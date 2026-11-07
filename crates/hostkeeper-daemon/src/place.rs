@@ -23,7 +23,17 @@
 //!   paths are committed (`placed`) and the paths of the service the target does not list are
 //!   removed ([`Placer::unlink_unlisted`]).
 //!
-//! Each is idempotent, so a resumed step switches again. `current` and `previous` are written
+//! Each is idempotent, so a resumed step switches again, and so a switch that failed is tried
+//! again ([`retried`]): up to [`SWITCH_ATTEMPTS`] times, [`SWITCH_RETRY_SECS`] apart on the
+//! daemon's clock, each failure but the last logged as `switch_retried` with what failed. A
+//! service manager can refuse a call for a moment (launchd, asked to boot out or print a job it
+//! is spawning that instant), and the placed lock is taken without waiting; one such refusal must
+//! not end the update without its step. Every failure is tried again, one that cannot pass on a
+//! second try (an unreadable manifest) too: the tries cost seconds, and telling the two apart
+//! would need every error typed. The last failure is the switch's error, which the runner stops
+//! on.
+//!
+//! `current` and `previous` are written
 //! by [`Placer::switch_current`], not by the package layout's own switch, which reads a seal and
 //! writes through `std::fs`: this path goes through the [`Fs`] port the placed paths do.
 
@@ -33,16 +43,22 @@ use std::sync::Arc;
 use hostkeeper_config::manifest::{Expected, HostkeeperVersion, Manifest};
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_placed::{Fs, Placer, Roots, UnitControl};
-use hostkeeper_steps::{Switch, Toward, UpdateOrder};
+use hostkeeper_steps::{Clock, Switch, Toward, UpdateOrder};
 
+use crate::boot::{WARN_SWITCH_RETRIED, warn_line};
 use crate::verbs::force::SELF_SERVICE;
+
+/// How many times a switch is tried before its error stops the update.
+pub(crate) const SWITCH_ATTEMPTS: u32 = 5;
+/// The wait between two tries of a switch, in seconds of the daemon's clock.
+pub(crate) const SWITCH_RETRY_SECS: u64 = 2;
 
 fn text(error: impl std::fmt::Display) -> String {
     error.to_string()
 }
 
 /// The switch of a hooked order on the host of `roots`, through `fs` and `units`; a manifest is
-/// read against the daemon's version `own`.
+/// read against the daemon's version `own`. One try: the daemon runs it [`retried`].
 pub fn hooked_switch(
     roots: Roots,
     fs: Arc<dyn Fs + Send + Sync>,
@@ -55,6 +71,36 @@ pub fn hooked_switch(
             Toward::Target => forward(&placer, order, &own),
             Toward::Back => back(&placer, &*fs, order, &own),
             Toward::Confirmed => confirmed(&placer, order, &own),
+        }
+    })
+}
+
+/// `switch` tried up to [`SWITCH_ATTEMPTS`] times: a failed try but the last is logged through
+/// `log` (one line, `alert=switch_retried`, with what failed) and tried again after
+/// [`SWITCH_RETRY_SECS`] of `clock`; the last try's result is the switch's.
+pub(crate) fn retried(
+    switch: Switch,
+    clock: Arc<dyn Clock>,
+    log: Arc<dyn Fn(&str) + Send + Sync>,
+) -> Switch {
+    Arc::new(move |toward: Toward, order: &UpdateOrder| {
+        let mut attempt = 1;
+        loop {
+            match switch(toward, order) {
+                Err(why) if attempt < SWITCH_ATTEMPTS => {
+                    log(&warn_line(
+                        WARN_SWITCH_RETRIED,
+                        &format!(
+                            "service={}: the switch {toward:?} failed (try {attempt} of \
+                             {SWITCH_ATTEMPTS}), tried again in {SWITCH_RETRY_SECS}s: {why}",
+                            order.service
+                        ),
+                    ));
+                    clock.sleep_secs(SWITCH_RETRY_SECS);
+                    attempt += 1;
+                }
+                ended => return ended,
+            }
         }
     })
 }
