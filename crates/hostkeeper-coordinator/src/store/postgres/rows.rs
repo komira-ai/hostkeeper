@@ -77,7 +77,11 @@ impl From<&KeyVal> for Val {
 }
 
 impl ToSql for Val {
-    fn to_sql(&self, ty: &Type, out: &mut BytesMut) -> Result<IsNull, Box<dyn Error + Sync + Send>> {
+    fn to_sql(
+        &self,
+        ty: &Type,
+        out: &mut BytesMut,
+    ) -> Result<IsNull, Box<dyn Error + Sync + Send>> {
         match self {
             Val::Null => Ok(IsNull::Yes),
             Val::Text(text) => text.to_sql(ty, out),
@@ -221,7 +225,11 @@ impl Table {
                 places.join(", "),
                 self.key_names().join(", ")
             ),
-            params: key.iter().map(Val::from).chain(values.iter().cloned()).collect(),
+            params: key
+                .iter()
+                .map(Val::from)
+                .chain(values.iter().cloned())
+                .collect(),
         }
     }
 

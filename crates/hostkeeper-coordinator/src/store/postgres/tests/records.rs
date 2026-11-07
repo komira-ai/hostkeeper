@@ -20,12 +20,8 @@ struct OnPostgres {
 impl Subject for OnPostgres {
     fn open(&self) -> Arc<dyn Records> {
         let mut live = self.live.lock().unwrap_or_else(PoisonError::into_inner);
-        let store = live.get_or_insert_with(|| {
-            self.database
-                .open("records")
-                .expect("the store opens")
-                .0
-        });
+        let store =
+            live.get_or_insert_with(|| self.database.open("records").expect("the store opens").0);
         Arc::new(PgRecords::over(store).expect("the records open"))
     }
 

@@ -184,6 +184,9 @@ pub struct Marks {
     /// Per service, the failures an operator acknowledged, each a node id and the version it
     /// failed, by its text: a cleared halt's, and those a version set by hand or forced acknowledged.
     pub acked: BTreeMap<String, BTreeSet<(String, String)>>,
+    /// Whether the store's link to the database is lost (`docs/design/coordinator-storage.md`,
+    /// section 5): the coordinator orders nothing, as in its quiet start, until it is back.
+    pub store_lost: bool,
 }
 
 /// Every host the coordinator has heard from since it started.
@@ -303,11 +306,17 @@ impl Fleet {
         })
     }
 
-    /// Whether `now` is still within the quiet start: the `quiet` of [`Self::new`] after the
-    /// coordinator's start.
+    /// Whether the coordinator orders nothing at `now`: within the quiet start (the `quiet` of
+    /// [`Self::new`] after the coordinator's start), or while the store's link is lost.
     #[must_use]
     pub fn is_quiet(&self, now: Duration) -> bool {
-        now < self.started.saturating_add(self.quiet)
+        self.marks.store_lost || now < self.started.saturating_add(self.quiet)
+    }
+
+    /// Whether the store's link is lost: no order goes out, an operator's included.
+    #[must_use]
+    pub fn store_lost(&self) -> bool {
+        self.marks.store_lost
     }
 
     /// The try of the next order of `service` for the host `id`: one past the highest try any

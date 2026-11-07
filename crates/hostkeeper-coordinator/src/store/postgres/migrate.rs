@@ -56,7 +56,9 @@ pub(crate) const SHIPPED: [(i32, &str, &str); 1] =
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub(crate) enum MigrationError {
     /// The first line names no rule for older releases.
-    #[error("migration {version} ({name}): its first line is not `-- older-releases: refuse` or `-- older-releases: may-run`")]
+    #[error(
+        "migration {version} ({name}): its first line is not `-- older-releases: refuse` or `-- older-releases: may-run`"
+    )]
     NoRule { version: i32, name: &'static str },
     /// A statement takes something away or ends the transaction.
     #[error("migration {version} ({name}): {what} is refused; a migration only adds")]
@@ -227,9 +229,7 @@ pub(crate) enum ApplyError {
     Shipped(#[from] MigrationError),
     /// The database holds a migration this binary does not know, which an older release must
     /// not run on.
-    #[error(
-        "the database's schema is newer than this coordinator (migration {version}, {name})"
-    )]
+    #[error("the database's schema is newer than this coordinator (migration {version}, {name})")]
     Newer { version: i32, name: String },
     /// A migration failed, and was rolled back whole.
     #[error("migration {version} ({name}) failed and was rolled back: {why}")]

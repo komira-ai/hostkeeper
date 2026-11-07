@@ -9,8 +9,8 @@ use std::path::Path;
 use std::num::{NonZeroU64, NonZeroUsize};
 
 use super::{
-    AuditLine, AuditLog, CHUNK, Filter, Logged, MAX_LINE, Query, Reader, Rotation, backward, forward,
-    line_from, page_in, segment_path, segments, start_after,
+    AuditLine, AuditLog, CHUNK, Filter, Logged, MAX_LINE, Query, Reader, Rotation, backward,
+    forward, line_from, page_in, segment_path, segments, start_after,
 };
 use crate::testutil::scratch;
 
@@ -110,7 +110,10 @@ fn every_since_seq_pages_exactly_the_entries_after_it() {
                 since_seq: since,
                 limit: 2,
                 newest: true,
-                filter: Filter { by_name: Some("bob"), ..Filter::default() },
+                filter: Filter {
+                    by_name: Some("bob"),
+                    ..Filter::default()
+                },
             },
         )
         .expect("read");
@@ -147,7 +150,10 @@ fn an_empty_log_and_a_filter_that_keeps_nothing_list_none() {
             since_seq: 0,
             limit: 5,
             newest,
-            filter: Filter { by_name: Some("nobody"), ..Filter::default() },
+            filter: Filter {
+                by_name: Some("nobody"),
+                ..Filter::default()
+            },
         };
         assert!(page_in(&file, &q).expect("read").is_empty());
     }
@@ -313,7 +319,10 @@ fn a_page_spans_segments_in_both_directions() {
             since_seq: 0,
             limit: 6,
             newest: true,
-            filter: Filter { by_name: Some("bob"), ..Filter::default() },
+            filter: Filter {
+                by_name: Some("bob"),
+                ..Filter::default()
+            },
         })
         .expect("read");
     assert_eq!(seqs(&bobs), vec![33, 36, 39, 42, 45, 48]);

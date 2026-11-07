@@ -184,7 +184,11 @@ impl Tx<'_> {
     ///
     /// # Errors
     /// The client's error.
-    pub(crate) fn execute(&mut self, sql: &str, params: Params<'_>) -> Result<u64, postgres::Error> {
+    pub(crate) fn execute(
+        &mut self,
+        sql: &str,
+        params: Params<'_>,
+    ) -> Result<u64, postgres::Error> {
         self.session.execute(sql, params)
     }
 

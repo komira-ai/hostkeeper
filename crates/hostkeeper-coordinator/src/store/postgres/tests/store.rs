@@ -34,7 +34,11 @@ impl OnPostgres {
 
 impl Subject for OnPostgres {
     fn live(&self) -> Shared {
-        let live = self.live.lock().unwrap_or_else(PoisonError::into_inner).clone();
+        let live = self
+            .live
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
         Arc::new(live.unwrap_or_else(|| self.opened()))
     }
 

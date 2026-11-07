@@ -40,9 +40,9 @@ pub(crate) use fake::Fake;
 #[cfg(test)]
 pub(crate) use fake::store_failure;
 pub(crate) use files::Files;
-pub(crate) use postgres::{Landing, Postgres};
 #[cfg(test)]
 pub(crate) use files::OpsWriter;
+pub(crate) use postgres::{Landing, Postgres};
 
 /// Where the coordinator's state is durable.
 pub(crate) trait Backend: Send + Sync {

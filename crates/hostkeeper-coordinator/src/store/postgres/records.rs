@@ -288,7 +288,10 @@ fn copy_of(store: &Postgres) -> Result<Copy, StoreError> {
                 })
                 .collect();
             let deny = session
-                .query("SELECT host_id, state, cleared_by FROM enrollment_deny", &[])?
+                .query(
+                    "SELECT host_id, state, cleared_by FROM enrollment_deny",
+                    &[],
+                )?
                 .iter()
                 .map(|row| {
                     let deny = deny_of(row);

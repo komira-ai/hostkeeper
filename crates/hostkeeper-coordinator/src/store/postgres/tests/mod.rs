@@ -118,7 +118,9 @@ impl TestDatabase {
             text.push_str(&format!(" user={user}"));
         }
         if let Some(password) = config.get_password() {
-            let password = String::from_utf8_lossy(password).replace('\\', "\\\\").replace('\'', "\\'");
+            let password = String::from_utf8_lossy(password)
+                .replace('\\', "\\\\")
+                .replace('\'', "\\'");
             text.push_str(&format!(" password='{password}'"));
         }
         text
@@ -178,7 +180,13 @@ impl TestDatabase {
         timeouts: Timeouts,
         holder: &str,
     ) -> Result<(Postgres, Loaded), super::DatabaseError> {
-        Postgres::open_with(&self.dsn(), timeouts, holder, &unix(), Arc::new(|| SPENT_NOW))
+        Postgres::open_with(
+            &self.dsn(),
+            timeouts,
+            holder,
+            &unix(),
+            Arc::new(|| SPENT_NOW),
+        )
     }
 
     /// Ends every session of the store on it but the tests' own: what a restart of the server

@@ -1,47 +1,189 @@
-//! The start's state files ([`super`]): the checks of what a stop left beside them (the marker
-//! of changes that were in memory and not yet written, [`crate::ops::Marker`], and the marker of a
-//! restore that did not finish, [`crate::backup::restore_marker`]), the files opened as one
-//! backend ([`Files`]) under the three stores and CI's spent ids, and the refusal of a part the
-//! backend could not load, as that part's store has always said it.
+//! The start's store ([`super`]): the files of `--state-file`, or the database of
+//! `--database-dsn-file` ([`open_store`]).
+//!
+//! For the files: the checks of what a stop left beside them (the marker of changes that were in
+//! memory and not yet written, [`crate::ops::Marker`], and the marker of a restore that did not
+//! finish, [`crate::backup::restore_marker`]), the files opened as one backend ([`Files`]) under
+//! the three stores and CI's spent ids, and the refusal of a part the backend could not load, as
+//! that part's store has always said it.
+//!
+//! For the database (`docs/design/coordinator-storage.md`, sections 4.3, 5 and 8): the flags of
+//! the file store refused beside it, the connection string read from its secret file, the store
+//! opened (the lock, the migrations, the epoch, the load), and the marker of `--halt-marker-file`
+//! settled against the `audit` table: removed when every change it lists has its audit row, a
+//! refusal to start naming those that do not.
 
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use hostkeeper_enrollment::enroll::records::Records;
 use hostkeeper_oidc::Clock;
 
-use super::{Serve, StartError};
-use crate::audit_file::Rotation;
-use crate::backup::restore_marker;
+use super::{Serve, StartError, take_lock};
+use crate::audit_file::{DEFAULT_MAX_BYTES, DEFAULT_RETAINED, Rotation, wall_clock};
+use crate::backup::{ops_path, restore_marker};
 use crate::jti_file::jti_path;
+use crate::lock::{LockGuard, StateLock, lock_path};
 use crate::ops::{Marker, OpsState, unlanded};
-use crate::store::{Backend, BackendError, Files, Loaded};
+use crate::store::postgres::{DatabaseError, Dsn, PgRecords, Postgres};
+use crate::store::{Backend, BackendError, Files, Loaded, Shared};
 use crate::verdict_file::verdicts_path;
 
-/// The state files `flags` name, the ops file at `ops` and the legacy service `legacy`, opened as
-/// one backend and loaded, once the markers beside them are settled: a marker of changes not yet
+/// The store a start opened: the backend under the three stores and CI's spent ids, what it
+/// loaded, the marker of changes not yet committed, what holds the store for this process, and
+/// the enrollment records when the store keeps them.
+pub(super) struct Opened {
+    pub(super) backend: Shared,
+    pub(super) loaded: Loaded,
+    pub(super) marker: PathBuf,
+    pub(super) held: LockGuard,
+    pub(super) records: Option<Arc<dyn Records>>,
+}
+
+/// Opens the store `flags` name: the database of `--database-dsn-file`, or the files of
+/// `--state-file` under the lock `lock` takes, the single-state file read as the state of
+/// `legacy`; CI's spent ids judged past by `oidc_clock`.
+///
+/// # Errors
+/// [`StartError`]: a flag of the file store beside the database, the lock, a marker, or a file or
+/// the database refused.
+pub(super) fn open_store(
+    flags: &Serve,
+    legacy: Option<&str>,
+    lock: &dyn StateLock,
+    oidc_clock: &Clock,
+) -> Result<Opened, StartError> {
+    let (Some(dsn), Some(marker)) = (&flags.database_dsn_file, &flags.halt_marker_file) else {
+        // clap requires one of --state-file and --database-dsn-file, and --halt-marker-file
+        // with the latter.
+        let state = flags.state_file.clone().unwrap_or_default();
+        // The lock before any state file: none is opened (an open settles a staged halts file,
+        // which is a write) before this process is the one coordinator on them.
+        let held = take_lock(lock, &lock_path(&state))?;
+        let ops = ops_path(&state, flags.ops_file.as_deref());
+        let (files, loaded) = open(flags, &state, legacy, &ops, oidc_clock)?;
+        return Ok(Opened {
+            backend: Arc::new(files),
+            loaded,
+            marker: crate::ops_file::unfinished_path(&ops),
+            held,
+            records: None,
+        });
+    };
+    let file_flags = [
+        ("--state-file", flags.state_file.is_some()),
+        ("--ops-file", flags.ops_file.is_some()),
+        ("--enrollment-dir", flags.enrollment_dir.is_some()),
+        ("--audit-max-bytes", flags.audit_max_bytes.is_some()),
+        (
+            "--audit-retained-segments",
+            flags.audit_retained_segments.is_some(),
+        ),
+    ];
+    if let Some((flag, _)) = file_flags.iter().find(|(_, given)| *given) {
+        return Err(StartError::DatabaseAndFileFlag(flag));
+    }
+    // A marker this build cannot read is refused before the database is touched.
+    let listed = match Marker::read(marker) {
+        None => None,
+        Some(Marker::Listed(numbers)) => Some(numbers),
+        Some(Marker::Unlisted) => {
+            return Err(StartError::HaltWriteUnfinished {
+                path: marker.clone(),
+            });
+        }
+    };
+    let dsn = Dsn::read(dsn).map_err(DatabaseError::from)?;
+    let holder = flags
+        .server_names
+        .first()
+        .map_or("coordinator", String::as_str);
+    let (store, loaded) = Postgres::open(&dsn, holder, &wall_clock(), Arc::clone(oidc_clock))?;
+    if let Some(numbers) = listed {
+        settle_in_database(&store, marker, &numbers)?;
+    }
+    let records: Option<Arc<dyn Records>> = match flags.ca_key_file {
+        Some(_) => Some(Arc::new(
+            PgRecords::over(&store).map_err(|e| DatabaseError::Load(e.to_string()))?,
+        )),
+        None => None,
+    };
+    Ok(Opened {
+        backend: Arc::new(store.clone()),
+        loaded,
+        marker: marker.clone(),
+        held: LockGuard::new(store),
+        records,
+    })
+}
+
+/// Settles the marker at `marker`, which lists the audit `numbers`, against the `audit` table of
+/// `store` (section 4.3): every change a memory-first commit holds has its audit row in the same
+/// transaction, so a number in the table is a change that landed. A marker whose every number is
+/// there is logged and removed; one with a number that is not refuses the start, naming it.
+///
+/// # Errors
+/// [`StartError::ChangesUnwritten`]: a change it lists did not land; [`StartError::Database`]:
+/// the table could not be read; [`StartError::Io`]: the marker could not be removed.
+fn settle_in_database(store: &Postgres, marker: &Path, numbers: &[u64]) -> Result<(), StartError> {
+    let wanted: Vec<i64> = numbers
+        .iter()
+        .map(|n| i64::try_from(*n).unwrap_or(i64::MAX))
+        .collect();
+    let held: Vec<i64> = store
+        .read(move |session| {
+            Ok(session
+                .query("SELECT seq FROM audit WHERE seq = ANY($1)", &[&wanted])?
+                .iter()
+                .map(|row| row.get(0))
+                .collect())
+        })
+        .map_err(DatabaseError::Load)?;
+    let missing: Vec<u64> = numbers
+        .iter()
+        .copied()
+        .filter(|n| !held.iter().any(|h| u64::try_from(*h).ok() == Some(*n)))
+        .collect();
+    if !missing.is_empty() {
+        return Err(StartError::ChangesUnwritten {
+            path: marker.to_owned(),
+            numbers: missing,
+        });
+    }
+    std::fs::remove_file(marker)?;
+    tracing::warn!(
+        path = %marker.display(),
+        "the changes the marker listed landed before the coordinator stopped: the marker is removed"
+    );
+    Ok(())
+}
+
+/// The state files `flags` name (the state file `state`), the ops file at `ops` and the legacy
+/// service `legacy`, opened as one backend and loaded, once the markers beside them are settled: a marker of changes not yet
 /// written is refused when it lists nothing this build reads, and after the load when the ops
 /// file does not hold every change it lists; a restore's marker is refused.
 ///
 /// # Errors
 /// [`StartError`]: a marker refuses the start, or a file cannot be opened or read.
-pub(super) fn open(
+fn open(
     flags: &Serve,
+    state: &Path,
     legacy: Option<&str>,
     ops: &Path,
     oidc_clock: &Clock,
 ) -> Result<(Files, Loaded), StartError> {
     let marker = refuse_unfinished_halt(ops)?;
-    refuse_unfinished_restore(&flags.state_file)?;
+    refuse_unfinished_restore(state)?;
     let rotation = Rotation {
-        max_bytes: flags.audit_max_bytes,
-        retained: flags.audit_retained_segments,
+        max_bytes: flags.audit_max_bytes.unwrap_or(DEFAULT_MAX_BYTES),
+        retained: flags.audit_retained_segments.unwrap_or(DEFAULT_RETAINED),
     };
     let files = Files::default()
-        .with_jti(&jti_path(&flags.state_file), Arc::clone(oidc_clock))?
-        .with_desired(&flags.state_file, legacy)
+        .with_jti(&jti_path(state), Arc::clone(oidc_clock))?
+        .with_desired(state, legacy)
         .with_ops(ops, rotation)?
-        .with_verdicts(&verdicts_path(&flags.state_file));
+        .with_verdicts(&verdicts_path(state));
     let loaded = files.load()?;
     if let Some(numbers) = marker {
         settle_unfinished(ops, &numbers, &loaded.ops)?;

@@ -209,7 +209,9 @@ fn text(s: &str) -> KeyVal {
 pub(crate) fn int(n: u64) -> Result<i64, StoreError> {
     i64::try_from(n).map_err(|_| StoreError::Io {
         path: place("counter"),
-        source: std::io::Error::other(format!("{n} is above the largest counter the database keeps")),
+        source: std::io::Error::other(format!(
+            "{n} is above the largest counter the database keeps"
+        )),
     })
 }
 
@@ -227,10 +229,11 @@ pub(crate) fn desired_rows(held: &desired::Held) -> Result<Tables, StoreError> {
         path: place("desired"),
         source: e.into(),
     })?;
-    let value: serde_json::Value = serde_json::from_slice(&encoded).map_err(|e| StoreError::Io {
-        path: place("desired"),
-        source: e.into(),
-    })?;
+    let value: serde_json::Value =
+        serde_json::from_slice(&encoded).map_err(|e| StoreError::Io {
+            path: place("desired"),
+            source: e.into(),
+        })?;
     let mut desired = Rows::new();
     let mut digests = Rows::new();
     let services = value
@@ -271,7 +274,10 @@ pub(crate) fn desired_rows(held: &desired::Held) -> Result<Tables, StoreError> {
             ],
         );
     }
-    Ok(Tables::from([("desired", desired), ("desired_digests", digests)]))
+    Ok(Tables::from([
+        ("desired", desired),
+        ("desired_digests", digests),
+    ]))
 }
 
 /// The desired state the rows `tables` hold, read as the desired-state file's reader reads it.
@@ -283,7 +289,13 @@ pub(crate) fn desired_of(tables: &Tables) -> Result<desired::Held, StoreError> {
     let mut services = serde_json::Map::new();
     for (key, values) in tables.get("desired").unwrap_or(&empty) {
         let mut entry = serde_json::Map::new();
-        let names = ["version", "max_updating", "min_up", "release_digest", "release_index"];
+        let names = [
+            "version",
+            "max_updating",
+            "min_up",
+            "release_digest",
+            "release_index",
+        ];
         for (name, value) in names.iter().zip(values) {
             match value {
                 Val::Text(text) => entry.insert((*name).to_owned(), text.clone().into()),
@@ -373,7 +385,8 @@ pub(crate) fn verdicts_rows(held: &verdict_file::Held) -> Result<Tables, Verdict
 /// [`VerdictsError::Invalid`]: a row holds what the reader refuses.
 pub(crate) fn verdicts_of(tables: &Tables) -> Result<verdict_file::Held, VerdictsError> {
     let empty = Rows::new();
-    let mut services: BTreeMap<String, serde_json::Map<String, serde_json::Value>> = BTreeMap::new();
+    let mut services: BTreeMap<String, serde_json::Map<String, serde_json::Value>> =
+        BTreeMap::new();
     for (key, values) in tables.get("verdict_standing").unwrap_or(&empty) {
         let (Some(service), Some(node)) = (
             key.first().and_then(KeyVal::as_text),
@@ -381,7 +394,11 @@ pub(crate) fn verdicts_of(tables: &Tables) -> Result<verdict_file::Held, Verdict
         ) else {
             continue;
         };
-        let report = values.first().and_then(Val::as_json).cloned().unwrap_or_default();
+        let report = values
+            .first()
+            .and_then(Val::as_json)
+            .cloned()
+            .unwrap_or_default();
         services
             .entry(service.to_owned())
             .or_default()
@@ -395,7 +412,11 @@ pub(crate) fn verdicts_of(tables: &Tables) -> Result<verdict_file::Held, Verdict
             continue;
         };
         let node = values.first().and_then(Val::as_text).unwrap_or_default();
-        let report = values.get(1).and_then(Val::as_json).cloned().unwrap_or_default();
+        let report = values
+            .get(1)
+            .and_then(Val::as_json)
+            .cloned()
+            .unwrap_or_default();
         services
             .entry(service.to_owned())
             .or_default()
@@ -443,8 +464,11 @@ pub(crate) fn ops_rows(state: &OpsState) -> Result<Tables, StoreError> {
         // The first of a key the code holds twice stands, as the file's first line would.
         rows.entry(key).or_insert(values);
     };
-    let names: std::collections::BTreeSet<&String> =
-        state.services.keys().chain(state.assignments.keys()).collect();
+    let names: std::collections::BTreeSet<&String> = state
+        .services
+        .keys()
+        .chain(state.assignments.keys())
+        .collect();
     for service in names {
         let marks = state.services.get(service).cloned().unwrap_or_default();
         let assigned = state.assignments.get(service).cloned().unwrap_or_default();
@@ -545,7 +569,10 @@ pub(crate) fn ops_rows(state: &OpsState) -> Result<Tables, StoreError> {
         put(
             "exclusions",
             vec![text(&exclusion.service), text(&exclusion.node_id)],
-            vec![Val::Text(exclusion.reason.clone()), Val::Int(position as i64)],
+            vec![
+                Val::Text(exclusion.reason.clone()),
+                Val::Int(position as i64),
+            ],
         );
     }
     for (position, hold) in state.holds.iter().enumerate() {
@@ -581,10 +608,9 @@ pub(crate) fn ops_rows(state: &OpsState) -> Result<Tables, StoreError> {
         if *rollout == Rollout::default() {
             continue;
         }
-        let (by, reason) = rollout
-            .paused
-            .as_ref()
-            .map_or((None, None), |p| (Some(p.by.as_str()), Some(p.reason.as_str())));
+        let (by, reason) = rollout.paused.as_ref().map_or((None, None), |p| {
+            (Some(p.by.as_str()), Some(p.reason.as_str()))
+        });
         put(
             "rollouts",
             vec![text(service)],
@@ -647,7 +673,8 @@ impl At<'_> {
     }
 
     fn required(&self, i: usize) -> Result<String, OpsError> {
-        self.text(i)?.ok_or_else(|| self.no("a column that is required is empty"))
+        self.text(i)?
+            .ok_or_else(|| self.no("a column that is required is empty"))
     }
 
     fn version(&self, i: usize) -> Result<Option<Version>, OpsError> {
@@ -693,11 +720,11 @@ impl At<'_> {
 pub(crate) fn ops_of(tables: &Tables) -> Result<OpsState, OpsError> {
     let empty = Rows::new();
     let rows = |table: &'static str| {
-        tables.get(table).unwrap_or(&empty).iter().map(move |(key, values)| At {
-            table,
-            key,
-            values,
-        })
+        tables
+            .get(table)
+            .unwrap_or(&empty)
+            .iter()
+            .map(move |(key, values)| At { table, key, values })
     };
     let mut state = OpsState::default();
     let mut ordered: BTreeMap<(&str, String, &str), Vec<(i64, HaltAck)>> = BTreeMap::new();
@@ -712,7 +739,11 @@ pub(crate) fn ops_of(tables: &Tables) -> Result<OpsState, OpsError> {
         marks.force = at.json::<ForceRecord>(4)?;
         let uninstall = at.count(3)?;
         if uninstall != 0 {
-            state.assignments.entry(service).or_default().uninstall_generation = uninstall;
+            state
+                .assignments
+                .entry(service)
+                .or_default()
+                .uninstall_generation = uninstall;
         }
     }
     for at in rows("bad_versions") {
@@ -805,7 +836,9 @@ pub(crate) fn ops_of(tables: &Tables) -> Result<OpsState, OpsError> {
         map.insert(at.key(2)?, entry);
     }
     for at in rows("min_versions") {
-        let version = at.version(0)?.ok_or_else(|| at.no("the version is empty"))?;
+        let version = at
+            .version(0)?
+            .ok_or_else(|| at.no("the version is empty"))?;
         let assigned = state.assignments.entry(at.key(0)?).or_default();
         let map = match at.key(1)?.as_str() {
             "role" => &mut assigned.role_min_versions,
@@ -897,7 +930,8 @@ pub(crate) fn ops_of(tables: &Tables) -> Result<OpsState, OpsError> {
             at.key(0)?,
             Rollout {
                 version: at.version(0)?,
-                entered: u32::try_from(entered).map_err(|_| at.no("the stages entered are too many"))?,
+                entered: u32::try_from(entered)
+                    .map_err(|_| at.no("the stages entered are too many"))?,
                 done: std::collections::BTreeSet::new(),
                 paused,
             },

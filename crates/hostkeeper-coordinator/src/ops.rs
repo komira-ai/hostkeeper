@@ -499,6 +499,11 @@ pub struct OpsStore {
     marker: Option<PathBuf>,
     /// The changes in memory and not yet committed.
     pending: Mutex<pending::Pending>,
+    /// Told when the store is deposed: another coordinator led its database while its link was
+    /// lost, and the coordinator stops ([`OpsStore::depose`]).
+    deposed: tokio::sync::Notify,
+    /// The epoch the deposing coordinator held, once deposed.
+    deposed_by: std::sync::OnceLock<u64>,
     /// The file and rotation of a store over a file, which a test hook opens again.
     #[cfg(test)]
     files: Option<(PathBuf, Rotation)>,
@@ -583,6 +588,8 @@ impl OpsStore {
             unix: wall_clock(),
             marker: None,
             pending: Mutex::new(pending::Pending::default()),
+            deposed: tokio::sync::Notify::new(),
+            deposed_by: std::sync::OnceLock::new(),
             #[cfg(test)]
             files: None,
             #[cfg(test)]

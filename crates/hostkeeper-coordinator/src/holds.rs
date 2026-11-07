@@ -156,6 +156,8 @@ pub fn marks_of(state: &OpsState) -> Marks {
             })
             .filter(|(_, acked)| !acked.is_empty())
             .collect(),
+        // The store's link is the coordinator's to add ([`crate::service`]).
+        store_lost: false,
     }
 }
 

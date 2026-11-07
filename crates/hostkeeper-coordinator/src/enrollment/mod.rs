@@ -71,8 +71,8 @@ pub use refusal::{RpcError, refusal_of};
 pub use reject::ACTION_REJECT;
 pub use rpc::{Enrolled, MAX_MESSAGE_BYTES, Method, call};
 pub use setup::{
-    CA_CERT_SUFFIX, Kept, ServerFile, Setup, SetupError, ca_certificate_path, pem, server_due,
-    setup,
+    CA_CERT_SUFFIX, Kept, ServerFile, Setup, SetupError, StoreAt, ca_certificate_path, pem,
+    server_due, setup,
 };
 
 use crate::identity::Identity;

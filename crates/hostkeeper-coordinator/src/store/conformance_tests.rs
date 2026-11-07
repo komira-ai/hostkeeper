@@ -351,13 +351,56 @@ fn audit_pages(subject: &dyn Subject) -> Outcome {
     .map_err(|why| format!("the commit failed: {why}"))?;
     let filters: [(&str, Filter<'_>); 8] = [
         ("every", Filter::default()),
-        ("by", Filter { by_name: Some("alice"), ..Filter::default() }),
-        ("action", Filter { actions: &["halt"], ..Filter::default() }),
-        ("actions", Filter { actions: &["halt", "exclude"], ..Filter::default() }),
-        ("service", Filter { service: Some("web"), ..Filter::default() }),
-        ("node", Filter { node_id: Some("s1"), ..Filter::default() }),
-        ("operator", Filter { actor: Some(Actor::Operator), ..Filter::default() }),
-        ("ci", Filter { actor: Some(Actor::Ci), service: Some("kbf"), ..Filter::default() }),
+        (
+            "by",
+            Filter {
+                by_name: Some("alice"),
+                ..Filter::default()
+            },
+        ),
+        (
+            "action",
+            Filter {
+                actions: &["halt"],
+                ..Filter::default()
+            },
+        ),
+        (
+            "actions",
+            Filter {
+                actions: &["halt", "exclude"],
+                ..Filter::default()
+            },
+        ),
+        (
+            "service",
+            Filter {
+                service: Some("web"),
+                ..Filter::default()
+            },
+        ),
+        (
+            "node",
+            Filter {
+                node_id: Some("s1"),
+                ..Filter::default()
+            },
+        ),
+        (
+            "operator",
+            Filter {
+                actor: Some(Actor::Operator),
+                ..Filter::default()
+            },
+        ),
+        (
+            "ci",
+            Filter {
+                actor: Some(Actor::Ci),
+                service: Some("kbf"),
+                ..Filter::default()
+            },
+        ),
     ];
     for (name, filter) in filters {
         for (since_seq, limit, newest) in [(0, 5, false), (4, 3, false), (0, 4, true), (9, 5, true)]

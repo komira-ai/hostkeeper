@@ -1157,6 +1157,10 @@ enum AlertKind {
   // The certificate the coordinator serves its hosts expires within the coordinator's window, or
   // has expired: its renewal is failing. Log token `cert_near_expiry`.
   ALERT_KIND_CERT_NEAR_EXPIRY = 9;
+  // The coordinator's session with its database is lost: it orders nothing, refuses every change
+  // that lowers protection, and keeps the changes that raise it in memory until the session is
+  // back. Log token `store_unreachable`.
+  ALERT_KIND_STORE_UNREACHABLE = 10;
 }
 
 // How soon an `Alert` needs a person.

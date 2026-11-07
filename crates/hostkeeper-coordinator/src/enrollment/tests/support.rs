@@ -29,7 +29,9 @@ use rcgen::{
     SigningKey,
 };
 
-use crate::enrollment::{Enrollment, Random, RpcError, Setup, SetupError, os_random, setup};
+use crate::enrollment::{
+    Enrollment, Random, RpcError, Setup, SetupError, StoreAt, os_random, setup,
+};
 use crate::identity::Identity;
 use crate::testutil::scratch;
 
@@ -90,7 +92,7 @@ impl Files {
     /// The setup of these files, making the CA when `init`.
     pub fn setup(&self, init: bool) -> Setup<'_> {
         Setup {
-            dir: &self.store,
+            store: StoreAt::Dir(&self.store),
             ca_key: &self.ca_key,
             ca_init: init,
             server_cert: &self.server_cert,

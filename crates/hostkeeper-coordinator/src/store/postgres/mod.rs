@@ -252,7 +252,10 @@ fn load_all(session: &mut Session, now: u64) -> Result<Loaded, BackendError> {
         .iter()
         .map(|row| {
             let until: i64 = row.get(1);
-            (row.get::<_, String>(0), u64::try_from(until).unwrap_or_default())
+            (
+                row.get::<_, String>(0),
+                u64::try_from(until).unwrap_or_default(),
+            )
         })
         .collect();
     Ok(Loaded {
@@ -482,10 +485,7 @@ impl Postgres {
 
 /// The settled outcome of the commit whose number was `number`: what the writer found, with the
 /// change remembered for that number.
-fn landing_of(
-    settled: writer::Settled,
-    unknown: Option<(u64, Owned)>,
-) -> Landing {
+fn landing_of(settled: writer::Settled, unknown: Option<(u64, Owned)>) -> Landing {
     Landing {
         number: settled.number,
         landed: settled.landed,
@@ -514,8 +514,10 @@ fn open_session(
     if !try_lock(&mut session).map_err(refused)? {
         return Err(DatabaseError::Locked);
     }
-    let set = migrate::checked(&migrate::SHIPPED).map_err(|e| DatabaseError::Schema(e.to_string()))?;
-    let ran = migrate::apply(&mut session, &set).map_err(|e| DatabaseError::Schema(e.to_string()))?;
+    let set =
+        migrate::checked(&migrate::SHIPPED).map_err(|e| DatabaseError::Schema(e.to_string()))?;
+    let ran =
+        migrate::apply(&mut session, &set).map_err(|e| DatabaseError::Schema(e.to_string()))?;
     if !ran.is_empty() {
         tracing::info!(?ran, "the database's migrations ran");
     }
@@ -528,7 +530,8 @@ fn open_session(
         .map_err(refused)?;
     session.batch("COMMIT").map_err(refused)?;
     let (epoch, commits): (i64, i64) = (row.get(0), row.get(1));
-    let loaded = load_all(&mut session, spent_now).map_err(|e| DatabaseError::Load(e.to_string()))?;
+    let loaded =
+        load_all(&mut session, spent_now).map_err(|e| DatabaseError::Load(e.to_string()))?;
     let last: Option<i64> = session
         .query_one("SELECT max(seq) FROM audit", &[])
         .map_err(refused)?
@@ -604,7 +607,11 @@ impl Backend for Postgres {
                     .iter()
                     .map(|p| p as &(dyn postgres::types::ToSql + Sync))
                     .collect();
-                Ok(session.query(&sql, &refs)?.iter().map(logged_of).collect::<Vec<_>>())
+                Ok(session
+                    .query(&sql, &refs)?
+                    .iter()
+                    .map(logged_of)
+                    .collect::<Vec<_>>())
             })
             .map_err(|why| unwritten(&why))?;
         if newest {
@@ -656,7 +663,11 @@ impl Backend for Postgres {
     }
 
     fn spend(&self, jti: &str, until_unix: u64, now_unix: u64) -> Result<(), BackendError> {
-        let (jti, until, now) = (jti.to_owned(), state::int(until_unix)?, state::int(now_unix)?);
+        let (jti, until, now) = (
+            jti.to_owned(),
+            state::int(until_unix)?,
+            state::int(now_unix)?,
+        );
         let recorded = self
             .write(move |tx| {
                 tx.execute("DELETE FROM spent_tokens WHERE until_unix <= $1", &[&now])?;

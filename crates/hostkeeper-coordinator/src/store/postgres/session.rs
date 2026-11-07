@@ -45,7 +45,12 @@ impl From<postgres::Error> for Fail {
 /// error and its cause. It never holds the connection string.
 pub(crate) fn describe(e: &postgres::Error) -> String {
     match e.as_db_error() {
-        Some(db) => format!("{}: {} (SQLSTATE {})", db.severity(), db.message(), db.code().code()),
+        Some(db) => format!(
+            "{}: {} (SQLSTATE {})",
+            db.severity(),
+            db.message(),
+            db.code().code()
+        ),
         None => match e.source() {
             Some(cause) => format!("{e}: {cause}"),
             None => e.to_string(),
@@ -163,7 +168,11 @@ impl Session {
     ///
     /// # Errors
     /// The client's error.
-    pub(crate) fn execute(&mut self, sql: &str, params: Params<'_>) -> Result<u64, postgres::Error> {
+    pub(crate) fn execute(
+        &mut self,
+        sql: &str,
+        params: Params<'_>,
+    ) -> Result<u64, postgres::Error> {
         self.count();
         self.client.execute(sql, params)
     }
@@ -172,7 +181,11 @@ impl Session {
     ///
     /// # Errors
     /// The client's error.
-    pub(crate) fn query(&mut self, sql: &str, params: Params<'_>) -> Result<Vec<Row>, postgres::Error> {
+    pub(crate) fn query(
+        &mut self,
+        sql: &str,
+        params: Params<'_>,
+    ) -> Result<Vec<Row>, postgres::Error> {
         self.count();
         self.client.query(sql, params)
     }
@@ -181,7 +194,11 @@ impl Session {
     ///
     /// # Errors
     /// The client's error, and when it returns no row or more than one.
-    pub(crate) fn query_one(&mut self, sql: &str, params: Params<'_>) -> Result<Row, postgres::Error> {
+    pub(crate) fn query_one(
+        &mut self,
+        sql: &str,
+        params: Params<'_>,
+    ) -> Result<Row, postgres::Error> {
         self.count();
         self.client.query_one(sql, params)
     }

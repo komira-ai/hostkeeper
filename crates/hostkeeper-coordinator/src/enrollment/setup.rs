@@ -30,6 +30,7 @@ use base64::Engine as _;
 use hostkeeper_enrollment::ca::{
     Ca, CaError, CaFiles, P256Key, SERVER_VALIDITY_CAP_SECS, ServerNames, Signer,
 };
+use hostkeeper_enrollment::enroll::records::Records;
 use hostkeeper_enrollment::enroll::{EnrollmentStore, StoreError};
 use hostkeeper_enrollment::fs::{Fs, temp_name, write_atomic};
 use hostkeeper_enrollment::validity::UnixClock;
@@ -45,10 +46,10 @@ pub const CA_CERT_SUFFIX: &str = ".cert";
 const SERVER_FILE_MODE: u32 = 0o600;
 
 /// The files and flags enrollment starts from.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct Setup<'a> {
-    /// `--enrollment-dir`.
-    pub dir: &'a Path,
+    /// Where the enrollment store keeps its records.
+    pub store: StoreAt<'a>,
     /// `--ca-key-file`.
     pub ca_key: &'a Path,
     /// `--ca-init`.
@@ -60,6 +61,15 @@ pub struct Setup<'a> {
     /// The IP addresses the server certificate names besides: the address of `--lan-listen`,
     /// when it is given.
     pub server_ips: &'a [IpAddr],
+}
+
+/// Where the enrollment store keeps its records.
+#[derive(Clone, Debug)]
+pub enum StoreAt<'a> {
+    /// The files of `--enrollment-dir`.
+    Dir(&'a Path),
+    /// Records kept elsewhere: the database of `--database-dsn-file`.
+    Records(Arc<dyn Records>),
 }
 
 /// Why enrollment did not start.
@@ -349,7 +359,10 @@ pub fn setup(
         Err(other) => return Err(other.into()),
     };
     tracing::info!(ca_sha256 = %ca.bundle().sha256_hex(), "the enrollment CA");
-    let store = EnrollmentStore::open(Arc::clone(&fs), setup.dir)?;
+    let store = match &setup.store {
+        StoreAt::Dir(dir) => EnrollmentStore::open(Arc::clone(&fs), dir)?,
+        StoreAt::Records(records) => EnrollmentStore::new(Arc::clone(records)),
+    };
     let server = |reason: String| SetupError::Server {
         path: setup.server_cert.to_path_buf(),
         reason,
