@@ -14,6 +14,10 @@ use super::lint::{
     PRIVILEGED_RUNNERS, PRIVILEGED_WORKFLOW, WRITE_ALLOWED, entries, entry, lint,
     privileged_runners, root_line, scalars,
 };
+use super::net_install::{
+    NET_INSTALL_ARM64_FIRST_LINE, NET_INSTALL_ARM64_JOB, NET_INSTALL_FIRST_LINE, NET_INSTALL_JOB,
+    NET_JOBS, apt_steps,
+};
 use super::release::{REQUIRED_WORKFLOWS, publish_problems};
 use super::yaml::{self, Node, Value};
 use super::{push_only, with_in, workflows};
@@ -365,7 +369,7 @@ fn sudo_count(node: &Node) -> usize {
 /// that builds or runs another set of test targets than the job's; a step that runs more than
 /// one command (`;`, `&&`, `||`, a pipe or more than one line), whose logic belongs in a Rust
 /// tool. Each problem of a job names it.
-fn shape_problems(text: &str, targets: &BTreeMap<&str, BTreeSet<String>>) -> Vec<String> {
+pub fn shape_problems(text: &str, targets: &BTreeMap<&str, BTreeSet<String>>) -> Vec<String> {
     let doc = match yaml::load(text) {
         Ok(doc) => doc,
         Err(e) => return vec![e],
@@ -388,7 +392,7 @@ fn shape_problems(text: &str, targets: &BTreeMap<&str, BTreeSet<String>>) -> Vec
             continue;
         };
         problems.extend(
-            job_shape_problems(job, targets)
+            job_shape_problems(name, job, targets)
                 .into_iter()
                 .map(|problem| format!("job {name}: {problem}")),
         );
@@ -397,13 +401,19 @@ fn shape_problems(text: &str, targets: &BTreeMap<&str, BTreeSet<String>>) -> Vec
 }
 
 /// [`shape_problems`] of one job, whose privileged test targets are `targets`.
-fn job_shape_problems(job: &Node, targets: &BTreeSet<String>) -> Vec<String> {
+fn job_shape_problems(name: &str, job: &Node, targets: &BTreeSet<String>) -> Vec<String> {
     let mut problems = Vec::new();
-    let sudo = sudo_count(job);
+    let runs = runs(job);
+    let builds: Vec<usize> = (0..runs.len())
+        .filter(|&i| runs[i].starts_with(BUILD))
+        .collect();
+    let net = NET_JOBS.iter().find(|net| net.name == name);
+    let (apt_problems, apt_allowed) = apt_steps(&runs, builds.first().copied(), net);
+    problems.extend(apt_problems);
+    let sudo = sudo_count(job) - apt_allowed.len();
     if sudo != 1 {
         problems.push(format!("sudo is named {sudo} times, not once"));
     }
-    let runs = runs(job);
     for run in &runs {
         let chained = [";", "&&", "||", "|", "\n"]
             .iter()
@@ -412,11 +422,8 @@ fn job_shape_problems(job: &Node, targets: &BTreeSet<String>) -> Vec<String> {
             problems.push(format!("the step `{run}` runs more than one command"));
         }
     }
-    let builds: Vec<usize> = (0..runs.len())
-        .filter(|&i| runs[i].starts_with(BUILD))
-        .collect();
     let rooted: Vec<usize> = (0..runs.len())
-        .filter(|&i| root_line(&[runs[i]]).is_some())
+        .filter(|&i| !apt_allowed.contains(&i) && root_line(&[runs[i]]).is_some())
         .collect();
     for (what, found, start) in [("build", &builds, BUILD), ("run as root", &rooted, RUN)] {
         match found[..] {
@@ -454,6 +461,13 @@ const FIRST_BOOT_FIRST_LINE: &str = "#![cfg(all(target_os = \"linux\", feature =
 /// The first line of a privileged test file of [`MACOS_DEVICE_JOB`]: the tests against launchd.
 const MACOS_FIRST_LINE: &str = "#![cfg(all(target_os = \"macos\", feature = \"privileged\"))]";
 
+/// Whether `text` starts with the attribute `first`, as rustfmt may break it over lines: the same
+/// characters, whitespace aside, up to the attribute's closing bracket.
+pub fn starts_with_attribute(text: &str, first: &str) -> bool {
+    let squeeze = |s: &str| s.chars().filter(|c| !c.is_whitespace()).collect::<String>();
+    squeeze(text).starts_with(&squeeze(first))
+}
+
 /// The privileged test targets of crates/hostkeeper-privileged whose first line is `first`: the
 /// files of its `tests/` that start with it, by name without `.rs`.
 fn privileged_targets(first: &str) -> BTreeSet<String> {
@@ -468,20 +482,25 @@ fn privileged_targets(first: &str) -> BTreeSet<String> {
             continue;
         };
         let text = std::fs::read_to_string(&path).expect("read a test file");
-        if text.lines().next() == Some(first) {
+        if starts_with_attribute(&text, first) {
             found.insert(target.to_owned());
         }
     }
     found
 }
 
-/// The jobs of privileged.yml and the targets of each: the Linux job's, the first-boot job's and
-/// the macOS job's.
-fn committed_targets() -> BTreeMap<&'static str, BTreeSet<String>> {
+/// The jobs of privileged.yml and the targets of each: the Linux job's, the first-boot job's, the
+/// macOS job's and the two network-install jobs'.
+pub fn committed_targets() -> BTreeMap<&'static str, BTreeSet<String>> {
     BTreeMap::from([
         ("privileged", privileged_targets(LINUX_FIRST_LINE)),
         (FIRST_BOOT_JOB, privileged_targets(FIRST_BOOT_FIRST_LINE)),
         (MACOS_DEVICE_JOB, privileged_targets(MACOS_FIRST_LINE)),
+        (NET_INSTALL_JOB, privileged_targets(NET_INSTALL_FIRST_LINE)),
+        (
+            NET_INSTALL_ARM64_JOB,
+            privileged_targets(NET_INSTALL_ARM64_FIRST_LINE),
+        ),
     ])
 }
 
@@ -531,6 +550,14 @@ fn the_committed_privileged_yml_passes_and_holds_the_one_sudo() {
             "device_mac_e2e".to_owned(),
             "unpack_mac".to_owned()
         ])
+    );
+    assert_eq!(
+        targets[NET_INSTALL_JOB],
+        BTreeSet::from(["net_install".to_owned()])
+    );
+    assert_eq!(
+        targets[NET_INSTALL_ARM64_JOB],
+        BTreeSet::from(["net_install_arm64".to_owned()])
     );
     assert_eq!(shape_problems(text, &targets), Vec::<String>::new());
     for (file, other) in all.iter().filter(|(file, _)| file != PRIVILEGED_WORKFLOW) {

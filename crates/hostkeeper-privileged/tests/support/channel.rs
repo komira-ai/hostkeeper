@@ -11,12 +11,18 @@
 //! without the network, so this is the one part of the path that is not the production one. The
 //! attestation bundle the channel serves is still read by the daemon, which checks its subject
 //! digest, source commit and ref before it runs the verifier.
+//!
+//! The network-install test (`tests/net_install.rs`) serves from the same [`Channel`], bound to
+//! the address of the test's farm LAN ([`Channel::start_at`]): the fixture package with the
+//! bundle of the end-to-end rig's signer ([`Fixture::build_signed`]), which the installed guest's
+//! own `gh` checks against the signer's trusted root, and the release `hostkeeper-pxe fetch`
+//! downloads, its ISO streamed from the file the job downloaded ([`Channel::serve_file`]).
 
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -205,6 +211,13 @@ pub struct Package {
     files: Vec<(String, Vec<u8>)>,
 }
 
+impl Package {
+    /// The name of the archive, `<service>-<version>-<platform>.tar.zst`.
+    pub fn archive_name(&self) -> String {
+        format!("{}-{}-{}.tar.zst", self.service, self.version, platform())
+    }
+}
+
 /// What the fixture package places and runs.
 pub struct Fixture<'a> {
     /// The service (its unit is `<service>.service`).
@@ -221,8 +234,15 @@ pub struct Fixture<'a> {
 
 impl Fixture<'_> {
     /// The package: its hook is the fixture (`ok` at every step), its one unit runs the
-    /// fixture's `serve`, and its one file says the version.
+    /// fixture's `serve`, and its one file says the version. Its attestation bundle is one only
+    /// the stand-in verifier of [`HostTrust`] takes.
     pub fn build(&self) -> Package {
+        self.build_signed(|_, digest| bundle(digest).into_bytes())
+    }
+
+    /// [`Self::build`], with the attestation bundle `sign` gives for the archive's file name and
+    /// SHA-256 (lowercase hex).
+    pub fn build_signed(&self, sign: impl FnOnce(&str, &str) -> Vec<u8>) -> Package {
         let Fixture {
             service, version, ..
         } = *self;
@@ -273,10 +293,7 @@ impl Fixture<'_> {
             version: version.to_owned(),
             files: vec![
                 (format!("{base}/index.json"), index.into_bytes()),
-                (
-                    format!("{base}/{file}.sigstore.json"),
-                    bundle(&digest).into_bytes(),
-                ),
+                (format!("{base}/{file}.sigstore.json"), sign(&file, &digest)),
                 (format!("{base}/{file}"), archive),
             ],
             digest,
@@ -284,10 +301,18 @@ impl Fixture<'_> {
     }
 }
 
-type Routes = Arc<Mutex<BTreeMap<String, Vec<u8>>>>;
+/// What the channel answers a path with.
+#[derive(Clone)]
+enum Body {
+    Bytes(Vec<u8>),
+    /// A file, read as it is sent: an ISO is larger than the test should hold in memory.
+    File(PathBuf),
+}
 
-/// The release channel: an HTTPS server on a loopback port the system picks, answering `GET` of
-/// the files of the packages it was given and 404 for any other path. Dropping it stops it.
+type Routes = Arc<Mutex<BTreeMap<String, Body>>>;
+
+/// The release channel: an HTTPS server on a port the system picks, answering `GET` of the
+/// files it was given and 404 for any other path. Dropping it stops it.
 pub struct Channel {
     pub addr: SocketAddr,
     routes: Routes,
@@ -298,7 +323,12 @@ pub struct Channel {
 impl Channel {
     /// Starts the channel, with a server certificate of `ca` for `127.0.0.1`.
     pub fn start(ca: &TestCa) -> Channel {
-        let leaf = ca.loopback_server();
+        Channel::start_at(ca, Ipv4Addr::LOCALHOST)
+    }
+
+    /// Starts the channel on `address`, with a server certificate of `ca` for that address.
+    pub fn start_at(ca: &TestCa, address: Ipv4Addr) -> Channel {
+        let leaf = ca.server_for(address);
         let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(leaf.key_der));
         let config =
             ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
@@ -308,7 +338,7 @@ impl Channel {
                 .with_single_cert(vec![CertificateDer::from(leaf.cert_der)], key)
                 .expect("the server config");
         let config = Arc::new(config);
-        let listener = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).expect("bind");
+        let listener = TcpListener::bind(SocketAddr::from((address, 0))).expect("bind");
         let addr = listener.local_addr().expect("the address");
         let routes: Routes = Arc::default();
         let stop = Arc::new(AtomicBool::new(false));
@@ -342,8 +372,20 @@ impl Channel {
     pub fn serve(&self, package: &Package) {
         let mut routes = self.routes.lock().expect("the routes");
         for (path, body) in &package.files {
-            routes.insert(path.clone(), body.clone());
+            routes.insert(path.clone(), Body::Bytes(body.clone()));
         }
+    }
+
+    /// Serves `body` at `path` from now on.
+    pub fn serve_bytes(&self, path: &str, body: Vec<u8>) {
+        let mut routes = self.routes.lock().expect("the routes");
+        routes.insert(path.to_owned(), Body::Bytes(body));
+    }
+
+    /// Serves the file `file` at `path` from now on, read from disk at each request.
+    pub fn serve_file(&self, path: &str, file: &Path) {
+        let mut routes = self.routes.lock().expect("the routes");
+        routes.insert(path.to_owned(), Body::File(file.to_path_buf()));
     }
 }
 
@@ -375,13 +417,22 @@ fn answer(config: &Arc<ServerConfig>, stream: TcpStream, routes: &Routes) -> std
     let body = routes.lock().expect("the routes").get(&path).cloned();
     let tls = tls.get_mut();
     match body {
-        Some(body) => {
+        Some(Body::Bytes(body)) => {
             write!(
                 tls,
                 "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                 body.len()
             )?;
             tls.write_all(&body)?;
+        }
+        Some(Body::File(file)) => {
+            let mut file = fs::File::open(file)?;
+            let len = file.metadata()?.len();
+            write!(
+                tls,
+                "HTTP/1.1 200 OK\r\nContent-Length: {len}\r\nConnection: close\r\n\r\n"
+            )?;
+            std::io::copy(&mut file, tls)?;
         }
         None => write!(
             tls,

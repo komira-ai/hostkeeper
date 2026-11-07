@@ -75,7 +75,9 @@ pub type Layer = (
 /// end-to-end tests run the coordinator in process with its fake issuer's config, and fetch and
 /// check the fixture's attestation with the package crate; the Mac's end-to-end test packages
 /// hello with their program `hello-e2e`, which runs hello's hook and server and so needs hello
-/// as a normal dependency. The binary's tests read the protobuf descriptors, and run the macOS
+/// as a normal dependency; and the network-install tests run `hostkeeper-pxe` (their program
+/// `hostkeeper-privileged-pxe`, which needs it as a normal dependency) and read a DHCP client's
+/// packet with its packet crate. The binary's tests read the protobuf descriptors, and run the macOS
 /// pkg's postinstall (`hostkeeper-launchd`) against the binary.
 pub const LAYERS: [Layer; 30] = [
     (BINARY, &[DAEMON], &[LAUNCHD, PROTO]),
@@ -124,9 +126,10 @@ pub const LAYERS: [Layer; 30] = [
             LAUNCHD,
             LINK,
             PLACED,
+            PXE,
             STEPS,
         ],
-        &[ENROLL, OBSERVE, OIDC, PACKAGE, PROTO, UNPACK],
+        &[ENROLL, OBSERVE, OIDC, PACKAGE, PROTO, PXE_PACKETS, UNPACK],
     ),
     (PROTO, &[], &[]),
     (
