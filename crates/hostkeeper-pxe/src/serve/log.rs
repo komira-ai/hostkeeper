@@ -10,6 +10,14 @@ use std::sync::Arc;
 /// The wall clock, in unix seconds.
 pub type Now = Arc<dyn Fn() -> u64 + Send + Sync>;
 
+/// The host's wall clock, in unix seconds: it only stamps the log lines, and nothing `serve`
+/// decides reads it.
+pub fn system_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs())
+}
+
 /// Where each line goes, without its newline.
 pub type Sink = Arc<dyn Fn(&str) + Send + Sync>;
 

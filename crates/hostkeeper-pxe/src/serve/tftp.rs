@@ -15,8 +15,8 @@ use std::net::{IpAddr, SocketAddr, SocketAddrV4};
 use std::sync::Arc;
 
 use hostkeeper_pxe_packets::tftp::{
-    Aborted, BOOT_EFI, ErrorCode, MAX_BLKSIZE, MAX_REQUEST, RecordPlatforms, Send, Step, Target,
-    Transfer, data_packet, on_request, parse_request,
+    Aborted, BOOT_EFI, ErrorCode, MAX_BLKSIZE, MAX_REQUEST, RecordPlatforms, Refused, Send, Step,
+    Target, Transfer, data_packet, on_request, parse_request,
 };
 use tokio::net::UdpSocket;
 use tokio::sync::watch;
@@ -34,7 +34,10 @@ pub async fn serve(server: Arc<Server>, socket: UdpSocket, mut stop: watch::Rece
             received = socket.recv_from(&mut buffer) => received,
             _ = stop.changed() => return,
         };
-        let Ok((n, from)) = received else { continue };
+        let (n, from) = match received {
+            Ok(received) => received,
+            Err(_) => continue,
+        };
         let bytes = buffer[..n].to_vec();
         let server = Arc::clone(&server);
         tokio::spawn(async move { request(&server, &bytes, from).await });
@@ -53,6 +56,29 @@ async fn request(server: &Server, bytes: &[u8], from: SocketAddr) {
             return;
         }
     };
+    let (name, content, transfer, first) = match prepare(server, bytes, from).await {
+        Ok(prepared) => prepared,
+        Err(refused) => {
+            server
+                .log()
+                .line(format_args!("tftp {from}: refused: {refused}"));
+            let _ = socket.send_to(&refused.packet(), from).await;
+            return;
+        }
+    };
+    let said = match send_file(server, &socket, from, transfer, first, &content).await {
+        Ok(()) => format!("sent {name} ({} bytes)", content.len()),
+        Err(why) => format!("{name} not sent: {why}"),
+    };
+    server.log().line(format_args!("tftp {from}: {said}"));
+}
+
+/// What the request `bytes` from `from` reads, and its transfer started; or why it is refused.
+async fn prepare(
+    server: &Server,
+    bytes: &[u8],
+    from: SocketAddr,
+) -> Result<(String, Content, Transfer, Send), Refused> {
     let lease = match from.ip() {
         IpAddr::V4(ip) => server.lease(ip),
         IpAddr::V6(_) => None,
@@ -63,22 +89,13 @@ async fn request(server: &Server, bytes: &[u8], from: SocketAddr) {
         true => server.answers().await.record_platforms,
         false => RecordPlatforms::new(),
     };
-    let read = match on_request(
+    let read = on_request(
         bytes,
         server.tftp_files(),
         lease.as_ref(),
         &records,
         server.boot(),
-    ) {
-        Ok(read) => read,
-        Err(refused) => {
-            server
-                .log()
-                .line(format_args!("tftp {from}: refused: {refused}"));
-            let _ = socket.send_to(&refused.packet(), from).await;
-            return;
-        }
-    };
+    )?;
     let (name, content) = match read.target {
         Target::File(name) => {
             let content = server.content(&name, Protocol::Tftp).await;
@@ -100,30 +117,11 @@ async fn request(server: &Server, bytes: &[u8], from: SocketAddr) {
             (shim.to_owned(), server.shim(shim))
         }
     };
-    let Some(content) = content else {
-        server
-            .log()
-            .line(format_args!("tftp {from}: refused: {name:?} is not served"));
-        let _ = socket
-            .send_to(&ErrorCode::FileNotFound.packet(), from)
-            .await;
-        return;
-    };
-    let (transfer, first) = match Transfer::start(read.options, content.len()) {
-        Ok(started) => started,
-        Err(refused) => {
-            server
-                .log()
-                .line(format_args!("tftp {from}: refused: {refused}"));
-            let _ = socket.send_to(&refused.packet(), from).await;
-            return;
-        }
-    };
-    let said = match send_file(server, &socket, from, transfer, first, &content).await {
-        Ok(()) => format!("sent {name} ({} bytes)", content.len()),
-        Err(why) => format!("{name} not sent: {why}"),
-    };
-    server.log().line(format_args!("tftp {from}: {said}"));
+    // Every name the TFTP set takes reads a content; a name that did not would be refused as
+    // not served.
+    let content = content.ok_or_else(|| Refused::Unknown(name.clone()))?;
+    let (transfer, first) = Transfer::start(read.options, content.len())?;
+    Ok((name, content, transfer, first))
 }
 
 /// Runs `transfer` of `content` to `client`, whose first packet is `first`, to its end.

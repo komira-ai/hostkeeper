@@ -147,8 +147,8 @@ fn the_endpoint_is_an_https_authority_and_nothing_more() {
             );
         }
         assert_eq!(
-            ConnectError::Endpoint("http://x".to_owned()).to_string(),
-            "--coordinator \"http://x\" is not https://<host>[:<port>]"
+            ConnectError::Endpoint("http://c.example".to_owned()).to_string(),
+            "--coordinator \"http://c.example\" is not https://<host>[:<port>]"
         );
         for endpoint in [
             "https://127.0.0.1:8443",

@@ -71,21 +71,23 @@ pub fn drop_to(to: DropTo) -> Result<(), PrivilegeError> {
     let gid = Gid::from_raw(to.gid);
     let uid = Uid::from_raw(to.uid);
     // Only root may set the supplementary groups; an unprivileged start has nothing to drop
-    // there, and cannot change them.
-    if geteuid().is_root() {
-        set_thread_groups(&[gid]).map_err(set("groups", to.gid))?;
-    }
+    // there, and cannot change them, so its refusal there is no error.
+    let root = geteuid().is_root();
+    let groups = set_thread_groups(&[gid]);
+    (groups.is_ok() | !root)
+        .then_some(())
+        .ok_or_else(|| set("groups", to.gid)(groups.err().unwrap_or(rustix::io::Errno::PERM)))?;
     set_thread_res_gid(gid, gid, gid).map_err(set("group", to.gid))?;
     set_thread_res_uid(uid, uid, uid).map_err(set("user", to.uid))?;
     let now = (getuid(), geteuid(), getgid(), getegid());
-    if now != (uid, uid, gid, gid) {
-        return Err(PrivilegeError::NotDropped {
+    (now == (uid, uid, gid, gid))
+        .then_some(())
+        .ok_or(PrivilegeError::NotDropped {
             uid: now.1.as_raw(),
             gid: now.3.as_raw(),
             want_uid: to.uid,
             want_gid: to.gid,
-        });
-    }
+        })?;
     let root = Uid::ROOT;
     match set_thread_res_uid(root, root, root) {
         Ok(()) => Err(PrivilegeError::Regained(to.uid)),
@@ -94,72 +96,5 @@ pub fn drop_to(to: DropTo) -> Result<(), PrivilegeError> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The test runs as an unprivileged user and drops to itself: the drop succeeds, and the
-    /// thread is that user and group. Root is refused as a target before any call, and a drop
-    /// to another user, which an unprivileged process cannot make, is refused naming the call.
-    ///
-    /// Catches a drop that leaves the process able to become root, one that accepts root as
-    /// the user to drop to, and one that reports success when a call failed.
-    #[test]
-    fn an_unprivileged_process_drops_to_itself_and_refuses_root_or_another_user() {
-        let me = DropTo {
-            uid: getuid().as_raw(),
-            gid: getgid().as_raw(),
-        };
-        assert_ne!(me.uid, 0, "the tests run unprivileged");
-        assert_eq!(drop_to(me), Ok(()));
-        assert_eq!((getuid().as_raw(), getgid().as_raw()), (me.uid, me.gid));
-        assert_eq!(
-            drop_to(DropTo {
-                uid: 0,
-                gid: me.gid
-            }),
-            Err(PrivilegeError::Root)
-        );
-        assert_eq!(
-            drop_to(DropTo {
-                uid: me.uid,
-                gid: 0
-            }),
-            Err(PrivilegeError::Root)
-        );
-        let other = DropTo {
-            uid: me.uid,
-            gid: me.gid.wrapping_add(1).max(1),
-        };
-        let refused = drop_to(other).expect_err("another group");
-        assert!(
-            matches!(&refused, PrivilegeError::Set { what: "group", id, .. } if *id == other.gid),
-            "{refused:?}"
-        );
-        assert_eq!(
-            refused.to_string(),
-            format!(
-                "cannot set the group to {}: {}",
-                other.gid,
-                rustix::io::Errno::PERM
-            )
-        );
-        assert_eq!(
-            PrivilegeError::Root.to_string(),
-            "--user-id and --group-id must name an unprivileged user and group, not root (0)"
-        );
-        assert_eq!(
-            PrivilegeError::NotDropped {
-                uid: 5,
-                gid: 6,
-                want_uid: 7,
-                want_gid: 8
-            }
-            .to_string(),
-            "after the drop the process is uid 5 gid 6, not uid 7 gid 8"
-        );
-        assert_eq!(
-            PrivilegeError::Regained(7).to_string(),
-            "after the drop to uid 7 the process could become root again"
-        );
-    }
-}
+#[path = "privilege_tests.rs"]
+mod tests;

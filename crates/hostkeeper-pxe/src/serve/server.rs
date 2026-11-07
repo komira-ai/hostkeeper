@@ -315,10 +315,10 @@ impl Server {
             .sealed
             .sets()
             .any(|(_, set)| set.shim == name || set.grub == name);
-        match protocol == Protocol::Http || tftp_served {
-            true => self.sealed.file(name).map(Content::File),
-            false => None,
-        }
+        self.sealed
+            .file(name)
+            .filter(|_| protocol == Protocol::Http || tftp_served)
+            .map(Content::File)
     }
 
     /// The sealed shim `hostkeeper/boot.efi` stands for.

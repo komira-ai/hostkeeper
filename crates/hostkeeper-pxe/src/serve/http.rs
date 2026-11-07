@@ -12,11 +12,11 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use futures::stream;
+use futures::{StreamExt as _, stream};
 use http_body_util::combinators::BoxBody;
-use http_body_util::{BodyExt as _, Empty, Full, StreamBody};
+use http_body_util::{BodyExt, Empty, Full, StreamBody};
 use hyper::body::{Frame, Incoming};
-use hyper::header::{ALLOW, CONTENT_LENGTH, CONTENT_TYPE};
+use hyper::header::{ALLOW, CONTENT_LENGTH, CONTENT_TYPE, HeaderValue};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
@@ -37,8 +37,9 @@ pub async fn serve(server: Arc<Server>, listener: TcpListener, mut stop: watch::
             accepted = listener.accept() => accepted,
             _ = stop.changed() => return,
         };
-        let Ok((stream, peer)) = accepted else {
-            continue;
+        let (stream, peer) = match accepted {
+            Ok(accepted) => accepted,
+            Err(_) => continue,
         };
         let server = Arc::clone(&server);
         tokio::spawn(async move {
@@ -83,19 +84,20 @@ async fn answer(server: &Server, request: Request<Incoming>, peer: SocketAddr) -
         "http {peer}: {method} {path}: {}",
         status.as_u16()
     ));
-    let mut response = Response::builder().status(status);
+    let mut response = Response::new(body);
+    *response.status_mut() = status;
+    let headers = response.headers_mut();
     if status == StatusCode::METHOD_NOT_ALLOWED {
-        response = response.header(ALLOW, "GET, HEAD");
+        headers.insert(ALLOW, HeaderValue::from_static("GET, HEAD"));
     }
     if let Some(len) = len {
-        response = response
-            .header(CONTENT_LENGTH, len)
-            .header(CONTENT_TYPE, "application/octet-stream");
+        headers.insert(CONTENT_LENGTH, HeaderValue::from(len));
+        headers.insert(
+            CONTENT_TYPE,
+            HeaderValue::from_static("application/octet-stream"),
+        );
     }
-    // The builder takes only a status and headers this function chose, all of them valid.
     response
-        .body(body)
-        .unwrap_or_else(|_| Response::new(empty()))
 }
 
 /// An empty body.
@@ -112,26 +114,20 @@ fn body_of(content: Content) -> Body {
         file @ Content::File(_) => {
             let file = Arc::new(file);
             let size = file.len();
-            let chunks = stream::unfold(0_u64, move |offset| {
+            // One chunk from each offset; a read that fails ends the body with its error, so
+            // the client sees a body shorter than its Content-Length, never a whole one.
+            let chunks = stream::iter((0..size).step_by(CHUNK)).then(move |offset| {
                 let file = Arc::clone(&file);
+                let len = (size - offset).min(CHUNK as u64) as usize;
                 async move {
-                    if offset >= size {
-                        return None;
-                    }
-                    let len = (size - offset).min(CHUNK as u64) as usize;
-                    let read = tokio::task::spawn_blocking(move || file.read(offset, len))
+                    tokio::task::spawn_blocking(move || file.read(offset, len))
                         .await
-                        .unwrap_or_else(|e| Err(io::Error::other(e)));
-                    // After a failed read the stream ends: the client sees a body shorter than
-                    // its Content-Length, never a whole one.
-                    let next = match read {
-                        Ok(_) => offset + len as u64,
-                        Err(_) => size,
-                    };
-                    Some((read.map(|bytes| Frame::data(Bytes::from(bytes))), next))
+                        .map_err(io::Error::other)
+                        .and_then(|read| read)
+                        .map(|bytes| Frame::data(Bytes::from(bytes)))
                 }
             });
-            StreamBody::new(chunks).boxed()
+            BodyExt::boxed(StreamBody::new(chunks))
         }
     }
 }

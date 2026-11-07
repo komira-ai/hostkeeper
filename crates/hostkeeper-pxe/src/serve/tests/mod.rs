@@ -7,6 +7,7 @@ mod fake;
 mod kit;
 
 mod answers;
+mod edges;
 mod http;
 mod inventory;
 mod proxy;

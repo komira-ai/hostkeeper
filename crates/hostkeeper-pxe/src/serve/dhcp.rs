@@ -27,7 +27,10 @@ pub async fn serve(
             received = socket.recv_from(&mut buffer) => received,
             _ = stop.changed() => return,
         };
-        let Ok((n, from)) = received else { continue };
+        let (n, from) = match received {
+            Ok(received) => received,
+            Err(_) => continue,
+        };
         let bytes = buffer[..n].to_vec();
         let (server, socket) = (Arc::clone(&server), Arc::clone(&socket));
         tokio::spawn(async move {
@@ -36,10 +39,11 @@ pub async fn serve(
                     ReplyTo::Broadcast => SocketAddr::V4(reply_to),
                     ReplyTo::Sender => from,
                 };
-                if let Err(error) = socket.send_to(&reply, to).await {
-                    server.log().line(format_args!(
+                match socket.send_to(&reply, to).await {
+                    Ok(_) => {}
+                    Err(error) => server.log().line(format_args!(
                         "dhcp: the answer to {to} could not be sent: {error}"
-                    ));
+                    )),
                 }
             }
         });

@@ -75,11 +75,7 @@ impl ServePorts {
     /// The host's: the system clock, standard error, and SIGINT or SIGTERM.
     pub fn host() -> ServePorts {
         ServePorts {
-            now: Arc::new(|| {
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_or(0, |since| since.as_secs())
-            }),
+            now: Arc::new(log::system_now),
             sink: Arc::new(|line| eprintln!("hostkeeper-pxe serve: {line}")),
             stop: Box::new(|| Box::pin(signalled())),
         }

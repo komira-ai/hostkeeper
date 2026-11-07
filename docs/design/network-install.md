@@ -229,7 +229,10 @@ the packet handling, `crates/hostkeeper-pxe-packets` (item N7).
   with no platform, and router mode installs nothing yet; and `Hosts.List` answers only the hosts heard from
   since the coordinator started, so after a restart of the coordinator a retired host whose record is still in
   the inventory is no longer known by that list (its record is not `enrolled` either), and only removing its
-  record keeps it out of the answer set.
+  record keeps it out of the answer set. That second fact is closed by a follow-up item: `InventoryRecord` gains
+  an additive field naming the host the enrollment store holds for that id (approved, denied or retired), read
+  from the durable store, and `serve` leaves such records out; until it lands, the runbook (item N12) has the
+  operator remove a retired host's record.
 
 **The L2 requirement.** A DHCPDISCOVER and a selecting DHCPREQUEST are broadcasts. `hostkeeper-pxe` sees them only on
 the same broadcast domain, unless a relay forwards them; this design adds no relay. Both modes rely on the router's
