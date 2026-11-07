@@ -64,6 +64,11 @@ libproc = "0.14.11"
 # results; the tests of hostkeeper-steps and hostkeeper-launchd read back the launchd plists they
 # generate.
 plist = { version = "1.10.3", default-features = false }
+# The coordinator's Postgres store (hostkeeper-coordinator, `--database-dsn-file`): the blocking
+# client, driven only from the store's own threads, never from inside the tokio runtime. No TLS
+# yet: a connection string that asks for it is refused. `with-serde_json-1` writes and reads the
+# `jsonb` columns with the same serde code as the files.
+postgres = { version = "0.19.14", features = ["with-serde_json-1"] }
 # The protobuf runtime of the code hostkeeper-proto generates, and the descriptor types its tests read.
 prost = "0.14.4"
 prost-types = "0.14.4"

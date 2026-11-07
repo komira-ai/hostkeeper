@@ -21,7 +21,7 @@ use hostkeeper_wire::version::Version;
 use hostkeeper_wire::wire::is_service_name;
 use hostkeeper_wire::{HostId, RoleName};
 
-use crate::audit_file::{Logged, Query};
+use crate::audit_file::{Actor, Filter, Logged, Query};
 use crate::halt;
 use crate::holds::{HoldMark, HoldScope, MAX_HOLDS, marks_of};
 use crate::operate::reason;
@@ -594,18 +594,26 @@ impl Coordinator {
             0 => MAX_AUDIT_PAGE,
             limit => limit.min(MAX_AUDIT_PAGE),
         };
-        let keep = |e: &AuditEntry| {
-            actor.is_none_or(|actor| actor_of(&e.by) == actor)
-                && request.by_name.as_ref().is_none_or(|n| *n == e.by)
-                && request.action.as_ref().is_none_or(|a| *a == e.action)
-                && (request.service.is_none() || e.service == request.service)
-                && (request.node_id.is_none() || e.node_id == request.node_id)
+        let action = request.action.as_deref();
+        let actions: &[&str] = match &action {
+            Some(action) => std::slice::from_ref(action),
+            None => &[],
         };
         let page = self.ops.audit_page(&Query {
             since_seq: request.since_seq,
             limit,
             newest: request.newest,
-            keep: &keep,
+            filter: Filter {
+                actor: actor.map(|actor| match actor {
+                    proto::Actor::Coordinator => Actor::Coordinator,
+                    proto::Actor::Ci => Actor::Ci,
+                    _ => Actor::Operator,
+                }),
+                by_name: request.by_name.as_deref(),
+                actions,
+                service: request.service.as_deref(),
+                node_id: request.node_id.as_deref(),
+            },
         })?;
         Ok(proto::ListAuditResponse {
             next_seq: page.last().map_or(request.since_seq, |l| l.entry.seq),

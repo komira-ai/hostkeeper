@@ -28,7 +28,7 @@ use std::time::Duration;
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_wire::HostId;
 
-use crate::audit_file::Query;
+use crate::audit_file::{Filter, Query};
 use crate::enrollment::{ACTION_APPROVE, ACTION_REPLACE};
 use crate::grpc::report;
 use crate::holds::marks_of;
@@ -221,15 +221,15 @@ impl Coordinator {
     /// # Errors
     /// `store_failed`: the audit log cannot be read (logged).
     fn retire_audited(&self, node: &str) -> Result<bool, proto::HostsRefusal> {
-        let keep = |entry: &AuditEntry| {
-            entry.node_id.as_deref() == Some(node)
-                && [ACTION_RETIRE, ACTION_APPROVE, ACTION_REPLACE].contains(&entry.action.as_str())
-        };
         let newest = self.ops.audit_page(&Query {
             since_seq: 0,
             limit: 1,
             newest: true,
-            keep: &keep,
+            filter: Filter {
+                actions: &[ACTION_RETIRE, ACTION_APPROVE, ACTION_REPLACE],
+                node_id: Some(node),
+                ..Filter::default()
+            },
         })?;
         Ok(newest
             .first()

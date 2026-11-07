@@ -199,15 +199,60 @@ pub(crate) struct Logged {
     pub(crate) at_unix: Option<u64>,
 }
 
-/// Which entries a page of the audit log holds: those numbered above `since_seq` that `keep`
+/// Who made a change, by the name it was made under: the coordinator, CI, or an operator's
+/// token (any other name).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Actor {
+    /// An operator's token.
+    Operator,
+    /// CI's OIDC token.
+    Ci,
+    /// The coordinator itself.
+    Coordinator,
+}
+
+impl Actor {
+    /// The actor of a change made under the name `by`.
+    pub(crate) fn of(by: &str) -> Actor {
+        match by {
+            crate::reconcile::COORDINATOR => Actor::Coordinator,
+            crate::reconcile::CI => Actor::Ci,
+            _ => Actor::Operator,
+        }
+    }
+}
+
+/// Which entries of the audit log a page keeps: each condition given holds of it. `actions`
+/// keeps an entry whose action is any of them; an empty list keeps every action.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Filter<'a> {
+    pub(crate) actor: Option<Actor>,
+    pub(crate) by_name: Option<&'a str>,
+    pub(crate) actions: &'a [&'a str],
+    pub(crate) service: Option<&'a str>,
+    pub(crate) node_id: Option<&'a str>,
+}
+
+impl Filter<'_> {
+    /// Whether the filter keeps `entry`.
+    pub(crate) fn keeps(&self, entry: &AuditEntry) -> bool {
+        self.actor.is_none_or(|actor| Actor::of(&entry.by) == actor)
+            && self.by_name.is_none_or(|name| name == entry.by)
+            && (self.actions.is_empty() || self.actions.contains(&entry.action.as_str()))
+            && (self.service.is_none() || entry.service.as_deref() == self.service)
+            && (self.node_id.is_none() || entry.node_id.as_deref() == self.node_id)
+    }
+}
+
+/// Which entries a page of the audit log holds: those numbered above `since_seq` that `filter`
 /// keeps, at most `limit` of them (at least 1), the oldest of them or, with `newest`, the newest;
 /// oldest first either way.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct Query<'a> {
     pub(crate) since_seq: u64,
     pub(crate) limit: usize,
     pub(crate) newest: bool,
-    pub(crate) keep: &'a dyn Fn(&AuditEntry) -> bool,
+    pub(crate) filter: Filter<'a>,
 }
 
 /// How many bytes one read of the audit file takes.
@@ -413,7 +458,7 @@ fn start_after(file: &Reader, since_seq: u64) -> io::Result<u64> {
 pub(crate) fn page_in(file: &Reader, query: &Query<'_>) -> io::Result<Vec<Logged>> {
     let mut page = Vec::new();
     let mut add = |logged: Logged| {
-        if (query.keep)(&logged.entry) {
+        if query.filter.keeps(&logged.entry) {
             page.push(logged);
         }
         if page.len() >= query.limit {

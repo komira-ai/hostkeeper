@@ -27,7 +27,7 @@ use serde_json::json;
 
 use super::fake::store_failure;
 use super::{Backend, BackendError, Commit, Fake, Files, Loaded, Shared};
-use crate::audit_file::{AuditLine, DEFAULT_ROTATION, Logged, Query};
+use crate::audit_file::{Actor, AuditLine, DEFAULT_ROTATION, Filter, Logged, Query};
 use crate::desired::{self, Desired, StoreError};
 use crate::jti_file::jti_path;
 use crate::ops::{AuditEntry, OpsError, OpsState};
@@ -50,9 +50,6 @@ type Outcome = Result<(), String>;
 
 /// A clause of the suite.
 type Clause = fn(&dyn Subject) -> Outcome;
-
-/// What a page keeps.
-type Keep<'a> = &'a dyn Fn(&AuditEntry) -> bool;
 
 /// `Err(what)` unless `holds`.
 fn check(holds: bool, what: impl FnOnce() -> String) -> Outcome {
@@ -340,31 +337,29 @@ fn audit_pages(subject: &dyn Subject) -> Outcome {
         ..Commit::default()
     })
     .map_err(|why| format!("the commit failed: {why}"))?;
-    let by_alice = |e: &AuditEntry| e.by == "alice";
-    let halts = |e: &AuditEntry| e.action == "halt";
-    let of_web = |e: &AuditEntry| e.service.as_deref() == Some("web");
-    let of_s1 = |e: &AuditEntry| e.node_id.as_deref() == Some("s1");
-    let every = |_: &AuditEntry| true;
-    let filters: [(&str, Keep<'_>); 5] = [
-        ("every", &every),
-        ("by", &by_alice),
-        ("action", &halts),
-        ("service", &of_web),
-        ("node", &of_s1),
+    let filters: [(&str, Filter<'_>); 8] = [
+        ("every", Filter::default()),
+        ("by", Filter { by_name: Some("alice"), ..Filter::default() }),
+        ("action", Filter { actions: &["halt"], ..Filter::default() }),
+        ("actions", Filter { actions: &["halt", "exclude"], ..Filter::default() }),
+        ("service", Filter { service: Some("web"), ..Filter::default() }),
+        ("node", Filter { node_id: Some("s1"), ..Filter::default() }),
+        ("operator", Filter { actor: Some(Actor::Operator), ..Filter::default() }),
+        ("ci", Filter { actor: Some(Actor::Ci), service: Some("kbf"), ..Filter::default() }),
     ];
-    for (name, keep) in filters {
+    for (name, filter) in filters {
         for (since_seq, limit, newest) in [(0, 5, false), (4, 3, false), (0, 4, true), (9, 5, true)]
         {
             let query = Query {
                 since_seq,
                 limit,
                 newest,
-                keep,
+                filter,
             };
             let mut want: Vec<Logged> = held
                 .iter()
                 .map(|line| line.clone().into_logged())
-                .filter(|logged| logged.entry.seq > since_seq && keep(&logged.entry))
+                .filter(|logged| logged.entry.seq > since_seq && filter.keeps(&logged.entry))
                 .collect();
             if newest {
                 want.drain(..want.len().saturating_sub(limit));
