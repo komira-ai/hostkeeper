@@ -35,10 +35,11 @@ use hostkeeper_enrollment::validity::UnixClock;
 
 use crate::answer;
 use crate::command::{Command, DEVICE_INFORMATION, SECURITY_INFO};
+use crate::enroll::{EnrollSide, Held};
 use crate::event::{self, Event, EventError};
 use crate::ids::{CommandUuid, EnrollmentId, shown};
 use crate::nanohub::{EnqueueError, NanoHub};
-use crate::record::{DeviceRecord, Phase, Sent};
+use crate::record::{DeviceRecord, NonceRecord, Phase, Sent};
 use crate::store::{DeviceStore, StoreError};
 
 /// Fills a buffer with random bytes; `false` when it could not. Command UUIDs are drawn from it.
@@ -96,6 +97,12 @@ pub struct Gate {
     random: Random,
     devices: Mutex<BTreeMap<EnrollmentId, DeviceRecord>>,
     turn: tokio::sync::Mutex<()>,
+    /// The enrollment side; without it the gate sends no profile and issues no nonce.
+    enroll: Option<EnrollSide>,
+    /// The nonce last pushed to each device, to push it again.
+    held: Mutex<BTreeMap<EnrollmentId, Held>>,
+    /// Set by [`Gate::wake`]: a request was posted.
+    wake: tokio::sync::Notify,
 }
 
 impl std::fmt::Debug for Gate {
@@ -130,7 +137,68 @@ impl Gate {
             random,
             devices: Mutex::new(devices),
             turn: tokio::sync::Mutex::new(()),
+            enroll: None,
+            held: Mutex::new(BTreeMap::new()),
+            wake: tokio::sync::Notify::new(),
         })
+    }
+
+    /// The same gate with its enrollment side ([`crate::enroll`]): it installs the config
+    /// profile and issues and pushes nonces.
+    #[must_use]
+    pub fn with_enrollment(mut self, side: EnrollSide) -> Self {
+        self.enroll = Some(side);
+        self
+    }
+
+    /// Asks for a look at every device soon ([`crate::enroll::run`]): the coordinator calls it
+    /// when a request is posted. A wake while a look runs is kept for the next.
+    pub fn wake(&self) {
+        self.wake.notify_one();
+    }
+
+    /// Resolves at the next [`Gate::wake`], or at once for one made since the last.
+    pub(crate) async fn woken(&self) {
+        self.wake.notified().await;
+    }
+
+    pub(crate) fn enroll_side(&self) -> Option<&EnrollSide> {
+        self.enroll.as_ref()
+    }
+
+    pub(crate) async fn turn(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.turn.lock().await
+    }
+
+    pub(crate) fn now(&self) -> u64 {
+        self.clock.now_unix()
+    }
+
+    fn held_map(&self) -> std::sync::MutexGuard<'_, BTreeMap<EnrollmentId, Held>> {
+        self.held.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    pub(crate) fn hold(&self, id: &EnrollmentId, held: Held) {
+        self.held_map().insert(id.clone(), held);
+    }
+
+    /// The bytes of `nonce`, when the gate holds them for `id`.
+    pub(crate) fn held(
+        &self,
+        id: &EnrollmentId,
+        nonce: &NonceRecord,
+    ) -> Option<crate::enroll::Nonce> {
+        self.held_map()
+            .get(id)
+            // One comparison of the pair: the nonce the gate holds is the one the record names.
+            .filter(|held| {
+                (held.request_id, held.issued_unix) == (nonce.request_id, nonce.issued_unix)
+            })
+            .map(|held| held.nonce.clone())
+    }
+
+    pub(crate) fn forget_held(&self, id: &EnrollmentId) {
+        self.held_map().remove(id);
     }
 
     fn devices(&self) -> std::sync::MutexGuard<'_, BTreeMap<EnrollmentId, DeviceRecord>> {
@@ -211,11 +279,13 @@ impl Gate {
             let sent = self.send(&id, &command).await;
             self.settle(&mut record, &command, sent.err().as_ref());
         }
+        // The enrollment side's look at the device; without the side it does nothing.
+        self.advance(self.enroll.as_ref(), record).await;
         Ok(Handled::Recorded)
     }
 
     /// Writes `record` and then takes it into memory.
-    fn keep(&self, record: &DeviceRecord) -> Result<(), StoreError> {
+    pub(crate) fn keep(&self, record: &DeviceRecord) -> Result<(), StoreError> {
         self.store.save(record)?;
         self.devices()
             .insert(record.enrollment_id.clone(), record.clone());
@@ -223,7 +293,11 @@ impl Gate {
     }
 
     /// Queues `command` for `id`; the error is NanoHUB's reason for not queueing it.
-    async fn send(&self, id: &EnrollmentId, command: &Command) -> Result<(), EnqueueError> {
+    pub(crate) async fn send(
+        &self,
+        id: &EnrollmentId,
+        command: &Command,
+    ) -> Result<(), EnqueueError> {
         let queued = self.nanohub.enqueue(id, command).await.inspect_err(|why| {
             tracing::warn!(enrollment_id = %id, command = command.request_type(), %why,
                 "NanoHUB did not queue the command; it is asked again at the device's next check-in");
@@ -239,7 +313,12 @@ impl Gate {
     /// queued for `why`, when it is taken off again with the reason kept, so it is asked again
     /// at the next check-in. `record` changes once the new one is written; a write that fails
     /// is logged, and the command, not written as queued, is dropped at the next event.
-    fn settle(&self, record: &mut DeviceRecord, command: &Command, why: Option<&EnqueueError>) {
+    pub(crate) fn settle(
+        &self,
+        record: &mut DeviceRecord,
+        command: &Command,
+        why: Option<&EnqueueError>,
+    ) {
         let mut taken = record.clone();
         match why {
             None => taken
@@ -261,7 +340,7 @@ impl Gate {
     }
 
     /// A new command UUID; `None` when no random bytes could be had.
-    fn uuid(&self) -> Option<CommandUuid> {
+    pub(crate) fn uuid(&self) -> Option<CommandUuid> {
         let mut bytes = [0; 16];
         (self.random)(&mut bytes).then(|| CommandUuid::from_random(bytes))
     }
@@ -336,13 +415,18 @@ fn result(
                 SECURITY_INFO => {
                     record.answer_security_info(answer::security_info(payload, &uuid), now);
                 }
-                // A command of the gate's enrollment side, which this release does not send.
-                _ => {}
+                // A profile command of the enrollment side.
+                _ => record.answer_profile(&uuid, true, now),
             }
         }
         "Error" | "CommandFormatError" => {
             record.take_sent(&uuid);
-            record.refuse(&sent.request_type, &format!("the device answered {status}"));
+            match sent.request_type.as_str() {
+                DEVICE_INFORMATION | SECURITY_INFO => {
+                    record.refuse(&sent.request_type, &format!("the device answered {status}"));
+                }
+                _ => record.answer_profile(&uuid, false, now),
+            }
         }
         // `NotNow`, or a status this release does not know: the command stays unanswered.
         _ => return None,
