@@ -56,8 +56,9 @@ reinstall needs no one-time network boot (section 8).
 
 **What does not change.**
 
-- No Linux host is approved without a person. Q15 of hostkeeper-design.md stays at (a) in v1: an inventory match fills
-  in the host id and role, and nothing more.
+- A match approves only in one case. An exact, uncontested match of an open, unused record that names a role is approved
+  by the coordinator within the record's window, once (audited `enrollment.auto_approved`); any other match fills in the
+  form and nothing more, and a person approves it. Q15 of hostkeeper-design.md is read accordingly.
 - The image carries no secret. The host's only trust root is still `hostkeeper.toml`, and its contents are as
   hostkeeper-design.md section 4.1 gives them.
 - The six existing farm nodes are not reinstalled. They keep the bootstrap and adopt path they use today.
@@ -125,8 +126,9 @@ mode, in which `hostkeeper-pxe` sends no DHCP message for guarding to drop. Rout
 
 **Which machines may be installed: the answer set.** At start, and again before each answer, `hostkeeper-pxe` reads
 through the operator API the inventory (`Enrollment.ListRecords`) and the pending requests (`Enrollment.List`). A MAC is
-in the answer set when it is a data MAC of a record that is not enrolled, whose `host_held` is `NONE`, that no pending
-request matches, and whose platform agrees with the firmware's (below). Only a MAC in the set gets the proxy offer, in
+in the answer set when it is a data MAC of a record that is not enrolled, whose `host_held` is `NONE`, whose
+approval window is open (`InventoryRecord.state` is `OPEN`: `CLOSED`, `USED` and `UNSPECIFIED`, a coordinator before
+windows, leave it out), that no pending request matches, and whose platform agrees with the firmware's (below). Only a MAC in the set gets the proxy offer, in
 proxy mode, or the install entry, in router mode. A machine that is enrolled, retired, or installed and waiting for
 approval therefore boots its disk whenever it boots the network first. Without that rule, every such machine would be
 wiped at its next reboot while `hostkeeper-pxe` runs, which matters more now that network boot early in the boot order
@@ -484,8 +486,9 @@ x86-64.
 loader or kernel Canonical did not sign. They can still change the kernel command line, the initrd and the ISO (point
 2 of section 5), and so still control the install. With Secure Boot off, they control everything from the first file.
 Either way, in v1 the farm LAN must be free of an active attacker while `hostkeeper-pxe` runs. Q15 of
-hostkeeper-design.md does not rely on a trusted network: it keeps approval a person's click because a MAC is only a
-claim. That defence does not reach this case, because an attacker who controls the install controls the key hash the
+hostkeeper-design.md does not rely on a trusted network: it limits automatic approval to a record the operator opened
+for a window, and keeps every other approval a person's click, because a MAC is only a claim. That defence does not
+reach this case, because an attacker who controls the install controls the key hash the
 console shows too. The residual risk is stated here as a decision for the CEO (Question 2), not hidden.
 
 **Later: a fully verified chain.** Enroll a key of the farm's own in each machine's Secure Boot `db` (by the BMC, once
@@ -576,7 +579,9 @@ thing:
   by the console's key hash. This is additive: a new field on `PendingEnrollment` and a new refusal value. A request
   that matches several records contests the requests of each.
 
-**Q15 stays (a) for Linux in v1.** None of the claims above approves anything by itself, and nothing auto-approves.
+**Q15 for Linux in v1.** None of the claims above approves anything by itself. The one automatic approval is an exact,
+uncontested match of an open, unused record that names a role: the coordinator approves it within the record's window,
+once. Any other match only fills in the form.
 
 ## 8. Reinstall of a known host
 
@@ -944,8 +949,8 @@ console then shows that system's key hash, and the person approves it. The real 
   machine, which needs BMC control or a person at each firmware screen.
 
 Recommendation: (a) for v1, and (b) as the item after BMC control. The same LAN already serves every node its address
-by unauthenticated DHCP, and an attacker on it can already disturb every node. Note that Q15 (a) does not cover this
-case: a person's approval protects against a forged request, not against an install the attacker controls.
+by unauthenticated DHCP, and an attacker on it can already disturb every node. Note that Q15 as built (a person's approval, or a record's one-time window) does not cover this
+case: approval protects against a forged request, not against an install the attacker controls.
 
 **Question 3. What credential does `hostkeeper-pxe` read the inventory with, and where does it run?** It needs the
 records (each with its `host_held`) and pending requests (section 3), from the coordinator's private listener, and it must sit on the farm

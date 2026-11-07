@@ -25,6 +25,7 @@ struct Seen {
     adds: Vec<proto::AddRecordRequest>,
     lists: Vec<proto::ListRecordsRequest>,
     removes: Vec<proto::RemoveRecordRequest>,
+    opens: Vec<proto::OpenRecordRequest>,
     rejects: Vec<proto::RejectRequest>,
     bearers: Vec<String>,
 }
@@ -100,6 +101,13 @@ impl Enrollment for Records {
                 added_unix: 1_800_000_000,
                 enrolled: false,
                 host_held: proto::HostHeld::None.into(),
+                approve_until_unix: if add.role.is_empty() {
+                    0
+                } else {
+                    add.approve_until_unix
+                },
+                state: proto::RecordState::Open.into(),
+                ..proto::InventoryRecord::default()
             };
             s.records.insert(add.host_id, record.clone());
             Ok(Response::new(proto::AddRecordResponse {
@@ -141,6 +149,26 @@ impl Enrollment for Records {
                 Some(_) => Ok(Response::new(proto::RemoveRecordResponse::default())),
                 None => Err(Status::new(Code::NotFound, "no_record")),
             }
+        })
+    }
+
+    async fn open_record(
+        &self,
+        request: Request<proto::OpenRecordRequest>,
+    ) -> Result<Response<proto::OpenRecordResponse>, Status> {
+        self.bearer(&request);
+        let open = request.into_inner();
+        self.seen(|s| {
+            s.opens.push(open.clone());
+            let Some(record) = s.records.get_mut(&open.host_id) else {
+                return Err(Status::new(Code::NotFound, "no_record"));
+            };
+            record.approve_until_unix = open.approve_until_unix;
+            record.state = proto::RecordState::Open.into();
+            Ok(Response::new(proto::OpenRecordResponse {
+                record: Some(record.clone()),
+                entry: None,
+            }))
         })
     }
 }
@@ -239,7 +267,7 @@ fn the_inventory_commands_add_list_and_remove_a_record_through_the_grpc_route() 
                "dataMacs": ["0C-C4-7A-00-00-02", "0c:c4:7a:00:00:03"],
                "bmcMac": "0c:c4:7a:00:00:01", "serial": "SN-1", "notes": "rack 4",
                "addedBy": "operator", "addedUnix": "1800000000",
-               "hostHeld": "HOST_HELD_NONE"})
+               "hostHeld": "HOST_HELD_NONE", "state": "RECORD_STATE_OPEN"})
     );
     assert_eq!(
         records.seen(|s| s.adds.clone()),
@@ -253,6 +281,7 @@ fn the_inventory_commands_add_list_and_remove_a_record_through_the_grpc_route() 
             bmc_mac: "0c:c4:7a:00:00:01".to_owned(),
             serial: "SN-1".to_owned(),
             notes: "rack 4".to_owned(),
+            ..proto::AddRecordRequest::default()
         }]
     );
 
@@ -418,4 +447,88 @@ fn list_records_sends_the_enrolled_filter_as_typed() {
         records.seen(|s| s.lists.iter().map(|l| l.enrolled).collect::<Vec<_>>()),
         [None, Some(true), Some(false)]
     );
+}
+
+/// Proves: `add-record --approve-until-unix` and `--approve-for-secs` reach
+/// `AddRecordRequest.approve_until_unix` and `approve_for_secs` as typed (an absent flag stays 0,
+/// which is "none given"); `open-record` sends its host id, window and reason as
+/// `OpenRecordRequest` over the operator's route, prints the record the server answers with its
+/// state, and ends a run against an unknown host id with `no_record` on stderr.
+#[test]
+fn add_record_carries_its_window_and_open_record_reopens_one() {
+    let dir = hostkeeper_testkit::Scratch::under(
+        std::path::Path::new(env!("CARGO_TARGET_TMPDIR")),
+        "ctl-inventory-window",
+    )
+    .expect("a scratch directory");
+    let token_file = dir.path().join("token");
+    std::fs::write(&token_file, format!("{TOKEN}\n")).expect("written");
+    let token_file = token_file.to_str().expect("UTF-8 path");
+    let records = Records::default();
+    let memory = InMemory::new(PeerIdentity::Operator("op".to_owned()))
+        .serve(EnrollmentServer::new(records.clone()));
+
+    for (host, flag, value) in [
+        ("db-1", "--approve-until-unix", "1800086400"),
+        ("db-2", "--approve-for-secs", "3600"),
+    ] {
+        let added = ctl(
+            &memory,
+            token_file,
+            &[
+                "enrollment",
+                "add-record",
+                "--host-id",
+                host,
+                "--role",
+                "storage",
+                flag,
+                value,
+            ],
+        );
+        assert_eq!(added.code, exit::SUCCESS, "{}", added.stderr);
+    }
+    let adds = records.seen(|s| s.adds.clone());
+    assert_eq!(
+        adds.iter()
+            .map(|a| (a.approve_until_unix, a.approve_for_secs))
+            .collect::<Vec<_>>(),
+        [(1_800_086_400, 0), (0, 3_600)]
+    );
+
+    let opened = json_of(&ctl(
+        &memory,
+        token_file,
+        &[
+            "enrollment",
+            "open-record",
+            "--host-id",
+            "db-2",
+            "--approve-until-unix",
+            "1800090000",
+            "--reason",
+            "rack was late",
+        ],
+    ));
+    assert_eq!(opened["record"]["hostId"], "db-2");
+    assert_eq!(opened["record"]["approveUntilUnix"], "1800090000");
+    assert_eq!(opened["record"]["state"], "RECORD_STATE_OPEN");
+    assert_eq!(
+        records.seen(|s| s.opens.clone()),
+        [proto::OpenRecordRequest {
+            host_id: "db-2".to_owned(),
+            approve_until_unix: 1_800_090_000,
+            approve_for_secs: 0,
+            reason: "rack was late".to_owned(),
+        }]
+    );
+
+    let missing = ctl(
+        &memory,
+        token_file,
+        &["enrollment", "open-record", "--host-id", "nobody"],
+    );
+    assert_eq!(missing.code, exit::FAILURE);
+    assert!(missing.stderr.contains("no_record"), "{}", missing.stderr);
+    assert_eq!(missing.stdout, "");
 }
