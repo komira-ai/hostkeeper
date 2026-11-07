@@ -32,7 +32,7 @@ use hyper::body::Body;
 use prost::Message;
 
 use super::refusal::{RpcError, rpc_error};
-use super::{Enrollment, MacOutcome};
+use super::{Enrollment, MacAllowEntry, MacOutcome};
 use crate::http::{BoxError, Peer, read_body};
 use crate::ops::AuditEntry;
 use crate::reconcile::COORDINATOR;
@@ -132,22 +132,43 @@ fn decode<M: Message + Default>(bytes: &[u8]) -> Result<M, RpcError> {
     M::decode(bytes).map_err(|_| RpcError::Malformed)
 }
 
+/// What an `Enroll` did ([`Enrollment::enrolled`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Enrolled {
+    /// The answer to the host.
+    pub response: EnrollResponse,
+    /// The allowlist entry the request was approved as by its Mac nonce, if it was: the
+    /// coordinator assigns its services ([`crate::service::Coordinator::enroll`]).
+    pub by_nonce: Option<MacAllowEntry>,
+}
+
 /// The refusal `refusal`, as an error.
 fn refused(refusal: CoordinatorRefusal) -> RpcError {
     RpcError::Refused(refusal)
 }
 
 impl Enrollment {
+    /// `Enroll` ([`Enrollment::enrolled`]), answered: the services of a Mac approved by its
+    /// nonce are not assigned here, but by the coordinator ([`crate::service::Coordinator::enroll`]),
+    /// which is what the gRPC service calls.
+    ///
+    /// # Errors
+    /// As [`Enrollment::enrolled`].
+    pub fn enroll(&self, request: EnrollRequest) -> Result<EnrollResponse, RpcError> {
+        self.enrolled(request).map(|enrolled| enrolled.response)
+    }
+
     /// `Enroll`: records the request of the CSR's key (its id is the key's SHA-256, computed
     /// here), pending until an operator approves it. The same key again is the same request.
     /// A new request while the pending queue is full is refused `pending_full`. A pending
     /// request that carries a Mac nonce is approved by it when every condition of the Mac path
-    /// holds ([`Enrollment::mac_auto_approve`]); otherwise it stays pending.
+    /// holds ([`Enrollment::mac_auto_approve`]), and the allowlist entry it was approved as is
+    /// returned with the answer; otherwise it stays pending.
     ///
     /// # Errors
     /// `bad_csr`, `key_not_p256`, `renewal_not_allowed` (also for a `renewal_of` that is no
     /// host id), `pending_full`, or [`RpcError::Internal`].
-    pub fn enroll(&self, request: EnrollRequest) -> Result<EnrollResponse, RpcError> {
+    pub fn enrolled(&self, request: EnrollRequest) -> Result<Enrolled, RpcError> {
         let renewal_of = match request.renewal_of.as_str() {
             "" => None,
             text => Some(
@@ -191,16 +212,18 @@ impl Enrollment {
                 ),
             ));
         }
-        let approved_by_nonce = !request.mac_nonce.is_empty()
-            && posted.state.is_pending()
-            && matches!(
-                self.mac_auto_approve(&posted.request_id, &request.mac_nonce),
-                MacOutcome::Approved(_)
-            );
+        let by_nonce = if !request.mac_nonce.is_empty() && posted.state.is_pending() {
+            match self.mac_auto_approve(&posted.request_id, &request.mac_nonce) {
+                MacOutcome::Approved(entry) => Some(entry),
+                MacOutcome::Declined(_) | MacOutcome::Refused(_) => None,
+            }
+        } else {
+            None
+        };
         // A request already approved, issued or denied is polled for where it stands. A post never
         // answers an expired request: the store starts it over.
         let state = match posted.state {
-            _ if approved_by_nonce => EnrollState::Unspecified,
+            _ if by_nonce.is_some() => EnrollState::Unspecified,
             RequestState::Pending => EnrollState::Pending,
             RequestState::DuplicateClaim => EnrollState::DuplicateClaim,
             RequestState::Approved
@@ -208,9 +231,12 @@ impl Enrollment {
             | RequestState::Denied
             | RequestState::Expired => EnrollState::Unspecified,
         };
-        Ok(EnrollResponse {
-            request_id: posted.request_id.to_hex(),
-            state: state as i32,
+        Ok(Enrolled {
+            response: EnrollResponse {
+                request_id: posted.request_id.to_hex(),
+                state: state as i32,
+            },
+            by_nonce,
         })
     }
 

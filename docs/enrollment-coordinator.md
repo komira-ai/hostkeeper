@@ -9,7 +9,9 @@ the store are the crate `hostkeeper-enrollment`; the coordinator's side is the m
 
 The handlers of `Enroll`, `Poll` and `Renew` are built here. The heartbeat listener serves them
 as gRPC calls of `hostkeeper.agent.v1.Coordinator` (`crates/hostkeeper-coordinator/src/grpc/`),
-with no client certificate asked of `Enroll` and `Poll`.
+with no client certificate asked of `Enroll` and `Poll`. With `--lan-listen`, a third listener on
+the farm LAN serves the same, to network-installed hosts, which have no tailnet
+(`docs/design/network-install.md` section 7).
 
 ## Flags
 
@@ -20,19 +22,24 @@ with no client certificate asked of `Enroll` and `Poll`.
 | `--ca-init` | Make the CA when `--ca-key-file` does not exist. Without it a missing CA stops the start. |
 | `--server-cert-file <file>` | The coordinator's server certificate, the CA certificate and the server key, one PEM file (mode 0600) the coordinator writes. The heartbeat listener serves it. |
 | `--server-name <name>` | A DNS name the server certificate names, as daemons dial the coordinator; repeat it for each. |
+| `--lan-listen <address:port>` | A third listener, on the farm LAN, for network-installed hosts: it serves what the heartbeat listener serves, with its TLS and its checks (below), and the server certificate names its IP address. The address of one interface: a wildcard address stops the start. Requires `--enrollment-dir`. |
 | `--max-pending-enrollments <n>` | How many requests may wait for an operator at once, 1 or more; 256 when not given. A new request over it is refused `pending_full`; no waiting request is dropped for it, and a host posting its waiting request again is still answered. Requires `--enrollment-dir`. |
 | `--enrollment-request-ttl <time>` | How long a request waits for an operator before it expires: digits and one unit, `s`, `m`, `h` or `d` (`90m`, `72h`), at least one second; `72h` when not given. Requires `--enrollment-dir`. |
 | `--mac-serial-allowlist <file>` | The Mac serial numbers a Mac may be approved for by its MDM nonce, with the host id prefix, role and services of each (below). Without it no Mac is approved by its nonce. Requires `--enrollment-dir`. |
 
 The CA is made once. Every daemon config pins the SHA-256 of its certificate (`ca_sha256`); the
-start logs it at info as `ca_sha256`. The server certificate is made again when its file is
-missing, does not start with a certificate, or has less than a third of its 90 days left (60 days
-after it was made): at the start, and while the coordinator runs, at each look of the reload tick
+start logs it at info as `ca_sha256`. The server certificate names the DNS names of
+`--server-name` and then, with `--lan-listen`, its IP address (an IPv4 address written as IPv6 is
+named as IPv4), so a daemon may dial the LAN listener by address. It is made again when its file is
+missing, does not start with a certificate, has less than a third of its 90 days left (60 days
+after it was made), or names other names than these (a name or the address added, removed or
+changed; their order is not compared): at the start, and while the coordinator runs, at each look of the reload tick
 (`--tls-reload-secs`, 60 seconds when not given), before the tick reloads the TLS files, so the
 heartbeat listener serves the new certificate from that same tick. A restart is not needed. The
 new file, with a new key and a serial from the store, is written whole: a temporary file
-`<file>.tmp` beside it (mode 0600), fsync, rename over the old one, fsync of the directory. Delete
-the file to have one made sooner (for new `--server-name` values, say): the next tick makes it.
+`<file>.tmp` beside it (mode 0600), fsync, rename over the old one, fsync of the directory. New
+`--server-name` values or a new `--lan-listen` take effect at the restart that gives them; delete
+the file to have one made sooner for any other reason: the next tick makes it.
 
 A renewal that fails (the file cannot be read, or the new one cannot be made or written) changes
 nothing that is served: the temporary file is removed, the old file stays as it was, and the
@@ -55,6 +62,13 @@ handshake, and admits a client certificate of the coordinator's CA as well as on
 route is the one route such a connection reaches, and it answers 403 `forbidden`. Without
 `--enrollment-dir` nothing changes: the listener requires a certificate of `--client-ca`.
 
+The LAN listener of `--lan-listen` is a second listener of the heartbeat surface: the same TLS
+source (the server certificate, a client certificate optional), the same calls and the same
+checks. It answers `Enroll` and `Poll` to a caller without a certificate, `Heartbeat`, `Renew`
+and the JSON heartbeat route to a host certificate only, and never the operator API (a gRPC call
+of it is `UNIMPLEMENTED`), its JSON gateway, the private listener's JSON routes or the UI's files
+(404 `not_found`). The start line names it after the other two, as `lan=<address:port>`.
+
 ## State files
 
 Under `--enrollment-dir`, every file one binary protobuf message with a schema number, written
@@ -67,7 +81,7 @@ whole (temporary file, fsync, rename, directory fsync), mode 0600:
 | `hosts/<host id>.pb` | an approved host: its key's hash, machine id, role, services, the duplicate mark, when its first heartbeat since the approval was accepted |
 | `deny/<host id>.pb` | a denied host: retiring, retired, or cleared by a later approval |
 | `serial.pb` | the next certificate serial |
-| `mac-nonces/<nonce SHA-256>.pb` | a Mac nonce by its SHA-256 only: its serial, when it was issued, the request that consumed it |
+| `mac-nonces/<nonce SHA-256>.pb` | a Mac nonce by its SHA-256 only: its serial, the request it was issued for (absent on a nonce stored before that field), when it was issued, the request that consumed it |
 | `lock` | the lock every change takes |
 
 A request id is the SHA-256 of the request key's SubjectPublicKeyInfo, as 64 lower-case hex
@@ -162,7 +176,7 @@ again, as it did before it expired.
 | `record_contested` | another pending request matches an inventory record the request matches; `replace` does not set it aside |
 | `not_pending` | the request was approved, issued or denied already, or it expired |
 | `duplicate_claim` | the request is a duplicate claim and `replace` is not set |
-| `host_id_taken` | another key holds the host id and `replace` is not set |
+| `host_id_taken` | another key holds the host id and `replace` is not set (a Mac's nonce approval takes its own host id over without it: [A Mac approved by its nonce](#a-mac-approved-by-its-nonce)) |
 | `denied` | the host id is denied and `replace` is not set |
 | `store_failed` | the store could not be read or written; nothing changed |
 
@@ -193,15 +207,30 @@ is `unknown_host`.
 
 The MDM policy gate (its own component, not in this coordinator) gives each Mac a one-time nonce
 through `Enrollment::issue_mac_nonce`: 32 random bytes, of which the store keeps the SHA-256
-only, for one serial, good for one hour and one approval. A Mac's `Enroll` carries it
-(`mac_nonce`). The request is approved, as the allowlist entry of its serial says and by the
-approver `mdm-nonce`, only when the serial it claims is on `--mac-serial-allowlist`, the gate says
-the device is enrolled and supervised, and the nonce is known, unexpired, unused and was issued
-for that serial. The nonce is consumed in the approval's own write. Any condition false leaves the
-request pending for an operator and is audited `mac_auto_approve_declined` with one of
-`serial_not_allowed`, `device_state_unavailable`, `device_not_enrolled`, `device_not_supervised`,
-`nonce_unknown`, `nonce_expired`, `nonce_used`, `nonce_wrong_serial`; such an attempt does not use
-the nonce. This coordinator has no gate: it knows no device, so it approves no Mac by its nonce
+only, for one serial and the one pending request the gate saw (its key hash), good for one hour
+and one approval. A Mac's `Enroll` carries it (`mac_nonce`). The request is approved, as the
+allowlist entry of its serial says and by the approver `mdm-nonce`, only when the serial it claims
+is on `--mac-serial-allowlist`, the gate says the device is enrolled and supervised, and the nonce
+is known, unexpired, unused, was issued for that serial and was issued for that request. A nonce
+stored before the request field names no request and is judged without it. The nonce is consumed
+in the approval's own write. Any condition false leaves the request pending for an operator and is
+audited `mac_auto_approve_declined` with one of `serial_not_allowed`, `device_state_unavailable`,
+`device_not_enrolled`, `device_not_supervised`, `nonce_unknown`, `nonce_expired`, `nonce_used`,
+`nonce_wrong_serial`, `nonce_wrong_request`; such an attempt does not use the nonce. Another key
+that presents the nonce, a local user's who read it first for instance, is `nonce_wrong_request`.
+
+The approval assigns the allowlist entry's services to the host as an operator's approval assigns
+the services it names: one `assign` entry per service, by `mdm-nonce`. An assignment that cannot
+be made is logged and leaves the approval standing.
+
+A Mac wiped after its approval comes back with a new key while its host id is held by the old
+one. Its nonce approval takes the host id over, audited `enroll_replace`, when the gate says the
+device's current MDM enrollment began after the old key's approval and the old key's own request
+claimed the same serial; the old key's certificate then names no host, as after an operator's
+`replace`. Otherwise it is refused as an operator's approval of a taken host id is
+(`enroll_approve_refused`, `host_id_taken`), and a denied host id is never taken over (`denied`).
+
+This coordinator has no gate: it knows no device, so it approves no Mac by its nonce
 (`device_state_unavailable`). No operator token may be named `mdm-nonce`.
 
 ```toml

@@ -1,0 +1,12 @@
+# hostkeeper-mdm-proxy-reload.path: when lego writes a new certificate, restart the proxy
+# so it serves it (Caddy runs with its admin API off, so a restart is how it
+# reloads). Rendered by `hostkeeper-mdm tls`.
+[Unit]
+Description=hostkeeper-mdm: restart the proxy when the certificate changes
+
+[Path]
+PathChanged=/var/lib/hostkeeper-mdm/lego/certificates/mdm.example.com.crt
+Unit=hostkeeper-mdm-proxy-reload.service
+
+[Install]
+WantedBy=multi-user.target

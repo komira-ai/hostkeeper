@@ -1,4 +1,4 @@
-//! `hostkeeper-coordinator serve`'s flags and start-up: read every file, bind both listeners,
+//! `hostkeeper-coordinator serve`'s flags and start-up: read every file, bind the listeners,
 //! print the start line, then serve until SIGTERM or SIGINT. The binary's other two verbs,
 //! `backup` and `restore`, copy the state files `serve` keeps and put a copy back
 //! ([`crate::backup`]), under the same lock.
@@ -12,7 +12,9 @@
 //! the coordinator runs), lets a client without a certificate through the handshake,
 //! and admits a client certificate of its own CA as well as one of `--client-ca`. The handlers
 //! of `Enroll`, `Poll` and `Renew` are served as gRPC on the heartbeat listener
-//! ([`crate::grpc`]). The services it manages are the ones `--rollout-file` defines;
+//! ([`crate::grpc`]). With enrollment, `--lan-listen` (the address of one interface, which the
+//! server certificate names) serves what the heartbeat listener serves, with its TLS, to hosts
+//! on the farm LAN. The services it manages are the ones `--rollout-file` defines;
 //! `--legacy-service` names the one whose heartbeat is the top level of a heartbeat;
 //! the operator's tokens are those of `--tokens-file`, or the one token of
 //! `--operator-token-file`. The private listener (`--private-listen`) serves CI's calls and the
@@ -103,6 +105,11 @@ pub enum StartError {
         "--private-listen: {0} is a wildcard address; the private listener takes CI's calls and the operator's, so name the address of one interface"
     )]
     PrivateListen(SocketAddr),
+    /// `--lan-listen` is a wildcard address.
+    #[error(
+        "--lan-listen: {0} is a wildcard address; the LAN listener's address is named in the server certificate, so name the address of one interface"
+    )]
+    LanListen(SocketAddr),
     /// The allow-list of CI's OIDC token is refused.
     #[error(transparent)]
     Oidc(#[from] ConfigError),
@@ -238,7 +245,8 @@ pub struct Cli {
     reason = "parsed once per process from its arguments; boxing `Serve` would change every caller for no saving"
 )]
 pub enum Command {
-    /// Serve the heartbeat and private listeners until SIGTERM or SIGINT.
+    /// Serve the heartbeat and private listeners, and the LAN listener when `--lan-listen` is
+    /// given, until SIGTERM or SIGINT.
     Serve(Serve),
     /// Copy the state of a stopped coordinator into a new directory, with the SHA-256 of each
     /// file in its manifest. The CA's key is not copied.
@@ -261,6 +269,14 @@ pub struct Serve {
     // is not in the doc comment above because that is the flag's help, which does not show it.
     #[arg(long, alias = "control-listen")]
     pub private_listen: SocketAddr,
+    /// A third listener, on the farm LAN, for network-installed hosts, which have no tailnet:
+    /// it serves what the heartbeat listener serves (`Enroll` and `Poll` with no client
+    /// certificate, the heartbeat and `Renew` with a host's) and never the operator API, the
+    /// JSON gateway or the UI. The server certificate names its IP address, so a daemon dials it
+    /// by address. It takes the address of one interface: a wildcard address is refused at
+    /// start. Requires --enrollment-dir.
+    #[arg(long, requires = "enrollment_dir")]
+    pub lan_listen: Option<SocketAddr>,
     /// The coordinator's certificate chain (PEM), issued by the farm CA with the role
     /// `coordinator`.
     #[arg(long)]
@@ -345,12 +361,13 @@ pub struct Serve {
     #[arg(long, requires = "ca_key_file")]
     pub ca_init: bool,
     /// The coordinator's server certificate, the CA certificate and its key, one PEM file
-    /// (mode 0600) the coordinator writes: made at start when missing or within the last third
-    /// of its validity.
+    /// (mode 0600) the coordinator writes: made at start when missing, within the last third
+    /// of its validity, or naming other names than --server-name and --lan-listen.
     #[arg(long, requires = "enrollment_dir")]
     pub server_cert_file: Option<PathBuf>,
     /// A DNS name of the coordinator, as daemons dial it: the server certificate names each
-    /// one given.
+    /// one given, and the address of --lan-listen besides. A certificate that names other
+    /// names than these is made again at start and at the reload tick.
     #[arg(long = "server-name", requires = "enrollment_dir")]
     pub server_names: Vec<String>,
     /// How many enrollment requests may wait for an operator at once (default 256). A new
@@ -464,6 +481,8 @@ pub struct Bound {
     pub heartbeat: SocketAddr,
     /// The private listener.
     pub control: SocketAddr,
+    /// The LAN listener, when `--lan-listen` is given.
+    pub lan: Option<SocketAddr>,
 }
 
 /// What a running coordinator is made of.
@@ -478,6 +497,9 @@ pub struct Parts {
     pub heartbeat_listen: SocketAddr,
     /// Where to bind the private listener.
     pub control_listen: SocketAddr,
+    /// Where to bind the LAN listener, when there is one. It serves the heartbeat listener's
+    /// TLS and surface.
+    pub lan_listen: Option<SocketAddr>,
     /// How often to look at the TLS files and the tokens file.
     pub reload: Duration,
     /// The lock of the state files, held for as long as the coordinator runs: dropping the
@@ -491,8 +513,8 @@ pub struct Parts {
 /// # Errors
 /// [`StartError`]: a file is missing, unreadable or refused (the text names the flag or the
 /// file; the ops file must be one this build reads), `--ui-dir` is missing or not a directory,
-/// `--private-listen` is a wildcard address, `--quiet-secs` is below two heartbeat intervals,
-/// `--release-channel` is not an `https://` base URL,
+/// `--private-listen` or `--lan-listen` is a wildcard address, `--quiet-secs` is below two
+/// heartbeat intervals, `--release-channel` is not an `https://` base URL,
 /// another coordinator holds the lock of the state files, a halt was being written when the
 /// coordinator stopped, both token flags or neither is given, the legacy service or an
 /// allow-list entry names a service `--rollout-file` does not define, an entry names no
@@ -508,6 +530,12 @@ pub fn build(flags: &Serve, roots: Roots) -> Result<Parts, StartError> {
 pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<Parts, StartError> {
     if flags.private_listen.ip().to_canonical().is_unspecified() {
         return Err(StartError::PrivateListen(flags.private_listen));
+    }
+    if let Some(lan) = flags
+        .lan_listen
+        .filter(|lan| lan.ip().to_canonical().is_unspecified())
+    {
+        return Err(StartError::LanListen(lan));
     }
     if flags.quiet_secs < QUIET_START.as_secs() {
         return Err(StartError::QuietBelowFloor {
@@ -625,6 +653,12 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
             {
                 return Err(StartError::MacService(unknown.as_str().to_owned()));
             }
+            // The LAN listener's address, an IPv4 one written as IPv6 named as IPv4.
+            let lan_ips: Vec<_> = flags
+                .lan_listen
+                .map(|lan| lan.ip().to_canonical())
+                .into_iter()
+                .collect();
             let max_pending = flags
                 .max_pending_enrollments
                 .map_or(DEFAULT_MAX_PENDING, |max| {
@@ -638,6 +672,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
                     ca_init: flags.ca_init,
                     server_cert,
                     server_names: &flags.server_names,
+                    server_ips: &lan_ips,
                 },
                 Arc::new(SystemClock),
                 os_random(),
@@ -670,6 +705,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         control_tls: TlsSource::files("control", files(None), interval)?,
         heartbeat_listen: flags.heartbeat_listen,
         control_listen: flags.private_listen,
+        lan_listen: flags.lan_listen,
         reload: interval,
         lock: held,
     })
@@ -773,9 +809,10 @@ async fn together(
     match never {}
 }
 
-/// Binds both listeners with `bind` (which answers the address bound and the function that
-/// accepts connections), calls `ready` with their addresses, and serves until the future is
-/// dropped. It never returns `Ok`.
+/// Binds the listeners with `bind` (which answers the address bound and the function that
+/// accepts connections): the heartbeat listener, the private one, then the LAN listener when
+/// there is one; calls `ready` with their addresses, and serves until the future is dropped. The
+/// LAN listener serves the heartbeat listener's TLS and surface. It never returns `Ok`.
 ///
 /// # Errors
 /// An address cannot be bound.
@@ -795,9 +832,19 @@ where
     let _held = parts.lock;
     let (heartbeat_addr, heartbeat_accept) = bind(parts.heartbeat_listen).await?;
     let (control_addr, control_accept) = bind(parts.control_listen).await?;
+    let lan = match parts.lan_listen {
+        Some(addr) => Some(bind(addr).await?),
+        None => None,
+    };
     ready(Bound {
         heartbeat: heartbeat_addr,
         control: control_addr,
+        lan: lan.as_ref().map(|(addr, _)| *addr),
+    });
+    let lan = lan.map(|(_, accept)| Listener {
+        accept,
+        tls: parts.heartbeat_tls.clone(),
+        surface: Surface::Heartbeat,
     });
     let heartbeat = Listener {
         accept: heartbeat_accept,
@@ -813,6 +860,16 @@ where
     let enrollment = parts.coordinator.enrollment().cloned();
     let coordinator = parts.coordinator;
     let observing = observe_every(Arc::clone(&coordinator), OBSERVE_EVERY);
+    // Without a LAN listener, a future that never finishes stands in for it.
+    let serving_lan = match lan {
+        Some(lan) => Either::Left(serve(
+            lan,
+            Arc::clone(&coordinator),
+            CLIENT_PATIENCE,
+            MAX_CONNECTIONS,
+        )),
+        None => Either::Right(std::future::pending()),
+    };
     let serving = together(
         serve(
             heartbeat,
@@ -828,7 +885,23 @@ where
         tokens,
         parts.reload,
     );
-    match together(serving, together(reloading, observing)).await {}
+    match together(
+        together(serving, serving_lan),
+        together(reloading, observing),
+    )
+    .await {}
+}
+
+/// The line `serve` prints once its listeners are bound ([`start`]): the version, then where
+/// each listener is, `lan=` (with `--lan-listen` only) after `control=`.
+#[must_use]
+pub fn start_line(bound: &Bound) -> String {
+    let lan = bound
+        .lan
+        .map_or_else(String::new, |lan| format!(" lan={lan}"));
+    let (heartbeat, control) = (bound.heartbeat, bound.control);
+    let version = env!("CARGO_PKG_VERSION");
+    format!("hostkeeper-coordinator {version} heartbeat={heartbeat} control={control}{lan}")
 }
 
 /// Resolves on SIGTERM or SIGINT.
@@ -860,14 +933,7 @@ where
     Stream: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     let parts = build(&flags, roots)?;
-    let serving = run(parts, bind, |bound| {
-        println!(
-            "hostkeeper-coordinator {} heartbeat={} control={}",
-            env!("CARGO_PKG_VERSION"),
-            bound.heartbeat,
-            bound.control
-        );
-    });
+    let serving = run(parts, bind, |bound| println!("{}", start_line(&bound)));
     match select(pin!(stop), pin!(serving)).await {
         Either::Left((stopped, _)) => stopped.map_err(StartError::from),
         Either::Right((served, _)) => {

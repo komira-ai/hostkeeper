@@ -22,7 +22,8 @@ It is made of two programs:
   plan. Operators use it through the operator API, the generated `hostkeeper ctl`
   ([docs/ctl.md](docs/ctl.md)) and the web UI (`ui/`). A new host asks the coordinator to enroll
   it, and an operator approves the request. Macs are to be managed through a self-hosted MDM
-  server; that part is not built ([macOS](docs/macos.md), [design](docs/design/hostkeeper-mdm.md)).
+  server; of that part only the pure core and the host-step layer of its install kit are built
+  ([macOS](docs/macos.md), [design](docs/design/hostkeeper-mdm.md)).
 
 Every API is a protobuf service, and the command line is generated from those definitions.
 
@@ -51,6 +52,7 @@ update coordinator, `hostkeeper-coordinator serve`. The parts are being moved he
 | [`hostkeeper-enroll`](crates/hostkeeper-enroll) | how a daemon gets and keeps its host certificate: the P-256 key, the request, the signed poll, and renewal at half life |
 | [`hostkeeper-launchd`](crates/hostkeeper-launchd) | the macOS side behind existing ports: launchd labels and plists, the `launchctl` port, service manager, unit control, process probe and the step launcher (`LaunchdLauncher`) ([macOS](docs/macos.md)) |
 | [`hostkeeper-mdm-step`](crates/hostkeeper-mdm-step) | the host-step layer of the MDM host kit: a dry-run-by-default planner of directory, file, user, unit and command steps over the machine or a fake, with every path walked without links and through trusted owners only ([design](docs/design/hostkeeper-mdm.md), task M3) |
+| [`hostkeeper-pxe-packets`](crates/hostkeeper-pxe-packets) | the packets of network install, with no socket and no inventory: proxyDHCP offers and ACKs for architectures 7, 9, 11, 16 and 19, router-mode learning of each client's address and architecture, and TFTP read requests (only served names, `hostkeeper/boot.efi` as the shim of the learned architecture) and transfers ([design](docs/design/network-install.md), item N7) |
 | [`hostkeeper-wire`](crates/hostkeeper-wire) | what the coordinator and a host exchange: the heartbeat and its reply, versions, host ids, role names and platforms, the certificate identity, the secret-file rule |
 | [`hostkeeper-proto`](crates/hostkeeper-proto) | the protobuf services of the coordinator (`hostkeeper.agent.v1`, `hostkeeper.operator.v1`) and of the daemon's local admin socket (`hostkeeper.local.v1`), the command table of `hostkeeper ctl`, and the compatibility test |
 | [`hostkeeper-ctl`](crates/hostkeeper-ctl) | `hostkeeper ctl`, the command line generated from those services: one command per RPC, over gRPC or the coordinator's HTTP/JSON gateway |
@@ -58,6 +60,7 @@ update coordinator, `hostkeeper-coordinator serve`. The parts are being moved he
 | [`hostkeeper-coordinator`](crates/hostkeeper-coordinator) | the update coordinator: the services and roles of a rollout file, the desired version of each service, the heartbeat endpoint, the operator endpoint, and the convergence of a fleet |
 | [`hostkeeper-enrollment`](crates/hostkeeper-enrollment) | the coordinator's certificate authority (profile, certificates, key file, CA bundle) and its durable enrollment store |
 | [`hostkeeper-oidc`](crates/hostkeeper-oidc) | the verifier of OIDC tokens (CI tokens) against an allow-list, with its issuer keys fetched over HTTPS |
+| [`hostkeeper-mdm-core`](crates/hostkeeper-mdm-core) | the pure core of the MDM kit: its settings, the enrollment and ADE profiles, the systemd units and Caddyfile of the MDM services, and the pinned upstream tools ([design](docs/design/hostkeeper-mdm.md) section 8) |
 | [`hostkeeper-tls`](crates/hostkeeper-tls) | TLS server configuration reloaded from certificate files, with its reload metrics |
 | [`hostkeeper-ui-tests`](crates/hostkeeper-ui-tests) | the tests of the operator web app in [`ui/`](ui), run in a JavaScript engine against a fake gateway, and each call of [`ui/calls.json`](ui/calls.json) sent to the real coordinator with an operator's token; not shipped |
 | [`hello`](examples/hello) | the example service: an HTTP server on loopback and its update hook, packaged for each release, which proves an install, an update and a rollback on the farm ([docs/hello.md](docs/hello.md)) |

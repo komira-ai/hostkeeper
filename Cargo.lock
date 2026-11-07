@@ -1557,6 +1557,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "hostkeeper-mdm-core"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "plist",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
 name = "hostkeeper-mdm-step"
 version = "0.1.0"
 dependencies = [
@@ -1692,6 +1704,14 @@ dependencies = [
  "tonic",
  "tonic-prost",
  "tonic-prost-build",
+]
+
+[[package]]
+name = "hostkeeper-pxe-packets"
+version = "0.1.0"
+dependencies = [
+ "hostkeeper-wire",
+ "thiserror",
 ]
 
 [[package]]

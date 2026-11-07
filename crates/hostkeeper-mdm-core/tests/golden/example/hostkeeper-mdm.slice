@@ -1,0 +1,13 @@
+# hostkeeper-mdm.slice: the caps of every hostkeeper-mdm service (NanoHUB, the
+# SCEP server, NanoDEP, the HTTPS proxy, the certificate job), rendered by
+# `hostkeeper-mdm install` into /etc/systemd/system/. Edit the template,
+# not the installed copy. Past MemoryMax the slice's processes are OOM-killed
+# inside it; the host and its other services stay up.
+[Unit]
+Description=hostkeeper-mdm services (capped)
+
+[Slice]
+MemoryMax=1G
+MemorySwapMax=0
+CPUQuota=100%
+TasksMax=256

@@ -4,6 +4,7 @@
 
 mod support;
 
+use std::net::IpAddr;
 use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,7 +12,7 @@ use std::time::Duration;
 use hostkeeper_enrollment::ca::{Ca, CaError, PollBundle};
 use hostkeeper_enrollment::ca::{
     CaFiles, CsrDefect, HOST_VALIDITY_SECS, MAX_CSR_BYTES, P256Key, ProfileError,
-    SERVER_VALIDITY_CAP_SECS, SignError, SignRequest, Signer, Subject, check_request,
+    SERVER_VALIDITY_CAP_SECS, ServerNames, SignError, SignRequest, Signer, Subject, check_request,
 };
 use hostkeeper_enrollment::fs::RealFs;
 use rcgen::{
@@ -26,6 +27,7 @@ use rustls::server::WebPkiClientVerifier;
 use sha2::{Digest, Sha256};
 use support::{FixedClock, HostKey, NOW, TestCa, csr_of, files, host_id, scratch, subject};
 use x509_parser::certificate::X509Certificate;
+use x509_parser::extensions::GeneralName;
 use x509_parser::prelude::FromDer as _;
 
 fn parse(der: &[u8]) -> X509Certificate<'_> {
@@ -55,6 +57,11 @@ fn purposes(cert: &X509Certificate<'_>) -> (bool, bool, bool) {
         || eku.ocsp_signing
         || !eku.other.is_empty();
     (eku.server_auth, eku.client_auth, other)
+}
+
+/// `dns` as the names of a server certificate with no IP address.
+fn dns_only(dns: &[String]) -> ServerNames<'_> {
+    ServerNames { dns, ips: &[] }
 }
 
 fn server_names() -> Vec<String> {
@@ -270,7 +277,7 @@ fn a_validity_over_the_cap_is_refused() {
     );
     let server_over = ca
         .ca
-        .issue_server(&key, &names, SERVER_VALIDITY_CAP_SECS + 1, 2)
+        .issue_server(&key, dns_only(&names), SERVER_VALIDITY_CAP_SECS + 1, 2)
         .expect_err("over");
     assert_eq!(
         server_over,
@@ -281,7 +288,7 @@ fn a_validity_over_the_cap_is_refused() {
     );
     let at_cap = ca
         .ca
-        .issue_server(&key, &names, SERVER_VALIDITY_CAP_SECS, 3)
+        .issue_server(&key, dns_only(&names), SERVER_VALIDITY_CAP_SECS, 3)
         .expect("the cap itself");
     assert_eq!(at_cap.not_after, NOW + SERVER_VALIDITY_CAP_SECS);
     assert!(sign(Subject::Host(&web), HOST_VALIDITY_SECS, 4).is_ok());
@@ -330,7 +337,7 @@ fn the_server_certificate_is_server_auth_only_and_chains_to_the_ca() {
     let names = server_names();
     let server = ca
         .ca
-        .issue_server(&coordinator.p256(), &names, 30 * 24 * 60 * 60, 2)
+        .issue_server(&coordinator.p256(), dns_only(&names), 30 * 24 * 60 * 60, 2)
         .expect("server certificate");
     let client = ca
         .ca
@@ -407,19 +414,108 @@ fn the_server_certificate_is_server_auth_only_and_chains_to_the_ca() {
     for (dns, want) in refused {
         let got = ca
             .ca
-            .issue_server(&coordinator.p256(), &dns, 60, 9)
+            .issue_server(&coordinator.p256(), dns_only(&dns), 60, 9)
             .expect_err("refused");
         assert_eq!(got, want);
     }
     assert!(
         ca.ca
-            .issue_server(&coordinator.p256(), &[long], 60, 9)
+            .issue_server(&coordinator.p256(), dns_only(&[long]), 60, 9)
             .is_ok()
     );
     assert_eq!(
         SignError::NoDnsName.to_string(),
         "a server certificate needs at least one DNS name"
     );
+}
+
+/// Catches a server certificate that leaves out the IP addresses asked for, names them in
+/// another form than an IP subjectAltName (a TLS client dialing the address would refuse it),
+/// drops or reorders the DNS names beside them, or is accepted for an address it does not name.
+#[test]
+fn a_server_certificate_names_its_ip_addresses_after_its_dns_names() {
+    let ca = TestCa::new("server-ips");
+    let coordinator = HostKey::new();
+    let dns = server_names();
+    let v4: IpAddr = "192.0.2.7".parse().expect("an address");
+    let v6: IpAddr = "2001:db8::7".parse().expect("an address");
+    let server = ca
+        .ca
+        .issue_server(
+            &coordinator.p256(),
+            ServerNames {
+                dns: &dns,
+                ips: &[v4, v6],
+            },
+            60,
+            2,
+        )
+        .expect("server certificate");
+    let parsed = parse(&server.der);
+    let san = parsed
+        .subject_alternative_name()
+        .expect("one")
+        .expect("present");
+    let named: Vec<String> = san
+        .value
+        .general_names
+        .iter()
+        .map(|name| match name {
+            GeneralName::DNSName(dns) => format!("dns:{dns}"),
+            GeneralName::IPAddress(bytes) => format!("ip:{bytes:?}"),
+            other => panic!("an unexpected name {other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        named,
+        [
+            "dns:coordinator.example".to_owned(),
+            "dns:hostkeeper.example".to_owned(),
+            "ip:[192, 0, 2, 7]".to_owned(),
+            format!(
+                "ip:{:?}",
+                [0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7]
+            ),
+        ]
+    );
+
+    let mut roots = RootCertStore::empty();
+    roots
+        .add(CertificateDer::from(
+            ca.ca.bundle().certificate_der().to_vec(),
+        ))
+        .expect("the CA certificate is a root");
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let servers = WebPkiServerVerifier::builder_with_provider(Arc::new(roots), provider)
+        .build()
+        .expect("a server verifier");
+    let now = UnixTime::since_unix_epoch(Duration::from_secs(NOW + 30));
+    let der = CertificateDer::from(server.der.clone());
+    let verify = |name: &str| {
+        let name = ServerName::try_from(name.to_owned()).expect("a name");
+        servers
+            .verify_server_cert(&der, &[], &name, &[], now)
+            .is_ok()
+    };
+    assert!(verify("192.0.2.7"));
+    assert!(verify("2001:db8::7"));
+    assert!(verify("hostkeeper.example"));
+    assert!(!verify("192.0.2.8"));
+    assert!(!verify("2001:db8::8"));
+
+    let no_dns = ca
+        .ca
+        .issue_server(
+            &coordinator.p256(),
+            ServerNames {
+                dns: &[],
+                ips: &[v4],
+            },
+            60,
+            3,
+        )
+        .expect_err("an address alone is no server certificate");
+    assert_eq!(no_dns, SignError::NoDnsName);
 }
 
 /// Catches a CA key file that its group or others may read, or that is a symbolic link, being

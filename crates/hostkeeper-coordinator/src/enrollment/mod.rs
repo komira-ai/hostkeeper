@@ -63,7 +63,7 @@ pub use mac_nonce::{
 pub use nonce::{NONCE_BYTES, NONCES_PER_REQUEST, Nonces, Random, os_random};
 pub use refusal::{RpcError, refusal_of};
 pub use reject::ACTION_REJECT;
-pub use rpc::{MAX_MESSAGE_BYTES, Method, call};
+pub use rpc::{Enrolled, MAX_MESSAGE_BYTES, Method, call};
 pub use setup::{
     CA_CERT_SUFFIX, Kept, ServerFile, Setup, SetupError, ca_certificate_path, pem, server_due,
     setup,
@@ -180,7 +180,8 @@ impl Enrollment {
     }
 
     /// One look at the server certificate file, at the time the clock reads: it is made again
-    /// when it is due ([`ServerFile::keep`]: a third of its validity or less left). The reload
+    /// when it is due ([`ServerFile::keep`]: a third of its validity or less left) or names
+    /// other names than the flags (`--server-name`, the address of `--lan-listen`). The reload
     /// loop calls this before it looks at the TLS files, so a new file is served from the same
     /// tick. A look that fails is logged at error level and kept for the status
     /// ([`Enrollment::server_certificate`]) until a later look succeeds; the file in use is left

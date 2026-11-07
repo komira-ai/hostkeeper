@@ -19,8 +19,9 @@
 //! adapter as [`Admitted`] in the request's extensions, so a bearer is resolved once: a CI token
 //! is good once.
 //!
-//! A service is served on one surface only: the agent's on the heartbeat listener, the
-//! operator's on the private one. A path of any other service (the daemon's local one among
+//! A service is served on one surface only: the agent's on the heartbeat listener (and on the
+//! LAN listener of `--lan-listen`, a second listener of the same surface), the operator's on the
+//! private one. A path of any other service (the daemon's local one among
 //! them) is `UNIMPLEMENTED`.
 
 use std::convert::Infallible;
