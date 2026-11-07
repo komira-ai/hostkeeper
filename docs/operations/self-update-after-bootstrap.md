@@ -132,12 +132,13 @@ coordinator, the others on the Mac as root.
    sudo rm -f /var/lib/updater/state/hostkeeper/bin/current
    ```
 
-5. Install the pkg and load its job. The installer runs the `postinstall`, and fails the install
-   with the seed's message if it could not give `current` a binary:
+5. Install the pkg. The installer runs the `postinstall`, which seeds `current`, keeps the
+   `/etc/hostkeeper/hostkeeper.toml` the Mac has (the pkg never replaces it) and loads the job. It
+   fails the install with the message of the command that failed: the seed's if it could not give
+   `current` a binary, `mac-config`'s if the Mac has neither that file nor a managed config.
 
    ```
    sudo installer -pkg hostkeeper-<version>-macos-arm64.pkg -target /
-   sudo launchctl bootstrap system /Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist
    ```
 
 6. Check that it runs the pkg's binary through `current` and talks to the coordinator:
