@@ -19,7 +19,7 @@
 //
 // Refusals: a gRPC status whose message is exactly one token of the service's refusal enum
 // (`HostsRefusal`, `ReleasesRefusal`, `ServicesRefusal`, `EnrollmentRefusal`, `AuditRefusal`,
-// `AlertsRefusal`, and `RolloutsRefusal` in rollouts.proto),
+// `AlertsRefusal`, `RolloutsRefusal` in rollouts.proto, and `MdmRefusal` in mdm.proto),
 // written as the value's name without the prefix, in lower case (for example
 // `below_min_version`); the status code is the one each value names. Nothing
 // else is ever in the message: no claim value, no path, no text of an internal error. A refused

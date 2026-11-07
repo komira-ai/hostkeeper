@@ -418,6 +418,7 @@ fn scenario(name: &str, stub: Stub) -> Ran {
         enroll_sleeper: Box::new(ScriptedSleeper::new(0)),
         renewal: hostkeeper_enroll::RenewalState::default(),
         watchdog: Box::new(hostkeeper_daemon::NoWatchdog),
+        console: None,
     };
     match stub {
         Stub::Loop => {
@@ -615,6 +616,7 @@ fn forced_scenario(name: &str, unadvertise: bool) -> Forced {
         enroll_sleeper: Box::new(ScriptedSleeper::new(0)),
         renewal: hostkeeper_enroll::RenewalState::default(),
         watchdog: Box::new(hostkeeper_daemon::NoWatchdog),
+        console: None,
     };
     let mut heartbeater = links.heartbeater(&daemon);
     // Heard before anything is desired: told nothing, and now a host a force may target.

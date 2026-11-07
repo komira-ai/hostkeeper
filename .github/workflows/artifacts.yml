@@ -252,7 +252,8 @@ jobs:
           ARCH: ${{ matrix.deb-arch }}
         run: nfpm package --config packaging/linux/nfpm.yaml --packager rpm --target dist
       # Each package read back: it installs the staged gh and trusted root at the daemon's paths,
-      # 0755 and 0644, root's, with the staged bytes.
+      # 0755 and 0644, root's, with the staged bytes, and the console's issue link
+      # /etc/issue.d/hostkeeper.issue pointing at /run/hostkeeper/enrollment.issue.
       - name: The deb installs the staged gh and trusted root
         env:
           ARCH: ${{ matrix.deb-arch }}

@@ -1,5 +1,5 @@
-//! `nfpm.yaml` read as nfpm (v2.48.0) reads it: the files a package carries, its scripts and
-//! the names of its files, for one packager (`deb` or `rpm`).
+//! `nfpm.yaml` read as nfpm (v2.48.0) reads it: the files and the links a package carries, its
+//! scripts and the names of its files, for one packager (`deb` or `rpm`).
 
 use std::collections::BTreeMap;
 
@@ -38,7 +38,10 @@ pub const TEXT_KEYS: [&str; 11] = [
     "license",
 ];
 pub const SCRIPT_KEYS: [&str; 2] = ["postinstall", "preremove"];
-pub const CONTENT_KEYS: [&str; 3] = ["src", "dst", "file_info"];
+pub const CONTENT_KEYS: [&str; 4] = ["src", "dst", "type", "file_info"];
+/// The one `type` a contents entry may have: a link, whose `src` is what it points at. An
+/// entry with no `type` is a file.
+pub const LINK_TYPE: &str = "symlink";
 pub const FILE_INFO_KEYS: [&str; 3] = ["mode", "owner", "group"];
 
 /// One file of a package.
@@ -50,6 +53,15 @@ pub struct File {
     pub mode: String,
     pub owner: String,
     pub group: String,
+}
+
+/// One link of a package: nfpm's `type: symlink` entry.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Link {
+    /// Where the link is.
+    pub dst: String,
+    /// What it points at, as written (`src`).
+    pub target: String,
 }
 
 /// The entries of a mapping, keyed by their text. A key that is not text, or that comes
@@ -100,11 +112,35 @@ fn required(entry: &BTreeMap<&str, &Node>, key: &str, line: usize) -> Result<Str
     }
 }
 
-/// The files of a contents list.
+/// Whether a contents entry is a link (`type: symlink`); an entry of any other type is a file
+/// here, and [`Config::bad_values`] reports its type.
+fn is_link(entry: &BTreeMap<&str, &Node>) -> bool {
+    entry.get("type").and_then(|node| node.as_str()) == Some(LINK_TYPE)
+}
+
+/// The links of a contents list.
+fn links_of(node: &Node) -> Result<Vec<Link>, String> {
+    let mut out = Vec::new();
+    for item in items(node, "contents")? {
+        let entry = map(item, "a contents entry")?;
+        if is_link(&entry) {
+            out.push(Link {
+                dst: required(&entry, "dst", item.line())?,
+                target: required(&entry, "src", item.line())?,
+            });
+        }
+    }
+    Ok(out)
+}
+
+/// The files of a contents list: its entries that are not links.
 fn files_of(node: &Node) -> Result<Vec<File>, String> {
     let mut out = Vec::new();
     for item in items(node, "contents")? {
         let entry = map(item, "a contents entry")?;
+        if is_link(&entry) {
+            continue;
+        }
         let info = match entry.get("file_info").copied() {
             Some(node) => map(node, "file_info")?,
             None => BTreeMap::new(),
@@ -169,7 +205,9 @@ impl Config {
     }
 
     /// The values nfpm would not take, or that are not this package's: a key of [`TEXT_KEYS`]
-    /// whose value is a mapping, a list or null, and a platform other than `linux`.
+    /// whose value is a mapping, a list or null, a platform other than `linux`, and a contents
+    /// entry whose `type` is not [`LINK_TYPE`] (a `config` file, which a package upgrade would
+    /// not replace, among them).
     pub fn bad_values(&self) -> Vec<String> {
         let top = self.top();
         let mut out: Vec<String> = TEXT_KEYS
@@ -181,6 +219,26 @@ impl Config {
             && platform != "linux"
         {
             out.push(format!("platform is {platform:?}, not linux"));
+        }
+        let entries = top
+            .get("contents")
+            .and_then(|node| match &node.value {
+                Value::Seq(items) => Some(items.as_slice()),
+                _ => None,
+            })
+            .unwrap_or_default();
+        for item in entries {
+            let kind = map(item, "a contents entry")
+                .ok()
+                .and_then(|entry| entry.get("type").copied());
+            if let Some(kind) = kind
+                && kind.as_str() != Some(LINK_TYPE)
+            {
+                out.push(format!(
+                    "line {}: a contents entry's type is not {LINK_TYPE}",
+                    kind.line()
+                ));
+            }
         }
         out
     }
@@ -205,6 +263,19 @@ impl Config {
         }
         if let Some(contents) = self.overridden(packager, "contents")? {
             out.extend(files_of(contents)?);
+        }
+        out.sort();
+        Ok(out)
+    }
+
+    /// The links the package of `packager` carries, sorted by where they are.
+    pub fn links(&self, packager: &str) -> Result<Vec<Link>, String> {
+        let mut out = Vec::new();
+        if let Some(contents) = self.top().get("contents").copied() {
+            out.extend(links_of(contents)?);
+        }
+        if let Some(contents) = self.overridden(packager, "contents")? {
+            out.extend(links_of(contents)?);
         }
         out.sort();
         Ok(out)

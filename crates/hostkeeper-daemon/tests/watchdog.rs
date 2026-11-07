@@ -121,6 +121,7 @@ fn links(
         enroll_sleeper: Box::new(ScriptedSleeper::new(0)),
         renewal: hostkeeper_enroll::RenewalState::default(),
         watchdog,
+        console: None,
     };
     (links, jobs)
 }

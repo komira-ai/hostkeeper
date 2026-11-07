@@ -19,10 +19,11 @@ use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_daemon::adapters::{Adapters, RunnerLauncher, SYSTEMCTL_DEADLINE};
 use hostkeeper_daemon::boot::{ALERT_START, BootReport, BootStep, Stage, alert_line};
 use hostkeeper_daemon::cli::{
-    CA_BUNDLE, CA_BUNDLE_MACOS, CA_BUNDLE_RHEL, DEADMAN_POLL_SECS, GH_BINARY, GH_BINARY_MACOS,
-    GH_HOME, HostFiles, HostVerifier, PKI_DIR, SIGSTORE_TRUSTED_ROOT, SIGSTORE_TRUSTED_ROOT_MACOS,
-    host_ports, start_with, tls_roots,
+    CA_BUNDLE, CA_BUNDLE_MACOS, CA_BUNDLE_RHEL, ConsoleFiles, DEADMAN_POLL_SECS, GH_BINARY,
+    GH_BINARY_MACOS, GH_HOME, HostFiles, HostVerifier, PKI_DIR, SIGSTORE_TRUSTED_ROOT,
+    SIGSTORE_TRUSTED_ROOT_MACOS, host_ports, start_with, tls_roots,
 };
+use hostkeeper_daemon::console::{AGETTY, ENROLLMENT_ISSUE};
 use hostkeeper_daemon::packages::{PackageError, Packages, VersionDir};
 use hostkeeper_daemon::start::{self, EXIT_FAILED, Settings, StartError, before_records};
 use hostkeeper_daemon::testing::{FakeNotifier, FakePackages, Log};
@@ -410,6 +411,7 @@ fn the_host_ports_are_built_from_flags_and_files_without_the_network() {
         gh: rig.scratch.path().join("gh"),
         trusted_root: rig.scratch.path().join("trusted_root.json"),
         pki: rig.scratch.path().join("pki"),
+        console: None,
     };
     let error = host_ports(&config(), &rig.settings(), &files, OWN, linux())
         .err()
@@ -562,6 +564,7 @@ fn the_start_of_the_host_build_stops_at_the_ports_it_cannot_build() {
         gh: rig.scratch.path().join("gh"),
         trusted_root: rig.scratch.path().join("trusted_root.json"),
         pki: rig.scratch.path().join("pki"),
+        console: None,
     };
     let notifier = FakeNotifier::new(Log::default());
     fs::write(&rig.packages, b"not a directory").expect("a file where the directory belongs");
@@ -617,6 +620,10 @@ fn linux_files(ca_bundle: &str) -> HostFiles {
         gh: PathBuf::from("/usr/lib/hostkeeper/gh"),
         trusted_root: PathBuf::from("/usr/lib/hostkeeper/trusted_root.json"),
         pki: PathBuf::from("/etc/updater/pki"),
+        console: Some(ConsoleFiles {
+            issue: PathBuf::from("/run/hostkeeper/enrollment.issue"),
+            agetty: PathBuf::from("/sbin/agetty"),
+        }),
     }
 }
 
@@ -625,8 +632,8 @@ const RHEL: &str = "/etc/pki/tls/certs/ca-bundle.crt";
 
 /// Catches a Mac given the Linux paths, under `/usr`, which is read-only on a Mac, and a CA
 /// bundle a Mac does not have: `gh` and the trusted root are where the installer pkg puts them,
-/// under `/usr/local/lib/hostkeeper`, the CA bundle is macOS's `/etc/ssl/cert.pem`, and no Linux
-/// bundle is looked for.
+/// under `/usr/local/lib/hostkeeper`, the CA bundle is macOS's `/etc/ssl/cert.pem`, no Linux
+/// bundle is looked for, and no console's issue file is written.
 #[test]
 fn a_mac_keeps_gh_and_the_trusted_root_under_usr_local_and_reads_etc_ssl_cert_pem() {
     let mac = HostFiles {
@@ -634,6 +641,7 @@ fn a_mac_keeps_gh_and_the_trusted_root_under_usr_local_and_reads_etc_ssl_cert_pe
         gh: PathBuf::from("/usr/local/lib/hostkeeper/gh"),
         trusted_root: PathBuf::from("/usr/local/lib/hostkeeper/trusted_root.json"),
         pki: PathBuf::from("/etc/updater/pki"),
+        console: None,
     };
     for present in [&[][..], &[DEBIAN, RHEL][..]] {
         assert_eq!(
@@ -650,7 +658,9 @@ fn a_mac_keeps_gh_and_the_trusted_root_under_usr_local_and_reads_etc_ssl_cert_pe
 }
 
 /// Catches a Debian-family host reading another bundle than its own: its bundle is asked about
-/// first and chosen, even when the RHEL one exists too, which is then not asked about.
+/// first and chosen, even when the RHEL one exists too, which is then not asked about. Its
+/// console's issue file is the daemon's runtime directory's `enrollment.issue`, redrawn by
+/// `/sbin/agetty`, as on every Linux host.
 #[test]
 fn a_debian_host_reads_the_debian_bundle() {
     for present in [&[DEBIAN][..], &[DEBIAN, RHEL][..]] {
@@ -660,6 +670,8 @@ fn a_debian_host_reads_the_debian_bundle() {
         );
     }
     assert_eq!(CA_BUNDLE, DEBIAN);
+    assert_eq!(ENROLLMENT_ISSUE, "/run/hostkeeper/enrollment.issue");
+    assert_eq!(AGETTY, "/sbin/agetty");
     assert_eq!(GH_BINARY, "/usr/lib/hostkeeper/gh");
     assert_eq!(
         SIGSTORE_TRUSTED_ROOT,

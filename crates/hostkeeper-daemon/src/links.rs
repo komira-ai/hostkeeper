@@ -30,6 +30,11 @@
 //! the current certificate and the error of the enroller's last step, which the enroller notes
 //! once it runs.
 //!
+//! On a Linux host, the enrollment loop also writes the console's issue file after each step,
+//! and after each failure to make the enroller ([`Links::console`], [`crate::console`]): the
+//! request's state, the coordinator and the key hash, for the login prompt of the machine's
+//! console.
+//!
 //! The heartbeat loop's link to the coordinator is [`HostLink`]: the [`NegotiatedLink`] of
 //! [`coordinator_link`] (the JSON route and gRPC, both over mutual TLS), made at the first
 //! heartbeat the loop sends, on the loop's own worker.
@@ -49,6 +54,7 @@ use hostkeeper_link::{
 };
 use hostkeeper_steps::Clock;
 
+use crate::console::ConsoleIssue;
 use crate::executor::Daemon;
 use crate::link_adapters::{
     DaemonHalts, DaemonObserver, DaemonOrders, DaemonRecords, DaemonRenewal,
@@ -109,6 +115,9 @@ pub struct Links {
     pub stop: StopFlag,
     /// Told after each heartbeat that the heartbeat loop is alive.
     pub watchdog: Box<dyn Watchdog>,
+    /// The console's issue file, which the enrollment loop writes after each step and each
+    /// failure to make its enroller; none on a host whose console shows none (a Mac).
+    pub console: Option<ConsoleIssue>,
 }
 
 impl Links {
@@ -128,6 +137,7 @@ impl Links {
             dispatch,
             stop,
             watchdog,
+            mut console,
             ..
         } = self;
         let enrolling = Arc::clone(daemon);
@@ -140,7 +150,7 @@ impl Links {
                 sleeper: &*enroll_sleeper,
                 stop: &stop,
             };
-            loop_ports.run(&mut enroller);
+            loop_ports.run(&mut enroller, &mut console);
         }));
         let beating = Arc::clone(daemon);
         dispatch.start(Box::new(move || {
@@ -204,9 +214,11 @@ impl EnrollLoop<'_> {
     /// While the enroller cannot be made, each failure is noted in `renewal` and logged
     /// ([`NO_ENROLLMENT`], once, and again when the reason changes), and the enroller is made
     /// again after a wait on `sleeper` of [`OPEN_RETRY_FIRST_SECS`], doubled after each failure
-    /// up to [`OPEN_RETRY_MAX_SECS`]; `node` is left without an enrollment meanwhile. The loop
-    /// ends when `stop` is set before a try, or the wait says [`Tick::Stop`].
-    fn run(&self, make: &mut MakeEnroller) {
+    /// up to [`OPEN_RETRY_MAX_SECS`]; `node` is left without an enrollment meanwhile. `console`,
+    /// when there is one, shows what each step came to, and each failure to make the enroller,
+    /// before the wait that follows it. The loop ends when `stop` is set before a try, or the
+    /// wait says [`Tick::Stop`].
+    fn run(&self, make: &mut MakeEnroller, console: &mut Option<ConsoleIssue>) {
         let mut wait = OPEN_RETRY_FIRST_SECS;
         let mut logged: Option<String> = None;
         while !self.stop.is_stopped() {
@@ -214,7 +226,12 @@ impl EnrollLoop<'_> {
                 Ok(mut enroller) => {
                     enroller.run_loop(
                         &mut |line: &str| self.log.line(line),
-                        &mut |enrollment| self.node.set_enrollment(enrollment),
+                        &mut |step, enrollment| {
+                            if let Some(console) = console.as_mut() {
+                                console.after_step(step, &enrollment, self.log);
+                            }
+                            self.node.set_enrollment(enrollment);
+                        },
                         self.renewal,
                         &mut || !self.stop.is_stopped(),
                     );
@@ -226,6 +243,9 @@ impl EnrollLoop<'_> {
                     }
                     self.renewal
                         .failed(format!("the enroller cannot be opened: {why}"));
+                    if let Some(console) = console.as_mut() {
+                        console.unopened(&why, self.log);
+                    }
                     logged = Some(why);
                     if self.sleeper.sleep(wait) == Tick::Stop {
                         return;
