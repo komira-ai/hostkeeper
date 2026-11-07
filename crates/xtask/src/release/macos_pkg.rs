@@ -53,10 +53,11 @@
 //! [`build`] lays the payload's tree and the scripts directory out in a new directory and runs
 //! `pkgbuild` over them through the [`BuildPkg`] port ([`PkgbuildCli`] is its adapter). [`check`]
 //! reads a pkg that `pkgutil --expand` has expanded into a directory: the directory holds exactly
-//! the files `Bom`, `PackageInfo`, `Payload` and `Scripts`; `PackageInfo` names the identifier,
-//! the version, the install location and the `postinstall` and no other script; `Scripts`, a
-//! gzip-compressed cpio archive (the portable `odc` format), holds that `postinstall` alone; and
-//! `Payload`, of the same format, holds exactly the entries above with their modes, owners and
+//! the files `Bom`, `PackageInfo` and `Payload` and the directory `Scripts`, into which
+//! `pkgutil --expand` expands the pkg's scripts archive; `PackageInfo` names the identifier, the
+//! version, the install location and the `postinstall` and no other script; `Scripts` holds that
+//! `postinstall` alone, a regular file of mode 0755; and `Payload`, a gzip-compressed cpio
+//! archive (the portable `odc` format) that `pkgutil --expand` does not expand, holds exactly the entries above with their modes, owners and
 //! bytes (the binary, `gh` and the trusted root those of the files it is given), the plist
 //! parsing as a launchd plist that names the daemon's label, the program `current` of the binary
 //! directory and the output files, and the newsyslog file rotating exactly those output files.
@@ -132,8 +133,10 @@ const TYPE_FILE: u32 = 0o100_000;
 /// Where the pkg installs its payload.
 const INSTALL_LOCATION: &str = "/";
 
-/// The files of an expanded pkg, sorted: a flat component package with its `Scripts`.
-const EXPANDED: [&str; 4] = ["Bom", "PackageInfo", "Payload", "Scripts"];
+/// The files of an expanded pkg, sorted, and its one directory: `pkgutil --expand` leaves a flat
+/// component package's `Payload` an archive and expands its scripts archive into `Scripts`.
+const EXPANDED_FILES: [&str; 3] = ["Bom", "PackageInfo", "Payload"];
+const EXPANDED_SCRIPTS: &str = "Scripts";
 
 /// The directories of the stage: the payload's tree and the scripts directory.
 const STAGE_ROOT: &str = "root";
@@ -734,7 +737,7 @@ fn payload_problems(
     );
 }
 
-/// The entries of the gzip-compressed portable cpio archive `name` of the expanded pkg
+/// The entries of the gzip-compressed portable cpio archive `name` (the `Payload`) of the expanded pkg
 /// `expanded`; the inner `Err` says why its bytes are not such an archive, the outer one that the
 /// file could not be opened.
 fn read_archive(expanded: &Path, name: &str) -> Result<Result<Vec<CpioEntry>, String>, Error> {
@@ -756,39 +759,53 @@ pub(crate) fn check(
     sources: &Sources,
 ) -> Result<Vec<String>, Error> {
     let what = format!("read {}", expanded.display());
-    let mut names: Vec<(String, bool)> = std::fs::read_dir(expanded)
+    // Each name with whether it is a regular file and whether it is a directory; a symbolic
+    // link is neither (`DirEntry::file_type` does not follow it).
+    let mut names: Vec<(String, bool, bool)> = std::fs::read_dir(expanded)
         .and_then(|read| read.collect::<Result<Vec<_>, _>>())
         .map_err(Error::io(&what))?
         .iter()
         .map(|e| {
-            let file = e.file_type().is_ok_and(|kind| kind.is_file());
-            (e.file_name().to_string_lossy().into_owned(), file)
+            let kind = e.file_type().ok();
+            (
+                e.file_name().to_string_lossy().into_owned(),
+                kind.is_some_and(|k| k.is_file()),
+                kind.is_some_and(|k| k.is_dir()),
+            )
         })
         .collect();
     names.sort();
     let mut problems = Vec::new();
-    for (name, file) in &names {
-        if !EXPANDED.contains(&name.as_str()) | !file {
+    let present = |want: &str| {
+        names.iter().any(|(name, file, dir)| {
+            (name == want)
+                & if want == EXPANDED_SCRIPTS {
+                    *dir
+                } else {
+                    *file & EXPANDED_FILES.contains(&want)
+                }
+        })
+    };
+    for (name, ..) in &names {
+        if !present(name) {
             problems.push(format!(
-                "{name}: an expanded pkg of hostkeeper holds only the files Bom, PackageInfo, \
-                 Payload and Scripts"
+                "{name}: an expanded pkg of hostkeeper holds only the files Bom, PackageInfo and \
+                 Payload and the directory Scripts"
             ));
         }
     }
-    let present = |want: &str| names.iter().any(|(name, file)| (name == want) & file);
-    for missing in EXPANDED.iter().filter(|n| !present(n)) {
-        problems.push(format!("missing {missing}"));
+    for missing in EXPANDED_FILES.iter().chain([&EXPANDED_SCRIPTS]) {
+        if !present(missing) {
+            problems.push(format!("missing {missing}"));
+        }
     }
     if present("PackageInfo") {
         let path = expanded.join("PackageInfo");
         let bytes = std::fs::read(&path).map_err(Error::io(format!("read {}", path.display())))?;
         package_info_problems(&String::from_utf8_lossy(&bytes), version, &mut problems);
     }
-    if present("Scripts") {
-        match read_archive(expanded, "Scripts")? {
-            Err(why) => problems.push(why),
-            Ok(entries) => scripts_problems(&entries, &mut problems),
-        }
+    if present(EXPANDED_SCRIPTS) {
+        scripts_problems(&expanded.join(EXPANDED_SCRIPTS), &mut problems)?;
     }
     if present("Payload") {
         match read_archive(expanded, "Payload")? {

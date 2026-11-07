@@ -17,16 +17,19 @@
 //!
 //! The read-back ([`scripts_problems`], [`package_info_scripts_problems`]) holds the built pkg to
 //! exactly that script: `PackageInfo` names `postinstall` and no `preinstall`, and the `Scripts`
-//! archive holds `postinstall` alone, executable, with exactly these bytes.
+//! directory `pkgutil --expand` makes of the pkg's scripts archive holds `postinstall` alone, a
+//! regular file of mode 0755 with exactly these bytes.
 
 use std::path::Path;
 
 use hostkeeper_launchd::plist::{DAEMON_STATE_DIR, INSTALLED_BINARY};
 use hostkeeper_launchd::postinstall::postinstall;
 
-use super::{CpioEntry, TYPE_BITS, TYPE_FILE};
+use std::os::unix::fs::MetadataExt;
 
-/// The name of the script, in the scripts directory and in the `Scripts` archive.
+use super::{Error, TYPE_BITS};
+
+/// The name of the script, in the scripts directory and in the expanded pkg's `Scripts`.
 pub(super) const POSTINSTALL: &str = "postinstall";
 
 /// The mode of the script: the installer runs it.
@@ -58,40 +61,52 @@ pub(super) fn package_info_scripts_problems(text: &str, problems: &mut Vec<Strin
     }
 }
 
-/// What is wrong with the entries of the `Scripts` archive, one line each: besides its top
-/// directory (`.`), it holds exactly `./postinstall`, a regular file with an execute bit and the
-/// bytes of [`postinstall_text`]. The owner is not checked: the installer runs the script as root
-/// whoever owns it in the archive, and installs nothing from it.
-pub(super) fn scripts_problems(entries: &[CpioEntry], problems: &mut Vec<String>) {
-    let want = format!("./{POSTINSTALL}");
-    let mut found = 0;
-    for entry in entries.iter().filter(|e| e.name != ".") {
-        if entry.name != want {
+/// What is wrong with the `Scripts` directory `dir` that `pkgutil --expand` makes of the pkg's
+/// scripts archive, one line each: it holds exactly `postinstall`, a regular file (not a link,
+/// which is not followed) of mode 0755 with the bytes of [`postinstall_text`]. The owner is not
+/// checked: the installer runs the script as root whoever owns it, and installs nothing from it.
+/// `Err` when the directory or the script cannot be read.
+pub(super) fn scripts_problems(dir: &Path, problems: &mut Vec<String>) -> Result<(), Error> {
+    let what = format!("read {}", dir.display());
+    let mut entries: Vec<_> = std::fs::read_dir(dir)
+        .and_then(|read| read.collect::<Result<Vec<_>, _>>())
+        .map_err(Error::io(&what))?;
+    entries.sort_by_key(std::fs::DirEntry::file_name);
+    let mut found = false;
+    for entry in entries {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name != POSTINSTALL {
             problems.push(format!(
-                "Scripts holds {:?}: the pkg's one script is {want}",
-                entry.name
+                "Scripts holds {name:?}: the pkg's one script is {POSTINSTALL}"
             ));
             continue;
         }
-        found += 1;
-        if entry.mode & TYPE_BITS != TYPE_FILE {
+        found = true;
+        let path = entry.path();
+        let meta = std::fs::symlink_metadata(&path)
+            .map_err(Error::io(format!("read {}", path.display())))?;
+        if !meta.file_type().is_file() {
             problems.push(format!(
-                "Scripts: {want} is of type {:o}, not a regular file",
-                entry.mode & TYPE_BITS
+                "Scripts: {POSTINSTALL} is of type {:o}, not a regular file",
+                meta.mode() & TYPE_BITS
             ));
-        } else if entry.mode & 0o111 == 0 {
+            continue;
+        }
+        let mode = meta.mode() & !TYPE_BITS;
+        if mode != SCRIPT_MODE {
             problems.push(format!(
-                "Scripts: {want} has mode {:o}, which the installer cannot run",
-                entry.mode & !TYPE_BITS
+                "Scripts: {POSTINSTALL} has mode {mode:o}, not {SCRIPT_MODE:o}"
             ));
         }
-        if entry.data != postinstall_text().as_bytes() {
+        let bytes = std::fs::read(&path).map_err(Error::io(format!("read {}", path.display())))?;
+        if bytes != postinstall_text().as_bytes() {
             problems.push(format!(
-                "Scripts: {want} is not the postinstall release macos-pkg writes"
+                "Scripts: {POSTINSTALL} is not the postinstall release macos-pkg writes"
             ));
         }
     }
-    if found != 1 {
-        problems.push(format!("Scripts holds {want} {found} times, not once"));
+    if !found {
+        problems.push(format!("Scripts holds no {POSTINSTALL}"));
     }
+    Ok(())
 }
