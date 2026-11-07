@@ -69,6 +69,7 @@ The kit's directory holds three things:
 | `<state>` | its state directory | `/var/lib/js-mdm` | `/var/lib/hostkeeper-mdm` |
 | `<etc>` | its configuration directory | `/etc/js-mdm` | `/etc/hostkeeper-mdm` |
 | `<user>` | its user | `js-mdm` | `hostkeeper-mdm` |
+| `<pkg-dir>` | the directory the proxy serves `/pkg/<sha256>.pkg` from | `<state>/www/pkg`, made by hand in step 2 | `/var/lib/hostkeeper-mdm-pkg` (`MDM_PKG_DIR`) |
 | `<mdm-host>` | the MDM host's name, which its certificate carries | | |
 | `<udid>` | the Mac's enrollment id in NanoHUB | | |
 | `<scratch>` | a directory only root can read, on the MDM host | | |
@@ -117,13 +118,22 @@ call the binary `xtask`.
 
 ## 2. Serve the pkgs, on the MDM host (as root)
 
-The proxy has no `/pkg/` route until task M5 adds it. For this test, add it by hand and remove
-it at the end (step 6). The route serves `https://<mdm-host>/pkg/<sha256>.pkg` from
-`<state>/www/pkg`, the URL design section 7.1 gives.
+The proxy serves `https://<mdm-host>/pkg/<sha256>.pkg`, the URL design section 7.1 gives, from
+`<pkg-dir>/<sha256>.pkg`, and the kit names each pkg `<sha256>.pkg`.
+
+After task M7 the route is the kit's own: `hostkeeper-mdm install` renders it into the Caddyfile
+and makes `<pkg-dir>` (`MDM_PKG_DIR`, root's, 0755). Put the pkgs in it:
 
 ```
-install -d -m 0755 -o <user> -g <user> <state>/www/pkg
-install -m 0644 -o <user> -g <user> <kit>/pkg/*.pkg <state>/www/pkg/
+install -m 0644 -o root -g root <kit>/pkg/*.pkg <pkg-dir>/
+```
+
+On the live stack, before task M7, the proxy has no `/pkg/` route. Add it by hand for this test,
+and remove it at the end (step 6):
+
+```
+install -d -m 0755 -o <user> -g <user> <pkg-dir>
+install -m 0644 -o <user> -g <user> <kit>/pkg/*.pkg <pkg-dir>/
 ```
 
 Edit `<etc>/Caddyfile`. Inside the `https://<mdm-host>:443` block, put this route before the last
@@ -295,6 +305,7 @@ lists the root's profile. `report` prints a `Cleanup:` line while the run has no
 
 On the MDM host, as root:
 
-1. Take the `/pkg/*` route out of `<etc>/Caddyfile` and run `systemctl restart <prefix>-proxy`.
-2. Remove the four pkgs from `<state>/www/pkg`, then remove the directory.
+1. On the live stack only (before task M7): take the `/pkg/*` route out of `<etc>/Caddyfile` and
+   run `systemctl restart <prefix>-proxy`.
+2. Remove the four pkgs from `<pkg-dir>`. On the live stack, remove the directory too.
 3. Remove `<scratch>/nanohub-api-key`.

@@ -54,9 +54,14 @@ pub struct UnitNames {
 impl UnitNames {
     /// The names for the settings `c`.
     pub fn new(c: &MdmConfig) -> UnitNames {
-        let p = c.unit_prefix();
+        UnitNames::with_prefix(c.unit_prefix(), c.slice())
+    }
+
+    /// The names of a kit whose units are `<prefix>-<part>.<kind>` and whose slice is `slice`.
+    pub fn with_prefix(prefix: &str, slice: &str) -> UnitNames {
+        let p = prefix;
         UnitNames {
-            slice: c.slice().to_owned(),
+            slice: slice.to_owned(),
             scep: format!("{p}-scep.service"),
             nanohub: format!("{p}-nanohub.service"),
             depserver: format!("{p}-depserver.service"),
@@ -153,6 +158,9 @@ fn values(c: &MdmConfig) -> Values {
         ("STATE", c.state().to_string()),
         ("ETC", c.etc().to_string()),
         ("BIN", c.bin().to_string()),
+        ("PKG_DIR", c.pkg_dir().to_string()),
+        // Caddy's named matcher of the pkg route: the template cannot spell an `@` itself.
+        ("PKG_MATCHER", "@pkg".to_owned()),
         ("NANOHUB_PORT", c.nanohub_port().to_string()),
         ("SCEP_PORT", c.scep_port().to_string()),
         ("DEP_PORT", c.dep_port().to_string()),

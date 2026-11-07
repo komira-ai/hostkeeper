@@ -1,5 +1,6 @@
 //! `hostkeeper-mdm`: the MDM kit's binary, which applies [`hostkeeper_mdm_core`]'s rendered
-//! output to the Linux host of the MDM server stack (docs/design/hostkeeper-mdm.md, task M4).
+//! output to the Linux host of the MDM server stack (docs/design/hostkeeper-mdm.md, tasks M4 and
+//! M5).
 //!
 //! The stack is NanoHUB, a SCEP server, NanoDEP and Caddy as capped systemd services on one
 //! Linux host, which enrolls the farm's Macs. This crate links no other crate of the workspace
@@ -7,8 +8,9 @@
 //! `hostkeeper-mdm-step`, the host-step layer (crates/xtask/tests/layering keeps it so). Every
 //! verb checks the host read only, makes a plan of the steps that would change it, prints the
 //! plan by default, and carries it out with `--apply`. It is the port of komira-ai/kbf's
-//! `mdm-host`, with the fixes of komira-ai/kbf#2248 that the design gives task M4
-//! (`MIGRATION.md` lists them with their tests).
+//! `mdm-host`, with the fixes of komira-ai/kbf#2248 that the design gives task M4, and of the
+//! `push-cert` and `dep` verbs of kbf-deploy's `mdm` module (`MIGRATION.md` lists them with
+//! their tests).
 //!
 //! # Verbs
 //!
@@ -38,7 +40,28 @@
 //!   active, listeners, certificate lifetime, modes), then one line per installed file
 //!   compared with `hostkeeper-mdm-core`'s render of the same settings.
 //!
-//! Not in this binary yet: `push-cert`, `dep` and `migrate` (design task M5).
+//! * `hostkeeper-mdm push-cert --settings FILE (--cert PEM --key PEM | --profile-only [--topic
+//!   TOPIC]) [--apply]`: as root, the APNs push certificate checked (an MDM push certificate,
+//!   unexpired by the injected clock, with its own unencrypted key, the key file 0600, neither
+//!   file inside a git work tree) and given to NanoHUB's API on loopback unless NanoHUB has it
+//!   already, then the enrollment profile written to `MDM_STATE/www/enroll.mobileconfig`, mode
+//!   0640, root's and the service group's, which the proxy serves at `/enroll`. The SCEP
+//!   challenge in it is never printed.
+//! * `hostkeeper-mdm dep (get-cert --out FILE | upload-token --token FILE | define-profile |
+//!   assign --serial SERIAL...) --settings FILE [--apply]`: as root, NanoDEP linked to Apple
+//!   Business Manager through depserver's API on loopback: its token certificate, the server
+//!   token, the ADE profile (defined once per change, then depsyncer started) and its assignment
+//!   to devices already in ABM (exit 1 unless Apple assigns every one).
+//! * `hostkeeper-mdm migrate --from OLD --settings NEW --bin-dir DIR --profile-id ID
+//!   [--scep-ca-cn CN] [--acme-resolvers R] [--acme-propagation-wait W] [--apply]`:
+//!   as root, the old kit's live stack moved to this kit's names while no Mac is enrolled: the
+//!   new settings written from the old ones, NanoHUB's push certificate and NanoDEP's ABM token
+//!   copied from the old state with the DNS provider's `dns.env`, this kit's files installed (a
+//!   fresh SCEP CA under its final name included), the old units stopped and disabled, and this
+//!   kit's services started. The old state and etc directories are never changed.
+//!
+//! A call to NanoHUB's or NanoDEP's API (`api`) is printed as a step is, with its method, URL and
+//! body size, and made only with `--apply`.
 //!
 //! # Rules every verb keeps
 //!
@@ -56,17 +79,25 @@
 //!   to 0600 root files.
 //! * Exit 0 done (or nothing to do), 1 a step, a download or a check failed, or the host could
 //!   not be read (`FAILED: ...` on stderr; a link or an untrusted owner met on the way to a path
-//!   the verb reads is such a failure), 2 refused (`REFUSED: ...` on stderr).
+//!   the verb reads is such a failure), 2 refused (`REFUSED: ...` on stderr). `dep assign` also
+//!   exits 1 when Apple did not assign every device.
 //! * Settings come from the file `--settings` names, never from the environment.
+//! * No API key, token, private key or challenge is put on a command line or printed: an API key
+//!   travels in a call's Basic authentication header only.
 
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
+pub mod api;
 pub mod archive;
 mod cli;
+pub mod dep;
 mod error;
 pub mod fetch;
 pub mod install;
+pub mod migrate;
 pub mod net;
+pub mod push_cert;
+mod repo;
 pub mod secret;
 mod system;
 pub mod tls;
@@ -76,21 +107,25 @@ use std::io;
 
 use hostkeeper_mdm_step::Host;
 
+pub use api::{HttpLoopback, Loopback};
 pub use cli::{run, run_with};
 pub use error::MdmError;
 pub use net::{Download, DownloadError, Net};
 pub use system::{RealMachine, main, system_random};
 
-/// What a verb needs from the outside: the host, the network, a random source and the time.
+/// What a verb needs from the outside: the host, the network, the services' APIs on loopback,
+/// a random source and the time.
 pub struct Env<'a> {
     /// The host.
     pub host: &'a dyn Host,
     /// Downloads.
     pub net: &'a dyn Download,
+    /// Calls to NanoHUB's and NanoDEP's APIs on `127.0.0.1`.
+    pub api: &'a dyn Loopback,
     /// Fills a buffer with random bytes.
     pub random: &'a dyn Fn(&mut [u8]) -> io::Result<()>,
-    /// Unix seconds now, read once when the program starts: it names an uninstall snapshot,
-    /// and nothing decides on it.
+    /// Unix seconds now, read once when the program starts (the injected clock): it names an
+    /// uninstall snapshot, and `push-cert` refuses a push certificate that has expired by it.
     pub now: u64,
 }
 
@@ -117,12 +152,15 @@ pub trait Machine {
     fn owner(&self, path: &str) -> io::Result<Option<u32>>;
 }
 
-/// What [`run`] acts on: the machine, the network, a random source and the time.
+/// What [`run`] acts on: the machine, the network, the services' APIs, a random source and the
+/// time.
 pub struct System<'a> {
     /// The machine.
     pub machine: &'a dyn Machine,
     /// Downloads.
     pub net: &'a dyn Download,
+    /// Calls to the services' APIs on loopback.
+    pub api: &'a dyn Loopback,
     /// Fills a buffer with random bytes.
     pub random: &'a dyn Fn(&mut [u8]) -> io::Result<()>,
     /// Unix seconds now.

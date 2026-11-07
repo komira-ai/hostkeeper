@@ -37,6 +37,11 @@ MDM_STATE=/var/lib/hostkeeper-mdm
 MDM_ETC=/etc/hostkeeper-mdm
 # Required. The pinned binaries (root-owned, 0755).
 MDM_BIN=/opt/hostkeeper-mdm/bin
+# Default /var/lib/<MDM_UNIT_PREFIX>-pkg. The pkg directory: the hostkeeper pkgs the proxy
+# serves at https://<MDM_DNS_NAME>/pkg/<sha256>.pkg, each named by its SHA-256. Root's,
+# mode 0755: a release pkg is public, and the Mac checks its digest. Not MDM_STATE,
+# MDM_ETC or MDM_BIN, and not inside or around one of them.
+MDM_PKG_DIR=/var/lib/hostkeeper-mdm-pkg
 # The erase path's replay ledger (root only, 0700). Accepted here so one file serves the
 # whole kit; the unit and profile builders do not read it.
 MDM_ERASE_STATE=/var/lib/hostkeeper-mdm-erase

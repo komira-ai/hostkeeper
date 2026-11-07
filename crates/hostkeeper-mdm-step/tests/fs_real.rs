@@ -551,3 +551,51 @@ fn a_file_where_a_directory_should_be_is_named_as_such() {
     assert_eq!(err.to_string(), "refused: /file/x: file is not a directory");
     assert!(host.read("/file/x").is_err());
 }
+
+/// Catches a listing that follows a link (root would copy whatever the service user points it
+/// at), that reads a file as a directory, that leaves `.` and `..` in, or that turns a system
+/// error or a missing directory into the wrong answer: the names come sorted, a link at the
+/// end or on the way and a file are refused by name, nothing there is `None`, and a name the
+/// file system cannot hold is the system's error.
+#[test]
+fn list_names_a_directory_without_following_links() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let (dir, host) = scratch("list");
+    let owner = me(&dir);
+    host.mkdir("/d", 0o700, owner).unwrap();
+    for name in ["b", "a", "c.pem"] {
+        std::fs::write(dir.path().join("d").join(name), b"x").unwrap();
+    }
+    std::fs::create_dir(dir.path().join("d/sub")).unwrap();
+    assert_eq!(
+        host.list("/d").unwrap(),
+        Some(vec!["a".into(), "b".into(), "c.pem".into(), "sub".into()])
+    );
+    assert_eq!(host.list("/d/sub").unwrap(), Some(Vec::new()));
+    assert_eq!(host.list("/d/none").unwrap(), None);
+    assert_eq!(host.list("/none/d").unwrap(), None);
+
+    symlink(dir.path().join("d"), dir.path().join("lnk")).unwrap();
+    assert_eq!(
+        host.list("/lnk").unwrap_err().to_string(),
+        "refused: /lnk: lnk is a symbolic link or not a directory; give the real path"
+    );
+    assert_eq!(
+        host.list("/lnk/sub").unwrap_err().to_string(),
+        "refused: /lnk/sub: lnk is a symbolic link; give the real path"
+    );
+    assert_eq!(
+        host.list("/d/a").unwrap_err().to_string(),
+        "refused: /d/a: a is a symbolic link or not a directory; give the real path"
+    );
+    let long = format!("/{}", "n".repeat(300));
+    assert!(host.list(&long).is_err());
+
+    let odd = std::ffi::OsStr::from_bytes(b"\xff");
+    std::fs::write(dir.path().join("d/sub").join(odd), b"x").unwrap();
+    assert_eq!(
+        host.list("/d/sub").unwrap_err().to_string(),
+        "refused: /d/sub: a name in it is not UTF-8"
+    );
+}
