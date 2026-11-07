@@ -109,12 +109,19 @@ fn entered(service: &str, view: &View) -> String {
     )
 }
 
-/// Enters, for the service `def` at its desired version `want`, every stage the plan may enter by
-/// itself now, after a heartbeat and under the fleet's lock: one write of the position, with one
-/// audit entry by the coordinator. Nothing is entered while the service is halted, its version is
-/// marked bad, the plan is paused, or the coordinator is quiet. A write that fails is logged, and
-/// the next heartbeat tries again; no host of the next stage is ordered until it lands.
-pub(crate) fn advance(def: &ServiceDef, want: &Desired, ops: &OpsStore, fleet: &mut Fleet, now: Duration) {
+/// Writes, for the service `def` at its desired version `want`, the position its plan reaches by
+/// itself now (every stage it may enter, [`reach`]), after a heartbeat and under the fleet's
+/// lock: one write, with one audit entry by the coordinator. Nothing is written while the service
+/// is halted, its version is marked bad, the plan is paused or the coordinator is quiet, nor when
+/// the plan has no host left to order. A write that fails is logged, and the next heartbeat tries
+/// again; the decision reads the position the plan reaches either way ([`View::effective`]).
+pub(crate) fn advance(
+    def: &ServiceDef,
+    want: &Desired,
+    ops: &OpsStore,
+    fleet: &mut Fleet,
+    now: Duration,
+) {
     let marks = ops.marks(&def.name);
     if marks.halt.is_some() || marks.bad.contains(&want.version) || fleet.is_quiet(now) {
         return;
@@ -124,11 +131,19 @@ pub(crate) fn advance(def: &ServiceDef, want: &Desired, ops: &OpsStore, fleet: &
     if view.paused.is_some() {
         return;
     }
-    let Some(view) = reach(def, want, view, false, fleet, now) else {
+    // A plan with nothing left to order (every eligible host had rolled when the coordinator
+    // heard it) enters its stages without a word: there is no position worth keeping.
+    let Some(view) = reach(def, want, view, false, fleet, now).filter(|view| !view.finished())
+    else {
         return;
     };
     let record = kept(&view);
-    let audit = entry(COORDINATOR, "rollout_advance", &def.name, entered(&def.name, &view));
+    let audit = entry(
+        COORDINATOR,
+        "rollout_advance",
+        &def.name,
+        entered(&def.name, &view),
+    );
     match ops.change(Write::BeforeMemory, audit, |state| {
         state.rollouts.insert(def.name.clone(), record);
     }) {
@@ -199,7 +214,15 @@ impl Coordinator {
             .services
             .get(&def.name)
             .is_some_and(|marks| marks.halt.is_some() || marks.bad.contains(&want.version));
-        Some(plan_proto(&self.services, all, def, want, halted, fleet, now))
+        Some(plan_proto(
+            &self.services,
+            all,
+            def,
+            want,
+            halted,
+            fleet,
+            now,
+        ))
     }
 
     /// The plan of `def` as it stands now, for an answer; none when the service has no desired
@@ -236,15 +259,17 @@ impl Coordinator {
         let mut fleet = self.lock_fleet();
         let now = (self.clock)();
         let marks = self.ops.marks(&def.name);
-        let kept_now = self.ops.read(|state| state.rollouts.get(&def.name).cloned());
+        let kept_now = self
+            .ops
+            .read(|state| state.rollouts.get(&def.name).cloned());
         let view = View::effective(def, &want, kept_now.as_ref(), &fleet, now);
         let stopped = marks.halt.is_some() || marks.bad.contains(&want.version);
         let waiting = view.wait(def, &want, &fleet, now) == Some(Wait::ManualAdvance);
         if stopped || fleet.is_quiet(now) || !waiting {
             return Err(proto::RolloutsRefusal::NotWaiting);
         }
-        let view = reach(def, &want, view, true, &fleet, now)
-            .ok_or(proto::RolloutsRefusal::NotWaiting)?;
+        let view =
+            reach(def, &want, view, true, &fleet, now).ok_or(proto::RolloutsRefusal::NotWaiting)?;
         let record = kept(&view);
         let audit = entry(
             by,
