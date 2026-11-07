@@ -581,6 +581,29 @@ fn a_secret_file_with_other_lines_and_no_value_is_not_overwritten() {
     );
 }
 
+/// Catches a secret file systemd would not read with certainty being made again, or refused
+/// as one that "holds other lines": a quote left open is refused by its cause, naming the file
+/// and the line, before anything changes, and the file keeps its bytes.
+#[test]
+fn a_secret_file_systemd_would_not_read_with_certainty_is_refused_by_its_cause() {
+    let kit = kit();
+    let host = ready_host(&kit);
+    let path = format!("{ETC}/nanohub.env");
+    host.put_file(&path, 0o600, (0, 0), b"NANOHUB_API_KEY=\"abc\n");
+    let before = host.paths();
+    let (result, _) = install(&host, &kit, Mode::Apply);
+    let err = result.unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        format!(
+            "{path} line 1: a quote is not closed: systemd might read it differently from this tool; write the value on one line as KEY=value"
+        )
+    );
+    assert_eq!(err.exit_code(), 2);
+    assert_eq!(host.paths(), before);
+    assert_eq!(host.node(&path).unwrap().bytes, b"NANOHUB_API_KEY=\"abc\n");
+}
+
 /// Catches an archive that cannot be read passing as a missing one, or as fine: a read error
 /// is a failure (exit 1) that names nothing it should not, and nothing is planned.
 #[test]

@@ -122,6 +122,14 @@ fn an_unquoted_backslash_escapes_or_continues() {
     assert_eq!(read_of(b"API_KEY=a\\#b\\ c\n"), Ok("a#b c".to_owned()));
 }
 
+/// A quote that does not open the value is an ordinary character: systemd's reader takes quotes
+/// only where a value starts, so the value keeps them as they are.
+#[test]
+fn a_quote_inside_an_unquoted_value_is_kept() {
+    assert_eq!(read_of(b"API_KEY=ab'cd ef'\n"), Ok("ab'cd ef'".to_owned()));
+    assert_eq!(read_of(b"API_KEY=ab\"cd\n"), Ok("ab\"cd".to_owned()));
+}
+
 /// Whitespace around the key and before the value is dropped, and so is whitespace after an
 /// unquoted value.
 #[test]

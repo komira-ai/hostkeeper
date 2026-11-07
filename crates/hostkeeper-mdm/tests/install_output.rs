@@ -93,8 +93,6 @@ fn steps() -> Vec<String> {
     for unit in SERVICES {
         steps.push(format!("systemctl enable -- {unit}"));
         steps.push(format!("systemctl restart -- {unit}"));
-    }
-    for unit in SERVICES {
         steps.push(format!("remove /run/hostkeeper-mdm/restart/{unit}"));
     }
     steps

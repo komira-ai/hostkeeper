@@ -31,15 +31,16 @@
 //! A service whose inputs change in the plan is restarted by it. So that a run which stops
 //! before the restart does not lose it, the plan begins with an empty 0600 root file
 //! `/run/<MDM_UNIT_PREFIX>/restart/<unit>` for each such service that has none yet (the
-//! directory is made 0700 when a file is), and ends, after the restarts, by removing the
-//! file of each service it restarts. A service whose file is there when the plan is made is
+//! directory is made 0700 when a file is), and removes the file of each service right after
+//! that service's restart. A service whose file is there when the plan is made is
 //! restarted whether or not anything changed in this run (the proxy only once the TLS
 //! certificate is there). `/run` is a tmpfs: a reboot starts every service with the files in
 //! place, so the files go with it.
 //!
 //! `--uninstall` stops and disables every unit of the kit that is installed (the timer, the
 //! path unit and the services in one command), then stops the certificate job and the reload
-//! job where installed (one that is running would go on after its file is moved), and moves
+//! job where installed (one that is running would go on after its file is moved), removes the
+//! pending-restart files of the services, and moves
 //! the unit files to `MDM_STATE/removed/<unix seconds>/` (a 0700 directory of `MDM_USER`'s;
 //! when that name exists the first free `<unix seconds>-1`, `-2`, ... is used), then reloads
 //! systemd. The state (database, SCEP CA, DEP token, TLS key and certificate), the secrets,
@@ -237,7 +238,7 @@ pub fn plan(
 
 /// The pending-restart markers of one run: `<RUN_DIR>/<MDM_UNIT_PREFIX>/restart/<unit>`, an
 /// empty 0600 root file made before the first change of the run for each unit whose inputs the
-/// run changes, and removed after the restarts. A run that stops in between leaves them, and
+/// run changes, and removed right after that unit's restart. A run that stops in between leaves them, and
 /// the next run restarts the units they name even when it changes nothing.
 struct Restarts<'h> {
     host: &'h dyn Host,
@@ -279,7 +280,7 @@ impl<'h> Restarts<'h> {
         Ok(())
     }
 
-    /// `plan` with the markers made before its first step and removed after its last.
+    /// `plan` with the markers made before its first step, each removed after its restart.
     fn wrap(self, plan: Plan) -> Result<Plan, PlanError> {
         let mut before = Planner::new(self.host);
         if !self.make.is_empty() {
@@ -292,8 +293,23 @@ impl<'h> Restarts<'h> {
             owner: Account::root(),
             bytes: Vec::new(),
         }));
-        steps.extend(plan.steps);
-        steps.extend(self.clear.into_iter().map(|path| Step::Absent { path }));
+        // Each marker goes right after its unit's restart, so a run that stops at a later
+        // restart leaves only the markers of the units it did not restart.
+        for step in plan.steps {
+            let cleared: Vec<String> = match &step {
+                Step::Unit {
+                    verb: UnitVerb::Restart,
+                    units,
+                } => units
+                    .iter()
+                    .map(|u| format!("{}/{u}", self.dir))
+                    .filter(|m| self.clear.contains(m))
+                    .collect(),
+                _ => Vec::new(),
+            };
+            steps.push(step);
+            steps.extend(cleared.into_iter().map(|path| Step::Absent { path }));
+        }
         Ok(Plan { steps })
     }
 }
@@ -472,6 +488,8 @@ fn secret_file(
 ) -> Result<bool, MdmError> {
     let host = env.host;
     let existing = host.read(path)?.unwrap_or_default();
+    // A file systemd would not read with certainty is refused by its cause, never made again.
+    secret::check_text(path, &existing)?;
     if secret::has_value(&existing, key) {
         let (mode, uid) = host.stat(path)?.map_or((0, 0), |m| (m.mode, m.uid));
         secret::check_mode(path, mode, uid)?;
@@ -557,6 +575,12 @@ pub fn plan_uninstall(env: &Env<'_>, c: &MdmConfig, out: &mut dyn Write) -> Resu
                 .arg("--")
                 .args(&jobs),
         );
+    }
+    // A pending restart means nothing once the units are gone: an install after this one starts
+    // them.
+    let markers = format!("{RUN_DIR}/{}/restart", c.unit_prefix());
+    for unit in [&n.scep, &n.nanohub, &n.depserver, &n.proxy] {
+        p.absent(&format!("{markers}/{unit}"))?;
     }
     let to = snapshot_dir(host, c, env.now)?;
     // The copies are the service user's, in a 0700 directory of its own: every directory on

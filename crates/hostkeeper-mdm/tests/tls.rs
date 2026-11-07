@@ -435,7 +435,6 @@ fn a_missing_or_mismatched_key_plans_a_new_issuance_and_says_why() {
         let (result, shown) = go(&host, Mode::Apply);
         result.unwrap();
         let line = format!("key: {KEY} {why}\n");
-        assert!(shown.contains(&line), "missing {line:?} in\n{shown}");
         let ran = changes(&host);
         let issue = ran
             .iter()
@@ -446,7 +445,7 @@ fn a_missing_or_mismatched_key_plans_a_new_issuance_and_says_why() {
             .position(|c| c.ends_with("start -- hostkeeper-mdm-proxy.service"))
             .unwrap();
         assert!(issue < proxy, "{ran:?}");
-        assert!(!shown.contains("KEY\n") && !shown.contains("PUBLIC-KEY"));
+        assert_eq!(shown, issued_output(&line), "{why}");
     }
 
     let host = issued_host();
@@ -513,8 +512,10 @@ fn a_certificate_ending_soon_is_renewed_once_after_the_reload_path_is_watching()
         "{shown}"
     );
     assert!(shown.contains("certificate: notAfter=Jan  1 00:00:00 2027 GMT\n"));
-    assert!(!shown.contains("started once"));
-    assert!(shown.contains("certificate: ends within 21 days, renewed\n"));
+    assert_eq!(
+        shown,
+        issued_output("certificate: ends within 21 days, a new one is issued\n")
+    );
 
     let host = issued_host();
     host.reply(&openssl_checkend(), 1, "Certificate will expire\n");
@@ -635,4 +636,37 @@ fn a_secret_is_read_from_a_root_only_file_and_never_shown() {
     ));
     assert!(secret::has_value(b"KEY=v\n", "KEY"));
     assert!(!secret::has_value(b"KEY=\nOTHER=v\n", "KEY"));
+}
+
+/// The whole output of an apply on a host whose units are not written yet, that issues a
+/// certificate and starts the proxy: `why` (the line saying why a certificate is issued) after
+/// the `dns.env` line, the plan's lines, and the certificate's public lines. No byte of a key or
+/// of the DNS token is in it.
+fn issued_output(why: &str) -> String {
+    let mut text = format!("dns.env: holds CLOUDFLARE_DNS_API_TOKEN (values not shown)\n{why}");
+    for unit in render_tls(&config(), &common::acme()).unwrap() {
+        text.push_str(&format!(
+            "+ write {UNITS}/{} mode 0644 owner root:root ({} bytes)\n",
+            unit.name,
+            unit.text.len()
+        ));
+    }
+    for line in [
+        "systemctl daemon-reload",
+        "systemctl enable -- hostkeeper-mdm-proxy-reload.path",
+        "systemctl restart -- hostkeeper-mdm-proxy-reload.path",
+        "systemctl enable -- hostkeeper-mdm-cert.timer",
+        "systemctl restart -- hostkeeper-mdm-cert.timer",
+        "systemctl start -- hostkeeper-mdm-cert.service",
+        "systemctl enable -- hostkeeper-mdm-proxy.service",
+        "systemctl start -- hostkeeper-mdm-proxy.service",
+    ] {
+        text.push_str(&format!("+ {line}\n"));
+    }
+    text.push_str(
+        "certificate: subject=CN = mdm.example.com\n\
+         certificate: issuer=CN = Example CA\n\
+         certificate: notAfter=Jan  1 00:00:00 2027 GMT\n",
+    );
+    text
 }

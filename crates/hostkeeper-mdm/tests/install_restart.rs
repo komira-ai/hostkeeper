@@ -44,8 +44,9 @@ fn interrupted_install() -> (common::Kit, FakeHost) {
 
 /// Catches a restart lost with the run that was to do it: the run stopped at the restart of
 /// NanoHUB, after the SCEP server's; the units' files, binaries and secrets are in place, so
-/// the rerun sees nothing different on disk. It restarts every unit the first run planned to
-/// (the markers say which), removes the markers, and a run after that has nothing to do.
+/// the rerun sees nothing different on disk. It restarts exactly the units the first run did
+/// not reach (the markers say which; the SCEP server's went with its restart), removes their
+/// markers, and a run after that has nothing to do.
 #[test]
 fn a_restart_that_a_failed_run_did_not_reach_is_done_by_the_rerun() {
     let (kit, host) = interrupted_install();
@@ -54,7 +55,9 @@ fn a_restart_that_a_failed_run_did_not_reach_is_done_by_the_rerun() {
         (dir.kind, dir.mode, dir.uid, dir.gid),
         (Kind::Dir, 0o700, 0, 0)
     );
-    for unit in CORE.iter().chain([&PROXY]) {
+    // The SCEP server was restarted before the failure, so its marker went with its restart.
+    assert!(host.node(&marker(CORE[0])).is_none());
+    for unit in [CORE[1], CORE[2], PROXY] {
         assert_marker(&host, unit);
     }
     assert_eq!(
@@ -62,7 +65,7 @@ fn a_restart_that_a_failed_run_did_not_reach_is_done_by_the_rerun() {
             .iter()
             .filter(|p| p.starts_with(MARKERS))
             .count(),
-        5
+        4
     );
 
     // The failure is gone; the services run the old files and nothing else differs.
@@ -77,7 +80,6 @@ fn a_restart_that_a_failed_run_did_not_reach_is_done_by_the_rerun() {
         [
             IP_AND_SS[0].to_owned(),
             IP_AND_SS[1].to_owned(),
-            restart_line(CORE[0]),
             restart_line(CORE[1]),
             restart_line(CORE[2]),
             restart_line(PROXY),
@@ -198,7 +200,7 @@ fn a_proxy_marker_waits_for_the_certificate_and_is_removed_by_its_restart() {
 }
 
 /// Catches a dry run that writes a marker: it prints the marker steps in their places (the
-/// directory and a marker per unit before the plan, the removals after the restarts) and
+/// directory and a marker per unit before the plan, each removal right after its restart) and
 /// changes nothing, not even the directory under `/run`.
 #[test]
 fn a_dry_run_prints_the_marker_steps_and_makes_no_marker() {
@@ -239,10 +241,13 @@ fn a_dry_run_prints_the_marker_steps_and_makes_no_marker() {
     .into();
     let got: Vec<String> = run_steps.iter().map(|(_, l)| (*l).to_owned()).collect();
     assert_eq!(got, expected);
-    // The marker steps come before the first step of the plan and after the last restart.
+    // The markers are made before the first step of the plan, and each is removed by the step
+    // right after its unit's restart.
     let first =
         at("DRY-RUN: mkdir /var/lib/hostkeeper-mdm mode 0700 owner hostkeeper-mdm:hostkeeper-mdm");
     assert!(run_steps[3].0 < first);
-    assert!(run_steps[4].0 > at(&restart(CORE[2])));
+    for unit in CORE {
+        assert_eq!(at(&clear(unit)), at(&restart(unit)) + 1, "{unit}");
+    }
     assert_eq!(changes(&host), IP_AND_SS);
 }

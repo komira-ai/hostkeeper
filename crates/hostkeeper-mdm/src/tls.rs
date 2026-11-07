@@ -194,7 +194,10 @@ fn look_at_certificate(
     let renew = ends.code != 0;
     if renew {
         let days = VALID_FOR_DAYS;
-        writeln!(out, "certificate: ends within {days} days, renewed")?;
+        writeln!(
+            out,
+            "certificate: ends within {days} days, a new one is issued"
+        )?;
     }
     Ok((false, renew))
 }

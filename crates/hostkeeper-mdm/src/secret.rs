@@ -272,6 +272,29 @@ pub fn holds_other_lines(bytes: &[u8], key: &str) -> bool {
     })
 }
 
+/// The entries of the secret file at `path` holding `bytes`: refused when they are not UTF-8 or
+/// hold a construct whose systemd reading is not certain.
+fn readable(path: &str, bytes: &[u8]) -> Result<Vec<Entry>, MdmError> {
+    let text = std::str::from_utf8(bytes).map_err(|_| MdmError::SecretEncoding {
+        path: path.to_owned(),
+    })?;
+    parse(text).map_err(|r| MdmError::SecretSyntax {
+        path: path.to_owned(),
+        line: r.line,
+        why: r.why,
+    })
+}
+
+/// Refuse the bytes of the secret file at `path` when systemd's reading of them is not certain:
+/// not UTF-8, or a construct [`read`] refuses. `install` checks a file it may make again with it,
+/// so the refusal names the cause, not only that the file holds something.
+///
+/// # Errors
+/// [`MdmError::SecretEncoding`], [`MdmError::SecretSyntax`].
+pub fn check_text(path: &str, bytes: &[u8]) -> Result<(), MdmError> {
+    readable(path, bytes).map(|_| ())
+}
+
 /// The value of `key` in the secret file at `path`: refused unless the file is a 0600 file of
 /// root's, UTF-8 text without a construct of uncertain reading, whose last assignment of `key`
 /// has a value without control characters.
@@ -283,14 +306,7 @@ pub fn read(host: &dyn Host, path: &str, key: &str) -> Result<Secret, MdmError> 
     let meta = host.stat(path)?.ok_or_else(missing)?;
     check_mode(path, meta.mode, meta.uid)?;
     let bytes = host.read(path)?.ok_or_else(missing)?;
-    let text = std::str::from_utf8(&bytes).map_err(|_| MdmError::SecretEncoding {
-        path: path.to_owned(),
-    })?;
-    let entries = parse(text).map_err(|r| MdmError::SecretSyntax {
-        path: path.to_owned(),
-        line: r.line,
-        why: r.why,
-    })?;
+    let entries = readable(path, &bytes)?;
     let value = last_value(&entries, key)
         .filter(|v| !v.is_empty())
         .ok_or_else(missing)?;

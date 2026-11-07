@@ -8,7 +8,7 @@ use hostkeeper_mdm_core::render::{UnitNames, render, render_tls};
 use hostkeeper_mdm_step::fake::FakeHost;
 use hostkeeper_mdm_step::{Host, Mode};
 use install_support::{
-    STATE, UNITS, ca_is_made_by_init, changes, install, uninstall, uninstall_at,
+    CORE, STATE, UNITS, ca_is_made_by_init, changes, install, marker, uninstall, uninstall_at,
 };
 
 const CERT_SERVICE: &str = "hostkeeper-mdm-cert.service";
@@ -154,4 +154,28 @@ fn uninstalls_in_the_same_second_keep_every_snapshot() {
     assert_eq!(other.bytes, text("hostkeeper-mdm-scep.service"));
     assert!(host.node(&format!("{STATE}/removed/{at}-3")).is_none());
     assert!(host.stat(&format!("{UNITS}/{slice}")).unwrap().is_none());
+}
+
+/// Catches a pending restart outliving the units it is for: an uninstall removes the markers
+/// of the services, so the install after it starts them and restarts nothing for an old run.
+#[test]
+fn uninstall_removes_the_pending_restart_markers() {
+    let host = installed(false);
+    for unit in [CORE[0], CORE[2]] {
+        host.put_file(&marker(unit), 0o600, (0, 0), b"");
+    }
+    let (result, shown) = uninstall(&host, Mode::DryRun);
+    result.unwrap();
+    let removals: Vec<&str> = shown.lines().filter(|l| l.contains("/run/")).collect();
+    assert_eq!(
+        removals,
+        [
+            format!("DRY-RUN: remove {}", marker(CORE[0])),
+            format!("DRY-RUN: remove {}", marker(CORE[2])),
+        ]
+    );
+    uninstall(&host, Mode::Apply).0.unwrap();
+    for unit in CORE {
+        assert!(host.node(&marker(unit)).is_none(), "{unit}");
+    }
 }

@@ -4,8 +4,7 @@
 //! A zip member must be no larger than the limit as the central directory lists it, and its
 //! output must be exactly that listed size; a tar member is read up to one byte past the
 //! limit. Every offset and length read from a zip is added with saturating arithmetic, so a
-//! hostile
-//! value lands outside the archive and is refused.
+//! hostile value lands outside the archive and is refused.
 //!
 //! The archive has been checked against its pinned sha256 before it is read here; the limits
 //! below only keep a hostile or damaged archive from filling memory.
