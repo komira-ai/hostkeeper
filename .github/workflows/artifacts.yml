@@ -5,9 +5,10 @@
 # with its `.sha256`; for each Linux platform the deb and the rpm, and the `hostkeeper-coordinator`
 # binary as a tarball with its SBOM and its container image (`.image.tar`, an OCI image layout);
 # for macos-arm64 the installer pkg of a Mac's first install; the release indexes `index.json`,
-# `hello-index.json` and `hello-fail-ready-index.json` over the three packages each; one SHA256SUMS
-# over them; and, on a push to main, the build-provenance and SBOM attestations of this repository
-# with a bundle per signed file. A host trusts only packages this workflow attested, so hello's
+# `hello-index.json` and `hello-fail-ready-index.json` over the three packages each;
+# `netboot.json`, the boot sets of network install for both Linux platforms, rendered from
+# packaging/netboot/pins.toml; one SHA256SUMS over them; and, on a push to main, the
+# build-provenance and SBOM attestations of this repository with a bundle per signed file. A host trusts only packages this workflow attested, so hello's
 # packages are signed like hostkeeper's. The names are the release contract
 # (docs/deploy/verify-a-release.md, "Every name"):
 #
@@ -20,7 +21,7 @@
 #   hostkeeper-coordinator-<version>-<linux-platform>.cdx.json
 #   hostkeeper-coordinator-<version>-<linux-platform>.image.tar
 #   hostkeeper-<version>-macos-arm64.pkg
-#   index.json   hello-index.json   hello-fail-ready-index.json   SHA256SUMS
+#   index.json   hello-index.json   hello-fail-ready-index.json   netboot.json   SHA256SUMS
 #   <signed file>.sigstore.json
 #
 # `<version>` is X.Y.Z (`cargo xtask release version`: X.Y from the VERSION file, Z the number of
@@ -496,7 +497,8 @@ jobs:
           retention-days: 90
           if-no-files-found: error
 
-  # index.json over the packages of both platforms, then SHA256SUMS over every file but itself
+  # index.json over the packages of both platforms, netboot.json from the committed pins of the
+  # boot sets of network install (it reads no network), then SHA256SUMS over every file but itself
   # (the bundles come later, from attest). The attest job signs these sums, so they are the one
   # list of what a release holds.
   sums:
@@ -527,6 +529,8 @@ jobs:
         run: cargo xtask release index --service hello --version "$RELEASE_VERSION" --dir dist
       - name: The release index of hello's failing build
         run: cargo xtask release index --service hello --fail-ready --version "$RELEASE_VERSION" --dir dist
+      - name: The boot sets of network install
+        run: cargo xtask release netboot --pins packaging/netboot/pins.toml --version "$RELEASE_VERSION" --dir dist
       # In the C locale, so the lines are in the byte order of the names; written outside dist,
       # so that SHA256SUMS does not list itself.
       - name: SHA256SUMS
@@ -546,13 +550,14 @@ jobs:
             dist/index.json
             dist/hello-index.json
             dist/hello-fail-ready-index.json
+            dist/netboot.json
           retention-days: 90
           if-no-files-found: error
 
   # Push to main only: build provenance for every summed file, an SBOM attestation for each
   # binary tarball, and a provenance attestation of each attested file alone (each binary
-  # tarball, package, deb, rpm and image), whose bundle is copied beside it as
-  # `<file>.sigstore.json` for a host that verifies without GitHub.
+  # tarball, package, deb, rpm, image and pkg, and netboot.json), whose bundle is copied beside
+  # it as `<file>.sigstore.json` for a host that verifies without GitHub.
   attest:
     needs: [version, sums]
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
@@ -772,6 +777,14 @@ jobs:
         env:
           BUNDLE: ${{ steps.pkg-macos-arm64.outputs.bundle-path }}
         run: cp "$BUNDLE" "dist/hostkeeper-${V}-macos-arm64.pkg.sigstore.json"
+      - id: netboot
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/netboot.json
+      - name: Name the bundle of the boot sets of network install
+        env:
+          BUNDLE: ${{ steps.netboot.outputs.bundle-path }}
+        run: cp "$BUNDLE" "dist/netboot.json.sigstore.json"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: bundles

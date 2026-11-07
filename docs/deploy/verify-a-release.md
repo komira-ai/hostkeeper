@@ -48,13 +48,18 @@ platforms; the installer pkg is for `macos-arm64`.
 | `index.json` | the release index of the hostkeeper packages: for each of the three platforms the package file, its SHA-256 and size |
 | `hello-index.json` | the release index of the hello packages (`service` `hello`, `version` `<version>`) |
 | `hello-fail-ready-index.json` | the release index of hello's failing build (`service` `hello`, `version` `<version>-fail-ready`) |
+| `netboot.json` | the boot sets of network install (docs/design/network-install.md, section 5): for each Linux platform the Ubuntu live-server ISO, the shim, the signed network GRUB, the kernel and the initrd a bare machine boots, each with the name it is served as, its size, its SHA-256 and where it comes from, rendered from `packaging/netboot/pins.toml` (`cargo xtask release netboot`) |
 | `SHA256SUMS` | the SHA-256 of every asset except itself and the bundles |
-| `<asset>.sigstore.json` | the attestation bundle of each `.tar.gz`, `.tar.zst`, `.deb`, `.rpm`, `.image.tar` and `.pkg` |
+| `<asset>.sigstore.json` | the attestation bundle of each `.tar.gz`, `.tar.zst`, `.deb`, `.rpm`, `.image.tar` and `.pkg`, and of `netboot.json` |
 
 Each index has the same schema. An index is a lookup, not a trust anchor: it has no bundle of its
 own, and a host trusts a package for its own attestation and manifest, never for its entry in the
 index. (`SHA256SUMS` lists every index, so the provenance of a release covers their bytes too.)
 Every `.tar.zst` is attested, hello's packages included: a host takes no unsigned package.
+`netboot.json` is attested with a bundle of its own, unlike the indexes: it is the trust anchor of
+the boot files it pins, which come from Canonical, not from this release. The design's
+`hostkeeper-pxe fetch` (item N8 of docs/design/network-install.md, not built yet) verifies that
+attestation before it trusts a digest in it.
 
 The coordinator's image runs `/usr/bin/hostkeeper-coordinator` as its entrypoint, as the
 distroless `nonroot` user, configured by its flags alone (`packaging/container/Dockerfile`). It
@@ -84,6 +89,8 @@ SHA256SUMS
 index.json
 hello-index.json
 hello-fail-ready-index.json
+netboot.json
+netboot.json.sigstore.json
 hostkeeper-<version>-<platform>.tar.gz
 hostkeeper-<version>-<platform>.tar.gz.sigstore.json
 hostkeeper-<version>-<platform>.cdx.json

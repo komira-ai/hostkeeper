@@ -26,6 +26,11 @@ githubapp.com
 # declares (http://www.apple.com/DTDs/PropertyList-1.0.dtd).
 apple.com
 
+# Canonical's release sites, which the network boot sets are pinned from
+# (packaging/netboot/pins.toml: releases.ubuntu.com, cdimage.ubuntu.com), and the Ubuntu archive
+# its README checks the pinned packages against (archive.ubuntu.com, ports.ubuntu.com).
+ubuntu.com
+
 # The registry of the distroless base image of the coordinator's container image
 # (packaging/container/Dockerfile, gcr.io/distroless/cc-debian13).
 gcr.io

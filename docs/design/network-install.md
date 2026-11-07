@@ -3,8 +3,9 @@
 Status: design, for review. This document makes network install of new Linux machines part of hostkeeper v1. It
 replaces the non-goal of [hostkeeper-design.md](hostkeeper-design.md) section 2.2 ("No network boot service in
 scope") and the first item of its section 12.1 ("the operator's own, no build items here"). Both now point here. Where
-this document and hostkeeper-design.md disagree on network install, this document wins. Nothing here is built yet:
-every statement about new code is **Designed**, and section 12 lists the build items.
+this document and hostkeeper-design.md disagree on network install, this document wins. Item N5 is built: the pins of
+the boot sets and the release asset `netboot.json` (section 5). Every other statement about new code is **Designed**,
+and section 12 lists the build items.
 
 This revision (item N1b of section 12) amends the first: network boot early in the boot order is the expected setup, so
 a machine takes two manual steps; a router mode, in which the farm's router names the boot server, stands beside
@@ -334,16 +335,28 @@ The image carries only public facts: the coordinator's LAN address, `ca_sha256`,
 
 1. **Boot files are verified before they are served.** Each hostkeeper release carries one `netboot.json` with a boot
    set for each of `linux-x86_64` and `linux-arm64`. It lists, for every file of each set, where it comes from, the
-   name it is served as, the size and the SHA-256: the live-server ISO of that architecture, and the shim (served as
-   `shimx64.efi` or `shimaa64.efi`), the signed network GRUB (served as `grubx64.efi` or `grubaa64.efi`), the kernel and
-   the initrd that match it. The ISO is pinned by the URL on Canonical's release site, and its pin is checked against
-   Canonical's signed `SHA256SUMS` when it is changed. The kernel and initrd are taken from that ISO, and the shim and
-   GRUB from Canonical's signed packages of the same release, each pinned by its own SHA-256 once taken out. **[V]**:
-   that Canonical publishes the arm64 live-server ISO beside the amd64 one, where each of the four smaller files is
-   published and under which name, and which signed checksum covers which file; item N5 records the answer in
-   `packaging/netboot/pins.toml`, which holds the pins.
-   `netboot.json` is attested by the release workflow, like every release asset (`.github/workflows/artifacts.yml`,
-   **Built** for the other assets).
+   name it is served as, the size and the SHA-256: the live-server ISO of that architecture (served under its own file
+   name), and the shim (served as `shimx64.efi` or `shimaa64.efi`), the signed network GRUB (served as `grubx64.efi`
+   or `grubaa64.efi`), the kernel (`vmlinuz-<platform>`) and the initrd (`initrd-<platform>`) that match it. The ISO is
+   pinned by the URL on Canonical's release site, and its pin is checked against Canonical's signed `SHA256SUMS` when
+   it is changed. The kernel and initrd are taken from that ISO, and the shim and GRUB from Canonical's signed packages
+   of the same release, each pinned by its own SHA-256 once taken out. **Built**: the pins are
+   `packaging/netboot/pins.toml`, and `cargo xtask release netboot` renders them into `netboot.json`, refusing pins
+   that miss a platform, a file or a key or hold one of the wrong form. What was checked when the pins were taken
+   (`packaging/netboot/README.md` has the detail and how to check a changed pin):
+   - The arm64 ISO is not beside the amd64 one. The amd64 ISO is on `releases.ubuntu.com/24.04/`, the arm64 ISO on
+     `cdimage.ubuntu.com/ubuntu/releases/24.04/release/`, and each is listed in the `SHA256SUMS` of its own directory,
+     which Canonical signs in `SHA256SUMS.gpg` with its CD image key.
+   - The four smaller files are inside the ISO, so its checksum covers them. The kernel and the initrd are the ISO's
+     `casper/vmlinuz` and `casper/initrd`, those of its default boot entry. The shim is
+     `usr/lib/shim/shim<x64|aa64>.efi.signed.latest` of the `shim-signed` deb in the ISO's pool, byte for byte the
+     ISO's own first boot file. The network GRUB is
+     `usr/lib/grub/<x86_64|arm64>-efi-signed/grubnet<x64|aa64>.efi.signed` of the `grub-efi-<amd64|arm64>-signed` deb
+     in the pool; the ISO's own `grub<x64|aa64>.efi` is the CD GRUB, not this one. The two debs are the files the Ubuntu archive's signed package indexes list, with the same SHA-256.
+   - Canonical's `netboot/` directories and `-netboot-` tarballs are in no signed checksum, so they are not a source.
+     The arm64 kernel and initrd there are not those of the arm64 ISO, whose live system needs its own kernel.
+   `netboot.json` is attested by the release workflow, like every release asset, with a bundle of its own
+   (`netboot.json.sigstore.json`, `.github/workflows/artifacts.yml`, **Built**).
    - `hostkeeper-pxe fetch` downloads the boot set and the hostkeeper deb of each platform into a new directory: both
      platforms by default, or those named by `--platform` (repeatable), so a farm of one architecture does not keep an
      ISO it never serves. It then verifies
@@ -389,9 +402,10 @@ was rejected for v1:
 **Recommendation: leave Secure Boot as each machine has it.** The boot chain is Ubuntu's shim, GRUB and kernel, signed
 through the Microsoft UEFI CA that server firmware trusts by default, so the install works with Secure Boot on or off
 **[V]**. Nothing of ours is signed for Secure Boot, and nothing needs to be. The installed system boots the same signed
-chain from disk. The arm64 chain is the same in kind: Ubuntu's `shimaa64.efi` is signed through the Microsoft UEFI CA
-**[V]**, and whether a given arm64 board trusts that CA by default, or ships with Secure Boot off, is **[V]** per board
-model. The install works either way, as on x86-64.
+chain from disk. The arm64 chain is the same in kind: the pinned shim of each architecture carries one signature, by
+the Microsoft Corporation UEFI CA 2011 (checked when the pins were taken, section 5), and whether a given board trusts
+that CA by default, or ships with Secure Boot off, is **[V]** per board model. The install works either way, as on
+x86-64.
 
 **What it protects, and what it does not.** With Secure Boot on, a LAN attacker cannot make the machine run a boot
 loader or kernel Canonical did not sign. They can still change the kernel command line, the initrd and the ISO (point
@@ -563,6 +577,12 @@ time (rule T10), are Rust (rule T11), and use the repository's scratch helpers a
 
 **Unit and integration tests, by the item that builds them (section 12):**
 
+- Boot sets (N5, **Built**, `crates/xtask/src/release/netboot/tests.rs`): the committed pins render a boot set for
+  each Linux platform, with the served names above; the asset of fixed pins is a golden, by exact equality; and pins
+  that miss a platform, a file or a key, carry an unknown key, a size that is not a whole number above 0, a digest that
+  is not 64 lowercase hex digits, a URL that is not `https://`, a path that is not relative or climbs out, or an ISO or
+  deb of the other architecture are refused, each naming the key, all at once, with nothing written. The workflow lint
+  refuses an `artifacts.yml` that does not attest `netboot.json` or copy its bundle.
 - proxyDHCP packets (N7, pure: a packet, the answer set and the platforms that have a boot set in, a packet or nothing
   out):
   - For a MAC in the set, a DISCOVER with a `PXEClient` or `HTTPClient` vendor class gets an offer with no address
