@@ -13,7 +13,8 @@
 //! - **hostkeeper's package** of each version is built here as the release builder lays it out
 //!   (`crates/xtask/src/release/package.rs`): `bin/hostkeeper`, `files/trusted_root.json`,
 //!   `manifest.toml`, and on Linux `units/hostkeeper.service`; its manifest is the release's, the
-//!   floor [`FLOOR`] and the no-op hook `bin/hostkeeper update-hook`. Two things differ from a
+//!   floor the release builder writes for the build the binary comes from ([`floor`]) and the
+//!   no-op hook `bin/hostkeeper update-hook`. Two things differ from a
 //!   release, both because the test is a host of its own: the packaged trusted root is the test
 //!   signer's, the root the host's copy holds too (the daemon uses whichever of the two was
 //!   written last, so a packaged production root would refuse every later package), and the
@@ -38,6 +39,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_config::platform::Platform;
 use hostkeeper_privileged::across::{Pin, checked_binary, download_path};
 use hostkeeper_steps::record::{Loaded, Record, RecordStore, State};
@@ -67,7 +69,8 @@ pub const NAMED: &str = env!("CARGO_BIN_EXE_hostkeeper-named-daemon");
 /// This build's `hostkeeper` made to fail its start.
 pub const FAILING: &str = env!("CARGO_BIN_EXE_hostkeeper-failing-daemon");
 /// The floor of hostkeeper's package the release builder writes today (`MIN_HOSTKEEPER`, and
-/// `min_hostkeeper` the lower of it and the version, in `crates/xtask/src/release/package.rs`).
+/// `min_hostkeeper` the lower of it and the build's version, in
+/// `crates/xtask/src/release/package.rs`).
 pub const FLOOR: &str = "0.1.53";
 /// The reason of the verdict of a version whose new binary fell back.
 pub const FALLBACK_REASON: &str = "self_update_fallback";
@@ -122,8 +125,24 @@ pub fn newer(version: &str, step: u64) -> String {
     format!("{major}.{minor}.{}", patch + step)
 }
 
-/// The manifest of hostkeeper's package at `version`, as the release builder writes it.
-pub fn manifest(version: &str) -> String {
+/// The `min_hostkeeper` the release builder writes into a package of `build`'s binary: the lower
+/// of [`FLOOR`] and the version that build was built with. The released binary was built as the
+/// pinned release. This build was built with the workspace's version (`0.1.0` in a pull request,
+/// the release's own once `release set-version` ran), which is also the version its package
+/// store judges a package's floor against (`hostkeeper_unpack::running_hostkeeper`), whatever
+/// name the program runs under; a higher floor is `daemon_too_old` to it.
+pub fn floor(build: Build, released: &str) -> String {
+    let floor = HostkeeperVersion::parse(FLOOR).expect("the floor is a version");
+    let built = match build {
+        Build::Released => HostkeeperVersion::parse(released).expect("the release is a version"),
+        Build::This | Build::Failing => hostkeeper_unpack::running_hostkeeper(),
+    };
+    floor.min(built).to_string()
+}
+
+/// The manifest of hostkeeper's package at `version` with the floor `floor`, as the release
+/// builder writes it.
+pub fn manifest(version: &str, floor: &str) -> String {
     let platform = Platform::current();
     let units = if cfg!(target_os = "linux") {
         "\n[units]\nrun = [\"hostkeeper.service\"]\n"
@@ -135,7 +154,7 @@ pub fn manifest(version: &str) -> String {
          name = \"{HK}\"\n\
          version = \"{version}\"\n\
          platform = \"{platform}\"\n\
-         min_hostkeeper = \"{FLOOR}\"\n\
+         min_hostkeeper = \"{floor}\"\n\
          \n\
          [hook]\n\
          command = [\"bin/hostkeeper\", \"update-hook\"]\n\
@@ -260,7 +279,7 @@ impl Rig {
     /// and publishes it on the release channel.
     pub fn publish(&self, version: &str, build: Build) -> Built {
         let binary = self.binary(build);
-        let manifest = manifest(version);
+        let manifest = manifest(version, &floor(build, &self.released));
         let root = self.signer.trusted_root_jsonl();
         let unit = Host::package_unit(self.host.root());
         let mut entries = vec![
