@@ -28,22 +28,31 @@ pub fn client(dbname: Option<&str>) -> Client {
     config.connect(NoTls).expect("the test server answers")
 }
 
-/// Runs `statements` on the server's own database under the catalog lock.
-fn catalog(statements: &[String]) {
+/// Runs `f` on a session of the server's own database that holds the catalog lock, which other
+/// tests take around their `CREATE DATABASE` and `DROP DATABASE`.
+pub fn with_catalog_lock<T>(f: impl FnOnce(&mut Client) -> T) -> T {
     let mut admin = client(None);
     admin
         .batch_execute(&format!(
             "SET lock_timeout = '300s'; SELECT pg_advisory_lock({CATALOG_LOCK})"
         ))
         .expect("the catalog lock");
-    for statement in statements {
-        admin
-            .batch_execute(statement)
-            .expect("the catalog change runs");
-    }
+    let out = f(&mut admin);
     admin
         .batch_execute(&format!("SELECT pg_advisory_unlock({CATALOG_LOCK})"))
         .expect("the catalog lock is released");
+    out
+}
+
+/// Runs `statements` on the server's own database under the catalog lock.
+fn catalog(statements: &[String]) {
+    with_catalog_lock(|admin| {
+        for statement in statements {
+            admin
+                .batch_execute(statement)
+                .expect("the catalog change runs");
+        }
+    });
 }
 
 /// A database of one test's own, dropped with it.
@@ -64,6 +73,11 @@ impl Database {
         );
         catalog(&[format!("CREATE DATABASE \"{name}\"")]);
         Database { name }
+    }
+
+    /// The database's name.
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     /// The connection string of the database, in keyword form, as the file holds it.
