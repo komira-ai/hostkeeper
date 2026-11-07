@@ -1,6 +1,6 @@
 //! The coordinator's gRPC: `hostkeeper.agent.v1.Coordinator` on the heartbeat listener,
-//! `hostkeeper.operator.v1.{Hosts, Releases, Services, Enrollment, Audit, Alerts, Rollouts}` on the
-//! private one,
+//! `hostkeeper.operator.v1.{Hosts, Releases, Services, Enrollment, Audit, Alerts, Rollouts,
+//! Mdm}` on the private one,
 //! and the JSON gateway of the operator API ([`gateway`]), all beside the frozen JSON routes of
 //! [`crate::http`].
 //!
@@ -36,6 +36,7 @@ use hostkeeper_proto::hostkeeper::operator::v1::alerts_server::AlertsServer;
 use hostkeeper_proto::hostkeeper::operator::v1::audit_server::AuditServer;
 use hostkeeper_proto::hostkeeper::operator::v1::enrollment_server::EnrollmentServer;
 use hostkeeper_proto::hostkeeper::operator::v1::hosts_server::HostsServer;
+use hostkeeper_proto::hostkeeper::operator::v1::mdm_server::MdmServer;
 use hostkeeper_proto::hostkeeper::operator::v1::releases_server::ReleasesServer;
 use hostkeeper_proto::hostkeeper::operator::v1::rollouts_server::RolloutsServer;
 use hostkeeper_proto::hostkeeper::operator::v1::services_server::ServicesServer;
@@ -50,8 +51,8 @@ use tonic::{Code, Status};
 
 use self::agent::{AgentService, beat_status};
 use self::operator::{
-    AlertsService, AuditService, EnrollmentService, HostsService, ReleasesService, RolloutsService,
-    ServicesService,
+    AlertsService, AuditService, EnrollmentService, HostsService, MdmService, ReleasesService,
+    RolloutsService, ServicesService,
 };
 use self::refusal::token_status;
 use crate::enrollment::MAX_MESSAGE_BYTES;
@@ -100,6 +101,8 @@ const AUDIT: &str = "hostkeeper.operator.v1.Audit";
 const ALERTS: &str = "hostkeeper.operator.v1.Alerts";
 /// The full name of the operator API's `Rollouts`.
 const ROLLOUTS: &str = "hostkeeper.operator.v1.Rollouts";
+/// The full name of the operator API's `Mdm`.
+const MDM: &str = "hostkeeper.operator.v1.Mdm";
 
 /// The path of `Coordinator.Heartbeat`, which needs a client certificate that names a host.
 const HEARTBEAT: &str = "/hostkeeper.agent.v1.Coordinator/Heartbeat";
@@ -194,7 +197,7 @@ pub(crate) async fn admit(
         (Surface::Heartbeat, Some(AGENT)) => Served::Agent,
         (
             Surface::Control,
-            Some(HOSTS | RELEASES | SERVICES | ENROLLMENT | AUDIT | ALERTS | ROLLOUTS),
+            Some(HOSTS | RELEASES | SERVICES | ENROLLMENT | AUDIT | ALERTS | ROLLOUTS | MDM),
         ) => Served::Operator,
         _ => return Err(Status::unimplemented("")),
     };
@@ -321,6 +324,11 @@ where
         }
         Some(ROLLOUTS) => {
             let server = RolloutsServer::new(RolloutsService::new(coordinator))
+                .max_decoding_message_size(MAX_OPERATOR_BYTES);
+            call(server, request).await
+        }
+        Some(MDM) => {
+            let server = MdmServer::new(MdmService::new(coordinator))
                 .max_decoding_message_size(MAX_OPERATOR_BYTES);
             call(server, request).await
         }

@@ -99,7 +99,8 @@ refusals!(
     ServicesRefusal,
     EnrollmentRefusal,
     AuditRefusal,
-    AlertsRefusal
+    AlertsRefusal,
+    MdmRefusal
 );
 
 changing!(

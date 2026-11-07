@@ -8,6 +8,7 @@ hostkeeper-wire = { path = "../hostkeeper-wire" }
 hostkeeper-oidc = { path = "../hostkeeper-oidc" }
 hostkeeper-tls = { path = "../hostkeeper-tls" }
 hostkeeper-enrollment = { path = "../hostkeeper-enrollment" }
+hostkeeper-mdm-gate = { path = "../hostkeeper-mdm-gate" }
 hostkeeper-proto = { path = "../hostkeeper-proto" }
 hostkeeper-config = { path = "../hostkeeper-config" }
 

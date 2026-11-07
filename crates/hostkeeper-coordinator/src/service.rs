@@ -239,6 +239,8 @@ pub struct Coordinator {
     features: Vec<String>,
     /// Enrollment: the store, the CA and the poll nonces; `None` without `--enrollment-dir`.
     enrollment: Option<Arc<Enrollment>>,
+    /// The MDM policy gate; `None` without `--mdm-api-url`.
+    pub(crate) mdm: Option<Arc<crate::mdm::Mdm>>,
     ui: Option<UiDir>,
     /// The alerts the last observation found ([`crate::alerts`]).
     pub(crate) alerts: crate::alerts::Book,
@@ -294,6 +296,7 @@ impl Coordinator {
             extras: Mutex::new(ExtrasDropped::default()),
             features: FEATURES.iter().map(|name| (*name).to_owned()).collect(),
             enrollment: None,
+            mdm: None,
             ui: None,
             alerts: crate::alerts::Book::default(),
             channel: None,

@@ -1,9 +1,9 @@
-//! The seven services of `hostkeeper.operator.v1` over [`Coordinator`]: `Hosts`, `Releases`,
-//! `Services`, `Enrollment`, `Audit`, `Alerts` and `Rollouts`.
+//! The eight services of `hostkeeper.operator.v1` over [`Coordinator`]: `Hosts`, `Releases`,
+//! `Services`, `Enrollment`, `Audit`, `Alerts`, `Rollouts` and `Mdm`.
 //!
 //! An adapter has no rule of its own. A method that has a handler in the coordinator
 //! ([`crate::operator`], [`crate::hosts`], [`crate::force`], [`crate::assign`],
-//! [`crate::alerts`], [`crate::rollouts`]) calls it with
+//! [`crate::alerts`], [`crate::rollouts`], [`crate::operator_mdm`]) calls it with
 //! the caller the router admitted. A method the frozen JSON routes have (`Hosts.Include`,
 //! `Hosts.SetLabels`, `Releases.ClearHalt`, `Releases.SetDesired`, `Releases.Converge`,
 //! `Releases.Status`) builds the request that route reads and calls what that route calls. Every
@@ -19,6 +19,7 @@ use hostkeeper_proto::hostkeeper::operator::v1::alerts_server::Alerts as AlertsA
 use hostkeeper_proto::hostkeeper::operator::v1::audit_server::Audit as AuditApi;
 use hostkeeper_proto::hostkeeper::operator::v1::enrollment_server::Enrollment as EnrollmentApi;
 use hostkeeper_proto::hostkeeper::operator::v1::hosts_server::Hosts as HostsApi;
+use hostkeeper_proto::hostkeeper::operator::v1::mdm_server::Mdm as MdmApi;
 use hostkeeper_proto::hostkeeper::operator::v1::releases_server::Releases as ReleasesApi;
 use hostkeeper_proto::hostkeeper::operator::v1::rollouts_server::Rollouts as RolloutsApi;
 use hostkeeper_proto::hostkeeper::operator::v1::services_server::Services as ServicesApi;
@@ -658,6 +659,32 @@ impl AlertsApi for AlertsService {
             .list_alerts(&caller, request.into_inner())
             .map(Response::new)
             .map_err(refusal::alerts)
+    }
+}
+
+/// The service of `Mdm`.
+pub(crate) struct MdmService {
+    coordinator: Arc<Coordinator>,
+}
+
+impl MdmService {
+    /// The service over `coordinator`.
+    pub(crate) fn new(coordinator: Arc<Coordinator>) -> Self {
+        Self { coordinator }
+    }
+}
+
+#[tonic::async_trait]
+impl MdmApi for MdmService {
+    async fn list_devices(
+        &self,
+        request: Request<proto::ListDevicesRequest>,
+    ) -> Result<Response<proto::ListDevicesResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .mdm_list_devices(&caller, request.get_ref())
+            .map(Response::new)
+            .map_err(refusal::mdm)
     }
 }
 
