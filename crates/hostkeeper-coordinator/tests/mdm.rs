@@ -3,6 +3,9 @@
 //! the gate needs, a torn device record stops the start, and `run` serves NanoHUB's webhook on
 //! its own address, whose events show in `Mdm.ListDevices`. The connections are in-memory; the
 //! gate's API URL names a loopback port nothing listens on, and no event makes the gate call it.
+//! The enrollment side's two flags go with the gate, are refused when wrong, and, parsed and
+//! started, make the gate install the farm's config profile through a NanoHUB on loopback,
+//! port 0, that queues every command.
 
 mod support;
 
@@ -313,6 +316,8 @@ fn serve_help_lists_the_gate_flags_and_no_environment_variable() {
         "--mdm-api-url <MDM_API_URL>",
         "--mdm-api-key-file <MDM_API_KEY_FILE>",
         "--mdm-webhook-listen <MDM_WEBHOOK_LISTEN>",
+        "--mdm-profile-identifier <MDM_PROFILE_IDENTIFIER>",
+        "--mdm-daemon-config <MDM_DAEMON_CONFIG>",
     ] {
         assert!(help.contains(flag), "{flag}: {help}");
     }
@@ -432,4 +437,299 @@ async fn run_serves_the_webhook_and_its_events_show_in_list_devices() {
     let none = list_devices(&net, &files, bound.control).await;
     assert_eq!(none, json!({}));
     serving.abort();
+}
+
+/// The farm's profile identifier in these tests.
+const IDENTIFIER: &str = "com.example.hostkeeper.mdm";
+
+/// The serial and UDID of NanoMDM's recorded `Authenticate`.
+const SERIAL: &str = "C02MT66KFLHH";
+const UDID: &str = "66ADE930-5FDF-5EC4-8429-15640684C489";
+
+/// A daemon config the daemon's loader accepts.
+const DAEMON_CONFIG: &str = r#"coordinator = "https://coordinator.example:8443"
+ca_sha256 = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+release_channel = "https://releases.example"
+
+[trusted_signers]
+organisation = "komira-ai"
+workflow = ".github/workflows/release.yml"
+refs = ["refs/tags/*"]
+hosted_runner = true
+"#;
+
+/// The good gate flags, NanoHUB at `url`, with the enrollment side's two flags and an
+/// allowlist of [`SERIAL`].
+fn side_args(files: &Files, url: &str) -> Vec<OsString> {
+    files.put("hostkeeper.toml", DAEMON_CONFIG, 0o644);
+    files.put(
+        "allow.toml",
+        &format!("[[mac]]\nserial = \"{SERIAL}\"\nhost_id_prefix = \"mac-\"\nrole = \"build\"\n"),
+        0o644,
+    );
+    let mut extra = enrollment();
+    extra.extend(["--mdm-api-url", url, "--mdm-api-key-file", "=mdm.key"]);
+    extra.extend(["--mdm-webhook-listen", WEBHOOK]);
+    extra.extend(["--mdm-profile-identifier", IDENTIFIER]);
+    extra.extend(["--mdm-daemon-config", "=hostkeeper.toml"]);
+    extra.extend(["--mac-serial-allowlist", "=allow.toml"]);
+    files.args(&extra)
+}
+
+/// Catches: an enrollment-side flag accepted without its partner or without the gate (each
+/// alone, both without `--mdm-api-url`), or a bad identifier or a daemon config the daemon's
+/// loader refuses let through the start, or refused with a text that does not name the flag.
+#[test]
+fn the_enrollment_side_flags_go_together_with_the_gate() {
+    let files = Files::new("mdm-side-flags");
+    files.put("hostkeeper.toml", DAEMON_CONFIG, 0o644);
+    let identifier = ["--mdm-profile-identifier", IDENTIFIER];
+    let config = ["--mdm-daemon-config", "=hostkeeper.toml"];
+    let refused: [Vec<&str>; 3] = [
+        good().into_iter().chain(identifier).collect(),
+        good().into_iter().chain(config).collect(),
+        enrollment()
+            .into_iter()
+            .chain(identifier)
+            .chain(config)
+            .collect(),
+    ];
+    for args in refused {
+        assert_eq!(
+            hostkeeper_coordinator::config::main(files.args(&args)),
+            ExitCode::from(2),
+            "{args:?}"
+        );
+    }
+    let both: Vec<&str> = good().into_iter().chain(identifier).chain(config).collect();
+    assert!(start(&files, &both).is_ok());
+
+    let bad: Vec<&str> = good()
+        .into_iter()
+        .chain(["--mdm-profile-identifier", "hostkeeper"])
+        .chain(config)
+        .collect();
+    assert_eq!(
+        refusal(&files, &bad),
+        "--mdm-profile-identifier: \"hostkeeper\" is not a reverse-DNS name (two or more labels of letters, digits and -, as com.example.hostkeeper.mdm)"
+    );
+    files.put(
+        "refused.toml",
+        &DAEMON_CONFIG.replace("release_channel", "channel"),
+        0o644,
+    );
+    let refused: Vec<&str> = good()
+        .into_iter()
+        .chain(identifier)
+        .chain(["--mdm-daemon-config", "=refused.toml"])
+        .collect();
+    let text = refusal(&files, &refused);
+    assert!(text.starts_with("--mdm-daemon-config: "), "{text}");
+}
+
+/// NanoHUB's API on loopback, port 0: it queues every command and keeps each body.
+struct Hub {
+    url: String,
+    bodies: Arc<Mutex<Vec<Vec<u8>>>>,
+}
+
+impl Hub {
+    async fn start() -> Hub {
+        use http_body_util::BodyExt as _;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("a loopback port");
+        let url = format!("http://{}", listener.local_addr().expect("its address"));
+        let bodies = Arc::new(Mutex::new(Vec::new()));
+        let kept = Arc::clone(&bodies);
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let kept = Arc::clone(&kept);
+                tokio::spawn(async move {
+                    let service = hyper::service::service_fn(
+                        move |request: hyper::Request<hyper::body::Incoming>| {
+                            let kept = Arc::clone(&kept);
+                            async move {
+                                let body = request
+                                    .into_body()
+                                    .collect()
+                                    .await
+                                    .map(|body| body.to_bytes().to_vec())
+                                    .unwrap_or_default();
+                                kept.lock().expect("bodies").push(body);
+                                Ok::<_, std::convert::Infallible>(hyper::Response::new(
+                                    http_body_util::Full::new(bytes::Bytes::from("{}")),
+                                ))
+                            }
+                        },
+                    );
+                    let _ = hyper::server::conn::http1::Builder::new()
+                        .serve_connection(hyper_util::rt::TokioIo::new(stream), service)
+                        .await;
+                });
+            }
+        });
+        Hub { url, bodies }
+    }
+
+    /// The `Command` dictionary of every command heard, in order.
+    fn commands(&self) -> Vec<plist::Dictionary> {
+        self.bodies
+            .lock()
+            .expect("bodies")
+            .iter()
+            .map(|body| {
+                plist::Value::from_reader(std::io::Cursor::new(body))
+                    .expect("a plist")
+                    .into_dictionary()
+                    .expect("a dictionary")
+            })
+            .map(|root| root["Command"].as_dictionary().expect("a Command").clone())
+            .collect()
+    }
+
+    /// The `CommandUUID` of the command heard of `kind`.
+    fn uuid_of(&self, kind: &str) -> String {
+        self.bodies
+            .lock()
+            .expect("bodies")
+            .iter()
+            .map(|body| {
+                plist::Value::from_reader(std::io::Cursor::new(body))
+                    .expect("a plist")
+                    .into_dictionary()
+                    .expect("a dictionary")
+            })
+            .find(|root| {
+                root["Command"].as_dictionary().expect("a Command")["RequestType"].as_string()
+                    == Some(kind)
+            })
+            .and_then(|root| root["CommandUUID"].as_string().map(str::to_owned))
+            .expect("a command of that kind")
+    }
+}
+
+/// The base64 of the XML property list of `dict`.
+fn payload(dict: plist::Dictionary) -> String {
+    use base64::Engine as _;
+    let mut bytes = Vec::new();
+    plist::Value::Dictionary(dict)
+        .to_writer_xml(&mut bytes)
+        .expect("a plist");
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+/// A dictionary of `entries`.
+fn dict(entries: Vec<(&str, plist::Value)>) -> plist::Dictionary {
+    entries
+        .into_iter()
+        .map(|(key, value)| (key.to_owned(), value))
+        .collect()
+}
+
+/// The device's first `TokenUpdate`, as NanoHUB 0.2.0's webhook posts it.
+fn token_update() -> Vec<u8> {
+    let raw = payload(dict(vec![
+        ("MessageType", "TokenUpdate".into()),
+        ("UDID", UDID.into()),
+        ("Token", plist::Value::Data(vec![1, 2, 3])),
+    ]));
+    serde_json::to_vec(&json!({
+        "topic": "mdm.TokenUpdate",
+        "checkin_event": {
+            "ids": {"id": UDID, "type": "Device"},
+            "udid": UDID,
+            "raw_payload": raw,
+            "token_update_tally": 1,
+        },
+    }))
+    .expect("json")
+}
+
+/// The device's `DeviceInformation` answer to the command `uuid`: [`SERIAL`], supervised.
+fn device_information(uuid: &str) -> Vec<u8> {
+    let answers = dict(vec![
+        ("SerialNumber", SERIAL.into()),
+        ("UDID", UDID.into()),
+        ("IsSupervised", plist::Value::Boolean(true)),
+    ]);
+    let raw = payload(dict(vec![
+        ("CommandUUID", uuid.into()),
+        ("Status", "Acknowledged".into()),
+        ("UDID", UDID.into()),
+        ("RequestType", "DeviceInformation".into()),
+        ("QueryResponses", plist::Value::Dictionary(answers)),
+    ]));
+    serde_json::to_vec(&json!({
+        "topic": "mdm.Connect",
+        "acknowledge_event": {
+            "ids": {"id": UDID, "type": "Device"},
+            "udid": UDID,
+            "status": "Acknowledged",
+            "command_uuid": uuid,
+            "raw_payload": raw,
+        },
+    }))
+    .expect("json")
+}
+
+/// Catches: the two flags parsed but not reaching the gate the coordinator starts (no config
+/// profile sent, or one of another identifier or without the daemon config's keys), or the
+/// gate's enrollment not attached at start (the allowlisted serial not allowed).
+#[tokio::test]
+async fn the_enrollment_side_flags_make_the_gate_install_the_config_profile() {
+    let hub = Hub::start().await;
+    let files = Files::new("mdm-side-start");
+    let roots = Roots::Given(vec![CertificateDer::from(Ca::new("issuer roots").der)]);
+    let parts = build(&flags_of(side_args(&files, &hub.url)), roots).expect("started");
+    let gate = Arc::clone(&parts.coordinator.mdm().expect("the gate").gate);
+
+    gate.webhook(&authenticate_event()).await.expect("taken");
+    gate.webhook(&token_update()).await.expect("taken");
+    let uuid = hub.uuid_of("DeviceInformation");
+    gate.webhook(&device_information(&uuid))
+        .await
+        .expect("taken");
+
+    let installs: Vec<plist::Dictionary> = hub
+        .commands()
+        .into_iter()
+        .filter(|command| command["RequestType"].as_string() == Some("InstallProfile"))
+        .collect();
+    assert_eq!(installs.len(), 1, "{installs:?}");
+    let profile = plist::Value::from_reader(std::io::Cursor::new(
+        installs[0]["Payload"].as_data().expect("a Payload"),
+    ))
+    .expect("a profile")
+    .into_dictionary()
+    .expect("a dictionary");
+    assert_eq!(
+        profile["PayloadIdentifier"].as_string(),
+        Some(format!("{IDENTIFIER}.config").as_str())
+    );
+    let settings = profile["PayloadContent"].as_array().expect("payloads")[0]
+        .as_dictionary()
+        .expect("a payload")["PayloadContent"]
+        .as_dictionary()
+        .expect("domains")["dev.hostkeeper.config"]
+        .as_dictionary()
+        .expect("the domain")["Forced"]
+        .as_array()
+        .expect("Forced")[0]
+        .as_dictionary()
+        .expect("an entry")["mcx_preference_settings"]
+        .as_dictionary()
+        .expect("settings")
+        .clone();
+    assert_eq!(
+        settings["coordinator"].as_string(),
+        Some("https://coordinator.example:8443")
+    );
+    assert_eq!(
+        settings["trusted_signers"]
+            .as_dictionary()
+            .expect("a table")["hosted_runner"]
+            .as_boolean(),
+        Some(true)
+    );
 }

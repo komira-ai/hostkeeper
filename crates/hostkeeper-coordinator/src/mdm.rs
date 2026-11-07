@@ -25,9 +25,15 @@
 //! Without the three flags the coordinator runs no gate: its port is [`NoDeviceState`], and
 //! `Mdm.ListDevices` answers no device.
 
+use std::convert::Infallible;
+use std::future::Future;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::pin::pin;
 use std::sync::{Arc, OnceLock, Weak};
+
+use futures::future::{Either, select};
+use tokio::io::{AsyncRead, AsyncWrite};
 
 use clap::Args;
 use hostkeeper_enrollment::fs::RealFs;
@@ -36,7 +42,7 @@ use hostkeeper_enrollment::validity::UnixClock;
 use hostkeeper_mdm_gate::{
     ApiKey, ApiKeyError, ApiUrl, ApiUrlError, CONFIG_FLAG, DaemonProfile, DaemonProfileError,
     EnrollSide, Enrollments, EnrollmentsError, FileDeviceStore, Gate, IdentifierError, NanoHub,
-    Nonce, ProfileIdentifier, Random, StoreError, Waiting, webhook,
+    Nonce, ProfileIdentifier, Random, StoreError, Waiting, enroll, webhook,
 };
 
 use crate::enrollment::{
@@ -182,6 +188,34 @@ impl Mdm {
             .attached
             .as_ref()
             .map(|attached| attached.0.set(Arc::downgrade(enrollment)));
+    }
+
+    /// `enrollment` as the coordinator runs it with the gate of `mdm`: it tells the gate of each
+    /// new request ([`Enrollment::with_posted`]), and the gate's enrollment side asks it
+    /// ([`Mdm::attach`]). Without a gate, `enrollment` as it is.
+    #[must_use]
+    pub fn wire(mdm: Option<&Self>, enrollment: Enrollment) -> Arc<Enrollment> {
+        let enrollment = Arc::new(match Self::posted(mdm) {
+            Some(posted) => enrollment.with_posted(posted),
+            None => enrollment,
+        });
+        let _ = mdm.map(|mdm| mdm.attach(&enrollment));
+        enrollment
+    }
+
+    /// Serves NanoHUB's webhook to `gate` on the connections `accept` gives, and has `gate`
+    /// look at every device once a minute and at each wake
+    /// ([`hostkeeper_mdm_gate::enroll::run`]), forever.
+    pub async fn serve<A, F, S>(gate: Arc<Gate>, accept: A) -> Infallible
+    where
+        A: FnMut() -> F,
+        F: Future<Output = std::io::Result<S>>,
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
+        let webhook = pin!(webhook::serve(accept, Arc::clone(&gate)));
+        let looks = pin!(enroll::run(gate, enroll::TICK));
+        let (Either::Left((never, _)) | Either::Right((never, _))) = select(webhook, looks).await;
+        match never {}
     }
 
     /// What the enrollment calls after a new request is recorded: a wake of the gate of `mdm`,
