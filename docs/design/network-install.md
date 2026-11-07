@@ -4,7 +4,7 @@ Status: design, for review. This document makes network install of new Linux mac
 replaces the non-goal of [hostkeeper-design.md](hostkeeper-design.md) section 2.2 ("No network boot service in
 scope") and the first item of its section 12.1 ("the operator's own, no build items here"). Both now point here. Where
 this document and hostkeeper-design.md disagree on network install, this document wins. What is built is marked
-**Built** where it is described (so far items N2, N3, N4, N5, N6, N7, N8, N9 and N12 of section 12); every other statement about
+**Built** where it is described (so far items N2, N3, N4, N5, N6, N7, N8, N9, N9b, N10 and N12 of section 12); every other statement about
 new code is **Designed**, and section 12 lists the build items.
 
 This revision (item N1b of section 12) amends the first: network boot early in the boot order is the expected setup, so
@@ -794,6 +794,41 @@ request (rule B9), and the workflow lint is extended to know the jobs and their 
   mode and serves the local-disk menu in router mode, and the guest's disk is untouched.
 - It needs `/dev/kvm` on the hosted `ubuntu-24.04` runner **[V]**. Without it, the job fails with that reason; it does
   not skip.
+- **Built** (item N10): `crates/hostkeeper-privileged/tests/net_install.rs`, test
+  `an_x86_64_machine_installs_by_network_enrolls_gets_its_service_is_reinstalled_and_retired`, its rig in
+  `tests/netinstall/`, and the job `net-install` of `.github/workflows/privileged.yml`. As built:
+  - **The reinstall is in proxy mode**, not router mode, until item N14: with no platform on the record, router mode
+    leaves every record out of the answer set (section 3), so it has no install menu to give. The router-mode steps
+    that need no install (the enrolled host's local-disk menu, and the retired host's) are as above. N14's pull
+    request moves the reinstall to router mode.
+  - **The boot set** is fetched by the job: the ISO by its pinned URL, `netboot.json` rendered from the committed
+    pins (`cargo xtask release netboot`), and the deb of the commit under test built as the artifacts workflow
+    builds it. The test serves them as a release from a channel on its LAN, each attested by the end-to-end rig's
+    signer, with the ISO's URL moved to that channel, and the real `hostkeeper-pxe fetch` checks every file against
+    the pins and the attestations with the job's pinned `gh` and seals the directory that `serve` then checks.
+  - **QEMU and the firmware** are Ubuntu's packages (`qemu-system-x86` and `ovmf`), from the runner's own signed
+    archive: two apt steps, the job's only other use of `sudo`, which the workflow lint allows in the two
+    network-install jobs only, for the packages it lists for each.
+  - **The LAN**: the bridge is in a network namespace of its own, so that no firewall of the runner sees its frames;
+    the router (whose DHCP is a thread of the test, moved into the router's namespace) and `hostkeeper-pxe` are in
+    theirs; the host's own namespace holds the coordinator's private and LAN listeners and the release channel, at
+    the LAN's `.1`. The protocol ports (67, 68, 69, 80) are fixed, each inside its own namespace. `serve` drops to the
+    owner of the build directory, the runner's user.
+  - **The fixture service** is the first-boot tests' fixture package, attested by the rig's signer. The one stand-in
+    is on the installed guest: before its approval the test gives it the release channel's CA and the signer's
+    trusted root, beside its own `gh` (the deb's), by the seed's `operator` account over SSH, and restarts the daemon
+    so that it reads the CA bundle again. A Sigstore attestation of a package built by the test cannot be made
+    without the network.
+  - **The guest** has a SCSI disk that reports itself not rotational, so the seed's default `--install-disk` (the
+    smallest SSD) takes it; `serve` runs with `--serial-console ttyS0`, so the console's issue text and the login
+    prompt are on the serial line the test reads. "The disk is untouched" is checked as: no proxy offer and no seed
+    fetched after the retirement, and the same `/etc/machine-id` before and after each boot.
+  - **What it found in `serve`**: GRUB's HTTP client matches `Content-Length: ` byte for byte, and `serve` wrote its
+    header names in lower case, so GRUB took the kernel's size as unknown and its `linux` failed with "out of
+    memory". `serve` now writes title-case header names (`crates/hostkeeper-pxe/src/serve/http.rs`, test
+    `the_size_of_a_file_is_spelt_as_grub_reads_it`).
+  - **The old certificate's heartbeat** is the JSON route of the LAN listener (`POST /v1/heartbeat`), sent by the test
+    with the certificate and key the guest held before its reinstall, read over SSH: it is refused 403 `forbidden`.
 
 **arm64 in CI (job `net-install-arm64`).** Whether the end-to-end can boot an arm64 guest depends on hardware help.
 QEMU can always emulate an arm64 guest, with the AAVMF UEFI firmware, by TCG on any runner. Without KVM, TCG
@@ -815,6 +850,17 @@ Item N10 checks which of the two the hosted arm runner allows, puts that one tes
 request; the job never chooses at run time, and never skips. The workflow lint lists the job's runner. With the
 fallback, the full arm64 install, the deb and the enrollment are proven on the first real arm64 machine (N13), by the
 runbook, and the unit tests above cover the platform choice in every component.
+
+**Built** (item N10): the fallback. The hosted arm64 runner exposes no `/dev/kvm`: the ARM64 hosted fleet does not
+surface a nested KVM device, and GitHub closed the request for it as not planned (actions/runner-images#14062). So
+the job `net-install-arm64` runs `arm64_boots_to_seed_fetch` (`crates/hostkeeper-privileged/tests/net_install_arm64.rs`)
+on `ubuntu-24.04` under TCG, and `arm64_installs_and_enrolls` is not written. Until item N14 it runs in proxy mode, as
+the reinstall does: it checks that the guest's DISCOVER stated architecture 11, that the proxy offer named
+`hostkeeper/shimaa64.efi` and the arm64 shim and GRUB were served, that GRUB asked for the arm64 menu of its MAC, and
+that the seed it fetched names the `arm64` deb (the test reads the same seed again, as a MAC whose install started may).
+N14's pull request moves it to router mode, where it also checks that `hostkeeper/boot.efi` was served as
+`hostkeeper/shimaa64.efi`. The job builds no arm64 deb: its boot set holds a stand-in deb, attested like the rest,
+which nothing fetches before the seed.
 
 **The measurement for the white paper (N11).** The two numbers are the time from power-on to approved-and-serving, and
 the number of manual steps.
@@ -858,7 +904,7 @@ One pull request each, in this order. "After" lists prerequisites. Sizes are tho
 | N11 | `cargo xtask netinstall-report`, and the report artifact of N10 | N10 | S |
 | N12 | Operator runbook `docs/operations/network-install.md`: choosing the mode; the UniFi "Network Boot" setting for router mode and DHCP guarding for proxy mode (both **[V]**); the router check of Question 4; the boot-order, local-disk and option 93 check of each board model (a capture of its DISCOVER and REQUEST); the per-machine steps; reinstall. **Built**: [docs/operations/network-install.md](../operations/network-install.md), whose `hostkeeper ctl` and `hostkeeper-pxe` lines a test parses with each program's parser | N9 | S |
 | N13 | First real machine of each platform on the farm, by the runbook, recording the measurement. Done by hand by the operator, not in CI | N10, N12 | S |
-| N14 | The record's optional platform: the field of `InventoryRecord` and `AddRecordRequest`, the platform kept behind the coordinator's store interface (in the halts file today), `add-record --platform`, the UI's Inventory page, `docs/operations/enrollment.md`, the runbook's note that router mode installs nothing yet (`docs/operations/network-install.md`), hostkeeper-design.md section 5.7 (the record's fields) and its table of stored files (the platforms in the halts file), and the tests of section 11 | N1b | S |
+| N14 | The record's optional platform: the field of `InventoryRecord` and `AddRecordRequest`, the platform kept behind the coordinator's store interface (in the halts file today), `add-record --platform`, the UI's Inventory page, `docs/operations/enrollment.md`, the runbook's note that router mode installs nothing yet (`docs/operations/network-install.md`), hostkeeper-design.md section 5.7 (the record's fields) and its table of stored files (the platforms in the halts file), and the tests of section 11; and the move of the end-to-end's reinstall and of `arm64_boots_to_seed_fetch` from proxy mode to router mode (section 11, "Built") | N1b | S |
 
 N2, N3, N4, N5, N6, N7 and N14 are independent and can be built in parallel. N10 checks a first install
 (`an_assigned_package_installs_once_across_restarts_and_the_boot_pass_keeps_it`, privileged). The

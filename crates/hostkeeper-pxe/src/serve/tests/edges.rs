@@ -226,7 +226,7 @@ fn a_head_of_a_seed_is_not_its_fetch() {
     run.wait("install linux-x86_64 as host new-1");
     let head = http(run.http, "HEAD", &format!("/seed/{RECORDED}/meta-data"));
     assert_eq!(head.status, 200);
-    assert!(head.head.contains("content-length: 30"), "{}", head.head);
+    assert!(head.head.contains("Content-Length: 30"), "{}", head.head);
     assert_eq!(head.body, b"");
     firmware
         .send_to(
