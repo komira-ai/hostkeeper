@@ -390,14 +390,7 @@ fn a_deferral_file_that_cannot_be_used_is_an_error_naming_it() {
     assert!(std::fs::symlink_metadata(&path).is_err());
 
     // A FIFO with no writer is refused at once, not waited on.
-    rustix::fs::mknodat(
-        rustix::fs::CWD,
-        path.as_path(),
-        rustix::fs::FileType::Fifo,
-        rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
-        0,
-    )
-    .expect("a FIFO");
+    hostkeeper_testkit::fifo(path.as_path(), 0o600).expect("a FIFO");
     assert_eq!(
         deferrals.load(&x).expect_err("a FIFO").to_string(),
         format!("{} is not a regular file", path.display())
@@ -486,14 +479,7 @@ fn an_unusable_deferral_file_is_logged_removed_and_ignored() {
     let rig = Rig::new("deferral-fifo");
     rig.install(vec![recorded("x", "1.0")]);
     let path = file_of(&rig);
-    rustix::fs::mknodat(
-        rustix::fs::CWD,
-        path.as_path(),
-        rustix::fs::FileType::Fifo,
-        rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
-        0,
-    )
-    .expect("a FIFO");
+    hostkeeper_testkit::fifo(path.as_path(), 0o600).expect("a FIFO");
     let mut heartbeater = rig.heartbeater();
     ask(&rig, 1, "2.0");
     assert_eq!(heartbeater.beat_once(), hostkeeper_link::BeatOutcome::Sent);

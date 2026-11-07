@@ -122,14 +122,7 @@ fn only_a_plain_relative_regular_file_is_a_hook() {
 #[test]
 fn what_cannot_be_hashed_is_refused() {
     let s = tree("art-fifo");
-    rustix::fs::mknodat(
-        rustix::fs::CWD,
-        s.path().join("pipe"),
-        rustix::fs::FileType::Fifo,
-        rustix::fs::Mode::from_raw_mode(0o600),
-        0,
-    )
-    .unwrap();
+    hostkeeper_testkit::fifo(&s.path().join("pipe"), 0o600).unwrap();
     let err = tree_digest(s.path()).unwrap_err();
     assert!(matches!(&err, ArtifactError::Unsupported(p) if p == Path::new("pipe")));
     assert!(
