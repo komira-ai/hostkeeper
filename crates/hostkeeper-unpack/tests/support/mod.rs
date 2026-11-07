@@ -417,6 +417,9 @@ impl Call {
     }
 }
 
+/// The errno of a refused permission.
+pub const EACCES: i32 = 13;
+
 /// When [`Faulty`] fails a call.
 pub type Matcher = Box<dyn Fn(&Call) -> bool>;
 
@@ -443,6 +446,9 @@ struct State {
     /// Run once, after the first call the matcher takes is recorded and before it is made.
     hook: RefCell<Option<(Matcher, Hook)>>,
     hooked: Cell<bool>,
+    /// A rename of a directory that its owner cannot write fails with `EACCES`, as macOS fails
+    /// it for a caller that is not root.
+    mac_rename: Cell<bool>,
 }
 
 /// The real port with every call recorded, and a failure or a crash where a test asks.
@@ -497,6 +503,14 @@ impl Faulty {
     /// Runs `action` once, at the first call `matcher` takes, before the call is made.
     pub fn at(self, matcher: Matcher, action: impl Fn(&Call) + 'static) -> Faulty {
         *self.state.hook.borrow_mut() = Some((matcher, Rc::new(action)));
+        self
+    }
+
+    /// Renames as macOS does for a caller that is not root: a directory without its owner's
+    /// write bit is not renamed (`EACCES`), even to a new name in the same parent. Linux
+    /// refuses it only when the parent changes, which an unpack never does.
+    pub fn mac_rename(self) -> Faulty {
+        self.state.mac_rename.set(true);
         self
     }
 
@@ -609,6 +623,12 @@ impl PackageFs for Faulty {
 
     fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
         self.call(Call::Rename(from.to_path_buf(), to.to_path_buf()))?;
+        if self.state.mac_rename.get() {
+            let meta = fs::symlink_metadata(self.inner.real_path(from))?;
+            if meta.is_dir() & (meta.mode() & 0o200 == 0) {
+                return Err(io::Error::from_raw_os_error(EACCES));
+            }
+        }
         self.inner.rename(from, to)
     }
 

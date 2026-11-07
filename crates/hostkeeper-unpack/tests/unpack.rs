@@ -732,11 +732,11 @@ fn a_staged_file_replaced_by_a_link_or_a_fifo_is_not_as_written() {
         let packages = rig.packages.clone();
         let fake = Faulty::new(rig.host()).at(
             Box::new(|c| {
-                matches!(c, Call::SetMode(p, _)
+                matches!(c, Call::SyncDir(p)
                     if p.file_name().is_some_and(|n| n.to_string_lossy().starts_with(".stage-")))
             }),
             move |c| {
-                let Call::SetMode(stage, _) = c else { return };
+                let Call::SyncDir(stage) = c else { return };
                 let bin = packages.join(stage).join("bin");
                 fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).unwrap();
                 fs::remove_file(bin.join("x")).unwrap();

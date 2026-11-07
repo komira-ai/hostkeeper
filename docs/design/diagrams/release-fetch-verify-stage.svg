@@ -68,7 +68,7 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <text x="140" y="274" class="b" text-anchor="middle">Manifest and seal</text>
 <text x="140" y="292" class="t-m" text-anchor="middle">manifest.toml: name, version,</text>
 <text x="140" y="308" class="t-m" text-anchor="middle">platform match; path claims;</text>
-<text x="140" y="324" class="t-m" text-anchor="middle">0555, rename, write .seal</text>
+<text x="140" y="324" class="t-m" text-anchor="middle">0555, write .seal, rename</text>
 <rect x="16" y="240" width="28" height="20" rx="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
 <text x="30" y="254" class="b" font-size="11" text-anchor="middle">4</text>
 <text x="320" y="66" class="b lbl" text-anchor="start">1 Download</text>

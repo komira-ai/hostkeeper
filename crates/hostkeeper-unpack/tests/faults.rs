@@ -177,9 +177,132 @@ fn a_crash_during_unpack_leaves_no_version_directory() {
             [VERSION.to_owned(), format!("{VERSION}.seal")],
             "crash at {crash}"
         );
+        assert_eq!(mode(&dir), 0o555, "crash at {crash}");
     }
-    // Only a crash at the last call, the fsync after the rename, finds the version in place.
-    assert_eq!(published, 1);
+    // Only a crash at the last three calls, after the rename (the fsync of the service
+    // directory, the mode of the version directory, its fsync), finds the version in place.
+    assert_eq!(published, 3);
+}
+
+/// The permission bits of `path`, not following a link.
+fn mode(path: &std::path::Path) -> u32 {
+    fs::symlink_metadata(path).unwrap().permissions().mode() & 0o7777
+}
+
+/// Whether `c` is the mode 0555 given to the published version directory itself.
+fn version_mode(c: &Call) -> bool {
+    matches!(c, Call::SetMode(p, 0o555) if p == &std::path::Path::new(SERVICE).join(VERSION))
+}
+
+/// Whether `c` is the fsync of the published version directory itself.
+fn version_sync(c: &Call) -> bool {
+    matches!(c, Call::SyncDir(p) if p == &std::path::Path::new(SERVICE).join(VERSION))
+}
+
+/// Catches an unpack that publishes only where a read-only directory can be renamed: on a port
+/// that renames as macOS does for a caller that is not root (a directory its owner cannot write
+/// is refused with `EACCES`, even within one parent), a package whose directories are all
+/// read-only is published whole and sealed, its version directory and every directory in it
+/// 0555, its files as normalised, and the next unpack takes it as it is. The port is shown to
+/// refuse such a rename first, so the test cannot pass on a port that renames everything.
+#[test]
+fn a_read_only_tree_is_published_where_a_read_only_directory_cannot_be_renamed() {
+    let rig = Rig::new("f-mac-rename");
+    let fake = Faulty::new(rig.host()).mac_rename();
+    fs::create_dir_all(rig.service().join("ro")).unwrap();
+    fs::set_permissions(rig.service().join("ro"), fs::Permissions::from_mode(0o555)).unwrap();
+    let service = std::path::Path::new(SERVICE);
+    let refused = fake
+        .rename(&service.join("ro"), &service.join("moved"))
+        .unwrap_err();
+    assert_eq!(refused.raw_os_error(), Some(support::EACCES));
+    fs::set_permissions(rig.service().join("ro"), fs::Permissions::from_mode(0o755)).unwrap();
+    fs::remove_dir(rig.service().join("ro")).unwrap();
+
+    let (path, order) = rig.archive("a.tar.zst", &package(VERSION));
+    let unpacked = unpack(&path, &order, &limits(), &fake, Platform::Linux).unwrap();
+    assert!(unpacked.fresh);
+    assert_eq!(
+        rig.listing(),
+        [VERSION.to_owned(), format!("{VERSION}.seal")]
+    );
+    let layout = Layout::package(&rig.service());
+    layout.check_tree(VERSION).unwrap();
+    let dir = layout.version_path(VERSION);
+    let modes: Vec<(&str, u32)> = ["", "bin", "bin/big", "bin/x", "files", "files/c.conf"]
+        .into_iter()
+        .map(|name| (name, mode(&dir.join(name))))
+        .collect();
+    assert_eq!(
+        modes,
+        [
+            ("", 0o555),
+            ("bin", 0o555),
+            ("bin/big", 0o444),
+            ("bin/x", 0o555),
+            ("files", 0o555),
+            ("files/c.conf", 0o444)
+        ]
+    );
+    let again = unpack(&path, &order, &limits(), &fake, Platform::Linux).unwrap();
+    assert!(!again.fresh);
+    assert_eq!(again.seal, unpacked.seal);
+}
+
+/// Catches a version left writable by its owner staying so, or being lost: when the mode 0555
+/// of the version directory after its rename fails, or its fsync does, the unpack is an
+/// `io_error` that leaves the version whole and sealed (0700 when the mode failed); the next
+/// unpack of the
+/// order, with the archive gone, takes it as it is and makes it 0555; and when that unpack's
+/// own mode fails too, it is an `io_error` that leaves the version as it was.
+#[test]
+fn a_version_left_writable_after_its_rename_is_made_read_only_by_the_next_unpack() {
+    for what in ["the mode of the version", "the fsync of the version"] {
+        let rig = Rig::new("f-settle");
+        let (path, order) = rig.archive("new.tar.zst", &package(VERSION));
+        let matcher: Matcher = if what == "the mode of the version" {
+            Box::new(version_mode)
+        } else {
+            Box::new(version_sync)
+        };
+        let fake = Faulty::new(rig.host()).fail(matcher, 0, EIO);
+        let err = unpack(&path, &order, &limits(), &fake, Platform::Linux).unwrap_err();
+        assert!(
+            matches!(&err, UnpackError::Io { what, .. } if *what == "cannot make the version read-only"),
+            "{what}: {err:?}"
+        );
+        assert_eq!(err.outcome().2, "io_error", "{what}");
+        assert_eq!(
+            rig.listing(),
+            [VERSION.to_owned(), format!("{VERSION}.seal")],
+            "{what}"
+        );
+        let layout = Layout::package(&rig.service());
+        layout.check_tree(VERSION).unwrap();
+        let dir = layout.version_path(VERSION);
+        let left = if what == "the mode of the version" {
+            0o700
+        } else {
+            0o555
+        };
+        assert_eq!(mode(&dir), left, "{what}");
+        fs::remove_file(&path).unwrap();
+
+        if left == 0o700 {
+            let failing = Faulty::new(rig.host()).fail(Box::new(version_mode), 0, EIO);
+            let err = unpack(&path, &order, &limits(), &failing, Platform::Linux).unwrap_err();
+            assert!(
+                matches!(&err, UnpackError::Io { what, .. } if *what == "cannot make the version read-only"),
+                "{err:?}"
+            );
+            assert_eq!(mode(&dir), 0o700);
+            layout.check_tree(VERSION).unwrap();
+        }
+        let again = unpack(&path, &order, &limits(), &rig.host(), Platform::Linux).unwrap();
+        assert!(!again.fresh, "{what}");
+        assert_eq!(mode(&dir), 0o555, "{what}");
+        layout.check_tree(VERSION).unwrap();
+    }
 }
 
 /// Catches orphans left behind, or more than orphans removed: `remove_orphans` removes every
