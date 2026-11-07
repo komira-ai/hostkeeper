@@ -8,8 +8,9 @@ on where the coordinator keeps its state, this document wins. C1 to C4 and C6 ar
 fake (section 4.1), the enrollment crate's `Records` port, the Postgres store
 (`crates/hostkeeper-coordinator/src/store/postgres/`, with its migrations `0001` and `0002`, sections 3 to 8),
 `import` and `export` (section 11: `crates/hostkeeper-coordinator/src/transfer.rs` and
-`crates/hostkeeper-coordinator/src/store/postgres/transfer.rs`), and the generations and write ids (migration
-`0003`, section 3.2). Every other
+`crates/hostkeeper-coordinator/src/store/postgres/transfer.rs`), the generations and write ids (migration
+`0003`, section 3.2), and C5, the compose deployment with its backups, restore and drill (sections 9 and
+10: `docs/deploy/coordinator/`, and `cargo xtask db-backup` in `crates/xtask/src/db_backup.rs`). Every other
 statement about new code is **Designed**, and section 13 lists the build items, C1 to C11, one pull request each. The tags are those of hostkeeper-design.md: **Built** names code on `main` with a path, **Designed** means
 nothing implements it yet.
 
@@ -608,7 +609,11 @@ daemon-config key of option (a) would be additions to public interfaces, flagged
 
 ## 9. Deployment: compose
 
-`docs/deploy/coordinator/compose.yaml` (build item C5), beside the channel-sync compose file:
+`docs/deploy/coordinator/compose.yaml` (build item C5, **Built**), beside the channel-sync compose file. As built,
+both images are pinned by version and digest, the `postgres` service is optional behind the compose profile
+`postgres` (a machine with a Postgres server already names that server in the connection-string file, by loopback
+or by its socket directory mounted into the coordinator), and the coordinator waits for it only when it runs
+(`required: false`). The runbook is `docs/deploy/coordinator/README.md`. The sketch:
 
 ```yaml
 services:
@@ -695,8 +700,8 @@ volumes:
 - **The two secrets** are files on the machine, outside the repository and the compose directory's version control.
   Without swarm, compose mounts a secret as a bind mount that keeps the host file's owner and mode, so `db-dsn` is
   owned by 65532 with mode 0400 (the rule of `read_secret`), and `db-password`, read only by the `cat` of
-  `password.sql` inside the container as its `postgres` user, is owned by that user's uid with mode 0400 (**[V]**: the
-  uid of the pinned image is checked by C5). The password is in both. To change it: write the new password into both
+  `password.sql` inside the container as its `postgres` user, is owned by that user's uid with mode 0400 (999 in the
+  pinned image, checked by C5). The password is in both. To change it: write the new password into both
   files, run `password.sql` again through the same `docker compose exec ... psql --file`, and restart the coordinator.
   C5's acceptance is the setup above on a fresh machine, ending in a healthy database and a coordinator that holds the
   lock.
@@ -706,8 +711,9 @@ volumes:
 
 ## 10. Backups and the restore drill
 
-- **Schedule.** `docs/deploy/coordinator/hostkeeper-db-backup.service` and `.timer` (C5), like the channel-sync timer
-  beside them: every six hours, `docker compose exec -T postgres pg_dump --format=custom --username=hostkeeper
+- **Schedule.** `docs/deploy/coordinator/hostkeeper-db-backup.service` and `.timer` (C5, **Built**), like the
+  channel-sync timer beside them, the unit running `cargo xtask db-backup` (which numbers each dump past the highest
+  there, keeps only a dump whose command succeeded and wrote something, and only then removes the oldest): every six hours, `docker compose exec -T postgres pg_dump --format=custom --username=hostkeeper
   --dbname=hostkeeper` (over the container's own socket) into a backup directory on the host, owner-only, keeping the
   last 28 dumps (one week). The coordinator keeps running: a dump is one consistent snapshot. Copy the directory off the
   machine, as for today's snapshots.

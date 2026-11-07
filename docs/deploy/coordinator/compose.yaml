@@ -1,0 +1,87 @@
+# The coordinator on its database (docs/design/coordinator-storage.md, section 9): the coordinator
+# as one container, and, optionally, Postgres 16 as a second, on one machine. README.md beside this
+# file is the runbook: the one-time setup, the secrets, the local volume, the backups, the restore
+# and the drill.
+#
+# - Both images are pinned by digest. The coordinator's is the release's image tar, loaded with
+#   `docker load` after its attestation is checked (docs/deploy/verify-a-release.md): the digest is
+#   the manifest digest its `index.json` names. Set both the version and the digest to the release
+#   you deploy, for the machine's platform (this one is linux-x86_64).
+# - No environment, for either container: no `environment`, no `env_file`. The coordinator is
+#   configured by its flags; Postgres by its command line and by `initdb`, run once by hand (the
+#   image's own first-start setup, which reads POSTGRES_* variables, is not used).
+# - Both use the host's network. The coordinator's listeners take one interface's address each;
+#   Postgres listens on the host's loopback only.
+# - The `postgres` service is optional, behind the profile `postgres`: name `--profile postgres`
+#   to run it. A machine that already has a Postgres server leaves it out and names that server in
+#   the connection-string file (README.md, "An existing Postgres server").
+services:
+  postgres:
+    image: postgres:16@sha256:f9a7b9ebf6f56201f949db745e47bc423c0f0f8294bafe991cc10bf74b029657
+    profiles: [postgres]
+    network_mode: host
+    command: ["postgres", "-c", "listen_addresses=127.0.0.1", "-c", "port=5432"]
+    secrets: [hostkeeper-db-password]
+    volumes:
+      - hostkeeper-db:/var/lib/postgresql/data
+      # init.sql, password.sql and the runbook's other statements; read by psql, not by the image.
+      - ./sql:/etc/hostkeeper-db:ro
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-p", "5432", "-U", "hostkeeper", "-d", "hostkeeper"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  coordinator:
+    image: hostkeeper-coordinator:0.1.149@sha256:38b9efaecc55b8d103cda49239e44a8a92e4f64b65edd188453d619a58af0594
+    pull_policy: never
+    network_mode: host
+    depends_on:
+      # Waited for when the profile `postgres` runs it; without the profile it is not started.
+      postgres: {condition: service_healthy, required: false}
+    command:
+      - serve
+      - --heartbeat-listen
+      - 192.0.2.10:8443
+      - --private-listen
+      - 192.0.2.10:8444
+      - --tls-cert
+      - /etc/hostkeeper-coordinator/tls.pem
+      - --tls-key
+      - /etc/hostkeeper-coordinator/tls.key
+      - --client-ca
+      - /etc/hostkeeper-coordinator/client-ca.pem
+      - --oidc-config
+      - /etc/hostkeeper-coordinator/oidc.toml
+      - --tokens-file
+      - /etc/hostkeeper-coordinator/tokens.toml
+      - --rollout-file
+      - /etc/hostkeeper-coordinator/rollout.toml
+      - --database-dsn-file
+      - /run/secrets/hostkeeper-db-dsn
+      - --halt-marker-file
+      - /var/lib/hostkeeper-coordinator/halt-unfinished
+      - --ca-key-file
+      - /var/lib/hostkeeper-coordinator/ca.key
+      - --server-cert-file
+      - /var/lib/hostkeeper-coordinator/server.pem
+      - --server-name
+      - coordinator.example.com
+    secrets: [hostkeeper-db-dsn]
+    volumes:
+      # The CA key and its certificate, the server certificate and the marker, owned by 65532.
+      - hostkeeper-coordinator:/var/lib/hostkeeper-coordinator
+      # The TLS files, the client CA, the OIDC allow-list, the tokens and the rollout file.
+      - ./etc:/etc/hostkeeper-coordinator:ro
+    restart: unless-stopped
+
+secrets:
+  # Read only by password.sql, inside the postgres container as its user postgres (uid 999).
+  hostkeeper-db-password: {file: ./secrets/db-password}
+  # The coordinator's --database-dsn-file: owned by 65532, mode 0400.
+  hostkeeper-db-dsn: {file: ./secrets/db-dsn}
+
+volumes:
+  hostkeeper-db: {}
+  hostkeeper-coordinator: {}
