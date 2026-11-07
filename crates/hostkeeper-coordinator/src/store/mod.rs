@@ -294,7 +294,7 @@ impl SpentJtis for Spent {
 
 #[cfg(test)]
 #[path = "conformance_tests.rs"]
-mod conformance_tests;
+pub(crate) mod conformance_tests;
 
 #[cfg(test)]
 #[path = "store_tests.rs"]

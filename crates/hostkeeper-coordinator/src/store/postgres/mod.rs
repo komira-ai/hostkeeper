@@ -457,6 +457,14 @@ impl Postgres {
         self.inner.writer.call(job)
     }
 
+    /// Stops the store's sessions, its lock released, though handles of it remain: what a test
+    /// does before it starts a store again on the same database.
+    #[cfg(test)]
+    pub(crate) fn stop(&self) {
+        self.inner.writer.stop();
+        self.inner.reader.stop();
+    }
+
     fn remember_unknown(&self, number: u64, change: Owned) {
         *self
             .inner
