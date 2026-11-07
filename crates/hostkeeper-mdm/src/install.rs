@@ -9,7 +9,8 @@
 //! `migrate` sets `Install::replacing`, one held by the replaced kit's active unit of the same
 //! role is accepted, since `migrate` stops that unit before the new one starts); the SCEP depot
 //! holds only one of `ca.pem` and `ca.key`, or both but not as two regular files that
-//! `openssl` reads and that hold one key pair; an archive in `--bin-dir` is missing or its
+//! `openssl` reads (the key with the empty password `scepserver ca -init` encrypts it with)
+//! and that hold one key pair; an archive in `--bin-dir` is missing or its
 //! sha256 is not its pin; a secret file is not mode 0600 or not root's.
 //!
 //! The plan has each of these only when the host differs:
@@ -71,6 +72,11 @@ pub const UNAME: &str = "/usr/bin/uname";
 /// What `uname -m` prints on the hosts the pinned tools are built for.
 const SUPPORTED_MACHINE: &str = "x86_64";
 const OPENSSL: &str = "/usr/bin/openssl";
+/// How openssl is given the password of the SCEP CA's key: the empty one. `scepserver ca -init`
+/// encrypts `ca.key` (DES-EDE3-CBC PEM) with its `-key-password`, which the kit does not pass,
+/// and the SCEP unit reads it with `-capass`, which it does not pass either. Given on the
+/// command line, openssl never asks for it on the terminal (which a run without one fails).
+const SCEP_KEY_PASSIN: &str = "pass:";
 /// Where pending-restart markers live: a tmpfs, so a reboot (which restarts every service
 /// with the files in place) clears them.
 const RUN_DIR: &str = "/run";
@@ -406,7 +412,9 @@ fn architecture(host: &dyn Host) -> Result<(), MdmError> {
 /// The SCEP depot holds no CA, or a whole one: `scepserver ca -init` writes `ca.key`, then
 /// `ca.pem`, each only if it is not there, so a depot with one of them is a failed init or a
 /// damaged backup, and one with both must be two regular files that openssl reads and that
-/// hold one key pair. Nothing printed by openssl is kept.
+/// hold one key pair. The key is read with the password the kit makes it with
+/// ([`SCEP_KEY_PASSIN`]), so a key encrypted with another password is refused as unreadable.
+/// Nothing printed by openssl is kept.
 fn scep_depot(host: &dyn Host, c: &MdmConfig) -> Result<(), MdmError> {
     let depot = format!("{}/scep/depot", c.state());
     let (pem, key) = (format!("{depot}/ca.pem"), format!("{depot}/ca.key"));
@@ -443,8 +451,14 @@ fn scep_depot(host: &dyn Host, c: &MdmConfig) -> Result<(), MdmError> {
             if cert_key.code != 0 {
                 return Err(damaged("openssl cannot read ca.pem as a certificate"));
             }
-            let own_key =
-                host.run(&Cmd::new(OPENSSL).args(&["pkey", "-pubout", "-in", key.as_str()]))?;
+            let own_key = host.run(&Cmd::new(OPENSSL).args(&[
+                "pkey",
+                "-passin",
+                SCEP_KEY_PASSIN,
+                "-pubout",
+                "-in",
+                key.as_str(),
+            ]))?;
             if own_key.code != 0 {
                 return Err(damaged("openssl cannot read ca.key as a private key"));
             }

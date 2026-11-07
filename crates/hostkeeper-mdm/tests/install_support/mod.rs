@@ -87,7 +87,15 @@ pub fn ca_argv() -> Vec<String> {
 /// `openssl x509 -noout -pubkey` on the depot's certificate.
 pub const X509: [&str; 6] = ["/usr/bin/openssl", "x509", "-noout", "-pubkey", "-in", CA];
 /// `openssl pkey -pubout` on the depot's key.
-pub const PKEY: [&str; 5] = ["/usr/bin/openssl", "pkey", "-pubout", "-in", CA_KEY];
+pub const PKEY: [&str; 7] = [
+    "/usr/bin/openssl",
+    "pkey",
+    "-passin",
+    "pass:",
+    "-pubout",
+    "-in",
+    CA_KEY,
+];
 
 /// openssl answering that the depot's certificate and key hold the same public key.
 pub fn openssl_finds_a_pair(host: &FakeHost) {
