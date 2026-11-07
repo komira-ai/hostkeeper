@@ -20,12 +20,11 @@
 //! directory `pkgutil --expand` makes of the pkg's scripts archive holds `postinstall` alone, a
 //! regular file of mode 0755 with exactly these bytes.
 
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
 use hostkeeper_launchd::plist::{DAEMON_STATE_DIR, INSTALLED_BINARY};
 use hostkeeper_launchd::postinstall::postinstall;
-
-use std::os::unix::fs::MetadataExt;
 
 use super::{Error, TYPE_BITS};
 

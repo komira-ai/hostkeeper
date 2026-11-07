@@ -57,10 +57,11 @@
 //! `pkgutil --expand` expands the pkg's scripts archive; `PackageInfo` names the identifier, the
 //! version, the install location and the `postinstall` and no other script; `Scripts` holds that
 //! `postinstall` alone, a regular file of mode 0755; and `Payload`, a gzip-compressed cpio
-//! archive (the portable `odc` format) that `pkgutil --expand` does not expand, holds exactly the entries above with their modes, owners and
-//! bytes (the binary, `gh` and the trusted root those of the files it is given), the plist
-//! parsing as a launchd plist that names the daemon's label, the program `current` of the binary
-//! directory and the output files, and the newsyslog file rotating exactly those output files.
+//! archive (the portable `odc` format) that `pkgutil --expand` does not expand, holds exactly
+//! the entries above with their modes, owners and bytes (the binary, `gh` and the trusted root
+//! those of the files it is given), the plist parsing as a launchd plist that names the daemon's
+//! label, the program `current` of the binary directory and the output files, and the newsyslog
+//! file rotating exactly those output files.
 
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -737,10 +738,11 @@ fn payload_problems(
     );
 }
 
-/// The entries of the gzip-compressed portable cpio archive `name` (the `Payload`) of the expanded pkg
-/// `expanded`; the inner `Err` says why its bytes are not such an archive, the outer one that the
+/// The entries of the `Payload` of the expanded pkg `expanded`, a gzip-compressed portable cpio
+/// archive; the inner `Err` says why its bytes are not such an archive, the outer one that the
 /// file could not be opened.
-fn read_archive(expanded: &Path, name: &str) -> Result<Result<Vec<CpioEntry>, String>, Error> {
+fn read_payload(expanded: &Path) -> Result<Result<Vec<CpioEntry>, String>, Error> {
+    let name = "Payload";
     let path = expanded.join(name);
     let file = std::fs::File::open(&path).map_err(Error::io(format!("read {}", path.display())))?;
     let mut cpio = Vec::new();
@@ -808,7 +810,7 @@ pub(crate) fn check(
         scripts_problems(&expanded.join(EXPANDED_SCRIPTS), &mut problems)?;
     }
     if present("Payload") {
-        match read_archive(expanded, "Payload")? {
+        match read_payload(expanded)? {
             Err(why) => problems.push(why),
             Ok(entries) => {
                 let contents = sources.contents()?;
