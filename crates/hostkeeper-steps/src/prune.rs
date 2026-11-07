@@ -13,15 +13,21 @@
 //!
 //! Each version is deleted in three steps, each durable before the next:
 //!
-//! 1. `<version>/` is renamed to `.stage-prune-<16 hex>` beside it, so the version is gone in
-//!    one step: no reader ever sees a half-deleted `<version>/`;
+//! 1. `<version>/` is opened to its owner (0700) and renamed to `.stage-prune-<16 hex>` beside
+//!    it, so the version is gone in one step: no reader ever sees a half-deleted `<version>/`.
+//!    The version is read-only (0555) as an unpack leaves it, and macOS refuses to rename a
+//!    directory its caller cannot write, even to a new name in the same parent (it rewrites the
+//!    directory's `..` entry); Linux makes that check only when the parent changes. The mode of
+//!    the top directory is not part of the tree digest;
 //! 2. `<version>.seal` is removed, so no seal outlives its tree;
 //! 3. the renamed tree is removed bottom-up. Each directory is opened to its owner first, so a
 //!    read-only tree (0555) can be emptied, and no link is followed: a link inside the tree is
 //!    removed itself, never what it points at.
 //!
-//! A crash leaves only a `.stage-*` directory or a seal with no tree beside it. The unpack's own
-//! orphan pass removes both (`hostkeeper_unpack::remove_orphans`), and so does the next prune.
+//! A crash leaves only a `.stage-*` directory, a seal with no tree beside it, or (a crash between
+//! the opening and the rename) a surplus version still whole, its top directory 0700. The unpack's
+//! own orphan pass removes the first two (`hostkeeper_unpack::remove_orphans`), and so does the
+//! next prune, which deletes all three.
 //! Every step is idempotent.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -238,6 +244,7 @@ impl Layout {
         let moved = self.dir().join(prune_name(version));
         if fs::symlink_metadata(&dir).is_ok_and(|meta| meta.is_dir()) {
             remove_tree(&moved, at)?;
+            fs::set_permissions(&dir, Permissions::from_mode(0o700))?;
             fs::rename(dir, &moved)?;
             self.sync()?;
             at(PruneStep::Moved { version })?;
