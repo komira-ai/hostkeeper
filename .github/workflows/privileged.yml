@@ -32,32 +32,26 @@
 # meet: the coordinator and the
 # daemon, each started by the tests as a child process, through a host's first boot (enrollment,
 # approval, the host certificate, heartbeats over mutual TLS, a restart of each) and a package
-# assigned and installed. In the jobs net-install and net-install-arm64 a QEMU guest is installed
-# by network end to end (docs/design/network-install.md section 11): the real hostkeeper-pxe and
-# the real coordinator's LAN listener, on a bridge with no route out, each box of the LAN in a
-# network namespace of its own; x86-64 under KVM through enrollment, a service, router mode, a
-# reinstall and a retired host, and arm64 under TCG until its seed fetch; net-install then makes
-# the report of the measurement of the guest's first install (cargo xtask netinstall-report) and
-# keeps it as the artifact net-install-report.
+# assigned and installed. Network install end to end (docs/design/network-install.md section 11)
+# is no job of this file: it runs in net-install.yml, on its own triggers, and no release waits
+# for it.
 #
 # It runs after a merge to main and by hand (workflow_dispatch), never on a pull request. The
-# workflow lint (crates/xtask/tests/workflows) holds its triggers to exactly these two and each job
-# to its runner (ubuntu-24.04; macos-15 for macos-device), holds the network-install jobs' ISO to
-# the pins of packaging/netboot/pins.toml and the previous release the jobs privileged and
-# macos-device download to crates/hostkeeper-privileged/previous-release.toml, and gives it no
-# write scope; it refuses root in every
-# other workflow, and macOS in every workflow that runs for a pull request, but in pr-device.yml,
+# workflow lint (crates/xtask/tests/workflows) holds its triggers to exactly these two, its jobs
+# to exactly these three, each on its runner (ubuntu-24.04; macos-15 for macos-device), the
+# previous release the jobs privileged and macos-device download to
+# crates/hostkeeper-privileged/previous-release.toml, and gives it no write scope; it refuses root
+# in every other workflow but net-install.yml, and
+# macOS in every workflow that runs for a pull request, but in pr-device.yml,
 # whose jobs privileged and macos-device are copies of this file's, step for step, run on every
 # pull request. A release waits for a successful push run of
 # this workflow on its commit (release.yml); pr-device.yml is no part of a release.
 #
 # In each job the test binaries are built as the runner's own user; only their run is as root,
 # through the cargo runner `sudo`, the one use of it in the job (on the Mac, unpack_mac also runs
-# once as the runner's user, before the run as root), but for the two network-install jobs, which
-# also install QEMU and its firmware from the runner's Ubuntu archive, by `sudo apt-get update`
-# and `sudo apt-get install` of the packages the workflow lint lists for each. So no file of the Cargo registry
+# once as the runner's user, before the run as root). So no file of the Cargo registry
 # or of target/ is owned by root, and a test writes only its scratch directory under target/ (and,
-# for the network-install tests and the failed end-to-end tests, what it keeps for the job's
+# for the failed end-to-end tests, what it keeps for the job's
 # artifact under target/privileged-artifacts/; but
 # the self-update tests, whose scratch directory is under /run/hostkeeper-ci, because the release
 # trees the daemon checks must have root's directories all the way up, and whose drop-in is in
@@ -77,23 +71,19 @@
 # daemon), and for install_uninstall the fixture service's unit and its wants link and the
 # package check's verifier directory /usr/lib/hostkeeper, each refused if the host already has it
 # and removed when the test ends, and the release channel's CA appended to the host's CA bundle,
-# which is written back as it was; and in the network-install jobs the network namespaces, the
-# bridge, the veth pairs and the tap of the test's LAN, named by its pid and deleted when it ends;
-# each on a runner that is thrown away after the job). Each test
+# which is written back as it was; each on a runner that is thrown away after the job). Each test
 # names its units hostkeeper-ci-<test>-<pid>-<n> (the fixture service's unit is
 # hostkeeper-ci-fixture, its steps updater-hostkeeper-ci-fixture-<step>-<n>), or its launchd jobs
 # dev.hostkeeper.ci-<test>-<pid> (a step job by its unit, as the launcher names it; hello's slots
 # hello.a and hello.b as its package names them), and stops them
 # when it ends, failed or not; every coordinator and release channel is on the loopback address,
-# or, in the network-install jobs, on the test's own bridge, which routes nowhere, so no test
-# leaves the host (the jobs' downloads are steps of their own, before the test). The test targets are
+# so no test leaves the host (the jobs' downloads are steps of their own, before the test). The test targets are
 # named, in both steps of each job, so that the run is the privileged tests and nothing else of the
 # crate; the workflow lint holds each job's list to the files that are privileged for it (first
 # line `#![cfg(feature = "privileged")]` for the job privileged, `#![cfg(all(target_os = "linux",
 # feature = "privileged"))]` for first-boot, `#![cfg(all(target_os = "macos", feature =
-# "privileged"))]` for the Mac, `#![cfg(all(any(target_os = "linux", target_os = "macos"), feature
-# = "privileged"))]` for a target of both the job privileged and the Mac, and their own lines for
-# the two network-install jobs).
+# "privileged"))]` for the Mac, and `#![cfg(all(any(target_os = "linux", target_os = "macos"),
+# feature = "privileged"))]` for a target of both the job privileged and the Mac).
 #
 # These tests are not counted by the 99% coverage gate (ci.yml judges the pull-request set). A red
 # run on main is a defect, fixed forward in a new pull request.
@@ -312,183 +302,6 @@ jobs:
         run: cargo test -p hostkeeper-privileged --features privileged --locked --test unpack_mac -- --nocapture
       - name: Run the macOS device tests as root
         run: cargo test -p hostkeeper-privileged --features privileged --locked --config "target.'cfg(unix)'.runner = 'sudo'" --test device_mac --test device_mac_e2e --test device_mac_selfupdate --test self_update_across_releases --test unpack_mac -- --test-threads=1 --nocapture
-      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        if: ${{ github.event_name == 'push' && steps.cargo-cache.outputs.cache-hit != 'true' }}
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
-
-  # Network install end to end, x86-64 (docs/design/network-install.md section 11): a QEMU guest
-  # with OVMF UEFI firmware under KVM, on a Linux bridge with no route out, installed by the real
-  # hostkeeper-pxe from a boot set this job fetched by pinned URL (`hostkeeper-pxe fetch` checks
-  # its size and SHA-256 against the pins), with this commit's deb; it enrolls with the real
-  # coordinator on its LAN listener, is approved, gets the fixture service, boots its disk in
-  # router mode, is reinstalled, and once retired and the coordinator restarted is not installed
-  # again in either mode. QEMU and the firmware are Ubuntu's packages, from the runner's own signed
-  # archive: the two apt steps are the job's only other use of sudo, which the workflow lint
-  # allows in the two network-install jobs only, for the packages it lists for each.
-  net-install:
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-    # A bound on the whole job, against a guest that hangs; no test depends on it.
-    timeout-minutes: 150
-    env:
-      GH_VERSION: 2.102.1
-      GH_SHA256: 77b9e297e94c50336823d0f84de7ef1be60cba704601fa0d98f129f47a94987b
-      NFPM_VERSION: 2.48.0
-      NFPM_SHA256: 6d7f9a28b2f397934403950fcbba83f598b08d02edbe79a0815b3b4897341750
-      # The version the job's deb and netboot.json carry: a name of this run's own build.
-      NET_INSTALL_VERSION: 1.0.0
-      # The ISO of packaging/netboot/pins.toml's linux-x86_64 boot set (the workflow lint holds
-      # it to the pin).
-      ISO_URL: https://releases.ubuntu.com/24.04/ubuntu-24.04.5-live-server-amd64.iso
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      # The guest runs under KVM: a runner without it is a setup failure, not a test to skip.
-      - name: Fail unless the runner has KVM (/dev/kvm is a character device)
-        run: test -c /dev/kvm
-      - name: The free disk space, for the log
-        run: df -h
-      - name: Refresh the package lists of the runner's Ubuntu archive
-        run: sudo apt-get update
-      - name: Install QEMU and the OVMF firmware
-        run: sudo apt-get install --yes --no-install-recommends qemu-system-x86 ovmf
-      - run: qemu-system-x86_64 --version
-      - run: rustup toolchain install
-      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        id: cargo-cache
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
-          restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
-      # The deb of this commit, built as artifacts.yml builds it: the release binaries, the
-      # pinned gh and the Sigstore trusted root staged, then nfpm.
-      - name: Download nfpm (HTTPS only, redirects included)
-        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --location --output "$RUNNER_TEMP/nfpm.tar.gz" "https://github.com/goreleaser/nfpm/releases/download/v$NFPM_VERSION/nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz"
-      - name: Install nfpm (pinned checksum)
-        run: cargo xtask install-tool --download "$RUNNER_TEMP/nfpm.tar.gz" --sha256 "$NFPM_SHA256" --out "$HOME/.cargo/bin/nfpm" --extract tar.gz --member nfpm
-      - name: Download gh (HTTPS only, redirects included)
-        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --location --output "$RUNNER_TEMP/gh.tar.gz" "https://github.com/cli/cli/releases/download/v$GH_VERSION/gh_${GH_VERSION}_linux_amd64.tar.gz"
-      # The gh the test checks the boot set's attestations with (hostkeeper-pxe fetch --gh).
-      - name: Install gh (pinned checksum)
-        run: cargo xtask install-tool --download "$RUNNER_TEMP/gh.tar.gz" --sha256 "$GH_SHA256" --out target/privileged-tools/gh --extract tar.gz --member "gh_${GH_VERSION}_linux_amd64/bin/gh"
-      - name: The Sigstore trusted root
-        run: target/privileged-tools/gh attestation trusted-root > "$RUNNER_TEMP/trusted_root.json"
-      - name: Build hostkeeper and hostkeeper-pxe
-        run: cargo build --locked --release -p hostkeeper --bin hostkeeper -p hostkeeper-pxe --bin hostkeeper-pxe
-      - name: Stage gh and the trusted root for the deb
-        run: cargo xtask release nfpm-stage --arch amd64 --gh-version "$GH_VERSION" --gh-archive "$RUNNER_TEMP/gh.tar.gz" --gh-sha256 "$GH_SHA256" --trusted-root "$RUNNER_TEMP/trusted_root.json" --out target/nfpm
-      - run: mkdir -p target/net-install
-      - name: The deb
-        env:
-          VERSION: ${{ env.NET_INSTALL_VERSION }}
-          ARCH: amd64
-        run: nfpm package --config packaging/linux/nfpm.yaml --packager deb --target target/net-install
-      - name: The boot sets of network install (netboot.json)
-        run: cargo xtask release netboot --pins packaging/netboot/pins.toml --version "$NET_INSTALL_VERSION" --dir target/net-install
-      # Checked by hostkeeper-pxe fetch, against the pinned size and SHA-256, in the test.
-      - name: Download the pinned ISO (HTTPS only, redirects included)
-        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --location --output target/net-install/ubuntu-24.04.5-live-server-amd64.iso "$ISO_URL"
-      - name: Build the network-install test as the runner's user
-        run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test net_install
-      - name: Run the network-install test as root
-        run: cargo test -p hostkeeper-privileged --features privileged --locked --config "target.'cfg(unix)'.runner = 'sudo'" --test net_install -- --test-threads=1 --nocapture
-      # The measurement of network install (design section 11, item N11): the guest's first
-      # install from power-on to serving, from hostkeeper-pxe's log and the files the test kept
-      # beside it. The MAC and host id are the test's (tests/net_install.rs); its first install is
-      # in proxy mode. As the runner's user, into target/, which root does not own.
-      - name: The report of the network install
-        run: cargo xtask netinstall-report --mac 52:54:00:4e:10:01 --host-id net-1 --mode proxy --pxe-log target/privileged-artifacts/net_install/hostkeeper-pxe.log --pending target/privileged-artifacts/net_install/pending.json --host target/privileged-artifacts/net_install/host.json > target/netinstall-report.md
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: net-install-report
-          path: target/netinstall-report.md
-          if-no-files-found: error
-      # The guest's serial console, the logs of hostkeeper-pxe, the router's DHCP and the
-      # coordinator, and the measurement's inputs, kept by the test whether it passed or failed.
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: always()
-        with:
-          name: net-install
-          path: target/privileged-artifacts
-          if-no-files-found: ignore
-      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        if: ${{ github.event_name == 'push' && steps.cargo-cache.outputs.cache-hit != 'true' }}
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
-
-  # Network install of an arm64 machine, the fallback of section 11: the hosted arm64 runner has
-  # no /dev/kvm, so an arm64 guest with the AAVMF firmware runs under TCG on this x86-64 runner,
-  # and boots until it fetches its seed: architecture 11 in its DISCOVER, the arm64 shim and
-  # GRUB, the arm64 menu of its MAC and a seed naming the arm64 deb. Its boot set's deb is a
-  # stand-in the test makes, which nothing fetches before the seed.
-  net-install-arm64:
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-    # A bound on the whole job, against a guest that hangs: TCG translates every instruction,
-    # and the live system loads the whole ISO into memory before it fetches the seed.
-    timeout-minutes: 330
-    env:
-      GH_VERSION: 2.102.1
-      GH_SHA256: 77b9e297e94c50336823d0f84de7ef1be60cba704601fa0d98f129f47a94987b
-      NET_INSTALL_VERSION: 1.0.0
-      # The ISO of packaging/netboot/pins.toml's linux-arm64 boot set (the workflow lint holds
-      # it to the pin).
-      ISO_URL: https://cdimage.ubuntu.com/ubuntu/releases/24.04/release/ubuntu-24.04.5-live-server-arm64.iso
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: The free disk space, for the log
-        run: df -h
-      - name: Refresh the package lists of the runner's Ubuntu archive
-        run: sudo apt-get update
-      - name: Install QEMU for arm64 and the AAVMF firmware
-        run: sudo apt-get install --yes --no-install-recommends qemu-system-arm qemu-efi-aarch64
-      - run: qemu-system-aarch64 --version
-      - run: rustup toolchain install
-      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        id: cargo-cache
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
-          restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
-      - name: Download gh (HTTPS only, redirects included)
-        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --location --output "$RUNNER_TEMP/gh.tar.gz" "https://github.com/cli/cli/releases/download/v$GH_VERSION/gh_${GH_VERSION}_linux_amd64.tar.gz"
-      - name: Install gh (pinned checksum)
-        run: cargo xtask install-tool --download "$RUNNER_TEMP/gh.tar.gz" --sha256 "$GH_SHA256" --out target/privileged-tools/gh --extract tar.gz --member "gh_${GH_VERSION}_linux_amd64/bin/gh"
-      - run: mkdir -p target/net-install
-      - name: The boot sets of network install (netboot.json)
-        run: cargo xtask release netboot --pins packaging/netboot/pins.toml --version "$NET_INSTALL_VERSION" --dir target/net-install
-      - name: Download the pinned ISO (HTTPS only, redirects included)
-        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --location --output target/net-install/ubuntu-24.04.5-live-server-arm64.iso "$ISO_URL"
-      - name: Build the arm64 network-install test as the runner's user
-        run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test net_install_arm64
-      - name: Run the arm64 network-install test as root
-        run: cargo test -p hostkeeper-privileged --features privileged --locked --config "target.'cfg(unix)'.runner = 'sudo'" --test net_install_arm64 -- --test-threads=1 --nocapture
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: always()
-        with:
-          name: net-install-arm64
-          path: target/privileged-artifacts
-          if-no-files-found: ignore
       - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: ${{ github.event_name == 'push' && steps.cargo-cache.outputs.cache-hit != 'true' }}
         with:

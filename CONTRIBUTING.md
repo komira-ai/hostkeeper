@@ -74,7 +74,8 @@ cargo run -p coverage-gate --locked -- --lcov target/lcov.info --root .
 Nothing privileged and nothing for macOS runs on a pull request, but in `pr-device.yml` (below),
 on every pull request. The workflow lint refuses such a
 job in any other workflow that runs on `pull_request`, refuses a job as root (`sudo`, a privileged
-container) in any workflow but `privileged.yml` and the two copies of its jobs in `pr-device.yml`,
+container) in any workflow but `privileged.yml`, `net-install.yml` and the two copies of
+`privileged.yml`'s jobs in `pr-device.yml`,
 refuses a write scope, a secret or the token in every workflow that runs on `pull_request`, and it
 also refuses an action that is not pinned
 by commit SHA, a runner that is not GitHub-hosted, a workflow without a top-level
@@ -92,6 +93,16 @@ real thing: it runs the tests of `crates/hostkeeper-privileged` as root against 
 GitHub-hosted `ubuntu-24.04` runner. It runs after a merge to `main` and by hand
 (`workflow_dispatch`), never on a pull request. A release waits for a successful run of it on its
 commit. A red run on `main` is a defect: fix it forward in a new pull request.
+
+Network install end to end (below) runs as root too, in `.github/workflows/net-install.yml`, on its
+own triggers, and no release waits for it: an emulated install takes hours. It runs on a push to
+`main` that changes the network-install code (the paths the workflow lint lists:
+`crates/hostkeeper-pxe*`, `packaging/netboot`, `packaging/linux`, the network-install tests and
+their rig, the generators of `netboot.json` and of the report, and the workflow itself), nightly
+on `main` whatever changed, and by hand (`workflow_dispatch`), on `main` or on a pull request's
+branch (`gh workflow run net-install.yml --ref <branch>`); never on a pull request. A newer run of
+the same branch cancels the older, so on `main` only the newest commit's run is kept. A red run on
+`main` is a defect, as above.
 
 ## The macOS and privileged jobs of a pull request
 
@@ -149,7 +160,7 @@ bundle back as it was when it ends. The verifier is the one stand-in:
 `/usr/bin/true` in place of `gh`, since an attestation of a package the test builds cannot be made
 without the network.
 
-In the jobs `net-install` and `net-install-arm64`, network install of a new machine end to end
+In the jobs `net-install` and `net-install-arm64` of `net-install.yml`, network install of a new machine end to end
 (docs/design/network-install.md section 11): a QEMU guest with UEFI firmware, an empty disk and
 its NIC first in the boot order, on a Linux bridge with no route out, each box of the LAN (the
 router, whose DHCP the test fakes, and the real `hostkeeper-pxe`) in a network namespace of its

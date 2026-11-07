@@ -1,6 +1,6 @@
 #![cfg(all(target_os = "linux", target_arch = "x86_64", feature = "privileged"))]
 //! Network install of an x86-64 machine, end to end (docs/design/network-install.md section 11,
-//! privileged.yml's job `net-install`): a QEMU guest with OVMF under KVM, an empty disk, a fixed
+//! net-install.yml's job `net-install`): a QEMU guest with OVMF under KVM, an empty disk, a fixed
 //! UUID and serial, its NIC first in the boot order, on a LAN with no route out, with the
 //! router's DHCP faked by the test, the real `hostkeeper-pxe` and the real coordinator with its
 //! LAN listener (`netinstall`). The operator acts only through `hostkeeper ctl`, and the guest is

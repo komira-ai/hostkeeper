@@ -1,5 +1,6 @@
 //! The rules of `privileged.yml` ([`super::lint`]): a job that runs as root is allowed in that
-//! file only, and there only on a push to main and by hand, on the runner the lint lists for the
+//! file and in `net-install.yml` only (whose own rules `net_install_tests.rs` tests), and in
+//! privileged.yml only on a push to main and by hand, on the runner the lint lists for the
 //! job (the one macOS job, `macos-device`, on its own list), under every other rule; and each job
 //! of the committed file holds exactly one `sudo`, the cargo runner of the run of its privileged
 //! tests, with their build before it as the runner's user. Each rule is shown
@@ -15,8 +16,8 @@ use super::lint::{
     privileged_runners, root_line, scalars,
 };
 use super::net_install::{
-    NET_INSTALL_ARM64_FIRST_LINE, NET_INSTALL_ARM64_JOB, NET_INSTALL_FIRST_LINE, NET_INSTALL_JOB,
-    NET_JOBS, apt_steps,
+    self, NET_INSTALL_ARM64_FIRST_LINE, NET_INSTALL_ARM64_JOB, NET_INSTALL_FIRST_LINE,
+    NET_INSTALL_JOB, NET_JOBS, apt_steps,
 };
 use super::pr_device;
 use super::release::{REQUIRED_WORKFLOWS, publish_problems};
@@ -80,22 +81,23 @@ fn the_clean_privileged_workflow_passes() {
 #[test]
 fn a_privileged_job_outside_privileged_yml_is_refused() {
     // Catches: a lint that still allows root in a workflow that does not run on pull requests,
-    // whatever its name (one close to privileged.yml included), by `sudo` in a step, by a cargo
+    // whatever its name (one close to privileged.yml or net-install.yml included), by `sudo` in a
+    // step, by a cargo
     // runner of `sudo`, by a privileged container, or by a container given a capability.
     let push = push_only();
     let step = "      - run: cargo test --workspace --locked\n";
     let cases: [(&str, &str); 3] = [
         (
             "      - run: sudo -E cargo test\n",
-            "job test: privileged outside privileged.yml (`sudo -E cargo test`)",
+            "job test: privileged outside privileged.yml and net-install.yml (`sudo -E cargo test`)",
         ),
         (
             "      - run: cargo test --config \"target.'cfg(unix)'.runner = 'sudo'\"\n",
-            "job test: privileged outside privileged.yml (`cargo test --config \"target.'cfg(unix)'.runner = 'sudo'\"`)",
+            "job test: privileged outside privileged.yml and net-install.yml (`cargo test --config \"target.'cfg(unix)'.runner = 'sudo'\"`)",
         ),
         (
             "      - run: docker run --privileged image\n",
-            "job test: privileged outside privileged.yml (`docker run --privileged image`)",
+            "job test: privileged outside privileged.yml and net-install.yml (`docker run --privileged image`)",
         ),
     ];
     for file in [
@@ -103,6 +105,8 @@ fn a_privileged_job_outside_privileged_yml_is_refused() {
         "nightly.yml",
         "privileged.yaml",
         "privileged-tests.yml",
+        "net-install.yaml",
+        "net_install.yml",
     ] {
         for (run, want) in cases {
             assert_eq!(lint(file, &with_in(&push, step, run)), [want], "{file}");
@@ -114,7 +118,7 @@ fn a_privileged_job_outside_privileged_yml_is_refused() {
             "ci.yml",
             &with_in(&push, "    runs-on: ubuntu-latest\n", container)
         ),
-        ["job test: privileged outside privileged.yml (`--cap-add NET_ADMIN`)"]
+        ["job test: privileged outside privileged.yml and net-install.yml (`--cap-add NET_ADMIN`)"]
     );
     // A word that only holds `sudo` is not root.
     let pseudo = with_in(&push, step, "      - run: cargo test pseudo_random\n");
@@ -364,14 +368,20 @@ fn sudo_count(node: &Node) -> usize {
     values.iter().map(|v| word_count(v, "sudo")).sum()
 }
 
-/// What is wrong with the shape of privileged.yml's `text`, whose jobs and the privileged test
-/// targets of each are `targets` (job name to targets): a job that is not one of them, or one of
+/// What is wrong with the shape of the workflow `file`'s `text` (privileged.yml or
+/// net-install.yml), whose jobs and the privileged test targets of each are `targets` (job name to
+/// targets): a job that is not one of them, or one of
 /// them missing; per job, `sudo` named other than once in its values, and none outside the jobs;
 /// other than one build step and one step as root; the build as root or after the run; a step
 /// that builds or runs another set of test targets than the job's; a step that runs more than
 /// one command (`;`, `&&`, `||`, a pipe or more than one line), whose logic belongs in a Rust
-/// tool. Each problem of a job names it.
-pub fn shape_problems(text: &str, targets: &BTreeMap<&str, BTreeSet<String>>) -> Vec<String> {
+/// tool; an apt step outside the network-install jobs of net-install.yml. Each problem of a job
+/// names it.
+pub fn shape_problems(
+    file: &str,
+    text: &str,
+    targets: &BTreeMap<&str, BTreeSet<String>>,
+) -> Vec<String> {
     let doc = match yaml::load(text) {
         Ok(doc) => doc,
         Err(e) => return vec![e],
@@ -390,11 +400,15 @@ pub fn shape_problems(text: &str, targets: &BTreeMap<&str, BTreeSet<String>>) ->
     for (name, job) in jobs {
         let name = name.as_str().unwrap_or_default();
         let Some(targets) = targets.get(name) else {
-            problems.push(format!("job {name} is not a job of privileged.yml"));
+            problems.push(format!("job {name} is not a job of {file}"));
             continue;
         };
+        // The apt steps are allowed in the network-install jobs of their own workflow only.
+        let net = NET_JOBS
+            .iter()
+            .find(|net| file == net_install::FILE && net.name == name);
         problems.extend(
-            job_shape_problems(name, job, targets)
+            job_shape_problems(job, targets, net)
                 .into_iter()
                 .map(|problem| format!("job {name}: {problem}")),
         );
@@ -402,14 +416,18 @@ pub fn shape_problems(text: &str, targets: &BTreeMap<&str, BTreeSet<String>>) ->
     problems
 }
 
-/// [`shape_problems`] of one job, whose privileged test targets are `targets`.
-fn job_shape_problems(name: &str, job: &Node, targets: &BTreeSet<String>) -> Vec<String> {
+/// [`shape_problems`] of one job, whose privileged test targets are `targets`; `net` is its entry
+/// of [`NET_JOBS`] when it is a network-install job of net-install.yml.
+fn job_shape_problems(
+    job: &Node,
+    targets: &BTreeSet<String>,
+    net: Option<&net_install::NetJob>,
+) -> Vec<String> {
     let mut problems = Vec::new();
     let runs = runs(job);
     let builds: Vec<usize> = (0..runs.len())
         .filter(|&i| runs[i].starts_with(BUILD))
         .collect();
-    let net = NET_JOBS.iter().find(|net| net.name == name);
     let (apt_problems, apt_allowed) = apt_steps(&runs, builds.first().copied(), net);
     problems.extend(apt_problems);
     let sudo = sudo_count(job) - apt_allowed.len();
@@ -496,9 +514,8 @@ fn privileged_targets(first: &str) -> BTreeSet<String> {
     found
 }
 
-/// The jobs of privileged.yml and the targets of each: the Linux job's, the first-boot job's, the
-/// macOS job's and the two network-install jobs'. A target of both platforms is the Linux job's
-/// and the macOS job's.
+/// The jobs of privileged.yml and the targets of each: the Linux job's, the first-boot job's and
+/// the macOS job's. A target of both platforms is the Linux job's and the macOS job's.
 pub fn committed_targets() -> BTreeMap<&'static str, BTreeSet<String>> {
     let both = privileged_targets(BOTH_FIRST_LINE);
     let with_both = |first: &str| {
@@ -510,6 +527,12 @@ pub fn committed_targets() -> BTreeMap<&'static str, BTreeSet<String>> {
         ("privileged", with_both(LINUX_FIRST_LINE)),
         (FIRST_BOOT_JOB, privileged_targets(FIRST_BOOT_FIRST_LINE)),
         (MACOS_DEVICE_JOB, with_both(MACOS_FIRST_LINE)),
+    ])
+}
+
+/// The jobs of net-install.yml and the targets of each: the two network-install jobs'.
+pub fn net_install_targets() -> BTreeMap<&'static str, BTreeSet<String>> {
+    BTreeMap::from([
         (NET_INSTALL_JOB, privileged_targets(NET_INSTALL_FIRST_LINE)),
         (
             NET_INSTALL_ARM64_JOB,
@@ -522,8 +545,9 @@ pub fn committed_targets() -> BTreeMap<&'static str, BTreeSet<String>> {
 fn the_committed_privileged_yml_passes_and_holds_the_one_sudo() {
     // Catches: privileged.yml missing, failing a rule, named otherwise than the release waits for,
     // with a second step as root or its build moved under root, leaving out a privileged test
-    // file (or naming one that is not, or one of another job), the first-boot job missing, and a
-    // job that runs as root in any other workflow.
+    // file (or naming one that is not, or one of another job), the first-boot job missing, a
+    // network-install job back in it (the release would wait hours on an emulated install), and a
+    // job that runs as root in any other workflow but net-install.yml.
     let all = workflows();
     let text = &all
         .iter()
@@ -569,17 +593,27 @@ fn the_committed_privileged_yml_passes_and_holds_the_one_sudo() {
         ])
     );
     assert_eq!(
-        targets[NET_INSTALL_JOB],
-        BTreeSet::from(["net_install".to_owned()])
+        targets.keys().copied().collect::<Vec<_>>(),
+        [FIRST_BOOT_JOB, MACOS_DEVICE_JOB, "privileged"]
     );
     assert_eq!(
-        targets[NET_INSTALL_ARM64_JOB],
-        BTreeSet::from(["net_install_arm64".to_owned()])
+        shape_problems(PRIVILEGED_WORKFLOW, text, &targets),
+        Vec::<String>::new()
     );
-    assert_eq!(shape_problems(text, &targets), Vec::<String>::new());
-    // Root in no other workflow, but in the jobs of pr-device.yml that are copies of this file's
+    // The jobs a release waits for are this file's three: no network-install job is among them.
+    let jobs: Vec<&str> = entry(&doc, "jobs")
+        .map_or(&[][..], entries)
+        .iter()
+        .filter_map(|(name, _)| name.as_str())
+        .collect();
+    assert_eq!(jobs, ["privileged", FIRST_BOOT_JOB, MACOS_DEVICE_JOB]);
+    // Root in no other workflow, but in net-install.yml (net_install_tests.rs holds its jobs to
+    // their shape) and in the jobs of pr-device.yml that are copies of this file's
     // (pr_device_tests.rs holds them to that).
-    for (file, other) in all.iter().filter(|(file, _)| file != PRIVILEGED_WORKFLOW) {
+    for (file, other) in all
+        .iter()
+        .filter(|(file, _)| file != PRIVILEGED_WORKFLOW && file != net_install::FILE)
+    {
         let doc = yaml::load(other).expect("a workflow parses");
         let mut values = Vec::new();
         for (key, value) in entries(&doc) {
@@ -621,11 +655,18 @@ fn the_shape_check_of_privileged_yml_refuses_each_defect() {
             ),
         "      # sudo is named here, in a comment, which is not a value\n"
     );
-    assert_eq!(shape_problems(&clean, &targets), Vec::<String>::new());
+    assert_eq!(
+        shape_problems(PRIVILEGED_WORKFLOW, &clean, &targets),
+        Vec::<String>::new()
+    );
     let build = "      - run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test observer --test transient_unit\n";
     let second = format!("{build}      - run: sudo journalctl --no-pager\n");
     assert_eq!(
-        shape_problems(&with_in(&clean, build, &second), &targets),
+        shape_problems(
+            PRIVILEGED_WORKFLOW,
+            &with_in(&clean, build, &second),
+            &targets
+        ),
         [
             "job privileged: sudo is named 2 times, not once",
             "job privileged: 2 run as root steps, not one"
@@ -633,7 +674,11 @@ fn the_shape_check_of_privileged_yml_refuses_each_defect() {
     );
     let rooted_build = "      - run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --config \"target.'cfg(unix)'.runner = 'sudo'\" --test observer --test transient_unit\n";
     assert_eq!(
-        shape_problems(&with_in(&clean, build, rooted_build), &targets),
+        shape_problems(
+            PRIVILEGED_WORKFLOW,
+            &with_in(&clean, build, rooted_build),
+            &targets
+        ),
         [
             "job privileged: sudo is named 2 times, not once",
             "job privileged: 2 run as root steps, not one",
@@ -647,7 +692,7 @@ fn the_shape_check_of_privileged_yml_refuses_each_defect() {
         .expect("the run step");
     let folded = with_in(&with_in(&clean, &run_step, ""), build, rooted_build);
     assert_eq!(
-        shape_problems(&folded, &targets),
+        shape_problems(PRIVILEGED_WORKFLOW, &folded, &targets),
         [
             format!("job privileged: the run as root step is not `{RUN} ...`"),
             "job privileged: the build step runs as root".to_owned(),
@@ -661,12 +706,12 @@ fn the_shape_check_of_privileged_yml_refuses_each_defect() {
     let after = with_in(&clean, &format!("{run_line}\n"), "");
     let after = with_in(&after, build, &format!("{run_line}\n{build}"));
     assert_eq!(
-        shape_problems(&after, &targets),
+        shape_problems(PRIVILEGED_WORKFLOW, &after, &targets),
         ["job privileged: the build step comes after the run as root"]
     );
     let missing = with_in(&clean, build, &build.replace(" --test observer", ""));
     assert_eq!(
-        shape_problems(&missing, &targets),
+        shape_problems(PRIVILEGED_WORKFLOW, &missing, &targets),
         [
             "job privileged: the build step names the test targets {\"transient_unit\"}, not {\"observer\", \"transient_unit\"}"
         ]
@@ -679,7 +724,7 @@ fn the_shape_check_of_privileged_yml_refuses_each_defect() {
         "      - run: |\n          systemctl --version\n          systemd-analyze --version\n",
     ] {
         let text = with_in(&clean, build, &format!("{chained}{build}"));
-        let found = shape_problems(&text, &targets);
+        let found = shape_problems(PRIVILEGED_WORKFLOW, &text, &targets);
         assert_eq!(found.len(), 1, "{chained}: {found:?}");
         assert!(
             found[0].ends_with("runs more than one command"),
@@ -688,11 +733,11 @@ fn the_shape_check_of_privileged_yml_refuses_each_defect() {
     }
     let no_build = with_in(&clean, build, "");
     assert_eq!(
-        shape_problems(&no_build, &targets),
+        shape_problems(PRIVILEGED_WORKFLOW, &no_build, &targets),
         ["job privileged: 0 build steps, not one"]
     );
     assert_eq!(
-        shape_problems("on: [unclosed\n", &targets).len(),
+        shape_problems(PRIVILEGED_WORKFLOW, "on: [unclosed\n", &targets).len(),
         1,
         "a text that does not parse is one problem"
     );
@@ -845,11 +890,14 @@ fn the_shape_check_holds_each_job_to_its_own_targets() {
         "runner = 'sudo'\" --test observer --",
         1,
     );
-    assert_eq!(shape_problems(&clean, &targets), Vec::<String>::new());
+    assert_eq!(
+        shape_problems(PRIVILEGED_WORKFLOW, &clean, &targets),
+        Vec::<String>::new()
+    );
 
     let wrong = clean.replace("--test device_mac", "--test observer");
     assert_eq!(
-        shape_problems(&wrong, &targets),
+        shape_problems(PRIVILEGED_WORKFLOW, &wrong, &targets),
         [
             "job macos-device: the build step names the test targets {\"observer\"}, not {\"device_mac\"}",
             "job macos-device: the run as root step names the test targets {\"observer\"}, not {\"device_mac\"}",
@@ -857,18 +905,21 @@ fn the_shape_check_holds_each_job_to_its_own_targets() {
     );
     let extra = format!("{clean}{}", MACOS_JOB.replace("macos-device:", "another:"));
     assert_eq!(
-        shape_problems(&extra, &targets),
+        shape_problems(PRIVILEGED_WORKFLOW, &extra, &targets),
         ["job another is not a job of privileged.yml"]
     );
     let missing = with_in(&clean, MACOS_JOB, "");
-    assert_eq!(shape_problems(&missing, &targets), ["no job macos-device"]);
+    assert_eq!(
+        shape_problems(PRIVILEGED_WORKFLOW, &missing, &targets),
+        ["no job macos-device"]
+    );
     let env = with_in(
         &clean,
         "permissions: {}\n",
         "permissions: {}\nenv:\n  ROOT: sudo\n",
     );
     assert_eq!(
-        shape_problems(&env, &targets),
+        shape_problems(PRIVILEGED_WORKFLOW, &env, &targets),
         ["sudo is named 1 times outside the jobs"]
     );
 }
@@ -911,7 +962,7 @@ fn a_target_of_both_platforms_left_out_of_either_job_is_refused() {
     );
     assert_ne!(dropped_mac, text);
     assert_eq!(
-        shape_problems(&dropped_mac, &targets),
+        shape_problems(PRIVILEGED_WORKFLOW, &dropped_mac, &targets),
         [
             format!(
                 "job macos-device: the build step names the test targets {mac_left:?}, not {mac:?}"
@@ -930,7 +981,7 @@ fn a_target_of_both_platforms_left_out_of_either_job_is_refused() {
     );
     assert_ne!(dropped_linux, text);
     assert_eq!(
-        shape_problems(&dropped_linux, &targets),
+        shape_problems(PRIVILEGED_WORKFLOW, &dropped_linux, &targets),
         [
             format!(
                 "job privileged: the build step names the test targets {linux_left:?}, not {linux:?}"

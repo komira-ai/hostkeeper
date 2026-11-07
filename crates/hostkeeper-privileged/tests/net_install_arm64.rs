@@ -4,7 +4,7 @@
     not(target_arch = "aarch64")
 ))]
 //! Network install of an arm64 machine, the fallback of docs/design/network-install.md section 11
-//! (privileged.yml's job `net-install-arm64`): the hosted arm64 runner exposes no `/dev/kvm`
+//! (net-install.yml's job `net-install-arm64`): the hosted arm64 runner exposes no `/dev/kvm`
 //! (actions/runner-images#14062, closed as not planned), so the guest is an arm64 QEMU guest with
 //! the AAVMF firmware under TCG on the x86-64 runner, which the full live-server install does not
 //! fit; it boots until it fetches its seed. That is every part of the boot chain that differs by

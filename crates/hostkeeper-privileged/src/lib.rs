@@ -35,7 +35,8 @@
 //! updated and installed to the next version and restarted into it by launchd, with its rig in
 //! `tests/mac_self_update/`. The network-install tests (`tests/net_install.rs`, first line
 //! `#![cfg(all(target_os = "linux", target_arch = "x86_64", feature = "privileged"))]`, job
-//! `net-install`, and `tests/net_install_arm64.rs`, job `net-install-arm64`) install a QEMU guest
+//! `net-install`, and `tests/net_install_arm64.rs`, job `net-install-arm64`, both in
+//! `.github/workflows/net-install.yml`) install a QEMU guest
 //! by network with the real `hostkeeper-pxe` (the program `hostkeeper-privileged-pxe`, which
 //! forwards to `hostkeeper_pxe::cli::main`) and the real coordinator's LAN listener, on a bridge
 //! of the test's with no route out; their rig is `tests/netinstall/`, whose root-free parts

@@ -351,8 +351,14 @@ fn the_trigger_of_pr_device_yml_is_pull_request_alone_with_no_filter() {
     // privileged.yml.
     let none = problems(&device_with("on:\n  pull_request:\n\n", ""));
     assert_eq!(none.len(), 3, "{none:?}");
-    assert!(none[0].starts_with("job macos-device: privileged outside privileged.yml"));
-    assert!(none[1].starts_with("job privileged: privileged outside privileged.yml"));
+    assert!(
+        none[0]
+            .starts_with("job macos-device: privileged outside privileged.yml and net-install.yml")
+    );
+    assert!(
+        none[1]
+            .starts_with("job privileged: privileged outside privileged.yml and net-install.yml")
+    );
     assert_eq!(none[2], ON_PROBLEM);
 }
 
