@@ -148,10 +148,9 @@ fn help_goes_to_standard_output() {
     let _ = main(vec!["hostkeeper-pxe".into(), "--version".into()]);
 }
 
-/// The program itself runs the fetch with root as the owner it trusts: a daemon config that is
-/// not there is refused before anything is made.
-///
-/// Catches a `main` that never reaches the verb.
+/// The program itself runs the fetch with root as the owner it trusts; a daemon config that is
+/// not there is refused before anything is made. (Its exit status and line are asserted on the
+/// binary, in `tests/binary.rs`.)
 #[test]
 fn the_program_runs_the_verb() {
     let files = Files::new("main");
@@ -171,12 +170,10 @@ fn the_program_runs_the_verb() {
     assert!(!std::path::Path::new(&dir).exists());
 }
 
-/// The flags reach the fetch as given, with both platforms when none is named and each named
-/// one otherwise, and a sealed directory is one line on standard output naming it, the release,
-/// the Ubuntu release and the platforms.
+/// A sealed directory is one line on standard output naming it, the release, the Ubuntu release
+/// and the platforms sealed.
 ///
-/// Catches a `--platform` that is dropped, and a success that prints nothing to say where the
-/// boot files are.
+/// Catches a success that prints nothing to say where the boot files are.
 #[test]
 fn a_sealed_fetch_prints_one_line_naming_the_directory() {
     let seal = |flags: &FetchFlags| {
@@ -346,4 +343,33 @@ fn the_host_ports_ask_the_release_and_a_refusal_keeps_nothing() {
         assert!(!std::path::Path::new(&dir).exists());
     }
     closer.join().expect("the listener");
+}
+
+/// No `--platform` fetches both platforms; each `--platform` named is fetched, and only those;
+/// a platform named twice is fetched once.
+///
+/// Catches a farm of one architecture made to download both, and a default of one platform.
+#[test]
+fn both_platforms_unless_platform_names_some() {
+    let (arm, x86) = (BootPlatform::LinuxArm64, BootPlatform::LinuxX86_64);
+    assert_eq!(platforms_of(&[]), BTreeSet::from([arm, x86]));
+    assert_eq!(platforms_of(&[x86]), BTreeSet::from([x86]));
+    assert_eq!(platforms_of(&[arm, arm]), BTreeSet::from([arm]));
+    let parsed = Cli::try_parse_from([
+        "hostkeeper-pxe",
+        "fetch",
+        "--release",
+        "https://r.example",
+        "--dir",
+        "d",
+        "--daemon-config",
+        "c",
+        "--platform",
+        "linux-arm64",
+        "--platform",
+        "linux-x86_64",
+    ])
+    .expect("parses");
+    let Verb::Fetch(flags) = parsed.verb;
+    assert_eq!(flags.platforms, [arm, x86]);
 }

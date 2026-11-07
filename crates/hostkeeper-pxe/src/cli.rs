@@ -195,10 +195,7 @@ fn fetch_with(flags: &FetchFlags, owner: u32) -> Result<Seal, String> {
         verifier: &verifier,
         clock: &*clock,
     };
-    let platforms: BTreeSet<BootPlatform> = match flags.platforms.is_empty() {
-        true => BootPlatform::ALL.into_iter().collect(),
-        false => flags.platforms.iter().copied().collect(),
-    };
+    let platforms = platforms_of(&flags.platforms);
     let request = Request {
         release: flags.release.clone(),
         dir: flags.dir.clone(),
@@ -212,6 +209,14 @@ fn fetch_with(flags: &FetchFlags, owner: u32) -> Result<Seal, String> {
         },
     };
     fetch(&ports, &request).map_err(|e| e.to_string())
+}
+
+/// The platforms a fetch of `named` (the `--platform` flags) takes: both when none is named.
+fn platforms_of(named: &[BootPlatform]) -> BTreeSet<BootPlatform> {
+    match named.is_empty() {
+        true => BootPlatform::ALL.into_iter().collect(),
+        false => named.iter().copied().collect(),
+    }
 }
 
 /// The DER certificates of the PEM bundle at `path`; a bundle that holds none is refused, since
