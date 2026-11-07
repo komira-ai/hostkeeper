@@ -79,6 +79,14 @@ impl Marker {
             Err(_) => Some(Self::Unlisted),
         }
     }
+
+    /// The epoch of the database the marker at `path` was written at: none for a marker of the
+    /// file store, or one that cannot be read.
+    #[must_use]
+    pub(crate) fn epoch_at(path: &Path) -> Option<u64> {
+        let bytes = fs::read(path).ok()?;
+        serde_json::from_slice::<Listed>(&bytes).ok()?.epoch
+    }
 }
 
 /// Of the audit `numbers` a marker lists, those that `committed`, the state as loaded, does not

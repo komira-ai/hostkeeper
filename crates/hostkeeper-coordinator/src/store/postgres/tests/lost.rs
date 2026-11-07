@@ -73,7 +73,7 @@ fn a_lost_session_is_revived_on_the_same_epoch() {
     line(&store, 4).expect("a commit once revived");
     assert_eq!(seqs(&db), vec!["1", "4"]);
     assert_eq!(store.last_seq(), 4);
-    assert!(store.take_landing().is_none());
+    assert!(store.take_landings().is_empty());
     assert!(super::logged("store_unreachable"));
     assert!(super::logged(
         "the database session is back, on the same epoch"
@@ -116,7 +116,7 @@ fn a_commit_that_landed_but_was_not_answered_is_settled_as_landed() {
     settle(&store);
     assert!(!store.unsettled());
     assert_eq!(store.health(), Health::Up);
-    let landing = store.take_landing().expect("the commit is settled");
+    let landing = store.take_landings().pop().expect("the commit is settled");
     assert!(landing.landed);
     assert_eq!(landing.number, 1);
     assert_eq!(landing.lines().len(), 2);
@@ -125,7 +125,7 @@ fn a_commit_that_landed_but_was_not_answered_is_settled_as_landed() {
         db.rows("SELECT service FROM services ORDER BY service"),
         vec![vec![Some("kbf".to_owned())]]
     );
-    assert!(store.take_landing().is_none(), "a landing is taken once");
+    assert!(store.take_landings().is_empty(), "a landing is taken once");
 }
 
 /// Proves: a commit that was lost before it landed (the session ended while its `COMMIT` ran) is
@@ -151,7 +151,7 @@ fn a_commit_that_did_not_land_is_settled_as_not_landed() {
         .expect("the trigger is dropped");
     store.revive();
     settle(&store);
-    let landing = store.take_landing().expect("the commit is settled");
+    let landing = store.take_landings().pop().expect("the commit is settled");
     assert!(!landing.landed);
     assert_eq!(landing.number, 1);
     assert!(landing.lines().is_empty());
@@ -178,7 +178,7 @@ fn a_store_whose_epoch_was_raised_meanwhile_is_deposed() {
     client
         .batch_execute(&format!(
             "SELECT pg_advisory_lock({LOCK_KEY}); \
-             UPDATE hostkeeper.lease SET epoch = epoch + 1; \
+             UPDATE \"hostkeeper\".lease SET epoch = epoch + 1; \
              SELECT pg_advisory_unlock({LOCK_KEY})"
         ))
         .expect("another coordinator leads");
@@ -343,7 +343,7 @@ fn a_stopped_store_answers_that_its_sessions_stopped() {
     db.end_sessions();
     assert!(line(&store, 1).is_err());
     let direct = store
-        .on_writer(|w| w.transact(|_| Ok(())))
+        .on_writer(|w| w.transact(None, |_| Ok(())))
         .expect("the writer runs");
     assert_eq!(
         direct.expect_err("no session").why(),
@@ -362,6 +362,11 @@ fn a_stopped_store_answers_that_its_sessions_stopped() {
     second.stop();
     let failed = second.write(|_| Ok(())).expect_err("stopped");
     assert_eq!(failed.why(), "the writing session stopped");
+    assert_eq!(
+        crate::store::Backend::health(&second),
+        crate::store::Health::Lost,
+        "a store whose writer is gone is lost, and its alert stands"
+    );
     assert_eq!(
         second.read(|_| Ok(())).expect_err("stopped"),
         "the reading session stopped"
@@ -464,7 +469,7 @@ fn a_session_lost_in_a_rollback_is_lost_and_a_deposed_store_stays_deposed() {
                 .query_one("SELECT pg_advisory_unlock($1)", &[&LOCK_KEY])
                 .expect("the lock is given up");
             w.revive();
-            w.transact(|_| Ok(()))
+            w.transact(None, |_| Ok(()))
         })
         .expect("the writer runs");
     assert_eq!(

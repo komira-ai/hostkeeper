@@ -121,12 +121,24 @@ pub(super) fn open_store(
 /// Settles the marker at `marker`, which lists the audit `numbers`, against the `audit` table of
 /// `store` (section 4.3): every change a memory-first commit holds has its audit row in the same
 /// transaction, so a number in the table is a change that landed. A marker whose every number is
-/// there is logged and removed; one with a number that is not refuses the start, naming it.
+/// there is logged and removed; one with a number that is not refuses the start, naming it. A
+/// marker of another epoch than the one the database held before this start refuses it naming
+/// every number: another coordinator led since, and a number in the table may be its change.
 ///
 /// # Errors
 /// [`StartError::ChangesUnwritten`]: a change it lists did not land; [`StartError::Database`]:
 /// the table could not be read; [`StartError::Io`]: the marker could not be removed.
 fn settle_in_database(store: &Postgres, marker: &Path, numbers: &[u64]) -> Result<(), StartError> {
+    // The epoch the database was at before this start raised it. A marker written at another one
+    // is a coordinator's that did not lead last: another led since, and its audit rows can carry
+    // the same numbers, so none of the marker's is taken as landed.
+    let before = store.epoch().unwrap_or_default().saturating_sub(1);
+    if Marker::epoch_at(marker).is_some_and(|epoch| epoch != before) {
+        return Err(StartError::ChangesUnwritten {
+            path: marker.to_owned(),
+            numbers: numbers.to_vec(),
+        });
+    }
     let wanted: Vec<i64> = numbers
         .iter()
         .map(|n| i64::try_from(*n).unwrap_or(i64::MAX))

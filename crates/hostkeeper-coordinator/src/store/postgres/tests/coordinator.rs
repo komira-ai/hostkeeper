@@ -77,7 +77,7 @@ impl Holding {
             database,
             &format!(
                 "SELECT pg_advisory_lock({LOCK_KEY}); \
-                 UPDATE hostkeeper.lease SET epoch = epoch + 1"
+                 UPDATE \"hostkeeper\".lease SET epoch = epoch + 1"
             ),
             &format!("SELECT pg_advisory_unlock({LOCK_KEY})"),
         )
@@ -639,6 +639,17 @@ fn the_enrollment_copy_is_reloaded_after_a_commit_of_unknown_outcome() {
         .expect("the writer runs");
     let lost = records.commit(&[Record::Host(host_record("web-2", "storage"))]);
     assert!(lost.is_err(), "the commit's outcome is not known");
+    let before = store.statements();
+    assert_eq!(
+        role(&records, "web-1").as_deref(),
+        Some("web"),
+        "while the outcome is not known the copy is served as it is"
+    );
+    assert_eq!(
+        store.statements(),
+        before,
+        "and a heartbeat's read does not wait on the lost session"
+    );
     Holding::the_lock(&database).release();
     store.revive();
     store.on_writer(|_| ()).expect("the writer runs");

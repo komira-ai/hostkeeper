@@ -30,7 +30,9 @@ the whole audit log, and the enrollment store. The design is
   coordinator's user, mode 0600 or 0400, at most 4 KiB. The password is never on the command line or
   in the environment, and no error shows the string or the file's path: an error names the flag.
   This release connects without TLS, so a string with `sslmode` `require`, `verify-ca` or
-  `verify-full` is refused; keep the database on the coordinator's machine, on loopback.
+  `verify-full` is refused. The coordinator does not check where the host is: a host other than
+  the machine's own loopback is connected to as well, with the password in the clear, so keep the
+  database on the coordinator's machine, on loopback.
 - **Flags beside it.** `--database-dsn-file` is refused beside `--state-file`, `--ops-file`,
   `--enrollment-dir`, `--audit-max-bytes` and `--audit-retained-segments`, each named
   (`--database-dsn-file and --ops-file are both given: ...`), and it requires `--halt-marker-file`.
@@ -59,7 +61,8 @@ the whole audit log, and the enrollment store. The design is
   Decisions read memory: a heartbeat in the steady state runs no query.
 - **Bounded waits.** Each session connects within 5 seconds, a statement runs at most 5 seconds and
   waits for a lock at most 3, and the connection's keepalives drop a peer that is gone. A wait
-  that runs out loses the session.
+  that runs out loses the session. The same bounds hold at start, for each statement of a
+  migration and of the load.
 - **A lost session.** When a write finds the session gone (the server restarted, the network
   dropped, a wait ran out), the coordinator orders nothing (its status says it is quiet, and an
   operator's force or abort waits too), refuses every change that lowers protection
@@ -77,9 +80,11 @@ the whole audit log, and the enrollment store. The design is
 - **The marker** (`--halt-marker-file`, on a local disk that stays writable when the database is
   not) lists the audit number of every change in memory and not yet committed, with the epoch:
   `{"unwritten":[41,42],"epoch":3}`. It is written before such a change's commit is tried and
-  removed once nothing is pending. A start that finds it removes it when every number it lists has
-  its row in the `audit` table (each such change commits its audit row with it); otherwise it
-  refuses to start, naming the numbers that did not land: look each up in the log, make it again by
+  removed once nothing is pending. A start that finds it removes it when the database is still at
+  the epoch the marker names and every number it lists has its row in the `audit` table (each such
+  change commits its audit row with it); otherwise it refuses to start, naming the numbers that did
+  not land (every number, when another coordinator led the database since, as its rows can carry
+  the same numbers): look each up in the log, make it again by
   hand if it still matters (a halt is raised again by the host's next report while the host is up),
   and remove the file. A marker this release cannot read refuses the start as one of the file store
   does.

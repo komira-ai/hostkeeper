@@ -115,9 +115,11 @@ JSON heartbeat route carries neither.
 ## The audit file
 
 On the database store (`--database-dsn-file`, [coordinator-state.md](coordinator-state.md#the-database-store))
-every change is one row of the table `audit`, committed in the same transaction as the change
-itself, so there is no case where the change is written and its line is not: `audit_unavailable`
-is never returned for these calls there, and a change whose commit fails is refused `store_failed`
+every change of the operations state, the desired state or the verdicts is one row of the table
+`audit`, committed in the same transaction as the change itself, so there is no case where such a
+change is written and its line is not: `audit_unavailable` is never returned for these calls there
+(an enrollment change's row is the coordinator's second transaction, as on the files, and the next
+start writes one that did not land: [enrollment-coordinator.md](../enrollment-coordinator.md#state-files)), and a change whose commit fails is refused `store_failed`
 and changes nothing. Every row is kept (no rotation; `--audit-max-bytes` and
 `--audit-retained-segments` are refused beside the database), and `Audit.List` is one query over
 the table with the same filters, paging and `since_seq` cursor. The three calls below that stand

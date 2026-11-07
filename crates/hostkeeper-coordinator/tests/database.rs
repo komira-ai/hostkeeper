@@ -340,6 +340,60 @@ fn serve_refuses_to_start_on_the_database_while_a_marker_lists_a_change_it_does_
     );
 }
 
+/// Proves: a marker written at an epoch another start has raised since is refused naming every
+/// number it lists, though the audit table holds rows of those numbers; one written at the epoch
+/// the database is still at is settled by its rows and removed.
+///
+/// Catches: the changes of a coordinator that did not lead last taken as landed because another
+/// coordinator's audit rows carry the same numbers.
+#[test]
+fn a_marker_of_an_epoch_another_coordinator_led_after_refuses_the_start() {
+    let files = Files::new("database-marker-epoch");
+    let database = Database::new();
+    let args = database_args(&files, &database);
+    let marker = files.path("halt.marker");
+
+    // Epoch 1: a change that lands.
+    let parts = start(args.clone());
+    let done = parts
+        .coordinator
+        .operate(
+            Some(OPERATOR),
+            br#"{"action":"exclude","service":"kbf","node_id":"d1","reason":"bad disk"}"#,
+        )
+        .expect("an operator's change");
+    drop(parts);
+    database.lock_is_free();
+    // Epoch 2: another start leads the database, and stops.
+    drop(start(args.clone()));
+    database.lock_is_free();
+
+    files.put(
+        "halt.marker",
+        &format!("{{\"unwritten\":[{}],\"epoch\":1}}\n", done.seq),
+        0o600,
+    );
+    let why = refusal(args.clone());
+    assert!(
+        matches!(&why, StartError::ChangesUnwritten { path, numbers } if *path == marker && *numbers == [done.seq]),
+        "{why}"
+    );
+    assert!(marker.exists(), "the marker stays for the operator");
+    database.lock_is_free();
+
+    // The refused start raised the epoch to 3; a marker of it is settled by its rows.
+    files.put(
+        "halt.marker",
+        &format!("{{\"unwritten\":[{}],\"epoch\":3}}\n", done.seq),
+        0o600,
+    );
+    drop(start(args));
+    assert!(
+        !marker.exists(),
+        "the marker of the epoch the database held is removed"
+    );
+}
+
 /// Proves: a marker whose every change the audit table holds is removed at the start, which goes
 /// on, and the changes stay in the database.
 ///

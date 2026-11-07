@@ -28,8 +28,8 @@ pub(crate) mod state;
 pub(crate) mod writer;
 
 use std::io;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
 
 use hostkeeper_oidc::Clock;
 
@@ -114,7 +114,7 @@ impl Reader {
 
 /// A commit whose outcome was not known when its session was lost: its parts, owned.
 #[derive(Clone, Debug, Default)]
-struct Owned {
+pub(crate) struct Owned {
     desired: Option<(desired::Held, desired::Held)>,
     ops: Option<(OpsState, OpsState)>,
     verdicts: Option<(verdict_file::Held, verdict_file::Held)>,
@@ -199,8 +199,6 @@ struct Inner {
     last_seq: AtomicU64,
     epoch: u64,
     clock: Clock,
-    /// The change of the commit whose outcome is not known, by its number.
-    unknown: Mutex<Option<(u64, Owned)>>,
 }
 
 /// The Postgres store: a handle shared by the three stores, CI's spent ids and the enrollment
@@ -400,7 +398,6 @@ impl Postgres {
             last_seq: AtomicU64::new(last),
             epoch: u64::try_from(epoch).unwrap_or_default(),
             clock,
-            unknown: Mutex::new(None),
         };
         tracing::info!(epoch, "the database's lock is held");
         Ok((
@@ -420,13 +417,28 @@ impl Postgres {
         &self,
         body: impl FnOnce(&mut Tx<'_>) -> Result<R, postgres::Error> + Send + 'static,
     ) -> Result<R, WriteFail> {
+        self.write_change(None, body)
+    }
+
+    /// [`Postgres::write`] of the change `change`, which a revival hands back with its outcome
+    /// when its commit's outcome is not known ([`Landing`]).
+    fn write_change<R: Send + 'static>(
+        &self,
+        change: Option<Owned>,
+        body: impl FnOnce(&mut Tx<'_>) -> Result<R, postgres::Error> + Send + 'static,
+    ) -> Result<R, WriteFail> {
         if self.inner.link.state() != State::Up {
             return Err(WriteFail::Lost("the database session is lost".to_owned()));
         }
-        self.inner
+        let answer = self
+            .inner
             .writer
-            .call(move |writer| writer.transact(body))
-            .unwrap_or_else(|| Err(WriteFail::Lost("the writing session stopped".to_owned())))
+            .call(move |writer| writer.transact(change, body));
+        answer.unwrap_or_else(|| {
+            // The writer's thread is gone: the store is lost for good, which the alert says.
+            self.inner.link.lose(None);
+            Err(WriteFail::Lost("the writing session stopped".to_owned()))
+        })
     }
 
     /// Runs `read` on the read-only session.
@@ -441,6 +453,12 @@ impl Postgres {
             .reader
             .call(move |reader| reader.run(read))
             .unwrap_or_else(|| Err("the reading session stopped".to_owned()))
+    }
+
+    /// Whether the writing session is up with no commit's outcome unknown: when what the tables
+    /// hold is what this coordinator committed.
+    pub(crate) fn settled_up(&self) -> bool {
+        self.inner.link.state() == State::Up && !self.inner.link.unsettled()
     }
 
     /// Whether a commit's outcome is not yet known.
@@ -472,30 +490,10 @@ impl Postgres {
         self.inner.reader.stop();
     }
 
-    fn remember_unknown(&self, number: u64, change: Owned) {
-        *self
-            .inner
-            .unknown
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some((number, change));
-    }
-
     fn reserve(&self, lines: &[AuditLine]) {
         if let Some(last) = lines.last() {
             self.inner.last_seq.fetch_max(last.seq, Ordering::Relaxed);
         }
-    }
-}
-
-/// The settled outcome of the commit whose number was `number`: what the writer found, with the
-/// change remembered for that number.
-fn landing_of(settled: writer::Settled, unknown: Option<(u64, Owned)>) -> Landing {
-    Landing {
-        number: settled.number,
-        landed: settled.landed,
-        change: unknown
-            .filter(|(number, _)| *number == settled.number)
-            .map(|(_, change)| change),
     }
 }
 
@@ -557,15 +555,14 @@ impl Backend for Postgres {
         if statements.is_empty() {
             return Ok(());
         }
-        match self.write(move |tx| run_all(tx, &statements)) {
+        match self.write_change(Some(Owned::of(change)), move |tx| run_all(tx, &statements)) {
             Ok(()) => {
                 self.reserve(change.audit);
                 Ok(())
             }
-            Err(WriteFail::Unknown { number, why }) => {
-                // Its numbers stay taken until the revival settles whether it landed.
+            Err(WriteFail::Unknown { why, .. }) => {
+                // Its numbers stay taken, whether or not the revival finds it landed.
                 self.reserve(change.audit);
-                self.remember_unknown(number, Owned::of(change));
                 Err(unwritten(&why))
             }
             Err(fail) => Err(unwritten(fail.why())),
@@ -698,22 +695,25 @@ impl Backend for Postgres {
         }
     }
 
-    fn take_landing(&self) -> Option<Landing> {
-        let settled = self.inner.link.take_settled()?;
-        let unknown = self
-            .inner
-            .unknown
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take();
-        let landing = landing_of(settled, unknown);
-        tracing::warn!(
-            alert = "store_unreachable",
-            number = landing.number,
-            landed = landing.landed,
-            "a commit whose session was lost while it was in flight is settled"
-        );
-        Some(landing)
+    fn take_landings(&self) -> Vec<Landing> {
+        self.inner
+            .link
+            .take_settled()
+            .into_iter()
+            .map(|settled| {
+                tracing::warn!(
+                    alert = "store_unreachable",
+                    number = settled.number,
+                    landed = settled.landed,
+                    "a commit whose session was lost while it was in flight is settled"
+                );
+                Landing {
+                    number: settled.number,
+                    landed: settled.landed,
+                    change: settled.change,
+                }
+            })
+            .collect()
     }
 
     fn epoch(&self) -> Option<u64> {

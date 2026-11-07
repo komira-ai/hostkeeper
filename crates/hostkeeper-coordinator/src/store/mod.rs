@@ -99,9 +99,10 @@ pub(crate) trait Backend: Send + Sync {
     /// every heartbeat.
     fn revive(&self) {}
 
-    /// What a commit of unknown outcome turned out to be, once its link is back, taken once.
-    fn take_landing(&self) -> Option<Landing> {
-        None
+    /// What the commits of unknown outcome turned out to be, once its link is back, in their
+    /// order, each taken once.
+    fn take_landings(&self) -> Vec<Landing> {
+        Vec::new()
     }
 
     /// The epoch this coordinator holds the store at, for a store that has one.

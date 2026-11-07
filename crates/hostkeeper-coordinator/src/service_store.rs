@@ -13,17 +13,16 @@
 use std::time::Duration;
 
 use super::Coordinator;
-use crate::fleet::Marks;
+use crate::fleet::Fleet;
 use crate::holds::marks_of;
 use crate::store::Health;
 
 impl Coordinator {
-    /// The operator's marks the decisions read, and whether the store's link is lost.
-    pub(crate) fn marks(&self) -> Marks {
-        Marks {
-            store_lost: self.ops.health() != Health::Up,
-            ..self.ops.read(marks_of)
-        }
+    /// Refreshes the operator's marks the decisions of `fleet` read, and whether the store's link
+    /// is lost, which a refresh of the marks alone keeps.
+    pub(crate) fn refresh_marks(&self, fleet: &mut Fleet) {
+        fleet.set_store_lost(self.ops.health() != Health::Up);
+        fleet.set_marks(self.ops.read(marks_of));
     }
 
     /// Tends the store's link at a heartbeat at the coordinator's time `now`: asks a lost link to
@@ -33,7 +32,10 @@ impl Coordinator {
     pub(crate) fn tend_store(&self, now: Duration) {
         let backend = self.ops.backend();
         backend.revive();
-        if let Some(landing) = backend.take_landing() {
+        // Read before the landings: a revival makes its landings known before it is up, so a
+        // link found up has no landing this heartbeat has not taken.
+        let health = backend.health();
+        for landing in backend.take_landings() {
             if landing.landed {
                 self.desired.take_landed(&landing);
                 self.ops.take_landed(&landing);
@@ -46,7 +48,7 @@ impl Coordinator {
                 "the commit whose outcome was not known is settled: memory takes it when it landed"
             );
         }
-        match backend.health() {
+        match health {
             Health::Up => self.ops.retry_unwritten(now),
             Health::Lost => {}
             Health::Deposed { found } => self.ops.depose(found),

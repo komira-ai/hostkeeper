@@ -246,7 +246,7 @@ fn a_commit_on_a_session_without_the_lock_fails() {
     let db = TestDatabase::new();
     let (store, _) = db.open("fenced").expect("the store opens");
     let mut client = db.client();
-    let bump = "UPDATE hostkeeper.lease SET commits = commits + 1";
+    let bump = "UPDATE \"hostkeeper\".lease SET commits = commits + 1";
     assert_eq!(
         refusal(client.execute(bump, &[])),
         "this session does not hold the coordinator's lock of the database"

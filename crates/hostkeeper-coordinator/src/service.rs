@@ -430,9 +430,7 @@ impl Coordinator {
     /// lock order is the fleet's, then the ops store's.
     pub(crate) fn lock_fleet(&self) -> std::sync::MutexGuard<'_, Fleet> {
         let mut fleet = self.fleet.lock().unwrap_or_else(PoisonError::into_inner);
-        let marks = self.marks();
-        fleet.set_store_lost(marks.store_lost);
-        fleet.set_marks(marks);
+        self.refresh_marks(&mut fleet);
         fleet
     }
 

@@ -593,17 +593,22 @@ fn desired_rows_the_reader_refuses_are_refused_at_load() {
         .insert(key(&["kbf", "2.0"]), vec![]);
     assert!(desired_of(&no_release).is_err());
 
+    // A value of another type than the column's is left out, as the file leaves out a field it
+    // does not hold.
     let mut passed_over = good.clone();
-    passed_over
-        .get_mut("desired_digests")
-        .expect("digests")
-        .insert(vec![KeyVal::Int(1), KeyVal::Int(2)], vec![Val::Null]);
     passed_over
         .get_mut("desired")
         .expect("desired")
         .get_mut(&key(&["kbf"]))
         .expect("kbf")[3] = Val::Int(5);
     assert_eq!(desired_of(&passed_over).expect("read"), held);
+    // A key that is not text names no service the reader takes.
+    let mut not_text = good.clone();
+    not_text
+        .get_mut("desired_digests")
+        .expect("digests")
+        .insert(vec![KeyVal::Int(1), KeyVal::Int(2)], vec![Val::Null]);
+    assert!(desired_of(&not_text).is_err());
     let mut int_key = good;
     int_key
         .get_mut("desired")
@@ -665,20 +670,12 @@ fn verdict_rows_the_reader_refuses_are_refused_at_load() {
         )]),
     )]);
     assert!(verdicts_of(&counted).is_err());
-    let passed_over = Tables::from([
-        (
-            "verdict_standing",
-            Rows::from([(vec![KeyVal::Int(1), KeyVal::Int(2)], vec![Val::Null])]),
-        ),
-        (
-            "verdict_counted",
-            Rows::from([(vec![KeyVal::Int(1), KeyVal::Int(2)], vec![Val::Null])]),
-        ),
-    ]);
-    assert_eq!(
-        verdicts_of(&passed_over).expect("passed over"),
-        verdict_file::Held::default()
-    );
+    // A key that is not text names no host the reader takes.
+    let not_text = Tables::from([(
+        "verdict_standing",
+        Rows::from([(vec![KeyVal::Int(1), KeyVal::Int(2)], vec![Val::Null])]),
+    )]);
+    assert!(verdicts_of(&not_text).is_err());
 }
 
 /// Proves: the place an error names is the table as `database:<table>`, and a hold's scope and a

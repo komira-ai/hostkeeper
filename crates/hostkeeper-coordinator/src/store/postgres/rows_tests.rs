@@ -3,7 +3,7 @@ use super::*;
 const PEOPLE: Table = Table {
     name: "people",
     keys: &[("team", KeyTy::Text), ("seat", KeyTy::Int)],
-    values: &[("name", Ty::Text), ("age", Ty::Int)],
+    values: &[("who", Ty::Text), ("age", Ty::Int)],
 };
 
 const TEAMS: Table = Table {
@@ -43,13 +43,13 @@ fn sql(statements: &[Stmt]) -> Vec<&str> {
 fn a_table_writes_one_row_by_its_whole_key() {
     assert_eq!(
         PEOPLE.select(),
-        "SELECT team, seat, name, age FROM people ORDER BY team, seat"
+        "SELECT team, seat, who, age FROM people ORDER BY team, seat"
     );
     let upsert = PEOPLE.upsert(&person("a", 2), &values("ann", 30));
     assert_eq!(
         upsert.sql,
-        "INSERT INTO people (team, seat, name, age) VALUES ($1, $2, $3, $4) \
-         ON CONFLICT (team, seat) DO UPDATE SET name = EXCLUDED.name, age = EXCLUDED.age"
+        "INSERT INTO people (team, seat, who, age) VALUES ($1, $2, $3, $4) \
+         ON CONFLICT (team, seat) DO UPDATE SET who = EXCLUDED.who, age = EXCLUDED.age"
     );
     assert_eq!(
         upsert.params,

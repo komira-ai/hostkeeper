@@ -19,6 +19,7 @@
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
+use super::Owned;
 use super::session::{Fail, Params, Session, describe, ends_session};
 
 /// The key of the coordinator's advisory lock: a constant that never changes, which the trigger
@@ -43,21 +44,24 @@ pub(crate) enum State {
 }
 
 /// What a commit of unknown outcome turned out to be, once the session is back.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub(crate) struct Settled {
     /// The number of the transaction (`lease.commits`).
     pub(crate) number: u64,
     /// Whether it landed.
     pub(crate) landed: bool,
+    /// The change it was, when its caller handed one over.
+    pub(crate) change: Option<Owned>,
 }
 
 #[derive(Debug)]
 struct Shared {
     state: State,
-    /// The number of the transaction whose `COMMIT` was in flight when the session was lost.
-    unknown: Option<u64>,
-    /// What the revival found that number to be, until it is taken.
-    settled: Option<Settled>,
+    /// The transaction whose `COMMIT` was in flight when the session was lost, and its change:
+    /// recorded in the same step as the loss, so no revival can settle it without its change.
+    unknown: Option<(u64, Option<Owned>)>,
+    /// What the revivals found, in their order, until they are taken.
+    settled: Vec<Settled>,
 }
 
 /// The state of the writing session, shared by the writer and its callers.
@@ -72,7 +76,7 @@ impl Default for Link {
             shared: Mutex::new(Shared {
                 state: State::Up,
                 unknown: None,
-                settled: None,
+                settled: Vec::new(),
             }),
         }
     }
@@ -93,7 +97,7 @@ impl Link {
     }
 
     /// Marks the session lost, unless the store is deposed already.
-    fn lose(&self, unknown: Option<u64>) {
+    pub(crate) fn lose(&self, unknown: Option<(u64, Option<Owned>)>) {
         let mut shared = self.lock();
         if !matches!(shared.state, State::Deposed { .. }) {
             shared.state = State::Lost;
@@ -114,13 +118,12 @@ impl Link {
         false
     }
 
-    /// The outcome of a commit of unknown outcome, once known, taken once.
-    pub(crate) fn take_settled(&self) -> Option<Settled> {
-        self.lock().settled.take()
+    /// The outcomes of the commits of unknown outcome known since the last take, in their order.
+    pub(crate) fn take_settled(&self) -> Vec<Settled> {
+        std::mem::take(&mut self.lock().settled)
     }
 
     /// Whether a commit's outcome is not yet known.
-    #[cfg(test)]
     pub(crate) fn unsettled(&self) -> bool {
         self.lock().unknown.is_some()
     }
@@ -258,7 +261,7 @@ impl Writer {
     }
 
     /// Drops the session: lost, with the transaction `unknown` in flight if one was.
-    fn lose(&mut self, why: &str, unknown: Option<u64>) {
+    fn lose(&mut self, why: &str, unknown: Option<(u64, Option<Owned>)>) {
         tracing::error!(
             alert = "store_unreachable",
             %why,
@@ -294,6 +297,7 @@ impl Writer {
     /// not known until the session is back.
     pub(crate) fn transact<R>(
         &mut self,
+        change: Option<Owned>,
         body: impl FnOnce(&mut Tx<'_>) -> Result<R, postgres::Error>,
     ) -> Result<R, WriteFail> {
         let epoch = self.epoch;
@@ -344,7 +348,7 @@ impl Writer {
             Err(e) if ends_session(&e) => {
                 let why = describe(&e);
                 let number = u64::try_from(number).unwrap_or_default();
-                self.lose(&why, Some(number));
+                self.lose(&why, Some((number, change)));
                 Err(WriteFail::Unknown { number, why })
             }
             // A deferred check refused the commit: the server rolled it back.
@@ -362,9 +366,13 @@ impl Writer {
                 let session = *session;
                 {
                     let mut shared = self.link.lock();
-                    if let Some(number) = shared.unknown.take() {
+                    if let Some((number, change)) = shared.unknown.take() {
                         let landed = u64::try_from(commits).ok() == Some(number);
-                        shared.settled = Some(Settled { number, landed });
+                        shared.settled.push(Settled {
+                            number,
+                            landed,
+                            change,
+                        });
                     }
                     shared.state = State::Up;
                 }

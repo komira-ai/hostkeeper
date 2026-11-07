@@ -10,8 +10,7 @@ use crate::ops::{AUDIT_RING, OpsState};
 use crate::store::conformance_tests::{desired_at, lines, normal, rich_ops, rich_verdicts};
 use crate::store::postgres::rows::{KeyTy, KeyVal, Rows, Stmt, Table, Ty, Val};
 use crate::store::postgres::session::Session;
-use crate::store::postgres::writer::Settled;
-use crate::store::postgres::{DatabaseError, Landing, Owned, Postgres, TIMEOUTS, landing_of};
+use crate::store::postgres::{DatabaseError, Landing, Owned, Postgres, TIMEOUTS};
 use crate::store::{Backend, Commit};
 
 /// The start's error on a database made by one start, then changed by `sql`.
@@ -319,33 +318,18 @@ fn verdicts_that_landed_are_laid_over_memory() {
     assert_eq!(unlanded.verdicts_over(&before), None);
 }
 
-/// Proves: a settled commit takes the change remembered for its own number only: with another
-/// number remembered, or none, it landed (or not) with no change to give back.
+/// Proves: a commit that landed with no change handed over (a records commit) gives memory
+/// nothing: no lines and no state laid over.
 ///
-/// Catches: a change of one commit taken as the outcome of another.
+/// Catches: a landing without its change read as an empty change that clears memory.
 #[test]
-fn a_settled_commit_takes_the_change_remembered_for_its_number_only() {
-    let held = lines(1, 1);
-    let commit = Commit {
-        audit: &held,
-        ..Commit::default()
-    };
-    let settled = Settled {
+fn a_landing_without_its_change_gives_memory_nothing() {
+    let landing = Landing {
         number: 2,
         landed: true,
+        change: None,
     };
-    assert_eq!(
-        landing_of(settled, Some((2, Owned::of(&commit))))
-            .lines()
-            .len(),
-        1
-    );
-    assert!(
-        landing_of(settled, Some((1, Owned::of(&commit))))
-            .lines()
-            .is_empty()
-    );
-    assert!(landing_of(settled, None).lines().is_empty());
+    assert!(landing.lines().is_empty());
     let none: OpsState = OpsState::default();
-    assert_eq!(landing_of(settled, None).ops_over(&none), None);
+    assert_eq!(landing.ops_over(&none), None);
 }

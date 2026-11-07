@@ -319,10 +319,13 @@ impl PgRecords {
         })
     }
 
-    /// The copy, loaded again first when a commit of unknown outcome may have changed the tables.
+    /// The copy, loaded again first when a commit of unknown outcome may have changed the tables
+    /// and that outcome is settled. While the writing session is lost or the outcome is not yet
+    /// known, the copy is served as it is and stays marked: a heartbeat never waits for a
+    /// reconnect, and never takes rows read before the commit it waits on was settled.
     fn copy(&self) -> Result<MutexGuard<'_, Copy>, StoreError> {
         let mut copy = self.copy.lock().unwrap_or_else(PoisonError::into_inner);
-        if copy.stale {
+        if copy.stale && self.store.settled_up() {
             *copy = copy_of(&self.store)?;
         }
         Ok(copy)
