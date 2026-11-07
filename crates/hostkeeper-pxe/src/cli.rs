@@ -39,7 +39,7 @@ use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use hostkeeper_config::daemon::DaemonConfig;
-use hostkeeper_package::gh::{GhVerifier, OwnedBy, SystemRunner};
+use hostkeeper_package::gh::{FileTrust, GhVerifier, OwnedBy, Runner, SystemRunner};
 use hostkeeper_package::net::{Timeouts, UreqTransport};
 use hostkeeper_steps::{Clock, ProcBootId, SystemClock};
 use rustls_pki_types::CertificateDer;
@@ -183,10 +183,8 @@ fn fetch_with(flags: &FetchFlags, owner: u32) -> Result<Seal, String> {
     let roots = tls_roots(&flags.ca_bundle)?;
     let clock: Arc<dyn Clock> = Arc::new(SystemClock::new(Box::new(ProcBootId::host())));
     let transport = UreqTransport::following_redirects(&roots, MAX_REDIRECTS);
-    let verifier = GhVerifier::new(
-        flags.gh.clone(),
-        flags.trusted_root.clone(),
-        flags.dir.join(VERIFY_DIR).join(GH_HOME),
+    let verifier = verifier_of(
+        flags,
         Box::new(SystemRunner::new(Arc::clone(&clock))),
         Box::new(OwnedBy { uid: owner }),
     );
@@ -195,11 +193,31 @@ fn fetch_with(flags: &FetchFlags, owner: u32) -> Result<Seal, String> {
         verifier: &verifier,
         clock: &*clock,
     };
-    let platforms = platforms_of(&flags.platforms);
-    let request = Request {
+    fetch(&ports, &request_of(flags, config)).map_err(|e| e.to_string())
+}
+
+/// The daemon's verifier as the flags name it: `--gh` run by `runner` against `--trusted-root`,
+/// in `gh`'s home under the new directory, each file checked by `trust` before each run.
+fn verifier_of(
+    flags: &FetchFlags,
+    runner: Box<dyn Runner>,
+    trust: Box<dyn FileTrust>,
+) -> GhVerifier {
+    GhVerifier::new(
+        flags.gh.clone(),
+        flags.trusted_root.clone(),
+        flags.dir.join(VERIFY_DIR).join(GH_HOME),
+        runner,
+        trust,
+    )
+}
+
+/// The fetch the flags and the loaded daemon config ask for.
+fn request_of(flags: &FetchFlags, config: DaemonConfig) -> Request {
+    Request {
         release: flags.release.clone(),
         dir: flags.dir.clone(),
-        platforms,
+        platforms: platforms_of(&flags.platforms),
         signers: config.trusted_signers,
         attestation_timeout_secs: config.bounds.attestation_timeout_secs,
         max_deb_bytes: config.bounds.max_package_bytes,
@@ -207,8 +225,7 @@ fn fetch_with(flags: &FetchFlags, owner: u32) -> Result<Seal, String> {
             connect: Duration::from_secs(CONNECT_TIMEOUT_SECS),
             total: Duration::from_secs(flags.download_timeout_secs),
         },
-    };
-    fetch(&ports, &request).map_err(|e| e.to_string())
+    }
 }
 
 /// The platforms a fetch of `named` (the `--platform` flags) takes: both when none is named.

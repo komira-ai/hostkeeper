@@ -373,3 +373,147 @@ fn both_platforms_unless_platform_names_some() {
     let Verb::Fetch(flags) = parsed.verb;
     assert_eq!(flags.platforms, [arm, x86]);
 }
+
+/// A `gh` that records the one run it is asked for and answers yes.
+struct Recording(std::rc::Rc<std::cell::RefCell<Vec<hostkeeper_package::gh::Spawn>>>);
+
+impl Runner for Recording {
+    fn run(
+        &self,
+        spawn: &hostkeeper_package::gh::Spawn,
+    ) -> io::Result<hostkeeper_package::gh::Ran> {
+        self.0.borrow_mut().push(spawn.clone());
+        Ok(hostkeeper_package::gh::Ran {
+            code: Some(0),
+            ..Default::default()
+        })
+    }
+}
+
+/// The flags of a `fetch` with `extra` after the required ones.
+fn fetch_flags(extra: &[&str]) -> FetchFlags {
+    let mut args = vec![
+        "hostkeeper-pxe",
+        "fetch",
+        "--release",
+        "https://r.example/v1.2.3",
+        "--dir",
+        "/srv/boot",
+        "--daemon-config",
+        "c",
+    ];
+    args.extend_from_slice(extra);
+    let Verb::Fetch(flags) = Cli::try_parse_from(args).expect("parses").verb;
+    flags
+}
+
+/// The verifier the flags make runs the `gh` of `--gh`, passes the root of `--trusted-root` as
+/// `--custom-trusted-root`, and runs in `gh`'s home under `--dir`; without the flags, the paths
+/// the hostkeeper deb installs.
+///
+/// Catches a `--gh` or `--trusted-root` that is parsed and then ignored, so the attestations
+/// would be checked by another `gh` or against another root than the operator named.
+#[test]
+fn the_verifier_runs_the_gh_and_trusted_root_the_flags_name() {
+    use hostkeeper_package::ports::{Attest, CommitId, SourceRef, Verifier};
+    for (extra, gh, root) in [
+        (
+            vec![
+                "--gh",
+                "/opt/pinned/gh",
+                "--trusted-root",
+                "/opt/pinned/root.json",
+            ],
+            "/opt/pinned/gh",
+            "/opt/pinned/root.json",
+        ),
+        (vec![], GH, TRUSTED_ROOT),
+    ] {
+        let flags = fetch_flags(&extra);
+        let runs = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let verifier = verifier_of(
+            &flags,
+            Box::new(Recording(std::rc::Rc::clone(&runs))),
+            Box::new(crate::testing::bundle::TrustAll),
+        );
+        let clock = crate::testing::FakeClock::at(5);
+        let signers = crate::testing::bundle::signers();
+        let sha = hostkeeper_config::daemon::Sha256Hex::parse(&"a".repeat(64)).expect("a digest");
+        let commit = CommitId::new(crate::testing::bundle::COMMIT).expect("a commit");
+        let source_ref = SourceRef::new("refs/heads/main").expect("a ref");
+        let deadline = hostkeeper_steps::Stamp::now(&clock);
+        let request = Attest {
+            archive: Path::new("/srv/boot/netboot.json"),
+            bundle: Path::new("/srv/boot/.verify/netboot.json.sigstore.json"),
+            sha256: &sha,
+            commit: &commit,
+            source_ref: &source_ref,
+            signers: &signers,
+            deadline: &deadline,
+        };
+        verifier
+            .verify(&request)
+            .expect("the recording gh says yes");
+        let runs = runs.borrow();
+        let spawn = runs.first().expect("gh ran once");
+        assert_eq!(runs.len(), 1);
+        assert_eq!(spawn.program, Path::new(gh));
+        assert_eq!(spawn.cwd, Path::new("/srv/boot/.verify/gh"));
+        let args: Vec<String> = spawn
+            .args
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let at = args
+            .iter()
+            .position(|a| a == "--custom-trusted-root")
+            .expect("the root flag");
+        assert_eq!(args[at + 1], root);
+    }
+}
+
+/// The request the flags and the daemon config make: `--download-timeout-secs` is the total
+/// bound of each download (four hours without it) beside the 30 s connect bound, and the
+/// config's trusted signer, attestation bound and package bound are passed as they are.
+///
+/// Catches a `--download-timeout-secs` that is parsed and then ignored, and a config bound
+/// passed to the wrong field.
+#[test]
+fn the_request_carries_the_flags_and_the_config_bounds() {
+    let config = DaemonConfig::parse(
+        "coordinator = \"https://coordinator.example:8443\"\n\
+         ca_sha256 = \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n\
+         release_channel = \"https://releases.example\"\n\
+         [trusted_signers]\n\
+         organisation = \"example-org\"\n\
+         workflow = \".github/workflows/artifacts.yml\"\n\
+         refs = [\"refs/heads/main\"]\n\
+         hosted_runner = true\n\
+         [bounds]\n\
+         max_package_bytes = 1048576\n\
+         fetch_timeout_secs = 2100\n\
+         attestation_timeout_secs = 45\n",
+    )
+    .expect("a config");
+    for (extra, total) in [
+        (vec!["--download-timeout-secs", "123"], 123),
+        (vec![], DOWNLOAD_TIMEOUT_SECS),
+    ] {
+        let request = request_of(&fetch_flags(&extra), config.clone());
+        assert_eq!(
+            request,
+            Request {
+                release: "https://r.example/v1.2.3".to_owned(),
+                dir: PathBuf::from("/srv/boot"),
+                platforms: BTreeSet::from([BootPlatform::LinuxArm64, BootPlatform::LinuxX86_64]),
+                signers: crate::testing::bundle::signers(),
+                attestation_timeout_secs: 45,
+                max_deb_bytes: 1_048_576,
+                timeouts: Timeouts {
+                    connect: Duration::from_secs(30),
+                    total: Duration::from_secs(total),
+                },
+            }
+        );
+    }
+}
