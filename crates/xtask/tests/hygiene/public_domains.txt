@@ -101,3 +101,6 @@ mender.io
 balena.io
 jamf.com
 fleetdm.com
+# The namespace of OpenSSH's own names for its security-key types, which the SSH keys file of a
+# network-install seed accepts (hostkeeper-pxe-seed's keys.rs).
+=openssh.com

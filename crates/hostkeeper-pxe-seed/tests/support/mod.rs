@@ -1,0 +1,132 @@
+//! The fixtures the tests share: a daemon config, SSH public keys, records and the boot server.
+
+#![allow(
+    dead_code,
+    reason = "each test binary includes this module and uses a different part of it"
+)]
+
+use std::net::{Ipv4Addr, SocketAddrV4};
+
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
+use hostkeeper_pxe_seed::inputs::{
+    BootServer, DaemonConfigText, InstallDisk, LinuxPlatform, Record, SerialConsole,
+};
+use hostkeeper_pxe_seed::keys::AuthorizedKeys;
+use hostkeeper_pxe_seed::seed::{Seed, SeedInputs, seed};
+
+/// A daemon config the daemon's parser accepts, with a comment, a `[bounds]` table and a
+/// trailing line, so the seed is shown to carry it byte for byte.
+pub const DAEMON_CONFIG: &str = "\
+# The farm's daemon config for network-installed hosts.
+coordinator     = \"https://192.0.2.1:8443\"
+ca_sha256       = \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"
+release_channel = \"https://releases.example\"
+
+[trusted_signers]
+organisation  = \"komira-ai\"
+workflow      = \".github/workflows/release.yml\"
+refs          = [\"refs/tags/*\"]
+hosted_runner = true
+
+[bounds]
+max_entries = 30000
+";
+
+/// The boot server of the goldens: 192.0.2.10 on HTTP's own port.
+pub fn server() -> BootServer {
+    server_on(80)
+}
+
+pub fn server_on(port: u16) -> BootServer {
+    BootServer::new(SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 10), port))
+        .expect("a documentation address is a boot server")
+}
+
+pub fn record(host_id: &str, role: Option<&str>, platform: Option<LinuxPlatform>) -> Record {
+    Record {
+        host_id: host_id.parse().expect("a host id"),
+        role: role.map(|r| r.parse().expect("a role")),
+        platform,
+    }
+}
+
+/// The base64 blob of a public key of type `kind`: the SSH string of the type, then `filler`
+/// bytes standing in for the key itself.
+pub fn blob(kind: &str, filler: u8) -> String {
+    let mut bytes = u32::try_from(kind.len())
+        .expect("a short type")
+        .to_be_bytes()
+        .to_vec();
+    bytes.extend_from_slice(kind.as_bytes());
+    bytes.extend_from_slice(&[0, 0, 0, 32]);
+    bytes.extend(std::iter::repeat_n(filler, 32));
+    STANDARD.encode(bytes)
+}
+
+/// One `authorized_keys` line.
+pub fn key_line(kind: &str, filler: u8, comment: &str) -> String {
+    match comment {
+        "" => format!("{kind} {}", blob(kind, filler)),
+        _ => format!("{kind} {} {comment}", blob(kind, filler)),
+    }
+}
+
+pub fn one_key() -> AuthorizedKeys {
+    AuthorizedKeys::parse(&format!(
+        "{}\n",
+        key_line("ssh-ed25519", 1, "operator-laptop")
+    ))
+    .expect("one public key")
+}
+
+pub fn several_keys() -> AuthorizedKeys {
+    let text = format!(
+        "# The farm's operators.\n{}\n\n{}\n{}\n",
+        key_line("ssh-ed25519", 1, "operator-laptop"),
+        key_line("ecdsa-sha2-nistp256", 2, "on-call \"pager\" key \\ spare"),
+        key_line("ssh-rsa", 3, ""),
+    );
+    AuthorizedKeys::parse(&text).expect("three public keys")
+}
+
+pub fn daemon_config() -> DaemonConfigText {
+    DaemonConfigText::parse(DAEMON_CONFIG).expect("the fixture config parses")
+}
+
+/// The seed of `record` with the defaults of the goldens: one key, the default disk, no serial
+/// console, the boot server on port 80.
+pub struct Build {
+    pub record: Record,
+    pub platform: LinuxPlatform,
+    pub server: BootServer,
+    pub keys: AuthorizedKeys,
+    pub disk: InstallDisk,
+    pub console: Option<SerialConsole>,
+}
+
+impl Build {
+    pub fn new(platform: LinuxPlatform) -> Build {
+        Build {
+            record: record("node-a", None, Some(platform)),
+            platform,
+            server: server(),
+            keys: one_key(),
+            disk: InstallDisk::default(),
+            console: None,
+        }
+    }
+
+    pub fn seed(&self) -> Seed {
+        let config = daemon_config();
+        seed(&SeedInputs {
+            record: &self.record,
+            platform: self.platform,
+            server: self.server,
+            daemon_config: &config,
+            keys: &self.keys,
+            install_disk: &self.disk,
+            serial_console: self.console.as_ref(),
+        })
+    }
+}
