@@ -15,8 +15,9 @@
 //! HTTP/1.1 (the JSON routes). Either has a limit on its handshake, its request body and on any
 //! single write of a response that its peer does not read; an HTTP/1.1 connection has a limit on
 //! its request head; an HTTP/2 connection has a limit on its streams, pings its peer, takes new
-//! calls for one patience only and is closed one patience after that; a listener has a limit on
-//! its connections.
+//! calls for one patience only and is closed one patience after that, or, when it holds a
+//! `Releases.WaitConverged` call then, one patience after the last such call ends
+//! ([`crate::wait`]); a listener has a limit on its connections.
 
 use std::convert::Infallible;
 use std::io;
@@ -43,6 +44,7 @@ use crate::grpc::route;
 use crate::http::{Peer, Surface};
 use crate::service::Coordinator;
 use crate::tokens::OperatorTokens;
+use crate::wait::{ConnectionWaits, unless};
 
 /// How long a client has to finish its TLS handshake, and then to send a request head.
 pub const CLIENT_PATIENCE: Duration = Duration::from_secs(10);
@@ -59,8 +61,9 @@ pub const MAX_STREAMS: u32 = 16;
 
 /// The most connections one listener serves at once. A client with a handshake, a head, a
 /// body or an unread response in flight holds one for at most [`CLIENT_PATIENCE`] each, and an
-/// HTTP/2 connection is closed two patiences after its handshake, so the cap makes a flood wait
-/// in the kernel's backlog rather than take the process's descriptors and memory.
+/// HTTP/2 connection is closed two patiences after its handshake (or one after the last held
+/// wait on it, of which a coordinator holds at most [`crate::wait::MAX_WAITS`]), so the cap makes
+/// a flood wait in the kernel's backlog rather than take the process's descriptors and memory.
 pub const MAX_CONNECTIONS: usize = 1024;
 
 /// One listener: `accept` yields the next connection, as a function of no argument that
@@ -271,9 +274,12 @@ pub async fn connection<S>(
         .and_then(<[_]>::first)
         .map(|leaf| Arc::from(leaf.as_ref()));
     let speaks_h2 = tls.get_ref().1.alpn_protocol() == Some(H2);
-    let service = service_fn(move |request: hyper::Request<Incoming>| {
+    let waits = ConnectionWaits::default();
+    let held = waits.clone();
+    let service = service_fn(move |mut request: hyper::Request<Incoming>| {
         let coordinator = Arc::clone(&coordinator);
         let peer = peer.clone();
+        request.extensions_mut().insert(held.clone());
         async move { Ok::<_, Infallible>(route(&coordinator, surface, &peer, request, patience).await) }
     });
     let io = TokioIo::new(WriteDeadline::new(tls, patience));
@@ -287,12 +293,13 @@ pub async fn connection<S>(
         let mut serving = std::pin::pin!(serving);
         // An HTTP/2 connection takes new calls for one patience: then it is told to go away
         // (no new stream; the calls in flight finish), and dropped one patience later, so an
-        // idle client that answers pings cannot keep a slot of the listener.
+        // idle client that answers pings cannot keep a slot of the listener. A held wait keeps
+        // it: it is dropped one patience after the last held wait on it ends.
         match tokio::time::timeout(patience, serving.as_mut()).await {
             Ok(ended) => ended,
             Err(_) => {
                 serving.as_mut().graceful_shutdown();
-                tokio::time::timeout(patience, serving)
+                unless(waits.quiet_for(patience), serving)
                     .await
                     .unwrap_or(Ok(()))
             }

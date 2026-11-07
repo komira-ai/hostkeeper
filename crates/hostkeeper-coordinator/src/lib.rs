@@ -72,6 +72,8 @@
 //! - [`grpc`]: the gRPC services on those surfaces (`hostkeeper.agent.v1.Coordinator` on the
 //!   heartbeat one, `hostkeeper.operator.v1` on the private one), the JSON gateway of the
 //!   operator API, and the router that tells them from the frozen JSON routes;
+//! - `wait`: `Releases.WaitConverged`, a read of the convergence held until it ends the wait,
+//!   and the call deadline and connection rule a held call has;
 //! - [`ui`]: the static files of `--ui-dir` (by default, for the binary,
 //!   [`config::DEFAULT_UI_DIR`] when it is a directory), which the private surface serves under
 //!   `/ui/`;
@@ -147,6 +149,7 @@ pub mod transfer;
 pub mod ui;
 pub mod verdict_file;
 pub mod verdicts;
+pub(crate) mod wait;
 pub(crate) mod write_record;
 
 #[cfg(test)]

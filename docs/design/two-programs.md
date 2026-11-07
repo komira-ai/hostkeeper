@@ -1,6 +1,7 @@
 # hostkeeper is two programs
 
-Status: design, for the maintainers' comments. Nothing here is built. Every statement about new code is **Designed**;
+Status: design, for the maintainers' comments. Of the build items of section 9, P1 (`Releases.WaitConverged`,
+`crates/hostkeeper-coordinator/src/wait.rs`) is built; nothing else here is. Every statement about new code is **Designed**;
 **Built** names code on `main` with a path, as in [hostkeeper-design.md](hostkeeper-design.md). Section 9 lists the
 build items, one pull request each.
 

@@ -14,8 +14,8 @@ use hyper::header::{AUTHORIZATION, HeaderValue};
 use tonic::Code;
 
 use super::support::{
-    CONVERGE, HEARTBEAT, SET_DESIRED, Served, call, decode, grpc_request, peer, served,
-    served_built, served_unreachable, served_with_operator_token, updater,
+    CONVERGE, HEARTBEAT, SET_DESIRED, Served, WAIT_CONVERGED, call, decode, grpc_request, peer,
+    served, served_built, served_unreachable, served_with_operator_token, updater,
 };
 use crate::grpc::{Admitted, admit};
 use crate::http::Surface;
@@ -260,8 +260,8 @@ async fn set_desired_of_a_service_off_the_allow_list_is_forbidden() {
 }
 
 /// Proves: for every method of the operator API the credentials that are admitted are exactly
-/// these: the operator token for every method, CI's token for `SetDesired` and `Converge` only,
-/// and no credential for any. The others are refused with `unauthorized` (nothing) or
+/// these: the operator token for every method, CI's token for `SetDesired`, `Converge` and
+/// `WaitConverged` only, and no credential for any. The others are refused with `unauthorized` (nothing) or
 /// `forbidden` (a CI token at a method that takes the operator's only).
 #[tokio::test]
 async fn every_operator_method_admits_exactly_its_credential() {
@@ -285,9 +285,10 @@ async fn every_operator_method_admits_exactly_its_credential() {
             "Services"
         ])
     );
-    assert!(paths.contains(&SET_DESIRED) && paths.contains(&CONVERGE));
+    let ci_methods = [SET_DESIRED, CONVERGE, WAIT_CONVERGED];
+    assert!(ci_methods.iter().all(|path| paths.contains(path)));
     for path in paths {
-        let ci_method = path == SET_DESIRED || path == CONVERGE;
+        let ci_method = ci_methods.contains(&path);
         let unauthorized = refused(Code::Unauthenticated, "unauthorized");
         let with_ci = if ci_method {
             Outcome::Admitted
@@ -312,7 +313,8 @@ async fn every_operator_method_admits_exactly_its_credential() {
     }
 }
 
-/// Proves: admitting the operator's token on `Converge` widened no other method of `Releases`:
+/// Proves: admitting CI's token on `Converge` and `WaitConverged` widened no other method of
+/// `Releases`:
 /// through the router, each of `Force`, `UnmarkBad`, `ClearHalt`, `Status`, `MarkBad` and
 /// `Halt` still refuses CI's token as `PERMISSION_DENIED` `forbidden` and a call with no token as
 /// `UNAUTHENTICATED` `unauthorized`, and nothing was set afterwards.
@@ -322,7 +324,7 @@ async fn every_other_releases_method_still_refuses_ci_and_no_token() {
     let others: Vec<&str> = operator_paths()
         .into_iter()
         .filter(|path| path.starts_with("/hostkeeper.operator.v1.Releases/"))
-        .filter(|path| *path != SET_DESIRED && *path != CONVERGE)
+        .filter(|path| ![SET_DESIRED, CONVERGE, WAIT_CONVERGED].contains(path))
         .collect();
     assert_eq!(
         others,
@@ -423,13 +425,14 @@ async fn an_authorization_header_that_is_not_a_bearer_is_no_token() {
     );
 }
 
-/// Proves: when the issuer's keys cannot be fetched, CI's `SetDesired` and `Converge` are
+/// Proves: when the issuer's keys cannot be fetched, CI's `SetDesired`, `Converge` and
+/// `WaitConverged` are
 /// `UNAVAILABLE` with the message `keys_unavailable`; an operator method does not take CI's
 /// token and says `unauthorized`; and the operator's token needs no issuer.
 #[tokio::test]
 async fn unreachable_keys_are_unavailable_for_ci_only() {
     let served = served_unreachable("grpc-cred-keys");
-    for path in [SET_DESIRED, CONVERGE] {
+    for path in [SET_DESIRED, CONVERGE, WAIT_CONVERGED] {
         let request = grpc_request(path, (), Some(&ci_token()));
         let answer = call(&served.coordinator, Surface::Control, &None, request).await;
         assert_eq!(

@@ -49,7 +49,8 @@ pub(crate) fn releases(refusal: ReleasesRefusal) -> Status {
         | ReleasesRefusal::ConfirmMismatch
         | ReleasesRefusal::UnknownTarget
         | ReleasesRefusal::IndexDigestMismatch
-        | ReleasesRefusal::IndexInvalid => Code::InvalidArgument,
+        | ReleasesRefusal::IndexInvalid
+        | ReleasesRefusal::InvalidWait => Code::InvalidArgument,
         ReleasesRefusal::UnknownService => Code::NotFound,
         ReleasesRefusal::GenerationConflict => Code::Aborted,
         ReleasesRefusal::HeldBad
@@ -61,7 +62,8 @@ pub(crate) fn releases(refusal: ReleasesRefusal) -> Status {
         | ReleasesRefusal::AlreadyBad
         | ReleasesRefusal::AlreadyHalted
         | ReleasesRefusal::NotInChannel
-        | ReleasesRefusal::ChannelDigestMismatch => Code::FailedPrecondition,
+        | ReleasesRefusal::ChannelDigestMismatch
+        | ReleasesRefusal::TooManyWaits => Code::FailedPrecondition,
     };
     refused(code, refusal.as_str_name(), "RELEASES_REFUSAL_")
 }

@@ -468,6 +468,21 @@ is cleared.
 | `--service` | STRING |  |
 | `--reason` | STRING |  |
 
+#### `hostkeeper ctl releases wait-converged`
+
+`/hostkeeper.operator.v1.Releases/WaitConverged`
+
+Hold the call until a service's hosts have converged on a version, or the wait ends another
+way (see `WaitOutcome`), for at most `wait_secs`. The coordinator answers at once when the
+wait is over already, and otherwise after the change that ends it. Changes nothing. Takes
+CI's OIDC token or the operator token, checked once, when the call is admitted.
+
+| flag | value | meaning |
+|---|---|---|
+| `--service` | STRING | The service; empty names the legacy service, as for `Converge`. |
+| `--version` | STRING | The version the caller set; any other desired version ends the wait as SUPERSEDED. |
+| `--wait-secs` | UINT32 | How long to hold the call, 1 to 1800 seconds. |
+
 ### `rollouts`
 
 The service `Rollouts` of the package `hostkeeper.operator.v1`. The update plans of the services: an operator moves a plan on, pauses it and resumes it. Each
