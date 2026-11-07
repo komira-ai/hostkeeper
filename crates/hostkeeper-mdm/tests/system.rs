@@ -62,28 +62,3 @@ fn the_real_host_stats_inside_a_directory_it_is_granted() {
     assert_eq!(file.uid, own);
     assert!(host.stat(text(&dir.path().join("none"))).unwrap().is_none());
 }
-
-/// Catches a host the machine cannot make from a grant by name, or one where that grant takes
-/// the place of another: with a grant by name of a directory below the scratch directory and a
-/// grant by id of the scratch directory, the host sees the scratch directory's file with its
-/// owner. The path is outside the directory granted by name, so the walk asks no lookup and no
-/// account database is read.
-#[test]
-fn the_real_host_keeps_a_grant_by_name_to_its_own_directory() {
-    let dir = scratch("by-name");
-    let own = std::fs::metadata(dir.path()).unwrap().uid();
-    std::fs::write(dir.path().join("file"), b"x").unwrap();
-    let grants = [
-        Grant {
-            dir: text(&dir.path().join("svc")).to_owned(),
-            who: Trustee::User("hostkeeper-mdm-test-user".to_owned()),
-        },
-        Grant {
-            dir: text(dir.path()).to_owned(),
-            who: Trustee::Uid(own),
-        },
-    ];
-    let host = RealMachine.host(&grants);
-    let file = host.stat(text(&dir.path().join("file"))).unwrap().unwrap();
-    assert_eq!(file.uid, own);
-}

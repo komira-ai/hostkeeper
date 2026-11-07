@@ -76,9 +76,8 @@ impl RealHost {
     }
 
     /// This host, looking a [`RealHost::trust_below_user`] grant's user up with `program`
-    /// (given `passwd NAME`, as `getent` is) in place of `getent`: the tests' fixture, so they
-    /// read no account database.
-    #[cfg(feature = "test-support")]
+    /// (given `passwd NAME`, as `getent` is) in place of `getent`. What the tests of the grants
+    /// by name run, so they read no account database; the machine always uses `getent`.
     #[must_use]
     pub fn looking_up_users_with(mut self, program: &str) -> RealHost {
         program.clone_into(&mut self.getent);
