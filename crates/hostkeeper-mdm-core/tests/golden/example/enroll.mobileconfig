@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>PayloadContent</key>
+	<array>
+		<dict>
+			<key>PayloadContent</key>
+			<dict>
+				<key>Key Type</key>
+				<string>RSA</string>
+				<key>Challenge</key>
+				<string>0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0</string>
+				<key>Key Usage</key>
+				<integer>5</integer>
+				<key>Keysize</key>
+				<integer>2048</integer>
+				<key>URL</key>
+				<string>https://mdm.example.com/scep</string>
+			</dict>
+			<key>PayloadIdentifier</key>
+			<string>com.example.hostkeeper.mdm.scep</string>
+			<key>PayloadType</key>
+			<string>com.apple.security.scep</string>
+			<key>PayloadUUID</key>
+			<string>0E3A040E-D630-56D6-817D-944F618BDFB6</string>
+			<key>PayloadVersion</key>
+			<integer>1</integer>
+		</dict>
+		<dict>
+			<key>AccessRights</key>
+			<integer>8191</integer>
+			<key>CheckOutWhenRemoved</key>
+			<true/>
+			<key>IdentityCertificateUUID</key>
+			<string>0E3A040E-D630-56D6-817D-944F618BDFB6</string>
+			<key>PayloadIdentifier</key>
+			<string>com.example.hostkeeper.mdm.mdm</string>
+			<key>PayloadType</key>
+			<string>com.apple.mdm</string>
+			<key>PayloadUUID</key>
+			<string>FEED84D0-B3AF-5E6C-8965-297D92C648D3</string>
+			<key>PayloadVersion</key>
+			<integer>1</integer>
+			<key>ServerCapabilities</key>
+			<array>
+				<string>com.apple.mdm.per-user-connections</string>
+				<string>com.apple.mdm.bootstraptoken</string>
+				<string>com.apple.mdm.token</string>
+			</array>
+			<key>ServerURL</key>
+			<string>https://mdm.example.com/mdm</string>
+			<key>SignMessage</key>
+			<true/>
+			<key>Topic</key>
+			<string>com.apple.mgmt.External.0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d</string>
+		</dict>
+	</array>
+	<key>PayloadDisplayName</key>
+	<string>Example MDM</string>
+	<key>PayloadIdentifier</key>
+	<string>com.example.hostkeeper.mdm</string>
+	<key>PayloadOrganization</key>
+	<string>Example</string>
+	<key>PayloadType</key>
+	<string>Configuration</string>
+	<key>PayloadUUID</key>
+	<string>9C29ADE3-92C5-5E08-AA99-8451CCE763B4</string>
+	<key>PayloadVersion</key>
+	<integer>1</integer>
+</dict>
+</plist>

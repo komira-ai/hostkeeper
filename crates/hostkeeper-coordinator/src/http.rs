@@ -90,7 +90,8 @@ pub const DENIED: &str = "denied";
 /// Which listener a request came in on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Surface {
-    /// The mutual-TLS listener of the updaters.
+    /// The mutual-TLS listener of the updaters, and the LAN listener of `--lan-listen`, which
+    /// serves the same to network-installed hosts.
     Heartbeat,
     /// The private listener: the listener of CI and the operator.
     Control,
