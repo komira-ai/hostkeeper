@@ -8,7 +8,8 @@
 //! that are not a key (the pending cap, a machine id or MAC already bound, one certificate per
 //! request and round, a host id another key holds) are the store's, decided under its lock.
 //!
-//! There are two implementations here, and the coordinator adds a third on its database:
+//! There are two implementations here; the coordinator is to add a third on its database (build
+//! item C3 of docs/design/coordinator-storage.md, not built yet):
 //!
 //! - [`FileRecords`]: one file per record in the store's directory, written through the
 //!   [`Fs`](crate::fs::Fs) port, as the store has always kept them. A commit writes its records

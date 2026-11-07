@@ -806,3 +806,56 @@ fn the_files_let_a_nonce_mark_fail_quietly_only_after_its_own_approval() {
         "remembered"
     );
 }
+
+/// Catches a deny or a retire that, when the host's request cannot be read, writes nothing and
+/// so leaves the host enrolled: over the files and the fake, the call is refused naming the
+/// missing request, and the host is denied all the same (retiring after a deny, retired after a
+/// retire).
+#[test]
+fn a_deny_whose_request_cannot_be_read_still_denies_the_host() {
+    for (call, held) in [("deny", HostHeld::Denied), ("retire", HostHeld::Retired)] {
+        let missing = KeyHash::of_spki(b"a key whose request is gone");
+        let orphan = pb::Host {
+            schema: 1,
+            host_id: "web-1".to_owned(),
+            key_hash: missing.as_bytes().to_vec(),
+            machine_id: "m-1".to_owned(),
+            role: "web".to_owned(),
+            services: vec!["api".to_owned()],
+            duplicate: false,
+            first_heartbeat_unix: None,
+        };
+        let files = Files::new("records-orphan");
+        let memory: Arc<dyn Records> = Arc::new(MemoryRecords::new());
+        for records in [files.open(), memory] {
+            records
+                .commit(&[Record::Host(orphan.clone())])
+                .expect("write the host");
+            let store = EnrollmentStore::new(records.clone());
+            let web = host_id("web-1");
+            let refused = match call {
+                "deny" => store.deny(&web).map(|_| ()),
+                _ => store.retire(&web),
+            }
+            .expect_err("the host's request is missing");
+            let host_place = records.place(&RecordKey::Host(web.clone()));
+            assert_eq!(
+                refused.to_string(),
+                format!(
+                    "{} is not a store file this release reads: the host's request is missing",
+                    host_place.display()
+                ),
+                "{call} over {records:?}"
+            );
+            assert_eq!(
+                store.held(&web).expect("held"),
+                held,
+                "{call} over {records:?}"
+            );
+            assert!(
+                store.is_denied(&web).expect("denied"),
+                "{call} over {records:?}"
+            );
+        }
+    }
+}

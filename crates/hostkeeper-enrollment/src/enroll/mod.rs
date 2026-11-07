@@ -32,8 +32,8 @@
 //!   an approved host, or a deny row, whether or not the host was heard from since start.
 //!
 //! The store keeps its state through the [`records::Records`] port: the files of one directory
-//! ([`records::FileRecords`], [`EnrollmentStore::open`]), a fake ([`records::MemoryRecords`]),
-//! or the coordinator's database. Every record it reads is checked, whatever keeps it. Every
+//! ([`records::FileRecords`], [`EnrollmentStore::open`]) or a fake ([`records::MemoryRecords`]);
+//! the coordinator's database is to be a third (not built yet). Every record it reads is checked, whatever keeps it. Every
 //! mutation takes one mutex and the records' lock (for the files, an exclusive `flock` on the
 //! store's lock file). The records are the messages of
 //! `proto/hostkeeper/enrollment/store/v1/store.proto` ([`records::pb`]).

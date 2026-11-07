@@ -27,12 +27,8 @@ impl EnrollmentStore {
     pub fn deny(&self, host: &HostId) -> Result<bool, StoreError> {
         let _held = self.lock()?;
         let new = !self.denied(host)?;
-        let mut records = Vec::new();
-        if new {
-            records.push(Self::deny_record(host, DenyState::Retiring, &[]));
-        }
-        records.extend(self.request_denied(host)?);
-        self.commit(&records)?;
+        let row = new.then(|| Self::deny_record(host, DenyState::Retiring, &[]));
+        self.commit_denied(host, row.into_iter().collect())?;
         Ok(new)
     }
 
@@ -43,9 +39,23 @@ impl EnrollmentStore {
     /// [`StoreError`] when a record cannot be read or written.
     pub fn retire(&self, host: &HostId) -> Result<(), StoreError> {
         let _held = self.lock()?;
-        let mut records = vec![Self::deny_record(host, DenyState::Retired, &[])];
-        records.extend(self.request_denied(host)?);
-        self.commit(&records)
+        self.commit_denied(host, vec![Self::deny_record(host, DenyState::Retired, &[])])
+    }
+
+    /// Commits `rows` (the deny row, if any) with `host`'s request marked denied. When the
+    /// request cannot be read, the deny row is committed alone and the error returned: the host
+    /// is refused whatever else fails.
+    fn commit_denied(&self, host: &HostId, mut rows: Vec<Record>) -> Result<(), StoreError> {
+        match self.request_denied(host) {
+            Ok(request) => {
+                rows.extend(request);
+                self.commit(&rows)
+            }
+            Err(why) => {
+                self.commit(&rows)?;
+                Err(why)
+            }
+        }
     }
 
     /// The request of `host`'s key marked denied; `None` for a host id never approved.
