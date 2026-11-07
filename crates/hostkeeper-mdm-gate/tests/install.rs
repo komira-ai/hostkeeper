@@ -318,7 +318,7 @@ fn the_manifest_carries_the_digest_the_mac_checks() {
         path: PathBuf::from(format!("/var/lib/hostkeeper-mdm-pkg/{digest}.pkg")),
     };
     let host = hostkeeper_mdm_gate::MdmHost::parse("MDM.Example.com").expect("a host");
-    let uuid = CommandUuid::from_random([7; 16]);
+    let uuid = CommandUuid::from_random([0xAB; 16]);
     let command = Command::install_application(uuid, pkg::manifest(&entry, &host));
     assert!(command.is_allowed());
     assert_eq!(command.request_type(), INSTALL);
@@ -364,7 +364,7 @@ fn the_manifest_carries_the_digest_the_mac_checks() {
 		<string>InstallEnterpriseApplication</string>
 	</dict>
 	<key>CommandUUID</key>
-	<string>07070707-0707-4707-8707-070707070707</string>
+	<string>ABABABAB-ABAB-4BAB-ABAB-ABABABABABAB</string>
 </dict>
 </plist>"#
     );

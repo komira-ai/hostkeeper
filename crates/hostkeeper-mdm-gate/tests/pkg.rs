@@ -79,9 +79,9 @@ fn the_allowlist_refuses_each_broken_rule() {
             format!(
                 "{}{}",
                 entry(A, "0.1.66", &at(A)),
-                entry(B, "0.1.66.0", &at(B))
+                entry(B, "0.1.66+1", &at(B))
             ),
-            "versions 0.1.66 and 0.1.66.0 are the same release, so neither is the newest",
+            "versions 0.1.66 and 0.1.66+1 are the same release, so neither is the newest",
         ),
     ];
     for (text, why) in cases {
