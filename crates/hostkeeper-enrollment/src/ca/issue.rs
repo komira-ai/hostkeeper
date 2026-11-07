@@ -3,7 +3,7 @@
 //! | | host client certificate | coordinator server certificate |
 //! |---|---|---|
 //! | subject | `CN=host:<id>`, the approved id | `CN=hostkeeper coordinator` |
-//! | subjectAltName | none | the DNS names asked for |
+//! | subjectAltName | none | the DNS names and IP addresses asked for |
 //! | extended key usage | `clientAuth` only | `serverAuth` only |
 //! | key usage | `digitalSignature` | `digitalSignature` |
 //! | basic constraints | `CA:FALSE` | `CA:FALSE` |
@@ -15,6 +15,7 @@
 //! ([`crate::enroll::EnrollmentStore::allocate_serial`]); 1 is the CA certificate's own and is
 //! refused, as is 0.
 
+use std::net::IpAddr;
 use std::sync::Arc;
 
 use rcgen::{
@@ -52,8 +53,19 @@ pub const SERVER_COMMON_NAME: &str = "hostkeeper coordinator";
 pub enum Subject<'a> {
     /// A host's client certificate, for the approved host id.
     Host(&'a HostId),
-    /// The coordinator's server certificate, for these DNS names.
-    Server(&'a [String]),
+    /// The coordinator's server certificate, for these names.
+    Server(ServerNames<'a>),
+}
+
+/// The names a coordinator's server certificate is for: at least one DNS name, and the IP
+/// addresses a daemon dials it by (a network-installed host dials the LAN listener's address).
+/// The certificate names the DNS names first, then the addresses, each in the order given.
+#[derive(Clone, Copy, Debug)]
+pub struct ServerNames<'a> {
+    /// The DNS names.
+    pub dns: &'a [String],
+    /// The IP addresses.
+    pub ips: &'a [IpAddr],
 }
 
 /// One certificate to sign. The key has met the profile ([`P256Key`]).
@@ -168,7 +180,7 @@ impl Ca {
         })
     }
 
-    /// The coordinator's server certificate for `dns_names`, valid `validity_secs` from now (at
+    /// The coordinator's server certificate for `names`, valid `validity_secs` from now (at
     /// most [`SERVER_VALIDITY_CAP_SECS`]).
     ///
     /// # Errors
@@ -176,12 +188,12 @@ impl Ca {
     pub fn issue_server(
         &self,
         key: &P256Key,
-        dns_names: &[String],
+        names: ServerNames<'_>,
         validity_secs: u64,
         serial: u64,
     ) -> Result<Certificate, SignError> {
         self.sign(&SignRequest {
-            subject: Subject::Server(dns_names),
+            subject: Subject::Server(names),
             key,
             validity_secs,
             serial,
@@ -276,9 +288,9 @@ fn host_params(host_id: &HostId) -> CertificateParams {
     params
 }
 
-/// The coordinator's server certificate.
-fn server_params(names: &[String]) -> Result<CertificateParams, SignError> {
-    if names.is_empty() {
+/// The coordinator's server certificate: the DNS names, then the IP addresses.
+fn server_params(names: ServerNames<'_>) -> Result<CertificateParams, SignError> {
+    if names.dns.is_empty() {
         return Err(SignError::NoDnsName);
     }
     let mut params = CertificateParams::default();
@@ -287,10 +299,14 @@ fn server_params(names: &[String]) -> Result<CertificateParams, SignError> {
     params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
     params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
     params.subject_alt_names = names
+        .dns
         .iter()
         .map(String::as_str)
         .map(dns_name)
         .collect::<Result<_, _>>()?;
+    params
+        .subject_alt_names
+        .extend(names.ips.iter().copied().map(SanType::IpAddress));
     Ok(params)
 }
 

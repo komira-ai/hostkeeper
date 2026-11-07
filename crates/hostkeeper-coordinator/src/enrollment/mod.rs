@@ -180,7 +180,8 @@ impl Enrollment {
     }
 
     /// One look at the server certificate file, at the time the clock reads: it is made again
-    /// when it is due ([`ServerFile::keep`]: a third of its validity or less left). The reload
+    /// when it is due ([`ServerFile::keep`]: a third of its validity or less left) or names
+    /// other names than the flags (`--server-name`, the address of `--lan-listen`). The reload
     /// loop calls this before it looks at the TLS files, so a new file is served from the same
     /// tick. A look that fails is logged at error level and kept for the status
     /// ([`Enrollment::server_certificate`]) until a later look succeeds; the file in use is left

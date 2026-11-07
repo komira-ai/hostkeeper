@@ -9,25 +9,32 @@
 //! - The store is the directory `--enrollment-dir` names.
 //! - The server certificate is the file `--server-cert-file` names: one PEM file, mode 0600,
 //!   holding the certificate, the CA certificate and the certificate's P-256 key, in that order,
-//!   which the heartbeat listener serves (its chain ends in the CA a daemon pins). The start
-//!   makes a new one, with a new key, a serial from the store and the DNS names of
-//!   `--server-name`, valid [`SERVER_VALIDITY_CAP_SECS`], when the file is missing, does not
-//!   start with a certificate, or has less than a third of its validity left ([`server_due`]).
+//!   which the heartbeat listener serves, and the LAN listener with it (its chain ends in the CA
+//!   a daemon pins). The start makes a new one, with a new key, a serial from the store, the DNS
+//!   names of `--server-name` and the IP address of `--lan-listen`, valid
+//!   [`SERVER_VALIDITY_CAP_SECS`], when the file is missing, does not start with a certificate,
+//!   has less than a third of its validity left ([`server_due`]), or names other names than
+//!   those (a name changed, added or removed; the order is not looked at).
 //!   While the coordinator runs, each tick of the reload loop asks the same question of the
 //!   file and makes it again the same way ([`ServerFile::keep`], through
 //!   [`crate::enrollment::Enrollment::renew_server`]). The new file is written whole: a
 //!   temporary file beside it (mode 0600), fsync, rename over the old one, fsync of the
 //!   directory; a write that fails removes the temporary file and leaves the old one served.
 
+use std::collections::BTreeSet;
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use base64::Engine as _;
-use hostkeeper_enrollment::ca::{Ca, CaError, CaFiles, P256Key, SERVER_VALIDITY_CAP_SECS, Signer};
+use hostkeeper_enrollment::ca::{
+    Ca, CaError, CaFiles, P256Key, SERVER_VALIDITY_CAP_SECS, ServerNames, Signer,
+};
 use hostkeeper_enrollment::enroll::{EnrollmentStore, StoreError};
 use hostkeeper_enrollment::fs::{Fs, temp_name, write_atomic};
 use hostkeeper_enrollment::validity::UnixClock;
 use rcgen::{KeyPair, PKCS_ECDSA_P256_SHA256, PublicKeyData};
+use x509_parser::extensions::GeneralName;
 
 use super::{Enrollment, Random};
 
@@ -50,6 +57,9 @@ pub struct Setup<'a> {
     pub server_cert: &'a Path,
     /// `--server-name`, each.
     pub server_names: &'a [String],
+    /// The IP addresses the server certificate names besides: the address of `--lan-listen`,
+    /// when it is given.
+    pub server_ips: &'a [IpAddr],
 }
 
 /// Why enrollment did not start.
@@ -100,17 +110,70 @@ pub fn pem(label: &str, der: &[u8]) -> String {
     out
 }
 
+/// One subjectAltName of a server certificate, as the names it is made for are compared.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Name {
+    /// A DNS name.
+    Dns(String),
+    /// An IP address: its 4 or 16 bytes, as the certificate holds them.
+    Ip(Vec<u8>),
+    /// Any other name, which the coordinator never asks for.
+    Other,
+}
+
+impl Name {
+    /// `name`, as a certificate's subjectAltName.
+    fn of(name: &GeneralName<'_>) -> Name {
+        match name {
+            GeneralName::DNSName(dns) => Name::Dns((*dns).to_owned()),
+            GeneralName::IPAddress(bytes) => Name::Ip(bytes.to_vec()),
+            _ => Name::Other,
+        }
+    }
+
+    /// `ip` as a certificate holds it.
+    fn ip(ip: &IpAddr) -> Name {
+        Name::Ip(match ip {
+            IpAddr::V4(v4) => v4.octets().to_vec(),
+            IpAddr::V6(v6) => v6.octets().to_vec(),
+        })
+    }
+}
+
+/// What the certificate a server certificate file starts with holds that decides whether it is
+/// made again: its validity, as unix seconds `(not_before, not_after)`, and its subjectAltNames
+/// (none when it has no such extension, or one that does not parse).
+struct Held {
+    window: (i64, i64),
+    names: BTreeSet<Name>,
+}
+
+/// What the certificate the server certificate file whose bytes are `file` starts with holds;
+/// `None` when its first PEM block is no certificate.
+fn held_of(file: &[u8]) -> Option<Held> {
+    let (_, block) = x509_parser::pem::parse_x509_pem(file).ok()?;
+    let certificate = block.parse_x509().ok()?;
+    let validity = certificate.validity();
+    let names = certificate
+        .subject_alternative_name()
+        .ok()
+        .flatten()
+        .map(|san| san.value.general_names.iter().map(Name::of).collect())
+        .unwrap_or_default();
+    Some(Held {
+        window: (
+            validity.not_before.timestamp(),
+            validity.not_after.timestamp(),
+        ),
+        names,
+    })
+}
+
 /// The validity of the certificate the server certificate file whose bytes are `file` starts
 /// with, as unix seconds `(not_before, not_after)`; `None` when its first PEM block is no
 /// certificate.
 fn validity_of(file: &[u8]) -> Option<(i64, i64)> {
-    let (_, block) = x509_parser::pem::parse_x509_pem(file).ok()?;
-    let certificate = block.parse_x509().ok()?;
-    let validity = certificate.validity();
-    Some((
-        validity.not_before.timestamp(),
-        validity.not_after.timestamp(),
-    ))
+    held_of(file).map(|held| held.window)
 }
 
 /// Whether the server certificate file whose bytes are `file` is made again at `now` (unix
@@ -130,13 +193,15 @@ fn due(window: Option<(i64, i64)>, now: u64) -> bool {
 }
 
 /// The coordinator's server certificate file (`--server-cert-file`) and the names it is made
-/// for (`--server-name`), written through a file-system port.
+/// for (the DNS names of `--server-name`, the address of `--lan-listen`), written through a
+/// file-system port.
 pub struct ServerFile {
     fs: Arc<dyn Fs>,
     path: PathBuf,
     dir: PathBuf,
     name: String,
     names: Vec<String>,
+    ips: Vec<IpAddr>,
 }
 
 impl std::fmt::Debug for ServerFile {
@@ -144,6 +209,7 @@ impl std::fmt::Debug for ServerFile {
         f.debug_struct("ServerFile")
             .field("path", &self.path)
             .field("names", &self.names)
+            .field("ips", &self.ips)
             .finish_non_exhaustive()
     }
 }
@@ -158,11 +224,16 @@ pub struct Kept {
 }
 
 impl ServerFile {
-    /// The file `path` for the DNS names `names`, through `fs`.
+    /// The file `path` for the DNS names `names` and the IP addresses `ips`, through `fs`.
     ///
     /// # Errors
     /// The text of why: `path` does not name a file.
-    pub fn new(fs: Arc<dyn Fs>, path: &Path, names: &[String]) -> Result<ServerFile, String> {
+    pub fn new(
+        fs: Arc<dyn Fs>,
+        path: &Path,
+        names: &[String],
+        ips: &[IpAddr],
+    ) -> Result<ServerFile, String> {
         let name = path
             .file_name()
             .and_then(|name| name.to_str())
@@ -177,6 +248,7 @@ impl ServerFile {
             dir: dir.to_path_buf(),
             name: name.to_owned(),
             names: names.to_vec(),
+            ips: ips.to_vec(),
         })
     }
 
@@ -186,8 +258,16 @@ impl ServerFile {
         &self.path
     }
 
-    /// Reads the file and, when it is due at `now` ([`server_due`]), makes it again: a new key,
-    /// a serial from `store`, a certificate `ca` signs for [`SERVER_VALIDITY_CAP_SECS`], written
+    /// The names the file is made for, as a certificate's subjectAltNames are compared.
+    fn wanted(&self) -> BTreeSet<Name> {
+        let dns = self.names.iter().cloned().map(Name::Dns);
+        dns.chain(self.ips.iter().map(Name::ip)).collect()
+    }
+
+    /// Reads the file and, when it is due at `now` ([`server_due`]) or its certificate names
+    /// other names than the file is made for (a DNS name or an IP address added, removed or
+    /// changed; their order is not looked at), makes it again: a new key, a serial from
+    /// `store`, a certificate `ca` signs for [`SERVER_VALIDITY_CAP_SECS`], written
     /// whole (a temporary file of mode 0600 beside it, fsync, rename over it, fsync of the
     /// directory). A write that fails removes the temporary file; the file is then as it was.
     ///
@@ -196,10 +276,21 @@ impl ServerFile {
     /// made, or the file cannot be written.
     pub fn keep(&self, ca: &Ca, store: &EnrollmentStore, now: u64) -> Result<Kept, String> {
         let existing = self.fs.read(&self.path).map_err(|e| e.to_string())?;
-        let window = existing.as_deref().and_then(validity_of);
+        let held = existing.as_deref().and_then(held_of);
+        let renamed = held
+            .as_ref()
+            .is_some_and(|held| held.names != self.wanted());
+        if renamed {
+            tracing::info!(
+                names = ?self.names,
+                ips = ?self.ips,
+                "the server certificate names other names than the flags: making it again"
+            );
+        }
         // A certificate that is not due ends after `now`, so its end is a `u64`.
-        let in_use = window
-            .filter(|_| !due(window, now))
+        let in_use = held
+            .map(|held| held.window)
+            .filter(|window| !renamed && !due(Some(*window), now))
             .and_then(|(_, end)| u64::try_from(end).ok());
         match in_use {
             Some(not_after) => Ok(Kept {
@@ -207,7 +298,11 @@ impl ServerFile {
                 not_after,
             }),
             None => {
-                let (text, not_after) = server_pem(ca, store, &self.names)?;
+                let names = ServerNames {
+                    dns: &self.names,
+                    ips: &self.ips,
+                };
+                let (text, not_after) = server_pem(ca, store, names)?;
                 self.write(text.as_bytes())?;
                 Ok(Kept {
                     renewed: true,
@@ -259,10 +354,15 @@ pub fn setup(
         path: setup.server_cert.to_path_buf(),
         reason,
     };
-    let file = ServerFile::new(fs, setup.server_cert, setup.server_names).map_err(server)?;
+    let file = ServerFile::new(fs, setup.server_cert, setup.server_names, setup.server_ips)
+        .map_err(server)?;
     let kept = file.keep(&ca, &store, clock.now_unix()).map_err(server)?;
     if kept.renewed {
-        tracing::info!(names = ?setup.server_names, "made the coordinator's server certificate");
+        tracing::info!(
+            names = ?setup.server_names,
+            ips = ?setup.server_ips,
+            "made the coordinator's server certificate"
+        );
     }
     Ok(Enrollment::new(
         store,
@@ -276,7 +376,11 @@ pub fn setup(
 
 /// A new server certificate for `names`, as the file holds it (the certificate, the CA
 /// certificate, and the new key), and the end of its validity in unix seconds.
-fn server_pem(ca: &Ca, store: &EnrollmentStore, names: &[String]) -> Result<(String, u64), String> {
+fn server_pem(
+    ca: &Ca,
+    store: &EnrollmentStore,
+    names: ServerNames<'_>,
+) -> Result<(String, u64), String> {
     let pair = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).map_err(|e| e.to_string())?;
     let key = P256Key::from_spki(&pair.subject_public_key_info()).map_err(|e| e.to_string())?;
     let serial = store.allocate_serial().map_err(|e| e.to_string())?;
