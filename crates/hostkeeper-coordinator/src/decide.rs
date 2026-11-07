@@ -410,8 +410,8 @@ fn order_or_hold(
 
 /// The uninstall of `def` the host `id` is ordered by `order_id`, or the first rule that holds
 /// it back: the host must still list the service, and the hold, the quiet start, the one update
-/// at a time on the host, its failure or deferral of this uninstall and the one live update hold
-/// it.
+/// at a time on the host, its failure or deferral of this uninstall and the other services' live
+/// rollouts hold it.
 fn uninstall(
     services: &Services,
     def: &ServiceDef,

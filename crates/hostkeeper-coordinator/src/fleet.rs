@@ -18,9 +18,9 @@
 //! ([`Fleet::note_node`]): the count of each host's heartbeats whose clock was off
 //! ([`Node::skewed_beats`]) starts again from zero after a restart.
 //!
-//! The operator's holds and the hosts a standing force orders are kept here as a copy of the ops
-//! store's ([`Marks`]), refreshed under the fleet's lock, so the decisions read them with the
-//! beats; the `abort` orders an operator queued are kept in memory only, like the other orders.
+//! The operator's holds, the hosts a standing force orders and where each service's update plan
+//! stands are kept here as a copy of the ops store's ([`Marks`]), refreshed under the fleet's
+//! lock, so the decisions read them with the beats; the `abort` orders an operator queued are kept in memory only, like the other orders.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
@@ -103,9 +103,9 @@ impl Host {
             && !self.beat.promotion_pending
     }
 
-    /// Whether the host holds an update slot (one is live at a time across every service,
-    /// [`crate::decide`]): it is updating, its promotion is pending, or its last update failed
-    /// and it has not yet heartbeated healthy. A failed install that left the service absent
+    /// Whether the host holds an update slot (a service's plan counts them against the role's
+    /// `max_updating`, [`crate::stages`]): it is updating, its promotion is pending, or its last
+    /// update failed and it has not yet heartbeated healthy. A failed install that left the service absent
     /// (staged, never run) holds none: like a failed update rolled back, nothing of it runs.
     #[must_use]
     pub fn holds_slot(&self) -> bool {
@@ -450,7 +450,7 @@ impl Fleet {
     /// Forgets the host `id` everywhere, if its update record is final: no service it was
     /// heard for (counted or not) shows it updating or waiting for its promotion, and no order
     /// for it is outstanding at `now`. Its slot, its bake and its orders go with it, so a
-    /// retiring host frees the one live update slot once it has finished (design 6.1). Returns
+    /// retiring host frees its update slot once it has finished (design 6.1). Returns
     /// whether it was forgotten.
     pub fn release_if_final(&mut self, id: &HostId, now: Duration) -> bool {
         let in_flight = self
@@ -755,9 +755,9 @@ impl Fleet {
     }
 
     /// Every host whose last word about `service` the fleet keeps, counted or not: the
-    /// service's hosts and the ones it no longer counts. One live update at a time is counted
-    /// over these ([`crate::decide`]), so a host that leaves a service mid-update still holds
-    /// its slot.
+    /// service's hosts and the ones it no longer counts. The update slots of a plan are counted
+    /// over these ([`crate::decide`], [`crate::stages`]), so a host that leaves a service
+    /// mid-update still holds its slot.
     pub fn occupants_of(&self, service: &str) -> impl Iterator<Item = (&HostId, &Host)> {
         self.hosts_of(service)
             .chain(self.outside.get(service).into_iter().flatten())

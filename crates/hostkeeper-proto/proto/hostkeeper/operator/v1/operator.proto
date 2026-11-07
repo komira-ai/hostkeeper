@@ -101,7 +101,8 @@ service Hosts {
 
 // The desired version of each service, how far the hosts are, and the operator's overrides.
 service Releases {
-  // Set a service's desired state. The coordinator moves its hosts there a role at a time. Takes
+  // Set a service's desired state. The coordinator moves its hosts there by the service's update
+  // plan, stage by stage (`Rollouts`), a role's `max_updating` at a time. Takes
   // CI's OIDC token (the services its allow-list entry names) or the operator token (any service
   // the coordinator manages, audited as `set_desired` under the token's name).
   rpc SetDesired(SetDesiredRequest) returns (SetDesiredResponse);
@@ -450,9 +451,9 @@ enum GateReason {
   // As many hosts of the host's role hold an update slot of the service as the desired state's
   // `max_updating` of the role lets.
   GATE_REASON_NO_SLOT = 14;
-  // No longer produced: the one live update orders roles already.
+  // No longer produced: `no_slot` counts the hosts of each role.
   GATE_REASON_WAITING_FOR_ROLE = 15;
-  // No longer produced: the one live update orders services already.
+  // No longer produced: `rollout_elsewhere` says a service waits for others.
   GATE_REASON_WAITING_FOR_SERVICE = 16;
   // No longer produced: `below_min_up` says it.
   GATE_REASON_MIN_UP = 17;
@@ -508,7 +509,7 @@ message ExcludeRequest {
   string service = 1;
   string node_id = 2;
   string reason = 3;
-  // Also free the one live update slot the host holds for the service mid-update, for a host
+  // Also free the update slot the host holds for the service mid-update, for a host
   // that is gone and will not report its update final. False (the default) keeps the slot.
   bool abandon = 4;
 }
@@ -726,9 +727,9 @@ message HostCounts {
 // downgrade marks bad each version it leaves (from the installed versions the targeted hosts last
 // reported). Each is an audit entry.
 //
-// It orders the `force` on each targeted host at its next heartbeat, passing the one live update,
-// the canary, the bake, a deferral, bad marks, a standing halt and a host's failure of the
-// version, so one call may reach every host in the same heartbeat round. It skips a pair an
+// It orders the `force` on each targeted host at its next heartbeat, passing the update plan (its
+// stages, limits, pause and the other services' rollouts), the canary, the bake, a deferral, bad
+// marks, a standing halt and a host's failure of the version, so one call may reach every host in the same heartbeat round. It skips a pair an
 // operator holds and lists the host in `held`, unless `include_held` is set: then it orders the
 // held pairs it targets, for this call only, and removes no hold.
 //

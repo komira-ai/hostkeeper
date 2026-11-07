@@ -18,10 +18,10 @@ It is made of two programs:
   trusted signer attested. The conformance suite runs in the service's own CI
   ([docs/conformance.md](docs/conformance.md)); nothing confines a hook at runtime;
 - **one coordinator**, `hostkeeper-coordinator serve`, which assigns services to hosts and holds
-  the desired version of each, and moves hosts to it a group at a time. Operators use it through
-  the operator API, the generated `hostkeeper ctl` ([docs/ctl.md](docs/ctl.md)) and the web UI
-  (`ui/`). A new host asks the coordinator to enroll it, and an operator approves the request.
-  Macs are to be managed through a self-hosted MDM server; that part is not built
+  the desired version of each, and moves hosts to it stage by stage, each service by its update
+  plan. Operators use it through the operator API, the generated `hostkeeper ctl`
+  ([docs/ctl.md](docs/ctl.md)) and the web UI (`ui/`). A new host asks the coordinator to enroll
+  it, and an operator approves the request. Macs are to be managed through a self-hosted MDM server; that part is not built
   ([macOS](docs/macos.md)).
 
 Every API is a protobuf service, and the command line is generated from those definitions.

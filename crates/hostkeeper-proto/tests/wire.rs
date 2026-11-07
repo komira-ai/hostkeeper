@@ -367,7 +367,7 @@ fn fields_of(pool: &DescriptorPool, message: &str) -> Vec<(String, u32)> {
 }
 
 /// The RPCs of the coordinator's services, pinned.
-const RPCS: [(&str, &[&str]); 7] = [
+const RPCS: [(&str, &[&str]); 8] = [
     (
         "hostkeeper.agent.v1.Coordinator",
         &[
@@ -432,11 +432,19 @@ const RPCS: [(&str, &[&str]); 7] = [
         "hostkeeper.operator.v1.Alerts",
         &["List(ListAlertsRequest) ListAlertsResponse"],
     ),
+    (
+        "hostkeeper.operator.v1.Rollouts",
+        &[
+            "Advance(AdvanceRequest) AdvanceResponse",
+            "Pause(PauseRequest) PauseResponse",
+            "Resume(ResumeRequest) ResumeResponse",
+        ],
+    ),
 ];
 
 /// The fields of the enrollment, abort, retire, audit and force-report messages, pinned by name
 /// and number.
-const FIELDS: [(&str, &[(&str, u32)]); 35] = [
+const FIELDS: [(&str, &[(&str, u32)]); 46] = [
     (
         "hostkeeper.agent.v1.HeartbeatResponse",
         &[
@@ -701,6 +709,87 @@ const FIELDS: [(&str, &[(&str, u32)]); 35] = [
         "hostkeeper.operator.v1.SkippedHost",
         &[("node_id", 1), ("reason", 2)],
     ),
+    (
+        "hostkeeper.operator.v1.AdvanceRequest",
+        &[("service", 1), ("reason", 2)],
+    ),
+    (
+        "hostkeeper.operator.v1.AdvanceResponse",
+        &[("entry", 1), ("plan", 2)],
+    ),
+    (
+        "hostkeeper.operator.v1.PauseRequest",
+        &[("service", 1), ("reason", 2)],
+    ),
+    (
+        "hostkeeper.operator.v1.PauseResponse",
+        &[("entry", 1), ("plan", 2)],
+    ),
+    (
+        "hostkeeper.operator.v1.ResumeRequest",
+        &[("service", 1), ("reason", 2)],
+    ),
+    (
+        "hostkeeper.operator.v1.ResumeResponse",
+        &[("entry", 1), ("plan", 2)],
+    ),
+    (
+        "hostkeeper.operator.v1.RolloutPlan",
+        &[
+            ("version", 1),
+            ("stages", 2),
+            ("current", 3),
+            ("eligible", 4),
+            ("waiting", 5),
+            ("paused", 6),
+            ("paused_by", 7),
+            ("pause_reason", 8),
+            ("finished", 9),
+        ],
+    ),
+    (
+        "hostkeeper.operator.v1.PlanStage",
+        &[
+            ("number", 1),
+            ("percent", 2),
+            ("hosts", 3),
+            ("advance", 4),
+            ("members", 5),
+        ],
+    ),
+    (
+        "hostkeeper.operator.v1.PlanHost",
+        &[("node_id", 1), ("role", 2), ("state", 3), ("deferring", 4)],
+    ),
+    (
+        "hostkeeper.operator.v1.HostService",
+        &[
+            ("service", 1),
+            ("up", 2),
+            ("holds_slot", 3),
+            ("gate_reason", 4),
+            ("membership", 5),
+            ("holds", 6),
+            ("installed_version", 7),
+            ("health", 8),
+            ("last_update", 9),
+            ("excluded_reason", 10),
+            ("stage", 11),
+        ],
+    ),
+    (
+        "hostkeeper.operator.v1.ServiceStatus",
+        &[
+            ("service", 1),
+            ("desired", 2),
+            ("convergence", 3),
+            ("hosts", 4),
+            ("up", 5),
+            ("slots_held", 6),
+            ("marks", 7),
+            ("plan", 8),
+        ],
+    ),
 ];
 
 /// Catches: a name on the wire renamed or renumbered without this test changing with it: the
@@ -744,7 +833,7 @@ fn wire_names_are_pinned() {
     ];
     assert_eq!(fields, want.map(|(name, number)| (name.to_owned(), number)));
 
-    let cases: [(&str, &str, &[&str]); 16] = [
+    let cases: [(&str, &str, &[&str]); 20] = [
         (
             "hostkeeper.agent.v1.CoordinatorRefusal",
             "COORDINATOR_REFUSAL_",
@@ -898,6 +987,49 @@ fn wire_names_are_pinned() {
                 "forbidden",
                 "invalid_request",
                 "store_failed",
+            ],
+        ),
+        (
+            "hostkeeper.operator.v1.RolloutsRefusal",
+            "ROLLOUTS_REFUSAL_",
+            &[
+                "unauthorized",
+                "forbidden",
+                "invalid_request",
+                "unknown_service",
+                "no_desired",
+                "not_waiting",
+                "already_paused",
+                "not_paused",
+                "store_failed",
+                "audit_unavailable",
+            ],
+        ),
+        (
+            "hostkeeper.operator.v1.StageAdvance",
+            "STAGE_ADVANCE_",
+            &["auto", "manual"],
+        ),
+        (
+            "hostkeeper.operator.v1.PlanHostState",
+            "PLAN_HOST_STATE_",
+            &["waiting", "updating", "baking", "done", "failed"],
+        ),
+        (
+            "hostkeeper.operator.v1.PlanWait",
+            "PLAN_WAIT_",
+            &[
+                "none",
+                "halted",
+                "paused",
+                "quiet",
+                "rollout_elsewhere",
+                "manual_advance",
+                "failed_host",
+                "below_min_up",
+                "updating",
+                "deferring",
+                "baking",
             ],
         ),
         (

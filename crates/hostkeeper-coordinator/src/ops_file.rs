@@ -7,7 +7,11 @@
 //! the halts file (`<ops-file>.halts`): the whole report a halt and each acknowledgement were
 //! made from, who raised the halt (`origin`, written only for the updater and an operator: a
 //! record without it is a hook's halt, and a release that does not know an origin reads a hook's), the reports received while a halt stood (`halt_seen`) and the clear
-//! generation of each service (`halt_generation`).
+//! generation of each service (`halt_generation`). The plan position of each service
+//! ([`crate::rollouts`]: the version it is for, the stages entered, the hosts done, an operator's
+//! pause) lives there too, under `rollouts`, read like the rest: a position this release cannot
+//! read is passed over and counted, and costs only that position (the plan reads as if none
+//! was kept, as it does for a new desired version).
 //!
 //! The reader of the halts file skips a key it does not know. A record whose report it cannot
 //! read (an outcome a later release added, say) is passed over as a whole and counted, and the

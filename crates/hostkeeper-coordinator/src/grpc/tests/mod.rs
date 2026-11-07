@@ -23,4 +23,5 @@ mod readme_status;
 mod refusal;
 mod release_index;
 mod report;
+mod rollouts;
 mod support;

@@ -35,7 +35,7 @@ pub struct HostStatus {
     pub live: bool,
     /// Live, healthy and not updating.
     pub up: bool,
-    /// Holds an update slot for the service (one is live at a time across every service).
+    /// Holds an update slot for the service (the plan's `max_updating` of the role counts these).
     pub holds_slot: bool,
     /// Whole seconds since its last heartbeat.
     pub silent_secs: u64,

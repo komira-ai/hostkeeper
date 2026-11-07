@@ -40,6 +40,14 @@ it again.
   text of the release index and its digest; the text is sent as typed), assigns the service to a role, and unassigns it from a role, with a box to
   uninstall it from each host that loses its last assignment. Setting the desired version and
   unassigning with uninstall ask first.
+  The section also shows the service's update plan from `Releases.Status`: the stage sizes with
+  their percents (a stage an operator enters is marked manual) against the eligible hosts, the
+  stage the plan is in ("2 of 3"), why it waits (and for which stage, or that an operator paused
+  it, who and why), the hosts that hold update slots (several can at once), and a table of the
+  stages with their hosts and each host's state. Its buttons call `Rollouts.Advance` (offered
+  only while the plan waits for a manual advance), `Rollouts.Pause` (while it is not paused) and
+  `Rollouts.Resume` (while it is paused), each with the reason typed in the section and a
+  confirmation first.
 - **Host**: the services assigned to that host, how each is assigned (to the host or through its
   role), the installed version against the desired one, and the minimum version.
 - Each action is one API call, and the Audit page shows it by the token's name. A refused call

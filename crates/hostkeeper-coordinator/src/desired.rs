@@ -6,10 +6,11 @@
 //! halts file beside it, which holds halt reports and clear generations.
 //!
 //! CI sets a desired state with one call: the version every host should run, and two maps the
-//! file format carries, how many hosts of a kind may update at once and how many of a role must
-//! stay up. Both are read, kept and printed as CI sent them, and no decision reads either: one
-//! update is live at a time across every service ([`crate::decide`]), and the convergence needs
-//! no number of hosts up. The store keeps one such state per service name; a service must be one
+//! file format carries, how many hosts of a role may update at once and how many of a role must
+//! stay up. Both are kept and printed as CI sent them, and the update plan of a service reads
+//! them: the hosts of a stage update at once up to a role's `max_updating`, and never so that
+//! fewer than its `min_up` stay up ([`crate::stages`]); the convergence needs no number of
+//! hosts up. The store keeps one such state per service name; a service must be one
 //! the rollout file defines (`crate::services`). The file is small JSON, replaced whole by a
 //! temporary file, fsync, rename and a directory fsync, so a crash leaves the old state or the
 //! new one. A directory fsync that fails after the rename leaves the new state in place
@@ -70,7 +71,8 @@ pub fn is_role_name(name: &str) -> bool {
 }
 
 /// A number per role name: the limit on hosts updating at once, or the minimum that stays up, as
-/// the desired-state file carries them. They are kept and printed; no decision reads them.
+/// the desired-state file carries them. They are kept and printed, and the update plan of a
+/// service reads them ([`crate::stages`]).
 ///
 /// A role the map does not name has the default of the question asked ([`Self::max_updating_of`],
 /// [`Self::min_up_of`]). The defaults are for a role a service definition names: whether a role
@@ -193,16 +195,17 @@ pub struct Desired {
     /// The version every host should run. An older one than the hosts run is a rollback.
     pub version: Version,
     /// The per-role limit on hosts updating at once. Kept, read and written as before so
-    /// older states load and older coordinators read this one's; no decision reads it: one
-    /// update is live at a time across every service ([`crate::decide`]).
+    /// older states load and older coordinators read this one's. The hosts of a plan's stage
+    /// update in parallel up to it for their role ([`crate::stages`]).
     #[serde(
         default = "RoleLimits::max_updating_default",
         deserialize_with = "read_max_updating",
         serialize_with = "write_max_updating"
     )]
     pub max_updating: RoleLimits,
-    /// The minimum number of hosts that stay up. Kept, read and written as before; nothing
-    /// decides on it, and the convergence needs no number of hosts up.
+    /// The minimum number of hosts of a role that stay up. Kept, read and written as before. A
+    /// plan orders no host that would leave fewer live hosts of its role up
+    /// ([`crate::stages`]); the convergence needs no number of hosts up.
     #[serde(serialize_with = "write_min_up")]
     pub min_up: RoleLimits,
     /// The digest of the package of `version`, as CI set it ([`crate::registry`]); none when CI
@@ -317,7 +320,7 @@ impl Desired {
         // record's key and must never be handed one: a request cannot write the record.
         let index_text = fields.remove("release_index");
         let index_digest = fields.remove("release_index_digest");
-        // `min_up` is optional for every service: nothing decides on it any more, and the file
+        // `min_up` is optional for every service: it is 0 when CI sends none, and the file
         // written names the format's two keys either way (`write_min_up`).
         fields
             .entry("min_up")

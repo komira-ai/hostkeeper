@@ -14,7 +14,8 @@
 //! - `converged`: past the quiet start, at least one live host, every live host at the
 //!   desired version, and none updating, failed, still baking or waiting for a promotion.
 //!   The last two keep a coordinator that has just restarted, and has heard from few hosts,
-//!   from reporting a farm converged. The desired state's `min_up` is not read.
+//!   from reporting a farm converged. The convergence reads no `min_up`; the update plan does
+//!   ([`crate::stages`]).
 //! - `halted`: a host reported a failure no version can repair and an operator has not
 //!   cleared it. It wins over every other state, and the convergence names the halt
 //!   (`halt`: the host, the check and the version); see [`crate::halt`].

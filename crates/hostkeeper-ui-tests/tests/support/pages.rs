@@ -87,6 +87,33 @@ pub fn alerts_reply() -> Value {
     ]})
 }
 
+/// The update plan of `api` in `status_reply`: three stages over eight eligible hosts, the second
+/// entered by an operator, the first done and the second waiting for its Advance.
+pub fn api_plan() -> Value {
+    json!({
+        "version": "1.4.0", "current": 1, "eligible": 8, "waiting": "PLAN_WAIT_MANUAL_ADVANCE",
+        "stages": [
+            {"number": 1, "percent": 1, "hosts": 1, "advance": "STAGE_ADVANCE_AUTO",
+             "members": [{"nodeId": "web-1", "role": "web", "state": "PLAN_HOST_STATE_DONE"}]},
+            {"number": 2, "percent": 50, "hosts": 4, "advance": "STAGE_ADVANCE_MANUAL",
+             "members": [{"nodeId": "web-4", "role": "web", "state": "PLAN_HOST_STATE_WAITING"},
+                         {"nodeId": "web-5", "role": "web", "state": "PLAN_HOST_STATE_WAITING",
+                          "deferring": true}]},
+            {"number": 3, "percent": 100, "hosts": 8, "advance": "STAGE_ADVANCE_AUTO"},
+        ],
+    })
+}
+
+/// The update plan of `web` in `status_reply`: one stage, paused by an operator.
+pub fn paused_plan() -> Value {
+    json!({
+        "version": "0.9.0", "current": 1, "eligible": 1, "waiting": "PLAN_WAIT_PAUSED",
+        "paused": true, "pausedBy": "ops", "pauseReason": "freeze for audit",
+        "stages": [{"number": 1, "percent": 100, "hosts": 1, "advance": "STAGE_ADVANCE_AUTO",
+                    "members": [{"nodeId": "web-9", "role": "web", "state": "PLAN_HOST_STATE_BAKING"}]}],
+    })
+}
+
 pub fn status_reply() -> Value {
     json!({
         "services": [
@@ -100,13 +127,15 @@ pub fn status_reply() -> Value {
                  {"nodeId": "web-1", "role": "web", "live": true,
                   "view": {"service": "api", "holdsSlot": true, "gateReason": "GATE_REASON_UPDATING"}},
                  {"nodeId": "web-4", "role": "web", "live": true,
-                  "view": {"service": "api", "gateReason": "GATE_REASON_CANARY_WAIT"}},
+                  "view": {"service": "api", "gateReason": "GATE_REASON_ADVANCE_WAIT", "stage": 2}},
                  {"nodeId": "web-5", "role": "web", "live": true,
                   "view": {"service": "api", "gateReason": "GATE_REASON_BAKING"}}],
              "up": 4,
+             "plan": api_plan(),
              "marks": {"halt": {"nodeId": "web-2", "check": "disk_full", "target": "1.4.0"},
                        "lastGood": "1.2.9", "bad": ["1.3.0"], "badByForce": ["1.2.0"]}},
-            {"service": "web", "convergence": {"state": "CONVERGENCE_STATE_CONVERGED"}},
+            {"service": "web", "convergence": {"state": "CONVERGENCE_STATE_CONVERGED"},
+             "plan": paused_plan()},
         ],
         "audit": [
             {"seq": "6", "by": "ACTOR_OPERATOR", "action": "hold", "service": "api", "nodeId": "web-2"},

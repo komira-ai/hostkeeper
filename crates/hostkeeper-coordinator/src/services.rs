@@ -4,10 +4,10 @@
 //! The rollout file (`--rollout-file`) is TOML with one `[[service]]` table for each service the
 //! coordinator manages. A [`ServiceDef`] has a name, a version scheme, the roles it runs on (a
 //! plain list of role names: the base of its assignment, [`crate::assignment`]) and the settings
-//! of its rollout: its priority, the hosts it is selected for, how long an updated host holds its
-//! slot, its update plan and canary ([`crate::stages`]), the automatic rollback and the backoff
-//! of a deferral. The decision reads
-//! these and branches on no service name.
+//! of its rollout: its priority, the hosts it is selected for, how long an updated host bakes
+//! before its stage is done, its update plan and canary ([`crate::stages`]), the automatic
+//! rollback and the backoff of a deferral. The decision reads these and branches on no service
+//! name.
 //!
 //! No service is built in: the services are the ones the file defines (an empty file defines
 //! none). A role is any [`RoleName`]. Every table refuses a key it does not know, naming it, so
@@ -27,7 +27,7 @@
 //! roles = ["storage", "daemon"]  # a host of any other role is ordered for the service only
 //!                                # when an operator assigned it there
 //! priority = 0                   # default 0; a host is offered the higher number first
-//! bake_beats = 0                 # default 0, at most 100: healthy beats before a slot frees
+//! bake_beats = 0                 # default 0, at most 100: healthy beats before a stage is done
 //! canary = { count = 1 }         # optional: a first stage of this many hosts
 //! stages = [1, 10, { percent = 50, advance = "manual" }, 100]
 //!                                # the update plan: each stage the percent of the eligible
@@ -128,8 +128,8 @@ pub struct ServiceDef {
     pub priority: i32,
     /// Which hosts should run the service (`None`: the hosts that announce it).
     pub selector: Option<Selector>,
-    /// How many healthy beats a host at the desired version must send before it frees the
-    /// slot it held while updating (default 0: it frees it at once).
+    /// How many healthy beats a host at the desired version must send before it has baked and
+    /// its stage of the update plan can be done (default 0: it has baked at once).
     pub bake_beats: u32,
     /// The hosts that go alone first, if the service has a canary: the first stage of its
     /// `plan`, kept for the rollback, which a canary's failure reaches alone.

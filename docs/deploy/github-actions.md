@@ -5,7 +5,8 @@ A push to `main` that changes code becomes a hostkeeper release by itself
 `RELEASE_SETS_DESIRED` set to `true`, the same run then deploys that release to the fleet: it
 waits until the release channel holds the release, and sets it as the desired version of the
 service `hostkeeper` on the coordinator, through one call with an OIDC token. The coordinator's
-rollout gate does the rest: the canary hosts first, then every other host once they have baked.
+rollout gate does the rest: the service's update plan rolls the release out stage by stage, the
+canary or first stage of hosts first, then more hosts once each stage has baked.
 
 CI uploads nothing and holds no secret. The release reaches the channel through the channel's own
 sync, which pulls from GitHub; the coordinator call's one credential is the OIDC token GitHub
@@ -44,12 +45,17 @@ issues to the job.
    does not hold (`not_in_channel`) or holds with other bytes (`channel_digest_mismatch`). A
    version below the service's `min_version`, or marked bad, is refused too. Nothing changes on a
    refusal.
-7. **The canary gate orders the hosts.** With `canary = { count = n }` in hostkeeper's
-   `[[service]]` table of the rollout file, the coordinator orders at most `n` hosts first; every
-   other host waits until `n` hosts have reported the new version healthy for `bake_beats`
-   heartbeats. Then the rest are ordered, one live update at a time across the fleet. A canary
-   whose update fails keeps the update slot until it is healthy, so no other host is ordered
-   the version meanwhile (design, section 5.4).
+7. **The update plan orders the hosts.** The `[[service]]` table of hostkeeper in the rollout file
+   may set `stages` (by default `[1, 10, 50, 100]`: the cumulative percent of the eligible hosts
+   that run the version once each stage is done) and `canary = { count = n }` (a first stage of
+   `n` hosts). The coordinator orders only the hosts of the first stage; the next stage starts
+   when every host of the stage has reported the new version healthy for `bake_beats`
+   heartbeats (a stage marked `advance = "manual"` waits for an operator's `Rollouts.Advance`).
+   The hosts of a stage update in parallel, up to the desired state's `max_updating` for each
+   role (by default 1, or 2 for `daemon` and `mac-daemon`). A host whose update fails keeps its
+   update slot until it is healthy, and its stage is not done until an operator resolves it, so
+   the next stage is not ordered the version meanwhile
+   ([rollout-plans.md](../operations/rollout-plans.md); design, section 5.4).
 8. **Each host updates itself.** At its next heartbeat an ordered host fetches its platform's
    package from the channel, checks it against the index and its attestation, and updates
    hostkeeper (design, section 6.6).
@@ -169,9 +175,9 @@ is older than one already published sets nothing: `set-desired` is skipped, not 
 ## What it does not do
 
 - It uploads nothing, to the channel or anywhere else.
-- It does not wait for the fleet to converge: one live update at a time across the fleet, with a
-  canary and bake, takes longer than a release run should hold the release group, and a slow roll
-  is not a failed release.
+- It does not wait for the fleet to converge: a roll by stages, each baked before the next, takes
+  longer than a release run should hold the release group, and a slow roll is not a failed
+  release.
 - It does not change the coordinator's allow-list, rollout file, holds or marks.
 - It sets only `hostkeeper`. The hello proof run stays a dispatch by hand
   ([docs/hello.md](../hello.md)).

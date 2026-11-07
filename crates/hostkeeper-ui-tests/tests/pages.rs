@@ -425,7 +425,8 @@ fn a_refused_action_reports_the_code_and_reason() {
 #[test]
 fn rollout_page_shows_desired_against_converged() {
     // Catches: a Rollout page that calls another method, or leaves out the desired version, the
-    // state, a role's counts, the slot holder, the canary and bake, the halt or a bad version.
+    // state, a role's counts, the slot holders, the plan and why it waits, the bake, the halt or a
+    // bad version.
     let mut ui = Ui::start();
     ui.reply(&m("Releases/Status"), status_reply());
     let out = render(&mut ui, "rollout", "{}");
@@ -437,8 +438,11 @@ fn rollout_page_shows_desired_against_converged() {
             "Desired 1.4.0",
             "halted",
             "Up 4 hosts",
-            "held by web-1",
-            "Waiting for the canary web-4",
+            "Update slots held by web-1",
+            "Plan 1 (1%), 4 (50%, manual), 8 (100%) hosts of 8 eligible",
+            "Stage 1 of 3",
+            "Waiting manual_advance, stage 2",
+            "Waiting paused by ops: freeze for audit",
             "Baking web-5",
             "by web-2, check disk_full, target 1.4.0",
             "Last good 1.2.9",

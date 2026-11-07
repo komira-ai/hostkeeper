@@ -198,16 +198,24 @@ named, and every change is audited to a file.
   (new; default `semver`, the only scheme; any other value is refused naming the key), `roles` (a
   plain list of role names, `roles = ["storage", "daemon"]`, which replaces the
   `[service.roles.<name>]` tables), `priority`, `selector`, `install_when_absent` (read only as
-  `false`; see the assignment below), `bake_beats`, `canary`, `rollback`, `rollback_after_failed`,
-  `min_version` and `defer_backoff`. A table refuses a key it does not know, naming it.
+  `false`; see the assignment below), `bake_beats`, `canary`, `stages` (the service's update plan:
+  1 to 16 percents rising to 100, each a number or a table with `percent` and `advance`, `"auto"`
+  or `"manual"`; by default `[1, 10, 50, 100]`; see
+  [rollout-update-plans.md](docs/design/rollout-update-plans.md)), `rollback`,
+  `rollback_after_failed`, `min_version` and `defer_backoff`. A table refuses a key it does not
+  know, naming it.
 - **Removed from the rollout file.** Each of these is refused by name, none is ignored: the
   service's `after` and `require_min_up`, and the `max_updating`, `min_up`, `never_last` and
   `after` of a role. kbf's definition becomes `name = "kbf"` and
   `roles = ["frontend", "storage", "daemon", "mac-daemon"]`.
 - **Behaviour changes of the cut rules.**
-  - A `max_updating` of 0 no longer holds a role. One update is live at a time across every
-    service and role; a later change adds an operator hold.
-  - `min_up` no longer delays an order, and the convergence does not read it.
+  - This migration ordered one update at a time across every service and role, and a
+    `max_updating` of 0 did not hold a role. The update plan release replaces that: a service
+    rolls out by stages, the hosts of a stage update in parallel up to the desired state's
+    `max_updating` of their role, and a `max_updating` of 0 holds the role again. One service's
+    rollout is live at a time by default (`--live-rollouts`).
+  - `min_up` delays an order again, per role, when it would leave fewer hosts of the role up; the
+    convergence does not read it.
   - `never_last` no longer keeps the last host of a role up.
   - `after`, of a role or of a service, and the order of roles no longer delay an order.
   - A service converges when every live member runs the desired version and none is updating,
@@ -216,15 +224,19 @@ named, and every change is audited to a file.
     `frontend` for its own).
 - **What does not change in the state files.** `max_updating` and `min_up` of a desired state are
   still read, kept, written in kbf's order (`min_up` always naming `storage` and `frontend`) and
-  printed in the status; no decision reads them. `desired.json`, the operations file and the
-  halts file are the same bytes, and the status and convergence JSON keep every field.
+  printed in the status; the update plan of a service reads them per role. `desired.json` and the
+  operations file are the same bytes. The halts file gains a `rollouts` key (each plan's position)
+  only once a plan goes past its first stage or is paused, and the release before skips it. The
+  status and convergence JSON keep every field.
 - **The decision names a gate or a skip.** `decide::Hold` is split into `Gate` (`halted`, `held`,
-  `bad`, `below_min_version`, `updating`, `busy_elsewhere`, `no_slot`, `quiet`, `canary_wait`,
-  `baking`) and `Skip` (`no_desired`, `not_a_member`, `up_to_date`, `failed_here`, `deferred`,
+  `bad`, `below_min_version`, `updating`, `busy_elsewhere`, `no_slot`, `quiet`, `baking`, and,
+  with the update plans, `paused`, `advance_wait`, `stage_failed`, `stage_wait`, `below_min_up`
+  and `rollout_elsewhere`; `canary_wait` is no longer produced, the canary being the plan's first
+  stage) and `Skip` (`no_desired`, `not_a_member`, `up_to_date`, `failed_here`, `deferred`,
   `unsupported`, `no_digest`, `no_package_for_platform`), and a decision is `Update`, `Install`, `Uninstall`, `Gate` or
-  `Skip`. `waiting_for_role`, `waiting_for_service` and `min_up` are no longer produced, nor are
-  `no_definition` (a service the coordinator does not manage is `not_a_member`) and `absent`
-  (see the assignment below).
+  `Skip`. `waiting_for_role`, `waiting_for_service` and `min_up` (`below_min_up` says it) are no
+  longer produced, nor are `no_definition` (a service the coordinator does not manage is
+  `not_a_member`) and `absent` (see the assignment below).
 - **A host runs the services the coordinator assigns it.** The rollout file's `roles` (or its
   selector) are the base; `Services.Assign`, `Unassign` and `SetMinVersion` add entries per role
   and per host on top, kept in the operations file under `assignments`, a key written only once

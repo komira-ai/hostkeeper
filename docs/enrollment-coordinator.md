@@ -240,7 +240,7 @@ status `INTERNAL` with no token. The JSON heartbeat route answers a denied host 
 
 A denied host whose update was in flight is still heard: its heartbeat is read for its final
 report and refused `denied`. When the report shows no update in flight and no order outstanding,
-the coordinator forgets the host, which frees the one live update slot, and marks the deny row
+the coordinator forgets the host, which frees its update slot, and marks the deny row
 final; from then on its heartbeats are refused before they are read.
 
 ## Not here yet

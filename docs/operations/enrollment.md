@@ -320,8 +320,8 @@ hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-
     hosts retire --node-id web-17 --reason "board failed, replaced by web-23"
 ```
 
-The answer's `update_in_flight` says whether the node was updating. If it was, it keeps the one
-live update slot until its heartbeat reports the update's record final; a node that is gone never
+The answer's `update_in_flight` says whether the node was updating. If it was, it keeps its
+update slot until its heartbeat reports the update's record final; a node that is gone never
 does, so free its slot with `hosts exclude --abandon true` for the service it was updating. A node
 with no update in flight frees its slot at once. The retirement is audited `host_retire`;
 retiring a node already retired succeeds and audits nothing. If a retirement is refused after its

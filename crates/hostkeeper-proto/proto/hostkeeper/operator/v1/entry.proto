@@ -28,10 +28,10 @@ message AuditEntry {
   // What it was, as a token (`exclude`, `include`, `set_labels`, `clear_halt`, `force`,
   // `force_ended`, `mark_bad`, `unmark_bad`, `halt`, `last_good`, `assign`, `unassign`,
   // `set_min_version`, `uninstalled`, `uninstall_cancelled`, `hold`, `unhold`, `abort`,
-  // `exclude_abandon`, `enroll_approve`, `enroll_replace`, `enroll_approve_refused`,
-  // `mac_auto_approve_declined`, `record_add`, `record_remove`, `enroll_requested`,
-  // `enroll_issued`, `cert_renewed`, `request_expired`, `enroll_reject`, `host_retire`). Open: a
-  // later coordinator adds actions.
+  // `exclude_abandon`, `rollout_advance`, `rollout_pause`, `rollout_resume`, `enroll_approve`,
+  // `enroll_replace`, `enroll_approve_refused`, `mac_auto_approve_declined`, `record_add`,
+  // `record_remove`, `enroll_requested`, `enroll_issued`, `cert_renewed`, `request_expired`,
+  // `enroll_reject`, `host_retire`). Open: a later coordinator adds actions.
   string action = 3;
   // The service, when the change is about one.
   optional string service = 4;

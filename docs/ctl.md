@@ -257,7 +257,7 @@ ordered. A second exclusion of the same host and service replaces the first.
 | `--service` | STRING |  |
 | `--node-id` | STRING |  |
 | `--reason` | STRING |  |
-| `--abandon` | true\|false | Also free the one live update slot the host holds for the service mid-update, for a host that is gone and will not report its update final. False (the default) keeps the slot. |
+| `--abandon` | true\|false | Also free the update slot the host holds for the service mid-update, for a host that is gone and will not report its update final. False (the default) keeps the slot. |
 
 #### `hostkeeper ctl hosts include`
 
@@ -320,7 +320,8 @@ The service `Releases` of the package `hostkeeper.operator.v1`. The desired vers
 
 `/hostkeeper.operator.v1.Releases/SetDesired`
 
-Set a service's desired state. The coordinator moves its hosts there a role at a time. Takes
+Set a service's desired state. The coordinator moves its hosts there by the service's update
+plan, stage by stage (`Rollouts`), a role's `max_updating` at a time. Takes
 CI's OIDC token (the services its allow-list entry names) or the operator token (any service
 the coordinator manages, audited as `set_desired` under the token's name).
 
@@ -419,6 +420,46 @@ is cleared.
 |---|---|---|
 | `--service` | STRING |  |
 | `--reason` | STRING |  |
+
+### `rollouts`
+
+The service `Rollouts` of the package `hostkeeper.operator.v1`. The update plans of the services: an operator moves a plan on, pauses it and resumes it. Each
+call is an audit entry under the operator token's name.
+
+#### `hostkeeper ctl rollouts advance`
+
+`/hostkeeper.operator.v1.Rollouts/Advance`
+
+Enter the next stage of a plan that waits for an operator (`advance = "manual"`): its done
+stage, or none yet for a manual first stage.
+
+| flag | value | meaning |
+|---|---|---|
+| `--service` | STRING | The service. |
+| `--reason` | STRING | Why; 1 to 256 bytes. |
+
+#### `hostkeeper ctl rollouts pause`
+
+`/hostkeeper.operator.v1.Rollouts/Pause`
+
+Pause a plan: no host that has not started is ordered; the updates already ordered or
+running finish and bake. The pause stands across a new desired version, until `Resume`.
+
+| flag | value | meaning |
+|---|---|---|
+| `--service` | STRING | The service. |
+| `--reason` | STRING | Why; 1 to 256 bytes. |
+
+#### `hostkeeper ctl rollouts resume`
+
+`/hostkeeper.operator.v1.Rollouts/Resume`
+
+Resume a paused plan from where it stands.
+
+| flag | value | meaning |
+|---|---|---|
+| `--service` | STRING | The service. |
+| `--reason` | STRING | Why; 1 to 256 bytes. |
 
 ### `services`
 

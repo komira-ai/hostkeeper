@@ -4,7 +4,8 @@
 use std::fmt::Debug;
 
 use hostkeeper_proto::hostkeeper::operator::v1::{
-    AlertsRefusal, AuditRefusal, EnrollmentRefusal, HostsRefusal, ReleasesRefusal, ServicesRefusal,
+    AlertsRefusal, AuditRefusal, EnrollmentRefusal, HostsRefusal, ReleasesRefusal, RolloutsRefusal,
+    ServicesRefusal,
 };
 use tonic::{Code, Status};
 
@@ -34,7 +35,8 @@ where
 }
 
 /// Proves that each value of `HostsRefusal`, `ReleasesRefusal`, `ServicesRefusal`,
-/// `EnrollmentRefusal`, `AuditRefusal` and `AlertsRefusal` becomes the status its proto comment names: the code of the comment and the
+/// `EnrollmentRefusal`, `AuditRefusal`, `AlertsRefusal` and `RolloutsRefusal` becomes the status
+/// its proto comment names: the code of the comment and the
 /// value's name, without its prefix and in lower case, as the whole message; and that
 /// `UNSPECIFIED`, which no caller is refused with, is `INTERNAL`. A value the enum gains that
 /// the table lacks fails the test.
@@ -309,6 +311,43 @@ fn every_refusal_value_has_the_code_and_token_its_proto_comment_names() {
             (AlertsRefusal::StoreFailed, Internal, "store_failed"),
         ],
         refusal::alerts,
+    );
+
+    assert_table(
+        &[
+            (RolloutsRefusal::Unspecified, Internal, "unspecified"),
+            (
+                RolloutsRefusal::Unauthorized,
+                Unauthenticated,
+                "unauthorized",
+            ),
+            (RolloutsRefusal::Forbidden, PermissionDenied, "forbidden"),
+            (
+                RolloutsRefusal::InvalidRequest,
+                InvalidArgument,
+                "invalid_request",
+            ),
+            (RolloutsRefusal::UnknownService, NotFound, "unknown_service"),
+            (RolloutsRefusal::NoDesired, FailedPrecondition, "no_desired"),
+            (
+                RolloutsRefusal::NotWaiting,
+                FailedPrecondition,
+                "not_waiting",
+            ),
+            (
+                RolloutsRefusal::AlreadyPaused,
+                FailedPrecondition,
+                "already_paused",
+            ),
+            (RolloutsRefusal::NotPaused, FailedPrecondition, "not_paused"),
+            (RolloutsRefusal::StoreFailed, Internal, "store_failed"),
+            (
+                RolloutsRefusal::AuditUnavailable,
+                Unavailable,
+                "audit_unavailable",
+            ),
+        ],
+        refusal::rollouts,
     );
 }
 
