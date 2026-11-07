@@ -84,11 +84,11 @@ fn refused(problems: &[&str]) -> Result<String, Error> {
 fn set_json(platform: &str, d: &str, e: &str, n: u64, sha: &str) -> String {
     format!(
         "\"{platform}\":{{\
-         \"grub\":{{\"bytes\":{n},\"deb_path\":\"usr/lib/grub/grubnet.signed\",\"iso_path\":\"pool/g/grub_1_{d}.deb\",\"name\":\"grub{e}.efi\",\"sha256\":\"{sha}\"}},\
+         \"grub\":{{\"bytes\":{n},\"deb_path\":\"usr/lib/grub/grubnet.signed\",\"iso_path\":\"pool/g/grub_1_{d}.deb\",\"name\":\"hostkeeper/grub{e}.efi\",\"sha256\":\"{sha}\"}},\
          \"initrd\":{{\"bytes\":{n},\"iso_path\":\"casper/initrd\",\"name\":\"initrd-{platform}\",\"sha256\":\"{sha}\"}},\
          \"iso\":{{\"bytes\":{n},\"name\":\"u-{d}.iso\",\"sha256\":\"{sha}\",\"sums\":\"https://cd.example/r/SHA256SUMS\",\"url\":\"https://cd.example/r/u-{d}.iso\"}},\
          \"kernel\":{{\"bytes\":{n},\"iso_path\":\"casper/vmlinuz\",\"name\":\"vmlinuz-{platform}\",\"sha256\":\"{sha}\"}},\
-         \"shim\":{{\"bytes\":{n},\"deb_path\":\"usr/lib/shim/shim.signed\",\"iso_path\":\"pool/s/shim_1_{d}.deb\",\"name\":\"shim{e}.efi\",\"sha256\":\"{sha}\"}}\
+         \"shim\":{{\"bytes\":{n},\"deb_path\":\"usr/lib/shim/shim.signed\",\"iso_path\":\"pool/s/shim_1_{d}.deb\",\"name\":\"hostkeeper/shim{e}.efi\",\"sha256\":\"{sha}\"}}\
          }}"
     )
 }
@@ -146,8 +146,8 @@ fn the_committed_pins_render_the_boot_sets_of_both_linux_platforms() {
             names,
             [
                 iso.to_owned(),
-                format!("shim{efi}.efi"),
-                format!("grub{efi}.efi"),
+                format!("hostkeeper/shim{efi}.efi"),
+                format!("hostkeeper/grub{efi}.efi"),
                 format!("vmlinuz-{platform}"),
                 format!("initrd-{platform}"),
             ],
@@ -521,4 +521,26 @@ fn pins_that_cannot_be_read_and_an_asset_that_cannot_be_written_are_io_errors() 
         write_netboot(&pins_path, &version(), &dir),
         Err(Error::Io { what, .. }) if what == format!("write {}", dir.join("netboot.json").display())
     ));
+}
+
+#[test]
+fn the_shim_and_grub_are_named_as_the_packet_handling_serves_them() {
+    // Catches: netboot.json naming a boot loader by another path than the one
+    // hostkeeper-pxe-packets serves it by (`hostkeeper/boot.efi` mapped to a shim the seal has
+    // under another name), so the fetched set and the served names would never meet.
+    for (arch, wire) in BOOT_PLATFORMS.into_iter().zip([
+        hostkeeper_wire::Platform::LinuxArm64,
+        hostkeeper_wire::Platform::LinuxX86_64,
+    ]) {
+        let served = hostkeeper_pxe_packets::LoaderNames::of(wire).expect("a boot set");
+        assert_eq!(
+            (
+                BootFile::Shim.served_name(arch, ""),
+                BootFile::Grub.served_name(arch, ""),
+            ),
+            (served.shim.to_owned(), served.grub.to_owned()),
+            "{}",
+            arch.platform.name()
+        );
+    }
 }

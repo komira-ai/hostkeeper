@@ -1707,6 +1707,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "hostkeeper-pxe-packets"
+version = "0.1.0"
+dependencies = [
+ "hostkeeper-wire",
+ "thiserror",
+]
+
+[[package]]
 name = "hostkeeper-steps"
 version = "0.1.0"
 dependencies = [
@@ -4226,8 +4234,10 @@ dependencies = [
  "hostkeeper-link",
  "hostkeeper-package",
  "hostkeeper-proto",
+ "hostkeeper-pxe-packets",
  "hostkeeper-steps",
  "hostkeeper-unpack",
+ "hostkeeper-wire",
  "plist",
  "prost-reflect",
  "ruzstd",

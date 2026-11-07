@@ -13,19 +13,21 @@
 //! ```json
 //! {"platforms":{
 //!   "linux-arm64":{
-//!     "grub":{"bytes":N,"deb_path":"usr/lib/...","iso_path":"pool/...deb","name":"grubaa64.efi","sha256":"<64 hex>"},
+//!     "grub":{"bytes":N,"deb_path":"usr/lib/...","iso_path":"pool/...deb","name":"hostkeeper/grubaa64.efi","sha256":"<64 hex>"},
 //!     "initrd":{"bytes":N,"iso_path":"casper/initrd","name":"initrd-linux-arm64","sha256":"<64 hex>"},
 //!     "iso":{"bytes":N,"name":"<file name of url>","sha256":"<64 hex>","sums":"https://.../SHA256SUMS","url":"https://.../...-arm64.iso"},
 //!     "kernel":{"bytes":N,"iso_path":"casper/vmlinuz","name":"vmlinuz-linux-arm64","sha256":"<64 hex>"},
-//!     "shim":{"bytes":N,"deb_path":"usr/lib/...","iso_path":"pool/...deb","name":"shimaa64.efi","sha256":"<64 hex>"}},
-//!   "linux-x86_64":{... "grubx64.efi" ... "shimx64.efi" ...}},
+//!     "shim":{"bytes":N,"deb_path":"usr/lib/...","iso_path":"pool/...deb","name":"hostkeeper/shimaa64.efi","sha256":"<64 hex>"}},
+//!   "linux-x86_64":{... "hostkeeper/grubx64.efi" ... "hostkeeper/shimx64.efi" ...}},
 //!  "ubuntu":"24.04.5","version":"X.Y.Z"}
 //! ```
 //!
 //! It is written canonically: compact JSON with every object's keys sorted. It changes additively
 //! only, so a reader ignores a field it does not know. The served names of the shim and GRUB are
-//! the design's (`shimx64.efi` or `shimaa64.efi`, `grubx64.efi` or `grubaa64.efi`): the shim reads
-//! GRUB by that name from its own directory.
+//! the design's, in the directory of the router-mode first file `hostkeeper/boot.efi`
+//! ([`LOADER_DIR`]): `hostkeeper/shimx64.efi` or `hostkeeper/shimaa64.efi`, and
+//! `hostkeeper/grubx64.efi` or `hostkeeper/grubaa64.efi`, the names `hostkeeper-pxe-packets`
+//! serves them by (`LoaderNames`). The shim reads GRUB by its own name from that directory.
 //!
 //! The pins are read strictly, and every problem is named at once: a missing platform, file or
 //! key, an unknown one, a size that is not a whole number above 0, a digest that is not 64
@@ -57,6 +59,10 @@ const BOOT_PLATFORMS: [Arch; 2] = [
 
 /// The key of the pins that names the Ubuntu release of the ISOs.
 const UBUNTU: &str = "ubuntu";
+
+/// The directory the shim and GRUB are served from: that of `hostkeeper/boot.efi`, the first file
+/// the router names (docs/design/network-install.md, section 3).
+const LOADER_DIR: &str = "hostkeeper/";
 
 /// The name of Canonical's checksum file that lists an ISO.
 const SUMS_FILE: &str = "SHA256SUMS";
@@ -116,8 +122,8 @@ impl BootFile {
         let platform = arch.platform.name();
         match self {
             BootFile::Iso => url.rsplit('/').next().unwrap_or_default().to_owned(),
-            BootFile::Shim => format!("shim{}.efi", arch.efi),
-            BootFile::Grub => format!("grub{}.efi", arch.efi),
+            BootFile::Shim => format!("{LOADER_DIR}shim{}.efi", arch.efi),
+            BootFile::Grub => format!("{LOADER_DIR}grub{}.efi", arch.efi),
             BootFile::Kernel => format!("vmlinuz-{platform}"),
             BootFile::Initrd => format!("initrd-{platform}"),
         }

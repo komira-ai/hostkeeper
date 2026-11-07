@@ -37,8 +37,8 @@ covers them:
 
 | file | served as | inside the ISO |
 |---|---|---|
-| shim | `shimx64.efi`, `shimaa64.efi` | `usr/lib/shim/shim<efi arch>.efi.signed.latest` of the deb `pool/main/s/shim-signed/shim-signed_<version>_<deb arch>.deb` |
-| network GRUB | `grubx64.efi`, `grubaa64.efi` | `usr/lib/grub/<grub arch>-efi-signed/grubnet<efi arch>.efi.signed` of the deb `pool/main/g/grub2-signed/grub-efi-<deb arch>-signed_<version>_<deb arch>.deb` |
+| shim | `hostkeeper/shimx64.efi`, `hostkeeper/shimaa64.efi` | `usr/lib/shim/shim<efi arch>.efi.signed.latest` of the deb `pool/main/s/shim-signed/shim-signed_<version>_<deb arch>.deb` |
+| network GRUB | `hostkeeper/grubx64.efi`, `hostkeeper/grubaa64.efi` | `usr/lib/grub/<grub arch>-efi-signed/grubnet<efi arch>.efi.signed` of the deb `pool/main/g/grub2-signed/grub-efi-<deb arch>-signed_<version>_<deb arch>.deb` |
 | kernel | `vmlinuz-<platform>` | `casper/vmlinuz` |
 | initrd | `initrd-<platform>` | `casper/initrd` |
 
