@@ -3,7 +3,8 @@
 //! is there for the timeout, for the kill of its whole control group, and for the capture of the
 //! exit code, the last line of standard output and the log; it confines nothing.
 //!
-//! The command lines are pure functions ([`command`], [`stop_command`]). Starting a program sits
+//! The command lines are pure functions ([`command`], [`additive_command`], [`probe_command`],
+//! [`stop_command`]). Starting a program sits
 //! behind [`Spawner`], so [`SystemdLauncher`] runs against a fake in a test.
 //! [`SystemdRunProcess`] is the real spawner, and the only code of the crate that starts a
 //! process: `systemd-run` or `systemctl`, with an empty environment and no input, both of its
@@ -46,11 +47,11 @@
 //! A probe ended by `RuntimeMaxSec=` exits `1` through `systemd-run`, as a step does: a probe
 //! that did not exit `0` printed no protocol.
 //!
-//! A step (or an additive step) that [`StepLauncher::stop`] stopped is reported with no exit code, whatever
-//! `systemd-run` exited with. systemd counts the end of a service's main process by the `SIGTERM`
-//! of a stop as a clean end (result `success`), so `systemd-run --wait` exits `0` for a hook that
-//! does not handle the signal; without this, a step the dead-man stopped at its bound would read
-//! as a step that succeeded. A step ended by `RuntimeMaxSec=` needs no such rule: its result is
+//! A step (or an additive step) that [`StepLauncher::stop`] stopped is reported with no exit
+//! code, whatever `systemd-run` exited with. systemd counts the end of a service's main process
+//! by the `SIGTERM` of a stop as a clean end (result `success`), so `systemd-run --wait` exits `0`
+//! for a hook that does not handle the signal; without this, a step the dead-man stopped at its
+//! bound would read as a step that succeeded. A step ended by `RuntimeMaxSec=` needs no such rule: its result is
 //! `timeout`, and `systemd-run --wait` exits `1`.
 
 use std::collections::BTreeSet;

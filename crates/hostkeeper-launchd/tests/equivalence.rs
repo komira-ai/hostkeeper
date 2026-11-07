@@ -14,7 +14,9 @@
 //! - a step that ends within its bound keeps its own exit code and report line;
 //! - a stop of a running step, a second stop, and a stop of a step never started are all `Ok`;
 //! - the capture keeps the last 1 MiB of each stream, and the report line from it;
-//! - a step run again under the same unit reports what the second run wrote.
+//! - a step run again under the same unit reports what the second run wrote;
+//! - an additive step (the hook's `uninstall`) keeps its own exit code and report line within
+//!   its bound, and past it is stopped at the bound and is a failed step.
 
 mod support;
 
@@ -28,11 +30,11 @@ use std::time::Duration;
 use hostkeeper_hook::{Outcome, Step};
 use hostkeeper_launchd::{Label, LaunchdLauncher};
 use hostkeeper_steps::{
-    Bound, Captured, Program, RING_BYTES, Ring, Spawner, StepExit, StepLauncher, StepLog,
-    SystemdLauncher,
+    AdditiveCall, Bound, Captured, Program, RING_BYTES, Ring, Spawner, StepExit, StepLauncher,
+    StepLog, SystemdLauncher,
 };
 use hostkeeper_testkit::Scratch;
-use support::{FakePace, Hook, SimLaunchd, call, hook_file, scratch, secs};
+use support::{FakePace, Hook, PARAMS, SimLaunchd, call, hook_file, scratch, secs};
 
 const UNIT: &str = "updater-web-cutover-7";
 
@@ -446,5 +448,57 @@ fn a_step_run_again_under_its_unit_reports_its_own_output() {
             "{}",
             rig.name()
         );
+    }
+}
+
+/// Catches a launcher that runs no additive step, or runs one under other rules than a step: the
+/// hook's `uninstall`, bounded at 30 s, keeps its own exit code and last line when it ends within
+/// the bound, and is stopped at 30 s and failed when it would run an hour.
+#[test]
+fn an_additive_step_keeps_its_exit_within_its_bound_and_is_stopped_past_it() {
+    let (_dir, hook, rigs) = rigs("equivalence-additive");
+    let unit = "updater-web-uninstall-7";
+    let hook_args = ["update-hook".to_owned()];
+    let uninstall = AdditiveCall {
+        service: "web",
+        step: "uninstall",
+        hook_args: &hook_args,
+        params: Path::new(PARAMS),
+        executable: &hook,
+        unit,
+        timeout_secs: 30,
+    };
+    for rig in &rigs {
+        let line = "{\"detail\":\"removed\"}";
+        rig.script(unit, Hook::exits(29, 0, line));
+        rig.script(unit, Hook::exits(3600, 0, "{}"));
+        let mut run = || {
+            rig.launcher()
+                .run_additive(&uninstall)
+                .unwrap_or_else(|e| panic!("{}: the step ran: {e}", rig.name()))
+        };
+        assert_eq!(
+            run(),
+            StepExit {
+                code: Some(0),
+                last_line: Some(line.to_owned())
+            },
+            "{}",
+            rig.name()
+        );
+        assert!(rig.stopped_after().is_empty(), "{}", rig.name());
+        assert_eq!(
+            Outcome::from_exit(run().code),
+            Outcome::Failure,
+            "{}",
+            rig.name()
+        );
+        assert_eq!(
+            rig.stopped_after(),
+            [Duration::from_secs(30)],
+            "{}",
+            rig.name()
+        );
+        assert!(!rig.is_running(unit), "{}", rig.name());
     }
 }
