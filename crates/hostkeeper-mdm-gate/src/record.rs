@@ -14,13 +14,17 @@
 //! The enrollment side (design 4 and 5) adds two things: the config profile's `InstallProfile`
 //! of this enrollment ([`DeviceRecord::config_profile`]), forgotten with the enrollment, and the
 //! last nonce the gate issued for the device ([`DeviceRecord::nonce`]), kept across enrollments,
-//! since a nonce lives its hour whatever the device does, unless an approval consumes it.
+//! since a nonce lives its hour whatever the device does, unless an approval consumes it. The
+//! install (design 7.1 and 5.4) adds the `InstallEnterpriseApplication` sends of this
+//! enrollment ([`DeviceRecord::install`]), forgotten with the enrollment, so a new enrollment
+//! starts the count again.
 
 use hostkeeper_enrollment::names::KeyHash;
 
 use crate::answer::{DeviceInformation, SecurityInfo};
 use crate::command::{DEVICE_INFORMATION, SECURITY_INFO};
 use crate::ids::{CommandUuid, EnrollmentId, shown};
+use crate::pkg::PkgDigest;
 
 /// Where a device is in its enrollment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -114,6 +118,17 @@ pub struct NonceRecord {
     pub removal: Option<ProfileCommand>,
 }
 
+/// The pkg sends of one enrollment (design 5.4).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InstallRecord {
+    /// The digest of the pkg last sent.
+    pub sha256: PkgDigest,
+    /// How many times NanoHUB queued an `InstallEnterpriseApplication` in this enrollment.
+    pub sends: u32,
+    /// The last `InstallEnterpriseApplication`, and its answer.
+    pub last: ProfileCommand,
+}
+
 /// The gate's record of one MDM enrollment id.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeviceRecord {
@@ -159,6 +174,8 @@ pub struct DeviceRecord {
     pub config_profile: Option<ProfileCommand>,
     /// The last nonce issued for the device, in this enrollment or an earlier one.
     pub nonce: Option<NonceRecord>,
+    /// The pkg sends of this enrollment.
+    pub install: Option<InstallRecord>,
 }
 
 impl DeviceRecord {
@@ -185,6 +202,7 @@ impl DeviceRecord {
             last_error: None,
             config_profile: None,
             nonce: None,
+            install: None,
         }
     }
 
@@ -206,6 +224,7 @@ impl DeviceRecord {
         self.sent.clear();
         self.refused.clear();
         self.config_profile = None;
+        self.install = None;
     }
 
     fn heard(&mut self, udid: &str, now: u64) {
@@ -324,7 +343,8 @@ impl DeviceRecord {
         self.device_information_unix = Some(now);
     }
 
-    /// The answer of the profile command `uuid` (already taken off [`DeviceRecord::sent`]):
+    /// The answer of the profile command or pkg install `uuid` (already taken off
+    /// [`DeviceRecord::sent`]):
     /// `acknowledged`, or an error, at `now`. An error is kept as the last error. A UUID that is
     /// no profile command of the record changes nothing.
     pub fn answer_profile(&mut self, uuid: &str, acknowledged: bool, now: u64) {
@@ -340,6 +360,10 @@ impl DeviceRecord {
             ("the config profile", self.config_profile.as_mut()),
             ("the nonce profile", push),
             ("the nonce profile's removal", removal),
+            (
+                "the pkg install",
+                self.install.as_mut().map(|install| &mut install.last),
+            ),
         ]
         .into_iter()
         .find_map(|(name, command)| {

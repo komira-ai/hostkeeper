@@ -109,13 +109,21 @@ pub(super) fn two_records() -> [hostkeeper_mdm_gate::DeviceRecord; 2] {
         },
     ];
     full.last_error = Some("NanoHUB did not queue the command".to_owned());
+    full.install = Some(hostkeeper_mdm_gate::InstallRecord {
+        sha256: hostkeeper_mdm_gate::PkgDigest::parse(&"ab".repeat(32)).expect("a digest"),
+        sends: 3,
+        last: hostkeeper_mdm_gate::ProfileCommand::new(
+            CommandUuid::parse("B2B2B2B2-2222-4333-8444-555555555555").expect("a uuid"),
+            1_800_000_070,
+        ),
+    });
     let bare = record("BBBB-BARE", None, Phase::Authenticated, None);
     [full, bare]
 }
 
 /// Proves: the operator's token lists the gate's records by enrollment id, each with every field
 /// of `MdmDevice` set from its record (the phase, the counts, the optional flags and times, the
-/// unanswered commands with their UUIDs, the last error) and a field the record lacks absent,
+/// unanswered commands with their UUIDs, the last error, the pkg's sends, last send and digest) and a field the record lacks absent,
 /// not zero; `gate` is true; and the gateway answers the same device in canonical JSON, the
 /// absent fields not shown.
 ///
@@ -154,6 +162,9 @@ async fn the_operator_lists_every_field_of_a_device_over_grpc_and_the_gateway() 
             },
         ],
         last_error: "NanoHUB did not queue the command".to_owned(),
+        install_sends: 3,
+        install_last_sent_unix: Some(1_800_000_070),
+        install_sha256: "ab".repeat(32),
     };
     let bare = proto::MdmDevice {
         enrollment_id: "BBBB-BARE".to_owned(),
@@ -170,6 +181,7 @@ async fn the_operator_lists_every_field_of_a_device_over_grpc_and_the_gateway() 
     assert_eq!(listed, want);
     assert_eq!(listed.devices[1].supervised, None);
     assert_eq!(listed.devices[1].checked_out_unix, None);
+    assert_eq!(listed.devices[1].install_last_sent_unix, None);
 
     let (status, json) = gateway(&served, Some(OPERATOR), "{}").await;
     assert_eq!(status, StatusCode::OK);
@@ -204,7 +216,10 @@ async fn the_operator_lists_every_field_of_a_device_over_grpc_and_the_gateway() 
                             "sentUnix": "1800000060"
                         }
                     ],
-                    "lastError": "NanoHUB did not queue the command"
+                    "lastError": "NanoHUB did not queue the command",
+                    "installSends": 3,
+                    "installLastSentUnix": "1800000070",
+                    "installSha256": "abababababababababababababababababababababababababababababababab"
                 },
                 {
                     "enrollmentId": "BBBB-BARE",

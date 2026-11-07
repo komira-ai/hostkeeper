@@ -38,7 +38,8 @@ holds on one machine only.
   enrolls again (section 11). The way back is `hostkeeper-coordinator export` and the file coordinator.
 
 **What does not change.** The rollout file, the operator tokens file, the OIDC allow-list, the TLS files, the CA key and
-its certificate, the server certificate file, the Mac serial allowlist and the UI directory stay files, read as today.
+its certificate, the server certificate file, the Mac serial allowlist, the MDM pkg allowlist and the UI directory
+stay files, read as today.
 The fleet view (heartbeats, outstanding orders, bake, deferrals, tries, the quiet start) stays in memory and is rebuilt
 from heartbeats after a restart. Every decision reads memory, never the database: a heartbeat in the steady state costs
 no query. (Today it reads the enrollment store's host and deny files at every heartbeat; an in-memory copy of those rows
@@ -64,7 +65,7 @@ storage trait (section 4.1).
 | The single-writer lock | `flock` on `<state-file>.lock`; the enrollment store's own `flock` on `<enrollment-dir>/lock` | an advisory lock on one session, and the row `lease` (section 5); the enrollment store keeps its in-process mutex |
 | Staged halts file, restore marker | `<ops-file>.halts.next`, `<state-file>.restore-unfinished` | gone: a transaction commits or does not |
 | The unfinished-halt marker | `<ops-file>.halts.unfinished` | a file still, named by `--halt-marker-file` (section 4.3) |
-| Rollout file, tokens, OIDC allow-list, TLS files, CA key and certificate, server certificate, Mac allowlist, UI | files | files, unchanged |
+| Rollout file, tokens, OIDC allow-list, TLS files, CA key and certificate, server certificate, Mac allowlist, MDM pkg allowlist, UI | files | files, unchanged |
 | Fleet, orders, bake, deferrals, tries, poll nonces, the enrollment store's live-machine map | memory | memory, unchanged |
 
 The MDM gate's device records (hostkeeper-mdm.md section 6.1, task M8, built before this store) are a table of the same

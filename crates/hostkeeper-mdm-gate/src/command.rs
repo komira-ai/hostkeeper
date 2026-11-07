@@ -32,6 +32,9 @@ pub const INSTALL_PROFILE: &str = "InstallProfile";
 /// `RemoveProfile`, which removes the nonce profile once its request is approved.
 pub const REMOVE_PROFILE: &str = "RemoveProfile";
 
+/// `InstallEnterpriseApplication`, which installs the hostkeeper pkg by its inline manifest.
+pub const INSTALL_ENTERPRISE_APPLICATION: &str = "InstallEnterpriseApplication";
+
 /// The queries of `DeviceInformation`: the serial, the UDID and the supervision.
 pub const QUERIES: [&str; 3] = ["SerialNumber", "UDID", "IsSupervised"];
 
@@ -88,6 +91,14 @@ impl Command {
         Self::new(REMOVE_PROFILE, uuid, fields)
     }
 
+    /// `InstallEnterpriseApplication` of the inline `manifest` ([`crate::pkg::manifest`]).
+    #[must_use]
+    pub fn install_application(uuid: CommandUuid, manifest: Dictionary) -> Self {
+        let mut fields = Dictionary::new();
+        fields.insert("Manifest".to_owned(), Value::Dictionary(manifest));
+        Self::new(INSTALL_ENTERPRISE_APPLICATION, uuid, fields)
+    }
+
     /// The request type.
     #[must_use]
     pub fn request_type(&self) -> &str {
@@ -119,7 +130,7 @@ impl Command {
         root.insert("Command".to_owned(), Value::Dictionary(command));
         root.insert("CommandUUID".to_owned(), Value::from(self.uuid.as_str()));
         let mut bytes = Vec::new();
-        // Writing a dictionary of strings, data and arrays into a Vec cannot fail: the writer only
+        // Writing a dictionary of strings, data, arrays and dictionaries into a Vec cannot fail: the writer only
         // fails on the sink's errors, and a date or a non-string key, neither of which is here.
         let _ = Value::Dictionary(root).to_writer_xml(&mut bytes);
         bytes

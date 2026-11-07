@@ -21,7 +21,10 @@
 //! 2. The config profile is installed, once per enrollment. One the device answered with an
 //!    error is sent again [`CONFIG_RESEND_SECS`] after that answer; one NanoHUB never queued is
 //!    sent again at the next look.
-//! 3. A nonce is issued only when every condition of design 5.1 holds: the device is
+//! 3. With the pkg install ([`crate::install`]), once the config profile is acknowledged and
+//!    while no request is a candidate (below), the pkg is sent, and sent again an hour after
+//!    the device's last answer to it.
+//! 4. A nonce is issued only when every condition of design 5.1 holds: the device is
 //!    supervised (and enrolled, as above); the serial is on the allowlist (as above); no nonce
 //!    issued for the serial is still good: unexpired ([`NONCE_VALID_SECS`] from its issue: at
 //!    3600 seconds it is, at 3601 it is not) and unconsumed (no approval of the serial recorded
@@ -30,7 +33,7 @@
 //!    device's UDID (letter case aside), and posted at or after the first `TokenUpdate` of the
 //!    current enrollment. The nonce is bound to that request; its profile is pushed and the push
 //!    audited `mdm_nonce_pushed`.
-//! 4. While the nonce is good, its profile is pushed again, with the same nonce, when the
+//! 5. While the nonce is good, its profile is pushed again, with the same nonce, when the
 //!    device answered the last push with an error at least [`NONCE_RESEND_SECS`] ago, or NanoHUB
 //!    never queued it. No new nonce is issued.
 //!
@@ -198,6 +201,25 @@ struct Look {
     now: u64,
 }
 
+/// The candidates among `waiting` for the device of `record`, whose enrollment began at
+/// `since` (design 5.1, condition 3): not a duplicate claim, claiming a platform UUID equal to
+/// the device's UDID (letter case aside), posted at or after `since`.
+pub(crate) fn candidates<'a>(
+    record: &DeviceRecord,
+    waiting: &'a [Waiting],
+    since: u64,
+) -> Vec<&'a Waiting> {
+    waiting
+        .iter()
+        .filter(|request| {
+            !request.duplicate_claim
+                && !record.udid.is_empty()
+                && request.platform_uuid.eq_ignore_ascii_case(&record.udid)
+                && request.posted_unix >= since
+        })
+        .collect()
+}
+
 /// Whether the profile command `command` (of `record`) is to be sent again at `now`: never
 /// queued, or answered with an error at least `after` seconds ago.
 fn again(record: &DeviceRecord, command: &ProfileCommand, now: u64, after: u64) -> bool {
@@ -245,14 +267,23 @@ impl Gate {
         }
         // One profile command a look: a config profile sent now is followed by the nonce at
         // the next look, which the daemon, not yet installed, cannot have asked for anyway.
-        if !self.send_config(side, record.clone(), now).await {
-            let when = Look {
-                since,
-                last_approval,
-                now,
-            };
-            self.push_nonce(side, record, &serial, when).await;
+        if self.send_config(side, record.clone(), now).await {
+            return;
         }
+        // The pkg, while no candidate request has appeared (design 5.4); a look that sent it,
+        // or changed the record, is done.
+        if self
+            .send_pkg(side, record.clone(), &serial, since, now)
+            .await
+        {
+            return;
+        }
+        let when = Look {
+            since,
+            last_approval,
+            now,
+        };
+        self.push_nonce(side, record, &serial, when).await;
     }
 
     /// The device's serial and the start of its enrollment, when the gate acts on it: enrolled,
@@ -321,15 +352,7 @@ impl Gate {
                 return;
             }
         };
-        let candidates: Vec<&Waiting> = waiting
-            .iter()
-            .filter(|request| {
-                !request.duplicate_claim
-                    && !record.udid.is_empty()
-                    && request.platform_uuid.eq_ignore_ascii_case(&record.udid)
-                    && request.posted_unix >= since
-            })
-            .collect();
+        let candidates = candidates(&record, &waiting, since);
         match candidates.as_slice() {
             [candidate] => {
                 let request_id = candidate.request_id;
@@ -504,7 +527,10 @@ impl Gate {
 
     /// `N` new UUIDs; `None`, with the reason kept in `record`, when no random bytes could be
     /// had.
-    fn uuids<const N: usize>(&self, record: &mut DeviceRecord) -> Option<[CommandUuid; N]> {
+    pub(crate) fn uuids<const N: usize>(
+        &self,
+        record: &mut DeviceRecord,
+    ) -> Option<[CommandUuid; N]> {
         let uuids: Option<Vec<CommandUuid>> = (0..N).map(|_| self.uuid()).collect();
         let uuids = uuids.and_then(|uuids| uuids.try_into().ok());
         if uuids.is_none() {
@@ -516,7 +542,12 @@ impl Gate {
 
     /// Stages `command` in `record`, keeps the record, and sends the command; whether NanoHUB
     /// queued it.
-    async fn dispatch(&self, record: &mut DeviceRecord, command: &Command, now: u64) -> bool {
+    pub(crate) async fn dispatch(
+        &self,
+        record: &mut DeviceRecord,
+        command: &Command,
+        now: u64,
+    ) -> bool {
         stage(record, command.uuid(), command.request_type(), now);
         self.kept(record) && self.post(record, command).await
     }
@@ -530,7 +561,7 @@ impl Gate {
     }
 
     /// Keeps `record`; a write that fails is logged, and `false`.
-    fn kept(&self, record: &DeviceRecord) -> bool {
+    pub(crate) fn kept(&self, record: &DeviceRecord) -> bool {
         match self.keep(record) {
             Ok(()) => true,
             Err(why) => {

@@ -15,7 +15,9 @@
 //! with more fields is read by this one; an unknown phase is refused. The enrollment side's
 //! fields (the config profile's command, the last nonce) were added to schema 1 as fields 18
 //! and 19, so a release before them reads a record that has them, and this one reads a record
-//! without them as one with no profile sent and no nonce issued.
+//! without them as one with no profile sent and no nonce issued. The pkg sends of an enrollment
+//! (task M14) are field 20, added to schema 1 the same way: a record without it is one with no
+//! pkg sent.
 //!
 //! Under the coordinator, the directory is `mdm-devices` in the enrollment store
 //! (`--enrollment-dir`), so `hostkeeper-coordinator backup` and `restore` copy it with the
@@ -31,7 +33,10 @@ use sha2::{Digest as _, Sha256};
 
 use crate::command::COMMAND_TYPES;
 use crate::ids::{CommandUuid, EnrollmentId};
-use crate::record::{DeviceRecord, NonceRecord, Phase, ProfileAnswer, ProfileCommand, Sent};
+use crate::pkg::PkgDigest;
+use crate::record::{
+    DeviceRecord, InstallRecord, NonceRecord, Phase, ProfileAnswer, ProfileCommand, Sent,
+};
 
 /// The schema this release writes and the newest it reads.
 pub const SCHEMA: u32 = 1;
@@ -155,6 +160,16 @@ struct NoncePb {
 }
 
 #[derive(Clone, PartialEq, prost::Message)]
+struct InstallPb {
+    #[prost(string, tag = "1")]
+    sha256: String,
+    #[prost(uint32, tag = "2")]
+    sends: u32,
+    #[prost(message, optional, tag = "3")]
+    last: Option<ProfilePb>,
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
 struct RecordPb {
     #[prost(string, tag = "1")]
     enrollment_id: String,
@@ -195,6 +210,8 @@ struct RecordPb {
     config_profile: Option<ProfilePb>,
     #[prost(message, optional, tag = "19")]
     nonce: Option<NoncePb>,
+    #[prost(message, optional, tag = "20")]
+    install: Option<InstallPb>,
 }
 
 fn profile_pb(command: &ProfileCommand) -> ProfilePb {
@@ -241,6 +258,24 @@ fn nonce_of(pb: NoncePb) -> Option<NonceRecord> {
         pushes: pb.pushes,
         push: command(pb.push)?,
         removal: command(pb.removal)?,
+    })
+}
+
+fn install_pb(install: &InstallRecord) -> InstallPb {
+    InstallPb {
+        sha256: install.sha256.as_str().to_owned(),
+        sends: install.sends,
+        last: Some(profile_pb(&install.last)),
+    }
+}
+
+/// The install of `pb`; `None` when its digest or its command's UUID is malformed, or it has
+/// no command.
+fn install_of(pb: InstallPb) -> Option<InstallRecord> {
+    Some(InstallRecord {
+        sha256: PkgDigest::parse(&pb.sha256)?,
+        sends: pb.sends,
+        last: profile_of(pb.last?)?,
     })
 }
 
@@ -292,6 +327,7 @@ fn encode(record: &DeviceRecord) -> Vec<u8> {
         last_error: record.last_error.clone(),
         config_profile: record.config_profile.as_ref().map(profile_pb),
         nonce: record.nonce.as_ref().map(nonce_pb),
+        install: record.install.as_ref().map(install_pb),
     }
     .encode_to_vec();
     FilePb {
@@ -351,6 +387,12 @@ fn decode(path: &Path, bytes: &[u8]) -> Result<DeviceRecord, StoreError> {
             nonce_of(pb).ok_or_else(|| corrupt("the nonce's request id or a UUID is malformed"))
         })
         .transpose()?;
+    let install = pb
+        .install
+        .map(|pb| {
+            install_of(pb).ok_or_else(|| corrupt("the pkg install's digest or UUID is malformed"))
+        })
+        .transpose()?;
     Ok(DeviceRecord {
         enrollment_id,
         udid: pb.udid,
@@ -371,6 +413,7 @@ fn decode(path: &Path, bytes: &[u8]) -> Result<DeviceRecord, StoreError> {
         last_error: pb.last_error,
         config_profile,
         nonce,
+        install,
     })
 }
 

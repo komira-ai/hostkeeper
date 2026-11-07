@@ -64,6 +64,8 @@ pub(crate) fn flags_in(dir: &Scratch) -> MdmFlags {
         mdm_webhook_listen: Some("127.0.0.1:9100".parse().expect("an address")),
         mdm_profile_identifier: None,
         mdm_daemon_config: None,
+        mdm_pkg_allowlist: None,
+        mdm_host: None,
     }
 }
 
@@ -243,4 +245,86 @@ fn the_mac_path_approves_only_an_enrolled_and_supervised_device_of_the_gate() {
             }
         }
     }
+}
+
+/// The real file system, but every file `read_private` opens is shown as root's, mode 0644: a
+/// file of root's cannot be made without root.
+struct RootFs;
+
+impl hostkeeper_enrollment::fs::Fs for RootFs {
+    fn read(&self, path: &std::path::Path) -> std::io::Result<Option<Vec<u8>>> {
+        RealFs.read(path)
+    }
+    fn read_private(
+        &self,
+        path: &std::path::Path,
+    ) -> std::io::Result<Option<(Vec<u8>, hostkeeper_enrollment::fs::FileStat)>> {
+        let root = |(bytes, stat): (Vec<u8>, hostkeeper_enrollment::fs::FileStat)| {
+            let stat = hostkeeper_enrollment::fs::FileStat {
+                uid: 0,
+                mode: 0o644,
+                ..stat
+            };
+            (bytes, stat)
+        };
+        Ok(RealFs.read_private(path)?.map(root))
+    }
+    fn write_new(&self, path: &std::path::Path, bytes: &[u8], mode: u32) -> std::io::Result<()> {
+        RealFs.write_new(path, bytes, mode)
+    }
+    fn sync_file(&self, path: &std::path::Path) -> std::io::Result<()> {
+        RealFs.sync_file(path)
+    }
+    fn rename(&self, from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+        RealFs.rename(from, to)
+    }
+    fn remove(&self, path: &std::path::Path) -> std::io::Result<()> {
+        RealFs.remove(path)
+    }
+    fn sync_dir(&self, dir: &std::path::Path) -> std::io::Result<()> {
+        RealFs.sync_dir(dir)
+    }
+    fn create_dir(&self, dir: &std::path::Path) -> std::io::Result<()> {
+        RealFs.create_dir(dir)
+    }
+    fn list(&self, dir: &std::path::Path) -> std::io::Result<Vec<String>> {
+        RealFs.list(dir)
+    }
+    fn lock(&self, path: &std::path::Path) -> std::io::Result<hostkeeper_enrollment::fs::FileLock> {
+        RealFs.lock(path)
+    }
+}
+
+/// Catches: the pkg install built from `--mdm-pkg-allowlist` and `--mdm-host` with another
+/// host or list than they name (the newest entry, the host in lower case), or built without
+/// the two flags; a root-owned allowlist refused.
+#[test]
+fn the_pkg_flags_make_the_install_of_the_newest_entry() {
+    let dir = scratch("mdm-pkg-install");
+    let (a, b) = ("a".repeat(64), "b".repeat(64));
+    let entry = |sha: &str, version: &str| {
+        format!(
+            "[[pkg]]\nsha256 = \"{sha}\"\nversion = \"{version}\"\npath = \"/var/lib/hostkeeper-mdm-pkg/{sha}.pkg\"\n"
+        )
+    };
+    let list = dir.path().join("pkgs.toml");
+    std::fs::write(&list, entry(&a, "0.1.9") + &entry(&b, "0.1.66")).expect("written");
+    let flags = MdmFlags {
+        mdm_pkg_allowlist: Some(list),
+        mdm_host: Some("MDM.example.com".to_owned()),
+        ..flags_in(&dir)
+    };
+    let install = super::install_of(&flags, Arc::new(RootFs))
+        .expect("read")
+        .expect("an install");
+    assert_eq!(install.allowlist.newest().sha256.as_str(), b);
+    assert_eq!(
+        install.host.pkg_url(&install.allowlist.newest().sha256),
+        format!("https://mdm.example.com/pkg/{b}.pkg")
+    );
+    assert!(
+        super::install_of(&flags_in(&dir), Arc::new(RootFs))
+            .expect("no flags")
+            .is_none()
+    );
 }

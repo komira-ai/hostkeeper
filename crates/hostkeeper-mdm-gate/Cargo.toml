@@ -23,7 +23,8 @@ bytes.workspace = true
 hostkeeper-config = { path = "../hostkeeper-config" }
 # The file-system port and the atomic write of a record, and the clock port the times come from.
 hostkeeper-enrollment = { path = "../hostkeeper-enrollment" }
-# The file rule of the API key file (`--mdm-api-key-file`).
+# The file rule of the API key file (`--mdm-api-key-file`), and the version of a pkg on the
+# allowlist (`--mdm-pkg-allowlist`).
 hostkeeper-wire = { path = "../hostkeeper-wire" }
 http-body-util.workspace = true
 # The client of NanoHUB's API and the server of the webhook, both HTTP/1.1 on loopback.
