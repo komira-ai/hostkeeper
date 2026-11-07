@@ -9,14 +9,14 @@ use support::replay::{Sequence, check_changed_list, replay, sequence_files};
 /// The recorded sequences in which a rule this coordinator cut or changed decided: each records
 /// this coordinator's answer in `expect_status`/`expect_body` and kbf's beside it in
 /// `kbf_status`/`kbf_body` (in `17`, the one step whose list of nine feature names kbf's bound
-/// of 8 dropped). Every other sequence is kbf's bytes, and any difference in it fails.
+/// of 8 dropped; in `10` and `23`, the steps the update plan decided). Every other sequence is kbf's bytes, and any difference in it fails.
 /// `tests/fixtures/recorded/README.md` says, for each, the rule and the old and the new reason.
 const CHANGED: &[&str] = &[
+    "10-halt-generations-of-two-services",
     "17-features-a-bad-announcement-is-dropped",
+    "23-automatic-rollback-marks-the-version-bad",
     "24-cut-never-last-does-not-delay-an-order",
-    "25-cut-min-up-does-not-delay-an-order",
     "26-cut-role-order-does-not-delay-an-order",
-    "27-cut-a-role-limit-of-zero-does-not-hold-the-role",
     "28-cut-convergence-does-not-need-min-up",
     "29-cut-service-order-does-not-delay-an-order",
     "30-cut-require-min-up-does-not-refuse-a-body",
@@ -25,13 +25,14 @@ const CHANGED: &[&str] = &[
 /// Proves: this coordinator, built from the recorded flags and the recorded rollout file as
 /// `config::build` builds one, answers every call of every recorded sequence with the status and
 /// the body bytes kbf's coordinator answered, except in the sequences of `CHANGED`, where a rule
-/// this coordinator cut (the minimum of hosts up, the `never_last` floor, the order of roles and
-/// of services, a role's limit of zero, the required `min_up` keys) decided and the recorded
-/// answer is this coordinator's, with kbf's kept beside it. The sequences cover halts (raise,
+/// this coordinator cut (the `never_last` floor, the order of roles and of services, the
+/// convergence minimum, the required `min_up` keys) or changed (the update plan, which orders by
+/// stages and audits the stages it enters) decided and the recorded answer is this
+/// coordinator's, with kbf's kept beside it. The sequences cover halts (raise,
 /// hold, operator clear, the generations in an answer), an automatic rollback to the last good
-/// version and the version marked bad, bake, canary, deferral and its backoff, one live update
-/// at a time, an updater that sends `services` and one that does not, and kbf's status and
-/// convergence bytes. Every differing step of every sequence is reported in one failure, with
+/// version and the version marked bad, bake, canary, deferral and its backoff, the update slots
+/// of a role, the minimum of hosts up and a role's limit of zero, an updater that
+/// sends `services` and one that does not, and kbf's status and convergence bytes. Every differing step of every sequence is reported in one failure, with
 /// the answer in full.
 /// Catches: a change of an answer that is not a cut rule's, and a cut rule whose answer moved
 /// back.

@@ -59,11 +59,14 @@ fn check_ops(rig: &Rig, readers: &Readers) {
         readers
             .check(readers.reader_of("halts"), &halts, "halts")
             .unwrap_or_else(|why| panic!("{why}"));
+        // kbf reads the halts file leniently: the one key this coordinator adds to it, where each
+        // service's update plan stands, is skipped there, and costs kbf only the plan's position.
         let mut keys: Vec<&str> = halts
             .as_object()
             .expect("an object")
             .keys()
             .map(String::as_str)
+            .filter(|key| *key != "rollouts")
             .collect();
         keys.sort_unstable();
         assert_eq!(keys, ["ops", "services"], "the halts file's keys");
