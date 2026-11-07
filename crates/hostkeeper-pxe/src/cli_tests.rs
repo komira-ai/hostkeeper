@@ -526,3 +526,89 @@ fn the_request_carries_the_flags_and_the_config_bounds() {
         );
     }
 }
+
+/// `serve --help` lists every flag of `serve`; `serve` without `--mode` exits 2 naming it, and
+/// the serve is not reached; a refused serve prints one line, `hostkeeper-pxe serve: <why>`,
+/// and exits 1; a serve that stops prints nothing and exits 0.
+///
+/// Catches a serve that starts in a mode the operator did not name, and a refusal that exits 0.
+#[test]
+fn serve_takes_its_flags_and_reports_its_refusal() {
+    let (status, out, _) = run_with(&["serve", "--help"], &unreached);
+    assert_eq!(status, 0);
+    for flag in [
+        "--mode",
+        "--address",
+        "--interface",
+        "--dhcp-listen",
+        "--proxy-listen",
+        "--tftp-listen",
+        "--http-listen",
+        "--dhcp-reply-to",
+        "--coordinator",
+        "--ca-file",
+        "--token-file",
+        "--dir",
+        "--daemon-config",
+        "--ssh-authorized-keys",
+        "--install-disk",
+        "--serial-console",
+        "--reinstall",
+        "--user-id",
+        "--group-id",
+        "--tftp-timeout-ms",
+    ] {
+        assert!(out.contains(flag), "{flag}: {out}");
+    }
+    let required = [
+        "serve",
+        "--address",
+        "192.0.2.10",
+        "--coordinator",
+        "https://192.0.2.1:8444",
+        "--ca-file",
+        "ca.pem",
+        "--token-file",
+        "token",
+        "--dir",
+        "boot",
+        "--daemon-config",
+        "c.toml",
+        "--ssh-authorized-keys",
+        "keys",
+        "--user-id",
+        "1000",
+        "--group-id",
+        "1000",
+    ];
+    let (status, out, err) = run_with(&required, &unreached);
+    assert_eq!((status, out.as_str()), (2, ""));
+    assert!(err.contains("--mode <MODE>"), "{err}");
+    let with_mode = [&required[..], &["--mode", "router"]].concat();
+    let argv = |args: &[&str]| {
+        let mut argv: Vec<OsString> = vec!["hostkeeper-pxe".into()];
+        argv.extend(args.iter().map(OsString::from));
+        argv
+    };
+    let (mut out, mut err) = (Vec::new(), Vec::new());
+    let refused = |flags: &ServeFlags| {
+        assert_eq!(flags.mode, ModeFlag::Router);
+        Err("the coordinator could not be read".to_owned())
+    };
+    let status = run(argv(&with_mode), &unreached, &refused, &mut out, &mut err);
+    assert_eq!(status, 1);
+    assert!(out.is_empty());
+    assert_eq!(
+        String::from_utf8(err).expect("UTF-8"),
+        "hostkeeper-pxe serve: the coordinator could not be read\n"
+    );
+    let (mut out, mut err) = (Vec::new(), Vec::new());
+    let status = run(
+        argv(&with_mode),
+        &unreached,
+        &|_| Ok(()),
+        &mut out,
+        &mut err,
+    );
+    assert_eq!((status, out.len(), err.len()), (0, 0, 0));
+}

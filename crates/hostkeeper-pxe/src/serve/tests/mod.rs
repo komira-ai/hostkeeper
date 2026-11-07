@@ -6,6 +6,12 @@
 mod fake;
 mod kit;
 
+mod answers;
+mod http;
+mod inventory;
 mod proxy;
 mod reads;
 mod router;
+mod sealed;
+mod start;
+mod tftp;
