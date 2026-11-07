@@ -3,8 +3,9 @@
 Status: design, for review. This document makes network install of new Linux machines part of hostkeeper v1. It
 replaces the non-goal of [hostkeeper-design.md](hostkeeper-design.md) section 2.2 ("No network boot service in
 scope") and the first item of its section 12.1 ("the operator's own, no build items here"). Both now point here. Where
-this document and hostkeeper-design.md disagree on network install, this document wins. Nothing here is built yet:
-every statement about new code is **Designed**, and section 12 lists the build items.
+this document and hostkeeper-design.md disagree on network install, this document wins. Section 12 lists the build
+items. A statement about new code is **Designed** until its item is merged, and **Built**, with its path, after: so far
+N3, the console's issue file (section 7).
 
 The tags are those of hostkeeper-design.md. **Built** names code on `main` with a path. **Designed** means nothing
 implements it yet. **[V]** marks a fact about software or hardware we do not own, which must be checked on the real
@@ -314,11 +315,17 @@ thing:
   data MAC of the record and does not contradict its BMC MAC. The machine wrote the claims itself, and anyone who read
   the label or the network can write the same. Approve only the key hash shown on this machine's console."
 - **Show the key hash on the machine's console.** This is the one check an attacker elsewhere on the LAN cannot fake.
-  While a request is pending, the daemon writes its key hash, the coordinator it posted to, and the request's state to
-  `/run/hostkeeper/enrollment.issue`. The deb ships `/etc/issue.d/hostkeeper.issue` as a link to it, so the login
-  prompt shows it. **[V]**: that agetty on 24.04 reads `issue.d`, and that it shows a file made after the prompt was
-  drawn only when the prompt is drawn again; so the daemon asks the gettys to redraw (`agetty --reload`) each time it
-  writes the file. Which consoles show it: the local console (tty1) always; the BMC's serial console only when the
+  After each step of its enrollment loop, while its text changes, the daemon writes the request's state, the
+  coordinator it posts to, and the key hash to `/run/hostkeeper/enrollment.issue`. The deb, the rpm and the boot-image
+  overlay ship `/etc/issue.d/hostkeeper.issue` as a link to it, so the login prompt shows it. **[V]**: that agetty on
+  24.04 reads `issue.d` and follows the link, and that it shows a file made after the prompt was drawn only when the
+  prompt is drawn again; so the daemon asks the gettys to redraw (`/sbin/agetty --reload`) each time it writes the
+  file, which changes nothing where agetty would have read it anyway. The text is printable ASCII, a backslash
+  (agetty's escape character) written as `?`, so it reads the same whatever agetty does with escapes. The state is
+  `pending approval`, `approved, enrolled as host:<id>`, `nothing sent` for an untrusted coordinator (without the hash
+  that CA presents, so no second hash stands beside the key's), `denied: <reason>`, or `error: <why>` for a coordinator
+  that cannot be reached or any other failure (**Built**: `crates/hostkeeper-daemon/src/console.rs`, the link in
+  `packaging/linux/nfpm.yaml` and `packaging/linux/overlay/`; exact texts in `crates/hostkeeper-daemon/tests/console.rs`). Which consoles show it: the local console (tty1) always; the BMC's serial console only when the
   seed sets the installed kernel's `console=` to that port and enables its serial getty, which `--serial-console
   <ttyS port>` does. The operator doc's check with `openssl` (docs/operations/enrollment.md, "Check the key hash")
   stays as the way to read it over SSH, for a machine with neither.

@@ -45,6 +45,7 @@ use hostkeeper_enroll::{
 use hostkeeper_hook::Step;
 use hostkeeper_launchd::{Platform, PlatformKind};
 use hostkeeper_link::{ClockSleeper, LoopFlags, PkiCertSource, StopFlag, ThreadDispatch};
+use hostkeeper_observe::ProcessRunner;
 use hostkeeper_package::gh::{GhVerifier, OwnedBy, SystemRunner};
 use hostkeeper_package::net::{NetFetcher, UreqTransport};
 use hostkeeper_package::ports::{Attest, Attested, Verifier, VerifyError};
@@ -55,8 +56,9 @@ use hostkeeper_unpack::Owner;
 use rustls_pki_types::CertificateDer;
 use rustls_pki_types::pem::PemObject;
 
-use crate::adapters::{Adapters, host_claims, host_clock};
+use crate::adapters::{Adapters, RunnerLauncher, host_claims, host_clock};
 use crate::admin_client::AdminCommand;
+use crate::console::{AGETTY, ConsoleIssue, ENROLLMENT_ISSUE};
 use crate::executor::{Daemon, Placement, Ports};
 use crate::files;
 use crate::ipmi::DevIpmi;
@@ -123,6 +125,10 @@ pub const DEADMAN_POLL_SECS: u64 = 1;
 pub const PKI_DIR: &str = "/etc/updater/pki";
 /// How long the enrollment loop's connection, handshake and each call to the coordinator may take.
 pub const ENROLL_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long `agetty --reload` may run: it only touches agetty's reload file and exits.
+pub const AGETTY_DEADLINE: Duration = Duration::from_secs(10);
+/// How much of `agetty --reload`'s standard output is read: its exit alone is judged.
+pub const AGETTY_OUTPUT_CAP: usize = 4 * 1024;
 
 /// hostkeeper: keeps a host's services on the versions its coordinator orders.
 #[derive(Debug, Parser)]
@@ -458,7 +464,11 @@ async fn start_and_serve(
 ///   first heartbeat, on the loop's worker, so a host not enrolled yet makes none;
 /// - each loop and each order runs on a thread of its own ([`ThreadDispatch`]);
 /// - both loops log through the daemon's alert sink ([`DaemonLog`]);
-/// - the heartbeat loop tells `watchdog` after each heartbeat that it is alive.
+/// - the heartbeat loop tells `watchdog` after each heartbeat that it is alive;
+/// - when `files` names a console, the enrollment loop writes its issue file, naming the daemon
+///   config's `coordinator`, and has the gettys redraw by running its agetty with `--reload` as
+///   a child process, its output read to [`AGETTY_OUTPUT_CAP`] and bounded by
+///   [`AGETTY_DEADLINE`] ([`crate::console`]).
 pub fn host_links(
     daemon: &Arc<Daemon>,
     files: &HostFiles,
@@ -475,6 +485,17 @@ pub fn host_links(
         image: image_of(ctx.own_version),
     };
     let pki = files.pki.clone();
+    let console = files.console.as_ref().map(|console| {
+        ConsoleIssue::new(
+            console.issue.clone(),
+            endpoint.clone(),
+            &console.agetty,
+            Box::new(RunnerLauncher::new(
+                ProcessRunner::new(AGETTY_OUTPUT_CAP),
+                AGETTY_DEADLINE,
+            )),
+        )
+    });
     let link = HostLink::new(
         ctx.config.clone(),
         files.pki.clone(),
@@ -494,6 +515,7 @@ pub fn host_links(
         dispatch: Arc::new(ThreadDispatch),
         stop,
         watchdog,
+        console,
     }
 }
 
@@ -563,6 +585,17 @@ pub struct HostFiles {
     pub trusted_root: PathBuf,
     /// The pki directory, which the enrollment loop writes and the heartbeat loop reads.
     pub pki: PathBuf,
+    /// The console's issue file and the agetty that redraws it; none on a Mac.
+    pub console: Option<ConsoleFiles>,
+}
+
+/// What the enrollment loop shows on the machine's console through ([`crate::console`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConsoleFiles {
+    /// The issue file the enrollment loop writes.
+    pub issue: PathBuf,
+    /// The agetty run with `--reload` after each write.
+    pub agetty: PathBuf,
 }
 
 impl HostFiles {
@@ -576,11 +609,16 @@ impl HostFiles {
     /// directory is [`PKI_DIR`] on both.
     ///
     /// - A Mac: [`CA_BUNDLE_MACOS`], [`GH_BINARY_MACOS`] and [`SIGSTORE_TRUSTED_ROOT_MACOS`],
-    ///   whatever `exists` says.
+    ///   whatever `exists` says, and no console.
     /// - Linux: [`GH_BINARY`] and [`SIGSTORE_TRUSTED_ROOT`], and the first of [`CA_BUNDLE`]
     ///   (Debian family) and [`CA_BUNDLE_RHEL`] (RHEL family) that exists; [`CA_BUNDLE`] when
     ///   neither does, so the fetch reads a bundle that is not there and has no root to trust.
+    ///   The console's issue file is [`ENROLLMENT_ISSUE`], redrawn by [`AGETTY`].
     pub fn for_platform(kind: PlatformKind, exists: impl Fn(&Path) -> bool) -> HostFiles {
+        let console = (kind == PlatformKind::Linux).then(|| ConsoleFiles {
+            issue: PathBuf::from(ENROLLMENT_ISSUE),
+            agetty: PathBuf::from(AGETTY),
+        });
         let (ca_bundle, gh, trusted_root) = match kind {
             PlatformKind::Macos => (
                 CA_BUNDLE_MACOS,
@@ -601,6 +639,7 @@ impl HostFiles {
             gh: PathBuf::from(gh),
             trusted_root: PathBuf::from(trusted_root),
             pki: PathBuf::from(PKI_DIR),
+            console,
         }
     }
 }

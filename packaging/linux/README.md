@@ -19,8 +19,8 @@ command lines, that it starts `current` of the daemon's binary directory and res
 daemon's exit after its own update, that it agrees with the drop-in the daemon writes, that it is
 the one unit file and the one hostkeeper's package is built with, that the directories are the
 design's with the design's modes, that the template is refused until each placeholder is filled
-and loads once they are, that the packages carry exactly the six files and no key, certificate,
-token or config, that `gh` and the trusted root are installed at the daemon's own paths from
+and loads once they are, that the packages carry exactly the six files and the console's issue
+link and no key, certificate, token or config, that `gh` and the trusted root are installed at the daemon's own paths from
 where `cargo xtask release nfpm-stage` writes them, that the scripts never start the unit, and
 that the overlay equals these sources.
 
@@ -76,7 +76,12 @@ packages, `linux-x86_64` (`amd64` for the deb, `x86_64` for the rpm) and `linux-
 | `/usr/lib/hostkeeper/gh` | 0755 |
 | `/usr/lib/hostkeeper/trusted_root.json` | 0644 |
 
-all owned by root. The last two are what the daemon checks every package's attestation with: a
+all owned by root, and one link, `/etc/issue.d/hostkeeper.issue`, to
+`/run/hostkeeper/enrollment.issue`: the console's issue file, which the daemon writes while the
+host waits for its enrollment (the request's state, the coordinator and the key hash), so the
+login prompt of the machine's console shows the key hash to check before approving
+([docs/operations/enrollment.md](../../docs/operations/enrollment.md#check-the-key-hash)). The
+link points at nothing until the daemon first writes the file. The last two are what the daemon checks every package's attestation with: a
 pinned `gh` (the distribution's own may have no `gh attestation`) and the Sigstore trusted root
 captured when the package was built. Before nfpm runs, `cargo xtask release nfpm-stage` checks
 the `gh` archive against its pin and writes both into `target/nfpm/`; where they come from, how
@@ -119,6 +124,7 @@ unit by hand to its approval and first heartbeat, is
 | `etc/systemd/system/multi-user.target.wants/hostkeeper.service` | a link to the unit (relative, so it resolves in this tree too), which enables it |
 | `usr/lib/tmpfiles.d/hostkeeper.conf` | the directories |
 | `etc/hostkeeper/hostkeeper.toml.template` | the config template |
+| `etc/issue.d/hostkeeper.issue` | a link to `/run/hostkeeper/enrollment.issue`, the console's issue file, as the packages install it |
 
 The image build copies the tree onto the image root (`cp -a overlay/. <image root>/`, keeping
 the link), installs the daemon as `/usr/bin/hostkeeper` and `gh` and the trusted root under
