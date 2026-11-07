@@ -6,7 +6,8 @@
 //!   `contract::tests::asset_names_are_the_documented_contract`;
 //! - the commands it gives a consumer are the ones the `verify` job of `release.yml` runs
 //!   ([`command_problems`]): step 2 in the job, steps 3 and 4 as `release check` runs them through
-//!   [`Gh`], and the outputs of step 6 as `release check-binary` holds the two binaries to.
+//!   [`Gh`], and the outputs of step 6 as `release check-binary` holds the shipped binaries
+//!   ([`PROGRAMS`]) to.
 //!
 //! Each check is shown to refuse a change to either side alone. Everything is read as text: no
 //! command runs.
@@ -15,9 +16,7 @@ use std::cell::RefCell;
 use std::path::Path;
 use std::rc::Rc;
 
-use super::contract::{
-    COORDINATOR, Commit, PROGRAM, Platform, Signer, Version, asset_names, stamp_of,
-};
+use super::contract::{Commit, PROGRAMS, Platform, Signer, Version, asset_names, stamp_of};
 use super::github::Gh;
 use super::ports::{Exec, Ran, Verifier};
 
@@ -276,7 +275,7 @@ fn command_problems(doc: &str, release_yml: &str) -> Vec<String> {
         problems.push(format!("the verify job does not `{check}`"));
     }
 
-    // Step 6: the outputs `check-binary` holds the two binaries to, and the job checks both.
+    // Step 6: the outputs `check-binary` holds the shipped binaries to, and the job checks each.
     let mut said: Vec<String> = quoted(section(doc, "\n### 6. ").unwrap_or_default())
         .into_iter()
         .filter(|q| q.contains("<X.Y.Z>+"))
@@ -287,16 +286,16 @@ fn command_problems(doc: &str, release_yml: &str) -> Vec<String> {
         .collect();
     said.sort();
     said.dedup();
-    let want = vec![
-        stamp_of(PROGRAM, &version, &commit),
-        stamp_of(COORDINATOR, &version, &commit),
-    ];
+    let want: Vec<String> = PROGRAMS
+        .iter()
+        .map(|p| stamp_of(p, &version, &commit))
+        .collect();
     if said != want {
         problems.push(format!(
             "step 6 expects {said:?}, not what check-binary holds the binaries to, {want:?}"
         ));
     }
-    for program in [PROGRAM, COORDINATOR] {
+    for program in PROGRAMS {
         let line = format!(
             "run: cargo xtask release check-binary \"$RUNNER_TEMP/binary/{program}\" \
              \"$RELEASE_VERSION\" \"$COMMIT\""
@@ -349,6 +348,11 @@ fn verify_a_release_commands_match_the_ones_the_verify_job_runs() {
             "step 6 expects",
         ),
         (
+            "`hostkeeper-mdm <X.Y.Z>+<first 12 hex digits of $PIN>`.\n",
+            "`hostkeeper-mdm <X.Y.Z>`.\n",
+            "step 6 expects",
+        ),
+        (
             "\n### 2. Checksums",
             "\n#### 2. Checksums",
             "no command in step 2",
@@ -382,6 +386,11 @@ fn verify_a_release_commands_match_the_ones_the_verify_job_runs() {
             "\"$RUNNER_TEMP/binary/hostkeeper-coordinator\" \"$RELEASE_VERSION\" \"$COMMIT\"",
             "\"$RUNNER_TEMP/binary/hostkeeper-coordinator\" \"$RELEASE_VERSION\" \"$GITHUB_SHA\"",
             "does not check hostkeeper-coordinator",
+        ),
+        (
+            "\"$RUNNER_TEMP/binary/hostkeeper-mdm\" \"$RELEASE_VERSION\" \"$COMMIT\"",
+            "\"$RUNNER_TEMP/binary/hostkeeper-mdm\" \"$RELEASE_VERSION\" \"$GITHUB_SHA\"",
+            "does not check hostkeeper-mdm",
         ),
         (
             "--commit \"$COMMIT\"\n      # The runner is linux-x86_64",
@@ -426,7 +435,8 @@ fn a_document_without_the_list_or_the_platforms_has_no_names() {
 #[test]
 fn the_platform_sentence_lists_the_released_platforms() {
     // Catches: a document that names a platform the release does not ship, or misses one, pairs
-    // a platform with another's deb or rpm architecture, or lists the coordinator for macOS.
+    // a platform with another's deb or rpm architecture, or lists the coordinator or the MDM kit
+    // for macOS.
     fn values(list: &[&str]) -> Vec<String> {
         list.iter().map(|v| (*v).to_owned()).collect()
     }
@@ -450,6 +460,8 @@ fn the_platform_sentence_lists_the_released_platforms() {
         "hostkeeper_0.1.5_amd64.deb",
         "hostkeeper-0.1.5-1.aarch64.rpm",
         "hostkeeper-coordinator-0.1.5-linux-arm64.image.tar",
+        "hostkeeper-mdm-0.1.5-linux-x86_64.tar.gz",
+        "hostkeeper-mdm-0.1.5-linux-arm64.cdx.json",
         "hostkeeper-0.1.5-macos-arm64.pkg",
     ] {
         assert!(names.iter().any(|n| n == name), "{name} in {names:?}");
@@ -457,7 +469,8 @@ fn the_platform_sentence_lists_the_released_platforms() {
     assert!(
         !names
             .iter()
-            .any(|n| n.starts_with("hostkeeper-coordinator-0.1.5-macos")),
+            .any(|n| n.starts_with("hostkeeper-coordinator-0.1.5-macos")
+                | n.starts_with("hostkeeper-mdm-0.1.5-macos")),
         "{names:?}"
     );
     assert_eq!(names.len(), asset_names(&v, &Platform::RELEASED).len());

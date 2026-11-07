@@ -59,6 +59,12 @@ hostkeeper-coordinator-<version>-linux-x86_64.image.tar
 hostkeeper-coordinator-<version>-linux-x86_64.image.tar.sigstore.json
 hostkeeper-coordinator-<version>-linux-x86_64.tar.gz
 hostkeeper-coordinator-<version>-linux-x86_64.tar.gz.sigstore.json
+hostkeeper-mdm-<version>-linux-arm64.cdx.json
+hostkeeper-mdm-<version>-linux-arm64.tar.gz
+hostkeeper-mdm-<version>-linux-arm64.tar.gz.sigstore.json
+hostkeeper-mdm-<version>-linux-x86_64.cdx.json
+hostkeeper-mdm-<version>-linux-x86_64.tar.gz
+hostkeeper-mdm-<version>-linux-x86_64.tar.gz.sigstore.json
 hostkeeper_<version>_amd64.deb
 hostkeeper_<version>_amd64.deb.sigstore.json
 hostkeeper_<version>_arm64.deb

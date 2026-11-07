@@ -4,8 +4,9 @@
 //!
 //! - the version `X.Y.Z` ([`Version`]) and the tag `v<X.Y.Z>` ([`Version::tag`]);
 //! - the text a shipped binary prints for `--version`, `hostkeeper X.Y.Z+<12 hex>`
-//!   ([`stamp_string`]) and `hostkeeper-coordinator X.Y.Z+<12 hex>` ([`stamp_of`]), and
-//!   [`RELEASE_COMMIT`], the build-time input that carries the commit;
+//!   ([`stamp_string`]), `hostkeeper-coordinator X.Y.Z+<12 hex>` and `hostkeeper-mdm
+//!   X.Y.Z+<12 hex>` ([`stamp_of`]), and [`RELEASE_COMMIT`], the build-time input that carries
+//!   the commit;
 //! - the identity that signs every attestation: [`SIGNER_WORKFLOW`] on [`SIGNER_REF`] of
 //!   [`REPO`], on a hosted runner;
 //! - the asset names of a release ([`asset_names`], the one function that lists them; the
@@ -15,7 +16,8 @@
 //! ([`Platform::ALL`]): one package per OS and CPU family, listed in the release index of its
 //! package (see `index`). A release ships every one of them ([`Platform::RELEASED`]), and a
 //! release missing one is refused. macos-arm64 also ships the installer pkg of a Mac's first
-//! install ([`installer_name`]). A release carries three kinds of package ([`Package`]):
+//! install ([`installer_name`]); the two Linux platforms also ship the coordinator
+//! ([`COORDINATOR`]) and the MDM kit's binary ([`MDM`]). A release carries three kinds of package ([`Package`]):
 //! hostkeeper's own (`index.json`), `hello`, the example service of `examples/hello`
 //! (`hello-index.json`), and hello's failing build (`hello-fail-ready-index.json`). It also
 //! carries `netboot.json` ([`NETBOOT`]), the boot sets of network install for the two Linux
@@ -66,6 +68,11 @@ pub(crate) const HELLO: &str = "hello";
 /// The coordinator's asset stem, and the name of its binary.
 pub(crate) const COORDINATOR: &str = "hostkeeper-coordinator";
 
+/// The asset stem of the MDM kit's binary, and the name of that binary: the Linux host of the
+/// MDM server stack runs it (`crates/hostkeeper-mdm`). Released for the two Linux platforms only,
+/// as a tarball with its SBOM.
+pub(crate) const MDM: &str = "hostkeeper-mdm";
+
 /// Where the coordinator's container image holds the operator web app (`ui/` of the commit):
 /// the destination of the Dockerfile's `COPY ui`, and the default UI directory of the
 /// coordinator's `serve` (`hostkeeper_coordinator::config::DEFAULT_UI_DIR`).
@@ -73,7 +80,7 @@ pub(crate) const IMAGE_UI_DIR: &str = "/usr/share/hostkeeper-coordinator/ui";
 
 /// The binaries a release ships, by file name: each prints `<name> X.Y.Z+<12 hex>` for
 /// `--version` ([`stamp_of`]).
-pub(crate) const PROGRAMS: [&str; 2] = [PROGRAM, COORDINATOR];
+pub(crate) const PROGRAMS: [&str; 3] = [PROGRAM, COORDINATOR, MDM];
 
 /// The file listing the SHA-256 of every asset but itself and the bundles.
 pub(crate) const SUMS: &str = "SHA256SUMS";
@@ -338,7 +345,8 @@ pub(crate) fn stamp_string(version: &Version, commit: &Commit) -> String {
 }
 
 /// The text the shipped binary `program` (one of [`PROGRAMS`]) prints for `--version`:
-/// `<program> X.Y.Z+<12 hex>`. The coordinator's is `hostkeeper-coordinator X.Y.Z+<12 hex>`.
+/// `<program> X.Y.Z+<12 hex>`. The coordinator's is `hostkeeper-coordinator X.Y.Z+<12 hex>`, the
+/// MDM kit's `hostkeeper-mdm X.Y.Z+<12 hex>`.
 pub(crate) fn stamp_of(program: &str, version: &Version, commit: &Commit) -> String {
     format!("{program} {version}+{}", commit.short())
 }
@@ -524,10 +532,12 @@ pub(crate) fn is_bundle(name: &str) -> bool {
 /// - `hostkeeper_<v>_<deb>.deb` and `hostkeeper-<v>-1.<rpm>.rpm`, the Linux packages;
 /// - `hostkeeper-coordinator-<v>-<p>.image.tar`, the coordinator's OCI image;
 /// - `hostkeeper-coordinator-<v>-<p>.cdx.json`, its SBOM;
+/// - `hostkeeper-mdm-<v>-<p>.tar.gz`, the MDM kit's binary, and `hostkeeper-mdm-<v>-<p>.cdx.json`,
+///   its SBOM;
 ///
 /// and on macOS `hostkeeper-<v>-macos-arm64.pkg`, the installer ([`installer_name`]);
 ///
-/// the bundle of each binary tarball, Linux package, installer, hostkeeper package, hello package,
+/// the bundle of each binary tarball (the three programs'), Linux package, installer, hostkeeper package, hello package,
 /// hello's failing build and image; and once, [`INDEX`] (the release index of the hostkeeper
 /// packages), [`HELLO_INDEX`] (that of the hello packages), [`HELLO_FAIL_READY_INDEX`] (that of the
 /// failing build), [`NETBOOT`] (the boot sets of network install) and its bundle, and
@@ -550,8 +560,10 @@ pub(crate) fn asset_names(version: &Version, platforms: &[Platform]) -> Vec<Stri
                 format!("{PROGRAM}_{version}_{deb}.deb"),
                 format!("{PROGRAM}-{version}-1.{rpm}.rpm"),
                 format!("{COORDINATOR}-{version}-{p}.image.tar"),
+                format!("{MDM}-{version}-{p}.tar.gz"),
             ]);
             names.push(format!("{COORDINATOR}-{version}-{p}.cdx.json"));
+            names.push(format!("{MDM}-{version}-{p}.cdx.json"));
         }
         if platform == Platform::MacosArm64 {
             attested.push(installer_name(version));

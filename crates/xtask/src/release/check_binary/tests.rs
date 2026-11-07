@@ -87,6 +87,35 @@ fn the_coordinator_is_checked_against_its_own_program_name() {
 }
 
 #[test]
+fn the_mdm_kit_binary_is_checked_against_its_own_program_name() {
+    // Catches: the MDM kit's binary refused as not shipped, held to the daemon's or the
+    // coordinator's stamp, or accepted printing either of theirs, or its developer stamp (no
+    // commit).
+    let binary = Path::new("/opt/bin/hostkeeper-mdm");
+    let own = "hostkeeper-mdm 0.1.5+abcdef012345";
+    let run =
+        |printed: &str| check_binary(&printing(true, printed, ""), binary, &version(), &pinned());
+    assert_eq!(
+        run(&format!("{own}\n")),
+        Ok(vec![format!("/opt/bin/hostkeeper-mdm: {own}")])
+    );
+    for other in [
+        STAMP,
+        "hostkeeper-coordinator 0.1.5+abcdef012345",
+        "hostkeeper-mdm 0.1.5",
+    ] {
+        let printed = format!("{other}\n");
+        assert_eq!(
+            run(&printed),
+            Err(Error::Failed(format!(
+                "/opt/bin/hostkeeper-mdm --version printed {printed:?}, not {own:?}"
+            ))),
+            "{other}"
+        );
+    }
+}
+
+#[test]
 fn a_binary_that_is_not_shipped_is_refused_before_it_runs() {
     // Catches: a check that runs any file it is given, or that takes the program name from the
     // output instead of from the file name the binary ships under.
@@ -99,13 +128,14 @@ fn a_binary_that_is_not_shipped_is_refused_before_it_runs() {
     let refused = |path: &Path| -> Result<Vec<String>, Error> {
         Err(Error::Failed(format!(
             "{} is not a shipped binary: its file name is none of \
-             [\"hostkeeper\", \"hostkeeper-coordinator\"]",
+             [\"hostkeeper\", \"hostkeeper-coordinator\", \"hostkeeper-mdm\"]",
             path.display()
         )))
     };
     for path in [
         Path::new("/opt/bin/hostkeeperd"),
         Path::new("/opt/bin/hostkeeper.old"),
+        Path::new("/opt/bin/hostkeeper-mdm-core"),
         Path::new("/"),
         Path::new(OsStr::from_bytes(b"/opt/bin/\xff")),
     ] {
