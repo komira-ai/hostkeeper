@@ -570,10 +570,11 @@ impl Fleet {
                     .is_some_and(|reported| reported.as_str() == order_id),
             };
             // The refusal ends the order of the try it refused, and no later one: one read back
-            // from the verdicts file after the order was given again names the older try.
+            // from the verdicts file after the order was given again names the older try. One
+            // that names no try is taken as the outstanding order's.
             let refused = refusal
                 .as_ref()
-                .is_some_and(|r| r.order_try == Some(order.order_try));
+                .is_some_and(|r| r.order_try.is_none_or(|t| t == order.order_try));
             if (beat.updating.is_some() || ended || deferred_order || refused)
                 && let Some(order) = self.orders.remove(&key)
             {

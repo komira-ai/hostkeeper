@@ -281,12 +281,12 @@ fn a_new_desired_version_is_installed_over_the_installed_one() {
     host.assert_steps(2, "the update ran each step once");
 }
 
-/// The farm's case: the coordinator's first update of a host whose last order of the service
+/// The coordinator's first update of a host whose last order of the service
 /// (the install, try 1) it holds no word of, neither in memory nor in its verdicts file, as for
 /// a coordinator replaced with its in-memory fleet rebuilt from heartbeats after an install the
 /// daemon ran across its own restart. The daemon is started again too, so it resends no verdict.
-/// The update is ordered past the try the daemon's step record holds and runs once, and the
-/// coordinator never hears a refusal for the try.
+/// The update is ordered past the try the daemon's step record holds and runs once, at try 2 by
+/// the record, and the coordinator never hears a refusal for the try.
 ///
 /// Catches: a coordinator that numbers that update try 1, which the daemon refuses
 /// `try_conflict` (its record holds the install's try 1 for another package) and the
@@ -306,6 +306,15 @@ fn an_update_after_a_coordinator_restart_that_forgot_the_install_runs_once() {
     host.wait_settled("2.0.0", 2);
     host.assert_on_host("2.0.0");
     host.assert_steps(2, "the install and the update ran each step once");
+    let record = host.daemon.step_record(SERVICE);
+    assert_eq!(
+        (
+            record["target_version"].as_str(),
+            record["order_try"].as_u64()
+        ),
+        (Some("2.0.0"), Some(2)),
+        "the update ran at the try after the install's: {record}"
+    );
     let log = host.coordinator.log();
     assert!(
         !log.contains("refused the order for its try"),

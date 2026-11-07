@@ -60,7 +60,7 @@ fn a_services_record_try_is_read_leniently() {
 }
 
 /// Catches: a top-level record try lost when the heartbeat is read again without a bad
-/// optional fact (the loose read), which a legacy service's state at the top level carries.
+/// optional fact (the loose read): the reader keeps it as it keeps the top level's other facts.
 #[test]
 fn a_top_level_record_try_survives_a_dropped_fact() {
     let strict = read_heartbeat(&beat_with(web(None), json!({"record_try": 7})), None)

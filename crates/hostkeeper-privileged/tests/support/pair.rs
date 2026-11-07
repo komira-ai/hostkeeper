@@ -551,6 +551,19 @@ impl Daemon {
         fs::read_to_string(self.dir.join("daemon.err")).unwrap_or_default()
     }
 
+    /// The step record of `service` the daemon keeps, as JSON: `null` when it cannot be read.
+    pub fn step_record(&self, service: &str) -> Value {
+        fs::read(
+            self.dir
+                .join("state")
+                .join(service)
+                .join("step-record.json"),
+        )
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or(Value::Null)
+    }
+
     /// The daemon's packages directory.
     pub fn packages(&self) -> PathBuf {
         PathBuf::from(PACKAGES_DIR)

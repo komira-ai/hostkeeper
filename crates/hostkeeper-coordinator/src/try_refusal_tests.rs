@@ -134,7 +134,7 @@ fn plan_state_of(rig: &Rig, node: &str) -> proto::PlanHostState {
 
 /// A rig of eight daemons on `web` at 1.0, each heard once, with `web` set to 2.0: the default
 /// plan's first stage is `d1` alone, and the others wait for it.
-async fn farm(test: &str) -> Rig {
+async fn eight_hosts(test: &str) -> Rig {
     let rig = rig(test, "");
     for i in 1..=8 {
         let reply = ordered(&rig, &format!("d{i}"), vec![web("1.0", &json!({}), None)]).0;
@@ -144,7 +144,7 @@ async fn farm(test: &str) -> Rig {
     rig
 }
 
-/// The farm's case, from a daemon that sends no record try: a coordinator that numbers the first
+/// From a daemon that sends no record try (one of an earlier release): a coordinator that numbers the first
 /// update of `d1` try 1 hears it refused `try_conflict` at try 1. The same answer orders the
 /// update again at try 2; `d1` is not failed here, nor failed in the plan, and the hosts after it
 /// are not held back as a failed stage. The refusal resent before the host takes try 2 is told
@@ -155,7 +155,7 @@ async fn farm(test: &str) -> Rig {
 /// whose try is older than the order given since, that ends that order and raises the try again.
 #[tokio::test]
 async fn a_try_conflict_is_ordered_again_past_the_try_and_fails_no_stage() {
-    let rig = farm("try-refusal-conflict").await;
+    let rig = eight_hosts("try-refusal-conflict").await;
     assert_eq!(
         ordered(&rig, "d1", vec![web("1.0", &json!({}), None)]),
         (update_reply("2.0"), Some(update_order("2.0", 1)))
@@ -200,7 +200,7 @@ async fn a_try_conflict_is_ordered_again_past_the_try_and_fails_no_stage() {
 /// refused try alone, which a record at 5 refuses `stale_try` again three times more.
 #[tokio::test]
 async fn a_stale_try_is_ordered_again_past_the_try_the_record_holds() {
-    let rig = farm("try-refusal-stale").await;
+    let rig = eight_hosts("try-refusal-stale").await;
     ordered(&rig, "d1", vec![web("1.0", &json!({}), None)]);
     let refused = web(
         "1.0",
@@ -222,7 +222,7 @@ async fn a_stale_try_is_ordered_again_past_the_try_the_record_holds() {
 /// failing the version, which no operator verb lifts until another version is set.
 #[tokio::test]
 async fn a_refusal_read_back_after_a_restart_fails_no_one() {
-    let mut rig = farm("try-refusal-restart").await;
+    let mut rig = eight_hosts("try-refusal-restart").await;
     ordered(&rig, "d1", vec![web("1.0", &json!({}), None)]);
     let (_, _, acks) = told(
         &rig,
@@ -243,7 +243,7 @@ async fn a_refusal_read_back_after_a_restart_fails_no_one() {
     assert_ne!(gate_of(&rig, "d1"), proto::GateReason::FailedHere);
 }
 
-/// The farm's case from a daemon that sends its record's try: after a restart the coordinator
+/// From a daemon that sends its record's try: after a restart the coordinator
 /// has heard no verdict of `d1`, whose step record holds the install's try 1, and orders its
 /// first update at try 2, so the daemon has nothing to refuse; a host that sends no record try
 /// is ordered try 1.
@@ -253,7 +253,7 @@ async fn a_refusal_read_back_after_a_restart_fails_no_one() {
 /// refuses `try_conflict`.
 #[tokio::test]
 async fn a_restarted_coordinator_orders_past_the_try_the_hosts_record_holds() {
-    let mut rig = farm("try-refusal-record").await;
+    let mut rig = eight_hosts("try-refusal-record").await;
     restart(&mut rig, "");
     rig.at(2_100);
     assert_eq!(
@@ -264,6 +264,25 @@ async fn a_restarted_coordinator_orders_past_the_try_the_hosts_record_holds() {
         ),
         (update_reply("2.0"), Some(update_order("2.0", 2)))
     );
+}
+
+/// A refusal for the try that names no try (from an agent that does not report it) is taken as
+/// the refusal of the outstanding order: it ends that order, and the host is ordered again at
+/// the next try at once, not failed here.
+///
+/// Catches: a try-less refusal that leaves the order outstanding, so the host is told the same
+/// refused try again until the order ages out.
+#[tokio::test]
+async fn a_refusal_that_names_no_try_ends_the_outstanding_order() {
+    let rig = eight_hosts("try-refusal-no-try").await;
+    ordered(&rig, "d1", vec![web("1.0", &json!({}), None)]);
+    let mut refused = refusal("2.0", 1, "try_conflict");
+    refused.order_try = None;
+    assert_eq!(
+        ordered(&rig, "d1", vec![web("1.0", &json!({}), Some(refused))]),
+        (update_reply("2.0"), Some(update_order("2.0", 2)))
+    );
+    assert_ne!(gate_of(&rig, "d1"), proto::GateReason::FailedHere);
 }
 
 /// Only a refusal for the try is passed over: a failure in a phase whose reason reads
@@ -287,7 +306,7 @@ async fn other_failures_still_fail_the_host_here() {
         ),
     ];
     for (test, failure) in cases {
-        let rig = farm(test).await;
+        let rig = eight_hosts(test).await;
         ordered(&rig, "d1", vec![web("1.0", &json!({}), None)]);
         assert_eq!(
             ordered(&rig, "d1", vec![web("1.0", &json!({}), Some(failure))]).1,
@@ -333,4 +352,18 @@ fn the_record_try_joins_the_highest_try_heard() {
         "an absent record try lowers nothing"
     );
     assert_eq!(hear(json!({"record_try": 2}), None), 10);
+
+    let other = id("d2");
+    fleet.record_in(
+        WEB,
+        other.clone(),
+        crate::testutil::role("daemon"),
+        beat(json!({"record_try": 0}), None),
+        Duration::from_secs(1),
+    );
+    assert_eq!(
+        fleet.next_try(WEB, &other),
+        1,
+        "a record at try 0 starts at 1"
+    );
 }
