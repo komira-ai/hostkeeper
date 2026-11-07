@@ -1,7 +1,8 @@
 -- The rows of each table, printed as `hostkeeper-coordinator export` prints them, for the drill
 -- (README.md, "The restore drill"). Run on the live database with `psql --quiet --tuples-only
 -- --no-align --set=ON_ERROR_STOP=1 --file=/etc/hostkeeper-db/counts.sql`, it reads the counts
--- without the coordinator's lock, so the coordinator keeps running.
+-- without the coordinator's lock, so the coordinator keeps running. Like export, it counts every
+-- row, the spent CI token ids already past among them.
 SET search_path = hostkeeper;
 SELECT format('  %s: %s rows', name, rows) FROM (VALUES
   (1, 'desired', (SELECT count(*) FROM desired)),

@@ -43,11 +43,11 @@ fn owned(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
 }
 
 /// A dump that writes `text`.
-fn writes(text: &'static str) -> impl FnOnce(File) -> Result<(), Error> {
-    move |mut out| {
+fn writes(text: &'static str) -> Box<Dump<'static>> {
+    Box::new(move |mut out: File| {
         out.write_all(text.as_bytes()).expect("write the dump");
         Ok(())
-    }
+    })
 }
 
 /// Proves: in an empty directory the first dump is `hostkeeper-db-1.dump`, holding exactly what
@@ -156,12 +156,16 @@ fn a_failed_or_empty_dump_is_refused_and_removes_nothing() {
         ("hostkeeper-db-3.dump", "three"),
     ];
     let dir = dumps("refused", 0o700, &before);
-    let failed = backup(&dir, 1, |mut out| {
-        out.write_all(b"PGDMP half").expect("write");
-        Err(Error::Failed {
-            status: "exit status: 1".to_owned(),
-        })
-    })
+    let failed = backup(
+        &dir,
+        1,
+        Box::new(|mut out: File| {
+            out.write_all(b"PGDMP half").expect("write");
+            Err(Error::Failed {
+                status: "exit status: 1".to_owned(),
+            })
+        }),
+    )
     .expect_err("the dump failed");
     assert_eq!(
         failed.to_string(),
@@ -169,7 +173,7 @@ fn a_failed_or_empty_dump_is_refused_and_removes_nothing() {
     );
     assert_eq!(files(&dir), owned(&before));
 
-    let empty = backup(&dir, 1, |_| Ok(())).expect_err("the dump wrote nothing");
+    let empty = backup(&dir, 1, Box::new(|_| Ok(()))).expect_err("the dump wrote nothing");
     assert_eq!(
         empty.to_string(),
         "the dump command wrote nothing; no dump was written"
@@ -185,10 +189,10 @@ fn a_failed_or_empty_dump_is_refused_and_removes_nothing() {
 /// through a link into another directory.
 #[test]
 fn a_directory_open_to_others_or_not_a_directory_is_refused_before_the_dump() {
-    let never = |_: File| -> Result<(), Error> { panic!("the dump must not run") };
+    let never = || -> Box<Dump<'static>> { Box::new(|_| panic!("the dump must not run")) };
     for mode in [0o750, 0o705, 0o701] {
         let dir = dumps("open", mode, &[]);
-        let why = backup(&dir, 1, never).expect_err("refused");
+        let why = backup(&dir, 1, never()).expect_err("refused");
         assert_eq!(
             why.to_string(),
             format!(
@@ -206,7 +210,7 @@ fn a_directory_open_to_others_or_not_a_directory_is_refused_before_the_dump() {
         .expect("mode");
     std::os::unix::fs::symlink(base.join("real"), base.join("link")).expect("a link");
     for name in ["file", "link"] {
-        let why = backup(&base.join(name), 1, never).expect_err("refused");
+        let why = backup(&base.join(name), 1, never()).expect_err("refused");
         assert_eq!(
             why.to_string(),
             format!("--into {}: not a directory", base.join(name).display())
@@ -215,7 +219,7 @@ fn a_directory_open_to_others_or_not_a_directory_is_refused_before_the_dump() {
     assert_eq!(files(&base.join("real")), owned(&[]));
 
     let missing = base.join("missing");
-    let why = backup(&missing, 1, never).expect_err("refused");
+    let why = backup(&missing, 1, never()).expect_err("refused");
     assert_eq!(
         why.to_string(),
         format!(
@@ -271,4 +275,28 @@ fn run_refuses_no_command_and_a_program_that_cannot_start() {
         )
     );
     assert_eq!(files(&dir), owned(&[]));
+}
+
+/// Proves: a directory its owner cannot write is refused naming the partial file it could not
+/// make, before the dump runs, and keeps its dumps.
+///
+/// Catches: a dump command run with nowhere to write its output, or a refusal that does not say
+/// which file.
+#[test]
+fn a_directory_its_owner_cannot_write_is_refused_before_the_dump() {
+    let dir = dumps("read-only", 0o500, &[]);
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).expect("mode");
+    std::fs::write(dir.join("hostkeeper-db-4.dump"), "four").expect("a dump");
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o500)).expect("mode");
+    let never = || -> Box<Dump<'static>> { Box::new(|_| panic!("the dump must not run")) };
+    let why = backup(&dir, 1, never()).expect_err("refused");
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).expect("mode");
+    assert_eq!(
+        why.to_string(),
+        format!(
+            "{}: Permission denied (os error 13)",
+            dir.join("hostkeeper-db-5.dump.partial").display()
+        )
+    );
+    assert_eq!(files(&dir), owned(&[("hostkeeper-db-4.dump", "four")]));
 }

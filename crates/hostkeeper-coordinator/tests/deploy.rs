@@ -33,7 +33,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use hostkeeper_coordinator::config::{Parts, StartError};
 use postgres::{Client, SimpleQueryMessage};
 use support::OPERATOR;
-use support::database::{Database, client, server_url, with_catalog_lock};
+use support::database::{COORDINATOR_LOCK, Database, client, server_url, with_catalog_lock};
 use support::serve::{Files, build_given, flags_of, refusal};
 use yaml::{Node, Value};
 
@@ -502,12 +502,14 @@ fn after_restore_moves_the_serial_counter_on_by_1048576() {
     assert_eq!(next(&mut session), before + 2 * 1_048_576);
 }
 
-/// Proves: on a database that holds an operator's changes, `counts.sql` prints exactly the lines
-/// `hostkeeper-coordinator export` prints for the rows of each table, in its order, so the drill
-/// compares the two line for line; and it reads them while the coordinator holds the lock.
+/// Proves: on a database that holds an operator's changes and two spent CI token ids, one past and
+/// one not, `counts.sql` prints exactly the lines `hostkeeper-coordinator export` prints for the
+/// rows of each table, in its order, so the drill compares the two line for line; both count every
+/// row, the past id among them.
 ///
 /// Catches: a table the export counts and the drill's query leaves out, or one it counts that the
-/// export does not, a count of the wrong table, or another spelling of the lines.
+/// export does not, a count of the wrong table, a count that leaves out the past ids the export
+/// counts (a drill that fails on good dumps), or another spelling of the lines.
 #[test]
 fn counts_sql_prints_the_rows_of_each_table_as_export_prints_them() {
     let files = Files::new("deploy-counts");
@@ -522,9 +524,20 @@ fn counts_sql_prints_the_rows_of_each_table_as_export_prints_them() {
             .operate(Some(OPERATOR), body.as_bytes())
             .expect("an operator's change");
     }
-    let mut session = client(Some(database.name()));
-    let counted = Psql::new().run(&mut session, &deploy("sql/counts.sql"));
     drop(parts);
+    database.lock_is_free();
+    let mut session = client(Some(database.name()));
+    // Written as the coordinator writes, under its lock: one id long past, one far ahead.
+    session
+        .batch_execute(&format!(
+            "SELECT pg_advisory_lock({COORDINATOR_LOCK}); \
+             INSERT INTO hostkeeper.spent_tokens (jti, until_unix) VALUES ('past', 1), \
+             ('live', 4000000000); \
+             SELECT pg_advisory_unlock({COORDINATOR_LOCK})"
+        ))
+        .expect("two spent ids");
+    let counted = Psql::new().run(&mut session, &deploy("sql/counts.sql"));
+    drop(session);
     database.lock_is_free();
 
     let out = files.path("exported");
@@ -556,6 +569,10 @@ fn counts_sql_prints_the_rows_of_each_table_as_export_prints_them() {
     assert_eq!(counted, lines);
     assert_eq!(counted.len(), 25, "{counted:?}");
     assert!(
+        counted.contains(&"  spent_tokens: 2 rows".to_owned()),
+        "{counted:?}"
+    );
+    assert!(
         counted.contains(&"  exclusions: 2 rows".to_owned()),
         "{counted:?}"
     );
@@ -567,7 +584,8 @@ fn counts_sql_prints_the_rows_of_each_table_as_export_prints_them() {
 
 /// Proves: a whole word is renamed and a word that only holds it is not.
 ///
-/// Catches: a rename that reaches the schema `hostkeeper_x` or a secret's path.
+/// Catches: a rename that reaches a longer identifier holding the name (`hostkeeper_x`,
+/// `xhostkeeper`). Paths are never renamed: the file a `\set` reads is not substituted.
 #[test]
 fn a_rename_reaches_whole_words_only() {
     assert_eq!(

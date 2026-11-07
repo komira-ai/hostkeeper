@@ -10,7 +10,7 @@ fake (section 4.1), the enrollment crate's `Records` port, the Postgres store
 `import` and `export` (section 11: `crates/hostkeeper-coordinator/src/transfer.rs` and
 `crates/hostkeeper-coordinator/src/store/postgres/transfer.rs`), the generations and write ids (migration
 `0003`, section 3.2), and C5, the compose deployment with its backups, restore and drill (sections 9 and
-10: `docs/deploy/coordinator/`, and `cargo xtask db-backup` in `crates/xtask/src/db_backup.rs`). Every other
+10: `docs/deploy/coordinator/`, and the `xtask db-backup` verb in `crates/xtask/src/db_backup.rs`). Every other
 statement about new code is **Designed**, and section 13 lists the build items, C1 to C11, one pull request each. The tags are those of hostkeeper-design.md: **Built** names code on `main` with a path, **Designed** means
 nothing implements it yet.
 
@@ -712,7 +712,7 @@ volumes:
 ## 10. Backups and the restore drill
 
 - **Schedule.** `docs/deploy/coordinator/hostkeeper-db-backup.service` and `.timer` (C5, **Built**), like the
-  channel-sync timer beside them, the unit running `cargo xtask db-backup` (which numbers each dump past the highest
+  channel-sync timer beside them, the unit running the installed xtask binary's `db-backup` (which numbers each dump past the highest
   there, keeps only a dump whose command succeeded and wrote something, and only then removes the oldest): every six hours, `docker compose exec -T postgres pg_dump --format=custom --username=hostkeeper
   --dbname=hostkeeper` (over the container's own socket) into a backup directory on the host, owner-only, keeping the
   last 28 dumps (one week). The coordinator keeps running: a dump is one consistent snapshot. Copy the directory off the

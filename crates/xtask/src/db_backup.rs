@@ -71,14 +71,20 @@ pub(crate) enum Error {
     Io { path: String, why: String },
 }
 
-impl Error {
-    fn io(path: &Path, why: &std::io::Error) -> Error {
-        Error::Io {
+/// `result`, its error as [`Error::Io`] naming `path`.
+fn at<T>(path: &Path, result: std::io::Result<T>) -> Result<T, Error> {
+    match result {
+        Ok(value) => Ok(value),
+        Err(why) => Err(Error::Io {
             path: path.display().to_string(),
             why: why.to_string(),
-        }
+        }),
     }
 }
+
+/// What writes one dump into the file it is given, and closes it. A trait object, not a generic,
+/// so the steps around it are one function whatever writes the dump.
+pub(crate) type Dump<'a> = dyn FnOnce(File) -> Result<(), Error> + 'a;
 
 /// The name of dump `n`.
 fn dump_name(n: u64) -> String {
@@ -99,31 +105,40 @@ fn number_of(name: &str, partial: bool) -> Option<u64> {
     digits.parse().ok().filter(|_| canonical)
 }
 
+/// Flushes the directory `dir` to disk, so a rename in it lasts.
+fn sync_dir(dir: &Path) -> Result<(), Error> {
+    at(dir, File::open(dir).and_then(|d| d.sync_all()))
+}
+
 /// The verb: one dump by `flags.command`, then the old ones beyond `flags.keep` removed.
 ///
 /// # Errors
 /// [`Error`]: see the module.
 pub(crate) fn run(flags: &Flags) -> Result<Vec<String>, Error> {
     let (program, args) = flags.command.split_first().ok_or(Error::NoCommand)?;
-    backup(&flags.into, flags.keep as usize, |out| {
-        let started = |e: std::io::Error| Error::Start {
-            program: program.to_string_lossy().into_owned(),
-            why: e.to_string(),
-        };
-        let status = Command::new(program)
-            .args(args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::from(out))
-            .status()
-            .map_err(started)?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err(Error::Failed {
-                status: status.to_string(),
-            })
-        }
-    })
+    backup(
+        &flags.into,
+        flags.keep as usize,
+        Box::new(|out| {
+            let started = |e: std::io::Error| Error::Start {
+                program: program.to_string_lossy().into_owned(),
+                why: e.to_string(),
+            };
+            let status = Command::new(program)
+                .args(args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::from(out))
+                .status()
+                .map_err(started)?;
+            if status.success() {
+                Ok(())
+            } else {
+                Err(Error::Failed {
+                    status: status.to_string(),
+                })
+            }
+        }),
+    )
 }
 
 /// One dump into `dir` by `dump`, which writes it to the file it is given (and closes it), then
@@ -132,12 +147,8 @@ pub(crate) fn run(flags: &Flags) -> Result<Vec<String>, Error> {
 ///
 /// # Errors
 /// [`Error`]: see the module.
-pub(crate) fn backup(
-    dir: &Path,
-    keep: usize,
-    dump: impl FnOnce(File) -> Result<(), Error>,
-) -> Result<Vec<String>, Error> {
-    let meta = std::fs::symlink_metadata(dir).map_err(|e| Error::io(dir, &e))?;
+pub(crate) fn backup(dir: &Path, keep: usize, dump: Box<Dump<'_>>) -> Result<Vec<String>, Error> {
+    let meta = at(dir, std::fs::symlink_metadata(dir))?;
     let refuse = |why: String| Error::Directory {
         path: dir.display().to_string(),
         why,
@@ -155,14 +166,14 @@ pub(crate) fn backup(
 
     let mut lines = Vec::new();
     let mut numbers = Vec::new();
-    for entry in std::fs::read_dir(dir).map_err(|e| Error::io(dir, &e))? {
-        let entry = entry.map_err(|e| Error::io(dir, &e))?;
+    for entry in at(dir, std::fs::read_dir(dir))? {
+        let entry = at(dir, entry)?;
         let name = entry.file_name().to_string_lossy().into_owned();
         if let Some(n) = number_of(&name, false) {
             numbers.push(n);
         } else if number_of(&name, true).is_some() {
             let path = entry.path();
-            std::fs::remove_file(&path).map_err(|e| Error::io(&path, &e))?;
+            at(&path, std::fs::remove_file(&path))?;
             lines.push(format!(
                 "db-backup: removed {name}, left by a run that did not finish"
             ));
@@ -179,20 +190,17 @@ pub(crate) fn backup(
     let name = dump_name(next);
     let path = dir.join(&name);
     let partial = dir.join(format!("{name}.partial"));
-    let file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&partial)
-        .map_err(|e| Error::io(&partial, &e))?;
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true).mode(0o600);
+    let file = at(&partial, options.open(&partial))?;
     let written = dump(file).and_then(|()| {
         // Opened again: the command was given the first handle, and closed it when it ended.
-        let file = File::open(&partial).map_err(|e| Error::io(&partial, &e))?;
-        let bytes = file.metadata().map_err(|e| Error::io(&partial, &e))?.len();
+        let file = at(&partial, File::open(&partial))?;
+        let bytes = at(&partial, file.metadata())?.len();
         if bytes == 0 {
             return Err(Error::Empty);
         }
-        file.sync_all().map_err(|e| Error::io(&partial, &e))?;
+        at(&partial, file.sync_all())?;
         Ok(bytes)
     });
     let bytes = match written {
@@ -203,10 +211,8 @@ pub(crate) fn backup(
             return Err(why);
         }
     };
-    std::fs::rename(&partial, &path).map_err(|e| Error::io(&path, &e))?;
-    File::open(dir)
-        .and_then(|d| d.sync_all())
-        .map_err(|e| Error::io(dir, &e))?;
+    at(&path, std::fs::rename(&partial, &path))?;
+    sync_dir(dir)?;
     lines.push(format!("db-backup: wrote {name}, {bytes} bytes"));
 
     numbers.push(next);
@@ -214,7 +220,7 @@ pub(crate) fn backup(
     let old = numbers.len().saturating_sub(keep);
     for n in &numbers[..old] {
         let gone = dir.join(dump_name(*n));
-        std::fs::remove_file(&gone).map_err(|e| Error::io(&gone, &e))?;
+        at(&gone, std::fs::remove_file(&gone))?;
         lines.push(format!("db-backup: removed {}", dump_name(*n)));
     }
     lines.push(format!(

@@ -184,7 +184,7 @@ file it was started with, so `password.sql` would read the old password.
 ## Backups
 
 `hostkeeper-db-backup.service`, started by `hostkeeper-db-backup.timer` every six hours, runs
-`cargo xtask db-backup`, which runs
+`xtask db-backup` (the installed xtask binary, `/usr/local/libexec/hostkeeper/xtask`), which runs
 
 ```sh
 docker compose --project-directory /srv/hostkeeper-coordinator --profile postgres \
