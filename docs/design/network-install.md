@@ -763,8 +763,10 @@ time (rule T10), are Rust (rule T11), and use the repository's scratch helpers a
   (`an_enrolled_host_heartbeats_and_renews_on_the_lan_listener_until_it_is_replaced`, **Built**).
 
 **The end-to-end proof (N10).** Rust integration tests in `crates/hostkeeper-privileged`, behind its feature
-`privileged`, in new jobs of `privileged.yml`. That workflow runs only on a push to `main` and by hand, never on a pull
-request (rule B9), and the workflow lint is extended to know the jobs and their runners.
+`privileged`, in the jobs of `net-install.yml`, a workflow of their own. It runs on a push to `main` that changes the
+network-install code (a paths filter the workflow lint holds), nightly on `main`, and by hand, never on a pull request
+(rule B9), a newer run of a branch cancelling the older; no release waits for it, as an emulated install takes hours.
+The workflow lint knows the jobs and their runners.
 
 - **x86-64, both modes (job `net-install`).** The test makes a Linux bridge with no route out, and a QEMU guest with
   OVMF UEFI firmware on it. The guest has an empty scratch disk, a fixed `-uuid` and an SMBIOS serial. Its NIC is first
@@ -799,7 +801,7 @@ request (rule B9), and the workflow lint is extended to know the jobs and their 
   not skip.
 - **Built** (item N10): `crates/hostkeeper-privileged/tests/net_install.rs`, test
   `an_x86_64_machine_installs_by_network_enrolls_gets_its_service_is_reinstalled_and_retired`, its rig in
-  `tests/netinstall/`, and the job `net-install` of `.github/workflows/privileged.yml`. As built:
+  `tests/netinstall/`, and the job `net-install` of `.github/workflows/net-install.yml`. As built:
   - **The reinstall is in router mode**, the record stating `linux-x86_64` (`add-record --platform`, item N14): the
     guest's REQUEST is learned, `hostkeeper/boot.efi` is served as `hostkeeper/shimx64.efi`, and the install menu and
     seed follow; the reboot after the install gets the local-disk menu, its MAC having left the answer set (reason:

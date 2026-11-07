@@ -1,8 +1,9 @@
 //! The workflow lint: every file in `.github/workflows` is held to the rules in [`lint`], and
 //! the lint is shown to refuse each defect by putting it into a workflow that is otherwise
 //! clean ([`CLEAN`]) and reading the exact problems it reports. The rules of `privileged.yml`, the
-//! one workflow that runs a job as root after a merge, are tested in `privileged_tests.rs`; those
-//! of `pr-device.yml`, the one workflow with macOS jobs and jobs as root on a pull request, and of
+//! workflow that runs the privileged tests as root after a merge, are tested in
+//! `privileged_tests.rs`; those of `net-install.yml`, the other workflow with jobs as root, the
+//! network-install jobs on main, in `net_install_tests.rs`; those of `pr-device.yml`, the one workflow with macOS jobs and jobs as root on a pull request, and of
 //! no secret on a pull request, in `pr_device_tests.rs`; those of `advisories.yml`, the advisory
 //! monitor, in `advisories.rs`.
 
@@ -423,7 +424,7 @@ fn the_pull_request_rule_holds_in_every_shape_of_on_and_only_there() {
     );
     assert_problems(
         &text,
-        &["job test: privileged outside privileged.yml (`sudo -E cargo test`)"],
+        &["job test: privileged outside privileged.yml and net-install.yml (`sudo -E cargo test`)"],
     );
     let ubuntu = with_in(&text, mac, "    runs-on: ubuntu-24.04\n");
     assert_eq!(lint(PRIVILEGED_WORKFLOW, &ubuntu), Vec::<String>::new());
@@ -519,9 +520,9 @@ fn workflow_level_env_and_defaults_on_pull_request_are_held_to_the_same_rule() {
     // Where no pull request runs, a darwin target is allowed and root is refused by the rule of
     // privileged.yml.
     let push_only_wants: [&[&str]; 3] = [
-        &["workflow: privileged outside privileged.yml (`sudo`)"],
+        &["workflow: privileged outside privileged.yml and net-install.yml (`sudo`)"],
         &[],
-        &["workflow: privileged outside privileged.yml (`sudo bash {0}`)"],
+        &["workflow: privileged outside privileged.yml and net-install.yml (`sudo bash {0}`)"],
     ];
     for ((top, want), push_want) in cases.into_iter().zip(push_only_wants) {
         assert_problems(&with(at, &format!("{at}{top}")), &[want]);

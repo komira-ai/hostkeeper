@@ -37,18 +37,22 @@
 //!   `image`) is not an image pinned by digest, `<name>[:<tag>]@sha256:<64 lowercase hex>`, or
 //!   a service has no image;
 //! - it is [`pr_device::FILE`] and breaks a rule of its own ([`pr_device::problems`]);
-//! - it is not [`PRIVILEGED_WORKFLOW`], it does not run for a pull request, and a job of it, or
-//!   what sits beside `jobs`, names root as above (`sudo` as a word, `--privileged`,
-//!   `--cap-add`), whatever its trigger: root runs in that one workflow, and on a pull request in
-//!   the copies of its jobs in [`pr_device::FILE`], or nowhere. (A pull-request workflow is
-//!   refused for the same values by the rule above, with its own message. A write scope is not
-//!   root; outside a pull request it is held to [`WRITE_ALLOWED`].)
+//! - it is neither [`PRIVILEGED_WORKFLOW`] nor [`net_install::FILE`], it does not run for a pull
+//!   request, and a job of it, or what sits beside `jobs`, names root as above (`sudo` as a word,
+//!   `--privileged`, `--cap-add`), whatever its trigger: root runs in those two workflows, and on
+//!   a pull request in the copies of the privileged workflow's jobs in [`pr_device::FILE`], or
+//!   nowhere. (A pull-request workflow is refused for the same values by the rule above, with its
+//!   own message. A write scope is not root; outside a pull request it is held to
+//!   [`WRITE_ALLOWED`].)
 //! - it is [`PRIVILEGED_WORKFLOW`] and its `on` is not exactly `push` with `branches: [main]` and
 //!   nothing else, and `workflow_dispatch` with no inputs (no other trigger, no `tags`, `paths` or
 //!   other filter of `push`), or a job of it runs on a runner that is not in its list
 //!   ([`privileged_runners`]: [`MACOS_DEVICE_RUNNERS`] for [`MACOS_DEVICE_JOB`], the one macOS
 //!   job, and [`PRIVILEGED_RUNNERS`] for every other). Every other rule holds for it as for any
 //!   file; [`WRITE_ALLOWED`] has no entry for it, so no job of it holds a write scope.
+//! - it is [`net_install::FILE`] and breaks a rule of its own ([`net_install::problems`]: its
+//!   triggers, the paths of its push, its concurrency and its two jobs), or a job of it runs on a
+//!   runner outside [`PRIVILEGED_RUNNERS`]. [`WRITE_ALLOWED`] has no entry for it either.
 //!
 //! - it is `release.yml` or `artifacts.yml` and breaks a rule of its own
 //!   ([`release::release_rules`]; for the deploy jobs of `release.yml`, [`super::desired`]).
@@ -64,6 +68,7 @@
 
 use super::advisories;
 use super::callers;
+use super::net_install;
 use super::pr_device;
 use super::release::{self, PLAN_IF, RELEASE_IF, SIGN_IF};
 use super::set_desired;
@@ -125,9 +130,10 @@ pub const WRITE_ALLOWED: &[Allowed] = &[
 /// CI client's, whose order of steps [`set_desired`] holds.
 pub const ID_TOKEN_ALLOWED: &[(&str, &str)] = &[(set_desired::FILE, set_desired::JOB)];
 
-/// The one workflow that may run a job as root (`sudo`, a privileged container) but on a pull
-/// request: the privileged tests, after a merge to main and by hand. On a pull request, the
-/// copies of its jobs in [`pr_device::FILE`] may.
+/// The workflow of the privileged tests, after a merge to main and by hand: with
+/// [`net_install::FILE`], one of the two workflows that may run a job as root (`sudo`, a
+/// privileged container) but on a pull request, and the one a release waits for. On a pull
+/// request, the copies of its jobs in [`pr_device::FILE`] may.
 pub const PRIVILEGED_WORKFLOW: &str = "privileged.yml";
 
 /// The runners a job of [`PRIVILEGED_WORKFLOW`] may run on, but [`MACOS_DEVICE_JOB`]:
@@ -294,6 +300,7 @@ pub fn lint(file: &str, text: &str) -> Vec<String> {
         problems.push("`on` names pull_request_target".to_owned());
     }
     let privileged_file = file == PRIVILEGED_WORKFLOW;
+    let net_install_file = file == net_install::FILE;
     if privileged_file && !push_to_main_and_dispatch_only(entry(&doc, "on")) {
         problems.push(PRIVILEGED_ON.to_owned());
     }
@@ -314,9 +321,9 @@ pub fn lint(file: &str, text: &str) -> Vec<String> {
         problems.extend(pin_problem(text, line, value));
     }
     let on_pull_request = on.iter().any(|t| runs_on_pull_requests(t));
-    // Root anywhere but in the privileged workflow; a pull-request workflow is refused for it by
-    // the pull-request rule.
-    let root_refused = !privileged_file && !on_pull_request;
+    // Root anywhere but in the privileged and the network-install workflows; a pull-request
+    // workflow is refused for it by the pull-request rule.
+    let root_refused = !privileged_file && !net_install_file && !on_pull_request;
     // What sits beside `jobs` (`env`, `defaults`, ...) applies to every job.
     let mut beside_jobs = Vec::new();
     for (k, v) in entries(&doc)
@@ -353,7 +360,7 @@ pub fn lint(file: &str, text: &str) -> Vec<String> {
             scalars(job, &mut values);
             problems.extend(root_problems(&format!("job {name}"), &values));
         }
-        if privileged_file {
+        if privileged_file || net_install_file {
             problems.extend(privileged_runner_problems(name, job));
         }
     }
@@ -363,6 +370,9 @@ pub fn lint(file: &str, text: &str) -> Vec<String> {
     }
     if file == pr_device::FILE {
         problems.extend(pr_device::problems(&doc));
+    }
+    if net_install_file {
+        problems.extend(net_install::problems(&doc));
     }
     problems.extend(callers::problems(file, &doc));
     problems
@@ -613,11 +623,16 @@ pub fn root_line<'a>(values: &[&'a str]) -> Option<&'a str> {
     })
 }
 
-/// Root among `values`, the values of `who` (a job or the workflow) of a workflow that is not
-/// [`PRIVILEGED_WORKFLOW`].
+/// Root among `values`, the values of `who` (a job or the workflow) of a workflow that is neither
+/// [`PRIVILEGED_WORKFLOW`] nor [`net_install::FILE`].
 fn root_problems(who: &str, values: &[&str]) -> Vec<String> {
     root_line(values)
-        .map(|line| format!("{who}: privileged outside {PRIVILEGED_WORKFLOW} (`{line}`)"))
+        .map(|line| {
+            format!(
+                "{who}: privileged outside {PRIVILEGED_WORKFLOW} and {} (`{line}`)",
+                net_install::FILE
+            )
+        })
         .into_iter()
         .collect()
 }
@@ -643,11 +658,6 @@ fn push_to_main_and_dispatch_only(on: Option<&Node>) -> bool {
         }
         _ => false,
     };
-    let no_inputs = |dispatch: &Node| match &dispatch.value {
-        Value::Scalar { .. } => dispatch.as_str().is_none(),
-        Value::Map(entries) => entries.is_empty(),
-        Value::Seq(_) => false,
-    };
     let has = |name: &str, holds: &dyn Fn(&Node) -> bool| {
         triggers
             .iter()
@@ -656,7 +666,17 @@ fn push_to_main_and_dispatch_only(on: Option<&Node>) -> bool {
     triggers.len() == 2 && has("push", &push_to_main) && has("workflow_dispatch", &no_inputs)
 }
 
-/// A job of [`PRIVILEGED_WORKFLOW`] on a runner that is not in its list ([`privileged_runners`]).
+/// Whether the `workflow_dispatch` trigger `dispatch` has no inputs: no value, or `{}`.
+pub fn no_inputs(dispatch: &Node) -> bool {
+    match &dispatch.value {
+        Value::Scalar { .. } => dispatch.as_str().is_none(),
+        Value::Map(entries) => entries.is_empty(),
+        Value::Seq(_) => false,
+    }
+}
+
+/// A job of [`PRIVILEGED_WORKFLOW`] or [`net_install::FILE`] on a runner that is not in its list
+/// ([`privileged_runners`]; the network-install jobs are on [`PRIVILEGED_RUNNERS`]).
 /// Labels that cannot be read are refused by [`runner_problems`] already.
 fn privileged_runner_problems(name: &str, job: &Node) -> Vec<String> {
     let listed = privileged_runners(name);
