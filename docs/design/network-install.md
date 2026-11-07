@@ -4,7 +4,7 @@ Status: design, for review. This document makes network install of new Linux mac
 replaces the non-goal of [hostkeeper-design.md](hostkeeper-design.md) section 2.2 ("No network boot service in
 scope") and the first item of its section 12.1 ("the operator's own, no build items here"). Both now point here. Where
 this document and hostkeeper-design.md disagree on network install, this document wins. What is built is marked
-**Built** where it is described (so far items N2, N3, N4, N5, N6, N7 and N8 of section 12); every other statement about
+**Built** where it is described (so far items N2, N3, N4, N5, N6, N7, N8 and N9 of section 12); every other statement about
 new code is **Designed**, and section 12 lists the build items.
 
 This revision (item N1b of section 12) amends the first: network boot early in the boot order is the expected setup, so
@@ -213,6 +213,23 @@ the packet handling, `crates/hostkeeper-pxe-packets` (item N7).
   router mode for the REQUEST broadcasts it learns architectures from. It starts as root only to bind its ports, then
   drops to an unprivileged user before it reads the token file (opened before the drop and kept as a descriptor) or
   parses a packet. Sending broadcasts needs no privilege once the socket is bound.
+- **Built**: `crates/hostkeeper-pxe/src/serve.rs` and `serve/` (item N9). The flags as built: `--mode`; `--address`,
+  the server's farm-LAN address that its answers, menus and seeds name; `--interface`; `--dhcp-listen`,
+  `--proxy-listen`, `--tftp-listen` and `--http-listen`, by default the protocol port on every address;
+  `--dhcp-reply-to`, where a proxy offer goes, by default `255.255.255.255:68`; `--coordinator`, `--ca-file` and
+  `--token-file`; `--dir`; the seed inputs; `--reinstall`; `--user-id` and `--group-id`, the user to drop to, as
+  numbers, so nothing reads the account database; and `--tftp-timeout-ms`, how long a TFTP transfer waits for an
+  ACK before it sends again. The start reads the coordinator once and refuses to start when that read fails, or
+  when a `--reinstall` names no record. The fixed `grub.cfg` and the menus are served under `grub/` by HTTP as
+  well as by TFTP, so a GRUB loaded by UEFI HTTP boot finds them at the same path below the server. A seed is
+  served only to a MAC given its install menu in the run; its first fetch reads the answer set again and is
+  refused unless the MAC is still in it. The binary ships in the hostkeeper deb and rpm as
+  `/usr/bin/hostkeeper-pxe`, with no unit of its own. Two facts the built code holds differently from the text
+  above, until they are closed: `InventoryRecord` has no platform until item N14, so every record reads as one
+  with no platform, and router mode installs nothing yet; and `Hosts.List` answers only the hosts heard from
+  since the coordinator started, so after a restart of the coordinator a retired host whose record is still in
+  the inventory is no longer known by that list (its record is not `enrolled` either), and only removing its
+  record keeps it out of the answer set.
 
 **The L2 requirement.** A DHCPDISCOVER and a selecting DHCPREQUEST are broadcasts. `hostkeeper-pxe` sees them only on
 the same broadcast domain, unless a relay forwards them; this design adds no relay. Both modes rely on the router's
@@ -411,7 +428,8 @@ The image carries only public facts: the coordinator's LAN address, `ca_sha256`,
      commit and ref each attestation confirmed (`crates/hostkeeper-pxe/src/seal.rs`). On any refusal the directory
      is removed.
    - `hostkeeper-pxe serve` checks the seal at start and refuses to start on any difference. A tampered asset, a
-     stale download or a mixed set is therefore never served.
+     stale download or a mixed set is therefore never served. **Built**: `crates/hostkeeper-pxe/src/serve/sealed.rs`
+     (item N9), which keeps each checked file open and serves it from that descriptor.
 2. **The machine fetches the files over the farm LAN**, by TFTP and plain HTTP. With Secure Boot on, the firmware
    checks shim, shim checks GRUB, and GRUB checks the kernel, each against Canonical's signature. Nothing on the
    machine checks `grub.cfg`, the initrd, the ISO or the seed. An attacker who can answer DHCP on the farm LAN during
@@ -685,8 +703,9 @@ time (rule T10), are Rust (rule T11), and use the repository's scratch helpers a
   attested by another organisation, workflow or ref, and a deb whose attestation does not verify. It fetches both
   platforms by default and only those `--platform` names when given. The verifier is the daemon's, given a fake
   attestation port, as the daemon's own tests do.
-- Serving (N9). Every listen address and port is a flag, so the tests bind ephemeral loopback ports with real UDP and
-  TCP sockets, and talk to a fake coordinator (the fake operator service pattern of `crates/hostkeeper-ctl/tests`).
+- Serving (N9, **Built**: `crates/hostkeeper-pxe/src/serve/tests/`). Every listen address and port is a flag, so the
+  tests bind ephemeral loopback ports with real UDP and TCP sockets, and talk to a fake coordinator (the fake
+  operator service pattern of `crates/hostkeeper-ctl/tests`, over TLS on loopback).
   - The answer set: a record with a host in any state, retired included, or with a pending request that matches it,
     is left out, unless `--reinstall` names its host id; a record is dropped from the set once its seed was fetched; a
     record whose platform disagrees with the firmware's, or has no boot set, is left out and logged; in router mode a
