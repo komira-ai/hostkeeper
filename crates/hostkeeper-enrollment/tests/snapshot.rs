@@ -154,6 +154,21 @@ fn a_snapshot_writes_nothing() {
     .expect("the nonce file");
     assert_eq!(nonce, unmarked_nonce(), "the nonce's file is not marked");
 
+    let unserialed = Snapshot {
+        serial: None,
+        ..read(from.path()).expect("read the snapshot")
+    };
+    let names: Vec<_> = unserialed
+        .files()
+        .expect("the files")
+        .into_iter()
+        .map(|(path, _)| path)
+        .collect();
+    assert!(
+        !names.iter().any(|path| path == Path::new("serial.pb")),
+        "no serial was taken, so no counter file: {names:?}"
+    );
+
     let bare = scratch("snapshot-bare");
     let empty = read_with(&fs, bare.path()).expect("an empty directory reads");
     assert!(empty.is_empty());
