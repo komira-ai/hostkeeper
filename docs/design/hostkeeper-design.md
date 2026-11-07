@@ -69,7 +69,7 @@ hostkeeper replaces all of that with one daemon per host, one coordinator per fa
 - Not a package manager in the distribution sense, a configuration management tool, a scheduler, or a high-availability coordinator (one coordinator, section 11). Not a Windows product.
 - No protection of a host from its own root, and none of the trusted signers' repositories (section 5.1 says what a compromise of each gets).
 - No remote way to widen what a hook may do. There is nothing to widen: hooks run as root, and the only way to put code on a host is a package signed by a trusted signer.
-- No network boot service in scope: the boot image is installed by the operator's own means (section 12.1).
+- No network boot of Macs (Apple silicon cannot net-boot; section 5.9). Network install of new Linux machines is in scope and designed in [network-install.md](network-install.md), which replaces the earlier non-goal "no network boot service".
 
 ## 3. The design in one picture
 
@@ -162,7 +162,7 @@ One launchd daemon, `com.<reverse-dns>.hostkeeper`, as root. Paths follow macOS 
 
 ### 4.3 The coordinator
 
-One process with two listeners: a **heartbeat listener** (mutual TLS, client certificate chaining to the farm CA; host identity from the certificate only) and one **private listener** (TLS, bound to the private network, off the public one) that serves the operator API (section 4.8) to the generated CLI and the UI, and serves the UI's static files (section 5.10). On it a CI OIDC token may set a desired version for services its allow-list entry names; every other action needs an operator token. A token either operates or does not; there are no per-token grants.
+One process with two listeners (and an optional third, a LAN listener serving only the agent service to network-installed hosts: network-install.md section 7): a **heartbeat listener** (mutual TLS, client certificate chaining to the farm CA; host identity from the certificate only) and one **private listener** (TLS, bound to the private network, off the public one) that serves the operator API (section 4.8) to the generated CLI and the UI, and serves the UI's static files (section 5.10). On it a CI OIDC token may set a desired version for services its allow-list entry names; every other action needs an operator token. A token either operates or does not; there are no per-token grants.
 
 Operator tokens are one per person, listed by name in a tokens file the coordinator reads, each revocable and replaceable without a restart; every action records the token's name in the audit log (an append-only file, `<ops-file>.audit`). A shared anonymous token is not supported (**Designed, B6**; PR #5 has one token today).
 
@@ -180,7 +180,7 @@ hostkeeper's own release planner holds releases from a commit whose privileged r
 
 ### 4.6 The boot image and installers
 
-Linux: a PXE-installed Ubuntu boot image carries the daemon, its unit and `/etc/hostkeeper/hostkeeper.toml`; a host built from it needs nothing else to enroll. A deb and an rpm carry the daemon and unit for hosts not built from the image; whoever installs them places the config. macOS: a signed pkg whose postinstall writes `hostkeeper.toml` from the config profile the MDM installed first (section 5.9, [hostkeeper-mdm.md](hostkeeper-mdm.md) section 4). Both publish into the operator's shared package repositories. The PXE service itself is the operator's, outside this document. Designed.
+Linux: a network-installed Ubuntu 24.04 system ([network-install.md](network-install.md)) carries the daemon, its unit and `/etc/hostkeeper/hostkeeper.toml`; a host built from it needs nothing else to enroll. A deb and an rpm carry the daemon and unit for hosts not built from the image; whoever installs them places the config. macOS: a signed pkg whose postinstall writes `hostkeeper.toml` from the config profile the MDM installed first (section 5.9, [hostkeeper-mdm.md](hostkeeper-mdm.md) section 4). Both publish into the operator's shared package repositories. Network boot is served by the optional `hostkeeper-pxe` (network-install.md section 3). Designed.
 
 ### 4.7 The package
 
@@ -859,7 +859,7 @@ Naming: `updater` names (`/var/lib/updater/{state,hooks}`, unit names, reserved 
 
 ### 12.1 Not planned in this document
 
-- A network-boot service (PXE, UEFI HTTP boot) that installs the boot image: the operator's own, no build items here. Apple silicon cannot net-boot, so Macs stay on MDM.
+- Network install of Linux machines is no longer here: it is designed in [network-install.md](network-install.md), with its own build items (its section 12). Apple silicon cannot net-boot, so Macs stay on MDM.
 - A coordinator high-availability design.
 - Automated rollback rehearsal in every release.
 - TPM-based hardware identity for enrollment.
@@ -881,7 +881,7 @@ Today: the hook, rights and steps crates are on `main`; the protobuf crate and t
 | B8 | Service-state observer (systemd, launchd ports; health probe; bake from observation) | 5.8, 8.5 | B4 | M |
 | B9 | Daemon heartbeat loop: order handling, resend, enrollment client hook-up | 4.1, 5.2, 8.3 | B1, B4, B6 | L |
 | B10 | `ctl` generator from descriptors (including the methods named in 4.8); gRPC serving beside the JSON adapters | 3, 11.10 | B1 | M |
-| B11 | Linux packaging: deb, rpm, unit; the boot image with the default `hostkeeper.toml` | 4.6 | B4, B9 | M |
+| B11 | Linux packaging: deb, rpm, unit, and the overlay with the `hostkeeper.toml` template; the network-installed system is built by items N5 to N9 of network-install.md | 4.6 | B4, B9 | M |
 | B12 | Privileged workflow on `main`: real systemd, root rig, workload fixture | 8.3, 8.7 | B4 | M |
 | B13 | **Pruning to two versions:** after a confirmed switch (section 4.7), under the service lock only, delete every version directory of the service except `current` and `previous`; a prune racing a force never removes the target | 4.7, 8.7 | B5 | S |
 | B14 | Release automation: version rule, artifacts, attestation, release job | 4.5, 4.6 | B11 | M |
@@ -922,7 +922,7 @@ Each has options and a recommendation. Until decided, the design behaves as the 
 
 **Q5. Keep the CA signer a separate process?** Now: a coordinator module. The signer as a separate process protected the CA key from a coordinator compromise; under the threat model of section 5.1 a compromised coordinator can already order any verb on any host, and a host trusts the CA only to authenticate the coordinator and itself. Options: (a) module in the coordinator, key file owner-only, one sealed backup; (b) separate process on its own socket. Recommendation: (a).
 
-**Q6. What else is cut or kept in the coordinator?** The coordinator's duties under this revision: which services each host or role runs, desired version and `min_version` per service, fleet membership, operator marks (exclude, hold, halt, bad, force), the rollout gate (`decide()`) including the one live update, CI by OIDC, operator tokens and the operator API that the CLI and the UI call. Cut in this revision (reversible; adding one back is additive): (a) service identity certificates; (b) batch-token enrollment and the `operator`/`auto` assurance levels; (c) `waiting_for_role`, `waiting_for_service`, the `after` graph, `max_updating` and `min_up`; (d) the earlier read-only page; (e) per-token set-desired grants and a third listener: tokens operate or do not, CI or an operator token sets desired (the operator through the API, the CLI and the UI's Rollout page) and the operator also uses Force, and the API and the UI's static files share one private listener. Kept, with a recommendation each: canary (keep: it is the only protection before bake); the safety rules `waiting_for_operator`, `duplicate` and `quiet` (keep, section 5.4; `install` for an assigned and absent service is order construction, not a gate rule); the pending-enrollment queue with `duplicate_claim` and `renewal_of` (keep: they are the enrollment safety rules); Force passing the live-update slot, now hookless and fleet-wide (keep, section 5.6); **automatic rollback with `last_good`** (recommend cut before the first release: the operator has Force and one click in the UI, and it is the largest piece of coordinator logic, and cutting it also removes the hooked `force_rollback` verb; it exists in PR #5); `deferred` backoff settings per service (bookkeeping outside the gate; recommend one fixed constant); the JSON adapters (keep until kbf's agent retires, then remove). The separate CA signer process is Q5.
+**Q6. What else is cut or kept in the coordinator?** The coordinator's duties under this revision: which services each host or role runs, desired version and `min_version` per service, fleet membership, operator marks (exclude, hold, halt, bad, force), the rollout gate (`decide()`) including the one live update, CI by OIDC, operator tokens and the operator API that the CLI and the UI call. Cut in this revision (reversible; adding one back is additive): (a) service identity certificates; (b) batch-token enrollment and the `operator`/`auto` assurance levels; (c) `waiting_for_role`, `waiting_for_service`, the `after` graph, `max_updating` and `min_up`; (d) the earlier read-only page; (e) per-token set-desired grants and a third listener for the operator API (the LAN listener of network-install.md serves no operator call): tokens operate or do not, CI or an operator token sets desired (the operator through the API, the CLI and the UI's Rollout page) and the operator also uses Force, and the API and the UI's static files share one private listener. Kept, with a recommendation each: canary (keep: it is the only protection before bake); the safety rules `waiting_for_operator`, `duplicate` and `quiet` (keep, section 5.4; `install` for an assigned and absent service is order construction, not a gate rule); the pending-enrollment queue with `duplicate_claim` and `renewal_of` (keep: they are the enrollment safety rules); Force passing the live-update slot, now hookless and fleet-wide (keep, section 5.6); **automatic rollback with `last_good`** (recommend cut before the first release: the operator has Force and one click in the UI, and it is the largest piece of coordinator logic, and cutting it also removes the hooked `force_rollback` verb; it exists in PR #5); `deferred` backoff settings per service (bookkeeping outside the gate; recommend one fixed constant); the JSON adapters (keep until kbf's agent retires, then remove). The separate CA signer process is Q5.
 
 **Q7. Add `min_free_bytes` to the daemon config?** Now: no; staging fails with `no_space`. Recommendation: no; size the volume.
 
