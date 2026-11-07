@@ -745,3 +745,60 @@ fn a_bad_additive_call_is_refused_before_any_launchctl_call() {
         sim.calls()
     );
 }
+
+/// Catches the `[hook] boot` step of a service never run on a Mac (its unit
+/// `updater-<service>-boot-<generation>` refused as no step unit, so the boot pass's stop before
+/// the run failed and the run never started): the daemon's sequence, a stop of the boot unit and
+/// then its additive run, finds nothing to stop and runs `<hook> update-hook warm --params <file>`
+/// as the job `<prefix>.hostkeeper.step.web.boot.0`, with its exit code and last line.
+#[test]
+fn a_boot_step_is_stopped_and_run_under_its_own_label() {
+    let root = scratch("launcher-boot");
+    let hook = hook_file(root.path());
+    let (launcher, sim, _, _) = sim_launcher(&root.path().join("jobs"));
+    let boot_label = "dev.hostkeeper.hostkeeper.step.web.boot.0";
+    sim.script(boot_label, Hook::exits(1, 0, "{\"warm\":true}"));
+    let hook_args = ["update-hook".to_owned()];
+    let call = AdditiveCall {
+        service: "web",
+        step: "warm",
+        hook_args: &hook_args,
+        params: Path::new(PARAMS),
+        executable: &hook,
+        unit: "updater-web-boot-0",
+        timeout_secs: 60,
+    };
+
+    launcher.stop(call.unit).expect("nothing to stop");
+    let exit = launcher.run_additive(&call).expect("the boot step ran");
+
+    assert_eq!(
+        exit,
+        StepExit {
+            code: Some(0),
+            last_line: Some("{\"warm\":true}".to_owned())
+        }
+    );
+    let args = sim.plists()[0]["ProgramArguments"].clone();
+    assert_eq!(
+        args,
+        Value::Array(
+            [
+                hook.to_str().expect("UTF-8"),
+                "update-hook",
+                "warm",
+                "--params",
+                PARAMS
+            ]
+            .map(|word| Value::String(word.to_owned()))
+            .to_vec()
+        )
+    );
+    // The stop finds the boot unit's label not loaded: nothing to boot out.
+    assert_eq!(
+        sim.calls()[0],
+        words(&print_args(&Label::parse(boot_label).expect("a label")))
+    );
+    assert_eq!(sim.calls()[1][0], "print", "the run looks for a job left");
+    assert!(!sim.is_loaded(boot_label));
+}

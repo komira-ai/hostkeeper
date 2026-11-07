@@ -10,12 +10,15 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use hostkeeper_daemon::cli::{self, Cli};
-use hostkeeper_daemon::{Refusal, Reply, update_hook};
-use hostkeeper_hook::{ArgsError, Outcome, Step, Verdict};
+use hostkeeper_daemon::selfupdate::{ProbeError, REASON_PROTOCOL_UNREADABLE};
+use hostkeeper_daemon::{Daemon, Refusal, Reply, update_hook};
+use hostkeeper_hook::{ArgsError, Class, Outcome, Step, Verdict};
 use hostkeeper_placed::testing::{Event, UnitCall};
 use hostkeeper_steps::Settled;
 use hostkeeper_steps::record::State;
-use support::selfupdate::{DEB_UNIT, DEB_WANTS, HK, NEW, OLD, SelfRig, awaiting};
+use support::selfupdate::{
+    DEB_UNIT, DEB_WANTS, HK, NEW, OLD, SelfRig, awaiting, own, refused_before_commit,
+};
 use support::{d, install};
 
 /// The version the packages directory's `current` of hostkeeper names, if any.
@@ -100,6 +103,43 @@ fn an_install_of_the_running_version_succeeds_without_a_restart() {
         ),
         "{rec:?}"
     );
+}
+
+/// Catches the probe run for a release that is the binary that runs (a host a pkg or a hand
+/// upgrade put on a version, then ordered the install of that version): nothing of that release
+/// is staged, so its binary is not asked its protocol, and a probe that cannot run (a launcher
+/// with no probe, as the Mac's had) does not refuse the install `protocol_unreadable`. The
+/// install of [`OLD`] by the daemon of [`OLD`] is `Succeeded` with the probe never asked, both
+/// with a probe that fails and with the probe of a step launcher that runs none; an install of
+/// [`NEW`] on the same kind of host still asks it, and is refused `protocol_unreadable` when it
+/// fails.
+#[test]
+fn an_install_of_the_running_version_asks_no_probe() {
+    let s = SelfRig::bootstrapped("su-install-running-unprobed");
+    s.release(OLD);
+    s.probe.set(|| Err(ProbeError::Exit(None)));
+    assert_eq!(
+        s.daemon().order(&install(HK, OLD, &d(), 1)),
+        succeeded(false)
+    );
+    assert!(s.probe.asked().is_empty());
+    assert_eq!(installed(&s).as_deref(), Some(OLD));
+    assert_eq!(s.current().as_deref(), Some(OLD));
+
+    let s = SelfRig::bootstrapped("su-install-running-no-launcher-probe");
+    s.release(OLD);
+    let daemon = Daemon::new(support::config(), s.rig.dirs(), s.rig.ports(), own(OLD));
+    assert_eq!(daemon.order(&install(HK, OLD, &d(), 1)), succeeded(false));
+    assert_eq!(installed(&s).as_deref(), Some(OLD));
+
+    let s = SelfRig::bootstrapped("su-install-next-probed");
+    s.probe.set(|| Err(ProbeError::Exit(None)));
+    assert_eq!(
+        s.daemon().order(&install(HK, NEW, &d(), 1)),
+        refused_before_commit(Class::Environment, REASON_PROTOCOL_UNREADABLE)
+    );
+    assert_eq!(s.probe.asked().len(), 1);
+    assert_eq!(installed(&s), None);
 }
 
 /// Catches the order the coordinator must give each kind of host going wrong: a bootstrapped

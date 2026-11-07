@@ -28,7 +28,11 @@
 //! runs the same path on a Mac with hello's macOS package (the program `hello-e2e` as its
 //! `bin/hello`): install, update, a failed `verify` rolled back and uninstall under launchd,
 //! with the rig's macOS host (`tests/e2e/mac_host.rs`); `tests/hello_rig.rs` checks its packages
-//! in the pull-request set.
+//! in the pull-request set. `tests/device_mac_selfupdate.rs` (a macOS file, in the job
+//! `macos-device`) is the Mac twin of `tests/self_update.rs`: the program
+//! `hostkeeper-selfupdate-daemon` as a launchd job from `current` of its binary directory,
+//! updated and installed to the next version and restarted into it by launchd, with its rig in
+//! `tests/mac_self_update/`.
 //!
 //! - [`fixture`]: the workload fixture, the program `hostkeeper-fixture-hook` that speaks the hook
 //!   contract in the modes a test picks, and `serve`, a long-running main process for a unit. Its

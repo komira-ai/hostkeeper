@@ -158,8 +158,10 @@ admin socket, until an update of hostkeeper itself asks it to exit so that its u
 new binary. This build fetches, verifies and unpacks packages, runs each step of a hook in a
 transient systemd unit of its own (the hook's standard error goes to the daemon's journal, under
 the unit's name), stops, starts and reloads units through `systemctl`, and observes each
-service for `Status`. Its launcher does not yet run an additive step (`[hook] boot`, `uninstall`) or the self-update
-protocol probe (each fails without starting). Once the host is enrolled, its heartbeats go to the
+service for `Status`. Its launcher also runs the additive steps (`[hook] boot`, `uninstall`) and
+the self-update protocol probe, each in a transient unit of its own (on a Mac each step, additive
+step and probe is a launchd job, see [macOS](docs/macos.md)). Once the host is enrolled, its
+heartbeats go to the
 config's `coordinator` over mutual TLS, pinned to `ca_sha256` (JSON, then gRPC once the coordinator
 advertises it), and the coordinator's orders come back in the replies.
 
@@ -289,7 +291,9 @@ removes a version from it; a list that cannot be read refuses every update of ho
 reported it failed.
 
 Before anything is staged, the daemon runs the new binary's `hostkeeper self-update-protocol`
-(in a transient unit, at most 10 seconds, at most 64 bytes of output read), which prints the
+(in a transient unit, or a launchd job on a Mac, at most 10 seconds, at most 64 bytes of output
+read; not for a release of the version that already runs, none of whose binary is staged), which
+prints the
 binary's self-update protocol and nothing else. **For release authors:** a daemon of protocol
 `N` accepts a new binary of protocol `N` or `N + 1` only, because it must be able to fall back
 from it: the previous binary must read every file the new one writes. A release that changes

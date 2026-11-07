@@ -178,16 +178,20 @@ pub fn probe_command(call: &ProbeCall<'_>) -> Result<Vec<OsString>, LaunchError>
     ))
 }
 
-/// How a probe ended: its exit code, and at most `limit` bytes of what it printed, the rest
-/// dropped and reported.
-fn probe_exit(captured: &Captured, limit: usize) -> ProbeExit {
-    let mut output = captured.stdout.bytes();
-    let truncated = captured.stdout.cut() | (output.len() > limit);
-    output.truncate(limit);
-    ProbeExit {
-        code: captured.code,
-        output,
-        truncated,
+impl ProbeExit {
+    /// How a probe ended, read from what its launcher captured: its exit code, and at most
+    /// `limit` bytes of what it printed, the rest dropped and reported (also when the capture
+    /// itself had to drop some). The one reading of every launcher, `SystemdLauncher` and the
+    /// launchd launcher of a Mac alike.
+    pub fn from_captured(captured: &Captured, limit: usize) -> ProbeExit {
+        let mut output = captured.stdout.bytes();
+        let truncated = captured.stdout.cut() | (output.len() > limit);
+        output.truncate(limit);
+        ProbeExit {
+            code: captured.code,
+            output,
+            truncated,
+        }
     }
 }
 
@@ -416,7 +420,7 @@ impl<S: Spawner> StepLauncher for SystemdLauncher<S> {
         if let Some(log) = self.log.as_ref() {
             log(call.unit, &captured);
         }
-        Ok(probe_exit(&captured, call.output_bytes))
+        Ok(ProbeExit::from_captured(&captured, call.output_bytes))
     }
 
     fn stop(&self, unit: &str) -> Result<(), LaunchError> {

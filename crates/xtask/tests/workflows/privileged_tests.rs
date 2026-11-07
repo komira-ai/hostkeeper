@@ -529,6 +529,7 @@ fn the_committed_privileged_yml_passes_and_holds_the_one_sudo() {
         BTreeSet::from([
             "device_mac".to_owned(),
             "device_mac_e2e".to_owned(),
+            "device_mac_selfupdate".to_owned(),
             "unpack_mac".to_owned()
         ])
     );

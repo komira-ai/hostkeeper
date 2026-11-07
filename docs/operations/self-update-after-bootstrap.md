@@ -40,7 +40,12 @@ first release after 0.1.100 that `hostkeeper --version` shows with that change) 
   release's unit. An earlier daemon refuses the install `path_conflict` before it writes anything.
 - Before it stages the new binary, the daemon asks it for its self-update protocol in a transient
   unit. An earlier Linux daemon has no way to run that probe and refuses every self-update
-  `protocol_unreadable` (komira-ai/hostkeeper#102). The macOS launcher still has none.
+  `protocol_unreadable` (komira-ai/hostkeeper#102). A macOS daemon runs the probe as a launchd
+  job from the release that carries that change on; an earlier one refuses every self-update
+  `protocol_unreadable` the same way, even an install of the version it already runs. The probe
+  is run by the daemon that runs, not by the release, so such a Mac is brought once, by hand, to
+  that release or a later one (stage its binary in the binary directory, switch `current` to it,
+  and `launchctl kickstart -k system/dev.hostkeeper.hostkeeper`) before it is included again.
 
 A verdict of a service the heartbeat does not list, such as the refusal of an install that wrote
 nothing, is sent in the next heartbeat. The service is listed `absent` at the order's target with
