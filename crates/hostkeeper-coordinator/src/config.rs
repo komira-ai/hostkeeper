@@ -892,6 +892,18 @@ where
     .await {}
 }
 
+/// The line `serve` prints once its listeners are bound ([`start`]): the version, then where
+/// each listener is, `lan=` (with `--lan-listen` only) after `control=`.
+#[must_use]
+pub fn start_line(bound: &Bound) -> String {
+    let lan = bound
+        .lan
+        .map_or_else(String::new, |lan| format!(" lan={lan}"));
+    let (heartbeat, control) = (bound.heartbeat, bound.control);
+    let version = env!("CARGO_PKG_VERSION");
+    format!("hostkeeper-coordinator {version} heartbeat={heartbeat} control={control}{lan}")
+}
+
 /// Resolves on SIGTERM or SIGINT.
 async fn signalled() -> io::Result<()> {
     use tokio::signal::unix::{SignalKind, signal};
@@ -921,17 +933,7 @@ where
     Stream: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     let parts = build(&flags, roots)?;
-    let serving = run(parts, bind, |bound| {
-        let lan = bound
-            .lan
-            .map_or_else(String::new, |lan| format!(" lan={lan}"));
-        println!(
-            "hostkeeper-coordinator {} heartbeat={} control={}{lan}",
-            env!("CARGO_PKG_VERSION"),
-            bound.heartbeat,
-            bound.control
-        );
-    });
+    let serving = run(parts, bind, |bound| println!("{}", start_line(&bound)));
     match select(pin!(stop), pin!(serving)).await {
         Either::Left((stopped, _)) => stopped.map_err(StartError::from),
         Either::Right((served, _)) => {

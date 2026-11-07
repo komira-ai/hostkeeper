@@ -18,7 +18,9 @@ use std::sync::{Arc, Mutex};
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use clap::Parser;
-use hostkeeper_coordinator::config::{Bound, Cli, Command, Parts, Serve, StartError, build, run};
+use hostkeeper_coordinator::config::{
+    Bound, Cli, Command, Parts, Serve, StartError, build, run, start_line,
+};
 use hostkeeper_enrollment::enroll::{Decision, poll_message};
 use hostkeeper_enrollment::names::{HostId, KeyHash, Role};
 use hostkeeper_oidc::Roots;
@@ -754,4 +756,31 @@ async fn an_enrolled_host_heartbeats_and_renews_on_the_lan_listener_until_it_is_
     );
     let (status, _) = lan.call(as_new, HEARTBEAT, None, &heartbeat()).await;
     assert_eq!((status.code(), status.message()), (Code::Ok, ""));
+}
+
+/// Proves: the line `serve` prints once its listeners are bound names the LAN listener's bound
+/// address as `lan=<address:port>` after `heartbeat=` and `control=`, and has no `lan=` word
+/// when there is no LAN listener.
+///
+/// Catches: a start line that leaves out where the LAN listener is (the end-to-end test of
+/// network install reads the address from it), or that names it where there is none.
+#[tokio::test]
+async fn the_start_line_names_the_lan_listener_after_the_other_two() {
+    let lan = Lan::start("lan-start-line").await;
+    let version = env!("CARGO_PKG_VERSION");
+    assert_eq!(
+        start_line(&lan.running.bound),
+        format!(
+            "hostkeeper-coordinator {version} heartbeat=192.0.2.1:1 control=192.0.2.1:2 \
+             lan=192.0.2.7:3"
+        )
+    );
+    let without = Bound {
+        lan: None,
+        ..lan.running.bound
+    };
+    assert_eq!(
+        start_line(&without),
+        format!("hostkeeper-coordinator {version} heartbeat=192.0.2.1:1 control=192.0.2.1:2")
+    );
 }
