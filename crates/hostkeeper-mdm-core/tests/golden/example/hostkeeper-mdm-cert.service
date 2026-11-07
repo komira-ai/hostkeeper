@@ -1,0 +1,32 @@
+# hostkeeper-mdm-cert.service: obtain or renew the MDM's ACME certificate with lego over
+# DNS-01, rendered by `hostkeeper-mdm tls`. Edit the template. Run twice a day by
+# hostkeeper-mdm-cert.timer, and once by `hostkeeper-mdm tls --apply` when no certificate is there
+# yet. The DNS provider's API key comes from EnvironmentFile (a 0600 root file),
+# never argv.
+[Unit]
+Description=hostkeeper-mdm TLS certificate (ACME, DNS-01)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=hostkeeper-mdm
+Group=hostkeeper-mdm
+Slice=hostkeeper-mdm.slice
+EnvironmentFile=/etc/hostkeeper-mdm/dns.env
+ExecStart=/opt/hostkeeper-mdm/bin/lego run --accept-tos --email admin@example.com --server https://acme-v02.api.letsencrypt.org/directory --path /var/lib/hostkeeper-mdm/lego --key-type ec256 --dns cloudflare --domains mdm.example.com --dns.resolvers 192.0.2.53:53,198.51.100.53:53 --dns.propagation.wait 300s
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ReadWritePaths=/var/lib/hostkeeper-mdm/lego
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX

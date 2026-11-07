@@ -26,6 +26,10 @@ githubapp.com
 # declares (http://www.apple.com/DTDs/PropertyList-1.0.dtd).
 apple.com
 
+# The ACME directory of Let's Encrypt (acme-v02.api.letsencrypt.org), which the MDM kit's example
+# settings name for its TLS certificate (crates/hostkeeper-mdm-core/config.example).
+letsencrypt.org
+
 # The registry of the distroless base image of the coordinator's container image
 # (packaging/container/Dockerfile, gcr.io/distroless/cc-debian13).
 gcr.io

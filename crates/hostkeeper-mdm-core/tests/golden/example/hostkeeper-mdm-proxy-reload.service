@@ -1,0 +1,8 @@
+# hostkeeper-mdm-proxy-reload.service: started by hostkeeper-mdm-proxy-reload.path. Rendered by
+# `hostkeeper-mdm tls`.
+[Unit]
+Description=hostkeeper-mdm: restart the proxy for a new certificate
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemctl try-restart hostkeeper-mdm-proxy.service
