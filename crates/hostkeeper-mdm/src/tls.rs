@@ -3,8 +3,9 @@
 //!
 //! It checks first, and refuses before anything changes: an ACME setting is unset or
 //! malformed (`hostkeeper_mdm_core::acme::Acme`); `MDM_ETC/dns.env` is not a 0600 file of root's holding
-//! every variable the provider reads; `MDM_BIN/lego` is missing, or its `lego run --help`
-//! lists no flag the unit passes. The DNS credentials are never read into this program's
+//! every variable the provider reads; `MDM_BIN/lego` is missing, its `lego run --help` exits
+//! non-zero, or it lists no flag the unit passes; the certificate path holds something that is
+//! not a regular file, or a file `openssl x509` cannot read. The DNS credentials are never read into this program's
 //! output or any command line: the certificate unit loads `dns.env` itself
 //! (`EnvironmentFile=`), so lego gets them in its environment.
 //!
@@ -14,8 +15,11 @@
 //!    `daemon-reload`;
 //! 2. the timer and the path unit enabled, and restarted when their unit changed, else started
 //!    when not active;
-//! 3. the certificate unit started once when there is no certificate yet (the first issuance;
-//!    the timer renews it after);
+//! 3. the certificate unit started once, after step 2, when there is no certificate yet (the
+//!    first issuance), when the key beside it (the `.crt` path with `.key`) is missing, is not a
+//!    regular file or is not the certificate's (a line says which; no key material is printed),
+//!    or when the certificate ends within [`VALID_FOR_DAYS`] days. `lego run` writes both files;
+//!    the reload path unit, already watching, restarts the proxy on the new certificate;
 //! 4. in a second plan, once the certificate is there (after step 3 when it runs; a dry run
 //!    that would issue shows no proxy step), the proxy enabled and started when not active.
 //!
@@ -35,9 +39,10 @@ use std::io::Write;
 use hostkeeper_mdm_core::acme::Acme;
 use hostkeeper_mdm_core::config::MdmConfig;
 use hostkeeper_mdm_core::render::{UnitNames, render_tls};
-use hostkeeper_mdm_step::{Account, Cmd, Kind, Mode, Planner, UnitVerb, execute};
+use hostkeeper_mdm_step::{Account, Cmd, Host, Kind, Mode, Planner, UnitVerb, execute};
 
 use crate::install::UNITS_DIR;
+use crate::verify::VALID_FOR_DAYS;
 use crate::{Env, MdmError, secret};
 
 const OPENSSL: &str = "/usr/bin/openssl";
@@ -78,6 +83,12 @@ pub fn run(
         return Err(MdmError::NoLego(lego));
     }
     let help = host.run(&Cmd::new(&lego).arg("run").arg("--help"))?;
+    if help.code != 0 {
+        return Err(MdmError::LegoHelp {
+            lego,
+            code: help.code,
+        });
+    }
     let help = help.stdout + &help.stderr;
     // Whole words: `--dns` is not there because `--dns.resolvers` is.
     let words: BTreeSet<&str> = help
@@ -86,6 +97,10 @@ pub fn run(
     if let Some(flag) = LEGO_FLAGS.into_iter().find(|f| !words.contains(f)) {
         return Err(MdmError::LegoFlag { lego, flag });
     }
+
+    let crt = format!("{}/lego/certificates/{}.crt", c.state(), c.dns_name());
+    let key = format!("{}.key", crt.strip_suffix(".crt").unwrap_or(crt.as_str()));
+    let (issue, renew) = look_at_certificate(host, &crt, &key, out)?;
 
     let n = UnitNames::new(c);
     let root = Account::root();
@@ -104,11 +119,10 @@ pub fn run(
         p.service(unit, changed.contains(unit))?;
     }
     // The proxy is planned only with its certificate there: started without it, Caddy fails
-    // and restarts every 5 s. A first issuance runs in this plan, so the proxy has a plan of
-    // its own after it, planned once the certificate is there.
-    let crt = format!("{}/lego/certificates/{}.crt", c.state(), c.dns_name());
-    let issue = host.stat(&crt)?.is_none();
-    if issue {
+    // and restarts every 5 s. An issuance runs in this plan, after the reload path unit is
+    // started above, so the proxy has a plan of its own after it, planned once the
+    // certificate is there.
+    if issue || renew {
         p.unit(UnitVerb::Start, &[n.cert_service.as_str()]);
     }
     execute(&p.finish(), mode, host, out)?;
@@ -135,4 +149,63 @@ pub fn run(
         writeln!(out, "certificate: {line}")?;
     }
     Ok(())
+}
+
+/// Looks at the certificate and its key before any plan: `(issue, renew)`, whether a new
+/// certificate is needed because there is none or the key cannot serve it, and whether the
+/// certificate ends within [`VALID_FOR_DAYS`] days.
+fn look_at_certificate(
+    host: &dyn Host,
+    crt: &str,
+    key: &str,
+    out: &mut dyn Write,
+) -> Result<(bool, bool), MdmError> {
+    match host.stat(crt)?.map(|m| m.kind) {
+        None => return Ok((true, false)),
+        Some(Kind::File) => {}
+        Some(_) => return Err(MdmError::CertNotFile(crt.to_owned())),
+    }
+    let read = host.run(&Cmd::new(OPENSSL).args(&["x509", "-noout", "-in", crt]))?;
+    if read.code != 0 {
+        return Err(MdmError::CertUnreadable(crt.to_owned()));
+    }
+    let why = match host.stat(key)?.map(|m| m.kind) {
+        None => Some("is not there"),
+        Some(Kind::File) => match key_matches(host, crt, key)? {
+            Some(true) => None,
+            Some(false) => Some("is not the key of the certificate"),
+            None => Some("cannot be compared with the certificate"),
+        },
+        Some(_) => Some("is not a regular file"),
+    };
+    if let Some(why) = why {
+        writeln!(out, "key: {key} {why}, a new certificate is issued")?;
+        return Ok((true, false));
+    }
+    let secs = VALID_FOR_DAYS * 24 * 3600;
+    let ends = host.run(&Cmd::new(OPENSSL).args(&[
+        "x509",
+        "-noout",
+        "-checkend",
+        &secs.to_string(),
+        "-in",
+        crt,
+    ]))?;
+    let renew = ends.code != 0;
+    if renew {
+        let days = VALID_FOR_DAYS;
+        writeln!(out, "certificate: ends within {days} days, renewed")?;
+    }
+    Ok((false, renew))
+}
+
+/// Whether the public key of the certificate is the key's; `None` when openssl cannot say.
+/// Only the two public keys are compared, and neither is printed.
+fn key_matches(host: &dyn Host, crt: &str, key: &str) -> Result<Option<bool>, MdmError> {
+    let from_crt = host.run(&Cmd::new(OPENSSL).args(&["x509", "-noout", "-pubkey", "-in", crt]))?;
+    let from_key = host.run(&Cmd::new(OPENSSL).args(&["pkey", "-pubout", "-in", key]))?;
+    Ok(match from_crt.code == 0 && from_key.code == 0 {
+        true => Some(from_crt.stdout == from_key.stdout),
+        false => None,
+    })
 }

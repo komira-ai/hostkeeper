@@ -248,6 +248,11 @@ pub enum MdmError {
     /// The certificate file is not one openssl reads.
     #[error("{0} is there and is not a PEM certificate")]
     NotCertificate(String),
+    /// The certificate file that is already there is not one openssl reads; nothing was changed.
+    #[error(
+        "{0} is there and openssl cannot read it as a PEM certificate: move it aside, and run tls again"
+    )]
+    CertUnreadable(String),
 }
 
 impl MdmError {
