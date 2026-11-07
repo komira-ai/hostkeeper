@@ -15,7 +15,7 @@ use hostkeeper_steps::{BootId, BootIdError, Clock};
 
 use crate::beat::{Health, Heartbeat, Liveness, Platform, Renewal};
 use crate::heartbeater::{DEFAULT_HEARTBEAT_SECS, Heartbeater, LoopConfig, Ports};
-use crate::order::{Order, OrderResult, Outcome, Reply};
+use crate::order::{Order, OrderRef, OrderResult, Outcome, Reply};
 use crate::ports::{
     CertSource, CertState, ClientIdentity, CoordinatorLink, Dispatch, HeldHalts, Job, LinkError,
     Log, Observation, OrderSink, RecordedService, RenewalSource, ServiceObserver, ServiceRecords,
@@ -96,6 +96,8 @@ impl CertSource for FakeCerts {
 pub struct FakeRecords {
     services: Mutex<Vec<RecordedService>>,
     failing: Mutex<Option<io::ErrorKind>>,
+    acknowledged: Mutex<Vec<(ServiceName, OrderRef)>>,
+    unkept: Mutex<Option<io::ErrorKind>>,
 }
 
 impl FakeRecords {
@@ -107,6 +109,16 @@ impl FakeRecords {
     pub fn fail(&self, kind: Option<io::ErrorKind>) {
         *lock(&self.failing) = kind;
     }
+
+    /// From now on an acknowledgement cannot be kept, with `kind`; `None` makes it kept again.
+    pub fn fail_acknowledged(&self, kind: Option<io::ErrorKind>) {
+        *lock(&self.unkept) = kind;
+    }
+
+    /// Every acknowledgement the loop passed on, in order, kept or not.
+    pub fn acknowledged_calls(&self) -> Vec<(ServiceName, OrderRef)> {
+        lock(&self.acknowledged).clone()
+    }
 }
 
 impl ServiceRecords for FakeRecords {
@@ -114,6 +126,14 @@ impl ServiceRecords for FakeRecords {
         match *lock(&self.failing) {
             Some(kind) => Err(io::Error::from(kind)),
             None => Ok(lock(&self.services).clone()),
+        }
+    }
+
+    fn acknowledged(&self, service: &ServiceName, order: &OrderRef) -> io::Result<()> {
+        lock(&self.acknowledged).push((service.clone(), order.clone()));
+        match *lock(&self.unkept) {
+            Some(kind) => Err(io::Error::from(kind)),
+            None => Ok(()),
         }
     }
 }

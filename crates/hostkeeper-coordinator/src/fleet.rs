@@ -742,10 +742,20 @@ impl Fleet {
     }
 
     /// Whether the host `id` holds an update slot of `service`: [`Host::holds_slot`], or an
-    /// order is outstanding for it.
+    /// order is outstanding for it. A host an operator excluded from `service` holds one only
+    /// while it runs an update (updating, or its promotion pending) or has an order outstanding,
+    /// so a host excluded mid-update keeps its slot until that update ends; one whose last update
+    /// failed and that is not healthy holds none, since the service no longer orders it and
+    /// nothing of an update of it runs: it would keep its role's `max_updating` taken for as long
+    /// as it stays excluded.
     #[must_use]
     pub fn holds_slot(&self, service: &str, id: &HostId, host: &Host, now: Duration) -> bool {
-        host.holds_slot() || self.is_ordered(service, id, now)
+        let running = host.beat.updating.is_some() || host.beat.promotion_pending;
+        let held = match self.is_excluded(service, id) {
+            true => running,
+            false => host.holds_slot(),
+        };
+        held || self.is_ordered(service, id, now)
     }
 
     /// How many healthy beats in a row the host `id` has sent `service` at `version`.

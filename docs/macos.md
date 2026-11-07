@@ -131,7 +131,10 @@ The daemon picks its adapters by the platform it was built for
 (`hostkeeper_daemon::adapters::Adapters::for_platform`): on a Mac the step launcher, the
 observer's service manager and process probe, and the unit control over `launchctl` and
 `/Library/LaunchDaemons`, the package check above, and the Mac claims; on Linux the systemd
-step launcher, observer and unit control (`systemctl`), and no package check. The admin socket's default is the platform's (`/var/run/hostkeeper/admin.sock` on a Mac),
+step launcher, observer and unit control (`systemctl`), and no package check. Each set names the
+unit the daemon runs as, which the observer watches as the service `hostkeeper`: on a Mac the
+daemon's job `dev.hostkeeper.hostkeeper`, since the macOS package of hostkeeper names no unit
+(docs/service-observation.md, "The daemon's own service"). The admin socket's default is the platform's (`/var/run/hostkeeper/admin.sock` on a Mac),
 in a directory the daemon makes mode 0700.
 
 #### One daemon, run by launchd
@@ -550,6 +553,11 @@ counted by the coverage gate; what they drive is measured against fakes on Linux
   - a daemon the pkg installed (no package of hostkeeper) ordered the install of the next
     release: the same, and the package is installed at the new version;
   - a daemon the pkg installed ordered the install of the version it runs: `Succeeded` at once,
-    with no probe and the same process.
+    with no probe and the same process;
+  - the real coordinator in the test's process, answering each heartbeat the daemon wrote (its
+    rollout asks two healthy heartbeats of a host at its version), orders the update: the daemon
+    restarts into the next version, the new binary reports the update's `Succeeded` under the
+    coordinator's order id and its own job running, healthy and at the new version, and the
+    coordinator reads the host baked and hostkeeper converged.
   The fallback of a next binary that cannot start is not run there: the daemon of the test writes
   its fallback job beside its placed units, not in `/Library/LaunchDaemons`.

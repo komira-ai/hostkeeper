@@ -102,6 +102,15 @@ pub struct Progress {
     /// set, and a record without it loads as `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub awaiting_restart: Option<AwaitingRestart>,
+    /// The coordinator's id of the order whose update of the updater itself this record settled
+    /// ([`RecordStore::settle_awaiting_restart`], from [`AwaitingRestart::order_id`]), while its
+    /// verdict is still to be reported: the binary that ran the order exited before its verdict
+    /// was sent, so a daemon reads the record's verdict, under this id and `order_try`, as one to
+    /// send, at every start, until the coordinator acknowledges it
+    /// ([`RecordStore::verdict_acknowledged`]). Additive: written only when set, and a record
+    /// without it loads as `None`; the next update writes a new record without it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report_order_id: Option<String>,
 }
 
 /// An update of the updater itself waiting for its new binary to start.
@@ -111,6 +120,14 @@ pub struct AwaitingRestart {
     pub version: String,
     /// What the `Succeeded` the new binary confirms says of the promotion.
     pub verdict_promotion_pending: bool,
+    /// The coordinator's id of the order the update ran for, when it came with one: the
+    /// settlement keeps it as [`Progress::report_order_id`], whichever binary settles it (the
+    /// new one at its start, or the fallback's previous one), since the binary that ran the
+    /// order exits before its verdict is sent. Additive: written only when set, and a record
+    /// without it (every record of a daemon from before it existed) loads as `None`, its verdict
+    /// then reported by no binary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub order_id: Option<String>,
 }
 
 /// How an update waiting for the restart ends ([`RecordStore::settle_awaiting_restart`]).
@@ -324,8 +341,32 @@ impl RecordStore {
         &self.dir
     }
 
+    /// Under the record lock, when the record holds a verdict to report under `order_id` and
+    /// `order_try` ([`Progress::report_order_id`]), marks it reported: the coordinator
+    /// acknowledged it. `true` when it wrote; any other record, of another order or try, or
+    /// none, is left as it is.
+    pub fn verdict_acknowledged(
+        &self,
+        order_id: &str,
+        order_try: u64,
+    ) -> Result<bool, RecordError> {
+        let _held = self.hold();
+        let mut rec = match self.load()? {
+            Loaded::Current(rec) => rec,
+            Loaded::Absent | Loaded::Newer { .. } => return Ok(false),
+        };
+        let named = rec.progress.report_order_id.as_deref() == Some(order_id);
+        if !(named & (rec.order_try == Some(order_try))) {
+            return Ok(false);
+        }
+        rec.progress.report_order_id = None;
+        self.save(&rec)?;
+        Ok(true)
+    }
+
     /// Under the record lock, closes the update the record holds as waiting for the restart
-    /// ([`Progress::awaiting_restart`]) in one write, the field cleared: `Succeeded` for
+    /// ([`Progress::awaiting_restart`]) in one write, the field cleared and its order id kept as
+    /// the one to report the verdict under ([`Progress::report_order_id`]): `Succeeded` for
     /// [`Settlement::Confirmed`], with the promotion the field kept, and `Failed` after the
     /// commit, of class release, [`REASON_SELF_UPDATE_FALLBACK`], for [`Settlement::FellBack`].
     /// `false`, and nothing written, when the record is absent, newer, or waits for no restart.
@@ -338,6 +379,7 @@ impl RecordStore {
         let Some(awaiting) = rec.progress.awaiting_restart.take() else {
             return Ok(false);
         };
+        rec.progress.report_order_id = awaiting.order_id;
         rec.state = match outcome {
             Settlement::Confirmed => State::Finished {
                 verdict: Verdict::Succeeded {

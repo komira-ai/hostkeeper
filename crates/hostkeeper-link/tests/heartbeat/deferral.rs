@@ -722,3 +722,39 @@ fn a_restart_at_or_after_the_retry_time_on_record_does_not_start_the_wait_again(
         );
     }
 }
+
+/// Catches a deferral left standing beside the verdict that ended it, when the verdict comes
+/// back after a restart (the settled update of the daemon itself, whose binary before the
+/// restart wrote the deferral): a hooked verdict of the deferral's target, given back by the
+/// records, ends it as it does when the order runs in the loop; a forced one keeps it.
+#[test]
+fn a_verdict_given_back_after_a_restart_ends_the_deferral_of_its_target() {
+    for (forced_verdict, kept) in [(false, false), (true, true)] {
+        let rig = Rig::with_world(
+            &format!("deferral-recover-{forced_verdict}"),
+            deferring_once(),
+        );
+        drop(defer(&rig));
+        assert!(file_of(&rig).exists());
+        let order = update("o-1", 1, "x", "2.0");
+        let mut result = verdict(&order, Outcome::Succeeded);
+        result.forced = forced_verdict;
+        rig.install(vec![RecordedService {
+            last_result: Some(result),
+            ..recorded("x", "1.0")
+        }]);
+        let mut heartbeater = rig.heartbeater();
+        rig.world
+            .link
+            .answer(Ok(reply(None, &[Feature::DeferredV1])));
+        heartbeater.beat_once();
+        heartbeater.beat_once();
+        let beats = rig.world.link.beats();
+        let last = beats.last().expect("a beat");
+        assert_eq!(
+            last.services[0].deferred.is_some(),
+            kept,
+            "forced: {forced_verdict}"
+        );
+    }
+}

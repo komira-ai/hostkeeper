@@ -12,6 +12,9 @@
 //!   ([`LaunchdProcessProbe`]), the plists under `/Library/LaunchDaemons`, and the quarantine and
 //!   code-signature checks of every unpacked package ([`HostMacVerify`]).
 //!
+//! Each set also names the unit the daemon itself runs as (`hostkeeper.service`, or the launchd
+//! job `dev.hostkeeper.hostkeeper`), which the observer watches as the service `hostkeeper`.
+//!
 //! The host's clock is chosen here too ([`host_clock`]): the kernel's monotonic clock under the
 //! boot id of the system the daemon was built for.
 //!
@@ -29,8 +32,8 @@ use hostkeeper_enroll::{
     ClaimsSource, Ioreg, Ipmi, LinuxClaims, MacClaims, ManagedFile, ManagedPreferences,
 };
 use hostkeeper_launchd::{
-    Launchctl, LaunchdProcessProbe, LaunchdServiceManager, LaunchdUnitControl, PidInfo, Platform,
-    PlatformKind, StdFileIdentity,
+    Label, Launchctl, LaunchdProcessProbe, LaunchdServiceManager, LaunchdUnitControl, PidInfo,
+    Platform, PlatformKind, StdFileIdentity,
 };
 use hostkeeper_observe::{CommandRunner, ProcessProbe, ProcessRunner, ServiceManager};
 use hostkeeper_placed::{CommandLauncher, Systemctl, UnitControl};
@@ -39,6 +42,7 @@ use hostkeeper_unpack::MacVerify;
 
 use crate::hook_log::log_hook_output;
 use crate::observer::{proc_probe, systemd_manager};
+use crate::selfunits::MAIN_UNIT;
 use crate::start::StartError;
 
 /// How long one `launchctl` command of the unit control may run: `bootout` waits for the job to
@@ -73,6 +77,10 @@ pub struct Adapters {
     pub manager: Box<dyn ServiceManager>,
     /// The observer's process probe.
     pub process: Box<dyn ProcessProbe>,
+    /// The unit the daemon itself runs as, which the observer watches as the service
+    /// `hostkeeper` ([`crate::observer::OwnService`]): [`MAIN_UNIT`] on Linux, the launchd job
+    /// [`Label::daemon`] on macOS.
+    pub own_unit: String,
     /// The check every unpacked package passes before it is sealed.
     pub package_check: PackageCheck,
 }
@@ -100,6 +108,7 @@ impl Adapters {
             unit_dir: platform.unit_dir.clone(),
             manager: Box::new(systemd_manager()),
             process: Box::new(proc_probe()),
+            own_unit: MAIN_UNIT.to_owned(),
             package_check: None,
         }
     }
@@ -133,6 +142,7 @@ impl Adapters {
             unit_dir: platform.unit_dir.clone(),
             manager: Box::new(LaunchdServiceManager::new(print)),
             process: Box::new(LaunchdProcessProbe::new(pids, StdFileIdentity)),
+            own_unit: Label::daemon().to_string(),
             package_check: Some(check),
         })
     }

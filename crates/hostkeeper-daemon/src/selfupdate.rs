@@ -49,7 +49,15 @@
 //! [`Daemon::settle_self_update`] settles an update that waits for the restart
 //! ([`hostkeeper_steps::selfupdate::settle`]): the new binary confirms it `Succeeded` and clears
 //! the deferrals an old updater caused in every service's record (`updater_old`,
-//! `daemon_too_old`); any other binary records it `Failed` and its version bad.
+//! `daemon_too_old`); any other binary records it `Failed` and its version bad. The binary that
+//! ran the order exited before its `Deferred` reached a heartbeat, and the coordinator ends the
+//! order once the host runs its target, so it never orders it again for a resend to be
+//! answered: the wait keeps the order's id, the settlement (by this start, or by the fallback
+//! verb before the previous binary starts) keeps it in the finished record, and every start
+//! of a daemon lists the record's verdict under that id and the record's try for the heartbeat
+//! to send until the coordinator acknowledges it (`crate::link_adapters::recorded`). A wait
+//! written by a daemon from before the id was kept names no order, and its verdict is reported
+//! by no binary.
 //!
 //! The protocol rule: a new binary of protocol `P` is accepted when
 //! `SELF_UPDATE_PROTOCOL <= P <= SELF_UPDATE_PROTOCOL + 1`. "Can fall back from" means that the
@@ -325,8 +333,9 @@ fn steps(
     files::make_private(layout.dir()).map_err(|e| Reply::refused(Refusal::StoreFailed, e))?;
     let store = ctx.store(service);
     let binary = Path::new(RELEASE_BINARY);
+    let order_id = order.order_id.as_deref();
     match follow_on(
-        &finished, &store, &layout, &running, version, release, binary,
+        &finished, &store, &layout, &running, version, release, binary, order_id,
     ) {
         Ok(FollowOn::Restart) => {
             ctx.restart().request();
