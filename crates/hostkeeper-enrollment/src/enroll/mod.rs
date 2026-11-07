@@ -220,9 +220,14 @@ pub struct ApprovalRecord {
     pub approved_unix: u64,
     /// Why, in the approver's words.
     pub reason: String,
-    /// The Mac nonce the host presented, by its SHA-256: it must be known, unexpired, unused
-    /// and issued for the serial the request claims, and the approval consumes it.
+    /// The Mac nonce the host presented, by its SHA-256: it must be known, unexpired, unused,
+    /// issued for the serial the request claims and, when it names one, for this request; the
+    /// approval consumes it.
     pub mac_nonce: Option<MacNonceHash>,
+    /// With a Mac nonce: when the MDM gate saw the Mac's current enrollment begin, unix
+    /// seconds. A host id held by the key of the same Mac's request approved before then is
+    /// taken over ([`EnrollmentStore::approve_recorded`]). `None`: no host id is taken over.
+    pub mac_enrolled_since_unix: Option<u64>,
 }
 
 /// An approval as the store holds it with its record: what the coordinator audits.
@@ -232,7 +237,8 @@ pub struct RecordedApproval {
     pub host_id: String,
     pub role: String,
     pub services: Vec<String>,
-    /// The approval was asked to take the host id over (`replace`).
+    /// The approval was asked to take the host id over (`replace`), or a Mac's request took
+    /// its own host id over from its earlier key.
     pub replace: bool,
     pub approver: String,
     pub approved_unix: u64,
@@ -269,6 +275,9 @@ pub struct Approval {
     pub renewal: bool,
     /// The approval took the host id out of a deny row.
     pub cleared_deny: bool,
+    /// The approval is recorded as replacing: `replace` was asked, or a Mac's request took its
+    /// own host id over from the key it held before a new MDM enrollment.
+    pub replace: bool,
 }
 
 /// The store could not read or write its files.

@@ -165,4 +165,8 @@ message MacNonce {
   uint64 issued_unix = 4;
   // The request whose approval consumed it; empty while it is unused.
   bytes consumed_by = 5;
+  // The request id (key hash) of the pending request it was issued for: it approves that
+  // request only. Empty on a nonce written before this field, which is judged without it; a
+  // release before the field ignores it.
+  bytes request_id = 6;
 }

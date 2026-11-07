@@ -2,8 +2,10 @@
 //! coordinator approves the Mac's request by.
 //!
 //! A nonce is kept by its SHA-256 only ([`MacNonceHash`]), one file each under `mac-nonces/`,
-//! with the serial it was issued for and when. It is good for [`MAC_NONCE_VALID_SECS`] from
-//! its issue and for one approval. The approval consumes it in the request file it writes
+//! with the serial it was issued for, the pending request it was issued for (its key hash), and
+//! when. It is good for [`MAC_NONCE_VALID_SECS`] from its issue and for one approval, of that
+//! request only. A nonce file written before the request field holds none, and is judged without
+//! it. The approval consumes it in the request file it writes
 //! (`Approval.mac_nonce_sha256`), which is the commit point; the nonce's own file is marked
 //! consumed after that write, and at the next [`EnrollmentStore::open`] if that mark did not
 //! land, and until then the store remembers it in memory. A check that does not lead to an
@@ -75,6 +77,9 @@ pub enum MacNonceRefusal {
     /// It was issued for another serial than the one the request claims.
     #[error("nonce_wrong_serial: the nonce was issued for another serial")]
     WrongSerial,
+    /// It was issued for another request (another key) than the one it is presented with.
+    #[error("nonce_wrong_request: the nonce was issued for another request")]
+    WrongRequest,
 }
 
 impl MacNonceRefusal {
@@ -85,20 +90,23 @@ impl MacNonceRefusal {
             MacNonceRefusal::Expired => "nonce_expired",
             MacNonceRefusal::Used => "nonce_used",
             MacNonceRefusal::WrongSerial => "nonce_wrong_serial",
+            MacNonceRefusal::WrongRequest => "nonce_wrong_request",
         }
     }
 }
 
 impl EnrollmentStore {
     /// Records the nonce of SHA-256 `hash`, issued at `now` (unix seconds) for the Mac of
-    /// `serial`. Returns `false`, and changes nothing, when a nonce of that hash exists already
-    /// (consumed or not): it is never issued again.
+    /// `serial` and its pending request `request` (the request's key hash): it approves that
+    /// request only. Returns `false`, and changes nothing, when a nonce of that hash exists
+    /// already (consumed or not): it is never issued again.
     ///
     /// # Errors
     /// [`StoreError`] when its file cannot be read or written.
     pub fn issue_mac_nonce(
         &self,
         serial: &str,
+        request: &KeyHash,
         hash: &MacNonceHash,
         now: u64,
     ) -> Result<bool, StoreError> {
@@ -112,17 +120,21 @@ impl EnrollmentStore {
             serial: serial.to_owned(),
             issued_unix: now,
             consumed_by: Vec::new(),
+            request_id: request.as_bytes().to_vec(),
         };
         self.write(MAC_NONCES, &hash.file_name(), &nonce.encode_to_vec())?;
         Ok(true)
     }
 
-    /// Whether the nonce of SHA-256 `hash` approves a request claiming `serial` at `now`: its
-    /// file, or the refusal, checked in this order: unknown, expired, used, wrong serial. The
+    /// Whether the nonce of SHA-256 `hash` approves the request `request`, claiming `serial`,
+    /// at `now`: its file, or the refusal, checked in this order: unknown, expired, used, wrong
+    /// serial, wrong request. A nonce that names no request (written before the field) is not
+    /// checked for it; one whose request field is not a key hash approves no request. The
     /// caller holds the store's lock and consumes it in the approval it writes.
     pub(super) fn mac_nonce_verdict(
         &self,
         hash: &MacNonceHash,
+        request: &KeyHash,
         serial: &str,
         now: u64,
     ) -> Result<Result<pb::MacNonce, MacNonceRefusal>, StoreError> {
@@ -142,6 +154,12 @@ impl EnrollmentStore {
         }
         if nonce.serial != serial {
             return Ok(Err(MacNonceRefusal::WrongSerial));
+        }
+        let bound = nonce.request_id.is_empty()
+            || KeyHash::from_bytes(&nonce.request_id)
+                .is_some_and(|bound| bound.equals_in_constant_time(request));
+        if !bound {
+            return Ok(Err(MacNonceRefusal::WrongRequest));
         }
         Ok(Ok(nonce))
     }

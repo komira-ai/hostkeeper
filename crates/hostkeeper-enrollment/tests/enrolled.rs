@@ -49,6 +49,7 @@ fn enroll(store: &EnrollmentStore, key: &HostKey, machine: &str, host: &str, at:
                 approved_unix: at,
                 reason: "new rack".to_owned(),
                 mac_nonce: None,
+                mac_enrolled_since_unix: None,
             },
         )
         .expect("approved");
