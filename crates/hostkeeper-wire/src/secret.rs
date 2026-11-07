@@ -3,8 +3,11 @@
 //!
 //! `read_token` reads the file and checks it each time it is called; when to call it is the
 //! caller's choice (the coordinator reads the operator token once, at start, so a rotated
-//! token needs a restart). The token never appears in an error text or a `Debug`. An error
-//! names the flag of the file, never its path or its content.
+//! token needs a restart). `open_token` opens and checks the file now and reads it later, from
+//! the descriptor it keeps ([`OpenToken::read`]): `hostkeeper-pxe serve` opens the root-only
+//! token file as root and reads it only once it has dropped to an unprivileged user. The token
+//! never appears in an error text or a `Debug`. An error names the flag of the file, never its
+//! path or its content.
 
 use std::io::Read;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
@@ -55,17 +58,51 @@ pub enum SecretError {
 /// # Errors
 /// [`SecretError`]: the file cannot be read, breaks the file rule, or holds no such token.
 pub fn read_token(path: &Path) -> Result<String, SecretError> {
-    let bytes = read_secret(path, TOKEN_FLAG, TOKEN_MAX)?;
-    let fail = || SecretError::Token {
-        flag: TOKEN_FLAG.to_owned(),
-    };
-    let text = String::from_utf8(bytes).map_err(|_| fail())?;
-    let token = text.trim();
-    let visible = token.bytes().all(|b| b.is_ascii_graphic());
-    if text.len() as u64 > TOKEN_MAX || token.len() < TOKEN_MIN || !visible {
-        return Err(fail());
+    open_token(path)?.read()
+}
+
+/// The token file at `path`, opened and checked against the file rule of [`read_token`] now,
+/// against this process's user now, and read later by [`OpenToken::read`] from the descriptor
+/// it keeps, whatever user the process is by then.
+///
+/// # Errors
+/// [`SecretError::Io`]: the file cannot be opened; [`SecretError::Rule`]: it breaks the file
+/// rule.
+pub fn open_token(path: &Path) -> Result<OpenToken, SecretError> {
+    open_secret(path, TOKEN_FLAG).map(|file| OpenToken { file })
+}
+
+/// A token file [`open_token`] opened and checked, not read yet. Its `Debug` shows nothing of
+/// the file.
+pub struct OpenToken {
+    file: std::fs::File,
+}
+
+impl std::fmt::Debug for OpenToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("OpenToken")
     }
-    Ok(token.to_owned())
+}
+
+impl OpenToken {
+    /// The token the file holds, as [`read_token`] takes it.
+    ///
+    /// # Errors
+    /// [`SecretError::Io`]: the file cannot be read; [`SecretError::Token`]: it holds no token
+    /// of 32 to 4096 visible ASCII characters.
+    pub fn read(self) -> Result<String, SecretError> {
+        let bytes = read_limited(self.file, TOKEN_FLAG, TOKEN_MAX)?;
+        let fail = || SecretError::Token {
+            flag: TOKEN_FLAG.to_owned(),
+        };
+        let text = String::from_utf8(bytes).map_err(|_| fail())?;
+        let token = text.trim();
+        let visible = token.bytes().all(|b| b.is_ascii_graphic());
+        if text.len() as u64 > TOKEN_MAX || token.len() < TOKEN_MIN || !visible {
+            return Err(fail());
+        }
+        Ok(token.to_owned())
+    }
 }
 
 /// The bytes of a secret file that passes the file rule, at most `limit` of them (and one
@@ -76,22 +113,36 @@ pub fn read_token(path: &Path) -> Result<String, SecretError> {
 /// [`SecretError::Io`]: the file cannot be opened or read; [`SecretError::Rule`]: it breaks
 /// the file rule.
 pub fn read_secret(path: &Path, flag: &str, limit: u64) -> Result<Vec<u8>, SecretError> {
-    let io = |e: std::io::Error| SecretError::Io {
-        flag: flag.to_owned(),
-        kind: e.kind(),
-    };
-    let (file, meta) = open_checked(path).map_err(io)?;
+    read_limited(open_secret(path, flag)?, flag, limit)
+}
+
+/// The secret file at `path`, open, once it passes the file rule; the error names `flag`.
+fn open_secret(path: &Path, flag: &str) -> Result<std::fs::File, SecretError> {
+    let (file, meta) = open_checked(path).map_err(|e| io_error(flag, &e))?;
     file_rule(meta.is_file(), meta.uid(), meta.mode(), euid()).map_err(|why| {
         SecretError::Rule {
             flag: flag.to_owned(),
             why,
         }
     })?;
+    Ok(file)
+}
+
+/// At most `limit` bytes of `file`, and one more; the error names `flag`.
+fn read_limited(file: std::fs::File, flag: &str, limit: u64) -> Result<Vec<u8>, SecretError> {
     let mut bytes = Vec::new();
     file.take(limit.saturating_add(1))
         .read_to_end(&mut bytes)
-        .map_err(io)?;
+        .map_err(|e| io_error(flag, &e))?;
     Ok(bytes)
+}
+
+/// [`SecretError::Io`] of `error` for the file of `flag`.
+fn io_error(flag: &str, error: &std::io::Error) -> SecretError {
+    SecretError::Io {
+        flag: flag.to_owned(),
+        kind: error.kind(),
+    }
 }
 
 /// The effective user of this process.

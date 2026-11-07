@@ -21,12 +21,17 @@ fn run_with(args: &[&str], fetch: Fetch<'_>) -> (u8, String, String) {
     let mut argv: Vec<OsString> = vec!["hostkeeper-pxe".into()];
     argv.extend(args.iter().map(OsString::from));
     let (mut out, mut err) = (Vec::new(), Vec::new());
-    let status = run(argv, fetch, &mut out, &mut err);
+    let status = run(argv, fetch, &unreached_serve, &mut out, &mut err);
     (
         status,
         String::from_utf8(out).expect("UTF-8"),
         String::from_utf8(err).expect("UTF-8"),
     )
+}
+
+/// A serve the fetch tests do not expect to be reached.
+fn unreached_serve(_: &ServeFlags) -> Result<(), String> {
+    panic!("serve is not reached")
 }
 
 /// A fetch the tests do not expect to be reached.
@@ -370,7 +375,9 @@ fn both_platforms_unless_platform_names_some() {
         "linux-x86_64",
     ])
     .expect("parses");
-    let Verb::Fetch(flags) = parsed.verb;
+    let Verb::Fetch(flags) = parsed.verb else {
+        panic!("a fetch")
+    };
     assert_eq!(flags.platforms, [arm, x86]);
 }
 
@@ -403,7 +410,9 @@ fn fetch_flags(extra: &[&str]) -> FetchFlags {
         "c",
     ];
     args.extend_from_slice(extra);
-    let Verb::Fetch(flags) = Cli::try_parse_from(args).expect("parses").verb;
+    let Verb::Fetch(flags) = Cli::try_parse_from(args).expect("parses").verb else {
+        panic!("a fetch")
+    };
     flags
 }
 

@@ -104,6 +104,10 @@ rustix = "1.1.5"
 saphyr-parser = "0.1.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+# The sockets of `hostkeeper-pxe serve`, set up before they are bound: SO_REUSEADDR, SO_BROADCAST
+# and SO_BINDTODEVICE (`--interface`), which neither std nor rustix sets. Already in the tree
+# through tokio and hyper-util.
+socket2 = { version = "0.6.5", features = ["all"] }
 sha2 = "0.11.0"
 # The operator token compared in constant time (hostkeeper-coordinator).
 subtle = "2.6.1"
