@@ -1,5 +1,6 @@
-//! `docs/operations/enrollment.md`, the runbook for enrolling a node, against the code it
-//! describes.
+//! `docs/operations/enrollment.md`, the runbook for enrolling a node, and
+//! `docs/operations/network-install.md`, the runbook for installing one from the network, against
+//! the code they describe.
 //!
 //! - Every command line in a fenced block that begins `hostkeeper ctl` parses with ctl's own
 //!   parser (`hostkeeper_ctl::parse_with`) over the generated command table, the one
@@ -14,6 +15,9 @@
 //!   heartbeat's own `invalid_heartbeat`. A token is the value's name without its enum prefix, in
 //!   lower case, as the coordinator sends it. Anywhere else, a token written after "refused"
 //!   (``refused `x` `` or ``refused: `x` ``) must be one of them.
+//! - The network-install runbook's `hostkeeper ctl` lines parse the same way, it uses the calls of
+//!   its two steps per machine (`add-record`, `list-records`, `list` and `approve` of
+//!   `enrollment`), and a token it writes after "refused" is one of the protos' refusal tokens.
 //!
 //! The checks are pure functions of the text, each tested on edited texts as well as on the real
 //! file. The file is read from the repository; a missing file fails.
@@ -27,6 +31,17 @@ use prost_reflect::DescriptorPool;
 
 /// The runbook, from the repository root.
 const DOC: &str = "docs/operations/enrollment.md";
+
+/// The network-install runbook, from the repository root.
+const NETWORK_INSTALL_DOC: &str = "docs/operations/network-install.md";
+
+/// The calls the network-install runbook's steps need, as `service rpc`.
+const NETWORK_INSTALL_REQUIRED: &[&str] = &[
+    "enrollment add-record",
+    "enrollment list-records",
+    "enrollment list",
+    "enrollment approve",
+];
 
 /// The heading of the table of `EnrollmentRefusal`.
 const OPERATOR_TABLE: &str = "## Refusals of the operator calls";
@@ -138,8 +153,14 @@ fn command_of(line: &str) -> Result<Option<String>, String> {
     }
 }
 
-/// Every command line that does not parse, and every required call no line makes.
+/// Every command line of the enrollment runbook that does not parse, and every call of
+/// [`REQUIRED`] no line makes.
 fn command_problems(doc: &str) -> Vec<String> {
+    command_problems_for(doc, REQUIRED)
+}
+
+/// Every command line of `doc` that does not parse, and every call of `required` no line makes.
+fn command_problems_for(doc: &str, required: &[&str]) -> Vec<String> {
     let mut problems = Vec::new();
     let mut called = BTreeSet::new();
     for line in ctl_lines(doc) {
@@ -148,7 +169,7 @@ fn command_problems(doc: &str) -> Vec<String> {
             Err(e) => problems.push(e),
         }
     }
-    for required in REQUIRED {
+    for required in required {
         if !called.contains(*required) {
             problems.push(format!("no command line calls `hostkeeper ctl {required}`"));
         }
@@ -267,6 +288,65 @@ fn enrollment_doc_commands_parse() {
     problems.extend(token_problems(&doc));
     assert!(problems.is_empty(), "{DOC}:\n{}", problems.join("\n"));
     assert!(ctl_lines(&doc).len() >= REQUIRED.len());
+}
+
+/// Every problem of the network-install runbook: a command line that does not parse, a call of
+/// its steps no line makes, and a token written as a refusal that the protos do not define.
+fn network_install_problems(doc: &str) -> Vec<String> {
+    let mut problems = command_problems_for(doc, NETWORK_INSTALL_REQUIRED);
+    let (operator, host) = code_tokens();
+    let known: BTreeSet<String> = operator.union(&host).cloned().collect();
+    problems.extend(mention_problems(doc, &known));
+    problems
+}
+
+/// Catches a `hostkeeper ctl` line of the network-install runbook that ctl would refuse as a
+/// usage error, a step of it with no command, and a refusal token the code does not define.
+#[test]
+fn network_install_doc_commands_parse() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(NETWORK_INSTALL_DOC);
+    let doc = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("read {NETWORK_INSTALL_DOC}: {e}"));
+    let problems = network_install_problems(&doc);
+    assert!(
+        problems.is_empty(),
+        "{NETWORK_INSTALL_DOC}:\n{}",
+        problems.join("\n")
+    );
+}
+
+/// Catches the network-install check passing a misspelled call, a runbook that leaves out the
+/// approval, and a refusal token no proto defines.
+#[test]
+fn the_network_install_check_refuses_each_defect() {
+    let all: String = NETWORK_INSTALL_REQUIRED
+        .iter()
+        .map(|r| fenced(&format!("hostkeeper ctl {r}")))
+        .collect();
+    assert_eq!(network_install_problems(&all), Vec::<String>::new());
+    let misspelled = all.clone() + &fenced("hostkeeper ctl enrollment list-record");
+    let problems = network_install_problems(&misspelled);
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    assert!(
+        problems[0].starts_with("hostkeeper ctl enrollment list-record\n"),
+        "{problems:?}"
+    );
+    let without_approve: String = NETWORK_INSTALL_REQUIRED
+        .iter()
+        .filter(|r| **r != "enrollment approve")
+        .map(|r| fenced(&format!("hostkeeper ctl {r}")))
+        .collect();
+    assert_eq!(
+        network_install_problems(&without_approve),
+        ["no command line calls `hostkeeper ctl enrollment approve`"]
+    );
+    let token = all + "A heartbeat is refused `revoked` at once.\n";
+    assert_eq!(
+        network_install_problems(&token),
+        ["`revoked` is written as a refusal and is none"]
+    );
 }
 
 /// A fenced block holding `line`, for the edited texts.
