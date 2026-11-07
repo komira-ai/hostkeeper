@@ -181,4 +181,12 @@ impl Placer<'_> {
     pub fn remove_all(&self, service: &ServiceName) -> Result<Removal, PlacedError> {
         self.prune(service.as_str(), true, |_| BTreeSet::new())
     }
+
+    /// [`Placer::remove_all`] that stops no unit: every placed path of `service` is removed and
+    /// dropped from the record, then `daemon-reload` runs when a unit or `WantedBy=` link went.
+    /// For a service whose unit is the one that runs the caller (the daemon's own), which a stop
+    /// would end mid-order.
+    pub fn unlink_all(&self, service: &ServiceName) -> Result<Removal, PlacedError> {
+        self.prune(service.as_str(), false, |_| BTreeSet::new())
+    }
 }

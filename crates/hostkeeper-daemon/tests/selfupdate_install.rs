@@ -12,9 +12,10 @@ use clap::Parser;
 use hostkeeper_daemon::cli::{self, Cli};
 use hostkeeper_daemon::{Refusal, Reply, update_hook};
 use hostkeeper_hook::{ArgsError, Outcome, Step, Verdict};
+use hostkeeper_placed::testing::{Event, UnitCall};
 use hostkeeper_steps::Settled;
 use hostkeeper_steps::record::State;
-use support::selfupdate::{HK, NEW, OLD, SelfRig, awaiting};
+use support::selfupdate::{DEB_UNIT, DEB_WANTS, HK, NEW, OLD, SelfRig, awaiting};
 use support::{d, install};
 
 /// The version the packages directory's `current` of hostkeeper names, if any.
@@ -169,4 +170,57 @@ fn update_hook_succeeds_at_every_step_and_refuses_what_the_contract_does_not_all
         let cli = Cli::parse_from(["hostkeeper", "update-hook"].iter().chain(line));
         assert_eq!(code(cli::run(cli)), code(ExitCode::FAILURE), "{line:?}");
     }
+}
+
+/// Catches a failed first install of hostkeeper that stops the daemon's own unit (systemd does
+/// not start a unit again after a stop, so the host would be left with no daemon) or takes the
+/// deb's enable link with it: on a host the deb enabled, an install whose `verify` fails is
+/// rolled back with no unit stopped; the unit link it placed and `current` go, `placed.json`
+/// lists nothing, the deb's `WantedBy=` link still points where the deb made it, and the binary
+/// directory stays on the running binary, with no restart asked.
+#[test]
+fn a_failed_first_install_of_hostkeeper_stops_no_unit_and_keeps_the_debs_enable_link() {
+    let s = SelfRig::deb("su-install-rollback");
+    s.rig.launcher.exits(HK, Step::Verify, &[1]);
+    let daemon = s.daemon();
+    s.rig.placed_log.clear();
+
+    let reply = daemon.order(&install(HK, NEW, &d(), 1));
+    assert!(
+        matches!(
+            reply,
+            Reply::Finished {
+                verdict: Verdict::Failed { .. },
+                ..
+            }
+        ),
+        "{reply:?}"
+    );
+    assert_eq!(
+        s.hk_steps(),
+        [Step::Prepare, Step::Cutover, Step::Verify, Step::Rollback]
+    );
+    let stops: Vec<Event> = s
+        .rig
+        .placed_log
+        .events()
+        .into_iter()
+        .filter(|event| matches!(event, Event::Unit(UnitCall::Stop(_))))
+        .collect();
+    assert_eq!(stops, []);
+    assert!(
+        s.rig
+            .placed_log
+            .events()
+            .contains(&Event::Unit(UnitCall::DaemonReload))
+    );
+    assert_eq!(
+        std::fs::read_link(s.rig.host(DEB_WANTS)).ok(),
+        Some(DEB_UNIT.into())
+    );
+    assert!(!s.rig.there("/units/hostkeeper.service"));
+    assert!(s.rig.placed_record().paths.is_empty());
+    assert_eq!(installed(&s), None);
+    assert_eq!(s.current().as_deref(), Some(OLD));
+    assert!(!daemon.ctx().restart().requested());
 }

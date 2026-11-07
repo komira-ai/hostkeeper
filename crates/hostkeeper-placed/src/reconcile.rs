@@ -317,16 +317,19 @@ impl Placer<'_> {
         };
         // Everything is judged before anything changes: the manifest, its claims and lint, and
         // every destination against the record and the disk.
-        let desired = match self
-            .manifest_of(service, &version, &view.running)
-            .and_then(|manifest| self.desired(&manifest).map_err(|e| e.to_string()))
-        {
-            Ok(desired) => desired,
-            Err(why) => {
-                report.unresolved.push(unresolved(why));
-                return Ok(());
-            }
-        };
+        let desired =
+            match self
+                .manifest_of(service, &version, &view.running)
+                .and_then(|manifest| {
+                    self.desired_in(&manifest, record)
+                        .map_err(|e| e.to_string())
+                }) {
+                Ok(desired) => desired,
+                Err(why) => {
+                    report.unresolved.push(unresolved(why));
+                    return Ok(());
+                }
+            };
         match check(&desired, record, self.fs) {
             Ok(()) => {}
             Err(PlacedError::PathConflict { path, owner }) => {

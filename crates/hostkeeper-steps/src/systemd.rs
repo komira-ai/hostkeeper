@@ -21,6 +21,18 @@
 //! `--collect` makes systemd unload the unit once it has ended, failed or not, so its name can
 //! be used again without `systemctl reset-failed`; `--pipe` carries the hook's output through.
 //!
+//! A probe ([`StepLauncher::run_probe`], the daemon asking a new hostkeeper binary for its
+//! self-update protocol) is run the same way, with its own arguments instead of a step's
+//! ([`probe_command`]):
+//!
+//! ```text
+//! systemd-run --system --quiet --wait --collect --pipe --unit=<unit>
+//!     --property=RuntimeMaxSec=<secs> -- <executable> <args...>
+//! ```
+//!
+//! A probe ended by `RuntimeMaxSec=` exits `1` through `systemd-run`, as a step does: a probe
+//! that did not exit `0` printed no protocol.
+//!
 //! A step that [`StepLauncher::stop`] stopped is reported with no exit code, whatever
 //! `systemd-run` exited with. systemd counts the end of a service's main process by the `SIGTERM`
 //! of a stop as a clean end (result `success`), so `systemd-run --wait` exits `0` for a hook that
@@ -40,7 +52,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use hostkeeper_hook::Step;
 
 use crate::capture::Ring;
-use crate::launcher::{Bound, LaunchError, StepCall, StepExit, StepLauncher};
+use crate::launcher::{Bound, LaunchError, ProbeCall, ProbeExit, StepCall, StepExit, StepLauncher};
 
 /// Where `systemd-run` is.
 pub const SYSTEMD_RUN: &str = "/usr/bin/systemd-run";
@@ -88,6 +100,41 @@ pub fn command(call: &StepCall<'_>) -> Result<Vec<OsString>, LaunchError> {
     args.push(call.executable.into());
     args.extend(call.invocation.to_args());
     Ok(args)
+}
+
+/// The arguments of `systemd-run` that run a probe, bounded by its `timeout_secs` (`0` is read
+/// as `1`: a probe is never unbounded). A relative executable is refused: the unit does not run
+/// in the updater's directory.
+pub fn probe_command(call: &ProbeCall<'_>) -> Result<Vec<OsString>, LaunchError> {
+    if !call.executable.is_absolute() {
+        return Err(LaunchError::Launcher(format!(
+            "the probed binary {:?} is not an absolute path",
+            call.executable
+        )));
+    }
+    let mut args: Vec<OsString> = ["--system", "--quiet", "--wait", "--collect", "--pipe"]
+        .into_iter()
+        .map(OsString::from)
+        .collect();
+    args.push(format!("--unit={}", call.unit).into());
+    args.push(format!("--property=RuntimeMaxSec={}", call.timeout_secs.max(1)).into());
+    args.push("--".into());
+    args.push(call.executable.into());
+    args.extend(call.args.iter().map(OsString::from));
+    Ok(args)
+}
+
+/// How a probe ended: its exit code, and at most `limit` bytes of what it printed, the rest
+/// dropped and reported.
+fn probe_exit(captured: &Captured, limit: usize) -> ProbeExit {
+    let mut output = captured.stdout.bytes();
+    let truncated = captured.stdout.cut() | (output.len() > limit);
+    output.truncate(limit);
+    ProbeExit {
+        code: captured.code,
+        output,
+        truncated,
+    }
 }
 
 /// The arguments of `systemctl` that stop a unit and wait for it to end.
@@ -297,6 +344,16 @@ impl<S: Spawner> StepLauncher for SystemdLauncher<S> {
             &captured,
             was_stopped,
         ))
+    }
+
+    fn run_probe(&self, call: &ProbeCall<'_>) -> Result<ProbeExit, LaunchError> {
+        let args = probe_command(call)?;
+        executable(call.executable)?;
+        let captured = self.spawn(Program::SystemdRun, &args)?;
+        if let Some(log) = self.log.as_ref() {
+            log(call.unit, &captured);
+        }
+        Ok(probe_exit(&captured, call.output_bytes))
     }
 
     fn stop(&self, unit: &str) -> Result<(), LaunchError> {

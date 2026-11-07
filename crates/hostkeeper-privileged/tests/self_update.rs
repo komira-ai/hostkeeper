@@ -18,11 +18,11 @@
 //!   starts the unit again, burst after burst, until it can start; with kbf's text, which lacks
 //!   the `-`, it is left failed.
 //!
-//! Every test that orders a self-update is ignored until komira-ai/hostkeeper#102 is fixed: the
-//! shipped Linux launcher has no protocol probe, so the daemon refuses each of these orders
-//! `protocol_unreadable` before anything is staged, and no test can reach what it proves. Run
-//! them with `--include-ignored` once it is fixed. The fallback-unit tests order nothing and
-//! run.
+//! - a daemon the deb installed and enabled (no package of hostkeeper, the deb's `WantedBy=` link
+//!   in the unit directory) is ordered the install of the next release, which carries the real
+//!   unit: the install places it around the deb's link, the probe of the new binary runs in its
+//!   transient unit through the shipped launcher, the unit restarts into the new binary, which
+//!   settles the install `Succeeded` and reports it.
 //!
 //! Every wait polls systemd or the files for a state (`support::wait_until`) and stops at once
 //! when the state can no longer come; no test asserts how long anything took.
@@ -40,7 +40,9 @@ use hostkeeper_steps::record::{Record, State};
 use hostkeeper_steps::selfupdate::{START_LIMIT_BURST, fallback_unit, main_dropin};
 use hostkeeper_steps::systemd::SYSTEMCTL;
 use rustix::process::{Pid, Signal, kill_process};
-use support::self_update::{FALLBACK_REASON, HK, Host, N, NEXT, Plan, count, refused_line};
+use support::self_update::{
+    DEB_UNIT, FALLBACK_REASON, HK, Host, N, NEXT, Plan, UNIT_FILE, count, refused_line,
+};
 use support::{Bench, journal, property, run, run_ok, show, wait_until};
 
 /// The record of an update to [`NEXT`] that ended with `verdict` and `reason`, and waits for
@@ -77,7 +79,6 @@ fn fell_back() -> Verdict {
 /// started, `current` names it, `previous` names the old one, and the unit's main process runs
 /// the new binary's file; the new daemon reports itself as the new version with the verdict.
 #[test]
-#[ignore = "komira-ai/hostkeeper#102: SystemdLauncher has no run_probe, so the daemon refuses every self-update with protocol_unreadable before it stages anything"]
 fn a_next_binary_that_starts_settles_the_update_succeeded_and_is_what_the_unit_runs() {
     let host = Host::start("su_good", Plan::default());
     host.runs(N);
@@ -106,6 +107,69 @@ fn a_next_binary_that_starts_settles_the_update_succeeded_and_is_what_the_unit_r
     });
 }
 
+/// Catches the self-update of a daemon the deb installed stopping after it placed the package
+/// (the deb's enable link refused as a placed path that `placed.json` does not list, the probe
+/// refused for a launcher that runs none, or a verdict never reported for a service that is not
+/// listed): ordered the install of [`NEXT`], the host runs it as its self-update; the record
+/// settles `Succeeded` once the new binary started; the unit's main process runs the new binary,
+/// `current` naming it and `previous` the deb's; the package is installed (`current` of the
+/// packages directory) with its unit linked in the unit directory and the deb's link left as
+/// the deb made it; the new daemon reports itself and hostkeeper at the new version with the
+/// install's verdict.
+#[test]
+fn a_daemon_the_deb_installed_is_installed_its_next_release_and_restarts_into_it() {
+    let host = Host::start(
+        "su_deb",
+        Plan {
+            deb: true,
+            ..Plan::default()
+        },
+    );
+    host.runs(N);
+    host.offer_install(1);
+
+    let rec = host.settled();
+    assert_finished(&rec, succeeded(), None);
+    host.runs(NEXT);
+    assert_eq!(
+        host.layout().previous().expect("previous").as_deref(),
+        Some(N)
+    );
+    let paths = host.paths();
+    assert_eq!(
+        fs::read_link(paths.packages.join(HK).join("current")).ok(),
+        Some(PathBuf::from(NEXT))
+    );
+    assert_eq!(
+        fs::read_link(paths.wants()).ok(),
+        Some(PathBuf::from(DEB_UNIT))
+    );
+    assert_eq!(
+        fs::read_link(paths.fixture.join("units").join(UNIT_FILE)).ok(),
+        Some(
+            paths
+                .packages
+                .join(HK)
+                .join("current/units")
+                .join(UNIT_FILE)
+        )
+    );
+    wait_until(|| {
+        host.check_not_stuck();
+        host.beats().iter().any(|beat| {
+            beat["agent"]["version"] == NEXT
+                && beat["services"].as_array().is_some_and(|services| {
+                    services.iter().any(|service| {
+                        service["name"] == HK
+                            && service["version"] == NEXT
+                            && service["last_update"]["order_try"] == 1
+                            && service["last_update"]["outcome"] == "succeeded"
+                    })
+                })
+        })
+    });
+}
+
 /// Catches a fallback that never runs (no `OnFailure=`, no start limit, a restart policy that
 /// gives up without failing the unit), a fallback that runs and leaves `current` on the bad
 /// binary, and a fallback that does not record the failure: systemd starts the new binary until
@@ -114,7 +178,6 @@ fn a_next_binary_that_starts_settles_the_update_succeeded_and_is_what_the_unit_r
 /// record says `Failed` after the commit, of class release, `self_update_fallback`; the version
 /// is bad; and the unit runs the old binary again, `current` naming it.
 #[test]
-#[ignore = "komira-ai/hostkeeper#102: SystemdLauncher has no run_probe, so the daemon refuses every self-update with protocol_unreadable before it stages anything"]
 fn a_next_binary_that_cannot_start_spends_the_start_limit_and_the_fallback_puts_the_old_one_back() {
     let host = Host::start(
         "su_bad",
@@ -164,7 +227,6 @@ fn a_next_binary_that_cannot_start_spends_the_start_limit_and_the_fallback_puts_
 /// try is answered `Failed` after the commit, `self_update_fallback`, and the record file,
 /// `current` (the same link, not one made again) and the running daemon are as they were.
 #[test]
-#[ignore = "komira-ai/hostkeeper#102: SystemdLauncher has no run_probe, so the daemon refuses every self-update with protocol_unreadable before it stages anything"]
 fn the_version_that_fell_back_offered_again_is_refused_from_the_bad_list_and_nothing_moves() {
     let host = Host::start(
         "su_again",
@@ -275,7 +337,6 @@ fn kill_and_settle(host: &Host, pid: u32) -> Record {
 /// `SIGKILL`, a start that does not settle): systemd starts `current`, now the new binary, and
 /// its start settles the record `Succeeded`; the unit runs the new binary.
 #[test]
-#[ignore = "komira-ai/hostkeeper#102: SystemdLauncher has no run_probe, so the daemon refuses every self-update with protocol_unreadable before it stages anything"]
 fn a_daemon_killed_after_the_switch_is_settled_succeeded_by_the_new_binarys_start() {
     let host = Host::start(
         "su_kill_switched",
@@ -298,7 +359,6 @@ fn a_daemon_killed_after_the_switch_is_settled_succeeded_by_the_new_binarys_star
 /// this), then the daemon is killed. systemd starts the old binary, and its start settles the
 /// record `Failed(self_update_fallback)` and the version bad; the unit runs the old binary.
 #[test]
-#[ignore = "komira-ai/hostkeeper#102: SystemdLauncher has no run_probe, so the daemon refuses every self-update with protocol_unreadable before it stages anything"]
 fn a_daemon_killed_before_the_switch_is_settled_fell_back_by_the_old_binarys_start() {
     let host = Host::start(
         "su_kill_unswitched",

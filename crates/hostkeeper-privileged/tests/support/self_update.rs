@@ -81,7 +81,18 @@ pub struct Plan {
     pub next_fails: bool,
     /// The daemon holds its exit after the follow-on switched (`--fixture-hold-exit`).
     pub hold_exit: bool,
+    /// The host is as the deb leaves it: no package of hostkeeper installed (only the binary
+    /// directory, as `self-update-seed` makes it), the unit enabled by a `WantedBy=` link to the
+    /// unit the deb installs ([`DEB_UNIT`]) that `placed.json` does not list, and the release of
+    /// [`NEXT`] carrying the real unit, run ([`REAL_UNIT`], as CI packages it). The coordinator
+    /// orders it an `install`.
+    pub deb: bool,
 }
+
+/// Where the deb installs the unit its `systemctl enable` links.
+pub const DEB_UNIT: &str = "/usr/lib/systemd/system/hostkeeper.service";
+/// The unit hostkeeper's release carries and runs.
+pub const UNIT_FILE: &str = "hostkeeper.service";
 
 /// One test's host (the module says what it is).
 pub struct Host {
@@ -124,9 +135,13 @@ fn program(from: &str, to: &Path) {
 }
 
 /// The manifest of hostkeeper at `version`: its hook the workload fixture in mode `ok`, which
-/// ends every step `0` with a valid last line.
-fn manifest(version: &str) -> String {
+/// ends every step `0` with a valid last line; with `unit`, it runs [`UNIT_FILE`].
+fn manifest(version: &str, unit: bool) -> String {
     let platform = Platform::current();
+    let units = match unit {
+        true => format!("\n[units]\nrun = [\"{UNIT_FILE}\"]\n"),
+        false => String::new(),
+    };
     format!(
         r#"schema = 1
 name = "{HK}"
@@ -147,7 +162,7 @@ cleanup = 1300
 
 [params]
 "fixture.mode" = "ok"
-"#
+{units}"#
     )
 }
 
@@ -170,7 +185,8 @@ pub struct Paths {
     pub packages: PathBuf,
     pub config: PathBuf,
     pub socket: PathBuf,
-    /// The fixture's directory: `link/`, `units/`, `placed/`.
+    /// The fixture's directory: `link/`, `units/` (the unit directory the daemon places
+    /// units in), `placed/`.
     pub fixture: PathBuf,
     /// The file the daemon holds its exit at.
     pub held: PathBuf,
@@ -191,6 +207,13 @@ impl Paths {
     /// The binary directory of hostkeeper's own update.
     pub fn bin(&self) -> PathBuf {
         self.state.join(HK).join("bin")
+    }
+
+    /// The `WantedBy=` link of [`UNIT_FILE`] in the fixture's unit directory.
+    pub fn wants(&self) -> PathBuf {
+        self.fixture
+            .join("units/multi-user.target.wants")
+            .join(UNIT_FILE)
     }
 }
 
@@ -271,8 +294,8 @@ pub fn test_unit(real: &str, paths: &Paths, fixture_flags: &[String]) -> String 
 
 impl Host {
     /// The host of the test `test` (lowercase letters, digits, `_`): hostkeeper [`N`] installed
-    /// (its package `current`, its binary staged and `current` of the binary directory), the
-    /// release of [`NEXT`] in the package store, the units linked and the drop-in in place, the
+    /// (its package `current`, its binary staged and `current` of the binary directory; with
+    /// [`Plan::deb`], its binary alone), the release of [`NEXT`] in the package store, the units linked and the drop-in in place, the
     /// main unit started under `plan` and ready (its start returns once the daemon notified
     /// systemd).
     pub fn start(test: &str, plan: Plan) -> Host {
@@ -320,10 +343,17 @@ impl Host {
         file(&paths.config, CONFIG.as_bytes(), 0o644);
         let service = paths.packages.join(HK);
         dir(&service, 0o755);
-        for version in [N, NEXT] {
-            self.release(&service, version);
+        if plan.deb {
+            self.release(&service, NEXT, true);
+            let wants = paths.wants();
+            dir(wants.parent().expect("the wants directory"), 0o755);
+            std::os::unix::fs::symlink(DEB_UNIT, &wants).expect("the deb's enable link");
+        } else {
+            for version in [N, NEXT] {
+                self.release(&service, version, false);
+            }
+            std::os::unix::fs::symlink(N, service.join("current")).expect("link current");
         }
-        std::os::unix::fs::symlink(N, service.join("current")).expect("link current");
         let layout = Layout::new(&paths.bin());
         layout
             .stage(N, Path::new(DAEMON))
@@ -358,16 +388,25 @@ impl Host {
     }
 
     /// The release of hostkeeper at `version` in the package directory `service`, as the real
-    /// store leaves it: the tree (manifest, the hook, the binary), then its seal beside it.
-    fn release(&self, service: &Path, version: &str) {
+    /// store leaves it: the tree (manifest, the hook, the binary and, with `unit`, the real unit
+    /// as `units/hostkeeper.service`), then its seal beside it.
+    fn release(&self, service: &Path, version: &str, unit: bool) {
         let tree = service.join(version);
         dir(&tree, 0o755);
         dir(&tree.join("bin"), 0o755);
         file(
             &tree.join("manifest.toml"),
-            manifest(version).as_bytes(),
+            manifest(version, unit).as_bytes(),
             0o644,
         );
+        if unit {
+            dir(&tree.join("units"), 0o755);
+            file(
+                &tree.join("units").join(UNIT_FILE),
+                REAL_UNIT.as_bytes(),
+                0o444,
+            );
+        }
         program(FIXTURE, &tree.join("bin/hook"));
         program(DAEMON, &tree.join("bin/hostkeeper"));
         let digest = tree_digest(&tree).expect("the tree digest");
@@ -382,10 +421,22 @@ impl Host {
     /// The coordinator orders the update of hostkeeper to [`NEXT`], order [`ORDER`] try
     /// `order_try`, in every reply from now on.
     pub fn offer(&self, order_try: u64) {
+        self.order("update", order_try);
+    }
+
+    /// The coordinator orders the install of hostkeeper at [`NEXT`], as it orders a host whose
+    /// heartbeat lists no hostkeeper, order [`ORDER`] try `order_try`, in every reply from now
+    /// on.
+    pub fn offer_install(&self, order_try: u64) {
+        self.order("install", order_try);
+    }
+
+    fn order(&self, verb: &str, order_try: u64) {
         let link = self.paths().fixture.join("link");
         let order = serde_json::json!({
             "id": ORDER,
             "try": order_try,
+            "verb": verb,
             "service": HK,
             "version": NEXT,
             "digest": DIGEST,

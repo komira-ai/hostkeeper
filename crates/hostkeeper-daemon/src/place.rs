@@ -15,7 +15,10 @@
 //!   places, removes what only the target placed and reloads. For a first install, the install
 //!   is taken off the host: [`Placer::remove_all`] (the `run` units stopped and disabled, every
 //!   placed link removed, `daemon-reload`) and then `current`, when it names the target; the
-//!   version directory stays, as a staged version a retry uses.
+//!   version directory stays, as a staged version a retry uses. A first install of the service
+//!   `hostkeeper` stops no unit ([`Placer::unlink_all`]): its `run` unit is the daemon's own,
+//!   which runs the order, and once its links are gone the unit the deb or the rpm installed is
+//!   the one systemd starts again.
 //! - [`Toward::Confirmed`], after `cleanup` and before the verdict is written: the target's
 //!   paths are committed (`placed`) and the paths of the service the target does not list are
 //!   removed ([`Placer::unlink_unlisted`]).
@@ -31,6 +34,8 @@ use hostkeeper_config::manifest::{Expected, HostkeeperVersion, Manifest};
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_placed::{Fs, Placer, Roots, UnitControl};
 use hostkeeper_steps::{Switch, Toward, UpdateOrder};
+
+use crate::verbs::force::SELF_SERVICE;
 
 fn text(error: impl std::fmt::Display) -> String {
     error.to_string()
@@ -137,10 +142,14 @@ fn confirmed(
 }
 
 /// Takes the install back off the host: every placed path of the service (its units stopped
-/// first), then `current` when it names the target.
+/// first, but for the daemon's own service), then `current` when it names the target.
 fn uninstall_first(placer: &Placer<'_>, fs: &dyn Fs, order: &UpdateOrder) -> Result<(), String> {
     let (service, version) = names(order)?;
-    placer.remove_all(&service).map_err(text)?;
+    match service.as_str() == SELF_SERVICE {
+        true => placer.unlink_all(&service),
+        false => placer.remove_all(&service),
+    }
+    .map_err(text)?;
     let named = placer.current(service.as_str()).map_err(text)?;
     match named.as_deref() == Some(version.as_str()) {
         true => {

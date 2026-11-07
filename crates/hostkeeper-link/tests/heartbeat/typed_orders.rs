@@ -4,7 +4,9 @@
 use hostkeeper_config::names::Version;
 use hostkeeper_hook::Phase;
 use hostkeeper_link::testing::{FakeSink, World};
-use hostkeeper_link::{Feature, Order, OrderResult, Outcome, Reason, Verb};
+use hostkeeper_link::{
+    Feature, Health, Liveness, Observed, Order, OrderResult, Outcome, Reason, ServiceFacts, Verb,
+};
 
 use crate::{Rig, abort, install, recorded, reply, service, uninstall, update, verdict, version};
 
@@ -38,11 +40,12 @@ fn executor(abort_answer: fn(&Order, &Version) -> OrderResult) -> FakeSink {
 }
 
 /// Catches an install refused for its service not being installed (an install is for a service
-/// the host does not run), one whose verdict names another version, and a verdict lost because
-/// the service was not listed when it ended: it runs on a worker with its own target, and its
-/// verdict is kept until the heartbeat lists the service, then sent.
+/// the host does not run), one whose verdict names another version, and a verdict kept unsent
+/// because the service was not listed when it ended: it runs on a worker with its own target,
+/// and its verdict goes out in the next heartbeat, under an entry of the service absent at the
+/// install's target, then under the service's own entry once the records list it.
 #[test]
-fn an_install_runs_for_a_service_the_host_does_not_list_and_its_verdict_is_sent_once_listed() {
+fn an_install_runs_for_a_service_the_host_does_not_list_and_its_verdict_is_sent_at_once() {
     let rig = Rig::new("typed-install");
     rig.install(vec![recorded("x", "1.0")]);
     let mut heartbeater = rig.heartbeater();
@@ -55,21 +58,47 @@ fn an_install_runs_for_a_service_the_host_does_not_list_and_its_verdict_is_sent_
     assert_eq!(rig.world.orders.orders(), std::slice::from_ref(&order));
     assert_eq!(rig.world.orders.targets(), [version("2.0")]);
 
-    // The ended install is not run again for the same order, and its verdict waits for `web`.
+    // The ended install is not run again for the same order, and its verdict is sent at once.
     heartbeater.beat_once();
     assert_eq!(rig.world.dispatch.pending(), 0);
-    assert_eq!(verdicts(&rig), Vec::<OrderResult>::new());
+    assert_eq!(
+        rig.world.link.beats()[1].services,
+        [
+            ServiceFacts {
+                name: service("x"),
+                ..rig.world.link.beats()[1].services[0].clone()
+            },
+            ServiceFacts {
+                name: service("web"),
+                version: version("2.0"),
+                health: Health::Absent,
+                updating: None,
+                last_update: Some(verdict(&order, Outcome::Succeeded)),
+                deferred: None,
+                health_detail: None,
+                observed: Some(Observed {
+                    liveness: Liveness::Absent,
+                    version: None,
+                }),
+            },
+        ]
+    );
     rig.install(vec![recorded("web", "2.0"), recorded("x", "1.0")]);
     heartbeater.beat_once();
-    let listed = &rig.world.link.beats()[2].services[0];
-    assert_eq!(listed.name, service("web"));
+    let listed = &rig.world.link.beats()[2].services;
+    assert_eq!(listed.len(), 2);
+    assert_eq!(listed[0].name, service("web"));
+    assert_ne!(listed[0].health, Health::Absent);
     assert_eq!(
-        listed.last_update,
+        listed[0].last_update,
         Some(verdict(&order, Outcome::Succeeded))
     );
     assert_eq!(
         rig.world.log.lines(),
-        ["the verdict of order install-1 try 1 is kept until web is listed again"]
+        [
+            "order install-1 try 1 of web, which is not installed, ended succeeded: it is sent \
+             with web listed absent"
+        ]
     );
 }
 
