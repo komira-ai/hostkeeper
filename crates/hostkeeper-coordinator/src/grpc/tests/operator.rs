@@ -23,7 +23,7 @@ use crate::desired::{DesiredError, StoreError};
 use crate::grpc::Admitted;
 use crate::grpc::operator::{
     HostsService, ReleasesService, bearer_of, caller_of, converge_refusal, desired_body,
-    desired_proto, hosts_refusal, releases_action_refusal, set_refusal,
+    desired_proto, hosts_refusal, record_proto, releases_action_refusal, set_refusal,
 };
 use crate::http::{DESIRED_PATH, OPERATOR_PATH, Surface, handle};
 use crate::operate::OperateError;
@@ -31,7 +31,8 @@ use crate::operator::Caller;
 use crate::ops::OpsError;
 use crate::registry::Digest;
 use crate::service::{CiRefused, ConvergenceError, Coordinator, SetError, Unauthorized};
-use crate::testutil::{OPERATOR, Rig, ci_token, desired, ops_of};
+use crate::testutil::{OPERATOR, Rig, ci_token, desired, ops_of, version};
+use crate::write_record::{Replaced, WriteAsk, WriteId, WriteRecord};
 
 /// The time the audit file of every coordinator of these tests reads.
 pub(super) const AUDIT_UNIX: u64 = 1_800_000_000;
@@ -531,6 +532,14 @@ fn every_way_a_set_of_the_desired_state_fails_is_refused_with_its_value() {
         ),
         (SetError::Invalid(DesiredError::Count), R::InvalidRequest),
         (SetError::Invalid(malformed()), R::InvalidRequest),
+        (
+            SetError::Invalid(DesiredError::GenerationConflict { asked: 1, now: 2 }),
+            R::GenerationConflict,
+        ),
+        (
+            SetError::Invalid(DesiredError::Unrecorded),
+            R::InvalidRequest,
+        ),
         (SetError::UnparseableVersion, R::InvalidRequest),
         (SetError::DigestConflict, R::InvalidRequest),
         (SetError::BelowMinVersion, R::BelowMinVersion),
@@ -579,7 +588,7 @@ fn every_way_a_convergence_is_not_read_is_refused_with_its_value() {
 
 /// The JSON `desired_body` makes of `request`.
 fn body_of(request: proto::SetDesiredRequest) -> Value {
-    let bytes = desired_body(request).expect("a body");
+    let (bytes, _) = desired_body(request).expect("a body");
     serde_json::from_slice(&bytes).expect("JSON")
 }
 
@@ -641,8 +650,8 @@ fn the_digest_of_a_body_is_the_one_in_the_state_or_beside_it_or_both_when_equal(
 }
 
 /// Proves that a request that cannot be honoured is refused `invalid_request`, never partly
-/// done: two different digests, a precondition on the generation, a write id (the store keeps
-/// neither), and no desired state at all.
+/// done: two different digests, a write id that breaks its rule (empty, 129 characters, a
+/// space), and no desired state at all.
 #[test]
 fn a_set_that_cannot_be_honoured_makes_no_body() {
     let invalid = Err(proto::ReleasesRefusal::InvalidRequest);
@@ -652,17 +661,78 @@ fn a_set_that_cannot_be_honoured_makes_no_body() {
     differing.package_digest = Some("cd".repeat(32));
     assert_eq!(desired_body(differing), invalid);
 
-    let mut generation = limits_request("kbf");
-    generation.if_generation = Some(3);
-    assert_eq!(desired_body(generation), invalid);
-
-    let mut write_id = limits_request("kbf");
-    write_id.write_id = Some("write-1".to_owned());
-    assert_eq!(desired_body(write_id), invalid);
+    for bad in [String::new(), "x".repeat(129), "write 1".to_owned()] {
+        let mut write_id = limits_request("kbf");
+        write_id.write_id = Some(bad);
+        assert_eq!(desired_body(write_id), invalid);
+    }
 
     let mut missing = limits_request("kbf");
     missing.desired = None;
     assert_eq!(desired_body(missing), invalid);
+}
+
+/// Proves that `if_generation` and a write id are not part of the JSON body and come beside it
+/// as what the set asks of the store; a request with neither asks nothing.
+///
+/// Catches: a precondition or a write id dropped on its way to the store, or sent to the JSON
+/// route, which does not read them.
+#[test]
+fn the_precondition_and_the_write_id_come_beside_the_body() {
+    let mut asking = limits_request("kbf");
+    asking.if_generation = Some(3);
+    asking.write_id = Some("write-1".to_owned());
+    let (body, ask) = desired_body(asking).expect("a body");
+    let (plain, nothing) = desired_body(limits_request("kbf")).expect("a body");
+    assert_eq!(body, plain);
+    assert_eq!(nothing, WriteAsk::default());
+    assert_eq!(
+        ask,
+        WriteAsk {
+            if_generation: Some(3),
+            write_id: Some(WriteId::parse("write-1").expect("an id")),
+        }
+    );
+}
+
+/// Proves that a write record reads as `hostkeeper.operator.v1` says it: the generation, the
+/// write id when there is one, and the replaced version with its minimums as the desired state's
+/// are written (`storage` and `frontend` named, 0 when not set); the default record is
+/// generation 0 with nothing else.
+///
+/// Catches: replaced minimums shown in another form than the state they replaced was answered in.
+#[test]
+fn a_write_record_reads_as_the_proto_says() {
+    let min_up = crate::desired::Desired::parse(br#"{"version":"1.0","min_up":{"daemon":2}}"#)
+        .expect("a state")
+        .min_up;
+    let record = WriteRecord {
+        generation: 4,
+        replaced: Some(Replaced {
+            version: version("1.0"),
+            min_up,
+        }),
+        write_id: Some(WriteId::parse("w-4").expect("an id")),
+    };
+    assert_eq!(
+        record_proto(&record),
+        proto::WriteRecord {
+            generation: 4,
+            replaced: Some(proto::Replaced {
+                version: "1.0".to_owned(),
+                min_up: HashMap::from([
+                    ("daemon".to_owned(), 2),
+                    ("storage".to_owned(), 0),
+                    ("frontend".to_owned(), 0),
+                ]),
+            }),
+            write_id: Some("w-4".to_owned()),
+        }
+    );
+    assert_eq!(
+        record_proto(&WriteRecord::default()),
+        proto::WriteRecord::default()
+    );
 }
 
 /// Proves the desired state of the answer: the version as text, both limits per role as the

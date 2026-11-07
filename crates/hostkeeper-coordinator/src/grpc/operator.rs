@@ -31,7 +31,9 @@ use crate::channel::ChannelRefusal;
 use crate::desired::{Desired, DesiredError};
 use crate::operator::{Caller, entry_proto};
 use crate::ops::OperateError;
+use crate::service::ci_calls::Setter;
 use crate::service::{CiRefused, ConvergenceError, Coordinator, SetError};
+use crate::write_record::{WriteAsk, WriteId, WriteRecord};
 
 /// What `operate` says of a service the coordinator does not manage.
 const UNKNOWN_SERVICE: &str = "service is not one this coordinator manages";
@@ -104,6 +106,9 @@ pub(crate) fn set_refusal(why: SetError) -> proto::ReleasesRefusal {
         SetError::Invalid(DesiredError::IndexDigestMismatch) => {
             proto::ReleasesRefusal::IndexDigestMismatch
         }
+        SetError::Invalid(DesiredError::GenerationConflict { .. }) => {
+            proto::ReleasesRefusal::GenerationConflict
+        }
         SetError::Invalid(_) | SetError::UnparseableVersion | SetError::DigestConflict => {
             proto::ReleasesRefusal::InvalidRequest
         }
@@ -134,22 +139,29 @@ pub(crate) fn converge_refusal(why: ConvergenceError) -> proto::ReleasesRefusal 
     }
 }
 
-/// The JSON body `POST /v1/desired` reads for `request`.
+/// The JSON body `POST /v1/desired` reads for `request`, and what the request asks of the store
+/// beside it: its `if_generation` and its write id, which the JSON body does not carry
+/// ([`WriteAsk`]; a store that keeps no write records refuses a request that names either).
 ///
 /// # Errors
-/// `invalid_request`: no desired state; a precondition (`if_generation`) or a write id, which
-/// the desired-state store keeps no generation or id for and so cannot honour; or two package
-/// digests that differ. An empty `service` names none, which the JSON route reads as the legacy
-/// service. A release index and its digest are passed as the keys `release_index` and
-/// `release_index_digest`, which the route checks (an index beside a package digest, or one of
-/// the pair alone, is its `index_invalid`).
+/// `invalid_request`: no desired state; a write id that is not 1 to 128 visible ASCII
+/// characters; or two package digests that differ. An empty `service` names none, which the JSON
+/// route reads as the legacy service. A release index and its digest are passed as the keys
+/// `release_index` and `release_index_digest`, which the route checks (an index beside a package
+/// digest, or one of the pair alone, is its `index_invalid`).
 pub(crate) fn desired_body(
     request: proto::SetDesiredRequest,
-) -> Result<Vec<u8>, proto::ReleasesRefusal> {
+) -> Result<(Vec<u8>, WriteAsk), proto::ReleasesRefusal> {
     let invalid = proto::ReleasesRefusal::InvalidRequest;
-    if request.if_generation.is_some() || request.write_id.is_some() {
-        return Err(invalid);
-    }
+    let ask = WriteAsk {
+        if_generation: request.if_generation,
+        write_id: request
+            .write_id
+            .as_deref()
+            .map(WriteId::parse)
+            .transpose()
+            .map_err(|_| invalid)?,
+    };
     let desired = request.desired.ok_or(invalid)?;
     let digest = match (desired.package_digest, request.package_digest) {
         (Some(inside), Some(beside)) if inside != beside => return Err(invalid),
@@ -172,7 +184,25 @@ pub(crate) fn desired_body(
     if let Some(digest) = request.release_index_digest {
         body["release_index_digest"] = digest.into();
     }
-    Ok(serde_json::to_vec(&body).unwrap_or_default())
+    Ok((serde_json::to_vec(&body).unwrap_or_default(), ask))
+}
+
+/// `record` as `hostkeeper.operator.v1` says it, the replaced minimums as the desired state's
+/// are written (the format's `storage` and `frontend` named).
+pub(crate) fn record_proto(record: &WriteRecord) -> proto::WriteRecord {
+    proto::WriteRecord {
+        generation: record.generation,
+        replaced: record.replaced.as_ref().map(|replaced| proto::Replaced {
+            version: replaced.version.as_str().to_owned(),
+            min_up: replaced
+                .min_up
+                .min_up_written()
+                .iter()
+                .map(|(role, n)| (role.to_owned(), n))
+                .collect(),
+        }),
+        write_id: record.write_id.as_ref().map(|id| id.as_str().to_owned()),
+    }
 }
 
 /// `desired` as `hostkeeper.operator.v1` says it, with the limits as the JSON route writes them.
@@ -328,19 +358,19 @@ impl ReleasesApi for ReleasesService {
                 return Err(refusal::releases(proto::ReleasesRefusal::Unauthorized));
             }
         };
-        let body = desired_body(request.into_inner()).map_err(refusal::releases)?;
-        let set = match &ci {
-            Some(verified) => self.coordinator.set_desired_verified(verified, &body).await,
-            None => {
-                self.coordinator
-                    .set_desired_operator(&operator, &body)
-                    .await
-            }
-        }
-        .map_err(|why| refusal::releases(set_refusal(why)))?;
+        let (body, ask) = desired_body(request.into_inner()).map_err(refusal::releases)?;
+        let setter = match &ci {
+            Some(verified) => Setter::Ci(verified),
+            None => Setter::Operator(&operator),
+        };
+        let (set, record) = self
+            .coordinator
+            .set_desired_by(&setter, &body, &ask)
+            .await
+            .map_err(|why| refusal::releases(set_refusal(why)))?;
         Ok(Response::new(proto::SetDesiredResponse {
             desired: Some(desired_proto(&set.desired)),
-            record: None,
+            record: record.as_ref().map(record_proto),
             dropped_roles: set.dropped_roles,
         }))
     }
@@ -368,8 +398,14 @@ impl ReleasesApi for ReleasesService {
         self.coordinator
             .convergence_verified(service)
             .map(|convergence| {
+                let mut convergence = report::convergence(&convergence);
+                convergence.record = self
+                    .coordinator
+                    .write_record(service)
+                    .as_ref()
+                    .map(record_proto);
                 Response::new(proto::ConvergeResponse {
-                    convergence: Some(report::convergence(&convergence)),
+                    convergence: Some(convergence),
                 })
             })
             .map_err(|why| refusal::releases(converge_refusal(why)))

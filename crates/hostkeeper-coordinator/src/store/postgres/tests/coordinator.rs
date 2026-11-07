@@ -116,7 +116,7 @@ fn waits() -> Timeouts {
 /// A coordinator running `web` and `db` over the three stores of one Postgres backend, as
 /// `serve` has them, and the marker `marker`: what [`crate::marks_support::start_on`] makes over
 /// a fake.
-fn start_on_postgres(
+pub(super) fn start_on_postgres(
     rig: &Rig,
     store: &Postgres,
     loaded: crate::store::Loaded,

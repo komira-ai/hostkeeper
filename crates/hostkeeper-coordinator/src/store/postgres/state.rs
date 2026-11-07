@@ -46,6 +46,11 @@ pub(crate) const DESIRED: [Table; 2] = [
             ("min_up", Ty::Json),
             ("release_digest", Ty::Text),
             ("release_index", Ty::Json),
+            // Migration `0003`: the write record ([`super::generations`]).
+            ("generation", Ty::Int),
+            ("write_id", Ty::Text),
+            ("replaced_version", Ty::Text),
+            ("replaced_min_up", Ty::Json),
         ],
     },
     Table {
@@ -264,20 +269,19 @@ pub(crate) fn desired_rows(held: &desired::Held) -> Result<Tables, StoreError> {
         let version = field(&mut entry, "version");
         let digest = field(&mut entry, "release_digest");
         let index = field(&mut entry, "release_index");
-        desired.insert(
-            vec![text(&service)],
-            vec![
-                Val::text_or_null(version.as_str()),
-                Val::Json(field(&mut entry, "max_updating")),
-                Val::Json(field(&mut entry, "min_up")),
-                Val::text_or_null(digest.as_str()),
-                if index.is_null() {
-                    Val::Null
-                } else {
-                    Val::Json(index)
-                },
-            ],
-        );
+        let mut row = vec![
+            Val::text_or_null(version.as_str()),
+            Val::Json(field(&mut entry, "max_updating")),
+            Val::Json(field(&mut entry, "min_up")),
+            Val::text_or_null(digest.as_str()),
+            if index.is_null() {
+                Val::Null
+            } else {
+                Val::Json(index)
+            },
+        ];
+        row.extend(super::generations::columns(held.records.get(&service))?);
+        desired.insert(vec![text(&service)], row);
     }
     Ok(Tables::from([
         ("desired", desired),
@@ -323,10 +327,14 @@ pub(crate) fn desired_of(tables: &Tables) -> Result<desired::Held, StoreError> {
             .insert("digests".to_owned(), registry.into());
     }
     let file = serde_json::json!({ "services": services });
-    desired::parse_file(file.to_string().as_bytes(), None).map_err(|source| StoreError::Invalid {
-        path: place("desired"),
-        source,
-    })
+    let mut held = desired::parse_file(file.to_string().as_bytes(), None).map_err(|source| {
+        StoreError::Invalid {
+            path: place("desired"),
+            source,
+        }
+    })?;
+    held.records = super::generations::records_of(tables.get("desired").unwrap_or(&empty))?;
+    Ok(held)
 }
 
 /// The text of column `i` of a key: empty for a key that is not text, which no table of a part

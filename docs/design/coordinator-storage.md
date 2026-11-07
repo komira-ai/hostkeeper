@@ -4,11 +4,12 @@ Status: design, for the maintainers' comments. It supersedes "plain files, no da
 [hostkeeper-design.md](hostkeeper-design.md) section 4.3 ("There is no database") and the coordinator's rows of its
 section 10, the halts-file storage of the plan position in [rollout-update-plans.md](rollout-update-plans.md) section 3,
 and the device-record file of [hostkeeper-mdm.md](hostkeeper-mdm.md) section 6.1. Where they disagree with this document
-on where the coordinator keeps its state, this document wins. C1 to C4 are built: the storage trait and its
+on where the coordinator keeps its state, this document wins. C1 to C4 and C6 are built: the storage trait and its
 fake (section 4.1), the enrollment crate's `Records` port, the Postgres store
 (`crates/hostkeeper-coordinator/src/store/postgres/`, with its migrations `0001` and `0002`, sections 3 to 8),
-and `import` and `export` (section 11: `crates/hostkeeper-coordinator/src/transfer.rs` and
-`crates/hostkeeper-coordinator/src/store/postgres/transfer.rs`). Every other
+`import` and `export` (section 11: `crates/hostkeeper-coordinator/src/transfer.rs` and
+`crates/hostkeeper-coordinator/src/store/postgres/transfer.rs`), and the generations and write ids (migration
+`0003`, section 3.2). Every other
 statement about new code is **Designed**, and section 13 lists the build items, C1 to C11, one pull request each. The tags are those of hostkeeper-design.md: **Built** names code on `main` with a path, **Designed** means
 nothing implements it yet.
 
@@ -132,9 +133,10 @@ Rust (`registry.rs`). `--legacy-service` keeps its meaning for the JSON routes; 
 a file encoding and has no table.
 
 **Generations and write ids.** The operator API already defines them (`SetDesiredRequest.if_generation` and `write_id`,
-`SetDesiredResponse.record`, the `WriteRecord` and `Replaced` messages, the refusal `generation_conflict`), and the
-coordinator refuses both fields today because the file store keeps neither (`desired_body` in `src/grpc/operator.rs`,
-**Built**). The database keeps them. Build item C6 adds, by its own migration, to `desired`:
+`SetDesiredResponse.record`, the `WriteRecord` and `Replaced` messages, the refusal `generation_conflict`). The file
+store keeps neither, so over it a set that names either field is refused `invalid_request` (`DesiredError::Unrecorded`
+in `set_desired_by`, `src/service_ci.rs`, **Built**). The database keeps them: C6's migration `0003_generations` adds
+to `desired`:
 
 ```sql
   generation        bigint NOT NULL DEFAULT 0,  -- one more for every accepted write, a write of the same version included
@@ -143,10 +145,12 @@ coordinator refuses both fields today because the file store keeps neither (`des
   replaced_min_up   jsonb
 ```
 
-and honours the two fields as the proto describes. C6's migration is one an older release must not run on (section 6):
+and honours the two fields as the proto describes (**Built**: `crates/hostkeeper-coordinator/src/write_record.rs`, the
+columns in `store/postgres/generations.rs`; a force raises the generation too, with no write id). C6's migration is
+one an older release must not run on (section 6):
 an older coordinator would write a desired state without raising its generation, and a writer's `if_generation` would
-then pass against a state it never saw. C6 is a behaviour change of its own: an identical set, which writes nothing
-today (`Recorded::Unchanged`), raises the generation and is written.
+then pass against a state it never saw. C6 is a behaviour change of its own: over the database an identical set, which
+the file store still answers `Recorded::Unchanged` without writing, raises the generation and is written.
 
 ### 3.3 The operations store
 
@@ -883,7 +887,7 @@ on the database and the back-out window has closed.
 | `an_accepted_write_raises_the_generation_even_for_an_identical_set` | the proto's generation | C6 |
 | `a_stale_if_generation_is_refused_generation_conflict_and_changes_nothing` | the precondition | C6 |
 | `the_write_id_and_the_replaced_state_come_back_in_the_record` | `SetDesiredResponse.record` | C6 |
-| `an_older_release_is_refused_on_a_database_with_0002` | `0002` says `refuse` | C6 |
+| `an_older_release_is_refused_on_a_database_with_0003` | `0003` says `refuse` | C6 |
 | `a_service_image_not_pinned_by_digest_is_refused` | the workflow lint's new rule | C3 |
 
 ## 13. Build items, one pull request each, in this order
@@ -895,7 +899,7 @@ on the database and the back-out window has closed.
 | C3 | The Postgres store: migrations `0001`, the lock and the epoch, the writing thread and the read connection, the in-memory enrollment copy, `--database-dsn-file` and `--halt-marker-file`, the `store_unreachable` alert, the workspace dependency `postgres` (its licences checked by `cargo deny`), the service container in the `test` job and the workflow lint's rule; the operator docs that describe the store (coordinator-state.md, holds-and-force.md, assignments.md, rollout-plans.md, enrollment.md, enrollment-coordinator.md) | C1, C2 | L |
 | C4 | `import` and `export` | C3 | M |
 | C5 | `docs/deploy/coordinator/`: the compose file with both digests and no environment, `init.sql`, `password.sql` and the one-time setup, the backup timer, the runbook of the local volume, the secrets, the restore and the drill | C4 | S |
-| C6 | Generations and write ids: migration `0002` (`refuse`), `if_generation` and `write_id` honoured, `SetDesiredResponse.record` filled | C3 | M |
+| C6 | Generations and write ids: migration `0003` (`refuse`), `if_generation` and `write_id` honoured, `SetDesiredResponse.record` filled | C3 | M |
 | C7 | The cutover, run by the operator with its plan, apply and back-out, outside this repository | C5 | S |
 | C8 | `docs/report` and the README's state sentences, once the farm runs on the database | C7 | S |
 | C9 | Delete the file store, its flags and `backup`/`restore`, after the back-out window, with the supersession check | C7 | M |

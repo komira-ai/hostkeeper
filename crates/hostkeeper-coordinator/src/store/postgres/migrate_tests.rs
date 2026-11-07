@@ -4,7 +4,7 @@ use super::*;
 
 /// The SHA-256 of each shipped migration file, in hex. A shipped migration is never edited: a
 /// change is a migration of its own, so these only grow.
-const PINNED: [(i32, &str, &str); 2] = [
+const PINNED: [(i32, &str, &str); 3] = [
     (
         1,
         "state",
@@ -14,6 +14,11 @@ const PINNED: [(i32, &str, &str); 2] = [
         2,
         "first_serving",
         "f0f413e9d9c8347115e4ee48e86ec6972525b3e8e13d45ba8694517f7197ae74",
+    ),
+    (
+        3,
+        "generations",
+        "f08728227dac47c098dc32e55d8d40e0727379678205830ef1b5729a6882ac23",
     ),
 ];
 
@@ -35,15 +40,19 @@ fn what(statement: &str) -> String {
 }
 
 /// Proves: the migrations this build ships are the ones that were released: their numbers and
-/// names are exactly [(1, "state"), (2, "first_serving")], each file's SHA-256 is the pinned one, and every one passes
-/// the header rule, the lint and the numbering.
+/// names are exactly [(1, "state"), (2, "first_serving"), (3, "generations")], each file's
+/// SHA-256 is the pinned one, and every one passes the header rule, the lint and the numbering,
+/// and says older releases must not run on it.
 ///
 /// Catches: an edit to a shipped migration (a database that ran the old text would differ from
 /// one that runs the new), and a shipped file the runner would refuse at every start.
 #[test]
 fn the_shipped_migrations_are_unchanged() {
     let listed: Vec<(i32, &str)> = SHIPPED.iter().map(|(n, name, _)| (*n, *name)).collect();
-    assert_eq!(listed, vec![(1, "state"), (2, "first_serving")]);
+    assert_eq!(
+        listed,
+        vec![(1, "state"), (2, "first_serving"), (3, "generations")]
+    );
     let hashes: Vec<(i32, &str, String)> = SHIPPED
         .iter()
         .map(|(n, name, sql)| (*n, *name, hex(&Sha256::digest(sql.as_bytes()))))
@@ -60,7 +69,8 @@ fn the_shipped_migrations_are_unchanged() {
         read,
         vec![
             (1, "state", OlderReleases::Refuse),
-            (2, "first_serving", OlderReleases::Refuse)
+            (2, "first_serving", OlderReleases::Refuse),
+            (3, "generations", OlderReleases::Refuse),
         ]
     );
 }
