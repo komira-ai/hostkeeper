@@ -42,7 +42,7 @@ fn asset_names_are_the_documented_contract() {
     let v = version("7.8.9");
     let names = asset_names(&v, &Platform::RELEASED);
     assert_eq!(names, baseline_for(&v));
-    assert_eq!(names.len(), 62);
+    assert_eq!(names.len(), 68);
     assert_eq!(documented_names(DOC, &v), Ok(names.clone()));
     // The document changed alone: a name dropped, or one renamed.
     let image = "hostkeeper-coordinator-<version>-<linux-platform>.image.tar\n";
@@ -81,12 +81,21 @@ fn asset_name_list_only_grows() {
 #[test]
 fn tag_and_version_string_formats_are_pinned() {
     // Catches: a tag that is not `v<X.Y.Z>`, a `--version` text other than
-    // `hostkeeper X.Y.Z+<12 hex>`, or a change of the signer identity.
+    // `hostkeeper X.Y.Z+<12 hex>` (`hostkeeper-coordinator ...` and `hostkeeper-mdm ...` for the
+    // other two shipped binaries), a shipped binary dropped, or a change of the signer identity.
     let v = version("0.1.27");
     let c = commit("0123456789abcdef0123456789abcdef01234567");
     assert_eq!(v.tag(), "v0.1.27");
     assert_eq!(Version::of_tag("v0.1.27"), Some(v));
     assert_eq!(stamp_string(&v, &c), "hostkeeper 0.1.27+0123456789ab");
+    assert_eq!(
+        PROGRAMS.map(|p| stamp_of(p, &v, &c)),
+        [
+            "hostkeeper 0.1.27+0123456789ab",
+            "hostkeeper-coordinator 0.1.27+0123456789ab",
+            "hostkeeper-mdm 0.1.27+0123456789ab",
+        ]
+    );
     assert_eq!(RELEASE_COMMIT, "RELEASE_COMMIT");
     assert_eq!(
         SIGNER_WORKFLOW,
@@ -209,8 +218,8 @@ fn the_attested_and_summed_names_partition_the_assets() {
     let v = version("0.1.3");
     let attested = attested_names(&v);
     let summed = summed_names(&v);
-    assert_eq!(attested.len(), 22);
-    assert_eq!(summed.len(), 39);
+    assert_eq!(attested.len(), 24);
+    assert_eq!(summed.len(), 43);
     for index in [INDEX, HELLO_INDEX, HELLO_FAIL_READY_INDEX] {
         assert!(summed.contains(&index.to_owned()) & !attested.contains(&index.to_owned()));
     }
@@ -266,7 +275,8 @@ fn there_are_exactly_three_platforms_and_a_release_ships_all_three() {
 
 #[test]
 fn a_macos_platform_has_a_binary_a_package_an_installer_and_an_sbom_but_no_linux_assets() {
-    // Catches: a deb, an rpm, a coordinator or an image named for macOS, its packages (the
+    // Catches: a deb, an rpm, a coordinator, an MDM kit binary or an image named for macOS
+    // (the MDM kit is Linux-only), its packages (the
     // hostkeeper one, the hello one and hello's failing build) without a bundle or digest file,
     // or its installer pkg missing or not attested.
     let v = version("0.2.1");
@@ -294,6 +304,47 @@ fn a_macos_platform_has_a_binary_a_package_an_installer_and_an_sbom_but_no_linux
             "netboot.json",
             "netboot.json.sigstore.json",
         ]
+    );
+}
+
+#[test]
+fn a_linux_platform_ships_the_mdm_binary_attested_with_its_sbom() {
+    // Catches: the MDM kit's binary missing from a Linux platform, named other than
+    // `hostkeeper-mdm-<v>-<p>.tar.gz`, shipped without its bundle (so neither verified offline
+    // nor held to the signer), or without its SBOM, or an SBOM given a bundle of its own.
+    let v = version("0.2.1");
+    for platform in [Platform::LinuxX86_64, Platform::LinuxArm64] {
+        let p = platform.name();
+        let names = asset_names(&v, &[platform]);
+        let mdm: Vec<&str> = names
+            .iter()
+            .map(String::as_str)
+            .filter(|n| n.starts_with("hostkeeper-mdm-"))
+            .collect();
+        assert_eq!(
+            mdm,
+            [
+                format!("hostkeeper-mdm-0.2.1-{p}.cdx.json"),
+                format!("hostkeeper-mdm-0.2.1-{p}.tar.gz"),
+                format!("hostkeeper-mdm-0.2.1-{p}.tar.gz.sigstore.json"),
+            ],
+            "{p}"
+        );
+    }
+    let attested = attested_names(&v);
+    let summed = summed_names(&v);
+    for p in ["linux-x86_64", "linux-arm64"] {
+        let tarball = format!("hostkeeper-mdm-0.2.1-{p}.tar.gz");
+        let sbom = format!("hostkeeper-mdm-0.2.1-{p}.cdx.json");
+        assert!(attested.contains(&tarball), "{tarball} is attested");
+        assert!(!attested.contains(&sbom), "{sbom} has no bundle");
+        assert!(summed.contains(&tarball) & summed.contains(&sbom), "{p}");
+    }
+    assert!(
+        !attested
+            .iter()
+            .any(|n| n.starts_with("hostkeeper-mdm-0.2.1-macos")),
+        "{attested:?}"
     );
 }
 

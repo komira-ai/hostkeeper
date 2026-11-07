@@ -9,7 +9,7 @@
 //!   of [`RELEASE_JOBS`]: `plan`, `verify` and `publish` under their exact `if:`, and the two jobs
 //!   of hostkeeper's own deploy, held to [`desired::problems`]; plans with the one step of
 //!   [`PLAN_RUN`], under no `if:`, on a checkout of the tip, for every trigger; publishes in the
-//!   job-level group of [`PUBLISH_GROUP`], never cancelled; checks both shipped binaries
+//!   job-level group of [`PUBLISH_GROUP`], never cancelled; checks every shipped binary
 //!   ([`SHIPPED_BINARIES`]) in `verify`, and
 //!   has no step that builds or signs ([`build_problems`]).
 //! - `artifacts.yml` ([`artifacts_problems`]) starts only by a push to main or by hand, has its
@@ -19,9 +19,11 @@
 //!   [`IMAGE_UI_CHECK`], [`IMAGE_RUN`]), and its `attest` job, under its exact
 //!   `if:`, runs no repository code: no checkout, and no `run:` but the checks of
 //!   [`ATTEST_RUNS`] and the bundle copies of [`BUNDLE_COPY`]. It attests every package of
-//!   [`PACKAGES`] for every platform of [`PLATFORMS`], and each file of [`ATTESTED_FILES`], and
-//!   copies the bundle of each beside it ([`package_problems`]): a host trusts only attested
-//!   packages, so a release asset list that names a bundle needs the steps that make it.
+//!   [`PACKAGES`] for every platform of [`PLATFORMS`], each binary tarball of [`TARBALLS`] and
+//!   each file of [`ATTESTED_FILES`], and copies the bundle of each beside it
+//!   ([`package_problems`]), and attests the SBOM of each binary tarball ([`sbom_problem`]): a
+//!   host trusts only attested packages, so a release asset list that names a bundle needs the
+//!   steps that make it.
 //!
 //! Which job may hold which write scope, under which `if:`, is [`super::lint::WRITE_ALLOWED`].
 
@@ -75,7 +77,7 @@ pub const RELEASE_TRIGGERS: [&str; 3] = ["schedule", "workflow_dispatch", "workf
 pub const REQUIRED_WORKFLOWS: [&str; 3] = ["artifacts", "ci", "privileged"];
 
 /// The binaries a release ships, each of which the verify job of release.yml runs.
-pub const SHIPPED_BINARIES: [&str; 2] = ["hostkeeper", "hostkeeper-coordinator"];
+pub const SHIPPED_BINARIES: [&str; 3] = ["hostkeeper", "hostkeeper-coordinator", "hostkeeper-mdm"];
 
 /// How each of the two builds of the coordinator's image in the image job of artifacts.yml
 /// starts; each must also pass `--no-cache`.
@@ -113,6 +115,16 @@ pub const PACKAGES: [(&str, &str); 3] =
 
 /// The platforms the release ships packages for.
 pub const PLATFORMS: [&str; 3] = ["linux-x86_64", "linux-arm64", "macos-arm64"];
+
+/// The binary tarballs the release carries, each as its program (the stem of its file name,
+/// `<program>-<version>-<platform>.tar.gz`) and the platforms it ships for: hostkeeper's on
+/// every platform, the coordinator's and the MDM kit's on the two Linux platforms. Each has a
+/// bundle and an attested SBOM (`<program>-<version>-<platform>.cdx.json`).
+pub const TARBALLS: [(&str, &[&str]); 3] = [
+    ("hostkeeper", &PLATFORMS),
+    ("hostkeeper-coordinator", &["linux-x86_64", "linux-arm64"]),
+    ("hostkeeper-mdm", &["linux-x86_64", "linux-arm64"]),
+];
 
 /// The release's other files that the attest job attests alone, each as its `subject-path` and
 /// its name: `netboot.json`, the boot sets of network install, whose attestation is what the
@@ -516,10 +528,11 @@ fn artifacts_problems(doc: &Node) -> Vec<String> {
     problems
 }
 
-/// One line per package of [`PACKAGES`], on each of [`PLATFORMS`], and per file of
-/// [`ATTESTED_FILES`], that the attest job does not attest (a provenance step whose
-/// `subject-path` is the file) or whose bundle it does not copy to `<file>.sigstore.json` from the
-/// outputs of that same step.
+/// One line per package of [`PACKAGES`], on each of [`PLATFORMS`], per binary tarball of
+/// [`TARBALLS`] and per file of [`ATTESTED_FILES`], that the attest job does not attest (a
+/// provenance step whose `subject-path` is the file) or whose bundle it does not copy to
+/// `<file>.sigstore.json` from the outputs of that same step; and one per binary tarball whose
+/// SBOM it does not attest ([`sbom_problem`]).
 fn package_problems(attest: Option<&Node>) -> Vec<String> {
     let mut problems = Vec::new();
     for (prefix, middle) in PACKAGES {
@@ -532,10 +545,37 @@ fn package_problems(attest: Option<&Node>) -> Vec<String> {
             problems.extend(attest_problem(attest, &subject, &file, &copied));
         }
     }
+    for (program, platforms) in TARBALLS {
+        for platform in platforms {
+            let stem = format!("{program}-${{{{ needs.version.outputs.version }}}}-{platform}");
+            let subject = format!("dist/{stem}.tar.gz");
+            let file = format!("{program}-<version>-{platform}.tar.gz");
+            let copied = format!("{program}-${{V}}-{platform}.tar.gz");
+            problems.extend(attest_problem(attest, &subject, &file, &copied));
+            let sbom = format!("dist/{stem}.cdx.json");
+            problems.extend(sbom_problem(attest, &subject, &sbom, &file));
+        }
+    }
     for (subject, file) in ATTESTED_FILES {
         problems.extend(attest_problem(attest, subject, file, file));
     }
     problems
+}
+
+/// What is wrong, if anything, with the SBOM attestation of the binary tarball `file`: no
+/// `attest-sbom` step whose `subject-path` is `subject` and whose `sbom-path` is `sbom`.
+fn sbom_problem(attest: Option<&Node>, subject: &str, sbom: &str, file: &str) -> Option<String> {
+    let found = steps(attest).iter().any(|s| {
+        let with = entry(s, "with");
+        text_of(Some(s), "uses").is_some_and(|u| u.starts_with("actions/attest-sbom@"))
+            && text_of(with, "subject-path") == Some(subject)
+            && text_of(with, "sbom-path") == Some(sbom)
+    });
+    (!found).then(|| {
+        format!(
+            "artifacts.yml: job attest does not attest the SBOM of {file} (an attest-sbom step with the subject-path {subject} and the sbom-path {sbom})"
+        )
+    })
 }
 
 /// What is wrong, if anything, with the attestation of `file` in the attest job: no provenance

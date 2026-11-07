@@ -562,7 +562,7 @@ fn release_workflow_keeps_its_five_jobs_and_checks_the_binary() {
         &text,
         "release.yml: jobs are [\"channel\", \"notify\", \"plan\", \"publish\", \"set-desired\", \"verify\"], not plan, verify, publish, channel and set-desired",
     );
-    for program in ["hostkeeper", "hostkeeper-coordinator"] {
+    for program in ["hostkeeper", "hostkeeper-coordinator", "hostkeeper-mdm"] {
         let check = format!(
             "      - name: {program} says the version and the commit it is released under\n        run: cargo xtask release check-binary \"$RUNNER_TEMP/binary/{program}\" \"$RELEASE_VERSION\" \"$COMMIT\"\n"
         );
@@ -800,6 +800,84 @@ fn attest_job_attests_every_package_for_every_platform_and_copies_each_bundle() 
         &text,
         "job attest does not attest hello-<version>-linux-arm64.tar.zst",
     );
+}
+
+#[test]
+fn attest_job_attests_every_binary_tarball_with_its_bundle_and_its_sbom() {
+    // Catches: a binary tarball (hostkeeper-mdm's in particular, on either Linux platform) that
+    // the release lists while the attest job does not sign it, signs it without copying its
+    // bundle beside it, copies the bundle of another step, or attests no SBOM for it (or the SBOM
+    // of another file). A consumer verifies the tarball by that bundle and that identity.
+    for platform in ["linux-x86_64", "linux-arm64"] {
+        let steps = attest_steps(
+            &format!("mdm-{platform}"),
+            &format!("Name the bundle of the tarball of hostkeeper-mdm for {platform}"),
+            &format!("hostkeeper-mdm-${{V}}-{platform}.tar.gz"),
+            &format!("hostkeeper-mdm-${{{{ needs.version.outputs.version }}}}-{platform}.tar.gz"),
+        );
+        let text = workflow("artifacts.yml");
+        assert!(
+            text.contains(&steps),
+            "the helper writes the steps as the file has them"
+        );
+        let found = all_problems("artifacts.yml", &with_in(&text, &steps, ""));
+        assert_eq!(
+            found,
+            vec![format!(
+                "artifacts.yml: job attest does not attest hostkeeper-mdm-<version>-{platform}.tar.gz (a provenance step with an id and the subject-path dist/hostkeeper-mdm-${{{{ needs.version.outputs.version }}}}-{platform}.tar.gz)"
+            )],
+            "{platform}"
+        );
+        let text = with_in(
+            &workflow("artifacts.yml"),
+            &format!("steps.mdm-{platform}.outputs.bundle-path"),
+            &format!("steps.coordinator-{platform}.outputs.bundle-path"),
+        );
+        assert_refused(
+            "artifacts.yml",
+            &text,
+            &format!(
+                "artifacts.yml: job attest does not copy the bundle of hostkeeper-mdm-<version>-{platform}.tar.gz from the step mdm-{platform} to dist/hostkeeper-mdm-${{V}}-{platform}.tar.gz.sigstore.json"
+            ),
+        );
+        let sbom = format!(
+            "          sbom-path: dist/hostkeeper-mdm-${{{{ needs.version.outputs.version }}}}-{platform}.cdx.json\n"
+        );
+        let other = format!(
+            "          sbom-path: dist/hostkeeper-coordinator-${{{{ needs.version.outputs.version }}}}-{platform}.cdx.json\n"
+        );
+        let text = with_in(&workflow("artifacts.yml"), &sbom, &other);
+        assert_refused(
+            "artifacts.yml",
+            &text,
+            &format!(
+                "artifacts.yml: job attest does not attest the SBOM of hostkeeper-mdm-<version>-{platform}.tar.gz"
+            ),
+        );
+    }
+    // The other binary tarballs are held to the same rule: hostkeeper's on macOS, the
+    // coordinator's on linux-arm64.
+    for (from, file) in [
+        (
+            "subject-path: dist/hostkeeper-${{ needs.version.outputs.version }}-macos-arm64.tar.gz\n          sbom-path",
+            "hostkeeper-<version>-macos-arm64.tar.gz",
+        ),
+        (
+            "subject-path: dist/hostkeeper-coordinator-${{ needs.version.outputs.version }}-linux-arm64.tar.gz\n          sbom-path",
+            "hostkeeper-coordinator-<version>-linux-arm64.tar.gz",
+        ),
+    ] {
+        let text = with_in(
+            &workflow("artifacts.yml"),
+            from,
+            "subject-path: dist/other.tar.gz\n          sbom-path",
+        );
+        assert_refused(
+            "artifacts.yml",
+            &text,
+            &format!("artifacts.yml: job attest does not attest the SBOM of {file}"),
+        );
+    }
 }
 
 #[test]

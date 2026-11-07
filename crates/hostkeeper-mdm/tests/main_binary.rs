@@ -45,16 +45,20 @@ fn the_system_random_source_fills_the_buffer_with_fresh_bytes() {
     assert_ne!(a, b);
 }
 
-/// Catches `--version` not reaching the parser or going to stderr: it prints the program's name
-/// and the crate's version on stdout and exits 0.
+/// Catches `--version` not reaching the parser, going to stderr, or not carrying the stamp: it
+/// prints `hostkeeper-mdm <crate version>` on stdout, followed for a release build (one given
+/// `RELEASE_COMMIT`) by `+` and the first 12 digits of that commit, and exits 0. `cargo xtask
+/// release check-binary` holds a release build to the same line.
 #[test]
 fn the_program_prints_its_version() {
     let (code, out, err) = hostkeeper_mdm(&["--version"]);
     assert_eq!(code, Some(0));
-    assert_eq!(
-        out,
-        format!("hostkeeper-mdm {}\n", env!("CARGO_PKG_VERSION"))
-    );
+    let version = env!("CARGO_PKG_VERSION");
+    let want = match option_env!("RELEASE_COMMIT") {
+        Some(commit) => format!("hostkeeper-mdm {version}+{}\n", &commit[..12]),
+        None => format!("hostkeeper-mdm {version}\n"),
+    };
+    assert_eq!(out, want);
     assert_eq!(err, "");
 }
 

@@ -153,8 +153,8 @@ pub(crate) enum Verb {
         commit: Commit,
     },
     /// Run a binary with `--version` and refuse it unless it prints exactly the stamp of this
-    /// version and commit: `<file name> X.Y.Z+<12 hex>`, for a file named `hostkeeper` or
-    /// `hostkeeper-coordinator`.
+    /// version and commit: `<file name> X.Y.Z+<12 hex>`, for a file named `hostkeeper`,
+    /// `hostkeeper-coordinator` or `hostkeeper-mdm`.
     CheckBinary {
         /// The binary to run, under the name it ships with.
         binary: PathBuf,
