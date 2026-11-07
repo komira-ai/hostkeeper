@@ -46,7 +46,7 @@ pub(crate) const DESIRED: [Table; 2] = [
             ("min_up", Ty::Json),
             ("release_digest", Ty::Text),
             ("release_index", Ty::Json),
-            // Migration `0002`: the write record ([`super::generations`]).
+            // Migration `0003`: the write record ([`super::generations`]).
             ("generation", Ty::Int),
             ("write_id", Ty::Text),
             ("replaced_version", Ty::Text),

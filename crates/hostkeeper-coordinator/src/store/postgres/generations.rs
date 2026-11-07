@@ -1,9 +1,9 @@
-//! Each service's write record ([`crate::write_record`]) as the four columns migration `0002` adds
+//! Each service's write record ([`crate::write_record`]) as the four columns migration `0003` adds
 //! to `desired` (`docs/design/coordinator-storage.md`, section 3.2): `generation`, `write_id`,
 //! `replaced_version` and `replaced_min_up`, after the columns of `0001`, and back.
 //!
 //! A service never written has the default record (generation 0, nothing else), which is what a
-//! row of `0001` reads as once `0002` has run: a load reads it as no record, and a commit writes
+//! row written before `0003` reads as once it has run: a load reads it as no record, and a commit writes
 //! it as those defaults. A load parses every value again, as a start on any other table does,
 //! and refuses a row whose record does not parse, naming the service.
 
@@ -16,7 +16,7 @@ use super::state::{int, place};
 use crate::desired::{DesiredError, MAX_COUNT, RoleLimits, StoreError, is_role_name};
 use crate::write_record::{Replaced, WriteId, WriteRecord};
 
-/// Where the columns of `0002` start in a row of `desired`: after `0001`'s five.
+/// Where the columns of `0003` start in a row of `desired`: after the five of `0001`.
 const FIRST: usize = 5;
 
 /// The columns of `record` (the default record for none), in their order.

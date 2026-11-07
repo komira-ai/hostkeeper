@@ -34,11 +34,11 @@ fn refused(columns: [Val; 4]) -> String {
 
 /// Proves: a record goes to its four columns and back as it was: the generation, the write id,
 /// and the replaced version with its minimums as a plain map; no record is written as the
-/// default (generation 0, the rest `NULL`); and a row at the default, as every row of `0001`
-/// reads once `0002` has run, is read as no record.
+/// default (generation 0, the rest `NULL`); and a row at the default, as every row written before `0003`
+/// reads once it has run, is read as no record.
 ///
 /// Catches: a record that does not come back from the database as it was committed, or a row
-/// written before `0002` read as a write.
+/// written before `0003` read as a write.
 #[test]
 fn a_record_goes_to_its_columns_and_back() {
     let record = WriteRecord {

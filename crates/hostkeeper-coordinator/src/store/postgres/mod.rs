@@ -721,7 +721,7 @@ impl Backend for Postgres {
         Some(self.inner.epoch)
     }
 
-    /// Migration `0002`'s columns of `desired` keep them.
+    /// Migration `0003`'s columns of `desired` keep them.
     fn keeps_write_records(&self) -> bool {
         true
     }

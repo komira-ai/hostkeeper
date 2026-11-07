@@ -12,6 +12,7 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use bytes::Bytes;
+use hostkeeper_enrollment::enroll::records::Records;
 use hostkeeper_enrollment::enroll::{Decision, poll_message};
 use hostkeeper_enrollment::fs::{Fs, RealFs};
 use hostkeeper_enrollment::names::{HostId, KeyHash, Role};
@@ -163,6 +164,32 @@ impl Rig {
                 .start(fs, Arc::clone(&clock), random)
                 .expect("enrollment starts"),
         ));
+        Rig {
+            _dir: dir,
+            files,
+            clock,
+            enrollment,
+        }
+    }
+
+    /// [`Rig::new`], the enrollment's records kept in `records` rather than in the directory's
+    /// store; the CA and the server certificate are still the directory's files.
+    pub fn over_records(name: &str, records: Arc<dyn Records>) -> Rig {
+        let dir = scratch(name);
+        let files = Files::in_dir(&dir);
+        let clock = FixedClock::at(NOW);
+        let enrollment = Arc::new(
+            setup(
+                Arc::new(RealFs),
+                &Setup {
+                    store: StoreAt::Records(records),
+                    ..files.setup(true)
+                },
+                Arc::<FixedClock>::clone(&clock),
+                os_random(),
+            )
+            .expect("enrollment starts over the records"),
+        );
         Rig {
             _dir: dir,
             files,

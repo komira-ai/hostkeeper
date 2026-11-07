@@ -6,8 +6,8 @@ section 10, the halts-file storage of the plan position in [rollout-update-plans
 and the device-record file of [hostkeeper-mdm.md](hostkeeper-mdm.md) section 6.1. Where they disagree with this document
 on where the coordinator keeps its state, this document wins. C1, C2, C3 and C6 are built: the storage trait and its
 fake (section 4.1), the enrollment crate's `Records` port, the Postgres store
-(`crates/hostkeeper-coordinator/src/store/postgres/`, with its migration `0001`, sections 3 to 8), and the
-generations and write ids (migration `0002`, section 3.2). Every other
+(`crates/hostkeeper-coordinator/src/store/postgres/`, with its migrations `0001` and `0002`, sections 3 to 8), and the
+generations and write ids (migration `0003`, section 3.2). Every other
 statement about new code is **Designed**, and section 13 lists the build items, C1 to C11, one pull request each. The tags are those of hostkeeper-design.md: **Built** names code on `main` with a path, **Designed** means
 nothing implements it yet.
 
@@ -132,7 +132,7 @@ a file encoding and has no table.
 **Generations and write ids.** The operator API already defines them (`SetDesiredRequest.if_generation` and `write_id`,
 `SetDesiredResponse.record`, the `WriteRecord` and `Replaced` messages, the refusal `generation_conflict`). The file
 store keeps neither, so over it a set that names either field is refused `invalid_request` (`DesiredError::Unrecorded`
-in `set_desired_by`, `src/service_ci.rs`, **Built**). The database keeps them: C6's migration `0002_generations` adds
+in `set_desired_by`, `src/service_ci.rs`, **Built**). The database keeps them: C6's migration `0003_generations` adds
 to `desired`:
 
 ```sql
@@ -307,7 +307,7 @@ enrollment_issued(request_id bytea PRIMARY KEY REFERENCES enrollment_requests, r
   serial bigint NOT NULL, host_id text NOT NULL, not_after bigint NOT NULL, certificate_der bytea NOT NULL)
 enrollment_hosts(host_id text PRIMARY KEY, key_hash bytea NOT NULL, machine_id text NOT NULL, role text NOT NULL,
   services text[] NOT NULL, duplicate boolean NOT NULL, first_heartbeat_unix bigint,
-  first_serving_unix bigint)               -- first_serving_unix added by migration 0003 (`refuse`)
+  first_serving_unix bigint)              -- first_serving_unix: added by migration 0002 (first_serving)
 enrollment_deny(host_id text PRIMARY KEY, state smallint NOT NULL,  -- 1 retiring, 2 retired, 3 cleared
   cleared_by bytea)
 enrollment_serial(singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton), next bigint NOT NULL)  -- starts at 2
@@ -871,7 +871,7 @@ on the database and the back-out window has closed.
 | `an_accepted_write_raises_the_generation_even_for_an_identical_set` | the proto's generation | C6 |
 | `a_stale_if_generation_is_refused_generation_conflict_and_changes_nothing` | the precondition | C6 |
 | `the_write_id_and_the_replaced_state_come_back_in_the_record` | `SetDesiredResponse.record` | C6 |
-| `an_older_release_is_refused_on_a_database_with_0002` | `0002` says `refuse` | C6 |
+| `an_older_release_is_refused_on_a_database_with_0003` | `0003` says `refuse` | C6 |
 | `a_service_image_not_pinned_by_digest_is_refused` | the workflow lint's new rule | C3 |
 
 ## 13. Build items, one pull request each, in this order
@@ -883,7 +883,7 @@ on the database and the back-out window has closed.
 | C3 | The Postgres store: migrations `0001`, the lock and the epoch, the writing thread and the read connection, the in-memory enrollment copy, `--database-dsn-file` and `--halt-marker-file`, the `store_unreachable` alert, the workspace dependency `postgres` (its licences checked by `cargo deny`), the service container in the `test` job and the workflow lint's rule; the operator docs that describe the store (coordinator-state.md, holds-and-force.md, assignments.md, rollout-plans.md, enrollment.md, enrollment-coordinator.md) | C1, C2 | L |
 | C4 | `import` and `export` | C3 | M |
 | C5 | `docs/deploy/coordinator/`: the compose file with both digests and no environment, `init.sql`, `password.sql` and the one-time setup, the backup timer, the runbook of the local volume, the secrets, the restore and the drill | C4 | S |
-| C6 | Generations and write ids: migration `0002` (`refuse`), `if_generation` and `write_id` honoured, `SetDesiredResponse.record` filled | C3 | M |
+| C6 | Generations and write ids: migration `0003` (`refuse`), `if_generation` and `write_id` honoured, `SetDesiredResponse.record` filled | C3 | M |
 | C7 | The cutover, run by the operator with its plan, apply and back-out, outside this repository | C5 | S |
 | C8 | `docs/report` and the README's state sentences, once the farm runs on the database | C7 | S |
 | C9 | Delete the file store, its flags and `backup`/`restore`, after the back-out window, with the supersession check | C7 | M |

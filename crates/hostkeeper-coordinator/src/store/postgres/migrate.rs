@@ -53,13 +53,13 @@ pub(crate) const SHIPPED: [(i32, &str, &str); 3] = [
     (1, "state", include_str!("migrations/0001_state.sql")),
     (
         2,
-        "generations",
-        include_str!("migrations/0002_generations.sql"),
+        "first_serving",
+        include_str!("migrations/0002_first_serving.sql"),
     ),
     (
         3,
-        "first_serving",
-        include_str!("migrations/0003_first_serving.sql"),
+        "generations",
+        include_str!("migrations/0003_generations.sql"),
     ),
 ];
 

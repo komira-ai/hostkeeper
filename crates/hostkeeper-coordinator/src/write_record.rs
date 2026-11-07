@@ -7,7 +7,7 @@
 //! state it saw.
 //!
 //! Only a backend that keeps them records them ([`crate::store::Backend::keeps_write_records`]):
-//! the Postgres store does, in the columns migration `0002` adds to `desired`. The desired-state
+//! the Postgres store does, in the columns migration `0003` adds to `desired`. The desired-state
 //! file keeps neither, so over the files a set that names `if_generation` or a write id is refused
 //! `invalid_request` and an identical set still writes nothing.
 

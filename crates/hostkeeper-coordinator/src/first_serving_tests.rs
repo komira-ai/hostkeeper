@@ -17,6 +17,9 @@ use crate::enrollment::os_random;
 use crate::enrollment::tests::support::{HostKey, NOW, Rig as EnrollmentRig, enroll_request};
 use crate::marks_support::{ask, operator, runs};
 use crate::services::Services;
+use crate::store::Postgres;
+use crate::store::postgres::PgRecords;
+use crate::store::postgres::tests::TestDatabase;
 use crate::testutil::{Log, Rig, beat, version};
 
 /// The agent's own service, and a service it runs.
@@ -53,11 +56,26 @@ fn services() -> Services {
 struct Fixture {
     enrollment: EnrollmentRig,
     rig: Rig,
+    /// The database the enrollment's records are kept in, for a fixture on Postgres; dropped
+    /// after the store.
+    _database: Option<(Postgres, TestDatabase)>,
 }
 
 impl Fixture {
     fn new(name: &str) -> Fixture {
         Fixture::over(EnrollmentRig::new(&format!("{name}-enrollment")), name)
+    }
+
+    /// [`Fixture::new`], the enrollment's records kept in a Postgres database of the test's own.
+    fn on_postgres(name: &str) -> Fixture {
+        let database = TestDatabase::new();
+        let (store, _) = database.open("records").expect("the store opens");
+        let records = Arc::new(PgRecords::over(&store).expect("the records open"));
+        let enrollment = EnrollmentRig::over_records(&format!("{name}-enrollment"), records);
+        Fixture {
+            _database: Some((store, database)),
+            ..Fixture::over(enrollment, name)
+        }
     }
 
     fn over(enrollment: EnrollmentRig, name: &str) -> Fixture {
@@ -71,7 +89,11 @@ impl Fixture {
             .with_legacy_service(None)
             .with_enrollment(Arc::clone(&enrollment.enrollment));
         rig.at(2_000);
-        Fixture { enrollment, rig }
+        Fixture {
+            enrollment,
+            rig,
+            _database: None,
+        }
     }
 
     /// A new key that posted from machine `machine`, approved by the operator as `host` at
@@ -165,7 +187,17 @@ fn updating(service: &str) -> ServiceBeat {
 /// the latest heartbeat instead of the first.
 #[test]
 fn the_first_heartbeat_with_a_managed_service_serving_is_kept_and_later_ones_leave_it() {
-    let f = Fixture::new("first-serving");
+    managed_service_serving_is_kept(&Fixture::new("first-serving"));
+}
+
+/// [`the_first_heartbeat_with_a_managed_service_serving_is_kept_and_later_ones_leave_it`], the enrollment's records on Postgres.
+#[test]
+fn the_first_heartbeat_with_a_managed_service_serving_is_kept_and_later_ones_leave_it_on_postgres()
+{
+    managed_service_serving_is_kept(&Fixture::on_postgres("first-serving-pg"));
+}
+
+fn managed_service_serving_is_kept(f: &Fixture) {
     f.approve("m-1", "db-1", APPROVED, false);
     f.beat("db-1", "storage", FIRST, vec![runs(HK, "0.1.100")]);
     assert_eq!(f.times("db-1"), (Some(FIRST), None), "only the agent");
@@ -190,7 +222,16 @@ fn the_first_heartbeat_with_a_managed_service_serving_is_kept_and_later_ones_lea
 /// host of the farm CA (no enrollment) answered with a time.
 #[test]
 fn a_service_that_does_not_count_the_host_and_a_host_not_enrolled_set_nothing() {
-    let f = Fixture::new("first-serving-not-counted");
+    not_counted_and_not_enrolled_set_nothing(&Fixture::new("first-serving-not-counted"));
+}
+
+/// [`a_service_that_does_not_count_the_host_and_a_host_not_enrolled_set_nothing`], the enrollment's records on Postgres.
+#[test]
+fn a_service_that_does_not_count_the_host_and_a_host_not_enrolled_set_nothing_on_postgres() {
+    not_counted_and_not_enrolled_set_nothing(&Fixture::on_postgres("first-serving-not-counted-pg"));
+}
+
+fn not_counted_and_not_enrolled_set_nothing(f: &Fixture) {
     f.approve("m-1", "db-1", APPROVED, false);
     f.beat("db-1", "edge", FIRST, vec![runs(WEB, "1.0")]);
     assert_eq!(f.times("db-1"), (Some(FIRST), None), "not selected");
@@ -205,7 +246,16 @@ fn a_service_that_does_not_count_the_host_and_a_host_not_enrolled_set_nothing() 
 /// put serving before the approval it is answered with.
 #[test]
 fn a_new_approval_starts_the_first_serving_heartbeat_over() {
-    let f = Fixture::new("first-serving-replaced");
+    a_new_approval_starts_over(&Fixture::new("first-serving-replaced"));
+}
+
+/// [`a_new_approval_starts_the_first_serving_heartbeat_over`], the enrollment's records on Postgres.
+#[test]
+fn a_new_approval_starts_the_first_serving_heartbeat_over_on_postgres() {
+    a_new_approval_starts_over(&Fixture::on_postgres("first-serving-replaced-pg"));
+}
+
+fn a_new_approval_starts_over(f: &Fixture) {
     f.approve("m-1", "db-1", APPROVED, false);
     f.beat("db-1", "storage", FIRST, vec![runs(WEB, "1.0")]);
     assert_eq!(f.times("db-1"), (Some(FIRST), Some(FIRST)));

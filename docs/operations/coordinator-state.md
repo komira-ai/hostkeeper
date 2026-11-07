@@ -67,10 +67,10 @@ the whole audit log, and the enrollment store. The design is
   that lost an answer can look up whether its write landed. A set with `--if-generation <n>` is
   taken only while the service's generation is `n`; otherwise it is refused `generation_conflict`
   (gRPC `ABORTED`) and nothing changes, the operator's audit entry included. The JSON route
-  `POST /v1/desired` takes neither, and raises the generation like any set. Migration `0002`
+  `POST /v1/desired` takes neither, and raises the generation like any set. Migration `0003`
   adds them and says older releases must not run on it: a coordinator of the release before is
   refused on a database that has it (`the database's schema is newer than this coordinator
-  (migration 2, generations)`). The file store keeps none of them: there a set that names
+  (migration 3, generations)`). The file store keeps none of them: there a set that names
   `--if-generation` or `--write-id` is refused `invalid_request`, and a set identical to the
   state held writes nothing.
 - **Bounded waits.** Each session connects within 5 seconds, a statement runs at most 5 seconds and
