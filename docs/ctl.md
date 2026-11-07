@@ -182,7 +182,7 @@ is answered as rejected and audited once.
 `/hostkeeper.operator.v1.Enrollment/AddRecord`
 
 Record a server the operator built, before it first boots: its host id, optional role, data
-MACs, BMC MAC, serial and notes. A record for the host id, or a MAC or serial another record
+MACs, BMC MAC, serial, notes and optional platform. A record for the host id, or a MAC or serial another record
 holds, is refused; remove the record first.
 
 | flag | value | meaning |
@@ -193,7 +193,7 @@ holds, is refused; remove the record first.
 | `--bmc-mac` | STRING | Empty for none. |
 | `--serial` | STRING | Empty for none. |
 | `--notes` | STRING | Empty for none. |
-| `--platform` | VALUE | The platform to install the server as by network boot: `PLATFORM_LINUX_X86_64` or `PLATFORM_LINUX_ARM64`; `PLATFORM_UNSPECIFIED` for none. Any other value is refused `invalid_request`. |
+| `--platform` | VALUE | The platform to install the server as by network boot: `PLATFORM_LINUX_X86_64` or `PLATFORM_LINUX_ARM64` (`linux_x86_64` or `linux_arm64` as a flag of `hostkeeper ctl`); `PLATFORM_UNSPECIFIED` (the flag left out) for none. Any other value is refused `invalid_request`. |
 
 #### `hostkeeper ctl enrollment list-records`
 
