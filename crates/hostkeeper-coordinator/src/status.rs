@@ -108,6 +108,11 @@ pub struct ServiceStatus {
     pub slots_held: usize,
     /// What `GET /v1/convergence` answers for the service.
     pub convergence: Convergence,
+    /// Its update plan for the desired version ([`crate::stages`]), which `Releases.Status`
+    /// answers; none without a desired version. The JSON status, whose bytes are frozen, leaves
+    /// it out.
+    #[serde(skip)]
+    pub plan: Option<hostkeeper_proto::hostkeeper::operator::v1::RolloutPlan>,
 }
 
 /// What an operator reads.

@@ -33,6 +33,7 @@ use crate::assignment::{Placement, ServiceAssignments, assigned, effective_min_v
 use crate::bake::Bake;
 use crate::defer::{DeferBackoff, Defers};
 use crate::holds::{HoldMark, holding};
+use crate::rollouts::Rollout;
 use crate::services::ServiceDef;
 use crate::verdicts::Verdicts;
 
@@ -172,6 +173,15 @@ pub struct Marks {
     pub labels: BTreeMap<String, BTreeMap<String, String>>,
     /// The (service, node id) pairs an operator excluded.
     pub excluded: BTreeSet<(String, String)>,
+    /// Per service, where its update plan stands ([`crate::rollouts`]).
+    pub rollouts: BTreeMap<String, Rollout>,
+    /// The services that are halted.
+    pub halted: BTreeSet<String>,
+    /// Per service, the versions marked bad.
+    pub bad: BTreeMap<String, Vec<Version>>,
+    /// Per service, the failures an operator acknowledged, each a node id and the version it
+    /// failed, by its text: a cleared halt's, and those a version set by hand or forced acknowledged.
+    pub acked: BTreeMap<String, BTreeSet<(String, String)>>,
 }
 
 /// Every host the coordinator has heard from since it started.
@@ -182,6 +192,8 @@ pub struct Fleet {
     quiet: Duration,
     /// How far a heartbeat's clock may be from the coordinator's before it counts as skewed.
     skew_after: Duration,
+    /// How many services may have a live rollout at once ([`crate::stages`]).
+    live_rollouts: usize,
     nodes: BTreeMap<HostId, Node>,
     hosts: BTreeMap<String, BTreeMap<HostId, Host>>,
     /// What hosts the service no longer counts (excluded, or dropped by its selector) last
@@ -223,6 +235,7 @@ impl Fleet {
             started,
             quiet,
             skew_after: CLOCK_SKEW_AFTER,
+            live_rollouts: 1,
             nodes: BTreeMap::new(),
             hosts: BTreeMap::new(),
             outside: BTreeMap::new(),
@@ -248,6 +261,44 @@ impl Fleet {
     /// the coordinator's, instead of [`CLOCK_SKEW_AFTER`].
     pub(crate) fn set_skew_after(&mut self, after: Duration) {
         self.skew_after = after;
+    }
+
+    /// The same fleet letting `n` services have a live rollout at once instead of one.
+    pub(crate) fn set_live_rollouts(&mut self, n: usize) {
+        self.live_rollouts = n;
+    }
+
+    /// How many services may have a live rollout at once.
+    #[must_use]
+    pub fn live_rollouts(&self) -> usize {
+        self.live_rollouts
+    }
+
+    /// Where the update plan of `service` stands, as the ops store keeps it.
+    #[must_use]
+    pub fn rollout_of(&self, service: &str) -> Option<&Rollout> {
+        self.marks.rollouts.get(service)
+    }
+
+    /// Whether `service` is halted, or `version` of it is marked bad: its plan orders no one.
+    #[must_use]
+    pub fn is_stopped(&self, service: &str, version: &Version) -> bool {
+        self.marks.halted.contains(service)
+            || self
+                .marks
+                .bad
+                .get(service)
+                .is_some_and(|bad| bad.contains(version))
+    }
+
+    /// Whether an operator acknowledged the failure of the host `id` at `version` of `service`:
+    /// it cleared the halt the failure raised, or set a version by hand over it.
+    #[must_use]
+    pub fn is_acked(&self, service: &str, id: &HostId, version: &Version) -> bool {
+        self.marks
+            .acked
+            .get(service)
+            .is_some_and(|acked| acked.contains(&(id.as_str().to_owned(), version.as_str().to_owned())))
     }
 
     /// Whether `now` is still within the quiet start: the `quiet` of [`Self::new`] after the
@@ -728,7 +779,7 @@ impl Fleet {
     /// The role the host `id` has now: its certificate's at its last heartbeat; for a host the
     /// fleet knows only by its beats of `service`, the role of those; empty for a host it does
     /// not know.
-    fn role_of(&self, service: &str, id: &HostId) -> &str {
+    pub(crate) fn role_in(&self, service: &str, id: &HostId) -> &str {
         match self.nodes.get(id) {
             Some(node) => node.role.as_str(),
             None => self.occupant(service, id).map_or("", Host::role_name),
@@ -744,7 +795,7 @@ impl Fleet {
             &self.marks.holds,
             service,
             id.as_str(),
-            self.role_of(service, id),
+            self.role_in(service, id),
         )
         .next()
         .is_some()
@@ -754,7 +805,7 @@ impl Fleet {
     fn placement<'a>(&'a self, service: &str, id: &'a HostId) -> Placement<'a> {
         Placement {
             node_id: id.as_str(),
-            role: self.role_of(service, id),
+            role: self.role_in(service, id),
             labels: self.marks.labels.get(id.as_str()),
         }
     }

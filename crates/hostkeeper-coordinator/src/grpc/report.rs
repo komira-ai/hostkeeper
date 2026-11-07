@@ -84,11 +84,12 @@ fn service_status(name: &str, one: &ServiceStatus, ops: &OpsState) -> proto::Ser
         hosts: one
             .hosts
             .iter()
-            .map(|host| service_host(name, host, &one.members, ops))
+            .map(|host| service_host(name, host, one, ops))
             .collect(),
         up: count(one.up),
         slots_held: count(one.slots_held),
         marks: marks.map(service_marks),
+        plan: one.plan.clone(),
     }
 }
 
@@ -225,10 +226,10 @@ fn failure_ack(ack: &FailureAck) -> proto::FailureAck {
 fn service_host(
     service: &str,
     host: &ServiceHostStatus,
-    members: &[Member],
+    one: &ServiceStatus,
     ops: &OpsState,
 ) -> proto::ServiceHost {
-    let view = host_service(service, host, members, ops);
+    let view = host_service(service, host, one, ops);
     proto::ServiceHost {
         node_id: host.host.node_id.clone(),
         role: host.host.role.clone(),
@@ -239,17 +240,18 @@ fn service_host(
     }
 }
 
-/// How `service` sees a host it heard: `members` are the nodes the service does not count; a
-/// host not among them is present.
+/// How `service`, whose status is `one`, sees a host it heard: the members of `one` are the nodes
+/// the service does not count, and a host not among them is present; the stage is the one of
+/// the service's plan that takes the host.
 fn host_service(
     service: &str,
     host: &ServiceHostStatus,
-    members: &[Member],
+    one: &ServiceStatus,
     ops: &OpsState,
 ) -> proto::HostService {
     let node_id = host.host.node_id.as_str();
     let role = host.host.role.as_str();
-    let member = members.iter().find(|m| m.node_id == node_id);
+    let member = one.members.iter().find(|m| m.node_id == node_id);
     let beat = &host.host.beat;
     proto::HostService {
         service: service.to_owned(),
@@ -264,7 +266,16 @@ fn host_service(
         health: health(beat.health).into(),
         last_update: beat.last_update.as_ref().map(update_result),
         excluded_reason: member.and_then(|m| m.reason.clone()),
+        stage: one.plan.as_ref().and_then(|plan| stage_of(plan, node_id)),
     }
+}
+
+/// The stage of `plan` that takes the host `node_id`, if the plan counts it.
+fn stage_of(plan: &proto::RolloutPlan, node_id: &str) -> Option<u32> {
+    plan.stages
+        .iter()
+        .find(|stage| stage.members.iter().any(|m| m.node_id == node_id))
+        .map(|stage| stage.number)
 }
 
 /// How `service` sees a host it has no heartbeat of, but does not count for a reason
@@ -308,7 +319,7 @@ pub(crate) fn host(
     let mut platform = None;
     for (name, one) in &status.per_service {
         if let Some(heard) = one.hosts.iter().find(|h| h.host.node_id == node_id) {
-            services.push(host_service(name, heard, &one.members, &status.ops));
+            services.push(host_service(name, heard, one, &status.ops));
             beats.push(service_beat(name, &heard.host.beat));
             platform = platform.or(Some(heard.host.beat.platform));
         } else if let Some(member) = one.members.iter().find(|m| m.node_id == node_id) {
@@ -501,6 +512,12 @@ fn gate_of(gate: Gate) -> proto::GateReason {
         Gate::Quiet => proto::GateReason::Quiet,
         Gate::CanaryWait => proto::GateReason::CanaryWait,
         Gate::Baking => proto::GateReason::Baking,
+        Gate::Paused => proto::GateReason::Paused,
+        Gate::AdvanceWait => proto::GateReason::AdvanceWait,
+        Gate::StageFailed => proto::GateReason::StageFailed,
+        Gate::StageWait => proto::GateReason::StageWait,
+        Gate::BelowMinUp => proto::GateReason::BelowMinUp,
+        Gate::RolloutElsewhere => proto::GateReason::RolloutElsewhere,
     }
 }
 

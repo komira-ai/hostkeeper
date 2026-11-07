@@ -19,7 +19,7 @@
 //
 // Refusals: a gRPC status whose message is exactly one token of the service's refusal enum
 // (`HostsRefusal`, `ReleasesRefusal`, `ServicesRefusal`, `EnrollmentRefusal`, `AuditRefusal`,
-// `AlertsRefusal`),
+// `AlertsRefusal`, and `RolloutsRefusal` in rollouts.proto),
 // written as the value's name without the prefix, in lower case (for example
 // `below_min_version`); the status code is the one each value names. Nothing
 // else is ever in the message: no claim value, no path, no text of an internal error. A refused
@@ -67,6 +67,8 @@ package hostkeeper.operator.v1;
 import "hostkeeper/agent/v1/agent.proto";
 // `AuditEntry` and `Actor`, which every service of the package answers.
 import public "hostkeeper/operator/v1/entry.proto";
+// The `Rollouts` service and the update plan (`RolloutPlan`) that `ServiceStatus` carries.
+import public "hostkeeper/operator/v1/rollouts.proto";
 
 // The hosts the coordinator has heard from, and what an operator decides about them.
 service Hosts {
@@ -389,7 +391,8 @@ message HostService {
   string service = 1;
   // Live, healthy, and not updating this service.
   bool up = 2;
-  // It holds the one live update slot of the farm for this service.
+  // It holds an update slot of this service: updating, its promotion pending, failed until it
+  // beats healthy, or ordered until it reports.
   bool holds_slot = 3;
   // Why the host would not be ordered at its next heartbeat: the rollout gate's reason.
   GateReason gate_reason = 4;
@@ -407,6 +410,9 @@ message HostService {
   hostkeeper.agent.v1.UpdateResult last_update = 9;
   // The operator's reason, when the host is excluded from the service.
   optional string excluded_reason = 10;
+  // The stage of the service's update plan the host is in or waits for, from 1; absent when the
+  // plan does not count the host (it is not eligible).
+  optional uint32 stage = 11;
 }
 
 // Why the rollout gate does not order a host now (not to be confused with an operator's hold,
@@ -432,7 +438,8 @@ enum GateReason {
   GATE_REASON_ABSENT = 8;
   // The host is updating the service.
   GATE_REASON_UPDATING = 9;
-  // Another host or service holds the one live update.
+  // The host is updating another service or has an order outstanding for one: a host does one
+  // update at a time.
   GATE_REASON_BUSY_ELSEWHERE = 10;
   // The host runs the desired version.
   GATE_REASON_UP_TO_DATE = 11;
@@ -440,17 +447,18 @@ enum GateReason {
   GATE_REASON_FAILED_HERE = 12;
   // The host declined the desired version for now.
   GATE_REASON_DEFERRED = 13;
-  // The one live update slot is held.
+  // As many hosts of the host's role hold an update slot of the service as the desired state's
+  // `max_updating` of the role lets.
   GATE_REASON_NO_SLOT = 14;
   // No longer produced: the one live update orders roles already.
   GATE_REASON_WAITING_FOR_ROLE = 15;
   // No longer produced: the one live update orders services already.
   GATE_REASON_WAITING_FOR_SERVICE = 16;
-  // No longer produced: the one live update keeps all but one host serving.
+  // No longer produced: `below_min_up` says it.
   GATE_REASON_MIN_UP = 17;
-  // The hosts that updated are still baking.
+  // The hosts of the current stage of the update plan are still baking.
   GATE_REASON_BAKING = 18;
-  // The canaries have not finished.
+  // No longer produced: a canary is the first stage of the update plan.
   GATE_REASON_CANARY_WAIT = 19;
   // The desired version is marked bad.
   GATE_REASON_BAD = 20;
@@ -463,6 +471,18 @@ enum GateReason {
   // The release index of the desired version lists no package for the host's platform: the host
   // is not ordered the version, and this is no failed update.
   GATE_REASON_NO_PACKAGE_FOR_PLATFORM = 24;
+  // An operator paused the service's update plan (`Rollouts.Pause`).
+  GATE_REASON_PAUSED = 25;
+  // The host waits for a stage the plan enters only by an operator's `Rollouts.Advance`.
+  GATE_REASON_ADVANCE_WAIT = 26;
+  // A host of the plan's current stage failed the desired version; the next stage waits.
+  GATE_REASON_STAGE_FAILED = 27;
+  // The host waits for a later stage while the current one fills and updates.
+  GATE_REASON_STAGE_WAIT = 28;
+  // Ordering the host would leave fewer hosts of its role up than the desired state's `min_up`.
+  GATE_REASON_BELOW_MIN_UP = 29;
+  // Other services' rollouts are live, as many as the coordinator's `--live-rollouts` lets be.
+  GATE_REASON_ROLLOUT_ELSEWHERE = 30;
 }
 
 // Whether a service counts a host.
@@ -548,13 +568,13 @@ message RetireResponse {
 // What a service's hosts should run, and how fast they get there.
 message DesiredState {
   string version = 1;
-  // Per role, 0 holds the role: none of its hosts is ordered. Any other number lets the role
-  // update one host at a time, because one update is live in the farm at a time. A role not named
+  // Per role, how many hosts of the role may hold an update slot of the service at once, within
+  // a stage of its update plan; 0 holds the role: none of its hosts is ordered. A role not named
   // takes its default (1; 2 for `daemon` and `mac-daemon`).
   map<string, uint32> max_updating = 2;
-  // The fewest hosts of each role that must stay up while others update. A role not named needs
-  // none. A service's definition may require roles here (`kbf` requires `storage` and
-  // `frontend`).
+  // The fewest live hosts of each role that must stay up while others update: a host is not
+  // ordered when that would leave fewer. A role not named needs none. A service's definition may
+  // require roles here (`kbf` requires `storage` and `frontend`).
   map<string, uint32> min_up = 3;
   // The digest of the one package CI registered for this version (64 lower-case hex characters),
   // which every order of this version names, whatever the host's platform. Absent when the
@@ -824,6 +844,8 @@ message ServiceStatus {
   uint32 slots_held = 6;
   // What the coordinator and its operators marked on the service.
   ServiceMarks marks = 7;
+  // The update plan for the desired version; absent when none was ever set.
+  RolloutPlan plan = 8;
 }
 
 // One host as one service sees it, with the host's own report of the service.

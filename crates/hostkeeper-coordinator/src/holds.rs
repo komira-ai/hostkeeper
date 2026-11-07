@@ -94,8 +94,9 @@ pub fn holding<'a>(
 }
 
 /// What the fleet keeps of the ops state for its decisions: the holds, the hosts each standing
-/// force orders ([`crate::force`]), the assignments ([`crate::assignment`]), the labels and the
-/// exclusions.
+/// force orders ([`crate::force`]), the assignments ([`crate::assignment`]), the labels, the
+/// exclusions, where each update plan stands ([`crate::rollouts`]), and the services halted or
+/// with versions marked bad, which a plan reads of the other services.
 #[must_use]
 pub fn marks_of(state: &OpsState) -> Marks {
     let forced = state
@@ -124,6 +125,35 @@ pub fn marks_of(state: &OpsState) -> Marks {
             .excluded
             .iter()
             .map(|e| (e.service.clone(), e.node_id.clone()))
+            .collect(),
+        rollouts: state.rollouts.clone(),
+        halted: state
+            .services
+            .iter()
+            .filter(|(_, marks)| marks.halt.is_some())
+            .map(|(name, _)| name.clone())
+            .collect(),
+        bad: state
+            .services
+            .iter()
+            .filter(|(_, marks)| !marks.bad.is_empty())
+            .map(|(name, marks)| (name.clone(), marks.bad.clone()))
+            .collect(),
+        acked: state
+            .services
+            .iter()
+            .map(|(name, marks)| {
+                let halts = marks
+                    .halt_acked
+                    .iter()
+                    .map(|ack| (ack.node_id.clone(), ack.target.as_str().to_owned()));
+                let failures = marks
+                    .failure_acked
+                    .iter()
+                    .map(|ack| (ack.node_id.clone(), ack.report.target.as_str().to_owned()));
+                (name.clone(), halts.chain(failures).collect::<BTreeSet<_>>())
+            })
+            .filter(|(_, acked)| !acked.is_empty())
             .collect(),
     }
 }

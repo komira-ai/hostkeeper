@@ -302,17 +302,6 @@ impl Coordinator {
         }
     }
 
-    /// The same coordinator ordering nothing for `quiet` after its start instead of
-    /// [`QUIET_START`] (`--quiet-secs`, whose floor [`crate::config::build`] checks).
-    #[must_use]
-    pub fn with_quiet(mut self, quiet: Duration) -> Self {
-        self.fleet
-            .get_mut()
-            .unwrap_or_else(PoisonError::into_inner)
-            .set_quiet(quiet);
-        self
-    }
-
     /// The same coordinator over `services` instead of none.
     #[must_use]
     pub fn with_services(mut self, services: Services) -> Self {
@@ -926,7 +915,9 @@ impl Coordinator {
                 let slots_held = hosts.iter().filter(|h| h.host.holds_slot).count();
                 let members = members(def, fleet, &ops, desired.as_ref(), now);
                 let convergence = convergence_of(def, desired.as_ref(), fleet, &ops, now);
+                let plan = self.plan_in(def, desired.as_ref(), &all, &ops, fleet, now);
                 let status = ServiceStatus {
+                    plan,
                     desired,
                     roles,
                     hosts,

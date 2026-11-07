@@ -28,19 +28,26 @@
 //! 5. the host did not decline an update to this version within its wait
 //!    ([`crate::defer`]; a deferral is not a failure, holds no slot, and a new desired
 //!    version lifts it);
-//! 6. the service's canary gate, if it has one, is open to the host ([`crate::canary`]; a
-//!    host that is deferring is not chosen as a canary);
-//! 7. no update is live anywhere: no host, of any role, holds an update slot for any service.
-//!    One update is live at a time across every service and role ([`live`]). A host holds a
-//!    slot while updating, while its promotion is pending, after a failed update until it
-//!    heartbeats healthy, from the order the coordinator gave it (an update, an install or an
-//!    uninstall) until the host reports it or the order ages out, [`crate::fleet::ORDER_AGE`],
-//!    and, at its service's desired version, until it has beaten healthy that service's
-//!    `bake_beats` times, [`crate::bake`]. The asking host's own slot for the asked service is
-//!    not counted, so a host asking again under its own order is told the same again. A host
-//!    the service no longer counts (excluded, out of its selector, not announcing it) still
-//!    holds its slot until its beats or its order's age free it ([`Fleet::occupants_of`]).
-//!
+//! 6. the service's update plan lets the host go now ([`crate::stages::gate`]): its rollout is
+//!    live, or fewer other services' rollouts are than the coordinator's `--live-rollouts`
+//!    (`rollout_elsewhere`); the plan is not paused (`paused`); and the host holds a free place
+//!    of the plan's current stage (the hosts that started count first; the free places go to
+//!    the eligible hosts that have not started, by node id, passing over a host that is
+//!    deferring), else it waits for a later stage (`advance_wait`, `stage_failed`, `baking`,
+//!    `stage_wait`). A stage is entered once every host of the stage before it is up at the
+//!    desired version and has baked that service's `bake_beats` times ([`crate::bake`]), by the
+//!    coordinator itself or, for a manual stage, by an operator ([`crate::rollouts`]);
+//! 7. inside the stage, as many hosts of the host's role hold an update slot of the service as
+//!    the desired state's `max_updating` of the role lets (`no_slot`), and ordering the host would
+//!    not leave fewer live hosts of its role up than its `min_up` (`below_min_up`). A host holds
+//!    a slot while updating, while its promotion is pending, after a failed update until it
+//!    heartbeats healthy, and from the order the coordinator gave it (an update, an install or an
+//!    uninstall) until the host reports it or the order ages out, [`crate::fleet::ORDER_AGE`].
+//!    The asking host's own order is never counted against it, so a host asking again under its
+//!    own order is told the same again. A host the service no longer counts (excluded, out of its
+//!    selector, not announcing it) still holds its slot until its beats or its order's age free
+//!    it ([`Fleet::occupants_of`]).
+
 //! A version marked bad ([`crate::reconcile`]) is ordered to nobody, whatever the rules above
 //! say, and is held at [`Gate::Bad`] after the quiet start; so is a desired version below the
 //! minimum version that applies to the host ([`Gate::BelowMinVersion`]: its own, else its
@@ -49,14 +56,14 @@
 //! host.
 //!
 //! An uninstall is ordered to a host that lists the service, is not assigned it, and has an
-//! uninstall intent for it, under the halt, the hold, the quiet start and the one live update
-//! (rules 2 and 7); one that failed is left for the operator, and one the host declined waits
+//! uninstall intent for it, under the halt, the hold, the quiet start, the one update at a time
+//! on the host (rule 2) and the other services' live rollouts (`rollout_elsewhere`); one that failed is left for the operator, and one the host declined waits
 //! out its backoff, keyed by the version the host runs.
 //!
 //! A pair an operator holds ([`crate::holds`]: the host, its role at the time of the decision,
 //! or the whole fleet) is told nothing, after a halt and the membership check and before every
 //! numbered rule above ([`Gate::Held`]): no update, install or uninstall, however far behind it
-//! is. It takes no slot of rule 7 and never bakes; an update it was running, or an order it was
+//! is. It is no eligible host of the plan, takes no slot of rule 7 and never bakes; an update it was running, or an order it was
 //! given, when the hold was set still counts until it ends. The pairs a standing force orders
 //! ([`crate::force`]) take no slot either.
 //!
@@ -68,14 +75,14 @@
 //! The JSON reply carries the desired version of an update and nothing else; an install and an
 //! uninstall go only as typed orders ([`crate::orders`]). [`decide_why`] is the same decision
 //! that also says why it holds. A [`Gate`] is a rule that is closed at this moment and opens by
-//! itself or when something changes (the quiet start, the one live update, the canary, a bake, a
+//! itself or when something changes (the quiet start, the update plan, a slot, a bake, a
 //! version marked bad, a halt); a [`Skip`] is a question that does not apply (no desired state,
 //! not a member of the service, a host at the desired version, one that failed it, one that
 //! declined it, an install the host's agent cannot take or that has no package digest, a release
 //! index that lists no package for the host's platform). [`Why`]
 //! is either, spelled in snake case for the status. [`decide_in`] drops the reason.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use hostkeeper_wire::HostId;
@@ -84,13 +91,13 @@ use hostkeeper_wire::wire::{Health, Outcome, Reply};
 use serde::Serialize;
 
 use crate::agent_service::runs_itself;
-use crate::canary;
 use crate::desired::Desired;
 use crate::fleet::Fleet;
 use crate::membership::HEARTBEAT_V2;
 use crate::orders::INSTALL_FEATURE;
 use crate::registry::Digest;
 use crate::services::{ServiceDef, Services};
+use crate::stages;
 
 /// What to tell the host `id` about `service` at `now`, given every service's `desired`
 /// state, as the JSON reply says it: an update, or nothing (an install and an uninstall go only
@@ -133,15 +140,31 @@ pub enum Gate {
     Updating,
     /// The host is updating another service or has an order outstanding for one.
     BusyElsewhere,
-    /// A host, of any role, holds an update slot for some service (one live update at a time).
+    /// As many hosts of the host's role hold an update slot of the service as the desired
+    /// state's `max_updating` of the role lets ([`crate::stages`]).
     NoSlot,
     /// The coordinator started less than its quiet start (`--quiet-secs`) ago.
     Quiet,
-    /// The service's canary gate is closed and the host is not one of the canaries.
+    /// No longer given: a canary is the first stage of the update plan ([`crate::canary`]).
     CanaryWait,
-    /// No host holds an update slot, but a host, of any role, runs its service's desired
-    /// version and has not yet baked.
+    /// The hosts of the plan's current stage run the desired version, and some have not yet
+    /// baked; the host waits for a later stage.
     Baking,
+    /// An operator paused the service's update plan (`Rollouts.Pause`).
+    Paused,
+    /// The host waits for a stage the plan enters only by an operator's `Rollouts.Advance`.
+    AdvanceWait,
+    /// A host of the plan's current stage failed the desired version and is still eligible; the
+    /// host waits for a later stage.
+    StageFailed,
+    /// The host waits for a later stage while the current one fills and updates.
+    StageWait,
+    /// Ordering the host would leave fewer live hosts of its role up than the desired state's
+    /// `min_up` of the role.
+    BelowMinUp,
+    /// The service's rollout is not live and other services' are, as many as the coordinator's
+    /// `--live-rollouts` lets be.
+    RolloutElsewhere,
 }
 
 /// A question that does not apply to this host and service: there is nothing to decide. The
@@ -340,7 +363,6 @@ fn order_or_hold(
                     .as_ref()
                     .is_some_and(|r| r.outcome == Outcome::Succeeded && r.target == desired.version)
         });
-    let live = live(services, all, fleet, service, id, now);
     let rules = [
         (fleet.is_held(service, id), Decision::Gate(Gate::Held)),
         (fleet.is_quiet(now), Decision::Gate(Gate::Quiet)),
@@ -376,16 +398,11 @@ fn order_or_hold(
                 .is_some_and(|until| now < until),
             Decision::Skip(Skip::Deferred),
         ),
-        (
-            canary::closed_to(def, desired, fleet, id, host, now),
-            Decision::Gate(Gate::CanaryWait),
-        ),
-        (live.slots > 0, Decision::Gate(Gate::NoSlot)),
-        (live.slots + live.baking > 0, Decision::Gate(Gate::Baking)),
     ];
     rules
         .into_iter()
         .find_map(|(holds, why)| holds.then_some(why))
+        .or_else(|| stages::gate(services, all, def, desired, fleet, id, now).map(Decision::Gate))
         .or(order)
         .unwrap_or(Decision::Skip(Skip::NoDigest))
 }
@@ -416,7 +433,6 @@ fn uninstall(
                 .as_ref()
                 .is_some_and(|reported| reported.as_str() == order_id)
     });
-    let live = live(services, all, fleet, service, id, now);
     let rules = [
         (fleet.is_held(service, id), Decision::Gate(Gate::Held)),
         (fleet.is_quiet(now), Decision::Gate(Gate::Quiet)),
@@ -436,79 +452,13 @@ fn uninstall(
                 .is_some_and(|until| now < until),
             Decision::Skip(Skip::Deferred),
         ),
-        (live.slots > 0, Decision::Gate(Gate::NoSlot)),
-        (live.slots + live.baking > 0, Decision::Gate(Gate::Baking)),
     ];
     rules
         .into_iter()
         .find_map(|(holds, why)| holds.then_some(why))
+        .or_else(|| stages::uninstall_gate(services, all, service, fleet, now).map(Decision::Gate))
         .unwrap_or(Decision::Uninstall {
             order_id,
             running: host.beat.version.clone(),
         })
-}
-
-/// The updates live across the fleet, as rule 7 counts them: each host once, however many
-/// services it is busy with.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Live {
-    /// Hosts that hold an update slot for some service ([`Fleet::holds_slot`]).
-    slots: usize,
-    /// Hosts that hold none and are still baking some service's desired version
-    /// ([`Fleet::is_baking`]).
-    baking: usize,
-}
-
-/// The updates live across every service the coordinator manages and every role, leaving out
-/// the asking host `id`'s own slot for the asked `service` and the pairs a standing force orders
-/// ([`crate::force`]: a force takes no slot). A pair an operator holds counts only while it runs
-/// an update or has an order outstanding ([`crate::holds`]). A service with no desired
-/// state has nothing to bake, so only its slots count.
-fn live(
-    services: &Services,
-    all: &BTreeMap<String, Desired>,
-    fleet: &Fleet,
-    service: &str,
-    id: &HostId,
-    now: Duration,
-) -> Live {
-    let mut holding = BTreeSet::new();
-    let mut baking = BTreeSet::new();
-    for def in services.defs() {
-        let name = def.name.as_str();
-        let want = all.get(name);
-        // A host told to install a service it does not list holds its slot by its order alone.
-        holding.extend(
-            fleet
-                .ordered_unseen(name, now)
-                .filter(|o| !(name == service && *o == id))
-                .filter(|o| !fleet.is_forced(name, o)),
-        );
-        for (o, h) in fleet
-            .occupants_of(name)
-            .filter(|(o, _)| !(name == service && *o == id))
-            .filter(|(o, _)| !fleet.is_forced(name, o))
-        {
-            // A held pair takes no slot and never bakes: only an update it was already running,
-            // or an order it was given, when the hold was set counts, until it ends.
-            let held = fleet.is_held(name, o);
-            let slot = if held {
-                h.beat.updating.is_some() || fleet.is_ordered(name, o, now)
-            } else {
-                fleet.holds_slot(name, o, h, now)
-            };
-            if slot {
-                holding.insert(o);
-            } else if !held
-                && want
-                    .is_some_and(|w| fleet.is_baking(name, o, h, &w.version, def.bake_beats, now))
-            {
-                baking.insert(o);
-            }
-        }
-    }
-    Live {
-        slots: holding.len(),
-        baking: baking.difference(&holding).count(),
-    }
 }

@@ -349,7 +349,8 @@ fn apply(
     Ok(())
 }
 
-/// Plans and makes the changes for `def` at `now`, after a heartbeat. A change that fails is
+/// Plans and makes the changes for `def` at `now`, after a heartbeat, then enters the stages of
+/// its update plan it may enter by itself ([`crate::rollouts::advance`]). A change that fails is
 /// logged and the rest are left for the next beat: the heartbeat is answered either way.
 /// A service with no desired state has nothing to plan.
 pub fn reconcile(
@@ -368,5 +369,9 @@ pub fn reconcile(
             tracing::error!(service = %def.name, %why, "a rollback change was not made");
             return;
         }
+    }
+    // The plan reads the desired state the changes above left: a rollback starts it over.
+    if let Some(want) = store.get(&def.name) {
+        crate::rollouts::advance(def, &want, ops, fleet, now);
     }
 }
