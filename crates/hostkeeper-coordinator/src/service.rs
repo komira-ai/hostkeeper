@@ -724,7 +724,7 @@ impl Coordinator {
         let acks = verdict_file::acknowledge(&self.verdicts, &fleet, &who.host_id, &heard, &names);
         // The operator's orders go first, past the gate, to a transport that carries them.
         if orders
-            && !fleet.store_lost()
+            && !fleet.store_lost
             && let Some(order) = self
                 .ops
                 .read(|state| crate::orders::next(&mut fleet, state, &who.host_id, &names))

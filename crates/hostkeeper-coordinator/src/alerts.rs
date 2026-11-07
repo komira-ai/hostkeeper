@@ -31,7 +31,7 @@
 //!   `--alert-silent-host-secs` old;
 //! - `cert_near_expiry`: the certificate the coordinator serves its hosts (with an enrollment
 //!   store), when it expires within `--alert-cert-window-secs`, or has expired;
-//! - `store_unreachable`: the store's link to its database is lost ([`Fleet::store_lost`]); it
+//! - `store_unreachable`: the store's link to its database is lost (`Fleet::store_lost`); it
 //!   stands until the link is back. While it stands, an enrollment store that cannot be read
 //!   gives no facts rather than refusing the list, so the alert is seen.
 
@@ -487,7 +487,7 @@ fn silent_hosts(fleet: &Fleet, now: Duration, silent_after: Duration) -> Vec<Ale
 
 /// `store_unreachable`: the store's link to its database, while it is lost.
 fn store_unreachable(fleet: &Fleet) -> Option<Alert> {
-    fleet.store_lost().then(|| Alert {
+    fleet.store_lost.then(|| Alert {
         subject: Subject::of(Kind::StoreUnreachable),
         message: "the session with the database is lost: nothing is ordered, a change that lowers protection is refused, and one that raises it stands in memory until the session is back".to_owned(),
     })
@@ -655,7 +655,7 @@ impl Coordinator {
             let enrollment = match self.enrollment_facts(&heard) {
                 Ok(facts) => facts,
                 // The alert that says the database is lost is not hidden by it.
-                Err(why) if self.lock_fleet().store_lost() => {
+                Err(why) if self.lock_fleet().store_lost => {
                     tracing::warn!(%why, "the enrollment store is not read while the database is lost");
                     EnrollmentFacts::default()
                 }

@@ -2,7 +2,7 @@
 //! section 5), kept apart so that `service.rs` stays short.
 //!
 //! While the backend's link is lost the coordinator orders nothing, as in its quiet start (the
-//! fleet's marks say so, [`crate::fleet::Marks::store_lost`]), refuses every storage-first change
+//! fleet says so, `Fleet::store_lost`), refuses every storage-first change
 //! `store_failed`, keeps memory-first changes pending, and still answers heartbeats and keeps the
 //! fleet view. Each heartbeat asks the backend to make the link again, on its own thread and never
 //! under the fleet's lock ([`crate::store::Backend::revive`]). Once it is back, a commit whose
@@ -21,7 +21,7 @@ impl Coordinator {
     /// Refreshes the operator's marks the decisions of `fleet` read, and whether the store's link
     /// is lost, which a refresh of the marks alone keeps.
     pub(crate) fn refresh_marks(&self, fleet: &mut Fleet) {
-        fleet.set_store_lost(self.ops.health() != Health::Up);
+        fleet.store_lost = self.ops.health() != Health::Up;
         fleet.set_marks(self.ops.read(marks_of));
     }
 

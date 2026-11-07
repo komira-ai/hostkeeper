@@ -184,9 +184,6 @@ pub struct Marks {
     /// Per service, the failures an operator acknowledged, each a node id and the version it
     /// failed, by its text: a cleared halt's, and those a version set by hand or forced acknowledged.
     pub acked: BTreeMap<String, BTreeSet<(String, String)>>,
-    /// Whether the store's link to the database is lost (`docs/design/coordinator-storage.md`,
-    /// section 5): the coordinator orders nothing, as in its quiet start, until it is back.
-    pub store_lost: bool,
 }
 
 /// Every host the coordinator has heard from since it started.
@@ -230,6 +227,9 @@ pub struct Fleet {
     /// install of a service its heartbeat does not list) may hold that try in its step record
     /// all the same. Kept in memory only, never lowered.
     sent: BTreeMap<(HostId, String), u64>,
+    /// Whether the store's link to its database is lost (`docs/design/coordinator-storage.md`,
+    /// section 5), read from the backend at each take of the fleet's lock: nothing is ordered.
+    pub(crate) store_lost: bool,
 }
 
 impl Fleet {
@@ -254,6 +254,7 @@ impl Fleet {
             canaries: BTreeMap::new(),
             tries: BTreeMap::new(),
             sent: BTreeMap::new(),
+            store_lost: false,
         }
     }
 
@@ -310,13 +311,7 @@ impl Fleet {
     /// [`Self::new`] after the coordinator's start), or while the store's link is lost.
     #[must_use]
     pub fn is_quiet(&self, now: Duration) -> bool {
-        self.marks.store_lost || now < self.started.saturating_add(self.quiet)
-    }
-
-    /// Whether the store's link is lost: no order goes out, an operator's included.
-    #[must_use]
-    pub fn store_lost(&self) -> bool {
-        self.marks.store_lost
+        self.store_lost || now < self.started.saturating_add(self.quiet)
     }
 
     /// The try of the next order of `service` for the host `id`: one past the highest try any
@@ -820,20 +815,9 @@ impl Fleet {
             .chain(self.outside.get(service).into_iter().flatten())
     }
 
-    /// Replaces the operator's marks the fleet decides by with `marks`. Whether the store's link
-    /// is lost is not among what is replaced: the operator's marks are refreshed from the ops
-    /// state in many places, and none of them knows the link ([`Self::set_store_lost`]).
+    /// Replaces the operator's marks the fleet decides by with `marks`.
     pub fn set_marks(&mut self, marks: Marks) {
-        self.marks = Marks {
-            store_lost: self.marks.store_lost,
-            ..marks
-        };
-    }
-
-    /// Records whether the store's link to the database is lost, which the coordinator reads
-    /// from its backend each time it takes the fleet's lock.
-    pub fn set_store_lost(&mut self, lost: bool) {
-        self.marks.store_lost = lost;
+        self.marks = marks;
     }
 
     /// What the fleet keeps of the host `id` for `service`, counted or not.
