@@ -10,10 +10,10 @@
 //! What they assert: a host assigned the fixture service is ordered to install it and does, once,
 //! when the coordinator is killed after the assignment, again while the install runs and again
 //! after it; a daemon killed and started again (its boot pass) keeps the service as it was,
-//! reports it and runs none of its steps again; a new desired version is installed over it (not
-//! yet: komira-ai/hostkeeper#109); and the uninstall the operator orders takes the file, the unit
-//! and the package off the host, after which the coordinator lists the host neither as running
-//! the service nor as uninstalling it (not yet: komira-ai/hostkeeper#110).
+//! reports it and runs none of its steps again; a new desired version is installed over it; and
+//! the uninstall the operator orders runs the package's `uninstall` hook and takes the file, the
+//! unit and the package off the host, after which the coordinator lists the host neither as
+//! running the service nor as uninstalling it.
 //!
 //! The daemon keeps its packages in `/var/lib/hostkeeper/packages`, links and enables the fixture
 //! service's unit (`hostkeeper-ci-fixture.service`) in `/etc/systemd/system`, and runs the
@@ -269,7 +269,6 @@ fn an_assigned_package_installs_once_across_restarts_and_the_boot_pass_keeps_it(
 /// Catches an update that is not ordered, refused or not installed, and one that runs a step
 /// twice.
 #[test]
-#[ignore = "an update ordered after an install is refused try_conflict: https://github.com/komira-ai/hostkeeper/issues/109"]
 fn a_new_desired_version_is_installed_over_the_installed_one() {
     let mut host = Installed::new("install_update");
     let scratch = host.bench.scratch().to_path_buf();
@@ -285,7 +284,6 @@ fn a_new_desired_version_is_installed_over_the_installed_one() {
 /// or the package on the host, and a coordinator that still lists the host as running the service
 /// or as uninstalling it.
 #[test]
-#[ignore = "the Linux launcher runs no uninstall hook: https://github.com/komira-ai/hostkeeper/issues/110"]
 fn an_uninstall_takes_the_package_its_file_and_its_unit_off_the_host() {
     let mut host = Installed::new("install_uninstall");
     let package = Path::new(PACKAGES_DIR).join(SERVICE);

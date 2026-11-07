@@ -1296,10 +1296,12 @@ dependencies = [
 name = "hostkeeper"
 version = "0.1.0"
 dependencies = [
+ "hostkeeper",
  "hostkeeper-daemon",
  "hostkeeper-launchd",
  "hostkeeper-proto",
  "hostkeeper-testkit",
+ "rustix",
 ]
 
 [[package]]
@@ -1426,6 +1428,7 @@ dependencies = [
  "hyper-util",
  "ipmi-rs",
  "libc",
+ "plist",
  "prost",
  "prost-types",
  "rcgen",

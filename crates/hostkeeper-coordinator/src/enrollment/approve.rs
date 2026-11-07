@@ -5,7 +5,9 @@
 //! the key hash against the pending request's (in constant time), then the host id against the
 //! host inventory: a request (not a renewal) that matches exactly one record is approved as that
 //! record's host id, which an empty host id defaults to, and a host id other than the record's is
-//! `record_mismatch` unless the approval replaces. A request that matches no record, or several,
+//! `record_mismatch` unless the approval replaces. Before that, a request that matches a record
+//! another pending request matches is `record_contested` ([`Enrollment::contests`]), whatever
+//! the approval names and even when it replaces: the operator rejects all but one first. A request that matches no record, or several,
 //! is approved as the host id named, which it must name. Then it calls the store's
 //! [`EnrollmentStore::approve_recorded`], which checks again under its lock: the request is
 //! pending, not a `duplicate_claim` unless the approval replaces, the host id is not held by
@@ -349,8 +351,8 @@ impl Enrollment {
     ///
     /// # Errors
     /// `invalid_request` (the request id, the key hash or the reason), `invalid_host_id`,
-    /// `invalid_role`, `invalid_service`, `unknown_request`, `key_mismatch`, `record_mismatch`,
-    /// `not_pending`, `duplicate_claim`, `host_id_taken`, `denied`, `store_failed`. Each is
+    /// `invalid_role`, `invalid_service`, `unknown_request`, `key_mismatch`, `record_contested`,
+    /// `record_mismatch`, `not_pending`, `duplicate_claim`, `host_id_taken`, `denied`, `store_failed`. Each is
     /// audited `enroll_approve_refused`, and nothing else changes.
     pub fn approve(
         &self,
@@ -374,6 +376,7 @@ impl Enrollment {
         };
         let pending = self
             .pending_for(&asked.request_id, &asked.key_sha256)
+            .and_then(|pending| self.uncontested(pending, inventory))
             .and_then(|pending| Ok((host_id_for(&asked, &pending, inventory)?, pending)));
         let (host_id, pending) =
             pending.map_err(|refusal| refused(refusal, asked.host_id.as_ref()))?;
@@ -412,6 +415,23 @@ impl Enrollment {
             .ok_or(EnrollmentRefusal::UnknownRequest)?;
         if !key_sha256.equals_in_constant_time(request_id) {
             return Err(EnrollmentRefusal::KeyMismatch);
+        }
+        Ok(pending)
+    }
+
+    /// `pending`, unless another pending request matches an inventory record it matches
+    /// (`record_contested`). A request that matches no record is never contested, and the
+    /// pending requests are read only for one that matches.
+    fn uncontested(
+        &self,
+        pending: RequestView,
+        inventory: &[InventoryRecord],
+    ) -> Result<RequestView, EnrollmentRefusal> {
+        if match_claims(&pending.claims, inventory) == InventoryMatch::Unmatched {
+            return Ok(pending);
+        }
+        if self.contests(inventory)?.contains_key(&pending.request_id) {
+            return Err(EnrollmentRefusal::RecordContested);
         }
         Ok(pending)
     }

@@ -159,8 +159,7 @@ jobs:
   # The first boot of a host with the real programs: the coordinator and the daemon started by
   # the tests as child processes on loopback (first_boot: enrollment, approval, the host
   # certificate, heartbeats, restarts of each; install_uninstall: an assigned package installed
-  # from a release channel the test serves, kept across restarts, updated and uninstalled, the
-  # last two ignored until komira-ai/hostkeeper#109 and komira-ai/hostkeeper#110 are fixed).
+  # from a release channel the test serves, kept across restarts, updated and uninstalled).
   # The daemon fixes its pki directory, its self-update units and its package check's CA bundle
   # and verifier on the host, with no flag. These tests claim the paths they make there (each refused if the host already
   # has it) and remove them when they end, and write the CA bundle back as it was, so they run in
