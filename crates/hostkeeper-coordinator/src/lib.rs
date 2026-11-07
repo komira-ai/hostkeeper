@@ -79,7 +79,10 @@
 //!   token ids in the [`jti_file`] beside them.
 //! - [`backup`]: `backup` and `restore`, a copy of the state files and the enrollment store
 //!   taken under the same lock, with the SHA-256 of each file in its manifest, and putting one
-//!   back into targets that hold no state.
+//!   back into targets that hold no state;
+//! - [`transfer`]: `import` and `export`, the state moved from the files into the database of
+//!   `--database-dsn-file` in one transaction that reads it back and compares it, and from the
+//!   database back into files that hold no state.
 //!
 //! The wire types of the heartbeat and the reply are `hostkeeper_wire::wire`.
 
@@ -140,6 +143,7 @@ pub mod stamp;
 pub mod status;
 pub(crate) mod store;
 pub mod tokens;
+pub mod transfer;
 pub mod ui;
 pub mod verdict_file;
 pub mod verdicts;

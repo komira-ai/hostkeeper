@@ -705,15 +705,25 @@ fn page(active: &Path, query: &Query<'_>) -> Result<Vec<Logged>, OpsError> {
 }
 
 /// Visits every line of the audit file at `active` and its sealed segments that parses, oldest
-/// first, a chunk at a time.
+/// first, a chunk at a time: how many lines did not parse.
 ///
 /// # Errors
 /// [`OpsError::Io`]: the directory cannot be listed, or a file of it cannot be read.
-fn each(active: &Path, visit: &mut dyn FnMut(AuditLine)) -> Result<(), OpsError> {
+fn each(active: &Path, visit: &mut dyn FnMut(AuditLine)) -> Result<usize, OpsError> {
+    let mut skipped = 0;
     for file in files_of(active)? {
-        each_in(&file, visit)?;
+        skipped += each_in(&file, visit)?;
     }
-    Ok(())
+    Ok(skipped)
+}
+
+/// The bytes of an audit file that holds `lines`, in their order, each written as an append
+/// writes it.
+pub(crate) fn history_text(lines: &[AuditLine]) -> Vec<u8> {
+    lines
+        .iter()
+        .flat_map(|line| line.text_after(false).into_bytes())
+        .collect()
 }
 
 /// The audit file of one ops file, with its sealed segments.
@@ -805,6 +815,14 @@ impl AuditLog {
     /// # Errors
     /// [`OpsError::Io`], as [`each`].
     pub(crate) fn each(&self, visit: &mut dyn FnMut(AuditLine)) -> Result<(), OpsError> {
+        self.each_counted(visit).map(|_skipped| ())
+    }
+
+    /// [`Self::each`]: how many lines of the files did not parse, and were not visited.
+    ///
+    /// # Errors
+    /// [`OpsError::Io`], as [`each`].
+    pub(crate) fn each_counted(&self, visit: &mut dyn FnMut(AuditLine)) -> Result<usize, OpsError> {
         let _appends = self.lock();
         each(&self.path, visit)
     }

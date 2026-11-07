@@ -1,7 +1,8 @@
-//! The verbs of `hostkeeper-coordinator`: `serve`, `backup` and `restore`, as the binary parses
-//! them and the exit codes of the last two, driven in-process through `config::main`. What a
-//! backup and a restore copy, check and refuse is in the crate's `backup_tests` and
-//! `backup_refusal_tests`.
+//! The verbs of `hostkeeper-coordinator`: `serve`, `backup`, `restore`, `import` and `export`, as
+//! the binary parses them and the exit codes of `backup` and `restore`, driven in-process through
+//! `config::main`. What a backup and a restore copy, check and refuse is in the crate's
+//! `backup_tests` and `backup_refusal_tests`; what an import and an export move and refuse, in
+//! its `transfer_tests` and the integration test `transfer.rs`.
 
 mod support;
 
@@ -47,10 +48,10 @@ const SERVE: [&str; 17] = [
 ];
 
 /// Catches: a verb missing or one too many, or a `serve` that can start without the services
-/// it manages: the verbs are `serve`, `backup` and `restore`, any other is refused, and
-/// `serve`'s `--rollout-file` is required.
+/// it manages: the verbs are `serve`, `backup`, `restore`, `import` and `export`, any other is
+/// refused, and `serve`'s `--rollout-file` is required. An import writes only with `--apply`.
 #[test]
-fn the_verbs_are_serve_backup_and_restore() {
+fn the_verbs_are_serve_backup_restore_import_and_export() {
     assert!(matches!(
         Cli::try_parse_from(args(&SERVE)).expect("flags").command,
         Command::Serve(_)
@@ -82,6 +83,40 @@ fn the_verbs_are_serve_backup_and_restore() {
         Some(Path::new("enr"))
     );
     assert!(flags.into_empty);
+    let import = args(&[
+        "import",
+        "--state-file",
+        "s.json",
+        "--database-dsn-file",
+        "db.dsn",
+        "--legacy-service",
+        "kbf",
+    ]);
+    let Command::Import(flags) = Cli::try_parse_from(import).expect("flags").command else {
+        panic!("import")
+    };
+    assert_eq!(flags.paths.ops_file(), Path::new("s.json.ops"));
+    assert_eq!(flags.database_dsn_file, Path::new("db.dsn"));
+    assert_eq!(flags.legacy_service.as_deref(), Some("kbf"));
+    assert!(!flags.apply, "an import without --apply writes nothing");
+    let export = args(&[
+        "export",
+        "--database-dsn-file",
+        "db.dsn",
+        "--state-file",
+        "s.json",
+        "--enrollment-dir",
+        "enr",
+        "--into-empty",
+    ]);
+    let Command::Export(flags) = Cli::try_parse_from(export).expect("flags").command else {
+        panic!("export")
+    };
+    assert_eq!(
+        flags.paths.enrollment_dir.as_deref(),
+        Some(Path::new("enr"))
+    );
+    assert!(flags.into_empty);
     assert_eq!(
         Cli::try_parse_from(args(&["run"]))
             .expect_err("no such verb")
@@ -94,9 +129,10 @@ fn the_verbs_are_serve_backup_and_restore() {
     assert!(missing.to_string().contains("--rollout-file"), "{missing}");
 }
 
-/// Catches: a restore that runs without saying it writes only into empty targets, or a backup
-/// without its place: `restore` without `--into-empty` and `backup` without `--out` are usage
-/// errors, exit 2, and the help of both names the flags `serve` names the state by.
+/// Catches: a restore or an export that runs without saying it writes only into empty targets,
+/// or a backup without its place: `restore` and `export` without `--into-empty`, `backup`
+/// without `--out` and `import` without `--database-dsn-file` are usage errors, exit 2, and the
+/// help of each names the flags `serve` names the state by.
 #[test]
 fn restore_requires_into_empty_and_backup_requires_out() {
     let refused = Cli::try_parse_from(args(&["restore", "--from", "s", "--state-file", "x"]))
@@ -111,7 +147,21 @@ fn restore_requires_into_empty_and_backup_requires_out() {
         main(args(&["backup", "--state-file", "x"])),
         ExitCode::from(2)
     );
-    for verb in ["backup", "restore"] {
+    let refused = Cli::try_parse_from(args(&[
+        "export",
+        "--database-dsn-file",
+        "d",
+        "--state-file",
+        "x",
+    ]))
+    .expect_err("--into-empty is required");
+    assert_eq!(refused.kind(), ErrorKind::MissingRequiredArgument);
+    assert!(refused.to_string().contains("--into-empty"), "{refused}");
+    assert_eq!(
+        main(args(&["import", "--state-file", "x"])),
+        ExitCode::from(2)
+    );
+    for verb in ["backup", "restore", "import", "export"] {
         let help = Cli::try_parse_from(args(&[verb, "--help"])).expect_err("help");
         assert_eq!(help.kind(), ErrorKind::DisplayHelp);
         for flag in ["--state-file", "--ops-file", "--enrollment-dir"] {

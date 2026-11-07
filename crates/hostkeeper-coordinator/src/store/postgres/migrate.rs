@@ -278,6 +278,53 @@ fn applied(session: &mut Session) -> Result<Vec<Applied>, postgres::Error> {
         .collect())
 }
 
+/// Refuses the migrations `rows` a database holds when one of them is newer than `set` and says
+/// `refuse`.
+fn newer(rows: &[Applied], set: &[Migration]) -> Result<(), ApplyError> {
+    let newest = set.last().map_or(0, |m| m.version);
+    match rows
+        .iter()
+        .find(|row| row.version > newest && row.older != OlderReleases::MayRun.as_str())
+    {
+        Some(row) => Err(ApplyError::Newer {
+            version: row.version,
+            name: row.name.clone(),
+        }),
+        None => Ok(()),
+    }
+}
+
+/// Refuses the database of `session` when it holds a migration newer than `set` that says
+/// `refuse`, as [`apply`] does, reading and making nothing: a database no migration ran on holds
+/// none.
+///
+/// # Errors
+/// [`ApplyError`]: a newer schema, or the bookkeeping could not be read.
+pub(crate) fn refuse_newer(session: &mut Session, set: &[Migration]) -> Result<(), ApplyError> {
+    let database = |e: postgres::Error| ApplyError::Database(describe(&e));
+    let made: bool = session
+        .query_one("SELECT to_regclass('schema_version') IS NOT NULL", &[])
+        .map_err(database)?
+        .get(0);
+    if !made {
+        return Ok(());
+    }
+    let rows: Vec<Applied> = session
+        .query(
+            "SELECT version, name, older_releases FROM schema_version ORDER BY version",
+            &[],
+        )
+        .map_err(database)?
+        .iter()
+        .map(|row| Applied {
+            version: row.get(0),
+            name: row.get(1),
+            older: row.get(2),
+        })
+        .collect();
+    newer(&rows, set)
+}
+
 /// Brings the database of `session`, which holds the lock, up to `set`: refuses a database that
 /// holds a migration `set` does not know and that says `refuse`, then runs each migration it
 /// lacks, in order, each in its own transaction with its `schema_version` row. Answers the
@@ -289,16 +336,7 @@ fn applied(session: &mut Session) -> Result<Vec<Applied>, postgres::Error> {
 pub(crate) fn apply(session: &mut Session, set: &[Migration]) -> Result<Vec<i32>, ApplyError> {
     let database = |e: postgres::Error| ApplyError::Database(describe(&e));
     let rows = applied(session).map_err(database)?;
-    let newest = set.last().map_or(0, |m| m.version);
-    if let Some(row) = rows
-        .iter()
-        .find(|row| row.version > newest && row.older != OlderReleases::MayRun.as_str())
-    {
-        return Err(ApplyError::Newer {
-            version: row.version,
-            name: row.name.clone(),
-        });
-    }
+    newer(&rows, set)?;
     let mut ran = Vec::new();
     for migration in set {
         if rows.iter().any(|row| row.version == migration.version) {

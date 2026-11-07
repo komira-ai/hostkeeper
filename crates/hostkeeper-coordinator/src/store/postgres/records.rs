@@ -16,12 +16,15 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use hostkeeper_enrollment::enroll::records::{Record, RecordKey, Records, RecordsLock, pb};
-use hostkeeper_enrollment::enroll::{MacNonceHash, StoreError};
+use hostkeeper_enrollment::enroll::records::{
+    Record, RecordKey, Records, RecordsLock, Snapshot, pb,
+};
+use hostkeeper_enrollment::enroll::{FIRST_SERIAL, MacNonceHash, StoreError};
 use hostkeeper_enrollment::names::{HostId, KeyHash};
 use postgres::Row;
 
 use super::rows::{Stmt, Val};
+use super::session::Session;
 use super::writer::WriteFail;
 use super::{Postgres, run_all};
 
@@ -35,6 +38,15 @@ const REQUEST_COLUMNS: &str = "request_id, state, expired_unix, expired_after_se
 /// The columns of `enrollment_hosts`.
 const HOST_COLUMNS: &str = "host_id, key_hash, machine_id, role, services, duplicate, first_heartbeat_unix, \
     first_serving_unix";
+
+/// The columns of `enrollment_issued`.
+const ISSUED_COLUMNS: &str = "request_id, round, serial, host_id, not_after, certificate_der";
+
+/// The columns of `enrollment_deny`.
+const DENY_COLUMNS: &str = "host_id, state, cleared_by";
+
+/// The columns of `mac_nonces`.
+const NONCE_COLUMNS: &str = "nonce_sha256, serial, issued_unix, consumed_by, request_id";
 
 /// The value every record kept here carries in its `schema`, which only a file needs.
 const SCHEMA: u32 = 1;
@@ -280,6 +292,95 @@ fn deny_of(row: &Row) -> pb::Deny {
     }
 }
 
+/// The issued certificate of a row of `enrollment_issued`, its columns in [`ISSUED_COLUMNS`]'
+/// order.
+fn issued_of(row: &Row) -> pb::Issued {
+    pb::Issued {
+        schema: SCHEMA,
+        request_id: row.get(0),
+        round: u32::try_from(row.get::<_, i64>(1)).unwrap_or_default(),
+        serial: unsigned(row.get(2)),
+        host_id: row.get(3),
+        not_after: unsigned(row.get(4)),
+        certificate_der: row.get(5),
+    }
+}
+
+/// The Mac nonce of a row of `mac_nonces`, its columns in [`NONCE_COLUMNS`]' order.
+fn nonce_of(row: &Row) -> pb::MacNonce {
+    pb::MacNonce {
+        schema: SCHEMA,
+        nonce_sha256: row.get(0),
+        serial: row.get(1),
+        issued_unix: unsigned(row.get(2)),
+        consumed_by: row.get::<_, Option<Vec<u8>>>(3).unwrap_or_default(),
+        request_id: row.get::<_, Option<Vec<u8>>>(4).unwrap_or_default(),
+    }
+}
+
+/// Every record the tables of `session` hold, each list in the order of its key, and the next
+/// serial when one was taken: what an import reads back and an export writes
+/// (`docs/design/coordinator-storage.md`, section 11). A counter still at the first serial is
+/// one no serial was taken from.
+///
+/// # Errors
+/// The client's error.
+pub(super) fn read_all(session: &mut Session) -> Result<Snapshot, postgres::Error> {
+    let mut all = |columns: &str, table: &str, key: &str| {
+        session.query(
+            &format!("SELECT {columns} FROM {table} ORDER BY {key}"),
+            &[],
+        )
+    };
+    let requests = all(REQUEST_COLUMNS, "enrollment_requests", "request_id")?;
+    let issued = all(ISSUED_COLUMNS, "enrollment_issued", "request_id")?;
+    // A host id's order is its bytes', as the files list them, whatever the database's collation.
+    let hosts = all(HOST_COLUMNS, "enrollment_hosts", "host_id COLLATE \"C\"")?;
+    let deny = all(DENY_COLUMNS, "enrollment_deny", "host_id COLLATE \"C\"")?;
+    let nonces = all(NONCE_COLUMNS, "mac_nonces", "nonce_sha256")?;
+    let next: i64 = session
+        .query_one("SELECT next FROM enrollment_serial", &[])?
+        .get(0);
+    Ok(Snapshot {
+        requests: requests.iter().map(request_of).collect(),
+        issued: issued.iter().map(issued_of).collect(),
+        hosts: hosts.iter().map(host_of).collect(),
+        deny: deny.iter().map(deny_of).collect(),
+        mac_nonces: nonces.iter().map(nonce_of).collect(),
+        serial: Some(unsigned(next)).filter(|next| *next != FIRST_SERIAL),
+    })
+}
+
+/// The statements that write every record of `snapshot` into tables that hold none, and set the
+/// serial counter to its next serial when one was taken.
+///
+/// # Errors
+/// [`StoreError`]: a record's key does not parse, or a counter is above the largest the database
+/// keeps.
+pub(super) fn writes(snapshot: &Snapshot) -> Result<Vec<Stmt>, StoreError> {
+    let records = snapshot
+        .requests
+        .iter()
+        .cloned()
+        .map(Record::Request)
+        .chain(snapshot.issued.iter().cloned().map(Record::Issued))
+        .chain(snapshot.hosts.iter().cloned().map(Record::Host))
+        .chain(snapshot.deny.iter().cloned().map(Record::Deny))
+        .chain(snapshot.mac_nonces.iter().cloned().map(Record::MacNonce));
+    let mut out = Vec::new();
+    for record in records {
+        record.key()?;
+        out.push(upsert(&record)?);
+    }
+    if let Some(next) = snapshot.serial {
+        out.push(Stmt {
+            sql: "UPDATE enrollment_serial SET next = $1".to_owned(),
+            params: vec![Val::Int(int(next, "enrollment_serial")?)],
+        });
+    }
+    Ok(out)
+}
+
 /// The copy of the hosts and the deny rows, read from the tables.
 fn copy_of(store: &Postgres) -> Result<Copy, StoreError> {
     store
@@ -293,10 +394,7 @@ fn copy_of(store: &Postgres) -> Result<Copy, StoreError> {
                 })
                 .collect();
             let deny = session
-                .query(
-                    "SELECT host_id, state, cleared_by FROM enrollment_deny",
-                    &[],
-                )?
+                .query(&format!("SELECT {DENY_COLUMNS} FROM enrollment_deny"), &[])?
                 .iter()
                 .map(|row| {
                     let deny = deny_of(row);
@@ -454,19 +552,9 @@ impl Records for PgRecords {
     fn issued(&self, id: &KeyHash) -> Result<Option<pb::Issued>, StoreError> {
         self.one(
             self.place(&RecordKey::Issued(*id)),
-            "SELECT request_id, round, serial, host_id, not_after, certificate_der \
-             FROM enrollment_issued WHERE request_id = $1"
-                .to_owned(),
+            format!("SELECT {ISSUED_COLUMNS} FROM enrollment_issued WHERE request_id = $1"),
             id.as_bytes().to_vec(),
-            |row| pb::Issued {
-                schema: SCHEMA,
-                request_id: row.get(0),
-                round: u32::try_from(row.get::<_, i64>(1)).unwrap_or_default(),
-                serial: unsigned(row.get(2)),
-                host_id: row.get(3),
-                not_after: unsigned(row.get(4)),
-                certificate_der: row.get(5),
-            },
+            issued_of,
         )
     }
 
@@ -489,18 +577,9 @@ impl Records for PgRecords {
     fn mac_nonce(&self, hash: &MacNonceHash) -> Result<Option<pb::MacNonce>, StoreError> {
         self.one(
             self.place(&RecordKey::MacNonce(*hash)),
-            "SELECT nonce_sha256, serial, issued_unix, consumed_by, request_id FROM mac_nonces \
-             WHERE nonce_sha256 = $1"
-                .to_owned(),
+            format!("SELECT {NONCE_COLUMNS} FROM mac_nonces WHERE nonce_sha256 = $1"),
             hash.as_bytes().to_vec(),
-            |row| pb::MacNonce {
-                schema: SCHEMA,
-                nonce_sha256: row.get(0),
-                serial: row.get(1),
-                issued_unix: unsigned(row.get(2)),
-                consumed_by: row.get::<_, Option<Vec<u8>>>(3).unwrap_or_default(),
-                request_id: row.get::<_, Option<Vec<u8>>>(4).unwrap_or_default(),
-            },
+            nonce_of,
         )
     }
 

@@ -403,10 +403,16 @@ fn read_if_any(path: &Path) -> Result<Option<Vec<u8>>, OpsError> {
 /// The halts file at `path` (nothing if there is none), and how many records of it this
 /// release passed over.
 fn read_halts(path: &Path) -> Result<(HaltsFile, usize), OpsError> {
-    let Some(bytes) = read_if_any(path)? else {
-        return Ok((HaltsFile::default(), 0));
-    };
-    let read: ReadHalts = serde_json::from_slice(&bytes).map_err(|e| OpsError::Invalid {
+    match read_if_any(path)? {
+        Some(bytes) => parse_halts(path, &bytes),
+        None => Ok((HaltsFile::default(), 0)),
+    }
+}
+
+/// The halts file `bytes`, read from `path`, and how many records of it this release passed
+/// over.
+fn parse_halts(path: &Path, bytes: &[u8]) -> Result<(HaltsFile, usize), OpsError> {
+    let read: ReadHalts = serde_json::from_slice(bytes).map_err(|e| OpsError::Invalid {
         path: path.to_owned(),
         why: e.to_string(),
     })?;
@@ -474,6 +480,47 @@ pub(crate) fn joined(path: &Path, ops: OpsState) -> Result<(OpsState, usize), Op
         );
     }
     Ok((join(ops, file), skipped))
+}
+
+/// [`joined`] without a write: `ops`, the state the ops file at `path` holds, joined with the
+/// halts file a start would settle on. A staged halts file that names the ops file's digest is
+/// the one a start renames in, and is read in its place; any other is the one a start removes,
+/// and is passed over. Nothing is renamed or removed.
+///
+/// # Errors
+/// [`OpsError`]: a file cannot be read, or a halts file holds what this build refuses.
+pub(crate) fn read_joined(path: &Path, ops: OpsState) -> Result<OpsState, OpsError> {
+    let staged = staged_path(path);
+    let committed = read_if_any(path)?.map(|text| digest(&text));
+    let (file, _skipped) = match read_if_any(&staged)? {
+        Some(bytes)
+            if committed
+                .as_ref()
+                .is_some_and(|ops| names(&bytes).as_ref() == Some(ops)) =>
+        {
+            parse_halts(&staged, &bytes)?
+        }
+        _ => read_halts(&halts_path(path))?,
+    };
+    Ok(join(ops, file))
+}
+
+/// The bytes [`write`] puts into the ops file at `path` and into its halts file for `state`: the
+/// halts file's are none when [`write`] writes none, on an ops file with no halts file beside it.
+///
+/// # Errors
+/// [`OpsError`]: the state cannot be serialised.
+pub(crate) fn texts(path: &Path, state: &OpsState) -> Result<(Vec<u8>, Option<Vec<u8>>), OpsError> {
+    let (ops, mut halts) = split(state);
+    let text = pretty(path, &ops)?;
+    // A state that keeps nothing in the halts file has none, as `write` writes it beside an ops
+    // file with no halts file.
+    if halts == HaltsFile::default() {
+        return Ok((text, None));
+    }
+    halts.ops = Some(digest(&text));
+    let halts_text = pretty(&halts_path(path), &halts)?;
+    Ok((text, Some(halts_text)))
 }
 
 fn pretty<T: Serialize>(path: &Path, value: &T) -> Result<Vec<u8>, OpsError> {

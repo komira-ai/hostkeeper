@@ -26,7 +26,7 @@ mod memory;
 use std::fmt;
 use std::path::PathBuf;
 
-pub use files::FileRecords;
+pub use files::{FileRecords, Snapshot};
 pub use memory::MemoryRecords;
 
 use super::StoreError;

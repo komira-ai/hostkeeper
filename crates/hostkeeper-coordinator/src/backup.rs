@@ -331,6 +331,13 @@ fn left_text(left: &[PathBuf]) -> String {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Report(Vec<String>);
 
+impl Report {
+    /// The report of `lines`.
+    pub(crate) fn of(lines: Vec<String>) -> Report {
+        Report(lines)
+    }
+}
+
 impl fmt::Display for Report {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for line in &self.0 {
@@ -455,6 +462,40 @@ pub fn backup(flags: &Backup, lock: &dyn StateLock) -> Result<Report, BackupErro
     Ok(Report(lines))
 }
 
+/// The manifest of the state `paths` names, as a backup's names it: each file there with its
+/// name in a snapshot, its size and its SHA-256, the files of the enrollment store among them.
+/// What an import records of the files it read.
+///
+/// # Errors
+/// [`BackupError::Io`]: a file or directory could not be read.
+pub(crate) fn manifest_of(paths: &StatePaths) -> Result<serde_json::Value, BackupError> {
+    let mut sources = Vec::new();
+    for (name, path) in paths.beside() {
+        if there(&path)? {
+            sources.push((name.to_owned(), path));
+        }
+    }
+    sources.extend(paths.segments()?);
+    if let Some(dir) = &paths.enrollment_dir {
+        store_files(dir, ENROLLMENT, &mut sources, &mut Vec::new())?;
+    }
+    let mut files = Vec::new();
+    for (name, path) in sources {
+        let bytes = fs::read(&path).map_err(io_at(&path))?;
+        files.push(Entry {
+            name,
+            bytes: bytes.len() as u64,
+            sha256: sha256_hex(&bytes),
+        });
+    }
+    let manifest = Manifest {
+        schema: SCHEMA,
+        made_by: format!("hostkeeper-coordinator {}", env!("CARGO_PKG_VERSION")),
+        files,
+    };
+    serde_json::to_value(&manifest).map_err(json_at(Path::new(MANIFEST)))
+}
+
 /// Restores the snapshot `flags.from` into the targets `flags.paths` names, under the lock of
 /// the state files taken by `lock`.
 ///
@@ -504,7 +545,7 @@ pub fn restore(flags: &Restore, lock: &dyn StateLock) -> Result<Report, BackupEr
 /// Makes the state file's directory (it holds the lock's file, and stays), takes the lock,
 /// refuses targets that hold state, and writes `files`, each to its target. A write that fails
 /// removes, still under the lock, every file and directory the writes had made.
-fn write_targets(
+pub(crate) fn write_targets(
     paths: &StatePaths,
     lock: &dyn StateLock,
     files: &[(PathBuf, Vec<u8>)],
@@ -545,7 +586,10 @@ fn put_all(
 }
 
 /// The lock of the state file `state`'s state files, taken by `lock`.
-fn take(lock: &dyn StateLock, state: &Path) -> Result<crate::lock::LockGuard, BackupError> {
+pub(crate) fn take(
+    lock: &dyn StateLock,
+    state: &Path,
+) -> Result<crate::lock::LockGuard, BackupError> {
     let path = lock_path(state);
     lock.acquire(&path).map_err(|why| match why {
         LockError::Held => BackupError::Locked { path: path.clone() },
