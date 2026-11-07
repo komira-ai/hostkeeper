@@ -3,9 +3,9 @@
 Status: design, for review. This document makes network install of new Linux machines part of hostkeeper v1. It
 replaces the non-goal of [hostkeeper-design.md](hostkeeper-design.md) section 2.2 ("No network boot service in
 scope") and the first item of its section 12.1 ("the operator's own, no build items here"). Both now point here. Where
-this document and hostkeeper-design.md disagree on network install, this document wins. Item N6, the menu and seed
-generator, is built (`crates/hostkeeper-pxe-seed`); every other statement about new code is **Designed**, and section 12
-lists the build items.
+this document and hostkeeper-design.md disagree on network install, this document wins. What is built so far is tagged
+**Built** where it is described, with its path (item N6, the menu and seed generator, is `crates/hostkeeper-pxe-seed`);
+every other statement about new code is **Designed**, and section 12 lists the build items.
 
 This revision (item N1b of section 12) amends the first: network boot early in the boot order is the expected setup, so
 a machine takes two manual steps; a router mode, in which the farm's router names the boot server, stands beside
