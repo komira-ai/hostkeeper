@@ -14,7 +14,9 @@
 //! file serves the whole kit.
 
 use std::net::Ipv4Addr;
+use std::str::FromStr;
 
+use crate::dns;
 use crate::path::AbsPath;
 use crate::settings::{Settings, SettingsError};
 
@@ -87,110 +89,311 @@ pub const DEFAULT_SKIP_ITEMS: [&str; 18] = [
 ];
 
 /// The settings the unit, profile and command builders read, checked. [`MdmConfig::parse`]
-/// is the only entry that checks: a value built field by field skips every check.
+/// is the only way to make one, and every field is read through an accessor, so a value
+/// that did not pass the parser's checks cannot reach a builder.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MdmConfig {
-    /// The name the Macs dial; the TLS certificate is for it.
-    pub dns_name: String,
-    /// The LAN address the HTTPS proxy binds: private, inside `lan`.
-    pub bind: Ipv4Addr,
-    /// The LAN, the only network besides loopback the proxy talks to.
-    pub lan: Cidr,
-    /// The services' system user.
-    pub user: String,
-    /// State: database, SCEP CA, DEP token, TLS key.
-    pub state: AbsPath,
-    /// Unit inputs and the env files.
-    pub etc: AbsPath,
-    /// The pinned binaries.
-    pub bin: AbsPath,
-    /// NanoHUB's loopback port.
-    pub nanohub_port: u16,
-    /// The SCEP server's loopback port.
-    pub scep_port: u16,
-    /// NanoDEP's depserver loopback port.
-    pub dep_port: u16,
-    /// The slice's memory cap, as systemd writes it: `1G`.
-    pub memory_max: String,
-    /// The slice's CPU cap: `100%`.
-    pub cpu_quota: String,
-    /// The slice's task cap: `256`.
-    pub tasks_max: String,
-    /// The prefix of every unit name.
-    pub unit_prefix: String,
-    /// The slice's name, ending in `.slice`.
-    pub slice: String,
-    /// NanoDEP's name for the Apple Business Manager token.
-    pub dep_name: String,
-    /// The organisation shown with the SCEP CA and the profiles.
-    pub org: String,
-    /// The enrollment profile's identifier, reverse-DNS (`com.example.hostkeeper.mdm`).
-    pub profile_id: String,
-    /// The enrollment profile's name in System Settings.
-    pub profile_display_name: String,
-    /// The ADE profile: name, org_magic, language, region, skipped panes.
-    pub ade: AdeSettings,
-    /// The SCEP CA's subject and validity.
-    pub scep_ca: ScepCa,
-    /// The DEP token certificate's name and validity.
-    pub dep_cert: DepCert,
-    /// The ssh signature namespace of an erase request.
-    pub signature_namespace: String,
+    dns_name: String,
+    bind: Ipv4Addr,
+    lan: Cidr,
+    user: String,
+    state: AbsPath,
+    etc: AbsPath,
+    bin: AbsPath,
+    nanohub_port: u16,
+    scep_port: u16,
+    dep_port: u16,
+    memory_max: String,
+    cpu_quota: String,
+    tasks_max: String,
+    unit_prefix: String,
+    slice: String,
+    dep_name: String,
+    org: String,
+    profile_id: String,
+    profile_display_name: String,
+    ade: AdeSettings,
+    scep_ca: ScepCa,
+    dep_cert: DepCert,
+    signature_namespace: String,
 }
 
-/// The ADE profile's settings.
+impl MdmConfig {
+    /// The name the Macs dial; the TLS certificate is for it.
+    pub fn dns_name(&self) -> &str {
+        &self.dns_name
+    }
+
+    /// The LAN address the HTTPS proxy binds: private, inside [`MdmConfig::lan`].
+    pub fn bind(&self) -> Ipv4Addr {
+        self.bind
+    }
+
+    /// The LAN, the only network besides loopback the proxy talks to.
+    pub fn lan(&self) -> Cidr {
+        self.lan
+    }
+
+    /// The services' system user.
+    pub fn user(&self) -> &str {
+        &self.user
+    }
+
+    /// State: database, SCEP CA, DEP token, TLS key.
+    pub fn state(&self) -> &AbsPath {
+        &self.state
+    }
+
+    /// Unit inputs and the env files.
+    pub fn etc(&self) -> &AbsPath {
+        &self.etc
+    }
+
+    /// The pinned binaries.
+    pub fn bin(&self) -> &AbsPath {
+        &self.bin
+    }
+
+    /// NanoHUB's loopback port, which neither other port equals.
+    pub fn nanohub_port(&self) -> u16 {
+        self.nanohub_port
+    }
+
+    /// The SCEP server's loopback port, which neither other port equals.
+    pub fn scep_port(&self) -> u16 {
+        self.scep_port
+    }
+
+    /// NanoDEP's depserver loopback port, which neither other port equals.
+    pub fn dep_port(&self) -> u16 {
+        self.dep_port
+    }
+
+    /// The slice's memory cap, as systemd writes it: `1G`.
+    pub fn memory_max(&self) -> &str {
+        &self.memory_max
+    }
+
+    /// The slice's CPU cap: `100%`.
+    pub fn cpu_quota(&self) -> &str {
+        &self.cpu_quota
+    }
+
+    /// The slice's task cap: `256`.
+    pub fn tasks_max(&self) -> &str {
+        &self.tasks_max
+    }
+
+    /// The prefix of every unit name.
+    pub fn unit_prefix(&self) -> &str {
+        &self.unit_prefix
+    }
+
+    /// The slice's name, ending in `.slice`.
+    pub fn slice(&self) -> &str {
+        &self.slice
+    }
+
+    /// NanoDEP's name for the Apple Business Manager token.
+    pub fn dep_name(&self) -> &str {
+        &self.dep_name
+    }
+
+    /// The organisation shown with the SCEP CA and the profiles.
+    pub fn org(&self) -> &str {
+        &self.org
+    }
+
+    /// The enrollment profile's identifier, reverse-DNS (`com.example.hostkeeper.mdm`).
+    pub fn profile_id(&self) -> &str {
+        &self.profile_id
+    }
+
+    /// The enrollment profile's name in System Settings.
+    pub fn profile_display_name(&self) -> &str {
+        &self.profile_display_name
+    }
+
+    /// The ADE profile: name, org_magic, language, region, skipped panes.
+    pub fn ade(&self) -> &AdeSettings {
+        &self.ade
+    }
+
+    /// The SCEP CA's subject and validity.
+    pub fn scep_ca(&self) -> &ScepCa {
+        &self.scep_ca
+    }
+
+    /// The DEP token certificate's name and validity.
+    pub fn dep_cert(&self) -> &DepCert {
+        &self.dep_cert
+    }
+
+    /// The ssh signature namespace of an erase request.
+    pub fn signature_namespace(&self) -> &str {
+        &self.signature_namespace
+    }
+}
+
+/// The ADE profile's settings, part of an [`MdmConfig`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AdeSettings {
-    /// The profile's name at Apple.
-    pub profile_name: String,
-    /// The profile's `org_magic`.
-    pub org_magic: String,
-    /// The language, two lower-case letters.
-    pub language: String,
-    /// The region, two upper-case letters.
-    pub region: String,
-    /// The Setup Assistant panes skipped, in the order given.
-    pub skip_items: Vec<String>,
+    profile_name: String,
+    org_magic: String,
+    language: String,
+    region: String,
+    skip_items: Vec<String>,
 }
 
-/// The SCEP CA's subject and validity. The CA is the issuer of every Mac's MDM identity
-/// certificate, so it is fixed before the first Mac enrolls.
+impl AdeSettings {
+    /// The profile's name at Apple.
+    pub fn profile_name(&self) -> &str {
+        &self.profile_name
+    }
+
+    /// The profile's `org_magic`.
+    pub fn org_magic(&self) -> &str {
+        &self.org_magic
+    }
+
+    /// The language, two lower-case letters.
+    pub fn language(&self) -> &str {
+        &self.language
+    }
+
+    /// The region, two upper-case letters.
+    pub fn region(&self) -> &str {
+        &self.region
+    }
+
+    /// The Setup Assistant panes skipped, in the order given, at least one.
+    pub fn skip_items(&self) -> &[String] {
+        &self.skip_items
+    }
+}
+
+/// The SCEP CA's subject and validity, part of an [`MdmConfig`]. The CA is the issuer of
+/// every Mac's MDM identity certificate, so it is fixed before the first Mac enrolls.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ScepCa {
-    /// The common name.
-    pub common_name: String,
-    /// The organizational unit.
-    pub organizational_unit: String,
-    /// The validity in years.
-    pub years: u32,
+    common_name: String,
+    organizational_unit: String,
+    years: u32,
 }
 
-/// The DEP token certificate's name and validity.
+impl ScepCa {
+    /// The common name.
+    pub fn common_name(&self) -> &str {
+        &self.common_name
+    }
+
+    /// The organizational unit.
+    pub fn organizational_unit(&self) -> &str {
+        &self.organizational_unit
+    }
+
+    /// The validity in years, 1 to 30.
+    pub fn years(&self) -> u32 {
+        self.years
+    }
+}
+
+/// The DEP token certificate's name and validity, part of an [`MdmConfig`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DepCert {
-    /// The common name.
-    pub common_name: String,
-    /// The validity in days.
-    pub days: u32,
+    common_name: String,
+    days: u32,
 }
 
-/// A private IPv4 network, `a.b.c.d/bits`. [`MdmConfig::parse`] takes 8 to 30 bits;
-/// [`Cidr::contains`] is defined for 0 to 32.
+impl DepCert {
+    /// The common name.
+    pub fn common_name(&self) -> &str {
+        &self.common_name
+    }
+
+    /// The validity in days, 1 to 365.
+    pub fn days(&self) -> u32 {
+        self.days
+    }
+}
+
+/// A private IPv4 network, `a.b.c.d/bits`, that stays inside the RFC 1918 block of its
+/// address: at least 8 bits in 10/8, 12 in 172.16/12 and 16 in 192.168/16, and at most 30.
+/// [`Cidr::new`] and its [`FromStr`] are the only ways to make one. A wider network would be
+/// read by systemd as public space: the /8 of an address in 192.168/16 is the /8 of 192.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Cidr {
-    /// The network address.
-    pub addr: Ipv4Addr,
-    /// The prefix length.
-    pub bits: u8,
+    addr: Ipv4Addr,
+    bits: u8,
+}
+
+/// Why an address and a prefix length are not a [`Cidr`].
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum CidrError {
+    /// Not `a.b.c.d/bits`, with the bits as decimal digits.
+    #[error("{0:?} is not a.b.c.d/bits")]
+    Malformed(String),
+    /// An address outside the three private blocks.
+    #[error("{0} is not in a private (RFC 1918) block")]
+    NotPrivate(Ipv4Addr),
+    /// A prefix length wider than the address's private block, or above 30.
+    #[error("{addr}/{bits}: the prefix is not from {min} to 30 bits")]
+    Bits {
+        /// The address.
+        addr: Ipv4Addr,
+        /// The prefix length given.
+        bits: u8,
+        /// The least the address's private block allows.
+        min: u8,
+    },
 }
 
 impl Cidr {
+    /// The network of `addr` with a prefix of `bits`, or why it is not a private one.
+    pub fn new(addr: Ipv4Addr, bits: u8) -> Result<Cidr, CidrError> {
+        if !addr.is_private() {
+            return Err(CidrError::NotPrivate(addr));
+        }
+        let min = match addr.octets()[0] {
+            10 => 8,
+            172 => 12,
+            _ => 16,
+        };
+        if !(min..=30).contains(&bits) {
+            return Err(CidrError::Bits { addr, bits, min });
+        }
+        Ok(Cidr { addr, bits })
+    }
+
+    /// The address the network was given with (its host bits are kept).
+    pub fn addr(self) -> Ipv4Addr {
+        self.addr
+    }
+
+    /// The prefix length, 8 to 30.
+    pub fn bits(self) -> u8 {
+        self.bits
+    }
+
     /// Whether `a` is inside the network.
     pub fn contains(self, a: Ipv4Addr) -> bool {
-        // `bits` 0 shifts by 32, which `checked_shl` refuses: the mask is then empty.
-        let shift = 32u32.saturating_sub(u32::from(self.bits));
-        let mask = u32::MAX.checked_shl(shift).unwrap_or(0);
+        // `bits` is 8 to 30 (`Cidr::new`), so the shift is 2 to 24 and cannot overflow.
+        let mask = u32::MAX << (32 - u32::from(self.bits));
         u32::from(a) & mask == u32::from(self.addr) & mask
+    }
+}
+
+impl FromStr for Cidr {
+    type Err = CidrError;
+
+    /// `a.b.c.d/bits`, checked by [`Cidr::new`].
+    fn from_str(text: &str) -> Result<Cidr, CidrError> {
+        let malformed = || CidrError::Malformed(text.to_owned());
+        let (addr, bits) = text.split_once('/').ok_or_else(malformed)?;
+        let addr: Ipv4Addr = addr.parse().map_err(|_| malformed())?;
+        let digits = !bits.is_empty() && bits.bytes().all(|b| b.is_ascii_digit());
+        let bits: u8 = bits.parse().ok().filter(|_| digits).ok_or_else(malformed)?;
+        Cidr::new(addr, bits)
     }
 }
 
@@ -332,7 +535,7 @@ impl MdmConfig {
             "DNS_NAME",
             &dns_name,
             is_dns_name(&dns_name),
-            "not a lower-case DNS name with a dot",
+            "not a lower-case DNS name with a dot (at most 63 characters a label, 253 in all)",
         )?;
         let text = r.get("BIND")?;
         let bind = lan_address(&text).ok_or(bad(
@@ -341,7 +544,7 @@ impl MdmConfig {
             "not a private LAN address (an RFC 1918 range): the proxy binds the LAN only, never 0.0.0.0, loopback or another range",
         ))?;
         let text = r.get("LAN_CIDR")?;
-        let lan = cidr(&text).ok_or(bad(
+        let lan = text.parse::<Cidr>().map_err(|_| bad(
             "LAN_CIDR",
             &text,
             "not a private IPv4 network in CIDR form inside one RFC 1918 block (at least 8 bits in 10/8, 12 in 172.16/12, 16 in 192.168/16; at most 30)",
@@ -382,6 +585,30 @@ impl MdmConfig {
             r.port("SCEP_PORT")?,
             r.port("DEP_PORT")?,
         );
+        // The three services listen on loopback side by side: two on one port would leave
+        // one of them unable to start, or the proxy sending its routes to the other.
+        for (key, port, other, why) in [
+            (
+                "SCEP_PORT",
+                scep_port,
+                nanohub_port,
+                "the same port as MDM_NANOHUB_PORT",
+            ),
+            (
+                "DEP_PORT",
+                dep_port,
+                nanohub_port,
+                "the same port as MDM_NANOHUB_PORT",
+            ),
+            (
+                "DEP_PORT",
+                dep_port,
+                scep_port,
+                "the same port as MDM_SCEP_PORT",
+            ),
+        ] {
+            check(key, &port.to_string(), port != other, why)?;
+        }
         let memory_max = r.capped("MEMORY_MAX", &['K', 'M', 'G'], "not like 1G")?;
         let cpu_quota = r.capped("CPU_QUOTA", &['%'], "not like 100%")?;
         let tasks_max = r.capped("TASKS_MAX", &[], "not a number from 1")?;
@@ -434,7 +661,7 @@ impl MdmConfig {
             "PROFILE_ID",
             &profile_id,
             is_dns_name(&profile_id),
-            "not a reverse-DNS identifier (lower-case labels joined by dots)",
+            "not a reverse-DNS identifier (lower-case labels joined by dots, at most 63 characters a label, 253 in all)",
         )?;
         let profile_display_name = r.text("PROFILE_DISPLAY_NAME", &format!("{org} MDM"))?;
         let ade = AdeSettings {
@@ -528,39 +755,15 @@ pub fn lan_address(text: &str) -> Option<Ipv4Addr> {
     a.is_private().then_some(a)
 }
 
-fn cidr(text: &str) -> Option<Cidr> {
-    let (addr, bits) = text.split_once('/')?;
-    let addr = lan_address(addr)?;
-    // The network must stay inside the private block the address is in: a /8 of
-    // the 192.168/16 block would be read by systemd as the /8 of 192, which is public space.
-    let block_bits = match addr.octets()[0] {
-        10 => 8,
-        172 => 12,
-        _ => 16,
-    };
-    let bits: u8 = bits
-        .parse()
-        .ok()
-        .filter(|b| (block_bits..=30).contains(b))?;
-    Some(Cidr { addr, bits })
-}
-
 /// Whether `a` and `b` are the same directory or one is inside the other.
 fn nested(a: &str, b: &str) -> bool {
     a == b || a.starts_with(&format!("{b}/")) || b.starts_with(&format!("{a}/"))
 }
 
-/// A lower-case DNS name with at least one dot; no label starts or ends with `-`.
+/// A lower-case DNS name with at least one dot, within DNS's length limits (63 octets a
+/// label, 253 the name); no label starts or ends with `-`.
 fn is_dns_name(name: &str) -> bool {
-    let labels: Vec<&str> = name.split('.').collect();
-    labels.len() >= 2
-        && labels.iter().all(|l| {
-            !l.is_empty()
-                && !l.starts_with('-')
-                && !l.ends_with('-')
-                && l.chars()
-                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-        })
+    dns::is_host_name(name, dns::Case::Lower, 2)
 }
 
 /// A whole number from 1, without leading zeros, then one of `suffixes` (none when

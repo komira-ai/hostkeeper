@@ -1,6 +1,9 @@
 //! Shared fixtures. `config.example` is the neutral site every golden is rendered from.
 
-#![allow(dead_code, reason = "each test binary uses part of the shared fixtures")]
+#![allow(
+    dead_code,
+    reason = "each test binary uses part of the shared fixtures"
+)]
 
 use std::net::Ipv4Addr;
 

@@ -10,10 +10,11 @@
 //! `tests/kbf_f89ed5c/kbf_names.conf`, which holds `@TEST_BIND@` and `@TEST_LAN@` for
 //! kbf's bind address and LAN; the tests build those addresses at run time.
 //!
-//! Two differences from kbf are deliberate, and the tests name them: comment lines are
-//! this crate's own wording (they say `hostkeeper-mdm`, not `kbf-deploy`), and the slice's
-//! `Description=` has lost the words ` on the dev box`. Everything else is compared byte
-//! for byte.
+//! Three differences from kbf are deliberate, and the tests name them: comment lines are
+//! this crate's own wording (they say `hostkeeper-mdm`, not `kbf-deploy`), the slice's
+//! `Description=` has lost the words ` on the dev box`, and the ADE profile sets
+//! `auto_advance_setup` (docs/design/hostkeeper-mdm.md section 6.2). Everything else is
+//! compared byte for byte.
 
 mod common;
 
@@ -222,7 +223,7 @@ fn the_enrollment_profile_is_kbfs_profile() {
     let mut ours =
         String::from_utf8(enrollment(&c, &topic, &challenge).expect("writes")).expect("utf-8");
     let theirs_text = String::from_utf8(theirs.clone()).expect("utf-8");
-    let derived = payload_uuids(&c.profile_id);
+    let derived = payload_uuids(c.profile_id());
     for (ours_uuid, kbf_uuid) in [
         (&derived.scep, "071DB849-C11F-4A24-B1E8-69113460B678"),
         (&derived.mdm, "25B0DB54-2EDA-4965-B430-24DB8BFC06DD"),
@@ -242,7 +243,8 @@ fn the_enrollment_profile_is_kbfs_profile() {
 
 /// Catches an ADE profile that differs from kbf's template once its two placeholders
 /// are filled: the same fields with the same values, and the same field order (the order
-/// in which they are sent).
+/// in which they are sent), but for `auto_advance_setup`, which kbf left false and this
+/// crate sets.
 #[test]
 fn the_ade_profile_is_kbfs_profile() {
     let (c, _) = site();
@@ -255,8 +257,12 @@ fn the_ade_profile_is_kbfs_profile() {
             .expect("the profile serializes"),
     )
     .expect("utf-8");
-    let a: serde_json::Value = serde_json::from_str(&ours).expect("ours parses");
+    let mut a: serde_json::Value = serde_json::from_str(&ours).expect("ours parses");
     let b: serde_json::Value = serde_json::from_str(&template).expect("theirs parses");
+    let flag = "auto_advance_setup";
+    assert_eq!(a[flag], serde_json::Value::Bool(true));
+    assert_eq!(b[flag], serde_json::Value::Bool(false));
+    a[flag] = serde_json::Value::Bool(false);
     assert_eq!(a, b);
     let top = |text: &str| -> Vec<String> {
         text.lines()

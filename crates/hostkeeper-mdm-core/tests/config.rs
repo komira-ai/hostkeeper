@@ -6,7 +6,7 @@ use std::net::Ipv4Addr;
 
 use common::{config, example, example_keys, ip, lan, minimal, with, without};
 use hostkeeper_mdm_core::config::{
-    Cidr, ConfigError, DEFAULT_SKIP_ITEMS, KEYS, MdmConfig, lan_address,
+    Cidr, CidrError, ConfigError, DEFAULT_SKIP_ITEMS, KEYS, MdmConfig, lan_address,
 };
 use hostkeeper_mdm_core::settings::SettingsError;
 
@@ -21,14 +21,14 @@ fn refusal(text: &str) -> String {
 fn the_example_documents_every_key_and_parses_into_its_fields() {
     assert_eq!(example_keys(), KEYS);
     let c = config();
-    assert_eq!(c.dns_name, "mdm.example.com");
+    assert_eq!(c.dns_name(), "mdm.example.com");
     assert_eq!(
-        (c.bind, c.lan.addr, c.lan.bits),
+        (c.bind(), c.lan().addr(), c.lan().bits()),
         (Ipv4Addr::new(10, 0, 0, 10), Ipv4Addr::new(10, 0, 0, 0), 24)
     );
-    assert_eq!(c.lan.to_string(), lan());
-    assert_eq!(c.user, "hostkeeper-mdm");
-    let paths = (c.state.as_str(), c.etc.as_str(), c.bin.as_str());
+    assert_eq!(c.lan().to_string(), lan());
+    assert_eq!(c.user(), "hostkeeper-mdm");
+    let paths = (c.state().as_str(), c.etc().as_str(), c.bin().as_str());
     assert_eq!(
         paths,
         (
@@ -38,37 +38,30 @@ fn the_example_documents_every_key_and_parses_into_its_fields() {
         )
     );
     assert_eq!(
-        (c.nanohub_port, c.scep_port, c.dep_port),
+        (c.nanohub_port(), c.scep_port(), c.dep_port()),
         (9004, 9005, 9001)
     );
-    let caps = (
-        c.memory_max.as_str(),
-        c.cpu_quota.as_str(),
-        c.tasks_max.as_str(),
-    );
+    let caps = (c.memory_max(), c.cpu_quota(), c.tasks_max());
     assert_eq!(caps, ("1G", "100%", "256"));
     assert_eq!(
-        (c.unit_prefix.as_str(), c.slice.as_str()),
+        (c.unit_prefix(), c.slice()),
         ("hostkeeper-mdm", "hostkeeper-mdm.slice")
     );
     assert_eq!(
-        (c.dep_name.as_str(), c.org.as_str(), c.profile_id.as_str()),
+        (c.dep_name(), c.org(), c.profile_id()),
         ("example", "Example", "com.example.hostkeeper.mdm")
     );
-    assert_eq!(c.profile_display_name, "Example MDM");
-    assert_eq!(c.ade.profile_name, "Example MDM");
-    assert_eq!(c.ade.org_magic, "hostkeeper-mdm");
-    assert_eq!(
-        (c.ade.language.as_str(), c.ade.region.as_str()),
-        ("en", "US")
-    );
-    assert_eq!(c.ade.skip_items, DEFAULT_SKIP_ITEMS);
-    assert_eq!(c.scep_ca.common_name, "Example MDM SCEP CA");
-    assert_eq!(c.scep_ca.organizational_unit, "hostkeeper-mdm");
-    assert_eq!(c.scep_ca.years, 10);
-    assert_eq!(c.dep_cert.common_name, "hostkeeper-mdm");
-    assert_eq!(c.dep_cert.days, 7);
-    assert_eq!(c.signature_namespace, "hostkeeper-mdm-erase");
+    assert_eq!(c.profile_display_name(), "Example MDM");
+    assert_eq!(c.ade().profile_name(), "Example MDM");
+    assert_eq!(c.ade().org_magic(), "hostkeeper-mdm");
+    assert_eq!((c.ade().language(), c.ade().region()), ("en", "US"));
+    assert_eq!(c.ade().skip_items(), DEFAULT_SKIP_ITEMS);
+    assert_eq!(c.scep_ca().common_name(), "Example MDM SCEP CA");
+    assert_eq!(c.scep_ca().organizational_unit(), "hostkeeper-mdm");
+    assert_eq!(c.scep_ca().years(), 10);
+    assert_eq!(c.dep_cert().common_name(), "hostkeeper-mdm");
+    assert_eq!(c.dep_cert().days(), 7);
+    assert_eq!(c.signature_namespace(), "hostkeeper-mdm-erase");
 }
 
 /// Catches a default that drifted from what `config.example` says it is: a file with
@@ -88,17 +81,14 @@ fn the_derived_defaults_follow_the_prefix_and_the_organisation() {
         minimal().replace("MDM_ORG=Example\n", "")
     );
     let c = MdmConfig::parse(&text).expect("valid");
-    assert_eq!(
-        (c.unit_prefix.as_str(), c.slice.as_str()),
-        ("acme-mdm", "acme-mdm.slice")
-    );
-    assert_eq!(c.profile_display_name, "Acme Labs MDM");
-    assert_eq!(c.ade.profile_name, "Acme Labs MDM");
-    assert_eq!(c.ade.org_magic, "acme-mdm");
-    assert_eq!(c.scep_ca.common_name, "Acme Labs MDM SCEP CA");
-    assert_eq!(c.scep_ca.organizational_unit, "acme-mdm");
-    assert_eq!(c.dep_cert.common_name, "acme-mdm");
-    assert_eq!(c.signature_namespace, "acme-mdm-erase");
+    assert_eq!((c.unit_prefix(), c.slice()), ("acme-mdm", "acme-mdm.slice"));
+    assert_eq!(c.profile_display_name(), "Acme Labs MDM");
+    assert_eq!(c.ade().profile_name(), "Acme Labs MDM");
+    assert_eq!(c.ade().org_magic(), "acme-mdm");
+    assert_eq!(c.scep_ca().common_name(), "Acme Labs MDM SCEP CA");
+    assert_eq!(c.scep_ca().organizational_unit(), "acme-mdm");
+    assert_eq!(c.dep_cert().common_name(), "acme-mdm");
+    assert_eq!(c.signature_namespace(), "acme-mdm-erase");
 }
 
 /// Catches a new key that is accepted and then ignored: each is set to a value that is
@@ -126,24 +116,18 @@ fn every_new_key_can_be_set_away_from_its_default() {
         text.push('\n');
     }
     let c = MdmConfig::parse(&text).expect("valid");
-    assert_eq!(
-        (c.unit_prefix.as_str(), c.slice.as_str()),
-        ("site-a", "site-a-b.slice")
-    );
-    assert_eq!(c.profile_display_name, "Site A Macs");
-    assert_eq!(c.ade.profile_name, "Site A enrollment");
-    assert_eq!(c.ade.org_magic, "site.a_1");
-    assert_eq!(c.ade.skip_items, ["Siri", "TOS"]);
-    assert_eq!(
-        (c.ade.language.as_str(), c.ade.region.as_str()),
-        ("de", "DE")
-    );
-    assert_eq!(c.scep_ca.common_name, "Site A CA");
-    assert_eq!(c.scep_ca.organizational_unit, "Site A OU");
-    assert_eq!(c.scep_ca.years, 30);
-    assert_eq!(c.dep_cert.common_name, "site-a.cert");
-    assert_eq!(c.dep_cert.days, 365);
-    assert_eq!(c.signature_namespace, "site.a-erase");
+    assert_eq!((c.unit_prefix(), c.slice()), ("site-a", "site-a-b.slice"));
+    assert_eq!(c.profile_display_name(), "Site A Macs");
+    assert_eq!(c.ade().profile_name(), "Site A enrollment");
+    assert_eq!(c.ade().org_magic(), "site.a_1");
+    assert_eq!(c.ade().skip_items(), ["Siri", "TOS"]);
+    assert_eq!((c.ade().language(), c.ade().region()), ("de", "DE"));
+    assert_eq!(c.scep_ca().common_name(), "Site A CA");
+    assert_eq!(c.scep_ca().organizational_unit(), "Site A OU");
+    assert_eq!(c.scep_ca().years(), 30);
+    assert_eq!(c.dep_cert().common_name(), "site-a.cert");
+    assert_eq!(c.dep_cert().days(), 365);
+    assert_eq!(c.signature_namespace(), "site.a-erase");
 }
 
 /// Each row is one planted bad setting; the parser must refuse it naming the key,
@@ -369,17 +353,11 @@ fn unknown_and_repeated_keys_are_refused() {
 /// takes a neighbouring range.
 #[test]
 fn an_address_is_inside_a_network_by_its_prefix_bits() {
-    let net = Cidr {
-        addr: Ipv4Addr::new(10, 1, 0, 0),
-        bits: 24,
-    };
+    let net = Cidr::new(Ipv4Addr::new(10, 1, 0, 0), 24).expect("a private /24");
     assert!(net.contains(Ipv4Addr::new(10, 1, 0, 255)));
     assert!(net.contains(Ipv4Addr::new(10, 1, 0, 1)));
     assert!(!net.contains(Ipv4Addr::new(10, 1, 1, 0)));
-    let wide = Cidr {
-        addr: Ipv4Addr::new(10, 0, 0, 0),
-        bits: 8,
-    };
+    let wide = Cidr::new(Ipv4Addr::new(10, 0, 0, 0), 8).expect("the whole 10/8");
     assert!(wide.contains(Ipv4Addr::new(10, 255, 0, 1)));
     for (a, private) in [
         (Ipv4Addr::new(172, 16, 0, 1), true),
@@ -405,7 +383,7 @@ fn names_with_hyphens_digits_and_underscores_are_taken() {
     );
     let c = MdmConfig::parse(&text).expect("valid");
     assert_eq!(
-        (c.dns_name.as_str(), c.user.as_str(), c.slice.as_str()),
+        (c.dns_name(), c.user(), c.slice()),
         (
             "mdm-1.site2.example.com",
             "_js_mdm-2",
@@ -441,24 +419,119 @@ fn directories_that_equal_nest_or_surround_each_other_are_refused() {
     }
     let text = with("MDM_ETC", "/var/lib/hostkeeper-mdm-etc");
     let c = MdmConfig::parse(&text).expect("a shared prefix is not nesting");
-    assert_eq!(c.etc.as_str(), "/var/lib/hostkeeper-mdm-etc");
+    assert_eq!(c.etc().as_str(), "/var/lib/hostkeeper-mdm-etc");
 }
 
-/// Catches a network check that overflows or answers wrongly at the ends of the prefix
-/// range: a /0 holds every address (a shift by 32 bits panics), a /32 only itself.
+/// Catches a network check that answers wrongly at the ends of the prefix range a
+/// [`Cidr`] may have: a /8 holds its whole block and nothing past it, a /30 its four
+/// addresses only.
 #[test]
-fn a_network_of_zero_or_thirty_two_bits_does_not_overflow() {
-    let any = Cidr {
-        addr: Ipv4Addr::new(10, 0, 0, 0),
-        bits: 0,
-    };
-    assert!(any.contains(Ipv4Addr::new(8, 8, 8, 8)));
-    let one = Cidr {
-        addr: Ipv4Addr::new(10, 0, 0, 7),
-        bits: 32,
-    };
-    assert!(one.contains(Ipv4Addr::new(10, 0, 0, 7)));
-    assert!(!one.contains(Ipv4Addr::new(10, 0, 0, 8)));
+fn a_network_of_eight_or_thirty_bits_holds_exactly_its_addresses() {
+    let block = Cidr::new(Ipv4Addr::new(10, 9, 9, 9), 8).expect("the 10/8 block");
+    assert!(block.contains(Ipv4Addr::new(10, 0, 0, 0)));
+    assert!(block.contains(Ipv4Addr::new(10, 255, 255, 255)));
+    assert!(!block.contains(Ipv4Addr::new(11, 0, 0, 0)));
+    assert!(!block.contains(Ipv4Addr::new(9, 255, 255, 255)));
+    let four = Cidr::new(Ipv4Addr::new(10, 0, 0, 4), 30).expect("a /30");
+    for last in 4..=7 {
+        assert!(four.contains(Ipv4Addr::new(10, 0, 0, last)), "{last}");
+    }
+    assert!(!four.contains(Ipv4Addr::new(10, 0, 0, 3)));
+    assert!(!four.contains(Ipv4Addr::new(10, 0, 0, 8)));
+}
+
+/// Catches a [`Cidr`] that can be built without the parser's checks (komira-ai/kbf#2248:
+/// its fields were public, so a public or too-wide network reached the proxy's
+/// `IPAddressAllow=`): [`Cidr::new`] and `parse` refuse what `MDM_LAN_CIDR` refuses, each
+/// with its reason, and give the network back through read-only accessors.
+#[test]
+fn a_network_is_built_only_through_its_checks() {
+    let a = |a: u8, b: u8, c: u8, d: u8| Ipv4Addr::new(a, b, c, d);
+    let net = Cidr::new(a(10, 1, 0, 0), 24).expect("a private /24");
+    assert_eq!((net.addr(), net.bits()), (a(10, 1, 0, 0), 24));
+    assert_eq!(net.to_string().parse::<Cidr>(), Ok(net));
+    let refused = [
+        (a(8, 8, 4, 0), 24, CidrError::NotPrivate(a(8, 8, 4, 0))),
+        (
+            a(100, 64, 0, 0),
+            16,
+            CidrError::NotPrivate(a(100, 64, 0, 0)),
+        ),
+        (a(127, 0, 0, 0), 8, CidrError::NotPrivate(a(127, 0, 0, 0))),
+    ];
+    for (addr, bits, want) in refused {
+        assert_eq!(Cidr::new(addr, bits), Err(want), "{addr}/{bits}");
+    }
+    for (addr, bits, min) in [
+        (a(10, 0, 0, 0), 0, 8),
+        (a(10, 0, 0, 0), 7, 8),
+        (a(10, 0, 0, 0), 31, 8),
+        (a(10, 0, 0, 0), 32, 8),
+        (a(172, 16, 0, 0), 11, 12),
+        (a(192, 168, 0, 0), 15, 16),
+        (a(192, 168, 0, 0), 8, 16),
+    ] {
+        assert_eq!(
+            Cidr::new(addr, bits),
+            Err(CidrError::Bits { addr, bits, min }),
+            "{addr}/{bits}"
+        );
+    }
+    for (addr, min) in [
+        (a(10, 0, 0, 0), 8),
+        (a(172, 16, 0, 0), 12),
+        (a(192, 168, 0, 0), 16),
+    ] {
+        let lo = Cidr::new(addr, min).expect("the block itself");
+        let hi = Cidr::new(addr, 30).expect("a /30");
+        assert_eq!((lo.bits(), hi.bits()), (min, 30));
+    }
+    let ten = a(10, 0, 0, 0);
+    for text in [
+        String::new(),
+        ten.to_string(),
+        format!("{ten}/"),
+        format!("{ten}/x"),
+        format!("{ten}/+24"),
+        format!("{ten}/ 24"),
+        format!("{ten}/256"),
+        "not-an-address/24".to_owned(),
+        format!("{ten}/24/1"),
+    ] {
+        assert_eq!(
+            text.parse::<Cidr>(),
+            Err(CidrError::Malformed(text.clone())),
+            "{text:?}"
+        );
+    }
+    assert_eq!(
+        format!("{}/8", a(192, 168, 0, 0)).parse::<Cidr>(),
+        Err(CidrError::Bits {
+            addr: a(192, 168, 0, 0),
+            bits: 8,
+            min: 16
+        })
+    );
+    assert_eq!(
+        CidrError::Malformed("x".to_owned()).to_string(),
+        "\"x\" is not a.b.c.d/bits"
+    );
+    assert_eq!(
+        CidrError::NotPrivate(a(8, 8, 4, 0)).to_string(),
+        format!("{} is not in a private (RFC 1918) block", a(8, 8, 4, 0))
+    );
+    assert_eq!(
+        CidrError::Bits {
+            addr: a(192, 168, 0, 0),
+            bits: 8,
+            min: 16
+        }
+        .to_string(),
+        format!(
+            "{}/8: the prefix is not from 16 to 30 bits",
+            a(192, 168, 0, 0)
+        )
+    );
 }
 
 /// Catches a LAN network that widens past private space, and one that is refused though
@@ -484,6 +557,97 @@ fn a_lan_network_stays_inside_its_private_block() {
             &format!("MDM_LAN_CIDR={net}"),
         );
         let c = MdmConfig::parse(&text).unwrap_or_else(|e| panic!("{bind} {net}: {e}"));
-        assert_eq!(c.lan.to_string(), net);
+        assert_eq!(c.lan().to_string(), net);
     }
+}
+
+/// Catches two services given one loopback port (komira-ai/kbf#2248: the three ports were
+/// checked one at a time): each pair set equal is refused naming the later key and the port
+/// it repeats, three equal ports are refused at the first pair, and ports that differ by one
+/// are taken.
+#[test]
+fn the_three_loopback_ports_are_checked_together() {
+    let ports = |nanohub: &str, scep: &str, dep: &str| {
+        with("MDM_NANOHUB_PORT", nanohub)
+            .replace("MDM_SCEP_PORT=9005", &format!("MDM_SCEP_PORT={scep}"))
+            .replace("MDM_DEP_PORT=9001", &format!("MDM_DEP_PORT={dep}"))
+    };
+    let cases = [
+        (
+            ("9004", "9004", "9001"),
+            "MDM_SCEP_PORT=9004: the same port as MDM_NANOHUB_PORT",
+        ),
+        (
+            ("9004", "9005", "9004"),
+            "MDM_DEP_PORT=9004: the same port as MDM_NANOHUB_PORT",
+        ),
+        (
+            ("9004", "9005", "9005"),
+            "MDM_DEP_PORT=9005: the same port as MDM_SCEP_PORT",
+        ),
+        (
+            ("9004", "9004", "9004"),
+            "MDM_SCEP_PORT=9004: the same port as MDM_NANOHUB_PORT",
+        ),
+        (
+            ("1", "65535", "1"),
+            "MDM_DEP_PORT=1: the same port as MDM_NANOHUB_PORT",
+        ),
+    ];
+    for ((nanohub, scep, dep), want) in cases {
+        assert_eq!(
+            refusal(&ports(nanohub, scep, dep)),
+            want,
+            "{nanohub} {scep} {dep}"
+        );
+    }
+    let c = MdmConfig::parse(&ports("9004", "9005", "9006")).expect("three ports");
+    assert_eq!(
+        (c.nanohub_port(), c.scep_port(), c.dep_port()),
+        (9004, 9005, 9006)
+    );
+    let c = MdmConfig::parse(&ports("1", "65535", "2")).expect("the ends of the range");
+    assert_eq!(
+        (c.nanohub_port(), c.scep_port(), c.dep_port()),
+        (1, 65535, 2)
+    );
+}
+
+/// Catches a DNS name or profile identifier longer than DNS allows (komira-ai/kbf#2248): the
+/// certificate, the URLs the profiles carry and the Macs' lookups all fail on such a name.
+/// A label of 63 characters and a name of 253 are taken, a label of 64 and a name of 254
+/// refused, for both keys.
+#[test]
+fn dns_names_are_within_the_label_and_name_length_limits() {
+    let name = |labels: &[usize]| -> String {
+        let parts: Vec<String> = labels.iter().map(|n| "a".repeat(*n)).collect();
+        parts.join(".")
+    };
+    // 63 + 1 + 63 + 1 + 63 + 1 + 61 = 253.
+    let longest = name(&[63, 63, 63, 61]);
+    let too_long = name(&[63, 63, 63, 62]);
+    assert_eq!((longest.len(), too_long.len()), (253, 254));
+    for key in ["MDM_DNS_NAME", "MDM_PROFILE_ID"] {
+        for ok in [name(&[63, 1]), name(&[1, 63]), longest.clone()] {
+            let c = MdmConfig::parse(&with(key, &ok))
+                .unwrap_or_else(|e| panic!("{key} of {}: {e}", ok.len()));
+            let got = if key == "MDM_DNS_NAME" {
+                c.dns_name()
+            } else {
+                c.profile_id()
+            };
+            assert_eq!(got, ok);
+        }
+        for bad in [name(&[64, 1]), name(&[1, 64]), too_long.clone()] {
+            let got = refusal(&with(key, &bad));
+            assert!(got.starts_with(&format!("{key}={bad}: ")), "{key}: {got}");
+        }
+    }
+    assert_eq!(
+        refusal(&with("MDM_DNS_NAME", &name(&[64, 1]))),
+        format!(
+            "MDM_DNS_NAME={}: not a lower-case DNS name with a dot (at most 63 characters a label, 253 in all)",
+            name(&[64, 1])
+        )
+    );
 }

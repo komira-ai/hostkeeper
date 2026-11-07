@@ -319,7 +319,7 @@ fn the_ade_profile_is_built_from_the_settings_and_passes_its_own_checks() {
             .expect("the profile serializes")
     );
     let text = String::from_utf8(json.clone()).expect("utf-8");
-    assert_eq!(AdeProfile::parse(&text, &c.dns_name), Ok(p.clone()));
+    assert_eq!(AdeProfile::parse(&text, c.dns_name()), Ok(p.clone()));
     let back: AdeProfile = serde_json::from_slice(&json).expect("round trip");
     assert_eq!(back, p);
     assert!(json.ends_with(b"}\n"));
@@ -344,5 +344,58 @@ fn the_ade_profile_is_built_from_the_settings_and_passes_its_own_checks() {
         text.contains("\"profile_name\": \"Site \\\"A\\\"\""),
         "{text}"
     );
-    assert_eq!(AdeProfile::parse(&text, &c.dns_name), Ok(p));
+    assert_eq!(AdeProfile::parse(&text, c.dns_name()), Ok(p));
+}
+
+/// Catches an ADE profile that leaves a wiped Mac waiting at Setup Assistant
+/// (docs/design/hostkeeper-mdm.md section 6.2: the port sets `auto_advance_setup`, which
+/// kbf's profile left false), while the parser still refuses everything weaker than
+/// supervised, mandatory and not removable whatever the flag says, and still takes a
+/// profile without Auto Advance, which is not weaker.
+#[test]
+fn the_ade_profile_advances_setup_by_itself_and_the_parser_still_refuses_a_weaker_one() {
+    let c = config();
+    let p = AdeProfile::from_config(&c);
+    assert!(p.auto_advance_setup);
+    assert!(p.is_supervised && p.is_mandatory && !p.is_mdm_removable);
+    assert!(!p.await_device_configured);
+    let text = read("golden/example/ade_profile.json");
+    assert!(
+        text.contains("\n  \"auto_advance_setup\": true,\n"),
+        "{text}"
+    );
+    for (from, to, want) in [
+        (
+            "\"is_supervised\": true",
+            "\"is_supervised\": false",
+            ProfileError::NotSupervised,
+        ),
+        (
+            "\"is_mandatory\": true",
+            "\"is_mandatory\": false",
+            ProfileError::NotMandatory,
+        ),
+        (
+            "\"is_mdm_removable\": false",
+            "\"is_mdm_removable\": true",
+            ProfileError::Removable,
+        ),
+    ] {
+        assert!(text.contains(from), "{from}");
+        let weaker = text.replace(from, to);
+        assert_eq!(AdeProfile::parse(&weaker, c.dns_name()), Err(want), "{to}");
+    }
+    let manual = text.replace(
+        "\"auto_advance_setup\": true",
+        "\"auto_advance_setup\": false",
+    );
+    let back = AdeProfile::parse(&manual, c.dns_name()).expect("Auto Advance off is not weaker");
+    assert!(!back.auto_advance_setup);
+    assert_eq!(
+        AdeProfile {
+            auto_advance_setup: true,
+            ..back
+        },
+        p
+    );
 }

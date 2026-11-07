@@ -391,3 +391,61 @@ service the deployment served). The old `--services-file` spelling still works.
   package in the graph, and no closed set of roles in the source.
 - `hygiene_lint_passes_the_tree` (`xtask`): the fixtures recorded from kbf name no internal host,
   date or address.
+
+# The MDM kit's core
+
+The pure core of the MDM kit (docs/design/hostkeeper-mdm.md, section 8, task M2) was imported
+from kbf's `main` at commit `5d7a2c405f9e23949661ee1e2b34fc029a623cbd`, where it is the crate
+`crates/mdm-core` (moved there by komira-ai/kbf#2238). kbf's copy stays until the design's task
+M6a deletes it.
+
+| kbf | hostkeeper | what it holds |
+|---|---|---|
+| `mdm-core` | `hostkeeper-mdm-core` | the kit's settings, the enrollment and ADE profiles, the systemd units and Caddyfile of the MDM services, the pinned upstream tools and the arguments of the SCEP CA and the DEP certificate |
+
+| kbf name | hostkeeper name |
+|---|---|
+| Rust path `mdm_core` | `hostkeeper_mdm_core` |
+| default unit prefix `js-mdm` and the defaults derived from it: the slice, `org_magic`, the SCEP CA's organizational unit, the DEP certificate's name, the signature namespace (`js-mdm-erase`) | `hostkeeper-mdm` (`hostkeeper-mdm.slice`, `hostkeeper-mdm-erase`) |
+| example user and directories `js-mdm`, `/var/lib/js-mdm`, `/etc/js-mdm`, `/opt/js-mdm/bin` | `hostkeeper-mdm`, `/var/lib/hostkeeper-mdm`, `/etc/hostkeeper-mdm`, `/opt/hostkeeper-mdm/bin` |
+| example profile identifier `com.example.mdm` | `com.example.hostkeeper.mdm` |
+
+## What changed
+
+The fixes of komira-ai/kbf#2248 that the design gives this task, each with a test that fails on
+the crate as it was copied (the first commit of the import):
+
+- The three loopback ports (`MDM_NANOHUB_PORT`, `MDM_SCEP_PORT`, `MDM_DEP_PORT`) are checked
+  together: two equal ports are refused, naming the later key and the key it repeats
+  (`the_three_loopback_ports_are_checked_together`).
+- `MdmConfig` and `Cidr`, and the parts of `MdmConfig` (`AdeSettings`, `ScepCa`, `DepCert`), have
+  private fields and read-only accessors. `MdmConfig::parse` is the only way to make a config;
+  `Cidr::new` and `Cidr`'s `FromStr` are the only ways to make a network, with the checks of
+  `MDM_LAN_CIDR` and a typed `CidrError` (`a_network_is_built_only_through_its_checks`). A `Cidr`
+  is now 8 to 30 bits, so `contains` lost its guard for a /0 and a /32
+  (`a_network_of_eight_or_thirty_bits_holds_exactly_its_addresses`).
+- DNS names are within DNS's limits, 63 characters a label and 253 in all: `MDM_DNS_NAME`,
+  `MDM_PROFILE_ID` and the host of every `https://` URL
+  (`dns_names_are_within_the_label_and_name_length_limits`,
+  `a_url_host_is_within_the_dns_length_limits`).
+- An `https://` URL's authority ends at the first `/` or `?`; a fragment, whitespace and control
+  characters are refused anywhere in it; its host is a host name and its port is digits only
+  (`an_authority_ends_at_its_path_or_query_and_holds_only_a_host_name_and_port`).
+- The ADE profile sets `auto_advance_setup` (design section 6.2); its parser still refuses a
+  profile that is not supervised, not mandatory or removable
+  (`the_ade_profile_advances_setup_by_itself_and_the_parser_still_refuses_a_weaker_one`).
+
+The other items of komira-ai/kbf#2248 belong to the ports of `host-step` and `mdm-host` (design
+section 12, tasks M3 and M4).
+
+## Left behind
+
+- The ignored test `installed_host`, a manual hook that compared a render with the files of a host
+  read by hand. `render::manifest` stays.
+
+## Tests that hold the MDM core import
+
+`crates/hostkeeper-mdm-core/tests/kbf_port.rs`: rendered with kbf's names
+(`tests/kbf_f89ed5c/kbf_names.conf`), the units, the Caddyfile, the enrollment profile, the ADE
+profile, the pins and the SCEP and DEP arguments equal kbf-deploy's own files, except the three
+differences that file names (comment wording, the slice's `Description=`, `auto_advance_setup`).

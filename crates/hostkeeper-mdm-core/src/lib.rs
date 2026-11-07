@@ -50,6 +50,7 @@
 pub mod acme;
 pub mod commands;
 pub mod config;
+mod dns;
 pub mod https;
 pub mod path;
 pub mod pins;

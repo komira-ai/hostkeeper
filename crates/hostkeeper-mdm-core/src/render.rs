@@ -54,9 +54,9 @@ pub struct UnitNames {
 impl UnitNames {
     /// The names for the settings `c`.
     pub fn new(c: &MdmConfig) -> UnitNames {
-        let p = &c.unit_prefix;
+        let p = c.unit_prefix();
         UnitNames {
-            slice: c.slice.clone(),
+            slice: c.slice().to_owned(),
             scep: format!("{p}-scep.service"),
             nanohub: format!("{p}-nanohub.service"),
             depserver: format!("{p}-depserver.service"),
@@ -147,22 +147,22 @@ pub fn render_tls(c: &MdmConfig, acme: &Acme) -> Result<Vec<Unit>, TemplateError
 
 fn values(c: &MdmConfig) -> Values {
     let pairs = [
-        ("PREFIX", c.unit_prefix.clone()),
-        ("SLICE", c.slice.clone()),
-        ("USER", c.user.clone()),
-        ("STATE", c.state.to_string()),
-        ("ETC", c.etc.to_string()),
-        ("BIN", c.bin.to_string()),
-        ("NANOHUB_PORT", c.nanohub_port.to_string()),
-        ("SCEP_PORT", c.scep_port.to_string()),
-        ("DEP_PORT", c.dep_port.to_string()),
-        ("DEP_NAME", c.dep_name.clone()),
-        ("LAN_CIDR", c.lan.to_string()),
-        ("BIND", c.bind.to_string()),
-        ("DNS_NAME", c.dns_name.clone()),
-        ("MEMORY_MAX", c.memory_max.clone()),
-        ("CPU_QUOTA", c.cpu_quota.clone()),
-        ("TASKS_MAX", c.tasks_max.clone()),
+        ("PREFIX", c.unit_prefix().to_owned()),
+        ("SLICE", c.slice().to_owned()),
+        ("USER", c.user().to_owned()),
+        ("STATE", c.state().to_string()),
+        ("ETC", c.etc().to_string()),
+        ("BIN", c.bin().to_string()),
+        ("NANOHUB_PORT", c.nanohub_port().to_string()),
+        ("SCEP_PORT", c.scep_port().to_string()),
+        ("DEP_PORT", c.dep_port().to_string()),
+        ("DEP_NAME", c.dep_name().to_owned()),
+        ("LAN_CIDR", c.lan().to_string()),
+        ("BIND", c.bind().to_string()),
+        ("DNS_NAME", c.dns_name().to_owned()),
+        ("MEMORY_MAX", c.memory_max().to_owned()),
+        ("CPU_QUOTA", c.cpu_quota().to_owned()),
+        ("TASKS_MAX", c.tasks_max().to_owned()),
     ];
     pairs.into_iter().collect()
 }

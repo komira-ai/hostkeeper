@@ -14,7 +14,8 @@
 
 # --- where the MDM answers ----------------------------------------------------
 # Required. The name the Macs dial (a DNS A record pointing at MDM_BIND). The TLS
-# certificate is for this name.
+# certificate is for this name. Lower-case, with a dot, at most 63 characters a label and
+# 253 in all.
 MDM_DNS_NAME=mdm.example.com
 # Required. The LAN address the HTTPS proxy binds, and the only one: refused unless it
 # is private (an RFC 1918 range: 10/8, 172.16/12 or 192.168/16) and inside MDM_LAN_CIDR.
@@ -39,7 +40,8 @@ MDM_BIN=/opt/hostkeeper-mdm/bin
 # The erase path's replay ledger (root only, 0700). Accepted here so one file serves the
 # whole kit; the unit and profile builders do not read it.
 MDM_ERASE_STATE=/var/lib/hostkeeper-mdm-erase
-# Required. Loopback ports of NanoHUB, the SCEP server and NanoDEP's depserver.
+# Required. Loopback ports of NanoHUB, the SCEP server and NanoDEP's depserver, three
+# different ports.
 MDM_NANOHUB_PORT=9004
 MDM_SCEP_PORT=9005
 MDM_DEP_PORT=9001
@@ -64,8 +66,8 @@ MDM_DEP_NAME=example
 # Required. The organisation shown with the SCEP CA, the enrollment profile and the ADE
 # profile.
 MDM_ORG=Example
-# Required. The enrollment profile's identifier, reverse-DNS. A Mac keeps one profile
-# per identifier, so keep it once Macs are enrolled.
+# Required. The enrollment profile's identifier, reverse-DNS, with the length limits of
+# MDM_DNS_NAME. A Mac keeps one profile per identifier, so keep it once Macs are enrolled.
 MDM_PROFILE_ID=com.example.hostkeeper.mdm
 # Default "<MDM_ORG> MDM". The enrollment profile's name in System Settings.
 MDM_PROFILE_DISPLAY_NAME=Example MDM

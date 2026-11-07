@@ -10,15 +10,15 @@ pub fn scep_ca_init_args(c: &MdmConfig) -> Vec<String> {
         "ca",
         "-init",
         "-depot",
-        &format!("{}/scep/depot", c.state),
+        &format!("{}/scep/depot", c.state()),
         "-years",
-        &c.scep_ca.years.to_string(),
+        &c.scep_ca().years().to_string(),
         "-common_name",
-        &c.scep_ca.common_name,
+        c.scep_ca().common_name(),
         "-organization",
-        &c.org,
+        c.org(),
         "-organizational_unit",
-        &c.scep_ca.organizational_unit,
+        c.scep_ca().organizational_unit(),
     ];
     args.into_iter().map(str::to_owned).collect()
 }
@@ -28,6 +28,8 @@ pub fn scep_ca_init_args(c: &MdmConfig) -> Vec<String> {
 pub fn dep_cert_request_path(c: &MdmConfig) -> String {
     format!(
         "/v1/tokenpki/{}?cn={}&validity_days={}",
-        c.dep_name, c.dep_cert.common_name, c.dep_cert.days
+        c.dep_name(),
+        c.dep_cert().common_name(),
+        c.dep_cert().days()
     )
 }

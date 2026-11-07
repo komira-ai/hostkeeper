@@ -222,8 +222,8 @@ pub fn enrollment_to<W: Write>(
     challenge: &Challenge,
     out: &mut W,
 ) -> Result<(), ProfileError> {
-    let uuids = payload_uuids(&c.profile_id);
-    let (dns_name, id, org) = (&c.dns_name, &c.profile_id, &c.org);
+    let uuids = payload_uuids(c.profile_id());
+    let (dns_name, id, org) = (c.dns_name(), c.profile_id(), c.org());
     let scep = dict([
         ("Key Type", text("RSA")),
         ("Challenge", text(challenge.expose())),
@@ -254,7 +254,7 @@ pub fn enrollment_to<W: Write>(
     ]);
     let profile = dict([
         ("PayloadContent", Value::Array(vec![scep, mdm])),
-        ("PayloadDisplayName", text(&c.profile_display_name)),
+        ("PayloadDisplayName", text(c.profile_display_name())),
         ("PayloadIdentifier", text(id)),
         ("PayloadOrganization", text(org)),
         ("PayloadType", text("Configuration")),
@@ -311,27 +311,32 @@ pub struct AdeProfile {
 
 impl AdeProfile {
     /// The profile for the settings `c`: supervised, mandatory, not removable, sending
-    /// devices to `https://<MDM_DNS_NAME>/enroll`.
+    /// devices to `https://<MDM_DNS_NAME>/enroll`, and advancing through Setup Assistant by
+    /// itself (`auto_advance_setup`), so that a wiped Mac on Ethernet enrolls with no one at
+    /// it (docs/design/hostkeeper-mdm.md section 6.2). Whether a farm Mac's macOS still stops
+    /// at a pane no profile skips is checked on a device; a Mac that ignores the key only
+    /// waits at that pane, as it would without it.
     pub fn from_config(c: &MdmConfig) -> AdeProfile {
         AdeProfile {
-            profile_name: c.ade.profile_name.clone(),
-            url: format!("https://{}/enroll", c.dns_name),
+            profile_name: c.ade().profile_name().to_owned(),
+            url: format!("https://{}/enroll", c.dns_name()),
             is_supervised: true,
             is_mandatory: true,
             is_mdm_removable: false,
             await_device_configured: false,
-            auto_advance_setup: false,
-            org_magic: c.ade.org_magic.clone(),
-            language: c.ade.language.clone(),
-            region: c.ade.region.clone(),
+            auto_advance_setup: true,
+            org_magic: c.ade().org_magic().to_owned(),
+            language: c.ade().language().to_owned(),
+            region: c.ade().region().to_owned(),
             anchor_certs: Vec::new(),
-            skip_setup_items: c.ade.skip_items.clone(),
+            skip_setup_items: c.ade().skip_items().to_vec(),
         }
     }
 
     /// `text` read as a profile for the MDM at `dns_name`, refused unless a device it
     /// enrolls is supervised, cannot skip it, cannot remove the MDM, and is sent to
-    /// this MDM.
+    /// this MDM. `auto_advance_setup` and `await_device_configured` are read and not
+    /// judged: neither lets a device leave the MDM or skip it.
     pub fn parse(text: &str, dns_name: &str) -> Result<AdeProfile, ProfileError> {
         let p: AdeProfile =
             serde_json::from_str(text).map_err(|e| ProfileError::Json(e.to_string()))?;
