@@ -16,7 +16,8 @@ Today a service can be deployed by hostkeeper only as hostkeeper's own package: 
 already ships a `.deb`, an `.rpm`, a macOS `.pkg` or an OCI image. This design removes hostkeeper's package format:
 
 1. A release names, for each platform, an ordered list of artifacts, one per installer (a `.deb`, an `.rpm`, a tarball,
-   a macOS `.pkg`, ...), and a host takes the first its daemon can install. hostkeeper fetches it by digest, verifies
+   a macOS `.pkg`, ...), and a host takes the first its daemon can install (a host that already runs the service
+   keeps the installer it runs). hostkeeper fetches it by digest, verifies
    its digest and attestation, and never parses it. Only the format's own tool reads it, after the checks.
 2. What hostkeeper needs to know about the service is a **manifest** sent in the same call, one per artifact, beside it. It is not inside the artifact.
 3. The code that installs a format is an **installer**, built into the daemon, with the contract of a hook. A format that
@@ -27,7 +28,7 @@ already ships a `.deb`, an `.rpm`, a macOS `.pkg` or an OCI image. This design r
 | Section of #179 | Fate here |
 |---|---|
 | 1, 2. What changes; today, in the code | Rewritten (sections 1, 2) |
-| 3, 4. Host facts; builds and "most specific wins" | Dropped from v1: a host gets the first entry of its platform's list whose installer its daemon announces, or none (section 3.3). A short note in section 11 ("Later") |
+| 3, 4. Host facts; builds and "most specific wins" | Dropped from v1: a host gets the entry of the installer it runs, else the first entry of its platform's list whose installer its daemon announces, or none (section 3.3). A short note in section 11 ("Later") |
 | 5. Artifact kinds (`archive`, `oci-image` as a payload, "not in v1", "what no kind may do") | Replaced by installers (section 5). `.deb`, `.rpm` and `.pkg` are in v1; an OCI image is an artifact of its own |
 | 6.1 to 6.3 `Releases.Register`, its checks, desired state over it | Replaced by one call, `SetDesired` with `targets`, and its checks (sections 3.1 to 3.4) |
 | 6.4 Where the coordinator keeps a release | Kept (section 3.6), without the per-host build record, which a platform map makes unneeded |
@@ -72,13 +73,13 @@ already ships a `.deb`, an `.rpm`, a macOS `.pkg` or an OCI image. This design r
   ```
 
 - A Debian or Ubuntu host takes the `.deb`, a Fedora, RHEL-family, Amazon Linux or openSUSE host the `.rpm`, and any
-  other Linux host the tarball: each host the first entry whose installer its daemon announces (section 3.3). One
+  other Linux host the tarball: each new host the first entry whose installer its daemon announces, and a host that
+  runs the service the entry of the installer it runs (section 3.3). One
   static build per platform, wrapped in every format, serves every release of each distribution (section 5.4).
 - A host is ordered the version only when its platform has a list and an entry of it is one its daemon can install. A
   host of a platform with none keeps what it runs and shows `no_target`; a host no entry fits keeps what it runs and
   shows `no_build_for_host`. Neither is failed or missing.
-- The artifact is any format with an installer: a `.deb`, an `.rpm`, an Alpine `.apk` and an Arch package (later), a
-  macOS flat `.pkg`, an OCI image archive, or a plain tarball (a Homebrew bottle is one), as well as today's archive.
+- The artifact is any format with an installer: a `.deb`, an `.rpm`, an Arch package (later), a macOS flat `.pkg`, an OCI image archive, or a plain tarball (a Homebrew bottle is one), as well as today's archive.
 - The bytes stay where CI published them (the GitHub release's assets) and may also sit in a mirror the host is
   configured to use. A daemon reads its stores and their credentials from `/etc/hostkeeper/stores.toml`.
 - The manifest, which names the root-run hook, comes from the call and is not attested. Whoever may set a service's
@@ -210,28 +211,35 @@ explicit nulls is then accepted as written, and means the same as the key left o
 For a version set with targets, the coordinator picks for each host of the service one entry of its platform's list:
 
 1. **A host that runs the service** takes the entry of the installer it runs, which its heartbeat names
-   (`ServiceBeat.installer`, absent for `hostkeeper-archive`), wherever that entry stands in the list.
+   (`ServiceBeat.installer`, absent for `hostkeeper-archive`), wherever that entry stands in the list, when its daemon
+   still lists that installer.
 2. **Any other host** takes the first entry whose installer is in its daemon's `installers` (section 5.1). A daemon
-   that does not announce `target-v1` counts as listing `hostkeeper-archive` alone (section 9.1).
+   that does not announce `target-v1` counts as listing `hostkeeper-archive` alone (section 9.1). A `target-v1` daemon
+   whose list the coordinator has not yet had over gRPC (after the daemon's or the coordinator's start; the list is
+   held in memory, as features are) is picked nothing until its first gRPC beat, and keeps the gate reason it had.
 
 The pick is equality of the `installer` strings and nothing else. The coordinator never reads a format, a package name
 or a manifest to choose, so a new installer needs no coordinator change. CI decides the preference by the order of the
-list: with `[deb, rpm, tarball]` a Debian host takes the `.deb` and an Alpine host the tarball; with the tarball first,
-every Linux host takes the tarball.
+list: with `[deb, rpm, tarball]` a new Debian host takes the `.deb` and a new Arch host the tarball; with the tarball
+first, every new Linux host takes the tarball.
 
 - **An entry is picked:** the host is ordered it, exactly as a host is ordered today, through the update plan and the
   rollout gate.
 - **Its platform has no list:** it is ordered nothing, keeps what it runs, and shows the gate reason
   `GATE_REASON_NO_TARGET`. `Releases.Status` and `Converge` list it apart, as they list `no_package_for_platform` hosts
   today. It is never counted as failed, and it does not hold convergence: the version has converged when every host
-  that was picked an entry runs it.
+  that was picked an entry runs it, and at least one was. A version set with targets that no host was picked for
+  (every host `no_target` or `no_build_for_host`, as a misspelt installer gives) is not converged, and `Converge` says
+  so with its counts of picked and unpicked hosts.
 - **No entry fits a host that does not run the service:** it is ordered nothing and shows
   `GATE_REASON_NO_BUILD_FOR_HOST`, "no build for this host", with the installers its daemon lists. It is treated as
   `no_target`: not failed, not missing, not holding convergence. The release has no build this host can install, which
   is the release's choice, as a null platform is.
-- **The host runs the service with an installer the list no longer has:** it is ordered nothing and shows
-  `GATE_REASON_INSTALLER_DROPPED`. It is listed apart, not failed, but `Converge` names it, because the release meant
-  it to update and a host may change a service's installer only by uninstalling it (section 5.1).
+- **The host runs the service with an installer the list has no entry for, or that its daemon no longer lists:** it
+  is ordered nothing and shows `GATE_REASON_INSTALLER_DROPPED`. It is listed apart, not failed, but `Converge` names
+  it, because the release meant it to update and a host may change a service's installer only by uninstalling it
+  (section 5.1). This holds for an old daemon too: one that runs the service from archives, given a list with no
+  archive entry, is `installer_dropped`, and one that does not run it is `no_build_for_host`.
 
 The daemon announces its installers once per start, so the pick is the same for a host at every beat until the daemon
 restarts. A daemon given an entry of an installer it does not list (its list changed at a restart the coordinator has
@@ -244,10 +252,12 @@ JSON (the first after a start, or one resent after a gRPC transport failure), an
 an old daemon's order (section 9.1), and an order for any other entry waits for the next gRPC heartbeat. The host's
 gate reason does not change for that one beat.
 
-`Force` to a version set with targets uses the same rule. `ForceRollback` and automatic rollback go to the version the
+`Force` and `Install` to a version set with targets use the same rule, and a host the rule picks nothing for is not
+ordered and shows the same gate reason. `ForceRollback` and automatic rollback go to the version the
 host ran before. When that version is still on the host, the daemon uses its sealed `target.json` and needs no fetch
 (section 6.4); the order still carries the entry of the installer the host runs, for a host that no longer keeps
-the version.
+the version. A version set with an index or a digest and no targets is ordered as today. A version with targets but
+no entry of that installer is not ordered, and the host shows `installer_dropped`.
 
 ### 3.4 What the coordinator checks
 
@@ -410,7 +420,7 @@ checks are today's `Manifest::load` rules moved to the message, plus those for i
 - **Health URL.** `http://` to `127.0.0.1` or `[::1]`, as today.
 - **Params.** Scalars only, no `updater` or `updater.*` key.
 
-A manifest that fails any check but the version is refused `Failed`, `release`, `manifest_invalid`, before any byte is
+A manifest that fails any check but the version and the listed installer is refused `Failed`, `release`, `manifest_invalid`, before any byte is
 fetched. These checks are guards against mistakes. They are not what makes the hook safe to run; section 8.2 says what
 does.
 
@@ -464,7 +474,6 @@ is wrong about the host.
 | `tarball` | A tar, plain or with gzip, xz or zstd: a plain tarball, a Homebrew bottle | `hostkeeper-unpack`'s bounded reader, extended in A6 with gzip and xz decoders, plain tar, a mode with no fixed top-level layout, and symbolic links (section 6.1) | Switch `current`, link the `place` entries, reload | Unlink what is placed | Every daemon from A6 |
 | `deb` | A `.deb` | `dpkg-deb --extract` into the tree (no maintainer script runs); `dpkg-deb --field <artifact> Package` must equal `package` | `dpkg --install <artifact>`; record the installed version from `dpkg-query` | `dpkg --purge <package>`, only while `dpkg-query` shows the version hostkeeper recorded | The `deb` family (section 5.4) |
 | `rpm` | An `.rpm` | `rpm2archive` into the bounded tar reader; `rpm --query --package --queryformat %{NAME}` must equal `package` | `rpm --upgrade --oldpackage <artifact>`; record the installed version | `rpm --erase <package>`, under the same condition | The `rpm` family |
-| `apk` (later, A13) | An Alpine `.apk` | Its gzip segments through the bounded reader; the `.PKGINFO` `pkgname` must equal `package` | `apk add --no-network --allow-untrusted <artifact>` (the attestation is the trust, not apk's keyring); record the version | `apk del <package>`, under the same condition | The `apk` family |
 | `arch` (later, A14) | An Arch package (`.pkg.tar.zst`) | The bounded reader; the `.PKGINFO` `pkgname` must equal `package` | `pacman --upgrade --noconfirm <artifact>`; record the version | `pacman --remove --nosave <package>`, under the same condition | The `arch` family |
 | `macos-pkg` | A flat `.pkg` | `pkgutil --expand-full` into the tree; its package identifier must equal `package` | Refuse if a path the payload installs exists on the host and is not recorded for this service (`package_conflict`); `installer -pkg <artifact> -target /`; record every file `pkgutil --files <package>` lists, with its digest | Delete each recorded file whose digest is unchanged, then `pkgutil --forget <package>` | macOS |
 | `oci-image` | An OCI image archive (`oci-archive` tar) holding exactly one image | Keep the file; read the archive's `index.json` with the bounded reader and refuse any count of images but one (`manifest_invalid`) | Note whether the runtime already holds the image's digest; `podman load --input <artifact>`; write one unit per `containers` entry; reload | Remove the generated units; `podman rmi` an image only if this service's `activate` loaded it and no kept version uses it | Linux with `/usr/bin/podman`, whatever the family |
@@ -536,7 +545,8 @@ for another architecture or with dependencies the host lacks.
 **Built in v1:** `hostkeeper-archive`, `tarball`, `deb`, `rpm`, `macos-pkg`, and `oci-image` (question 2). **Later:**
 `arch` (A14); until then an Arch host takes the tarball. `apk` (A13) is later for a second reason: the daemon runs only
 under systemd (its step launcher's transient units, its unit's start limit and fallback), and Alpine runs OpenRC, so no
-Alpine host runs a daemon today. A13 waits on a daemon that runs without systemd (question 5).
+Alpine host runs a daemon today. A13 waits on a daemon that runs without systemd (question 5) and designs `apk`'s steps
+then; the name and the family are reserved now, and CI builds no `.apk` until A13.
 
 **One build, every release.** Distributions differ in their releases' libraries, not in the formats' tools. A service
 ships one `.deb` for every Debian and Ubuntu release, and one `.rpm` for every RHEL-family and openSUSE release, when:
@@ -544,8 +554,10 @@ ships one `.deb` for every Debian and Ubuntu release, and one `.rpm` for every R
 1. It builds **one binary per platform**: static (Rust's `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl`,
    no `NEEDED` entry), or linked against glibc alone at a stated baseline, built on the oldest release it serves.
 2. It wraps **that same build** into every format of its list. nfpm, which already builds hostkeeper's `.deb` and
-   `.rpm` from `packaging/linux/nfpm.yaml`, emits `apk` and `archlinux` from the same file. So every entry of a
-   platform holds the same program bytes.
+   `.rpm` from `packaging/linux/nfpm.yaml`, emits `archlinux` (and `apk`) from the same file. So every entry of a
+   platform holds the same program bytes. The `tarball` entry of a Linux list must be the static build: a tarball
+   declares no dependency, so nothing on the host could refuse a glibc build too new for it. A glibc-baseline build
+   goes only in formats that declare its baseline.
 3. Its packages **declare no dependency**, but for a glibc build the C library at its baseline (`libc6 (>= 2.34)`,
    `glibc >= 2.34`), and add none of the format's automatic ones (`AutoReqProv: no` in an `.rpm`; nfpm adds none).
 4. It installs its units under `/usr/lib/systemd/system`, which every systemd release reads, and writes its package
@@ -556,8 +568,10 @@ ships one `.deb` for every Debian and Ubuntu release, and one `.rpm` for every R
 **What the daemon checks.** It does not read the binary: it reads no ELF header and no library list. At the end of
 `stage`, after the identity check and before `prepare`, it runs the format's own dependency check in its no-change
 mode against the host's package database: `dpkg --dry-run --install <artifact>`, `rpm --upgrade --test --oldpackage
-<artifact>`, `apk add --simulate --no-network <artifact>`, and for `arch` the `--print` run of `pacman --upgrade`
-(A14's device test shows it refuses a missing dependency, or A14 names the check that does). When it refuses, the
+<artifact>`, and for `arch` one A14 settles. A7's device test must show `dpkg --dry-run` refuses a `Depends` the host
+lacks; if it does not, A7 names the check that does. Until a format's check is shown, a missing dependency is still
+caught by the tool's install in `activate`, `Failed`, `environment`, `dependency_missing`, and the version is rolled
+back (section 6.4). When it refuses, the
 order is `Failed`, `environment`, `dependency_missing`: nothing is installed, the hook has not run, and the host keeps
 the version it runs. A glibc build on a release older than its baseline is refused there, by its declared baseline,
 instead of installing a program that cannot start. A static build declares nothing and passes on every release.
@@ -565,7 +579,7 @@ instead of installing a program that cannot start. A static build declares nothi
 hostkeeper's own Linux build does not qualify yet: it is `*-unknown-linux-gnu` built on Ubuntu 24.04 (glibc 2.39), and
 its `.deb` and `.rpm` declare no dependency, so they install on Debian 12 (glibc 2.36) or RHEL 9 (glibc 2.34), whose C
 library may lack symbols the binary needs. A15 builds it for musl, has `cargo xtask release check-linux-pkg` refuse a
-`NEEDED` entry and any declared dependency, and adds nfpm's `archlinux` bootstrap package.
+`NEEDED` entry and any declared dependency (the check a service's CI can run on its own tarball too), and adds nfpm's `archlinux` bootstrap package.
 
 ## 6. An update, a rollback and an uninstall
 
@@ -786,7 +800,7 @@ Every proto change is additive (rule B8, and the "Extending" rules of `agent.pro
 - new file `release.proto`: `TargetList`, `Target`, `Blob`, `Location`, `Manifest`, `Hook`, `StepBounds`, `InstallerBounds`,
   `Place`, `Param`, `Container`, `Port`, `Volume`;
 - `operator.proto`: `SetDesiredRequest.targets = 8`; the RPC `Releases.GetRelease` and its messages;
-  `Host.installers = 18`; `ReleasesRefusal` values `TARGET_INVALID = 23`, `RELEASE_EXISTS = 24` and
+  `Host.installers = 19` (18 is `first_serving_unix`); `ReleasesRefusal` values `TARGET_INVALID = 23`, `RELEASE_EXISTS = 24` and
   `RELEASE_UNKNOWN = 25`; `GateReason` values `GATE_REASON_NO_TARGET = 31`, `GATE_REASON_NO_BUILD_FOR_HOST = 32`
   and `GATE_REASON_INSTALLER_DROPPED = 33`. `GATE_REASON_NO_PACKAGE_FOR_PLATFORM = 24` keeps its meaning, for sets
   made with an index, and is not widened;
@@ -857,7 +871,7 @@ The tests of every build item, the cases each covers and why that list is comple
 | A10 | `oci-image`, the generated units, the observer's image digest | A6 | `oci_image.rs`; `install_oci_image.rs` in `privileged` with podman |
 | A11 | Stage 5: the channel keeps only hostkeeper's archives; `channel-stage` and the other services in `channel-sync` go; their docs; hostkeeper's own workflow keeps sending its index | both conditions of stage 5 | Sets with an index still accepted; the workflow lint for hostkeeper's index; the supersession check of rule B22 |
 | A12 | Stage 6: the daemon drops the channel fetch and its `Platform` copy, and requires `target-v1` echoed | A11 | The daemon's `coordinator_too_old` test; the device tests of section 9.3 |
-| A13 (later) | `apk`, its dependency check | A6, and a daemon that runs without systemd (question 5) | `apk.rs`; `install_apk.rs` in an Alpine container |
+| A13 (later) | `apk`: its steps, its dependency check | A6, and a daemon that runs without systemd (question 5) | `apk.rs`; `install_apk.rs` in an Alpine container |
 | A14 (later) | `arch`, its dependency check | A6 | `arch.rs`; `install_arch.rs` in an Arch container |
 | A15 | hostkeeper's own Linux build for musl, static; `check-linux-pkg` refuses a `NEEDED` entry and a declared dependency; nfpm's `archlinux` package beside the `.deb` and `.rpm`, attested like them; `docs/deploy/verify-a-release.md` names it | none | `release_linux.rs`; the same `.deb` and `.rpm` installed and started on the oldest and newest release of each family in `privileged` |
 
@@ -886,6 +900,8 @@ payload) by A10, and P10 and P12 (stages 5 and 6) by A11 and A12.
 | Which installers a daemon announces | The always-present ones, plus at most one native format: the `os-release` family's, when its tools are present; `oci-image` when podman is | A host's own package database decides, not any tool lying on disk (section 5.4) |
 | An entry of an installer the daemon does not list | `Deferred`, `installer_not_listed`, and picked again at the next gRPC beat | The coordinator's copy of the list can be one restart stale; nothing is wrong with the release |
 | Distro releases | One static (or stated glibc baseline) build per platform, wrapped in every format; the format's no-change dependency check before `prepare` | One `.deb` per family serves every release; a build too new for a host is refused before anything is installed |
+| The tarball fallback's build | The static build only; a glibc baseline only in formats that declare it | A tarball declares nothing, so no host check could refuse a build too new for it |
+| A host with no list over gRPC yet; a version no host is picked for | Picked nothing until its first gRPC beat; not converged, with counts in `Converge` | The pick needs the host's list; a misspelt installer must not read as success |
 | Each format's attestation | Its own bundle on its entry, listing its digest; CI attests every format it lists | A host verifies what it installs, and no format is trusted through another |
 | One call or `Register` and `SetDesired` | One call: `SetDesired` gains `targets`; `GetRelease` reads back | One call deploys, as asked; a separate registration adds a state nobody acts on |
 | `package_name` | Kept as today's `service`, version in `desired.version` | Renaming a shipped field is not additive (rule B8) |

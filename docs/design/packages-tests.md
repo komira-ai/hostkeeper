@@ -21,7 +21,8 @@ run only in the device jobs (`privileged`, `macos-device`), whose tests count to
   to a non-loopback host; an `updater.` param; each count limit one under and one over; a manifest of 16 KiB and one
   byte over; an entry of 24 KiB and one byte over; 2 KiB of locators and one byte over; an attestation absent, of
   0 bytes, of 1 MiB and one byte over; 9 locations. On the lists: a platform with an empty list, with 8 entries and
-  with 9; two entries of one installer in one list; an entry whose installer is empty or not of `[a-z0-9-]`.
+  with 9; two entries of one installer in one list; an entry whose installer is empty, of 32 bytes and of 33, or not of
+  `[a-z0-9-]`; a digest of 63 hex digits or with an upper-case letter; `bytes` 0 and 1.
 - **Deploy call (A2; `crates/hostkeeper-coordinator/tests/targets.rs`).** Every row of section 3.4, one refusal each, a
   fourth platform key, no target at all, `hostkeeper` with a `tarball` entry and with two entries. An identical repeat
   is accepted; the same entries in another order, or a different artifact or manifest, under the same version is
@@ -42,7 +43,12 @@ run only in the device jobs (`privileged`, `macos-device`), whose tests count to
   installers; an old daemon gets the list's `hostkeeper-archive` entry wherever it stands, as today, with the index
   digest and with none when the set had no index, and is `no_build_for_host` when the list has none; a host that runs
   the service from its `tarball` gets the list's `tarball` entry although a `deb` entry comes first, and is
-  `installer_dropped`, named by `Converge`, when the list has no `tarball`; a target is sent only to a daemon that
+  `installer_dropped`, named by `Converge`, when the list has no `tarball` or its daemon no longer lists `tarball`; an
+  old daemon that runs the service from archives, given a list with no archive entry, is `installer_dropped`; a list
+  with a misspelt installer that no host is picked for leaves the version not converged, with the counts in
+  `Converge`; a `target-v1` host is picked nothing before its first gRPC beat, after its own start and after the
+  coordinator's; a `ForceRollback` to a version with no entry of the host's installer is not ordered
+  (`installer_dropped`), and to a version set with an index is ordered as today; a target is sent only to a daemon that
   announced `target-v1`, only over gRPC, and the feature is echoed; one host beating over gRPC, then JSON, then gRPC
   keeps its first installers list, gets an archive order in today's form and no `deb` order over JSON, and the `deb`
   order in the next gRPC reply; a host whose next gRPC beat lists other installers is picked for again from the new
@@ -54,22 +60,25 @@ run only in the device jobs (`privileged`, `macos-device`), whose tests count to
   `http://` and one past the count; a credential not sent after a cross-origin redirect; a realm on another origin; a
   bundle over 1 MiB; each refused `stores.toml`; no `stores.toml`. On the order: an entry whose digest is not
   `package_digest`, a locator with `..`, `%`, a scheme, `//`, a query or 1025 bytes (`order_invalid`, reported); an
-  entry of an installer the daemon does not list (`installer_not_listed`, deferred, nothing fetched); a manifest
+  entry of an installer the daemon does not list (`installer_not_listed`, deferred, not `manifest_invalid`, nothing
+  fetched); a manifest
   refused before any fetch; a bundle that does not list the digest (`not_attested`), and one bundle that lists the
   digests of every entry of the release accepted for each; an order without a target takes the channel; a reply of
   32 KiB read and one byte over refused. On earlier binaries: the mixed cases of section 9.3.
-- **Which installers a daemon announces (A6 for `tarball`, A7 to A10, A13, A14 for theirs;
+- **Which installers a daemon announces (A6 for `hostkeeper-archive` and `tarball`, A7 to A10, A13, A14 for theirs;
   `crates/hostkeeper-install/tests/announce.rs`).** One case per row of section 5.4's table, with `ID` alone and with
   the family only in `ID_LIKE` (`linuxmint`, `rocky`, `amzn`, `opensuse-leap`, `manjaro`); an `ID` that maps to one
   family ahead of an `ID_LIKE` token of another; a Debian host with `/usr/bin/rpm` present announces `deb` and not
-  `rpm`; a Debian host without `dpkg` announces only `tarball`; an unknown `ID`, an empty file, a missing file and a
-  quoted value all give `tarball` alone on Linux; a macOS host announces `macos-pkg` and `tarball` and never reads
-  `os-release`. The list is the same at every heartbeat of one start.
+  `rpm`; a Debian host without `dpkg` announces no native format; quoted and unquoted values give the same family;
+  `/usr/lib/os-release` is read when `/etc/os-release` is missing; an unknown `ID`, an empty file, both files missing
+  and a malformed line (no `=`, an unterminated quote) give no native format, so a Linux host announces
+  `hostkeeper-archive` and `tarball` alone; `oci-image` is announced with `/usr/bin/podman` present and not without it
+  (A10); a macOS host announces `hostkeeper-archive`, `tarball` and `macos-pkg` and never reads `os-release`. The list is the same at every heartbeat of one start.
 - **Installers (A6 to A10, A13, A14; `crates/hostkeeper-install/tests/<installer>.rs`, device tests in
   `crates/hostkeeper-privileged/tests/install_<installer>.rs` and the macOS device suite).** For each installer:
   `stage` refuses a package whose identity is not `package` (and an OCI archive of two images), and runs no script
-  (the fake tool records its calls). The dependency check of section 5.4 runs after the identity check and before
-  `prepare`; when the tool's no-change mode refuses, the outcome is `dependency_missing`, the hook never runs and
+  (the fake tool records its calls). For `deb`, `rpm` and `arch` (and `apk` in A13), the dependency check of section
+  5.4 runs after the identity check and before `prepare`; when the tool's no-change mode refuses, the outcome is `dependency_missing`, the hook never runs and
   nothing is installed. The walk after `stage` refuses an entry under a link, an absolute or escaping link, a hard
   link, a device, one entry over `max_entries` and one byte over `max_unpacked_bytes`; it makes a non-root owner root,
   strips a setuid bit and sets modes; on macOS an unsigned Mach-O file is refused. Every tool run is in a unit with
@@ -91,7 +100,7 @@ run only in the device jobs (`privileged`, `macos-device`), whose tests count to
   with nothing installed.
 - **One build, every release (A15; `crates/xtask/tests/release_linux.rs`, and the `privileged` device job).**
   `cargo xtask release check-linux-pkg` refuses a package whose binary has a `NEEDED` entry (a fixture binary linked to
-  `libssl`), one that declares a dependency, and accepts the static build. The device job installs the same `.deb` on
+  `libssl`), one that declares a dependency, and a tarball holding a glibc build, and accepts the static build. The device job installs the same `.deb` on
   the oldest and the newest Debian and Ubuntu releases the project lists and the same `.rpm` on the oldest and newest
   RHEL-family and openSUSE releases, each in a container, and starts the binary.
 - **Tree and seal (A6; `crates/hostkeeper-unpack/tests/formats.rs` for the digest goldens,
@@ -110,7 +119,8 @@ run only in the device jobs (`privileged`, `macos-device`), whose tests count to
   it goes on.
 
 This list is complete in this sense: it holds one case for every refusal, outcome, gate reason, alert and bound named
-in sections 3 to 7 and 9.1 of packages.md, one under and one over every limit, each step of the coordinator's pick of
+in sections 3 to 7 and 9.1 of packages.md (stages 5 and 6 of section 9.2 are proved by A11's and A12's own tests,
+named in the build table's last column), one under and one over every limit, each step of the coordinator's pick of
 section 3.3 (first listed, kept installer, no match, old daemon), each row of the announce table of section 5.4, and
 every installer's four steps against crash, repeat, failure and removal. Each item's pull request names its tests
 (rule T8).
