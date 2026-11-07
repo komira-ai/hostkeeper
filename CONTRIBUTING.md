@@ -127,8 +127,36 @@ bundle back as it was when it ends. The verifier is the one stand-in:
 `/usr/bin/true` in place of `gh`, since an attestation of a package the test builds cannot be made
 without the network.
 
+In the jobs `net-install` and `net-install-arm64`, network install of a new machine end to end
+(docs/design/network-install.md section 11): a QEMU guest with UEFI firmware, an empty disk and
+its NIC first in the boot order, on a Linux bridge with no route out, each box of the LAN (the
+router, whose DHCP the test fakes, and the real `hostkeeper-pxe`) in a network namespace of its
+own, with the real coordinator's LAN listener (`tests/netinstall/`). The job installs QEMU and the
+firmware from Ubuntu's archive (its only other use of `sudo`, which the workflow lint allows in
+these two jobs for the packages it lists), downloads the ISO by its pinned URL, and, for x86-64,
+builds this commit's deb; `hostkeeper-pxe fetch` checks and seals the boot set from a release the
+test serves and signs. Every wait is on a line of the guest's serial console, of
+`hostkeeper-pxe`'s log or of the router's DHCP, or on an answer of `hostkeeper ctl`; the job's
+`timeout-minutes` is the only bound. What each run kept, passed or not, is the job's artifact:
+
+- `net_install.rs` (under KVM):
+  `an_x86_64_machine_installs_by_network_enrolls_gets_its_service_is_reinstalled_and_retired`
+  (proxy mode; enrollment by the console's key hash; the fixture service; router mode for the
+  enrolled host; a reinstall with `--reinstall` and `--replace`; a retired host after a coordinator
+  restart, in both modes);
+- `net_install_arm64.rs` (under TCG, as the hosted arm64 runner has no KVM): `arm64_boots_to_seed_fetch`.
+
+The one stand-in is on the installed guest: before its approval the test gives it the release
+channel's CA and the trusted root of the test's signer, by its operator account over SSH, so that
+its own `gh` checks the fixture package's attestation. `tests/net_install_rig.rs` runs the parts
+of the rig that need no root (the router's DHCP answers, the console's lines) in the pull-request
+set.
+
 The files of the job `privileged` start with `#![cfg(feature = "privileged")]`, those of
-`first-boot` with `#![cfg(all(target_os = "linux", feature = "privileged"))]`. The feature is off by default,
+`first-boot` with `#![cfg(all(target_os = "linux", feature = "privileged"))]`, `net_install.rs` with
+`#![cfg(all(target_os = "linux", target_arch = "x86_64", feature = "privileged"))]` and
+`net_install_arm64.rs` with `#![cfg(all(target_os = "linux", feature = "privileged",
+not(target_arch = "aarch64")))]`. The feature is off by default,
 so `cargo test --workspace` and CI's `test` job compile none of them, and they count toward no
 coverage gate; the crate's library (the workload fixture `hostkeeper-fixture-hook`, the host
 check, the rig) is tested without root in the pull-request set like any crate. A privileged test

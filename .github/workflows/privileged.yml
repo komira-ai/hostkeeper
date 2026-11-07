@@ -23,18 +23,25 @@
 # meet: the coordinator and the
 # daemon, each started by the tests as a child process, through a host's first boot (enrollment,
 # approval, the host certificate, heartbeats over mutual TLS, a restart of each) and a package
-# assigned and installed.
+# assigned and installed. In the jobs net-install and net-install-arm64 a QEMU guest is installed
+# by network end to end (docs/design/network-install.md section 11): the real hostkeeper-pxe and
+# the real coordinator's LAN listener, on a bridge with no route out, each box of the LAN in a
+# network namespace of its own; x86-64 under KVM through enrollment, a service, router mode, a
+# reinstall and a retired host, and arm64 under TCG until its seed fetch.
 #
 # It runs after a merge to main and by hand (workflow_dispatch), never on a pull request. The
 # workflow lint (crates/xtask/tests/workflows) allows a privileged job in this file only, holds its
 # triggers to exactly these two and each job to its runner (ubuntu-24.04; macos-15 for
-# macos-device), and gives it no write scope; it refuses root in every other workflow, and macOS
+# macos-device), holds the network-install jobs' ISO to the pins of packaging/netboot/pins.toml,
+# and gives it no write scope; it refuses root in every other workflow, and macOS
 # in every workflow that runs for a pull request. A release waits for a successful push run of
 # this workflow on its commit (release.yml).
 #
 # In each job the test binaries are built as the runner's own user; only their run is as root,
 # through the cargo runner `sudo`, the one use of it in the job (on the Mac, unpack_mac also runs
-# once as the runner's user, before the run as root). So no file of the Cargo registry
+# once as the runner's user, before the run as root), but for the two network-install jobs, which
+# also install QEMU and its firmware from the runner's Ubuntu archive, by `sudo apt-get update`
+# and `sudo apt-get install` of the packages the workflow lint lists for each. So no file of the Cargo registry
 # or of target/ is owned by root, and a test writes only its scratch directory under target/ (but
 # the self-update tests, whose scratch directory is under /run/hostkeeper-ci, because the release
 # trees the daemon checks must have root's directories all the way up, and whose drop-in is in
@@ -49,18 +56,21 @@
 # daemon), and for install_uninstall the fixture service's unit and its wants link and the
 # package check's verifier directory /usr/lib/hostkeeper, each refused if the host already has it
 # and removed when the test ends, and the release channel's CA appended to the host's CA bundle,
-# which is written back as it was; each on a runner that is thrown away after the job). Each test
+# which is written back as it was; and in the network-install jobs the network namespaces, the
+# bridge, the veth pairs and the tap of the test's LAN, named by its pid and deleted when it ends;
+# each on a runner that is thrown away after the job). Each test
 # names its units hostkeeper-ci-<test>-<pid>-<n> (the fixture service's unit is
 # hostkeeper-ci-fixture, its steps updater-hostkeeper-ci-fixture-<step>-<n>), or its launchd jobs
 # dev.hostkeeper.ci-<test>-<pid> (a step job by its unit, as the launcher names it; hello's slots
 # hello.a and hello.b as its package names them), and stops them
 # when it ends, failed or not; every coordinator and release channel is on the loopback address,
-# so no test leaves the host. The test targets are
+# or, in the network-install jobs, on the test's own bridge, which routes nowhere, so no test
+# leaves the host (the jobs' downloads are steps of their own, before the test). The test targets are
 # named, in both steps of each job, so that the run is the privileged tests and nothing else of the
 # crate; the workflow lint holds each job's list to the files that are privileged for it (first
 # line `#![cfg(feature = "privileged")]` for the job privileged, `#![cfg(all(target_os = "linux",
 # feature = "privileged"))]` for first-boot, `#![cfg(all(target_os = "macos", feature =
-# "privileged"))]` for the Mac).
+# "privileged"))]` for the Mac, and their own lines for the two network-install jobs).
 #
 # These tests are not counted by the 99% coverage gate (ci.yml judges the pull-request set). A red
 # run on main is a defect, fixed forward in a new pull request.

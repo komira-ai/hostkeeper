@@ -28,7 +28,13 @@
 //! runs the same path on a Mac with hello's macOS package (the program `hello-e2e` as its
 //! `bin/hello`): install, update, a failed `verify` rolled back and uninstall under launchd,
 //! with the rig's macOS host (`tests/e2e/mac_host.rs`); `tests/hello_rig.rs` checks its packages
-//! in the pull-request set.
+//! in the pull-request set. The network-install tests (`tests/net_install.rs`, first line
+//! `#![cfg(all(target_os = "linux", target_arch = "x86_64", feature = "privileged"))]`, job
+//! `net-install`, and `tests/net_install_arm64.rs`, job `net-install-arm64`) install a QEMU guest
+//! by network with the real `hostkeeper-pxe` (the program `hostkeeper-privileged-pxe`, which
+//! forwards to `hostkeeper_pxe::cli::main`) and the real coordinator's LAN listener, on a bridge
+//! of the test's with no route out; their rig is `tests/netinstall/`, whose root-free parts
+//! `tests/net_install_rig.rs` runs in the pull-request set.
 //!
 //! - [`fixture`]: the workload fixture, the program `hostkeeper-fixture-hook` that speaks the hook
 //!   contract in the modes a test picks, and `serve`, a long-running main process for a unit. Its
