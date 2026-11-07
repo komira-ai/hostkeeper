@@ -58,7 +58,7 @@ desired version never does.
 The uninstall is decided under the halt, the hold, the quiet start, one update at a time on the
 host and the other services' live rollouts (`rollout_elsewhere`, `--live-rollouts`), and takes an
 update slot as an update does. It is not a stage of the service's update plan. It stands across a
-coordinator restart, in the ops file, and ends when the host reports the service gone from the
+coordinator restart, in the ops file (on the database store, the table `uninstall_intents`), and ends when the host reports the service gone from the
 services it lists (audited as `uninstalled`, by the coordinator), or when the service is
 assigned to the host again (`uninstall_cancelled`). An uninstall the host declined is ordered
 again after its backoff; one that failed is left for the operator, and like a failed update it
@@ -96,3 +96,7 @@ and the holds that hold it), the hosts ordered to uninstall it, and its holds.
 The ops file gains an `assignments` key once an entry stands. A coordinator of an earlier
 release refuses to start on such a file rather than ignore the assignments; a file that never
 held one keeps the shape earlier releases read.
+
+On the database store ([coordinator-state.md](coordinator-state.md#the-database-store)) the
+entries are rows of the tables `assignments` and `min_versions`, and the uninstall intents rows of
+`uninstall_intents`, each change with its audit row in one transaction.

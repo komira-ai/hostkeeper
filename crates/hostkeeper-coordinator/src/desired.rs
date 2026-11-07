@@ -801,6 +801,17 @@ impl DesiredStore {
         }
     }
 
+    /// Takes the desired state of a commit of unknown outcome that `landing` found landed into
+    /// memory, with what memory changed since laid over it (`docs/design/coordinator-storage.md`,
+    /// section 4.4).
+    pub(crate) fn take_landed(&self, landing: &crate::store::Landing) {
+        let _writer = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
+        let taken = landing.desired_over(&self.lock());
+        if let Some(taken) = taken {
+            *self.lock() = taken;
+        }
+    }
+
     fn lock(&self) -> MutexGuard<'_, Held> {
         self.current.lock().unwrap_or_else(PoisonError::into_inner)
     }

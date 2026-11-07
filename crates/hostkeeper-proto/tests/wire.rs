@@ -722,6 +722,7 @@ fn wire_names_are_pinned() {
                 "abandoned_while_updating",
                 "silent_host",
                 "cert_near_expiry",
+                "store_unreachable",
             ],
         ),
         (

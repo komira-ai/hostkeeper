@@ -59,6 +59,8 @@ hyper = { workspace = true, features = ["client", "http1", "http2", "server"] }
 hyper-util = { workspace = true, features = ["tokio"] }
 # `O_NOFOLLOW`, for reading the files of a snapshot without following a link (`src/backup.rs`).
 libc.workspace = true
+# The Postgres store of `--database-dsn-file` (`src/store/postgres`), on the store's own threads.
+postgres.workspace = true
 prost.workspace = true
 # The descriptors the JSON gateway of the operator API reads and writes messages by.
 prost-reflect = { workspace = true, features = ["serde"] }

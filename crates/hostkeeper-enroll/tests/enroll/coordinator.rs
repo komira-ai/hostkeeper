@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 
 use hostkeeper_coordinator::enrollment::{
     DeviceState, DeviceStateError, DeviceStatus, Enrollment, MacAllowlist, MacPolicy, Random,
-    RpcError, Setup, setup,
+    RpcError, Setup, StoreAt, setup,
 };
 use hostkeeper_enroll::{
     CoordinatorEnroll, EnrollAnswer, EnrollRequest, EnrollState, Enroller, Identity, Issued,
@@ -231,7 +231,7 @@ fn started(world: &World) -> Enrollment {
     );
     let names = ["coordinator.example".to_owned()];
     let files = Setup {
-        dir: &store,
+        store: StoreAt::Dir(&store),
         ca_key: &ca_key,
         ca_init: true,
         server_cert: &server_cert,

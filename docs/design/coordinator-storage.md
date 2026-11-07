@@ -4,9 +4,10 @@ Status: design, for the maintainers' comments. It supersedes "plain files, no da
 [hostkeeper-design.md](hostkeeper-design.md) section 4.3 ("There is no database") and the coordinator's rows of its
 section 10, the halts-file storage of the plan position in [rollout-update-plans.md](rollout-update-plans.md) section 3,
 and the device-record file of [hostkeeper-mdm.md](hostkeeper-mdm.md) section 6.1. Where they disagree with this document
-on where the coordinator keeps its state, this document wins. Nothing here is built but C2 (section 4.1): every
-other statement about new code is **Designed**, and section 13 lists the build items, C1 to C11, one pull request
-each. The tags are those of hostkeeper-design.md: **Built** names code on `main` with a path, **Designed** means
+on where the coordinator keeps its state, this document wins. C1, C2 and C3 are built: the storage trait and its
+fake (section 4.1), the enrollment crate's `Records` port, and the Postgres store
+(`crates/hostkeeper-coordinator/src/store/postgres/`, with its migration `0001`, sections 3 to 8). Every other
+statement about new code is **Designed**, and section 13 lists the build items, C1 to C11, one pull request each. The tags are those of hostkeeper-design.md: **Built** names code on `main` with a path, **Designed** means
 nothing implements it yet.
 
 Ruling: the coordinator runs as one container and Postgres 16 as a second, on one machine for now, later on separate
@@ -172,7 +173,10 @@ min_versions(service text, scope text CHECK (scope IN ('host', 'role')), target 
 uninstall_intents(service text, node_id text, generation bigint NOT NULL, PRIMARY KEY (service, node_id))
 inventory(host_id text PRIMARY KEY, role text NOT NULL, data_macs text[] NOT NULL, bmc_mac text NOT NULL,
   serial text NOT NULL, notes text NOT NULL, platform text NOT NULL DEFAULT '', by_name text NOT NULL,
-  at_unix bigint NOT NULL)
+  at_unix bigint NOT NULL,
+  position bigint NOT NULL,                -- the code keeps the records in the order they were added
+  approve_until_unix bigint NOT NULL DEFAULT 0, used_request_id text, used_unix bigint,  -- the record's window
+  CHECK ((used_request_id IS NULL) = (used_unix IS NULL)))
 CREATE UNIQUE INDEX inventory_serial ON inventory (lower(serial)) WHERE serial <> '';
 CREATE UNIQUE INDEX inventory_bmc ON inventory (lower(bmc_mac)) WHERE bmc_mac <> '';
 ```
@@ -195,7 +199,7 @@ halts(service text PRIMARY KEY, node_id text NOT NULL, check_name text NOT NULL,
 halt_reports(service text, node_id text, kind text CHECK (kind IN ('acked', 'seen')), target text NOT NULL,
   report jsonb, position bigint NOT NULL, PRIMARY KEY (service, kind, node_id))
 
-rollouts(service text PRIMARY KEY, version text, entered integer NOT NULL DEFAULT 0,
+rollouts(service text PRIMARY KEY, version text, entered bigint NOT NULL DEFAULT 0,
   paused_by text, paused_reason text, CHECK ((paused_by IS NULL) = (paused_reason IS NULL)))
 rollout_done(service text REFERENCES rollouts ON DELETE CASCADE, node_id text, PRIMARY KEY (service, node_id))
 ```
@@ -325,7 +329,11 @@ imports(id bigint PRIMARY KEY, at_unix bigint NOT NULL, manifest jsonb NOT NULL,
   audit_pruned_before bigint)                                                        -- section 3.5
 ```
 
-`0001` inserts the one row of `lease` (epoch 0) and of `enrollment_serial` (next 2).
+`0001` inserts the one row of `lease` (epoch 0) and of `enrollment_serial` (next 2). `schema_version` is made by
+the migration runner before the first migration, so a database of any release can be asked which migrations it
+holds. A trigger of `0001` on `lease` (`lease_fenced`) refuses an update of the row from a session that does not
+hold the coordinator's advisory lock (section 5), and every transaction of the coordinator updates it first, so the
+fence holds at the database, not only in the coordinator.
 
 ## 4. Transactions and write order
 
@@ -587,7 +595,8 @@ daemon-config key of option (a) would be additions to public interfaces, flagged
 - **Flags beside it.** `--database-dsn-file` refuses `--state-file`, `--ops-file`, `--enrollment-dir`,
   `--audit-max-bytes` and `--audit-retained-segments`, naming the flag. It requires `--halt-marker-file`. Enrollment is
   on when `--ca-key-file` is given, which keeps requiring `--server-cert-file` and `--server-name`; the store is the
-  database's. The file store stays selectable by `--state-file` for one release after the farm moves (section 11).
+  database's. The MDM gate's flags keep requiring `--enrollment-dir`, where the gate's device records are (section
+  2), so until M8's table lands the gate does not run on the database store. The file store stays selectable by `--state-file` for one release after the farm moves (section 11).
 
 ## 9. Deployment: compose
 

@@ -591,12 +591,12 @@ FAILED_PRECONDITION, 3 on UNAUTHENTICATED and PERMISSION_DENIED, and 1 on the ot
 | `invalid_request` | INVALID_ARGUMENT | another field breaks its rule: a request id or key hash that is not 64 hex digits, a missing or bad reason, a page token, or a record's MAC, serial, notes or platform | correct the field; `--reason` is 1 to 256 bytes |
 | `not_pending` | FAILED_PRECONDITION | the request was already approved, issued or denied, or it expired; a `reject` of a request approved or issued | list again; an expired request is approved only after its host posts again (retire an enrolled host with `hosts retire`) |
 | `denied` | FAILED_PRECONDITION | the host id was retired (`hosts retire`) | `--replace true`, or another host id |
-| `store_failed` | INTERNAL | the change could not be written; nothing changed | read the coordinator's log and ask again |
+| `store_failed` | INTERNAL | the change could not be written (on the database store, also while its session is lost: the alert `store_unreachable` stands); nothing changed | read the coordinator's log and ask again |
 | `record_exists` | ALREADY_EXISTS | `add-record` for a host id that has a record | remove the record first |
 | `record_conflict` | ALREADY_EXISTS | `add-record` with a MAC or a serial another record holds | remove or correct the other record |
 | `no_record` | NOT_FOUND | `remove-record` or `open-record` of a host id with no record | check the host id with `list-records` |
 | `capacity` | RESOURCE_EXHAUSTED | `add-record` past the 10000 records the coordinator keeps | remove records no longer needed |
-| `audit_unavailable` | UNAVAILABLE | `add-record`, `remove-record` or `open-record` whose audit line could not be appended (a full disk); nothing changed | free the disk of the audit file, then ask again |
+| `audit_unavailable` | UNAVAILABLE | `add-record`, `remove-record` or `open-record` whose audit line could not be appended (a full disk, on the file store; the database store commits the line with the change and never answers this); nothing changed | free the disk of the audit file, then ask again |
 | `record_mismatch` | FAILED_PRECONDITION | `approve` names a host id other than that of the one record the request matches | leave out `--host-id`, or `--replace true` |
 | `invalid_window` | INVALID_ARGUMENT | `add-record` or `open-record` with both `--approve-until-unix` and `--approve-for-secs`, an end not in the future, a window longer than the coordinator's `--record-approve-max`, or a window on a record that names no role | give one field, within the maximum, for a record with a role |
 | `record_used` | FAILED_PRECONDITION | `open-record` of a record whose one use is spent (`RECORD_STATE_USED`) | `remove-record`, then `add-record` it again |

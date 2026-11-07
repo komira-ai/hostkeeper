@@ -19,7 +19,7 @@ use crate::desired::{Desired, DesiredError, DesiredStore, StoreError};
 use crate::enrollment::Enrollment;
 use crate::fleet::{Fleet, Node, QUIET_START};
 use crate::halt;
-use crate::holds::{marks_of, on_bad_version};
+use crate::holds::on_bad_version;
 use crate::identity::Identity;
 use crate::membership::{Standing, members, standing};
 use crate::ops::{self, AuditEntry, OperateError, OpsError, OpsStore};
@@ -430,7 +430,7 @@ impl Coordinator {
     /// lock order is the fleet's, then the ops store's.
     pub(crate) fn lock_fleet(&self) -> std::sync::MutexGuard<'_, Fleet> {
         let mut fleet = self.fleet.lock().unwrap_or_else(PoisonError::into_inner);
-        fleet.set_marks(self.ops.read(marks_of));
+        self.refresh_marks(&mut fleet);
         fleet
     }
 
@@ -633,8 +633,7 @@ impl Coordinator {
             Vec::new()
         };
         let announced = beat.services.clone().unwrap_or_default();
-        // A change whose commit failed is committed again at every heartbeat until it lands.
-        self.ops.retry_unwritten(now);
+        self.tend_store(now);
         let held = halt::note(&self.ops, &self.services, legacy, &who, &beat, &node, now);
         let (platform, ops) = (beat.platform, self.ops.state());
         self.note_serving(&who.host_id, &node, &beat, &ops, now);
@@ -725,6 +724,7 @@ impl Coordinator {
         let acks = verdict_file::acknowledge(&self.verdicts, &fleet, &who.host_id, &heard, &names);
         // The operator's orders go first, past the gate, to a transport that carries them.
         if orders
+            && !fleet.store_lost
             && let Some(order) = self
                 .ops
                 .read(|state| crate::orders::next(&mut fleet, state, &who.host_id, &names))
@@ -994,14 +994,13 @@ pub(crate) fn kept(marks: &crate::ops::ServiceOps, version: &Version) -> bool {
     marks.last_good.as_ref() == Some(version) || marks.bad.contains(version)
 }
 
-/// The calls of the heartbeat path that ask enrollment.
-#[path = "service_enrollment.rs"]
-mod enrollment_calls;
-
-/// The calls that act for a CI token already checked.
 #[path = "service_ci.rs"]
 mod ci_calls;
-
-/// The rollout gate's update, install or uninstall for a heartbeat.
+/// The calls of the heartbeat path that ask enrollment, those that act for a CI token already
+/// checked, the rollout gate's orders for a heartbeat, and the care of the store's link.
+#[path = "service_enrollment.rs"]
+mod enrollment_calls;
 #[path = "service_orders.rs"]
 mod gate_orders;
+#[path = "service_store.rs"]
+mod store_calls;

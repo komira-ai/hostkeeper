@@ -227,6 +227,9 @@ pub struct Fleet {
     /// install of a service its heartbeat does not list) may hold that try in its step record
     /// all the same. Kept in memory only, never lowered.
     sent: BTreeMap<(HostId, String), u64>,
+    /// Whether the store's link to its database is lost (`docs/design/coordinator-storage.md`,
+    /// section 5), read from the backend at each take of the fleet's lock: nothing is ordered.
+    pub(crate) store_lost: bool,
 }
 
 impl Fleet {
@@ -251,6 +254,7 @@ impl Fleet {
             canaries: BTreeMap::new(),
             tries: BTreeMap::new(),
             sent: BTreeMap::new(),
+            store_lost: false,
         }
     }
 
@@ -303,11 +307,11 @@ impl Fleet {
         })
     }
 
-    /// Whether `now` is still within the quiet start: the `quiet` of [`Self::new`] after the
-    /// coordinator's start.
+    /// Whether the coordinator orders nothing at `now`: within the quiet start (the `quiet` of
+    /// [`Self::new`] after the coordinator's start), or while the store's link is lost.
     #[must_use]
     pub fn is_quiet(&self, now: Duration) -> bool {
-        now < self.started.saturating_add(self.quiet)
+        self.store_lost || now < self.started.saturating_add(self.quiet)
     }
 
     /// The try of the next order of `service` for the host `id`: one past the highest try any

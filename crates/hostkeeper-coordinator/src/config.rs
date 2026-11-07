@@ -54,192 +54,39 @@ use futures::future::{Either, select};
 use hostkeeper_enrollment::enroll::DEFAULT_MAX_PENDING;
 use hostkeeper_enrollment::fs::RealFs;
 use hostkeeper_enrollment::validity::SystemClock;
-use hostkeeper_oidc::{AllowList, ConfigError, HttpsKeys, KeySourceError, Roots, Verifier};
-use hostkeeper_tls::{Alpn, ClientAuth, TlsError, TlsFiles, TlsSource};
+use hostkeeper_oidc::{AllowList, HttpsKeys, Roots, Verifier};
+use hostkeeper_tls::{Alpn, ClientAuth, TlsFiles, TlsSource};
 use hostkeeper_wire::identity::{
-    DEFAULT_HOST_ROLE_URI_PREFIX, DEFAULT_ROLE_URI_PREFIX, PrefixError, SanPrefixes,
+    DEFAULT_HOST_ROLE_URI_PREFIX, DEFAULT_ROLE_URI_PREFIX, SanPrefixes,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::alerts::{
     DEFAULT_CERT_WINDOW_SECS, DEFAULT_SILENT_HOST_SECS, OBSERVE_EVERY, Thresholds, observe_every,
 };
-use crate::audit_file::{DEFAULT_MAX_BYTES, DEFAULT_RETAINED};
-use crate::backup::{Backup, BackupError, Report, Restore, backup, ops_path, restore};
+use crate::backup::{Backup, BackupError, Report, Restore, backup, restore};
 use crate::channel::ReleaseChannel;
-use crate::channel_https::{ChannelTlsError, ChannelUrl, ChannelUrlError, HttpsChannel};
-use crate::desired::{DesiredStore, StoreError};
-use crate::enrollment::{
-    AllowlistError, MacAllowlist, MacPolicy, Setup, SetupError, os_random, setup,
-};
+use crate::channel_https::{ChannelUrl, HttpsChannel};
+use crate::desired::DesiredStore;
+use crate::enrollment::{MacAllowlist, MacPolicy, Setup, StoreAt, os_random, setup};
 use crate::fleet::{CLOCK_SKEW_AFTER, QUIET_START};
 use crate::http::Surface;
-use crate::inventory::{RecordWindow, WindowAboveMax};
-use crate::jti_file::JtiError;
+use crate::inventory::RecordWindow;
 use crate::listen::{CLIENT_PATIENCE, Listener, MAX_CONNECTIONS, accept_tcp, reload_every, serve};
-use crate::lock::{FileLock, LockError, LockGuard, StateLock, lock_path};
-use crate::mdm::{Mdm, MdmError, MdmFlags};
-use crate::ops::{OpsError, OpsStore};
+use crate::lock::{FileLock, LockError, LockGuard, StateLock};
+use crate::mdm::{Mdm, MdmFlags};
+use crate::ops::OpsStore;
 use crate::service::{Clock, Coordinator};
-use crate::services::{Services, ServicesError};
-use crate::store::{Shared, Spent};
-use crate::tokens::{OperatorTokens, TokensError};
-use crate::ui::{UiDir, UiDirError};
-use crate::verdict_file::{VerdictFile, VerdictsError};
+use crate::services::Services;
+use crate::store::Spent;
+use crate::tokens::OperatorTokens;
+use crate::ui::UiDir;
+use crate::verdict_file::VerdictFile;
 
-/// Why the coordinator did not start, for the operator.
-#[derive(Debug, thiserror::Error)]
-pub enum StartError {
-    /// The operator token file is refused.
-    #[error("--operator-token-file: {0}")]
-    OperatorToken(#[source] hostkeeper_wire::secret::SecretError),
-    /// The tokens file is refused.
-    #[error(transparent)]
-    Tokens(#[from] TokensError),
-    /// `--tokens-file` and `--operator-token-file` are both given.
-    #[error(
-        "--tokens-file and --operator-token-file are both given: name the operator's tokens one way"
-    )]
-    TokenFlags,
-    /// Neither is given.
-    #[error("one of --tokens-file and --operator-token-file is required")]
-    NoTokenFlag,
-    /// `--private-listen` is a wildcard address.
-    #[error(
-        "--private-listen: {0} is a wildcard address; the private listener takes CI's calls and the operator's, so name the address of one interface"
-    )]
-    PrivateListen(SocketAddr),
-    /// `--lan-listen` is a wildcard address.
-    #[error(
-        "--lan-listen: {0} is a wildcard address; the LAN listener's address is named in the server certificate, so name the address of one interface"
-    )]
-    LanListen(SocketAddr),
-    /// The allow-list of CI's OIDC token is refused.
-    #[error(transparent)]
-    Oidc(#[from] ConfigError),
-    /// The rollout file is refused.
-    #[error("--rollout-file: {0}")]
-    Services(#[from] ServicesError),
-    /// The two certificate URI prefixes are refused.
-    #[error("--role-uri-prefix and --host-role-uri-prefix: {0}")]
-    Prefixes(#[from] PrefixError),
-    /// `--legacy-service` names a service the rollout file does not define.
-    #[error("--legacy-service names {0}, which --rollout-file does not define")]
-    LegacyService(String),
-    /// An allow-list entry names no services and there is no legacy service for it to stand for.
-    #[error("--oidc-config: entry {0} names no services and --legacy-service is not set")]
-    OidcEntryUnnamed(usize),
-    /// An allow-list entry names a service the rollout file does not define.
-    #[error(
-        "--oidc-config: entry {entry} names the service {service}, which is not defined by --rollout-file"
-    )]
-    OidcEntryService {
-        /// The entry, counting from 1.
-        entry: usize,
-        /// The service it names.
-        service: String,
-    },
-    /// The OIDC key fetcher could not be made.
-    #[error("the issuer's keys: {0}")]
-    Keys(#[source] KeySourceError),
-    /// The desired-state file is refused.
-    #[error(transparent)]
-    Desired(#[from] StoreError),
-    /// The ops file is refused.
-    #[error("--ops-file: {0}")]
-    Ops(#[from] OpsError),
-    /// A TLS file is refused.
-    #[error(transparent)]
-    Tls(#[from] TlsError),
-    /// Enrollment did not start: its CA, its store or the server certificate.
-    #[error(transparent)]
-    Enrollment(#[from] SetupError),
-    /// The Mac serial allowlist is refused.
-    #[error(transparent)]
-    MacAllowlist(#[from] AllowlistError),
-    /// The Mac serial allowlist names a service the rollout file does not define.
-    #[error("--mac-serial-allowlist names service {0}, which --rollout-file does not define")]
-    MacService(String),
-    /// `--ui-dir` does not name a directory.
-    #[error("--ui-dir: {0}")]
-    UiDir(#[from] UiDirError),
-    /// `--record-approve-for` is longer than `--record-approve-max`.
-    #[error(transparent)]
-    RecordWindow(#[from] WindowAboveMax),
-    /// A socket, the runtime or the signal handlers failed.
-    #[error(transparent)]
-    Io(#[from] io::Error),
-    /// Another coordinator holds the lock of the state files.
-    #[error(
-        "{path}: another coordinator holds the lock of these state files; one coordinator runs on them at a time"
-    )]
-    Locked {
-        /// The lock file.
-        path: PathBuf,
-    },
-    /// The lock of the state files could not be taken.
-    #[error("{path}: the lock of the state files could not be taken: {source}")]
-    Lock {
-        /// The lock file.
-        path: PathBuf,
-        /// Why.
-        source: io::Error,
-    },
-    /// A halt was being written to the ops file when the coordinator stopped, and may not have
-    /// landed.
-    #[error(
-        "{path}: a halt was being written to the ops file when the coordinator stopped and may be lost; read the halts file, settle it by hand, and remove this file to start"
-    )]
-    HaltWriteUnfinished {
-        /// The marker file.
-        path: PathBuf,
-    },
-    /// Changes were in memory and not yet written to the ops file when the coordinator stopped,
-    /// and the ops file does not hold them.
-    #[error(
-        "{path}: the changes numbered {} were in memory and not yet written to the ops file when the coordinator stopped, and it does not hold them; look each up by its number in the coordinator's log (target hostkeeper_coordinator::audit), make it again by hand if it still matters (a halt is raised again by the host's next report while the host is up), and remove this file to start",
-        numbers.iter().map(u64::to_string).collect::<Vec<_>>().join(", ")
-    )]
-    ChangesUnwritten {
-        /// The marker file.
-        path: PathBuf,
-        /// The audit numbers of the changes that did not land.
-        numbers: Vec<u64>,
-    },
-    /// A restore into these state files stopped before it finished.
-    #[error(
-        "{path}: a restore into these state files stopped before it finished, so they may hold part of a snapshot; remove them and this file, and restore again"
-    )]
-    RestoreUnfinished {
-        /// The marker file.
-        path: PathBuf,
-    },
-    /// `--quiet-secs` is below two heartbeat intervals.
-    #[error(
-        "--quiet-secs: {secs} is below {floor}, two heartbeat intervals: a restarted coordinator would order before it has heard the fleet"
-    )]
-    QuietBelowFloor {
-        /// What the flag said.
-        secs: u64,
-        /// The floor.
-        floor: u64,
-    },
-    /// The file of spent token ids is refused.
-    #[error(transparent)]
-    Jti(#[from] JtiError),
-    /// The file of verdicts is refused.
-    #[error(transparent)]
-    Verdicts(#[from] VerdictsError),
-    /// `--release-channel` is not an `https://` base URL.
-    #[error("--release-channel: {0}")]
-    ReleaseChannel(#[from] ChannelUrlError),
-    /// The TLS client of the release channel could not be made.
-    #[error("--release-channel: {0}")]
-    ReleaseChannelTls(#[from] ChannelTlsError),
-    /// The MDM policy gate did not start.
-    #[error(transparent)]
-    Mdm(#[from] MdmError),
-}
+#[path = "config_error.rs"]
+mod error;
+
+pub use error::StartError;
 
 /// The times the flags take, in seconds.
 #[path = "config_secs.rs"]
@@ -309,8 +156,8 @@ pub struct Serve {
     /// certificate, the heartbeat and `Renew` with a host's) and never the operator API, the
     /// JSON gateway or the UI. The server certificate names its IP address, so a daemon dials it
     /// by address. It takes the address of one interface: a wildcard address is refused at
-    /// start. Requires --enrollment-dir.
-    #[arg(long, requires = "enrollment_dir")]
+    /// start. Requires --ca-key-file.
+    #[arg(long, requires = "ca_key_file")]
     pub lan_listen: Option<SocketAddr>,
     /// The coordinator's certificate chain (PEM), issued by the farm CA with the role
     /// `coordinator`.
@@ -322,10 +169,25 @@ pub struct Serve {
     /// The farm CA certificate or bundle (PEM) an updater's certificate must chain to.
     #[arg(long)]
     pub client_ca: PathBuf,
-    /// The desired-state file: written by the coordinator, read back at start. Its
-    /// directory must be writable by the coordinator.
-    #[arg(long)]
-    pub state_file: PathBuf,
+    /// The desired-state file of the file store: written by the coordinator, read back at
+    /// start. Its directory must be writable by the coordinator. Exactly one of this and
+    /// `--database-dsn-file`.
+    #[arg(long, required_unless_present = "database_dsn_file")]
+    pub state_file: Option<PathBuf>,
+    /// The Postgres store: a file holding one libpq connection string in keyword form
+    /// (`host=127.0.0.1 port=5432 dbname=hostkeeper user=hostkeeper password=<secret>
+    /// sslmode=disable`), a regular file owned by the coordinator's user, mode 0600 or 0400, at
+    /// most 4 KiB. The database holds everything the file store's files hold. Not taken beside
+    /// --state-file, --ops-file, --enrollment-dir, --audit-max-bytes or
+    /// --audit-retained-segments. Requires --halt-marker-file.
+    #[arg(long, requires = "halt_marker_file")]
+    pub database_dsn_file: Option<PathBuf>,
+    /// With --database-dsn-file: the file, on a local disk that stays writable when the database
+    /// is not, that lists the changes that stand in memory and are not yet committed. A start
+    /// that finds it removes it when the database holds every change it lists, and refuses
+    /// otherwise.
+    #[arg(long, requires = "database_dsn_file")]
+    pub halt_marker_file: Option<PathBuf>,
     /// The allow-list of CI's OIDC token: a TOML file with a `[remote_operator]` table.
     #[arg(long)]
     pub oidc_config: PathBuf,
@@ -348,13 +210,13 @@ pub struct Serve {
     pub ops_file: Option<PathBuf>,
     /// The most bytes the audit file `<ops-file>.audit` holds before it is rotated: a line that
     /// would take it past this is written to a fresh file, and the full one is sealed as
-    /// `<ops-file>.audit.<n>`. At least 1; 0 is refused.
-    #[arg(long, default_value_t = DEFAULT_MAX_BYTES)]
-    pub audit_max_bytes: NonZeroU64,
+    /// `<ops-file>.audit.<n>`. At least 1; 0 is refused. Default 16 MiB.
+    #[arg(long)]
+    pub audit_max_bytes: Option<NonZeroU64>,
     /// How many sealed segments of the audit file are kept: at each rotation the oldest beyond
-    /// this are deleted. At least 1; 0 is refused.
-    #[arg(long, default_value_t = DEFAULT_RETAINED)]
-    pub audit_retained_segments: NonZeroUsize,
+    /// this are deleted. At least 1; 0 is refused. Default 8.
+    #[arg(long)]
+    pub audit_retained_segments: Option<NonZeroUsize>,
     /// The rollout file: TOML with a `[[service]]` table for each service the coordinator
     /// manages, the roles it runs on and how its rollout goes (`docs/design/host-updates.md`).
     /// Required; an empty file defines none. Which of them a CI token may set is said by the
@@ -378,8 +240,9 @@ pub struct Serve {
     /// How often the TLS files and the tokens file are looked at again, in seconds.
     #[arg(long, default_value_t = 60, value_parser = clap::value_parser!(u64).range(1..))]
     pub tls_reload_secs: u64,
-    /// The enrollment store: a directory of the coordinator's own holding the pending
-    /// requests, the issued certificates, the approved hosts and the deny rows. With it the
+    /// The enrollment store of the file store: a directory of the coordinator's own holding the
+    /// pending requests, the issued certificates, the approved hosts and the deny rows. With it
+    /// (or with --database-dsn-file and --ca-key-file, the store then the database's) the
     /// coordinator is the hosts' CA: the heartbeat listener serves `--server-cert-file`, lets a
     /// client without a certificate through the handshake (each route then decides; only
     /// `Enroll` and `Poll` will answer one), and admits a host certificate of its CA.
@@ -388,8 +251,9 @@ pub struct Serve {
     pub enrollment_dir: Option<PathBuf>,
     /// The CA's key: PKCS#8, mode 0600, owned by the coordinator's user (a file open to
     /// group or others, or a symbolic link, is refused). Its certificate is beside it, the same
-    /// path with `.cert` added. Back both up once, sealed and offline.
-    #[arg(long, requires = "enrollment_dir")]
+    /// path with `.cert` added. Back both up once, sealed and offline. Turns enrollment on;
+    /// requires --enrollment-dir or --database-dsn-file, --server-cert-file and --server-name.
+    #[arg(long, requires_all = ["server_cert_file", "server_names"])]
     pub ca_key_file: Option<PathBuf>,
     /// Make the CA when --ca-key-file does not exist; without it a missing CA stops the start.
     /// The CA is made once: every daemon config pins its certificate's SHA-256.
@@ -398,23 +262,23 @@ pub struct Serve {
     /// The coordinator's server certificate, the CA certificate and its key, one PEM file
     /// (mode 0600) the coordinator writes: made at start when missing, within the last third
     /// of its validity, or naming other names than --server-name and --lan-listen.
-    #[arg(long, requires = "enrollment_dir")]
+    #[arg(long, requires = "ca_key_file")]
     pub server_cert_file: Option<PathBuf>,
     /// A DNS name of the coordinator, as daemons dial it: the server certificate names each
     /// one given, and the address of --lan-listen besides. A certificate that names other
     /// names than these is made again at start and at the reload tick.
-    #[arg(long = "server-name", requires = "enrollment_dir")]
+    #[arg(long = "server-name", requires = "ca_key_file")]
     pub server_names: Vec<String>,
     /// How many enrollment requests may wait for an operator at once (default 256). A new
     /// request over it is refused `pending_full`; no waiting request is dropped for it, and a
     /// host posting its waiting request again is still answered.
-    #[arg(long, requires = "enrollment_dir", value_parser = clap::value_parser!(u64).range(1..))]
+    #[arg(long, requires = "ca_key_file", value_parser = clap::value_parser!(u64).range(1..))]
     pub max_pending_enrollments: Option<u64>,
     /// How long an enrollment request waits for an operator before it expires: a whole number
     /// and a unit, `s`, `m`, `h` or `d` (`90m`, `72h`), at least one second. An expired request
     /// is no longer approved, and its host is listed unenrolled; the host's key posted again
     /// waits anew. Requests are looked at every --tls-reload-secs.
-    #[arg(long, default_value = "72h", requires = "enrollment_dir", value_parser = request_ttl_secs)]
+    #[arg(long, default_value = "72h", requires = "ca_key_file", value_parser = request_ttl_secs)]
     pub enrollment_request_ttl: u64,
     /// How long the approval window of a new inventory record that names a role lasts when
     /// `Enrollment.AddRecord` names none: a whole number and a unit, `s`, `m`, `h` or `d`
@@ -431,7 +295,7 @@ pub struct Serve {
     /// The Mac serial numbers a Mac may be approved for by its MDM nonce, with the host id
     /// prefix, role and services of each: a TOML file of `[[mac]]` entries (`serial`,
     /// `host_id_prefix`, `role`, `services`). Without it no Mac is approved by its nonce.
-    #[arg(long, requires = "enrollment_dir")]
+    #[arg(long, requires = "ca_key_file")]
     pub mac_serial_allowlist: Option<PathBuf>,
     /// The MDM policy gate: NanoHUB's API, its key and the webhook listener.
     #[command(flatten)]
@@ -641,15 +505,16 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
     }
     let keys = HttpsKeys::new(&oidc.entries()[0].issuer, roots, KEY_FETCH_TIMEOUT)
         .map_err(StartError::Keys)?;
-    // The lock before any state file: none is opened (an open settles a staged halts file,
-    // which is a write) before this process is the one coordinator on them.
-    let held = take_lock(lock, &lock_path(&flags.state_file))?;
-    let ops_path = ops_path(&flags.state_file, flags.ops_file.as_deref());
     // The wall clock is read for the validity of CI's tokens and the expiry of their spent
     // ids, and for nothing the coordinator decides.
     let oidc_clock = hostkeeper_oidc::system_clock();
-    let (files, loaded) = state::open(flags, legacy, &ops_path, &oidc_clock)?;
-    let backend: Shared = Arc::new(files);
+    let state::Opened {
+        backend,
+        loaded,
+        marker,
+        held,
+        records,
+    } = state::open_store(flags, legacy, lock, &oidc_clock)?;
     let verifier = Verifier::new(
         oidc,
         Arc::new(keys),
@@ -659,7 +524,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
     );
     let desired = DesiredStore::over(Arc::clone(&backend), loaded.desired);
     let ops = OpsStore::over(Arc::clone(&backend), loaded.ops)
-        .with_marker(crate::ops_file::unfinished_path(&ops_path))
+        .with_marker(marker)
         .with_record_window(record_window);
     let verdicts = VerdictFile::over(backend, loaded.verdicts);
     let ui = flags.ui_dir.as_deref().map(UiDir::new).transpose()?;
@@ -685,12 +550,14 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
     if let Some(channel) = channel {
         coordinator = coordinator.with_release_channel(channel);
     }
-    let heartbeat_tls = match (
-        &flags.enrollment_dir,
-        &flags.ca_key_file,
-        &flags.server_cert_file,
-    ) {
-        (Some(dir), Some(ca_key), Some(server_cert)) => {
+    let store = match (&flags.enrollment_dir, records) {
+        (Some(dir), _) => Some(StoreAt::Dir(dir)),
+        (None, Some(records)) => Some(StoreAt::Records(records)),
+        (None, None) if flags.ca_key_file.is_some() => return Err(StartError::NoEnrollmentStore),
+        (None, None) => None,
+    };
+    let heartbeat_tls = match (store, &flags.ca_key_file, &flags.server_cert_file) {
+        (Some(store), Some(ca_key), Some(server_cert)) => {
             let allowlist = flags
                 .mac_serial_allowlist
                 .as_deref()
@@ -714,11 +581,17 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
                 .map_or(DEFAULT_MAX_PENDING, |max| {
                     usize::try_from(max).unwrap_or(usize::MAX)
                 });
-            let mdm = Mdm::open(&flags.mdm, dir, Arc::new(SystemClock), os_random())?;
+            // clap holds the MDM gate's flags to --enrollment-dir, where its device records are.
+            let mdm = match &store {
+                StoreAt::Dir(dir) => {
+                    Mdm::open(&flags.mdm, dir, Arc::new(SystemClock), os_random())?
+                }
+                StoreAt::Records(_) => None,
+            };
             let enrollment = setup(
                 Arc::new(RealFs),
                 &Setup {
-                    dir,
+                    store,
                     ca_key,
                     ca_init: flags.ca_init,
                     server_cert,
@@ -749,7 +622,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
             };
             TlsSource::files_with("heartbeat", served, interval, Alpn::H2AndHttp1, client)?
         }
-        // clap requires the three together: one alone is no enrollment.
+        // clap requires --ca-key-file, --server-cert-file and --server-name together.
         _ => TlsSource::files("heartbeat", files(Some(flags.client_ca.clone())), interval)?,
     };
     Ok(Parts {
@@ -818,7 +691,7 @@ async fn together(
 /// the heartbeat listener's TLS and surface. It never returns `Ok`.
 ///
 /// # Errors
-/// An address cannot be bound.
+/// An address cannot be bound; the store is deposed ([`StartError::Deposed`]).
 pub async fn run<Bind, Binding, Accept, Next, Stream>(
     parts: Parts,
     bind: Bind,
@@ -870,6 +743,7 @@ where
     let tokens = parts.coordinator.tokens().clone();
     let enrollment = parts.coordinator.enrollment().cloned();
     let coordinator = parts.coordinator;
+    let watching = Arc::clone(&coordinator);
     let observing = observe_every(Arc::clone(&coordinator), OBSERVE_EVERY);
     // Without a LAN listener, a future that never finishes stands in for it.
     let serving_lan = match lan {
@@ -896,11 +770,16 @@ where
         tokens,
         parts.reload,
     );
-    match together(
+    let all = together(
         together(serving, serving_lan),
         together(reloading, together(observing, webhook)),
-    )
-    .await {}
+    );
+    // A store another coordinator led while this one's link was lost stops the serve: its memory
+    // is stale (`docs/design/coordinator-storage.md`, section 5).
+    match select(pin!(all), pin!(watching.deposed())).await {
+        Either::Left((never, _)) => match never {},
+        Either::Right(((epoch, found), _)) => Err(StartError::Deposed { epoch, found }),
+    }
 }
 
 /// The line `serve` prints once its listeners are bound ([`start`]): the version, then where

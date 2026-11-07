@@ -34,6 +34,7 @@ use crate::verdict_file::{self, VerdictsError};
 
 mod fake;
 mod files;
+pub(crate) mod postgres;
 
 pub(crate) use fake::Fake;
 #[cfg(test)]
@@ -41,6 +42,9 @@ pub(crate) use fake::store_failure;
 pub(crate) use files::Files;
 #[cfg(test)]
 pub(crate) use files::OpsWriter;
+pub(crate) use postgres::Landing;
+#[cfg(test)]
+pub(crate) use postgres::Postgres;
 
 /// Where the coordinator's state is durable.
 pub(crate) trait Backend: Send + Sync {
@@ -84,6 +88,43 @@ pub(crate) trait Backend: Send + Sync {
     /// # Errors
     /// [`BackendError::Spent`]: the id is spent and not yet past. Any other: it is not recorded.
     fn spend(&self, jti: &str, until_unix: u64, now_unix: u64) -> Result<(), BackendError>;
+
+    /// Whether the backend takes writes now. A store that cannot lose its link to where it is
+    /// durable (the files, the fake) is always up.
+    fn health(&self) -> Health {
+        Health::Up
+    }
+
+    /// Asks a backend whose link is lost to make it again, without waiting for it: called at
+    /// every heartbeat.
+    fn revive(&self) {}
+
+    /// What the commits of unknown outcome turned out to be, once its link is back, in their
+    /// order, each taken once.
+    fn take_landings(&self) -> Vec<Landing> {
+        Vec::new()
+    }
+
+    /// The epoch this coordinator holds the store at, for a store that has one.
+    fn epoch(&self) -> Option<u64> {
+        None
+    }
+}
+
+/// Whether a backend takes writes (`docs/design/coordinator-storage.md`, section 5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Health {
+    /// It takes writes.
+    Up,
+    /// Its link is lost: every write is refused at once until it is made again. The coordinator
+    /// orders nothing meanwhile.
+    Lost,
+    /// Another coordinator led the store while the link was lost, at epoch `found`: this one's
+    /// memory is stale, and it exits.
+    Deposed {
+        /// The epoch found.
+        found: u64,
+    },
 }
 
 /// The state before and after one change, and its audit lines.
@@ -256,7 +297,7 @@ impl SpentJtis for Spent {
 
 #[cfg(test)]
 #[path = "conformance_tests.rs"]
-mod conformance_tests;
+pub(crate) mod conformance_tests;
 
 #[cfg(test)]
 #[path = "store_tests.rs"]

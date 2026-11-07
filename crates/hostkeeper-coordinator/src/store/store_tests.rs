@@ -141,12 +141,11 @@ fn files_with_no_part_keep_nothing() {
             ..Commit::default()
         })
         .expect("taken");
-    let every = |_: &crate::ops::AuditEntry| true;
     let query = Query {
         since_seq: 0,
         limit: 10,
         newest: false,
-        keep: &every,
+        filter: crate::audit_file::Filter::default(),
     };
     assert_eq!(files.audit_page(&query).expect("a page"), []);
     let mut seen = 0;
