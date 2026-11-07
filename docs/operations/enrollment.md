@@ -166,6 +166,16 @@ happens: the daemon sends no nonce, and the coordinator has no MDM device-state 
 decline one. Every Mac waits for an operator, with `mac_nonce_presented` false, and is approved
 as a Linux request is.
 
+Once the gate and the daemon send nonces, three things follow for an operator. A nonce approves
+only the request it was issued for: a second request presenting it (another key on the same Mac)
+stays pending and is audited `mac_auto_approve_declined` with `nonce_wrong_request`; deny it.
+A Mac approved by its nonce is assigned the services of its allowlist entry, audited `assign` by
+`mdm-nonce`, as an approval assigns the services it names. A Mac wiped and enrolled in MDM again
+takes its own host id over from its old key without an operator (`enroll_replace` by
+`mdm-nonce`); that does not apply to a denied host id, which stays `denied`, nor to a host id
+approved for a request that claimed another serial, which is `host_id_taken`: approve those by
+key hash with `--replace true` as below.
+
 ## Check the key hash
 
 Claims identify nothing: any machine can claim any MAC. Before approving, check that the request

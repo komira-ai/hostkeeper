@@ -187,8 +187,9 @@ impl Coordinator {
     }
 
     /// Assigns each of `services` to the host `host_id`: the one path by which a service is
-    /// assigned to one host, for `Services.Assign` of a host and for the services an operator's
-    /// enrollment approval names (`Enrollment.Approve`). `role` is the host's role, as an
+    /// assigned to one host, for `Services.Assign` of a host, for the services an operator's
+    /// enrollment approval names (`Enrollment.Approve`), and for those of the allowlist entry a
+    /// Mac is approved as by its MDM nonce (`Enroll`). `role` is the host's role, as an
     /// approval names it, for a host the fleet has not heard from (one it has heard from is read
     /// with the role it heartbeated with). Each service is one audit entry `assign` by `by`, all
     /// in one write; an uninstall the host was ordered of one of them is dropped. The host's own entry is written even when its role

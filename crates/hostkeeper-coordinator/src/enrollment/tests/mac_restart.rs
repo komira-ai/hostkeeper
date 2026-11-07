@@ -26,6 +26,7 @@ fn policy() -> MacPolicy {
         Ok(DeviceStatus {
             enrolled: true,
             supervised: true,
+            enrolled_since_unix: None,
         }),
     );
     MacPolicy {
@@ -41,13 +42,14 @@ fn policy() -> MacPolicy {
 /// and the key of a Mac's request: the rig, the nonce and the key.
 fn mac_run(name: &str, fs: Arc<dyn Fs>) -> (Rig, Vec<u8>, HostKey) {
     let rig = Rig::configured(name, fs, os_random(), |e| e.with_mac(policy()));
+    let key = HostKey::new();
     let nonce = rig
         .enrollment
-        .issue_mac_nonce(SERIAL)
+        .issue_mac_nonce(SERIAL, &key.key_hash())
         .expect("a nonce")
         .as_bytes()
         .to_vec();
-    (rig, nonce, HostKey::new())
+    (rig, nonce, key)
 }
 
 /// The state of `key`'s request in `enrollment`.
@@ -147,9 +149,10 @@ fn a_nonce_is_consumed_with_the_approval_across_a_restart() {
     assert_eq!(answer.state, EnrollState::Pending as i32);
     let restarted = run.restart_with(|e| e.with_mac(policy()));
     assert_eq!(state_of(&restarted, &key), RequestState::Pending);
-    assert_eq!(
-        restarted.mac_auto_approve(&key.key_hash(), &nonce),
-        MacOutcome::Approved(host_id(MAC_HOST))
+    let outcome = restarted.mac_auto_approve(&key.key_hash(), &nonce);
+    assert!(
+        matches!(&outcome, MacOutcome::Approved(entry) if entry.host_id == host_id(MAC_HOST)),
+        "{outcome:?}"
     );
 
     // The nonce's mark fails: the approval stands and the nonce is used, then and after a

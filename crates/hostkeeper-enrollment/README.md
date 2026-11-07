@@ -64,7 +64,7 @@ signing returns `None` and is not a refusal.
 | `ApproveError` | `Denied` | `denied` |
 | `ApproveError` | `RenewalOfOtherHost` | `renewal_of_other_host` |
 | `ApproveError` | `DuplicateClaim` | `duplicate_claim` |
-| `ApproveError` | `MacNonce(_)` | `nonce_unknown`, `nonce_expired`, `nonce_used`, `nonce_wrong_serial` |
+| `ApproveError` | `MacNonce(_)` | `nonce_unknown`, `nonce_expired`, `nonce_used`, `nonce_wrong_serial`, `nonce_wrong_request` |
 | `IssueError` | `UnknownRequest` | `unknown_request` |
 | `IssueError` | `Denied` | `denied` |
 | `IssueError` | `NotApproved(_)` (also an expired request) | none: the poll answers "pending" |
@@ -76,8 +76,10 @@ signing returns `None` and is not a refusal.
 ## Mac nonces
 
 A Mac nonce is good for one hour from its issue (`MAC_NONCE_VALID_SECS`, by the caller's clock)
-and for one approval. `approve_recorded` checks it under the store lock (known, unexpired,
-unused, issued for the serial the request claims) and writes the approval with the nonce's
+and for one approval, of the request it was issued for (`issue_mac_nonce` records the request's
+key hash; a nonce file written before that field names none and is judged without it).
+`approve_recorded` checks it under the store lock (known, unexpired, unused, issued for the serial
+the request claims, issued for this request) and writes the approval with the nonce's
 SHA-256 in the request file: that one write is the consumption. The nonce's own file is marked
 after it; should that mark not land, the store remembers the consumption in memory and `open`
 marks the file. A check that does not end in an approval consumes nothing.
