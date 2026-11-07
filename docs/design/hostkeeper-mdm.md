@@ -84,8 +84,8 @@ the nonce before the request, and a gate call named `CheckSerial` where the code
 | ABM server token | The upload is probably done (the depserver log shows the upload and account check calls) but unconfirmed. The token expiry has not been read. A read-only check with root on the MDM host settles both before the ADE profile is defined (task M7). |
 | ADE profile | Not defined. The `depsyncer` unit is disabled. |
 | Enrolled Macs | None. NanoHUB's log has no `/mdm` check-in, and the farm's Macs report no DEP and no MDM enrollment. |
-| Policy gate | None runs. kbf has one (`kbf-mdm`, binary `kbf-mdm-gate`) that was never deployed. Its server speaks JSON over HTTP while the kbf server's client calls it as gRPC, so the two cannot talk. It also has no eligibility check. |
-| Coordinator side | **Built**: the nonce store (32 bytes, one hour, one use, consumed in the approval's own write), the serial allowlist, the `DeviceState` port and its eight decline tokens (`crates/hostkeeper-coordinator/src/enrollment/`, `crates/hostkeeper-enrollment/src/enroll/mac_nonce.rs`). The only `DeviceState` is `NoDeviceState`, so no Mac is approved by a nonce today. |
+| Policy gate | **Built**, the device side (task M8): `crates/hostkeeper-mdm-gate`, linked into the coordinator with `--mdm-api-url` (section 6.1). Its enrollment side (config profile, nonce, pkg) is not built, and it runs on no host yet. kbf has one (`kbf-mdm`, binary `kbf-mdm-gate`) that was never deployed. Its server speaks JSON over HTTP while the kbf server's client calls it as gRPC, so the two cannot talk. It also has no eligibility check. |
+| Coordinator side | **Built**: the nonce store (32 bytes, one hour, one use, consumed in the approval's own write), the serial allowlist, the `DeviceState` port and its eight decline tokens (`crates/hostkeeper-coordinator/src/enrollment/`, `crates/hostkeeper-enrollment/src/enroll/mac_nonce.rs`). With `--mdm-api-url` the `DeviceState` is the gate's (`crates/hostkeeper-coordinator/src/mdm.rs`); without it, `NoDeviceState`. No nonce is issued yet, so no Mac is approved by a nonce today. |
 | Daemon side | **Built**: the launchd daemon, the claims of serial and platform UUID, the pkg with its seed postinstall (`docs/macos.md`). **Not built**: the daemon sends no nonce, and the pkg writes no config. |
 | Pkg signature | None. The pkg is attested, and the binary in it carries the linker's ad-hoc code signature (`crates/xtask/src/release/macos_pkg.rs`). |
 
@@ -120,7 +120,8 @@ Under design section 5.1 a compromised coordinator can already order any verb on
 the gate adds erase to that list, plus the install of any pkg the Mac accepts (a Developer ID pkg,
 if section 7 ends there). The gate's own code enqueues only five command types: `DeviceInformation`,
 `SecurityInfo`, `InstallProfile`, `RemoveProfile` and `InstallEnterpriseApplication`. A test
-pins that list (to build, M8). This bounds the code, not a thief of the key.
+pins that list (**Built**: `the_gate_enqueues_only_its_five_command_types` in
+`crates/hostkeeper-mdm-gate/tests/gate.rs`). This bounds the code, not a thief of the key.
 The key is a file, mode 0600 and owned by the coordinator's user, named by a flag (rule S2).
 
 ## 4. Where the daemon config comes from (decided first)
@@ -338,15 +339,28 @@ serial is `device_state_unavailable`.
 **Supervised.** The gate reads it from that `DeviceInformation` answer. It also sends
 `SecurityInfo`, whose `ManagementStatus` says whether the Mac `EnrolledViaDEP` and whether the
 enrollment is user-approved. The gate shows both in its device list and passes neither to the
-coordinator: the built condition is enrolled and supervised, and it stays so. NanoHUB 0.2.0's
-webhook event names and the result format are to confirm in task M8 against the pinned NanoHUB.
-Its tests read recorded payloads.
+coordinator: the built condition is enrolled and supervised, and it stays so.
 
-The device record is a durable file per enrollment id under the coordinator's state directory.
-It holds the enrollment id, serial, enrolled, supervised, ADE, user-approved, the times of the
-last check-in, the config profile's state, the install tries and the nonce pushes. `status(serial)`
+**Confirmed against NanoHUB 0.2.0** (task M8, read from its source at `v0.2.0` and the NanoMDM
+`v0.9.0` its `go.mod` pins). The webhook (`-webhook-url`) is NanoMDM's MicroMDM-compatible one,
+with no signature: a JSON object with a `topic` (`mdm.Authenticate`, `mdm.TokenUpdate`,
+`mdm.CheckOut`, `mdm.Connect` for a command result, and others the gate passes over), and a
+`checkin_event` or an `acknowledge_event` carrying `ids` (the enrollment id and its type, `Device`
+for the device channel), `udid`, `raw_payload` (the base64 of the device's plist),
+`token_update_tally` on a `TokenUpdate`, and `command_uuid` and `status` on a result. Commands are
+queued by `PUT /api/v1/nanomdm/enqueue/<id>` with the raw command plist, behind basic
+authentication as `nanohub`; the answer is NanoMDM's `APIResult` JSON. Because the webhook is not
+signed, the gate reads a result only for a command UUID it sent that device and is still waiting
+on. Its tests read NanoMDM's recorded payloads (`crates/hostkeeper-mdm-gate/tests/fixtures/nanohub/`).
+
+The device record is a durable file per enrollment id (**Built**:
+`<--enrollment-dir>/mdm-devices/<enrollment id>.pb`, behind the gate's `DeviceStore`, so the
+coordinator's backup copies it with the enrollment store). It holds the enrollment id, serial,
+enrolled, supervised, ADE, user-approved, the times of the last check-in, and the commands sent
+and not answered. The config profile's state, the install tries and the nonce pushes are fields
+the tasks that send them add (M12, M14). `status(serial)`
 answers from the record and never asks the Mac live. A serial the gate has no record of is
-`device_state_unavailable`, as the built `NoDeviceState` answers. A serial seen under two
+`device_state_unavailable`, as `NoDeviceState` answers. A serial seen under two
 enrollment ids is also `device_state_unavailable`, until a `CheckOut` of the older one.
 
 ### 6.2 Path A: wipe (or a new Mac), then ADE

@@ -1,0 +1,241 @@
+//! The gate's record of one device (design 6.1), and how each event changes it.
+//!
+//! A device is enrolled from its first `TokenUpdate` until a `CheckOut`. An `Authenticate`
+//! begins a new enrollment: everything the device said in its last one (its serial, its
+//! supervision, its ADE and user-approval status, its unanswered commands) is forgotten, and
+//! asked again once its `TokenUpdate` makes it enrolled. A `TokenUpdate` after a `CheckOut`, or
+//! one NanoMDM counts as the first since an `Authenticate` the gate did not hear, also begins a
+//! new enrollment. [`DeviceRecord::enrollment`] counts them.
+//!
+//! The record keeps the commands the gate sent and the device has not answered, so a result is
+//! matched to its command across a restart, and a command is never sent twice while one is
+//! unanswered: a Mac that is off piles nothing up in NanoHUB's queue.
+
+use crate::answer::{DeviceInformation, SecurityInfo};
+use crate::command::{DEVICE_INFORMATION, SECURITY_INFO};
+use crate::ids::{CommandUuid, EnrollmentId, shown};
+
+/// Where a device is in its enrollment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Phase {
+    /// It sent `Authenticate` and no `TokenUpdate` since: not enrolled yet.
+    Authenticated,
+    /// It sent a `TokenUpdate` and no `CheckOut` since: enrolled.
+    Enrolled,
+    /// It sent `CheckOut`: not enrolled.
+    CheckedOut,
+}
+
+/// One command the gate sent that the device has not answered.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Sent {
+    /// The command's UUID.
+    pub uuid: CommandUuid,
+    /// The command's request type.
+    pub request_type: String,
+    /// When NanoHUB took it, in unix seconds.
+    pub sent_unix: u64,
+}
+
+/// The gate's record of one MDM enrollment id.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeviceRecord {
+    /// The enrollment id the record is kept under.
+    pub enrollment_id: EnrollmentId,
+    /// The device's UDID, as its check-ins name it.
+    pub udid: String,
+    /// The `SerialNumber` of its last `Authenticate`, when it carried one. Shown only: the
+    /// serial the gate answers by is [`DeviceRecord::serial`].
+    pub authenticate_serial: Option<String>,
+    /// The serial its `DeviceInformation` answer gave in this enrollment.
+    pub serial: Option<String>,
+    /// Where it is in its enrollment.
+    pub phase: Phase,
+    /// How many enrollments the gate has seen it begin.
+    pub enrollment: u32,
+    /// `IsSupervised` of its `DeviceInformation` answer in this enrollment.
+    pub supervised: Option<bool>,
+    /// `EnrolledViaDEP` of its `SecurityInfo` answer in this enrollment.
+    pub enrolled_via_dep: Option<bool>,
+    /// `UserApprovedEnrollment` of its `SecurityInfo` answer in this enrollment.
+    pub user_approved: Option<bool>,
+    /// The first `TokenUpdate` of this enrollment, in unix seconds.
+    pub enrolled_since_unix: Option<u64>,
+    /// Its last check-in, in unix seconds.
+    pub last_checkin_unix: u64,
+    /// Its `CheckOut`, when it checked out, in unix seconds.
+    pub checked_out_unix: Option<u64>,
+    /// When it answered `DeviceInformation` in this enrollment, in unix seconds.
+    pub device_information_unix: Option<u64>,
+    /// When it answered `SecurityInfo` in this enrollment, in unix seconds.
+    pub security_info_unix: Option<u64>,
+    /// The commands sent and not answered.
+    pub sent: Vec<Sent>,
+    /// The query types it answered with an error since its last `TokenUpdate`: they are asked
+    /// again at the next one, never sooner, so a device that refuses a query is not asked in a
+    /// loop.
+    pub refused: Vec<String>,
+    /// The last thing that went wrong with a command for it: NanoHUB refused it, or the device
+    /// answered an error.
+    pub last_error: Option<String>,
+}
+
+impl DeviceRecord {
+    /// A record of `id` first heard of at `now`, not enrolled.
+    #[must_use]
+    pub fn new(id: EnrollmentId, now: u64) -> Self {
+        Self {
+            enrollment_id: id,
+            udid: String::new(),
+            authenticate_serial: None,
+            serial: None,
+            phase: Phase::Authenticated,
+            enrollment: 0,
+            supervised: None,
+            enrolled_via_dep: None,
+            user_approved: None,
+            enrolled_since_unix: None,
+            last_checkin_unix: now,
+            checked_out_unix: None,
+            device_information_unix: None,
+            security_info_unix: None,
+            sent: Vec::new(),
+            refused: Vec::new(),
+            last_error: None,
+        }
+    }
+
+    /// Whether the device is enrolled now.
+    #[must_use]
+    pub fn is_enrolled(&self) -> bool {
+        self.phase == Phase::Enrolled
+    }
+
+    /// Forgets what the device said in its last enrollment.
+    fn forget_enrollment(&mut self) {
+        self.serial = None;
+        self.supervised = None;
+        self.enrolled_via_dep = None;
+        self.user_approved = None;
+        self.enrolled_since_unix = None;
+        self.device_information_unix = None;
+        self.security_info_unix = None;
+        self.sent.clear();
+        self.refused.clear();
+    }
+
+    fn heard(&mut self, udid: &str, now: u64) {
+        if !udid.is_empty() {
+            udid.clone_into(&mut self.udid);
+        }
+        self.last_checkin_unix = now;
+    }
+
+    /// `Authenticate` at `now`: a new enrollment begins, not enrolled until its `TokenUpdate`.
+    pub fn authenticate(&mut self, udid: &str, serial: Option<String>, now: u64) {
+        self.forget_enrollment();
+        self.heard(udid, now);
+        self.phase = Phase::Authenticated;
+        self.authenticate_serial = serial;
+        self.checked_out_unix = None;
+    }
+
+    /// `TokenUpdate` at `now`, the `tally`-th since an `Authenticate` when NanoMDM counts it.
+    /// The first after an `Authenticate` or a `CheckOut` makes the device enrolled, as does a
+    /// first one (tally 1) the gate hears while it holds the device enrolled. Either way the
+    /// queries it refused are due again.
+    pub fn token_update(&mut self, udid: &str, tally: Option<u64>, now: u64) {
+        let first = tally == Some(1);
+        if !self.is_enrolled() || first {
+            if self.is_enrolled() {
+                self.forget_enrollment();
+            }
+            self.phase = Phase::Enrolled;
+            self.enrollment = self.enrollment.saturating_add(1);
+            self.enrolled_since_unix = Some(now);
+            self.checked_out_unix = None;
+        }
+        self.refused.clear();
+        self.heard(udid, now);
+    }
+
+    /// `CheckOut` at `now`: no longer enrolled; its unanswered commands are dropped.
+    pub fn check_out(&mut self, now: u64) {
+        self.heard("", now);
+        self.phase = Phase::CheckedOut;
+        self.checked_out_unix = Some(now);
+        self.sent.clear();
+    }
+
+    /// The queries to send now: those of an enrolled device it has not answered in this
+    /// enrollment, that are not sent and unanswered, and that it has not refused since its last
+    /// `TokenUpdate`. `DeviceInformation` first.
+    #[must_use]
+    pub fn due(&self) -> Vec<&'static str> {
+        if !self.is_enrolled() {
+            return Vec::new();
+        }
+        [
+            (DEVICE_INFORMATION, self.device_information_unix),
+            (SECURITY_INFO, self.security_info_unix),
+        ]
+        .into_iter()
+        .filter(|(kind, answered)| {
+            answered.is_none()
+                && !self.sent.iter().any(|sent| sent.request_type == *kind)
+                && !self.refused.iter().any(|refused| refused == kind)
+        })
+        .map(|(kind, _)| kind)
+        .collect()
+    }
+
+    /// The unanswered command `uuid`, taken off the list; `None` when the gate sent no such
+    /// command to this device or it was answered already.
+    pub fn take_sent(&mut self, uuid: &str) -> Option<Sent> {
+        let at = self
+            .sent
+            .iter()
+            .position(|sent| sent.uuid.as_str() == uuid)?;
+        Some(self.sent.remove(at))
+    }
+
+    /// Notes that the device answered `request_type` with an error, or NanoHUB refused it:
+    /// `why` is kept as the last error.
+    pub fn refuse(&mut self, request_type: &str, why: &str) {
+        if !self.refused.iter().any(|kind| kind == request_type) {
+            self.refused.push(request_type.to_owned());
+        }
+        self.last_error = Some(shown(&format!("{request_type}: {why}")));
+    }
+
+    /// The `DeviceInformation` answer `info`, given at `now`. An answer naming another UDID than
+    /// the device's is refused, as a malformed one is.
+    pub fn answer_device_information(&mut self, info: Option<DeviceInformation>, now: u64) {
+        let Some(info) = info else {
+            return self.refuse(
+                DEVICE_INFORMATION,
+                "the answer is not a DeviceInformation result",
+            );
+        };
+        if info
+            .udid
+            .as_deref()
+            .is_some_and(|udid| !self.udid.is_empty() && udid != self.udid)
+        {
+            return self.refuse(DEVICE_INFORMATION, "the answer names another UDID");
+        }
+        self.serial = info.serial;
+        self.supervised = Some(info.supervised);
+        self.device_information_unix = Some(now);
+    }
+
+    /// The `SecurityInfo` answer `info`, given at `now`.
+    pub fn answer_security_info(&mut self, info: Option<SecurityInfo>, now: u64) {
+        let Some(info) = info else {
+            return self.refuse(SECURITY_INFO, "the answer is not a SecurityInfo result");
+        };
+        self.enrolled_via_dep = info.enrolled_via_dep;
+        self.user_approved = info.user_approved;
+        self.security_info_unix = Some(now);
+    }
+}

@@ -67,13 +67,14 @@ use crate::channel::ReleaseChannel;
 use crate::channel_https::{ChannelTlsError, ChannelUrl, ChannelUrlError, HttpsChannel};
 use crate::desired::{DesiredStore, StoreError};
 use crate::enrollment::{
-    AllowlistError, MacAllowlist, MacPolicy, NoDeviceState, Setup, SetupError, os_random, setup,
+    AllowlistError, MacAllowlist, MacPolicy, Setup, SetupError, os_random, setup,
 };
 use crate::fleet::{CLOCK_SKEW_AFTER, QUIET_START};
 use crate::http::Surface;
 use crate::jti_file::{JtiError, JtiFile, jti_path};
 use crate::listen::{CLIENT_PATIENCE, Listener, MAX_CONNECTIONS, accept_tcp, reload_every, serve};
 use crate::lock::{FileLock, LockError, LockGuard, StateLock, lock_path};
+use crate::mdm::{Mdm, MdmError, MdmFlags};
 use crate::ops::{OpsError, OpsStore};
 use crate::service::{Clock, Coordinator};
 use crate::services::{Services, ServicesError};
@@ -210,6 +211,9 @@ pub enum StartError {
     /// The TLS client of the release channel could not be made.
     #[error("--release-channel: {0}")]
     ReleaseChannelTls(#[from] ChannelTlsError),
+    /// The MDM policy gate did not start.
+    #[error(transparent)]
+    Mdm(#[from] MdmError),
 }
 
 /// How long the verifier waits before it fetches the issuer's keys again for an unknown `kid`.
@@ -369,6 +373,9 @@ pub struct Serve {
     /// `host_id_prefix`, `role`, `services`). Without it no Mac is approved by its nonce.
     #[arg(long, requires = "enrollment_dir")]
     pub mac_serial_allowlist: Option<PathBuf>,
+    /// The MDM policy gate: NanoHUB's API, its key and the webhook listener.
+    #[command(flatten)]
+    pub mdm: MdmFlags,
     /// A directory of static files (the operator web app) that the private listener serves
     /// under `/ui/`, to `GET` and `HEAD` only: `/ui/` is its `index.html`, and only files ending
     /// in .html, .css, .js, .json, .svg, .png or .ico of at most 4 MiB inside it are served.
@@ -496,7 +503,8 @@ pub struct Parts {
 /// another coordinator holds the lock of the state files, a halt was being written when the
 /// coordinator stopped, both token flags or neither is given, the legacy service or an
 /// allow-list entry names a service `--rollout-file` does not define, an entry names no
-/// services with no legacy service set, or the two URI prefixes are refused.
+/// services with no legacy service set, the two URI prefixes are refused, or the MDM gate's
+/// flags or device records are ([`crate::mdm::MdmError`]).
 pub fn build(flags: &Serve, roots: Roots) -> Result<Parts, StartError> {
     build_with(flags, roots, &FileLock)
 }
@@ -630,6 +638,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
                 .map_or(DEFAULT_MAX_PENDING, |max| {
                     usize::try_from(max).unwrap_or(usize::MAX)
                 });
+            let mdm = Mdm::open(&flags.mdm, dir, Arc::new(SystemClock), os_random())?;
             let enrollment = setup(
                 Arc::new(RealFs),
                 &Setup {
@@ -644,16 +653,19 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
             )?
             .with_max_pending(max_pending)
             .with_request_ttl(flags.enrollment_request_ttl)
-            // The MDM gate is not built into this coordinator: no device is known to it.
+            // The gate, when the coordinator runs it, says whether a Mac is enrolled and
+            // supervised; without it no device is known.
             .with_mac(MacPolicy {
-                device_state: Arc::new(NoDeviceState),
+                device_state: Mdm::device_state(mdm.as_ref()),
                 allowlist,
             });
             let client = ClientAuth {
                 optional: true,
                 extra_roots: vec![enrollment.ca_bundle().certificate_der().to_vec()],
             };
-            coordinator = coordinator.with_enrollment(Arc::new(enrollment));
+            coordinator = coordinator
+                .with_enrollment(Arc::new(enrollment))
+                .with_mdm(mdm);
             let served = TlsFiles {
                 cert: server_cert.clone(),
                 key: server_cert.clone(),
@@ -774,8 +786,9 @@ async fn together(
 }
 
 /// Binds both listeners with `bind` (which answers the address bound and the function that
-/// accepts connections), calls `ready` with their addresses, and serves until the future is
-/// dropped. It never returns `Ok`.
+/// accepts connections), and the MDM gate's webhook listener when the coordinator runs the gate,
+/// calls `ready` with the addresses of the two, and serves until the future is dropped. It never
+/// returns `Ok`.
 ///
 /// # Errors
 /// An address cannot be bound.
@@ -795,6 +808,17 @@ where
     let _held = parts.lock;
     let (heartbeat_addr, heartbeat_accept) = bind(parts.heartbeat_listen).await?;
     let (control_addr, control_accept) = bind(parts.control_listen).await?;
+    let webhook = match parts.coordinator.mdm() {
+        Some(mdm) => {
+            let (addr, accept) = bind(mdm.webhook_listen).await?;
+            tracing::info!(%addr, "serving the MDM webhook");
+            Either::Left(hostkeeper_mdm_gate::webhook::serve(
+                accept,
+                Arc::clone(&mdm.gate),
+            ))
+        }
+        None => Either::Right(std::future::pending()),
+    };
     ready(Bound {
         heartbeat: heartbeat_addr,
         control: control_addr,
@@ -828,7 +852,7 @@ where
         tokens,
         parts.reload,
     );
-    match together(serving, together(reloading, observing)).await {}
+    match together(serving, together(reloading, together(observing, webhook))).await {}
 }
 
 /// Resolves on SIGTERM or SIGINT.

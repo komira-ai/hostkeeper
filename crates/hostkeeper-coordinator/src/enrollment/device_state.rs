@@ -1,8 +1,9 @@
 //! The port through which the Mac path asks the MDM policy gate about a device (design 5.9).
 //!
-//! The gate and its implementation of [`DeviceState`] are a component with their own design
-//! document and are not in this crate. A coordinator started without one uses
-//! [`NoDeviceState`], which knows no device, so no Mac is approved by its nonce.
+//! The gate is the crate `hostkeeper-mdm-gate` (docs/design/hostkeeper-mdm.md), linked into the
+//! coordinator; [`crate::mdm`] answers this port from its device records. A coordinator started
+//! without the gate (no `--mdm-api-url`) uses [`NoDeviceState`], which knows no device, so no
+//! Mac is approved by its nonce.
 
 /// What the gate says of a device.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -7,8 +7,8 @@
 //! can never be refused with (`UNSPECIFIED`) is `INTERNAL`.
 
 use hostkeeper_proto::hostkeeper::operator::v1::{
-    AlertsRefusal, AuditRefusal, EnrollmentRefusal, HostsRefusal, ReleasesRefusal, RolloutsRefusal,
-    ServicesRefusal,
+    AlertsRefusal, AuditRefusal, EnrollmentRefusal, HostsRefusal, MdmRefusal, ReleasesRefusal,
+    RolloutsRefusal, ServicesRefusal,
 };
 use tonic::{Code, Status};
 
@@ -145,4 +145,15 @@ pub(crate) fn rollouts(refusal: RolloutsRefusal) -> Status {
         RolloutsRefusal::AuditUnavailable => Code::Unavailable,
     };
     refused(code, refusal.as_str_name(), "ROLLOUTS_REFUSAL_")
+}
+
+/// The status of a refusal by `Mdm`.
+pub(crate) fn mdm(refusal: MdmRefusal) -> Status {
+    let code = match refusal {
+        MdmRefusal::Unspecified => Code::Internal,
+        MdmRefusal::Unauthorized => Code::Unauthenticated,
+        MdmRefusal::Forbidden => Code::PermissionDenied,
+        MdmRefusal::InvalidRequest => Code::InvalidArgument,
+    };
+    refused(code, refusal.as_str_name(), "MDM_REFUSAL_")
 }

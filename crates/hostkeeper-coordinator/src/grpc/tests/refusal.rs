@@ -4,8 +4,8 @@
 use std::fmt::Debug;
 
 use hostkeeper_proto::hostkeeper::operator::v1::{
-    AlertsRefusal, AuditRefusal, EnrollmentRefusal, HostsRefusal, ReleasesRefusal, RolloutsRefusal,
-    ServicesRefusal,
+    AlertsRefusal, AuditRefusal, EnrollmentRefusal, HostsRefusal, MdmRefusal, ReleasesRefusal,
+    RolloutsRefusal, ServicesRefusal,
 };
 use tonic::{Code, Status};
 
@@ -35,7 +35,7 @@ where
 }
 
 /// Proves that each value of `HostsRefusal`, `ReleasesRefusal`, `ServicesRefusal`,
-/// `EnrollmentRefusal`, `AuditRefusal`, `AlertsRefusal` and `RolloutsRefusal` becomes the status
+/// `EnrollmentRefusal`, `AuditRefusal`, `AlertsRefusal`, `RolloutsRefusal` and `MdmRefusal` becomes the status
 /// its proto comment names: the code of the comment and the
 /// value's name, without its prefix and in lower case, as the whole message; and that
 /// `UNSPECIFIED`, which no caller is refused with, is `INTERNAL`. A value the enum gains that
@@ -348,6 +348,20 @@ fn every_refusal_value_has_the_code_and_token_its_proto_comment_names() {
             ),
         ],
         refusal::rollouts,
+    );
+
+    assert_table(
+        &[
+            (MdmRefusal::Unspecified, Internal, "unspecified"),
+            (MdmRefusal::Unauthorized, Unauthenticated, "unauthorized"),
+            (MdmRefusal::Forbidden, PermissionDenied, "forbidden"),
+            (
+                MdmRefusal::InvalidRequest,
+                InvalidArgument,
+                "invalid_request",
+            ),
+        ],
+        refusal::mdm,
     );
 }
 

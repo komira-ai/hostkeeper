@@ -1,0 +1,46 @@
+[package]
+name = "hostkeeper-mdm-gate"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "The MDM policy gate's device side, linked into the coordinator: NanoHUB's command queue, its webhook on loopback, a durable record per device, and what the gate says of a Mac serial."
+
+# docs/design/hostkeeper-mdm.md sections 3 and 6.1 (task M8). The gate talks to NanoHUB 0.2.0 on
+# loopback only: it enqueues commands through NanoHUB's API (HTTP basic authentication, the key
+# read from a file a flag names) and hears check-ins and command results on its webhook. It keeps
+# one record per MDM enrollment id behind `DeviceStore`; `FileDeviceStore` is a file per device.
+# The coordinator links it and adapts its answer to the enrollment's `DeviceState` port.
+[dependencies]
+# The webhook's `raw_payload`, and the basic authentication of NanoHUB's API.
+base64.workspace = true
+bytes.workspace = true
+# The file-system port and the atomic write of a record, and the clock port the times come from.
+hostkeeper-enrollment = { path = "../hostkeeper-enrollment" }
+# The file rule of the API key file (`--mdm-api-key-file`).
+hostkeeper-wire = { path = "../hostkeeper-wire" }
+http-body-util.workspace = true
+# The client of NanoHUB's API and the server of the webhook, both HTTP/1.1 on loopback.
+hyper = { workspace = true, features = ["client", "http1", "server"] }
+hyper-util = { workspace = true, features = ["tokio"] }
+# The MDM commands the gate sends and the check-ins and results it reads are property lists.
+plist.workspace = true
+# The record file's messages, derived in place (no build script).
+prost.workspace = true
+serde.workspace = true
+# The webhook's events and the API's answers are JSON.
+serde_json.workspace = true
+# The digest a record file ends with, so a torn file is refused.
+sha2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["net", "rt", "sync", "time"] }
+tracing.workspace = true
+
+[dev-dependencies]
+hostkeeper-testkit = { path = "../hostkeeper-testkit" }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "test-util", "time"] }
+
+[lints]
+workspace = true

@@ -23,6 +23,9 @@ with no client certificate asked of `Enroll` and `Poll`.
 | `--max-pending-enrollments <n>` | How many requests may wait for an operator at once, 1 or more; 256 when not given. A new request over it is refused `pending_full`; no waiting request is dropped for it, and a host posting its waiting request again is still answered. Requires `--enrollment-dir`. |
 | `--enrollment-request-ttl <time>` | How long a request waits for an operator before it expires: digits and one unit, `s`, `m`, `h` or `d` (`90m`, `72h`), at least one second; `72h` when not given. Requires `--enrollment-dir`. |
 | `--mac-serial-allowlist <file>` | The Mac serial numbers a Mac may be approved for by its MDM nonce, with the host id prefix, role and services of each (below). Without it no Mac is approved by its nonce. Requires `--enrollment-dir`. |
+| `--mdm-api-url <url>` | NanoHUB's API, on loopback: `http://<loopback address>:<port>`, as `http://127.0.0.1:9004`; a name (even `localhost`), another address, `https://`, a path or a query stops the start. With it the coordinator runs the MDM policy gate (below). Requires the two below and `--enrollment-dir`. |
+| `--mdm-api-key-file <file>` | NanoHUB's API key (NanoHUB's `-api-key`): one key of visible ASCII, in a file of mode 0600 or 0400 owned by the coordinator's user; a link, another mode or owner, or an empty file stops the start, and the message names the flag, never the path or the key. Requires `--mdm-api-url`. |
+| `--mdm-webhook-listen <addr>` | Where the gate serves NanoHUB's webhook: a loopback address and port, as `127.0.0.1:9100`; another address stops the start. Requires `--mdm-api-url`. |
 
 The CA is made once. Every daemon config pins the SHA-256 of its certificate (`ca_sha256`); the
 start logs it at info as `ca_sha256`. The server certificate is made again when its file is
@@ -68,6 +71,7 @@ whole (temporary file, fsync, rename, directory fsync), mode 0600:
 | `deny/<host id>.pb` | a denied host: retiring, retired, or cleared by a later approval |
 | `serial.pb` | the next certificate serial |
 | `mac-nonces/<nonce SHA-256>.pb` | a Mac nonce by its SHA-256 only: its serial, when it was issued, the request that consumed it |
+| `mdm-devices/<enrollment id>.pb` | with the MDM gate, its record of one device (below), with the SHA-256 of the record, so a torn file is refused |
 | `lock` | the lock every change takes |
 
 A request id is the SHA-256 of the request key's SubjectPublicKeyInfo, as 64 lower-case hex
@@ -186,8 +190,8 @@ is `unknown_host`.
 
 ## A Mac approved by its nonce
 
-The MDM policy gate (its own component, not in this coordinator) gives each Mac a one-time nonce
-through `Enrollment::issue_mac_nonce`: 32 random bytes, of which the store keeps the SHA-256
+The MDM policy gate gives each Mac a one-time nonce through `Enrollment::issue_mac_nonce`: 32
+random bytes, of which the store keeps the SHA-256
 only, for one serial, good for one hour and one approval. A Mac's `Enroll` carries it
 (`mac_nonce`). The request is approved, as the allowlist entry of its serial says and by the
 approver `mdm-nonce`, only when the serial it claims is on `--mac-serial-allowlist`, the gate says
@@ -196,8 +200,8 @@ for that serial. The nonce is consumed in the approval's own write. Any conditio
 request pending for an operator and is audited `mac_auto_approve_declined` with one of
 `serial_not_allowed`, `device_state_unavailable`, `device_not_enrolled`, `device_not_supervised`,
 `nonce_unknown`, `nonce_expired`, `nonce_used`, `nonce_wrong_serial`; such an attempt does not use
-the nonce. This coordinator has no gate: it knows no device, so it approves no Mac by its nonce
-(`device_state_unavailable`). No operator token may be named `mdm-nonce`.
+the nonce. A coordinator without the gate (no `--mdm-api-url`) knows no device, so it approves no
+Mac by its nonce (`device_state_unavailable`). No operator token may be named `mdm-nonce`.
 
 ```toml
 [[mac]]
@@ -209,6 +213,46 @@ services = ["builder"]      # services the rollout file defines
 
 A file that does not read, a serial listed twice, or a serial, host id, role or service that
 breaks its rule or names a service the rollout file does not define stops the start.
+
+## The MDM policy gate
+
+With `--mdm-api-url`, `--mdm-api-key-file` and `--mdm-webhook-listen` the coordinator runs the
+device side of the MDM policy gate, the crate `hostkeeper-mdm-gate`
+([docs/design/hostkeeper-mdm.md](design/hostkeeper-mdm.md) sections 3 and 6.1). It is linked in:
+the enrollment asks it about a serial as a library call. NanoHUB 0.2.0 runs on the same host and
+is started with `-webhook-url http://<--mdm-webhook-listen>/webhook`.
+
+- **What it hears.** NanoHUB posts each check-in (`mdm.Authenticate`, `mdm.TokenUpdate`,
+  `mdm.CheckOut`) and each command result (`mdm.Connect`) of a device channel to `POST /webhook`.
+  The listener answers `200` once the event is recorded or passed over, `400` for a body that is no
+  event, `404` and `405` for another path or method, `413` over 4 MiB, and `500` when the record
+  cannot be written; NanoHUB logs any answer but `200` and does not send the event again.
+- **What it sends.** At a device's first `TokenUpdate` of an enrollment it queues
+  `DeviceInformation` (`SerialNumber`, `UDID`, `IsSupervised`) and `SecurityInfo` through NanoHUB's
+  API (`PUT /api/v1/nanomdm/enqueue/<id>`, basic authentication as `nanohub`). A command the device
+  has not answered is never sent again, so a Mac that is off piles nothing up; a query NanoHUB did
+  not queue is sent again at the device's next check-in, and one the device answered with an error
+  at its next `TokenUpdate`. The gate's code sends only five command types (`DeviceInformation`,
+  `SecurityInfo`, `InstallProfile`, `RemoveProfile`, `InstallEnterpriseApplication`); any other is
+  refused before NanoHUB is called. This bounds the code, not a holder of the key.
+- **What it believes.** A result is read only when its command UUID is one the gate sent that
+  device and the device has not answered (NanoHUB's webhook carries no signature). A device is
+  enrolled from its first `TokenUpdate` until a `CheckOut`; an `Authenticate` begins a new
+  enrollment and forgets the serial and supervision the device gave in the last. The serial is the
+  one its `DeviceInformation` answer gave, never the `Authenticate`'s alone, and the device is
+  supervised only when that answer says `IsSupervised` true. `SecurityInfo`'s `EnrolledViaDEP` and
+  `UserApprovedEnrollment` are shown and decide nothing.
+- **What it says.** The enrollment's question about a serial is answered from the records, never by
+  asking the device: a serial no record has, or one two enrollments that have not checked out
+  have, is `device_state_unavailable`; a checked-out device is `device_not_enrolled`; an
+  unsupervised one `device_not_supervised`.
+- **Its records.** One file per device under `mdm-devices/` (above), written before the gate acts
+  on the event, so a restart loses nothing and a result of a command sent before the restart is
+  still matched. A record that does not read stops the start. `Mdm.ListDevices` of the operator
+  API (`hostkeeper ctl mdm list-devices`, [docs/ctl.md](ctl.md)) lists them; it asks no device.
+
+The gate does not yet install the config profile, issue or push the nonce, or install the pkg
+(tasks M12 and M14 of the design).
 
 ## Backup
 
@@ -246,6 +290,6 @@ final; from then on its heartbeats are refused before they are read.
 ## Not here yet
 
 The wire transport of `Enroll`, `Poll` and `Renew`, and of `Enrollment.List` and
-`Enrollment.Approve` (the coordinator's gRPC serving). The MDM policy gate and its `DeviceState`.
-Neither transport carries a machine id in a heartbeat yet, so the duplicate mark (two live
+`Enrollment.Approve` (the coordinator's gRPC serving). The MDM policy gate's enrollment side: the
+config profile, the nonce's issue and push, and the pkg. Neither transport carries a machine id in a heartbeat yet, so the duplicate mark (two live
 daemons on one host id) is only set when a caller of `Coordinator::heartbeat_from` passes one.

@@ -312,6 +312,22 @@ audited once.
 | `--node-id` | STRING | The host id the host was enrolled as. |
 | `--reason` | STRING | Why, for the audit log: 1 to 256 bytes with no control character, or empty for none. |
 
+### `mdm`
+
+The service `Mdm` of the package `hostkeeper.operator.v1`. The devices of the MDM policy gate.
+
+#### `hostkeeper ctl mdm list-devices`
+
+`/hostkeeper.operator.v1.Mdm/ListDevices`
+
+The devices the gate has a record of, by enrollment id, from the records alone: no device
+is asked. A coordinator that runs no gate answers none, with `gate` false. Changes nothing.
+
+| flag | value | meaning |
+|---|---|---|
+| `--limit` | UINT32 | At most this many devices; 0 means the cap. |
+| `--page-token` | STRING | Empty for the first page; else the `next_page_token` of the page before. |
+
 ### `releases`
 
 The service `Releases` of the package `hostkeeper.operator.v1`. The desired version of each service, how far the hosts are, and the operator's overrides.

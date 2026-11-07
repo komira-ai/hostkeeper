@@ -1344,6 +1344,7 @@ dependencies = [
  "hostkeeper-config",
  "hostkeeper-ctl",
  "hostkeeper-enrollment",
+ "hostkeeper-mdm-gate",
  "hostkeeper-oidc",
  "hostkeeper-proto",
  "hostkeeper-testkit",
@@ -1551,6 +1552,28 @@ dependencies = [
  "tonic",
  "tower",
  "x509-cert",
+]
+
+[[package]]
+name = "hostkeeper-mdm-gate"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "bytes",
+ "hostkeeper-enrollment",
+ "hostkeeper-testkit",
+ "hostkeeper-wire",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "plist",
+ "prost",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
