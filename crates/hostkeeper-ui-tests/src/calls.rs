@@ -6,6 +6,7 @@
 //! parameter named `api`). [`call_sites`] reads those calls from a module's text and refuses
 //! what would hide one from the list: `api.` followed by anything but `<service>.<function>(`
 //! (`api.call(...)`, `api["hosts"]`, `api.hosts.list.call(...)`, a function kept in a variable),
+//! the client reached as `api?.` or `ctx["api"]`,
 //! the client given another name (`const a = ctx.api`), and a method's full name in a string,
 //! which only the generated client spells. [`derived_calls`] turns the calls into the entries of
 //! `ui/calls.json`, each function with its method and the pages that call it.
@@ -108,6 +109,11 @@ pub fn call_sites(path: &str, text: &str) -> Result<Vec<CallSite>, ScanError> {
             .is_some_and(|after| !after.starts_with(|c: char| is_ident(c) || c == '.' || c == '('))
         {
             continue;
+        }
+        // `api?.hosts` and `ctx["api"]`: the client reached in a way no call is read from.
+        let quoted = text[..at].ends_with(['"', '\'']) && rest.starts_with(['"', '\'']);
+        if quoted || skip_blank(rest).starts_with('?') {
+            return Err(error(at, |path, line| ScanError::NotACall { path, line }));
         }
         if skip_blank(rest).starts_with(['.', '[']) {
             let called = member(rest)

@@ -145,6 +145,10 @@ fn a_call_not_written_as_a_function_of_the_client_is_refused_with_its_line() {
         ("api.hosts.", 1),
         ("api.hosts.list`x`", 1),
         ("api.js()", 1),
+        ("ctx.api?.hosts.list({});", 1),
+        ("api ?.hosts.list({});", 1),
+        ("\nctx[\"api\"].hosts.list({});", 2),
+        ("ctx['api'].hosts.list({});", 1),
     ] {
         assert_eq!(
             call_sites("pages/x.js", text),
