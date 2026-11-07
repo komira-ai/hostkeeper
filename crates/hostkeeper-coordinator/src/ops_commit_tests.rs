@@ -101,7 +101,7 @@ fn halted_store(name: &str) -> (Scratch, PathBuf, OpsStore, Arc<Faults>) {
     let faults = Arc::new(Faults::default());
     let (at, fail) = (path.clone(), Arc::clone(&faults));
     let state = OpsStore::open(&path).expect("read").state();
-    let store = OpsStore::with_writer(
+    let store = OpsStore::refusing(
         state,
         Box::new(move |state| ops_file::write_with(&at, state, &|step| fail.at(step))),
     );

@@ -11,8 +11,9 @@
 //! The halt is kept in the ops store ([`crate::ops`]). Raising it is written *after* it is in
 //! memory, so a halt that could not be written still stops the service, and under a marker
 //! file ([`crate::ops::Write::Halt`]): a write that fails is tried again at every heartbeat
-//! until it lands, and a coordinator started over the marker refuses to start. Clearing it is
-//! written *first*, so a clear that could not be written leaves it standing.
+//! until it lands, and a coordinator started over the marker refuses to start unless the ops
+//! file holds the halt. Clearing it is written *first*, so a clear that could not be written
+//! leaves it standing.
 //!
 //! Who raised a halt says what lifts it ([`HaltOrigin`], design section 5.4). A halt the
 //! updater raised itself (a report whose reason is one of [`UPDATER_HALT_REASONS`]) is lifted
@@ -231,12 +232,12 @@ fn end_ack(ops: &OpsStore, service: &str, id: &HostId, report: Option<&Halt>) ->
 }
 
 /// Raises `halt` for `service`, or keeps it for the clear when the service is halted already,
-/// unless an operator cleared exactly this report: in memory first, then written under the
-/// unfinished-halt marker ([`Write::Halt`]). Which of these it is is decided under the writers'
-/// lock, on the state the change is applied to, so a clear or another host's halt that got there
-/// first is seen. A failed write is logged and the change stands in memory; the write is tried
-/// again at every heartbeat until it lands ([`OpsStore::retry_unwritten`]), and the marker
-/// stops a restart before then.
+/// unless an operator cleared exactly this report: in memory first, then committed under the
+/// marker of changes not yet written ([`Write::Halt`]). Which of these it is is decided under the
+/// writers' lock, on the state the change is applied to, so a clear or another host's halt that
+/// got there first is seen. A failed commit is logged and the change stands in memory, pending;
+/// it is committed again at every heartbeat until it lands ([`OpsStore::retry_unwritten`]), and
+/// the marker stops a restart before then.
 ///
 /// A report made while the halt stands is kept once per host, with the halt (`halt_seen`), for
 /// the clear to acknowledge: a report the halt itself holds, or one kept already, is not kept
@@ -291,8 +292,8 @@ fn raise(ops: &OpsStore, service: &str, halt: Halt) {
 pub const OPERATOR_CHECK: &str = "operator";
 
 /// Raises a halt of `service` for the operator `by`, with `reason`, as a host's halt report
-/// raises one ([`raise`]): in memory first, then written under the unfinished-halt marker
-/// ([`Write::Halt`]): an alert ([`crate::alerts`]). The halt names no host, the check
+/// raises one ([`raise`]): in memory first, then committed under the marker of changes not yet
+/// written ([`Write::Halt`]): an alert ([`crate::alerts`]). The halt names no host, the check
 /// [`OPERATOR_CHECK`] and the desired version `target`; its origin is [`HaltOrigin::Operator`],
 /// so only `clear_halt`, or a force, lifts it. Decided under the writers' lock: `already` is
 /// answered, and nothing changes, when a halt stands.

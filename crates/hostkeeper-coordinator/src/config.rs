@@ -29,11 +29,14 @@
 //!
 //! Before it opens any state file, the start takes the lock of `<state-file>.lock`
 //! ([`crate::lock`]) and holds it for as long as the coordinator runs, so a second `serve` on
-//! the same files is refused. It then refuses to start over a halt that was being written when
-//! the coordinator stopped (`<ops-file>.halts.unfinished`, [`crate::ops::Write::Halt`]) and
-//! over a restore that stopped partway (`<state-file>.restore-unfinished`, [`crate::backup`]),
-//! and
-//! reads the spent ids of CI's tokens (`<state-file>.jti`, [`crate::jti_file`]).
+//! the same files is refused. It then refuses to start over a restore that stopped partway
+//! (`<state-file>.restore-unfinished`, [`crate::backup`]), opens the state files as one backend
+//! ([`crate::store::Files`]) under the three stores and the spent ids of CI's tokens
+//! (`<state-file>.jti`, [`crate::jti_file`]), and settles the marker of changes that were in
+//! memory and not yet written when the coordinator stopped (`<ops-file>.halts.unfinished`,
+//! [`crate::ops::Marker`]): removed when the ops file holds every change it lists, a refusal to
+//! start naming those it does not hold, and a refusal, as the release before made, for a marker
+//! that lists nothing this build reads.
 
 use std::convert::Infallible;
 use std::ffi::OsString;
@@ -73,13 +76,14 @@ use crate::enrollment::{
 };
 use crate::fleet::{CLOCK_SKEW_AFTER, QUIET_START};
 use crate::http::Surface;
-use crate::jti_file::{JtiError, JtiFile, jti_path};
+use crate::jti_file::{JtiError, jti_path};
 use crate::listen::{CLIENT_PATIENCE, Listener, MAX_CONNECTIONS, accept_tcp, reload_every, serve};
 use crate::lock::{FileLock, LockError, LockGuard, StateLock, lock_path};
 use crate::mdm::{Mdm, MdmError, MdmFlags};
-use crate::ops::{OpsError, OpsStore};
+use crate::ops::{Marker, OpsError, OpsState, OpsStore, unlanded};
 use crate::service::{Clock, Coordinator};
 use crate::services::{Services, ServicesError};
+use crate::store::{Backend, BackendError, Files, Shared, Spent};
 use crate::tokens::{OperatorTokens, TokensError};
 use crate::ui::{UiDir, UiDirError};
 use crate::verdict_file::{VerdictFile, VerdictsError, verdicts_path};
@@ -188,6 +192,18 @@ pub enum StartError {
         /// The marker file.
         path: PathBuf,
     },
+    /// Changes were in memory and not yet written to the ops file when the coordinator stopped,
+    /// and the ops file does not hold them.
+    #[error(
+        "{path}: the changes numbered {} were in memory and not yet written to the ops file when the coordinator stopped, and it does not hold them; look each up by its number in the coordinator's log (target hostkeeper_coordinator::audit), make it again by hand if it still matters (a halt is raised again by the host's next report while the host is up), and remove this file to start",
+        numbers.iter().map(u64::to_string).collect::<Vec<_>>().join(", ")
+    )]
+    ChangesUnwritten {
+        /// The marker file.
+        path: PathBuf,
+        /// The audit numbers of the changes that did not land.
+        numbers: Vec<u64>,
+    },
     /// A restore into these state files stopped before it finished.
     #[error(
         "{path}: a restore into these state files stopped before it finished, so they may hold part of a snapshot; remove them and this file, and restore again"
@@ -221,6 +237,20 @@ pub enum StartError {
     /// The MDM policy gate did not start.
     #[error(transparent)]
     Mdm(#[from] MdmError),
+}
+
+impl From<BackendError> for StartError {
+    /// The refusal of the part the backend could not load, as that part's store has always said
+    /// it.
+    fn from(why: BackendError) -> Self {
+        match why {
+            BackendError::Desired(why) => why.into(),
+            BackendError::Ops(why) => why.into(),
+            BackendError::Verdicts(why) => why.into(),
+            BackendError::Jti(why) => why.into(),
+            BackendError::Spent => Self::Io(io::Error::other(why)),
+        }
+    }
 }
 
 /// How long the verifier waits before it fetches the issuer's keys again for an unknown `kid`.
@@ -600,26 +630,37 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
     // which is a write) before this process is the one coordinator on them.
     let held = take_lock(lock, &lock_path(&flags.state_file))?;
     let ops_path = ops_path(&flags.state_file, flags.ops_file.as_deref());
-    refuse_unfinished_halt(&ops_path)?;
+    let marker = refuse_unfinished_halt(&ops_path)?;
     refuse_unfinished_restore(&flags.state_file)?;
     // The wall clock is read for the validity of CI's tokens and the expiry of their spent
     // ids, and for nothing the coordinator decides.
     let oidc_clock = hostkeeper_oidc::system_clock();
-    let spent = JtiFile::open(&jti_path(&flags.state_file), Arc::clone(&oidc_clock))?;
-    let verifier = Verifier::new(
-        oidc,
-        Arc::new(keys),
-        KEY_REFETCH,
-        oidc_clock,
-        Arc::new(spent),
-    );
-    let desired = DesiredStore::open(&flags.state_file, legacy)?;
     let rotation = Rotation {
         max_bytes: flags.audit_max_bytes,
         retained: flags.audit_retained_segments,
     };
-    let ops = OpsStore::open_with(&ops_path, rotation)?;
-    let verdicts = VerdictFile::open(&verdicts_path(&flags.state_file))?;
+    // One backend under the three stores and the spent ids: the files of today.
+    let files = Files::default()
+        .with_jti(&jti_path(&flags.state_file), Arc::clone(&oidc_clock))?
+        .with_desired(&flags.state_file, legacy)
+        .with_ops(&ops_path, rotation)?
+        .with_verdicts(&verdicts_path(&flags.state_file));
+    let loaded = files.load().map_err(StartError::from)?;
+    if let Some(numbers) = marker {
+        settle_unfinished(&ops_path, &numbers, &loaded.ops)?;
+    }
+    let backend: Shared = Arc::new(files);
+    let verifier = Verifier::new(
+        oidc,
+        Arc::new(keys),
+        KEY_REFETCH,
+        Arc::clone(&oidc_clock),
+        Arc::new(Spent::new(Arc::clone(&backend), loaded.spent, oidc_clock)),
+    );
+    let desired = DesiredStore::over(Arc::clone(&backend), loaded.desired);
+    let ops = OpsStore::over(Arc::clone(&backend), loaded.ops)
+        .with_marker(crate::ops_file::unfinished_path(&ops_path));
+    let verdicts = VerdictFile::over(backend, loaded.verdicts);
     let ui = flags.ui_dir.as_deref().map(UiDir::new).transpose()?;
     let interval = Duration::from_secs(flags.tls_reload_secs);
     let files = |client_ca| TlsFiles {
@@ -731,17 +772,45 @@ pub(crate) fn alert_thresholds(flags: &Serve) -> Thresholds {
     }
 }
 
-/// Refuses to start over the marker of a halt that was being written to the ops file at `ops`
-/// when the coordinator stopped ([`crate::ops::Write::Halt`]): the halt may be lost, and the
-/// operator settles the halts file by hand and removes the marker.
+/// Refuses to start over the marker of changes that were in memory and not yet written to the
+/// ops file at `ops` when the coordinator stopped ([`crate::ops::Marker`]) when it lists nothing
+/// this build reads (the marker of the release before, which marked a halt): what it marked may
+/// be lost, and the operator settles the halts file by hand and removes the marker. Answers the
+/// audit numbers a marker lists, settled once the state is loaded ([`settle_unfinished`]).
 ///
 /// # Errors
-/// [`StartError::HaltWriteUnfinished`]: the marker is there.
-pub(crate) fn refuse_unfinished_halt(ops: &Path) -> Result<(), StartError> {
-    let marker = crate::ops_file::unfinished_path(ops);
-    if marker.exists() {
-        return Err(StartError::HaltWriteUnfinished { path: marker });
+/// [`StartError::HaltWriteUnfinished`]: the marker lists nothing this build reads.
+pub(crate) fn refuse_unfinished_halt(ops: &Path) -> Result<Option<Vec<u64>>, StartError> {
+    let path = crate::ops_file::unfinished_path(ops);
+    match Marker::read(&path) {
+        None => Ok(None),
+        Some(Marker::Listed(numbers)) => Ok(Some(numbers)),
+        Some(Marker::Unlisted) => Err(StartError::HaltWriteUnfinished { path }),
     }
+}
+
+/// Settles the marker of the ops file at `ops`, which lists the audit `numbers`, against
+/// `committed`, the state it holds: a marker whose every change landed before the coordinator
+/// stopped is logged and removed; one with a change that did not refuses the start, naming it.
+///
+/// # Errors
+/// [`StartError::ChangesUnwritten`]: a change it lists did not land. [`StartError::Io`]: the
+/// marker could not be removed.
+pub(crate) fn settle_unfinished(
+    ops: &Path,
+    numbers: &[u64],
+    committed: &OpsState,
+) -> Result<(), StartError> {
+    let path = crate::ops_file::unfinished_path(ops);
+    let numbers = unlanded(numbers, committed);
+    if !numbers.is_empty() {
+        return Err(StartError::ChangesUnwritten { path, numbers });
+    }
+    std::fs::remove_file(&path)?;
+    tracing::warn!(
+        path = %path.display(),
+        "the changes the marker listed landed before the coordinator stopped: the marker is removed"
+    );
     Ok(())
 }
 

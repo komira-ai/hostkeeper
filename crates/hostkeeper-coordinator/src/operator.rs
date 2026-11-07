@@ -373,10 +373,10 @@ impl Coordinator {
     ///
     /// # Errors
     /// `unauthorized`, `forbidden`, `invalid_request` (the node id or the reason),
-    /// `unknown_service`, `unknown_host` (not heard from since the coordinator started),
-    /// `store_failed`. Never `audit_unavailable`: an abort whose audit line cannot be appended
-    /// is queued all the same, the failure logged and the entry in the ring
-    /// ([`crate::ops::OpsStore::escape`]).
+    /// `unknown_service`, `unknown_host` (not heard from since the coordinator started). Never
+    /// `store_failed` or `audit_unavailable`: an abort whose commit fails is queued all the same,
+    /// the failure logged, the entry in the ring and the change pending, committed at the next
+    /// heartbeat ([`crate::ops::OpsStore::escape`]).
     pub fn abort(
         &self,
         caller: &Caller,
@@ -398,7 +398,7 @@ impl Coordinator {
         }
         let mut audit = entry(by, "abort", &def.name, why);
         audit.node_id = Some(id.to_string());
-        let done = self.ops.escape(audit)?;
+        let done = self.ops.escape(audit);
         fleet.queue_abort(id, def.name.clone(), format!("abort-{}", done.seq));
         Ok(proto::AbortResponse {
             queued: true,

@@ -9,7 +9,6 @@ use std::ffi::OsString;
 use std::future::Pending;
 use std::io;
 use std::net::SocketAddr;
-use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
@@ -18,173 +17,21 @@ use std::time::Duration;
 use clap::Parser;
 use clap::error::ErrorKind;
 use futures::FutureExt;
-use hostkeeper_coordinator::config::{
-    Bound, Cli, Command, Serve, StartError, build, build_with, run, start,
-};
+use hostkeeper_coordinator::config::{Bound, Cli, StartError, build_with, run, start};
 use hostkeeper_coordinator::desired::DesiredStore;
 use hostkeeper_coordinator::lock::{LockError, LockGuard, StateLock};
 use hostkeeper_coordinator::service::Unauthorized;
 use hostkeeper_coordinator::tokens::Reload;
 use hostkeeper_coordinator::ui::UiDirError;
-use hostkeeper_oidc::Roots;
 use hostkeeper_oidc::testkit::{STATIC_ISSUER, config_text};
-use hostkeeper_testkit::Scratch;
 use hostkeeper_wire::identity::{
     DEFAULT_HOST_ROLE_URI_PREFIX, DEFAULT_ROLE_URI_PREFIX, SanPrefixes,
 };
-use rustls::pki_types::CertificateDer;
-use sha2::{Digest as _, Sha256};
-use support::{Ca, OPERATOR, recorded, scratch};
+use support::serve::{
+    Files, build_given, exit_code, flags_of, refusal, renamed, roots, sha256_hex, with, without,
+};
+use support::{OPERATOR, recorded};
 use tokio::io::DuplexStream;
-
-/// The files the flags name, in a directory of their own.
-struct Files {
-    dir: Scratch,
-}
-
-impl Files {
-    fn new(name: &str) -> Self {
-        let dir = scratch(name);
-        let leaf = Ca::new("config CA").coordinator();
-        let files = Self { dir };
-        files.put("tls.pem", &leaf.cert_pem, 0o644);
-        files.put("tls.key", &leaf.key_pem, 0o600);
-        files.put("ca.pem", &Ca::new("clients CA").pem, 0o644);
-        files.put("oidc.toml", &config_text(STATIC_ISSUER), 0o644);
-        files.put("operator.token", OPERATOR, 0o600);
-        files.put("rollout.toml", &recorded("services.toml"), 0o600);
-        files
-    }
-
-    fn put(&self, file: &str, text: &str, mode: u32) {
-        let path = self.dir.path().join(file);
-        std::fs::write(&path, text).expect("written");
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).expect("mode");
-    }
-
-    fn path(&self, file: &str) -> PathBuf {
-        self.dir.path().join(file)
-    }
-
-    /// Writes `tokens.toml` (mode 0600) with a `[[token]]` for each `(name, token)`, holding
-    /// the hash of the token; answers its path as text.
-    fn tokens(&self, entries: &[(&str, &str)]) -> String {
-        let text: String = entries
-            .iter()
-            .map(|(name, token)| {
-                format!(
-                    "[[token]]\nname = \"{name}\"\nsha256 = \"{}\"\n",
-                    sha256_hex(token)
-                )
-            })
-            .collect();
-        self.put("tokens.toml", &text, 0o600);
-        self.path("tokens.toml").display().to_string()
-    }
-
-    /// The arguments of a `serve` the recorded flags describe, kbf's namespaces included.
-    fn args(&self) -> Vec<OsString> {
-        let mut args: Vec<OsString> = vec!["hostkeeper-coordinator".into(), "serve".into()];
-        let pairs = [
-            ("--heartbeat-listen", "192.0.2.1:1".to_owned()),
-            ("--private-listen", "192.0.2.1:2".to_owned()),
-            ("--tls-cert", self.path("tls.pem").display().to_string()),
-            ("--tls-key", self.path("tls.key").display().to_string()),
-            ("--client-ca", self.path("ca.pem").display().to_string()),
-            (
-                "--state-file",
-                self.path("desired.json").display().to_string(),
-            ),
-            (
-                "--oidc-config",
-                self.path("oidc.toml").display().to_string(),
-            ),
-            (
-                "--operator-token-file",
-                self.path("operator.token").display().to_string(),
-            ),
-            (
-                "--rollout-file",
-                self.path("rollout.toml").display().to_string(),
-            ),
-            ("--legacy-service", "kbf".to_owned()),
-            ("--role-uri-prefix", "urn:kbf:role:".to_owned()),
-            ("--host-role-uri-prefix", "urn:kbf:host-role:".to_owned()),
-        ];
-        for (flag, value) in pairs {
-            args.push(flag.into());
-            args.push(value.into());
-        }
-        args
-    }
-}
-
-/// `args` with the value of `flag` replaced.
-fn with(args: &[OsString], flag: &str, value: &str) -> Vec<OsString> {
-    let mut args = args.to_vec();
-    let at = args.iter().position(|a| a == flag).expect("a flag");
-    args[at + 1] = value.into();
-    args
-}
-
-/// `args` with every element equal to `from` spelled `to`.
-fn renamed(args: &[OsString], from: &str, to: &str) -> Vec<OsString> {
-    args.iter()
-        .map(|a| {
-            if a == from {
-                OsString::from(to)
-            } else {
-                a.clone()
-            }
-        })
-        .collect()
-}
-
-/// The SHA-256 of `text` as lowercase hex.
-fn sha256_hex(text: &str) -> String {
-    Sha256::digest(text.as_bytes())
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
-}
-
-/// `args` without `flag` and its value.
-fn without(args: &[OsString], flag: &str) -> Vec<OsString> {
-    let mut args = args.to_vec();
-    let at = args.iter().position(|a| a == flag).expect("a flag");
-    args.drain(at..=at + 1);
-    args
-}
-
-/// The roots the issuer's keys are fetched trusting: a CA of the test, so no test reads the
-/// host's certificate store.
-fn roots() -> Roots {
-    Roots::Given(vec![CertificateDer::from(Ca::new("issuer roots").der)])
-}
-
-/// [`build`] trusting [`roots`].
-fn build_given(flags: &Serve) -> Result<hostkeeper_coordinator::config::Parts, StartError> {
-    build(flags, roots())
-}
-
-fn flags_of(args: Vec<OsString>) -> Serve {
-    let Command::Serve(flags) = Cli::try_parse_from(args).expect("flags").command else {
-        panic!("serve")
-    };
-    flags
-}
-
-/// Why `build` refuses `args`.
-fn refusal(args: Vec<OsString>) -> StartError {
-    match build_given(&flags_of(args)) {
-        Err(why) => why,
-        Ok(_) => panic!("the start was not refused"),
-    }
-}
-
-fn exit_code(args: Vec<OsString>) -> ExitCode {
-    hostkeeper_coordinator::config::main(args)
-}
 
 /// Catches: the flags not being the interface: `--version` and `--help` exit 0 with the usage
 /// naming `serve`, no verb, a missing flag, an unknown flag and a reload of zero seconds exit 2.

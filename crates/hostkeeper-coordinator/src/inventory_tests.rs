@@ -564,8 +564,8 @@ fn an_add_past_the_cap_is_refused() {
         .map(|n| record(&format!("h-{n}"), &[], "", &format!("s{n}")))
         .collect();
     let mut rig = Rig::new("inventory-cap");
-    rig.coordinator = Rig::start(&rig.dir, &rig.clock)
-        .with_ops(OpsStore::with_writer(state, Box::new(|_| Ok(()))));
+    rig.coordinator =
+        Rig::start(&rig.dir, &rig.clock).with_ops(OpsStore::refusing(state, Box::new(|_| Ok(()))));
     assert_eq!(
         add(&rig, add_of("db-1", &["0c:c4:7a:00:00:02"], "")).err(),
         Some(Refusal::Capacity)

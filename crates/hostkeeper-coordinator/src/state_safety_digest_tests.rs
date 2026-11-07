@@ -102,7 +102,10 @@ async fn set_desired_records_the_digest_with_the_version() {
     assert_eq!(after.digests(LEGACY).get(&version("3.0")), None);
     fs::remove_dir(&blocker).expect("unblocked");
 
-    let unsynced = reopened(&path).with_sync_dir(|_| Err(std::io::Error::other("no sync")));
+    let unsynced = DesiredStore::open_syncing(&path, Some(LEGACY), |_| {
+        Err(std::io::Error::other("no sync"))
+    })
+    .expect("the state file");
     let landed = unsynced.record(LEGACY, three, |_| false);
     assert!(
         matches!(landed, Err(StoreError::NotSynced { .. })),

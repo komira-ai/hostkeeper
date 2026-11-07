@@ -365,8 +365,8 @@ async fn a_change_past_the_cap_on_entries_is_refused() {
     }
     let mut state = OpsState::default();
     state.assignments.insert(WEB.to_owned(), full);
-    rig.coordinator = start(&rig.dir, &rig.clock, "")
-        .with_ops(OpsStore::with_writer(state, Box::new(|_| Ok(()))));
+    rig.coordinator =
+        start(&rig.dir, &rig.clock, "").with_ops(OpsStore::refusing(state, Box::new(|_| Ok(()))));
     assert_eq!(
         assign(&rig, DB, "h1", "").expect_err("past the cap"),
         proto::ServicesRefusal::InvalidRequest

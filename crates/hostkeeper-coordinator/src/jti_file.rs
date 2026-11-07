@@ -149,13 +149,20 @@ impl JtiFile {
     }
 }
 
-impl SpentJtis for JtiFile {
-    fn load(&self) -> Vec<(String, u64)> {
-        let kept = self.kept.lock().unwrap_or_else(PoisonError::into_inner);
-        kept.live.iter().map(|(j, u)| (j.clone(), *u)).collect()
+impl JtiFile {
+    /// The file.
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
     }
 
-    fn record(&self, jti: &str, until: u64) -> io::Result<()> {
+    /// Records that `jti` is spent until `until`, its line appended and synced, the ids past at
+    /// `now` dropped first.
+    ///
+    /// # Errors
+    /// [`io::ErrorKind::InvalidInput`]: the id is not one word of visible ASCII.
+    /// [`io::ErrorKind::AlreadyExists`]: the id is spent and not yet past, a replay. Any other:
+    /// the line could not be written; the id is not spent.
+    pub(crate) fn spend_at(&self, jti: &str, until: u64, now: u64) -> io::Result<()> {
         if !is_word(jti) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -163,8 +170,13 @@ impl SpentJtis for JtiFile {
             ));
         }
         let mut kept = self.kept.lock().unwrap_or_else(PoisonError::into_inner);
-        let now = (self.clock)();
         kept.live.retain(|_, until| *until > now);
+        if kept.live.contains_key(jti) {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "the token id is spent",
+            ));
+        }
         self.append(&format!("{jti} {until}\n"))?;
         kept.lines += 1;
         kept.live.insert(jti.to_owned(), until);
@@ -181,6 +193,17 @@ impl SpentJtis for JtiFile {
             }
         }
         Ok(())
+    }
+}
+
+impl SpentJtis for JtiFile {
+    fn load(&self) -> Vec<(String, u64)> {
+        let kept = self.kept.lock().unwrap_or_else(PoisonError::into_inner);
+        kept.live.iter().map(|(j, u)| (j.clone(), *u)).collect()
+    }
+
+    fn record(&self, jti: &str, until: u64) -> io::Result<()> {
+        self.spend_at(jti, until, (self.clock)())
     }
 }
 
