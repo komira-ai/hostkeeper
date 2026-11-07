@@ -220,6 +220,30 @@ message InventoryRecord {
   // match this record and no other, and its host id is not denied (`Host.inventory_record_id`
   // names the record).
   bool enrolled = 9;
+  // What the coordinator's enrollment store holds for the record's host id, read from the store
+  // at each call: the same before and after a coordinator restart, and the same for a host never
+  // heard from as for one heartbeating (`Hosts.List` lists only the hosts heard from since the
+  // coordinator started). Only `HOST_HELD_NONE` says no host holds the id; `UNSPECIFIED` (a
+  // coordinator of a release before this field, or one without enrollment) says nothing.
+  HostHeld host_held = 10;
+}
+
+// What the coordinator's enrollment store holds for a host id, as `InventoryRecord.host_held`
+// says it.
+enum HostHeld {
+  // Not said: the coordinator is of a release before `host_held`, or runs without enrollment,
+  // so it has no store to read. A reader that needs to know whether a host holds the id takes
+  // this as "it may".
+  HOST_HELD_UNSPECIFIED = 0;
+  // No host: the id was never approved, and it is not denied.
+  HOST_HELD_NONE = 1;
+  // A host was approved as the id and the id is not denied, whether or not it was heard from.
+  HOST_HELD_APPROVED = 2;
+  // The id is denied (`Hosts.Retire`) and its retirement is not final yet: an update may still
+  // be in flight on it.
+  HOST_HELD_DENIED = 3;
+  // The id is denied and its retirement is final.
+  HOST_HELD_RETIRED = 4;
 }
 
 message ApproveRequest {
