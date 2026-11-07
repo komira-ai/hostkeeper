@@ -16,8 +16,8 @@
 //! version, or failed an update or install to it. The started hosts count against the current
 //! stage; its free places go to the eligible hosts that have not started as they ask, the first
 //! to ask first (a host that declined the update and waits does not ask: it is passed over).
-//! A stage is done when it is full and every host
-//! that started is up at the desired version and has baked (or was recorded done).
+//! A stage is done when as many hosts are up at the desired version and have baked (or were
+//! recorded done) as it holds.
 //!
 //! Where the plan stands is the number of stages of the rollout file it has entered, kept per
 //! service in the ops store ([`crate::rollouts`]); none kept for the desired version is the
@@ -428,13 +428,18 @@ impl View {
         self.size().saturating_sub(self.started().count())
     }
 
-    /// Whether the current stage is done: it is entered and full, and every host that started is
-    /// done.
+    /// Whether the current stage is done: it is entered, and as many hosts are done as it holds.
+    /// The hosts are in the order the stages take them, the done ones first, so these are the
+    /// stage's own: a host the next stage already ordered does not undo it.
     #[must_use]
     pub fn stage_done(&self) -> bool {
         self.current > 0
-            && self.started().count() >= self.size()
-            && self.started().all(|m| m.state == HostState::Done)
+            && self
+                .members
+                .iter()
+                .filter(|m| m.state == HostState::Done)
+                .count()
+                >= self.size()
     }
 
     /// The stage after the current one, if there is one.
