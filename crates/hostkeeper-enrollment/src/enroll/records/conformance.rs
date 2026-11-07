@@ -41,7 +41,8 @@ pub enum Clause {
     /// Serials start at [`FIRST_SERIAL`], go up by one, survive a reopen, and a reserving take
     /// writes the request with the serial taken and nothing else changed.
     Serial,
-    /// The first heartbeat and the duplicate mark change that field of the host only.
+    /// The first heartbeat, the first serving heartbeat and the duplicate mark change that
+    /// field of the host only.
     HostMarks,
     /// A commit that fails before it writes leaves the records as they were.
     FailedCommit,
@@ -179,6 +180,7 @@ fn host(name: &str, key: &KeyHash) -> pb::Host {
         services: vec!["api".to_owned()],
         duplicate: false,
         first_heartbeat_unix: None,
+        first_serving_unix: None,
     }
 }
 
@@ -195,6 +197,7 @@ fn every_kind() -> Vec<Record> {
         Record::Host(pb::Host {
             duplicate: true,
             first_heartbeat_unix: Some(1_800_000_300),
+            first_serving_unix: Some(1_800_000_360),
             ..host("web-1", &id)
         }),
         Record::Request(pb::Request {
@@ -423,13 +426,22 @@ fn host_marks(subject: &dyn Subject) -> Result<(), String> {
     holds_all(&*subject.open(), &[Record::Host(heard.clone())])?;
     subject
         .open()
-        .set_duplicate(&heard)
+        .set_first_serving(&heard, 1_800_000_460)
+        .map_err(failed("the first serving heartbeat"))?;
+    let serving = pb::Host {
+        first_serving_unix: Some(1_800_000_460),
+        ..heard
+    };
+    holds_all(&*subject.open(), &[Record::Host(serving.clone())])?;
+    subject
+        .open()
+        .set_duplicate(&serving)
         .map_err(failed("the duplicate mark"))?;
     holds_all(
         &*subject.open(),
         &[Record::Host(pb::Host {
             duplicate: true,
-            ..heard
+            ..serving
         })],
     )
 }

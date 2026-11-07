@@ -3,11 +3,17 @@
 
 use std::sync::Arc;
 
-use hostkeeper_wire::wire::{Answer, Heartbeat};
+use std::time::Duration;
+
+use hostkeeper_wire::wire::{Answer, Health, Heartbeat};
 
 use super::{Coordinator, HeartbeatRefused};
+use crate::agent_service::runs_itself;
 use crate::enrollment::{Admission, Enrollment};
+use crate::fleet::Node;
 use crate::identity::{Identity, IdentityError, identity_of};
+use crate::membership::{Membership, membership};
+use crate::ops::OpsState;
 
 /// What a heartbeat's turn is, once it is heard.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -51,6 +57,35 @@ impl Coordinator {
             Turn::Hold
         } else {
             Turn::Order
+        }
+    }
+
+    /// With enrollment, notes that the heartbeat `beat` of `host`, heard as `node` at `now`,
+    /// reported a service serving ([`Enrollment::note_serving`], which keeps the first since the
+    /// host's approval), when it did: a service of this coordinator that counts the host as
+    /// present, other than the agent itself, healthy, with no update of it under way.
+    pub(super) fn note_serving(
+        &self,
+        host: &hostkeeper_wire::HostId,
+        node: &Node,
+        beat: &Heartbeat,
+        ops: &OpsState,
+        now: Duration,
+    ) {
+        let Some(enrollment) = &self.enrollment else {
+            return;
+        };
+        let serving = beat.services.iter().flatten().any(|one| {
+            one.health == Health::Healthy
+                && one.updating.is_none()
+                && !runs_itself(node, &one.name)
+                && self
+                    .services
+                    .get(&one.name)
+                    .is_some_and(|def| membership(def, host, node, ops, now) == Membership::Present)
+        });
+        if serving {
+            enrollment.note_serving(host);
         }
     }
 

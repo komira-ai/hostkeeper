@@ -597,6 +597,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 32] = [
             ("last_renew_error", 15),
             ("clock_skew_beats", 16),
             ("first_heartbeat_unix", 17),
+            ("first_serving_unix", 18),
         ],
     ),
     (

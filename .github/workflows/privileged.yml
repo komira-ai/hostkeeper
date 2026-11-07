@@ -31,7 +31,9 @@
 # by network end to end (docs/design/network-install.md section 11): the real hostkeeper-pxe and
 # the real coordinator's LAN listener, on a bridge with no route out, each box of the LAN in a
 # network namespace of its own; x86-64 under KVM through enrollment, a service, router mode, a
-# reinstall and a retired host, and arm64 under TCG until its seed fetch.
+# reinstall and a retired host, and arm64 under TCG until its seed fetch; net-install then makes
+# the report of the measurement of the guest's first install (cargo xtask netinstall-report) and
+# keeps it as the artifact net-install-report.
 #
 # It runs after a merge to main and by hand (workflow_dispatch), never on a pull request. The
 # workflow lint (crates/xtask/tests/workflows) holds its triggers to exactly these two and each job
@@ -367,8 +369,19 @@ jobs:
         run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test net_install
       - name: Run the network-install test as root
         run: cargo test -p hostkeeper-privileged --features privileged --locked --config "target.'cfg(unix)'.runner = 'sudo'" --test net_install -- --test-threads=1 --nocapture
+      # The measurement of network install (design section 11, item N11): the guest's first
+      # install from power-on to serving, from hostkeeper-pxe's log and the files the test kept
+      # beside it. The MAC and host id are the test's (tests/net_install.rs); its first install is
+      # in proxy mode. As the runner's user, into target/, which root does not own.
+      - name: The report of the network install
+        run: cargo xtask netinstall-report --mac 52:54:00:4e:10:01 --host-id net-1 --mode proxy --pxe-log target/privileged-artifacts/net_install/hostkeeper-pxe.log --pending target/privileged-artifacts/net_install/pending.json --host target/privileged-artifacts/net_install/host.json > target/netinstall-report.md
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: net-install-report
+          path: target/netinstall-report.md
+          if-no-files-found: error
       # The guest's serial console, the logs of hostkeeper-pxe, the router's DHCP and the
-      # coordinator, kept by the test whether it passed or failed.
+      # coordinator, and the measurement's inputs, kept by the test whether it passed or failed.
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:

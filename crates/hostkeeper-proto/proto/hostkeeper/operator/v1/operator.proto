@@ -380,6 +380,12 @@ message Host {
   // heartbeated since that approval. It is kept with the host's enrollment, so a restart of the
   // coordinator keeps it; the next approval of the host (a new key or a renewal) clears it.
   optional uint64 first_heartbeat_unix = 17;
+  // When the coordinator accepted the host's first heartbeat since that approval that reported a
+  // service the coordinator manages for the host (one that counts the host, not the agent
+  // itself) installed and healthy, with no update of it under way, in unix seconds by the same
+  // clock; absent until then, and when the host is not enrolled. Kept with the host's enrollment
+  // as `first_heartbeat_unix` is, and cleared by the next approval of the host.
+  optional uint64 first_serving_unix = 18;
 }
 
 // A host taken out of a service.

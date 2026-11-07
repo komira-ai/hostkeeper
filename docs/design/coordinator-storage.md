@@ -298,7 +298,7 @@ CREATE INDEX enrollment_machine ON enrollment_requests (machine_id) WHERE machin
 enrollment_issued(request_id bytea PRIMARY KEY REFERENCES enrollment_requests, round bigint NOT NULL,
   serial bigint NOT NULL, host_id text NOT NULL, not_after bigint NOT NULL, certificate_der bytea NOT NULL)
 enrollment_hosts(host_id text PRIMARY KEY, key_hash bytea NOT NULL, machine_id text NOT NULL, role text NOT NULL,
-  services text[] NOT NULL, duplicate boolean NOT NULL, first_heartbeat_unix bigint)
+  services text[] NOT NULL, duplicate boolean NOT NULL, first_heartbeat_unix bigint, first_serving_unix bigint)
 enrollment_deny(host_id text PRIMARY KEY, state smallint NOT NULL,  -- 1 retiring, 2 retired, 3 cleared
   cleared_by bytea)
 enrollment_serial(singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton), next bigint NOT NULL)  -- starts at 2
@@ -397,7 +397,8 @@ Each of these is one transaction, where today it is several file writes:
 - **An expiry sweep:** every request it expires.
 - **A deny or a retire:** the deny row and the request marked denied.
 - **A heartbeat's enrollment write**, each one row, each rare: a host's first heartbeat time (`note_heartbeat`, once
-  after each approval) and its duplicate mark (`report_live`, once). `report_live` keeps its map of live machine ids in
+  after each approval), its first serving time (`note_serving`, once after each approval) and its duplicate mark
+  (`report_live`, once). `report_live` keeps its map of live machine ids in
   memory, as today, and touches the database only to set the mark.
 
 These stay ordered sequences of transactions, because each partial state they can leave is already the safe side and is
@@ -827,7 +828,7 @@ on the database and the back-out window has closed.
 | `the_different_epoch_exit_removes_the_marker_and_names_what_it_dropped` | the exit of section 5 | C3 |
 | `store_unreachable_stands_while_the_session_is_lost` | the alert | C3 |
 | `the_enrollment_copy_is_reloaded_after_a_commit_of_unknown_outcome` | the copy never disagrees with the tables | C3 |
-| `the_first_heartbeat_and_the_duplicate_mark_are_written_once` | the heartbeat's enrollment writes | C3 |
+| `the_first_heartbeat_and_the_duplicate_mark_are_written_once` | the heartbeat's enrollment writes, the first serving heartbeat among them | C3 |
 | `a_fresh_database_gets_every_migration_in_order` | migrations at start | C3 |
 | `a_migration_that_fails_is_rolled_back_whole_and_stops_the_start` | one transaction per migration | C3 |
 | `a_migration_marked_refuse_stops_an_older_release_and_may_run_does_not` | the newer-schema rule | C3 |
