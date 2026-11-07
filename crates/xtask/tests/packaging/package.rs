@@ -1,9 +1,10 @@
-//! The packages: `nfpm.yaml`, the files it puts in the deb and the rpm and their names, and the
-//! two package scripts.
+//! The packages: `nfpm.yaml`, the files and the link it puts in the deb and the rpm and their
+//! names, and the two package scripts.
 
 use std::collections::BTreeMap;
 
 use hostkeeper_daemon::cli::{GH_BINARY, SIGSTORE_TRUSTED_ROOT};
+use hostkeeper_daemon::console::{ENROLLMENT_ISSUE, ISSUE_LINK};
 use xtask::test_support::NFPM_STAGED;
 
 use crate::attestation_files::staged;
@@ -55,9 +56,9 @@ fn check_nfpm_keys(text: &str) -> Result<(), String> {
 }
 
 /// Catches a signing or repository section (release work, outside this file), a key for one
-/// packager only, a dependency or a version suffix: any key nfpm.yaml does not need; and a
-/// value nfpm decodes as text written as a mapping, a list or null, or a platform other than
-/// Linux.
+/// packager only, a dependency or a version suffix: any key nfpm.yaml does not need; a value
+/// nfpm decodes as text written as a mapping, a list or null, or a platform other than Linux;
+/// and a contents entry of another type than a link (a `config` file among them).
 #[test]
 fn nfpm_config_holds_only_the_keys_it_needs() {
     let text = read(NFPM);
@@ -117,7 +118,11 @@ fn nfpm_config_holds_only_the_keys_it_needs() {
                 "    dst: /usr/bin/hostkeeper\n",
                 "    dst: /usr/bin/hostkeeper\n    type: config\n",
             ),
-            "[\"contents[].type\"]",
+            "a contents entry's type is not symlink",
+        ),
+        (
+            altered(&text, "    type: symlink\n", "    type: [symlink]\n"),
+            "a contents entry's type is not symlink",
         ),
         (
             altered(
@@ -161,6 +166,31 @@ pub fn package_files() -> Vec<nfpm::File> {
     files
 }
 
+/// The one link of the package: the console's issue link, to the file the daemon writes.
+pub fn package_links() -> Vec<nfpm::Link> {
+    vec![nfpm::Link {
+        dst: ISSUE_LINK.to_owned(),
+        target: ENROLLMENT_ISSUE.to_owned(),
+    }]
+}
+
+/// Catches the check of the built packages (`release check-linux-pkg`, run on every deb and rpm
+/// the artifacts workflow builds) holding them to another link than the one nfpm.yaml declares
+/// and the daemon writes.
+#[test]
+fn the_built_package_check_requires_the_link_nfpm_yaml_declares() {
+    let (dst, target) = xtask::test_support::LINUX_PKG_LINK;
+    let declared: Vec<nfpm::Link> = config().links("deb").expect("links");
+    assert_eq!(
+        declared,
+        [nfpm::Link {
+            dst: dst.to_owned(),
+            target: target.to_owned(),
+        }]
+    );
+    assert_eq!(declared, package_links());
+}
+
 /// A name that is that of a key, a certificate, a token, a secret or the live config.
 fn is_secret_name(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
@@ -175,7 +205,7 @@ fn is_secret_name(name: &str) -> bool {
 
 /// The files of the `packager` package are exactly [`package_files`], and none is a key, a
 /// certificate, a token or the live config, by its name or (for a source in this repository,
-/// read by `source`) by its text.
+/// read by `source`) by its text; its links are exactly [`package_links`].
 fn check_manifest(
     text: &str,
     packager: &str,
@@ -202,6 +232,13 @@ fn check_manifest(
     if files != wanted {
         return Err(format!("the {packager} carries {files:?}, not {wanted:?}"));
     }
+    let links = Config::parse(text)?.links(packager)?;
+    let wanted = package_links();
+    if links != wanted {
+        return Err(format!(
+            "the {packager} carries the links {links:?}, not {wanted:?}"
+        ));
+    }
     Ok(())
 }
 
@@ -223,8 +260,9 @@ fn with_content(text: &str, src: &str, dst: &str) -> String {
 }
 
 /// Catches a package that carries a key, a certificate, a token or a live `hostkeeper.toml`
-/// (by name, or a private key in a source's text), a file too many or too few, or a file with
-/// another mode, owner or place.
+/// (by name, or a private key in a source's text), a file too many or too few, a file with
+/// another mode, owner or place, and a console issue link that is missing, is somewhere else
+/// than `/etc/issue.d`, or points at another file than the one the daemon writes.
 #[test]
 fn deb_manifest_lists_the_unit_the_binary_and_no_key_or_token() {
     let text = read(NFPM);
@@ -311,6 +349,30 @@ fn deb_manifest_lists_the_unit_the_binary_and_no_key_or_token() {
             ),
             "not [",
         ),
+        (
+            altered(
+                &text,
+                "  - src: /run/hostkeeper/enrollment.issue\n    dst: /etc/issue.d/hostkeeper.issue\n    type: symlink\n",
+                "",
+            ),
+            "carries the links [], not [",
+        ),
+        (
+            altered(
+                &text,
+                "dst: /etc/issue.d/hostkeeper.issue",
+                "dst: /etc/issue.d/other.issue",
+            ),
+            "carries the links [",
+        ),
+        (
+            altered(
+                &text,
+                "src: /run/hostkeeper/enrollment.issue",
+                "src: /run/hostkeeper/admin.sock",
+            ),
+            "carries the links [",
+        ),
     ];
     refuses(check, &cases);
     // A source whose text holds a private key, whatever its name.
@@ -334,6 +396,12 @@ fn check_one_list(text: &str) -> Result<(), String> {
     if deb != rpm {
         return Err(format!("the deb carries {deb:?} and the rpm {rpm:?}"));
     }
+    let (deb, rpm) = (config.links("deb")?, config.links("rpm")?);
+    if deb != rpm {
+        return Err(format!(
+            "the deb carries the links {deb:?} and the rpm {rpm:?}"
+        ));
+    }
     let (deb, rpm) = (config.scripts("deb")?, config.scripts("rpm")?);
     if deb != rpm {
         return Err(format!(
@@ -343,7 +411,8 @@ fn check_one_list(text: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Catches an override that gives one packager a file or a script the other does not have.
+/// Catches an override that gives one packager a file, a link or a script the other does not
+/// have.
 #[test]
 fn rpm_and_deb_share_one_file_list() {
     let text = read(NFPM);
@@ -351,8 +420,10 @@ fn rpm_and_deb_share_one_file_list() {
     let extra_file = "overrides:\n  rpm:\n    contents:\n      - src: packaging/linux/extra.conf\n        dst: /etc/extra.conf\n        file_info:\n          mode: 0644\n          owner: root\n          group: root\n";
     let extra_script = "overrides:\n  deb:\n    scripts:\n      postremove: packaging/linux/scripts/postremove.sh\n";
     let other_script = "overrides:\n  rpm:\n    scripts:\n      preremove: packaging/linux/scripts/preremove-rpm.sh\n";
+    let extra_link = "overrides:\n  deb:\n    contents:\n      - src: /run/hostkeeper/other\n        dst: /etc/issue.d/other.issue\n        type: symlink\n";
     let cases = [
         (format!("{text}{extra_file}"), "the deb carries"),
+        (format!("{text}{extra_link}"), "the deb carries the links"),
         (format!("{text}{extra_script}"), "the deb runs the scripts"),
         (format!("{text}{other_script}"), "the deb runs the scripts"),
     ];

@@ -63,6 +63,7 @@ pub fn idle_links() -> Links {
         enroll_sleeper: Box::new(ScriptedSleeper::new(0)),
         renewal: RenewalState::default(),
         watchdog: Box::new(hostkeeper_daemon::NoWatchdog),
+        console: None,
         period: DEFAULT_HEARTBEAT_SECS,
         dispatch: Arc::new(ManualDispatch::default()),
         stop: StopFlag::default(),

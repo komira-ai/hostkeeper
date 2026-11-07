@@ -35,9 +35,16 @@ struct File {
     group: &'static str,
     directory: bool,
     data: Vec<u8>,
+    /// What the entry points at, for a link.
+    link: Option<&'static str>,
 }
 
-/// The two files as nfpm.yaml installs them, and the daemon's binary beside them.
+/// The path of the console's issue link in a package, and what it points at.
+const LINK: &str = "./etc/issue.d/hostkeeper.issue";
+const TARGET: &str = "/run/hostkeeper/enrollment.issue";
+
+/// The two files and the issue link as nfpm.yaml installs them, and the daemon's binary beside
+/// them.
 fn files() -> Vec<File> {
     let file = |path, mode, data: &[u8]| File {
         path,
@@ -47,11 +54,16 @@ fn files() -> Vec<File> {
         group: "root",
         directory: false,
         data: data.to_vec(),
+        link: None,
     };
     vec![
         file("./usr/bin/hostkeeper", 0o755, b"the daemon"),
         file("./usr/lib/hostkeeper/gh", 0o755, GH),
         file("./usr/lib/hostkeeper/trusted_root.json", 0o644, ROOT),
+        File {
+            link: Some(TARGET),
+            ..file(LINK, 0o777, b"")
+        },
     ]
 }
 
@@ -68,9 +80,14 @@ fn tar(files: &[File]) -> Vec<u8> {
         let mut h = tar::Header::new_gnu();
         h.set_entry_type(if f.directory {
             tar::EntryType::Directory
+        } else if f.link.is_some() {
+            tar::EntryType::Symlink
         } else {
             tar::EntryType::Regular
         });
+        if let Some(target) = f.link {
+            h.set_link_name(target).expect("the link's target");
+        }
         h.set_mode(f.mode);
         h.set_uid(f.uid);
         h.set_gid(0);
@@ -114,7 +131,8 @@ fn deb_of(files: &[File]) -> Vec<u8> {
     ])
 }
 
-/// A newc `cpio` of the regular files of `files`, with its trailer.
+/// A newc `cpio` of the regular files and links of `files` (a link's data is its target, as
+/// rpm keeps it), with its trailer.
 fn cpio_of(files: &[File]) -> Vec<u8> {
     let mut out = Vec::new();
     let mut entry = |name: &str, data: &[u8]| {
@@ -148,7 +166,10 @@ fn cpio_of(files: &[File]) -> Vec<u8> {
         }
     };
     for f in files.iter().filter(|f| !f.directory) {
-        entry(f.path, &f.data);
+        match f.link {
+            Some(target) => entry(f.path, target.as_bytes()),
+            None => entry(f.path, &f.data),
+        }
     }
     entry("TRAILER!!!", b"");
     out
@@ -189,7 +210,7 @@ fn rpm_header(tags: &[Tag]) -> Vec<u8> {
 fn rpm_tags(files: &[File], compressor: &str) -> Vec<Tag> {
     let mut dirs: Vec<String> = Vec::new();
     let (mut bases, mut indexes, mut modes) = (Vec::new(), Vec::new(), Vec::new());
-    let (mut owners, mut groups) = (Vec::new(), Vec::new());
+    let (mut owners, mut groups, mut targets) = (Vec::new(), Vec::new(), Vec::new());
     for f in files {
         let path = f.path.trim_start_matches('.');
         let (dir, base) = path.split_at(path.rfind('/').expect("a slash") + 1);
@@ -199,15 +220,23 @@ fn rpm_tags(files: &[File], compressor: &str) -> Vec<Tag> {
         });
         bases.push(base);
         indexes.extend((at as u32).to_be_bytes());
-        let kind = if f.directory { 0o040_000 } else { 0o100_000 };
+        let kind = match (f.directory, f.link) {
+            (true, _) => 0o040_000,
+            (false, Some(_)) => 0o120_000,
+            (false, None) => 0o100_000,
+        };
         modes.extend(((kind | f.mode) as u16).to_be_bytes());
         owners.push(f.owner);
         groups.push(f.group);
+        targets.push(f.link.unwrap_or(""));
     }
     let dirs: Vec<&str> = dirs.iter().map(String::as_str).collect();
     let mut compressor = compressor.as_bytes().to_vec();
     compressor.push(0);
+    // The link targets first: a string tag's strings are read to the end of the store, so a
+    // tag after `DIRNAMES` would lend it strings.
     vec![
+        strings(FILELINKTOS, &targets),
         (FILEMODES, INT16, files.len() as u32, modes),
         strings(FILEUSERNAME, &owners),
         strings(FILEGROUPNAME, &groups),
@@ -295,6 +324,9 @@ fn a_deb_and_an_rpm_that_install_the_staged_files_pass() {
                 format!(
                     "{name}: /usr/lib/hostkeeper/trusted_root.json is 644 root:root and the staged bytes"
                 ),
+                format!(
+                    "{name}: /etc/issue.d/hostkeeper.issue is a link to /run/hostkeeper/enrollment.issue"
+                ),
             ])
         );
     }
@@ -350,6 +382,48 @@ fn each_way_a_package_differs_is_one_line() {
             assert_eq!(case.problems(), want);
         }
     }
+}
+
+/// Catches a package without the console's issue link, with a file in its place, or with a link
+/// to another file than the one the daemon writes; and an rpm whose header gives no link target:
+/// each is one line, in the deb and in the rpm. Only the target's text is read, so the check
+/// holds where the target does not exist, as where a package is built or checked.
+#[test]
+fn a_package_whose_issue_link_is_missing_or_points_elsewhere_is_one_line() {
+    let link = "/etc/issue.d/hostkeeper.issue";
+    let cases: Vec<(Vec<File>, String)> = vec![
+        (
+            files().into_iter().filter(|f| f.path != LINK).collect(),
+            format!("{link}: not in the package"),
+        ),
+        (
+            with(LINK, |f| {
+                f.link = None;
+                f.mode = 0o644;
+                f.data = b"hostkeeper enrollment".to_vec();
+            }),
+            format!("{link}: not a link"),
+        ),
+        (
+            with(LINK, |f| f.link = Some("/run/hostkeeper/admin.sock")),
+            format!("{link}: points at /run/hostkeeper/admin.sock, not {TARGET}"),
+        ),
+    ];
+    for (files, want) in cases {
+        for package in both(&files) {
+            assert_eq!(Case::new(&package).problems(), std::slice::from_ref(&want));
+        }
+    }
+    let all = files();
+    let tags: Vec<Tag> = rpm_tags(&all, "gzip")
+        .into_iter()
+        .filter(|t| t.0 != FILELINKTOS)
+        .collect();
+    let rpm = rpm_with(&tags, &gzip(&cpio_of(&all)));
+    assert_eq!(
+        Case::new(&rpm).problems(),
+        [format!("{link}: points at nothing, not {TARGET}")]
+    );
 }
 
 /// A deb entry owned by name `root` but a uid other than 0 is not root's.
@@ -465,7 +539,7 @@ fn an_rpm_this_check_cannot_read_is_refused_by_name() {
         ),
         (
             rpm_with(
-                &changed(DIRINDEXES, &|t| t.3 = [0, 0, 0, 7].repeat(3)),
+                &changed(DIRINDEXES, &|t| t.3 = [0, 0, 0, 7].repeat(4)),
                 &payload,
             ),
             "rpm file \"hostkeeper\" has no directory",
@@ -560,6 +634,8 @@ fn installed_paths_are_under_usr_lib_hostkeeper() {
     assert_eq!(installed_path("./a/b"), "/a/b");
     assert_eq!(installed_path("a/b"), "/a/b");
     assert_eq!(Path::new(INSTALLED_GH).file_name(), Some(GH_FILE.as_ref()));
+    assert_eq!(INSTALLED_ISSUE_LINK, "/etc/issue.d/hostkeeper.issue");
+    assert_eq!(ISSUE_TARGET, "/run/hostkeeper/enrollment.issue");
 }
 
 /// The argv of the `release` command, as clap reads it.

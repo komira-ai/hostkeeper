@@ -1,17 +1,21 @@
 //! `release check-linux-pkg`: a built deb or rpm, read back, carries the files of
 //! [`nfpm_stage`](super::nfpm_stage) at the daemon's paths: `/usr/lib/hostkeeper/gh`, a regular
 //! file of mode 0755, and `/usr/lib/hostkeeper/trusted_root.json`, 0644, each owned by root and
-//! group root, each with the bytes of the file staged for it. Every way the package differs is
-//! reported, one line each.
+//! group root, each with the bytes of the file staged for it; and the console's issue link,
+//! `/etc/issue.d/hostkeeper.issue`, a link that points at `/run/hostkeeper/enrollment.issue`
+//! (`hostkeeper_daemon::console`), a path that exists only on a running host. Every way the
+//! package differs is reported, one line each.
 //!
 //! The package is told apart by its first bytes and read with no tool:
 //!
 //! - a deb is an `ar` archive whose `data.tar.gz` member is the tree it installs; an entry's mode
-//!   and owner are its tar header's (owner and group by name, and uid and gid 0);
+//!   and owner are its tar header's (owner and group by name, and uid and gid 0), and a link's
+//!   target is its tar header's link name;
 //! - an rpm is a lead, a signature header, a header and a gzip `cpio` (newc) payload. The mode,
 //!   the owner and the group rpm installs a file with are the header's (`FILEMODES`,
 //!   `FILEUSERNAME`, `FILEGROUPNAME`, one per file named by `DIRNAMES`, `BASENAMES` and
-//!   `DIRINDEXES`); the bytes are the payload's.
+//!   `DIRINDEXES`); the bytes are the payload's, and a link's target is the header's
+//!   `FILELINKTOS`.
 //!
 //! nfpm 2.48.0 compresses both with gzip, its default, which `nfpm.yaml` does not change; any
 //! other compression is refused by name rather than read.
@@ -29,6 +33,13 @@ pub(crate) const INSTALLED_GH: &str = "/usr/lib/hostkeeper/gh";
 /// Where they install the trusted root: `hostkeeper_daemon::cli::SIGSTORE_TRUSTED_ROOT`.
 pub(crate) const INSTALLED_TRUSTED_ROOT: &str = "/usr/lib/hostkeeper/trusted_root.json";
 
+/// Where the deb and the rpm install the console's issue link:
+/// `hostkeeper_daemon::console::ISSUE_LINK`.
+pub(crate) const INSTALLED_ISSUE_LINK: &str = "/etc/issue.d/hostkeeper.issue";
+
+/// What that link points at: `hostkeeper_daemon::console::ENROLLMENT_ISSUE`.
+pub(crate) const ISSUE_TARGET: &str = "/run/hostkeeper/enrollment.issue";
+
 /// Each checked file: where it is installed, the staged file it must equal, its mode.
 const CHECKED: [(&str, &str, u32); 2] = [
     (INSTALLED_GH, GH_FILE, 0o755),
@@ -38,6 +49,7 @@ const CHECKED: [(&str, &str, u32); 2] = [
 /// The file-type bits of a mode, and those of a regular file.
 const TYPE_BITS: u32 = 0o170_000;
 const REGULAR: u32 = 0o100_000;
+const SYMLINK: u32 = 0o120_000;
 
 /// A file of the package as it is installed.
 #[derive(Debug, PartialEq, Eq)]
@@ -47,6 +59,8 @@ struct Installed {
     owner: String,
     group: String,
     data: Vec<u8>,
+    /// What a link points at; none for anything else.
+    target: Option<String>,
 }
 
 /// Why the package cannot be read.
@@ -80,7 +94,12 @@ fn installed_path(name: &str) -> String {
     format!("/{}", name.trim_start_matches("./").trim_start_matches('/'))
 }
 
-/// The files of [`CHECKED`] a deb holds.
+/// Whether `path` is one this check reads: a file of [`CHECKED`] or the issue link.
+fn checked(path: &str) -> bool {
+    path == INSTALLED_ISSUE_LINK || CHECKED.iter().any(|(dst, _, _)| *dst == path)
+}
+
+/// The files of [`CHECKED`] and the issue link a deb holds.
 fn deb(bytes: &[u8]) -> Result<BTreeMap<String, Installed>, Error> {
     let mut at = 8;
     let data = loop {
@@ -112,7 +131,7 @@ fn deb(bytes: &[u8]) -> Result<BTreeMap<String, Installed>, Error> {
     {
         let mut entry = entry.map_err(|e| bad(format!("data.tar: {e}")))?;
         let path = installed_path(&String::from_utf8_lossy(&entry.path_bytes()));
-        if !CHECKED.iter().any(|(dst, _, _)| *dst == path) {
+        if !checked(&path) {
             continue;
         }
         let header = entry.header();
@@ -122,9 +141,15 @@ fn deb(bytes: &[u8]) -> Result<BTreeMap<String, Installed>, Error> {
         };
         let kind = if header.entry_type().is_file() {
             REGULAR
+        } else if header.entry_type().is_symlink() {
+            SYMLINK
         } else {
             0
         };
+        let target = header
+            .link_name_bytes()
+            .filter(|_| kind == SYMLINK)
+            .map(|name| String::from_utf8_lossy(&name).into_owned());
         let mode = kind | (header.mode().map_err(|e| bad(format!("{path}: {e}")))? & 0o7777);
         let owner = name(header.username_bytes(), header.uid().unwrap_or(1));
         let group = name(header.groupname_bytes(), header.gid().unwrap_or(1));
@@ -139,6 +164,7 @@ fn deb(bytes: &[u8]) -> Result<BTreeMap<String, Installed>, Error> {
                 owner,
                 group,
                 data,
+                target,
             },
         );
     }
@@ -239,6 +265,7 @@ const DIRINDEXES: u32 = 1116;
 const BASENAMES: u32 = 1117;
 const DIRNAMES: u32 = 1118;
 const PAYLOADCOMPRESSOR: u32 = 1125;
+const FILELINKTOS: u32 = 1036;
 
 /// The regular files of a newc `cpio` archive, by installed path.
 fn cpio(bytes: &[u8]) -> Result<BTreeMap<String, Vec<u8>>, Error> {
@@ -265,7 +292,8 @@ fn cpio(bytes: &[u8]) -> Result<BTreeMap<String, Vec<u8>>, Error> {
     }
 }
 
-/// The files of [`CHECKED`] an rpm holds.
+/// The files of [`CHECKED`] and the issue link an rpm holds. A header without `FILELINKTOS`
+/// holds no link.
 fn rpm(bytes: &[u8]) -> Result<BTreeMap<String, Installed>, Error> {
     let signature = header(bytes, 96)?;
     let main = header(bytes, signature.end.next_multiple_of(8))?;
@@ -282,6 +310,7 @@ fn rpm(bytes: &[u8]) -> Result<BTreeMap<String, Installed>, Error> {
     let modes = main.numbers(FILEMODES, INT16)?;
     let owners = main.strings(FILEUSERNAME)?;
     let groups = main.strings(FILEGROUPNAME)?;
+    let targets = main.strings(FILELINKTOS).unwrap_or_default();
     let mut found = BTreeMap::new();
     for (n, base) in bases.iter().enumerate() {
         let dir = indexes
@@ -289,7 +318,7 @@ fn rpm(bytes: &[u8]) -> Result<BTreeMap<String, Installed>, Error> {
             .and_then(|i| dirs.get(*i as usize))
             .ok_or_else(|| bad(format!("rpm file {base:?} has no directory")))?;
         let path = format!("{dir}{base}");
-        if !CHECKED.iter().any(|(dst, _, _)| *dst == path) {
+        if !checked(&path) {
             continue;
         }
         let (Some(mode), Some(owner), Some(group)) = (modes.get(n), owners.get(n), groups.get(n))
@@ -303,13 +332,18 @@ fn rpm(bytes: &[u8]) -> Result<BTreeMap<String, Installed>, Error> {
                 owner: owner.clone(),
                 group: group.clone(),
                 data: payload.get(&path).cloned().unwrap_or_default(),
+                target: targets
+                    .get(n)
+                    .filter(|_| mode & TYPE_BITS == SYMLINK)
+                    .cloned(),
             },
         );
     }
     Ok(found)
 }
 
-/// The problems of `found` against the files staged in `staged`, one line each.
+/// The problems of `found` against the files staged in `staged`, then of the issue link, one
+/// line each.
 fn problems(found: &BTreeMap<String, Installed>, staged: &Path) -> Result<Vec<String>, Error> {
     let mut out = Vec::new();
     for (dst, file, mode) in CHECKED {
@@ -338,6 +372,16 @@ fn problems(found: &BTreeMap<String, Installed>, staged: &Path) -> Result<Vec<St
             ));
         }
     }
+    let link = INSTALLED_ISSUE_LINK;
+    match found.get(link) {
+        None => out.push(format!("{link}: not in the package")),
+        Some(got) if got.mode & TYPE_BITS != SYMLINK => out.push(format!("{link}: not a link")),
+        Some(got) if got.target.as_deref() != Some(ISSUE_TARGET) => out.push(format!(
+            "{link}: points at {}, not {ISSUE_TARGET}",
+            got.target.as_deref().unwrap_or("nothing")
+        )),
+        Some(_) => {}
+    }
     Ok(out)
 }
 
@@ -364,7 +408,7 @@ pub(crate) fn check(package: &Path, staged: &Path) -> Result<Vec<String>, Error>
                 .collect(),
         ));
     }
-    Ok(CHECKED
+    let mut lines: Vec<String> = CHECKED
         .iter()
         .map(|(dst, _, mode)| {
             format!(
@@ -372,7 +416,12 @@ pub(crate) fn check(package: &Path, staged: &Path) -> Result<Vec<String>, Error>
                 package.display()
             )
         })
-        .collect())
+        .collect();
+    lines.push(format!(
+        "{}: {INSTALLED_ISSUE_LINK} is a link to {ISSUE_TARGET}",
+        package.display()
+    ));
+    Ok(lines)
 }
 
 #[cfg(test)]

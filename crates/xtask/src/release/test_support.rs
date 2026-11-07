@@ -20,6 +20,11 @@ pub const LINUX_PKG_INSTALLED: [&str; 2] = [
     linux_check::INSTALLED_TRUSTED_ROOT,
 ];
 
+/// The console's issue link `release check-linux-pkg` requires a deb and an rpm to install, and
+/// what it must point at.
+pub const LINUX_PKG_LINK: (&str, &str) =
+    (linux_check::INSTALLED_ISSUE_LINK, linux_check::ISSUE_TARGET);
+
 /// The path of `gh` in its release archive of `gh_version` for `arch` (`amd64` or `arm64`).
 pub fn gh_member(gh_version: &str, arch: &str) -> Result<String, String> {
     let version = gh_version.parse::<Version>().map_err(|e| e.to_string())?;
