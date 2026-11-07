@@ -157,7 +157,7 @@ again, as it did before it expired.
 | `record_mismatch` | the request matches one inventory record, the host id is another, and `replace` is not set |
 | `not_pending` | the request was approved, issued or denied already, or it expired |
 | `duplicate_claim` | the request is a duplicate claim and `replace` is not set |
-| `host_id_taken` | another key holds the host id and `replace` is not set |
+| `host_id_taken` | another key holds the host id and `replace` is not set (a Mac's nonce approval takes its own host id over without it: [A Mac approved by its nonce](#a-mac-approved-by-its-nonce)) |
 | `denied` | the host id is denied and `replace` is not set |
 | `store_failed` | the store could not be read or written; nothing changed |
 
@@ -209,7 +209,9 @@ one. Its nonce approval takes the host id over, audited `enroll_replace`, when t
 device's current MDM enrollment began after the old key's approval and the old key's own request
 claimed the same serial; the old key's certificate then names no host, as after an operator's
 `replace`. Otherwise it is refused as an operator's approval of a taken host id is
-(`enroll_approve_refused`, `host_id_taken`), and a denied host id is never taken over (`denied`). This coordinator has no gate: it knows no device, so it approves no Mac by its nonce
+(`enroll_approve_refused`, `host_id_taken`), and a denied host id is never taken over (`denied`).
+
+This coordinator has no gate: it knows no device, so it approves no Mac by its nonce
 (`device_state_unavailable`). No operator token may be named `mdm-nonce`.
 
 ```toml
