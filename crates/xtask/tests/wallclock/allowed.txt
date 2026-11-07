@@ -13,6 +13,9 @@
 # Each entry has a `#` line directly above it saying which of these it serves and why. The test
 # no_decision_reads_the_wall_clock in crates/xtask/tests/wallclock reads this file; it refuses
 # an entry that matches no file or whose files read no wall clock.
+# A stamp of a record that nothing reads back to decide: system_now stamps each line of
+# hostkeeper-pxe serve's log, which the operator and the measurement of network install read.
+crates/hostkeeper-pxe/src/serve/log.rs
 # The OIDC verifier: system_clock is the time a CI token's exp, nbf and iat are checked against,
 # and the age of the cached signing keys.
 crates/hostkeeper-oidc/src/lib.rs

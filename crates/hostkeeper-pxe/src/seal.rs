@@ -14,11 +14,13 @@
 //! ```
 //!
 //! It is one line of JSON, every object's keys sorted, and it changes additively only: `seal`
-//! is the format's number, 1, and is raised only by a change a reader of 1 cannot read.
+//! is the format's number, 1, and is raised only by a change a reader of 1 cannot read. A
+//! reader takes a key it does not know as absent (`serve`'s reader, `serve/sealed.rs`, skips
+//! them), so a key added later leaves this release able to read the seal.
 
 use std::collections::BTreeMap;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// The file name of the seal in the fetched directory.
 pub const SEAL_FILE: &str = "seal.json";
@@ -28,7 +30,7 @@ pub const SEAL_FORMAT: u32 = 1;
 
 /// One sealed file: its name in the directory (the name it is served as), its size and its
 /// SHA-256, as 64 lowercase hex digits.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SealedFile {
     pub bytes: u64,
     pub name: String,
@@ -36,7 +38,7 @@ pub struct SealedFile {
 }
 
 /// `netboot.json`: its SHA-256 and its attestation. The file itself is not kept.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SealedNetboot {
     pub commit: String,
     pub sha256: String,
@@ -44,7 +46,7 @@ pub struct SealedNetboot {
 }
 
 /// The hostkeeper deb of a platform, and its attestation.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SealedDeb {
     pub bytes: u64,
     pub commit: String,
@@ -54,7 +56,7 @@ pub struct SealedDeb {
 }
 
 /// The files of one platform.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SealedSet {
     pub deb: SealedDeb,
     pub grub: SealedFile,
@@ -66,7 +68,7 @@ pub struct SealedSet {
 
 /// The seal of a fetched directory. Its fields are in the order of their names, which is the
 /// order they are written in.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Seal {
     pub netboot: SealedNetboot,
     /// Each platform fetched, by its spelling.

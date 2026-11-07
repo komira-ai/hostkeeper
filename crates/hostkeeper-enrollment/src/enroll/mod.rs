@@ -28,6 +28,8 @@
 //! - [`EnrollmentStore::deny`], [`EnrollmentStore::retire`], [`EnrollmentStore::report_live`]
 //!   and the questions the heartbeat path asks (`is_denied`, `is_retiring`, `is_duplicate`,
 //!   `renew_allowed`).
+//! - [`EnrollmentStore::held`] says what the store holds for a host id ([`HostHeld`]): nothing,
+//!   an approved host, or a deny row, whether or not the host was heard from since start.
 //!
 //! Every mutation takes one mutex and an exclusive `flock` on the store's lock file. The files
 //! and their messages are listed in `proto/hostkeeper/enrollment/store/v1/store.proto`.
@@ -262,6 +264,22 @@ pub struct EnrolledHost {
     /// When the coordinator accepted the host's first heartbeat since that approval, unix
     /// seconds ([`EnrollmentStore::note_heartbeat`]); `None` until it does.
     pub first_heartbeat_unix: Option<u64>,
+}
+
+/// What the store holds for a host id ([`EnrollmentStore::held`]). It is read from the store's
+/// files alone, so it is the same before and after a restart, and the same for a host never
+/// heard from as for one heartbeating.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HostHeld {
+    /// No host: the id was never approved, and is not denied.
+    None,
+    /// A host was approved as the id (its host file names its key), and the id is not denied.
+    Approved,
+    /// The id is denied (`Hosts.Retire`) and its deny row is retiring: an update may still be
+    /// in flight on it ([`EnrollmentStore::is_retiring`]).
+    Denied,
+    /// The id is denied and its deny row is final ([`EnrollmentStore::retire`]).
+    Retired,
 }
 
 /// A recorded approval.

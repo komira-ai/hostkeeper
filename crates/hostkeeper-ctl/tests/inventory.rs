@@ -99,6 +99,7 @@ impl Enrollment for Records {
                 added_by: "operator".to_owned(),
                 added_unix: 1_800_000_000,
                 enrolled: false,
+                host_held: proto::HostHeld::None.into(),
             };
             s.records.insert(add.host_id, record.clone());
             Ok(Response::new(proto::AddRecordResponse {
@@ -237,7 +238,8 @@ fn the_inventory_commands_add_list_and_remove_a_record_through_the_grpc_route() 
         json!({"hostId": "db-1", "role": "storage",
                "dataMacs": ["0C-C4-7A-00-00-02", "0c:c4:7a:00:00:03"],
                "bmcMac": "0c:c4:7a:00:00:01", "serial": "SN-1", "notes": "rack 4",
-               "addedBy": "operator", "addedUnix": "1800000000"})
+               "addedBy": "operator", "addedUnix": "1800000000",
+               "hostHeld": "HOST_HELD_NONE"})
     );
     assert_eq!(
         records.seen(|s| s.adds.clone()),

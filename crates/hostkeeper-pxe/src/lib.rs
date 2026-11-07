@@ -1,6 +1,6 @@
 //! `hostkeeper-pxe`, the boot server of network install (docs/design/network-install.md,
-//! sections 3 and 5). This crate holds its first verb, `fetch` (item N8); `serve` (item N9)
-//! comes later and serves only what `fetch` sealed.
+//! sections 3 and 5). It has two verbs: `fetch` (item N8) and `serve` (item N9), which serves
+//! only what `fetch` sealed ([`serve`]).
 //!
 //! `hostkeeper-pxe fetch` makes a new directory and writes into it, for each Linux platform asked
 //! for (both by default):
@@ -25,13 +25,18 @@
 //! - `attest`: one asset's bundle, read and handed to the verifier within its deadline;
 //! - `iso`: an ISO 9660 image with Rock Ridge names, read for one file's extent;
 //! - `deb`: a deb, read for one file of its `data.tar` (zstd, xz, gzip or none);
-//! - [`seal`]: what the seal holds.
+//! - [`seal`]: what the seal holds;
+//! - [`serve`]: the start of `serve` (the files read as root, the sockets, the privilege drop of
+//!   [`privilege`], the seal check), and the run: the answer set read from the coordinator for
+//!   each answer, DHCP in proxy or router mode, TFTP and HTTP.
 
 pub mod cli;
 pub mod fetch;
 pub mod netboot;
 pub mod platform;
+pub mod privilege;
 pub mod seal;
+pub mod serve;
 
 mod attest;
 mod copy;
