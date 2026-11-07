@@ -118,15 +118,21 @@ fn the_certificate_is_read_from_the_older_chain_location() {
 /// Catches a reader that panics or reports a later, misleading reason.
 #[test]
 fn text_that_is_not_json_is_refused() {
-    assert_eq!(read(b"not json"), Err("the bundle is not JSON"));
+    assert_eq!(
+        read(b"not json"),
+        Err(BundleInvalid("the bundle is not JSON"))
+    );
 }
 
 /// A bundle with no DSSE payload string is refused.
 /// Catches a reader that treats a missing or non-text payload as an empty statement.
 #[test]
 fn a_bundle_without_a_payload_is_refused() {
-    assert_eq!(read(b"{}"), Err(NO_PAYLOAD));
-    assert_eq!(read(br#"{"dsseEnvelope":{"payload":5}}"#), Err(NO_PAYLOAD));
+    assert_eq!(read(b"{}"), Err(BundleInvalid(NO_PAYLOAD)));
+    assert_eq!(
+        read(br#"{"dsseEnvelope":{"payload":5}}"#),
+        Err(BundleInvalid(NO_PAYLOAD))
+    );
 }
 
 /// A payload that is not base64, or not JSON once decoded, is refused.
@@ -134,9 +140,9 @@ fn a_bundle_without_a_payload_is_refused() {
 #[test]
 fn a_payload_that_is_not_a_base64_json_statement_is_refused() {
     let not_base64 = json!({ "dsseEnvelope": { "payload": "!!!" } }).to_string();
-    assert_eq!(read(not_base64.as_bytes()), Err(BAD_PAYLOAD));
+    assert_eq!(read(not_base64.as_bytes()), Err(BundleInvalid(BAD_PAYLOAD)));
     let not_json = json!({ "dsseEnvelope": { "payload": b64(b"plain text") } }).to_string();
-    assert_eq!(read(not_json.as_bytes()), Err(BAD_PAYLOAD));
+    assert_eq!(read(not_json.as_bytes()), Err(BundleInvalid(BAD_PAYLOAD)));
 }
 
 /// A statement with no resolved dependencies, none with a commit, or two different commits has
@@ -146,18 +152,30 @@ fn a_payload_that_is_not_a_base64_json_statement_is_refused() {
 fn a_statement_without_exactly_one_commit_is_refused() {
     let certificate = certificate_b64();
     let none = json!({ "subject": [] });
-    assert_eq!(read(&bundle_of(&none, &certificate)), Err(BAD_COMMIT));
+    assert_eq!(
+        read(&bundle_of(&none, &certificate)),
+        Err(BundleInvalid(BAD_COMMIT))
+    );
 
     let empty = statement_of(&[]);
-    assert_eq!(read(&bundle_of(&empty, &certificate)), Err(BAD_COMMIT));
+    assert_eq!(
+        read(&bundle_of(&empty, &certificate)),
+        Err(BundleInvalid(BAD_COMMIT))
+    );
 
     let mut odd = statement_of(&[]);
     odd["predicate"]["buildDefinition"]["resolvedDependencies"] =
         json!([{ "uri": "x" }, { "digest": { "gitCommit": 5 } }]);
-    assert_eq!(read(&bundle_of(&odd, &certificate)), Err(BAD_COMMIT));
+    assert_eq!(
+        read(&bundle_of(&odd, &certificate)),
+        Err(BundleInvalid(BAD_COMMIT))
+    );
 
     let two = statement_of(&[COMMIT, OTHER]);
-    assert_eq!(read(&bundle_of(&two, &certificate)), Err(BAD_COMMIT));
+    assert_eq!(
+        read(&bundle_of(&two, &certificate)),
+        Err(BundleInvalid(BAD_COMMIT))
+    );
 }
 
 /// The same commit named twice is one commit, and dependencies without a commit are ignored.
@@ -180,7 +198,10 @@ fn a_commit_that_is_not_lower_case_hex_is_refused() {
     let certificate = certificate_b64();
     for bad in [&COMMIT.to_ascii_uppercase()[..], "abc", &COMMIT[1..], "zz"] {
         let statement = statement_of(&[bad]);
-        assert_eq!(read(&bundle_of(&statement, &certificate)), Err(BAD_COMMIT));
+        assert_eq!(
+            read(&bundle_of(&statement, &certificate)),
+            Err(BundleInvalid(BAD_COMMIT))
+        );
     }
     let long = "a".repeat(64);
     let statement = statement_of(&[long.as_str()]);
@@ -195,8 +216,11 @@ fn a_missing_or_undecodable_certificate_is_refused() {
     let statement = statement_of(&[COMMIT]);
     let payload = b64(statement.to_string().as_bytes());
     let none = json!({ "dsseEnvelope": { "payload": payload } }).to_string();
-    assert_eq!(read(none.as_bytes()), Err(NO_CERTIFICATE));
-    assert_eq!(read(&bundle_of(&statement, "!!!")), Err(NO_CERTIFICATE));
+    assert_eq!(read(none.as_bytes()), Err(BundleInvalid(NO_CERTIFICATE)));
+    assert_eq!(
+        read(&bundle_of(&statement, "!!!")),
+        Err(BundleInvalid(NO_CERTIFICATE))
+    );
 }
 
 /// A certificate with no source ref extension, or with a ref that is not a valid ref, is
@@ -205,14 +229,20 @@ fn a_missing_or_undecodable_certificate_is_refused() {
 #[test]
 fn a_certificate_without_a_valid_ref_is_refused() {
     let statement = statement_of(&[COMMIT]);
-    assert_eq!(read(&bundle_of(&statement, &b64(b"junk"))), Err(NO_REF));
+    assert_eq!(
+        read(&bundle_of(&statement, &b64(b"junk"))),
+        Err(BundleInvalid(NO_REF))
+    );
     for bad in ["refs/heads/../x", "main"] {
         let spec = BundleSpec {
             source_ref: bad,
             ..spec()
         };
         let certificate = b64(&certificate(&spec));
-        assert_eq!(read(&bundle_of(&statement, &certificate)), Err(NO_REF));
+        assert_eq!(
+            read(&bundle_of(&statement, &certificate)),
+            Err(BundleInvalid(NO_REF))
+        );
     }
 }
 
@@ -314,4 +344,14 @@ fn a_captured_github_bundle_yields_its_commit_ref_and_subjects() {
     assert_eq!(facts.subjects.len(), 21);
     assert!(facts.lists("4c806978ffce1cec70853302a56d70ac6da4f19bae7adca4e1a8ab00633dd91d"));
     assert!(!facts.lists(DIGEST));
+}
+
+/// What a bundle lacks is shown as the text that names it, for the log of a caller outside this
+/// crate (`hostkeeper-pxe fetch`).
+///
+/// Catches a refusal shown as its type's name instead of the part the bundle lacks.
+#[test]
+fn a_bundle_refusal_shows_the_part_it_lacks() {
+    let refusal = read(b"not json").expect_err("not a bundle");
+    assert_eq!(refusal.to_string(), "the bundle is not JSON");
 }

@@ -43,6 +43,9 @@ ipmi-rs = { version = "0.6.0", default-features = false, features = ["unix-file"
 # `O_NOFOLLOW` and `O_NONBLOCK` for the daemon config and the manifest (hostkeeper-config) and
 # the secret files (hostkeeper-wire).
 libc = "0.2.190"
+# The xz decoder of `hostkeeper-pxe fetch`, which takes the shim out of Ubuntu's `shim-signed` deb
+# (its `data.tar.xz`); pure Rust (MIT). Its tests compress with it too.
+lzma-rs = "0.3.0"
 # The host's P-256 key, its ECDSA signatures (RFC 6979: the same key and message give the same
 # signature, so a reposted enrollment request is byte for byte the same) and its PKCS#8 encoding
 # (hostkeeper-enroll). Pure Rust: no OpenSSL, no C.

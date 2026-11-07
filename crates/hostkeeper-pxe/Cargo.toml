@@ -1,0 +1,56 @@
+[package]
+name = "hostkeeper-pxe"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "hostkeeper-pxe, the boot server of network install: fetch downloads the boot sets and debs of a release, verifies them against its attestation and netboot.json, and seals them."
+
+# docs/design/network-install.md sections 3 and 5, item N8: `hostkeeper-pxe fetch` writes a new
+# directory holding, for each Linux platform asked for, the boot set `netboot.json` pins (the
+# live-server ISO, and the kernel, initrd, shim and network GRUB taken out of it) and the
+# hostkeeper deb, each checked as it is written, `netboot.json` and the debs attested by the
+# daemon config's trusted signer through the daemon's own verifier, and a seal over all of it.
+# `serve` (item N9) comes later.
+[[bin]]
+name = "hostkeeper-pxe"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+# The gzip decoder of a deb whose `data.tar` is gzip.
+flate2.workspace = true
+# The daemon config's loader (its trusted signer and bounds) and `TrustedSigners`.
+hostkeeper-config = { path = "../hostkeeper-config" }
+# The daemon's verifier (`gh attestation verify`, offline), its bundle reader and its HTTPS
+# transport.
+hostkeeper-package = { path = "../hostkeeper-package" }
+# `Clock` and `Stamp`: the attestation's deadline is a point on the injected clock.
+hostkeeper-steps = { path = "../hostkeeper-steps" }
+hex.workspace = true
+lzma-rs.workspace = true
+# The zstd decoder of a deb whose `data.tar` is zstd.
+ruzstd.workspace = true
+# The CA bundle the HTTPS client trusts, read as PEM.
+rustls-pki-types.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+# The `data.tar` of a deb.
+tar.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+base64.workspace = true
+hostkeeper-testkit = { path = "../hostkeeper-testkit" }
+# A CA certificate for the CA bundle of the command's tests, made at run time.
+rcgen.workspace = true
+# The fake `gh` matches the signer identity as `gh` does, as a regular expression.
+regex.workspace = true
+# The committed pins (`packaging/netboot/pins.toml`), read by a test in the released form.
+toml.workspace = true
+
+[lints]
+workspace = true

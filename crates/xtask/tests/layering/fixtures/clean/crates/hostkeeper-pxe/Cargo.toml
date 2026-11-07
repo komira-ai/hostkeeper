@@ -1,0 +1,12 @@
+[package]
+name = "hostkeeper-pxe"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+hostkeeper-config = { path = "../hostkeeper-config" }
+hostkeeper-package = { path = "../hostkeeper-package" }
+hostkeeper-steps = { path = "../hostkeeper-steps" }
+
+[dev-dependencies]
+hostkeeper-testkit = { path = "../hostkeeper-testkit" }
