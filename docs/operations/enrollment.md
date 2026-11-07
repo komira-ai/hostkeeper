@@ -182,9 +182,12 @@ hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-
 The enrollment request can carry a one-time nonce from MDM (`mac_nonce`, one hour, one use),
 which lets the coordinator approve a Mac whose serial is in `--mac-serial-allowlist` without an
 operator ([enrollment-coordinator.md](../enrollment-coordinator.md)). In this build that never
-happens: the daemon sends no nonce, and the coordinator's MDM gate (`--mdm-api-url`) knows which
-Macs are enrolled and supervised but issues no nonce yet. Every Mac waits for an operator, with `mac_nonce_presented` false, and is approved
-as a Linux request is.
+happens: the coordinator's MDM gate (`--mdm-api-url`, with `--mdm-profile-identifier` and
+`--mdm-daemon-config`) pushes a nonce to a Mac once its request is pending (audited
+`mdm_nonce_pushed`), but the daemon does not read it or send it yet. Every Mac waits for an
+operator, with `mac_nonce_presented` false, and is approved as a Linux request is. A Mac with
+two pending requests that claim its serial and its platform UUID gets no nonce at all: deny the
+one that is not its daemon's.
 
 Once the gate and the daemon send nonces, three things follow for an operator. A nonce approves
 only the request it was issued for: a second request presenting it (another key on the same Mac)

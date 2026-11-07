@@ -6,13 +6,15 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "The MDM policy gate's device side, linked into the coordinator: NanoHUB's command queue, its webhook on loopback, a durable record per device, and what the gate says of a Mac serial."
+description = "The MDM policy gate, linked into the coordinator: NanoHUB's command queue, its webhook on loopback, a durable record per device, what the gate says of a Mac serial, and the config profile and one-time nonce it gives each Mac."
 
 # docs/design/hostkeeper-mdm.md sections 3 and 6.1 (task M8). The gate talks to NanoHUB 0.2.0 on
 # loopback only: it enqueues commands through NanoHUB's API (HTTP basic authentication, the key
 # read from a file a flag names) and hears check-ins and command results on its webhook. It keeps
 # one record per MDM enrollment id behind `DeviceStore`; `FileDeviceStore` is a file per device.
-# The coordinator links it and adapts its answer to the enrollment's `DeviceState` port.
+# The coordinator links it and adapts its answer to the enrollment's `DeviceState` port. Its
+# enrollment side (sections 4 and 5, task M12) installs the config profile and pushes the nonce,
+# asking the coordinator's enrollment through `Enrollments`.
 [dependencies]
 # The webhook's `raw_payload`, and the basic authentication of NanoHUB's API.
 base64.workspace = true

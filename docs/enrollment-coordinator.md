@@ -29,6 +29,8 @@ the farm LAN serves the same, to network-installed hosts, which have no tailnet
 | `--mdm-api-url <url>` | NanoHUB's API, on loopback: `http://<loopback address>:<port>`, as `http://127.0.0.1:9004`; a name (even `localhost`), another address, `https://`, a path or a query stops the start. With it the coordinator runs the MDM policy gate (below). Requires the two below and `--enrollment-dir`. |
 | `--mdm-api-key-file <file>` | NanoHUB's API key (NanoHUB's `-api-key`): one key of visible ASCII, in a file of mode 0600 or 0400 owned by the coordinator's user; a link, another mode or owner, or an empty file stops the start, and the message names the flag, never the path or the key. Requires `--mdm-api-url`. |
 | `--mdm-webhook-listen <addr>` | Where the gate serves NanoHUB's webhook: a loopback address and port, as `127.0.0.1:9100`; another address stops the start. Requires `--mdm-api-url`. |
+| `--mdm-profile-identifier <id>` | The farm's MDM profile identifier, as the kit's settings say it (`com.komira.hostkeeper.mdm`): two to sixteen labels of letters, digits and `-`, at most 200 characters; anything else stops the start. With it and `--mdm-daemon-config` the gate runs its enrollment side (below): it installs the config profile `<id>.config` and pushes the nonce profile `<id>.nonce`. Requires `--mdm-api-url` and `--mdm-daemon-config`. |
+| `--mdm-daemon-config <file>` | The daemon config the config profile carries: a `hostkeeper.toml` of the farm (`coordinator`, `ca_sha256`, `release_channel`, `trusted_signers`, optional `bounds`). It is read at start and judged by the daemon's own loader; a file that does not read, or that the loader refuses, stops the start with the loader's reason. It holds no secret. Requires `--mdm-profile-identifier`. |
 
 The CA is made once. Every daemon config pins the SHA-256 of its certificate (`ca_sha256`); the
 start logs it at info as `ca_sha256`. The server certificate names the DNS names of
@@ -236,7 +238,8 @@ claimed the same serial; the old key's certificate then names no host, as after 
 
 A coordinator without the gate (no `--mdm-api-url`) knows no device, so it approves no Mac by its
 nonce (`device_state_unavailable`); with it, the gate's records say whether the device is enrolled
-and supervised and when its current enrollment began. No operator token may be named `mdm-nonce`.
+and supervised and when its current enrollment began. No operator token may be named `mdm-nonce`
+or `mdm-gate`.
 
 ```toml
 [[mac]]
@@ -286,8 +289,36 @@ is started with `-webhook-url http://<--mdm-webhook-listen>/webhook`.
   still matched. A record that does not read stops the start. `Mdm.ListDevices` of the operator
   API (`hostkeeper ctl mdm list-devices`, [docs/ctl.md](ctl.md)) lists them; it asks no device.
 
-The gate does not yet install the config profile, issue or push the nonce, or install the pkg
-(tasks M12 and M14 of the design).
+- **Its enrollment side.** With `--mdm-profile-identifier` and `--mdm-daemon-config` the gate
+  also acts for each device that is enrolled, has a serial from its `DeviceInformation` answer
+  that no other live enrollment has, and whose serial is on `--mac-serial-allowlist` (design
+  sections 4 and 5). It looks at each webhook event of a device, at each request posted to the
+  coordinator, and at every device once a minute; one profile command a look.
+  - Once a request claiming the serial was approved in this enrollment (at or after its first
+    `TokenUpdate`), it sends nothing more to the Mac in this enrollment, and removes the nonce
+    profile it pushed in it (`RemoveProfile`, once).
+  - It installs the config profile, `<id>.config`, once per enrollment, supervised or not: one
+    `com.apple.ManagedClient.preferences` payload forcing the keys of `--mdm-daemon-config` in
+    the domain `dev.hostkeeper.config`. One the Mac answered with an error is sent again an hour
+    after the answer.
+  - It issues a nonce (`Enrollment::issue_mac_nonce`) only when the device is supervised, no
+    nonce issued for the serial is still good (3600 seconds from its issue), and exactly one
+    request is a candidate: waiting for an operator, not a duplicate claim, claiming the serial
+    and a platform UUID equal to the device's UDID (letter case aside), posted at or after the
+    first `TokenUpdate` of the current enrollment. Two candidates, a local reader of the
+    managed preferences for instance, get no nonce: the operator decides. The nonce is bound to
+    the candidate and pushed in `<id>.nonce` (domain `dev.hostkeeper.enrollment`, keys `nonce`
+    and `request_id`); each push NanoHUB queued is audited `mdm_nonce_pushed` by `mdm-gate`,
+    with the serial, the request and the push count. A push the Mac answered with an error is
+    pushed again, with the same nonce, a minute after the answer; an expired nonce is replaced
+    by a new one for the same request.
+  - The record says when a nonce was issued and for which request, and is written before the
+    nonce is issued; the nonce itself is only in the enrollment store (by its SHA-256) and in
+    the gate's memory, and no byte of it is logged or audited. After a restart a failed push is
+    not pushed again: a new nonce is issued once the old one expires.
+
+  The gate does not install the pkg yet (task M14 of the design), and the daemon does not post
+  the nonce yet (task M13).
 
 ## Backup
 
@@ -325,6 +356,6 @@ final; from then on its heartbeats are refused before they are read.
 ## Not here yet
 
 The wire transport of `Enroll`, `Poll` and `Renew`, and of `Enrollment.List` and
-`Enrollment.Approve` (the coordinator's gRPC serving). The MDM policy gate's enrollment side: the
-config profile, the nonce's issue and push, and the pkg. Neither transport carries a machine id in a heartbeat yet, so the duplicate mark (two live
+`Enrollment.Approve` (the coordinator's gRPC serving). The MDM policy gate's install of the pkg,
+and the daemon's repost of its request with the nonce. Neither transport carries a machine id in a heartbeat yet, so the duplicate mark (two live
 daemons on one host id) is only set when a caller of `Coordinator::heartbeat_from` passes one.

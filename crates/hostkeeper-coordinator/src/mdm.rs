@@ -177,9 +177,11 @@ impl Mdm {
     /// Gives the gate's enrollment side `enrollment` to ask; before this it sends no profile.
     /// Without the side it does nothing.
     pub fn attach(&self, enrollment: &Arc<Enrollment>) {
-        if let Some(attached) = &self.attached {
-            let _ = attached.0.set(Arc::downgrade(enrollment));
-        }
+        // Set once; a second attach keeps the first.
+        let _ = self
+            .attached
+            .as_ref()
+            .map(|attached| attached.0.set(Arc::downgrade(enrollment)));
     }
 
     /// What the enrollment calls after a new request is recorded: a wake of the gate of `mdm`,
@@ -251,9 +253,10 @@ impl Enrollments for Attached {
     }
 
     fn audit(&self, action: &str, reason: &str) {
-        if let Ok(enrollment) = self.get() {
-            Enrollments::audit(&*enrollment, action, reason);
-        }
+        // Unattached, the gate has issued nothing to audit.
+        let _ = self
+            .get()
+            .map(|enrollment| Enrollments::audit(&*enrollment, action, reason));
     }
 }
 
@@ -276,3 +279,7 @@ impl DeviceState for GateDeviceState {
 #[cfg(test)]
 #[path = "mdm_tests.rs"]
 pub(crate) mod tests;
+
+#[cfg(test)]
+#[path = "mdm_enroll_tests.rs"]
+mod enroll_tests;

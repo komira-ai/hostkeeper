@@ -121,12 +121,6 @@ impl DaemonProfile {
         Ok(Self(dictionary_of(&table)))
     }
 
-    /// The dictionary.
-    #[must_use]
-    pub fn settings(&self) -> &Dictionary {
-        &self.0
-    }
-
     /// The config profile, identified `identifier.config`, its profile and payload UUIDs
     /// `uuids`.
     #[must_use]

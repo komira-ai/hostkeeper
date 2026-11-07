@@ -1356,6 +1356,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "libc",
+ "plist",
  "prost",
  "prost-reflect",
  "prost-types",

@@ -174,10 +174,6 @@ impl Gate {
         self.clock.now_unix()
     }
 
-    pub(crate) fn record_of(&self, id: &EnrollmentId) -> Option<DeviceRecord> {
-        self.devices().get(id).cloned()
-    }
-
     fn held_map(&self) -> std::sync::MutexGuard<'_, BTreeMap<EnrollmentId, Held>> {
         self.held.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -194,8 +190,9 @@ impl Gate {
     ) -> Option<crate::enroll::Nonce> {
         self.held_map()
             .get(id)
+            // One comparison of the pair: the nonce the gate holds is the one the record names.
             .filter(|held| {
-                held.request_id == nonce.request_id && held.issued_unix == nonce.issued_unix
+                (held.request_id, held.issued_unix) == (nonce.request_id, nonce.issued_unix)
             })
             .map(|held| held.nonce.clone())
     }
@@ -282,9 +279,8 @@ impl Gate {
             let sent = self.send(&id, &command).await;
             self.settle(&mut record, &command, sent.err().as_ref());
         }
-        if let Some(side) = &self.enroll {
-            self.advance(side, &id).await;
-        }
+        // The enrollment side's look at the device; without the side it does nothing.
+        self.advance(self.enroll.as_ref(), record).await;
         Ok(Handled::Recorded)
     }
 

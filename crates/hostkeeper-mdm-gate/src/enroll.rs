@@ -53,7 +53,7 @@ use hostkeeper_enrollment::names::KeyHash;
 
 use crate::command::{Command, INSTALL_PROFILE};
 use crate::gate::Gate;
-use crate::ids::{CommandUuid, EnrollmentId};
+use crate::ids::CommandUuid;
 use crate::profile::{DaemonProfile, ProfileIdentifier, nonce_profile};
 use crate::record::{DeviceRecord, NonceRecord, ProfileCommand, Sent};
 
@@ -202,38 +202,35 @@ impl Gate {
             return;
         };
         let _turn = self.turn().await;
-        let ids: Vec<EnrollmentId> = self
-            .records()
-            .into_iter()
-            .map(|r| r.enrollment_id)
-            .collect();
-        for id in ids {
-            self.advance(side, &id).await;
+        for record in self.records() {
+            self.advance(Some(side), record).await;
         }
     }
 
-    /// One look at the device `id`; the caller holds the turn.
-    pub(crate) async fn advance(&self, side: &EnrollSide, id: &EnrollmentId) {
+    /// One look at the device of `record`, as the gate holds it, by the enrollment side `side`
+    /// (none: nothing); the caller holds the turn.
+    pub(crate) async fn advance(&self, side: Option<&EnrollSide>, record: DeviceRecord) {
         let now = self.now();
-        let Some(record) = self.record_of(id) else {
-            return;
-        };
-        let Some((serial, since)) = self.eligible(side, &record) else {
+        let eligible = side.and_then(|side| {
+            self.eligible(side, &record)
+                .map(|(serial, since)| (side, serial, since))
+        });
+        let Some((side, serial, since)) = eligible else {
             return;
         };
         let approved = match side.enrollments.last_approval_unix(&serial) {
             Ok(at) => at.is_some_and(|at| at >= since),
             Err(why) => {
-                tracing::warn!(enrollment_id = %id, %why, "the enrollment did not say whether the Mac is approved");
+                tracing::warn!(enrollment_id = %record.enrollment_id, %why, "the enrollment did not say whether the Mac is approved");
                 return;
             }
         };
         if approved {
-            self.remove_nonce(side, record, now).await;
-            return;
+            return self.remove_nonce(side, record, now).await;
         }
-        self.send_config(side, record, now).await;
-        if let Some(record) = self.record_of(id) {
+        // One profile command a look: a config profile sent now is followed by the nonce at
+        // the next look, which the daemon, not yet installed, cannot have asked for anyway.
+        if !self.send_config(side, record.clone(), now).await {
             self.push_nonce(side, record, &serial, since, now).await;
         }
     }
@@ -250,17 +247,17 @@ impl Gate {
         (unique && side.enrollments.allowed(&serial)).then_some((serial, since))
     }
 
-    /// The config profile, when it is due.
-    async fn send_config(&self, side: &EnrollSide, mut record: DeviceRecord, now: u64) {
+    /// The config profile, when it is due; whether it was.
+    async fn send_config(&self, side: &EnrollSide, mut record: DeviceRecord, now: u64) -> bool {
         let due = record
             .config_profile
             .as_ref()
             .is_none_or(|command| again(&record, command, now, CONFIG_RESEND_SECS));
         if !due {
-            return;
+            return false;
         }
         let Some([uuid, profile, payload]) = self.uuids(&mut record) else {
-            return;
+            return true;
         };
         record.config_profile = Some(ProfileCommand::new(uuid.clone(), now));
         let bytes = side.config.profile(&side.identifier, [&profile, &payload]);
@@ -268,6 +265,7 @@ impl Gate {
         if self.dispatch(&mut record, &command, now).await {
             tracing::info!(enrollment_id = %record.enrollment_id, "sent the config profile");
         }
+        true
     }
 
     /// The nonce profile: a new nonce when every condition holds, or the live one again.
@@ -282,8 +280,8 @@ impl Gate {
         if record.supervised != Some(true) {
             return;
         }
-        if record.nonce.as_ref().is_some_and(|nonce| live(nonce, now)) {
-            return self.push_again(side, record, now).await;
+        if let Some(nonce) = record.nonce.clone().filter(|nonce| live(nonce, now)) {
+            return self.push_again(side, record, nonce, now).await;
         }
         let live_elsewhere = self.records().iter().any(|other| {
             other
@@ -339,7 +337,7 @@ impl Gate {
         let Some([uuid, profile, payload]) = self.uuids(&mut record) else {
             return;
         };
-        record.nonce = Some(NonceRecord {
+        let nonce = NonceRecord {
             serial: serial.to_owned(),
             request_id,
             issued_unix: now,
@@ -347,24 +345,25 @@ impl Gate {
             pushes: 0,
             push: Some(ProfileCommand::new(uuid.clone(), now)),
             removal: None,
-        });
+        };
+        record.nonce = Some(nonce.clone());
         stage(&mut record, &uuid, INSTALL_PROFILE, now);
         // Written before the nonce exists, so a crash between the two holds the device for an
         // hour and never makes two live nonces.
         if !self.kept(&record) {
             return;
         }
-        let nonce = match side.enrollments.issue_nonce(serial, &request_id) {
-            Ok(nonce) => nonce,
+        let bytes = match side.enrollments.issue_nonce(serial, &request_id) {
+            Ok(bytes) => bytes,
             Err(why) => {
                 tracing::warn!(enrollment_id = %record.enrollment_id, %why, "no nonce was issued for the Mac");
                 self.kept(&before);
                 return;
             }
         };
-        let bytes = nonce_profile(
+        let profile = nonce_profile(
             &side.identifier,
-            nonce.as_bytes(),
+            bytes.as_bytes(),
             &request_id,
             [&profile, &payload],
         );
@@ -373,19 +372,22 @@ impl Gate {
             Held {
                 request_id,
                 issued_unix: now,
-                nonce,
+                nonce: bytes,
             },
         );
-        let command = Command::install_profile(uuid, bytes);
-        self.deliver_nonce(side, record, &command).await;
+        let command = Command::install_profile(uuid, profile);
+        self.deliver_nonce(side, record, nonce, &command).await;
     }
 
-    /// The live nonce's profile again, when its last push is to be sent again and the gate
-    /// still holds the nonce.
-    async fn push_again(&self, side: &EnrollSide, mut record: DeviceRecord, now: u64) {
-        let Some(nonce) = record.nonce.clone() else {
-            return;
-        };
+    /// The profile of the live `nonce` (the record's) again, when its last push is to be sent
+    /// again and the gate still holds the nonce.
+    async fn push_again(
+        &self,
+        side: &EnrollSide,
+        mut record: DeviceRecord,
+        nonce: NonceRecord,
+        now: u64,
+    ) {
         let due = nonce.enrollment == record.enrollment
             && nonce
                 .push
@@ -410,26 +412,31 @@ impl Gate {
             &nonce.request_id,
             [&profile, &payload],
         );
-        if let Some(kept) = record.nonce.as_mut() {
-            kept.push = Some(ProfileCommand::new(uuid.clone(), now));
-        }
+        let nonce = NonceRecord {
+            push: Some(ProfileCommand::new(uuid.clone(), now)),
+            ..nonce
+        };
+        record.nonce = Some(nonce.clone());
         stage(&mut record, &uuid, INSTALL_PROFILE, now);
         if !self.kept(&record) {
             return;
         }
         let command = Command::install_profile(uuid, bytes);
-        self.deliver_nonce(side, record, &command).await;
+        self.deliver_nonce(side, record, nonce, &command).await;
     }
 
-    /// Sends the staged and kept nonce profile `command`; once NanoHUB queued it, counts and
-    /// audits the push.
-    async fn deliver_nonce(&self, side: &EnrollSide, mut record: DeviceRecord, command: &Command) {
+    /// Sends the profile `command` of `nonce`, staged and kept in `record`; once NanoHUB queued
+    /// it, counts and audits the push.
+    async fn deliver_nonce(
+        &self,
+        side: &EnrollSide,
+        mut record: DeviceRecord,
+        mut nonce: NonceRecord,
+        command: &Command,
+    ) {
         if !self.post(&mut record, command).await {
             return;
         }
-        let Some(nonce) = record.nonce.as_mut() else {
-            return;
-        };
         nonce.pushes = nonce.pushes.saturating_add(1);
         let reason = format!(
             "serial {}; request {}; push {}",
@@ -443,6 +450,7 @@ impl Gate {
             "pushed the nonce profile"
         );
         side.enrollments.audit(ACTION_NONCE_PUSHED, &reason);
+        record.nonce = Some(nonce);
         self.kept(&record);
     }
 
@@ -462,9 +470,10 @@ impl Gate {
         let Some([uuid]) = self.uuids(&mut record) else {
             return;
         };
-        if let Some(kept) = record.nonce.as_mut() {
-            kept.removal = Some(ProfileCommand::new(uuid.clone(), now));
-        }
+        record.nonce = Some(NonceRecord {
+            removal: Some(ProfileCommand::new(uuid.clone(), now)),
+            ..nonce
+        });
         let command = Command::remove_profile(uuid, &side.identifier.nonce());
         if self.dispatch(&mut record, &command, now).await {
             tracing::info!(enrollment_id = %record.enrollment_id, "removed the nonce profile: the Mac is approved");
@@ -474,16 +483,13 @@ impl Gate {
     /// `N` new UUIDs; `None`, with the reason kept in `record`, when no random bytes could be
     /// had.
     fn uuids<const N: usize>(&self, record: &mut DeviceRecord) -> Option<[CommandUuid; N]> {
-        let mut uuids = Vec::with_capacity(N);
-        for _ in 0..N {
-            let Some(uuid) = self.uuid() else {
-                record.last_error = Some("no random bytes for a profile command".to_owned());
-                self.kept(record);
-                return None;
-            };
-            uuids.push(uuid);
+        let uuids: Option<Vec<CommandUuid>> = (0..N).map(|_| self.uuid()).collect();
+        let uuids = uuids.and_then(|uuids| uuids.try_into().ok());
+        if uuids.is_none() {
+            record.last_error = Some("no random bytes for a profile command".to_owned());
+            self.kept(record);
         }
-        uuids.try_into().ok()
+        uuids
     }
 
     /// Stages `command` in `record`, keeps the record, and sends the command; whether NanoHUB

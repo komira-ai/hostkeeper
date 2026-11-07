@@ -103,7 +103,7 @@ pub const LAYERS: [Layer; 27] = [
         &[COORDINATOR, ENROLL, OIDC, TLS],
     ),
     (MDM_CORE, &[], &[]),
-    (MDM_GATE, &[ENROLLMENT, WIRE], &[]),
+    (MDM_GATE, &[CONFIG, ENROLLMENT, WIRE], &[]),
     (MDM_STEP, &[], &[]),
     (OBSERVE, &[CONFIG, PROTO], &[HOOK, STEPS]),
     (OIDC, &[], &[]),

@@ -212,9 +212,7 @@ impl Enrollment {
                     posted.request_id, posted.round
                 ),
             ));
-            if let Some(told) = &self.posted {
-                told();
-            }
+            self.posted.iter().for_each(|told| told());
         }
         let by_nonce = if !request.mac_nonce.is_empty() && posted.state.is_pending() {
             match self.mac_auto_approve(&posted.request_id, &request.mac_nonce) {

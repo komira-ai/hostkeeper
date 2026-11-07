@@ -84,14 +84,6 @@ impl ProfileCommand {
         }
     }
 
-    /// When the device answered it with an error; `None` when it did not.
-    #[must_use]
-    pub fn error_unix(&self) -> Option<u64> {
-        self.answer
-            .filter(|answer| !answer.acknowledged)
-            .map(|answer| answer.at_unix)
-    }
-
     /// When the device acknowledged it; `None` when it did not.
     #[must_use]
     pub fn acknowledged_unix(&self) -> Option<u64> {
