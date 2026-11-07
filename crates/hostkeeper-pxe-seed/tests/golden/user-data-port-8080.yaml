@@ -22,7 +22,7 @@ autoinstall:
     - "curl --fail --silent --show-error --output /target/var/tmp/hostkeeper.deb http://192.0.2.10:8080/deb/hostkeeper_amd64.deb"
     - "curtin in-target -- dpkg -i /var/tmp/hostkeeper.deb"
   user-data:
-    hostname: node-a
+    hostname: "node-a"
     users:
       - name: operator
         lock_passwd: true

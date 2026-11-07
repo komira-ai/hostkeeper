@@ -21,13 +21,24 @@ fn mac() -> MacAddress {
 }
 
 /// The choice for `path` when the answer set holds `record` for [`MAC`] and nothing else.
-fn choose<'r>(path: &str, mode: Mode, set: Option<&'r Record>) -> MenuChoice<'r> {
+fn choose(path: &str, mode: Mode, set: Option<&Record>) -> MenuChoice {
     MenuRequest::parse(path)
         .expect("a menu path")
         .choose(mode, &|asked| set.filter(|_| asked == mac()))
 }
 
 const MODES: [Mode; 2] = [Mode::Proxy, Mode::Router];
+
+/// Asserts `choice` is an install of `platform` on the machine of `mac`, carrying `record`.
+fn assert_install(choice: &MenuChoice, mac: MacAddress, record: &Record, platform: LinuxPlatform) {
+    let MenuChoice::Install(install) = choice else {
+        panic!("not an install: {choice:?}");
+    };
+    assert_eq!(
+        (install.mac(), install.record(), install.platform()),
+        (mac, record, platform)
+    );
+}
 
 /// Catches a `grub.cfg` that differs between machines or loads anything but the menu of
 /// GRUB's CPU and MAC from the menu directory.
@@ -86,14 +97,7 @@ fn a_mac_in_the_answer_set_whose_platform_agrees_gets_the_install_menu() {
         let path = format!("grub/hostkeeper/{}/{MAC}", platform.grub_cpu());
         for mode in MODES {
             let choice = choose(&path, mode, Some(&node));
-            assert_eq!(
-                choice,
-                MenuChoice::Install {
-                    mac: mac(),
-                    record: &node,
-                    platform
-                }
-            );
+            assert_install(&choice, mac(), &node, platform);
             assert_eq!(
                 choice.text(&server()),
                 install_menu(&server(), platform, mac())
@@ -109,13 +113,11 @@ fn proxy_mode_installs_a_record_with_no_platform_as_the_platform_grub_states() {
     let node = record("node-a", None, None);
     for platform in LinuxPlatform::ALL {
         let path = format!("grub/hostkeeper/{}/{MAC}", platform.grub_cpu());
-        assert_eq!(
-            choose(&path, Mode::Proxy, Some(&node)),
-            MenuChoice::Install {
-                mac: mac(),
-                record: &node,
-                platform
-            }
+        assert_install(
+            &choose(&path, Mode::Proxy, Some(&node)),
+            mac(),
+            &node,
+            platform,
         );
     }
 }
@@ -251,15 +253,7 @@ fn every_spelling_of_a_mac_is_the_one_mac() {
         let choice = MenuRequest::parse(&path)
             .expect("a menu path")
             .choose(Mode::Router, &|asked| (asked == expected).then_some(&node));
-        assert_eq!(
-            choice,
-            MenuChoice::Install {
-                mac: expected,
-                record: &node,
-                platform: LinuxPlatform::X86_64
-            },
-            "{spelling}"
-        );
+        assert_install(&choice, expected, &node, LinuxPlatform::X86_64);
         assert!(
             choice
                 .text(&server())
@@ -293,7 +287,7 @@ fn only_a_path_ending_in_the_menu_directory_cpu_and_mac_is_a_menu_request() {
         assert!(
             matches!(
                 choose(path, Mode::Router, Some(&node)),
-                MenuChoice::Install { .. }
+                MenuChoice::Install(_)
             ),
             "{path}"
         );

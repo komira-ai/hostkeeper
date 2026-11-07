@@ -63,8 +63,8 @@ impl<'n> MenuRequest<'n> {
     /// The menu of this request. `in_answer_set` gives the record of a MAC that may be
     /// installed now, and `None` for every other MAC (`hostkeeper-pxe serve` decides the answer
     /// set, network-install.md section 3). It is not called for a MAC that is not well-formed
-    /// or a CPU this design does not install. It is a `dyn` closure, so the choice is compiled
-    /// once, not once per caller.
+    /// or a CPU this design does not install. It is a `dyn` closure, so `choose` has one
+    /// compiled body and each of its arms is measured once.
     ///
     /// The install menu is chosen exactly when the MAC is well-formed and in the answer set,
     /// the CPU is that of a Linux platform, and the record's platform is that platform; or, in
@@ -74,7 +74,7 @@ impl<'n> MenuRequest<'n> {
         &self,
         mode: Mode,
         in_answer_set: &dyn Fn(MacAddress) -> Option<&'r Record>,
-    ) -> MenuChoice<'r> {
+    ) -> MenuChoice {
         let Ok(mac) = MacAddress::parse(self.mac) else {
             return MenuChoice::LocalDisk(LocalDiskReason::MalformedMac);
         };
@@ -85,22 +85,22 @@ impl<'n> MenuRequest<'n> {
             return MenuChoice::LocalDisk(LocalDiskReason::NotInAnswerSet { mac });
         };
         match (record.platform, mode) {
-            (Some(recorded), _) if recorded == stated => MenuChoice::Install {
+            (Some(recorded), _) if recorded == stated => MenuChoice::Install(Install {
                 mac,
-                record,
+                record: record.clone(),
                 platform: stated,
-            },
+            }),
             (Some(recorded), _) => MenuChoice::LocalDisk(LocalDiskReason::PlatformDisagrees {
                 mac,
                 host_id: record.host_id.clone(),
                 recorded,
                 stated,
             }),
-            (None, Mode::Proxy) => MenuChoice::Install {
+            (None, Mode::Proxy) => MenuChoice::Install(Install {
                 mac,
-                record,
+                record: record.clone(),
                 platform: stated,
-            },
+            }),
             (None, Mode::Router) => MenuChoice::LocalDisk(LocalDiskReason::NoPlatform {
                 mac,
                 host_id: record.host_id.clone(),
@@ -109,24 +109,48 @@ impl<'n> MenuRequest<'n> {
     }
 }
 
+/// An install [`MenuRequest::choose`] decided: the machine's MAC, its record, and the platform
+/// to install, which is the record's, or in proxy mode the one GRUB stated when the record has
+/// none. Only [`MenuRequest::choose`] makes one, so a seed ([`crate::seed::seed`]) cannot be made
+/// for a platform its menu did not choose.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Install {
+    mac: MacAddress,
+    record: Record,
+    platform: LinuxPlatform,
+}
+
+impl Install {
+    /// The MAC the machine booted from.
+    pub fn mac(&self) -> MacAddress {
+        self.mac
+    }
+
+    /// The machine's record.
+    pub fn record(&self) -> &Record {
+        &self.record
+    }
+
+    /// The platform to install.
+    pub fn platform(&self) -> LinuxPlatform {
+        self.platform
+    }
+}
+
 /// The menu [`MenuRequest::choose`] gave.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum MenuChoice<'r> {
-    /// Install `platform` on the machine of `mac`, whose record is `record`.
-    Install {
-        mac: MacAddress,
-        record: &'r Record,
-        platform: LinuxPlatform,
-    },
+pub enum MenuChoice {
+    /// Install on the machine.
+    Install(Install),
     /// Boot the local disk.
     LocalDisk(LocalDiskReason),
 }
 
-impl MenuChoice<'_> {
+impl MenuChoice {
     /// The text of the menu: [`install_menu`] or [`LOCAL_DISK_MENU`].
     pub fn text(&self, server: &BootServer) -> String {
         match self {
-            MenuChoice::Install { mac, platform, .. } => install_menu(server, *platform, *mac),
+            MenuChoice::Install(install) => install_menu(server, install.platform, install.mac),
             MenuChoice::LocalDisk(_) => LOCAL_DISK_MENU.to_owned(),
         }
     }

@@ -300,3 +300,73 @@ fn a_port_other_than_80_is_in_the_deb_and_mirror_urls() {
         include_str!("golden/user-data-port-8080.yaml")
     );
 }
+
+/// Catches a host id that YAML 1.1 (PyYAML, which cloud-init and the installer read the seed
+/// with) would read as a boolean, a null, a number or a date: every host id is written quoted,
+/// so each of these is the host name as text.
+#[test]
+fn a_host_id_that_yaml_reads_as_another_type_is_written_as_text() {
+    for host_id in [
+        "on",
+        "no",
+        "yes",
+        "off",
+        "true",
+        "null",
+        "123",
+        "0123",
+        "0x1f",
+        "0b101",
+        "1e3",
+        "2026-11-06",
+    ] {
+        let mut build = Build::new(LinuxPlatform::X86_64);
+        build.record = record(host_id, None, Some(LinuxPlatform::X86_64));
+        let seed = build.seed();
+        assert!(
+            seed.user_data
+                .contains(&format!("\n    hostname: \"{host_id}\"\n")),
+            "{host_id}"
+        );
+        let hostname: Vec<(String, String)> = scalars(&seed.user_data)
+            .into_iter()
+            .filter(|(path, _)| path == ".autoinstall.user-data.hostname")
+            .collect();
+        assert_eq!(
+            hostname,
+            pairs(&[(".autoinstall.user-data.hostname", host_id)])
+        );
+        assert_eq!(
+            seed.meta_data,
+            format!("instance-id: hostkeeper-{host_id}\n")
+        );
+    }
+}
+
+/// Catches a disk glob whose YAML-special characters (`#`, `:`, `$`, `'`, `[`, `&`, `*`, `!`)
+/// are read as a comment, a mapping, a flow sequence, an anchor, an alias or a tag: each glob
+/// reads back as written.
+#[test]
+fn a_disk_glob_with_yaml_special_characters_reads_back_as_written() {
+    for glob in [
+        "Disk #1: [a]",
+        "$x'y'",
+        "&anchor *alias !tag",
+        "{a, b}",
+        "% @ `x`",
+        "- a",
+        "?x|>",
+    ] {
+        let mut build = Build::new(LinuxPlatform::X86_64);
+        build.disk = format!("model={glob}").parse::<InstallDisk>().expect(glob);
+        let model: Vec<(String, String)> = scalars(&build.seed().user_data)
+            .into_iter()
+            .filter(|(path, _)| path == ".autoinstall.storage.layout.match.model")
+            .collect();
+        assert_eq!(
+            model,
+            pairs(&[(".autoinstall.storage.layout.match.model", glob)]),
+            "{glob}"
+        );
+    }
+}

@@ -11,8 +11,9 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 
 /// The key types accepted, as `ssh-keygen` writes them. The two security-key types are
-/// OpenSSH's own names, `<type>@openssh.com`; they are joined from two pieces only because the
-/// repository's hygiene lint reads that spelling as an e-mail address.
+/// OpenSSH's own names, `<type>@openssh.com`. The repository's hygiene lint reads that spelling
+/// as an e-mail address, so each is joined from two pieces; the domain piece alone is allowed
+/// by name in the lint's public domains.
 pub const KEY_TYPES: [&str; 7] = [
     "ecdsa-sha2-nistp256",
     "ecdsa-sha2-nistp384",

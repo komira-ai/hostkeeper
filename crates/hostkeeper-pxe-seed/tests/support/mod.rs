@@ -13,6 +13,7 @@ use hostkeeper_pxe_seed::inputs::{
     BootServer, DaemonConfigText, InstallDisk, LinuxPlatform, Record, SerialConsole,
 };
 use hostkeeper_pxe_seed::keys::AuthorizedKeys;
+use hostkeeper_pxe_seed::menu::{Install, MenuChoice, MenuRequest, Mode};
 use hostkeeper_pxe_seed::seed::{Seed, SeedInputs, seed};
 
 /// A daemon config the daemon's parser accepts, with a comment, a `[bounds]` table and a
@@ -119,14 +120,27 @@ impl Build {
 
     pub fn seed(&self) -> Seed {
         let config = daemon_config();
+        let install = install(&self.record, self.platform);
         seed(&SeedInputs {
-            record: &self.record,
-            platform: self.platform,
+            install: &install,
             server: self.server,
             daemon_config: &config,
             keys: &self.keys,
             install_disk: &self.disk,
             serial_console: self.console.as_ref(),
         })
+    }
+}
+
+/// The install of `record` on `platform`, chosen as `hostkeeper-pxe serve` chooses it: GRUB of
+/// `platform` asks for the menu of a MAC in the answer set, in proxy mode.
+pub fn install(record: &Record, platform: LinuxPlatform) -> Install {
+    let path = format!("grub/hostkeeper/{}/52:54:00:12:34:56", platform.grub_cpu());
+    let choice = MenuRequest::parse(&path)
+        .expect("a menu path")
+        .choose(Mode::Proxy, &|_| Some(record));
+    match choice {
+        MenuChoice::Install(install) => install,
+        MenuChoice::LocalDisk(reason) => panic!("not an install: {reason}"),
     }
 }

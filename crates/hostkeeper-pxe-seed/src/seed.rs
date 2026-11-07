@@ -23,11 +23,10 @@
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 
-use crate::inputs::{
-    BootServer, DaemonConfigText, InstallDisk, LinuxPlatform, Record, SerialConsole,
-};
+use crate::inputs::{BootServer, DaemonConfigText, InstallDisk, SerialConsole};
 use crate::keys::AuthorizedKeys;
 use crate::layout::{NO_MIRROR_PATH, deb_path};
+use crate::menu::Install;
 
 /// The name of the installed system's one local account.
 pub const OPERATOR_ACCOUNT: &str = "operator";
@@ -46,11 +45,8 @@ const GRUB_CONSOLE_FILE: &str = "/etc/default/grub.d/99_hostkeeper.cfg";
 /// What a seed is made from.
 #[derive(Clone, Debug)]
 pub struct SeedInputs<'a> {
-    /// The record of the machine.
-    pub record: &'a Record,
-    /// The platform of the install: the record's, or in proxy mode the one GRUB stated
-    /// ([`crate::menu::MenuChoice::Install`]).
-    pub platform: LinuxPlatform,
+    /// The install the machine's menu chose: its record and the platform of the install.
+    pub install: &'a Install,
     /// The boot server the deb is fetched from.
     pub server: BootServer,
     /// The daemon config the installed system gets.
@@ -76,7 +72,10 @@ pub struct Seed {
 pub fn seed(inputs: &SeedInputs<'_>) -> Seed {
     Seed {
         user_data: user_data(inputs),
-        meta_data: format!("instance-id: hostkeeper-{}\n", inputs.record.host_id),
+        meta_data: format!(
+            "instance-id: hostkeeper-{}\n",
+            inputs.install.record().host_id
+        ),
     }
 }
 
@@ -112,7 +111,7 @@ fn user_data(inputs: &SeedInputs<'_>) -> String {
     let mirror = quoted(&inputs.server.url(NO_MIRROR_PATH));
     let fetch = quoted(&format!(
         "curl --fail --silent --show-error --output /target{DEB_IN_TARGET} {}",
-        inputs.server.url(deb_path(inputs.platform))
+        inputs.server.url(deb_path(inputs.install.platform()))
     ));
     let install = quoted(&format!("curtin in-target -- dpkg -i {DEB_IN_TARGET}"));
     let keys: String = inputs
@@ -165,7 +164,7 @@ autoinstall:
         content: {datasource}
 ",
         disk = disk_match(inputs.install_disk),
-        host = inputs.record.host_id,
+        host = quoted(inputs.install.record().host_id.as_str()),
         datasource = quoted("datasource_list: [ NoCloud, None ]\n"),
     );
     if let Some(console) = inputs.serial_console {
