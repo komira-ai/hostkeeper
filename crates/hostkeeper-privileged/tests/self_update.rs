@@ -174,9 +174,9 @@ fn a_daemon_the_deb_installed_is_installed_its_next_release_and_restarts_into_it
 /// gives up without failing the unit), a fallback that runs and leaves `current` on the bad
 /// binary, and a fallback that does not record the failure: systemd starts the new binary until
 /// the start limit (the window's starts are the old binary's first one and then the new one's)
-/// and fails the unit with `start-limit-hit`; the fallback unit runs once and ends well; the
-/// record says `Failed` after the commit, of class release, `self_update_fallback`; the version
-/// is bad; and the unit runs the old binary again, `current` naming it.
+/// and fails the unit there, which triggers `OnFailure=`; the fallback unit runs once and ends
+/// well; the record says `Failed` after the commit, of class release, `self_update_fallback`; the
+/// version is bad; and the unit runs the old binary again, `current` naming it.
 #[test]
 fn a_next_binary_that_cannot_start_spends_the_start_limit_and_the_fallback_puts_the_old_one_back() {
     let host = Host::start(
@@ -202,9 +202,16 @@ fn a_next_binary_that_cannot_start_spends_the_start_limit_and_the_fallback_puts_
         START_LIMIT_BURST as usize - 1,
         "the new binary started on every start the limit left after the old one's\n{main}"
     );
+    // With `RestartMode=direct` systemd (255) records the unit's result as the last start's
+    // (`exit-code`), not `start-limit-hit`: the start limit is its message, and the fallback is
+    // what it triggers once the unit has failed there.
+    let refused_start = main.find(": Start request repeated too quickly.");
+    let on_failure = main.find(": Triggering OnFailure= dependencies.");
     assert!(
-        main.contains("UNIT_RESULT=start-limit-hit"),
-        "systemd failed the unit at its start limit\n{main}"
+        refused_start
+            .zip(on_failure)
+            .is_some_and(|(limit, fail)| limit < fail),
+        "systemd failed the unit at its start limit, then triggered OnFailure=\n{main}"
     );
     wait_until(|| {
         host.check_not_stuck();
