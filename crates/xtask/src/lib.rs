@@ -13,8 +13,6 @@
 //!   kit's pkgs, built on a Mac, and the sends of its steps to an enrolled Mac through NanoHUB,
 //!   with what each did (`mdm_signing_test`). Not a CI step: an operator runs it
 //!   (`docs/operations/pkg-signing-test.md`).
-//! - `pr-jobs`: which macOS and privileged jobs of `pr-device.yml` a pull request needs, from the
-//!   paths it changes (`pr_jobs`).
 //!
 //! The workflows that call them are in `.github/workflows`; `tests/workflows` holds each of
 //! them to the rules of this repository. The crate's one export is [`main`], the entry point of
@@ -24,7 +22,6 @@
 mod advisories;
 mod install;
 mod mdm_signing_test;
-mod pr_jobs;
 mod release;
 
 #[cfg(feature = "test-support")]
@@ -52,8 +49,6 @@ enum Error {
     Advisories(#[from] advisories::Error),
     #[error(transparent)]
     SigningTest(#[from] mdm_signing_test::Error),
-    #[error(transparent)]
-    PrJobs(#[from] pr_jobs::Error),
 }
 
 #[derive(Parser)]
@@ -101,16 +96,6 @@ enum Verb {
         #[command(subcommand)]
         verb: mdm_signing_test::Verb,
     },
-    /// Append `mac=` and `linux-privileged=` to `--output`: whether the paths a pull request
-    /// changes select the macOS jobs and the privileged job on Linux of pr-device.yml.
-    PrJobs {
-        /// The changed paths, separated by NUL or a newline (`git diff --name-only -z`).
-        #[arg(long)]
-        changed: PathBuf,
-        /// The file the outputs are appended to (on Actions, `$GITHUB_OUTPUT`).
-        #[arg(long)]
-        output: PathBuf,
-    },
 }
 
 fn run(cli: Cli) -> Result<Vec<String>, Error> {
@@ -138,7 +123,6 @@ fn run(cli: Cli) -> Result<Vec<String>, Error> {
             &release::real::exec(),
             mdm_signing_test::NanoHubHttp::new,
         )?),
-        Verb::PrJobs { changed, output } => Ok(pr_jobs::pr_jobs(&changed, &output)?),
     }
 }
 
@@ -158,8 +142,7 @@ pub fn main() -> ExitCode {
                 Error::Install(_)
                 | Error::Release(_)
                 | Error::Advisories(_)
-                | Error::SigningTest(_)
-                | Error::PrJobs(_) => ExitCode::FAILURE,
+                | Error::SigningTest(_) => ExitCode::FAILURE,
             }
         }
     }

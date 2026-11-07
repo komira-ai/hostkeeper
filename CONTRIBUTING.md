@@ -95,29 +95,23 @@ commit. A red run on `main` is a defect: fix it forward in a new pull request.
 
 ## The macOS and privileged jobs of a pull request
 
-`.github/workflows/pr-device.yml` runs on every pull request. Its job `changes` lists the paths
-the pull request changes and runs `cargo xtask pr-jobs`, which says which of two lists in
-`crates/xtask/src/pr_jobs.rs` they are on, and prints the paths that matched:
+`.github/workflows/pr-device.yml` runs on every pull request, beside `ci.yml`. Its three jobs are
+each a check of its own, required of every pull request:
 
-- the Mac list (the launchd adapters, the daemon, the step launcher, placement, the package check,
-  the observer, the enrollment claims, the `hostkeeper` binary, hello, the privileged tests, the
-  Mac packaging in `crates/xtask/src/release/macos_pkg*`, `artifacts.yml`, `privileged.yml`,
-  `pr-device.yml`, the filter itself, `.cargo/` and `rust-toolchain.toml`) runs `macos-test`, the
-  workspace's tests on a GitHub-hosted `macos-15` runner, and `macos-device`, the device tests as
-  root under launchd;
-- the Linux list (the daemon, the step launcher and its systemd adapter, placement, the observer,
-  the privileged tests, `packaging/linux/`, `privileged.yml`, `pr-device.yml`, the filter itself,
-  `.cargo/` and `rust-toolchain.toml`) runs `privileged`, the privileged tests as root against
-  systemd.
+- `macos-test`: the tests of the crates the `hostkeeper` and `hello` binaries are built from (the
+  code a Mac runs: the daemon, the launchd adapters, the step launcher, placement, the package
+  check, the observer, the enrollment claims and what they use) on a GitHub-hosted `macos-15`
+  runner, as the runner's user. The rest of the workspace (the coordinator's MDM and
+  network-install servers, the release tooling) runs on Linux only and does not build for macOS;
+  the workflow lint holds the list to those binaries' path dependencies, so a crate added to
+  either joins it.
+- `macos-device`: the device tests as root under launchd.
+- `privileged`: the privileged tests as root against systemd.
 
-`macos-device` and `privileged` are copies of `privileged.yml`'s jobs of those names, step for step
-(the workflow lint compares them), so a pull request runs what will run after its merge. A pull
-request on neither list runs `changes` and `gate` only, on Linux, and no macOS runner starts.
-`gate` always runs and fails when another job of the workflow failed or was cancelled, and passes
-when each passed or was skipped: it is the one check of this workflow to require. A newer push to
-the same pull request cancels the older run. These jobs hold no write scope and name no secret.
-`Cargo.lock` and the root `Cargo.toml` are on neither list: a dependency change that breaks the
-Mac is found by `privileged.yml` after the merge, as before.
+`macos-device` and `privileged` are copies of `privileged.yml`'s jobs of those names, key for key
+(the workflow lint compares them), so a pull request runs what will run after its merge. A newer
+push to the same pull request cancels the older run. These jobs hold no write scope and name no
+secret or token, and save no cache.
 
 The tests, in `crates/hostkeeper-privileged/tests/`, drive the production code:
 

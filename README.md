@@ -70,7 +70,7 @@ update coordinator, `hostkeeper-coordinator serve`. The parts are being moved he
 | [`hostkeeper-ui-tests`](crates/hostkeeper-ui-tests) | the tests of the operator web app in [`ui/`](ui), run in a JavaScript engine against a fake gateway, and each call of [`ui/calls.json`](ui/calls.json) sent to the real coordinator with an operator's token; not shipped |
 | [`hello`](examples/hello) | the example service: an HTTP server on loopback and its update hook, packaged for each release, which proves an install, an update and a rollback on the farm ([docs/hello.md](docs/hello.md)) |
 | `hostkeeper-testkit` | helpers the tests share |
-| [`hostkeeper-privileged`](crates/hostkeeper-privileged) | the tests that run as root against a host's real systemd, in `privileged.yml` after a merge to main and in `pr-device.yml` on a pull request that changes what they prove, with the workload fixture `hostkeeper-fixture-hook` they drive, and the end-to-end update of a tierstore-shaped package through the real coordinator and daemon; not shipped |
+| [`hostkeeper-privileged`](crates/hostkeeper-privileged) | the tests that run as root against a host's real systemd, in `privileged.yml` after a merge to main and in `pr-device.yml` on every pull request, with the workload fixture `hostkeeper-fixture-hook` they drive, and the end-to-end update of a tierstore-shaped package through the real coordinator and daemon; not shipped |
 | `coverage-gate`, `xtask` | the 99% coverage gate, and the CI steps and release verbs |
 
 The operator web app (`ui/`) is static files: HTML, one stylesheet and JavaScript modules, with

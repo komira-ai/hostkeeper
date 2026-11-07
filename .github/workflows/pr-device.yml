@@ -1,33 +1,26 @@
-# The macOS and privileged jobs of a pull request, run only when it changes the code they
-# prove. ci.yml runs the same Linux checks on every pull request as before; this workflow adds,
-# for a pull request that changes the Mac and service-manager surface, what before ran only after
-# a merge to main (privileged.yml), so that a change that breaks the Mac is red before it merges.
+# The macOS and privileged jobs of every pull request. ci.yml runs the Linux checks (lint, test
+# and coverage) as before; this workflow adds what before ran only after a merge to main
+# (privileged.yml), so that a change that breaks the Mac or the service managers is red before it
+# merges. Its jobs, each on every pull request:
 #
-# It runs on every pull request, with no paths filter of `on`, so that the job `gate` always
-# reports: a check required of every pull request is never left waiting for a run that did not
-# start. Its jobs:
+# - macos-test: the tests of the crates the `hostkeeper` and `hello` binaries are built from (the
+#   code a Mac runs), on a GitHub-hosted macOS runner (macos-15), as the runner's user, with no
+#   fail-fast so that a run reports every failure. The rest of the workspace (the coordinator's
+#   MDM and network-install servers, the release tooling) runs on Linux only and does not build
+#   for macOS; the workflow lint holds the crate list to the binaries' path dependencies.
+# - macos-device: the device tests under launchd as root, privileged.yml's job of that name, step
+#   for step.
+# - privileged: the privileged tests against systemd as root, privileged.yml's job of that name,
+#   step for step.
 #
-# - changes: on Linux, lists the paths the pull request changes (the merge commit against its
-#   first parent, the base; renames as the old and the new path) and runs `cargo xtask pr-jobs`,
-#   which sets `mac` and `linux-privileged` from the lists in crates/xtask/src/pr_jobs.rs and
-#   prints which changed paths selected each.
-# - macos-test, when `mac`: the workspace's tests on a GitHub-hosted macOS runner (macos-15), as
-#   the runner's user, with no fail-fast so that a run reports every failure.
-# - macos-device, when `mac`: the device tests under launchd as root, privileged.yml's job of that
-#   name, step for step.
-# - privileged, when `linux-privileged`: the privileged tests against systemd as root,
-#   privileged.yml's job of that name, step for step.
-# - gate: always; fails when a job above failed or was cancelled, passes when each passed or was
-#   skipped. A pull request that changes none of the lists runs `changes` and `gate` only, on
-#   Linux, and no macOS runner.
-#
-# No job of it holds a write scope or names a secret or the token, and no cache is saved from a
-# pull request (each copied job's save step runs only on a push, which never starts this
-# workflow): the jobs restore the caches privileged.yml's runs on main saved, and macos-test the
-# one of macos-device. The workflow lint (crates/xtask/tests/workflows, pr_device.rs) holds this
-# file to its trigger, its concurrency, its five jobs, the `needs` and `if:` of each, the copied
-# jobs to privileged.yml's, and to no secret; it refuses a macOS job or a job as root in any
-# other workflow that runs for a pull request.
+# Each is a check of its own name, required of every pull request. A pull request's newer run
+# cancels its older one. No job of it holds a write scope or names a secret or the token, and no
+# cache is saved from a pull request (each copied job's save step runs only on a push, which
+# never starts this workflow): the jobs restore the caches privileged.yml's runs on main saved,
+# and macos-test the one of macos-device. The workflow lint (crates/xtask/tests/workflows,
+# pr_device.rs) holds this file to its trigger, its concurrency, its top-level keys, its three
+# jobs and their runners, the copied jobs to privileged.yml's, and to no secret; it refuses a
+# macOS job or a job as root in any other workflow that runs for a pull request.
 #
 # privileged.yml still runs after every merge to main, and a release still waits for that run on
 # its commit (release.yml); this workflow is no part of a release.
@@ -51,42 +44,9 @@ env:
   CARGO_INCREMENTAL: 0
 
 jobs:
-  # Which of the jobs below this pull request needs. The cache privileged.yml's Linux job saves
-  # holds a build of xtask, so the verb builds incrementally.
-  changes:
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-    timeout-minutes: 20
-    outputs:
-      mac: ${{ steps.pr-jobs.outputs.mac }}
-      linux-privileged: ${{ steps.pr-jobs.outputs.linux-privileged }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          # The merge commit and its two parents: the base and the pull request's head.
-          fetch-depth: 2
-      - run: rustup toolchain install
-      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: cargo-${{ runner.os }}-${{ runner.arch }}-privileged-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
-          restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-privileged-
-      - name: List the paths the pull request changes
-        run: git diff --name-only --no-renames -z --output="$RUNNER_TEMP/changed" HEAD^1 HEAD
-      - id: pr-jobs
-        name: Select the jobs for those paths
-        run: cargo xtask pr-jobs --changed "$RUNNER_TEMP/changed" --output "$GITHUB_OUTPUT"
-
-  # The workspace's tests on the Mac, as the runner's user. The build restores the cache of
+  # The tests of the Mac's crates, as the runner's user. The build restores the cache of
   # privileged.yml's macos-device job (this job saves none), whose dependencies it shares.
   macos-test:
-    needs: changes
-    if: ${{ needs.changes.outputs.mac == 'true' }}
     runs-on: macos-15
     permissions:
       contents: read
@@ -108,16 +68,13 @@ jobs:
             target
           key: cargo-${{ runner.os }}-${{ runner.arch }}-macos-device-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
           restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-macos-device-
-      - name: Build the workspace's tests
-        run: cargo test --workspace --locked --no-run
-      - name: Run the workspace's tests
-        run: cargo test --workspace --locked --no-fail-fast
+      - name: Build the tests of the Mac's crates
+        run: cargo test --locked --no-run -p hello -p hostkeeper -p hostkeeper-ci -p hostkeeper-config -p hostkeeper-ctl -p hostkeeper-daemon -p hostkeeper-enroll -p hostkeeper-hook -p hostkeeper-launchd -p hostkeeper-link -p hostkeeper-observe -p hostkeeper-package -p hostkeeper-placed -p hostkeeper-proto -p hostkeeper-steps -p hostkeeper-unpack -p hostkeeper-wire
+      - name: Run the tests of the Mac's crates
+        run: cargo test --locked --no-fail-fast -p hello -p hostkeeper -p hostkeeper-ci -p hostkeeper-config -p hostkeeper-ctl -p hostkeeper-daemon -p hostkeeper-enroll -p hostkeeper-hook -p hostkeeper-launchd -p hostkeeper-link -p hostkeeper-observe -p hostkeeper-package -p hostkeeper-placed -p hostkeeper-proto -p hostkeeper-steps -p hostkeeper-unpack -p hostkeeper-wire
 
-  # privileged.yml's job macos-device, with `needs` and `if:` added; the workflow lint holds every
-  # other key of it to that job's.
+  # privileged.yml's job macos-device; the workflow lint holds it, key for key, to that job.
   macos-device:
-    needs: changes
-    if: ${{ needs.changes.outputs.mac == 'true' }}
     runs-on: macos-15
     permissions:
       contents: read
@@ -171,11 +128,8 @@ jobs:
             target
           key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
 
-  # privileged.yml's job privileged, with `needs` and `if:` added; the workflow lint holds every
-  # other key of it to that job's.
+  # privileged.yml's job privileged; the workflow lint holds it, key for key, to that job.
   privileged:
-    needs: changes
-    if: ${{ needs.changes.outputs.linux-privileged == 'true' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -243,17 +197,3 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
-
-  # The one check of this workflow a pull request needs: it always runs, after the others, and
-  # fails when one of them failed or was cancelled. A skipped job (its list matched no changed
-  # path) passes.
-  gate:
-    needs: [changes, macos-test, macos-device, privileged]
-    if: ${{ always() }}
-    runs-on: ubuntu-24.04
-    permissions: {}
-    steps:
-      - name: Fail if a job failed or was cancelled
-        env:
-          FAILED: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
-        run: test "$FAILED" = false

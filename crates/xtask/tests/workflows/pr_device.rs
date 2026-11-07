@@ -1,23 +1,25 @@
 //! The rules of `pr-device.yml` ([`FILE`]), the one workflow that runs a macOS job or a job as
-//! root for a pull request, and only when the pull request changes what those jobs prove.
+//! root for a pull request: on every pull request, each job a check of its own.
 //!
 //! [`super::lint`] refuses a macOS job and a job as root in every workflow that runs for a pull
 //! request but the jobs of [`JOBS`] that may (`macos` and `root` of each entry). [`problems`]
 //! holds the file to its shape, so that what such a job may do is fixed here:
-//! - its `on` is exactly `pull_request` with no filter (no `types`, `branches` or `paths`): the
-//!   workflow starts for every pull request, so [`GATE_JOB`] always reports;
+//! - its `on` is exactly `pull_request` with no filter (no `types`, `branches` or `paths`): every
+//!   job runs for every pull request, so a required check never waits for a run that did not
+//!   start;
 //! - its top-level keys are among [`TOP_LEVEL`] (no `defaults`, which would change the copies);
 //! - its `concurrency` is exactly the group [`GROUP`], one per pull request, with
 //!   `cancel-in-progress: true`: a newer push cancels the older run and its macOS runners;
-//! - its jobs are exactly those of [`JOBS`]; each has exactly the `if:` and `needs` its entry
-//!   gives (the jobs that need a list run only when [`CHANGES_JOB`] says a changed path is on it;
-//!   [`GATE_JOB`] runs always and needs every other job), and runs on a runner of its entry.
+//! - its jobs are exactly those of [`JOBS`], none with an `if:` or `needs` (each runs, and
+//!   reports, on its own), each on a runner of its entry.
 //!
 //! [`mirror_problems`] holds the jobs of [`JOBS`] whose `mirrors` is set to privileged.yml's job
-//! of the same name, key for key, `needs` and `if:` aside, and the file's top-level `env` to that
-//! file's, so a pull request runs exactly what runs after the merge. Every other rule of
-//! [`super::lint`] holds for the file as for any pull-request workflow: no write scope (no
-//! `id-token: write`), no secret and no token named, pinned actions, hosted runners.
+//! of the same name, key for key, and the file's top-level `env` to that file's, so a pull
+//! request runs exactly what runs after the merge. [`crate_problems`] holds the crates
+//! [`MACOS_TEST_JOB`] builds and tests to a given set (the workflow test gives the path
+//! dependencies of the `hostkeeper` and `hello` binaries). Every other rule of [`super::lint`]
+//! holds for the file as for any pull-request workflow: no write scope (no `id-token: write`), no
+//! secret and no token named, pinned actions, hosted runners.
 
 use std::collections::BTreeSet;
 
@@ -28,25 +30,15 @@ use super::yaml::{self, Node, Value};
 
 /// The workflow.
 pub const FILE: &str = "pr-device.yml";
-/// Its job that says which lists the pull request's changed paths are on.
-pub const CHANGES_JOB: &str = "changes";
-/// Its job that a pull request needs: it fails when another job failed or was cancelled.
-pub const GATE_JOB: &str = "gate";
-/// The `if:` of the jobs of the Mac list.
-pub const MAC_IF: &str = "${{ needs.changes.outputs.mac == 'true' }}";
-/// The `if:` of the job of the Linux privileged list.
-pub const LINUX_IF: &str = "${{ needs.changes.outputs.linux-privileged == 'true' }}";
-/// The `if:` of [`GATE_JOB`]: it runs whatever the others did.
-pub const GATE_IF: &str = "${{ always() }}";
+/// Its job that runs the tests of the Mac's crates on macOS, as the runner's user.
+pub const MACOS_TEST_JOB: &str = "macos-test";
 /// The concurrency group: one per pull request.
 pub const GROUP: &str = "pr-device-${{ github.event.pull_request.number }}";
 
-/// A job of [`FILE`]: its name, its `if:` (none for [`CHANGES_JOB`]), whether it may name macOS
-/// and run as root on a pull request, whether it is a copy of privileged.yml's job of its name,
-/// and the runners it may run on.
+/// A job of [`FILE`]: its name, whether it may name macOS and run as root on a pull request,
+/// whether it is a copy of privileged.yml's job of its name, and the runners it may run on.
 pub struct Job {
     pub name: &'static str,
-    pub condition: Option<&'static str>,
     pub macos: bool,
     pub root: bool,
     pub mirrors: bool,
@@ -56,16 +48,7 @@ pub struct Job {
 /// Every job of [`FILE`].
 pub const JOBS: &[Job] = &[
     Job {
-        name: CHANGES_JOB,
-        condition: None,
-        macos: false,
-        root: false,
-        mirrors: false,
-        runners: PRIVILEGED_RUNNERS,
-    },
-    Job {
-        name: "macos-test",
-        condition: Some(MAC_IF),
+        name: MACOS_TEST_JOB,
         macos: true,
         root: false,
         mirrors: false,
@@ -73,7 +56,6 @@ pub const JOBS: &[Job] = &[
     },
     Job {
         name: MACOS_DEVICE_JOB,
-        condition: Some(MAC_IF),
         macos: true,
         root: true,
         mirrors: true,
@@ -81,18 +63,9 @@ pub const JOBS: &[Job] = &[
     },
     Job {
         name: "privileged",
-        condition: Some(LINUX_IF),
         macos: false,
         root: true,
         mirrors: true,
-        runners: PRIVILEGED_RUNNERS,
-    },
-    Job {
-        name: GATE_JOB,
-        condition: Some(GATE_IF),
-        macos: false,
-        root: false,
-        mirrors: false,
         runners: PRIVILEGED_RUNNERS,
     },
 ];
@@ -149,15 +122,6 @@ fn one_group_per_pull_request(concurrency: Option<&Node>) -> bool {
         && entry(concurrency, "cancel-in-progress").and_then(Node::as_str) == Some("true")
 }
 
-/// The job names `needs` lists, as a scalar or a list.
-fn needs(job: &Node) -> Option<BTreeSet<&str>> {
-    let needs = entry(job, "needs")?;
-    Some(match &needs.value {
-        Value::Seq(items) => items.iter().filter_map(Node::as_str).collect(),
-        _ => needs.as_str().into_iter().collect(),
-    })
-}
-
 /// What is wrong with the shape of [`FILE`], the document `doc`.
 pub fn problems(doc: &Node) -> Vec<String> {
     let mut problems = Vec::new();
@@ -180,34 +144,18 @@ pub fn problems(doc: &Node) -> Vec<String> {
     for wanted in JOBS.iter().filter(|j| !named.contains(j.name)) {
         problems.push(format!("no job {}", wanted.name));
     }
-    let others: BTreeSet<&str> = JOBS
-        .iter()
-        .map(|j| j.name)
-        .filter(|name| *name != GATE_JOB)
-        .collect();
     for (name, node) in jobs {
         let name = name.as_str().unwrap_or_default();
         let Some(wanted) = job(FILE, name) else {
             problems.push(format!("job {name} is not a job of {FILE}"));
             continue;
         };
-        let condition = entry(node, "if").and_then(Node::as_str);
-        if condition != wanted.condition {
-            problems.push(match wanted.condition {
-                Some(c) => format!("job {name}: its `if:` must be exactly `{c}`"),
-                None => format!("job {name}: has an `if:`, and runs for every pull request"),
-            });
-        }
-        let want_needs = match name {
-            CHANGES_JOB => None,
-            GATE_JOB => Some(others.clone()),
-            _ => Some(BTreeSet::from([CHANGES_JOB])),
-        };
-        if needs(node) != want_needs {
-            problems.push(match want_needs {
-                Some(n) => format!("job {name}: its `needs` must be exactly {n:?}"),
-                None => format!("job {name}: needs no job"),
-            });
+        for key in ["if", "needs"] {
+            if entry(node, key).is_some() {
+                problems.push(format!(
+                    "job {name}: has `{key}`, and must run and report on every pull request"
+                ));
+            }
         }
         let runner = entry(node, "runs-on").and_then(Node::as_str);
         if !runner.is_some_and(|r| wanted.runners.contains(&r)) {
@@ -244,30 +192,16 @@ pub fn same(a: &Node, b: &Node) -> bool {
     }
 }
 
-/// `job` without its `needs` and `if:`.
-fn without_needs_and_if(job: &Node) -> Node {
-    let kept = entries(job)
-        .iter()
-        .filter(|(k, _)| !matches!(k.as_str(), Some("needs" | "if")))
-        .cloned()
-        .collect();
-    Node {
-        value: Value::Map(kept),
-        span: job.span,
-    }
-}
-
 /// What differs between [`FILE`] (`text`) and privileged.yml (`privileged`): a job of [`JOBS`]
-/// whose `mirrors` is set that is not privileged.yml's job of its name with `needs` and `if:`
-/// added, and a top-level `env` that is not privileged.yml's.
+/// whose `mirrors` is set that is not privileged.yml's job of its name, and a top-level `env`
+/// that is not privileged.yml's.
 pub fn mirror_problems(text: &str, privileged: &str) -> Vec<String> {
     let (doc, original) = match (yaml::load(text), yaml::load(privileged)) {
         (Ok(doc), Ok(original)) => (doc, original),
         (Err(e), _) | (_, Err(e)) => return vec![e],
     };
     let mut problems = Vec::new();
-    let env = (entry(&doc, "env"), entry(&original, "env"));
-    let same_env = match env {
+    let same_env = match (entry(&doc, "env"), entry(&original, "env")) {
         (Some(a), Some(b)) => same(a, b),
         (a, b) => a.is_none() && b.is_none(),
     };
@@ -277,16 +211,75 @@ pub fn mirror_problems(text: &str, privileged: &str) -> Vec<String> {
     for wanted in JOBS.iter().filter(|j| j.mirrors) {
         let copy = entry(&doc, "jobs").and_then(|jobs| entry(jobs, wanted.name));
         let source = entry(&original, "jobs").and_then(|jobs| entry(jobs, wanted.name));
-        let copied = match (copy, source) {
-            (Some(copy), Some(source)) => same(&without_needs_and_if(copy), source),
-            _ => false,
-        };
-        if !copied {
+        if !matches!((copy, source), (Some(c), Some(s)) if same(c, s)) {
             problems.push(format!(
-                "job {}: not privileged.yml's job {0} with `needs` and `if:` added",
+                "job {}: not privileged.yml's job {0}, key for key",
                 wanted.name
             ));
         }
+    }
+    problems
+}
+
+/// The packages a `cargo test` line names with `-p`.
+fn packages(run: &str) -> BTreeSet<&str> {
+    let words: Vec<&str> = run.split_whitespace().collect();
+    words
+        .windows(2)
+        .filter(|pair| pair[0] == "-p")
+        .map(|pair| pair[1])
+        .collect()
+}
+
+/// What is wrong with the crates [`MACOS_TEST_JOB`] of [`FILE`] (`text`) tests, against `want`:
+/// other than exactly one step that builds the tests (`cargo test --locked --no-run`) and one that
+/// runs them (`cargo test --locked --no-fail-fast`), each naming exactly `want` with `-p` and
+/// nothing else (no `--workspace`, no `--exclude`, no other flag).
+pub fn crate_problems(text: &str, want: &BTreeSet<String>) -> Vec<String> {
+    let doc = match yaml::load(text) {
+        Ok(doc) => doc,
+        Err(e) => return vec![e],
+    };
+    let steps = entry(&doc, "jobs")
+        .and_then(|jobs| entry(jobs, MACOS_TEST_JOB))
+        .and_then(|job| entry(job, "steps"));
+    let runs: Vec<&str> = match steps.map(|s| &s.value) {
+        Some(Value::Seq(steps)) => steps
+            .iter()
+            .filter_map(|step| entry(step, "run").and_then(Node::as_str))
+            .filter(|run| run.starts_with("cargo test"))
+            .collect(),
+        _ => Vec::new(),
+    };
+    let mut problems = Vec::new();
+    for start in [
+        "cargo test --locked --no-run",
+        "cargo test --locked --no-fail-fast",
+    ] {
+        let found: Vec<&&str> = runs.iter().filter(|r| r.starts_with(start)).collect();
+        let [run] = found[..] else {
+            problems.push(format!(
+                "job {MACOS_TEST_JOB}: {} steps `{start} ...`, not one",
+                found.len()
+            ));
+            continue;
+        };
+        let named: BTreeSet<String> = packages(run).into_iter().map(str::to_owned).collect();
+        let rest: Vec<&str> = run[start.len()..]
+            .split_whitespace()
+            .filter(|w| *w != "-p" && !named.contains(*w))
+            .collect();
+        if named != *want || !rest.is_empty() {
+            problems.push(format!(
+                "job {MACOS_TEST_JOB}: `{start}` must name exactly the crates {want:?} with -p, and nothing else"
+            ));
+        }
+    }
+    if runs.len() != 2 {
+        problems.push(format!(
+            "job {MACOS_TEST_JOB}: {} `cargo test` steps, not two",
+            runs.len()
+        ));
     }
     problems
 }

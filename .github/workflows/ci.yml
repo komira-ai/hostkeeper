@@ -6,7 +6,7 @@
 # privileged or macOS job in one but the jobs of pr-device.yml it lists, and to no job as root
 # (`sudo`, a privileged container) outside privileged.yml, which runs the tests of
 # crates/hostkeeper-privileged as root after a merge to main and by hand, and those copies of its
-# jobs in pr-device.yml, which run them on a pull request that changes what they prove.
+# jobs in pr-device.yml, which run them on every pull request.
 #
 # `lint` is the format, cargo-deny (licences, bans and sources), clippy, the build of the hook
 # SDK without its test feature, actionlint and the workflow lint. `test` runs every test under

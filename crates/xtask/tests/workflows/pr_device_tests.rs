@@ -2,10 +2,13 @@
 //! [`super::lint`] that it is the one exception to. Each rule is shown to refuse its defect by
 //! putting it into the committed file, which passes, and reading the exact problems it reports.
 
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
+
 use super::lint::{PRIVILEGED_WORKFLOW, entries, entry, lint};
 use super::pr_device::{
-    CONCURRENCY_PROBLEM, FILE, GATE_IF, GROUP, JOBS, LINUX_IF, MAC_IF, ON_PROBLEM, TOP_LEVEL,
-    mirror_problems, same,
+    CONCURRENCY_PROBLEM, FILE, GROUP, JOBS, ON_PROBLEM, TOP_LEVEL, crate_problems, mirror_problems,
+    same,
 };
 use super::yaml::{self, Node};
 use super::{CLEAN, with, with_in, workflows};
@@ -33,21 +36,75 @@ fn device_with(from: &str, to: &str) -> String {
 }
 
 /// The start of the job `macos-test`, once in the file.
-const MACOS_TEST: &str = "  macos-test:\n    needs: changes\n";
-/// The start of the job `gate`, once in the file.
-const GATE: &str = "  gate:\n    needs: [changes, macos-test, macos-device, privileged]\n";
+const MACOS_TEST: &str = "  macos-test:\n    runs-on: macos-15\n";
+
+/// The `[dependencies]` and `[target.<cfg>.dependencies]` of the manifest `toml` that are crates
+/// of the workspace (a `path`), by the directory each path names, from the crate's `dir`.
+fn path_dependencies(dir: &Path) -> Vec<PathBuf> {
+    let text = std::fs::read_to_string(dir.join("Cargo.toml")).expect("read a manifest");
+    let manifest: toml::Table = text.parse().expect("a manifest parses");
+    let mut tables: Vec<&toml::Table> = manifest
+        .get("dependencies")
+        .and_then(toml::Value::as_table)
+        .into_iter()
+        .collect();
+    if let Some(targets) = manifest.get("target").and_then(toml::Value::as_table) {
+        tables.extend(
+            targets
+                .values()
+                .filter_map(|t| t.get("dependencies").and_then(toml::Value::as_table)),
+        );
+    }
+    tables
+        .into_iter()
+        .flat_map(|t| t.values())
+        .filter_map(|d| d.get("path").and_then(toml::Value::as_str))
+        .map(|path| dir.join(path))
+        .collect()
+}
+
+/// The package name of the crate in `dir`.
+fn package_name(dir: &Path) -> String {
+    let text = std::fs::read_to_string(dir.join("Cargo.toml")).expect("read a manifest");
+    let manifest: toml::Table = text.parse().expect("a manifest parses");
+    manifest["package"]["name"]
+        .as_str()
+        .expect("a package name")
+        .to_owned()
+}
+
+/// The crates the `hostkeeper` and `hello` binaries are built from: the two crates and every
+/// workspace crate they depend on, through normal dependencies, on any target.
+fn mac_crates() -> BTreeSet<String> {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut pending = vec![root.join("crates/hostkeeper"), root.join("examples/hello")];
+    let mut seen = BTreeSet::new();
+    while let Some(dir) = pending.pop() {
+        if seen.insert(package_name(&dir)) {
+            pending.extend(path_dependencies(&dir));
+        }
+    }
+    seen
+}
 
 #[test]
 fn the_committed_pr_device_yml_passes_and_its_jobs_are_the_listed_ones() {
-    // Catches: the workflow failing a rule; a job of it that is not in the lint's list (or one
-    // of the list missing); the `if:` of a job reading an output `changes` does not set; and a
-    // diff step that drops a renamed file's old path or reads paths split on newlines.
+    // Catches: the workflow failing a rule; a job of it that is not in the lint's list (or one of
+    // the list missing); a copy that drifted from privileged.yml; and macos-test leaving out a
+    // crate the Mac's binaries are built from (a crate added to `hostkeeper` or `hello` later).
     let text = device();
     assert_eq!(problems(&text), Vec::<String>::new());
     assert_eq!(
         mirror_problems(&text, &committed(PRIVILEGED_WORKFLOW)),
         Vec::<String>::new()
     );
+    let crates = mac_crates();
+    assert!(crates.contains("hostkeeper-launchd") && crates.contains("hostkeeper-daemon"));
+    assert!(
+        !crates.contains("hostkeeper-mdm-step"),
+        "the MDM server is not the Mac's"
+    );
+    assert_eq!(crate_problems(&text, &crates), Vec::<String>::new());
     let doc = yaml::load(&text).expect("pr-device.yml parses");
     assert_eq!(
         entry(&doc, "name").and_then(Node::as_str),
@@ -57,27 +114,6 @@ fn the_committed_pr_device_yml_passes_and_its_jobs_are_the_listed_ones() {
     let names: Vec<&str> = jobs.iter().filter_map(|(n, _)| n.as_str()).collect();
     let listed: Vec<&str> = JOBS.iter().map(|j| j.name).collect();
     assert_eq!(names, listed);
-    let changes = entry(entry(&doc, "jobs").expect("jobs"), "changes").expect("changes");
-    let outputs = entry(changes, "outputs").expect("outputs of changes");
-    for (output, condition) in [("mac", MAC_IF), ("linux-privileged", LINUX_IF)] {
-        assert_eq!(
-            entry(outputs, output).and_then(Node::as_str),
-            Some(format!("${{{{ steps.pr-jobs.outputs.{output} }}}}").as_str())
-        );
-        assert_eq!(
-            condition,
-            format!("${{{{ needs.changes.outputs.{output} == 'true' }}}}")
-        );
-    }
-    for step in [
-        "run: git diff --name-only --no-renames -z --output=\"$RUNNER_TEMP/changed\" HEAD^1 HEAD\n",
-        "run: cargo xtask pr-jobs --changed \"$RUNNER_TEMP/changed\" --output \"$GITHUB_OUTPUT\"\n",
-        "fetch-depth: 2\n",
-        "FAILED: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}\n",
-        "run: test \"$FAILED\" = false\n",
-    ] {
-        assert_eq!(text.matches(step).count(), 1, "{step}");
-    }
 }
 
 #[test]
@@ -213,30 +249,24 @@ fn a_write_scope_or_id_token_on_a_pr_device_job_is_refused() {
 
 #[test]
 fn root_and_macos_on_a_pull_request_are_allowed_only_in_the_jobs_listed_for_them() {
-    // Catches: the exception reaching a job it does not name: root in the macOS test job or the
-    // gate, a macOS runner for the job that reads the paths, and a job named like a listed one in
-    // another workflow (ci.yml), which is held to the rule in full.
-    let sudo = "      - name: Run the workspace's tests\n        run: cargo test --workspace --locked --no-fail-fast\n";
-    let text = device_with(sudo, &sudo.replace("run: cargo", "run: sudo cargo"));
+    // Catches: the exception reaching a job it does not name: root in the macOS test job, a macOS
+    // runner for the Linux copy, and a job named like a listed one in another workflow (ci.yml),
+    // which is held to the rule in full.
+    let run = "        run: cargo test --locked --no-fail-fast -p hello";
+    let text = device_with(run, &run.replace("run: cargo", "run: sudo cargo"));
+    let found = problems(&text);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(
+        found[0].starts_with("job macos-test: privileged on pull_request (`sudo cargo test"),
+        "{found:?}"
+    );
+    let linux = "    runs-on: ubuntu-24.04\n";
+    let text = device_with(linux, "    runs-on: macos-15\n");
     assert_eq!(
         problems(&text),
         [
-            "job macos-test: privileged on pull_request (`sudo cargo test --workspace --locked --no-fail-fast`)"
-        ]
-    );
-    let gate = "        run: test \"$FAILED\" = false\n";
-    let text = device_with(gate, "        run: sudo test \"$FAILED\" = false\n");
-    assert_eq!(
-        problems(&text),
-        ["job gate: privileged on pull_request (`sudo test \"$FAILED\" = false`)"]
-    );
-    let changes = "  changes:\n    runs-on: ubuntu-24.04\n";
-    let text = device_with(changes, "  changes:\n    runs-on: macos-15\n");
-    assert_eq!(
-        problems(&text),
-        [
-            "job changes: macOS on pull_request (`macos-15`)",
-            "job changes: runs on a runner outside [\"ubuntu-24.04\"]",
+            "job privileged: macOS on pull_request (`macos-15`)",
+            "job privileged: runs on a runner outside [\"ubuntu-24.04\"]",
         ]
     );
     let in_ci = with(
@@ -255,15 +285,12 @@ fn root_and_macos_on_a_pull_request_are_allowed_only_in_the_jobs_listed_for_them
             "job macos-device: macOS on pull_request (`macos-15`)",
         ]
     );
-    // The job names `needs` lists are not values of the job: the gate needs the macOS jobs.
-    assert_eq!(problems(&device()), Vec::<String>::new());
-    assert!(device().contains(GATE));
 }
 
 #[test]
 fn the_trigger_of_pr_device_yml_is_pull_request_alone_with_no_filter() {
-    // Catches: a paths or branches filter on `on`, which leaves the gate unreported (a required
-    // check that never starts), a push trigger that would run the copies again after the merge,
+    // Catches: a paths or branches filter on `on`, which leaves the required checks unreported on
+    // a pull request it filters out (a check that never starts), a push trigger that would run the copies again after the merge,
     // and a `types` list that skips the pushes to an open pull request.
     let on = "on:\n  pull_request:\n\npermissions";
     for changed in [
@@ -328,75 +355,111 @@ fn the_concurrency_of_pr_device_yml_is_one_group_per_pull_request_that_cancels()
 }
 
 #[test]
-fn each_job_of_pr_device_yml_has_its_needs_its_if_and_its_runner() {
-    // Catches: a macOS job that runs for every pull request (no `if:`, or another one), one that
-    // starts before `changes` has said, the gate not waiting for a job (so it passes before that
-    // job fails) or skipped when one failed, a job the list does not name, one missing, and a job
-    // on another runner.
-    let mac_if = format!(
-        "    if: {MAC_IF}\n    runs-on: macos-15\n    permissions:\n      contents: read\n    # A bound on the whole job, against a test that hangs; no test depends on it.\n    timeout-minutes: 60\n"
-    );
-    let cases: [(&str, String, Vec<String>); 9] = [
+fn each_job_of_pr_device_yml_runs_on_every_pull_request_on_its_runner() {
+    // Catches: a job that a condition or another job's result can skip (a required check that
+    // then passes, or never reports, without its tests having run), a job the list does not name,
+    // one of the list missing, and a job on another runner.
+    let cases: [(&str, &str, &str); 5] = [
         (
             MACOS_TEST,
-            "  macos-test:\n".to_owned(),
-            vec!["job macos-test: its `needs` must be exactly {\"changes\"}".to_owned()],
+            "  macos-test:\n    if: ${{ github.event.pull_request.draft == false }}\n    runs-on: macos-15\n",
+            "job macos-test: has `if`, and must run and report on every pull request",
         ),
         (
-            &mac_if,
-            mac_if.replace(&format!("    if: {MAC_IF}\n"), ""),
-            vec![format!("job macos-test: its `if:` must be exactly `{MAC_IF}`")],
+            MACOS_TEST,
+            "  macos-test:\n    needs: privileged\n    runs-on: macos-15\n",
+            "job macos-test: has `needs`, and must run and report on every pull request",
         ),
         (
-            &mac_if,
-            mac_if.replace(MAC_IF, LINUX_IF),
-            vec![format!("job macos-test: its `if:` must be exactly `{MAC_IF}`")],
+            MACOS_TEST,
+            "  macos-test:\n    runs-on: macos-14\n",
+            "job macos-test: runs on a runner outside [\"macos-15\"]",
         ),
         (
-            &mac_if,
-            mac_if.replace("macos-15", "macos-14"),
-            vec!["job macos-test: runs on a runner outside [\"macos-15\"]".to_owned()],
+            MACOS_TEST,
+            "  macos-test:\n    runs-on: [macos-15]\n",
+            "job macos-test: runs on a runner outside [\"macos-15\"]",
         ),
         (
-            GATE,
-            "  gate:\n    needs: [changes, macos-test, macos-device]\n".to_owned(),
-            vec![
-                "job gate: its `needs` must be exactly {\"changes\", \"macos-device\", \"macos-test\", \"privileged\"}"
-                    .to_owned(),
-            ],
-        ),
-        (
-            &format!("    if: {GATE_IF}\n"),
-            "    if: ${{ success() }}\n".to_owned(),
-            vec![format!("job gate: its `if:` must be exactly `{GATE_IF}`")],
-        ),
-        (
-            "  changes:\n    runs-on: ubuntu-24.04\n",
-            "  changes:\n    if: ${{ always() }}\n    needs: gate\n    runs-on: ubuntu-24.04\n"
-                .to_owned(),
-            vec![
-                "job changes: has an `if:`, and runs for every pull request".to_owned(),
-                "job changes: needs no job".to_owned(),
-            ],
-        ),
-        (
-            GATE,
-            format!("  extra:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: cargo test\n{GATE}"),
-            vec!["job extra is not a job of pr-device.yml".to_owned()],
-        ),
-        (
-            "  changes:\n    runs-on: ubuntu-24.04\n",
-            "  changes:\n    runs-on: [ubuntu-24.04]\n".to_owned(),
-            vec!["job changes: runs on a runner outside [\"ubuntu-24.04\"]".to_owned()],
+            "jobs:\n",
+            "jobs:\n  extra:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: cargo test\n",
+            "job extra is not a job of pr-device.yml",
         ),
     ];
     for (from, to, want) in cases {
-        assert_eq!(problems(&device_with(from, &to)), want, "{to}");
+        assert_eq!(problems(&device_with(from, to)), [want], "{to}");
     }
-    // A job of the list missing: the gate, removed with every line after its start.
+    // A job of the list missing: privileged, the last, removed with every line after its start.
     let text = device();
-    let at = text.find(GATE).expect("the gate");
-    assert_eq!(problems(&text[..at]), ["no job gate"]);
+    let at = text
+        .find("  # privileged.yml's job privileged;")
+        .expect("the copy");
+    assert_eq!(problems(&text[..at]), ["no job privileged"]);
+}
+
+#[test]
+fn macos_test_must_test_exactly_the_macs_crates() {
+    // Catches: a crate of the Mac left out of the build or the run, a crate added that does not
+    // build for macOS (the MDM server), `--workspace` or `--exclude` in place of the list, a run
+    // that stops at the first failure, and a build or run step missing or doubled.
+    let crates = mac_crates();
+    let want = |start: &str| {
+        format!(
+            "job macos-test: `{start}` must name exactly the crates {crates:?} with -p, and nothing else"
+        )
+    };
+    let build = "cargo test --locked --no-run";
+    let run = "cargo test --locked --no-fail-fast";
+    let cases: [(&str, &str, Vec<String>); 4] = [
+        ("--no-run -p hello ", "--no-run ", vec![want(build)]),
+        (
+            "--no-fail-fast -p hello ",
+            "--no-fail-fast -p hostkeeper-mdm-step -p hello ",
+            vec![want(run)],
+        ),
+        (
+            "--no-fail-fast -p hello ",
+            "--no-fail-fast --workspace -p hello ",
+            vec![want(run)],
+        ),
+        (
+            "--no-fail-fast -p hello ",
+            "--no-fail-fast --exclude hostkeeper-mdm-step -p hello ",
+            vec![want(run)],
+        ),
+    ];
+    for (from, to, wants) in cases {
+        assert_eq!(
+            crate_problems(&device_with(from, to), &crates),
+            wants,
+            "{to}"
+        );
+    }
+    // The run without `--no-fail-fast` is no run step; a second build step is one too many.
+    assert_eq!(
+        crate_problems(
+            &device_with("--locked --no-fail-fast -p hello ", "--locked -p hello "),
+            &crates
+        ),
+        [format!("job macos-test: 0 steps `{run} ...`, not one")]
+    );
+    let step = "      - name: Run the tests of the Mac's crates\n";
+    let doubled = device_with(step, &format!("      - run: {build} -p hello\n{step}"));
+    assert_eq!(
+        crate_problems(&doubled, &crates),
+        [
+            format!("job macos-test: 2 steps `{build} ...`, not one"),
+            "job macos-test: 3 `cargo test` steps, not two".to_owned(),
+        ]
+    );
+    // Without the job, or with a file that does not parse.
+    let at = device().find(MACOS_TEST).expect("the job");
+    let end = device()
+        .find("  # privileged.yml's job macos-device;")
+        .expect("the copy");
+    let without = format!("{}{}", &device()[..at], &device()[end..]);
+    assert_eq!(crate_problems(&without, &crates).len(), 3);
+    assert_eq!(crate_problems("on: [unclosed\n", &crates).len(), 1);
 }
 
 #[test]
@@ -405,9 +468,7 @@ fn a_copy_that_drifted_from_privileged_yml_is_refused() {
     // runner, an env or a test target changed in the copy or in privileged.yml alone, a copy
     // missing, and a top-level env (RUSTFLAGS) that differs.
     let privileged = committed(PRIVILEGED_WORKFLOW);
-    let drift = |job: &str| {
-        format!("job {job}: not privileged.yml's job {job} with `needs` and `if:` added")
-    };
+    let drift = |job: &str| format!("job {job}: not privileged.yml's job {job}, key for key");
     let device_mac = "--test device_mac --test device_mac_e2e --test device_mac_selfupdate --test unpack_mac -- --test-threads=1 --nocapture";
     let changed = device_with(
         device_mac,
@@ -441,12 +502,9 @@ fn a_copy_that_drifted_from_privileged_yml_is_refused() {
         ["pr-device.yml: its top-level env is not privileged.yml's"]
     );
     let at = device()
-        .find("  # privileged.yml's job privileged,")
+        .find("  # privileged.yml's job privileged;")
         .expect("the copy");
-    let end = device()
-        .find("  # The one check of this workflow")
-        .expect("the gate");
-    let without = format!("{}{}", &device()[..at], &device()[end..]);
+    let without = device()[..at].to_owned();
     assert_eq!(
         mirror_problems(&without, &privileged),
         [drift("privileged")]
@@ -457,6 +515,12 @@ fn a_copy_that_drifted_from_privileged_yml_is_refused() {
         "a file that does not parse is one problem"
     );
     assert_eq!(mirror_problems(&device(), "").len(), 1);
+    // A copy with an `if:` added is no copy either (and `problems` refuses the `if:` itself).
+    let copy = device_with(
+        "  macos-device:\n    runs-on: macos-15\n",
+        "  macos-device:\n    if: ${{ always() }}\n    runs-on: macos-15\n",
+    );
+    assert_eq!(mirror_problems(&copy, &privileged), [drift("macos-device")]);
 }
 
 #[test]

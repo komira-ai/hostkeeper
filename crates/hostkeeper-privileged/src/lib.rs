@@ -3,7 +3,7 @@
 //! The privileged tests (`tests/transient_unit.rs`, `tests/observer.rs`, `tests/unit_control.rs`,
 //! `tests/self_update.rs`) run as root against the real systemd of a host, in
 //! `.github/workflows/privileged.yml`, after a merge to main, and in `pr-device.yml`'s copies of
-//! its jobs, on a pull request that changes what they prove. Each of these files starts with
+//! its jobs, on every pull request. Each of these files starts with
 //! `#![cfg(feature = "privileged")]` (the first-boot and macOS files below with lines of their
 //! own); the feature is off by default, so the pull-request set compiles none of them
 //! ([`PRIVILEGED`]). They drive the production adapters

@@ -34,7 +34,7 @@
 # to its runner (ubuntu-24.04; macos-15 for macos-device), and gives it no write scope; it refuses
 # root in every other workflow, and macOS in every workflow that runs for a pull request, but in
 # pr-device.yml, whose jobs privileged and macos-device are copies of this file's, step for step,
-# run on a pull request that changes what they prove. A release waits for a successful push run of
+# run on every pull request. A release waits for a successful push run of
 # this workflow on its commit (release.yml); pr-device.yml is no part of a release.
 #
 # In each job the test binaries are built as the runner's own user; only their run is as root,
