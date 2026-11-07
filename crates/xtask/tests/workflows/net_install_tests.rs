@@ -211,14 +211,30 @@ fn the_shape_check_holds_each_network_install_job_to_its_own_targets() {
         };
         (job, BTreeSet::from([swap.to_owned()]))
     }));
-    assert_eq!(shape_problems(FILE, &text, &swapped).len(), 4);
+    let swapped_want: Vec<String> = [
+        (NET_INSTALL_JOB, "net_install", "net_install_arm64"),
+        (NET_INSTALL_ARM64_JOB, "net_install_arm64", "net_install"),
+    ]
+    .iter()
+    .flat_map(|(job, has, wants)| {
+        ["build", "run as root"].map(|step| {
+            format!("job {job}: the {step} step names the test targets {{\"{has}\"}}, not {{\"{wants}\"}}")
+        })
+    })
+    .collect();
+    assert_eq!(shape_problems(FILE, &text, &swapped), swapped_want);
     let privileged_only = replace_in_job(
         &text,
         NET_INSTALL_JOB,
         " --test net_install",
         " --test observer",
     );
-    assert_eq!(problems(&privileged_only).len(), 2);
+    assert_eq!(
+        problems(&privileged_only),
+        ["build", "run as root"].map(|step| format!(
+            "job net-install: the {step} step names the test targets {{\"observer\"}}, not {{\"net_install\"}}"
+        ))
+    );
     let missing = text.replace("\n  net-install-arm64:\n", "\n  net-install-arm64-gone:\n");
     assert_eq!(
         problems(&missing),
@@ -292,8 +308,9 @@ fn job_section(text: &str, job: &str) -> String {
 fn a_network_install_job_back_in_privileged_yml_is_refused() {
     // Catches: the network-install jobs moved back into privileged.yml, whose successful run each
     // release waits for: a release would wait hours on an emulated install again. Each job is
-    // refused as no job of that file, by the shape check and by the release's list of workflows,
-    // which does not name net-install.yml's.
+    // refused as no job of that file by the shape check; and net-install.yml's workflow is not
+    // among those release.yml waits for (release_tests.rs holds this list to release.yml's
+    // `workflow_run.workflows`; the release verbs' own list is held in src/release/tests.rs).
     let privileged = committed_file(PRIVILEGED_WORKFLOW);
     let net = committed();
     for job in [NET_INSTALL_JOB, NET_INSTALL_ARM64_JOB] {
@@ -307,7 +324,6 @@ fn a_network_install_job_back_in_privileged_yml_is_refused() {
     let doc = yaml::load(&net).expect("net-install.yml parses");
     let name = entry(&doc, "name").and_then(Node::as_str);
     assert_eq!(name, Some("net-install"));
-    assert!(!REQUIRED_WORKFLOWS.contains(&"net-install"));
     assert_eq!(REQUIRED_WORKFLOWS, ["artifacts", "ci", "privileged"]);
 }
 
@@ -533,11 +549,14 @@ fn the_iso_of_each_network_install_job_is_held_to_the_pin() {
             "job net-install: ISO_URL is `{arm_url}`, not the url `{x86_url}` of [linux-x86_64.iso] in pins.toml"
         )]
     );
+    // A URL that is not the pin's, by one character.
     let typo = replace_in_job(&text, NET_INSTALL_ARM64_JOB, "24.04.5", "24.04.4");
+    let typo_url = arm_url.replace("24.04.5", "24.04.4");
     assert_eq!(
-        iso_problems(&typo, &pins).len(),
-        1,
-        "a URL that is not the pin's, by one character"
+        iso_problems(&typo, &pins),
+        [format!(
+            "job net-install-arm64: ISO_URL is `{typo_url}`, not the url `{arm_url}` of [linux-arm64.iso] in pins.toml"
+        )]
     );
     let moved = pins.replace(x86_url, &format!("{x86_url}.new"));
     assert_eq!(
@@ -557,7 +576,10 @@ fn the_iso_of_each_network_install_job_is_held_to_the_pin() {
         ["job net-install: no step uses \"$ISO_URL\""]
     );
     let unquoted = replace_in_job(&text, NET_INSTALL_JOB, "\"$ISO_URL\"", "$ISO_URL");
-    assert_eq!(iso_problems(&unquoted, &pins).len(), 1);
+    assert_eq!(
+        iso_problems(&unquoted, &pins),
+        ["job net-install: no step uses \"$ISO_URL\""]
+    );
     let gone = text.replace("\n  net-install:\n", "\n  net-install-gone:\n");
     assert_eq!(iso_problems(&gone, &pins), ["no job net-install"]);
     let no_table = pins.replace("[linux-arm64.iso]", "[linux-arm64.disc]");

@@ -479,3 +479,14 @@ fn a_repository_has_the_trust_lists_grammar() {
         assert_eq!(ours, theirs, "{text}");
     }
 }
+
+#[test]
+fn a_release_waits_for_ci_privileged_and_artifacts_only() {
+    // Catches: a workflow added to the runs a release waits for, such as net-install.yml, whose
+    // emulated install takes hours (it runs on its own triggers and holds no release), or one of
+    // the three dropped, so that a red privileged or artifacts run no longer holds a release.
+    assert_eq!(
+        REQUIRED_WORKFLOWS,
+        ["ci.yml", "privileged.yml", "artifacts.yml"]
+    );
+}
