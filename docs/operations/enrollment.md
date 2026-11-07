@@ -61,7 +61,9 @@ reads one record by host id: list the records and find it. The coordinator keeps
 
 ## Bootstrap a Linux node
 
-The deb and the rpm are [packaging/linux](../../packaging/linux/README.md). Install one as root:
+A new Linux machine can instead be installed from the farm LAN, Ubuntu, the deb and the config
+together: [network-install.md](network-install.md). By hand, the deb and the rpm are
+[packaging/linux](../../packaging/linux/README.md). Install one as root:
 
 ```
 dpkg -i hostkeeper_<version>_amd64.deb
