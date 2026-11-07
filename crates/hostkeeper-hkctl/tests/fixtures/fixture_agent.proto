@@ -1,0 +1,25 @@
+// hostkeeper.agent.v9: a host API package of the fixture. hkctl emits no command for a
+// `hostkeeper.agent` package: the gateway never serves one, and its caller is the daemon.
+//
+// Served by: nothing.
+//
+// Authentication: none.
+//
+// Refusals: none.
+//
+// Units: none.
+//
+// Extending: add what a test needs.
+syntax = "proto3";
+
+package hostkeeper.agent.v9;
+
+// What a host sends.
+service Beats {
+  // One beat.
+  rpc Beat(BeatRequest) returns (BeatRequest);
+}
+
+message BeatRequest {
+  string host = 1;
+}

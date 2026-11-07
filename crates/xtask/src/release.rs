@@ -24,6 +24,8 @@
 //!   platforms, rendered from the committed pins (`packaging/netboot/pins.toml`), which it
 //!   refuses unless each platform has its ISO, shim, GRUB, kernel and initrd, each pinned well
 //!   formed.
+//! - `hkctl` ([`hkctl`]): `hkctl-<version>`, the command line of the coordinator, one bash
+//!   script for every platform, generated from the protos' command table.
 //! - `macos-pkg` and `check-macos-pkg` ([`macos_pkg`]): the installer pkg of a Mac's first
 //!   install, and the check of its payload read back from the built pkg.
 //! - `compare-images` ([`compare_images`]): two OCI image tarballs are byte for byte equal.
@@ -62,6 +64,7 @@ mod doc_tests;
 pub(crate) mod fakes;
 pub(crate) mod git;
 mod github;
+mod hkctl;
 mod index;
 mod locate;
 mod macos_pkg;
@@ -266,6 +269,19 @@ pub(crate) enum Verb {
         #[arg(long)]
         dir: PathBuf,
     },
+    /// Write `hkctl-<version>` (0755), the command line of the coordinator: one bash script
+    /// for every platform, generated from the command table of the protos, whose `--version`
+    /// prints `hkctl <version>+<first 12 hex digits of the commit>`.
+    Hkctl {
+        #[arg(long)]
+        version: Version,
+        /// The commit built.
+        #[arg(long)]
+        commit: Commit,
+        /// The directory of the release's assets, made if missing; the script is written there.
+        #[arg(long)]
+        out: PathBuf,
+    },
     /// Build the installer pkg of a Mac's first install: `pkgbuild` builds a component pkg of the
     /// daemon binary, its launchd plist, its log directory and newsyslog file, the pinned `gh`
     /// and the Sigstore trusted root, nothing else, and one script, a postinstall that seeds the
@@ -448,6 +464,11 @@ pub(crate) fn run<A: Adapters>(
             None => Err(Error::Failed(package::FAIL_READY_ONLY_HELLO.to_owned())),
         },
         Verb::Netboot { pins, version, dir } => netboot::write_netboot(&pins, &version, &dir),
+        Verb::Hkctl {
+            version,
+            commit,
+            out,
+        } => hkctl::write(hostkeeper_proto::ctl::COMMANDS, &version, &commit, &out),
         Verb::NfpmStage {
             arch,
             gh_version,
@@ -617,6 +638,7 @@ fn run_with(verb: Verb, ports: &Ports<'_>) -> Result<Vec<String>, Error> {
         | Verb::CheckImageUi { .. }
         | Verb::Index { .. }
         | Verb::Netboot { .. }
+        | Verb::Hkctl { .. }
         | Verb::NfpmStage { .. }
         | Verb::CheckLinuxPkg { .. }
         | Verb::CheckMacosPkg { .. }
