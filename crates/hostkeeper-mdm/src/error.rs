@@ -205,6 +205,24 @@ pub enum MdmError {
         /// The key.
         key: String,
     },
+    /// A secret file holds a construct whose reading by systemd is not certain.
+    #[error(
+        "{path} line {line}: {why}: systemd might read it differently from this tool; write the value on one line as KEY=value"
+    )]
+    SecretSyntax {
+        /// The file.
+        path: String,
+        /// The line where the construct starts, from 1.
+        line: usize,
+        /// What was refused.
+        why: &'static str,
+    },
+    /// A secret file is not UTF-8 text.
+    #[error("{path} is not UTF-8 text")]
+    SecretEncoding {
+        /// The file.
+        path: String,
+    },
     /// lego is not installed.
     #[error("{0} is missing: hostkeeper-mdm install --apply installs it")]
     NoLego(String),
