@@ -14,72 +14,26 @@
 mod support;
 
 use std::fmt::Write as _;
-use std::path::Path;
 
 use hostkeeper_coordinator::desired::DesiredStore;
 use hostkeeper_coordinator::ops::{AuditEntry, FailureAck, OpsError, OpsStore, Write};
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
-use support::readers::Readers;
+use support::readers::{Readers, parse};
 use support::rig::{Rig, Spec};
 use support::{BEAT, Flags, recorded, recorded_bytes, scratch};
-
-fn parse(path: &Path) -> Value {
-    let text = std::fs::read_to_string(path).expect("a file");
-    assert!(
-        text.ends_with("}\n"),
-        "{}: one JSON value and a newline",
-        path.display()
-    );
-    serde_json::from_str(&text).expect("JSON")
-}
 
 /// The desired-state file the rig's coordinator has written, checked against kbf's reader of
 /// `file`: `desired-single` for the single state, `desired-map` for the map.
 fn check_desired(rig: &Rig, readers: &Readers, file: &str) {
-    let path = rig.dir.path().join("desired.json");
-    readers
-        .check(readers.reader_of(file), &parse(&path), "desired.json")
-        .unwrap_or_else(|why| panic!("{why}"));
+    readers.check_desired_in(rig.dir.path(), file);
 }
 
 /// The ops file and the halts file the rig's coordinator has written, checked against kbf's
 /// readers, down into the records of both; the halts file names the digest of the ops file it
 /// goes with.
 fn check_ops(rig: &Rig, readers: &Readers) {
-    let ops = rig.dir.path().join("desired.json.ops");
-    let value = parse(&ops);
-    readers
-        .check(readers.reader_of("ops"), &value, "ops")
-        .unwrap_or_else(|why| panic!("{why}"));
-    assert_eq!(value["schema"], 1);
-    let halts = rig.dir.path().join("desired.json.ops.halts");
-    if halts.exists() {
-        let halts = parse(&halts);
-        readers
-            .check(readers.reader_of("halts"), &halts, "halts")
-            .unwrap_or_else(|why| panic!("{why}"));
-        // kbf reads the halts file leniently: the one key this coordinator adds to it, where each
-        // service's update plan stands, is skipped there, and costs kbf only the plan's position.
-        let mut keys: Vec<&str> = halts
-            .as_object()
-            .expect("an object")
-            .keys()
-            .map(String::as_str)
-            .filter(|key| *key != "rollouts")
-            .collect();
-        keys.sort_unstable();
-        assert_eq!(keys, ["ops", "services"], "the halts file's keys");
-        let mut digest = String::new();
-        for b in Sha256::digest(std::fs::read(&ops).expect("ops file")).iter() {
-            write!(digest, "{b:02x}").expect("a string takes text");
-        }
-        assert_eq!(
-            halts["ops"],
-            digest.as_str(),
-            "the halts file goes with this ops file"
-        );
-    }
+    readers.check_ops_in(rig.dir.path());
 }
 
 fn bytes(rig: &Rig, file: &str) -> Vec<u8> {

@@ -15,10 +15,15 @@ use super::{Export, Import, TransferError, export, import};
 use crate::audit_file::{AuditLine, AuditLog, Detail, Rotation, UnixClock};
 use crate::backup::{BackupError, StatePaths};
 use crate::config::StartError;
-use crate::enrollment::tests::support::{HostKey, Rig as Enrolling, enrolled, host_id};
+use crate::enrollment::tests::support::{
+    FixedClock, HostKey, NOW, Rig as Enrolling, enrolled, host_id,
+};
+use crate::enrollment::{StoreAt, os_random, setup};
 use crate::lock::{FileLock, StateLock, lock_path};
+use crate::ops::OpsStore;
 use crate::store::Backend;
 use crate::store::postgres::DatabaseError;
+use crate::store::postgres::PgRecords;
 use crate::store::postgres::tests::{AT, TestDatabase};
 use crate::store::postgres::transfer::{MoveError, STATE_TABLES};
 use crate::store::{Files, Loaded};
@@ -787,4 +792,83 @@ fn export_prints_the_count_of_each_table() {
         )),
         "{report}"
     );
+}
+
+/// The audit rows `database` holds once a coordinator started on it has audited the enrollment
+/// store against them (`audit_to`), as `serve` does at its start.
+fn audited_at_start(database: &TestDatabase) -> usize {
+    let (store, loaded) = database.open("coordinator").expect("the store opens");
+    let ops = Arc::new(OpsStore::over(Arc::new(store.clone()), loaded.ops));
+    let records = Arc::new(PgRecords::over(&store).expect("the records"));
+    let ca = scratch("transfer-start-ca");
+    let files = crate::enrollment::tests::support::Files::in_dir(&ca);
+    let enrollment = setup(
+        Arc::new(RealFs),
+        &crate::enrollment::Setup {
+            store: StoreAt::Records(records),
+            ..files.setup(true)
+        },
+        FixedClock::at(NOW),
+        os_random(),
+    )
+    .expect("enrollment starts over the database");
+    enrollment.audit_to(Arc::clone(&ops));
+    store.stop();
+    count(database, "audit")
+}
+
+/// Proves: a history whose oldest segments were deleted keeps its beginning across the move: an
+/// approval older than the oldest line the files held has no line, and the first start on the
+/// database adds none for it, as the file coordinator added none; with the import's record of
+/// where the history begins taken away, the same start adds the approval's line.
+///
+/// Catches: an import that forgets `audit_pruned_before`, so the first start on the database
+/// writes an audit row for every approval older than the retained history.
+#[test]
+fn import_of_a_pruned_history_adds_no_audit_rows_at_first_start() {
+    let enrolling = Enrolling::new("transfer-pruned-ca");
+    let key = HostKey::new();
+    enrolling
+        .enrollment
+        .enroll(crate::enrollment::tests::support::enroll_request(
+            &key, "m-1",
+        ))
+        .expect("enrolled");
+    enrolling
+        .enrollment
+        .store()
+        .approve_recorded(
+            &key.key_hash(),
+            &key.key_hash(),
+            &hostkeeper_enrollment::enroll::Decision {
+                host_id: host_id("web-1"),
+                role: hostkeeper_enrollment::names::Role::parse("storage").expect("a role"),
+                services: Vec::new(),
+                replace: false,
+            },
+            &hostkeeper_enrollment::enroll::ApprovalRecord {
+                approver: "alice".to_owned(),
+                approved_unix: NOW,
+                reason: "racked".to_owned(),
+                mac_nonce: None,
+                mac_enrolled_since_unix: None,
+            },
+        )
+        .expect("approved by alice");
+    let mut store = Store::new("transfer-pruned");
+    // Every line kept is newer than the approval, which was made at NOW.
+    audit(&store, 9, NOW + 100, 2);
+    store.paths.enrollment_dir = Some(enrolling.files.store.clone());
+
+    let database = TestDatabase::new();
+    imported(&store, &database).expect("imported");
+    let rows = count(&database, "audit");
+    assert_eq!(audited_at_start(&database), rows);
+
+    let unpruned = TestDatabase::new();
+    imported(&store, &unpruned).expect("imported");
+    unpruned
+        .run("UPDATE imports SET audit_pruned_before = NULL")
+        .expect("the record changed");
+    assert_eq!(audited_at_start(&unpruned), rows + 1);
 }

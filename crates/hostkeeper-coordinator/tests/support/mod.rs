@@ -11,6 +11,7 @@
     reason = "each test binary uses its own part of these shared helpers"
 )]
 
+pub mod database;
 pub mod readers;
 pub mod replay;
 pub mod rig;
