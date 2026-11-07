@@ -35,6 +35,8 @@ use plist::{Dictionary, Value};
 use serde_json::json;
 use tokio::net::TcpListener;
 
+pub mod enrollment;
+
 /// The UDID (and so the enrollment id) and the serial of NanoMDM's recorded events.
 pub const UDID: &str = "66ADE930-5FDF-5EC4-8429-15640684C489";
 pub const SERIAL: &str = "C02MT66KFLHH";
@@ -78,6 +80,25 @@ pub fn counting() -> Random {
         buffer.fill(next.fetch_add(1, Ordering::SeqCst));
         true
     })
+}
+
+/// Random bytes that count, as many draws as the budget says (`-1`: any number), then none.
+pub fn budgeted() -> (Random, Arc<std::sync::atomic::AtomicI64>) {
+    let budget = Arc::new(std::sync::atomic::AtomicI64::new(-1));
+    let left = Arc::clone(&budget);
+    let next = Arc::new(AtomicU8::new(1));
+    let random: Random = Box::new(move |buffer: &mut [u8]| {
+        let n = left.load(Ordering::SeqCst);
+        if n == 0 {
+            return false;
+        }
+        if n > 0 {
+            left.store(n - 1, Ordering::SeqCst);
+        }
+        buffer.fill(next.fetch_add(1, Ordering::SeqCst));
+        true
+    });
+    (random, budget)
 }
 
 /// Random bytes that cannot be had.
@@ -128,6 +149,8 @@ pub struct FakeNanoHub {
     pub addr: std::net::SocketAddr,
     heard: Arc<Mutex<Vec<Heard>>>,
     answer: Arc<Mutex<Answer>>,
+    /// Told after each request is recorded.
+    told: Arc<tokio::sync::Notify>,
 }
 
 impl FakeNanoHub {
@@ -138,14 +161,17 @@ impl FakeNanoHub {
         let addr = listener.local_addr().expect("its address");
         let heard = Arc::new(Mutex::new(Vec::new()));
         let answer = Arc::new(Mutex::new(Answer::Queued));
-        let (h, a) = (Arc::clone(&heard), Arc::clone(&answer));
+        let told = Arc::new(tokio::sync::Notify::new());
+        let (h, a, t) = (Arc::clone(&heard), Arc::clone(&answer), Arc::clone(&told));
         tokio::spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
-                let (h, a) = (Arc::clone(&h), Arc::clone(&a));
+                let (h, a, t) = (Arc::clone(&h), Arc::clone(&a), Arc::clone(&t));
                 tokio::spawn(async move {
                     let service = service_fn(move |request| {
-                        let (h, a) = (Arc::clone(&h), Arc::clone(&a));
-                        async move { Ok::<_, std::convert::Infallible>(serve(request, &h, &a).await) }
+                        let (h, a, t) = (Arc::clone(&h), Arc::clone(&a), Arc::clone(&t));
+                        async move {
+                            Ok::<_, std::convert::Infallible>(serve(request, &h, &a, &t).await)
+                        }
                     });
                     let _ = http1::Builder::new()
                         .serve_connection(TokioIo::new(stream), service)
@@ -157,6 +183,14 @@ impl FakeNanoHub {
             addr,
             heard,
             answer,
+            told,
+        }
+    }
+
+    /// Resolves once at least `n` requests were heard: an explicit progress event, no clock.
+    pub async fn heard_at_least(&self, n: usize) {
+        while self.heard().len() < n {
+            self.told.notified().await;
         }
     }
 
@@ -189,6 +223,7 @@ async fn serve(
     request: Request<Incoming>,
     heard: &Mutex<Vec<Heard>>,
     answer: &Mutex<Answer>,
+    told: &tokio::sync::Notify,
 ) -> Response<Full<Bytes>> {
     let header = |name: &str| {
         request
@@ -218,6 +253,7 @@ async fn serve(
             content_type,
             body,
         });
+    told.notify_one();
     let wanted = format!("Basic {}", STANDARD.encode(format!("nanohub:{KEY}")));
     if authorization.as_deref() != Some(wanted.as_str()) {
         return reply(401, "Unauthorized\n");
@@ -547,6 +583,11 @@ pub struct TestFs {
 }
 
 impl TestFs {
+    /// How many writes were asked for so far.
+    pub fn writes(&self) -> u64 {
+        self.writes.load(Ordering::SeqCst)
+    }
+
     pub fn fail_writes_from(&self, n: u64) {
         self.fail_from.store(n, Ordering::SeqCst);
     }

@@ -574,7 +574,7 @@ Designed (B8); replaces kbf's registration socket (`/run/updater/register.sock`)
 
 ![Mac path: MDM enrollment, package install by digest, per-device nonce, enrollment, auto-approval conditions, and the one launchd daemon](diagrams/mac-path.svg)
 
-The figure shows the order before [hostkeeper-mdm.md](hostkeeper-mdm.md): there the nonce is pushed after the daemon's request is pending, and bound to it. The text below is current.
+The figure is the order of [hostkeeper-mdm.md](hostkeeper-mdm.md): the nonce is pushed after the daemon's request is pending, and bound to it.
 
 The flow is the same; these differ:
 

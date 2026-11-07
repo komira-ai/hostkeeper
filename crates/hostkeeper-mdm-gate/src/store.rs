@@ -12,7 +12,10 @@
 //! coordinator does not start until the file is fixed or removed. Every cut of a file is
 //! refused: one that ends before the digest has none, and one inside it has a short one. A
 //! field the reader does not know is skipped (protobuf), so a record a later release writes
-//! with more fields is read by this one; an unknown phase is refused.
+//! with more fields is read by this one; an unknown phase is refused. The enrollment side's
+//! fields (the config profile's command, the last nonce) were added to schema 1 as fields 18
+//! and 19, so a release before them reads a record that has them, and this one reads a record
+//! without them as one with no profile sent and no nonce issued.
 //!
 //! Under the coordinator, the directory is `mdm-devices` in the enrollment store
 //! (`--enrollment-dir`), so `hostkeeper-coordinator backup` and `restore` copy it with the
@@ -22,12 +25,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use hostkeeper_enrollment::fs::{Fs, write_atomic};
+use hostkeeper_enrollment::names::KeyHash;
 use prost::Message as _;
 use sha2::{Digest as _, Sha256};
 
 use crate::command::COMMAND_TYPES;
 use crate::ids::{CommandUuid, EnrollmentId};
-use crate::record::{DeviceRecord, Phase, Sent};
+use crate::record::{DeviceRecord, NonceRecord, Phase, ProfileAnswer, ProfileCommand, Sent};
 
 /// The schema this release writes and the newest it reads.
 pub const SCHEMA: u32 = 1;
@@ -120,6 +124,37 @@ struct SentPb {
 }
 
 #[derive(Clone, PartialEq, prost::Message)]
+struct ProfilePb {
+    #[prost(string, tag = "1")]
+    uuid: String,
+    #[prost(uint64, tag = "2")]
+    sent_unix: u64,
+    /// Set once answered: true for `Acknowledged`.
+    #[prost(bool, optional, tag = "3")]
+    acknowledged: Option<bool>,
+    #[prost(uint64, tag = "4")]
+    answered_unix: u64,
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
+struct NoncePb {
+    #[prost(string, tag = "1")]
+    serial: String,
+    #[prost(bytes = "vec", tag = "2")]
+    request_id: Vec<u8>,
+    #[prost(uint64, tag = "3")]
+    issued_unix: u64,
+    #[prost(uint32, tag = "4")]
+    enrollment: u32,
+    #[prost(uint32, tag = "5")]
+    pushes: u32,
+    #[prost(message, optional, tag = "6")]
+    push: Option<ProfilePb>,
+    #[prost(message, optional, tag = "7")]
+    removal: Option<ProfilePb>,
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
 struct RecordPb {
     #[prost(string, tag = "1")]
     enrollment_id: String,
@@ -156,6 +191,57 @@ struct RecordPb {
     refused: Vec<String>,
     #[prost(string, optional, tag = "17")]
     last_error: Option<String>,
+    #[prost(message, optional, tag = "18")]
+    config_profile: Option<ProfilePb>,
+    #[prost(message, optional, tag = "19")]
+    nonce: Option<NoncePb>,
+}
+
+fn profile_pb(command: &ProfileCommand) -> ProfilePb {
+    ProfilePb {
+        uuid: command.uuid.as_str().to_owned(),
+        sent_unix: command.sent_unix,
+        acknowledged: command.answer.map(|answer| answer.acknowledged),
+        answered_unix: command.answer.map_or(0, |answer| answer.at_unix),
+    }
+}
+
+fn profile_of(pb: ProfilePb) -> Option<ProfileCommand> {
+    Some(ProfileCommand {
+        uuid: CommandUuid::parse(&pb.uuid)?,
+        sent_unix: pb.sent_unix,
+        answer: pb.acknowledged.map(|acknowledged| ProfileAnswer {
+            acknowledged,
+            at_unix: pb.answered_unix,
+        }),
+    })
+}
+
+fn nonce_pb(nonce: &NonceRecord) -> NoncePb {
+    NoncePb {
+        serial: nonce.serial.clone(),
+        request_id: nonce.request_id.as_bytes().to_vec(),
+        issued_unix: nonce.issued_unix,
+        enrollment: nonce.enrollment,
+        pushes: nonce.pushes,
+        push: nonce.push.as_ref().map(profile_pb),
+        removal: nonce.removal.as_ref().map(profile_pb),
+    }
+}
+
+/// The nonce of `pb`; `None` when its request id is not a key hash or a command's UUID is
+/// malformed.
+fn nonce_of(pb: NoncePb) -> Option<NonceRecord> {
+    let command = |pb: Option<ProfilePb>| pb.map(profile_of).map_or(Some(None), |c| c.map(Some));
+    Some(NonceRecord {
+        serial: pb.serial,
+        request_id: KeyHash::from_bytes(&pb.request_id)?,
+        issued_unix: pb.issued_unix,
+        enrollment: pb.enrollment,
+        pushes: pb.pushes,
+        push: command(pb.push)?,
+        removal: command(pb.removal)?,
+    })
 }
 
 fn phase_number(phase: Phase) -> u32 {
@@ -204,6 +290,8 @@ fn encode(record: &DeviceRecord) -> Vec<u8> {
             .collect(),
         refused: record.refused.clone(),
         last_error: record.last_error.clone(),
+        config_profile: record.config_profile.as_ref().map(profile_pb),
+        nonce: record.nonce.as_ref().map(nonce_pb),
     }
     .encode_to_vec();
     FilePb {
@@ -253,6 +341,16 @@ fn decode(path: &Path, bytes: &[u8]) -> Result<DeviceRecord, StoreError> {
             queued: one.queued,
         });
     }
+    let config_profile = pb
+        .config_profile
+        .map(|pb| profile_of(pb).ok_or_else(|| corrupt("the config profile's UUID is malformed")))
+        .transpose()?;
+    let nonce = pb
+        .nonce
+        .map(|pb| {
+            nonce_of(pb).ok_or_else(|| corrupt("the nonce's request id or a UUID is malformed"))
+        })
+        .transpose()?;
     Ok(DeviceRecord {
         enrollment_id,
         udid: pb.udid,
@@ -271,6 +369,8 @@ fn decode(path: &Path, bytes: &[u8]) -> Result<DeviceRecord, StoreError> {
         sent,
         refused: pb.refused,
         last_error: pb.last_error,
+        config_profile,
+        nonce,
     })
 }
 

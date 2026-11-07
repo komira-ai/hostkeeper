@@ -62,6 +62,8 @@ pub(crate) fn flags_in(dir: &Scratch) -> MdmFlags {
         mdm_api_url: Some(unused_url()),
         mdm_api_key_file: Some(key),
         mdm_webhook_listen: Some("127.0.0.1:9100".parse().expect("an address")),
+        mdm_profile_identifier: None,
+        mdm_daemon_config: None,
     }
 }
 

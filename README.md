@@ -22,7 +22,8 @@ It is made of two programs:
   plan. Operators use it through the operator API, the generated `hostkeeper ctl`
   ([docs/ctl.md](docs/ctl.md)) and the web UI (`ui/`). A new host asks the coordinator to enroll
   it, and an operator approves the request. Macs are to be managed through a self-hosted MDM
-  server; of that part only the pure core and the host-step layer of its install kit are built
+  server; of that part the pure core and the host-step layer of its install kit, and the policy
+  gate linked into the coordinator (without the pkg install yet), are built
   ([macOS](docs/macos.md), [design](docs/design/hostkeeper-mdm.md)).
 
 Every API is a protobuf service, and the command line is generated from those definitions.
@@ -62,7 +63,7 @@ update coordinator, `hostkeeper-coordinator serve`. The parts are being moved he
 | [`hostkeeper-ci`](crates/hostkeeper-ci) | `hostkeeper ci set-desired`, the CI client a service's release job runs once it has verified the hostkeeper release ([docs/deploy/ci-client.md](docs/deploy/ci-client.md)) |
 | [`hostkeeper-coordinator`](crates/hostkeeper-coordinator) | the update coordinator: the services and roles of a rollout file, the desired version of each service, the heartbeat endpoint, the operator endpoint, and the convergence of a fleet |
 | [`hostkeeper-enrollment`](crates/hostkeeper-enrollment) | the coordinator's certificate authority (profile, certificates, key file, CA bundle) and its durable enrollment store |
-| [`hostkeeper-mdm-gate`](crates/hostkeeper-mdm-gate) | the MDM policy gate's device side, linked into the coordinator: NanoHUB's command queue and webhook on loopback, a durable record per Mac, and whether a Mac is enrolled and supervised |
+| [`hostkeeper-mdm-gate`](crates/hostkeeper-mdm-gate) | the MDM policy gate, linked into the coordinator: NanoHUB's command queue and webhook on loopback, a durable record per Mac, whether a Mac is enrolled and supervised, and the config profile and one-time nonce it installs on each allowlisted Mac ([design](docs/design/hostkeeper-mdm.md) sections 4 to 6) |
 | [`hostkeeper-oidc`](crates/hostkeeper-oidc) | the verifier of OIDC tokens (CI tokens) against an allow-list, with its issuer keys fetched over HTTPS |
 | [`hostkeeper-mdm-core`](crates/hostkeeper-mdm-core) | the pure core of the MDM kit: its settings, the enrollment and ADE profiles, the systemd units and Caddyfile of the MDM services, and the pinned upstream tools ([design](docs/design/hostkeeper-mdm.md) section 8) |
 | [`hostkeeper-tls`](crates/hostkeeper-tls) | TLS server configuration reloaded from certificate files, with its reload metrics |

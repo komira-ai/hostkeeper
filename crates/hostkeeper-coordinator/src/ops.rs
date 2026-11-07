@@ -278,7 +278,8 @@ pub struct AuditEntry {
     /// Its number: one more than the entry before it, for the life of the file.
     pub seq: u64,
     /// Who made it: the name of the operator's token (`operator` for `--operator-token-file`),
-    /// `coordinator` for the coordinator's own changes, `ci` for CI's.
+    /// `coordinator` for the coordinator's own changes, `ci` for CI's, `mdm-nonce` for a Mac's
+    /// approval by its nonce, `mdm-gate` for the MDM gate's.
     pub by: String,
     /// What it was (`exclude`, `exclude_abandon`, `include`, `set_labels`, `clear_halt`,
     /// `halt`, `mark_bad`, `unmark_bad`, `abort`, `hold`, `unhold`, `assign`, `unassign`,
@@ -289,7 +290,8 @@ pub struct AuditEntry {
     /// `rollout_resume` (an operator's); CI's: `lift_halt`, `force_ended`, and `unmark_bad` in a
     /// file an earlier build wrote; enrollment's: `enroll_approve`, `enroll_replace`,
     /// `enroll_approve_refused`, `mac_auto_approve_declined`, and the coordinator's
-    /// `enroll_requested`, `enroll_issued`, `cert_renewed` and `request_expired`).
+    /// `enroll_requested`, `enroll_issued`, `cert_renewed` and `request_expired`; the MDM gate's
+    /// `mdm_nonce_pushed`, by `mdm-gate`).
     pub action: String,
     /// The service it concerned, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]

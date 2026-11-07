@@ -197,11 +197,17 @@ for approval`. No line the daemon writes holds a byte of the nonce. To see what 
 as root: `plutil -p '/Library/Managed Preferences/dev.hostkeeper.enrollment.plist'` and `ls -l` on
 it.
 
-In this build no Mac gets a nonce: the coordinator's MDM gate (`--mdm-api-url`) knows which Macs
-are enrolled and supervised but issues no nonce yet, so no MDM pushes one. Every Mac waits for an
-operator, with `mac_nonce_presented` false, and is approved as a Linux request is.
+The coordinator's MDM gate (`--mdm-api-url`, with `--mdm-profile-identifier` and
+`--mdm-daemon-config`) installs that profile once the Mac's request is pending, bound to it, and
+audits each push `mdm_nonce_pushed` by `mdm-gate`. A Mac with two pending requests that claim its
+serial and its platform UUID gets no nonce at all: deny the one that is not its daemon's, and the
+gate pushes a nonce to the other at its next look.
 
-Once the gate pushes nonces, three things follow for an operator. A nonce approves
+A coordinator without those flags pushes no nonce: every Mac then waits for an operator, with
+`mac_nonce_presented` false, and is approved as a Linux request is. So does a Mac the gate does
+not see enrolled and supervised, or whose serial is not on `--mac-serial-allowlist`.
+
+With nonces, three things follow for an operator. A nonce approves
 only the request it was issued for: a second request presenting it (another key on the same Mac)
 stays pending and is audited `mac_auto_approve_declined` with `nonce_wrong_request`; deny it.
 A Mac approved by its nonce is assigned the services of its allowlist entry, audited `assign` by

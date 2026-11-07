@@ -1371,6 +1371,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "libc",
+ "plist",
  "prost",
  "prost-reflect",
  "prost-types",
@@ -1616,6 +1617,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
  "bytes",
+ "hostkeeper-config",
  "hostkeeper-enrollment",
  "hostkeeper-testkit",
  "hostkeeper-wire",
@@ -1629,6 +1631,7 @@ dependencies = [
  "sha2",
  "thiserror",
  "tokio",
+ "toml",
  "tracing",
 ]
 

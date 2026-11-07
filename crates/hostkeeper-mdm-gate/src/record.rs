@@ -10,6 +10,13 @@
 //! The record keeps the commands the gate sent and the device has not answered, so a result is
 //! matched to its command across a restart, and a command is never sent twice while one is
 //! unanswered: a Mac that is off piles nothing up in NanoHUB's queue.
+//!
+//! The enrollment side (design 4 and 5) adds two things: the config profile's `InstallProfile`
+//! of this enrollment ([`DeviceRecord::config_profile`]), forgotten with the enrollment, and the
+//! last nonce the gate issued for the device ([`DeviceRecord::nonce`]), kept across enrollments,
+//! since a nonce lives its hour whatever the device does, unless an approval consumes it.
+
+use hostkeeper_enrollment::names::KeyHash;
 
 use crate::answer::{DeviceInformation, SecurityInfo};
 use crate::command::{DEVICE_INFORMATION, SECURITY_INFO};
@@ -40,6 +47,71 @@ pub struct Sent {
     /// coordinator stopped while asking, or the confirmation could not be written) is dropped
     /// at the device's next event, and its query is due again.
     pub queued: bool,
+}
+
+/// How a device answered a profile command.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ProfileAnswer {
+    /// `Acknowledged`; otherwise `Error` or `CommandFormatError`.
+    pub acknowledged: bool,
+    /// When the answer came, in unix seconds.
+    pub at_unix: u64,
+}
+
+/// One profile command the gate sent (`InstallProfile` or `RemoveProfile`), and its answer.
+///
+/// While the device has not answered, the command is also on [`DeviceRecord::sent`]. A
+/// command with no answer that is not on that list was never queued (NanoHUB refused it, or
+/// the coordinator stopped while asking), and may be sent again.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProfileCommand {
+    /// The command's UUID.
+    pub uuid: CommandUuid,
+    /// When the gate asked NanoHUB to queue it, in unix seconds.
+    pub sent_unix: u64,
+    /// The device's answer; `None` before one.
+    pub answer: Option<ProfileAnswer>,
+}
+
+impl ProfileCommand {
+    /// The command `uuid`, sent at `now` and not answered.
+    #[must_use]
+    pub fn new(uuid: CommandUuid, now: u64) -> Self {
+        Self {
+            uuid,
+            sent_unix: now,
+            answer: None,
+        }
+    }
+
+    /// When the device acknowledged it; `None` when it did not.
+    #[must_use]
+    pub fn acknowledged_unix(&self) -> Option<u64> {
+        self.answer
+            .filter(|answer| answer.acknowledged)
+            .map(|answer| answer.at_unix)
+    }
+}
+
+/// The last nonce the gate issued for a device (design 5.1 and 5.4). The nonce's bytes are not
+/// here: only the coordinator's enrollment store knows the nonce, by its SHA-256, and the gate
+/// holds the bytes in memory, to push the profile again.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NonceRecord {
+    /// The serial it was issued for.
+    pub serial: String,
+    /// The pending request it is bound to: the request's key hash.
+    pub request_id: KeyHash,
+    /// When it was issued, in unix seconds; it is good for an hour from then.
+    pub issued_unix: u64,
+    /// The device's enrollment it was issued in ([`DeviceRecord::enrollment`]).
+    pub enrollment: u32,
+    /// How many times NanoHUB queued its profile.
+    pub pushes: u32,
+    /// The last `InstallProfile` of its profile.
+    pub push: Option<ProfileCommand>,
+    /// The `RemoveProfile` of its profile, once the request was approved.
+    pub removal: Option<ProfileCommand>,
 }
 
 /// The gate's record of one MDM enrollment id.
@@ -83,6 +155,10 @@ pub struct DeviceRecord {
     /// The last thing that went wrong with a command for it: NanoHUB refused it, or the device
     /// answered an error.
     pub last_error: Option<String>,
+    /// The `InstallProfile` of the farm's config profile in this enrollment.
+    pub config_profile: Option<ProfileCommand>,
+    /// The last nonce issued for the device, in this enrollment or an earlier one.
+    pub nonce: Option<NonceRecord>,
 }
 
 impl DeviceRecord {
@@ -107,6 +183,8 @@ impl DeviceRecord {
             sent: Vec::new(),
             refused: Vec::new(),
             last_error: None,
+            config_profile: None,
+            nonce: None,
         }
     }
 
@@ -127,6 +205,7 @@ impl DeviceRecord {
         self.security_info_unix = None;
         self.sent.clear();
         self.refused.clear();
+        self.config_profile = None;
     }
 
     fn heard(&mut self, udid: &str, now: u64) {
@@ -194,6 +273,12 @@ impl DeviceRecord {
         .collect()
     }
 
+    /// Whether the command `uuid` is sent and not answered.
+    #[must_use]
+    pub fn is_unanswered(&self, uuid: &CommandUuid) -> bool {
+        self.sent.iter().any(|sent| sent.uuid == *uuid)
+    }
+
     /// Drops the commands NanoHUB never confirmed it queued ([`Sent::queued`]).
     pub fn drop_unqueued(&mut self) {
         self.sent.retain(|sent| sent.queued);
@@ -237,6 +322,37 @@ impl DeviceRecord {
         self.serial = info.serial;
         self.supervised = Some(info.supervised);
         self.device_information_unix = Some(now);
+    }
+
+    /// The answer of the profile command `uuid` (already taken off [`DeviceRecord::sent`]):
+    /// `acknowledged`, or an error, at `now`. An error is kept as the last error. A UUID that is
+    /// no profile command of the record changes nothing.
+    pub fn answer_profile(&mut self, uuid: &str, acknowledged: bool, now: u64) {
+        let answer = Some(ProfileAnswer {
+            acknowledged,
+            at_unix: now,
+        });
+        let nonce = self.nonce.as_mut();
+        let (push, removal) = nonce.map_or((None, None), |nonce| {
+            (nonce.push.as_mut(), nonce.removal.as_mut())
+        });
+        let which = [
+            ("the config profile", self.config_profile.as_mut()),
+            ("the nonce profile", push),
+            ("the nonce profile's removal", removal),
+        ]
+        .into_iter()
+        .find_map(|(name, command)| {
+            command
+                .filter(|command| command.uuid.as_str() == uuid)
+                .map(|command| (name, command))
+        });
+        if let Some((name, command)) = which {
+            command.answer = answer;
+            if !acknowledged {
+                self.last_error = Some(format!("{name}: the device answered an error"));
+            }
+        }
     }
 
     /// The `SecurityInfo` answer `info`, given at `now`.

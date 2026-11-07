@@ -769,8 +769,9 @@ The coordinator has the deny and retire states, but nothing outside its tests wr
 one-use MDM nonce (valid
 <span data-cell="c-mac-nonce" data-source="crates/hostkeeper-enrollment/src/enroll/mac_nonce.rs" data-item="MAC_NONCE_VALID_SECS">3600 s</span>)
 is built in the coordinator&rsquo;s library. With <code>--mdm-api-url</code> the coordinator&rsquo;s device check is the
-MDM gate&rsquo;s record of each device (<code>crates/hostkeeper-mdm-gate</code>), but the gate issues no nonce yet and
-the daemon never sends one, so a Mac is approved by an operator like any host.</p>
+MDM gate&rsquo;s record of each device (<code>crates/hostkeeper-mdm-gate</code>), and with its enrollment side the gate
+installs the config profile and pushes a nonce bound to the Mac&rsquo;s pending request, which the daemon posts back
+with that request; the gate does not install the pkg yet.</p>
 <p><strong>The daemon&rsquo;s certificate request.</strong> The daemon builds every certificate request, for <code>Enroll</code>
 and for <code>Renew</code>, with the one subject <code>CN=host:pending</code>
 (<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-enroll/src/key.rs">crates/hostkeeper-enroll/src/key.rs</a>, <code>csr_der</code>):

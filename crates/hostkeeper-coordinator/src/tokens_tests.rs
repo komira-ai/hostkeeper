@@ -100,11 +100,12 @@ fn a_token_name_is_1_to_32_bytes_of_a_z_0_9_and_hyphen() {
     assert_eq!(TokenNameError::Grammar.to_string(), GRAMMAR);
 }
 
-/// Proves: `coordinator`, `ci` and `mdm-nonce` are not token names, since the audit uses them
-/// for changes that are not an operator's; a name that only starts with one is fine.
+/// Proves: `coordinator`, `ci`, `mdm-nonce` and `mdm-gate` are not token names, since the audit
+/// uses them for changes that are not an operator's; a name that only starts with one is fine.
 ///
-/// Catches: an operator token named `ci` whose changes read as CI's in the audit, or one named
-/// `mdm-nonce` whose approvals read as a Mac's automatic one.
+/// Catches: an operator token named `ci` whose changes read as CI's in the audit, one named
+/// `mdm-nonce` whose approvals read as a Mac's automatic one, or one named `mdm-gate` whose
+/// entries read as the MDM gate's nonce pushes.
 #[test]
 fn no_token_may_take_a_name_the_audit_uses_for_other_actors() {
     assert_eq!(
@@ -119,7 +120,11 @@ fn no_token_may_take_a_name_the_audit_uses_for_other_actors() {
         "ci".parse::<TokenName>(),
         Err(TokenNameError::Reserved("ci"))
     );
-    for fine in ["ci-ops", "coordinator-2"] {
+    assert_eq!(
+        "mdm-gate".parse::<TokenName>(),
+        Err(TokenNameError::Reserved("mdm-gate"))
+    );
+    for fine in ["ci-ops", "coordinator-2", "mdm-gate-2"] {
         assert_eq!(fine.parse::<TokenName>().expect("a name").as_str(), fine);
     }
     assert_eq!(

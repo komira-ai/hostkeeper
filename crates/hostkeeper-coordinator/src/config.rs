@@ -694,13 +694,12 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
                 device_state: Mdm::device_state(mdm.as_ref()),
                 allowlist,
             });
+            let enrollment = Mdm::wire(mdm.as_ref(), enrollment);
             let client = ClientAuth {
                 optional: true,
                 extra_roots: vec![enrollment.ca_bundle().certificate_der().to_vec()],
             };
-            coordinator = coordinator
-                .with_enrollment(Arc::new(enrollment))
-                .with_mdm(mdm);
+            coordinator = coordinator.with_enrollment(enrollment).with_mdm(mdm);
             let served = TlsFiles {
                 cert: server_cert.clone(),
                 key: server_cert.clone(),
@@ -853,10 +852,7 @@ where
         Some(mdm) => {
             let (addr, accept) = bind(mdm.webhook_listen).await?;
             tracing::info!(%addr, "serving the MDM webhook");
-            Either::Left(hostkeeper_mdm_gate::webhook::serve(
-                accept,
-                Arc::clone(&mdm.gate),
-            ))
+            Either::Left(Mdm::serve(Arc::clone(&mdm.gate), accept))
         }
         None => Either::Right(std::future::pending()),
     };

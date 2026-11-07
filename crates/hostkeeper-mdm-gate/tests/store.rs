@@ -8,9 +8,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use hostkeeper_enrollment::fs::{FaultFs, Fs, RealFs};
+use hostkeeper_enrollment::names::KeyHash;
 use hostkeeper_mdm_gate::{
-    CommandUuid, DeviceRecord, DeviceStore, FileDeviceStore, Gate, Handled, Phase, SCHEMA, Sent,
-    StoreError, WebhookError,
+    CommandUuid, DeviceRecord, DeviceStore, FileDeviceStore, Gate, Handled, NonceRecord, Phase,
+    ProfileAnswer, ProfileCommand, SCHEMA, Sent, StoreError, WebhookError,
 };
 use prost::Message as _;
 use sha2::{Digest as _, Sha256};
@@ -406,10 +407,156 @@ fn full(id_text: &str) -> DeviceRecord {
     ];
     record.refused = vec!["DeviceInformation".to_owned(), "SecurityInfo".to_owned()];
     record.last_error = Some("DeviceInformation: the device answered Error".to_owned());
+    record.config_profile = Some(ProfileCommand {
+        uuid: CommandUuid::from_random([3; 16]),
+        sent_unix: 18,
+        answer: Some(ProfileAnswer {
+            acknowledged: true,
+            at_unix: 19,
+        }),
+    });
+    record.nonce = Some(NonceRecord {
+        serial: "C02SERIAL".to_owned(),
+        request_id: KeyHash::from_bytes(&[9; 32]).expect("32 bytes"),
+        issued_unix: 20,
+        enrollment: 6,
+        pushes: 2,
+        push: Some(ProfileCommand {
+            uuid: CommandUuid::from_random([4; 16]),
+            sent_unix: 21,
+            answer: Some(ProfileAnswer {
+                acknowledged: false,
+                at_unix: 22,
+            }),
+        }),
+        removal: Some(ProfileCommand::new(CommandUuid::from_random([5; 16]), 23)),
+    });
     record
 }
 
-/// Catches: a field lost in the file (any of the seventeen), an unset optional read back as set
+/// The enrollment side's fields (18 and 19) of a record, in the shapes `store.rs` writes, to
+/// append to a record of [`RecordPb`]: protobuf merges a message's fields across its bytes.
+#[derive(Clone, PartialEq, prost::Message)]
+struct ProfilePb {
+    #[prost(string, tag = "1")]
+    uuid: String,
+    #[prost(uint64, tag = "2")]
+    sent_unix: u64,
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
+struct NoncePb {
+    #[prost(string, tag = "1")]
+    serial: String,
+    #[prost(bytes = "vec", tag = "2")]
+    request_id: Vec<u8>,
+    #[prost(message, optional, tag = "6")]
+    push: Option<ProfilePb>,
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
+struct EnrollFieldsPb {
+    #[prost(message, optional, tag = "18")]
+    config_profile: Option<ProfilePb>,
+    #[prost(message, optional, tag = "19")]
+    nonce: Option<NoncePb>,
+}
+
+/// Catches: the enrollment side's fields made a change a release before them cannot read (a
+/// reader of fields 1 to 17 reads a record that has them, and every field it knows is the
+/// same), or a record without them (written before them) not read as one with no profile sent
+/// and no nonce; a malformed UUID or request id in them read as a device, not refused.
+#[test]
+fn the_enrollment_fields_are_read_by_the_release_before_them_and_the_other_way() {
+    let scratch = scratch("store-enroll-fields");
+    let dir = scratch.path().join("devices");
+    let record = full(UDID);
+    store_in(&dir).save(&record).expect("saved");
+    let bytes = std::fs::read(dir.join(format!("{UDID}.pb"))).expect("the file");
+    let file = FilePb::decode(bytes.as_slice()).expect("a file");
+    let before = RecordPb::decode(file.record.as_slice()).expect("the release before reads it");
+    assert_eq!(before.enrollment_id, UDID);
+    assert_eq!(before.serial.as_deref(), Some("C02SERIAL"));
+    assert_eq!((before.phase, before.enrollment), (3, 7));
+    assert_eq!(before.sent.len(), 2);
+    assert_eq!(before.last_error, record.last_error);
+
+    let name = format!("{UDID}.pb");
+    let (_, loaded) = load_file(
+        "store-before-fields",
+        &name,
+        &file_of(&good(UDID).encode_to_vec()),
+    );
+    let loaded = loaded.expect("read");
+    assert_eq!(
+        (&loaded[0].config_profile, &loaded[0].nonce),
+        (&None, &None)
+    );
+
+    let with = |extra: &EnrollFieldsPb| {
+        let mut bytes = good(UDID).encode_to_vec();
+        bytes.extend(extra.encode_to_vec());
+        file_of(&bytes)
+    };
+    let profile = |uuid: &str| ProfilePb {
+        uuid: uuid.to_owned(),
+        sent_unix: 1,
+    };
+    let cases = [
+        (
+            EnrollFieldsPb {
+                config_profile: Some(profile("not-a-uuid")),
+                nonce: None,
+            },
+            "the config profile's UUID is malformed",
+        ),
+        (
+            EnrollFieldsPb {
+                config_profile: None,
+                nonce: Some(NoncePb {
+                    serial: "C02SERIAL".to_owned(),
+                    request_id: vec![9; 31],
+                    push: None,
+                }),
+            },
+            "the nonce's request id or a UUID is malformed",
+        ),
+        (
+            EnrollFieldsPb {
+                config_profile: None,
+                nonce: Some(NoncePb {
+                    serial: "C02SERIAL".to_owned(),
+                    request_id: vec![9; 32],
+                    push: Some(profile("not-a-uuid")),
+                }),
+            },
+            "the nonce's request id or a UUID is malformed",
+        ),
+    ];
+    for (extra, reason) in cases {
+        let (path, loaded) = load_file("store-enroll-corrupt", &name, &with(&extra));
+        assert_eq!(
+            loaded.expect_err("refused").to_string(),
+            corrupt(&path, reason)
+        );
+    }
+    let fine = EnrollFieldsPb {
+        config_profile: Some(profile(GOOD_UUID)),
+        nonce: Some(NoncePb {
+            serial: "C02SERIAL".to_owned(),
+            request_id: vec![9; 32],
+            push: None,
+        }),
+    };
+    let (_, loaded) = load_file("store-enroll-fine", &name, &with(&fine));
+    let loaded = loaded.expect("read").remove(0);
+    let nonce = loaded.nonce.expect("a nonce");
+    assert_eq!((nonce.push, nonce.removal, nonce.pushes), (None, None, 0));
+    let config = loaded.config_profile.expect("a config profile");
+    assert_eq!((config.uuid.as_str(), config.answer), (GOOD_UUID, None));
+}
+
+/// Catches: a field lost in the file (any of the nineteen, and those of the profile commands), an unset optional read back as set
 /// or the other way round, a phase changed; a rewrite that leaves two files or a mode wider
 /// than 0600.
 #[test]

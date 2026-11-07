@@ -26,11 +26,19 @@ pub const DEVICE_INFORMATION: &str = "DeviceInformation";
 /// enrollment is user-approved.
 pub const SECURITY_INFO: &str = "SecurityInfo";
 
+/// `InstallProfile`, which installs the config profile and the nonce profile.
+pub const INSTALL_PROFILE: &str = "InstallProfile";
+
+/// `RemoveProfile`, which removes the nonce profile once its request is approved.
+pub const REMOVE_PROFILE: &str = "RemoveProfile";
+
 /// The queries of `DeviceInformation`: the serial, the UDID and the supervision.
 pub const QUERIES: [&str; 3] = ["SerialNumber", "UDID", "IsSupervised"];
 
 /// One MDM command: its request type, its UUID and the other keys of its `Command` dictionary.
-#[derive(Clone, Debug, PartialEq)]
+/// Its `Debug` shows the type and the UUID only: an `InstallProfile` of the nonce profile
+/// carries the nonce.
+#[derive(Clone, PartialEq)]
 pub struct Command {
     request_type: String,
     uuid: CommandUuid,
@@ -64,6 +72,22 @@ impl Command {
         Self::new(SECURITY_INFO, uuid, Dictionary::new())
     }
 
+    /// `InstallProfile` of the profile whose property list is `profile`.
+    #[must_use]
+    pub fn install_profile(uuid: CommandUuid, profile: Vec<u8>) -> Self {
+        let mut fields = Dictionary::new();
+        fields.insert("Payload".to_owned(), Value::Data(profile));
+        Self::new(INSTALL_PROFILE, uuid, fields)
+    }
+
+    /// `RemoveProfile` of the profile identified `identifier`.
+    #[must_use]
+    pub fn remove_profile(uuid: CommandUuid, identifier: &str) -> Self {
+        let mut fields = Dictionary::new();
+        fields.insert("Identifier".to_owned(), Value::from(identifier));
+        Self::new(REMOVE_PROFILE, uuid, fields)
+    }
+
     /// The request type.
     #[must_use]
     pub fn request_type(&self) -> &str {
@@ -95,9 +119,18 @@ impl Command {
         root.insert("Command".to_owned(), Value::Dictionary(command));
         root.insert("CommandUUID".to_owned(), Value::from(self.uuid.as_str()));
         let mut bytes = Vec::new();
-        // Writing a dictionary of strings and arrays into a Vec cannot fail: the writer only
+        // Writing a dictionary of strings, data and arrays into a Vec cannot fail: the writer only
         // fails on the sink's errors, and a date or a non-string key, neither of which is here.
         let _ = Value::Dictionary(root).to_writer_xml(&mut bytes);
         bytes
+    }
+}
+
+impl std::fmt::Debug for Command {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Command")
+            .field("request_type", &self.request_type)
+            .field("uuid", &self.uuid)
+            .finish_non_exhaustive()
     }
 }
