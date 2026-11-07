@@ -4,6 +4,7 @@
 
 use std::net::{SocketAddr, UdpSocket};
 
+use hostkeeper_proto::hostkeeper::agent::v1::Platform;
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_pxe_seed::inputs::LinuxPlatform;
 use hostkeeper_pxe_seed::menu::LOCAL_DISK_MENU;
@@ -270,6 +271,115 @@ fn a_shared_mac_or_a_platform_with_no_boot_set_is_not_answered() {
     let (result, _) = run.stop();
     assert_eq!(result, Ok(()));
     assert!(!waiting(&firmware));
+}
+
+/// Sets the platform the fake coordinator states for the record of `host`.
+fn state_platform(kit: &Kit, host: &str, platform: Platform) {
+    kit.fake().set(|s| {
+        for record in s.records.iter_mut().filter(|r| r.host_id == host) {
+            record.platform = platform as i32;
+        }
+    });
+}
+
+/// In proxy mode, a record whose platform (from the coordinator) disagrees with the
+/// architecture the DISCOVER states gets no proxy offer, and the log names the record's host id
+/// and both platforms; the record stating the platform of the firmware is offered its shim; a
+/// record with no platform takes the firmware's.
+///
+/// Proves: the exact refusal line, and that the offer follows the record's platform agreement.
+/// Catches a machine recorded as arm64 installed as x86-64 because the firmware said so.
+#[test]
+fn proxy_mode_refuses_a_record_whose_platform_disagrees_with_the_firmware() {
+    let kit = Kit::new("reads-disagree");
+    state_platform(&kit, "new-1", Platform::LinuxArm64);
+    let (mut run, firmware) = start(&kit, "proxy", &[]);
+    assert_eq!(
+        discover(&mut run, &firmware, RECORDED, 7),
+        unanswered(
+            RECORDED,
+            &format!(
+                "host new-1: the record of {RECORDED} is linux-arm64, and its firmware states \
+                 linux-x86_64"
+            )
+        )
+    );
+    assert_eq!(
+        discover(&mut run, &firmware, RECORDED, 11),
+        format!(
+            "{NOW} dhcp: DHCPDISCOVER from {RECORDED}, architecture 11, PXEClient, on the DHCP \
+             port: proxy offer sent, boot file hostkeeper/shimaa64.efi (linux-arm64)"
+        )
+    );
+    state_platform(&kit, "new-1", Platform::Unspecified);
+    assert_eq!(
+        discover(&mut run, &firmware, RECORDED, 7),
+        offered(RECORDED)
+    );
+    let (result, _) = run.stop();
+    assert_eq!(result, Ok(()));
+}
+
+/// A record stating a platform this server does not install (Darwin, or a number a newer
+/// coordinator sends) gets no offer in proxy mode and the local-disk menu in router mode, each
+/// logged with the record's host id and the value, while the other record of the same read is
+/// still answered.
+///
+/// Proves: one odd record does not empty the answer set, and is never installed.
+/// Catches a read that fails on an unknown platform number, and a Darwin record installed.
+#[test]
+fn a_record_stating_a_platform_not_installed_is_left_out_while_the_rest_are_answered() {
+    let kit = Kit::new("reads-odd");
+    kit.fake().set(|s| {
+        s.records[0].platform = Platform::DarwinArm64 as i32;
+        s.records[1].platform = 99;
+        s.records[1].enrolled = false;
+        s.records[1].host_held = proto::HostHeld::None.into();
+        s.records
+            .push(fake::record("ok-1", &["52:54:00:00:00:03"], false));
+    });
+    let (mut run, firmware) = start(&kit, "proxy", &[]);
+    assert_eq!(
+        discover(&mut run, &firmware, RECORDED, 7),
+        unanswered(
+            RECORDED,
+            "not in the answer set: the record of host new-1 states the platform \
+             PLATFORM_DARWIN_ARM64, which is not installed"
+        )
+    );
+    assert_eq!(
+        discover(&mut run, &firmware, ENROLLED, 7),
+        unanswered(
+            ENROLLED,
+            "not in the answer set: the record of host old-1 states the platform the number 99, \
+             which is not installed"
+        )
+    );
+    assert_eq!(
+        discover(&mut run, &firmware, "52:54:00:00:00:03", 7),
+        offered("52:54:00:00:00:03")
+    );
+    let (result, _) = run.stop();
+    assert_eq!(result, Ok(()));
+
+    let (mut run, _firmware) = start(&kit, "router", &[]);
+    let menu = tftp_read(
+        run.tftp,
+        &format!("/grub/hostkeeper/x86_64/{RECORDED}"),
+        &[],
+    )
+    .expect("the menu");
+    assert_eq!(menu, LOCAL_DISK_MENU.as_bytes());
+    assert_eq!(
+        run.wait("menu grub/"),
+        format!(
+            "{NOW} menu grub/hostkeeper/x86_64/{RECORDED}: local disk: {RECORDED}: not in the \
+             answer set: the record of host new-1 states the platform PLATFORM_DARWIN_ARM64, \
+             which is not installed"
+        )
+    );
+    let (result, _) = run.stop();
+    assert_eq!(result, Ok(()));
 }
 
 /// A record whose window is `CLOSED`, `USED` or `UNSPECIFIED` leaves its MAC out, naming the

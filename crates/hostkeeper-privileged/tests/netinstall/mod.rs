@@ -78,8 +78,8 @@ pub struct Rig {
 impl Rig {
     /// The world of the test `test`, on the LAN `<net>.0/24`, for `machine` recorded as
     /// `host_id`: the coordinator, the channel serving the fixture service, the boot set of the
-    /// machine's platform sealed, and the inventory record of the machine (its data MAC and
-    /// serial). Nothing serves network boot yet, and the guest is off.
+    /// machine's platform sealed, and the inventory record of the machine (its data MAC, serial
+    /// and platform). Nothing serves network boot yet, and the guest is off.
     pub fn new(
         test: &str,
         tag: &str,
@@ -168,6 +168,8 @@ impl Rig {
             machine.mac,
             "--serial",
             machine.serial,
+            "--platform",
+            machine.arch.ctl_platform(),
             "--notes",
             "the network-install test's guest",
         ]);
@@ -271,7 +273,8 @@ impl Rig {
     }
 
     /// Waits for the network boot of the guest after `from` to end in its install: in proxy
-    /// mode the proxy offer, in either mode the install menu of its MAC and its seed fetched.
+    /// mode the proxy offer; in router mode its REQUEST learned and `hostkeeper/boot.efi` served
+    /// as the platform's shim; in either mode the install menu of its MAC and its seed fetched.
     /// Gives the mark after the seed's fetch.
     pub fn wait_install(&mut self, from: Mark, mode: Mode) -> Mark {
         let mac = self.mac();
@@ -280,10 +283,7 @@ impl Rig {
         let host = self.host_id;
         let from = match mode {
             Mode::Proxy => {
-                let shim = match self.guest.machine().arch {
-                    guest::Arch::X86_64 => "hostkeeper/shimx64.efi",
-                    guest::Arch::Arm64 => "hostkeeper/shimaa64.efi",
-                };
+                let shim = self.guest.machine().arch.shim();
                 self.pxe_says(
                     from,
                     "the proxy offer to the guest's DISCOVER",
@@ -294,7 +294,25 @@ impl Rig {
                 )
                 .0
             }
-            Mode::Router => from,
+            Mode::Router => {
+                let (at, _) = self.pxe_says(
+                    from,
+                    "the guest's REQUEST, learned",
+                    &[
+                        &format!("dhcp: DHCPREQUEST from {mac}, "),
+                        &format!("it takes {}", self.guest_address()),
+                    ],
+                );
+                let shim = self.guest.machine().arch.shim();
+                self.pxe_says(
+                    at,
+                    "hostkeeper/boot.efi served as the platform's shim",
+                    &[&format!(
+                        "hostkeeper/boot.efi is {shim} for {mac} ({platform})"
+                    )],
+                )
+                .0
+            }
         };
         let (from, _) = self.pxe_says(
             from,

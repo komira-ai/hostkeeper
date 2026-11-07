@@ -182,8 +182,8 @@ is answered as rejected and audited once.
 `/hostkeeper.operator.v1.Enrollment/AddRecord`
 
 Record a server the operator built, before it first boots: its host id, optional role, data
-MACs, BMC MAC, serial and notes. A record for the host id, or a MAC or serial another record
-holds, is refused; remove the record first.
+MACs, BMC MAC, serial, notes and optional platform. A record for the host id, or a MAC or
+serial another record holds, is refused; remove the record first.
 
 A record that names a role is the approval of the host's enrollment: its window opens now
 and stays open until `approve_until_unix`, for `approve_for_secs`, or for the coordinator's
@@ -207,6 +207,7 @@ other request waits for `Approve` as before. A record with no role has no window
 | `--notes` | STRING | Empty for none. |
 | `--approve-until-unix` | UINT64 | The end of the record's window, unix seconds: after now, and within the coordinator's `--record-approve-max` of it. 0 for none given. |
 | `--approve-for-secs` | UINT64 | The length of the record's window from now, in seconds: at most the coordinator's `--record-approve-max`. 0 for none given. With neither, the window is the coordinator's `--record-approve-for`; with both, the call is refused `invalid_window`. A record that names no role takes neither, and has no window. |
+| `--platform` | VALUE | The platform to install the server as by network boot: `PLATFORM_LINUX_X86_64` or `PLATFORM_LINUX_ARM64` (`linux_x86_64` or `linux_arm64` as a flag of `hostkeeper ctl`); `PLATFORM_UNSPECIFIED` (the flag left out) for none. Any other value is refused `invalid_request`. |
 
 #### `hostkeeper ctl enrollment list-records`
 

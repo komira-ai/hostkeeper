@@ -32,6 +32,12 @@ hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-
     --bmc-mac 00:00:5e:00:53:a1 --serial SN-0042 --notes "rack 4, unit 17"
 ```
 
+`--platform linux_x86_64` or `--platform linux_arm64` names the platform the server is installed as
+by network boot ([network-install.md](network-install.md)); `hostkeeper-pxe` in router mode needs it, and
+in proxy mode refuses a record whose platform disagrees with the firmware's architecture. It is
+optional and for a Linux server only: `darwin_arm64` is refused `invalid_request`, and a Mac's record
+has none. `list-records` and the Inventory page show it.
+
 The answer is the record as kept, with `added_by` (the token's name). A second record of the same
 host id is refused `record_exists`; a record with a MAC or a serial that another record holds is
 refused `record_conflict`. To change a record, remove it and add it again. Removing a record does
@@ -582,7 +588,7 @@ FAILED_PRECONDITION, 3 on UNAUTHENTICATED and PERMISSION_DENIED, and 1 on the ot
 | `invalid_host_id` | INVALID_ARGUMENT | the host id breaks its rule (1 to 63 of `a-z0-9-`, not starting or ending with `-`), none is named for a request that matches no record or several or for a renewal, or a renewal is approved under another host id | name a valid host id; for a renewal, `renewal_of` |
 | `invalid_role` | INVALID_ARGUMENT | the role is missing or breaks its rule | pass `--role`: 1 to 32 of `a-z0-9-`, starting with a letter, not ending with `-`, with no `--` |
 | `invalid_service` | INVALID_ARGUMENT | a service name breaks its rule or names no service the rollout file defines | name only services of the rollout file |
-| `invalid_request` | INVALID_ARGUMENT | another field breaks its rule: a request id or key hash that is not 64 hex digits, a missing or bad reason, a page token, or a record's MAC, serial or notes | correct the field; `--reason` is 1 to 256 bytes |
+| `invalid_request` | INVALID_ARGUMENT | another field breaks its rule: a request id or key hash that is not 64 hex digits, a missing or bad reason, a page token, or a record's MAC, serial, notes or platform | correct the field; `--reason` is 1 to 256 bytes |
 | `not_pending` | FAILED_PRECONDITION | the request was already approved, issued or denied, or it expired; a `reject` of a request approved or issued | list again; an expired request is approved only after its host posts again (retire an enrolled host with `hosts retire`) |
 | `denied` | FAILED_PRECONDITION | the host id was retired (`hosts retire`) | `--replace true`, or another host id |
 | `store_failed` | INTERNAL | the change could not be written; nothing changed | read the coordinator's log and ask again |

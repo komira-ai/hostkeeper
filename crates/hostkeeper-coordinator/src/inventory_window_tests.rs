@@ -558,6 +558,7 @@ fn the_ops_file_reads_a_record_without_the_new_keys_and_writes_them_only_when_se
                     notes: String::new(),
                     by: "operator".to_owned(),
                     at_unix: NOW,
+                    platform: None,
                     approve_until_unix: NOW + 60,
                     used: Some(RecordUse {
                         request_id: "c".repeat(64),
@@ -605,6 +606,7 @@ fn marking_a_record_used_leaves_a_used_or_missing_record_alone() {
         notes: String::new(),
         by: "operator".to_owned(),
         at_unix: NOW,
+        platform: None,
         approve_until_unix: NOW + 60,
         used: None,
     };
@@ -642,6 +644,7 @@ fn a_record_matches_exactly_only_what_the_coordinator_approves_by() {
         notes: String::new(),
         by: "operator".to_owned(),
         at_unix: NOW,
+        platform: None,
         approve_until_unix: NOW + 60,
         used: None,
     };

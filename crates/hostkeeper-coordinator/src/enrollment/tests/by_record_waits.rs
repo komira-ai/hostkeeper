@@ -30,6 +30,7 @@ fn open_record(host: &str, data: &str) -> InventoryRecord {
         notes: String::new(),
         by: "operator".to_owned(),
         at_unix: NOW,
+        platform: None,
         approve_until_unix: NOW + 3600,
         used: None,
     }
