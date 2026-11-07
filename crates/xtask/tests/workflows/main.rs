@@ -18,6 +18,7 @@ mod pr_device_tests;
 mod privileged_tests;
 mod release;
 mod release_tests;
+mod services_tests;
 mod set_desired;
 mod set_desired_tests;
 #[path = "../../src/testdir.rs"]
@@ -357,7 +358,7 @@ fn a_privileged_job_on_pull_request_is_refused() {
     for (run, want) in cases {
         assert_problems(&with(step, run), &[want]);
     }
-    let container = "    container:\n      image: rust:1\n      options: --cap-add NET_ADMIN\n    runs-on: ubuntu-latest\n";
+    let container = "    container:\n      image: rust@sha256:f9a7b9ebf6f56201f949db745e47bc423c0f0f8294bafe991cc10bf74b029657\n      options: --cap-add NET_ADMIN\n    runs-on: ubuntu-latest\n";
     assert_problems(
         &with("    runs-on: ubuntu-latest\n", container),
         &["job test: privileged on pull_request (`--cap-add NET_ADMIN`)"],

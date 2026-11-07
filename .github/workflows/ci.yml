@@ -6,7 +6,8 @@
 # privileged or macOS job in one but the jobs of pr-device.yml it lists, and to no job as root
 # (`sudo`, a privileged container) outside privileged.yml, which runs the tests of
 # crates/hostkeeper-privileged as root after a merge to main and by hand, and those copies of its
-# jobs in pr-device.yml, which run them on every pull request.
+# jobs in pr-device.yml, which run them on every pull request. A service or job container image
+# must be pinned by digest (`name:tag@sha256:<64 hex>`).
 #
 # `lint` is the format, cargo-deny (licences, bans and sources), clippy, the build of the hook
 # SDK without its test feature, actionlint and the workflow lint. `test` runs every test under
@@ -144,6 +145,18 @@ jobs:
       LLVM_COV_SHA256: b3f68e625481fed9b16444174f3fa5ebcdbde4a1878803a35eabe2dcefcdc41a
       NEXTEST_VERSION: 0.9.146
       NEXTEST_SHA256: 682c21b777c333e96fd532e114d3a5a894e0729ab88d94c0a9f20f8419695428
+      HOSTKEEPER_TEST_POSTGRES_URL: postgres://postgres@127.0.0.1:5432/postgres
+    # The coordinator's Postgres store tests need a server. It is a throwaway container that lives
+    # for this one job, so it trusts every connection and holds no password. The tests read its
+    # URL from the one variable above, and each makes its own database in it.
+    services:
+      postgres:
+        image: postgres:16@sha256:f9a7b9ebf6f56201f949db745e47bc423c0f0f8294bafe991cc10bf74b029657
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: --health-cmd pg_isready --health-interval 2s --health-timeout 5s --health-retries 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

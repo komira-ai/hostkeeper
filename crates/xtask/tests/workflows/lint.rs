@@ -33,6 +33,9 @@
 //!   `secrets` or `github.token` as a word (or the token as `github['token']`, or the whole
 //!   context through `toJSON(github)`), in any case and spacing. The token's rights are those of the
 //!   job's `permissions`; naming it hands them to a step of pull-request code;
+//! - a job's service (`services.<name>.image`) or job container (`container`, a string or its
+//!   `image`) is not an image pinned by digest, `<name>[:<tag>]@sha256:<64 lowercase hex>`, or
+//!   a service has no image;
 //! - it is [`pr_device::FILE`] and breaks a rule of its own ([`pr_device::problems`]);
 //! - it is not [`PRIVILEGED_WORKFLOW`], it does not run for a pull request, and a job of it, or
 //!   what sits beside `jobs`, names root as above (`sudo` as a word, `--privileged`,
@@ -334,6 +337,7 @@ pub fn lint(file: &str, text: &str) -> Vec<String> {
     for (name, job) in jobs {
         let name = name.as_str().unwrap_or_default();
         problems.extend(permission_problems(file, name, job));
+        problems.extend(image_problems(name, job));
         // A job of `callers::CALLERS` that calls the CI client runs on that workflow's runner,
         // which its own rules hold; every other job that calls a reusable workflow is refused.
         let calls_client = callers::caller(file, name).is_some()
@@ -381,6 +385,45 @@ fn inherited_secrets(node: &Node) -> Vec<String> {
             })
             .collect(),
     }
+}
+
+/// True for `<name>[:<tag>]@sha256:<64 lowercase hex>`.
+fn pinned_by_digest(image: &str) -> bool {
+    let Some((name, digest)) = image.split_once('@') else {
+        return false;
+    };
+    let hex = digest.strip_prefix("sha256:").unwrap_or_default();
+    !name.is_empty()
+        && hex.len() == 64
+        && hex.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// The services and the container of `job` whose image is missing or not pinned by digest.
+fn image_problems(name: &str, job: &Node) -> Vec<String> {
+    let mut problems = Vec::new();
+    let mut check = |who: String, image: Option<&str>| match image {
+        None => problems.push(format!("job {name}: {who} has no image")),
+        Some(image) if !pinned_by_digest(image) => problems.push(format!(
+            "job {name}: {who}: image {image} is not pinned by digest (name@sha256:<64 hex>)"
+        )),
+        Some(_) => {}
+    };
+    if let Some(services) = entry(job, "services") {
+        for (service, config) in entries(services) {
+            let service = service.as_str().unwrap_or_default();
+            check(
+                format!("service {service}"),
+                entry(config, "image").and_then(Node::as_str),
+            );
+        }
+    }
+    if let Some(container) = entry(job, "container") {
+        let image = container
+            .as_str()
+            .or_else(|| entry(container, "image").and_then(Node::as_str));
+        check("container".to_owned(), image);
+    }
+    problems
 }
 
 fn permission_problems(file: &str, name: &str, job: &Node) -> Vec<String> {
