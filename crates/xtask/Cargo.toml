@@ -63,6 +63,14 @@ name = "xtask-gh-fixture"
 path = "tests/bin/gh_fixture.rs"
 required-features = ["test-support"]
 
+# The `docker` the database backup test (tests/coordinator_deploy.rs) runs the committed backup
+# unit's command with: it prints its arguments as the dump, or fails, as files beside it say. A
+# program of the tests, not shipped.
+[[bin]]
+name = "xtask-dump-fixture"
+path = "tests/bin/dump_fixture.rs"
+required-features = ["test-support"]
+
 [features]
 # Builds the launch test's fixture program and `xtask::test_support`. Off for everything else.
 test-support = []
