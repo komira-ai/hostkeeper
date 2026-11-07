@@ -1386,9 +1386,6 @@ lint holds each crate&rsquo;s dependencies. This report&rsquo;s own check is als
 and <code>abort</code>, and announces <code>install-v1</code> and <code>abort-v1</code>, so the coordinator&rsquo;s install, uninstall
 and <code>Hosts.Abort</code> are sent to it over the heartbeat link, once the host has its certificate (<a href="#identity">identity and enrollment</a>). The loop
 runs no <code>force_rollback</code> or <code>clear_halt</code>, and the coordinator never orders them.</li>
-<li><strong>Additive steps:</strong> a manifest&rsquo;s <code>boot</code> step, the hook&rsquo;s <code>uninstall</code> step and the self-update
-probe cannot start on either real launcher, so uninstall and self-update do not complete on a
-host.</li>
 <li><strong>Rollout shape:</strong> a service&rsquo;s update plan comes from the rollout file, which is read only at start. Automatic
 rollback cannot move a host back below the version it runs.</li>
 <li><strong>Identity:</strong> no BMC reader, no operator call to deny or retire a host, no CA rotation or

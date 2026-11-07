@@ -28,7 +28,11 @@
 //! runs the same path on a Mac with hello's macOS package (the program `hello-e2e` as its
 //! `bin/hello`): install, update, a failed `verify` rolled back and uninstall under launchd,
 //! with the rig's macOS host (`tests/e2e/mac_host.rs`); `tests/hello_rig.rs` checks its packages
-//! in the pull-request set. The network-install tests (`tests/net_install.rs`, first line
+//! in the pull-request set. `tests/device_mac_selfupdate.rs` (a macOS file, in the job
+//! `macos-device`) is the Mac twin of `tests/self_update.rs`: the program
+//! `hostkeeper-selfupdate-daemon` as a launchd job from `current` of its binary directory,
+//! updated and installed to the next version and restarted into it by launchd, with its rig in
+//! `tests/mac_self_update/`. The network-install tests (`tests/net_install.rs`, first line
 //! `#![cfg(all(target_os = "linux", target_arch = "x86_64", feature = "privileged"))]`, job
 //! `net-install`, and `tests/net_install_arm64.rs`, job `net-install-arm64`) install a QEMU guest
 //! by network with the real `hostkeeper-pxe` (the program `hostkeeper-privileged-pxe`, which

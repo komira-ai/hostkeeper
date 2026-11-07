@@ -164,6 +164,9 @@ pub struct RecordedService {
     pub updating: Option<Version>,
     /// The verdict of the last order the record finished; the loop resends it after a restart.
     pub last_result: Option<OrderResult>,
+    /// The try the step record holds, finished or not; none when the record names none or
+    /// cannot be read.
+    pub record_try: Option<u64>,
 }
 
 /// The services installed on the host, from their step records: never a list of names from a

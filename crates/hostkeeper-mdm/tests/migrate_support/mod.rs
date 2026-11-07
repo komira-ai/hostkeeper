@@ -6,17 +6,21 @@
     reason = "each migrate test binary uses part of the shared helpers"
 )]
 
+use std::cell::Cell;
 use std::collections::BTreeMap;
+use std::io;
 use std::net::Ipv4Addr;
 
 use crate::common::{self, FakeNet, Kit, SVC, bind, ready_host};
-use hostkeeper_mdm::MdmError;
 use hostkeeper_mdm::migrate::{Migrate, run};
+use hostkeeper_mdm::{Grant, MdmError};
 use hostkeeper_mdm_core::commands::scep_ca_init_args;
 use hostkeeper_mdm_core::migrate::{Old, Target, new_settings};
 use hostkeeper_mdm_core::render::UnitNames;
-use hostkeeper_mdm_step::fake::{FakeHost, Node};
-use hostkeeper_mdm_step::{GETENT, Mode, SYSTEMCTL};
+use hostkeeper_mdm_step::fake::{FakeHost, Node, Strict};
+use hostkeeper_mdm_step::{
+    Cmd, GETENT, Host, Meta, Mode, Output, SYSTEMCTL, Trustee, USERADD, Way,
+};
 
 /// The old service user's id.
 pub const OLD_UID: u32 = 800;
@@ -251,16 +255,44 @@ pub fn live_host(kit: &Kit) -> FakeHost {
     host
 }
 
-/// Runs `migrate` on `host` at the injected time of the common fixtures.
+/// The grants the command line runs `migrate` with for [`ask`]: the old state to the old user
+/// and the new state to the new user, by name, and the archives to their owner.
+pub fn grants() -> Vec<Grant> {
+    let user = |dir: &str, name: &str| Grant {
+        dir: dir.to_owned(),
+        who: Trustee::User(name.to_owned()),
+    };
+    vec![
+        user(OLD_STATE, "js-mdm"),
+        user(NEW_STATE, "hostkeeper-mdm"),
+        Grant {
+            dir: "/srv/fetch".to_owned(),
+            who: Trustee::Uid(1000),
+        },
+    ]
+}
+
+/// Runs `migrate` on `host` at the injected time of the common fixtures, judged as the machine
+/// judges it with [`grants`].
 pub fn migrate(
     host: &FakeHost,
     kit: &Kit,
     a: &Migrate,
     mode: Mode,
 ) -> (Result<(), MdmError>, String) {
+    migrate_on(&common::strict(host, &grants()), kit, a, mode)
+}
+
+/// Runs `migrate` on any host at the injected time of the common fixtures.
+pub fn migrate_on(
+    host: &dyn Host,
+    kit: &Kit,
+    a: &Migrate,
+    mode: Mode,
+) -> (Result<(), MdmError>, String) {
     let net = FakeNet::new(Default::default());
     let mut out = Vec::new();
-    let result = common::with_env(host, &net, |env| run(env, a, &kit.pins, mode, &mut out));
+    let result = common::with_env_on(host, &net, |env| run(env, a, &kit.pins, mode, &mut out));
     (result, String::from_utf8(out).unwrap())
 }
 
@@ -311,6 +343,33 @@ pub fn new_text(a: &Migrate) -> String {
 
 /// Makes the fake leave the CA `scepserver ca -init` makes, and openssl find them a pair.
 pub fn ca_is_made(host: &FakeHost, a: &Migrate) {
+    ca_is_made_as(host, a, b"KEY", b"CA");
+    let depot = format!("{NEW_STATE}/scep/depot");
+    let pem = format!("{depot}/ca.pem");
+    let key = format!("{depot}/ca.key");
+    host.reply(
+        &["/usr/bin/openssl", "x509", "-noout", "-pubkey", "-in", &pem],
+        0,
+        "PUBLIC KEY\n",
+    );
+    host.reply(
+        &[
+            "/usr/bin/openssl",
+            "pkey",
+            "-passin",
+            "pass:",
+            "-pubout",
+            "-in",
+            &key,
+        ],
+        0,
+        "PUBLIC KEY\n",
+    );
+}
+
+/// Makes the fake's `scepserver ca -init` (as the new user) leave `key` as `ca.key` and `pem`
+/// as `ca.pem`, both the new user's, 0400, as the real one does; openssl is not scripted.
+pub fn ca_is_made_as(host: &FakeHost, a: &Migrate, key: &[u8], pem: &[u8]) {
     let c = new_settings(&a.old, &a.target).expect("accepted").config;
     let mut argv: Vec<String> = [
         "/usr/sbin/runuser",
@@ -324,24 +383,174 @@ pub fn ca_is_made(host: &FakeHost, a: &Migrate) {
     argv.extend(scep_ca_init_args(&c));
     let words: Vec<&str> = argv.iter().map(String::as_str).collect();
     let depot = format!("{NEW_STATE}/scep/depot");
-    host.effect(
-        &words,
-        &format!("{depot}/ca.key"),
-        0o400,
-        (SVC, SVC),
-        b"KEY",
-    );
-    host.effect(&words, &format!("{depot}/ca.pem"), 0o400, (SVC, SVC), b"CA");
-    let pem = format!("{depot}/ca.pem");
-    let key = format!("{depot}/ca.key");
-    host.reply(
-        &["/usr/bin/openssl", "x509", "-noout", "-pubkey", "-in", &pem],
-        0,
-        "PUBLIC KEY\n",
-    );
-    host.reply(
-        &["/usr/bin/openssl", "pkey", "-pubout", "-in", &key],
-        0,
-        "PUBLIC KEY\n",
-    );
+    host.effect(&words, &format!("{depot}/ca.key"), 0o400, (SVC, SVC), key);
+    host.effect(&words, &format!("{depot}/ca.pem"), 0o400, (SVC, SVC), pem);
+}
+
+/// What `useradd` is run with for the new service user.
+pub const USERADD_NEW: [&str; 9] = [
+    USERADD,
+    "--system",
+    "--user-group",
+    "--home-dir",
+    NEW_STATE,
+    "--no-create-home",
+    "--shell",
+    "/usr/sbin/nologin",
+    "hostkeeper-mdm",
+];
+
+/// The live host before the move: the old kit's stack, and no user `hostkeeper-mdm` until
+/// `useradd` makes it (with the uid the fixtures' files of the new user have). Its
+/// `scepserver ca -init` leaves a CA as [`ca_is_made_as`] does; openssl is not scripted.
+pub fn host_before_the_move_making(a: &Migrate, key: &[u8], pem: &[u8]) -> FakeHost {
+    let host = live_host(&common::kit());
+    host.reply(&[GETENT, "passwd", "hostkeeper-mdm"], 2, "");
+    host.reply(&[GETENT, "group", "hostkeeper-mdm"], 2, "");
+    host.reply(&USERADD_NEW, 0, "");
+    host.effect_user(&USERADD_NEW, "hostkeeper-mdm", SVC);
+    ca_is_made_as(&host, a, key, pem);
+    host
+}
+
+/// [`host_before_the_move_making`] with the fake CA and openssl of [`ca_is_made`].
+pub fn host_before_the_move(a: &Migrate) -> FakeHost {
+    let host = host_before_the_move_making(a, b"KEY", b"CA");
+    ca_is_made(&host, a);
+    host
+}
+
+/// A host that fails its `fail_at`-th change (a write, a mkdir, a removal, or a command that is
+/// not a lookup or a question), as an apply that stops at that step, and counts the changes.
+pub struct FailsAt<'a> {
+    host: Strict<'a>,
+    fail_at: Option<usize>,
+    changes: Cell<usize>,
+}
+
+impl<'a> FailsAt<'a> {
+    pub fn new(host: Strict<'a>, fail_at: Option<usize>) -> FailsAt<'a> {
+        FailsAt {
+            host,
+            fail_at,
+            changes: Cell::new(0),
+        }
+    }
+
+    /// How many changes were made or failed.
+    pub fn changes(&self) -> usize {
+        self.changes.get()
+    }
+
+    /// One more change; the error the test makes when it is the `fail_at`-th.
+    fn change(&self) -> io::Result<()> {
+        let n = self.changes.get() + 1;
+        self.changes.set(n);
+        match self.fail_at == Some(n) {
+            true => Err(io::Error::other("the change the test fails")),
+            false => Ok(()),
+        }
+    }
+}
+
+/// Whether `cmd` only asks: an account lookup, `systemctl is-*`, and the host checks.
+fn asks(cmd: &Cmd) -> bool {
+    let program = cmd.program.as_str();
+    program == GETENT
+        || (program == SYSTEMCTL && cmd.args.first().is_some_and(|a| a.starts_with("is-")))
+        || [
+            "/usr/bin/uname",
+            "/usr/bin/ip",
+            "/usr/bin/ss",
+            "/usr/bin/openssl",
+        ]
+        .contains(&program)
+}
+
+impl Host for FailsAt<'_> {
+    fn euid(&self) -> u32 {
+        self.host.euid()
+    }
+    fn egid(&self) -> u32 {
+        self.host.egid()
+    }
+    fn canonical(&self, path: &str) -> io::Result<String> {
+        self.host.canonical(path)
+    }
+    fn stat(&self, path: &str) -> io::Result<Option<Meta>> {
+        self.host.stat(path)
+    }
+    fn read(&self, path: &str) -> io::Result<Option<Vec<u8>>> {
+        self.host.read(path)
+    }
+    fn read_limited(&self, path: &str, limit: u64) -> io::Result<Option<Vec<u8>>> {
+        self.host.read_limited(path, limit)
+    }
+    fn list(&self, path: &str) -> io::Result<Option<Vec<String>>> {
+        self.host.list(path)
+    }
+    fn write(&self, path: &str, mode: u32, owner: (u32, u32), bytes: &[u8]) -> io::Result<()> {
+        self.change()?;
+        self.host.write(path, mode, owner, bytes)
+    }
+    fn mkdir(&self, path: &str, mode: u32, owner: (u32, u32)) -> io::Result<()> {
+        self.change()?;
+        self.host.mkdir(path, mode, owner)
+    }
+    fn remove(&self, path: &str) -> io::Result<()> {
+        self.change()?;
+        self.host.remove(path)
+    }
+    fn run(&self, cmd: &Cmd) -> io::Result<Output> {
+        if !asks(cmd) {
+            self.change()?;
+        }
+        self.host.run(cmd)
+    }
+    fn way(&self, path: &str) -> io::Result<Option<Way>> {
+        self.host.way(path)
+    }
+}
+
+/// How a convergence check runs `migrate` on a host: directly, or through a wrapper.
+pub type Go<'g> = dyn Fn(&dyn Host, Mode) -> (Result<(), MdmError>, String) + 'g;
+
+/// For a fresh host from `make`: one apply that does not fail makes `steps` changes, one per
+/// step it prints, and a rerun of it is accepted and leaves every file as it is (the fake does
+/// not model systemd's state, so the rerun may plan its systemctl steps again).
+/// Then, for each step k: an apply that fails at step k stops there, naming it; the dry run
+/// that follows (`mdm_migrate.sh plan`) is accepted and changes nothing; and the apply after
+/// it leaves the host exactly as the apply that did not fail. Every run goes through `go`.
+pub fn rerun_converges_after_each_step(make: &dyn Fn() -> FakeHost, go: &Go<'_>) {
+    let host = make();
+    let whole = FailsAt::new(common::strict(&host, &grants()), None);
+    let (result, shown) = go(&whole, Mode::Apply);
+    result.unwrap_or_else(|e| panic!("{e}\n{shown}"));
+    let steps = whole.changes();
+    let applied = shown.lines().filter(|l| l.starts_with("+ ")).count();
+    assert_eq!(steps, applied, "one change per step\n{shown}");
+    assert!(steps > 0, "{shown}");
+    let done = snapshot(&host);
+    let (result, shown) = go(&common::strict(&host, &grants()), Mode::Apply);
+    result.unwrap_or_else(|e| panic!("rerun after a whole apply: {e}\n{shown}"));
+    assert_eq!(snapshot(&host), done, "rerun after a whole apply");
+
+    for k in 1..=steps {
+        let host = make();
+        let failing = FailsAt::new(common::strict(&host, &grants()), Some(k));
+        let (first, _) = go(&failing, Mode::Apply);
+        let first = first.unwrap_err().to_string();
+        assert!(
+            first.starts_with(&format!("step {k} ("))
+                && first.ends_with("the change the test fails"),
+            "{first}"
+        );
+        let stopped = snapshot(&host);
+        let (plan, shown) = go(&common::strict(&host, &grants()), Mode::DryRun);
+        plan.unwrap_or_else(|e| panic!("dry run after step {k}: {e}\n{shown}"));
+        assert_eq!(snapshot(&host), stopped, "dry run after step {k}");
+        let (again, shown) = go(&common::strict(&host, &grants()), Mode::Apply);
+        again.unwrap_or_else(|e| panic!("rerun after step {k}: {e}\n{shown}"));
+        assert_eq!(snapshot(&host), done, "rerun after a failure at step {k}");
+    }
 }

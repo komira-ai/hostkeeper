@@ -5,6 +5,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
 use hostkeeper_mdm::{Grant, Machine, RealMachine};
+use hostkeeper_mdm_step::Trustee;
 use hostkeeper_testkit::Scratch;
 
 fn scratch(name: &str) -> Scratch {
@@ -54,7 +55,7 @@ fn the_real_host_stats_inside_a_directory_it_is_granted() {
     std::fs::write(dir.path().join("file"), b"x").unwrap();
     let grant = Grant {
         dir: text(dir.path()).to_owned(),
-        uid: own,
+        who: Trustee::Uid(own),
     };
     let host = RealMachine.host(&[grant]);
     let file = host.stat(text(&dir.path().join("file"))).unwrap().unwrap();

@@ -701,9 +701,22 @@ CA, the ADE profile, the unit and path names. The order:
    - The steps run in this order: the new kit's files (`install`'s plan up to its first systemctl
      step, the fresh SCEP CA included), the new settings, the copies, the old units stopped and
      disabled (those enabled or active; their unit files stay), then the new services started. A
-     run that fails before the stop leaves the old stack running.
+     run that fails before the stop leaves the old stack running. A rerun finishes a run that
+     stopped: each step is planned again against the host as that run left it, so what is done
+     is kept and checked again (the user, the SCEP CA, a copy, the settings) and the rest is done.
+   - The new user does not exist before the plan makes it, and the plan writes root's
+     `push-topic` and `push-cert.sha256` below that user's state, so the state is granted to the
+     user by name (`RealHost::trust_below_user`), looked up on each walk. The whole plan is
+     checked before its first step, for a dry run as for an apply, against the owners the earlier
+     steps leave on the way: a step the walk would refuse refuses the plan, with nothing done.
    - It prints the back-out and the next steps: `tls`, `push-cert --profile-only` (the enrollment
-     profile, with the new SCEP challenge), `verify`, `dep define-profile`.
+     profile, with the new SCEP challenge), `verify`, `dep define-profile`. Before the stop it
+     writes the old units it stops to `MDM_ETC/migrate-stopped-units` (root's, 0644, one name a
+     line, with those an earlier run wrote), so the back-out of a rerun after the stop still
+     starts them, though systemd then calls them disabled and inactive.
+   - The SCEP depot check reads `ca.key` as `scepserver ca -init` writes it: PEM encrypted with
+     the empty password (no `-key-password`, and the unit passes no `-capass`), given to openssl
+     as `-passin pass:`. Its tests read the pinned scepserver's own output with the real openssl.
 4. **Run it on the MDM host.** This is a held step, which only the owner of the MDM host runs
    (task M7). First the read-only check of
    the live state. Then `migrate --apply`. Then `tls --apply` and `push-cert --profile-only
@@ -795,6 +808,8 @@ progress from explicit events. NanoHUB is a fake: an in-process HTTP server on `
 | `pkg_add_refuses_an_unattested_pkg` | the farm-signing verb verifies first (only if M11 chooses the farm identity) | M15 |
 | `the_enrollment_profile_is_served_mode_0640` | the SCEP challenge it carries is readable by the service group only | M5 |
 | `migrate_dry_runs_and_keeps_the_old_state` | without `--apply` nothing changes; with it the old state directory is untouched | M5 |
+| `a_rerun_after_an_apply_that_failed_at_any_step_converges` | an apply stopped at any step, then run again, leaves the host as one whole apply | M5 |
+| `a_dry_run_refuses_what_its_apply_would_refuse` | a dry run and an apply refuse the same step, before any step, in the walk's words | M3 |
 | one test per komira-ai/kbf#2248 item, named by its behaviour | each fails on the moved code and passes on the port | M2 to M4 |
 
 Why this list of failure and boundary cases is complete. Every input the gate acts on is one of
@@ -869,7 +884,7 @@ pull request.
 |---|---|---|---|
 | M1 | This design. Design 5.9 and 4.6 point at it and say the config comes from a managed profile | none | S |
 | M2 | `hostkeeper-mdm-core`: port of `mdm-core`, pure, hostkeeper names. Fixes from komira-ai/kbf#2248: the three loopback ports checked together; checked constructors and read-only accessors for `MdmConfig` and `Cidr`; DNS label and name length limits; authorities with whitespace, queries and fragments. ADE profile with `auto_advance_setup` true. **Built**: `crates/hostkeeper-mdm-core` | M1 | M |
-| M3 | `hostkeeper-mdm-step`: port of `host-step`. Fixes: the path's trusted owners include the operator's and the service's (a filesystem-backed test); a unique temporary name per writer; an existing account that resolves to uid 0 refused; whole-output redaction tests. **Built**: `crates/hostkeeper-mdm-step`; the owners are granted per directory with `RealHost::trust_below`, which M4 calls for `--bin-dir` and the state directory | M1 | M |
+| M3 | `hostkeeper-mdm-step`: port of `host-step`. Fixes: the path's trusted owners include the operator's and the service's (a filesystem-backed test); a unique temporary name per writer; an existing account that resolves to uid 0 refused; whole-output redaction tests. **Built**: `crates/hostkeeper-mdm-step`; the owners are granted per directory, by id with `RealHost::trust_below` (M4 calls it for `--bin-dir`) and by name with `RealHost::trust_below_user` (for the state directory, whose user a plan may make); `execute` checks a whole plan against the owners on its way before its first step, so a dry run refuses what an apply would | M1 | M |
 | M4 | `hostkeeper-mdm` binary, verbs `fetch`, `install`, `tls`, `verify`: port of `mdm-host`. Fixes: restarts planned from the installed state, not only this run's changes; malformed ACME settings refused, not skipped; `lego --help` exit status checked; archive limits exact and safe at `u64::MAX`; environment files read by systemd's rules; a typed error for `Tool::named`. The test gaps of komira-ai/kbf#2248 as tests: download redirects (HTTPS to HTTP, cycles, exhaustion), bodies of exactly the limit, chunked and interrupted bodies; TLS with a directory or link at the certificate path, a malformed certificate, a missing or mismatched key, renewal and the proxy reload; install with a damaged SCEP depot, failures part-way through a plan and the retry, uninstall during the certificate or reload job, two uninstall snapshots in one second, an unsupported architecture refused first; whole-output redaction. **Built**: `crates/hostkeeper-mdm` | M2, M3 | L |
 | M5 | Verbs `push-cert`, `dep` (`get-cert`, `upload-token`, `define-profile`, `assign`), the enrollment profile at `/enroll` (mode 0640, the service group's), the pkg directory and `/pkg/` route in the proxy, and `migrate --from` (section 8), from kbf-deploy's `mdm`. **Built**: `crates/hostkeeper-mdm` (`push_cert.rs`, `dep.rs`, `migrate.rs`, `api.rs`), `MDM_PKG_DIR` and the route in `crates/hostkeeper-mdm-core` | M4 | M |
 | M6a | komira-ai/kbf: freeze notes; delete `kbf-mdm`, `kbf-mdm-api` and their client in `kbf-server`; later, after M7, delete `mdm-core`, `host-step`, `mdm-host` and `kbf-deploy mdm` | M5 | S |

@@ -16,8 +16,9 @@ use crate::{Rig, recorded, service, update, version};
 
 /// Catches a heartbeat whose list of services comes from anywhere but the step records (a
 /// configuration, a list of file names), that omits an installed service, or that takes a fact
-/// from the wrong source: the version from the record, the health and its detail and the
-/// observer's detail from the observer.
+/// from the wrong source: the version and the try the record holds from the record (none for a
+/// record that holds none), the health and its detail and the observer's detail from the
+/// observer.
 #[test]
 fn heartbeat_lists_installed_services_from_records_and_observer() {
     let rig = Rig::new("facts-list");
@@ -27,6 +28,7 @@ fn heartbeat_lists_installed_services_from_records_and_observer() {
         RecordedService {
             updating: Some(version("2.1")),
             last_result: Some(kept.clone()),
+            record_try: Some(1),
             ..recorded("y", "2.0")
         },
     ]);
@@ -58,6 +60,7 @@ fn heartbeat_lists_installed_services_from_records_and_observer() {
                     liveness: Liveness::Stopped,
                     version: Some(version("1.0")),
                 }),
+                record_try: None,
             },
             ServiceFacts {
                 name: service("y"),
@@ -71,6 +74,7 @@ fn heartbeat_lists_installed_services_from_records_and_observer() {
                     liveness: Liveness::Running,
                     version: None,
                 }),
+                record_try: Some(1),
             },
         ],
         sent_unix: hostkeeper_link::testing::START_UNIX,

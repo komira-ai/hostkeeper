@@ -7,12 +7,12 @@
 //!
 //! Each test works in a scratch directory of its own, names its launchd jobs
 //! `dev.hostkeeper.ci-<test>-<pid>` (the step job of the launcher test is named by
-//! `Label::from_unit`, `dev.hostkeeper.hostkeeper.step.hkci.prepare.<pid>`), and boots them out
-//! when it ends, failed or not. The daemon's coordinator is the loopback address, where nothing
-//! answers: no test leaves the host. Waits poll a
-//! state with a bounded number of reads; no test asserts how long anything took. What a test
-//! finds about the system (the `proc_pidpath` table, the verdicts of `codesign`) it prints, for
-//! the record of the run.
+//! `Label::from_unit`, `dev.hostkeeper.hostkeeper.step.hkci.prepare.<pid>`, and a probe job by
+//! `Label::probe`, `dev.hostkeeper.hostkeeper.probe.hostkeeper-ci-<test>-<pid>`), and boots them
+//! out when it ends, failed or not. The daemon's coordinator is the loopback address, where nothing
+//! answers: no test leaves the host. Waits poll a state with a bounded number of reads; no test
+//! asserts how long anything took. What a test finds about the system (the `proc_pidpath` table,
+//! the verdicts of `codesign`) it prints, for the record of the run.
 
 use std::fs;
 use std::io::Write;
@@ -24,6 +24,9 @@ use std::time::Duration;
 
 use hostkeeper_daemon::boot::BOOT_ID_FILE;
 use hostkeeper_daemon::mac::{HostIoreg, HostMacVerify};
+use hostkeeper_daemon::selfupdate::{
+    LauncherProbe, PROBE_OUTPUT_BYTES, PROTOCOL_VERB, ProtocolProbe, SELF_UPDATE_PROTOCOL,
+};
 use hostkeeper_enroll::{Claims, ClaimsSource, MacClaims};
 use hostkeeper_hook::{Invocation, Outcome, Step};
 use hostkeeper_launchd::launchctl::{JobStatus, bootout_args, bootstrap_args, print};
@@ -37,7 +40,8 @@ use hostkeeper_privileged::{Mode, Rig};
 use hostkeeper_proto::hostkeeper::local::v1::StatusRequest;
 use hostkeeper_proto::hostkeeper::local::v1::admin_client::AdminClient;
 use hostkeeper_steps::{
-    ArtifactError, BootId, BootIdSource, Bound, Staged, StepCall, StepLauncher,
+    ArtifactError, BootId, BootIdSource, Bound, ProbeCall, ProbeExit, Staged, StepCall,
+    StepLauncher,
 };
 use hostkeeper_testkit::Scratch;
 use hostkeeper_unpack::{MacVerify, SignatureVerdict};
@@ -490,6 +494,81 @@ fn a_fixture_hook_runs_as_a_launchd_job_and_is_stopped_at_its_timeout() {
     assert_eq!(exit.code, None, "stopped, not exited");
     assert_eq!(Outcome::from_exit(exit.code), Outcome::Failure);
     let status = print(&launchctl(), &step_label).expect("launchctl print");
+    assert_eq!(status, JobStatus::NotLoaded, "the job is gone");
+}
+
+/// The unit of a probe of the test `test`, and the label of its job.
+fn probe_unit(test: &str) -> (String, Label) {
+    let unit = format!("hostkeeper-ci-{test}-{}", std::process::id());
+    let label = Label::probe(&unit).expect("a probe label");
+    (unit, label)
+}
+
+/// Catches a Mac whose launcher cannot ask a new hostkeeper binary for its self-update protocol
+/// (every Mac self-update refused `protocol_unreadable`): the daemon binary's
+/// `self-update-protocol`, run through the host's launcher as a launchd job, exits 0 and prints
+/// exactly the protocol and a newline, and its job is gone afterwards; the daemon's own probe
+/// over the same launcher reads that protocol.
+#[test]
+fn the_self_update_protocol_of_a_binary_is_probed_as_a_launchd_job() {
+    as_root();
+    let (unit, probe_label) = probe_unit("probe");
+    let _booted = Booted(probe_label.clone());
+    let args = [PROTOCOL_VERB];
+    let call = ProbeCall {
+        service: "hostkeeper",
+        executable: Path::new(DAEMON),
+        args: &args,
+        unit: &unit,
+        timeout_secs: 30,
+        output_bytes: PROBE_OUTPUT_BYTES,
+    };
+    let exit = LaunchdLauncher::system()
+        .run_probe(&call)
+        .expect("the probe ran");
+    println!("the probe: {exit:?}");
+    assert_eq!(
+        exit,
+        ProbeExit {
+            code: Some(0),
+            output: format!("{SELF_UPDATE_PROTOCOL}\n").into_bytes(),
+            truncated: false,
+        }
+    );
+    let status = print(&launchctl(), &probe_label).expect("launchctl print");
+    assert_eq!(status, JobStatus::NotLoaded, "the job is gone");
+
+    let probe = LauncherProbe::new(std::sync::Arc::new(LaunchdLauncher::system()));
+    assert_eq!(
+        probe.protocol(Path::new(DAEMON)).expect("a protocol"),
+        SELF_UPDATE_PROTOCOL
+    );
+}
+
+/// Catches a probe job that outlives its bound or keeps an exit: `/bin/sleep 3600`, probed with a
+/// bound of 1 second through the host's launcher, is booted out at the bound, has no exit code
+/// (a probe that printed no protocol), and launchd no longer holds its job.
+#[test]
+fn a_probe_that_never_ends_is_booted_out_at_its_bound_with_no_exit_code() {
+    as_root();
+    let (unit, probe_label) = probe_unit("probe-bound");
+    let _booted = Booted(probe_label.clone());
+    let args = ["3600"];
+    let call = ProbeCall {
+        service: "hostkeeper",
+        executable: Path::new("/bin/sleep"),
+        args: &args,
+        unit: &unit,
+        timeout_secs: 1,
+        output_bytes: PROBE_OUTPUT_BYTES,
+    };
+    let exit = LaunchdLauncher::system()
+        .run_probe(&call)
+        .expect("the probe ran");
+    println!("the probe at its bound: {exit:?}");
+    assert_eq!(exit.code, None, "stopped, not exited");
+    assert!(exit.output.is_empty(), "{exit:?}");
+    let status = print(&launchctl(), &probe_label).expect("launchctl print");
     assert_eq!(status, JobStatus::NotLoaded, "the job is gone");
 }
 

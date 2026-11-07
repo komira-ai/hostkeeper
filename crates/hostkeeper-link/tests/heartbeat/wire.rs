@@ -49,6 +49,7 @@ fn facts(name: &str, at: &str) -> ServiceFacts {
             liveness: Liveness::Running,
             version: Some(version(at)),
         }),
+        record_try: None,
     }
 }
 
@@ -185,8 +186,9 @@ fn heartbeat_bytes_equal_the_recorded_kbf_shape_for_the_same_facts() {
 
 /// Catches a word of the loop mapped to another word of the wire, a fact the wire has no field
 /// for sent anyway, and a deferred verdict sent as an outcome: every platform, health, phase,
-/// class and outcome, a running update, a deferral, and the facts that stay home (the observer's
-/// detail, the health detail, the forced flag, the verdict's detail).
+/// class and outcome, a running update, a deferral, the try a step record holds (written only for
+/// a service whose record holds one), and the facts that stay home (the observer's detail, the
+/// health detail, the forced flag, the verdict's detail).
 #[test]
 fn every_word_of_a_heartbeat_is_the_wires() {
     use hostkeeper_hook::{Class, Phase};
@@ -199,6 +201,7 @@ fn every_word_of_a_heartbeat_is_the_wires() {
     done.forced = true;
     done.detail = Some("stays home".to_owned());
     succeeded.last_update = Some(done);
+    succeeded.record_try = Some(1);
     services.push(succeeded);
     let failures = [
         (
@@ -278,6 +281,7 @@ fn every_word_of_a_heartbeat_is_the_wires() {
                         "target": "1.0", "outcome": "succeeded", "order_id": "o-1", "order_try": 1,
                     },
                     "updating": "2.0",
+                    "record_try": 1,
                 },
                 failed("s-b", "unhealthy", "before_commit", Some("release")),
                 failed("s-c", "absent", "gate_release", Some("environment")),
@@ -337,6 +341,7 @@ fn largest(ids: &[usize; 16], reasons: &[usize; 16]) -> Heartbeat {
                 }),
                 health_detail: None,
                 observed: None,
+                record_try: None,
             }
         })
         .collect();

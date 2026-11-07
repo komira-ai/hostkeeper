@@ -85,6 +85,7 @@ fn service(facts: &ServiceFacts) -> Result<pb::ServiceBeat, Unsendable> {
         last_update,
         updating: facts.updating.as_ref().map(version).transpose()?,
         deferred,
+        record_try: facts.record_try,
         ..pb::ServiceBeat::default()
     })
 }
@@ -370,6 +371,7 @@ mod tests {
             deferred: None,
             health_detail: None,
             observed: None,
+            record_try: None,
         }
     }
 
@@ -452,8 +454,9 @@ mod tests {
     /// Proves every fact the request has a field for goes out in it, and the ones it has none
     /// for do not: the platform, the agent's name and version, the announced features by name,
     /// and for a service its name, version, health, running update, verdict (target, outcome,
-    /// phase, class, reason, try, order id, forced, detail) and deferral, but not the health
-    /// detail or the observer's detail.
+    /// phase, class, reason, try, order id, forced, detail), deferral and the try its step record
+    /// holds (none for a service whose record holds none), but not the health detail or the
+    /// observer's detail.
     #[test]
     fn a_heartbeat_with_every_fact_maps_to_the_request_field_for_field() {
         let mut busy = facts("web", "1.0");
@@ -477,6 +480,7 @@ mod tests {
             reason: Reason::new("busy").expect("a reason"),
             retry_after_secs: 90,
         });
+        busy.record_try = Some(4);
         let request = sent(&beat(Platform::LinuxArm64, vec![busy, facts("api", "3.1")]));
         assert_eq!(
             request,
@@ -522,6 +526,7 @@ mod tests {
                             reason: "busy".to_owned(),
                             retry_after_secs: 90,
                         }),
+                        record_try: Some(4),
                         ..pb::ServiceBeat::default()
                     },
                     pb::ServiceBeat {

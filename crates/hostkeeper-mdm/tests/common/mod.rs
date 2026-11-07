@@ -18,9 +18,9 @@ use hostkeeper_mdm::{Download, DownloadError, Env, Grant, Loopback, Machine, Sys
 use hostkeeper_mdm_core::acme::Acme;
 use hostkeeper_mdm_core::config::MdmConfig;
 use hostkeeper_mdm_core::pins::{Packing, Pins, Tool};
-use hostkeeper_mdm_step::fake::FakeHost;
-use hostkeeper_mdm_step::{Cmd, Host, Meta, Output};
+use hostkeeper_mdm_step::fake::{FakeHost, Strict};
 use hostkeeper_mdm_step::{GETENT, SYSTEMCTL};
+use hostkeeper_mdm_step::{Host, Trustee};
 use sha2::{Digest, Sha256};
 
 /// The documented example settings as committed: every key, with `MDM_BIND` and
@@ -356,6 +356,18 @@ pub fn with_env<T>(host: &FakeHost, net: &FakeNet, f: impl FnOnce(&Env<'_>) -> T
     with_env_api(host, net, &FakeApi::new(), 1_700_000_000, f)
 }
 
+/// [`with_env`] over any host: a [`strict`] view of a fake, for one.
+pub fn with_env_on<T>(host: &dyn Host, net: &FakeNet, f: impl FnOnce(&Env<'_>) -> T) -> T {
+    let env = Env {
+        host,
+        net,
+        api: &FakeApi::new(),
+        random: &fill,
+        now: 1_700_000_000,
+    };
+    f(&env)
+}
+
 /// Runs `f` with an [`Env`] over `host`, `net` and `api`, at the injected time `now`.
 pub fn with_env_api<T>(
     host: &FakeHost,
@@ -419,43 +431,13 @@ pub fn changes(host: &FakeHost) -> Vec<String> {
         .collect()
 }
 
-/// A [`Host`] that is a borrowed [`FakeHost`]: what [`FakeMachine`] hands a verb.
-pub struct Shared<'a>(pub &'a FakeHost);
-
-impl Host for Shared<'_> {
-    fn euid(&self) -> u32 {
-        self.0.euid()
-    }
-    fn egid(&self) -> u32 {
-        self.0.egid()
-    }
-    fn canonical(&self, path: &str) -> std::io::Result<String> {
-        self.0.canonical(path)
-    }
-    fn stat(&self, path: &str) -> std::io::Result<Option<Meta>> {
-        self.0.stat(path)
-    }
-    fn read(&self, path: &str) -> std::io::Result<Option<Vec<u8>>> {
-        self.0.read(path)
-    }
-    fn read_limited(&self, path: &str, limit: u64) -> std::io::Result<Option<Vec<u8>>> {
-        self.0.read_limited(path, limit)
-    }
-    fn list(&self, path: &str) -> std::io::Result<Option<Vec<String>>> {
-        self.0.list(path)
-    }
-    fn write(&self, path: &str, mode: u32, owner: (u32, u32), bytes: &[u8]) -> std::io::Result<()> {
-        self.0.write(path, mode, owner, bytes)
-    }
-    fn mkdir(&self, path: &str, mode: u32, owner: (u32, u32)) -> std::io::Result<()> {
-        self.0.mkdir(path, mode, owner)
-    }
-    fn remove(&self, path: &str) -> std::io::Result<()> {
-        self.0.remove(path)
-    }
-    fn run(&self, cmd: &Cmd) -> std::io::Result<Output> {
-        self.0.run(cmd)
-    }
+/// `host` judged as the real machine judges it with `grants`: what [`FakeMachine`] hands a
+/// verb.
+pub fn strict<'a>(host: &'a FakeHost, grants: &[Grant]) -> Strict<'a> {
+    grants.iter().fold(host.strict(), |view, g| match &g.who {
+        Trustee::Uid(uid) => view.trust_below(&g.dir, *uid),
+        Trustee::User(user) => view.trust_below_user(&g.dir, user),
+    })
 }
 
 /// A [`Machine`] over a [`FakeHost`]: every host it gives is that fake, and it records the
@@ -475,9 +457,11 @@ impl<'a> FakeMachine<'a> {
 }
 
 impl Machine for FakeMachine<'_> {
+    /// The fake judged as the real machine judges it: root and the effective user trusted
+    /// everywhere, and each grant's owner below its directory.
     fn host(&self, grants: &[Grant]) -> Box<dyn Host + '_> {
         self.grants.borrow_mut().push(grants.to_vec());
-        Box::new(Shared(self.host))
+        Box::new(strict(self.host, grants))
     }
     fn owner(&self, path: &str) -> std::io::Result<Option<u32>> {
         Ok(self.host.stat(path)?.map(|m| m.uid))

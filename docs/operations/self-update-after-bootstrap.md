@@ -40,7 +40,12 @@ first release after 0.1.100 that `hostkeeper --version` shows with that change) 
   release's unit. An earlier daemon refuses the install `path_conflict` before it writes anything.
 - Before it stages the new binary, the daemon asks it for its self-update protocol in a transient
   unit. An earlier Linux daemon has no way to run that probe and refuses every self-update
-  `protocol_unreadable` (komira-ai/hostkeeper#102). The macOS launcher still has none.
+  `protocol_unreadable` (komira-ai/hostkeeper#102). A macOS daemon runs the probe as a launchd
+  job from the release that carries that change on; an earlier one refuses every self-update
+  `protocol_unreadable` the same way, even an install of the version it already runs. The probe
+  is run by the daemon that runs, not by the release, so such a Mac is brought once, by hand, to
+  that release or a later one (stage its binary in the binary directory, switch `current` to it,
+  and `launchctl kickstart -k system/dev.hostkeeper.hostkeeper`) before it is included again.
 
 A verdict of a service the heartbeat does not list, such as the refusal of an install that wrote
 nothing, is sent in the next heartbeat. The service is listed `absent` at the order's target with
@@ -83,6 +88,15 @@ it)
 may hold that order's try in its step record. The coordinator orders the next install one try past an order that went 120 seconds
 (`ORDER_AGE`) with no word, so such a host takes the next order instead of refusing it
 `try_conflict` for good.
+
+The daemon also sends the try its step record holds for each service in every heartbeat, so a
+coordinator that restarted after a self-update's install, and so never heard that install's
+verdict, orders the next update past it. A daemon of an earlier release does not send it; such a
+host may refuse the coordinator's first update `try_conflict` (or `stale_try`). The coordinator
+reads either refusal as a disagreement on the try, not as the host failing the version: it orders
+the host again past the refused try in the same answer, and the host is neither failed here nor
+holds back its stage. A host a coordinator of an earlier release left failed here on such a
+refusal is ordered again once the coordinator runs this release.
 
 ## Macs
 

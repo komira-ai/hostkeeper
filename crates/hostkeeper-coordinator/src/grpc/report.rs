@@ -418,6 +418,7 @@ fn service_beat(service: &str, beat: &Heartbeat) -> agent::ServiceBeat {
             retry_after_secs: d.retry_after_secs,
         }),
         pinned: None,
+        record_try: beat.record_try,
     }
 }
 

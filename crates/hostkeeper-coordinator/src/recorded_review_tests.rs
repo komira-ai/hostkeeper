@@ -34,6 +34,7 @@ fn announcing_other(mut top: Heartbeat, service: &str, running: &str) -> Heartbe
         step_secs: Default::default(),
         promotion_pending: false,
         deferred: None,
+        record_try: None,
     }]);
     top
 }

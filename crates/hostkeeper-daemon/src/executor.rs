@@ -25,7 +25,7 @@ use hostkeeper_steps::{
     StepRunner, UpdateOrder, Watch,
 };
 
-use crate::boot::{ALERT_JOURNAL, ALERT_UNSTOPPABLE, ALERT_WATCHER, alert_line};
+use crate::boot::{ALERT_INTERRUPTED, ALERT_JOURNAL, ALERT_UNSTOPPABLE, ALERT_WATCHER, alert_line};
 use crate::checks;
 use crate::halt::HaltStore;
 use crate::installed::{self, CURRENT, Lifecycle};
@@ -275,11 +275,15 @@ impl Ctx {
         drop(self.watchers.stop(service));
         let mut runners = self.runners.lock().unwrap_or_else(PoisonError::into_inner);
         let made = runners.entry(service.to_string()).or_insert_with(|| {
-            let switch = crate::place::hooked_switch(
-                self.placement.roots.clone(),
-                Arc::clone(&self.placement.fs),
-                Arc::clone(&self.units),
-                self.own_version,
+            let switch = crate::place::retried(
+                crate::place::hooked_switch(
+                    self.placement.roots.clone(),
+                    Arc::clone(&self.placement.fs),
+                    Arc::clone(&self.units),
+                    self.own_version,
+                ),
+                Arc::clone(&self.clock),
+                Arc::clone(&self.alerts),
             );
             let runner = StepRunner::new(
                 Arc::clone(&self.launcher),
@@ -699,7 +703,10 @@ impl Daemon {
 
     /// One verb. A step that could not be stopped is an alert (`unstoppable_unit`): its service
     /// stays locked and its record `running`, and every hooked order of the service, the same
-    /// update's resend included, is `busy` until `abort` clears it.
+    /// update's resend included, is `busy` until `abort` clears it. Any other hooked order that
+    /// stops without a verdict, whatever its reason, is an alert too (`order_interrupted`), with
+    /// its service, its reason and what failed: the coordinator keeps only the reason, so this
+    /// line is where the host says why (a switch that could not relink, a launcher that failed).
     pub fn execute(&self, verb: Verb) -> Reply {
         let hooked = match &verb {
             Verb::Update(order) | Verb::ForceRollback(order) | Verb::Install(order) => {
@@ -709,6 +716,7 @@ impl Daemon {
             _ => None,
         };
         let stuck = hooked
+            .clone()
             .and_then(|service| self.ctx.locks.holder(&service).map(|held| (service, held)))
             .filter(|(_, held)| held.stuck);
         if let Some((service, held)) = stuck {
@@ -721,12 +729,19 @@ impl Daemon {
             );
         }
         let reply = self.dispatch(verb);
-        if let Reply::Interrupted {
-            refusal: Refusal::Unstopped,
-            detail,
-        } = &reply
-        {
-            self.ctx.alert(ALERT_UNSTOPPABLE, detail);
+        match (&reply, &hooked) {
+            (
+                Reply::Interrupted {
+                    refusal: Refusal::Unstopped,
+                    detail,
+                },
+                _,
+            ) => self.ctx.alert(ALERT_UNSTOPPABLE, detail),
+            (Reply::Interrupted { refusal, detail }, Some(service)) => self.ctx.alert(
+                ALERT_INTERRUPTED,
+                &format!("service={service}: {}: {detail}", refusal.token()),
+            ),
+            _ => {}
         }
         reply
     }

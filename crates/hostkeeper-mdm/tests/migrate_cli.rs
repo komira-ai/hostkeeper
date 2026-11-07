@@ -6,11 +6,12 @@ mod migrate_support;
 
 use common::{FakeMachine, FakeNet, SVC, kit, with_system};
 use hostkeeper_mdm::{Grant, run_with};
+use hostkeeper_mdm_step::Trustee;
 use migrate_support::*;
 
 /// Catches a command line that does not carry `migrate`'s arguments or its directory grants: the
-/// old state is granted to the old user's uid, the new state to the new user's, and the archive
-/// directory to its owner; the settings file is read from `--from`; a dry run prints the plan
+/// old state is granted to the old user by name, the new state to the new user by name, and the
+/// archive directory to its owner's uid; the settings file is read from `--from`; a dry run prints the plan
 /// for `--settings`, with the profile identifier and the ACME overrides reaching the new
 /// settings, and changes nothing.
 #[test]
@@ -60,17 +61,11 @@ fn migrate_runs_through_the_command_line_with_its_grants() {
     assert_eq!(
         grants.last().unwrap(),
         &[
-            Grant {
-                dir: OLD_STATE.to_owned(),
-                uid: OLD_UID
-            },
-            Grant {
-                dir: NEW_STATE.to_owned(),
-                uid: SVC
-            },
+            user_grant(OLD_STATE, "js-mdm"),
+            user_grant(NEW_STATE, "hostkeeper-mdm"),
             Grant {
                 dir: "/srv/fetch".to_owned(),
-                uid: 1000
+                who: Trustee::Uid(1000)
             },
         ]
     );
@@ -114,11 +109,12 @@ fn a_refusal_exits_2_through_the_command_line() {
     );
 }
 
-/// Catches grants for owners that are not there: on the live host before the move the new
-/// service user does not exist and an archive directory may be missing, so the only grant is
-/// the old state to the old user.
+/// Catches a new state that is not granted to the new user because that user does not exist
+/// before the move (the plan makes it, then writes root's `push-topic` below its state, which
+/// the walk would then refuse), and an archive directory that is not there granted to someone:
+/// both service users are granted by name, and the missing archive directory to no one.
 #[test]
-fn only_the_owners_that_exist_are_granted() {
+fn the_new_user_is_granted_by_name_before_it_exists() {
     let kit = kit();
     let host = live_host(&kit);
     host.put_file("/etc/js-mdm.conf", 0o644, (0, 0), old_text().as_bytes());
@@ -153,9 +149,16 @@ fn only_the_owners_that_exist_are_granted() {
     let grants = machine.grants.borrow();
     assert_eq!(
         grants.last().unwrap(),
-        &[Grant {
-            dir: OLD_STATE.to_owned(),
-            uid: OLD_UID
-        }]
+        &[
+            user_grant(OLD_STATE, "js-mdm"),
+            user_grant(NEW_STATE, "hostkeeper-mdm"),
+        ]
     );
+}
+
+fn user_grant(dir: &str, user: &str) -> Grant {
+    Grant {
+        dir: dir.to_owned(),
+        who: Trustee::User(user.to_owned()),
+    }
 }

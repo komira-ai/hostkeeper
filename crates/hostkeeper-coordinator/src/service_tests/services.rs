@@ -89,6 +89,7 @@ fn service_beat(running: &str) -> hostkeeper_wire::wire::ServiceBeat {
         step_secs: Default::default(),
         promotion_pending: false,
         deferred: None,
+        record_try: None,
     }
 }
 

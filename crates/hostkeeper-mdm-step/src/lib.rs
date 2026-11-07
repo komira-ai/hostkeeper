@@ -22,7 +22,12 @@
 //! * Every directory on the way to a path is owned by a user trusted for that path: root and
 //!   the effective user ([`RealHost::new`]), the owner a step asks for, and the owner granted
 //!   for the paths below a directory ([`RealHost::trust_below`]: the operator's for the
-//!   directory of fetched binaries, the service's for its state).
+//!   directory of fetched binaries; [`RealHost::trust_below_user`], by name: the service's
+//!   for its state, also when the plan makes the service user).
+//! * A plan is checked whole before its first step, the same way for a dry run and an apply:
+//!   a step that the walk would refuse, given the owners the earlier steps leave on its way,
+//!   refuses the plan ([`ExecError::Refused`]), so a dry run refuses what an apply would, and
+//!   an apply never stops part way on an owner.
 //! * An existing account a service is to run as is refused when it resolves to uid 0
 //!   ([`Planner::user`]).
 //! * Nothing here reads an environment variable.
@@ -31,8 +36,9 @@ pub mod fake;
 mod host;
 mod plan;
 mod real;
+mod trust;
 
-pub use host::{Cmd, Host, Kind, Meta, Output};
+pub use host::{Cmd, Host, Kind, Meta, Output, Trustee, Way};
 pub use plan::{
     Account, ExecError, Mode, Plan, PlanError, Planner, Step, StepError, UnitVerb, execute, ids,
 };

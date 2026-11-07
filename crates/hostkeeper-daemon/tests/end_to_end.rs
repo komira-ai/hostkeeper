@@ -175,6 +175,7 @@ fn service_beat(facts: &ServiceFacts) -> ServiceBeat {
         step_secs: BTreeMap::new(),
         promotion_pending: false,
         deferred: None,
+        record_try: facts.record_try,
     }
 }
 
@@ -202,6 +203,7 @@ fn wire_beat(beat: &Heartbeat) -> wire::Heartbeat {
         sent_unix: None,
         cert_not_after_unix: None,
         last_renew_error: None,
+        record_try: None,
     }
 }
 
@@ -340,6 +342,7 @@ fn first_beat() -> Heartbeat {
             deferred: None,
             health_detail: None,
             observed: None,
+            record_try: None,
         }],
         sent_unix: 0,
         renewal: Renewal::default(),

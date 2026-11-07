@@ -194,6 +194,7 @@ fn the_heartbeat_json_has_the_wire_names() {
                 liveness: Liveness::Transitioning,
                 version: None,
             }),
+            record_try: Some(3),
         }],
         sent_unix: 0,
         renewal: hostkeeper_link::Renewal::default(),
@@ -222,6 +223,7 @@ fn the_heartbeat_json_has_the_wire_names() {
             "deferred": { "target": "2.0", "reason": "drain_bound", "retry_after_secs": 5 },
             "health_detail": "refused",
             "observed": { "liveness": "transitioning", "version": null },
+            "record_try": 3,
         }],
         "sent_unix": 0,
     });

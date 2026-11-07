@@ -24,14 +24,15 @@
 //!    package;
 //! 6. the step lock, waited for (a running step of another service is never interrupted), and
 //!    the records of step 4 read again under it;
-//! 7. the protocol of the new binary ([`ProtocolProbe`]), asked of the file of the verified
-//!    release before anything is staged: a protocol this daemon cannot fall back from is
-//!    `Failed` before the commit, of class release (`protocol_unsupported`), and a probe that
-//!    cannot be read is `Failed` before the commit, of class environment
-//!    (`protocol_unreadable`); a release without the binary is `Failed` before the commit, of
-//!    class release (`self_binary_missing`), and a release that changed since it was verified,
-//!    or cannot be read now, is refused (`release_unreadable`). Nothing is written for any of
-//!    them;
+//! 7. the protocol of the new binary ([`ProtocolProbe`]), asked of the file of the verified release
+//!    before anything is staged, unless the release is the version that runs, whose binary is never
+//!    staged and so is not asked (an install of the version a pkg or a hand upgrade put on the host
+//!    goes on to its steps without running the probe): a protocol this daemon cannot fall back from
+//!    is `Failed` before the commit, of class release (`protocol_unsupported`), and a probe that
+//!    cannot be read is `Failed` before the commit, of class environment (`protocol_unreadable`); a
+//!    release without the binary is `Failed` before the commit, of class release
+//!    (`self_binary_missing`), and a release that changed since it was verified, or cannot be read
+//!    now, is refused (`release_unreadable`). Nothing is written for any of them;
 //! 8. the hook's steps through the step runner, which holds the success back
 //!    ([`hostkeeper_steps::StepRunner::with_held_success`]);
 //! 9. the follow-on ([`hostkeeper_steps::follow_on`]): the new binary staged in the binary
@@ -312,10 +313,9 @@ fn steps(
         // The tree cannot be read now, or is not the one verified: nothing runs from it.
         Err(error) => return Err(Reply::refused(Refusal::ReleaseUnreadable, error)),
     };
-    match ctx.probe().protocol(&binary) {
-        Ok(protocol) if accepted(protocol) => {}
-        Ok(_) => return Ok(failed(Class::Release, REASON_PROTOCOL_UNSUPPORTED)),
-        Err(_) => return Ok(failed(Class::Environment, REASON_PROTOCOL_UNREADABLE)),
+    let running = ctx.own_version.to_string();
+    if let Some(refused) = probed(ctx.probe(), &binary, &running, version) {
+        return Ok(refused);
     }
     let finished = match runner.run(&prepared.update) {
         Ok(finished) => finished,
@@ -323,7 +323,6 @@ fn steps(
     };
     let layout = Layout::new(&binary_dir(&ctx.dirs.state));
     files::make_private(layout.dir()).map_err(|e| Reply::refused(Refusal::StoreFailed, e))?;
-    let running = ctx.own_version.to_string();
     let store = ctx.store(service);
     let binary = Path::new(RELEASE_BINARY);
     match follow_on(
@@ -338,6 +337,21 @@ fn steps(
             refusal: follow_refusal(&error),
             detail: error.to_string(),
         }),
+    }
+}
+
+/// Step 7: the refusal of the new binary `binary` of `version` by its protocol, asked of `probe`;
+/// `None` when it is accepted. A release of the version that runs (`running`) is not asked: the
+/// follow-on stages no binary for it ([`FollowOn::NotNeeded`]), so nothing of it is ever run, and
+/// the order goes on as the module says (an install of it is `Succeeded` once its steps ran).
+fn probed(probe: &dyn ProtocolProbe, binary: &Path, running: &str, version: &str) -> Option<Reply> {
+    if running == version {
+        return None;
+    }
+    match probe.protocol(binary) {
+        Ok(protocol) if accepted(protocol) => None,
+        Ok(_) => Some(failed(Class::Release, REASON_PROTOCOL_UNSUPPORTED)),
+        Err(_) => Some(failed(Class::Environment, REASON_PROTOCOL_UNREADABLE)),
     }
 }
 

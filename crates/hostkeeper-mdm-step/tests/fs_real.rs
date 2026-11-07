@@ -3,7 +3,7 @@
 use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
 use std::path::Path;
 
-use hostkeeper_mdm_step::{Cmd, Host, Kind, RealHost, TEMP_SUFFIX};
+use hostkeeper_mdm_step::{Cmd, Host, Kind, RealHost, TEMP_SUFFIX, Trustee, Way};
 use hostkeeper_testkit::Scratch;
 
 /// The program the run tests start (tests/bin/run_fixture.rs).
@@ -374,6 +374,124 @@ fn the_operators_and_the_services_directories_are_trusted_below_their_grants() {
             .unwrap_err()
             .to_string(),
         not_trusted("/srv/operator/bin/nanohub", &root)
+    );
+}
+
+/// Catches a grant by name that is looked up once (the user a plan makes would stay
+/// untrusted), never (a name would trust anyone or no one), or whose failed lookup reads as a
+/// path that is not there: the user is trusted below the directory by the id the lookup gives
+/// on each walk, a name the lookup does not know trusts nobody, and a lookup that cannot start
+/// fails the walk with its command line, for a stat as for a write.
+///
+/// The lookup is the fixture program (`passwd fixture-UID` answers as `getent` for that uid), so
+/// no account database is read.
+#[test]
+fn a_grant_by_name_trusts_the_user_the_lookup_names_on_each_walk() {
+    let (dir, _) = scratch("user-grants");
+    let user = me(&dir).0;
+    std::fs::create_dir_all(dir.path().join("var/lib/svc/nanohub")).unwrap();
+    std::fs::write(dir.path().join("var/lib/svc/nanohub/db"), b"state").unwrap();
+    let root = dir.path().display().to_string();
+    let path = "/var/lib/svc/nanohub/db";
+    let not_trusted = format!(
+        "refused: {path}: {root} is owned by uid {user}, which is not trusted for this path"
+    );
+
+    let named = |name: &str| {
+        RealHost::trusting(dir.path(), &[])
+            .looking_up_users_with(FIXTURE)
+            .trust_below_user("/var/lib/svc", name)
+    };
+    let known = named(&format!("fixture-{user}"));
+    assert_eq!(known.read(path).unwrap().unwrap(), b"state");
+    known.write(path, 0o600, me(&dir), b"new").unwrap();
+    assert_eq!(known.read(path).unwrap().unwrap(), b"new");
+    // The id the lookup gives is judged, not the name: a user of another id is not the owner.
+    let other = named(&format!("fixture-{}", user + 1));
+    assert_eq!(other.read(path).unwrap_err().to_string(), not_trusted);
+    for unknown in ["nobody-here", "fixture-x"] {
+        assert_eq!(
+            named(unknown).stat(path).unwrap_err().to_string(),
+            not_trusted,
+            "{unknown}"
+        );
+    }
+    // Outside the granted directory no lookup is made and nothing is trusted.
+    assert_eq!(
+        known.stat("/var/lib/x").unwrap_err().to_string(),
+        format!(
+            "refused: /var/lib/x: {root} is owned by uid {user}, which is not trusted for this path"
+        )
+    );
+
+    let missing = dir.path().join("no-such-program");
+    let broken = RealHost::trusting(dir.path(), &[])
+        .looking_up_users_with(&missing.display().to_string())
+        .trust_below_user("/var/lib/svc", "svc");
+    for e in [
+        broken.stat(path).unwrap_err(),
+        broken.write(path, 0o600, me(&dir), b"x").unwrap_err(),
+    ] {
+        assert_ne!(e.kind(), std::io::ErrorKind::NotFound, "{e}");
+        assert!(
+            e.to_string()
+                .starts_with(&format!("{} passwd svc: ", missing.display())),
+            "{e}"
+        );
+    }
+}
+
+/// Catches a way that judges what it only reports, follows a link, goes past a name that is
+/// not there or lists the path's own owner: it gives the root's and each directory's owner up
+/// to the first missing one, with no owner judged, and who is trusted there, a grant's user
+/// that exists by its id and one that does not by its name; a link or a file on the way, and
+/// a path that names no file, are refused as every walk refuses them.
+#[test]
+fn the_way_reports_owners_and_trust_without_judging() {
+    let (dir, _) = scratch("way");
+    let user = me(&dir).0;
+    std::fs::create_dir_all(dir.path().join("var/lib")).unwrap();
+    std::fs::write(dir.path().join("file"), b"x").unwrap();
+    symlink(dir.path().join("var"), dir.path().join("link")).unwrap();
+    let host = RealHost::trusting(dir.path(), &[3])
+        .looking_up_users_with(FIXTURE)
+        .trust_below("/var/lib", 5)
+        .trust_below_user("/var", &format!("fixture-{user}"))
+        .trust_below_user("/var/lib/new", "later")
+        .trust_below("/other", 6);
+    assert_eq!(
+        host.way("/var/lib/new/deeper/f").unwrap(),
+        Some(Way {
+            root: dir.path().display().to_string(),
+            owners: vec![user, user, user],
+            trusted: vec![
+                Trustee::Uid(3),
+                Trustee::Uid(5),
+                Trustee::Uid(user),
+                Trustee::User("later".to_owned()),
+            ],
+        })
+    );
+    assert_eq!(
+        host.way("/link/lib/f").unwrap_err().to_string(),
+        "refused: /link/lib/f: link is a symbolic link; give the real path"
+    );
+    assert_eq!(
+        host.way("/file/f").unwrap_err().to_string(),
+        "refused: /file/f: file is not a directory"
+    );
+    assert_eq!(
+        host.way("/").unwrap_err().to_string(),
+        "refused: / names no file"
+    );
+    assert_eq!(
+        host.way("/a/../b").unwrap_err().to_string(),
+        "refused: /a/../b has a . or .. component"
+    );
+    let gone = dir.path().join("gone");
+    assert_eq!(
+        RealHost::under(&gone).way("/f").unwrap_err().kind(),
+        std::io::ErrorKind::NotFound
     );
 }
 

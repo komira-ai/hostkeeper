@@ -127,3 +127,62 @@ fn from_unit_refuses_a_malformed_unit() {
         );
     }
 }
+
+/// Catches a probe label that could be a step's (a probe would then boot out a step job of the
+/// same name, or the other way round) or that takes what a label may not hold: the label of a
+/// probe is `<prefix>.hostkeeper.probe.<unit>`, apart from the step label of the same unit text,
+/// and a unit with a byte a label refuses, or too long for one, is refused as a label is.
+#[test]
+fn a_probe_label_is_apart_from_every_step_label_and_refuses_what_a_label_refuses() {
+    assert_eq!(
+        Label::probe("hostkeeper-self-update-protocol")
+            .expect("a probe label")
+            .as_str(),
+        "dev.hostkeeper.hostkeeper.probe.hostkeeper-self-update-protocol"
+    );
+    let unit = unit("web", Step::Cutover, 7);
+    assert_ne!(
+        Label::probe(&unit).expect("a probe label"),
+        Label::from_unit(&unit).expect("a step label")
+    );
+    assert_eq!(
+        Label::probe("a/b"),
+        Err(LabelError::BadCharacter {
+            label: "dev.hostkeeper.hostkeeper.probe.a/b".to_owned(),
+            byte: b'/',
+        })
+    );
+    let long = "x".repeat(MAX_LABEL);
+    assert_eq!(
+        Label::probe(&long),
+        Err(LabelError::TooLong {
+            len: "dev.hostkeeper.hostkeeper.probe.".len() + MAX_LABEL
+        })
+    );
+}
+
+/// Catches the unit of a `[hook] boot` step refused as no step unit (the daemon's boot pass
+/// stops `updater-<service>-boot-<generation>` and runs its additive step in it, so on a Mac
+/// every boot step failed before it started): it gives the step label with the word `boot`,
+/// apart from every other step's label of the same update, and a word that is neither a step
+/// nor `boot` is still refused.
+#[test]
+fn from_unit_gives_the_unit_of_a_boot_step_its_own_label() {
+    let label = Label::from_unit("updater-web-api-boot-7").expect("a boot unit");
+    assert_eq!(
+        label.as_str(),
+        format!("{REVERSE_DNS_PREFIX}.hostkeeper.step.web-api.boot.7")
+    );
+    for step in Step::ALL {
+        assert_ne!(
+            Label::from_unit(&unit("web-api", step, 7)),
+            Ok(label.clone())
+        );
+    }
+    assert_eq!(
+        Label::from_unit("updater-web-reboot-7"),
+        Err(LabelError::NotAStepUnit {
+            unit: "updater-web-reboot-7".to_owned()
+        })
+    );
+}

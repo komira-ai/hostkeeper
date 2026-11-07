@@ -217,7 +217,8 @@ pub struct Fleet {
     /// ([`crate::reconcile::Change::CanaryFailed`]): kept in memory only, like the orders.
     canaries: BTreeMap<(String, String), String>,
     /// The highest order try heard of each host and service, from every verdict its heartbeats
-    /// carried (an acknowledged one read back from the verdicts file among them): what
+    /// carried (an acknowledged one read back from the verdicts file among them, and a refusal
+    /// for the try) and from the try its step record holds (`record_try`): what
     /// [`Self::next_try`] numbers past. Kept in memory only, never lowered.
     tries: BTreeMap<(HostId, String), u64>,
     /// The highest try of an order of each host and service the coordinator gave and no longer
@@ -310,15 +311,19 @@ impl Fleet {
     }
 
     /// The try of the next order of `service` for the host `id`: one past the highest try any
-    /// heartbeat of the host has carried for the service, whatever order its verdict ended, or
-    /// of any order of it the coordinator gave that is no longer outstanding ([`Self::order_try`]),
-    /// and 1 when there is none. The daemon keys tries per service (design 8.3): its step record
-    /// holds the try of the service's last order and refuses the same try of another package
-    /// (`try_conflict`) and a lower one (`stale_try`). The highest is kept, not the last heard,
+    /// heartbeat of the host has carried for the service, whatever order its verdict ended, the
+    /// try its step record holds among them, or of any order of it the coordinator gave that is
+    /// no longer outstanding ([`Self::order_try`]), and 1 when there is none. The daemon keys
+    /// tries per service (design 8.3): its step record holds the try of the service's last order
+    /// and refuses the same try of another package (`try_conflict`) and a lower one
+    /// (`stale_try`). The highest is kept, not the last heard,
     /// so a verdict that stops being sent once acknowledged, one that names no try, or an older
     /// one heard after a newer never lowers it. A resend before the host reports keeps the try;
     /// a restarted coordinator rebuilds it from the heartbeats, an acknowledged verdict read back
-    /// from the verdicts file among them (design 8.2).
+    /// from the verdicts file and the step record's try among them (design 8.2), so its first
+    /// order of a host starts past a try the host ran across its own restart and never reported
+    /// (the install of a self-update). A refusal for the try (`try_conflict`, `stale_try`) moves
+    /// it past the refused try, and past the record's when the host sends it.
     #[must_use]
     pub fn next_try(&self, service: &str, id: &HostId) -> u64 {
         let key = (id.clone(), service.to_owned());
@@ -484,7 +489,10 @@ impl Fleet {
     /// counts from then), or reports that it declined it ([`crate::defer`]: a deferral holds no
     /// slot, so the order must not hold it for [`ORDER_AGE`] either); an update or an install
     /// also ends when the host runs the ordered version (not as an `absent` copy) or reports
-    /// that it failed it, and an uninstall when the host reports a verdict of its order id.
+    /// that it failed it, and an uninstall when the host reports a verdict of its order id. A
+    /// refusal for the try ([`UpdateResult::is_try_refusal`]) ends the order of the try it
+    /// refused, moves the try, and is not kept as the host's report: the host is ordered again
+    /// past the try, and never counted as failing the version.
     pub fn record_in(
         &mut self,
         service: &str,
@@ -535,6 +543,11 @@ impl Fleet {
         counted: bool,
     ) {
         let key = (id, service.to_owned());
+        // A refusal of an order for its try alone is no word on the release: it is taken out of
+        // the beat, so no rule reads it as the host failing the version (the gate's
+        // `failed_here`, the plan's failed host, a force's verdict), and it only moves the try.
+        let mut beat = beat;
+        let refusal = beat.last_update.take_if(|r| r.is_try_refusal());
         let mut deferred_order = false;
         if let Some(order) = self.orders.get(&key) {
             deferred_order = beat
@@ -556,9 +569,24 @@ impl Fleet {
                     .and_then(|r| r.order_id.as_ref())
                     .is_some_and(|reported| reported.as_str() == order_id),
             };
-            if (beat.updating.is_some() || ended || deferred_order)
+            // The refusal ends the order of the try it refused, and no later one: one read back
+            // from the verdicts file after the order was given again names the older try. One
+            // that names no try is taken as the outstanding order's.
+            let refused = refusal
+                .as_ref()
+                .is_some_and(|r| r.order_try.is_none_or(|t| t == order.order_try));
+            if (beat.updating.is_some() || ended || deferred_order || refused)
                 && let Some(order) = self.orders.remove(&key)
             {
+                if refused {
+                    tracing::warn!(
+                        %service,
+                        node_id = %key.0,
+                        order_try = order.order_try,
+                        record_try = ?beat.record_try,
+                        "the host refused the order for its try; it is ordered again past it"
+                    );
+                }
                 self.no_longer_outstanding(key.clone(), &order);
             }
         }
@@ -573,7 +601,15 @@ impl Fleet {
         }
         self.defers.observe(&key, &beat, deferred_order, now);
         self.verdicts.observe(&key.1, &key.0, &beat);
-        if let Some(heard) = beat.last_update.as_ref().and_then(|r| r.order_try) {
+        // The try of the verdict, of the refusal (whose order the step record holds a try at
+        // or past), and the one the step record holds, which the host sends whether or not a
+        // verdict reached the coordinator.
+        let heard = [
+            beat.last_update.as_ref().and_then(|r| r.order_try),
+            refusal.as_ref().and_then(|r| r.order_try),
+            beat.record_try,
+        ];
+        if let Some(heard) = heard.into_iter().flatten().max() {
             let highest = self.tries.entry(key.clone()).or_default();
             *highest = (*highest).max(heard);
         }
