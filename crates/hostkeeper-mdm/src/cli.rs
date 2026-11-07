@@ -24,7 +24,7 @@ use crate::{Env, Grant, MdmError, System, tls};
 /// hostkeeper-mdm: MDM for enrolling Macs as compute hosts, on a Linux host. Every verb prints its
 /// plan by default; --apply acts. Exit 0 done, 1 a step or check failed, 2 refused.
 #[derive(Parser)]
-#[command(name = "hostkeeper-mdm", version)]
+#[command(name = "hostkeeper-mdm", version = crate::stamp::version())]
 struct Cli {
     #[command(subcommand)]
     verb: Verb,

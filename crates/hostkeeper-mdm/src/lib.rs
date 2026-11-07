@@ -60,6 +60,11 @@
 //!   fresh SCEP CA under its final name included), the old units stopped and disabled, and this
 //!   kit's services started. The old state and etc directories are never changed.
 //!
+//! * `hostkeeper-mdm --version`: `hostkeeper-mdm X.Y.Z+<first 12 hex digits of the commit>`
+//!   for a release build (the binary of the release asset
+//!   `hostkeeper-mdm-X.Y.Z-<linux platform>.tar.gz`), `hostkeeper-mdm X.Y.Z` for any other
+//!   (`stamp`).
+//!
 //! A call to NanoHUB's or NanoDEP's API (`api`) is printed as a step is, with its method, URL and
 //! body size, and made only with `--apply`.
 //!
@@ -99,6 +104,7 @@ pub mod net;
 pub mod push_cert;
 mod repo;
 pub mod secret;
+mod stamp;
 mod system;
 pub mod tls;
 pub mod verify;

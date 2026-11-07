@@ -38,8 +38,9 @@
 #          of its artifacts run, checks them against SHA256SUMS, verifies every attestation
 #          online as a deployment does and every bundle offline as a host does
 #          (cargo xtask release check), and runs the downloaded linux-x86_64 binaries, which
-#          must print exactly `hostkeeper X.Y.Z+<12 hex>` and `hostkeeper-coordinator
-#          X.Y.Z+<12 hex>` (cargo xtask release check-binary). These are the commands of
+#          must print exactly `hostkeeper X.Y.Z+<12 hex>`, `hostkeeper-coordinator
+#          X.Y.Z+<12 hex>` and `hostkeeper-mdm X.Y.Z+<12 hex>` (cargo xtask release
+#          check-binary). These are the commands of
 #          docs/deploy/verify-a-release.md, and a test keeps the two the same
 #          (crates/xtask/src/release/doc_tests.rs).
 # publish  the one job that holds `contents: write`, per release: creates a draft release at the
@@ -192,6 +193,9 @@ jobs:
       - run: tar -xzf "dist/hostkeeper-coordinator-$RELEASE_VERSION-linux-x86_64.tar.gz" -C "$RUNNER_TEMP/binary" hostkeeper-coordinator
       - name: hostkeeper-coordinator says the version and the commit it is released under
         run: cargo xtask release check-binary "$RUNNER_TEMP/binary/hostkeeper-coordinator" "$RELEASE_VERSION" "$COMMIT"
+      - run: tar -xzf "dist/hostkeeper-mdm-$RELEASE_VERSION-linux-x86_64.tar.gz" -C "$RUNNER_TEMP/binary" hostkeeper-mdm
+      - name: hostkeeper-mdm says the version and the commit it is released under
+        run: cargo xtask release check-binary "$RUNNER_TEMP/binary/hostkeeper-mdm" "$RELEASE_VERSION" "$COMMIT"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-${{ matrix.tag }}
