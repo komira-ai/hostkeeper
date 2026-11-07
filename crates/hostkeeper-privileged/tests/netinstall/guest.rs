@@ -9,6 +9,10 @@
 //! - arm64: `qemu-system-aarch64` under TCG, `virt`, with Ubuntu's AAVMF (`qemu-efi-aarch64`):
 //!   the hosted runners have no arm64 KVM.
 //!
+//! The NIC has no option ROM (`romfile=`): the firmware's own virtio-net driver and network
+//! stack boot it, as a board's firmware boots its NIC, and QEMU's iPXE ROMs (a package the job
+//! does not install) are not used.
+//!
 //! The serial console is the program's standard output: a line on it is an event of the test.
 //! The disk is a sparse raw file (no `qemu-img` needed), on a SCSI disk that reports itself not
 //! rotational, so the seed's default `--install-disk` (the smallest SSD) takes it.
@@ -172,7 +176,7 @@ impl Guest {
                 ),
                 "-device",
                 &format!(
-                    "virtio-net-pci,netdev=lan,mac={},bootindex=0",
+                    "virtio-net-pci,netdev=lan,mac={},romfile=,bootindex=0",
                     self.machine.mac
                 ),
                 "-device",
