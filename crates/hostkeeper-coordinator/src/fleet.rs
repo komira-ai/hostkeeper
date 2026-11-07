@@ -820,9 +820,20 @@ impl Fleet {
             .chain(self.outside.get(service).into_iter().flatten())
     }
 
-    /// Replaces the operator's marks the fleet decides by with `marks`.
+    /// Replaces the operator's marks the fleet decides by with `marks`. Whether the store's link
+    /// is lost is not among what is replaced: the operator's marks are refreshed from the ops
+    /// state in many places, and none of them knows the link ([`Self::set_store_lost`]).
     pub fn set_marks(&mut self, marks: Marks) {
-        self.marks = marks;
+        self.marks = Marks {
+            store_lost: self.marks.store_lost,
+            ..marks
+        };
+    }
+
+    /// Records whether the store's link to the database is lost, which the coordinator reads
+    /// from its backend each time it takes the fleet's lock.
+    pub fn set_store_lost(&mut self, lost: bool) {
+        self.marks.store_lost = lost;
     }
 
     /// What the fleet keeps of the host `id` for `service`, counted or not.

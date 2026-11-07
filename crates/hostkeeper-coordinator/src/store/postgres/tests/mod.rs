@@ -235,5 +235,6 @@ pub(crate) fn unix() -> UnixClock {
     Arc::new(|| AT)
 }
 
+mod coordinator;
 mod records;
 pub(crate) mod store;
