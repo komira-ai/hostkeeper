@@ -147,6 +147,7 @@ fn requests_posted_with(scratch: &Scratch, claims: Box<dyn ClaimsSource>) -> Vec
         entropy: Box::new(OsEntropy),
         wall: Box::new(SystemWallClock),
         clock: Box::new(hostkeeper_link::testing::FakeClock::new(0, 0)),
+        managed: None,
     };
     let settings = EnrollSettings {
         ca_sha256: Sha256Hex::parse(&hex::encode(Sha256::digest(CA_DER))).expect("a SHA-256"),

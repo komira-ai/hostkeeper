@@ -25,7 +25,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use hostkeeper_enroll::{ClaimsSource, Ioreg, Ipmi, LinuxClaims, MacClaims};
+use hostkeeper_enroll::{
+    ClaimsSource, Ioreg, Ipmi, LinuxClaims, MacClaims, ManagedFile, ManagedPreferences,
+};
 use hostkeeper_launchd::{
     Launchctl, LaunchdProcessProbe, LaunchdServiceManager, LaunchdUnitControl, PidInfo, Platform,
     PlatformKind, StdFileIdentity,
@@ -238,5 +240,14 @@ pub fn host_claims(
     match kind {
         PlatformKind::Linux => Box::new(linux.with_ipmi(bmc)),
         PlatformKind::Macos => Box::new(MacClaims::new(ioreg)),
+    }
+}
+
+/// The managed preferences the enroller of a host of `kind` reads its MDM's enrollment nonce
+/// from: `mac` on macOS (the host's: [`ManagedFile::host`]), and none on Linux, which has no MDM.
+pub fn host_managed(kind: PlatformKind, mac: ManagedFile) -> Option<Box<dyn ManagedPreferences>> {
+    match kind {
+        PlatformKind::Linux => None,
+        PlatformKind::Macos => Some(Box::new(mac)),
     }
 }

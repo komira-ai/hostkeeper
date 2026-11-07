@@ -16,6 +16,8 @@
 //! - [`ClaimsSource`]: what the host says about itself ([`LinuxClaims`], with the BMC's MAC over
 //!   the [`Ipmi`] port; [`MacClaims`] over the [`Ioreg`] port; `claims.rs`);
 //! - [`Entropy`]: random bytes for the key ([`OsEntropy`], `key.rs`);
+//! - [`ManagedPreferences`]: on a Mac, the managed preferences its MDM writes the one-time
+//!   enrollment nonce to ([`ManagedFile`], `managed.rs`);
 //! - [`WallClock`]: the wall clock, read only for certificate validity ([`SystemWallClock`],
 //!   `validity.rs`, the one file the wall-clock lint allows here);
 //! - `hostkeeper_steps::Clock`: the monotonic clock the retries sleep on.
@@ -28,6 +30,7 @@ mod claims;
 mod enroller;
 mod grpc;
 mod key;
+mod managed;
 mod renewal;
 mod store;
 mod validity;
@@ -44,6 +47,10 @@ pub use enroller::{
 };
 pub use grpc::{GrpcEnroll, GrpcError};
 pub use key::{Entropy, EntropyError, KEY_DRAWS, KeyError, OsEntropy};
+pub use managed::{
+    MAC_NONCE_BYTES, MANAGED_ENROLLMENT, MacNonce, ManagedError, ManagedFile, ManagedNonce,
+    ManagedPreferences, read_nonce,
+};
 pub use renewal::{Renewal, RenewalState};
 pub use store::{
     CurrentPaths, Fault, FaultGate, KeyFrom, PkiDir, SCHEMA, Store, StoreError, StoreLock, Stored,
