@@ -40,7 +40,16 @@
 //! forwards to `hostkeeper_pxe::cli::main`) and the real coordinator's LAN listener, on a bridge
 //! of the test's with no route out; their rig is `tests/netinstall/`, whose root-free parts
 //! `tests/net_install_rig.rs` runs in the pull-request set.
+//! `tests/self_update_across_releases.rs` (first line
+//! `#![cfg(all(any(target_os = "linux", target_os = "macos"), feature = "privileged"))]`, in both
+//! the job `privileged` and the job `macos-device`) is the cross-release rig: the daemon binary of
+//! the published release `previous-release.toml` pins, under the host's own unit or launchd job,
+//! updates to this build (the programs `hostkeeper-named-daemon`, versioned by the file it runs
+//! from, and `hostkeeper-failing-daemon`, which cannot start) through the end-to-end rig; its rig
+//! is `tests/across/`.
 //!
+//! - [`across`]: the cross-release rig's pin of the previous release, the check of its
+//!   downloaded tarball against the pin, and the version a program of this build runs as.
 //! - [`fixture`]: the workload fixture, the program `hostkeeper-fixture-hook` that speaks the hook
 //!   contract in the modes a test picks, and `serve`, a long-running main process for a unit. Its
 //!   interface is documented and kept stable for any test that drives it.
@@ -49,6 +58,7 @@
 //! - [`rig`]: the names and files of one test: a unique unit name per unit, the params files of
 //!   the fixture, the unit file of `serve`, and the `systemctl` lines that tear every unit down.
 
+pub mod across;
 pub mod fixture;
 pub mod host;
 pub mod rig;

@@ -236,6 +236,40 @@ add a `FixtureVersion` to `Scenario::start` (`tests/e2e/scenario.rs`): its versi
 (chosen at run time) and whether its `verify` fails; the scenario builds, signs and publishes it
 with the others. Nothing binary is committed.
 
+### The cross-release rig
+
+`self_update_across_releases.rs` runs hostkeeper's update of itself from a **published release** to
+this build, on Linux in the job `privileged` and on a Mac in the job `macos-device` (one target in
+both: its first line names both platforms). The release is the one
+`crates/hostkeeper-privileged/previous-release.toml` pins: its tag and version, and for each
+release platform the URL of its binary tarball (`hostkeeper-<version>-<platform>.tar.gz`) and that
+tarball's SHA-256. The jobs' steps `Download the previous release` and `Check the previous
+release (pinned checksum)` fetch the URL with `curl` and check it with `cargo xtask install-tool`
+into `target/previous-release/hostkeeper.tar.gz`; the workflow lint holds each job's
+`PREVIOUS_RELEASE_URL` and `PREVIOUS_RELEASE_SHA256` to the pin. The test checks the file against
+the pin again and fails by name when it is missing or differs; it fetches nothing itself.
+
+The released daemon runs as the host's own daemon (`hostkeeper.service` where the deb installs
+it, or the launchd job `dev.hostkeeper.hostkeeper` where the pkg puts it), on the end-to-end rig:
+the real coordinator ordering hostkeeper, the loopback release channel, the pinned `gh` against
+the test's trust root, which the released daemon reads from the host's fixed path as this build
+does. This build is the program `hostkeeper-named-daemon` (the shipped daemon, its version the
+name of the file it runs from, so it runs as versions newer than the release) and
+`hostkeeper-failing-daemon` (whose `daemon` exits 1). The tests, each from the released daemon
+converged on its own version's package:
+
+- `the_released_daemon_updates_to_this_build_and_this_build_settles_it_succeeded`;
+- `this_build_made_to_fail_its_start_is_fallen_back_from_to_the_released_binary`: by the released
+  binary's own fallback unit or job, the update `Failed`, `self_update_fallback`, and the
+  coordinator converging the host back on the release;
+- `this_build_updates_to_itself_under_a_newer_version_name`.
+
+To move the pin, in the pull request that needs it: set `tag` and `version`, and each platform's
+`url` and `sha256` from the release's `SHA256SUMS`, in `previous-release.toml`, and the same URL
+and SHA-256 in the `env` of the jobs `privileged` and `macos-device` of both `privileged.yml` and
+`pr-device.yml`. `cargo test -p hostkeeper-privileged --lib across` checks the pin's shape and
+`cargo test -p xtask --test workflows` checks the workflows against it.
+
 ## Tests
 
 Tests assert behaviour, cover failure and boundary cases, and are hermetic. A bug fix ships with

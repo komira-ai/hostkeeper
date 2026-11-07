@@ -1736,6 +1736,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
  "clap",
+ "flate2",
  "getrandom 0.4.3",
  "hello",
  "hex",
@@ -1770,6 +1771,7 @@ dependencies = [
  "tar",
  "thiserror",
  "tokio",
+ "toml",
  "tonic",
  "tower",
  "ureq",

@@ -494,7 +494,7 @@ fn a_copy_that_drifted_from_privileged_yml_is_refused() {
     // missing, and a top-level env (RUSTFLAGS) that differs.
     let privileged = committed(PRIVILEGED_WORKFLOW);
     let drift = |job: &str| format!("job {job}: not privileged.yml's job {job}, key for key");
-    let device_mac = "--test device_mac --test device_mac_e2e --test device_mac_selfupdate --test unpack_mac -- --test-threads=1 --nocapture";
+    let device_mac = "--test device_mac --test device_mac_e2e --test device_mac_selfupdate --test self_update_across_releases --test unpack_mac -- --test-threads=1 --nocapture";
     let changed = device_with(
         device_mac,
         "--test device_mac -- --test-threads=1 --nocapture",
