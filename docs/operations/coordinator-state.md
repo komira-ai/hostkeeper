@@ -110,8 +110,10 @@ the whole audit log, and the enrollment store. The design is
   (a guard against a bug or a hand-typed statement, not against the database's owner). Every row is
   kept; there is no rotation.
 - **Backups** of the database are taken with the database's own tools while the coordinator runs:
-  `pg_dump` reads one consistent snapshot. The deployment's timer and the restore drill come with
-  the compose deployment ([coordinator-storage.md](../design/coordinator-storage.md), section 10).
+  `pg_dump` reads one consistent snapshot. The compose deployment
+  ([docs/deploy/coordinator](../deploy/coordinator/README.md)) dumps it every six hours and keeps a
+  week of dumps; its runbook has the one-time setup, the restore (into an empty database, then the
+  serial counter moved on) and the monthly restore drill.
 
 ## Moving between the stores: import and export
 

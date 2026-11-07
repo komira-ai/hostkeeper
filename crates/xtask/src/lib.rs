@@ -18,6 +18,9 @@
 //!   intervals between them, from the times `hostkeeper-pxe` and the coordinator recorded
 //!   (`netinstall_report`). The end-to-end job `net-install` runs it; an operator
 //!   runs it once on the first real machine (`docs/operations/network-install.md`).
+//! - `db-backup`: one dump of the coordinator's database into a directory of dumps, keeping the
+//!   newest of them (`db_backup`). Not a CI step: the backup timer of the compose deployment runs
+//!   it (`docs/deploy/coordinator/`).
 //!
 //! The workflows that call them are in `.github/workflows`; `tests/workflows` holds each of
 //! them to the rules of this repository. The crate's one export is [`main`], the entry point of
@@ -25,6 +28,7 @@
 //! also exports `test_support`, what its integration tests need of its internals.
 
 mod advisories;
+mod db_backup;
 mod install;
 mod mdm_signing_test;
 mod netinstall_report;
@@ -57,6 +61,8 @@ enum Error {
     SigningTest(#[from] mdm_signing_test::Error),
     #[error(transparent)]
     NetinstallReport(#[from] netinstall_report::Error),
+    #[error(transparent)]
+    DbBackup(#[from] db_backup::Error),
 }
 
 #[derive(Parser)]
@@ -109,6 +115,10 @@ enum Verb {
     /// the log of `hostkeeper-pxe serve` and what `hostkeeper ctl` printed of its request and
     /// host. Reads no clock.
     NetinstallReport(netinstall_report::Flags),
+    /// One backup of the coordinator's database: run the dump command after `--` with its
+    /// output into a new numbered file of `--into` (mode 0600), and keep the newest `--keep`
+    /// dumps. A dump that fails or writes nothing is not kept, and removes no older one.
+    DbBackup(db_backup::Flags),
 }
 
 fn run(cli: Cli) -> Result<Vec<String>, Error> {
@@ -137,6 +147,7 @@ fn run(cli: Cli) -> Result<Vec<String>, Error> {
             mdm_signing_test::NanoHubHttp::new,
         )?),
         Verb::NetinstallReport(flags) => Ok(netinstall_report::run(&flags)?),
+        Verb::DbBackup(flags) => Ok(db_backup::run(&flags)?),
     }
 }
 
@@ -157,7 +168,8 @@ pub fn main() -> ExitCode {
                 | Error::Release(_)
                 | Error::Advisories(_)
                 | Error::SigningTest(_)
-                | Error::NetinstallReport(_) => ExitCode::FAILURE,
+                | Error::NetinstallReport(_)
+                | Error::DbBackup(_) => ExitCode::FAILURE,
             }
         }
     }
