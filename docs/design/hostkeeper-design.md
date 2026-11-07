@@ -180,7 +180,7 @@ hostkeeper's own release planner holds releases from a commit whose privileged r
 
 ### 4.6 The boot image and installers
 
-Linux: a network-installed Ubuntu 24.04 system ([network-install.md](network-install.md)) carries the daemon, its unit and `/etc/hostkeeper/hostkeeper.toml`; a host built from it needs nothing else to enroll. A deb and an rpm carry the daemon and unit for hosts not built from the image; whoever installs them places the config. macOS: a signed pkg whose postinstall writes `hostkeeper.toml` (section 5.9). Both publish into the operator's shared package repositories. Network boot is served by the optional `hostkeeper-pxe` (network-install.md section 3). Designed.
+Linux: a network-installed Ubuntu 24.04 system ([network-install.md](network-install.md)) carries the daemon, its unit and `/etc/hostkeeper/hostkeeper.toml`; a host built from it needs nothing else to enroll. A deb and an rpm carry the daemon and unit for hosts not built from the image; whoever installs them places the config. macOS: a signed pkg whose postinstall writes `hostkeeper.toml` from the config profile the MDM installed first (section 5.9, [hostkeeper-mdm.md](hostkeeper-mdm.md) section 4). Both publish into the operator's shared package repositories. Network boot is served by the optional `hostkeeper-pxe` (network-install.md section 3). Designed.
 
 ### 4.7 The package
 
@@ -574,6 +574,8 @@ Designed (B8); replaces kbf's registration socket (`/run/updater/register.sock`)
 
 ![Mac path: MDM enrollment, package install by digest, per-device nonce, enrollment, auto-approval conditions, and the one launchd daemon](diagrams/mac-path.svg)
 
+The figure shows the order before [hostkeeper-mdm.md](hostkeeper-mdm.md): there the nonce is pushed after the daemon's request is pending, and bound to it. The text below is current.
+
 The flow is the same; these differ:
 
 | Aspect | Linux | macOS |
@@ -588,7 +590,7 @@ The flow is the same; these differ:
 | Package verification | attestation, archive shape | plus no quarantine attribute and a valid code signature |
 | Self-update | `OnFailure=` fallback | launchd `KeepAlive` plus a timer job that flips the link back |
 
-Mac enrollment auto-approval, designed: MDM installs the hostkeeper installer pkg by allowlisted digest; the gate pushes a per-device one-time nonce as a managed configuration profile; the pkg's postinstall writes the whole daemon config (`hostkeeper.toml`: coordinator, CA hash, release channel and trusted signers); the daemon enrolls with the nonce; the coordinator auto-approves only if the nonce is valid, unexpired (one hour), unused, consumed in the same durable transaction as the approval, issued for the claimed serial, the gate reports the device enrolled and supervised, and the serial is on the allowlist. **MDM is part of hostkeeper, decided:** the policy gate and installer kit are components of this repository with their own design document; this document states only the interface the enrollment path needs. The MDM profile identifier is renamed to the hostkeeper reverse-DNS prefix before any Mac enrolls (a build gate on B18).
+Mac enrollment auto-approval, designed: the gate installs a managed config profile (coordinator, CA hash, release channel and trusted signers; no secret), then the hostkeeper installer pkg by allowlisted digest; the pkg's postinstall writes `hostkeeper.toml` from that profile and loads the launchd job; once the daemon's request is pending the gate pushes a per-device one-time nonce, bound to that request, as a managed configuration profile; the daemon enrolls with the nonce; the coordinator auto-approves only if the nonce is valid, unexpired (one hour), unused, consumed in the same durable transaction as the approval, issued for the claimed serial and the request, the gate reports the device enrolled and supervised, and the serial is on the allowlist. **MDM is part of hostkeeper, decided:** the policy gate and installer kit are components of this repository with their own design document, [hostkeeper-mdm.md](hostkeeper-mdm.md); this document states only the interface the enrollment path needs. The MDM profile identifier is renamed to `com.komira.hostkeeper.mdm`, the farm's setting, before any Mac enrolls (a build gate on B18).
 
 ### 5.10 The UI
 
