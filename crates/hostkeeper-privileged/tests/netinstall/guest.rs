@@ -18,17 +18,28 @@
 //! rotational, so the seed's default `--install-disk` (the smallest SSD) takes it.
 
 use std::fs::{self, File};
+use std::io::Write as _;
 use std::net::Ipv4Addr;
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use super::events::{Bus, Source};
 use super::program::Program;
 
 /// The size of the guest's disk: room for the direct layout of a live-server install.
 const DISK_BYTES: u64 = 20 * 1024 * 1024 * 1024;
-/// The guest's memory, in MiB: the live system loads the whole ISO into memory.
-const MEMORY_MIB: &str = "8192";
+/// The guest's memory, in MiB: the live system copies the whole ISO (3.8 GiB) into a file
+/// system in memory, which is given half of it by default, so 8 GiB is not enough.
+const MEMORY_MIB: &str = "12288";
+/// How often the guest's screen is saved for the job's artifacts: the live installer writes to
+/// the screen only (its kernel line names no serial console), so the screens are what a failed
+/// or timed-out job shows of it. A pace of the evidence, which no test reads.
+const SCREEN_EVERY: Duration = Duration::from_secs(120);
 
 /// The firmware of a platform: its code (read only) and the template of its variables, which the
 /// guest gets a writable copy of.
@@ -62,6 +73,14 @@ impl Arch {
         match self {
             Arch::X86_64 => "qemu-system-x86_64",
             Arch::Arm64 => "qemu-system-aarch64",
+        }
+    }
+
+    /// The display device, whose screen the rig saves.
+    fn display(self) -> &'static str {
+        match self {
+            Arch::X86_64 => "VGA",
+            Arch::Arm64 => "virtio-gpu-pci",
         }
     }
 
@@ -104,8 +123,10 @@ pub struct Guest {
     disk: PathBuf,
     vars: PathBuf,
     log_dir: PathBuf,
+    monitor: PathBuf,
     ns: String,
     run: Option<Program>,
+    screens: Option<(Arc<AtomicBool>, JoinHandle<()>)>,
 }
 
 impl Guest {
@@ -131,8 +152,10 @@ impl Guest {
             disk,
             vars,
             log_dir: log_dir.to_path_buf(),
+            monitor: dir.join("monitor.sock"),
             ns: ns.to_owned(),
             run: None,
+            screens: None,
         }
     }
 
@@ -152,6 +175,10 @@ impl Guest {
                 "-nodefaults",
                 "-display",
                 "none",
+                "-device",
+                self.machine.arch.display(),
+                "-monitor",
+                &format!("unix:{},server=on,wait=off", self.monitor.display()),
                 "-serial",
                 "stdio",
                 "-m",
@@ -203,6 +230,48 @@ impl Guest {
             &self.args(),
             &self.log_dir.join("guest-console.log"),
         ));
+        if self.screens.is_none() {
+            let stop = Arc::new(AtomicBool::new(false));
+            let (stopped, monitor, dir) = (
+                Arc::clone(&stop),
+                self.monitor.clone(),
+                self.log_dir.clone(),
+            );
+            let thread = thread::spawn(move || {
+                let mut n = 0u32;
+                while !stopped.load(Ordering::SeqCst) {
+                    thread::sleep(SCREEN_EVERY);
+                    n += 1;
+                    let file = dir.join(format!("screen-{n:03}.png"));
+                    // A guest that is down between two runs has no monitor: no screen then.
+                    if let Ok(mut monitor) = UnixStream::connect(&monitor) {
+                        let _ = writeln!(monitor, "screendump -f png {}", file.display());
+                        let _ = monitor.flush();
+                        // Read to the prompt after the command (the second one, after the
+                        // banner's), so that the command is done before the connection closes.
+                        let _ = monitor.set_read_timeout(Some(Duration::from_secs(30)));
+                        let mut seen = Vec::new();
+                        let mut answer = [0u8; 4096];
+                        while seen.windows(6).filter(|w| *w == b"(qemu)").count() < 2 {
+                            match std::io::Read::read(&mut monitor, &mut answer) {
+                                Ok(0) | Err(_) => break,
+                                Ok(read) => seen.extend_from_slice(&answer[..read]),
+                            }
+                        }
+                    }
+                }
+            });
+            self.screens = Some((stop, thread));
+        }
+    }
+}
+
+impl Drop for Guest {
+    fn drop(&mut self) {
+        // The screen thread is left to end with the process: it sleeps between two screens.
+        if let Some((stop, _)) = &self.screens {
+            stop.store(true, Ordering::SeqCst);
+        }
     }
 }
 
@@ -244,7 +313,6 @@ impl Ssh {
 
     /// Runs `command` on the guest as `operator`, with `input` on its standard input.
     pub fn run(&self, command: &str, input: &[u8]) -> Output {
-        use std::io::Write;
         let mut child = Command::new("ssh")
             .args([
                 "-F",
