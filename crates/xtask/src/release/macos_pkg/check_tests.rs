@@ -1,23 +1,27 @@
 //! The read-back of an expanded pkg: its parts, its `PackageInfo` and its payload, checked
 //! against the binary, `gh` and trusted root it must hold.
 
+use hostkeeper_launchd::postinstall::Postinstall;
+
 use super::tests::*;
 use super::*;
 
 #[test]
 fn a_good_expanded_pkg_passes_the_check() {
-    // Catches: a check that refuses the pkg pkgbuild makes of the tree build lays out.
+    // Catches: a check that refuses the product archive productbuild makes of the component
+    // pkgbuild makes of the tree build lays out.
     let expanded = Expanded::good("macos-pkg-check-good");
     assert_eq!(
         expanded.check(),
         Ok(vec![format!(
-            "check-macos-pkg: {} installs exactly /usr/local/bin/hostkeeper (755), \
+            "check-macos-pkg: {} is a product archive of the one component hostkeeper.pkg, \
+             which installs exactly /usr/local/bin/hostkeeper (755), \
              /Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist (644), \
              /private/etc/newsyslog.d/hostkeeper.conf (644), /usr/local/lib/hostkeeper/gh \
              (755), /usr/local/lib/hostkeeper/trusted_root.json (644) and the directory \
              /private/var/log/hostkeeper (755), owned by root and wheel, with the label \
              dev.hostkeeper.hostkeeper, version 0.1.5 and the one script postinstall",
-            expanded.pkg().display()
+            expanded.product().display()
         )])
     );
 }
@@ -92,7 +96,8 @@ type Lay<'a> = Box<dyn Fn(&Expanded, &Path) + 'a>;
 #[test]
 fn a_scripts_directory_that_is_not_the_one_postinstall_is_refused() {
     // Catches: a pkg that runs another script at install, runs a postinstall with other words
-    // than the seed (another state directory, another binary, a command that is not the seed),
+    // than the three commands (another state directory, another binary, a command that is not the
+    // seed, a text one byte off, or one that does not load the job),
     // holds no postinstall, holds one the installer cannot run or that others may write or that
     // is setuid, or holds a link, a directory or anything else in place of it or beside it.
     let text = postinstall_text();
@@ -100,6 +105,8 @@ fn a_scripts_directory_that_is_not_the_one_postinstall_is_refused() {
         "--state-dir '/var/lib/updater/state'",
         "--state-dir '/tmp/state'",
     );
+    let one_byte = text.replacen("mac-config", "mac-confiG", 1);
+    let without_load = text.replace("exec ", "");
     let not_ours = "Scripts: postinstall is not the postinstall release macos-pkg writes";
     let mode = |m: &str| format!("Scripts: postinstall has mode {m}, not 755");
     let cases: Vec<(Lay<'_>, Vec<String>)> = vec![
@@ -109,6 +116,14 @@ fn a_scripts_directory_that_is_not_the_one_postinstall_is_refused() {
         ),
         (
             Box::new(|e, _| e.write_script(POSTINSTALL, b"", 0o755)),
+            vec![not_ours.to_owned()],
+        ),
+        (
+            Box::new(|e, _| e.write_script(POSTINSTALL, one_byte.as_bytes(), 0o755)),
+            vec![not_ours.to_owned()],
+        ),
+        (
+            Box::new(|e, _| e.write_script(POSTINSTALL, without_load.as_bytes(), 0o755)),
             vec![not_ours.to_owned()],
         ),
         (
@@ -184,25 +199,32 @@ fn a_scripts_directory_that_is_not_the_one_postinstall_is_refused() {
 }
 
 #[test]
-fn the_postinstall_runs_the_installed_binarys_seed_of_the_daemons_state_directory() {
-    // Catches: a postinstall that is not one line running the seed (the counterpart of the Linux
-    // unit's ExecStartPre=), or that runs it from another binary, of another binary, or for
-    // another state directory than the daemon's, which the plist starts `current` of.
+fn the_postinstall_runs_the_seed_then_mac_config_then_loads_the_job() {
+    // Catches: a postinstall that is not the three commands in order (seed, mac-config, load),
+    // that runs them from another binary or for other paths than the daemon's and the
+    // managed preferences' (which the plist starts `current` of and the MDM writes), that goes on
+    // after a failed command, or that loads the job without a config.
     let text = postinstall_text();
-    assert_eq!(
-        text.lines().last(),
-        Some(
-            "exec '/usr/local/bin/hostkeeper' self-update-seed --state-dir \
-             '/var/lib/updater/state' --binary '/usr/local/bin/hostkeeper'"
-        )
-    );
+    assert_eq!(text, Postinstall::pkg().script());
     assert!(text.starts_with("#!/bin/sh\n"));
     let code: Vec<&str> = text
         .lines()
         .skip(1)
         .filter(|line| !line.starts_with('#'))
         .collect();
-    assert_eq!(code.len(), 1, "one command: {code:?}");
+    assert_eq!(
+        code,
+        [
+            "'/usr/local/bin/hostkeeper' self-update-seed --state-dir '/var/lib/updater/state' \
+             --binary '/usr/local/bin/hostkeeper' || exit",
+            "'/usr/local/bin/hostkeeper' mac-config --managed \
+             '/Library/Managed Preferences/dev.hostkeeper.config.plist' --config \
+             '/etc/hostkeeper/hostkeeper.toml' || exit",
+            "'/bin/launchctl' bootout 'system/dev.hostkeeper.hostkeeper' 2>/dev/null",
+            "exec '/bin/launchctl' bootstrap system \
+             '/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist'",
+        ]
+    );
 }
 
 #[test]
@@ -238,7 +260,7 @@ fn package_info_of_another_identifier_version_or_location_or_with_a_script_is_re
             package_info().replace("<postinstall file=\"./postinstall\"/>", ""),
             vec![
                 "PackageInfo names no postinstall script (<postinstall file=\"./postinstall\"/>): \
-                 nothing would give the daemon's job a binary to start",
+                 nothing would seed the binary, write the config or load the daemon's job",
             ],
         ),
         (
@@ -557,7 +579,7 @@ fn an_unreadable_directory_binary_gh_or_trusted_root_is_an_io_error_naming_it() 
         ];
         *source.into_iter().nth(missing).expect("a source") = absent.clone();
         assert!(matches!(
-            check(&expanded.pkg(), &version(), &sources),
+            check(&expanded.product(), &version(), &sources),
             Err(Error::Io { what, .. }) if what == format!("read {}", absent.display())
         ));
     }

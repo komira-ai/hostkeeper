@@ -185,9 +185,10 @@ pub(crate) trait AdvisoryCheck {
     fn check_advisories(&self) -> Result<Said, PortError>;
 }
 
-/// Builds a flat macOS installer package from a directory tree (`pkgbuild`).
+/// Builds a macOS installer package from a directory tree (`pkgbuild`) and wraps it as a
+/// distribution package (`productbuild`).
 pub(crate) trait BuildPkg {
-    /// Builds `pkg` from the tree `root`, installed at `/`, with the package identifier
+    /// Builds the component `pkg` from the tree `root`, installed at `/`, with the package identifier
     /// `identifier` and version `version`, every entry owned by root and wheel, and the scripts
     /// of the directory `scripts`.
     fn build_pkg(
@@ -197,6 +198,16 @@ pub(crate) trait BuildPkg {
         identifier: &str,
         version: &Version,
         pkg: &Path,
+    ) -> Result<(), PortError>;
+
+    /// Wraps the component pkg `component` as the one package of the distribution pkg `product`,
+    /// with the product identifier `identifier` and version `version`; `product` is not signed.
+    fn build_product(
+        &self,
+        component: &Path,
+        identifier: &str,
+        version: &Version,
+        product: &Path,
     ) -> Result<(), PortError>;
 }
 

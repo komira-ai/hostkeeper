@@ -10,7 +10,9 @@
 //! nothing else ([`crate::selfupdate::protocol_line`]); and `hostkeeper self-update-seed
 //! --state-dir <dir> --binary <file>`, which the daemon's unit runs before each start (on a Mac the
 //! pkg's `postinstall`, at install) to give the binary directory its first binary
-//! ([`crate::seed`]). Configuration comes in as flags only, never from the
+//! ([`crate::seed`]); and `hostkeeper mac-config [--managed <file>] [--config <file>]`, which the
+//! same `postinstall` runs next to write the daemon config from the managed preferences the MDM
+//! installed ([`crate::mac_config`]). Configuration comes in as flags only, never from the
 //! environment (AGENTS.md S2); every default is a constant here.
 //!
 //! The two values read from the environment are platform-set markers of systemd, and only
@@ -160,6 +162,9 @@ pub enum Command {
     /// Give the binary directory of hostkeeper's own update its first binary when its `current`
     /// starts none (run by the daemon's unit before each start, and by the macOS pkg at install).
     SelfUpdateSeed(SeedFlags),
+    /// Write the daemon config from the managed preferences of the MDM, unless a config is there
+    /// (run by the macOS pkg at install).
+    MacConfig(MacConfigFlags),
     /// The hook of hostkeeper's own package: every step does nothing and exits 0, since
     /// hostkeeper replaces itself by the daemon's self-update (run by a daemon that installs or
     /// updates the service `hostkeeper`).
@@ -201,6 +206,17 @@ pub struct SeedFlags {
     /// The binary put in as this binary's version: the one the package installed.
     #[arg(long)]
     pub binary: PathBuf,
+}
+
+/// The flags of `hostkeeper mac-config`.
+#[derive(Clone, Debug, PartialEq, Eq, Args)]
+pub struct MacConfigFlags {
+    /// The managed preferences file, a property list (binary or XML) root owns.
+    #[arg(long, default_value = hostkeeper_launchd::postinstall::MANAGED_CONFIG)]
+    pub managed: PathBuf,
+    /// The daemon config to write; one that is there is kept.
+    #[arg(long, default_value = DEFAULT_CONFIG)]
+    pub config: PathBuf,
 }
 
 /// The flags of `hostkeeper self-update-fallback`.
@@ -297,6 +313,9 @@ pub fn run_with(cli: Cli, systemd: SystemdVars) -> ExitCode {
         Command::SelfUpdateFallback(flags) => return crate::fallback::main(&flags.dir),
         Command::SelfUpdateSeed(flags) => {
             return crate::seed::main(&flags.state_dir, &flags.binary);
+        }
+        Command::MacConfig(flags) => {
+            return crate::mac_config::main(&flags.managed, &flags.config);
         }
         Command::SelfUpdateProtocol => {
             print!("{}", crate::selfupdate::protocol_line());

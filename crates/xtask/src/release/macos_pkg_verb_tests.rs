@@ -59,9 +59,10 @@ fn check_macos_pkg_takes_the_gh_and_the_trusted_root_it_checks_against() {
 }
 
 #[test]
-fn macos_pkg_builds_through_the_pkgbuild_port_with_its_flags() {
+fn macos_pkg_builds_through_the_pkgbuild_and_productbuild_port_with_its_flags() {
     // Catches: `--version`, `--binary`, `--gh`, `--trusted-root`, `--stage` or `--out` not
-    // reaching the pkg builder, or the builder run without the pkgbuild port.
+    // reaching the pkg builder, the component not written to the stage or the product not to `--out`,
+    // or the builder run without the pkgbuild port.
     let d = scratch("release-macos-pkg-verb");
     std::fs::write(d.join("hostkeeper"), b"bin").expect("write the binary");
     std::fs::write(d.join("gh"), b"gh").expect("write gh");
@@ -99,6 +100,20 @@ fn macos_pkg_builds_through_the_pkgbuild_port_with_its_flags() {
         (
             stage.join("root").as_path(),
             stage.join("scripts").as_path(),
+            stage.join("hostkeeper.pkg").as_path(),
+            "0.1.9".to_owned()
+        )
+    );
+    let products = fakes.pkgbuild.product_calls.borrow();
+    assert_eq!(products.len(), 1);
+    assert_eq!(
+        (
+            products[0].component.as_path(),
+            products[0].product.as_path(),
+            products[0].version.to_string()
+        ),
+        (
+            stage.join("hostkeeper.pkg").as_path(),
             out.join("hostkeeper-0.1.9-macos-arm64.pkg").as_path(),
             "0.1.9".to_owned()
         )
