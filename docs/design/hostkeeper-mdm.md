@@ -503,6 +503,56 @@ Pkg 4 is the negative case that shows the root payload is what makes pkg 3 pass.
 installs, the farm identity is the answer. If it does not, Developer ID Installer is required, and
 question Q4 asks for it.
 
+**Built: the kit and its runbook.** The kit is `cargo xtask mdm-signing-test`
+(`crates/xtask/src/mdm_signing_test.rs`) and the runbook is
+[docs/operations/pkg-signing-test.md](../operations/pkg-signing-test.md). The run itself needs
+an enrolled Mac and has not happened yet.
+
+The kit has four verbs:
+
+- `build` runs on a Mac that is not the one under test.
+- `send` runs on the MDM host. It sends the root's profile, each pkg and the profile's removal
+  through NanoHUB's API on loopback, with the inline manifest of section 7.1, and sends nothing
+  without `--apply`.
+- `record` writes what the operator read: the Mac's answer from NanoHUB's log, and whether the
+  Mac holds the pkg's receipt.
+- `report` prints the run and its verdict.
+
+How the kit carries out the four pkgs:
+
+- **The farm identity is a test CA the build makes.** It is a root, `A`, with an installer
+  identity under it (RSA, `codeSigning`). The pkg 4 identity sits under a second root, `B`, which
+  the build deletes. Every private key is deleted with the build's scratch directory, so the
+  repository and the kit hold no secret.
+- **Root A comes in a profile of its own,** `<profile identifier>.signing-test.root`, holding
+  one `com.apple.security.root` payload. It does not go into the config profile of section 4,
+  because the test must install and remove it alone. If the farm identity is chosen, task M15
+  moves the payload into the config profile.
+- **Each pkg carries one marker file under its own identifier,**
+  `dev.hostkeeper.signing-test.pkg<n>`, not the hostkeeper payload. "Today's pkg" in the list
+  above is read as this unsigned component pkg. The marker has two purposes. First, a receipt
+  names exactly one pkg. Second, the release pkg's postinstall fails on a Mac with no managed
+  config (`mac-config`), and that failure would hide the signature's outcome. The signing is the
+  release pkg's: `productsign` over a `productbuild` distribution pkg.
+- **The order holds by construction.** `send` refuses pkg 3 and pkg 4 until the root's profile
+  is recorded `Acknowledged`, and refuses them again after its removal.
+- **An outcome is read on the Mac** (`pkgutil --pkg-info`, the install log), because
+  `Acknowledged` comes before the install. For pkg 3 the operator also records whether
+  `pkgutil --check-signature` on the Mac reads its chain as trusted.
+- **A run that cannot decide says so.** The report names it inconclusive, not a refusal of the
+  signature, in three cases: a command the Mac answered with an error, pkg 4 installing, or pkg 3
+  refused with a chain the Mac was not shown to trust.
+
+Two facts are to verify in the run:
+
+- whether `productsign` signs with an identity whose root the build Mac does not trust (the
+  runbook stops if it does not);
+- whether the Mac's installer accepts the `codeSigning` extended key usage for a pkg (the
+  `--trusted` record tells this case apart from a refusal by the MDM).
+
+**Results:** none yet. The run writes its table, its verdict, the Mac's macOS version and the
+enrollment path here.
+
 Whatever the test says, the release pkg becomes a distribution pkg (`productbuild` around the
 component pkg). It costs one tool call in `cargo xtask release macos-pkg`, every source that
 names a format names that one, and `check-macos-pkg` reads both layers (**Built**:
@@ -652,6 +702,7 @@ progress from explicit events. NanoHUB is a fake: an in-process HTTP server on `
 | `an_approved_mac_is_not_sent_the_pkg_again` | re-sending stops at the first candidate request and after approval | M14 |
 | `only_an_allowlisted_digest_is_sent` | an unlisted digest, a file whose bytes differ from its listed digest, and a listed one | M14 |
 | `the_manifest_carries_the_digest_the_mac_checks` | the inline manifest golden: `sha256` equals the allowlisted digest, `url` names it | M14 |
+| `crates/xtask/src/mdm_signing_test/` tests | the kit's CA, pkg and signing commands in order; no key, keychain or root B left after a build, a failed one included; the manifest's digest and URL; the order of the steps; each send's own command UUID; NanoHUB's answers; the verdict of every outcome | M11 |
 | `pkg_add_refuses_an_unattested_pkg` | the farm-signing verb verifies first (only if M11 chooses the farm identity) | M15 |
 | `the_enrollment_profile_is_served_mode_0640` | the SCEP challenge it carries is readable by the service group only | M5 |
 | `migrate_dry_runs_and_keeps_the_old_state` | without `--apply` nothing changes; with it the old state directory is untouched | M5 |
@@ -738,7 +789,7 @@ pull request.
 | M8 | The gate's device side: NanoHUB client (loopback, API key file), webhook listener on loopback, durable device records, `DeviceInformation` and `SecurityInfo`, the `DeviceState` implementation; coordinator flags `--mdm-api-url`, `--mdm-api-key-file`, `--mdm-webhook-listen`; `Mdm.ListDevices` in the operator API and its generated CLI verb; `docs/enrollment-coordinator.md` no longer says the gate is outside the coordinator; the table `mdm_devices` by its own migration | M1, C3 of coordinator-storage.md | L |
 | M9 | Coordinator: the nonce's `request_id` (an added store field), `nonce_wrong_request`, the replacement of a wiped Mac's own host id, and the allowlist entry's services assigned at a nonce approval as at an operator's; `docs/enrollment-coordinator.md` and `docs/operations/enrollment.md` | M1 | M |
 | M10 | Pkg: the `productbuild` distribution layer, the `mac-config` verb, the three-command postinstall, `check-macos-pkg`, the `plist` dependency comment, `docs/macos.md` | M1 | M |
-| M11 | Device test of pkg signing (section 7.2) on one enrolled Mac; the results are written into this document, and they decide M15 | M7, M8, M10 | S |
+| M11 | Device test of pkg signing (section 7.2) on one enrolled Mac; the results are written into this document, and they decide M15. **Built**: the kit and its runbook (section 7.2); the run waits for the Mac | M7, M8, M10 | S |
 | M12 | The gate's enrollment side: the config profile, nonce issue and push under the conditions of 5.1, re-issue, removal; the redrawn `mac-path.svg` | M8, M9 | M |
 | M13 | Daemon: the enroller reads the nonce from the managed profile and posts once with it for its own request; `wire::EnrollRequest` and the gRPC adapter carry it; `docs/operations/enrollment.md` | M9 | M |
 | M14 | The gate's install: the pkg allowlist, the inline manifest, the re-send of 5.4 | M5, M8, M10 | M |

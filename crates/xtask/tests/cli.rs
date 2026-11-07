@@ -490,3 +490,70 @@ fn advisories_reaches_cargo_deny_first_and_fails_with_status_1_when_it_cannot_st
     assert_eq!(o.status.code(), Some(2), "{}", stderr(&o));
     assert_eq!(stdout(&o), "");
 }
+
+#[test]
+fn mdm_signing_test_report_prints_an_empty_run_with_status_0() {
+    // Catches: the signing test's verbs not reached from the command line, or a report of a
+    // run with nothing recorded failing instead of saying it is incomplete.
+    let d = dir("signing-report");
+    let o = run(&d, &["mdm-signing-test", "report", "--kit", "."]);
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+    assert_eq!(
+        stdout(&o),
+        "| Step | Command | Answer | Installed | Note |\n|---|---|---|---|---|\n\n\
+         Verdict: incomplete: pkg-1 has no recorded outcome\n"
+    );
+}
+
+#[test]
+fn mdm_signing_test_build_into_a_directory_that_exists_fails_with_status_1() {
+    // Catches: a refusal of the signing test exiting 0 or 2, or its words not printed.
+    let d = dir("signing-build");
+    let o = run(
+        &d,
+        &[
+            "mdm-signing-test",
+            "build",
+            "--out",
+            ".",
+            "--profile-identifier",
+            "com.example.hostkeeper.mdm",
+        ],
+    );
+    assert_eq!(o.status.code(), Some(1));
+    assert_eq!(
+        stderr(&o),
+        "xtask: . exists: the kit is built into a new directory\n"
+    );
+}
+
+#[test]
+fn mdm_signing_test_send_refuses_an_api_url_off_loopback_with_status_2() {
+    // Catches: NanoHUB's API key sent to an address beyond the host: the flag parser refuses it.
+    let d = dir("signing-send");
+    let o = run(
+        &d,
+        &[
+            "mdm-signing-test",
+            "send",
+            "--kit",
+            ".",
+            "--step",
+            "pkg-1",
+            "--enrollment-id",
+            "A",
+            "--api-url",
+            "http://192.0.2.1:9004",
+            "--api-key-file",
+            "key",
+            "--mdm-host",
+            "mdm.example.net",
+        ],
+    );
+    assert_eq!(o.status.code(), Some(2));
+    assert!(
+        stderr(&o).contains("is not NanoHUB's loopback API URL"),
+        "{}",
+        stderr(&o)
+    );
+}

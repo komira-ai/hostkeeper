@@ -12,7 +12,8 @@ description = "The CI steps of this repository (cargo xtask <verb>)."
 default-run = "xtask"
 
 [dependencies]
-# The DSSE payload of an attestation bundle (`release channel-stage` reads its subjects).
+# The DSSE payload of an attestation bundle (`release channel-stage` reads its subjects); the
+# HTTP Basic credentials of `mdm-signing-test send`.
 base64.workspace = true
 clap.workspace = true
 flate2.workspace = true
@@ -28,9 +29,13 @@ hostkeeper-config = { path = "../hostkeeper-config" }
 hostkeeper-launchd = { path = "../hostkeeper-launchd" }
 # The zstd compression of the hostkeeper package (`release package`).
 ruzstd.workspace = true
-# Reads back the launchd plist of the installer pkg (`release check-macos-pkg`).
+# Reads back the launchd plist of the installer pkg (`release check-macos-pkg`); writes the
+# commands and the root's profile of `mdm-signing-test`.
 plist.workspace = true
-# The JSON `gh` prints: workflow runs, issues, releases and verified attestations.
+# `kit.toml` and `results.toml` of `mdm-signing-test`, read and written by their types.
+serde.workspace = true
+# The JSON `gh` prints: workflow runs, issues, releases and verified attestations; NanoHUB's
+# answer to `mdm-signing-test send`.
 serde_json.workspace = true
 sha2.workspace = true
 tar.workspace = true

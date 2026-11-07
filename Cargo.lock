@@ -4220,6 +4220,7 @@ dependencies = [
  "prost-reflect",
  "ruzstd",
  "saphyr-parser",
+ "serde",
  "serde_json",
  "sha2",
  "tar",
