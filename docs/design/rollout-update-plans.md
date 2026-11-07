@@ -32,7 +32,7 @@ stages = [1, { percent = 10, advance = "manual" }, 50, 100]
 
 ### 1.2 Eligible hosts and stage sizes
 
-A host is **eligible** for a service when it is live (it heartbeat within the down limit, 45 seconds), the service is assigned to it, an operator has not excluded or held it there, no standing force covers the pair, and the coordinator could order it the service: it runs it, or it is to install it and its agent takes installs and the desired version has a package for its platform. Eligibility is computed at every decision from the fleet the heartbeats built; nothing about it is stored.
+A host is **eligible** for a service when it is live (it heartbeat within the down limit, 45 seconds), the service is assigned to it, an operator has not excluded or held it there, no standing force covers the pair, it has no failure of the desired version that an operator acknowledged (section 1.5), and the coordinator could order it the service: it runs it, or it is to install it and its agent takes installs and the desired version has a package for its platform. Eligibility is computed at every decision from the fleet the heartbeats built; nothing about it is stored.
 
 With `n` eligible hosts, a stage of percent `p` holds `max(1, ceil(p * n / 100))` hosts, never fewer than the stage before it and never more than `n`. A canary stage holds `min(count, n)`. Stages that come out the same size **collapse** into one: on 8 hosts, `[1, 10, 50, 100]` gives 1, 1, 4 and 8, which is three stages, 1, 4 and 8. On 100 hosts it gives 1, 10, 50 and 100. On one host every plan is one stage of one host. A collapsed stage is `manual` when its first stage is, or when a `manual` stage was folded into the one before it; it is numbered by its place among the collapsed stages, so the status says "stage 2 of 3".
 
@@ -41,7 +41,7 @@ With `n` eligible hosts, a stage of percent `p` holds `max(1, ceil(p * n / 100))
 A host has **started** in the plan when it is updating, has an order outstanding, runs the desired version, or failed an update or install to it. The plan's hosts are counted against the current stage's size:
 
 - The hosts that have started count first, whatever stage they started in.
-- The free places of the stage go to eligible hosts that have not started, in node-id order, leaving out a host that is deferring (it declined the update and its wait is not over; the next host is taken, as the canary did).
+- The free places of the stage go to the eligible hosts that have not started as they heartbeat, the first to ask first. A host that is deferring (it declined the update and its wait is not over) is not ordered, so it takes no place; nor does a host the coordinator cannot order (an agent that needs a package digest the version lacks). The status lists the hosts that wait by node id.
 - All the hosts that hold a free place are ordered in parallel, as each heartbeats, under two limits, both per role and both read from the desired state:
   - `max_updating`: no more hosts of the role hold an update slot for the service at once than the state's number for the role. A role the state does not name has the default the state's format documents: 1, or 2 for `daemon` and `mac-daemon`. A `max_updating` of 0 holds the role. A host holds a slot as before: updating, promotion pending, failed until it beats healthy, or ordered until it reports or the order ages out. A held host that is updating still holds its slot.
   - `min_up`: a host is not ordered when that would leave fewer live hosts of the role up (healthy, not updating, not ordered) than the state's `min_up` for the role. With `min_up = 6` of 8 live hosts, at most two are updating or unhealthy at once.
@@ -51,7 +51,7 @@ A stage is **done** when it is full (as many eligible hosts have started as the 
 
 ### 1.4 Advancing
 
-When a stage is done, the plan enters the next stage. An `auto` stage is entered by the coordinator at the heartbeat that finds the stage done; it writes the new position with an audit entry (`rollout_advance`, by `coordinator`), and only then are the next stage's hosts ordered. A `manual` stage waits for an operator's `Rollouts.Advance`, which enters it with an audit entry under the operator's token name. A first stage that is `manual` waits for an Advance before any host is ordered.
+When a stage is done, the plan enters the next stage. An `auto` stage is entered as soon as the stage before it is done: the decision reads the position the plan reaches by itself from the one kept (its **effective** position), and the coordinator writes that position, with an audit entry (`rollout_advance`, by `coordinator`), at the same heartbeat that finds the stage done, before it answers any order. A write that fails is logged and tried again at the next heartbeat; the decision does not wait for it, since the position it records follows from the hosts' reports. A `manual` stage waits for an operator's `Rollouts.Advance`, which enters it with an audit entry under the operator's token name. A first stage that is `manual` waits for an Advance before any host is ordered.
 
 When hosts already run the desired version (a rollback to a version most hosts still run, say), the coordinator enters every `auto` stage they already fill in one write: the plan goes straight to the first stage with hosts left to order, or stops at a `manual` stage.
 
@@ -61,7 +61,7 @@ When hosts already run the desired version (a rollback to a version most hosts s
 
 The rollback threshold is unchanged: release-class failures (phase `after_commit` or `gate_release`, class not `environment`) of the desired version on live, unheld hosts, at least the larger of `rollback_after_failed.percent` of the live hosts of the service and its `min_hosts`. It is checked at every heartbeat that brings a verdict, so it is reached within a stage, as the failures arrive, not at the stage's end. Reaching it marks the version bad, which halts the plan (every host is told `bad`), and with `rollback = "automatic"` sets the desired version back to `last_good`, as before.
 
-A failure below the threshold does not stop the stage: the stage's other hosts go on. But a stage with an eligible host that failed is not done, so the next stage does not start until an operator resolves the host: holds it or excludes it (it is then no longer eligible and the stage takes another host in its place), or sets another version.
+A failure below the threshold does not stop the stage: the stage's other hosts go on. But a stage with an eligible host that failed is not done, so the next stage does not start until an operator resolves the host: holds it or excludes it, clears the halt its failure raised, or sets a version by hand (which acknowledges the failures standing). A resolved host is no longer eligible, and the stage takes another host in its place. Setting another version starts the plan over.
 
 ### 1.6 Across services
 
@@ -73,7 +73,7 @@ This keeps the rule of one service's rollout at a time across the fleet as the d
 
 Stage sizes are recomputed from the eligible hosts at every decision, and the position is the stage, not a list of hosts, so:
 
-- **A host joins** (newly assigned, back from silence, a hold released). It counts in `n`, so the stages may grow. It has not started, so it takes a free place of the current stage if the stage has one, in node-id order with the others; otherwise it waits for a later stage. It never makes the plan go back.
+- **A host joins** (newly assigned, back from silence, a hold released). It counts in `n`, so the stages may grow. It has not started, so it takes a free place of the current stage if the stage has one when it asks; otherwise it waits for a later stage. It never makes the plan go back.
 - **A host leaves** (excluded, held, retired, unassigned, silent past the down limit). It no longer counts in `n` or in the stage. If it had started, the stage has a free place again and the next eligible host takes it. An update it was running still holds its slot (and so counts against `max_updating`) until its beats or its order's age free it, as before.
 - **A host is held mid-update.** As leaving; its update finishes.
 - **The stage shrinks below the hosts already started** (hosts left the plan). The stage is full; nothing is undone.
@@ -106,9 +106,9 @@ All three refuse `unknown_service`, `invalid_request` (a missing or bad reason),
 - the stages after collapsing, each with its percent, its size, its `advance` and its hosts, each host with its state (`waiting`, `updating`, `baking`, `done`, `failed`);
 - the current stage (1-based; 0 before a manual first stage is entered) and the number of stages;
 - the eligible host count, the version the plan is for, and whether it is paused, by whom and why;
-- why it waits, naming the stage: `paused`, `halted` (a halt or a bad version), `rollout_elsewhere`, `quiet`, `manual_advance`, `failed_host`, `below_min_up`, `updating`, `baking`, `advancing` (the stage is done and the next starts at the next heartbeat of the service), or none once every eligible host runs the version.
+- why it waits, naming the stage: `paused`, `halted` (a halt or a bad version), `rollout_elsewhere`, `quiet`, `manual_advance`, `failed_host`, `below_min_up`, `updating`, `deferring` (the hosts left to order in the stage declined the update and wait), `baking`, or none when it has a free place to order or every eligible host has rolled.
 
-The hosts of each stage are the plan's: the hosts that have started fill the stages in order, done hosts first, then by node id; the rest follow in node-id order. Each host's `HostService` gains `stage`, the stage it is in or waits for, so every gate reason shown for it names the stage.
+The hosts of each stage are the plan's: the hosts that have started fill the stages in order, done hosts first, then by node id; the rest follow in node-id order, the deferring ones last. The stage shown for a host that has not started is where it would fall if the hosts were ordered by node id; it takes the first free place when it asks. Each host's `HostService` gains `stage`, the stage it is in or waits for, so every gate reason shown for it names the stage.
 
 The per-host gate reasons gain `paused`, `advance_wait` (the host is in a later stage than a done stage that waits for an Advance), `stage_failed` (a host of the current stage failed), `stage_wait` (the current stage is still filling or updating), `below_min_up` and `rollout_elsewhere`. `no_slot` now means the role's `max_updating` is reached, and `baking` that the current stage is baking. `canary_wait` is no longer given: a canary is the plan's first stage.
 
@@ -122,7 +122,7 @@ The Rollout page shows, per service, the plan (its stages and their sizes), "sta
 
 The plan's position is kept per service in the ops store: the version it is for, the number of stages entered, the hosts recorded done, and the pause (who, why). It is written in the halts file beside the ops file (`<ops-file>.halts`, section 4.2 of `hostkeeper-design.md`), under a new top-level key `rollouts`, in the same atomic two-file commit as every other change: written whole, read back on start. The halts file's reader skips a key it does not know, so the release before reads a file with `rollouts` and loses only the position; the ops file itself is unchanged, and so is what its strict readers read.
 
-- **Writes.** The coordinator writes the position when it enters a stage (with the hosts done so far) and an operator's Advance, Pause and Resume write it. A plan whose stages are all filled by one write, and a rollout of one stage, write nothing. Each write is one audit entry.
+- **Writes.** The coordinator writes the position when the plan enters a stage (with the hosts done so far): every stage it enters at one heartbeat is one write. An operator's Advance, Pause and Resume write it. A rollout that never goes past its first stage writes nothing. Each write is one audit entry.
 - **A new desired version** starts the plan over: a position whose version is not the desired one is read as the first stage with no host done (a pause stands). Nothing is written until the plan enters its next stage.
 - **A restart** keeps the position: the plan resumes at the stage it had entered, and a host recorded done counts as baked while it is up at the version, so it is neither ordered again nor made to bake again. A host of the current stage that had not finished its bake bakes again from zero, as before. The fleet, the bake counts, the deferrals and the outstanding orders are in memory and are rebuilt from heartbeats after the quiet start, as before.
 
@@ -150,7 +150,10 @@ Audit entries: `rollout_advance` (by `coordinator` or the operator; the reason s
 | An unresolved failed host | Blocks the next stage until it is held, excluded or another version is set. | The brief's rule; holding or excluding it is the operator's resolution and is audited. |
 | Pause | Per service, across versions; written memory first. | An operator who stops a service's rollout means the service. A pause raises protection. |
 | A paused or manual-waiting plan | Live for `--live-rollouts`. | The operator is in the middle of that rollout. |
-| A deferring host | Passed over for the stage, and not counted as left to order for liveness. | It may decline for its whole backoff; it must not hold the plan or the fleet. |
+| Which hosts take a stage's free places | The first eligible hosts to ask. | A host that cannot be ordered now (deferring, an agent the version has no digest for) must not hold a place it will not take. |
+| A deferring host | Takes no place, and is not counted as left to order for liveness. | It may decline for its whole backoff; it must not hold the plan or the fleet. |
+| Entering an `auto` stage | Read at once by the decision; written by the coordinator at the same heartbeat. | The decision stays a pure function of what the hosts reported and the operator's marks; the write is the audit record and the restart checkpoint. |
+| A failure an operator acknowledged | Resolved: the host leaves the plan. | Clearing a host's halt, or setting a version by hand over its failure, is the operator saying the rollout may go on. |
 | Canary failure rollback | Kept for services with `canary`. | It is behaviour farms rely on; `stages` without `canary` follow the threshold. |
 
 ## 6. Tests
