@@ -137,7 +137,8 @@ A missing file or a digest that differs from the pin fails the build, and no deb
 After nfpm has built them, `cargo xtask release check-linux-pkg` reads the deb and the rpm back
 (the deb's `data.tar.gz`; the rpm's header and payload) and fails the build unless each installs
 both files at these paths, a regular file of exactly this mode, owned by root and group root,
-with the bytes staged.
+with the bytes staged, and installs `/etc/issue.d/hostkeeper.issue` as a link to
+`/run/hostkeeper/enrollment.issue`, the console's issue file the daemon writes.
 
 Bumping the pin: set the workflow-level `GH_VERSION` in `artifacts.yml` to the new release and both `gh-sha256`
 values of the build job's matrix to the SHA-256s of `gh_<version>_linux_amd64.tar.gz` and

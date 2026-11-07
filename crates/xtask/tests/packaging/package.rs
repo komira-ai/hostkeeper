@@ -174,6 +174,23 @@ pub fn package_links() -> Vec<nfpm::Link> {
     }]
 }
 
+/// Catches the check of the built packages (`release check-linux-pkg`, run on every deb and rpm
+/// the artifacts workflow builds) holding them to another link than the one nfpm.yaml declares
+/// and the daemon writes.
+#[test]
+fn the_built_package_check_requires_the_link_nfpm_yaml_declares() {
+    let (dst, target) = xtask::test_support::LINUX_PKG_LINK;
+    let declared: Vec<nfpm::Link> = config().links("deb").expect("links");
+    assert_eq!(
+        declared,
+        [nfpm::Link {
+            dst: dst.to_owned(),
+            target: target.to_owned(),
+        }]
+    );
+    assert_eq!(declared, package_links());
+}
+
 /// A name that is that of a key, a certificate, a token, a secret or the live config.
 fn is_secret_name(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
