@@ -99,6 +99,12 @@ else (`GH_TOKEN`, gh's own credential). It reads only the 100 newest releases of
 leaves drafts out, and skips a release whose tag is not `v<X.Y.Z>` or that carries no release
 index (a release of binaries only).
 
+A hostkeeper release is held to exactly the asset names of the xtask that checks it
+([verify-a-release.md](verify-a-release.md), "Every name"). A release that adds a name, as the
+one that added `netboot.json` did, is therefore refused by a channel-sync built from an earlier
+commit, and so is every later release, each naming the new asset (`netboot.json is not an asset
+of v<X.Y.Z>`), until the sync's xtask is built again from that release's commit or a later one.
+
 ### The trust list
 
 The trust list is a TOML file with one `[[service]]` table per service the channel stages. The
