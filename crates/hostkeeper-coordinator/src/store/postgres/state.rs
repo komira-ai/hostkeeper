@@ -286,9 +286,9 @@ pub(crate) fn desired_rows(held: &desired::Held) -> Result<Tables, StoreError> {
 /// [`StoreError::Invalid`]: a row holds what the reader refuses, the service named.
 pub(crate) fn desired_of(tables: &Tables) -> Result<desired::Held, StoreError> {
     let empty = Rows::new();
-    let mut services = serde_json::Map::new();
+    let mut services: BTreeMap<String, serde_json::Map<String, serde_json::Value>> =
+        BTreeMap::new();
     for (key, values) in tables.get("desired").unwrap_or(&empty) {
-        let mut entry = serde_json::Map::new();
         let names = [
             "version",
             "max_updating",
@@ -296,44 +296,51 @@ pub(crate) fn desired_of(tables: &Tables) -> Result<desired::Held, StoreError> {
             "release_digest",
             "release_index",
         ];
+        let entry = services.entry(key_text(key, 0)).or_default();
         for (name, value) in names.iter().zip(values) {
-            match value {
-                Val::Text(text) => entry.insert((*name).to_owned(), text.clone().into()),
-                Val::Json(value) => entry.insert((*name).to_owned(), value.clone()),
-                _ => None,
-            };
+            if let Some(value) = json_of(value) {
+                entry.insert((*name).to_owned(), value);
+            }
         }
-        let service = key.first().and_then(KeyVal::as_text).unwrap_or_default();
-        services.insert(service.to_owned(), entry.into());
     }
+    let mut digests: BTreeMap<String, serde_json::Map<String, serde_json::Value>> = BTreeMap::new();
     for (key, values) in tables.get("desired_digests").unwrap_or(&empty) {
-        let (Some(service), Some(version)) = (
-            key.first().and_then(KeyVal::as_text),
-            key.get(1).and_then(KeyVal::as_text),
-        ) else {
-            continue;
-        };
-        let release = values
-            .first()
-            .and_then(Val::as_json)
-            .cloned()
-            .unwrap_or_default();
-        let entry = services
-            .entry(service.to_owned())
-            .or_insert_with(|| serde_json::Map::new().into());
-        if let Some(entry) = entry.as_object_mut() {
-            entry
-                .entry("digests")
-                .or_insert_with(|| serde_json::Map::new().into())
-                .as_object_mut()
-                .map(|digests| digests.insert(version.to_owned(), release));
-        }
+        let release = values.first().and_then(json_of).unwrap_or_default();
+        digests
+            .entry(key_text(key, 0))
+            .or_default()
+            .insert(key_text(key, 1), release);
+    }
+    for (service, registry) in digests {
+        services
+            .entry(service)
+            .or_default()
+            .insert("digests".to_owned(), registry.into());
     }
     let file = serde_json::json!({ "services": services });
     desired::parse_file(file.to_string().as_bytes(), None).map_err(|source| StoreError::Invalid {
         path: place("desired"),
         source,
     })
+}
+
+/// The text of column `i` of a key: empty for a key that is not text, which no table of a part
+/// read as JSON has.
+fn key_text(key: &[KeyVal], i: usize) -> String {
+    key.get(i)
+        .and_then(KeyVal::as_text)
+        .unwrap_or_default()
+        .to_owned()
+}
+
+/// A value as the JSON its file holds: text as a string, JSON as itself; `None` for `NULL`, which
+/// the file leaves out.
+fn json_of(value: &Val) -> Option<serde_json::Value> {
+    match value {
+        Val::Text(text) => Some(text.clone().into()),
+        Val::Json(value) => Some(value.clone()),
+        _ => None,
+    }
 }
 
 /// The rows of the verdicts `held`.
@@ -385,45 +392,37 @@ pub(crate) fn verdicts_rows(held: &verdict_file::Held) -> Result<Tables, Verdict
 /// [`VerdictsError::Invalid`]: a row holds what the reader refuses.
 pub(crate) fn verdicts_of(tables: &Tables) -> Result<verdict_file::Held, VerdictsError> {
     let empty = Rows::new();
-    let mut services: BTreeMap<String, serde_json::Map<String, serde_json::Value>> =
+    let mut standing: BTreeMap<String, serde_json::Map<String, serde_json::Value>> =
         BTreeMap::new();
     for (key, values) in tables.get("verdict_standing").unwrap_or(&empty) {
-        let (Some(service), Some(node)) = (
-            key.first().and_then(KeyVal::as_text),
-            key.get(1).and_then(KeyVal::as_text),
-        ) else {
-            continue;
-        };
-        let report = values
-            .first()
-            .and_then(Val::as_json)
-            .cloned()
-            .unwrap_or_default();
-        services
-            .entry(service.to_owned())
+        let report = values.first().and_then(json_of).unwrap_or_default();
+        standing
+            .entry(key_text(key, 0))
             .or_default()
-            .entry("standing")
-            .or_insert_with(|| serde_json::Map::new().into())
-            .as_object_mut()
-            .map(|standing| standing.insert(node.to_owned(), report));
+            .insert(key_text(key, 1), report);
     }
+    let mut counted: BTreeMap<String, Vec<serde_json::Value>> = BTreeMap::new();
     for (key, values) in tables.get("verdict_counted").unwrap_or(&empty) {
-        let Some(service) = key.first().and_then(KeyVal::as_text) else {
-            continue;
-        };
-        let node = values.first().and_then(Val::as_text).unwrap_or_default();
-        let report = values
-            .get(1)
-            .and_then(Val::as_json)
-            .cloned()
-            .unwrap_or_default();
-        services
-            .entry(service.to_owned())
+        let node = values.first().and_then(json_of).unwrap_or_default();
+        let report = values.get(1).and_then(json_of).unwrap_or_default();
+        counted
+            .entry(key_text(key, 0))
             .or_default()
-            .entry("counted")
-            .or_insert_with(|| serde_json::Value::Array(Vec::new()))
-            .as_array_mut()
-            .map(|list| list.push(serde_json::json!({ "node_id": node, "report": report })));
+            .push(serde_json::json!({ "node_id": node, "report": report }));
+    }
+    let mut services: BTreeMap<String, serde_json::Map<String, serde_json::Value>> =
+        BTreeMap::new();
+    for (service, map) in standing {
+        services
+            .entry(service)
+            .or_default()
+            .insert("standing".to_owned(), map.into());
+    }
+    for (service, list) in counted {
+        services
+            .entry(service)
+            .or_default()
+            .insert("counted".to_owned(), list.into());
     }
     let file = serde_json::json!({ "services": services });
     verdict_file::parse(&place("verdicts"), file.to_string().as_bytes())
@@ -727,7 +726,7 @@ pub(crate) fn ops_of(tables: &Tables) -> Result<OpsState, OpsError> {
             .map(move |(key, values)| At { table, key, values })
     };
     let mut state = OpsState::default();
-    let mut ordered: BTreeMap<(&str, String, &str), Vec<(i64, HaltAck)>> = BTreeMap::new();
+    let mut ordered: BTreeMap<(String, &str), Vec<(i64, HaltAck)>> = BTreeMap::new();
     let mut bad: BTreeMap<String, Vec<(i64, Version, bool)>> = BTreeMap::new();
     let mut acks: BTreeMap<String, Vec<(i64, FailureAck)>> = BTreeMap::new();
     for at in rows("services") {
@@ -906,11 +905,11 @@ pub(crate) fn ops_of(tables: &Tables) -> Result<OpsState, OpsError> {
             report: at.json(1)?,
         };
         ordered
-            .entry(("halt_reports", at.key(0)?, kind))
+            .entry((at.key(0)?, kind))
             .or_default()
             .push((at.position(2)?, ack));
     }
-    for ((_, service, kind), mut list) in ordered {
+    for ((service, kind), mut list) in ordered {
         list.sort_by_key(|(position, _)| *position);
         let list: Vec<HaltAck> = list.into_iter().map(|(_, ack)| ack).collect();
         let marks: &mut ServiceOps = state.services.entry(service).or_default();

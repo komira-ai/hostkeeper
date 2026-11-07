@@ -64,8 +64,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use crate::alerts::{
     DEFAULT_CERT_WINDOW_SECS, DEFAULT_SILENT_HOST_SECS, OBSERVE_EVERY, Thresholds, observe_every,
 };
-use crate::audit_file::{DEFAULT_MAX_BYTES, DEFAULT_RETAINED};
-use crate::backup::{Backup, BackupError, Report, Restore, backup, ops_path, restore};
+use crate::backup::{Backup, BackupError, Report, Restore, backup, restore};
 use crate::channel::ReleaseChannel;
 use crate::channel_https::{ChannelUrl, HttpsChannel};
 use crate::desired::DesiredStore;
@@ -73,12 +72,12 @@ use crate::enrollment::{MacAllowlist, MacPolicy, Setup, StoreAt, os_random, setu
 use crate::fleet::{CLOCK_SKEW_AFTER, QUIET_START};
 use crate::http::Surface;
 use crate::listen::{CLIENT_PATIENCE, Listener, MAX_CONNECTIONS, accept_tcp, reload_every, serve};
-use crate::lock::{FileLock, LockError, LockGuard, StateLock, lock_path};
+use crate::lock::{FileLock, LockError, LockGuard, StateLock};
 use crate::mdm::{Mdm, MdmFlags};
 use crate::ops::OpsStore;
 use crate::service::{Clock, Coordinator};
 use crate::services::Services;
-use crate::store::{Shared, Spent};
+use crate::store::Spent;
 use crate::tokens::OperatorTokens;
 use crate::ui::UiDir;
 use crate::verdict_file::VerdictFile;

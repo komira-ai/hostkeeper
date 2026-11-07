@@ -358,6 +358,7 @@ impl Writer {
     pub(crate) fn revive(&mut self) {
         match self.reopen() {
             Ok(Revived::Up(session, commits)) => {
+                let session = *session;
                 {
                     let mut shared = self.link.lock();
                     if let Some(number) = shared.unknown.take() {
@@ -416,7 +417,7 @@ impl Writer {
         if epoch != self.epoch {
             return Ok(Revived::Deposed(u64::try_from(epoch).unwrap_or_default()));
         }
-        Ok(Revived::Up(session, commits))
+        Ok(Revived::Up(Box::new(session), commits))
     }
 
     /// The epoch this coordinator holds.
@@ -432,7 +433,7 @@ impl Writer {
 }
 
 enum Revived {
-    Up(Session, i64),
+    Up(Box<Session>, i64),
     Deposed(u64),
     Held,
 }

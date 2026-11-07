@@ -498,10 +498,6 @@ fn landing_of(settled: writer::Settled, unknown: Option<(u64, Owned)>) -> Landin
 /// Opens the writing session at start, on a thread of its own: the connect, the lock, the
 /// migrations, the epoch, the load. Answers the session, its epoch, the lease's count of
 /// transactions, the state, and the number of the newest audit row.
-#[expect(
-    clippy::type_complexity,
-    reason = "the five things a start hands on, once"
-)]
 fn open_session(
     config: &postgres::Config,
     statements: Arc<AtomicU64>,

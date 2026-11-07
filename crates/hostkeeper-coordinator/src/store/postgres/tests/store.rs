@@ -3,8 +3,9 @@
 use std::sync::{Arc, Mutex, PoisonError};
 
 use super::TestDatabase;
+use crate::store::Shared;
 use crate::store::conformance_tests::Subject;
-use crate::store::{Postgres, Shared};
+use crate::store::postgres::Postgres;
 
 /// The conformance suite's subject on a database of its own: the live store, which a restart
 /// stops so that the store started again takes the lock.
