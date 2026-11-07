@@ -77,6 +77,7 @@ fn record(host: &str, data: &[&str], bmc: &str, serial: &str) -> InventoryRecord
         notes: String::new(),
         by: "operator".to_owned(),
         at_unix: 1_800_000_000,
+        platform: None,
     }
 }
 
@@ -117,6 +118,7 @@ fn an_added_record_keeps_one_spelling_of_each_mac_and_is_listed_and_audited() {
         added_unix: rig.coordinator.ops.unix_now(),
         enrolled: false,
         host_held: proto::HostHeld::Unspecified.into(),
+        platform: 0,
     };
     assert_eq!(added.record.as_ref(), Some(&want));
     let entry = added.entry.expect("an audit entry");

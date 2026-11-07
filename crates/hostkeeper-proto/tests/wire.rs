@@ -621,6 +621,19 @@ const FIELDS: [(&str, &[(&str, u32)]); 35] = [
             ("added_unix", 8),
             ("enrolled", 9),
             ("host_held", 10),
+            ("platform", 11),
+        ],
+    ),
+    (
+        "hostkeeper.operator.v1.AddRecordRequest",
+        &[
+            ("host_id", 1),
+            ("role", 2),
+            ("data_macs", 3),
+            ("bmc_mac", 4),
+            ("serial", 5),
+            ("notes", 6),
+            ("platform", 7),
         ],
     ),
     (

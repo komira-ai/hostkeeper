@@ -226,6 +226,10 @@ message InventoryRecord {
   // coordinator started). Only `HOST_HELD_NONE` says no host holds the id; `UNSPECIFIED` (a
   // coordinator of a release before this field, or one without enrollment) says nothing.
   HostHeld host_held = 10;
+  // The platform the server is to be installed as by network boot: `PLATFORM_LINUX_X86_64` or
+  // `PLATFORM_LINUX_ARM64`, or `PLATFORM_UNSPECIFIED` when the record states none (a Mac's
+  // record, a record added without one, or a coordinator of a release before this field).
+  hostkeeper.agent.v1.Platform platform = 11;
 }
 
 // What the coordinator's enrollment store holds for a host id, as `InventoryRecord.host_held`
@@ -297,6 +301,10 @@ message AddRecordRequest {
   string serial = 5;
   // Empty for none.
   string notes = 6;
+  // The platform to install the server as by network boot: `PLATFORM_LINUX_X86_64` or
+  // `PLATFORM_LINUX_ARM64`; `PLATFORM_UNSPECIFIED` for none. Any other value is refused
+  // `invalid_request`.
+  hostkeeper.agent.v1.Platform platform = 7;
 }
 
 message AddRecordResponse {

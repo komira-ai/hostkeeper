@@ -64,6 +64,7 @@ fn record() -> op::InventoryRecord {
         added_unix: 1_800_000_000,
         enrolled: true,
         host_held: op::HostHeld::Approved.into(),
+        platform: hostkeeper_proto::hostkeeper::agent::v1::Platform::LinuxArm64.into(),
     }
 }
 
@@ -256,6 +257,7 @@ fn new_messages() -> Vec<(&'static str, Vec<u8>)> {
                 bmc_mac: "0c:c4:7a:00:00:01".to_owned(),
                 serial: "SN-1".to_owned(),
                 notes: "rack 4".to_owned(),
+                platform: hostkeeper_proto::hostkeeper::agent::v1::Platform::LinuxX8664.into(),
             }),
         ),
         (
