@@ -625,3 +625,33 @@ fn a_host_that_cannot_be_read_fails_the_run() {
     );
     assert_eq!(code, 1);
 }
+
+/// Catches a git-tree check that a relative path or a link gets past: a relative `--key` is
+/// refused as not absolute before anything is read, and a key reached through a link into a
+/// work tree is refused with the `.git` of the link's target, the path named as given.
+#[test]
+fn a_relative_path_or_a_link_into_a_work_tree_is_refused() {
+    let p = push_pair();
+    let host = host(&p);
+    let relative = With::Pair {
+        cert: CERT.to_owned(),
+        key: "keys/push.key".to_owned(),
+    };
+    let (code, text) = refused(go(&host, &FakeApi::new(), NOW, relative, Mode::DryRun).0);
+    assert_eq!(code, 2);
+    assert!(text.contains("keys/push.key"), "{text}");
+    host.put_dir("/repo/.git", 0o755, (1000, 1000));
+    host.put_dir("/repo/keys", 0o755, (1000, 1000));
+    host.put_file("/repo/keys/push.key", 0o600, (1000, 1000), p.key.as_bytes());
+    host.put_symlink("/srv/linked", "/repo/keys");
+    let linked = With::Pair {
+        cert: CERT.to_owned(),
+        key: "/srv/linked/push.key".to_owned(),
+    };
+    let (code, text) = refused(go(&host, &FakeApi::new(), NOW, linked, Mode::DryRun).0);
+    assert_eq!(code, 2);
+    assert_eq!(
+        text,
+        "/srv/linked/push.key is inside a git work tree (/repo/.git exists): keep keys, tokens and certificates outside every repository"
+    );
+}

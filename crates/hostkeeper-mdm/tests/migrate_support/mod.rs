@@ -119,7 +119,9 @@ pub fn old_unit_files() -> Vec<String> {
     ]
 }
 
-/// The old units `migrate` stops, in the order it stops them.
+/// The live stack's old units `migrate` stops, in the order it stops them: those enabled or
+/// active. The two oneshot jobs are
+/// `static` and inactive, so they are not among them; the slice is `static` and active.
 pub fn stopped() -> Vec<String> {
     let n = old_units();
     vec![
@@ -129,8 +131,6 @@ pub fn stopped() -> Vec<String> {
         n.depserver,
         n.nanohub,
         n.scep,
-        n.cert_service,
-        n.reload_service,
         n.slice,
     ]
 }

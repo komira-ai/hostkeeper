@@ -323,8 +323,8 @@ fn stored_topic(answer: &[u8]) -> String {
 /// The certificate and the key, each refused inside a git work tree; the key also unless it
 /// is mode 0600.
 fn pair_files(host: &dyn Host, cert: &str, key: &str) -> Result<(Vec<u8>, Vec<u8>), MdmError> {
-    outside_git(host, cert)?;
-    outside_git(host, key)?;
+    crate::repo::file_outside_git(host, cert)?;
+    crate::repo::file_outside_git(host, key)?;
     let cert_pem = host
         .read(cert)?
         .ok_or_else(|| MdmError::NoFile(cert.to_owned()))?;
@@ -340,20 +340,4 @@ fn pair_files(host: &dyn Host, cert: &str, key: &str) -> Result<(Vec<u8>, Vec<u8
         .into());
     }
     Ok((cert_pem, key_pem))
-}
-
-/// Refuse `path` when a directory above it holds `.git`: keys and certificates are kept
-/// outside every repository.
-fn outside_git(host: &dyn Host, path: &str) -> Result<(), MdmError> {
-    for above in std::path::Path::new(path).ancestors().skip(1) {
-        let root = above.to_str().unwrap_or_default().trim_end_matches('/');
-        let git = format!("{root}/.git");
-        if host.stat(&git)?.is_some() {
-            return Err(MdmError::FileInGitTree {
-                path: path.to_owned(),
-                git,
-            });
-        }
-    }
-    Ok(())
 }

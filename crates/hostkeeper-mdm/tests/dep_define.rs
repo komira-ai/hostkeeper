@@ -236,22 +236,6 @@ fn a_failing_assigner_call_records_nothing() {
     assert!(changes(&host).is_empty());
 }
 
-/// Catches a define-profile that fails to tell when the record of the uuid is lost: with
-/// the sum recorded and the uuid file gone it still calls nothing, and names no uuid.
-#[test]
-fn a_recorded_sum_without_a_uuid_file_calls_nothing() {
-    let host = dep_host();
-    host.put_file(SUM_FILE, 0o644, (0, 0), sum_of(&config()).as_bytes());
-    let api = FakeApi::new();
-    let (result, shown) = go(&host, &api, &Dep::DefineProfile, Mode::DryRun);
-    assert!(result.unwrap());
-    assert!(
-        shown.starts_with("ADE profile: unchanged (uuid )\n"),
-        "{shown}"
-    );
-    assert!(api.sent().is_empty());
-}
-
 /// Catches a record that is trusted when it is not a regular file: a directory where the sum
 /// belongs does not count as recorded, so the profile is defined.
 #[test]
@@ -489,5 +473,27 @@ fn a_closed_output_fails_the_run_at_whichever_write_it_closes() {
             );
         }
         assert!(closed_after > 0);
+    }
+}
+
+/// Catches a define-profile that trusts the digest record alone: with the sha256 recorded but
+/// the uuid record gone, empty or not a uuid, `assign` would have no profile, so the profile is
+/// defined again and both records are written.
+#[test]
+fn a_matching_digest_without_a_uuid_record_defines_again() {
+    for uuid in [None, Some(""), Some("not-a-uuid\n")] {
+        let host = dep_host();
+        let (result, _) = go(&host, &answered(), &Dep::DefineProfile, Mode::Apply);
+        assert!(result.unwrap());
+        match uuid {
+            None => host.remove(UUID_FILE).unwrap(),
+            Some(text) => host.put_file(UUID_FILE, 0o644, (0, 0), text.as_bytes()),
+        }
+        let api = answered();
+        let (result, shown) = go(&host, &api, &Dep::DefineProfile, Mode::Apply);
+        assert!(result.unwrap());
+        assert_eq!(api.sent().len(), 2, "{uuid:?}");
+        assert!(shown.contains("ADE profile: defined"), "{shown}");
+        assert_eq!(read(&host, UUID_FILE).unwrap(), format!("{UUID}\n"));
     }
 }

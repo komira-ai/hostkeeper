@@ -270,8 +270,8 @@ fn upload_token_puts_the_token_and_prints_the_account() {
     );
 }
 
-/// Catches an upload-token that fails on an account answer with fields missing or not JSON:
-/// each missing field shows as `?`.
+/// Catches an upload-token that fails on an account answer with a field missing: each missing
+/// field shows as `?`.
 #[test]
 fn upload_token_shows_a_question_mark_for_a_missing_field() {
     for (answer, line) in [
@@ -279,7 +279,7 @@ fn upload_token_shows_a_question_mark_for_a_missing_field() {
             &br#"{"org_name":"Example Org"}"#[..],
             "ABM: org Example Org, MDM server ?",
         ),
-        (&b"not json"[..], "ABM: org ?, MDM server ?"),
+        (&b"{}"[..], "ABM: org ?, MDM server ?"),
     ] {
         let host = ops_host();
         host.put_file(TOKEN, 0o600, (1000, 1000), b"t");
@@ -523,4 +523,64 @@ fn the_dep_errors_have_their_exit_codes() {
     let profile = DepError::from(ProfileError::Json("z".to_owned()));
     assert_eq!(profile.exit_code(), 1);
     assert_eq!(MdmError::from(profile).exit_code(), 1);
+}
+
+/// Catches an account check that passes on an answer it cannot read: an answer that is not a
+/// JSON object fails (exit 1) quoting the answer, after the token was put.
+#[test]
+fn upload_token_fails_on_an_account_answer_that_is_not_json() {
+    for answer in [&b"not json"[..], &b"[1]"[..]] {
+        let host = ops_host();
+        host.put_file(TOKEN, 0o600, (1000, 1000), b"t");
+        let api = FakeApi::new();
+        api.reply(Method::Put, "/v1/tokenpki/example", 200, b"");
+        api.reply(Method::Get, "/proxy/example/account", 200, answer);
+        let (result, _) = go(&host, &api, &upload(), Mode::Apply);
+        let e = result.unwrap_err();
+        assert_eq!(e.exit_code(), 1);
+        assert_eq!(
+            e.to_string(),
+            format!(
+                "the account check: not a JSON object: {}",
+                String::from_utf8_lossy(answer)
+            )
+        );
+        assert_eq!(api.sent().len(), 2);
+    }
+}
+
+/// Catches an upload-token that sends an empty token, or reads a file of any size whole: an
+/// empty file and one of 64 KiB and a byte are refused (exit 2) by name before any call, and one
+/// of exactly 64 KiB is sent.
+#[test]
+fn upload_token_refuses_an_empty_or_oversized_file() {
+    for (size, refused) in [
+        (0, Some("empty")),
+        (64 * 1024 + 1, Some("larger than 64 KiB")),
+        (64 * 1024, None),
+    ] {
+        let host = ops_host();
+        host.put_file(TOKEN, 0o600, (1000, 1000), &vec![b'x'; size]);
+        let api = FakeApi::new();
+        api.reply(Method::Put, "/v1/tokenpki/example", 200, b"");
+        api.reply(Method::Get, "/proxy/example/account", 200, b"{}");
+        let (result, _) = go(&host, &api, &upload(), Mode::Apply);
+        match refused {
+            Some(why) => {
+                let e = result.unwrap_err();
+                assert_eq!(e.exit_code(), 2);
+                assert_eq!(
+                    e.to_string(),
+                    format!(
+                        "{TOKEN} is {why}: give the server token (.p7m) Apple Business Manager gave"
+                    )
+                );
+                assert!(api.sent().is_empty());
+            }
+            None => {
+                assert!(result.unwrap());
+                assert_eq!(api.sent()[0].call.body.len(), size);
+            }
+        }
+    }
 }

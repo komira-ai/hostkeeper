@@ -3,8 +3,9 @@
 //!
 //! It reads the old kit's settings and state, as root (a dry run too), and refuses before any
 //! change when: the effective uid is not 0; the new settings are refused by the core (`--profile-id`
-//! or an ACME key is not accepted); the old and the new state, etc or bin directory, or the two
-//! unit prefixes, are the same or one is inside the other; the file at `--settings` exists with
+//! or an ACME key is not accepted); the old and the new state, etc or bin directory are the same
+//! or one is inside the other, or the two unit prefixes are the same; `--settings` is inside the
+//! old state, etc or bin directory; the file at `--settings` exists with
 //! other bytes than the new settings; a symbolic link or other kind is in a tree or at a
 //! path that is copied; the old `dns.env` is not a 0600 file of root's; none of the old kit's
 //! unit files is installed and none of this kit's is either (a wrong `--from`); or `install`'s
@@ -37,7 +38,8 @@
 //!    (`push-cert --cert --key`; `dep get-cert` and `dep upload-token`, with a token the owner
 //!    of the ABM account downloads again; writing `dns.env`);
 //! 4. the old units, those of the old prefix and slice whose file is in `/etc/systemd/system`,
-//!    that are enabled or active: stopped and disabled in one step. Their unit files stay;
+//!    that are enabled (`systemctl is-enabled` says `enabled` or `enabled-runtime`; a `static`
+//!    unit is not) or active: stopped and disabled in one step. Their unit files stay;
 //! 5. the rest of `install`'s plan: `daemon-reload`, and the new services enabled and started.
 //!
 //! A run that fails before step 4 leaves the old stack running. After the plan (a dry run
@@ -52,7 +54,7 @@ use hostkeeper_mdm_core::migrate::{Old, Target, new_settings};
 use hostkeeper_mdm_core::pins::Pins;
 use hostkeeper_mdm_core::render::UnitNames;
 use hostkeeper_mdm_step::{
-    Account, Host, Kind, Meta, Mode, Plan, Planner, Step, UnitVerb, execute,
+    Account, Cmd, Host, Kind, Meta, Mode, Plan, Planner, SYSTEMCTL, Step, UnitVerb, execute,
 };
 
 use crate::install::{self, Install, UNITS_DIR};
@@ -173,8 +175,8 @@ pub fn run(
     finish(a, c, &stopped, out)
 }
 
-/// The old and the new kit share nothing: no directory is the same or inside the other, and the
-/// unit prefixes differ.
+/// The old and the new kit share nothing: no directory is the same or inside the other, the
+/// new settings file is not inside an old directory, and the unit prefixes differ.
 fn apart(a: &Migrate, c: &MdmConfig) -> Result<(), MdmError> {
     let mut old = vec![
         ("MDM_STATE", a.old.state().as_str()),
@@ -196,6 +198,15 @@ fn apart(a: &Migrate, c: &MdmConfig) -> Result<(), MdmError> {
                 }
                 .into());
             }
+        }
+    }
+    for (old_key, o) in &old {
+        if a.settings.starts_with(&format!("{o}/")) {
+            return Err(MoveError::Overlap {
+                old: format!("{old_key} {o}"),
+                new: format!("--settings {}", a.settings),
+            }
+            .into());
         }
     }
     if a.old.unit_prefix() == c.unit_prefix() {
@@ -472,7 +483,7 @@ impl<'h> Mover<'h> {
     ) -> Result<Vec<String>, MdmError> {
         let mut running = Vec::new();
         for unit in there {
-            if self.p.unit_is("is-enabled", unit)? || self.p.unit_is("is-active", unit)? {
+            if enabled(self.host, unit)? || self.p.unit_is("is-active", unit)? {
                 running.push(unit.clone());
             }
         }
@@ -493,6 +504,14 @@ impl<'h> Mover<'h> {
         }
         Ok(running)
     }
+}
+
+/// Whether `unit` is enabled: `systemctl is-enabled` says `enabled` or `enabled-runtime`. A
+/// `static` unit (a slice, a oneshot job a timer or a path unit starts) also answers 0, and is
+/// not taken as enabled: it is stopped only when it is active.
+fn enabled(host: &dyn Host, unit: &str) -> Result<bool, MdmError> {
+    let out = host.run(&Cmd::new(SYSTEMCTL).arg("is-enabled").arg(unit))?;
+    Ok(out.code == 0 && ["enabled", "enabled-runtime"].contains(&out.stdout.trim()))
 }
 
 /// The back-out and the next steps.

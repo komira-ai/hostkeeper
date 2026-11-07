@@ -316,3 +316,25 @@ fn a_host_that_cannot_be_read_fails_the_run() {
         assert_eq!(changes(&host), Vec::<String>::new());
     }
 }
+
+/// Catches new settings written into the old kit's directories, which must stay untouched: a
+/// `--settings` inside the old state or the old etc directory is refused (exit 2), naming both.
+#[test]
+fn new_settings_inside_an_old_directory_are_refused() {
+    let host = live_host(&kit());
+    for (path, old) in [
+        ("/etc/js-mdm/hostkeeper-mdm.conf", "MDM_ETC /etc/js-mdm"),
+        ("/var/lib/js-mdm/new.conf", "MDM_STATE /var/lib/js-mdm"),
+    ] {
+        let mut a = ask(&old_text());
+        a.settings = path.to_owned();
+        let err = refused(&host, &a);
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "the old kit's {old} and the new kit's --settings {path} are the same or one is inside the other: the old kit's state stays untouched"
+            )
+        );
+        assert_eq!(err.exit_code(), 2);
+    }
+}

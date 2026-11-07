@@ -95,6 +95,7 @@ pub mod install;
 pub mod migrate;
 pub mod net;
 pub mod push_cert;
+mod repo;
 pub mod secret;
 mod system;
 pub mod tls;

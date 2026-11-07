@@ -33,7 +33,6 @@
 //!   `SUCCESS` for every serial. Every run assigns; a dry run assigns nothing.
 
 use std::io::Write;
-use std::path::Path;
 
 use hostkeeper_mdm_core::commands::dep_cert_request_path;
 use hostkeeper_mdm_core::config::MdmConfig;
@@ -113,6 +112,14 @@ pub enum DepError {
         /// What is wrong with the answer.
         why: String,
     },
+    /// The server token file given to `upload-token` cannot be a token.
+    #[error("{path} is {why}: give the server token (.p7m) Apple Business Manager gave")]
+    Token {
+        /// The file.
+        path: String,
+        /// What is wrong with it.
+        why: &'static str,
+    },
     /// `assign` found no recorded profile.
     #[error("{0} is not there: run hostkeeper-mdm dep define-profile --apply first")]
     NoProfile(String),
@@ -125,7 +132,7 @@ impl DepError {
     /// The exit code: 1 when a call or a step failed, 2 when the input was refused.
     pub fn exit_code(&self) -> u8 {
         match self {
-            DepError::NotCertificate(_) | DepError::NoProfile(_) => 2,
+            DepError::NotCertificate(_) | DepError::NoProfile(_) | DepError::Token { .. } => 2,
             DepError::Answer { .. } | DepError::Profile(_) => 1,
         }
     }
@@ -156,22 +163,6 @@ pub fn run(
     Ok(true)
 }
 
-/// Refuse `file` when it or a directory above it holds `.git`: keys, tokens and certificates
-/// are never kept where they could be committed.
-fn outside_git(host: &dyn Host, file: &str) -> Result<(), MdmError> {
-    for above in Path::new(file).ancestors() {
-        let root = above.to_str().unwrap_or_default().trim_end_matches('/');
-        let git = format!("{root}/.git");
-        if host.stat(&git)?.is_some() {
-            return Err(MdmError::FileInGitTree {
-                path: file.to_owned(),
-                git,
-            });
-        }
-    }
-    Ok(())
-}
-
 fn is_certificate(bytes: &[u8]) -> bool {
     x509_parser::pem::parse_x509_pem(bytes).is_ok_and(|(_, pem)| pem.parse_x509().is_ok())
 }
@@ -185,7 +176,7 @@ fn get_cert(
     out: &mut dyn Write,
 ) -> Result<(), MdmError> {
     let host = env.host;
-    outside_git(host, file)?;
+    crate::repo::file_outside_git(host, file)?;
     if host.stat(file)?.is_some() {
         let held = host.read(file)?.filter(|bytes| is_certificate(bytes));
         if held.is_none() {
@@ -217,6 +208,9 @@ fn get_cert(
     Ok(())
 }
 
+/// The largest server token file read, in bytes.
+const MAX_TOKEN: u64 = 64 * 1024;
+
 fn upload_token(
     env: &Env<'_>,
     api: &Api,
@@ -226,11 +220,26 @@ fn upload_token(
     out: &mut dyn Write,
 ) -> Result<(), MdmError> {
     let name = c.dep_name();
-    outside_git(env.host, token)?;
-    let bytes = env
+    crate::repo::file_outside_git(env.host, token)?;
+    // One bounded read: a server token is a few kilobytes of S/MIME.
+    let read = env
         .host
-        .read(token)?
-        .ok_or_else(|| MdmError::NoFile(token.to_owned()))?;
+        .read_limited(token, MAX_TOKEN)
+        .map_err(|e| match e.kind() {
+            std::io::ErrorKind::FileTooLarge => MdmError::from(DepError::Token {
+                path: token.to_owned(),
+                why: "larger than 64 KiB",
+            }),
+            _ => MdmError::Io(e),
+        });
+    let bytes = read?.ok_or_else(|| MdmError::NoFile(token.to_owned()))?;
+    if bytes.is_empty() {
+        return Err(DepError::Token {
+            path: token.to_owned(),
+            why: "empty",
+        }
+        .into());
+    }
     let put = Call::put(format!("/v1/tokenpki/{name}"), bytes);
     api::call(env, api, &put, mode, out)?;
     let get = Call::get(format!("/proxy/{name}/account"));
@@ -238,7 +247,20 @@ fn upload_token(
         writeln!(out, "{DRY_RUN_NOTE}")?;
         return Ok(());
     };
-    let account: serde_json::Value = serde_json::from_slice(&account).unwrap_or_default();
+    // The token is stored by now; an answer that is not a JSON object fails the check of it.
+    let account: serde_json::Value = serde_json::from_slice(&account)
+        .ok()
+        .filter(serde_json::Value::is_object)
+        .ok_or_else(|| DepError::Answer {
+            what: "the account check",
+            why: format!(
+                "not a JSON object: {}",
+                String::from_utf8_lossy(&account)
+                    .chars()
+                    .take(300)
+                    .collect::<String>()
+            ),
+        })?;
     let field = |key: &str| account.get(key).and_then(|v| v.as_str()).unwrap_or("?");
     writeln!(
         out,
@@ -277,10 +299,13 @@ fn define_profile(
     let sum_file = format!("{}/dep-profile.sha256", c.state());
     let root = Account::root();
     let mut planner = Planner::new(host);
-    if recorded(host, &sum_file)?.as_deref() == Some(sum.as_bytes()) {
-        let uuid = recorded(host, &uuid_file)?.unwrap_or_default();
-        let uuid = String::from_utf8_lossy(&uuid);
-        writeln!(out, "ADE profile: unchanged (uuid {})", uuid.trim())?;
+    // The profile is the same only when its digest is recorded and so is the uuid Apple gave it:
+    // a lost uuid record would leave `assign` without a profile, so it is defined again.
+    let same = recorded(host, &sum_file)?.as_deref() == Some(sum.as_bytes());
+    let uuid = recorded(host, &uuid_file)?.unwrap_or_default();
+    let uuid = String::from_utf8_lossy(&uuid).trim().to_owned();
+    if same && is_uuid(&uuid) {
+        writeln!(out, "ADE profile: unchanged (uuid {uuid})")?;
     } else {
         let name = c.dep_name();
         let define = Call::post_json(format!("/proxy/{name}/profile"), json.clone());
@@ -317,13 +342,18 @@ fn define_profile(
 }
 
 /// The `profile_uuid` of Apple's answer to a profile definition: 16 to 64 hex digits.
+/// Whether `text` is a profile uuid as Apple answers it: 16 to 64 hex digits.
+fn is_uuid(text: &str) -> bool {
+    (16..=64).contains(&text.len()) && text.chars().all(|c| c.is_ascii_hexdigit())
+}
+
 fn profile_uuid(answer: &[u8]) -> Result<String, DepError> {
     let value: serde_json::Value = serde_json::from_slice(answer).unwrap_or_default();
     let uuid = value
         .get("profile_uuid")
         .and_then(|u| u.as_str())
         .unwrap_or_default();
-    if !(16..=64).contains(&uuid.len()) || !uuid.chars().all(|c| c.is_ascii_hexdigit()) {
+    if !is_uuid(uuid) {
         return Err(DepError::Answer {
             what: "the profile definition",
             why: format!(
