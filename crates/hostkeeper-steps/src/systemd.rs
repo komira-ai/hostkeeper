@@ -3,7 +3,8 @@
 //! is there for the timeout, for the kill of its whole control group, and for the capture of the
 //! exit code, the last line of standard output and the log; it confines nothing.
 //!
-//! The command lines are pure functions ([`command`], [`stop_command`]). Starting a program sits
+//! The command lines are pure functions ([`command`], [`additive_command`], [`probe_command`],
+//! [`stop_command`]). Starting a program sits
 //! behind [`Spawner`], so [`SystemdLauncher`] runs against a fake in a test.
 //! [`SystemdRunProcess`] is the real spawner, and the only code of the crate that starts a
 //! process: `systemd-run` or `systemctl`, with an empty environment and no input, both of its
@@ -21,6 +22,19 @@
 //! `--collect` makes systemd unload the unit once it has ended, failed or not, so its name can
 //! be used again without `systemctl reset-failed`; `--pipe` carries the hook's output through.
 //!
+//! An additive step ([`StepLauncher::run_additive`]: the hook's `uninstall`, or a `[hook] boot`
+//! step) is run as a step is, its arguments the hook command's own before the step's name
+//! ([`additive_command`]):
+//!
+//! ```text
+//! systemd-run --system --quiet --wait --collect --pipe --unit=updater-<service>-<step>-<generation>
+//!     --property=RuntimeMaxSec=<secs|infinity> -- <executable> <hook_args...> <step> --params <file>
+//! ```
+//!
+//! A `timeout_secs` of 0 is no bound (`infinity`), as for a `prepare` whose manifest timeout is 0.
+//! Its exit, its last line, its log and a [`StepLauncher::stop`] of its unit while it runs are
+//! read as for a step.
+//!
 //! A probe ([`StepLauncher::run_probe`], the daemon asking a new hostkeeper binary for its
 //! self-update protocol) is run the same way, with its own arguments instead of a step's
 //! ([`probe_command`]):
@@ -33,17 +47,18 @@
 //! A probe ended by `RuntimeMaxSec=` exits `1` through `systemd-run`, as a step does: a probe
 //! that did not exit `0` printed no protocol.
 //!
-//! A step that [`StepLauncher::stop`] stopped is reported with no exit code, whatever
-//! `systemd-run` exited with. systemd counts the end of a service's main process by the `SIGTERM`
-//! of a stop as a clean end (result `success`), so `systemd-run --wait` exits `0` for a hook that
-//! does not handle the signal; without this, a step the dead-man stopped at its bound would read
-//! as a step that succeeded. A step ended by `RuntimeMaxSec=` needs no such rule: its result is
+//! A step (or an additive step) that [`StepLauncher::stop`] stopped is reported with no exit
+//! code, whatever `systemd-run` exited with. systemd counts the end of a service's main process
+//! by the `SIGTERM` of a stop as a clean end (result `success`), so `systemd-run --wait` exits `0`
+//! for a hook that does not handle the signal; without this, a step the dead-man stopped at its
+//! bound would read as a step that succeeded. A step ended by `RuntimeMaxSec=` needs no such rule: its result is
 //! `timeout`, and `systemd-run --wait` exits `1`.
 
 use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::fs;
 use std::io;
+use std::num::NonZeroU64;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -52,7 +67,9 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use hostkeeper_hook::Step;
 
 use crate::capture::Ring;
-use crate::launcher::{Bound, LaunchError, ProbeCall, ProbeExit, StepCall, StepExit, StepLauncher};
+use crate::launcher::{
+    AdditiveCall, Bound, LaunchError, ProbeCall, ProbeExit, StepCall, StepExit, StepLauncher,
+};
 
 /// Where `systemd-run` is.
 pub const SYSTEMD_RUN: &str = "/usr/bin/systemd-run";
@@ -76,30 +93,71 @@ fn runtime_max_sec(bound: Bound) -> String {
     }
 }
 
-/// The arguments of `systemd-run` that run one step. A relative executable or params file is
-/// refused: the unit does not run in the updater's directory.
-pub fn command(call: &StepCall<'_>) -> Result<Vec<OsString>, LaunchError> {
-    if !call.executable.is_absolute() {
-        return Err(LaunchError::Launcher(format!(
-            "the hook executable {:?} is not an absolute path",
-            call.executable
-        )));
-    }
-    if let Some(params) = call.invocation.params.as_ref().filter(|p| !p.is_absolute()) {
-        return Err(LaunchError::Launcher(format!(
-            "the params file {params:?} is not an absolute path"
-        )));
-    }
+/// The arguments of `systemd-run` that run `executable` with `rest` in the transient unit `unit`,
+/// with `RuntimeMaxSec=` set to `max_sec`.
+fn unit_line(
+    unit: &str,
+    max_sec: &str,
+    executable: &Path,
+    rest: impl IntoIterator<Item = OsString>,
+) -> Vec<OsString> {
     let mut args: Vec<OsString> = ["--system", "--quiet", "--wait", "--collect", "--pipe"]
         .into_iter()
         .map(OsString::from)
         .collect();
-    args.push(format!("--unit={}", call.unit).into());
-    args.push(format!("--property=RuntimeMaxSec={}", runtime_max_sec(call.bound)).into());
+    args.push(format!("--unit={unit}").into());
+    args.push(format!("--property=RuntimeMaxSec={max_sec}").into());
     args.push("--".into());
-    args.push(call.executable.into());
-    args.extend(call.invocation.to_args());
-    Ok(args)
+    args.push(executable.into());
+    args.extend(rest);
+    args
+}
+
+/// `Ok` when the hook `executable` and the `params` file (if any) are absolute paths: the unit
+/// does not run in the updater's directory.
+fn absolute_hook(executable: &Path, params: Option<&Path>) -> Result<(), LaunchError> {
+    if !executable.is_absolute() {
+        return Err(LaunchError::Launcher(format!(
+            "the hook executable {executable:?} is not an absolute path"
+        )));
+    }
+    if let Some(params) = params.filter(|p| !p.is_absolute()) {
+        return Err(LaunchError::Launcher(format!(
+            "the params file {params:?} is not an absolute path"
+        )));
+    }
+    Ok(())
+}
+
+/// The arguments of `systemd-run` that run one step. A relative executable or params file is
+/// refused: the unit does not run in the updater's directory.
+pub fn command(call: &StepCall<'_>) -> Result<Vec<OsString>, LaunchError> {
+    absolute_hook(call.executable, call.invocation.params.as_deref())?;
+    Ok(unit_line(
+        call.unit,
+        &runtime_max_sec(call.bound),
+        call.executable,
+        call.invocation.to_args(),
+    ))
+}
+
+/// The arguments of `systemd-run` that run one additive step:
+/// `<executable> <hook_args...> <step> --params <params>`, bounded by its `timeout_secs` (0 is no
+/// bound: `infinity`). A relative executable or params file is refused, as for [`command`].
+pub fn additive_command(call: &AdditiveCall<'_>) -> Result<Vec<OsString>, LaunchError> {
+    absolute_hook(call.executable, Some(call.params))?;
+    let bound = NonZeroU64::new(call.timeout_secs).map_or(Bound::Unbounded, Bound::Secs);
+    let rest = call.hook_args.iter().map(OsString::from).chain([
+        OsString::from(call.step),
+        OsString::from("--params"),
+        call.params.as_os_str().to_owned(),
+    ]);
+    Ok(unit_line(
+        call.unit,
+        &runtime_max_sec(bound),
+        call.executable,
+        rest,
+    ))
 }
 
 /// The arguments of `systemd-run` that run a probe, bounded by its `timeout_secs` (`0` is read
@@ -112,16 +170,12 @@ pub fn probe_command(call: &ProbeCall<'_>) -> Result<Vec<OsString>, LaunchError>
             call.executable
         )));
     }
-    let mut args: Vec<OsString> = ["--system", "--quiet", "--wait", "--collect", "--pipe"]
-        .into_iter()
-        .map(OsString::from)
-        .collect();
-    args.push(format!("--unit={}", call.unit).into());
-    args.push(format!("--property=RuntimeMaxSec={}", call.timeout_secs.max(1)).into());
-    args.push("--".into());
-    args.push(call.executable.into());
-    args.extend(call.args.iter().map(OsString::from));
-    Ok(args)
+    Ok(unit_line(
+        call.unit,
+        &call.timeout_secs.max(1).to_string(),
+        call.executable,
+        call.args.iter().map(OsString::from),
+    ))
 }
 
 /// How a probe ended: its exit code, and at most `limit` bytes of what it printed, the rest
@@ -271,6 +325,17 @@ impl<S: Spawner> SystemdLauncher<S> {
     fn spawn(&self, program: Program, args: &[OsString]) -> Result<Captured, LaunchError> {
         spawned(program, self.spawner.spawn(program, args))
     }
+
+    /// Runs `systemd-run` with `args`, the line of a step or an additive step in the unit
+    /// `unit`, and reads how it ended. A stop of an earlier run under this name (a resume, or an
+    /// uninstall, stops the unit it may find running before it runs it again) says nothing of
+    /// this run; a stop made while it runs does.
+    fn run_unit(&self, unit: &str, args: &[OsString]) -> Result<StepExit, LaunchError> {
+        stops(&self.stopped_units).remove(unit);
+        let captured = self.spawn(Program::SystemdRun, args)?;
+        let was_stopped = stops(&self.stopped_units).remove(unit);
+        Ok(step_exit(self.log.as_ref(), unit, &captured, was_stopped))
+    }
 }
 
 // The decisions of the launcher are in the functions below, which are not generic: every
@@ -333,17 +398,15 @@ impl<S: Spawner> StepLauncher for SystemdLauncher<S> {
     fn run(&self, call: &StepCall<'_>) -> Result<StepExit, LaunchError> {
         let args = command(call)?;
         executable(call.executable)?;
-        // A stop of an earlier run under this name (a resume stops the unit it finds running)
-        // says nothing of this run.
-        stops(&self.stopped_units).remove(call.unit);
-        let captured = self.spawn(Program::SystemdRun, &args)?;
-        let was_stopped = stops(&self.stopped_units).remove(call.unit);
-        Ok(step_exit(
-            self.log.as_ref(),
-            call.unit,
-            &captured,
-            was_stopped,
-        ))
+        self.run_unit(call.unit, &args)
+    }
+
+    /// Runs `<executable> <hook_args...> <step> --params <params>` ([`additive_command`]) as
+    /// [`StepLauncher::run`] runs a step.
+    fn run_additive(&self, call: &AdditiveCall<'_>) -> Result<StepExit, LaunchError> {
+        let args = additive_command(call)?;
+        executable(call.executable)?;
+        self.run_unit(call.unit, &args)
     }
 
     fn run_probe(&self, call: &ProbeCall<'_>) -> Result<ProbeExit, LaunchError> {

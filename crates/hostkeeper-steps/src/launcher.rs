@@ -41,9 +41,10 @@ pub struct StepCall<'a> {
     pub bound: Bound,
 }
 
-/// One run of an additive step: a step of the hook that is not one of the five of an update, named
-/// by the package's manifest (the `[hook] boot` step, which the daemon runs from `current` at its
-/// start). The hook is run as `<executable> <hook_args...> <step> --params <params>`.
+/// One run of an additive step: a step of the hook that is not one of the five of an update (the
+/// hook's `uninstall`, which an uninstall order runs, or the `[hook] boot` step the package's
+/// manifest names, which the daemon runs from `current` at its start). The hook is run as
+/// `<executable> <hook_args...> <step> --params <params>`.
 #[derive(Clone, Debug)]
 pub struct AdditiveCall<'a> {
     /// The service the step belongs to.
