@@ -23,7 +23,9 @@
 //!   digits, else exit 1) is made the assigner's (`PUT /v1/assigner/<MDM_DEP_NAME>`), and then
 //!   `MDM_STATE/dep-profile-uuid` and `MDM_STATE/dep-profile.sha256` (root's, 0644) record the
 //!   uuid and the sha256 of the profile; nothing is recorded when a call fails. A profile
-//!   whose sha256 is the recorded one is not defined again and calls nothing. In the same
+//!   whose sha256 is the recorded one, with a uuid of 16 to 64 hex digits recorded beside it,
+//!   is not defined again and calls nothing; a recorded sha256 without such a uuid defines it
+//!   again. A record that is not a regular file counts as not recorded. In the same
 //!   plan the depsyncer service is enabled and started when it is not active: this is the
 //!   verb that starts it, `install` leaves it alone.
 //! - `assign --serial SERIAL...`: refuses (exit 2) when no profile is recorded; otherwise

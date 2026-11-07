@@ -236,18 +236,38 @@ fn a_failing_assigner_call_records_nothing() {
     assert!(changes(&host).is_empty());
 }
 
-/// Catches a record that is trusted when it is not a regular file: a directory where the sum
-/// belongs does not count as recorded, so the profile is defined.
+/// Catches a record that is trusted when it is not a regular file: with a directory where the
+/// sum belongs, the dry run plans the definition, and the apply posts the profile, makes it the
+/// assigner's and records the uuid and the sum, never saying "unchanged".
 #[test]
 fn a_directory_where_the_sum_belongs_is_not_a_record() {
     let host = dep_host();
     host.put_dir(SUM_FILE, 0o755, (0, 0));
     let api = answered();
-    let (result, _) = go(&host, &api, &Dep::DefineProfile, Mode::DryRun);
+    let (result, shown) = go(&host, &api, &Dep::DefineProfile, Mode::DryRun);
     assert!(result.unwrap());
     assert!(api.sent().is_empty());
+    assert!(
+        shown.starts_with("DRY-RUN: POST http://127.0.0.1:9001/proxy/example/profile "),
+        "{shown}"
+    );
     let (result, shown) = go(&host, &api, &Dep::DefineProfile, Mode::Apply);
-    assert!(result.is_err() || !shown.is_empty());
+    assert!(result.unwrap());
+    assert!(!shown.contains("unchanged"), "{shown}");
+    let sent = api.sent();
+    let calls: Vec<(Method, &str)> = sent
+        .iter()
+        .map(|s| (s.call.method, s.call.path.as_str()))
+        .collect();
+    assert_eq!(
+        calls,
+        [
+            (Method::Post, "/proxy/example/profile"),
+            (Method::Put, ASSIGNER)
+        ]
+    );
+    assert_eq!(read(&host, UUID_FILE).unwrap(), format!("{UUID}\n"));
+    assert_eq!(read(&host, SUM_FILE).unwrap(), sum_of(&config()));
 }
 
 fn args(words: &[&str]) -> Vec<String> {
