@@ -5,8 +5,8 @@
 //! The position of a plan ([`Rollout`]) is kept per service in the ops store and written in the
 //! halts file beside the ops file ([`crate::ops_file`]), whose reader skips a key it does not
 //! know, so the release before still reads both files. It is the desired version it is for, how
-//! many stages of the rollout file the plan has entered, the hosts recorded done when it entered
-//! the last of them, and the operator's pause. A position for another version than the desired
+//! far the plan has entered (one past the first stage of the rollout file of its last stage),
+//! the hosts recorded done when it entered that stage, and the operator's pause. A position for another version than the desired
 //! one counts for nothing but its pause: a new desired version starts the plan over
 //! ([`crate::stages::View::of`]).
 //!
@@ -41,7 +41,8 @@ pub struct Rollout {
     /// The desired version the position is for.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<Version>,
-    /// How many stages of the rollout file the plan has entered.
+    /// How far the plan has entered: one past the first stage of the rollout file of the last
+    /// stage it entered ([`crate::stages::View::entered`]).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub entered: u32,
     /// The hosts, by node id, that had rolled when the plan entered its last stage.
@@ -122,11 +123,20 @@ pub(crate) fn advance(
     fleet: &mut Fleet,
     now: Duration,
 ) {
-    let marks = ops.marks(&def.name);
-    if marks.halt.is_some() || marks.bad.contains(&want.version) || fleet.is_quiet(now) {
+    // Every host heard runs the version and none is to install it: nothing is left to order,
+    // and the plan is not built at all.
+    let service = def.name.as_str();
+    let rolled = fleet
+        .hosts_of(service)
+        .all(|(_, h)| h.beat.version == want.version && h.beat.updating.is_none())
+        && fleet
+            .nodes()
+            .all(|(id, node)| node.announced.contains_key(service) || !fleet.is_assigned(def, id));
+    let marks = ops.marks(service);
+    if rolled || marks.halt.is_some() || marks.bad.contains(&want.version) || fleet.is_quiet(now) {
         return;
     }
-    let kept_now = ops.read(|state| state.rollouts.get(&def.name).cloned());
+    let kept_now = ops.read(|state| state.rollouts.get(service).cloned());
     let view = View::of(def, want, kept_now.as_ref(), fleet, now);
     if view.paused.is_some() {
         return;
@@ -252,11 +262,13 @@ impl Coordinator {
             .get(&request.service)
             .ok_or(proto::RolloutsRefusal::UnknownService)?;
         let why = valid_reason(&request.reason).ok_or(proto::RolloutsRefusal::InvalidRequest)?;
+        // The fleet's lock first: CI's set of a desired state holds it, so the version read is
+        // the one the plan stands for until the call returns.
+        let mut fleet = self.lock_fleet();
         let want = self
             .desired
             .get(&def.name)
             .ok_or(proto::RolloutsRefusal::NoDesired)?;
-        let mut fleet = self.lock_fleet();
         let now = (self.clock)();
         let marks = self.ops.marks(&def.name);
         let kept_now = self
@@ -378,7 +390,7 @@ pub(crate) fn plan_proto(
     fleet: &Fleet,
     now: Duration,
 ) -> proto::RolloutPlan {
-    let view = View::effective(def, want, fleet.rollout_of(&def.name), fleet, now);
+    let view = crate::stages::current(def, want, fleet, now);
     let waiting = if view.finished() {
         None
     } else if halted {

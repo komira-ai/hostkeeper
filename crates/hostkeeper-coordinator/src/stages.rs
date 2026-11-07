@@ -30,7 +30,9 @@
 //! of the role's live hosts up). Across services, a service whose rollout is not live is told
 //! `rollout_elsewhere` while the coordinator's `--live-rollouts` others are ([`is_live`]).
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 use std::time::Duration;
 
 use hostkeeper_wire::HostId;
@@ -239,7 +241,7 @@ pub struct PlanStage {
     pub advance: Advance,
     /// The first stage of the rollout file folded into it, from 0.
     pub first: usize,
-    /// One past the last: entering the stage enters this many stages of the rollout file.
+    /// One past the last.
     pub through: usize,
 }
 
@@ -307,7 +309,10 @@ pub struct View {
     pub version: Version,
     /// The stages over the eligible hosts there are, collapsed.
     pub stages: Vec<PlanStage>,
-    /// How many stages of the rollout file the plan has entered.
+    /// How far the plan has entered: one past the first stage of the rollout file of the last
+    /// stage it entered. A stage of the rollout file folded into that one is entered with it
+    /// only while it adds no host: one that comes apart from it as hosts join is entered on its
+    /// own, by an operator when it is manual.
     pub entered: usize,
     /// How many of [`Self::stages`] it has entered: it is in stage `current` of
     /// `stages.len()`, from 1; 0 before a manual first stage is entered.
@@ -446,6 +451,7 @@ impl View {
     #[must_use]
     pub fn stage_done(&self) -> bool {
         self.current > 0
+            && !self.started().any(|m| m.state == HostState::Failed)
             && self
                 .members
                 .iter()
@@ -575,8 +581,13 @@ fn eligible<'a>(
                         && fleet.is_acked(service, id, &want.version)
                 })
             });
+            // A host the desired version is below the minimum of is never ordered it.
+            let below = fleet
+                .min_version(def, id)
+                .is_some_and(|floor| !want.version.at_least(floor));
             let ok = live
                 && !resolved
+                && !below
                 && fleet.is_assigned(def, id)
                 && !fleet.is_excluded(service, id)
                 && !fleet.is_held(service, id)
@@ -647,7 +658,8 @@ fn is_deferring(
 
 /// Whether ordering the host `id` would leave fewer live hosts of its role up for `def` than the
 /// desired state's `min_up` of the role. Every live host of the role that runs the service and
-/// is not excluded counts, held ones included: `min_up` is about what stays serving.
+/// is not excluded counts, held ones included: `min_up` is about what stays serving. A host that
+/// is not up now (unhealthy, or not running the service) takes nothing away by its order.
 fn below_min_up(
     def: &ServiceDef,
     want: &Desired,
@@ -658,7 +670,10 @@ fn below_min_up(
     let service = def.name.as_str();
     let role = fleet.role_in(service, id);
     let min = want.min_up.min_up_of(role) as usize;
-    if min == 0 {
+    let up_now = fleet
+        .get_in(service, id)
+        .is_some_and(|h| fleet.is_up(service, id, h, now));
+    if min == 0 || !up_now {
         return false;
     }
     // Up after the order: every other live host of the role that is up now.
@@ -725,14 +740,40 @@ pub fn is_live(def: &ServiceDef, want: Option<&Desired>, fleet: &Fleet, now: Dur
                     })
             });
     slot || want.is_some_and(|want| {
-        !fleet.is_stopped(service, &want.version)
-            && View::effective(def, want, fleet.rollout_of(service), fleet, now).under_way()
+        !fleet.is_stopped(service, &want.version) && current(def, want, fleet, now).under_way()
     })
 }
 
 /// Whether `service` may not start a rollout now: its own is not live and as many other
 /// services' are as `--live-rollouts` lets be.
 pub(crate) fn elsewhere(
+    services: &Services,
+    all: &BTreeMap<String, Desired>,
+    service: &str,
+    fleet: &Fleet,
+    now: Duration,
+) -> bool {
+    let kept = MEMO.with(|memo| {
+        memo.borrow()
+            .as_ref()
+            .map(|plans| plans.elsewhere.get(service).copied())
+    });
+    match kept {
+        Some(Some(held)) => held,
+        Some(None) => {
+            let held = elsewhere_now(services, all, service, fleet, now);
+            MEMO.with(|memo| {
+                memo.borrow_mut()
+                    .as_mut()
+                    .map(|plans| plans.elsewhere.insert(service.to_owned(), held))
+            });
+            held
+        }
+        None => elsewhere_now(services, all, service, fleet, now),
+    }
+}
+
+fn elsewhere_now(
     services: &Services,
     all: &BTreeMap<String, Desired>,
     service: &str,
@@ -749,6 +790,73 @@ pub(crate) fn elsewhere(
         .filter(|def| live(def))
         .count();
     others >= fleet.live_rollouts()
+}
+
+thread_local! {
+    /// The plans [`current`] built while a [`Memo`] stands, by service and desired version.
+    static MEMO: RefCell<Option<Plans>> = const { RefCell::new(None) };
+}
+
+/// What a [`Memo`] keeps: each service's plan by service and desired version, and whether
+/// another service's rollout holds it ([`elsewhere`]).
+#[derive(Default)]
+struct Plans {
+    views: BTreeMap<(String, String), Rc<View>>,
+    elsewhere: BTreeMap<String, bool>,
+}
+
+/// While it stands, each service's plan is built once at its desired version and read again from
+/// memory ([`current`]): for a pass over a fleet that does not change under it, such as the
+/// decisions of one heartbeat until it is ordered something, or a status. The pass begins one
+/// and drops it before it changes the fleet. A memo begun while another stands leaves that one.
+pub(crate) struct Memo {
+    began: bool,
+}
+
+impl Memo {
+    /// A memo for this thread, unless one stands already.
+    #[must_use]
+    pub(crate) fn begin() -> Self {
+        let began = MEMO.with(|memo| {
+            let mut memo = memo.borrow_mut();
+            let began = memo.is_none();
+            if began {
+                *memo = Some(Plans::default());
+            }
+            began
+        });
+        Self { began }
+    }
+}
+
+impl Drop for Memo {
+    fn drop(&mut self) {
+        if self.began {
+            MEMO.with(|memo| *memo.borrow_mut() = None);
+        }
+    }
+}
+
+/// The plan of `def` at its desired version `want` as the decision reads it
+/// ([`View::effective`]), from the memo while one stands.
+pub(crate) fn current(def: &ServiceDef, want: &Desired, fleet: &Fleet, now: Duration) -> Rc<View> {
+    let build = || {
+        Rc::new(View::effective(
+            def,
+            want,
+            fleet.rollout_of(&def.name),
+            fleet,
+            now,
+        ))
+    };
+    MEMO.with(|memo| {
+        let mut memo = memo.borrow_mut();
+        let Some(plans) = memo.as_mut() else {
+            return build();
+        };
+        let key = (def.name.clone(), want.version.as_str().to_owned());
+        Rc::clone(plans.views.entry(key).or_insert_with(build))
+    })
 }
 
 /// The gate the plan of `def` puts on ordering the host `id` the desired version `want` at
@@ -777,18 +885,19 @@ pub fn gate(
     if fleet.is_ordered(service, id, now) {
         return None;
     }
-    let view = View::effective(def, want, fleet.rollout_of(service), fleet, now);
+    let view = current(def, want, fleet, now);
     if !view.members.iter().any(|m| m.id == *id) {
         return None;
     }
     if view.paused.is_some() {
         return Some(Gate::Paused);
     }
-    if elsewhere(services, all, service, fleet, now) {
-        return Some(Gate::RolloutElsewhere);
-    }
     if view.free() > 0 {
-        return if no_slot(def, want, fleet, id, now) {
+        // A plan with a free place whose rollout is not live has started no host, or has none
+        // left but this one: only then can another service's rollout hold it.
+        return if elsewhere(services, all, service, fleet, now) {
+            Some(Gate::RolloutElsewhere)
+        } else if no_slot(def, want, fleet, id, now) {
             Some(Gate::NoSlot)
         } else if below_min_up(def, want, fleet, id, now) {
             Some(Gate::BelowMinUp)
@@ -852,7 +961,7 @@ pub(crate) fn reach(
                 .map(|m| m.id.to_string()),
         );
         let paused = view.paused.take();
-        view = View::at(def, want, next.through, done, fleet, now);
+        view = View::at(def, want, next.first + 1, done, fleet, now);
         view.paused = paused;
         moved = true;
     }

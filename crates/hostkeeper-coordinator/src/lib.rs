@@ -281,6 +281,8 @@ mod service_tests;
 #[cfg(test)]
 mod services_tests;
 #[cfg(test)]
+mod stages_edge_tests;
+#[cfg(test)]
 mod stages_tests;
 #[cfg(test)]
 mod state_safety_digest_tests;

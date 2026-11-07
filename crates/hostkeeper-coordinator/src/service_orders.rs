@@ -51,6 +51,9 @@ impl Coordinator {
     ) -> Option<(ServiceReply, Option<Order>, Option<Terms>)> {
         let id = &asked.who.host_id;
         let now = asked.now;
+        // Each service's plan is built once for these decisions: the fleet changes only by the
+        // order that ends them.
+        let _plans = crate::stages::Memo::begin();
         let desired = self.desired.all();
         let unlisted: Vec<&str> = self
             .services

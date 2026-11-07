@@ -876,6 +876,7 @@ impl Coordinator {
     /// The status of `fleet` at `now`, which the caller holds locked: what [`Self::status`]
     /// answers, and what `Hosts.List` and `Hosts.Get` read ([`crate::hosts`]).
     pub(crate) fn status_in(&self, fleet: &Fleet, now: Duration) -> Status {
+        let _plans = crate::stages::Memo::begin();
         let hosts = self
             .legacy
             .iter()
