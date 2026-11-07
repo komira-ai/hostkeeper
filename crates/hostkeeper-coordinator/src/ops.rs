@@ -44,7 +44,7 @@
 //! (`<ops-file>.halts.unfinished` for a store over a file), and removes it once nothing is
 //! pending. A start that finds the marker removes it when the ops file holds every change it
 //! lists, and is refused otherwise, naming the changes that did not land
-//! ([`crate::config::settle_unfinished`]); the operator makes them again by hand if they still
+//! ([`crate::config::settle_unfinished`], with the start); the operator makes them again by hand if they still
 //! matter, and removes the marker.
 //!
 //! Every change carries an [`AuditEntry`]: the store numbers it, keeps the last

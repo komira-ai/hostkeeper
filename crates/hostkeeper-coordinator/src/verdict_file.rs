@@ -191,9 +191,24 @@ impl VerdictFile {
             kept.standing.remove(host.as_str());
         }
         next.services.retain(|_, kept| !kept.is_empty());
-        (self.write)(&next)?;
+        self.commit(&held, &next)?;
         *held = next;
         Ok(())
+    }
+
+    /// Commits `next` in place of `held` to the backend.
+    ///
+    /// # Errors
+    /// [`VerdictsError`]: the backend did not take it.
+    fn commit(&self, held: &Held, next: &Held) -> Result<(), VerdictsError> {
+        let commit = Commit {
+            verdicts: Some((held, next)),
+            ..Commit::default()
+        };
+        self.backend.commit(&commit).map_err(|why| match why {
+            BackendError::Verdicts(why) => why,
+            other => VerdictsError::Io(other.into_store()),
+        })
     }
 
     /// Every verdict counted: the service, the host and its report.
@@ -250,14 +265,7 @@ impl VerdictFile {
                 .collect();
         }
         next.services.retain(|_, kept| !kept.is_empty());
-        let commit = Commit {
-            verdicts: Some((&held, &next)),
-            ..Commit::default()
-        };
-        self.backend.commit(&commit).map_err(|why| match why {
-            BackendError::Verdicts(why) => why,
-            other => VerdictsError::Io(other.into_store()),
-        })?;
+        self.commit(&held, &next)?;
         *held = next;
         Ok(())
     }
