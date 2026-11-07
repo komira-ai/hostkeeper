@@ -15,6 +15,14 @@
 //! world-readable files; the checks of the 0700 state and the 0600 secrets fail for another
 //! user, since they cannot be seen.
 //!
+//! Before the checks, verify waits for the services: a service that `install`, `tls` or
+//! `migrate` started a moment ago may not have bound its port yet. It looks up to
+//! [`LISTEN_TRIES`] times, [`LISTEN_PAUSE`] apart (through the injected pause), until the SCEP
+//! server, NanoHUB, depserver and the proxy are each active with something listening on its
+//! port. When it waited, it prints at which look they were up, or that they were not. It
+//! stops looking at once when `ss` or `systemctl` cannot be run, since waiting does not change
+//! that. The checks then read the host once more and report what they see.
+//!
 //! The checks:
 //! - the SCEP server, NanoHUB, depserver and the proxy are active, and so are the certificate
 //!   renewal timer and the proxy's reload on renewal;
@@ -29,6 +37,7 @@
 
 use std::fmt;
 use std::io::Write;
+use std::time::Duration;
 
 use hostkeeper_mdm_core::acme::Acme;
 use hostkeeper_mdm_core::config::MdmConfig;
@@ -41,6 +50,10 @@ use crate::{Env, MdmError};
 
 /// How long the certificate must stay valid.
 pub const VALID_FOR_DAYS: u64 = 21;
+/// How many times verify looks for the services and their listeners before the checks.
+pub const LISTEN_TRIES: u32 = 60;
+/// The pause between two looks: with [`LISTEN_TRIES`], a minute at most.
+pub const LISTEN_PAUSE: Duration = Duration::from_secs(1);
 /// The secret files, all 0600 and root's.
 pub const SECRET_FILES: [&str; 4] = ["nanohub.env", "nanodep.env", "scep.env", "dns.env"];
 const OPENSSL: &str = "/usr/bin/openssl";
@@ -55,6 +68,8 @@ pub struct Verify<'a> {
     pub acme: Option<&'a Acme>,
     /// Whole lines left out of both texts of every file before they are compared.
     pub ignore: &'a [String],
+    /// Waits the time it is given between two looks for the listeners (the real one sleeps).
+    pub pause: &'a dyn Fn(Duration),
 }
 
 /// How one check went: a line of the report, not an error.
@@ -135,12 +150,10 @@ pub fn checks(host: &dyn Host, v: &Verify<'_>) -> Vec<Check> {
         code => Err(format!("ss exited with status {code}")),
     });
     let bind = c.bind().to_string();
-    for (what, port, addr) in [
-        ("NanoHUB", c.nanohub_port(), "127.0.0.1"),
-        ("SCEP", c.scep_port(), "127.0.0.1"),
-        ("depserver", c.dep_port(), "127.0.0.1"),
-        ("the proxy", 443, bind.as_str()),
-    ] {
+    for Service {
+        what, port, addr, ..
+    } in services(c, &n, &bind)
+    {
         let only = listening.clone().and_then(|t| listens_only(&t, port, addr));
         row(format!("{what} listens on {addr}:{port} only"), only);
     }
@@ -182,6 +195,78 @@ pub fn checks(host: &dyn Host, v: &Verify<'_>) -> Vec<Check> {
         profile_file(host, c),
     );
     rows
+}
+
+/// A service verify waits for: its name in the report, its unit, and where it listens.
+struct Service<'s> {
+    what: &'static str,
+    unit: &'s str,
+    port: u16,
+    addr: &'s str,
+}
+
+/// The services that listen, in the order their checks print; `bind` is `MDM_BIND`'s text.
+fn services<'s>(c: &MdmConfig, n: &'s UnitNames, bind: &'s str) -> [Service<'s>; 4] {
+    let local = "127.0.0.1";
+    [
+        Service {
+            what: "NanoHUB",
+            unit: &n.nanohub,
+            port: c.nanohub_port(),
+            addr: local,
+        },
+        Service {
+            what: "SCEP",
+            unit: &n.scep,
+            port: c.scep_port(),
+            addr: local,
+        },
+        Service {
+            what: "depserver",
+            unit: &n.depserver,
+            port: c.dep_port(),
+            addr: local,
+        },
+        Service {
+            what: "the proxy",
+            unit: &n.proxy,
+            port: 443,
+            addr: bind,
+        },
+    ]
+}
+
+/// One look: `Some(true)` when every service is active and something listens on its port,
+/// `Some(false)` when one is not yet, `None` when `ss` or `systemctl` could not be run.
+fn up(host: &dyn Host, services: &[Service<'_>]) -> Option<bool> {
+    let ss = host.run(&Cmd::new(SS_PATH).arg("-Hltn")).ok()?;
+    if ss.code != 0 {
+        return None;
+    }
+    for s in services {
+        let state = host.run(&Cmd::new(SYSTEMCTL).arg("is-active").arg(s.unit));
+        if state.ok()?.code != 0 || listeners(&ss.stdout, s.port).is_empty() {
+            return Some(false);
+        }
+    }
+    Some(true)
+}
+
+/// Looks up to [`LISTEN_TRIES`] times, pausing [`LISTEN_PAUSE`] between two looks, until every
+/// service is up; how many looks it took and whether they were all up at the last one.
+fn settle(host: &dyn Host, v: &Verify<'_>) -> (u32, bool) {
+    let c = v.config;
+    let n = UnitNames::new(c);
+    let bind = c.bind().to_string();
+    let services = services(c, &n, &bind);
+    let mut look = 1;
+    loop {
+        match up(host, &services) {
+            Some(false) if look < LISTEN_TRIES => (v.pause)(LISTEN_PAUSE),
+            seen => return (look, seen == Some(true)),
+        }
+        look += 1;
+    }
 }
 
 fn active(host: &dyn Host, unit: &str) -> Outcome {
@@ -439,6 +524,18 @@ pub fn run(env: &Env<'_>, v: &Verify<'_>, out: &mut dyn Write) -> Result<bool, M
     }
     if host.euid() != 0 {
         writeln!(out, "{NOT_ROOT}")?;
+    }
+    let secs = LISTEN_PAUSE.as_secs();
+    match settle(host, v) {
+        (1, _) => {}
+        (look, true) => writeln!(
+            out,
+            "waited     the services were active and listening at look {look} of {LISTEN_TRIES}, {secs} s apart"
+        )?,
+        (look, false) => writeln!(
+            out,
+            "waited     the services were not all active and listening after {look} looks, {secs} s apart; the checks below say which"
+        )?,
     }
     let mut fails = 0;
     for row in checks(host, v) {
