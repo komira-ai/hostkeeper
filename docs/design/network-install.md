@@ -452,10 +452,12 @@ thing:
   in the Linux match (and only when both sides have one); the serial and the UUID are for the person to compare. A
   value the record does not hold is shown as "not recorded", and a claim the request leaves out as "not claimed";
   neither is shown as agreement. A request that leaves out its BMC MAC still matches on a data MAC (**Built**), so
-  "not claimed" beside a recorded BMC MAC is shown as a warning.
-- **Say that "matched" is not proof.** Beside the match line, the screen says: "Matched means this request claims a
-  data MAC of the record and does not contradict its BMC MAC. The machine wrote the claims itself, and anyone who read
-  the label or the network can write the same. Approve only the key hash shown on this machine's console."
+  "not claimed" beside a recorded BMC MAC is shown as a warning. **Built**: `PendingEnrollment` carries the matched
+  record's serial and BMC MAC (`record_serial`, `record_bmc_mac`) for the screen to show.
+- **Say that "matched" is not proof.** Beside the match line of a matched Linux request, the screen says (**Built**):
+  "Matched means this request claims a data MAC of the record and does not contradict its BMC MAC. The machine wrote
+  the claims itself, and anyone who read the label or the network can write the same. Approve only the key hash shown
+  on this machine's console."
 - **Show the key hash on the machine's console.** This is the one check an attacker elsewhere on the LAN cannot fake.
   While a request is pending, the daemon writes its key hash, the coordinator it posted to, and the request's state to
   `/run/hostkeeper/enrollment.issue`. The deb ships `/etc/issue.d/hostkeeper.issue` as a link to it, so the login
@@ -465,12 +467,13 @@ thing:
   seed sets the installed kernel's `console=` to that port and enables its serial getty, which `--serial-console
   <ttyS port>` does. The operator doc's check with `openssl` (docs/operations/enrollment.md, "Check the key hash")
   stays as the way to read it over SSH, for a machine with neither.
-- **Refuse a contested record.** Today two pending requests that match one record both show `matched`, with that
-  record's host id. Designed: `Enrollment.List` marks each of them `contested`, naming the others. `Enrollment.Approve`
-  then refuses `record_contested` while another pending request matches the same record, until the operator rejects
-  the others. An attacker who posted first therefore cannot be approved by a hurried click on the first `matched` row;
-  the operator has to decide which machine is real, by the console's key hash. This is additive: a new field on
-  `PendingEnrollment` and a new refusal value.
+- **Refuse a contested record.** Two pending requests that match one record both show `matched`, with that record's
+  host id, and `Enrollment.List` marks each of them contested, naming the others (`PendingEnrollment.contested_by`,
+  **Built**). `Enrollment.Approve` refuses `record_contested` while another pending request matches the same record,
+  with or without `replace`, until the operator rejects the others (**Built**). An attacker who posted first therefore
+  cannot be approved by a hurried click on the first `matched` row; the operator has to decide which machine is real,
+  by the console's key hash. This is additive: a new field on `PendingEnrollment` and a new refusal value. A request
+  that matches several records contests the requests of each.
 
 **Q15 stays (a) for Linux in v1.** None of the claims above approves anything by itself, and nothing auto-approves.
 
@@ -714,7 +717,7 @@ One pull request each, in this order. "After" lists prerequisites. Sizes are tho
 | N1b | This amendment: network boot first as the expected setup and two steps per machine, router mode beside proxy mode with the per-MAC boot menu, DHCP guarding, `linux-arm64` in v1, the record's platform, and arm64 in CI | N1 | S |
 | N2 | Coordinator `--lan-listen` (agent service only, per Question 1); IP SAN of its address; server certificate made again when its names change; the tests of section 11 | N1 | M |
 | N3 | Daemon: the console issue file of the pending request; the deb and the overlay ship the `issue.d` link | N1 | S |
-| N4 | Enrollment: `contested` on `PendingEnrollment` and refusal `record_contested`; the UI's approval screen puts the hard-to-copy claims beside the record and adds the "matched is not proof" text | N1 | M |
+| N4 | Enrollment: `contested_by`, `record_serial` and `record_bmc_mac` on `PendingEnrollment` and refusal `record_contested`; the UI's approval screen puts the hard-to-copy claims beside the record and adds the "matched is not proof" text | N1 | M |
 | N5 | `packaging/netboot/pins.toml` and `netboot.json` with a boot set for each of `linux-x86_64` and `linux-arm64` (ISO, shim, signed network GRUB, kernel, initrd), built and attested in the artifacts workflow | N1b | M |
 | N6 | Seed and menu generator: a pure crate turning a record, its platform, a daemon config and flags into the fixed `grub.cfg`, the install and local-disk menus of a MAC, autoinstall `user-data` and `meta-data`, with goldens for each platform | N1b | M |
 | N7 | proxyDHCP, router-mode learning and TFTP packet handling: a pure crate, no sockets, no inventory; architectures 7, 9, 11, 16 and 19; the router-mode `hostkeeper/boot.efi` by learned architecture | N1b | M |
