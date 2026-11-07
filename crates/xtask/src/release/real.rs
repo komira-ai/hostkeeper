@@ -25,6 +25,12 @@ impl Exec for SystemExec {
     }
 }
 
+/// The process runner of `mdm-signing-test build` (`openssl`, `pkgbuild`, `productbuild`,
+/// `security`, `productsign` and `pkgutil` from the `PATH`, or the path named).
+pub(crate) fn exec() -> impl Exec {
+    SystemExec
+}
+
 /// The real adapters: `git`, `gh`, `pkgbuild` and `cargo` from the `PATH`, in the current
 /// directory, and the binary a `check-binary` names, each run as a process.
 pub(crate) fn connect() -> impl super::ports::Adapters {

@@ -50,8 +50,9 @@
 //! component pkg that holds the payload and the script, and `productbuild` wraps it, as the one
 //! package of the product, in the file the MDM installs.
 //!
-//! The pkg is not signed: an installer signature needs an Apple Developer ID Installer
-//! identity. It is attested like every other asset (build provenance by the artifacts
+//! The pkg is not signed. Which identity will sign it (a farm installer identity whose root the
+//! MDM installs, or Apple's Developer ID Installer) is decided by the device test of
+//! `docs/design/hostkeeper-mdm.md` section 7.2 (`cargo xtask mdm-signing-test`). It is attested like every other asset (build provenance by the artifacts
 //! workflow), and an MDM installs it by its digest (design section 5.9). The binary in it keeps
 //! the ad-hoc code signature the linker gives it, which the macOS unpack check accepts.
 //!
