@@ -1,0 +1,12 @@
+# hostkeeper-mdm-cert.timer: run hostkeeper-mdm-cert.service twice a day (a run missed while the
+# host was down runs at boot). Rendered by `hostkeeper-mdm tls`.
+[Unit]
+Description=hostkeeper-mdm TLS certificate renewal, twice a day
+
+[Timer]
+OnCalendar=*-*-* 04,16:23:00
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

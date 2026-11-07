@@ -1,0 +1,27 @@
+[package]
+name = "hostkeeper-mdm-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "The pure core of the MDM kit: its settings, the enrollment and ADE profiles, the systemd units and Caddyfile of the MDM services, and the pinned upstream tools."
+
+# docs/design/hostkeeper-mdm.md section 8: the port of komira-ai/kbf's `mdm-core`. No I/O, no
+# process, no clock, no randomness and no hashed collections; it depends on no crate of this
+# workspace (crates/xtask/tests/layering keeps it so).
+[dependencies]
+# The payload UUIDs of the enrollment profile, and the sha256 of a pin, as hex.
+hex.workspace = true
+# The enrollment profile is an XML property list.
+plist.workspace = true
+# The ADE profile is JSON, written and read with a derived strict parser.
+serde.workspace = true
+serde_json.workspace = true
+# The manifest of the rendered files.
+sha2.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

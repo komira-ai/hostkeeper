@@ -245,6 +245,7 @@ fn a_backup_holds_no_byte_of_the_ca_key_even_when_it_is_in_the_enrollment_dir() 
         ca_key: store.join("ca.key"),
         server_cert: store.join("server.pem"),
         names: vec!["coordinator.example".to_owned()],
+        ips: Vec::new(),
     };
     files
         .start(Arc::new(RealFs), FixedClock::at(NOW), os_random())
