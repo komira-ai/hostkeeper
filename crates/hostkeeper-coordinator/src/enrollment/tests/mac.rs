@@ -29,7 +29,7 @@ use crate::marks_support::operator;
 use crate::testutil::{OPERATOR, Rig as CoordinatorRig, scratch};
 
 /// The allowlist entry of [`SERIAL`]: host id `mac-<serial>`, role `build`, service `kbf`.
-const ALLOWED: &str = r#"
+pub(super) const ALLOWED: &str = r#"
 [[mac]]
 serial = "C02XK1ABJG5J"
 host_id_prefix = "mac-"
@@ -38,16 +38,22 @@ services = ["kbf"]
 "#;
 
 /// The host id the allowlist gives [`SERIAL`].
-const MAC_HOST: &str = "mac-c02xk1abjg5j";
+pub(super) const MAC_HOST: &str = "mac-c02xk1abjg5j";
 
 /// A device the gate says is enrolled and supervised.
-const GOOD: DeviceStatus = DeviceStatus {
+pub(super) const GOOD: DeviceStatus = DeviceStatus {
     enrolled: true,
     supervised: true,
+    enrolled_since_unix: None,
 };
 
 /// An enrollment over `fs` approving a Mac as `allowlist` and the gate `gate` say.
-fn mac_rig(name: &str, fs: Arc<dyn Fs>, gate: &Arc<FakeDeviceState>, allowlist: &str) -> Rig {
+pub(super) fn mac_rig(
+    name: &str,
+    fs: Arc<dyn Fs>,
+    gate: &Arc<FakeDeviceState>,
+    allowlist: &str,
+) -> Rig {
     let policy = MacPolicy {
         device_state: gate.clone(),
         allowlist: MacAllowlist::parse(allowlist).expect("an allowlist"),
@@ -58,7 +64,7 @@ fn mac_rig(name: &str, fs: Arc<dyn Fs>, gate: &Arc<FakeDeviceState>, allowlist: 
 }
 
 /// A gate that says `serial` is `status`.
-fn gate_saying(
+pub(super) fn gate_saying(
     serial: &str,
     status: Result<DeviceStatus, DeviceStateError>,
 ) -> Arc<FakeDeviceState> {
@@ -68,7 +74,7 @@ fn gate_saying(
 }
 
 /// The audit entry of a declined attempt for `key`'s request.
-fn declined(why: MacDecline, key: &HostKey) -> Audited {
+pub(super) fn declined(why: MacDecline, key: &HostKey) -> Audited {
     audited(
         "mdm-nonce",
         "mac_auto_approve_declined",
@@ -82,7 +88,7 @@ fn declined(why: MacDecline, key: &HostKey) -> Audited {
 }
 
 /// The state the store holds `key`'s request in.
-fn state_of(enrollment: &Enrollment, key: &HostKey) -> RequestState {
+pub(super) fn state_of(enrollment: &Enrollment, key: &HostKey) -> RequestState {
     enrollment
         .store()
         .request(&key.key_hash())
@@ -146,13 +152,20 @@ async fn mac_auto_approve_requires_every_condition() {
             Change::WrongSerial => "OTHERSERIAL1",
             _ => SERIAL,
         };
-        let nonce = e.issue_mac_nonce(issued_for).expect("a nonce");
+        let (key, first) = (HostKey::new(), HostKey::new());
+        // A nonce used already was used by the request it was issued for.
+        let bound = match change {
+            Change::Used => &first,
+            _ => &key,
+        };
+        let nonce = e
+            .issue_mac_nonce(issued_for, &bound.key_hash())
+            .expect("a nonce");
         let presented = match change {
             Change::UnknownNonce => b"a nonce the gate never issued".to_vec(),
             _ => nonce.as_bytes().to_vec(),
         };
         if let Change::Used = change {
-            let first = HostKey::new();
             e.enroll(mac_request(
                 &first,
                 "machine-first",
@@ -167,7 +180,6 @@ async fn mac_auto_approve_requires_every_condition() {
             _ => 10,
         };
         enrollment.clock.set(NOW + offset);
-        let key = HostKey::new();
         let before = audit_of(&rig.coordinator).len();
         let answer = e
             .enroll(mac_request(&key, "machine-mac", SERIAL, &presented))
@@ -228,8 +240,8 @@ async fn a_declined_attempt_does_not_burn_the_nonce() {
     );
     let enrollment = mac_rig("mac-not-burnt", Arc::new(RealFs), &gate, ALLOWED);
     let e = &enrollment.enrollment;
-    let nonce = e.issue_mac_nonce(SERIAL).expect("a nonce");
     let key = HostKey::new();
+    let nonce = e.issue_mac_nonce(SERIAL, &key.key_hash()).expect("a nonce");
     let request = mac_request(&key, "machine-mac", SERIAL, nonce.as_bytes());
     e.enroll(request.clone()).expect("enrolled");
     assert_eq!(state_of(e, &key), RequestState::Pending);
@@ -272,8 +284,8 @@ async fn a_repost_claiming_another_serial_is_judged_by_the_first() {
     gate.set("C02VIP000001", Ok(GOOD));
     let enrollment = mac_rig("mac-repost-serial", Arc::new(RealFs), &gate, TWO_ALLOWED);
     let e = &enrollment.enrollment;
-    let nonce = e.issue_mac_nonce(SERIAL).expect("a nonce");
     let key = HostKey::new();
+    let nonce = e.issue_mac_nonce(SERIAL, &key.key_hash()).expect("a nonce");
     e.enroll(mac_request(&key, "machine-mac", SERIAL, &[]))
         .expect("posted without a nonce");
     let answer = e
@@ -313,8 +325,8 @@ async fn a_mac_path_quotes_its_serial_and_fails_closed() {
     let enrollment = mac_rig("mac-closed", fs.clone(), &gate, ALLOWED);
     let rig = coordinator_over("mac-closed-coordinator", &enrollment).await;
     let e = &enrollment.enrollment;
-    let nonce = e.issue_mac_nonce(SERIAL).expect("a nonce");
     let odd = HostKey::new();
+    let nonce = e.issue_mac_nonce(SERIAL, &odd.key_hash()).expect("a nonce");
     let before = audit_of(&rig.coordinator).len();
     e.enroll(mac_request(&odd, "machine-odd", "C02 X", nonce.as_bytes()))
         .expect("enrolled");
@@ -361,9 +373,9 @@ async fn a_nonce_expires_after_exactly_one_hour() {
             ALLOWED,
         );
         let e = &enrollment.enrollment;
-        let nonce = e.issue_mac_nonce(SERIAL).expect("a nonce");
-        enrollment.clock.set(NOW + offset);
         let key = HostKey::new();
+        let nonce = e.issue_mac_nonce(SERIAL, &key.key_hash()).expect("a nonce");
+        enrollment.clock.set(NOW + offset);
         e.enroll(mac_request(&key, "machine-mac", SERIAL, nonce.as_bytes()))
             .expect("enrolled");
         let approved = state_of(e, &key) == RequestState::Approved;
@@ -378,8 +390,8 @@ async fn no_gate_configured_auto_approves_nothing() {
     let enrollment = Rig::new("mac-no-gate");
     let rig = coordinator_over("mac-no-gate-coordinator", &enrollment).await;
     let e = &enrollment.enrollment;
-    let nonce = e.issue_mac_nonce(SERIAL).expect("a nonce");
     let key = HostKey::new();
+    let nonce = e.issue_mac_nonce(SERIAL, &key.key_hash()).expect("a nonce");
     let before = audit_of(&rig.coordinator).len();
     let answer = e
         .enroll(mac_request(&key, "machine-mac", SERIAL, nonce.as_bytes()))
@@ -401,7 +413,7 @@ async fn no_gate_configured_auto_approves_nothing() {
         e.with_mac(policy)
     });
     let e = &gateless.enrollment;
-    let nonce = e.issue_mac_nonce(SERIAL).expect("a nonce");
+    let nonce = e.issue_mac_nonce(SERIAL, &key.key_hash()).expect("a nonce");
     let answer = e
         .enroll(mac_request(&key, "machine-mac", SERIAL, nonce.as_bytes()))
         .expect("enrolled");
@@ -458,8 +470,8 @@ async fn a_mac_approval_is_refused_as_an_operators_would_be() {
     let rig = coordinator_over("mac-refused-coordinator", &enrollment).await;
     let e = &enrollment.enrollment;
     enrolled(e, &HostKey::new(), "machine-old", MAC_HOST);
-    let nonce = e.issue_mac_nonce(SERIAL).expect("a nonce");
     let key = HostKey::new();
+    let nonce = e.issue_mac_nonce(SERIAL, &key.key_hash()).expect("a nonce");
     let before = audit_of(&rig.coordinator).len();
     e.enroll(mac_request(&key, "machine-new", SERIAL, nonce.as_bytes()))
         .expect("enrolled");
@@ -518,9 +530,9 @@ async fn no_secret_in_list_or_audit() {
     let rig = coordinator_over("mac-secret-coordinator", &enrollment).await;
     let operator = rig.coordinator.caller(Some(OPERATOR)).await;
     let e = &enrollment.enrollment;
-    let nonce = e.issue_mac_nonce(SERIAL).expect("a nonce");
-    assert_eq!(format!("{nonce:?}"), "MacNonce(..)");
     let key = HostKey::new();
+    let nonce = e.issue_mac_nonce(SERIAL, &key.key_hash()).expect("a nonce");
+    assert_eq!(format!("{nonce:?}"), "MacNonce(..)");
     let request = mac_request(&key, "machine-mac", SERIAL, nonce.as_bytes());
     e.enroll(request.clone()).expect("declined");
     let mut seen: Vec<Vec<u8>> = vec![
@@ -611,14 +623,16 @@ fn a_nonce_is_issued_only_for_a_serial_from_fresh_random_bytes() {
     let long = "C".repeat(65);
     for bad in ["", "C02 X", "C02-X", long.as_str()] {
         assert!(matches!(
-            enrollment.enrollment.issue_mac_nonce(bad),
+            enrollment
+                .enrollment
+                .issue_mac_nonce(bad, &HostKey::new().key_hash()),
             Err(MacNonceError::InvalidSerial)
         ));
     }
     assert_eq!(
         enrollment
             .enrollment
-            .issue_mac_nonce(&"C".repeat(64))
+            .issue_mac_nonce(&"C".repeat(64), &HostKey::new().key_hash())
             .expect("the longest serial")
             .as_bytes()
             .len(),
@@ -627,7 +641,9 @@ fn a_nonce_is_issued_only_for_a_serial_from_fresh_random_bytes() {
     let none: Random = Box::new(|_| false);
     let starved = Rig::over("mac-issue-none", Arc::new(RealFs), none);
     assert!(matches!(
-        starved.enrollment.issue_mac_nonce(SERIAL),
+        starved
+            .enrollment
+            .issue_mac_nonce(SERIAL, &HostKey::new().key_hash()),
         Err(MacNonceError::NoRandom)
     ));
     let same: Random = Box::new(|buffer| {
@@ -635,10 +651,13 @@ fn a_nonce_is_issued_only_for_a_serial_from_fresh_random_bytes() {
         true
     });
     let stuck = Rig::over("mac-issue-same", Arc::new(RealFs), same);
-    stuck.enrollment.issue_mac_nonce(SERIAL).expect("the first");
+    stuck
+        .enrollment
+        .issue_mac_nonce(SERIAL, &HostKey::new().key_hash())
+        .expect("the first");
     let again = stuck
         .enrollment
-        .issue_mac_nonce(SERIAL)
+        .issue_mac_nonce(SERIAL, &HostKey::new().key_hash())
         .expect_err("the same bytes");
     assert!(matches!(again, MacNonceError::NoRandom), "{again}");
     let fs = Arc::new(FaultFs::new());
@@ -646,7 +665,7 @@ fn a_nonce_is_issued_only_for_a_serial_from_fresh_random_bytes() {
     fs.fail_at(fs.count() + 1);
     let refused = failing
         .enrollment
-        .issue_mac_nonce(SERIAL)
+        .issue_mac_nonce(SERIAL, &HostKey::new().key_hash())
         .expect_err("the lock fails");
     assert!(matches!(refused, MacNonceError::Store(_)), "{refused}");
 }
@@ -696,8 +715,8 @@ fn shown(rig: &CoordinatorRig, key: &HostKey) -> PendingEnrollment {
 /// declined it `serial_not_allowed` and left it pending, and gives the key.
 fn post_unlisted_mac(enrollment: &Rig, rig: &CoordinatorRig) -> HostKey {
     let e = &enrollment.enrollment;
-    let nonce = e.issue_mac_nonce(SERIAL).expect("a nonce");
     let key = HostKey::new();
+    let nonce = e.issue_mac_nonce(SERIAL, &key.key_hash()).expect("a nonce");
     let before = audit_of(&rig.coordinator).len();
     let answer = e
         .enroll(mac_request(&key, "machine-mac", SERIAL, nonce.as_bytes()))
