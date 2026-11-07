@@ -6,19 +6,21 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "The update coordinator: tells each host's updater which version to run, one live update at a time across the fleet."
+description = "The update coordinator: tells each host's updater which version to run, each service by its update plan of stages."
 
 # The update coordinator (docs/design/host-updates.md): a deployable of its own that tells each
-# host's updater which version to run, one live update at a time across every service and role
-# (the limits and minimums a desired state carries are kept and printed; no decision reads
-# them). Updaters dial it over mutual TLS; CI sets the desired state of a service with a GitHub
-# Actions OIDC token (hostkeeper-oidc); an operator reads the status with a named token. The
-# decision is a pure function (`decide`) over the heartbeats the coordinator has seen. On disk it
-# keeps three files: the desired state of each service (with the package digest of every version
-# CI has set), the operations file (operator actions, version marks, the audit ring, with every
-# change also a line of the audit file beside it) and the halts file beside it (halt reports, who
-# raised each halt, clear generations); beside the state file, the spent ids of CI's tokens and
-# the lock that keeps a second coordinator off these files.
+# host's updater which version to run, each service by its update plan: stages of a growing
+# share of its hosts (docs/design/rollout-update-plans.md), the hosts of a stage updating in
+# parallel under the limits and minimums a desired state carries per role, and by default one
+# service's rollout live at a time. Updaters dial it over mutual TLS; CI sets the desired state
+# of a service with a GitHub Actions OIDC token (hostkeeper-oidc); an operator reads the status
+# with a named token. The decision is a pure function (`decide`) over the heartbeats the
+# coordinator has seen. On disk it keeps three files: the desired state of each service (with
+# the package digest of every version CI has set), the operations file (operator actions, version
+# marks, the audit ring, with every change also a line of the audit file beside it) and the halts
+# file beside it (halt reports, who raised each halt, clear generations, where each service's
+# update plan stands); beside the state file, the spent ids of CI's tokens and the lock that
+# keeps a second coordinator off these files.
 # With `--enrollment-dir` it is also the hosts' certificate authority (hostkeeper-enrollment): it
 # keeps the enrollment store and the CA key file, answers Enroll, Poll and Renew, and makes its
 # own server certificate.

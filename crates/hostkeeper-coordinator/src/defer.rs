@@ -2,9 +2,9 @@
 //! (`docs/design/host-updates.md`, section 3.8).
 //!
 //! A host that says it declined an update to a version (a [`DeferredReport`] in its
-//! heartbeat) is left alone for a wait, holds no slot and does not make its service
-//! `blocked`; at the end of the wait it is ordered again like any other host. A deferral
-//! never cuts work: it only delays the offer of one version to one host, and a new desired
+//! heartbeat) is left alone for a wait, holds no slot, takes no place in a stage of the service's
+//! update plan ([`crate::stages`]) and does not make its service `blocked`; at the end of the wait
+//! it is ordered again like any other host. A deferral never cuts work: it only delays the offer of one version to one host, and a new desired
 //! version lifts it at once.
 //!
 //! A host declining several orders in a row waits longer each time: the wait of the n-th

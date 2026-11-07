@@ -6,9 +6,12 @@ read them as they are; none is generated at test time. A file is changed only to
 again, never to make a test pass. Three kinds of change are the exception, and say so where they
 are: the services files are written as rollout files of this coordinator (the data they record
 is kbf's service and tierstore's); the sequences `24` to `30` are not recordings: each is a
-case where a rule this coordinator cut decided, with its own answer and kbf's beside it; and one
-step of `17`, whose list of nine feature names kbf's bound of 8 dropped and this coordinator's
-bound of 16 reads, keeps kbf's answer beside this coordinator's.
+case derived from kbf's rules at the tag, where a rule this coordinator cut decided, with its own
+answer and kbf's beside it, or, in `25` and `27`, where a rule this coordinator holds as kbf did
+decided, with the answer both give; one step of `17`, whose list of nine feature names kbf's
+bound of 8 dropped and this coordinator's bound of 16 reads, keeps kbf's answer beside this
+coordinator's; and steps of `10` and `23`, where this coordinator's update plan decided, keep
+kbf's answers beside this coordinator's.
 
 ## Services and flags
 
@@ -94,22 +97,22 @@ a host that sent none, is taken out of the status before it is compared.
 ## Where a cut rule decided
 
 Sequences `03` to `07` were transcribed from kbf goldens that asked each host without noting an
-order; the rules this coordinator cut (the order of roles, the minimum of hosts up, the
-`never_last` floor, a role's limit of zero) showed there. A recorded sequence goes through the
-coordinator, which notes each order, and the host asked after the first order is held by the one
-live update (`no_slot`) in kbf as well, so every answer of `03` to `07` is the same in kbf and
-here, and so is the reason.
+order; the rules this coordinator cut (the order of roles, the `never_last` floor) showed there.
+A recorded sequence goes through the coordinator, which notes each order, and the host asked
+after the first order is held, in kbf by the one live update (`no_slot`) and here by the first
+stage of the service's update plan, which holds one host, so every answer of `03` to `07` is the
+same in kbf and here; the reason here is the plan's.
 
 | sequence | the cut rule | kbf: answer and reason | here: answer and reason |
 |---|---|---|---|
 | `24-cut-never-last-does-not-delay-an-order` | the `never_last` floor of one | `nothing`, `min_up` (no other frontend up) | `update 2.0`, no reason (nothing holds it) |
-| `25-cut-min-up-does-not-delay-an-order` | the desired `min_up` of storage | `nothing`, `min_up` (0 of the 2 other storage hosts required up) | `update 2.0` |
 | `26-cut-role-order-does-not-delay-an-order` | a role's `after` (a frontend waits for storage) | `nothing`, `waiting_for_role` (storage host `s1` behind and live) | `update 2.0` |
-| `27-cut-a-role-limit-of-zero-does-not-hold-the-role` | a role's `max_updating` of 0 | `nothing`, `no_slot` (room 0 for the daemon role) | `update 2.0` |
 | `28-cut-convergence-does-not-need-min-up` | the convergence minimum | `in_progress` (0 of the 1 storage host required up) | `converged` |
 | `29-cut-service-order-does-not-delay-an-order` | a service's `after` | `nothing`, `waiting_for_service` (a host of `first`, which `second` came after, was behind and live) | `update` of `second` |
 | `30-cut-require-min-up-does-not-refuse-a-body` | `require_min_up` | 400 `bad_request` (`min_up lacks storage`) | 200 and the echo of the state, with `min_up` written `{"storage":0,"frontend":0}` |
 | `17-features-a-bad-announcement-is-dropped`, step 5 | the bound of 8 feature names, raised to 16 | `nothing` with no `features` (the list of nine is dropped) | `nothing` and `features: []` (nine names read, none supported) |
+| `10-halt-generations-of-two-services`, steps 6 and 9 | the update plan, which audits the stage it enters | the clears numbered 5 and 7 | the clears numbered 6 and 8: this coordinator's update plan for kbf enters its second stage at step 4 (`rollout_advance`, by the coordinator), an audit entry kbf never wrote |
+| `23-automatic-rollback-marks-the-version-bad`, step 10 | the update plan: a failed host of a stage holds the next | `update 2.0`, no reason (the one live update was free once `d1` beat healthy) | `nothing`, `stage_failed` (`d1`, the first stage's host, failed below the threshold) |
 
 `kbf_status` and `kbf_body` of a step keep kbf's answer; the replay never compares them.
 `tests/replay.rs` lists these eight in `CHANGED` and `check_changed_list` fails when a sequence

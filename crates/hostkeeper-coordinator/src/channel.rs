@@ -2,9 +2,9 @@
 //!
 //! CI publishes a version to the release channel and then sets it as the desired version
 //! (design section 5.2). When the set comes first, every host the version is ordered to fetches
-//! an index the channel does not hold yet, and the one live update stays on a rollout that
-//! cannot succeed. With `--release-channel` the coordinator asks the channel first: before a set
-//! is decided, it fetches the version's index, `{channel}/{service}/{version}/index.json`
+//! an index the channel does not hold yet, and the service's rollout stays live on a version
+//! that cannot succeed. With `--release-channel` the coordinator asks the channel first: before a
+//! set is decided, it fetches the version's index, `{channel}/{service}/{version}/index.json`
 //! ([`index_path`]), and refuses the set unless the channel holds it:
 //!
 //! - no index (404), an answer that is not an index, an index that lists no package, or a fetch

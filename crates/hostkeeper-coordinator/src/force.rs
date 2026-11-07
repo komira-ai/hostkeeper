@@ -1,7 +1,8 @@
 //! Force: the fleet-wide fix, the coordinator's half (design 5.6). `Releases.Force` names a
 //! service, a version, a reason and the targets (the whole fleet, a role, or a list of hosts),
-//! and orders a hookless `force` at each targeted host's next heartbeat, past the one live
-//! update, the canary, the bake, a deferral, a bad mark, a halt and a host's failure of the
+//! and orders a hookless `force` at each targeted host's next heartbeat, past the update plan (its
+//! stages, its `max_updating` and `min_up`, a pause and the other services' live rollouts), the
+//! canary, the bake, a deferral, a bad mark, a halt and a host's failure of the
 //! version, so one call may reach every target in the same heartbeat round.
 //!
 //! [`Coordinator::force`] refuses, before anything changes: the service `hostkeeper`, which
@@ -31,9 +32,10 @@
 //!
 //! The force stands until CI or an operator sets another version ([`end_by_ci`],
 //! [`end_by_setter`]) or another force replaces it. While it stands the automatic rollback of the service is suspended
-//! ([`crate::reconcile`]) and the pairs it orders take no update slot ([`crate::decide`]), so
-//! the slot accounting is the same when it ends as if it had never been. Its order goes to each
-//! host it orders at every heartbeat until the host runs the version, is running the force, or
+//! ([`crate::reconcile`]) and the pairs it orders take no update slot ([`crate::decide`]) and are
+//! no eligible host of the plan ([`crate::stages`]), so the slot accounting is the same when it
+//! ends as if it had never been; the new desired version it sets starts the plan over. Its order
+//! goes to each host it orders at every heartbeat until the host runs the version, is running the force, or
 //! reported a verdict of it ([`crate::orders`]); a host that reported the force failed is not
 //! ordered again, and a second force orders it again.
 
@@ -541,7 +543,7 @@ impl Coordinator {
             %version,
             by,
             ordered = plan.ordered.len(),
-            "a force was ordered: it passes the one live update, the canary and the bake"
+            "a force was ordered: it passes the update plan and the bake"
         );
         Ok(proto::ForceResponse {
             entries: entries.iter().map(entry_proto).collect(),

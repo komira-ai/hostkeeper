@@ -18,6 +18,14 @@ use crate::services::Services;
 use crate::testutil::{LEGACY, Log, OPERATOR, Rig, beat, clock_of, verdicts_of, version};
 use crate::verdict_file::{FEATURE, VerdictFile, verdicts_path};
 
+/// The definition line that rolls the service in one stage, so that the daemon role's
+/// `max_updating` alone decides who is ordered.
+const ONE_STAGE: &str = "stages = [100]";
+
+/// 2.0 desired, one daemon of the service updating at a time.
+const TWO_SERIAL: &str =
+    r#"{"version":"2.0","max_updating":{"daemon":1},"min_up":{"storage":0,"frontend":0}}"#;
+
 /// `b` from an agent that announced `verdict-acks-v1` (and `heartbeat-v2`, so the services it
 /// lists are all it runs).
 fn acking(mut b: Heartbeat) -> Heartbeat {
@@ -111,7 +119,7 @@ async fn a_verdict_is_acknowledged_only_once_it_is_stored() {
 /// after the restart, while a host that never failed is ordered the version.
 #[tokio::test]
 async fn a_restart_after_an_ack_does_not_order_the_version_again() {
-    let mut rig = rig("acks-restart", "", TWO).await;
+    let mut rig = rig("acks-restart", ONE_STAGE, TWO_SERIAL).await;
     let (reply, acks) = ask(&rig, "d1", acking(verdict("o-1", 1)), 2_000);
     assert_eq!(
         (reply, acks),
@@ -122,7 +130,7 @@ async fn a_restart_after_an_ack_does_not_order_the_version_again() {
         ask(&rig, "d1", stopped.clone(), 2_015),
         (ServiceReply::Nothing, vec![])
     );
-    restart(&mut rig, "");
+    restart(&mut rig, ONE_STAGE);
     assert_eq!(
         ask(&rig, "d1", stopped.clone(), 2_100),
         (ServiceReply::Nothing, vec![])
@@ -194,7 +202,7 @@ async fn without_the_feature_on_both_sides_nothing_is_acknowledged_or_kept() {
 
 /// The coordinator of a rig of `kbf` and `web` on the role `daemon`, starting now.
 fn start_two(rig: &Rig) -> Coordinator {
-    let text = "[[service]]\nname = \"kbf\"\nroles = [\"daemon\"]\n\n[[service]]\nname = \"web\"\nroles = [\"daemon\"]\n";
+    let text = "[[service]]\nname = \"kbf\"\nroles = [\"daemon\"]\n\n[[service]]\nname = \"web\"\nstages = [100]\nroles = [\"daemon\"]\n";
     let list = format!(
         "{}services = [\"kbf\", \"web\"]\n",
         config_text(STATIC_ISSUER)
@@ -203,13 +211,16 @@ fn start_two(rig: &Rig) -> Coordinator {
         .with_services(Services::parse(text).expect("services"))
 }
 
-/// A rig of `kbf` and `web`, both desired at 2.0, past the quiet start.
+/// A rig of `kbf` and `web`, both desired at 2.0, past the quiet start. `web` rolls in one stage,
+/// one daemon at a time.
 async fn two_services(test: &str) -> Rig {
     let mut rig = Rig::new(test);
     rig.coordinator = start_two(&rig);
     rig.set(TWO).await;
-    rig.set(r#"{"service":"web","version":"2.0","min_up":{"storage":0,"frontend":0}}"#)
-        .await;
+    rig.set(
+        r#"{"service":"web","version":"2.0","max_updating":{"daemon":1},"min_up":{"storage":0,"frontend":0}}"#,
+    )
+    .await;
     rig.at(2_000);
     rig
 }

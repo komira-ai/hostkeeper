@@ -7,7 +7,8 @@
 //! can never be refused with (`UNSPECIFIED`) is `INTERNAL`.
 
 use hostkeeper_proto::hostkeeper::operator::v1::{
-    AlertsRefusal, AuditRefusal, EnrollmentRefusal, HostsRefusal, ReleasesRefusal, ServicesRefusal,
+    AlertsRefusal, AuditRefusal, EnrollmentRefusal, HostsRefusal, ReleasesRefusal, RolloutsRefusal,
+    ServicesRefusal,
 };
 use tonic::{Code, Status};
 
@@ -127,4 +128,21 @@ pub(crate) fn alerts(refusal: AlertsRefusal) -> Status {
         AlertsRefusal::Forbidden => Code::PermissionDenied,
     };
     refused(code, refusal.as_str_name(), "ALERTS_REFUSAL_")
+}
+
+/// The status of a refusal by `Rollouts`.
+pub(crate) fn rollouts(refusal: RolloutsRefusal) -> Status {
+    let code = match refusal {
+        RolloutsRefusal::Unspecified | RolloutsRefusal::StoreFailed => Code::Internal,
+        RolloutsRefusal::Unauthorized => Code::Unauthenticated,
+        RolloutsRefusal::Forbidden => Code::PermissionDenied,
+        RolloutsRefusal::InvalidRequest => Code::InvalidArgument,
+        RolloutsRefusal::UnknownService => Code::NotFound,
+        RolloutsRefusal::NoDesired
+        | RolloutsRefusal::NotWaiting
+        | RolloutsRefusal::AlreadyPaused
+        | RolloutsRefusal::NotPaused => Code::FailedPrecondition,
+        RolloutsRefusal::AuditUnavailable => Code::Unavailable,
+    };
+    refused(code, refusal.as_str_name(), "ROLLOUTS_REFUSAL_")
 }

@@ -318,10 +318,13 @@ async fn a_force_with_include_held_leaves_a_role_hold_in_place() {
 /// gate closed for each: a host that holds the one live update slot elsewhere (`d4` updating
 /// `db`), a closed canary, a bake, a deferral (`d2`), a halt, a version marked bad and a host that
 /// failed the version (`d1`). One `Releases.Force`, then one typed heartbeat of each of `d1`,
-/// `d2` and `d3` answers each the force order, and the gate alone still tells them nothing.
+/// `d2` and `d3` answers each the force order. A forced pair is outside the update plan, so the
+/// plan's gate (here the rollout of `db` that is live elsewhere, and the canary stage) no longer
+/// holds `d3`, which the plain route then orders the forced version; `d1` and `d2` are still told
+/// nothing, since a failure of the version and a deferral are rules before the plan's gate.
 ///
 /// Catches: a force that waits for the slot, the canary or a deferral, that leaves a failed host
-/// out, or that is refused over a bad mark or a halt.
+/// out, or that is refused over a bad mark or a halt; a forced pair that the plan's gate holds.
 #[tokio::test]
 async fn force_reaches_every_target_in_one_heartbeat_round_and_passes_the_slot() {
     let rig = rig("force-round", "canary = { count = 1 }\nbake_beats = 3");
@@ -370,13 +373,19 @@ async fn force_reaches_every_target_in_one_heartbeat_round_and_passes_the_slot()
     }
     assert!(marks(&rig).halt.is_none(), "the force cleared the halt");
     assert!(!marks(&rig).bad.contains(&version("2.0")));
-    for (host, role_name, b) in &hosts[..3] {
+    for (host, role_name, b) in &hosts[..2] {
         assert_eq!(
             ask(&rig, host, role_name, b.clone()),
             ServiceReply::Nothing,
-            "{host}: the gate stays closed, only the force reaches it"
+            "{host}: its failure and its deferral stand, only the force reaches it"
         );
     }
+    let (host, role_name, b) = &hosts[2];
+    assert_eq!(
+        ask(&rig, host, role_name, b.clone()),
+        update(WEB, "2.0"),
+        "{host}: a forced pair is outside the plan, which holds it neither for the rollout of db nor for the canary stage"
+    );
 }
 
 /// Proves: the coordinator refuses to force the service `hostkeeper` (`self_service`) and a

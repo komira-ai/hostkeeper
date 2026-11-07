@@ -48,6 +48,15 @@ const ASSIGN: &str = "/hostkeeper.operator.v1.Services/Assign";
 /// The path of `Services.Unassign`.
 const UNASSIGN: &str = "/hostkeeper.operator.v1.Services/Unassign";
 
+/// The path of `Rollouts.Pause`.
+const PAUSE: &str = "/hostkeeper.operator.v1.Rollouts/Pause";
+
+/// The path of `Rollouts.Resume`.
+const RESUME: &str = "/hostkeeper.operator.v1.Rollouts/Resume";
+
+/// The path of `Rollouts.Advance`.
+const ADVANCE: &str = "/hostkeeper.operator.v1.Rollouts/Advance";
+
 /// A `Connect` whose transport calls the router of `coordinator` in process, the way the
 /// transport named by `kind` would over the network. It refuses a `Target` that names the other
 /// transport, so a run that reads `--transport` wrongly fails.
@@ -490,4 +499,66 @@ fn alerts_list_runs_through_ctl_over_both_transports() {
                         operator clears the halt",
         }]})
     );
+}
+
+/// Proves: `hostkeeper ctl rollouts pause --service web --reason ...`, the command generated from
+/// `Rollouts.Pause`, pauses the plan of `web` over `--transport grpc` and over `--transport
+/// gateway`: it exits 0 with nothing on stderr, prints the audit entry `rollout_pause` of `web`
+/// by `operator` with the reason given and a plan that is paused, and calls `Rollouts.Pause`
+/// once; a second `pause` exits 2 with exactly `refused: already_paused`; `rollouts resume`
+/// exits 0 and prints the entry `rollout_resume` and a plan that is not paused; and `rollouts
+/// advance` of a plan that waits for no one exits 2 with exactly `refused: not_waiting`.
+///
+/// Catches: a `rollouts` command missing from ctl, a `--reason` or `--service` flag dropped by
+/// either transport, and a refusal whose token is lost on the way to the command line.
+#[test]
+fn rollouts_pause_resume_and_advance_run_through_ctl_over_both_transports() {
+    for (name, kind) in [
+        ("ctl-rollouts-grpc", TransportKind::Grpc),
+        ("ctl-rollouts-gateway", TransportKind::Gateway),
+    ] {
+        let farm = rig(name, "");
+        Runtime::new()
+            .expect("a runtime")
+            .block_on(crate::marks_support::set(&farm, "web", "2.0", 1));
+        let coordinator = Arc::new(farm.coordinator);
+        let bridge = Bridge::new(kind, &coordinator);
+        let verb = |verb: &str, reason: &str| -> Vec<OsString> {
+            ["rollouts", verb, "--service", "web", "--reason", reason]
+                .iter()
+                .map(OsString::from)
+                .collect()
+        };
+
+        let ran = run_ctl(&bridge, OPERATOR, verb("pause", "watching the first host"));
+        assert_eq!((ran.code, ran.stderr.as_str()), (0, ""), "{kind:?}");
+        let response: Value = serde_json::from_str(&ran.stdout).expect("JSON");
+        assert_eq!(response["entry"]["action"], "rollout_pause", "{kind:?}");
+        assert_eq!(response["entry"]["service"], "web", "{kind:?}");
+        assert_eq!(response["entry"]["byName"], "operator", "{kind:?}");
+        assert_eq!(
+            response["entry"]["reason"], "watching the first host",
+            "{kind:?}"
+        );
+        assert_eq!(response["plan"]["paused"], true, "{kind:?}");
+        assert_eq!(response["plan"]["pausedBy"], "operator", "{kind:?}");
+        assert_eq!(bridge.paths(), [PAUSE], "{kind:?}");
+
+        let ran = run_ctl(&bridge, OPERATOR, verb("pause", "again"));
+        assert_eq!(ran.code, 2, "{kind:?}");
+        assert_eq!(ran.stdout, "", "{kind:?}");
+        assert_eq!(ran.stderr, "refused: already_paused\n", "{kind:?}");
+
+        let ran = run_ctl(&bridge, OPERATOR, verb("resume", "the first host is fine"));
+        assert_eq!((ran.code, ran.stderr.as_str()), (0, ""), "{kind:?}");
+        let response: Value = serde_json::from_str(&ran.stdout).expect("JSON");
+        assert_eq!(response["entry"]["action"], "rollout_resume", "{kind:?}");
+        assert_ne!(response["plan"]["paused"], true, "{kind:?}");
+
+        let ran = run_ctl(&bridge, OPERATOR, verb("advance", "go on"));
+        assert_eq!(ran.code, 2, "{kind:?}");
+        assert_eq!(ran.stdout, "", "{kind:?}");
+        assert_eq!(ran.stderr, "refused: not_waiting\n", "{kind:?}");
+        assert_eq!(bridge.paths(), [PAUSE, PAUSE, RESUME, ADVANCE], "{kind:?}");
+    }
 }

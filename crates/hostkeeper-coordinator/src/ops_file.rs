@@ -7,7 +7,11 @@
 //! the halts file (`<ops-file>.halts`): the whole report a halt and each acknowledgement were
 //! made from, who raised the halt (`origin`, written only for the updater and an operator: a
 //! record without it is a hook's halt, and a release that does not know an origin reads a hook's), the reports received while a halt stood (`halt_seen`) and the clear
-//! generation of each service (`halt_generation`).
+//! generation of each service (`halt_generation`). The plan position of each service
+//! ([`crate::rollouts`]: the version it is for, the stages entered, the hosts done, an operator's
+//! pause) lives there too, under `rollouts`, read like the rest: a position this release cannot
+//! read is passed over and counted, and costs only that position (the plan reads as if none
+//! was kept, as it does for a new desired version).
 //!
 //! The reader of the halts file skips a key it does not know. A record whose report it cannot
 //! read (an outcome a later release added, say) is passed over as a whole and counted, and the
@@ -67,6 +71,7 @@ use sha2::{Digest as _, Sha256};
 
 use crate::desired::{StoreError, dir_of, io_at, write_whole};
 use crate::ops::{HaltAck, HaltOrigin, OpsError, OpsState};
+use crate::rollouts::Rollout;
 
 /// The halts file of the ops file at `ops`: its name with `.halts` added.
 #[must_use]
@@ -166,6 +171,10 @@ struct HaltsFile {
     /// The SHA-256 of the ops file text this file was written with.
     #[serde(skip_serializing_if = "Option::is_none")]
     ops: Option<String>,
+    /// Where each service's update plan stands ([`crate::rollouts`]); a service with none is not
+    /// listed.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    rollouts: BTreeMap<String, Rollout>,
 }
 
 /// [`ServiceHalts`] as read: each record is read on its own, so that one this release cannot
@@ -189,10 +198,12 @@ struct ReadHalts {
     services: BTreeMap<String, ReadService>,
     #[serde(default)]
     ops: Option<String>,
+    #[serde(default)]
+    rollouts: BTreeMap<String, Value>,
 }
 
 /// The record `value` holds; none, counted in `skipped`, when this release cannot read it.
-fn kept(value: Value, skipped: &mut usize) -> Option<Kept> {
+fn kept<T: serde::de::DeserializeOwned>(value: Value, skipped: &mut usize) -> Option<T> {
     let read = serde_json::from_value(value).ok();
     *skipped += usize::from(read.is_none());
     read
@@ -243,9 +254,15 @@ impl ReadHalts {
             };
             services.insert(name, service);
         }
+        let rollouts = self
+            .rollouts
+            .into_iter()
+            .filter_map(|(name, v)| Some((name, kept(v, &mut skipped)?)))
+            .collect();
         let file = HaltsFile {
             services,
             ops: self.ops,
+            rollouts,
         };
         (file, skipped)
     }
@@ -284,11 +301,13 @@ fn split(state: &OpsState) -> (OpsState, HaltsFile) {
             halts.services.insert(name.clone(), kept);
         }
     }
+    halts.rollouts = std::mem::take(&mut ops.rollouts);
     (ops, halts)
 }
 
 /// `ops`, read from the ops file, with what `halts` keeps for it joined to it.
 fn join(mut ops: OpsState, halts: HaltsFile) -> OpsState {
+    ops.rollouts = halts.rollouts;
     for (name, kept) in halts.services {
         if kept.halt_generation == 0 && !ops.services.contains_key(&name) {
             continue;
@@ -458,7 +477,7 @@ pub(crate) fn write_with(
     let (ops, mut halts) = split(state);
     let text = pretty(path, &ops)?;
     let halts_path = halts_path(path);
-    if halts.services.is_empty() && !halts_path.exists() {
+    if halts.services.is_empty() && halts.rollouts.is_empty() && !halts_path.exists() {
         return Ok(write_whole(path, &text)?);
     }
     halts.ops = Some(digest(&text));

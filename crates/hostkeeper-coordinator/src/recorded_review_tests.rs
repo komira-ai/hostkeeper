@@ -218,6 +218,12 @@ fn the_hold_strings_are_the_ones_the_status_documents() {
             Gate::Quiet => "quiet",
             Gate::CanaryWait => "canary_wait",
             Gate::Baking => "baking",
+            Gate::Paused => "paused",
+            Gate::AdvanceWait => "advance_wait",
+            Gate::StageFailed => "stage_failed",
+            Gate::StageWait => "stage_wait",
+            Gate::BelowMinUp => "below_min_up",
+            Gate::RolloutElsewhere => "rollout_elsewhere",
         }
     };
     let skip = |skip: Skip| -> &'static str {
@@ -243,6 +249,12 @@ fn the_hold_strings_are_the_ones_the_status_documents() {
         Gate::Quiet,
         Gate::CanaryWait,
         Gate::Baking,
+        Gate::Paused,
+        Gate::AdvanceWait,
+        Gate::StageFailed,
+        Gate::StageWait,
+        Gate::BelowMinUp,
+        Gate::RolloutElsewhere,
     ] {
         assert_eq!(json!(g), json!(gate(g)));
         assert_eq!(json!(Why::Gate(g)), json!(gate(g)));

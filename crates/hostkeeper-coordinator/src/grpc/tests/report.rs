@@ -23,6 +23,8 @@ use crate::registry::Digest;
 use crate::status::{AgentStatus, HostStatus, ServiceHostStatus, ServiceStatus, Status};
 use crate::testutil::{beat, version};
 
+mod plan;
+
 const COMMIT: &str = "c0ffee";
 
 fn conv(state: State) -> Convergence {
@@ -66,6 +68,7 @@ fn svc(hosts: Vec<ServiceHostStatus>) -> ServiceStatus {
         up: 0,
         slots_held: 0,
         convergence: conv(State::Converged),
+        plan: None,
     }
 }
 
@@ -734,6 +737,12 @@ fn every_rollout_hold_maps_to_its_proto_gate_reason() {
         (Some(Why::Gate(Gate::Quiet)), R::Quiet),
         (Some(Why::Gate(Gate::CanaryWait)), R::CanaryWait),
         (Some(Why::Gate(Gate::Baking)), R::Baking),
+        (Some(Why::Gate(Gate::Paused)), R::Paused),
+        (Some(Why::Gate(Gate::AdvanceWait)), R::AdvanceWait),
+        (Some(Why::Gate(Gate::StageFailed)), R::StageFailed),
+        (Some(Why::Gate(Gate::StageWait)), R::StageWait),
+        (Some(Why::Gate(Gate::BelowMinUp)), R::BelowMinUp),
+        (Some(Why::Gate(Gate::RolloutElsewhere)), R::RolloutElsewhere),
         (Some(Why::Skip(Skip::NoDesired)), R::NoDesired),
         (Some(Why::Skip(Skip::NotAMember)), R::NotAMember),
         (Some(Why::Skip(Skip::UpToDate)), R::UpToDate),

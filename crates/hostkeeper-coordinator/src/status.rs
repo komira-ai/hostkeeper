@@ -35,7 +35,7 @@ pub struct HostStatus {
     pub live: bool,
     /// Live, healthy and not updating.
     pub up: bool,
-    /// Holds an update slot for the service (one is live at a time across every service).
+    /// Holds an update slot for the service (the plan's `max_updating` of the role counts these).
     pub holds_slot: bool,
     /// Whole seconds since its last heartbeat.
     pub silent_secs: u64,
@@ -108,6 +108,11 @@ pub struct ServiceStatus {
     pub slots_held: usize,
     /// What `GET /v1/convergence` answers for the service.
     pub convergence: Convergence,
+    /// Its update plan for the desired version ([`crate::stages`]), which `Releases.Status`
+    /// answers; none without a desired version. The JSON status, whose bytes are frozen, leaves
+    /// it out.
+    #[serde(skip)]
+    pub plan: Option<hostkeeper_proto::hostkeeper::operator::v1::RolloutPlan>,
 }
 
 /// What an operator reads.

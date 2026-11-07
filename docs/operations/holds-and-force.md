@@ -1,7 +1,8 @@
 # Holds, marks and force
 
-What an operator can do to stop or steer a rollout, and how the coordinator acts on it. Every
-call below takes the operator token only: a CI token is refused with `forbidden`, no token with
+What an operator can do to stop or steer a rollout, and how the coordinator acts on it. The
+stages of a rollout, and `Rollouts.Advance`, `Pause` and `Resume`, are in
+[rollout-plans.md](rollout-plans.md). Every call below takes the operator token only: a CI token is refused with `forbidden`, no token with
 `unauthorized`, and a refused call changes nothing. Every change is an entry of the audit log,
 under the name of the token that made it; `Audit.List` reads the log back.
 
@@ -16,16 +17,18 @@ with a reason; `Services.Unhold` releases it. A hold freezes the service where i
 - A hold carries no version. The host keeps running what it runs, and never learns of the hold.
 - A role hold is matched against the host's role each time the coordinator decides, so a host
   that joins the role later is held, and one that leaves it is released.
-- A held pair takes no update slot, is never a canary, never holds back a bake, and is left out
-  of the convergence and of the hosts an automatic rollback is counted against, so it never
-  blocks the others. An update the host was already running, or had been ordered, when the
+- A held pair takes no update slot, is in no stage of the service's update plan (it takes no
+  place in a stage and does not count towards one being done), never holds back a bake, and is
+  left out of the convergence and of the hosts an automatic rollback is counted against, so it
+  never blocks the others. An update the host was already running, or had been ordered, when the
   hold was set finishes, and holds the slot until it ends (`Hosts.Abort` stops it).
 - Automatic rollback and a version marked bad do not reach a held pair. A held host that runs a
   version marked bad is an alert: `Alerts.List` lists it, an error-level log line with
   `alert=held_on_bad_version` is logged once when it appears, and the status flags the host.
 - Holds are kept in the ops file and survive a restart. `Services.List` shows them.
 - Holding the same service in the same scope again replaces the reason. `Unhold` releases the
-  pairs to the desired version at their next heartbeat.
+  pairs to the desired version at their next heartbeat, and they become eligible for the
+  plan's stages again.
 
 The ops file gains a `holds` key once a hold is set. A coordinator of an earlier release refuses
 to start on such a file rather than ignore the holds; a file that never held one keeps the shape
@@ -47,7 +50,7 @@ host, as before.
 
 - `Releases.MarkBad` marks a version of a service bad, any version the service's version scheme
   reads. No host is ordered it again, and CI cannot set it, until `UnmarkBad` or a force lifts
-  the mark. A second mark of the same version is refused with `already_bad`.
+  the mark. A version marked bad halts the plan (every host is told `bad`). A second mark of the same version is refused with `already_bad`.
 - `Releases.Halt` halts a service by hand, as a host's halt report does: no host of it is
   ordered until `ClearHalt` (or a force). It is an alert (`Alerts.List`, and an `alert=halt`
   line logged once when it appears). A service with
@@ -65,8 +68,9 @@ host, as before.
 ## Force
 
 `Releases.Force` is the fleet-wide fix: one call orders a hookless `force` of a service to a
-version at every targeted host's next heartbeat, past the one live update, the canary, the
-bake, a deferral, a bad mark, a halt and a host's failure of the version. The units stop
+version at every targeted host's next heartbeat, past the update plan (its stages, the role
+limits, a pause and the other services' rollouts), the canary, the bake, a deferral, a bad mark,
+a halt and a host's failure of the version. The units stop
 without a drain, so a force may cut running work.
 
 The targets are the whole fleet (the call names the service a second time, `confirm_service`),
@@ -98,7 +102,8 @@ A host that reports the force failed is not ordered again; a second force, to an
 orders it again. A force whose targets are all held or too old orders no host and still makes
 every change above. The force stands until CI or an operator sets another version or another force replaces it.
 While it stands, the automatic rollback of the service is suspended, and the hosts it orders
-take no update slot.
+take no update slot and no place in a stage. The new desired version the force sets starts the
+service's update plan over for the hosts it does not order.
 
 The `force` and `abort` orders travel only on the typed heartbeat of `hostkeeper.agent.v1`; the
 JSON heartbeat route carries neither.
@@ -138,8 +143,8 @@ later one, never the other way round; a force, which
 writes the desired state first, puts it back. On the JSON routes, whose answers are frozen, the
 same refusal is `500 internal`.
 
-Two calls still stand when their line cannot be appended, so that an operator can stop a rollout
-on a full disk: `Hosts.Abort` and `Releases.Halt`. Each logs the failed append as an error and
+Three calls still stand when their line cannot be appended, so that an operator can stop a rollout
+on a full disk: `Hosts.Abort`, `Releases.Halt` and `Rollouts.Pause`. Each logs the failed append as an error and
 keeps its entry in the ring of the ops file (`Releases.Status` shows the last 64); its line is
 not in the audit file. The coordinator's own changes that raise protection (a halt a host
 reports, a version marked bad by its failures) stand the same way. Read-only calls, `Audit.List`

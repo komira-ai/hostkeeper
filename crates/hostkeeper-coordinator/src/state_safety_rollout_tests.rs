@@ -20,6 +20,13 @@ use crate::rollback_tests::{
 };
 use crate::testutil::{LEGACY, Log, Rig, beat, desired, id, role, secs, updating, version};
 
+/// The service in one stage (`stages = [100]`): every host is in the stage from the start.
+const ONE_STAGE: &str = "stages = [100]";
+
+/// 2.0 desired with one daemon updating at a time.
+const ONE_DAEMON: &str =
+    r#"{"version":"2.0","max_updating":{"daemon":1},"min_up":{"storage":0,"frontend":0}}"#;
+
 /// A release failure of 2.0 that ends try `attempt` of the order `order`.
 fn verdict(order: &str, attempt: u64) -> Heartbeat {
     let (phase, class) = release();
@@ -287,13 +294,15 @@ fn ordered(reply: &ServiceReply) -> bool {
 /// it), or a restarted coordinator that orders before the host updating says so: after the
 /// restart nothing is ordered in the quiet start, and a host that beats `updating` in it holds
 /// the slot again; a host that was ordered and stays silent holds nothing after the restart.
+/// The service rolls in one stage with one daemon updating at a time, so the slot is what holds
+/// `d2`.
 #[tokio::test]
 async fn a_restart_forgets_orders_and_a_beating_host_takes_its_slot_back() {
-    let mut rig = rig("restart-orders", "", TWO).await;
+    let mut rig = rig("restart-orders", ONE_STAGE, ONE_DAEMON).await;
     assert!(ordered(&ask(&rig, "d1", beat("1.0"), 2_000)));
     assert_eq!(ask(&rig, "d2", beat("1.0"), 2_000), ServiceReply::Nothing);
 
-    restart(&mut rig, "");
+    restart(&mut rig, ONE_STAGE);
     assert_eq!(
         ask(&rig, "d1", updating(beat("1.0"), "2.0"), 2_015),
         ServiceReply::Nothing
@@ -309,14 +318,15 @@ async fn a_restart_forgets_orders_and_a_beating_host_takes_its_slot_back() {
     assert_eq!(hosts[0]["holds_slot"], true, "d1, from its own beat");
     assert_eq!(hosts[1]["hold"], "no_slot");
 
-    let mut silent = crate::rollback_tests::rig("restart-orders-silent", "", TWO).await;
+    let mut silent =
+        crate::rollback_tests::rig("restart-orders-silent", ONE_STAGE, ONE_DAEMON).await;
     assert!(ordered(&ask(&silent, "d1", beat("1.0"), 2_000)));
     assert_eq!(
         ask(&silent, "d2", beat("1.0"), 2_000),
         ServiceReply::Nothing,
         "d1's order holds the slot"
     );
-    restart(&mut silent, "");
+    restart(&mut silent, ONE_STAGE);
     assert!(
         ordered(&ask(&silent, "d2", beat("1.0"), 2_031)),
         "d1's forgotten order holds nothing"
@@ -359,10 +369,11 @@ fn drain_bound() -> Heartbeat {
 /// Catches: a slot freed by the time a drain takes, or held after its host gave up at its bound:
 /// a host updating with no verdict holds the slot through a pause of any length while it beats
 /// `updating`; a `Deferred` at the drain's bound frees it, the next host is ordered, and the
-/// host that deferred is left alone for its wait.
+/// host that deferred is left alone for its wait. The service rolls in one stage with one daemon
+/// updating at a time, so the slot is what holds `d2`.
 #[tokio::test]
 async fn an_unbounded_prepare_holds_the_slot_and_a_bounded_one_frees_it() {
-    let rig = rig("drain-slot", "", TWO).await;
+    let rig = rig("drain-slot", ONE_STAGE, ONE_DAEMON).await;
     assert!(ordered(&ask(&rig, "d1", beat("1.0"), 2_000)));
     for at in [2_015, 2_600, 9_000, 50_000] {
         assert_eq!(

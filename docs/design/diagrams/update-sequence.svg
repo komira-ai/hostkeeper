@@ -49,7 +49,7 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <path d="M380,222 L680,222" class="ln-d" marker-end="url(#update-sequence-ak)"/>
 <text x="530" y="216" class="t-m lbl" text-anchor="middle">order: update S V, try n</text>
 <rect x="300" y="236" width="170" height="28" rx="5" class="box-b"/>
-<text x="385" y="254" class="t-m" text-anchor="middle">rollout gate: one live update</text>
+<text x="385" y="254" class="t-m" text-anchor="middle">rollout gate: update plan</text>
 <circle cx="590" cy="250" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
 <text x="590" y="254" class="b" font-size="12" text-anchor="middle">3</text>
 <rect x="600" y="236" width="160" height="28" rx="5" class="box-o"/>
@@ -112,7 +112,7 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <text x="394" y="965" class="b" font-size="12" text-anchor="middle">7</text>
 <text x="412" y="969" class="t-m lbl" text-anchor="start">heartbeat: last_update, Succeeded (promotion_pending)</text>
 <rect x="300" y="985" width="170" height="28" rx="5" class="box-b"/>
-<text x="385" y="1003" class="t-m" text-anchor="middle">slot held through bake</text>
+<text x="385" y="1003" class="t-m" text-anchor="middle">stage waits for the bake</text>
 <text x="680" y="1040" class="t-m" text-anchor="middle">thin bar on the daemon line: step record, written before and after each step. No second process, no rights gate.</text>
 <rect x="30" y="1066" width="22" height="14" rx="3" class="box-o"/>
 <text x="60" y="1078" class="t-m" text-anchor="start">runs as root</text>

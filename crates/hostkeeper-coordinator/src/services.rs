@@ -4,9 +4,10 @@
 //! The rollout file (`--rollout-file`) is TOML with one `[[service]]` table for each service the
 //! coordinator manages. A [`ServiceDef`] has a name, a version scheme, the roles it runs on (a
 //! plain list of role names: the base of its assignment, [`crate::assignment`]) and the settings
-//! of its rollout: its priority, the hosts it is selected for, how long an updated host holds its
-//! slot, the canary, the automatic rollback and the backoff of a deferral. The decision reads
-//! these and branches on no service name.
+//! of its rollout: its priority, the hosts it is selected for, how long an updated host bakes
+//! before its stage is done, its update plan and canary ([`crate::stages`]), the automatic
+//! rollback and the backoff of a deferral. The decision reads these and branches on no service
+//! name.
 //!
 //! No service is built in: the services are the ones the file defines (an empty file defines
 //! none). A role is any [`RoleName`]. Every table refuses a key it does not know, naming it, so
@@ -26,8 +27,13 @@
 //! roles = ["storage", "daemon"]  # a host of any other role is ordered for the service only
 //!                                # when an operator assigned it there
 //! priority = 0                   # default 0; a host is offered the higher number first
-//! bake_beats = 0                 # default 0, at most 100: healthy beats before a slot frees
-//! canary = { count = 1 }         # optional: only this many hosts go until they have baked
+//! bake_beats = 0                 # default 0, at most 100: healthy beats before a stage is done
+//! canary = { count = 1 }         # optional: a first stage of this many hosts
+//! stages = [1, 10, { percent = 50, advance = "manual" }, 100]
+//!                                # the update plan: each stage the percent of the eligible
+//!                                # hosts done once it is done, rising to 100; a stage is entered
+//!                                # by itself ("auto", the default) or by an operator's Advance
+//!                                # ("manual"); default [1, 10, 50, 100]
 //! rollback = "manual"            # or "automatic": the coordinator sets the last good version
 //!                                # when a release fails on enough hosts (default manual)
 //! rollback_after_failed = { percent = 25, min_hosts = 2 }  # the larger of the two (default)
@@ -56,6 +62,7 @@ use crate::defer::DeferBackoff;
 use crate::desired::{FORMAT_ROLES, MAX_COUNT};
 use crate::membership::{RawSelector, Selector};
 use crate::reconcile::{FailThreshold, Rollback};
+use crate::stages::{Plan, RawStage};
 
 /// The most bytes of a rollout file.
 const MAX_FILE_BYTES: u64 = 1 << 20;
@@ -116,16 +123,19 @@ pub struct ServiceDef {
     /// Which service a host is offered first when more than one is behind: the higher
     /// number first, and services with the same number in the tie order of
     /// [`crate::service::Coordinator::heartbeat`]. It orders offers only: a service whose
-    /// order cannot be given yet (the one live update, its canary) yields to the next one
+    /// order cannot be given yet (its update plan, another service's live rollout) yields to the next one
     /// whatever its priority.
     pub priority: i32,
     /// Which hosts should run the service (`None`: the hosts that announce it).
     pub selector: Option<Selector>,
-    /// How many healthy beats a host at the desired version must send before it frees the
-    /// slot it held while updating (default 0: it frees it at once).
+    /// How many healthy beats a host at the desired version must send before it has baked and
+    /// its stage of the update plan can be done (default 0: it has baked at once).
     pub bake_beats: u32,
-    /// The hosts that go alone first, if the service has a canary.
+    /// The hosts that go alone first, if the service has a canary: the first stage of its
+    /// `plan`, kept for the rollback, which a canary's failure reaches alone.
     pub canary: Option<Canary>,
+    /// Its update plan: the stages it rolls out by ([`crate::stages`]), the canary's first.
+    pub plan: Plan,
     /// Whether the coordinator rolls the service back by itself.
     pub rollback: Rollback,
     /// How many hosts must fail before it does.
@@ -149,6 +159,7 @@ impl ServiceDef {
             selector: None,
             bake_beats: 0,
             canary: None,
+            plan: Plan::default(),
             rollback: Rollback::Manual,
             rollback_after_failed: FailThreshold::default(),
             min_version: None,
@@ -207,6 +218,7 @@ struct RawService {
     #[serde(default)]
     bake_beats: u32,
     canary: Option<RawCanary>,
+    stages: Option<Vec<RawStage>>,
     #[serde(default)]
     rollback: Rollback,
     #[serde(default)]
@@ -282,6 +294,7 @@ fn service_def(
         install_when_absent,
         bake_beats,
         canary,
+        stages,
         rollback,
         rollback_after_failed,
         min_version,
@@ -325,6 +338,8 @@ fn service_def(
     {
         return invalid(format!("{name}: canary count is not 1 to {MAX_COUNT}"));
     }
+    let canary = canary.map(|c| Canary { count: c.count });
+    let plan = Plan::read(stages, canary).or_else(|why| invalid(format!("{name}: {why}")))?;
     if !(1..=100).contains(&rollback_after_failed.percent) {
         return invalid(format!(
             "{name}: rollback_after_failed percent is not 1 to 100"
@@ -346,7 +361,8 @@ fn service_def(
         priority,
         selector,
         bake_beats,
-        canary: canary.map(|c| Canary { count: c.count }),
+        canary,
+        plan,
         rollback,
         rollback_after_failed,
         min_version,

@@ -218,8 +218,8 @@ const KEY_REFETCH: Duration = Duration::from_secs(30);
 /// How long fetching the issuer's discovery document or keys may take.
 const KEY_FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// `hostkeeper-coordinator`: tells each host's updater which version to run, one live update at
-/// a time.
+/// `hostkeeper-coordinator`: tells each host's updater which version to run, each service by
+/// its update plan, one service's rollout at a time.
 #[derive(Clone, Debug, Parser)]
 #[command(
     name = "hostkeeper-coordinator",
@@ -379,7 +379,7 @@ pub struct Serve {
     #[arg(long)]
     pub ui_dir: Option<PathBuf>,
     /// How long after its start the coordinator orders nothing, in seconds, so that it hears
-    /// the fleet first and knows which host holds the update slot. At least two heartbeat
+    /// the fleet first and knows which hosts hold an update slot. At least two heartbeat
     /// intervals (30); a lower value is refused at start.
     #[arg(long, default_value_t = QUIET_START.as_secs())]
     pub quiet_secs: u64,
@@ -388,6 +388,15 @@ pub struct Serve {
     /// answer each host's count since the start (`clock_skew_beats`). Nothing else reads it.
     #[arg(long, default_value_t = CLOCK_SKEW_AFTER.as_secs())]
     pub clock_skew_secs: u64,
+    /// How many services may have a live rollout at once, 1 to 16: a service whose rollout is
+    /// not live (none of its hosts updating or baking, and its update plan not under way) orders
+    /// no host while this many others are.
+    #[arg(
+        long,
+        default_value_t = 1,
+        value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..=16)
+    )]
+    pub live_rollouts: usize,
     /// The release channel the hosts fetch packages from, as `https://<host>[:<port>][/<path>]`
     /// (the daemon config's `release_channel`). With it, a set of the desired state is refused
     /// `not_in_channel` unless `<channel>/<service>/<version>/index.json` is there (retry once
@@ -588,6 +597,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         .with_services(services)
         .with_legacy_service(legacy.map(str::to_owned))
         .with_quiet(Duration::from_secs(flags.quiet_secs))
+        .with_live_rollouts(flags.live_rollouts)
         .with_clock_skew(Duration::from_secs(flags.clock_skew_secs))
         .with_prefixes(prefixes)
         .with_ops(ops)

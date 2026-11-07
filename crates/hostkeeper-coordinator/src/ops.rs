@@ -5,8 +5,10 @@
 //! host, the operator's holds ([`crate::holds`]) and assignments ([`crate::assignment`]: which
 //! roles and hosts run each service, their minimum versions, the hosts ordered to uninstall
 //! it), the host inventory ([`crate::inventory`]), the per-service marks later changes fill (a
-//! halt, the last good version, the bad versions, the force that stands: [`crate::force`]), and
-//! a ring of the last changes made. A key this build added is written only when it holds
+//! halt, the last good version, the bad versions, the force that stands: [`crate::force`]), where
+//! each service's update plan stands (the stages entered, the hosts done, an operator's pause:
+//! [`crate::rollouts`]; kept in the halts file beside this one, not in this file), and a ring of
+//! the last changes made. A key this build added is written only when it holds
 //! something, so a file that never held one keeps the shape the release before reads; once it
 //! does, the release before refuses the file, as it should: it would ignore a hold, a force or an
 //! assignment.
@@ -56,10 +58,12 @@
 //! The operator actions ([`operate`]) write exclusions, labels and the clear of a halt; the
 //! coordinator itself writes the raising of a halt ([`crate::halt`]) and, in
 //! [`crate::reconcile`], the last good version and the marking of a version bad (a raise, so in
+//! memory first), and the entering of a plan's next stage ([`crate::rollouts`]); the operator's
+//! `Rollouts.Advance`, `Pause` and `Resume` write the plan's position (a pause is a raise, so in
 //! memory first); CI's set of a new desired version lifts a halt the updater raised
 //! ([`crate::halt::lift_by_ci`]), and never a bad mark. The decision reads a halt and the bad
-//! versions ([`crate::halt::decide`]); nothing reads the rest when it decides what a host is
-//! told.
+//! versions ([`crate::halt::decide`]) and the position of a plan ([`crate::stages::View::of`]);
+//! nothing reads the rest when it decides what a host is told.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -82,6 +86,7 @@ use crate::force::ForceRecord;
 use crate::holds::HoldMark;
 use crate::inventory::InventoryRecord;
 use crate::ops_file;
+use crate::rollouts::Rollout;
 
 pub use crate::operate::{OperateError, operate};
 
@@ -279,8 +284,10 @@ pub struct AuditEntry {
     /// `halt`, `mark_bad`, `unmark_bad`, `abort`, `hold`, `unhold`, `assign`, `unassign`,
     /// `set_min_version`, `force` with the `unmark_bad`, `mark_bad` and `clear_halt` it made;
     /// the coordinator's own: `last_good`, `clear_last_good`, `mark_bad`, `uninstalled` and
-    /// `uninstall_cancelled`; CI's: `lift_halt`, `force_ended`, and `unmark_bad` in a file an
-    /// earlier build wrote; enrollment's: `enroll_approve`, `enroll_replace`,
+    /// `uninstall_cancelled`; the update plans': `rollout_advance` (the coordinator's, when a
+    /// plan enters a stage by itself, or an operator's `Rollouts.Advance`), `rollout_pause` and
+    /// `rollout_resume` (an operator's); CI's: `lift_halt`, `force_ended`, and `unmark_bad` in a
+    /// file an earlier build wrote; enrollment's: `enroll_approve`, `enroll_replace`,
     /// `enroll_approve_refused`, `mac_auto_approve_declined`, and the coordinator's
     /// `enroll_requested`, `enroll_issued`, `cert_renewed` and `request_expired`).
     pub action: String,
@@ -340,6 +347,10 @@ pub struct OpsState {
     /// record, so a file with none keeps the shape the release before reads.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inventory: Vec<InventoryRecord>,
+    /// Where each service's update plan stands, by service name ([`crate::rollouts`]): kept in
+    /// the halts file beside this one ([`crate::ops_file`]), never in this file.
+    #[serde(skip)]
+    pub rollouts: BTreeMap<String, Rollout>,
 }
 
 impl Default for OpsState {
@@ -353,6 +364,7 @@ impl Default for OpsState {
             holds: Vec::new(),
             assignments: BTreeMap::new(),
             inventory: Vec::new(),
+            rollouts: BTreeMap::new(),
         }
     }
 }
@@ -939,54 +951,11 @@ impl OpsStore {
     }
 }
 
+/// The store's hooks for tests: a clock, a writer and an appender put in, a rival writer's change
+/// made between a read and a change.
 #[cfg(test)]
-impl OpsStore {
-    /// Every change of the audit log, oldest first ([`Self::audit_each`]).
-    pub(crate) fn audit_log(&self) -> Result<Vec<AuditEntry>, OpsError> {
-        let mut all = Vec::new();
-        self.audit_each(&mut |entry| all.push(entry))?;
-        Ok(all)
-    }
-
-    /// The store with `unix` as its clock for the audit file.
-    pub(crate) fn with_unix(mut self, unix: UnixClock) -> Self {
-        self.unix = unix;
-        self
-    }
-
-    /// The store with `write` putting its states into the file instead, its marker kept.
-    pub(crate) fn with_write(mut self, write: Writer) -> Self {
-        self.write = write;
-        self
-    }
-
-    /// The store with `append` appending its audit lines instead of the audit file, which is
-    /// still what the store reads.
-    pub(crate) fn with_append(mut self, append: Appender) -> Self {
-        self.append = append;
-        self
-    }
-
-    /// Makes `change` at the start of the next change, under the writers' lock, as another
-    /// writer that got there between that caller's read and its change would.
-    pub(crate) fn interleave(&self, change: impl FnOnce(&mut OpsState) + Send + 'static) {
-        *self
-            .interleave
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some(Box::new(change));
-    }
-
-    fn interleaved(&self) {
-        let change = self
-            .interleave
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take();
-        if let Some(change) = change {
-            change(&mut self.lock());
-        }
-    }
-}
+#[path = "ops_hooks.rs"]
+mod hooks;
 
 fn announce(entry: &AuditEntry) {
     tracing::info!(

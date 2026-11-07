@@ -135,8 +135,11 @@ confirm. The page keeps the limits CI set earlier.
 
 **Watch:**
 
-- Rollout, section `hello`: `Desired` is `<v1>`. The canary host goes first, then the others
-  one at a time. The role table counts `Updating`, then `At desired`. `State` ends `converged`.
+- Rollout, section `hello`: `Desired` is `<v1>`. The canary host goes first, then the others by
+  the stages of hello's update plan, each baked before the next; a stage's hosts update in
+  parallel up to the role's `max_updating` (1 unless CI set more), so one at a time by default.
+  The plan shows "stage k of n" and why it waits. The role table counts `Updating`, then `At
+  desired`. `State` ends `converged`.
 - Fleet: each host shows `hello <v1>, healthy`. Healthy is the daemon's own probe of
   `/readyz` on each running slot.
 - Host, `Last update`: `Verdict` succeeded, the steps prepare, cutover, verify and cleanup.
@@ -198,7 +201,7 @@ the fleet. The packages must be in the channel first ("Before you start", step 1
 Run it twice, in this order, with the same `version`, a release the hosts are not already at:
 
 1. **`variant: hello`.** The coordinator stores `<version>` as hello's desired version. The canary
-   host updates first, bakes, then the others one at a time, as in step 2. The job ends green,
+   host updates first, bakes, then the others stage by stage, as in step 2. The job ends green,
    with the outputs `desired_version` `<version>`, `converged` `true` and `reason` `converged`. The
    job's log prints a line `poll <n>: <state>` each time what a read reports changes, and ends with
    `The hosts of hello run <version>`.

@@ -1,5 +1,5 @@
 {
- "from": "kbf-coordinator/src/rollback_tests.rs::release_failures_past_the_threshold_roll_desired_back_and_mark_the_version_bad (kbf's definition replaced as the test does; its asserts on Rust values -- the wanted version, the marks, the audit entry -- are expect_contains of the status bytes, in kbf's serialiser order)",
+ "from": "kbf-coordinator/src/rollback_tests.rs::release_failures_past_the_threshold_roll_desired_back_and_mark_the_version_bad (kbf's definition replaced as the test does; its asserts on Rust values -- the wanted version, the marks, the audit entry -- are expect_contains of the status bytes, in kbf's serialiser order; step 10 is this coordinator's answer, kbf's in kbf_body: d1, the first host of the update plan, failed below the threshold, so the next stage does not start and d2 is not ordered (stage_failed))",
  "services_text": "[[service]]\nname = \"kbf\"\nrollback = \"automatic\"\nroles = [\"daemon\"]\n",
  "steps": [
   {
@@ -94,7 +94,8 @@
    "role": "daemon",
    "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
    "expect_status": 200,
-   "expect_body": "{\"reply\":\"update\",\"version\":\"2.0\"}"
+   "expect_body": "{\"reply\":\"nothing\"}",
+   "kbf_body": "{\"reply\":\"update\",\"version\":\"2.0\"}"
   },
   {
    "at_secs": 2015,

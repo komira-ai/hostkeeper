@@ -1,6 +1,6 @@
 //! The coordinator's gRPC: `hostkeeper.agent.v1.Coordinator` on the heartbeat listener,
-//! `hostkeeper.operator.v1.{Hosts, Releases, Services, Enrollment, Audit, Alerts}` on the private
-//! one,
+//! `hostkeeper.operator.v1.{Hosts, Releases, Services, Enrollment, Audit, Alerts, Rollouts}` on the
+//! private one,
 //! and the JSON gateway of the operator API ([`gateway`]), all beside the frozen JSON routes of
 //! [`crate::http`].
 //!
@@ -36,6 +36,7 @@ use hostkeeper_proto::hostkeeper::operator::v1::audit_server::AuditServer;
 use hostkeeper_proto::hostkeeper::operator::v1::enrollment_server::EnrollmentServer;
 use hostkeeper_proto::hostkeeper::operator::v1::hosts_server::HostsServer;
 use hostkeeper_proto::hostkeeper::operator::v1::releases_server::ReleasesServer;
+use hostkeeper_proto::hostkeeper::operator::v1::rollouts_server::RolloutsServer;
 use hostkeeper_proto::hostkeeper::operator::v1::services_server::ServicesServer;
 use hostkeeper_wire::wire::MAX_HEARTBEAT_BYTES;
 use http_body_util::{Either, Full};
@@ -48,7 +49,8 @@ use tonic::{Code, Status};
 
 use self::agent::{AgentService, beat_status};
 use self::operator::{
-    AlertsService, AuditService, EnrollmentService, HostsService, ReleasesService, ServicesService,
+    AlertsService, AuditService, EnrollmentService, HostsService, ReleasesService, RolloutsService,
+    ServicesService,
 };
 use self::refusal::token_status;
 use crate::enrollment::MAX_MESSAGE_BYTES;
@@ -95,6 +97,8 @@ const ENROLLMENT: &str = "hostkeeper.operator.v1.Enrollment";
 const AUDIT: &str = "hostkeeper.operator.v1.Audit";
 /// The full name of the operator API's `Alerts`.
 const ALERTS: &str = "hostkeeper.operator.v1.Alerts";
+/// The full name of the operator API's `Rollouts`.
+const ROLLOUTS: &str = "hostkeeper.operator.v1.Rollouts";
 
 /// The path of `Coordinator.Heartbeat`, which needs a client certificate that names a host.
 const HEARTBEAT: &str = "/hostkeeper.agent.v1.Coordinator/Heartbeat";
@@ -187,9 +191,10 @@ pub(crate) async fn admit(
 ) -> Result<Admitted, Status> {
     let served = match (surface, service_of(path)) {
         (Surface::Heartbeat, Some(AGENT)) => Served::Agent,
-        (Surface::Control, Some(HOSTS | RELEASES | SERVICES | ENROLLMENT | AUDIT | ALERTS)) => {
-            Served::Operator
-        }
+        (
+            Surface::Control,
+            Some(HOSTS | RELEASES | SERVICES | ENROLLMENT | AUDIT | ALERTS | ROLLOUTS),
+        ) => Served::Operator,
         _ => return Err(Status::unimplemented("")),
     };
     match served {
@@ -310,6 +315,11 @@ where
         }
         Some(ALERTS) => {
             let server = AlertsServer::new(AlertsService::new(coordinator))
+                .max_decoding_message_size(MAX_OPERATOR_BYTES);
+            call(server, request).await
+        }
+        Some(ROLLOUTS) => {
+            let server = RolloutsServer::new(RolloutsService::new(coordinator))
                 .max_decoding_message_size(MAX_OPERATOR_BYTES);
             call(server, request).await
         }

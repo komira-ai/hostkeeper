@@ -59,11 +59,14 @@ fn check_ops(rig: &Rig, readers: &Readers) {
         readers
             .check(readers.reader_of("halts"), &halts, "halts")
             .unwrap_or_else(|why| panic!("{why}"));
+        // kbf reads the halts file leniently: the one key this coordinator adds to it, where each
+        // service's update plan stands, is skipped there, and costs kbf only the plan's position.
         let mut keys: Vec<&str> = halts
             .as_object()
             .expect("an object")
             .keys()
             .map(String::as_str)
+            .filter(|key| *key != "rollouts")
             .collect();
         keys.sort_unstable();
         assert_eq!(keys, ["ops", "services"], "the halts file's keys");
@@ -501,6 +504,74 @@ async fn a_second_halt_report_and_the_clear_are_written_within_kbfs_readers(read
     assert!(kbf.get("halt").is_none() && kbf.get("halt_seen").is_none());
 }
 
+/// The halts file's `rollouts` key: where each service's update plan stands.
+fn rollouts_of(rig: &Rig) -> Value {
+    parse(&rig.dir.path().join("desired.json.ops.halts"))
+        .get("rollouts")
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+
+/// An operator pauses a service's update plan, and the plan of another enters its second stage
+/// with hosts left to order: each leaves a position under `rollouts` in the halts file, a key
+/// kbf's lenient reader of that file skips, and both files are within kbf's readers each time.
+async fn an_update_plan_position_is_written_within_kbfs_readers(readers: &Readers) {
+    let rig = Rig::new(
+        "state-plan-pause",
+        Spec::recorded().with_services(AUTOMATIC),
+    );
+    assert!(
+        !rig.dir.path().join("desired.json.ops.halts").exists(),
+        "a farm that has not paused a plan keeps no halts file"
+    );
+    let pause = hostkeeper_proto::hostkeeper::operator::v1::PauseRequest {
+        service: "kbf".to_owned(),
+        reason: "waiting for the maintainers".to_owned(),
+    };
+    let by =
+        hostkeeper_coordinator::operator::Caller::Operator("operator".parse().expect("a name"));
+    rig.coordinator.rollout_pause(&by, pause).expect("paused");
+    check_ops(&rig, readers);
+    assert_eq!(
+        rollouts_of(&rig)["kbf"]["paused"]["reason"],
+        "waiting for the maintainers"
+    );
+    let ops = parse(&rig.dir.path().join("desired.json.ops"));
+    assert!(
+        ops.get("rollouts").is_none() && ops["services"]["kbf"].get("rollouts").is_none(),
+        "the position is in the halts file only"
+    );
+
+    // Six daemons on the default plan are three stages, 1, 3 and 6 hosts: d1 goes alone and,
+    // once it runs 2.0, the plan enters the second stage with hosts left to order.
+    let rig = Rig::new(
+        "state-plan-stage",
+        Spec::recorded().with_services(AUTOMATIC),
+    );
+    let (code, body) = rig.desired(ONE).await;
+    assert_eq!(code, 200, "{body}");
+    round(&rig, 2_000, &[]).await;
+    let (code, body) = rig.desired(TWO).await;
+    assert_eq!(code, 200, "{body}");
+    round(&rig, 2_015, &[]).await;
+    let on_two = BEAT.replace("\"version\":\"1.0\"", "\"version\":\"2.0\"");
+    for at in (2_030..2_090).step_by(15) {
+        rig.at(at);
+        for host in DAEMONS {
+            let body = if host == "d1" { &on_two } else { BEAT };
+            let (code, answer) = rig.heartbeat(host, "daemon", body).await;
+            assert_eq!(code, 200, "{host}: {answer}");
+        }
+        if rollouts_of(&rig) != Value::Null {
+            break;
+        }
+    }
+    check_ops(&rig, readers);
+    let position = &rollouts_of(&rig)["kbf"];
+    assert_eq!(position["version"], "2.0");
+    assert_eq!(position["done"], json!(["d1"]));
+}
+
 /// An ops file of a newer schema is refused at open and never rewritten: its bytes are the same
 /// afterwards and nothing else is made beside it.
 fn a_newer_ops_file_is_refused_and_left_alone() {
@@ -532,7 +603,8 @@ fn a_newer_ops_file_is_refused_and_left_alone() {
 /// the desired state in both forms, and with limits for a role the format does not name (kept
 /// for the service that has the role, dropped for one that has not); the ops file and the halts
 /// file after an exclusion, a label, a halt, a second host's halt report, a clear, an include
-/// and a removal of labels, after an automatic rollback (the last good version and the bad
+/// and a removal of labels, after an operator pauses a plan and after a plan enters its second
+/// stage (the position under `rollouts` in the halts file), after an automatic rollback (the last good version and the bad
 /// one) and after CI sets the bad version by hand (the failure acks). For the changes kbf's
 /// fixtures record it is kbf's bytes. An ops file of schema 2 is refused at open, and its bytes
 /// are unchanged afterwards.
@@ -553,6 +625,7 @@ async fn state_files_written_by_kbf_are_read_and_the_reverse_holds_by_schema_rul
     a_refused_set_of_a_bad_version_and_failure_acks_are_within_kbfs_readers(&readers).await;
     limits_for_a_custom_role_are_written_within_kbfs_readers(&readers).await;
     a_second_halt_report_and_the_clear_are_written_within_kbfs_readers(&readers).await;
+    an_update_plan_position_is_written_within_kbfs_readers(&readers).await;
     a_newer_ops_file_is_refused_and_left_alone();
 }
 

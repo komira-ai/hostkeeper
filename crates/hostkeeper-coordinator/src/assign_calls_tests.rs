@@ -301,7 +301,8 @@ async fn assignment_api_reasons_are_closed_tokens() {
 /// Catches: an enrollment approval's services taking another path than `Assign` (no entry, no
 /// audit, an unknown service half assigned): one call assigns each service to the new host by
 /// its own entry, one audit entry each, and the host, at its first heartbeat, is told to install
-/// them; a service the rollout file does not define assigns nothing.
+/// them; a service the rollout file does not define assigns nothing. The install takes the first
+/// place of the plan's stage: the next host waits for the stage after.
 #[tokio::test]
 async fn an_approvals_services_are_assigned_by_the_path_assign_takes() {
     let rig = rig("assign-approve", "");
@@ -348,8 +349,8 @@ async fn an_approvals_services_are_assigned_by_the_path_assign_takes() {
     assert_eq!(order_to(&rig, "n2", vec![]), None);
     assert_eq!(
         why_of(&rig, WEB, "n2"),
-        Some(Why::Gate(Gate::NoSlot)),
-        "n1's install holds the one live update"
+        Some(Why::Gate(Gate::StageWait)),
+        "n1's install takes the one place of the first stage"
     );
 }
 

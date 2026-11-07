@@ -309,8 +309,8 @@ jobs:
   #          caller's: one call with an OIDC token, which names the release by its index and the
   #          index's digest, so each host is ordered its own platform's package. It does not wait
   #          for the fleet: the coordinator's rollout gate orders the hosts, the canary hosts of
-  #          the service `hostkeeper` first, then the rest once they have baked, at the pace of
-  #          one live update at a time, which is longer than a job should hold the release group.
+  #          the service `hostkeeper` first, then the rest once they have baked, stage by stage by the
+  #          service's update plan, which is longer than a job should hold the release group.
   #          The job ends once the coordinator stored the version (`reason` `not_waited`).
   set-desired:
     needs: [plan, channel]

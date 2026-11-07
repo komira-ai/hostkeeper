@@ -16,12 +16,13 @@ use serde_json::{Value, json};
 use super::support::{
     HostKey, PATIENCE, Rig, coordinator_over, enrolled, host_id, identity, watched,
 };
-use crate::enrollment::{Admission, RpcError, os_random};
+use crate::enrollment::{Admission, Enrollment, RpcError, os_random};
 use crate::fleet::{Fleet, ORDER_AGE, QUIET_START};
 use crate::http::{Peer, Surface, handle};
 use crate::identity::{Identity, IdentityError};
 use crate::service::Coordinator;
-use crate::testutil::{Log, beat, id, role, secs, updating, version};
+use crate::services::Services;
+use crate::testutil::{KBF_ENTRY, Log, beat, id, role, secs, updating, version};
 
 /// The order of the legacy service to 2.0.
 pub(super) fn order() -> ServiceReply {
@@ -51,6 +52,39 @@ pub(super) async fn beat_json(
     (status, serde_json::from_slice(&bytes).expect("JSON"))
 }
 
+/// `ONE_STORAGE` without a floor: one storage host holds the service's update slot at a time,
+/// and a lone live host may be ordered (a `min_up` of 1 would refuse it, as no other storage
+/// host is up).
+pub(super) const ONE_STORAGE_NO_FLOOR: &str = r#"{"version":"2.0","max_updating":{"storage":1},
+    "min_up":{"storage":0,"frontend":0}}"#;
+
+/// The recorded kbf service with one stage of every host, so that the only thing that holds a
+/// host back is a place in the role's `max_updating`, not a stage that is still filling.
+fn one_stage_services() -> Services {
+    Services::parse(&format!("{KBF_ENTRY}\nstages = [100]\n")).expect("services")
+}
+
+/// A coordinator over `enrollment` on the files of `rig`, serving kbf in one stage.
+pub(super) fn one_stage_coordinator(
+    rig: &crate::testutil::Rig,
+    enrollment: Arc<Enrollment>,
+) -> Coordinator {
+    crate::testutil::Rig::start(&rig.dir, &rig.clock)
+        .with_enrollment(enrollment)
+        .with_services(one_stage_services())
+}
+
+/// A coordinator past its quiet start over `enrollment`, with kbf in one stage at 2.0 and
+/// [`ONE_STORAGE_NO_FLOOR`]: the order of a host is held only by the role's `max_updating`.
+pub(super) async fn slot_coordinator(name: &str, enrollment: &Rig) -> crate::testutil::Rig {
+    let mut rig = crate::testutil::Rig::new(name);
+    rig.coordinator = one_stage_coordinator(&rig, Arc::clone(&enrollment.enrollment));
+    rig.at(2_000);
+    rig.set(ONE_STORAGE_NO_FLOOR).await;
+    rig.at(2_100);
+    rig
+}
+
 pub(super) const UPDATING: &str =
     r#"{"platform":"linux-x86_64","version":"1.0","health":"healthy","updating":"2.0"}"#;
 pub(super) const DONE: &str = r#"{"platform":"linux-x86_64","version":"2.0","health":"healthy"}"#;
@@ -71,7 +105,7 @@ async fn two_live_daemons_on_one_id_are_duplicate() {
     let (one, two) = (HostKey::new(), HostKey::new());
     let first = enrolled(&enrollment.enrollment, &one, "machine-1", "s1");
     let second = enrolled(&enrollment.enrollment, &two, "machine-2", "s2");
-    let mut rig = coordinator_over("hb-duplicate-coordinator", &enrollment).await;
+    let mut rig = slot_coordinator("hb-duplicate-coordinator", &enrollment).await;
     let s1 = identity(&rig.coordinator, &first);
     let s2 = identity(&rig.coordinator, &second);
     let heard = |coordinator: &Coordinator, who: &Identity, machine: Option<&str>| {
@@ -98,8 +132,7 @@ async fn two_live_daemons_on_one_id_are_duplicate() {
     );
     assert!(rig.coordinator.host_is_duplicate(&s1.host_id));
 
-    rig.coordinator =
-        crate::testutil::Rig::start(&rig.dir, &rig.clock).with_enrollment(enrollment.restart());
+    rig.coordinator = one_stage_coordinator(&rig, enrollment.restart());
     rig.at(3_000);
     assert_eq!(heard(&rig.coordinator, &s1, None), ServiceReply::Nothing);
     assert_eq!(
@@ -117,7 +150,7 @@ async fn a_retired_host_mid_update_frees_its_slot_when_final() {
     let (one, two) = (HostKey::new(), HostKey::new());
     let first = enrolled(&enrollment.enrollment, &one, "machine-1", "s1");
     let second = enrolled(&enrollment.enrollment, &two, "machine-2", "s2");
-    let rig = coordinator_over("hb-retiring-coordinator", &enrollment).await;
+    let rig = slot_coordinator("hb-retiring-coordinator", &enrollment).await;
     let c = &rig.coordinator;
     let (s1, s2) = (identity(c, &first), identity(c, &second));
     assert_eq!(
@@ -283,7 +316,7 @@ fn an_enrolled_certificate_names_its_host_and_a_broken_store_file_fails_closed()
 #[tokio::test]
 async fn a_farm_host_is_not_tracked_and_a_final_report_releases_only_a_final_host() {
     let enrollment = Rig::new("hb-farm-host");
-    let rig = coordinator_over("hb-farm-host-coordinator", &enrollment).await;
+    let rig = slot_coordinator("hb-farm-host-coordinator", &enrollment).await;
     let farm_host = Identity {
         host_id: id("d1"),
         role: role("storage"),

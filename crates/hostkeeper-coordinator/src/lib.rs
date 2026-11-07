@@ -1,6 +1,8 @@
-//! `hostkeeper-coordinator`: tells each host's updater which version to run, one live update at a
-//! time across every service and role (`docs/design/host-updates.md`). The per-role limits and
-//! minimums a desired state carries are kept, written and printed, and no decision reads them.
+//! `hostkeeper-coordinator`: tells each host's updater which version to run, each service by its
+//! update plan: stages of a growing share of its hosts, the hosts of a stage updating in
+//! parallel under the per-role limits and minimums of the desired state, and one service's
+//! rollout live at a time by default (`docs/design/rollout-update-plans.md`;
+//! `docs/design/host-updates.md` for the rules a host is ordered under).
 //!
 //! - [`identity`]: who is calling, from the client certificate's subjectAltNames alone;
 //! - [`enrollment`]: how a host gets and keeps its certificate (`Enroll`, `Poll`, `Renew`) over
@@ -17,7 +19,12 @@
 //!   and the [`verdict_file`] that stores them with the verdict each host was last acknowledged,
 //!   before an answer acknowledges it;
 //! - [`bake`] and [`canary`]: how long an updated host holds its slot, and the hosts that go
-//!   alone first;
+//!   alone first (the first stage of a plan);
+//! - [`stages`]: the update plan of a service: its stages over the eligible hosts, where the
+//!   plan stands, and the gate it puts on a host's order (`max_updating`, `min_up`, the live
+//!   rollouts across services);
+//! - [`rollouts`]: where each service's plan stands as the ops store keeps it, what enters a
+//!   stage by itself, and the operator's `Rollouts.Advance`, `Pause` and `Resume`;
 //! - [`converge`]: whether the farm has reached the desired version, for CI to wait on;
 //! - [`decide`]: the decision as a pure function of the desired state, the fleet, the host
 //!   and the time: an update, an install, an uninstall, or why none;
@@ -30,7 +37,7 @@
 //!   `intents`;
 //! - [`order_terms`]: the order id, try and package digest an update answer of the JSON route
 //!   carries to an agent that announced `order-v1`;
-//! - [`force`]: the fleet-wide fix, a hookless `force` ordered at once past the one live update,
+//! - [`force`]: the fleet-wide fix, a hookless `force` ordered at once past the update plan,
 //!   and [`orders`], the typed orders a heartbeat answer carries (`force`, `abort`, `install`,
 //!   `uninstall`);
 //! - [`operator`]: the operator's calls over the messages of `hostkeeper.operator.v1` (marks,
@@ -120,8 +127,10 @@ pub mod orders;
 pub mod reconcile;
 pub mod registry;
 pub mod release_index;
+pub mod rollouts;
 pub mod service;
 pub mod services;
+pub mod stages;
 pub mod stamp;
 pub mod status;
 pub mod tokens;
@@ -232,6 +241,10 @@ mod ops_tests;
 #[cfg(test)]
 mod order_terms_tests;
 #[cfg(test)]
+mod plan_rollout_tests;
+#[cfg(test)]
+mod plan_status_tests;
+#[cfg(test)]
 mod priority_tests;
 #[cfg(test)]
 mod recorded_definition_tests;
@@ -254,11 +267,25 @@ mod rollback_race_tests;
 #[cfg(test)]
 mod rollback_tests;
 #[cfg(test)]
+mod rollouts_calls_support;
+#[cfg(test)]
+mod rollouts_calls_tests;
+#[cfg(test)]
+mod rollouts_refusal_tests;
+#[cfg(test)]
+mod rollouts_restart_tests;
+#[cfg(test)]
+mod rollouts_state_tests;
+#[cfg(test)]
 mod self_update_fallback_tests;
 #[cfg(test)]
 mod service_tests;
 #[cfg(test)]
 mod services_tests;
+#[cfg(test)]
+mod stages_edge_tests;
+#[cfg(test)]
+mod stages_tests;
 #[cfg(test)]
 mod state_safety_digest_tests;
 #[cfg(test)]

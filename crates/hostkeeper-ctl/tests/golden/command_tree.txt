@@ -168,3 +168,12 @@ flag hosts retire --reason STRING
 flag coordinator heartbeat --sent-unix UINT64
 flag coordinator heartbeat --cert-not-after-unix UINT64
 flag coordinator heartbeat --last-renew-error STRING
+command rollouts advance /hostkeeper.operator.v1.Rollouts/Advance
+flag rollouts advance --service STRING
+flag rollouts advance --reason STRING
+command rollouts pause /hostkeeper.operator.v1.Rollouts/Pause
+flag rollouts pause --service STRING
+flag rollouts pause --reason STRING
+command rollouts resume /hostkeeper.operator.v1.Rollouts/Resume
+flag rollouts resume --service STRING
+flag rollouts resume --reason STRING

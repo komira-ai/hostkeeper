@@ -168,6 +168,18 @@ const REQUESTS: &[(&str, &str)] = &[
         r#"{"service": "kbf", "version": "1.2.3", "reason": "was the disk"}"#,
     ),
     (
+        "hostkeeper.operator.v1.Rollouts/Advance",
+        r#"{"service": "kbf", "reason": "canary looks fine"}"#,
+    ),
+    (
+        "hostkeeper.operator.v1.Rollouts/Pause",
+        r#"{"service": "kbf", "reason": "freeze for audit"}"#,
+    ),
+    (
+        "hostkeeper.operator.v1.Rollouts/Resume",
+        r#"{"service": "kbf", "reason": "audit done"}"#,
+    ),
+    (
         "hostkeeper.operator.v1.Services/Assign",
         r#"{"service": "tierstore", "role": "storage"}"#,
     ),
@@ -192,12 +204,21 @@ const REQUESTS: &[(&str, &str)] = &[
 
 /// The calls sent, with the operator's token over the gateway, before the request of a method
 /// that needs them: what an operator has done before the page offers the action. A halt stands at
-/// a service's desired version, so a service with none has nothing to halt (`invalid_request`).
-const BEFORE: &[(&str, &str, &str)] = &[(
-    "hostkeeper.operator.v1.Releases/Halt",
-    "hostkeeper.operator.v1.Releases/SetDesired",
-    r#"{"service": "kbf", "desired": {"version": "1.2.3"}}"#,
-)];
+/// a service's desired version, so a service with none has nothing to halt (`invalid_request`);
+/// and a plan has a version only once one is set, so an Advance meets a plan that does not wait
+/// (`not_waiting`) rather than a service with no desired state (`no_desired`).
+const BEFORE: &[(&str, &str, &str)] = &[
+    (
+        "hostkeeper.operator.v1.Releases/Halt",
+        "hostkeeper.operator.v1.Releases/SetDesired",
+        r#"{"service": "kbf", "desired": {"version": "1.2.3"}}"#,
+    ),
+    (
+        "hostkeeper.operator.v1.Rollouts/Advance",
+        "hostkeeper.operator.v1.Releases/SetDesired",
+        r#"{"service": "kbf", "desired": {"version": "1.2.3"}}"#,
+    ),
+];
 
 /// Every method `ui/calls.json` lists.
 fn listed() -> Vec<String> {

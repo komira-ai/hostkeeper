@@ -1,5 +1,5 @@
 {
- "from": "kbf-coordinator/src/decide.rs (v0.0.64), first_hold: a max_updating of 0 for the role left no room, so nothing was ordered for it. This coordinator cut the rule, so the order is given; kbf's answer is in kbf_body (derived from the rules at the tag, not a kbf test)",
+ "from": "kbf-coordinator/src/decide.rs (v0.0.64), first_hold: a max_updating of 0 for the role left no room, so nothing was ordered for it. This coordinator holds the role as kbf did (within a stage of an update plan, max_updating caps the hosts of a role holding an update slot, and 0 holds the role: no_slot); derived from the rules at the tag, not a kbf test",
  "steps": [
   {
    "at_secs": 2000,
@@ -15,8 +15,7 @@
    "role": "daemon",
    "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
    "expect_status": 200,
-   "expect_body": "{\"reply\":\"update\",\"version\":\"2.0\"}",
-   "kbf_body": "{\"reply\":\"nothing\"}"
+   "expect_body": "{\"reply\":\"nothing\"}"
   }
  ]
 }

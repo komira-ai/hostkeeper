@@ -7,10 +7,19 @@ use hostkeeper_wire::wire::{Health, Heartbeat, ServiceBeat};
 use serde_json::{Value, json};
 
 use crate::identity::Identity;
-use crate::testutil::{OPERATOR, Rig, beat, ci_token, id, role, updating, version, with_kbf};
+use crate::services::Services;
+use crate::testutil::{KBF_ENTRY, OPERATOR, Rig, beat, ci_token, id, role, updating, version};
 
-const SERVICES: &str = "[[service]]\nname = \"other\"\nroles = [\"daemon\"]\n\
+/// kbf rolls in one stage, so its storage limit alone holds a host; `other` keeps the default
+/// plan and bakes two beats, so its second stage waits for the first host's bake; `third` has
+/// no desired state.
+const SERVICES: &str = "stages = [100]\n\
+                        [[service]]\nname = \"other\"\nroles = [\"daemon\"]\nbake_beats = 2\n\
                         [[service]]\nname = \"third\"\nroles = [\"daemon\"]\n";
+
+fn services() -> Services {
+    Services::parse(&format!("{KBF_ENTRY}\n{SERVICES}")).expect("services")
+}
 
 fn who(name: &str, role: RoleName) -> Identity {
     Identity {
@@ -47,14 +56,15 @@ fn announcing(mut top: Heartbeat, services: &[(&str, &str)]) -> Heartbeat {
 ///
 /// - `s1` storage at 2.0; `s2` storage at 1.0 and updating to 2.0; `s3` storage at 1.0,
 ///   behind with the one storage slot taken by `s2`;
-/// - `d1` daemon at 2.0, running `other` at 3.0 and `third` at 1.0;
+/// - `d1` daemon at 2.0, running `other` at 3.0 (one healthy beat of the two it bakes) and
+///   `third` at 1.0;
 /// - `d2` daemon at 2.0, running `other` at 1.0: behind on `other`, and not ordered, since
-///   `s2`'s kbf update is the one update live (`decide.rs`, rule 7).
+///   `d1`, the one host of `other`'s first stage, has not baked (`decide.rs`, rule 6).
 async fn farm(name: &str) -> Rig {
     let mut rig = Rig::new(name);
     let list = config_text(STATIC_ISSUER) + "services = [\"kbf\", \"other\", \"third\"]\n";
     rig.coordinator =
-        Rig::start_with_allow_list(&rig.dir, &rig.clock, &list).with_services(with_kbf(SERVICES));
+        Rig::start_with_allow_list(&rig.dir, &rig.clock, &list).with_services(services());
     for body in [
         r#"{"version":"2.0","min_up":{"storage":0,"frontend":0}}"#,
         r#"{"service":"other","version":"3.0","min_up":{"storage":0,"frontend":0}}"#,
@@ -146,7 +156,7 @@ async fn status_lists_every_service_with_its_hosts_up_count_slots_and_hold() {
         rows(&status, "other"),
         [
             row("d1", true, false, json!("up_to_date")),
-            row("d2", true, false, json!("no_slot")),
+            row("d2", true, false, json!("baking")),
         ]
     );
     assert_eq!((&other["up"], &other["slots_held"]), (&json!(2), &json!(0)));
@@ -164,15 +174,19 @@ async fn status_lists_every_service_with_its_hosts_up_count_slots_and_hold() {
 }
 
 /// Behaviour: a host holding a slot of one service is shown holding it for that service
-/// only. Once `s2` reports kbf done, `d2` is ordered to update `other`: under `other` it holds
-/// a slot and is not up; under kbf, and in the top-level kbf host list, it holds nothing and
-/// is up. Catches the kbf service being used where the service named should be.
+/// only. Once `d1` has baked `other` (its second healthy beat at 3.0), `d2` is ordered to
+/// update `other`: under `other` it holds a slot and is not up; under kbf, and in the
+/// top-level kbf host list, it holds nothing and is up. Catches the kbf service being used
+/// where the service named should be.
 #[tokio::test]
 async fn an_order_for_another_service_is_shown_under_that_service_only() {
     let rig = farm("status-service-slot").await;
     let c = &rig.coordinator;
-    c.heartbeat(who("s2", role("storage")), beat("2.0"))
-        .expect("a heartbeat");
+    c.heartbeat(
+        who("d1", role("daemon")),
+        announcing(beat("2.0"), &[("other", "3.0"), ("third", "1.0")]),
+    )
+    .expect("a heartbeat");
     let ordered = c
         .heartbeat(
             who("d2", role("daemon")),

@@ -1,9 +1,11 @@
-// Rollout: per service, the desired version against the converged hosts, the canary and bake, the
-// halt, the bad versions and the holder of the update slot; and the operator's overrides.
+// Rollout: per service, the desired version against the converged hosts, the update plan (its
+// stages, the stage it is in, why it waits, and each stage's hosts with their states), the bake,
+// the halt, the bad versions and the holders of the update slots; and the operator's overrides.
 // Calls: Releases.Status, then Services.List for each service's roles, assignments and hosts; on a
 // button, one of Releases.MarkBad, Releases.UnmarkBad, Releases.Halt, Releases.ClearHalt,
-// Releases.Converge, Releases.Force, Releases.SetDesired, Services.Assign, Services.Unassign and
-// Services.SetMinVersion, and Hosts.List to count a force's hosts. The desired version is set here or by CI.
+// Releases.Converge, Releases.Force, Releases.SetDesired, Rollouts.Advance, Rollouts.Pause,
+// Rollouts.Resume, Services.Assign, Services.Unassign and Services.SetMinVersion, and Hosts.List
+// to count a force's hosts. The desired version is set here or by CI.
 
 import {
   h, action, allPages, area, checkbox, describeError, enumLabel, errorView, field, list, reasonProblem, select,
@@ -200,7 +202,7 @@ function forceSection(ctx, services, state, redraw) {
   };
   return h("section", { class: "force" },
     h("h3", {}, "Force a version"),
-    h("p", {}, "Switches the service on every targeted host at once, with no hook, past the update slot, the canary and the bake."),
+    h("p", {}, "Switches the service on every targeted host at once, with no hook, past the update slots, the plan and the bake."),
     select("Service", "force-service", form, "service",
       [["", "choose"]].concat(services.map((s) => [s.service, s.service]))),
     field("Version", "force-version", form, "version"),
@@ -242,6 +244,97 @@ function byGate(svc, reason) {
   return (svc.hosts || []).filter((host) => host.view && host.view.gateReason === reason).map((host) => host.nodeId);
 }
 
+function planStages(plan) {
+  return plan ? list(plan, "stages") : [];
+}
+
+function isManual(stage) {
+  return stage.advance === "STAGE_ADVANCE_MANUAL";
+}
+
+// How a stage is named in the plan row: the hosts it brings the service to, then in brackets its
+// percent (a canary has none) and that an operator enters it.
+function stageSize(stage) {
+  const marks = [typeof stage.percent === "number" ? `${stage.percent}%` : "canary"];
+  if (isManual(stage)) {
+    marks.push("manual");
+  }
+  return `${stage.hosts || 0} (${marks.join(", ")})`;
+}
+
+// "1 (1%), 4 (50%, manual), 8 (100%) hosts of 8 eligible"; "none" when the service has no plan.
+export function planSummary(plan) {
+  const stages = planStages(plan);
+  if (stages.length === 0) {
+    return "none";
+  }
+  return `${stages.map(stageSize).join(", ")} hosts of ${plan.eligible || 0} eligible`;
+}
+
+// "2 of 3"; "0 of 3" before a manual first stage is entered.
+export function stageProgress(plan) {
+  const stages = planStages(plan);
+  if (stages.length === 0) {
+    return "-";
+  }
+  return `${plan.current || 0} of ${stages.length}${plan.finished === true ? ", every host rolled" : ""}`;
+}
+
+// The stage that a wait is about: the stage waiting for its Advance is the next one, the other
+// waits that name a stage are the current one. The waits of the whole service (halt, pause, quiet
+// start, other rollouts) and no wait name none.
+function waitStage(plan) {
+  const current = plan.current || 0;
+  switch (plan.waiting) {
+    case "PLAN_WAIT_MANUAL_ADVANCE":
+      return current + 1;
+    case "PLAN_WAIT_FAILED_HOST":
+    case "PLAN_WAIT_BELOW_MIN_UP":
+    case "PLAN_WAIT_UPDATING":
+    case "PLAN_WAIT_DEFERRING":
+    case "PLAN_WAIT_BAKING":
+      return current;
+    default:
+      return null;
+  }
+}
+
+// Why the plan orders no new host: the wait with its stage, and the pause with who and why.
+export function planWaiting(plan) {
+  if (!plan) {
+    return "-";
+  }
+  const parts = [];
+  if (plan.waiting !== "PLAN_WAIT_PAUSED") {
+    const stage = waitStage(plan);
+    parts.push(enumLabel(plan.waiting, "PLAN_WAIT_") + (stage === null ? "" : `, stage ${stage}`));
+  }
+  if (plan.paused === true) {
+    parts.push(`paused by ${plan.pausedBy || "-"}: ${plan.pauseReason || "-"}`);
+  }
+  return parts.join("; ");
+}
+
+// The stages with their hosts, one row to a host; the stage's own cells are on its first row.
+function planTable(plan) {
+  const body = [];
+  for (const stage of planStages(plan)) {
+    const members = list(stage, "members");
+    const mark = (stage.number || 0) === (plan.current || 0) ? " (current)" : "";
+    const own = [`${stage.number || 0}${mark}`, typeof stage.percent === "number" ? `${stage.percent}%` : "canary",
+      String(stage.hosts || 0), enumLabel(stage.advance, "STAGE_ADVANCE_")];
+    const rows = members.length > 0 ? members : [null];
+    rows.forEach((member, at) => {
+      const first = at === 0 ? own : ["", "", "", ""];
+      const host = member === null ? ["-", "-", "-"]
+        : [member.nodeId, member.role || "-",
+          enumLabel(member.state, "PLAN_HOST_STATE_") + (member.deferring === true ? " (deferring)" : "")];
+      body.push(h("tr", {}, first.concat(host).map((text) => h("td", {}, text))));
+    });
+  }
+  return table(["Stage", "Percent", "Hosts", "Enters", "Host", "Role", "State"], body);
+}
+
 // The limits of a desired state that an operator's set keeps: CI's per-role maxUpdating and minUp.
 function limitsOf(desired) {
   const limits = {};
@@ -260,7 +353,7 @@ function setDesired(ctx, svc, form) {
     if (version === "") {
       return "Name the version.";
     }
-    if (!ctx.confirm(`Set the desired version of ${service} to ${version}? Its hosts are moved there a role at a time.`)) {
+    if (!ctx.confirm(`Set the desired version of ${service} to ${version}? Its hosts are moved there stage by stage, by the service's update plan.`)) {
       return "Desired version not changed.";
     }
     const request = { service, desired: Object.assign({ version }, limitsOf(svc.desired)) };
@@ -371,6 +464,43 @@ function assignmentRows(entries, service) {
   ];
 }
 
+// The buttons of the plan: Advance while it waits for an operator to enter its next stage, Pause
+// while it runs and Resume while it is paused. Each needs a reason and asks first.
+function planButtons(ctx, service, plan, withReason) {
+  const buttons = [];
+  if (plan && plan.waiting === "PLAN_WAIT_MANUAL_ADVANCE") {
+    const next = waitStage(plan);
+    buttons.push(action(ctx, "Advance", "advance", withReason(async (reason) => {
+      if (!ctx.confirm(`Advance ${service} into stage ${next} of ${planStages(plan).length}? Its hosts are ordered at their next heartbeats.`)) {
+        return "Not advanced.";
+      }
+      const reply = await ctx.api.call("hostkeeper.operator.v1.Rollouts/Advance", { service, reason });
+      ctx.refresh();
+      return reply.plan ? `Advanced ${service} into stage ${stageProgress(reply.plan)}.` : `Advanced ${service}.`;
+    })));
+  }
+  if (plan && plan.paused === true) {
+    buttons.push(action(ctx, "Resume", "resume", withReason(async (reason) => {
+      if (!ctx.confirm(`Resume the plan of ${service}? Its hosts are ordered again from where it stands.`)) {
+        return "Not resumed.";
+      }
+      await ctx.api.call("hostkeeper.operator.v1.Rollouts/Resume", { service, reason });
+      ctx.refresh();
+      return `Resumed the plan of ${service}.`;
+    })));
+  } else {
+    buttons.push(action(ctx, "Pause", "pause", withReason(async (reason) => {
+      if (!ctx.confirm(`Pause the plan of ${service}? No host that has not started is ordered; the updates under way finish.`)) {
+        return "Not paused.";
+      }
+      await ctx.api.call("hostkeeper.operator.v1.Rollouts/Pause", { service, reason });
+      ctx.refresh();
+      return `Paused the plan of ${service}.`;
+    })));
+  }
+  return buttons;
+}
+
 // `listing` is `{entries}` of Services.List, or `{error}` when it failed.
 function serviceSection(ctx, svc, listing) {
   const service = svc.service;
@@ -385,7 +515,7 @@ function serviceSection(ctx, svc, listing) {
     }
     return reasonProblem(trimmed(form.reason)) || run(trimmed(form.reason));
   };
-  const canary = byGate(svc, "GATE_REASON_CANARY_WAIT");
+  const plan = svc.plan;
   const baking = byGate(svc, "GATE_REASON_BAKING");
   const holders = slotHolders(svc);
   const roles = (convergence.roles || []).map((role) => h("tr", {},
@@ -398,8 +528,10 @@ function serviceSection(ctx, svc, listing) {
       ...(listing.error ? [] : assignmentRows(listing.entries, service)),
       ["State", enumLabel(convergence.state, "CONVERGENCE_STATE_")],
       ["Up", `${svc.up || 0} hosts`],
-      ["Update slot", holders.length > 0 ? `held by ${holders.join(", ")}` : "free"],
-      ["Waiting for the canary", canary.length > 0 ? canary.join(", ") : "-"],
+      ["Update slots", holders.length > 0 ? `held by ${holders.join(", ")}` : "none held"],
+      ["Plan", planSummary(plan)],
+      ["Stage", stageProgress(plan)],
+      ["Waiting", planWaiting(plan)],
       ["Baking", baking.length > 0 ? baking.join(", ") : "-"],
       ["Halt", halt ? `by ${halt.nodeId || "-"}, check ${halt.check || "-"}, target ${halt["target"] || "-"}`
         : (halted ? "halted" : "-")],
@@ -410,6 +542,7 @@ function serviceSection(ctx, svc, listing) {
     ].map(([k, v]) => h("tr", {}, h("th", {}, k), h("td", {}, v)))),
     listing.error ? h("p", { class: "error", role: "alert" }, describeError(listing.error)) : null,
     table(["Role", "At desired", "Updating", "Failed", "Down"], roles),
+    planStages(plan).length > 0 ? planTable(plan) : null,
     assignFieldset(ctx, svc),
     h("fieldset", {},
       h("legend", {}, `Act on ${service}`),
@@ -444,6 +577,7 @@ function serviceSection(ctx, svc, listing) {
             ctx.refresh();
             return `Halted ${service}.`;
           })),
+        planButtons(ctx, service, plan, withReason),
         action(ctx, "Check convergence", "converge", async () => {
           const reply = await ctx.api.call("hostkeeper.operator.v1.Releases/Converge", { service });
           const c = reply.convergence || {};

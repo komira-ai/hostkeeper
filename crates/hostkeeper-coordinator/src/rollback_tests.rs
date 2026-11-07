@@ -868,7 +868,9 @@ async fn a_mark_that_cannot_be_written_stays_raised_and_the_rollback_waits() {
 }
 
 /// A manual service uses none of this: nothing is recorded for it, so a farm that never asks
-/// for a rollback keeps its files as they were (no ops file, no `ops` in the status).
+/// for a rollback keeps its files as they were (no ops file, no `ops` in the status). Its plan,
+/// whose hosts all run the desired version, has no host left to order and writes no position
+/// either (no halts file).
 #[tokio::test]
 async fn a_manual_service_records_nothing_and_creates_no_ops_file() {
     let rig = rig("rb-manual-quiet", "", ONE).await;
@@ -886,4 +888,5 @@ async fn a_manual_service_records_nothing_and_creates_no_ops_file() {
     );
     assert!(status(&rig).ops.is_empty());
     assert!(!rig.dir.path().join("desired.json.ops").exists());
+    assert!(!rig.dir.path().join("desired.json.ops.halts").exists());
 }

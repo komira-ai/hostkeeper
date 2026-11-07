@@ -12,7 +12,7 @@ use crate::desired::Desired;
 use crate::fleet::Fleet;
 use crate::services::Services;
 use crate::testutil::{
-    LEGACY, beat, desired, fleet, id, kbf_services, last, role, secs, updating, version,
+    KBF_ENTRY, LEGACY, beat, desired, fleet, id, kbf_services, last, role, secs, updating, version,
 };
 
 const NOW: Duration = Duration::from_secs(1_000);
@@ -196,8 +196,9 @@ fn a_host_that_failed_this_version_holds_as_failed_here() {
     assert_eq!(kbf(&desired("3.0", 1, 1), &f, "d1", NOW), update("3.0"));
 }
 
-/// A storage host asked while another storage host updates (the one live update) holds with
-/// `NoSlot`.
+/// A storage host asked while another storage host updates, in a plan of one stage, holds with
+/// `NoSlot` (the storage limit is 1); with the default plan, where the first stage holds one of
+/// the two hosts, the same host holds with `StageWait`.
 #[test]
 fn a_role_with_no_free_slot_holds_as_no_slot() {
     let f = fleet(
@@ -207,10 +208,11 @@ fn a_role_with_no_free_slot_holds_as_no_slot() {
             ("s2", role("storage"), beat("1.0")),
         ],
     );
-    assert_eq!(
-        kbf(&desired("2.0", 0, 0), &f, "s2", NOW),
-        gate(Gate::NoSlot)
-    );
+    let d = desired("2.0", 0, 0);
+    let whole = Services::parse(&format!("{KBF_ENTRY}\nstages = [100]\n")).expect("services");
+    let all = BTreeMap::from([(LEGACY.to_owned(), d.clone())]);
+    assert_eq!(why(&whole, &all, LEGACY, &f, "s2", NOW), gate(Gate::NoSlot));
+    assert_eq!(kbf(&d, &f, "s2", NOW), gate(Gate::StageWait));
 }
 
 /// The first failing rule is the one named: a host that is both up to date and in a role

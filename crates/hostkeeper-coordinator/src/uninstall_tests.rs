@@ -1,6 +1,7 @@
 //! The `uninstall` order and its intent (design 5.7 items 5 to 7): only `Services.Unassign`
 //! with `uninstall` records one, for each host that stops being assigned the service and lists
-//! it; the rollout gate orders it under the hold, the quiet start and the one live update; it
+//! it; the rollout gate orders it under the hold, the quiet start and the other services' live
+//! rollouts, and its order holds the role's update slot of the service; it
 //! survives a restart and ends when the host reports the service gone or is assigned it again;
 //! retiring, excluding or abandoning a host orders nothing. Every time is the rig's clock.
 
@@ -17,6 +18,7 @@ use crate::assign_support::{
 };
 use crate::assignment::{Entry, ServiceAssignments};
 use crate::decide::{Gate, Skip, Why};
+use crate::install_tests::{ONE_STAGE, set_one_slot};
 use crate::marks_support::{
     DB, NEW_DAEMON, WEB, ask_typed, beat_of, hold, operator, restart, rig, runs, scope_host, set,
     start, unhold, update,
@@ -237,12 +239,13 @@ async fn no_other_rpc_orders_an_uninstall() {
 /// Catches: an uninstall sent to a host that is retired, excluded or abandoned, or a retired
 /// host's slot held after its record is final: a host whose update ends and that is then
 /// retired (its heartbeats stop) leaves its services as they are and frees its slot; a host
-/// that vanishes mid-update is freed by an exclusion with `abandon`; an excluded host with an
+/// that vanishes mid-update is freed by an exclusion with `abandon` (the daemons update one at
+/// a time here: `max_updating` of 1 and one stage); an excluded host with an
 /// uninstall intent is ordered nothing.
 #[tokio::test]
 async fn retiring_a_host_sends_no_uninstall() {
-    let rig = rig("uninstall-retire", "");
-    set(&rig, WEB, "2.0", 1).await;
+    let rig = rig("uninstall-retire", ONE_STAGE);
+    set_one_slot(&rig, WEB, "2.0", 1).await;
     assert_eq!(
         told(&rig, "d1", vec![runs(WEB, "1.0")]).0,
         update(WEB, "2.0")
@@ -327,16 +330,17 @@ async fn retiring_a_host_sends_no_uninstall() {
 
 /// Catches: an uninstall intent kept in memory only, never cleared, or a slot kept after the
 /// service is gone: the intent is in the ops file across a restart, the restarted coordinator
-/// orders the same uninstall after its quiet start, the order holds the one live update, and
+/// orders the same uninstall after its quiet start, the order holds the role's update slot, and
 /// once the host reports the service gone the intent is cleared (as the coordinator's own
-/// audited change, read back after another restart) and the slot is free.
+/// audited change, read back after another restart) and the slot is free. (The daemons update
+/// one at a time here: `max_updating` of 1 and one stage.)
 #[tokio::test]
 async fn an_uninstall_intent_survives_a_coordinator_restart_and_clears_when_the_host_reports_the_service_gone()
  {
-    let mut rig = rig("uninstall-restart", "");
+    let mut rig = rig("uninstall-restart", ONE_STAGE);
     order_to(&rig, "d1", vec![runs(WEB, "1.0")]);
     unassign(&rig, WEB, "d1", "", true).expect("unassigned");
-    restart(&mut rig, "");
+    restart(&mut rig, ONE_STAGE);
     assert_eq!(intents(&rig, WEB), ["d1"]);
     assert_eq!(order_to(&rig, "d1", vec![runs(WEB, "1.0")]), None);
     assert_eq!(why_of(&rig, WEB, "d1"), Some(Why::Gate(Gate::Quiet)));
@@ -345,7 +349,7 @@ async fn an_uninstall_intent_survives_a_coordinator_restart_and_clears_when_the_
         order_to(&rig, "d1", vec![runs(WEB, "1.0")]),
         Some(uninstall_order(WEB, "uninstall-1", 1))
     );
-    set(&rig, WEB, "2.0", 1).await;
+    set_one_slot(&rig, WEB, "2.0", 1).await;
     assert_eq!(
         told(&rig, "d2", vec![runs(WEB, "1.0")]).0,
         ServiceReply::Nothing
@@ -373,7 +377,7 @@ async fn an_uninstall_intent_survives_a_coordinator_restart_and_clears_when_the_
         update(WEB, "2.0")
     );
 
-    restart(&mut rig, "");
+    restart(&mut rig, ONE_STAGE);
     assert_eq!(intents(&rig, WEB), Vec::<String>::new());
 }
 
@@ -391,12 +395,13 @@ fn verdict(order_id: &str, outcome: Outcome, health: Health) -> hostkeeper_wire:
 
 /// Catches: a failed uninstall ordered again on its own, a declined one ordered before its wait
 /// ends, or one ordered to a daemon that cannot run it: a failure is left for the operator (the
-/// intent stands; the host's slot is held until it beats healthy, as after a failed update), a
-/// deferral waits out its backoff and is then ordered again, and a daemon that did not announce
-/// `install-v1` is told nothing (`unsupported`).
+/// intent stands; the host's slot of the service is held until it beats healthy, as after a
+/// failed update, so another host's update waits; the uninstall of another host takes no place
+/// of the plan and is ordered at once), a deferral waits out its backoff and is then ordered
+/// again, and a daemon that did not announce `install-v1` is told nothing (`unsupported`).
 #[tokio::test]
 async fn a_failed_uninstall_is_left_for_the_operator_and_a_declined_one_waits() {
-    let rig = rig("uninstall-verdicts", "");
+    let rig = rig("uninstall-verdicts", ONE_STAGE);
     for host in ["d1", "d2"] {
         order_to(&rig, host, vec![runs(WEB, "1.0")]);
         unassign(&rig, WEB, host, "", true).expect("unassigned");
@@ -409,11 +414,19 @@ async fn a_failed_uninstall_is_left_for_the_operator_and_a_declined_one_waits() 
     assert_eq!(order_to(&rig, "d1", vec![failed]), None);
     assert_eq!(why_of(&rig, WEB, "d1"), Some(Why::Skip(Skip::FailedHere)));
     assert_eq!(intents(&rig, WEB), ["d1", "d2"]);
-    assert_eq!(order_to(&rig, "d2", vec![runs(WEB, "1.0")]), None);
-    assert_eq!(why_of(&rig, WEB, "d2"), Some(Why::Gate(Gate::NoSlot)));
+    // The failed uninstall holds d1's slot of `web`: an update of another host waits for it.
+    set_one_slot(&rig, WEB, "2.0", 1).await;
+    assert_eq!(order_to(&rig, "d3", vec![runs(WEB, "1.0")]), None);
+    assert_eq!(why_of(&rig, WEB, "d3"), Some(Why::Gate(Gate::NoSlot)));
 
     let healed = verdict("uninstall-1", Outcome::Failed, Health::Healthy);
     assert_eq!(order_to(&rig, "d1", vec![healed]), None);
+    assert_eq!(
+        why_of(&rig, WEB, "d3"),
+        None,
+        "d1 beat healthy: its slot is free"
+    );
+    // An uninstall is held by no place of the plan: d2's is ordered though d1's stands failed.
     assert_eq!(
         order_to(&rig, "d2", vec![runs(WEB, "1.0")]),
         Some(uninstall_order(WEB, "uninstall-2", 1))

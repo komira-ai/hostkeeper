@@ -1,9 +1,9 @@
-//! The six services of `hostkeeper.operator.v1` over [`Coordinator`]: `Hosts`, `Releases`,
-//! `Services`, `Enrollment`, `Audit` and `Alerts`.
+//! The seven services of `hostkeeper.operator.v1` over [`Coordinator`]: `Hosts`, `Releases`,
+//! `Services`, `Enrollment`, `Audit`, `Alerts` and `Rollouts`.
 //!
 //! An adapter has no rule of its own. A method that has a handler in the coordinator
 //! ([`crate::operator`], [`crate::hosts`], [`crate::force`], [`crate::assign`],
-//! [`crate::alerts`]) calls it with
+//! [`crate::alerts`], [`crate::rollouts`]) calls it with
 //! the caller the router admitted. A method the frozen JSON routes have (`Hosts.Include`,
 //! `Hosts.SetLabels`, `Releases.ClearHalt`, `Releases.SetDesired`, `Releases.Converge`,
 //! `Releases.Status`) builds the request that route reads and calls what that route calls. Every
@@ -20,6 +20,7 @@ use hostkeeper_proto::hostkeeper::operator::v1::audit_server::Audit as AuditApi;
 use hostkeeper_proto::hostkeeper::operator::v1::enrollment_server::Enrollment as EnrollmentApi;
 use hostkeeper_proto::hostkeeper::operator::v1::hosts_server::Hosts as HostsApi;
 use hostkeeper_proto::hostkeeper::operator::v1::releases_server::Releases as ReleasesApi;
+use hostkeeper_proto::hostkeeper::operator::v1::rollouts_server::Rollouts as RolloutsApi;
 use hostkeeper_proto::hostkeeper::operator::v1::services_server::Services as ServicesApi;
 use serde_json::{Value, json};
 use tonic::{Request, Response, Status};
@@ -657,5 +658,53 @@ impl AlertsApi for AlertsService {
             .list_alerts(&caller, request.into_inner())
             .map(Response::new)
             .map_err(refusal::alerts)
+    }
+}
+
+/// `Rollouts` over the coordinator.
+pub(crate) struct RolloutsService {
+    coordinator: Arc<Coordinator>,
+}
+
+impl RolloutsService {
+    /// The service over `coordinator`.
+    pub(crate) fn new(coordinator: Arc<Coordinator>) -> Self {
+        Self { coordinator }
+    }
+}
+
+#[tonic::async_trait]
+impl RolloutsApi for RolloutsService {
+    async fn advance(
+        &self,
+        request: Request<proto::AdvanceRequest>,
+    ) -> Result<Response<proto::AdvanceResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .rollout_advance(&caller, request.into_inner())
+            .map(Response::new)
+            .map_err(refusal::rollouts)
+    }
+
+    async fn pause(
+        &self,
+        request: Request<proto::PauseRequest>,
+    ) -> Result<Response<proto::PauseResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .rollout_pause(&caller, request.into_inner())
+            .map(Response::new)
+            .map_err(refusal::rollouts)
+    }
+
+    async fn resume(
+        &self,
+        request: Request<proto::ResumeRequest>,
+    ) -> Result<Response<proto::ResumeResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .rollout_resume(&caller, request.into_inner())
+            .map(Response::new)
+            .map_err(refusal::rollouts)
     }
 }

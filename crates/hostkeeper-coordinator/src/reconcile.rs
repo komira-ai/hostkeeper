@@ -135,8 +135,8 @@ pub(crate) fn is_release_failure_beat(beat: &Heartbeat, version: &Version) -> bo
 ///    override do not count ([`crate::acks`]). A canary's release failure meets the threshold
 ///    on its own, whatever `min_hosts` says, and is logged as an alert: a canary is a live host
 ///    of a service with a canary that failed while the canary gate was still closed (fewer
-///    than its `count` hosts had baked at the desired version), when only canaries are
-///    ordered.
+///    than its `count` hosts had baked at the desired version), when only
+///    the plan's first stage ([`crate::stages`]) is ordered.
 ///
 /// Acks that no longer match their host's report are dropped whatever else is planned.
 #[must_use]
@@ -249,7 +249,8 @@ fn decide(
 
 /// Whether the canary gate of `def` is still closed for `want`: the service has a canary and
 /// fewer than its `count` member hosts have baked at the desired version. While it is, only
-/// canaries are ordered the desired version ([`crate::canary`]).
+/// the canary hosts, the first stage of the plan, are ordered the desired version
+/// ([`crate::canary`], [`crate::stages`]).
 fn canary_open(def: &ServiceDef, want: &Desired, fleet: &Fleet, now: Duration) -> bool {
     let Some(canary) = def.canary else {
         return false;
@@ -349,7 +350,8 @@ fn apply(
     Ok(())
 }
 
-/// Plans and makes the changes for `def` at `now`, after a heartbeat. A change that fails is
+/// Plans and makes the changes for `def` at `now`, after a heartbeat, then enters the stages of
+/// its update plan it may enter by itself (`crate::rollouts::advance`). A change that fails is
 /// logged and the rest are left for the next beat: the heartbeat is answered either way.
 /// A service with no desired state has nothing to plan.
 pub fn reconcile(
@@ -368,5 +370,9 @@ pub fn reconcile(
             tracing::error!(service = %def.name, %why, "a rollback change was not made");
             return;
         }
+    }
+    // The plan reads the desired state the changes above left: a rollback starts it over.
+    if let Some(want) = store.get(&def.name) {
+        crate::rollouts::advance(def, &want, ops, fleet, now);
     }
 }

@@ -34,9 +34,10 @@ list it, or lists it `absent`: staged and never run), the coordinator orders `in
 service's desired version, with the package digest for the host's platform: the one CI set, or
 the one the version's release index lists for that platform. The install is decided under
 every rule of an update, in the same order: the halt, the exclusion, the hold, a version marked
-bad, the minimum version, one update at a time on the host, the canary, the one live update of
-the farm, the bake, a failure of this version on this host and a deferral. An install takes the
-one live update slot and frees it as an update does.
+bad, the minimum version, one update at a time on the host, a failure of this version on this
+host, a deferral and the service's update plan ([rollout-plans.md](rollout-plans.md): a pause, the
+other services' live rollouts, the stage the host is in, the role's `max_updating` and `min_up`).
+An install takes an update slot and a place in a stage, and frees them as an update does.
 
 An install goes only to a daemon that announces the `install-v1` feature and lists every
 service it runs (`heartbeat-v2`), and only as a typed order: the JSON heartbeat reply carries
@@ -55,7 +56,8 @@ excluding a host, retiring it, an enrollment approval, a hold, a minimum version
 desired version never does.
 
 The uninstall is decided under the halt, the hold, the quiet start, one update at a time on the
-host and the one live update, and takes the slot as an update does. It stands across a
+host and the other services' live rollouts (`rollout_elsewhere`, `--live-rollouts`), and takes an
+update slot as an update does. It is not a stage of the service's update plan. It stands across a
 coordinator restart, in the ops file, and ends when the host reports the service gone from the
 services it lists (audited as `uninstalled`, by the coordinator), or when the service is
 assigned to the host again (`uninstall_cancelled`). An uninstall the host declined is ordered

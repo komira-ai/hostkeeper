@@ -1,7 +1,7 @@
-//! `bake_beats` and `canary`: a host that has updated holds its slot until it has beaten
-//! healthy enough times, `promotion_pending` holds the slot and is not up, and a canary
-//! gate lets the first hosts go alone. Every time is explicit; the fleets are built beat by
-//! beat.
+//! `bake_beats` and `canary`: a host that has updated is baking until it has beaten healthy
+//! enough times, `promotion_pending` holds the slot and is not up, and a canary is the first
+//! stage of the update plan: the first hosts to ask go alone. Every time is explicit; the
+//! fleets are built beat by beat.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -35,9 +35,20 @@ pub(crate) fn all(want: &Desired) -> BTreeMap<String, Desired> {
 }
 
 pub(crate) fn why(s: &Services, f: &Fleet, host: &str, now: u64) -> Decision {
-    let want = desired("2.0", 0, 0);
-    let decision = decide_why(s, &all(&want), LEGACY, f, &id(host), secs(now));
-    let reply = decide_in(s, &all(&want), LEGACY, f, &id(host), secs(now));
+    why_under(&desired("2.0", 0, 0), s, f, host, now)
+}
+
+/// The desired state `2.0` that lets one host of the daemon role update at a time.
+pub(crate) fn one_daemon_at_a_time() -> Desired {
+    let mut want = desired("2.0", 0, 0);
+    want.max_updating.set("daemon", 1);
+    want
+}
+
+/// [`why`], under the desired state `want`.
+pub(crate) fn why_under(want: &Desired, s: &Services, f: &Fleet, host: &str, now: u64) -> Decision {
+    let decision = decide_why(s, &all(want), LEGACY, f, &id(host), secs(now));
+    let reply = decide_in(s, &all(want), LEGACY, f, &id(host), secs(now));
     match &decision {
         Decision::Update { version } => assert_eq!(
             reply,
@@ -143,14 +154,48 @@ fn a_baking_host_that_went_silent_frees_its_slot() {
     assert_eq!(why(&s, &f, "b", 145), go());
 }
 
-/// A slot held by a host that is updating is a slot held, not a bake: the reason says so.
+/// A slot held by a host that is updating is a slot held, not a bake: with one stage and
+/// `max_updating` of 1 for the role the reason is `no_slot`. With the default plan the second
+/// host is not in the stage yet, and says so.
 #[test]
 fn a_slot_held_by_an_update_is_no_slot_not_baking() {
-    let s = services("bake_beats = 3");
+    let one_stage = services("bake_beats = 3\nstages = [100]");
     let mut f = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
     beats(&mut f, "a", &updating(beat("1.0"), "2.0"), 100);
     beats(&mut f, "b", &beat("1.0"), 100);
-    assert_eq!(why(&s, &f, "b", 100), gate(Gate::NoSlot));
+    let one = one_daemon_at_a_time();
+    assert_eq!(
+        why_under(&one, &one_stage, &f, "b", 100),
+        gate(Gate::NoSlot)
+    );
+    let plan = services("bake_beats = 3");
+    assert_eq!(why(&plan, &f, "b", 100), gate(Gate::StageWait));
+}
+
+/// `max_updating` of the desired state caps the hosts of a role that update at once inside a
+/// stage: the default for the daemon role lets two go and holds the third; a number of 1 holds
+/// the second; a number of 0 holds the role.
+#[test]
+fn max_updating_caps_a_role_within_a_stage() {
+    let s = services("stages = [100]");
+    let mut f = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
+    started(&mut f, 100);
+    let default = desired("2.0", 0, 0);
+    assert_eq!(why_under(&default, &s, &f, "a", 100), go());
+    f.order(LEGACY, id("a"), version("2.0"), secs(100));
+    assert_eq!(why_under(&default, &s, &f, "b", 100), go());
+    f.order(LEGACY, id("b"), version("2.0"), secs(100));
+    assert_eq!(why_under(&default, &s, &f, "c", 100), gate(Gate::NoSlot));
+    let one = one_daemon_at_a_time();
+    let mut none = desired("2.0", 0, 0);
+    none.max_updating.set("daemon", 0);
+    let mut fresh = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
+    started(&mut fresh, 100);
+    assert_eq!(why_under(&none, &s, &fresh, "a", 100), gate(Gate::NoSlot));
+    let mut single = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
+    started(&mut single, 100);
+    single.order(LEGACY, id("a"), version("2.0"), secs(100));
+    assert_eq!(why_under(&one, &s, &single, "b", 100), gate(Gate::NoSlot));
 }
 
 /// A pending promotion holds the slot, and the host is not up: the next host waits while it
@@ -160,16 +205,17 @@ fn promotion_pending_holds_the_slot_and_is_not_up_until_it_clears() {
     let mut pending = beat("2.0");
     pending.promotion_pending = true;
 
-    let slot = services("");
+    let slot = services("stages = [100]");
+    let one = one_daemon_at_a_time();
     let mut f = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
     beats(&mut f, "a", &pending, 100);
     beats(&mut f, "b", &beat("1.0"), 100);
-    assert_eq!(why(&slot, &f, "b", 100), gate(Gate::NoSlot));
+    assert_eq!(why_under(&one, &slot, &f, "b", 100), gate(Gate::NoSlot));
     let a = f.get_in(LEGACY, &id("a")).expect("a");
     assert!(!f.is_up(LEGACY, &id("a"), a, secs(100)), "a is not up");
     beats(&mut f, "a", &beat("2.0"), 115);
     beats(&mut f, "b", &beat("1.0"), 115);
-    assert_eq!(why(&slot, &f, "b", 115), go());
+    assert_eq!(why_under(&one, &slot, &f, "b", 115), go());
 }
 
 /// A pending promotion, or a bake not yet complete, keeps the service from converging.
@@ -196,34 +242,38 @@ pub(crate) fn started(f: &mut Fleet, at: u64) {
     }
 }
 
-/// With a canary of one, the host with the smallest id alone is ordered. It is not
-/// followed until it has baked: not while ordered, updating, or baking; when its second
-/// healthy beat comes the others go.
+/// With a canary of one, the first host to ask alone is ordered. The others are not followed
+/// until it has baked: not while ordered, updating, or baking; when its second healthy beat
+/// comes the plan enters its second stage and the next host goes.
 #[test]
 fn with_a_canary_of_one_nobody_else_is_ordered_until_it_has_baked() {
     let s = services("bake_beats = 2\ncanary = { count = 1 }");
     let mut f = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
     started(&mut f, 100);
     assert_eq!(why(&s, &f, "a", 100), go());
-    assert_eq!(why(&s, &f, "b", 100), gate(Gate::CanaryWait));
-    assert_eq!(why(&s, &f, "c", 100), gate(Gate::CanaryWait));
     f.order(LEGACY, id("a"), version("2.0"), secs(100));
     assert_eq!(
         why(&s, &f, "a", 100),
         go(),
         "its own order does not hold it"
     );
-    assert_eq!(why(&s, &f, "b", 100), gate(Gate::CanaryWait), "ordered");
+    assert_eq!(why(&s, &f, "b", 100), gate(Gate::StageWait), "ordered");
+    assert_eq!(why(&s, &f, "c", 100), gate(Gate::StageWait), "ordered");
     beats(&mut f, "a", &updating(beat("1.0"), "2.0"), 115);
     started_others(&mut f, 115);
-    assert_eq!(why(&s, &f, "b", 115), gate(Gate::CanaryWait), "updating");
+    assert_eq!(why(&s, &f, "b", 115), gate(Gate::StageWait), "updating");
     beats(&mut f, "a", &beat("2.0"), 130);
     started_others(&mut f, 130);
-    assert_eq!(why(&s, &f, "b", 130), gate(Gate::CanaryWait), "one beat");
+    assert_eq!(why(&s, &f, "b", 130), gate(Gate::Baking), "one beat");
     beats(&mut f, "a", &beat("2.0"), 145);
     started_others(&mut f, 145);
     assert_eq!(why(&s, &f, "b", 145), go(), "baked");
-    assert_eq!(why(&s, &f, "c", 145), go(), "baked");
+    f.order(LEGACY, id("b"), version("2.0"), secs(145));
+    assert_eq!(
+        why(&s, &f, "c", 145),
+        gate(Gate::StageWait),
+        "the second stage holds two hosts, and the canary is one"
+    );
 }
 
 pub(crate) fn started_others(f: &mut Fleet, at: u64) {
@@ -232,8 +282,8 @@ pub(crate) fn started_others(f: &mut Fleet, at: u64) {
     }
 }
 
-/// A canary at the desired version whose promotion is pending has not baked: the gate stays
-/// closed, whatever the bake count says.
+/// A canary at the desired version whose promotion is pending has not baked: the next stage is
+/// not entered, whatever the bake count says, and it is when the promotion clears.
 #[test]
 fn a_canary_with_a_pending_promotion_keeps_the_gate_closed() {
     let s = services("canary = { count = 1 }");
@@ -243,7 +293,7 @@ fn a_canary_with_a_pending_promotion_keeps_the_gate_closed() {
     pending.promotion_pending = true;
     beats(&mut f, "a", &pending, 115);
     started_others(&mut f, 115);
-    assert_eq!(why(&s, &f, "b", 115), gate(Gate::CanaryWait));
+    assert_eq!(why(&s, &f, "b", 115), gate(Gate::StageWait));
     beats(&mut f, "a", &beat("2.0"), 130);
     started_others(&mut f, 130);
     assert_eq!(why(&s, &f, "b", 130), go());
@@ -256,17 +306,19 @@ fn a_canary_of_two_orders_two_hosts() {
     let mut f = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
     started(&mut f, 100);
     assert_eq!(why(&s, &f, "a", 100), go());
+    f.order(LEGACY, id("a"), version("2.0"), secs(100));
     assert_eq!(why(&s, &f, "b", 100), go());
-    assert_eq!(why(&s, &f, "c", 100), gate(Gate::CanaryWait));
+    f.order(LEGACY, id("b"), version("2.0"), secs(100));
+    assert_eq!(why(&s, &f, "c", 100), gate(Gate::StageWait));
     beats(&mut f, "a", &beat("2.0"), 115);
     started_others(&mut f, 115);
-    assert_eq!(why(&s, &f, "c", 115), gate(Gate::CanaryWait), "one baked");
+    assert_eq!(why(&s, &f, "c", 115), gate(Gate::StageWait), "one baked");
     beats(&mut f, "b", &beat("2.0"), 115);
     assert_eq!(why(&s, &f, "c", 115), go(), "two baked");
 }
 
-/// A canary that failed keeps its place, so nobody else is ordered and the service reads
-/// as blocked.
+/// A canary that failed keeps its place, so nobody else is ordered, the hosts say the stage
+/// failed, and the service reads as blocked.
 #[test]
 fn a_failed_canary_blocks_the_service_and_orders_nobody_else() {
     let s = services("canary = { count = 1 }");
@@ -276,49 +328,56 @@ fn a_failed_canary_blocks_the_service_and_orders_nobody_else() {
     let failed = last(beat("1.0"), "2.0", hostkeeper_wire::wire::Outcome::Failed);
     beats(&mut f, "a", &failed, 115);
     started_others(&mut f, 115);
-    assert_eq!(why(&s, &f, "b", 115), gate(Gate::CanaryWait));
-    assert_eq!(why(&s, &f, "c", 115), gate(Gate::CanaryWait));
+    assert_eq!(why(&s, &f, "b", 115), gate(Gate::StageFailed));
+    assert_eq!(why(&s, &f, "c", 115), gate(Gate::StageFailed));
     let want = desired("2.0", 0, 0);
     let state = converge_service(def, Some(&want), &f, secs(115)).state;
     assert_eq!(state, State::Blocked);
 }
 
-/// A canary that went silent before it was ever ordered is not a canary: the next host is.
+/// A host that went silent before it was ever ordered takes no place in the canary stage: the
+/// host that asks takes it, and the next waits.
 #[test]
-fn a_canary_that_is_down_and_never_started_is_replaced_by_the_next_host() {
+fn a_host_that_is_down_and_never_started_takes_no_place_in_the_canary_stage() {
     let s = services("canary = { count = 1 }");
     let mut f = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
     started(&mut f, 100);
     beats(&mut f, "b", &beat("1.0"), 200);
     beats(&mut f, "c", &beat("1.0"), 200);
     assert_eq!(why(&s, &f, "b", 200), go());
-    assert_eq!(why(&s, &f, "c", 200), gate(Gate::CanaryWait));
+    f.order(LEGACY, id("b"), version("2.0"), secs(200));
+    assert_eq!(why(&s, &f, "c", 200), gate(Gate::StageWait));
 }
 
-/// A canary that started and then went silent still counts as started: no one takes its
-/// place.
+/// A host that started and then went silent leaves the plan, so its place in the canary stage
+/// is free for the next host; the update it was running still holds its slot, so with one
+/// daemon updating at a time the next host waits on it.
 #[test]
-fn one_that_started_and_went_down_still_counts() {
+fn one_that_started_and_went_down_frees_its_place_but_keeps_its_slot() {
     let s = services("canary = { count = 1 }");
     let mut f = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
     beats(&mut f, "a", &updating(beat("1.0"), "2.0"), 100);
     beats(&mut f, "b", &beat("1.0"), 200);
     beats(&mut f, "c", &beat("1.0"), 200);
-    assert_eq!(why(&s, &f, "b", 200), gate(Gate::CanaryWait));
-    assert_eq!(why(&s, &f, "c", 200), gate(Gate::CanaryWait));
+    assert_eq!(why(&s, &f, "b", 200), go(), "the place is free");
+    let one = one_daemon_at_a_time();
+    assert_eq!(why_under(&one, &s, &f, "b", 200), gate(Gate::NoSlot));
+    assert_eq!(why_under(&one, &s, &f, "c", 200), gate(Gate::NoSlot));
 }
 
-/// A canary is chosen by node id whatever the roles: the smallest id alone is ordered, in any
-/// role, and a host of another role waits for the canary to bake like every other.
+/// A canary place goes to the first host to ask whatever the roles: the host with the larger
+/// id is ordered when it asks first, in any role, and a host of another role waits for the
+/// canary to bake like every other.
 #[test]
-fn a_canary_is_chosen_by_node_id_whatever_the_role() {
+fn the_first_host_to_ask_takes_the_canary_place_whatever_the_role() {
     let text = "[[service]]\nname = \"kbf\"\ncanary = { count = 1 }\nroles = [\"frontend\", \"storage\"]\n";
     let s = Services::parse(text).expect("services");
     let mut f = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
     f.record_in(LEGACY, id("a1"), role("frontend"), beat("1.0"), secs(100));
     f.record_in(LEGACY, id("s1"), role("storage"), beat("1.0"), secs(100));
-    assert_eq!(why(&s, &f, "a1", 100), go());
-    assert_eq!(why(&s, &f, "s1", 100), gate(Gate::CanaryWait));
+    assert_eq!(why(&s, &f, "s1", 100), go());
+    f.order(LEGACY, id("s1"), version("2.0"), secs(100));
+    assert_eq!(why(&s, &f, "a1", 100), gate(Gate::StageWait));
 }
 
 /// A restart forgets the count: a host that had baked two of three beats starts again at

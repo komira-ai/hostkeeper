@@ -180,7 +180,7 @@ return null;"#,
     assert_eq!(
         out["seen"]["questions"],
         json!([
-            "Set the desired version of api to 1.5.0? Its hosts are moved there a role at a time."
+            "Set the desired version of api to 1.5.0? Its hosts are moved there stage by stage, by the service's update plan."
         ])
     );
     assert_eq!(out["seen"]["refreshes"], 0);

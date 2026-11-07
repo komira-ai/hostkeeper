@@ -12,6 +12,7 @@ use crate::assign_support::{
 };
 use crate::assignment::{Entry, ServiceAssignments};
 use crate::decide::{Gate, Why};
+use crate::install_tests::{ONE_STAGE, set_one_slot};
 use crate::marks_support::{
     OLD_DAEMON, WEB, ask, ask_typed, beat_of, rig, runs, set, start, update,
 };
@@ -19,13 +20,14 @@ use crate::ops::{FailureAck, OpsState, OpsStore};
 use crate::rollback_tests::unwritable;
 use crate::testutil::{OPERATOR, version};
 
-/// Catches: a failed install that holds the farm's slot for ever because the service it left
+/// Catches: a failed install that holds the role's slot for ever because the service it left
 /// `absent` never beats healthy, or an install order that holds it past its age: after either,
-/// another host is ordered.
+/// another host of the role is ordered (the daemons update one at a time here: `max_updating`
+/// of 1 and one stage).
 #[tokio::test]
 async fn a_failed_or_unheard_install_frees_the_slot() {
-    let rig = rig("edge-install-freed", "");
-    set(&rig, WEB, "2.0", 1).await;
+    let rig = rig("edge-install-freed", ONE_STAGE);
+    set_one_slot(&rig, WEB, "2.0", 1).await;
     assert_eq!(order_to(&rig, "d1", vec![]), Some(install("2.0", 1)));
     assert_eq!(
         told(&rig, "d2", vec![runs(WEB, "1.0")]).0,
@@ -40,8 +42,8 @@ async fn a_failed_or_unheard_install_frees_the_slot() {
         update(WEB, "2.0")
     );
 
-    let rig = crate::marks_support::rig("edge-install-aged", "");
-    set(&rig, WEB, "2.0", 1).await;
+    let rig = crate::marks_support::rig("edge-install-aged", ONE_STAGE);
+    set_one_slot(&rig, WEB, "2.0", 1).await;
     assert_eq!(order_to(&rig, "d1", vec![]), Some(install("2.0", 1)));
     rig.at(2_119);
     assert_eq!(
@@ -93,12 +95,14 @@ async fn only_a_heartbeat_that_lists_every_service_ends_an_intent() {
     );
 }
 
-/// Catches: a host taken off a service while it ran an update of it holding the farm's slot for
-/// ever, its later beats ignored: once it reports the update ended, the next host is ordered.
+/// Catches: a host taken off a service while it ran an update of it holding the role's slot for
+/// ever, its later beats ignored: while it runs the update the next host of the role is held,
+/// and once it reports the update ended, that host is ordered (the daemons update one at a time
+/// here: `max_updating` of 1 and one stage).
 #[tokio::test]
 async fn a_host_taken_off_mid_update_frees_the_slot_when_the_update_ends() {
-    let rig = rig("edge-unassigned-mid-update", "");
-    set(&rig, WEB, "2.0", 1).await;
+    let rig = rig("edge-unassigned-mid-update", ONE_STAGE);
+    set_one_slot(&rig, WEB, "2.0", 1).await;
     assert_eq!(
         told(&rig, "d1", vec![runs(WEB, "1.0")]).0,
         update(WEB, "2.0")
@@ -106,23 +110,23 @@ async fn a_host_taken_off_mid_update_frees_the_slot_when_the_update_ends() {
     let mut running = runs(WEB, "1.0");
     running.updating = Some(version("2.0"));
     order_to(&rig, "d1", vec![running.clone()]);
-    unassign(&rig, WEB, "", "daemon", false).expect("taken off the daemons");
+    unassign(&rig, WEB, "d1", "", false).expect("taken off d1");
     order_to(&rig, "d1", vec![running]);
     let (_, order) = ask_typed(
         &rig,
-        "s1",
-        "storage",
+        "d2",
+        "daemon",
         beat_of(OLD_DAEMON, vec![runs(WEB, "1.0")]),
     );
     assert_eq!(order, None);
-    assert_eq!(why_of(&rig, WEB, "s1"), Some(Why::Gate(Gate::NoSlot)));
+    assert_eq!(why_of(&rig, WEB, "d2"), Some(Why::Gate(Gate::NoSlot)));
     let mut done = runs(WEB, "2.0");
     done.last_update = Some(UpdateResult::new(version("2.0"), Outcome::Succeeded));
     order_to(&rig, "d1", vec![done]);
     let (reply, _) = ask_typed(
         &rig,
-        "s1",
-        "storage",
+        "d2",
+        "daemon",
         beat_of(OLD_DAEMON, vec![runs(WEB, "1.0")]),
     );
     assert_eq!(reply, update(WEB, "2.0"));
@@ -163,11 +167,12 @@ async fn the_calls_know_the_hosts_and_roles_the_ops_file_names() {
 }
 
 /// Catches: an install order ended by a staged copy (a host that lists the service `absent` at
-/// the version it is installing), which would free the farm's slot before the install ran.
+/// the version it is installing), which would free the role's slot before the install ran (the
+/// daemons update one at a time here: `max_updating` of 1 and one stage).
 #[tokio::test]
 async fn an_absent_copy_at_the_target_does_not_end_the_install_order() {
-    let rig = rig("edge-install-staged", "");
-    set(&rig, WEB, "2.0", 1).await;
+    let rig = rig("edge-install-staged", ONE_STAGE);
+    set_one_slot(&rig, WEB, "2.0", 1).await;
     assert_eq!(order_to(&rig, "d1", vec![]), Some(install("2.0", 1)));
     assert_eq!(
         order_to(&rig, "d1", vec![absent(WEB, "2.0")]),

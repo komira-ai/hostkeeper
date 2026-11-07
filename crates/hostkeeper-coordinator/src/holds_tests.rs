@@ -18,14 +18,16 @@ use crate::decide::{Gate, Why};
 use crate::fleet::{Fleet, Marks, QUIET_START};
 use crate::holds::{HoldMark, HoldScope};
 use crate::marks_support::{
-    DB, INSTALLER, NEW_DAEMON, WEB, ask, ask_typed, beat_of, fleet_target, force_request, hold,
-    operator, restart, rig, runs, scope_fleet, scope_host, scope_role, services_with, set, unhold,
-    update, who,
+    DB, INSTALLER, NEW_DAEMON, WEB, ask, ask_typed, beat_of, digest, fleet_target, force_request,
+    hold, operator, restart, rig, runs, scope_fleet, scope_host, scope_role, services_with, set,
+    unhold, update, who,
 };
 use crate::ops::{OpsState, ServiceOps};
 use crate::orders::Order;
 use crate::reconcile::{Change, plan};
-use crate::testutil::{Log, OPERATOR, Rig, beat, desired, id, ops_of, role, secs, version};
+use crate::testutil::{
+    Log, OPERATOR, Rig, beat, ci_token, desired, id, ops_of, role, secs, version,
+};
 
 /// A daemon's heartbeat that lists `web` running `running`, healthy.
 fn web_at(running: &str) -> Heartbeat {
@@ -531,14 +533,31 @@ async fn a_held_pair_is_left_out_of_canary_bake_and_converged() {
 
 // ---- the slot ---------------------------------------------------------------------------
 
+/// The line of `web`'s definition that rolls it in one stage, so that the daemon role's
+/// `max_updating` alone decides who holds the slot.
+const ONE_STAGE: &str = "stages = [100]";
+
+/// Sets `web` to `version` as CI does, with the desired state's `max_updating` of the daemon
+/// role at 1: one daemon of the service holds an update slot at a time.
+async fn set_one_daemon_at_a_time(rig: &Rig, version: &str, n: u8) {
+    let body = format!(
+        r#"{{"service":"{WEB}","version":"{version}","release_digest":"{}","max_updating":{{"daemon":1}}}}"#,
+        digest(n)
+    );
+    rig.coordinator
+        .set_desired(Some(&ci_token()), body.as_bytes())
+        .await
+        .expect("set");
+}
+
 /// A held host that is unhealthy after a failed update would hold the one live update if it were
 /// not held; once held it does not, and another host is ordered.
 ///
 /// Catches: a held pair counted towards the live update when it only failed.
 #[tokio::test]
 async fn a_held_pair_takes_no_slot() {
-    let rig = rig("holds-no-slot", "");
-    set(&rig, WEB, "2.0", 2).await;
+    let rig = rig("holds-no-slot", ONE_STAGE);
+    set_one_daemon_at_a_time(&rig, "2.0", 2).await;
     let mut stuck = runs(WEB, "1.0");
     stuck.health = Health::Unhealthy;
     stuck.last_update = Some(UpdateResult::new(version("2.0"), Outcome::Failed));
@@ -572,8 +591,8 @@ async fn a_held_pair_takes_no_slot() {
 /// starts beside it.
 #[tokio::test]
 async fn a_held_pair_that_is_updating_holds_the_slot_until_it_stops() {
-    let rig = rig("holds-updating", "");
-    set(&rig, WEB, "2.0", 2).await;
+    let rig = rig("holds-updating", ONE_STAGE);
+    set_one_daemon_at_a_time(&rig, "2.0", 2).await;
     let mut running = runs(WEB, "1.0");
     running.updating = Some(version("2.0"));
     assert_eq!(
@@ -614,8 +633,8 @@ async fn a_held_pair_that_is_updating_holds_the_slot_until_it_stops() {
 /// Catches: a hold that frees the slot of an order just given, so two updates are live at once.
 #[tokio::test]
 async fn a_held_pair_with_an_order_outstanding_holds_the_slot_until_the_order_ends() {
-    let rig = rig("holds-ordered", "");
-    set(&rig, WEB, "2.0", 2).await;
+    let rig = rig("holds-ordered", ONE_STAGE);
+    set_one_daemon_at_a_time(&rig, "2.0", 2).await;
     assert_eq!(ask(&rig, "d1", "daemon", web_at("1.0")), update(WEB, "2.0"));
     hold(&rig, WEB, scope_host("d1")).expect("held");
     assert_eq!(

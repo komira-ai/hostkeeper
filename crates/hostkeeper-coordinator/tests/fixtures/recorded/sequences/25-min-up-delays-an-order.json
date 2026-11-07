@@ -1,5 +1,5 @@
 {
- "from": "kbf-coordinator/src/decide.rs (v0.0.64), first_hold: the desired state's min_up for storage was the number of other storage hosts that had to be up, and none was. This coordinator cut the rule, so the order is given; kbf's answer is in kbf_body (derived from the rules at the tag, not a kbf test)",
+ "from": "kbf-coordinator/src/decide.rs (v0.0.64), first_hold: the desired state's min_up for storage was the number of other storage hosts that had to be up, and none was, so nothing was ordered. This coordinator holds the order as kbf did (an update plan orders no host that would leave fewer of its role up than min_up: below_min_up); derived from the rules at the tag, not a kbf test",
  "steps": [
   {
    "at_secs": 2000,
@@ -15,8 +15,7 @@
    "role": "storage",
    "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
    "expect_status": 200,
-   "expect_body": "{\"reply\":\"update\",\"version\":\"2.0\"}",
-   "kbf_body": "{\"reply\":\"nothing\"}"
+   "expect_body": "{\"reply\":\"nothing\"}"
   }
  ]
 }

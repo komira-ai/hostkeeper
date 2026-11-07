@@ -1,0 +1,209 @@
+// hostkeeper.operator.v1: the `Rollouts` service of the operator API, its refusals
+// (`RolloutsRefusal`), and the update plan of a service (`RolloutPlan`) that it and
+// `Releases.Status` answer: the stages a service rolls out by, where the plan stands, and why it
+// waits. The rest of the package, `Enrollment` and `EnrollmentRefusal` (enrollment.proto) and
+// `Audit` and `AuditRefusal` among it, is operator.proto, which imports this file publicly; this
+// file is the same package and API, kept apart so that each file stays short.
+//
+// Served by: the coordinator, on its control listener, as operator.proto says.
+//
+// Authentication: `Rollouts` takes the operator token only; no CI token reaches it (see
+// operator.proto).
+//
+// Refusals: a gRPC status whose message is exactly one token of `RolloutsRefusal`, written as
+// the value's name without the prefix, in lower case; the status code is the one each value
+// names. A refused request changes nothing.
+//
+// Units: as operator.proto says. A stage is numbered from 1; a percent is 1 to 100.
+//
+// Extending: as operator.proto says: add fields, messages, enum values and RPCs; never renumber,
+// rename, retype or remove one, and never reuse a number.
+syntax = "proto3";
+
+package hostkeeper.operator.v1;
+
+import "hostkeeper/operator/v1/entry.proto";
+
+// The update plans of the services: an operator moves a plan on, pauses it and resumes it. Each
+// call is an audit entry under the operator token's name.
+service Rollouts {
+  // Enter the next stage of a plan that waits for an operator (`advance = "manual"`): its done
+  // stage, or none yet for a manual first stage.
+  rpc Advance(AdvanceRequest) returns (AdvanceResponse);
+  // Pause a plan: no host that has not started is ordered; the updates already ordered or
+  // running finish and bake. The pause stands across a new desired version, until `Resume`.
+  rpc Pause(PauseRequest) returns (PauseResponse);
+  // Resume a paused plan from where it stands.
+  rpc Resume(ResumeRequest) returns (ResumeResponse);
+}
+
+// Why `Rollouts` refused a request. The token is the value's name without the prefix, in lower
+// case.
+enum RolloutsRefusal {
+  ROLLOUTS_REFUSAL_UNSPECIFIED = 0;
+  // UNAUTHENTICATED: no bearer, or not the operator token.
+  ROLLOUTS_REFUSAL_UNAUTHORIZED = 1;
+  // PERMISSION_DENIED: the bearer is a valid CI token, which `Rollouts` does not take.
+  ROLLOUTS_REFUSAL_FORBIDDEN = 2;
+  // INVALID_ARGUMENT: a field breaks its rule (the reason is missing, too long or has a control
+  // character).
+  ROLLOUTS_REFUSAL_INVALID_REQUEST = 3;
+  // NOT_FOUND: the service is not one the coordinator manages.
+  ROLLOUTS_REFUSAL_UNKNOWN_SERVICE = 4;
+  // FAILED_PRECONDITION: `Advance` of a service with no desired version.
+  ROLLOUTS_REFUSAL_NO_DESIRED = 5;
+  // FAILED_PRECONDITION: `Advance` of a plan that does not wait for an operator: its stage is not
+  // done, the next stage enters by itself, every stage is entered, the plan is paused, the
+  // service is halted or its desired version is bad, or the coordinator is within its quiet start.
+  ROLLOUTS_REFUSAL_NOT_WAITING = 6;
+  // FAILED_PRECONDITION: `Pause` of a plan that is paused.
+  ROLLOUTS_REFUSAL_ALREADY_PAUSED = 7;
+  // FAILED_PRECONDITION: `Resume` of a plan that is not paused.
+  ROLLOUTS_REFUSAL_NOT_PAUSED = 8;
+  // INTERNAL: the change could not be written; nothing changed, and asking again is safe.
+  ROLLOUTS_REFUSAL_STORE_FAILED = 9;
+  // UNAVAILABLE: the change's line could not be appended to the audit file (a full disk); nothing
+  // changed, and asking again is safe once the file takes lines again. A `Pause` stands without
+  // its line.
+  ROLLOUTS_REFUSAL_AUDIT_UNAVAILABLE = 10;
+}
+
+message AdvanceRequest {
+  // The service.
+  string service = 1;
+  // Why; 1 to 256 bytes.
+  string reason = 2;
+}
+
+message AdvanceResponse {
+  AuditEntry entry = 1;
+  // The plan after the advance.
+  RolloutPlan plan = 2;
+}
+
+message PauseRequest {
+  // The service.
+  string service = 1;
+  // Why; 1 to 256 bytes.
+  string reason = 2;
+}
+
+message PauseResponse {
+  AuditEntry entry = 1;
+  // The plan after the pause; absent when the service has no desired version.
+  RolloutPlan plan = 2;
+}
+
+message ResumeRequest {
+  // The service.
+  string service = 1;
+  // Why; 1 to 256 bytes.
+  string reason = 2;
+}
+
+message ResumeResponse {
+  AuditEntry entry = 1;
+  // The plan after the resume; absent when the service has no desired version.
+  RolloutPlan plan = 2;
+}
+
+// The update plan of a service for its desired version, over the hosts eligible now (live,
+// assigned, neither excluded nor held, not ordered by a standing force, and orderable).
+message RolloutPlan {
+  // The desired version the plan rolls.
+  string version = 1;
+  // The stages over the eligible hosts, after the ones of the same size are collapsed.
+  repeated PlanStage stages = 2;
+  // The stage the plan is in, from 1; 0 before a manual first stage is entered.
+  uint32 current = 3;
+  // How many hosts are eligible.
+  uint32 eligible = 4;
+  // Why no new host is ordered now; NONE when the plan has a free place to order, or nothing is
+  // left to roll.
+  PlanWait waiting = 5;
+  // Whether an operator paused the plan.
+  bool paused = 6;
+  // Who paused it, by the name of their token.
+  optional string paused_by = 7;
+  // Why it was paused.
+  optional string pause_reason = 8;
+  // Every eligible host has rolled: it runs the desired version and has baked.
+  bool finished = 9;
+}
+
+// One stage of a plan.
+message PlanStage {
+  // Its number, from 1.
+  uint32 number = 1;
+  // The percent of the eligible hosts it rolls to, the stages before included; absent for the
+  // canary (`canary = { count = n }`), which is a number of hosts.
+  optional uint32 percent = 2;
+  // How many hosts run the desired version once it is done, the stages before included.
+  uint32 hosts = 3;
+  // How the plan enters it.
+  StageAdvance advance = 4;
+  // The hosts it takes: the hosts that started fill the stages in order, the done ones first;
+  // the rest follow by node id.
+  repeated PlanHost members = 5;
+}
+
+// One host of a plan.
+message PlanHost {
+  string node_id = 1;
+  string role = 2;
+  PlanHostState state = 3;
+  // It declined the update and its wait is not over: the stage takes the next host.
+  bool deferring = 4;
+}
+
+// How a plan enters a stage.
+enum StageAdvance {
+  STAGE_ADVANCE_UNSPECIFIED = 0;
+  // By itself, once the stage before is done.
+  STAGE_ADVANCE_AUTO = 1;
+  // By an operator's `Rollouts.Advance`, once the stage before is done.
+  STAGE_ADVANCE_MANUAL = 2;
+}
+
+// Where a host stands in a plan.
+enum PlanHostState {
+  PLAN_HOST_STATE_UNSPECIFIED = 0;
+  // It has not started.
+  PLAN_HOST_STATE_WAITING = 1;
+  // It is ordered or updating, or runs the version and is not up.
+  PLAN_HOST_STATE_UPDATING = 2;
+  // It runs the version, up, and is still baking.
+  PLAN_HOST_STATE_BAKING = 3;
+  // It runs the version, up, and has baked.
+  PLAN_HOST_STATE_DONE = 4;
+  // It failed an update or install to the version.
+  PLAN_HOST_STATE_FAILED = 5;
+}
+
+// Why a plan orders no new host now. A value is never removed.
+enum PlanWait {
+  PLAN_WAIT_UNSPECIFIED = 0;
+  // Nothing: it has a free place to order, or nothing is left to roll.
+  PLAN_WAIT_NONE = 1;
+  // The service is halted, or its desired version is marked bad.
+  PLAN_WAIT_HALTED = 2;
+  // An operator paused the plan.
+  PLAN_WAIT_PAUSED = 3;
+  // The coordinator is within its quiet start after a restart.
+  PLAN_WAIT_QUIET = 4;
+  // Other services' rollouts are live, as many as the coordinator's `--live-rollouts` lets be.
+  PLAN_WAIT_ROLLOUT_ELSEWHERE = 5;
+  // The current stage is done (or none is entered yet) and the next waits for `Rollouts.Advance`.
+  PLAN_WAIT_MANUAL_ADVANCE = 6;
+  // A host of the current stage failed the version; the next stage waits until it is held,
+  // excluded, or another version is set.
+  PLAN_WAIT_FAILED_HOST = 7;
+  // Ordering the next host of the stage would leave fewer hosts of its role up than `min_up`.
+  PLAN_WAIT_BELOW_MIN_UP = 8;
+  // Hosts of the current stage are ordered or updating.
+  PLAN_WAIT_UPDATING = 9;
+  // The hosts left to order in the current stage declined the update and wait.
+  PLAN_WAIT_DEFERRING = 10;
+  // The hosts of the current stage run the version, and some are still baking.
+  PLAN_WAIT_BAKING = 11;
+}

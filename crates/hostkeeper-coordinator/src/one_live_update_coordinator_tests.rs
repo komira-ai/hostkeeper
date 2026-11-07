@@ -1,8 +1,8 @@
-//! One live update at a time (`decide.rs`, rule 7) through a real [`crate::service::Coordinator`]:
-//! a host that leaves a service mid-update still holds the slot, a halted service's holder
-//! holds it, a restart resumes the rule from what the hosts report in the quiet start, and two
-//! heartbeats that race for the one slot get one order between them. Every time is explicit;
-//! nothing sleeps.
+//! One rollout live at a time across services (`stages.rs`, `elsewhere`) through a real
+//! [`crate::service::Coordinator`]: a host that leaves a service mid-update still holds its
+//! rollout live, a halted service's holder holds it, a restart resumes the rule from what the
+//! hosts report in the quiet start, and two heartbeats of two services that race for the one
+//! live rollout get one order between them. Every time is explicit; nothing sleeps.
 
 use std::sync::Barrier;
 
@@ -120,8 +120,8 @@ async fn leaving_mid_update(name: &str, leave: impl Fn(&Rig), during: &[Value]) 
 
 /// Behaviour: `d1` is updating `other` when it leaves the service: excluded by the operator,
 /// moved out of the selector's zone, or no longer announcing `other`. `second` on `d2` is held
-/// (`no_slot`) through each, and is ordered once `d1`'s beats show `other` done at 3.0. Catches
-/// a membership change forgetting a slot that an update still holds.
+/// (`rollout_elsewhere`) through each, and is ordered once `d1`'s beats show `other` done at
+/// 3.0. Catches a membership change forgetting a slot that an update still holds.
 #[tokio::test]
 async fn a_host_that_leaves_a_service_mid_update_still_holds_the_slot() {
     let exclude = |rig: &Rig| {
@@ -150,7 +150,7 @@ async fn a_host_that_leaves_a_service_mid_update_still_holds_the_slot() {
         );
         assert_eq!(
             hold(&rig, "second", "d2"),
-            Some(Why::Gate(Gate::NoSlot)),
+            Some(Why::Gate(Gate::RolloutElsewhere)),
             "{case}"
         );
         send(&rig, 2_030, "d1", &during);
