@@ -1,8 +1,10 @@
 //! The program itself: its argument handling, exit codes and the random source.
 
+use std::path::Path;
 use std::process::Command;
 
 use hostkeeper_mdm::system_random;
+use hostkeeper_testkit::Scratch;
 
 fn hostkeeper_mdm(args: &[&str]) -> (Option<i32>, String, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_hostkeeper-mdm"))
@@ -41,4 +43,47 @@ fn the_system_random_source_fills_the_buffer_with_fresh_bytes() {
     system_random(&mut b).unwrap();
     assert_ne!(a, [0u8; 32]);
     assert_ne!(a, b);
+}
+
+/// Catches `--version` not reaching the parser or going to stderr: it prints the program's name
+/// and the crate's version on stdout and exits 0.
+#[test]
+fn the_program_prints_its_version() {
+    let (code, out, err) = hostkeeper_mdm(&["--version"]);
+    assert_eq!(code, Some(0));
+    assert_eq!(
+        out,
+        format!("hostkeeper-mdm {}\n", env!("CARGO_PKG_VERSION"))
+    );
+    assert_eq!(err, "");
+}
+
+/// Catches an unknown verb that is run, ignored or answered with exit 1: the parser refuses it
+/// with exit 2, says so on stderr and prints nothing on stdout.
+#[test]
+fn an_unknown_verb_exits_2() {
+    let (code, out, err) = hostkeeper_mdm(&["frobnicate"]);
+    assert_eq!((code, out.as_str()), (Some(2), ""));
+    assert!(
+        err.starts_with("error: unrecognized subcommand 'frobnicate'"),
+        "{err}"
+    );
+}
+
+/// Catches a settings file that is not there passing as a plan, or a main that turns the refusal
+/// into exit 1: install reads the file before it looks at who runs it, so whoever runs the test
+/// (root or not) gets exit 2 and the one REFUSED line, and nothing is printed or changed.
+#[test]
+fn install_with_a_settings_file_that_is_not_there_is_refused() {
+    let dir = Scratch::under(
+        Path::new(env!("CARGO_TARGET_TMPDIR")),
+        "hostkeeper-mdm-main",
+    )
+    .unwrap();
+    let settings = dir.path().join("settings");
+    let (settings, bin) = (settings.to_str().unwrap(), dir.path().to_str().unwrap());
+    let (code, out, err) = hostkeeper_mdm(&["install", "--settings", settings, "--bin-dir", bin]);
+    assert_eq!((code, out.as_str()), (Some(2), ""));
+    assert_eq!(err, format!("REFUSED: {settings} is not there\n"));
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
 }

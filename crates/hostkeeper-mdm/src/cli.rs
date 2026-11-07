@@ -1,4 +1,7 @@
 //! The command line: parsing, dispatch and the exit code.
+//!
+//! `verify` reads the ACME settings only when the settings file sets at least one `MDM_ACME_`
+//! key; it then needs all five to parse, and refuses (exit 2) when they do not.
 
 use std::io::Write;
 
@@ -92,6 +95,17 @@ fn read_settings(host: &dyn Host, path: &str) -> Result<String, MdmError> {
         .read(path)?
         .ok_or_else(|| MdmError::NoFile(path.to_owned()))?;
     Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// The ACME settings in `text`, a settings file `MdmConfig::parse` accepted: none when it sets
+/// no `MDM_ACME_` key, otherwise all of them, and a key that is missing, empty or malformed is
+/// an error. (Every line of an accepted file is a comment, blank, or `KEY=VALUE` of a known key,
+/// so a line that starts with the prefix sets an ACME key.)
+fn acme_settings(text: &str) -> Result<Option<Acme>, MdmError> {
+    match text.lines().any(|l| l.starts_with("MDM_ACME_")) {
+        true => Ok(Some(Acme::parse(text)?)),
+        false => Ok(None),
+    }
 }
 
 /// The grant of the state directory to the service user, when the user exists: the state is
@@ -231,7 +245,7 @@ fn dispatch(
         Verb::Verify { settings, ignore } => {
             let text = read_settings(base.as_ref(), &settings)?;
             let config = MdmConfig::parse(&text)?;
-            let acme = Acme::parse(&text).ok();
+            let acme = acme_settings(&text)?;
             let host = system.machine.host(&state_grant(base.as_ref(), &config)?);
             let v = Verify {
                 config: &config,
