@@ -346,6 +346,36 @@ impl Host for RealHost {
         }
     }
 
+    fn list(&self, path: &str) -> io::Result<Option<Vec<String>>> {
+        let Some((dir, name)) = found(self.parent(path, false, None))? else {
+            return Ok(None);
+        };
+        let flags = OFlags::DIRECTORY | OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+        let opened = openat(&dir, &name, flags, FileMode::empty()).map_err(|e| match e {
+            Errno::LOOP | Errno::NOTDIR => refused_at(
+                path,
+                &format!("{name} is a symbolic link or not a directory; give the real path"),
+            ),
+            other => io::Error::from(other),
+        });
+        let Some(fd) = found(opened)? else {
+            return Ok(None);
+        };
+        let mut names = Vec::new();
+        for entry in rustix::fs::Dir::read_from(&fd)? {
+            let entry = entry?;
+            let bytes = entry.file_name().to_bytes();
+            if bytes == b"." || bytes == b".." {
+                continue;
+            }
+            let name = std::str::from_utf8(bytes)
+                .map_err(|_| refused_at(path, "a name in it is not UTF-8"))?;
+            names.push(name.to_owned());
+        }
+        names.sort();
+        Ok(Some(names))
+    }
+
     fn write(&self, path: &str, mode: u32, owner: (u32, u32), bytes: &[u8]) -> io::Result<()> {
         let (dir, name) = self.parent(path, false, Some(owner.0))?;
         let (file, temp) = create_temp(&dir, path, temp_names(&name))?;

@@ -259,6 +259,27 @@ impl Host for FakeHost {
         }
     }
 
+    fn list(&self, path: &str) -> io::Result<Option<Vec<String>>> {
+        if self.state.borrow().unreadable.iter().any(|p| p == path) {
+            return Err(io::Error::from(io::ErrorKind::PermissionDenied));
+        }
+        match self.node(path).map(|n| n.kind) {
+            None => return Ok(None),
+            Some(Kind::Dir) => {}
+            Some(_) => return Err(io::Error::other("fake host: not a directory")),
+        }
+        let prefix = format!("{path}/");
+        let state = self.state.borrow();
+        let names = state
+            .nodes
+            .keys()
+            .filter_map(|k| k.strip_prefix(&prefix))
+            .filter(|rest| !rest.contains('/'))
+            .map(str::to_owned)
+            .collect();
+        Ok(Some(names))
+    }
+
     fn write(&self, path: &str, mode: u32, owner: (u32, u32), bytes: &[u8]) -> io::Result<()> {
         self.put_file(path, mode, owner, bytes);
         Ok(())

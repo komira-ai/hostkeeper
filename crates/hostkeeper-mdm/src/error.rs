@@ -8,7 +8,10 @@ use hostkeeper_mdm_core::template::TemplateError;
 use hostkeeper_mdm_step::{ExecError, PlanError};
 
 use crate::archive::ArchiveError;
+use crate::dep::DepError;
+use crate::migrate::MoveError;
 use crate::net::DownloadError;
+use crate::push_cert::PushCertError;
 
 /// Why a verb refused (exit 2: fix the input or the host) or failed (exit 1: a step, a
 /// download or a check did not work).
@@ -248,6 +251,36 @@ pub enum MdmError {
     /// The certificate file is not one openssl reads.
     #[error("{0} is there and is not a PEM certificate")]
     NotCertificate(String),
+    /// A call to a service's API on loopback did not complete, or was not answered 2xx.
+    #[error("{call}: {why}")]
+    Api {
+        /// The call, as its plan line shows it (no body, no key).
+        call: String,
+        /// Why it failed: the transport's error, or the status and the start of the answer.
+        why: String,
+    },
+    /// A file the operator names (a key, a token, a certificate) is inside a git work tree.
+    #[error(
+        "{path} is inside a git work tree ({git} exists): keep keys, tokens and certificates outside every repository"
+    )]
+    FileInGitTree {
+        /// The file.
+        path: String,
+        /// The `.git` found.
+        git: String,
+    },
+    /// `migrate`'s settings, old or new, were refused.
+    #[error(transparent)]
+    Settings(#[from] hostkeeper_mdm_core::migrate::MigrateError),
+    /// `push-cert` refused or failed.
+    #[error(transparent)]
+    PushCert(#[from] PushCertError),
+    /// `dep` refused or failed.
+    #[error(transparent)]
+    Dep(#[from] DepError),
+    /// `migrate` refused or failed.
+    #[error(transparent)]
+    Move(#[from] MoveError),
     /// The certificate file that is already there is not one openssl reads; nothing was changed.
     #[error(
         "{0} is there and openssl cannot read it as a PEM certificate: move it aside, and run tls again"
@@ -267,7 +300,11 @@ impl MdmError {
             | MdmError::Download { .. }
             | MdmError::Command { .. }
             | MdmError::NoCertificate(_)
-            | MdmError::NotCertificate(_) => 1,
+            | MdmError::NotCertificate(_)
+            | MdmError::Api { .. } => 1,
+            MdmError::PushCert(e) => e.exit_code(),
+            MdmError::Dep(e) => e.exit_code(),
+            MdmError::Move(e) => e.exit_code(),
             _ => 2,
         }
     }

@@ -13,7 +13,8 @@ use std::net::Ipv4Addr;
 
 use flate2::Compression;
 use flate2::write::{DeflateEncoder, GzEncoder};
-use hostkeeper_mdm::{Download, DownloadError, Env, Grant, Machine, System};
+use hostkeeper_mdm::api::{Answer, Api, Call, Method};
+use hostkeeper_mdm::{Download, DownloadError, Env, Grant, Loopback, Machine, System};
 use hostkeeper_mdm_core::acme::Acme;
 use hostkeeper_mdm_core::config::MdmConfig;
 use hostkeeper_mdm_core::pins::{Packing, Pins, Tool};
@@ -275,13 +276,100 @@ pub fn fill(buf: &mut [u8]) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Runs `f` with an [`Env`] over `host` and `net`.
+/// One call a [`FakeApi`] received: the service, its port, the Basic authentication user and
+/// key, and the call.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Sent {
+    pub service: &'static str,
+    pub port: u16,
+    pub user: &'static str,
+    pub key: String,
+    pub call: Call,
+}
+
+/// A reply a [`FakeApi`] gives: the method and path it answers, and the answer.
+type Reply = (Method, String, Result<Answer, String>);
+
+/// The services' APIs in memory: each call is recorded, then answered by the first reply
+/// registered for its method and path (the path compared whole, query included); a call with
+/// no reply fails as a call that did not complete.
+#[derive(Default)]
+pub struct FakeApi {
+    replies: RefCell<Vec<Reply>>,
+    sent: RefCell<Vec<Sent>>,
+}
+
+impl FakeApi {
+    pub fn new() -> FakeApi {
+        FakeApi::default()
+    }
+
+    /// Answers `method path` with `status` and `body`.
+    pub fn reply(&self, method: Method, path: &str, status: u16, body: &[u8]) {
+        let answer = Answer {
+            status,
+            body: body.to_vec(),
+        };
+        self.replies
+            .borrow_mut()
+            .push((method, path.to_owned(), Ok(answer)));
+    }
+
+    /// Makes `method path` fail to complete with `why`.
+    pub fn fail(&self, method: Method, path: &str, why: &str) {
+        self.replies
+            .borrow_mut()
+            .push((method, path.to_owned(), Err(why.to_owned())));
+    }
+
+    /// Every call received, in order.
+    pub fn sent(&self) -> Vec<Sent> {
+        self.sent.borrow().clone()
+    }
+}
+
+impl Loopback for FakeApi {
+    fn send(&self, api: &Api, call: &Call) -> Result<Answer, String> {
+        self.sent.borrow_mut().push(Sent {
+            service: api.name,
+            port: api.port,
+            user: api.user,
+            key: api.key.expose().to_owned(),
+            call: call.clone(),
+        });
+        let replies = self.replies.borrow();
+        let found = replies
+            .iter()
+            .find(|(m, p, _)| *m == call.method && *p == call.path);
+        match found {
+            Some((_, _, answer)) => answer.clone(),
+            None => Err(format!(
+                "fake api: no reply for {} {}",
+                call.method, call.path
+            )),
+        }
+    }
+}
+
+/// Runs `f` with an [`Env`] over `host` and `net`, and APIs that answer nothing.
 pub fn with_env<T>(host: &FakeHost, net: &FakeNet, f: impl FnOnce(&Env<'_>) -> T) -> T {
+    with_env_api(host, net, &FakeApi::new(), 1_700_000_000, f)
+}
+
+/// Runs `f` with an [`Env`] over `host`, `net` and `api`, at the injected time `now`.
+pub fn with_env_api<T>(
+    host: &FakeHost,
+    net: &FakeNet,
+    api: &FakeApi,
+    now: u64,
+    f: impl FnOnce(&Env<'_>) -> T,
+) -> T {
     let env = Env {
         host,
         net,
+        api,
         random: &fill,
-        now: 1_700_000_000,
+        now,
     };
     f(&env)
 }
@@ -353,6 +441,9 @@ impl Host for Shared<'_> {
     fn read_limited(&self, path: &str, limit: u64) -> std::io::Result<Option<Vec<u8>>> {
         self.0.read_limited(path, limit)
     }
+    fn list(&self, path: &str) -> std::io::Result<Option<Vec<String>>> {
+        self.0.list(path)
+    }
     fn write(&self, path: &str, mode: u32, owner: (u32, u32), bytes: &[u8]) -> std::io::Result<()> {
         self.0.write(path, mode, owner, bytes)
     }
@@ -393,15 +484,26 @@ impl Machine for FakeMachine<'_> {
     }
 }
 
-/// Runs `f` with a [`System`] over `machine` and `net`.
+/// Runs `f` with a [`System`] over `machine` and `net`, and APIs that answer nothing.
 pub fn with_system<T>(
     machine: &FakeMachine<'_>,
     net: &FakeNet,
     f: impl FnOnce(&System<'_>) -> T,
 ) -> T {
+    with_system_api(machine, net, &FakeApi::new(), f)
+}
+
+/// Runs `f` with a [`System`] over `machine`, `net` and `api`.
+pub fn with_system_api<T>(
+    machine: &FakeMachine<'_>,
+    net: &FakeNet,
+    api: &FakeApi,
+    f: impl FnOnce(&System<'_>) -> T,
+) -> T {
     let system = System {
         machine,
         net,
+        api,
         random: &fill,
         now: 1_700_000_000,
     };

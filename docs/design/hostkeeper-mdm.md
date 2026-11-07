@@ -87,7 +87,7 @@ M14).
 | Enrolled Macs | None. NanoHUB's log has no `/mdm` check-in, and the farm's Macs report no DEP and no MDM enrollment. |
 | Policy gate | **Built**, the device side (task M8): `crates/hostkeeper-mdm-gate`, linked into the coordinator with `--mdm-api-url` (section 6.1). **Built**, the enrollment side's config profile and nonce (task M12): `crates/hostkeeper-mdm-gate/src/enroll.rs` and `profile.rs`, with `--mdm-profile-identifier` and `--mdm-daemon-config` (sections 4 and 5). **Not built**: the pkg (M14). It runs on no host yet. kbf has one (`kbf-mdm`, binary `kbf-mdm-gate`) that was never deployed. Its server speaks JSON over HTTP while the kbf server's client calls it as gRPC, so the two cannot talk. It also has no eligibility check. |
 | Coordinator side | **Built**: the nonce store (32 bytes, one hour, one use, consumed in the approval's own write), the serial allowlist, the `DeviceState` port and its nine decline tokens, the nonce's binding to its request, the replacement of a wiped Mac's own host id, and the allowlist entry's services assigned at a nonce approval (task M9; `crates/hostkeeper-coordinator/src/enrollment/`, `crates/hostkeeper-enrollment/src/enroll/mac_nonce.rs`). With `--mdm-api-url` the `DeviceState` is the gate's (`crates/hostkeeper-coordinator/src/mdm.rs`); without it, `NoDeviceState`. The gate issues and pushes nonces (task M12), through `hostkeeper_mdm_gate::Enrollments` (`crates/hostkeeper-coordinator/src/enrollment/gate_port.rs`), and the daemon posts it back (M13). |
-| MDM kit | **Built**: its pure core, `crates/hostkeeper-mdm-core` (task M2): the settings, the enrollment and ADE profiles, the units and Caddyfile of the stack, the pins, under hostkeeper's names and with M2's fixes of komira-ai/kbf#2248. Its host-step layer is `crates/hostkeeper-mdm-step` (task M3). Its binary, `crates/hostkeeper-mdm` (task M4), has the verbs `fetch`, `install`, `tls` and `verify`, with M4's fixes of komira-ai/kbf#2248. **Not built**: the verbs `push-cert`, `dep` and `migrate` and the enrollment profile at `/enroll` (M5), so the stack installs but enrolls no Mac yet. |
+| MDM kit | **Built**: its pure core, `crates/hostkeeper-mdm-core` (task M2): the settings, the enrollment and ADE profiles, the units and Caddyfile of the stack, the pins, under hostkeeper's names and with M2's fixes of komira-ai/kbf#2248. Its host-step layer is `crates/hostkeeper-mdm-step` (task M3). Its binary, `crates/hostkeeper-mdm` (task M4), has the verbs `fetch`, `install`, `tls` and `verify`, with M4's fixes of komira-ai/kbf#2248, and (task M5) `push-cert` with the enrollment profile at `/enroll`, `dep` (`get-cert`, `upload-token`, `define-profile`, `assign`), `migrate --from`, and the pkg directory and its `/pkg/<sha256>.pkg` route. The live stack is still the old kit's until `migrate --apply` runs on the MDM host (task M7). |
 | Daemon side | **Built**: the launchd daemon, the claims of serial and platform UUID, the pkg with its postinstall of the seed, `mac-config` and the load of the job (`docs/macos.md`), and the pkg writes the config (**Built**: `crates/hostkeeper-daemon/src/mac_config.rs`, `crates/hostkeeper-launchd/src/postinstall.rs`). The enroller reads the nonce from the managed preferences and posts it once for its own request (**Built**, task M13: `crates/hostkeeper-enroll/src/managed.rs`, `crates/hostkeeper-enroll/src/enroller.rs`). |
 | Pkg signature | None. The pkg is attested, and the binary in it carries the linker's ad-hoc code signature (`crates/xtask/src/release/macos_pkg.rs`). |
 
@@ -433,7 +433,7 @@ Two routes give management without a wipe.
   to 10 runs a day per device.
 - **B2: the Mac is not in ABM.** It is not added without a wipe, because Apple Configurator adds a
   Mac only at Setup Assistant. The Mac enrolls by the profile instead: the operator downloads the
-  enrollment profile from the MDM host (the kit serves it at `/enroll`, to build in M5), opens it, and approves it
+  enrollment profile from the MDM host (the kit serves it at `/enroll`; **Built**: `hostkeeper-mdm push-cert` writes it), opens it, and approves it
   in System Settings. That is a person at the Mac, or screen sharing, because Apple documents no
   scripted approval. Apple's supervision page says a Mac on macOS 11 or later enrolled by
   profile-based Device Enrollment and approved by a local administrator is supervised too. The
@@ -481,7 +481,9 @@ manifest has one item:
 
 - `assets`: one `software-package` asset;
 - its `url`: `https://<MDM host>/pkg/<sha256>.pkg`, served by the kit's proxy from the gate's pkg
-  directory;
+  directory (**Built**, task M5: the directory is the kit's setting `MDM_PKG_DIR`, root's and
+  mode 0755, `/var/lib/<unit prefix>-pkg` by default; the route answers only a name of 64
+  lower-case hex digits and `.pkg`, and every other path under `/pkg/` is 404);
 - the hash: the single whole-file `sha256` key, the pkg's digest. Apple's schema
   (`other/manifesturl.yaml`) calls it "The SHA-256 hash value the device uses when verifying the
   hash of the manifest item data", and the device then ignores the chunked keys;
@@ -632,7 +634,7 @@ CA, the ADE profile, the unit and path names. The order:
    gate, `kbf-mdm`, is not ported. It was never deployed, its two ends do not agree on a protocol,
    and its OS-update and erase verbs are not v1 work. The design takes only its lessons: the
    loopback-only NanoHUB URL, the trusted-file checks, and profiles by allowlisted digest.
-   **Built** for M2 to M4: `crates/hostkeeper-mdm-core` and `crates/hostkeeper-mdm`, recorded in
+   **Built** for M2 to M5: `crates/hostkeeper-mdm-core` and `crates/hostkeeper-mdm`, recorded in
    `MIGRATION.md`, and `crates/hostkeeper-mdm-step`.
 2. **Rename to hostkeeper names.**
    - user `hostkeeper-mdm`;
@@ -657,9 +659,31 @@ CA, the ADE profile, the unit and path names. The order:
    is stopping the new units and starting the old ones. Carrying the depserver's key pair means
    ABM needs no new token. If the copy cannot be made, the operator downloads the token from ABM
    again, which is a step only the owner of the ABM account can take.
+
+   **Built** (`crates/hostkeeper-mdm/src/migrate.rs`, `crates/hostkeeper-mdm-core/src/migrate.rs`),
+   checked by a dry run against the live stack's layout:
+   - The old file is read with the old kits' keys, kbf-deploy's `MDM_ERASE_NAMESPACE` included;
+     its unit prefix is its `MDM_UNIT_PREFIX`, else kbf-deploy's `kbf-mdm`. The new settings keep
+     the site's values (name, addresses, ports, caps, organisation, texts, ACME) and
+     `MDM_DEP_NAME`, take the new kit's user, directories and prefix and the given
+     `--profile-id`, drop the erase path's keys, and must pass the new kit's own parsers. A
+     kbf-deploy file has no `MDM_ACME_RESOLVERS` or `MDM_ACME_PROPAGATION_WAIT`;
+     `--acme-resolvers` and `--acme-propagation-wait` give them.
+   - The push certificate is copied as NanoHUB's file storage holds it (the tree
+     `nanohub/mdm/push_cert`, whatever its layout) with the `push-topic` and `push-cert.sha256`
+     records; the ABM token and key pair are NanoDEP's files named `*.<MDM_DEP_NAME>`. The old
+     `dns.env` is copied too, because `tls` needs the DNS provider's key. A target that is there
+     is kept, never overwritten.
+   - The steps run in this order: the new kit's files (`install`'s plan up to its first systemctl
+     step, the fresh SCEP CA included), the new settings, the copies, the old units stopped and
+     disabled (those enabled or active; their unit files stay), then the new services started. A
+     run that fails before the stop leaves the old stack running.
+   - It prints the back-out and the next steps: `tls`, `push-cert --profile-only` (the enrollment
+     profile, with the new SCEP challenge), `verify`, `dep define-profile`.
 4. **Run it on the MDM host.** This is a held step, which only the owner of the MDM host runs
    (task M7). First the read-only check of
-   the live state. Then `migrate --apply`. Then `verify`. Then `dep define-profile`, which defines
+   the live state. Then `migrate --apply`. Then `tls --apply` and `push-cert --profile-only
+   --apply`. Then `verify`. Then `dep define-profile`, which defines
    the ADE profile and enables `depsyncer`. ABM's own name for the server is a label, and can be
    renamed in ABM at any time.
 5. **Freeze the old copies (tasks M6a, M6b).**
@@ -823,7 +847,7 @@ pull request.
 | M2 | `hostkeeper-mdm-core`: port of `mdm-core`, pure, hostkeeper names. Fixes from komira-ai/kbf#2248: the three loopback ports checked together; checked constructors and read-only accessors for `MdmConfig` and `Cidr`; DNS label and name length limits; authorities with whitespace, queries and fragments. ADE profile with `auto_advance_setup` true. **Built**: `crates/hostkeeper-mdm-core` | M1 | M |
 | M3 | `hostkeeper-mdm-step`: port of `host-step`. Fixes: the path's trusted owners include the operator's and the service's (a filesystem-backed test); a unique temporary name per writer; an existing account that resolves to uid 0 refused; whole-output redaction tests. **Built**: `crates/hostkeeper-mdm-step`; the owners are granted per directory with `RealHost::trust_below`, which M4 calls for `--bin-dir` and the state directory | M1 | M |
 | M4 | `hostkeeper-mdm` binary, verbs `fetch`, `install`, `tls`, `verify`: port of `mdm-host`. Fixes: restarts planned from the installed state, not only this run's changes; malformed ACME settings refused, not skipped; `lego --help` exit status checked; archive limits exact and safe at `u64::MAX`; environment files read by systemd's rules; a typed error for `Tool::named`. The test gaps of komira-ai/kbf#2248 as tests: download redirects (HTTPS to HTTP, cycles, exhaustion), bodies of exactly the limit, chunked and interrupted bodies; TLS with a directory or link at the certificate path, a malformed certificate, a missing or mismatched key, renewal and the proxy reload; install with a damaged SCEP depot, failures part-way through a plan and the retry, uninstall during the certificate or reload job, two uninstall snapshots in one second, an unsupported architecture refused first; whole-output redaction. **Built**: `crates/hostkeeper-mdm` | M2, M3 | L |
-| M5 | Verbs `push-cert`, `dep` (`get-cert`, `upload-token`, `define-profile`, `assign`), the enrollment profile at `/enroll` (mode 0640, the service group's), the pkg directory and `/pkg/` route in the proxy, and `migrate --from` (section 8), from kbf-deploy's `mdm` | M4 | M |
+| M5 | Verbs `push-cert`, `dep` (`get-cert`, `upload-token`, `define-profile`, `assign`), the enrollment profile at `/enroll` (mode 0640, the service group's), the pkg directory and `/pkg/` route in the proxy, and `migrate --from` (section 8), from kbf-deploy's `mdm`. **Built**: `crates/hostkeeper-mdm` (`push_cert.rs`, `dep.rs`, `migrate.rs`, `api.rs`), `MDM_PKG_DIR` and the route in `crates/hostkeeper-mdm-core` | M4 | M |
 | M6a | komira-ai/kbf: freeze notes; delete `kbf-mdm`, `kbf-mdm-api` and their client in `kbf-server`; later, after M7, delete `mdm-core`, `host-step`, `mdm-host` and `kbf-deploy mdm` | M5 | S |
 | M6b | komira-ai/jobscheduler: after M7, delete `js-mdm-core`, `js-host-step`, `js-mdm` and their release workflow, release plan, test and coverage-baseline entries, with a pointer to hostkeeper | M7 | S |
 | M7 | Held, run by the owner of the MDM host: the read-only check of the live state, `migrate --apply`, `verify`, `dep define-profile`; the DNS record (section 9); the ABM checks (question Q2) | M5 | S |

@@ -29,6 +29,7 @@ pub const KEYS: &[&str] = &[
     "MDM_STATE",
     "MDM_ETC",
     "MDM_BIN",
+    "MDM_PKG_DIR",
     "MDM_ERASE_STATE",
     "MDM_NANOHUB_PORT",
     "MDM_SCEP_PORT",
@@ -100,6 +101,7 @@ pub struct MdmConfig {
     state: AbsPath,
     etc: AbsPath,
     bin: AbsPath,
+    pkg_dir: AbsPath,
     nanohub_port: u16,
     scep_port: u16,
     dep_port: u16,
@@ -152,6 +154,12 @@ impl MdmConfig {
     /// The pinned binaries.
     pub fn bin(&self) -> &AbsPath {
         &self.bin
+    }
+
+    /// The pkg directory: the hostkeeper pkgs the proxy serves at `/pkg/<sha256>.pkg`, root's,
+    /// and readable by every user (a release pkg is public).
+    pub fn pkg_dir(&self) -> &AbsPath {
+        &self.pkg_dir
     }
 
     /// NanoHUB's loopback port, which neither other port equals.
@@ -458,22 +466,13 @@ impl Reader<'_> {
     }
 
     fn path(&self, key: &'static str) -> Result<AbsPath, ConfigError> {
-        let text = self.get(key)?;
-        check(
-            key,
-            &text,
-            is_word(&text, "/._-"),
-            "a path the units cannot carry (letters, digits, / . _ -)",
-        )?;
-        AbsPath::new(&text).map_err(|_| {
-            bad(
-                key,
-                &text,
-                "not an absolute path with no empty, . or .. part",
-            )
-        })
+        checked_path(key, &self.get(key)?)
     }
 
+    /// A path, `default` when the file does not set it.
+    fn path_or(&self, key: &'static str, default: &str) -> Result<AbsPath, ConfigError> {
+        checked_path(key, &self.get_or(key, default)?)
+    }
     fn port(&self, key: &'static str) -> Result<u16, ConfigError> {
         let text = self.get(key)?;
         let port = text.parse::<u16>().ok().filter(|p| *p != 0);
@@ -619,6 +618,17 @@ impl MdmConfig {
             is_unit_stem(&unit_prefix),
             "not lower-case letters, digits and - from a letter, at most 40 characters",
         )?;
+        // The pkg directory is served to anyone on the LAN and read by the gate: no directory
+        // of the kit may be it, hold it or be inside it.
+        let pkg_dir = r.path_or("PKG_DIR", &format!("/var/lib/{unit_prefix}-pkg"))?;
+        for (other, why) in [
+            (&state, "equal to, inside or around MDM_STATE"),
+            (&etc, "equal to, inside or around MDM_ETC"),
+            (&bin, "equal to, inside or around MDM_BIN"),
+        ] {
+            let clash = nested(pkg_dir.as_str(), other.as_str());
+            check("PKG_DIR", pkg_dir.as_str(), !clash, why)?;
+        }
         let slice = r.get_or("SLICE", &format!("{unit_prefix}.slice"))?;
         let stem = slice.strip_suffix(".slice").unwrap_or_default();
         check(
@@ -716,6 +726,7 @@ impl MdmConfig {
             state,
             etc,
             bin,
+            pkg_dir,
             nanohub_port,
             scep_port,
             dep_port,
@@ -734,6 +745,23 @@ impl MdmConfig {
             signature_namespace,
         })
     }
+}
+
+/// `text` as the path of `key`: an absolute path of characters the units can carry.
+pub(crate) fn checked_path(key: &'static str, text: &str) -> Result<AbsPath, ConfigError> {
+    check(
+        key,
+        text,
+        is_word(text, "/._-"),
+        "a path the units cannot carry (letters, digits, / . _ -)",
+    )?;
+    AbsPath::new(text).map_err(|_| {
+        bad(
+            key,
+            text,
+            "not an absolute path with no empty, . or .. part",
+        )
+    })
 }
 
 /// The skipped panes: words of letters and digits, at least one.
@@ -779,7 +807,7 @@ fn is_count(text: &str, suffixes: &[char]) -> bool {
     })
 }
 
-fn is_user_name(name: &str) -> bool {
+pub(crate) fn is_user_name(name: &str) -> bool {
     let mut chars = name.chars();
     name.len() <= 31
         && chars
@@ -790,7 +818,7 @@ fn is_user_name(name: &str) -> bool {
 
 /// Lower-case letters, digits and `-`, starting with a letter, at most 40 characters:
 /// what a systemd unit name's stem is made of here.
-fn is_unit_stem(name: &str) -> bool {
+pub(crate) fn is_unit_stem(name: &str) -> bool {
     let mut chars = name.chars();
     // systemd reads `-` in a slice name as a nesting step and refuses an empty one.
     name.len() <= 40

@@ -651,3 +651,40 @@ fn dns_names_are_within_the_label_and_name_length_limits() {
         )
     );
 }
+
+/// Catches a pkg directory the proxy would serve from a directory of the kit (the state, with
+/// its keys, or the secrets), or a default that is not the prefix's: left out, it is
+/// `/var/lib/<MDM_UNIT_PREFIX>-pkg`; set, it is taken; equal to, inside or around `MDM_STATE`,
+/// `MDM_ETC` or `MDM_BIN` it is refused by name, while a name that only shares a prefix is
+/// not nesting; a relative path is refused as every path is.
+#[test]
+fn the_pkg_directory_defaults_from_the_prefix_and_never_nests_in_the_kit() {
+    let c = MdmConfig::parse(&without("MDM_PKG_DIR")).expect("valid");
+    assert_eq!(c.pkg_dir().as_str(), "/var/lib/hostkeeper-mdm-pkg");
+    let text = without("MDM_PKG_DIR").replace(
+        "MDM_UNIT_PREFIX=hostkeeper-mdm\n",
+        "MDM_UNIT_PREFIX=site-b\n",
+    );
+    let text = text.replace("MDM_SLICE=hostkeeper-mdm.slice\n", "");
+    let c = MdmConfig::parse(&text).expect("valid");
+    assert_eq!(c.pkg_dir().as_str(), "/var/lib/site-b-pkg");
+    let c = MdmConfig::parse(&with("MDM_PKG_DIR", "/srv/pkg")).expect("valid");
+    assert_eq!(c.pkg_dir().as_str(), "/srv/pkg");
+    let c = MdmConfig::parse(&with("MDM_PKG_DIR", "/var/lib/hostkeeper-mdm2")).expect("valid");
+    assert_eq!(c.pkg_dir().as_str(), "/var/lib/hostkeeper-mdm2");
+    for (value, other) in [
+        ("/var/lib/hostkeeper-mdm", "MDM_STATE"),
+        ("/var/lib/hostkeeper-mdm/pkg", "MDM_STATE"),
+        ("/var/lib", "MDM_STATE"),
+        ("/etc/hostkeeper-mdm/pkg", "MDM_ETC"),
+        ("/opt/hostkeeper-mdm/bin", "MDM_BIN"),
+    ] {
+        let err = MdmConfig::parse(&with("MDM_PKG_DIR", value)).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            format!("MDM_PKG_DIR={value}: equal to, inside or around {other}"),
+        );
+    }
+    let err = MdmConfig::parse(&with("MDM_PKG_DIR", "pkg")).unwrap_err();
+    assert!(err.to_string().starts_with("MDM_PKG_DIR="), "{err}");
+}

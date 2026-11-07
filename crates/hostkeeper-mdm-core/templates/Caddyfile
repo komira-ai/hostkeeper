@@ -42,6 +42,18 @@ https://@DNS_NAME@:443 {
 		file_server
 	}
 
+	# The hostkeeper pkg, by its digest only: GET /pkg/<sha256>.pkg is the file
+	# <sha256>.pkg of @PKG_DIR@. Every other name under /pkg is 404, so a
+	# directory listing or another file is never served. The Mac checks the digest
+	# itself (the manifest of InstallEnterpriseApplication carries it). The matcher's
+	# name, @PKG_MATCHER@, is a value of the render, as the template syntax needs.
+	@PKG_MATCHER@ path_regexp ^/pkg/[0-9a-f]{64}\.pkg$
+	handle @PKG_MATCHER@ {
+		uri strip_prefix /pkg
+		root * @PKG_DIR@
+		file_server
+	}
+
 	# Everything else, NanoHUB's /api/ and NanoDEP included, is not served here.
 	handle {
 		respond 404

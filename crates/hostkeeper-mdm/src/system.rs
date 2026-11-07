@@ -7,7 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use hostkeeper_mdm_step::{Host, RealHost};
 
-use crate::{Grant, Machine, Net, System, run};
+use crate::{Grant, HttpLoopback, Machine, Net, System, run};
 
 /// The machine itself: a [`RealHost`] with the grants a verb asks for.
 #[derive(Clone, Copy, Debug, Default)]
@@ -42,12 +42,14 @@ pub fn system_random(buf: &mut [u8]) -> io::Result<()> {
 pub fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
     let net = Net::new(true);
-    // The wall clock names an uninstall snapshot (`MDM_STATE/removed/<unix seconds>`) and
-    // nothing else: no decision reads it.
+    let api = HttpLoopback::new();
+    // The wall clock, read once: it names an uninstall snapshot (`MDM_STATE/removed/<unix
+    // seconds>`), and `push-cert` refuses a push certificate that has expired by it.
     let secs = SystemTime::now().duration_since(UNIX_EPOCH);
     let system = System {
         machine: &RealMachine,
         net: &net,
+        api: &api,
         random: &system_random,
         now: secs.map_or(0, |d| d.as_secs()),
     };
