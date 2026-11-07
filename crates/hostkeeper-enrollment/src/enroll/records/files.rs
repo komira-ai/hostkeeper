@@ -82,6 +82,19 @@ fn decode<M: Message + Default>(
     Ok(message)
 }
 
+/// The directory under `dir` and the name of the file of `key`.
+fn file_of(dir: &Path, key: &RecordKey) -> (PathBuf, String) {
+    let (sub, name) = match key {
+        RecordKey::Request(id) => (REQUESTS, format!("{id}.pb")),
+        RecordKey::Issued(id) => (ISSUED, format!("{id}.pb")),
+        RecordKey::Host(host) => (HOSTS, format!("{host}.pb")),
+        RecordKey::Deny(host) => (DENY, format!("{host}.pb")),
+        RecordKey::MacNonce(hash) => (MAC_NONCES, format!("{}.pb", hex::encode(hash.as_bytes()))),
+        RecordKey::Serial => return (dir.to_path_buf(), SERIAL_FILE.to_owned()),
+    };
+    (dir.join(sub), name)
+}
+
 impl FileRecords {
     /// The records in `dir`, which is made (mode 0700) with its subdirectories when missing. A
     /// Mac nonce an approval consumed whose own file was not yet marked is marked now.
@@ -121,17 +134,7 @@ impl FileRecords {
 
     /// The directory and the name of the file of `key`.
     fn file(&self, key: &RecordKey) -> (PathBuf, String) {
-        let (sub, name) = match key {
-            RecordKey::Request(id) => (REQUESTS, format!("{id}.pb")),
-            RecordKey::Issued(id) => (ISSUED, format!("{id}.pb")),
-            RecordKey::Host(host) => (HOSTS, format!("{host}.pb")),
-            RecordKey::Deny(host) => (DENY, format!("{host}.pb")),
-            RecordKey::MacNonce(hash) => {
-                (MAC_NONCES, format!("{}.pb", hex::encode(hash.as_bytes())))
-            }
-            RecordKey::Serial => return (self.dir.clone(), SERIAL_FILE.to_owned()),
-        };
-        (self.dir.join(sub), name)
+        file_of(&self.dir, key)
     }
 
     /// Writes `bytes` as the file of `key`.
@@ -387,6 +390,54 @@ impl Snapshot {
     pub fn is_empty(&self) -> bool {
         *self == Snapshot::default()
     }
+
+    /// The files of a store directory that holds these records, as [`FileRecords`] writes them:
+    /// each file's path under the directory and its bytes, the serial counter's file among them
+    /// when a serial was taken. Every file is mode 0600 and every directory 0700 in a store; the
+    /// subdirectories that hold no file are made by [`FileRecords::open`].
+    ///
+    /// # Errors
+    /// [`StoreError::Unkeyed`]: a record's key does not parse ([`Record::key`]).
+    pub fn files(&self) -> Result<Vec<(PathBuf, Vec<u8>)>, StoreError> {
+        let records = self
+            .requests
+            .iter()
+            .map(|m| (Record::Request(m.clone()), m.encode_to_vec()))
+            .chain(
+                self.issued
+                    .iter()
+                    .map(|m| (Record::Issued(m.clone()), m.encode_to_vec())),
+            )
+            .chain(
+                self.hosts
+                    .iter()
+                    .map(|m| (Record::Host(m.clone()), m.encode_to_vec())),
+            )
+            .chain(
+                self.deny
+                    .iter()
+                    .map(|m| (Record::Deny(m.clone()), m.encode_to_vec())),
+            )
+            .chain(
+                self.mac_nonces
+                    .iter()
+                    .map(|m| (Record::MacNonce(m.clone()), m.encode_to_vec())),
+            );
+        let mut files = Vec::new();
+        for (record, bytes) in records {
+            let (dir, name) = file_of(Path::new(""), &record.key()?);
+            files.push((dir.join(name), bytes));
+        }
+        if let Some(next) = self.serial {
+            let (dir, name) = file_of(Path::new(""), &RecordKey::Serial);
+            let counter = pb::SerialCounter {
+                schema: SCHEMA,
+                next,
+            };
+            files.push((dir.join(name), counter.encode_to_vec()));
+        }
+        Ok(files)
+    }
 }
 
 /// Refuses `record`, read from `path`, unless it is kept under `key`: the key its own fields name.
@@ -493,40 +544,5 @@ impl FileRecords {
             .transpose()?
             .map(|counter| counter.next);
         Ok(snapshot)
-    }
-
-    /// Writes every record of `snapshot` into `dir`, which holds no record: the directories made
-    /// as [`FileRecords::open`] makes them, each record written whole as a commit writes it, and
-    /// the serial counter set to `snapshot.serial` when it is given.
-    ///
-    /// # Errors
-    /// [`StoreError`]: a directory or file cannot be made or written, or a record's key does not
-    /// parse. What was written before the failure stays.
-    pub fn write_snapshot(
-        fs: Arc<dyn Fs>,
-        dir: &Path,
-        snapshot: &Snapshot,
-    ) -> Result<FileRecords, StoreError> {
-        let records = FileRecords::open(fs, dir)?;
-        let all = snapshot
-            .requests
-            .iter()
-            .cloned()
-            .map(Record::Request)
-            .chain(snapshot.issued.iter().cloned().map(Record::Issued))
-            .chain(snapshot.hosts.iter().cloned().map(Record::Host))
-            .chain(snapshot.deny.iter().cloned().map(Record::Deny))
-            .chain(snapshot.mac_nonces.iter().cloned().map(Record::MacNonce));
-        for record in all {
-            records.put(&record.key()?, &record)?;
-        }
-        if let Some(next) = snapshot.serial {
-            let counter = pb::SerialCounter {
-                schema: SCHEMA,
-                next,
-            };
-            records.write(&RecordKey::Serial, &counter.encode_to_vec())?;
-        }
-        Ok(records)
     }
 }

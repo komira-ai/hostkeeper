@@ -117,7 +117,10 @@ fn a_snapshot_reads_every_record_and_writes_them_back() {
 
     let into = scratch("snapshot-into");
     let target = into.path().join("enrollment");
-    FileRecords::write_snapshot(Arc::new(RealFs), &target, &snapshot).expect("write it back");
+    for (path, bytes) in snapshot.files().expect("the files of the snapshot") {
+        assert!(path.is_relative(), "{}", path.display());
+        put(&target, path.to_str().expect("a UTF-8 path"), &bytes);
+    }
     assert_eq!(read(&target).expect("read it again"), snapshot);
     let store = EnrollmentStore::open(Arc::new(RealFs), &target).expect("the store opens it");
     let view = store.request(&fixture_id()).expect("read").expect("held");
