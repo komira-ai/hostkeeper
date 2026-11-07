@@ -189,10 +189,12 @@ jobs:
         run: cp Cargo.lock "$RUNNER_TEMP/Cargo.lock.release"
       # RELEASE_COMMIT is a build input of the binaries (crates/hostkeeper-daemon/src/stamp.rs,
       # crates/hostkeeper-coordinator/src/stamp.rs), not configuration they read when they run.
-      - name: Build hostkeeper and hostkeeper-coordinator
+      # hostkeeper-pxe, which the deb and the rpm carry, has no stamp: its --version is the
+      # workspace's version alone.
+      - name: Build hostkeeper, hostkeeper-coordinator and hostkeeper-pxe
         env:
           RELEASE_COMMIT: ${{ github.sha }}
-        run: cargo build --locked --release -p hostkeeper --bin hostkeeper -p hostkeeper-coordinator --bin hostkeeper-coordinator
+        run: cargo build --locked --release -p hostkeeper --bin hostkeeper -p hostkeeper-coordinator --bin hostkeeper-coordinator -p hostkeeper-pxe --bin hostkeeper-pxe
       # hello takes its version from the workspace, so it needs no RELEASE_COMMIT.
       - name: Build hello
         run: cargo build --locked --release -p hello --bin hello

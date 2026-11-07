@@ -8,7 +8,8 @@
 //!   with or without a day, in the orders `Month D, YYYY`, `D Month YYYY`, `D-Mon-YYYY`,
 //!   `YYYY-Mon-D` and `YYYY Month D`. A year alone is not a date. The licence text is exempt from
 //!   this rule only (see [`lint`]);
-//! - [`ipv4s`]: four dotted octets that are not loopback, unspecified or a documentation range;
+//! - [`ipv4s`]: four dotted octets that are not loopback, unspecified, the limited broadcast
+//!   address (`255.255.255.255`, a protocol constant like `0.0.0.0`) or a documentation range;
 //! - [`home_paths`]: a path under the home directories of a person or a host;
 //! - [`emails`]: an e-mail address, with a plain or a quoted local part, outside the example
 //!   domains, apart from the instance name of a systemd unit (`name@instance.service`);
@@ -521,11 +522,16 @@ fn is_word_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
 }
 
-/// Loopback, unspecified and the three documentation ranges.
+/// Loopback, unspecified, the limited broadcast address and the three documentation ranges.
 fn is_documentation_or_local(octets: &[u8]) -> bool {
     matches!(
         octets,
-        [127, ..] | [0, 0, 0, 0] | [192, 0, 2, _] | [198, 51, 100, _] | [203, 0, 113, _]
+        [127, ..]
+            | [0, 0, 0, 0]
+            | [255, 255, 255, 255]
+            | [192, 0, 2, _]
+            | [198, 51, 100, _]
+            | [203, 0, 113, _]
     )
 }
 
@@ -570,7 +576,7 @@ pub fn ipv4s(path: &str, text: &str) -> Vec<Finding> {
             };
             if !is_documentation_or_local(&found) {
                 let reason = format!(
-                    "the IPv4 address `{run}` is not loopback, unspecified or a documentation address"
+                    "the IPv4 address `{run}` is not loopback, unspecified, the limited broadcast or a documentation address"
                 );
                 out.push(finding(path, n, reason));
             }

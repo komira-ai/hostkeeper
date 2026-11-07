@@ -923,10 +923,15 @@ fn enrollment_depending_on_a_workspace_crate_is_refused() {
              hostkeeper-steps, which is neither itself nor hostkeeper-testkit"
         )
     );
-    // The coordinator and the seed generator depend on the enrollment crate, so they lose the
-    // dependency with it; so does the MDM gate, which goes too.
+    // The coordinator, the seed generator and the boot server depend on the enrollment crate, so
+    // they lose the dependency with it; so does the MDM gate, which goes too.
     let without = format!("{WIRE_DEP}{OIDC_DEP}{TLS_DEP}{PROTO_DEP}{CONFIG_DEP}");
     let seed_without = format!("{CONFIG_DEP}{WIRE_DEP}");
+    let pxe_without = format!(
+        "{CONFIG_DEP}hostkeeper-package = {{ path = \"../hostkeeper-package\" }}\n{PROTO_DEP}\
+         hostkeeper-pxe-packets = {{ path = \"../hostkeeper-pxe-packets\" }}\n\
+         hostkeeper-pxe-seed = {{ path = \"../hostkeeper-pxe-seed\" }}\n{STEPS_DEP}{WIRE_DEP}"
+    );
     let dir = fixture(
         "clean",
         vec![
@@ -934,6 +939,10 @@ fn enrollment_depending_on_a_workspace_crate_is_refused() {
             manifest_of(
                 "hostkeeper-pxe-seed",
                 layered("hostkeeper-pxe-seed", &seed_without, "", ""),
+            ),
+            manifest_of(
+                "hostkeeper-pxe",
+                layered("hostkeeper-pxe", &pxe_without, "", TESTKIT_DEP),
             ),
         ],
     );
@@ -949,6 +958,11 @@ fn enrollment_depending_on_a_workspace_crate_is_refused() {
              but must depend on exactly {COORDINATOR_DEPS}\n\
              hostkeeper-enrollment is not a workspace member\n\
              hostkeeper-mdm-gate is not a workspace member\n\
+             hostkeeper-pxe depends (normal or build) on the workspace crates \
+             {{hostkeeper-config, hostkeeper-package, hostkeeper-proto, hostkeeper-pxe-packets, \
+             hostkeeper-pxe-seed, hostkeeper-steps, hostkeeper-wire}}, but must depend on exactly \
+             {{hostkeeper-config, hostkeeper-enrollment, hostkeeper-package, hostkeeper-proto, \
+             hostkeeper-pxe-packets, hostkeeper-pxe-seed, hostkeeper-steps, hostkeeper-wire}}\n\
              hostkeeper-pxe-seed depends (normal or build) on the workspace crates \
              {{hostkeeper-config, hostkeeper-wire}}, but must depend on exactly \
              {{hostkeeper-config, hostkeeper-enrollment, hostkeeper-wire}}"
