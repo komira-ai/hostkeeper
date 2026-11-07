@@ -1,8 +1,7 @@
 # SCEP CAs made by the pinned scepserver
 
-Each directory is the output of `scepserver ca -init` of scepserver 2.3.0, the archive
-`scepserver-linux-amd64-v2.3.0.zip` that `crates/hostkeeper-mdm-core/pins.txt` pins
-(sha256 `cb429621a5dee8acaa19012b42e8126699a13469fe47e8a264793d6c4ba0f845`), run as:
+Each directory is the output of `scepserver ca -init` of scepserver 2.3.0, the linux-amd64 archive that
+`crates/hostkeeper-mdm-core/pins.txt` pins (sha256 `cb429621a5dee8acaa19012b42e8126699a13469fe47e8a264793d6c4ba0f845`), run as:
 
     scepserver-linux-amd64 ca -init -depot <dir> -years 10 -common_name "Example MDM SCEP CA" \
         -organization Example -organizational_unit hostkeeper-mdm
