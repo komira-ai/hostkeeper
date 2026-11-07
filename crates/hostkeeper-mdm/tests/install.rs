@@ -1,80 +1,20 @@
 //! `install` and `install --uninstall` on the fake host.
 
 mod common;
+mod install_support;
 
 use common::{
-    FakeNet, Kit, SVC, binary_bytes, changes, config, kit, kit_with, random_hex, ready_host,
-    site_addresses,
+    FakeNet, SVC, binary_bytes, config, kit, kit_with, random_hex, ready_host, site_addresses,
 };
-use hostkeeper_mdm::install::{Install, run, run_uninstall};
+use hostkeeper_mdm::install::{Install, run};
 use hostkeeper_mdm::{Env, MdmError};
-use hostkeeper_mdm_core::commands::scep_ca_init_args;
 use hostkeeper_mdm_core::render::{render, render_tls};
 use hostkeeper_mdm_step::fake::FakeHost;
 use hostkeeper_mdm_step::{Host, Mode, SYSTEMCTL};
-
-const STATE: &str = "/var/lib/hostkeeper-mdm";
-const ETC: &str = "/etc/hostkeeper-mdm";
-const BIN: &str = "/opt/hostkeeper-mdm/bin";
-const UNITS: &str = "/etc/systemd/system";
-const CA: &str = "/var/lib/hostkeeper-mdm/scep/depot/ca.pem";
-const CERT: &str = "/var/lib/hostkeeper-mdm/lego/certificates/mdm.example.com.crt";
-
-fn install(host: &FakeHost, kit: &Kit, mode: Mode) -> (Result<(), MdmError>, String) {
-    let net = FakeNet::new(Default::default());
-    let a = Install {
-        config: config(),
-        bin_dir: "/srv/fetch".to_owned(),
-        max_archive: 1 << 30,
-    };
-    let mut out = Vec::new();
-    let result = common::with_env(host, &net, |env| run(env, &a, &kit.pins, mode, &mut out));
-    (result, String::from_utf8(out).unwrap())
-}
-
-fn uninstall(host: &FakeHost, mode: Mode) -> (Result<(), MdmError>, String) {
-    let net = FakeNet::new(Default::default());
-    let mut out = Vec::new();
-    let result = common::with_env(host, &net, |env| {
-        run_uninstall(env, &config(), mode, &mut out)
-    });
-    (result, String::from_utf8(out).unwrap())
-}
-
-/// The commands that make a unit enabled and active, for a rerun.
-fn running(host: &FakeHost, units: &[&str]) {
-    for unit in units {
-        host.reply(&[SYSTEMCTL, "is-enabled", unit], 0, "enabled\n");
-        host.reply(&[SYSTEMCTL, "is-active", unit], 0, "active\n");
-    }
-}
-
-const CORE: [&str; 3] = [
-    "hostkeeper-mdm-scep.service",
-    "hostkeeper-mdm-nanohub.service",
-    "hostkeeper-mdm-depserver.service",
-];
-
-fn ca_argv() -> Vec<String> {
-    let mut argv: Vec<String> = [
-        "/usr/sbin/runuser",
-        "-u",
-        "hostkeeper-mdm",
-        "--",
-        "/opt/hostkeeper-mdm/bin/scepserver",
-    ]
-    .map(str::to_owned)
-    .to_vec();
-    argv.extend(scep_ca_init_args(&config()));
-    argv
-}
-
-/// Tells the fake that the CA command leaves a CA, as the real one does.
-fn ca_is_made_by_init(host: &FakeHost) {
-    let argv = ca_argv();
-    let words: Vec<&str> = argv.iter().map(String::as_str).collect();
-    host.effect(&words, CA, 0o600, (SVC, SVC), b"CA");
-}
+use install_support::{
+    BIN, CA, CERT, CORE, ETC, STATE, UNITS, ca_argv, ca_is_made_by_init, changes, install, running,
+    uninstall, whole_depot,
+};
 
 /// Catches a dry run that changes the host or lists a secret: the plan names paths, sizes and
 /// modes only; the secrets it would make appear by name and size; only read-only commands run.
@@ -113,8 +53,6 @@ fn a_dry_run_lists_names_sizes_and_modes_and_changes_nothing() {
     ] {
         assert!(shown.contains(line), "missing {line:?} in\n{shown}");
     }
-    assert!(!shown.contains(&random_hex()));
-    assert!(!shown.contains("CHALLENGE_PASSWORD="));
 }
 
 /// Catches an install that can be run by anyone: without root it is refused before any
@@ -229,7 +167,7 @@ fn apply_writes_exact_modes_the_core_render_and_keeps_secrets_off_argv() {
         let line = call.join(" ");
         assert!(!line.contains(&random_hex()), "{line}");
     }
-    assert!(!shown.contains(&random_hex()));
+    // The output as a whole is checked in install_output.rs.
     assert!(shown.contains("+ write /etc/hostkeeper-mdm/scep.env mode 0600 owner root:root ("));
 }
 
@@ -273,7 +211,7 @@ fn a_rerun_finds_nothing_to_do() {
 fn an_existing_scep_ca_is_kept() {
     let kit = kit();
     let host = ready_host(&kit);
-    host.put_file(CA, 0o600, (SVC, SVC), b"EXISTING CA");
+    whole_depot(&host);
     let (result, shown) = install(&host, &kit, Mode::Apply);
     result.unwrap();
     assert!(shown.contains("SCEP CA: kept (/var/lib/hostkeeper-mdm/scep/depot/ca.pem)"));

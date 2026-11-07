@@ -23,7 +23,9 @@
 //!   SCEP CA (kept when its depot holds a whole CA, refused when it holds part of one), the
 //!   slice, the service units and the Caddyfile, and the services started. The proxy waits for
 //!   the TLS certificate. A service whose inputs changed is restarted on this run or, if the run
-//!   stops first, on the next one.
+//!   stops first, on the next one: a marker file per such service under
+//!   `/run/<MDM_UNIT_PREFIX>/restart/` is made before the run's first change and removed
+//!   after the restart (`/run` is a tmpfs; a reboot restarts every service anyway).
 //! * `hostkeeper-mdm install --settings FILE --uninstall [--apply]`: stops and disables the
 //!   units, stops the certificate and reload jobs, and moves their files to
 //!   `MDM_STATE/removed/<unix seconds>/` (a later snapshot in the same second takes the next free

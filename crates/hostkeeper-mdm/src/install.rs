@@ -2,11 +2,13 @@
 //! services, as root.
 //!
 //! It checks the host first, read only, and refuses before anything changes: the effective uid
-//! is not 0 (the plan reads root-only files, so a dry run needs root too); `MDM_STATE`,
+//! is not 0 (the plan reads root-only files, so a dry run needs root too); `uname -m` is not
+//! `x86_64` (the pins are linux-amd64 builds); `MDM_STATE`,
 //! `MDM_ETC` or `MDM_BIN` is a symbolic link; no interface carries `MDM_BIND`; a port it uses
-//! is held by another process (one held by the kit's own active unit is a rerun); an archive in
-//! `--bin-dir` is missing or its sha256 is not its pin; a secret file is not mode 0600 or not
-//! root's.
+//! is held by another process (one held by the kit's own active unit is a rerun); the SCEP depot
+//! holds only one of `ca.pem` and `ca.key`, or both but not as two regular files that
+//! `openssl` reads and that hold one key pair; an archive in `--bin-dir` is missing or its
+//! sha256 is not its pin; a secret file is not mode 0600 or not root's.
 //!
 //! The plan has each of these only when the host differs:
 //! 1. the user `MDM_USER` (a system user and group of its name, no login);
@@ -17,8 +19,8 @@
 //! 4. the secrets, each made once from 32 random bytes as hex and never printed:
 //!    `NANOHUB_API_KEY` (`nanohub.env`), `NANODEP_API` (`nanodep.env`) and
 //!    `SCEP_CHALLENGE_PASSWORD` (`scep.env`), in 0600 root files under `MDM_ETC`;
-//! 5. the SCEP CA (`scepserver ca -init`, as `MDM_USER`), unless `ca.pem` is there: an existing
-//!    CA is kept, since replacing it re-enrolls every Mac;
+//! 5. the SCEP CA (`scepserver ca -init`, as `MDM_USER`), unless the depot holds one (both
+//!    files, checked above): an existing CA is kept, since replacing it re-enrolls every Mac;
 //! 6. the slice and the service units under `/etc/systemd/system` (root's, 0644) and the
 //!    Caddyfile (root and `MDM_USER`'s group, 0640), exactly as `hostkeeper-mdm-core` renders them;
 //! 7. `daemon-reload` when a unit changed; the SCEP server, NanoHUB and depserver enabled, and
@@ -26,9 +28,22 @@
 //!    when not active; the proxy likewise, but only once the TLS certificate is there;
 //!    depsyncer is left alone (it is enabled once an Apple token exists).
 //!
-//! `--uninstall` stops and disables every unit of the kit that is installed and moves the unit
-//! files to `MDM_STATE/removed/<unix seconds>/` (a 0700 directory of `MDM_USER`'s). The state (database, SCEP CA, DEP token, TLS
-//! key and certificate), the secrets, the binaries and the user stay.
+//! A service whose inputs change in the plan is restarted by it. So that a run which stops
+//! before the restart does not lose it, the plan begins with an empty 0600 root file
+//! `/run/<MDM_UNIT_PREFIX>/restart/<unit>` for each such service that has none yet (the
+//! directory is made 0700 when a file is), and ends, after the restarts, by removing the
+//! file of each service it restarts. A service whose file is there when the plan is made is
+//! restarted whether or not anything changed in this run (the proxy only once the TLS
+//! certificate is there). `/run` is a tmpfs: a reboot starts every service with the files in
+//! place, so the files go with it.
+//!
+//! `--uninstall` stops and disables every unit of the kit that is installed (the timer, the
+//! path unit and the services in one command), then stops the certificate job and the reload
+//! job where installed (one that is running would go on after its file is moved), and moves
+//! the unit files to `MDM_STATE/removed/<unix seconds>/` (a 0700 directory of `MDM_USER`'s;
+//! when that name exists the first free `<unix seconds>-1`, `-2`, ... is used), then reloads
+//! systemd. The state (database, SCEP CA, DEP token, TLS key and certificate), the secrets,
+//! the binaries and the user stay.
 
 use std::collections::BTreeSet;
 use std::io::{self, Write};
@@ -37,7 +52,9 @@ use hostkeeper_mdm_core::commands::scep_ca_init_args;
 use hostkeeper_mdm_core::config::MdmConfig;
 use hostkeeper_mdm_core::pins::Pins;
 use hostkeeper_mdm_core::render::{self, UnitNames};
-use hostkeeper_mdm_step::{Account, Cmd, Host, Kind, Plan, Planner, UnitVerb, execute};
+use hostkeeper_mdm_step::{
+    Account, Cmd, Host, Kind, Plan, PlanError, Planner, Step, UnitVerb, execute,
+};
 use sha2::{Digest, Sha256};
 
 use crate::{Env, MdmError, archive, secret};
@@ -45,6 +62,14 @@ use crate::{Env, MdmError, archive, secret};
 /// Where systemd reads local units from.
 pub const UNITS_DIR: &str = "/etc/systemd/system";
 const IP: &str = "/usr/bin/ip";
+/// The machine-hardware query.
+pub const UNAME: &str = "/usr/bin/uname";
+/// What `uname -m` prints on the hosts the pinned tools are built for.
+const SUPPORTED_MACHINE: &str = "x86_64";
+const OPENSSL: &str = "/usr/bin/openssl";
+/// Where pending-restart markers live: a tmpfs, so a reboot (which restarts every service
+/// with the files in place) clears them.
+const RUN_DIR: &str = "/run";
 /// The socket lister.
 pub const SS_PATH: &str = "/usr/bin/ss";
 /// The secret files and the key each holds.
@@ -155,6 +180,7 @@ pub fn plan(
             changed.insert(file.to_owned());
         }
     }
+    // `preflight` has refused a depot that is part of a CA or damaged.
     let ca = format!("{state}/scep/depot/ca.pem");
     if host.stat(&ca)?.is_some() {
         writeln!(out, "SCEP CA: kept ({ca})")?;
@@ -181,38 +207,101 @@ pub fn plan(
         p.unit(UnitVerb::DaemonReload, &[]);
     }
     let n = UnitNames::new(c);
+    let mut restarts = Restarts::new(host, c);
     let core = [
         (&n.scep, "scepserver", "scep.env"),
         (&n.nanohub, "nanohub", "nanohub.env"),
         (&n.depserver, "depserver", "nanodep.env"),
     ];
     for (unit, binary, env_file) in core {
-        let again = [n.slice.as_str(), unit.as_str(), binary, env_file]
-            .iter()
-            .any(|k| changed.contains(*k));
-        p.service(unit, again)?;
+        let inputs = [n.slice.as_str(), unit.as_str(), binary, env_file];
+        let changed_now = inputs.iter().any(|k| changed.contains(*k));
+        restarts.service(&mut p, unit, changed_now)?;
     }
     let cert = format!("{state}/lego/certificates/{}.crt", c.dns_name());
     if host.stat(&cert)?.is_some() {
-        let again = [
+        let inputs = [
             n.slice.as_str(),
             n.proxy.as_str(),
             "caddy",
             render::CADDYFILE_NAME,
-        ]
-        .iter()
-        .any(|k| changed.contains(*k));
-        p.service(&n.proxy, again)?;
+        ];
+        let changed_now = inputs.iter().any(|k| changed.contains(*k));
+        restarts.service(&mut p, &n.proxy, changed_now)?;
     } else {
         let waits = format!("proxy: not started; it waits for the TLS certificate {cert}");
         writeln!(out, "{waits}")?;
     }
-    Ok(p.finish())
+    Ok(restarts.wrap(p.finish())?)
+}
+
+/// The pending-restart markers of one run: `<RUN_DIR>/<MDM_UNIT_PREFIX>/restart/<unit>`, an
+/// empty 0600 root file made before the first change of the run for each unit whose inputs the
+/// run changes, and removed after the restarts. A run that stops in between leaves them, and
+/// the next run restarts the units they name even when it changes nothing.
+struct Restarts<'h> {
+    host: &'h dyn Host,
+    dir: String,
+    /// The markers the plan makes.
+    make: Vec<String>,
+    /// The markers the plan removes, those of the units it restarts.
+    clear: Vec<String>,
+}
+
+impl<'h> Restarts<'h> {
+    fn new(host: &'h dyn Host, c: &MdmConfig) -> Restarts<'h> {
+        Restarts {
+            host,
+            dir: format!("{RUN_DIR}/{}/restart", c.unit_prefix()),
+            make: Vec::new(),
+            clear: Vec::new(),
+        }
+    }
+
+    /// Plan `unit` enabled, and restarted when `changed_now` (an input of it differs on the
+    /// host) or its marker is there from a run that stopped; else started when not active.
+    fn service(
+        &mut self,
+        p: &mut Planner<'_>,
+        unit: &str,
+        changed_now: bool,
+    ) -> Result<(), MdmError> {
+        let marker = format!("{}/{unit}", self.dir);
+        let pending = self.host.stat(&marker)?.is_some();
+        if changed_now && !pending {
+            self.make.push(marker.clone());
+        }
+        let again = changed_now || pending;
+        if again {
+            self.clear.push(marker);
+        }
+        p.service(unit, again)?;
+        Ok(())
+    }
+
+    /// `plan` with the markers made before its first step and removed after its last.
+    fn wrap(self, plan: Plan) -> Result<Plan, PlanError> {
+        let mut before = Planner::new(self.host);
+        if !self.make.is_empty() {
+            before.dir(&self.dir, 0o700, &Account::root())?;
+        }
+        let mut steps = before.finish().steps;
+        steps.extend(self.make.into_iter().map(|path| Step::File {
+            path,
+            mode: 0o600,
+            owner: Account::root(),
+            bytes: Vec::new(),
+        }));
+        steps.extend(plan.steps);
+        steps.extend(self.clear.into_iter().map(|path| Step::Absent { path }));
+        Ok(Plan { steps })
+    }
 }
 
 /// The host checks, read only.
 fn preflight(host: &dyn Host, c: &MdmConfig, out: &mut dyn Write) -> Result<(), MdmError> {
     root_only(host, "install")?;
+    architecture(host)?;
     for path in [&c.state(), &c.etc(), &c.bin()] {
         let link = host.stat(path.as_str())?.map(|m| m.kind) == Some(Kind::Other);
         if link {
@@ -257,7 +346,81 @@ fn preflight(host: &dyn Host, c: &MdmConfig, out: &mut dyn Write) -> Result<(), 
             writeln!(out, "port {port}: held by {unit} (a rerun)")?;
         }
     }
-    Ok(())
+    scep_depot(host, c)
+}
+
+/// The host must be x86-64: the pinned tools are linux-amd64 builds.
+fn architecture(host: &dyn Host) -> Result<(), MdmError> {
+    let cmd = Cmd::new(UNAME).arg("-m");
+    let out = host.run(&cmd).map_err(|_| MdmError::Command {
+        line: cmd.line(),
+        code: -1,
+    })?;
+    match (out.code, out.stdout.trim()) {
+        (0, SUPPORTED_MACHINE) => Ok(()),
+        (0, machine) => Err(MdmError::Architecture {
+            machine: machine.to_owned(),
+        }),
+        (code, _) => Err(MdmError::Command {
+            line: cmd.line(),
+            code,
+        }),
+    }
+}
+
+/// The SCEP depot holds no CA, or a whole one: `scepserver ca -init` writes `ca.key`, then
+/// `ca.pem`, each only if it is not there, so a depot with one of them is a failed init or a
+/// damaged backup, and one with both must be two regular files that openssl reads and that
+/// hold one key pair. Nothing printed by openssl is kept.
+fn scep_depot(host: &dyn Host, c: &MdmConfig) -> Result<(), MdmError> {
+    let depot = format!("{}/scep/depot", c.state());
+    let (pem, key) = (format!("{depot}/ca.pem"), format!("{depot}/ca.key"));
+    let (have_pem, have_key) = (host.stat(&pem)?, host.stat(&key)?);
+    let damaged = |why: &str| MdmError::DepotDamaged {
+        depot: depot.clone(),
+        why: why.to_owned(),
+    };
+    match (have_pem, have_key) {
+        (None, None) => Ok(()),
+        (Some(_), None) => Err(MdmError::DepotPartial {
+            depot,
+            present: "ca.pem",
+            missing: "ca.key",
+        }),
+        (None, Some(_)) => Err(MdmError::DepotPartial {
+            depot,
+            present: "ca.key",
+            missing: "ca.pem",
+        }),
+        (Some(pem_meta), Some(key_meta)) => {
+            for (name, meta) in [("ca.pem", pem_meta), ("ca.key", key_meta)] {
+                if meta.kind != Kind::File {
+                    return Err(damaged(&format!("{name} is not a regular file")));
+                }
+            }
+            let cert_key = host.run(&Cmd::new(OPENSSL).args(&[
+                "x509",
+                "-noout",
+                "-pubkey",
+                "-in",
+                pem.as_str(),
+            ]))?;
+            if cert_key.code != 0 {
+                return Err(damaged("openssl cannot read ca.pem as a certificate"));
+            }
+            let own_key =
+                host.run(&Cmd::new(OPENSSL).args(&["pkey", "-pubout", "-in", key.as_str()]))?;
+            if own_key.code != 0 {
+                return Err(damaged("openssl cannot read ca.key as a private key"));
+            }
+            match cert_key.stdout == own_key.stdout {
+                true => Ok(()),
+                false => Err(damaged(
+                    "ca.pem and ca.key are not a pair (the certificate's public key is not the key's)",
+                )),
+            }
+        }
+    }
 }
 
 /// Every pinned archive in `dir` checked against its pin, and the binaries unpacked from them:
@@ -330,8 +493,21 @@ fn secret_file(
     Ok(true)
 }
 
-/// Plan the rollback: units stopped and disabled, their files moved to
-/// `MDM_STATE/removed/<now>/`.
+/// `MDM_STATE/removed/<now>`, or the first of `<now>-1`, `<now>-2`, ... when that name is
+/// taken: an earlier snapshot is never written over.
+fn snapshot_dir(host: &dyn Host, c: &MdmConfig, now: u64) -> Result<String, MdmError> {
+    let base = format!("{}/removed/{now}", c.state());
+    let mut name = base.clone();
+    let mut n = 0u32;
+    while host.stat(&name)?.is_some() {
+        n += 1;
+        name = format!("{base}-{n}");
+    }
+    Ok(name)
+}
+
+/// Plan the rollback: units stopped and disabled, the two jobs stopped, their files moved to
+/// `MDM_STATE/removed/<now>/` (`<now>-1`, `-2`, ... when that exists).
 pub fn plan_uninstall(env: &Env<'_>, c: &MdmConfig, out: &mut dyn Write) -> Result<Plan, MdmError> {
     let host = env.host;
     root_only(host, "install --uninstall")?;
@@ -362,11 +538,27 @@ pub fn plan_uninstall(env: &Env<'_>, c: &MdmConfig, out: &mut dyn Write) -> Resu
         .filter(|u| !idle.contains(u))
         .map(|u| u.as_str())
         .collect();
+    // A job may be running now (the timer started it, or the path unit did): it is stopped
+    // before its unit file is moved, so it cannot go on to restart the proxy. Stopping a unit
+    // that is not running is not an error.
+    let jobs: Vec<&str> = there
+        .iter()
+        .filter(|u| [&n.cert_service, &n.reload_service].contains(u))
+        .map(|u| u.as_str())
+        .collect();
     let mut p = Planner::new(host);
     if !stop.is_empty() {
         p.unit(UnitVerb::DisableNow, &stop);
     }
-    let to = format!("{}/removed/{}", c.state(), env.now);
+    if !jobs.is_empty() {
+        p.run(
+            Cmd::new(hostkeeper_mdm_step::SYSTEMCTL)
+                .arg("stop")
+                .arg("--")
+                .args(&jobs),
+        );
+    }
+    let to = snapshot_dir(host, c, env.now)?;
     // The copies are the service user's, in a 0700 directory of its own: every directory on
     // the way is then root's or the service user's, which the host layer insists on.
     let mine = Account::new(c.user(), c.user());

@@ -300,6 +300,7 @@ pub fn bind_line() -> String {
 pub fn ready_host(kit: &Kit) -> FakeHost {
     let host = FakeHost::new(0);
     host.add_user("hostkeeper-mdm", SVC);
+    host.reply(&["/usr/bin/uname", "-m"], 0, "x86_64\n");
     host.reply(
         &["/usr/bin/ip", "-o", "-4", "addr", "show"],
         0,
@@ -313,6 +314,7 @@ pub fn ready_host(kit: &Kit) -> FakeHost {
     host.reply_prefix(&[SYSTEMCTL, "start"], 0, "");
     host.reply_prefix(&[SYSTEMCTL, "restart"], 0, "");
     host.reply_prefix(&[SYSTEMCTL, "disable"], 0, "");
+    host.reply_prefix(&[SYSTEMCTL, "stop"], 0, "");
     host.reply_prefix(&["/usr/sbin/runuser"], 0, "");
     for (file, bytes) in &kit.archives {
         host.put_file(&format!("/srv/fetch/{file}"), 0o644, (1000, 1000), bytes);
