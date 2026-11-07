@@ -6,7 +6,7 @@
 //! A wait of this module ([`wait_until`], [`wait_for_file`]) polls a state systemd or the fixture
 //! reaches (a file written, a unit active) and sleeps between looks; it never bounds the time it
 //! waits and nothing asserts how long it took. A test that hangs is ended by the job's
-//! `timeout-minutes` in privileged.yml.
+//! `timeout-minutes` in privileged.yml (in net-install.yml for the network-install tests).
 //!
 //! The first-boot tests' harness is in submodules: [`spawn`] (a child process killed when dropped,
 //! and [`spawn::poll`], a wait of a bounded number of looks that fails with the last state it

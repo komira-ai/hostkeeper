@@ -1,11 +1,45 @@
-//! The rules of the two network-install jobs of `privileged.yml` beyond those every job of the
-//! file keeps (`privileged_tests.rs`): the apt steps that install QEMU and the firmware, and the
-//! ISO each job downloads, held to the pin of `packaging/netboot/pins.toml`. Each is a function
-//! over the workflow text (and the pins text) that returns its problems; `net_install_tests.rs`
-//! shows each to refuse its defect.
+//! The rules of `net-install.yml` ([`FILE`]), the workflow of the two network-install jobs, beyond
+//! those every workflow keeps ([`super::lint`]): its triggers (a push to main that changes one of
+//! [`PATHS`], one schedule, and by hand; never a pull request), its concurrency ([`GROUP`], a newer
+//! run cancelling the older), exactly its two jobs ([`NET_JOBS`]); and, of each job, the apt steps
+//! that install QEMU and the firmware and the ISO it downloads, held to the pin of
+//! `packaging/netboot/pins.toml`. The shape of each job (one build, one run as root, its own test
+//! targets) is the shape every privileged job keeps (`privileged_tests.rs`). Each rule is a
+//! function over the workflow (and the pins text) that returns its problems;
+//! `net_install_tests.rs` shows each to refuse its defect.
 
-use super::lint::{entry, scalars};
-use super::yaml::{self, Node};
+use std::collections::BTreeSet;
+
+use super::lint::{entries, entry, no_inputs, scalars};
+use super::yaml::{self, Node, Value};
+
+/// The workflow of the network-install jobs. No release waits for it (`release.yml` names
+/// `ci`, `privileged` and `artifacts`), and it never runs for a pull request.
+pub const FILE: &str = "net-install.yml";
+
+/// The paths of a push to main that runs [`FILE`], exactly and in this order: the network-install
+/// code. The nightly run covers what they leave out.
+pub const PATHS: &[&str] = &[
+    ".github/workflows/net-install.yml",
+    "crates/hostkeeper-pxe*/**",
+    "packaging/netboot/**",
+    "packaging/linux/**",
+    "crates/hostkeeper-privileged/tests/net_install*.rs",
+    "crates/hostkeeper-privileged/tests/netinstall/**",
+    "crates/hostkeeper-privileged/tests/bin/pxe.rs",
+    "crates/xtask/src/release/netboot.rs",
+    "crates/xtask/src/release/netboot/**",
+    "crates/xtask/src/netinstall_report.rs",
+    "crates/xtask/src/netinstall_report/**",
+];
+
+/// The concurrency group of [`FILE`]: one per branch, so on main one for the workflow.
+pub const GROUP: &str = "net-install-${{ github.ref }}";
+
+/// What [`FILE`] is refused with when its `on` is anything else.
+pub const ON_PROBLEM: &str = "net-install.yml: on must be push to main with exactly the network-install paths, one schedule, and workflow_dispatch with no inputs";
+/// What [`FILE`] is refused with when its `concurrency` is anything else.
+pub const CONCURRENCY_PROBLEM: &str = "net-install.yml: concurrency must be the group net-install-${{ github.ref }}, cancel-in-progress: true";
 
 /// The job of the x86-64 network-install end-to-end test.
 pub const NET_INSTALL_JOB: &str = "net-install";
@@ -172,4 +206,89 @@ pub fn iso_problems(text: &str, pins: &str) -> Vec<String> {
         }
     }
     problems
+}
+
+/// What is wrong with the shape of [`FILE`], the document `doc`: its `on`, its `concurrency`, and
+/// a job that is not one of [`NET_JOBS`] or one of them missing.
+pub fn problems(doc: &Node) -> Vec<String> {
+    let mut problems = Vec::new();
+    if !push_schedule_and_dispatch(entry(doc, "on")) {
+        problems.push(ON_PROBLEM.to_owned());
+    }
+    if !one_group_that_cancels(entry(doc, "concurrency")) {
+        problems.push(CONCURRENCY_PROBLEM.to_owned());
+    }
+    let jobs = entry(doc, "jobs").map_or(&[][..], entries);
+    let named: BTreeSet<&str> = jobs.iter().filter_map(|(name, _)| name.as_str()).collect();
+    for wanted in NET_JOBS.iter().filter(|j| !named.contains(j.name)) {
+        problems.push(format!("no job {}", wanted.name));
+    }
+    for name in named
+        .iter()
+        .filter(|name| !NET_JOBS.iter().any(|j| j.name == **name))
+    {
+        problems.push(format!("job {name} is not a job of {FILE}"));
+    }
+    problems
+}
+
+/// The scalars of the list `node`, or `None` when it is not a list of scalars.
+fn strings(node: &Node) -> Option<Vec<&str>> {
+    match &node.value {
+        Value::Seq(items) => items.iter().map(Node::as_str).collect(),
+        _ => None,
+    }
+}
+
+/// Whether `on` is exactly, as a mapping: `push` with `branches: [main]` and `paths:` [`PATHS`] and
+/// no other filter; `schedule` with one entry, of one `cron`; and `workflow_dispatch` with no
+/// inputs. No other trigger, so none that runs for a pull request.
+fn push_schedule_and_dispatch(on: Option<&Node>) -> bool {
+    let Some(Value::Map(triggers)) = on.map(|on| &on.value) else {
+        return false;
+    };
+    let push = |push: &Node| {
+        let keys: BTreeSet<&str> = entries(push)
+            .iter()
+            .filter_map(|(k, _)| k.as_str())
+            .collect();
+        keys == BTreeSet::from(["branches", "paths"])
+            && entries(push).len() == 2
+            && entry(push, "branches").and_then(strings) == Some(vec!["main"])
+            && entry(push, "paths").and_then(strings).as_deref() == Some(PATHS)
+    };
+    let schedule = |schedule: &Node| match &schedule.value {
+        Value::Seq(items) => match &items[..] {
+            [only] => {
+                matches!(entries(only), [(key, cron)] if key.as_str() == Some("cron") && cron.as_str().is_some())
+            }
+            _ => false,
+        },
+        _ => false,
+    };
+    let has = |name: &str, holds: &dyn Fn(&Node) -> bool| {
+        triggers
+            .iter()
+            .any(|(k, v)| k.as_str() == Some(name) && holds(v))
+    };
+    triggers.len() == 3
+        && has("push", &push)
+        && has("schedule", &schedule)
+        && has("workflow_dispatch", &no_inputs)
+}
+
+/// Whether `concurrency` is exactly [`GROUP`] with `cancel-in-progress: true`.
+fn one_group_that_cancels(concurrency: Option<&Node>) -> bool {
+    let Some(concurrency) = concurrency else {
+        return false;
+    };
+    let keys: Vec<&str> = entries(concurrency)
+        .iter()
+        .filter_map(|(k, _)| k.as_str())
+        .collect();
+    keys.len() == 2
+        && keys.contains(&"group")
+        && keys.contains(&"cancel-in-progress")
+        && entry(concurrency, "group").and_then(Node::as_str) == Some(GROUP)
+        && entry(concurrency, "cancel-in-progress").and_then(Node::as_str) == Some("true")
 }
