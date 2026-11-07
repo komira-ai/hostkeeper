@@ -9,7 +9,11 @@
 //! None of these is believed: the verifier is asked to confirm the commit and the ref against
 //! the signed certificate, and the digest against the archive, so a bundle that lies about any
 //! of them fails verification. The bundle is at most [`MAX_BUNDLE_BYTES`] and is parsed only with
-//! `serde_json` and the DER reader of [`crate::der`].
+//! `serde_json` and the DER reader of `der`.
+//!
+//! [`crate::prove`] reads the bundle of a package with it; `hostkeeper-pxe fetch` reads the
+//! bundles of `netboot.json` and of the hostkeeper deb with it before it asks the same
+//! [`crate::ports::Verifier`].
 
 use std::collections::BTreeSet;
 
@@ -21,10 +25,10 @@ use crate::der;
 use crate::ports::{CommitId, SourceRef};
 
 /// The most bytes of a bundle.
-pub(crate) const MAX_BUNDLE_BYTES: u64 = 1 << 20;
+pub const MAX_BUNDLE_BYTES: u64 = 1 << 20;
 /// Where a package's bundle is: the archive's URL with this appended. One constant, so another
 /// place is one change.
-pub(crate) const BUNDLE_SUFFIX: &str = ".sigstore.json";
+pub const BUNDLE_SUFFIX: &str = ".sigstore.json";
 
 /// Where a certificate may be in a bundle: `certificate` (bundle v0.3) or the first of
 /// `x509CertificateChain` (v0.1 and v0.2).
@@ -35,7 +39,7 @@ const CERTIFICATE_AT: [&str; 2] = [
 
 /// What a bundle says about itself.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Facts {
+pub struct Facts {
     pub commit: CommitId,
     pub source_ref: SourceRef,
     /// The SHA-256 of each subject, lower-case.
@@ -44,13 +48,22 @@ pub(crate) struct Facts {
 
 impl Facts {
     /// Whether the statement lists `sha256` as a subject's digest.
-    pub(crate) fn lists(&self, sha256: &str) -> bool {
+    pub fn lists(&self, sha256: &str) -> bool {
         self.subjects.iter().any(|subject| subject == sha256)
     }
 }
 
+/// What a bundle lacks, for the log: the text names the part.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("{0}")]
+pub struct BundleInvalid(pub &'static str);
+
 /// Reads `bytes` as a bundle, or says what it lacks.
-pub(crate) fn read(bytes: &[u8]) -> Result<Facts, &'static str> {
+pub fn read(bytes: &[u8]) -> Result<Facts, BundleInvalid> {
+    read_facts(bytes).map_err(BundleInvalid)
+}
+
+fn read_facts(bytes: &[u8]) -> Result<Facts, &'static str> {
     let bundle: Value = serde_json::from_slice(bytes).map_err(|_| "the bundle is not JSON")?;
     let payload = bundle
         .pointer("/dsseEnvelope/payload")
