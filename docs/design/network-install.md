@@ -505,10 +505,11 @@ One pull request each, in this order. "After" lists prerequisites. Sizes are tho
 | N12 | Operator runbook `docs/operations/network-install.md`: router check, firmware settings, the per-machine steps, reinstall | N9 | S |
 | N13 | First real machine on the farm, by the runbook, recording the measurement. Done by hand by the operator, not in CI | N10, N12 | S |
 
-N2, N3, N4, N5, N6 and N7 are independent and can be built in parallel. The open install-path issues
-(komira-ai/hostkeeper#109, komira-ai/hostkeeper#110, komira-ai/hostkeeper#115, komira-ai/hostkeeper#116 and
-komira-ai/hostkeeper#102) do not block N10: it checks a first install, which works today
-(`an_assigned_package_installs_once_across_restarts_and_the_boot_pass_keeps_it`, privileged).
+N2, N3, N4, N5, N6 and N7 are independent and can be built in parallel. N10 checks a first install
+(`an_assigned_package_installs_once_across_restarts_and_the_boot_pass_keeps_it`, privileged). The
+later orders of an installed service, an update and an uninstall, are checked by the privileged
+`a_new_desired_version_is_installed_over_the_installed_one` and
+`an_uninstall_takes_the_package_its_file_and_its_unit_off_the_host`.
 
 ## 13. Questions for the CEO
 
