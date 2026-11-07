@@ -3,8 +3,9 @@
 Status: design, for review. This document makes network install of new Linux machines part of hostkeeper v1. It
 replaces the non-goal of [hostkeeper-design.md](hostkeeper-design.md) section 2.2 ("No network boot service in
 scope") and the first item of its section 12.1 ("the operator's own, no build items here"). Both now point here. Where
-this document and hostkeeper-design.md disagree on network install, this document wins. Nothing here is built yet:
-every statement about new code is **Designed**, and section 12 lists the build items.
+this document and hostkeeper-design.md disagree on network install, this document wins. Item N7, the packet handling,
+is **Built** (`crates/hostkeeper-pxe-packets`); every other statement about new code is **Designed**, and section 12
+lists the build items.
 
 This revision (item N1b of section 12) amends the first: network boot early in the boot order is the expected setup, so
 a machine takes two manual steps; a router mode, in which the farm's router names the boot server, stands beside
@@ -190,7 +191,11 @@ of the architecture it learned for that address (above), or, when the client's p
 the record whose data MAC the client has. An address it learned no MAC for, a MAC with neither, and an architecture with
 no boot set in the sealed directory get a TFTP error, and its firmware moves on to its next
 boot device **[V]** on each board model. The shim then reads GRUB by its own name, which differs by architecture
-(`grubx64.efi`, `grubaa64.efi`), from the same directory **[V]**.
+(`grubx64.efi`, `grubaa64.efi`), from the same directory **[V]**. Both boot loaders of each platform are therefore
+served from `hostkeeper/`, the directory of `hostkeeper/boot.efi`: `hostkeeper/shimx64.efi` and
+`hostkeeper/grubx64.efi`, `hostkeeper/shimaa64.efi` and `hostkeeper/grubaa64.efi`, by TFTP and under the HTTP root
+alike, and the proxy offer names the shim by that path, so the shim finds GRUB beside it in both modes. **Built**:
+the packet handling, `crates/hostkeeper-pxe-packets` (item N7).
 
 **What it serves, and how it runs.**
 
@@ -335,7 +340,8 @@ The image carries only public facts: the coordinator's LAN address, `ca_sha256`,
 1. **Boot files are verified before they are served.** Each hostkeeper release carries one `netboot.json` with a boot
    set for each of `linux-x86_64` and `linux-arm64`. It lists, for every file of each set, where it comes from, the
    name it is served as, the size and the SHA-256: the live-server ISO of that architecture, and the shim (served as
-   `shimx64.efi` or `shimaa64.efi`), the signed network GRUB (served as `grubx64.efi` or `grubaa64.efi`), the kernel and
+   `hostkeeper/shimx64.efi` or `hostkeeper/shimaa64.efi`, section 3), the signed network GRUB (served as
+   `hostkeeper/grubx64.efi` or `hostkeeper/grubaa64.efi`), the kernel and
    the initrd that match it. The ISO is pinned by the URL on Canonical's release site, and its pin is checked against
    Canonical's signed `SHA256SUMS` when it is changed. The kernel and initrd are taken from that ISO, and the shim and
    GRUB from Canonical's signed packages of the same release, each pinned by its own SHA-256 once taken out. **[V]**:
@@ -580,7 +586,9 @@ time (rule T10), are Rust (rule T11), and use the repository's scratch helpers a
   no architecture; a REQUEST with no option 50, and a malformed packet, yield nothing. In router mode no packet is ever
   sent, which a test asserts for every input above.
 - TFTP packets (N7, pure): only names of the file set are served; a write request, a path with `..`, an absolute path
-  and an unknown name are refused. `hostkeeper/boot.efi` is the x86-64 or the arm64 shim by the architecture learned for
+  and an unknown name are refused. One leading `/` names the root of the served tree, as a TFTP server confined to its
+  directory reads it, so a GRUB that asks for `/grub/grub.cfg` gets `grub/grub.cfg`; an absolute path is then a name
+  outside the set and is refused, and a name that still starts with `/` is refused as unsafe. `hostkeeper/boot.efi` is the x86-64 or the arm64 shim by the architecture learned for
   the reader's address, or by the record's platform of its MAC when it stated no architecture, and a TFTP error for an
   address with no MAC, a MAC with neither, or an architecture with no boot set. Block numbering
   and the final short block follow RFC 1350, and option negotiation RFC 2347.
@@ -715,7 +723,7 @@ One pull request each, in this order. "After" lists prerequisites. Sizes are tho
 | N4 | Enrollment: `contested` on `PendingEnrollment` and refusal `record_contested`; the UI's approval screen puts the hard-to-copy claims beside the record and adds the "matched is not proof" text | N1 | M |
 | N5 | `packaging/netboot/pins.toml` and `netboot.json` with a boot set for each of `linux-x86_64` and `linux-arm64` (ISO, shim, signed network GRUB, kernel, initrd), built and attested in the artifacts workflow | N1b | M |
 | N6 | Seed and menu generator: a pure crate turning a record, its platform, a daemon config and flags into the fixed `grub.cfg`, the install and local-disk menus of a MAC, autoinstall `user-data` and `meta-data`, with goldens for each platform | N1b | M |
-| N7 | proxyDHCP, router-mode learning and TFTP packet handling: a pure crate, no sockets, no inventory; architectures 7, 9, 11, 16 and 19; the router-mode `hostkeeper/boot.efi` by learned architecture | N1b | M |
+| N7 | proxyDHCP, router-mode learning and TFTP packet handling: a pure crate, no sockets, no inventory; architectures 7, 9, 11, 16 and 19; the router-mode `hostkeeper/boot.efi` by learned architecture. **Built**: `crates/hostkeeper-pxe-packets` | N1b | M |
 | N8 | `hostkeeper-pxe fetch`: download both platforms' boot sets and debs (or those `--platform` names), verify against the release attestation and `netboot.json`, seal | N5 | M |
 | N9 | `hostkeeper-pxe serve`: `--mode` (proxy or router), sockets and privilege drop, the answer set from records, hosts and pending requests and its platform rule, the MAC leaving the set at its seed fetch, `--reinstall`, the per-MAC menus, HTTP and TFTP from the sealed directory, the seal check; released as a binary with no enabled unit | N6, N7, N8, N14 | M |
 | N10 | Privileged end-to-end: the `net-install` job (x86-64, proxy mode then router mode) and the `net-install-arm64` job with the one arm64 test the hosted runners allow (section 11), and the workflow lint | N2, N3, N9 | M |
