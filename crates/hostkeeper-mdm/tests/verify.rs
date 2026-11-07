@@ -13,6 +13,7 @@ use sha2::{Digest, Sha256};
 const UNITS: &str = "/etc/systemd/system";
 const ETC: &str = "/etc/hostkeeper-mdm";
 const STATE: &str = "/var/lib/hostkeeper-mdm";
+const PROFILE: &str = "/var/lib/hostkeeper-mdm/www/enroll.mobileconfig";
 const CERT: &str = "/var/lib/hostkeeper-mdm/lego/certificates/mdm.example.com.crt";
 const ACTIVE: [&str; 6] = [
     "hostkeeper-mdm-scep.service",
@@ -76,6 +77,7 @@ fn installed() -> FakeHost {
     host.put_dir(STATE, 0o700, (SVC, SVC));
     host.put_dir(ETC, 0o750, (0, SVC));
     host.put_dir("/var/lib/hostkeeper-mdm-pkg", 0o755, (0, 0));
+    host.put_file(PROFILE, 0o640, (0, SVC), b"profile");
     for f in ["nanohub.env", "nanodep.env", "scep.env", "dns.env"] {
         host.put_file(&format!("{ETC}/{f}"), 0o600, (0, 0), b"K=v\n");
     }
@@ -106,7 +108,7 @@ fn a_host_as_installed_passes_every_check_and_every_file_is_the_same() {
     assert!(!shown.contains("FAIL"));
     assert_eq!(
         shown.lines().filter(|l| l.starts_with("ok    ")).count(),
-        6 + 4 + 1 + 1 + 2 + 4 + 1
+        6 + 4 + 1 + 1 + 2 + 4 + 1 + 1
     );
     assert_eq!(
         shown
@@ -562,4 +564,40 @@ fn the_pkg_directory_must_be_roots_and_0755() {
         shown.contains(&format!("FAIL  {line}: {pkg} is not there\n")),
         "{shown}"
     );
+}
+
+/// Catches a health check that lets the enrollment profile be readable by everyone, owned by
+/// the wrong group or user, a directory, or missing: the file push-cert writes (0640, root, the
+/// service group) passes; a 0644 file, a file of another group and a file of the service user
+/// each fail with what they are; no file says push-cert writes it; no service user is reported.
+#[test]
+fn the_enrollment_profile_must_be_0640_of_root_and_the_service_group() {
+    let line = format!("{PROFILE} is a 0640 file of root, group hostkeeper-mdm");
+    let host = installed();
+    let (_, shown) = go(&host, true, &[]);
+    assert!(shown.contains(&format!("ok    {line}\n")), "{shown}");
+    for (mode, owner) in [(0o644, (0, SVC)), (0o640, (0, 0)), (0o640, (SVC, SVC))] {
+        host.put_file(PROFILE, mode, owner, b"profile");
+        let (ok, shown) = go(&host, true, &[]);
+        assert!(!ok);
+        let want = format!(
+            "FAIL  {line}: is File {mode:04o} uid {} gid {}, not File 0640 uid 0 gid {SVC}\n",
+            owner.0, owner.1
+        );
+        assert!(shown.contains(&want), "{want}\n{shown}");
+    }
+    host.put_dir(PROFILE, 0o640, (0, SVC));
+    let (_, shown) = go(&host, true, &[]);
+    let want =
+        format!("FAIL  {line}: is Dir 0640 uid 0 gid {SVC}, not File 0640 uid 0 gid {SVC}\n");
+    assert!(shown.contains(&want), "{shown}");
+    host.remove(PROFILE).unwrap();
+    let (ok, shown) = go(&host, true, &[]);
+    assert!(!ok);
+    let want = format!("FAIL  {line}: {PROFILE} is not there (push-cert writes it)\n");
+    assert!(shown.contains(&want), "{shown}");
+    host.reply(&["/usr/bin/getent", "passwd", "hostkeeper-mdm"], 2, "");
+    let (_, shown) = go(&host, true, &[]);
+    let want = format!("FAIL  {line}: no user hostkeeper-mdm\n");
+    assert!(shown.contains(&want), "{shown}");
 }

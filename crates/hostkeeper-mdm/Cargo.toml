@@ -33,6 +33,7 @@ rustls.workspace = true
 # The roots the downloads trust: the host's. Every download is checked against its sha256 pin
 # after it arrives, so the roots guard the transfer, not what is installed.
 rustls-native-certs.workspace = true
+serde_json.workspace = true
 sha2.workspace = true
 tar.workspace = true
 thiserror.workspace = true
@@ -44,6 +45,7 @@ x509-parser.workspace = true
 [dev-dependencies]
 # The test certificates and keys of `push-cert` and `dep get-cert`.
 rcgen.workspace = true
+time.workspace = true
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }
 
 [lints]
