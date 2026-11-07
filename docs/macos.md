@@ -209,7 +209,20 @@ One run of a step:
 
 A step that is not one of the five of an update (the hook's `uninstall`, a `[hook] boot` step)
 runs the same way, as one job: `<hook> <hook args> <step> --params <file>`, bounded by its
-timeout (a timeout of 0 is no bound).
+timeout (a timeout of 0 is no bound). The unit of a `[hook] boot` step is
+`updater-<service>-boot-<generation>`, whatever the step's name, and its label
+`<prefix>.hostkeeper.step.<service>.boot.<generation>`.
+
+The probe of hostkeeper's own update (the daemon asking a new binary for its self-update
+protocol, `<binary> self-update-protocol`, before it stages it) runs the same way too, as one job
+with the label `<prefix>.hostkeeper.probe.<unit>` (`hostkeeper-self-update-protocol`), apart from
+every step label, so that a probe never boots out a step's job. It is bounded at 10 seconds (a
+bound of 0 is 1 second: a probe is never unbounded) and checked and read as on Linux: an absolute
+path to an executable file, the job's exit code (none when it was booted out at its bound or
+ended by a signal) and at most 64 bytes of its standard output. The binary is the file of the
+verified release the daemon just checked, so it passed the package check every Mach-O file of a
+release passes at unpack (no quarantine attribute, a valid code signature). A release of the
+version that already runs is not probed: none of its binary is staged.
 
 | how the job ended | the step's exit |
 |---|---|
@@ -238,7 +251,8 @@ with the error (resume stops the job by name if it is still there).
 
 The equivalence tests (`crates/hostkeeper-launchd/tests/equivalence.rs`) run the same scenarios
 against both launchers through the trait: a bounded step that overruns is stopped at its bound
-and failed, an unbounded one is not, a double stop is `Ok`, and the capture keeps the tail. The
+and failed, an unbounded one is not, a double stop is `Ok`, the capture keeps the tail, and a
+probe keeps its exit and output within its bound and is stopped past it. The
 real `launchctl` run is not part of the pull-request check (no Mac runs there): the host's
 launcher, `LaunchdLauncher::system`, is compiled on macOS only.
 
@@ -480,7 +494,8 @@ older releases wrote on a Mac, so the on-disk format is unchanged.
 
 The job `macos-device` of `.github/workflows/privileged.yml` runs on a GitHub-hosted arm64 macOS
 runner (`macos-15`) after every merge to `main` and by hand, never on a pull request, as root.
-Its tests (`crates/hostkeeper-privileged/tests/device_mac.rs` and `device_mac_e2e.rs`) are not
+Its tests (`crates/hostkeeper-privileged/tests/device_mac.rs`, `device_mac_e2e.rs` and
+`device_mac_selfupdate.rs`) are not
 counted by the coverage gate; what they drive is measured against fakes on Linux. They:
 
 - start the daemon as a launchd job of the system domain, with a config and directories of their
@@ -489,6 +504,11 @@ counted by the coverage gate; what they drive is measured against fakes on Linux
 - run the fixture hook in mode `sleep` as a step job through `LaunchdLauncher` with a bound of 5
   seconds: the job is booted out at the bound, the step has no exit code (a failed step), and
   launchd no longer holds the job;
+- probe the daemon binary's `self-update-protocol` as a launchd job through `LaunchdLauncher`
+  (the job `dev.hostkeeper.hostkeeper.probe.<unit>`): it exits 0 and prints exactly the protocol
+  and a newline, the daemon's probe reads that protocol, and launchd no longer holds the job; a
+  probe of a program that never ends, bounded at 1 second, is booted out at the bound with no
+  exit code;
 - read a running job, an ended job and an unknown label through the observer's service manager:
   active, inactive, not found;
 - read the boot id from `kern.bootsessionuuid` twice: a UUID, the same on both reads;
@@ -517,3 +537,16 @@ counted by the coverage gate; what they drive is measured against fakes on Linux
     `1.2.0` bad;
   - uninstall: both plists are gone, launchd holds neither job, and hello's package directory and
     its paths in `placed.json` are gone.
+- update hostkeeper itself under launchd (`device_mac_selfupdate.rs`, the Mac twin of the Linux
+  `self_update.rs`): the daemon, a launchd job of the daemon's own plist from `current` of its
+  binary directory, is ordered to the next version with releases the test seals in its package
+  store and a coordinator of files the test writes:
+  - an installed daemon ordered the update: the new binary's protocol is asked through a launchd
+    job, `current` is switched, the daemon exits and launchd starts the new binary, which settles
+    the update `Succeeded`, with `previous` the old version, and reports it;
+  - a daemon the pkg installed (no package of hostkeeper) ordered the install of the next
+    release: the same, and the package is installed at the new version;
+  - a daemon the pkg installed ordered the install of the version it runs: `Succeeded` at once,
+    with no probe and the same process.
+  The fallback of a next binary that cannot start is not run there: the daemon of the test writes
+  its fallback job beside its placed units, not in `/Library/LaunchDaemons`.

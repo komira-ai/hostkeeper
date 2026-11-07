@@ -4,7 +4,9 @@
 //! Every verb but `daemon` is forwarded to the daemon's command line as the `hostkeeper` binary
 //! forwards it (`hostkeeper_daemon::cli::run_with`): `self-update-protocol`, which the daemon's
 //! probe asks of a new binary, and `self-update-fallback`, which the fallback unit runs with the
-//! previous binary, are the shipped code.
+//! previous binary, are the shipped code. Before `self-update-protocol` it writes one line to
+//! standard error ([`probed_line`]), which the step launcher hands the daemon's log under the
+//! probe's unit: the tests read from the daemon's log whether its probe ran.
 //!
 //! `daemon` is the shipped daemon (`hostkeeper_daemon::start`: the settle of a waiting
 //! self-update, the boot pass, the readiness notice, the units of its own update, the heartbeat
@@ -18,10 +20,11 @@
 //!   heartbeat is appended to `link/beats.jsonl` as one line of its JSON, and the reply carries
 //!   the order of `link/order.json` when that file is there (no coordinator and no enrollment).
 //!
-//! Its own version is the name of the file it runs from: the binary directory keeps version
-//! `<v>` at `versions/<v>`, which is what `current` and `previous` name, so a copy staged there
-//! runs as that version. (The shipped binary's version is the one it was built with; the tests
-//! need two versions of one build.)
+//! Its own version is the name of the file it runs from, its links resolved (launchd starts
+//! `current`, and macOS gives a program the path it was started by): the binary directory keeps
+//! version `<v>` at `versions/<v>`, which is what `current` and `previous` name, so a copy staged
+//! there runs as that version. (The shipped binary's version is the one it was built with; the
+//! tests need two versions of one build.)
 //!
 //! Its own flags come before the verb, and only `daemon` reads them; it reads no environment
 //! variable but the notify socket systemd sets for a `Type=notify` unit:
@@ -85,6 +88,11 @@ fn refused_line(version: &str) -> String {
     format!("{PROGRAM}: version {version} refuses to start (--fixture-fail-start)")
 }
 
+/// The line written to standard error before `self-update-protocol` is answered.
+fn probed_line() -> String {
+    format!("{PROGRAM}: asked self-update-protocol")
+}
+
 fn main() -> ExitCode {
     let (fixture, rest) = match take_fixture_flags(std::env::args_os().skip(1)) {
         Ok(taken) => taken,
@@ -96,7 +104,12 @@ fn main() -> ExitCode {
     };
     match cli.command {
         Command::Daemon(flags) => daemon_verb(&fixture, &flags),
-        command => cli::run_with(Cli { command }, systemd_vars()),
+        command => {
+            if matches!(command, Command::SelfUpdateProtocol) {
+                eprintln!("{}", probed_line());
+            }
+            cli::run_with(Cli { command }, systemd_vars())
+        }
     }
 }
 
@@ -145,6 +158,7 @@ fn own_version(exe: &Path) -> Result<HostkeeperVersion, String> {
 fn daemon_verb(fixture: &Fixture, flags: &DaemonFlags) -> ExitCode {
     let own = match std::env::current_exe()
         .map_err(|e| format!("its own executable cannot be read: {e}"))
+        .and_then(|exe| fs::canonicalize(&exe).map_err(|e| format!("{}: {e}", exe.display())))
         .and_then(|exe| own_version(&exe))
     {
         Ok(own) => own,

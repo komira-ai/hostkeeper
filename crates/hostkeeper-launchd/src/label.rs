@@ -1,4 +1,5 @@
-//! The reverse-DNS prefix and the launchd labels of the daemon and of each step job.
+//! The reverse-DNS prefix and the launchd labels of the daemon, of each step job and of each
+//! probe job.
 
 use std::fmt;
 use std::str::FromStr;
@@ -13,6 +14,10 @@ pub const MAX_LABEL: usize = 255;
 
 /// The start of the unit name a step runs in, as `hostkeeper_steps::Record::unit` makes it.
 const UNIT_PREFIX: &str = "updater-";
+
+/// The word of the unit a `[hook] boot` step runs in, `updater-<service>-boot-<generation>`
+/// (the daemon's boot pass): an additive step whose word is none of the steps.
+const BOOT_WORD: &str = "boot";
 
 /// A launchd label: 1 to 255 bytes of ASCII letters, digits, `.`, `_` and `-`.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -52,12 +57,23 @@ impl Label {
         ))
     }
 
+    /// The label of the job a probe runs in (`hostkeeper_steps::ProbeCall`, the daemon asking a
+    /// new hostkeeper binary for its self-update protocol), named after the probe's unit:
+    /// `<prefix>.hostkeeper.probe.<unit>`. Apart from every step label (`.step.`), so that a
+    /// probe never boots out a step's job, nor a step a probe's.
+    pub fn probe(unit: &str) -> Result<Label, LabelError> {
+        Label::parse(&format!("{REVERSE_DNS_PREFIX}.hostkeeper.probe.{unit}"))
+    }
+
     /// The step label of a unit name `updater-<service>-<step>-<generation>`, read from the
     /// right: the generation digits, then the step word, then the service (which may hold
-    /// dashes).
+    /// dashes). The word is a step's name, or [`BOOT_WORD`] for the unit of a `[hook] boot`
+    /// step, whose label is `<prefix>.hostkeeper.step.<service>.boot.<generation>`.
     pub fn from_unit(unit: &str) -> Result<Label, LabelError> {
         match split_unit(unit) {
-            Some((service, step, generation)) => Label::step(service, step, generation),
+            Some((service, word, generation)) => Label::parse(&format!(
+                "{REVERSE_DNS_PREFIX}.hostkeeper.step.{service}.{word}.{generation}"
+            )),
             None => Err(LabelError::NotAStepUnit {
                 unit: unit.to_owned(),
             }),
@@ -69,15 +85,15 @@ fn is_label_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() | matches!(byte, b'.' | b'_' | b'-')
 }
 
-fn split_unit(unit: &str) -> Option<(&str, Step, u64)> {
+fn split_unit(unit: &str) -> Option<(&str, &str, u64)> {
     let rest = unit.strip_prefix(UNIT_PREFIX)?;
     let (rest, generation) = rest.rsplit_once('-')?;
     let generation = Some(generation)
         .filter(|digits| digits.bytes().all(|byte| byte.is_ascii_digit()))
         .and_then(|digits| digits.parse::<u64>().ok())?;
     let (service, word) = rest.rsplit_once('-')?;
-    let step = Step::from_str(word).ok()?;
-    Some((service, step, generation)).filter(|(service, _, _)| !service.is_empty())
+    let word = Some(word).filter(|word| (*word == BOOT_WORD) | Step::from_str(word).is_ok())?;
+    Some((service, word, generation)).filter(|(service, _, _)| !service.is_empty())
 }
 
 impl fmt::Display for Label {

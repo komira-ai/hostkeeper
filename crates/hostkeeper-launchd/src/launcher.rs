@@ -25,6 +25,18 @@
 //! way: `<executable> <hook_args...> <step> --params <params>` as one job, bounded by its
 //! `timeout_secs` (0 is no bound, as `RuntimeMaxSec=0` is for a systemd unit).
 //!
+//! [`StepLauncher::run_probe`] (the daemon asking a new hostkeeper binary for its self-update
+//! protocol) runs the same way too: `<executable> <args...>` as one job under the probe's label
+//! ([`Label::probe`], not a step's), bounded by its `timeout_secs` (`0` is read as `1`: a probe is
+//! never unbounded, as for `SystemdLauncher`). Its call is checked as `SystemdLauncher` checks
+//! it (an absolute path to an executable file), and its exit is read as `SystemdLauncher` reads
+//! it ([`ProbeExit::from_captured`]): the job's exit code (none when it was booted out at its
+//! bound or ended by a signal), and at most [`ProbeCall::output_bytes`] of its standard output,
+//! what passes it dropped and reported. The binary is the file of a verified release the daemon
+//! checked just before; on a Mac every Mach-O file of a release was refused at unpack when it
+//! carried the quarantine attribute or had no valid code signature (`hostkeeper_unpack`), so the
+//! probe runs nothing those checks did not pass.
+//!
 //! [`StepLauncher::stop`] is [`bootout`]: a label that is not loaded is stopped already, so a
 //! second stop, or a stop of a step that has ended, is not an error. `launchctl bootout` waits
 //! for the job to end; launchd sends `SIGTERM`, then `SIGKILL` to the job's process group after
@@ -52,10 +64,11 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use hostkeeper_steps::{
-    AdditiveCall, Bound, Captured, LaunchError, Ring, StepCall, StepExit, StepLauncher, StepLog,
+    AdditiveCall, Bound, Captured, LaunchError, ProbeCall, ProbeExit, Ring, StepCall, StepExit,
+    StepLauncher, StepLog,
 };
 
-use crate::label::Label;
+use crate::label::{Label, LabelError};
 use crate::launchctl::{
     JobInfo, JobState, JobStatus, Launchctl, LaunchctlError, LaunchctlOutput, bootout,
     bootout_args, bootstrap_args, print,
@@ -230,11 +243,14 @@ fn bootstrapped(label: &Label, out: &LaunchctlOutput) -> Result<(), LaunchError>
     }
 }
 
-/// One run of a hook as a job: what [`StepCall`] and [`AdditiveCall`] have in common.
+/// One run of a program as a job: what [`StepCall`], [`AdditiveCall`] and [`ProbeCall`] have in
+/// common.
 struct Run<'a> {
-    /// The step unit the job is named after.
+    /// The unit the job is named after.
     unit: &'a str,
-    /// The hook executable.
+    /// What the executable is, as a refusal names it.
+    what: &'static str,
+    /// The executable.
     executable: &'a Path,
     /// The arguments after it.
     args: Vec<OsString>,
@@ -247,6 +263,7 @@ impl<'a> Run<'a> {
     fn step(call: &'a StepCall<'a>) -> Run<'a> {
         Run {
             unit: call.unit,
+            what: HOOK,
             executable: call.executable,
             args: call.invocation.to_args(),
             params: call.invocation.params.as_deref(),
@@ -262,21 +279,37 @@ impl<'a> Run<'a> {
         args.push(call.params.as_os_str().to_owned());
         Run {
             unit: call.unit,
+            what: HOOK,
             executable: call.executable,
             args,
             params: Some(call.params),
             bound: NonZeroU64::new(call.timeout_secs).map_or(Bound::Unbounded, Bound::Secs),
         }
     }
+
+    /// `<args...>`, bounded by `timeout_secs`, `0` read as `1` (a probe is never unbounded).
+    fn probe(call: &'a ProbeCall<'a>) -> Run<'a> {
+        Run {
+            unit: call.unit,
+            what: "the probed binary",
+            executable: call.executable,
+            args: call.args.iter().map(OsString::from).collect(),
+            params: None,
+            bound: Bound::Secs(NonZeroU64::MIN.saturating_add(call.timeout_secs.saturating_sub(1))),
+        }
+    }
 }
+
+/// What the executable of a step or an additive step is, as a refusal names it.
+const HOOK: &str = "the hook executable";
 
 /// The job that runs `run` under `label`, its output in `files`. A relative executable or
 /// params file is refused: the job does not run in the updater's directory.
 fn step_job(run: &Run<'_>, label: Label, files: &JobFiles) -> Result<StepJob, LaunchError> {
     if !run.executable.is_absolute() {
         return Err(LaunchError::Launcher(format!(
-            "the hook executable {:?} is not an absolute path",
-            run.executable
+            "{} {:?} is not an absolute path",
+            run.what, run.executable
         )));
     }
     if let Some(params) = run.params.filter(|p| !p.is_absolute()) {
@@ -338,11 +371,8 @@ fn tail(path: &Path) -> Ring {
     ring
 }
 
-/// How a step ended, after `log` (if any) was given what was captured.
-fn step_exit(log: Option<&StepLog>, unit: &str, captured: &Captured) -> StepExit {
-    if let Some(log) = log {
-        log(unit, captured);
-    }
+/// How a step ended, read from what was captured.
+fn step_exit(captured: &Captured) -> StepExit {
     StepExit {
         code: captured.code,
         last_line: captured.stdout.last_line(),
@@ -350,9 +380,14 @@ fn step_exit(log: Option<&StepLog>, unit: &str, captured: &Captured) -> StepExit
 }
 
 impl LaunchdLauncher {
-    /// Runs `run` as one job and waits for its end (the steps in the module documentation).
-    fn run_job(&self, run: &Run<'_>) -> Result<StepExit, LaunchError> {
-        let label = Label::from_unit(run.unit).map_err(|e| LaunchError::Launcher(e.to_string()))?;
+    /// Runs `run` as one job under `label` and waits for its end (the steps in the module
+    /// documentation); gives what was captured, after the log (if any) was given it.
+    fn run_job(
+        &self,
+        run: &Run<'_>,
+        label: Result<Label, LabelError>,
+    ) -> Result<Captured, LaunchError> {
+        let label = label.map_err(|e| LaunchError::Launcher(e.to_string()))?;
         let files = JobFiles::of(&self.jobs_dir, &label);
         let job = step_job(run, label.clone(), &files)?;
         executable(run.executable)?;
@@ -381,19 +416,36 @@ impl LaunchdLauncher {
         // could not be unloaded is booted out by the next run of its label.
         let _ = self.launchctl.run(&bootout_args(&label));
         let _ = fs::remove_dir_all(&files.dir);
-        Ok(step_exit(self.log.as_ref(), run.unit, &captured))
+        if let Some(log) = self.log.as_ref() {
+            log(run.unit, &captured);
+        }
+        Ok(captured)
+    }
+
+    /// Runs a step or an additive step as one job under its step label.
+    fn run_step(&self, run: &Run<'_>) -> Result<StepExit, LaunchError> {
+        let captured = self.run_job(run, Label::from_unit(run.unit))?;
+        Ok(step_exit(&captured))
     }
 }
 
 impl StepLauncher for LaunchdLauncher {
     fn run(&self, call: &StepCall<'_>) -> Result<StepExit, LaunchError> {
-        self.run_job(&Run::step(call))
+        self.run_step(&Run::step(call))
     }
 
     /// Runs `<executable> <hook_args...> <step> --params <params>` as [`StepLauncher::run`]
     /// runs a step, bounded by `timeout_secs`.
     fn run_additive(&self, call: &AdditiveCall<'_>) -> Result<StepExit, LaunchError> {
-        self.run_job(&Run::additive(call))
+        self.run_step(&Run::additive(call))
+    }
+
+    /// Runs `<executable> <args...>` as one job under [`Label::probe`] of its unit, bounded by
+    /// `timeout_secs` (`0` is 1 second), and reads its exit as `SystemdLauncher` does
+    /// ([`ProbeExit::from_captured`]).
+    fn run_probe(&self, call: &ProbeCall<'_>) -> Result<ProbeExit, LaunchError> {
+        let captured = self.run_job(&Run::probe(call), Label::probe(call.unit))?;
+        Ok(ProbeExit::from_captured(&captured, call.output_bytes))
     }
 
     fn stop(&self, unit: &str) -> Result<(), LaunchError> {
