@@ -1,8 +1,12 @@
 //! The read of the coordinator: the snapshot of its three lists, every page of each, with the
 //! token, over TLS that trusts the coordinator's CA alone; and every way a read fails.
 
+use std::collections::BTreeMap;
+
 use hostkeeper_enrollment::names::MacAddress;
+use hostkeeper_proto::hostkeeper::agent::v1 as agent;
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
+use hostkeeper_pxe_seed::inputs::LinuxPlatform;
 use tonic::Code;
 
 use super::fake::{self, Coordinator as FakeCoordinator, Fake, pending, pki, record};
@@ -33,7 +37,7 @@ fn read(endpoint: &str, ca: &str) -> Result<Snapshot, ReadError> {
 
 /// A snapshot keeps each record's host id, role (none when empty), MACs, enrolled mark, `host_held`
 /// and window state (a value this release does not know reads as `UNSPECIFIED`),
-/// with no platform (the field is not in the API yet); each host's node id; and, for each
+/// with no platform (the fixture states none); and, for each
 /// pending request, the host ids of the records it matches: the candidates of AMBIGUOUS, then
 /// the one of MATCHED.
 ///
@@ -89,6 +93,7 @@ fn a_snapshot_keeps_what_the_answer_set_needs() {
                     platform: None,
                 },
             ],
+            not_installable: BTreeMap::new(),
             pending: vec![
                 Pending {
                     request_id: "req-1".to_owned(),
@@ -322,4 +327,53 @@ fn no_answer_or_another_ca_fails_the_read() {
         "{refused:?}"
     );
     assert_eq!(coordinator.fake.get(|s| s.bearers.len()), 0);
+}
+
+/// A record's `platform` is read as the platform it names: unspecified as none recorded, the two
+/// Linux platforms as themselves; Darwin and a number this release does not know are read as
+/// none recorded and kept, with the value, by host id, in `not_installable`; no record of the
+/// list is lost for it, and the read does not fail.
+///
+/// Catches a Darwin or unknown platform read as a Linux one (installed), and one odd record that
+/// fails the read for every machine.
+#[test]
+fn a_records_platform_is_read_and_one_that_is_not_installable_is_kept_by_host_id() {
+    let stating = |host: &str, platform: i32| {
+        let mut record = record(host, &[], false);
+        record.platform = platform;
+        record
+    };
+    let snapshot = Snapshot::of(
+        vec![
+            stating("none-1", agent::Platform::Unspecified as i32),
+            stating("x86-1", agent::Platform::LinuxX8664 as i32),
+            stating("arm-1", agent::Platform::LinuxArm64 as i32),
+            stating("mac-1", agent::Platform::DarwinArm64 as i32),
+            stating("odd-1", 99),
+        ],
+        vec![],
+    )
+    .expect("a snapshot");
+    let platforms: Vec<(String, Option<LinuxPlatform>)> = snapshot
+        .records
+        .iter()
+        .map(|r| (r.host_id.to_string(), r.platform))
+        .collect();
+    assert_eq!(
+        platforms,
+        [
+            ("none-1".to_owned(), None),
+            ("x86-1".to_owned(), Some(LinuxPlatform::X86_64)),
+            ("arm-1".to_owned(), Some(LinuxPlatform::Arm64)),
+            ("mac-1".to_owned(), None),
+            ("odd-1".to_owned(), None),
+        ]
+    );
+    assert_eq!(
+        snapshot.not_installable,
+        BTreeMap::from([
+            ("mac-1".parse().expect("an id"), 3),
+            ("odd-1".parse().expect("an id"), 99),
+        ])
+    );
 }

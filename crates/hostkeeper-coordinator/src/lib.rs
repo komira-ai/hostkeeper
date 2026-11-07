@@ -225,6 +225,8 @@ mod http_tests;
 #[cfg(test)]
 mod install_tests;
 #[cfg(test)]
+mod inventory_platform_tests;
+#[cfg(test)]
 mod inventory_tests;
 #[cfg(test)]
 mod inventory_window_tests;
@@ -246,6 +248,8 @@ mod ops_commit_tests;
 mod ops_crash_tests;
 #[cfg(test)]
 mod ops_downgrade_tests;
+#[cfg(test)]
+mod ops_platform_tests;
 #[cfg(test)]
 mod ops_tests;
 #[cfg(test)]

@@ -132,6 +132,80 @@ await click(tree, "next-page");
 }
 
 #[test]
+fn inventory_page_records_and_shows_a_platform() {
+    // Proves: the platform choice is sent as the enum name the gateway takes
+    // (`PLATFORM_LINUX_ARM64`, `PLATFORM_LINUX_X86_64`) and left out while "none" is chosen, a
+    // choice kept by the form for the next add, and each record's platform shown in its own
+    // column (a record with none, or one the page does not know, as "-").
+    let mut ui = Ui::start();
+    ui.reply(
+        &m("Enrollment/ListRecords"),
+        json!({"records": [
+            {"hostId": "arm-1", "serial": "SN-1", "platform": "PLATFORM_LINUX_ARM64"},
+            {"hostId": "x86-1", "serial": "SN-2", "platform": "PLATFORM_LINUX_X86_64"},
+            {"hostId": "none-1", "serial": "SN-3"},
+            {"hostId": "odd-1", "serial": "SN-4", "platform": "PLATFORM_DARWIN_ARM64"},
+        ]}),
+    );
+    ui.reply(
+        &m("Enrollment/AddRecord"),
+        json!({"record": {"hostId": "arm-2"}}),
+    );
+    ui.reply(
+        &m("Enrollment/AddRecord"),
+        json!({"record": {"hostId": "x86-2"}}),
+    );
+    ui.reply(
+        &m("Enrollment/AddRecord"),
+        json!({"record": {"hostId": "none-2"}}),
+    );
+    let out = ui.run(&page_driver(
+        "inventory",
+        "{}",
+        "[]",
+        r#"
+for (const [host, platform] of [["arm-2", "linux-arm64"], ["x86-2", "linux-x86_64"], ["none-2", ""]]) {
+  type(tree, "record-host-id", host);
+  type(tree, "record-serial", host);
+  choose(tree, "record-platform", platform);
+  await click(tree, "add-record");
+}
+return { rows: rows(tree).map((row) => row.slice(0, 1).concat(row.slice(5, 6))) };
+"#,
+    ));
+    let sent = |host: &str, platform: Option<&str>| {
+        let mut body = json!({"hostId": host, "role": "", "dataMacs": [], "bmcMac": "",
+            "serial": host, "notes": ""});
+        if let Some(platform) = platform {
+            body["platform"] = json!(platform);
+        }
+        (m("Enrollment/AddRecord"), body)
+    };
+    assert_eq!(
+        bodies(&ui),
+        [
+            (
+                m("Enrollment/ListRecords"),
+                json!({"limit": 50, "pageToken": ""})
+            ),
+            sent("arm-2", Some("PLATFORM_LINUX_ARM64")),
+            sent("x86-2", Some("PLATFORM_LINUX_X86_64")),
+            sent("none-2", None),
+        ]
+    );
+    assert_eq!(
+        out["out"]["rows"],
+        json!([
+            ["Host id", "Platform"],
+            ["arm-1", "linux-arm64"],
+            ["x86-1", "linux-x86_64"],
+            ["none-1", "-"],
+            ["odd-1", "-"],
+        ])
+    );
+}
+
+#[test]
 fn inventory_page_removes_a_record_only_with_a_reason_and_pages_back() {
     // Catches: a remove sent without a reason or with one off its rule, a remove of another
     // record than the row's, an empty list shown as a table, and a first page that keeps the
@@ -245,6 +319,7 @@ return { rows: rows(tree), marked: marked.map((row) => text(row.children[0])) };
                 "Data MACs",
                 "BMC MAC",
                 "Serial",
+                "Platform",
                 "Notes",
                 "Added by",
                 "Added at",
@@ -265,6 +340,7 @@ return { rows: rows(tree), marked: marked.map((row) => text(row.children[0])) };
                 "-",
                 "-",
                 "-",
+                "-",
                 "yes",
                 "-",
                 "-",
@@ -274,7 +350,7 @@ return { rows: rows(tree), marked: marked.map((row) => text(row.children[0])) };
                 "Remove"
             ],
             [
-                "db-2", "-", "-", "-", "SN-2", "-", "-", "-", "no", "-", "-", "-", "-", "",
+                "db-2", "-", "-", "-", "SN-2", "-", "-", "-", "-", "no", "-", "-", "-", "-", "",
                 "Remove"
             ],
         ])
@@ -583,7 +659,7 @@ fn inventory_page_shows_each_records_window_and_state() {
         "{}",
         "[]",
         r#"
-return { rows: rows(tree).slice(1).map((r) => r.slice(0, 1).concat(r.slice(9))),
+return { rows: rows(tree).slice(1).map((r) => r.slice(0, 1).concat(r.slice(10))),
          opens: named(tree, "open-record").length };
 "#,
     ));

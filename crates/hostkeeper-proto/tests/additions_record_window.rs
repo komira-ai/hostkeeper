@@ -127,6 +127,7 @@ fn record_now() -> op::InventoryRecord {
         state: op::RecordState::Used.into(),
         used_by_request_id: "ab".repeat(32),
         used_unix: 1_800_000_060,
+        platform: 0,
     }
 }
 
@@ -199,6 +200,7 @@ fn a_reader_before_the_window_reads_every_field_it_knows() {
         notes: "rack 4, slot 2".to_owned(),
         approve_until_unix: 1_800_086_400,
         approve_for_secs: 0,
+        platform: 0,
     };
     assert_eq!(
         AddBefore::decode(add.encode_to_vec().as_slice()).expect("an older reader decodes"),

@@ -81,7 +81,7 @@ fn report(target: &str, reason: &str) -> serde_json::Value {
 }
 
 /// An operations state with something in every list, lists out of any sorted order, and entries
-/// at their default.
+/// at their default; one inventory record states its platform.
 pub(crate) fn rich_ops() -> OpsState {
     let mut state: OpsState = serde_json::from_value(json!({
         "schema": 1,
@@ -133,6 +133,7 @@ pub(crate) fn rich_ops() -> OpsState {
         "idle": {}
     }))
     .expect("plan positions");
+    state.inventory[0].platform = Some(hostkeeper_wire::Platform::LinuxArm64);
     state
 }
 
