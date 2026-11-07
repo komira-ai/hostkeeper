@@ -9,8 +9,9 @@ use std::convert::Infallible;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use bytes::Bytes;
-use hostkeeper_enrollment::enroll::RequestState;
+use hostkeeper_enrollment::enroll::{ApprovalRecord, Decision, RequestState};
 use hostkeeper_enrollment::fs::RealFs;
+use hostkeeper_enrollment::names::Role;
 use hostkeeper_mdm_gate::enroll::{TICK, run};
 use hostkeeper_mdm_gate::{
     DeviceRecord, DeviceStore, FileDeviceStore, Phase, ProfileAnswer, ProfileCommand,
@@ -24,7 +25,8 @@ use hyper_util::rt::TokioIo;
 use plist::{Dictionary, Value};
 
 use crate::enrollment::tests::support::{
-    FixedClock, HostKey, NOW, Rig, SERIAL, audit_of, audited, coordinator_over, mac_request,
+    FixedClock, HostKey, NOW, Rig, SERIAL, audit_of, audited, coordinator_over, host_id,
+    mac_request,
 };
 use crate::enrollment::{GATE_AUDITOR, MacAllowlist, MacPolicy, os_random};
 use crate::mdm::tests::{devices_dir, flags_in, record};
@@ -424,4 +426,103 @@ async fn the_start_refuses_a_bad_identifier_or_daemon_config() {
     without.gate.tick().await;
     assert_eq!(without.gate.records(), [ready(NOW, 1)]);
     assert!(Mdm::posted(None).is_none());
+}
+
+/// An approval of `key`'s request as `host`, recorded by `operator` at `at`.
+fn approve_at(rig: &Rig, key: &HostKey, host: &str, at: u64) {
+    rig.enrollment
+        .store()
+        .approve_recorded(
+            &key.key_hash(),
+            &key.key_hash(),
+            &Decision {
+                host_id: host_id(host),
+                role: Role::parse("build").expect("a role"),
+                services: Vec::new(),
+                replace: false,
+            },
+            &ApprovalRecord {
+                approver: "operator".to_owned(),
+                approved_unix: at,
+                reason: "a test".to_owned(),
+                mac_nonce: None,
+                mac_enrolled_since_unix: None,
+            },
+        )
+        .expect("approved");
+}
+
+/// Catches: the coordinator's answers to the gate not those of its store: a duplicate claim not
+/// flagged (so the gate takes it as a candidate), a request of another serial listed, a
+/// request's posting time or platform UUID changed; an approval of another serial counted as
+/// the Mac's, or an earlier approval taken for the last; a nonce not issued for a waiting
+/// request, or issued for a malformed serial; the allowlist not the one the enrollment holds.
+#[test]
+fn the_enrollment_answers_the_gate_from_its_store() {
+    use hostkeeper_mdm_gate::Enrollments as _;
+    let policy = MacPolicy {
+        allowlist: MacAllowlist::parse(ALLOWED).expect("an allowlist"),
+        ..MacPolicy::default()
+    };
+    let rig = Rig::configured(
+        "mdm-enroll-port",
+        Arc::new(RealFs),
+        os_random(),
+        |enrollment| enrollment.with_mac(policy),
+    );
+    let e = &rig.enrollment;
+    assert!(e.allowed(SERIAL));
+    assert!(!e.allowed("C02OTHER0001"));
+
+    let (first, twin, other) = (HostKey::new(), HostKey::new(), HostKey::new());
+    e.enroll(mac_request(&first, "machine-mac", SERIAL, &[]))
+        .expect("posted");
+    rig.clock.set(NOW + 3);
+    // The same machine id from another key: a duplicate claim.
+    e.enroll(mac_request(&twin, "machine-mac", SERIAL, &[]))
+        .expect("posted");
+    e.enroll(mac_request(&other, "machine-other", "C02OTHER0001", &[]))
+        .expect("posted");
+    let mut waiting = e.waiting(SERIAL).expect("listed");
+    waiting.sort_by_key(|request| request.posted_unix);
+    assert_eq!(
+        waiting,
+        [
+            hostkeeper_mdm_gate::Waiting {
+                request_id: first.key_hash(),
+                platform_uuid: PLATFORM_UUID.to_owned(),
+                posted_unix: NOW,
+                duplicate_claim: false,
+            },
+            hostkeeper_mdm_gate::Waiting {
+                request_id: twin.key_hash(),
+                platform_uuid: PLATFORM_UUID.to_owned(),
+                posted_unix: NOW + 3,
+                duplicate_claim: true,
+            },
+        ]
+    );
+
+    assert_eq!(e.last_approval_unix(SERIAL).expect("read"), None);
+    approve_at(&rig, &other, "mac-other", NOW + 5);
+    assert_eq!(e.last_approval_unix(SERIAL).expect("read"), None);
+    approve_at(&rig, &first, "mac-first", NOW + 9);
+    let later = HostKey::new();
+    e.enroll(mac_request(&later, "machine-later", SERIAL, &[]))
+        .expect("posted");
+    approve_at(&rig, &later, "mac-later", NOW + 7);
+    assert_eq!(e.last_approval_unix(SERIAL).expect("read"), Some(NOW + 9));
+
+    let pending = HostKey::new();
+    e.enroll(mac_request(&pending, "machine-pending", SERIAL, &[]))
+        .expect("posted");
+    let nonce = e.issue_nonce(SERIAL, &pending.key_hash()).expect("a nonce");
+    assert_eq!(nonce.as_bytes().len(), 32);
+    let refused = e
+        .issue_nonce("not a serial", &pending.key_hash())
+        .expect_err("refused");
+    assert_eq!(
+        refused.to_string(),
+        "a Mac serial is 1 to 64 ASCII letters and digits"
+    );
 }

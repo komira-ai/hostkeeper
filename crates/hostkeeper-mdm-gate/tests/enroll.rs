@@ -694,6 +694,34 @@ async fn no_nonce_when_the_requests_cannot_be_listed() {
     assert_eq!(rig.fake.issued().len(), 1);
 }
 
+/// Catches: a nonce an approval consumed still counted as live for the rest of its hour, so a
+/// Mac wiped and enrolled again within that hour (a new key, a new request) gets no nonce and
+/// waits for an operator; an approval from before the nonce's issue ending it.
+#[tokio::test]
+async fn a_consumed_nonce_does_not_hold_back_the_next_enrollment() {
+    let rig = rig("nonce-consumed", true, true).await;
+    rig.fake.approve(SERIAL, SINCE - 1);
+    rig.fake.wait(SERIAL, request(1, UDID, 1_005));
+    look(&rig, 1_010).await;
+    assert_eq!(
+        rig.fake.issued().len(),
+        1,
+        "an approval before the issue ends nothing"
+    );
+    rig.fake.approve(SERIAL, 1_020);
+    look(&rig, 1_021).await;
+    assert_eq!(rig.removed(), [nonce_id()]);
+
+    // Wiped within the nonce's hour: a new enrollment and the new key's request.
+    rig.clock().set(1_200);
+    rig.enroll(SERIAL, true).await;
+    rig.fake.wait(SERIAL, request(2, UDID, 1_205));
+    look(&rig, 1_206).await;
+    let issued = rig.fake.issued();
+    assert_eq!(issued.len(), 2, "the consumed nonce holds nothing back");
+    assert_eq!(issued[1].1, key_hash(2));
+}
+
 /// Catches: a nonce pushed again after a restart from bytes the gate cannot have, or a new one
 /// issued while the old one lives; the record of the nonce lost at the restart; no new nonce
 /// once the old one expired.

@@ -23,8 +23,9 @@
 //!    sent again at the next look.
 //! 3. A nonce is issued only when every condition of design 5.1 holds: the device is
 //!    supervised (and enrolled, as above); the serial is on the allowlist (as above); no nonce
-//!    issued for the serial is still good ([`NONCE_VALID_SECS`] from its issue: at 3600 seconds
-//!    it is, at 3601 it is not); and exactly one request is a candidate: waiting for an
+//!    issued for the serial is still good: unexpired ([`NONCE_VALID_SECS`] from its issue: at
+//!    3600 seconds it is, at 3601 it is not) and unconsumed (no approval of the serial recorded
+//!    since its issue); and exactly one request is a candidate: waiting for an
 //!    operator, not a duplicate claim, claiming the serial and a platform UUID equal to the
 //!    device's UDID (letter case aside), and posted at or after the first `TokenUpdate` of the
 //!    current enrollment. The nonce is bound to that request; its profile is pushed and the push
@@ -178,9 +179,23 @@ pub async fn run(gate: Arc<Gate>, every: Duration) -> Infallible {
     }
 }
 
-/// Whether `nonce` is still good at `now`.
-fn live(nonce: &NonceRecord, now: u64) -> bool {
+/// Whether `nonce` is still good at `now`: unexpired, and unconsumed (design 5.1, condition 4).
+/// An approval of its serial recorded at or after its issue (`last_approval`) ends it: that
+/// approval consumed it, or approved its request without it, so it approves nothing more.
+fn live(nonce: &NonceRecord, now: u64, last_approval: Option<u64>) -> bool {
     now.saturating_sub(nonce.issued_unix) <= NONCE_VALID_SECS
+        && last_approval.is_none_or(|at| at < nonce.issued_unix)
+}
+
+/// The times one look judges a device's nonce by.
+#[derive(Clone, Copy)]
+struct Look {
+    /// When the device's current enrollment began.
+    since: u64,
+    /// When an approval of its serial was last recorded.
+    last_approval: Option<u64>,
+    /// Now.
+    now: u64,
 }
 
 /// Whether the profile command `command` (of `record`) is to be sent again at `now`: never
@@ -218,20 +233,25 @@ impl Gate {
         let Some((side, serial, since)) = eligible else {
             return;
         };
-        let approved = match side.enrollments.last_approval_unix(&serial) {
-            Ok(at) => at.is_some_and(|at| at >= since),
+        let last_approval = match side.enrollments.last_approval_unix(&serial) {
+            Ok(at) => at,
             Err(why) => {
                 tracing::warn!(enrollment_id = %record.enrollment_id, %why, "the enrollment did not say whether the Mac is approved");
                 return;
             }
         };
-        if approved {
+        if last_approval.is_some_and(|at| at >= since) {
             return self.remove_nonce(side, record, now).await;
         }
         // One profile command a look: a config profile sent now is followed by the nonce at
         // the next look, which the daemon, not yet installed, cannot have asked for anyway.
         if !self.send_config(side, record.clone(), now).await {
-            self.push_nonce(side, record, &serial, since, now).await;
+            let when = Look {
+                since,
+                last_approval,
+                now,
+            };
+            self.push_nonce(side, record, &serial, when).await;
         }
     }
 
@@ -269,25 +289,27 @@ impl Gate {
     }
 
     /// The nonce profile: a new nonce when every condition holds, or the live one again.
-    async fn push_nonce(
-        &self,
-        side: &EnrollSide,
-        record: DeviceRecord,
-        serial: &str,
-        since: u64,
-        now: u64,
-    ) {
+    async fn push_nonce(&self, side: &EnrollSide, record: DeviceRecord, serial: &str, when: Look) {
+        let Look {
+            since,
+            last_approval,
+            now,
+        } = when;
         if record.supervised != Some(true) {
             return;
         }
-        if let Some(nonce) = record.nonce.clone().filter(|nonce| live(nonce, now)) {
+        if let Some(nonce) = record
+            .nonce
+            .clone()
+            .filter(|nonce| live(nonce, now, last_approval))
+        {
             return self.push_again(side, record, nonce, now).await;
         }
         let live_elsewhere = self.records().iter().any(|other| {
             other
                 .nonce
                 .as_ref()
-                .is_some_and(|nonce| nonce.serial == serial && live(nonce, now))
+                .is_some_and(|nonce| nonce.serial == serial && live(nonce, now, last_approval))
         });
         if live_elsewhere {
             return;

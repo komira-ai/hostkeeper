@@ -14,7 +14,7 @@
 //! The enrollment side (design 4 and 5) adds two things: the config profile's `InstallProfile`
 //! of this enrollment ([`DeviceRecord::config_profile`]), forgotten with the enrollment, and the
 //! last nonce the gate issued for the device ([`DeviceRecord::nonce`]), kept across enrollments,
-//! since a nonce lives its hour whatever the device does.
+//! since a nonce lives its hour whatever the device does, unless an approval consumes it.
 
 use hostkeeper_enrollment::names::KeyHash;
 
