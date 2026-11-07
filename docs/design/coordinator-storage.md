@@ -588,12 +588,10 @@ services:
     image: postgres@sha256:<digest of postgres:16, pinned by C5>
     network_mode: host
     command: ["postgres", "-c", "listen_addresses=127.0.0.1", "-c", "port=5432"]
-    environment:
-      POSTGRES_DB: hostkeeper
-      POSTGRES_USER: hostkeeper
-      POSTGRES_PASSWORD_FILE: /run/secrets/hostkeeper-db-password
     secrets: [hostkeeper-db-password]
-    volumes: [hostkeeper-db:/var/lib/postgresql/data]
+    volumes:
+      - hostkeeper-db:/var/lib/postgresql/data
+      - ./sql:/etc/hostkeeper-db:ro      # init.sql and password.sql, the setup below; read by psql, not by the image
     healthcheck:
       test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-p", "5432", "-U", "hostkeeper", "-d", "hostkeeper"]
       interval: 5s
@@ -638,16 +636,42 @@ volumes:
   ([verify-a-release.md](../deploy/verify-a-release.md)) and loaded with `docker load`, which names it by the release's
   version. It sets no environment variable (the packaging test of `packaging/container/Dockerfile` holds it to that),
   and the compose file sets none for it.
+- **No environment, and the database made by an explicit step.** The compose file sets no environment variable for
+  either container. The Postgres image's own first-start setup, which reads `POSTGRES_*` variables, is not used: the
+  data directory is made once by `initdb` with its settings on the command line, and the image's entrypoint then finds
+  it made and only starts the server. The one-time setup of the C5 runbook:
+
+  1. `docker compose run --rm --no-deps --user postgres --entrypoint initdb postgres --pgdata=/var/lib/postgresql/data
+     --username=postgres --auth-local=trust --auth-host=scram-sha-256`. The superuser `postgres` gets no password, so
+     with `scram-sha-256` on TCP it cannot log in over the network at all; it is reached only through the container's
+     own socket, by `docker compose exec`, which needs root on the machine already.
+  2. `docker compose up -d postgres`.
+  3. `docker compose exec -T postgres psql --username=postgres --file=/etc/hostkeeper-db/init.sql`, where `init.sql`
+     and `password.sql` (committed beside the compose file by C5, both mounted read-only) are:
+
+     ```sql
+     -- init.sql
+     CREATE ROLE hostkeeper LOGIN;
+     \ir password.sql
+     CREATE DATABASE hostkeeper OWNER hostkeeper;
+     -- password.sql
+     \set password `cat /run/secrets/hostkeeper-db-password`
+     ALTER ROLE hostkeeper PASSWORD :'password';
+     ```
+
+     psql reads the password from the mounted secret itself, so it is never on a command line or in an environment.
+  4. `docker compose up -d coordinator`: its first start runs the migrations (section 6).
 - **The local volume** holds the CA key and its certificate, the server certificate file and the marker. The image runs
   as user 65532, which must own the key file (`Ca::open` refuses a key another user owns or others can read). The
   runbook of C5 says how to place them.
 - **The two secrets** are files on the machine, outside the repository and the compose directory's version control.
-  Without swarm, compose mounts a secret as a bind mount that keeps the host file's owner and mode, so: `db-dsn` is
-  owned by 65532 with mode 0400 (the rule of `read_secret`); `db-password` is read by the Postgres image's entrypoint,
-  as its `postgres` user, so it is owned by that user's uid with mode 0400 **[V]**: the uid of the pinned image is
-  checked by C5. The password is in both. To change it: `ALTER ROLE hostkeeper PASSWORD ...` through `docker compose
-  exec`, write both files, restart the coordinator. C5's acceptance is a `docker compose up` on a fresh machine that
-  reaches a healthy database and a coordinator that holds the lock.
+  Without swarm, compose mounts a secret as a bind mount that keeps the host file's owner and mode, so `db-dsn` is
+  owned by 65532 with mode 0400 (the rule of `read_secret`), and `db-password`, read only by the `cat` of
+  `password.sql` inside the container as its `postgres` user, is owned by that user's uid with mode 0400 (**[V]**: the
+  uid of the pinned image is checked by C5). The password is in both. To change it: write the new password into both
+  files, run `password.sql` again through the same `docker compose exec ... psql --file`, and restart the coordinator.
+  C5's acceptance is the setup above on a fresh machine, ending in a healthy database and a coordinator that holds the
+  lock.
 - **Health.** The database has a health check and the coordinator starts only once it passes. The coordinator has none
   of its own: its image has no shell or client to run one. It exits on a refusal and the restart policy starts it again
   (section 5).
@@ -751,7 +775,11 @@ on the database and the back-out window has closed.
   half, a load that drops order, a spend that forgets) and expect the failure of that clause, so the suite is shown to
   catch what it claims (rule T15).
 - **Postgres in CI, as jobscheduler runs it.** The existing `test` job gains a `postgres` service container pinned by
-  digest, with trust authentication on loopback and no password; no new job (rule B9). The tests read the server's URL
+  digest, with trust authentication on loopback and no password; no new job (rule B9). A GitHub service container
+  takes no start command, so the trust setting is the image's own variable, `POSTGRES_HOST_AUTH_METHOD: trust`, in the
+  workflow's `services:` block: a setting of a throwaway third-party container that lives for one job, as jobscheduler's
+  CI sets it, and no configuration of hostkeeper's code. The deployment sets no such variable (section 9). The
+  tests read the server's URL
   from one variable the job sets, `HOSTKEEPER_TEST_POSTGRES_URL`, through one function of the test support with an
   `#[expect(clippy::disallowed_methods, reason = ...)]`; no product code reads the environment. A test that needs the
   server fails when the variable is unset, with a message saying how to start one; it never skips. Each test creates its
@@ -829,7 +857,7 @@ on the database and the back-out window has closed.
 | C2 | The enrollment crate's `Records` port (a public trait) with its files and fake implementations, which the store uses in place of `Fs` (kept for the CA key and the file `Records`) | none | M |
 | C3 | The Postgres store: migrations `0001`, the lock and the epoch, the writing thread and the read connection, the in-memory enrollment copy, `--database-dsn-file` and `--halt-marker-file`, the `store_unreachable` alert, the workspace dependency `postgres` (its licences checked by `cargo deny`), the service container in the `test` job and the workflow lint's rule; the operator docs that describe the store (coordinator-state.md, holds-and-force.md, assignments.md, rollout-plans.md, enrollment.md, enrollment-coordinator.md) | C1, C2 | L |
 | C4 | `import` and `export` | C3 | M |
-| C5 | `docs/deploy/coordinator/`: the compose file with both digests, the backup timer, the runbook of the local volume, the secrets, the restore and the drill | C4 | S |
+| C5 | `docs/deploy/coordinator/`: the compose file with both digests and no environment, `init.sql`, `password.sql` and the one-time setup, the backup timer, the runbook of the local volume, the secrets, the restore and the drill | C4 | S |
 | C6 | Generations and write ids: migration `0002` (`refuse`), `if_generation` and `write_id` honoured, `SetDesiredResponse.record` filled | C3 | M |
 | C7 | The cutover, run by the operator with its plan, apply and back-out, outside this repository | C5 | S |
 | C8 | `docs/report` and the README's state sentences, once the farm runs on the database | C7 | S |
@@ -861,6 +889,7 @@ tests in its own pull request.
 | Migrations | Run by `serve` at start, under the lock. | One writer, so no installer race; the farm has no installer step for the coordinator. |
 | Approval and its audit row | Two transactions, with `audit_to` at start, as today. | The enrollment crate depends on no other crate of the workspace. |
 | Client | The blocking `postgres` crate on the store's own thread. | The stores' calls are synchronous under the fleet lock; jobscheduler runs the same client. |
+| How the database is made | `initdb` with explicit flags, then `init.sql` and `password.sql` through psql; the image's `POSTGRES_*` setup is not used. | Configuration is never passed by environment (AGENTS.md rule S2), and the password never leaves its file. |
 | Networking of the containers | The host's network for both; Postgres on loopback. | The listeners bind one interface's address by rule; the database stays off the network. |
 | Tests' server URL | One environment variable read by the test support only, failing when unset. | jobscheduler's pattern; product code reads no environment. |
 | The file store after the move | Kept for one release cycle, then deleted (C9). | It is the back-out, and `export` writes through it. |
