@@ -31,15 +31,20 @@
 //! - [`EnrollmentStore::held`] says what the store holds for a host id ([`HostHeld`]): nothing,
 //!   an approved host, or a deny row, whether or not the host was heard from since start.
 //!
-//! Every mutation takes one mutex and an exclusive `flock` on the store's lock file. The files
-//! and their messages are listed in `proto/hostkeeper/enrollment/store/v1/store.proto`.
+//! The store keeps its state through the [`records::Records`] port: the files of one directory
+//! ([`records::FileRecords`], [`EnrollmentStore::open`]), a fake ([`records::MemoryRecords`]),
+//! or the coordinator's database. Every record it reads is checked, whatever keeps it. Every
+//! mutation takes one mutex and the records' lock (for the files, an exclusive `flock` on the
+//! store's lock file). The records are the messages of
+//! `proto/hostkeeper/enrollment/store/v1/store.proto` ([`records::pb`]).
 
-mod files;
 mod hosts;
 mod issue;
 mod mac_nonce;
 mod poll;
+pub mod records;
 mod reject;
+mod rows;
 mod store;
 
 use std::io;
@@ -132,7 +137,7 @@ pub enum RequestState {
     Denied = 5,
     /// It waited for an operator longer than the coordinator's request TTL
     /// ([`EnrollmentStore::expire`]): its host is unenrolled, and it is never approved. Not a
-    /// state the file's `state` field holds: the file keeps the waiting state it expired in and
+    /// state the record's `state` field holds: the record keeps the waiting state it expired in and
     /// sets `expired_unix`, which a release before expiry ignores.
     Expired = 6,
 }
@@ -267,13 +272,13 @@ pub struct EnrolledHost {
 }
 
 /// What the store holds for a host id ([`EnrollmentStore::held`]). It is read from the store's
-/// files alone, so it is the same before and after a restart, and the same for a host never
+/// records alone, so it is the same before and after a restart, and the same for a host never
 /// heard from as for one heartbeating.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HostHeld {
     /// No host: the id was never approved, and is not denied.
     None,
-    /// A host was approved as the id (its host file names its key), and the id is not denied.
+    /// A host was approved as the id (its host record names its key), and the id is not denied.
     Approved,
     /// The id is denied (`Hosts.Retire`) and its deny row is retiring: an update may still be
     /// in flight on it ([`EnrollmentStore::is_retiring`]).
@@ -298,23 +303,28 @@ pub struct Approval {
     pub replace: bool,
 }
 
-/// The store could not read or write its files.
+/// The store could not read or write its records. `path` is where the record is kept
+/// ([`records::Records::place`]): a file's path, or the name of a record not kept in a file.
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
     #[error("cannot use {path}: {source}")]
     Io { path: PathBuf, source: io::Error },
-    /// A file this release cannot read: not protobuf, no schema, or inconsistent.
+    /// A record this release cannot read: not protobuf, no schema, or inconsistent.
     #[error("{path} is not a store file this release reads: {reason}")]
     Corrupt { path: PathBuf, reason: String },
-    /// A file written by a newer release.
+    /// A record written by a newer release.
     #[error("{path} has schema {schema}; this release reads schema 1")]
     NewerSchema { path: PathBuf, schema: u32 },
-    /// A file holding a state this release does not know.
+    /// A record holding a state this release does not know.
     #[error("{path} holds state {value}, which this release does not know")]
     UnknownState { path: PathBuf, value: i32 },
     /// No host of this id was ever approved.
     #[error("no host {0} was approved")]
     UnknownHost(HostId),
+    /// A record given to a commit whose key does not parse ([`records::Record::key`]); its kind
+    /// is named. Nothing of the commit is written.
+    #[error("a {0} record whose key does not parse is not kept")]
+    Unkeyed(&'static str),
 }
 
 /// Why a post was refused.

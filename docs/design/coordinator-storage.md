@@ -4,8 +4,8 @@ Status: design, for the maintainers' comments. It supersedes "plain files, no da
 [hostkeeper-design.md](hostkeeper-design.md) section 4.3 ("There is no database") and the coordinator's rows of its
 section 10, the halts-file storage of the plan position in [rollout-update-plans.md](rollout-update-plans.md) section 3,
 and the device-record file of [hostkeeper-mdm.md](hostkeeper-mdm.md) section 6.1. Where they disagree with this document
-on where the coordinator keeps its state, this document wins. Nothing here is built: every statement about new code is
-**Designed**, and section 13 lists the build items, C1 to C11, one pull request each. The tags are those of
+on where the coordinator keeps its state, this document wins. Nothing here is built but C2 (section 4.1): every other
+statement about new code is **Designed**, and section 13 lists the build items, C1 to C11, one pull request each. The tags are those of
 hostkeeper-design.md: **Built** names code on `main` with a path, **Designed** means nothing implements it yet.
 
 Ruling: the coordinator runs as one container and Postgres 16 as a second, on one machine for now, later on separate
@@ -365,7 +365,10 @@ the files (the code of today behind it, still on `Fs`), Postgres (in the coordin
 connection), and a fake. `Fs` itself stays: the CA key file is read through it (`read_private`, the owner and mode check
 of `Ca::open`), and the file `Records` writes through it. Under Postgres the store's lock is its in-process mutex alone;
 the advisory lock of section 5 keeps other processes off. Adding the public trait to the enrollment crate is a change to
-its public interface, made in its own pull request (C2).
+its public interface, made in its own pull request (C2). **Built** (C2):
+`crates/hostkeeper-enrollment/src/enroll/records/`, with `FileRecords`, `MemoryRecords` and the conformance suite
+(`records::conformance`). Its list gives every request, not the requests of one state: the store checks every request
+a list gives it, as a file reader does today, so a list by state would leave the other requests unread and unchecked.
 
 ### 4.2 What is one transaction
 

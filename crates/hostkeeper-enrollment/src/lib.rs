@@ -9,17 +9,20 @@
 //!   signer process would implement.
 //! - [`enroll`]: the durable enrollment store: pending requests, approval, expiry of a request
 //!   no operator approved in time, one certificate per request id and round, duplicate claims,
-//!   live-daemon duplicates and deny rows.
+//!   live-daemon duplicates and deny rows. It keeps them through the [`enroll::records::Records`]
+//!   port, with the files ([`enroll::records::FileRecords`]) and a fake
+//!   ([`enroll::records::MemoryRecords`]) here.
 //! - [`validity`]: the [`validity::UnixClock`] port, the only place the crate reads the wall
 //!   clock.
-//! - [`fs`]: the [`fs::Fs`] port the store and the key file write through, with a real
+//! - [`fs`]: the [`fs::Fs`] port the store's files and the key file write through, with a real
 //!   implementation and [`fs::FaultFs`], which fails a chosen operation.
 //! - [`names`]: host ids, roles, service names and key hashes.
 //!
 //! Errors name the refusal token the coordinator answers with (`token()`), where there is one.
 //! No RPC is served and no wire message is used here; the store's own messages
-//! (`proto/hostkeeper/enrollment/store/v1/store.proto`) are private to the crate. The crate
-//! depends on no crate of this workspace.
+//! (`proto/hostkeeper/enrollment/store/v1/store.proto`) are its records
+//! ([`enroll::records::pb`]), public so that records kept elsewhere can be written and read.
+//! The crate depends on no crate of this workspace.
 
 pub mod ca;
 pub mod enroll;
