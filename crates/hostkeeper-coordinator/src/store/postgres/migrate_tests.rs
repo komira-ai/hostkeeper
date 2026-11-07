@@ -4,11 +4,18 @@ use super::*;
 
 /// The SHA-256 of each shipped migration file, in hex. A shipped migration is never edited: a
 /// change is a migration of its own, so these only grow.
-const PINNED: [(i32, &str, &str); 1] = [(
-    1,
-    "state",
-    "6bbe0733ad81d8ae91f252c45653ab9bb3e08cc5f5bd7707f75b087042e540f5",
-)];
+const PINNED: [(i32, &str, &str); 2] = [
+    (
+        1,
+        "state",
+        "6bbe0733ad81d8ae91f252c45653ab9bb3e08cc5f5bd7707f75b087042e540f5",
+    ),
+    (
+        2,
+        "first_serving",
+        "775887559e1a70234f63e6da1419017a92c1a3a0b52aecfe9acc3c6a0f5ed9f4",
+    ),
+];
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
@@ -28,7 +35,7 @@ fn what(statement: &str) -> String {
 }
 
 /// Proves: the migrations this build ships are the ones that were released: their numbers and
-/// names are exactly [(1, "state")], each file's SHA-256 is the pinned one, and every one passes
+/// names are exactly [(1, "state"), (2, "first_serving")], each file's SHA-256 is the pinned one, and every one passes
 /// the header rule, the lint and the numbering.
 ///
 /// Catches: an edit to a shipped migration (a database that ran the old text would differ from
@@ -36,7 +43,7 @@ fn what(statement: &str) -> String {
 #[test]
 fn the_shipped_migrations_are_unchanged() {
     let listed: Vec<(i32, &str)> = SHIPPED.iter().map(|(n, name, _)| (*n, *name)).collect();
-    assert_eq!(listed, vec![(1, "state")]);
+    assert_eq!(listed, vec![(1, "state"), (2, "first_serving")]);
     let hashes: Vec<(i32, &str, String)> = SHIPPED
         .iter()
         .map(|(n, name, sql)| (*n, *name, hex(&Sha256::digest(sql.as_bytes()))))
@@ -47,10 +54,15 @@ fn the_shipped_migrations_are_unchanged() {
         .collect();
     assert_eq!(hashes, pinned);
     let set = checked(&SHIPPED).expect("every shipped migration passes");
-    assert_eq!(set.len(), 1);
-    assert_eq!(set[0].version, 1);
-    assert_eq!(set[0].name, "state");
-    assert_eq!(set[0].older, OlderReleases::Refuse);
+    let read: Vec<(i32, &str, OlderReleases)> =
+        set.iter().map(|m| (m.version, m.name, m.older)).collect();
+    assert_eq!(
+        read,
+        vec![
+            (1, "state", OlderReleases::Refuse),
+            (2, "first_serving", OlderReleases::Refuse)
+        ]
+    );
 }
 
 /// Proves: the lint refuses each statement that takes something away or ends the transaction,

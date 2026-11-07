@@ -651,6 +651,7 @@ fn host_record(host: &str, role: &str) -> pb::Host {
         services: Vec::new(),
         duplicate: false,
         first_heartbeat_unix: None,
+        first_serving_unix: None,
     }
 }
 
@@ -719,7 +720,7 @@ fn the_enrollment_copy_is_reloaded_after_a_commit_of_unknown_outcome() {
 }
 
 /// An enrollment store over the records of `store`, with `host` approved.
-fn approved(store: &Postgres, host: &str) -> (EnrollmentStore, HostId) {
+pub(super) fn approved(store: &Postgres, host: &str) -> (EnrollmentStore, HostId) {
     let records = Arc::new(crate::store::postgres::PgRecords::over(store).expect("records"));
     let enrollment = EnrollmentStore::new(records);
     let id = HostId::parse(host).expect("a host id");

@@ -16,6 +16,14 @@ fn versions(db: &TestDatabase) -> Vec<Vec<Option<String>>> {
     db.rows("SELECT version, name, older_releases FROM schema_version ORDER BY version")
 }
 
+/// The rows of `schema_version` after the shipped migrations ran.
+fn shipped_rows() -> Vec<Vec<Option<String>>> {
+    vec![
+        row("1", "state", "refuse"),
+        row("2", "first_serving", "refuse"),
+    ]
+}
+
 fn row(version: &str, name: &str, older: &str) -> Vec<Option<String>> {
     vec![
         Some(version.to_owned()),
@@ -53,11 +61,11 @@ fn message(error: &postgres::Error) -> String {
 fn a_fresh_database_gets_every_migration_in_order() {
     let db = TestDatabase::new();
     let (first, _) = db.open("first").expect("the store opens");
-    assert_eq!(versions(&db), vec![row("1", "state", "refuse")]);
+    assert_eq!(versions(&db), shipped_rows());
     let applied = db.rows("SELECT applied_unix FROM schema_version");
     first.stop();
     let (second, _) = db.open("second").expect("the store opens again");
-    assert_eq!(versions(&db), vec![row("1", "state", "refuse")]);
+    assert_eq!(versions(&db), shipped_rows());
     assert_eq!(db.rows("SELECT applied_unix FROM schema_version"), applied);
     second.stop();
 }
@@ -73,7 +81,7 @@ fn a_migration_that_fails_is_rolled_back_whole_and_stops_the_start() {
     let db = TestDatabase::new();
     let shipped = migrate::checked(&migrate::SHIPPED).expect("the shipped set");
     let failing = Migration {
-        version: 2,
+        version: 3,
         name: "half",
         older: OlderReleases::Refuse,
         sql: "CREATE TABLE half (x int); SELECT 1/0;",
@@ -81,29 +89,29 @@ fn a_migration_that_fails_is_rolled_back_whole_and_stops_the_start() {
     let mut set = shipped.clone();
     set.push(failing);
     let error = with_session(&db, move |session| {
-        migrate::apply(session, &set).expect_err("the second migration fails")
+        migrate::apply(session, &set).expect_err("the third migration fails")
     });
     assert!(matches!(
         error,
         ApplyError::Failed {
-            version: 2,
+            version: 3,
             name: "half",
             ..
         }
     ));
     assert_eq!(
         error.to_string(),
-        "migration 2 (half) failed and was rolled back: ERROR: division by zero (SQLSTATE 22012)"
+        "migration 3 (half) failed and was rolled back: ERROR: division by zero (SQLSTATE 22012)"
     );
     assert_eq!(
         db.rows("SELECT to_regclass('hostkeeper.half')::text"),
         vec![vec![None]]
     );
-    assert_eq!(versions(&db), vec![row("1", "state", "refuse")]);
+    assert_eq!(versions(&db), shipped_rows());
 
     // A migration that works is run, once, and its number answered.
     let good = Migration {
-        version: 2,
+        version: 3,
         name: "later",
         older: OlderReleases::MayRun,
         sql: "CREATE TABLE later (x int)",
@@ -114,11 +122,10 @@ fn a_migration_that_fails_is_rolled_back_whole_and_stops_the_start() {
         let ran = migrate::apply(session, &set).expect("the set applies");
         (ran, migrate::apply(session, &set).expect("and again"))
     });
-    assert_eq!((ran, again), (vec![2], Vec::<i32>::new()));
-    assert_eq!(
-        versions(&db),
-        vec![row("1", "state", "refuse"), row("2", "later", "may-run")]
-    );
+    assert_eq!((ran, again), (vec![3], Vec::<i32>::new()));
+    let mut with_later = shipped_rows();
+    with_later.push(row("3", "later", "may-run"));
+    assert_eq!(versions(&db), with_later);
 }
 
 /// Proves: the runner's failures read as text that says what failed: a session that cannot
@@ -161,16 +168,16 @@ fn a_migration_marked_refuse_stops_an_older_release_and_may_run_does_not() {
     let (store, _) = db.open("first").expect("the store opens");
     store.stop();
     db.run(
-        "INSERT INTO schema_version (version, name, older_releases) VALUES (2, 'later', 'refuse')",
+        "INSERT INTO schema_version (version, name, older_releases) VALUES (3, 'later', 'refuse')",
     )
     .expect("a later migration is recorded");
     let error = db.open("older").err().expect("an older release is refused");
     assert!(matches!(error, DatabaseError::Schema(_)));
     assert_eq!(
         error.to_string(),
-        "the database's schema is newer than this coordinator (migration 2, later)"
+        "the database's schema is newer than this coordinator (migration 3, later)"
     );
-    db.run("UPDATE schema_version SET older_releases = 'may-run' WHERE version = 2")
+    db.run("UPDATE schema_version SET older_releases = 'may-run' WHERE version = 3")
         .expect("the rule is changed");
     let (store, _) = db.open("older").expect("an older release may run");
     store.stop();

@@ -33,8 +33,8 @@ const REQUEST_COLUMNS: &str = "request_id, state, expired_unix, expired_after_se
     approved_unix, approved_reason, approved_mac_nonce";
 
 /// The columns of `enrollment_hosts`.
-const HOST_COLUMNS: &str =
-    "host_id, key_hash, machine_id, role, services, duplicate, first_heartbeat_unix";
+const HOST_COLUMNS: &str = "host_id, key_hash, machine_id, role, services, duplicate, first_heartbeat_unix, \
+    first_serving_unix";
 
 /// The value every record kept here carries in its `schema`, which only a file needs.
 const SCHEMA: u32 = 1;
@@ -167,8 +167,8 @@ fn upsert(record: &Record) -> Result<Stmt, StoreError> {
         ),
         Record::Host(h) => (
             format!(
-                "INSERT INTO enrollment_hosts ({HOST_COLUMNS}) VALUES ($1, $2, $3, $4, $5, $6, $7) \
-                 ON CONFLICT (host_id) DO UPDATE SET ({HOST_COLUMNS}) = ROW(EXCLUDED.*)"
+                "INSERT INTO enrollment_hosts ({HOST_COLUMNS}) VALUES ($1, $2, $3, $4, $5, $6, $7, \
+                 $8) ON CONFLICT (host_id) DO UPDATE SET ({HOST_COLUMNS}) = ROW(EXCLUDED.*)"
             ),
             vec![
                 text(&h.host_id),
@@ -178,6 +178,10 @@ fn upsert(record: &Record) -> Result<Stmt, StoreError> {
                 Val::Texts(h.services.clone()),
                 Val::Bool(h.duplicate),
                 match h.first_heartbeat_unix {
+                    Some(at) => Val::Int(int(at, "enrollment_hosts")?),
+                    None => Val::Null,
+                },
+                match h.first_serving_unix {
                     Some(at) => Val::Int(int(at, "enrollment_hosts")?),
                     None => Val::Null,
                 },
@@ -263,6 +267,7 @@ fn host_of(row: &Row) -> pb::Host {
         services: row.get(4),
         duplicate: row.get(5),
         first_heartbeat_unix: row.get::<_, Option<i64>>(6).map(unsigned),
+        first_serving_unix: row.get::<_, Option<i64>>(7).map(unsigned),
     }
 }
 
@@ -535,6 +540,13 @@ impl Records for PgRecords {
     fn set_first_heartbeat(&self, host: &pb::Host, at_unix: u64) -> Result<(), StoreError> {
         self.commit(&[Record::Host(pb::Host {
             first_heartbeat_unix: Some(at_unix),
+            ..host.clone()
+        })])
+    }
+
+    fn set_first_serving(&self, host: &pb::Host, at_unix: u64) -> Result<(), StoreError> {
+        self.commit(&[Record::Host(pb::Host {
+            first_serving_unix: Some(at_unix),
             ..host.clone()
         })])
     }

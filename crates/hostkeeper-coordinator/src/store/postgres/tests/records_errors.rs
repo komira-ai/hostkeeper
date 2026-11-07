@@ -73,6 +73,13 @@ fn a_record_the_database_cannot_hold_is_refused_whole() {
             }),
         ),
         (
+            "enrollment_hosts",
+            Record::Host(pb::Host {
+                first_serving_unix: Some(u64::MAX),
+                ..host("h1")
+            }),
+        ),
+        (
             "mac_nonces",
             Record::MacNonce(pb::MacNonce {
                 nonce_sha256: vec![3; 32],

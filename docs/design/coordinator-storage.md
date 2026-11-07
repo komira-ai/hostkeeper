@@ -302,7 +302,8 @@ CREATE INDEX enrollment_machine ON enrollment_requests (machine_id) WHERE machin
 enrollment_issued(request_id bytea PRIMARY KEY REFERENCES enrollment_requests, round bigint NOT NULL,
   serial bigint NOT NULL, host_id text NOT NULL, not_after bigint NOT NULL, certificate_der bytea NOT NULL)
 enrollment_hosts(host_id text PRIMARY KEY, key_hash bytea NOT NULL, machine_id text NOT NULL, role text NOT NULL,
-  services text[] NOT NULL, duplicate boolean NOT NULL, first_heartbeat_unix bigint, first_serving_unix bigint)
+  services text[] NOT NULL, duplicate boolean NOT NULL, first_heartbeat_unix bigint,
+  first_serving_unix bigint)              -- first_serving_unix: added by migration 0002 (first_serving)
 enrollment_deny(host_id text PRIMARY KEY, state smallint NOT NULL,  -- 1 retiring, 2 retired, 3 cleared
   cleared_by bytea)
 enrollment_serial(singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton), next bigint NOT NULL)  -- starts at 2
