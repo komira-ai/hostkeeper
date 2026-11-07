@@ -318,6 +318,8 @@ fn serve_help_lists_the_gate_flags_and_no_environment_variable() {
         "--mdm-webhook-listen <MDM_WEBHOOK_LISTEN>",
         "--mdm-profile-identifier <MDM_PROFILE_IDENTIFIER>",
         "--mdm-daemon-config <MDM_DAEMON_CONFIG>",
+        "--mdm-pkg-allowlist <MDM_PKG_ALLOWLIST>",
+        "--mdm-host <MDM_HOST>",
     ] {
         assert!(help.contains(flag), "{flag}: {help}");
     }
@@ -525,6 +527,68 @@ fn the_enrollment_side_flags_go_together_with_the_gate() {
         .collect();
     let text = refusal(&files, &refused);
     assert!(text.starts_with("--mdm-daemon-config: "), "{text}");
+}
+
+/// Catches: a pkg flag accepted without its partner or without the enrollment side
+/// (`--mdm-pkg-allowlist` without `--mdm-host`, `--mdm-host` alone, both without
+/// `--mdm-profile-identifier`), a pkg allowlist that is not root's let through the start (it
+/// says what may be installed as root on every Mac), or a host name with a scheme; each
+/// refusal names its flag.
+#[test]
+fn the_pkg_flags_go_together_and_the_allowlist_must_be_roots() {
+    let files = Files::new("mdm-pkg-flags");
+    files.put("hostkeeper.toml", DAEMON_CONFIG, 0o644);
+    let digest = "a".repeat(64);
+    files.put(
+        "pkgs.toml",
+        &format!(
+            "[[pkg]]\nsha256 = \"{digest}\"\nversion = \"0.1.66\"\npath = \"/var/lib/hostkeeper-mdm-pkg/{digest}.pkg\"\n"
+        ),
+        0o644,
+    );
+    let side = [
+        "--mdm-profile-identifier",
+        IDENTIFIER,
+        "--mdm-daemon-config",
+        "=hostkeeper.toml",
+    ];
+    let allowlist = ["--mdm-pkg-allowlist", "=pkgs.toml"];
+    let host = ["--mdm-host", "mdm.example.com"];
+    let refused: [Vec<&str>; 3] = [
+        good().into_iter().chain(side).chain(allowlist).collect(),
+        good().into_iter().chain(side).chain(host).collect(),
+        good().into_iter().chain(allowlist).chain(host).collect(),
+    ];
+    for args in refused {
+        assert_eq!(
+            hostkeeper_coordinator::config::main(files.args(&args)),
+            ExitCode::from(2),
+            "{args:?}"
+        );
+    }
+    let all: Vec<&str> = good()
+        .into_iter()
+        .chain(side)
+        .chain(allowlist)
+        .chain(host)
+        .collect();
+    assert_eq!(
+        refusal(&files, &all),
+        format!(
+            "--mdm-pkg-allowlist {}: it is not owned by root; the pkg allowlist must be a file of root's that no one else can write",
+            files.path("pkgs.toml").display()
+        )
+    );
+    let schemed: Vec<&str> = good()
+        .into_iter()
+        .chain(side)
+        .chain(allowlist)
+        .chain(["--mdm-host", "https://mdm.example.com"])
+        .collect();
+    assert_eq!(
+        refusal(&files, &schemed),
+        "--mdm-host: \"https://mdm.example.com\" is not a DNS name (the MDM host's name alone, with no scheme, port or path)"
+    );
 }
 
 /// NanoHUB's API on loopback, port 0: it queues every command and keeps each body.

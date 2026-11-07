@@ -39,6 +39,7 @@ use crate::enroll::{EnrollSide, Held};
 use crate::event::{self, Event, EventError};
 use crate::ids::{CommandUuid, EnrollmentId, shown};
 use crate::nanohub::{EnqueueError, NanoHub};
+use crate::pkg::Install;
 use crate::record::{DeviceRecord, NonceRecord, Phase, Sent};
 use crate::store::{DeviceStore, StoreError};
 
@@ -99,6 +100,8 @@ pub struct Gate {
     turn: tokio::sync::Mutex<()>,
     /// The enrollment side; without it the gate sends no profile and issues no nonce.
     enroll: Option<EnrollSide>,
+    /// The pkg install; without it (or without the enrollment side) the gate sends no pkg.
+    install: Option<Install>,
     /// The nonce last pushed to each device, to push it again.
     held: Mutex<BTreeMap<EnrollmentId, Held>>,
     /// Set by [`Gate::wake`]: a request was posted.
@@ -138,6 +141,7 @@ impl Gate {
             devices: Mutex::new(devices),
             turn: tokio::sync::Mutex::new(()),
             enroll: None,
+            install: None,
             held: Mutex::new(BTreeMap::new()),
             wake: tokio::sync::Notify::new(),
         })
@@ -148,6 +152,14 @@ impl Gate {
     #[must_use]
     pub fn with_enrollment(mut self, side: EnrollSide) -> Self {
         self.enroll = Some(side);
+        self
+    }
+
+    /// The same gate with the pkg install `install` ([`crate::install`]), or without one for
+    /// `None`. It acts only with the enrollment side too.
+    #[must_use]
+    pub fn with_install(mut self, install: Option<Install>) -> Self {
+        self.install = install;
         self
     }
 
@@ -164,6 +176,10 @@ impl Gate {
 
     pub(crate) fn enroll_side(&self) -> Option<&EnrollSide> {
         self.enroll.as_ref()
+    }
+
+    pub(crate) fn install(&self) -> Option<&Install> {
+        self.install.as_ref()
     }
 
     pub(crate) async fn turn(&self) -> tokio::sync::MutexGuard<'_, ()> {

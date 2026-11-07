@@ -323,8 +323,41 @@ is started with `-webhook-url http://<--mdm-webhook-listen>/webhook`.
     not pushed again: a new nonce is issued once the old one expires.
 
   The daemon posts the nonce back with its request ([docs/operations/enrollment.md](operations/enrollment.md)),
-  and the request is approved as above. The gate does not install the pkg yet (task M14 of the
-  design): the pkg is installed by hand until then.
+  and the request is approved as above.
+
+- **Its install of the pkg.** With `--mdm-pkg-allowlist` and `--mdm-host` as well, the gate
+  installs the hostkeeper pkg on each Mac it acts on (design sections 7.1 and 5.4). The
+  allowlist is a TOML file, a regular file of root's that its group and others cannot write,
+  read at start (a defect stops it; a new entry takes a restart):
+
+  ```toml
+  [[pkg]]
+  sha256  = "<the pkg's SHA-256, 64 lower-case hex digits>"
+  version = "0.1.66"
+  path    = "/var/lib/hostkeeper-mdm-pkg/<sha256>.pkg"   # in the MDM kit's pkg directory
+  ```
+
+  A path is absolute and named `<sha256>.pkg`, a digest is listed once and so are a version's
+  release numbers, and a list with no entry is refused. The gate sends the newest entry: an
+  `InstallEnterpriseApplication` with an inline manifest, one `software-package` asset whose
+  `url` is `https://<--mdm-host>/pkg/<sha256>.pkg` and whose `sha256` is the digest the Mac
+  checks, and the metadata `bundle-identifier` `dev.hostkeeper.hostkeeper`, `bundle-version`,
+  `kind` `software` and `title`. It hashes the file before every send and sends nothing when the
+  bytes are not the listed digest (or the file is missing), keeping the reason as the device's
+  last error.
+  - It sends the pkg once the Mac has acknowledged the config profile, supervised or not, while
+    no request is a candidate (above) and no request claiming the serial was approved in this
+    enrollment.
+  - The Mac answers only that it accepted the command, never the install's end. So the gate
+    sends it again an hour after the Mac's last answer (`Acknowledged` or an error) while those
+    conditions hold. It never sends it again while the last send is unanswered (a Mac that is
+    off), and sends at the next look one NanoHUB did not queue.
+  - Each send NanoHUB queued is audited `mdm_install_sent` by `mdm-gate`, with the serial, the
+    digest, the version and the send's count. `hostkeeper ctl mdm list-devices` shows the count
+    (`install_sends`), the last send (`install_last_sent_unix`) and its digest
+    (`install_sha256`). A new enrollment starts the count again.
+
+  Without the two flags the gate sends no pkg, and the pkg is installed by hand.
 
 ## Backup
 

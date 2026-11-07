@@ -810,7 +810,7 @@ async fn nothing_is_sent_for_a_serial_of_two_live_enrollments() {
 /// wake given before the loop waits lost.
 #[tokio::test]
 async fn the_gate_looks_when_woken() {
-    let EnrollRig { rig, fake } = rig("enroll-wake", true, true).await;
+    let EnrollRig { rig, fake, .. } = rig("enroll-wake", true, true).await;
     let Rig {
         scratch: _scratch,
         hub,

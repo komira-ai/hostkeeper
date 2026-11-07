@@ -43,7 +43,8 @@ Apple Business Manager (ABM).
    device and asks it for its serial number and its supervision state. It installs the config
    profile (section 4), then sends `InstallEnterpriseApplication` with an inline manifest. The
    manifest names one pkg by its SHA-256, and that digest must be on the gate's allowlist. The Mac
-   checks the digest itself before it installs.
+   checks the digest itself before it installs (**Built**, task M14:
+   `crates/hostkeeper-mdm-gate/src/install.rs` and `pkg.rs`, section 7.1).
 4. **The pkg's postinstall writes `hostkeeper.toml` and loads the launchd job.** It writes the
    daemon config from the managed config profile of step 3, seeds the binary directory as it does
    today, and bootstraps `dev.hostkeeper.hostkeeper`. The daemon starts, makes its key and posts
@@ -72,8 +73,7 @@ ordinary operator approval by key hash, exactly as a Linux host's does
 
 ![Mac path: MDM enrollment, package install by digest, per-device nonce, enrollment, auto-approval conditions, and the one launchd daemon](diagrams/mac-path.svg)
 
-The figure follows the seven steps; the part drawn dashed is not built yet (the pkg's send, task
-M14).
+The figure follows the seven steps.
 
 ## 2. State today
 
@@ -85,7 +85,7 @@ M14).
 | ABM server token | The upload is probably done (the depserver log shows the upload and account check calls) but unconfirmed. The token expiry has not been read. A read-only check with root on the MDM host settles both before the ADE profile is defined (task M7). |
 | ADE profile | Not defined. The `depsyncer` unit is disabled. |
 | Enrolled Macs | None. NanoHUB's log has no `/mdm` check-in, and the farm's Macs report no DEP and no MDM enrollment. |
-| Policy gate | **Built**, the device side (task M8): `crates/hostkeeper-mdm-gate`, linked into the coordinator with `--mdm-api-url` (section 6.1). **Built**, the enrollment side's config profile and nonce (task M12): `crates/hostkeeper-mdm-gate/src/enroll.rs` and `profile.rs`, with `--mdm-profile-identifier` and `--mdm-daemon-config` (sections 4 and 5). **Not built**: the pkg (M14). It runs on no host yet. kbf has one (`kbf-mdm`, binary `kbf-mdm-gate`) that was never deployed. Its server speaks JSON over HTTP while the kbf server's client calls it as gRPC, so the two cannot talk. It also has no eligibility check. |
+| Policy gate | **Built**, the device side (task M8): `crates/hostkeeper-mdm-gate`, linked into the coordinator with `--mdm-api-url` (section 6.1). **Built**, the enrollment side's config profile and nonce (task M12): `crates/hostkeeper-mdm-gate/src/enroll.rs` and `profile.rs`, with `--mdm-profile-identifier` and `--mdm-daemon-config` (sections 4 and 5). **Built**, the pkg (task M14): `crates/hostkeeper-mdm-gate/src/install.rs` and `pkg.rs`, with `--mdm-pkg-allowlist` and `--mdm-host` (sections 7.1 and 5.4). It runs on no host yet. kbf has one (`kbf-mdm`, binary `kbf-mdm-gate`) that was never deployed. Its server speaks JSON over HTTP while the kbf server's client calls it as gRPC, so the two cannot talk. It also has no eligibility check. |
 | Coordinator side | **Built**: the nonce store (32 bytes, one hour, one use, consumed in the approval's own write), the serial allowlist, the `DeviceState` port and its nine decline tokens, the nonce's binding to its request, the replacement of a wiped Mac's own host id, and the allowlist entry's services assigned at a nonce approval (task M9; `crates/hostkeeper-coordinator/src/enrollment/`, `crates/hostkeeper-enrollment/src/enroll/mac_nonce.rs`). With `--mdm-api-url` the `DeviceState` is the gate's (`crates/hostkeeper-coordinator/src/mdm.rs`); without it, `NoDeviceState`. The gate issues and pushes nonces (task M12), through `hostkeeper_mdm_gate::Enrollments` (`crates/hostkeeper-coordinator/src/enrollment/gate_port.rs`), and the daemon posts it back (M13). |
 | MDM kit | **Built**: its pure core, `crates/hostkeeper-mdm-core` (task M2): the settings, the enrollment and ADE profiles, the units and Caddyfile of the stack, the pins, under hostkeeper's names and with M2's fixes of komira-ai/kbf#2248. Its host-step layer is `crates/hostkeeper-mdm-step` (task M3). Its binary, `crates/hostkeeper-mdm` (task M4), has the verbs `fetch`, `install`, `tls` and `verify`, with M4's fixes of komira-ai/kbf#2248, and (task M5) `push-cert` with the enrollment profile at `/enroll`, `dep` (`get-cert`, `upload-token`, `define-profile`, `assign`), `migrate --from`, and the pkg directory and its `/pkg/<sha256>.pkg` route. The live stack is still the old kit's until `migrate --apply` runs on the MDM host (task M7). |
 | Daemon side | **Built**: the launchd daemon, the claims of serial and platform UUID, the pkg with its postinstall of the seed, `mac-config` and the load of the job (`docs/macos.md`), and the pkg writes the config (**Built**: `crates/hostkeeper-daemon/src/mac_config.rs`, `crates/hostkeeper-launchd/src/postinstall.rs`). The enroller reads the nonce from the managed preferences and posts it once for its own request (**Built**, task M13: `crates/hostkeeper-enroll/src/managed.rs`, `crates/hostkeeper-enroll/src/enroller.rs`). |
@@ -345,7 +345,7 @@ test-only, and tests that it reads both binary and XML plists
 | Case | What happens |
 |---|---|
 | The pkg install is slow | No request is pending, so no nonce is issued (condition 3). Nothing expires. |
-| The pkg install fails, or never happens | The device stays enrolled with no candidate request. `InstallEnterpriseApplication` reports only that it accepted the command, never the install's end. So the gate sends it again while three things hold: no candidate request has appeared, no host is approved for the serial in this enrollment, and the previous send's result (`Acknowledged` or `Error`) arrived at least an hour ago. A command that has not been answered, for instance on a Mac that is off, is never sent again, so nothing piles up in NanoHUB's queue. The hour is a constant, not a flag. Each send is audited `mdm_install_sent` with its count, and the gate's device list shows the count and the last send. Sending stops at the first candidate request, and a new enrollment starts the count again. A re-sent install is safe: the seed and `mac-config` do nothing the second time. |
+| The pkg install fails, or never happens | The device stays enrolled with no candidate request. `InstallEnterpriseApplication` reports only that it accepted the command, never the install's end. So the gate sends it again (**Built**, M14: `crates/hostkeeper-mdm-gate/src/install.rs`) while three things hold: no candidate request has appeared, no host is approved for the serial in this enrollment, and the previous send's result (`Acknowledged` or `Error`) arrived at least an hour ago. A command that has not been answered, for instance on a Mac that is off, is never sent again, so nothing piles up in NanoHUB's queue. The hour is a constant, not a flag. Each send is audited `mdm_install_sent` with its count, and the gate's device list shows the count and the last send. Sending stops at the first candidate request, and a new enrollment starts the count again. A re-sent install is safe: the seed and `mac-config` do nothing the second time. |
 | The nonce's `InstallProfile` fails (an `Error` result) | The nonce stays issued. The gate sends the same nonce again at the next tick, at most once a minute, while it is unexpired (**Built**, M12). The bytes are held in the gate's memory only: after a coordinator restart the same nonce is not sent again, and a new one is issued once it expires. |
 | The nonce expires before use (the Mac was off, or the profile never arrived) | Condition 4 holds again, so the gate issues a new nonce, bound to the same request, and replaces the profile. The old nonce is dead by expiry. A new one is issued at most once an hour per serial. |
 | The daemon's key changes without a new enrollment (its state was removed by hand) | Two candidates, so no nonce. The operator denies the stale request or approves by key hash. A wipe is not this case: it is a new enrollment, so the old request is stale and is not a candidate (condition 3). |
@@ -391,7 +391,9 @@ enrolled, supervised, ADE, user-approved, the times of the last check-in, and th
 and not answered. The config profile's state and the last nonce (when it was issued, for which request, its pushes
 and its removal) are fields 18 and 19 of the record, added by M12 to schema 1 so the release
 before reads it (`the_enrollment_fields_are_read_by_the_release_before_them_and_the_other_way`);
-the install tries are M14's. `status(serial)`
+the install tries are field 20, added by M14 the same way (**Built**: the digest last sent, the count NanoHUB
+queued and the last send with its answer, forgotten with the enrollment;
+`the_install_field_is_read_by_the_release_before_it_and_the_other_way`). `status(serial)`
 answers from the record and never asks the Mac live. A serial the gate has no record of is
 `device_state_unavailable`, as `NoDeviceState` answers. A serial seen under two
 enrollment ids is also `device_state_unavailable`, until a `CheckOut` of the older one.
@@ -490,8 +492,30 @@ manifest has one item:
 - `metadata`: `bundle-identifier` (the pkg identifier), `bundle-version`, `kind = software` and a
   `title`.
 
-The digest the gate allowlists is checked twice: by the gate when it builds the command, and by
-the Mac when it downloads. The Mac's check is what makes "by allowlisted digest" true.
+**Built** (task M14): `crates/hostkeeper-mdm-gate/src/pkg.rs` and `install.rs`, linked in by the
+coordinator's `--mdm-pkg-allowlist` and `--mdm-host` (the MDM host's DNS name, which the URL
+names). What the build decides beyond the text above:
+
+- The allowlist's entries are `[[pkg]]` tables with `sha256`, `version` and `path`. A path is
+  absolute and named `<sha256>.pkg`, the name the route serves, so the URL never names a digest
+  its file is not. A digest is listed once and so are a version's release numbers; the gate sends
+  the newest entry. A key the gate does not read is passed over, so `pkg add` (M15) can add the
+  release pkg's digest beside each entry. The file must be a regular file of root's that its
+  group and others cannot write, and it is read at start: a defect stops the start, and a new
+  entry takes a restart. It is configuration the operator writes, like the Mac allowlist, so it
+  stays a file when the coordinator's state moves to Postgres
+  ([coordinator-storage.md](coordinator-storage.md) section 2); what the gate writes, the sends,
+  is in the device record.
+- The pkg is sent once the device has acknowledged the config profile, because the postinstall's
+  `mac-config` reads the managed config. Whether the managed preferences file exists by then is
+  to verify (M16); if it does not, the install fails and the re-send of 5.4 an hour later repairs
+  it. Supervision is not required, as section 6.3 says.
+- The manifest's `bundle-identifier` is the pkg identifier `dev.hostkeeper.hostkeeper`, its
+  `bundle-version` the entry's version and its `title` `hostkeeper <version>`.
+
+The digest the gate allowlists is checked twice: by the gate when it builds the command (it
+hashes the file before every send, and sends nothing when the bytes differ, keeping the reason as
+the device's last error), and by the Mac when it downloads. The Mac's check is what makes "by allowlisted digest" true.
 `InstalledApplicationList` lists `.app` bundles, and the hostkeeper pkg installs none, so the gate
 learns of the install from the daemon's request (section 5.1), not from MDM.
 
@@ -857,7 +881,7 @@ pull request.
 | M11 | Device test of pkg signing (section 7.2) on one enrolled Mac; the results are written into this document, and they decide M15. **Built**: the kit and its runbook (section 7.2); the run waits for the Mac | M7, M8, M10 | S |
 | M12 | The gate's enrollment side: the config profile, nonce issue and push under the conditions of 5.1, re-issue, removal; the redrawn `mac-path.svg`. **Built**: `crates/hostkeeper-mdm-gate/src/enroll.rs` and `profile.rs`, the coordinator's `--mdm-profile-identifier` and `--mdm-daemon-config` (`crates/hostkeeper-coordinator/src/mdm.rs`, `src/enrollment/gate_port.rs`) | M8, M9 | M |
 | M13 | Daemon: the enroller reads the nonce from the managed profile and posts once with it for its own request; `wire::EnrollRequest` and the gRPC adapter carry it; `docs/operations/enrollment.md` | M9 | M |
-| M14 | The gate's install: the pkg allowlist, the inline manifest, the re-send of 5.4 | M5, M8, M10 | M |
+| M14 | The gate's install: the pkg allowlist, the inline manifest, the re-send of 5.4. **Built**: `crates/hostkeeper-mdm-gate/src/install.rs` and `pkg.rs`, the coordinator's `--mdm-pkg-allowlist` and `--mdm-host` (`crates/hostkeeper-coordinator/src/mdm.rs`), the count and last send in `Mdm.ListDevices` | M5, M8, M10 | M |
 | M15 | Signing, as M11 decides: `hostkeeper-mdm pkg add` (farm identity), or the Developer ID job in `artifacts.yml` with its workflow-lint entry | M11, M14 | M |
 | M16 | Device run on Path A and Path B: the checklist and the report with the measurement | M7, M12, M13, M14, M15 | M |
 

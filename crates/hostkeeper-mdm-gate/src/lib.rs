@@ -13,7 +13,10 @@
 //! - [`enroll`]: the enrollment side, linked in with [`Gate::with_enrollment`]: the config
 //!   profile ([`DaemonProfile`]), and the one-time nonce issued through the coordinator's
 //!   [`Enrollments`] and pushed in the nonce profile once the Mac's daemon has posted its
-//!   request; re-issue, re-push and removal. The pkg is not here yet.
+//!   request; re-issue, re-push and removal.
+//! - [`install`]: the pkg, linked in with [`Gate::with_install`]: the allowlist of pkg digests
+//!   ([`PkgAllowlist`]), the `InstallEnterpriseApplication` with its inline manifest
+//!   ([`pkg::manifest`]), and its re-send an hour after the Mac's last answer.
 
 mod answer;
 mod command;
@@ -21,7 +24,9 @@ pub mod enroll;
 mod event;
 mod gate;
 mod ids;
+pub mod install;
 mod nanohub;
+pub mod pkg;
 mod profile;
 mod record;
 mod store;
@@ -29,8 +34,8 @@ pub mod webhook;
 
 pub use answer::{DeviceInformation, SecurityInfo};
 pub use command::{
-    COMMAND_TYPES, Command, DEVICE_INFORMATION, INSTALL_PROFILE, QUERIES, REMOVE_PROFILE,
-    SECURITY_INFO,
+    COMMAND_TYPES, Command, DEVICE_INFORMATION, INSTALL_ENTERPRISE_APPLICATION, INSTALL_PROFILE,
+    QUERIES, REMOVE_PROFILE, SECURITY_INFO,
 };
 pub use enroll::{EnrollSide, Enrollments, EnrollmentsError, Nonce, Waiting};
 pub use event::{Event, EventError, parse as parse_event};
@@ -40,9 +45,15 @@ pub use nanohub::{
     ApiKey, ApiKeyError, ApiUrl, ApiUrlError, CALL_TIMEOUT, EnqueueError, KEY_FLAG, NanoHub,
     Queued, URL_FLAG,
 };
+pub use pkg::{
+    ALLOWLIST_FLAG, HOST_FLAG, Install, MdmHost, MdmHostError, PKG_IDENTIFIER, PkgAllowlist,
+    PkgAllowlistError, PkgDigest, PkgEntry, PkgFileError,
+};
 pub use profile::{
     CONFIG_DOMAIN, CONFIG_FLAG, DaemonProfile, DaemonProfileError, ENROLLMENT_DOMAIN,
     IDENTIFIER_FLAG, IdentifierError, PREFERENCES_PAYLOAD, ProfileIdentifier, nonce_profile,
 };
-pub use record::{DeviceRecord, NonceRecord, Phase, ProfileAnswer, ProfileCommand, Sent};
+pub use record::{
+    DeviceRecord, InstallRecord, NonceRecord, Phase, ProfileAnswer, ProfileCommand, Sent,
+};
 pub use store::{DeviceStore, FileDeviceStore, SCHEMA, StoreError};

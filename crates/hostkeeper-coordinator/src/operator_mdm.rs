@@ -111,5 +111,15 @@ fn device_proto(record: &DeviceRecord) -> proto::MdmDevice {
             })
             .collect(),
         last_error: record.last_error.clone().unwrap_or_default(),
+        install_sends: record.install.as_ref().map_or(0, |install| install.sends),
+        install_last_sent_unix: record
+            .install
+            .as_ref()
+            .map(|install| install.last.sent_unix),
+        install_sha256: record
+            .install
+            .as_ref()
+            .map(|install| install.sha256.as_str().to_owned())
+            .unwrap_or_default(),
     }
 }
