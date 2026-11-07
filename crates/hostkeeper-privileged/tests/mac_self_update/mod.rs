@@ -21,8 +21,9 @@
 //! directory of its placement (the fixture's `units/`, not `/Library/LaunchDaemons`) and loads it
 //! from `/Library/LaunchDaemons`, where it is not: that load fails and is an alert of the daemon,
 //! which goes on (`hostkeeper_daemon::selfunits`). So the fallback of a next binary that cannot
-//! start is not run here; [`MacSelfHost::new`] refuses a Mac where that plist is present, so a
-//! fallback job of another host's tree is never loaded.
+//! start is not run here. A fallback plist the Mac already has (an earlier daemon writes it at its
+//! start) is booted out and moved aside by [`MacSelfHost::new`] and put back when the host is
+//! dropped, so a fallback job of another tree is never loaded.
 //!
 //! Dropping the host boots out the daemon's job, the probe's job and the fallback label, prints
 //! the daemon's output when the test is failing, and removes the tree.
@@ -166,6 +167,23 @@ pub enum Plan {
 pub struct MacSelfHost {
     base: PathBuf,
     label: Label,
+    /// Where the Mac's own fallback plist was moved aside to, when it had one: put back when the
+    /// host is dropped.
+    aside: Option<PathBuf>,
+}
+
+/// The plist of the daemon's fallback job in `/Library/LaunchDaemons`.
+fn fallback_plist() -> PathBuf {
+    Path::new(LAUNCHD_DIR).join(format!("{}.plist", fallback_label()))
+}
+
+/// Moves `from` to `to`: a rename, or a copy and a removal when the two are on different
+/// volumes.
+fn move_file(from: &Path, to: &Path) -> std::io::Result<()> {
+    fs::rename(from, to).or_else(|_| {
+        fs::copy(from, to)?;
+        fs::remove_file(from)
+    })
 }
 
 impl Drop for MacSelfHost {
@@ -183,6 +201,15 @@ impl Drop for MacSelfHost {
         {
             let _ = launchctl().run(&bootout_args(&label));
         }
+        if let Some(aside) = &self.aside
+            && let Err(e) = move_file(aside, &fallback_plist())
+        {
+            eprintln!(
+                "the fallback plist moved aside to {} was not put back: {e}",
+                aside.display()
+            );
+            return;
+        }
         let _ = fs::remove_dir_all(&self.base);
     }
 }
@@ -195,18 +222,24 @@ impl MacSelfHost {
             rustix::process::geteuid().is_root(),
             "the device tests run as root (privileged.yml's cargo runner `sudo`)"
         );
-        let fallback = Path::new(LAUNCHD_DIR).join(format!("{}.plist", fallback_label()));
-        assert!(
-            fs::symlink_metadata(&fallback).is_err(),
-            "{} is on this Mac: the daemon under test would load that fallback job",
-            fallback.display()
-        );
         let pid = std::process::id();
         let base = PathBuf::from(format!("/var/hk-su-{tag}-{pid}"));
         // `create_dir_all` would take over a directory that is already there.
         fs::create_dir(&base).unwrap_or_else(|e| panic!("create {}: {e}", base.display()));
         let label = Label::parse(&format!("dev.hostkeeper.ci-su{tag}-{pid}")).expect("a job label");
-        let host = MacSelfHost { base, label };
+        // A fallback job of this Mac's own (an earlier daemon's, which writes it at its start)
+        // would run another tree's `previous`: it is booted out and its plist moved aside, and
+        // put back when the test ends, so the daemon under test never loads it.
+        let fallback = fallback_plist();
+        let aside = fs::symlink_metadata(&fallback).is_ok().then(|| {
+            let fallback_job = Label::parse(&fallback_label()).expect("the fallback label");
+            let _ = launchctl().run(&bootout_args(&fallback_job));
+            let aside = base.join("fallback.plist.aside");
+            move_file(&fallback, &aside)
+                .unwrap_or_else(|e| panic!("move {} aside: {e}", fallback.display()));
+            aside
+        });
+        let host = MacSelfHost { base, label, aside };
         host.make(plan);
         host.load();
         host.runs(N);
