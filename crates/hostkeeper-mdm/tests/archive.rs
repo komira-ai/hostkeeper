@@ -167,3 +167,169 @@ fn a_member_above_the_limit_is_an_error_not_a_short_read() {
         body
     );
 }
+
+fn zip_why(bytes: &[u8], limit: u64) -> String {
+    match member_with_limit("a.zip", Packing::Zip, bytes, "m", limit) {
+        Err(ArchiveError::Unreadable { why, .. }) => why,
+        other => panic!("expected Unreadable, got {other:?}"),
+    }
+}
+
+/// Catches a zip member whose listed size is above the limit but whose real output is
+/// exactly the limit being accepted: the listed size decides, and the error names both the
+/// listed size and the limit. Stored and deflated.
+#[test]
+fn a_zip_member_listed_larger_than_the_limit_is_refused_even_if_its_output_fits() {
+    let body = [4u8; 5];
+    for deflate in [true, false] {
+        let zip = zip_raw(
+            &[("m", &body[..])],
+            deflate,
+            &Tweak {
+                plain: Some(10),
+                ..Tweak::default()
+            },
+        );
+        assert_eq!(
+            zip_why(&zip, 5),
+            "member is listed as 10 bytes, larger than the 5 byte limit"
+        );
+    }
+}
+
+/// Catches a size check that is off by one: a member of limit-1 and of exactly the limit is
+/// read in full and one of limit+1 is refused, on a stored zip, a deflated zip and a tar.gz.
+#[test]
+fn a_member_of_exactly_the_limit_is_read_and_one_byte_more_is_refused() {
+    let body = [3u8; 8];
+    let tgz = tar_gz_of(&[("m", &body[..])]);
+    let zips = [true, false].map(|d| zip_raw(&[("m", &body[..])], d, &Tweak::default()));
+    for limit in [7u64, 8, 9] {
+        let want_ok = limit >= 8;
+        for zip in &zips {
+            let got = member_with_limit("a.zip", Packing::Zip, zip, "m", limit);
+            assert_eq!(got.is_ok(), want_ok, "zip, limit {limit}");
+        }
+        let got = member_with_limit("a.tar.gz", Packing::TarGz, &tgz, "m", limit);
+        assert_eq!(got.is_ok(), want_ok, "tar, limit {limit}");
+    }
+    assert_eq!(
+        zip_why(&zips[0], 7),
+        "member is listed as 8 bytes, larger than the 7 byte limit"
+    );
+}
+
+/// Catches `limit + 1` overflowing when the limit is `u64::MAX`: both packings read a small
+/// member in full, and a missing one is still absent.
+#[test]
+fn a_limit_of_u64_max_reads_a_member_on_both_packings() {
+    let body = b"some bytes";
+    let tgz = tar_gz_of(&[("m", &body[..])]);
+    assert_eq!(
+        member_with_limit("a.tar.gz", Packing::TarGz, &tgz, "m", u64::MAX).unwrap(),
+        body
+    );
+    for deflate in [true, false] {
+        let zip = zip_raw(&[("m", &body[..])], deflate, &Tweak::default());
+        assert_eq!(
+            member_with_limit("a.zip", Packing::Zip, &zip, "m", u64::MAX).unwrap(),
+            body
+        );
+    }
+    let err = member_with_limit("a.tar.gz", Packing::TarGz, &tgz, "x", u64::MAX).unwrap_err();
+    assert!(matches!(err, ArchiveError::NoMember { .. }));
+}
+
+/// Catches a zip member whose inflated output differs from its listed size: shorter or
+/// longer is refused with both numbers, and a stored member whose packed size differs from
+/// its listed size is refused too.
+#[test]
+fn a_zip_member_must_come_out_exactly_the_listed_size() {
+    let body = [6u8; 10];
+    let m = [("m", &body[..])];
+    let tweak = |plain| Tweak {
+        plain: Some(plain),
+        ..Tweak::default()
+    };
+    let deflated = |plain| zip_raw(&m, true, &tweak(plain));
+    let stored = |plain| zip_raw(&m, false, &tweak(plain));
+    assert_eq!(
+        zip_why(&deflated(11), 100),
+        "member is 10 bytes, not the 11 the zip lists"
+    );
+    assert_eq!(
+        zip_why(&deflated(9), 100),
+        "member is more than the 9 bytes the zip lists"
+    );
+    assert_eq!(
+        zip_why(&stored(11), 100),
+        "member is 10 bytes, not the 11 the zip lists"
+    );
+    assert_eq!(
+        zip_why(&stored(9), 100),
+        "member is 10 bytes, not the 9 the zip lists"
+    );
+    assert_eq!(
+        member_with_limit("a.zip", Packing::Zip, &stored(10), "m", 100).unwrap(),
+        body
+    );
+}
+
+fn put(bytes: &mut [u8], at: usize, v: u32, n: usize) {
+    bytes[at..at + n].copy_from_slice(&v.to_le_bytes()[..n]);
+}
+
+/// Catches arithmetic on offsets and lengths read from the archive that overflows or
+/// indexes outside it: each field of the central directory and end record set to values
+/// near `u32::MAX` (or `u16::MAX`) is refused, never a panic.
+#[test]
+fn hostile_zip_offsets_near_the_integer_limits_are_refused_not_panicked_on() {
+    let zip = zip_raw(
+        &[("m", b"tool bytes"), ("n", b"more")],
+        true,
+        &Tweak::default(),
+    );
+    let end = zip.len() - 22;
+    let cd = u32::from_le_bytes(zip[end + 16..end + 20].try_into().unwrap()) as usize;
+    // The second central header follows the first, which has a one byte name.
+    let second = cd + 46 + 1;
+    // (header, offset of the field, its width): "n" is asked for, so the fields of its own
+    // header decide where its data is, and the fields of the first header decide where the
+    // second header is.
+    let fields = [
+        (second, 42usize, 4usize),
+        (second, 20, 4),
+        (second, 28, 2),
+        (cd, 28, 2),
+        (cd, 30, 2),
+        (cd, 32, 2),
+    ];
+    for (header, field, width) in fields {
+        for value in [u32::MAX, u32::MAX - 1, u32::MAX - 45, i32::MAX as u32] {
+            let mut z = zip.clone();
+            put(&mut z, header + field, value, width);
+            let r = member_with_limit("a.zip", Packing::Zip, &z, "n", u64::MAX);
+            assert!(r.is_err(), "field {field} = {value:#x}: {r:?}");
+        }
+    }
+    // The local header's name and extra lengths.
+    for field in [26usize, 28] {
+        let mut z = zip.clone();
+        put(&mut z, field, 0xffff, 2);
+        assert!(member_with_limit("a.zip", Packing::Zip, &z, "m", u64::MAX).is_err());
+    }
+    // The end record: the directory's offset and entry count.
+    for value in [u32::MAX, u32::MAX - 21] {
+        let mut z = zip.clone();
+        put(&mut z, end + 16, value, 4);
+        assert_eq!(
+            zip_why(&z, u64::MAX),
+            "malformed zip",
+            "directory at {value:#x}"
+        );
+    }
+    let mut z = zip.clone();
+    put(&mut z, end + 10, 0xffff, 2);
+    let r = member_with_limit("a.zip", Packing::Zip, &z, "absent", u64::MAX);
+    assert!(matches!(r, Err(ArchiveError::Unreadable { .. })), "{r:?}");
+}

@@ -1,6 +1,12 @@
 //! One member of a pinned archive, read in memory: a zip (stored or deflated) or a
 //! gzip-compressed tar. Nothing is unpacked to disk, so no member name can place a file.
 //!
+//! A zip member must be no larger than the limit as the central directory lists it, and its
+//! output must be exactly that listed size; a tar member is read up to one byte past the
+//! limit. Every offset and length read from a zip is added with saturating arithmetic, so a
+//! hostile
+//! value lands outside the archive and is refused.
+//!
 //! The archive has been checked against its pinned sha256 before it is read here; the limits
 //! below only keep a hostile or damaged archive from filling memory.
 
@@ -88,52 +94,90 @@ fn zip_member(bytes: &[u8], member: &str, limit: u64) -> Result<Option<Vec<u8>>,
             .rev()
             .fold(0, |acc, v| (acc << 8) | usize::from(*v)))
     };
+    // A sum of offsets and lengths read from the archive. One that would overflow stays at
+    // `usize::MAX`, which no read of the archive accepts.
+    let sum =
+        |parts: &[usize]| -> usize { parts.iter().fold(0usize, |acc, p| acc.saturating_add(*p)) };
     // The end record is the last 22 bytes, or earlier by the length of a comment.
     let last = bytes.len().saturating_sub(22);
     let end = (last.saturating_sub(65535)..=last)
         .rev()
-        .find(|i| bytes.get(*i..*i + 4) == Some(&END[..]))
+        .find(|i| bytes.get(*i..i.saturating_add(4)) == Some(&END[..]))
         .ok_or_else(bad)?;
-    let mut at = num(end + 16, 4)?;
-    for _ in 0..num(end + 10, 2)? {
+    let mut at = num(sum(&[end, 16]), 4)?;
+    for _ in 0..num(sum(&[end, 10]), 2)? {
         if num(at, 4)? != CENTRAL {
             return Err(bad());
         }
-        let (method, packed, plain) = (num(at + 10, 2)?, num(at + 20, 4)?, num(at + 24, 4)?);
-        let (name, extra, comment) = (num(at + 28, 2)?, num(at + 30, 2)?, num(at + 32, 2)?);
-        let local = num(at + 42, 4)?;
-        let listed = bytes.get(at + 46..at + 46 + name).ok_or_else(bad)?;
+        let (method, packed, plain) = (
+            num(sum(&[at, 10]), 2)?,
+            num(sum(&[at, 20]), 4)?,
+            num(sum(&[at, 24]), 4)?,
+        );
+        let (name, extra, comment) = (
+            num(sum(&[at, 28]), 2)?,
+            num(sum(&[at, 30]), 2)?,
+            num(sum(&[at, 32]), 2)?,
+        );
+        let local = num(sum(&[at, 42]), 4)?;
+        let name_at = sum(&[at, 46]);
+        let listed = bytes.get(name_at..sum(&[name_at, name])).ok_or_else(bad)?;
         if listed == member.as_bytes() {
             // The local header repeats the name and extra lengths; the data follows them.
             if num(local, 4)? != LOCAL {
                 return Err(bad());
             }
-            let data = local + 30 + num(local + 26, 2)? + num(local + 28, 2)?;
-            let packed = bytes.get(data..data + packed).ok_or_else(bad)?;
-            return inflate(method, packed, plain, limit).map(Some);
+            let data = sum(&[
+                local,
+                30,
+                num(sum(&[local, 26]), 2)?,
+                num(sum(&[local, 28]), 2)?,
+            ]);
+            let packed = bytes.get(data..sum(&[data, packed])).ok_or_else(bad)?;
+            return inflate(method, packed, plain as u64, limit).map(Some);
         }
-        at += 46 + name + extra + comment;
+        at = sum(&[name_at, name, extra, comment]);
     }
     Ok(None)
 }
 
-fn inflate(method: usize, packed: &[u8], plain: usize, limit: u64) -> Result<Vec<u8>, String> {
+/// The member's bytes, which must be exactly the `plain` bytes the central directory lists,
+/// and `plain` must not exceed `limit`.
+fn inflate(method: usize, packed: &[u8], plain: u64, limit: u64) -> Result<Vec<u8>, String> {
+    if plain > limit {
+        return Err(format!(
+            "member is listed as {plain} bytes, larger than the {limit} byte limit"
+        ));
+    }
     let mut out = Vec::new();
-    let cap = limit.min(plain as u64) + 1;
     match method {
-        0 => out.extend_from_slice(packed),
+        0 => {
+            if packed.len() as u64 != plain {
+                return Err(format!(
+                    "member is {} bytes, not the {plain} the zip lists",
+                    packed.len()
+                ));
+            }
+            out.extend_from_slice(packed);
+        }
         8 => {
+            // One byte more than listed is read, so a longer member is seen as longer.
             DeflateDecoder::new(packed)
-                .take(cap)
+                .take(plain.saturating_add(1))
                 .read_to_end(&mut out)
                 .map_err(why)?;
         }
         other => return Err(format!("compression method {other} is not supported")),
     }
-    if out.len() != plain.min(limit as usize) {
+    let got = out.len() as u64;
+    if got > plain {
         return Err(format!(
-            "member is {} bytes, not the {plain} the zip lists",
-            out.len()
+            "member is more than the {plain} bytes the zip lists"
+        ));
+    }
+    if got != plain {
+        return Err(format!(
+            "member is {got} bytes, not the {plain} the zip lists"
         ));
     }
     Ok(out)
@@ -146,8 +190,11 @@ fn tar_member(bytes: &[u8], member: &str, limit: u64) -> Result<Option<Vec<u8>>,
         let named = entry.path().map_err(why)?.to_str() == Some(member);
         if named {
             let mut out = Vec::new();
-            entry.take(limit + 1).read_to_end(&mut out).map_err(why)?;
-            // One byte more than the limit was asked for: a member that long is cut off.
+            // One byte more than the limit is read, so a longer member is seen as longer.
+            entry
+                .take(limit.saturating_add(1))
+                .read_to_end(&mut out)
+                .map_err(why)?;
             if out.len() as u64 > limit {
                 return Err(format!("member is larger than {limit} bytes"));
             }
