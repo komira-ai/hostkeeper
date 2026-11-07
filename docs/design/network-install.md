@@ -282,7 +282,9 @@ no tailscale.
 - Never the operator API, the JSON gateway or the UI. A call to any of them on this listener is refused
   `UNIMPLEMENTED`, as an operator call on the heartbeat listener is today (`grpc/mod.rs`).
 
-The address must be one interface's, and a wildcard address is refused at start, as for `--private-listen` today. The
+The address must be one interface's, and a wildcard address is refused at start, as for `--private-listen` today. In
+the compose deployment ([coordinator-storage.md](coordinator-storage.md) section 9) the coordinator's container uses
+the host's network, so this is the host's own farm-LAN address, and its enrollment store is the database's. The
 daemon config of a network-installed host names this listener as `coordinator`. Existing hosts keep the tailnet
 address. One coordinator serves both groups, with one CA and one enrollment store.
 
