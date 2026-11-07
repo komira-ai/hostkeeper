@@ -51,6 +51,8 @@ pub struct State {
     pub refuse: Option<(Code, String)>,
     /// The entries of one page; every entry on one page when 0.
     pub page: usize,
+    /// Every page names a next page, so the list never ends.
+    pub endless: bool,
     /// The page token of every call, in order.
     pub tokens: Vec<String>,
     /// The `authorization` of every call, in order.
@@ -98,7 +100,7 @@ impl Fake {
             size => size,
         };
         let to = (from + size).min(all.len());
-        let next = match to < all.len() {
+        let next = match state.endless || to < all.len() {
             true => to.to_string(),
             false => String::new(),
         };
