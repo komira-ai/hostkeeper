@@ -84,6 +84,15 @@ may hold that order's try in its step record. The coordinator orders the next in
 (`ORDER_AGE`) with no word, so such a host takes the next order instead of refusing it
 `try_conflict` for good.
 
+The daemon also sends the try its step record holds for each service in every heartbeat, so a
+coordinator that restarted after a self-update's install, and so never heard that install's
+verdict, orders the next update past it. A daemon of an earlier release does not send it; such a
+host may refuse the coordinator's first update `try_conflict` (or `stale_try`). The coordinator
+reads either refusal as a disagreement on the try, not as the host failing the version: it orders
+the host again past the refused try in the same answer, and the host is neither failed here nor
+holds back its stage. A host a coordinator of an earlier release left failed here on such a
+refusal is ordered again once the coordinator runs this release.
+
 ## Macs
 
 A Mac reaches the desired release of hostkeeper by itself, as a Linux host does, once two things

@@ -211,6 +211,9 @@ pub struct ServiceFacts {
     pub health_detail: Option<String>,
     /// Optional: the observer's detail.
     pub observed: Option<Observed>,
+    /// The try the service's step record holds, sent in every heartbeat; none when the service
+    /// has no step record, or its record names no try.
+    pub record_try: Option<u64>,
 }
 
 impl ServiceFacts {
@@ -225,6 +228,7 @@ impl ServiceFacts {
             "deferred": self.deferred.as_ref().map(DeferredReport::to_json),
             "health_detail": self.health_detail,
             "observed": self.observed.as_ref().map(Observed::to_json),
+            "record_try": self.record_try,
         })
     }
 }

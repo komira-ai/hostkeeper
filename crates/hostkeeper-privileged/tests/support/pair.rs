@@ -341,6 +341,11 @@ impl Coordinator {
         sha256_hex(&fs::read(self.ca_cert_path()).expect("the CA certificate"))
     }
 
+    /// The file of the verdicts it acknowledged, beside its state file (`--state-file`).
+    pub fn verdicts_path(&self) -> PathBuf {
+        self.dir.join("state/desired.json.verdicts")
+    }
+
     /// The enrollment CA's certificate, DER: beside its key (`--ca-key-file`), `.cert` added.
     pub fn ca_cert_path(&self) -> PathBuf {
         self.dir.join("ca/ca.key.cert")

@@ -50,4 +50,6 @@ mod wire_size_tests;
 #[cfg(test)]
 mod wire_tests;
 #[cfg(test)]
+mod wire_try_tests;
+#[cfg(test)]
 mod wire_verdict_tests;

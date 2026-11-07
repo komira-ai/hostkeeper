@@ -75,6 +75,7 @@ fn offered(rig: &Rig, announced: &[&str]) -> Vec<String> {
                         step_secs: Default::default(),
                         promotion_pending: false,
                         deferred: None,
+                        record_try: None,
                     }
                 })
                 .collect(),

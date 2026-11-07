@@ -80,6 +80,7 @@ pub(crate) fn heartbeat(beat: &Heartbeat) -> Result<wire::Heartbeat, Unsendable>
         sent_unix: Some(beat.sent_unix),
         cert_not_after_unix: beat.renewal.cert_not_after_unix,
         last_renew_error: beat.renewal.last_renew_error.clone(),
+        record_try: None,
     })
 }
 
@@ -109,6 +110,7 @@ fn service(facts: &ServiceFacts) -> Result<ServiceBeat, Unsendable> {
         step_secs: BTreeMap::new(),
         promotion_pending: false,
         deferred,
+        record_try: facts.record_try,
     })
 }
 

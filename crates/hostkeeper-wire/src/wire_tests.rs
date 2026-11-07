@@ -34,6 +34,7 @@ fn a_heartbeat_is_written_and_read_in_one_spelling() {
         sent_unix: None,
         cert_not_after_unix: None,
         last_renew_error: None,
+        record_try: None,
     };
     assert_eq!(
         serde_json::to_value(&busy).expect("json"),

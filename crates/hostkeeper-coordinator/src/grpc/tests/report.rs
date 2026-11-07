@@ -859,6 +859,7 @@ fn full_heartbeat_maps_every_fact_into_the_service_beat() {
         reason: Token::parse("busy").expect("a token"),
         retry_after_secs: 30,
     });
+    b.record_try = Some(2);
 
     let out = plain_host(b);
 
@@ -883,6 +884,7 @@ fn full_heartbeat_maps_every_fact_into_the_service_beat() {
                 retry_after_secs: 30,
             }),
             pinned: None,
+            record_try: Some(2),
         })
     );
     assert_eq!(

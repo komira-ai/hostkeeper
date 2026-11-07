@@ -309,6 +309,8 @@ mod tokens_tests;
 #[cfg(test)]
 mod try_per_service_tests;
 #[cfg(test)]
+mod try_refusal_tests;
+#[cfg(test)]
 mod uninstall_tests;
 #[cfg(test)]
 mod unmark_tests;

@@ -83,6 +83,7 @@ fn a_refused_install_is_sent_until_acknowledged_and_its_absent_entry_stays_until
                 liveness: Liveness::Absent,
                 version: None,
             }),
+            record_try: None,
         })
     };
     for at in [1, 2] {
