@@ -1,0 +1,31 @@
+/usr/bin/openssl rand -hex 16
+/usr/bin/openssl req -x509 -new -newkey rsa:2048 -nodes -sha256 -days 90 -config <kit>/work/root-a.cnf -extensions root_ext -keyout <kit>/work/root-a.key -out <kit>/work/root-a.pem
+/usr/bin/openssl req -new -newkey rsa:2048 -nodes -sha256 -config <kit>/work/installer-a.cnf -keyout <kit>/work/installer-a.key -out <kit>/work/installer-a.csr
+/usr/bin/openssl x509 -req -sha256 -days 90 -in <kit>/work/installer-a.csr -CA <kit>/work/root-a.pem -CAkey <kit>/work/root-a.key -set_serial 2 -extfile <kit>/work/installer-a.cnf -extensions leaf_ext -out <kit>/work/installer-a.pem
+/usr/bin/openssl req -x509 -new -newkey rsa:2048 -nodes -sha256 -days 90 -config <kit>/work/root-b.cnf -extensions root_ext -keyout <kit>/work/root-b.key -out <kit>/work/root-b.pem
+/usr/bin/openssl req -new -newkey rsa:2048 -nodes -sha256 -config <kit>/work/installer-b.cnf -keyout <kit>/work/installer-b.key -out <kit>/work/installer-b.csr
+/usr/bin/openssl x509 -req -sha256 -days 90 -in <kit>/work/installer-b.csr -CA <kit>/work/root-b.pem -CAkey <kit>/work/root-b.key -set_serial 2 -extfile <kit>/work/installer-b.cnf -extensions leaf_ext -out <kit>/work/installer-b.pem
+/usr/bin/openssl pkcs12 -export -inkey <kit>/work/installer-a.key -in <kit>/work/installer-a.pem -certfile <kit>/work/root-a.pem -name 'hostkeeper pkg signing test installer A' -passout pass:<pw> -out <kit>/work/installer-a.p12
+/usr/bin/openssl pkcs12 -export -inkey <kit>/work/installer-b.key -in <kit>/work/installer-b.pem -certfile <kit>/work/root-b.pem -name 'hostkeeper pkg signing test installer B' -passout pass:<pw> -out <kit>/work/installer-b.p12
+/usr/bin/openssl x509 -in <kit>/work/root-a.pem -outform DER -out <kit>/work/root-a.cer
+pkgbuild --root <kit>/work/payload-1 --identifier dev.hostkeeper.signing-test.pkg1 --version 1 --install-location '/Library/Application Support/hostkeeper-signing-test' --ownership recommended <kit>/work/component-1.pkg
+pkgbuild --root <kit>/work/payload-2 --identifier dev.hostkeeper.signing-test.pkg2 --version 1 --install-location '/Library/Application Support/hostkeeper-signing-test' --ownership recommended <kit>/work/component-2.pkg
+productbuild --package <kit>/work/component-2.pkg --identifier dev.hostkeeper.signing-test.pkg2 --version 1 <kit>/work/product-2.pkg
+pkgbuild --root <kit>/work/payload-3 --identifier dev.hostkeeper.signing-test.pkg3 --version 1 --install-location '/Library/Application Support/hostkeeper-signing-test' --ownership recommended <kit>/work/component-3.pkg
+productbuild --package <kit>/work/component-3.pkg --identifier dev.hostkeeper.signing-test.pkg3 --version 1 <kit>/work/product-3.pkg
+pkgbuild --root <kit>/work/payload-4 --identifier dev.hostkeeper.signing-test.pkg4 --version 1 --install-location '/Library/Application Support/hostkeeper-signing-test' --ownership recommended <kit>/work/component-4.pkg
+productbuild --package <kit>/work/component-4.pkg --identifier dev.hostkeeper.signing-test.pkg4 --version 1 <kit>/work/product-4.pkg
+security list-keychains -d user
+security create-keychain -p <pw> <kit>/work/signing-test.keychain-db
+security list-keychains -d user -s <kit>/work/signing-test.keychain-db /k/login.keychain-db
+security unlock-keychain -p <pw> <kit>/work/signing-test.keychain-db
+security set-keychain-settings <kit>/work/signing-test.keychain-db
+security import <kit>/work/installer-a.p12 -k <kit>/work/signing-test.keychain-db -P <pw> -T /usr/bin/productsign
+security import <kit>/work/installer-b.p12 -k <kit>/work/signing-test.keychain-db -P <pw> -T /usr/bin/productsign
+security set-key-partition-list -S apple-tool:,apple: -s -k <pw> <kit>/work/signing-test.keychain-db
+productsign --sign 'hostkeeper pkg signing test installer A' --keychain <kit>/work/signing-test.keychain-db --timestamp=none <kit>/work/product-3.pkg <kit>/work/signed-3.pkg
+pkgutil --check-signature <kit>/work/signed-3.pkg
+productsign --sign 'hostkeeper pkg signing test installer B' --keychain <kit>/work/signing-test.keychain-db --timestamp=none <kit>/work/product-4.pkg <kit>/work/signed-4.pkg
+pkgutil --check-signature <kit>/work/signed-4.pkg
+security list-keychains -d user -s /k/login.keychain-db
+security delete-keychain <kit>/work/signing-test.keychain-db

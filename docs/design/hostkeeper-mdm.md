@@ -88,8 +88,8 @@ the nonce before the request, and a gate call named `CheckSerial` where the code
 | Enrolled Macs | None. NanoHUB's log has no `/mdm` check-in, and the farm's Macs report no DEP and no MDM enrollment. |
 | Policy gate | **Built**, the device side (task M8): `crates/hostkeeper-mdm-gate`, linked into the coordinator with `--mdm-api-url` (section 6.1). Its enrollment side (config profile, nonce, pkg) is not built, and it runs on no host yet. kbf has one (`kbf-mdm`, binary `kbf-mdm-gate`) that was never deployed. Its server speaks JSON over HTTP while the kbf server's client calls it as gRPC, so the two cannot talk. It also has no eligibility check. |
 | Coordinator side | **Built**: the nonce store (32 bytes, one hour, one use, consumed in the approval's own write), the serial allowlist, the `DeviceState` port and its nine decline tokens, the nonce's binding to its request, the replacement of a wiped Mac's own host id, and the allowlist entry's services assigned at a nonce approval (task M9; `crates/hostkeeper-coordinator/src/enrollment/`, `crates/hostkeeper-enrollment/src/enroll/mac_nonce.rs`). With `--mdm-api-url` the `DeviceState` is the gate's (`crates/hostkeeper-coordinator/src/mdm.rs`); without it, `NoDeviceState`. No nonce is issued yet, so no Mac is approved by a nonce today. |
-| MDM kit | **Built**: its pure core, `crates/hostkeeper-mdm-core` (task M2): the settings, the enrollment and ADE profiles, the units and Caddyfile of the stack, the pins, under hostkeeper's names and with M2's fixes of komira-ai/kbf#2248. Its host-step layer is `crates/hostkeeper-mdm-step` (task M3). **Not built**: the binary with its verbs (M4, M5), so nothing in this repository installs the stack yet. |
-| Daemon side | **Built**: the launchd daemon, the claims of serial and platform UUID, the pkg with its postinstall of the seed, `mac-config` and the load of the job (`docs/macos.md`), and the pkg writes the config (**Built**: `crates/hostkeeper-daemon/src/mac_config.rs`, `crates/hostkeeper-launchd/src/postinstall.rs`). **Not built**: the daemon sends no nonce. |
+| MDM kit | **Built**: its pure core, `crates/hostkeeper-mdm-core` (task M2): the settings, the enrollment and ADE profiles, the units and Caddyfile of the stack, the pins, under hostkeeper's names and with M2's fixes of komira-ai/kbf#2248. Its host-step layer is `crates/hostkeeper-mdm-step` (task M3). Its binary, `crates/hostkeeper-mdm` (task M4), has the verbs `fetch`, `install`, `tls` and `verify`, with M4's fixes of komira-ai/kbf#2248. **Not built**: the verbs `push-cert`, `dep` and `migrate` and the enrollment profile at `/enroll` (M5), so the stack installs but enrolls no Mac yet. |
+| Daemon side | **Built**: the launchd daemon, the claims of serial and platform UUID, the pkg with its postinstall of the seed, `mac-config` and the load of the job (`docs/macos.md`), and the pkg writes the config (**Built**: `crates/hostkeeper-daemon/src/mac_config.rs`, `crates/hostkeeper-launchd/src/postinstall.rs`). The enroller reads the nonce from the managed preferences and posts it once for its own request (**Built**, task M13: `crates/hostkeeper-enroll/src/managed.rs`, `crates/hostkeeper-enroll/src/enroller.rs`). |
 | Pkg signature | None. The pkg is attested, and the binary in it carries the linker's ad-hoc code signature (`crates/xtask/src/release/macos_pkg.rs`). |
 
 The kit's code is in three places:
@@ -304,9 +304,10 @@ In the payload the keys sit where Apple's `com.apple.ManagedClient.preferences` 
 them: under the domain, then `Forced`, then `mcx_preference_settings`. The path, owner and mode
 of the file macOS writes are to verify in M16.
 
-**The enroller changes (task M13).** Today it posts `Enroll` once per key and then only polls
-(`crates/hostkeeper-enroll/src/enroller.rs`, the `posted` cache). Its `EnrollRequest` has no
-nonce field, and the gRPC adapter always sends `mac_nonce` empty. New:
+**The enroller changes (task M13, **Built**: `crates/hostkeeper-enroll/src/managed.rs`,
+`crates/hostkeeper-enroll/src/enroller.rs`).** Before it, the enroller posted `Enroll` once per key
+and then only polled (the `posted` cache); its `EnrollRequest` had no nonce field, and the gRPC
+adapter always sent `mac_nonce` empty. Now:
 
 - The daemon reads `/Library/Managed Preferences/dev.hostkeeper.enrollment.plist` in each step,
   through a port with a fake for tests.
@@ -316,7 +317,9 @@ nonce field, and the gRPC adapter always sends `mac_nonce` empty. New:
   with `mac_nonce` set. `EnrollRequest.mac_nonce` is field 5, **Built** on the wire. The
   coordinator already approves on such a repost (**Built**: `Enrollment::enroll` runs
   `mac_auto_approve` for a still-pending request that carries a nonce).
-- After that one post the step polls as before.
+- After that one post the step polls as before. The coordinator answers the post of a request
+  it has approved (by the nonce, or earlier) with `ENROLL_STATE_UNSPECIFIED`, which the gRPC
+  adapter reads as decided, so the step's poll brings the certificate.
 - A missing file, a malformed one, a file of the wrong owner, or another request's nonce means
   nothing more is posted. Enrollment never fails over the file, because the operator path must
   keep working.
@@ -530,6 +533,56 @@ Pkg 4 is the negative case that shows the root payload is what makes pkg 3 pass.
 installs, the farm identity is the answer. If it does not, Developer ID Installer is required, and
 question Q4 asks for it.
 
+**Built: the kit and its runbook.** The kit is `cargo xtask mdm-signing-test`
+(`crates/xtask/src/mdm_signing_test.rs`) and the runbook is
+[docs/operations/pkg-signing-test.md](../operations/pkg-signing-test.md). The run itself needs
+an enrolled Mac and has not happened yet.
+
+The kit has four verbs:
+
+- `build` runs on a Mac that is not the one under test.
+- `send` runs on the MDM host. It sends the root's profile, each pkg and the profile's removal
+  through NanoHUB's API on loopback, with the inline manifest of section 7.1, and sends nothing
+  without `--apply`.
+- `record` writes what the operator read: the Mac's answer from NanoHUB's log, and whether the
+  Mac holds the pkg's receipt.
+- `report` prints the run and its verdict.
+
+How the kit carries out the four pkgs:
+
+- **The farm identity is a test CA the build makes.** It is a root, `A`, with an installer
+  identity under it (RSA, `codeSigning`). The pkg 4 identity sits under a second root, `B`, which
+  the build deletes. Every private key is deleted with the build's scratch directory, so the
+  repository and the kit hold no secret.
+- **Root A comes in a profile of its own,** `<profile identifier>.signing-test.root`, holding
+  one `com.apple.security.root` payload. It does not go into the config profile of section 4,
+  because the test must install and remove it alone. If the farm identity is chosen, task M15
+  moves the payload into the config profile.
+- **Each pkg carries one marker file under its own identifier,**
+  `dev.hostkeeper.signing-test.pkg<n>`, not the hostkeeper payload. "Today's pkg" in the list
+  above is read as this unsigned component pkg. The marker has two purposes. First, a receipt
+  names exactly one pkg. Second, the release pkg's postinstall fails on a Mac with no managed
+  config (`mac-config`), and that failure would hide the signature's outcome. The signing is the
+  release pkg's: `productsign` over a `productbuild` distribution pkg.
+- **The order holds by construction.** `send` refuses pkg 3 and pkg 4 until the root's profile
+  is recorded `Acknowledged`, and refuses them again after its removal.
+- **An outcome is read on the Mac** (`pkgutil --pkg-info`, the install log), because
+  `Acknowledged` comes before the install. For pkg 3 the operator also records whether
+  `pkgutil --check-signature` on the Mac reads its chain as trusted.
+- **A run that cannot decide says so.** The report names it inconclusive, not a refusal of the
+  signature, in three cases: a command the Mac answered with an error, pkg 4 installing, or pkg 3
+  refused with a chain the Mac was not shown to trust.
+
+Two facts are to verify in the run:
+
+- whether `productsign` signs with an identity whose root the build Mac does not trust (the
+  runbook stops if it does not);
+- whether the Mac's installer accepts the `codeSigning` extended key usage for a pkg (the
+  `--trusted` record tells this case apart from a refusal by the MDM).
+
+**Results:** none yet. The run writes its table, its verdict, the Mac's macOS version and the
+enrollment path here.
+
 Whatever the test says, the release pkg becomes a distribution pkg (`productbuild` around the
 component pkg). It costs one tool call in `cargo xtask release macos-pkg`, every source that
 names a format names that one, and `check-macos-pkg` reads both layers (**Built**:
@@ -570,7 +623,8 @@ CA, the ADE profile, the unit and path names. The order:
    gate, `kbf-mdm`, is not ported. It was never deployed, its two ends do not agree on a protocol,
    and its OS-update and erase verbs are not v1 work. The design takes only its lessons: the
    loopback-only NanoHUB URL, the trusted-file checks, and profiles by allowlisted digest.
-   **Built** for M2: `crates/hostkeeper-mdm-core`, recorded in `MIGRATION.md`.
+   **Built** for M2 to M4: `crates/hostkeeper-mdm-core` and `crates/hostkeeper-mdm`, recorded in
+   `MIGRATION.md`, and `crates/hostkeeper-mdm-step`.
 2. **Rename to hostkeeper names.**
    - user `hostkeeper-mdm`;
    - `/var/lib/hostkeeper-mdm`, `/etc/hostkeeper-mdm`, `/opt/hostkeeper-mdm/bin`;
@@ -680,6 +734,7 @@ progress from explicit events. NanoHUB is a fake: an in-process HTTP server on `
 | `an_approved_mac_is_not_sent_the_pkg_again` | re-sending stops at the first candidate request and after approval | M14 |
 | `only_an_allowlisted_digest_is_sent` | an unlisted digest, a file whose bytes differ from its listed digest, and a listed one | M14 |
 | `the_manifest_carries_the_digest_the_mac_checks` | the inline manifest golden: `sha256` equals the allowlisted digest, `url` names it | M14 |
+| `crates/xtask/src/mdm_signing_test/` tests | the kit's CA, pkg and signing commands in order; no key, keychain or root B left after a build, a failed one included; the manifest's digest and URL; the order of the steps; each send's own command UUID; NanoHUB's answers; the verdict of every outcome | M11 |
 | `pkg_add_refuses_an_unattested_pkg` | the farm-signing verb verifies first (only if M11 chooses the farm identity) | M15 |
 | `the_enrollment_profile_is_served_mode_0640` | the SCEP challenge it carries is readable by the service group only | M5 |
 | `migrate_dry_runs_and_keeps_the_old_state` | without `--apply` nothing changes; with it the old state directory is untouched | M5 |
@@ -758,7 +813,7 @@ pull request.
 | M1 | This design. Design 5.9 and 4.6 point at it and say the config comes from a managed profile | none | S |
 | M2 | `hostkeeper-mdm-core`: port of `mdm-core`, pure, hostkeeper names. Fixes from komira-ai/kbf#2248: the three loopback ports checked together; checked constructors and read-only accessors for `MdmConfig` and `Cidr`; DNS label and name length limits; authorities with whitespace, queries and fragments. ADE profile with `auto_advance_setup` true. **Built**: `crates/hostkeeper-mdm-core` | M1 | M |
 | M3 | `hostkeeper-mdm-step`: port of `host-step`. Fixes: the path's trusted owners include the operator's and the service's (a filesystem-backed test); a unique temporary name per writer; an existing account that resolves to uid 0 refused; whole-output redaction tests. **Built**: `crates/hostkeeper-mdm-step`; the owners are granted per directory with `RealHost::trust_below`, which M4 calls for `--bin-dir` and the state directory | M1 | M |
-| M4 | `hostkeeper-mdm` binary, verbs `fetch`, `install`, `tls`, `verify`: port of `mdm-host`. Fixes: restarts planned from the installed state, not only this run's changes; malformed ACME settings refused, not skipped; `lego --help` exit status checked; archive limits exact and safe at `u64::MAX`; environment files read by systemd's rules; a typed error for `Tool::named`. The test gaps of komira-ai/kbf#2248 as tests: download redirects (HTTPS to HTTP, cycles, exhaustion), bodies of exactly the limit, chunked and interrupted bodies; TLS with a directory or link at the certificate path, a malformed certificate, a missing or mismatched key, renewal and the proxy reload; install with a damaged SCEP depot, failures part-way through a plan and the retry, uninstall during the certificate or reload job, two uninstall snapshots in one second, an unsupported architecture refused first; whole-output redaction | M2, M3 | L |
+| M4 | `hostkeeper-mdm` binary, verbs `fetch`, `install`, `tls`, `verify`: port of `mdm-host`. Fixes: restarts planned from the installed state, not only this run's changes; malformed ACME settings refused, not skipped; `lego --help` exit status checked; archive limits exact and safe at `u64::MAX`; environment files read by systemd's rules; a typed error for `Tool::named`. The test gaps of komira-ai/kbf#2248 as tests: download redirects (HTTPS to HTTP, cycles, exhaustion), bodies of exactly the limit, chunked and interrupted bodies; TLS with a directory or link at the certificate path, a malformed certificate, a missing or mismatched key, renewal and the proxy reload; install with a damaged SCEP depot, failures part-way through a plan and the retry, uninstall during the certificate or reload job, two uninstall snapshots in one second, an unsupported architecture refused first; whole-output redaction. **Built**: `crates/hostkeeper-mdm` | M2, M3 | L |
 | M5 | Verbs `push-cert`, `dep` (`get-cert`, `upload-token`, `define-profile`, `assign`), the enrollment profile at `/enroll` (mode 0640, the service group's), the pkg directory and `/pkg/` route in the proxy, and `migrate --from` (section 8), from kbf-deploy's `mdm` | M4 | M |
 | M6a | komira-ai/kbf: freeze notes; delete `kbf-mdm`, `kbf-mdm-api` and their client in `kbf-server`; later, after M7, delete `mdm-core`, `host-step`, `mdm-host` and `kbf-deploy mdm` | M5 | S |
 | M6b | komira-ai/jobscheduler: after M7, delete `js-mdm-core`, `js-host-step`, `js-mdm` and their release workflow, release plan, test and coverage-baseline entries, with a pointer to hostkeeper | M7 | S |
@@ -766,7 +821,7 @@ pull request.
 | M8 | The gate's device side: NanoHUB client (loopback, API key file), webhook listener on loopback, durable device records, `DeviceInformation` and `SecurityInfo`, the `DeviceState` implementation; coordinator flags `--mdm-api-url`, `--mdm-api-key-file`, `--mdm-webhook-listen`; `Mdm.ListDevices` in the operator API and its generated CLI verb; `docs/enrollment-coordinator.md` no longer says the gate is outside the coordinator; the table `mdm_devices` by its own migration, once C3 is built. **Built**: `crates/hostkeeper-mdm-gate`, wired in by `crates/hostkeeper-coordinator/src/mdm.rs`, its records files behind `DeviceStore` until the table is | M1; C3 of coordinator-storage.md for the table | L |
 | M9 | Coordinator: the nonce's `request_id` (an added store field), `nonce_wrong_request`, the replacement of a wiped Mac's own host id, and the allowlist entry's services assigned at a nonce approval as at an operator's; `docs/enrollment-coordinator.md` and `docs/operations/enrollment.md` | M1 | M |
 | M10 | Pkg: the `productbuild` distribution layer, the `mac-config` verb, the three-command postinstall, `check-macos-pkg`, the `plist` dependency comment, `docs/macos.md` | M1 | M |
-| M11 | Device test of pkg signing (section 7.2) on one enrolled Mac; the results are written into this document, and they decide M15 | M7, M8, M10 | S |
+| M11 | Device test of pkg signing (section 7.2) on one enrolled Mac; the results are written into this document, and they decide M15. **Built**: the kit and its runbook (section 7.2); the run waits for the Mac | M7, M8, M10 | S |
 | M12 | The gate's enrollment side: the config profile, nonce issue and push under the conditions of 5.1, re-issue, removal; the redrawn `mac-path.svg` | M8, M9 | M |
 | M13 | Daemon: the enroller reads the nonce from the managed profile and posts once with it for its own request; `wire::EnrollRequest` and the gRPC adapter carry it; `docs/operations/enrollment.md` | M9 | M |
 | M14 | The gate's install: the pkg allowlist, the inline manifest, the re-send of 5.4 | M5, M8, M10 | M |

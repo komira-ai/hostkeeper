@@ -426,8 +426,10 @@ The manual path, for a Mac without an MDM: place `/etc/hostkeeper/hostkeeper.tom
 install the pkg. `mac-config` keeps that file, and the postinstall loads the job. Installing the
 pkg with neither a config nor a managed file fails at `mac-config`, before the job is loaded.
 
-The pkg carries no installer signature, since that needs an
-Apple Developer ID Installer identity. It is attested like every other asset, and the binary in it
+The pkg carries no installer signature yet. Which identity will sign it, a farm installer
+identity whose root the MDM installs or an Apple Developer ID Installer identity, is decided by
+the device test of the MDM design (section 7.2, task M11), whose kit and runbook are
+[operations/pkg-signing-test.md](operations/pkg-signing-test.md). It is attested like every other asset, and the binary in it
 keeps the ad-hoc code signature the linker gives it, which the package verification above accepts.
 `cargo xtask release macos-pkg` builds the component with `pkgbuild` from the binary, `gh` and the
 trusted root (`--binary`, `--gh`, `--trusted-root`), then runs `productbuild --package` over it

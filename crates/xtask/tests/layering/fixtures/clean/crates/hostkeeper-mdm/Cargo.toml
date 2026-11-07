@@ -1,0 +1,11 @@
+[package]
+name = "hostkeeper-mdm"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+hostkeeper-mdm-core = { path = "../hostkeeper-mdm-core" }
+hostkeeper-mdm-step = { path = "../hostkeeper-mdm-step" }
+
+[dev-dependencies]
+hostkeeper-testkit = { path = "../hostkeeper-testkit" }

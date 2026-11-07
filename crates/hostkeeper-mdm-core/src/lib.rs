@@ -6,8 +6,8 @@
 //! This is a pure crate: no I/O, no process, no clock, no randomness and no hashed
 //! collections. Everything is a function from settings text to bytes, so a site's files
 //! are the same on every render and can be compared with what is installed. The kit's binary,
-//! which reads the settings file, fetches the tools and installs the files, is not built yet
-//! (design section 12, task M4). The crate is the port of komira-ai/kbf's `mdm-core`, which was
+//! which reads the settings file, fetches the tools and installs the files, is
+//! `crates/hostkeeper-mdm` (design section 12, task M4). The crate is the port of komira-ai/kbf's `mdm-core`, which was
 //! itself ported from the `mdm` module of kbf-deploy (kbf commit
 //! `f89ed5c063728e2949c2bcc65c2cda99a313d771`), with the names that module fixed (the unit
 //! prefix, the slice, the SCEP CA's subject, the DEP certificate's name, the ADE profile's text,

@@ -1,0 +1,32 @@
+[package]
+name = "hostkeeper-pxe-seed"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "The boot menus and autoinstall seeds hostkeeper-pxe serves: the fixed grub.cfg, the install or local-disk menu of a MAC, and a machine's user-data and meta-data, each a pure function of its inputs."
+
+# Item N6 of docs/design/network-install.md: the generator of what a bare machine boots into
+# (its section 4). Pure: no file, socket, clock or environment is read; `hostkeeper-pxe serve`
+# (item N9) reads the flags, files and inventory and hands the values in.
+[dependencies]
+# The daemon config's own parser (`DaemonConfig::parse`), so a config the daemon refuses is
+# refused before a seed is made.
+hostkeeper-config = { path = "../hostkeeper-config" }
+# The MAC grammar of the inventory (`MacAddress`).
+hostkeeper-enrollment = { path = "../hostkeeper-enrollment" }
+# The host id and role grammars of the inventory record (`HostId`, `RoleName`).
+hostkeeper-wire = { path = "../hostkeeper-wire" }
+# The daemon config is carried in the seed as base64, byte for byte; an SSH public key's blob is
+# decoded to check the key type it names.
+base64.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+# The tests read each generated user-data back as YAML and list its keys.
+saphyr-parser.workspace = true
+
+[lints]
+workspace = true

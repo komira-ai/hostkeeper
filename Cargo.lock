@@ -1474,6 +1474,7 @@ dependencies = [
  "hostkeeper-steps",
  "hostkeeper-testkit",
  "p256",
+ "plist",
  "rcgen",
  "rustix",
  "rustls",
@@ -1570,6 +1571,26 @@ dependencies = [
  "tonic",
  "tower",
  "x509-cert",
+]
+
+[[package]]
+name = "hostkeeper-mdm"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "flate2",
+ "getrandom 0.4.3",
+ "hex",
+ "hostkeeper-mdm-core",
+ "hostkeeper-mdm-step",
+ "hostkeeper-testkit",
+ "rustix",
+ "rustls",
+ "rustls-native-certs",
+ "sha2",
+ "tar",
+ "thiserror",
+ "ureq",
 ]
 
 [[package]]
@@ -1774,6 +1795,18 @@ name = "hostkeeper-pxe-packets"
 version = "0.1.0"
 dependencies = [
  "hostkeeper-wire",
+ "thiserror",
+]
+
+[[package]]
+name = "hostkeeper-pxe-seed"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "hostkeeper-config",
+ "hostkeeper-enrollment",
+ "hostkeeper-wire",
+ "saphyr-parser",
  "thiserror",
 ]
 
@@ -4315,6 +4348,7 @@ dependencies = [
  "prost-reflect",
  "ruzstd",
  "saphyr-parser",
+ "serde",
  "serde_json",
  "sha2",
  "tar",

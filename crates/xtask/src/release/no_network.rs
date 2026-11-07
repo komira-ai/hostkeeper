@@ -2,8 +2,8 @@
 //!
 //! The adapters that start a process are built in one module, `real.rs`, and called from one
 //! place, `lib.rs`. This test reads every Rust file of the crate and refuses a name that breaks
-//! that: the process-starting `Exec` named outside `real.rs`, `real::connect` named outside
-//! `lib.rs`, test code in `real.rs`, and a test that starts a process of its own, but for the
+//! that: the process-starting `Exec` named outside `real.rs`, `real::connect` or `real::exec`
+//! named outside `lib.rs`, test code in `real.rs`, and a test that starts a process of its own, but for the
 //! tests listed in [`PROCESS_TESTS`], which run a program on purpose. The names are built from
 //! pieces, so this file passes its own rules.
 //!
@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 /// The one module that builds the process-starting `Exec`.
 const REAL: &str = "src/release/real.rs";
 
-/// The one module that calls `real::connect`.
+/// The one module that calls `real::connect` and `real::exec`.
 const LIB: &str = "src/lib.rs";
 
 /// The name of the process-starting `Exec`.
@@ -24,6 +24,9 @@ const SYSTEM_EXEC: &str = concat!("System", "Exec");
 
 /// The path of the function that builds the real adapters.
 const CONNECT: &str = concat!("real::", "connect");
+
+/// The path of the function that returns the process-starting `Exec` itself.
+const EXEC: &str = concat!("real::", "exec");
 
 /// The call that starts a process.
 const COMMAND: &str = concat!("Command::", "new");
@@ -114,10 +117,12 @@ fn findings(files: &[(String, String)]) -> Vec<String> {
                     "{path}:{at}: names {SYSTEM_EXEC}, which only {REAL} may build"
                 ));
             }
-            if code.contains(CONNECT) & (path != LIB) {
-                out.push(format!(
-                    "{path}:{at}: names {CONNECT}, which only {LIB} may call"
-                ));
+            for name in [CONNECT, EXEC] {
+                if code.contains(name) & (path != LIB) {
+                    out.push(format!(
+                        "{path}:{at}: names {name}, which only {LIB} may call"
+                    ));
+                }
             }
             if code.contains(CFG_TEST) & (path == REAL) {
                 out.push(format!(
@@ -169,7 +174,7 @@ fn file(path: &str, text: &str) -> (String, String) {
 #[test]
 fn release_commands_never_call_the_network_in_tests() {
     // Catches: a test (or an adapter test) building the process-starting Exec, calling
-    // `real::connect`, or starting git, gh or any program, so that a release test reaches the
+    // `real::connect` or `real::exec`, or starting git, gh or any program, so that a release test reaches the
     // network or the host.
     let files = sources();
     let paths: Vec<&str> = files.iter().map(|(p, _)| p.as_str()).collect();
@@ -199,6 +204,16 @@ fn release_commands_never_call_the_network_in_tests() {
         findings(&[file("tests/x.rs", &exec), file(REAL, &exec)]),
         vec![format!(
             "tests/x.rs:1: names {SYSTEM_EXEC}, which only {REAL} may build"
+        )]
+    );
+    let real_exec = format!("let e = {EXEC}();\n");
+    assert_eq!(
+        findings(&[
+            file("src/mdm_signing_test/tests.rs", &real_exec),
+            file(LIB, &real_exec)
+        ]),
+        vec![format!(
+            "src/mdm_signing_test/tests.rs:1: names {EXEC}, which only {LIB} may call"
         )]
     );
     let connect = format!("x();\nlet r = {CONNECT}();\n");
