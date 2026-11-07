@@ -1853,6 +1853,9 @@ dependencies = [
 [[package]]
 name = "hostkeeper-testkit"
 version = "0.1.0"
+dependencies = [
+ "nix",
+]
 
 [[package]]
 name = "hostkeeper-tls"

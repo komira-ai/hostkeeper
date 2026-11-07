@@ -15,7 +15,8 @@ use support::{
 };
 
 const ENOSPC: i32 = 28;
-const EDQUOT: i32 = 122;
+// EDQUOT is 122 on Linux and 69 on macOS, so the platform's own value.
+const EDQUOT: i32 = rustix::io::Errno::DQUOT.raw_os_error();
 
 /// The valid package of `version`, with a file `bin/big` of two buffers and more.
 fn package(version: &str) -> Vec<u8> {

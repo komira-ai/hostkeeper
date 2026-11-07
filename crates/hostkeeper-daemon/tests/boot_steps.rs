@@ -524,5 +524,12 @@ fn a_full_notify_queue_fails_the_notice_without_waiting() {
     let notifier = SystemdNotifier::new(path.as_os_str());
     while notifier.ready().is_ok() {}
     let error = notifier.ready().expect_err("a full queue");
-    assert_eq!(error.kind(), std::io::ErrorKind::WouldBlock);
+    // A full datagram queue is EAGAIN (`WouldBlock`) on Linux and ENOBUFS on macOS, which std
+    // maps to no kind of its own.
+    let full = if cfg!(target_os = "macos") {
+        error.raw_os_error() == Some(libc::ENOBUFS)
+    } else {
+        error.kind() == std::io::ErrorKind::WouldBlock
+    };
+    assert!(full, "{error:?}");
 }

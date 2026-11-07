@@ -4,10 +4,8 @@
 
 mod support;
 
-use std::fs;
-
 use hostkeeper_hook::{Step, Verdict};
-use hostkeeper_steps::{Finished, Loaded, RunError, Staged};
+use hostkeeper_steps::{Finished, Loaded, RunError};
 use support::{FAIL, Rig};
 
 fn ok() -> Finished {
@@ -21,8 +19,7 @@ fn ok() -> Finished {
 
 /// Catches an order whose names could reach a unit name or a path unchecked: a service name
 /// outside the rule of design 11.8 (empty, white space, a `/`, a non-ASCII letter, a leading `-`
-/// or `.`, a `+`, 256 bytes), and a release path that is not UTF-8 (the params file and the
-/// artifact argument must be the same string).
+/// or `.`, a `+`, 256 bytes).
 #[test]
 fn an_order_with_unusable_names_is_refused() {
     let rig = Rig::new("run-bad-order");
@@ -34,7 +31,22 @@ fn an_order_with_unusable_names_is_refused() {
         assert!(matches!(err, RunError::BadOrder(_)), "{name}");
         assert!(err.to_string().contains("not valid"));
     }
+    assert!(rig.fake.events().is_empty());
+}
+
+/// Catches a release path that is not UTF-8 reaching the params file and the artifact argument,
+/// which must be the same string: an order whose `staged`, or whose `previous`, is such a path is
+/// `BadOrder` before anything runs. Linux only: macOS (APFS and HFS+) refuses to create a
+/// directory whose name is not UTF-8 (`EILSEQ`), so no such release path can exist there.
+#[cfg(target_os = "linux")]
+#[test]
+fn an_order_with_a_release_path_that_is_not_utf8_is_refused() {
+    use std::fs;
     use std::os::unix::ffi::OsStrExt;
+
+    use hostkeeper_steps::Staged;
+
+    let rig = Rig::new("run-bad-path");
     let odd = rig
         .scratch
         .path()

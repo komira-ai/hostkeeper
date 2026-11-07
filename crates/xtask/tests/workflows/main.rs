@@ -1,8 +1,10 @@
 //! The workflow lint: every file in `.github/workflows` is held to the rules in [`lint`], and
 //! the lint is shown to refuse each defect by putting it into a workflow that is otherwise
 //! clean ([`CLEAN`]) and reading the exact problems it reports. The rules of `privileged.yml`, the
-//! one workflow that runs a job as root, are tested in `privileged_tests.rs`; those of
-//! `advisories.yml`, the advisory monitor, in `advisories.rs`.
+//! one workflow that runs a job as root after a merge, are tested in `privileged_tests.rs`; those
+//! of `pr-device.yml`, the one workflow with macOS jobs and jobs as root on a pull request, and of
+//! no secret on a pull request, in `pr_device_tests.rs`; those of `advisories.yml`, the advisory
+//! monitor, in `advisories.rs`.
 
 mod advisories;
 mod callers;
@@ -11,6 +13,8 @@ mod channel_run_tests;
 mod desired;
 mod desired_tests;
 mod lint;
+mod pr_device;
+mod pr_device_tests;
 mod privileged_tests;
 mod release;
 mod release_tests;
@@ -105,17 +109,20 @@ fn assert_problems(text: &str, want: &[&str]) {
 fn every_workflow_of_the_repository_passes_the_lint() {
     // Catches: an unpinned action, a missing top-level `permissions: {}`, pull_request_target,
     // a runner that is not GitHub-hosted, a write scope outside the table, or a privileged or
-    // macOS job on pull_request, a release workflow out of its shape, or a workflow that tags or
-    // publishes on pull_request or outside the release group, in any workflow file of this
-    // repository.
+    // macOS job on pull_request outside pr-device.yml's jobs that may be, a copy in pr-device.yml
+    // that drifted from privileged.yml's job, a release workflow out of its shape, or a workflow
+    // that tags or publishes on pull_request or outside the release group, in any workflow file
+    // of this repository.
     let all = workflows();
-    for required in ["ci.yml", PRIVILEGED_WORKFLOW] {
-        assert!(
-            all.iter().any(|(name, _)| name == required),
-            "{required} is missing"
-        );
-    }
-    let mut found = Vec::new();
+    let text_of = |required: &str| {
+        all.iter()
+            .find(|(name, _)| name == required)
+            .map(|(_, text)| text.clone())
+            .unwrap_or_else(|| panic!("{required} is missing"))
+    };
+    text_of("ci.yml");
+    let mut found =
+        pr_device::mirror_problems(&text_of(pr_device::FILE), &text_of(PRIVILEGED_WORKFLOW));
     for (file, text) in all {
         let publish = release::publish_problems(&file, &text);
         for p in lint(&file, &text).into_iter().chain(publish) {

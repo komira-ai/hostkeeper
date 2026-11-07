@@ -71,9 +71,12 @@ cargo +nightly-2026-10-01 llvm-cov --workspace --locked --branch --lcov --output
 cargo run -p coverage-gate --locked -- --lcov target/lcov.info --root .
 ```
 
-Nothing privileged and nothing for macOS runs on a pull request. The workflow lint refuses such a
-job in any workflow that runs on `pull_request`, refuses a job as root (`sudo`, a privileged
-container) in any workflow but `privileged.yml` (below), and it also refuses an action that is not pinned
+Nothing privileged and nothing for macOS runs on a pull request, but in `pr-device.yml` (below),
+on every pull request. The workflow lint refuses such a
+job in any other workflow that runs on `pull_request`, refuses a job as root (`sudo`, a privileged
+container) in any workflow but `privileged.yml` and the two copies of its jobs in `pr-device.yml`,
+refuses a write scope, a secret or the token in every workflow that runs on `pull_request`, and it
+also refuses an action that is not pinned
 by commit SHA, a runner that is not GitHub-hosted, a workflow without a top-level
 `permissions: {}`, `pull_request_target` and `secrets: inherit`. It also holds
 `set-desired.yml`, the CI client services call ([docs/deploy/ci-client.md](docs/deploy/ci-client.md)),
@@ -87,9 +90,28 @@ Everything a pull request runs proves hostkeeper against fakes of the host.
 `.github/workflows/privileged.yml` is the one place where the adapters behind those fakes meet the
 real thing: it runs the tests of `crates/hostkeeper-privileged` as root against the systemd of a
 GitHub-hosted `ubuntu-24.04` runner. It runs after a merge to `main` and by hand
-(`workflow_dispatch`), never on a pull request, so a pull request cannot show these tests passing:
-the first run on `main` after the merge is their proof. A release waits for a successful run of it
-on its commit. A red run on `main` is a defect: fix it forward in a new pull request.
+(`workflow_dispatch`), never on a pull request. A release waits for a successful run of it on its
+commit. A red run on `main` is a defect: fix it forward in a new pull request.
+
+## The macOS and privileged jobs of a pull request
+
+`.github/workflows/pr-device.yml` runs on every pull request, beside `ci.yml`. Its three jobs are
+each a check of its own, required of every pull request:
+
+- `macos-test`: the tests of the crates the `hostkeeper` and `hello` binaries are built from (the
+  code a Mac runs: the daemon, the launchd adapters, the step launcher, placement, the package
+  check, the observer, the enrollment claims and what they use) on a GitHub-hosted `macos-15`
+  runner, as the runner's user. The rest of the workspace (the coordinator's MDM and
+  network-install servers, the release tooling) runs on Linux only and does not build for macOS;
+  the workflow lint holds the list to those binaries' path dependencies, so a crate added to
+  either joins it.
+- `macos-device`: the device tests as root under launchd.
+- `privileged`: the privileged tests as root against systemd.
+
+`macos-device` and `privileged` are copies of `privileged.yml`'s jobs of those names, key for key
+(the workflow lint compares them), so a pull request runs what will run after its merge. A newer
+push to the same pull request cancels the older run. These jobs hold no write scope and name no
+secret or token, and save no cache.
 
 The tests, in `crates/hostkeeper-privileged/tests/`, drive the production code:
 

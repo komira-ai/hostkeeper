@@ -2,7 +2,8 @@
 //!
 //! The privileged tests (`tests/transient_unit.rs`, `tests/observer.rs`, `tests/unit_control.rs`,
 //! `tests/self_update.rs`) run as root against the real systemd of a host, in
-//! `.github/workflows/privileged.yml` only, after a merge to main. Each of these files starts with
+//! `.github/workflows/privileged.yml`, after a merge to main, and in `pr-device.yml`'s copies of
+//! its jobs, on every pull request. Each of these files starts with
 //! `#![cfg(feature = "privileged")]` (the first-boot and macOS files below with lines of their
 //! own); the feature is off by default, so the pull-request set compiles none of them
 //! ([`PRIVILEGED`]). They drive the production adapters
@@ -51,7 +52,8 @@ pub use host::{HostError, SYSTEMD_RUNTIME_DIR, check_host};
 pub use rig::{Rig, RigError, SERVICE, UNIT_PREFIX};
 
 /// Whether this build has the feature `privileged`, which compiles the privileged tests. False in
-/// every build of the workspace's own test run; true only in privileged.yml's.
+/// every build of the workspace's own test run; true only in the builds of privileged.yml's jobs
+/// and of pr-device.yml's copies of them.
 pub const PRIVILEGED: bool = cfg!(feature = "privileged");
 
 #[cfg(test)]

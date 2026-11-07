@@ -82,6 +82,36 @@ fn text(rig: &Rig, path: &Path) -> Option<String> {
     fs::read_to_string(rig.host(path)).ok()
 }
 
+/// The files a start on this host writes, in order: on Linux the fallback unit and the drop-in, on
+/// macOS the fallback job (`Platform::host` decides which, as the daemon's start does).
+fn host_files() -> Vec<PathBuf> {
+    match cfg!(target_os = "macos") {
+        true => vec![job()],
+        false => vec![fallback_unit(), dropin()],
+    }
+}
+
+/// The text of the file a start on this host writes last, as the pinned generators give it: the
+/// drop-in on Linux, the job on macOS.
+fn host_last_text(rig: &Rig) -> (PathBuf, String) {
+    match cfg!(target_os = "macos") {
+        true => (job(), job_text(&binary_dir(&rig.state))),
+        false => (dropin(), DROPIN_TEXT.to_owned()),
+    }
+}
+
+/// The calls to the service manager a start on this host makes to tell it of the units it wrote:
+/// on Linux one `daemon-reload`, on macOS the bootout and bootstrap of the fallback job.
+fn host_told() -> Vec<UnitCall> {
+    match cfg!(target_os = "macos") {
+        true => vec![
+            UnitCall::Stop(fallback_label()),
+            UnitCall::Start(fallback_label()),
+        ],
+        false => vec![UnitCall::DaemonReload],
+    }
+}
+
 /// The design's named test for the daemon side. Catches the generators having no caller, a
 /// start that writes the files and does not tell systemd, one that tells it more than once, one
 /// that writes the drop-in before the unit its `OnFailure=` names, and one that rewrites or
@@ -149,9 +179,10 @@ fn a_start_installs_the_units_once_ready_and_a_second_start_leaves_them() {
     );
     assert_eq!(
         report.self_units,
-        Some(Ok(Installed::Written(vec![fallback_unit(), dropin()])))
+        Some(Ok(Installed::Written(host_files())))
     );
-    assert_eq!(text(&rig, &dropin()).as_deref(), Some(DROPIN_TEXT));
+    let (last, last_text) = host_last_text(&rig);
+    assert_eq!(text(&rig, &last), Some(last_text));
     drop(started);
 
     rig.placed_log.clear();
@@ -166,7 +197,7 @@ fn a_start_installs_the_units_once_ready_and_a_second_start_leaves_them() {
         .into_iter()
         .any(|event| match event {
             Event::Fs(write) => format!("{write:?}").contains("/units"),
-            Event::Unit(call) => call == UnitCall::DaemonReload,
+            Event::Unit(call) => host_told().contains(&call),
             Event::Mark(_) => false,
         });
     assert!(!touched_units, "{:?}", rig.placed_log.events());
@@ -323,16 +354,27 @@ fn a_write_or_read_that_fails_is_the_error_and_nothing_is_reloaded() {
 #[test]
 fn a_start_whose_units_cannot_be_installed_goes_on_and_reports_why() {
     let rig = Rig::new("units-fail");
-    rig.units.fail_reload();
+    // The call that tells the service manager: the reload on Linux, the bootout of the job on macOS.
+    let refusal = match cfg!(target_os = "macos") {
+        true => {
+            rig.units.fail_stop(&fallback_label());
+            format!(
+                "Stop({:?}) failed: the fake fails this call",
+                fallback_label()
+            )
+        }
+        false => {
+            rig.units.fail_reload();
+            "DaemonReload failed: the fake fails this call".to_owned()
+        }
+    };
     let started = start::startup(&rig.settings(), rig.ports(), OWN).expect("the daemon starts");
     let report = started.boot_report();
     assert_eq!(report.stages.last(), Some(&Stage::SelfUnits));
     let installed = report.self_units.clone().expect("tried");
-    let error = installed.expect_err("the reload fails");
+    let error = installed.expect_err("the service manager refuses");
     assert!(
-        error.ends_with(
-            "the service manager could not be told: DaemonReload failed: the fake fails this call"
-        ),
+        error.ends_with(&format!("the service manager could not be told: {refusal}")),
         "{error}"
     );
 }

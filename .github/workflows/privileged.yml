@@ -30,11 +30,12 @@
 # assigned and installed.
 #
 # It runs after a merge to main and by hand (workflow_dispatch), never on a pull request. The
-# workflow lint (crates/xtask/tests/workflows) allows a privileged job in this file only, holds its
-# triggers to exactly these two and each job to its runner (ubuntu-24.04; macos-15 for
-# macos-device), and gives it no write scope; it refuses root in every other workflow, and macOS
-# in every workflow that runs for a pull request. A release waits for a successful push run of
-# this workflow on its commit (release.yml).
+# workflow lint (crates/xtask/tests/workflows) holds its triggers to exactly these two and each job
+# to its runner (ubuntu-24.04; macos-15 for macos-device), and gives it no write scope; it refuses
+# root in every other workflow, and macOS in every workflow that runs for a pull request, but in
+# pr-device.yml, whose jobs privileged and macos-device are copies of this file's, step for step,
+# run on every pull request. A release waits for a successful push run of
+# this workflow on its commit (release.yml); pr-device.yml is no part of a release.
 #
 # In each job the test binaries are built as the runner's own user; only their run is as root,
 # through the cargo runner `sudo`, the one use of it in the job (on the Mac, unpack_mac also runs

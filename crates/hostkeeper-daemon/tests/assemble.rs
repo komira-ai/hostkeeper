@@ -587,18 +587,23 @@ fn the_start_of_the_host_build_stops_at_the_ports_it_cannot_build() {
         .expect("no config");
     assert!(matches!(error, StartError::Config { .. }), "{error}");
 
-    let error = start_with(&rig.settings(), &files, OWN, &*notifier, &Platform::macos())
-        .err()
-        .expect("no macOS adapters in a Linux build");
-    assert!(
-        matches!(error, StartError::NoAdapters { platform: "macOS" }),
-        "{error}"
-    );
-    assert_eq!(
-        error.to_string(),
-        "this build of hostkeeper has no adapters for macOS"
-    );
-    assert_eq!(error.exit_code(), EXIT_FAILED);
+    // Only a build for another system than macOS has no macOS adapters; a Mac's build has them,
+    // and a start with them would reach for the Mac's real launchd directories.
+    #[cfg(not(target_os = "macos"))]
+    {
+        let error = start_with(&rig.settings(), &files, OWN, &*notifier, &Platform::macos())
+            .err()
+            .expect("no macOS adapters in a Linux build");
+        assert!(
+            matches!(error, StartError::NoAdapters { platform: "macOS" }),
+            "{error}"
+        );
+        assert_eq!(
+            error.to_string(),
+            "this build of hostkeeper has no adapters for macOS"
+        );
+        assert_eq!(error.exit_code(), EXIT_FAILED);
+    }
     assert_eq!(notifier.sent(), 0);
 }
 
