@@ -784,3 +784,47 @@ fn mdm_signing_test_record_writes_every_flag_to_the_send() {
         "xtask: pkg-1 has not been sent: `send --apply` it first\n"
     );
 }
+
+#[test]
+fn pr_jobs_appends_the_outputs_and_prints_why_with_status_0() {
+    // Catches: the verb not reachable as the workflow calls it, its outputs not appended to
+    // `--output`, or its lines not printed to the log.
+    let d = dir("pr-jobs");
+    std::fs::write(
+        d.join("changed"),
+        "docs/macos.md\0crates/hostkeeper-steps/src/systemd.rs\0",
+    )
+    .expect("changed");
+    std::fs::write(d.join("output"), "earlier=1\n").expect("output");
+    let o = run(
+        &d,
+        &["pr-jobs", "--changed", "changed", "--output", "output"],
+    );
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+    assert_eq!(
+        stdout(&o),
+        "mac: true, for crates/hostkeeper-steps/src/systemd.rs\n\
+         linux-privileged: true, for crates/hostkeeper-steps/src/systemd.rs\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(d.join("output")).expect("read"),
+        "earlier=1\nmac=true\nlinux-privileged=true\n"
+    );
+}
+
+#[test]
+fn pr_jobs_of_a_missing_list_is_a_failure_with_status_1_and_writes_nothing() {
+    // Catches: a failed diff step read as "nothing changed" (which skips every job), or its
+    // failure exiting 0.
+    let d = dir("pr-jobs-missing");
+    let o = run(
+        &d,
+        &["pr-jobs", "--changed", "changed", "--output", "output"],
+    );
+    assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
+    assert_eq!(
+        stderr(&o),
+        "xtask: read the changed paths \"changed\": No such file or directory (os error 2)\n"
+    );
+    assert!(!d.join("output").exists());
+}

@@ -21,18 +21,24 @@
 //!   [`ID_TOKEN_ALLOWED`] and [`callers::CALLERS`];
 //! - any key `secrets` has the value `inherit`;
 //! - the workflow runs for a pull request (`pull_request`, its review events, or
-//!   `merge_group`) and a job of it is privileged or macOS, whatever its `if:` says, or what
-//!   sits beside `jobs` (`env`, `defaults`, ...) is, so that nothing of the kind runs on a pull
-//!   request, as a gate or not.
-//!   Privileged: a value of the job names `sudo` as a word (so `cargo xtask sudo-test` and a
-//!   cargo runner of `sudo` too), `--privileged` or `--cap-add` (a container's options), or the
-//!   job holds a `write` scope. macOS: a value of the job names `macos` or `darwin`, in any case
-//!   (a runner, a matrix value, a `--target aarch64-apple-darwin`);
+//!   `merge_group`) and a job of it holds a `write` scope, or is root or macOS, whatever its
+//!   `if:` says, and is not a job of [`pr_device::JOBS`] that may be (`root`, `macos`); or what
+//!   sits beside `jobs` (`env`, `defaults`, ...) is root or macOS, which no job may take from
+//!   there. Root: a value of the job names `sudo` as a word (so `cargo xtask sudo-test` and a
+//!   cargo runner of `sudo` too), `--privileged` or `--cap-add` (a container's options). macOS:
+//!   a value of the job names `macos` or `darwin`, in any case (a runner, a matrix value, a
+//!   `--target aarch64-apple-darwin`). The job names a job's `needs` lists are not its values;
+//! - the workflow runs for a pull request and a job of it, or what sits beside `jobs`, names a
+//!   secret or the token: a key or value `secrets`, or an expression (`${{ ... }}`) that names
+//!   `secrets` or `github.token` as a word, in any case. The token's rights are those of the
+//!   job's `permissions`; naming it hands them to a step of pull-request code;
+//! - it is [`pr_device::FILE`] and breaks a rule of its own ([`pr_device::problems`]);
 //! - it is not [`PRIVILEGED_WORKFLOW`], it does not run for a pull request, and a job of it, or
 //!   what sits beside `jobs`, names root as above (`sudo` as a word, `--privileged`,
-//!   `--cap-add`), whatever its trigger: root runs in that one workflow or nowhere. (A pull-request
-//!   workflow is refused for the same values by the rule above, with its own message. A write
-//!   scope is not root; outside a pull request it is held to [`WRITE_ALLOWED`].)
+//!   `--cap-add`), whatever its trigger: root runs in that one workflow, and on a pull request in
+//!   the copies of its jobs in [`pr_device::FILE`], or nowhere. (A pull-request workflow is
+//!   refused for the same values by the rule above, with its own message. A write scope is not
+//!   root; outside a pull request it is held to [`WRITE_ALLOWED`].)
 //! - it is [`PRIVILEGED_WORKFLOW`] and its `on` is not exactly `push` with `branches: [main]` and
 //!   nothing else, and `workflow_dispatch` with no inputs (no other trigger, no `tags`, `paths` or
 //!   other filter of `push`), or a job of it runs on a runner that is not in its list
@@ -54,6 +60,7 @@
 
 use super::advisories;
 use super::callers;
+use super::pr_device;
 use super::release::{self, PLAN_IF, RELEASE_IF, SIGN_IF};
 use super::set_desired;
 use super::yaml::{self, Node, Value};
@@ -114,8 +121,9 @@ pub const WRITE_ALLOWED: &[Allowed] = &[
 /// CI client's, whose order of steps [`set_desired`] holds.
 pub const ID_TOKEN_ALLOWED: &[(&str, &str)] = &[(set_desired::FILE, set_desired::JOB)];
 
-/// The one workflow that may run a job as root (`sudo`, a privileged container): the privileged
-/// tests, after a merge to main and by hand, never on a pull request.
+/// The one workflow that may run a job as root (`sudo`, a privileged container) but on a pull
+/// request: the privileged tests, after a merge to main and by hand. On a pull request, the
+/// copies of its jobs in [`pr_device::FILE`] may.
 pub const PRIVILEGED_WORKFLOW: &str = "privileged.yml";
 
 /// The runners a job of [`PRIVILEGED_WORKFLOW`] may run on, but [`MACOS_DEVICE_JOB`]:
@@ -315,7 +323,8 @@ pub fn lint(file: &str, text: &str) -> Vec<String> {
         scalars(v, &mut beside_jobs);
     }
     if on_pull_request {
-        problems.extend(word_problems("workflow", &beside_jobs));
+        problems.extend(word_problems("workflow", &beside_jobs, false, false));
+        problems.extend(secret_problems("workflow", &beside_jobs));
     }
     if root_refused {
         problems.extend(root_problems("workflow", &beside_jobs));
@@ -332,7 +341,7 @@ pub fn lint(file: &str, text: &str) -> Vec<String> {
             problems.extend(runner_problems(name, job));
         }
         if on_pull_request {
-            problems.extend(pull_request_problems(name, job));
+            problems.extend(pull_request_problems(file, name, job));
         }
         if root_refused {
             let mut values = Vec::new();
@@ -346,6 +355,9 @@ pub fn lint(file: &str, text: &str) -> Vec<String> {
     problems.extend(release::release_rules(file, text));
     if file == set_desired::FILE {
         problems.extend(set_desired::problems(&doc));
+    }
+    if file == pr_device::FILE {
+        problems.extend(pr_device::problems(&doc));
     }
     problems.extend(callers::problems(file, &doc));
     problems
@@ -517,12 +529,25 @@ pub fn runs_on_pull_requests(name: &str) -> bool {
     name.starts_with("pull_request") || name == "merge_group"
 }
 
-/// What a job of a workflow that runs on pull requests may not be: privileged or macOS.
-fn pull_request_problems(name: &str, job: &Node) -> Vec<String> {
+/// What the job `name` of `file`, a workflow that runs on pull requests, may not be: holding a
+/// write scope, naming a secret or the token, and, unless [`pr_device`] lets it, root or macOS.
+fn pull_request_problems(file: &str, name: &str, job: &Node) -> Vec<String> {
     let mut values = Vec::new();
-    scalars(job, &mut values);
+    for (k, v) in entries(job)
+        .iter()
+        .filter(|(k, _)| k.as_str() != Some("needs"))
+    {
+        scalars(k, &mut values);
+        scalars(v, &mut values);
+    }
     let who = format!("job {name}");
-    let mut problems = word_problems(&who, &values);
+    let mut problems = word_problems(
+        &who,
+        &values,
+        pr_device::root_allowed(file, name),
+        pr_device::macos_allowed(file, name),
+    );
+    problems.extend(secret_problems(&who, &values));
     let writes = entry(job, "permissions")
         .map_or(&[][..], entries)
         .iter()
@@ -599,18 +624,46 @@ fn privileged_runner_problems(name: &str, job: &Node) -> Vec<String> {
     }
 }
 
-/// The privileged and macOS words among `values`, the values of `who` (a job or the workflow).
-fn word_problems(who: &str, values: &[&str]) -> Vec<String> {
+/// The privileged and macOS words among `values`, the values of `who` (a job or the workflow),
+/// but root when `root_ok` and macOS when `macos_ok`.
+fn word_problems(who: &str, values: &[&str], root_ok: bool, macos_ok: bool) -> Vec<String> {
     let mut problems = Vec::new();
-    if let Some(line) = root_line(values) {
+    if let Some(line) = root_line(values).filter(|_| !root_ok) {
         problems.push(format!("{who}: privileged on pull_request (`{line}`)"));
     }
     let macos = first_line(values, |line| {
         let lower = line.to_ascii_lowercase();
         lower.contains("macos") || lower.contains("darwin")
     });
-    if let Some(line) = macos {
+    if let Some(line) = macos.filter(|_| !macos_ok) {
         problems.push(format!("{who}: macOS on pull_request (`{line}`)"));
     }
     problems
+}
+
+/// The expressions of `text`: what stands between each `${{` and the `}}` after it.
+fn expressions(text: &str) -> Vec<&str> {
+    let mut found = Vec::new();
+    let mut rest = text;
+    while let Some((_, after)) = rest.split_once("${{") {
+        let (inside, tail) = after.split_once("}}").unwrap_or((after, ""));
+        found.push(inside);
+        rest = tail;
+    }
+    found
+}
+
+/// The first line of `values`, the values of `who` (a job or the workflow) of a workflow that
+/// runs for a pull request, that names a secret or the token.
+fn secret_problems(who: &str, values: &[&str]) -> Vec<String> {
+    first_line(values, |line| {
+        let lower = line.to_ascii_lowercase();
+        lower.trim() == "secrets"
+            || expressions(&lower)
+                .iter()
+                .any(|e| has_word(e, "secrets") || has_word(e, "github.token"))
+    })
+    .map(|line| format!("{who}: a secret on pull_request (`{line}`)"))
+    .into_iter()
+    .collect()
 }

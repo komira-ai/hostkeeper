@@ -71,9 +71,12 @@ cargo +nightly-2026-10-01 llvm-cov --workspace --locked --branch --lcov --output
 cargo run -p coverage-gate --locked -- --lcov target/lcov.info --root .
 ```
 
-Nothing privileged and nothing for macOS runs on a pull request. The workflow lint refuses such a
-job in any workflow that runs on `pull_request`, refuses a job as root (`sudo`, a privileged
-container) in any workflow but `privileged.yml` (below), and it also refuses an action that is not pinned
+Nothing privileged and nothing for macOS runs on a pull request, but in `pr-device.yml` (below),
+and only when the pull request changes the code those jobs prove. The workflow lint refuses such a
+job in any other workflow that runs on `pull_request`, refuses a job as root (`sudo`, a privileged
+container) in any workflow but `privileged.yml` and the two copies of its jobs in `pr-device.yml`,
+refuses a write scope, a secret or the token in every workflow that runs on `pull_request`, and it
+also refuses an action that is not pinned
 by commit SHA, a runner that is not GitHub-hosted, a workflow without a top-level
 `permissions: {}`, `pull_request_target` and `secrets: inherit`. It also holds
 `set-desired.yml`, the CI client services call ([docs/deploy/ci-client.md](docs/deploy/ci-client.md)),
@@ -87,9 +90,34 @@ Everything a pull request runs proves hostkeeper against fakes of the host.
 `.github/workflows/privileged.yml` is the one place where the adapters behind those fakes meet the
 real thing: it runs the tests of `crates/hostkeeper-privileged` as root against the systemd of a
 GitHub-hosted `ubuntu-24.04` runner. It runs after a merge to `main` and by hand
-(`workflow_dispatch`), never on a pull request, so a pull request cannot show these tests passing:
-the first run on `main` after the merge is their proof. A release waits for a successful run of it
-on its commit. A red run on `main` is a defect: fix it forward in a new pull request.
+(`workflow_dispatch`), never on a pull request. A release waits for a successful run of it on its
+commit. A red run on `main` is a defect: fix it forward in a new pull request.
+
+## The macOS and privileged jobs of a pull request
+
+`.github/workflows/pr-device.yml` runs on every pull request. Its job `changes` lists the paths
+the pull request changes and runs `cargo xtask pr-jobs`, which says which of two lists in
+`crates/xtask/src/pr_jobs.rs` they are on, and prints the paths that matched:
+
+- the Mac list (the launchd adapters, the daemon, the step launcher, placement, the package check,
+  the observer, the enrollment claims, the `hostkeeper` binary, hello, the privileged tests, the
+  Mac packaging in `crates/xtask/src/release/macos_pkg*`, `artifacts.yml`, `privileged.yml`,
+  `pr-device.yml`, the filter itself, `.cargo/` and `rust-toolchain.toml`) runs `macos-test`, the
+  workspace's tests on a GitHub-hosted `macos-15` runner, and `macos-device`, the device tests as
+  root under launchd;
+- the Linux list (the daemon, the step launcher and its systemd adapter, placement, the observer,
+  the privileged tests, `packaging/linux/`, `privileged.yml`, `pr-device.yml`, the filter itself,
+  `.cargo/` and `rust-toolchain.toml`) runs `privileged`, the privileged tests as root against
+  systemd.
+
+`macos-device` and `privileged` are copies of `privileged.yml`'s jobs of those names, step for step
+(the workflow lint compares them), so a pull request runs what will run after its merge. A pull
+request on neither list runs `changes` and `gate` only, on Linux, and no macOS runner starts.
+`gate` always runs and fails when another job of the workflow failed or was cancelled, and passes
+when each passed or was skipped: it is the one check of this workflow to require. A newer push to
+the same pull request cancels the older run. These jobs hold no write scope and name no secret.
+`Cargo.lock` and the root `Cargo.toml` are on neither list: a dependency change that breaks the
+Mac is found by `privileged.yml` after the merge, as before.
 
 The tests, in `crates/hostkeeper-privileged/tests/`, drive the production code:
 
