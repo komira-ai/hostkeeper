@@ -113,3 +113,49 @@ fn a_refusal_exits_2_through_the_command_line() {
         "{err}"
     );
 }
+
+/// Catches grants for owners that are not there: on the live host before the move the new
+/// service user does not exist and an archive directory may be missing, so the only grant is
+/// the old state to the old user.
+#[test]
+fn only_the_owners_that_exist_are_granted() {
+    let kit = kit();
+    let host = live_host(&kit);
+    host.put_file("/etc/js-mdm.conf", 0o644, (0, 0), old_text().as_bytes());
+    host.reply(
+        &[hostkeeper_mdm_step::GETENT, "passwd", "hostkeeper-mdm"],
+        2,
+        "",
+    );
+    let machine = FakeMachine::new(&host);
+    let net = FakeNet::new(Default::default());
+    let words = [
+        "hostkeeper-mdm",
+        "migrate",
+        "--from",
+        "/etc/js-mdm.conf",
+        "--settings",
+        SETTINGS,
+        "--bin-dir",
+        "/srv/none",
+        "--profile-id",
+        "com.komira.hostkeeper.mdm",
+        "--acme-resolvers",
+        "192.0.2.53:53",
+        "--acme-propagation-wait",
+        "300s",
+    ];
+    let args: Vec<String> = words.iter().map(|w| (*w).to_owned()).collect();
+    let (mut out, mut err) = (Vec::new(), Vec::new());
+    with_system(&machine, &net, |system| {
+        run_with(&args, system, &kit.pins, &mut out, &mut err)
+    });
+    let grants = machine.grants.borrow();
+    assert_eq!(
+        grants.last().unwrap(),
+        &[Grant {
+            dir: OLD_STATE.to_owned(),
+            uid: OLD_UID
+        }]
+    );
+}

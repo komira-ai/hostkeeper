@@ -584,3 +584,17 @@ fn upload_token_refuses_an_empty_or_oversized_file() {
         }
     }
 }
+
+/// Catches a token that cannot be read taken for a missing one, or sent anyway: a read the
+/// system denies fails the run (exit 1) before any call.
+#[test]
+fn upload_token_fails_when_the_token_cannot_be_read() {
+    let host = ops_host();
+    host.put_file(TOKEN, 0o600, (1000, 1000), b"t");
+    host.deny_read(TOKEN);
+    let api = FakeApi::new();
+    let (result, _) = go(&host, &api, &upload(), Mode::Apply);
+    let e = result.unwrap_err();
+    assert_eq!(e.exit_code(), 1);
+    assert!(api.sent().is_empty());
+}

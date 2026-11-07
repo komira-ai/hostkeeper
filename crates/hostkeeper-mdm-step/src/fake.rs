@@ -274,7 +274,7 @@ impl Host for FakeHost {
             .nodes
             .keys()
             .filter_map(|k| k.strip_prefix(&prefix))
-            .filter(|rest| !rest.is_empty() && !rest.contains('/'))
+            .filter(|rest| !rest.contains('/'))
             .map(str::to_owned)
             .collect();
         Ok(Some(names))

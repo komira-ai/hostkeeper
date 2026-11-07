@@ -160,3 +160,29 @@ fn push_cert_runs_through_the_command_line() {
         "{err}"
     );
 }
+
+/// Catches a relative `--key` that the command line passes on unchecked: it is granted nothing
+/// and refused (exit 2) as not absolute, with REFUSED on standard error and no call.
+#[test]
+fn a_relative_key_path_is_refused_through_the_command_line() {
+    let p = push_pair();
+    let host = host(&p);
+    host.put_file("/cfg", 0o644, (0, 0), example().as_bytes());
+    let api = FakeApi::new();
+    let words = [
+        "push-cert",
+        "--settings",
+        "/cfg",
+        "--cert",
+        CERT,
+        "--key",
+        "push.key",
+    ];
+    let (code, out, err) = cli(&host, &api, &words);
+    assert_eq!(code, 2, "{out}");
+    assert!(
+        err.starts_with("REFUSED: ") && err.contains("push.key"),
+        "{err}"
+    );
+    assert!(api.sent().is_empty());
+}
