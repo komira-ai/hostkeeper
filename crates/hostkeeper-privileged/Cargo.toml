@@ -25,9 +25,6 @@ hostkeeper-daemon = { path = "../hostkeeper-daemon" }
 # The coordinator of the first-boot tests' program `hostkeeper-privileged-coordinator`, which
 # forwards to its command line as the `hostkeeper-coordinator` binary does.
 hostkeeper-coordinator = { path = "../hostkeeper-coordinator" }
-# The boot server of the network-install tests' program `hostkeeper-privileged-pxe`, which
-# forwards to its command line as the `hostkeeper-pxe` binary does.
-hostkeeper-pxe = { path = "../hostkeeper-pxe" }
 # The hook contract the fixture speaks: the step, its arguments, the params file, the last line.
 hostkeeper-hook = { path = "../hostkeeper-hook" }
 # The SHA-256 of the fixture's own executable (mode `print-pid`).
@@ -102,6 +99,12 @@ path = "tests/bin/tierstore_like.rs"
 [[bin]]
 name = "hello-e2e"
 path = "tests/bin/hello_e2e.rs"
+
+# The boot server of the network-install tests' program `hostkeeper-privileged-pxe`, which
+# forwards to its command line as the `hostkeeper-pxe` binary does. It builds on Linux only, as
+# `hostkeeper-pxe` does (its sockets and its privilege drop are Linux's).
+[target.'cfg(target_os = "linux")'.dependencies]
+hostkeeper-pxe = { path = "../hostkeeper-pxe" }
 
 [features]
 # The tests that run as root against the host's systemd. Only privileged.yml turns it on.
