@@ -99,6 +99,8 @@ enum Defect {
     ForgetsReservation,
     /// The duplicate mark also clears the first heartbeat.
     WideMark,
+    /// The first serving heartbeat also clears the first heartbeat.
+    WideServing,
     /// A commit told to fail writes anyway.
     WritesWhenFailing,
     /// A commit with a record whose key does not parse writes the records before it.
@@ -262,6 +264,18 @@ impl Records for Broken {
         self.inner.set_first_heartbeat(host, at_unix)
     }
 
+    fn set_first_serving(&self, host: &pb::Host, at_unix: u64) -> Result<(), StoreError> {
+        self.up()?;
+        if self.defect == Defect::WideServing {
+            let cleared = pb::Host {
+                first_heartbeat_unix: None,
+                ..host.clone()
+            };
+            return self.inner.set_first_serving(&cleared, at_unix);
+        }
+        self.inner.set_first_serving(host, at_unix)
+    }
+
     fn set_duplicate(&self, host: &pb::Host) -> Result<(), StoreError> {
         self.up()?;
         if self.defect == Defect::WideMark {
@@ -328,6 +342,7 @@ fn the_records_suite_fails_against_records_that_break_each_clause() {
         (Defect::SameSerial, Clause::Serial),
         (Defect::ForgetsReservation, Clause::Serial),
         (Defect::WideMark, Clause::HostMarks),
+        (Defect::WideServing, Clause::HostMarks),
         (Defect::WritesWhenFailing, Clause::FailedCommit),
         (Defect::KeepsBeforeUnkeyed, Clause::Unkeyed),
         (Defect::LockOnce, Clause::Lock),
@@ -824,6 +839,7 @@ fn a_deny_whose_request_cannot_be_read_still_denies_the_host() {
             services: vec!["api".to_owned()],
             duplicate: false,
             first_heartbeat_unix: None,
+            first_serving_unix: None,
         };
         let files = Files::new("records-orphan");
         let memory: Arc<dyn Records> = Arc::new(MemoryRecords::new());

@@ -129,6 +129,11 @@ async fn list_and_get_answer_the_host_that_enrolled_and_heartbeated() {
     assert_eq!(host.heartbeat.as_ref(), Some(&sent), "as it sent it");
     assert_eq!(host.labels, labels_of(&[("rack", "r1")]));
     assert_eq!(host.first_heartbeat_unix, Some(NOW), "its first heartbeat");
+    assert_eq!(
+        host.first_serving_unix,
+        Some(NOW),
+        "kbf healthy and counted"
+    );
     let [kbf] = host.services.as_slice() else {
         panic!("kbf alone: {:?}", host.services);
     };

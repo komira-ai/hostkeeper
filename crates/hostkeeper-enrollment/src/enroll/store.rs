@@ -44,6 +44,10 @@ pub struct EnrollmentStore {
     /// later heartbeat takes neither the lock nor a read ([`EnrollmentStore::note_heartbeat`]).
     /// An approval of the host takes it out.
     pub(super) heard: Mutex<BTreeSet<HostId>>,
+    /// The hosts whose host record is known to hold the first heartbeat that reported a
+    /// managed service installed and healthy ([`EnrollmentStore::note_serving`]); an approval
+    /// of the host takes it out.
+    pub(super) served: Mutex<BTreeSet<HostId>>,
 }
 
 impl std::fmt::Debug for EnrollmentStore {
@@ -78,6 +82,7 @@ impl EnrollmentStore {
             live: Mutex::new(BTreeMap::new()),
             max_pending: DEFAULT_MAX_PENDING,
             heard: Mutex::new(BTreeSet::new()),
+            served: Mutex::new(BTreeSet::new()),
         }
     }
 
@@ -567,8 +572,10 @@ impl EnrollmentStore {
             services: services.clone(),
             // Only a new key clears a duplicate mark; a renewal keeps the host's.
             duplicate: renewal.is_some() && current.is_some_and(|h| h.pb.duplicate),
-            // Every approval, a renewal's too, waits for its own first heartbeat.
+            // Every approval, a renewal's too, waits for its own first heartbeat, and for its own
+            // first heartbeat that reports a managed service serving.
             first_heartbeat_unix: None,
+            first_serving_unix: None,
         }));
         row.set_state(RequestState::Approved);
         row.pb.approved = Some(pb::Approval {
@@ -597,6 +604,10 @@ impl EnrollmentStore {
             .unwrap_or_else(PoisonError::into_inner)
             .remove(host);
         self.heard
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(host);
+        self.served
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .remove(host);

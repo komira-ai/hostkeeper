@@ -784,3 +784,85 @@ fn mdm_signing_test_record_writes_every_flag_to_the_send() {
         "xtask: pkg-1 has not been sent: `send --apply` it first\n"
     );
 }
+
+/// The flags of `netinstall-report` over the files of the directory it runs in, with `mac` as
+/// its `--mac`.
+fn netinstall_report(mac: &str) -> Vec<&str> {
+    vec![
+        "netinstall-report",
+        "--mac",
+        mac,
+        "--host-id",
+        "net-1",
+        "--mode",
+        "router",
+        "--pxe-log",
+        "serve.log",
+        "--pending",
+        "pending.json",
+        "--host",
+        "host.json",
+    ]
+}
+
+#[test]
+fn netinstall_report_prints_the_report_with_status_0() {
+    // Catches: the verb not reached from the command line, or its flags reaching other fields
+    // (router mode reads the REQUEST, not the DISCOVER).
+    let d = dir("netinstall-report");
+    std::fs::write(
+        d.join("serve.log"),
+        "hostkeeper-pxe serve: 990 dhcp: DHCPDISCOVER from 52:54:00:4e:10:01, architecture 7, \
+         PXEClient, on the DHCP port: its architecture is kept for its REQUEST\n\
+         hostkeeper-pxe serve: 1000 dhcp: DHCPREQUEST from 52:54:00:4e:10:01, architecture 7, \
+         PXEClient, on the DHCP port: it takes 192.0.2.50\n",
+    )
+    .expect("the log");
+    std::fs::write(d.join("pending.json"), "{}").expect("the list");
+    std::fs::write(
+        d.join("host.json"),
+        r#"{"host": {"nodeId": "net-1", "enrolledUnix": "1960"}}"#,
+    )
+    .expect("the host");
+    let o = run(&d, &netinstall_report("52:54:00:4e:10:01"));
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+    let out = stdout(&o);
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(
+        lines[..6],
+        [
+            "Network install of 52:54:00:4e:10:01 as host net-1, router mode.",
+            "",
+            "| Event | Unix seconds | Recorded by |",
+            "|---|---|---|",
+            "| power-on | 1000 | hostkeeper-pxe: the first DHCPREQUEST from the MAC |",
+            "| install started | not reached | hostkeeper-pxe: the seed fetch |",
+        ],
+        "{out}"
+    );
+    assert_eq!(
+        lines[7],
+        "| approved | 1960 | the coordinator: the host's `enrolled_unix` |"
+    );
+}
+
+#[test]
+fn netinstall_report_of_a_missing_file_fails_with_status_1_and_a_bad_mac_with_2() {
+    // Catches: a report made without one of its files exiting 0, its words not printed, and a
+    // MAC that is not one reaching the verb.
+    let d = dir("netinstall-report-missing");
+    let o = run(&d, &netinstall_report("52:54:00:4e:10:01"));
+    assert_eq!(o.status.code(), Some(1));
+    let err = stderr(&o);
+    assert!(err.starts_with("xtask: --pxe-log serve.log: "), "{err}");
+    assert_eq!(stdout(&o), "");
+    let o = run(&d, &netinstall_report("52:54:00:4e:10"));
+    assert_eq!(o.status.code(), Some(2));
+    assert!(
+        stderr(&o).contains(
+            "`52:54:00:4e:10` is not a MAC address: six pairs of hex digits, separated by colons"
+        ),
+        "{}",
+        stderr(&o)
+    );
+}

@@ -477,7 +477,10 @@ then). The first heartbeat time is kept in the enrollment store with the host, s
 restart keeps it, and each later approval of the host (a new key with `--replace`, or a renewal an
 operator approves) clears it until the host is heard again; the time to first heartbeat of an
 install is `first_heartbeat_unix - enrolled_unix`. The Host page of the operator web app shows it
-as First heartbeat ("not yet" for an enrolled host not heard since). `hosts list` answers every
+as First heartbeat ("not yet" for an enrolled host not heard since). `first_serving_unix`, by the
+same clock and kept and cleared the same way, is the first heartbeat since that approval that
+reported a service the coordinator manages for the host (not hostkeeper itself) healthy, with no
+update of it under way: when the host began serving (absent until then). `hosts list` answers every
 host the same way, a page at a time. [Renewal](#renewal) says what they answer of its certificate.
 
 ## Renewal

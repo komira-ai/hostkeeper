@@ -27,7 +27,12 @@
 //!    time the same installed system boots from its disk, with no seed fetched.
 //!
 //! The guest's console, the logs and the coordinator's are kept under
-//! `target/privileged-artifacts/net_install/`.
+//! `target/privileged-artifacts/net_install/`, with the inputs of the measurement of the first
+//! install that are not logs (design section 11, item N11): `pending.json`, the pending list as
+//! `enrollment list` gave it before the approval, and `host.json`, the host as `hosts get` gave
+//! it once the fixture service was installed, its serving time among them. The job's step after
+//! this test makes the report of them with `cargo xtask netinstall-report`; no test asserts a
+//! time.
 
 mod e2e;
 mod netinstall;
@@ -177,6 +182,8 @@ fn an_x86_64_machine_installs_by_network_enrolls_gets_its_service_is_reinstalled
 
     // 2. Enrollment, approval, the first heartbeat and the fixture service.
     let request = rig.wait_request(&[]);
+    let pending = rig.ctl(&["enrollment", "list"]);
+    rig.keep("pending.json", pending.to_string().as_bytes());
     let key = request["keySha256"]
         .as_str()
         .expect("a key hash")
@@ -205,6 +212,16 @@ fn an_x86_64_machine_installs_by_network_enrolls_gets_its_service_is_reinstalled
     });
     let first_cert = unix(&first["certNotAfterUnix"]).expect("the host's certificate");
     wait_installed(&mut rig, first_cert - 1);
+    // The first heartbeat that reports the fixture service healthy is kept as serving: the one
+    // wait_installed saw, or the next.
+    let coordinator = &rig.coordinator;
+    let got = rig.bus.until("the host's serving time", || {
+        let got = coordinator.ctl(&["hosts", "get", "--node-id", HOST])?;
+        unix(&got["host"]["firstServingUnix"])
+            .map(|_| got.clone())
+            .ok_or_else(|| format!("{got}"))
+    });
+    rig.keep("host.json", got.to_string().as_bytes());
 
     // 3. Router mode: the enrolled guest boots its disk.
     rig.serve(Mode::Router, &[]);
