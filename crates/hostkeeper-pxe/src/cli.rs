@@ -392,3 +392,7 @@ fn tls_roots(path: &Path) -> Result<Vec<Vec<u8>>, String> {
 #[cfg(test)]
 #[path = "cli_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "runbook_tests.rs"]
+mod runbook_tests;

@@ -4,7 +4,7 @@ Status: design, for review. This document makes network install of new Linux mac
 replaces the non-goal of [hostkeeper-design.md](hostkeeper-design.md) section 2.2 ("No network boot service in
 scope") and the first item of its section 12.1 ("the operator's own, no build items here"). Both now point here. Where
 this document and hostkeeper-design.md disagree on network install, this document wins. What is built is marked
-**Built** where it is described (so far items N2, N3, N4, N5, N6, N7, N8, N9, N9b and N10 of section 12); every other statement about
+**Built** where it is described (so far items N2, N3, N4, N5, N6, N7, N8, N9, N9b, N10 and N12 of section 12); every other statement about
 new code is **Designed**, and section 12 lists the build items.
 
 This revision (item N1b of section 12) amends the first: network boot early in the boot order is the expected setup, so
@@ -265,8 +265,8 @@ The runbook's first step checks which of the two the router does. This is Questi
 - **A documented recipe only** (dnsmasq or the router's own options, with hostkeeper shipping only the image). This
   was rejected as the primary path. Installing only recorded, unenrolled MACs is the safety rule that keeps an enrolled
   host from being wiped, and in a recipe it is a list the operator keeps by hand. A recipe also has no code that CI can
-  test end to end. It is still possible: the verified boot directory and the seeds are plain files, and section 12's
-  runbook says what another server must serve.
+  test end to end. It is still possible: the verified boot directory and the seeds are plain files, and the runbook
+  of item N12 says what another server must serve.
 - **A full DHCP server.** This was rejected. It would take over the router's job on the farm LAN, and two DHCP servers
   giving addresses on one segment is an outage.
 - **The router's boot options pointing at a plain TFTP server.** This was rejected: it cannot tell enrolled machines
@@ -898,9 +898,9 @@ One pull request each, in this order. "After" lists prerequisites. Sizes are tho
 | N9b | `InventoryRecord.host_held`: what the enrollment store holds for the record's host id (`NONE`, `APPROVED`, `DENIED`, `RETIRED`; `UNSPECIFIED` without a store), read by host id in `Enrollment.ListRecords` and `Enrollment.AddRecord`; the tests of section 11 | N1b | S |
 | N10 | Privileged end-to-end: the `net-install` job (x86-64, proxy mode then router mode) and the `net-install-arm64` job with the one arm64 test the hosted runners allow (section 11), and the workflow lint | N2, N3, N9 | M |
 | N11 | `cargo xtask netinstall-report`, and the report artifact of N10 | N10 | S |
-| N12 | Operator runbook `docs/operations/network-install.md`: choosing the mode; the UniFi "Network Boot" setting for router mode and DHCP guarding for proxy mode (both **[V]**); the router check of Question 4; the boot-order, local-disk and option 93 check of each board model (a capture of its DISCOVER and REQUEST); the per-machine steps; reinstall | N9 | S |
+| N12 | Operator runbook `docs/operations/network-install.md`: choosing the mode; the UniFi "Network Boot" setting for router mode and DHCP guarding for proxy mode (both **[V]**); the router check of Question 4; the boot-order, local-disk and option 93 check of each board model (a capture of its DISCOVER and REQUEST); the per-machine steps; reinstall. **Built**: [docs/operations/network-install.md](../operations/network-install.md), whose `hostkeeper ctl` and `hostkeeper-pxe` lines a test parses with each program's parser | N9 | S |
 | N13 | First real machine of each platform on the farm, by the runbook, recording the measurement. Done by hand by the operator, not in CI | N10, N12 | S |
-| N14 | The record's optional platform: the field of `InventoryRecord` and `AddRecordRequest`, the platform kept behind the coordinator's store interface (in the halts file today), `add-record --platform`, the UI's Inventory page, `docs/operations/enrollment.md`, hostkeeper-design.md section 5.7 (the record's fields) and its table of stored files (the platforms in the halts file), and the tests of section 11; and the move of the end-to-end's reinstall and of `arm64_boots_to_seed_fetch` from proxy mode to router mode (section 11, "Built") | N1b | S |
+| N14 | The record's optional platform: the field of `InventoryRecord` and `AddRecordRequest`, the platform kept behind the coordinator's store interface (in the halts file today), `add-record --platform`, the UI's Inventory page, `docs/operations/enrollment.md`, the runbook's note that router mode installs nothing yet (`docs/operations/network-install.md`), hostkeeper-design.md section 5.7 (the record's fields) and its table of stored files (the platforms in the halts file), and the tests of section 11; and the move of the end-to-end's reinstall and of `arm64_boots_to_seed_fetch` from proxy mode to router mode (section 11, "Built") | N1b | S |
 
 N2, N3, N4, N5, N6, N7 and N14 are independent and can be built in parallel. N10 checks a first install
 (`an_assigned_package_installs_once_across_restarts_and_the_boot_pass_keeps_it`, privileged). The

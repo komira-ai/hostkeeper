@@ -89,7 +89,10 @@ Every command of `hostkeeper ctl`, with its flags and exit codes, is in [docs/ct
 which a test regenerates from the protos and compares, so it cannot drift from them.
 Enrolling a node, from its inventory record to its first heartbeat, with every refusal on the
 way, is [docs/operations/enrollment.md](docs/operations/enrollment.md); a test parses each of
-its `hostkeeper ctl` lines with ctl's own parser.
+its `hostkeeper ctl` lines with ctl's own parser. Installing a new Linux machine from the farm
+LAN with `hostkeeper-pxe`, and the router and board checks before the first one, is
+[docs/operations/network-install.md](docs/operations/network-install.md); its `hostkeeper ctl` and
+`hostkeeper-pxe` lines are parsed the same way.
 
 ## Build order
 
