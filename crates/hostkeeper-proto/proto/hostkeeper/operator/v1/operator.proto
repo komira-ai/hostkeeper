@@ -42,7 +42,8 @@
 // `Enrollment` also keeps the host inventory: one record per server, which the operator adds
 // when building it (host id, optional role, data MACs, BMC MAC, optional serial and notes).
 // `List` shows each pending request matched against the records; a match fills in a host id
-// and a role and approves nothing. A MAC is six octets of two hex digits, separated all by `:`
+// and a role, and the coordinator approves it only for an open, unused record that names a role, an exact
+// and uncontested match, within the record's window. A MAC is six octets of two hex digits, separated all by `:`
 // or all by `-`, or twelve hex digits, in either case, and is answered as lower-case
 // `aa:bb:cc:dd:ee:ff`.
 //

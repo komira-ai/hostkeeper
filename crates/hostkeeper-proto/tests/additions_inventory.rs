@@ -65,6 +65,7 @@ fn now_of(record: &RecordBefore, held: op::HostHeld) -> op::InventoryRecord {
         added_unix: record.added_unix,
         enrolled: record.enrolled,
         host_held: held.into(),
+        ..op::InventoryRecord::default()
     }
 }
 

@@ -8,7 +8,7 @@
 //!   not take, fails here. A line continued with a trailing `\` is one line; words are split as
 //!   a shell splits them, by white space, with `'...'` and `"..."` quoting.
 //! - The runbook uses the calls of the procedure: `add-record`, `list-records`, `remove-record`,
-//!   `list` and `approve` of `enrollment`.
+//!   `open-record`, `list` and `approve` of `enrollment`.
 //! - The tokens of its two refusal tables are exactly the refusal tokens of the protos: the
 //!   table under `## Refusals of the operator calls` is every value of `EnrollmentRefusal`, and
 //!   the one under `## Refusals of the host's calls` every value of `CoordinatorRefusal` but the
@@ -57,6 +57,7 @@ const REQUIRED: &[&str] = &[
     "enrollment add-record",
     "enrollment list-records",
     "enrollment remove-record",
+    "enrollment open-record",
     "enrollment list",
     "enrollment approve",
     "enrollment reject",

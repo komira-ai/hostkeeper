@@ -289,6 +289,16 @@ fn every_refusal_value_has_the_code_and_token_its_proto_comment_names() {
                 FailedPrecondition,
                 "record_contested",
             ),
+            (
+                EnrollmentRefusal::InvalidWindow,
+                InvalidArgument,
+                "invalid_window",
+            ),
+            (
+                EnrollmentRefusal::RecordUsed,
+                FailedPrecondition,
+                "record_used",
+            ),
         ],
         refusal::enrollment,
     );

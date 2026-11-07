@@ -162,6 +162,13 @@ impl Enrollment for Fake {
     ) -> Result<Response<proto::RemoveRecordResponse>, Status> {
         unimplemented()
     }
+
+    async fn open_record(
+        &self,
+        _: Request<proto::OpenRecordRequest>,
+    ) -> Result<Response<proto::OpenRecordResponse>, Status> {
+        unimplemented()
+    }
 }
 
 /// The fake on a loopback port with TLS; it stops when dropped.
@@ -213,8 +220,8 @@ impl Drop for Coordinator {
     }
 }
 
-/// A record of the inventory: one a host is enrolled against is held as approved, any other
-/// is held by no host.
+/// A record of the inventory, its approval window open: one a host is enrolled against is held
+/// as approved, any other is held by no host.
 pub fn record(host_id: &str, macs: &[&str], enrolled: bool) -> proto::InventoryRecord {
     let held = match enrolled {
         true => proto::HostHeld::Approved,
@@ -225,6 +232,7 @@ pub fn record(host_id: &str, macs: &[&str], enrolled: bool) -> proto::InventoryR
         data_macs: macs.iter().map(|m| (*m).to_owned()).collect(),
         enrolled,
         host_held: held.into(),
+        state: proto::RecordState::Open.into(),
         ..Default::default()
     }
 }
