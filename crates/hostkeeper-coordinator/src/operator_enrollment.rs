@@ -13,7 +13,10 @@
 //! An approval of a request that matches one record of the host inventory is made as that
 //! record's host id, read from the ops file when the call is made: an empty host id is it, and
 //! another host id is `record_mismatch` unless the approval replaces (a record removed or added
-//! while the call runs is seen at the next call).
+//! while the call runs is seen at the next call). A request that matches a record another
+//! pending request matches is contested: the list names the others on it, and its approval is
+//! `record_contested` until all but one are rejected (a request posted while the call runs is
+//! seen at the next call).
 //!
 //! An approval assigns the services it names to the host it approves
 //! ([`Coordinator::assign_host`], the one path by which `Services.Assign` of a host assigns
@@ -23,6 +26,9 @@
 //! `Enroll` ([`Coordinator::enroll`]) has the services of its allowlist entry assigned the same
 //! way, by `mdm-nonce`.
 
+use std::collections::BTreeMap;
+
+use hostkeeper_enrollment::names::KeyHash;
 use hostkeeper_proto::hostkeeper::agent::v1::{EnrollRequest, EnrollResponse};
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_proto::hostkeeper::operator::v1::EnrollmentRefusal;
@@ -35,7 +41,9 @@ use crate::service::Coordinator;
 
 impl Coordinator {
     /// `Enrollment.List`: the requests waiting for an operator ([`Enrollment::list`]), each
-    /// with its match against the host inventory ([`crate::inventory::show_match`]).
+    /// with its match against the host inventory ([`crate::inventory::show_match`]) and, when it
+    /// is contested, the other pending requests that match its record
+    /// ([`Enrollment::contests`]).
     ///
     /// # Errors
     /// `unauthorized`, `forbidden`, `invalid_request` (a page token), `store_failed`.
@@ -50,8 +58,17 @@ impl Coordinator {
         };
         let mut listed = enrollment.list(request)?;
         let records = self.ops.read(|state| state.inventory.clone());
+        // An expired request is not pending, so no contest names it.
+        let contested: BTreeMap<String, Vec<String>> = enrollment
+            .contests(&records)?
+            .into_iter()
+            .map(|(id, others)| (id.to_hex(), others.iter().map(KeyHash::to_hex).collect()))
+            .collect();
         for pending in &mut listed.requests {
             show_match(pending, &records);
+            if let Some(others) = contested.get(&pending.request_id) {
+                pending.contested_by.clone_from(others);
+            }
         }
         Ok(listed)
     }

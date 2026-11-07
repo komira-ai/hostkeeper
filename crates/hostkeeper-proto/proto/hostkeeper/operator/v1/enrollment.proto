@@ -100,6 +100,10 @@ enum EnrollmentRefusal {
   // FAILED_PRECONDITION: `Approve` names a host id other than that of the one inventory record
   // the request matches, and `replace` is not set.
   ENROLLMENT_REFUSAL_RECORD_MISMATCH = 20;
+  // FAILED_PRECONDITION: another pending request matches an inventory record this request
+  // matches (`PendingEnrollment.contested_by` names them): reject all but one first. `replace`
+  // does not set it aside.
+  ENROLLMENT_REFUSAL_RECORD_CONTESTED = 21;
 }
 
 message ListPendingRequest {
@@ -159,6 +163,15 @@ message PendingEnrollment {
   uint64 unenrolled_unix = 15;
   // The coordinator's request TTL the request expired under, in seconds (UNENROLLED only).
   uint64 request_ttl_secs = 16;
+  // The request ids of the other pending requests that match an inventory record this request
+  // matches, sorted; empty when no other does. A request with any is contested: its approval is
+  // refused `record_contested` until all but one are rejected. Empty in the `unenrolled` view,
+  // and from a coordinator before contested records.
+  repeated string contested_by = 17;
+  // The serial of the one matching record; empty when it holds none (MATCHED only).
+  string record_serial = 18;
+  // The BMC MAC of the one matching record; empty when it holds none (MATCHED only).
+  string record_bmc_mac = 19;
 }
 
 // Where an enrollment request stands, as `Enrollment.List` shows it.
@@ -221,7 +234,8 @@ message ApproveRequest {
   // Services to assign to the host; may be empty.
   repeated string services = 5;
   // Take the host id from the host that holds it, revoking that host's certificate; also needed
-  // to approve a `duplicate_claim` request or a denied host id.
+  // to approve a `duplicate_claim` request or a denied host id. It never approves a contested
+  // request (`record_contested`).
   bool replace = 6;
   string reason = 7;
 }
