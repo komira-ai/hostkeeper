@@ -8,7 +8,9 @@
 # for macos-arm64 the installer pkg of a Mac's first install; the release indexes `index.json`,
 # `hello-index.json` and `hello-fail-ready-index.json` over the three packages each;
 # `netboot.json`, the boot sets of network install for both Linux platforms, rendered from
-# packaging/netboot/pins.toml; one SHA256SUMS over them; and, on a push to main, the
+# packaging/netboot/pins.toml; `hkctl-<version>`, the command line of the coordinator, one bash
+# script for every platform generated from the protos (`cargo xtask release hkctl`); one
+# SHA256SUMS over them; and, on a push to main, the
 # build-provenance and SBOM attestations of this repository with a bundle per signed file. A
 # host trusts only packages this workflow attested, so hello's packages are signed like
 # hostkeeper's. The names are the release contract
@@ -26,6 +28,7 @@
 #   hostkeeper-mdm-<version>-<linux-platform>.cdx.json
 #   hostkeeper-<version>-macos-arm64.pkg
 #   index.json   hello-index.json   hello-fail-ready-index.json   netboot.json   SHA256SUMS
+#   hkctl-<version>
 #   <signed file>.sigstore.json
 #
 # `<version>` is X.Y.Z (`cargo xtask release version`: X.Y from the VERSION file, Z the number of
@@ -552,6 +555,8 @@ jobs:
         run: cargo xtask release index --service hello --fail-ready --version "$RELEASE_VERSION" --dir dist
       - name: The boot sets of network install
         run: cargo xtask release netboot --pins packaging/netboot/pins.toml --version "$RELEASE_VERSION" --dir dist
+      - name: The command line, hkctl
+        run: cargo xtask release hkctl --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --out dist
       # In the C locale, so the lines are in the byte order of the names; written outside dist,
       # so that SHA256SUMS does not list itself.
       - name: SHA256SUMS
@@ -572,12 +577,13 @@ jobs:
             dist/hello-index.json
             dist/hello-fail-ready-index.json
             dist/netboot.json
+            dist/hkctl-${{ needs.version.outputs.version }}
           retention-days: 90
           if-no-files-found: error
 
   # Push to main only: build provenance for every summed file, an SBOM attestation for each
   # binary tarball (hostkeeper's, the coordinator's and hostkeeper-mdm's), and a provenance
-  # attestation of each attested file alone (each binary tarball, package, deb, rpm, image and pkg, and netboot.json), whose bundle is copied beside
+  # attestation of each attested file alone (each binary tarball, package, deb, rpm, image and pkg, netboot.json and hkctl), whose bundle is copied beside
   # it as `<file>.sigstore.json` for a host that verifies without GitHub.
   attest:
     needs: [version, sums]
@@ -830,6 +836,14 @@ jobs:
         env:
           BUNDLE: ${{ steps.netboot.outputs.bundle-path }}
         run: cp "$BUNDLE" "dist/netboot.json.sigstore.json"
+      - id: hkctl
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/hkctl-${{ needs.version.outputs.version }}
+      - name: Name the bundle of the command line
+        env:
+          BUNDLE: ${{ steps.hkctl.outputs.bundle-path }}
+        run: cp "$BUNDLE" "dist/hkctl-${V}.sigstore.json"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: bundles

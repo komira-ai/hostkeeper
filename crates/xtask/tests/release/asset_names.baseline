@@ -25,6 +25,8 @@ hello-<version>-macos-arm64.tar.zst.sha256
 hello-<version>-macos-arm64.tar.zst.sigstore.json
 hello-fail-ready-index.json
 hello-index.json
+hkctl-<version>
+hkctl-<version>.sigstore.json
 hostkeeper-<version>-1.aarch64.rpm
 hostkeeper-<version>-1.aarch64.rpm.sigstore.json
 hostkeeper-<version>-1.x86_64.rpm
