@@ -230,8 +230,8 @@ gh attestation trusted-root > trusted_root.jsonl
 This saved root is only for checking a release by hand. A hostkeeper host needs no such step: its
 root ships in the packages (see [The trusted root on a host](#the-trusted-root-on-a-host)).
 
-Then, for each `.tar.gz`, `.tar.zst`, `.deb`, `.rpm`, `.image.tar` and `.pkg` you use, with the
-bundle released next to it (the other assets have no bundle and are verified online, step 3):
+Then, for each `.tar.gz`, `.tar.zst`, `.deb`, `.rpm`, `.image.tar` and `.pkg`, and `netboot.json`,
+you use, with the bundle released next to it (the other assets have no bundle and are verified online, step 3):
 
 ```sh
 gh attestation verify release/<asset> \

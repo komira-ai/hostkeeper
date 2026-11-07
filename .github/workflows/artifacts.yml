@@ -8,8 +8,9 @@
 # `hello-index.json` and `hello-fail-ready-index.json` over the three packages each;
 # `netboot.json`, the boot sets of network install for both Linux platforms, rendered from
 # packaging/netboot/pins.toml; one SHA256SUMS over them; and, on a push to main, the
-# build-provenance and SBOM attestations of this repository with a bundle per signed file. A host trusts only packages this workflow attested, so hello's
-# packages are signed like hostkeeper's. The names are the release contract
+# build-provenance and SBOM attestations of this repository with a bundle per signed file. A
+# host trusts only packages this workflow attested, so hello's packages are signed like
+# hostkeeper's. The names are the release contract
 # (docs/deploy/verify-a-release.md, "Every name"):
 #
 #   hostkeeper-<version>-<platform>.tar.gz          hostkeeper-<version>-<platform>.cdx.json
