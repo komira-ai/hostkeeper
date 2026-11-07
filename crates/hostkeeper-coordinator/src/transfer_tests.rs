@@ -84,6 +84,11 @@ impl Store {
         self.paths.ops_file()
     }
 
+    /// Writes `bytes` as the halts file a change staged beside the ops file.
+    fn stage(&self, bytes: &[u8]) {
+        fs::write(crate::ops_file::staged_path(&self.ops()), bytes).expect("write the staged file");
+    }
+
     /// Every file under the store's directory, with its bytes; the lock file, which holds no
     /// state and stays once made, left out.
     fn files(&self) -> BTreeMap<PathBuf, Vec<u8>> {
@@ -452,10 +457,7 @@ fn import_rolls_back_when_the_read_back_differs() {
 #[test]
 fn import_without_apply_writes_nothing() {
     let store = Store::recorded("transfer-plan");
-    store.put(
-        "desired.json.ops.halts.next",
-        b"{\"ops\": \"no digest of the ops file\"}",
-    );
+    store.stage(b"{\"ops\": \"no digest of the ops file\"}");
     store.put("desired.json.jti", b"past 1\nlive 99999999999\n");
     let before = store.files();
     let database = TestDatabase::new();
@@ -492,10 +494,7 @@ fn import_reads_the_halts_file_a_start_would_settle_on() {
     let committed = Store::recorded("transfer-staged");
     let mut staged: serde_json::Value = serde_json::from_slice(HALTS).expect("the halts file");
     staged["services"]["kbf"]["halt"]["report"]["reason"] = "staged".into();
-    committed.put(
-        "desired.json.ops.halts.next",
-        &serde_json::to_vec(&staged).expect("json"),
-    );
+    committed.stage(&serde_json::to_vec(&staged).expect("json"));
     let database = TestDatabase::new();
     imported(&committed, &database).expect("imported");
     assert_eq!(
@@ -505,10 +504,7 @@ fn import_reads_the_halts_file_a_start_would_settle_on() {
 
     let discarded = Store::recorded("transfer-discarded");
     staged["ops"] = "0".repeat(64).into();
-    discarded.put(
-        "desired.json.ops.halts.next",
-        &serde_json::to_vec(&staged).expect("json"),
-    );
+    discarded.stage(&serde_json::to_vec(&staged).expect("json"));
     let database = TestDatabase::new();
     imported(&discarded, &database).expect("imported");
     assert_eq!(
@@ -562,6 +558,16 @@ fn import_refuses_what_serve_refuses() {
         }
         other => panic!("{other:?}"),
     }
+    // The device records' directory that cannot be read as one is refused too.
+    fs::remove_dir_all(store.dir.path().join("enrollment/mdm-devices")).expect("remove");
+    store.put("enrollment/mdm-devices", b"not a directory");
+    assert!(matches!(
+        imported(&store, &database),
+        Err(TransferError::Files(BackupError::Io { path, .. }))
+            if path == store.dir.path().join("enrollment/mdm-devices")
+    ));
+    fs::remove_file(store.dir.path().join("enrollment/mdm-devices")).expect("remove");
+    store.put("enrollment/mdm-devices/a.pb", b"a device");
     store.put("enrollment/hosts/web-1.pb", b"no record");
     fs::remove_dir_all(store.dir.path().join("enrollment/mdm-devices")).expect("remove");
     assert!(matches!(
@@ -871,4 +877,94 @@ fn import_of_a_pruned_history_adds_no_audit_rows_at_first_start() {
         .run("UPDATE imports SET audit_pruned_before = NULL")
         .expect("the record changed");
     assert_eq!(audited_at_start(&unpruned), rows + 1);
+}
+
+/// Proves: an import is refused, before it reads the database, when the ops file cannot be read
+/// or the connection string's file breaks the rule of a secret file; the refusal names the file
+/// or the flag, never the connection string.
+///
+/// Catches: an import that reads a missing ops file as none when it is there and unreadable, or
+/// that connects with a connection string others can read.
+#[test]
+fn import_refuses_an_unreadable_ops_file_and_an_open_connection_string() {
+    let store = Store::recorded("transfer-unreadable");
+    fs::remove_file(store.ops()).expect("remove the ops file");
+    fs::create_dir(store.ops()).expect("a directory in its place");
+    let database = TestDatabase::new();
+    assert!(matches!(
+        imported(&store, &database),
+        Err(TransferError::Files(BackupError::Io { path, .. })) if path == store.ops()
+    ));
+
+    let store = Store::recorded("transfer-open-dsn");
+    let flags = import_flags(&store, &database, true);
+    fs::set_permissions(&flags.database_dsn_file, fs::Permissions::from_mode(0o644))
+        .expect("open to others");
+    let refused = import(&flags, &FileLock, &clock()).expect_err("refused");
+    assert!(
+        matches!(
+            &refused,
+            TransferError::Database(MoveError::Database(DatabaseError::Dsn(_)))
+        ),
+        "{refused:?}"
+    );
+    let text = refused.to_string();
+    assert!(text.starts_with("--database-dsn-file: "), "{text}");
+    assert!(!text.contains(&database.dsn_text()), "{text}");
+    assert!(!migrated(&database));
+}
+
+/// Proves: a database that a coordinator started on and never imported into, so with no audit
+/// row and no record, exports as a file store that holds nothing: the desired-state file and the
+/// ops file of no state, no audit file, no enrollment record; every table counted at 0.
+///
+/// Catches: an export that needs an audit history or an import's record to be there.
+#[test]
+fn an_empty_database_exports_an_empty_file_store() {
+    let database = TestDatabase::new();
+    let (opened, _) = database.open("coordinator").expect("the store opens");
+    opened.stop();
+    let mut into = Store::new("transfer-export-empty");
+    into.paths.enrollment_dir = Some(into.dir.path().join("enrollment"));
+    let report = export(&export_flags(&database, &into), &FileLock, &clock())
+        .expect("exported")
+        .to_string();
+    let written: Vec<PathBuf> = into.files().into_keys().collect();
+    assert_eq!(written, [into.paths.state_file.clone(), into.ops()]);
+    assert_eq!(files_loaded(&into, None), Loaded::default());
+    for table in STATE_TABLES {
+        assert!(report.contains(&format!("  {table}: 0 rows\n")), "{report}");
+    }
+}
+
+/// Proves: the verdicts a file store holds (the verdict each host was last acknowledged, and the
+/// ones counted toward an automatic rollback) are imported and exported back as they were.
+///
+/// Catches: an import or an export that leaves the verdicts behind, so a host would be
+/// acknowledged a verdict again, or a rollback counted twice.
+#[test]
+fn the_verdicts_move_both_ways() {
+    let store = Store::recorded("transfer-verdicts");
+    let report = r#"{"target":"2.0","outcome":"failed","phase":"halt","reason":"disk_tainted"}"#;
+    store.put(
+        "desired.json.verdicts",
+        format!(r#"{{"services":{{"kbf":{{"standing":{{"s1":{report}}}}}}}}}"#).as_bytes(),
+    );
+    let files = Files::default()
+        .with_verdicts(&crate::verdict_file::verdicts_path(&store.paths.state_file))
+        .load_verdicts()
+        .expect("the verdicts");
+    assert_ne!(files, crate::verdict_file::Held::default());
+    let database = TestDatabase::new();
+    imported(&store, &database).expect("imported");
+    assert_eq!(count(&database, "verdict_standing"), 1);
+    assert_eq!(loaded(&database).verdicts, files);
+
+    let into = Store::new("transfer-verdicts-out");
+    export(&export_flags(&database, &into), &FileLock, &clock()).expect("exported");
+    let back = Files::default()
+        .with_verdicts(&crate::verdict_file::verdicts_path(&into.paths.state_file))
+        .load_verdicts()
+        .expect("the exported verdicts");
+    assert_eq!(back, files);
 }

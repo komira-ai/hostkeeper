@@ -493,7 +493,11 @@ pub(crate) fn read_joined(path: &Path, ops: OpsState) -> Result<OpsState, OpsErr
     let staged = staged_path(path);
     let committed = read_if_any(path)?.map(|text| digest(&text));
     let (file, _skipped) = match read_if_any(&staged)? {
-        Some(bytes) if committed.is_some() && names(&bytes) == committed => {
+        Some(bytes)
+            if committed
+                .as_ref()
+                .is_some_and(|ops| names(&bytes).as_ref() == Some(ops)) =>
+        {
             parse_halts(&staged, &bytes)?
         }
         _ => read_halts(&halts_path(path))?,
@@ -509,7 +513,9 @@ pub(crate) fn read_joined(path: &Path, ops: OpsState) -> Result<OpsState, OpsErr
 pub(crate) fn texts(path: &Path, state: &OpsState) -> Result<(Vec<u8>, Option<Vec<u8>>), OpsError> {
     let (ops, mut halts) = split(state);
     let text = pretty(path, &ops)?;
-    if halts.services.is_empty() && halts.rollouts.is_empty() && halts.platforms.is_empty() {
+    // A state that keeps nothing in the halts file has none, as `write` writes it beside an ops
+    // file with no halts file.
+    if halts == HaltsFile::default() {
         return Ok((text, None));
     }
     halts.ops = Some(digest(&text));

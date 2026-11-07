@@ -467,7 +467,7 @@ pub fn backup(flags: &Backup, lock: &dyn StateLock) -> Result<Report, BackupErro
 /// What an import records of the files it read.
 ///
 /// # Errors
-/// [`BackupError`]: a file or directory could not be read, or `--enrollment-dir` is no directory.
+/// [`BackupError::Io`]: a file or directory could not be read.
 pub(crate) fn manifest_of(paths: &StatePaths) -> Result<serde_json::Value, BackupError> {
     let mut sources = Vec::new();
     for (name, path) in paths.beside() {
@@ -477,9 +477,6 @@ pub(crate) fn manifest_of(paths: &StatePaths) -> Result<serde_json::Value, Backu
     }
     sources.extend(paths.segments()?);
     if let Some(dir) = &paths.enrollment_dir {
-        if !fs::symlink_metadata(dir).is_ok_and(|meta| meta.is_dir()) {
-            return Err(BackupError::NoEnrollmentDir { path: dir.clone() });
-        }
         store_files(dir, ENROLLMENT, &mut sources, &mut Vec::new())?;
     }
     let mut files = Vec::new();
