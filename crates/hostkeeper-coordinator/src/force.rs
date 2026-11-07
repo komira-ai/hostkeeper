@@ -543,7 +543,7 @@ impl Coordinator {
             %version,
             by,
             ordered = plan.ordered.len(),
-            "a force was ordered: it passes the one live update, the canary and the bake"
+            "a force was ordered: it passes the update plan and the bake"
         );
         Ok(proto::ForceResponse {
             entries: entries.iter().map(entry_proto).collect(),

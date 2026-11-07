@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use crate::decide::{Gate, Why};
 use crate::marks_support::{
     NEW_DAEMON, ask, ask_typed, beat_of, digest, force_request, hold, hosts_target, operator,
-    scope_host,
+    scope_host, unhold,
 };
 use crate::orders::Order;
 use crate::services::Services;
@@ -325,7 +325,9 @@ async fn a_manual_stage_waits_for_advance_and_a_pause_stops_new_orders() {
 /// Proves: inside a plan, a host held before its stage is not ordered and takes no place of the
 /// stage (the next host to ask takes it); a force orders its host whatever the stage, and the
 /// plan does not count a forced host; an abort's halt stops the plan where it stands, and once
-/// the operator clears it the plan goes on in the same stage, the aborted host left out.
+/// the operator clears it the plan goes on in the same stage, the aborted host left out; an
+/// unheld host is eligible again and is ordered when the plan has a place for it. The abort is
+/// the operator's `Hosts.Abort`: the host's next typed heartbeat is answered with the order.
 #[tokio::test]
 async fn holds_forces_and_aborts_work_inside_a_plan() {
     let mut farm = Farm::new("plan-marks", &web(""), 1, &["web"], 8);
@@ -349,7 +351,25 @@ async fn holds_forces_and_aborts_work_inside_a_plan() {
     let (_, order) = ask_typed(&farm.rig, "d8", "daemon", beat);
     assert!(matches!(order, Some(Order::Force { .. })), "{order:?}");
     assert_eq!(farm.plan("web").eligible, 6, "nor is the forced host");
-    // d2 is aborted mid-update and reports the halt: the service halts, the plan waits there.
+    // The operator aborts d2 mid-update through Hosts.Abort: d2's next typed heartbeat is
+    // answered with the abort, and it reports the halt that ends its order.
+    farm.rig
+        .coordinator
+        .abort(
+            &operator(),
+            proto::AbortRequest {
+                node_id: "d2".to_owned(),
+                service: "web".to_owned(),
+                reason: "stuck step".to_owned(),
+            },
+        )
+        .expect("queued");
+    let beat = farm.beat("d2");
+    let (_, order) = ask_typed(&farm.rig, "d2", "daemon", beat);
+    assert!(
+        matches!(&order, Some(Order::Abort { service, .. }) if service == "web"),
+        "{order:?}"
+    );
     farm.sim("d2", "web").updating = None;
     farm.sim("d2", "web").last = Some(
         json!({"target": "2.0", "outcome": "failed", "phase": "halt", "reason": "aborted_by_operator"}),
@@ -372,6 +392,18 @@ async fn holds_forces_and_aborts_work_inside_a_plan() {
         "d2 left the plan: stage 2 done with d4 and d5"
     );
     assert!(!told.iter().any(|t| t.starts_with("d2 ")), "{told:?}");
+    // The operator releases d3: it is eligible again, counted by the plan, and ordered at its
+    // next heartbeat since the third stage has a place for it.
+    assert_eq!(
+        farm.plan("web").eligible,
+        5,
+        "d3 is held, d8 forced, d2 aborted"
+    );
+    unhold(&farm.rig, "web", scope_host("d3")).expect("unheld");
+    assert_eq!(farm.plan("web").eligible, 6, "d3 counts again");
+    assert_eq!(farm.hold("web", "d3"), None);
+    let told = farm.round();
+    assert!(told.contains(&"d3 web 2.0".to_owned()), "{told:?}");
 }
 
 /// Proves: with `--live-rollouts 1` a service whose rollout is not live orders nothing while

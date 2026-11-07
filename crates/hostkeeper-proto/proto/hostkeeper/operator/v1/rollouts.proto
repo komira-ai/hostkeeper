@@ -53,7 +53,8 @@ enum RolloutsRefusal {
   // FAILED_PRECONDITION: `Advance` of a service with no desired version.
   ROLLOUTS_REFUSAL_NO_DESIRED = 5;
   // FAILED_PRECONDITION: `Advance` of a plan that does not wait for an operator: its stage is not
-  // done, the next stage enters by itself, or every stage is entered.
+  // done, the next stage enters by itself, every stage is entered, the plan is paused, the
+  // service is halted or its desired version is bad, or the coordinator is within its quiet start.
   ROLLOUTS_REFUSAL_NOT_WAITING = 6;
   // FAILED_PRECONDITION: `Pause` of a plan that is paused.
   ROLLOUTS_REFUSAL_ALREADY_PAUSED = 7;

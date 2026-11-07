@@ -213,6 +213,25 @@ fn the_stages_of_the_rollout_file_and_the_default() {
     );
 }
 
+/// Proves: the longest plan is 16 stages: sixteen percents, 1 to 15 and 100, are accepted and
+/// give sixteen stages over 100 hosts, and seventeen are refused naming the limit.
+/// Catches: a limit off by one in either direction.
+#[test]
+fn sixteen_stages_are_accepted_and_seventeen_refused() {
+    let list = |upto: u32| -> String {
+        let rising: String = (1..upto).map(|p| format!("{p}, ")).collect();
+        format!("stages = [{rising}100]")
+    };
+    let def = services(0, &list(16));
+    let plan = &def.get("app").expect("app").plan;
+    assert_eq!(plan.defs().len(), 16);
+    let sizes: Vec<usize> = plan.stages(100).iter().map(|s| s.hosts).collect();
+    let mut want: Vec<usize> = (1..16).collect();
+    want.push(100);
+    assert_eq!(sizes, want);
+    assert_eq!(refusal(&list(17)), "app: stages lists 1 to 16 stages");
+}
+
 /// Proves: a plan that cannot roll is refused, naming the service and what is wrong: no stage,
 /// too many, a percent of 0 or over 100, percents that do not rise, a last stage short of 100,
 /// a stage that is neither a percent nor a table of one, a table with a key it does not know,
@@ -382,7 +401,10 @@ fn a_hundred_hosts_roll_by_the_default_plan_capped_by_max_updating() {
     };
     assert_eq!(sizes, [1, 10, 50, 100]);
     let mut per_round = Vec::new();
-    while farm.running("2.0") < 10 {
+    for _ in 0..30 {
+        if farm.running("2.0") >= 10 {
+            break;
+        }
         per_round.push(farm.round().len());
         assert!(
             farm.not_up() <= 4,
@@ -390,6 +412,10 @@ fn a_hundred_hosts_roll_by_the_default_plan_capped_by_max_updating() {
             farm.not_up()
         );
     }
+    assert!(
+        farm.running("2.0") >= 10,
+        "the first two stages did not roll within 30 rounds"
+    );
     // h01 updates, then the 9 go 4, 4 and 1, each set once the set before runs 2.0; the beat
     // that ends the bake of the tenth enters the third stage, whose first 4 go that round.
     assert_eq!(per_round, [0, 4, 0, 4, 0, 1, 0, 4]);
@@ -399,11 +425,19 @@ fn a_hundred_hosts_roll_by_the_default_plan_capped_by_max_updating() {
         "the third stage is entered"
     );
     let mut most = 0;
-    while farm.running("2.0") < 100 {
+    for _ in 0..100 {
+        if farm.running("2.0") >= 100 {
+            break;
+        }
         let ordered = farm.round().len();
         most = most.max(ordered);
         assert!(farm.not_up() <= 4);
     }
+    assert_eq!(
+        farm.running("2.0"),
+        100,
+        "the roll did not finish within 100 more rounds"
+    );
     assert_eq!(most, 4);
 }
 

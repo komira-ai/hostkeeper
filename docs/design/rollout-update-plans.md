@@ -90,7 +90,7 @@ Stage sizes are recomputed from the eligible hosts at every decision, and the po
 
 ### 2.1 Rollouts
 
-A new operator service, `hostkeeper.operator.v1.Rollouts`, with three calls. Each takes the operator token only (a CI token is refused `forbidden`, no token `unauthorized`), names a service and gives a reason (1 to 256 bytes, no control characters). A refused call changes nothing.
+A new operator service, `hostkeeper.operator.v1.Rollouts`, with three calls. Each takes the operator token only (a CI token is refused `forbidden`, no token `unauthorized`), names a service and gives a reason (1 to 256 bytes, no control characters). A refused call changes nothing, with one exception: `Pause` is written to memory first and stands even when its audit line cannot be appended.
 
 | Call | Does | Refused when |
 |---|---|---|
@@ -98,7 +98,7 @@ A new operator service, `hostkeeper.operator.v1.Rollouts`, with three calls. Eac
 | `Pause` | Pauses the plan. | it is paused already (`already_paused`) |
 | `Resume` | Resumes a paused plan. | it is not paused (`not_paused`) |
 
-All three refuse `unknown_service`, `invalid_request` (a missing or bad reason), `store_failed` and `audit_unavailable`. Each answers the audit entry it wrote and the plan as it stands after the call. `hostkeeper ctl rollouts advance --service hello --reason '...'` and the gateway route `POST /hostkeeper.operator.v1.Rollouts/Advance` are generated from the proto, as for every other call.
+All three refuse `unknown_service`, `invalid_request` (a missing or bad reason) and `store_failed`; `Advance` and `Resume` also refuse `audit_unavailable` (nothing changes, as no audit line can be written). `Pause` does not: it stands without its audit line, and a failed write of it answers `store_failed` with the pause standing in memory. Each answers the audit entry it wrote and the plan as it stands after the call. `hostkeeper ctl rollouts advance --service hello --reason '...'` and the gateway route `POST /hostkeeper.operator.v1.Rollouts/Advance` are generated from the proto, as for every other call.
 
 ### 2.2 Status
 
@@ -135,7 +135,7 @@ Audit entries: `rollout_advance` (by `coordinator` or the operator; the reason s
 - **The proto.** Added: the `Rollouts` service, its messages and `RolloutsRefusal`; `ServiceStatus.plan`; `HostService.stage`; six `GateReason` values. Nothing is renumbered or renamed. An older reader keeps the new fields as unknown fields.
 - **State files.** The desired state and the ops file are unchanged. The halts file gains `rollouts`, which the release before skips.
 - **A release before this one** on the same files orders one host at a time, as it did; it ignores the plan position, and this release finds it again on its next start (or starts the plan from the hosts that run the version, if the release before rewrote the halts file).
-- **Behaviour change for every farm.** With the default plan, a service of more than one host updates more than one host at once from its second stage, up to `max_updating` per role. A role's default `max_updating` is 1 (2 for `daemon` and `mac-daemon`), so a stage updates one host of such a role at a time until CI sets a larger number for it; different roles of a stage update at the same time. A farm that wants one host at a time across the service sets `max_updating` of 1 for every role it runs and `stages = [100]`.
+- **Behaviour change for every farm.** With the default plan, a service of more than one host updates more than one host at once from its second stage, up to `max_updating` per role and never so that fewer hosts of a role than its `min_up` stay up (a role with `min_up` equal to its host count never orders a host). A role's default `max_updating` is 1 (2 for `daemon` and `mac-daemon`), so a stage updates one host of such a role at a time until CI sets a larger number for it; different roles of a stage update at the same time. A farm that wants one host per role at a time sets `max_updating` of 1 for every role it runs and `stages = [100]` (`no_slot` counts per role, so a service of several roles still updates one host of each role at once).
 - **Canary failure.** A service with `canary` still rolls back on one release failure among the canary hosts before they have baked, and raises `failed_canary`.
 
 ## 5. Decisions
@@ -148,7 +148,7 @@ Audit entries: `rollout_advance` (by `coordinator` or the operator; the reason s
 | `min_up` | Per role, counting every live host of the role (held ones too) that is up. | `min_up` is about what stays serving. |
 | Where the position is stored | In the halts file beside the ops file. | It is read by a lenient reader, so the release before keeps reading the ops store. |
 | `advance` on a stage | It governs entering that stage. | A manual first stage then means "start the rollout by hand". |
-| An unresolved failed host | Blocks the next stage until it is held, excluded or another version is set. | The brief's rule; holding or excluding it is the operator's resolution and is audited. |
+| An unresolved failed host | Blocks the next stage until it is held, excluded or another version is set. | A failed host is the operator's to resolve, so the plan does not go on over it; holding or excluding it is the operator's resolution and is audited. |
 | Pause | Per service, across versions; written memory first. | An operator who stops a service's rollout means the service. A pause raises protection. |
 | A paused or manual-waiting plan | Live for `--live-rollouts`. | The operator is in the middle of that rollout. |
 | Which hosts take a stage's free places | The first eligible hosts to ask. | A host that cannot be ordered now (deferring, an agent the version has no digest for) must not hold a place it will not take. |

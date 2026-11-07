@@ -111,7 +111,7 @@ same in kbf and here; the reason here is the plan's.
 | `29-cut-service-order-does-not-delay-an-order` | a service's `after` | `nothing`, `waiting_for_service` (a host of `first`, which `second` came after, was behind and live) | `update` of `second` |
 | `30-cut-require-min-up-does-not-refuse-a-body` | `require_min_up` | 400 `bad_request` (`min_up lacks storage`) | 200 and the echo of the state, with `min_up` written `{"storage":0,"frontend":0}` |
 | `17-features-a-bad-announcement-is-dropped`, step 5 | the bound of 8 feature names, raised to 16 | `nothing` with no `features` (the list of nine is dropped) | `nothing` and `features: []` (nine names read, none supported) |
-| `10-halt-generations-of-two-services`, steps 6 and 9 | the update plan, which audits the stage it enters | the clears numbered 5 and 7 | the clears numbered 6 and 8: kbf's plan entered its second stage at step 4 (`rollout_advance`, by the coordinator) |
+| `10-halt-generations-of-two-services`, steps 6 and 9 | the update plan, which audits the stage it enters | the clears numbered 5 and 7 | the clears numbered 6 and 8: this coordinator's update plan for kbf enters its second stage at step 4 (`rollout_advance`, by the coordinator), an audit entry kbf never wrote |
 | `23-automatic-rollback-marks-the-version-bad`, step 10 | the update plan: a failed host of a stage holds the next | `update 2.0`, no reason (the one live update was free once `d1` beat healthy) | `nothing`, `stage_failed` (`d1`, the first stage's host, failed below the threshold) |
 
 `kbf_status` and `kbf_body` of a step keep kbf's answer; the replay never compares them.

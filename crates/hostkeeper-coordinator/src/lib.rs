@@ -273,6 +273,8 @@ mod rollouts_calls_tests;
 #[cfg(test)]
 mod rollouts_refusal_tests;
 #[cfg(test)]
+mod rollouts_restart_tests;
+#[cfg(test)]
 mod rollouts_state_tests;
 #[cfg(test)]
 mod self_update_fallback_tests;

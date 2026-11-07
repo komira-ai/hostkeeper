@@ -1,5 +1,5 @@
 {
- "from": "kbf-coordinator/src/http_tests/halt.rs::the_generation_counts_clears_per_service_and_survives_a_restart (the clears' audit entries are asserted by their fields, as in kbf's other halt tests; steps 6 and 9 are this coordinator's answers, kbf's in kbf_body: at d1's heartbeat of step 4 kbf's update plan enters its second stage, an audit entry of its own, so the clears that follow are numbered one later)",
+ "from": "kbf-coordinator/src/http_tests/halt.rs::the_generation_counts_clears_per_service_and_survives_a_restart (the clears' audit entries are asserted by their fields, as in kbf's other halt tests; steps 6 and 9 are this coordinator's answers, kbf's in kbf_body: at d1's heartbeat of step 4 this coordinator's update plan for kbf enters its second stage, an audit entry of its own that kbf never wrote, so the clears that follow are numbered one later)",
  "services_fixture": "kbf.services.toml",
  "services_text": "[[service]]\nname = \"other\"\nroles = [\"daemon\"]\n",
  "oidc_services": [

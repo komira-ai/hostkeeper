@@ -3,7 +3,8 @@
 How a service rolls a new version out, and what an operator can do to it. The design is
 [rollout-update-plans.md](../design/rollout-update-plans.md). `hostkeeper ctl` is [ctl.md](../ctl.md).
 Every `hostkeeper ctl rollouts` call takes the operator token only: a CI token is refused with
-`forbidden`, no token with `unauthorized`, and a refused call changes nothing. Each call names a
+`forbidden`, no token with `unauthorized`, and a refused call changes nothing (one exception: a
+`Pause` stands without its audit line, see Pause and Resume below). Each call names a
 service and gives a reason (1 to 256 bytes, no control character), and is an entry of the audit log
 under the name of the token that made it.
 
@@ -36,8 +37,9 @@ The hosts of a stage update in parallel, as each heartbeats, up to the desired s
 `mac-daemon`; 0 holds the role), and never so that fewer live hosts of the role than its `min_up`
 stay up. A stage is done when every host in it is up at the desired version and has baked
 (`bake_beats` healthy heartbeats); only then does the next stage start. A farm that wants one host
-at a time across a service sets `max_updating` of 1 for every role it runs, in the desired state, and
-`stages = [100]`.
+per role at a time sets `max_updating` of 1 for every role it runs, in the desired state, and
+`stages = [100]`; the slot count is per role, so a service of several roles still updates one host
+of each role at once. A role whose `min_up` equals its host count never has a host ordered.
 
 A host is eligible for a plan when it is live, the service is assigned to it, it is neither
 excluded nor held there, no standing force covers it, and the coordinator could order it the
@@ -85,7 +87,7 @@ stage 2 of 3 (4 hosts)", then yours) and the plan as it stands. It is refused:
 | `unknown_service` | the coordinator does not manage the service |
 | `invalid_request` | the reason is missing, too long or has a control character |
 | `audit_unavailable` | the audit line could not be appended (a full disk); nothing changed, ask again once the disk has room |
-| `store_failed` | the position could not be written; nothing changed |
+| `store_failed` | the position could not be written; nothing changed (for `Pause`, which is written memory first, the pause stands) |
 
 An `auto` stage needs no Advance: the coordinator enters it at the heartbeat that finds the stage
 before it done, and writes the same `rollout_advance` entry under the name `coordinator`.

@@ -353,7 +353,7 @@ function setDesired(ctx, svc, form) {
     if (version === "") {
       return "Name the version.";
     }
-    if (!ctx.confirm(`Set the desired version of ${service} to ${version}? Its hosts are moved there a role at a time.`)) {
+    if (!ctx.confirm(`Set the desired version of ${service} to ${version}? Its hosts are moved there stage by stage, by the service's update plan.`)) {
       return "Desired version not changed.";
     }
     const request = { service, desired: Object.assign({ version }, limitsOf(svc.desired)) };

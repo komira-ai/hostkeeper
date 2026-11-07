@@ -158,8 +158,10 @@ impl Node {
 }
 
 /// What the fleet keeps of the operator's marks for its decisions: a copy of the holds, of the
-/// hosts each standing force orders, of the assignments, the labels and the exclusions, as the
-/// ops store holds them ([`crate::holds::marks_of`]), refreshed under the fleet's lock
+/// hosts each standing force orders, of the assignments, the labels and the exclusions, of where
+/// each service's update plan stands (`rollouts`), of the services that are halted, of the
+/// versions marked bad and of the failures an operator acknowledged (`acked`), as the ops store
+/// holds them ([`crate::holds::marks_of`]), refreshed under the fleet's lock
 /// ([`Fleet::set_marks`]).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Marks {

@@ -31,7 +31,7 @@ use crate::services::Services;
 use crate::testutil::{Log, OPERATOR, Rig, scratch, version};
 
 /// The role of every host of these tests.
-const DAEMON: &str = "daemon";
+pub(crate) const DAEMON: &str = "daemon";
 
 /// Eight hosts, in node-id order.
 const HOSTS: [&str; 8] = ["d1", "d2", "d3", "d4", "d5", "d6", "d7", "d8"];
@@ -462,7 +462,7 @@ fn a_position_counts_only_for_its_own_version() {
 
 /// What a fake host runs.
 #[derive(Clone, Debug)]
-enum Run {
+pub(crate) enum Run {
     /// This version, healthy.
     At(String),
     /// This version, updating to the second.
@@ -470,21 +470,21 @@ enum Run {
 }
 
 /// A farm of daemons that run `web`, driven by the heartbeats the test sends at the rig's clock.
-struct Farm {
-    rig: Rig,
-    hosts: BTreeMap<String, Run>,
-    at: u64,
+pub(crate) struct Farm {
+    pub(crate) rig: Rig,
+    pub(crate) hosts: BTreeMap<String, Run>,
+    pub(crate) at: u64,
 }
 
 impl Farm {
     /// A farm over the rig `test` with the `extra` lines of `web`'s definition, each host in
     /// `hosts` having beaten once at the version beside it. No version of `web` is desired.
-    fn new(test: &str, extra: &str, hosts: &[(&str, &str)]) -> Self {
+    pub(crate) fn new(test: &str, extra: &str, hosts: &[(&str, &str)]) -> Self {
         Self::over(rig(test, extra), hosts)
     }
 
     /// The farm of `hosts` over `rig`.
-    fn over(rig: Rig, hosts: &[(&str, &str)]) -> Self {
+    pub(crate) fn over(rig: Rig, hosts: &[(&str, &str)]) -> Self {
         let mut farm = Self {
             rig,
             hosts: hosts
@@ -501,7 +501,7 @@ impl Farm {
     }
 
     /// Eight hosts at 1.0, but for `up` of them (the first) at 2.0.
-    fn eight(test: &str, extra: &str, up: usize) -> Self {
+    pub(crate) fn eight(test: &str, extra: &str, up: usize) -> Self {
         let hosts: Vec<(&str, &str)> = HOSTS
             .iter()
             .enumerate()
@@ -512,7 +512,7 @@ impl Farm {
 
     /// `host` beats as it runs now, and acts on the answer: an ordered host updates, its next beat
     /// says so, and the one after runs the new version.
-    fn beat(&mut self, host: &str) -> ServiceReply {
+    pub(crate) fn beat(&mut self, host: &str) -> ServiceReply {
         let run = self.hosts[host].clone();
         let (running, updating) = match &run {
             Run::At(v) => (v.as_str(), None),
@@ -538,7 +538,7 @@ impl Farm {
     }
 
     /// Ten seconds on, every host beats in node-id order; the hosts that were ordered `web` 2.0.
-    fn round(&mut self) -> Vec<String> {
+    pub(crate) fn round(&mut self) -> Vec<String> {
         self.at += 10;
         self.rig.at(self.at);
         let hosts: Vec<String> = self.hosts.keys().cloned().collect();
@@ -549,7 +549,7 @@ impl Farm {
     }
 
     /// Rounds until `until` holds, at most `most`.
-    fn rounds_until(&mut self, most: usize, until: impl Fn(&Self) -> bool) {
+    pub(crate) fn rounds_until(&mut self, most: usize, until: impl Fn(&Self) -> bool) {
         for _ in 0..most {
             if until(self) {
                 return;
@@ -560,12 +560,12 @@ impl Farm {
     }
 
     /// A coordinator that starts now on the same files, over the same hosts.
-    fn restart(&mut self, extra: &str) {
+    pub(crate) fn restart(&mut self, extra: &str) {
         restart(&mut self.rig, extra);
     }
 
     /// Every host that runs `version` and does not update.
-    fn running(&self, version: &str) -> Vec<&str> {
+    pub(crate) fn running(&self, version: &str) -> Vec<&str> {
         self.hosts
             .iter()
             .filter(|(_, run)| matches!(run, Run::At(v) if v == version))
@@ -573,19 +573,19 @@ impl Farm {
             .collect()
     }
 
-    fn ops_path(&self) -> PathBuf {
+    pub(crate) fn ops_path(&self) -> PathBuf {
         self.rig.dir.path().join("desired.json.ops")
     }
 
     /// The `rollouts` key of the halts file; none when there is no file or no such key.
-    fn kept(&self) -> Option<Value> {
+    pub(crate) fn kept(&self) -> Option<Value> {
         let text = fs::read(halts_path(&self.ops_path())).ok()?;
         let file: Value = serde_json::from_slice(&text).expect("JSON");
         file.get("rollouts").cloned()
     }
 
     /// The entries `rollout_advance` in the audit ring.
-    fn advances(&self) -> Vec<AuditEntry> {
+    pub(crate) fn advances(&self) -> Vec<AuditEntry> {
         self.rig
             .coordinator
             .ops()
@@ -597,7 +597,7 @@ impl Farm {
     }
 
     /// The plan of `web` as the status answers it.
-    fn plan(&self) -> proto::RolloutPlan {
+    pub(crate) fn plan(&self) -> proto::RolloutPlan {
         status(&self.rig).per_service[WEB]
             .plan
             .clone()
@@ -605,7 +605,7 @@ impl Farm {
     }
 
     /// The state of each host in the plan of `web`.
-    fn states(&self) -> BTreeMap<String, proto::PlanHostState> {
+    pub(crate) fn states(&self) -> BTreeMap<String, proto::PlanHostState> {
         self.plan()
             .stages
             .iter()
@@ -616,7 +616,7 @@ impl Farm {
 
     /// Whether the farm has written no position: no `rollouts` in the halts file and no
     /// `rollout_advance` in the ring.
-    fn wrote_nothing(&self) -> bool {
+    pub(crate) fn wrote_nothing(&self) -> bool {
         self.kept().is_none() && self.advances().is_empty()
     }
 }
@@ -625,7 +625,7 @@ impl Farm {
 /// until `d1` is done and the coordinator has entered the second stage: `d1` updated and baked,
 /// `d2` and `d3` (the two a daemon role may update at once) ordered by the second stage, and the
 /// farm still in the beat of `d2` and `d3` updating.
-async fn in_second_stage(test: &str) -> Farm {
+pub(crate) async fn in_second_stage(test: &str) -> Farm {
     let mut farm = Farm::eight(test, "bake_beats = 2", 0);
     set(&farm.rig, WEB, "2.0", 2).await;
     assert_eq!(farm.round(), ["d1"]);
@@ -636,62 +636,6 @@ async fn in_second_stage(test: &str) -> Farm {
     farm.rounds_until(6, |farm| !farm.advances().is_empty());
     assert_eq!(farm.advances().len(), 1);
     farm
-}
-
-// ---- the coordinator restarts -----------------------------------------------------------
-
-/// Proves: a coordinator that restarts with the second stage entered resumes there. The position
-/// on disk is version 2.0, three stages of the rollout file entered, `d1` done; after the restart
-/// the plan is in stage 2 of 3; at its first beat `d1`, which has beaten once at 2.0 of the two
-/// that bake needs, is Done (recorded, not re-baked) while `d2`, at 2.0 as well, is Baking; and no
-/// host that runs 2.0 is ordered again, nor does the restart write the stage again.
-///
-/// Catches: a restart that forgets the position and goes back to stage 1, one that makes `d1` bake
-/// again from zero, or one that orders a host that is already at the desired version.
-#[tokio::test]
-async fn a_restart_resumes_at_the_stage_the_plan_had_entered() {
-    let mut farm = in_second_stage("rollouts-state-restart").await;
-    // d2 and d3 were ordered at the beat that entered the stage; they report updating, and
-    // their next beat is the first at 2.0.
-    farm.round();
-    assert_eq!(farm.running("2.0"), ["d1", "d2", "d3"]);
-    assert_eq!(
-        farm.kept(),
-        Some(json!({"web": {"version": "2.0", "entered": 3, "done": ["d1"]}}))
-    );
-    farm.restart("bake_beats = 2");
-    // Every host beats once within the quiet start, which rebuilds the fleet; nothing is ordered.
-    farm.at += 5;
-    assert_eq!(farm.round(), Vec::<String>::new());
-    let plan = farm.plan();
-    assert_eq!(plan.current, 2);
-    assert_eq!(plan.stages.len(), 3);
-    assert_eq!(plan.waiting(), proto::PlanWait::Quiet);
-    let states = farm.states();
-    assert_eq!(states["d1"], proto::PlanHostState::Done);
-    assert_eq!(states["d2"], proto::PlanHostState::Baking);
-    assert_eq!(states["d3"], proto::PlanHostState::Baking);
-
-    // Past the quiet start the plan orders the rest of its stage and no one already at 2.0.
-    farm.at += 20;
-    let ordered = farm.round();
-    assert!(
-        ordered
-            .iter()
-            .all(|host| !["d1", "d2", "d3"].contains(&host.as_str())),
-        "{ordered:?}"
-    );
-    assert_eq!(farm.plan().current, 2);
-    assert_eq!(
-        farm.rig.coordinator.ops().state().rollouts["web"],
-        Rollout {
-            version: Some(version("2.0")),
-            entered: 3,
-            done: ["d1".to_owned()].into(),
-            paused: None,
-        }
-    );
-    assert_eq!(farm.advances().len(), 1, "the restart enters nothing");
 }
 
 // ---- when the coordinator writes a position ---------------------------------------------
@@ -921,11 +865,11 @@ fn flaky(failing: &Arc<AtomicBool>, attempts: &Arc<AtomicUsize>) -> OpsStore {
 
 /// Proves: when the write of the second stage fails the error is logged ("the plan's next stage
 /// was not entered", the service named), nothing reaches the state or the audit ring, the
-/// heartbeat is still answered by the position the plan reaches by itself (`d2` is ordered, `d3`
-/// is held only by the role's two slots), each following heartbeat tries the write once more
-/// (one attempt at `d1`'s beat, a second at `d2`'s), and the first heartbeat after the store
-/// takes writes again lands it: one `rollout_advance` "stage 2 of 3 (4 hosts)" and the position
-/// 2.0, three stages entered, `d1` done.
+/// heartbeat is still answered by the position the plan reaches by itself (`d2` and `d3` are
+/// ordered and take the role's two slots, `d4` is held by them), each following heartbeat tries
+/// the write once more (one attempt at `d1`'s beat, a second at `d2`'s), and the first heartbeat
+/// after the store takes writes again lands it: one `rollout_advance` "stage 2 of 3 (4 hosts)"
+/// and the position 2.0, three stages entered, `d1` done.
 ///
 /// Catches: a stage that waits for its write (the second stage's hosts not ordered while the disk
 /// is full), a failed write that is not retried, or one that leaves half a position in memory.
