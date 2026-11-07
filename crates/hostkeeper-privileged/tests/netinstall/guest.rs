@@ -40,6 +40,9 @@ const MEMORY_MIB: &str = "12288";
 /// the screen only (its kernel line names no serial console), so the screens are what a failed
 /// or timed-out job shows of it. A pace of the evidence, which no test reads.
 const SCREEN_EVERY: Duration = Duration::from_secs(120);
+/// How many of the latest screens are kept (each a few MiB, as PPM, the format every QEMU
+/// writes).
+const SCREENS_KEPT: u32 = 8;
 
 /// The firmware of a platform: its code (read only) and the template of its variables, which the
 /// guest gets a writable copy of.
@@ -242,22 +245,36 @@ impl Guest {
                 while !stopped.load(Ordering::SeqCst) {
                     thread::sleep(SCREEN_EVERY);
                     n += 1;
-                    let file = dir.join(format!("screen-{n:03}.png"));
+                    let file = dir.join(format!("screen-{n:03}.ppm"));
                     // A guest that is down between two runs has no monitor: no screen then.
-                    if let Ok(mut monitor) = UnixStream::connect(&monitor) {
-                        let _ = writeln!(monitor, "screendump -f png {}", file.display());
-                        let _ = monitor.flush();
-                        // Read to the prompt after the command (the second one, after the
-                        // banner's), so that the command is done before the connection closes.
-                        let _ = monitor.set_read_timeout(Some(Duration::from_secs(30)));
-                        let mut seen = Vec::new();
-                        let mut answer = [0u8; 4096];
-                        while seen.windows(6).filter(|w| *w == b"(qemu)").count() < 2 {
-                            match std::io::Read::read(&mut monitor, &mut answer) {
-                                Ok(0) | Err(_) => break,
-                                Ok(read) => seen.extend_from_slice(&answer[..read]),
-                            }
+                    let Ok(mut monitor) = UnixStream::connect(&monitor) else {
+                        continue;
+                    };
+                    let _ = writeln!(monitor, "screendump {}", file.display());
+                    let _ = monitor.flush();
+                    // Read to the prompt after the command (the second one, after the banner's),
+                    // so that the command is done before the connection closes.
+                    let _ = monitor.set_read_timeout(Some(Duration::from_secs(30)));
+                    let mut seen = Vec::new();
+                    let mut answer = [0u8; 4096];
+                    while seen.windows(6).filter(|w| *w == b"(qemu)").count() < 2 {
+                        match std::io::Read::read(&mut monitor, &mut answer) {
+                            Ok(0) | Err(_) => break,
+                            Ok(read) => seen.extend_from_slice(&answer[..read]),
                         }
+                    }
+                    // What the monitor said, for a screen that is missing.
+                    if let Ok(mut log) = File::options()
+                        .create(true)
+                        .append(true)
+                        .open(dir.join("guest-monitor.log"))
+                    {
+                        let _ = log.write_all(&seen);
+                        let _ = writeln!(log);
+                    }
+                    // The last screens are what a failure needs; the older ones go.
+                    if let Some(old) = n.checked_sub(SCREENS_KEPT) {
+                        let _ = fs::remove_file(dir.join(format!("screen-{old:03}.ppm")));
                     }
                 }
             });
