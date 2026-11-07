@@ -586,6 +586,7 @@ fn alerts_come_by_kind_then_service_and_host() {
         Kind::AbandonedWhileUpdating,
         Kind::SilentHost,
         Kind::CertNearExpiry,
+        Kind::StoreUnreachable,
     ];
     assert_eq!(
         all.map(Kind::log_token),
@@ -599,11 +600,12 @@ fn alerts_come_by_kind_then_service_and_host() {
             "exclude_abandon",
             "silent_host",
             "cert_near_expiry",
+            "store_unreachable",
         ]
     );
     assert_eq!(
         all.map(|kind| kind.proto() as i32),
-        [1, 2, 3, 4, 5, 6, 7, 8, 9]
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     );
     let critical: Vec<Kind> = all
         .into_iter()
@@ -611,7 +613,12 @@ fn alerts_come_by_kind_then_service_and_host() {
         .collect();
     assert_eq!(
         critical,
-        vec![Kind::Halt, Kind::Duplicate, Kind::FailedCanary]
+        vec![
+            Kind::Halt,
+            Kind::Duplicate,
+            Kind::FailedCanary,
+            Kind::StoreUnreachable
+        ]
     );
 }
 

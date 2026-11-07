@@ -379,3 +379,22 @@ fn an_ack_is_the_same_in_the_proto() {
     );
     assert!(to_proto(&[]).is_empty());
 }
+
+/// Proves: superseding the verdict of a service the store holds none for succeeds and changes
+/// nothing: no verdict stands or is counted, before or after a reopen.
+///
+/// Catches: a supersede that fails, or makes a verdict up, for a service it never acknowledged.
+#[test]
+fn superseding_a_service_with_no_verdict_changes_nothing() {
+    let dir = scratch("verdicts-supersede-none");
+    let path = file_in(dir.path());
+    let store = VerdictFile::open(&path).expect("open");
+    store
+        .supersede("web", &id("s1"))
+        .expect("nothing to supersede");
+    assert!(store.standing("web", &id("s1")).is_none());
+    assert!(store.counted().is_empty());
+    let again = VerdictFile::open(&path).expect("open again");
+    assert!(again.standing("web", &id("s1")).is_none());
+    assert!(again.counted().is_empty());
+}

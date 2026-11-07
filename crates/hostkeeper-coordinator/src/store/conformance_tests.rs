@@ -1,6 +1,5 @@
-//! The contract of a [`Backend`], as one suite run against every implementation: the files and
-//! the fake here (and Postgres, `docs/design/coordinator-storage.md` section 12, once it is
-//! built). Each clause is a function that answers how the backend fared, so that the suite's own
+//! The contract of a [`Backend`], as one suite run against every implementation: the files, the
+//! fake and Postgres (`docs/design/coordinator-storage.md` section 12). Each clause is a function that answers how the backend fared, so that the suite's own
 //! test can run it against backends wrong in one way each and see the clause that names the
 //! fault fail, and only that one.
 //!
@@ -9,7 +8,9 @@
 //!   audit lines may stay in a log that is only appended to (the files append them before the
 //!   ops file is written); no number is held twice.
 //! - `load_gives_back`: a load gives back what was committed, every list in its order; an entry
-//!   at its default may come back as absent ([`normal`]), which the code reads the same.
+//!   at its default may come back as absent ([`normal`]), which the code reads the same. A state's
+//!   audit ring is the entries of the lines committed with it, as a store keeps it, which a
+//!   backend may give back from the lines it holds.
 //! - `failed_keeps`: a commit of one part that fails leaves that part as it was.
 //! - `numbering_continues`: a backend started again holds every audit line, in order, and its
 //!   newest number ([`Backend::last_seq`]), so a store numbers on from it.
@@ -27,7 +28,7 @@ use serde_json::json;
 
 use super::fake::store_failure;
 use super::{Backend, BackendError, Commit, Fake, Files, Loaded, Shared};
-use crate::audit_file::{AuditLine, DEFAULT_ROTATION, Logged, Query};
+use crate::audit_file::{Actor, AuditLine, DEFAULT_ROTATION, Filter, Logged, Query};
 use crate::desired::{self, Desired, StoreError};
 use crate::jti_file::jti_path;
 use crate::ops::{AuditEntry, OpsError, OpsState};
@@ -50,9 +51,6 @@ type Outcome = Result<(), String>;
 
 /// A clause of the suite.
 type Clause = fn(&dyn Subject) -> Outcome;
-
-/// What a page keeps.
-type Keep<'a> = &'a dyn Fn(&AuditEntry) -> bool;
 
 /// `Err(what)` unless `holds`.
 fn check(holds: bool, what: impl FnOnce() -> String) -> Outcome {
@@ -185,6 +183,14 @@ pub(crate) fn lines(from: u64, to: u64) -> Vec<AuditLine> {
         .collect()
 }
 
+/// The ring of a state committed with `lines`: their entries, as the store keeps them.
+fn ring(lines: &[AuditLine]) -> Vec<AuditEntry> {
+    lines
+        .iter()
+        .map(|line| line.clone().into_logged().entry)
+        .collect()
+}
+
 fn loaded(backend: &Shared) -> Result<Loaded, String> {
     backend
         .load()
@@ -206,6 +212,7 @@ fn all_or_nothing(subject: &dyn Subject) -> Outcome {
     let mut first_ops = OpsState::default();
     first_ops.excluded = rich_ops().excluded.split_off(1);
     let first_lines = lines(1, 2);
+    first_ops.audit = ring(&first_lines);
     let first = Commit {
         desired: Some((&empty_desired, &first_desired)),
         ops: Some((&empty_ops, &first_ops)),
@@ -215,8 +222,9 @@ fn all_or_nothing(subject: &dyn Subject) -> Outcome {
     live.commit(&first)
         .map_err(|why| format!("the first commit failed: {why}"))?;
     let second_desired = desired_at("2.0", 'b');
-    let second_ops = rich_ops();
     let second_lines = lines(3, 3);
+    let mut second_ops = rich_ops();
+    second_ops.audit = ring(&lines(1, 3));
     subject.failing(true);
     let refused = live.commit(&Commit {
         desired: Some((&first_desired, &second_desired)),
@@ -252,8 +260,9 @@ fn all_or_nothing(subject: &dyn Subject) -> Outcome {
 
 fn load_gives_back(subject: &dyn Subject) -> Outcome {
     let live = subject.live();
-    let (desired, ops, verdicts) = (desired_at("2.0", 'c'), rich_ops(), rich_verdicts());
+    let (desired, mut ops, verdicts) = (desired_at("2.0", 'c'), rich_ops(), rich_verdicts());
     let audit = lines(1, 3);
+    ops.audit = ring(&audit);
     live.commit(&Commit {
         desired: Some((&desired::Held::default(), &desired)),
         ops: Some((&OpsState::default(), &ops)),
@@ -341,31 +350,72 @@ fn audit_pages(subject: &dyn Subject) -> Outcome {
         ..Commit::default()
     })
     .map_err(|why| format!("the commit failed: {why}"))?;
-    let by_alice = |e: &AuditEntry| e.by == "alice";
-    let halts = |e: &AuditEntry| e.action == "halt";
-    let of_web = |e: &AuditEntry| e.service.as_deref() == Some("web");
-    let of_s1 = |e: &AuditEntry| e.node_id.as_deref() == Some("s1");
-    let every = |_: &AuditEntry| true;
-    let filters: [(&str, Keep<'_>); 5] = [
-        ("every", &every),
-        ("by", &by_alice),
-        ("action", &halts),
-        ("service", &of_web),
-        ("node", &of_s1),
+    let filters: [(&str, Filter<'_>); 8] = [
+        ("every", Filter::default()),
+        (
+            "by",
+            Filter {
+                by_name: Some("alice"),
+                ..Filter::default()
+            },
+        ),
+        (
+            "action",
+            Filter {
+                actions: &["halt"],
+                ..Filter::default()
+            },
+        ),
+        (
+            "actions",
+            Filter {
+                actions: &["halt", "exclude"],
+                ..Filter::default()
+            },
+        ),
+        (
+            "service",
+            Filter {
+                service: Some("web"),
+                ..Filter::default()
+            },
+        ),
+        (
+            "node",
+            Filter {
+                node_id: Some("s1"),
+                ..Filter::default()
+            },
+        ),
+        (
+            "operator",
+            Filter {
+                actor: Some(Actor::Operator),
+                ..Filter::default()
+            },
+        ),
+        (
+            "ci",
+            Filter {
+                actor: Some(Actor::Ci),
+                service: Some("kbf"),
+                ..Filter::default()
+            },
+        ),
     ];
-    for (name, keep) in filters {
+    for (name, filter) in filters {
         for (since_seq, limit, newest) in [(0, 5, false), (4, 3, false), (0, 4, true), (9, 5, true)]
         {
             let query = Query {
                 since_seq,
                 limit,
                 newest,
-                keep,
+                filter,
             };
             let mut want: Vec<Logged> = held
                 .iter()
                 .map(|line| line.clone().into_logged())
-                .filter(|logged| logged.entry.seq > since_seq && keep(&logged.entry))
+                .filter(|logged| logged.entry.seq > since_seq && filter.keeps(&logged.entry))
                 .collect();
             if newest {
                 want.drain(..want.len().saturating_sub(limit));
@@ -620,15 +670,20 @@ impl Subject for Flawed {
     }
 }
 
-/// Proves: the files and the fake each keep every clause of the contract the stores rely on.
+/// Proves: the files, the fake and Postgres each keep every clause of the contract the stores
+/// rely on.
 ///
 /// Catches: a backend that loses a part of a failed commit's state, gives a list back out of
 /// order, numbers the audit anew after a restart, pages the audit wrongly, or takes a spent id
 /// again.
 #[test]
-fn the_conformance_suite_passes_on_the_files_and_the_fake() {
+fn the_conformance_suite_passes_on_the_files_the_fake_and_postgres() {
     assert_eq!(run(&|_| Box::new(OnFake(Fake::new()))), []);
     assert_eq!(run(&|name| Box::new(OnFiles::new(name))), []);
+    assert_eq!(
+        run(&|_| Box::new(super::postgres::tests::store::OnPostgres::new())),
+        []
+    );
 }
 
 /// Proves: the suite catches what it claims. Against a backend wrong in one way each, the clause

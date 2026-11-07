@@ -165,6 +165,15 @@ impl VerdictFile {
         }
     }
 
+    /// Takes the verdicts of a commit of unknown outcome that `landing` found landed into
+    /// memory, with what memory changed since laid over them.
+    pub(crate) fn take_landed(&self, landing: &crate::store::Landing) {
+        let mut held = self.held();
+        if let Some(taken) = landing.verdicts_over(&held) {
+            *held = taken;
+        }
+    }
+
     fn held(&self) -> std::sync::MutexGuard<'_, Held> {
         self.held.lock().unwrap_or_else(PoisonError::into_inner)
     }

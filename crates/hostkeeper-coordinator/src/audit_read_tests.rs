@@ -9,10 +9,9 @@ use std::path::Path;
 use std::num::{NonZeroU64, NonZeroUsize};
 
 use super::{
-    AuditLine, AuditLog, CHUNK, Logged, MAX_LINE, Query, Reader, Rotation, backward, forward,
-    line_from, page_in, segment_path, segments, start_after,
+    AuditLine, AuditLog, CHUNK, Filter, Logged, MAX_LINE, Query, Reader, Rotation, backward,
+    forward, line_from, page_in, segment_path, segments, start_after,
 };
-use crate::ops::AuditEntry;
 use crate::testutil::scratch;
 
 /// The line of entry `seq` by `by`, as the store writes it, at `1_800_000_000 + seq`.
@@ -37,16 +36,12 @@ fn log_of(n: u64) -> String {
         .collect()
 }
 
-fn all(_: &AuditEntry) -> bool {
-    true
-}
-
 fn query(since_seq: u64, limit: usize, newest: bool) -> Query<'static> {
     Query {
         since_seq,
         limit,
         newest,
-        keep: &all,
+        filter: Filter::default(),
     }
 }
 
@@ -98,7 +93,6 @@ fn every_since_seq_pages_exactly_the_entries_after_it() {
     let dir = scratch("audit-every-since");
     let n = 600;
     let (file, _) = counted(&dir.path().join("audit"), &log_of(n));
-    let bob = |e: &AuditEntry| e.by == "bob";
     for since in [0, 1, 2, 99, 300, 301, 598, 599, 600, 601] {
         let oldest = page_in(&file, &query(since, 3, false)).expect("read");
         let want: Vec<u64> = ((since + 1)..=n).take(3).collect();
@@ -116,7 +110,10 @@ fn every_since_seq_pages_exactly_the_entries_after_it() {
                 since_seq: since,
                 limit: 2,
                 newest: true,
-                keep: &bob,
+                filter: Filter {
+                    by_name: Some("bob"),
+                    ..Filter::default()
+                },
             },
         )
         .expect("read");
@@ -148,13 +145,15 @@ fn an_empty_log_and_a_filter_that_keeps_nothing_list_none() {
     assert!(missing.is_empty());
 
     let (file, _) = counted(&dir.path().join("full"), &log_of(50));
-    let none = |_: &AuditEntry| false;
     for newest in [false, true] {
         let q = Query {
             since_seq: 0,
             limit: 5,
             newest,
-            keep: &none,
+            filter: Filter {
+                by_name: Some("nobody"),
+                ..Filter::default()
+            },
         };
         assert!(page_in(&file, &q).expect("read").is_empty());
     }
@@ -315,13 +314,15 @@ fn a_page_spans_segments_in_both_directions() {
     assert_eq!(page(0, 3, true), vec![48, 49, 50]);
     assert_eq!(page(44, 10, true), (45..=50).collect::<Vec<u64>>());
     assert!(page(50, 5, true).is_empty());
-    let bob = |e: &AuditEntry| e.by == "bob";
     let bobs = log
         .page(&Query {
             since_seq: 0,
             limit: 6,
             newest: true,
-            keep: &bob,
+            filter: Filter {
+                by_name: Some("bob"),
+                ..Filter::default()
+            },
         })
         .expect("read");
     assert_eq!(seqs(&bobs), vec![33, 36, 39, 42, 45, 48]);

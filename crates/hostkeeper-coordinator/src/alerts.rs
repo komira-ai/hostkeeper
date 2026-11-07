@@ -30,7 +30,10 @@
 //! - `silent_host`: a host heard since the start whose last heartbeat is at least
 //!   `--alert-silent-host-secs` old;
 //! - `cert_near_expiry`: the certificate the coordinator serves its hosts (with an enrollment
-//!   store), when it expires within `--alert-cert-window-secs`, or has expired.
+//!   store), when it expires within `--alert-cert-window-secs`, or has expired;
+//! - `store_unreachable`: the store's link to its database is lost (`Fleet::store_lost`); it
+//!   stands until the link is back. While it stands, an enrollment store that cannot be read
+//!   gives no facts rather than refusing the list, so the alert is seen.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
@@ -97,6 +100,8 @@ pub enum Kind {
     SilentHost,
     /// The coordinator's certificate for its hosts expires soon.
     CertNearExpiry,
+    /// The store's link to its database is lost.
+    StoreUnreachable,
 }
 
 impl Kind {
@@ -115,6 +120,7 @@ impl Kind {
             Self::AbandonedWhileUpdating => "exclude_abandon",
             Self::SilentHost => "silent_host",
             Self::CertNearExpiry => "cert_near_expiry",
+            Self::StoreUnreachable => "store_unreachable",
         }
     }
 
@@ -122,7 +128,9 @@ impl Kind {
     #[must_use]
     pub const fn severity(self) -> proto::AlertSeverity {
         match self {
-            Self::Halt | Self::Duplicate | Self::FailedCanary => proto::AlertSeverity::Critical,
+            Self::Halt | Self::Duplicate | Self::FailedCanary | Self::StoreUnreachable => {
+                proto::AlertSeverity::Critical
+            }
             Self::WaitingForOperator
             | Self::DuplicateClaimPending
             | Self::HeldOnBadVersion
@@ -145,6 +153,7 @@ impl Kind {
             Self::AbandonedWhileUpdating => proto::AlertKind::AbandonedWhileUpdating,
             Self::SilentHost => proto::AlertKind::SilentHost,
             Self::CertNearExpiry => proto::AlertKind::CertNearExpiry,
+            Self::StoreUnreachable => proto::AlertKind::StoreUnreachable,
         }
     }
 }
@@ -250,6 +259,7 @@ pub fn derive(
         at.unix,
         thresholds.cert_window_secs,
     ));
+    alerts.extend(store_unreachable(fleet));
     alerts.sort_by(|a, b| a.subject.cmp(&b.subject));
     alerts.dedup_by(|a, b| a.subject == b.subject);
     alerts
@@ -475,6 +485,14 @@ fn silent_hosts(fleet: &Fleet, now: Duration, silent_after: Duration) -> Vec<Ale
         .collect()
 }
 
+/// `store_unreachable`: the store's link to its database, while it is lost.
+fn store_unreachable(fleet: &Fleet) -> Option<Alert> {
+    fleet.store_lost.then(|| Alert {
+        subject: Subject::of(Kind::StoreUnreachable),
+        message: "the session with the database is lost: nothing is ordered, a change that lowers protection is refused, and one that raises it stands in memory until the session is back".to_owned(),
+    })
+}
+
 /// `cert_near_expiry`: the certificate the coordinator serves its hosts, when it expires
 /// before `unix` plus `window` seconds.
 fn cert_near_expiry(enrollment: &EnrollmentFacts, unix: u64, window: u64) -> Vec<Alert> {
@@ -634,7 +652,15 @@ impl Coordinator {
                 .nodes()
                 .map(|(id, _)| id.clone())
                 .collect();
-            let enrollment = self.enrollment_facts(&heard)?;
+            let enrollment = match self.enrollment_facts(&heard) {
+                Ok(facts) => facts,
+                // The alert that says the database is lost is not hidden by it.
+                Err(why) if self.lock_fleet().store_lost => {
+                    tracing::warn!(%why, "the enrollment store is not read while the database is lost");
+                    EnrollmentFacts::default()
+                }
+                Err(why) => return Err(why),
+            };
             let at = At {
                 now: (self.clock)(),
                 unix: self.ops.unix_now(),

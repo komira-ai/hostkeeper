@@ -164,7 +164,9 @@ impl Backend for Fake {
             .audit
             .iter()
             .map(|line| line.clone().into_logged())
-            .filter(|logged| logged.entry.seq > query.since_seq && (query.keep)(&logged.entry))
+            .filter(|logged| {
+                logged.entry.seq > query.since_seq && query.filter.keeps(&logged.entry)
+            })
             .collect();
         let limit = query.limit.max(1);
         if query.newest {

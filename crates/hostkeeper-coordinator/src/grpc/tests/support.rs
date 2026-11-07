@@ -26,7 +26,7 @@ use rcgen::{CertificateParams, ExtendedKeyUsagePurpose, KeyPair, SanType};
 use tonic::{Code, Status};
 
 use crate::desired::DesiredStore;
-use crate::enrollment::{Enrollment, Setup, os_random, setup};
+use crate::enrollment::{Enrollment, Setup, StoreAt, os_random, setup};
 use crate::grpc::route;
 use crate::http::{BoxError, Peer, Surface};
 use crate::service::Coordinator;
@@ -124,7 +124,7 @@ fn enrollment_in(dir: &Scratch) -> Arc<Enrollment> {
     let server_cert = dir.path().join("server.pem");
     let names = ["coordinator.example".to_owned()];
     let files = Setup {
-        dir: &store,
+        store: StoreAt::Dir(&store),
         ca_key: &ca_key,
         ca_init: true,
         server_cert: &server_cert,

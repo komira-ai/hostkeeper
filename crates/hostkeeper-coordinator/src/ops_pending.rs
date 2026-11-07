@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 use super::{OpsError, OpsState, OpsStore, UNWRITTEN_LOG_EVERY};
 use crate::audit_file::AuditLine;
 use crate::desired::{StoreError, write_whole};
-use crate::store::Commit;
+use crate::store::{Commit, Health, Landing, Shared};
 
 /// The changes in memory and not yet committed.
 #[derive(Debug, Default)]
@@ -46,11 +46,14 @@ pub(super) struct Pending {
     logged: Option<Duration>,
 }
 
-/// What the marker holds.
+/// What the marker holds: the audit numbers, and the epoch of the store's database when it has
+/// one (`--halt-marker-file`, `docs/design/coordinator-storage.md` section 4.3).
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Listed {
     unwritten: Vec<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    epoch: Option<u64>,
 }
 
 /// The marker found at start.
@@ -76,6 +79,14 @@ impl Marker {
             Err(_) => Some(Self::Unlisted),
         }
     }
+
+    /// The epoch of the database the marker at `path` was written at: none for a marker of the
+    /// file store, or one that cannot be read.
+    #[must_use]
+    pub(crate) fn epoch_at(path: &Path) -> Option<u64> {
+        let bytes = fs::read(path).ok()?;
+        serde_json::from_slice::<Listed>(&bytes).ok()?.epoch
+    }
 }
 
 /// Of the audit `numbers` a marker lists, those that `committed`, the state as loaded, does not
@@ -87,11 +98,15 @@ pub(crate) fn unlanded(numbers: &[u64], committed: &OpsState) -> Vec<u64> {
     numbers.iter().copied().filter(|n| *n > newest).collect()
 }
 
-/// Writes the marker at `path` listing `numbers`, whole and owner-only, its directory synced.
-fn write_marker(path: &Path, numbers: Vec<u64>) -> Result<(), StoreError> {
-    let mut text = serde_json::to_vec(&Listed { unwritten: numbers })
-        .map_err(io::Error::from)
-        .map_err(crate::desired::io_at(path))?;
+/// Writes the marker at `path` listing `numbers` (and `epoch`), whole and owner-only, its
+/// directory synced.
+fn write_marker(path: &Path, numbers: Vec<u64>, epoch: Option<u64>) -> Result<(), StoreError> {
+    let mut text = serde_json::to_vec(&Listed {
+        unwritten: numbers,
+        epoch,
+    })
+    .map_err(io::Error::from)
+    .map_err(crate::desired::io_at(path))?;
     text.push(b'\n');
     write_whole(path, &text)
 }
@@ -119,7 +134,7 @@ impl OpsStore {
             return;
         };
         let numbers = pending.lines.iter().map(|line| line.seq).collect();
-        if let Err(why) = write_marker(marker, numbers) {
+        if let Err(why) = write_marker(marker, numbers, self.backend.epoch()) {
             tracing::error!(
                 alert = "halt",
                 path = %marker.display(),
@@ -233,5 +248,64 @@ impl OpsStore {
                 }
             }
         }
+    }
+}
+
+impl OpsStore {
+    /// The backend the store commits to.
+    pub(crate) fn backend(&self) -> &Shared {
+        &self.backend
+    }
+
+    /// Whether the backend takes writes now.
+    pub(crate) fn health(&self) -> Health {
+        self.backend.health()
+    }
+
+    /// Takes the change of a commit of unknown outcome that `landing` found landed into memory
+    /// and into the state as last committed, each with what memory changed since laid over it
+    /// row by row; its audit lines are no longer pending. A commit that did not land leaves both
+    /// as they are (section 4.4).
+    pub(crate) fn take_landed(&self, landing: &Landing) {
+        let _writer = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(taken) = landing.ops_over(&self.state()) else {
+            return;
+        };
+        let mut pending = self.pending_lock();
+        if let Some(base) = pending.base.take() {
+            pending.base = Some(landing.ops_over(&base).unwrap_or(base));
+        }
+        let landed: Vec<u64> = landing.lines().iter().map(|line| line.seq).collect();
+        pending.lines.retain(|line| !landed.contains(&line.seq));
+        drop(pending);
+        *self.lock() = taken;
+    }
+
+    /// Drops what is pending, because another coordinator led the database while this one's
+    /// link was lost (at epoch `found`) and its state now governs: each change dropped is logged
+    /// by its audit number, the marker is removed (they are dropped knowingly), and the
+    /// coordinator is told to stop ([`OpsStore::deposed`]).
+    pub(crate) fn depose(&self, found: u64) {
+        let mut pending = self.pending_lock();
+        let dropped: Vec<u64> = pending.lines.iter().map(|line| line.seq).collect();
+        tracing::error!(
+            alert = "store_unreachable",
+            found,
+            ?dropped,
+            "another coordinator led the database while this one's session was lost: the changes numbered here are dropped, and the coordinator stops"
+        );
+        pending.base = None;
+        pending.lines.clear();
+        pending.marked = true;
+        self.unmark(&mut pending);
+        drop(pending);
+        let _ = self.deposed_by.set(found);
+        self.deposed.notify_one();
+    }
+
+    /// Waits until the store is deposed ([`OpsStore::depose`]); the epoch found.
+    pub(crate) async fn deposed(&self) -> u64 {
+        self.deposed.notified().await;
+        self.deposed_by.get().copied().unwrap_or_default()
     }
 }

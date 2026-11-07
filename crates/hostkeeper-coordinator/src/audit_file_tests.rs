@@ -392,3 +392,21 @@ fn a_store_stamps_its_audit_lines_with_the_wall_clock() {
     assert_eq!(read.lines[0].seq, 1);
     assert!(read.lines[0].at_unix > 0, "{:?}", read.lines[0]);
 }
+
+/// Proves: the tests' reader of one audit file reads a missing file as no line, and refuses a
+/// path it cannot read (a directory) with the I/O error naming the path.
+///
+/// Catches: a reader that takes an unreadable audit file for an empty one.
+#[test]
+fn the_whole_file_reader_reads_a_missing_file_as_empty_and_refuses_one_it_cannot_read() {
+    let dir = scratch("audit-read-whole");
+    let missing = audit_file::read(&dir.path().join("none")).expect("no file");
+    assert!(missing.lines.is_empty() && missing.skipped == 0 && !missing.torn);
+    let refused = audit_file::read(dir.path())
+        .map(|_| ())
+        .expect_err("a directory");
+    assert!(
+        matches!(&refused, OpsError::Io(StoreError::Io { path, .. }) if path == dir.path()),
+        "{refused}"
+    );
+}
