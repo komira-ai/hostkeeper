@@ -2,9 +2,9 @@
 
 mod common;
 
-use common::{FakeNet, kit, with_env};
-use hostkeeper_mdm::MdmError;
+use common::{FakeMachine, FakeNet, kit, with_env, with_system};
 use hostkeeper_mdm::fetch::{Fetch, run};
+use hostkeeper_mdm::{MdmError, run_with};
 use hostkeeper_mdm_core::pins::Tool;
 use hostkeeper_mdm_step::Mode;
 use hostkeeper_mdm_step::fake::FakeHost;
@@ -201,4 +201,36 @@ fn a_dir_that_links_into_a_git_tree_is_refused_and_a_link_elsewhere_is_followed(
     let (result, _) = go(&host, &net, &[Tool::Caddy], Mode::Apply);
     result.unwrap();
     assert!(host.node("/data/archives/caddy-v1.0.0.tar.gz").is_some());
+}
+
+/// Catches `fetch --only` with a name that is no pinned tool being accepted or reported
+/// vaguely: the command line is refused (exit 2) with clap's whole message carrying the
+/// `UnknownTool` text, nothing is printed on standard output, and the network is not asked.
+#[test]
+fn only_with_an_unknown_tool_is_refused_with_the_unknown_tool_message() {
+    let kit = kit();
+    let (host, net) = (FakeHost::new(1000), FakeNet::new(kit.urls.clone()));
+    let machine = FakeMachine::new(&host);
+    let (mut out, mut err) = (Vec::new(), Vec::new());
+    let words: Vec<String> = [
+        "hostkeeper-mdm",
+        "fetch",
+        "--dir",
+        DIR,
+        "--only",
+        "nonesuch",
+    ]
+    .map(str::to_owned)
+    .to_vec();
+    let code = with_system(&machine, &net, |system| {
+        run_with(&words, system, &kit.pins, &mut out, &mut err)
+    });
+    assert_eq!(code, 2);
+    assert_eq!(String::from_utf8(out).unwrap(), "");
+    assert_eq!(
+        String::from_utf8(err).unwrap(),
+        "error: invalid value 'nonesuch' for '--only <ONLY>': \"nonesuch\" is not a pinned tool\n\nFor more information, try '--help'.\n"
+    );
+    assert!(net.asked.borrow().is_empty());
+    assert!(host.paths().is_empty());
 }

@@ -1,4 +1,5 @@
-//! Downloads, over HTTPS only, for `fetch`.
+//! Downloads, over HTTPS only, for `fetch`: at most [`MAX_REDIRECTS`] redirects, and a body
+//! of at most the caller's limit (a body of exactly that size is accepted).
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,6 +12,12 @@ use ureq::unversioned::transport::{Connector, DefaultConnector};
 
 /// How long one download may take, whole.
 const TIMEOUT: Duration = Duration::from_secs(600);
+
+/// How many redirects one download follows. Release assets redirect once or twice (the
+/// release page to its storage host), so five leaves room without letting a loop run long.
+/// Past it the download is an error ([`ureq::Error::TooManyRedirects`]), never the last
+/// redirect's body.
+pub(crate) const MAX_REDIRECTS: u32 = 5;
 
 /// Why a download failed.
 #[derive(Debug, thiserror::Error)]
@@ -74,6 +81,8 @@ impl Net {
             .proxy(None)
             .http_status_as_error(false)
             .https_only(https_only)
+            .max_redirects(MAX_REDIRECTS)
+            .max_redirects_will_error(true)
             .timeout_global(Some(TIMEOUT))
             .tls_config(tls)
             .build();
@@ -90,9 +99,25 @@ impl Download for Net {
         if !(200..300).contains(&status) {
             return Err(DownloadError::Status(status));
         }
-        let body = answer.body_mut().with_config().limit(limit);
-        Ok(body.read_to_vec()?)
+        // ureq's limit fails the read that follows the last permitted byte, even at the end
+        // of the body, so a body of exactly `limit` bytes would be refused. Allow one more
+        // byte and report any overrun against the caller's limit.
+        let body = answer
+            .body_mut()
+            .with_config()
+            .limit(limit.saturating_add(1));
+        match body.read_to_vec() {
+            Ok(bytes) if bytes.len() as u64 > limit => Err(over(limit)),
+            Ok(bytes) => Ok(bytes),
+            Err(ureq::Error::BodyExceedsLimit(_)) => Err(over(limit)),
+            Err(other) => Err(other.into()),
+        }
     }
+}
+
+/// The error for a body longer than `limit`.
+fn over(limit: u64) -> DownloadError {
+    DownloadError::Transport(ureq::Error::BodyExceedsLimit(limit))
 }
 
 #[cfg(test)]
