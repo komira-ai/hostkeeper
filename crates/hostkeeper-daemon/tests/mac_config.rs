@@ -493,7 +493,7 @@ fn a_top_level_that_is_not_a_dictionary_is_refused() {
 /// key, and an array element's key missing its index.
 #[test]
 fn values_the_config_cannot_hold_are_refused_naming_their_key() {
-    let date = Value::Date(plist::Date::from_xml_format("2026-01-02T03:04:05Z").expect("date"));
+    let date = Value::Date(plist::Date::from_xml_format("2026-10-02T03:04:05Z").expect("date"));
     let cases = [
         (
             vec!["coordinator"],
