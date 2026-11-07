@@ -1,8 +1,8 @@
 // Inventory: the servers the operator recorded when building them (host id, role, data MACs, BMC
-// MAC, serial, notes), so that a pending enrollment request can be matched to its record, and
-// whether a host is enrolled against each. Calls: Enrollment.ListRecords, all records or, with
-// the filter, only the enrolled or only the not enrolled ones; on a button, Enrollment.AddRecord
-// or Enrollment.RemoveRecord. A record approves nothing: Enrollment still approves each request
+// MAC, serial, platform, notes), so that a pending enrollment request can be matched to its
+// record, and whether a host is enrolled against each. Calls: Enrollment.ListRecords, all records
+// or, with the filter, only the enrolled or only the not enrolled ones; on a button,
+// Enrollment.AddRecord or Enrollment.RemoveRecord. A record approves nothing: Enrollment still approves each request
 // by its key hash. The page's `record` parameter (the Host page's link) marks that record's row.
 
 import {
@@ -20,6 +20,11 @@ const ROLE = /^(?!.*--)[a-z]([a-z0-9-]{0,30}[a-z0-9])?$/;
 const MAC = /^([0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}|[0-9A-Fa-f]{2}(-[0-9A-Fa-f]{2}){5}|[0-9A-Fa-f]{12})$/;
 const SERIAL = /^[A-Za-z0-9._-]{1,64}$/;
 const MAX_DATA_MACS = 16;
+// The platforms a record may name for a network install, as the gateway's JSON spells the enum
+// (the form's choice, then the name sent), and the short names the records list shows.
+const PLATFORMS = [["", "none"], ["linux-x86_64", "linux-x86_64"], ["linux-arm64", "linux-arm64"]];
+const PLATFORM_NAMES = { PLATFORM_LINUX_X86_64: "linux-x86_64", PLATFORM_LINUX_ARM64: "linux-arm64" };
+const PLATFORM_ENUMS = { "linux-x86_64": "PLATFORM_LINUX_X86_64", "linux-arm64": "PLATFORM_LINUX_ARM64" };
 
 // The AddRecordRequest the form names, or a sentence saying what is missing or wrong, each input
 // checked on its own against its grammar. The coordinator writes each MAC in one spelling.
@@ -55,7 +60,11 @@ export function recordRequest(form) {
   if (notes !== "" && reasonProblem(notes) !== null) {
     return reasonProblem(notes).replace("A reason", "A note");
   }
-  return { hostId, role, dataMacs, bmcMac, serial, notes };
+  const body = { hostId, role, dataMacs, bmcMac, serial, notes };
+  if (form.platform) {
+    body.platform = PLATFORM_ENUMS[form.platform];
+  }
+  return body;
 }
 
 // The `enrolled` of a ListRecordsRequest for the page's `enrolled` parameter: true for "true",
@@ -77,6 +86,7 @@ function recordRow(ctx, record, removal, chosen) {
     h("td", {}, (record.dataMacs || []).join(", ") || "-"),
     h("td", {}, record.bmcMac || "-"),
     h("td", {}, record.serial || "-"),
+    h("td", {}, PLATFORM_NAMES[record.platform] || "-"),
     h("td", {}, record.notes || "-"),
     h("td", {}, record.addedBy || "-"),
     h("td", {}, fmtUnix(record.addedUnix)),
@@ -111,7 +121,7 @@ export async function render(ctx) {
   }
   const records = listed.records || [];
   const next = typeof listed.nextPageToken === "string" ? listed.nextPageToken : "";
-  const form = { hostId: "", role: "", dataMacs: "", bmcMac: "", serial: "", notes: "" };
+  const form = { hostId: "", role: "", dataMacs: "", bmcMac: "", serial: "", platform: "", notes: "" };
   const removal = { reason: "" };
   const filterForm = { enrolled: shown };
   const nothing = shown === "" ? "No server is recorded." : `No ${shown === "true" ? "" : "not "}enrolled server is recorded.`;
@@ -131,7 +141,7 @@ export async function render(ctx) {
       })),
     records.length === 0
       ? h("p", {}, nothing)
-      : table(["Host id", "Role", "Data MACs", "BMC MAC", "Serial", "Notes", "Added by", "Added at", "Enrolled", ""],
+      : table(["Host id", "Role", "Data MACs", "BMC MAC", "Serial", "Platform", "Notes", "Added by", "Added at", "Enrolled", ""],
         records.map((record) => recordRow(ctx, record, removal, record.hostId === param("record")))),
     records.length === 0 ? null : field("Reason for a removal", "remove-reason", removal, "reason", { maxlength: 256 }),
     h("div", { class: "buttons" },
@@ -149,6 +159,7 @@ export async function render(ctx) {
       field("Data MACs (separated by commas)", "record-data-macs", form, "dataMacs"),
       field("BMC MAC (may be empty)", "record-bmc-mac", form, "bmcMac"),
       field("Serial (a Mac's is what it is matched by)", "record-serial", form, "serial"),
+      select("Platform (for a network install)", "record-platform", form, "platform", PLATFORMS),
       field("Notes", "record-notes", form, "notes", { maxlength: 256 }),
       action(ctx, "Record", "add-record", async () => {
         const body = recordRequest(form);

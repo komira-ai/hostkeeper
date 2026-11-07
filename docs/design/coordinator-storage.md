@@ -61,6 +61,7 @@ storage trait (section 4.1).
 | Exclusions, labels, holds, assignments, minimums, uninstall intents, bad marks, last good, standing force, inventory | `--ops-file` | the tables of section 3.3 |
 | Halts, halt reports, clear generations | `<ops-file>.halts` with the ops file | tables `halts`, `halt_reports`, column `services.halt_generation` |
 | Plan positions (rollout-update-plans.md section 3) | `rollouts` of `<ops-file>.halts` | tables `rollouts`, `rollout_done` |
+| The platform of each inventory record (`linux-x86_64`, `linux-arm64`) | `platforms` of `<ops-file>.halts`, by host id | column `inventory.platform` |
 | The audit log | `<ops-file>.audit` and its sealed segments; the ring of 64 in the ops file | table `audit`; the ring is the newest 64 rows |
 | Enrollment requests, issued certificates, hosts, deny rows, Mac nonces, the serial counter | `--enrollment-dir/*.pb` | the tables of section 3.6 |
 | The single-writer lock | `flock` on `<state-file>.lock`; the enrollment store's own `flock` on `<enrollment-dir>/lock` | an advisory lock on one session, and the row `lease` (section 5); the enrollment store keeps its in-process mutex |
@@ -170,7 +171,8 @@ min_versions(service text, scope text CHECK (scope IN ('host', 'role')), target 
   PRIMARY KEY (service, scope, target))
 uninstall_intents(service text, node_id text, generation bigint NOT NULL, PRIMARY KEY (service, node_id))
 inventory(host_id text PRIMARY KEY, role text NOT NULL, data_macs text[] NOT NULL, bmc_mac text NOT NULL,
-  serial text NOT NULL, notes text NOT NULL, by_name text NOT NULL, at_unix bigint NOT NULL)
+  serial text NOT NULL, notes text NOT NULL, platform text NOT NULL DEFAULT '', by_name text NOT NULL,
+  at_unix bigint NOT NULL)
 CREATE UNIQUE INDEX inventory_serial ON inventory (lower(serial)) WHERE serial <> '';
 CREATE UNIQUE INDEX inventory_bmc ON inventory (lower(bmc_mac)) WHERE bmc_mac <> '';
 ```
@@ -179,8 +181,8 @@ CREATE UNIQUE INDEX inventory_bmc ON inventory (lower(bmc_mac)) WHERE bmc_mac <>
 is not there (`operator.rs`, `force.rs`), except the coordinator's own mark of a rollback (`reconcile.rs`), which pushes
 without the check; a version listed twice reads the same as once, and the import folds such a pair into one row. The
 inventory's uniqueness rules (no two records share a host id, a MAC or a serial, compared without case) stay in Rust
-under the store's lock (`inventory.rs`). An empty `role`, `bmc_mac`, `serial` or `notes` is the empty string, as the
-code keeps it (`String`, left out of the file when empty), and the two unique indexes skip it; they are a second guard
+under the store's lock (`inventory.rs`). An empty `role`, `bmc_mac`, `serial`, `notes` or `platform` is the empty string, as the
+code keeps it (`String`, left out of the file when empty; a platform that is none, left out of the halts file), and the two unique indexes skip it; they are a second guard
 on the serial and the BMC MAC alone, and the rule across data and BMC MACs stays in Rust. The caps (`MAX_HOSTS`,
 `MAX_EXCLUDED`, `MAX_HOLDS`, `assignment::MAX_ENTRIES`, `inventory::MAX_RECORDS`, `MAX_LABELS`, `MAX_REASON_BYTES`) stay
 in the edits, checked under the store's lock as today.

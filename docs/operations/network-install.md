@@ -24,12 +24,13 @@ its certificate chains to, and `<token-file>` a file holding an operator token. 
 the documentation addresses `192.0.2.0/24` for the farm LAN and `00:00:5e:00:53:xx` for MACs;
 put your own in their place.
 
-**What is not built yet.** The inventory record has no platform yet (item N14 of the design).
-`serve` therefore reads every record as one with no platform, and router mode, which needs the
-record's platform, installs nothing: every machine it answers gets the menu that boots its local
-disk, and `serve` logs `has no platform, which router mode needs` for each recorded MAC. Until
-N14 is built, install machines in proxy mode. Router mode is still useful before then: it is a
-safe way to run the board check below, since it cannot install anything. Facts the design marks
+**The record's platform.** Router mode chooses the shim and the boot set by the record's platform,
+since the machine's own packets may state none, so every record of a machine to install in router
+mode names it: `hostkeeper ctl enrollment add-record --platform linux_x86_64` or
+`--platform linux_arm64` ([enrollment.md](enrollment.md#record-the-server)). A record with no
+platform is still read, and `serve` logs `has no platform, which router mode needs` for its MACs:
+router mode installs nothing for it, and it gets the menu that boots its local disk. Proxy mode
+takes the platform from the firmware's stated architecture and does not need the field. Facts the design marks
 **[V]** (not yet checked on the real router or boards) are marked the same way here, with the
 check that settles each; record what you find in [What has been checked](#what-has-been-checked).
 
@@ -44,9 +45,9 @@ from two reads of the coordinator taken for that answer: `Enrollment.ListRecords
   its install starts);
 - the record is not `enrolled`, no pending request matches it, and its `hostHeld` is
   `HOST_HELD_NONE`, unless `--reinstall` names its host id ([Reinstall](#reinstall-a-known-host));
-- in router mode, the record has a platform (none has one yet, above);
-- the platform agrees with the architecture the firmware or GRUB states, and the sealed directory
-  has a boot set for it.
+- in router mode, the record has a platform (above);
+- in proxy mode, a record that has a platform agrees with the architecture the firmware or GRUB
+  states, else the machine is refused; and the sealed directory has a boot set for the platform.
 
 **`hostHeld` is the rule; `Hosts.List` is not.** Each record of `list-records` says what the
 coordinator's durable enrollment store holds for its host id, read from the store at each call.
@@ -86,7 +87,7 @@ boot reads again.
 | A machine not to be installed | gets the shim and the menu that boots its local disk | gets no answer from `hostkeeper-pxe`, and its firmware goes on to its next boot device |
 | DHCP guarding | needs no change | drops the proxy offer unless the `hostkeeper-pxe` host is trusted ([step 6](#6-set-the-router)) |
 | UEFI HTTP boot | not served | served |
-| Today | installs nothing until the record's platform is built | installs |
+| The record's platform | required: it chooses the shim and the boot set | optional; if set, must agree with the firmware's architecture |
 
 `--mode` has no default: the wrong mode answers nothing, or its answers are dropped.
 
@@ -251,7 +252,7 @@ error to a file) for the measurement of a first machine. A start logs:
 - `the coordinator holds <n> records and <n> pending requests; <n> MACs are in the answer set`.
 
 Check that number before a machine boots: it counts the data MACs `serve` would install now. In
-router mode it is 0 until the record's platform is built.
+router mode it counts only the records that have a platform.
 
 Stop it with Ctrl-C or SIGTERM; it logs `stopped` and exits 0. It keeps nothing: the next run
 starts with nothing learned.
@@ -285,8 +286,7 @@ HTTP boot accepts a proxy offer is **[V]**, and its UEFI PXE boot is used either
 ### What to check
 
 Run the check on a machine of the model that has no inventory record, so that nothing is
-installed: proxy mode gives it no answer, and router mode, today, gives every machine the
-local-disk menu. Start `serve` in either mode, and the capture of [step 6](#6-set-the-router) to
+installed: proxy mode gives it no answer, and router mode gives it the local-disk menu. Start `serve` in either mode, and the capture of [step 6](#6-set-the-router) to
 keep the packets with the result. Power the machine on and read `serve`'s log for its MAC.
 
 1. **Option 93, the firmware's architecture.** The DISCOVER and REQUEST lines say it:
@@ -295,8 +295,7 @@ keep the packets with the result. Power the machine on and read `serve`'s log fo
    option 93; any other value is a platform that is not installed. x86-64 firmware commonly sends
    7 and arm64 firmware 11 **[V]**. Record the value of the DISCOVER and of the REQUEST (the
    REQUEST line appears in router mode as `it takes <address>`). In router mode a client whose
-   packets carry no option 93 gets a TFTP error for `hostkeeper/boot.efi` until the record's
-   platform is built, since there is then nothing to choose its shim by.
+   packets carry no option 93 is served the shim of the platform of its record.
 2. **Network boot comes first.** A DISCOVER at power-on, before the disk boots, says it does.
 3. **No answer, next boot device.** In proxy mode the log says `no answer: not in the answer set:
    no record holds it`, and the machine must go on to its disk (or its next boot option) by
@@ -338,7 +337,8 @@ NIC the firmware boots from among the data MACs.
 hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment add-record --host-id web-17 --role web \
     --data-macs 00:00:5e:00:53:01 --data-macs 00:00:5e:00:53:02 \
-    --bmc-mac 00:00:5e:00:53:a1 --serial SN-0042 --notes "rack 4, unit 17"
+    --bmc-mac 00:00:5e:00:53:a1 --serial SN-0042 --platform linux_x86_64 \
+    --notes "rack 4, unit 17"
 ```
 
 The answer shows `hostHeld` `HOST_HELD_NONE` for a host id no host holds. If it shows anything
@@ -399,8 +399,8 @@ Boot off again if the wait of a network boot with no server matters on the farm'
 
 The host keeps its host id, role and services; its install disk is written anew, and it gets a
 new key. Only the disk `--install-disk` matches is written: other disks, such as a storage node's
-data disks, are not touched by the installer. Until the record's platform is built, reinstall in
-proxy mode.
+data disks, are not touched by the installer. In router mode the record must have a platform;
+to set one on a record, remove the record and add it again.
 
 1. Start `serve` with `--reinstall <host id>` (repeatable). For the records of those host ids
    only, it sets aside the rule that a host or a pending request keeps a record out; the rest of
@@ -452,10 +452,10 @@ keeps its record out of the answer set by its `hostHeld`; its record need not be
 | `not in the answer set: the record of host <id>: a host is enrolled against it`, `a host is approved as that id`, `that id is denied, its retirement not final yet`, `that id is retired` | The record is held, so the machine is not installed. To rebuild that host, [reinstall](#reinstall-a-known-host). |
 | `the record of host <id>: the coordinator does not say whether a host holds that id` | The coordinator answers `HOST_HELD_UNSPECIFIED`: it is of a release before the field, or runs without enrollment. Nothing is installed until it says `HOST_HELD_NONE`. |
 | `the record of host <id>: the pending request <id> matches it` | A request waits for approval. If the machine is installed, approve it; if no machine of yours posted it, reject it, and the machine is installed at its next network boot. |
-| `has no platform, which router mode needs` | Router mode installs nothing until the record's platform is built. Use proxy mode. |
+| `has no platform, which router mode needs` | Router mode installs nothing for a record with no platform. Remove the record and add it again with `--platform`, or use proxy mode. |
 | `proxy offer sent` and no `tftp` line from the machine | DHCP guarding dropped the offer: trust the `hostkeeper-pxe` host, or use router mode ([step 6](#6-set-the-router)). |
 | `states the architecture <n>, which is not installed` | The firmware asks as legacy BIOS (0), 32-bit ARM (10) or another value: set UEFI boot. |
-| `the record of <mac> is <platform>, and its firmware states <platform>` | The record's platform is wrong; it is not booted with the wrong kernel. |
+| `host <host id>: the record of <mac> is <platform>, and its firmware states <platform>` | The record's platform is wrong; it is not booted with the wrong kernel. |
 | `tftp <address>: refused: hostkeeper/boot.efi from an address with no lease` | Router mode, and `serve` saw no DHCPREQUEST from that address in this run: the broadcasts do not reach it, or it started after the machine took its address. Boot the machine again. |
 | `menu ...: local disk: ...` and the machine stops at its firmware's menu | The board does not boot its next option after GRUB's `exit` (board check, item 4): use proxy mode on it. |
 | `the coordinator could not be read (<why>): this answer is made from the empty answer set` | The private listener, the CA or the token: fix it; the next network boot reads again. |

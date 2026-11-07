@@ -348,7 +348,7 @@ fn record_proto(
 }
 
 /// A Linux platform as `hostkeeper.agent.v1` says it.
-fn platform_proto(platform: Platform) -> agent::Platform {
+pub(crate) fn platform_proto(platform: Platform) -> agent::Platform {
     match platform {
         Platform::LinuxX86_64 => agent::Platform::LinuxX8664,
         Platform::LinuxArm64 => agent::Platform::LinuxArm64,
@@ -364,9 +364,7 @@ fn record_platform(number: i32) -> Result<Option<Platform>, proto::EnrollmentRef
         Ok(agent::Platform::Unspecified) => Ok(None),
         Ok(agent::Platform::LinuxX8664) => Ok(Some(Platform::LinuxX86_64)),
         Ok(agent::Platform::LinuxArm64) => Ok(Some(Platform::LinuxArm64)),
-        Ok(agent::Platform::DarwinArm64) | Err(_) => {
-            Err(proto::EnrollmentRefusal::InvalidRequest)
-        }
+        Ok(agent::Platform::DarwinArm64) | Err(_) => Err(proto::EnrollmentRefusal::InvalidRequest),
     }
 }
 

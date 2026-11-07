@@ -12,9 +12,8 @@
 //! of its MAC and a seed that names the arm64 deb. The install, the deb and the enrollment of an
 //! arm64 machine are proven on the first real one (item N13), by the runbook.
 //!
-//! It runs in proxy mode: router mode installs a record only once it has its platform (item
-//! N14), whose pull request moves this test to router mode, where it also checks that
-//! `hostkeeper/boot.efi` is served as `hostkeeper/shimaa64.efi`.
+//! It runs in router mode, the record stating `linux-arm64`: the guest's REQUEST states
+//! architecture 11 and `hostkeeper/boot.efi` is served as `hostkeeper/shimaa64.efi`.
 
 mod e2e;
 mod netinstall;
@@ -58,18 +57,24 @@ fn http_get(server: SocketAddr, path: &str) -> String {
 fn arm64_boots_to_seed_fetch() {
     let mut rig = Rig::new("net_install_arm64", "a", [198, 51, 100], machine(), HOST);
     let mac = rig.mac();
-    rig.serve(Mode::Proxy, &[]);
+    rig.serve(Mode::Router, &[]);
     let start = rig.bus.mark();
     rig.guest.start(&rig.bus);
 
-    // The DISCOVER states arm64 UEFI, and the proxy offer names the arm64 shim.
+    // The REQUEST states arm64 UEFI, and hostkeeper/boot.efi is the arm64 shim.
     let (at, _) = rig.pxe_says(
         start,
-        "the guest's DISCOVER, architecture 11",
-        &[
-            &format!("dhcp: DHCPDISCOVER from {mac}, architecture 11, PXEClient, "),
-            "proxy offer sent, boot file hostkeeper/shimaa64.efi (linux-arm64)",
-        ],
+        "the guest's REQUEST, architecture 11",
+        &[&format!(
+            "dhcp: DHCPREQUEST from {mac}, architecture 11, PXEClient, "
+        )],
+    );
+    let (at, _) = rig.pxe_says(
+        at,
+        "hostkeeper/boot.efi served as the arm64 shim",
+        &[&format!(
+            "hostkeeper/boot.efi is hostkeeper/shimaa64.efi for {mac} (linux-arm64)"
+        )],
     );
     let (at, _) = rig.pxe_says(
         at,
@@ -82,7 +87,7 @@ fn arm64_boots_to_seed_fetch() {
         &["sent hostkeeper/grubaa64.efi"],
     );
     // GRUB asks for the arm64 menu of its MAC, and the live system fetches its seed.
-    rig.wait_install(start, Mode::Proxy);
+    rig.wait_install(start, Mode::Router);
 
     // The seed, as the guest fetched it (a MAC whose install started may fetch it again): it
     // installs the arm64 deb.

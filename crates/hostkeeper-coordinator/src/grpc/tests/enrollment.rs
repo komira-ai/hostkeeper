@@ -5,6 +5,7 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
+use hostkeeper_proto::hostkeeper::agent::v1 as agent;
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_proto::hostkeeper::operator::v1::enrollment_server::Enrollment as _;
 use tonic::{Code, Request, Response, Status};
@@ -279,4 +280,37 @@ async fn records_are_added_listed_and_removed_and_each_refusal_has_its_status() 
         Code::NotFound,
         "no_record",
     );
+}
+
+/// Proves: the platform of `AddRecordRequest` reaches the record the call answers and the list,
+/// and a platform that is not a Linux one is `INVALID_ARGUMENT` `invalid_request`.
+#[tokio::test]
+async fn a_records_platform_is_added_listed_and_a_mac_platform_is_refused() {
+    let world = World::new("grpc-enrollment-platform");
+    let c = &world.coordinator;
+    let s = service(&world);
+    let with = |platform: agent::Platform| proto::AddRecordRequest {
+        platform: platform.into(),
+        ..add_of("db-1", "0c:c4:7a:00:00:02")
+    };
+
+    assert_refused(
+        s.add_record(as_operator(c, with(agent::Platform::DarwinArm64)).await)
+            .await,
+        Code::InvalidArgument,
+        "invalid_request",
+    );
+    let added = s
+        .add_record(as_operator(c, with(agent::Platform::LinuxArm64)).await)
+        .await
+        .expect("added")
+        .into_inner();
+    let record = added.record.expect("the record as kept");
+    assert_eq!(record.platform(), agent::Platform::LinuxArm64);
+    let listed = s
+        .list_records(as_operator(c, proto::ListRecordsRequest::default()).await)
+        .await
+        .expect("listed")
+        .into_inner();
+    assert_eq!(listed.records, vec![record]);
 }

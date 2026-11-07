@@ -436,7 +436,7 @@ const RPCS: [(&str, &[&str]); 7] = [
 
 /// The fields of the enrollment, abort, retire, audit and force-report messages, pinned by name
 /// and number.
-const FIELDS: [(&str, &[(&str, u32)]); 35] = [
+const FIELDS: [(&str, &[(&str, u32)]); 36] = [
     (
         "hostkeeper.agent.v1.HeartbeatResponse",
         &[

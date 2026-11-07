@@ -193,6 +193,7 @@ holds, is refused; remove the record first.
 | `--bmc-mac` | STRING | Empty for none. |
 | `--serial` | STRING | Empty for none. |
 | `--notes` | STRING | Empty for none. |
+| `--platform` | VALUE | The platform to install the server as by network boot: `PLATFORM_LINUX_X86_64` or `PLATFORM_LINUX_ARM64`; `PLATFORM_UNSPECIFIED` for none. Any other value is refused `invalid_request`. |
 
 #### `hostkeeper ctl enrollment list-records`
 

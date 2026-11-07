@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 
 use hostkeeper_ctl::transport::InMemory;
 use hostkeeper_ctl::{Io, PeerIdentity, exit};
+use hostkeeper_proto::hostkeeper::agent::v1::Platform;
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_proto::hostkeeper::operator::v1::enrollment_server::{Enrollment, EnrollmentServer};
 use serde_json::{Value, json};
@@ -100,6 +101,7 @@ impl Enrollment for Records {
                 added_unix: 1_800_000_000,
                 enrolled: false,
                 host_held: proto::HostHeld::None.into(),
+                platform: add.platform,
             };
             s.records.insert(add.host_id, record.clone());
             Ok(Response::new(proto::AddRecordResponse {
@@ -154,6 +156,15 @@ struct Ran {
 
 /// Runs `hostkeeper ctl <args>` with the operator's token file, against `memory`.
 fn ctl(memory: &InMemory, token_file: &str, args: &[&str]) -> Ran {
+    ctl_as("json", memory, token_file, args)
+}
+
+/// The same run printing in the `--output text` form.
+fn ctl_text(memory: &InMemory, token_file: &str, args: &[&str]) -> Ran {
+    ctl_as("text", memory, token_file, args)
+}
+
+fn ctl_as(output: &str, memory: &InMemory, token_file: &str, args: &[&str]) -> Ran {
     let mut stdin: &[u8] = b"";
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
@@ -165,7 +176,7 @@ fn ctl(memory: &InMemory, token_file: &str, args: &[&str]) -> Ran {
         "--token-file",
         token_file,
         "--output",
-        "json",
+        output,
     ];
     let words = std::iter::once("hostkeeper-ctl")
         .chain(args.iter().copied())
@@ -253,6 +264,7 @@ fn the_inventory_commands_add_list_and_remove_a_record_through_the_grpc_route() 
             bmc_mac: "0c:c4:7a:00:00:01".to_owned(),
             serial: "SN-1".to_owned(),
             notes: "rack 4".to_owned(),
+            platform: 0,
         }]
     );
 
@@ -417,5 +429,123 @@ fn list_records_sends_the_enrolled_filter_as_typed() {
     assert_eq!(
         records.seen(|s| s.lists.iter().map(|l| l.enrolled).collect::<Vec<_>>()),
         [None, Some(true), Some(false)]
+    );
+}
+
+/// A scratch token file and a server holding no records, for the platform tests.
+fn platform_setup(name: &str) -> (hostkeeper_testkit::Scratch, String, Records, InMemory) {
+    let dir =
+        hostkeeper_testkit::Scratch::under(std::path::Path::new(env!("CARGO_TARGET_TMPDIR")), name)
+            .expect("a scratch directory");
+    let token_file = dir.path().join("token");
+    std::fs::write(&token_file, format!("{TOKEN}\n")).expect("written");
+    let token_file = token_file.to_str().expect("UTF-8 path").to_owned();
+    let records = Records::default();
+    let memory = InMemory::new(PeerIdentity::Operator("op".to_owned()))
+        .serve(EnrollmentServer::new(records.clone()));
+    (dir, token_file, records, memory)
+}
+
+/// Proves: `add-record --platform` reaches `AddRecordRequest.platform` as typed for both Linux
+/// values, and a record added without the flag is sent with the platform unspecified.
+#[test]
+fn add_record_sends_the_platform_as_typed() {
+    let (_dir, token_file, records, memory) = platform_setup("ctl-inventory-platform");
+    for (host, flag) in [
+        ("arm-1", Some("linux_arm64")),
+        ("x86-1", Some("linux_x86_64")),
+        ("none-1", None),
+    ] {
+        let mut args = vec![
+            "enrollment",
+            "add-record",
+            "--host-id",
+            host,
+            "--serial",
+            host,
+        ];
+        if let Some(flag) = flag {
+            args.extend(["--platform", flag]);
+        }
+        let ran = ctl(&memory, &token_file, &args);
+        assert_eq!(ran.code, exit::SUCCESS, "{}", ran.stderr);
+    }
+    let sent: Vec<(String, Platform)> = records.seen(|s| {
+        s.adds
+            .iter()
+            .map(|a| (a.host_id.clone(), a.platform()))
+            .collect()
+    });
+    assert_eq!(
+        sent,
+        [
+            ("arm-1".to_owned(), Platform::LinuxArm64),
+            ("x86-1".to_owned(), Platform::LinuxX8664),
+            ("none-1".to_owned(), Platform::Unspecified),
+        ]
+    );
+}
+
+/// Proves: a `--platform` outside the list is a usage error (exit code 2) that names the
+/// possible values, and no call is made.
+#[test]
+fn add_record_refuses_a_platform_outside_the_list_without_calling() {
+    let (_dir, token_file, records, memory) = platform_setup("ctl-inventory-platform-bad");
+    let ran = ctl(
+        &memory,
+        &token_file,
+        &[
+            "enrollment",
+            "add-record",
+            "--host-id",
+            "db-1",
+            "--serial",
+            "SN-1",
+            "--platform",
+            "windows",
+        ],
+    );
+    assert_eq!(ran.code, exit::USAGE, "{}", ran.stderr);
+    for value in ["linux_x86_64", "linux_arm64", "darwin_arm64"] {
+        assert!(ran.stderr.contains(value), "{}", ran.stderr);
+    }
+    assert_eq!(ran.stdout, "");
+    assert_eq!(records.seen(|s| s.adds.len() + s.bearers.len()), 0);
+}
+
+/// Proves: `list-records` prints a record's platform in the JSON output (as the enum's name) and
+/// in the text output, and leaves it out for a record with none.
+#[test]
+fn list_records_prints_the_platform_in_json_and_text() {
+    let (_dir, token_file, records, memory) = platform_setup("ctl-inventory-platform-list");
+    records.seen(|s| {
+        for (host, platform) in [
+            ("arm-1", Platform::LinuxArm64),
+            ("none-1", Platform::Unspecified),
+        ] {
+            let record = proto::InventoryRecord {
+                host_id: host.to_owned(),
+                serial: host.to_owned(),
+                platform: platform.into(),
+                ..proto::InventoryRecord::default()
+            };
+            s.records.insert(host.to_owned(), record);
+        }
+    });
+    let listed = json_of(&ctl(&memory, &token_file, &["enrollment", "list-records"]));
+    let platforms: Vec<Option<&str>> = listed["records"]
+        .as_array()
+        .expect("records")
+        .iter()
+        .map(|r| r["platform"].as_str())
+        .collect();
+    assert_eq!(platforms, [Some("PLATFORM_LINUX_ARM64"), None]);
+
+    let text = ctl_text(&memory, &token_file, &["enrollment", "list-records"]);
+    assert_eq!(text.code, exit::SUCCESS, "{}", text.stderr);
+    assert!(
+        text.stdout.contains("PLATFORM_LINUX_ARM64"),
+        "{}",
+        text.stdout
     );
 }

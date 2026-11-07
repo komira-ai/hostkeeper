@@ -84,6 +84,7 @@ fn inventory() -> Snapshot {
                 host_ids: vec!["other-1".to_owned(), "amb-1".to_owned()],
             },
         ],
+        ..Snapshot::default()
     }
 }
 
@@ -357,6 +358,7 @@ fn every_host_held_but_none_leaves_the_record_out() {
         let snapshot = Snapshot {
             records: vec![held_record],
             pending: Vec::new(),
+            ..Snapshot::default()
         };
         let out = run(&snapshot, Mode::Proxy, &BOTH, &[], &[]);
         assert_eq!(out.dhcp, BTreeMap::new(), "{held:?}");
@@ -385,8 +387,66 @@ fn every_host_held_but_none_leaves_the_record_out() {
     let free = Snapshot {
         records: vec![record("free-1", &["02:00:00:00:00:22"], None)],
         pending: Vec::new(),
+        ..Snapshot::default()
     };
     let out = run(&free, Mode::Proxy, &BOTH, &[], &[]);
     assert_eq!(out.left_out, BTreeMap::new());
     assert_eq!(out.menus.len(), 1);
+}
+
+/// A record whose platform is one this server does not install (Darwin, or a number from a newer
+/// coordinator) is left out in both modes and with `--reinstall` naming it, each MAC with its
+/// reason; the records beside it are still answered.
+///
+/// Proves: the reasons read "states the platform PLATFORM_DARWIN_ARM64" and "states the
+/// platform the number 99". Catches a record of an unknown platform installed as a Linux one,
+/// or one odd record emptying the set.
+#[test]
+fn a_record_stating_a_platform_not_installed_is_left_out_whatever_the_mode_or_reinstall() {
+    let snapshot = Snapshot {
+        records: vec![
+            record("mac-1", &["02:00:00:00:00:31"], None),
+            record("odd-1", &["02:00:00:00:00:32"], None),
+            record("arm-1", &["02:00:00:00:00:33"], Some(LinuxPlatform::Arm64)),
+        ],
+        not_installable: BTreeMap::from([(id("mac-1"), 3), (id("odd-1"), 99)]),
+        ..Snapshot::default()
+    };
+    for (mode, reinstall) in [
+        (Mode::Proxy, &[][..]),
+        (Mode::Router, &[][..]),
+        (Mode::Proxy, &["mac-1", "odd-1"][..]),
+    ] {
+        let out = run(&snapshot, mode, &BOTH, reinstall, &[]);
+        assert_eq!(
+            out.why_not(mac("02:00:00:00:00:31").octets()),
+            "the record of host mac-1 states the platform PLATFORM_DARWIN_ARM64, which is not installed"
+        );
+        assert_eq!(
+            out.why_not(mac("02:00:00:00:00:32").octets()),
+            "the record of host odd-1 states the platform the number 99, which is not installed"
+        );
+        assert_eq!(
+            out.menus.keys().copied().collect::<Vec<_>>(),
+            [mac("02:00:00:00:00:33")]
+        );
+    }
+}
+
+/// `host_of` names the host id of the record in the set that holds a MAC, and none for a MAC no
+/// record in the set holds.
+///
+/// Proves: the lookup the DHCP log uses to name the record of a refused disagreement.
+#[test]
+fn host_of_names_the_record_in_the_set_that_holds_a_mac() {
+    let snapshot = Snapshot {
+        records: vec![record("free-1", &["02:00:00:00:00:41"], None)],
+        ..Snapshot::default()
+    };
+    let out = run(&snapshot, Mode::Proxy, &BOTH, &[], &[]);
+    assert_eq!(
+        out.host_of(mac("02:00:00:00:00:41").octets()),
+        [&id("free-1")]
+    );
+    assert!(out.host_of(mac("02:00:00:00:00:42").octets()).is_empty());
 }

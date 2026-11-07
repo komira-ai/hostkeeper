@@ -291,6 +291,14 @@ impl Server {
                 ),
                 None,
             ),
+            Outcome::Ignored(why @ Ignored::PlatformDisagrees { mac, .. }) => {
+                let hosts: Vec<&str> = answers
+                    .host_of(mac.octets())
+                    .into_iter()
+                    .map(HostId::as_str)
+                    .collect();
+                (format!("no answer: host {}: {why}", hosts.join(", ")), None)
+            }
             Outcome::Ignored(why) => (format!("no answer: {why}"), None),
         };
         self.log.line(format_args!(

@@ -29,6 +29,12 @@ hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-
     --bmc-mac 00:00:5e:00:53:a1 --serial SN-0042 --notes "rack 4, unit 17"
 ```
 
+`--platform linux_x86_64` or `--platform linux_arm64` names the platform the server is installed as
+by network boot ([network-install.md](network-install.md)); `hostkeeper-pxe` in router mode needs it, and
+in proxy mode refuses a record whose platform disagrees with the firmware's architecture. It is
+optional and for a Linux server only: `darwin_arm64` is refused `invalid_request`, and a Mac's record
+has none. `list-records` and the Inventory page show it.
+
 The answer is the record as kept, with `added_by` (the token's name). A second record of the same
 host id is refused `record_exists`; a record with a MAC or a serial that another record holds is
 refused `record_conflict`. To change a record, remove it and add it again. Removing a record does
