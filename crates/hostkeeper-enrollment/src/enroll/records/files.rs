@@ -23,7 +23,7 @@ use prost::Message;
 
 use super::{Record, RecordKey, Records, RecordsLock, pb};
 use crate::enroll::mac_nonce::MacNonceHash;
-use crate::enroll::rows::{RequestRow, SCHEMA, corrupt};
+use crate::enroll::rows::{HostRow, RequestRow, SCHEMA, corrupt, deny_state};
 use crate::enroll::{FIRST_SERIAL, StoreError};
 use crate::fs::{Fs, write_atomic};
 use crate::names::{HostId, KeyHash};
@@ -140,10 +140,13 @@ impl FileRecords {
         write_atomic(&*self.fs, &dir, &name, bytes, FILE_MODE).map_err(io_at(&dir.join(&name)))
     }
 
-    /// The names in the subdirectory `sub`, sorted.
+    /// The names in the subdirectory `sub`, sorted; none when it is not there.
     fn list(&self, sub: &str) -> Result<Vec<String>, StoreError> {
         let dir = self.dir.join(sub);
-        self.fs.list(&dir).map_err(io_at(&dir))
+        match self.fs.list(&dir) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+            listed => listed.map_err(io_at(&dir)),
+        }
     }
 
     /// At open: remembers every nonce an approval consumed, and marks the file of each one
@@ -356,5 +359,174 @@ impl Records for FileRecords {
         let mut host = host.clone();
         host.duplicate = true;
         self.commit(&[Record::Host(host)])
+    }
+}
+
+/// Every record of a store, read whole: what `hostkeeper-coordinator import` moves into its
+/// database and `export` writes back (docs/design/coordinator-storage.md, section 11).
+///
+/// Each list is in the order of its key, as a file store lists its files.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Snapshot {
+    /// Every request, each checked as the store checks it.
+    pub requests: Vec<pb::Request>,
+    /// Every issued certificate.
+    pub issued: Vec<pb::Issued>,
+    /// Every host.
+    pub hosts: Vec<pb::Host>,
+    /// Every deny row.
+    pub deny: Vec<pb::Deny>,
+    /// Every Mac nonce, marked consumed when an approval consumed it.
+    pub mac_nonces: Vec<pb::MacNonce>,
+    /// The next serial the counter gives; `None` when none was ever taken.
+    pub serial: Option<u64>,
+}
+
+impl Snapshot {
+    /// Whether it holds no record and no serial was taken.
+    pub fn is_empty(&self) -> bool {
+        *self == Snapshot::default()
+    }
+}
+
+/// Refuses `record`, read from `path`, unless it is kept under `key`: the key its own fields name.
+fn kept_under(path: &Path, record: Record, key: &RecordKey) -> Result<(), StoreError> {
+    if record.key().ok().as_ref() != Some(key) {
+        return Err(corrupt(
+            path,
+            "the record's own key is not the one its file is named by",
+        ));
+    }
+    Ok(())
+}
+
+/// The record a listing named, read from `path`: one that is gone since is refused, since the
+/// store changed while it was read.
+fn there<T>(path: &Path, read: Option<T>) -> Result<T, StoreError> {
+    read.ok_or_else(|| {
+        corrupt(
+            path,
+            "the file was listed and is gone: the store changed while it was read",
+        )
+    })
+}
+
+impl FileRecords {
+    /// Every record of the store in `dir`, read without writing anything: no directory is made,
+    /// no lock is taken and no Mac nonce's file is marked. A subdirectory that is not there holds
+    /// nothing, as [`FileRecords::open`] would make it empty. Every record is checked as the store
+    /// checks it when it reads it (the schema, a request's state, key and host ids, a host's key
+    /// hash, a deny row's state), and each must be kept under the key its fields name. A Mac
+    /// nonce an approval consumed reads as consumed, as [`FileRecords::open`] would mark it.
+    ///
+    /// # Errors
+    /// [`StoreError`]: a directory or file cannot be read, or a record is refused.
+    pub fn read_snapshot(fs: Arc<dyn Fs>, dir: &Path) -> Result<Snapshot, StoreError> {
+        let records = FileRecords {
+            fs,
+            dir: dir.to_path_buf(),
+            consumed: Mutex::new(BTreeMap::new()),
+        };
+        let mut snapshot = Snapshot::default();
+        let mut consumed = BTreeMap::new();
+        for (id, request) in records.requests()? {
+            let row = RequestRow::check(records.place(&RecordKey::Request(id)), request, &id)?;
+            row.renewal_of()?;
+            row.host_id()?;
+            let hash = row
+                .pb
+                .approved
+                .as_ref()
+                .and_then(|approved| MacNonceHash::from_bytes(&approved.mac_nonce_sha256));
+            consumed.extend(hash.map(|hash| (hash, id)));
+            snapshot.requests.push(row.pb);
+        }
+        for name in records.list(ISSUED)? {
+            let Some(id) = name.strip_suffix(".pb").and_then(KeyHash::from_hex) else {
+                continue;
+            };
+            let key = RecordKey::Issued(id);
+            let path = records.place(&key);
+            let issued = there(&path, records.load(&key, |m: &pb::Issued| m.schema)?)?;
+            kept_under(&path, Record::Issued(issued.clone()), &key)?;
+            snapshot.issued.push(issued);
+        }
+        for host in records.host_ids()? {
+            let key = RecordKey::Host(host.clone());
+            let path = records.place(&key);
+            let found = HostRow::check(&path, there(&path, records.host(&host)?)?)?.pb;
+            kept_under(&path, Record::Host(found.clone()), &key)?;
+            snapshot.hosts.push(found);
+        }
+        for name in records.list(DENY)? {
+            let Some(host) = name.strip_suffix(".pb").and_then(|n| HostId::parse(n).ok()) else {
+                continue;
+            };
+            let key = RecordKey::Deny(host.clone());
+            let path = records.place(&key);
+            let deny = there(&path, records.deny(&host)?)?;
+            deny_state(&path, &deny)?;
+            kept_under(&path, Record::Deny(deny.clone()), &key)?;
+            snapshot.deny.push(deny);
+        }
+        for name in records.list(MAC_NONCES)? {
+            let Some(hash) = name
+                .strip_suffix(".pb")
+                .and_then(|n| hex::decode(n).ok())
+                .and_then(|bytes| MacNonceHash::from_bytes(&bytes))
+            else {
+                continue;
+            };
+            let key = RecordKey::MacNonce(hash);
+            let path = records.place(&key);
+            let mut nonce = there(&path, records.load(&key, |m: &pb::MacNonce| m.schema)?)?;
+            if let Some(by) = consumed.get(&hash).filter(|_| nonce.consumed_by.is_empty()) {
+                nonce.consumed_by = by.as_bytes().to_vec();
+            }
+            kept_under(&path, Record::MacNonce(nonce.clone()), &key)?;
+            snapshot.mac_nonces.push(nonce);
+        }
+        let serial = records.place(&RecordKey::Serial);
+        snapshot.serial = records
+            .read(&serial)?
+            .map(|bytes| decode(&serial, &bytes, |m: &pb::SerialCounter| m.schema))
+            .transpose()?
+            .map(|counter| counter.next);
+        Ok(snapshot)
+    }
+
+    /// Writes every record of `snapshot` into `dir`, which holds no record: the directories made
+    /// as [`FileRecords::open`] makes them, each record written whole as a commit writes it, and
+    /// the serial counter set to `snapshot.serial` when it is given.
+    ///
+    /// # Errors
+    /// [`StoreError`]: a directory or file cannot be made or written, or a record's key does not
+    /// parse. What was written before the failure stays.
+    pub fn write_snapshot(
+        fs: Arc<dyn Fs>,
+        dir: &Path,
+        snapshot: &Snapshot,
+    ) -> Result<FileRecords, StoreError> {
+        let records = FileRecords::open(fs, dir)?;
+        let all = snapshot
+            .requests
+            .iter()
+            .cloned()
+            .map(Record::Request)
+            .chain(snapshot.issued.iter().cloned().map(Record::Issued))
+            .chain(snapshot.hosts.iter().cloned().map(Record::Host))
+            .chain(snapshot.deny.iter().cloned().map(Record::Deny))
+            .chain(snapshot.mac_nonces.iter().cloned().map(Record::MacNonce));
+        for record in all {
+            records.put(&record.key()?, &record)?;
+        }
+        if let Some(next) = snapshot.serial {
+            let counter = pb::SerialCounter {
+                schema: SCHEMA,
+                next,
+            };
+            records.write(&RecordKey::Serial, &counter.encode_to_vec())?;
+        }
+        Ok(records)
     }
 }
