@@ -16,14 +16,14 @@ use std::fs;
 use std::sync::Arc;
 
 use hostkeeper_config::names::ServiceName;
-use hostkeeper_daemon::link_adapters::recorded;
-use hostkeeper_daemon::selfupdate::{ProbeError, SettledOrder};
-use hostkeeper_hook::Verdict;
+use hostkeeper_daemon::fallback::fallback_with;
+use hostkeeper_daemon::link_adapters::{DaemonRecords, recorded};
+use hostkeeper_daemon::selfupdate::ProbeError;
 use hostkeeper_launchd::Label;
-use hostkeeper_link::{Order, Verb};
+use hostkeeper_link::{Order, OrderId, OrderRef, Outcome, ServiceRecords, Verb};
 use hostkeeper_proto::hostkeeper::agent::v1 as pb;
-use hostkeeper_steps::Settled;
 use hostkeeper_steps::record::RECORD_FILE;
+use hostkeeper_steps::{RecordStore, Settled};
 use support::Scratch;
 use support::coordinated::{
     HOOK_LINES, Host, convergence_of, coordinator_with, hk_on_host, hostkeeper_at, order_and_try,
@@ -218,17 +218,90 @@ fn a_mac_the_pkg_installed_reports_the_install_of_its_release_and_converges() {
     assert_eq!(convergence["state"], "converged", "{convergence}");
 }
 
-/// Catches a fallback the coordinator never hears of: the binary that starts after the switch is
-/// the previous one (the new one fell back), which settles the update `Failed` after the commit,
-/// of class release, `self_update_fallback`, and its first heartbeat carries that verdict under
-/// the update's id and try.
+/// Catches a fallback the coordinator never hears of, whichever binary settles it: the binary
+/// that starts after the switch is the previous one (the new one fell back), settled either by
+/// the fallback verb before the previous binary starts (the fallback unit on Linux, the fallback
+/// job on a Mac) or by the previous binary at its start; either way the record is `Failed` after
+/// the commit, of class release, `self_update_fallback`, and the first heartbeat of the previous
+/// binary carries that verdict under the update's id and try.
 #[test]
 fn a_self_update_that_fell_back_reports_the_fallback_under_its_order() {
-    let s = SelfRig::new("converge-fallback");
+    for by_the_verb in [true, false] {
+        let tag = format!("converge-fallback-{by_the_verb}");
+        let s = SelfRig::new(&tag);
+        for (step, line) in HOOK_LINES {
+            s.rig.launcher.replies(HK, step, &[(0, line)]);
+        }
+        let dir = Scratch::new(&format!("{tag}-coordinator"));
+        let coordinator = coordinator_with(dir.path(), HK, NEW, BAKE);
+        s.runs(&mac_job(), OLD, 100);
+        let mut host = Host::of(
+            Arc::new(s.daemon_running_as(OLD, &mac_job())),
+            &coordinator,
+            None,
+        );
+        host.beat();
+        assert!(host.dispatch.run_next());
+        let update = order_of(&host, 0);
+        drop(host);
+
+        let daemon = Arc::new(s.daemon_running_as(OLD, &mac_job()));
+        let settled = match by_the_verb {
+            true => {
+                let store = RecordStore::new(&s.hk_state());
+                assert_eq!(
+                    fallback_with(&s.layout(), &store).expect("the fallback"),
+                    Settled::FellBack
+                );
+                assert_eq!(
+                    daemon.settle_self_update().expect("settled"),
+                    Settled::NotPending
+                );
+                Settled::FellBack
+            }
+            false => {
+                s.layout().flip_back().expect("the previous binary back");
+                daemon.settle_self_update().expect("settled")
+            }
+        };
+        assert_eq!(settled, Settled::FellBack, "{tag}");
+        let mut host = Host::of(daemon, &coordinator, None);
+        host.beat();
+        assert_eq!(
+            last_update(&coordinator),
+            (
+                NEW.to_owned(),
+                pb::Outcome::Failed as i32,
+                "self_update_fallback".to_owned(),
+                update.id.as_str().to_owned(),
+                Some(1)
+            ),
+            "{tag}"
+        );
+        let reported = hk_on_host(&coordinator).last_update.expect("the verdict");
+        assert_eq!(
+            (reported.phase, reported.class),
+            (
+                pb::FailurePhase::AfterCommit as i32,
+                pb::FailureClass::Release as i32
+            ),
+            "{tag}"
+        );
+    }
+}
+
+/// Catches a settled verdict lost to a restart before the coordinator heard it, or sent again
+/// after it was acknowledged (in place of a newer verdict the coordinator holds): the binary of
+/// [`NEW`] settles the update and is restarted before any heartbeat; the start after it sends
+/// the success under the update's id; once the coordinator acknowledged it, the record keeps it
+/// no longer, and no later start lists it again.
+#[test]
+fn the_settled_verdict_is_sent_after_each_restart_until_it_is_acknowledged() {
+    let s = SelfRig::new("converge-restart");
     for (step, line) in HOOK_LINES {
         s.rig.launcher.replies(HK, step, &[(0, line)]);
     }
-    let dir = Scratch::new("converge-fallback-coordinator");
+    let dir = Scratch::new("converge-restart-coordinator");
     let coordinator = coordinator_with(dir.path(), HK, NEW, BAKE);
     s.runs(&mac_job(), OLD, 100);
     let mut host = Host::of(
@@ -241,47 +314,48 @@ fn a_self_update_that_fell_back_reports_the_fallback_under_its_order() {
     let update = order_of(&host, 0);
     drop(host);
 
-    s.layout()
-        .flip_back()
-        .expect("the fallback puts the previous binary back");
-    let daemon = Arc::new(s.daemon_running_as(OLD, &mac_job()));
+    s.runs(&mac_job(), NEW, 101);
+    let first = s.daemon_running_as(NEW, &mac_job());
+    assert_eq!(
+        first.settle_self_update().expect("settled"),
+        Settled::Confirmed
+    );
+    drop(first);
+    let daemon = Arc::new(s.daemon_running_as(NEW, &mac_job()));
     assert_eq!(
         daemon.settle_self_update().expect("settled"),
-        Settled::FellBack
+        Settled::NotPending
     );
-    let mut host = Host::of(daemon, &coordinator, None);
+    let listed = recorded(daemon.ctx(), hk()).expect("listed");
+    let kept = listed.last_result.expect("the verdict the record keeps");
+    assert_eq!(
+        (kept.order.id.as_str(), kept.order.order_try, kept.outcome),
+        (update.id.as_str(), 1, Outcome::Succeeded)
+    );
+    let mut host = Host::of(Arc::clone(&daemon), &coordinator, None);
     host.beat();
-    assert_eq!(
-        last_update(&coordinator),
-        (
-            NEW.to_owned(),
-            pb::Outcome::Failed as i32,
-            "self_update_fallback".to_owned(),
-            update.id.as_str().to_owned(),
-            Some(1)
-        )
-    );
-    let reported = hk_on_host(&coordinator).last_update.expect("the verdict");
-    assert_eq!(
-        (reported.phase, reported.class),
-        (
-            pb::FailurePhase::AfterCommit as i32,
-            pb::FailureClass::Release as i32
-        )
-    );
+    assert_eq!(last_update(&coordinator).1, pb::Outcome::Succeeded as i32);
+    let rec = s.rig.record(HK).expect("the record");
+    assert_eq!(rec.progress.report_order_id, None);
+    drop(host);
+
+    let again = s.daemon_running_as(NEW, &mac_job());
+    let listed = recorded(again.ctx(), hk()).expect("listed");
+    assert_eq!(listed.last_result, None);
 }
 
-/// Catches a verdict reported where none can be acknowledged, or for another service: a wait for
-/// the restart that names no order (as a daemon from before the id was kept writes it, or as an
-/// order with no id leaves it) is settled and reports no verdict; a settled order is reported for `hostkeeper` only, never for another
-/// service; and a start that settles nothing keeps none.
+/// Catches a verdict reported where none can be acknowledged, or for another service, or an
+/// acknowledgement that clears the wrong verdict: a wait for the restart that names no order (as
+/// a daemon from before the id was kept writes it, or as an order with no id leaves it) is
+/// settled and reports no verdict; a settled order is reported for `hostkeeper` only, never for
+/// another service; and an acknowledgement of another order, another try or another service
+/// leaves it to report.
 #[test]
 fn only_a_settled_wait_that_names_its_order_is_reported_and_only_for_hostkeeper() {
     let s = SelfRig::new("converge-no-id");
     for (step, line) in HOOK_LINES {
         s.rig.launcher.replies(HK, step, &[(0, line)]);
     }
-    s.rig.running("web", "1.0.0");
     let old = s.daemon_running_as(OLD, &mac_job());
     let reply = old.order(&support::update(HK, NEW, &support::d(), 3));
     assert_eq!(reply.refusal(), None, "{reply:?}");
@@ -292,15 +366,12 @@ fn only_a_settled_wait_that_names_its_order_is_reported_and_only_for_hostkeeper(
     let unnamed = text.replace(&format!(",\n      {id}"), "");
     assert!(!unnamed.contains("order_id"), "{unnamed}");
     fs::write(&path, unnamed).expect("the record of an older daemon");
-
     let new = s.daemon_running_as(NEW, &mac_job());
     assert_eq!(
         new.settle_self_update().expect("settled"),
         Settled::Confirmed
     );
-    assert_eq!(new.ctx().settled_order(), None);
-    let listed = recorded(new.ctx(), ServiceName::new(HK).expect("a name")).expect("listed");
-    assert_eq!(listed.last_result, None);
+    assert_eq!(recorded(new.ctx(), hk()).expect("listed").last_result, None);
 
     // An order that carries no id keeps none in its wait, and its verdict is reported by no
     // binary either.
@@ -324,7 +395,7 @@ fn only_a_settled_wait_that_names_its_order_is_reported_and_only_for_hostkeeper(
         new.settle_self_update().expect("settled"),
         Settled::Confirmed
     );
-    assert_eq!(new.ctx().settled_order(), None);
+    assert_eq!(recorded(new.ctx(), hk()).expect("listed").last_result, None);
 
     // The same update with its id kept: reported for hostkeeper, and for no other service.
     let s = SelfRig::new("converge-named");
@@ -332,30 +403,24 @@ fn only_a_settled_wait_that_names_its_order_is_reported_and_only_for_hostkeeper(
         s.rig.launcher.replies(HK, step, &[(0, line)]);
     }
     s.rig.running("web", "1.0.0");
-    let old = s.daemon_running_as(OLD, &mac_job());
-    assert_eq!(old.ctx().settled_order(), None);
-    old.order(&support::update(HK, NEW, &support::d(), 3));
-    let new = s.daemon_running_as(NEW, &mac_job());
+    s.daemon_running_as(OLD, &mac_job())
+        .order(&support::update(HK, NEW, &support::d(), 3));
+    let new = Arc::new(s.daemon_running_as(NEW, &mac_job()));
     assert_eq!(
         new.settle_self_update().expect("settled"),
         Settled::Confirmed
     );
+    let web = ServiceName::new("web").expect("a name");
     assert_eq!(
-        new.ctx().settled_order(),
-        Some(SettledOrder {
-            order_id: "order-hostkeeper-0.2.0".to_owned(),
-            order_try: 3,
-            target: NEW.to_owned(),
-            verdict: Verdict::Succeeded {
-                promotion_pending: false
-            },
-            reason: None,
-        })
+        recorded(new.ctx(), web.clone())
+            .expect("listed")
+            .last_result,
+        None
     );
-    let web = recorded(new.ctx(), ServiceName::new("web").expect("a name")).expect("listed");
-    assert_eq!(web.last_result, None);
-    let hk = recorded(new.ctx(), ServiceName::new(HK).expect("a name")).expect("listed");
-    let result = hk.last_result.expect("the settled verdict");
+    let result = recorded(new.ctx(), hk())
+        .expect("listed")
+        .last_result
+        .expect("the settled verdict");
     assert_eq!(
         (
             result.order.id.as_str(),
@@ -364,19 +429,31 @@ fn only_a_settled_wait_that_names_its_order_is_reported_and_only_for_hostkeeper(
             result.outcome,
             result.forced
         ),
-        (
-            "order-hostkeeper-0.2.0",
-            3,
-            NEW,
-            hostkeeper_link::Outcome::Succeeded,
-            false
-        )
+        ("order-hostkeeper-0.2.0", 3, NEW, Outcome::Succeeded, false)
     );
-    // A second start of the same binary settles nothing and keeps nothing to report.
-    let again = s.daemon_running_as(NEW, &mac_job());
-    assert_eq!(
-        again.settle_self_update().expect("settled"),
-        Settled::NotPending
-    );
-    assert_eq!(again.ctx().settled_order(), None);
+    let records = DaemonRecords::new(Arc::clone(&new));
+    let other = |id: &str, order_try| OrderRef {
+        id: OrderId::new(id).expect("an id"),
+        order_try,
+    };
+    for (service, order) in [
+        (hk(), other("order-hostkeeper-0.1.9", 3)),
+        (hk(), other("order-hostkeeper-0.2.0", 2)),
+        (web, other("order-hostkeeper-0.2.0", 3)),
+    ] {
+        records
+            .acknowledged(&service, &order)
+            .expect("nothing to write");
+        assert_eq!(
+            recorded(new.ctx(), hk()).expect("listed").last_result,
+            Some(result.clone()),
+            "{service} {order:?}"
+        );
+    }
+    records.acknowledged(&hk(), &result.order).expect("written");
+    assert_eq!(recorded(new.ctx(), hk()).expect("listed").last_result, None);
+}
+
+fn hk() -> ServiceName {
+    ServiceName::new(HK).expect("a name")
 }

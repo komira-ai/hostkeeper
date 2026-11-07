@@ -474,6 +474,26 @@ impl MacSelfHost {
         }
     }
 
+    /// Fails at once, with the daemon's output, when any heartbeat reports a refusal of an order
+    /// of hostkeeper, whatever its id (an order the coordinator in process gave).
+    pub fn check_no_refusal(&self) {
+        for beat in self.beats() {
+            let refused = beat["services"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|service| {
+                    let last = &service["last_update"];
+                    service["name"] == HK
+                        && last["outcome"] == "failed"
+                        && last["reason"] != AWAITING_REASON
+                });
+            if let Some(service) = refused {
+                panic!("an order was refused: {service}\n{}", self.logs());
+            }
+        }
+    }
+
     /// Waits until the step record of hostkeeper is finished, and gives it.
     pub fn settled(&self) -> Record {
         let mut found = None;

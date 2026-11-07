@@ -58,10 +58,12 @@ verdict unsent until the service is listed, which a refused install never is.
 
 The daemon that runs a self-update exits before its verdict (`Deferred`, `awaiting_restart`)
 reaches a heartbeat, and the coordinator ends the order once the host runs its target, so it never
-orders it again. The new binary reports the verdict instead: the daemon that ran the order keeps
-the order's id in its step record, and the binary that settles the update at its start sends the
-settled `Succeeded` (or, after a fallback, the `Failed` `self_update_fallback`) under that id and
-try in its first heartbeat, until the coordinator acknowledges it. The coordinator then holds it as
+orders it again. The next binary reports the verdict instead: the daemon that ran the order keeps
+the order's id in its step record, the settlement keeps it beside the settled verdict (the new
+binary's `Succeeded`, or after a fallback the `Failed` `self_update_fallback`, whether the
+fallback unit or job or the previous binary's start settled it), and every start of the daemon
+sends that verdict under that id and try, from its first heartbeat until the coordinator
+acknowledges it; the record then stops keeping it. The coordinator then holds it as
 the host's last update of hostkeeper, in place of an older verdict. A daemon keeps the id from the
 release that carries that change on, so a self-update an earlier daemon ran reports no verdict,
 and the coordinator keeps showing the host's older verdict until hostkeeper's next self-update.

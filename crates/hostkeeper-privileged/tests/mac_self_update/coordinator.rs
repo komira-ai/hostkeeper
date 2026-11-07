@@ -7,9 +7,12 @@
 //! its answer to `link/answer.json`, which the fixture's link reads at the daemon's next
 //! heartbeat (`tests/bin/selfupdate_daemon.rs`).
 //!
-//! The heartbeat is read as the coordinator's JSON route reads it (`read_heartbeat`). What this
-//! leaves out is the transport (TLS, the certificate of an enrolled host) and the moment of the
-//! answer: the daemon reads each answer one heartbeat later than a real link would. The
+//! Each line of `beats.jsonl` is the loop's own JSON of the heartbeat (`Heartbeat::to_json`):
+//! [`wire_beat`] reads it into the coordinator's heartbeat, field by field as the link's mapping
+//! to the wire does (the agent's version and health at the top level, each service's facts in
+//! its entry, a `deferred` verdict sent as `failed`). What this leaves out is the transport
+//! (TLS, the certificate of an enrolled host) and the moment of the answer: the daemon reads
+//! each answer one heartbeat later than a real link would. The
 //! coordinator's clock stays at one second, so no host goes quiet between two heartbeats.
 
 use std::fs;
@@ -23,6 +26,7 @@ use hostkeeper_coordinator::ops::OpsStore;
 use hostkeeper_coordinator::service::{Clock, Coordinator};
 use hostkeeper_coordinator::services::Services;
 use hostkeeper_coordinator::verdict_file::{VerdictFile, verdicts_path};
+use hostkeeper_hook::{Class, Phase};
 use hostkeeper_oidc::testkit::{
     STATIC_ISSUER, StaticKeys, clock, config_text, jwks_of, keys, spent,
 };
@@ -30,7 +34,8 @@ use hostkeeper_oidc::{OidcConfig, Verifier};
 use hostkeeper_proto::hostkeeper::agent::v1 as pb;
 use hostkeeper_proto::hostkeeper::operator::v1::{GetHostRequest, HostService};
 use hostkeeper_wire::identity::Identity;
-use hostkeeper_wire::wire::read_heartbeat;
+use hostkeeper_wire::version::Version;
+use hostkeeper_wire::wire::{self, ServiceBeat, UpdateResult};
 use serde_json::{Value, json};
 
 /// The operator token of the coordinator.
@@ -115,15 +120,17 @@ impl Relay {
             false => lines.len().saturating_sub(1),
         };
         for line in &lines[self.read.min(whole)..whole] {
-            let read = read_heartbeat(line.as_bytes(), None)
-                .unwrap_or_else(|e| panic!("the coordinator does not read {line}: {e}"));
+            let json: Value = serde_json::from_str(line)
+                .unwrap_or_else(|e| panic!("a heartbeat line that is not JSON: {e}: {line}"));
+            let beat = wire_beat(&json)
+                .unwrap_or_else(|| panic!("a heartbeat the coordinator does not read: {line}"));
             let who = Identity {
                 host_id: HOST.parse().expect("a host id"),
                 role: "daemon".parse().expect("a role"),
             };
             let (answer, order) = self
                 .coordinator
-                .heartbeat_with_orders(who, read.beat)
+                .heartbeat_with_orders(who, beat)
                 .unwrap_or_else(|e| panic!("the coordinator refused the heartbeat: {e:?}"));
             let acks: Vec<Value> = answer
                 .acks
@@ -200,4 +207,110 @@ fn order_json(order: &pb::Order) -> String {
         "digest": target.2,
     })
     .to_string()
+}
+
+/// A version of the heartbeat's JSON.
+fn version(value: &Value) -> Option<Version> {
+    Version::parse(value.as_str()?).ok()
+}
+
+/// A health of the heartbeat's JSON (`healthy`, `unhealthy`, `absent`).
+fn health(value: &Value) -> Option<wire::Health> {
+    match value.as_str()? {
+        "healthy" => Some(wire::Health::Healthy),
+        "unhealthy" => Some(wire::Health::Unhealthy),
+        "absent" => Some(wire::Health::Absent),
+        _ => None,
+    }
+}
+
+/// A verdict of the heartbeat's JSON as the wire carries it: `succeeded`, or `failed` for a
+/// failure and a deferral, with its phase, class, reason, order id and try.
+fn verdict(value: &Value) -> Option<UpdateResult> {
+    let outcome = match value["outcome"].as_str()? {
+        "succeeded" => wire::Outcome::Succeeded,
+        _ => wire::Outcome::Failed,
+    };
+    let phase = serde_json::from_value::<Phase>(value["phase"].clone())
+        .ok()
+        .map(|phase| match phase {
+            Phase::BeforeCommit => wire::Phase::BeforeCommit,
+            Phase::GateRelease => wire::Phase::GateRelease,
+            Phase::GateEnvironment => wire::Phase::GateEnvironment,
+            Phase::AfterCommit => wire::Phase::AfterCommit,
+            Phase::Halt => wire::Phase::Halt,
+        });
+    let class = serde_json::from_value::<Class>(value["class"].clone())
+        .ok()
+        .map(|class| match class {
+            Class::Release => wire::Class::Release,
+            Class::Environment => wire::Class::Environment,
+        });
+    Some(UpdateResult {
+        phase,
+        class,
+        reason: value["reason"].as_str().and_then(wire::Token::parse),
+        order_id: value["order_id"].as_str().and_then(wire::OrderId::parse),
+        order_try: value["order_try"].as_u64(),
+        ..UpdateResult::new(version(&value["target"])?, outcome)
+    })
+}
+
+/// One service entry of the heartbeat's JSON.
+fn service_beat(value: &Value) -> Option<ServiceBeat> {
+    Some(ServiceBeat {
+        name: value["name"].as_str()?.to_owned(),
+        version: version(&value["version"])?,
+        health: health(&value["health"])?,
+        last_update: value
+            .get("last_update")
+            .filter(|v| !v.is_null())
+            .map(verdict)
+            .flatten(),
+        updating: version(&value["updating"]),
+        step: None,
+        commit: None,
+        step_secs: std::collections::BTreeMap::new(),
+        promotion_pending: false,
+        deferred: None,
+        record_try: value["record_try"].as_u64(),
+    })
+}
+
+/// The loop's JSON of a heartbeat (`Heartbeat::to_json`) as the coordinator reads it: the
+/// agent's version and a healthy top level, each service entry, the features announced and the
+/// agent; `None` when a field the coordinator needs is missing or malformed.
+pub fn wire_beat(value: &Value) -> Option<wire::Heartbeat> {
+    let agent_version = version(&value["agent"]["version"])?;
+    let services = value["services"]
+        .as_array()?
+        .iter()
+        .map(service_beat)
+        .collect::<Option<Vec<_>>>()?;
+    Some(wire::Heartbeat {
+        platform: hostkeeper_wire::Platform::parse(value["platform"].as_str()?)?,
+        version: agent_version.clone(),
+        health: wire::Health::Healthy,
+        last_update: None,
+        updating: None,
+        services: Some(services),
+        agent_features: value["agent_features"]
+            .as_array()?
+            .iter()
+            .filter_map(|name| name.as_str().map(str::to_owned))
+            .collect(),
+        step: None,
+        commit: None,
+        step_secs: std::collections::BTreeMap::new(),
+        promotion_pending: false,
+        deferred: None,
+        agent: Some(wire::Agent {
+            name: wire::AgentName::parse(value["agent"]["name"].as_str()?)?,
+            version: agent_version,
+        }),
+        sent_unix: value["sent_unix"].as_u64(),
+        cert_not_after_unix: None,
+        last_renew_error: None,
+        record_try: None,
+    })
 }

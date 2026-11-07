@@ -258,13 +258,14 @@ fn a_service_with_no_current_or_an_unreadable_manifest_is_not_observed() {
     let rig = Rig::new("observer-input");
     let observer = &rig.observer;
     let (packages, web) = (&rig.packages, name("web"));
+    let bin = &binary_dir(&rig.state);
     rig.stage("web", "1.0.0");
-    assert_eq!(service_input(packages, &OWN, &web), None);
-    assert_eq!(observe(observer, packages, &OWN, &web), None);
+    assert_eq!(service_input(packages, bin, &OWN, &web), None);
+    assert_eq!(observe(observer, packages, bin, &OWN, &web), None);
 
     rig.store.link("web", "current", "1.0.0");
     assert_eq!(
-        service_input(packages, &OWN, &web),
+        service_input(packages, bin, &OWN, &web),
         Some(ServiceInput {
             service: "web".to_owned(),
             current: Some(Current {
@@ -277,7 +278,7 @@ fn a_service_with_no_current_or_an_unreadable_manifest_is_not_observed() {
 
     installed(&rig, "api", "1.0.0", true);
     assert_eq!(
-        service_input(packages, &OWN, &name("api")).and_then(|input| input.current),
+        service_input(packages, bin, &OWN, &name("api")).and_then(|input| input.current),
         Some(Current {
             run: vec!["api.service".to_owned()],
             health_url: Some(URL.to_owned()),
@@ -285,9 +286,9 @@ fn a_service_with_no_current_or_an_unreadable_manifest_is_not_observed() {
     );
 
     fs::write(packages.join("web/1.0.0/manifest.toml"), "{").expect("break the manifest");
-    assert_eq!(service_input(packages, &OWN, &web), None);
+    assert_eq!(service_input(packages, bin, &OWN, &web), None);
     rig.store.link("web", "current", "9.9.9");
-    assert_eq!(service_input(packages, &OWN, &web), None);
+    assert_eq!(service_input(packages, bin, &OWN, &web), None);
 }
 
 /// A `Live` observation with a recorded version `1.0.0`.
@@ -696,7 +697,14 @@ fn the_observer_confirms_the_version_of_a_mac_service() {
         &own_service(&rig, &Label::daemon().to_string()),
     );
 
-    let seen = observe(&observer, &rig.packages, &OWN, &name("web")).expect("observed");
+    let seen = observe(
+        &observer,
+        &rig.packages,
+        &binary_dir(&rig.state),
+        &OWN,
+        &name("web"),
+    )
+    .expect("observed");
     assert_eq!(
         (seen.state.clone(), seen.version.clone()),
         (
@@ -711,7 +719,14 @@ fn the_observer_confirms_the_version_of_a_mac_service() {
 
     rig.process.set(4243, 78, stat(), RUNNING);
     rig.manager.set("web", ActiveState::Active, Some(4243));
-    let seen = observe(&observer, &rig.packages, &OWN, &name("web")).expect("observed");
+    let seen = observe(
+        &observer,
+        &rig.packages,
+        &binary_dir(&rig.state),
+        &OWN,
+        &name("web"),
+    )
+    .expect("observed");
     assert_eq!(seen.reason_token(), Some("version_mismatch"));
 }
 

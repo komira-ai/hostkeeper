@@ -52,10 +52,12 @@
 //! `daemon_too_old`); any other binary records it `Failed` and its version bad. The binary that
 //! ran the order exited before its `Deferred` reached a heartbeat, and the coordinator ends the
 //! order once the host runs its target, so it never orders it again for a resend to be
-//! answered: the binary that settles it reports the settled verdict itself, under the order id
-//! the wait kept and the record's try ([`SettledOrder`]), from its first heartbeat until the
-//! coordinator acknowledges it. A wait written by a daemon from before the id was kept names
-//! no order, and its verdict is reported by no binary.
+//! answered: the wait keeps the order's id, the settlement (by this start, or by the fallback
+//! verb before the previous binary starts) keeps it in the finished record, and every start
+//! of a daemon lists the record's verdict under that id and the record's try for the heartbeat
+//! to send until the coordinator acknowledges it (`crate::link_adapters::recorded`). A wait
+//! written by a daemon from before the id was kept names no order, and its verdict is reported
+//! by no binary.
 //!
 //! The protocol rule: a new binary of protocol `P` is accepted when
 //! `SELF_UPDATE_PROTOCOL <= P <= SELF_UPDATE_PROTOCOL + 1`. "Can fall back from" means that the
@@ -71,7 +73,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_hook::{Class, Phase, Verdict};
 use hostkeeper_steps::record::{
-    AwaitingRestart, Loaded, REASON_SELF_UPDATE_FALLBACK, Record, RecordError, State,
+    AwaitingRestart, Loaded, REASON_SELF_UPDATE_FALLBACK, RecordError, State,
 };
 use hostkeeper_steps::selfupdate::settle_with;
 use hostkeeper_steps::{
@@ -234,18 +236,6 @@ pub(crate) fn runner_for(runner: StepRunner, service: &ServiceName) -> StepRunne
         true => runner.with_held_success(),
         false => runner,
     }
-}
-
-/// The verdict of the update of hostkeeper itself that this binary settled at its start: the
-/// order it ran for (the id the wait kept, [`AwaitingRestart::order_id`], and the record's try),
-/// the version it switched to, and the verdict the settlement wrote, with its reason.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SettledOrder {
-    pub order_id: String,
-    pub order_try: u64,
-    pub target: String,
-    pub verdict: Verdict,
-    pub reason: Option<String>,
 }
 
 /// The verdict a version that fell back is answered with: `Failed` after the commit, of class
@@ -452,9 +442,6 @@ impl Daemon {
     /// record of an old updater (`updater_old`, `daemon_too_old`) is removed first, so that the
     /// next order of it runs and `Status` no longer reports it; a record that cannot be cleared
     /// is an alert. [`Settled::NotPending`] when the service `hostkeeper` has no state directory.
-    ///
-    /// A confirmation or a fallback of a wait that names its order is kept as the verdict the
-    /// heartbeat reports ([`Ctx::settled_order`]).
     pub fn settle_self_update(&self) -> Result<Settled, SelfUpdateError> {
         let ctx = self.ctx();
         let services = installed::service_dirs(&ctx.dirs.state)?;
@@ -474,37 +461,6 @@ impl Daemon {
             }
             Ok(())
         };
-        let store = ctx.store(service);
-        let waited = match store.load()? {
-            Loaded::Current(rec) => rec.progress.awaiting_restart.and_then(|a| a.order_id),
-            Loaded::Absent | Loaded::Newer { .. } => None,
-        };
-        let settled = settle_with(&layout, &store, &running, &mut clear)?;
-        let finished = match (&settled, waited) {
-            (Settled::Confirmed | Settled::FellBack, Some(order_id)) => match store.load()? {
-                Loaded::Current(rec) => settled_order(order_id, &rec),
-                Loaded::Absent | Loaded::Newer { .. } => None,
-            },
-            _ => None,
-        };
-        if let Some(finished) = finished {
-            ctx.keep_settled(finished);
-        }
-        Ok(settled)
+        settle_with(&layout, &ctx.store(service), &running, &mut clear)
     }
-}
-
-/// The verdict of the order `order_id` that the settled record `rec` holds; `None` when the
-/// record names no try or holds no verdict.
-fn settled_order(order_id: String, rec: &Record) -> Option<SettledOrder> {
-    let State::Finished { verdict, reason } = &rec.state else {
-        return None;
-    };
-    Some(SettledOrder {
-        order_id,
-        order_try: rec.order_try?,
-        target: rec.target_version.clone(),
-        verdict: verdict.clone(),
-        reason: reason.clone(),
-    })
 }

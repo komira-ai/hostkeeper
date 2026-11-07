@@ -155,6 +155,7 @@ fn the_coordinator_bakes_and_converges_a_mac_that_updated_itself_under_launchd()
     );
     let mut convergence = Value::Null;
     wait("the coordinator reads hostkeeper converged", || {
+        host.check_no_refusal();
         coordinator.relay();
         convergence = coordinator.convergence(HK);
         convergence["state"] == "converged"

@@ -61,8 +61,14 @@ const PROC: &str = "/proc";
 /// The part of `service` the observer reads: the version `current` names as the recorded
 /// version, and the manifest of that version. `None` when there is no `current`, or its manifest
 /// does not load for `own`.
+///
+/// For the daemon's own service, `hostkeeper`, the recorded version is the one `current` of
+/// the binary directory `binaries` names, the binary its unit starts, when it names one: the
+/// package's `current` names the release the last update placed, which is not the binary that
+/// runs between the switch and the restart, nor after a fallback put the previous binary back.
 pub fn service_input(
     packages: &Path,
+    binaries: &Path,
     own: &HostkeeperVersion,
     service: &ServiceName,
 ) -> Option<ServiceInput> {
@@ -74,10 +80,13 @@ pub fn service_input(
         platform: hostkeeper_config::platform::Platform::current(),
     };
     let manifest = Manifest::load(&dir, &expected, own).ok()?;
+    let started = (service.as_str() == SELF_SERVICE)
+        .then(|| Layout::new(binaries).current().ok().flatten())
+        .flatten();
     Some(ServiceInput {
         service: service.to_string(),
         current: Some(Current::from_manifest(&manifest)),
-        recorded_version: Some(version.to_string()),
+        recorded_version: Some(started.unwrap_or_else(|| version.to_string())),
     })
 }
 
@@ -85,10 +94,12 @@ pub fn service_input(
 pub fn observe(
     observer: &Observer,
     packages: &Path,
+    binaries: &Path,
     own: &HostkeeperVersion,
     service: &ServiceName,
 ) -> Option<Observation> {
-    service_input(packages, own, service).map(|input| observer.observe(&input, STATUS_DEADLINE))
+    service_input(packages, binaries, own, service)
+        .map(|input| observer.observe(&input, STATUS_DEADLINE))
 }
 
 /// The health the heartbeat reports of the service `status` describes, and its version, as
@@ -109,10 +120,12 @@ pub fn service_health(status: &ServiceStatus) -> Option<(Health, Option<String>)
 /// it runs no unit, the command is not through `current` or has a `..`, or the file cannot be
 /// read.
 ///
-/// Given the daemon's binary directory ([`SealedExe::with_binary_dir`]), a sealed version of the
+/// Given the daemon's binary directory ([`SealedExe::with_binary_dir`]), a version of the
 /// service `hostkeeper` is instead the file `versions/<version>` of that directory: the copy of
-/// the release's binary the self-update staged, which the daemon's unit starts through the
-/// directory's `current` on both platforms. It has no digest when that file cannot be read.
+/// the release's binary the self-update staged (or the first binary the deb or the pkg seeded),
+/// which the daemon's unit starts through the directory's `current` on both platforms, whether
+/// or not the package of that version is still installed. It has no digest when that file
+/// cannot be read.
 #[derive(Debug)]
 pub struct SealedExe {
     packages: PathBuf,
@@ -148,13 +161,13 @@ impl SealedExe {
             version: Version::new(version).ok()?,
             platform: hostkeeper_config::platform::Platform::current(),
         };
+        if let Some(binaries) = self.binaries.as_deref().filter(|_| service == SELF_SERVICE) {
+            return Some(Layout::new(binaries).version_path(expected.version.as_str()));
+        }
         let service_dir = self.packages.join(service);
         let sealed = fs::metadata(service_dir.join(format!("{version}.seal")))
             .is_ok_and(|seal| seal.is_file());
         sealed.then_some(())?;
-        if let Some(binaries) = self.binaries.as_deref().filter(|_| service == SELF_SERVICE) {
-            return Some(Layout::new(binaries).version_path(version));
-        }
         let dir = service_dir.join(version);
         let manifest = Manifest::load(&dir, &expected, &self.own).ok()?;
         let unit = manifest.run.first()?;

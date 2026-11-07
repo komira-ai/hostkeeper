@@ -131,6 +131,11 @@ fn a_verdict_survives_a_daemon_restart_and_is_resent() {
     assert_eq!(last_update(&rig, 0), Some(kept.clone()));
     assert_eq!(last_update(&rig, 1), Some(kept));
     assert_eq!(last_update(&rig, 2), None);
+    // The records are told, once, so a record that keeps the verdict to report stops.
+    assert_eq!(
+        rig.world.records.acknowledged_calls(),
+        [(service("x"), reference("o-1", 1))]
+    );
     // The coordinator's resend of the order goes to the executor, which answers it from its
     // record (the try rules are the executor's); the loop has no memory of it to answer with.
     assert_eq!(rig.world.dispatch.pending(), 1);
@@ -351,4 +356,35 @@ fn verdicts_acknowledged_newest_first_are_not_sent_again_when_the_service_return
         let beats = rig.world.link.beats();
         assert_eq!(beats[beats.len() - 1].services[0].last_update, sent);
     }
+}
+
+/// Catches an acknowledgement the step records could not keep passing in silence, or stopping
+/// the loop: it is logged with the order and the error, and the verdict is not sent again in
+/// this run.
+#[test]
+fn an_acknowledgement_the_records_cannot_keep_is_logged() {
+    let rig = Rig::new("resend-unkept");
+    let order = update("o-1", 1, "x", "2.0");
+    let kept = verdict(&order, Outcome::Succeeded);
+    rig.install(vec![RecordedService {
+        last_result: Some(kept),
+        ..recorded("x", "1.0")
+    }]);
+    rig.world
+        .records
+        .fail_acknowledged(Some(std::io::ErrorKind::PermissionDenied));
+    let mut heartbeater = rig.heartbeater();
+    rig.world
+        .link
+        .answer(Ok(acknowledging(vec![reference("o-1", 1)])));
+    heartbeater.beat_once();
+    heartbeater.beat_once();
+    assert_eq!(last_update(&rig, 1), None);
+    assert_eq!(
+        rig.world.log.lines(),
+        [format!(
+            "error: the acknowledgement of order o-1 try 1 of x is not kept: {}",
+            std::io::Error::from(std::io::ErrorKind::PermissionDenied)
+        )]
+    );
 }

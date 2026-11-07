@@ -13,8 +13,9 @@ use hostkeeper_hook::{Class, Phase, Step, Verdict};
 use hostkeeper_steps::record::{HookSel, Loaded, Progress, RECORD_FILE, SCHEMA, State};
 use hostkeeper_steps::selfupdate::{
     FollowOn, Layout, START_LIMIT_BURST, SelfUpdateError, fallback_unit, follow_on, main_dropin,
+    settle,
 };
-use hostkeeper_steps::{ArtifactError, Finished, Record, RecordStore, Staged};
+use hostkeeper_steps::{ArtifactError, Finished, Record, RecordStore, Settled, Staged};
 use support::Scratch;
 
 fn binary(dir: &Path, name: &str, text: &str) -> PathBuf {
@@ -719,4 +720,84 @@ fn the_wait_for_the_restart_keeps_the_order_id_it_was_given() {
         panic!("no record");
     };
     assert_eq!(rec.progress.awaiting_restart.and_then(|a| a.order_id), None);
+}
+
+/// Catches a settlement that drops the order the update ran for, an acknowledgement that clears
+/// another order's verdict, and a record that writes the new key when it has nothing to report:
+/// a confirmed and a fallen-back settlement each keep the wait's order id as the one to report;
+/// an acknowledgement of another id or another try leaves it, the right one clears it (and
+/// writes the record without the key), and a second one writes nothing; a wait with no id
+/// settles with none to report.
+#[test]
+fn a_settlement_keeps_the_order_to_report_until_its_verdict_is_acknowledged() {
+    for (running, outcome) in [("v2", Settled::Confirmed), ("v1", Settled::FellBack)] {
+        let s = Scratch::new(&format!("su-report-{running}"));
+        let layout = Layout::new(&s.path().join("bin"));
+        layout.stage("v1", &binary(s.path(), "a", "a")).unwrap();
+        layout.switch("v1").unwrap();
+        let v2 = release(s.path(), "v2", &binary(s.path(), "b", "b"));
+        let store = updating(&s, "v2");
+        let id = Some("update-0123abcd");
+        follow_on(
+            &ok(),
+            &store,
+            &layout,
+            "v1",
+            "v2",
+            &v2,
+            Path::new(UPDATER),
+            id,
+        )
+        .unwrap();
+        if running == "v1" {
+            layout.flip_back().unwrap();
+        }
+        assert_eq!(settle(&layout, &store, running).unwrap(), outcome);
+        let reported = |store: &RecordStore| match store.load().unwrap() {
+            Loaded::Current(rec) => rec.progress.report_order_id,
+            _ => panic!("no record"),
+        };
+        assert_eq!(reported(&store).as_deref(), id, "{running}");
+
+        assert!(!store.verdict_acknowledged("update-other", 1).unwrap());
+        assert!(!store.verdict_acknowledged("update-0123abcd", 2).unwrap());
+        assert_eq!(reported(&store).as_deref(), id, "{running}");
+        assert!(store.verdict_acknowledged("update-0123abcd", 1).unwrap());
+        assert_eq!(reported(&store), None, "{running}");
+        let text = fs::read_to_string(store.dir().join(RECORD_FILE)).unwrap();
+        assert!(!text.contains("report_order_id"), "{text}");
+        assert!(!store.verdict_acknowledged("update-0123abcd", 1).unwrap());
+    }
+
+    let s = Scratch::new("su-report-none");
+    let layout = Layout::new(&s.path().join("bin"));
+    layout.stage("v1", &binary(s.path(), "a", "a")).unwrap();
+    layout.switch("v1").unwrap();
+    let v2 = release(s.path(), "v2", &binary(s.path(), "b", "b"));
+    let store = updating(&s, "v2");
+    follow_on(
+        &ok(),
+        &store,
+        &layout,
+        "v1",
+        "v2",
+        &v2,
+        Path::new(UPDATER),
+        None,
+    )
+    .unwrap();
+    assert_eq!(settle(&layout, &store, "v2").unwrap(), Settled::Confirmed);
+    let Loaded::Current(rec) = store.load().unwrap() else {
+        panic!("no record");
+    };
+    assert_eq!(rec.progress.report_order_id, None);
+    assert!(!store.verdict_acknowledged("update-0123abcd", 1).unwrap());
+    // No record at all: nothing to acknowledge.
+    let empty = s.path().join("empty");
+    fs::create_dir_all(&empty).unwrap();
+    assert!(
+        !RecordStore::new(&empty)
+            .verdict_acknowledged("x", 1)
+            .unwrap()
+    );
 }

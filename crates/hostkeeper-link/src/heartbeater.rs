@@ -21,7 +21,8 @@
 //!    `deferred-v1`. Step records that name a service
 //!    twice send nothing. A service listed again after it was not takes the verdict its step
 //!    record kept, unless that verdict was acknowledged, so a restart resends it; a kept
-//!    deferred verdict with no deferral of its target on record starts one. A service the
+//!    deferred verdict with no deferral of its target on record starts one, and any other
+//!    hooked one ends a deferral of its target, as an order that ran here does. A service the
 //!    records do not list that has a verdict to send (an install that ended before it placed
 //!    anything, as a refusal does, or a service that left the records while its order ran) is
 //!    listed too, absent at the verdict's target, with its units absent and that verdict: the
@@ -34,7 +35,9 @@
 //! 4. [`fit`] keeps the bound; a heartbeat over it is refused and logged, never sent cut short.
 //! 5. The heartbeat goes out through [`CoordinatorLink::heartbeat`], the one outbound call.
 //! 6. From the reply: the advertised features replace the last ones; a verdict whose service,
-//!    order id and try the reply acknowledges is not sent again; with `halt-v1`, a halt
+//!    order id and try the reply acknowledges is not sent again, and the step records are told
+//!    ([`ServiceRecords::acknowledged`]), so a record that keeps it to report stops; with
+//!    `halt-v1`, a halt
 //!    generation newer than the held one is raised in [`HeldHalts`]; and the order goes to the
 //!    executor.
 //!
@@ -46,7 +49,8 @@
 //! it hears, and an ack also ends every verdict of the service older than the one it names (the
 //! newest, sent before the reply that advertised the feature): an older one heard after it
 //! would stand in its place. Across
-//! a restart only the step record's verdict, the last order's, comes back: the coordinator
+//! a restart only the verdict the step records give back comes back (the last order's, or the
+//! settled update of the daemon itself, which the binary that ran it never sent): the coordinator
 //! orders a host only when it has no outstanding order (design 8.1), and after its own restart
 //! it rebuilds from heartbeats before it orders (8.2), so an order's verdict has reached it
 //! before the next order of the host is issued, and an earlier completed verdict of the
@@ -387,15 +391,23 @@ impl Heartbeater {
         if counted.is_some_and(|refs| refs.contains(&result.order)) {
             return;
         }
-        if let Outcome::Deferred { retry_after_secs } = result.outcome {
-            let log = self.ports.log.as_ref();
-            let on_record = self.book.get(service, now, log);
-            // A deferral of the same target on record, ended or not, is this verdict's: its
-            // retry time stands, and one that has passed is not started again.
-            if !on_record.is_some_and(|deferral| deferral.target == result.target) {
-                self.book
-                    .set(service, deferral_of(&result, now, retry_after_secs), log);
+        let log = self.ports.log.as_ref();
+        match result.outcome {
+            Outcome::Deferred { retry_after_secs } => {
+                let on_record = self.book.get(service, now, log);
+                // A deferral of the same target on record, ended or not, is this verdict's: its
+                // retry time stands, and one that has passed is not started again.
+                if !on_record.is_some_and(|deferral| deferral.target == result.target) {
+                    self.book
+                        .set(service, deferral_of(&result, now, retry_after_secs), log);
+                }
             }
+            // As when the order ran in this process ([`Self::finish`]): a hooked verdict ends a
+            // deferral of its target, such as one the binary before a restart wrote for it.
+            Outcome::Succeeded | Outcome::Failed if !result.forced => {
+                self.book.end(service, &result.target, now, log);
+            }
+            Outcome::Succeeded | Outcome::Failed => {}
         }
         self.push(service, result);
     }
@@ -552,6 +564,7 @@ impl Heartbeater {
         } = reply;
         self.advertised = Features::of(&features);
         let in_order = self.advertised.has(Feature::VerdictAcksV1);
+        let mut counted_now = Vec::new();
         for (service, queue) in &mut self.pending {
             let acks = |result: &OrderResult| {
                 acknowledged
@@ -569,6 +582,7 @@ impl Heartbeater {
                 at += 1;
                 let counted = acks(result);
                 if counted {
+                    counted_now.push((service.clone(), result.order.clone()));
                     let refs = self.acked.entry(service.clone()).or_default();
                     refs.push(result.order.clone());
                     if refs.len() > ACKED_KEPT {
@@ -579,6 +593,18 @@ impl Heartbeater {
             });
         }
         self.pending.retain(|_, queue| !queue.is_empty());
+        for (service, order) in counted_now {
+            let Ok(name) = ServiceName::new(&service) else {
+                continue;
+            };
+            if let Err(e) = self.ports.records.acknowledged(&name, &order) {
+                self.log(&format!(
+                    "error: the acknowledgement of order {} try {} of {service} is not kept: {e}",
+                    order.id.as_str(),
+                    order.order_try
+                ));
+            }
+        }
         if self.advertised.has(Feature::HaltV1) {
             for (service, generation) in &halt_generations {
                 self.raise_halt(service, *generation);

@@ -35,7 +35,7 @@ use crate::observer;
 use crate::packages::Packages;
 use crate::prune::{ForceLockPoint, Prune};
 use crate::refusal::Refusal;
-use crate::selfupdate::{self, LauncherProbe, ProtocolProbe, Restart, SettledOrder};
+use crate::selfupdate::{self, LauncherProbe, ProtocolProbe, Restart};
 use crate::trusted_root::RootReport;
 use crate::verb::{HookedVerb, Verb};
 use crate::verbs;
@@ -136,27 +136,9 @@ pub struct Ctx {
     probe: Arc<dyn ProtocolProbe>,
     /// The daemon's request to exit so that its unit starts a new binary.
     restart: Restart,
-    /// The verdict of the update of hostkeeper itself this binary settled at its start, when its
-    /// order had an id ([`Daemon::settle_self_update`]): the heartbeat reports it, since the
-    /// binary that ran the order exited before it could.
-    settled: Mutex<Option<SettledOrder>>,
 }
 
 impl Ctx {
-    /// The verdict of the update of hostkeeper itself this binary settled at its start, when the
-    /// order it ran for had an id; `None` otherwise.
-    pub fn settled_order(&self) -> Option<SettledOrder> {
-        self.settled
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
-    }
-
-    /// Keeps `settled` as the verdict [`Ctx::settled_order`] gives.
-    pub(crate) fn keep_settled(&self, settled: SettledOrder) {
-        *self.settled.lock().unwrap_or_else(PoisonError::into_inner) = Some(settled);
-    }
-
     /// The probe a new hostkeeper binary's self-update protocol is asked with.
     pub fn probe(&self) -> &dyn ProtocolProbe {
         &*self.probe
@@ -621,7 +603,6 @@ impl Daemon {
                 stop: Arc::new(AtomicBool::new(false)),
                 probe,
                 restart: Restart::default(),
-                settled: Mutex::default(),
             },
             abort_tries: Mutex::default(),
         }
@@ -838,6 +819,7 @@ impl Daemon {
                     observation: observer::observe(
                         &ctx.observer,
                         &ctx.dirs.packages,
+                        &selfupdate::binary_dir(&ctx.dirs.state),
                         &ctx.own_version,
                         &service,
                     ),

@@ -95,8 +95,9 @@ fn printed(label: &str, state: &str, extra: &str) -> LaunchctlOutput {
 }
 
 /// A Mac host: hostkeeper's package of `version` installed and sealed with no `[units]` (as the
-/// macOS package is), the binary directory holding `staged`, each with its own bytes, and
-/// `current` naming `version`.
+/// macOS package is), the binary directory holding `staged`, each with its own bytes and switched
+/// to in turn, and its `current` naming `version` when it is one of them (the last of `staged`
+/// otherwise).
 fn mac_host(name: &str, version: &str, staged: &[&str]) -> Rig {
     let rig = Rig::new(name);
     rig.running(HK, version);
@@ -106,6 +107,7 @@ fn mac_host(name: &str, version: &str, staged: &[&str]) -> Rig {
         let file = rig.scratch.path().join(format!("binary-{one}"));
         fs::write(&file, format!("#!hostkeeper {one}\n")).expect("a binary");
         layout.stage(one, &file).expect("staged");
+        layout.switch(one).expect("current");
     }
     if staged.contains(&version) {
         layout.switch(version).expect("current");
@@ -150,7 +152,14 @@ fn version_file(rig: &Rig, version: &str) -> PathBuf {
 }
 
 fn of_hk(rig: &Rig, observer: &hostkeeper_observe::Observer) -> Observation {
-    observe(observer, &rig.packages, &OWN, &hk()).expect("hostkeeper is observed")
+    observe(
+        observer,
+        &rig.packages,
+        &binary_dir(&rig.state),
+        &OWN,
+        &hk(),
+    )
+    .expect("hostkeeper is observed")
 }
 
 /// Catches the farm's Mac reporting its own service `unmonitored`, at no version, unhealthy: the
@@ -203,13 +212,15 @@ fn a_mac_daemon_observes_its_own_launchd_job_live_healthy_and_at_its_version() {
     );
 }
 
-/// Catches the daemon's own job read as live, or healthy, when it is not, and a version
-/// confirmed that the job does not run: a job launchd has loaded but is not running (it exited
-/// with 1) is stopped; one launchd has not loaded is absent; a job whose process runs the
-/// previous version's file (a fallback put it back while the package names the new one) is
-/// `version_mismatch` and unhealthy; and one whose version has no file in the binary directory
-/// is live and healthy at an unconfirmed version, as a service whose executable the daemon cannot
-/// find.
+/// Catches the daemon's own job read as live, or healthy, when it is not, a version confirmed
+/// that the job does not run, and a fallback reported as a mismatch for as long as the package
+/// names the version that fell back: a job launchd has loaded but is not running (its last exit
+/// code is 1) is stopped; one launchd has not loaded is absent; a job whose process runs another file
+/// than the one `current` of the binary directory names (the moment between the switch and the
+/// restart) is `version_mismatch` and unhealthy; once a fallback put the previous binary back,
+/// the job is live, healthy and confirmed at that previous version; and one whose version has no
+/// file in the binary directory is live and healthy at an unconfirmed version, as a service
+/// whose executable the daemon cannot find.
 #[test]
 fn the_daemons_own_job_is_stopped_absent_or_mismatched_as_launchd_and_its_process_say() {
     let rig = mac_host("own-mac-states", RUNS, &[BEFORE, RUNS]);
@@ -247,11 +258,37 @@ fn the_daemons_own_job_is_stopped_absent_or_mismatched_as_launchd_and_its_proces
         (None, false, Unhealthy::VersionMismatch as i32)
     );
 
-    let unstaged = mac_host("own-mac-unstaged", RUNS, &[BEFORE]);
+    // A fallback put the previous binary back: the package still names the version that fell
+    // back, the binary directory's `current` the one the job runs, which is what is reported.
+    Layout::new(&binary_dir(&rig.state))
+        .flip_back()
+        .expect("the previous binary back");
     let seen = of_hk(
-        &unstaged,
-        &mac_observer(&unstaged, running, &version_file(&unstaged, BEFORE)),
+        &rig,
+        &mac_observer(&rig, running.clone(), &version_file(&rig, BEFORE)),
     );
+    assert_eq!(
+        (
+            seen.state.clone(),
+            seen.version.clone(),
+            seen.reason_token()
+        ),
+        (
+            ServiceState::Live,
+            VersionView::Recorded {
+                version: BEFORE.to_owned(),
+                confirmed: true,
+            },
+            None
+        )
+    );
+    assert!(service_state(&seen).healthy);
+
+    // No binary directory: the package's version, which no file confirms.
+    let unstaged = mac_host("own-mac-unstaged", RUNS, &[]);
+    let elsewhere = unstaged.scratch.path().join("hostkeeper");
+    fs::write(&elsewhere, "a binary the pkg put elsewhere").expect("a binary");
+    let seen = of_hk(&unstaged, &mac_observer(&unstaged, running, &elsewhere));
     assert_eq!(
         (seen.state.clone(), seen.reason_token()),
         (ServiceState::Live, Some("version_unconfirmed"))
@@ -292,7 +329,14 @@ fn only_hostkeeper_with_no_unit_of_its_own_is_observed_through_the_daemons_job()
         },
     );
     let web = ServiceName::new("web").expect("a name");
-    let seen = observe(&observer, &rig.packages, &OWN, &web).expect("observed");
+    let seen = observe(
+        &observer,
+        &rig.packages,
+        &binary_dir(&rig.state),
+        &OWN,
+        &web,
+    )
+    .expect("observed");
     assert_eq!(seen.state, ServiceState::Unmonitored);
     assert_eq!(asked.calls(), Vec::<Vec<String>>::new());
 
@@ -313,10 +357,11 @@ fn only_hostkeeper_with_no_unit_of_its_own_is_observed_through_the_daemons_job()
 
 /// Catches a Linux daemon that cannot confirm the version of its own unit: `hostkeeper.service`
 /// starts `bin/current` of the binary directory, which is not under the package's `current`, so
-/// its version was never confirmed. The sealed executable of a version of hostkeeper is the
-/// binary directory's file of it; one with no seal, or no file there, has none, and without the
-/// binary directory hostkeeper's is found through its unit as any service's. The Linux
-/// observer, over a fake systemd, confirms the daemon's version through `hostkeeper.service`.
+/// its version was never confirmed. The executable of a version of hostkeeper is the binary
+/// directory's file of it, whether or not that version's package is installed; one with no file
+/// there has none, and without the binary directory hostkeeper's is found through its unit as
+/// any service's. The Linux observer, over a fake systemd, confirms the daemon's version
+/// through `hostkeeper.service`.
 #[test]
 fn the_sealed_executable_of_hostkeeper_is_its_file_in_the_binary_directory() {
     let rig = mac_host("own-linux-sealed", RUNS, &[RUNS]);
@@ -325,12 +370,21 @@ fn the_sealed_executable_of_hostkeeper_is_its_file_in_the_binary_directory() {
     let file = fs::File::open(version_file(&rig, RUNS)).expect("the binary");
     let digest = digest_open_file(&file).expect("its digest");
     assert_eq!(exe.digest(HK, RUNS), Some(digest));
-    // Not sealed: no digest, whatever the binary directory holds.
-    rig.stage(HK, BEFORE);
-    assert_eq!(exe.digest(HK, BEFORE), None);
-    // Sealed, and no file of it in the binary directory.
-    rig.store.seal(HK, BEFORE, &d());
-    assert_eq!(exe.digest(HK, BEFORE), None);
+    // No package of it, and its file in the binary directory: the file's digest.
+    let before = rig.scratch.path().join("before");
+    fs::write(&before, "before").expect("a binary");
+    Layout::new(&binary_dir(&rig.state))
+        .stage(BEFORE, &before)
+        .expect("staged");
+    let file = fs::File::open(version_file(&rig, BEFORE)).expect("the binary");
+    let staged = digest_open_file(&file).expect("its digest");
+    assert_eq!(exe.digest(HK, BEFORE), Some(staged));
+    // Its package sealed, and no file of it in the binary directory: none.
+    rig.stage(HK, "0.1.200");
+    rig.store.seal(HK, "0.1.200", &d());
+    assert_eq!(exe.digest(HK, "0.1.200"), None);
+    // A version that is no plain name: none.
+    assert_eq!(exe.digest(HK, "../bin"), None);
     // Without the binary directory, hostkeeper's version is found through its unit as any
     // other's, and the macOS package has none.
     let plain = SealedExe::new(&rig.packages, &rig.packages, OWN);
