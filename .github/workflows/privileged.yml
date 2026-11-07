@@ -42,7 +42,9 @@
 # once as the runner's user, before the run as root), but for the two network-install jobs, which
 # also install QEMU and its firmware from the runner's Ubuntu archive, by `sudo apt-get update`
 # and `sudo apt-get install` of the packages the workflow lint lists for each. So no file of the Cargo registry
-# or of target/ is owned by root, and a test writes only its scratch directory under target/ (but
+# or of target/ is owned by root, and a test writes only its scratch directory under target/ (and,
+# for the network-install tests and the failed end-to-end tests, what it keeps for the job's
+# artifact under target/privileged-artifacts/; but
 # the self-update tests, whose scratch directory is under /run/hostkeeper-ci, because the release
 # trees the daemon checks must have root's directories all the way up, and whose drop-in is in
 # /run/systemd/system; on the Mac, what the daemon's fixed paths name: the step jobs' directory

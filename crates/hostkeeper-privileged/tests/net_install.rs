@@ -164,7 +164,7 @@ fn an_x86_64_machine_installs_by_network_enrolls_gets_its_service_is_reinstalled
     let asked = format!("dhcp: DHCPDISCOVER from {mac}, ");
     let left = format!(
         "no answer: not in the answer set: the record of host {HOST}: its seed was fetched in \
-         this run"
+         this run, so its install started"
     );
     assert!(
         rig.bus

@@ -148,9 +148,10 @@ impl Bus {
             })
     }
 
-    /// Fails the test if a program it needs ended after `from`.
-    fn assert_alive(&self, from: Mark, what: &str) {
-        for event in self.seen.iter().skip(from.0) {
+    /// Fails the test if a program it needs has ended: an end is pushed only for a program the
+    /// test did not stop, so any end, however long ago, is one no later event can come after.
+    fn assert_alive(&self, what: &str) {
+        for event in &self.seen {
             if let Event::Ended(_, why) = event {
                 panic!("{what}: not reached, because {why}");
             }
@@ -166,6 +167,7 @@ impl Bus {
         what: &str,
         matches: impl Fn(&str) -> bool,
     ) -> (Mark, String) {
+        self.drain();
         let mut looked = from;
         loop {
             if let Some(found) = self.find(looked, source, &matches) {
@@ -175,7 +177,7 @@ impl Bus {
                 println!("reached: {what}: {line}");
                 return (found, line.clone());
             }
-            self.assert_alive(looked, what);
+            self.assert_alive(what);
             looked = Mark(self.seen.len());
             match self.receiver.recv() {
                 Ok(event) => self.seen.push(event),
@@ -210,9 +212,8 @@ impl Bus {
     }
 
     /// Asks `look` until it gives a value, with a pause between two asks; fails the test,
-    /// naming `what` and the last answer, if a program it needs ends first.
+    /// naming `what` and the last answer, if a program it needs has ended.
     pub fn until<T>(&mut self, what: &str, mut look: impl FnMut() -> Result<T, String>) -> T {
-        let from = self.mark();
         loop {
             let last = match look() {
                 Ok(value) => {
@@ -222,7 +223,7 @@ impl Bus {
                 Err(now) => now,
             };
             self.drain();
-            for event in self.seen.iter().skip(from.0) {
+            for event in &self.seen {
                 if let Event::Ended(_, why) = event {
                     panic!("{what}: not reached, because {why}; the last answer was: {last}");
                 }

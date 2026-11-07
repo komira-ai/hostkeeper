@@ -174,7 +174,8 @@ cargo test -p hostkeeper-privileged --features privileged --locked --config "tar
 Each test names its units `hostkeeper-ci-<test>-<pid>-<n>` and stops, unlinks and resets them when
 it ends, failed or not; `journalctl --unit 'hostkeeper-ci-*'` shows what they logged. The
 first-boot tests also add a CA to the host's CA bundle and write under `/etc`, `/usr/lib` and
-`/var/lib`: run them only on a throwaway VM, never on a host that runs hostkeeper.
+`/var/lib`, and the network-install tests make network namespaces, a bridge, veth pairs and a tap
+on the host and run QEMU: run them only on a throwaway VM, never on a host that runs hostkeeper.
 
 ### The tierstore-shaped end-to-end tests
 
