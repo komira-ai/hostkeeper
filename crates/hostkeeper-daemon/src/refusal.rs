@@ -120,7 +120,7 @@ pub enum Refusal {
     /// `clear_halt` with a halt generation not above the one the service is held under: nothing
     /// is written.
     StaleHaltGeneration,
-    /// `clear_record` in a coordinator's order: it is the admin socket's alone.
+    /// `clear_record` in a coordinator's order: this daemon runs it only for the admin socket.
     Forbidden,
 }
 

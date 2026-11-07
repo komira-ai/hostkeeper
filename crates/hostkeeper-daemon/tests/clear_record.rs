@@ -163,7 +163,7 @@ fn clear_record_from_a_coordinator_order_is_refused_before_any_lock() {
         version: Version::new("2.0.0").expect("a version"),
         digest: PackageDigest::new(&d()).expect("a digest"),
     };
-    let detail = "`clear_record` of web is the admin socket's, not an order's";
+    let detail = "`clear_record` of web is not run from an order by this daemon";
     let forbidden = Reply::refused(Refusal::Forbidden, detail);
     let order = Order {
         order_id: "clear-record-7".to_owned(),
