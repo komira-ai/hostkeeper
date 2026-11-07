@@ -22,7 +22,7 @@ It is made of two programs:
   the operator API, the generated `hostkeeper ctl` ([docs/ctl.md](docs/ctl.md)) and the web UI
   (`ui/`). A new host asks the coordinator to enroll it, and an operator approves the request.
   Macs are to be managed through a self-hosted MDM server; that part is not built
-  ([macOS](docs/macos.md)).
+  ([macOS](docs/macos.md), [design](docs/design/hostkeeper-mdm.md)).
 
 Every API is a protobuf service, and the command line is generated from those definitions.
 
