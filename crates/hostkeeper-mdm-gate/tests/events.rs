@@ -362,11 +362,11 @@ fn a_command_uuid_is_version_four_uppercase() {
     let uuid = |bytes: [u8; 16]| CommandUuid::from_random(bytes).to_string();
     assert_eq!(uuid([0; 16]), "00000000-0000-4000-8000-000000000000");
     assert_eq!(uuid([0xff; 16]), "FFFFFFFF-FFFF-4FFF-BFFF-FFFFFFFFFFFF");
-    let counted: [u8; 16] = core::array::from_fn(|i| u8::try_from(i).expect("small"));
-    assert_eq!(uuid(counted), "00010203-0405-4607-8809-0A0B0C0D0E0F");
+    let counted: [u8; 16] = core::array::from_fn(|i| 0xA0 + u8::try_from(i).expect("small"));
+    assert_eq!(uuid(counted), "A0A1A2A3-A4A5-46A7-A8A9-AAABACADAEAF");
     assert_eq!(
         CommandUuid::from_random(counted).as_str(),
-        "00010203-0405-4607-8809-0A0B0C0D0E0F"
+        "A0A1A2A3-A4A5-46A7-A8A9-AAABACADAEAF"
     );
 }
 

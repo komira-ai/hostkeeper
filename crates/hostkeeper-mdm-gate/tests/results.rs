@@ -492,11 +492,13 @@ async fn an_acknowledged_profile_command_is_taken_off_the_list_and_changes_nothi
             uuid: ack_uuid.clone(),
             request_type: "InstallProfile".to_owned(),
             sent_unix: 960,
+            queued: true,
         },
         Sent {
             uuid: other_uuid,
             request_type: "RemoveProfile".to_owned(),
             sent_unix: 961,
+            queued: true,
         },
     ];
     let fs: Arc<dyn Fs> = Arc::new(RealFs);
@@ -730,4 +732,86 @@ fn a_record_asks_what_is_due_and_keeps_what_the_device_answered() {
     record.answer_security_info(None, 9);
     assert_eq!(record.refused, ["DeviceInformation", "SecurityInfo"]);
     assert_eq!(record.device_information_unix, Some(7));
+}
+
+/// Catches: a command written as sent and never confirmed queued (the coordinator stopped
+/// between writing the record and asking NanoHUB) left on the list for good, so the device is
+/// never asked again in that enrollment; and a confirmed command not written as queued.
+#[tokio::test]
+async fn a_command_never_confirmed_queued_is_asked_again_at_the_next_event() {
+    let mut rig = Rig::new("never-queued").await;
+    rig.post(&token_update(UDID, 1)).await;
+    let record = rig.record(UDID);
+    assert_eq!(record.sent.len(), 2);
+    assert!(
+        record.sent.iter().all(|sent| sent.queued),
+        "NanoHUB queued both"
+    );
+
+    // The record as a crash between its write and the queue call leaves it.
+    let mut crashed = record.clone();
+    for sent in &mut crashed.sent {
+        sent.queued = false;
+    }
+    let fs: Arc<dyn Fs> = Arc::new(RealFs);
+    FileDeviceStore::open(fs, &rig.dir())
+        .expect("the store")
+        .save(&crashed)
+        .expect("saved");
+    rig.restart().expect("the gate opens");
+    assert_eq!(rig.gate.records(), [crashed.clone()]);
+
+    // A result of one of them is not read: NanoHUB never said it queued it.
+    let stale = crashed.sent[0].uuid.as_str().to_owned();
+    rig.post(&device_information(UDID, &stale, Some(SERIAL), Some(true)))
+        .await;
+    let record = rig.record(UDID);
+    assert_eq!(record.serial, None);
+    // That event dropped both and asked both again.
+    let sent: Vec<(String, String)> = rig.hub.commands().into_iter().skip(2).collect();
+    assert_eq!(
+        sent.iter()
+            .map(|(kind, _)| kind.as_str())
+            .collect::<Vec<_>>(),
+        ["DeviceInformation", "SecurityInfo"]
+    );
+    assert!(record.sent.iter().all(|sent| sent.queued));
+    let uuid = rig.sent(UDID, "DeviceInformation");
+    rig.post(&device_information(UDID, &uuid, Some(SERIAL), Some(true)))
+        .await;
+    assert_eq!(rig.record(UDID).serial.as_deref(), Some(SERIAL));
+}
+
+/// Catches: a confirmation of a queued command that cannot be written leaving the command on
+/// the list as unconfirmed for good: at the next event it is dropped and asked again.
+#[tokio::test]
+async fn a_queued_command_whose_confirmation_is_not_written_is_asked_again() {
+    let fs = Arc::new(TestFs::default());
+    let scratch = support::scratch("confirm-write");
+    let hub = support::FakeNanoHub::start().await;
+    let clock = support::Clock::at(1_000);
+    let dir = support::dir_of(&scratch);
+    let gate =
+        support::open_on(fs.clone(), &dir, &hub, &clock, support::counting()).expect("opens");
+    // The first write (the record with its two commands) works; the first confirmation does not.
+    fs.fail_write(2);
+    gate.webhook(&token_update(UDID, 1)).await.expect("taken");
+    let record = &gate.records()[0];
+    let queued: Vec<(&str, bool)> = record
+        .sent
+        .iter()
+        .map(|sent| (sent.request_type.as_str(), sent.queued))
+        .collect();
+    assert_eq!(
+        queued,
+        [("DeviceInformation", false), ("SecurityInfo", true)]
+    );
+    assert_eq!(hub.commands().len(), 2);
+    gate.webhook(&idle(UDID)).await.expect("taken");
+    let kinds: Vec<String> = hub.commands().into_iter().map(|(kind, _)| kind).collect();
+    assert_eq!(
+        kinds,
+        ["DeviceInformation", "SecurityInfo", "DeviceInformation"]
+    );
+    assert!(gate.records()[0].sent.iter().all(|sent| sent.queued));
 }

@@ -96,14 +96,16 @@ pub(super) fn two_records() -> [hostkeeper_mdm_gate::DeviceRecord; 2] {
     full.security_info_unix = Some(1_799_999_200);
     full.sent = vec![
         Sent {
-            uuid: CommandUuid::parse("11111111-2222-4333-8444-555555555555").expect("a uuid"),
+            uuid: CommandUuid::parse("A1A1A1A1-2222-4333-8444-555555555555").expect("a uuid"),
             request_type: "SecurityInfo".to_owned(),
             sent_unix: 1_800_000_050,
+            queued: true,
         },
         Sent {
             uuid: CommandUuid::parse("66666666-7777-4888-8999-000000000000").expect("a uuid"),
             request_type: "DeviceInformation".to_owned(),
             sent_unix: 1_800_000_060,
+            queued: true,
         },
     ];
     full.last_error = Some("NanoHUB did not queue the command".to_owned());
@@ -142,7 +144,7 @@ async fn the_operator_lists_every_field_of_a_device_over_grpc_and_the_gateway() 
         unanswered: vec![
             proto::MdmCommand {
                 request_type: "SecurityInfo".to_owned(),
-                command_uuid: "11111111-2222-4333-8444-555555555555".to_owned(),
+                command_uuid: "A1A1A1A1-2222-4333-8444-555555555555".to_owned(),
                 sent_unix: 1_800_000_050,
             },
             proto::MdmCommand {
@@ -193,7 +195,7 @@ async fn the_operator_lists_every_field_of_a_device_over_grpc_and_the_gateway() 
                     "unanswered": [
                         {
                             "requestType": "SecurityInfo",
-                            "commandUuid": "11111111-2222-4333-8444-555555555555",
+                            "commandUuid": "A1A1A1A1-2222-4333-8444-555555555555",
                             "sentUnix": "1800000050"
                         },
                         {

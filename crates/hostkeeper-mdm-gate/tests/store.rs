@@ -395,11 +395,13 @@ fn full(id_text: &str) -> DeviceRecord {
             uuid: CommandUuid::from_random([1; 16]),
             request_type: "InstallProfile".to_owned(),
             sent_unix: 16,
+            queued: true,
         },
         Sent {
             uuid: CommandUuid::from_random([2; 16]),
             request_type: "SecurityInfo".to_owned(),
             sent_unix: 17,
+            queued: true,
         },
     ];
     record.refused = vec!["DeviceInformation".to_owned(), "SecurityInfo".to_owned()];

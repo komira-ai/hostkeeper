@@ -115,6 +115,8 @@ struct SentPb {
     request_type: String,
     #[prost(uint64, tag = "3")]
     sent_unix: u64,
+    #[prost(bool, tag = "4")]
+    queued: bool,
 }
 
 #[derive(Clone, PartialEq, prost::Message)]
@@ -197,6 +199,7 @@ fn encode(record: &DeviceRecord) -> Vec<u8> {
                 uuid: sent.uuid.as_str().to_owned(),
                 request_type: sent.request_type.clone(),
                 sent_unix: sent.sent_unix,
+                queued: sent.queued,
             })
             .collect(),
         refused: record.refused.clone(),
@@ -247,6 +250,7 @@ fn decode(path: &Path, bytes: &[u8]) -> Result<DeviceRecord, StoreError> {
             uuid,
             request_type: one.request_type,
             sent_unix: one.sent_unix,
+            queued: one.queued,
         });
     }
     Ok(DeviceRecord {

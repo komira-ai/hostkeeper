@@ -40,7 +40,7 @@ fn device() -> op::MdmDevice {
         security_info_unix: Some(1_800_000_020),
         unanswered: vec![op::MdmCommand {
             request_type: "SecurityInfo".to_owned(),
-            command_uuid: "11111111-2222-4333-8444-555555555555".to_owned(),
+            command_uuid: "A1A1A1A1-2222-4333-8444-555555555555".to_owned(),
             sent_unix: 1_800_000_030,
         }],
         last_error: "NanoHUB did not queue the command".to_owned(),

@@ -231,8 +231,8 @@ is started with `-webhook-url http://<--mdm-webhook-listen>/webhook`.
   `DeviceInformation` (`SerialNumber`, `UDID`, `IsSupervised`) and `SecurityInfo` through NanoHUB's
   API (`PUT /api/v1/nanomdm/enqueue/<id>`, basic authentication as `nanohub`). A command the device
   has not answered is never sent again, so a Mac that is off piles nothing up; a query NanoHUB did
-  not queue is sent again at the device's next check-in, and one the device answered with an error
-  at its next `TokenUpdate`. The gate's code sends only five command types (`DeviceInformation`,
+  not queue, or never confirmed it queued (the coordinator stopped while asking), is sent again at
+  the device's next event, and one the device answered with an error at its next `TokenUpdate`. The gate's code sends only five command types (`DeviceInformation`,
   `SecurityInfo`, `InstallProfile`, `RemoveProfile`, `InstallEnterpriseApplication`); any other is
   refused before NanoHUB is called. This bounds the code, not a holder of the key.
 - **What it believes.** A result is read only when its command UUID is one the gate sent that

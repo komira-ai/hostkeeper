@@ -6,9 +6,12 @@
 //! events of one device never both send it the same query. The record the event makes is
 //! written before the gate's memory takes it, and before any command is sent: a command is
 //! written as sent, with its UUID, before NanoHUB is asked to queue it, so its result is
-//! matched even when it comes back before the queue call returns, or after a restart. A queue
-//! call that fails takes the command off again and keeps NanoHUB's reason as the record's last
-//! error; the query is asked again at the device's next check-in.
+//! matched even when it comes back before the queue call returns, or after a restart; once
+//! NanoHUB says it queued it, the command is written as queued. A queue call that fails takes
+//! the command off again and keeps NanoHUB's reason as the record's last error; the query is
+//! asked again at the device's next check-in. A command never written as queued (the
+//! coordinator stopped while asking, or a write failed) is dropped at the device's next event,
+//! and its query is asked again then.
 //!
 //! **What a result is.** A result is read only when its command UUID is one the gate sent to
 //! that device and the device has not answered: NanoHUB 0.2.0's webhook carries no signature,
@@ -172,7 +175,17 @@ impl Gate {
         let now = self.clock.now_unix();
         let id = id_of(&event).clone();
         let known = self.devices().get(&id).cloned();
-        let Some(mut record) = apply(known, event, now) else {
+        // Commands NanoHUB never confirmed are dropped; when there were any, the record changed
+        // and is written, whatever the event says, so their queries are asked again now.
+        let settled = known.clone().map(|mut record| {
+            record.drop_unqueued();
+            record
+        });
+        let changed = settled
+            .as_ref()
+            .filter(|&record| Some(record) != known.as_ref())
+            .cloned();
+        let Some(mut record) = apply(settled, event, now).or(changed) else {
             return Ok(Handled::PassedOver);
         };
         let mut commands = Vec::new();
@@ -185,14 +198,14 @@ impl Gate {
                 uuid: uuid.clone(),
                 request_type: kind.to_owned(),
                 sent_unix: now,
+                queued: false,
             });
             commands.push(command_of(kind, uuid));
         }
         self.keep(&record)?;
         for command in commands {
-            if let Err(why) = self.send(&id, &command).await {
-                self.take_back(&mut record, &command, &why);
-            }
+            let sent = self.send(&id, &command).await;
+            self.settle(&mut record, &command, sent.err().as_ref());
         }
         Ok(Handled::Recorded)
     }
@@ -218,13 +231,23 @@ impl Gate {
         Ok(())
     }
 
-    /// `command`, which NanoHUB did not queue for `why`, taken off `record` again with the
-    /// reason kept, so it is asked again at the next check-in. `record` changes once the new
-    /// one is written.
-    fn take_back(&self, record: &mut DeviceRecord, command: &Command, why: &EnqueueError) {
+    /// What NanoHUB said of `command`, written into `record`: queued (`why` is `None`), or not
+    /// queued for `why`, when it is taken off again with the reason kept, so it is asked again
+    /// at the next check-in. `record` changes once the new one is written; a write that fails
+    /// is logged, and the command, not written as queued, is dropped at the next event.
+    fn settle(&self, record: &mut DeviceRecord, command: &Command, why: Option<&EnqueueError>) {
         let mut taken = record.clone();
-        taken.take_sent(command.uuid().as_str());
-        taken.last_error = Some(shown(&format!("{}: {why}", command.request_type())));
+        match why {
+            None => taken
+                .sent
+                .iter_mut()
+                .filter(|sent| sent.uuid == *command.uuid())
+                .for_each(|sent| sent.queued = true),
+            Some(why) => {
+                taken.take_sent(command.uuid().as_str());
+                taken.last_error = Some(shown(&format!("{}: {why}", command.request_type())));
+            }
+        }
         match self.keep(&taken) {
             Ok(()) => *record = taken,
             Err(why) => {

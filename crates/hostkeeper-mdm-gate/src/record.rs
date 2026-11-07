@@ -33,8 +33,13 @@ pub struct Sent {
     pub uuid: CommandUuid,
     /// The command's request type.
     pub request_type: String,
-    /// When NanoHUB took it, in unix seconds.
+    /// When the gate asked NanoHUB to queue it, in unix seconds.
     pub sent_unix: u64,
+    /// NanoHUB said it queued it. The command is written as sent before NanoHUB is asked, so
+    /// that its result is matched however soon it comes; an entry NanoHUB never confirmed (the
+    /// coordinator stopped while asking, or the confirmation could not be written) is dropped
+    /// at the device's next event, and its query is due again.
+    pub queued: bool,
 }
 
 /// The gate's record of one MDM enrollment id.
@@ -187,6 +192,11 @@ impl DeviceRecord {
         })
         .map(|(kind, _)| kind)
         .collect()
+    }
+
+    /// Drops the commands NanoHUB never confirmed it queued ([`Sent::queued`]).
+    pub fn drop_unqueued(&mut self) {
+        self.sent.retain(|sent| sent.queued);
     }
 
     /// The unanswered command `uuid`, taken off the list; `None` when the gate sent no such
