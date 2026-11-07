@@ -130,9 +130,10 @@ Rust (`registry.rs`). `--legacy-service` keeps its meaning for the JSON routes; 
 a file encoding and has no table.
 
 **Generations and write ids.** The operator API already defines them (`SetDesiredRequest.if_generation` and `write_id`,
-`SetDesiredResponse.record`, the `WriteRecord` and `Replaced` messages, the refusal `generation_conflict`), and the
-coordinator refuses both fields today because the file store keeps neither (`desired_body` in `src/grpc/operator.rs`,
-**Built**). The database keeps them. Build item C6 adds, by its own migration, to `desired`:
+`SetDesiredResponse.record`, the `WriteRecord` and `Replaced` messages, the refusal `generation_conflict`). The file
+store keeps neither, so over it a set that names either field is refused `invalid_request` (`DesiredError::Unrecorded`
+in `set_desired_by`, `src/service_ci.rs`, **Built**). The database keeps them: C6's migration `0002_generations` adds
+to `desired`:
 
 ```sql
   generation        bigint NOT NULL DEFAULT 0,  -- one more for every accepted write, a write of the same version included
@@ -145,8 +146,8 @@ and honours the two fields as the proto describes (**Built**: `crates/hostkeeper
 columns in `store/postgres/generations.rs`; a force raises the generation too, with no write id). C6's migration is
 one an older release must not run on (section 6):
 an older coordinator would write a desired state without raising its generation, and a writer's `if_generation` would
-then pass against a state it never saw. C6 is a behaviour change of its own: an identical set, which writes nothing
-today (`Recorded::Unchanged`), raises the generation and is written.
+then pass against a state it never saw. C6 is a behaviour change of its own: over the database an identical set, which
+the file store still answers `Recorded::Unchanged` without writing, raises the generation and is written.
 
 ### 3.3 The operations store
 

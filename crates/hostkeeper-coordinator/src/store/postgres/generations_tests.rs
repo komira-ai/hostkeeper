@@ -173,3 +173,28 @@ fn a_record_that_does_not_parse_refuses_the_load() {
         assert_eq!(refused(columns), format!("{prefix}{why}"));
     }
 }
+
+/// Proves: a commit's rows of a desired state whose record holds a generation above `i64::MAX`
+/// are refused whole, with the counter's text, before any row is written.
+///
+/// Catches: a state whose rows are cut without its record's columns when they cannot be written.
+#[test]
+fn the_rows_of_a_state_whose_generation_the_database_cannot_hold_are_refused() {
+    let mut held = crate::desired::Held::default();
+    held.desired.insert(
+        "web".to_owned(),
+        Desired::parse(br#"{"version":"1.0","min_up":{}}"#).expect("a state"),
+    );
+    held.records.insert(
+        "web".to_owned(),
+        WriteRecord {
+            generation: u64::MAX,
+            ..WriteRecord::default()
+        },
+    );
+    let error = super::super::state::desired_rows(&held).expect_err("refused");
+    assert_eq!(
+        error.to_string(),
+        "database:counter: 18446744073709551615 is above the largest counter the database keeps"
+    );
+}
