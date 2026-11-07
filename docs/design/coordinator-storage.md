@@ -6,7 +6,7 @@ section 10, the halts-file storage of the plan position in [rollout-update-plans
 and the device-record file of [hostkeeper-mdm.md](hostkeeper-mdm.md) section 6.1. Where they disagree with this document
 on where the coordinator keeps its state, this document wins. C1, C2 and C3 are built: the storage trait and its
 fake (section 4.1), the enrollment crate's `Records` port, and the Postgres store
-(`crates/hostkeeper-coordinator/src/store/postgres/`, with its migration `0001`, sections 3 to 8). Every other
+(`crates/hostkeeper-coordinator/src/store/postgres/`, with its migrations `0001` and `0002`, sections 3 to 8). Every other
 statement about new code is **Designed**, and section 13 lists the build items, C1 to C11, one pull request each. The tags are those of hostkeeper-design.md: **Built** names code on `main` with a path, **Designed** means
 nothing implements it yet.
 

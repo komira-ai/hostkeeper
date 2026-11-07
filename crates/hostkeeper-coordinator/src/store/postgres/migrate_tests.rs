@@ -13,7 +13,7 @@ const PINNED: [(i32, &str, &str); 2] = [
     (
         2,
         "first_serving",
-        "775887559e1a70234f63e6da1419017a92c1a3a0b52aecfe9acc3c6a0f5ed9f4",
+        "f0f413e9d9c8347115e4ee48e86ec6972525b3e8e13d45ba8694517f7197ae74",
     ),
 ];
 
