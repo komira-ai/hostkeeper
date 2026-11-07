@@ -243,6 +243,8 @@ mod order_terms_tests;
 #[cfg(test)]
 mod plan_rollout_tests;
 #[cfg(test)]
+mod plan_status_tests;
+#[cfg(test)]
 mod priority_tests;
 #[cfg(test)]
 mod recorded_definition_tests;
@@ -264,6 +266,14 @@ mod rollback_override_tests;
 mod rollback_race_tests;
 #[cfg(test)]
 mod rollback_tests;
+#[cfg(test)]
+mod rollouts_calls_support;
+#[cfg(test)]
+mod rollouts_calls_tests;
+#[cfg(test)]
+mod rollouts_refusal_tests;
+#[cfg(test)]
+mod rollouts_state_tests;
 #[cfg(test)]
 mod self_update_fallback_tests;
 #[cfg(test)]

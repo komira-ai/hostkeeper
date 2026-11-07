@@ -77,6 +77,7 @@ Stage sizes are recomputed from the eligible hosts at every decision, and the po
 - **A host leaves** (excluded, held, retired, unassigned, silent past the down limit). It no longer counts in `n` or in the stage. If it had started, the stage has a free place again and the next eligible host takes it. An update it was running still holds its slot (and so counts against `max_updating`) until its beats or its order's age free it, as before.
 - **A host is held mid-update.** As leaving; its update finishes.
 - **The stage shrinks below the hosts already started** (hosts left the plan). The stage is full; nothing is undone.
+- **Much of the fleet goes silent mid-plan** (a partition). The stages shrink with the eligible hosts, so the plan can enter a later stage over the hosts that remain; when the others come back the plan stays where it went. `max_updating` and `min_up` still pace the hosts it then orders. After a coordinator restart the quiet start keeps this from happening while the fleet is heard again.
 
 ### 1.8 Holds, force, abort and halts inside a plan
 
@@ -153,6 +154,7 @@ Audit entries: `rollout_advance` (by `coordinator` or the operator; the reason s
 | Which hosts take a stage's free places | The first eligible hosts to ask. | A host that cannot be ordered now (deferring, an agent the version has no digest for) must not hold a place it will not take. |
 | A deferring host | Takes no place, and is not counted as left to order for liveness. | It may decline for its whole backoff; it must not hold the plan or the fleet. |
 | Entering an `auto` stage | Read at once by the decision; written by the coordinator at the same heartbeat. | The decision stays a pure function of what the hosts reported and the operator's marks; the write is the audit record and the restart checkpoint. |
+| A plan that went on while hosts were silent | Stays where it went. | The position is a stage, not a host count; going back would re-hold hosts that already rolled. |
 | A failure an operator acknowledged | Resolved: the host leaves the plan. | Clearing a host's halt, or setting a version by hand over its failure, is the operator saying the rollout may go on. |
 | Canary failure rollback | Kept for services with `canary`. | It is behaviour farms rely on; `stages` without `canary` follow the threshold. |
 

@@ -200,7 +200,10 @@ impl Plan {
             match out.last_mut() {
                 Some(last) if last.hosts == hosts => {
                     last.through = i + 1;
-                    last.percent = percent.or(last.percent);
+                    // A canary keeps its count: a percent folded into it is no percent of it.
+                    if matches!(self.0[last.first].share, Share::Percent(_)) {
+                        last.percent = percent.or(last.percent);
+                    }
                     manual |= def.advance == Advance::Manual;
                 }
                 _ => {
@@ -227,7 +230,8 @@ impl Plan {
 /// A stage of the plan over the eligible hosts there are now, after collapsing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PlanStage {
-    /// The percent of the last stage of the rollout file folded into it; none for the canary.
+    /// The percent of the last stage of the rollout file folded into it; none for the canary and
+    /// a stage folded into it.
     pub percent: Option<u32>,
     /// How many hosts run the desired version once it is done, the stages before included.
     pub hosts: usize,
@@ -456,10 +460,11 @@ impl View {
         self.stages.get(self.current)
     }
 
-    /// Whether every eligible host is done: there is nothing left to roll.
+    /// Whether every eligible host is done, and there is one: there is nothing left to roll. A
+    /// plan with no eligible host (every host down, say) has rolled nothing.
     #[must_use]
     pub fn finished(&self) -> bool {
-        self.members.iter().all(|m| m.state == HostState::Done)
+        !self.members.is_empty() && self.members.iter().all(|m| m.state == HostState::Done)
     }
 
     /// Whether the plan has started a host and has one left to order: the rollout is under way.
@@ -489,6 +494,9 @@ impl View {
         }
         if self.paused.is_some() {
             return Some(Wait::Paused);
+        }
+        if self.members.is_empty() {
+            return None;
         }
         if self.current == 0 {
             return Some(Wait::ManualAdvance);
