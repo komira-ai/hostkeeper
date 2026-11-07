@@ -26,6 +26,7 @@ use super::{GrpcEnroll, convert, describe, trust_only_last};
 use crate::claims::{ClaimsError, ClaimsSource};
 use crate::enroller::{Enroller, Outcome, Ports, Settings};
 use crate::key::{HostKey, OsEntropy};
+use crate::managed::{MAC_NONCE_BYTES, MacNonce};
 use crate::store::{CurrentPaths, PkiDir, Store};
 use crate::validity::SystemWallClock;
 use crate::verify::sha256_hex;
@@ -144,6 +145,7 @@ fn full_request() -> EnrollRequest {
         },
         image: "image-1".to_owned(),
         renewal_of: Some(host()),
+        mac_nonce: MacNonce::new(vec![0x5a; MAC_NONCE_BYTES]),
     }
 }
 
@@ -153,6 +155,7 @@ fn bare_request() -> EnrollRequest {
         claims: Claims::default(),
         image: String::new(),
         renewal_of: None,
+        mac_nonce: None,
     }
 }
 
@@ -224,6 +227,7 @@ fn open_enroller(dir: &Scratch, port: u16, pinned: &[u8]) -> Enroller {
         entropy: Box::new(OsEntropy),
         wall: Box::new(SystemWallClock),
         clock: Box::new(SystemClock::new(Box::new(ProcBootId::host()))),
+        managed: None,
     };
     Enroller::open(settings, ports).expect("open the enroller")
 }
@@ -394,8 +398,8 @@ fn a_poll_round_trips_the_documented_challenge() {
 }
 
 /// Catches an `Enroll` request whose fields reach the coordinator changed (claims, image,
-/// `renewal_of`, the absent claims as empty strings, no Mac nonce), and an answer of PENDING or
-/// DUPLICATE_CLAIM not read as pending.
+/// `renewal_of`, the Mac nonce, the absent claims and the absent nonce as empty), and an answer
+/// of PENDING or DUPLICATE_CLAIM not read as pending.
 #[test]
 fn an_enroll_request_goes_field_for_field_and_its_answer_is_read() {
     let mut f = probed("enroll");
@@ -431,7 +435,7 @@ fn an_enroll_request_goes_field_for_field_and_its_answer_is_read() {
                 }),
                 image: "image-1".to_owned(),
                 renewal_of: "web-1".to_owned(),
-                mac_nonce: Vec::new(),
+                mac_nonce: vec![0x5a; MAC_NONCE_BYTES],
             }),
             Seen::Enroll(pb::EnrollRequest {
                 csr_der: b"csr-2".to_vec(),
@@ -444,25 +448,37 @@ fn an_enroll_request_goes_field_for_field_and_its_answer_is_read() {
     );
 }
 
+/// Catches the coordinator's answer to a post of a request that waits for no operator any more
+/// (approved by the Mac nonce it carried, or earlier, issued or denied) taken as an error: the
+/// UNSPECIFIED state is read as decided, so the enroller polls for where the request stands.
+#[test]
+fn an_enroll_answered_unspecified_is_decided() {
+    let mut f = probed("enroll-decided");
+    let id = the_id();
+    f.double
+        .script_enroll(pb_enroll(id.as_str(), pb::EnrollState::Unspecified.into()));
+    assert_eq!(
+        f.grpc.enroll(&full_request()).expect("an answer"),
+        EnrollAnswer {
+            request_id: id,
+            state: EnrollState::Decided,
+        }
+    );
+}
+
 /// Catches an `Enroll` answer the port cannot represent (a request id that is not lower-case
-/// hex, the UNSPECIFIED state, a state this daemon does not know) taken for an answer, or given a
-/// default.
+/// hex, a state this daemon does not know) taken for an answer, or given a default.
 #[test]
 fn an_enroll_answer_the_port_cannot_represent_is_a_transport_error() {
     let mut f = probed("enroll-unrepresentable");
     let id = the_id();
     let upper = id.to_string().to_uppercase();
     f.double.script_enroll(pb_enroll(&upper, 1));
-    f.double.script_enroll(pb_enroll(id.as_str(), 0));
     f.double.script_enroll(pb_enroll(id.as_str(), 99));
     let request = bare_request();
     assert_eq!(
         error_of(f.grpc.enroll(&request)),
         format!("Enroll answered the request id {upper:?}, which is not 64 lower-case hex digits")
-    );
-    assert_eq!(
-        error_of(f.grpc.enroll(&request)),
-        "Enroll answered state 0, which this daemon does not know"
     );
     assert_eq!(
         error_of(f.grpc.enroll(&request)),

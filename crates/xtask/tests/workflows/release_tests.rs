@@ -688,8 +688,8 @@ fn attest_steps(id: &str, name: &str, file: &str, subject: &str) -> String {
 #[test]
 fn attest_job_attests_every_package_for_every_platform_and_copies_each_bundle() {
     // Catches: a release asset list that names the bundle of a hello package (or of its failing
-    // build) while artifacts.yml has no step that signs it, one that signs it without copying the
-    // bundle beside it, or one that copies the bundle of another step. A host trusts only
+    // build, or of netboot.json) while artifacts.yml has no step that signs it, one that signs it
+    // without copying the bundle beside it, or one that copies the bundle of another step. A host trusts only
     // attested packages, so each of these would ship a package no host can install.
     let hello_x86 = attest_steps(
         "hello-linux-x86_64",
@@ -765,6 +765,29 @@ fn attest_job_attests_every_package_for_every_platform_and_copies_each_bundle() 
             "job attest does not copy the bundle of hello-<version>-fail-ready-macos-arm64.tar.zst"
         )),
         "{found:?}"
+    );
+    // The boot sets of network install: attested, and their bundle copied from that step.
+    let netboot = attest_steps(
+        "netboot",
+        "Name the bundle of the boot sets of network install",
+        "netboot.json",
+        "netboot.json",
+    );
+    let text = workflow("artifacts.yml");
+    assert!(text.contains(&netboot));
+    assert_refused(
+        "artifacts.yml",
+        &with_in(&text, &netboot, ""),
+        "artifacts.yml: job attest does not attest netboot.json (a provenance step with an id and the subject-path dist/netboot.json)",
+    );
+    assert_refused(
+        "artifacts.yml",
+        &with_in(
+            &text,
+            "steps.netboot.outputs.bundle-path",
+            "steps.pkg-macos-arm64.outputs.bundle-path",
+        ),
+        "artifacts.yml: job attest does not copy the bundle of netboot.json from the step netboot to dist/netboot.json.sigstore.json",
     );
     // A package attested under the name of another file.
     let text = with_in(

@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1305" width="1200" height="1305" role="img" aria-label="Mac path in seven steps: the operator allowlists the serial, the Mac enrolls by ADE, the gate in the coordinator installs the config profile, the pkg starts the daemon which posts an enrollment request, the gate pushes a one-time nonce profile bound to that request only when every condition holds, the daemon reposts with the nonce, and the coordinator auto-approves; any miss leaves the request pending for an operator.">
 <title>Mac path</title>
-<desc>The operator adds the serial in ABM and to the coordinator's allowlist. The Mac enrolls by ADE and the MDM gate, linked into the coordinator, installs the config profile. The pkg (task M14, not built) starts the daemon, which posts an enrollment request without a nonce. The gate then pushes a one-time nonce profile bound to that request, only if the device is enrolled and supervised, the serial is allowlisted, exactly one candidate request exists and no nonce is live. The daemon (task M13, not built) reposts the request with the nonce and the coordinator auto-approves only when the serial, the gate's device state and the nonce all check out; otherwise the request stays pending for an operator approval by key hash.</desc>
+<desc>The operator adds the serial in ABM and to the coordinator's allowlist. The Mac enrolls by ADE and the MDM gate, linked into the coordinator, installs the config profile. The gate's send of the pkg (task M14) is not built; the pkg starts the daemon, which posts an enrollment request without a nonce. The gate then pushes a one-time nonce profile bound to that request, only if the device is enrolled and supervised, the serial is allowlisted, exactly one candidate request exists and no nonce is live. The daemon reposts the request with the nonce and the coordinator auto-approves only when the serial, the gate's device state and the nonce all check out; otherwise the request stays pending for an operator approval by key hash.</desc>
 <defs><marker id="mac-path-ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0B0B0A"/></marker><marker id="mac-path-ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FD4F1D"/></marker></defs>
 <style>
 .box{fill:#FFFFFF;stroke:#0B0B0A;stroke-width:1.4}
@@ -126,7 +126,7 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <text x="424" y="1047" class="t-m" text-anchor="start">- nonce known, unexpired, unused,</text>
 <text x="424" y="1063" class="t-m" text-anchor="start">  issued for that serial</text>
 <text x="424" y="1079" class="t-m" text-anchor="start">- nonce bound to that request (nonce_wrong_request)</text>
-<path d="M910,1010 L790,1010" class="ln-d" marker-end="url(#mac-path-ak)"/>
+<path d="M910,1010 L790,1010" class="ln" marker-end="url(#mac-path-ak)"/>
 <text x="850" y="995" class="t-m lbl" text-anchor="middle">Enroll + nonce</text>
 <circle cx="850" cy="1010" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
 <text x="850" y="1014" class="b" font-size="12" text-anchor="middle">6</text>
@@ -188,8 +188,8 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <text x="1040" y="912" class="b" text-anchor="middle">Nonce profile (managed)</text>
 <text x="1040" y="929" class="t-m" text-anchor="middle">dev.hostkeeper.enrollment:</text>
 <text x="1040" y="946" class="t-m" text-anchor="middle">keys nonce, request_id</text>
-<rect x="910" y="970" width="260" height="80" rx="5" class="box-p"/>
-<text x="1040" y="992" class="b" text-anchor="middle">Daemon, task M13, not built</text>
+<rect x="910" y="970" width="260" height="80" rx="5" class="box-o"/>
+<text x="1040" y="992" class="b" text-anchor="middle">Daemon: nonce repost</text>
 <text x="1040" y="1008" class="t-m" text-anchor="middle">reposts Enroll with the same</text>
 <text x="1040" y="1024" class="t-m" text-anchor="middle">key and the nonce</text>
 <rect x="910" y="1120" width="260" height="82" rx="5" class="box"/>

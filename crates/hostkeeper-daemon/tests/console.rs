@@ -379,6 +379,7 @@ fn the_enrollment_loop_shows_each_step_and_each_failure_to_open_on_the_console()
         entropy: Box::new(OsEntropy),
         wall: Box::new(SystemWallClock),
         clock: Box::new(FakeClock::new(0, 0)),
+        managed: None,
     };
     let settings = EnrollSettings {
         ca_sha256: Sha256Hex::parse(&hex(&Sha256::digest(CA_DER))).expect("a SHA-256"),

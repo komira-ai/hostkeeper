@@ -41,8 +41,8 @@ use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_ctl::transport::Network;
 use hostkeeper_ctl::{Connect, Io};
 use hostkeeper_enroll::{
-    Enroller, GrpcEnroll, LinuxClaims, OsEntropy, PkiDir, RenewalState, Settings as EnrollSettings,
-    SystemWallClock,
+    Enroller, GrpcEnroll, LinuxClaims, ManagedFile, OsEntropy, PkiDir, RenewalState,
+    Settings as EnrollSettings, SystemWallClock,
 };
 use hostkeeper_hook::Step;
 use hostkeeper_launchd::{Platform, PlatformKind};
@@ -58,7 +58,7 @@ use hostkeeper_unpack::Owner;
 use rustls_pki_types::CertificateDer;
 use rustls_pki_types::pem::PemObject;
 
-use crate::adapters::{Adapters, RunnerLauncher, host_claims, host_clock};
+use crate::adapters::{Adapters, RunnerLauncher, host_claims, host_clock, host_managed};
 use crate::admin_client::AdminCommand;
 use crate::console::{AGETTY, ConsoleIssue, ENROLLMENT_ISSUE};
 use crate::executor::{Daemon, Placement, Ports};
@@ -546,7 +546,8 @@ pub fn image_of(own_version: HostkeeperVersion) -> String {
 /// The enroller of a host of `kind`: [`GrpcEnroll`] to `endpoint`, the pki directory at `pki`
 /// (its `current` generation is what a renewal presents), the claims of [`host_claims`] (on
 /// Linux the host's files and its BMC behind `/dev/ipmi0`, [`DevIpmi::host`]; on a Mac through
-/// the host's `ioreg`, [`HostIoreg::system`]), the operating
+/// the host's `ioreg`, [`HostIoreg::system`]), on a Mac the managed preferences its MDM writes
+/// the enrollment nonce to ([`host_managed`]), the operating
 /// system's entropy, the wall clock for the certificates' validity alone, and the monotonic
 /// clock for the retries. Opening it takes the pki directory's lock and finishes what a crash
 /// left there. `Err` names what refused: the endpoint, the runtime or the pki directory.
@@ -571,6 +572,7 @@ pub fn host_enroller(
         entropy: Box::new(OsEntropy),
         wall: Box::new(SystemWallClock),
         clock: Box::new(host_clock()),
+        managed: host_managed(kind, ManagedFile::host()),
     };
     Enroller::open(settings, ports).map_err(|error| error.to_string())
 }

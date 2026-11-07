@@ -7,12 +7,17 @@
 //! protobuf message, answers it with the handler the gRPC service calls, and turns the answer
 //! back. It presents the last certificate the coordinator issued as the client certificate of a
 //! `Renew`, as the TLS connection would. The coordinator's wall clock is the test's wall clock.
+//! A Mac is approved by the nonce the coordinator issued for its request, as the MDM's gate
+//! would hand it over, through the managed preferences.
 
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 
-use hostkeeper_coordinator::enrollment::{Enrollment, Random, RpcError, Setup, setup};
+use hostkeeper_coordinator::enrollment::{
+    DeviceState, DeviceStateError, DeviceStatus, Enrollment, MacAllowlist, MacPolicy, Random,
+    RpcError, Setup, setup,
+};
 use hostkeeper_enroll::{
     CoordinatorEnroll, EnrollAnswer, EnrollRequest, EnrollState, Enroller, Identity, Issued,
     Outcome, Poll, PollAnswer, Ports, Reason, RenewAnswer, RenewRequest, RequestId, Settings,
@@ -20,6 +25,7 @@ use hostkeeper_enroll::{
 };
 use hostkeeper_enrollment::ca::check_request;
 use hostkeeper_enrollment::fs::RealFs;
+use hostkeeper_enrollment::names::KeyHash;
 use hostkeeper_enrollment::validity::UnixClock;
 use hostkeeper_proto::hostkeeper::agent::v1 as pb;
 use hostkeeper_proto::hostkeeper::operator::v1::ApproveRequest;
@@ -28,7 +34,9 @@ use x509_cert::der::{Decode, DecodePem, Encode};
 use x509_cert::name::Name;
 use x509_cert::request::CertReq;
 
-use crate::support::{HOST, IMAGE, T0, WEEK, Wall, World, claims, pem, pin_of};
+use crate::support::{
+    HOST, IMAGE, Managed, T0, WEEK, Wall, World, claims, nonce_plist, pem, pin_of,
+};
 
 /// The subject every request of the daemon carries before and after approval.
 const PENDING: &str = "CN=host:pending";
@@ -146,13 +154,18 @@ impl CoordinatorEnroll for InProcess {
                     .as_ref()
                     .map(ToString::to_string)
                     .unwrap_or_default(),
-                ..pb::EnrollRequest::default()
+                mac_nonce: request
+                    .mac_nonce
+                    .as_ref()
+                    .map(|nonce| nonce.as_bytes().to_vec())
+                    .unwrap_or_default(),
             })
             .map_err(|e| failed("Enroll", e))?;
         let request_id = RequestId::parse(&reply.request_id)
             .ok_or_else(|| TransportError(format!("Enroll: request id {}", reply.request_id)))?;
         let state = match pb::EnrollState::try_from(reply.state) {
             Ok(pb::EnrollState::Pending | pb::EnrollState::DuplicateClaim) => EnrollState::Pending,
+            Ok(pb::EnrollState::Unspecified) => EnrollState::Decided,
             other => return Err(TransportError(format!("Enroll: state {other:?}"))),
         };
         Ok(EnrollAnswer { request_id, state })
@@ -204,6 +217,11 @@ impl CoordinatorEnroll for InProcess {
 /// The coordinator's enrollment, started over its own files in the test's scratch directory,
 /// its CA made at the test's wall clock.
 fn start(world: &World) -> Arc<Enrollment> {
+    Arc::new(started(world))
+}
+
+/// [`start`], not yet shared.
+fn started(world: &World) -> Enrollment {
     let dir = world.dir.path().join("coordinator");
     std::fs::create_dir_all(&dir).expect("the coordinator's directory");
     let (store, ca_key, server_cert) = (
@@ -221,7 +239,7 @@ fn start(world: &World) -> Arc<Enrollment> {
         server_ips: &[],
     };
     let clock = Arc::new(SharedWall(Arc::clone(&world.wall)));
-    Arc::new(setup(Arc::new(RealFs), &files, clock, counting()).expect("enrollment starts"))
+    setup(Arc::new(RealFs), &files, clock, counting()).expect("enrollment starts")
 }
 
 /// An enroller whose coordinator is `enrollment`, its config pinning that CA.
@@ -326,4 +344,70 @@ fn a_daemon_enrolls_and_renews_with_the_coordinators_own_enrollment_and_ca() {
     };
     let second_der = assert_issued(&enrollment, &second, 2);
     assert_ne!(first_der, second_der);
+}
+
+/// The serial of the tests' Mac.
+const SERIAL: &str = "C02XK1ABJG5J";
+
+/// The gate of the tests: every device enrolled and supervised.
+struct Supervised;
+
+impl DeviceState for Supervised {
+    fn status(&self, _serial: &str) -> Result<DeviceStatus, DeviceStateError> {
+        Ok(DeviceStatus {
+            enrolled: true,
+            supervised: true,
+            enrolled_since_unix: None,
+        })
+    }
+}
+
+/// Catches a Mac nonce the coordinator does not approve on: a Mac posts and waits; the
+/// coordinator issues a nonce for its pending request, which reaches the Mac through its
+/// managed preferences; the next step reposts with it, the coordinator's Mac path approves the
+/// request as its allowlist entry says, and the same step's poll brings that host's
+/// certificate, with no operator.
+#[test]
+fn a_mac_is_approved_by_its_nonce_with_the_coordinators_own_enrollment() {
+    let world = World::new("own-coordinator-mac");
+    *world.claims.lock().expect("claims") = hostkeeper_enroll::Claims {
+        mac_serial: Some(SERIAL.to_owned()),
+        platform_uuid: Some("4C4C4544-0042-5A10-8048-B7C04F4E3332".to_owned()),
+        ..hostkeeper_enroll::Claims::default()
+    };
+    let allowlist =
+        format!("[[mac]]\nserial = \"{SERIAL}\"\nhost_id_prefix = \"mac-\"\nrole = \"{ROLE}\"\n");
+    let enrollment = Arc::new(started(&world).with_mac(MacPolicy {
+        device_state: Arc::new(Supervised),
+        allowlist: MacAllowlist::parse(&allowlist).expect("an allowlist"),
+    }));
+    let mut enroller = enroller_of(&world, &enrollment);
+    assert_eq!(enroller.run_once().expect("posted"), Outcome::Pending);
+    assert_eq!(enroller.run_once().expect("polled"), Outcome::Pending);
+
+    let [pending] = enrollment
+        .store()
+        .pending()
+        .expect("pending")
+        .try_into()
+        .expect("one");
+    assert!(!pending.mac_nonce_presented);
+    let id = pending.request_id.to_hex();
+    let nonce = enrollment
+        .issue_mac_nonce(SERIAL, &KeyHash::from_hex(&id).expect("a key hash"))
+        .expect("a nonce");
+    world.set_managed(Managed::Bytes(nonce_plist(&id, nonce.as_bytes())));
+
+    let Outcome::Enrolled(identity) = enroller.run_once().expect("enrolled") else {
+        panic!("not enrolled");
+    };
+    let host = format!("mac-{}", SERIAL.to_ascii_lowercase());
+    assert_eq!(identity.host_id.as_str(), host);
+    let der = stored(&identity).to_der().expect("DER");
+    let known = enrollment.identity_of(&der).expect("a known certificate");
+    assert_eq!(
+        (known.host_id.as_str(), known.role.as_str()),
+        (host.as_str(), ROLE)
+    );
+    assert_eq!(enroller.run_once().expect("idle"), Outcome::Idle);
 }

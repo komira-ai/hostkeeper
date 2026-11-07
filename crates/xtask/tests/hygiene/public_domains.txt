@@ -26,6 +26,11 @@ githubapp.com
 # declares (http://www.apple.com/DTDs/PropertyList-1.0.dtd).
 apple.com
 
+# Canonical's release sites, which the network boot sets are pinned from
+# (packaging/netboot/pins.toml: releases.ubuntu.com, cdimage.ubuntu.com), and the Ubuntu archive
+# its README checks the pinned packages against (archive.ubuntu.com, ports.ubuntu.com).
+ubuntu.com
+
 # The ACME directory of Let's Encrypt (acme-v02.api.letsencrypt.org), which the MDM kit's example
 # settings name for its TLS certificate (crates/hostkeeper-mdm-core/config.example).
 letsencrypt.org
@@ -105,3 +110,6 @@ mender.io
 balena.io
 jamf.com
 fleetdm.com
+# The namespace of OpenSSH's own names for its security-key types, which the SSH keys file of a
+# network-install seed accepts (hostkeeper-pxe-seed's keys.rs).
+=openssh.com

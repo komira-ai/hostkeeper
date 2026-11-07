@@ -17,8 +17,15 @@
 //! that write returned is the request built and posted. A failed write posts nothing, and neither
 //! do claims the host cannot give ([`Error::Claims`]).
 //!
-//! A posted request is polled: an unsigned poll gets a nonce, a poll signed by the request key
-//! gets the answer. An issued certificate is checked (`verify.rs`) and stored as a new
+//! A request is posted once per key (and `renewal_of`), and then polled: an unsigned poll gets a
+//! nonce, a poll signed by the request key gets the answer. On a Mac, a step that enrolls also
+//! reads the managed preferences its MDM writes the one-time nonce to (`managed.rs`). When they
+//! hold a nonce for this step's request (their `request_id` is its id) that this enroller has not
+//! posted, the step posts `Enroll` again, the same request with `mac_nonce` set, before it polls
+//! (docs/design/hostkeeper-mdm.md, section 5.3). A nonce is posted once, whatever the answer; a
+//! new nonce is posted once more. A file that is missing, untrusted, malformed or for another
+//! request posts nothing more and fails nothing: the request waits for an operator as before.
+//! Only the SHA-256 of a posted nonce is kept, and no line or error carries a byte of it. An issued certificate is checked (`verify.rs`) and stored as a new
 //! generation; one that fails a check leaves the pki directory as it was.
 
 use std::path::PathBuf;
@@ -30,6 +37,7 @@ use x509_cert::der::DecodePem;
 
 use crate::claims::{ClaimsError, ClaimsSource};
 use crate::key::{Entropy, HostKey, KeyError};
+use crate::managed::{MacNonce, ManagedPreferences, read_nonce};
 use crate::renewal::RenewalState;
 use crate::store::{KeyFrom, Store, StoreError, StoreLock, Stored};
 use crate::validity::{self, WallClock};
@@ -64,6 +72,9 @@ pub struct Ports {
     pub wall: Box<dyn WallClock>,
     /// Paces the retries.
     pub clock: Box<dyn Clock>,
+    /// A Mac's managed preferences, where its MDM puts the enrollment nonce; `None` on a host
+    /// without them (Linux).
+    pub managed: Option<Box<dyn ManagedPreferences>>,
 }
 
 /// The host's certificate generation, as stored.
@@ -178,6 +189,8 @@ pub struct Enroller {
     /// The host an issued certificate named when it expired before it could be installed: the
     /// pending key returns as `renewal_of` that host.
     returning: Option<HostId>,
+    /// The SHA-256 of the last Mac nonce this process posted, so each is posted once.
+    nonce_posted: Option<[u8; 32]>,
     _lock: StoreLock,
 }
 
@@ -191,6 +204,7 @@ impl Enroller {
             ports,
             posted: None,
             returning: None,
+            nonce_posted: None,
             _lock: lock,
         })
     }
@@ -318,14 +332,19 @@ impl Enroller {
         };
         let id = key.request_id();
         let wanted = (id.clone(), renewal_of.clone());
-        if self.posted.as_ref() != Some(&wanted) {
+        let mac_nonce = self.unposted_nonce(&id);
+        if self.posted.as_ref() != Some(&wanted) || mac_nonce.is_some() {
             let request = EnrollRequest {
                 csr_der: key.csr_der()?,
                 claims: self.ports.claims.claims()?,
                 image: self.settings.image.clone(),
                 renewal_of: renewal_of.clone(),
+                mac_nonce,
             };
             let answer = self.ports.coordinator.enroll(&request)?;
+            if let Some(nonce) = &request.mac_nonce {
+                self.nonce_posted = Some(nonce.digest());
+            }
             if answer.request_id != id {
                 return Err(ProtocolError::OtherRequest {
                     sent: id,
@@ -352,6 +371,15 @@ impl Enroller {
                 }
             },
         }
+    }
+
+    /// The nonce of the managed preferences when it is for the request `id` and was not posted
+    /// yet; `None` without managed preferences, or when they cannot be read or used.
+    fn unposted_nonce(&self, id: &RequestId) -> Option<MacNonce> {
+        let bytes = self.ports.managed.as_ref()?.read().ok()?;
+        let managed = read_nonce(&bytes).ok()?;
+        let fresh = self.nonce_posted != Some(managed.nonce.digest());
+        (managed.request_id == *id && fresh).then_some(managed.nonce)
     }
 
     /// After a refusal of an issued certificate as expired (approved, then not installed until

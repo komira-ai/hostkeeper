@@ -1,0 +1,42 @@
+#cloud-config
+autoinstall:
+  version: 1
+  refresh-installer:
+    update: false
+  apt:
+    geoip: false
+    mirror-selection:
+      primary:
+        - uri: "http://192.0.2.10/no-mirror/"
+    fallback: offline-install
+  storage:
+    layout:
+      name: direct
+      match:
+        path: "/dev/nvme0n1"
+        size: smallest
+  ssh:
+    install-server: true
+    allow-pw: false
+  late-commands:
+    - "curl --fail --silent --show-error --output /target/var/tmp/hostkeeper.deb http://192.0.2.10/deb/hostkeeper_amd64.deb"
+    - "curtin in-target -- dpkg -i /var/tmp/hostkeeper.deb"
+  user-data:
+    hostname: "node-a"
+    users:
+      - name: operator
+        lock_passwd: true
+        shell: /bin/bash
+        sudo: "ALL=(ALL) NOPASSWD:ALL"
+        ssh_authorized_keys:
+          - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB operator-laptop"
+    write_files:
+      - path: /etc/hostkeeper/hostkeeper.toml
+        owner: "root:root"
+        permissions: "0600"
+        encoding: b64
+        content: IyBUaGUgZmFybSdzIGRhZW1vbiBjb25maWcgZm9yIG5ldHdvcmstaW5zdGFsbGVkIGhvc3RzLgpjb29yZGluYXRvciAgICAgPSAiaHR0cHM6Ly8xOTIuMC4yLjE6ODQ0MyIKY2Ffc2hhMjU2ICAgICAgID0gIjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWYiCnJlbGVhc2VfY2hhbm5lbCA9ICJodHRwczovL3JlbGVhc2VzLmV4YW1wbGUiCgpbdHJ1c3RlZF9zaWduZXJzXQpvcmdhbmlzYXRpb24gID0gImtvbWlyYS1haSIKd29ya2Zsb3cgICAgICA9ICIuZ2l0aHViL3dvcmtmbG93cy9yZWxlYXNlLnltbCIKcmVmcyAgICAgICAgICA9IFsicmVmcy90YWdzLyoiXQpob3N0ZWRfcnVubmVyID0gdHJ1ZQoKW2JvdW5kc10KbWF4X2VudHJpZXMgPSAzMDAwMAo=
+      - path: /etc/cloud/cloud.cfg.d/99_hostkeeper.cfg
+        owner: "root:root"
+        permissions: "0644"
+        content: "datasource_list: [ NoCloud, None ]\n"

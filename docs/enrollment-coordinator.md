@@ -214,7 +214,11 @@ is `unknown_host`.
 The MDM policy gate gives each Mac a one-time nonce through `Enrollment::issue_mac_nonce`: 32
 random bytes, of which the store keeps the SHA-256
 only, for one serial and the one pending request the gate saw (its key hash), good for one hour
-and one approval. A Mac's `Enroll` carries it (`mac_nonce`). The request is approved, as the
+and one approval. A Mac's `Enroll` carries it (`mac_nonce`): the daemon reads it from the managed
+preferences the MDM installed and posts its pending request once more with it
+([operations/enrollment.md](operations/enrollment.md#the-mac-path)). The answer to that post is
+`ENROLL_STATE_UNSPECIFIED` when the nonce approved the request, as it is for any request no longer
+pending, and the daemon's next `Poll` brings the certificate. The request is approved, as the
 allowlist entry of its serial says and by the approver `mdm-nonce`, only when the serial it claims
 is on `--mac-serial-allowlist`, the gate says the device is enrolled and supervised, and the nonce
 is known, unexpired, unused, was issued for that serial and was issued for that request. A nonce
@@ -302,7 +306,8 @@ is started with `-webhook-url http://<--mdm-webhook-listen>/webhook`.
     the domain `dev.hostkeeper.config`. One the Mac answered with an error is sent again an hour
     after the answer.
   - It issues a nonce (`Enrollment::issue_mac_nonce`) only when the device is supervised, no
-    nonce issued for the serial is still good (3600 seconds from its issue), and exactly one
+    nonce issued for the serial is still good (3600 seconds from its issue, and no approval of
+    the serial recorded since, which consumed it), and exactly one
     request is a candidate: waiting for an operator, not a duplicate claim, claiming the serial
     and a platform UUID equal to the device's UDID (letter case aside), posted at or after the
     first `TokenUpdate` of the current enrollment. Two candidates, a local reader of the
@@ -317,8 +322,9 @@ is started with `-webhook-url http://<--mdm-webhook-listen>/webhook`.
     the gate's memory, and no byte of it is logged or audited. After a restart a failed push is
     not pushed again: a new nonce is issued once the old one expires.
 
-  The gate does not install the pkg yet (task M14 of the design), and the daemon does not post
-  the nonce yet (task M13).
+  The daemon posts the nonce back with its request ([docs/operations/enrollment.md](operations/enrollment.md)),
+  and the request is approved as above. The gate does not install the pkg yet (task M14 of the
+  design): the pkg is installed by hand until then.
 
 ## Backup
 
@@ -356,6 +362,5 @@ final; from then on its heartbeats are refused before they are read.
 ## Not here yet
 
 The wire transport of `Enroll`, `Poll` and `Renew`, and of `Enrollment.List` and
-`Enrollment.Approve` (the coordinator's gRPC serving). The MDM policy gate's install of the pkg,
-and the daemon's repost of its request with the nonce. Neither transport carries a machine id in a heartbeat yet, so the duplicate mark (two live
+`Enrollment.Approve` (the coordinator's gRPC serving). The MDM policy gate's install of the pkg. Neither transport carries a machine id in a heartbeat yet, so the duplicate mark (two live
 daemons on one host id) is only set when a caller of `Coordinator::heartbeat_from` passes one.
