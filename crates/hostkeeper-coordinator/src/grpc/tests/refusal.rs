@@ -284,6 +284,11 @@ fn every_refusal_value_has_the_code_and_token_its_proto_comment_names() {
                 FailedPrecondition,
                 "record_mismatch",
             ),
+            (
+                EnrollmentRefusal::RecordContested,
+                FailedPrecondition,
+                "record_contested",
+            ),
         ],
         refusal::enrollment,
     );

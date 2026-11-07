@@ -353,9 +353,11 @@ authentication as `nanohub`; the answer is NanoMDM's `APIResult` JSON. Because t
 signed, the gate reads a result only for a command UUID it sent that device and is still waiting
 on. Its tests read NanoMDM's recorded payloads (`crates/hostkeeper-mdm-gate/tests/fixtures/nanohub/`).
 
-The device record is a durable file per enrollment id (**Built**:
-`<--enrollment-dir>/mdm-devices/<enrollment id>.pb`, behind the gate's `DeviceStore`, so the
-coordinator's backup copies it with the enrollment store). It holds the enrollment id, serial,
+The device record is durable, one per enrollment id, behind the gate's `DeviceStore` (**Built**).
+While the coordinator's state is files, it is a file, `<--enrollment-dir>/mdm-devices/<enrollment
+id>.pb`, which the coordinator's backup copies with the enrollment store. Once the Postgres store is
+built (task C3 of [coordinator-storage.md](coordinator-storage.md)), it is a row of the table
+`mdm_devices` that M8's migration adds there, as a second `DeviceStore`; the gate does not change. It holds the enrollment id, serial,
 enrolled, supervised, ADE, user-approved, the times of the last check-in, and the commands sent
 and not answered. The config profile's state, the install tries and the nonce pushes are fields
 the tasks that send them add (M12, M14). `status(serial)`
@@ -630,7 +632,7 @@ progress from explicit events. NanoHUB is a fake: an in-process HTTP server on `
 | `a_device_without_a_serial_is_unavailable` | an `Authenticate` and a `DeviceInformation` answer with no serial approve nothing | M8 |
 | `a_serial_under_two_enrollments_is_unavailable` | an ambiguous serial approves nothing | M8 |
 | `the_gate_enqueues_only_its_five_command_types` | the command list of section 3; a sixth type is refused before NanoHUB is called | M8 |
-| `a_device_record_survives_a_coordinator_restart` | the record is durable; a torn write is refused at open, not read as enrolled | M8 |
+| `a_device_record_survives_a_coordinator_restart` | the record is durable; a row that does not parse is refused at start, not read as enrolled | M8 |
 | `no_nonce_for_a_device_that_is_not_enrolled_and_supervised` | condition 1 | M12 |
 | `no_nonce_for_a_serial_off_the_allowlist` | condition 2 | M12 |
 | `no_nonce_before_a_candidate_request_is_pending` | condition 3: enrolled, supervised and allowlisted are not enough | M12 |
@@ -740,7 +742,7 @@ pull request.
 | M6a | komira-ai/kbf: freeze notes; delete `kbf-mdm`, `kbf-mdm-api` and their client in `kbf-server`; later, after M7, delete `mdm-core`, `host-step`, `mdm-host` and `kbf-deploy mdm` | M5 | S |
 | M6b | komira-ai/jobscheduler: after M7, delete `js-mdm-core`, `js-host-step`, `js-mdm` and their release workflow, release plan, test and coverage-baseline entries, with a pointer to hostkeeper | M7 | S |
 | M7 | Held, run by the owner of the MDM host: the read-only check of the live state, `migrate --apply`, `verify`, `dep define-profile`; the DNS record (section 9); the ABM checks (question Q2) | M5 | S |
-| M8 | The gate's device side: NanoHUB client (loopback, API key file), webhook listener on loopback, durable device records, `DeviceInformation` and `SecurityInfo`, the `DeviceState` implementation; coordinator flags `--mdm-api-url`, `--mdm-api-key-file`, `--mdm-webhook-listen`; `Mdm.ListDevices` in the operator API and its generated CLI verb; `docs/enrollment-coordinator.md` no longer says the gate is outside the coordinator. **Built**: `crates/hostkeeper-mdm-gate`, wired in by `crates/hostkeeper-coordinator/src/mdm.rs` | M1 | L |
+| M8 | The gate's device side: NanoHUB client (loopback, API key file), webhook listener on loopback, durable device records, `DeviceInformation` and `SecurityInfo`, the `DeviceState` implementation; coordinator flags `--mdm-api-url`, `--mdm-api-key-file`, `--mdm-webhook-listen`; `Mdm.ListDevices` in the operator API and its generated CLI verb; `docs/enrollment-coordinator.md` no longer says the gate is outside the coordinator; the table `mdm_devices` by its own migration, once C3 is built. **Built**: `crates/hostkeeper-mdm-gate`, wired in by `crates/hostkeeper-coordinator/src/mdm.rs`, its records files behind `DeviceStore` until the table is | M1; C3 of coordinator-storage.md for the table | L |
 | M9 | Coordinator: the nonce's `request_id` (an added store field), `nonce_wrong_request`, the replacement of a wiped Mac's own host id, and the allowlist entry's services assigned at a nonce approval as at an operator's; `docs/enrollment-coordinator.md` and `docs/operations/enrollment.md` | M1 | M |
 | M10 | Pkg: the `productbuild` distribution layer, the `mac-config` verb, the three-command postinstall, `check-macos-pkg`, the `plist` dependency comment, `docs/macos.md` | M1 | M |
 | M11 | Device test of pkg signing (section 7.2) on one enrolled Mac; the results are written into this document, and they decide M15 | M7, M8, M10 | S |
@@ -750,7 +752,7 @@ pull request.
 | M15 | Signing, as M11 decides: `hostkeeper-mdm pkg add` (farm identity), or the Developer ID job in `artifacts.yml` with its workflow-lint entry | M11, M14 | M |
 | M16 | Device run on Path A and Path B: the checklist and the report with the measurement | M7, M12, M13, M14, M15 | M |
 
-M2, M3, M8, M9 and M10 can proceed in parallel after M1. The critical path is M1, M8, M12, M16,
+M2, M3, M9 and M10 can proceed in parallel after M1, and M8 once coordinator-storage.md's C3 has landed. The critical path is M1, M8, M12, M16,
 with M10, M11, M14 and M15 joining before M16.
 
 ## 13. Questions for the maintainers
