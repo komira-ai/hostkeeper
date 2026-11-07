@@ -1,0 +1,125 @@
+//! `hostkeeper-mdm`: the MDM kit's binary, which applies [`hostkeeper_mdm_core`]'s rendered
+//! output to the Linux host of the MDM server stack (docs/design/hostkeeper-mdm.md, task M4).
+//!
+//! The stack is NanoHUB, a SCEP server, NanoDEP and Caddy as capped systemd services on one
+//! Linux host, which enrolls the farm's Macs. This crate links no other crate of the workspace
+//! but `hostkeeper-mdm-core`, the pure half (settings, units, profiles and pins), and
+//! `hostkeeper-mdm-step`, the host-step layer (crates/xtask/tests/layering keeps it so). Every
+//! verb checks the host read only, makes a plan of the steps that would change it, prints the
+//! plan by default, and carries it out with `--apply`. It is the port of komira-ai/kbf's
+//! `mdm-host`, with the fixes of komira-ai/kbf#2248 that the design gives task M4
+//! (`MIGRATION.md` lists them with their tests).
+//!
+//! # Verbs
+//!
+//! * `hostkeeper-mdm fetch --dir DIR [--only TOOL]... [--apply]`: the pinned upstream archives,
+//!   downloaded over HTTPS as your own user into `DIR` (refused at uid 0: it does not drop
+//!   privileges; refused inside a git work tree, links resolved first), each checked against its
+//!   sha256 pin. A download that is not the pin is kept as `<file>.rejected` and fails the
+//!   run. Nothing downloaded is run.
+//! * `hostkeeper-mdm install --settings FILE --bin-dir DIR [--apply]`: as root, on an x86-64
+//!   host (the pins are linux-amd64 builds), the user, the directories, the binaries unpacked
+//!   from the checked archives, the secrets (made once from 32 random bytes, never printed), the
+//!   SCEP CA (kept when its depot holds a whole CA, refused when it holds part of one), the
+//!   slice, the service units and the Caddyfile, and the services started. The proxy waits for
+//!   the TLS certificate. A service whose inputs changed is restarted on this run or, if the run
+//!   stops first, on the next one.
+//! * `hostkeeper-mdm install --settings FILE --uninstall [--apply]`: stops and disables the
+//!   units, stops the certificate and reload jobs, and moves their files to
+//!   `MDM_STATE/removed/<unix seconds>/` (a later snapshot in the same second takes the next free
+//!   name). The state, the TLS certificate, the secrets, the binaries and the user stay.
+//! * `hostkeeper-mdm tls --settings FILE [--apply]`: as root, the TLS certificate from an ACME
+//!   CA over DNS-01 by the pinned lego, with the DNS provider's credentials read by the
+//!   certificate unit from the root-only `MDM_ETC/dns.env` (never argv), its renewal timer, and
+//!   the proxy started once the certificate is there.
+//! * `hostkeeper-mdm verify --settings FILE [--ignore LINE]...`: read only. Health checks (units
+//!   active, listeners, certificate lifetime, modes), then one line per installed file
+//!   compared with `hostkeeper-mdm-core`'s render of the same settings.
+//!
+//! Not in this binary yet: `push-cert`, `dep` and `migrate` (design task M5).
+//!
+//! # Rules every verb keeps
+//!
+//! * A dry run is the default and changes nothing; `--apply` acts. A rerun finds nothing to
+//!   do.
+//! * Verbs that read root-only files refuse to run as another user, even for a dry run.
+//! * Files are made without following links: a link in a directory the service user owns is
+//!   refused, never chmodded, chowned or written through. The directories on the way to a path
+//!   must be root's, or the operator's on the way to `--bin-dir`, or the service user's below
+//!   `MDM_STATE`.
+//! * A plan names paths, sizes and modes, never contents (its `Debug` form neither). No secret
+//!   is put on a command line or printed; the SCEP challenge and API keys are written straight
+//!   to 0600 root files.
+//! * Exit 0 done (or nothing to do), 1 a step, a download or a check failed, 2 refused
+//!   (`REFUSED: ...` on stderr).
+//! * Settings come from the file `--settings` names, never from the environment.
+
+#![deny(clippy::disallowed_methods, clippy::disallowed_types)]
+
+pub mod archive;
+mod cli;
+mod error;
+pub mod fetch;
+pub mod install;
+pub mod net;
+pub mod secret;
+mod system;
+pub mod tls;
+pub mod verify;
+
+use std::io;
+
+use hostkeeper_mdm_step::Host;
+
+pub use cli::{run, run_with};
+pub use error::MdmError;
+pub use net::{Download, DownloadError, Net};
+pub use system::{RealMachine, main, system_random};
+
+/// What a verb needs from the outside: the host, the network, a random source and the time.
+pub struct Env<'a> {
+    /// The host.
+    pub host: &'a dyn Host,
+    /// Downloads.
+    pub net: &'a dyn Download,
+    /// Fills a buffer with random bytes.
+    pub random: &'a dyn Fn(&mut [u8]) -> io::Result<()>,
+    /// Unix seconds now, read once when the program starts: it names an uninstall snapshot,
+    /// and nothing decides on it.
+    pub now: u64,
+}
+
+/// A directory whose owner is trusted on the way to it and to every path below it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Grant {
+    /// The directory.
+    pub dir: String,
+    /// The owner trusted.
+    pub uid: u32,
+}
+
+/// Where a verb's [`Host`] comes from: the machine, trusting root and the effective user, and
+/// the owners of the directories a verb grants.
+pub trait Machine {
+    /// The host, also trusting each grant's owner for the paths at and below its directory.
+    fn host(&self, grants: &[Grant]) -> Box<dyn Host + '_>;
+
+    /// The owner of the directory at `path`; `None` when nothing is there. Only whom
+    /// [`Machine::host`] is to trust is decided on it: every read still walks the path itself.
+    ///
+    /// # Errors
+    /// The system's error, other than "not found".
+    fn owner(&self, path: &str) -> io::Result<Option<u32>>;
+}
+
+/// What [`run`] acts on: the machine, the network, a random source and the time.
+pub struct System<'a> {
+    /// The machine.
+    pub machine: &'a dyn Machine,
+    /// Downloads.
+    pub net: &'a dyn Download,
+    /// Fills a buffer with random bytes.
+    pub random: &'a dyn Fn(&mut [u8]) -> io::Result<()>,
+    /// Unix seconds now.
+    pub now: u64,
+}

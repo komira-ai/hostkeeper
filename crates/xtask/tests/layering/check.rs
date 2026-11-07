@@ -23,6 +23,7 @@ const UNPACK: &str = "hostkeeper-unpack";
 const ENROLLMENT: &str = "hostkeeper-enrollment";
 const OBSERVE: &str = "hostkeeper-observe";
 const LAUNCHD: &str = "hostkeeper-launchd";
+const MDM: &str = "hostkeeper-mdm";
 const MDM_STEP: &str = "hostkeeper-mdm-step";
 const PROTO: &str = "hostkeeper-proto";
 const CTL: &str = "hostkeeper-ctl";
@@ -72,7 +73,7 @@ pub type Layer = (
 /// hello with their program `hello-e2e`, which runs hello's hook and server and so needs hello
 /// as a normal dependency. The binary's tests read the protobuf descriptors, and run the macOS
 /// pkg's postinstall (`hostkeeper-launchd`) against the binary.
-pub const LAYERS: [Layer; 25] = [
+pub const LAYERS: [Layer; 26] = [
     (BINARY, &[DAEMON], &[LAUNCHD, PROTO]),
     (CI, &[CTL], &[PROTO]),
     (CONFIG, &[], &[]),
@@ -100,6 +101,7 @@ pub const LAYERS: [Layer; 25] = [
         &[CONFIG, HOOK, PROTO, STEPS, WIRE],
         &[COORDINATOR, ENROLL, OIDC, TLS],
     ),
+    (MDM, &[MDM_CORE, MDM_STEP], &[]),
     (MDM_CORE, &[], &[]),
     (MDM_STEP, &[], &[]),
     (OBSERVE, &[CONFIG, PROTO], &[HOOK, STEPS]),
