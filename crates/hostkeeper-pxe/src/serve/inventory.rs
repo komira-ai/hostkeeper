@@ -2,7 +2,7 @@
 //! section 3, "Which machines may be installed: the answer set"): through the operator API on
 //! the private listener, with the operator token, the inventory (`Enrollment.ListRecords`, each
 //! record with its `host_held`, what the coordinator's durable enrollment store holds for its host
-//! id) and the pending requests (`Enrollment.List`), every page of each. `Hosts.List` is not read:
+//! id, and its `state`, where its approval window stands) and the pending requests (`Enrollment.List`), every page of each. `Hosts.List` is not read:
 //! it lists only the hosts heard from since the coordinator started (section 3, "`host_held` is
 //! the rule").
 //!
@@ -61,6 +61,9 @@ pub struct Record {
     /// What the enrollment store holds for its host id; a value this release does not know
     /// reads as `Unspecified`, which says nothing, so the record is left out.
     pub host_held: proto::HostHeld,
+    /// Where its approval window stands; a value this release does not know reads as
+    /// `Unspecified`, which says nothing, so the record is left out unless it is `Open`.
+    pub state: proto::RecordState,
     /// Its platform; `None` when not recorded.
     pub platform: Option<LinuxPlatform>,
 }
@@ -204,6 +207,7 @@ fn record_of(record: proto::InventoryRecord) -> Result<(Record, Platform), Strin
             data_macs,
             enrolled: record.enrolled,
             host_held: record.host_held(),
+            state: record.state(),
             platform,
         },
         kind,

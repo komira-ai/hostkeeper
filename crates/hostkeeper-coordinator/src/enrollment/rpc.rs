@@ -137,6 +137,8 @@ fn decode<M: Message + Default>(bytes: &[u8]) -> Result<M, RpcError> {
 pub struct Enrolled {
     /// The answer to the host.
     pub response: EnrollResponse,
+    /// The request's id: the SHA-256 of the CSR's key.
+    pub request_id: KeyHash,
     /// The allowlist entry the request was approved as by its Mac nonce, if it was: the
     /// coordinator assigns its services ([`crate::service::Coordinator::enroll`]).
     pub by_nonce: Option<MacAllowEntry>,
@@ -160,7 +162,9 @@ impl Enrollment {
 
     /// `Enroll`: records the request of the CSR's key (its id is the key's SHA-256, computed
     /// here), pending until an operator approves it. The same key again is the same request.
-    /// A new request while the pending queue is full is refused `pending_full`. A pending
+    /// A new request while the pending queue is full is refused `pending_full`. A request that
+    /// stays pending here waits for an operator, or for the inventory record it matches
+    /// ([`crate::service::Coordinator::enroll`] tries the records); a pending
     /// request that carries a Mac nonce is approved by it when every condition of the Mac path
     /// holds ([`Enrollment::mac_auto_approve`]), and the allowlist entry it was approved as is
     /// returned with the answer; otherwise it stays pending. A new request (not a repost) is
@@ -238,6 +242,7 @@ impl Enrollment {
                 request_id: posted.request_id.to_hex(),
                 state: state as i32,
             },
+            request_id: posted.request_id,
             by_nonce,
         })
     }

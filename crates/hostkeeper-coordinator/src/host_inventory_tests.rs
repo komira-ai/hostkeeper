@@ -390,6 +390,8 @@ fn record(host: &str, data: &[&str], bmc: &str, serial: &str) -> InventoryRecord
         notes: String::new(),
         by: "operator".to_owned(),
         at_unix: NOW,
+        approve_until_unix: 0,
+        used: None,
         platform: None,
     }
 }

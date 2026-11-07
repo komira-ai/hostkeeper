@@ -65,6 +65,10 @@ fn record() -> op::InventoryRecord {
         enrolled: true,
         host_held: op::HostHeld::Approved.into(),
         platform: hostkeeper_proto::hostkeeper::agent::v1::Platform::LinuxArm64.into(),
+        approve_until_unix: 1_800_086_400,
+        state: op::RecordState::Used.into(),
+        used_by_request_id: "ab".repeat(32),
+        used_unix: 1_800_000_060,
     }
 }
 
@@ -213,6 +217,8 @@ fn new_messages() -> Vec<(&'static str, Vec<u8>)> {
                     contested_by: vec!["2e".repeat(32), "3d".repeat(32)],
                     record_serial: "SN-42".to_owned(),
                     record_bmc_mac: "0c:c4:7a:00:00:01".to_owned(),
+                    record_state: op::RecordState::Open.into(),
+                    record_approve_until_unix: 1_800_086_400,
                 }],
                 next_page_token: "p3".to_owned(),
             }),
@@ -258,6 +264,24 @@ fn new_messages() -> Vec<(&'static str, Vec<u8>)> {
                 serial: "SN-1".to_owned(),
                 notes: "rack 4".to_owned(),
                 platform: hostkeeper_proto::hostkeeper::agent::v1::Platform::LinuxX8664.into(),
+                approve_until_unix: 1_800_086_400,
+                approve_for_secs: 3_600,
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.OpenRecordRequest",
+            round_trip(&op::OpenRecordRequest {
+                host_id: "db-1".to_owned(),
+                approve_until_unix: 1_800_086_400,
+                approve_for_secs: 3_600,
+                reason: "rack was late".to_owned(),
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.OpenRecordResponse",
+            round_trip(&op::OpenRecordResponse {
+                record: Some(record()),
+                entry: Some(audit_entry("record_open")),
             }),
         ),
         (
@@ -443,7 +467,7 @@ fn the_new_messages_round_trip_and_an_older_reader_keeps_unknown_fields() {
         .expect("released");
     assert_eq!(blind.fields().count(), 0);
     let messages = new_messages();
-    assert_eq!(messages.len(), 32);
+    assert_eq!(messages.len(), 34);
     for (name, bytes) in messages {
         assert!(older.get_message_by_name(name).is_none(), "{name} is new");
         assert!(!bytes.is_empty(), "{name} sets its fields");

@@ -44,8 +44,11 @@
 //!   halts, aborts, exclusions, holds, the audit log), and [`assign`], its assignment calls
 //!   (`Services.Assign`, `Unassign`, `SetMinVersion`, `List`), [`operator_enrollment`], its
 //!   `Enrollment.List` and `Enrollment.Approve`, and [`hosts`], its `Hosts.List` and `Hosts.Get`;
-//! - [`inventory`]: the host inventory (`Enrollment.AddRecord`, `ListRecords`, `RemoveRecord`),
-//!   kept in the ops file, and the match of each request `Enrollment.List` shows against it;
+//! - [`inventory`]: the host inventory (`Enrollment.AddRecord`, `ListRecords`, `RemoveRecord`,
+//!   `OpenRecord`), kept in the ops file, the match of each request `Enrollment.List` shows
+//!   against it, and the approval window of a record that names a role: while it is open, a
+//!   request that matches the record exactly is approved by the coordinator itself
+//!   ([`enrollment`]);
 //! - [`ops`]: what operators decide (exclusions, labels, halts cleared), the marks of bad and
 //!   last good versions and the audit ring, in the operations file, and every change as a line of
 //!   the audit file beside it (`audit_file`); the halt reports and clear generations in the halts
@@ -225,6 +228,8 @@ mod install_tests;
 mod inventory_platform_tests;
 #[cfg(test)]
 mod inventory_tests;
+#[cfg(test)]
+mod inventory_window_tests;
 #[cfg(test)]
 mod marks_support;
 #[cfg(test)]

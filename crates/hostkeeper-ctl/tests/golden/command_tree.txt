@@ -184,3 +184,10 @@ flag rollouts resume --reason STRING
 command mdm list-devices /hostkeeper.operator.v1.Mdm/ListDevices
 flag mdm list-devices --limit UINT32
 flag mdm list-devices --page-token STRING
+flag enrollment add-record --approve-until-unix UINT64
+flag enrollment add-record --approve-for-secs UINT64
+command enrollment open-record /hostkeeper.operator.v1.Enrollment/OpenRecord
+flag enrollment open-record --host-id STRING
+flag enrollment open-record --approve-until-unix UINT64
+flag enrollment open-record --approve-for-secs UINT64
+flag enrollment open-record --reason STRING

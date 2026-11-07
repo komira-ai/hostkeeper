@@ -111,14 +111,24 @@ fn the_record_add_audit_reason_names_the_platform() {
         ),
     )
     .expect("added");
+    let until = with.record.as_ref().expect("the record").approve_until_unix;
     assert_eq!(
-        with.entry.expect("audited").reason.as_deref(),
-        Some("role storage; data 0c:c4:7a:00:00:01; platform linux-arm64")
+        with.entry.expect("audited").reason,
+        Some(format!(
+            "role storage; data 0c:c4:7a:00:00:01; approve until {until}; platform linux-arm64"
+        ))
     );
     let without = add(&rig, add_with("db-2", "0c:c4:7a:00:00:02", 0)).expect("added");
+    let until = without
+        .record
+        .as_ref()
+        .expect("the record")
+        .approve_until_unix;
     assert_eq!(
-        without.entry.expect("audited").reason.as_deref(),
-        Some("role storage; data 0c:c4:7a:00:00:02")
+        without.entry.expect("audited").reason,
+        Some(format!(
+            "role storage; data 0c:c4:7a:00:00:02; approve until {until}"
+        ))
     );
 }
 

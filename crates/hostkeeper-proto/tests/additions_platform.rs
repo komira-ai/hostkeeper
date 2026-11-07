@@ -1,4 +1,4 @@
-//! `InventoryRecord.platform` (field 11) and `AddRecordRequest.platform` (field 7), typed as
+//! `InventoryRecord.platform` (field 15) and `AddRecordRequest.platform` (field 9), typed as
 //! `hostkeeper.agent.v1.Platform`: a reader of the messages before the field reads every field
 //! it knows from a message that carries it, a message written before the field reads as
 //! `PLATFORM_UNSPECIFIED` (no platform), and the field numbers are pinned. The baseline holds
@@ -9,7 +9,7 @@ use prost::Message as _;
 use hostkeeper_proto::hostkeeper::agent::v1::Platform;
 use hostkeeper_proto::hostkeeper::operator::v1 as op;
 
-/// `InventoryRecord` as it was before `platform`: fields 1 to 10.
+/// `InventoryRecord` as it was before `platform`: fields 1 to 14.
 #[derive(Clone, PartialEq, prost::Message)]
 struct RecordBefore {
     #[prost(string, tag = "1")]
@@ -32,9 +32,17 @@ struct RecordBefore {
     enrolled: bool,
     #[prost(int32, tag = "10")]
     host_held: i32,
+    #[prost(uint64, tag = "11")]
+    approve_until_unix: u64,
+    #[prost(int32, tag = "12")]
+    state: i32,
+    #[prost(string, tag = "13")]
+    used_by_request_id: String,
+    #[prost(uint64, tag = "14")]
+    used_unix: u64,
 }
 
-/// `AddRecordRequest` as it was before `platform`: fields 1 to 6.
+/// `AddRecordRequest` as it was before `platform`: fields 1 to 8.
 #[derive(Clone, PartialEq, prost::Message)]
 struct AddBefore {
     #[prost(string, tag = "1")]
@@ -49,6 +57,10 @@ struct AddBefore {
     serial: String,
     #[prost(string, tag = "6")]
     notes: String,
+    #[prost(uint64, tag = "7")]
+    approve_until_unix: u64,
+    #[prost(uint64, tag = "8")]
+    approve_for_secs: u64,
 }
 
 fn record(platform: Platform) -> op::InventoryRecord {
@@ -63,6 +75,10 @@ fn record(platform: Platform) -> op::InventoryRecord {
         added_unix: 1_800_000_000,
         enrolled: false,
         host_held: op::HostHeld::None.into(),
+        approve_until_unix: 1_800_086_400,
+        state: op::RecordState::Open.into(),
+        used_by_request_id: String::new(),
+        used_unix: 0,
         platform: platform.into(),
     }
 }
@@ -79,6 +95,10 @@ fn record_before() -> RecordBefore {
         added_unix: 1_800_000_000,
         enrolled: false,
         host_held: op::HostHeld::None.into(),
+        approve_until_unix: 1_800_086_400,
+        state: op::RecordState::Open.into(),
+        used_by_request_id: String::new(),
+        used_unix: 0,
     }
 }
 
@@ -113,6 +133,8 @@ fn an_add_record_request_reads_across_the_release_before() {
         bmc_mac: String::new(),
         serial: "SN-1".to_owned(),
         notes: "rack 4".to_owned(),
+        approve_until_unix: 0,
+        approve_for_secs: 3_600,
     };
     let read = op::AddRecordRequest::decode(before.encode_to_vec().as_slice()).expect("decodes");
     assert_eq!(read.platform(), Platform::Unspecified);
@@ -125,7 +147,7 @@ fn an_add_record_request_reads_across_the_release_before() {
     assert_eq!(older, before);
 }
 
-/// Proves: `InventoryRecord.platform` is field 11 and `AddRecordRequest.platform` field 7, each
+/// Proves: `InventoryRecord.platform` is field 15 and `AddRecordRequest.platform` field 9, each
 /// written as the varint of the platform's number (linux-arm64 is 2).
 ///
 /// Catches: a renumbered field or platform value, which a reader of either side would misread.
@@ -135,10 +157,10 @@ fn the_platform_fields_are_pinned() {
         platform: Platform::LinuxArm64.into(),
         ..op::InventoryRecord::default()
     };
-    assert_eq!(record.encode_to_vec(), [0x58, 0x02]);
+    assert_eq!(record.encode_to_vec(), [0x78, 0x02]);
     let request = op::AddRecordRequest {
         platform: Platform::LinuxX8664.into(),
         ..op::AddRecordRequest::default()
     };
-    assert_eq!(request.encode_to_vec(), [0x38, 0x01]);
+    assert_eq!(request.encode_to_vec(), [0x48, 0x01]);
 }

@@ -13,7 +13,9 @@
 //!    (`Snapshot::not_installable`) is never installed, `--reinstall` or not;
 //! 4. unless `--reinstall` names the record's host id: the record is not enrolled, its
 //!    `host_held` is `NONE` (the enrollment store holds no host by its id: any other value,
-//!    `UNSPECIFIED` included, leaves it out), and no pending request matches it;
+//!    `UNSPECIFIED` included, leaves it out), the record's approval window is `OPEN` (`CLOSED`,
+//!    `USED` and `UNSPECIFIED`, a coordinator before windows, leave it out), and no pending
+//!    request matches it;
 //! 5. in router mode, the record states a platform (the router names one file for every
 //!    client, so the record is where the install's platform is stated);
 //! 6. the record's platform, when it states one, has a boot set.
@@ -28,6 +30,7 @@ use std::fmt;
 
 use hostkeeper_enrollment::names::MacAddress;
 use hostkeeper_proto::hostkeeper::operator::v1::HostHeld as HostHeldValue;
+use hostkeeper_proto::hostkeeper::operator::v1::RecordState;
 use hostkeeper_pxe_packets::Mac;
 use hostkeeper_pxe_packets::dhcp::{AnswerSet, Mode};
 use hostkeeper_pxe_packets::tftp::RecordPlatforms;
@@ -65,6 +68,9 @@ pub enum LeftOut {
         host_id: HostId,
         held: HostHeldValue,
     },
+    /// The record's approval window is not open (`state` is not `OPEN`): it ended or never
+    /// opened, an approval used the record, or the coordinator does not say.
+    Closed { host_id: HostId, state: RecordState },
     /// A pending request matches the record.
     Pending { host_id: HostId, request_id: String },
     /// The record states a platform this server does not install.
@@ -106,6 +112,16 @@ impl fmt::Display for LeftOut {
                     HostHeldValue::Retired => "that id is retired",
                     HostHeldValue::Unspecified | HostHeldValue::None => {
                         "the coordinator does not say whether a host holds that id"
+                    }
+                };
+                write!(f, "the record of host {host_id}: {what}")
+            }
+            LeftOut::Closed { host_id, state } => {
+                let what = match state {
+                    RecordState::Closed => "its approval window is closed",
+                    RecordState::Used => "an approval used it",
+                    RecordState::Unspecified | RecordState::Open => {
+                        "the coordinator does not say whether its approval window is open"
                     }
                 };
                 write!(f, "the record of host {host_id}: {what}")
@@ -246,6 +262,12 @@ fn judge<'r>(
             return Err(LeftOut::HostHeld {
                 host_id: host_id(),
                 held: record.host_held,
+            });
+        }
+        if record.state != RecordState::Open {
+            return Err(LeftOut::Closed {
+                host_id: host_id(),
+                state: record.state,
             });
         }
         let matching = snapshot.pending.iter().find(|pending| {

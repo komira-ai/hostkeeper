@@ -1,16 +1,16 @@
 //! `Enrollment.Approve` of a request by the host inventory: a request that matches exactly one
 //! record is approved as that record's host id (an empty host id is it; another needs `replace`),
 //! and a request that matches no record or several, or is a renewal, is approved as the host id
-//! named, as before the inventory. The view of each match is `inventory.rs`'s.
-
-use std::sync::Arc;
+//! named, as before the inventory. The view of each match is `inventory.rs`'s. The coordinators
+//! here have only closed approval windows ([`super::support::closed_windows`]), so a request
+//! waits for the operator's approval.
 
 use hostkeeper_enrollment::enroll::RequestState;
 use hostkeeper_proto::hostkeeper::agent::v1::{EnrollRequest, EnrollState};
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 
 use super::support::{
-    HostKey, Rig, audit_after, audit_of, audited, enroll_request, enrolled, host_id,
+    HostKey, Rig, audit_after, audit_of, audited, closed_windows, enroll_request, enrolled, host_id,
 };
 use crate::inventory::InventoryRecord;
 use crate::marks_support::operator;
@@ -24,12 +24,10 @@ const DB1_DATA: &str = "0c:c4:7a:00:00:02";
 /// The data MAC of the record `db-2`.
 const DB2_DATA: &str = "0c:c4:7a:00:00:12";
 
-/// A coordinator over the enrollment of `enrollment`.
+/// A coordinator over the enrollment of `enrollment`, whose records' windows are closed
+/// ([`closed_windows`]): a matching request waits for an operator here.
 fn coordinator(name: &str, enrollment: &Rig) -> CoordinatorRig {
-    let mut rig = CoordinatorRig::new(name);
-    rig.coordinator = CoordinatorRig::start(&rig.dir, &rig.clock)
-        .with_enrollment(Arc::clone(&enrollment.enrollment));
-    rig
+    closed_windows(name, enrollment)
 }
 
 /// Records `host` (role `storage`) with the data MAC `data`.
@@ -265,6 +263,8 @@ fn a_record_whose_host_id_breaks_its_rule_names_no_host() {
         notes: String::new(),
         by: "operator".to_owned(),
         at_unix: 0,
+        approve_until_unix: 0,
+        used: None,
         platform: None,
     }];
     let approve = |request| {

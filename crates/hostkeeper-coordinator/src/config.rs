@@ -74,6 +74,7 @@ use crate::enrollment::{
 };
 use crate::fleet::{CLOCK_SKEW_AFTER, QUIET_START};
 use crate::http::Surface;
+use crate::inventory::{RecordWindow, WindowAboveMax};
 use crate::jti_file::JtiError;
 use crate::listen::{CLIENT_PATIENCE, Listener, MAX_CONNECTIONS, accept_tcp, reload_every, serve};
 use crate::lock::{FileLock, LockError, LockGuard, StateLock, lock_path};
@@ -162,6 +163,9 @@ pub enum StartError {
     /// `--ui-dir` does not name a directory.
     #[error("--ui-dir: {0}")]
     UiDir(#[from] UiDirError),
+    /// `--record-approve-for` is longer than `--record-approve-max`.
+    #[error(transparent)]
+    RecordWindow(#[from] WindowAboveMax),
     /// A socket, the runtime or the signal handlers failed.
     #[error(transparent)]
     Io(#[from] io::Error),
@@ -236,6 +240,11 @@ pub enum StartError {
     #[error(transparent)]
     Mdm(#[from] MdmError),
 }
+
+/// The times the flags take, in seconds.
+#[path = "config_secs.rs"]
+mod secs;
+use secs::{record_window_secs, request_ttl_secs};
 
 /// The start's state files, opened as one backend once the markers a stop left beside them are
 /// settled.
@@ -407,6 +416,18 @@ pub struct Serve {
     /// waits anew. Requests are looked at every --tls-reload-secs.
     #[arg(long, default_value = "72h", requires = "enrollment_dir", value_parser = request_ttl_secs)]
     pub enrollment_request_ttl: u64,
+    /// How long the approval window of a new inventory record that names a role lasts when
+    /// `Enrollment.AddRecord` names none: a whole number and a unit, `s`, `m`, `h` or `d`
+    /// (`90m`, `24h`), at least one second, and no longer than --record-approve-max. While the
+    /// window is open a pending request that matches the record exactly is approved by the
+    /// coordinator itself. Needs no --enrollment-dir.
+    #[arg(long, default_value = "24h", value_parser = record_window_secs)]
+    pub record_approve_for: u64,
+    /// The longest approval window an inventory record may be given, `Enrollment.AddRecord` and
+    /// `Enrollment.OpenRecord` alike: a whole number and a unit, `s`, `m`, `h` or `d` (`7d`),
+    /// at least one second. A longer window is refused `invalid_window`.
+    #[arg(long, default_value = "7d", value_parser = record_window_secs)]
+    pub record_approve_max: u64,
     /// The Mac serial numbers a Mac may be approved for by its MDM nonce, with the host id
     /// prefix, role and services of each: a TOML file of `[[mac]]` entries (`serial`,
     /// `host_id_prefix`, `role`, `services`). Without it no Mac is approved by its nonce.
@@ -574,6 +595,8 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         });
     }
 
+    let record_window = RecordWindow::new(flags.record_approve_for, flags.record_approve_max)?;
+
     let tokens = match (&flags.tokens_file, &flags.operator_token_file) {
         (Some(path), None) => OperatorTokens::from_file(path)?,
         (None, Some(path)) => OperatorTokens::single(
@@ -636,7 +659,8 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
     );
     let desired = DesiredStore::over(Arc::clone(&backend), loaded.desired);
     let ops = OpsStore::over(Arc::clone(&backend), loaded.ops)
-        .with_marker(crate::ops_file::unfinished_path(&ops_path));
+        .with_marker(crate::ops_file::unfinished_path(&ops_path))
+        .with_record_window(record_window);
     let verdicts = VerdictFile::over(backend, loaded.verdicts);
     let ui = flags.ui_dir.as_deref().map(UiDir::new).transpose()?;
     let interval = Duration::from_secs(flags.tls_reload_secs);
@@ -747,30 +771,6 @@ pub(crate) fn alert_thresholds(flags: &Serve) -> Thresholds {
         silent_after: Duration::from_secs(flags.alert_silent_host_secs),
         cert_window_secs: flags.alert_cert_window_secs,
     }
-}
-
-/// `--enrollment-request-ttl` in seconds: digits, then one unit of `s`, `m`, `h` or `d`, and at
-/// least one second.
-fn request_ttl_secs(text: &str) -> Result<u64, String> {
-    let wrong = || format!("{text:?} is not a time like 90m or 72h: digits, then s, m, h or d");
-    let (digits, per) = [("s", 1), ("m", 60), ("h", 3600), ("d", 86_400)]
-        .into_iter()
-        .find_map(|(unit, per)| text.strip_suffix(unit).map(|digits| (digits, per)))
-        .ok_or_else(wrong)?;
-    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
-        return Err(wrong());
-    }
-    let secs = digits
-        .parse::<u64>()
-        .ok()
-        .and_then(|n| n.checked_mul(per))
-        .ok_or_else(|| format!("{text:?} is more seconds than this coordinator counts"))?;
-    if secs == 0 {
-        return Err(format!(
-            "{text:?} is no time: a request waits at least one second"
-        ));
-    }
-    Ok(secs)
 }
 
 /// The lock of `path`, taken by `lock`.

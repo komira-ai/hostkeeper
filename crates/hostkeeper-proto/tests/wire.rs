@@ -367,7 +367,7 @@ fn fields_of(pool: &DescriptorPool, message: &str) -> Vec<(String, u32)> {
 }
 
 /// The RPCs of the coordinator's services, pinned.
-const RPCS: [(&str, &[&str]); 7] = [
+const RPCS: [(&str, &[&str]); 6] = [
     (
         "hostkeeper.agent.v1.Coordinator",
         &[
@@ -414,17 +414,6 @@ const RPCS: [(&str, &[&str]); 7] = [
         ],
     ),
     (
-        "hostkeeper.operator.v1.Enrollment",
-        &[
-            "List(ListPendingRequest) ListPendingResponse",
-            "Approve(ApproveRequest) ApproveResponse",
-            "Reject(RejectRequest) RejectResponse",
-            "AddRecord(AddRecordRequest) AddRecordResponse",
-            "ListRecords(ListRecordsRequest) ListRecordsResponse",
-            "RemoveRecord(RemoveRecordRequest) RemoveRecordResponse",
-        ],
-    ),
-    (
         "hostkeeper.operator.v1.Audit",
         &["List(ListAuditRequest) ListAuditResponse"],
     ),
@@ -436,7 +425,7 @@ const RPCS: [(&str, &[&str]); 7] = [
 
 /// The fields of the enrollment, abort, retire, audit and force-report messages, pinned by name
 /// and number.
-const FIELDS: [(&str, &[(&str, u32)]); 35] = [
+const FIELDS: [(&str, &[(&str, u32)]); 32] = [
     (
         "hostkeeper.agent.v1.HeartbeatResponse",
         &[
@@ -585,46 +574,6 @@ const FIELDS: [(&str, &[(&str, u32)]); 35] = [
         &[("requests", 1), ("next_page_token", 2)],
     ),
     (
-        "hostkeeper.operator.v1.PendingEnrollment",
-        &[
-            ("request_id", 1),
-            ("key_sha256", 2),
-            ("claims", 3),
-            ("image", 4),
-            ("first_seen_unix", 5),
-            ("renewal_of", 6),
-            ("duplicate_claim", 7),
-            ("mac_nonce_presented", 8),
-            ("inventory_match", 9),
-            ("record_host_id", 10),
-            ("record_role", 11),
-            ("candidate_host_ids", 12),
-            ("state", 13),
-            ("unenrolled_reason", 14),
-            ("unenrolled_unix", 15),
-            ("request_ttl_secs", 16),
-            ("contested_by", 17),
-            ("record_serial", 18),
-            ("record_bmc_mac", 19),
-        ],
-    ),
-    (
-        "hostkeeper.operator.v1.InventoryRecord",
-        &[
-            ("host_id", 1),
-            ("role", 2),
-            ("data_macs", 3),
-            ("bmc_mac", 4),
-            ("serial", 5),
-            ("notes", 6),
-            ("added_by", 7),
-            ("added_unix", 8),
-            ("enrolled", 9),
-            ("host_held", 10),
-            ("platform", 11),
-        ],
-    ),
-    (
         "hostkeeper.operator.v1.ListRecordsRequest",
         &[("limit", 1), ("page_token", 2), ("enrolled", 3)],
     ),
@@ -648,18 +597,6 @@ const FIELDS: [(&str, &[(&str, u32)]); 35] = [
             ("last_renew_error", 15),
             ("clock_skew_beats", 16),
             ("first_heartbeat_unix", 17),
-        ],
-    ),
-    (
-        "hostkeeper.operator.v1.AddRecordRequest",
-        &[
-            ("host_id", 1),
-            ("role", 2),
-            ("data_macs", 3),
-            ("bmc_mac", 4),
-            ("serial", 5),
-            ("notes", 6),
-            ("platform", 7),
         ],
     ),
     (
@@ -750,7 +687,7 @@ fn wire_names_are_pinned() {
     ];
     assert_eq!(fields, want.map(|(name, number)| (name.to_owned(), number)));
 
-    let cases: [(&str, &str, &[&str]); 17] = [
+    let cases: [(&str, &str, &[&str]); 16] = [
         (
             "hostkeeper.agent.v1.CoordinatorRefusal",
             "COORDINATOR_REFUSAL_",
@@ -858,33 +795,6 @@ fn wire_names_are_pinned() {
                 "unknown_role",
                 "below_min_version",
                 "audit_unavailable",
-            ],
-        ),
-        (
-            "hostkeeper.operator.v1.EnrollmentRefusal",
-            "ENROLLMENT_REFUSAL_",
-            &[
-                "unauthorized",
-                "forbidden",
-                "unknown_request",
-                "key_mismatch",
-                "host_id_taken",
-                "pending_full",
-                "duplicate_claim",
-                "invalid_host_id",
-                "invalid_role",
-                "invalid_service",
-                "invalid_request",
-                "not_pending",
-                "denied",
-                "store_failed",
-                "record_exists",
-                "record_conflict",
-                "no_record",
-                "capacity",
-                "audit_unavailable",
-                "record_mismatch",
-                "record_contested",
             ],
         ),
         (

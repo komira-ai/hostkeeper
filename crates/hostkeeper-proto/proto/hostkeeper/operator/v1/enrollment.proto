@@ -39,14 +39,31 @@ service Enrollment {
   // is answered as rejected and audited once.
   rpc Reject(RejectRequest) returns (RejectResponse);
   // Record a server the operator built, before it first boots: its host id, optional role, data
-  // MACs, BMC MAC, serial, notes and optional platform. A record for the host id, or a MAC or serial another record
-  // holds, is refused; remove the record first.
+  // MACs, BMC MAC, serial, notes and optional platform. A record for the host id, or a MAC or
+  // serial another record holds, is refused; remove the record first.
+  //
+  // A record that names a role is the approval of the host's enrollment: its window opens now
+  // and stays open until `approve_until_unix`, for `approve_for_secs`, or for the coordinator's
+  // `--record-approve-for` (24 hours unless set), and never longer than its
+  // `--record-approve-max` (7 days unless set). While the window is open and the record unused,
+  // a pending request (not a renewal) that matches it exactly and no other record, that no
+  // other pending request contests, and that is not a `duplicate_claim`, is approved by the
+  // coordinator itself, as the record's host id and role, bound to the SHA-256 of the request's
+  // key: no `Approve` is needed. The approval uses the record (`InventoryRecord.state` USED),
+  // which approves nothing again. Exactly: by one of its data MACs among the claimed addresses
+  // and, when the record holds a BMC MAC, that BMC MAC claimed; a Mac by its serial. Every
+  // other request waits for `Approve` as before. A record with no role has no window.
   rpc AddRecord(AddRecordRequest) returns (AddRecordResponse);
   // The records, by host id, a page at a time; all of them, or only those a host is enrolled
   // against, or only the others.
   rpc ListRecords(ListRecordsRequest) returns (ListRecordsResponse);
   // Remove the record of a host id. An enrolled host keeps its certificate.
   rpc RemoveRecord(RemoveRecordRequest) returns (RemoveRecordResponse);
+  // Open the window of a record again, one whose window ended or that a release before windows
+  // added, or move the end of one still open: as `AddRecord` opens it, from now. A record an
+  // approval used is refused `record_used`: remove it and add it again. A pending request that
+  // matches the record is approved then, as at `AddRecord`.
+  rpc OpenRecord(OpenRecordRequest) returns (OpenRecordResponse);
 }
 
 // Why `Enrollment` refused a request. The token is the value's name without the prefix, in lower
@@ -104,6 +121,12 @@ enum EnrollmentRefusal {
   // matches (`PendingEnrollment.contested_by` names them): reject all but one first. `replace`
   // does not set it aside.
   ENROLLMENT_REFUSAL_RECORD_CONTESTED = 21;
+  // INVALID_ARGUMENT: the window of `AddRecord` or `OpenRecord`: both `approve_until_unix` and
+  // `approve_for_secs` set, an `approve_until_unix` not after now, a window longer than the
+  // coordinator's `--record-approve-max`, or a window for a record that names no role.
+  ENROLLMENT_REFUSAL_INVALID_WINDOW = 22;
+  // FAILED_PRECONDITION: `OpenRecord` of a record an approval used.
+  ENROLLMENT_REFUSAL_RECORD_USED = 23;
 }
 
 message ListPendingRequest {
@@ -172,6 +195,14 @@ message PendingEnrollment {
   string record_serial = 18;
   // The BMC MAC of the one matching record; empty when it holds none (MATCHED only).
   string record_bmc_mac = 19;
+  // Where the one matching record's window stands (MATCHED only): a request still pending
+  // against an OPEN record waits for an operator for another reason (it is contested, a
+  // duplicate claim, a renewal, or claims no BMC MAC or another one than the record's).
+  // UNSPECIFIED otherwise, and from a coordinator before windows.
+  RecordState record_state = 20;
+  // The end of the one matching record's window, unix seconds; 0 when it has none (MATCHED
+  // only).
+  uint64 record_approve_until_unix = 21;
 }
 
 // Where an enrollment request stands, as `Enrollment.List` shows it.
@@ -226,10 +257,35 @@ message InventoryRecord {
   // coordinator started). Only `HOST_HELD_NONE` says no host holds the id; `UNSPECIFIED` (a
   // coordinator of a release before this field, or one without enrollment) says nothing.
   HostHeld host_held = 10;
+  // The end of the record's approval window, unix seconds: the coordinator approves a request
+  // that matches the record exactly while the time is before it. 0 for a record with no window
+  // (one that names no role, or one a release before windows added).
+  uint64 approve_until_unix = 11;
+  // Where the window stands, at the time of the call.
+  RecordState state = 12;
+  // The request the coordinator approved by the record (USED only).
+  string used_by_request_id = 13;
+  // When it approved it, unix seconds (USED only).
+  uint64 used_unix = 14;
   // The platform the server is to be installed as by network boot: `PLATFORM_LINUX_X86_64` or
   // `PLATFORM_LINUX_ARM64`, or `PLATFORM_UNSPECIFIED` when the record states none (a Mac's
   // record, a record added without one, or a coordinator of a release before this field).
-  hostkeeper.agent.v1.Platform platform = 11;
+  hostkeeper.agent.v1.Platform platform = 15;
+}
+
+// Where an inventory record's approval window stands.
+enum RecordState {
+  // Not said: a coordinator of a release before windows.
+  RECORD_STATE_UNSPECIFIED = 0;
+  // The window is open and no approval used the record: a request that matches it exactly is
+  // approved by the coordinator.
+  RECORD_STATE_OPEN = 1;
+  // No approval used the record, and its window ended or it has none: a request that matches
+  // it waits for an operator. `OpenRecord` opens it again.
+  RECORD_STATE_CLOSED = 2;
+  // The coordinator approved a request by the record (`used_by_request_id`, `used_unix`): it
+  // approves nothing again, whatever its window.
+  RECORD_STATE_USED = 3;
 }
 
 // What the coordinator's enrollment store holds for a host id, as `InventoryRecord.host_held`
@@ -301,11 +357,19 @@ message AddRecordRequest {
   string serial = 5;
   // Empty for none.
   string notes = 6;
+  // The end of the record's window, unix seconds: after now, and within the coordinator's
+  // `--record-approve-max` of it. 0 for none given.
+  uint64 approve_until_unix = 7;
+  // The length of the record's window from now, in seconds: at most the coordinator's
+  // `--record-approve-max`. 0 for none given. With neither, the window is the coordinator's
+  // `--record-approve-for`; with both, the call is refused `invalid_window`. A record that names
+  // no role takes neither, and has no window.
+  uint64 approve_for_secs = 8;
   // The platform to install the server as by network boot: `PLATFORM_LINUX_X86_64` or
   // `PLATFORM_LINUX_ARM64` (`linux_x86_64` or `linux_arm64` as a flag of `hostkeeper ctl`);
   // `PLATFORM_UNSPECIFIED` (the flag left out) for none. Any other value is refused
   // `invalid_request`.
-  hostkeeper.agent.v1.Platform platform = 7;
+  hostkeeper.agent.v1.Platform platform = 9;
 }
 
 message AddRecordResponse {
@@ -338,4 +402,20 @@ message RemoveRecordRequest {
 
 message RemoveRecordResponse {
   AuditEntry entry = 1;
+}
+
+message OpenRecordRequest {
+  string host_id = 1;
+  // As `AddRecordRequest.approve_until_unix`.
+  uint64 approve_until_unix = 2;
+  // As `AddRecordRequest.approve_for_secs`.
+  uint64 approve_for_secs = 3;
+  // Why, for the audit log: 1 to 256 bytes with no control character, or empty for none.
+  string reason = 4;
+}
+
+message OpenRecordResponse {
+  // As kept, with its new window.
+  InventoryRecord record = 1;
+  AuditEntry entry = 2;
 }

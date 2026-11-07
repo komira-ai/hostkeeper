@@ -94,6 +94,8 @@ fn record(host: &str, mac: &str, platform: Option<Platform>) -> InventoryRecord 
         notes: String::new(),
         by: "operator".to_owned(),
         at_unix: 1_800_000_000,
+        approve_until_unix: 0,
+        used: None,
         platform,
     }
 }

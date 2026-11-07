@@ -182,8 +182,20 @@ is answered as rejected and audited once.
 `/hostkeeper.operator.v1.Enrollment/AddRecord`
 
 Record a server the operator built, before it first boots: its host id, optional role, data
-MACs, BMC MAC, serial, notes and optional platform. A record for the host id, or a MAC or serial another record
-holds, is refused; remove the record first.
+MACs, BMC MAC, serial, notes and optional platform. A record for the host id, or a MAC or
+serial another record holds, is refused; remove the record first.
+
+A record that names a role is the approval of the host's enrollment: its window opens now
+and stays open until `approve_until_unix`, for `approve_for_secs`, or for the coordinator's
+`--record-approve-for` (24 hours unless set), and never longer than its
+`--record-approve-max` (7 days unless set). While the window is open and the record unused,
+a pending request (not a renewal) that matches it exactly and no other record, that no
+other pending request contests, and that is not a `duplicate_claim`, is approved by the
+coordinator itself, as the record's host id and role, bound to the SHA-256 of the request's
+key: no `Approve` is needed. The approval uses the record (`InventoryRecord.state` USED),
+which approves nothing again. Exactly: by one of its data MACs among the claimed addresses
+and, when the record holds a BMC MAC, that BMC MAC claimed; a Mac by its serial. Every
+other request waits for `Approve` as before. A record with no role has no window.
 
 | flag | value | meaning |
 |---|---|---|
@@ -193,6 +205,8 @@ holds, is refused; remove the record first.
 | `--bmc-mac` | STRING | Empty for none. |
 | `--serial` | STRING | Empty for none. |
 | `--notes` | STRING | Empty for none. |
+| `--approve-until-unix` | UINT64 | The end of the record's window, unix seconds: after now, and within the coordinator's `--record-approve-max` of it. 0 for none given. |
+| `--approve-for-secs` | UINT64 | The length of the record's window from now, in seconds: at most the coordinator's `--record-approve-max`. 0 for none given. With neither, the window is the coordinator's `--record-approve-for`; with both, the call is refused `invalid_window`. A record that names no role takes neither, and has no window. |
 | `--platform` | VALUE | The platform to install the server as by network boot: `PLATFORM_LINUX_X86_64` or `PLATFORM_LINUX_ARM64` (`linux_x86_64` or `linux_arm64` as a flag of `hostkeeper ctl`); `PLATFORM_UNSPECIFIED` (the flag left out) for none. Any other value is refused `invalid_request`. |
 
 #### `hostkeeper ctl enrollment list-records`
@@ -218,6 +232,22 @@ Remove the record of a host id. An enrolled host keeps its certificate.
 |---|---|---|
 | `--host-id` | STRING |  |
 | `--reason` | STRING |  |
+
+#### `hostkeeper ctl enrollment open-record`
+
+`/hostkeeper.operator.v1.Enrollment/OpenRecord`
+
+Open the window of a record again, one whose window ended or that a release before windows
+added, or move the end of one still open: as `AddRecord` opens it, from now. A record an
+approval used is refused `record_used`: remove it and add it again. A pending request that
+matches the record is approved then, as at `AddRecord`.
+
+| flag | value | meaning |
+|---|---|---|
+| `--host-id` | STRING |  |
+| `--approve-until-unix` | UINT64 | As `AddRecordRequest.approve_until_unix`. |
+| `--approve-for-secs` | UINT64 | As `AddRecordRequest.approve_for_secs`. |
+| `--reason` | STRING | Why, for the audit log: 1 to 256 bytes with no control character, or empty for none. |
 
 ### `hosts`
 
