@@ -269,7 +269,7 @@ fn no_byte_of_a_nonce_reaches_a_log_or_the_audit() {
     let mut id = None;
     enroller.run_loop(
         &mut |line| lines.push(line.to_owned()),
-        &mut |enrollment| {
+        &mut |_step, enrollment| {
             if let Enrollment::Pending { key_sha256 } = enrollment {
                 let plist = nonce_plist(key_sha256.as_str(), &FIRST);
                 managed.lock().expect("managed").file = Managed::Bytes(plist);

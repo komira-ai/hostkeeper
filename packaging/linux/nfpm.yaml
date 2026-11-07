@@ -9,9 +9,11 @@
 # hostkeeper_<version>_<arch>.deb (amd64, arm64) and hostkeeper-<version>-1.<arch>.rpm (x86_64,
 # aarch64). The packages carry the daemon, its unit, its tmpfiles rules, the template of its
 # config, and the pinned `gh` and the Sigstore trusted root its attestation check runs on, and
-# nothing else: no key, no certificate, no token and no hostkeeper.toml, which whoever installs
-# the package places (packaging/linux/README.md). The deb and the rpm carry the same files and
-# the same scripts.
+# one link, /etc/issue.d/hostkeeper.issue, to the console's issue file the daemon writes while
+# the host waits for its enrollment (/run/hostkeeper/enrollment.issue), and nothing else: no
+# key, no certificate, no token and no hostkeeper.toml, which whoever installs the package
+# places (packaging/linux/README.md). The deb and the rpm carry the same files, the same link
+# and the same scripts.
 #
 # `gh` and the trusted root are taken from target/nfpm/, which
 #
@@ -19,7 +21,7 @@
 #
 # writes, with the same ARCH, after checking the archive against its pin and the trusted root
 # (and `cargo xtask release check-linux-pkg <package> --staged target/nfpm` reads each built
-# package back and refuses it unless it installs both as staged);
+# package back and refuses it unless it installs both as staged and the issue link as above);
 # the pins and the capture are in .github/workflows/artifacts.yml (docs/deploy/verify-a-release.md,
 # "What the deb and the rpm check packages with").
 name: hostkeeper
@@ -73,6 +75,9 @@ contents:
       mode: 0644
       owner: root
       group: root
+  - src: /run/hostkeeper/enrollment.issue
+    dst: /etc/issue.d/hostkeeper.issue
+    type: symlink
 scripts:
   postinstall: packaging/linux/scripts/postinstall.sh
   preremove: packaging/linux/scripts/preremove.sh

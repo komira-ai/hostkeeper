@@ -228,11 +228,12 @@ impl Enroller {
     /// clock after each step. A step's line goes to `log` only when it differs from the line of
     /// the step before: a host waiting for approval logs [`NOT_ENROLLED`] once. After each step,
     /// before the sleep, `renewal` notes the end of the current certificate and the step's error
-    /// ([`RenewalState`]), and `seen` is given the host's enrollment ([`Enroller::enrollment`]).
+    /// ([`RenewalState`]), and `seen` is given what the step came to with the host's enrollment
+    /// ([`Enroller::enrollment`]).
     pub fn run_loop(
         &mut self,
         log: &mut dyn FnMut(&str),
-        seen: &mut dyn FnMut(Enrollment),
+        seen: &mut dyn FnMut(&Result<Outcome, Error>, Enrollment),
         renewal: &RenewalState,
         keep_going: &mut dyn FnMut() -> bool,
     ) {
@@ -248,7 +249,7 @@ impl Enroller {
             }
             let enrollment = self.enrollment();
             renewal.record(&step, &enrollment);
-            seen(enrollment);
+            seen(&step, enrollment);
             self.ports.clock.sleep_secs(RETRY_SECS);
         }
     }

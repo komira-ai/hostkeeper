@@ -90,6 +90,7 @@ fn links_with(
         enroll_sleeper: Box::new(ScriptedSleeper::new(0)),
         renewal: hostkeeper_enroll::RenewalState::default(),
         watchdog: Box::new(NoWatchdog),
+        console: None,
     }
 }
 
@@ -296,6 +297,7 @@ fn files_under(root: &Path) -> HostFiles {
         gh: root.join("gh"),
         trusted_root: root.join("trusted_root.json"),
         pki: root.join("pki"),
+        console: None,
     }
 }
 
