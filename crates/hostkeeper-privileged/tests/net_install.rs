@@ -17,10 +17,11 @@
 //! 3. Router mode, the enrolled guest rebooted: `hostkeeper-pxe` learns its address from its
 //!    REQUEST, serves `hostkeeper/boot.efi` as the x86-64 shim, and its local-disk menu; its
 //!    heartbeat comes back from the same disk.
-//! 4. Reinstall with `--reinstall`, in proxy mode (router mode installs once the record has its
-//!    platform, item N14): the install menu, a request flagged `duplicate_claim`, an approval
-//!    without `--replace` refused, the `--replace` approval, and the old certificate's heartbeat
-//!    refused `forbidden`.
+//! 4. Reinstall with `--reinstall`, in router mode (the record states its platform): the guest's
+//!    REQUEST learned, `hostkeeper/boot.efi` served as the x86-64 shim, the install menu and the
+//!    seed fetched; the reboot after the install got the local-disk menu (its MAC left the answer
+//!    set); then a request flagged `duplicate_claim`, an approval without `--replace` refused,
+//!    the `--replace` approval, and the old certificate's heartbeat refused `forbidden`.
 //! 5. The host retired (`Hosts.Retire`), the coordinator restarted, the guest network-booted
 //!    without `--reinstall`: no answer in proxy mode, the local-disk menu in router mode, and each
 //!    time the same installed system boots from its disk, with no seed fetched.
@@ -253,7 +254,7 @@ fn an_x86_64_machine_installs_by_network_enrolls_gets_its_service_is_reinstalled
             .ok_or_else(|| format!("{host}"))
     });
 
-    // 4. Reinstall, in proxy mode: the old identity is kept to be refused.
+    // 4. Reinstall, in router mode: the old identity is kept to be refused.
     let old_cert = rig
         .ssh
         .output("sudo cat /etc/updater/pki/current/cert.pem", b"")
@@ -262,11 +263,21 @@ fn an_x86_64_machine_installs_by_network_enrolls_gets_its_service_is_reinstalled
         .ssh
         .output("sudo cat /etc/updater/pki/current/key", b"")
         .expect("the old key");
-    rig.serve(Mode::Proxy, &[HOST]);
+    rig.serve(Mode::Router, &[HOST]);
     let from = rig.bus.mark();
     rig.ssh.reboot();
-    let seeded = rig.wait_install(from, Mode::Proxy);
-    rig.login_prompt(seeded);
+    let seeded = rig.wait_install(from, Mode::Router);
+    let booted = rig.login_prompt(seeded);
+    // The reboot after the install: its MAC left the answer set, so router mode gave the
+    // local-disk menu.
+    let local = format!("menu grub/hostkeeper/x86_64/{mac}: local disk: ");
+    assert!(
+        rig.bus
+            .saw(seeded, booted, Source::Pxe, |l| l.contains(&local)
+                && l.contains("its seed was fetched in this run")),
+        "the reboot after the reinstall got the local-disk menu: {:?}",
+        rig.bus.lines_since(seeded, Source::Pxe)
+    );
     let again = rig.wait_request(std::slice::from_ref(&key));
     assert_eq!(
         again["duplicateClaim"], true,

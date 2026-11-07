@@ -265,6 +265,7 @@ fn a_record_whose_host_id_breaks_its_rule_names_no_host() {
         at_unix: 0,
         approve_until_unix: 0,
         used: None,
+        platform: None,
     }];
     let approve = |request| {
         enrollment

@@ -92,6 +92,7 @@ CREATE TABLE inventory (
   bmc_mac   text NOT NULL,
   serial    text NOT NULL,
   notes     text NOT NULL,
+  platform  text NOT NULL DEFAULT '' CHECK (platform IN ('', 'linux-x86_64', 'linux-arm64')),
   by_name   text NOT NULL,
   at_unix   bigint NOT NULL,
   position  bigint NOT NULL,

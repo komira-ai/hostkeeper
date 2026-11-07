@@ -97,6 +97,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 5] = [
             ("state", 12),
             ("used_by_request_id", 13),
             ("used_unix", 14),
+            ("platform", 15),
         ],
     ),
     (
@@ -110,6 +111,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 5] = [
             ("notes", 6),
             ("approve_until_unix", 7),
             ("approve_for_secs", 8),
+            ("platform", 9),
         ],
     ),
     (

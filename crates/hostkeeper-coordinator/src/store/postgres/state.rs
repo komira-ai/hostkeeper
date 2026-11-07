@@ -17,6 +17,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use hostkeeper_wire::Platform;
 use hostkeeper_wire::version::Version;
 use hostkeeper_wire::wire::UpdateResult;
 use serde::Serialize;
@@ -153,6 +154,7 @@ pub(crate) const OPS: [Table; 14] = [
             ("approve_until_unix", Ty::Int),
             ("used_request_id", Ty::Text),
             ("used_unix", Ty::Int),
+            ("platform", Ty::Text),
         ],
     },
     Table {
@@ -609,6 +611,7 @@ pub(crate) fn ops_rows(state: &OpsState) -> Result<Tables, StoreError> {
                     Some(used) => Val::Int(int(used.at_unix)?),
                     None => Val::Null,
                 },
+                Val::Text(record.platform.map_or("", |p| p.as_str()).to_owned()),
             ],
         );
     }
@@ -877,6 +880,14 @@ pub(crate) fn ops_of(tables: &Tables) -> Result<OpsState, OpsError> {
             (None, Some(Val::Null)) => None,
             _ => return Err(at.no("a record's use is half there")),
         };
+        let platform = match at.required(11)?.as_str() {
+            "" => None,
+            "linux-x86_64" => Some(Platform::LinuxX86_64),
+            "linux-arm64" => Some(Platform::LinuxArm64),
+            other => {
+                return Err(at.no(format!("the platform {other:?} is not one a record states")));
+            }
+        };
         inventory.push((
             at.position(7)?,
             InventoryRecord {
@@ -890,6 +901,7 @@ pub(crate) fn ops_of(tables: &Tables) -> Result<OpsState, OpsError> {
                 at_unix: at.count(6)?,
                 approve_until_unix: at.count(8)?,
                 used,
+                platform,
             },
         ));
     }

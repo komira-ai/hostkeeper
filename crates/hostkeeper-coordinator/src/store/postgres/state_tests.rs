@@ -58,6 +58,8 @@ fn full_ops() -> OpsState {
     });
     // One record with an approval window, used; the other with neither.
     state.inventory[0].approve_until_unix = 1_900_000_100;
+    state.inventory[0].platform = Some(hostkeeper_wire::Platform::LinuxArm64);
+    state.inventory[1].platform = Some(hostkeeper_wire::Platform::LinuxX86_64);
     state.inventory[0].used = Some(crate::inventory::RecordUse {
         request_id: "ab".repeat(32),
         at_unix: 1_900_000_050,
@@ -397,6 +399,7 @@ fn a_row_this_build_cannot_read_is_refused_naming_its_table_and_key() {
             Val::Int(0),
             used.0,
             used.1,
+            text(""),
         ]
     };
     let inventory = |macs: Val| inventory_used(macs, (Val::Null, Val::Null));
@@ -414,6 +417,16 @@ fn a_row_this_build_cannot_read_is_refused_naming_its_table_and_key() {
             inventory_used(macs(), (text("ab"), Val::Int(-1))),
         ),
         why("inventory", "h1", "a counter is negative"),
+    ));
+    let mut darwin = inventory(macs());
+    darwin[11] = text("darwin-arm64");
+    cases.push((
+        refusal("inventory", &["h1"], darwin),
+        why(
+            "inventory",
+            "h1",
+            "the platform \"darwin-arm64\" is not one a record states",
+        ),
     ));
     cases.push((
         refusal("inventory", &["h1"], inventory(text("aa"))),

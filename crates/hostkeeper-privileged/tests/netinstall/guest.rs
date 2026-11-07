@@ -103,6 +103,22 @@ impl Arch {
         }
     }
 
+    /// The platform as `hostkeeper ctl enrollment add-record --platform` spells it.
+    pub fn ctl_platform(self) -> &'static str {
+        match self {
+            Arch::X86_64 => "linux_x86_64",
+            Arch::Arm64 => "linux_arm64",
+        }
+    }
+
+    /// The shim `hostkeeper/boot.efi` stands for on this platform, and the proxy offer names.
+    pub fn shim(self) -> &'static str {
+        match self {
+            Arch::X86_64 => "hostkeeper/shimx64.efi",
+            Arch::Arm64 => "hostkeeper/shimaa64.efi",
+        }
+    }
+
     /// The platform of the boot set.
     pub fn platform(self) -> &'static str {
         match self {

@@ -1,16 +1,17 @@
 //! Router mode, end to end: no DHCP packet is ever sent; DISCOVERs and REQUESTs teach which
 //! client took which address and its architecture; `hostkeeper/boot.efi` is the shim of that
-//! architecture; and every MAC gets the fixed `grub.cfg` and, while the inventory's records carry
-//! no platform (item N14 of the design), the local-disk menu.
+//! architecture or, when a REQUEST states none, the platform of its record; and every MAC gets the
+//! fixed `grub.cfg` and, for a record with no platform, the local-disk menu.
 
 use std::net::Ipv4Addr;
 
+use hostkeeper_proto::hostkeeper::agent::v1::Platform;
 use hostkeeper_pxe_seed::inputs::LinuxPlatform;
 use hostkeeper_pxe_seed::menu::LOCAL_DISK_MENU;
 
 use super::kit::{
-    ENROLLED, Kit, NOW, RECORDED, SHIM_BYTES, client, content, dhcp, tftp_read, tftp_read_from,
-    waiting,
+    ENROLLED, Kit, NOW, RECORDED, SHIM_BYTES, client, content, dhcp, http, tftp_read,
+    tftp_read_from, waiting,
 };
 
 const PXE: Option<&str> = Some("PXEClient:Arch:00007:UNDI:003016");
@@ -20,7 +21,8 @@ const PXE: Option<&str> = Some("PXEClient:Arch:00007:UNDI:003016");
 /// for any of them; `hostkeeper/boot.efi` read from the address a REQUEST named is the x86-64
 /// shim for architecture 7 and the arm64 shim for architecture 11, a REQUEST with no option 93
 /// taking the architecture of its MAC's DISCOVER; both MACs get the fixed `grub.cfg` and the
-/// local-disk menu, the recorded one because router mode needs the record's platform.
+/// local-disk menu, the recorded one because router mode needs the record's platform (here it
+/// states none).
 ///
 /// Catches a router-mode server that answers DHCP and fights the router, one that serves an
 /// arm64 machine the x86-64 shim, and one that installs a record whose platform is not stated.
@@ -163,4 +165,53 @@ fn boot_efi_is_refused_with_no_lease_or_an_architecture_not_installed() {
     let (result, _) = run.stop();
     assert_eq!(result, Ok(()));
     assert!(!waiting(&reply_to));
+}
+
+/// In router mode a record whose platform the coordinator states (arm64) is installed as that
+/// platform: a REQUEST stating no architecture, from a MAC that sent no DISCOVER, is served
+/// `hostkeeper/boot.efi` as the arm64 shim from the record; GRUB's menu is the install menu of
+/// linux-arm64 as the record's host, and the seed it then fetches names the arm64 deb.
+///
+/// Proves: the record's platform, read from the coordinator, is what router mode installs.
+/// Catches a router-mode install that ignores the record and serves the x86-64 shim.
+#[test]
+fn router_mode_installs_the_platform_the_record_states() {
+    let kit = Kit::new("router-record");
+    kit.fake()
+        .set(|s| s.records[0].platform = Platform::LinuxArm64 as i32);
+    let reply_to = client();
+    let mut run = kit.start(kit.args("router", reply_to.local_addr().expect("its address"), &[]));
+    let firmware = client();
+    firmware
+        .send_to(
+            &dhcp(3, RECORDED, PXE, None, Some(Ipv4Addr::LOCALHOST)),
+            run.dhcp,
+        )
+        .expect("send");
+    run.wait("it takes 127.0.0.1");
+    let shim = tftp_read(run.tftp, "/hostkeeper/boot.efi", &[]).expect("the shim");
+    assert_eq!(shim, content(LinuxPlatform::Arm64, "shim", SHIM_BYTES));
+    run.wait(&format!(
+        "hostkeeper/boot.efi is hostkeeper/shimaa64.efi for {RECORDED} (linux-arm64)"
+    ));
+    let menu =
+        tftp_read(run.tftp, &format!("/grub/hostkeeper/arm64/{RECORDED}"), &[]).expect("the menu");
+    assert_ne!(menu, LOCAL_DISK_MENU.as_bytes());
+    assert!(
+        String::from_utf8(menu)
+            .expect("text")
+            .contains(&format!(":{}/", run.http.port())),
+        "the menu names this server's HTTP port"
+    );
+    assert_eq!(
+        run.wait("menu grub/"),
+        format!("{NOW} menu grub/hostkeeper/arm64/{RECORDED}: install linux-arm64 as host new-1")
+    );
+    let user = http(run.http, "GET", &format!("/seed/{RECORDED}/user-data"));
+    assert_eq!(user.status, 200);
+    let text = String::from_utf8(user.body).expect("text");
+    assert!(text.contains("hostkeeper_arm64.deb"), "{text}");
+    assert!(!text.contains("hostkeeper_amd64.deb"), "{text}");
+    let (result, _) = run.stop();
+    assert_eq!(result, Ok(()));
 }

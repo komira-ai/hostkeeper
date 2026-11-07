@@ -392,6 +392,7 @@ fn record(host: &str, data: &[&str], bmc: &str, serial: &str) -> InventoryRecord
         at_unix: NOW,
         approve_until_unix: 0,
         used: None,
+        platform: None,
     }
 }
 

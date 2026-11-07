@@ -1,5 +1,5 @@
 // Inventory: the servers the operator recorded when building them (host id, role, data MACs, BMC
-// MAC, serial, notes), so that a pending enrollment request can be matched to its record, and
+// MAC, serial, platform, notes), so that a pending enrollment request can be matched to its record, and
 // whether a host is enrolled against each. Calls: Enrollment.ListRecords, all records or, with
 // the filter, only the enrolled or only the not enrolled ones; on a button, Enrollment.AddRecord
 // or Enrollment.RemoveRecord; on a closed record that names a role, Enrollment.OpenRecord. A
@@ -22,6 +22,11 @@ const ROLE = /^(?!.*--)[a-z]([a-z0-9-]{0,30}[a-z0-9])?$/;
 const MAC = /^([0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}|[0-9A-Fa-f]{2}(-[0-9A-Fa-f]{2}){5}|[0-9A-Fa-f]{12})$/;
 const SERIAL = /^[A-Za-z0-9._-]{1,64}$/;
 const MAX_DATA_MACS = 16;
+// The platforms a record may name for a network install, as the gateway's JSON spells the enum
+// (the form's choice, then the name sent), and the short names the records list shows.
+const PLATFORMS = [["", "none"], ["linux-x86_64", "linux-x86_64"], ["linux-arm64", "linux-arm64"]];
+const PLATFORM_NAMES = { PLATFORM_LINUX_X86_64: "linux-x86_64", PLATFORM_LINUX_ARM64: "linux-arm64" };
+const PLATFORM_ENUMS = { "linux-x86_64": "PLATFORM_LINUX_X86_64", "linux-arm64": "PLATFORM_LINUX_ARM64" };
 
 const WINDOW_TIME = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?(?:Z| ?UTC)?$/;
 const WINDOW_PROBLEM = "A window is a number of hours (2 or 1.5), or an end time in UTC (2027-01-15 08:00 or 2027-01-15T08:00:00Z).";
@@ -90,7 +95,11 @@ export function recordRequest(form) {
   if (role === "" && Object.keys(window).length > 0) {
     return "A window needs a role: a record with no role approves nothing.";
   }
-  return Object.assign({ hostId, role, dataMacs, bmcMac, serial, notes }, window);
+  const body = Object.assign({ hostId, role, dataMacs, bmcMac, serial, notes }, window);
+  if (form.platform) {
+    body.platform = PLATFORM_ENUMS[form.platform];
+  }
+  return body;
 }
 
 // The `enrolled` of a ListRecordsRequest for the page's `enrolled` parameter: true for "true",
@@ -112,6 +121,7 @@ function recordRow(ctx, record, removal, opening, chosen) {
     h("td", {}, (record.dataMacs || []).join(", ") || "-"),
     h("td", {}, record.bmcMac || "-"),
     h("td", {}, record.serial || "-"),
+    h("td", {}, PLATFORM_NAMES[record.platform] || "-"),
     h("td", {}, record.notes || "-"),
     h("td", {}, record.addedBy || "-"),
     h("td", {}, fmtUnix(record.addedUnix)),
@@ -167,7 +177,7 @@ export async function render(ctx) {
   }
   const records = listed.records || [];
   const next = typeof listed.nextPageToken === "string" ? listed.nextPageToken : "";
-  const form = { hostId: "", role: "", dataMacs: "", bmcMac: "", serial: "", notes: "", window: "" };
+  const form = { hostId: "", role: "", dataMacs: "", bmcMac: "", serial: "", platform: "", notes: "", window: "" };
   const opening = { window: "", reason: "" };
   const removal = { reason: "" };
   const filterForm = { enrolled: shown };
@@ -189,7 +199,7 @@ export async function render(ctx) {
       })),
     records.length === 0
       ? h("p", {}, nothing)
-      : table(["Host id", "Role", "Data MACs", "BMC MAC", "Serial", "Notes", "Added by", "Added at", "Enrolled", "Window ends", "State", "Used by", "Used at", "", ""],
+      : table(["Host id", "Role", "Data MACs", "BMC MAC", "Serial", "Platform", "Notes", "Added by", "Added at", "Enrolled", "Window ends", "State", "Used by", "Used at", "", ""],
         records.map((record) => recordRow(ctx, record, removal, opening, record.hostId === param("record")))),
     records.length === 0 ? null : field("Reason for a removal", "remove-reason", removal, "reason", { maxlength: 256 }),
     records.length === 0 ? null : field("Window to open (hours or an end time; empty for the coordinator's default)",
@@ -210,6 +220,7 @@ export async function render(ctx) {
       field("Data MACs (separated by commas)", "record-data-macs", form, "dataMacs"),
       field("BMC MAC (may be empty)", "record-bmc-mac", form, "bmcMac"),
       field("Serial (a Mac's is what it is matched by)", "record-serial", form, "serial"),
+      select("Platform (for a network install)", "record-platform", form, "platform", PLATFORMS),
       field("Notes", "record-notes", form, "notes", { maxlength: 256 }),
       field("Window (hours or an end time in UTC; empty for the coordinator's default; needs a role)", "record-window", form, "window"),
       action(ctx, "Record", "add-record", async () => {

@@ -43,6 +43,13 @@
 //! (`host_held`, [`Coordinator::host_held`]): no host, an approved host, or a denied or retired
 //! one. It is read from the store by host id, so it holds after a restart and for a host never
 //! heard from, which `Hosts.List` (the hosts heard from since start) does not show.
+//!
+//! A record may also state the platform its server is installed as by network boot
+//! ([`InventoryRecord::platform`]: `linux-x86_64` or `linux-arm64`), which `hostkeeper-pxe` needs
+//! in router mode (network-install design, section 3). It is kept with the rest of the record in
+//! the operations state, but the ops file, whose reader in the release before refuses a key it
+//! does not know, never holds it: the files keep it in the halts file beside it
+//! ([`crate::ops_file`]).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -50,7 +57,7 @@ use hostkeeper_enrollment::enroll::{Claims, EnrolledHost, HostHeld, RequestView,
 use hostkeeper_enrollment::names::{KeyHash, MacAddress};
 use hostkeeper_proto::hostkeeper::agent::v1 as agent;
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
-use hostkeeper_wire::{HostId, RoleName};
+use hostkeeper_wire::{HostId, Platform, RoleName};
 use serde::{Deserialize, Serialize};
 
 pub(crate) use window::mark_used;
@@ -118,6 +125,11 @@ pub struct InventoryRecord {
     /// The approval that used the record, once the coordinator approved a request by it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub used: Option<RecordUse>,
+    /// The platform to install it as by network boot: a Linux platform, or `None` when the
+    /// record states none. Never in the ops file: the files keep it in the halts file
+    /// ([`crate::ops_file`]).
+    #[serde(skip)]
+    pub platform: Option<Platform>,
 }
 
 impl InventoryRecord {
@@ -179,6 +191,9 @@ impl InventoryRecord {
         }
         if self.approve_until_unix > 0 {
             parts.push(format!("approve until {}", self.approve_until_unix));
+        }
+        if let Some(platform) = self.platform {
+            parts.push(format!("platform {platform}"));
         }
         parts.join("; ")
     }
@@ -386,6 +401,31 @@ fn record_proto(
             .map(|used| used.request_id.clone())
             .unwrap_or_default(),
         used_unix: record.used.as_ref().map_or(0, |used| used.at_unix),
+        platform: record
+            .platform
+            .map_or(agent::Platform::Unspecified, platform_proto)
+            .into(),
+    }
+}
+
+/// A Linux platform as `hostkeeper.agent.v1` says it.
+pub(crate) fn platform_proto(platform: Platform) -> agent::Platform {
+    match platform {
+        Platform::LinuxX86_64 => agent::Platform::LinuxX8664,
+        Platform::LinuxArm64 => agent::Platform::LinuxArm64,
+        Platform::DarwinArm64 => agent::Platform::DarwinArm64,
+    }
+}
+
+/// The platform a record may state, from `AddRecordRequest.platform`'s number: `None` for
+/// `PLATFORM_UNSPECIFIED`, a Linux platform for its value; any other (a Mac's platform, which
+/// is not installed by network boot, or a number this release does not know) is refused.
+fn record_platform(number: i32) -> Result<Option<Platform>, proto::EnrollmentRefusal> {
+    match agent::Platform::try_from(number) {
+        Ok(agent::Platform::Unspecified) => Ok(None),
+        Ok(agent::Platform::LinuxX8664) => Ok(Some(Platform::LinuxX86_64)),
+        Ok(agent::Platform::LinuxArm64) => Ok(Some(Platform::LinuxArm64)),
+        Ok(agent::Platform::DarwinArm64) | Err(_) => Err(proto::EnrollmentRefusal::InvalidRequest),
     }
 }
 
@@ -437,6 +477,7 @@ fn record_of(
         text => mac(text)?,
     };
     let serial = request.serial.trim().to_owned();
+    let platform = record_platform(request.platform)?;
     let notes = match request.notes.trim() {
         "" => String::new(),
         text => valid_reason(text).ok_or(InvalidRequest)?,
@@ -463,6 +504,7 @@ fn record_of(
         at_unix,
         approve_until_unix,
         used: None,
+        platform,
     })
 }
 
@@ -561,7 +603,8 @@ impl Coordinator {
     /// # Errors
     /// `unauthorized`, `forbidden`, `invalid_host_id`, `invalid_role`, `invalid_request` (a
     /// MAC, the serial, the notes, more than [`MAX_DATA_MACS`] data MACs, a data MAC that is
-    /// also the BMC MAC, or neither a data MAC nor a serial), `invalid_window`,
+    /// also the BMC MAC, neither a data MAC nor a serial, or a platform that is not a Linux
+    /// one), `invalid_window`,
     /// `record_exists`, `record_conflict`, `capacity`, `store_failed` (also when the enrolled
     /// hosts, or what the store holds for the host id, cannot be read: nothing is written
     /// then).

@@ -82,6 +82,7 @@ fn record(host: &str, data: &[&str], bmc: &str, serial: &str) -> InventoryRecord
         at_unix: 1_800_000_000,
         approve_until_unix: 0,
         used: None,
+        platform: None,
     }
 }
 
@@ -127,6 +128,7 @@ fn an_added_record_keeps_one_spelling_of_each_mac_and_is_listed_and_audited() {
         state: proto::RecordState::Open.into(),
         used_by_request_id: String::new(),
         used_unix: 0,
+        platform: 0,
     };
     assert_eq!(added.record.as_ref(), Some(&want));
     let entry = added.entry.expect("an audit entry");

@@ -144,6 +144,10 @@ flag enrollment add-record --data-macs STRING
 flag enrollment add-record --bmc-mac STRING
 flag enrollment add-record --serial STRING
 flag enrollment add-record --notes STRING
+flag enrollment add-record --platform VALUE
+value enrollment add-record --platform linux_x86_64
+value enrollment add-record --platform linux_arm64
+value enrollment add-record --platform darwin_arm64
 command enrollment list-records /hostkeeper.operator.v1.Enrollment/ListRecords
 flag enrollment list-records --limit UINT32
 flag enrollment list-records --page-token STRING
