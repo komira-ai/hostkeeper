@@ -497,7 +497,7 @@ One pull request each, in this order. "After" lists prerequisites. Sizes are tho
 | N1 | This design, and the pointers from hostkeeper-design.md sections 2.2, 4.6 and 12.1 | none | S |
 | N2 | Coordinator `--lan-listen` (agent service only, per Question 1); IP SAN of its address; server certificate made again when its names change; the tests of section 11 | N1 | M |
 | N3 | Daemon: the console issue file of the pending request; the deb and the overlay ship the `issue.d` link | N1 | S |
-| N4 | Enrollment: `contested` on `PendingEnrollment` and refusal `record_contested`; the UI's approval screen puts the hard-to-copy claims beside the record and adds the "matched is not proof" text | N1 | M |
+| N4 | Enrollment: `contested_by`, `record_serial` and `record_bmc_mac` on `PendingEnrollment` and refusal `record_contested`; the UI's approval screen puts the hard-to-copy claims beside the record and adds the "matched is not proof" text | N1 | M |
 | N5 | `packaging/netboot/pins.toml` and `netboot.json` for `linux-x86_64`, built and attested in the artifacts workflow | N1 | M |
 | N6 | Seed generator: a pure crate turning a record, a daemon config and flags into `grub.cfg`, autoinstall `user-data` and `meta-data`, with goldens | N1 | M |
 | N7 | proxyDHCP and TFTP packet handling: a pure crate, no sockets, no inventory | N1 | M |
