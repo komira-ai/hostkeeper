@@ -14,6 +14,8 @@ description = "How a hostkeeper daemon gets and keeps its host certificate: the 
 # It depends on `hostkeeper-config` (the pinned `ca_sha256`) and `hostkeeper-steps` (the monotonic
 # `Clock` the retry pacing sleeps on). `GrpcEnroll` (`grpc.rs`) is the production implementation of
 # the `CoordinatorEnroll` port: the generated client of `hostkeeper-proto` over tonic with rustls.
+# `ManagedFile` (`managed.rs`) is the production implementation of the `ManagedPreferences` port: a
+# Mac's managed preferences file, read only when root owns it and no one else can write it.
 [dependencies]
 getrandom.workspace = true
 hex.workspace = true
@@ -21,6 +23,9 @@ hostkeeper-config = { path = "../hostkeeper-config" }
 hostkeeper-proto = { path = "../hostkeeper-proto" }
 hostkeeper-steps = { path = "../hostkeeper-steps" }
 p256.workspace = true
+# The managed preferences a Mac's MDM writes the enrollment nonce to, a property list, binary or
+# XML (`managed.rs`).
+plist.workspace = true
 # `flock` for the store lock; the effective uid that owns the pki directory.
 rustix = { workspace = true, features = ["fs", "process"] }
 # The probe of the coordinator's certificate chain, and the trust anchors of the later calls.

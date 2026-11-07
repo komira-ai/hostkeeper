@@ -923,10 +923,20 @@ fn enrollment_depending_on_a_workspace_crate_is_refused() {
              hostkeeper-steps, which is neither itself nor hostkeeper-testkit"
         )
     );
-    // The coordinator depends on the enrollment crate, so it loses the dependency with it; so
-    // does the MDM gate, which goes too.
+    // The coordinator and the seed generator depend on the enrollment crate, so they lose the
+    // dependency with it; so does the MDM gate, which goes too.
     let without = format!("{WIRE_DEP}{OIDC_DEP}{TLS_DEP}{PROTO_DEP}{CONFIG_DEP}");
-    let dir = fixture("clean", vec![coordinator(&without)]);
+    let seed_without = format!("{CONFIG_DEP}{WIRE_DEP}");
+    let dir = fixture(
+        "clean",
+        vec![
+            coordinator(&without),
+            manifest_of(
+                "hostkeeper-pxe-seed",
+                layered("hostkeeper-pxe-seed", &seed_without, "", ""),
+            ),
+        ],
+    );
     std::fs::remove_dir_all(dir.join("crates/hostkeeper-enrollment")).expect("remove the crate");
     std::fs::remove_dir_all(dir.join("crates/hostkeeper-mdm-gate")).expect("remove the crate");
     cargo(&["generate-lockfile", "--offline"], &dir.join("Cargo.toml"));
@@ -938,7 +948,10 @@ fn enrollment_depending_on_a_workspace_crate_is_refused() {
              hostkeeper-wire}}, \
              but must depend on exactly {COORDINATOR_DEPS}\n\
              hostkeeper-enrollment is not a workspace member\n\
-             hostkeeper-mdm-gate is not a workspace member"
+             hostkeeper-mdm-gate is not a workspace member\n\
+             hostkeeper-pxe-seed depends (normal or build) on the workspace crates \
+             {{hostkeeper-config, hostkeeper-wire}}, but must depend on exactly \
+             {{hostkeeper-config, hostkeeper-enrollment, hostkeeper-wire}}"
         ))
     );
 }

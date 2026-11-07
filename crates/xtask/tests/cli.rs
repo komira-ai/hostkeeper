@@ -490,3 +490,297 @@ fn advisories_reaches_cargo_deny_first_and_fails_with_status_1_when_it_cannot_st
     assert_eq!(o.status.code(), Some(2), "{}", stderr(&o));
     assert_eq!(stdout(&o), "");
 }
+
+#[test]
+fn mdm_signing_test_report_prints_an_empty_run_with_status_0() {
+    // Catches: the signing test's verbs not reached from the command line, or a report of a
+    // run with nothing recorded failing instead of saying it is incomplete.
+    let d = dir("signing-report");
+    let o = run(&d, &["mdm-signing-test", "report", "--kit", "."]);
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+    assert_eq!(
+        stdout(&o),
+        "| Step | Command | Answer | Installed | Note |\n|---|---|---|---|---|\n\n\
+         Verdict: incomplete: pkg-1 has no recorded outcome\n"
+    );
+}
+
+#[test]
+fn mdm_signing_test_build_into_a_directory_that_exists_fails_with_status_1() {
+    // Catches: a refusal of the signing test exiting 0 or 2, or its words not printed.
+    let d = dir("signing-build");
+    let o = run(
+        &d,
+        &[
+            "mdm-signing-test",
+            "build",
+            "--out",
+            ".",
+            "--profile-identifier",
+            "com.example.hostkeeper.mdm",
+        ],
+    );
+    assert_eq!(o.status.code(), Some(1));
+    assert_eq!(
+        stderr(&o),
+        "xtask: . exists: the kit is built into a new directory\n"
+    );
+}
+
+#[test]
+fn mdm_signing_test_send_refuses_an_api_url_off_loopback_with_status_2() {
+    // Catches: NanoHUB's API key sent to an address beyond the host: the flag parser refuses it.
+    let d = dir("signing-send");
+    let o = run(
+        &d,
+        &[
+            "mdm-signing-test",
+            "send",
+            "--kit",
+            ".",
+            "--step",
+            "pkg-1",
+            "--enrollment-id",
+            "A",
+            "--api-url",
+            "http://192.0.2.1:9004",
+            "--api-key-file",
+            "key",
+            "--mdm-host",
+            "mdm.example.net",
+        ],
+    );
+    assert_eq!(o.status.code(), Some(2));
+    assert!(
+        stderr(&o).contains("is not NanoHUB's loopback API URL"),
+        "{}",
+        stderr(&o)
+    );
+}
+
+/// The bytes of the signing test's root profile in the CLI tests.
+const SIGNING_PROFILE: &[u8] = b"<plist>a root profile</plist>";
+
+/// A signing-test kit in `d`, as `mdm-signing-test build` leaves one: pkgs whose bytes are
+/// `pkg <n>` under their digests, the profile and `kit.toml`. The digest of pkg `n`, by index.
+fn signing_kit(d: &Path) -> Vec<String> {
+    std::fs::create_dir(d.join("pkg")).expect("pkg dir");
+    std::fs::write(d.join("signing-test-root.mobileconfig"), SIGNING_PROFILE).expect("profile");
+    let mut text = format!(
+        "profile_identifier = \"com.example.hostkeeper.mdm\"\n\n[root_profile]\n\
+         identifier = \"com.example.hostkeeper.mdm.signing-test.root\"\nsha256 = \"{}\"\n\
+         root_sha256 = \"{}\"\n",
+        sha256(SIGNING_PROFILE),
+        "0".repeat(64)
+    );
+    let mut digests = Vec::new();
+    for n in 1..=4 {
+        let bytes = format!("pkg {n}");
+        let digest = sha256(bytes.as_bytes());
+        std::fs::write(d.join("pkg").join(format!("{digest}.pkg")), &bytes).expect("pkg");
+        text.push_str(&format!(
+            "\n[[pkg]]\nstep = \"pkg-{n}\"\nidentifier = \"dev.hostkeeper.signing-test.pkg{n}\"\n\
+             version = \"1\"\nsha256 = \"{digest}\"\nbuild_check_signature = \"\"\n"
+        ));
+        digests.push(digest);
+    }
+    std::fs::write(d.join("kit.toml"), text).expect("kit.toml");
+    digests
+}
+
+/// A NanoHUB on `127.0.0.1`, port 0, that answers one call `200 {}`; the join gives the
+/// request it read.
+fn one_call_nanohub() -> (String, std::thread::JoinHandle<String>) {
+    use std::io::Read;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let url = format!("http://{}", listener.local_addr().expect("address"));
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept");
+        let mut request = Vec::new();
+        let mut buf = [0_u8; 4096];
+        loop {
+            let n = stream.read(&mut buf).expect("read");
+            request.extend_from_slice(&buf[..n]);
+            let text = String::from_utf8_lossy(&request).into_owned();
+            if let Some((head, body)) = text.split_once("\r\n\r\n") {
+                let length: usize = head
+                    .lines()
+                    .find_map(|l| l.strip_prefix("Content-Length: "))
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0);
+                if body.len() >= length {
+                    break;
+                }
+            }
+            if n == 0 {
+                break;
+            }
+        }
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+            .expect("answer");
+        String::from_utf8(request).expect("a UTF-8 request")
+    });
+    (url, server)
+}
+
+#[test]
+fn mdm_signing_test_send_dry_runs_then_applies_through_nanohub() {
+    // Catches: `send`'s flags not reaching the send from the command line: a dry run that
+    // calls NanoHUB or writes results.toml, `--apply` not sending the step's command to the
+    // enrollment id with the API key, or the send it made not recorded under its UUID.
+    let d = dir("signing-send-apply");
+    let digests = signing_kit(&d);
+    std::fs::write(d.join("key"), "the-key\n").expect("key");
+    std::fs::set_permissions(d.join("key"), std::fs::Permissions::from_mode(0o600)).expect("mode");
+    let (url, server) = one_call_nanohub();
+    let flags = [
+        "mdm-signing-test",
+        "send",
+        "--kit",
+        ".",
+        "--step",
+        "pkg-2",
+        "--enrollment-id",
+        "0000FE00-ABC",
+        "--api-url",
+        &url,
+        "--api-key-file",
+        "key",
+        "--mdm-host",
+        "mdm.example.net",
+    ];
+    let dry = run(&d, &flags);
+    assert_eq!(dry.status.code(), Some(0), "{}", stderr(&dry));
+    let printed = stdout(&dry);
+    let first = printed.lines().next().expect("a line");
+    let uuid = first
+        .strip_prefix("pkg-2 to 0000FE00-ABC: command ")
+        .expect("the step, the Mac and the command's UUID")
+        .to_owned();
+    assert!(
+        printed.contains("<string>InstallEnterpriseApplication</string>"),
+        "{printed}"
+    );
+    assert!(
+        printed.ends_with("dry run: nothing sent; add --apply to send it\n"),
+        "{printed}"
+    );
+    assert!(!d.join("results.toml").exists());
+
+    let mut apply = flags.to_vec();
+    apply.push("--apply");
+    let sent = run(&d, &apply);
+    assert_eq!(sent.status.code(), Some(0), "{}", stderr(&sent));
+    assert_eq!(
+        stdout(&sent),
+        format!(
+            "pkg-2 to 0000FE00-ABC: command {uuid}\nqueued and pushed\nfind the answer: the \
+             NanoHUB unit's log line with command_uuid={uuid}, then `mdm-signing-test record \
+             --step pkg-2`\n"
+        )
+    );
+    let request = server.join().expect("the server");
+    let (head, body) = request.split_once("\r\n\r\n").expect("a head");
+    assert!(
+        head.starts_with("PUT /api/v1/nanomdm/enqueue/0000FE00-ABC HTTP/1.1\r\n"),
+        "{head}"
+    );
+    // base64 of `nanohub:the-key`.
+    assert!(
+        head.contains("\r\nAuthorization: Basic bmFub2h1Yjp0aGUta2V5\r\n"),
+        "{head}"
+    );
+    assert!(
+        body.contains("<string>InstallEnterpriseApplication</string>"),
+        "{body}"
+    );
+    assert!(
+        body.contains(&format!(
+            "<string>https://mdm.example.net/pkg/{}.pkg</string>",
+            digests[1]
+        )),
+        "{body}"
+    );
+    assert!(body.contains(&format!("<string>{uuid}</string>")), "{body}");
+    let results: toml::Table = std::fs::read_to_string(d.join("results.toml"))
+        .expect("results.toml")
+        .parse()
+        .expect("TOML");
+    let sends = results["send"].as_array().expect("sends");
+    assert_eq!(sends.len(), 1);
+    assert_eq!(sends[0]["step"].as_str(), Some("pkg-2"));
+    assert_eq!(sends[0]["command_uuid"].as_str(), Some(uuid.as_str()));
+    assert!(sends[0].get("push_error").is_none());
+}
+
+#[test]
+fn mdm_signing_test_record_writes_every_flag_to_the_send() {
+    // Catches: `record`'s flags not reaching results.toml from the command line: the answer,
+    // the install, pkg 3's trust or the note dropped or written to another send.
+    let d = dir("signing-record");
+    signing_kit(&d);
+    std::fs::write(
+        d.join("results.toml"),
+        "[[send]]\nstep = \"pkg-3\"\ncommand_uuid = \"OLD\"\n\n\
+         [[send]]\nstep = \"pkg-3\"\ncommand_uuid = \"NEW\"\n",
+    )
+    .expect("results.toml");
+    let o = run(
+        &d,
+        &[
+            "mdm-signing-test",
+            "record",
+            "--kit",
+            ".",
+            "--step",
+            "pkg-3",
+            "--answer",
+            "Acknowledged",
+            "--installed",
+            "true",
+            "--trusted",
+            "true",
+            "--note",
+            "Installed dev.hostkeeper.signing-test.pkg3",
+        ],
+    );
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+    assert_eq!(stdout(&o), "recorded pkg-3 (command NEW)\n");
+    let results: toml::Table = std::fs::read_to_string(d.join("results.toml"))
+        .expect("results.toml")
+        .parse()
+        .expect("TOML");
+    let sends = results["send"].as_array().expect("sends");
+    assert!(sends[0].get("outcome").is_none(), "{sends:?}");
+    let outcome = sends[1]["outcome"]
+        .as_table()
+        .expect("the last send's outcome");
+    assert_eq!(outcome["answer"].as_str(), Some("Acknowledged"));
+    assert_eq!(outcome["installed"].as_bool(), Some(true));
+    assert_eq!(outcome["trusted"].as_bool(), Some(true));
+    assert_eq!(
+        outcome["note"].as_str(),
+        Some("Installed dev.hostkeeper.signing-test.pkg3")
+    );
+    let refused = run(
+        &d,
+        &[
+            "mdm-signing-test",
+            "record",
+            "--kit",
+            ".",
+            "--step",
+            "pkg-1",
+            "--answer",
+            "none",
+            "--installed",
+            "false",
+        ],
+    );
+    assert_eq!(refused.status.code(), Some(1));
+    assert_eq!(
+        stderr(&refused),
+        "xtask: pkg-1 has not been sent: `send --apply` it first\n"
+    );
+}

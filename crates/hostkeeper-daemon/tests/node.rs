@@ -99,6 +99,7 @@ fn the_enrollment_loop_writes_the_enrollment_after_its_step() {
         entropy: Box::new(OsEntropy),
         wall: Box::new(SystemWallClock),
         clock: Box::new(FakeClock::new(0, 0)),
+        managed: None,
     };
     let settings = EnrollSettings {
         ca_sha256: Sha256Hex::parse(&"00".repeat(32)).expect("a SHA-256"),

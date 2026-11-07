@@ -1,7 +1,7 @@
 //! The fakes the enroller is driven with: an in-memory coordinator that follows the enrollment
 //! contract and issues certificates from a test CA, a wall clock that records who reads it, a
-//! monotonic clock that records its sleeps, entropy shared by every enroller of one test, and a
-//! store that cannot write the key. Each test owns a scratch directory for its pki directory.
+//! monotonic clock that records its sleeps, entropy shared by every enroller of one test, a
+//! Mac's managed preferences as a test sets them, and a store that cannot write the key. Each test owns a scratch directory for its pki directory.
 
 use std::collections::BTreeMap;
 use std::io;
@@ -11,11 +11,12 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use hostkeeper_config::daemon::{DaemonConfig, Sha256Hex};
+use hostkeeper_config::trust::TrustError;
 use hostkeeper_enroll::{
     Claims, ClaimsError, ClaimsSource, CoordinatorEnroll, EnrollAnswer, EnrollRequest, EnrollState,
-    Enroller, Entropy, EntropyError, Error, FaultGate, HostId, Issued, KeyFrom, PkiDir, Poll,
-    PollAnswer, Ports, Reason, RenewAnswer, RenewRequest, RequestId, Settings, Site, Store,
-    StoreError, StoreLock, Stored, TransportError, WallClock,
+    Enroller, Entropy, EntropyError, Error, FaultGate, HostId, Issued, KeyFrom, ManagedPreferences,
+    PkiDir, Poll, PollAnswer, Ports, Reason, RenewAnswer, RenewRequest, RequestId, Settings, Site,
+    Store, StoreError, StoreLock, Stored, TransportError, WallClock,
 };
 use hostkeeper_steps::{BootId, BootIdError, Clock};
 use hostkeeper_testkit::Scratch;
@@ -367,6 +368,9 @@ pub struct Coordinator {
     pub renew_refusal: Option<Reason>,
     /// Makes the certificates; [`proper`] when `None`.
     pub issue: Option<Issue>,
+    /// Approves a pending request whose `Enroll` carries a Mac nonce as this host id, and
+    /// answers it decided, as the coordinator's Mac path does when its conditions hold.
+    pub nonce_approves: Option<String>,
 }
 
 impl Coordinator {
@@ -459,9 +463,15 @@ impl CoordinatorEnroll for Handle {
             row.issued = None;
             row.renewal_of = request.renewal_of.clone();
         }
+        if let Some(host_id) = &c.nonce_approves
+            && request.mac_nonce.is_some()
+            && row.state == RowState::Pending
+        {
+            row.state = RowState::Approved(host_id.clone());
+        }
         let state = match &row.state {
             RowState::Pending => EnrollState::Pending,
-            RowState::Approved(_) => EnrollState::Approved,
+            RowState::Approved(_) => EnrollState::Decided,
             RowState::Denied(reason) => EnrollState::Denied(Reason::new(reason).expect("a token")),
         };
         let answer = EnrollAnswer {
@@ -630,6 +640,67 @@ pub fn claims() -> Claims {
     }
 }
 
+/// What a Mac's managed preferences file is, as a test sets it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Managed {
+    /// No file.
+    Missing,
+    /// A file owned by another account than the trusted one.
+    NotRoots,
+    /// A file the group or others can write.
+    Writable,
+    /// A trusted file with these bytes.
+    Bytes(Vec<u8>),
+}
+
+/// A Mac's managed preferences: what the test set, and how often the enroller read them.
+#[derive(Debug)]
+pub struct ManagedState {
+    pub file: Managed,
+    pub reads: usize,
+}
+
+/// The managed preferences an enroller holds.
+pub struct FakeManaged(pub Arc<Mutex<ManagedState>>);
+
+impl ManagedPreferences for FakeManaged {
+    fn read(&self) -> Result<Vec<u8>, TrustError> {
+        let mut state = self.0.lock().expect("managed");
+        state.reads += 1;
+        match &state.file {
+            Managed::Missing => Err(TrustError::Io(io::Error::from(io::ErrorKind::NotFound))),
+            Managed::NotRoots => Err(TrustError::Owner {
+                found: 501,
+                wanted: 0,
+            }),
+            Managed::Writable => Err(TrustError::Writable { mode: 0o664 }),
+            Managed::Bytes(bytes) => Ok(bytes.clone()),
+        }
+    }
+}
+
+/// A property list, XML, of the managed preferences of `dev.hostkeeper.enrollment` holding
+/// `entries`.
+pub fn managed_plist(entries: Vec<(&str, plist::Value)>) -> Vec<u8> {
+    let dict: plist::Dictionary = entries
+        .into_iter()
+        .map(|(key, value)| (key.to_owned(), value))
+        .collect();
+    let mut bytes = Vec::new();
+    plist::Value::Dictionary(dict)
+        .to_writer_xml(&mut bytes)
+        .expect("an XML plist");
+    bytes
+}
+
+/// The managed preferences the gate makes: `nonce` for the request `request_id`.
+pub fn nonce_plist(request_id: &str, nonce: &[u8]) -> Vec<u8> {
+    managed_plist(vec![
+        ("nonce", plist::Value::Data(nonce.to_vec())),
+        ("request_id", plist::Value::String(request_id.to_owned())),
+    ])
+}
+
 /// The pki directory, except that writing the pending key fails, as a failed fsync would.
 pub struct KeyWriteFails(pub PkiDir);
 
@@ -672,6 +743,7 @@ pub struct World {
     pub sleeps: Arc<Mutex<Vec<u64>>>,
     entropy: Arc<Mutex<u8>>,
     pub claims: Arc<Mutex<Claims>>,
+    pub managed: Arc<Mutex<ManagedState>>,
     pub image: Mutex<String>,
     pub pin: Sha256Hex,
 }
@@ -704,6 +776,7 @@ impl World {
             signed_answer: None,
             renew_refusal: None,
             issue: None,
+            nonce_approves: None,
         };
         World {
             dir: Scratch::under(&base(), name).expect("a scratch directory"),
@@ -712,6 +785,10 @@ impl World {
             sleeps: Arc::new(Mutex::new(Vec::new())),
             entropy: Arc::new(Mutex::new(0)),
             claims: Arc::new(Mutex::new(claims())),
+            managed: Arc::new(Mutex::new(ManagedState {
+                file: Managed::Missing,
+                reads: 0,
+            })),
             image: Mutex::new(IMAGE.to_owned()),
             pin,
         }
@@ -724,6 +801,16 @@ impl World {
 
     pub fn coordinator(&self) -> MutexGuard<'_, Coordinator> {
         self.coordinator.lock().expect("coordinator")
+    }
+
+    /// From now on, the managed preferences file is `file`.
+    pub fn set_managed(&self, file: Managed) {
+        self.managed.lock().expect("managed").file = file;
+    }
+
+    /// How often the enroller read the managed preferences.
+    pub fn managed_reads(&self) -> usize {
+        self.managed.lock().expect("managed").reads
     }
 
     pub fn set_now(&self, now: u64) {
@@ -770,6 +857,7 @@ impl World {
             entropy: entropy.unwrap_or_else(|| Box::new(SharedEntropy(Arc::clone(&self.entropy)))),
             wall: Box::new(FakeWall(Arc::clone(&self.wall))),
             clock: Box::new(FakeClock(Arc::clone(&self.sleeps))),
+            managed: Some(Box::new(FakeManaged(Arc::clone(&self.managed)))),
         }
     }
 

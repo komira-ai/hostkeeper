@@ -3,8 +3,9 @@
 //!
 //! The contract is the coordinator's enrollment API (design section 5.7):
 //!
-//! - `Enroll` takes a PKCS#10 request for the host's key, the claims, the boot image and, for a
-//!   host that was offline past expiry, `renewal_of`; it answers the request id and a state.
+//! - `Enroll` takes a PKCS#10 request for the host's key, the claims, the boot image, for a
+//!   host that was offline past expiry `renewal_of`, and on a Mac the one-time nonce its MDM gave
+//!   it; it answers the request id and a state.
 //! - The request id is the lower-case hex SHA-256 of the key's DER SubjectPublicKeyInfo.
 //! - A first `Poll` with an empty signature answers a coordinator nonce, 16 to 64 bytes, good for
 //!   one use. The second `Poll` carries that nonce and an ECDSA P-256/SHA-256 signature (DER) by
@@ -18,6 +19,8 @@
 use std::fmt;
 
 use sha2::{Digest, Sha256};
+
+use crate::managed::MacNonce;
 
 /// The first part of the message a poll signs.
 pub const POLL_CONTEXT: &[u8] = b"hostkeeper-enroll-poll-v1";
@@ -143,8 +146,8 @@ pub struct Claims {
     pub bmc_mac: Option<String>,
 }
 
-/// An `Enroll` request. It is a function of the key, the claims, the image and `renewal_of`
-/// only, so a repost of the same key is the same request.
+/// An `Enroll` request. It is a function of the key, the claims, the image, `renewal_of` and
+/// the Mac nonce only, so a repost of the same key is the same request.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EnrollRequest {
     /// The PKCS#10 request (DER) for the host's key, signed by it.
@@ -154,13 +157,19 @@ pub struct EnrollRequest {
     pub image: String,
     /// The host this request returns, for a host whose certificate expired while it was offline.
     pub renewal_of: Option<HostId>,
+    /// The one-time nonce a Mac's MDM gave it for this request (`managed.rs`); `None` on any
+    /// other post.
+    pub mac_nonce: Option<MacNonce>,
 }
 
 /// Where a request stands.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EnrollState {
+    /// Waiting for an operator.
     Pending,
-    Approved,
+    /// Waiting for no one any more: approved (by an operator, or by the Mac nonce the post
+    /// carried), issued or denied. The poll says which.
+    Decided,
     Denied(Reason),
 }
 

@@ -9,6 +9,10 @@
 //!   into that tree (`release`).
 //! - `advisories`: the security advisories against the dependencies in `Cargo.lock`, kept in
 //!   one GitHub issue that it opens, rewrites and closes (`advisories`).
+//! - `mdm-signing-test <verb>`: the device test of pkg signing of the MDM design (task M11): the
+//!   kit's pkgs, built on a Mac, and the sends of its steps to an enrolled Mac through NanoHUB,
+//!   with what each did (`mdm_signing_test`). Not a CI step: an operator runs it
+//!   (`docs/operations/pkg-signing-test.md`).
 //!
 //! The workflows that call them are in `.github/workflows`; `tests/workflows` holds each of
 //! them to the rules of this repository. The crate's one export is [`main`], the entry point of
@@ -17,6 +21,7 @@
 
 mod advisories;
 mod install;
+mod mdm_signing_test;
 mod release;
 
 #[cfg(feature = "test-support")]
@@ -42,6 +47,8 @@ enum Error {
     Release(#[from] release::Error),
     #[error(transparent)]
     Advisories(#[from] advisories::Error),
+    #[error(transparent)]
+    SigningTest(#[from] mdm_signing_test::Error),
 }
 
 #[derive(Parser)]
@@ -83,6 +90,12 @@ enum Verb {
         #[arg(long)]
         repo: release::contract::Repo,
     },
+    /// The device test of pkg signing (MDM design, task M11): build the kit on a Mac, send its
+    /// steps to an enrolled Mac through NanoHUB, record and report what each did.
+    MdmSigningTest {
+        #[command(subcommand)]
+        verb: mdm_signing_test::Verb,
+    },
 }
 
 fn run(cli: Cli) -> Result<Vec<String>, Error> {
@@ -105,6 +118,11 @@ fn run(cli: Cli) -> Result<Vec<String>, Error> {
             let ports = release::ports::Adapters::ports(&adapters);
             Ok(advisories::sync(ports.advisories, ports.runs, &repo)?)
         }
+        Verb::MdmSigningTest { verb } => Ok(mdm_signing_test::run(
+            verb,
+            &release::real::exec(),
+            mdm_signing_test::NanoHubHttp::new,
+        )?),
     }
 }
 
@@ -121,7 +139,10 @@ pub fn main() -> ExitCode {
             eprintln!("xtask: {e}");
             match e {
                 Error::Usage(_) => ExitCode::from(2),
-                Error::Install(_) | Error::Release(_) | Error::Advisories(_) => ExitCode::FAILURE,
+                Error::Install(_)
+                | Error::Release(_)
+                | Error::Advisories(_)
+                | Error::SigningTest(_) => ExitCode::FAILURE,
             }
         }
     }

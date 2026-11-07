@@ -7,8 +7,11 @@
 //!
 //! What the proto says and the port needs:
 //!
-//! - `Enroll` answers PENDING or DUPLICATE_CLAIM (pending, with an alert for the operator).
-//!   Approval and denial reach the daemon in `Poll`; a refusal of `Enroll` is a gRPC status.
+//! - `Enroll` carries a Mac's nonce as `mac_nonce`, empty when there is none. It answers PENDING
+//!   or DUPLICATE_CLAIM (pending, with an alert for the operator), or UNSPECIFIED for a request
+//!   that waits for no one any more (approved, by an operator or by the nonce just posted, issued
+//!   or denied), which is [`EnrollState::Decided`]. Approval and denial reach the daemon in
+//!   `Poll`; a refusal of `Enroll` is a gRPC status.
 //! - `Poll` answers UNSPECIFIED with a nonce (the challenge), PENDING, ISSUED or DENIED. The
 //!   message has no reason, so a denied poll carries the reason `denied`, the state's own name.
 //! - `Renew` answers the certificate; a refusal is a gRPC status whose message is one reason
@@ -89,7 +92,11 @@ pub(super) fn enroll_request(request: &EnrollRequest) -> pb::EnrollRequest {
             .as_ref()
             .map(ToString::to_string)
             .unwrap_or_default(),
-        ..pb::EnrollRequest::default()
+        mac_nonce: request
+            .mac_nonce
+            .as_ref()
+            .map(|nonce| nonce.as_bytes().to_vec())
+            .unwrap_or_default(),
     }
 }
 
@@ -102,9 +109,8 @@ pub(super) fn enroll_answer(reply: pb::EnrollResponse) -> Result<EnrollAnswer, T
     })?;
     let state = match pb::EnrollState::try_from(reply.state) {
         Ok(pb::EnrollState::Pending | pb::EnrollState::DuplicateClaim) => EnrollState::Pending,
-        Ok(pb::EnrollState::Unspecified) | Err(_) => {
-            return Err(unknown("Enroll", "state", reply.state));
-        }
+        Ok(pb::EnrollState::Unspecified) => EnrollState::Decided,
+        Err(_) => return Err(unknown("Enroll", "state", reply.state)),
     };
     Ok(EnrollAnswer { request_id, state })
 }
