@@ -43,10 +43,11 @@ pub(crate) fn write_assets(dir: &Path, version: &Version, marker: &str) {
         }
         write(name, format!("{name} {marker}\n"));
     }
-    // The command line passes `release check` as the script `release hkctl` writes.
+    // The command line passes `release check` as the script `release hkctl` writes, stamped with
+    // the 12 digits every commit of [`nth_commit`] below 2^32 starts with.
     write(
         &hkctl_name(version),
-        format!("#!/usr/bin/env bash\n# {marker}\n_hk_version='hkctl {version}+0123456789ab'\n"),
+        format!("#!/usr/bin/env bash\n# {marker}\n_hk_version='hkctl {version}+000000000000'\n"),
     );
     for package in Package::ALL {
         let (service, text) = (package.service().name(), package.version_text(version));

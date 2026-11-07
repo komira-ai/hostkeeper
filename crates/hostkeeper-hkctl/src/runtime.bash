@@ -434,7 +434,7 @@ _hk_field_flag() {
 # _hk_key_escaped is 1 when a key holds an escape. The gateway reads the object itself; this
 # finds the keys a flag must not set again.
 _hk_scan_object() {
-	local s=$1 len=${#1} i=0 c depth=0 instr=0 esc=0 inkey=0 expect=1 key='' vstart=-1 open close=-1 n=0
+	local s=$1 len=${#1} i=0 c depth=0 instr=0 esc=0 inkey=0 expect=1 keyed=0 key='' vstart=-1 open close=-1 n=0
 	_hk_keys=()
 	_hk_kvals=()
 	_hk_key_escaped=0
@@ -463,6 +463,7 @@ _hk_scan_object() {
 					inkey=0
 					_hk_keys[n]=$key
 					n=$((n + 1))
+					keyed=1
 				fi
 			elif ((inkey)); then
 				key+=$c
@@ -486,6 +487,11 @@ _hk_scan_object() {
 				;;
 			':')
 				if ((depth == 1)); then
+					# A value with no key before it: not an object.
+					if ((!keyed)); then
+						return 1
+					fi
+					keyed=0
 					expect=0
 					vstart=$((i + 1))
 				fi

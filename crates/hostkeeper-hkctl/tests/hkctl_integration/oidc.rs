@@ -249,24 +249,39 @@ fn a_token_reply_without_a_token_and_a_job_without_the_variables_are_refused() {
     let bad_char = "hkctl: the runner set ACTIONS_ID_TOKEN_REQUEST_URL or ACTIONS_ID_TOKEN_REQUEST_TOKEN with a character that is not visible ASCII\n";
     let envs: [(&[(&str, &str)], &str); 5] = [
         (&[], no_vars),
-        (&[("ACTIONS_ID_TOKEN_REQUEST_URL", "https://x/t")], no_vars),
+        (
+            &[(
+                "ACTIONS_ID_TOKEN_REQUEST_URL",
+                "https://runner.example.com/t",
+            )],
+            no_vars,
+        ),
         (
             &[
-                ("ACTIONS_ID_TOKEN_REQUEST_URL", "http://x/t"),
+                (
+                    "ACTIONS_ID_TOKEN_REQUEST_URL",
+                    "http://runner.example.com/t",
+                ),
                 ("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "t"),
             ],
             "hkctl: ACTIONS_ID_TOKEN_REQUEST_URL is not an https URL\n",
         ),
         (
             &[
-                ("ACTIONS_ID_TOKEN_REQUEST_URL", "https://x/t"),
+                (
+                    "ACTIONS_ID_TOKEN_REQUEST_URL",
+                    "https://runner.example.com/t",
+                ),
                 ("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "a b"),
             ],
             bad_char,
         ),
         (
             &[
-                ("ACTIONS_ID_TOKEN_REQUEST_URL", "https://x/ t"),
+                (
+                    "ACTIONS_ID_TOKEN_REQUEST_URL",
+                    "https://runner.example.com/ t",
+                ),
                 ("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "t"),
             ],
             bad_char,

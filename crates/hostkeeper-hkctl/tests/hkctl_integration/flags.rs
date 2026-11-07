@@ -404,7 +404,7 @@ fn the_request_file_is_the_body_the_flags_add_to_and_a_field_named_twice_is_refu
     }
 
     rig.reset();
-    let cases: [(&[u8], &[&str], &str); 10] = [
+    let cases: [(&[u8], &[&str], &str); 12] = [
         (
             b"{\"name\":\"a\"}",
             &["--name", "b"],
@@ -429,6 +429,12 @@ fn the_request_file_is_the_body_the_flags_add_to_and_a_field_named_twice_is_refu
         (b"{} x", &[], "the request file is not a JSON object"),
         (b"{\"a\":1", &[], "the request file is not a JSON object"),
         (b"", &[], "the request file is not a JSON object"),
+        (b"{:1}", &[], "the request file is not a JSON object"),
+        (
+            b"{\"a\":1, :2}",
+            &[],
+            "the request file is not a JSON object",
+        ),
         (
             b"{\"na\\u006de\":\"a\"}",
             &[],

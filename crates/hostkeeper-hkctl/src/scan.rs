@@ -126,7 +126,7 @@ enum Quote {
 
 /// The code of `script`, one entry per line: each single-quoted or `$'...'` text is `''` and each
 /// comment is gone; double-quoted text, which holds expansions, is kept.
-pub fn code(script: &str) -> Vec<String> {
+pub(crate) fn code(script: &str) -> Vec<String> {
     let mut lines = Vec::new();
     let mut current = String::new();
     let mut quote = Quote::None;

@@ -709,23 +709,25 @@ fn an_index_that_leaves_out_the_macos_package_is_listed() {
 
 #[test]
 fn an_hkctl_asset_that_is_not_the_releases_script_is_listed() {
-    // Catches: `release check` passing a command line of another release, or a file that is not
-    // the script at all, as `hkctl-<version>`.
+    // Catches: `release check` passing a command line of another release or another commit, or a
+    // file that is not the script at all, as `hkctl-<version>`.
     let (dir, commit) = assets("check-hkctl");
     let verifier = FakeVerifier::good(&commit);
     let name = crate::release::contract::hkctl_name(&version());
-    std::fs::write(
-        dir.join(&name),
-        "#!/usr/bin/env bash\n_hk_version='hkctl 0.1.4+0123456789ab'\n",
-    )
-    .expect("write");
-    let lines = refused(run(&verifier, &dir, &commit));
-    assert!(
-        lines.contains(&format!(
-            "{name} does not hold exactly one version line `_hk_version='hkctl 0.1.5+<12 hex>'`"
-        )),
-        "{lines:?}"
+    let wrong = format!(
+        "{name} does not hold exactly one version line `_hk_version='hkctl 0.1.5+{}'`",
+        commit.short()
     );
+    // Another release's, and this release's at another commit.
+    for line in ["hkctl 0.1.4+000000000000", "hkctl 0.1.5+0123456789ab"] {
+        std::fs::write(
+            dir.join(&name),
+            format!("#!/usr/bin/env bash\n_hk_version='{line}'\n"),
+        )
+        .expect("write");
+        let lines = refused(run(&verifier, &dir, &commit));
+        assert!(lines.contains(&wrong), "{lines:?}");
+    }
     std::fs::write(dir.join(&name), "not a script\n").expect("write");
     let lines = refused(run(&verifier, &dir, &commit));
     assert!(

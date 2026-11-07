@@ -124,7 +124,13 @@ fn version_help_and_names_are_answered_without_a_call() {
         vec!["-h"],
         vec!["releases", "--help"],
         vec!["releases", "set-desired", "--help"],
-        vec!["--endpoint", "https://x", "hosts", "get", "-h"],
+        vec![
+            "--endpoint",
+            "https://coordinator.example.com",
+            "hosts",
+            "get",
+            "-h",
+        ],
     ] {
         let ran = rig.run(Script::Real, &args(&words), b"", &[]);
         assert_eq!((ran.code, ran.stderr.as_str()), (0, ""), "{words:?}");
@@ -164,7 +170,11 @@ fn version_help_and_names_are_answered_without_a_call() {
     );
 
     // Nothing to run: the help on stderr, exit 2.
-    for words in [vec![], vec!["hosts"], vec!["--endpoint", "https://x"]] {
+    for words in [
+        vec![],
+        vec!["hosts"],
+        vec!["--endpoint", "https://coordinator.example.com"],
+    ] {
         let ran = rig.run(Script::Real, &args(&words), b"", &[]);
         assert_eq!((ran.code, ran.stdout.as_str()), (2, ""), "{words:?}");
         assert!(ran.stderr.starts_with("hkctl"), "{words:?}");
@@ -229,7 +239,7 @@ fn the_global_flags_usage_errors_end_the_script_before_any_call() {
         (
             vec![
                 "--endpoint",
-                "http://x",
+                "http://coordinator.example.com",
                 "--ca-file",
                 &ca,
                 "--token-file",
@@ -240,7 +250,7 @@ fn the_global_flags_usage_errors_end_the_script_before_any_call() {
         (
             vec![
                 "--endpoint",
-                "https://x/path",
+                "https://runner.example.com/path",
                 "--ca-file",
                 &ca,
                 "--token-file",
@@ -249,13 +259,18 @@ fn the_global_flags_usage_errors_end_the_script_before_any_call() {
             "--endpoint takes https://<host>[:<port>]".to_owned(),
         ),
         (
-            vec!["--endpoint", "https://x", "--token-file", &token],
+            vec![
+                "--endpoint",
+                "https://coordinator.example.com",
+                "--token-file",
+                &token,
+            ],
             "a call needs --ca-file".to_owned(),
         ),
         (
             vec![
                 "--endpoint",
-                "https://x",
+                "https://coordinator.example.com",
                 "--ca-file",
                 &missing,
                 "--token-file",
@@ -266,7 +281,7 @@ fn the_global_flags_usage_errors_end_the_script_before_any_call() {
         (
             vec![
                 "--endpoint",
-                "https://x",
+                "https://coordinator.example.com",
                 "--ca-file",
                 &directory,
                 "--token-file",
@@ -275,14 +290,19 @@ fn the_global_flags_usage_errors_end_the_script_before_any_call() {
             format!("cannot read --ca-file {directory}"),
         ),
         (
-            vec!["--endpoint", "https://x", "--ca-file", &ca],
+            vec![
+                "--endpoint",
+                "https://coordinator.example.com",
+                "--ca-file",
+                &ca,
+            ],
             "a call needs exactly one of --token-file, --token-stdin and --github-oidc-audience"
                 .to_owned(),
         ),
         (
             vec![
                 "--endpoint",
-                "https://x",
+                "https://coordinator.example.com",
                 "--ca-file",
                 &ca,
                 "--token-file",
@@ -293,7 +313,12 @@ fn the_global_flags_usage_errors_end_the_script_before_any_call() {
                 .to_owned(),
         ),
         (
-            vec!["--endpoint", "https://x", "--endpoint", "https://y"],
+            vec![
+                "--endpoint",
+                "https://coordinator.example.com",
+                "--endpoint",
+                "https://other.example.com",
+            ],
             "--endpoint is given twice".to_owned(),
         ),
         (

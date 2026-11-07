@@ -34,25 +34,25 @@ const RUNTIME: &str = include_str!("runtime.bash");
 /// A request field of this name, an integer given as a flag or in the request file, holds the
 /// call on the coordinator for that many seconds (`Releases.WaitConverged`): `curl --max-time` is
 /// its value plus `--timeout-secs`.
-pub const HOLD_FIELD: &str = "wait_secs";
+pub(crate) const HOLD_FIELD: &str = "wait_secs";
 
 /// The flags hkctl defines beyond those `hostkeeper ctl` keeps for itself (the generator's
 /// `RESERVED_FLAGS`, which no field takes): no field may take these either. `--version` is
 /// hkctl's own only before the service, so a field may be named `version`.
-pub const OWN_FLAGS: [&str; 2] = ["github-oidc-audience", "response-file"];
+pub(crate) const OWN_FLAGS: [&str; 2] = ["github-oidc-audience", "response-file"];
 
 /// The default of `--timeout-secs`.
-pub const DEFAULT_TIMEOUT_SECS: &str = "30";
+pub(crate) const DEFAULT_TIMEOUT_SECS: &str = "30";
 
 /// A flag hkctl defines itself: its name, the name of its value (empty for a switch) and its help.
-pub struct Global {
-    pub flag: &'static str,
-    pub value: &'static str,
-    pub help: &'static str,
+pub(crate) struct Global {
+    pub(crate) flag: &'static str,
+    pub(crate) value: &'static str,
+    pub(crate) help: &'static str,
 }
 
 /// The global flags, in the order `--help` lists them.
-pub const GLOBALS: [Global; 9] = [
+pub(crate) const GLOBALS: [Global; 9] = [
     Global {
         flag: "endpoint",
         value: "URL",
@@ -61,8 +61,9 @@ pub const GLOBALS: [Global; 9] = [
     Global {
         flag: "ca-file",
         value: "PATH",
-        help: "PEM certificates of the CA the coordinator's certificate must chain to; curl trusts \
-               no other root for the call. Needed for a call.",
+        help: "PEM certificates of the CA the coordinator's certificate must chain to, given to \
+               curl as `--cacert` in place of its default bundle (a curl built with a default CA \
+               directory also reads that directory). Needed for a call.",
     },
     Global {
         flag: "token-file",
@@ -109,7 +110,7 @@ pub const GLOBALS: [Global; 9] = [
 
 /// The exit code of each code the gateway's error body names (`{"code":"<NAME>",...}`). `OK` is
 /// never an error body's: one that says `OK`, like any name not here, is not the gateway's.
-pub const EXIT_CODES: [(&str, u8); 17] = [
+pub(crate) const EXIT_CODES: [(&str, u8); 17] = [
     ("OK", 0),
     ("CANCELLED", 1),
     ("UNKNOWN", 1),
@@ -130,7 +131,7 @@ pub const EXIT_CODES: [(&str, u8); 17] = [
 ];
 
 /// Each exit code with what it means, for `--help` and `docs/cli.md`.
-pub const MEANINGS: [(u8, &str); 4] = [
+pub(crate) const MEANINGS: [(u8, &str); 4] = [
     (0, "the call succeeded"),
     (
         1,
@@ -149,7 +150,7 @@ pub const MEANINGS: [(u8, &str); 4] = [
 ];
 
 /// How hkctl turns a request field into input, said once in `--help` and `docs/cli.md`.
-pub const RULES: &str = "\
+pub(crate) const RULES: &str = "\
 Every command is one method: `hkctl <service> <method>`, both in kebab case as the protos name \
 them (`Releases.SetDesired` is `releases set-desired`), called as one POST of JSON to the \
 coordinator's gateway with curl. hkctl needs bash 3.2 or later and curl 7.55 or later, and no jq.

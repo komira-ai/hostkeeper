@@ -39,7 +39,10 @@ fn hkctl_writes_the_script_of_the_protos_stamped_with_the_version_and_commit() {
         .permissions()
         .mode();
     assert_eq!(mode & 0o777, 0o755);
-    assert_eq!(problems(&text, &version()), Vec::<String>::new());
+    assert_eq!(
+        problems(&text, &version(), &nth_commit(0xabc)),
+        Vec::<String>::new()
+    );
     // The stamp is the commit's first 12 digits.
     let commit: Commit = "0123456789abcdef0123456789abcdef01234567"
         .parse()
@@ -99,12 +102,13 @@ fn hkctl_refuses_a_table_it_cannot_write_and_a_directory_it_cannot_make() {
 #[test]
 fn an_asset_that_is_not_the_releases_script_is_named() {
     // Catches: `release check` passing an asset with no bash shebang, with no version line or
-    // two, or with the version line of another release or a stamp that is not 12 hex digits.
+    // two, or with the version line of another release or another commit.
+    let commit: Commit = COMMIT.parse().expect("a commit");
+    let check = |text: &str| problems(text, &version(), &commit);
     let good = "#!/usr/bin/env bash\n# x\n_hk_version='hkctl 0.1.70+0123456789ab'\n";
-    assert_eq!(problems(good, &version()), Vec::<String>::new());
+    assert_eq!(check(good), Vec::<String>::new());
     let shebang = "hkctl-0.1.70 does not start with `#!/usr/bin/env bash`";
-    let line =
-        "hkctl-0.1.70 does not hold exactly one version line `_hk_version='hkctl 0.1.70+<12 hex>'`";
+    let line = "hkctl-0.1.70 does not hold exactly one version line `_hk_version='hkctl 0.1.70+0123456789ab'`";
     for (text, want) in [
         (
             "#!/bin/sh\n_hk_version='hkctl 0.1.70+0123456789ab'\n",
@@ -121,11 +125,11 @@ fn an_asset_that_is_not_the_releases_script_is_named() {
             vec![line],
         ),
         (
-            "#!/usr/bin/env bash\n_hk_version='hkctl 0.1.70+0123456789AB'\n",
+            "#!/usr/bin/env bash\n_hk_version='hkctl 0.1.70+0123456789ac'\n",
             vec![line],
         ),
         (
-            "#!/usr/bin/env bash\n_hk_version='hkctl 0.1.70+0123456789a'\n",
+            "#!/usr/bin/env bash\n_hk_version='hkctl 0.1.70+0123456789AB'\n",
             vec![line],
         ),
         (
@@ -133,7 +137,7 @@ fn an_asset_that_is_not_the_releases_script_is_named() {
             vec![line],
         ),
     ] {
-        assert_eq!(problems(text, &version()), want, "{text:?}");
+        assert_eq!(check(text), want, "{text:?}");
     }
 }
 

@@ -6,8 +6,8 @@
 //! host package carries it.
 //!
 //! [`problems`] is the step of `release check` that holds the asset to that shape: a bash
-//! script whose one version line is the release's. The commit it was built from is what its
-//! attestation names, which `release check` verifies against the pin.
+//! script whose one version line is the release's stamp, its version and the pinned commit, as
+//! `check-binary` holds a binary's `--version`.
 
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
@@ -15,7 +15,7 @@ use std::path::Path;
 use hostkeeper_proto::ctl::Command;
 
 use super::Error;
-use super::contract::{Commit, HKCTL, Version, hkctl_name};
+use super::contract::{Commit, HKCTL, Version, hkctl_name, stamp_of};
 
 /// The first line of the script.
 const SHEBANG: &str = "#!/usr/bin/env bash";
@@ -41,9 +41,10 @@ pub(crate) fn write(
     Ok(vec![format!("{}: {HKCTL} {stamp}", path.display())])
 }
 
-/// What is wrong with `text` as the asset `hkctl-<version>`: it must start with the bash
-/// shebang, and hold exactly one version line, `_hk_version='hkctl <version>+<12 hex>'`.
-pub(crate) fn problems(text: &str, version: &Version) -> Vec<String> {
+/// What is wrong with `text` as the asset `hkctl-<version>` built from `commit`: it must start
+/// with the bash shebang, and hold exactly one version line,
+/// `_hk_version='hkctl <version>+<first 12 hex digits of the commit>'`.
+pub(crate) fn problems(text: &str, version: &Version, commit: &Commit) -> Vec<String> {
     let name = hkctl_name(version);
     let mut problems = Vec::new();
     if text.lines().next() != Some(SHEBANG) {
@@ -53,17 +54,10 @@ pub(crate) fn problems(text: &str, version: &Version) -> Vec<String> {
         .lines()
         .filter(|l| l.starts_with(VERSION_LINE))
         .collect();
-    let prefix = format!("{VERSION_LINE}{HKCTL} {version}+");
-    let stamped = |line: &&str| {
-        line.strip_prefix(&prefix)
-            .and_then(|rest| rest.strip_suffix('\''))
-            .is_some_and(|hex| {
-                hex.len() == 12 && hex.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
-            })
-    };
-    if !matches!(lines.as_slice(), [one] if stamped(one)) {
+    let want = format!("{VERSION_LINE}{}'", stamp_of(HKCTL, version, commit));
+    if lines != [want.as_str()] {
         problems.push(format!(
-            "{name} does not hold exactly one version line `{prefix}<12 hex>'`"
+            "{name} does not hold exactly one version line `{want}`"
         ));
     }
     problems

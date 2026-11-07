@@ -146,7 +146,12 @@ fn the_code_of_a_script_is_read_without_quoted_text_and_comments() {
             construct: NEWER[4].1
         }
     );
-    // Every pattern compiles.
+}
+
+/// Catches a pattern that does not compile, which the compiled tables would leave out and so
+/// turn its check off: every table compiles whole.
+#[test]
+fn every_pattern_of_the_scans_compiles() {
     assert_eq!(NEWER_RE.len(), NEWER.len());
     assert_eq!(NEWER_QUOTED_RE.len(), NEWER_QUOTED.len());
     assert_eq!(HAZARDS_RE.len(), HAZARDS.len());

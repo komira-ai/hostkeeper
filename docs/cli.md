@@ -21,7 +21,7 @@ The answer, the gateway's JSON, goes to stdout or to `--response-file`; diagnost
 | flag | value | default | meaning |
 |---|---|---|---|
 | `--endpoint` | URL |  | The coordinator's private listener, as https://<host>[:<port>]. Needed for a call. |
-| `--ca-file` | PATH |  | PEM certificates of the CA the coordinator's certificate must chain to; curl trusts no other root for the call. Needed for a call. |
+| `--ca-file` | PATH |  | PEM certificates of the CA the coordinator's certificate must chain to, given to curl as `--cacert` in place of its default bundle (a curl built with a default CA directory also reads that directory). Needed for a call. |
 | `--token-file` | PATH |  | Read the bearer token (an operator token) from this file, which only its owner may read; one trailing newline is dropped. The token is never an argument, an environment variable or a line of output. |
 | `--token-stdin` |  |  | Read the bearer token from stdin instead. |
 | `--github-oidc-audience` | AUDIENCE |  | In a GitHub Actions job with id-token: write: ask the runner for a fresh ID token for this audience and call with it; `::add-mask::<token>` is printed on stdout first. |
