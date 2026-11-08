@@ -11,10 +11,11 @@
 //! when the coordinator is killed after the assignment, again while the install runs and again
 //! after it; a daemon killed and started again (its boot pass) keeps the service as it was,
 //! reports it and runs none of its steps again; a new desired version is installed over it, also
-//! by a coordinator restarted with no word of the install (its verdicts file gone); and
-//! the uninstall the operator orders runs the package's `uninstall` hook and takes the file, the
+//! by a coordinator restarted with no word of the install (its verdicts file gone); the
+//! uninstall the operator orders runs the package's `uninstall` hook and takes the file, the
 //! unit and the package off the host, after which the coordinator lists the host neither as
-//! running the service nor as uninstalling it.
+//! running the service nor as uninstalling it; and the three orders in one sequence (install
+//! 1.0.0, update to 1.1.0, uninstall) each run once, with no order refused for its try.
 //!
 //! The daemon keeps its packages in `/var/lib/hostkeeper/packages`, links and enables the fixture
 //! service's unit (`hostkeeper-ci-fixture.service`) in `/etc/systemd/system`, and runs the
@@ -62,6 +63,7 @@ struct Installed {
     _host: HostPaths,
     _bench: Bench,
     placed: PathBuf,
+    v1_1: Package,
     v2: Package,
 }
 
@@ -89,8 +91,9 @@ impl Installed {
             }
             .build()
         };
-        let (v1, v2) = (build("1.0.0"), build("2.0.0"));
+        let (v1, v1_1, v2) = (build("1.0.0"), build("1.1.0"), build("2.0.0"));
         channel.serve(&v1);
+        channel.serve(&v1_1);
         channel.serve(&v2);
 
         // 1. An enrolled host that heartbeats.
@@ -119,6 +122,7 @@ impl Installed {
             _host: host,
             _bench: bench,
             placed,
+            v1_1,
             v2,
         };
         installed.wait_settled("1.0.0", 1);
@@ -176,6 +180,70 @@ impl Installed {
                 self.daemon.log()
             );
         }
+    }
+
+    /// The operator takes the service off the host with an uninstall; waits until the hook has
+    /// run `uninstall` once, the coordinator lists no host as uninstalling the service and the
+    /// package is gone, and asserts the host and the coordinator's listing hold nothing of it.
+    fn uninstall(&mut self) {
+        let package = Path::new(PACKAGES_DIR).join(SERVICE);
+        must(
+            "services unassign",
+            self.coordinator.api().unassign(NODE, SERVICE, true),
+        );
+        let Installed {
+            daemon,
+            coordinator,
+            ..
+        } = self;
+        poll(&format!("{NODE} reporting {SERVICE} gone"), || {
+            coordinator.assert_running();
+            daemon.assert_running();
+            let entry = coordinator.service(SERVICE)?;
+            let uninstalling = entry["uninstalling"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+            if ran(daemon, "uninstall") == 1 && uninstalling.is_empty() && !package.exists() {
+                Ok(())
+            } else {
+                Err(format!("{entry}"))
+            }
+        });
+        let listed = coordinator
+            .host(NODE)
+            .unwrap_or_else(|e| panic!("{e}"))
+            .expect("the host is still heard");
+        assert_eq!(
+            beat(&listed),
+            Value::Null,
+            "the host runs no {SERVICE}: {listed}"
+        );
+        assert_eq!(
+            seen(&listed)["installedVersion"],
+            Value::Null,
+            "the host is listed as running no {SERVICE}: {listed}"
+        );
+        assert!(!self.placed.exists(), "the placed file is removed");
+        assert!(
+            std::fs::symlink_metadata(UNIT_LINK).is_err(),
+            "the unit file is removed"
+        );
+        assert!(
+            std::fs::symlink_metadata(WANTS).is_err(),
+            "the unit is disabled"
+        );
+        assert_eq!(ran(&self.daemon, "uninstall"), 1, "{}", self.daemon.log());
+    }
+
+    /// The coordinator never heard the host refuse an order for its try (`try_conflict` or
+    /// `stale_try`), by its log.
+    fn assert_no_try_refusal(&self) {
+        let log = self.coordinator.log();
+        assert!(
+            !log.contains("refused the order for its try"),
+            "the coordinator heard a refusal for the try:\n{log}"
+        );
     }
 }
 
@@ -297,11 +365,7 @@ fn an_update_after_a_coordinator_restart_that_forgot_the_install_runs_once() {
         (Some("2.0.0"), Some(2)),
         "the update ran at the try after the install's: {record}"
     );
-    let log = host.coordinator.log();
-    assert!(
-        !log.contains("refused the order for its try"),
-        "the coordinator heard a refusal for the try:\n{log}"
-    );
+    host.assert_no_try_refusal();
 }
 
 /// Catches an uninstall that is not ordered or not run, one that leaves the placed file, the unit
@@ -310,54 +374,50 @@ fn an_update_after_a_coordinator_restart_that_forgot_the_install_runs_once() {
 #[test]
 fn an_uninstall_takes_the_package_its_file_and_its_unit_off_the_host() {
     let mut host = Installed::new("install_uninstall");
-    let package = Path::new(PACKAGES_DIR).join(SERVICE);
 
     // 4. The operator takes the service off the host with an uninstall.
-    must(
-        "services unassign",
-        host.coordinator.api().unassign(NODE, SERVICE, true),
-    );
-    let Installed {
-        daemon,
-        coordinator,
-        ..
-    } = &mut host;
-    poll(&format!("{NODE} reporting {SERVICE} gone"), || {
-        coordinator.assert_running();
-        daemon.assert_running();
-        let entry = coordinator.service(SERVICE)?;
-        let uninstalling = entry["uninstalling"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default();
-        if ran(daemon, "uninstall") == 1 && uninstalling.is_empty() && !package.exists() {
-            Ok(())
-        } else {
-            Err(format!("{entry}"))
-        }
-    });
-    let listed = coordinator
-        .host(NODE)
-        .unwrap_or_else(|e| panic!("{e}"))
-        .expect("the host is still heard");
+    host.uninstall();
+}
+
+/// One host through the three orders of a service's life, in sequence, with the real coordinator
+/// and daemon: the install of 1.0.0 (try 1 by the step record), the update to 1.1.0 (try 2) and
+/// the uninstall. Each order runs once; the coordinator orders each past the try of the one before,
+/// whatever its order id, and never hears the host refuse one for its try.
+///
+/// Catches: an update after an install refused `try_conflict` because both orders went out at try
+/// 1 (komira-ai/hostkeeper#109, komira-ai/hostkeeper#115); an uninstall after an update refused for
+/// its try the same way; an uninstall hook that does not run on Linux, so the package, its file
+/// and its unit stay (komira-ai/hostkeeper#110); and an update or uninstall that runs a step twice.
+#[test]
+fn install_then_update_then_uninstall_each_run_once_with_no_try_refused() {
+    let mut host = Installed::new("install_update_uninstall");
+    let record = host.daemon.step_record(SERVICE);
     assert_eq!(
-        beat(&listed),
-        Value::Null,
-        "the host runs no {SERVICE}: {listed}"
+        (
+            record["target_version"].as_str(),
+            record["order_try"].as_u64()
+        ),
+        (Some("1.0.0"), Some(1)),
+        "the install ran at the first try: {record}"
     );
+
+    // The update to 1.1.0, a new order id after the install's.
+    set_desired(&host.coordinator, &host.v1_1);
+    host.wait_settled("1.1.0", 2);
+    host.assert_on_host("1.1.0");
+    host.assert_steps(2, "the install and the update ran each step once");
+    let record = host.daemon.step_record(SERVICE);
     assert_eq!(
-        seen(&listed)["installedVersion"],
-        Value::Null,
-        "the host is listed as running no {SERVICE}: {listed}"
+        (
+            record["target_version"].as_str(),
+            record["order_try"].as_u64()
+        ),
+        (Some("1.1.0"), Some(2)),
+        "the update ran at the try after the install's: {record}"
     );
-    assert!(!host.placed.exists(), "the placed file is removed");
-    assert!(
-        std::fs::symlink_metadata(UNIT_LINK).is_err(),
-        "the unit file is removed"
-    );
-    assert!(
-        std::fs::symlink_metadata(WANTS).is_err(),
-        "the unit is disabled"
-    );
-    assert_eq!(ran(&host.daemon, "uninstall"), 1, "{}", host.daemon.log());
+
+    // The uninstall, a third order id after the update's.
+    host.uninstall();
+    host.assert_steps(2, "the uninstall ran no install or update step");
+    host.assert_no_try_refusal();
 }
