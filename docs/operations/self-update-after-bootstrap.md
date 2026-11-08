@@ -136,13 +136,15 @@ hold:
 A self-update never changes the plist (hostkeeper's own package has no unit on a Mac), so a Mac
 installed from an earlier pkg keeps that plist until the pkg is installed again by hand. Do it
 once on each such Mac, with a pkg whose plist starts `current`; keep the Mac excluded from
-hostkeeper until it is done. Run the `ctl` lines on a workstation with an operator token for the
+hostkeeper until it is done. Run the `hkctl` lines on a workstation with an operator token for the
 coordinator, the others on the Mac as root.
 
 1. Take the Mac out of hostkeeper, if it is not out already:
 
    ```
-   hostkeeper ctl hosts exclude --service hostkeeper --node-id <node id> --reason "macOS: pkg installed by hand"
+   hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+       hosts exclude --service hostkeeper --node-id <node-id> \
+       --reason "macOS: pkg installed by hand"
    ```
 
 2. Fetch the pkg of the release (`hostkeeper-<version>-macos-arm64.pkg`) and verify it as
@@ -177,11 +179,12 @@ coordinator, the others on the Mac as root.
    `/var/lib/updater/state/hostkeeper/bin/current`, `readlink` of that path names
    `versions/<version>`, `sudo hostkeeper admin status` prints
    `link.consecutive_failures: 0` after a heartbeat period, and
-   `hostkeeper ctl hosts get --node-id <node id>` answers `heartbeat.agent.version` at the new
+   `hkctl hosts get --node-id <node id>` answers `heartbeat.agent.version` at the new
    version.
 
 7. Put the Mac back into hostkeeper; its next self-update starts the new binary:
 
    ```
-   hostkeeper ctl hosts include --service hostkeeper --node-id <node id>
+   hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+       hosts include --service hostkeeper --node-id <node-id>
    ```

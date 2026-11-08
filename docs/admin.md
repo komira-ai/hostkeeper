@@ -3,7 +3,7 @@
 `hostkeeper admin` calls the daemon on the host it runs on, over the daemon's admin socket
 (`hostkeeper.local.v1.Admin`, `crates/hostkeeper-proto/proto/hostkeeper/local/v1/admin.proto`).
 It works with the coordinator down. It is the home of every call of the services in the packages
-`hostkeeper.local.v<n>`; [`hostkeeper ctl`](ctl.md) calls the coordinator and has none of them.
+`hostkeeper.local.v<n>`; [`hkctl`](cli.md) calls the coordinator and has none of them.
 
 ```
 hostkeeper admin status
@@ -107,8 +107,8 @@ last:
 | `enrolled` | a certificate of this host under `current`, valid or expired | renews it from the middle of its validity on; once it expired, enrolls again with the same key, `renewal_of` the host |
 | `unreadable` | something it cannot read, or a `current` generation or pending key that is not a certificate and key of this host | nothing until it reads; the daemon's log says why |
 
-The `key_sha256` of a pending host is the value `hostkeeper ctl enrollment list` shows for its
-request and `hostkeeper ctl enrollment approve --key-sha256` compares
+The `key_sha256` of a pending host is the value `hkctl enrollment list` shows for its
+request and `hkctl enrollment approve --key-sha256` compares
 ([enrollment-coordinator.md](enrollment-coordinator.md)): an operator at the host's console reads
 it here and checks it against the coordinator's list before approving.
 
@@ -121,8 +121,8 @@ it here and checks it against the coordinator's list before approving.
 | 2 | a usage error, or the daemon refused the request: `INVALID_ARGUMENT` (`invalid_request`) or `FAILED_PRECONDITION` (`nothing_running`, `record_reads`, `busy`) |
 | 3 | `UNAUTHENTICATED` or `PERMISSION_DENIED` |
 
-These are the codes of `hostkeeper ctl` (`crates/hostkeeper-ctl/src/exit.rs`). A call that fails
-prints nothing on standard output and one line on standard error: `hostkeeper admin: <message>
+These are the codes of `hkctl` ([cli.md](cli.md)), from the mapping `hostkeeper ctl` has
+(`crates/hostkeeper-ctl/src/exit.rs`), which this command calls. A call that fails prints nothing on standard output and one line on standard error: `hostkeeper admin: <message>
 (<code>)` for an answer of the daemon, whose message is the refusal's token (for example
 `hostkeeper admin: not_installed (NotFound)`), and `hostkeeper admin: cannot connect to
 <socket>: <why>` for a socket that could not be reached.

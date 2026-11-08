@@ -5015,7 +5015,6 @@ dependencies = [
  "hello",
  "hex",
  "hostkeeper-config",
- "hostkeeper-ctl",
  "hostkeeper-daemon",
  "hostkeeper-hkctl",
  "hostkeeper-hook",
