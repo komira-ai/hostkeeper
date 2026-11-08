@@ -45,8 +45,9 @@ The four pkgs follow section 7.2. Each installs one marker file in
 | `pkg-4` | distribution pkg, signed by B's identity | `dev.hostkeeper.signing-test.pkg4` |
 
 The pkgs carry a marker file, not the hostkeeper payload, for two reasons. First, a receipt then
-names exactly one pkg. Second, the release pkg's postinstall fails when the Mac has no managed
-config yet (`mac-config`), and that failure would hide the signature's outcome.
+names exactly one pkg. Second, the release pkg's daemon refuses each start when the Mac has no managed
+config yet, which would leave a Mac that has the pkg's job loaded and failing, and that
+would blur the signature's outcome.
 
 The pkgs and the release pkg are signed the same way: `productsign` over a `productbuild`
 distribution pkg.

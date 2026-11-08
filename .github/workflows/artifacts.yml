@@ -317,13 +317,14 @@ jobs:
         run: cargo xtask release check-linux-pkg "dist/hostkeeper-$RELEASE_VERSION-1-$RPM_ARCH.pkg.tar.zst" --staged target/nfpm
       - name: The binary tarball holds no dynamically linked program
         run: cargo xtask release check-linux-pkg "dist/hostkeeper-$RELEASE_VERSION-$PLATFORM.tar.gz"
-      # The package carries the unit the Linux packages install (packaging/linux/hostkeeper.service),
-      # the one unit file of the daemon: it starts the binary the self-update switches. It also
+      # The package carries its own unit (packaging/linux/units/hostkeeper.service), not the
+      # bootstrap unit the Linux packages install (packaging/linux/hostkeeper.service): it seeds
+      # the binary directory and starts the binary the self-update switches. It also
       # carries the committed Sigstore trusted root, which the daemon checks every package against,
       # so each update of hostkeeper brings the root of its release (trusted-root.yml says when the
       # committed root is no longer the live one).
       - name: hostkeeper's own package and its SHA-256
-        run: cargo xtask release package --platform "$PLATFORM" --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --binary "target/$MUSL_TARGET/release/hostkeeper" --unit packaging/linux/hostkeeper.service --trusted-root packaging/sigstore/trusted_root.json --out dist
+        run: cargo xtask release package --platform "$PLATFORM" --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --binary "target/$MUSL_TARGET/release/hostkeeper" --unit packaging/linux/units/hostkeeper.service --trusted-root packaging/sigstore/trusted_root.json --out dist
       - name: hostkeeper's package holds no dynamically linked program
         run: cargo xtask release check-linux-pkg "dist/hostkeeper-$RELEASE_VERSION-$PLATFORM.tar.zst"
       - name: hello's package and its SHA-256
@@ -474,10 +475,10 @@ jobs:
       # Distribution names the one component under the pkg's identifier and version and runs no
       # installer script, and the component's payload holds exactly the binary, the daemon's plist,
       # the log directory and the newsyslog file, gh and the trusted root, with their paths, modes,
-      # owners and bytes, the plist names the daemon's label, `current` of the self-update binary
-      # directory as its program and its output files, the newsyslog file rotates exactly those
-      # files, and the pkg's one script is the postinstall that seeds that binary directory, writes
-      # the config with mac-config and loads the job, byte for byte.
+      # owners and bytes, the plist names the daemon's label, the installed binary
+      # /usr/local/bin/hostkeeper as its program and its output files, the newsyslog file rotates
+      # exactly those files, and the pkg's one script is the postinstall that boots out and loads
+      # the job, byte for byte.
       - name: Expand the distribution pkg
         run: pkgutil --expand "dist/hostkeeper-$RELEASE_VERSION-$PLATFORM.pkg" "$RUNNER_TEMP/pkg-expanded"
       - name: The distribution pkg holds one component that installs exactly the binary, the plist, the log directory and its newsyslog file, gh and the trusted root

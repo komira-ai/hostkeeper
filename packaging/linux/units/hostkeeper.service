@@ -1,0 +1,74 @@
+# The hostkeeper daemon's package unit: the unit hostkeeper's own package carries as
+# units/hostkeeper.service (.github/workflows/artifacts.yml, `release package --unit`), which
+# the package's install links in /etc/systemd/system/, where it takes the place of the
+# bootstrap unit a Linux package or a boot image installed (packaging/linux/hostkeeper.service,
+# docs/design/two-programs.md section 4.1). It runs as root, with no sandbox and no capability
+# bound: the daemon runs the hooks and places the units of every service of the host
+# (docs/design/hostkeeper-design.md, section 5.3). Its configuration is its flags; of the
+# environment it reads only what systemd sets for it, NOTIFY_SOCKET and WATCHDOG_USEC.
+#
+# It starts the binary hostkeeper's own update chose (section 6.6): `current` of the binary
+# directory under the state directory, never /usr/bin/hostkeeper, which only a deb or rpm
+# upgrade replaces and so is, on most hosts, older than `current`. A self-update stages the new
+# binary there, switches `current` and exits 0, and the restart policy, always, starts the new
+# binary; the fallback unit (hostkeeper-fallback.service, with the drop-in
+# hostkeeper.service.d/self-update.conf that names it in OnFailure=, both written by the daemon
+# at its start) switches `current` back when the new binary fails its start limit. Before each
+# start, the binary the package installed gives the binary directory its first binary when
+# `current` starts none, the one repair of a `current` that starts nothing; the `-` lets a start
+# go on when that binary is older and lacks the verb, since `current` is then already there.
+#
+# The daemon binds no path of its own under /run through this unit: it passes no
+# --admin-socket, which every daemon defaults to /run/hostkeeper/admin.sock, and has no
+# RuntimeDirectory=; the tmpfiles rules make /run/hostkeeper.
+[Unit]
+Description=hostkeeper, the update daemon of this host
+Documentation=https://github.com/komira-ai/hostkeeper/blob/main/packaging/linux/README.md
+After=network-online.target
+Wants=network-online.target
+# kbf's update agent and the root half that serves it (kbf v0.0.64,
+# packaging/host-agent/linux/): the two families never run on one host together (design
+# section 12.3). Starting this unit stops them; starting one of them stops this unit.
+Conflicts=kbf-updater-agent.service kbf-host-local.service kbf-host-local-frontend.service
+# Ordered after them too. When one of two units with an ordering between them stops while the
+# other starts, systemd finishes the stop before it begins the start, whichever of After= and
+# Before= orders them (systemd.unit(5), Before=, After=). So in a handoff, in either direction,
+# the stopping updater has exited before the starting one runs.
+After=kbf-updater-agent.service kbf-host-local.service kbf-host-local-frontend.service
+# No start limit of its own. The start limit is the self-update drop-in's
+# (hostkeeper_steps::selfupdate::main_dropin, which the daemon writes once it is ready, and
+# whose assignments replace these): three starts within 300 seconds, restarts included, start
+# its OnFailure= unit, the fallback of design section 6.6. The fallback, which has no start
+# limit of its own, puts the previous binary back while an update waits for its restart and,
+# either way, starts this unit again, so the daemon is retried for good, three starts at a time. Before the daemon has first been ready
+# there is no drop-in and no fallback, and with no limit here a daemon that cannot start is
+# still retried every RestartSec= rather than left failed.
+StartLimitIntervalSec=0
+
+[Service]
+# The daemon tells systemd it is ready only after its boot pass (design section 6.5).
+Type=notify
+# The boot pass runs every unfinished update to its verdict, each step under its own timeout,
+# before the daemon is ready: no start timeout cuts it short.
+TimeoutStartSec=infinity
+ExecStartPre=-/usr/bin/hostkeeper self-update-seed --state-dir /var/lib/updater/state --binary /usr/bin/hostkeeper
+ExecStart=/var/lib/updater/state/hostkeeper/bin/current daemon --config /etc/hostkeeper/hostkeeper.toml --state-dir /var/lib/updater/state --packages-dir /var/lib/hostkeeper/packages --notify-systemd
+# The daemon exits 0 to be started again after its own update, so a clean exit restarts it too.
+# An automatic restart goes straight to the next start without the failed state
+# (RestartMode=direct, systemd 254 and later), so the drop-in's OnFailure= runs once the
+# restarts end at the start limit, not at every failed start. The drop-in the daemon writes
+# (hostkeeper_steps::selfupdate::main_dropin) sets the same three.
+Restart=always
+RestartSec=1
+RestartMode=direct
+# The heartbeat loop sends WATCHDOG=1 after each heartbeat and nowhere else
+# (crates/hostkeeper-daemon/src/links.rs): one every 15 seconds, the default of
+# --heartbeat-secs (hostkeeper_link::DEFAULT_HEARTBEAT_SECS), plus the heartbeat's own call, at
+# most 10 seconds (hostkeeper_link::CALL_SECS). 60 seconds is four heartbeat periods: a loop that
+# has not finished a heartbeat by then has hung, and systemd kills the daemon and restarts it.
+# systemd starts the watchdog once the daemon is ready, so the boot pass is not bound by it. The
+# packaging test holds WatchdogSec= to at least three periods of this command line's heartbeat.
+WatchdogSec=60
+
+[Install]
+WantedBy=multi-user.target
