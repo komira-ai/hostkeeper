@@ -31,6 +31,8 @@ use hostkeeper_launchd::{DaemonJob, Label, Launchctl, PidInfo, daemon_plist};
 use hostkeeper_steps::Layout;
 
 use super::super::e2e::mac_host::{LAUNCHD_DIR, MacHost, launchctl};
+use super::super::e2e::scenario::LOCAL;
+use super::super::e2e::wait_for;
 
 /// The daemon's own job.
 fn daemon_label() -> Label {
@@ -157,16 +159,17 @@ impl Host {
     /// The job still has a process after the tries.
     pub fn stop(&self) {
         bootout_quiet(&daemon_label());
-        wait_for("the daemon job has no process", STATUS_TRIES, || {
+        wait_for("the daemon job has no process", LOCAL, || {
             self.running().is_none()
         });
     }
 
     /// Bootstraps the daemon's plist again, on whatever `current` of the binary directory names
-    /// now, and waits until the daemon answers `Status`.
+    /// now, and waits until launchd runs it and it has recorded the boot id
+    /// ([`MacHost::wait_started`], as [`Host::start`] does).
     ///
     /// # Panics
-    /// The job cannot be loaded, or the daemon never answers.
+    /// The job cannot be loaded, or the daemon never starts.
     pub fn start_again(&self) {
         let plist = daemon_plist_path();
         let loaded = launchctl()
@@ -179,9 +182,7 @@ impl Host {
             daemon_label(),
             loaded.stderr_text()
         );
-        wait_for("the daemon answers Status", STATUS_TRIES, || {
-            self.root.status().is_ok()
-        });
+        self.root.wait_started(&daemon_label());
     }
 
     /// What the daemon job's process runs, while it has one.

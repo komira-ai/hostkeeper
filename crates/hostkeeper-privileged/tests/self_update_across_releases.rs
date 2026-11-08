@@ -262,11 +262,11 @@ fn assert_staged_by_this_build(rig: &Rig, version: &str) -> String {
 /// binary that, started on them, reports nothing or cannot update again. The released daemon
 /// updates to this build, this build (ordered the entry) installs the version after it, and the
 /// operator goes back to the released binary: the binary directory's `current` names it and
-/// `previous` names the version this build staged; it reports itself and hostkeeper at the
-/// version this build installed; the sealed tree, its seal, its `bin/hostkeeper` staging, the
-/// linked unit (Linux) and the record that says that update `Succeeded` are as this build left
-/// them; and ordered the version after, by the channel, it updates to it and this build runs
-/// again.
+/// `previous` names the version this build staged; its heartbeat reports itself, and hostkeeper
+/// at its own version (the service `hostkeeper` runs the binary `current` names); the sealed
+/// tree, its seal, its `bin/hostkeeper` staging, the linked unit (Linux) and the record that says
+/// that update `Succeeded` are as this build left them; and ordered the version after, by the
+/// channel, it updates to it and this build runs again.
 #[test]
 fn the_released_binary_put_back_on_the_packages_this_build_staged_reports_them_and_updates_again() {
     let rig = Rig::installed("x1back");
@@ -295,8 +295,7 @@ fn the_released_binary_put_back_on_the_packages_this_build_staged_reports_them_a
         "{}",
         rig.host.logs()
     );
-    rig.wait_host_reports(&released, &staged);
-    rig.wait_converged(&staged);
+    rig.wait_host_reports(&released, &released);
     assert_eq!(assert_staged_by_this_build(&rig, &staged), digest);
     let rec = rig.settled(&staged);
     assert_finished(&rec, &staged, succeeded(), None);
