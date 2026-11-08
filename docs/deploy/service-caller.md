@@ -160,7 +160,9 @@ the tailnet's admin, not by the service's CI.
    coordinator refuses the set (`index_invalid`).
 3. **The channel holds the release.** The release channel stages `my-service`: the channel's
    trust list has a `[[service]]` table naming the service, its repository and the workflow that
-   attests its packages ([The trust list](release-channel.md#the-trust-list)). Run the workflow
+   attests its packages ([The trust list](release-channel.md#the-trust-list)), and each host's
+   daemon config trusts the same signer in its `[trusted_signers]`: a signer the channel lists
+   and the daemons do not stages packages every host refuses to unpack. Run the workflow
    once the channel serves `my-service/<X.Y.Z>/index.json`; before that, the coordinator refuses
    the set (`not_in_channel`) when it checks the channel, and every host fails its fetch when it
    does not.
