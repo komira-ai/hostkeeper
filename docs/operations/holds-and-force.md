@@ -72,7 +72,11 @@ host, as before.
   `step-record.json.corrupt` only when it does not read, and reports the order's verdict as the
   service's last update, at the version the service runs: `succeeded` with the reason
   `record_cleared`, or failed with `record_reads` (the record reads, is absent, or is of a newer
-  hostkeeper), `busy` (another order of the service holds it) or `store_failed`.
+  hostkeeper), `busy` (another order of the service holds it) or `store_failed`. The
+  coordinator acknowledges that verdict and `Hosts.Get` shows it as the service's last update
+  until the host reports a verdict of another order, but it is no word on a release: it never
+  replaces the host's standing verdict, so a failure the host fell back from still keeps that
+  version from being ordered to it, and a failed clear holds no update slot.
 - `Hosts.Exclude` takes a host out of a service. Its update slot stays held while the host runs
   an update (it reports one `updating` or its promotion pending) or has an order outstanding,
   until the host's own heartbeats or its order's age free it; an excluded host whose last update

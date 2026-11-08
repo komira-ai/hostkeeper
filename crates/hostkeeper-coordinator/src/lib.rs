@@ -194,6 +194,8 @@ mod channel_tests;
 #[cfg(test)]
 mod clear_record_tests;
 #[cfg(test)]
+mod clear_record_verdict_tests;
+#[cfg(test)]
 mod converge_tests;
 #[cfg(test)]
 mod decide_golden_tests;

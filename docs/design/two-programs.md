@@ -321,7 +321,11 @@ message ClearRecordResponse { string order_id = 1; }
   is `succeeded` with the reason `record_cleared`; every verdict names the version the service runs, as an `uninstall`'s
   does. The heartbeat loop runs the order one at a time like the others (`crates/hostkeeper-link/src/heartbeater.rs`),
   but it is no update: a deferral does not hold it back and its verdict ends none, its service is not reported
-  `updating` while it runs, and a service the host does not list is not run.
+  `updating` while it runs, and a service the host does not list is not run. The coordinator acknowledges the verdict
+  and `Hosts.Get` shows it, but it is no word on a release: it is taken out of the heartbeat before any rule reads it
+  and is never kept as the host's standing verdict, as a refusal for the try is kept out of the beat
+  (`crates/hostkeeper-coordinator/src/clear_record.rs`). So a host's failure of a version it fell back from still keeps
+  the gate from ordering it that version, and a failed clear holds no update slot.
 - **A host the coordinator cannot reach.** Root stops the daemon, which ends the running step. If the record must go
   before the link is back, root renames it by hand, `step-record.json` to `step-record.json.corrupt` in the service's
   state directory: that rename is the whole of what the verb does. The runbook of K3 says so.
