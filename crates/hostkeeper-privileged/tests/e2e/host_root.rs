@@ -185,7 +185,8 @@ impl HostRoot {
             saved,
         };
         // The package check wants the packages directory and every ancestor root-owned and
-        // writable by nobody else; the admin socket's directory is the daemon's to make 0700.
+        // writable by nobody else; `run` is the directory of the `--admin-socket` path, which an
+        // older release's daemon binds in it (the daemon of this checkout binds nothing).
         make_dir(&host.base, 0o755);
         make_dir(&host.packages(), 0o755);
         make_dir(&host.state(), 0o755);

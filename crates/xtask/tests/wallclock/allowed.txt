@@ -7,7 +7,7 @@
 #   the enrollment nonce check;
 # and, apart from them, to stamp a record with the time it was made, which nothing reads back to
 # decide: the coordinator's audit file, and the age of the daemon's Sigstore trusted root, which
-# the admin Status reports; and for the one decision whose file format is in unix seconds and
+# the heartbeat reports; and for the one decision whose file format is in unix seconds and
 # that is bounded whatever the clock says: the heartbeat loop's deferral retry time, capped at an
 # hour from now at every read.
 # Each entry has a `#` line directly above it saying which of these it serves and why. The test
@@ -35,7 +35,7 @@ crates/hostkeeper-enroll/src/validity.rs
 # because a restart has no memory of the monotonic clock; the loop caps every deferral at
 # MAX_RETRY_SECS from now at each read, so a wrong clock can run a deferred target early, or hold
 # it for at most that long. No other decision of the daemon reads it: it also ages the Sigstore
-# trusted root against its file's modification time, a report of the admin Status that nothing
+# trusted root against its file's modification time, a report of the heartbeat that nothing
 # decides on (crates/hostkeeper-daemon/src/trusted_root.rs).
 crates/hostkeeper-daemon/src/unix_clock.rs
 # A record stamped with the time it was made: the MDM kit's `install --uninstall` names the

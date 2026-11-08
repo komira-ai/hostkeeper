@@ -1,10 +1,9 @@
 //! The executor: [`Daemon::order`] takes one order of the coordinator, decodes it into a
 //! [`Verb`] and hands it to the verb's module under `verbs/`, which answers with a [`Reply`].
-//! [`Daemon::status`] reports what the daemon holds for each service. [`Daemon::abort`] and
-//! [`Daemon::clear_record`] are also the admin socket's; [`Daemon::clear_halt`] is the
-//! coordinator's alone. A coordinator's `clear_record` order runs what the admin socket's call
-//! runs, and is dispatched before anything reads the service's step record, so a record that
-//! does not read is no bar to the order that clears it.
+//! [`Daemon::status`] reports what the daemon holds for each service; nothing on the host serves
+//! it. [`Daemon::abort`] runs what the coordinator's `abort` order runs. A coordinator's
+//! `clear_record` order is dispatched before anything reads the service's step record, so a
+//! record that does not read is no bar to the order that clears it.
 //!
 //! The executor only dispatches: each verb is one module with one function taking the shared
 //! [`Ctx`] and its typed arguments, so that a later verb fills one file and one arm.
@@ -43,7 +42,6 @@ use crate::verb::{HookedVerb, Verb};
 use crate::verbs;
 use crate::verbs::abort::Aborted;
 use crate::verbs::clear_halt::Lifted;
-use crate::verbs::clear_record::Cleared;
 use crate::verbs::force::SELF_SERVICE;
 use crate::watchers::{STOPPED, SlicedClock, WatchEnd, Watchers, Yielding};
 
@@ -686,8 +684,8 @@ impl Daemon {
     }
 
     /// `abort` (design sections 6.3 and 8.5): stops the service's running step and ends its
-    /// update `Finished{Halt}`, taking neither the service's lock nor the step lock. The
-    /// coordinator's order and the admin socket's call both come here.
+    /// update `Finished{Halt}`, taking neither the service's lock nor the step lock, as the
+    /// coordinator's order does.
     pub fn abort(&self, service: &ServiceName) -> Result<Aborted, Refused> {
         verbs::abort::abort(&self.ctx, service)
     }
@@ -696,11 +694,6 @@ impl Daemon {
     /// strictly above the one it is held under.
     pub fn clear_halt(&self, service: &ServiceName, generation: u64) -> Result<Lifted, Refused> {
         verbs::clear_halt::clear_halt(&self.ctx, service, generation)
-    }
-
-    /// `clear_record` (design sections 4.1 and 7): sets aside a step record that cannot be read.
-    pub fn clear_record(&self, service: &ServiceName) -> Result<Cleared, Refused> {
-        verbs::clear_record::clear_record(&self.ctx, service)
     }
 
     /// One verb. A step that could not be stopped is an alert (`unstoppable_unit`): its service

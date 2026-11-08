@@ -21,7 +21,7 @@ use super::coordinator::CoordinatorHandle;
 use super::host_root::{DaemonUnit, HostRoot};
 use super::package::{BuiltPackage, FixtureVersion, PackageBuilder};
 use super::signer::FixtureSigner;
-use super::{FIXTURE_BINARY, HOST_ID, ROLE, SERVICE, free_port, served_version, wait_for};
+use super::{FIXTURE_BINARY, HOST_ID, HeldPort, ROLE, SERVICE, served_version, wait_for};
 
 /// The first release.
 pub const V1: &str = "1.0.0";
@@ -37,8 +37,9 @@ pub const COORDINATED: u32 = 600;
 pub const LOCAL: u32 = 240;
 
 /// The rig of one test. The fields are dropped in this order: the daemon first (its unit stopped
-/// and unlinked), then the coordinator and the channel, the host root last (every unit of the
-/// fixture stopped and every path the test made on the host removed).
+/// and unlinked), then the coordinator and the channel, the host root (every unit of the fixture
+/// stopped and every path the test made on the host removed), and the held ports last, once no
+/// unit of the fixture can bind them again.
 pub struct Scenario {
     pub daemon: DaemonUnit,
     pub coordinator: CoordinatorHandle,
@@ -46,6 +47,10 @@ pub struct Scenario {
     pub signer: FixtureSigner,
     pub packages: BTreeMap<&'static str, BuiltPackage>,
     pub host: HostRoot,
+    /// The ports of the fixture's instances, two per version, held from before the coordinator
+    /// binds its listeners until the test ends: a port only chosen and let go could be the one
+    /// such a listener is given, and the instance on it would fail to start.
+    pub ports: Vec<HeldPort>,
 }
 
 /// The pinned `gh` the workflow installed (its step `Install gh`), where the test finds it: next
@@ -64,17 +69,15 @@ pub fn pinned_gh() -> PathBuf {
     gh
 }
 
-/// Distinct free loopback ports, two per version.
-fn port_pairs(count: usize) -> Vec<[u16; 2]> {
-    let mut seen = BTreeSet::new();
-    let mut ports = Vec::new();
-    while ports.len() < count * 2 {
-        let port = free_port();
-        if seen.insert(port) {
-            ports.push(port);
-        }
-    }
-    ports.chunks(2).map(|pair| [pair[0], pair[1]]).collect()
+/// Held loopback ports, two per version (distinct, since the system gives a held port to no
+/// other socket), and their numbers in pairs.
+fn held_pairs(count: usize) -> (Vec<HeldPort>, Vec<[u16; 2]>) {
+    let held: Vec<HeldPort> = (0..count * 2).map(|_| HeldPort::new()).collect();
+    let pairs = held
+        .chunks(2)
+        .map(|pair| [pair[0].port(), pair[1].port()])
+        .collect();
+    (held, pairs)
 }
 
 /// A failed test's view of the coordinator: its status and convergence of the service, printed
@@ -118,8 +121,8 @@ impl Scenario {
         fs::create_dir_all(&built).expect("the directory of the built packages");
         let versions = [(V1, false), (V2, false), (V3, true)];
         let mut packages = BTreeMap::new();
-        for ((version, fail_verify), ports) in versions.into_iter().zip(port_pairs(versions.len()))
-        {
+        let (ports, pairs) = held_pairs(versions.len());
+        for ((version, fail_verify), ports) in versions.into_iter().zip(pairs) {
             let fixture = FixtureVersion {
                 version,
                 ports,
@@ -154,6 +157,7 @@ impl Scenario {
             signer,
             packages,
             host,
+            ports,
         }
     }
 

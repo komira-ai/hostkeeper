@@ -15,7 +15,8 @@
 //!   `packaging/linux/hostkeeper.service` ([`BOOTSTRAP_UNIT`]), every line kept but these
 //!   ([`test_unit`]): `ExecStart=` runs the same program and flags with the test's directories,
 //!   the fixture's own flags before the verb, `--admin-socket` at the scratch directory (the real
-//!   units pass none, so the daemon would bind the host's default socket) and `--heartbeat-secs 1`
+//!   units pass none, so a daemon before this checkout's would bind the host's default socket;
+//!   this checkout's ignores the flag) and `--heartbeat-secs 1`
 //!   after the verb; the program is `current` of the test's binary directory for the package
 //!   unit, and for the bootstrap unit a copy of the fixture daemon at a packaged path of the
 //!   scratch directory, named by the version [`N`] it stands for (`--fixture-packaged`: the

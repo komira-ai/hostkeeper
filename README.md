@@ -33,8 +33,9 @@ It is made of two programs:
 Every API is a protobuf service, and the command line is generated from those definitions.
 
 **hostkeeper is pre-release.** There is no release yet. Two programs are built from source: the
-one host program, `hostkeeper daemon`, which serves its admin socket (`Status`, `Abort`,
-`ClearRecord`) and runs the orders the coordinator sends in its heartbeat replies (see
+one host program, `hostkeeper daemon`, which serves nothing on the host and runs the orders the
+coordinator sends in its heartbeat replies (status, abort and clearing a step record go through
+`hkctl`, see [docs/admin.md](docs/admin.md); see
 [Running the daemon](#running-the-daemon)), and the
 update coordinator, `hostkeeper-coordinator serve`. The parts are being moved here from
 [kbf](https://github.com/komira-ai/kbf), where they were developed first
@@ -45,7 +46,7 @@ update coordinator, `hostkeeper-coordinator serve`. The parts are being moved he
 | crate | what it holds |
 |---|---|
 | [`hostkeeper`](crates/hostkeeper) | the binary: `hostkeeper daemon` and the plumbing verbs of its own update; it only forwards to `hostkeeper-daemon` |
-| [`hostkeeper-daemon`](crates/hostkeeper-daemon) | the daemon: start-up and its lock, the order executor with its locks and try rules, the held halts, the root-only admin socket, and the enrollment and heartbeat loops |
+| [`hostkeeper-daemon`](crates/hostkeeper-daemon) | the daemon: start-up and its lock, the order executor with its locks and try rules, the held halts, and the enrollment and heartbeat loops (no socket: `hostkeeper admin` and the admin socket are gone) |
 | [`hostkeeper-config`](crates/hostkeeper-config) | the strict loaders of `hostkeeper.toml` and of a package's `manifest.toml`, the owner and mode check of a trusted file, and the name and path grammars |
 | [`hostkeeper-hook`](crates/hostkeeper-hook) | the contract between the host and a service's update hook, and the conformance harness a service tests its hook with (feature `conformance`) |
 | [`hostkeeper-steps`](crates/hostkeeper-steps) | the step runner: the step record and its resume, the dead-man, the layout of versions with `current` and `previous`, the seal of a version, and the transient systemd unit of one step |
@@ -62,7 +63,7 @@ update coordinator, `hostkeeper-coordinator serve`. The parts are being moved he
 | [`hostkeeper-pxe-packets`](crates/hostkeeper-pxe-packets) | the packets of network install, with no socket and no inventory: proxyDHCP offers and ACKs for architectures 7, 9, 11, 16 and 19, router-mode learning of each client's address and architecture, and TFTP read requests (only served names, `hostkeeper/boot.efi` as the shim of the learned architecture) and transfers ([design](docs/design/network-install.md), item N7) |
 | [`hostkeeper-pxe-seed`](crates/hostkeeper-pxe-seed) | what a network-installed machine boots into: the fixed `grub.cfg`, the install or local-disk menu of a MAC, and its autoinstall seed, each a pure function of the inventory record, the daemon config and the flags ([design](docs/design/network-install.md), item N6) |
 | [`hostkeeper-wire`](crates/hostkeeper-wire) | what the coordinator and a host exchange: the heartbeat and its reply, versions, host ids, role names and platforms, the certificate identity, the secret-file rule |
-| [`hostkeeper-proto`](crates/hostkeeper-proto) | the protobuf services of the coordinator (`hostkeeper.agent.v1`, `hostkeeper.operator.v1`) and of the daemon's local admin socket (`hostkeeper.local.v1`), the messages of a release (`hostkeeper.release.v1`), the command table `hkctl` and the UI's generated client are made from, and the compatibility test |
+| [`hostkeeper-proto`](crates/hostkeeper-proto) | the protobuf services of the coordinator (`hostkeeper.agent.v1`, `hostkeeper.operator.v1`) and the frozen file of the daemon's former admin socket (`hostkeeper.local.v1`, no code generated from it), the messages of a release (`hostkeeper.release.v1`), the command table `hkctl` and the UI's generated client are made from, and the compatibility test |
 | [`hostkeeper-hkctl`](crates/hostkeeper-hkctl) | `hkctl`, the operator's bash command line over the gateway: the emitter of its script from the same command table (`cargo xtask release hkctl` writes the asset `hkctl-<version>`), [docs/cli.md](docs/cli.md), and the scan that holds the script to bash 3.2 |
 | [`hostkeeper-coordinator`](crates/hostkeeper-coordinator) | the update coordinator: the services and roles of a rollout file, the desired version of each service, the heartbeat endpoint, the operator endpoint, the convergence of a fleet, and its state in Postgres (the migrations, the advisory lock, `import` and `export`) or in the file store kept as the way back |
 | [`hostkeeper-enrollment`](crates/hostkeeper-enrollment) | the coordinator's certificate authority (profile, certificates, key file, CA bundle) and its durable enrollment store |
@@ -108,8 +109,8 @@ flag or a value hkctl does not take.
 
 The items B1 to B28 of section 12.2 of the design, by theme. "Built" means the code is on `main`.
 
-- **Host daemon.** Built: B2 (the config and manifest loaders), B4 (the daemon and its admin
-  socket), B8 (the service observer), B9 (the heartbeat loop), B13 (pruning to two versions),
+- **Host daemon.** Built: B2 (the config and manifest loaders), B4 (the daemon; its admin
+  socket was deleted by K3 of [two-programs](docs/design/two-programs.md)), B8 (the service observer), B9 (the heartbeat loop), B13 (pruning to two versions),
   B22 (self-update of hostkeeper), B3 (`SystemdLauncher`, in `hostkeeper-steps`, which the daemon
   runs each hook step through), B20 (the verbs `abort`, `clear_halt` and `clear_record`, see
   [Operator verbs on the host](#operator-verbs-on-the-host)).
@@ -147,15 +148,15 @@ only, never from the environment:
 | `--config` | `/etc/hostkeeper/hostkeeper.toml` | the daemon config, owned by root and not writable by group or others |
 | `--state-dir` | `/var/lib/updater/state` | a directory per service with its step record, params file and held halt generation, and the daemon's lock file `lock`; the directory of the service `hostkeeper` also holds its binaries (`bin/`) and its list of bad versions (`bad-versions`), see [Updating hostkeeper itself](#updating-hostkeeper-itself) |
 | `--packages-dir` | `/var/lib/hostkeeper/packages` | a directory per service with its version directories and the links `current` and `previous` |
-| `--admin-socket` | `/run/hostkeeper/admin.sock` (macOS: `/var/run/hostkeeper/admin.sock`) | the admin socket, mode 0600 in a directory of mode 0700, served to uid 0 only |
+| `--admin-socket` | none | accepted and ignored: the daemon binds no socket. Kept because units that pass it are live until stage 3 of [two-programs](docs/design/two-programs.md) |
 | `--notify-systemd` | off | once the boot work is over, send `READY=1` to the notify socket systemd sets for a `Type=notify` unit; without that socket the daemon exits 1 |
 | `--heartbeat-secs` | `15` | seconds between two heartbeats, at least 1; the end of a running order is reported within a second, without waiting for the period |
-| `--trusted-root-max-age-days` | `90` | days after which the Sigstore trusted root that package attestations are checked against is reported `trusted_root_stale` in the admin `Status` and stale in every gRPC heartbeat (`hkctl hosts get`, the `trusted_root` alert), at least 1; a signal only, package checks go on (see [docs/deploy/verify-a-release.md](docs/deploy/verify-a-release.md#the-trusted-root-on-a-host)) |
+| `--trusted-root-max-age-days` | `90` | days after which the Sigstore trusted root that package attestations are checked against is reported `trusted_root_stale` and stale in every gRPC heartbeat (`hkctl hosts get`, the `trusted_root` alert), at least 1; a signal only, package checks go on (see [docs/deploy/verify-a-release.md](docs/deploy/verify-a-release.md#the-trusted-root-on-a-host)) |
 
 At start it loads the config first: a config that does not load stops the daemon with an error
 naming the key, and nothing on the host changes. It then takes the lock on the state directory
 (one daemon per state directory) and does its boot work. It removes the registration socket
-kbf's updater served (`updater/register.sock` beside the admin socket's directory, `/run/updater`
+kbf's updater served (`updater/register.sock` in the platform's run directory, `/run/updater`
 by default), removes what a crashed package fetch or unpack left, finishes or undoes each switch
 of `current` a step record says was begun, and relinks the placed paths that differ from `current`.
 It then reads every step record against the host's boot id (kept in `.boot-id` in the state
@@ -165,8 +166,8 @@ systemd it is ready. Only then does it start its two loops, the enrollment loop 
 enrollment loop gets the host's certificate from the coordinator (a P-256 key made on the host,
 a request an operator approves, renewal at half life) and keeps it under `/etc/updater/pki`; the
 heartbeat loop reads the certificate under that directory's `current` link at every heartbeat,
-and while there is none it says once what it waits for and sends nothing. It then serves the
-admin socket, until an update of hostkeeper itself asks it to exit so that its unit starts the
+and while there is none it says once what it waits for and sends nothing. It then runs the
+loops, until an update of hostkeeper itself asks it to exit so that its unit starts the
 new binary. This build fetches, verifies and unpacks packages, runs each step of a hook in a
 transient systemd unit of its own (the hook's standard error goes to the daemon's journal, under
 the unit's name), stops, starts and reloads units through `systemctl`, and observes each
@@ -180,17 +181,18 @@ advertises it), and the coordinator's orders come back in the replies.
 | exit status | meaning |
 |---|---|
 | 0 | the daemon exited for its own update (see [Updating hostkeeper itself](#updating-hostkeeper-itself)) |
-| 1 | the daemon could not start or serve for another reason (the state directory, the admin socket) |
+| 1 | the daemon could not start or serve for another reason (the state directory) |
 | 2 | a usage error: an unknown flag or subcommand |
 | 3 | the daemon config did not load |
 | 4 | another daemon holds the state directory's lock |
 
 ### Operator verbs on the host
 
-Root on the host has two verbs besides `Status` on the admin socket, because they must work with
-the coordinator down or a hook hung: `abort` and `clear_record` (the admin service's `Abort` and
-`ClearRecord`). The socket carries nothing else: no `clear_halt`, and nothing that installs,
-updates or switches a version.
+The daemon has two operator verbs besides the update orders, `abort` and `clear_record`, and they
+reach it as orders in a heartbeat reply (`hkctl hosts abort`, `hkctl hosts clear-record`); the
+daemon serves no socket. With the coordinator unreachable, root stops the daemon and, for a record,
+renames it by hand ([docs/admin.md](docs/admin.md)). Neither verb installs, updates or switches a
+version, and neither lifts a halt.
 
 - `abort <service>` stops the service's running step and ends its update. The daemon asks the
   update's runner to launch nothing more (no `rollback`, no `cleanup`), stops the unit of the
@@ -199,21 +201,21 @@ updates or switches a version.
   that does not return. When every try to stop the unit fails, the update ends `Halt` with the
   reason `unstoppable`, the daemon logs an alert (`alert=unstoppable_unit`) naming the unit, and
   the unit may still be running: stop it by name (`systemctl stop <unit>`). A step the daemon's
-  dead-man could not stop at its bound keeps the service locked (`Status` shows the update under
+  dead-man could not stop at its bound keeps the service locked (the host's status shows the update under
   way with the reason `unstoppable_unit`), and `abort` is what ends it and lets the service go.
   With no step running, `abort` is refused `nothing_running` and changes nothing.
 - An aborted update ends in a halt: the service takes no other order until the coordinator lifts
   the halt (an operator's halt clear, which reaches the host as a halt generation greater than
-  the one it holds, in a heartbeat reply or a `clear_halt` order). A coordinator's `abort` order
-  is answered the same way as the local one, and takes no farm slot.
+  the one it holds, in a heartbeat reply or a `clear_halt` order). The `abort` order
+  takes no farm slot.
 - `clear_record <service>` sets aside a step record that does not read (the record problem
-  `RECORD_PROBLEM_UNREADABLE` in `Status`), so that orders run for the service again: the file is
+  `unreadable` in the host's status), so that orders run for the service again: the file is
   renamed `step-record.json.corrupt` in the service's state directory, for the operator to read,
   and nothing else changes (not the params file, the held halt or the package directory). A
   record that reads, in any state, or that a newer hostkeeper wrote, is refused `record_reads`.
   A unit that the lost record had started is not stopped, since nothing names it any more: find
   it (`systemctl list-units 'updater-<service>-*'`) and stop it by name before the next order.
-  The coordinator's `clear_record` order (`hkctl hosts clear-record`) runs the same verb, for a
+  The `clear_record` order (`hkctl hosts clear-record`) runs this verb, for a
   daemon that announces `clear-record-v1`; its verdict, in the next heartbeat, is `succeeded`
   with the reason `record_cleared`, or the refusal's token.
 

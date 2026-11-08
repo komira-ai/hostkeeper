@@ -110,7 +110,7 @@ pub enum Verb {
         service: ServiceName,
         halt_generation: u64,
     },
-    /// The admin socket's `ClearRecord`, and the `clear_record` case of an order.
+    /// The `clear_record` case of an order.
     ClearRecord(ServiceName),
 }
 

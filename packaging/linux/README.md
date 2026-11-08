@@ -53,9 +53,9 @@ starts no executable file, copies `/usr/bin/hostkeeper` in as its own version an
 `current` at it; otherwise it changes nothing. The `-` lets a start go on when the installed
 binary is older and lacks the verb, since `current` is then already there.
 
-Neither unit passes `--admin-socket` or sets `RuntimeDirectory=`: the daemon binds the admin
-socket at its default, `/run/hostkeeper/admin.sock`, and makes the directory itself;
-`hostkeeper.tmpfiles.conf` makes `/run/hostkeeper` at boot.
+Neither unit passes `--admin-socket` or sets `RuntimeDirectory=`: the daemon binds no socket
+and makes `/run/hostkeeper` mode 0700 itself, where an older daemon binds the admin socket at
+its default, `/run/hostkeeper/admin.sock`; `hostkeeper.tmpfiles.conf` makes it at boot.
 
 - A self-update stages the new binary in `versions/`, points the link `next` at it and exits 0
   (the hand-over, design section 4.3); `current` is not moved. `Restart=always` starts the binary
@@ -175,14 +175,11 @@ directory, byte for byte; the test above fails when they differ.
 
 ## Debugging a wedged node
 
-On the host, as root, `hostkeeper admin status` asks the running daemon over its admin socket
-(`/run/hostkeeper/admin.sock`) what it holds, with the coordinator up or down: whether the host
-is enrolled (and the `key_sha256` of a pending request, to check against
-`hkctl enrollment list` before approving it), when its certificate expires
-(`enrollment.not_after_unix`), whether its heartbeats reach the coordinator
-(`link.last_success_unix`, `link.consecutive_failures`), and each service's lifecycle, health
-and step records. `hostkeeper admin abort <service>` stops a hung step and
-`hostkeeper admin clear-record <service>` clears a step record that cannot be read.
-`docs/admin.md` describes each line of the output and the exit codes. When the command cannot
-connect, the daemon is not running: `systemctl status hostkeeper.service` and
-`journalctl -u hostkeeper.service` say why.
+The daemon binds no admin socket and `hostkeeper admin` is gone; an older daemon that still runs
+under this unit binds `/run/hostkeeper/admin.sock` until the host updates. The status of a host is
+`hkctl hosts get --node-id <id>`: whether the host is live, its last heartbeat, and each
+service's lifecycle, health and step records (a pending request's `key_sha256`, to check
+against the host, is in `hkctl enrollment list`). `hkctl hosts abort` stops a hung step and
+`hkctl hosts clear-record` clears a step record that cannot be read. With the coordinator
+unreachable, root stops the daemon and reads `journalctl -u hostkeeper.service`; `docs/admin.md`
+is the runbook, including the by-hand rename of a record.

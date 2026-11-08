@@ -15,4 +15,4 @@ fakes on Linux, and on a Mac in `.github/workflows/privileged.yml`'s job `macos-
 | `procid` | `LaunchdProcessProbe`: the observer's `ProcessProbe` over `proc_pidpath` and a device and inode check, against the path and against the image the process has mapped (`PidInfo::image`), so a file renamed over the path is an error, not its digest; the `PidInfo` and `FileIdentity` ports |
 | `launcher` | `LaunchdLauncher`: the step runner's `StepLauncher`, each step a transient launchd job read until it ends, booted out at its bound (none for an unbounded `prepare`), its output kept in the same capture ring as on Linux; the `Pace` port for its clock. `LaunchdLauncher::system` is compiled on macOS only |
 | `unit_control` | `LaunchdUnitControl`: the linking side's `UnitControl` over `launchctl`, reloading the plists that were linked, changed or removed |
-| `platform` | `Platform`: the unit directory, unit suffix, admin socket and label prefix of Linux and of macOS |
+| `platform` | `Platform`: the unit directory, unit suffix, run directory and label prefix of Linux and of macOS |

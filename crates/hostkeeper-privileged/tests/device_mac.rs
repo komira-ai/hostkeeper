@@ -15,7 +15,7 @@
 
 use std::fs;
 use std::io::Write;
-use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
+use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt, symlink};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
@@ -33,15 +33,11 @@ use hostkeeper_launchd::{
 };
 use hostkeeper_observe::{ActiveState, ProcessProbe, ServiceManager, UnitState};
 use hostkeeper_privileged::{Mode, Rig};
-use hostkeeper_proto::hostkeeper::local::v1::StatusRequest;
-use hostkeeper_proto::hostkeeper::local::v1::admin_client::AdminClient;
 use hostkeeper_steps::{
     ArtifactError, BootId, BootIdSource, Bound, Staged, StepCall, StepLauncher,
 };
 use hostkeeper_testkit::Scratch;
 use hostkeeper_unpack::{MacVerify, SignatureVerdict};
-use hyper_util::rt::TokioIo;
-use tonic::transport::{Endpoint, Uri};
 
 const FIXTURE: &str = env!("CARGO_BIN_EXE_hostkeeper-fixture-hook");
 const DAEMON: &str = env!("CARGO_BIN_EXE_hostkeeper-device-daemon");
@@ -542,12 +538,30 @@ fn the_mac_claims_from_the_real_ioreg_are_a_serial_and_a_platform_uuid() {
     );
 }
 
-/// Catches a daemon that does not start under launchd on a Mac, or starts under no boot id: the
-/// daemon binary, as a job of the system domain with a config, state and packages directories
-/// and admin socket of its own, is `running`, answers `Status` on its admin socket, and its start
-/// pass wrote the Mac's boot id.
+/// Every socket under `dir`, as paths (links are not followed).
+fn sockets_under(dir: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(next) = pending.pop() {
+        for entry in fs::read_dir(&next).expect("a readable directory").flatten() {
+            let kind = entry.file_type().expect("an entry's type");
+            if kind.is_socket() {
+                found.push(entry.path());
+            } else if kind.is_dir() {
+                pending.push(entry.path());
+            }
+        }
+    }
+    found
+}
+
+/// Catches a daemon that does not start under launchd on a Mac, starts under no boot id, or
+/// binds a socket: the daemon binary, as a job of the system domain with a config, state and
+/// packages directories of its own (and an `--admin-socket` path it accepts and ignores), is
+/// `running`, its start pass wrote the Mac's boot id, and nothing is bound at the socket path or
+/// anywhere else in its scratch tree.
 #[test]
-fn the_daemon_starts_under_launchd_and_answers_status() {
+fn the_daemon_starts_under_launchd_and_binds_no_socket() {
     as_root();
     let dir = scratch("device-daemon");
     let root = dir.path();
@@ -590,31 +604,12 @@ hosted_runner = true
     let _booted = bootstrap(&daemon, &argv, root);
 
     let running = wait_state(&daemon, |s| s.active == ActiveState::Active);
-    let mut answered = None;
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("a runtime");
+    let boot_id = state.join(BOOT_ID_FILE);
+    let mut recorded = false;
     for _ in 0..READS {
-        if socket.exists() {
-            let path = socket.clone();
-            let connector = tower::service_fn(move |_: Uri| {
-                let path = path.clone();
-                async move {
-                    tokio::net::UnixStream::connect(path)
-                        .await
-                        .map(TokioIo::new)
-                }
-            });
-            let reply = runtime.block_on(async move {
-                let channel = Endpoint::from_static("http://admin.invalid")
-                    .connect_with_connector_lazy(connector);
-                AdminClient::new(channel).status(StatusRequest {}).await
-            });
-            if let Ok(reply) = reply {
-                answered = Some(reply.into_inner());
-                break;
-            }
+        recorded = boot_id.exists();
+        if recorded {
+            break;
         }
         std::thread::sleep(PAUSE);
     }
@@ -622,11 +617,15 @@ hosted_runner = true
     println!("the daemon's job: {running:?}");
     println!("its standard error:\n{}", log("stderr"));
     assert_eq!(running.active, ActiveState::Active, "{}", log("stderr"));
-    let status = answered.unwrap_or_else(|| panic!("no Status answer: {}", log("stderr")));
-    println!("Status: {status:?}");
-    let socket_dir = fs::metadata(socket.parent().expect("a parent")).expect("its directory");
-    assert_eq!(socket_dir.permissions().mode() & 0o777, 0o700);
-    let written = fs::read_to_string(state.join(BOOT_ID_FILE)).expect("the boot id file");
+    assert!(recorded, "no boot id file: {}", log("stderr"));
+    let written = fs::read_to_string(&boot_id).expect("the boot id file");
     let id = SysctlBootId.read().expect("kern.bootsessionuuid");
     assert_eq!(written, id.as_str());
+    assert!(
+        !socket.exists(),
+        "the daemon bound {}: {}",
+        socket.display(),
+        log("stderr")
+    );
+    assert_eq!(sockets_under(root), Vec::<PathBuf>::new());
 }
