@@ -144,6 +144,7 @@ pub fn update(service: &str, version: &str, package_digest: &str, order_try: u64
         order_id: format!("order-{service}-{version}"),
         r#try: order_try,
         verb: Some(order::Verb::Update(Update {
+            target: None,
             service: service.to_owned(),
             version: version.to_owned(),
             package_digest: package_digest.to_owned(),
@@ -158,6 +159,7 @@ pub fn install(service: &str, version: &str, package_digest: &str, order_try: u6
         order_id: format!("install-{service}-{version}"),
         r#try: order_try,
         verb: Some(order::Verb::Install(Install {
+            target: None,
             service: service.to_owned(),
             version: version.to_owned(),
             package_digest: package_digest.to_owned(),
@@ -187,6 +189,7 @@ pub fn force_rollback(service: &str, version: &str, package_digest: &str, order_
         order_id: format!("rollback-{service}-{version}"),
         r#try: order_try,
         verb: Some(order::Verb::ForceRollback(ForceRollback {
+            target: None,
             service: service.to_owned(),
             version: version.to_owned(),
             package_digest: package_digest.to_owned(),
@@ -207,6 +210,7 @@ pub fn force(
         order_id: format!("force-{service}-{version}"),
         r#try: order_try,
         verb: Some(order::Verb::Force(Force {
+            target: None,
             service: service.to_owned(),
             version: version.to_owned(),
             package_digest: package_digest.to_owned(),

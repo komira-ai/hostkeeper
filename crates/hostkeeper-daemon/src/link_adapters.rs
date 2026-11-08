@@ -71,7 +71,7 @@ impl OrderSink for DaemonOrders {
 /// the target's service, version and digest, or the service alone. An update is an `update`, a
 /// forced update a `force`, an install an `install`, an uninstall an `uninstall`, an abort an
 /// `abort` and a clear-record a `clear_record`. The loop's order has no halt generation, so a
-/// `force` carries 0 and lifts no halt.
+/// `force` carries 0 and lifts no halt, and no entry of a release, so no verb carries a `target`.
 pub fn wire_order(order: &Order) -> wire::Order {
     let terms = |target: &Target| {
         (
@@ -92,6 +92,7 @@ pub fn wire_order(order: &Order) -> wire::Order {
                 version,
                 package_digest,
                 index_digest,
+                target: None,
             })
         }
         Verb::Force(target) => {
@@ -102,6 +103,7 @@ pub fn wire_order(order: &Order) -> wire::Order {
                 package_digest,
                 index_digest,
                 halt_generation: 0,
+                target: None,
             })
         }
         Verb::Install(target) => {
@@ -111,6 +113,7 @@ pub fn wire_order(order: &Order) -> wire::Order {
                 version,
                 package_digest,
                 index_digest,
+                target: None,
             })
         }
         Verb::Uninstall(service) => wire::order::Verb::Uninstall(wire::Uninstall {

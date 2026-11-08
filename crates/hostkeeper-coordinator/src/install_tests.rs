@@ -57,6 +57,7 @@ async fn an_assigned_service_not_installed_gets_an_install_order() {
     assert_eq!(
         typed.verb,
         Some(agent::order::Verb::Install(agent::Install {
+            target: None,
             service: WEB.to_owned(),
             version: "2.0".to_owned(),
             package_digest: digest(7),

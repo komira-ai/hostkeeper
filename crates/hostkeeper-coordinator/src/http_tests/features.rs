@@ -230,6 +230,9 @@ async fn advertised_features_equal_the_handled_set() {
         } else if *name == crate::force::FEATURE {
             // The force is a typed order, which only the gRPC route carries.
             crate::force_tests::forced_v1_is_acted_on().await;
+        } else if *name == crate::picks::TARGET_FEATURE {
+            // The entry picked for a host goes only in a typed order.
+            crate::picks_tests::target_v1_is_acted_on().await;
         } else if let Some(extra) = uses.get(name) {
             let without = beat_text(&rig, "d1", "daemon", &beat("1.0", &announce)).await;
             let with_it = beat("1.0", &format!("{announce}{extra}"));
@@ -246,6 +249,7 @@ async fn advertised_features_equal_the_handled_set() {
     handled.push(ORDER_FEATURE);
     handled.push(GRPC_FEATURE);
     handled.push(crate::force::FEATURE);
+    handled.push(crate::picks::TARGET_FEATURE);
     handled.sort_unstable();
     proven.sort_unstable();
     assert_eq!(proven, handled);

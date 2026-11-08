@@ -281,6 +281,7 @@ fn an_order_is_one_verb_with_typed_arguments() {
             order_id: "o-18".to_owned(),
             r#try: 1,
             verb: Some(order::Verb::Force(Force {
+                target: None,
                 service: "db".to_owned(),
                 version: "1.4".to_owned(),
                 package_digest: "ab".repeat(32),
@@ -429,6 +430,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 36] = [
             ("last_renew_error", 7),
             ("trusted_root_age_secs", 8),
             ("trusted_root_reason", 9),
+            ("installers", 10),
         ],
     ),
     (
@@ -605,6 +607,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 36] = [
             ("first_serving_unix", 18),
             ("trusted_root_age_secs", 19),
             ("trusted_root_reason", 20),
+            ("installers", 21),
         ],
     ),
     (
@@ -680,6 +683,7 @@ fn wire_names_are_pinned() {
             "halt-v1",
             "heartbeat-v2",
             "install-v1",
+            "target-v1",
             "verdict-acks-v1"
         ]
     );

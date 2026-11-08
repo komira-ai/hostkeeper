@@ -939,7 +939,11 @@ once that loop has a link.</p>
 token, and an operator may set it the same way with the operator&rsquo;s token. Beside the version, a set names the release: the text of the version&rsquo;s <code>index.json</code> and its SHA-256
 (or, for a fleet of one platform, one package digest). The coordinator checks the digest and that the index is the service&rsquo;s at that version, and keeps
 the index digest and the package digest of each platform, in the state file. Each host is then ordered the package of its own platform, and a host
-whose platform the index lists no package for is ordered nothing and shown as <code>no_package_for_platform</code>, not as failed. It refuses a version marked bad or below the service&rsquo;s <code>min_version</code>. A new desired
+whose platform the index lists no package for is ordered nothing and shown as <code>no_package_for_platform</code>, not as failed. A version may
+instead be set with targets: for each platform an ordered list of artifacts, one per installer. Each host is then ordered the entry of the installer
+it runs the service with, else the first entry whose installer its daemon lists over gRPC, and a host no entry fits is ordered nothing and shown as
+<code>no_target</code>, <code>no_build_for_host</code> or <code>installer_dropped</code>, not as failed
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-coordinator/src/picks.rs">crates/hostkeeper-coordinator/src/picks.rs</a>). It refuses a version marked bad or below the service&rsquo;s <code>min_version</code>. A new desired
 version ends a standing force and lifts a halt the updater raised, but not one a hook or an
 operator raised (<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-coordinator/src/desired.rs">crates/hostkeeper-coordinator/src/desired.rs</a>,
 <a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/design/hostkeeper-design.md#54-the-rollout-gate-which-hosts-may-update-now">design: The rollout gate</a>).</p>
