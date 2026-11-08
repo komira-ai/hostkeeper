@@ -731,7 +731,7 @@ impl Backend for Postgres {
 
 impl Drop for Inner {
     fn drop(&mut self) {
-        // The writing session goes first, and the lock with it.
+        // The writing session goes first, its lock freed before it closes ([`Writer`]'s drop).
         self.writer.stop();
         self.reader.stop();
     }
