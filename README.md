@@ -40,7 +40,7 @@ update coordinator, `hostkeeper-coordinator serve`. The parts are being moved he
 
 | crate | what it holds |
 |---|---|
-| [`hostkeeper`](crates/hostkeeper) | the binary: `hostkeeper daemon`, `hostkeeper ctl`, `hostkeeper ci`, and the two plumbing verbs of its own update; it only forwards to `hostkeeper-daemon` |
+| [`hostkeeper`](crates/hostkeeper) | the binary: `hostkeeper daemon`, `hostkeeper ci`, and the two plumbing verbs of its own update; it only forwards to `hostkeeper-daemon` |
 | [`hostkeeper-daemon`](crates/hostkeeper-daemon) | the daemon: start-up and its lock, the order executor with its locks and try rules, the held halts, the root-only admin socket, and the enrollment and heartbeat loops |
 | [`hostkeeper-config`](crates/hostkeeper-config) | the strict loaders of `hostkeeper.toml` and of a package's `manifest.toml`, the owner and mode check of a trusted file, and the name and path grammars |
 | [`hostkeeper-hook`](crates/hostkeeper-hook) | the contract between the host and a service's update hook, and the conformance harness a service tests its hook with (feature `conformance`) |
@@ -58,8 +58,7 @@ update coordinator, `hostkeeper-coordinator serve`. The parts are being moved he
 | [`hostkeeper-pxe-packets`](crates/hostkeeper-pxe-packets) | the packets of network install, with no socket and no inventory: proxyDHCP offers and ACKs for architectures 7, 9, 11, 16 and 19, router-mode learning of each client's address and architecture, and TFTP read requests (only served names, `hostkeeper/boot.efi` as the shim of the learned architecture) and transfers ([design](docs/design/network-install.md), item N7) |
 | [`hostkeeper-pxe-seed`](crates/hostkeeper-pxe-seed) | what a network-installed machine boots into: the fixed `grub.cfg`, the install or local-disk menu of a MAC, and its autoinstall seed, each a pure function of the inventory record, the daemon config and the flags ([design](docs/design/network-install.md), item N6) |
 | [`hostkeeper-wire`](crates/hostkeeper-wire) | what the coordinator and a host exchange: the heartbeat and its reply, versions, host ids, role names and platforms, the certificate identity, the secret-file rule |
-| [`hostkeeper-proto`](crates/hostkeeper-proto) | the protobuf services of the coordinator (`hostkeeper.agent.v1`, `hostkeeper.operator.v1`) and of the daemon's local admin socket (`hostkeeper.local.v1`), the command table `hostkeeper ctl`, `hkctl` and the UI's generated client are made from, and the compatibility test |
-| [`hostkeeper-ctl`](crates/hostkeeper-ctl) | `hostkeeper ctl`, the command line generated from those services: one command per RPC, over gRPC or the coordinator's HTTP/JSON gateway |
+| [`hostkeeper-proto`](crates/hostkeeper-proto) | the protobuf services of the coordinator (`hostkeeper.agent.v1`, `hostkeeper.operator.v1`) and of the daemon's local admin socket (`hostkeeper.local.v1`), the command table `hkctl` and the UI's generated client are made from, and the compatibility test |
 | [`hostkeeper-hkctl`](crates/hostkeeper-hkctl) | `hkctl`, the operator's bash command line over the gateway: the emitter of its script from the same command table (`cargo xtask release hkctl` writes the asset `hkctl-<version>`), [docs/cli.md](docs/cli.md), and the scan that holds the script to bash 3.2 |
 | [`hostkeeper-ci`](crates/hostkeeper-ci) | `hostkeeper ci set-desired`, the CI client that revisions of `set-desired.yml` before its move to `hkctl` run; a caller pinned to one keeps running it ([docs/deploy/ci-client.md](docs/deploy/ci-client.md), "Pinning hostkeeper") |
 | [`hostkeeper-coordinator`](crates/hostkeeper-coordinator) | the update coordinator: the services and roles of a rollout file, the desired version of each service, the heartbeat endpoint, the operator endpoint, and the convergence of a fleet |
@@ -119,8 +118,8 @@ The items B1 to B28 of section 12.2 of the design, by theme. "Built" means the c
 - **Enrollment.** Built: B16 (certificate authority, enrollment and renewal), B17 (approval).
   Planned: B21 (adopting hosts that run kbf's agent).
 - **Operator surfaces.** Built: B1 (the protobuf services, every method of which has a handler:
-  none answers `UNIMPLEMENTED`), B10 (the generated command line: `hostkeeper ctl`, gRPC beside
-  the gateway, and `hkctl` over the gateway), B24 (the CI client), B25 (the UI).
+  none answers `UNIMPLEMENTED`), B10 (the generated command line: `hkctl`, over the gateway),
+  B24 (the CI client), B25 (the UI).
 - **Platforms and packaging.** Built: B11 (deb, rpm, unit, boot-image overlay). Partly built:
   B18 (macOS: `hostkeeper-launchd`, the daemon's Mac adapters, package check and claims, and a
   device run of the daemon under launchd after each merge; no update has run through it on a

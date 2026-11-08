@@ -2,7 +2,7 @@
 //! declarations, `ui/gen/client.d.ts`.
 //!
 //! It reads the command table of `hostkeeper-proto` (`hostkeeper_proto::ctl::COMMANDS`, one
-//! entry per unary RPC, which `hostkeeper ctl` reads too) for the functions, and the descriptor
+//! entry per unary RPC, which `hkctl` is generated from too) for the functions, and the descriptor
 //! set the table was generated from for the types of their requests and responses. A new RPC of
 //! [`PACKAGE`] is a new function at the next run, with no hand edit. Both files are checked in:
 //! the app is static files with no build step, and a test of this crate (`tests/client.rs`)

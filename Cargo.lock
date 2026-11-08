@@ -1414,7 +1414,6 @@ dependencies = [
  "hostkeeper",
  "hostkeeper-daemon",
  "hostkeeper-launchd",
- "hostkeeper-proto",
  "hostkeeper-testkit",
  "rustix",
 ]
@@ -1423,16 +1422,15 @@ dependencies = [
 name = "hostkeeper-ci"
 version = "0.1.0"
 dependencies = [
- "bytes",
  "clap",
- "hostkeeper-ctl",
  "hostkeeper-proto",
  "hostkeeper-testkit",
- "prost",
  "rcgen",
  "rustls-pki-types",
  "serde_json",
  "thiserror",
+ "tokio",
+ "tokio-stream",
  "tonic",
  "ureq",
 ]
@@ -1459,7 +1457,6 @@ dependencies = [
  "futures",
  "getrandom 0.4.3",
  "hostkeeper-config",
- "hostkeeper-ctl",
  "hostkeeper-enrollment",
  "hostkeeper-mdm-gate",
  "hostkeeper-oidc",
@@ -1495,26 +1492,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hostkeeper-ctl"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "clap",
- "hostkeeper-proto",
- "hostkeeper-testkit",
- "prost",
- "prost-reflect",
- "protox",
- "rcgen",
- "rustls",
- "serde_json",
- "thiserror",
- "tokio",
- "tokio-stream",
- "tonic",
-]
-
-[[package]]
 name = "hostkeeper-daemon"
 version = "0.1.0"
 dependencies = [
@@ -1526,7 +1503,6 @@ dependencies = [
  "hostkeeper-ci",
  "hostkeeper-config",
  "hostkeeper-coordinator",
- "hostkeeper-ctl",
  "hostkeeper-daemon",
  "hostkeeper-enroll",
  "hostkeeper-hook",
@@ -1986,7 +1962,17 @@ dependencies = [
 name = "hostkeeper-testkit"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "nix",
+ "prost",
+ "prost-reflect",
+ "prost-types",
+ "rcgen",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tokio-stream",
+ "tonic",
 ]
 
 [[package]]

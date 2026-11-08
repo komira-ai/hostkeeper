@@ -10,11 +10,11 @@
 //!   `hostkeeper-pxe serve: <unix seconds> <text>`. Power-on is its first `DHCPDISCOVER` from
 //!   the MAC in proxy mode, or its first `DHCPREQUEST` in router mode; the install started at
 //!   the seed fetch of the MAC as the record's host.
-//! - `--pending`: what `hostkeeper ctl --output json enrollment list` printed while the
-//!   machine's request was pending: the request matched to the record's host gives pending,
+//! - `--pending`: what the operator API's `Enrollment.List` answered, as proto3 canonical
+//!   JSON, while the machine's request was pending: the request matched to the record's host gives pending,
 //!   its `firstSeenUnix`.
-//! - `--host`: what `hostkeeper ctl --output json hosts get --node-id <host-id>` printed once
-//!   the host served: approved is its `enrolledUnix`, the first heartbeat its
+//! - `--host`: what the operator API's `Hosts.Get` of the host id answered, as proto3
+//!   canonical JSON, once the host served: approved is its `enrolledUnix`, the first heartbeat its
 //!   `firstHeartbeatUnix`, and serving its `firstServingUnix` (the first heartbeat that reported
 //!   a service the coordinator manages for the host installed and healthy).
 //!
@@ -117,11 +117,12 @@ pub(crate) struct Flags {
     /// The log of `hostkeeper-pxe serve` (its standard error).
     #[arg(long)]
     pub(crate) pxe_log: PathBuf,
-    /// What `hostkeeper ctl --output json enrollment list` printed while the request was
-    /// pending.
+    /// What the operator API's `Enrollment.List` answered (proto3 canonical JSON) while the
+    /// request was pending.
     #[arg(long)]
     pub(crate) pending: PathBuf,
-    /// What `hostkeeper ctl --output json hosts get --node-id <host-id>` printed once it served.
+    /// What the operator API's `Hosts.Get` of the host id answered (proto3 canonical JSON) once it
+    /// served.
     #[arg(long)]
     pub(crate) host: PathBuf,
 }

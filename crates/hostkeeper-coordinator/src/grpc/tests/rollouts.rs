@@ -6,7 +6,6 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
-use hostkeeper_ctl::codes;
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use http_body_util::Full;
 use hyper::{Request, StatusCode};
@@ -17,7 +16,7 @@ use tonic::Code;
 
 use super::operator::World;
 use super::support::{call, decode, framed, grpc_request_raw, raw};
-use crate::grpc::gateway::is_method;
+use crate::grpc::gateway::{STATUS_TABLE, is_method};
 use crate::http::Surface;
 use crate::marks_support::{NEW_DAEMON, beat_of, runs, start, who};
 use crate::service::Coordinator;
@@ -32,20 +31,20 @@ const MANUAL_FIRST_STAGE: &str = "stages = [{ percent = 100, advance = \"manual\
 
 /// The transports of the operator API that a test drives.
 #[derive(Clone, Copy, Debug)]
-enum Wire {
+pub(super) enum Wire {
     Grpc,
     Gateway,
 }
 
-const WIRES: [Wire; 2] = [Wire::Grpc, Wire::Gateway];
+pub(super) const WIRES: [Wire; 2] = [Wire::Grpc, Wire::Gateway];
 
 /// A refusal as the caller reads it: the status code and the token.
-type Refused = (Code, String);
+pub(super) type Refused = (Code, String);
 
 /// The call `path` with `request` and `bearer` over `wire`, answered as the message `R` or as
 /// the refusal. The gateway's request and answer are the canonical JSON of the messages, as
-/// `hostkeeper ctl --transport gateway` sends and reads them.
-async fn rpc<R: Message + Default>(
+/// `hkctl` and the web app's client send and read them.
+pub(super) async fn rpc<R: Message + Default>(
     coordinator: &Arc<Coordinator>,
     wire: Wire,
     path: &str,
@@ -88,8 +87,11 @@ async fn rpc<R: Message + Default>(
                 Ok(decode(&reply.encode_to_vec()))
             } else {
                 let error: Value = serde_json::from_slice(&body).expect("a JSON error");
-                let code = codes::from_name(error["code"].as_str().expect("a code name"))
-                    .expect("a code ctl knows");
+                let name = error["code"].as_str().expect("a code name");
+                let (code, _, _) = *STATUS_TABLE
+                    .iter()
+                    .find(|(_, known, _)| *known == name)
+                    .expect("a code the gateway answers with");
                 Err((code, error["reason"].as_str().expect("a reason").to_owned()))
             }
         }

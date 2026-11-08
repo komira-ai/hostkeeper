@@ -16,7 +16,7 @@
 //! `current` and `previous` links (the switch), the version string an instance serves, read from
 //! the manifest inside the unpacked package it runs from (the switch and the hook), `systemctl
 //! is-active` (the units), the step record and the hook's record files (the step launcher), and
-//! `hostkeeper ctl` against the coordinator (the heartbeat's report).
+//! the operator API of the coordinator (the heartbeat's report).
 
 mod e2e;
 

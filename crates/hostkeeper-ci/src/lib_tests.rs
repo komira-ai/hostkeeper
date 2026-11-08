@@ -82,6 +82,7 @@ fn run_without_the_platform_variables_fails_at_the_token() {
     let valid = flags(dir.path());
     assert_eq!(status(CiCommand::SetDesired(valid.clone())), 1);
     assert!(!dir.path().join("hostkeeper-oidc-token").exists());
+    assert!(!dir.path().join("set-desired.json").exists());
     assert_eq!(
         std::fs::read_to_string(dir.path().join("github-output")).expect("outputs"),
         "desired_version=\nconverged=false\nreason=no_answer\n"

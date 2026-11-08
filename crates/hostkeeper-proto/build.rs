@@ -1,9 +1,9 @@
 //! Compiles hostkeeper's protos into Rust, and writes their descriptor set and the command
-//! table of `hostkeeper ctl`.
+//! table.
 //!
 //! `protox` parses the `.proto` files in pure Rust, so the build needs no `protoc`;
 //! `tonic-prost-build` turns the descriptors into messages, service traits and clients, and
-//! `src/ctl_gen.rs` turns them into `ctl`'s command table. Nothing generated is checked in: the
+//! `src/ctl_gen.rs` turns them into the command table. Nothing generated is checked in: the
 //! code, the descriptor set `src/lib.rs` embeds as `FILE_DESCRIPTOR_SET`, and the table
 //! `src/ctl.rs` includes land in `OUT_DIR`.
 

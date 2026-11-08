@@ -27,8 +27,6 @@ clap.workspace = true
 hostkeeper-config = { path = "../hostkeeper-config" }
 # `hostkeeper ci`: the CI client, a subcommand of the one binary (docs/deploy/ci-client.md).
 hostkeeper-ci = { path = "../hostkeeper-ci" }
-# `hostkeeper ctl`, which the binary reaches through `cli`.
-hostkeeper-ctl = { path = "../hostkeeper-ctl" }
 # The enrollment loop, over gRPC with TLS to the coordinator, the pki directory and the host's
 # claims.
 hostkeeper-enroll = { path = "../hostkeeper-enroll" }

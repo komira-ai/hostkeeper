@@ -14,8 +14,7 @@
 //! - This holds in every operator doc: each Markdown file of the repository but the design
 //!   documents (`docs/design/`, which also describe methods not built yet). There, an inline
 //!   code span that begins `hkctl` names a service and a method hkctl has, and flags that method
-//!   or hkctl has; and no fenced line begins `hostkeeper ctl`, but in the files of
-//!   [`OLD_CLI_LEFT`], each of which must still hold one.
+//!   or hkctl has; and no fenced line begins `hostkeeper ctl`.
 //! - The enrollment runbook uses the calls of the procedure: `add-record`, `list-records`,
 //!   `remove-record`, `open-record`, `list` and `approve` of `enrollment`.
 //! - The tokens of its two refusal tables are exactly the refusal tokens of the protos: the

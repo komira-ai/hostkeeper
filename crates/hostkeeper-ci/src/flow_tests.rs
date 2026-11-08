@@ -1,17 +1,16 @@
-//! The flow against a fake coordinator, through the real `hostkeeper ctl`.
+//! The flow against a fake Releases service.
 
-use hostkeeper_proto::hostkeeper::operator::v1::{
-    ConvergeRequest, ConvergenceState, SetDesiredRequest,
-};
-use prost::Message as _;
+use hostkeeper_proto::hostkeeper::operator::v1::ConvergenceState;
 use tonic::Status;
 
 use crate::flow::execute;
-use crate::testing::{Fake, convergence, flags, role, run_case, scratch, settings, stored};
+use crate::testing::{
+    ConvReply, Fake, convergence, flags, role, run_case, scratch, settings, stored,
+};
 
 const DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
-fn in_progress() -> crate::testing::Reply {
+fn in_progress() -> ConvReply {
     convergence(
         Some("1.2.3"),
         ConvergenceState::InProgress,
@@ -19,7 +18,7 @@ fn in_progress() -> crate::testing::Reply {
     )
 }
 
-fn converged() -> crate::testing::Reply {
+fn converged() -> ConvReply {
     convergence(
         Some("1.2.3"),
         ConvergenceState::Converged,
@@ -35,7 +34,8 @@ fn polls(said: &[String]) -> Vec<&str> {
 }
 
 /// Catches a call that reuses a token, sends it as anything but the bearer of the call it was
-/// issued for, leaves the token file open to others or behind, or loses a field of the request.
+/// issued for, loses a field of a request, leaves anything in the work directory, or calls a
+/// target other than the endpoint and the CA file the flags name.
 #[test]
 fn a_converged_fleet_ends_converged_with_one_token_per_call() {
     let ran = run_case(
@@ -59,64 +59,31 @@ fn a_converged_fleet_ends_converged_with_one_token_per_call() {
         ]
     );
     let log = ran.log.lock().expect("lock");
-    let bearers: Vec<&str> = log.calls.iter().map(|c| c.bearer.as_str()).collect();
-    assert_eq!(
-        bearers,
-        ["Bearer token-1", "Bearer token-2", "Bearer token-3"]
-    );
-    let paths: Vec<&str> = log.calls.iter().map(|c| c.path.as_str()).collect();
-    assert_eq!(
-        paths,
-        [
-            "/hostkeeper.operator.v1.Releases/SetDesired",
-            "/hostkeeper.operator.v1.Releases/Converge",
-            "/hostkeeper.operator.v1.Releases/Converge"
-        ]
-    );
-    let set = SetDesiredRequest::decode(log.calls[0].request.clone()).expect("a SetDesired");
+    assert_eq!(log.bearers, ["token-1", "token-2", "token-3"]);
+    assert_eq!(log.sets.len(), 1);
+    let set = &log.sets[0];
     assert_eq!(set.service, "svc");
     assert_eq!(set.package_digest.as_deref(), Some(DIGEST));
-    assert_eq!(set.desired.expect("desired").version, "1.2.3");
-    for call in &log.calls[1..] {
-        let read = ConvergeRequest::decode(call.request.clone()).expect("a Converge");
+    assert_eq!(set.release_index, None);
+    assert_eq!(set.release_index_digest, None);
+    assert_eq!(set.desired.as_ref().expect("desired").version, "1.2.3");
+    assert_eq!(log.converges.len(), 2);
+    for read in &log.converges {
         assert_eq!(read.service, "svc");
     }
-    // The file ctl read held the token, was private while the call ran, and each call had a
-    // file of its own.
-    assert_eq!(
-        log.token_files,
-        [
-            (0o600, "token-1".to_owned()),
-            (0o600, "token-2".to_owned()),
-            (0o600, "token-3".to_owned())
-        ]
-    );
     assert_eq!(
         log.audiences,
         ["hostkeeper-ci", "hostkeeper-ci", "hostkeeper-ci"]
     );
-    assert_eq!(
-        log.targets,
-        [
-            (
-                "coordinator.example".to_owned(),
-                443,
-                ran.dir.path().join("ca.pem")
-            ),
-            (
-                "coordinator.example".to_owned(),
-                443,
-                ran.dir.path().join("ca.pem")
-            ),
-            (
-                "coordinator.example".to_owned(),
-                443,
-                ran.dir.path().join("ca.pem")
-            ),
-        ]
+    let target = (
+        "https://coordinator.example".to_owned(),
+        ran.dir.path().join("ca.pem"),
     );
+    assert_eq!(log.targets, [target.clone(), target.clone(), target]);
     drop(log);
-    assert!(!ran.token_file_exists());
+    // The token is in memory only: the work directory holds what the test put there, and the
+    // job's outputs.
+    assert_eq!(ran.work_dir_names(), ["github-output", "web-roots.pem"]);
     assert_eq!(
         ran.outputs.as_deref(),
         Some("desired_version=1.2.3\nconverged=true\nreason=converged\n")
@@ -133,8 +100,6 @@ fn a_converged_fleet_ends_converged_with_one_token_per_call() {
             "The hosts of svc run 1.2.3",
         ]
     );
-    let request = std::fs::read_to_string(ran.dir.path().join("set-desired.json")).expect("file");
-    assert_eq!(request, r#"{"desired":{"version":"1.2.3"}}"#);
 }
 
 /// Catches an index request that loses the index text or its digest, sends the text changed,
@@ -162,7 +127,7 @@ fn an_index_release_is_sent_whole_with_its_digest_and_no_package_digest() {
         ["token 1", "SetDesired", "token 2", "Converge"]
     );
     let log = ran.log.lock().expect("lock");
-    let set = SetDesiredRequest::decode(log.calls[0].request.clone()).expect("a SetDesired");
+    let set = &log.sets[0];
     assert_eq!(set.service, "svc");
     assert_eq!(set.package_digest, None);
     assert_eq!(set.release_index.as_deref(), Some(text));
@@ -170,16 +135,7 @@ fn an_index_release_is_sent_whole_with_its_digest_and_no_package_digest() {
         set.release_index_digest.as_deref(),
         Some(index_digest.as_str())
     );
-    assert_eq!(set.desired.expect("desired").version, "1.2.3");
-    drop(log);
-    let request: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(ran.dir.path().join("set-desired.json")).expect("file"),
-    )
-    .expect("JSON");
-    assert_eq!(request["releaseIndex"], text);
-    assert_eq!(request["releaseIndexDigest"], index_digest);
-    assert_eq!(request["desired"]["version"], "1.2.3");
-    assert_eq!(request.as_object().expect("an object").len(), 3);
+    assert_eq!(set.desired.as_ref().expect("desired").version, "1.2.3");
 }
 
 /// Catches the coordinator's index refusals being reported as anything but their token, with the
@@ -257,7 +213,7 @@ fn a_refused_set_desired_sets_nothing_and_never_polls() {
         ran.said().last().map(String::as_str),
         Some("::error::the coordinator refused the version 1.2.3 of svc: held_bad; it is not set")
     );
-    assert!(!ran.token_file_exists());
+    assert_eq!(ran.work_dir_names(), ["github-output", "web-roots.pem"]);
 }
 
 /// Catches a wait that goes on after the service halted or got another version, and a refusal
@@ -378,7 +334,7 @@ fn no_token_means_no_call() {
     let ran = run_case("no-token", stored("1.2.3"), vec![converged()], true, |_| {});
     assert_eq!(ran.code, 1);
     assert_eq!(ran.events(), Vec::<String>::new());
-    assert!(ran.log.lock().expect("lock").calls.is_empty());
+    assert!(ran.log.lock().expect("lock").bearers.is_empty());
     assert_eq!(
         ran.outputs.as_deref(),
         Some("desired_version=\nconverged=false\nreason=no_answer\n")
@@ -419,8 +375,8 @@ fn the_coordinator_must_store_the_version() {
     );
 }
 
-/// Catches a lost answer reported as a refusal or as a version that is surely not set, and a
-/// failure to write the token file or the request file that is not reported at all.
+/// Catches a lost answer reported as a refusal or as a version that is surely not set, a status
+/// text that loses its code or its message, and a token that is printed in it.
 #[test]
 fn a_call_that_cannot_be_made_or_answered_is_reported_as_no_answer() {
     let lost = run_case("lost", Err(Status::unavailable("")), vec![], false, |_| {});
@@ -432,7 +388,21 @@ fn a_call_that_cannot_be_made_or_answered_is_reported_as_no_answer() {
     assert_eq!(
         lost.said().last().map(String::as_str),
         Some(
-            "::error::no answer to the request to set the version 1.2.3 of svc (ctl exited 1: error: UNAVAILABLE:); whether it is set is not known"
+            "::error::no answer to the request to set the version 1.2.3 of svc (Unavailable); whether it is set is not known"
+        )
+    );
+    // A message is in the text, and the token is not.
+    let told = run_case(
+        "lost-message",
+        Err(Status::deadline_exceeded("bad token-1 given")),
+        vec![],
+        false,
+        |_| {},
+    );
+    assert_eq!(
+        told.said().last().map(String::as_str),
+        Some(
+            "::error::no answer to the request to set the version 1.2.3 of svc (DeadlineExceeded: bad <token> given); whether it is set is not known"
         )
     );
     // A refusal that is not a token is no refusal.
@@ -460,60 +430,68 @@ fn a_call_that_cannot_be_made_or_answered_is_reported_as_no_answer() {
         long.outputs.as_deref(),
         Some("desired_version=\nconverged=false\nreason=no_answer\n")
     );
-
-    // A directory where the token file goes: it cannot be made.
-    let dir = scratch("token-file");
-    let f = flags(dir.path());
-    std::fs::create_dir(dir.path().join("hostkeeper-oidc-token")).expect("mkdir");
-    let mut fake = Fake::new(dir.path(), stored("1.2.3"), vec![]);
-    let outcome = execute(&settings(&f), &mut fake);
-    assert_eq!(outcome.reason, "no_answer");
-    assert_eq!(fake.log.lock().expect("lock").events, ["token 1"]);
-    let said = fake.log.lock().expect("lock").said.clone();
-    assert_eq!(said.len(), 2);
-    assert!(
-        said[1].starts_with("::error::cannot write the token file "),
-        "{said:?}"
+    // Nor is a token on a status the coordinator does not refuse with.
+    let missing = run_case(
+        "not-found",
+        Err(Status::not_found("no_such_thing")),
+        vec![],
+        false,
+        |_| {},
     );
-    assert!(
-        said[1].ends_with("; the version 1.2.3 of svc is not set"),
-        "{said:?}"
-    );
-
-    // A directory where the request file goes: it cannot be written, and no token is spent.
-    let dir = scratch("request-file");
-    let f = flags(dir.path());
-    std::fs::create_dir(dir.path().join("set-desired.json")).expect("mkdir");
-    let mut fake = Fake::new(dir.path(), stored("1.2.3"), vec![]);
-    let outcome = execute(&settings(&f), &mut fake);
-    assert_eq!(outcome.reason, "no_answer");
-    assert!(fake.log.lock().expect("lock").events.is_empty());
-    let said = fake.log.lock().expect("lock").said.clone();
-    assert_eq!(said.len(), 1);
-    assert!(
-        said[0].starts_with("::error::cannot write the request file "),
-        "{said:?}"
+    assert_eq!(
+        missing.outputs.as_deref(),
+        Some("desired_version=\nconverged=false\nreason=no_answer\n")
     );
 }
 
-/// Catches a token file left by an earlier run that is reused (with its mode and its content)
-/// instead of made fresh.
+/// Catches each of the four codes with which the coordinator refuses not being read as a refusal
+/// with its token, and an empty message being one.
 #[test]
-fn an_old_token_file_is_replaced_by_a_fresh_private_one() {
-    let dir = scratch("old-token");
-    let f = flags(dir.path());
-    let old = dir.path().join("hostkeeper-oidc-token");
-    std::fs::write(&old, "stale").expect("write");
-    let mut fake = Fake::new(dir.path(), stored("1.2.3"), vec![]);
-    let mut settings = settings(&f);
-    settings.wait = false;
-    let outcome = execute(&settings, &mut fake);
-    assert_eq!(outcome.reason, "not_waited");
-    assert_eq!(
-        fake.log.lock().expect("lock").token_files,
-        [(0o600, "token-1".to_owned())]
+fn four_codes_refuse_with_a_token() {
+    for (name, status) in [
+        ("invalid-argument", Status::invalid_argument("a_1")),
+        ("failed-precondition", Status::failed_precondition("a_1")),
+        ("unauthenticated", Status::unauthenticated("a_1")),
+        ("permission-denied", Status::permission_denied("a_1")),
+    ] {
+        let ran = run_case(name, Err(status), vec![], false, |_| {});
+        assert_eq!(
+            ran.outputs.as_deref(),
+            Some("desired_version=\nconverged=false\nreason=a_1\n"),
+            "{name}"
+        );
+    }
+    let empty = run_case(
+        "empty-refusal",
+        Err(Status::invalid_argument("")),
+        vec![],
+        false,
+        |_| {},
     );
-    assert!(!old.exists());
+    assert_eq!(
+        empty.outputs.as_deref(),
+        Some("desired_version=\nconverged=false\nreason=no_answer\n")
+    );
+}
+
+/// Catches a call that cannot be made (a CA that cannot be read, a bad endpoint) reported as a
+/// lost answer, as a refusal, or without saying that the version is not set.
+#[test]
+fn a_call_that_is_not_sent_says_why_and_that_the_version_is_not_set() {
+    let dir = scratch("not-sent");
+    let f = flags(dir.path());
+    let mut fake = Fake::new(stored("1.2.3"), vec![]);
+    fake.not_sending("cannot read the CA from ca.pem: gone");
+    let outcome = execute(&settings(&f), &mut fake);
+    assert_eq!(outcome.reason, "no_answer");
+    assert_eq!(outcome.desired_version, "");
+    assert_eq!(
+        fake.log.lock().expect("lock").said,
+        [
+            "::add-mask::token-1",
+            "::error::cannot read the CA from ca.pem: gone; the version 1.2.3 of svc is not set"
+        ]
+    );
 }
 
 /// Catches job outputs that are lost, or a failure to write them that exits 0.

@@ -13,7 +13,7 @@
 //!   host's fixed paths the daemon uses, all removed when the test ends, failed or not; and
 //!   [`host_root::DaemonUnit`], the daemon under a `Type=notify` unit.
 //! - [`coordinator`]: [`coordinator::CoordinatorHandle`], the real coordinator in process, and
-//!   `hostkeeper ctl` against it.
+//!   the operator's calls against it ([`operator_api`], shared with `support::pair`).
 //! - [`scenario`]: the states the tests start from, each built the same way by every test.
 //!
 //! `tests/tierstore_rig.rs` runs the parts that need no root (the archive shape, the channel's
@@ -32,6 +32,12 @@ pub mod der;
 pub mod hello;
 pub mod host_root;
 pub mod mac_host;
+#[allow(
+    clippy::duplicate_mod,
+    reason = "the operator's calls are shared by the two harnesses, which a test file may use both of"
+)]
+#[path = "../shared/operator_api.rs"]
+pub mod operator_api;
 pub mod package;
 pub mod scenario;
 pub mod signer;
@@ -44,7 +50,7 @@ pub const BINARY_NAME: &str = "tierstore-like";
 pub const UNIT_TEMPLATE: &str = "hostkeeper-ci-tierstore@.service";
 /// The fixture program as cargo built it.
 pub const FIXTURE_BINARY: &str = env!("CARGO_BIN_EXE_tierstore-like");
-/// The `hostkeeper` CLI (`daemon`, `ctl`), as cargo built it: `hostkeeper-device-daemon` only
+/// The `hostkeeper` CLI (`daemon`), as cargo built it: `hostkeeper-device-daemon` only
 /// forwards to `hostkeeper_daemon::cli::main`.
 pub const HOSTKEEPER: &str = env!("CARGO_BIN_EXE_hostkeeper-device-daemon");
 

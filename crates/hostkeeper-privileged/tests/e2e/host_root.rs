@@ -26,7 +26,7 @@ use hostkeeper_steps::systemd::SYSTEMCTL;
 
 use super::SERVICE;
 
-/// The daemon program: `hostkeeper`, built with these tests (it holds `daemon` and `ctl`).
+/// The daemon program: `hostkeeper`, built with these tests (it holds `daemon`).
 pub const DAEMON: &str = env!("CARGO_BIN_EXE_hostkeeper-device-daemon");
 /// Where `journalctl` is.
 const JOURNALCTL: &str = "/usr/bin/journalctl";

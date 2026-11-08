@@ -2,9 +2,11 @@
 
 use crate::flags::{MAX_INDEX_BYTES, Release, SetDesiredFlags, is_service, is_version, validate};
 use crate::flow::set_desired;
+use crate::grpc::Failure;
 use crate::ports::Ports;
 use crate::testing::{Fake, flags, scratch, stored};
 use crate::token::read_roots;
+use hostkeeper_proto::hostkeeper::operator::v1::ConvergeRequest;
 
 const RELEASE_HELP: &str = "hostkeeper ci set-desired: give either --package-digest, or --release-index-file together with --release-index-digest\n";
 const SERVICE_HELP: &str = "hostkeeper ci set-desired: --service must be 1 to 255 bytes of A-Z a-z 0-9 . _ - and must not start with - or .\n";
@@ -145,7 +147,7 @@ fn invalid_flags_are_refused_before_any_token() {
         let dir = scratch(name);
         let mut flags = flags(dir.path());
         tweak(&mut flags);
-        let mut fake = Fake::new(dir.path(), stored("1.2.3"), vec![]);
+        let mut fake = Fake::new(stored("1.2.3"), vec![]);
         let mut stderr = Vec::new();
         let code = set_desired(&flags, &mut stderr, |_| &mut fake);
         assert_eq!(code, 2, "{name}");
@@ -250,10 +252,10 @@ impl std::io::Write for Shared {
     }
 }
 
-/// Catches the real ports printing nothing, another line, or lines run together, and handing ctl
-/// another transport than the network one: each line the flow says comes out exactly, with its
-/// newline, in order; and the transport they give reads the call's CA file before it connects,
-/// so a missing one is refused with ctl's own read error and no connection.
+/// Catches the real ports printing nothing, another line, or lines run together, and handing the
+/// flow another client than the gRPC one: each line the flow says comes out exactly, with its
+/// newline, in order; and the client they give reads the call's CA file before it connects, so a
+/// missing one is refused as not sent, with the read error and no connection.
 #[test]
 fn the_network_ports_pause_and_say() {
     let out = Shared::default();
@@ -267,24 +269,21 @@ fn the_network_ports_pause_and_say() {
     );
     let dir = scratch("network-ports");
     let missing = dir.path().join("missing-ca.pem");
-    let target = hostkeeper_ctl::Target {
-        endpoint: hostkeeper_ctl::Endpoint::parse("https://coordinator.example")
-            .expect("an https endpoint"),
-        transport: hostkeeper_ctl::TransportKind::Grpc,
+    let target = crate::grpc::Target {
+        endpoint: "https://coordinator.example".to_owned(),
         ca_file: missing.clone(),
-        client_identity: None,
-        timeout: std::time::Duration::from_secs(1),
     };
-    let refused = hostkeeper_ctl::Connect::connect(ports.connect(), &target)
-        .err()
-        .map(|e| e.to_string());
+    let refused = ports
+        .releases()
+        .converge(&target, "a-token", ConvergeRequest::default())
+        .err();
     let not_found = std::fs::read(&missing).expect_err("the CA file is missing");
-    assert_eq!(
-        refused,
-        Some(format!(
+    assert!(
+        matches!(&refused, Some(Failure::NotSent(why)) if *why == format!(
             "cannot read the CA from {}: {not_found}",
             missing.display()
-        ))
+        )),
+        "{refused:?}"
     );
 }
 
@@ -368,7 +367,7 @@ fn an_index_file_that_cannot_be_used_is_refused_before_any_token() {
     );
 
     for flags in [gone, big, latin] {
-        let mut fake = Fake::new(dir.path(), stored("1.2.3"), vec![]);
+        let mut fake = Fake::new(stored("1.2.3"), vec![]);
         let mut stderr = Vec::new();
         assert_eq!(set_desired(&flags, &mut stderr, |_| &mut fake), 2);
         assert!(fake.log.lock().expect("lock").audiences.is_empty());
