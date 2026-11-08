@@ -4,7 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-hostkeeper-ci = { path = "../hostkeeper-ci" }
 hostkeeper-config = { path = "../hostkeeper-config" }
 hostkeeper-enroll = { path = "../hostkeeper-enroll" }
 hostkeeper-hook = { path = "../hostkeeper-hook" }

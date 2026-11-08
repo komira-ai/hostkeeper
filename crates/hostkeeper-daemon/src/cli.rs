@@ -1,9 +1,9 @@
 //! The command line of the `hostkeeper` binary: `hostkeeper daemon` and its flags,
 //! `hostkeeper admin`, the client of the daemon's admin socket on the host
-//! ([`crate::admin_client`], docs/admin.md), `hostkeeper ci`, the CI client a service's release
-//! job runs once it has verified this binary (`hostkeeper_ci`, docs/deploy/ci-client.md), and the three plumbing verbs of hostkeeper's own update (design
-//! section 6.6), which no operator runs: `hostkeeper self-update-fallback --dir <dir>`, what the
-//! generated fallback unit runs, and on a Mac the fallback timer job ([`crate::fallback`]);
+//! ([`crate::admin_client`], docs/admin.md), and the three plumbing verbs of hostkeeper's own
+//! update (design section 6.6), which no operator runs: `hostkeeper self-update-fallback --dir
+//! <dir>`, what the generated fallback unit runs, and on a Mac the fallback timer job
+//! ([`crate::fallback`]);
 //! `hostkeeper self-update-protocol`, which prints this binary's self-update protocol and does
 //! nothing else ([`crate::selfupdate::protocol_line`]); and `hostkeeper self-update-seed
 //! --state-dir <dir> --binary <file>`, which the package unit runs before each start to give the
@@ -28,8 +28,10 @@
 //! `2` for a usage error (as clap reports it), [`EXIT_CONFIG`] when the daemon config did not
 //! load, [`EXIT_LOCKED`] when another daemon holds the state directory. The exit status of
 //! `hostkeeper admin` is the code [`crate::admin_client::exit`] assigns to the call, `2` for a
-//! usage error among them. A verb this binary does not have (`ctl`, the coordinator's command line,
-//! is `hkctl` now, docs/cli.md) is a usage error, `2`, as clap reports it.
+//! usage error among them. A verb this binary does not have is a usage error, `2`, as clap reports
+//! it: `ctl` (the coordinator's command line is `hkctl` now, docs/cli.md) and `ci` (CI runs
+//! `hkctl releases set-desired` and `hkctl releases wait-converged`, docs/deploy/ci-client.md)
+//! among them.
 //!
 //! `--version` prints `hostkeeper X.Y.Z+<12 hex digits of the commit>` for a release build and
 //! `hostkeeper X.Y.Z` for a developer build ([`crate::stamp`]).
@@ -151,10 +153,6 @@ pub enum Command {
     /// Call the host's daemon over its root-only admin socket: `status`, `abort`, `clear-record`
     /// (docs/admin.md).
     Admin(AdminCommand),
-    /// The CI client: set a service's desired version from its release job and wait for the
-    /// fleet (docs/deploy/ci-client.md).
-    #[command(subcommand)]
-    Ci(hostkeeper_ci::CiCommand),
     /// Put the previous hostkeeper binary back after the new one failed to start, and record the
     /// update failed and its version bad (run by the generated fallback unit).
     SelfUpdateFallback(FallbackFlags),
@@ -360,7 +358,6 @@ pub fn run_with(cli: Cli, systemd: SystemdVars) -> ExitCode {
             print!("{}", crate::selfupdate::protocol_line());
             return ExitCode::SUCCESS;
         }
-        Command::Ci(command) => return hostkeeper_ci::run(command),
         Command::UpdateHook(hook) => return crate::update_hook::main(hook.args),
         Command::Prepare(hook) => return crate::update_hook::main_at(Step::Prepare, hook.args),
         Command::Cutover(hook) => return crate::update_hook::main_at(Step::Cutover, hook.args),
