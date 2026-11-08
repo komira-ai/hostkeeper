@@ -63,7 +63,7 @@ on:
         type: string
         required: true
       package_digest:
-        description: The SHA-256 of the one package of this version that every host is ordered, 64 lower-case hex digits. For a fleet of one platform. Give this, or release_index with release_index_digest.
+        description: The SHA-256 of the one package of this version that every host is ordered, 64 lower-case hex digits. For a fleet of one platform. Give this, or release_index with release_index_digest, or targets; never this with another.
         type: string
         required: false
       release_index:
@@ -75,7 +75,7 @@ on:
         type: string
         required: false
       targets:
-        description: "The targets of the version, one JSON object keyed by platform (linux-x86_64, linux-arm64, macos-arm64), each value {\"entries\": [...]} in the order the service prefers, as `cargo xtask release targets` writes them; at most 128 KiB. Each host is ordered the entry of the installer it runs, else the first its daemon can install (docs/design/packages.md, section 3). Alone, or with release_index and release_index_digest, which must then list exactly the hostkeeper-archive entries, so that a daemon before targets is ordered its archive through the release channel; not with package_digest. Needs a coordinator that takes SetDesired with targets."
+        description: "The targets of the version, one JSON object keyed by platform (linux-x86_64, linux-arm64, macos-arm64), each value {\"entries\": [...]} in the order the service prefers, as `cargo xtask release targets` writes them; under 128 KiB, the most the runner passes in one environment value or argument. Each host is ordered the entry of the installer it runs, else the first its daemon can install (docs/design/packages.md, section 3). Alone, or with release_index and release_index_digest, which must then list exactly the hostkeeper-archive entries, so that a daemon before targets is ordered its archive through the release channel; not with package_digest. Needs a coordinator that takes SetDesired with targets."
         type: string
         required: false
       hostkeeper_version:
