@@ -19,7 +19,9 @@
 //! wanted, is superseded instead: not read, and forgotten (the host reached the version wanted
 //! by an order whose own verdict it never sent, as a self-update's binary exits before it
 //! reports). A verdict the agent reports replaces the standing one; one with no order id or no try cannot
-//! be acknowledged, so it is not stored and ends the standing one. An agent that did not
+//! be acknowledged, so it is not stored and ends the standing one. The verdict of a
+//! `clear_record` order ([`crate::clear_record::is_verdict`]) is neither: it is acknowledged
+//! once the write returned, and the standing verdict stays as it was. An agent that did not
 //! announce the feature is answered and read exactly as before.
 //!
 //! The file is JSON, written whole (a temporary file, fsync, rename, a directory fsync) under
@@ -251,7 +253,7 @@ impl VerdictFile {
             return Ok(());
         }
         let mut next = held.clone();
-        for (service, last) in heard {
+        for (service, last) in heard.iter().filter(|(_, last)| !clear_record(last)) {
             let kept = next.services.entry(service.clone()).or_default();
             match last.as_ref().filter(|report| ackable(report)) {
                 Some(report) => {
@@ -293,7 +295,8 @@ fn changes(
             .get(service)
             .and_then(|kept| kept.standing.get(host.as_str()))
     };
-    let stands = heard.iter().any(|(service, last)| match last {
+    let heard = heard.iter().filter(|(_, last)| !clear_record(last));
+    let stands = heard.into_iter().any(|(service, last)| match last {
         Some(report) if ackable(report) => standing(service) != Some(report),
         Some(_) => standing(service).is_some(),
         None => false,
@@ -310,6 +313,12 @@ fn changes(
                 .any(|(one, (id, report))| one.node_id != *id || one.report != *report)
     });
     stands || counts
+}
+
+/// Whether `last` is the verdict of a `clear_record` order, which never stands for the host
+/// ([`crate::clear_record`]).
+fn clear_record(last: &Option<UpdateResult>) -> bool {
+    last.as_ref().is_some_and(crate::clear_record::is_verdict)
 }
 
 /// Whether `report` names its order and try, which an ack needs.
@@ -427,8 +436,10 @@ pub(crate) fn acknowledge(
             order_try,
         };
         // A service the heartbeat names twice (the legacy one in `services` too) is
-        // acknowledged once: an agent refuses an answer that lists an ack twice.
-        if file.standing(service, host).as_ref() == Some(report) && !acks.contains(&ack) {
+        // acknowledged once: an agent refuses an answer that lists an ack twice. The verdict of
+        // a `clear_record` stands for nothing, and is acknowledged once the write returned.
+        let durable = clear_record(last) || file.standing(service, host).as_ref() == Some(report);
+        if durable && !acks.contains(&ack) {
             acks.push(ack);
         }
     }

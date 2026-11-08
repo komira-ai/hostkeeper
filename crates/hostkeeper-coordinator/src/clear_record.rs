@@ -13,17 +13,24 @@
 //! is kept in memory only: a restart of the coordinator forgets an order not yet sent, and the
 //! operator asks again.
 //!
-//! What the daemon does with it, and its verdict, are the daemon's (design section 3.2); the
-//! coordinator reads that verdict as any order's.
+//! What the daemon does with it is the daemon's (design section 3.2). Its verdict, the
+//! service's `last_update` under the order's id, is acknowledged as any order's
+//! ([`crate::verdict_file::acknowledge`]) and shown by `Hosts.Get`, but it is no word on any
+//! release: it is taken out of the heartbeat before any rule reads it ([`Queue::take_verdicts`]),
+//! so the gate's `failed_here`, the update slot, the bake, the halt and the counting read the
+//! host's standing verdict instead, and it never becomes the standing verdict itself. Like a
+//! refusal for the try, it says how the host answered an order, not how a version ran there.
 
 use std::collections::BTreeMap;
 
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_wire::HostId;
+use hostkeeper_wire::wire::{Heartbeat, UpdateResult};
 
 use crate::operator::Caller;
 use crate::ops::{AuditEntry, Write};
 use crate::service::Coordinator;
+use crate::verdict_file::Heard;
 
 /// The feature a daemon announces to be sent a `clear_record`.
 pub const FEATURE: &str = "clear-record-v1";
@@ -31,17 +38,34 @@ pub const FEATURE: &str = "clear-record-v1";
 /// The audit action of an accepted `Hosts.ClearRecord`.
 pub const ACTION: &str = "record_cleared";
 
+/// The prefix of every order id [`order_id`] makes.
+const ORDER_ID_PREFIX: &str = "clear-record-";
+
 /// The order id of the `clear_record` audited as the entry `seq`.
 #[must_use]
 pub fn order_id(seq: u64) -> String {
-    format!("clear-record-{seq}")
+    format!("{ORDER_ID_PREFIX}{seq}")
+}
+
+/// Whether `report` is the verdict of a `clear_record` order: its order id is one [`order_id`]
+/// makes, `clear-record-` and a number.
+#[must_use]
+pub(crate) fn is_verdict(report: &UpdateResult) -> bool {
+    report.order_id.as_ref().is_some_and(|id| {
+        id.as_str()
+            .strip_prefix(ORDER_ID_PREFIX)
+            .is_some_and(|seq| !seq.is_empty() && seq.bytes().all(|b| b.is_ascii_digit()))
+    })
 }
 
 /// The `clear_record` orders an operator queued, per host and service, each with its order id:
-/// sent once, at the host's next heartbeat that can carry it.
+/// sent once, at the host's next heartbeat that can carry it. And the verdict of the last one
+/// each host reported, per service, which `Hosts.Get` shows until the host reports a verdict of
+/// another order of the service.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Queue {
     queued: BTreeMap<(HostId, String), String>,
+    shown: BTreeMap<(HostId, String), UpdateResult>,
 }
 
 impl Queue {
@@ -57,6 +81,45 @@ impl Queue {
     /// one waits for them already: the first stands.
     pub fn queue(&mut self, id: HostId, service: String, order_id: String) {
         self.queued.entry((id, service)).or_insert(order_id);
+    }
+
+    /// The verdict of a `clear_record` of `service` that `Hosts.Get` shows for the host `id`.
+    #[must_use]
+    pub(crate) fn shown(&self, id: &HostId, service: &str) -> Option<&UpdateResult> {
+        self.shown.get(&(id.clone(), service.to_owned()))
+    }
+
+    /// Takes the verdict of a `clear_record` out of each service entry of `beat` of the host
+    /// `id` (and out of its top level, the service `legacy`), so that no rule reads it, and
+    /// returns them, each with its service, to be acknowledged. Each is the one shown for its
+    /// service from now on; an entry that carries a verdict of another order ends the one shown.
+    pub(crate) fn take_verdicts(
+        &mut self,
+        id: &HostId,
+        legacy: Option<&str>,
+        beat: &mut Heartbeat,
+    ) -> Vec<Heard> {
+        let mut taken = Vec::new();
+        let mut take = |name: &str, last: &mut Option<UpdateResult>| {
+            let key = (id.clone(), name.to_owned());
+            match last.take_if(|report| is_verdict(report)) {
+                Some(report) => {
+                    self.shown.insert(key, report.clone());
+                    taken.push((name.to_owned(), Some(report)));
+                }
+                None if last.is_some() => {
+                    self.shown.remove(&key);
+                }
+                None => {}
+            }
+        };
+        if let Some(name) = legacy {
+            take(name, &mut beat.last_update);
+        }
+        for one in beat.services.iter_mut().flatten() {
+            take(&one.name, &mut one.last_update);
+        }
+        taken
     }
 
     /// Takes a `clear_record` queued for the host `id`, the first by service name: the service
