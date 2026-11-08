@@ -10,15 +10,16 @@
 //!   followed on the same line by a version comment (`# v1.2.3`; the value may be quoted, and
 //!   the spaces before and after `#` are free), or names a local path (a
 //!   local action or reusable workflow is code this lint does not read);
-//! - a job has no `runs-on` (but a job of [`callers::CALLERS`] that calls the CI client), or a
-//!   runner that is not one of [`HOSTED_RUNNERS`]: a runner group, a custom label (a
+//! - a job has no `runs-on` (but a job of [`callers::CALLERS`], or of [`callers::TEMPLATE`], that
+//!   calls the CI client), or a runner that is not one of [`HOSTED_RUNNERS`]: a runner group, a
+//!   custom label (a
 //!   self-hosted or a paid larger runner), or an expression other than `${{ matrix.<key> }}`,
 //!   whose values are read from the job's own `strategy.matrix` (a list
 //!   or an `include` the lint cannot read, such as an expression, is refused);
 //! - a job's `permissions` is not a mapping, or grants `write` for a scope that is not in
 //!   [`WRITE_ALLOWED`] for that workflow file and job, or grants it under another `if:` than the
 //!   one the table gives; or grants `id-token: write` in a job that is in none of that table,
-//!   [`ID_TOKEN_ALLOWED`] and [`callers::CALLERS`];
+//!   [`ID_TOKEN_ALLOWED`], [`callers::CALLERS`] and [`callers::TEMPLATE`];
 //! - any key `secrets` has the value `inherit`;
 //! - the workflow runs for a pull request (`pull_request`, its review events, or
 //!   `merge_group`) and a job of it holds a `write` scope, or is root or macOS, whatever its
@@ -356,8 +357,9 @@ pub fn lint(file: &str, text: &str) -> Vec<String> {
         let name = name.as_str().unwrap_or_default();
         problems.extend(permission_problems(file, name, job));
         problems.extend(image_problems(name, job));
-        // A job of `callers::CALLERS` that calls the CI client runs on that workflow's runner,
-        // which its own rules hold; every other job that calls a reusable workflow is refused.
+        // A job of `callers::CALLERS` (or the template's) that calls the CI client runs on that
+        // workflow's runner, which its own rules hold; every other job that calls a reusable
+        // workflow is refused.
         let calls_client = callers::caller(file, name).is_some()
             && callers::job_uses(job).is_some_and(callers::names_set_desired);
         if !calls_client {
