@@ -78,27 +78,19 @@ check that `S/V/index.json` is served), not straight after the release is publis
 
 ## Calling it
 
-In the service's release workflow, after the job that publishes the package:
+A service calls it from a workflow of its own, once the release channel holds the release. The
+whole workflow, for a service that sets each release with its targets and its index, is the
+template of [A service's caller](service-caller.md), with the checklist of what must be set up
+before its first run. The workflow lint of this repository holds that template to the rules of
+`hello-desired.yml`, so it always pins the CI client's current revision. Its calling job:
 
-```yaml
-jobs:
-  set-desired:
-    needs: publish
-    permissions:
-      contents: read
-      id-token: write
-    uses: komira-ai/hostkeeper/.github/workflows/set-desired.yml@0123456789abcdef0123456789abcdef01234567 # v0.1.0
-    with:
-      service: my-service
-      version: ${{ needs.publish.outputs.version }}
-      release_index: ${{ needs.publish.outputs.release_index }}
-      release_index_digest: ${{ needs.publish.outputs.release_index_sha256 }}
-      hostkeeper_version: 0.1.0
-      hostkeeper_commit: 0123456789abcdef0123456789abcdef01234567
-      coordinator_url: https://coordinator.example
-      coordinator_ca: ${{ vars.HOSTKEEPER_COORDINATOR_CA }}
-      audience: my-service-release
-```
+- grants `contents: read` and `id-token: write`, and nothing else;
+- calls `komira-ai/hostkeeper/.github/workflows/set-desired.yml` pinned to a full commit, with
+  its release as the comment, and passes that release and commit as `hostkeeper_version` and
+  `hostkeeper_commit` ([Pinning hostkeeper](#pinning-hostkeeper));
+- passes `service`, `version`, `targets`, `release_index` and `release_index_digest`, the
+  coordinator's address, CA and audience, and `tailnet_tag`, from the job that read the release
+  and from repository variables.
 
 `release_index` is the text of the `index.json` the publish job wrote (design, section 5.5), and
 `release_index_digest` its SHA-256, taken from the file the publish job uploaded: the two must be
@@ -297,7 +289,7 @@ some other way; then the step is skipped and no action runs in the job.
 
 ```yaml
     with:
-      # ... the inputs of "Calling it" above, with coordinator_url naming the coordinator
+      # ... the inputs of the template (service-caller.md), with coordinator_url naming the coordinator
       # by the name it has on the tailnet and in its certificate.
       join_tailnet: true
       tailnet_client_id: ${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID }}
