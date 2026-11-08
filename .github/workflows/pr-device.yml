@@ -106,7 +106,7 @@ jobs:
           key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
           restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
       - name: Download gh (HTTPS only, redirects included)
-        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --location --output "$RUNNER_TEMP/gh.zip" "https://github.com/cli/cli/releases/download/v$GH_VERSION/gh_${GH_VERSION}_macOS_arm64.zip"
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 5 --retry-delay 5 --retry-max-time 300 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/gh.zip" "https://github.com/cli/cli/releases/download/v$GH_VERSION/gh_${GH_VERSION}_macOS_arm64.zip"
       - name: Check gh (pinned checksum)
         run: cargo xtask install-tool --download "$RUNNER_TEMP/gh.zip" --sha256 "$GH_SHA256" --out "$RUNNER_TEMP/gh-checked.zip"
       - name: Unpack gh where the tests find it
@@ -116,7 +116,7 @@ jobs:
       # workflow lint holds PREVIOUS_RELEASE_URL and PREVIOUS_RELEASE_SHA256 equal to it). The test
       # checks the file against the pin again and fetches nothing itself.
       - name: Download the previous release (HTTPS only, redirects included)
-        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --location --output "$RUNNER_TEMP/previous-release.tar.gz" "$PREVIOUS_RELEASE_URL"
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 5 --retry-delay 5 --retry-max-time 300 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/previous-release.tar.gz" "$PREVIOUS_RELEASE_URL"
       - name: Check the previous release (pinned checksum)
         run: cargo xtask install-tool --download "$RUNNER_TEMP/previous-release.tar.gz" --sha256 "$PREVIOUS_RELEASE_SHA256" --out target/previous-release/hostkeeper.tar.gz
       # device_mac_e2e and device_mac_selfupdate run after device_mac, in the one step that runs
@@ -181,7 +181,7 @@ jobs:
       # own gh has no `gh attestation`. tierstore_shaped.rs installs this file at that path and
       # checks its fixture's attestation with it, offline, against a test trust root.
       - name: Download gh (HTTPS only, redirects included)
-        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --location --output "$RUNNER_TEMP/gh.tar.gz" "https://github.com/cli/cli/releases/download/v$GH_VERSION/gh_${GH_VERSION}_linux_amd64.tar.gz"
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 5 --retry-delay 5 --retry-max-time 300 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/gh.tar.gz" "https://github.com/cli/cli/releases/download/v$GH_VERSION/gh_${GH_VERSION}_linux_amd64.tar.gz"
       - name: Install gh (pinned checksum)
         run: cargo xtask install-tool --download "$RUNNER_TEMP/gh.tar.gz" --sha256 "$GH_SHA256" --out target/privileged-tools/gh --extract tar.gz --member "gh_${GH_VERSION}_linux_amd64/bin/gh"
       # The released daemon self_update_across_releases.rs updates from: the binary tarball of the
@@ -189,7 +189,7 @@ jobs:
       # workflow lint holds PREVIOUS_RELEASE_URL and PREVIOUS_RELEASE_SHA256 equal to it). The test
       # checks the file against the pin again and fetches nothing itself.
       - name: Download the previous release (HTTPS only, redirects included)
-        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --location --output "$RUNNER_TEMP/previous-release.tar.gz" "$PREVIOUS_RELEASE_URL"
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 5 --retry-delay 5 --retry-max-time 300 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/previous-release.tar.gz" "$PREVIOUS_RELEASE_URL"
       - name: Check the previous release (pinned checksum)
         run: cargo xtask install-tool --download "$RUNNER_TEMP/previous-release.tar.gz" --sha256 "$PREVIOUS_RELEASE_SHA256" --out target/previous-release/hostkeeper.tar.gz
       # The packages crates/hostkeeper-privileged/tests/linux_packages.rs installs in a container
@@ -199,7 +199,7 @@ jobs:
       # images are pulled here, one step each (the workflow lint holds the steps to the list); the
       # test pulls nothing and its containers have no network.
       - name: Download nfpm (HTTPS only, redirects included)
-        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --location --output "$RUNNER_TEMP/nfpm.tar.gz" "https://github.com/goreleaser/nfpm/releases/download/v$NFPM_VERSION/nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz"
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 5 --retry-delay 5 --retry-max-time 300 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/nfpm.tar.gz" "https://github.com/goreleaser/nfpm/releases/download/v$NFPM_VERSION/nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz"
       - name: Install nfpm (pinned checksum)
         run: cargo xtask install-tool --download "$RUNNER_TEMP/nfpm.tar.gz" --sha256 "$NFPM_SHA256" --out target/privileged-tools/nfpm --extract tar.gz --member nfpm
       - name: Add the static target

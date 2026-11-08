@@ -35,7 +35,8 @@ pub(crate) const REJECTED_SUFFIX: &str = ".rejected";
 
 /// Downloads over HTTPS with `curl` through an [`Exec`]: no `.curlrc` (`-q`), HTTPS only, also
 /// on a redirect (GitHub's release downloads redirect once to their storage), TLS 1.2 or later,
-/// an HTTP error a failure, and the URL after `--`.
+/// an HTTP error a failure, a transient failure (a 504, also when curl reports it as a receive
+/// error) retried 5 times 5 seconds apart within 300 seconds, and the URL after `--`.
 pub(crate) struct CurlCli<E> {
     exec: E,
 }
@@ -56,6 +57,13 @@ fn curl_args(url: &str, file: &str) -> Vec<String> {
         "=https",
         "--tlsv1.2",
         "--fail",
+        "--retry",
+        "5",
+        "--retry-delay",
+        "5",
+        "--retry-max-time",
+        "300",
+        "--retry-all-errors",
         "--silent",
         "--show-error",
         "--location",
