@@ -326,7 +326,7 @@ fn a_gate_that_reports_or_gates_otherwise_or_reads_no_merged_run_is_refused() {
         &edited(
             GATE_JOB,
             "--lcov target/coverage/lcov.info --root",
-            "--lcov other.info --root",
+            "--lcov target/other/lcov.info --root",
         ),
         &[&gate],
     );
