@@ -1,18 +1,17 @@
 //! The pkg's one script, `postinstall` ([`postinstall_text`], the text
-//! `hostkeeper_launchd::postinstall::Postinstall::pkg` writes for the pkg's paths). It runs three
-//! commands, in order, and one that fails ends the script and fails the install with its message:
+//! `hostkeeper_launchd::postinstall::Postinstall::pkg` writes for the pkg's paths). It runs two
+//! commands, in order:
 //!
-//! 1. the installed binary's `self-update-seed` (`hostkeeper_daemon::seed`) with the daemon's
-//!    state directory. It gives the binary directory of hostkeeper's own update its first binary,
-//!    so that the daemon's launchd job, which starts `current` of that directory
-//!    (`hostkeeper_launchd::plist::DAEMON_PROGRAM`), starts the binary the pkg installed before
-//!    any self-update; it changes nothing when `current` starts a binary already. It is the
-//!    counterpart of the Linux unit's `ExecStartPre=` (`packaging/linux/hostkeeper.service`).
-//! 2. the installed binary's `mac-config`, which writes `/etc/hostkeeper/hostkeeper.toml` from
-//!    the managed preferences the MDM installed, keeps a config that is there, and fails with
-//!    neither.
-//! 3. `launchctl bootstrap` of the daemon's plist, after a `launchctl bootout` of any copy of the
-//!    job loaded before.
+//! 1. `launchctl bootout` of the daemon's job, which boots out any copy loaded before; its status
+//!    and standard error are not judged (it fails when none is loaded).
+//! 2. `launchctl bootstrap` of the daemon's plist, which loads the job (its `RunAtLoad` starts it);
+//!    its status is the script's, so a failure fails the install with its message.
+//!
+//! The script runs the installed binary at no point. The job's program is that binary
+//! (`hostkeeper_launchd::plist::INSTALLED_BINARY`), and `hostkeeper daemon` started from it seeds
+//! the binary directory of hostkeeper's own update and execs `current` of it, and writes the
+//! config from the managed preferences (`hostkeeper_daemon::packaged`,
+//! `hostkeeper_daemon::mac_config::at_start`), at each start.
 //!
 //! The installer runs it as root after the payload is in place, with the path of the pkg, the
 //! install location, the target volume and the root of the volume as its arguments, which it
@@ -40,8 +39,7 @@ pub(super) const SCRIPT_MODE: u32 = 0o755;
 /// The element `pkgbuild` writes in `PackageInfo` for a `postinstall` in the scripts directory.
 const POSTINSTALL_ELEMENT: &str = "<postinstall file=\"./postinstall\"";
 
-/// The text of `postinstall`: the seed, `mac-config` and the load of the daemon's job, for the
-/// pkg's paths.
+/// The text of `postinstall`: the boot-out and the load of the daemon's job, for the pkg's paths.
 pub(super) fn postinstall_text() -> String {
     Postinstall::pkg().script()
 }
@@ -58,7 +56,7 @@ pub(super) fn package_info_scripts_problems(text: &str, problems: &mut Vec<Strin
     if !text.contains(POSTINSTALL_ELEMENT) {
         problems.push(format!(
             "PackageInfo names no postinstall script ({POSTINSTALL_ELEMENT}/>): nothing would \
-             seed the binary, write the config or load the daemon's job"
+             load the daemon's job"
         ));
     }
 }

@@ -1149,7 +1149,7 @@ starts within
 <span data-cell="c-burst-window" data-source="crates/hostkeeper-steps/src/selfupdate.rs" data-item="START_LIMIT_WINDOW_SECS">300 s</span>.
 The timer job meant to run it is rendered but not installed.</li>
 <li>The installer is an unsigned distribution <code>.pkg</code> (<code>productbuild</code> around one component pkg) holding the binary, the daemon&rsquo;s plist, its log directory and
-newsyslog file, the pinned <code>gh</code> and the Sigstore trusted root. Its <code>postinstall</code> seeds the binary directory, writes <code>hostkeeper.toml</code> from the MDM&rsquo;s managed preferences (<code>hostkeeper mac-config</code>, which keeps a config already there) and loads the daemon&rsquo;s job.</li>
+newsyslog file, the pinned <code>gh</code> and the Sigstore trusted root. Its <code>postinstall</code> loads the daemon&rsquo;s job, whose program is the installed binary: each start seeds the binary directory, writes <code>hostkeeper.toml</code> from the MDM&rsquo;s managed preferences when it is absent, and execs <code>current</code>.</li>
 </ul>
 <p>The <code>macos-device</code> job of <a href="https://github.com/komira-ai/hostkeeper/blob/main/.github/workflows/privileged.yml">.github/workflows/privileged.yml</a>
 runs as root on a hosted Mac after each merge to <code>main</code>. It shows real <code>codesign</code> and quarantine

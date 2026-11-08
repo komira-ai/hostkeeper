@@ -1,4 +1,4 @@
-//! The committed unit of the daemon (`packaging/linux/hostkeeper.service`), as hostkeeper's own
+//! The committed package unit of the daemon (`packaging/linux/units/hostkeeper.service`), as hostkeeper's own
 //! package carries it, launched the way systemd launches its `ExecStart=`: through `current` of
 //! the binary directory that the self-update fills from the package's `bin/hostkeeper`.
 
@@ -8,9 +8,9 @@ use super::Platform;
 use super::tests::{BINARY, unpacked_tree};
 use crate::release::fakes::scratch;
 
-/// The daemon's one unit, as committed (the release workflow passes it to `release package
-/// --unit`, and the deb, the rpm and the overlay install it).
-const UNIT: &str = include_str!("../../../../../packaging/linux/hostkeeper.service");
+/// The daemon's package unit, as committed (the release workflow passes it to `release package
+/// --unit`; the deb, the rpm and the overlay install the bootstrap unit instead).
+const UNIT: &str = include_str!("../../../../../packaging/linux/units/hostkeeper.service");
 
 /// What a launcher starts for the `ExecStart=` of `unit` on a host whose state directory is
 /// `state`: the program, with the unit's own `--state-dir` rebased onto `state` and every link on

@@ -1,6 +1,6 @@
-//! The daemon's unit (`packaging/linux/hostkeeper.service`, which hostkeeper's own package
-//! carries), started for real: a runnable program (`tests/bin/exec_fixture.rs`) is packaged as
-//! `bin/hostkeeper` with the committed unit, as `cargo xtask release package` builds a package;
+//! The daemon's package unit (`packaging/linux/units/hostkeeper.service`, which hostkeeper's own
+//! package carries), started for real: a runnable program (`tests/bin/exec_fixture.rs`) is
+//! packaged as `bin/hostkeeper` with the committed package unit, as `cargo xtask release package` builds a package;
 //! the daemon's own unpacker (design 5.5, `hostkeeper-unpack`) installs it into a scratch packages
 //! directory; the self-update's follow-on stages the package's binary into the binary directory
 //! under a scratch state directory and switches `current` to it; and the `ExecStart=` of the
@@ -22,9 +22,9 @@ use testdir::TestDir;
 /// The packaged program: it prints how it was started.
 const FIXTURE: &str = env!("CARGO_BIN_EXE_xtask-exec-fixture");
 
-/// The daemon's one unit, as committed: the deb, the rpm, the overlay and hostkeeper's own
-/// package carry it.
-const UNIT: &str = "../../packaging/linux/hostkeeper.service";
+/// The daemon's package unit, as committed: hostkeeper's own package carries it (the deb, the
+/// rpm and the overlay carry the bootstrap unit, `packaging/linux/hostkeeper.service`).
+const PACKAGE_UNIT: &str = "../../packaging/linux/units/hostkeeper.service";
 
 /// The Sigstore trusted root the release packages, as committed.
 const TRUSTED_ROOT: &str = "../../packaging/sigstore/trusted_root.json";
@@ -76,7 +76,7 @@ fn installed(dir: &Path) -> (PathBuf, String) {
     xtask::test_support::linux_package(
         &version,
         Path::new(FIXTURE),
-        &repo_file(UNIT),
+        &repo_file(PACKAGE_UNIT),
         &repo_file(TRUSTED_ROOT),
         &out,
         MTIME,
@@ -146,7 +146,7 @@ fn the_committed_unit_starts_the_packaged_program_through_the_binary_directory()
         .expect("the unpacked unit");
     assert_eq!(
         unit,
-        std::fs::read_to_string(repo_file(UNIT)).expect("the committed unit")
+        std::fs::read_to_string(repo_file(PACKAGE_UNIT)).expect("the committed unit")
     );
     let state = dir.join("state");
     let (program, args) = exec_start(&unit, &state).expect("the unit's ExecStart");
