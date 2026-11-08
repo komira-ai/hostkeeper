@@ -25,10 +25,10 @@ It is made of two programs:
   until they are removed ([docs/operations/coordinator-state.md](docs/operations/coordinator-state.md),
   [design](docs/design/coordinator-storage.md)). Operators use it through the operator API,
   `hkctl`, the generated command line ([docs/cli.md](docs/cli.md)), and the web UI (`ui/`). A new
-  host asks the coordinator to enroll it, and an operator approves the request. Macs are to be managed through a self-hosted MDM
-  server; of that part the pure core and the host-step layer of its install kit, and the policy
-  gate linked into the coordinator (without the pkg install yet), are built
-  ([macOS](docs/macos.md), [design](docs/design/hostkeeper-mdm.md)).
+  host asks the coordinator to enroll it, and an operator approves the request. Macs are to be
+  managed through a self-hosted MDM server; of that part the pure core and the host-step layer of
+  its install kit, and the policy gate linked into the coordinator (without the pkg install yet,
+  and on the file store only for now), are built ([macOS](docs/macos.md), [design](docs/design/hostkeeper-mdm.md)).
 
 Every API is a protobuf service, and the command line is generated from those definitions.
 
