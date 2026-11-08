@@ -376,3 +376,67 @@ fn a_second_coordinator_on_the_database_is_refused() {
     );
     third.stop();
 }
+
+/// How many times the tests below end a store and take its lock at once.
+const CYCLES: u32 = 200;
+
+/// Whether `client` takes the coordinator's lock at once, without waiting; it holds none of it
+/// afterwards.
+fn takes_at_once(client: &mut postgres::Client) -> bool {
+    let taken = client
+        .query_one("SELECT pg_try_advisory_lock($1)", &[&LOCK_KEY])
+        .expect("a try")
+        .get(0);
+    client
+        .batch_execute("SELECT pg_advisory_unlock_all()")
+        .expect("the lock is freed");
+    taken
+}
+
+/// Proves: once [`Postgres::stop`](crate::store::postgres::Postgres::stop) returns, the store's
+/// advisory lock is free on the server, every time: another session takes it at once, in each
+/// of many cycles of open, stop and try.
+///
+/// Catches: a stop that closes the store's session and returns before the server has ended it
+/// and released the lock with it.
+#[test]
+fn the_lock_is_free_at_once_after_every_stop() {
+    let db = TestDatabase::new();
+    let mut client = db.client();
+    let held: Vec<u32> = (0..CYCLES)
+        .filter(|_| {
+            let (store, _) = db.open("cycling").expect("the store opens");
+            store.stop();
+            !takes_at_once(&mut client)
+        })
+        .collect();
+    assert_eq!(
+        held,
+        Vec::<u32>::new(),
+        "the cycles that found the lock held"
+    );
+}
+
+/// Proves: once a store is dropped, as a coordinator drops it when it ends, its advisory lock is
+/// free on the server, every time: a successor's session takes it at once, in each of many cycles
+/// of open, drop and try.
+///
+/// Catches: a successor refused `another coordinator holds the lock of this database` by the
+/// session of a coordinator that already ended.
+#[test]
+fn the_lock_is_free_at_once_after_every_drop() {
+    let db = TestDatabase::new();
+    let mut client = db.client();
+    let held: Vec<u32> = (0..CYCLES)
+        .filter(|_| {
+            let (store, _) = db.open("cycling").expect("the store opens");
+            drop(store);
+            !takes_at_once(&mut client)
+        })
+        .collect();
+    assert_eq!(
+        held,
+        Vec::<u32>::new(),
+        "the cycles that found the lock held"
+    );
+}

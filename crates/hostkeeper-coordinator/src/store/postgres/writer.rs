@@ -233,6 +233,21 @@ pub(crate) fn try_lock(session: &mut Session) -> Result<bool, postgres::Error> {
         .get(0))
 }
 
+impl Drop for Writer {
+    /// Lets go of the lock before the session closes, so the lock is free once the writer is
+    /// gone. Closing a session only sends the server its end and returns; the server ends the
+    /// session, and frees the lock with it, a moment later, when a successor may already be
+    /// trying the lock. The server answers the unlock once the lock is free. A lost session was
+    /// dropped when it was lost, so this waits on none that is known to be gone.
+    fn drop(&mut self) {
+        if let Some(session) = self.session.as_mut() {
+            // A session that cannot run it is broken, and the server frees the lock as it
+            // ends it.
+            let _ = session.batch("SELECT pg_advisory_unlock_all()");
+        }
+    }
+}
+
 impl Writer {
     /// A writer over `session`, which holds the lock, at `epoch` with `commits` transactions
     /// committed, reporting its state to `link`.
