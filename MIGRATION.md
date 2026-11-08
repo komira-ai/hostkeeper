@@ -233,7 +233,8 @@ named, and every change is audited to a file.
   with the update plans, `paused`, `advance_wait`, `stage_failed`, `stage_wait`, `below_min_up`
   and `rollout_elsewhere`; `canary_wait` is no longer produced, the canary being the plan's first
   stage) and `Skip` (`no_desired`, `not_a_member`, `up_to_date`, `failed_here`, `deferred`,
-  `unsupported`, `no_digest`, `no_package_for_platform`), and a decision is `Update`, `Install`, `Uninstall`, `Gate` or
+  `unsupported`, `no_digest`, `no_package_for_platform`, and, for a version set with targets,
+  `no_target`, `no_build_for_host` and `installer_dropped`), and a decision is `Update`, `Install`, `Uninstall`, `Gate` or
   `Skip`. `waiting_for_role`, `waiting_for_service` and `min_up` (`below_min_up` says it) are no
   longer produced, nor are `no_definition` (a service the coordinator does not manage is
   `not_a_member`) and `absent` (see the assignment below).

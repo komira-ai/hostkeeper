@@ -189,6 +189,7 @@ async fn index_coordinator(name: &str) -> (Arc<Coordinator>, Scratch, String) {
 /// A heartbeat of an `order-v1` agent on `platform` that runs kbf at `running`.
 fn kbf_beat(platform: agent::Platform, running: &str) -> agent::HeartbeatRequest {
     agent::HeartbeatRequest {
+        installers: Vec::new(),
         platform: platform as i32,
         agent: Some(agent::AgentInfo {
             name: "hostkeeper-daemon".to_owned(),

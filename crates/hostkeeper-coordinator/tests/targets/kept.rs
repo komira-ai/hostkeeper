@@ -878,8 +878,10 @@ async fn hold_of_d1(rig: &Rig) -> Value {
 /// Proves: a coordinator that reads only `desired.json` (the previous one, which has no releases
 /// file: here the same state file with `desired.json.releases` left behind) sees a version set
 /// with targets as a version with neither package digest nor index: a host that does not run the
-/// service is held `no_digest` and told nothing, as the coordinator with the releases is; only
-/// the coordinator that reads the releases file answers `GetRelease`. A version set with a
+/// service is held `no_digest` and told nothing. The coordinator with the releases picks the host
+/// from them (section 3.3): its daemon, before `target-v1`, can install only an archive, which
+/// these targets lack, so it is held `no_build_for_host` and told nothing either. Only the
+/// coordinator that reads the releases file answers `GetRelease`. A version set with a
 /// package digest on the previous coordinator's state is ordered to the same host.
 /// Catches: a version set with targets that an older coordinator would order some package, or
 /// that the new one holds differently.
@@ -896,7 +898,7 @@ async fn the_previous_coordinator_holds_a_version_set_with_targets_as_no_digest(
     assert!(!old.dir.path().join("desired.json.releases").exists());
     old.restart();
 
-    assert_eq!(hold_of_d1(&rig).await, json!("no_digest"));
+    assert_eq!(hold_of_d1(&rig).await, json!("no_build_for_host"));
     assert_eq!(hold_of_d1(&old).await, json!("no_digest"));
     assert_eq!(release(&rig, "web", "2.0").await.targets, targets("web"));
     assert_eq!(

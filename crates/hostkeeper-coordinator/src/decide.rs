@@ -80,7 +80,8 @@
 //! version marked bad, a halt); a [`Skip`] is a question that does not apply (no desired state,
 //! not a member of the service, a host at the desired version, one that failed it, one that
 //! declined it, an install the host's agent cannot take or that has no package digest, a release
-//! index that lists no package for the host's platform). [`Why`]
+//! index that lists no package for the host's platform, a release set with targets that picks the
+//! host no entry, [`crate::picks`]). [`Why`]
 //! is either, spelled in snake case for the status. [`decide_in`] drops the reason.
 
 use std::collections::BTreeMap;
@@ -199,6 +200,18 @@ pub enum Skip {
     /// is not ordered the version, an update or an install. It is no failed update: it counts
     /// as none, halts nothing and rolls nothing back.
     NoPackageForPlatform,
+    /// The desired version was set with targets and none for the host's platform
+    /// ([`crate::picks`]): the host is not ordered the version, as for
+    /// [`Self::NoPackageForPlatform`].
+    NoTarget,
+    /// The desired version's list for the host's platform has no entry whose installer the host's
+    /// daemon lists, and the host does not run the service ([`crate::picks`]): no build for this
+    /// host, which is not ordered, not missing and not failed.
+    NoBuildForHost,
+    /// The host runs the service with an installer the desired version's list has no entry of,
+    /// or its daemon no longer lists ([`crate::picks`]): it is not ordered the version, since a
+    /// host changes a service's installer only by an uninstall.
+    InstallerDropped,
 }
 
 /// Why a host is told nothing, as the status says it in `hold`: a gate or a skip, each in its own
@@ -334,7 +347,10 @@ fn order_or_hold(
     // one: it has a word of the service, or it announced that it lists every service it runs,
     // which only a node says.
     let platform = fleet.platform_of(service, id);
-    let package = platform.and_then(|platform| desired.package_for(platform));
+    // Of a version set with targets, the entry picked for the host ([`crate::picks`]).
+    let package = crate::picks::package_for(fleet, service, &desired.version, id)
+        .unwrap_or_else(|| platform.and_then(|platform| desired.package_for(platform)));
+    let unpicked = crate::picks::skip(fleet, service, &desired.version, id);
     let unlisted = desired.release_index.is_some() && package.is_none();
     let order = if installed {
         Some(Decision::Update {
@@ -390,6 +406,9 @@ fn order_or_hold(
             (!installed && !fleet.announced(id, INSTALL_FEATURE)) || installed_not_run,
             Decision::Skip(Skip::Unsupported),
         ),
+        unpicked.map_or((false, Decision::Skip(Skip::NoDigest)), |why| {
+            (true, Decision::Skip(why))
+        }),
         (unlisted, Decision::Skip(Skip::NoPackageForPlatform)),
         (order.is_none(), Decision::Skip(Skip::NoDigest)),
         (failed_here, Decision::Skip(Skip::FailedHere)),

@@ -125,6 +125,7 @@ fn counted_at(rig: &Rig, service: &str, host: &str) -> Option<String> {
 fn install(service: &str, to: &str, order_try: u64) -> Order {
     let digest = Digest::parse(&digest(7)).expect("a digest");
     Order::Install {
+        target: None,
         service: service.to_owned(),
         version: version(to),
         order_id: install_order_id(&digest),

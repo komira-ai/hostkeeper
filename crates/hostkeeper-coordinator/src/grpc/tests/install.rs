@@ -16,6 +16,7 @@ const INSTALLER: [&str; 2] = ["heartbeat-v2", "install-v1"];
 /// version and healthy.
 fn installer_beat(services: &[(&str, &str)]) -> proto::HeartbeatRequest {
     proto::HeartbeatRequest {
+        installers: Vec::new(),
         platform: proto::Platform::LinuxArm64 as i32,
         agent: Some(proto::AgentInfo {
             name: "hostkeeper-daemon".to_owned(),
@@ -61,6 +62,7 @@ async fn the_grpc_heartbeat_answers_the_gates_install_and_uninstall() {
     assert_eq!(
         order.verb,
         Some(proto::order::Verb::Install(proto::Install {
+            target: None,
             service: "other".to_owned(),
             version: "3.0".to_owned(),
             package_digest: "1".repeat(64),

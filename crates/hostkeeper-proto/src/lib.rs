@@ -14,8 +14,9 @@
 //!   the log of every change; `Alerts`, the conditions that need a person; `Rollouts`, the
 //!   update plans; and `Mdm`, the devices the MDM policy gate knows.
 //! - `hostkeeper.release.v1`: no service; the messages of a release, a list of artifacts per
-//!   platform, one per installer, each with its manifest, which the operator and agent APIs are
-//!   to carry (docs/design/packages.md section 3.1).
+//!   platform, one per installer, each with its manifest, which the operator API's
+//!   `SetDesired` and `GetRelease` carry, and an agent's order the one entry picked for its host
+//!   (docs/design/packages.md sections 3.1 and 3.3).
 //! - `hostkeeper.local.v1`: `Admin`, what root on the host may ask of its daemon with the
 //!   coordinator down (status, abort, clear a corrupt step record).
 //!
