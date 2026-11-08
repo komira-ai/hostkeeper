@@ -180,7 +180,7 @@ hostkeeper's own release planner holds releases from a commit whose privileged r
 
 ### 4.6 The boot image and installers
 
-Linux: a network-installed Ubuntu 24.04 system ([network-install.md](network-install.md)) carries the daemon, its unit and `/etc/hostkeeper/hostkeeper.toml`; a host built from it needs nothing else to enroll. A deb and an rpm carry the daemon and unit for hosts not built from the image, and `hostkeeper-pxe` with no unit of its own; whoever installs them places the config. macOS: a signed pkg whose postinstall writes `hostkeeper.toml` from the config profile the MDM installed first (section 5.9, [hostkeeper-mdm.md](hostkeeper-mdm.md) section 4). Both publish into the operator's shared package repositories. Network boot is served by the optional `hostkeeper-pxe` (network-install.md section 3). Designed.
+Linux: a network-installed Ubuntu 24.04 system ([network-install.md](network-install.md)) carries the daemon, its unit and `/etc/hostkeeper/hostkeeper.toml`; a host built from it needs nothing else to enroll. A deb, an rpm and an Arch Linux package carry the daemon and unit for hosts not built from the image, and `hostkeeper-pxe` with no unit of its own, both the static build of [packages.md](packages.md) section 5.4 (`packaging/linux/nfpm.yaml`, built and checked by `.github/workflows/artifacts.yml`); whoever installs them places the config. macOS: a signed pkg whose postinstall writes `hostkeeper.toml` from the config profile the MDM installed first (section 5.9, [hostkeeper-mdm.md](hostkeeper-mdm.md) section 4). Both publish into the operator's shared package repositories. Network boot is served by the optional `hostkeeper-pxe` (network-install.md section 3). Designed.
 
 ### 4.7 The package
 
