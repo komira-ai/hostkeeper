@@ -64,7 +64,7 @@ fn edit_job(text: &str, job: &str, mut edit: impl FnMut(&str) -> String) -> Stri
 }
 
 /// `text` with the `from` of the job `job` replaced by `to` (every occurrence, at least one).
-fn replace_in_job(text: &str, job: &str, from: &str, to: &str) -> String {
+pub fn replace_in_job(text: &str, job: &str, from: &str, to: &str) -> String {
     edit_job(text, job, |section| {
         assert!(section.contains(from), "{from:?} is not in job {job}");
         section.replace(from, to)

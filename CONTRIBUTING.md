@@ -208,7 +208,7 @@ The files of the job `privileged` start with `#![cfg(feature = "privileged")]`, 
 `#![cfg(all(target_os = "linux", target_arch = "x86_64", feature = "privileged"))]` and
 `net_install_arm64.rs` with `#![cfg(all(target_os = "linux", feature = "privileged",
 not(target_arch = "aarch64")))]`. The feature is off by default,
-so `cargo test --workspace` and CI's `test` job compile none of them, and they count toward no
+so `cargo test --workspace` and CI's test shards compile none of them, and they count toward no
 coverage gate; the crate's library (the workload fixture `hostkeeper-fixture-hook`, the host
 check, the rig) is tested without root in the pull-request set like any crate. A privileged test
 refuses to start unless it runs as root on a host whose service manager is systemd.
