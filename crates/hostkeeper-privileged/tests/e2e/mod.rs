@@ -17,7 +17,7 @@
 //! - [`scenario`]: the states the tests start from, each built the same way by every test.
 //!
 //! `tests/tierstore_rig.rs` runs the parts that need no root (the archive shape, the channel's
-//! log) in the pull-request set.
+//! log, the held ports) in the pull-request set.
 
 #![allow(dead_code, reason = "each test file uses part of the end-to-end rig")]
 
