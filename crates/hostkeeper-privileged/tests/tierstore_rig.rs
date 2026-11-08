@@ -1,18 +1,21 @@
 //! The parts of the end-to-end rig of `tests/tierstore_shaped.rs` that need no root, run in the
 //! pull-request set so that a privileged run after the merge is not the first place a drift
 //! shows: the fixture package has the archive shape the production unpacker accepts and a
-//! manifest the production loader loads, and the release channel logs every request and refuses
-//! connections once stopped (the witness the force test's "no fetch" depends on).
+//! manifest the production loader loads, the release channel logs every request and refuses
+//! connections once stopped (the witness the force test's "no fetch" depends on), and a port the
+//! rig holds for the fixture's instances is refused to other sockets and served by the fixture.
 
 mod e2e;
 
 use std::fs;
-use std::io::Read;
+use std::io::{self, Read};
+use std::net::{Ipv4Addr, SocketAddr};
 use std::path::Path;
+use std::process::{Child, Command};
 
 use e2e::channel::{ReleaseChannel, archive_path};
 use e2e::package::{FixtureVersion, PackageBuilder};
-use e2e::{FIXTURE_BINARY, SERVICE, instance};
+use e2e::{FIXTURE_BINARY, HeldPort, SERVICE, instance, served_version, wait_for};
 use hostkeeper_config::daemon::Sha256Hex;
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_config::platform::Platform;
@@ -136,6 +139,80 @@ fn fixture_package_builds_the_archive_shape_the_unpacker_accepts() {
     let refused = unpacked(&linked.path, "1.0.1", &linked.sha256, &packages)
         .expect_err("a link entry is refused");
     assert_eq!(refused.outcome().2, "bad_archive", "{refused}");
+}
+
+/// A [`HeldPort`] is the scenario's port of a fixture instance, held for the whole test: while it
+/// is held, a socket that does not share the address (no `SO_REUSEADDR`) is refused the port with
+/// `AddrInUse`, so the port is no one else's, and nothing answers on it; the fixture's own
+/// `serve`, unpacked from its package, takes the port and serves its version, and once stopped
+/// gives it back and takes it again when started anew, as a unit of it does at a cutover and a
+/// rollback. Fails if the scenario's ports are only chosen and let go (a listener the coordinator
+/// binds to port 0 may then be given one, and the instance on it fails to start with
+/// `Address already in use`), or if holding a port keeps the fixture from serving on it.
+#[test]
+fn a_held_port_is_refused_to_other_sockets_and_served_by_the_fixture() {
+    let bench = Bench::new("held-port");
+    let packages = bench.path().join("packages");
+    let records = bench.path().join("hooks");
+    let built = bench.path().join("built");
+    for dir in [&packages, &records, &built] {
+        fs::create_dir_all(dir).expect("a directory of the bench");
+    }
+    let held = HeldPort::new();
+    let port = held.port();
+    let address = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+
+    let unshared = socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::STREAM, None)
+        .expect("a TCP socket");
+    let refused = unshared
+        .bind(&address.into())
+        .expect_err("a held port is refused to a socket that does not share it");
+    assert_eq!(refused.kind(), io::ErrorKind::AddrInUse, "{refused}");
+    assert_eq!(served_version(port), None, "nothing answers on a held port");
+
+    let other = HeldPort::new();
+    let fixture = FixtureVersion {
+        version: "1.0.0",
+        ports: [port, other.port()],
+        fail_verify: false,
+    };
+    let package =
+        PackageBuilder::new(&packages, &records, Path::new(FIXTURE_BINARY)).build(&fixture, &built);
+    unpacked(&package.path, "1.0.0", &package.sha256, &packages)
+        .expect("the production unpacker accepts the fixture package");
+    let program = packages.join(SERVICE).join("1.0.0/bin/tierstore-like");
+
+    for start in ["first", "second"] {
+        let serving = Serving(
+            Command::new(&program)
+                .arg("serve")
+                .arg(port.to_string())
+                .spawn()
+                .expect("the fixture's serve starts"),
+        );
+        wait_for(
+            &format!("the {start} serve on the held port answers 1.0.0"),
+            40,
+            || served_version(port).as_deref() == Some("1.0.0"),
+        );
+        drop(serving);
+        assert_eq!(
+            served_version(port),
+            None,
+            "a stopped serve leaves the held port answering nothing"
+        );
+    }
+}
+
+/// A `serve` of the fixture, killed and reaped when dropped, so its listener is closed when the
+/// drop returns.
+struct Serving(Child);
+
+impl Drop for Serving {
+    fn drop(&mut self) {
+        drop(self.0.kill());
+        drop(self.0.wait());
+    }
 }
 
 /// The release channel logs every request it answers, a missing path too, serves what was
