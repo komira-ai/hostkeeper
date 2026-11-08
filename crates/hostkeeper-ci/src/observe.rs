@@ -1,29 +1,27 @@
-//! What one read of the convergence says, from the canonical JSON `releases converge` prints.
+//! What one read of the convergence says, from the reply of `Converge`.
 //!
-//! proto3 JSON leaves out a field that has its default: an absent count is 0, an absent state
-//! is unspecified, an absent desired version is none.
+//! An absent convergence is an empty one: no desired version, state unspecified, no roles.
 
-use serde_json::Value;
+use hostkeeper_proto::hostkeeper::operator::v1::{ConvergeResponse, ConvergenceState, RoleCounts};
 
 /// The hosts of one role.
 #[derive(Debug, PartialEq, Eq)]
 struct Role {
     name: String,
-    at_desired: u64,
-    updating: u64,
-    failed: u64,
-    down: u64,
+    at_desired: u32,
+    updating: u32,
+    failed: u32,
+    down: u32,
 }
 
 impl Role {
-    fn of(json: &Value) -> Role {
-        let count = |key: &str| json[key].as_u64().unwrap_or(0);
+    fn of(counts: &RoleCounts) -> Role {
         Role {
-            name: json["role"].as_str().unwrap_or("").to_owned(),
-            at_desired: count("atDesired"),
-            updating: count("updating"),
-            failed: count("failed"),
-            down: count("down"),
+            name: counts.role.clone(),
+            at_desired: counts.at_desired,
+            updating: counts.updating,
+            failed: counts.failed,
+            down: counts.down,
         }
     }
 
@@ -46,20 +44,13 @@ pub(crate) struct Convergence {
 }
 
 impl Convergence {
-    /// The convergence in the reply of `releases converge`.
-    pub(crate) fn of(reply: &Value) -> Convergence {
-        let json = &reply["convergence"];
+    /// The convergence in the reply of `Converge`.
+    pub(crate) fn of(reply: &ConvergeResponse) -> Convergence {
+        let convergence = reply.convergence.clone().unwrap_or_default();
         Convergence {
-            desired: json["desired"].as_str().map(str::to_owned),
-            state: json["state"]
-                .as_str()
-                .unwrap_or("CONVERGENCE_STATE_UNSPECIFIED")
-                .trim_start_matches("CONVERGENCE_STATE_")
-                .to_ascii_lowercase(),
-            roles: json["roles"]
-                .as_array()
-                .map(|roles| roles.iter().map(Role::of).collect())
-                .unwrap_or_default(),
+            desired: convergence.desired,
+            state: state_name(convergence.state),
+            roles: convergence.roles.iter().map(Role::of).collect(),
         }
     }
 
@@ -76,4 +67,18 @@ impl Convergence {
         }
         line
     }
+}
+
+/// The name of the state with number `number` in lower case, without its prefix; `unknown_<n>`
+/// for a number no state has (a coordinator newer than this client).
+fn state_name(number: i32) -> String {
+    ConvergenceState::try_from(number).map_or_else(
+        |_| format!("unknown_{number}"),
+        |state| {
+            state
+                .as_str_name()
+                .trim_start_matches("CONVERGENCE_STATE_")
+                .to_ascii_lowercase()
+        },
+    )
 }

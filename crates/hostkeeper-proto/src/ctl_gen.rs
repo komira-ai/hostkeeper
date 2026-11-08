@@ -1,4 +1,4 @@
-//! The generator of `hostkeeper ctl`'s command table: from a descriptor pool, the Rust source of
+//! The generator of the command table: from a descriptor pool, the Rust source of
 //! `COMMANDS` (one entry per RPC), `HAND_WRITTEN_LOCAL` and `RESERVED_FLAGS`, which
 //! `hostkeeper_proto::ctl` includes from `OUT_DIR`.
 //!
@@ -6,11 +6,11 @@
 //! fixture protos, so the generator is measured like any other code. It writes data, not code
 //! per RPC: a new RPC in a proto becomes a new entry with no hand edit.
 //!
-//! What it refuses, so that the build fails rather than `ctl` misbehaving:
+//! What it refuses, so that the build fails rather than a generated command line misbehaving:
 //!
 //! - `(hostkeeper.secret)` on a field that is not `string` or `bytes`, anywhere a request or a
 //!   response reaches;
-//! - a streaming RPC (`ctl` makes unary calls only);
+//! - a streaming RPC (the generated command lines make unary calls only);
 //! - a request or response that reaches a `google.protobuf.*` message, whose canonical JSON has
 //!   special forms the output does not write;
 //! - two RPCs with one command path, two inputs of one RPC with one flag, or an input whose flag
@@ -25,7 +25,7 @@ use prost_reflect::{
     MethodDescriptor, ServiceDescriptor, Value,
 };
 
-/// The flags `hostkeeper ctl` defines itself, which no request field may take.
+/// The flags the generated command lines define themselves, which no request field may take.
 pub const RESERVED_FLAGS: &[&str] = &[
     "ca-file",
     "client-cert-file",
@@ -61,7 +61,7 @@ pub enum GenError {
     WellKnownType { method: String, message: String },
     /// Two RPCs whose commands are the same words.
     CommandClash { command: String },
-    /// Two inputs of an RPC with one flag, or one flag that `ctl` keeps for itself.
+    /// Two inputs of an RPC with one flag, or one flag that the command lines keep for themselves.
     FlagClash { method: String, flag: String },
     /// An enum value whose flag spelling is empty or another value's.
     EnumSpelling { value: String },
@@ -75,11 +75,14 @@ impl fmt::Display for GenError {
                 "{field}: (hostkeeper.secret) is allowed only on a string or bytes field"
             ),
             GenError::Streaming { method } => {
-                write!(f, "{method}: ctl makes unary calls only; this RPC streams")
+                write!(
+                    f,
+                    "{method}: the command table holds unary calls only; this RPC streams"
+                )
             }
             GenError::WellKnownType { method, message } => write!(
                 f,
-                "{method}: reaches {message}, a well-known type ctl does not write"
+                "{method}: reaches {message}, a well-known type the command table does not write"
             ),
             GenError::CommandClash { command } => {
                 write!(f, "two RPCs make the command `{command}`")
@@ -87,7 +90,7 @@ impl fmt::Display for GenError {
             GenError::FlagClash { method, flag } => {
                 write!(
                     f,
-                    "{method}: the flag --{flag} is taken twice or kept by ctl"
+                    "{method}: the flag --{flag} is taken twice or kept by the command lines"
                 )
             }
             GenError::EnumSpelling { value } => {
@@ -407,7 +410,7 @@ pub fn generate(pool: &DescriptorPool) -> Result<String, GenError> {
     services.sort_by_key(|s| (kebab(s.name()), s.full_name().to_owned()));
 
     let mut out = String::from(
-        "/// Every RPC of hostkeeper's non-local services, as `hostkeeper ctl` calls it.\n\
+        "/// Every RPC of hostkeeper's non-local services, as the generated command lines call it.\n\
          pub static COMMANDS: &[Command] = &[\n",
     );
     let mut local = Vec::new();
@@ -428,7 +431,7 @@ pub fn generate(pool: &DescriptorPool) -> Result<String, GenError> {
     out.push_str("];\n\n");
     out.push_str(
         "/// The services of a host's admin socket (packages `hostkeeper.local.v<n>`): their verbs \
-         stay hand-written, and `ctl` has no command for them.\n\
+         stay hand-written, and the command table has no entry for them.\n\
          pub static HAND_WRITTEN_LOCAL: &[&str] = &[",
     );
     for name in &local {
@@ -437,7 +440,7 @@ pub fn generate(pool: &DescriptorPool) -> Result<String, GenError> {
     }
     out.push_str("];\n\n");
     out.push_str(
-        "/// The flags `hostkeeper ctl` defines itself; no request field takes one of them.\n\
+        "/// The flags the generated command lines define themselves; no request field takes one of them.\n\
          pub static RESERVED_FLAGS: &[&str] = &[",
     );
     for flag in RESERVED_FLAGS {

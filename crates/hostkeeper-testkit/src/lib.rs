@@ -13,7 +13,13 @@
 //!   from the one variable CI's job sets: the one read of the environment in the tests, and none
 //!   in any product code.
 //!
-//! No moved test opens a port, so there is no port helper.
+//! - [`operator`]: the operator's side of the coordinator's API, the generated tonic clients
+//!   over gRPC with TLS and the operator's bearer token, called from a test that is not async,
+//!   and the canonical JSON of a reply.
+//!
+//! No helper opens a port, so there is no port helper.
+
+pub mod operator;
 
 use std::io;
 use std::path::{Path, PathBuf};

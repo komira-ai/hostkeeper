@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "The test helpers the crates of this workspace share: a scratch directory a test owns, a named pipe, and the exit code and last line of each fixture hook behaviour."
+description = "The test helpers the crates of this workspace share: a scratch directory a test owns, a named pipe, the exit code and last line of each fixture hook behaviour, and the operator's gRPC client of the coordinator's API with the canonical JSON of its replies."
 
 # A dev-dependency only: no crate of the workspace depends on it outside its tests
 # (crates/xtask/tests/layering keeps it so). It depends on no crate of the workspace.
@@ -14,6 +14,25 @@ description = "The test helpers the crates of this workspace share: a scratch di
 [dependencies]
 # `fifo`: mkfifo, on Linux and on macOS alike.
 nix.workspace = true
+# `operator`: the channel the generated clients of `hostkeeper-proto` (the test's own dependency)
+# call the coordinator over, gRPC with TLS and the operator's bearer token, on a runtime of its
+# own; and the canonical JSON of a reply, read against the descriptor set the test passes.
+prost.workspace = true
+prost-reflect = { workspace = true, features = ["serde"] }
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt"] }
+tonic = { workspace = true, features = ["channel", "tls-ring"] }
+
+[dev-dependencies]
+# A loopback gRPC server with TLS (127.0.0.1, port 0) and its certificates made at run time, for
+# the operator client's tests; a descriptor set built in the test, for the canonical JSON's.
+bytes.workspace = true
+prost-types.workspace = true
+rcgen.workspace = true
+tokio = { workspace = true, features = ["net", "rt-multi-thread"] }
+tokio-stream = { workspace = true, features = ["net"] }
+tonic = { workspace = true, features = ["server", "tls-ring"] }
 
 [lints]
 workspace = true

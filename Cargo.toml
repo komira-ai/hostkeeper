@@ -20,7 +20,7 @@ base64 = "0.23.1"
 # data layer and pages (`ui/`) against a fake gateway; dev-dependency only. Pinned exactly: its
 # embedding API changes between minor versions.
 boa_engine = "=0.22.0"
-# The byte buffers of a gRPC call's raw request and response (hostkeeper-ctl).
+# The byte buffers of HTTP bodies and of gRPC messages.
 bytes = "1.12.1"
 clap = { version = "4.6.7", features = ["derive"] }
 # gzip for the tarballs `cargo xtask install-tool` unpacks; the pure-Rust backend.
@@ -73,14 +73,15 @@ postgres = { version = "0.19.14", features = ["with-serde_json-1"] }
 prost = "0.14.4"
 prost-types = "0.14.4"
 # Reads custom options (`(hostkeeper.secret)`) off compiled descriptors in hostkeeper-proto's tests;
-# hostkeeper-ui-tests adds `serde` to read a message's canonical JSON against its descriptor.
+# hostkeeper-ui-tests and hostkeeper-testkit add `serde` to read a message's canonical JSON against
+# its descriptor.
 prost-reflect = "0.16.5"
 # Compiles .proto files in pure Rust, with no protoc: hostkeeper-proto's and
 # hostkeeper-enrollment's build scripts, and tests.
 protox = "0.10.0"
 # Certificates: the CA module of hostkeeper-enrollment signs with it (members add `x509-parser`,
-# which reads a public key back for signing), and the TLS tests of hostkeeper-ctl,
-# hostkeeper-enroll and the coordinator crates make their test certificates with it at run time,
+# which reads a public key back for signing), and the TLS tests of hostkeeper-ci,
+# hostkeeper-enroll, hostkeeper-testkit and the coordinator crates make their test certificates with it at run time,
 # so that no key is committed. The ring backend.
 rcgen = { version = "0.14.10", default-features = false, features = ["crypto", "pem", "ring"] }
 # ECDSA P-256 / SHA-256 signature checks and SHA-256 digests (hostkeeper-enrollment: a CSR's
@@ -95,8 +96,7 @@ ruzstd = { version = "0.9.1", default-features = false, features = ["hash", "std
 # the regular expression `gh` reads it as.
 regex = "1.13.1"
 # hostkeeper-package's tests: a TLS server on loopback for its HTTPS client, with the ring
-# provider ureq already brings; and reading the test certificates. Also the TLS of
-# `hostkeeper ctl`'s gateway client (hostkeeper-ctl), with the ring provider of tonic's `tls-ring`.
+# provider ureq already brings; and reading the test certificates.
 # The coordinator client of hostkeeper-enroll reads the certificate chain the coordinator presents
 # with it, and builds the trust anchors of its calls.
 # hostkeeper-enrollment's tests (dev only): verify the certificates its CA issues as TLS would.
@@ -137,21 +137,21 @@ time = { version = "0.3.45", default-features = false }
 # files are TOML.
 toml = { version = "1.1.8", default-features = false, features = ["display", "parse", "serde", "std"] }
 # The daemon's runtime: the admin socket's server (hostkeeper-daemon); the runtime of one
-# gRPC call of `hostkeeper ctl` (hostkeeper-ctl) and of each call of the coordinator client of
-# hostkeeper-enroll; the coordinator's server and the OIDC key fetch (hostkeeper-coordinator,
+# gRPC call of `hostkeeper ci` (hostkeeper-ci), of the operator client of hostkeeper-testkit and
+# of each call of the coordinator client of hostkeeper-enroll; the coordinator's server and the OIDC key fetch (hostkeeper-coordinator,
 # hostkeeper-oidc, hostkeeper-tls). Members add the features they use.
 tokio = { version = "1.54.1", default-features = false }
 # The TLS of the coordinator's listeners and of the OIDC key fetch, on rustls with ring.
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring"] }
 # The admin socket's listener as a stream of connections (hostkeeper-daemon), and the loopback
-# listener of the gRPC tests of hostkeeper-ctl and hostkeeper-enroll.
+# listener of the gRPC tests of hostkeeper-ci, hostkeeper-enroll and hostkeeper-testkit.
 tokio-stream = { version = "0.1.19", default-features = false }
 # gRPC: the service traits and clients hostkeeper-proto generates. Code generation only here: no
 # transport and no TLS. hostkeeper-coordinator calls the generated servers in process under its
 # own hyper listeners. hostkeeper-link adds `channel` for the daemon's gRPC heartbeat, over a TLS
 # stream it makes itself. hostkeeper-daemon adds `server` for its admin socket (and `channel` in its
-# tests, for a client). hostkeeper-ctl and hostkeeper-enroll add `channel` and `tls-ring` for their
-# clients (and `server` in their tests, for a loopback server).
+# tests, for a client). hostkeeper-ci, hostkeeper-enroll and hostkeeper-testkit add `channel` and
+# `tls-ring` for their clients (and `server` in their tests, for a loopback server).
 tonic = { version = "0.14.6", default-features = false, features = ["codegen"] }
 tonic-prost = "0.14.6"
 tonic-prost-build = "0.14.6"
