@@ -57,7 +57,7 @@ pub const STEP_KEYS: [&str; 6] = ["env", "id", "name", "run", "uses", "with"];
 pub const CHANNEL_STEPS: [&str; 6] = [
     r#"run jq --raw-output '.include[-1] | "version=\(.version)", "tag=\(.tag)"' <<< "$MATRIX" >> "$GITHUB_OUTPUT" env MATRIX=${{ needs.plan.outputs.matrix }}"#,
     "uses actions/download-artifact with name=release-${{ steps.newest.outputs.tag }} with path=dist",
-    r#"run curl --proto =https --tlsv1.2 --fail --silent --show-error --max-time 30 --retry 45 --retry-delay 40 --retry-max-time 1800 --retry-all-errors --output "$RUNNER_TEMP/served-index.json" "$RELEASE_CHANNEL/hostkeeper/$VERSION/index.json" env RELEASE_CHANNEL=${{ vars.HOSTKEEPER_RELEASE_CHANNEL }} env VERSION=${{ steps.newest.outputs.version }}"#,
+    r#"run curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --max-time 30 --retry 45 --retry-delay 40 --retry-max-time 1800 --retry-all-errors --output "$RUNNER_TEMP/served-index.json" "$RELEASE_CHANNEL/hostkeeper/$VERSION/index.json" env RELEASE_CHANNEL=${{ vars.HOSTKEEPER_RELEASE_CHANNEL }} env VERSION=${{ steps.newest.outputs.version }}"#,
     r#"run cmp dist/index.json "$RUNNER_TEMP/served-index.json""#,
     r#"run printf 'release_index=%s\nrelease_index_digest=%s\n' "$(< dist/index.json)" "$(sha256sum dist/index.json | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT""#,
     r#"run gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --limit 100 --json tagName --jq '[.[].tagName | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")) | ltrimstr("v") | split(".") | map(tonumber)] | max | "newest=\(map(tostring) | join(".") == env.VERSION)"' >> "$GITHUB_OUTPUT" env GH_TOKEN=${{ github.token }} env VERSION=${{ steps.newest.outputs.version }}"#,

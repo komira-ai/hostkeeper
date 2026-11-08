@@ -162,7 +162,7 @@ jobs:
       - name: Download hkctl of the hostkeeper release
         id: download
         run: |
-          curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --location \
+          curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 5 --retry-delay 5 --retry-max-time 300 --retry-all-errors --silent --show-error --location \
             --create-dirs --output-dir "$RUNNER_TEMP/hkctl-release" \
             --remote-name "https://github.com/komira-ai/hostkeeper/releases/download/$HOSTKEEPER_TAG/$HKCTL_ASSET" \
             --remote-name "https://github.com/komira-ai/hostkeeper/releases/download/$HOSTKEEPER_TAG/SHA256SUMS"

@@ -293,7 +293,7 @@ jobs:
         env:
           RELEASE_CHANNEL: ${{ vars.HOSTKEEPER_RELEASE_CHANNEL }}
           VERSION: ${{ steps.newest.outputs.version }}
-        run: curl --proto =https --tlsv1.2 --fail --silent --show-error --max-time 30 --retry 45 --retry-delay 40 --retry-max-time 1800 --retry-all-errors --output "$RUNNER_TEMP/served-index.json" "$RELEASE_CHANNEL/hostkeeper/$VERSION/index.json"
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --max-time 30 --retry 45 --retry-delay 40 --retry-max-time 1800 --retry-all-errors --output "$RUNNER_TEMP/served-index.json" "$RELEASE_CHANNEL/hostkeeper/$VERSION/index.json"
       - name: The channel serves the published index, byte for byte
         run: cmp dist/index.json "$RUNNER_TEMP/served-index.json"
       # The index is canonical (one line, no final line break: `cargo xtask release check`
