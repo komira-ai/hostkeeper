@@ -571,7 +571,8 @@ fn eligible<'a>(
             let installed = host.is_some_and(|h| h.beat.health != Health::Absent);
             let installable = (host.is_some() || fleet.announced(id, HEARTBEAT_V2))
                 && fleet.announced(id, INSTALL_FEATURE)
-                && platform.and_then(|p| want.package_for(p)).is_some();
+                && crate::picks::picked(fleet, service, &want.version, id)
+                    .unwrap_or_else(|| platform.and_then(|p| want.package_for(p)).is_some());
             // A failure of the desired version an operator acknowledged (a cleared halt, a
             // version set by hand) is resolved: the host leaves the plan, as a held one does.
             let resolved = host.is_some_and(|h| {
@@ -593,6 +594,7 @@ fn eligible<'a>(
                 && !fleet.is_held(service, id)
                 && !fleet.is_forced(service, id)
                 && !platform.is_some_and(|p| want.lacks_package_for(p))
+                && !crate::picks::unpicked(fleet, service, &want.version, id)
                 && (installed || installable);
             ok.then(|| (id.clone(), host))
         })

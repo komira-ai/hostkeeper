@@ -236,6 +236,8 @@ pub struct Fleet {
     /// Whether the store's link to its database is lost (`docs/design/coordinator-storage.md`,
     /// section 5), read from the backend at each take of the fleet's lock: nothing is ordered.
     pub(crate) store_lost: bool,
+    /// The installers daemons said over gRPC and the releases the picks read ([`crate::picks`]).
+    pub(crate) picks: crate::picks::Picks,
 }
 
 impl Fleet {
@@ -262,6 +264,7 @@ impl Fleet {
             tries: BTreeMap::new(),
             sent: BTreeMap::new(),
             store_lost: false,
+            picks: crate::picks::Picks::default(),
         }
     }
 
@@ -490,6 +493,7 @@ impl Fleet {
         self.orders.retain(|(o, _), _| o != id);
         self.bake.retain(|(_, o), _| o != id);
         self.nodes.remove(id);
+        self.picks.forget(id);
         true
     }
 
