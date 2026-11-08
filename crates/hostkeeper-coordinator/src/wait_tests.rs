@@ -30,7 +30,7 @@ fn convergence(desired: Option<&str>, state: State) -> Convergence {
 /// Catches: a wait answered `CONVERGED` or `HALTED` for a version that is no longer desired, a
 /// service with no desired version read as the caller's, a converged or halted state that keeps
 /// the call waiting, and a blocked or in-progress one that ends it. The desired version is told
-/// first, as `hostkeeper ci` tells it.
+/// first, as the `hostkeeper ci` of older releases tells it.
 #[test]
 fn a_read_ends_the_wait_by_the_desired_version_first_then_by_the_state() {
     let table = [
