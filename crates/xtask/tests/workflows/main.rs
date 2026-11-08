@@ -15,6 +15,8 @@ mod callers_tests;
 mod channel_run_tests;
 mod desired;
 mod desired_tests;
+mod downloads;
+mod downloads_tests;
 mod lint;
 mod linux_packages_tests;
 mod linux_releases;

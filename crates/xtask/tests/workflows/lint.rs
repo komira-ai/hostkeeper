@@ -59,6 +59,9 @@
 //!
 //! A workflow that tags or publishes is also held to [`release::publish_problems`].
 //!
+//! Every `curl` of a `run:` carries the HTTPS and failure guards and the retry options, and no
+//! `run:` downloads with `wget` or `gh release download` ([`downloads`]).
+//!
 //! `set-desired.yml` is also held to the rules of [`set_desired`], which fix the order of its
 //! steps. Every workflow is held to the rules of [`callers`]: which jobs may call it, and how.
 //! `self-hosted` in `--deny-self-hosted-runners` names no runner.
@@ -68,6 +71,7 @@
 
 use super::advisories;
 use super::callers;
+use super::downloads;
 use super::net_install;
 use super::pr_device;
 use super::release::{self, PLAN_IF, RELEASE_IF, SIGN_IF};
@@ -383,6 +387,7 @@ pub fn lint(file: &str, text: &str) -> Vec<String> {
         problems.extend(net_install::problems(&doc));
     }
     problems.extend(callers::problems(file, text, &doc));
+    problems.extend(downloads::problems(&doc));
     problems
 }
 
