@@ -42,7 +42,7 @@ fn asset_names_are_the_documented_contract() {
     let v = version("7.8.9");
     let names = asset_names(&v, &Platform::RELEASED);
     assert_eq!(names, baseline_for(&v));
-    assert_eq!(names.len(), 74);
+    assert_eq!(names.len(), 78);
     assert_eq!(documented_names(DOC, &v), Ok(names.clone()));
     // The document changed alone: a name dropped, or one renamed.
     let image = "hostkeeper-coordinator-<version>-<linux-platform>.image.tar\n";
@@ -219,8 +219,8 @@ fn the_attested_and_summed_names_partition_the_assets() {
     let v = version("0.1.3");
     let attested = attested_names(&v);
     let summed = summed_names(&v);
-    assert_eq!(attested.len(), 26);
-    assert_eq!(summed.len(), 47);
+    assert_eq!(attested.len(), 28);
+    assert_eq!(summed.len(), 49);
     for index in [INDEX, HELLO_INDEX, HELLO_FAIL_READY_INDEX, MDM_INDEX] {
         assert!(summed.contains(&index.to_owned()) & !attested.contains(&index.to_owned()));
     }
@@ -362,6 +362,30 @@ fn a_linux_platform_ships_the_mdm_binary_attested_with_its_sbom() {
             .iter()
             .any(|n| n.starts_with("hostkeeper-mdm-0.2.1-macos")),
         "{attested:?}"
+    );
+}
+
+#[test]
+fn a_linux_platform_ships_the_arch_package_attested_and_no_other_platform_does() {
+    // Catches: the Arch package missing from a Linux platform, named with the rpm's dot instead
+    // of its dash, shipped without its bundle, given a digest file or a place in the sums-only
+    // package names, or shipped for macOS.
+    let v = version("0.2.1");
+    for (platform, arch) in [
+        (Platform::LinuxX86_64, "x86_64"),
+        (Platform::LinuxArm64, "aarch64"),
+    ] {
+        let names = asset_names(&v, &[platform]);
+        let arch_package = format!("hostkeeper-0.2.1-1-{arch}.pkg.tar.zst");
+        assert!(names.contains(&arch_package), "{arch_package}");
+        assert!(names.contains(&format!("{arch_package}.sigstore.json")));
+        assert!(!names.contains(&format!("{arch_package}.sha256")));
+        assert!(attested_names(&v).contains(&arch_package));
+    }
+    assert!(
+        !asset_names(&v, &[Platform::MacosArm64])
+            .iter()
+            .any(|n| n.contains(".pkg.tar.zst"))
     );
 }
 
