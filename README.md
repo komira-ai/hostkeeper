@@ -199,8 +199,7 @@ updates or switches a version.
 - An aborted update ends in a halt: the service takes no other order until the coordinator lifts
   the halt (an operator's halt clear, which reaches the host as a halt generation greater than
   the one it holds, in a heartbeat reply or a `clear_halt` order). A coordinator's `abort` order
-  is answered the same way as the local one, and takes no farm slot; this build's heartbeat loop
-  carries only `update` and `force` orders.
+  is answered the same way as the local one, and takes no farm slot.
 - `clear_record <service>` sets aside a step record that does not read (the record problem
   `RECORD_PROBLEM_UNREADABLE` in `Status`), so that orders run for the service again: the file is
   renamed `step-record.json.corrupt` in the service's state directory, for the operator to read,
@@ -208,6 +207,9 @@ updates or switches a version.
   record that reads, in any state, or that a newer hostkeeper wrote, is refused `record_reads`.
   A unit that the lost record had started is not stopped, since nothing names it any more: find
   it (`systemctl list-units 'updater-<service>-*'`) and stop it by name before the next order.
+  The coordinator's `clear_record` order (`hkctl hosts clear-record`) runs the same verb, for a
+  daemon that announces `clear-record-v1`; its verdict, in the next heartbeat, is `succeeded`
+  with the reason `record_cleared`, or the refusal's token.
 
 ## Force on a host
 

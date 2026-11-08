@@ -425,7 +425,7 @@ fn service_beat(service: &str, beat: &Heartbeat) -> agent::ServiceBeat {
 
 /// A verdict of the host. The proto's start time, `forced` flag, detail and log lines have no
 /// source on the heartbeat wire.
-fn update_result(result: &wire::UpdateResult) -> agent::UpdateResult {
+pub(crate) fn update_result(result: &wire::UpdateResult) -> agent::UpdateResult {
     agent::UpdateResult {
         target: result.target.as_str().to_owned(),
         outcome: outcome(result.outcome).into(),

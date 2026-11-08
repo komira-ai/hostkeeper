@@ -8,6 +8,7 @@
 //! loopback address with a port the system chose; `waits` plays the loop's waits from a script.
 
 mod certs;
+mod clear_record;
 mod coordinator;
 mod deferral;
 mod dial;
@@ -120,6 +121,15 @@ pub fn abort(id: &str, name: &str) -> Order {
         id: order_id(id),
         order_try: 1,
         verb: Verb::Abort(service(name)),
+    }
+}
+
+/// The `clear_record` of `name`'s step record, order `id`.
+pub fn clear_record(id: &str, name: &str) -> Order {
+    Order {
+        id: order_id(id),
+        order_try: 1,
+        verb: Verb::ClearRecord(service(name)),
     }
 }
 

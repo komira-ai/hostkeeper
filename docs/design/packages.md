@@ -130,7 +130,7 @@ Every item is **Built** at the path given.
   (`REPLY_MAX`, `crates/hostkeeper-link/src/mtls.rs`).
 - **The host's platform.** `HeartbeatRequest.platform` (values 1 to 3), from the daemon's compile target; `index_platform`
   (`crates/hostkeeper-coordinator/src/registry.rs`) maps it to `linux-x86_64`, `linux-arm64`, `macos-arm64`.
-- **Features.** At most 16 in `HeartbeatRequest.features`, nine today (`crates/hostkeeper-link/src/beat.rs`); the
+- **Features.** At most 16 in `HeartbeatRequest.features`, ten today (`crates/hostkeeper-link/src/beat.rs`); the
   coordinator echoes those it supports, and sends a verb only to a daemon that announced it.
 - **Two routes and the audit.** The first heartbeat after start, and a gRPC one that failed in transport, go to the
   frozen JSON route (`crates/hostkeeper-link/src/negotiated.rs`). An operator's set is audited; CI's is only logged.
@@ -444,8 +444,8 @@ runs the format's tool by absolute path through the step launcher, as a hook ste
 it can run in a new heartbeat field, `HeartbeatRequest.installers = 8`, decided once at start by the rules of section
 5.4, and names each installed service's installer in `ServiceBeat.installer = 13`. The coordinator orders an entry only
 to a host that lists its installer (section 3.3). A list, not a feature per installer, because the set depends on the
-host and grows with every format, and the feature list is capped at 16 names, of which ten are taken once `target-v1`
-is added.
+host and grows with every format, and the feature list is capped at 16 names, of which eleven are taken once
+`target-v1` is added.
 
 **Why built in, and not delivered.** The daemon runs only code it shipped with or code inside bytes a trusted signer
 attested. An installer is root code that every service's release goes through, so it is shipped with the daemon and
