@@ -314,6 +314,16 @@ decimal number is refused `Failed` before the commit, of class environment
 (`protocol_unreadable`); a release without `bin/hostkeeper` is refused `Failed` before the
 commit, of class release (`self_binary_missing`). In each case nothing on the host changes.
 
+The probe is asked only of a release whose package declares a floor (`min_hostkeeper`) of 0.1.53
+or lower, the floor every release of hostkeeper declares today (`LEGACY_FLOOR`,
+`crates/hostkeeper-daemon/src/selfupdate.rs`). A release with a higher floor is judged by its
+floor alone ([two programs](docs/design/two-programs.md), section 4.2): a daemon older than the
+floor defers it (`daemon_too_old`), and a daemon refuses one older than its own oldest reader
+(`OLDEST_READER` in `hostkeeper-steps`, 0.1.53, the floor the release builder writes) `Failed`
+before the commit, of class release (`protocol_unsupported`), with no probe. Such a release's
+hook steps are built into the daemon: each succeeds at once, no command of the release runs,
+and the step record is the one `bin/hostkeeper update-hook` gives.
+
 hostkeeper is licensed under [Apache-2.0](LICENSE). How to contribute is in
 [CONTRIBUTING.md](CONTRIBUTING.md), and how to report a vulnerability is in
 [SECURITY.md](SECURITY.md). The rules every change to this repository is written and reviewed

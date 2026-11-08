@@ -368,6 +368,7 @@ fn files_under(root: &Path) -> HostFiles {
         trusted_root: root.join("trusted_root.json"),
         pki: root.join("pki"),
         console: None,
+        managed_config: None,
     }
 }
 
