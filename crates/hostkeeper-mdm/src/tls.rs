@@ -78,25 +78,7 @@ pub fn run(
         secret::read(host, &dns_env, var)?;
     }
     writeln!(out, "dns.env: holds {} (values not shown)", vars.join(" "))?;
-    let lego = format!("{}/lego", c.bin());
-    if host.stat(&lego)?.map(|m| m.kind) != Some(Kind::File) {
-        return Err(MdmError::NoLego(lego));
-    }
-    let help = host.run(&Cmd::new(&lego).arg("run").arg("--help"))?;
-    if help.code != 0 {
-        return Err(MdmError::LegoHelp {
-            lego,
-            code: help.code,
-        });
-    }
-    let help = help.stdout + &help.stderr;
-    // Whole words: `--dns` is not there because `--dns.resolvers` is.
-    let words: BTreeSet<&str> = help
-        .split(|ch: char| ch.is_whitespace() || ch == ',' || ch == '=')
-        .collect();
-    if let Some(flag) = LEGO_FLAGS.into_iter().find(|f| !words.contains(f)) {
-        return Err(MdmError::LegoFlag { lego, flag });
-    }
+    check_lego(host, &format!("{}/lego", c.bin()))?;
 
     let crt = format!("{}/lego/certificates/{}.crt", c.state(), c.dns_name());
     let key = format!("{}.key", crt.strip_suffix(".crt").unwrap_or(crt.as_str()));
@@ -147,6 +129,31 @@ pub fn run(
     }
     for line in shown.stdout.lines() {
         writeln!(out, "certificate: {line}")?;
+    }
+    Ok(())
+}
+
+/// `lego` is a file, `lego run --help` exits 0 and lists every flag the certificate unit
+/// passes ([`LEGO_FLAGS`]).
+pub(crate) fn check_lego(host: &dyn Host, lego: &str) -> Result<(), MdmError> {
+    let lego = lego.to_owned();
+    if host.stat(&lego)?.map(|m| m.kind) != Some(Kind::File) {
+        return Err(MdmError::NoLego(lego));
+    }
+    let help = host.run(&Cmd::new(&lego).arg("run").arg("--help"))?;
+    if help.code != 0 {
+        return Err(MdmError::LegoHelp {
+            lego,
+            code: help.code,
+        });
+    }
+    let help = help.stdout + &help.stderr;
+    // Whole words: `--dns` is not there because `--dns.resolvers` is.
+    let words: BTreeSet<&str> = help
+        .split(|ch: char| ch.is_whitespace() || ch == ',' || ch == '=')
+        .collect();
+    if let Some(flag) = LEGO_FLAGS.into_iter().find(|f| !words.contains(f)) {
+        return Err(MdmError::LegoFlag { lego, flag });
     }
     Ok(())
 }

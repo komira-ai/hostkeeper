@@ -235,7 +235,10 @@ pub fn drop_ins(c: &MdmConfig, acme: &Acme) -> Vec<Unit> {
         c.tasks_max()
     );
     let proxy = format!("{head}[Service]\nIPAddressAllow={}\n", c.lan());
-    let depsyncer = format!("{head}[Service]\nEnvironment=MDM_DEP_NAME={}\n", c.dep_name());
+    let depsyncer = format!(
+        "{head}[Service]\nEnvironment=MDM_DEP_NAME={}\n",
+        c.dep_name()
+    );
     let cert = format!(
         "{head}[Service]\nEnvironment=MDM_ACME_EMAIL={}\nEnvironment=MDM_ACME_SERVER={}\nEnvironment=MDM_ACME_DNS_PROVIDER={}\nEnvironment=MDM_DNS_NAME={}\nEnvironment=MDM_ACME_RESOLVERS={}\nEnvironment=MDM_ACME_PROPAGATION_WAIT={}\n",
         acme.email,

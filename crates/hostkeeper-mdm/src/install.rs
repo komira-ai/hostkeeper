@@ -88,7 +88,7 @@ pub const SECRETS: [(&str, &str); 3] = [
     ("nanodep.env", "NANODEP_API"),
     ("scep.env", "SCEP_CHALLENGE_PASSWORD"),
 ];
-const STATE_DIRS: [&str; 7] = [
+pub(crate) const STATE_DIRS: [&str; 7] = [
     "nanohub",
     "scep",
     "scep/depot",
@@ -328,7 +328,7 @@ impl<'h> Restarts<'h> {
 }
 
 /// The host checks, read only.
-fn preflight(
+pub(crate) fn preflight(
     host: &dyn Host,
     c: &MdmConfig,
     replacing: Option<&UnitNames>,
@@ -386,7 +386,7 @@ fn preflight(
 }
 
 /// Whether `systemctl is-active <unit>` succeeds.
-fn is_active(host: &dyn Host, unit: &str) -> Result<bool, MdmError> {
+pub(crate) fn is_active(host: &dyn Host, unit: &str) -> Result<bool, MdmError> {
     let cmd = Cmd::new(hostkeeper_mdm_step::SYSTEMCTL)
         .arg("is-active")
         .arg(unit);
@@ -512,7 +512,7 @@ fn binaries(
 
 /// Plan the secret file `path` holding `key`, unless it holds a value already (then it must be
 /// root's, 0600); whether one is made. The value is never printed.
-fn secret_file(
+pub(crate) fn secret_file(
     env: &Env<'_>,
     p: &mut Planner<'_>,
     path: &str,

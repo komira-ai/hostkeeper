@@ -36,6 +36,8 @@
 //! * [`pins::Pins::built_in`] gives the pinned tools.
 //! * [`commands`] gives the SCEP CA's and the DEP certificate's arguments.
 //! * [`migrate::new_settings`] writes the settings of a stack moved from the old kit.
+//! * [`package`] holds what the `mdm` service package's builder and its program share: the
+//!   layout the package fixes, its units, the drop-ins of a site's settings and its manifest.
 //!
 //! # Comparing with an installed host
 //!

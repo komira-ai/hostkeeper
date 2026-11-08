@@ -23,6 +23,9 @@ pub enum MdmError {
     /// A unit template did not render.
     #[error(transparent)]
     Template(#[from] TemplateError),
+    /// The settings do not fit the `mdm` package's layout.
+    #[error(transparent)]
+    Package(#[from] hostkeeper_mdm_core::package::PackageError),
     /// A path is not an absolute path.
     #[error(transparent)]
     Path(#[from] PathError),
