@@ -350,7 +350,23 @@ fn force_back_to_previous_needs_no_fetch() {
 /// fixture's instances still serving.
 #[test]
 fn the_daemon_is_ready_under_a_notify_unit_only_after_its_boot_pass() {
-    let s = Scenario::installed("boot");
+    ready_only_after_boot_pass("boot");
+}
+
+/// The test above, run 20 times in a row, each run with a rig of its own: the repeat that shows
+/// its ports are no longer lost to a listener of the coordinator. A check of this pull request,
+/// removed before it lands.
+#[test]
+fn the_daemon_is_ready_under_a_notify_unit_only_after_its_boot_pass_20_times() {
+    for run in 1..=20 {
+        eprintln!("run {run} of 20");
+        ready_only_after_boot_pass(&format!("boot{run}"));
+    }
+}
+
+/// The body of the notify-unit test, with the tag of its rig.
+fn ready_only_after_boot_pass(tag: &str) {
+    let s = Scenario::installed(tag);
     let installed = s.package(V1).clone();
     let wants = Path::new(UNIT_DIR)
         .join("multi-user.target.wants")
