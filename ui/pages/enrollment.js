@@ -263,7 +263,7 @@ function pending(ctx, request) {
           `Approve request ${body.requestId} as ${named} and revoke the certificate of any host that holds ${named}?`)) {
           return "Not approved.";
         }
-        const reply = await ctx.api.call("hostkeeper.operator.v1.Enrollment/Approve", body);
+        const reply = await ctx.api.enrollment.approve(body);
         ctx.refresh();
         return `Approved ${reply.hostId || named}: the host gets its certificate at its next poll.`;
       })),
@@ -286,7 +286,7 @@ function rejectSection(ctx, request) {
       if (!ctx.confirm(`Reject request ${request.requestId}? Its key is refused from then on.`)) {
         return "Not rejected.";
       }
-      await ctx.api.call("hostkeeper.operator.v1.Enrollment/Reject", { requestId: request.requestId, reason });
+      await ctx.api.enrollment.reject({ requestId: request.requestId, reason });
       ctx.refresh();
       return `Rejected request ${request.requestId}.`;
     }));
@@ -333,7 +333,7 @@ export async function render(ctx) {
   const body = expired ? { limit: PAGE_SIZE, pageToken, unenrolled: true } : { limit: PAGE_SIZE, pageToken };
   let listed;
   try {
-    listed = await ctx.api.call("hostkeeper.operator.v1.Enrollment/List", body);
+    listed = await ctx.api.enrollment.list(body);
   } catch (error) {
     return errorView("Enrollment", error);
   }
