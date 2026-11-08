@@ -87,7 +87,7 @@ pub(crate) struct Measure {
 }
 
 impl Measure {
-    fn of(bytes: &[u8]) -> Measure {
+    pub(super) fn of(bytes: &[u8]) -> Measure {
         Measure {
             bytes: bytes.len() as u64,
             sha256: hex::encode(sha2::Sha256::digest(bytes)),
@@ -128,7 +128,7 @@ fn found(path: &Path) -> Result<Found, Error> {
 }
 
 /// The last component of a channel path.
-fn file_name(rel: &str) -> &str {
+pub(super) fn file_name(rel: &str) -> &str {
     rel.rsplit('/').next().unwrap_or(rel)
 }
 
@@ -156,14 +156,14 @@ pub(crate) fn copy_measured(
 }
 
 /// The measure of the file at `path`, read in one streaming pass.
-fn measure_file(path: &Path) -> Result<Measure, Error> {
+pub(super) fn measure_file(path: &Path) -> Result<Measure, Error> {
     let what = format!("read {}", path.display());
     let file = File::open(path).map_err(Error::io(&what))?;
     copy_measured(file, std::io::sink()).map_err(Error::io(&what))
 }
 
 /// At most `cap + 1` bytes of the file at `path`: more than `cap` means it is over the cap.
-fn read_capped(path: &Path, cap: u64) -> Result<Vec<u8>, Error> {
+pub(super) fn read_capped(path: &Path, cap: u64) -> Result<Vec<u8>, Error> {
     let what = format!("read {}", path.display());
     let file = File::open(path).map_err(Error::io(&what))?;
     let mut bytes = Vec::new();
@@ -175,7 +175,7 @@ fn read_capped(path: &Path, cap: u64) -> Result<Vec<u8>, Error> {
 
 /// The text of the index at `path` and the index it reads as, which must be the canonical index
 /// of `service` at `version`.
-fn load_index(
+pub(super) fn load_index(
     path: &Path,
     service: &ServiceName,
     version: &Version,
@@ -229,7 +229,7 @@ fn subjects(bundle: &[u8]) -> Result<Vec<String>, &'static str> {
 
 /// What is wrong with `bundle`, the bundle of the package `name` whose SHA-256 is `sha256`, if
 /// anything: over the daemon's cap, not a bundle, or not listing that SHA-256.
-fn bundle_problem(bundle: &[u8], name: &str, sha256: &str) -> Option<String> {
+pub(super) fn bundle_problem(bundle: &[u8], name: &str, sha256: &str) -> Option<String> {
     if bundle.len() as u64 > MAX_BUNDLE_BYTES {
         return Some(format!(
             "longer than {MAX_BUNDLE_BYTES} bytes, the most the daemon reads of a bundle"
@@ -244,7 +244,7 @@ fn bundle_problem(bundle: &[u8], name: &str, sha256: &str) -> Option<String> {
 
 /// Whether `name` in `from` is a regular file; when not, why, in `problems` (`missing` when
 /// nothing is there).
-fn regular_file(
+pub(super) fn regular_file(
     from: &Path,
     name: &str,
     missing: &str,
