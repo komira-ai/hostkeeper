@@ -52,6 +52,7 @@ use crate::fleet::Fleet;
 use crate::holds::marks_of;
 use crate::operator::{Caller, entry_proto, valid_reason};
 use crate::ops::{AuditEntry, HaltAck, OpsError, OpsState, OpsStore, Write};
+use crate::picks::Pick;
 use crate::registry::{Digest, IndexRecord, Package, Release};
 use crate::service::{Coordinator, kept};
 use crate::services::{ServiceDef, Services};
@@ -228,9 +229,8 @@ pub fn plan(
             plan.held.push(id.to_string());
         } else if !fleet.announced(&id, FEATURE) {
             plan.skipped.push((id.to_string(), "daemon_too_old"));
-        } else if forced.release.package_for(platform).is_none() {
-            plan.skipped
-                .push((id.to_string(), "no_package_for_platform"));
+        } else if let Some(why) = unordered(forced, service, &id, platform, fleet) {
+            plan.skipped.push((id.to_string(), why));
         } else {
             if !forced.version.at_least(&running) && !plan.left.contains(&running) {
                 plan.left.push(running);
@@ -248,6 +248,30 @@ pub fn plan(
         }
     }
     Ok(plan)
+}
+
+/// Why the force `forced` of `service` orders the host `id`, of `platform`, nothing: the release
+/// index lists no package for the platform, or, for a version set with targets, the pick finds
+/// the host no entry ([`crate::picks`]; a host whose daemon's installers are not read yet is
+/// ordered, and is sent the force once they are and an entry is picked).
+fn unordered(
+    forced: Forced<'_>,
+    service: &str,
+    id: &HostId,
+    platform: Platform,
+    fleet: &Fleet,
+) -> Option<&'static str> {
+    match crate::picks::pick(fleet, service, forced.version, id).map(|(found, _)| found) {
+        Some(Pick::Entry(_) | Pick::Unheard) => None,
+        Some(Pick::NoTarget) => Some("no_target"),
+        Some(Pick::NoBuildForHost) => Some("no_build_for_host"),
+        Some(Pick::InstallerDropped) => Some("installer_dropped"),
+        None => forced
+            .release
+            .package_for(platform)
+            .is_none()
+            .then_some("no_package_for_platform"),
+    }
 }
 
 /// What a force writes to the ops file, as the call and its [`Plan`] decided it.
@@ -473,16 +497,22 @@ impl Coordinator {
         {
             return Err(proto::ReleasesRefusal::BelowMinVersion);
         }
-        let release = self
-            .desired
-            .digests(&def.name)
-            .get(&version)
-            .cloned()
+        // A version set with targets is forced as its release: each host is ordered the entry
+        // picked for it ([`crate::picks`]), and the ops file records the release as one digest
+        // ([`crate::picks::recorded`]); the desired state names neither, as CI's set left it.
+        let set_with = self.desired.release(&def.name, version.as_str());
+        let registered = self.desired.digests(&def.name).get(&version).cloned();
+        let release = registered
+            .clone()
+            .or_else(|| set_with.as_deref().and_then(crate::picks::recorded))
             .ok_or(proto::ReleasesRefusal::NoDigest)?;
         let now = (self.clock)();
         // The fleet's lock is held to the end: no heartbeat decides or rolls back between the
         // plan and the writes, as for CI's set.
         let mut fleet = self.lock_fleet();
+        if let Some(set_with) = set_with {
+            fleet.picks.keep_one(&def.name, &version, set_with);
+        }
         let plan = plan(
             def,
             &self.services,
@@ -505,7 +535,7 @@ impl Coordinator {
             .ok_or(proto::ReleasesRefusal::NoDigest)?;
         let mut wanted = before;
         wanted.version = version.clone();
-        wanted.set_release(Some(release.clone()));
+        wanted.set_release(registered);
         let marks = self.ops.marks(&def.name);
         let staged = self.desired.stage(&def.name, wanted, |v| kept(&marks, v));
         let forcing = Forcing {

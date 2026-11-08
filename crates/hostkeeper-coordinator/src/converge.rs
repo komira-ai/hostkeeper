@@ -24,7 +24,9 @@
 //! A host whose platform the desired version's release index lists no package for is not ordered
 //! the version ([`crate::decide::Skip::NoPackageForPlatform`]) and could never reach it: it is
 //! left out of every count, as a pair an operator holds is, so it neither blocks the others nor
-//! keeps the service from converging.
+//! keeps the service from converging. So is a host a release set with targets picks no entry
+//! for ([`crate::picks`]: `no_target`, `no_build_for_host`, `installer_dropped`); a version no
+//! host is picked an entry of has no counted host and is never converged.
 //!
 //! How long a farm has gone without progress is the caller's to judge: it needs the time of
 //! the last change, which the coordinator does not keep.
@@ -95,6 +97,23 @@ impl From<Halt> for HaltNote {
     }
 }
 
+/// For a desired version set with targets, how many of a service's hosts the release picks an
+/// entry for, and how many it picks none for, by why ([`crate::picks`]). A host picked none is in
+/// no count of `roles`; a host whose daemon's installers are not read yet is in none here.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct PickCounts {
+    /// Picked an entry.
+    pub picked: usize,
+    /// Of a platform the release has no list for (`no_target`).
+    pub no_target: usize,
+    /// Not running the service, with no entry its daemon can install (`no_build_for_host`).
+    pub no_build_for_host: usize,
+    /// Running the service with an installer the release dropped (`installer_dropped`).
+    pub installer_dropped: usize,
+    /// The node ids of those, in order.
+    pub dropped: Vec<String>,
+}
+
 /// What CI reads.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Convergence {
@@ -113,6 +132,10 @@ pub struct Convergence {
     /// selector until there is one to count.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hosts: Option<HostCounts>,
+    /// For a desired version set with targets, the hosts picked an entry of it and those picked
+    /// none ([`crate::picks`]); left out for any other.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub picks: Option<PickCounts>,
     /// The commit this coordinator was built from ([`crate::BUILD_COMMIT`]): what a client
     /// compares with a release before it orders one.
     pub commit: &'static str,
@@ -148,9 +171,13 @@ fn unlisted(host: &Host, desired: &Desired) -> bool {
 
 /// Whether the host `id` of `def` is counted against `desired`: the service is assigned to it
 /// ([`Fleet::is_assigned`], the function the order path asks), an operator does not hold the pair,
-/// and the release index lists a package for its platform.
+/// the release index lists a package for its platform, and a release set with targets did not
+/// pick it nothing ([`crate::picks::unpicked`]).
 fn counted(def: &ServiceDef, desired: &Desired, fleet: &Fleet, id: &HostId, host: &Host) -> bool {
-    fleet.is_assigned(def, id) && !fleet.is_held(&def.name, id) && !unlisted(host, desired)
+    fleet.is_assigned(def, id)
+        && !fleet.is_held(&def.name, id)
+        && !unlisted(host, desired)
+        && !crate::picks::unpicked(fleet, &def.name, &desired.version, id)
 }
 
 fn counts(
@@ -234,6 +261,7 @@ pub fn converge_service(
             roles: Vec::new(),
             halt: None,
             hosts: None,
+            picks: None,
             commit: crate::BUILD_COMMIT,
         };
     };
@@ -267,6 +295,7 @@ pub fn converge_service(
         roles,
         halt: None,
         hosts: None,
+        picks: None,
         commit: crate::BUILD_COMMIT,
     }
 }

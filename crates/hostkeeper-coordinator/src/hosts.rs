@@ -88,13 +88,18 @@ impl Coordinator {
         let (mut hosts, more) = {
             let fleet = self.lock_fleet();
             let status = self.status_in(&fleet, now);
+            let desired = self.desired.all();
             let mut rest = fleet
                 .nodes()
                 .filter(|(id, _)| after.as_ref().is_none_or(|after| *id > after));
             let hosts: Vec<proto::Host> = rest
                 .by_ref()
                 .take(size)
-                .map(|(id, node)| report::host(id, node, &status, now, unix_now))
+                .map(|(id, node)| {
+                    let mut host = report::host(id, node, &status, now, unix_now);
+                    crate::picks::show(&fleet, id, &mut host, &self.services, &desired);
+                    host
+                })
                 .collect();
             (hosts, rest.next().is_some())
         };
@@ -132,6 +137,7 @@ impl Coordinator {
             let node = fleet.node(&id).ok_or(proto::HostsRefusal::UnknownHost)?;
             let status = self.status_in(&fleet, now);
             let mut host = report::host(&id, node, &status, now, unix_now);
+            crate::picks::show(&fleet, &id, &mut host, &self.services, &self.desired.all());
             // The verdict of a `clear_record` the host reported, which no rule reads.
             for one in &mut host.services {
                 if let Some(cleared) = fleet.clear_records.shown(&id, &one.service) {

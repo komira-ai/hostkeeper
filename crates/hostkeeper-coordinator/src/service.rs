@@ -185,6 +185,8 @@ pub struct Set {
 /// agent itself, never the legacy service, as the heartbeat's top level. `verdict-acks-v1`: the
 /// acks of the verdicts stored ([`crate::verdict_file`]). `grpc-v1`: the agent API is served on
 /// the heartbeat listener ([`crate::grpc`]), so an agent may send its next heartbeat there.
+/// `target-v1`: the installers of a heartbeat over gRPC are read, and the entry of a release
+/// picked for the host goes in its orders over gRPC ([`crate::picks`]).
 pub const FEATURES: &[&str] = &[
     "deferred-v1",
     halt::FEATURE,
@@ -193,6 +195,7 @@ pub const FEATURES: &[&str] = &[
     ORDER_FEATURE,
     verdict_file::FEATURE,
     crate::grpc::GRPC_FEATURE,
+    crate::picks::TARGET_FEATURE,
 ];
 
 /// The fields of the answer to a heartbeat that go only to an agent that announced a feature,
@@ -572,7 +575,8 @@ impl Coordinator {
         // advertises it.
         let terms = terms.filter(|_| sends("order_id", features.as_deref()));
         // On a transport that carries typed orders, the update is one too, with the same terms.
-        let order = order.or_else(|| order_terms::typed(&reply, terms.as_ref()).filter(|_| orders));
+        let order =
+            order.or_else(|| order_terms::typed(&reply, terms.as_ref(), None).filter(|_| orders));
         let acks = if sends("acks", features.as_deref()) {
             acks
         } else {

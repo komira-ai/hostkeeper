@@ -53,6 +53,7 @@ pub(crate) fn heartbeat(beat: &Heartbeat) -> Result<pb::HeartbeatRequest, Unsend
         .map(service)
         .collect::<Result<Vec<pb::ServiceBeat>, Unsendable>>()?;
     Ok(pb::HeartbeatRequest {
+        installers: Vec::new(),
         platform: platform(beat.platform).into(),
         agent: Some(pb::AgentInfo {
             name: AGENT_NAME.to_owned(),
