@@ -59,6 +59,10 @@ match them:
 A heartbeat the loop did not try to send, because the host has no certificate yet or its
 installed services could not be read, changes neither `link` line.
 
+Every heartbeat on the gRPC route carries the same trusted root age and reason, so off the host
+`hkctl hosts get --node-id <id>` answers them too (`trusted_root_age_secs`, `trusted_root_reason`;
+see [The trusted root on a host](deploy/verify-a-release.md#the-trusted-root-on-a-host)).
+
 Then, for each service in name order:
 
 | key | value |

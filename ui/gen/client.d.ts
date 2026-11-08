@@ -115,6 +115,8 @@ export namespace hostkeeper_agent_v1 {
     sentUnix?: string;
     certNotAfterUnix?: string;
     lastRenewError?: string;
+    trustedRootAgeSecs?: string;
+    trustedRootReason?: hostkeeper_agent_v1.TrustedRootReason;
   }
   export type Outcome = "OUTCOME_UNSPECIFIED" | "OUTCOME_SUCCEEDED" | "OUTCOME_FAILED";
   export interface PinReport {
@@ -143,6 +145,12 @@ export namespace hostkeeper_agent_v1 {
     name?: string;
     attempt?: number;
   }
+  export type TrustedRootReason =
+    | "TRUSTED_ROOT_REASON_UNSPECIFIED"
+    | "TRUSTED_ROOT_REASON_NONE"
+    | "TRUSTED_ROOT_REASON_STALE"
+    | "TRUSTED_ROOT_REASON_MISSING"
+    | "TRUSTED_ROOT_REASON_UNPARSEABLE";
   export interface UpdateResult {
     target?: string;
     outcome?: hostkeeper_agent_v1.Outcome;
@@ -214,7 +222,8 @@ export namespace hostkeeper_operator_v1 {
     | "ALERT_KIND_ABANDONED_WHILE_UPDATING"
     | "ALERT_KIND_SILENT_HOST"
     | "ALERT_KIND_CERT_NEAR_EXPIRY"
-    | "ALERT_KIND_STORE_UNREACHABLE";
+    | "ALERT_KIND_STORE_UNREACHABLE"
+    | "ALERT_KIND_TRUSTED_ROOT";
   export type AlertSeverity =
     | "ALERT_SEVERITY_UNSPECIFIED"
     | "ALERT_SEVERITY_CRITICAL"
@@ -442,6 +451,8 @@ export namespace hostkeeper_operator_v1 {
     clockSkewBeats?: string;
     firstHeartbeatUnix?: string;
     firstServingUnix?: string;
+    trustedRootAgeSecs?: string;
+    trustedRootReason?: hostkeeper_agent_v1.TrustedRootReason;
   }
   export interface HostCounts {
     missing?: number;

@@ -13,7 +13,8 @@
 //!   with the [`registry`] of every version CI has set and its release (the digest of its
 //!   package, or the record of its release index, checked by [`release_index`]: each host is
 //!   ordered the package of its own platform);
-//! - [`fleet`]: the last heartbeat of every host, the live and down rule, the quiet start;
+//! - [`fleet`]: the last heartbeat of every host, the live and down rule, the quiet start, and
+//!   what each host's last gRPC heartbeat said of its Sigstore trusted root ([`trusted_root`]);
 //! - [`acks`]: the failure reports an override of a bad version acknowledged;
 //! - [`verdicts`]: the release failures heard, each counted once per host, order id and try,
 //!   and the [`verdict_file`] that stores them with the verdict each host was last acknowledged,
@@ -149,6 +150,7 @@ pub mod status;
 pub(crate) mod store;
 pub mod tokens;
 pub mod transfer;
+pub mod trusted_root;
 pub mod ui;
 pub mod verdict_file;
 pub mod verdicts;

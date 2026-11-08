@@ -22,7 +22,10 @@ use hostkeeper_coordinator::http::{CONVERGENCE_PATH, DESIRED_PATH, Surface, hand
 use hostkeeper_coordinator::ops::OpsStore;
 use hostkeeper_coordinator::service::{Clock, Coordinator};
 use hostkeeper_coordinator::services::Services;
-use hostkeeper_daemon::link_adapters::{DaemonHalts, DaemonObserver, DaemonRecords, DaemonRenewal};
+use hostkeeper_coordinator::trusted_root::TrustedRootSaid;
+use hostkeeper_daemon::link_adapters::{
+    DaemonHalts, DaemonObserver, DaemonRecords, DaemonRenewal, DaemonTrustedRoot,
+};
 use hostkeeper_daemon::links::{Links, PLATFORM};
 use hostkeeper_daemon::start;
 use hostkeeper_daemon::{Daemon, ForcedResult};
@@ -346,6 +349,7 @@ fn first_beat() -> Heartbeat {
         }],
         sent_unix: 0,
         renewal: Renewal::default(),
+        trusted_root: None,
     }
 }
 
@@ -369,6 +373,7 @@ fn without_executor(daemon: &Arc<Daemon>, links: &Links) -> Heartbeater {
             clock: Arc::clone(&links.clock),
             log: Arc::clone(&links.log),
             renewal: Arc::new(DaemonRenewal::new(links.renewal.clone())),
+            trusted_root: Arc::new(DaemonTrustedRoot::new(Arc::clone(daemon))),
         },
     )
 }
@@ -567,7 +572,7 @@ impl CoordinatorLink for TypedInProcess {
         };
         let (answer, order) = self
             .coordinator
-            .heartbeat_with_orders(who, wire_beat(beat))
+            .heartbeat_with_orders(who, wire_beat(beat), TrustedRootSaid::default())
             .map_err(|_| LinkError::Refused(Reason::new("forbidden").expect("a token")))?;
         let mut reply = reply_of(&answer);
         reply.order = order.as_ref().map(typed_order);

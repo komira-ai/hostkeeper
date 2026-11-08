@@ -109,7 +109,8 @@ use crate::names::Reason;
 use crate::order::{Acknowledged, Order, OrderRef, OrderResult, Outcome, Reply, Verb};
 use crate::ports::{
     CertSource, CertState, CoordinatorLink, Dispatch, HeldHalts, LinkError, Log, OrderSink,
-    RecordedService, RenewalSource, ServiceObserver, ServiceRecords, Sleeper, Tick, UnixClock,
+    RecordedService, RenewalSource, ServiceObserver, ServiceRecords, Sleeper, Tick,
+    TrustedRootSource, UnixClock,
 };
 
 /// The period when the daemon is given none: 15 seconds.
@@ -156,6 +157,7 @@ pub struct Ports {
     pub dispatch: Arc<dyn Dispatch>,
     pub halts: Arc<dyn HeldHalts>,
     pub renewal: Arc<dyn RenewalSource>,
+    pub trusted_root: Arc<dyn TrustedRootSource>,
     pub clock: Arc<dyn UnixClock>,
     pub log: Arc<dyn Log>,
 }
@@ -511,6 +513,7 @@ impl Heartbeater {
                     .map(|text| clip_renew_error(&text).to_owned())
                     .filter(|text| !text.is_empty()),
             },
+            trusted_root: self.ports.trusted_root.trusted_root(),
         })
     }
 

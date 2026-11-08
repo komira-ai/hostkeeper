@@ -174,7 +174,11 @@ pub(crate) fn ask_typed(
 ) -> (ServiceReply, Option<Order>) {
     let (answer, order) = rig
         .coordinator
-        .heartbeat_with_orders(who(host, role_name), b)
+        .heartbeat_with_orders(
+            who(host, role_name),
+            b,
+            crate::trusted_root::TrustedRootSaid::default(),
+        )
         .expect("answered");
     (answer.reply, order)
 }
