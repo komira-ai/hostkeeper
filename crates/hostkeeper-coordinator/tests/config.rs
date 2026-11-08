@@ -388,6 +388,7 @@ async fn run_binds_both_listeners_and_reports_them() {
             heartbeat: "192.0.2.9:1".parse().expect("an address"),
             control: "192.0.2.9:2".parse().expect("an address"),
             lan: None,
+            health: None,
         })
     );
 }

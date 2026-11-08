@@ -110,7 +110,7 @@ where
 /// [`serve`] with the connection slots given: one permit is held for each connection being
 /// served, so a caller can see how many are in use.
 pub async fn serve_with_slots<A, F, S>(
-    mut listener: Listener<A>,
+    listener: Listener<A>,
     coordinator: Arc<Coordinator>,
     patience: Duration,
     slots: Arc<Semaphore>,
@@ -120,19 +120,44 @@ where
     F: Future<Output = io::Result<S>> + Send,
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
+    let Listener {
+        accept,
+        tls,
+        surface,
+    } = listener;
+    accept_each(accept, slots, move |stream| {
+        connection(
+            stream,
+            tls.clone(),
+            surface,
+            Arc::clone(&coordinator),
+            patience,
+        )
+    })
+    .await
+}
+
+/// Accepts the connections `accept` yields and serves each on a task of its own with
+/// `serve_one`, holding one of `slots` for each while it is served: with none free, clients
+/// queue in the kernel's backlog. A failed accept is logged and tried again after a pause. It
+/// never returns.
+pub(crate) async fn accept_each<A, F, S, C>(
+    mut accept: A,
+    slots: Arc<Semaphore>,
+    mut serve_one: impl FnMut(S) -> C,
+) -> Infallible
+where
+    A: FnMut() -> F + Send,
+    F: Future<Output = io::Result<S>> + Send,
+    C: Future<Output = ()> + Send + 'static,
+{
     loop {
         // A slot first, then the accept: with none free, clients queue in the backlog.
         // (The semaphore is never closed, so this is always `Some`.)
         let slot = Arc::clone(&slots).acquire_owned().await.ok();
-        match (listener.accept)().await {
+        match accept().await {
             Ok(stream) => {
-                let serving = connection(
-                    stream,
-                    listener.tls.clone(),
-                    listener.surface,
-                    Arc::clone(&coordinator),
-                    patience,
-                );
+                let serving = serve_one(stream);
                 tokio::spawn(async move {
                     serving.await;
                     drop(slot);
@@ -149,7 +174,7 @@ where
 /// A connection's IO whose writes fail with [`io::ErrorKind::TimedOut`] when one makes no
 /// progress for the patience, so a peer that sends requests and stops reading the responses
 /// does not keep its connection for ever. Reads pass through.
-struct WriteDeadline<S> {
+pub(crate) struct WriteDeadline<S> {
     inner: S,
     deadline: Deadline,
 }
@@ -200,7 +225,8 @@ impl Deadline {
 }
 
 impl<S> WriteDeadline<S> {
-    fn new(inner: S, patience: Duration) -> Self {
+    /// `inner`, whose writes fail once one makes no progress for `patience`.
+    pub(crate) fn new(inner: S, patience: Duration) -> Self {
         Self {
             inner,
             deadline: Deadline::new(patience),
