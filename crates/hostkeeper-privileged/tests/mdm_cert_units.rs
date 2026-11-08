@@ -179,6 +179,28 @@ fn lay_out(tree: &Tree) {
     support::run_ok(SYSTEMCTL, &["daemon-reload"]);
 }
 
+/// The property `name` of the unit `unit`, named in full (`support::property` adds `.service`
+/// to a name, which the timer and these names already have).
+fn property(unit: &str, name: &str) -> String {
+    let flag = format!("--property={name}");
+    support::run_ok(
+        SYSTEMCTL,
+        &["show", "--system", "--value", flag.as_str(), "--", unit],
+    )
+    .trim_end()
+    .to_owned()
+}
+
+/// What the journal holds of `units`, for a failure's message.
+fn journal(units: &[&str]) -> String {
+    let _ = support::run(support::JOURNALCTL, &["--sync"]);
+    let mut args = vec!["--no-pager", "--output=short"];
+    for unit in units {
+        args.extend(["--unit", unit]);
+    }
+    String::from_utf8_lossy(&support::run(support::JOURNALCTL, &args).stdout).into_owned()
+}
+
 /// The lines lego was started with, so far.
 fn calls(tree: &Tree) -> Vec<String> {
     fs::read_to_string(tree.path("state/lego/calls"))
@@ -232,12 +254,28 @@ fn the_certificate_units_order_once_renew_after_and_restart_the_proxy() {
     let renew = tree.unit(package::CERT_RENEW);
     let first = tree.unit(package::CERT_SERVICE);
     let proxy = tree.unit(package::PROXY);
+    let timer = tree.unit(package::CERT_TIMER);
+    // Every name below is one systemd loaded from the test's files: a property of a unit it
+    // does not know reads as inactive, and would pass a check vacuously.
+    for unit in [&renew, &first, &proxy, &timer] {
+        assert_eq!(property(unit, "LoadState"), "loaded", "{unit}");
+    }
+    let units = [first.as_str(), renew.as_str(), proxy.as_str()];
+    let state = |unit: &str, name: &str, want: &str| {
+        let got = property(unit, name);
+        assert_eq!(
+            got,
+            want,
+            "{unit} {name}; the journal:\n{}",
+            journal(&units)
+        );
+    };
 
     support::run_ok(SYSTEMCTL, &["start", renew.as_str()]);
     assert_eq!(calls(&tree), Vec::<String>::new());
-    assert_eq!(support::property(&first, "ConditionResult"), "no");
-    assert_eq!(support::property(&renew, "ConditionResult"), "no");
-    assert_eq!(support::property(&proxy, "ActiveState"), "inactive");
+    state(&first, "ConditionResult", "no");
+    state(&renew, "ConditionResult", "no");
+    state(&proxy, "ActiveState", "inactive");
 
     let dns_env = tree.path("etc/dns.env");
     fs::write(&dns_env, format!("{}={}\n", TOKEN.0, TOKEN.1)).expect("dns.env");
@@ -256,15 +294,18 @@ fn the_certificate_units_order_once_renew_after_and_restart_the_proxy() {
     );
     let crt = tree.path(&format!("state/lego/certificates/{}.crt", c.dns_name()));
     assert!(crt.exists(), "the first job wrote the certificate");
-    assert_eq!(support::property(&proxy, "ActiveState"), "active");
+    state(&first, "ConditionResult", "yes");
+    state(&first, "Result", "success");
+    state(&renew, "Result", "success");
+    state(&proxy, "ActiveState", "active");
     support::wait_until(|| proxy_starts(&tree) == 2);
 
     support::run_ok(SYSTEMCTL, &["start", renew.as_str()]);
     assert_eq!(calls(&tree).len(), 6, "{:?}", calls(&tree));
     assert_eq!(calls(&tree)[4], format!("renew {args} --days 30"));
-    assert_eq!(support::property(&first, "ConditionResult"), "no");
+    state(&first, "ConditionResult", "no");
+    state(&proxy, "ActiveState", "active");
     support::wait_until(|| proxy_starts(&tree) == 3);
 
-    let timer = tree.unit(package::CERT_TIMER);
-    assert_eq!(support::property(&timer, "Unit"), renew);
+    state(&timer, "Unit", &renew);
 }
