@@ -1,8 +1,8 @@
-//! `abort` through `Daemon::abort`, the coordinator's order and the admin socket: a running step
+//! `abort` through `Daemon::abort` and the coordinator's order: a running step
 //! stopped by name and its update ended `Halt`, a step that could not be stopped ended and its
 //! service let go, and a service with nothing running refused and untouched. All on fakes: a
-//! launcher that holds a step until it is stopped or released, a clock that moves when told, an
-//! alert sink, and an in-process admin connection with an explicit peer.
+//! launcher that holds a step until it is stopped or released, a clock that moves when told, and an
+//! alert sink.
 //!
 //! Every wait here ends: each names the party that would send what it waits for (the thread of an
 //! order or an abort, the dead-man's ticks on the clock), and fails the test, naming what ended,
@@ -15,7 +15,6 @@ mod support;
 use std::sync::Arc;
 
 use hostkeeper_config::names::{ServiceName, Version};
-use hostkeeper_daemon::admin::Peer;
 use hostkeeper_daemon::boot::{ALERT_UNSTOPPABLE, alert_line};
 use hostkeeper_daemon::locks::Package;
 use hostkeeper_daemon::testing::{FakeClock, Spawned, lock_waits, manifest, spawn};
@@ -24,10 +23,9 @@ use hostkeeper_daemon::verbs::abort::{ABORT_STOP_ATTEMPTS, Aborted};
 use hostkeeper_daemon::{Daemon, Refusal, Refused, Reply};
 use hostkeeper_hook::{Step, Verdict};
 use hostkeeper_proto::hostkeeper::agent::v1::{Abort, Order, order};
-use hostkeeper_proto::hostkeeper::local::v1::AbortRequest;
 use hostkeeper_steps::record::{PARAMS_FILE, Record, State};
 use hostkeeper_steps::runner::{REASON_ABORTED, REASON_UNSTOPPABLE};
-use support::{Rig, admin_from, alerting, d, lines, name, snapshot, update};
+use support::{Rig, alerting, d, lines, name, snapshot, update};
 
 /// The reply of an order that ended `Halt` for `reason`.
 fn halted(reason: &str) -> Reply {
@@ -135,12 +133,12 @@ fn unstopped(rig: &Rig) -> Arc<Daemon> {
 
 /// Catches an abort that waits for a bound, stops a wrong unit, runs a rollback, leaves the
 /// lock held or the record `running`: an unbounded `prepare` held until its unit is stopped is
-/// aborted through the admin socket from another thread; the one stop names the record's unit,
+/// aborted by `Daemon::abort` from another thread; the one stop names the record's unit,
 /// the order's own reply is `Halt` `aborted_by_operator`, the record says so, no step ran after
 /// `prepare`, the params file is gone, a later order of the service is `halted` (not `busy`),
 /// and another service's order that waited for the step lock meanwhile ran to its end.
-#[tokio::test(flavor = "multi_thread")]
-async fn abort_stops_an_unbounded_prepare_and_halts_the_order() {
+#[test]
+fn abort_stops_an_unbounded_prepare_and_halts_the_order() {
     let rig = Rig::new("abort-unbounded");
     unbounded(&rig, "web", "2.0.0");
     rig.add("web", "2.1.0");
@@ -158,30 +156,19 @@ async fn abort_stops_an_unbounded_prepare_and_halts_the_order() {
     let unit = record(&rig, "web").unit(Step::Prepare);
 
     let waits = lock_waits(&daemon.ctx().locks);
-    let (mut client, _) = admin_from(Arc::clone(&daemon), Peer { uid: Some(0) });
-    let runtime = tokio::runtime::Handle::current();
-    let abort = spawn("the abort", move || {
-        let request = AbortRequest {
-            service: "web".to_owned(),
-        };
-        runtime.block_on(client.abort(request))
-    });
+    let abort = abort_of(&daemon, "web");
     // The abort stops the step's unit, then waits for the order to let go of the lock.
     assert_eq!(
         waits.wait(&abort).expect("the abort waits for the order"),
         "web"
     );
-    assert_eq!(rig.launcher.stops(), [unit]);
-    let aborted = abort
-        .join()
-        .expect("the abort")
-        .expect("aborted")
-        .into_inner();
+    assert_eq!(rig.launcher.stops(), std::slice::from_ref(&unit));
+    let aborted = abort.join().expect("the abort").expect("aborted");
 
     assert_eq!(order.join().expect("the order"), halted(REASON_ABORTED));
-    let wire = aborted.record.expect("the record");
-    assert_eq!(wire.reason, REASON_ABORTED);
-    assert_eq!(wire.step, "prepare");
+    assert_eq!(aborted.record.state, halt_state(REASON_ABORTED));
+    assert_eq!(aborted.record.step, Step::Prepare);
+    assert_eq!(aborted.unit.as_deref(), Some(unit.as_str()));
     let rec = record(&rig, "web");
     assert_eq!(rec.state, halt_state(REASON_ABORTED));
     assert_eq!(rig.launcher.steps("web"), [Step::Prepare]);
@@ -418,16 +405,16 @@ fn abort_with_no_step_running_is_refused_and_writes_nothing() {
 }
 
 /// Catches the two entry points diverging: the scenario of the first test, aborted once by the
-/// coordinator's order and once by the admin socket, ends in the same record (state, step,
-/// attempt, generation), with the same stop.
-#[tokio::test(flavor = "multi_thread")]
-async fn abort_by_coordinator_order_and_by_admin_socket_end_in_the_same_state() {
+/// coordinator's order and once by `Daemon::abort` in the process, ends in the same record
+/// (state, step, attempt, generation), with the same stop.
+#[test]
+fn abort_by_coordinator_order_and_by_daemon_abort_end_in_the_same_state() {
     let mut ended = Vec::new();
     for by_order in [true, false] {
         let rig = Rig::new(if by_order {
             "abort-by-order"
         } else {
-            "abort-by-admin"
+            "abort-by-call"
         });
         unbounded(&rig, "web", "2.0.0");
         let gate = rig.launcher.hold_until_stopped("web", Step::Prepare);
@@ -445,14 +432,7 @@ async fn abort_by_coordinator_order_and_by_admin_socket_end_in_the_same_state() 
                 assert_eq!(abort.join().expect("the abort"), halted(REASON_ABORTED));
             }
             false => {
-                let (mut client, _) = admin_from(Arc::clone(&daemon), Peer { uid: Some(0) });
-                let runtime = tokio::runtime::Handle::current();
-                let abort = spawn("the abort", move || {
-                    let request = AbortRequest {
-                        service: "web".to_owned(),
-                    };
-                    runtime.block_on(client.abort(request))
-                });
+                let abort = abort_of(&daemon, "web");
                 let waited = waits.wait(&abort).expect("the abort waits for the order");
                 assert_eq!(waited, "web");
                 assert_eq!(rig.launcher.stops(), ["updater-web-prepare-1"]);

@@ -1,6 +1,6 @@
 //! `abort` (design sections 6.3 and 8.5): stop the service's running step and end its update
-//! `Finished{Halt}`. A coordinator's order and the admin socket's `Abort` both come here
-//! ([`crate::Daemon::abort`]). It takes neither the service's lock (the order it stops holds it)
+//! `Finished{Halt}`. A coordinator's order comes here ([`run`]), and so does
+//! [`crate::Daemon::abort`]. It takes neither the service's lock (the order it stops holds it)
 //! nor the step lock, and it never waits for a step to end by itself.
 //!
 //! - **An order holds the service's lock** and its update is unfinished: the update's runner is

@@ -1,12 +1,20 @@
-// hostkeeper.local.v1 Admin: what root on the host may ask of the host's daemon, with the
-// coordinator down.
+// hostkeeper.local.v1 Admin: what root on the host asked of the host's daemon, with the
+// coordinator down, on the daemon's admin socket.
 //
-// Served by: the daemon (`hostkeeper.service`, run as root), on the unix socket
-// `/run/hostkeeper/admin.sock`, mode 0600, in a directory of mode 0700. It carries exactly three
-// calls, because they must work with the coordinator down: see what the daemon is doing, how
-// far the host's enrollment is and whether its heartbeats reach the coordinator (`Status`), stop a
-// step (`Abort`), and clear a corrupt step record (`ClearRecord`). None of them can install,
-// update or switch a version; only the coordinator's orders do that.
+// Served by: nothing. This file is frozen: no program serves it and no code is generated from it.
+// The daemon binds no admin socket and `hostkeeper admin` is gone (docs/design/two-programs.md,
+// section 3.3): a host's status is `hkctl hosts get`, a step is stopped by `hkctl hosts abort`,
+// and a corrupt step record is cleared by `hkctl hosts clear-record` (docs/admin.md). The file
+// stays because the format shipped: an older `hostkeeper admin` on a host still speaks it to an
+// older daemon, and the compatibility test of `hostkeeper-proto` holds it to the last release.
+//
+// Before it was frozen, the daemon (`hostkeeper.service`, run as root) served it on the unix
+// socket `/run/hostkeeper/admin.sock`, mode 0600, in a directory of mode 0700. It carried exactly
+// three calls, because they had to work with the coordinator down: see what the daemon is doing,
+// how far the host's enrollment is and whether its heartbeats reach the coordinator (`Status`),
+// stop a step (`Abort`), and clear a corrupt step record (`ClearRecord`). None of them could
+// install, update or switch a version; only the coordinator's orders do that. The sections below
+// say how it was served.
 //
 // Authentication: the peer's credentials on the socket (`SO_PEERCRED`; on macOS
 // `LOCAL_PEERCRED`), read on each connection before any request. Only uid 0 may connect: a
@@ -23,11 +31,8 @@
 // version the same with `+` added. A token (a reason, a step name) is 1 to 64 bytes of
 // `[a-z0-9_]`.
 //
-// Extending: add fields, messages and enum values; never renumber, rename, retype or remove one,
-// and never reuse a number (the compatibility test in this crate refuses each). A reader treats
-// an enum value it does not know as UNSPECIFIED; no enum here is closed. The menu of calls grows
-// only by a reviewed change to this file, and never by a call that installs, updates or switches
-// a version.
+// Extending: never. The file is frozen: nothing is added, renumbered, renamed, retyped or removed
+// (the compatibility test in `hostkeeper-proto` refuses the last four).
 syntax = "proto3";
 
 package hostkeeper.local.v1;

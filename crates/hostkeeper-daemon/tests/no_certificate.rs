@@ -234,8 +234,7 @@ fn without_a_certificate_the_daemon_waits_and_names_the_missing_file() {
 
     step.send(Tick::Stop).expect("the loop takes the tick");
     daemon.ctx().restart().request();
-    let ended = runtime.block_on(served).expect("the server task");
-    assert!(ended.is_ok(), "{ended:?}");
+    runtime.block_on(served).expect("the server task");
     // Checked once the server is over, on purpose: a line said again would be queued, so it is
     // taken at once, and a wait with none fails at once rather than waiting.
     assert!(

@@ -9,8 +9,8 @@
 //! - hostkeeper's Alpine package, built by nfpm from `packaging/alpine/`, installs with `apk`,
 //!   enables its init script in the default runlevel, and `rc-service hostkeeper start` returns
 //!   once the daemon is ready (its ready file holds the pid supervise-daemon runs); the daemon is
-//!   the packaged binary's seed of the binary directory, exec'd from `current`, its admin socket
-//!   answers; killed, supervise-daemon starts it again; stopped, it is gone; a reboot of the
+//!   the packaged binary's seed of the binary directory, exec'd from `current`, its heartbeat
+//!   loop runs; killed, supervise-daemon starts it again; stopped, it is gone; a reboot of the
 //!   container starts it from the runlevel; and `apk del` takes it out of the runlevel and its
 //!   files away, and stops nothing;
 //! - a daemon whose config does not load makes `rc-service hostkeeper start` return, with the
@@ -229,7 +229,10 @@ fn the_alpine_package_installs_and_runs_the_daemon_under_openrc() {
             .trim(),
         format!("versions/{OWN}")
     );
-    host.exec_ok(&["/usr/bin/hostkeeper", "admin", "status"]);
+    // Past its start: its heartbeat loop runs, and waits for the enrollment no test gives it.
+    wait("the heartbeat loop of the daemon runs", || {
+        host.log().contains("not enrolled: waiting for")
+    });
 
     host.exec_ok(&["kill", "-KILL", &pid.to_string()]);
     let again = host.runs(&exe, Some(pid));

@@ -122,7 +122,7 @@ pub struct Links {
 
 impl Links {
     /// Starts the enrollment loop, then the heartbeat loop, each on a worker of
-    /// [`Links::dispatch`]. Each loop writes what the admin `Status` reports of it into the
+    /// [`Links::dispatch`]. Each loop writes what [`Daemon::status`] reports of it into the
     /// daemon's [`crate::node::NodeState`]: the enrollment loop the host's enrollment after each
     /// step, the heartbeat loop its link after each heartbeat, at the second of [`Links::clock`].
     pub fn start(self, daemon: &Arc<Daemon>) {

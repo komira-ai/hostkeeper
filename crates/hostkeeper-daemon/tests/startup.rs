@@ -1,5 +1,5 @@
-//! Start-up: the config before anything else, one daemon per state directory, the admin socket
-//! and its modes, the real socket's peer check, and the command line.
+//! Start-up: the config before anything else, one daemon per state directory, the modes of the
+//! state directory and the lock, and the command line.
 
 mod support;
 
@@ -11,19 +11,15 @@ use std::sync::Arc;
 
 use clap::Parser;
 use hostkeeper_daemon::cli::{
-    self, Cli, Command, DEFAULT_ADMIN_SOCKET, DEFAULT_CONFIG, DEFAULT_PACKAGES_DIR,
-    DEFAULT_STATE_DIR, DEFAULT_TRUSTED_ROOT_MAX_AGE_DAYS, DaemonFlags, EXIT_CONFIG, EXIT_FAILED,
-    EXIT_LOCKED, UNWIRED, Unwired,
+    self, Cli, Command, DEFAULT_CONFIG, DEFAULT_PACKAGES_DIR, DEFAULT_STATE_DIR,
+    DEFAULT_TRUSTED_ROOT_MAX_AGE_DAYS, DaemonFlags, EXIT_CONFIG, EXIT_FAILED, EXIT_LOCKED, UNWIRED,
+    Unwired,
 };
 use hostkeeper_daemon::start::{self, LOCK_FILE, StartError, Started};
 use hostkeeper_link::{DEFAULT_HEARTBEAT_SECS, LoopFlags};
 use hostkeeper_placed::{UnitControl, UnitControlError};
-use hostkeeper_proto::hostkeeper::local::v1::StatusRequest;
-use hostkeeper_proto::hostkeeper::local::v1::admin_client::AdminClient;
 use hostkeeper_steps::{LaunchError, StepLauncher};
-use hyper_util::rt::TokioIo;
-use support::{CONFIG, OWN, Rig, my_uid, snapshot};
-use tonic::transport::{Endpoint, Uri};
+use support::{CONFIG, OWN, Rig, snapshot};
 
 fn mode(path: &Path) -> u32 {
     fs::symlink_metadata(path)
@@ -37,7 +33,7 @@ fn start(rig: &Rig) -> Result<Started, StartError> {
     start::startup(&rig.settings(), rig.ports(), OWN)
 }
 
-/// Catches a lock file, a socket or a directory made before the config loaded: a config with a
+/// Catches a lock file or a directory made before the config loaded: a config with a
 /// key no table has, and one with a bad `ca_sha256`, each stop start-up with an error naming the
 /// key and the exit status of a config error, and the scratch directory is as it was.
 #[test]
@@ -66,109 +62,55 @@ fn a_config_that_fails_to_load_stops_the_daemon_naming_the_key_and_changes_nothi
         assert_eq!(snapshot(rig.scratch.path()), before);
     }
     assert!(!rig.state.exists());
-    assert!(!rig.socket.parent().expect("the socket dir").exists());
+    assert!(!rig.run_dir.exists());
 }
 
 /// Catches a lock that only holds within one daemon, or that the second daemon breaks: a second
 /// start on the same state directory is `Locked` (its exit status) and touches nothing of the
-/// first, which still answers.
+/// first, which still reports its status.
 #[test]
 fn a_second_daemon_on_the_same_state_dir_exits_locked() {
     let rig = Rig::new("locked");
     let first = start(&rig).expect("the first daemon");
-    let socket = fs::symlink_metadata(&rig.socket).expect("the socket").ino();
+    let lock = fs::symlink_metadata(rig.state.join(LOCK_FILE))
+        .expect("the lock file")
+        .ino();
     let error = start(&rig).err().expect("the second is refused");
     assert!(matches!(error, StartError::Locked { .. }), "{error}");
     assert_eq!(error.exit_code(), EXIT_LOCKED);
     assert!(error.to_string().contains(LOCK_FILE), "{error}");
     assert_eq!(
-        fs::symlink_metadata(&rig.socket)
+        fs::symlink_metadata(rig.state.join(LOCK_FILE))
             .expect("still there")
             .ino(),
-        socket
+        lock
     );
     assert!(first.daemon().status().is_ok());
 }
 
-/// Catches a lock that is never released: once the first daemon is gone, a third starts, and
-/// binds the socket again over the stale one the first left.
+/// Catches a lock that is never released: once the first daemon is gone, a third starts on the
+/// same state directory, and the lock file is as private as before.
 #[test]
 fn the_lock_is_released_when_the_first_daemon_ends() {
     let rig = Rig::new("released");
     let first = start(&rig).expect("the first daemon");
     drop(first);
-    assert!(
-        rig.socket.exists(),
-        "the first daemon leaves its socket file"
-    );
-    // Binding over the stale socket file works only because it is removed first.
     let third = start(&rig).expect("a daemon after the first ended");
-    assert_eq!(mode(&rig.socket), 0o600);
+    assert_eq!(mode(&rig.state.join(LOCK_FILE)), 0o600);
     drop(third);
 }
 
-/// Catches an admin socket or directory others can reach: the socket is 0600 in a 0700
-/// directory, and an existing directory of looser mode is closed to 0700.
+/// Catches a state directory or lock file others can reach: the state directory is 0700 and the
+/// lock file 0600, and a state directory of looser mode is closed to 0700.
 #[test]
-fn the_admin_socket_is_0600_in_a_0700_directory() {
+fn the_state_dir_is_0700_and_the_lock_0600() {
     let rig = Rig::new("modes");
-    let dir = rig.socket.parent().expect("the socket dir").to_path_buf();
-    fs::create_dir_all(&dir).expect("the dir");
-    fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).expect("loose");
+    fs::create_dir_all(&rig.state).expect("the dir");
+    fs::set_permissions(&rig.state, fs::Permissions::from_mode(0o755)).expect("loose");
     let started = start(&rig).expect("started");
-    assert_eq!(mode(&rig.socket), 0o600);
-    assert_eq!(mode(&dir), 0o700);
     assert_eq!(mode(&rig.state), 0o700);
     assert_eq!(mode(&rig.state.join(LOCK_FILE)), 0o600);
     drop(started);
-}
-
-/// Catches a file that is not a socket removed or overwritten at the socket's path, a socket
-/// directory that is a file taken for a directory, and a path the kernel refuses: each stops
-/// start-up, and the file in the way is as it was.
-#[test]
-fn what_is_in_the_way_of_the_socket_stops_start_up_and_is_left_alone() {
-    let rig = Rig::new("in-the-way");
-    let dir = rig.socket.parent().expect("the socket dir").to_path_buf();
-    fs::create_dir_all(&dir).expect("the dir");
-    fs::write(&rig.socket, "keep me").expect("a file");
-    let error = start(&rig).err().expect("refused");
-    assert!(error.to_string().contains("is not a socket"), "{error}");
-    assert_eq!(error.exit_code(), EXIT_FAILED);
-    assert_eq!(fs::read_to_string(&rig.socket).expect("kept"), "keep me");
-
-    let rig = Rig::new("dir-file");
-    fs::write(rig.socket.parent().expect("the socket dir"), "a file").expect("a file");
-    let error = start(&rig).err().expect("refused");
-    assert!(error.to_string().contains("is not a directory"), "{error}");
-
-    let mut rig = Rig::new("too-long");
-    rig.socket = rig.socket.with_file_name("s".repeat(300));
-    let error = start(&rig).err().expect("refused");
-    assert!(matches!(error, StartError::Io { .. }), "{error}");
-}
-
-/// Catches the real socket serving a connection whose peer is not root: a client of the bound
-/// socket, connecting as the uid the tests run as (not root), is closed unanswered.
-#[tokio::test]
-async fn a_real_connection_from_a_non_root_uid_is_closed() {
-    let rig = Rig::new("real-sock");
-    let started = start(&rig).expect("started");
-    let served = tokio::spawn(start::serve(started, support::idle_links()));
-    let path = rig.socket.clone();
-    let connector = tower::service_fn(move |_: Uri| {
-        let path = path.clone();
-        async move {
-            tokio::net::UnixStream::connect(path)
-                .await
-                .map(TokioIo::new)
-        }
-    });
-    let channel =
-        Endpoint::from_static("http://admin.invalid").connect_with_connector_lazy(connector);
-    let answered = AdminClient::new(channel).status(StatusRequest {}).await;
-    assert_eq!(answered.is_ok(), my_uid() == 0, "{answered:?}");
-    served.abort();
 }
 
 /// Catches a start-up error of the command line that exits 0 or with another error's status:
@@ -186,8 +128,6 @@ fn the_command_line_exits_with_the_config_errors_status() {
         rig.state.clone().into(),
         "--packages-dir".into(),
         rig.packages.clone().into(),
-        "--admin-socket".into(),
-        rig.socket.clone().into(),
     ];
     let code = cli::run(Cli::parse_from(args));
     assert_eq!(
@@ -211,7 +151,7 @@ fn daemon_flag_defaults_are_the_documented_ones() {
             config: DEFAULT_CONFIG.into(),
             state_dir: DEFAULT_STATE_DIR.into(),
             packages_dir: DEFAULT_PACKAGES_DIR.into(),
-            admin_socket: DEFAULT_ADMIN_SOCKET.into(),
+            admin_socket: None,
             notify_systemd: false,
             ready_file: None,
             trusted_root_max_age_days: DEFAULT_TRUSTED_ROOT_MAX_AGE_DAYS,
@@ -242,25 +182,12 @@ fn daemon_flag_defaults_are_the_documented_ones() {
     for line in documented {
         assert!(readme.contains(&line), "the README does not state {line}");
     }
-    // The admin socket's default is the host platform's: its row states the Linux one first and
-    // the macOS one after it, so the default of either build is in it.
+    // `--admin-socket` is hidden and ignored: the README says so in its row.
     let row = readme
         .lines()
         .find(|line| line.starts_with("| `--admin-socket` |"))
         .expect("the README's row of `--admin-socket`");
-    for path in [
-        "/run/hostkeeper/admin.sock",
-        "/var/run/hostkeeper/admin.sock",
-    ] {
-        assert!(
-            row.contains(&format!("`{path}`")),
-            "{row} does not state {path}"
-        );
-    }
-    assert!(
-        row.contains(&format!("`{DEFAULT_ADMIN_SOCKET}`")),
-        "{row} does not state {DEFAULT_ADMIN_SOCKET}"
-    );
+    assert!(row.contains("accepted and ignored"), "{row}");
 }
 
 /// Catches the config and lock errors sharing an exit status with each other or with a usage

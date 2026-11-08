@@ -1,7 +1,6 @@
 //! `clear_halt` (design sections 5.4 and 6.2): lift the service's halt for a halt generation
 //! strictly above the one the service is held under. The coordinator's: a `clear_halt` order,
-//! and the halt generations of its heartbeat replies ([`crate::link_adapters::DaemonHalts`]). The
-//! admin socket does not serve it.
+//! and the halt generations of its heartbeat replies ([`crate::link_adapters::DaemonHalts`]).
 //!
 //! Under the service's lock, never waited for (a service with an order under way is `busy`, and
 //! nothing changes): the held generation is read (a missing file is 0; one that is not a number

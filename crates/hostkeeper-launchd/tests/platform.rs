@@ -11,7 +11,7 @@ fn linux() -> Platform {
         kind: PlatformKind::Linux,
         unit_dir: PathBuf::from("/etc/systemd/system"),
         unit_suffix: ".service",
-        admin_socket: PathBuf::from("/run/hostkeeper/admin.sock"),
+        run_dir: PathBuf::from("/run"),
         label_prefix: None,
     }
 }
@@ -21,7 +21,7 @@ fn macos() -> Platform {
         kind: PlatformKind::Macos,
         unit_dir: PathBuf::from("/Library/LaunchDaemons"),
         unit_suffix: ".plist",
-        admin_socket: PathBuf::from("/var/run/hostkeeper/admin.sock"),
+        run_dir: PathBuf::from("/var/run"),
         label_prefix: Some(REVERSE_DNS_PREFIX),
     }
 }
@@ -31,7 +31,7 @@ fn openrc() -> Platform {
         kind: PlatformKind::Openrc,
         unit_dir: PathBuf::from("/etc/init.d"),
         unit_suffix: "",
-        admin_socket: PathBuf::from("/run/hostkeeper/admin.sock"),
+        run_dir: PathBuf::from("/run"),
         label_prefix: None,
     }
 }
@@ -41,7 +41,8 @@ fn only(dirs: &'static [&'static str]) -> impl Fn(&Path) -> bool {
     move |path| dirs.iter().any(|dir| Path::new(dir) == path)
 }
 
-/// Catches a constructor that names the wrong unit directory, suffix, socket or label prefix.
+/// Catches a constructor that names the wrong unit directory, suffix, run directory or label
+/// prefix.
 #[test]
 fn the_platform_constructors_name_the_documented_paths() {
     assert_eq!(Platform::linux(), linux());

@@ -1,4 +1,4 @@
-//! The daemon's observer: what `Status` reports of how each installed service runs, that a
+//! The daemon's observer: what the daemon's status holds of how each installed service runs, that a
 //! status read never waits for a running step, which executable a version seals, and the
 //! observer of a host.
 
@@ -9,28 +9,22 @@ use std::path::Path;
 use std::sync::Arc;
 
 use hostkeeper_config::names::ServiceName;
-use hostkeeper_daemon::admin::{self, Peer, service_state};
+use hostkeeper_daemon::Reply;
 use hostkeeper_daemon::observer::{
     OwnService, STATUS_DEADLINE, SealedExe, host_observer, observe, observer_with, service_health,
     service_input,
 };
 use hostkeeper_daemon::selfunits::MAIN_UNIT;
 use hostkeeper_daemon::selfupdate::binary_dir;
-use hostkeeper_daemon::testing::{Counted, manifest, spawn};
-use hostkeeper_daemon::{Daemon, Reply};
+use hostkeeper_daemon::testing::{manifest, spawn};
 use hostkeeper_hook::Step;
 use hostkeeper_launchd::Label;
 use hostkeeper_observe::{
     ActiveState, Current, ExeStat, ExpectedExe, HealthView, Observation, ServiceInput,
-    ServiceState as Observed, UnhealthyReason, UnobservedReason, VersionView,
+    ServiceState as Observed, UnhealthyReason, UnobservedReason, VersionView, beat_health,
 };
 use hostkeeper_proto::hostkeeper::agent::v1::Health;
-use hostkeeper_proto::hostkeeper::local::v1::{
-    Liveness, ServiceState, StatusRequest, Unhealthy, admin_client::AdminClient,
-};
-use support::{OWN, Rig, client, d, update};
-use tokio::io::duplex;
-use tokio_stream::StreamExt;
+use support::{OWN, Rig, d, update};
 
 /// The SHA-256 of the three bytes `abc`.
 const ABC: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
@@ -75,16 +69,6 @@ fn installed(rig: &Rig, service: &str, version: &str, health: bool) {
     rig.store.link(service, "current", version);
 }
 
-/// A client of `daemon`'s admin service as root.
-fn connect(daemon: Arc<Daemon>) -> AdminClient<tonic::transport::Channel> {
-    let (near, far) = duplex(64 * 1024);
-    let (counted, _) = Counted::new(far);
-    let peer = Peer { uid: Some(0) };
-    let incoming = tokio_stream::iter([Ok((counted, peer))]).chain(tokio_stream::pending());
-    tokio::spawn(admin::serve(daemon, incoming));
-    client(near)
-}
-
 fn stat() -> ExeStat {
     ExeStat {
         size: 10,
@@ -95,10 +79,10 @@ fn stat() -> ExeStat {
 
 /// Catches an observation dropped, read for the wrong service or left off the wire: two
 /// installed services, one live with a confirmed version and a healthy probe and one stopped,
-/// are each reported in the library's observation with its reason token and in the wire's
-/// `ServiceState`; a service with no `current` has no observation and no state.
-#[tokio::test(flavor = "multi_thread")]
-async fn status_reports_the_observation_and_the_installed_version_per_service() {
+/// are each reported in the library's observation with its reason token and in the health the
+/// heartbeat reports; a service with no `current` has no observation and no health.
+#[test]
+fn status_reports_the_observation_and_the_installed_version_per_service() {
     let rig = Rig::new("observer-status");
     installed(&rig, "live", "1.0.0", true);
     installed(&rig, "stopped", "1.0.0", false);
@@ -163,36 +147,6 @@ async fn status_reports_the_observation_and_the_installed_version_per_service() 
     );
     assert_eq!(service_health(bare), None);
     assert_eq!(rig.health.requests(), [URL]);
-
-    let wire = connect(Arc::clone(&daemon))
-        .status(StatusRequest {})
-        .await
-        .expect("status")
-        .into_inner();
-    let [bare, live, stopped] = &wire.services[..] else {
-        panic!("three services");
-    };
-    assert_eq!(
-        live.state,
-        Some(ServiceState {
-            liveness: Liveness::Live as i32,
-            version: Some("1.0.0".to_owned()),
-            healthy: true,
-            unhealthy: Unhealthy::Unspecified as i32,
-            unit: String::new(),
-        })
-    );
-    assert_eq!(
-        stopped.state,
-        Some(ServiceState {
-            liveness: Liveness::Stopped as i32,
-            version: None,
-            healthy: false,
-            unhealthy: Unhealthy::Unspecified as i32,
-            unit: String::new(),
-        })
-    );
-    assert_eq!(bare.state, None);
 }
 
 /// Catches an observation that takes the service's lock or the step lock: a step of `web` is
@@ -331,30 +285,31 @@ fn unobserved(reason: UnobservedReason) -> Observed {
     }
 }
 
-/// Catches an observation put in the wrong wire field: each state, version view and health view
-/// has its liveness, its confirmed version only, its `healthy` only for a live service nothing
-/// speaks against, and its unhealthy reason by the rules of `service_state`.
+/// Catches an observation put in the wrong heartbeat field: each state, version view and health
+/// view has its `Health` and the version the beat carries (the recorded one, none for an absent
+/// service), and its reason token by the rules of `Observation::reason_token`.
 #[test]
-fn the_wire_state_says_what_the_observation_says() {
+fn the_heartbeat_health_and_the_reason_say_what_the_observation_says() {
     let mismatch = VersionView::Mismatch {
         recorded: "1.0.0".to_owned(),
         observed_note: "another executable".to_owned(),
     };
     let none = VersionView::NotLive;
     let not_probed = HealthView::NotProbed;
-    // The observation, then the liveness, the version, `healthy` and the reason it is not.
+    let v = Some("1.0.0");
+    // The observation, then the health and version of the beat and the reason token.
     let table = [
         (
             observation(Observed::Absent, none.clone(), not_probed.clone()),
-            (Liveness::Absent, None, false, Unhealthy::Unspecified),
+            (Health::Absent, None, Some("absent")),
         ),
         (
             observation(Observed::Stopped, none.clone(), not_probed.clone()),
-            (Liveness::Stopped, None, false, Unhealthy::Unspecified),
+            (Health::Unhealthy, v, Some("stopped")),
         ),
         (
             observation(Observed::Transitioning, none.clone(), not_probed.clone()),
-            (Liveness::Transitioning, None, false, Unhealthy::Unspecified),
+            (Health::Unhealthy, v, Some("transitioning")),
         ),
         (
             observation(
@@ -362,7 +317,7 @@ fn the_wire_state_says_what_the_observation_says() {
                 none.clone(),
                 not_probed.clone(),
             ),
-            (Liveness::Unobserved, None, false, Unhealthy::Unspecified),
+            (Health::Unhealthy, v, Some("unobserved")),
         ),
         (
             observation(
@@ -370,11 +325,11 @@ fn the_wire_state_says_what_the_observation_says() {
                 none.clone(),
                 not_probed.clone(),
             ),
-            (Liveness::Unobserved, None, false, Unhealthy::Observing),
+            (Health::Unhealthy, v, Some("unobserved")),
         ),
         (
             observation(Observed::Unmonitored, none.clone(), HealthView::Healthy),
-            (Liveness::Unmonitored, None, false, Unhealthy::Unspecified),
+            (Health::Healthy, v, Some("unmonitored")),
         ),
         (
             observation(
@@ -382,72 +337,56 @@ fn the_wire_state_says_what_the_observation_says() {
                 none,
                 unhealthy(UnhealthyReason::Unreachable),
             ),
-            (Liveness::Unmonitored, None, false, Unhealthy::Health),
+            (Health::Unhealthy, v, Some("unreachable")),
         ),
         (
             live(confirmed(), HealthView::Healthy),
-            (Liveness::Live, Some("1.0.0"), true, Unhealthy::Unspecified),
+            (Health::Healthy, v, None),
         ),
         (
             live(unconfirmed(), not_probed.clone()),
-            (Liveness::Live, None, true, Unhealthy::Unspecified),
+            (Health::Healthy, v, Some("version_unconfirmed")),
         ),
         (
             live(mismatch.clone(), HealthView::Healthy),
-            (Liveness::Live, None, false, Unhealthy::VersionMismatch),
+            (Health::Unhealthy, v, Some("version_mismatch")),
         ),
         (
             live(mismatch, unhealthy(UnhealthyReason::StatusNon2xx)),
-            (Liveness::Live, None, false, Unhealthy::VersionMismatch),
+            (Health::Unhealthy, v, Some("version_mismatch")),
         ),
         (
             live(confirmed(), unhealthy(UnhealthyReason::StatusNon2xx)),
-            (Liveness::Live, Some("1.0.0"), false, Unhealthy::Health),
+            (Health::Unhealthy, v, Some("status_non_2xx")),
         ),
         (
             live(confirmed(), unhealthy(UnhealthyReason::Unreachable)),
-            (Liveness::Live, Some("1.0.0"), false, Unhealthy::Health),
+            (Health::Unhealthy, v, Some("unreachable")),
         ),
         (
             live(confirmed(), unhealthy(UnhealthyReason::Redirect)),
-            (
-                Liveness::Live,
-                Some("1.0.0"),
-                false,
-                Unhealthy::HealthRedirect,
-            ),
+            (Health::Unhealthy, v, Some("redirect")),
         ),
         (
             live(confirmed(), unhealthy(UnhealthyReason::UrlInvalid)),
-            (
-                Liveness::Live,
-                Some("1.0.0"),
-                false,
-                Unhealthy::HealthUnmapped,
-            ),
+            (Health::Unhealthy, v, Some("url_invalid")),
         ),
         (
             live(VersionView::Unknown, not_probed.clone()),
-            (Liveness::Live, None, false, Unhealthy::NoMainProcess),
+            (Health::Healthy, v, Some("version_unknown")),
         ),
         (
             Observation {
                 recorded: None,
                 ..live(VersionView::Unknown, not_probed)
             },
-            (Liveness::Live, None, true, Unhealthy::Unspecified),
+            (Health::Healthy, None, Some("version_unknown")),
         ),
     ];
-    for (observation, (liveness, version, healthy, why)) in table {
+    for (observation, (health, version, reason)) in table {
         assert_eq!(
-            service_state(&observation),
-            ServiceState {
-                liveness: liveness as i32,
-                version: version.map(str::to_owned),
-                healthy,
-                unhealthy: why as i32,
-                unit: String::new(),
-            },
+            (beat_health(&observation), observation.reason_token()),
+            ((health, version.map(str::to_owned)), reason),
             "{observation:?}"
         );
     }

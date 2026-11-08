@@ -708,7 +708,7 @@ Reconcile on every heartbeat: advance `last_good`, mark bad, plan automatic roll
 | Rollback fails after commit | Failed after commit if the hook says `reversible:false`, else Halt | `next.rs` |
 | Hook-requested wait too long | clamped to 3600 seconds | `MAX_RETRY_SECS` |
 | Newer-schema step record | read, reported, never rewritten | `RecordNewer` |
-| Corrupt step record | the run fails; the operator runs `clear_record` on the host's admin socket (section 4.1, B20) | `RecordError::Corrupt` |
+| Corrupt step record | the run fails; the operator clears it with `hkctl hosts clear-record` (two-programs.md 3.2; off-line, docs/admin.md) | `RecordError::Corrupt` |
 | First start of a daemon not yet enrolled | logs once, calls nothing, retries every few seconds, finishes a half-written enrollment under the store lock | designed from kbf `enrolled.rs` |
 | Package whose manifest `name`, `version` or `platform` differs from the one asked for | `manifest_mismatch`, nothing is linked | `a_manifest_for_another_name_version_or_platform_is_manifest_mismatch` (unpack), `a_manifest_for_another_platform_is_manifest_mismatch` (loader) |
 | Order carrying a version that is not a version | refused by grammar | `crates/hostkeeper-wire/src/version.rs` (open PR #5) |
