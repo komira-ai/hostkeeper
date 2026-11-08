@@ -67,7 +67,7 @@ update coordinator, `hostkeeper-coordinator serve`. The parts are being moved he
 | [`hostkeeper-oidc`](crates/hostkeeper-oidc) | the verifier of OIDC tokens (CI tokens) against an allow-list, with its issuer keys fetched over HTTPS |
 | [`hostkeeper-mdm-core`](crates/hostkeeper-mdm-core) | the pure core of the MDM kit: its settings, the enrollment and ADE profiles, the systemd units and Caddyfile of the MDM services, and the pinned upstream tools ([design](docs/design/hostkeeper-mdm.md) section 8) |
 | [`hostkeeper-tls`](crates/hostkeeper-tls) | TLS server configuration reloaded from certificate files, with its reload metrics |
-| [`hostkeeper-ui-tests`](crates/hostkeeper-ui-tests) | the tests of the operator web app in [`ui/`](ui), run in a JavaScript engine against a fake gateway, and each call of [`ui/calls.json`](ui/calls.json) sent to the real coordinator with an operator's token; not shipped |
+| [`hostkeeper-ui-tests`](crates/hostkeeper-ui-tests) | the generator of the web app's API client ([`ui/gen/`](ui/gen), from the protos), and the tests of the operator web app in [`ui/`](ui), run in a JavaScript engine against a fake gateway, with each call of [`ui/calls.json`](ui/calls.json) sent to the real coordinator with an operator's token; not shipped |
 | [`hello`](examples/hello) | the example service: an HTTP server on loopback and its update hook, packaged for each release, which proves an install, an update and a rollback on the farm ([docs/hello.md](docs/hello.md)) |
 | `hostkeeper-testkit` | helpers the tests share |
 | [`hostkeeper-privileged`](crates/hostkeeper-privileged) | the tests that run as root against a host's real systemd, in `privileged.yml` after a merge to main and in `pr-device.yml` on every pull request, with the workload fixture `hostkeeper-fixture-hook` they drive, the end-to-end update of a tierstore-shaped package through the real coordinator and daemon, and network install end to end (in `net-install.yml` only, which no release waits for): a QEMU guest installed by the real `hostkeeper-pxe`, enrolled and given a service, reinstalled and retired (x86-64), and booted to its seed fetch (arm64) ([design](docs/design/network-install.md) section 11, item N10); not shipped |
@@ -75,7 +75,11 @@ update coordinator, `hostkeeper-coordinator serve`. The parts are being moved he
 
 The operator web app (`ui/`) is static files: HTML, one stylesheet and JavaScript modules, with
 no framework and no build step. Its pages (Fleet, Host, Rollout, Holds, Enrollment, Audit) call
-the coordinator's HTTP/JSON gateway with the operator's token, each button one method call. The
+the coordinator's HTTP/JSON gateway with the operator's token, each button one method call,
+through a client generated from the protos: `ui/gen/client.js`, one function per method of
+`hostkeeper.operator.v1` (`api.releases.setDesired(request)`), with its TypeScript declarations
+in `ui/gen/client.d.ts`. Both are checked in, and a test regenerates them and fails on any
+difference; `ui/calls.json`, the methods the pages call, is derived from the pages the same way. The
 coordinator serves it under `/ui/` of its private listener: the coordinator's container image
 holds it at `/usr/share/hostkeeper-coordinator/ui`, which the coordinator serves when started
 without `--ui-dir`, and `--ui-dir` names another directory

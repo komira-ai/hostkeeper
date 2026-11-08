@@ -1,8 +1,10 @@
 //! The coordinator's container build file, `packaging/container/Dockerfile`: a distroless base
 //! pinned by digest, the released binary and the operator web app (`ui/`, at the path the
 //! coordinator serves when given no `--ui-dir`) copied in and nothing else, a non-root user, the
-//! binary as the entrypoint, and no environment variable, build argument or default argument (the
-//! coordinator's configuration is its flags, AGENTS.md S2). The file is read as text; nothing
+//! binary as the entrypoint, and no environment variable, build argument, default argument (the
+//! coordinator's configuration is its flags, AGENTS.md S2) or health check (the image has no shell
+//! or client to run one; a probe outside the container asks `serve --health-listen`'s
+//! `GET /healthz`, docs/design/two-programs.md section 2.7). The file is read as text; nothing
 //! here builds an image.
 
 use std::fs;
@@ -68,8 +70,8 @@ fn check_dockerfile(text: &str) -> Result<(), String> {
 
 /// Catches an unpinned or moved base, a base other than distroless, a file copied in other than
 /// the binary and the web app, the web app copied elsewhere or with a mode for its directories, a
-/// root user, an environment variable, a build argument, default arguments, or an entrypoint
-/// other than the binary.
+/// root user, an environment variable, a build argument, default arguments, a `HEALTHCHECK`, or an
+/// entrypoint other than the binary.
 #[test]
 fn the_coordinator_image_is_the_binary_on_a_pinned_base_as_nonroot_with_flags_only() {
     let text = dockerfile();
@@ -106,6 +108,15 @@ fn the_coordinator_image_is_the_binary_on_a_pinned_base_as_nonroot_with_flags_on
                 "ENTRYPOINT [\"/usr/bin/hostkeeper-coordinator\"]\nCMD [\"serve\"]",
             ),
             "CMD",
+        ),
+        (
+            altered(
+                &text,
+                ENTRYPOINT,
+                "HEALTHCHECK CMD [\"/usr/bin/hostkeeper-coordinator\", \"healthcheck\"]\n\
+                 ENTRYPOINT [\"/usr/bin/hostkeeper-coordinator\"]",
+            ),
+            "HEALTHCHECK",
         ),
         (altered(&text, COPY, "COPY . /usr/bin/"), "COPY . /usr/bin/"),
         (
