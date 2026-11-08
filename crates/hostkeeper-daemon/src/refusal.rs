@@ -120,13 +120,11 @@ pub enum Refusal {
     /// `clear_halt` with a halt generation not above the one the service is held under: nothing
     /// is written.
     StaleHaltGeneration,
-    /// `clear_record` in a coordinator's order: this daemon runs it only for the admin socket.
-    Forbidden,
 }
 
 impl Refusal {
     /// Every refusal, in the order of the enum.
-    pub const ALL: [Refusal; 45] = [
+    pub const ALL: [Refusal; 44] = [
         Refusal::InvalidOrder,
         Refusal::NotImplemented,
         Refusal::Busy,
@@ -171,7 +169,6 @@ impl Refusal {
         Refusal::NothingRunning,
         Refusal::RecordReads,
         Refusal::StaleHaltGeneration,
-        Refusal::Forbidden,
     ];
 
     /// The token.
@@ -221,7 +218,6 @@ impl Refusal {
             Refusal::NothingRunning => "nothing_running",
             Refusal::RecordReads => "record_reads",
             Refusal::StaleHaltGeneration => "stale_halt_generation",
-            Refusal::Forbidden => "forbidden",
         }
     }
 }

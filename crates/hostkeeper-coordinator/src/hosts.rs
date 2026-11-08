@@ -131,7 +131,14 @@ impl Coordinator {
             let fleet = self.lock_fleet();
             let node = fleet.node(&id).ok_or(proto::HostsRefusal::UnknownHost)?;
             let status = self.status_in(&fleet, now);
-            report::host(&id, node, &status, now, unix_now)
+            let mut host = report::host(&id, node, &status, now, unix_now);
+            // The verdict of a `clear_record` the host reported, which no rule reads.
+            for one in &mut host.services {
+                if let Some(cleared) = fleet.clear_records.shown(&id, &one.service) {
+                    one.last_update = Some(report::update_result(cleared));
+                }
+            }
+            host
         };
         let mut hosts = [host];
         self.show_inventory_of(&mut hosts)?;

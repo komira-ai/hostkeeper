@@ -148,7 +148,7 @@ Every table refuses unknown keys. A config that fails to load stops the daemon w
 | `abort` (also local) | service | stop the running step and end the order `Halt` |
 | `clear_halt` | service, halt generation | lift a halt |
 | `status` (also local) | none | report; also sent with every heartbeat |
-| `clear_record` (local) | service | clear a corrupt step record |
+| `clear_record` (also local) | service | clear a corrupt step record; its verdict, `succeeded` with the reason `record_cleared`, names the version the service runs |
 
 Updating hostkeeper itself is `update` for the service named `hostkeeper`, or `install` on a host the deb or the pkg bootstrapped (no package of hostkeeper is installed there), followed by the self-update follow-on (section 6.6).
 

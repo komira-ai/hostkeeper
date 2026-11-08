@@ -3,8 +3,8 @@
 //! the certificate.
 //!
 //! [`DaemonOrders`] is the loop's [`OrderSink`]: it writes the loop's order (an update, a forced
-//! update, an install, an uninstall or an abort) as the protobuf `Order` that [`Daemon::order`]
-//! takes ([`wire_order`]), and reads the daemon's [`Reply`] as the verdict the loop reports
+//! update, an install, an uninstall, an abort or a clear-record) as the protobuf `Order` that
+//! [`Daemon::order`] takes ([`wire_order`]), and reads the daemon's [`Reply`] as the verdict the loop reports
 //! ([`order_result`]). It decides nothing about the order: the checks, the locks and the try
 //! rules are the daemon's.
 //!
@@ -64,8 +64,9 @@ impl OrderSink for DaemonOrders {
 
 /// `order` as the protobuf `Order` the daemon takes, every field as it is: the id, the try, and
 /// the target's service, version and digest, or the service alone. An update is an `update`, a
-/// forced update a `force`, an install an `install`, an uninstall an `uninstall` and an abort an
-/// `abort`. The loop's order has no halt generation, so a `force` carries 0 and lifts no halt.
+/// forced update a `force`, an install an `install`, an uninstall an `uninstall`, an abort an
+/// `abort` and a clear-record a `clear_record`. The loop's order has no halt generation, so a
+/// `force` carries 0 and lifts no halt.
 pub fn wire_order(order: &Order) -> wire::Order {
     let terms = |target: &Target| {
         (
@@ -111,6 +112,9 @@ pub fn wire_order(order: &Order) -> wire::Order {
             service: service.as_str().to_owned(),
         }),
         Verb::Abort(service) => wire::order::Verb::Abort(wire::Abort {
+            service: service.as_str().to_owned(),
+        }),
+        Verb::ClearRecord(service) => wire::order::Verb::ClearRecord(wire::ClearRecord {
             service: service.as_str().to_owned(),
         }),
     };
