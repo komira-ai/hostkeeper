@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "`hostkeeper ci set-desired`: what a service's CI runs after its release is verified, to set the desired version on the coordinator with a GitHub Actions OIDC token and wait for the fleet to converge."
+description = "`hostkeeper ci set-desired`: what a revision of set-desired.yml before its move to hkctl runs after the release is verified, to set the desired version on the coordinator with a GitHub Actions OIDC token and wait for the fleet to converge."
 
 # The CI client of the design (section 4.5), for everything after a service's release job has
 # verified the hostkeeper release: it requests a GitHub Actions OIDC token, calls

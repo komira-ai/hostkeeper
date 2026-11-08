@@ -25,6 +25,9 @@ mod release;
 mod release_tests;
 mod services_tests;
 mod set_desired;
+mod set_desired_calls;
+mod set_desired_calls_tests;
+mod set_desired_outputs_tests;
 mod set_desired_tests;
 #[path = "../../src/testdir.rs"]
 mod testdir;

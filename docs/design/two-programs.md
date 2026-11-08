@@ -602,8 +602,9 @@ command:
    source ref, source digest and `--deny-self-hosted-runners`).
 3. `version`: `hkctl --version` equals `hkctl <version>+<commit12>`.
 4. `tailnet`: as today, only with `join_tailnet`.
-5. `ca`, `request`: the CA file, as today; the request of the set built by `jq -n --arg ... --rawfile ...` from the
-   step's `env:` values (`{"desired":{"version":...}}`, with the release index and its digest when given). No
+5. `ca`, `request`: the CA file, as today; the request of the set built by `jq -n --arg ...` from the
+   step's `env:` values (`{"desired":{"version":...}}`, with the one package digest, or the release index and its
+   digest). It refuses neither way, both, or half of one, before any token, as `hostkeeper ci` does today. No
    `${{ inputs.* }}` is written into a script, as today.
 6. `set-desired`, `continue-on-error: true`: `hkctl --endpoint ... --ca-file ... --github-oidc-audience "$AUDIENCE"
    --response-file "$RUNNER_TEMP/hkctl-set.json" releases set-desired --service "$SERVICE" [--package-digest ...]
@@ -611,20 +612,27 @@ command:
 7. `wait`, only when `wait` is true and step 6 succeeded, `continue-on-error: true`: `hkctl ... --response-file
    "$RUNNER_TEMP/hkctl-wait.json" releases wait-converged --service ... --version ... --wait-secs <max_polls times 10>
    2> "$RUNNER_TEMP/hkctl-wait.err"`.
-8. `outputs`, `if: always()`: one `jq` program, a file beside the workflow, reads those four files and the steps'
-   outcomes and writes the three outputs, then exits 1 unless the reason is `converged` or `not_waited`, as `hostkeeper
-   ci` does (`crates/hostkeeper-ci/src/flow.rs`, **Built**). Its table, in order:
+8. `outputs`, `if: always()`: one `jq` program, held in the step's `env` (a reusable workflow runs
+   in the caller's repository, where no file beside the workflow is checked out), reads those four
+   files and the steps' outcomes and writes the three outputs, then exits 1 unless the reason is
+   `converged` or `not_waited`, as `hostkeeper ci` does (`crates/hostkeeper-ci/src/flow.rs`,
+   **Built**). Its table, in order:
 
 | What the files say | `reason` | `converged` | `desired_version` |
 |---|---|---|---|
-| step 6 failed with `refused: <token>` | the token (only `[a-z0-9_]{1,64}`, as 2.4) | `false` | the requested version |
-| step 6 failed otherwise (transport, no body) | `no_answer` | `false` | the requested version |
+| step 6 failed with `refused: <token>` | the token (only `[a-z0-9_]{1,64}`, as 2.4) | `false` | empty |
+| step 6 failed otherwise (transport, no body) | `no_answer` | `false` | empty |
 | the stored version differs from the requested one | `not_stored` | `false` | the stored one, when it is a version |
 | `wait` is false | `not_waited` | `false` | the requested version |
 | step 7 failed with `refused: <token>` (`invalid_wait`, `too_many_waits`, ...) | the token | `false` | the requested version |
 | step 7 failed otherwise, or the outcome is absent or `UNSPECIFIED` | `no_answer` | `false` | the requested version |
 | outcome `WAIT_OUTCOME_CONVERGED`, `_HALTED`, `_SUPERSEDED` | `converged`, `halted`, `superseded` | `true` only for `converged` | the requested version |
 | outcome `WAIT_OUTCOME_DEADLINE` | `not_converged` | `false` | the requested version |
+
+`desired_version` is empty whenever step 6 failed: the output is "the desired version the
+coordinator stored; empty when it stored none", as `hostkeeper ci` writes it, and the first draft
+of this table, which gave the requested version there, contradicted that contract. A version is
+written only when it is a version, so no caller input reaches `GITHUB_OUTPUT` unchecked.
 
 **The properties kept.**
 

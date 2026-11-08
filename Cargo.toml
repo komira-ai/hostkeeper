@@ -30,6 +30,11 @@ futures = "0.3.34"
 # the tree through the P-256 crates below.
 getrandom = "0.4.3"
 hex = "0.4.3"
+# A jq interpreter in pure Rust, in which the workflow lint's tests (crates/xtask/tests/workflows)
+# run the outputs program of `set-desired.yml` on fixtures, with no shell; dev-dependency only.
+jaq-core = "3.1.2"
+jaq-json = "2.0.3"
+jaq-std = "3.0.4"
 # The coordinator's HTTP/1.1 and HTTP/2 server and the OIDC key fetch's client (hostkeeper-coordinator,
 # hostkeeper-oidc); members turn on the parts they use. hyper-util is also the connection the
 # tests of hostkeeper-daemon open to its admin server over an in-process pipe (`TokioIo`).
