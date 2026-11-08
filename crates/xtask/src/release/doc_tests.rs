@@ -16,7 +16,7 @@ use std::cell::RefCell;
 use std::path::Path;
 use std::rc::Rc;
 
-use super::contract::{Commit, PROGRAMS, Platform, Signer, Version, asset_names, stamp_of};
+use super::contract::{Commit, HKCTL, PROGRAMS, Platform, Signer, Version, asset_names, stamp_of};
 use super::github::Gh;
 use super::ports::{Exec, Ran, Verifier};
 
@@ -275,7 +275,8 @@ fn command_problems(doc: &str, release_yml: &str) -> Vec<String> {
         problems.push(format!("the verify job does not `{check}`"));
     }
 
-    // Step 6: the outputs `check-binary` holds the shipped binaries to, and the job checks each.
+    // Step 6: the outputs `check-binary` holds the shipped binaries to, and the job checks each;
+    // and hkctl's, which `release check` holds the asset's version line to.
     let mut said: Vec<String> = quoted(section(doc, "\n### 6. ").unwrap_or_default())
         .into_iter()
         .filter(|q| q.contains("<X.Y.Z>+"))
@@ -286,10 +287,12 @@ fn command_problems(doc: &str, release_yml: &str) -> Vec<String> {
         .collect();
     said.sort();
     said.dedup();
-    let want: Vec<String> = PROGRAMS
+    let mut want: Vec<String> = PROGRAMS
         .iter()
+        .chain([&HKCTL])
         .map(|p| stamp_of(p, &version, &commit))
         .collect();
+    want.sort();
     if said != want {
         problems.push(format!(
             "step 6 expects {said:?}, not what check-binary holds the binaries to, {want:?}"
@@ -318,7 +321,8 @@ fn verify_a_release_commands_match_the_ones_the_verify_job_runs() {
     // Catches: the consumer document and the release job drifting apart, from either side: a
     // flag of step 3 or 4 that `release check` does not pass (or passes and the document does
     // not show), a checksum the job does not run, an expected `--version` output that
-    // `check-binary` does not hold a binary to, or a binary the job does not check.
+    // `check-binary` (or, for hkctl, `release check`) does not hold a binary to, or a binary the
+    // job does not check.
     assert_eq!(command_problems(DOC, RELEASE_YML), Vec::<String>::new());
 
     let doc_cases = [
@@ -350,6 +354,11 @@ fn verify_a_release_commands_match_the_ones_the_verify_job_runs() {
         (
             "`hostkeeper-mdm <X.Y.Z>+<first 12 hex digits of $PIN>`.\n",
             "`hostkeeper-mdm <X.Y.Z>`.\n",
+            "step 6 expects",
+        ),
+        (
+            "`hkctl <X.Y.Z>+<first 12 hex digits of $PIN>`.\n",
+            "`hkctl <X.Y.Z>+<first 7 hex digits of $PIN>`.\n",
             "step 6 expects",
         ),
         (

@@ -116,6 +116,11 @@ hello = { path = "../../examples/hello" }
 # The operator docs' test (tests/enrollment_doc.rs) reads the refusal tokens from the protos'
 # descriptors.
 prost-reflect.workspace = true
+# The workflow lint's tests run the outputs program of `set-desired.yml` (a jq program) on one
+# fixture per row of its table, with no shell.
+jaq-core.workspace = true
+jaq-json.workspace = true
+jaq-std.workspace = true
 saphyr-parser.workspace = true
 
 [lints]

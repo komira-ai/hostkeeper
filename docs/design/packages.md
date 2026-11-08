@@ -1,7 +1,10 @@
 # Packages in any format: a list of targets per platform, installers, and a manifest outside the artifact
 
-Status: design, for the maintainers' ruling. Nothing here is built but item A15 (section 5.4). This is a revision
-of the design merged as komira-ai/hostkeeper#179. It keeps that design's stores, its digest and attestation checks before any byte is used, and its
+Status: design, for the maintainers' ruling. Build item A1 is **Built**: `release.proto`
+(`crates/hostkeeper-proto/proto/hostkeeper/release/v1/release.proto`) and the checks of sections 3.4, 4.4 and 7.1
+(`crates/hostkeeper-release`), which nothing calls yet. Build item A15 is **Built** (section 5.4). Nothing else here is
+built. This is a revision of the design merged as
+komira-ai/hostkeeper#179. It keeps that design's stores, its digest and attestation checks before any byte is used, and its
 staged path for the daemons on hosts now. It replaces its package model: host facts, "most specific wins", artifact kinds
 and `Releases.Register` (section 0 says what replaces what). It changes three things in
 [hostkeeper-design.md](hostkeeper-design.md) section 5.5 ("One package per operating system and CPU family", "The release
