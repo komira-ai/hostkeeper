@@ -129,6 +129,10 @@ fn the_committed_pr_device_yml_passes_and_its_jobs_are_the_listed_ones() {
         !crates.contains("hostkeeper-mdm-step"),
         "the MDM server is not the Mac's"
     );
+    assert!(
+        !crates.contains("hostkeeper-ci"),
+        "the binary has no `ci` verb: CI runs hkctl"
+    );
     assert_eq!(crate_problems(&text, &crates), Vec::<String>::new());
     let doc = yaml::load(&text).expect("pr-device.yml parses");
     assert_eq!(

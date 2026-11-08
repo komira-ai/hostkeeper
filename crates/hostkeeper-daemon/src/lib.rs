@@ -60,7 +60,7 @@
 //! - [`admin`] and [`socket`]: the root-only admin socket (`hostkeeper.local.v1.Admin`);
 //!   [`node`]: the host's enrollment and the heartbeat loop's link, which its `Status` reports
 //!   besides the services; [`admin_client`]: `hostkeeper admin`, its client on the host.
-//! - [`cli`]: `hostkeeper daemon` and its flags, `hostkeeper admin`, `hostkeeper ci`, and the
+//! - [`cli`]: `hostkeeper daemon` and its flags, `hostkeeper admin`, and the
 //!   plumbing verbs `self-update-fallback` and `self-update-protocol`; the binary only forwards
 //!   to it.
 //! - [`stamp`]: the version `hostkeeper --version` prints, with the commit of a release build.

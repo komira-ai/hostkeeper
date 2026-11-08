@@ -40,7 +40,7 @@ update coordinator, `hostkeeper-coordinator serve`. The parts are being moved he
 
 | crate | what it holds |
 |---|---|
-| [`hostkeeper`](crates/hostkeeper) | the binary: `hostkeeper daemon`, `hostkeeper ci`, and the two plumbing verbs of its own update; it only forwards to `hostkeeper-daemon` |
+| [`hostkeeper`](crates/hostkeeper) | the binary: `hostkeeper daemon` and the plumbing verbs of its own update; it only forwards to `hostkeeper-daemon` |
 | [`hostkeeper-daemon`](crates/hostkeeper-daemon) | the daemon: start-up and its lock, the order executor with its locks and try rules, the held halts, the root-only admin socket, and the enrollment and heartbeat loops |
 | [`hostkeeper-config`](crates/hostkeeper-config) | the strict loaders of `hostkeeper.toml` and of a package's `manifest.toml`, the owner and mode check of a trusted file, and the name and path grammars |
 | [`hostkeeper-hook`](crates/hostkeeper-hook) | the contract between the host and a service's update hook, and the conformance harness a service tests its hook with (feature `conformance`) |
@@ -61,7 +61,6 @@ update coordinator, `hostkeeper-coordinator serve`. The parts are being moved he
 | [`hostkeeper-wire`](crates/hostkeeper-wire) | what the coordinator and a host exchange: the heartbeat and its reply, versions, host ids, role names and platforms, the certificate identity, the secret-file rule |
 | [`hostkeeper-proto`](crates/hostkeeper-proto) | the protobuf services of the coordinator (`hostkeeper.agent.v1`, `hostkeeper.operator.v1`) and of the daemon's local admin socket (`hostkeeper.local.v1`), the messages of a release (`hostkeeper.release.v1`), the command table `hkctl` and the UI's generated client are made from, and the compatibility test |
 | [`hostkeeper-hkctl`](crates/hostkeeper-hkctl) | `hkctl`, the operator's bash command line over the gateway: the emitter of its script from the same command table (`cargo xtask release hkctl` writes the asset `hkctl-<version>`), [docs/cli.md](docs/cli.md), and the scan that holds the script to bash 3.2 |
-| [`hostkeeper-ci`](crates/hostkeeper-ci) | `hostkeeper ci set-desired`, the CI client that revisions of `set-desired.yml` before its move to `hkctl` run; a caller pinned to one keeps running it ([docs/deploy/ci-client.md](docs/deploy/ci-client.md), "Pinning hostkeeper") |
 | [`hostkeeper-coordinator`](crates/hostkeeper-coordinator) | the update coordinator: the services and roles of a rollout file, the desired version of each service, the heartbeat endpoint, the operator endpoint, and the convergence of a fleet |
 | [`hostkeeper-enrollment`](crates/hostkeeper-enrollment) | the coordinator's certificate authority (profile, certificates, key file, CA bundle) and its durable enrollment store |
 | [`hostkeeper-mdm-gate`](crates/hostkeeper-mdm-gate) | the MDM policy gate, linked into the coordinator: NanoHUB's command queue and webhook on loopback, a durable record per Mac, whether a Mac is enrolled and supervised, and the config profile and one-time nonce it installs on each allowlisted Mac ([design](docs/design/hostkeeper-mdm.md) sections 4 to 6) |

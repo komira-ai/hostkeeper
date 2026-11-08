@@ -71,6 +71,25 @@ fn ctl_is_a_usage_error() {
     );
 }
 
+/// Proves: the real binary answers `hostkeeper ci set-desired --help` as a usage error: exit
+/// status 2, clap's unknown verb naming `ci` on stderr, and nothing on stdout.
+///
+/// Catches: a `ci` verb left in the binary, or one that prints help and succeeds.
+#[test]
+fn ci_is_a_usage_error() {
+    let out = Command::new(env!("CARGO_BIN_EXE_hostkeeper"))
+        .args(["ci", "set-desired", "--help"])
+        .output()
+        .expect("run hostkeeper");
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    assert!(out.stdout.is_empty(), "{out:?}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.starts_with("error: unrecognized subcommand 'ci'\n"),
+        "{stderr}"
+    );
+}
+
 /// Catches a binary whose `--version` is not the release stamp: it prints `hostkeeper `, the
 /// crate version, and `+` with the first 12 digits of the build's commit when it has one, then
 /// exits 0.
