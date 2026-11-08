@@ -262,16 +262,55 @@ pub fn step_call_problems(who: &str, step: &Node, call: &Call) -> Vec<String> {
     problems
 }
 
-/// What is wrong with the request step: it does not write [`REQUEST_FILE`].
+/// The variables of the request program, each from its own variable of the step's `env`, which
+/// is the caller's input of the same name: a variable not passed, or passed from anything else,
+/// leaves that part of the release out of the request with no error.
+pub const REQUEST_ARGS: [(&str, &str, &str); 5] = [
+    ("version", "VERSION", "${{ inputs.version }}"),
+    (
+        "package_digest",
+        "PACKAGE_DIGEST",
+        "${{ inputs.package_digest }}",
+    ),
+    (
+        "release_index",
+        "RELEASE_INDEX",
+        "${{ inputs.release_index }}",
+    ),
+    (
+        "release_index_digest",
+        "RELEASE_INDEX_DIGEST",
+        "${{ inputs.release_index_digest }}",
+    ),
+    ("targets", "TARGETS", "${{ inputs.targets }}"),
+];
+
+/// What is wrong with the request step: it does not write [`REQUEST_FILE`], or does not pass
+/// each of [`REQUEST_ARGS`] from its input.
 pub fn request_problems(step: &Node) -> Vec<String> {
     let run = text(step, "run").unwrap_or_default();
-    if run.trim_end().ends_with(&format!("> \"{REQUEST_FILE}\"")) {
-        Vec::new()
-    } else {
-        vec![format!(
+    let mut problems = Vec::new();
+    if !run.trim_end().ends_with(&format!("> \"{REQUEST_FILE}\"")) {
+        problems.push(format!(
             "the request step does not end by writing `\"{REQUEST_FILE}\"`, the file the set step reads"
-        )]
+        ));
     }
+    let env = entry(step, "env");
+    let lines = logical_lines(run);
+    let parts: Vec<&str> = lines.iter().flat_map(|line| words(line)).collect();
+    for (name, var, want) in REQUEST_ARGS {
+        if env.and_then(|e| text(e, var)) != Some(want) {
+            problems.push(format!("the request step's `{var}` is not `{want}`"));
+        }
+        // `words` takes the quotes off a word.
+        let arg = format!("${var}");
+        if !parts.windows(3).any(|w| w == ["--arg", name, arg.as_str()]) {
+            problems.push(format!(
+                "the request step does not pass `--arg {name} \"${var}\"`"
+            ));
+        }
+    }
+    problems
 }
 
 /// What is wrong with the outputs step: its `env` or the command that runs its program.
