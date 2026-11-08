@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use hostkeeper_enrollment::enroll::records::Records;
+use hostkeeper_mdm_gate::DeviceStore;
 use hostkeeper_oidc::Clock;
 
 use super::{Serve, StartError, take_lock};
@@ -26,19 +27,21 @@ use crate::backup::{ops_path, restore_marker};
 use crate::jti_file::jti_path;
 use crate::lock::{LockGuard, StateLock, lock_path};
 use crate::ops::{Marker, OpsState, unlanded};
-use crate::store::postgres::{DatabaseError, Dsn, PgRecords, Postgres};
+use crate::store::postgres::{DatabaseError, Dsn, PgDevices, PgRecords, Postgres};
 use crate::store::{Backend, BackendError, Files, Loaded, Shared};
 use crate::verdict_file::verdicts_path;
 
 /// The store a start opened: the backend under the three stores and CI's spent ids, what it
 /// loaded, the marker of changes not yet committed, what holds the store for this process, and
-/// the enrollment records when the store keeps them.
+/// the enrollment records and the MDM gate's device records when the store keeps them (the
+/// file store keeps both in `--enrollment-dir`, opened there).
 pub(super) struct Opened {
     pub(super) backend: Shared,
     pub(super) loaded: Loaded,
     pub(super) marker: PathBuf,
     pub(super) held: LockGuard,
     pub(super) records: Option<Arc<dyn Records>>,
+    pub(super) devices: Option<Box<dyn DeviceStore>>,
 }
 
 /// Opens the store `flags` name: the database of `--database-dsn-file`, or the files of
@@ -69,6 +72,7 @@ pub(super) fn open_store(
             marker: crate::ops_file::unfinished_path(&ops),
             held,
             records: None,
+            devices: None,
         });
     };
     let file_flags = [
@@ -109,12 +113,18 @@ pub(super) fn open_store(
         )),
         None => None,
     };
+    // The gate's device records are the table `mdm_devices` when the gate runs.
+    let devices: Option<Box<dyn DeviceStore>> = match flags.mdm.mdm_api_url {
+        Some(_) => Some(Box::new(PgDevices::over(&store))),
+        None => None,
+    };
     Ok(Opened {
         backend: Arc::new(store.clone()),
         loaded,
         marker: marker.clone(),
         held: LockGuard::new(store),
         records,
+        devices,
     })
 }
 
