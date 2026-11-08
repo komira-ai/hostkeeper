@@ -328,18 +328,19 @@ The service `Releases` of the package `hostkeeper.operator.v1`. The desired vers
 Set a service's desired state. The coordinator moves its hosts there by the service's update
 plan, stage by stage (`Rollouts`), a role's `max_updating` at a time. Takes
 CI's OIDC token (the services its allow-list entry names) or the operator token (any service
-the coordinator manages, audited as `set_desired` under the token's name).
+the coordinator manages, audited as `set_desired` under the token's name; a set with
+`targets` is audited by CI too). Its request is at most 256 KiB; every other method's 4 KiB.
 
 | flag | value | meaning |
 |---|---|---|
 | `--service` | STRING |  |
 | `--if-generation` | UINT64 | Write only if the service's generation is this one now; otherwise refused with `generation_conflict`, and nothing changes. Absent: write whatever the generation is. |
 | `--write-id` | STRING | The writer's own id for this write, kept with it and returned by `Converge`, so a writer that lost the answer can tell whether its write landed: 1 to 128 visible ASCII characters. Absent: none. |
-| `--package-digest` | STRING | The digest of the package CI registers for `desired.version` (64 lower-case hex characters), the one package every host is ordered whatever its platform: for a fleet of one platform. Refused with `release_index` (`index_invalid`). |
+| `--package-digest` | STRING | The digest of the package CI registers for `desired.version` (64 lower-case hex characters), the one package every host is ordered whatever its platform: for a fleet of one platform. Refused with `release_index` or with `targets` (`index_invalid`). |
 | `--release-index` | STRING | The release index of `desired.version` (`index.json`, design section 5.5), byte for byte: per platform, the package file, its size and its SHA-256. The coordinator checks that its SHA-256 is `release_index_digest` (else `index_digest_mismatch`) and that it is the index of `service` at `desired.version` (else `index_invalid`), keeps the digest of each platform's package, and orders each host the package of its own platform. Comes with `release_index_digest`. |
 | `--release-index-digest` | STRING | The SHA-256 of `release_index` (64 lower-case hex characters), as CI's release job wrote it down when it published the index: the release this desired state names. |
 
-Through `--request` only: `desired` (hostkeeper.operator.v1.DesiredState).
+Through `--request` only: `desired` (hostkeeper.operator.v1.DesiredState), `targets` (map).
 
 #### `hkctl releases converge`
 
@@ -440,6 +441,19 @@ CI's OIDC token or the operator token, checked once, when the call is admitted.
 | `--service` | STRING | The service; empty names the legacy service, as for `Converge`. |
 | `--version` | STRING | The version the caller set; any other desired version ends the wait as SUPERSEDED. |
 | `--wait-secs` | UINT32 | How long to hold the call, 1 to 1800 seconds. |
+
+#### `hkctl releases get-release`
+
+`/hostkeeper.operator.v1.Releases/GetRelease`
+
+The release a version of a service was set with: its targets, as set, and the digest of the
+release index that came with them. Changes nothing. Takes CI's OIDC token or the operator
+token, and answers either for any service.
+
+| flag | value | meaning |
+|---|---|---|
+| `--service` | STRING | The service; empty names the legacy service, as for `Converge`. |
+| `--version` | STRING | The version, as it was set. |
 
 ### `rollouts`
 

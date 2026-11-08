@@ -390,6 +390,7 @@ const RPCS: [(&str, &[&str]); 6] = [
             "MarkBad(MarkBadRequest) MarkBadResponse",
             "Halt(HaltRequest) HaltResponse",
             "WaitConverged(WaitConvergedRequest) WaitConvergedResponse",
+            "GetRelease(GetReleaseRequest) GetReleaseResponse",
         ],
     ),
     (
@@ -801,6 +802,9 @@ fn wire_names_are_pinned() {
                 "index_invalid",
                 "invalid_wait",
                 "too_many_waits",
+                "target_invalid",
+                "release_exists",
+                "release_unknown",
             ],
         ),
         (

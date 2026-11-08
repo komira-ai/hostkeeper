@@ -382,8 +382,8 @@ fn a_requested_version_that_is_not_a_version_is_never_written() {
     assert_eq!(outputs(&trailing), want("", false, "not_waited", false));
 }
 
-/// The request program of the real workflow, given the four texts of the release inputs.
-fn request(package_digest: &str, index: &str, index_digest: &str) -> Ran {
+/// The request program of the real workflow, given the five texts of the release inputs.
+fn request(package_digest: &str, index: &str, index_digest: &str, targets: &str) -> Ran {
     let doc = yaml::load(&real()).expect("the workflow parses");
     let program = request_program(&doc).expect("the request step has its program");
     run(
@@ -393,9 +393,24 @@ fn request(package_digest: &str, index: &str, index_digest: &str) -> Ran {
             ("package_digest", package_digest.to_owned()),
             ("release_index", index.to_owned()),
             ("release_index_digest", index_digest.to_owned()),
+            ("targets", targets.to_owned()),
         ],
     )
 }
+
+/// The one JSON object a request printed, once it ran to its end.
+fn written(ran: Ran) -> serde_json::Value {
+    let (printed, ended) = ran;
+    assert_eq!(ended, Ended::Done);
+    let [line] = printed.as_slice() else {
+        panic!("not one line: {printed:?}");
+    };
+    serde_json::from_str(line).expect("one JSON object")
+}
+
+/// Targets of one archive entry, as `cargo xtask release targets` writes them.
+const TARGETS: &str = "{\"linux-x86_64\":{\"entries\":[{\"installer\":\"hostkeeper-archive\",\
+    \"bytes\":\"7\",\"manifest\":{\"minHostkeeper\":\"0.1.0\"}}]}}";
 
 #[test]
 fn the_request_names_the_release_one_way_exactly() {
@@ -403,20 +418,13 @@ fn the_request_names_the_release_one_way_exactly() {
     // (it is one JSON string of its exact bytes), and a request sent with neither way of naming
     // the release, or with both (the coordinator would take a set with no digest at all).
     let digest = "a".repeat(64);
-    let (printed, halted) = request(&digest, "", "");
-    assert_eq!(halted, Ended::Done);
-    assert_eq!(printed.len(), 1);
-    let json: serde_json::Value = serde_json::from_str(&printed[0]).expect("one JSON object");
     assert_eq!(
-        json,
+        written(request(&digest, "", "", "")),
         serde_json::json!({"desired": {"version": "1.2.3"}, "packageDigest": digest})
     );
     let index = "{\"service\":\"hello\",\n \"note\":\"a \\\"quoted\\\" word\"}\n";
-    let (printed, halted) = request("", index, &digest);
-    assert_eq!(halted, Ended::Done);
-    let json: serde_json::Value = serde_json::from_str(&printed[0]).expect("one JSON object");
     assert_eq!(
-        json,
+        written(request("", index, &digest, "")),
         serde_json::json!({
             "desired": {"version": "1.2.3"},
             "releaseIndex": index,
@@ -426,30 +434,82 @@ fn the_request_names_the_release_one_way_exactly() {
 }
 
 #[test]
-fn a_request_with_neither_way_both_or_half_of_one_is_refused() {
-    // Catches a request sent with neither way of naming the release (the coordinator would take
-    // a set with no digest at all), with both, or with half of one: each stops with jq's error
-    // (exit 5), so the step fails before any token exists.
+fn targets_go_into_the_request_as_an_object_alone_or_beside_the_index() {
+    // Catches the targets sent as a JSON string (the coordinator reads `targets` as a map and
+    // refuses a string), changed on their way (an entry's order or a field lost), the index and
+    // its digest dropped from a set that has them (a daemon before targets would then be
+    // ordered no archive through the release channel), or a set of targets alone refused.
+    let digest = "a".repeat(64);
+    let targets: serde_json::Value = serde_json::from_str(TARGETS).expect("JSON");
+    assert_eq!(
+        written(request("", "", "", TARGETS)),
+        serde_json::json!({"desired": {"version": "1.2.3"}, "targets": targets})
+    );
+    assert_eq!(
+        written(request("", "{}", &digest, TARGETS)),
+        serde_json::json!({
+            "desired": {"version": "1.2.3"},
+            "releaseIndex": "{}",
+            "releaseIndexDigest": digest,
+            "targets": targets,
+        })
+    );
+}
+
+#[test]
+fn a_request_with_no_way_a_package_digest_and_another_or_half_an_index_is_refused() {
+    // Catches a request sent with no way of naming the release (the coordinator would take a
+    // set with no digest at all), the package digest with the index or the targets (refused by
+    // the coordinator as `index_invalid`), or half of the index, with or without targets: each
+    // stops with jq's error (exit 5), so the step fails before any token exists.
     let digest = "a".repeat(64);
     let refused = (
         Vec::new(),
         Ended::Failed(
-            "give package_digest, or release_index with release_index_digest, not both".to_owned(),
+            "give package_digest, or release_index with release_index_digest, or targets alone \
+             or with both of those; never package_digest with another"
+                .to_owned(),
         ),
     );
-    for (package, index, index_digest) in [
-        ("", "", ""),
-        (digest.as_str(), "{}", digest.as_str()),
-        (digest.as_str(), "{}", ""),
-        (digest.as_str(), "", digest.as_str()),
-        ("", "{}", ""),
-        ("", "", digest.as_str()),
+    let d = digest.as_str();
+    for (package, index, index_digest, targets) in [
+        ("", "", "", ""),
+        (d, "{}", d, ""),
+        (d, "{}", "", ""),
+        (d, "", d, ""),
+        ("", "{}", "", ""),
+        ("", "", d, ""),
+        (d, "", "", TARGETS),
+        (d, "{}", d, TARGETS),
+        ("", "{}", "", TARGETS),
+        ("", "", d, TARGETS),
     ] {
         assert_eq!(
-            request(package, index, index_digest),
+            request(package, index, index_digest, targets),
             refused,
-            "{package:?} {index:?} {index_digest:?}"
+            "{package:?} {index:?} {index_digest:?} {targets:?}"
         );
+    }
+}
+
+#[test]
+fn targets_that_are_not_one_json_object_are_refused() {
+    // Catches targets that are not JSON, a JSON value other than an object (an array, a string,
+    // null), or two values sent on, which the coordinator would refuse only once a token was
+    // spent, or which jq would write as something other than the map.
+    let refused = (
+        Vec::new(),
+        Ended::Failed("targets is not one JSON object".to_owned()),
+    );
+    for targets in [
+        "not json",
+        "[1]",
+        "\"{}\"",
+        "null",
+        "{\"a\":1} {\"b\":2}",
+        "{\"a\":",
+    ] {
+        assert_eq!(request("", "", "", targets), refused, "{targets:?}");
     }
 }
 

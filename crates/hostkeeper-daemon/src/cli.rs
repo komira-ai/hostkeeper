@@ -1,14 +1,12 @@
 //! The command line of the `hostkeeper` binary: `hostkeeper daemon` and its flags,
-//! `hostkeeper ci`, the CI client a service's release job runs once it has verified this binary
-//! (`hostkeeper_ci`, docs/deploy/ci-client.md), and the three plumbing verbs of hostkeeper's own update (design
-//! section 6.6), which no operator runs: `hostkeeper self-update-fallback --dir <dir>`, what the
-//! generated fallback unit runs, and on a Mac the fallback timer job ([`crate::fallback`]);
+//! and the three plumbing verbs of hostkeeper's own update (design section 6.6), which no
+//! operator runs: `hostkeeper self-update-fallback --dir <dir>`, what the generated fallback
+//! unit runs, and on a Mac the fallback timer job ([`crate::fallback`]);
 //! `hostkeeper self-update-protocol`, which prints this binary's self-update protocol and does
 //! nothing else ([`crate::selfupdate::protocol_line`]); and `hostkeeper self-update-seed
-//! --state-dir <dir> --binary <file>`, which the daemon's unit runs before each start (on a Mac the
-//! pkg's `postinstall`, at install) to give the binary directory its first binary
-//! ([`crate::seed`]); and `hostkeeper mac-config [--managed <file>] [--config <file>]`, which the
-//! same `postinstall` runs next to write the daemon config from the managed preferences the MDM
+//! --state-dir <dir> --binary <file>`, which the package unit runs before each start to give the
+//! binary directory its first binary ([`crate::seed`]); and `hostkeeper mac-config [--managed
+//! <file>] [--config <file>]`, which writes the daemon config from the managed preferences the MDM
 //! installed ([`crate::mac_config`]). Configuration comes in as flags only, never from the
 //! environment (AGENTS.md S2); every default is a constant here.
 //!
@@ -17,8 +15,8 @@
 //! none, as `self-update-seed` does, and execs `current` with its own arguments
 //! ([`crate::packaged`], [`run_from`]); a Mac's daemon writes its config from the managed
 //! preferences when the config is not there, as `mac-config` does, before it reads it
-//! ([`start_with`], [`HostFiles::managed_config`]). The verbs stay for the units and the pkg
-//! that call them.
+//! ([`start_with`], [`HostFiles::managed_config`]). The verbs stay for the units and the
+//! releases that call them.
 //!
 //! The two values read from the environment are platform-set markers of systemd, and only
 //! `--notify-systemd` makes the daemon use them ([`SystemdVars`]): the address of the notify
@@ -28,8 +26,9 @@
 //! `2` for a usage error (as clap reports it), [`EXIT_CONFIG`] when the daemon config did not
 //! load, [`EXIT_LOCKED`] when another daemon holds the state directory. A verb this binary does
 //! not have is a usage error, `2`, as clap reports it: `ctl` (the coordinator's command line is
-//! `hkctl` now, docs/cli.md) and `admin` (the daemon serves no admin socket; a host's status,
-//! abort and clear-record go through the coordinator, docs/admin.md).
+//! `hkctl` now, docs/cli.md), `ci` (CI runs `hkctl releases set-desired` and `hkctl releases
+//! wait-converged`, docs/deploy/ci-client.md) and `admin` (the daemon serves no admin socket; a
+//! host's status, abort and clear-record go through the coordinator, docs/admin.md).
 //!
 //! `--admin-socket` is accepted and ignored: the package unit of every release before stage 2
 //! of docs/design/two-programs.md passes it, and a daemon started by such a unit must start.
@@ -144,10 +143,6 @@ pub struct Cli {
 pub enum Command {
     /// Run the daemon: the one root process of the host.
     Daemon(DaemonFlags),
-    /// The CI client: set a service's desired version from its release job and wait for the
-    /// fleet (docs/deploy/ci-client.md).
-    #[command(subcommand)]
-    Ci(hostkeeper_ci::CiCommand),
     /// Put the previous hostkeeper binary back after the new one failed to start, and record the
     /// update failed and its version bad (run by the generated fallback unit).
     SelfUpdateFallback(FallbackFlags),
@@ -354,7 +349,6 @@ pub fn run_with(cli: Cli, systemd: SystemdVars) -> ExitCode {
             print!("{}", crate::selfupdate::protocol_line());
             return ExitCode::SUCCESS;
         }
-        Command::Ci(command) => return hostkeeper_ci::run(command),
         Command::UpdateHook(hook) => return crate::update_hook::main(hook.args),
         Command::Prepare(hook) => return crate::update_hook::main_at(Step::Prepare, hook.args),
         Command::Cutover(hook) => return crate::update_hook::main_at(Step::Cutover, hook.args),

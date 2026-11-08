@@ -16,11 +16,14 @@
 //!   its tools downloaded with `curl` over HTTPS and checked against its pin
 //!   (`crates/hostkeeper-mdm-core/pins.txt`), a mismatch kept as `<archive>.rejected`.
 //! - `nfpm-stage` ([`package::nfpm_stage`]): the pinned `gh` of one architecture, out of its
-//!   release archive checked against its pinned SHA-256, and the Sigstore trusted root, checked
-//!   and staged for the deb and the rpm.
-//! - `check-linux-pkg` ([`package::linux_check`]): a built deb or rpm, read back, installs the
-//!   staged `gh` and trusted root at the daemon's paths, with their modes, root's, and the
-//!   console's issue link pointing at the daemon's issue file.
+//!   release archive checked against its pinned SHA-256, the Sigstore trusted root, and the
+//!   static `hostkeeper` and `hostkeeper-pxe` of `--binaries`, each checked and staged for the
+//!   deb, the rpm and the Arch package.
+//! - `check-linux-pkg` ([`package::linux_check`]): a built deb, rpm, Arch package or tarball,
+//!   read back, holds no ELF program with an interpreter or a needed library and declares no
+//!   dependency; with `--staged` it also installs the staged `gh`, trusted root and programs at
+//!   the daemon's paths, with their modes, root's, and the console's issue link pointing at the
+//!   daemon's issue file.
 //! - `index` ([`index`]): the release index of a package, `index.json` for hostkeeper,
 //!   `hello-index.json` for hello, `hello-fail-ready-index.json` for its failing build and
 //!   `mdm-index.json` for mdm: which package serves each platform, refused unless it has the
@@ -51,6 +54,10 @@
 //!   package's attestation verified by its service's signer in the list, and staged into a
 //!   release channel by `channel-stage`, a new version renamed into place whole; never changes a
 //!   version already there.
+//! - `targets` ([`targets`]): the `targets` of the set that deploys a package of a release, one
+//!   `hostkeeper-archive` entry per platform its release index lists, read from the release's
+//!   assets and checked as the coordinator and the daemon check them, written as one line of
+//!   JSON for the CI client (`set-desired.yml`, input `targets`).
 //!
 //! The names and formats a consumer relies on are in [`contract`]. The adapters that run `git`,
 //! `gh`, `pkgbuild`, `productbuild` and `curl` are in [`git`], [`github`], [`macos_pkg`] and
@@ -85,6 +92,7 @@ mod publish;
 pub(crate) mod real;
 mod set_version;
 mod sync;
+mod targets;
 #[cfg(feature = "test-support")]
 pub mod test_support;
 mod version;
@@ -224,10 +232,13 @@ pub(crate) enum Verb {
         #[arg(long)]
         dir: PathBuf,
     },
-    /// Stage the pinned `gh` and the Sigstore trusted root for the deb and the rpm: `gh` out of
-    /// its release archive, refused unless the archive has the pinned SHA-256 and `gh` is a
-    /// program of the architecture; the trusted root refused unless each line is one. Writes
-    /// `<out>/gh` (0755) and `<out>/trusted_root.json` (0644) only when both pass.
+    /// Stage the pinned `gh`, the Sigstore trusted root and the two static programs for the deb,
+    /// the rpm and the Arch package: `gh` out of its release archive, refused unless the archive
+    /// has the pinned SHA-256 and `gh` is a program of the architecture; the trusted root
+    /// refused unless each line is one; `hostkeeper` and `hostkeeper-pxe` of `--binaries`,
+    /// refused unless each is a 64-bit little-endian ELF of the architecture with no
+    /// interpreter and no needed library. Writes `<out>/gh`, `<out>/hostkeeper` and
+    /// `<out>/hostkeeper-pxe` (0755) and `<out>/trusted_root.json` (0644) only when all pass.
     NfpmStage {
         /// The architecture of the packages, as nfpm's `ARCH`.
         #[arg(long, value_enum)]
@@ -244,19 +255,26 @@ pub(crate) enum Verb {
         /// The output of `gh attestation trusted-root`.
         #[arg(long)]
         trusted_root: PathBuf,
-        /// The directory nfpm.yaml takes the two files from.
+        /// The directory holding the static `hostkeeper` and `hostkeeper-pxe`
+        /// (`target/<musl target>/release`).
+        #[arg(long)]
+        binaries: PathBuf,
+        /// The directory nfpm.yaml takes the files from.
         #[arg(long)]
         out: PathBuf,
     },
-    /// Read a built deb or rpm and refuse it unless it installs `/usr/lib/hostkeeper/gh` (a
-    /// regular file, 0755) and `/usr/lib/hostkeeper/trusted_root.json` (0644), both
-    /// root:root, with the bytes of the files `nfpm-stage` wrote.
+    /// Read a built deb, rpm, Arch package or tarball and refuse it if it holds an ELF program
+    /// with an interpreter or a needed library, or (not a tarball) declares a dependency. With
+    /// `--staged` (not for a tarball) also refuse it unless it installs `/usr/lib/hostkeeper/gh`,
+    /// `/usr/bin/hostkeeper` and `/usr/bin/hostkeeper-pxe` (regular files, 0755) and
+    /// `/usr/lib/hostkeeper/trusted_root.json` (0644), all root:root, with the bytes of the files
+    /// `nfpm-stage` wrote, and the console's issue link.
     CheckLinuxPkg {
-        /// The `.deb` or `.rpm` nfpm built.
+        /// The `.deb`, `.rpm`, Arch package (`.pkg.tar.zst`) or tarball.
         package: PathBuf,
         /// The directory `nfpm-stage` wrote (its `--out`).
         #[arg(long)]
-        staged: PathBuf,
+        staged: Option<PathBuf>,
     },
     /// Write the release index of a service's packages of a version in a directory, one entry
     /// per platform the package is released for (linux-x86_64 alone for mdm), refused when the
@@ -306,9 +324,9 @@ pub(crate) enum Verb {
     },
     /// Build the installer pkg of a Mac's first install: `pkgbuild` builds a component pkg of the
     /// daemon binary, its launchd plist, its log directory and newsyslog file, the pinned `gh`
-    /// and the Sigstore trusted root, nothing else, and one script, a postinstall that seeds the
-    /// binary directory the plist starts `current` of, writes the config with `mac-config` and
-    /// loads the job; `productbuild` wraps the component as the unsigned distribution pkg.
+    /// and the Sigstore trusted root, nothing else, and one script, a postinstall that boots out
+    /// any copy of the daemon's job loaded before and loads the job, whose program is the binary
+    /// the pkg installs; `productbuild` wraps the component as the unsigned distribution pkg.
     MacosPkg {
         #[arg(long)]
         version: Version,
@@ -453,6 +471,34 @@ pub(crate) enum Verb {
         #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
         every_secs: Option<u64>,
     },
+    /// Write the `targets` of the set that deploys a package of the release: for each platform
+    /// its release index lists, one `hostkeeper-archive` entry with the archive's two locations
+    /// (the release channel's path, then the release asset), its size and SHA-256, its
+    /// `.sigstore.json` bundle, and the `min_hostkeeper` of the archive's own manifest. Refused,
+    /// every problem named, unless the index, every archive, bundle and manifest check out and
+    /// the entries pass the coordinator's checks. Prints `targets=<JSON>`.
+    Targets {
+        /// The service: hostkeeper (the default), hello or mdm.
+        #[arg(long, value_enum, default_value_t)]
+        service: Service,
+        /// The entries of hello's failing build (`hello-fail-ready-index.json`). Refused for
+        /// hostkeeper and mdm.
+        #[arg(long)]
+        fail_ready: bool,
+        /// The release, `X.Y.Z`: the tag `v<X.Y.Z>` holds the assets.
+        #[arg(long)]
+        version: Version,
+        /// The directory of the release's assets: the package's index, its archives and their
+        /// bundles.
+        #[arg(long)]
+        dir: PathBuf,
+        /// The repository of the release, `owner/name`.
+        #[arg(long)]
+        repo: Repo,
+        /// A file the `targets=` line is appended to (on Actions, `GITHUB_OUTPUT`).
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
     /// Publish a checked directory as the release of the version, at the commit.
     Publish {
         dir: PathBuf,
@@ -497,6 +543,7 @@ pub(crate) fn run<A: Adapters>(
             gh_archive,
             gh_sha256,
             trusted_root,
+            binaries,
             out,
         } => package::nfpm_stage::stage(&package::nfpm_stage::Request {
             arch,
@@ -504,9 +551,12 @@ pub(crate) fn run<A: Adapters>(
             gh_archive,
             gh_sha256,
             trusted_root,
+            binaries,
             out,
         }),
-        Verb::CheckLinuxPkg { package, staged } => package::linux_check::check(&package, &staged),
+        Verb::CheckLinuxPkg { package, staged } => {
+            package::linux_check::check(&package, staged.as_deref())
+        }
         Verb::CheckMacosPkg {
             expanded,
             version,
@@ -537,6 +587,23 @@ pub(crate) fn run<A: Adapters>(
             require: require_platforms,
             out,
         }),
+        Verb::Targets {
+            service,
+            fail_ready,
+            version,
+            dir,
+            repo,
+            output,
+        } => match Package::of(service, fail_ready) {
+            Some(package) => targets::targets(&targets::Request {
+                package,
+                version,
+                dir,
+                repo,
+                output,
+            }),
+            None => Err(Error::Failed(package::FAIL_READY_ONLY_HELLO.to_owned())),
+        },
         verb => run_with(verb, &connect().ports()),
     }
 }
@@ -667,7 +734,8 @@ fn run_with(verb: Verb, ports: &Ports<'_>) -> Result<Vec<String>, Error> {
         | Verb::NfpmStage { .. }
         | Verb::CheckLinuxPkg { .. }
         | Verb::CheckMacosPkg { .. }
-        | Verb::ChannelStage { .. } => run(verb, || Lent(*ports)),
+        | Verb::ChannelStage { .. }
+        | Verb::Targets { .. } => run(verb, || Lent(*ports)),
     }
 }
 

@@ -18,8 +18,9 @@ hostkeeper-hook = { path = "../../crates/hostkeeper-hook" }
 # The manifest loader, which the tests load the committed package goldens with.
 hostkeeper-config = { path = "../../crates/hostkeeper-config" }
 hostkeeper-testkit = { path = "../../crates/hostkeeper-testkit" }
-# `poll` on the listener in the socket tests (tests/server_socket.rs): the test waits until a
-# connection is in the listener's queue before it starts the server, instead of racing the kernel.
+# `poll` on the listener in the socket tests (tests/support/mod.rs, used by tests/server_socket.rs
+# and tests/program.rs): a test waits until a connection is in the listener's queue before it
+# starts the server, instead of racing the kernel.
 rustix = { workspace = true, features = ["event"] }
 
 [lints]

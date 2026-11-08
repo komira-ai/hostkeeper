@@ -1420,23 +1420,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hostkeeper-ci"
-version = "0.1.0"
-dependencies = [
- "clap",
- "hostkeeper-proto",
- "hostkeeper-testkit",
- "rcgen",
- "rustls-pki-types",
- "serde_json",
- "thiserror",
- "tokio",
- "tokio-stream",
- "tonic",
- "ureq",
-]
-
-[[package]]
 name = "hostkeeper-config"
 version = "0.1.0"
 dependencies = [
@@ -1462,6 +1445,7 @@ dependencies = [
  "hostkeeper-mdm-gate",
  "hostkeeper-oidc",
  "hostkeeper-proto",
+ "hostkeeper-release",
  "hostkeeper-testkit",
  "hostkeeper-tls",
  "hostkeeper-wire",
@@ -1501,7 +1485,6 @@ dependencies = [
  "clap",
  "hello",
  "hex",
- "hostkeeper-ci",
  "hostkeeper-config",
  "hostkeeper-coordinator",
  "hostkeeper-daemon",
@@ -5179,13 +5162,16 @@ dependencies = [
  "hostkeeper-package",
  "hostkeeper-proto",
  "hostkeeper-pxe-packets",
+ "hostkeeper-release",
  "hostkeeper-steps",
  "hostkeeper-unpack",
  "hostkeeper-wire",
  "jaq-core",
  "jaq-json",
  "jaq-std",
+ "lzma-rs",
  "plist",
+ "prost",
  "prost-reflect",
  "ruzstd",
  "saphyr-parser",

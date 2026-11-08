@@ -81,8 +81,8 @@ release each lands):
   (section 4.3). The binary `current` names (reached directly, or through the packaged binary's one exec) hands over to
   the next binary itself, so no unit or job runs an older binary with a verb of its own.
 
-**The bare program or `daemon`.** The verb stays. Every live unit and plist starts `.../bin/current daemon ...`, and
-hosts keep their unit text until a package replaces it (section 4.1). An old unit that started a binary which no longer
+**The bare program or `daemon`.** The verb stays. The package unit starts `.../bin/current daemon ...` and the bootstrap unit and the plist start
+`<packaged path> daemon ...` (4.1), and hosts keep their unit text until a package replaces it (section 4.1). An old unit that started a binary which no longer
 knows `daemon` would leave the host with no daemon. Bare `hostkeeper` as a second spelling would be a second way to do
 one thing. So `hostkeeper` with no verb prints its usage and exits 2, as today. The unit stays
 `hostkeeper.service`, the launchd job stays `dev.hostkeeper.hostkeeper`.
@@ -358,7 +358,7 @@ The fleet's daemons are live, and a daemon updates itself. Every risk below come
 or runs a step of the self-update is often not the binary that was built with the change. A self-update is run by the
 **old** daemon, which runs the **new** release's hook and probes the **new** binary; the fallback, today, runs the
 **previous** binary from a unit the **new** daemon wrote; and on Linux the unit that starts the daemon comes from
-hostkeeper's own package, which the update links (`packaging/linux/hostkeeper.service` header, **Built**), so after a
+hostkeeper's own package, which the update links (`packaging/linux/units/hostkeeper.service` header, **Built**), so after a
 fallback the old binary runs under the new release's unit.
 
 The path is three stages. Releases are cut from `main` automatically; a stage is the set of pull requests listed for it
@@ -399,10 +399,19 @@ downgrades are allowed by the rule of 4.2.
   package is first installed, whose linked unit then takes its place in `/etc/systemd/system`. The binary and this unit
   come from the same deb, so they always match. From stage 2 the two units are two files in `packaging/linux/`, and the
   packaging tests hold each.
+  **Built** (S2b): the package unit is `packaging/linux/units/hostkeeper.service` (`ExecStartPre=-` seed line,
+  `ExecStart=` `current` of the binary directory, no `--admin-socket`, no `RuntimeDirectory=`); the bootstrap unit is
+  `packaging/linux/hostkeeper.service` (`ExecStart=/usr/bin/hostkeeper daemon ...`, no `ExecStartPre=`), with its
+  byte-identical copy `packaging/linux/overlay/usr/lib/systemd/system/hostkeeper.service` and the comment of
+  `packaging/linux/hostkeeper.tmpfiles.conf` (`/run/hostkeeper` is still made by tmpfiles; the daemon makes its
+  admin socket's directory itself). `packaging/linux/README.md` describes both.
 - **macOS.** The pkg is the only source of the plist and of `/usr/local/bin/hostkeeper` (hostkeeper's package carries
   no units on macOS), so the two always match. Stage 2 makes `daemon_plist` start `/usr/local/bin/hostkeeper daemon`,
   which seeds and execs `current` at each start, and the postinstall script two lines: `launchctl bootout` and
   `launchctl bootstrap` (`crates/hostkeeper-launchd/src/postinstall.rs`, held byte for byte by `check-macos-pkg`).
+  **Built** (S2b): `DaemonJob::standard` runs `INSTALLED_BINARY` (`crates/hostkeeper-launchd/src/plist.rs`, which no
+  longer has `DAEMON_PROGRAM`), and `Postinstall` has the two commands and nothing else; `docs/macos.md` describes
+  both.
 - **Why these texts need no floor.** The bootstrap unit, the plist and the postinstall arrive only with the binary of
   the same deb or pkg. The package unit of stage 2 differs from today's only in a flag every older daemon defaults to
   the same path (`--admin-socket`, `crates/hostkeeper-daemon/src/cli.rs`, **Built**) and the socket's runtime

@@ -1,15 +1,18 @@
 //! The Linux host of the cross-release rig: the daemon's own unit `hostkeeper.service` under the
 //! host's systemd, as the deb leaves a host.
 //!
-//! **The unit.** The text is `packaging/linux/hostkeeper.service` ([`REAL_UNIT`]) with three
+//! **The unit.** The text is the package unit, `packaging/linux/units/hostkeeper.service`
+//! ([`REAL_UNIT`]; the unit that starts `current`, because the released binary the rig pins
+//! predates the packaged start, so the deb's bootstrap unit would not start it), with three
 //! changes ([`unit_text`]): `ExecStart=` runs the same `current` of the binary directory with the
-//! same flags, at the test's directories (the end-to-end rig's tree, `super::super::e2e::host_root`)
-//! and with `--heartbeat-secs 1`; the seed (`ExecStartPre=`: the test stages the first binary
-//! itself) and the runtime directory of the unit's `--admin-socket` (the path is in the test's tree; the
-//! daemon of this checkout ignores the flag and the older release binds the socket there) are left
-//! out. A change to the real `ExecStart=` that this does not know fails the test by name. The
-//! unit is installed where the deb installs it ([`DEB_UNIT`]) and enabled by the link `systemctl
-//! enable` makes ([`WANTS_LINK`]); each hostkeeper package of the rig carries the same text as
+//! same flags, at the test's directories (the end-to-end rig's tree, `super::super::e2e::host_root`),
+//! with the admin socket in the test's tree (`--admin-socket`, which the real line does not pass:
+//! the older release would bind the default `/run/hostkeeper/admin.sock`; the daemon of this
+//! checkout ignores the flag and binds nothing) and with `--heartbeat-secs 1`;
+//! the seed (`ExecStartPre=`: the test stages the first binary itself) is left out. A change to
+//! the real `ExecStart=` that this does not know fails the test by name. The unit is installed
+//! where the deb installs it ([`DEB_UNIT`]) and enabled by the link `systemctl enable` makes
+//! ([`WANTS_LINK`]); each hostkeeper package of the rig carries the same text as
 //! `units/hostkeeper.service`, which the daemon links into `/etc/systemd/system` ([`LINKED_UNIT`])
 //! in its place, as a release's unit takes the deb's place on a host.
 //!
@@ -34,10 +37,11 @@ use hostkeeper_steps::Layout;
 
 use super::super::e2e::host_root::{HostRoot, systemctl};
 
-/// The unit file the deb, the rpm and the boot image install.
-pub const REAL_UNIT: &str = include_str!("../../../../packaging/linux/hostkeeper.service");
+/// The unit file of hostkeeper's package, which starts `current` (the bootstrap unit the deb, the
+/// rpm and the boot image install starts the packaged binary).
+pub const REAL_UNIT: &str = include_str!("../../../../packaging/linux/units/hostkeeper.service");
 /// The `ExecStart=` line of [`REAL_UNIT`] that [`unit_text`] knows how to point at the test.
-const REAL_EXEC_START: &str = "ExecStart=/var/lib/updater/state/hostkeeper/bin/current daemon --config /etc/hostkeeper/hostkeeper.toml --state-dir /var/lib/updater/state --packages-dir /var/lib/hostkeeper/packages --admin-socket /run/hostkeeper/admin.sock --notify-systemd";
+const REAL_EXEC_START: &str = "ExecStart=/var/lib/updater/state/hostkeeper/bin/current daemon --config /etc/hostkeeper/hostkeeper.toml --state-dir /var/lib/updater/state --packages-dir /var/lib/hostkeeper/packages --notify-systemd";
 /// The daemon's own unit.
 pub const MAIN: &str = "hostkeeper.service";
 /// The fallback unit the daemon writes.
@@ -80,7 +84,7 @@ pub fn unit_text(root: &HostRoot) -> String {
             .filter(|line| line.starts_with("ExecStart="))
             .collect::<Vec<_>>(),
         [&REAL_EXEC_START],
-        "packaging/linux/hostkeeper.service starts the daemon another way than this rig knows"
+        "packaging/linux/units/hostkeeper.service starts the daemon another way than this rig knows"
     );
     let exec_start = format!(
         "ExecStart={} daemon --config {} --state-dir {} --packages-dir {} --admin-socket {} \

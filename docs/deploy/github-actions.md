@@ -33,9 +33,10 @@ issues to the job.
    is skipped, so that the fleet is never moved back. The job reads the repository
    (`contents: read`) and holds no other token right.
 5. **Set the desired version** (job `set-desired` of `release.yml`). The job calls the CI client
-   ([set-desired.yml](ci-client.md)) once: it verifies the pinned hostkeeper release, joins the
-   tailnet when the job is configured to, requests an OIDC token, and calls
-   `releases set-desired` for the service `hostkeeper` at `<X.Y.Z>`. The call names the release
+   ([set-desired.yml](ci-client.md)) once: it verifies the pinned hostkeeper release's `hkctl`,
+   joins the tailnet when the job is configured to, and runs `hkctl releases set-desired` for the
+   service `hostkeeper` at `<X.Y.Z>`; hkctl requests the OIDC token itself and hands it to the
+   call through a pipe, never a file or an argument. The call names the release
    by its index and the index's SHA-256, so each host is ordered the package of its own platform.
    The job does not wait for the fleet (`wait: false`); it ends when the coordinator has stored
    the version, with `reason` `not_waited`.
@@ -120,11 +121,12 @@ bake_beats = 3                  # healthy heartbeats at the new version before t
 canary = { count = 1 }          # one host goes first, alone, and bakes
 ```
 
-**The allow-list entry.** `release.yml` calls the CI client as `hello-desired.yml` does, so the
-entry for this repository ([The allow-list entry](ci-client.md#the-allow-list-entry)) admits it
-with three changes: `job_workflow_ref` adds `set-desired.yml` at the commit `release.yml` pins
-(listed once when it is the same commit `hello-desired.yml` pins), `event_names` adds
-`workflow_run` and `schedule`, the events `release.yml` runs on, and `services` adds `hostkeeper`:
+**The allow-list entry.** `release.yml` calls the CI client as `hello-desired.yml` does, at the
+same revision ([Pinning the client](#pinning-the-client)), so the entry for this repository
+([The allow-list entry](ci-client.md#the-allow-list-entry)) admits it with two changes:
+`event_names` adds `workflow_run` and `schedule`, the events `release.yml` runs on, and
+`services` adds `hostkeeper`. `job_workflow_ref` names `set-desired.yml` at the commit both
+callers pin, once:
 
 ```toml
 [[remote_operator]]
@@ -133,8 +135,7 @@ audience = "hostkeeper-ci"
 repository_id = "123456789"            # gh api repos/komira-ai/hostkeeper --jq .id
 repository = "komira-ai/hostkeeper"
 job_workflow_ref = [
-  "komira-ai/hostkeeper/.github/workflows/set-desired.yml@<the commit hello-desired.yml pins>",
-  "komira-ai/hostkeeper/.github/workflows/set-desired.yml@<the commit release.yml pins>",
+  "komira-ai/hostkeeper/.github/workflows/set-desired.yml@3018137f2c8806dd22bf2071a23565d4a2d64e8d",
 ]
 refs = ["refs/heads/main"]
 event_names = ["workflow_dispatch", "workflow_run", "schedule"]
@@ -144,14 +145,28 @@ services = ["hello", "hostkeeper"]
 
 Restart the coordinator after changing the file: it reads the allow-list when it starts.
 
+**Moving the pin.** Add the new commit to `job_workflow_ref` and restart the coordinator before
+the pull request that moves the pin merges, or the first run after it is refused
+(`unauthorized`). Keep the old commit listed while a run of the old pin may still call: a
+**Re-run failed jobs** of a release run from before the move runs that run's `release.yml`, with
+its old pin. Remove it once the coordinator's audit log shows no call from it; that removal is
+what ends the old revision's path.
+
 ## Pinning the client
 
 `release.yml` pins the CI client like any caller ([Pinning hostkeeper](ci-client.md#pinning-hostkeeper)):
 the `uses:` line names a commit of this repository with its release as the comment, and
 `hostkeeper_version` and `hostkeeper_commit` name that same release. The program that holds the
-OIDC token is a published release, verified before it runs, never the commit being released. The
-pin moves in a reviewed pull request, together with the allow-list entry's `job_workflow_ref`;
-the workflow lint refuses a `hostkeeper_commit` that is not the `uses:` commit.
+OIDC token is a published release, verified before it runs, never the commit being released.
+
+Both callers of this repository, `release.yml` and `hello-desired.yml`, pin one revision: commit
+`3018137f2c8806dd22bf2071a23565d4a2d64e8d`, release `v0.1.166`, the first whose
+`set-desired.yml` runs hkctl (one set, and for `hello-desired.yml` one held wait). The workflow
+lint (`cargo test -p xtask --test workflows`, `callers.rs`) names that revision, as
+`CLIENT_COMMIT` and `CLIENT_RELEASE`, and refuses a caller whose `uses:` commit, version comment,
+`hostkeeper_version` or `hostkeeper_commit` is not it. The pin moves in a reviewed pull request
+that changes those two values and both callers together, after the allow-list entry names the
+new commit (above).
 
 ## When it fails
 

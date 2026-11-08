@@ -1,14 +1,18 @@
-//! The unit as hostkeeper's own update relies on it (design section 6.6): it starts `current` of
-//! the daemon's binary directory (`hostkeeper_daemon::selfupdate::binary_dir`) under the state
-//! directory it gives the daemon; its seed fills that directory from the binary the packages
-//! install; its restart policy restarts the status the daemon exits with once it has staged a new
-//! binary; it agrees with the drop-in and the fallback unit the daemon writes at its start
-//! (`hostkeeper_daemon::selfunits`), the drop-in alone setting the start limit; and a start limit
-//! the daemon fails ends with the daemon started again, never with the unit left failed.
+//! The two units as hostkeeper's own update relies on them (design section 6.6, two-programs.md
+//! section 4.1): the bootstrap unit starts the installed binary, one of the paths a daemon
+//! seeds from (`hostkeeper_daemon::packaged::PACKAGED_BINARIES`), which gives the binary
+//! directory its first binary and execs `current`; the package unit seeds that directory itself
+//! and starts `current` of the daemon's binary directory (`hostkeeper_daemon::selfupdate::
+//! binary_dir`) under the state directory it gives the daemon. Both restart the status the
+//! daemon exits with once it has staged a new binary; both agree with the drop-in and the
+//! fallback unit the daemon writes at its start (`hostkeeper_daemon::selfunits`), the drop-in
+//! alone setting the start limit; and a start limit the daemon fails ends with the daemon
+//! started again, never with the unit left failed.
 
 use std::path::{Path, PathBuf};
 
 use hostkeeper_daemon::cli::{Command, DEFAULT_STATE_DIR, EXIT_FAILED, exit_status};
+use hostkeeper_daemon::packaged::PACKAGED_BINARIES;
 use hostkeeper_daemon::selfunits::{FALLBACK_UNIT, MAIN_UNIT};
 use hostkeeper_daemon::selfupdate::binary_dir;
 use hostkeeper_steps::Layout;
@@ -18,7 +22,7 @@ use hostkeeper_steps::selfupdate::{
 
 use crate::daemon_flags::{parse, parse_flags, parse_seed};
 use crate::unit::{self, Unit};
-use crate::{INSTALLED_UNIT, UNIT, altered, config, read, refuses};
+use crate::{INSTALLED_UNIT, Kind, SEED_LINE, altered, config, refuses};
 
 /// The words of the command line of `key` in `[Service]`, its `-` prefix dropped.
 fn words(unit: &Unit, key: &str) -> Result<Vec<String>, String> {
@@ -33,16 +37,35 @@ fn start_of(unit: &Unit) -> Result<(PathBuf, PathBuf), String> {
     Ok((PathBuf::from(&words[0]), flags.state_dir))
 }
 
-fn check_start(text: &str) -> Result<(), String> {
+fn check_start(kind: Kind, text: &str) -> Result<(), String> {
     let unit = Unit::parse(text)?;
     let (program, state) = start_of(&unit)?;
-    let current = binary_dir(&state).join("current");
-    if program != current {
-        return Err(format!(
-            "ExecStart= runs {}, not {}, `current` of the binary directory of its --state-dir",
-            program.display(),
-            current.display()
-        ));
+    match kind {
+        Kind::Bootstrap => {
+            let installed = installed_binary()?;
+            if !PACKAGED_BINARIES.iter().any(|p| Path::new(p) == program) {
+                return Err(format!(
+                    "ExecStart= runs {}, not one of the packaged binaries {PACKAGED_BINARIES:?}, which a daemon seeds from",
+                    program.display()
+                ));
+            }
+            if program != Path::new(&installed) {
+                return Err(format!(
+                    "ExecStart= runs {}, not the installed {installed}",
+                    program.display()
+                ));
+            }
+        }
+        Kind::Package => {
+            let current = binary_dir(&state).join("current");
+            if program != current {
+                return Err(format!(
+                    "ExecStart= runs {}, not {}, `current` of the binary directory of its --state-dir",
+                    program.display(),
+                    current.display()
+                ));
+            }
+        }
     }
     if state != Path::new(DEFAULT_STATE_DIR) {
         return Err(format!(
@@ -57,31 +80,71 @@ fn check_start(text: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// The design's named test for the unit. Catches a unit that does not start the binary the
-/// self-update switches (the deb's `/usr/bin/hostkeeper`, the package's own
+/// The design's named test for the units. Catches a bootstrap unit that does not start the
+/// binary the packages install (`current`, which only the package unit starts; a path a daemon
+/// does not seed from; another packaged path than the deb's), a package unit that does not start
+/// the binary the self-update switches (the deb's `/usr/bin/hostkeeper`, the package's own
 /// `packages/hostkeeper/current/bin/hostkeeper`, `current` under another state directory than
-/// the one it gives the daemon), or that does not restart the daemon's clean exit.
+/// the one it gives the daemon), the package unit built from the bootstrap file and the other
+/// way about, or either that does not restart the daemon's clean exit.
 #[test]
-fn the_unit_starts_current_of_the_daemons_binary_directory_with_restart_always() {
-    let text = read(UNIT);
-    assert_eq!(check_start(&text), Ok(()));
-    let started = "ExecStart=/var/lib/updater/state/hostkeeper/bin/current daemon";
-    let cases = [
+fn the_bootstrap_unit_starts_the_installed_binary_and_the_package_unit_starts_current_with_restart_always()
+ {
+    let bootstrap = Kind::Bootstrap.read();
+    let package = Kind::Package.read();
+    assert_eq!(check_start(Kind::Bootstrap, &bootstrap), Ok(()));
+    assert_eq!(check_start(Kind::Package, &package), Ok(()));
+    let current = "/var/lib/updater/state/hostkeeper/bin/current";
+    let started = format!("ExecStart={current} daemon");
+    let installed = "ExecStart=/usr/bin/hostkeeper daemon";
+    let bootstrap_cases = [
         (
-            altered(&text, started, "ExecStart=/usr/bin/hostkeeper daemon"),
+            altered(&bootstrap, installed, &started),
+            "ExecStart= runs /var/lib/updater/state/hostkeeper/bin/current, not one of the packaged binaries",
+        ),
+        (
+            altered(&bootstrap, installed, "ExecStart=/opt/hostkeeper daemon"),
+            "ExecStart= runs /opt/hostkeeper, not one of the packaged binaries",
+        ),
+        (
+            altered(
+                &bootstrap,
+                installed,
+                "ExecStart=/usr/local/bin/hostkeeper daemon",
+            ),
+            "ExecStart= runs /usr/local/bin/hostkeeper, not the installed /usr/bin/hostkeeper",
+        ),
+        (package.clone(), "not one of the packaged binaries"),
+        (
+            altered(&bootstrap, "Restart=always", "Restart=on-failure"),
+            "Restart=on-failure, not always",
+        ),
+        (
+            altered(
+                &bootstrap,
+                "toml --state-dir /var/lib/updater/state --packages-dir",
+                "toml --state-dir /srv --packages-dir",
+            ),
+            "--state-dir is /srv, not the daemon's default",
+        ),
+    ];
+    refuses(|t: &str| check_start(Kind::Bootstrap, t), &bootstrap_cases);
+    let package_cases = [
+        (
+            altered(&package, &started, installed),
             "ExecStart= runs /usr/bin/hostkeeper, not /var/lib/updater/state/hostkeeper/bin/current",
         ),
         (
             altered(
-                &text,
-                started,
+                &package,
+                &started,
                 "ExecStart=/var/lib/hostkeeper/packages/hostkeeper/current/bin/hostkeeper daemon",
             ),
             "ExecStart= runs /var/lib/hostkeeper/packages/hostkeeper/current/bin/hostkeeper",
         ),
         (
             altered(
-                &text,
+                &package,
                 "toml --state-dir /var/lib/updater/state --packages-dir",
                 "toml --state-dir /var/lib/updater/other --packages-dir",
             ),
@@ -90,8 +153,8 @@ fn the_unit_starts_current_of_the_daemons_binary_directory_with_restart_always()
         (
             altered(
                 &altered(
-                    &text,
-                    started,
+                    &package,
+                    &started,
                     "ExecStart=/srv/hostkeeper/bin/current daemon",
                 ),
                 "toml --state-dir /var/lib/updater/state --packages-dir",
@@ -100,11 +163,15 @@ fn the_unit_starts_current_of_the_daemons_binary_directory_with_restart_always()
             "--state-dir is /srv, not the daemon's default",
         ),
         (
-            altered(&text, "Restart=always", "Restart=on-failure"),
+            altered(&package, "Restart=always", "Restart=on-failure"),
             "Restart=on-failure, not always",
         ),
+        (
+            bootstrap.clone(),
+            "ExecStart= runs /usr/bin/hostkeeper, not /var/lib/updater/state/hostkeeper/bin/current",
+        ),
     ];
-    refuses(check_start, &cases);
+    refuses(|t: &str| check_start(Kind::Package, t), &package_cases);
 }
 
 /// The binary the deb and the rpm install, as `nfpm.yaml` places it.
@@ -112,13 +179,28 @@ fn installed_binary() -> Result<String, String> {
     let files = config().files("deb")?;
     files
         .into_iter()
-        .find(|f| f.src == "target/release/hostkeeper")
+        .find(|f| {
+            f.src
+                == format!(
+                    "target/nfpm/{}",
+                    xtask::test_support::LINUX_PKG_PROGRAMS[0].1
+                )
+        })
         .map(|f| f.dst)
         .ok_or_else(|| "the packages carry no daemon binary".to_owned())
 }
 
-fn check_seed(text: &str) -> Result<(), String> {
+fn check_seed(kind: Kind, text: &str) -> Result<(), String> {
     let unit = Unit::parse(text)?;
+    if kind == Kind::Bootstrap {
+        return match unit.values("Service", "ExecStartPre").is_empty() {
+            true => Ok(()),
+            false => Err(
+                "the bootstrap unit has an ExecStartPre= seed; the daemon it starts seeds itself"
+                    .to_owned(),
+            ),
+        };
+    }
     let (_, state) = start_of(&unit)?;
     let words = words(&unit, "ExecStartPre")?;
     let seed = parse_seed(&words)?;
@@ -141,14 +223,15 @@ fn check_seed(text: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Catches a first start with nothing to start: a seed that fills another state directory than
-/// the daemon's, or that is not the binary the packages install, run with that binary (another
-/// path is not on every host, and would stage something else as this version).
+/// Catches a first start with nothing to start: a seed in the package unit that fills another
+/// state directory than the daemon's, or that is not the binary the packages install, run with
+/// that binary (another path is not on every host, and would stage something else as this
+/// version).
 #[test]
-fn the_seed_fills_the_daemons_binary_directory_from_the_installed_binary() {
-    let text = read(UNIT);
+fn the_package_units_seed_fills_the_daemons_binary_directory_from_the_installed_binary() {
+    let text = Kind::Package.read();
     assert_eq!(installed_binary().as_deref(), Ok("/usr/bin/hostkeeper"));
-    assert_eq!(check_seed(&text), Ok(()));
+    assert_eq!(check_seed(Kind::Package, &text), Ok(()));
     let cases = [
         (
             altered(
@@ -174,8 +257,31 @@ fn the_seed_fills_the_daemons_binary_directory_from_the_installed_binary() {
             ),
             "the seed is run by /opt/hostkeeper",
         ),
+        (
+            altered(&text, SEED_LINE, ""),
+            "[Service] has no ExecStartPre=",
+        ),
     ];
-    refuses(check_seed, &cases);
+    refuses(|t: &str| check_seed(Kind::Package, t), &cases);
+}
+
+/// Catches a bootstrap unit that seeds: the daemon it starts seeds the binary directory itself
+/// (`hostkeeper_daemon::packaged`), so an `ExecStartPre=` there is a second seeder of the same
+/// directory, and the package unit built from the wrong file would have no seed.
+#[test]
+fn the_bootstrap_unit_runs_no_seed() {
+    let text = Kind::Bootstrap.read();
+    assert_eq!(check_seed(Kind::Bootstrap, &text), Ok(()));
+    let seeded = altered(&text, "ExecStart=", &format!("{}ExecStart=", SEED_LINE));
+    refuses(
+        |t: &str| check_seed(Kind::Bootstrap, t),
+        &[(seeded, "the bootstrap unit has an ExecStartPre= seed")],
+    );
+    let package = Kind::Package.read();
+    refuses(
+        |t: &str| check_seed(Kind::Bootstrap, t),
+        &[(package, "the bootstrap unit has an ExecStartPre= seed")],
+    );
 }
 
 /// Whether systemd restarts a service of `policy` that exited with `status` by itself, as
@@ -213,29 +319,31 @@ fn check_restart(text: &str) -> Result<(), String> {
 /// stays down (`on-failure`, the policy the unit had; `no`; `on-abnormal`); the status is the one
 /// the daemon's command line maps that exit to, not a constant here.
 #[test]
-fn the_restart_policy_restarts_the_exit_status_of_the_daemon_after_staging() {
-    let text = read(UNIT);
-    assert_eq!(check_restart(&text), Ok(()));
-    assert_eq!(exit_status(&Ok(())), 0);
-    let cases = [
-        (
-            altered(&text, "Restart=always", "Restart=on-failure"),
-            "Restart=on-failure does not restart the daemon's exit status 0",
-        ),
-        (
-            altered(&text, "Restart=always", "Restart=no"),
-            "Restart=no does not restart",
-        ),
-        (
-            altered(&text, "Restart=always", "Restart=on-abnormal"),
-            "Restart=on-abnormal does not restart",
-        ),
-        (
-            altered(&text, "Restart=always", "Restart=sometimes"),
-            "Restart=sometimes is not a policy systemd knows",
-        ),
-    ];
-    refuses(check_restart, &cases);
+fn each_units_restart_policy_restarts_the_exit_status_of_the_daemon_after_staging() {
+    for kind in Kind::ALL {
+        let text = kind.read();
+        assert_eq!(check_restart(&text), Ok(()));
+        assert_eq!(exit_status(&Ok(())), 0);
+        let cases = [
+            (
+                altered(&text, "Restart=always", "Restart=on-failure"),
+                "Restart=on-failure does not restart the daemon's exit status 0",
+            ),
+            (
+                altered(&text, "Restart=always", "Restart=no"),
+                "Restart=no does not restart",
+            ),
+            (
+                altered(&text, "Restart=always", "Restart=on-abnormal"),
+                "Restart=on-abnormal does not restart",
+            ),
+            (
+                altered(&text, "Restart=always", "Restart=sometimes"),
+                "Restart=sometimes is not a policy systemd knows",
+            ),
+        ];
+        refuses(check_restart, &cases);
+    }
     // `on-success` restarts a clean exit as well; it is `unit_file.rs` that holds the unit to
     // `always`, which also restarts a crash.
     assert_eq!(restarts("on-success", 0), Ok(true));
@@ -307,44 +415,46 @@ fn check_agreement(text: &str) -> Result<(), String> {
 /// directory the unit starts from. The drop-in is for the unit the packages install, under its
 /// name.
 #[test]
-fn the_unit_agrees_with_the_dropin_and_fallback_unit_the_daemon_writes() {
-    let text = read(UNIT);
-    assert_eq!(check_agreement(&text), Ok(()));
-    assert_eq!(
-        Path::new(INSTALLED_UNIT).file_name(),
-        Some(MAIN_UNIT.as_ref())
-    );
-    let cases = [
-        (
-            altered(&text, "RestartSec=1", "RestartSec=5"),
-            "the unit sets RestartSec=5 and the drop-in RestartSec=1",
-        ),
-        (
-            altered(&text, "RestartMode=direct\n", "RestartMode=normal\n"),
-            "the unit sets RestartMode=normal and the drop-in RestartMode=direct",
-        ),
-        (
-            altered(
-                &text,
-                "StartLimitIntervalSec=0",
-                "StartLimitIntervalSec=300",
+fn each_unit_agrees_with_the_dropin_and_fallback_unit_the_daemon_writes() {
+    for kind in Kind::ALL {
+        let text = kind.read();
+        assert_eq!(check_agreement(&text), Ok(()));
+        assert_eq!(
+            Path::new(INSTALLED_UNIT).file_name(),
+            Some(MAIN_UNIT.as_ref())
+        );
+        let cases = [
+            (
+                altered(&text, "RestartSec=1", "RestartSec=5"),
+                "the unit sets RestartSec=5 and the drop-in RestartSec=1",
             ),
-            "the unit sets a start limit of its own (StartLimitIntervalSec=300)",
-        ),
-        (
-            altered(
-                &text,
-                "StartLimitIntervalSec=0\n",
-                "StartLimitIntervalSec=0\nStartLimitBurst=3\n",
+            (
+                altered(&text, "RestartMode=direct\n", "RestartMode=normal\n"),
+                "the unit sets RestartMode=normal and the drop-in RestartMode=direct",
             ),
-            "the unit sets a start limit of its own (StartLimitIntervalSec=0)",
-        ),
-        (
-            altered(&text, "RestartSec=1\n", ""),
-            "[Service] has no RestartSec=",
-        ),
-    ];
-    refuses(check_agreement, &cases);
+            (
+                altered(
+                    &text,
+                    "StartLimitIntervalSec=0",
+                    "StartLimitIntervalSec=300",
+                ),
+                "the unit sets a start limit of its own (StartLimitIntervalSec=300)",
+            ),
+            (
+                altered(
+                    &text,
+                    "StartLimitIntervalSec=0\n",
+                    "StartLimitIntervalSec=0\nStartLimitBurst=3\n",
+                ),
+                "the unit sets a start limit of its own (StartLimitIntervalSec=0)",
+            ),
+            (
+                altered(&text, "RestartSec=1\n", ""),
+                "[Service] has no RestartSec=",
+            ),
+        ];
+        refuses(check_agreement, &cases);
+    }
 }
 
 /// What systemd leaves of the daemon's unit once it has failed the start limit of the drop-in.
@@ -421,58 +531,60 @@ fn written_fallback(text: &str) -> String {
 /// resets it, that does not reset it, or that starts another unit, leaves the daemon failed, and
 /// so does a drop-in without `RestartMode=direct` with a fallback that has a start limit.
 #[test]
-fn three_failed_starts_with_no_update_waiting_start_the_daemon_again() {
-    let text = read(UNIT);
-    let dropin = main_dropin(FALLBACK_UNIT, START_LIMIT_BURST);
-    let fallback = written_fallback(&text);
-    let after = |fallback: &str, status| after_limit(&dropin, fallback, MAIN_UNIT, status);
-    assert_eq!(after(&fallback, EXIT_FAILED), Ok(AfterLimit::StartedAgain));
-    assert_eq!(after(&fallback, 0), Ok(AfterLimit::StartedAgain));
-    assert_eq!(EXIT_FAILED, 1);
+fn three_failed_starts_of_either_unit_with_no_update_waiting_start_the_daemon_again() {
+    for kind in Kind::ALL {
+        let text = kind.read();
+        let dropin = main_dropin(FALLBACK_UNIT, START_LIMIT_BURST);
+        let fallback = written_fallback(&text);
+        let after = |fallback: &str, status| after_limit(&dropin, fallback, MAIN_UNIT, status);
+        assert_eq!(after(&fallback, EXIT_FAILED), Ok(AfterLimit::StartedAgain));
+        assert_eq!(after(&fallback, 0), Ok(AfterLimit::StartedAgain));
+        assert_eq!(EXIT_FAILED, 1);
 
-    let reset = format!("ExecStartPost=/usr/bin/systemctl reset-failed {MAIN_UNIT}\n");
-    let start = format!("ExecStartPost=/usr/bin/systemctl start --no-block {MAIN_UNIT}\n");
-    let unignored = altered(&fallback, "ExecStart=-/", "ExecStart=/");
-    let swapped = altered(
-        &altered(&fallback, &reset, ""),
-        &start,
-        &format!("{start}{reset}"),
-    );
-    let unreset = altered(&fallback, &reset, "");
-    let limited = altered(&fallback, "StartLimitIntervalSec=0\n", "");
-    let normal = altered(&dropin, "RestartMode=direct\n", "");
-    let other = altered(
-        &fallback,
-        &start,
-        "ExecStartPost=/usr/bin/systemctl start --no-block other.service\n",
-    );
-    for (text, case) in [
-        (&unignored, "the verb's failure ends the fallback"),
-        (&swapped, "started before it is reset"),
-        (&unreset, "never reset"),
-        (&other, "another unit started"),
-    ] {
+        let reset = format!("ExecStartPost=/usr/bin/systemctl reset-failed {MAIN_UNIT}\n");
+        let start = format!("ExecStartPost=/usr/bin/systemctl start --no-block {MAIN_UNIT}\n");
+        let unignored = altered(&fallback, "ExecStart=-/", "ExecStart=/");
+        let swapped = altered(
+            &altered(&fallback, &reset, ""),
+            &start,
+            &format!("{start}{reset}"),
+        );
+        let unreset = altered(&fallback, &reset, "");
+        let limited = altered(&fallback, "StartLimitIntervalSec=0\n", "");
+        let normal = altered(&dropin, "RestartMode=direct\n", "");
+        let other = altered(
+            &fallback,
+            &start,
+            "ExecStartPost=/usr/bin/systemctl start --no-block other.service\n",
+        );
+        for (text, case) in [
+            (&unignored, "the verb's failure ends the fallback"),
+            (&swapped, "started before it is reset"),
+            (&unreset, "never reset"),
+            (&other, "another unit started"),
+        ] {
+            assert_eq!(
+                after(text, EXIT_FAILED),
+                Ok(AfterLimit::LeftFailed),
+                "{case}"
+            );
+        }
+        // With both the drop-in's `RestartMode=direct` and the fallback's `StartLimitIntervalSec=0`
+        // gone, the fallback spends its own start limit and the unit is left failed; either alone
+        // keeps it running.
+        let spent = after_limit(&normal, &limited, MAIN_UNIT, EXIT_FAILED);
+        assert_eq!(spent, Ok(AfterLimit::LeftFailed));
+        assert_eq!(after(&limited, EXIT_FAILED), Ok(AfterLimit::StartedAgain));
+        let unlimited_only = after_limit(&normal, &fallback, MAIN_UNIT, EXIT_FAILED);
+        assert_eq!(unlimited_only, Ok(AfterLimit::StartedAgain));
+        // Without the failure, the verb that put the previous binary back still starts the unit.
+        assert_eq!(after(&unignored, 0), Ok(AfterLimit::StartedAgain));
+        let elsewhere = main_dropin("other.service", START_LIMIT_BURST);
         assert_eq!(
-            after(text, EXIT_FAILED),
-            Ok(AfterLimit::LeftFailed),
-            "{case}"
+            after_limit(&elsewhere, &fallback, MAIN_UNIT, EXIT_FAILED),
+            Err(format!(
+                "the drop-in starts other.service, not {FALLBACK_UNIT}"
+            ))
         );
     }
-    // With both the drop-in's `RestartMode=direct` and the fallback's `StartLimitIntervalSec=0`
-    // gone, the fallback spends its own start limit and the unit is left failed; either alone
-    // keeps it running.
-    let spent = after_limit(&normal, &limited, MAIN_UNIT, EXIT_FAILED);
-    assert_eq!(spent, Ok(AfterLimit::LeftFailed));
-    assert_eq!(after(&limited, EXIT_FAILED), Ok(AfterLimit::StartedAgain));
-    let unlimited_only = after_limit(&normal, &fallback, MAIN_UNIT, EXIT_FAILED);
-    assert_eq!(unlimited_only, Ok(AfterLimit::StartedAgain));
-    // Without the failure, the verb that put the previous binary back still starts the unit.
-    assert_eq!(after(&unignored, 0), Ok(AfterLimit::StartedAgain));
-    let elsewhere = main_dropin("other.service", START_LIMIT_BURST);
-    assert_eq!(
-        after_limit(&elsewhere, &fallback, MAIN_UNIT, EXIT_FAILED),
-        Err(format!(
-            "the drop-in starts other.service, not {FALLBACK_UNIT}"
-        ))
-    );
 }

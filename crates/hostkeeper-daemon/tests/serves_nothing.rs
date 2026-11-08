@@ -41,31 +41,61 @@ fn sockets_under(dir: &Path) -> Vec<PathBuf> {
     found
 }
 
-/// The words of the `ExecStart=` line of the package's unit after the program: the arguments the
-/// daemon is started with today.
-fn unit_arguments() -> Vec<String> {
-    let unit = fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../packaging/linux/hostkeeper.service"
-    ))
-    .expect("the package's unit");
-    let line = unit
-        .lines()
-        .find_map(|line| line.strip_prefix("ExecStart="))
-        .expect("the unit's ExecStart=");
+/// The `ExecStart=` line of the package unit of every release before stage 2 of
+/// docs/design/two-programs.md: the unit the farm's hosts run today, until a stage-2 release
+/// reaches them. The repository's units are stage 2's now, so it is kept here, word for word.
+const RELEASED_EXEC_START: &str = "/var/lib/updater/state/hostkeeper/bin/current daemon \
+    --config /etc/hostkeeper/hostkeeper.toml --state-dir /var/lib/updater/state \
+    --packages-dir /var/lib/hostkeeper/packages --admin-socket /run/hostkeeper/admin.sock \
+    --notify-systemd";
+
+/// The words of a command line after its program.
+fn arguments_of(line: &str) -> Vec<String> {
     line.split_whitespace().skip(1).map(str::to_owned).collect()
 }
 
-/// The arguments of the stage-2 unit: today's with the pair `--admin-socket <path>` dropped
-/// (design section 4.1).
+/// The arguments the daemon is started with today: [`RELEASED_EXEC_START`]'s.
+fn unit_arguments() -> Vec<String> {
+    arguments_of(RELEASED_EXEC_START)
+}
+
+/// The arguments of the `ExecStart=` line of the unit at `path` in the repository.
+fn arguments_in(path: &str) -> Vec<String> {
+    let at = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(path);
+    let unit = fs::read_to_string(&at).unwrap_or_else(|e| panic!("{}: {e}", at.display()));
+    let line = unit
+        .lines()
+        .find_map(|line| line.strip_prefix("ExecStart="))
+        .unwrap_or_else(|| panic!("{} has no ExecStart=", at.display()));
+    arguments_of(line)
+}
+
+/// The arguments of stage 2's package unit (design section 4.1, which drops `--admin-socket`).
 fn stage_two_arguments() -> Vec<String> {
-    let mut arguments = unit_arguments();
-    let at = arguments
+    arguments_in("packaging/linux/units/hostkeeper.service")
+}
+
+/// The arguments of stage 2's bootstrap unit, which starts the packaged binary.
+fn bootstrap_arguments() -> Vec<String> {
+    arguments_in("packaging/linux/hostkeeper.service")
+}
+
+/// Catches a pin of today's line that has drifted from the units it came from: without its
+/// `--admin-socket` pair, today's arguments are stage 2's package unit's and bootstrap unit's,
+/// word for word, so the two lists the tests below start differ by that pair alone.
+#[test]
+fn today_s_arguments_are_stage_two_s_with_the_admin_socket_pair() {
+    let mut today = unit_arguments();
+    let at = today
         .iter()
         .position(|word| word == "--admin-socket")
         .expect("today's unit passes --admin-socket");
-    arguments.drain(at..at + 2);
-    arguments
+    let pair: Vec<String> = today.drain(at..at + 2).collect();
+    assert_eq!(pair, ["--admin-socket", "/run/hostkeeper/admin.sock"]);
+    assert_eq!(today, stage_two_arguments());
+    assert_eq!(today, bootstrap_arguments());
 }
 
 fn parse(arguments: &[String]) -> DaemonFlags {
@@ -194,6 +224,7 @@ fn help_lists_no_admin_command_and_no_admin_socket_flag() {
 fn today_s_unit_and_the_stage_two_unit_give_the_same_settings() {
     let today = parse(&unit_arguments());
     let stage_two = parse(&stage_two_arguments());
+    assert_eq!(parse(&bootstrap_arguments()), stage_two);
     assert_eq!(today.settings(), stage_two.settings());
     assert_eq!(
         (&today.admin_socket, &stage_two.admin_socket),
@@ -233,6 +264,7 @@ async fn a_daemon_starts_from_today_s_unit_and_from_the_stage_two_unit_and_binds
     for (name, arguments) in [
         ("serves-today", unit_arguments()),
         ("serves-stage-two", stage_two_arguments()),
+        ("serves-bootstrap", bootstrap_arguments()),
     ] {
         let rig = Rig::new(name);
         let flags = parse(&arguments);

@@ -28,17 +28,17 @@
 //!   fallback timer job, and the verb then decides the burst from the start log itself), and
 //!   [`selfunits`] the drop-in and fallback unit (on macOS the fallback job) the daemon writes at
 //!   each start where they differ, telling the service manager only then; [`seed`] is the verb
-//!   `self-update-seed` the unit runs before each start (on macOS the pkg's `postinstall`, at
-//!   install), which gives the binary directory its first binary.
+//!   `self-update-seed` the package unit runs before each start, which gives the binary
+//!   directory its first binary.
 //! - [`packaged`]: `hostkeeper daemon` started from the packaged binary seeds the binary
 //!   directory as [`seed`] does and execs its `current`.
 //! - [`handover`]: the first thing `hostkeeper daemon` does, before it reads its config (after
 //!   the packaged start, which execs `current` first): a
 //!   hand-over of hostkeeper's own update into another binary (docs/design/two-programs.md, 4.3)
 //!   execs that binary while its start count lasts, and is settled failed once it cannot.
-//! - [`mac_config`]: the verb `mac-config`, which the pkg's `postinstall` runs to write the
-//!   daemon config from the managed preferences the MDM installed, and which the start of a
-//!   Mac's daemon runs when its config is not there.
+//! - [`mac_config`]: the verb `mac-config`, which writes the daemon config from the managed
+//!   preferences the MDM installed, and which the start of a Mac's daemon runs when its config is
+//!   not there.
 //! - [`adapters`]: the step launcher, service manager, unit directory, observer ports and package
 //!   check of the host's platform ([`adapters::Adapters::for_platform`]: systemd on Linux,
 //!   launchd on macOS), and the claims of its enrollment.
@@ -59,7 +59,7 @@
 //!   [`Daemon::status`] reports of it.
 //! - [`node`]: the host's enrollment and the heartbeat loop's link, as the loops last wrote them,
 //!   which [`Daemon::status`] reports besides the services.
-//! - [`cli`]: `hostkeeper daemon` and its flags, `hostkeeper ci`, and the
+//! - [`cli`]: `hostkeeper daemon` and its flags, and the
 //!   plumbing verbs `self-update-fallback` and `self-update-protocol`; the binary only forwards
 //!   to it.
 //! - [`stamp`]: the version `hostkeeper --version` prints, with the commit of a release build.

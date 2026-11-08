@@ -1,10 +1,11 @@
 //! `hostkeeper self-update-seed --state-dir <dir> --binary <file>`: the first binary of the
-//! binary directory of hostkeeper's own update (design section 6.6), which the daemon's unit
-//! starts through `current` (`<state-dir>/hostkeeper/bin/current`, [`binary_dir`]). The unit runs
-//! it before every start (`ExecStartPre=`) with the binary the package installed; a host
-//! that has never updated hostkeeper has no `current` yet, and its first start needs one. On a
-//! Mac, whose launchd job starts the same `current` and has no step before a start, the pkg's
-//! `postinstall` runs it once, at install, with the binary the pkg installed.
+//! binary directory of hostkeeper's own update (design section 6.6), which the package unit
+//! (`packaging/linux/units/hostkeeper.service`) starts through `current`
+//! (`<state-dir>/hostkeeper/bin/current`, [`binary_dir`]). That unit runs it before every start
+//! (`ExecStartPre=-`) with the binary the package installed; a host that has never updated
+//! hostkeeper has no `current` yet, and its first start needs one. The bootstrap unit of the deb
+//! and the rpm and a Mac's launchd job start the packaged binary instead, whose `hostkeeper
+//! daemon` does the same seed itself before it execs `current` ([`crate::packaged`]).
 //!
 //! When `current` starts an executable file, the seed writes nothing, takes no lock and exits 0:
 //! after the first start, and after every self-update, `current` is the update's, and the seed

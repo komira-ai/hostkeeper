@@ -3,9 +3,12 @@
 
 use std::path::Path;
 
+use hostkeeper_daemon::layout::RUN_SUBDIR;
+use hostkeeper_launchd::Platform;
+
 use crate::tmpfiles;
 use crate::unit::{self, Unit};
-use crate::{TMPFILES, UNIT, altered, read, refuses};
+use crate::{Kind, TMPFILES, altered, read, refuses};
 
 /// The daemon's directories and their modes (design sections 4.1 and 10), each root's.
 const DIRECTORIES: [(&str, &str); 5] = [
@@ -216,93 +219,92 @@ fn check_agreement(unit_text: &str, tmpfiles_text: &str) -> Result<(), String> {
     let unit = Unit::parse(unit_text)?;
     let words = unit::command_words(unit.single("Service", "ExecStart")?)?;
     let lines = tmpfiles::parse(tmpfiles_text)?;
-    let socket_dir = parent(flag(&words, "--admin-socket")?);
+    if let Some(entry) = unit
+        .entries
+        .iter()
+        .find(|e| e.key.starts_with("RuntimeDirectory"))
+    {
+        return Err(format!(
+            "{}= makes a directory under /run, which only the tmpfiles rules make",
+            entry.key
+        ));
+    }
     let dirs = [
         flag(&words, "--state-dir")?.to_owned(),
         flag(&words, "--packages-dir")?.to_owned(),
         parent(flag(&words, "--config")?),
-        socket_dir.clone(),
+        // The daemon's run directory, which it makes 0700 at each start, and where a daemon
+        // before it binds its admin socket by default; the unit passes no path for it.
+        Platform::linux()
+            .run_dir
+            .join(RUN_SUBDIR)
+            .display()
+            .to_string(),
     ];
     if let Some(dir) = dirs.iter().find(|dir| mode_of(&lines, dir).is_none()) {
         return Err(format!(
-            "{dir}, on the unit's command line, has no tmpfiles line"
-        ));
-    }
-    let runtime = format!("/run/{}", unit.single("Service", "RuntimeDirectory")?);
-    if runtime != socket_dir {
-        return Err(format!(
-            "RuntimeDirectory= makes {runtime}, but the admin socket is in {socket_dir}"
-        ));
-    }
-    let runtime_mode = unit.single("Service", "RuntimeDirectoryMode")?;
-    let made = mode_of(&lines, &runtime);
-    if made != Some(runtime_mode) {
-        return Err(format!(
-            "RuntimeDirectoryMode={runtime_mode}, but tmpfiles makes {runtime} with {made:?}"
+            "{dir}, on the unit's command line or the daemon's run directory, has no tmpfiles line"
         ));
     }
     Ok(())
 }
 
 /// Catches the unit and the tmpfiles rules drifting apart: a directory the daemon is told to
-/// use that no tmpfiles line makes, or a runtime directory made with two different modes.
+/// use, or its run directory (where an older daemon binds its admin socket), that no tmpfiles
+/// line makes, and a
+/// unit that makes `/run/hostkeeper` itself with a `RuntimeDirectory=`. Each of the two units is
+/// held to it.
 #[test]
 fn unit_flags_and_tmpfiles_name_the_same_directories() {
-    let unit = read(UNIT);
     let tmpfiles = read(TMPFILES);
-    assert_eq!(check_agreement(&unit, &tmpfiles), Ok(()));
-    let with_unit = |text: String| move |t: &str| check_agreement(&text, t);
-    let cases = [
-        (
-            altered(
-                &unit,
-                "--state-dir /var/lib/updater/state --packages-dir",
-                "--state-dir /var/lib/hostkeeper/state --packages-dir",
+    for kind in Kind::ALL {
+        let unit = kind.read();
+        assert_eq!(check_agreement(&unit, &tmpfiles), Ok(()));
+        let with_unit = |text: String| move |t: &str| check_agreement(&text, t);
+        let cases = [
+            (
+                altered(
+                    &unit,
+                    "--state-dir /var/lib/updater/state --packages-dir",
+                    "--state-dir /var/lib/hostkeeper/state --packages-dir",
+                ),
+                "/var/lib/hostkeeper/state, on the unit's command line",
             ),
-            "/var/lib/hostkeeper/state, on the unit's command line",
-        ),
-        (
-            altered(
-                &unit,
-                "--admin-socket /run/hostkeeper/admin.sock",
-                "--admin-socket /run/hostkeeper.sock",
+            (
+                altered(
+                    &unit,
+                    "WatchdogSec=60\n",
+                    "WatchdogSec=60\nRuntimeDirectory=hostkeeper\n",
+                ),
+                "RuntimeDirectory= makes a directory",
             ),
-            "/run, on the unit's command line",
-        ),
-        (
-            altered(
-                &unit,
-                "RuntimeDirectory=hostkeeper\n",
-                "RuntimeDirectory=hk\n",
+            (
+                altered(&unit, " --packages-dir /var/lib/hostkeeper/packages", ""),
+                "ExecStart= has no --packages-dir",
             ),
-            "RuntimeDirectory= makes /run/hk",
-        ),
-        (
-            altered(
-                &unit,
-                "RuntimeDirectoryMode=0700",
-                "RuntimeDirectoryMode=0755",
-            ),
-            "RuntimeDirectoryMode=0755",
-        ),
-        (
-            altered(&unit, " --packages-dir /var/lib/hostkeeper/packages", ""),
-            "ExecStart= has no --packages-dir",
-        ),
-    ];
-    for (unit_text, words) in cases {
-        refuses(with_unit(unit_text), &[(tmpfiles.clone(), words)]);
+        ];
+        for (unit_text, words) in cases {
+            refuses(with_unit(unit_text), &[(tmpfiles.clone(), words)]);
+        }
+        let without_state = altered(
+            &tmpfiles,
+            "/var/lib/updater/state       0700",
+            "/var/lib/updater/other       0700",
+        );
+        let without_socket_dir = altered(
+            &tmpfiles,
+            "d      /run/hostkeeper              0700 root root  -\n",
+            "",
+        );
+        refuses(
+            |t: &str| check_agreement(&unit, t),
+            &[
+                (
+                    without_state,
+                    "/var/lib/updater/state, on the unit's command line",
+                ),
+                (without_socket_dir, "/run/hostkeeper, on the unit's"),
+            ],
+        );
     }
-    let without_state = altered(
-        &tmpfiles,
-        "/var/lib/updater/state       0700",
-        "/var/lib/updater/other       0700",
-    );
-    refuses(
-        |t: &str| check_agreement(&unit, t),
-        &[(
-            without_state,
-            "/var/lib/updater/state, on the unit's command line",
-        )],
-    );
 }

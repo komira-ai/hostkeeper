@@ -540,23 +540,23 @@ main>section>figure.wide,main>section>.tblw.wide{width:min(72rem,calc(100vw - 3r
 <p>Two programs are built (<a href="https://github.com/komira-ai/hostkeeper/tree/main/crates/hostkeeper">crates/hostkeeper</a>,
 <a href="https://github.com/komira-ai/hostkeeper/tree/main/crates/hostkeeper-coordinator">crates/hostkeeper-coordinator</a>):</p>
 <ul>
-<li><code>hostkeeper</code>, the host program. Its verbs are <code>daemon</code>,
-<code>ci set-desired</code> (the CI client), and two plumbing verbs of its own update
+<li><code>hostkeeper</code>, the host program. Its verbs are <code>daemon</code> and two
+plumbing verbs of its own update
 (<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-daemon/src/cli.rs">crates/hostkeeper-daemon/src/cli.rs</a>).</li>
 <li><code>hostkeeper-coordinator serve</code>, the coordinator, shipped as a tarball and a container image
 (<a href="https://github.com/komira-ai/hostkeeper/blob/main/packaging/container/Dockerfile">packaging/container/Dockerfile</a>). No systemd unit for it
 is packaged, so the operator supervises it.</li>
 </ul>
 <p>Both programs take their configuration from flags and files, not environment variables. The only
-environment reads are platform-set: <code>NOTIFY_SOCKET</code> for <code>--notify-systemd</code>, and the GitHub Actions
-token request variables in <code>hostkeeper ci</code>.</p>
+environment reads are platform-set: systemd&rsquo;s <code>NOTIFY_SOCKET</code> and <code>WATCHDOG_USEC</code>, for
+<code>--notify-systemd</code>.</p>
 <h3 id="architecture">Architecture</h3>
 <figure class="wide" id="fig-arch"><div class="fig-wrap scroll"><svg viewBox="0 0 1000 470" role="img" aria-label="The parts of hostkeeper. On the left, CI&rsquo;s release job, hkctl and the web UI call the coordinator&rsquo;s private listener: CI with its OIDC token, the others with an operator token. In the middle, the coordinator has a private listener, a heartbeat listener, a CA and enrollment store, and plain files. On the right, each host runs the hostkeeper daemon as root, serving nothing on the host, with one transient unit or launchd job per hook step, and its packages. The daemon dials the heartbeat listener for enrollment, polling and renewal, and for its heartbeat. The daemon fetches and verifies packages from a release channel over HTTPS, only inside an order."><defs><marker id="aa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk" d="M0 0L10 5L0 10z"/></marker><marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk-bad" d="M0 0L10 5L0 10z"/></marker></defs>
 <text x="10" y="30" class="t-s t-m">operators and CI</text>
 <rect class="box" x="10" y="40" width="240" height="72" rx="4"/>
 <text x="22" y="62" class="t-b">CI release job</text>
-<text x="22" y="80" class="t-mono">hostkeeper ci set-desired</text>
-<text x="22" y="100" class="t-s">Releases.SetDesired, Releases.Converge</text>
+<text x="22" y="80" class="t-mono">hkctl releases set-desired</text>
+<text x="22" y="100" class="t-s">Releases: SetDesired, WaitConverged</text>
 <rect class="box" x="10" y="130" width="240" height="48" rx="4"/>
 <text x="22" y="150" class="t-b">hkctl</text>
 <text x="22" y="168" class="t-s t-m">generated from the protos</text>
@@ -800,7 +800,8 @@ unary method of that package in the embedded descriptors, and the call goes to t
 service as gRPC, through the same credential check. So no method exists on one surface and not the
 other. A body is at most
 <span data-cell="c-operator-bytes" data-source="crates/hostkeeper-coordinator/src/http.rs" data-item="MAX_OPERATOR_BYTES">4096</span>
-bytes. A test holds <a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/gateway.md">docs/gateway.md</a>&rsquo;s status table equal to the code&rsquo;s.</p>
+bytes, but a <code>Releases.SetDesired</code> body, which may carry a release&rsquo;s targets, at most
+<span data-cell="c-set-desired-bytes" data-source="crates/hostkeeper-coordinator/src/http.rs" data-item="MAX_SET_DESIRED_BYTES">256 KiB</span>. A test holds <a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/gateway.md">docs/gateway.md</a>&rsquo;s status table equal to the code&rsquo;s.</p>
 <p><strong>Every declared method has a handler.</strong> The <code>PENDING</code> list in
 <a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-coordinator/src/grpc/mod.rs">crates/hostkeeper-coordinator/src/grpc/mod.rs</a>,
 of the methods that answer <code>UNIMPLEMENTED</code> until their handler lands, is empty, and a test fails if any
@@ -822,8 +823,9 @@ command per method of every non-local service. <code>hkctl</code> is one bash sc
 table, which calls the gateway with <code>curl</code>
 (<a href="https://github.com/komira-ai/hostkeeper/tree/main/crates/hostkeeper-hkctl">crates/hostkeeper-hkctl</a>, <a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/cli.md">docs/cli.md</a>). The test
 <code>docs_cli_md_is_current</code> regenerates <a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/cli.md">docs/cli.md</a> and fails when it differs, and a
-golden script makes a removed flag or a changed exit code fail. <code>hostkeeper ci set-desired</code>
-calls <code>Releases.SetDesired</code> and <code>Releases.Converge</code> over gRPC for a release job
+golden script makes a removed flag or a changed exit code fail. A release job runs
+<code>hkctl releases set-desired</code> and then <code>hkctl releases wait-converged</code>, one held call of
+<code>Releases.WaitConverged</code>
 (<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/deploy/ci-client.md">docs/deploy/ci-client.md</a>).</p>
 <p><strong>The web UI is built on the gateway.</strong> <a href="https://github.com/komira-ai/hostkeeper/tree/main/ui">ui/</a> is static HTML, one stylesheet and
 JavaScript modules, with no framework and no build step. Its pages are Fleet, Host, Rollout, Holds,
@@ -1001,9 +1003,10 @@ the newest entries by reading back from the end of the newest file. It filters b
 service and host, at most
 <span data-cell="c-audit-page" data-source="crates/hostkeeper-coordinator/src/operator.rs" data-item="MAX_AUDIT_PAGE">256</span>
 entries a page (<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-coordinator/src/audit_file.rs">crates/hostkeeper-coordinator/src/audit_file.rs</a>).
-A <code>SetDesired</code> by CI writes no audit entry of its own (only the force it ends, <code>force_ended</code>, and
-the halt it lifts, <code>lift_halt</code>, are audited as <code>ci</code>); one made with an operator&rsquo;s token is a
-<code>set_desired</code> entry under the token&rsquo;s name
+A <code>SetDesired</code> by CI without targets writes no audit entry of its own (only the force it ends,
+<code>force_ended</code>, and the halt it lifts, <code>lift_halt</code>, are audited as <code>ci</code>); one with targets
+is a <code>set_desired</code> entry as <code>ci</code>, naming each entry&rsquo;s digest and its manifest&rsquo;s; one
+made with an operator&rsquo;s token is a <code>set_desired</code> entry under the token&rsquo;s name
 (<code>set_desired_by</code> in <a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-coordinator/src/service_ci.rs">crates/hostkeeper-coordinator/src/service_ci.rs</a>).
 An entry that <code>Audit.List</code> answers carries its time and the name it was made under; the entry in a
 change&rsquo;s own answer has the name and no time. Enrollment&rsquo;s own changes are audited under
@@ -1142,7 +1145,7 @@ starts within
 <span data-cell="c-burst-window" data-source="crates/hostkeeper-steps/src/selfupdate.rs" data-item="START_LIMIT_WINDOW_SECS">300 s</span>.
 The timer job meant to run it is rendered but not installed.</li>
 <li>The installer is an unsigned distribution <code>.pkg</code> (<code>productbuild</code> around one component pkg) holding the binary, the daemon&rsquo;s plist, its log directory and
-newsyslog file, the pinned <code>gh</code> and the Sigstore trusted root. Its <code>postinstall</code> seeds the binary directory, writes <code>hostkeeper.toml</code> from the MDM&rsquo;s managed preferences (<code>hostkeeper mac-config</code>, which keeps a config already there) and loads the daemon&rsquo;s job.</li>
+newsyslog file, the pinned <code>gh</code> and the Sigstore trusted root. Its <code>postinstall</code> loads the daemon&rsquo;s job, whose program is the installed binary: each start seeds the binary directory, writes <code>hostkeeper.toml</code> from the MDM&rsquo;s managed preferences when it is absent, and execs <code>current</code>.</li>
 </ul>
 <p>The <code>macos-device</code> job of <a href="https://github.com/komira-ai/hostkeeper/blob/main/.github/workflows/privileged.yml">.github/workflows/privileged.yml</a>
 runs as root on a hosted Mac after each merge to <code>main</code>. It shows real <code>codesign</code> and quarantine
@@ -1166,7 +1169,7 @@ paths (the CA bundle, <code>gh</code> and the trusted root use their Linux paths
 <rect class="box" x="20" y="14" width="300" height="62" rx="4"/>
 <text x="32" y="36" class="t-b">GitHub-hosted runners</text>
 <text x="32" y="54" class="t-s">a service&rsquo;s release job runs</text>
-<text x="32" y="68" class="t-mono">hostkeeper ci set-desired</text>
+<text x="32" y="68" class="t-mono">hkctl releases set-desired</text>
 <rect class="box" x="680" y="14" width="300" height="62" rx="4"/>
 <text x="692" y="36" class="t-b">release channel, over HTTPS</text>
 <text x="692" y="54" class="t-s">staged by the operator; packages and</text>
