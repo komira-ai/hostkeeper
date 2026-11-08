@@ -30,7 +30,7 @@ use crate::enrollment::tests::support::{
 };
 use crate::enrollment::{GATE_AUDITOR, MacAllowlist, MacPolicy, os_random};
 use crate::mdm::tests::{devices_dir, flags_in, record};
-use crate::mdm::{Mdm, MdmError, MdmFlags};
+use crate::mdm::{Devices, Mdm, MdmError, MdmFlags};
 use crate::testutil::scratch;
 
 /// The platform UUID [`mac_request`] claims: the device's UDID, and its enrollment id.
@@ -214,7 +214,7 @@ fn gate_and_enrollment(
     }
     let mdm = Mdm::open(
         &side_flags(dir, &hub.url),
-        dir.path(),
+        Devices::Files(dir.path()),
         Arc::clone(clock) as _,
         os_random(),
     )
@@ -368,7 +368,13 @@ async fn the_start_refuses_a_bad_identifier_or_daemon_config() {
     let dir = scratch("mdm-enroll-flags");
     let good = side_flags(&dir, "http://127.0.0.1:9004");
     let open = |flags: &MdmFlags| {
-        Mdm::open(flags, dir.path(), FixedClock::at(NOW), os_random()).expect_err("refused")
+        Mdm::open(
+            flags,
+            Devices::Files(dir.path()),
+            FixedClock::at(NOW),
+            os_random(),
+        )
+        .expect_err("refused")
     };
 
     let flags = MdmFlags {
@@ -408,14 +414,19 @@ async fn the_start_refuses_a_bad_identifier_or_daemon_config() {
     // nothing, and its record is unchanged. Without the side, attaching does nothing.
     let store = FileDeviceStore::open(Arc::new(RealFs), &devices_dir(&dir)).expect("a store");
     store.save(&ready(NOW, 1)).expect("saved");
-    let mdm = Mdm::open(&good, dir.path(), FixedClock::at(NOW), os_random())
-        .expect("opens")
-        .expect("a gate");
+    let mdm = Mdm::open(
+        &good,
+        Devices::Files(dir.path()),
+        FixedClock::at(NOW),
+        os_random(),
+    )
+    .expect("opens")
+    .expect("a gate");
     mdm.gate.tick().await;
     assert_eq!(mdm.gate.records(), [ready(NOW, 1)]);
     let without = Mdm::open(
         &flags_in(&dir),
-        dir.path(),
+        Devices::Files(dir.path()),
         FixedClock::at(NOW),
         os_random(),
     )

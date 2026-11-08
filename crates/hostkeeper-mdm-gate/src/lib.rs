@@ -6,7 +6,8 @@
 //! - [`webhook::serve`]: the loopback listener NanoHUB's webhook posts each check-in and
 //!   command result to.
 //! - [`Gate`]: the records of the devices, kept behind [`DeviceStore`] ([`FileDeviceStore`]: a
-//!   file per device), the `DeviceInformation` and `SecurityInfo` it asks each newly enrolled
+//!   file per device; the coordinator's database is another, held to the same cases by
+//!   [`conformance`]), the `DeviceInformation` and `SecurityInfo` it asks each newly enrolled
 //!   device, and [`Gate::status`], what it says of a Mac serial: the coordinator's
 //!   `DeviceState`.
 //!
@@ -20,6 +21,7 @@
 
 mod answer;
 mod command;
+pub mod conformance;
 pub mod enroll;
 mod event;
 mod gate;
@@ -56,4 +58,4 @@ pub use profile::{
 pub use record::{
     DeviceRecord, InstallRecord, NonceRecord, Phase, ProfileAnswer, ProfileCommand, Sent,
 };
-pub use store::{DeviceStore, FileDeviceStore, SCHEMA, StoreError};
+pub use store::{DeviceStore, FileDeviceStore, SCHEMA, StoreError, decode_record, encode_record};
