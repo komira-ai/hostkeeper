@@ -83,7 +83,7 @@ jobs:
           VERSION: ${{ inputs.variant == 'fail-ready' && format('{0}-fail-ready', inputs.version) || inputs.version }}
           PLATFORM: ${{ inputs.platform }}
         run: |
-          digest=$(curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --location "https://github.com/$GITHUB_REPOSITORY/releases/download/v$RELEASE/hello-$VERSION-$PLATFORM.tar.zst.sha256" | cut -d ' ' -f 1)
+          digest=$(curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 5 --retry-delay 5 --retry-max-time 300 --retry-all-errors --silent --show-error --location "https://github.com/$GITHUB_REPOSITORY/releases/download/v$RELEASE/hello-$VERSION-$PLATFORM.tar.zst.sha256" | cut -d ' ' -f 1)
           [[ "$digest" =~ ^[0-9a-f]{64}$ ]]
           printf 'version=%s\npackage_digest=%s\n' "$VERSION" "$digest" >> "$GITHUB_OUTPUT"
 
