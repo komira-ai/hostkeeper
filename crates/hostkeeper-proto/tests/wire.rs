@@ -387,6 +387,7 @@ const RPCS: [(&str, &[&str]); 6] = [
             "SetLabels(SetLabelsRequest) SetLabelsResponse",
             "Abort(AbortRequest) AbortResponse",
             "Retire(RetireRequest) RetireResponse",
+            "ClearRecord(ClearRecordRequest) ClearRecordResponse",
         ],
     ),
     (
@@ -400,6 +401,7 @@ const RPCS: [(&str, &[&str]); 6] = [
             "Status(StatusRequest) StatusResponse",
             "MarkBad(MarkBadRequest) MarkBadResponse",
             "Halt(HaltRequest) HaltResponse",
+            "WaitConverged(WaitConvergedRequest) WaitConvergedResponse",
         ],
     ),
     (
@@ -423,9 +425,9 @@ const RPCS: [(&str, &[&str]); 6] = [
     ),
 ];
 
-/// The fields of the enrollment, abort, retire, audit and force-report messages, pinned by name
-/// and number.
-const FIELDS: [(&str, &[(&str, u32)]); 32] = [
+/// The fields of the enrollment, abort, retire, clear-record, audit and force-report messages,
+/// pinned by name and number.
+const FIELDS: [(&str, &[(&str, u32)]); 35] = [
     (
         "hostkeeper.agent.v1.HeartbeatResponse",
         &[
@@ -618,6 +620,15 @@ const FIELDS: [(&str, &[(&str, u32)]); 32] = [
         &[("entry", 1), ("update_in_flight", 2)],
     ),
     (
+        "hostkeeper.operator.v1.ClearRecordRequest",
+        &[("node_id", 1), ("service", 2)],
+    ),
+    (
+        "hostkeeper.operator.v1.ClearRecordResponse",
+        &[("order_id", 1)],
+    ),
+    ("hostkeeper.agent.v1.ClearRecord", &[("service", 1)]),
+    (
         "hostkeeper.operator.v1.ApproveRequest",
         &[
             ("request_id", 1),
@@ -650,7 +661,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 32] = [
 /// Catches: a name on the wire renamed or renumbered without this test changing with it: the
 /// features daemons announce, the order's verbs, every refusal token, the enrollment and poll
 /// states, the coordinator's RPCs with their messages, the fields of the enrollment, abort,
-/// audit and force-report messages, and the kbf JSON keys and the fields that carry them.
+/// clear-record, audit and force-report messages, and the kbf JSON keys and the fields that carry them.
 /// Callers branch on each, and the daemon and the coordinator are built against them apart.
 #[test]
 fn wire_names_are_pinned() {
@@ -658,6 +669,7 @@ fn wire_names_are_pinned() {
         feature_names(),
         [
             "abort-v1",
+            "clear-record-v1",
             "deferred-v1",
             "forced-v1",
             "halt-v1",
@@ -685,6 +697,7 @@ fn wire_names_are_pinned() {
         ("uninstall", 7),
         ("abort", 8),
         ("clear_halt", 9),
+        ("clear_record", 10),
     ];
     assert_eq!(fields, want.map(|(name, number)| (name.to_owned(), number)));
 
@@ -752,6 +765,7 @@ fn wire_names_are_pinned() {
                 "capacity",
                 "store_failed",
                 "audit_unavailable",
+                "daemon_too_old",
             ],
         ),
         (
@@ -780,6 +794,8 @@ fn wire_names_are_pinned() {
                 "channel_digest_mismatch",
                 "index_digest_mismatch",
                 "index_invalid",
+                "invalid_wait",
+                "too_many_waits",
             ],
         ),
         (

@@ -38,8 +38,8 @@
 //! - [`order_terms`]: the order id, try and package digest an update answer of the JSON route
 //!   carries to an agent that announced `order-v1`;
 //! - [`force`]: the fleet-wide fix, a hookless `force` ordered at once past the update plan,
-//!   and [`orders`], the typed orders a heartbeat answer carries (`force`, `abort`, `install`,
-//!   `uninstall`);
+//!   and [`orders`], the typed orders a heartbeat answer carries (`force`, `abort`,
+//!   `clear_record`, `install`, `uninstall`), with [`clear_record`], `Hosts.ClearRecord`;
 //! - [`operator`]: the operator's calls over the messages of `hostkeeper.operator.v1` (marks,
 //!   halts, aborts, exclusions, holds, the audit log), and [`assign`], its assignment calls
 //!   (`Services.Assign`, `Unassign`, `SetMinVersion`, `List`), [`operator_enrollment`], its
@@ -73,6 +73,8 @@
 //! - [`grpc`]: the gRPC services on those surfaces (`hostkeeper.agent.v1.Coordinator` on the
 //!   heartbeat one, `hostkeeper.operator.v1` on the private one), the JSON gateway of the
 //!   operator API, and the router that tells them from the frozen JSON routes;
+//! - `wait`: `Releases.WaitConverged`, a read of the convergence held until it ends the wait,
+//!   and the call deadline and connection rule a held call has;
 //! - [`ui`]: the static files of `--ui-dir` (by default, for the binary,
 //!   [`config::DEFAULT_UI_DIR`] when it is a directory), which the private surface serves under
 //!   `/ui/`;
@@ -104,6 +106,7 @@ pub mod bake;
 pub mod canary;
 pub mod channel;
 pub mod channel_https;
+pub mod clear_record;
 pub mod config;
 pub mod converge;
 pub mod decide;
@@ -149,6 +152,7 @@ pub mod transfer;
 pub mod ui;
 pub mod verdict_file;
 pub mod verdicts;
+pub(crate) mod wait;
 pub(crate) mod write_record;
 
 #[cfg(test)]
@@ -187,6 +191,8 @@ mod channel_https_tests;
 mod channel_set_tests;
 #[cfg(test)]
 mod channel_tests;
+#[cfg(test)]
+mod clear_record_tests;
 #[cfg(test)]
 mod converge_tests;
 #[cfg(test)]

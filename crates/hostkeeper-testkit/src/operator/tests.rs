@@ -323,7 +323,7 @@ fn a_bad_endpoint_token_or_ca_is_refused_when_the_operator_is_made() {
 }
 
 /// A descriptor set of one file, `fixture.proto`, package `fixture`: an enum `State`
-/// (`STATE_UNSPECIFIED`, `STATE_ON`) and a message `Host` (`node_id` string 1, `enrolled_unix`
+/// (`STATE_UNSPECIFIED`, `STATE_ON`) and a message `Machine` (`node_id` string 1, `enrolled_unix`
 /// uint64 2, `state` State 3, `count` uint32 4); and `Other` with `name` uint64 1.
 fn descriptors() -> Vec<u8> {
     fn field(name: &str, number: i32, kind: Type, json: &str) -> FieldDescriptorProto {
@@ -354,7 +354,7 @@ fn descriptors() -> Vec<u8> {
         }],
         message_type: vec![
             DescriptorProto {
-                name: Some("Host".to_owned()),
+                name: Some("Machine".to_owned()),
                 field: vec![
                     field("node_id", 1, Type::String, "nodeId"),
                     field("enrolled_unix", 2, Type::Uint64, "enrolledUnix"),
@@ -374,9 +374,9 @@ fn descriptors() -> Vec<u8> {
     FileDescriptorSet { file: vec![file] }.encode_to_vec()
 }
 
-/// `fixture.Host`, as the generated code of `descriptors` would be.
+/// `fixture.Machine`, as the generated code of `descriptors` would be.
 #[derive(Clone, PartialEq, prost::Message)]
-struct Host {
+struct Machine {
     #[prost(string, tag = "1")]
     node_id: String,
     #[prost(uint64, tag = "2")]
@@ -394,18 +394,18 @@ struct Host {
 /// 64-bit integer as a JSON number, and a default field printed.
 #[test]
 fn a_message_is_its_canonical_json() {
-    let host = Host {
+    let host = Machine {
         node_id: "h1".to_owned(),
         enrolled_unix: 1_700_000_000,
         state: 1,
         count: 0,
     };
     assert_eq!(
-        canonical_json(&descriptors(), "fixture.Host", &host).expect("JSON"),
+        canonical_json(&descriptors(), "fixture.Machine", &host).expect("JSON"),
         serde_json::json!({"nodeId": "h1", "enrolledUnix": "1700000000", "state": "STATE_ON"})
     );
     assert_eq!(
-        canonical_json(&descriptors(), "fixture.Host", &Host::default()).expect("JSON"),
+        canonical_json(&descriptors(), "fixture.Machine", &Machine::default()).expect("JSON"),
         serde_json::json!({})
     );
 }
@@ -417,11 +417,11 @@ fn a_message_is_its_canonical_json() {
 /// object, instead of an error.
 #[test]
 fn a_bad_descriptor_set_an_unknown_name_and_bytes_of_another_message_are_refused() {
-    let host = Host {
+    let host = Machine {
         node_id: "h1".to_owned(),
-        ..Host::default()
+        ..Machine::default()
     };
-    let refused = canonical_json(b"\xff", "fixture.Host", &host).expect_err("not a set");
+    let refused = canonical_json(b"\xff", "fixture.Machine", &host).expect_err("not a set");
     assert!(matches!(refused, JsonError::Descriptors(_)), "{refused}");
     assert!(
         refused
@@ -434,7 +434,7 @@ fn a_bad_descriptor_set_an_unknown_name_and_bytes_of_another_message_are_refused
         refused.to_string(),
         "the descriptor set has no message fixture.Gone"
     );
-    // Field 1 of `Other` is a varint; `Host` sends a length-delimited string in it.
+    // Field 1 of `Other` is a varint; `Machine` sends a length-delimited string in it.
     let refused = canonical_json(&descriptors(), "fixture.Other", &host).expect_err("another");
     assert!(
         refused

@@ -35,6 +35,7 @@ export interface Client {
     setLabels(request: hostkeeper_operator_v1.SetLabelsRequest): Promise<hostkeeper_operator_v1.SetLabelsResponse>;
     abort(request: hostkeeper_operator_v1.AbortRequest): Promise<hostkeeper_operator_v1.AbortResponse>;
     retire(request: hostkeeper_operator_v1.RetireRequest): Promise<hostkeeper_operator_v1.RetireResponse>;
+    clearRecord(request: hostkeeper_operator_v1.ClearRecordRequest): Promise<hostkeeper_operator_v1.ClearRecordResponse>;
   };
   readonly mdm: {
     listDevices(request: hostkeeper_operator_v1.ListDevicesRequest): Promise<hostkeeper_operator_v1.ListDevicesResponse>;
@@ -48,6 +49,7 @@ export interface Client {
     status(request: hostkeeper_operator_v1.StatusRequest): Promise<hostkeeper_operator_v1.StatusResponse>;
     markBad(request: hostkeeper_operator_v1.MarkBadRequest): Promise<hostkeeper_operator_v1.MarkBadResponse>;
     halt(request: hostkeeper_operator_v1.HaltRequest): Promise<hostkeeper_operator_v1.HaltResponse>;
+    waitConverged(request: hostkeeper_operator_v1.WaitConvergedRequest): Promise<hostkeeper_operator_v1.WaitConvergedResponse>;
   };
   readonly rollouts: {
     advance(request: hostkeeper_operator_v1.AdvanceRequest): Promise<hostkeeper_operator_v1.AdvanceResponse>;
@@ -267,6 +269,13 @@ export namespace hostkeeper_operator_v1 {
   }
   export interface ClearHaltResponse {
     entry?: hostkeeper_operator_v1.AuditEntry;
+  }
+  export interface ClearRecordRequest {
+    nodeId?: string;
+    service?: string;
+  }
+  export interface ClearRecordResponse {
+    orderId?: string;
   }
   export interface ConvergeRequest {
     service?: string;
@@ -848,6 +857,21 @@ export namespace hostkeeper_operator_v1 {
   export interface UnmarkBadResponse {
     entry?: hostkeeper_operator_v1.AuditEntry;
   }
+  export interface WaitConvergedRequest {
+    service?: string;
+    version?: string;
+    waitSecs?: number;
+  }
+  export interface WaitConvergedResponse {
+    outcome?: hostkeeper_operator_v1.WaitOutcome;
+    convergence?: hostkeeper_operator_v1.Convergence;
+  }
+  export type WaitOutcome =
+    | "WAIT_OUTCOME_UNSPECIFIED"
+    | "WAIT_OUTCOME_CONVERGED"
+    | "WAIT_OUTCOME_HALTED"
+    | "WAIT_OUTCOME_SUPERSEDED"
+    | "WAIT_OUTCOME_DEADLINE";
   export interface WholeFleet {
   }
   export interface WriteRecord {

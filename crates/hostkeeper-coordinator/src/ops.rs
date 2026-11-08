@@ -296,12 +296,12 @@ pub struct AuditEntry {
     /// `coordinator` for the coordinator's own changes, `ci` for CI's, `mdm-nonce` for a Mac's
     /// approval by its nonce, `mdm-gate` for the MDM gate's.
     pub by: String,
-    /// What it was (`exclude`, `exclude_abandon`, `include`, `set_labels`, `clear_halt`,
-    /// `halt`, `mark_bad`, `unmark_bad`, `abort`, `hold`, `unhold`, `assign`, `unassign`,
-    /// `set_min_version`, `force` with the `unmark_bad`, `mark_bad` and `clear_halt` it made;
-    /// the coordinator's own: `last_good`, `clear_last_good`, `mark_bad`, `uninstalled` and
-    /// `uninstall_cancelled`; the update plans': `rollout_advance` (the coordinator's, when a
-    /// plan enters a stage by itself, or an operator's `Rollouts.Advance`), `rollout_pause` and
+    /// What it was (`exclude`, `exclude_abandon`, `include`, `set_labels`, `clear_halt`, `halt`,
+    /// `mark_bad`, `unmark_bad`, `abort`, `record_cleared`, `hold`, `unhold`, `assign`, `unassign`,
+    /// `set_min_version`, `force` with the `unmark_bad`, `mark_bad` and `clear_halt` it made; the
+    /// coordinator's own: `last_good`, `clear_last_good`, `mark_bad`, `uninstalled` and
+    /// `uninstall_cancelled`; the update plans': `rollout_advance` (the coordinator's, when a plan
+    /// enters a stage by itself, or an operator's `Rollouts.Advance`), `rollout_pause` and
     /// `rollout_resume` (an operator's); CI's: `lift_halt`, `force_ended`, and `unmark_bad` in a
     /// file an earlier build wrote; enrollment's: `enroll_approve`, `enroll_replace`,
     /// `enroll_approve_refused`, `mac_auto_approve_declined`, and the coordinator's

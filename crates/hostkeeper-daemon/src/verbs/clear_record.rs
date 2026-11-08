@@ -1,6 +1,8 @@
-//! `clear_record` (design sections 4.1 and 7): set aside a step record that cannot be read, so
-//! that orders run for the service again. The admin socket's alone: a coordinator's order cannot
-//! carry it, and [`crate::Daemon::execute`] refuses the verb `forbidden` before any lock.
+//! `clear_record` (design sections 4.1 and 7): set aside a step record that cannot be read, so that
+//! orders run for the service again. Run for the admin socket only: an order that carries it (the
+//! `clear_record` case of `hostkeeper.agent.v1`'s `Order`, which no coordinator sends this daemon,
+//! since it does not announce `clear-record-v1`) is refused `forbidden` by
+//! [`crate::Daemon::execute`] before any lock.
 //!
 //! Under the service's lock, never waited for (`busy` when held). Only a record that does not
 //! read ([`RecordError::Corrupt`]) is cleared. An absent record, one that reads in any state, and

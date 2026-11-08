@@ -25,4 +25,5 @@ mod release_index;
 mod report;
 mod rollouts;
 mod support;
+mod waits;
 mod wires;

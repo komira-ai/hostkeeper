@@ -4,7 +4,8 @@
 //! and `Audit.List`; `Releases.Force` is in [`crate::force`], `Services.Assign`, `Unassign`,
 //! `SetMinVersion` and `List` in [`crate::assign`], `Enrollment.List` and `Enrollment.Approve`
 //! in [`crate::operator_enrollment`], the inventory's calls in [`crate::inventory`], and
-//! `Hosts.List` and `Hosts.Get` in [`crate::hosts`]. A transport (the gRPC services, or a JSON
+//! `Hosts.List` and `Hosts.Get` in [`crate::hosts`], and `Hosts.ClearRecord` in
+//! [`crate::clear_record`]. A transport (the gRPC services, or a JSON
 //! gateway) authenticates the bearer ([`Coordinator::caller`]) and hands the call here.
 //!
 //! Every one of them takes the operator token only: a valid CI token is `forbidden` and no

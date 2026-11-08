@@ -12,7 +12,8 @@ use hostkeeper_proto::hostkeeper::operator::v1::{
     ClearHaltRequest, ClearHaltResponse, ConvergeRequest, ConvergeResponse, Convergence,
     ConvergenceState, DesiredState, ForceRequest, ForceResponse, HaltRequest, HaltResponse,
     MarkBadRequest, MarkBadResponse, RoleCounts, SetDesiredRequest, SetDesiredResponse,
-    StatusRequest, StatusResponse, UnmarkBadRequest, UnmarkBadResponse,
+    StatusRequest, StatusResponse, UnmarkBadRequest, UnmarkBadResponse, WaitConvergedRequest,
+    WaitConvergedResponse,
 };
 use tonic::transport::{Identity, Server, ServerTlsConfig};
 use tonic::{Code, Request, Response, Status};
@@ -150,6 +151,13 @@ impl ReleasesService for Probe {
     }
 
     async fn halt(&self, _: Request<HaltRequest>) -> Result<Response<HaltResponse>, Status> {
+        unimplemented()
+    }
+
+    async fn wait_converged(
+        &self,
+        _: Request<WaitConvergedRequest>,
+    ) -> Result<Response<WaitConvergedResponse>, Status> {
         unimplemented()
     }
 }

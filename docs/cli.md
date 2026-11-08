@@ -286,6 +286,21 @@ audited once.
 | `--node-id` | STRING | The host id the host was enrolled as. |
 | `--reason` | STRING | Why, for the audit log: 1 to 256 bytes with no control character, or empty for none. |
 
+#### `hkctl hosts clear-record`
+
+`/hostkeeper.operator.v1.Hosts/ClearRecord`
+
+Order the host to set aside its step record of the service when the record does not read
+(the `clear_record` verb of `hostkeeper.agent.v1`), at the host's next heartbeat; it takes no
+slot and is sent once. Only for a host whose daemon announced `clear-record-v1` in its last
+heartbeat; to any other it is refused `daemon_too_old` and nothing is ordered. The daemon's
+verdict comes back in a heartbeat like any order's. Audited `record_cleared`.
+
+| flag | value | meaning |
+|---|---|---|
+| `--node-id` | STRING | The host, heard from since the coordinator started. |
+| `--service` | STRING | The service whose step record the host sets aside; one the coordinator manages. |
+
 ### `mdm`
 
 The service `Mdm` of the package `hostkeeper.operator.v1`. The devices of the MDM policy gate.
@@ -410,6 +425,21 @@ is cleared.
 |---|---|---|
 | `--service` | STRING |  |
 | `--reason` | STRING |  |
+
+#### `hkctl releases wait-converged`
+
+`/hostkeeper.operator.v1.Releases/WaitConverged`
+
+Hold the call until a service's hosts have converged on a version, or the wait ends another
+way (see `WaitOutcome`), for at most `wait_secs`. The coordinator answers at once when the
+wait is over already, and otherwise after the change that ends it. Changes nothing. Takes
+CI's OIDC token or the operator token, checked once, when the call is admitted.
+
+| flag | value | meaning |
+|---|---|---|
+| `--service` | STRING | The service; empty names the legacy service, as for `Converge`. |
+| `--version` | STRING | The version the caller set; any other desired version ends the wait as SUPERSEDED. |
+| `--wait-secs` | UINT32 | How long to hold the call, 1 to 1800 seconds. |
 
 ### `rollouts`
 

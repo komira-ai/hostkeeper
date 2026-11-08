@@ -34,6 +34,7 @@ export function createClient(call) {
       setLabels: (request) => call("hostkeeper.operator.v1.Hosts/SetLabels", request),
       abort: (request) => call("hostkeeper.operator.v1.Hosts/Abort", request),
       retire: (request) => call("hostkeeper.operator.v1.Hosts/Retire", request),
+      clearRecord: (request) => call("hostkeeper.operator.v1.Hosts/ClearRecord", request),
     }),
     mdm: Object.freeze({
       listDevices: (request) => call("hostkeeper.operator.v1.Mdm/ListDevices", request),
@@ -47,6 +48,7 @@ export function createClient(call) {
       status: (request) => call("hostkeeper.operator.v1.Releases/Status", request),
       markBad: (request) => call("hostkeeper.operator.v1.Releases/MarkBad", request),
       halt: (request) => call("hostkeeper.operator.v1.Releases/Halt", request),
+      waitConverged: (request) => call("hostkeeper.operator.v1.Releases/WaitConverged", request),
     }),
     rollouts: Object.freeze({
       advance: (request) => call("hostkeeper.operator.v1.Rollouts/Advance", request),

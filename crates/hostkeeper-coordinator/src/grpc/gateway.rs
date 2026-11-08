@@ -7,6 +7,8 @@
 //! message with the protobuf descriptors; calls the same in-process gRPC service a gRPC call
 //! reaches ([`serve_admitted`]); and turns the response message back into JSON. A refusal is
 //! `{"code":"<gRPC code name>","reason":"<token>"}` with the HTTP status of [`STATUS_TABLE`].
+//! The call has no deadline here beyond the read of its body: a held `Releases.WaitConverged`
+//! ends by its own `wait_secs`.
 //!
 //! A path is a gateway path when it names a unary method of `hostkeeper.operator.v1`. The agent
 //! and local packages are never served, and the gateway adds no other route.
@@ -122,6 +124,8 @@ where
         .insert(CONTENT_TYPE, HeaderValue::from_static("application/grpc"));
     call.headers_mut()
         .insert(TE, HeaderValue::from_static("trailers"));
+    // What the listener put in the request (the connection's held waits) goes to the call.
+    *call.extensions_mut() = parts.extensions;
     let response = serve_admitted(coordinator, admitted, call).await;
 
     match reply(&method, response).await {

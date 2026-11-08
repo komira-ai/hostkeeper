@@ -60,6 +60,15 @@ host, as before.
 - `Hosts.Abort` queues an `abort` of a service for the host's next heartbeat. It takes no slot,
   is sent once, and only to a daemon that announced the `abort-v1` feature; an abort asked
   again while one is queued queues nothing more.
+- `Hosts.ClearRecord` orders a host to set aside its step record of a service when that record
+  does not read (`clear_record`), at the host's next heartbeat. It takes no slot and is sent once.
+  It is accepted only for a host whose daemon announced the `clear-record-v1` feature in its last
+  heartbeat; any other is refused `daemon_too_old` and nothing is ordered. It answers the order's
+  id, `clear-record-<n>`, where `n` is the number of its `record_cleared` audit entry; asked again
+  while the order waits, it answers the same id and audits nothing. A call whose audit line
+  cannot be written is refused `store_failed` or `audit_unavailable`, and nothing is ordered.
+  The order is kept in memory only: a restart of the coordinator before the host's next heartbeat
+  forgets it, and the operator asks again.
 - `Hosts.Exclude` takes a host out of a service. Its update slot stays held while the host runs
   an update (it reports one `updating` or its promotion pending) or has an order outstanding,
   until the host's own heartbeats or its order's age free it; an excluded host whose last update
@@ -109,8 +118,8 @@ While it stands, the automatic rollback of the service is suspended, and the hos
 take no update slot and no place in a stage. The new desired version the force sets starts the
 service's update plan over for the hosts it does not order.
 
-The `force` and `abort` orders travel only on the typed heartbeat of `hostkeeper.agent.v1`; the
-JSON heartbeat route carries neither.
+The `force`, `abort` and `clear_record` orders travel only on the typed heartbeat of
+`hostkeeper.agent.v1`; the JSON heartbeat route carries none of them.
 
 ## The audit file
 

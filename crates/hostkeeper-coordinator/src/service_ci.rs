@@ -14,6 +14,7 @@ use crate::desired::{Desired, DesiredError};
 use crate::force::end_by_setter;
 use crate::halt::lift_by_setter;
 use crate::ops::{AuditEntry, Write};
+use crate::services::ServiceDef;
 use crate::status::convergence_of;
 use crate::write_record::{WriteAsk, WriteRecord};
 
@@ -186,10 +187,31 @@ impl Coordinator {
             .services
             .get(service)
             .ok_or(ConvergenceError::UnknownService)?;
+        Ok(self.convergence_of_def(def))
+    }
+
+    /// Where the hosts of the service `def` defines stand against its desired state, now.
+    pub(crate) fn convergence_of_def(&self, def: &ServiceDef) -> Convergence {
         let now = (self.clock)();
         let fleet = self.lock_fleet();
-        let desired = self.desired.get(service);
+        let desired = self.desired.get(&def.name);
         let ops = self.ops.state();
-        Ok(convergence_of(def, desired.as_ref(), &fleet, &ops, now))
+        convergence_of(def, desired.as_ref(), &fleet, &ops, now)
+    }
+
+    /// Where the hosts of `service` stand against its desired state, if `bearer` is a
+    /// GitHub Actions OIDC token the same allow-list accepts as for [`Self::set_desired`]
+    /// (any service may be read with any accepted token). The operator token is no CI token
+    /// and is refused. Read-only, and each token is good once.
+    ///
+    /// # Errors
+    /// [`ConvergenceError`].
+    pub async fn convergence(
+        &self,
+        bearer: Option<&str>,
+        service: &str,
+    ) -> Result<Convergence, ConvergenceError> {
+        self.ci(bearer).await?;
+        self.convergence_verified(service)
     }
 }
