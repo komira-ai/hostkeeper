@@ -48,6 +48,7 @@ ui_files![
     "pages/holds.js",
     "pages/host.js",
     "pages/inventory.js",
+    "pages/release.js",
     "pages/rollout.js",
 ];
 
