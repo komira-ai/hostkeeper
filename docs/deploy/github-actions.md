@@ -28,16 +28,24 @@ issues to the job.
    the run published and its release index, `index.json`, from the files `verify` checked. It
    reads `<channel>/hostkeeper/<X.Y.Z>/index.json` every 40 seconds, a 404 included, until the
    channel serves it, for at most 30 minutes. The served index must then be the published one,
-   byte for byte. Last, it lists the published releases: when a higher version than the run's is
-   published already (a late run of an older commit, released after a newer one), the next step
-   is skipped, so that the fleet is never moved back. The job reads the repository
-   (`contents: read`) and holds no other token right.
+   byte for byte. Then `cargo xtask release targets`, compiled from the release's own commit,
+   writes the release's targets from the same checked files: one `hostkeeper-archive` entry per
+   platform the index lists, with the archive's two locations (the channel's path, then the
+   release asset), its size and SHA-256, its attestation bundle and the `min_hostkeeper` of its
+   manifest ([packages design](../design/packages.md), section 3.7). A file of the release that
+   does not check out fails the job, and nothing is set. Last, it lists the published releases:
+   when a higher version than the run's is published already (a late run of an older commit,
+   released after a newer one), the next step is skipped, so that the fleet is never moved back.
+   The job reads the repository (`contents: read`) and holds no other token right.
 5. **Set the desired version** (job `set-desired` of `release.yml`). The job calls the CI client
    ([set-desired.yml](ci-client.md)) once: it verifies the pinned hostkeeper release's `hkctl`,
    joins the tailnet when the job is configured to, and runs `hkctl releases set-desired` for the
    service `hostkeeper` at `<X.Y.Z>`; hkctl requests the OIDC token itself and hands it to the
    call through a pipe, never a file or an argument. The call names the release
-   by its index and the index's SHA-256, so each host is ordered the package of its own platform.
+   by its targets, and by its index and the index's SHA-256, so each host is ordered the package
+   of its own platform: a daemon that reads targets its platform's entry, one before them the
+   package the index lists. `hkctl releases get-release --service hostkeeper --version <X.Y.Z>`
+   answers the targets the coordinator stored, one list per platform.
    The job does not wait for the fleet (`wait: false`); it ends when the coordinator has stored
    the version, with `reason` `not_waited`.
 6. **The coordinator checks the call.** The allow-list entry must admit the token and name the
@@ -138,7 +146,7 @@ audience = "hostkeeper-ci"
 repository_id = "123456789"            # gh api repos/komira-ai/hostkeeper --jq .id
 repository = "komira-ai/hostkeeper"
 job_workflow_ref = [
-  "komira-ai/hostkeeper/.github/workflows/set-desired.yml@3018137f2c8806dd22bf2071a23565d4a2d64e8d",
+  "komira-ai/hostkeeper/.github/workflows/set-desired.yml@4859b4800897f2468c0f2131455721edfc537217",
 ]
 refs = ["refs/heads/main"]
 event_names = ["workflow_dispatch", "workflow_run", "schedule"]
@@ -163,8 +171,10 @@ the `uses:` line names a commit of this repository with its release as the comme
 OIDC token is a published release, verified before it runs, never the commit being released.
 
 Both callers of this repository, `release.yml` and `hello-desired.yml`, pin one revision: commit
-`3018137f2c8806dd22bf2071a23565d4a2d64e8d`, release `v0.1.166`, the first whose
-`set-desired.yml` runs hkctl (one set, and for `hello-desired.yml` one held wait). The workflow
+`4859b4800897f2468c0f2131455721edfc537217`, release `v0.1.173`, the first whose
+`set-desired.yml` takes a release's targets, on hkctl (one set, and for `hello-desired.yml` one
+held wait). A coordinator that does not take `SetDesired` with targets refuses their sets; the
+coordinator is updated to one that does before the pin moves. The workflow
 lint (`cargo test -p xtask --test workflows`, `callers.rs`) names that revision, as
 `CLIENT_COMMIT` and `CLIENT_RELEASE`, and refuses a caller whose `uses:` commit, version comment,
 `hostkeeper_version` or `hostkeeper_commit` is not it. The pin moves in a reviewed pull request
