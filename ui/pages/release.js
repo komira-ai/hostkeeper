@@ -82,7 +82,7 @@ export function pickFor(host, service, targets) {
       running = word.installer;
     }
   }
-  const runs = word !== undefined && word.health !== "HEALTH_ABSENT";
+  const runs = word !== undefined && word["health"] !== "HEALTH_ABSENT";
   const at = runs
     ? entries.findIndex((entry) => entry.installer === running && listed.includes(running))
     : entries.findIndex((entry) => listed.includes(entry.installer));
@@ -108,7 +108,7 @@ function hostsOf(hosts, service) {
 // An entry's locations, in preference order, each as `store:locator`.
 function locations(entry) {
   const all = list(entry, "locations");
-  return all.length === 0 ? "-" : all.map((at) => `${at.store || "-"}:${at.locator || "-"}`).join(", ");
+  return all.length === 0 ? "-" : all.map((at) => `${at["store"] || "-"}:${at["locator"] || "-"}`).join(", ");
 }
 
 function digestCell(digest) {
