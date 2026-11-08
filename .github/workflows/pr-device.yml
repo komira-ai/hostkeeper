@@ -307,7 +307,7 @@ jobs:
           key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
           restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
       - name: Download nfpm (HTTPS only, redirects included)
-        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --location --output "$RUNNER_TEMP/nfpm.tar.gz" "https://github.com/goreleaser/nfpm/releases/download/v$NFPM_VERSION/nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz"
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 5 --retry-delay 5 --retry-max-time 300 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/nfpm.tar.gz" "https://github.com/goreleaser/nfpm/releases/download/v$NFPM_VERSION/nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz"
       - name: Install nfpm (pinned checksum)
         run: cargo xtask install-tool --download "$RUNNER_TEMP/nfpm.tar.gz" --sha256 "$NFPM_SHA256" --out target/privileged-tools/nfpm --extract tar.gz --member nfpm
       - name: Build the Alpine image the tests run in
