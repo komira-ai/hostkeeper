@@ -3,16 +3,18 @@
 
 use hostkeeper_config::manifest::REFUSED_PREFIXES;
 use hostkeeper_config::names::{PathError, UnitError};
+use hostkeeper_config::platform::Platform;
 use hostkeeper_proto::hostkeeper::release::v1::{Manifest, Place};
 use hostkeeper_release::Installer;
 use hostkeeper_release::manifest::{self, ManifestError};
 
-use crate::support::{manifest, place, web};
+use crate::support::{LINUX, manifest, place, web};
 
 fn with_run(run: &[&str]) -> Manifest {
     Manifest {
         run: run.iter().map(|unit| (*unit).to_owned()).collect(),
         health_url: None,
+        place: Vec::new(),
         ..manifest(Installer::Tarball)
     }
 }
@@ -25,23 +27,22 @@ fn with_place(places: Vec<Place>) -> Manifest {
 }
 
 fn check(manifest: &Manifest) -> Result<(), ManifestError> {
-    manifest::check(&web(), manifest)
+    manifest::check(&web(), LINUX, manifest)
 }
 
-/// Catches: a run unit of another service, of a kind a package may not carry, a template, or
-/// with a bad instance passing; a launchd label of another service passing; a unit or label of
-/// the service refused.
+fn check_mac(manifest: &Manifest) -> Result<(), ManifestError> {
+    manifest::check(&web(), Platform::MacosArm64, manifest)
+}
+
+/// Catches: on Linux, a run unit of another service, without a unit suffix, of a kind a package
+/// may not carry, a template, or with a bad instance passing; a unit of the service refused.
 #[test]
-fn a_run_entry_is_a_unit_or_a_label_of_the_service() {
+fn on_linux_a_run_entry_is_a_systemd_unit_of_the_service() {
     for good in [
         "web.service",
         "web-cache.timer",
         "web@9301.service",
         "web.socket",
-        "web",
-        "web.worker",
-        // No unit suffix: read as a launchd label, as `[units] run` reads it today.
-        "web.mount",
     ] {
         assert_eq!(check(&with_run(&[good])), Ok(()), "{good}");
     }
@@ -49,17 +50,14 @@ fn a_run_entry_is_a_unit_or_a_label_of_the_service() {
     for (bad, why) in [
         ("api.service", UnitError::NotTheServices),
         ("webx.service", UnitError::NotTheServices),
+        ("web", UnitError::NotAUnit),
+        ("web.worker", UnitError::NotAUnit),
+        ("web.mount", UnitError::NotAUnit),
+        ("", UnitError::NotAUnit),
         ("web@.service", UnitError::BadInstance),
         ("web@a b.service", UnitError::BadInstance),
         ("web@a@b.service", UnitError::BadInstance),
         (long.as_str(), UnitError::TooLong),
-        (
-            "api.worker",
-            UnitError::BadLabel(
-                "it is neither the service name nor the service name, `.` and more",
-            ),
-        ),
-        ("", UnitError::BadLabel("it is empty")),
     ] {
         assert_eq!(
             check(&with_run(&[bad])),
@@ -76,6 +74,35 @@ fn a_run_entry_is_a_unit_or_a_label_of_the_service() {
             .to_string(),
         "the run entry \"api.service\" does not begin with the service name, alone or followed by `-`"
     );
+}
+
+/// Catches: on macOS, a run entry that is not a launchd label of the service passing, or a label
+/// of the service refused.
+#[test]
+fn on_macos_a_run_entry_is_a_launchd_label_of_the_service() {
+    for good in ["web", "web.worker", "web.a-b_c"] {
+        assert_eq!(check_mac(&with_run(&[good])), Ok(()), "{good}");
+    }
+    let other = "it is neither the service name nor the service name, `.` and more";
+    for (bad, why) in [
+        ("api.worker", UnitError::BadLabel(other)),
+        ("web-worker", UnitError::BadLabel(other)),
+        ("web.", UnitError::BadLabel(other)),
+        (
+            "web@1",
+            UnitError::BadLabel("it has a character outside `A-Za-z0-9._-`"),
+        ),
+        ("", UnitError::BadLabel("it is empty")),
+    ] {
+        assert_eq!(
+            check_mac(&with_run(&[bad])),
+            Err(ManifestError::RunUnit {
+                unit: bad.to_owned(),
+                why
+            }),
+            "{bad}"
+        );
+    }
 }
 
 /// Catches: a place source that leaves the tree or names an absolute path passing, a kind other
@@ -122,36 +149,47 @@ fn a_place_source_is_relative_and_a_kind_is_unit_or_file() {
     );
 }
 
-/// Catches: a placed unit of another service, without a suffix, or with a bad instance passing;
-/// a template or a plist of the service refused.
+/// Catches: on Linux, a placed unit of another service, without a suffix, a plist, or with a bad
+/// instance passing; a unit or a template of the service refused. On macOS, a placed unit that
+/// is not the plist of a label of the service passing.
 #[test]
-fn a_placed_unit_is_a_unit_file_of_the_service() {
-    for good in [
-        "web.service",
-        "web@.service",
-        "web-cache.timer",
-        "web.plist",
-        "web.worker.plist",
-    ] {
-        assert_eq!(
-            check(&with_place(vec![place("unit", "units/u", good)])),
-            Ok(()),
-            "{good}"
-        );
+fn a_placed_unit_is_a_unit_file_of_the_service_for_its_platform() {
+    let unit = |path: &str| with_place(vec![place("unit", "units/u", path)]);
+    for good in ["web.service", "web@.service", "web-cache.timer"] {
+        assert_eq!(check(&unit(good)), Ok(()), "{good}");
     }
     for (bad, why) in [
         ("api.service", UnitError::NotTheServices),
         ("web", UnitError::NotAUnit),
+        ("web.plist", UnitError::NotAUnit),
         ("web@a/b.service", UnitError::BadInstance),
+    ] {
+        assert_eq!(
+            check(&unit(bad)),
+            Err(ManifestError::PlaceUnit {
+                path: bad.to_owned(),
+                why
+            }),
+            "{bad}"
+        );
+    }
+    for good in ["web.plist", "web.worker.plist"] {
+        assert_eq!(check_mac(&unit(good)), Ok(()), "{good}");
+    }
+    for (bad, why) in [
         (
             "api.plist",
             UnitError::BadLabel(
                 "it is neither the service name nor the service name, `.` and more",
             ),
         ),
+        (
+            "web.service",
+            UnitError::BadLabel("a plist file is named `<label>.plist`"),
+        ),
     ] {
         assert_eq!(
-            check(&with_place(vec![place("unit", "units/u", bad)])),
+            check_mac(&unit(bad)),
             Err(ManifestError::PlaceUnit {
                 path: bad.to_owned(),
                 why

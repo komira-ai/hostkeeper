@@ -9,13 +9,13 @@ use hostkeeper_release::Installer;
 use hostkeeper_release::installer::UnknownInstaller;
 use hostkeeper_release::manifest::{self, ManifestError};
 
-use crate::support::{bounds, container, hook, manifest, place, text, web};
+use crate::support::{bounds, container, hook, manifest, place, platform_of, text, web};
 
 /// Sets one field of a manifest.
 type SetField = fn(&mut Manifest);
 
 fn check_for(installer: Installer, manifest: &Manifest) -> Result<(), ManifestError> {
-    manifest::check_for(&web(), installer, manifest)
+    manifest::check_for(&web(), platform_of(installer), installer, manifest)
 }
 
 /// Asserts `installer` refuses `manifest` for `field`, and the coordinator's check takes it.
@@ -26,7 +26,7 @@ fn refused(installer: Installer, manifest: &Manifest, field: &'static str) {
         "{installer} {field}"
     );
     assert_eq!(
-        manifest::check(&web(), manifest),
+        manifest::check(&web(), platform_of(installer), manifest),
         Ok(()),
         "{installer} {field}"
     );
@@ -40,7 +40,7 @@ fn missing(installer: Installer, manifest: &Manifest, field: &'static str) {
         "{installer} {field}"
     );
     assert_eq!(
-        manifest::check(&web(), manifest),
+        manifest::check(&web(), platform_of(installer), manifest),
         Ok(()),
         "{installer} {field}"
     );
@@ -155,7 +155,8 @@ fn place_is_for_a_tarball_and_containers_for_an_image_only() {
         m.place = vec![place("file", "files/a", "/etc/web/a")];
         refused(installer, &m, "place");
     }
-    for installer in [Installer::Deb, Installer::Tarball, Installer::MacosPkg] {
+    // An image is Linux only; a container's unit is a systemd unit.
+    for installer in [Installer::Deb, Installer::Rpm, Installer::Tarball] {
         let mut m = manifest(installer);
         m.run.push("web-api.service".to_owned());
         m.containers = vec![container()];

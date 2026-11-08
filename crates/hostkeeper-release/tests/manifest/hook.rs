@@ -6,7 +6,7 @@ use hostkeeper_proto::hostkeeper::release::v1::{Hook, InstallerBounds, Manifest,
 use hostkeeper_release::manifest::{self, ManifestError};
 use hostkeeper_release::{Installer, MAX_INSTALLER_SECS};
 
-use crate::support::{bounds, hook, manifest, web};
+use crate::support::{LINUX, bounds, hook, manifest, web};
 
 fn with_hook(hook: Hook) -> Manifest {
     Manifest {
@@ -16,7 +16,7 @@ fn with_hook(hook: Hook) -> Manifest {
 }
 
 fn check_hook(hook: Hook) -> Result<(), ManifestError> {
-    manifest::check(&web(), &with_hook(hook))
+    manifest::check(&web(), LINUX, &with_hook(hook))
 }
 
 /// A change to one bound of a fixture.
@@ -273,7 +273,7 @@ fn each_installer_bound_is_1_to_3600() {
         ] {
             let mut b = bounds();
             set(&mut b, secs);
-            let got = manifest::check(&web(), &with(b));
+            let got = manifest::check(&web(), LINUX, &with(b));
             let want = if ok {
                 Ok(())
             } else {

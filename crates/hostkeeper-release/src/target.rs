@@ -136,8 +136,11 @@ pub fn check<'a>(
     service: &ServiceName,
     targets: impl IntoIterator<Item = (&'a String, &'a TargetList)>,
 ) -> Result<(), TargetError> {
+    // Sorted by spelling before any is judged, so a map that hashes its keys gives the same
+    // answer on every run.
+    let keyed: BTreeMap<&String, &TargetList> = targets.into_iter().collect();
     let mut lists = BTreeMap::new();
-    for (key, list) in targets {
+    for (key, list) in keyed {
         let platform = key
             .parse::<Platform>()
             .map_err(TargetError::UnknownPlatform)?;
@@ -164,7 +167,11 @@ fn check_list(
         });
     }
     for (at, entry) in entries.iter().enumerate() {
-        check_entry(service, entry).map_err(|why| TargetError::Entry { platform, at, why })?;
+        check_entry(service, platform, entry).map_err(|why| TargetError::Entry {
+            platform,
+            at,
+            why,
+        })?;
         if entries[..at].iter().any(|e| e.installer == entry.installer) {
             return Err(TargetError::DuplicateInstaller {
                 platform,
@@ -183,8 +190,12 @@ fn check_list(
 /// Checks one entry: at most 24 KiB encoded; its installer's name; the artifact's digest,
 /// size and 1 to 8 locations; an attestation of 1 byte to 1 MiB with its digest and 1 to 8
 /// locations; every location's store and locator; at most 2 KiB of locators in all; and its
-/// manifest by [`manifest::check`].
-pub fn check_entry(service: &ServiceName, entry: &Target) -> Result<(), EntryError> {
+/// manifest by [`manifest::check`] for the platform of its list.
+pub fn check_entry(
+    service: &ServiceName,
+    platform: Platform,
+    entry: &Target,
+) -> Result<(), EntryError> {
     let bytes = entry.encoded_len();
     if bytes > MAX_ENTRY_BYTES {
         return Err(EntryError::TooLarge(bytes));
@@ -212,7 +223,7 @@ pub fn check_entry(service: &ServiceName, entry: &Target) -> Result<(), EntryErr
         return Err(EntryError::LocatorBytes(total));
     }
     let manifest = entry.manifest.as_ref().ok_or(EntryError::NoManifest)?;
-    manifest::check(service, manifest).map_err(EntryError::Manifest)
+    manifest::check(service, platform, manifest).map_err(EntryError::Manifest)
 }
 
 fn check_attestation(attestation: &Blob) -> Result<(), EntryError> {

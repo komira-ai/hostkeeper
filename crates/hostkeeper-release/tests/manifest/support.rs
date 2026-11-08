@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 
 use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_config::names::ServiceName;
+use hostkeeper_config::platform::Platform;
 use hostkeeper_proto::hostkeeper::release::v1::{
     Blob, Container, Hook, InstallerBounds, Location, Manifest, Param, Place, Port, StepBounds,
     Target, TargetList, Volume, param,
@@ -16,6 +17,18 @@ use prost::Message as _;
 pub fn web() -> ServiceName {
     ServiceName::new("web").expect("a service name")
 }
+
+/// The platform each fixture is built for: macOS for `macos-pkg`, whose units are launchd
+/// labels, Linux for the others.
+pub fn platform_of(installer: Installer) -> Platform {
+    match installer {
+        Installer::MacosPkg => Platform::MacosArm64,
+        _ => Platform::LinuxX86_64,
+    }
+}
+
+/// The platform of the Linux fixtures.
+pub const LINUX: Platform = Platform::LinuxX86_64;
 
 /// A version.
 pub fn version(text: &str) -> HostkeeperVersion {

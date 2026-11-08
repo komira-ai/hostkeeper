@@ -5,7 +5,7 @@ use hostkeeper_proto::hostkeeper::release::v1::{Container, Manifest, Port, Volum
 use hostkeeper_release::Installer;
 use hostkeeper_release::manifest::{self, ManifestError};
 
-use crate::support::{container, manifest, web};
+use crate::support::{LINUX, container, manifest, web};
 
 fn with(containers: Vec<Container>, run: &[&str]) -> Manifest {
     Manifest {
@@ -18,7 +18,7 @@ fn with(containers: Vec<Container>, run: &[&str]) -> Manifest {
 fn check_one(container: Container) -> Result<(), ManifestError> {
     let run = [container.unit.clone()];
     let run: Vec<&str> = run.iter().map(String::as_str).collect();
-    manifest::check(&web(), &with(vec![container], &run))
+    manifest::check(&web(), LINUX, &with(vec![container], &run))
 }
 
 fn unit(unit: &str) -> Container {
@@ -41,7 +41,7 @@ fn a_container_unit_is_a_service_of_the_service_in_run_and_no_other_containers()
         ("web@a b.service", UnitError::BadInstance),
     ] {
         // Not in run either: the unit's own rule is the answer.
-        let got = manifest::check(&web(), &with(vec![unit(bad)], &["web.service"]));
+        let got = manifest::check(&web(), LINUX, &with(vec![unit(bad)], &["web.service"]));
         assert_eq!(
             got,
             Err(ManifestError::ContainerUnit {
@@ -60,6 +60,7 @@ fn a_container_unit_is_a_service_of_the_service_in_run_and_no_other_containers()
     assert_eq!(
         manifest::check(
             &web(),
+            LINUX,
             &with(vec![unit("web-api.service")], &["web.service"])
         ),
         Err(ManifestError::ContainerNotRun("web-api.service".to_owned()))
@@ -67,6 +68,7 @@ fn a_container_unit_is_a_service_of_the_service_in_run_and_no_other_containers()
     assert_eq!(
         manifest::check(
             &web(),
+            LINUX,
             &with(
                 vec![unit("web-api.service"), unit("web-api.service")],
                 &["web-api.service"]

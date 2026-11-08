@@ -16,14 +16,19 @@
 
 use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_config::names::ServiceName;
+use hostkeeper_config::platform::Platform;
 use hostkeeper_proto::hostkeeper::release::v1::Target;
 
 use crate::installer::Installer;
 use crate::manifest::{self, ManifestError};
 
-/// What the daemon brings to the check: its own version and the installers it announces.
+/// What the daemon brings to the check: its own version and platform, and the installers it
+/// announces.
 #[derive(Clone, Copy, Debug)]
 pub struct Daemon<'a> {
+    /// The platform the daemon was compiled for (`Platform::current`), which the coordinator
+    /// picked the entry's list by.
+    pub platform: Platform,
     /// The running daemon's version.
     pub running: HostkeeperVersion,
     /// The installers it lists in its heartbeat, decided once at its start.
@@ -94,6 +99,7 @@ pub fn check(
         .ok()
         .filter(|installer| daemon.installers.contains(installer))
         .ok_or_else(|| ReceiptError::InstallerNotListed(target.installer.clone()))?;
-    manifest::check_for(service, installer, manifest).map_err(ReceiptError::Invalid)?;
+    manifest::check_for(service, daemon.platform, installer, manifest)
+        .map_err(ReceiptError::Invalid)?;
     Ok(installer)
 }

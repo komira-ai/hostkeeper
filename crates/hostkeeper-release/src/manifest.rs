@@ -18,9 +18,10 @@ use hostkeeper_config::manifest::{
     is_boot_step,
 };
 use hostkeeper_config::names::{
-    PLIST_SUFFIX, PathError, ServiceName, UNIT_SUFFIXES, UnitError, UnitName, check_path,
-    check_relative, is_within, launchd_label, plist_label,
+    PathError, ServiceName, UnitError, UnitName, check_path, check_relative, is_within,
+    launchd_label, plist_label,
 };
+use hostkeeper_config::platform::Platform;
 use hostkeeper_proto::hostkeeper::release::v1::{
     Container, Hook, InstallerBounds, Manifest, Place,
 };
@@ -249,9 +250,15 @@ pub enum ManifestError {
     },
 }
 
-/// Applies the rules of every manifest of `service`, whatever its installer and host: the
-/// coordinator's check of each entry (section 3.4), and the first part of the daemon's.
-pub fn check(service: &ServiceName, manifest: &Manifest) -> Result<(), ManifestError> {
+/// Applies the rules of every manifest of `service` for `platform`, whatever its installer and
+/// host: the coordinator's check of each entry of the platform's list (section 3.4), and the
+/// first part of the daemon's. The platform decides the unit names: systemd units on Linux,
+/// launchd labels on macOS.
+pub fn check(
+    service: &ServiceName,
+    platform: Platform,
+    manifest: &Manifest,
+) -> Result<(), ManifestError> {
     let bytes = manifest.encoded_len();
     if bytes > MAX_MANIFEST_BYTES {
         return Err(ManifestError::TooLarge { bytes });
@@ -263,7 +270,7 @@ pub fn check(service: &ServiceName, manifest: &Manifest) -> Result<(), ManifestE
     }
     let service = service.as_str();
     for unit in &manifest.run {
-        run_unit(service, unit).map_err(|why| ManifestError::RunUnit {
+        run_unit(service, platform, unit).map_err(|why| ManifestError::RunUnit {
             unit: unit.clone(),
             why,
         })?;
@@ -274,7 +281,7 @@ pub fn check(service: &ServiceName, manifest: &Manifest) -> Result<(), ManifestE
             why,
         })?;
     }
-    places(service, &manifest.place)?;
+    places(service, platform, &manifest.place)?;
     params(manifest)?;
     containers(service, &manifest.run, &manifest.containers)?;
     if let Some(bounds) = &manifest.installer_bounds {
@@ -288,10 +295,11 @@ pub fn check(service: &ServiceName, manifest: &Manifest) -> Result<(), ManifestE
 /// installer are known to fit ([`crate::receipt`]).
 pub fn check_for(
     service: &ServiceName,
+    platform: Platform,
     installer: Installer,
     manifest: &Manifest,
 ) -> Result<(), ManifestError> {
-    check(service, manifest)?;
+    check(service, platform, manifest)?;
     let missing = |field| ManifestError::Missing { installer, field };
     let refused = |field| ManifestError::Refused { installer, field };
     if installer == Installer::HostkeeperArchive {
@@ -415,19 +423,24 @@ fn check_hook(hook: &Hook) -> Result<(), ManifestError> {
     Ok(())
 }
 
-/// A `run` entry: a systemd unit of the service (no template) when it ends in a unit suffix,
-/// otherwise a launchd label of the service, as `[units] run` today.
-fn run_unit(service: &str, unit: &str) -> Result<(), UnitError> {
-    if UNIT_SUFFIXES.iter().any(|suffix| unit.ends_with(suffix)) {
-        UnitName::of(service, unit, false).map(drop)
-    } else {
+/// Whether `platform` runs services under launchd rather than systemd.
+fn is_launchd(platform: Platform) -> bool {
+    platform == Platform::MacosArm64
+}
+
+/// A `run` entry: on a launchd platform a label of the service, on any other a systemd unit
+/// of the service (`.service`, `.socket` or `.timer`; no template).
+fn run_unit(service: &str, platform: Platform, unit: &str) -> Result<(), UnitError> {
+    if is_launchd(platform) {
         launchd_label(service, unit).map(drop)
+    } else {
+        UnitName::of(service, unit, false).map(drop)
     }
 }
 
 /// The `place` entries: a relative source, and a unit file of the service or an absolute path
 /// outside [`REFUSED_PREFIXES`]; no path twice.
-fn places(service: &str, places: &[Place]) -> Result<(), ManifestError> {
+fn places(service: &str, platform: Platform, places: &[Place]) -> Result<(), ManifestError> {
     let mut seen = BTreeSet::new();
     for place in places {
         check_relative(&place.source).map_err(|why| ManifestError::PlaceSource {
@@ -435,7 +448,7 @@ fn places(service: &str, places: &[Place]) -> Result<(), ManifestError> {
             why,
         })?;
         match place.kind.as_str() {
-            PLACE_UNIT => place_unit(service, &place.path)?,
+            PLACE_UNIT => place_unit(service, platform, &place.path)?,
             PLACE_FILE => place_file(&place.path)?,
             _ => {
                 return Err(ManifestError::PlaceKind {
@@ -451,10 +464,11 @@ fn places(service: &str, places: &[Place]) -> Result<(), ManifestError> {
     Ok(())
 }
 
-/// A unit file a tarball places: a systemd unit of the service, templates allowed, or
-/// `<label>.plist` of a launchd label of the service, as a file of `units/` today.
-fn place_unit(service: &str, path: &str) -> Result<(), ManifestError> {
-    let checked = if path.ends_with(PLIST_SUFFIX) {
+/// A unit file a tarball places: on a launchd platform `<label>.plist` of a label of the
+/// service, on any other a systemd unit of the service, templates allowed, as a file of
+/// `units/` today.
+fn place_unit(service: &str, platform: Platform, path: &str) -> Result<(), ManifestError> {
+    let checked = if is_launchd(platform) {
         plist_label(service, path).map(drop)
     } else {
         UnitName::of(service, path, true).map(drop)

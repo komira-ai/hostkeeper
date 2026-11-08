@@ -14,14 +14,14 @@ use hostkeeper_release::{
 };
 use prost::Message as _;
 
-use crate::support::{entry, list, location, pad_manifest_to, targets, web};
+use crate::support::{LINUX, entry, list, location, pad_manifest_to, targets, web};
 
 fn check(targets: &BTreeMap<String, TargetList>) -> Result<(), TargetError> {
     target::check(&web(), targets)
 }
 
 fn check_entry(entry: &Target) -> Result<(), EntryError> {
-    target::check_entry(&web(), entry)
+    target::check_entry(&web(), LINUX, entry)
 }
 
 const NATIVE: [Installer; 3] = [Installer::Deb, Installer::Rpm, Installer::Tarball];
@@ -187,6 +187,65 @@ fn of_several_broken_platforms_the_first_spelling_is_the_answer() {
             count: 0
         })
     );
+}
+
+/// Catches: the answer depending on the order the caller's map yields its keys (a map that
+/// hashes them yields another order on each run): two unknown keys, and an unknown key beside
+/// a broken list, given in both orders, are refused for the same one.
+#[test]
+fn the_answer_does_not_depend_on_the_order_the_keys_are_given_in() {
+    let good = list(&NATIVE);
+    let empty = entries(0);
+    let keys = [
+        ("windows-x86_64".to_owned(), good.clone()),
+        ("linux-riscv64".to_owned(), good.clone()),
+        ("macos-arm64".to_owned(), empty.clone()),
+    ];
+    let forward: Vec<(&String, &TargetList)> = keys.iter().map(|(k, l)| (k, l)).collect();
+    let backward: Vec<(&String, &TargetList)> = forward.iter().rev().copied().collect();
+    for order in [forward, backward] {
+        assert_eq!(
+            target::check(&web(), order),
+            Err(TargetError::UnknownPlatform(UnknownPlatform(
+                "linux-riscv64".to_owned()
+            )))
+        );
+    }
+    let lists = [
+        ("macos-arm64".to_owned(), empty.clone()),
+        ("linux-x86_64".to_owned(), good),
+        ("linux-arm64".to_owned(), empty),
+    ];
+    let forward: Vec<(&String, &TargetList)> = lists.iter().map(|(k, l)| (k, l)).collect();
+    let backward: Vec<(&String, &TargetList)> = forward.iter().rev().copied().collect();
+    for order in [forward, backward] {
+        assert_eq!(
+            target::check(&web(), order),
+            Err(TargetError::Entries {
+                platform: Platform::LinuxArm64,
+                count: 0
+            })
+        );
+    }
+}
+
+/// Catches: the coordinator judging a list's unit names by another platform than the list's.
+#[test]
+fn each_lists_manifests_are_judged_by_its_own_platform() {
+    let set = targets(&[
+        ("macos-arm64", list(&[Installer::MacosPkg])),
+        ("linux-arm64", list(&[Installer::Deb])),
+    ]);
+    assert_eq!(check(&set), Ok(()));
+    let crossed = targets(&[("macos-arm64", list(&[Installer::Deb]))]);
+    assert!(matches!(
+        check(&crossed),
+        Err(TargetError::Entry {
+            platform: Platform::MacosArm64,
+            at: 0,
+            why: EntryError::Manifest(ManifestError::RunUnit { .. })
+        })
+    ));
 }
 
 /// Catches: an entry's error reported without its platform and place, or not at all.

@@ -2,12 +2,13 @@
 //! lists, then the manifest.
 
 use hostkeeper_config::manifest::HostkeeperVersion;
-use hostkeeper_proto::hostkeeper::release::v1::Target;
+use hostkeeper_config::platform::Platform;
+use hostkeeper_proto::hostkeeper::release::v1::{Manifest, Target};
 use hostkeeper_release::Installer;
 use hostkeeper_release::manifest::ManifestError;
 use hostkeeper_release::receipt::{self, Daemon, ReceiptError};
 
-use crate::support::{entry, version, web};
+use crate::support::{LINUX, entry, pad_manifest_to, text, version, web};
 
 const LISTED: [Installer; 3] = [
     Installer::HostkeeperArchive,
@@ -17,6 +18,7 @@ const LISTED: [Installer; 3] = [
 
 fn daemon(running: &str) -> Daemon<'static> {
     Daemon {
+        platform: LINUX,
         running: version(running),
         installers: &LISTED,
     }
@@ -141,6 +143,7 @@ fn a_manifest_that_breaks_a_rule_or_has_no_version_is_manifest_invalid() {
 #[test]
 fn a_daemon_that_lists_no_installer_takes_no_entry() {
     let daemon = Daemon {
+        platform: LINUX,
         running: HostkeeperVersion::parse("9.9.9").expect("a version"),
         installers: &[],
     };
@@ -150,4 +153,97 @@ fn a_daemon_that_lists_no_installer_takes_no_entry() {
             "hostkeeper-archive".to_owned()
         ))
     );
+}
+
+/// Catches: the daemon taking a manifest the coordinator's rules refuse: the daemon trusts no
+/// check the coordinator made, so every rule every manifest keeps is applied on receipt too, and
+/// before the installer's own rules.
+#[test]
+fn on_receipt_the_daemon_applies_every_rule_every_manifest_keeps_before_its_installers() {
+    type Break = fn(&mut Manifest);
+    type Is = fn(&ManifestError) -> bool;
+    let cases: [(Break, Is); 6] = [
+        (
+            |m| m.run = vec!["api.service".to_owned()],
+            |e| matches!(e, ManifestError::RunUnit { .. }),
+        ),
+        (
+            |m| m.health_url = Some("http://localhost:8080/".to_owned()),
+            |e| matches!(e, ManifestError::HealthUrl { .. }),
+        ),
+        (
+            |m| m.hook.as_mut().expect("a hook").command = vec!["../bin/sh".to_owned()],
+            |e| matches!(e, ManifestError::HookProgram { .. }),
+        ),
+        (
+            |m| {
+                m.params.insert("updater.x".to_owned(), text("y"));
+            },
+            |e| matches!(e, ManifestError::ReservedParam(_)),
+        ),
+        (
+            |m| m.installer_bounds.as_mut().expect("bounds").stage_secs = 0,
+            |e| matches!(e, ManifestError::InstallerBound { .. }),
+        ),
+        (
+            |m| pad_manifest_to(m, 16 * 1024 + 1),
+            |e| matches!(e, ManifestError::TooLarge { .. }),
+        ),
+    ];
+    for (at, (broken, is)) in cases.into_iter().enumerate() {
+        let mut target = entry(Installer::Deb);
+        let manifest = target.manifest.as_mut().expect("a manifest");
+        // The installer's rule is broken too: a deb manifest names its package.
+        manifest.package = None;
+        broken(manifest);
+        let err = check(&target, "0.4.0").expect_err("refused");
+        assert_eq!(err.reason(), "manifest_invalid", "case {at}");
+        let ReceiptError::Invalid(why) = &err else {
+            panic!("case {at}: {err:?}");
+        };
+        assert!(is(why), "case {at}: {why:?}");
+    }
+    // The archive's own branch too: a field it refuses, broken by a shared rule, is that rule.
+    let mut archive = entry(Installer::HostkeeperArchive);
+    archive.manifest.as_mut().expect("a manifest").run = vec!["api.service".to_owned()];
+    assert!(matches!(
+        check(&archive, "0.4.0"),
+        Err(ReceiptError::Invalid(ManifestError::RunUnit { .. }))
+    ));
+    archive.manifest.as_mut().expect("a manifest").run = vec!["web.service".to_owned()];
+    assert_eq!(
+        check(&archive, "0.4.0"),
+        Err(ReceiptError::Invalid(ManifestError::Refused {
+            installer: Installer::HostkeeperArchive,
+            field: "run"
+        }))
+    );
+}
+
+/// Catches: the daemon judging unit names by another platform than its own.
+#[test]
+fn on_receipt_the_unit_names_are_those_of_the_daemons_platform() {
+    let mac = Daemon {
+        platform: Platform::MacosArm64,
+        running: version("0.4.0"),
+        installers: &[Installer::MacosPkg, Installer::Deb],
+    };
+    assert_eq!(
+        receipt::check(&web(), &entry(Installer::MacosPkg), mac),
+        Ok(Installer::MacosPkg)
+    );
+    // A Linux entry's systemd units are not launchd labels of the service on a Mac.
+    let mut linux = entry(Installer::Deb);
+    linux.manifest.as_mut().expect("a manifest").run = vec!["web-cache.timer".to_owned()];
+    assert!(matches!(
+        receipt::check(&web(), &linux, mac),
+        Err(ReceiptError::Invalid(ManifestError::RunUnit { .. }))
+    ));
+    // And a Mac's labels are not systemd units on Linux.
+    let mut on_linux = entry(Installer::MacosPkg);
+    on_linux.installer = "deb".to_owned();
+    assert!(matches!(
+        check(&on_linux, "0.4.0"),
+        Err(ReceiptError::Invalid(ManifestError::RunUnit { .. }))
+    ));
 }

@@ -20,9 +20,10 @@
 // `[a-z0-9-]`. An artifact and an attestation each have 1 to 8 locations, with at most 2048
 // bytes of locators in all per entry; a locator is 1 to 1024 bytes of URL path characters with
 // no scheme, `//`, query, fragment, `%`, or `.` or `..` segment. An attestation is 1 byte to
-// 1 MiB. An entry is at most 24 KiB encoded, its manifest at most 16 KiB. Bounds are whole
-// seconds (fields end in `_secs`), an installer bound 1 to 3600. A manifest holds at most 64
-// `run` entries, 256 `place` entries, 64 params and 32 containers.
+// 1 MiB. An entry is at most 24 KiB encoded, its manifest at most 16 KiB. Every bound is whole
+// seconds: each step of a hook's `timeout_secs` (`StepBounds`), `verify_deadline_secs`,
+// `promotion_ceiling_secs` and each of `installer_bounds`, which is 1 to 3600. A manifest holds
+// at most 64 `run` entries, 256 `place` entries, 64 params and 32 containers.
 //
 // Extending: add fields and messages; never renumber, rename, retype or remove one, and never
 // reuse a number (the compatibility test in this crate refuses each). A field beside a list's
@@ -85,8 +86,9 @@ message Manifest {
   // The hand-over from the old version to the new. Absent only for `hostkeeper-archive`, whose
   // manifest is inside the attested archive.
   Hook hook = 2;
-  // The systemd units (`<service>` or `<service>-…`, with `.service`, `.socket` or `.timer`)
-  // or launchd labels (`<service>` or `<service>.…`) the service runs: at most 64.
+  // The units the service runs, at most 64: on Linux systemd units (`<service>` or
+  // `<service>-…`, with `.service`, `.socket` or `.timer`), on macOS launchd labels
+  // (`<service>` or `<service>.…`).
   repeated string run = 3;
   // The health URL the observer probes: `http://` to `127.0.0.1` or `[::1]`. Absent: none.
   optional string health_url = 4;
@@ -124,7 +126,8 @@ message Hook {
   optional uint32 cleanup_retries = 6;
 }
 
-// The bound of each hook step. Every bound but `prepare` is above 0; `prepare` 0 is unbounded.
+// The bound of each hook step, in seconds. Every bound but `prepare` is above 0; `prepare` 0 is
+// unbounded.
 message StepBounds {
   uint64 prepare = 1;
   uint64 cutover = 2;
@@ -148,7 +151,8 @@ message Place {
   string kind = 1;
   // The path in the tree, relative, of plain names.
   string source = 2;
-  // For a unit, its unit file's name (a unit of the service, or `<label>.plist`); for a file,
+  // For a unit, its unit file's name (on Linux a unit of the service, on macOS
+  // `<label>.plist` of a label of the service); for a file,
   // an absolute path outside the paths hostkeeper keeps for itself and the system's.
   string path = 3;
 }

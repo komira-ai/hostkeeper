@@ -9,10 +9,10 @@ use hostkeeper_release::{
 };
 use prost::Message as _;
 
-use crate::support::{container, manifest, pad_manifest_to, place, text, web};
+use crate::support::{LINUX, container, manifest, pad_manifest_to, place, platform_of, text, web};
 
 fn check(manifest: &Manifest) -> Result<(), ManifestError> {
-    manifest::check(&web(), manifest)
+    manifest::check(&web(), LINUX, manifest)
 }
 
 /// Catches: a rule that refuses a well-formed manifest of some installer.
@@ -20,9 +20,14 @@ fn check(manifest: &Manifest) -> Result<(), ManifestError> {
 fn the_manifest_of_every_installer_passes_its_checks() {
     for installer in Installer::ALL {
         let manifest = manifest(installer);
-        assert_eq!(check(&manifest), Ok(()), "{installer}");
+        let platform = platform_of(installer);
         assert_eq!(
-            manifest::check_for(&web(), installer, &manifest),
+            manifest::check(&web(), platform, &manifest),
+            Ok(()),
+            "{installer}"
+        );
+        assert_eq!(
+            manifest::check_for(&web(), platform, installer, &manifest),
             Ok(()),
             "{installer}"
         );
