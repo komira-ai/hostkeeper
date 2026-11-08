@@ -304,6 +304,16 @@ For the MDM kit, unpack `hostkeeper-mdm-<version>-<linux-platform>.tar.gz` and r
 `./hostkeeper-mdm --version`; its output is, exactly,
 `hostkeeper-mdm <X.Y.Z>+<first 12 hex digits of $PIN>`.
 
+For the command line, `hkctl-<version>` is one bash script for every platform, with nothing to
+unpack. Make it executable under its own name and run it:
+
+```sh
+install -m 0755 release/hkctl-<version> ./hkctl
+./hkctl --version
+```
+
+Expected output, exactly: `hkctl <X.Y.Z>+<first 12 hex digits of $PIN>`.
+
 What it proves: the binary was built from the pinned commit and reports the version of the tag.
 
 Refuse when: the output differs in any character.
@@ -347,7 +357,8 @@ Before anything is published, the `verify` job of `release.yml`, on the files of
   itself. Each command gets `--format json` added, so that the attestations it verified are read
   back, and each must name this commit and the file's SHA-256;
 - runs step 6 on the linux-x86_64 binaries, the daemon's, the coordinator's and the MDM kit's
-  (`cargo xtask release check-binary`).
+  (`cargo xtask release check-binary`); `cargo xtask release check` holds `hkctl-<version>` to the
+  expected output of step 6 too, by its one version line, without running it.
 
 The test `verify_a_release_commands_match_the_ones_the_verify_job_runs`
 (`cargo test -p xtask`, in `crates/xtask/src/release/doc_tests.rs`) keeps these commands equal to
@@ -355,10 +366,9 @@ the ones written here, and `asset_names_are_the_documented_contract` keeps the l
 equal to the names the tooling produces.
 
 The CI client, `.github/workflows/set-desired.yml` ([The CI client](ci-client.md)), runs steps 2
-and 3 and the `--version` check of step 6 as written here, on the binary tarball for
-`linux-x86_64`. The workflow lint (`cargo test -p xtask --test workflows`) refuses a change to
-those commands, to the tag or to the binary tarball's name in this document that the workflow
-does not follow, and the reverse.
+and 3 and hkctl's `--version` check of step 6 as written here, on `hkctl-<version>`. The workflow
+lint (`cargo test -p xtask --test workflows`) refuses a change to those commands, to the tag or to
+hkctl's asset name in this document that the workflow does not follow, and the reverse.
 
 ## The trusted root on a host
 

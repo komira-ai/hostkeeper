@@ -12,9 +12,9 @@ use super::{with_in, workflows_dir, yaml};
 const CHECKSUM: &str = "sha256sum --check --strict --ignore-missing SHA256SUMS";
 /// The attestation step's command, as the document's step 3 gives it, with the output the commit
 /// step reads.
-const ATTESTATION: &str = "gh attestation verify \"$RUNNER_TEMP/hostkeeper-release/$HOSTKEEPER_ASSET\" --repo komira-ai/hostkeeper --signer-workflow komira-ai/hostkeeper/.github/workflows/artifacts.yml --source-ref refs/heads/main --source-digest \"$HOSTKEEPER_COMMIT\" --deny-self-hosted-runners --format json > \"$RUNNER_TEMP/hostkeeper-release/attestation.json\"";
+const ATTESTATION: &str = "gh attestation verify \"$RUNNER_TEMP/hkctl-release/$HKCTL_ASSET\" --repo komira-ai/hostkeeper --signer-workflow komira-ai/hostkeeper/.github/workflows/artifacts.yml --source-ref refs/heads/main --source-digest \"$HOSTKEEPER_COMMIT\" --deny-self-hosted-runners --format json > \"$RUNNER_TEMP/hkctl-release/attestation.json\"";
 /// The version step's command: the document's step 6 command, compared with its expected output.
-const VERSION: &str = "test \"$(\"$RUNNER_TEMP/hostkeeper-bin/hostkeeper\" --version)\" = \"hostkeeper $HOSTKEEPER_VERSION+${HOSTKEEPER_COMMIT:0:12}\"";
+const VERSION: &str = "test \"$(\"$RUNNER_TEMP/hkctl-bin/hkctl\" --version)\" = \"hkctl $HOSTKEEPER_VERSION+${HOSTKEEPER_COMMIT:0:12}\"";
 
 fn real_doc() -> String {
     std::fs::read_to_string(
@@ -43,13 +43,11 @@ fn tag_problem(tag: &str) -> String {
 }
 
 fn asset_problem(asset: &str) -> String {
-    format!(
-        "the job's `HOSTKEEPER_ASSET` `{asset}` is not the binary tarball of {DOC} for `linux-x86_64`"
-    )
+    format!("the job's `HKCTL_ASSET` `{asset}` is not hkctl's asset in {DOC}")
 }
 
 /// The real asset name, with the version as the job's `env` names it.
-const ASSET: &str = "hostkeeper-${{ inputs.hostkeeper_version }}-linux-x86_64.tar.gz";
+const ASSET: &str = "hkctl-${{ inputs.hostkeeper_version }}";
 
 #[test]
 fn the_ci_client_runs_the_checks_of_verify_a_release() {
@@ -61,7 +59,8 @@ fn the_ci_client_runs_the_checks_of_verify_a_release() {
 #[test]
 fn a_check_changed_in_the_document_alone_is_refused() {
     // Catches: the document gaining, losing or changing a check the workflow does not follow,
-    // or renaming the release's tag, its binary tarball or the runner's platform.
+    // or renaming the release's tag or hkctl's asset; and the daemon's own expected output,
+    // which the workflow does not check, changed without a problem.
     let doc = real_doc();
     let workflow = real_workflow();
     let predicate = "--repo komira-ai/hostkeeper --predicate-type https://slsa.dev/provenance/v1";
@@ -95,8 +94,8 @@ fn a_check_changed_in_the_document_alone_is_refused() {
         (
             with_in(
                 &doc,
-                "Expected output, exactly: `hostkeeper <X.Y.Z>+",
-                "Expected output, exactly: `hostkeeper <X.Y.Z>-",
+                "Expected output, exactly: `hkctl <X.Y.Z>+",
+                "Expected output, exactly: `hkctl <X.Y.Z>-",
             ),
             vec![runs(
                 "version",
@@ -112,30 +111,23 @@ fn a_check_changed_in_the_document_alone_is_refused() {
         (
             with_in(
                 &doc,
-                "| `hostkeeper-<version>-<platform>.tar.gz` | the daemon binary |",
-                "| `hostkeeper-<version>-<platform>.tgz` | the daemon binary |",
+                "| `hkctl-<version>` | the command line of the coordinator",
+                "| `hkctl-<version>.sh` | the command line of the coordinator",
             ),
             vec![asset_problem(ASSET)],
         ),
         (
             with_in(
                 &doc,
-                "`<platform>` is `linux-x86_64`, `linux-arm64` or `macos-arm64`",
-                "`<platform>` is `linux-arm64` or `macos-arm64`",
+                "Expected output, exactly: `hostkeeper <X.Y.Z>+",
+                "Expected output, exactly: `hostkeeper <X.Y.Z>-",
             ),
-            vec![asset_problem(ASSET)],
+            vec![],
         ),
         (
-            with_in(
-                &doc,
-                "./hostkeeper --version",
-                "./hostkeeper --version --verbose",
-            ),
-            vec![runs(
-                "version",
-                VERSION,
-                &VERSION.replacen("--version)", "--version --verbose)", 1),
-                6,
+            with_in(&doc, "./hkctl --version\n", "./hkctl --version --verbose\n"),
+            vec![format!(
+                "{DOC} has no `./hkctl --version` command in step 6"
             )],
         ),
     ];
@@ -165,12 +157,16 @@ fn a_document_without_one_of_the_checks_refuses_the_workflow() {
             format!("{DOC} has no `gh attestation verify` command in step 3"),
         ),
         (
-            with_in(&doc, "./hostkeeper --version", "./hostkeeper version"),
-            format!("{DOC} has no `--version` command in step 6"),
+            with_in(&doc, "./hkctl --version", "./hkctl version"),
+            format!("{DOC} has no `./hkctl --version` command in step 6"),
         ),
         (
-            with_in(&doc, "Expected output, exactly: `", "Expected output: `"),
-            format!("{DOC} has no expected output in step 6"),
+            with_in(
+                &doc,
+                "Expected output, exactly: `hkctl ",
+                "Expected output: `hkctl ",
+            ),
+            format!("{DOC} has no expected output for hkctl in step 6"),
         ),
     ];
     for (doc, want) in cases {
@@ -272,14 +268,16 @@ fn a_check_changed_in_the_workflow_alone_is_refused() {
             vec![tag_problem("${{ inputs.hostkeeper_version }}")],
         ),
         (
-            // The self-update package is an asset of the release too, but not the binary
-            // tarball the workflow unpacks.
+            // The daemon's tarball is an asset of the release too, but not the one the workflow
+            // runs.
             with_in(
                 &workflow,
-                "-linux-x86_64.tar.gz\n",
-                "-linux-x86_64.tar.zst\n",
+                "HKCTL_ASSET: hkctl-${{ inputs.hostkeeper_version }}\n",
+                "HKCTL_ASSET: hostkeeper-${{ inputs.hostkeeper_version }}-linux-x86_64.tar.gz\n",
             ),
-            vec![asset_problem(&ASSET.replacen(".tar.gz", ".tar.zst", 1))],
+            vec![asset_problem(
+                "hostkeeper-${{ inputs.hostkeeper_version }}-linux-x86_64.tar.gz",
+            )],
         ),
     ];
     for (workflow, want) in cases {
