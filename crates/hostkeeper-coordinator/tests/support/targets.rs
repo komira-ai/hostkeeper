@@ -176,8 +176,10 @@ pub async fn grpc_bytes(rig: &Rig, path: &str, bearer: Option<&str>, bytes: &[u8
     }
     let request = builder.body(Full::new(framed(bytes))).expect("a request");
     let response = route(&rig.coordinator, Surface::Control, &None, request, PATIENCE).await;
+    // A refusal made before the body is read has its status in the headers.
+    let headers = response.headers().clone();
     let collected = response.into_body().collect().await.expect("a body");
-    let trailers = collected.trailers().cloned().unwrap_or_default();
+    let trailers = collected.trailers().cloned().unwrap_or(headers);
     let data = collected.to_bytes();
     let code = trailers
         .get("grpc-status")
