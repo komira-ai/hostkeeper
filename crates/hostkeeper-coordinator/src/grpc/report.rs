@@ -18,7 +18,7 @@ use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_wire::wire::{self, Heartbeat};
 use hostkeeper_wire::{HostId, Platform};
 
-use crate::converge::{Convergence, HaltNote, RoleCounts, State};
+use crate::converge::{Convergence, HaltNote, PickCounts, RoleCounts, State};
 use crate::decide::{Gate, Skip, Why};
 use crate::desired::{Desired, RoleLimits};
 use crate::fleet::Node;
@@ -66,10 +66,15 @@ pub(crate) fn convergence(convergence: &Convergence) -> proto::Convergence {
         state: convergence_state(convergence.state).into(),
         roles: convergence.roles.iter().map(role_counts).collect(),
         halt: convergence.halt.as_ref().map(halt_note),
-        hosts: convergence.hosts.as_ref().map(host_counts),
+        hosts: host_counts(convergence.hosts.as_ref(), convergence.picks.as_ref()),
         coordinator_commit: convergence.commit.to_owned(),
         record: None,
         force: None,
+        installer_dropped: convergence
+            .picks
+            .as_ref()
+            .map(|picks| picks.dropped.clone())
+            .unwrap_or_default(),
     }
 }
 
@@ -139,15 +144,30 @@ fn role_counts(counts: &RoleCounts) -> proto::RoleCounts {
     }
 }
 
-/// The hosts a service does not count, by why.
-fn host_counts(counts: &HostCounts) -> proto::HostCounts {
-    proto::HostCounts {
+/// The hosts a service does not count, by why, with the picks of a version set with targets;
+/// none when there are neither.
+fn host_counts(
+    counts: Option<&HostCounts>,
+    picks: Option<&PickCounts>,
+) -> Option<proto::HostCounts> {
+    if counts.is_none() && picks.is_none() {
+        return None;
+    }
+    let (counts, picks) = (
+        counts.copied().unwrap_or_default(),
+        picks.cloned().unwrap_or_default(),
+    );
+    Some(proto::HostCounts {
         missing: count(counts.missing),
         absent: count(counts.absent),
         excluded: count(counts.excluded),
         unmanaged: count(counts.unmanaged),
         deferred: count(counts.deferred),
-    }
+        picked: count(picks.picked),
+        no_target: count(picks.no_target),
+        no_build_for_host: count(picks.no_build_for_host),
+        installer_dropped: count(picks.installer_dropped),
+    })
 }
 
 /// The halt a convergence names. It carries no report: the convergence keeps the host, the check
@@ -422,6 +442,8 @@ fn service_beat(service: &str, beat: &Heartbeat) -> agent::ServiceBeat {
         }),
         pinned: None,
         record_try: beat.record_try,
+        // `Hosts.List` and `Hosts.Get` fill it in from the fleet ([`crate::picks::show`]).
+        installer: None,
     }
 }
 
@@ -534,6 +556,9 @@ fn skip_of(skip: Skip) -> proto::GateReason {
         Skip::FailedHere => proto::GateReason::FailedHere,
         Skip::Deferred => proto::GateReason::Deferred,
         Skip::NoPackageForPlatform => proto::GateReason::NoPackageForPlatform,
+        Skip::NoTarget => proto::GateReason::NoTarget,
+        Skip::NoBuildForHost => proto::GateReason::NoBuildForHost,
+        Skip::InstallerDropped => proto::GateReason::InstallerDropped,
         Skip::Unsupported | Skip::NoDigest => proto::GateReason::Unspecified,
     }
 }

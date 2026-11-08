@@ -17,6 +17,7 @@ const TICK: Duration = Duration::from_millis(1);
 
 fn convergence(desired: Option<&str>, state: State) -> Convergence {
     Convergence {
+        picks: None,
         desired: desired.map(version),
         quiet: false,
         state,
