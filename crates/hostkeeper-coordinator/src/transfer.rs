@@ -420,3 +420,7 @@ mod tests;
 #[cfg(test)]
 #[path = "transfer_export_tests.rs"]
 mod export_tests;
+
+#[cfg(test)]
+#[path = "transfer_releases_tests.rs"]
+mod releases_tests;
