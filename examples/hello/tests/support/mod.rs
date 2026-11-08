@@ -7,12 +7,14 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs;
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 
 use hello::hook::Units;
 use hello::ports::{Host, Probe, Runner};
 use hostkeeper_hook::{Class, Context, Next, Outcome, Params, Report, Scalar, Step};
 use hostkeeper_testkit::Scratch;
+use rustix::event::{PollFd, PollFlags, poll};
 
 pub const PORT: u16 = 9310;
 pub const TARGET: &str = "1.2.3";
@@ -382,4 +384,17 @@ pub fn files(entries: &[(&str, Option<&str>)]) -> BTreeMap<String, Option<String
         .iter()
         .map(|(name, content)| ((*name).to_owned(), content.map(str::to_owned)))
         .collect()
+}
+
+/// Blocks until `listener` has a connection ready to accept: `poll` with no timeout, so the wait
+/// ends on the kernel's event, not on a clock. A connect that has returned to the client may not be
+/// in the listener's queue yet (on macOS the server's side of the handshake can finish later).
+pub fn wait_until_acceptable(listener: &TcpListener) {
+    let mut fds = [PollFd::new(listener, PollFlags::IN)];
+    let ready = poll(&mut fds, None).expect("poll the listener");
+    assert_eq!(
+        (ready, fds[0].revents()),
+        (1, PollFlags::IN),
+        "the listener is readable"
+    );
 }

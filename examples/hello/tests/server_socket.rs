@@ -1,14 +1,15 @@
 //! The server over real sockets on loopback (port 0, chosen by the system), asked through the
 //! real probe and through raw connections; and the probe against servers that misbehave.
 
+mod support;
+
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::thread;
 
-use rustix::event::{PollFd, PollFlags, poll};
-
 use hello::ports::{HttpProbe, Probe};
 use hello::server::{Answer, MAX_HEAD, serve};
+use support::wait_until_acceptable;
 
 /// A listener on a port of the system's choosing, and that port.
 fn listener() -> (TcpListener, u16) {
@@ -127,19 +128,6 @@ fn the_server_answers_what_it_is_not_asked_and_survives_its_clients() {
     assert_eq!(
         HttpProbe.get(port, "/version"),
         Ok((200, "1.0.0\n".to_owned()))
-    );
-}
-
-/// Blocks until `listener` has a connection ready to accept: `poll` with no timeout, so the wait
-/// ends on the kernel's event, not on a clock. A connect that has returned to the client may not be
-/// in the listener's queue yet (on macOS the server's side of the handshake can finish later).
-fn wait_until_acceptable(listener: &TcpListener) {
-    let mut fds = [PollFd::new(listener, PollFlags::IN)];
-    let ready = poll(&mut fds, None).expect("poll the listener");
-    assert_eq!(
-        (ready, fds[0].revents()),
-        (1, PollFlags::IN),
-        "the listener is readable"
     );
 }
 
