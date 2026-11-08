@@ -71,6 +71,8 @@ fn waiting_for(version: &str) -> Option<AwaitingRestart> {
         version: version.to_owned(),
         verdict_promotion_pending: false,
         order_id: Some(format!("order-{HK}-{version}")),
+        next: None,
+        starts: None,
     })
 }
 

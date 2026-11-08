@@ -18,7 +18,10 @@
 //! that starts next settles it ([`settle`]): the new one confirms it `Succeeded`, and any other
 //! (the fallback, or a hand switch, put the previous binary back) closes it `Failed` after the
 //! commit, of class release, [`REASON_SELF_UPDATE_FALLBACK`], and adds the version to the local
-//! list of bad versions ([`crate::bad`]).
+//! list of bad versions ([`crate::bad`]). A wait that names a hand-over ([`AwaitingRestart::next`],
+//! [`crate::handover`]), written by a later release that does not move `current` before the new
+//! binary has run, is settled by the same function: the new binary finishes the switch itself and
+//! confirms.
 //!
 //! On macOS the daemon runs from its LaunchDaemons plist, which `hostkeeper-launchd` renders
 //! (`hostkeeper_launchd::plist::daemon_plist`: `KeepAlive` plain `true`, the counterpart of
@@ -192,6 +195,11 @@ impl Layout {
         self.dir.join("previous")
     }
 
+    /// The link to the binary a hand-over waits to start ([`crate::handover`]).
+    pub fn next_path(&self) -> PathBuf {
+        self.dir.join(crate::handover::NEXT)
+    }
+
     /// Where version `version` is: `versions/<version>` for the binary directory,
     /// `<version>` for a package directory. `version` is not checked here.
     pub fn version_path(&self, version: &str) -> PathBuf {
@@ -220,6 +228,21 @@ impl Layout {
     /// The version `previous` points at.
     pub fn previous(&self) -> io::Result<Option<String>> {
         link_version(&self.previous_path())
+    }
+
+    /// The version `next` points at, `None` when no hand-over put it there.
+    pub fn next(&self) -> io::Result<Option<String>> {
+        link_version(&self.next_path())
+    }
+
+    /// Removes the link `next`; none there is fine. The directory is synced, so that a removal
+    /// is not undone by a crash.
+    pub fn remove_next(&self) -> io::Result<()> {
+        match fs::remove_file(self.next_path()) {
+            Ok(()) => File::open(&self.dir)?.sync_all(),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e),
+        }
     }
 
     /// Puts `binary` beside the others as version `version`, mode 0755, durably. Changes no link.
@@ -392,7 +415,7 @@ impl Layout {
     /// `versions/<version>` is a regular file with an execute bit, not a link (dangling or not)
     /// and not a directory: what staging makes. [`io::ErrorKind::NotFound`] when there is
     /// nothing, [`io::ErrorKind::InvalidData`] when it is something else.
-    fn check_binary(&self, version: &str) -> io::Result<()> {
+    pub(crate) fn check_binary(&self, version: &str) -> io::Result<()> {
         check_version(version)?;
         let meta = fs::symlink_metadata(self.version_path(version))?;
         if !meta.is_file() || meta.permissions().mode() & 0o111 == 0 {
@@ -590,6 +613,8 @@ pub fn follow_on(
         version: version.to_owned(),
         verdict_promotion_pending: promotion_pending,
         order_id: order_id.map(str::to_owned),
+        next: None,
+        starts: None,
     };
     await_restart(store, awaiting.clone())?;
     if let Err(error) = layout.switch(version) {
@@ -675,10 +700,21 @@ pub fn settle(
 /// At the start of a binary of version `running`: settles the update of the record of `store`
 /// that waits for the restart (design section 6.6).
 ///
-/// - No update waits ([`Settled::NotPending`]): nothing is written.
-/// - The version it waits for is `running`, and `current` of `layout` names it: the new binary
-///   runs. `before_confirm` runs first, then the record is rewritten `Succeeded` in one write
-///   ([`Settled::Confirmed`]). A crash between the two leaves the record waiting, and the next
+/// - No update waits ([`Settled::NotPending`]): a link `next` of `layout` is removed (a
+///   hand-over that crashed between the link and the wait, or a confirmation between its write
+///   and the removal), and nothing else is written. A record a newer binary wrote is left as it
+///   is, and so is `next`.
+/// - A hand-over waits ([`AwaitingRestart::next`] set, docs/design/two-programs.md, 4.3), and
+///   its version is `running`: the switch is finished ([`Layout::switch`]: `previous` to the old
+///   `current`, then `current` to `running`, nothing when `current` names it already), then
+///   `before_confirm` runs, the record is rewritten `Succeeded` in one write, and only then is
+///   `next` removed ([`Settled::Confirmed`]). A crash at any point leaves the wait, and the next
+///   start of this binary does the rest.
+/// - A hand-over waits for another version: the hand-over's step 3 ([`crate::handover`]): the
+///   version is bad here, the record `Failed`, `next` removed ([`Settled::FellBack`]).
+/// - A wait written the old way (no `next`), whose version is `running`, with `current` of
+///   `layout` naming it: the new binary runs. `before_confirm` runs first, then the record is
+///   rewritten `Succeeded` in one write ([`Settled::Confirmed`]). A crash between the two leaves the record waiting, and the next
 ///   start confirms again, so `before_confirm` must be safe to run again.
 /// - Otherwise the binary that runs is not the new one: the version is added to the list of bad
 ///   versions in the store's directory ([`BadVersions`]), then the record is rewritten `Failed`
@@ -694,11 +730,16 @@ pub fn settle_with(
 ) -> Result<Settled, SelfUpdateError> {
     let awaiting = match store.load()? {
         Loaded::Current(rec) => rec.progress.awaiting_restart,
-        Loaded::Absent | Loaded::Newer { .. } => None,
+        Loaded::Absent => None,
+        Loaded::Newer { .. } => return Ok(Settled::NotPending),
     };
     let Some(awaiting) = awaiting else {
+        layout.remove_next()?;
         return Ok(Settled::NotPending);
     };
+    if awaiting.next.is_some() {
+        return settle_hand_over(layout, store, running, &awaiting, before_confirm);
+    }
     let current = layout.current()?;
     let confirmed = (awaiting.version == running) & (current.as_deref() == Some(running));
     if confirmed {
@@ -709,6 +750,24 @@ pub fn settle_with(
     BadVersions::load(store.dir())?.add(&awaiting.version)?;
     store.settle_awaiting_restart(Settlement::FellBack)?;
     Ok(Settled::FellBack)
+}
+
+/// The settlement of a hand-over that waits for `awaiting` ([`settle_with`]).
+fn settle_hand_over(
+    layout: &Layout,
+    store: &RecordStore,
+    running: &str,
+    awaiting: &AwaitingRestart,
+    before_confirm: &mut dyn FnMut() -> Result<(), SelfUpdateError>,
+) -> Result<Settled, SelfUpdateError> {
+    if awaiting.version != running {
+        return crate::handover::hand_over_failed(layout, store);
+    }
+    layout.switch(running)?;
+    before_confirm()?;
+    store.settle_awaiting_restart(Settlement::Confirmed)?;
+    layout.remove_next()?;
+    Ok(Settled::Confirmed)
 }
 
 /// The drop-in for the updater's own unit: restart when it exits, and run the fallback unit
