@@ -31,8 +31,9 @@
 #
 # Then the verified hkctl makes two calls, each one command that asks the runner for its own
 # OIDC token (`--github-oidc-audience`): `releases set-desired`, with the request the `request`
-# step wrote (the version, and the one package digest or the release index and its digest,
-# which the coordinator checks); and, when `wait` is true and the set succeeded,
+# step wrote (the version, and the one package digest, or the release index and its digest, or
+# the targets, alone or with the index and its digest; the coordinator checks them); and, when
+# `wait` is true and the set succeeded,
 # `releases wait-converged`, one call the coordinator holds until the fleet converges, the
 # service halts, another version is set or `max_polls` times 10 seconds pass. hkctl keeps the
 # token in a shell variable and hands it to curl through a pipe: no file holds it, no argument
@@ -71,6 +72,10 @@ on:
         required: false
       release_index_digest:
         description: The SHA-256 of release_index, 64 lower-case hex digits, as the release job that published the index wrote it down.
+        type: string
+        required: false
+      targets:
+        description: "The targets of the version, one JSON object keyed by platform (linux-x86_64, linux-arm64, macos-arm64), each value {\"entries\": [...]} in the order the service prefers, as `cargo xtask release targets` writes them; at most 128 KiB. Each host is ordered the entry of the installer it runs, else the first its daemon can install (docs/design/packages.md, section 3). Alone, or with release_index and release_index_digest, which must then list exactly the hostkeeper-archive entries, so that a daemon before targets is ordered its archive through the release channel; not with package_digest. Needs a coordinator that takes SetDesired with targets."
         type: string
         required: false
       hostkeeper_version:
@@ -235,9 +240,12 @@ jobs:
         run: printf '%s\n' "$COORDINATOR_CA" > "$RUNNER_TEMP/hkctl-coordinator-ca.pem"
 
       # The request of the set, in the request's canonical JSON names: the version, and the one
-      # package digest or the release index (its exact text, as one JSON string) with its digest.
-      # Every value comes from the step's environment, never written into the script. A job that
-      # names neither way of the release, or both, stops here, before any token exists.
+      # package digest, or the release index (its exact text, as one JSON string) with its
+      # digest, or the targets (the JSON object of the input, as an object), alone or with the
+      # index and its digest. Every value comes from the step's environment, never written into
+      # the script. A job that names no way of the release, the package digest with another, half
+      # of the index, or targets that are not one JSON object, stops here, before any token
+      # exists.
       - name: Write the request of the set
         id: request
         env:
@@ -245,13 +253,15 @@ jobs:
           PACKAGE_DIGEST: ${{ inputs.package_digest }}
           RELEASE_INDEX: ${{ inputs.release_index }}
           RELEASE_INDEX_DIGEST: ${{ inputs.release_index_digest }}
+          TARGETS: ${{ inputs.targets }}
         run: |
           jq --null-input --compact-output \
             --arg version "$VERSION" \
             --arg package_digest "$PACKAGE_DIGEST" \
             --arg release_index "$RELEASE_INDEX" \
             --arg release_index_digest "$RELEASE_INDEX_DIGEST" \
-            'if $package_digest != "" and $release_index == "" and $release_index_digest == "" then {desired: {version: $version}, packageDigest: $package_digest} elif $package_digest == "" and $release_index != "" and $release_index_digest != "" then {desired: {version: $version}, releaseIndex: $release_index, releaseIndexDigest: $release_index_digest} else error("give package_digest, or release_index with release_index_digest, not both") end' \
+            --arg targets "$TARGETS" \
+            '(if $targets == "" then null else [$targets | try fromjson catch null] | if length == 1 and (.[0] | type) == "object" then .[0] else error("targets is not one JSON object") end end) as $parsed | {desired: {version: $version}} as $set | if $package_digest != "" and $release_index == "" and $release_index_digest == "" and $parsed == null then $set + {packageDigest: $package_digest} elif $package_digest == "" and $release_index != "" and $release_index_digest != "" then $set + {releaseIndex: $release_index, releaseIndexDigest: $release_index_digest} + (if $parsed == null then {} else {targets: $parsed} end) elif $package_digest == "" and $release_index == "" and $release_index_digest == "" and $parsed != null then $set + {targets: $parsed} else error("give package_digest, or release_index with release_index_digest, or targets alone or with both of those; never package_digest with another") end' \
             > "$RUNNER_TEMP/hkctl-request.json"
 
       # The first step that requests an OIDC token for the coordinator. Its outcome, its answer
