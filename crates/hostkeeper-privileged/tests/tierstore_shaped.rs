@@ -342,12 +342,29 @@ fn force_back_to_previous_needs_no_fetch() {
     s.wait_converged(V1);
 }
 
+/// Every socket under `dir`, as paths (links are not followed).
+fn sockets_under(dir: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(next) = pending.pop() {
+        for entry in fs::read_dir(&next).expect("a readable directory").flatten() {
+            let kind = entry.file_type().expect("an entry's type");
+            if kind.is_socket() {
+                found.push(entry.path());
+            } else if kind.is_dir() {
+                pending.push(entry.path());
+            }
+        }
+    }
+    found
+}
+
 /// The daemon is ready under a `Type=notify` unit only after its boot pass: with `1.0.0`
 /// installed, the daemon stopped and one of the wants links it placed removed, `systemctl start`
 /// returns (which, for `Type=notify`, is after the daemon sent `READY=1`) with the link back in
 /// place (the boot pass's reconcile of the placed paths ran before the notice), the unit active
-/// and of type notify, the boot id recorded, the admin socket bound with mode 0600, and the
-/// fixture's instances still serving.
+/// and of type notify, the boot id recorded, no socket bound (nothing at the `--admin-socket` path it was given, none
+/// anywhere in the test's tree), and the fixture's instances still serving.
 #[test]
 fn the_daemon_is_ready_under_a_notify_unit_only_after_its_boot_pass() {
     let s = Scenario::installed("boot");
@@ -376,9 +393,11 @@ fn the_daemon_is_ready_under_a_notify_unit_only_after_its_boot_pass() {
     let boot_id = fs::read_to_string("/proc/sys/kernel/random/boot_id").expect("the boot id");
     let recorded = fs::read_to_string(s.host.state().join(".boot-id")).expect("the recorded id");
     assert_eq!(recorded.trim(), boot_id.trim());
-    let socket = fs::metadata(s.host.admin_socket()).expect("the admin socket");
-    assert!(socket.file_type().is_socket());
-    assert_eq!(socket.permissions().mode() & 0o777, 0o600);
+    assert!(
+        fs::symlink_metadata(s.host.admin_socket()).is_err(),
+        "nothing is at the --admin-socket path the daemon was given"
+    );
+    assert_eq!(sockets_under(s.host.base()), Vec::<PathBuf>::new());
     for port in installed.ports {
         assert_eq!(served_version(port).as_deref(), Some(V1), "instance {port}");
     }

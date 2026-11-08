@@ -1,133 +1,107 @@
-# hostkeeper admin
+# A host's status, abort and a corrupt step record
 
-`hostkeeper admin` calls the daemon on the host it runs on, over the daemon's admin socket
-(`hostkeeper.local.v1.Admin`, `crates/hostkeeper-proto/proto/hostkeeper/local/v1/admin.proto`).
-It works with the coordinator down. It is the home of every call of the services in the packages
-`hostkeeper.local.v<n>`; [`hkctl`](cli.md) calls the coordinator and has none of them.
+The daemon serves nothing on the host: it binds no socket, and `hostkeeper admin` is gone (it is a
+usage error, exit status 2). What the three calls of `hostkeeper admin` did, the coordinator does,
+through [`hkctl`](cli.md):
 
-```
-hostkeeper admin status
-hostkeeper admin abort <service>
-hostkeeper admin clear-record <service>
-```
-
-| verb | RPC | what it does |
+| to | run | needs |
 |---|---|---|
-| `status` | `Status` | prints the host's enrollment, the heartbeat loop's link to the coordinator, the trusted root's age, and each installed service. Changes nothing. |
-| `abort <service>` | `Abort` | stops the service's running step, and ends its order in the halt phase, as the coordinator's `abort` verb does. |
-| `clear-record <service>` | `ClearRecord` | clears the service's step record when it cannot be read, so that orders run for the service again. A record that reads is refused (`record_reads`). |
+| read a host's status | `hkctl hosts get` | the host heard from since the coordinator started |
+| stop a service's running step | `hkctl hosts abort` | any daemon that announces `abort-v1` |
+| set aside a step record that does not read | `hkctl hosts clear-record` | a daemon that announces `clear-record-v1` |
 
-No verb installs, updates or switches a version, and none lifts a halt: a halt is lifted only by
-the coordinator's `clear_halt` order, which the admin socket does not carry.
+Every `hkctl` call takes the endpoint, the CA file and the token of [cli.md](cli.md). A host the coordinator cannot reach is the last section.
 
-## The socket
+No call installs, updates or switches a version, and none lifts a halt: a halt is lifted only by the
+coordinator's `clear_halt` order.
 
-`--admin-socket <path>` names the socket, before or after the verb. Its default is the path the
-daemon binds by default: `/run/hostkeeper/admin.sock` on Linux, `/var/run/hostkeeper/admin.sock`
-on macOS (the constant `DEFAULT_ADMIN_SOCKET` of `crates/hostkeeper-daemon/src/cli.rs`, which
-`hostkeeper daemon --admin-socket` defaults to as well). The socket is mode 0600 in a directory
-of mode 0700, and the daemon serves only a peer whose uid is 0: run `hostkeeper admin` as root.
-The path comes from the flag only, never from the environment.
-
-## Output
-
-A verb that succeeds prints its answer on standard output, one `key: value` per line, and exits
-0. The lines and their order are stable, so a person at a console reads them and a script may
-match them:
-
-- an enum value is its name without its prefix, in lower case (`LIFECYCLE_RUNNING` is `running`);
-  a value this binary does not know is `unknown_<number>`;
-- an empty string field is `-`;
-- a service's keys are under `service[<name>]`; a service name never holds `[`, `]`, `:` or a
-  space.
-
-`status` prints, in this order:
-
-| key | value |
-|---|---|
-| `enrollment` | `unenrolled`, `pending`, `enrolled` or `unreadable` (see below); `unknown` before the enrollment loop's first step has ended, including while the loop cannot make its enroller (it logs `the enrollment loop cannot start yet` and tries again after 5 s, doubling up to 300 s) |
-| `enrollment.key_sha256` | only when `pending`: the SHA-256 of the pending key's DER SubjectPublicKeyInfo, 64 lower-case hex digits |
-| `enrollment.host_id` | only when `enrolled`: the host id the certificate names |
-| `enrollment.not_after_unix` | only when `enrolled`: the last unix second the certificate is valid |
-| `link.last_success_unix` | the unix second, by the host's wall clock, of the last heartbeat the coordinator answered; `never` when none was since the daemon started |
-| `link.consecutive_failures` | the heartbeats in a row not sent or not answered since the last one answered, or since the daemon started |
-| `link` | `unknown`, in place of the two lines above, before the heartbeat loop's first heartbeat has ended, and when the loop does not run |
-| `trusted_root.age_secs` | the seconds since the Sigstore trusted root's file was last written on the host; `unknown` when the daemon reported no age (no file) |
-| `trusted_root.reason` | why the trusted root needs attention: `trusted_root_stale`, `trusted_root_missing` or `trusted_root_unparseable`; `none` when it needs none |
-| `services` | how many services follow |
-
-A heartbeat the loop did not try to send, because the host has no certificate yet or its
-installed services could not be read, changes neither `link` line.
-
-Every heartbeat on the gRPC route carries the same trusted root age and reason, so off the host
-`hkctl hosts get --node-id <id>` answers them too (`trusted_root_age_secs`, `trusted_root_reason`;
-see [The trusted root on a host](deploy/verify-a-release.md#the-trusted-root-on-a-host)).
-
-Then, for each service in name order:
-
-| key | value |
-|---|---|
-| `service[<name>].lifecycle` | `absent`, `installing`, `running` or `removing` |
-| `service[<name>].record_problem` | `none`, or `unreadable` or `newer_schema` when its step record cannot be read as it is |
-| `service[<name>].liveness` | `live`, `absent`, `stopped`, `transitioning`, `unobserved` or `unmonitored`; `unknown` when the service was not observed, and then the next three lines are left out |
-| `service[<name>].version` | the version an active unit runs, when the daemon confirmed it; else `-` |
-| `service[<name>].healthy` | `true` or `false` |
-| `service[<name>].unhealthy` | why it is not healthy, or `none` |
-| `service[<name>].current` | `none` when no order is under way; else the step record of the order under way, as the `.current.*` lines below |
-| `service[<name>].last` | `none` when no order ended; else the step record of the last order that ended, as the `.last.*` lines below |
-
-A step record is printed as these keys under its prefix (`service[<name>].current`,
-`service[<name>].last`, or `record` for `abort`): `order_id`, `order_try`, `version`, `step`,
-`outcome` (`succeeded`, `failed`, `deferred`, or `none` while it runs), `phase` and `class` (`none`
-unless it failed with one), `reason` and `forced`.
-
-`abort <service>` prints `aborted: <service>` and then the order as its step record holds it
-once it ended, under `record` (`record: none` when the daemon sent no record). `clear-record
-<service>` prints `cleared: <service>` and `problem: unreadable`.
-
-For example, a host waiting for its approval, whose heartbeats are not sent yet:
+## Status
 
 ```
-# hostkeeper admin status
-enrollment: pending
-enrollment.key_sha256: 4f2a9c0e8b7d6a5f4e3d2c1b0a99887766554433221100ffeeddccbbaa998877
-link.last_success_unix: never
-link.consecutive_failures: 0
-trusted_root.age_secs: 86400
-trusted_root.reason: none
-services: 0
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+    hosts get --node-id <id>
 ```
 
-## Enrollment states
+The answer is the coordinator's view of the host: whether it is live, when its last heartbeat
+arrived, that heartbeat as the host sent it (its agent version, the trusted root's age and reason in
+`trusted_root_age_secs` and `trusted_root_reason`, see
+[The trusted root on a host](deploy/verify-a-release.md#the-trusted-root-on-a-host), and each
+service's lifecycle, health and step records), and how each service the coordinator manages sees it. A host the coordinator has not heard from since it
+started is refused `unknown_host`.
 
-The daemon's enrollment loop reads the pki directory (`/etc/updater/pki`) after each of its
-steps, with the same code a step uses to decide what to do next, and `status` shows what it read
-last:
+The enrollment of a host that has no certificate yet is read at the coordinator, not on the host:
+`hkctl enrollment list` shows the request with its `key_sha256`, which an operator at the host's
+console checks against the SHA-256 of the host's pending key
+([enrollment.md](operations/enrollment.md#check-the-key-hash)).
 
-| state | the pki directory holds | what the loop does next |
-|---|---|---|
-| `unenrolled` | no certificate and no pending key | makes the pending key and posts the request, once the coordinator's CA matches the pinned `ca_sha256` |
-| `pending` | no certificate, and a pending key | polls for the operator's approval of the request with this key |
-| `enrolled` | a certificate of this host under `current`, valid or expired | renews it from the middle of its validity on; once it expired, enrolls again with the same key, `renewal_of` the host |
-| `unreadable` | something it cannot read, or a `current` generation or pending key that is not a certificate and key of this host | nothing until it reads; the daemon's log says why |
+## Abort
 
-The `key_sha256` of a pending host is the value `hkctl enrollment list` shows for its
-request and `hkctl enrollment approve --key-sha256` compares
-([enrollment-coordinator.md](enrollment-coordinator.md)): an operator at the host's console reads
-it here and checks it against the coordinator's list before approving.
+```
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+    hosts abort --node-id <id> --service <service> --reason <why>
+```
 
-## Exit status
+The coordinator orders the host `abort` for the service in its next heartbeat answer; the order
+takes no farm slot. The daemon stops the service's running step and ends its update in the halt
+phase with the reason `aborted_by_operator`: the halt is that order's verdict, which comes back in a
+heartbeat and `hkctl hosts get` shows. The abort's own answer is only in the daemon's log, where a
+service with no step running is `nothing_running`, and nothing changes. A daemon that
+does not announce `abort-v1` is refused `daemon_too_old` and nothing is ordered. An aborted service
+takes no other order until its halt is lifted.
 
-| code | when |
+## A step record that does not read
+
+```
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+    hosts clear-record --node-id <id> --service <service>
+```
+
+The coordinator orders the host `clear_record` for the service, once, in its next heartbeat answer.
+A host whose daemon does not announce `clear-record-v1` is refused `daemon_too_old`, an unknown
+host `unknown_host`, and nothing is ordered. The daemon runs the order under the service's lock,
+without waiting, and answers with one verdict (`hkctl hosts get` shows it):
+
+| verdict | meaning |
 |---|---|
-| 0 | the call succeeded |
-| 1 | the socket could not be reached, the call broke off, or the daemon answered `NOT_FOUND` (`not_installed`), `INTERNAL` (`store_failed`) or another failure |
-| 2 | a usage error, or the daemon refused the request: `INVALID_ARGUMENT` (`invalid_request`) or `FAILED_PRECONDITION` (`nothing_running`, `record_reads`, `busy`) |
-| 3 | `UNAUTHENTICATED` or `PERMISSION_DENIED` |
+| `record_cleared` | the record did not read; it was renamed `step-record.json.corrupt` in the service's state directory, for the operator to read, and nothing else changed |
+| `record_reads` | the record reads (or is absent, or was written by a newer hostkeeper): nothing was changed |
+| `busy` | the service's lock is held by an order under way: nothing was changed; try again once it ends |
+| `store_failed` | the rename failed: nothing was changed; the daemon's log says why |
 
-These are the codes of `hostkeeper admin`, from its own mapping of gRPC codes
-(`crates/hostkeeper-daemon/src/admin_client.rs`, its `exit` module); `hkctl` maps the gateway's codes
-the same way ([cli.md](cli.md)). A call that fails prints nothing on standard output and one
-line on standard error: `hostkeeper admin: <message> (<code>)` for an answer of the daemon, whose
-message is the refusal's token (for example `hostkeeper admin: not_installed (NotFound)`), and
-`hostkeeper admin: cannot connect to <socket>: <why>` for a socket that could not be reached.
+The call is audited `record_cleared` at the coordinator.
+
+## A host the coordinator cannot reach
+
+When the link is down, root works on the host itself.
+
+- **Status.** The daemon logs to the journal: `journalctl -u hostkeeper` on Linux. On a Mac its
+  standard error is `/var/log/hostkeeper/daemon.err.log`. `systemctl status hostkeeper` shows
+  whether it runs.
+- **Stop a running step.** Stop the daemon: `systemctl stop hostkeeper` on Linux,
+  `launchctl bootout system/dev.hostkeeper.hostkeeper` on a Mac. This ends the running step. A unit
+  the step started may outlive it: find it (`systemctl list-units 'updater-<service>-*'`) and stop
+  it by name.
+- **A step record that does not read.** If the record must go before the link is back, stop the
+  daemon as above, then rename the record in the service's state directory (the daemon's
+  `--state-dir`, `/var/lib/updater/state` by default, holds one directory per service):
+
+  ```
+  mv /var/lib/updater/state/<service>/step-record.json \
+     /var/lib/updater/state/<service>/step-record.json.corrupt
+  ```
+
+  That rename is the whole of what `clear-record` does. Do it only for a record that does not
+  read: a record that reads is an update in progress. Then start the daemon again
+  (`systemctl start hostkeeper`; on a Mac `launchctl bootstrap system
+  /Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist`).
+
+## Hosts that have not updated yet
+
+A daemon from before this change still binds its admin socket (`/run/hostkeeper/admin.sock`,
+`/var/run/hostkeeper/admin.sock` on a Mac) and still serves `hostkeeper.local.v1.Admin` to root. An
+older `hostkeeper admin status|abort|clear-record` keeps working against it until the host updates.
+The newer daemon accepts the flag `--admin-socket <path>` that its unit still passes and ignores it:
+it binds nothing. The flag goes in a later stage of
+[the design](design/two-programs.md#4-the-staged-path-for-the-daemon). The file
+`crates/hostkeeper-proto/proto/hostkeeper/local/v1/admin.proto` stays, frozen, because the older
+binary speaks it; no program serves it and no code is generated from it.

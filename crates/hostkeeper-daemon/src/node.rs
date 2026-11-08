@@ -1,6 +1,6 @@
-//! What the admin `Status` reports of the host besides its services: the host's enrollment as
-//! the enrollment loop read it after its last step, and the heartbeat loop's link to the
-//! coordinator. The two loops write it ([`crate::links`]); `Status` reads it ([`crate::admin`]).
+//! What [`crate::Daemon::status`] reports of the host besides its services: the host's
+//! enrollment as the enrollment loop read it after its last step, and the heartbeat loop's link
+//! to the coordinator. The two loops write it ([`crate::links`]); `status` reads it.
 //! Neither loop reads it back, so what it holds changes nothing the loops do.
 
 use std::sync::{Mutex, MutexGuard, PoisonError};

@@ -7,8 +7,8 @@ mod support;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
-use hostkeeper_daemon::admin::service_record;
 use hostkeeper_daemon::boot::Outcome;
+use hostkeeper_daemon::executor::RecordState;
 use hostkeeper_daemon::locks::Package;
 use hostkeeper_daemon::testing::{FakeClock, Log, spawn};
 use hostkeeper_daemon::verb::{HookedVerb, PackageDigest};
@@ -96,12 +96,15 @@ fn unstopped_keeps_serving_holds_the_lock_and_leaves_the_step_running() {
         .collect();
     assert_eq!(names, ["alpha", "beta"]);
     assert!(status.services[0].stuck & status.services[0].step_running());
-    let record = service_record(&status.services[0]);
-    assert_eq!(
-        record.current.expect("under way").reason,
-        "unstoppable_unit"
-    );
-    assert!(service_record(&status.services[1]).current.is_none());
+    let RecordState::Unfinished(record) = &status.services[0].record else {
+        panic!(
+            "alpha's update is under way: {:?}",
+            status.services[0].record
+        )
+    };
+    assert!(matches!(record.state, State::Running { .. }));
+    assert_eq!(status.services[1].record, RecordState::Absent);
+    assert!(!status.services[1].step_running());
     let package = Package {
         verb: HookedVerb::Update,
         version: hostkeeper_config::names::Version::new("2.0.0").expect("version"),

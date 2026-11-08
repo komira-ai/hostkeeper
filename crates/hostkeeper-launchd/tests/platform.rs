@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use hostkeeper_launchd::{Platform, PlatformKind, REVERSE_DNS_PREFIX};
 
-/// Catches a constructor that names the wrong unit directory, suffix, socket or label prefix, and
+/// Catches a constructor that names the wrong unit directory, suffix, run directory or label prefix, and
 /// a `host` that picks the other platform than the one the binary was built for.
 #[test]
 fn the_platform_constructors_name_the_documented_paths() {
@@ -12,14 +12,14 @@ fn the_platform_constructors_name_the_documented_paths() {
         kind: PlatformKind::Linux,
         unit_dir: PathBuf::from("/etc/systemd/system"),
         unit_suffix: ".service",
-        admin_socket: PathBuf::from("/run/hostkeeper/admin.sock"),
+        run_dir: PathBuf::from("/run"),
         label_prefix: None,
     };
     let macos = Platform {
         kind: PlatformKind::Macos,
         unit_dir: PathBuf::from("/Library/LaunchDaemons"),
         unit_suffix: ".plist",
-        admin_socket: PathBuf::from("/var/run/hostkeeper/admin.sock"),
+        run_dir: PathBuf::from("/var/run"),
         label_prefix: Some(REVERSE_DNS_PREFIX),
     };
     assert_eq!(Platform::linux(), linux);

@@ -22,9 +22,9 @@
 //! `launchctl print system/hello.<slot>` through the daemon's own `launchctl` adapter (what
 //! launchd loaded and runs: each version's plists send their output to a directory of that
 //! version, so the `stdout path` launchd prints names the version of the plist it loaded), the
-//! server's `/version` (the slot that serves), the daemon's `Status` on its admin socket (the
-//! observer: the service live, the running executable confirmed as the installed version's), and
-//! the operator API of the coordinator (the heartbeat's report). Every wait is a bounded
+//! server's `/version` (the slot that serves), and the operator API of the coordinator (the
+//! heartbeat's report: `Hosts.Get` lists hello with the version the daemon's observer confirmed
+//! running and its health). Every wait is a bounded
 //! count of tries of an explicit state; nothing is asserted about time.
 
 mod e2e;
@@ -42,7 +42,6 @@ use e2e::mac_host::{
 use e2e::scenario::{COORDINATED, LOCAL, pinned_gh};
 use e2e::signer::FixtureSigner;
 use e2e::{HOST_ID, ROLE, http_get, wait_for};
-use hostkeeper_proto::hostkeeper::local::v1::{Lifecycle, Liveness, ServiceRecord};
 use serde_json::Value;
 
 /// The first release.
@@ -279,36 +278,34 @@ impl Rig {
         );
     }
 
-    /// hello as the daemon's `Status` lists it, `None` when it is not listed.
-    fn service_status(&self) -> Option<ServiceRecord> {
-        let status = self
-            .host
-            .status()
-            .unwrap_or_else(|why| panic!("Status: {why}"));
-        status.services.into_iter().find(|s| s.service == SERVICE)
+    /// hello as the host's last heartbeat lists it (the `services` of the `heartbeat` that
+    /// `Hosts.Get` answers), `None` when the host or the entry is not listed.
+    fn service_beat(&self) -> Option<Value> {
+        let reply = self.coordinator.api().get_host(HOST_ID).ok()?;
+        reply["host"]["heartbeat"]["services"]
+            .as_array()?
+            .iter()
+            .find(|beat| beat["name"] == SERVICE)
+            .cloned()
     }
 
-    /// Waits until the daemon's `Status` reports hello running, live, healthy, and its running
-    /// executable confirmed as `version`'s.
+    /// Waits until the host's heartbeat lists hello on `version` and healthy: the daemon's
+    /// observer saw its running executable as `version`'s, and its health check passes.
     fn wait_observed(&self, version: &str) {
         let mut last = None;
         wait_for(
-            &format!("Status reports hello live on {version}"),
-            LOCAL,
+            &format!("the heartbeat reports hello healthy on {version}"),
+            COORDINATED,
             || {
-                let record = self.service_status();
-                let done = record.as_ref().is_some_and(|record| {
-                    let state = record.state.clone().unwrap_or_default();
-                    record.lifecycle == Lifecycle::Running as i32
-                        && state.liveness == Liveness::Live as i32
-                        && state.version.as_deref() == Some(version)
-                        && state.healthy
+                let beat = self.service_beat();
+                let done = beat.as_ref().is_some_and(|beat| {
+                    beat["version"] == version && beat["health"] == "HEALTH_HEALTHY"
                 });
-                last = record;
+                last = beat;
                 done
             },
         );
-        println!("Status of hello on {version}: {last:?}");
+        println!("The heartbeat's entry of hello on {version}: {last:?}");
     }
 }
 
@@ -325,8 +322,9 @@ fn hello_installs_updates_rolls_back_and_uninstalls_under_launchd() {
 /// The install of `1.0.0`: once the coordinator reports the host on it, `current` is `1.0.0`;
 /// both slots' plists are links in `/Library/LaunchDaemons` into `current`, resolving to
 /// `1.0.0`'s; launchd holds both jobs, loaded from `1.0.0`'s plists and running `1.0.0`'s
-/// program; `hello.a` serves `1.0.0` and `hello.b` does not run; and the daemon's `Status`
-/// reports hello live and healthy, the running executable `1.0.0`'s.
+/// program; `hello.a` serves `1.0.0` and `hello.b` does not run; the heartbeat
+/// reports hello healthy on `1.0.0`; and the daemon bound no socket at the `--admin-socket` it
+/// was given.
 fn install(rig: &Rig) {
     for slot in SLOTS {
         assert!(
@@ -344,13 +342,17 @@ fn install(rig: &Rig) {
     }
     rig.wait_serving("a", V1);
     rig.wait_observed(V1);
+    assert!(
+        !rig.host.admin_socket().exists(),
+        "the daemon binds no admin socket"
+    );
 }
 
 /// The update to `1.1.0`: `current` is `1.1.0` and `previous` `1.0.0`; both plists still are
 /// links into `current` and now resolve to `1.1.0`'s; launchd holds both jobs loaded again from
 /// `1.1.0`'s plists (booted out and bootstrapped: `1.0.0`'s plists sent their output elsewhere)
 /// and running `1.1.0`'s program; `hello.b` serves `1.1.0` and `hello.a` no longer runs; and
-/// `Status` reports `1.1.0` live and healthy.
+/// the heartbeat reports `1.1.0` healthy.
 fn update(rig: &Rig) {
     rig.order(V2);
     rig.wait_converged(V2);
@@ -375,7 +377,7 @@ fn update(rig: &Rig) {
 /// verdict; `current` is `1.1.0` again (`previous` the version rolled back from); both plists
 /// resolve to `1.1.0`'s; launchd holds both jobs loaded from `1.1.0`'s plists and running
 /// `1.1.0`'s program, so no job of `1.2.0` is loaded; `hello.b` serves `1.1.0` again and is
-/// ready; `Status` reports `1.1.0` live and healthy; and the coordinator marks `1.2.0` bad and
+/// ready; the heartbeat reports `1.1.0` healthy; and the coordinator marks `1.2.0` bad and
 /// wants `1.1.0`, which the host is converged on.
 fn failed_verify_rolls_back(rig: &Rig) {
     rig.order(V3);
@@ -425,7 +427,7 @@ fn failed_verify_rolls_back(rig: &Rig) {
 /// `/Library/LaunchDaemons`, launchd holds neither job, hello's package directory is gone with
 /// every version, link and seal in it, `placed.json` (if any is left) holds no path and no
 /// tombstone of hello, the hook's slot
-/// markers are gone, nothing answers on the port, and `Status` no longer reports hello running.
+/// markers are gone, nothing answers on the port, and the heartbeat no longer reports hello healthy.
 fn uninstall(rig: &Rig) {
     rig.coordinator.unassign_uninstall(HOST_ID, SERVICE);
     wait_for("the uninstall of hello ends", COORDINATED, || {
@@ -488,11 +490,12 @@ fn uninstall(rig: &Rig) {
         None,
         "nothing answers on the port"
     );
-    let record = rig.service_status();
-    assert!(
-        record
-            .as_ref()
-            .is_none_or(|record| record.lifecycle != Lifecycle::Running as i32),
-        "Status reports hello running after its uninstall: {record:?}"
+    wait_for(
+        "the heartbeat lists no healthy hello after its uninstall",
+        COORDINATED,
+        || {
+            rig.service_beat()
+                .is_none_or(|beat| beat["health"] != "HEALTH_HEALTHY")
+        },
     );
 }

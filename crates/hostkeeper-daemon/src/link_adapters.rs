@@ -14,15 +14,15 @@
 //!
 //! [`DaemonRecords`] is the loop's [`ServiceRecords`]: every service whose `current` link names a
 //! version, at that version, with the target of its step record while the record is unfinished
-//! ([`recorded`]). [`DaemonObserver`] is its [`ServiceObserver`]: the observation the admin
-//! `Status` reports ([`Daemon::observer`]), in the loop's words ([`observation`]).
+//! ([`recorded`]). [`DaemonObserver`] is its [`ServiceObserver`]: the observation
+//! [`Daemon::status`] reports ([`Daemon::observer`]), in the loop's words ([`observation`]).
 //!
 //! [`DaemonRenewal`] is its [`RenewalSource`]: the [`RenewalState`] the enrollment loop writes
 //! after each step ([`crate::links::Links::renewal`]), as it is when the heartbeat is made.
 //!
 //! [`DaemonTrustedRoot`] is its [`TrustedRootSource`]: the report of the trusted root the package
-//! store checks attestations with ([`crate::packages::Packages::trusted_root`], the one the admin
-//! `Status` reports), read when the heartbeat is made; none from a store that keeps no root.
+//! store checks attestations with ([`crate::packages::Packages::trusted_root`], the one
+//! [`Daemon::status`] reports), read when the heartbeat is made; none from a store that keeps no root.
 
 use std::io;
 use std::sync::Arc;
@@ -389,8 +389,8 @@ impl ServiceObserver for DaemonObserver {
 }
 
 /// `seen` in the loop's words: the state as the liveness (live is running); the version only when
-/// the running executable confirmed it; the health as the heartbeat's health of the admin
-/// `Status` ([`beat_health`]), a health the observer cannot tell being unhealthy; and the token
+/// the running executable confirmed it; the health as the heartbeat's health
+/// ([`beat_health`]), a health the observer cannot tell being unhealthy; and the token
 /// that says why the service is not plainly live, healthy and confirmed as the detail.
 pub fn observation(seen: &hostkeeper_observe::Observation) -> Observation {
     let liveness = match &seen.state {

@@ -6,6 +6,9 @@
 //! `src/ctl_gen.rs` turns them into the command table. Nothing generated is checked in: the
 //! code, the descriptor set `src/lib.rs` embeds as `FILE_DESCRIPTOR_SET`, and the table
 //! `src/ctl.rs` includes land in `OUT_DIR`.
+//!
+//! [`FROZEN`] is in the descriptor set, which the compatibility test reads, and nothing else:
+//! no Rust code is generated from it, and the command generator skips its package.
 
 use std::path::PathBuf;
 
@@ -25,6 +28,10 @@ const FILES: &[&str] = &[
     "hostkeeper/local/v1/admin.proto",
     "hostkeeper/release/v1/release.proto",
 ];
+
+/// The files of [`FILES`] that no program serves any more: kept in the descriptor set, so the
+/// compatibility test still holds them to the last release, with no code generated from them.
+const FROZEN: &[&str] = &["hostkeeper/local/v1/admin.proto"];
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // A build script runs in its package's directory.
@@ -46,6 +53,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let table = ctl_gen::generate(&pool).map_err(|e| e.to_string())?;
     std::fs::write(out.join("ctl_commands.rs"), table)?;
 
+    let mut served = compiler.file_descriptor_set();
+    served.file.retain(|file| !FROZEN.contains(&file.name()));
     tonic_prost_build::configure()
         .build_client(true)
         .build_server(true)
@@ -58,7 +67,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // judges, audits and answers them in the order of their spellings.
         .btree_map(".hostkeeper.operator.v1.SetDesiredRequest.targets")
         .btree_map(".hostkeeper.operator.v1.GetReleaseResponse.targets")
-        .compile_fds(compiler.file_descriptor_set())?;
+        .compile_fds(served)?;
 
     println!("cargo:rerun-if-changed=proto");
     Ok(())
