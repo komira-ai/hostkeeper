@@ -101,14 +101,19 @@ federation's client ID are all public values, so they are variables, not secrets
 | `HOSTKEEPER_TAILNET_CLIENT_ID` | The client ID of the tailnet's federated identity. Empty: the job does not join the tailnet, and the coordinator must be reachable from the runner some other way. |
 | `HOSTKEEPER_TAILNET_AUDIENCE` | The audience of that federated identity. |
 | `HOSTKEEPER_TAILNET_COORDINATOR` | The coordinator's name on the tailnet, which the join pings until it answers. |
-| `HOSTKEEPER_TAILNET_TAG` | The tag the join gives the runner's node, the one the federation's trust credential issues, such as `tag:ci`. Empty: `tag:hk-ci`. Read once `release.yml` pins a revision of the CI client that takes `tailnet_tag`, which the current pin, v0.1.166, does not: until then the join asks for `tag:hk-ci`. |
+| `HOSTKEEPER_TAILNET_TAG` | The tag the join gives the runner's node, the one the federation's trust credential issues: `tag:ci` (shared). Both callers pass it as `tailnet_tag`. It must be set, even with `HOSTKEEPER_TAILNET_CLIENT_ID` empty: the CI client checks the tag at its first step, with or without the join, and an empty one ends the job there, before anything is downloaded or set. |
 
-The tailnet, its tag (`HOSTKEEPER_TAILNET_TAG`, by default `tag:hk-ci`), its ACL and its federation
+The tailnet, its tag (`HOSTKEEPER_TAILNET_TAG`, `tag:ci`), its ACL and its federation
 are set up as for any caller of the CI client
 ([Reaching the coordinator](ci-client.md#reaching-the-coordinator),
 [The tag and the ACL](ci-client.md#the-tag-and-the-acl)). For this
 repository, the federation's subject is
-`repo:komira-ai/hostkeeper:ref:refs/heads/main`.
+`repo:komira-ai/hostkeeper:ref:refs/heads/main`, its trust credential issues `tag:ci`, and the
+ACL's stanza names `tag:ci` in place of `tag:hk-ci`. `tag:ci` is shared with other CI jobs, so
+the join keeps the grants they need; the stanza adds the coordinator's private listener to them
+and takes nothing away. The callers name no fallback tag: the CI client's default, `tag:hk-ci`,
+is not a tag this repository's credential issues, so an unset variable fails at the client's
+first step rather than at the join.
 
 ## Set up once, outside CI
 
@@ -146,7 +151,7 @@ audience = "hostkeeper-ci"
 repository_id = "123456789"            # gh api repos/komira-ai/hostkeeper --jq .id
 repository = "komira-ai/hostkeeper"
 job_workflow_ref = [
-  "komira-ai/hostkeeper/.github/workflows/set-desired.yml@4859b4800897f2468c0f2131455721edfc537217",
+  "komira-ai/hostkeeper/.github/workflows/set-desired.yml@2c767d1842a88edb7120073d2dff3b4bfccc834c",
 ]
 refs = ["refs/heads/main"]
 event_names = ["workflow_dispatch", "workflow_run", "schedule"]
@@ -171,9 +176,9 @@ the `uses:` line names a commit of this repository with its release as the comme
 OIDC token is a published release, verified before it runs, never the commit being released.
 
 Both callers of this repository, `release.yml` and `hello-desired.yml`, pin one revision: commit
-`4859b4800897f2468c0f2131455721edfc537217`, release `v0.1.173`, the first whose
-`set-desired.yml` takes a release's targets, on hkctl (one set, and for `hello-desired.yml` one
-held wait). A coordinator that does not take `SetDesired` with targets refuses their sets; the
+`2c767d1842a88edb7120073d2dff3b4bfccc834c`, release `v0.1.184`, the first whose
+`set-desired.yml` takes the tailnet tag (`tailnet_tag`), on top of a release's targets and hkctl
+(one set, and for `hello-desired.yml` one held wait). A coordinator that does not take `SetDesired` with targets refuses their sets; the
 coordinator is updated to one that does before the pin moves. The workflow
 lint (`cargo test -p xtask --test workflows`, `callers.rs`) names that revision, as
 `CLIENT_COMMIT` and `CLIENT_RELEASE`, and refuses a caller whose `uses:` commit, version comment,

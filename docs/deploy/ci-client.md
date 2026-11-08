@@ -78,27 +78,19 @@ check that `S/V/index.json` is served), not straight after the release is publis
 
 ## Calling it
 
-In the service's release workflow, after the job that publishes the package:
+A service calls it from a workflow of its own, once the release channel holds the release. The
+whole workflow, for a service that sets each release with its targets and its index, is the
+template of [A service's caller](service-caller.md), with the checklist of what must be set up
+before its first run. The workflow lint of this repository holds that template to the rules of
+`hello-desired.yml`, so it always pins the CI client's current revision. Its calling job:
 
-```yaml
-jobs:
-  set-desired:
-    needs: publish
-    permissions:
-      contents: read
-      id-token: write
-    uses: komira-ai/hostkeeper/.github/workflows/set-desired.yml@0123456789abcdef0123456789abcdef01234567 # v0.1.0
-    with:
-      service: my-service
-      version: ${{ needs.publish.outputs.version }}
-      release_index: ${{ needs.publish.outputs.release_index }}
-      release_index_digest: ${{ needs.publish.outputs.release_index_sha256 }}
-      hostkeeper_version: 0.1.0
-      hostkeeper_commit: 0123456789abcdef0123456789abcdef01234567
-      coordinator_url: https://coordinator.example
-      coordinator_ca: ${{ vars.HOSTKEEPER_COORDINATOR_CA }}
-      audience: my-service-release
-```
+- grants `contents: read` and `id-token: write`, and nothing else;
+- calls `komira-ai/hostkeeper/.github/workflows/set-desired.yml` pinned to a full commit, with
+  its release as the comment, and passes that release and commit as `hostkeeper_version` and
+  `hostkeeper_commit` ([Pinning hostkeeper](#pinning-hostkeeper));
+- passes `service`, `version`, `targets`, `release_index` and `release_index_digest`, the
+  coordinator's address, CA and audience, and `tailnet_tag`, from the job that read the release
+  and from repository variables.
 
 `release_index` is the text of the `index.json` the publish job wrote (design, section 5.5), and
 `release_index_digest` its SHA-256, taken from the file the publish job uploaded: the two must be
@@ -162,7 +154,7 @@ audience = "hostkeeper-ci"
 repository_id = "123456789"            # gh api repos/komira-ai/hostkeeper --jq .id
 repository = "komira-ai/hostkeeper"
 job_workflow_ref = [
-  "komira-ai/hostkeeper/.github/workflows/set-desired.yml@4859b4800897f2468c0f2131455721edfc537217",
+  "komira-ai/hostkeeper/.github/workflows/set-desired.yml@2c767d1842a88edb7120073d2dff3b4bfccc834c",
 ]
 refs = ["refs/heads/main"]
 event_names = ["workflow_dispatch"]
@@ -297,7 +289,7 @@ some other way; then the step is skipped and no action runs in the job.
 
 ```yaml
     with:
-      # ... the inputs of "Calling it" above, with coordinator_url naming the coordinator
+      # ... the inputs of the template (service-caller.md), with coordinator_url naming the coordinator
       # by the name it has on the tailnet and in its certificate.
       join_tailnet: true
       tailnet_client_id: ${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID }}
@@ -319,7 +311,10 @@ caller's federated identity issues ([The federation](#the-federation-set-up-once
 Tailscale refuses the join when the job asks for a tag the credential does not issue. By default
 it is `tag:hk-ci`, a tag of its own for the CI client. A tailnet whose CI already joins with a
 credential of another tag, such as an organisation's credential whose nodes are `tag:ci`, passes
-that tag instead (`tailnet_tag: tag:ci`) and needs no second credential.
+that tag instead (`tailnet_tag: tag:ci`) and needs no second credential. hostkeeper's own callers,
+`release.yml` and `hello-desired.yml`, do that: each passes `tag:ci` from the repository variable
+`HOSTKEEPER_TAILNET_TAG`, with no fallback, so the variable must be set
+([The repository variables](github-actions.md#the-repository-variables)).
 
 Whichever tag it is, the ACL must let it reach the coordinator's private listener. Tag the
 coordinator's machine `tag:hk-coordinator`, and give the tailnet policy file this stanza, with the
@@ -348,8 +343,9 @@ refuse a policy edit under which the tag can reach the coordinator's SSH port or
 listener. The heartbeat listener needs no grant for CI.
 
 With `tag:hk-ci` the node reaches the coordinator's private listener and nothing else. A tag
-shared with other CI jobs, such as `tag:ci`, keeps the grants those jobs need, and the join runs
-with all of them: the stanza adds the coordinator's listener to them and takes nothing away.
+shared with other CI jobs, such as `tag:ci` (the tag of hostkeeper's own callers), keeps the
+grants those jobs need, and the join runs with all of them: the stanza, with `tag:ci` in place of
+`tag:hk-ci`, adds the coordinator's listener to them and takes nothing away.
 
 `release.yml`'s `channel` job, which reads the release channel before this repository's own call
 of the workflow ([Deploying hostkeeper from GitHub Actions](github-actions.md)), does not join the
