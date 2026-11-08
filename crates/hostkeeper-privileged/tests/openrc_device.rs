@@ -10,8 +10,9 @@
 //!   enables its init script in the default runlevel, and `rc-service hostkeeper start` returns
 //!   once the daemon is ready (its ready file holds the pid supervise-daemon runs); the daemon is
 //!   the packaged binary's seed of the binary directory, exec'd from `current`, its admin socket
-//!   answers; killed, supervise-daemon starts it again; stopped, it is gone; and a reboot of the
-//!   container starts it from the runlevel;
+//!   answers; killed, supervise-daemon starts it again; stopped, it is gone; a reboot of the
+//!   container starts it from the runlevel; and `apk del` takes it out of the runlevel and its
+//!   files away, and stops nothing;
 //! - a daemon whose config does not load makes `rc-service hostkeeper start` return, with the
 //!   error said, rather than wait for good, and once the config is fixed the daemon supervise-daemon
 //!   keeps starting becomes ready with no command;
@@ -191,19 +192,17 @@ fn place_config(host: &Alpine, config: &str, mode: u32) {
 
 /// Catches an Alpine package that does not install, does not enable its service, or whose start
 /// returns before the daemon is ready (or never); a daemon that is not the packaged binary's seed
-/// exec'd from `current`; a supervisor that does not restart it, or a stop that leaves it; and a
-/// service that a reboot does not start.
+/// exec'd from `current`; a supervisor that does not restart it, or a stop that leaves it; a
+/// service that a reboot does not start; and a removal that fails, leaves the service in the
+/// runlevel, or stops the running daemon.
 #[test]
 fn the_alpine_package_installs_and_runs_the_daemon_under_openrc() {
     let host = Alpine::boot("install");
     let apk = build_apk(host.base());
     install(&host, &apk, CONFIG);
-    let enabled = host.exec_ok(&["rc-update", "show", "default"]);
     assert!(
-        enabled
-            .lines()
-            .any(|line| line.split('|').next().map(str::trim) == Some(SERVICE)),
-        "the package enables the service in the default runlevel:\n{enabled}"
+        in_default_runlevel(&host),
+        "the package enables the service in the default runlevel"
     );
 
     let started = host.exec(&["rc-service", SERVICE, "start"]);
@@ -248,7 +247,41 @@ fn the_alpine_package_installs_and_runs_the_daemon_under_openrc() {
     wait("the default runlevel starts the daemon at boot", || {
         host.status() == Some(0) && host.ready().is_some()
     });
-    host.runs(&exe, None);
+    let booted = host.runs(&exe, None);
+
+    // Removed, the package takes the service out of the default runlevel (its pre-remove) and
+    // its files away, and stops nothing: the daemon runs on from its binary directory, as the
+    // deb's and the rpm's removal leave a running daemon.
+    host.exec_ok(&["apk", "del", "--no-network", "hostkeeper"]);
+    assert!(
+        !in_default_runlevel(&host),
+        "the removal takes the service out of the default runlevel"
+    );
+    assert!(
+        !host
+            .exec(&["test", "-e", "/etc/init.d/hostkeeper"])
+            .status
+            .success()
+    );
+    assert!(
+        !host
+            .exec(&["test", "-e", "/usr/bin/hostkeeper"])
+            .status
+            .success()
+    );
+    assert_eq!(
+        host.exe_of(booted).as_deref(),
+        Some(exe.as_str()),
+        "the removal stops nothing"
+    );
+}
+
+/// Whether the service is in the default runlevel, as `rc-update show default` lists it.
+fn in_default_runlevel(host: &Alpine) -> bool {
+    let shown = host.exec_ok(&["rc-update", "show", "default"]);
+    shown
+        .lines()
+        .any(|line| line.split('|').next().map(str::trim) == Some(SERVICE))
 }
 
 /// Catches a start that waits for good on a daemon that cannot become ready (the runlevel, and

@@ -84,7 +84,7 @@ pub type Layer = (
 /// packet with its packet crate; the `mdm` package's certificate-unit test loads that package's
 /// units and drop-ins (`hostkeeper-mdm-core`) into the host's systemd. The binary's tests run
 /// the macOS pkg's postinstall (`hostkeeper-launchd`) against the binary.
-pub const LAYERS: [Layer; 31] = [
+pub const LAYERS: [Layer; 32] = [
     (BINARY, &[DAEMON], &[LAUNCHD]),
     (CI, &[PROTO], &[]),
     (CONFIG, &[], &[]),
