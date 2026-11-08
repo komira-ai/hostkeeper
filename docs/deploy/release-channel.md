@@ -123,11 +123,12 @@ workflow      = ".github/workflows/artifacts.yml"
 refs          = ["refs/heads/main"]
 hosted_runner = true
 
-# js-agent: a service of jobscheduler, whose release.yml builds, signs and publishes it.
+# js-agent: a service of jobscheduler, whose release.yml builds and publishes it and signs it
+# through the artifacts.yml it calls.
 [[service]]
 name          = "js-agent"
 repository    = "komira-ai/jobscheduler"
-workflow      = ".github/workflows/release.yml"
+workflow      = ".github/workflows/artifacts.yml"
 refs          = ["refs/heads/main"]
 hosted_runner = true
 ```
@@ -179,7 +180,7 @@ For each release, oldest version first:
    hosted runner when `hosted_runner` is true. A version with a package not so signed is refused,
    naming the service, the signer it requires and what each attestation said, for example
    `not signed as the trust list requires of js-agent, by
-   komira-ai/jobscheduler/.github/workflows/release.yml on refs/heads/main:
+   komira-ai/jobscheduler/.github/workflows/artifacts.yml on refs/heads/main:
    js-agent-0.1.176-linux-x86_64.tar.zst (online): signed by
    komira-ai/jobscheduler/.github/workflows/ci.yml, not ...`. The release's other versions go on.
 4. It stages each verified version with `channel-stage`, which requires a package for every
