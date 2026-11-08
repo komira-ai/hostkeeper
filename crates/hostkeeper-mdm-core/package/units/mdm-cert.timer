@@ -1,0 +1,12 @@
+# mdm-cert.timer: runs mdm-cert.service twice a day. A unit of the mdm package,
+# linked by hostkeeper from the package's current version.
+[Unit]
+Description=mdm TLS certificate renewal, twice a day
+
+[Timer]
+OnCalendar=*-*-* 04,16:23:00
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
