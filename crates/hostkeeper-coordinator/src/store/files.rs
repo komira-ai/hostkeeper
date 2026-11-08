@@ -1,5 +1,7 @@
 //! The files of today behind the [`Backend`]: each part of a commit replaces its file whole, as
-//! its store always did (`desired.json` by [`crate::desired`], the ops file and its halts file by
+//! its store always did (`desired.json` by [`crate::desired`], and before it, when a release
+//! changed, the releases file beside it, `<desired.json>.releases`, by [`crate::releases`]; the
+//! ops file and its halts file by
 //! [`crate::ops_file`], the verdicts by [`crate::verdict_file`]), and the audit lines of a commit
 //! are appended to the audit file ([`crate::audit_file`]) before the ops file is written, so a
 //! commit whose line cannot be appended writes nothing of the ops state.
@@ -23,14 +25,18 @@ use crate::audit_file::{self, Appender, AuditLine, AuditLog, Logged, Query, Rota
 use crate::desired::{self, StoreError, SyncDir, io_at};
 use crate::jti_file::{JtiError, JtiFile};
 use crate::ops::{OpsError, OpsState};
+use crate::releases;
 use crate::verdict_file::{self, VerdictsError};
 
 /// What puts an operations state into the ops file and its halts file.
 pub(crate) type OpsWriter = Box<dyn Fn(&OpsState) -> Result<(), OpsError> + Send + Sync>;
 
-/// The desired-state file.
+/// The desired-state file, and the releases file beside it.
 struct DesiredFile {
     path: PathBuf,
+    /// The releases file ([`releases::releases_path`]): written whole, before the state file,
+    /// when a commit changes a release. An earlier build never reads it.
+    releases: PathBuf,
     /// The legacy service: the one whose state alone is written as the single state.
     legacy: Option<String>,
     /// Syncs the directory of the file after a rename.
@@ -70,6 +76,7 @@ impl Files {
     pub(crate) fn with_desired(mut self, path: &Path, legacy: Option<&str>) -> Self {
         self.desired = Some(DesiredFile {
             path: path.to_owned(),
+            releases: releases::releases_path(path),
             legacy: legacy.map(str::to_owned),
             sync_dir: desired::sync_dir,
         });
@@ -140,23 +147,30 @@ impl Files {
         Ok(self)
     }
 
-    /// The desired state the file holds; none without one.
+    /// The desired state the file holds, with the releases of the releases file; none without
+    /// one, and no releases without the releases file.
     ///
     /// # Errors
-    /// [`StoreError`]: the file exists and cannot be read, or holds no desired state.
+    /// [`StoreError`]: a file exists and cannot be read, or holds no desired state or no
+    /// releases.
     pub(crate) fn load_desired(&self) -> Result<desired::Held, StoreError> {
         let Some(file) = &self.desired else {
             return Ok(desired::Held::default());
         };
-        match read_if_any(&file.path).map_err(io_at(&file.path))? {
-            Some(bytes) => desired::parse_file(&bytes, file.legacy.as_deref()).map_err(|source| {
-                StoreError::Invalid {
-                    path: file.path.clone(),
-                    source,
-                }
-            }),
-            None => Ok(desired::Held::default()),
+        let invalid = |path: &Path| {
+            let path = path.to_owned();
+            move |source| StoreError::Invalid { path, source }
+        };
+        let mut held = match read_if_any(&file.path).map_err(io_at(&file.path))? {
+            Some(bytes) => {
+                desired::parse_file(&bytes, file.legacy.as_deref()).map_err(invalid(&file.path))?
+            }
+            None => desired::Held::default(),
+        };
+        if let Some(bytes) = read_if_any(&file.releases).map_err(io_at(&file.releases))? {
+            held.releases = releases::parse_file(&bytes).map_err(invalid(&file.releases))?;
         }
+        Ok(held)
     }
 
     /// The operations state the ops file holds, joined with its halts file once a staged halts
@@ -196,18 +210,33 @@ impl Files {
         self.jti.as_ref().map(JtiFile::load).unwrap_or_default()
     }
 
-    fn write_desired(&self, held: &desired::Held) -> Result<(), BackendError> {
+    /// Writes the state `held` over `before`: the releases file first when a release changed,
+    /// so a state file never names a version whose release is not written, then the state file.
+    fn write_desired(
+        &self,
+        before: &desired::Held,
+        held: &desired::Held,
+    ) -> Result<(), BackendError> {
         let Some(file) = &self.desired else {
             return Ok(());
         };
+        // A releases file in place whose directory was not synced is followed by the state
+        // file all the same, and the commit answers it unsynced: both files are in place.
+        let mut releases_synced = Ok(());
+        if held.releases != before.releases {
+            let text = releases::encode_file(&held.releases)
+                .map_err(io::Error::from)
+                .map_err(io_at(&file.releases))?;
+            match desired::write_whole_syncing(&file.releases, &text, file.sync_dir) {
+                Err(unsynced @ StoreError::NotSynced { .. }) => releases_synced = Err(unsynced),
+                written => written?,
+            }
+        }
         let text = desired::encode(held, file.legacy.as_deref())
             .map_err(io::Error::from)
             .map_err(io_at(&file.path))?;
-        Ok(desired::write_whole_syncing(
-            &file.path,
-            &text,
-            file.sync_dir,
-        )?)
+        desired::write_whole_syncing(&file.path, &text, file.sync_dir)?;
+        Ok(releases_synced?)
     }
 
     fn write_ops(&self, state: &OpsState, lines: &[AuditLine]) -> Result<(), BackendError> {
@@ -250,7 +279,7 @@ impl Backend for Files {
     fn commit(&self, change: &Commit<'_>) -> Result<(), BackendError> {
         if let Some(part) = change.desired {
             if change.desired_alone() {
-                return self.write_desired(part.1);
+                return self.write_desired(part.0, part.1);
             }
             return in_turn(self, self, part, change);
         }

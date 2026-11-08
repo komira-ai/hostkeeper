@@ -10,7 +10,8 @@
 //! - `load_gives_back`: a load gives back what was committed, every list in its order; an entry
 //!   at its default may come back as absent ([`normal`]), which the code reads the same. A state's
 //!   audit ring is the entries of the lines committed with it, as a store keeps it, which a
-//!   backend may give back from the lines it holds.
+//!   backend may give back from the lines it holds. The desired state holds a release (targets
+//!   and an index digest), given back equal.
 //! - `failed_keeps`: a commit of one part that fails leaves that part as it was.
 //! - `numbering_continues`: a backend started again holds every audit line, in order, and its
 //!   newest number ([`Backend::last_seq`]), so a store numbers on from it.
@@ -152,6 +153,43 @@ pub(crate) fn desired_at(at: &str, fill: char) -> desired::Held {
     held
 }
 
+/// A desired state of `kbf` at `at` that also holds the release of that version: two platforms,
+/// the first with two entries, one with a release index digest.
+pub(crate) fn desired_with_release(at: &str, fill: char) -> desired::Held {
+    use hostkeeper_proto::hostkeeper::release::v1::{Location, Target, TargetList};
+    let entry = |installer: &str, c: char| Target {
+        installer: installer.to_owned(),
+        locations: vec![Location {
+            store: "github".to_owned(),
+            locator: format!("example-org/kbf/releases/download/v{at}/kbf-{installer}"),
+        }],
+        digest: c.to_string().repeat(64),
+        bytes: 4096,
+        ..Target::default()
+    };
+    let targets = std::collections::BTreeMap::from([
+        (
+            "linux-x86_64".to_owned(),
+            TargetList {
+                entries: vec![entry("tarball", fill), entry("deb", 'd')],
+            },
+        ),
+        (
+            "macos-arm64".to_owned(),
+            TargetList {
+                entries: vec![entry("tarball", 'e')],
+            },
+        ),
+    ]);
+    let index = Digest::parse(&"9".repeat(64)).expect("a digest");
+    let mut held = desired_at(at, fill);
+    held.releases.entry("kbf".to_owned()).or_default().insert(
+        at.to_owned(),
+        Arc::new(crate::releases::Release::new(targets, Some(index))),
+    );
+    held
+}
+
 /// Verdicts with a standing one and two counted, out of host order.
 pub(crate) fn rich_verdicts() -> verdict_file::Held {
     let with_order = |reason: &str| {
@@ -260,7 +298,11 @@ fn all_or_nothing(subject: &dyn Subject) -> Outcome {
 
 fn load_gives_back(subject: &dyn Subject) -> Outcome {
     let live = subject.live();
-    let (desired, mut ops, verdicts) = (desired_at("2.0", 'c'), rich_ops(), rich_verdicts());
+    let (desired, mut ops, verdicts) = (
+        desired_with_release("2.0", 'c'),
+        rich_ops(),
+        rich_verdicts(),
+    );
     let audit = lines(1, 3);
     ops.audit = ring(&audit);
     live.commit(&Commit {
@@ -278,6 +320,9 @@ fn load_gives_back(subject: &dyn Subject) -> Outcome {
     let back = loaded(&subject.restarted())?;
     check(back.desired == desired, || {
         format!("the desired state came back as {:?}", back.desired)
+    })?;
+    check(back.desired.releases == desired.releases, || {
+        format!("the releases came back as {:?}", back.desired.releases)
     })?;
     check(normal(back.ops.clone()) == normal(ops), || {
         format!("the operations state came back as {:?}", back.ops)
@@ -579,6 +624,8 @@ enum Flaw {
     KeepsFailed,
     /// A load gives the exclusions back in the other order.
     DropsOrder,
+    /// A load gives no release back.
+    DropsReleases,
     /// It says it holds no audit line.
     ForgetsNumbers,
     /// A page asked for the newest lines answers the oldest.
@@ -599,6 +646,9 @@ impl Backend for Flawed {
         let mut loaded = self.inner.load()?;
         if self.flaw == Flaw::DropsOrder {
             loaded.ops.excluded.reverse();
+        }
+        if self.flaw == Flaw::DropsReleases {
+            loaded.desired.releases.clear();
         }
         Ok(loaded)
     }
@@ -696,6 +746,7 @@ fn the_suite_fails_against_a_backend_that_breaks_each_clause() {
     let cases = [
         (Flaw::WritesHalf, "all_or_nothing"),
         (Flaw::DropsOrder, "load_gives_back"),
+        (Flaw::DropsReleases, "load_gives_back"),
         (Flaw::KeepsFailed, "failed_keeps"),
         (Flaw::ForgetsNumbers, "numbering_continues"),
         (Flaw::IgnoresNewest, "audit_pages"),

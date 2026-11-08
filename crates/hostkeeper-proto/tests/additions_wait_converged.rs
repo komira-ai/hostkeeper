@@ -39,7 +39,8 @@ fn methods(pool: &DescriptorPool, service: &str) -> Vec<(String, String, String)
 
 /// Catches: the wait replacing or retyping a method the release before has, or the release
 /// before already knowing a method, message or enum of that name (the addition would then re-mean
-/// it): the current `Releases` is the baseline's methods, in order, then `WaitConverged` alone.
+/// it): the current `Releases` is the baseline's methods, in order, then `WaitConverged`, then
+/// only `GetRelease`, added after it (`additions_releases.rs`).
 #[test]
 fn the_wait_is_a_new_method_of_releases_after_every_method_the_release_before_has() {
     let older = baseline_pool();
@@ -51,8 +52,14 @@ fn the_wait_is_a_new_method_of_releases_after_every_method_the_release_before_ha
         "hostkeeper.operator.v1.WaitConvergedRequest".to_owned(),
         "hostkeeper.operator.v1.WaitConvergedResponse".to_owned(),
     );
+    let get_release = (
+        "GetRelease".to_owned(),
+        "hostkeeper.operator.v1.GetReleaseRequest".to_owned(),
+        "hostkeeper.operator.v1.GetReleaseResponse".to_owned(),
+    );
     let mut want = before.clone();
     want.push(wait);
+    want.push(get_release);
     assert_eq!(now, want);
     assert!(before.iter().all(|(name, _, _)| name != "WaitConverged"));
     for message in [

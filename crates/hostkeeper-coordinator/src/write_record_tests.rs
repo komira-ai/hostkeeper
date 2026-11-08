@@ -190,7 +190,7 @@ fn an_accepted_write_raises_the_generation_even_for_an_identical_set() {
         write_id: Some(id("ci-7")),
     };
     let record = store
-        .record_as("web", state("1.0", 1), keep_all, &ask)
+        .record_as("web", state("1.0", 1), keep_all, &ask, None)
         .expect("taken");
     let expected = WriteRecord {
         generation: 3,
@@ -224,7 +224,7 @@ fn a_stale_if_generation_is_refused_generation_conflict_and_changes_nothing() {
         if_generation: Some(0),
         write_id: Some(id("late")),
     };
-    let refused = store.record_as("web", state("2.0", 1), keep_all, &stale);
+    let refused = store.record_as("web", state("2.0", 1), keep_all, &stale, None);
     assert!(matches!(
         refused,
         Err(WriteError::Conflict { asked: 0, now: 1 })
@@ -243,7 +243,7 @@ fn a_stale_if_generation_is_refused_generation_conflict_and_changes_nothing() {
         if_generation: Some(1),
         write_id: None,
     };
-    let failed = store.record_as("web", state("2.0", 1), keep_all, &fresh);
+    let failed = store.record_as("web", state("2.0", 1), keep_all, &fresh, None);
     assert!(matches!(failed, Err(WriteError::Store(_))));
     assert_eq!(
         (store.all(), store.write_record("web"), fake.commits()),
@@ -279,10 +279,10 @@ fn the_file_store_keeps_no_record_and_refuses_what_needs_one() {
             write_id: Some(id("w")),
         },
     ] {
-        let refused = store.record_as("web", state("2.0", 1), keep_all, &ask);
+        let refused = store.record_as("web", state("2.0", 1), keep_all, &ask, None);
         assert!(matches!(refused, Err(WriteError::Unrecorded)));
     }
-    let plain = store.record_as("web", state("1.0", 1), keep_all, &WriteAsk::default());
+    let plain = store.record_as("web", state("1.0", 1), keep_all, &WriteAsk::default(), None);
     assert_eq!(plain.expect("taken"), None);
     assert_eq!(std::fs::read(&path).expect("the file"), text);
     assert_eq!(store.all()["web"].version, version("1.0"));

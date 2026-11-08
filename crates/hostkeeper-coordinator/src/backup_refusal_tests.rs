@@ -473,6 +473,7 @@ fn a_backup_copies_the_store_files_alone_and_names_what_it_passed_over() {
     assert_eq!(
         absent,
         [
+            format!("{state}.releases"),
             format!("{state}.verdicts"),
             ops.clone(),
             format!("{ops}.audit"),

@@ -25,6 +25,7 @@ mod release_index;
 mod report;
 mod rollouts;
 mod support;
+mod targets;
 mod trusted_root;
 mod waits;
 mod wires;
