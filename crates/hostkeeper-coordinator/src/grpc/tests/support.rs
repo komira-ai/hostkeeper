@@ -43,6 +43,8 @@ pub const HEARTBEAT: &str = "/hostkeeper.agent.v1.Coordinator/Heartbeat";
 pub const SET_DESIRED: &str = "/hostkeeper.operator.v1.Releases/SetDesired";
 /// The path of `Releases.Converge`, which takes CI's token or the operator's.
 pub const CONVERGE: &str = "/hostkeeper.operator.v1.Releases/Converge";
+/// The path of `Releases.WaitConverged`, which takes CI's token or the operator's.
+pub const WAIT_CONVERGED: &str = "/hostkeeper.operator.v1.Releases/WaitConverged";
 
 /// A coordinator the tests call through the router, and the rig that keeps its directory and
 /// its clock alive.
