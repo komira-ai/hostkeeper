@@ -311,18 +311,17 @@ message ClearRecordResponse { string order_id = 1; }
   the feature is never sent it. This bullet and the audit line below are **Built**
   (`crates/hostkeeper-coordinator/src/clear_record.rs`): the order is sent once and takes no slot, as `Hosts.Abort`'s.
 - The daemon runs exactly what the admin socket's `ClearRecord` runs today
-  (`crates/hostkeeper-daemon/src/verbs/clear_record.rs`, **Built**): under the service's lock without waiting
-  (`busy`), it renames `step-record.json` to `step-record.json.corrupt` only when the record does not read; an absent
-  record, one that reads and one of a newer schema are each `record_reads`; a store failure is `store_failed`. The
-  verdict comes back in the heartbeat like any order's. Today an order carrying the verb is refused `forbidden`; that
-  refusal goes. The executor dispatches `clear-record` before it reads the service's record, as the admin verb does, so
-  a host whose record does not read still takes it; D1 proves that with a corrupt record in place. This bullet is
-  **Built** (D1): the daemon announces `clear-record-v1` (`crates/hostkeeper-link/src/beat.rs`) and the refusal
-  `forbidden` is gone. A verdict that cleared the record is `succeeded` with the reason `record_cleared`; every verdict
-  names the version the service runs, as an `uninstall`'s does. The heartbeat loop runs the order one at a time like
-  the others (`crates/hostkeeper-link/src/heartbeater.rs`), but it is no update: a deferral does not hold it back and
-  its verdict ends none, its service is not reported `updating` while it runs, and a service the host does not list
-  is not run.
+  (`crates/hostkeeper-daemon/src/verbs/clear_record.rs`, **Built**): under the service's lock without waiting (`busy`),
+  it renames `step-record.json` to `step-record.json.corrupt` only when the record does not read; an absent record, one
+  that reads and one of a newer schema are each `record_reads`; a store failure is `store_failed`. The verdict comes
+  back in the heartbeat like any order's. Before D1 an order carrying the verb was refused `forbidden`; that refusal is
+  gone. The executor dispatches `clear-record` before it reads the service's record, as the admin verb does, so a host
+  whose record does not read still takes it; D1 proves that with a corrupt record in place. This bullet is **Built**
+  (D1): the daemon announces `clear-record-v1` (`crates/hostkeeper-link/src/beat.rs`). A verdict that cleared the record
+  is `succeeded` with the reason `record_cleared`; every verdict names the version the service runs, as an `uninstall`'s
+  does. The heartbeat loop runs the order one at a time like the others (`crates/hostkeeper-link/src/heartbeater.rs`),
+  but it is no update: a deferral does not hold it back and its verdict ends none, its service is not reported
+  `updating` while it runs, and a service the host does not list is not run.
 - **A host the coordinator cannot reach.** Root stops the daemon, which ends the running step. If the record must go
   before the link is back, root renames it by hand, `step-record.json` to `step-record.json.corrupt` in the service's
   state directory: that rename is the whole of what the verb does. The runbook of K3 says so.
