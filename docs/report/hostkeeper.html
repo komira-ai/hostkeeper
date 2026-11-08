@@ -801,7 +801,8 @@ unary method of that package in the embedded descriptors, and the call goes to t
 service as gRPC, through the same credential check. So no method exists on one surface and not the
 other. A body is at most
 <span data-cell="c-operator-bytes" data-source="crates/hostkeeper-coordinator/src/http.rs" data-item="MAX_OPERATOR_BYTES">4096</span>
-bytes. A test holds <a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/gateway.md">docs/gateway.md</a>&rsquo;s status table equal to the code&rsquo;s.</p>
+bytes, but a <code>Releases.SetDesired</code> body, which may carry a release&rsquo;s targets, at most
+<span data-cell="c-set-desired-bytes" data-source="crates/hostkeeper-coordinator/src/http.rs" data-item="MAX_SET_DESIRED_BYTES">256 KiB</span>. A test holds <a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/gateway.md">docs/gateway.md</a>&rsquo;s status table equal to the code&rsquo;s.</p>
 <p><strong>Every declared method has a handler.</strong> The <code>PENDING</code> list in
 <a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-coordinator/src/grpc/mod.rs">crates/hostkeeper-coordinator/src/grpc/mod.rs</a>,
 of the methods that answer <code>UNIMPLEMENTED</code> until their handler lands, is empty, and a test fails if any
@@ -1002,9 +1003,10 @@ the newest entries by reading back from the end of the newest file. It filters b
 service and host, at most
 <span data-cell="c-audit-page" data-source="crates/hostkeeper-coordinator/src/operator.rs" data-item="MAX_AUDIT_PAGE">256</span>
 entries a page (<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-coordinator/src/audit_file.rs">crates/hostkeeper-coordinator/src/audit_file.rs</a>).
-A <code>SetDesired</code> by CI writes no audit entry of its own (only the force it ends, <code>force_ended</code>, and
-the halt it lifts, <code>lift_halt</code>, are audited as <code>ci</code>); one made with an operator&rsquo;s token is a
-<code>set_desired</code> entry under the token&rsquo;s name
+A <code>SetDesired</code> by CI without targets writes no audit entry of its own (only the force it ends,
+<code>force_ended</code>, and the halt it lifts, <code>lift_halt</code>, are audited as <code>ci</code>); one with targets
+is a <code>set_desired</code> entry as <code>ci</code>, naming each entry&rsquo;s digest and its manifest&rsquo;s; one
+made with an operator&rsquo;s token is a <code>set_desired</code> entry under the token&rsquo;s name
 (<code>set_desired_by</code> in <a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-coordinator/src/service_ci.rs">crates/hostkeeper-coordinator/src/service_ci.rs</a>).
 An entry that <code>Audit.List</code> answers carries its time and the name it was made under; the entry in a
 change&rsquo;s own answer has the name and no time. Enrollment&rsquo;s own changes are audited under

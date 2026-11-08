@@ -230,20 +230,27 @@ impl Registry {
     pub fn record(&mut self, version: &Version, release: Release, keep: impl Fn(&Version) -> bool) {
         self.0.insert(version.as_str().to_owned(), release);
         while self.0.len() > MAX_REGISTRY {
-            let oldest = self
-                .0
-                .keys()
-                .filter_map(|text| Version::parse(text).ok())
-                .filter(|v| v != version && !keep(v))
-                .min_by(|a, b| {
-                    a.release_numbers()
-                        .cmp(&b.release_numbers())
-                        .then_with(|| a.as_str().cmp(b.as_str()))
-                });
-            let Some(oldest) = oldest else {
+            let Some(oldest) = oldest_droppable(self.0.keys(), version, &keep) else {
                 return;
             };
             self.0.remove(oldest.as_str());
         }
     }
+}
+
+/// Of the versions `keys`, the oldest that is not `version` and that `keep` does not keep: the
+/// lowest release numbers, then the lowest text. None when every other one is kept. The registry
+/// and the releases ([`crate::releases::record`]) drop a version past their cap by this rule.
+pub(crate) fn oldest_droppable<'a>(
+    keys: impl Iterator<Item = &'a String>,
+    version: &Version,
+    keep: &dyn Fn(&Version) -> bool,
+) -> Option<Version> {
+    keys.filter_map(|text| Version::parse(text).ok())
+        .filter(|v| v != version && !keep(v))
+        .min_by(|a, b| {
+            a.release_numbers()
+                .cmp(&b.release_numbers())
+                .then_with(|| a.as_str().cmp(b.as_str()))
+        })
 }

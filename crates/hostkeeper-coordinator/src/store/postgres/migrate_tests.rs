@@ -4,7 +4,7 @@ use super::*;
 
 /// The SHA-256 of each shipped migration file, in hex. A shipped migration is never edited: a
 /// change is a migration of its own, so these only grow.
-const PINNED: [(i32, &str, &str); 3] = [
+const PINNED: [(i32, &str, &str); 4] = [
     (
         1,
         "state",
@@ -19,6 +19,11 @@ const PINNED: [(i32, &str, &str); 3] = [
         3,
         "generations",
         "f08728227dac47c098dc32e55d8d40e0727379678205830ef1b5729a6882ac23",
+    ),
+    (
+        4,
+        "releases",
+        "ac5c3d331b404227ee7de2955e1d559b1c2a7644744e91418d7d6e5f357bc86a",
     ),
 ];
 
@@ -40,9 +45,10 @@ fn what(statement: &str) -> String {
 }
 
 /// Proves: the migrations this build ships are the ones that were released: their numbers and
-/// names are exactly [(1, "state"), (2, "first_serving"), (3, "generations")], each file's
-/// SHA-256 is the pinned one, and every one passes the header rule, the lint and the numbering,
-/// and says older releases must not run on it.
+/// names are exactly [(1, "state"), (2, "first_serving"), (3, "generations"), (4, "releases")],
+/// each file's SHA-256 is the pinned one, and every one passes the header rule, the lint and the
+/// numbering; the first three say older releases must not run on them, and `releases` that they
+/// may (an older release never reads the table).
 ///
 /// Catches: an edit to a shipped migration (a database that ran the old text would differ from
 /// one that runs the new), and a shipped file the runner would refuse at every start.
@@ -51,7 +57,12 @@ fn the_shipped_migrations_are_unchanged() {
     let listed: Vec<(i32, &str)> = SHIPPED.iter().map(|(n, name, _)| (*n, *name)).collect();
     assert_eq!(
         listed,
-        vec![(1, "state"), (2, "first_serving"), (3, "generations")]
+        vec![
+            (1, "state"),
+            (2, "first_serving"),
+            (3, "generations"),
+            (4, "releases")
+        ]
     );
     let hashes: Vec<(i32, &str, String)> = SHIPPED
         .iter()
@@ -71,6 +82,7 @@ fn the_shipped_migrations_are_unchanged() {
             (1, "state", OlderReleases::Refuse),
             (2, "first_serving", OlderReleases::Refuse),
             (3, "generations", OlderReleases::Refuse),
+            (4, "releases", OlderReleases::MayRun),
         ]
     );
 }

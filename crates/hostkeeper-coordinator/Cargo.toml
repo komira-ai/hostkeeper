@@ -44,6 +44,9 @@ hostkeeper-oidc = { path = "../hostkeeper-oidc" }
 # The messages and refusals of the operator's calls, the orders a typed heartbeat answer
 # carries, and the messages of `Enroll`, `Poll` and `Renew`.
 hostkeeper-proto = { path = "../hostkeeper-proto" }
+# The rules of a release a set with targets is judged by (docs/design/packages.md, section 3.4),
+# the same code the daemon judges an order's entry by.
+hostkeeper-release = { path = "../hostkeeper-release" }
 hostkeeper-tls = { path = "../hostkeeper-tls" }
 hostkeeper-wire = { path = "../hostkeeper-wire" }
 # The PEM of the CA bundle and of the server certificate file.

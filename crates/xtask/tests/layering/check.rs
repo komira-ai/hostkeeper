@@ -89,7 +89,9 @@ pub const LAYERS: [Layer; 31] = [
     (CONFIG, &[], &[]),
     (
         COORDINATOR,
-        &[CONFIG, ENROLLMENT, MDM_GATE, OIDC, PROTO, TLS, WIRE],
+        &[
+            CONFIG, ENROLLMENT, MDM_GATE, OIDC, PROTO, RELEASE, TLS, WIRE,
+        ],
         &[OIDC],
     ),
     (

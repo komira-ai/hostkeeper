@@ -54,6 +54,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // A release's maps (a manifest's params) are ordered, so a manifest encodes to the same
         // bytes on every run: the audit entry of a set records the SHA-256 of that encoding.
         .btree_map(".hostkeeper.release.v1")
+        // The targets of a set and of a release are ordered by platform too, so the coordinator
+        // judges, audits and answers them in the order of their spellings.
+        .btree_map(".hostkeeper.operator.v1.SetDesiredRequest.targets")
+        .btree_map(".hostkeeper.operator.v1.GetReleaseResponse.targets")
         .compile_fds(compiler.file_descriptor_set())?;
 
     println!("cargo:rerun-if-changed=proto");
