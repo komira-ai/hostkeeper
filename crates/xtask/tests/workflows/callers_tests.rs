@@ -3,7 +3,7 @@
 //! it and reading the exact problems the lint reports.
 
 use super::callers::{
-    CALLERS, CLIENT_COMMIT, CLIENT_RELEASE, HELLO_FILE, job_uses, names_set_desired,
+    CALLERS, CLIENT_COMMIT, CLIENT_RELEASE, HELLO_FILE, TAILNET_TAG, job_uses, names_set_desired,
 };
 use super::lint::{entries, entry, lint};
 use super::yaml;
@@ -41,6 +41,7 @@ jobs:
       release_index_digest: ${{ needs.release.outputs.release_index_digest }}
       hostkeeper_commit: <commit>
       hostkeeper_version: <release>
+      tailnet_tag: ${{ vars.HOSTKEEPER_TAILNET_TAG }}
   release:
     if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-24.04
@@ -318,6 +319,49 @@ fn a_caller_pinned_to_the_ci_client_before_hkctl_is_refused() {
     );
 }
 
+/// The pin of the CI client before it took `tailnet_tag`, as both callers had it: release
+/// v0.1.173.
+const PRE_TAG_COMMIT: &str = "4859b4800897f2468c0f2131455721edfc537217";
+
+#[test]
+fn a_caller_pinned_to_the_ci_client_before_the_tailnet_tag_is_refused() {
+    // Catches: a caller left on, or moved back to, v0.1.173, whose set-desired.yml declares no
+    // input `tailnet_tag`: GitHub refuses the call of a workflow with an input it does not
+    // declare, so the whole caller workflow fails to start.
+    let text = with_in(
+        &with_in(
+            &with_in(
+                &hello(),
+                &uses(),
+                &format!(
+                    "    uses: komira-ai/hostkeeper/.github/workflows/set-desired.yml@{PRE_TAG_COMMIT} # v0.1.173\n"
+                ),
+            ),
+            &format!("      hostkeeper_commit: {CLIENT_COMMIT}\n"),
+            &format!("      hostkeeper_commit: {PRE_TAG_COMMIT}\n"),
+        ),
+        &format!("      hostkeeper_version: {CLIENT_RELEASE}\n"),
+        "      hostkeeper_version: 0.1.173\n",
+    );
+    assert_eq!(
+        hello_problems(&text),
+        [
+            format!(
+                "job set-desired must pin set-desired.yml at the CI client's revision {CLIENT_COMMIT}, not `komira-ai/hostkeeper/.github/workflows/set-desired.yml@{PRE_TAG_COMMIT}`"
+            ),
+            format!(
+                "job set-desired must name the CI client's release `# v{CLIENT_RELEASE}` after its `uses:`, not `# v0.1.173`"
+            ),
+            format!(
+                "job set-desired must pass `hostkeeper_version: {CLIENT_RELEASE}`, the CI client's revision"
+            ),
+            format!(
+                "job set-desired must pass `hostkeeper_commit: {CLIENT_COMMIT}`, the CI client's revision"
+            ),
+        ]
+    );
+}
+
 #[test]
 fn a_caller_whose_pin_alone_is_another_commit_is_refused() {
     // Catches: the `uses:` line moved without its inputs, so that the revision of set-desired.yml
@@ -394,6 +438,80 @@ fn a_hostkeeper_version_other_than_the_client_release_is_refused() {
         "",
     ] {
         assert_hello(&from, to, &[&want]);
+    }
+}
+
+/// The `tailnet_tag` line of a caller that passes the repository variable.
+const TAG_LINE: &str = "      tailnet_tag: ${{ vars.HOSTKEEPER_TAILNET_TAG }}\n";
+
+/// The refusal of a caller that does not pass [`TAILNET_TAG`] as `tailnet_tag`.
+fn no_tag() -> String {
+    format!(
+        "job set-desired must pass `tailnet_tag: {TAILNET_TAG}`, the tag the tailnet's trust credential issues"
+    )
+}
+
+#[test]
+fn a_caller_that_joins_the_tailnet_without_the_tailnet_tag_is_refused() {
+    // Catches: a caller that joins with the CI client's default tag, `tag:hk-ci`, instead of the
+    // one the federation's trust credential issues, which Tailscale refuses at the join.
+    let join = "      join_tailnet: ${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID != '' }}\n      tailnet_client_id: ${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID }}\n";
+    assert_hello(TAG_LINE, join, &[&no_tag()]);
+    // The repository's own caller that joins, release.yml, with its `tailnet_tag` taken out.
+    let release = workflows()
+        .into_iter()
+        .find(|(file, _)| file == "release.yml")
+        .map(|(_, text)| text)
+        .expect("release.yml exists");
+    assert!(
+        release.contains("      join_tailnet: "),
+        "release.yml joins"
+    );
+    let text = with_in(&release, TAG_LINE, "");
+    assert_eq!(lint("release.yml", &text), [no_tag()]);
+}
+
+#[test]
+fn a_caller_that_passes_another_tailnet_tag_is_refused() {
+    // Catches: a tag written into the caller, a fallback to another tag when the variable is
+    // empty, another variable, or no tag at all on a caller that does not join (the CI client
+    // checks the tag whether or not it joins).
+    for to in [
+        "",
+        "      tailnet_tag: tag:ci\n",
+        "      tailnet_tag: tag:hk-ci\n",
+        "      tailnet_tag: ''\n",
+        "      tailnet_tag:\n",
+        "      tailnet_tag: ${{ vars.HOSTKEEPER_TAILNET_TAG || 'tag:hk-ci' }}\n",
+        "      tailnet_tag: ${{ vars.HOSTKEEPER_TAILNET_TAG || 'tag:ci' }}\n",
+        "      tailnet_tag: ${{ vars.TAILNET_TAG }}\n",
+        "      tailnet_tag: ${{ inputs.tailnet_tag }}\n",
+        "      tailnet_tag: ${{vars.HOSTKEEPER_TAILNET_TAG}}\n",
+        "      tailnet_tag:\n        - ${{ vars.HOSTKEEPER_TAILNET_TAG }}\n",
+        "      tailnet-tag: ${{ vars.HOSTKEEPER_TAILNET_TAG }}\n",
+    ] {
+        assert_hello(TAG_LINE, to, &[&no_tag()]);
+    }
+    // Quoted, it is the same value.
+    assert_hello(
+        TAG_LINE,
+        "      tailnet_tag: \"${{ vars.HOSTKEEPER_TAILNET_TAG }}\"\n",
+        &[],
+    );
+}
+
+#[test]
+fn the_callers_of_the_repository_pass_the_tailnet_tag_variable() {
+    // Catches: release.yml or hello-desired.yml that names its tag some other way than the one
+    // repository variable the deploy docs list.
+    assert_eq!(TAILNET_TAG, "${{ vars.HOSTKEEPER_TAILNET_TAG }}");
+    for c in CALLERS {
+        let text = workflows()
+            .into_iter()
+            .find(|(file, _)| file == c.file)
+            .map(|(_, text)| text)
+            .expect("every caller's file exists");
+        assert_eq!(text.matches(TAG_LINE).count(), 1, "{}", c.file);
     }
 }
 

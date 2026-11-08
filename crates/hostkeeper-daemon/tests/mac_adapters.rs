@@ -10,8 +10,9 @@ use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use clap::Parser;
 use hostkeeper_daemon::adapters::{Adapters, host_claims, host_managed};
-use hostkeeper_daemon::cli::{DEFAULT_ADMIN_SOCKET, UNWIRED, Unwired};
+use hostkeeper_daemon::cli::{Cli, Command, UNWIRED, Unwired};
 use hostkeeper_daemon::ipmi::DevIpmi;
 use hostkeeper_daemon::mac::{
     CODESIGN, HostIoreg, HostMacVerify, IOREG, NOT_SIGNED, QUARANTINE_ATTRIBUTE, TOOL_DEADLINE,
@@ -528,14 +529,16 @@ fn the_linux_adapters_are_the_systemd_set() {
     assert!(adapters.package_check.is_none());
 }
 
-/// Catches an admin socket default that is not the host platform's: the flag's default is where
-/// the platform keeps the socket (`/var/run/hostkeeper/admin.sock` on a Mac).
+/// Catches a run directory that is not the host platform's: the flags' settings name where the
+/// platform keeps its run directory (`/var/run` on a Mac), which the registration socket's
+/// directory is under.
 #[test]
-fn the_admin_socket_default_is_the_host_platforms() {
-    assert_eq!(
-        Path::new(DEFAULT_ADMIN_SOCKET),
-        Platform::host().admin_socket
-    );
+fn the_run_directory_of_the_settings_is_the_host_platforms() {
+    let flags = match Cli::parse_from(["hostkeeper", "daemon"]).command {
+        Command::Daemon(flags) => flags,
+        other => panic!("not the daemon: {other:?}"),
+    };
+    assert_eq!(flags.settings().run_dir, Platform::host().run_dir);
 }
 
 /// Catches a daemon built for Linux whose clock has no boot id, or one that is not the kernel's:

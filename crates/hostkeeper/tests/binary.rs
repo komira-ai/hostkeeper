@@ -90,6 +90,27 @@ fn ci_is_a_usage_error() {
     );
 }
 
+/// Proves: the real binary answers `hostkeeper admin` and `hostkeeper admin status` as usage
+/// errors: exit status 2, clap's unknown verb naming `admin` on stderr, and nothing on stdout.
+///
+/// Catches: an `admin` verb left in the binary, or one that still dials the daemon's socket.
+#[test]
+fn admin_is_a_usage_error() {
+    for args in [&["admin"][..], &["admin", "status"][..]] {
+        let out = Command::new(env!("CARGO_BIN_EXE_hostkeeper"))
+            .args(args)
+            .output()
+            .expect("run hostkeeper");
+        assert_eq!(out.status.code(), Some(2), "{args:?}: {out:?}");
+        assert!(out.stdout.is_empty(), "{args:?}: {out:?}");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.starts_with("error: unrecognized subcommand 'admin'\n"),
+            "{args:?}: {stderr}"
+        );
+    }
+}
+
 /// Catches a binary whose `--version` is not the release stamp: it prints `hostkeeper `, the
 /// crate version, and `+` with the first 12 digits of the build's commit when it has one, then
 /// exits 0.

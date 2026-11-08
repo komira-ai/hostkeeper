@@ -31,10 +31,6 @@ use hostkeeper_launchd::{DaemonJob, Label, Launchctl, PidInfo, daemon_plist};
 use hostkeeper_steps::Layout;
 
 use super::super::e2e::mac_host::{LAUNCHD_DIR, MacHost, launchctl};
-use super::super::e2e::wait_for;
-
-/// How many reads of the admin socket [`Host::start`] makes before it gives up.
-const STATUS_TRIES: u32 = 240;
 
 /// The daemon's own job.
 fn daemon_label() -> Label {
@@ -99,11 +95,11 @@ impl Host {
     }
 
     /// Stages `first` as version `version` of the binary directory, `current` naming it, puts the
-    /// daemon's plist where the pkg does, bootstraps it and waits until the daemon answers
-    /// `Status` on its admin socket.
+    /// daemon's plist where the pkg does, bootstraps it and waits until
+    /// launchd runs it and it has recorded the boot id ([`MacHost::wait_started`]).
     ///
     /// # Panics
-    /// The binary cannot be staged, the job cannot be loaded, or the daemon never answers.
+    /// The binary cannot be staged, the job cannot be loaded, or the daemon never starts.
     pub fn start(&self, first: &Path, version: &str) {
         let layout = Layout::new(&binary_dir(&self.root.state()));
         layout
@@ -130,6 +126,7 @@ impl Host {
             ("--config", path(self.root.config_path())),
             ("--state-dir", path(self.root.state())),
             ("--packages-dir", path(self.root.packages())),
+            // Accepted and ignored by this checkout's daemon; the older release binds it.
             ("--admin-socket", path(self.root.admin_socket())),
             ("--heartbeat-secs", "1".to_owned()),
         ] {
@@ -150,9 +147,7 @@ impl Host {
             daemon_label(),
             loaded.stderr_text()
         );
-        wait_for("the daemon answers Status", STATUS_TRIES, || {
-            self.root.status().is_ok()
-        });
+        self.root.wait_started(&daemon_label());
     }
 
     /// What the daemon job's process runs, while it has one.

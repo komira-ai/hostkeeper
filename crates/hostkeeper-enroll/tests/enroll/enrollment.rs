@@ -1,5 +1,5 @@
 //! What the enroller says of the host's enrollment (`Enroller::enrollment`), the view the
-//! daemon's admin `Status` reports: read from the pki directory as a step reads it.
+//! daemon's `Daemon::status` holds: read from the pki directory as a step reads it.
 
 use std::fs;
 

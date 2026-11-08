@@ -36,8 +36,7 @@ jaq-core = "3.1.2"
 jaq-json = "2.0.3"
 jaq-std = "3.0.4"
 # The coordinator's HTTP/1.1 and HTTP/2 server and the OIDC key fetch's client (hostkeeper-coordinator,
-# hostkeeper-oidc); members turn on the parts they use. hyper-util is also the connection the
-# tests of hostkeeper-daemon open to its admin server over an in-process pipe (`TokioIo`).
+# hostkeeper-oidc); members turn on the parts they use.
 http-body-util = "0.1.5"
 hyper = { version = "1.12.0", default-features = false }
 hyper-util = { version = "0.1.21", default-features = false }
@@ -142,21 +141,19 @@ time = { version = "0.3.45", default-features = false }
 # The `--params` file, the daemon config, the manifest and the coordinator's rollout and tokens
 # files are TOML.
 toml = { version = "1.1.8", default-features = false, features = ["display", "parse", "serde", "std"] }
-# The daemon's runtime: the admin socket's server (hostkeeper-daemon); the runtime of the
-# operator client of hostkeeper-testkit and of each call of the coordinator client of
-# hostkeeper-enroll; the coordinator's server and the OIDC key fetch (hostkeeper-coordinator,
+# The daemon's runtime (hostkeeper-daemon); the runtime of the operator client of
+# hostkeeper-testkit and of each call of the coordinator client of hostkeeper-enroll; the
+# coordinator's server and the OIDC key fetch (hostkeeper-coordinator,
 # hostkeeper-oidc, hostkeeper-tls). Members add the features they use.
 tokio = { version = "1.54.1", default-features = false }
 # The TLS of the coordinator's listeners and of the OIDC key fetch, on rustls with ring.
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring"] }
-# The admin socket's listener as a stream of connections (hostkeeper-daemon), and the loopback
-# listener of the gRPC tests of hostkeeper-enroll and hostkeeper-testkit.
+# The loopback listener of the gRPC tests of hostkeeper-enroll and hostkeeper-testkit.
 tokio-stream = { version = "0.1.19", default-features = false }
 # gRPC: the service traits and clients hostkeeper-proto generates. Code generation only here: no
 # transport and no TLS. hostkeeper-coordinator calls the generated servers in process under its
 # own hyper listeners. hostkeeper-link adds `channel` for the daemon's gRPC heartbeat, over a TLS
-# stream it makes itself. hostkeeper-daemon adds `server` for its admin socket (and `channel` in its
-# tests, for a client). hostkeeper-enroll and hostkeeper-testkit add `channel` and `tls-ring` for
+# stream it makes itself. hostkeeper-enroll and hostkeeper-testkit add `channel` and `tls-ring` for
 # their clients (and `server` in their tests, for a loopback server).
 tonic = { version = "0.14.6", default-features = false, features = ["codegen"] }
 tonic-prost = "0.14.6"

@@ -104,6 +104,29 @@ fn a_clear_record_order_refuses_a_record_that_reads_fine() {
     }
 }
 
+/// Catches a service name that breaks its rule reaching the state directory: the
+/// `clear_record` order and the `abort` order of `a b` are each refused `invalid_order`, and the
+/// state directory is byte for byte as it was.
+#[test]
+fn a_clear_record_or_abort_order_of_a_bad_service_name_is_invalid_order() {
+    let rig = Rig::new("clear-bad-name");
+    let daemon = rig.daemon();
+    with_record(&rig, b"{");
+    let before = snapshot(&rig.state);
+    let abort = Order {
+        order_id: "abort-bad".to_owned(),
+        r#try: 1,
+        verb: Some(order::Verb::Abort(agent::Abort {
+            service: "a b".to_owned(),
+        })),
+    };
+    for order in [clear("a b"), abort] {
+        let reply = daemon.order(&order);
+        assert_eq!(reply.refusal(), Some(Refusal::InvalidOrder), "{reply:?}");
+    }
+    assert_eq!(snapshot(&rig.state), before);
+}
+
 /// Catches an order that deletes anything beyond the record, or leaves the corrupt record in
 /// place: an empty record, a truncated one and one with a field of the wrong type are each
 /// renamed to `step-record.json.corrupt` with the same bytes (replacing the one before) and

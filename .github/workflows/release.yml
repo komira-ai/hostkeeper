@@ -341,21 +341,25 @@ jobs:
   #          the service `hostkeeper` first, then the rest once they have baked, stage by stage by the
   #          service's update plan, which is longer than a job should hold the release group.
   #          The job ends once the coordinator stored the version (`reason` `not_waited`).
+  #          The join, when HOSTKEEPER_TAILNET_CLIENT_ID is set, asks for the tag of the
+  #          repository variable HOSTKEEPER_TAILNET_TAG (`tag:ci`), the one the federation's trust
+  #          credential issues; the client checks it at its first step, with or without the join,
+  #          so the variable must be set.
   set-desired:
     needs: [plan, channel]
     if: ${{ needs.plan.outputs.release == 'true' && github.ref == 'refs/heads/main' && vars.RELEASE_SETS_DESIRED == 'true' && needs.channel.outputs.newest == 'true' }}
     permissions:
       contents: read
       id-token: write
-    uses: komira-ai/hostkeeper/.github/workflows/set-desired.yml@4859b4800897f2468c0f2131455721edfc537217 # v0.1.173
+    uses: komira-ai/hostkeeper/.github/workflows/set-desired.yml@2c767d1842a88edb7120073d2dff3b4bfccc834c # v0.1.184
     with:
       service: hostkeeper
       version: ${{ needs.channel.outputs.version }}
       release_index: ${{ needs.channel.outputs.release_index }}
       release_index_digest: ${{ needs.channel.outputs.release_index_digest }}
       targets: ${{ needs.channel.outputs.targets }}
-      hostkeeper_version: 0.1.173
-      hostkeeper_commit: 4859b4800897f2468c0f2131455721edfc537217
+      hostkeeper_version: 0.1.184
+      hostkeeper_commit: 2c767d1842a88edb7120073d2dff3b4bfccc834c
       coordinator_url: ${{ vars.HOSTKEEPER_COORDINATOR_URL }}
       coordinator_ca: ${{ vars.HOSTKEEPER_COORDINATOR_CA }}
       audience: ${{ vars.HOSTKEEPER_CI_AUDIENCE }}
@@ -364,3 +368,4 @@ jobs:
       tailnet_client_id: ${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID }}
       tailnet_audience: ${{ vars.HOSTKEEPER_TAILNET_AUDIENCE }}
       tailnet_coordinator: ${{ vars.HOSTKEEPER_TAILNET_COORDINATOR }}
+      tailnet_tag: ${{ vars.HOSTKEEPER_TAILNET_TAG }}

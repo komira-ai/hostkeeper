@@ -9,13 +9,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use hostkeeper_config::names::ServiceName;
-use hostkeeper_daemon::admin::step_record;
 use hostkeeper_daemon::boot::{BootReport, Outcome};
 use hostkeeper_daemon::testing::{NoPrune, RecordingPrune};
 use hostkeeper_daemon::{Daemon, ForcedResult, Ports, Refusal, Reply, WriteStep};
 use hostkeeper_hook::{Class, Phase, Verdict};
 use hostkeeper_placed::testing::{FakeUnitControl, FaultFs, Log as PlacedLog};
-use hostkeeper_steps::record::RECORD_FILE;
+use hostkeeper_steps::record::{RECORD_FILE, State};
 use hostkeeper_steps::{
     CrashGate, CrashPoint, Finished, ForceFailure, ForcePhase, ForceVerdict, RecordStore,
 };
@@ -186,7 +185,7 @@ fn forced_of(daemon: &Daemon) -> Option<ForcedResult> {
 /// Catches a force verdict the heartbeat cannot read, or reads once only: the read model gives
 /// `Succeeded`, then `Failed` with `start_failed`, each with the order's id and try, on every
 /// read and after a restart, until the next order; an update's verdict is not a forced one; and
-/// the admin socket's record says `forced` with the order's id.
+/// the step record says `forced` with the order's id.
 #[test]
 fn force_reports_its_verdict_in_the_next_heartbeat_read() {
     let rig = Rig::new("force-report");
@@ -244,12 +243,20 @@ fn force_reports_its_verdict_in_the_next_heartbeat_read() {
             reason: Some("start_failed".to_owned()),
         })
     );
-    let shown = step_record(&rig.record(WEB).expect("the record"));
-    assert!(shown.forced);
-    assert_eq!(shown.order_id, "force-web-2.0.0");
-    assert_eq!(shown.order_try, 3);
-    assert_eq!(shown.reason, "start_failed");
-    assert_eq!(shown.step, "");
+    let shown = rig.record(WEB).expect("the record");
+    let force = shown.force.as_ref().expect("the record is of a force");
+    assert_eq!(force.order_id.as_deref(), Some("force-web-2.0.0"));
+    assert_eq!(force.order_try, 3);
+    assert_eq!(
+        shown.state,
+        State::Finished {
+            verdict: Verdict::Failed {
+                phase: Phase::AfterCommit,
+                class: Class::Release,
+            },
+            reason: Some("start_failed".to_owned()),
+        }
+    );
 }
 
 fn versions(rig: &Rig) -> Vec<String> {
