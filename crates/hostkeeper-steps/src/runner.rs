@@ -39,7 +39,7 @@ use hostkeeper_hook::{
 use crate::artifact::{ArtifactError, Staged};
 use crate::clock::{BootId, Clock, Stamp};
 use crate::deadman::Watch;
-use crate::launcher::{Bound, LaunchError, StepCall, StepExit, StepLauncher};
+use crate::launcher::{BUILTIN_EXIT, Bound, LaunchError, StepCall, StepExit, StepLauncher};
 use crate::record::{HookSel, Loaded, Progress, Record, RecordError, RecordStore, SCHEMA, State};
 use crate::systemd::unit_name;
 
@@ -164,6 +164,9 @@ pub struct UpdateOrder {
     /// The coordinator's try of the order (`Order.try`), kept in the record as `order_try`;
     /// `None` for an update that came without one.
     pub order_try: Option<u64>,
+    /// Every step is built in: it ends at once as a hook that exits 0 and prints nothing
+    /// ([`BUILTIN_EXIT`]), and no command is launched. The record is the one that hook gives.
+    pub builtin_steps: bool,
 }
 
 /// How an update ended.
@@ -699,17 +702,20 @@ impl StepRunner {
         if !unbounded {
             self.watch.arm(&unit, deadline_secs);
         }
-        let result = self.launcher.run(&StepCall {
-            service: &order.service,
-            invocation: Invocation {
-                step: rec.step,
-                artifact,
-                params: Some(rec.params.clone()),
-            },
-            executable,
-            unit: &unit,
-            bound,
-        });
+        let result = match order.builtin_steps {
+            true => Ok(BUILTIN_EXIT),
+            false => self.launcher.run(&StepCall {
+                service: &order.service,
+                invocation: Invocation {
+                    step: rec.step,
+                    artifact,
+                    params: Some(rec.params.clone()),
+                },
+                executable,
+                unit: &unit,
+                bound,
+            }),
+        };
         let stop_error = self.watch.disarm();
         // An aborted step's report is not read, whoever stopped it: the write of its end closes
         // the update.

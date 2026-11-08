@@ -47,6 +47,7 @@ use crate::executor::{Daemon, Dirs, Ports};
 use crate::files;
 use crate::installed;
 use crate::links::Links;
+use crate::mac_config::MacConfigError;
 use crate::notify::{NoNotifier, ReadyNotifier};
 use crate::selfunits::ALERT_SELF_UNITS;
 use crate::socket;
@@ -101,6 +102,10 @@ pub enum StartError {
         #[source]
         source: ConfigError,
     },
+    /// A Mac's daemon config is not there and could not be written from the managed
+    /// preferences ([`crate::mac_config::at_start`]).
+    #[error("the daemon config is not made from the managed preferences: {0}")]
+    MacConfig(#[from] MacConfigError),
     /// Another daemon holds the state directory, or its lock cannot be taken.
     #[error("another daemon holds {}, or its lock cannot be taken: {source}", path.display())]
     Locked {
@@ -137,7 +142,7 @@ impl StartError {
     /// The exit status of the daemon for this error.
     pub fn exit_code(&self) -> u8 {
         match self {
-            StartError::Config { .. } => EXIT_CONFIG,
+            StartError::Config { .. } | StartError::MacConfig(_) => EXIT_CONFIG,
             StartError::Locked { .. } => EXIT_LOCKED,
             StartError::Io { .. }
             | StartError::Serve(_)

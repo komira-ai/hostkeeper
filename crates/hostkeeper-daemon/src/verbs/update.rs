@@ -26,7 +26,7 @@
 use std::num::NonZeroU64;
 use std::path::PathBuf;
 
-use hostkeeper_config::manifest::{Expected, Manifest};
+use hostkeeper_config::manifest::{Expected, HostkeeperVersion, Manifest};
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_config::platform::Platform;
 use hostkeeper_hook::{Params, Verdict};
@@ -41,6 +41,7 @@ use crate::locks::{Held, Holder, Package, ServiceGuard};
 use crate::packages::VersionDir;
 use crate::prune;
 use crate::refusal::Refusal;
+use crate::selfupdate;
 use crate::verb::{Hooked, HookedVerb};
 
 /// `update`: refused below the running version, and for a service with no release installed.
@@ -183,11 +184,12 @@ pub(crate) fn answer(
     }
 }
 
-/// An order checked and ready for the step runner: its package's version directory and the
-/// runner's order.
+/// An order checked and ready for the step runner: its package's version directory, the
+/// runner's order and the floor its manifest declares (`min_hostkeeper`).
 pub(crate) struct Prepared {
     pub dir: VersionDir,
     pub update: UpdateOrder,
+    pub floor: HostkeeperVersion,
 }
 
 /// The checks of `order` that follow the try rules, in order, and the runner's order built from
@@ -258,7 +260,8 @@ pub(crate) fn prepare(
     claims_check(ctx, &manifest)?;
     let declared = declared_params(&manifest.params)?;
     let update = update_order(order, &dir, &manifest, previous, declared);
-    Ok(Prepared { dir, update })
+    let floor = manifest.min_hostkeeper;
+    Ok(Prepared { dir, update, floor })
 }
 
 /// The paths `manifest` places, checked against `placed.json` and what is on disk: a path
@@ -346,6 +349,7 @@ fn update_order(
         declared_params,
         min_updater_protocol: None,
         order_try: Some(order.order_try.get()),
+        builtin_steps: selfupdate::builtin_steps(&order.service, manifest.min_hostkeeper),
     }
 }
 
