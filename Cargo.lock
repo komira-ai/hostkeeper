@@ -5019,6 +5019,7 @@ dependencies = [
  "hostkeeper-steps",
  "hostkeeper-unpack",
  "hostkeeper-wire",
+ "lzma-rs",
  "plist",
  "prost-reflect",
  "ruzstd",

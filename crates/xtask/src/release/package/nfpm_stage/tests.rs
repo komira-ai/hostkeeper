@@ -3,6 +3,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use super::*;
+use crate::release::package::elf::fixture::Spec;
 use crate::testdir::TestDir;
 
 /// The trusted root `gh attestation trusted-root` prints, cut down: one line per instance.
@@ -37,6 +38,11 @@ fn elf(arch: Arch) -> Vec<u8> {
     elf_with(2, 1, arch.elf_machine())
 }
 
+/// A static-pie program for `arch`, as the musl build makes one.
+fn static_program(arch: Arch) -> Vec<u8> {
+    Spec::static_pie(arch.elf_machine()).build()
+}
+
 /// A gzip tar like gh's release archive: a decoy, then `member` holding `program`.
 fn archive(member: &str, program: &[u8]) -> Vec<u8> {
     let mut b = tar::Builder::new(Vec::new());
@@ -69,12 +75,18 @@ impl Case {
         let trusted_root = dir.join("trusted_root.jsonl");
         std::fs::write(&gh_archive, archive_bytes).expect("archive");
         std::fs::write(&trusted_root, root).expect("root");
+        let binaries = dir.join("target/release");
+        std::fs::create_dir_all(&binaries).expect("binaries");
+        for file in [HOSTKEEPER_FILE, PXE_FILE] {
+            std::fs::write(binaries.join(file), static_program(arch)).expect("program");
+        }
         let request = Request {
             arch,
             gh_version: "2.0.0".parse().expect("version"),
             gh_archive,
             gh_sha256: install::Sha256::of(archive_bytes),
             trusted_root,
+            binaries,
             out: dir.join("target/nfpm"),
         };
         Case { dir, request }
@@ -131,7 +143,17 @@ fn stages_the_gh_of_the_package_arch_and_the_trusted_root_with_their_modes() {
             .map(|e| e.expect("entry").file_name())
             .collect();
         names.sort();
-        assert_eq!(names, ["gh", "trusted_root.json"]);
+        assert_eq!(
+            names,
+            ["gh", "hostkeeper", "hostkeeper-pxe", "trusted_root.json"]
+        );
+        for file in [HOSTKEEPER_FILE, PXE_FILE] {
+            assert_eq!(
+                std::fs::read(out.join(file)).expect("program"),
+                static_program(arch)
+            );
+            assert_eq!(mode(&out.join(file)), 0o755);
+        }
         assert_eq!(
             lines,
             [
@@ -146,7 +168,103 @@ fn stages_the_gh_of_the_package_arch_and_the_trusted_root_with_their_modes() {
                     case.request.trusted_root.display(),
                     install::Sha256::of(ROOT.as_bytes())
                 ),
+                format!(
+                    "{}: static {arch} program from {}, sha256 {}",
+                    out.join("hostkeeper").display(),
+                    case.request.binaries.join("hostkeeper").display(),
+                    install::Sha256::of(&static_program(arch))
+                ),
+                format!(
+                    "{}: static {arch} program from {}, sha256 {}",
+                    out.join("hostkeeper-pxe").display(),
+                    case.request.binaries.join("hostkeeper-pxe").display(),
+                    install::Sha256::of(&static_program(arch))
+                ),
             ]
+        );
+    }
+}
+
+/// Catches a glibc build, a program of the other architecture, a 32-bit or big-endian build, or
+/// a file that is no program, staged in a package: each is refused naming the file, and nothing
+/// is written.
+#[test]
+fn a_program_that_is_not_a_static_64_bit_little_endian_one_of_the_arch_is_refused() {
+    let glibc = Spec::glibc();
+    let cases: Vec<(&str, Vec<u8>, String)> = vec![
+        (
+            HOSTKEEPER_FILE,
+            glibc.build(),
+            "it asks for the interpreter /lib64/ld-linux-x86-64.so.2".into(),
+        ),
+        (
+            PXE_FILE,
+            Spec {
+                interpreter: None,
+                ..glibc.clone()
+            }
+            .build(),
+            "it is linked to libc.so.6".into(),
+        ),
+        (
+            HOSTKEEPER_FILE,
+            static_program(Arch::Arm64),
+            "ELF machine 0xb7, not 0x3e".into(),
+        ),
+        (
+            PXE_FILE,
+            Spec {
+                class: 1,
+                ..Spec::static_pie(0x3e)
+            }
+            .build(),
+            "ELF class 1 and data 1, not 2 (64-bit) and 1 (little-endian)".into(),
+        ),
+        (
+            PXE_FILE,
+            Spec {
+                big_endian: true,
+                ..Spec::static_pie(0x3e)
+            }
+            .build(),
+            "ELF class 2 and data 2, not 2 (64-bit) and 1 (little-endian)".into(),
+        ),
+        (
+            HOSTKEEPER_FILE,
+            b"#!/bin/sh\n".to_vec(),
+            "no ELF magic".into(),
+        ),
+        (
+            HOSTKEEPER_FILE,
+            static_program(Arch::Amd64)[..100].to_vec(),
+            "a program header (8 bytes at offset 96) is outside the file".into(),
+        ),
+    ];
+    for (file, program, why) in cases {
+        let case = Case::of("program", Arch::Amd64, &elf(Arch::Amd64), ROOT);
+        let path = case.request.binaries.join(file);
+        std::fs::write(&path, program).expect("program");
+        let message = case.refused_writing_nothing();
+        assert_eq!(
+            message,
+            format!(
+                "{} is not a static linux amd64 program: {why}",
+                path.display()
+            )
+        );
+    }
+}
+
+#[test]
+fn a_missing_program_is_refused_and_nothing_is_written() {
+    for file in [HOSTKEEPER_FILE, PXE_FILE] {
+        let case = Case::of("absent", Arch::Amd64, &elf(Arch::Amd64), ROOT);
+        let path = case.request.binaries.join(file);
+        std::fs::remove_file(&path).expect("remove");
+        let message = case.refused_writing_nothing();
+        assert!(
+            message.starts_with(&format!("read {}: ", path.display())),
+            "{message}"
         );
     }
 }
@@ -318,7 +436,12 @@ fn files_staged_before_are_replaced_and_given_their_modes() {
     let case = Case::of("again", Arch::Amd64, &elf(Arch::Amd64), ROOT);
     let out = &case.request.out;
     std::fs::create_dir_all(out).expect("out");
-    for (name, mode) in [("gh", 0o600), ("trusted_root.json", 0o777)] {
+    for (name, mode) in [
+        ("gh", 0o600),
+        ("trusted_root.json", 0o777),
+        ("hostkeeper", 0o666),
+        ("hostkeeper-pxe", 0o600),
+    ] {
         let path = out.join(name);
         std::fs::write(
             &path,
@@ -335,6 +458,13 @@ fn files_staged_before_are_replaced_and_given_their_modes() {
         ROOT
     );
     assert_eq!(mode(&out.join("trusted_root.json")), 0o644);
+    for file in [HOSTKEEPER_FILE, PXE_FILE] {
+        assert_eq!(
+            std::fs::read(out.join(file)).expect("program"),
+            static_program(Arch::Amd64)
+        );
+        assert_eq!(mode(&out.join(file)), 0o755);
+    }
 }
 
 #[test]
@@ -349,7 +479,12 @@ fn an_out_that_cannot_be_made_or_written_is_an_error() {
         "{message}"
     );
 
-    for (blocked, staged) in [("gh", None), ("trusted_root.json", Some("gh"))] {
+    for (blocked, staged) in [
+        ("gh", None),
+        ("trusted_root.json", Some("gh")),
+        ("hostkeeper", Some("trusted_root.json")),
+        ("hostkeeper-pxe", Some("hostkeeper")),
+    ] {
         let case = Case::of("write", Arch::Amd64, &elf(Arch::Amd64), ROOT);
         let out: PathBuf = case.request.out.clone();
         std::fs::create_dir_all(out.join(blocked)).expect("a directory in the way");
@@ -402,6 +537,8 @@ fn verb(case: &Case) -> crate::release::Verb {
         &sha,
         "--trusted-root",
         r.trusted_root.to_str().expect("UTF-8"),
+        "--binaries",
+        r.binaries.to_str().expect("UTF-8"),
         "--out",
         r.out.to_str().expect("UTF-8"),
     ];
@@ -434,4 +571,5 @@ fn the_verb_gets_its_flags_and_asks_for_no_adapters() {
     let out = crate::release::run_with(verb(&case), &fakes.ports());
     assert_eq!(out, stage(&case.request));
     assert!(case.request.out.join("trusted_root.json").is_file());
+    assert!(case.request.out.join("hostkeeper-pxe").is_file());
 }
