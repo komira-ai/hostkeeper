@@ -23,9 +23,9 @@ means nothing implements it yet. Section 13 lists the build items, A1 to A17, on
 [packages-tests.md](packages-tests.md).
 
 **Amended by [packages-repositories.md](packages-repositories.md).** A Linux distribution's package is installed from
-a package repository with the system package manager (`apt`, A7; later `dnf`, `pacman`, `apk`, and `brew` on macOS):
+a package repository with the system package manager (`apt`, A7, the first backend of one repository installer; later managers are backends of it):
 the entry names the package, its version and a repository of the host's own configuration, and the repository's key
-is the trust. The file installers `deb`, `rpm`, `arch` and `macos-pkg` below are withdrawn. Where the two files
+is the trust, and every entry pins the package's SHA-256. The file installers `deb`, `rpm`, `arch`, `apk` and `macos-pkg` below are withdrawn. Where the two files
 disagree, that one wins; its section 0 lists what it replaces, and its section 8 re-scopes A4, A6 to A14.
 
 Today a service can be deployed by hostkeeper only as hostkeeper's own package: a `tar.zst` archive holding
@@ -165,7 +165,7 @@ message TargetList {
   repeated Target entries = 1;      // in CI's order of preference; 1 to 8, no installer twice
 }
 message Target {
-  string installer = 1;             // "hostkeeper-archive", "tarball", "apt", "dnf", "apk", "pacman", "brew", "oci-image"
+  string installer = 1;             // "hostkeeper-archive", "tarball", "apt", "oci-image"
   repeated Location locations = 2;  // where the artifact's bytes are, in preference order; 1 to 8
   string digest = 3;                // SHA-256 of the artifact, 64 lower-case hex
   uint64 bytes = 4;                 // its size, 1 up to the host's max_package_bytes
@@ -402,7 +402,7 @@ The service's name and version are the call's, not fields of the manifest, so th
 | Field | Why hostkeeper needs it |
 |---|---|
 | `installer` (on the entry) | The daemon never sniffs a format. It must be told which built-in code reads and installs the bytes, and the coordinator matches it against the host's list to pick an entry (section 3.3). It sits on the entry, beside the bytes it names the format of, so the pick reads no manifest |
-| `package` | The format's tool knows a package by a name (`dpkg`, `rpm`, `apk`, `pacman`) or an identifier (`pkgutil`). The daemon checks the artifact is that package before it installs it, refuses to take over a package it did not install, and removes that package on uninstall (section 6.5). Required for the repository installers (`apt`, `dnf`, `pacman`, `apk`, `brew`); refused for the others |
+| `package` | The format's tool knows a package by a name (`dpkg`, `rpm`, `apk`, `pacman`) or an identifier (`pkgutil`). The daemon checks the package is that one before it installs it, installs the desired version over a package found at any other version (drift, packages-repositories.md section 4.4), and removes that package on uninstall (section 6.5). Required for the repository installer (`apt`, and each later backend); refused for the others |
 | `hook` | The hand-over from old to new is the service's (section 6.2). The bounds are what lets the daemon stop a step, and `verify_deadline_secs` is the verify window, as today. An empty `command` asks for the built-in steps (section 6.3) |
 | `run` | The units the daemon stops before uninstall, starts and stops in `force` and the built-in steps, and observes for liveness and identity. Without it the daemon could not tell the service's units from any other unit a package installed |
 | `health_url` | The daemon's observer probes it for the heartbeat and the bake gate, as today. Optional, as today |
@@ -492,8 +492,8 @@ is wrong about the host.
 |---|---|---|---|---|---|
 | `hostkeeper-archive` | Today's `tar.zst` with `manifest.toml` inside | Today's unpack, bounds and shape rules, exactly (`hostkeeper-unpack`). The hook, units, files and params come from the attested `manifest.toml` inside, and the entry's manifest is empty but for `min_hostkeeper` | Today's switch and placement | Today's uninstall | Every daemon from A4 |
 | `tarball` | A tar, plain or with gzip, xz or zstd: a plain tarball, a Homebrew bottle | `hostkeeper-unpack`'s bounded reader, extended in A6 with gzip and xz decoders, plain tar, a mode with no fixed top-level layout, and symbolic links (section 6.1) | Switch `current`, link the `place` entries, reload | Unlink what is placed | Every daemon from A6 |
-| `apt` (A7) | No artifact: a package, a version and a repository of the host's configuration | `apt-get update` and a download from that repository alone, the pin, `dpkg-deb --extract` of the downloaded package into the tree (packages-repositories.md section 4.3) | `apt-get install --no-download package=V`; `apt-mark hold`; record the version | `apt-mark unhold`; `dpkg --purge <package>`, only while `dpkg-query` shows the version hostkeeper recorded | The `deb` family with a repository configured |
-| `dnf`, `pacman`, `apk`, `brew` (later: A8, A14, A13, A9) | The same shape as `apt` | packages-repositories.md section 6 | | | The `rpm`, `arch` and `apk` families; macOS |
+| `apt` (A7) | No artifact: a package, a version and a repository of the host's configuration | `apt-get update` and a download from that repository alone, the pin, `dpkg-deb --extract` of the downloaded package into the tree (packages-repositories.md section 4.3) | `apt-get install --no-download package=V`; `apt-mark hold`; record the version | `apt-mark unhold`; `dpkg --purge <package>` at whatever version is installed (a version hostkeeper did not set is drift, packages-repositories.md section 4.4) | The `deb` family with a repository configured |
+| Later backends (A8 `dnf`; A9, A13, A14 not designed here) | The same installer as `apt` | packages-repositories.md section 6 | | | Their families |
 | `oci-image` | An OCI image archive (`oci-archive` tar) holding exactly one image | Keep the file; read the archive's `index.json` with the bounded reader and refuse any count of images but one (`manifest_invalid`) | Note whether the runtime already holds the image's digest; `podman load --input <artifact>`; write one unit per `containers` entry; reload | Remove the generated units; `podman rmi` an image only if this service's `activate` loaded it and no kept version uses it | Linux with `/usr/bin/podman`, whatever the family |
 
 The `retire` step is the same for every installer: delete the version directory, its seal and its kept artifact. For
@@ -546,7 +546,7 @@ A daemon decides its `installers` once at start, from its platform, the host's `
 | `hostkeeper-archive`, `tarball` | Always | Every host; the tarball is the fallback of every Linux host | A4, A6 |
 | `apt` | Family `deb`, apt 2.2 or later and the dpkg tools present, and an apt repository configured (packages-repositories.md section 4.1) | Debian, Ubuntu and their derivatives | A7 |
 | `oci-image` | Linux, and `/usr/bin/podman` present | Any Linux host | A10 |
-| `dnf`, `pacman`, `apk`, `brew` | Their family (macOS for `brew`), their tools, and a repository of theirs configured | RPM family, Arch, Alpine, macOS | Later: A8, A14, A13, A9 |
+| Later backends | Their family, their tools, and a repository of theirs configured | RPM family first (A8) | Later |
 
 A Linux host's **family** comes from `/etc/os-release` (or `/usr/lib/os-release`, as `os-release(5)` orders): its `ID`,
 then each token of `ID_LIKE` in order, and the first that names a family wins: `debian`, `ubuntu` give `deb`;
@@ -558,11 +558,9 @@ have `/usr/bin/rpm` (Debian packages it, for building), and an `.rpm` installed 
 is the host's own and root-owned; a wrong one misleads only that host, and the format's tool still refuses a package
 for another architecture or with dependencies the host lacks.
 
-**Built in v1:** `hostkeeper-archive`, `tarball`, `apt`, and `oci-image` (question 2). **Later:** `dnf` (A8),
-`pacman` (A14) and `brew` (A9); until then those hosts take the tarball. `apk` (A13) is later for a second reason: the daemon runs only
-under systemd (its step launcher's transient units, its unit's start limit and fallback), and Alpine runs OpenRC, so no
-Alpine host runs a daemon today. A13 waits on a daemon that runs without systemd (question 5) and designs `apk`'s steps
-then; the name and the family are reserved now, and CI builds no `.apk` until A13.
+**Built in v1:** `hostkeeper-archive`, `tarball`, `apt`, and `oci-image` (question 2). **Later:** a `dnf` backend (A8), and
+backends for other families (A9, A13, A14), not designed here; until then those hosts take the tarball. An Alpine backend (A13) also waits on a daemon that runs without systemd
+(question 5).
 
 **One build, every release.** Distributions differ in their releases' libraries, not in the formats' tools. A service
 ships one `.deb` for every Debian and Ubuntu release, and one `.rpm` for every RHEL-family and openSUSE release, when:
@@ -790,7 +788,7 @@ on every host (`Hosts.List`).
 | 1 | Coordinator: `SetDesired` with targets, releases kept, `GetRelease`, `target-v1` echoed, `installers` read, targets in orders over gRPC, the pick of section 3.3, `no_target`, `no_build_for_host` and `installer_dropped` (A1, A2, A3) | Every set with a digest or an index; old daemons ordered exactly as today | Every change is additive; no daemon announces `target-v1` yet, so no order carries a target |
 | 2 | CI of this repository and of `hello` sets every release with `hostkeeper-archive` entries and the release index (A5) | `channel-sync` keeps filling the channel | The archive entries are the same bytes the index lists, and the coordinator checks that they agree (section 3.4) |
 | 3 | Daemon: `target-v1`, `stores.toml`, fetch and proof through the target, `hostkeeper-archive` through the target (A4) | An order without a target is fetched through the channel as today | The old daemon updates to it through the channel. The new one is sent targets only once it announces `target-v1` and the coordinator echoes it |
-| 4 | Installers: `tarball` and built-in steps (A6), then `apt` and `oci-image` (A7, A10), later `dnf`, `brew`, `apk` and `pacman` (A8, A9, A13, A14) | Archives keep being set for old daemons | An entry is ordered only to a daemon that lists its installer; a host keeps the installer it runs |
+| 4 | Installers: `tarball` and built-in steps (A6), then `apt` and `oci-image` (A7, A10), later backends (A8, A9, A13, A14) | Archives keep being set for old daemons | An entry is ordered only to a daemon that lists its installer; a host keeps the installer it runs |
 | 5 | Retire the channel for every service but `hostkeeper` (A11) | A set with an index or a digest is still accepted (rule B8). The channel keeps hostkeeper's own archives, so a host installed from an older deb, rpm or pkg can still update itself | Every host announces `target-v1`, and each retired service's last three releases answer `GetRelease`, both shown in A11's pull request |
 | 6 | Daemon: drop the channel fetch and the index parser's `Platform` copy (A12) | The channel of hostkeeper's archives stays for old bootstrap packages | The daemon requires `target-v1` echoed; against an older coordinator its orders are `Deferred`, `coordinator_too_old` |
 
@@ -889,14 +887,14 @@ The tests of every build item, the cases each covers and why that list is comple
 | A4 | Daemon: `target-v1`, `stores.toml`, fetch and proof through the entry, `hostkeeper-archive` through the entry, `order_invalid`, `installer_not_listed`, replies up to 32 KiB, the channel path kept, the `agent.proto` header | A3 | `stores.rs`, `fetch.rs`; the self-update device tests through targets; the mixed cases of section 9.3 |
 | A5 | This repository's and `hello`'s release workflows set each release with `hostkeeper-archive` entries and the release index, through the generated bash client; `channel-sync` keeps filling the channel | A2, the two-programs design's bash client | The workflow lint (`cargo test -p xtask --test workflows`) for the new steps; the next release on `main` answering `GetRelease` |
 | A6 | `hostkeeper-install` with the installer trait, `tarball` and the announce rules of section 5.4; `ServiceBeat.installer`; `PrivateNetwork=yes` on every tool run; the reader's gzip and xz decoders and free layout (new dependencies declared at the root, rules R5 and R6); the walk after `stage`; `VersionDir::read`; manifest-driven placement; built-in steps; the `l` tree record; `install-record.json`; `installed` and `uninstalling_installed`; `installer_changed`, `target_changed`, `rollback_below_installer` | A4 | `tarball.rs`, `announce.rs`, `formats.rs`, `artifact.rs`, `builtin_steps.rs`, `uninstall.rs`, `selfupdate.rs`; a device test of `hello` as a plain tarball |
-| A7 | `apt` (packages-repositories.md section 8): the repository configuration, `stage` from the repository, the pin, the simulation, `activate` with the hold, rollback by downgrade, `remove` by purge, the failure reasons; the observer reading units from the tree | A6, A16 | `apt.rs`; `install_apt.rs` in `privileged`, against a signed fixture repository on disk |
-| A8 (later) | `dnf` (packages-repositories.md section 6.1), after a design pull request of its own | A6, A16 | `dnf.rs`; `install_dnf.rs` in a container with dnf |
-| A9 (later) | `brew` (packages-repositories.md section 6.4), after a design pull request of its own; `macos-pkg` is withdrawn | A6, A16 | `brew.rs`; the macOS device suite in `macos-device` |
+| A7 | The repository installer and its `apt` backend (packages-repositories.md section 8): the repository configuration, `stage` from the repository, the pin, the simulation, `activate` with the hold, rollback by downgrade, `remove` by purge, drift, the failure reasons; the observer reading units from the tree | A6, A16 | `apt.rs`; `install_apt.rs` in `privileged`, against a signed fixture repository on disk |
+| A8 (later) | A `dnf` backend (packages-repositories.md section 6), after a design pull request of its own once an RPM host exists | A7 | Named by its design |
+| A9 (later) | Not designed here: a macOS repository backend; `macos-pkg` is withdrawn | A7 | Named by its design |
 | A10 | `oci-image`, the generated units, the observer's image digest | A6 | `oci_image.rs`; `install_oci_image.rs` in `privileged` with podman |
 | A11 | Stage 5: the channel keeps only hostkeeper's archives; `channel-stage` and the other services in `channel-sync` go; their docs; hostkeeper's own workflow keeps sending its index | both conditions of stage 5 | Sets with an index still accepted; the workflow lint for hostkeeper's index; the supersession check of rule B22 |
 | A12 | Stage 6: the daemon drops the channel fetch and its `Platform` copy, and requires `target-v1` echoed | A11 | The daemon's `coordinator_too_old` test; the device tests of section 9.3 |
-| A13 (later) | `apk` from a repository (packages-repositories.md section 6.2) | A6, A16, and a daemon that runs without systemd (question 5) | `apk.rs`; `install_apk.rs` in an Alpine container |
-| A14 (later) | `pacman` from a repository (packages-repositories.md section 6.3); replaces `arch` | A6, A16 | `pacman.rs`; `install_pacman.rs` in an Arch container |
+| A13 (later) | Not designed here: an Alpine backend | A7, and a daemon that runs without systemd (question 5) | Named by its design |
+| A14 (later) | Not designed here: an Arch backend; `arch` is withdrawn | A7 | Named by its design |
 | A15 | hostkeeper's own Linux build for musl, static; `check-linux-pkg` refuses a `NEEDED` entry and a declared dependency; nfpm's `archlinux` package beside the `.deb` and `.rpm`, attested like them; `docs/deploy/verify-a-release.md` names it | none | `release_linux.rs`; the same `.deb` and `.rpm` installed and started on the oldest and newest release of each family in `privileged` |
 | A16 | `Target.repository` and `Target.package_version`; the checks of repository entries; the installer set; the audit of a repository entry (packages-repositories.md section 8) | A2 | `repository.rs`, `additions_repository.rs`; the previous coordinator on a stored repository entry |
 | A17 | Host setup places repository entries and keyrings (`hostkeeper-pxe --repositories`, the runbooks) | A7 | `hostkeeper-pxe`'s tests of `--repositories` |
@@ -944,7 +942,7 @@ payload) by A10, and P10 and P12 (stages 5 and 6) by A11 and A12.
 | An archive version's layout | Today's, with no `target.json` | An older binary reads it unchanged after a fallback |
 | An order for a sealed version | The sealed `target.json` wins; a different entry is `target_changed` | A release is immutable, and the daemon checks it rather than trust the coordinator |
 | Prune and uninstall | Two steps, `retire` (a version's directory only) and `remove` (the service's installed package) | A native format's database holds only the installed version, so pruning an old one must not call the tool |
-| Repository package removal | `dpkg --purge` (for `apt`; each later manager its own), only while the recorded version is installed | Removes the package's files as the format lists them; a package changed by hand is not ours to remove |
+| Repository package removal | `dpkg --purge` (for `apt`; each later backend its own), at whatever version is installed | Removes the package's files as the format lists them; a package at another version is drift, which hostkeeper repairs and reports, and an uninstall still purges it |
 | Package scripts that restart the service | Not suppressed; the service builds packages that leave restarts to its hook | Suppressing them would mean writing `policy-rc.d` into `/usr`, host-wide, for one format only |
 | A service with no hand-over | Built-in steps, chosen by an empty `command`; always uninstallable | Most packaged services and every image need only restart and check |
 | An OCI image's units | Generated from a fixed template; args after the image; structured ports and volumes | An unattested manifest must not write unit text or runtime options, which are a root command line |

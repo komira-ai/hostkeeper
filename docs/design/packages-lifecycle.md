@@ -3,8 +3,8 @@
 Status: design, for the maintainers' ruling. Nothing here is built. This is section 6 of [packages.md](packages.md), kept
 in a file of its own so that one stays under 1000 lines (rule R12). Section numbers here are those of packages.md.
 Amended by [packages-repositories.md](packages-repositories.md): a Linux distribution's package comes from a
-repository through `apt` (and later `dnf`, `pacman`, `apk`, `brew`), whose version directory, rollback, hold and
-purge are that file's section 4; the `deb`, `rpm`, `arch` and `macos-pkg` cases below are withdrawn with those
+repository through `apt` (later managers are backends of the same installer), whose version directory, rollback,
+hold, purge and drift are that file's section 4; the `deb`, `rpm`, `arch`, `apk` and `macos-pkg` cases below are withdrawn with those
 installers.
 
 ## 6. An update, a rollback and an uninstall
@@ -32,7 +32,7 @@ The seal and `Staged::check` cover the whole directory, so the hook program, the
 re-hashed before every step, as the tree is today. The tree digest gains one record kind, `l`, for a symbolic link,
 hashed by its target text, and `Staged::check`'s walk accepts a link only inside `tree/`, never follows one, and still
 refuses a foreign owner, a setuid or setgid bit and a group- or other-writable entry (the walk of section 5.2 made the
-tree so). Extracted `.deb`, `.rpm` and `.pkg` trees hold links, and today's walk refuses them. A tree with a link was
+tree so). Extracted package trees hold links, and today's walk refuses them. A tree with a link was
 never readable by an older daemon, which is never ordered one (section 9.1), so the change is additive. A hook program
 and a `place` source still must not pass through a link.
 
@@ -83,8 +83,7 @@ fetched), so a rollback never fetches, for every format:
 | Installer | Rollback, before the hook's `rollback` step |
 |---|---|
 | `hostkeeper-archive`, `tarball` | Switch `current` back and relink, as today |
-| `apt` (and later `dnf`, `pacman`, `apk`, `brew`) | A downgrade by one version from the previous version's kept index and package, with no fetch (`apt-get install --no-download --allow-downgrades`, packages-repositories.md section 4.4), running the older package's scripts (pacman installs the kept previous package, and brew relinks the kept keg:
-packages-repositories.md sections 6.3 and 6.4). A service that ships these packages keeps its scripts able to go back one version, as its hook must read the record one version back today |
+| `apt` (and each later repository backend) | A downgrade by one version from the previous version's kept index and package, with no fetch (`apt-get install --no-download --allow-downgrades`, packages-repositories.md section 4.4), running the older package's scripts. A service that ships these packages keeps its scripts able to go back one version, as its hook must read the record one version back today |
 | `oci-image` | The previous image is still loaded (`retire` keeps it while `previous` names it). Re-point the generated units at it and reload |
 
 A first install that fails has no previous version: `remove` takes it off the host, as `remove_all` does today.
@@ -105,16 +104,16 @@ and, for a repository package, the package identity, the version it installed an
 `oci-image`, whether it loaded the image).
 
 - `tarball` and `hostkeeper-archive`: the links `placed.json` lists, while each is still the recorded link, as today.
-- `apt` (and later `dnf`, `pacman`, `apk`): the package the manifest names, unheld and purged with `dpkg --purge`
-  (packages-repositories.md section 4.4; each later manager its own removal). The
-  format's database is the list of the package's files. hostkeeper refuses to install a package that is installed on
-  the host but not recorded as its own (`Failed`, `release`, `package_not_ours`), or that another service records
-  (`package_conflict`), and it removes only while the installed version is the one it recorded. A package someone
-  upgraded by hand is left alone and raises `installed_changed`.
+- `apt` (and each later repository backend): the package the manifest names, unheld and purged with `dpkg --purge`
+  at whatever version is installed (packages-repositories.md section 4.4). The
+  format's database is the list of the package's files. hostkeeper refuses a package that another service records
+  (`package_conflict`). A package installed with no record, or moved by hand to another version, is drift: hostkeeper
+  installs the desired version over it, holds and records it, and reports the drift (packages-repositories.md
+  section 4.4).
 - `oci-image`: the generated units, and the image only if its own `activate` loaded it.
 
 What stays, by each format's own rules: files a package's scripts made that the format does not list (a user, a cache,
-an alternative), an `.rpm`'s configuration files changed since install, which `rpm` keeps as `.rpmsave`, and the
+an alternative), and the
 service's data under `/var/lib/<service>`, which is the hook's business, never the daemon's, as today. A package's own
 removal scripts may delete what they made; that is the service's packaging choice. The device tests of section 12 (packages-tests.md) show
 the fixture packages leave nothing behind.
@@ -126,5 +125,5 @@ the same path in the version's sealed tree. For `tarball` and `hostkeeper-archiv
 today. For a repository package it reads the unit text from the tree extracted from the downloaded package, at the path the
 package installs it (`tree/lib/systemd/system/<unit>` or `tree/usr/lib/systemd/system/<unit>`),
 and maps its program onto the tree: for a `.deb` that installs `/usr/bin/tierstore`, `tree/usr/bin/tierstore`. The
-extracted tree is the attested package's files, so a process left from another version still shows `version_mismatch`.
+extracted tree is the attested (or, for a repository package, signed) package's files, so a process left from another version still shows `version_mismatch`.
 For an `oci-image` unit, the running version is the image digest the runtime reports.
