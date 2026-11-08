@@ -41,13 +41,17 @@
 //!   anywhere or passes a stored credential ([`STORED_CREDENTIALS`]), its `with:` does not give
 //!   each of [`JOIN_WITH`] exactly, or it does not pin the Tailscale tarball by an `X.Y.Z`
 //!   `version` and a 64-digit lowercase `sha256sum`; or a step after the last provenance check
-//!   and before the join uses an action: the join is the first action of the job.
+//!   and before the join uses an action: the join is the first action of the job;
+//! - the tailnet tag the join passes breaks a rule of [`set_desired_tag`](super::set_desired_tag):
+//!   it is the input `tailnet_tag`, `tag:hk-ci` by default, checked by the step [`TAG_STEP`] (one
+//!   of [`CHECKED`] and [`ORDERED`]) before the join.
 //!
 //! Commands are read as text, line by line (a line ending in `\` continues on the next), and are
 //! never run.
 
 use super::lint::{entries, entry, has_word, scalars, triggers};
 use super::set_desired_calls::{CALLS, outputs_problems, request_problems, step_call_problems};
+use super::set_desired_tag::{self, TAG_STEP, TAG_VALUE};
 use super::yaml::{Node, Value};
 
 /// The file these rules are for, in `.github/workflows`.
@@ -67,9 +71,10 @@ pub const WAIT_STEP: &str = "wait";
 pub const CALL_STEPS: [&str; 2] = [CLIENT_STEP, WAIT_STEP];
 /// The last step, which writes the job's outputs whatever happened before it.
 pub const OUTPUTS_STEP: &str = "outputs";
-/// The steps before the calls that the job may not run on past: the checks, the install, the
-/// CA and the request.
-pub const CHECKED: [&str; 7] = [
+/// The steps before the calls that the job may not run on past: the tailnet tag's check, the
+/// checks, the install, the CA and the request.
+pub const CHECKED: [&str; 8] = [
+    TAG_STEP,
     "checksum",
     "attestation",
     "commit",
@@ -79,7 +84,8 @@ pub const CHECKED: [&str; 7] = [
     "request",
 ];
 /// The steps the job rests on, each there exactly once.
-pub const ORDERED: [&str; 10] = [
+pub const ORDERED: [&str; 11] = [
+    TAG_STEP,
     "checksum",
     "attestation",
     "commit",
@@ -133,13 +139,13 @@ pub const JOIN_IF: &str = "${{ inputs.join_tailnet }}";
 /// The action the join step uses, pinned to a commit.
 pub const JOIN_ACTION: &str = "tailscale/github-action";
 /// What the join step's `with:` must give, exactly: the federated identity (from the caller's
-/// inputs; neither is a secret), the one tag the tailnet's ACL lets reach the coordinator, and
-/// the coordinator the join pings before it ends (from the caller's input), so the first call
-/// does not race the tailnet's spread of the new node.
+/// inputs; neither is a secret), the tag its credential issues (the caller's input, which the
+/// step [`TAG_STEP`] checked), and the coordinator the join pings before it ends (from the
+/// caller's input), so the first call does not race the tailnet's spread of the new node.
 pub const JOIN_WITH: [(&str, &str); 4] = [
     ("oauth-client-id", "${{ inputs.tailnet_client_id }}"),
     ("audience", "${{ inputs.tailnet_audience }}"),
-    ("tags", "tag:hk-ci"),
+    ("tags", TAG_VALUE),
     ("ping", "${{ inputs.tailnet_coordinator }}"),
 ];
 /// The job's `outputs`, exactly: each from the outputs step, `converged` `false` when that step
@@ -314,6 +320,7 @@ pub fn problems(doc: &Node) -> Vec<String> {
         _ => &[][..],
     };
     problems.extend(step_problems(steps));
+    problems.extend(set_desired_tag::problems(doc, steps));
     problems
 }
 

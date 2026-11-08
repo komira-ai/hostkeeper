@@ -583,7 +583,7 @@ The flow is the same; these differ (a Linux host under OpenRC, an Alpine host, i
 |---|---|---|---|
 | Daemon | systemd unit | one launchd daemon, root | one supervise-daemon service, `/etc/init.d/hostkeeper`, root |
 | Hook run | transient systemd unit | one launchd job per step, as root, for timeout, kill and log capture only; no sandbox profile, no rights | a child process group of the daemon per step, bounded and killed by the daemon |
-| Placed units | symlinks in `/etc/systemd/system` | symlinks to plists in `/Library/LaunchDaemons` | `/etc/init.d`; a package's init scripts come with A13 |
+| Placed units | symlinks in `/etc/systemd/system` | symlinks to plists in `/Library/LaunchDaemons` | `/etc/init.d`; no package ships an init script yet |
 | Process identity | `/proc/<pid>/exe` | `proc_pidpath` plus device and inode check (to verify) | `/proc/<pid>/exe` |
 | Enrollment | operator approval | device enrollment through MDM, a package install, then auto-approval | operator approval |
 | Hand-over of ports | nft redirect | none; tierstore on a Mac updates with a gap | as Linux |

@@ -672,8 +672,8 @@ binary execs `current`, the old binary, which execs `next` while its count lasts
 judged by the burst.
 
 **What this does not cover yet.** A service package's own OpenRC init script (how a package ships, links and enables
-one) comes with A13, whose `apk` installer installs a package's script with its files; until then the OpenRC unit
-control and observer act on any init script by name, and the placer links what a package's `units/` holds into
+one) has no design: `apk` is withdrawn with no successor ([packages-repositories.md](packages-repositories.md)), so
+an Alpine host's services take the tarball. The OpenRC unit control and observer act on any init script by name, and the placer links what a package's `units/` holds into
 `/etc/init.d` as on the other systems, which check no unit's kind against the host either. A downgrade on an OpenRC
 host to a release older than the first with this support would run that binary on systemd's adapters; the floor rule
 of 4.2 is where its refusal belongs, once that release's number is known.

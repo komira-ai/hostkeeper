@@ -10,9 +10,10 @@ use super::yaml::{self, Node, Value};
 use super::{with_in, workflows_dir};
 
 /// A CI client that keeps every rule: the download, the three provenance checks, the install and
-/// the version check, then the join, the CA, the request, the two calls and the outputs. Its
-/// job's `runs-on` is on line 24; its steps are, from 1: download, checksum, attestation, commit,
-/// install, version, tailnet, ca, request, set-desired, wait, outputs.
+/// the version check, then the join, the CA, the request, the two calls and the outputs, all
+/// after the check of the tailnet tag. Its job's `runs-on` is on line 27; its steps are, from 1:
+/// tailnet-tag, download, checksum, attestation, commit, install, version, tailnet, ca, request,
+/// set-desired, wait, outputs.
 pub(super) const CLIENT: &str = "\
 name: set-desired
 on:
@@ -27,6 +28,9 @@ on:
       join_tailnet:
         type: boolean
         default: false
+      tailnet_tag:
+        type: string
+        default: tag:hk-ci
     outputs:
       desired_version:
         value: ${{ jobs.set-desired.outputs.desired_version }}
@@ -46,6 +50,10 @@ jobs:
       converged: ${{ steps.outputs.outputs.converged || 'false' }}
       reason: ${{ steps.outputs.outputs.reason }}
     steps:
+      - id: tailnet-tag
+        env:
+          TAILNET_TAG: ${{ inputs.tailnet_tag }}
+        run: jq --null-input --arg tag \"$TAILNET_TAG\" 'empty'
       - id: download
         run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 5 --retry-delay 5 --retry-max-time 300 --retry-all-errors --remote-name https://github.com/komira-ai/hostkeeper/releases/download/v1/hkctl-1
       - id: checksum
@@ -75,7 +83,7 @@ jobs:
         with:
           oauth-client-id: ${{ inputs.tailnet_client_id }}
           audience: ${{ inputs.tailnet_audience }}
-          tags: tag:hk-ci
+          tags: ${{ inputs.tailnet_tag }}
           version: 1.94.2
           sha256sum: c6f99a5d774c7783b56902188d69e9756fc3dddfb08ac6be4cb2585f3fecdc32
           ping: ${{ inputs.tailnet_coordinator }}
@@ -178,7 +186,7 @@ pub(super) const JOIN_BLOCK: &str = "      - id: tailnet
         with:
           oauth-client-id: ${{ inputs.tailnet_client_id }}
           audience: ${{ inputs.tailnet_audience }}
-          tags: tag:hk-ci
+          tags: ${{ inputs.tailnet_tag }}
           version: 1.94.2
           sha256sum: c6f99a5d774c7783b56902188d69e9756fc3dddfb08ac6be4cb2585f3fecdc32
           ping: ${{ inputs.tailnet_coordinator }}
@@ -253,17 +261,17 @@ fn the_oidc_request_comes_after_every_verification_step() {
     );
     // The set step at 2 and the checksum at 3: every later step is one further on.
     let early_want = [
-        "the OIDC token step `set-desired` (step 2) comes before the verification step `checksum` (step 3)",
-        "the OIDC token step `set-desired` (step 2) comes before the verification step `attestation` (step 4)",
-        "the OIDC token step `set-desired` (step 2) comes before the verification step `commit` (step 5)",
-        "the OIDC token step `set-desired` (step 2) comes before the verification step `version` (step 7)",
-        "the set step `set-desired` (step 2) comes before `ca` (step 9), whose file it reads",
-        "the set step `set-desired` (step 2) comes before `request` (step 10), whose file it reads",
-        "step 2 (`set-desired`) comes before the last verification step and runs hkctl",
-        "the join step `tailnet` (step 8) comes after the OIDC token step `set-desired` (step 2)",
+        "the OIDC token step `set-desired` (step 3) comes before the verification step `checksum` (step 4)",
+        "the OIDC token step `set-desired` (step 3) comes before the verification step `attestation` (step 5)",
+        "the OIDC token step `set-desired` (step 3) comes before the verification step `commit` (step 6)",
+        "the OIDC token step `set-desired` (step 3) comes before the verification step `version` (step 8)",
+        "the set step `set-desired` (step 3) comes before `ca` (step 10), whose file it reads",
+        "the set step `set-desired` (step 3) comes before `request` (step 11), whose file it reads",
+        "step 3 (`set-desired`) comes before the last verification step and runs hkctl",
+        "the join step `tailnet` (step 9) comes after the OIDC token step `set-desired` (step 3)",
     ];
     assert_client(&early, &early_want);
-    // The real file with its set step moved to just before the checksum: the download is step 1.
+    // The real file with its set step moved to just before the checksum: the download is step 2.
     let reordered = moved(
         &text,
         "      # The first step that requests an OIDC token for the coordinator",
@@ -282,23 +290,23 @@ fn nothing_before_verification_touches_the_token_or_ctl() {
     let cases: [(&str, &[&str]); 4] = [
         (
             "      - id: early\n        run: hostkeeper ctl releases converge --service s\n",
-            &["step 4 (`early`) comes before the last verification step and runs ctl"],
+            &["step 5 (`early`) comes before the last verification step and runs ctl"],
         ),
         (
             "      - id: early\n        run: exec \"$RUNNER_TEMP/hkctl-bin/hkctl\" --version\n",
-            &["step 4 (`early`) comes before the last verification step and runs hkctl"],
+            &["step 5 (`early`) comes before the last verification step and runs hkctl"],
         ),
         (
             "      - id: early\n        run: echo \"$ACTIONS_ID_TOKEN_REQUEST_TOKEN\"\n",
             &[
-                "step 4 (`early`) comes before the last verification step and names the OIDC token request",
+                "step 5 (`early`) comes before the last verification step and names the OIDC token request",
             ],
         ),
         (
             "      - uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1\n        with:\n          script: core.getIDToken()\n",
             &[
-                "step 4 (`unnamed`) comes before the last verification step and uses an action, which can read the OIDC token request",
-                "step 4 (`unnamed`) comes before the last verification step and names the OIDC token request",
+                "step 5 (`unnamed`) comes before the last verification step and uses an action, which can read the OIDC token request",
+                "step 5 (`unnamed`) comes before the last verification step and names the OIDC token request",
             ],
         ),
     ];
@@ -320,7 +328,7 @@ fn nothing_before_verification_touches_the_token_or_ctl() {
             commit,
             &format!("{commit}        continue-on-error: true\n"),
         ),
-        &["step 4 (`commit`) has `continue-on-error`, which could run the job on past it"],
+        &["step 5 (`commit`) has `continue-on-error`, which could run the job on past it"],
     );
     assert_client(
         &with_in(
@@ -328,7 +336,7 @@ fn nothing_before_verification_touches_the_token_or_ctl() {
             "      - id: set-desired\n",
             "      - id: set-desired\n        if: ${{ always() }}\n",
         ),
-        &["step 10 (`set-desired`) has `if`, which could run the job on past it"],
+        &["step 11 (`set-desired`) has `if`, which could run the job on past it"],
     );
     // The order is read from the one step with the client's id: a second one is refused.
     assert_client(
@@ -399,6 +407,7 @@ fn the_workflow_has_no_pull_request_target_and_no_inherited_secrets() {
             "the output `converged` of `workflow_call` is not `${{ jobs.set-desired.outputs.converged }}`",
             "the output `reason` of `workflow_call` is not `${{ jobs.set-desired.outputs.reason }}`",
             "no input `join_tailnet` of `type: boolean` with `default: false`",
+            "no input `tailnet_tag` of `type: string` with `default: tag:hk-ci`",
         ],
     );
     assert_client(
@@ -411,7 +420,7 @@ fn the_workflow_has_no_pull_request_target_and_no_inherited_secrets() {
             "    runs-on: ubuntu-24.04\n",
             "    runs-on: ubuntu-24.04\n    secrets: inherit\n",
         ),
-        &["line 25: `secrets: inherit` hands every secret of the caller on"],
+        &["line 28: `secrets: inherit` hands every secret of the caller on"],
     );
     assert_client(
         &with_in(
@@ -427,7 +436,7 @@ fn the_workflow_has_no_pull_request_target_and_no_inherited_secrets() {
             "ci.yml",
             &with_in(CLIENT, "      id-token: write\n", "    secrets: inherit\n")
         ),
-        ["line 27: `secrets: inherit` hands every secret of the caller on"]
+        ["line 30: `secrets: inherit` hands every secret of the caller on"]
     );
 }
 
@@ -664,7 +673,8 @@ fn without_the_join_input_and_step_the_workflow_is_refused() {
     );
     let no_input = "no input `join_tailnet` of `type: boolean` with `default: false`";
     let no_step = "no step has `id: tailnet`";
-    // The real file as it was before the join: no input, no step.
+    // The real file as it was before the join: no input, no step (and no input of the tag the
+    // join passes, which comes after the join's other inputs).
     let start = text.find("      join_tailnet:\n").expect("the input");
     let end = start + text[start..].find("    outputs:\n").expect("the outputs");
     let without_input = format!("{}{}", &text[..start], &text[end..]);
@@ -676,7 +686,14 @@ fn without_the_join_input_and_step_the_workflow_is_refused() {
             .find("      - name: Write the coordinator's CA\n")
             .expect("the CA step");
     let before = format!("{}{}", &without_input[..start], &without_input[end..]);
-    assert_client(&before, &[no_input, no_step]);
+    assert_client(
+        &before,
+        &[
+            no_input,
+            no_step,
+            "no input `tailnet_tag` of `type: string` with `default: tag:hk-ci`",
+        ],
+    );
     assert_client(&with_in(CLIENT, JOIN_INPUT_BLOCK, ""), &[no_input]);
     assert_client(&with_in(CLIENT, JOIN_BLOCK, ""), &[no_step]);
     for (from, to) in [
@@ -709,7 +726,7 @@ fn the_join_runs_only_when_asked_after_every_check_and_before_the_token_step() {
     }
     assert!(at(JOIN_STEP) < at(CLIENT_STEP), "{ids:?}");
     let join_if = "        if: ${{ inputs.join_tailnet }}\n";
-    let no_if = "the join step `tailnet` (step 7) does not have `if: ${{ inputs.join_tailnet }}`";
+    let no_if = "the join step `tailnet` (step 8) does not have `if: ${{ inputs.join_tailnet }}`";
     assert_client(&with_in(CLIENT, join_if, ""), &[no_if]);
     assert_client(
         &with_in(CLIENT, join_if, "        if: ${{ always() }}\n"),
@@ -722,7 +739,7 @@ fn the_join_runs_only_when_asked_after_every_check_and_before_the_token_step() {
             &format!("{join_if}        continue-on-error: true\n"),
         ),
         &[
-            "the join step `tailnet` (step 7) has `continue-on-error`, which could run the job on past it",
+            "the join step `tailnet` (step 8) has `continue-on-error`, which could run the job on past it",
         ],
     );
     // Before the first check: every check comes after it.
@@ -735,11 +752,11 @@ fn the_join_runs_only_when_asked_after_every_check_and_before_the_token_step() {
     assert_client(
         &first,
         &[
-            "step 2 (`tailnet`) comes before the last verification step and uses an action, which can read the OIDC token request",
-            "the join step `tailnet` (step 2) comes before the verification step `checksum` (step 3)",
-            "the join step `tailnet` (step 2) comes before the verification step `attestation` (step 4)",
-            "the join step `tailnet` (step 2) comes before the verification step `commit` (step 5)",
-            "the join step `tailnet` (step 2) comes before the verification step `version` (step 7)",
+            "step 3 (`tailnet`) comes before the last verification step and uses an action, which can read the OIDC token request",
+            "the join step `tailnet` (step 3) comes before the verification step `checksum` (step 4)",
+            "the join step `tailnet` (step 3) comes before the verification step `attestation` (step 5)",
+            "the join step `tailnet` (step 3) comes before the verification step `commit` (step 6)",
+            "the join step `tailnet` (step 3) comes before the verification step `version` (step 8)",
         ],
     );
     // After the provenance checks, before the version check.
@@ -751,15 +768,15 @@ fn the_join_runs_only_when_asked_after_every_check_and_before_the_token_step() {
     );
     assert_client(
         &between,
-        &["the join step `tailnet` (step 5) comes before the verification step `version` (step 7)"],
+        &["the join step `tailnet` (step 6) comes before the verification step `version` (step 8)"],
     );
     // After the calls, last.
     let late = format!("{}{JOIN_BLOCK}", with_in(CLIENT, JOIN_BLOCK, ""));
     assert_client(
         &late,
         &[
-            "the outputs step `outputs` (step 11) is not the last step",
-            "the join step `tailnet` (step 12) comes after the OIDC token step `set-desired` (step 9)",
+            "the outputs step `outputs` (step 12) is not the last step",
+            "the join step `tailnet` (step 13) comes after the OIDC token step `set-desired` (step 10)",
         ],
     );
     // The real file with its join moved to just before the attestation check.
@@ -772,10 +789,10 @@ fn the_join_runs_only_when_asked_after_every_check_and_before_the_token_step() {
     assert_client(
         &reordered,
         &[
-            "step 3 (`tailnet`) comes before the last verification step and uses an action, which can read the OIDC token request",
-            "the join step `tailnet` (step 3) comes before the verification step `attestation` (step 4)",
-            "the join step `tailnet` (step 3) comes before the verification step `commit` (step 5)",
-            "the join step `tailnet` (step 3) comes before the verification step `version` (step 7)",
+            "step 4 (`tailnet`) comes before the last verification step and uses an action, which can read the OIDC token request",
+            "the join step `tailnet` (step 4) comes before the verification step `attestation` (step 5)",
+            "the join step `tailnet` (step 4) comes before the verification step `commit` (step 6)",
+            "the join step `tailnet` (step 4) comes before the verification step `version` (step 8)",
         ],
     );
 }
@@ -788,7 +805,7 @@ fn no_action_runs_before_the_join() {
     let action = "      - id: other\n        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1\n";
     assert_client(
         &with_in(CLIENT, join, &format!("{action}{join}")),
-        &["step 7 (`other`) comes before the join step and uses an action"],
+        &["step 8 (`other`) comes before the join step and uses an action"],
     );
     let plain = "      - id: other\n        run: echo ready\n";
     assert_client(&with_in(CLIENT, join, &format!("{plain}{join}")), &[]);
@@ -809,19 +826,19 @@ fn the_join_action_is_pinned_federated_and_names_no_secret() {
     // credential or any `secrets.` reference in the join; another tag or identity than the
     // inputs name; and the Tailscale tarball left to float.
     let pin = "tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be390056cd";
-    let unpinned = "the join step `tailnet` (step 7) does not use `tailscale/github-action` pinned to a 40-digit lowercase commit SHA";
+    let unpinned = "the join step `tailnet` (step 8) does not use `tailscale/github-action` pinned to a 40-digit lowercase commit SHA";
     let cases: [(&str, &[&str]); 3] = [
         (
             "tailscale/github-action@v4",
             &[
-                "line 58: `uses: tailscale/github-action@v4` is not pinned to a 40-digit lowercase commit SHA",
+                "line 65: `uses: tailscale/github-action@v4` is not pinned to a 40-digit lowercase commit SHA",
                 unpinned,
             ],
         ),
         (
             "tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be39005",
             &[
-                "line 58: `uses: tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be39005` is not pinned to a 40-digit lowercase commit SHA",
+                "line 65: `uses: tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be39005` is not pinned to a 40-digit lowercase commit SHA",
                 unpinned,
             ],
         ),
@@ -833,8 +850,8 @@ fn the_join_action_is_pinned_federated_and_names_no_secret() {
     for (to, want) in cases {
         assert_client(&with_in(CLIENT, pin, to), want);
     }
-    let tags = "          tags: tag:hk-ci\n";
-    let secret = "the join step `tailnet` (step 7) names `secrets.`";
+    let tags = "          tags: ${{ inputs.tailnet_tag }}\n";
+    let secret = "the join step `tailnet` (step 8) names `secrets.`";
     assert_client(
         &with_in(
             CLIENT,
@@ -843,7 +860,7 @@ fn the_join_action_is_pinned_federated_and_names_no_secret() {
         ),
         &[
             secret,
-            "the join step `tailnet` (step 7) passes `oauth-secret`, a stored credential",
+            "the join step `tailnet` (step 8) passes `oauth-secret`, a stored credential",
         ],
     );
     assert_client(
@@ -852,7 +869,7 @@ fn the_join_action_is_pinned_federated_and_names_no_secret() {
             tags,
             &format!("{tags}          authkey: tskey-auth-k0123\n"),
         ),
-        &["the join step `tailnet` (step 7) passes `authkey`, a stored credential"],
+        &["the join step `tailnet` (step 8) passes `authkey`, a stored credential"],
     );
     assert_client(
         &with_in(
@@ -862,7 +879,7 @@ fn the_join_action_is_pinned_federated_and_names_no_secret() {
         ),
         &[
             secret,
-            "the join step `tailnet` (step 7) does not pass `audience: ${{ inputs.tailnet_audience }}`",
+            "the join step `tailnet` (step 8) does not pass `audience: ${{ inputs.tailnet_audience }}`",
         ],
     );
     let join_if = "        if: ${{ inputs.join_tailnet }}\n";
@@ -876,7 +893,7 @@ fn the_join_action_is_pinned_federated_and_names_no_secret() {
     );
     assert_client(
         &with_in(CLIENT, tags, "          tags: tag:ci,tag:admin\n"),
-        &["the join step `tailnet` (step 7) does not pass `tags: tag:hk-ci`"],
+        &["the join step `tailnet` (step 8) does not pass `tags: ${{ inputs.tailnet_tag }}`"],
     );
     assert_client(
         &with_in(
@@ -885,7 +902,7 @@ fn the_join_action_is_pinned_federated_and_names_no_secret() {
             "oauth-client-id: kAbCd",
         ),
         &[
-            "the join step `tailnet` (step 7) does not pass `oauth-client-id: ${{ inputs.tailnet_client_id }}`",
+            "the join step `tailnet` (step 8) does not pass `oauth-client-id: ${{ inputs.tailnet_client_id }}`",
         ],
     );
     // The coordinator the join waits for is the caller's input, in the real file too.
@@ -909,7 +926,7 @@ fn the_join_action_is_pinned_federated_and_names_no_secret() {
     );
     let ping = "          ping: ${{ inputs.tailnet_coordinator }}\n";
     let no_ping =
-        "the join step `tailnet` (step 7) does not pass `ping: ${{ inputs.tailnet_coordinator }}`";
+        "the join step `tailnet` (step 8) does not pass `ping: ${{ inputs.tailnet_coordinator }}`";
     for to in [
         "",
         "          ping: hk-coordinator\n",
@@ -917,7 +934,7 @@ fn the_join_action_is_pinned_federated_and_names_no_secret() {
     ] {
         assert_client(&with_in(CLIENT, ping, to), &[no_ping]);
     }
-    let floating = "the join step `tailnet` (step 7) does not pin the Tailscale tarball by an `X.Y.Z` `version` and a 64-digit lowercase `sha256sum`";
+    let floating = "the join step `tailnet` (step 8) does not pin the Tailscale tarball by an `X.Y.Z` `version` and a 64-digit lowercase `sha256sum`";
     let sha =
         "          sha256sum: c6f99a5d774c7783b56902188d69e9756fc3dddfb08ac6be4cb2585f3fecdc32\n";
     for (from, to) in [
