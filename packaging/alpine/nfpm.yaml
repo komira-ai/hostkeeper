@@ -19,9 +19,8 @@
 # (docs/design/network-install.md, section 3), which runs on a systemd host and is carried by
 # the deb and the rpm.
 #
-# The package depends on OpenRC 0.62 or later, the first release whose supervise-daemon takes
-# notify="socket:ready" (Alpine 3.22), which the init script uses to wait for the daemon's
-# READY=1. Its scripts are packaging/alpine/scripts/postinstall.sh, which apk runs as
+# The package depends on OpenRC 0.62 or later: OpenRC 0.62 (Alpine 3.22) is the oldest the
+# device tests run the package on. Its scripts are packaging/alpine/scripts/postinstall.sh, which apk runs as
 # .post-install on a first install, and preremove.sh, which apk runs as .pre-deinstall on a
 # removal. apk runs neither on an upgrade (it runs .post-upgrade, which the package does not
 # have), so an upgrade leaves the service in the runlevels as it was.

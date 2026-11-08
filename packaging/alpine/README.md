@@ -23,8 +23,8 @@ its attestation check runs on:
 | `/usr/lib/hostkeeper/gh` | 0755 |
 | `/usr/lib/hostkeeper/trusted_root.json` | 0644 |
 
-all owned by root. It needs OpenRC 0.62 or later (Alpine 3.22 or later): the init script uses
-`notify="socket:ready"` of supervise-daemon, which earlier releases do not have. It carries
+all owned by root. It needs OpenRC 0.62 or later (Alpine 3.22 or later), the oldest release the
+device tests run the package on. It carries
 neither the systemd unit nor `hostkeeper-pxe`, the boot server of network install, which runs on
 a systemd host.
 

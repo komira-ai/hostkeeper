@@ -15,12 +15,11 @@ const SHEBANG: &str = "#!/sbin/openrc-run";
 
 /// The variables the init script sets. `command_user` and the others that drop root or confine
 /// the daemon are not among them: the daemon runs as root with no sandbox, as the unit does.
-const VARIABLES: [&str; 9] = [
+const VARIABLES: [&str; 8] = [
     "description",
     "supervisor",
     "command",
     "command_args",
-    "notify",
     "respawn_delay",
     "respawn_max",
     "output_log",
@@ -30,16 +29,20 @@ const VARIABLES: [&str; 9] = [
 /// The variables that have one value: how supervise-daemon runs the daemon. The program is the
 /// binary the package installed, which execs `current` itself; the daemon exits 0 to be started
 /// again after its own update, so it is respawned for good (`respawn_max=0`), a second after.
-const FIXED: [(&str, &str); 5] = [
+const FIXED: [(&str, &str); 4] = [
     ("supervisor", "supervise-daemon"),
     ("command", "/usr/bin/hostkeeper"),
-    ("notify", "socket:ready"),
     ("respawn_delay", "1"),
     ("respawn_max", "0"),
 ];
 
 /// The functions of the init script.
-const FUNCTIONS: [&str; 2] = ["depend", "start_pre"];
+const FUNCTIONS: [&str; 3] = ["depend", "start_pre", "start_post"];
+
+/// The ready file the daemon writes (`--ready-file`), which `start_pre` removes and `start_post`
+/// waits for. The systemd unit has `--notify-systemd` where the init script has
+/// `--ready-file` and this path.
+const READY_FILE: &str = "/run/hostkeeper/ready";
 
 /// The directories `start_pre` makes beyond those of the tmpfiles rules: the parents that
 /// `checkpath` does not make, at the mode and owner of a directory made by default.
@@ -140,8 +143,14 @@ impl Initd {
 }
 
 /// The init script sets only [`VARIABLES`], each of [`FIXED`] to its value, and defines only
-/// [`FUNCTIONS`].
+/// [`FUNCTIONS`]. It does not set `notify`: supervise-daemon's wait for it has no end.
 fn check_variables(initd: &Initd) -> Result<(), String> {
+    if initd.vars.contains_key("notify") {
+        return Err(
+            "the init script sets notify: supervise-daemon's wait for the notice has no end when the daemon exits before it is ready, which would hold the runlevel; start_post waits for the ready file instead"
+                .to_owned(),
+        );
+    }
     if let Some(name) = initd.vars.keys().find(|k| !VARIABLES.contains(&k.as_str())) {
         return Err(format!(
             "the init script sets {name}, which it does not use: the daemon runs as root with no sandbox, and its configuration is its flags"
@@ -165,11 +174,19 @@ fn check_variables(initd: &Initd) -> Result<(), String> {
     Ok(())
 }
 
-/// `command_args` is, word for word, the arguments of the unit's `ExecStart=` after its program.
+/// `command_args` is, word for word, the arguments of the unit's `ExecStart=` after its program,
+/// with `--notify-systemd` replaced by `--ready-file` and [`READY_FILE`].
 fn check_arguments(initd: &Initd, unit_text: &str) -> Result<(), String> {
     let unit = Unit::parse(unit_text)?;
     let exec = unit::command_words(unit.single("Service", "ExecStart")?)?;
-    let wanted: Vec<&str> = exec.iter().skip(1).map(String::as_str).collect();
+    let wanted: Vec<&str> = exec
+        .iter()
+        .skip(1)
+        .flat_map(|word| match word.as_str() {
+            "--notify-systemd" => vec!["--ready-file", READY_FILE],
+            other => vec![other],
+        })
+        .collect();
     let args = initd.vars.get("command_args").map_or("", String::as_str);
     let words: Vec<&str> = args.split_whitespace().collect();
     if words != wanted {
@@ -177,13 +194,24 @@ fn check_arguments(initd: &Initd, unit_text: &str) -> Result<(), String> {
             "command_args is {words:?}, not the arguments of the unit's ExecStart=: {wanted:?}"
         ));
     }
-    if !words.contains(&"--notify-systemd") {
+    if !words.contains(&"--ready-file") {
         return Err(
-            "command_args lacks --notify-systemd, so supervise-daemon waits for a READY=1 the daemon never sends"
+            "command_args lacks --ready-file, so the daemon writes no ready file and start_post waits for it with no end"
                 .to_owned(),
         );
     }
     Ok(())
+}
+
+/// The ready file `command_args` names: the word after `--ready-file`.
+fn ready_file(initd: &Initd) -> Result<String, String> {
+    let args = initd.vars.get("command_args").map_or("", String::as_str);
+    let mut words = args.split_whitespace();
+    words
+        .find(|word| *word == "--ready-file")
+        .and_then(|_| words.next())
+        .map(str::to_owned)
+        .ok_or_else(|| "command_args names no --ready-file".to_owned())
 }
 
 /// A directory `start_pre` makes: its path, mode and owner as `checkpath` is given them.
@@ -251,7 +279,16 @@ fn check_directories(initd: &Initd, tmpfiles_text: &str) -> Result<(), String> {
         .functions
         .get("start_pre")
         .ok_or("the init script has no start_pre")?;
-    let made = made_directories(body)?;
+    let ready = ready_file(initd)?;
+    let rm = format!("rm -f {ready}");
+    let last = body.last().map_or("", String::as_str);
+    let checkpaths = &body[..body.len().saturating_sub(1)];
+    if last != rm {
+        return Err(format!(
+            "start_pre ends with `{last}`, not `{rm}`: the ready file of the last start must be gone before the daemon starts, or start_post would return at once"
+        ));
+    }
+    let made = made_directories(checkpaths)?;
     let mut sorted = made.clone();
     sorted.sort();
     let wanted = tmpfiles_directories(tmpfiles_text)?;
@@ -281,17 +318,40 @@ fn check_depend(initd: &Initd) -> Result<(), String> {
     Ok(())
 }
 
+/// `start_post` is, line for line, the wait for the ready file of `command_args`, which stops
+/// with an error said once supervise-daemon has started the daemon a second time.
+fn check_start_post(initd: &Initd) -> Result<(), String> {
+    let ready = ready_file(initd)?;
+    let wanted = [
+        format!("while [ ! -e {ready} ]; do"),
+        "if [ \"$(service_get_value start_count)\" -gt 1 ]; then".to_owned(),
+        "eerror \"hostkeeper ended before it was ready; supervise-daemon starts it again (see /var/log/hostkeeper.log)\"".to_owned(),
+        "return 0".to_owned(),
+        "fi".to_owned(),
+        "sleep 1".to_owned(),
+        "done".to_owned(),
+    ];
+    let body = initd.functions.get("start_post");
+    if body.is_none_or(|lines| lines.as_slice() != wanted) {
+        return Err(format!(
+            "start_post is {body:?}, not the wait for {ready} that gives up once the start count is past 1: {wanted:?}"
+        ));
+    }
+    Ok(())
+}
+
 fn check_initd(text: &str, unit_text: &str, tmpfiles_text: &str) -> Result<(), String> {
     let initd = Initd::parse(text)?;
     check_variables(&initd)?;
     check_arguments(&initd, unit_text)?;
     check_depend(&initd)?;
-    check_directories(&initd, tmpfiles_text)
+    check_directories(&initd, tmpfiles_text)?;
+    check_start_post(&initd)
 }
 
 /// Catches an init script that drifts from the systemd unit and the tmpfiles rules it stands
 /// in for: a flag, path or order of the daemon's arguments that is not the unit's, no
-/// `--notify-systemd`, a supervisor, program, notify mode or respawn setting other than the
+/// `--ready-file`, a `notify=`, a supervisor, program, notify mode or respawn setting other than the
 /// design's, a variable that drops root or confines the daemon, a directory that is not one of
 /// the rules' (or their parent) or is made with another mode or owner, a parent made after the
 /// directory in it, and a line of a language other than the small part of OpenRC's it is
@@ -328,12 +388,20 @@ fn init_script_runs_the_units_flags_and_makes_the_tmpfiles_directories() {
             "command is Some(\"/var/lib/updater/state/hostkeeper/bin/current\")",
         ),
         (
-            altered(&initd, "\nnotify=\"socket:ready\"\n", "\n"),
-            "notify is None",
+            altered(
+                &initd,
+                "\nrespawn_delay=1\n",
+                "\nrespawn_delay=1\nnotify=\"socket:ready\"\n",
+            ),
+            "sets notify: supervise-daemon's wait for the notice has no end",
         ),
         (
-            altered(&initd, "\nnotify=\"socket:ready\"\n", "\nnotify=\"fd:3\"\n"),
-            "notify is Some(\"fd:3\")",
+            altered(
+                &initd,
+                "\nrespawn_delay=1\n",
+                "\nrespawn_delay=1\nnotify=fd:3\n",
+            ),
+            "sets notify: supervise-daemon's wait",
         ),
         (
             altered(&initd, "\nrespawn_max=0\n", "\nrespawn_max=3\n"),
@@ -376,7 +444,11 @@ fn init_script_runs_the_units_flags_and_makes_the_tmpfiles_directories() {
             "the character '$' is outside",
         ),
         (
-            altered(&initd, "\nnotify=", "\nexport RUST_LOG=debug\nnotify="),
+            altered(
+                &initd,
+                "\nrespawn_delay=",
+                "\nexport RUST_LOG=debug\nrespawn_delay=",
+            ),
             "\"export RUST_LOG\" is not a variable name",
         ),
         (
@@ -396,11 +468,7 @@ fn init_script_runs_the_units_flags_and_makes_the_tmpfiles_directories() {
             "the character ';' is outside",
         ),
         (
-            altered(
-                &initd,
-                "\nnotify=\"socket:ready\"\n",
-                "\nnotify \"socket:ready\"\n",
-            ),
+            altered(&initd, "\nrespawn_max=0\n", "\nrespawn_max 0\n"),
             "not an assignment or a function",
         ),
         (
@@ -420,11 +488,7 @@ fn init_script_runs_the_units_flags_and_makes_the_tmpfiles_directories() {
             "the function \"Stop\" is not a new name",
         ),
         (
-            altered(
-                &initd,
-                "/var/lib/updater/hooks\n}",
-                "/var/lib/updater/hooks\n",
-            ),
+            altered(&initd, "\t\tsleep 1\n\tdone\n}", "\t\tsleep 1\n\tdone\n"),
             "a function is not closed",
         ),
         (
@@ -509,20 +573,75 @@ fn init_script_runs_the_units_flags_and_makes_the_tmpfiles_directories() {
         ),
         (
             altered(&initd, "start_pre() {", "start_post() {"),
-            "defines start_post",
+            "the function \"start_post\" is not a new name",
+        ),
+        (
+            altered(&initd, "start_pre() {", "stop() {"),
+            "defines stop, which it does not use",
+        ),
+        (
+            altered(&initd, "\trm -f /run/hostkeeper/ready\n}", "}"),
+            "start_pre ends with `checkpath",
+        ),
+        (
+            altered(
+                &initd,
+                "\trm -f /run/hostkeeper/ready\n}",
+                "\trm -rf /run/hostkeeper\n}",
+            ),
+            "start_pre ends with `rm -rf /run/hostkeeper`, not `rm -f /run/hostkeeper/ready`",
+        ),
+        (
+            altered(
+                &initd,
+                "\trm -f /run/hostkeeper/ready\n}",
+                "\trm -f /run/hostkeeper/other\n}",
+            ),
+            "start_pre ends with `rm -f /run/hostkeeper/other`",
+        ),
+        (
+            altered(
+                &initd,
+                "\trm -f /run/hostkeeper/ready\n}",
+                "\trm -f /run/hostkeeper/ready\n\trm -f /run/hostkeeper/admin.sock\n}",
+            ),
+            "start_pre ends with `rm -f /run/hostkeeper/admin.sock`",
+        ),
+        (
+            altered(
+                &initd,
+                "\n\t\tif [ \"$(service_get_value start_count)\" -gt 1 ]; then",
+                "\n\t\tif false; then",
+            ),
+            "start_post is",
+        ),
+        (altered(&initd, "-gt 1 ]", "-gt 2 ]"), "start_post is"),
+        (
+            altered(
+                &initd,
+                "while [ ! -e /run/hostkeeper/ready ]",
+                "while [ ! -e /run/hostkeeper/up ]",
+            ),
+            "start_post is",
+        ),
+        (altered(&initd, "\t\tsleep 1\n", ""), "start_post is"),
+        (altered(&initd, "\t\t\treturn 0\n", ""), "start_post is"),
+        (
+            altered(&initd, "\nstart_post() {", "\nstop_post() {"),
+            "defines stop_post",
         ),
     ];
     refuses(|t: &str| check_initd(t, &unit, &tmpfiles), &cases);
 }
 
 /// Catches an init script whose arguments are not the unit's: a path, a flag, the order, or
-/// no `--notify-systemd` in both; and an init script that no longer follows a unit that changed.
+/// no `--ready-file` in both, `--notify-systemd` kept, or another ready file; and an init script that no longer follows a unit that changed.
 #[test]
 fn init_script_arguments_are_the_units_word_for_word() {
     let initd = read_alpine(INITD);
     let unit = read(UNIT);
     let tmpfiles = read(TMPFILES);
-    let args = "daemon --config /etc/hostkeeper/hostkeeper.toml --state-dir /var/lib/updater/state --packages-dir /var/lib/hostkeeper/packages --admin-socket /run/hostkeeper/admin.sock --notify-systemd";
+    let args = "daemon --config /etc/hostkeeper/hostkeeper.toml --state-dir /var/lib/updater/state --packages-dir /var/lib/hostkeeper/packages --admin-socket /run/hostkeeper/admin.sock --ready-file /run/hostkeeper/ready";
     let with_args = |new: &str| altered(&initd, args, new);
     let initd_cases = [
         (
@@ -533,7 +652,19 @@ fn init_script_arguments_are_the_units_word_for_word() {
             "command_args is",
         ),
         (
-            with_args(&args.replace(" --notify-systemd", "")),
+            with_args(&args.replace(" --ready-file /run/hostkeeper/ready", "")),
+            "command_args is",
+        ),
+        (
+            with_args(&args.replace("--ready-file /run/hostkeeper/ready", "--notify-systemd")),
+            "command_args is",
+        ),
+        (
+            with_args(&args.replace("--ready-file", "--ready-path")),
+            "command_args is",
+        ),
+        (
+            with_args(&args.replace("/run/hostkeeper/ready", "/run/hostkeeper/up")),
             "command_args is",
         ),
         (with_args(&args.replace("daemon ", "")), "command_args is"),
@@ -543,7 +674,7 @@ fn init_script_arguments_are_the_units_word_for_word() {
         ),
         (
             with_args(
-                "daemon --state-dir /var/lib/updater/state --config /etc/hostkeeper/hostkeeper.toml --packages-dir /var/lib/hostkeeper/packages --admin-socket /run/hostkeeper/admin.sock --notify-systemd",
+                "daemon --state-dir /var/lib/updater/state --config /etc/hostkeeper/hostkeeper.toml --packages-dir /var/lib/hostkeeper/packages --admin-socket /run/hostkeeper/admin.sock --ready-file /run/hostkeeper/ready",
             ),
             "command_args is",
         ),
@@ -564,12 +695,51 @@ fn init_script_arguments_are_the_units_word_for_word() {
         ),
     ];
     refuses(|t: &str| check_initd(&initd, t, &tmpfiles), &unit_cases);
-    // Both without the flag: they agree, and supervise-daemon would still wait for READY=1.
-    let without = |text: &str| text.replace(" --notify-systemd", "");
+    // Both without the flag: they agree, and the daemon would write no ready file.
+    let without = |initd: &str, unit: &str| {
+        check_initd(
+            &initd.replace(" --ready-file /run/hostkeeper/ready", ""),
+            &unit.replace(" --notify-systemd", ""),
+            &tmpfiles,
+        )
+    };
     assert_eq!(
-        check_initd(&without(&initd), &without(&unit), &tmpfiles),
-        Err("command_args lacks --notify-systemd, so supervise-daemon waits for a READY=1 the daemon never sends".to_owned())
+        without(&initd, &unit),
+        Err("command_args lacks --ready-file, so the daemon writes no ready file and start_post waits for it with no end".to_owned())
     );
+}
+
+/// Catches an init script whose `start_pre` and `start_post` name another ready file than the
+/// one `command_args` hands the daemon: the wait would never end, or the stale file of the last
+/// start would end it at once.
+#[test]
+fn init_script_waits_for_the_file_the_daemon_writes() {
+    let initd = read_alpine(INITD);
+    let unit = read(UNIT);
+    let tmpfiles = read(TMPFILES);
+    let cases = [
+        (
+            altered(
+                &initd,
+                "rm -f /run/hostkeeper/ready",
+                "rm -f /run/hostkeeper/up",
+            ),
+            "start_pre ends with `rm -f /run/hostkeeper/up`, not `rm -f /run/hostkeeper/ready`",
+        ),
+        (
+            altered(
+                &initd,
+                "while [ ! -e /run/hostkeeper/ready ]",
+                "while [ ! -e /run/hostkeeper/up ]",
+            ),
+            "start_post is",
+        ),
+        (
+            altered(&initd, "start_post() {", "start_post() {\n\tsleep 5"),
+            "start_post is",
+        ),
+    ];
+    refuses(|t: &str| check_initd(t, &unit, &tmpfiles), &cases);
 }
 
 /// Catches an init script that drifts from the tmpfiles rules: a mode, an owner, a directory

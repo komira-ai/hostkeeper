@@ -14,8 +14,8 @@ const INITD: &str = "hostkeeper.initd";
 const APK_POSTINSTALL: &str = "scripts/postinstall.sh";
 const APK_PREREMOVE: &str = "scripts/preremove.sh";
 
-/// The dependency of the apk: the first OpenRC whose supervise-daemon takes
-/// `notify="socket:ready"`.
+/// The dependency of the apk: OpenRC 0.62 (Alpine 3.22), the oldest the device tests run the
+/// package on.
 const DEPENDS: [&str; 1] = ["openrc>=0.62"];
 
 fn alpine() -> PathBuf {
