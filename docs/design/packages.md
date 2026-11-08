@@ -5,7 +5,11 @@ Status: design, for the maintainers' ruling. Build item A1 is **Built**: `releas
 (`crates/hostkeeper-release`). Build item A2 is **Built**: `SetDesired` with targets, its checks and refusals, the
 256 KiB limit, the gateway's null step, the audit entry, the releases in the file store and in Postgres, and
 `GetRelease` (`crates/hostkeeper-coordinator/src/releases.rs`, `service_ci.rs`, `store/postgres/releases.rs`).
-Build item A15 is **Built** (section 5.4). Nothing else here is built. This is a revision of the design merged as
+Build item A15 is **Built** (section 5.4). Build item A5 is **Built** in part: the CI client's
+`targets` input (`.github/workflows/set-desired.yml`) and `cargo xtask release targets`
+(`crates/xtask/src/release/targets.rs`); its callers move to targets in a pull request of their own, once a
+release carries that input, the farm's coordinator runs A2, and the callers' pin has moved to the hkctl
+client. Nothing else here is built. This is a revision of the design merged as
 komira-ai/hostkeeper#179. It keeps that design's stores, its digest and attestation checks before any byte is used, and its
 staged path for the daemons on hosts now. It replaces its package model: host facts, "most specific wins", artifact kinds
 and `Releases.Register` (section 0 says what replaces what). It changes three things in
@@ -837,8 +841,8 @@ with an `uninstalling_installed` tombstone (it leaves the package and the record
 ## 10. Fit with the two-programs design and the hook contract
 
 The two-programs design (`docs/design/two-programs.md`) generates every client from the proto. This design adds no
-verb: the deploy call is a proto method, installers run inside the daemon. Only A5 waits for the generated bash
-client; until it exists, CI keeps today's `set-desired` path.
+verb: the deploy call is a proto method, installers run inside the daemon. Only A5 needs the generated bash
+client, which `set-desired.yml` runs; a caller pinned to an older revision keeps today's `set-desired` path.
 
 The hook contract (`crates/hostkeeper-hook`, hostkeeper-design.md section 5.3, host-updates.md section 3.2) keeps its
 steps, command line, exit codes, last line and params file, and gains no reserved `updater.*` key. A hook's `<artifact>`

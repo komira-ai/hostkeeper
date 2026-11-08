@@ -6,7 +6,7 @@
 
 use super::lint::entry;
 use super::set_desired::{ALWAYS_IF, CALL_STEPS, ORDERED, WAIT_IF};
-use super::set_desired_calls::{CALLS, OUTPUTS_ENV, command};
+use super::set_desired_calls::{CALLS, OUTPUTS_ENV, REQUEST_ARGS, command};
 use super::set_desired_tests::{CLIENT, CLIENT_BLOCK, assert_client, moved, real, step_ids};
 use super::with_in;
 use super::yaml::{self, Node, Value};
@@ -225,8 +225,8 @@ fn the_set_sends_the_request_and_the_wait_is_bounded_by_max_polls() {
     assert_client(
         &with_in(
             CLIENT,
-            "jq --null-input '{}' > \"$RUNNER_TEMP/hkctl-request.json\"",
-            "jq --null-input '{}' > \"$RUNNER_TEMP/request.json\"",
+            "'{}' > \"$RUNNER_TEMP/hkctl-request.json\"",
+            "'{}' > \"$RUNNER_TEMP/request.json\"",
         ),
         &[
             "the request step does not end by writing `\"$RUNNER_TEMP/hkctl-request.json\"`, the file the set step reads",
@@ -409,9 +409,9 @@ fn no_step_hands_a_token_or_an_environment_on() {
         assert_client(
             &with_in(
                 CLIENT,
-                "        run: jq --null-input '{}' > \"$RUNNER_TEMP/hkctl-request.json\"\n",
+                "        run: jq --null-input --arg version",
                 &format!(
-                    "        run: |\n          {script}\n          jq --null-input '{{}}' > \"$RUNNER_TEMP/hkctl-request.json\"\n"
+                    "        run: |\n          {script}\n          jq --null-input --arg version"
                 ),
             ),
             &[&format!(
@@ -579,5 +579,60 @@ fn steps(doc: &Node) -> Vec<Node> {
     match entry(job, "steps").map(|s| &s.value) {
         Some(Value::Seq(steps)) => steps.clone(),
         _ => panic!("the job has no steps"),
+    }
+}
+
+#[test]
+fn the_request_takes_each_part_of_the_release_from_its_own_input() {
+    // Catches: a part of the release (the targets above all) left out of the request with no
+    // error: its variable not passed to the program, passed under another name, or read from
+    // another input or from nothing, so that a caller's targets or index never reach the
+    // coordinator.
+    // The request step's `env`, whole: VERSION is in the call steps' too.
+    let block: String = REQUEST_ARGS
+        .iter()
+        .map(|(_, var, want)| format!("          {var}: {want}\n"))
+        .collect();
+    let block = format!("      - id: request\n        env:\n{block}");
+    // Its command line, whole: the outputs step passes `--arg version` too.
+    let args: String = REQUEST_ARGS
+        .iter()
+        .map(|(name, var, _)| format!(" --arg {name} \"${var}\""))
+        .collect();
+    let line = format!("        run: jq --null-input{args} '{{}}'");
+    for (name, var, want) in REQUEST_ARGS {
+        let env = format!("          {var}: {want}\n");
+        let arg = format!(" --arg {name} \"${var}\"");
+        let not_env = format!("the request step's `{var}` is not `{want}`");
+        let not_arg = format!("the request step does not pass `--arg {name} \"${var}\"`");
+        let other = format!("          {var}: ${{{{ inputs.service }}}}\n");
+        assert_client(
+            &with_in(CLIENT, &block, &block.replace(&env, "")),
+            &[&not_env],
+        );
+        assert_client(
+            &with_in(CLIENT, &block, &block.replace(&env, &other)),
+            &[&not_env],
+        );
+        assert_client(
+            &with_in(CLIENT, &line, &line.replace(&arg, "")),
+            &[&not_arg],
+        );
+        assert_client(
+            &with_in(
+                CLIENT,
+                &line,
+                &line.replace(&arg, &format!(" --arg {name}_text \"${var}\"")),
+            ),
+            &[&not_arg],
+        );
+        assert_client(
+            &with_in(
+                CLIENT,
+                &line,
+                &line.replace(&arg, &format!(" --arg {name} \"$OTHER\"")),
+            ),
+            &[&not_arg],
+        );
     }
 }
