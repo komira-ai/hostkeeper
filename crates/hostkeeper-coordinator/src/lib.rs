@@ -292,6 +292,8 @@ mod release_index_support;
 #[cfg(test)]
 mod release_index_tests;
 #[cfg(test)]
+mod releases_tests;
+#[cfg(test)]
 mod rollback_definition_tests;
 #[cfg(test)]
 mod rollback_membership_tests;
