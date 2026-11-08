@@ -93,9 +93,12 @@ federation's client ID are all public values, so they are variables, not secrets
 | `HOSTKEEPER_TAILNET_CLIENT_ID` | The client ID of the tailnet's federated identity. Empty: the job does not join the tailnet, and the coordinator must be reachable from the runner some other way. |
 | `HOSTKEEPER_TAILNET_AUDIENCE` | The audience of that federated identity. |
 | `HOSTKEEPER_TAILNET_COORDINATOR` | The coordinator's name on the tailnet, which the join pings until it answers. |
+| `HOSTKEEPER_TAILNET_TAG` | The tag the join gives the runner's node, the one the federation's trust credential issues, such as `tag:ci`. Empty: `tag:hk-ci`. Read once `release.yml` pins a revision of the CI client that takes `tailnet_tag`, which the current pin, v0.1.166, does not: until then the join asks for `tag:hk-ci`. |
 
-The tailnet, its tag `tag:hk-ci`, its ACL and its federation are set up as for any caller of the
-CI client ([Reaching the coordinator](ci-client.md#reaching-the-coordinator)). For this
+The tailnet, its tag (`HOSTKEEPER_TAILNET_TAG`, by default `tag:hk-ci`), its ACL and its federation
+are set up as for any caller of the CI client
+([Reaching the coordinator](ci-client.md#reaching-the-coordinator),
+[The tag and the ACL](ci-client.md#the-tag-and-the-acl)). For this
 repository, the federation's subject is
 `repo:komira-ai/hostkeeper:ref:refs/heads/main`.
 

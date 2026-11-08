@@ -24,10 +24,12 @@
 #
 # A GitHub-hosted runner is not on the private network the coordinator's private listener is
 # bound to. With `join_tailnet` true, one step after the verification joins the runner to the
-# tailnet as an ephemeral node tagged `tag:hk-ci` (docs/deploy/ci-client.md, "Reaching the
-# coordinator"). It is the one action of the job, pinned to a commit, and authenticates with a
-# GitHub OIDC token exchanged by the tailnet's federated identity: no secret is stored. No step
-# before it uses an action.
+# tailnet as an ephemeral node tagged `tailnet_tag`, `tag:hk-ci` unless the caller names the tag
+# its tailnet's trust credential issues (docs/deploy/ci-client.md, "Reaching the coordinator").
+# It is the one action of the job, pinned to a commit, and authenticates with a GitHub OIDC token
+# exchanged by the tailnet's federated identity: no secret is stored. No step before it uses an
+# action. The first step of the job checks `tailnet_tag`, whether or not the job joins: no other
+# step but the join reads it.
 #
 # Then the verified hkctl makes two calls, each one command that asks the runner for its own
 # OIDC token (`--github-oidc-audience`): `releases set-desired`, with the request the `request`
@@ -128,6 +130,11 @@ on:
         type: string
         required: false
         default: ""
+      tailnet_tag:
+        description: "The tag the join gives the runner's node, the one the tailnet's federated identity for this repository issues: `tag:` and a Tailscale tag name, a lower-case letter, then lower-case letters, digits and `-`. Checked by the job's first step, which ends the job on any other value."
+        type: string
+        required: false
+        default: tag:hk-ci
     outputs:
       desired_version:
         description: The desired version the coordinator stored; empty when it stored none.
@@ -162,6 +169,16 @@ jobs:
       HOSTKEEPER_TAG: v${{ inputs.hostkeeper_version }}
       HKCTL_ASSET: hkctl-${{ inputs.hostkeeper_version }}
     steps:
+      # `tailnet_tag` is `tag:` and a Tailscale tag name, or the job ends here, before anything is
+      # downloaded and before the join, the one other step that reads it. jq exits 5 with the
+      # error; the value comes from the step's environment, never written into the script.
+      - name: Check the tailnet tag
+        id: tailnet-tag
+        env:
+          TAILNET_TAG: ${{ inputs.tailnet_tag }}
+        run: |
+          jq --null-input --arg tag "$TAILNET_TAG" 'if $tag | test("^tag:[a-z][a-z0-9-]*\\z") then empty else error("tailnet_tag is not tag: followed by a Tailscale tag name (a lower-case letter, then lower-case letters, digits and -)") end'
+
       # The download proves nothing: the release channel is not trusted, the next three steps
       # decide (docs/deploy/verify-a-release.md, step 1).
       - name: Download hkctl of the hostkeeper release
@@ -217,9 +234,9 @@ jobs:
 
       # Only with `join_tailnet`: the runner joins the tailnet, so that it can reach the private
       # listener. The first action of the job, after every verification step. The node is
-      # ephemeral and tagged `tag:hk-ci`; it authenticates with a GitHub OIDC token for the
-      # federated identity's audience, and the tailnet's ACL lets that tag reach the coordinator's
-      # private listener and nothing else. The Tailscale tarball is pinned by version and SHA-256.
+      # ephemeral and tagged `tailnet_tag`, which the first step checked; it authenticates with a
+      # GitHub OIDC token for the federated identity's audience, and the tailnet's ACL lets that
+      # tag reach the coordinator's private listener. The Tailscale tarball is pinned by version and SHA-256.
       - name: Join the tailnet
         id: tailnet
         if: ${{ inputs.join_tailnet }}
@@ -227,7 +244,7 @@ jobs:
         with:
           oauth-client-id: ${{ inputs.tailnet_client_id }}
           audience: ${{ inputs.tailnet_audience }}
-          tags: tag:hk-ci
+          tags: ${{ inputs.tailnet_tag }}
           version: 1.94.2
           sha256sum: c6f99a5d774c7783b56902188d69e9756fc3dddfb08ac6be4cb2585f3fecdc32
           use-cache: false
