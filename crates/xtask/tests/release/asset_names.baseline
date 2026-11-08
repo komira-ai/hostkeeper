@@ -80,3 +80,7 @@ mdm-<version>-linux-x86_64.tar.zst.sigstore.json
 mdm-index.json
 netboot.json
 netboot.json.sigstore.json
+hostkeeper-<version>-1-aarch64.pkg.tar.zst
+hostkeeper-<version>-1-aarch64.pkg.tar.zst.sigstore.json
+hostkeeper-<version>-1-x86_64.pkg.tar.zst
+hostkeeper-<version>-1-x86_64.pkg.tar.zst.sigstore.json

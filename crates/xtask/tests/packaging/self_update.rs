@@ -112,7 +112,13 @@ fn installed_binary() -> Result<String, String> {
     let files = config().files("deb")?;
     files
         .into_iter()
-        .find(|f| f.src == "target/release/hostkeeper")
+        .find(|f| {
+            f.src
+                == format!(
+                    "target/nfpm/{}",
+                    xtask::test_support::LINUX_PKG_PROGRAMS[0].1
+                )
+        })
         .map(|f| f.dst)
         .ok_or_else(|| "the packages carry no daemon binary".to_owned())
 }

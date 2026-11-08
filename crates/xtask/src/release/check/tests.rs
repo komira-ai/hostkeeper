@@ -60,12 +60,12 @@ fn a_good_directory_passes_with_two_verifier_calls_per_attested_asset() {
     assert_eq!(
         run(&verifier, &dir, &commit),
         Ok(vec![format!(
-            "release check: the 74 assets of v0.1.5 match SHA256SUMS, and 52 attestations of \
+            "release check: the 78 assets of v0.1.5 match SHA256SUMS, and 56 attestations of \
              commit {commit} verified online and from their bundles"
         )])
     );
     let calls = verifier.calls.borrow();
-    assert_eq!(calls.len(), 52);
+    assert_eq!(calls.len(), 56);
     for name in attested_names(&version()) {
         assert!(calls.contains(&format!("online {name}")), "{name}");
         assert!(
@@ -245,7 +245,7 @@ fn verify_fails_when_the_attested_commit_differs_from_the_pin() {
         ]
     );
     let everything = refused(run(&FakeVerifier::good(&other), &dir, &commit));
-    assert_eq!(everything.len(), 52);
+    assert_eq!(everything.len(), 56);
 }
 
 #[test]
@@ -306,7 +306,7 @@ fn a_verifier_error_is_listed_for_every_file() {
     let lines = refused(run(&fakes.verifier, &dir, &commit));
     let names = attested_names(&version());
     let first = &names[0];
-    assert_eq!(lines.len(), 52);
+    assert_eq!(lines.len(), 56);
     assert_eq!(
         lines[0],
         format!("{first} (online): verify: no attestation")
