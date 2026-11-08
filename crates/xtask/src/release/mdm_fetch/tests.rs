@@ -30,7 +30,7 @@ fn bytes_of(tool: Tool) -> Vec<u8> {
 }
 
 fn archive(dir: &Path, tool: Tool) -> PathBuf {
-    dir.join(format!("{tool}.tar.gz"))
+    dir.join(archive_name(tool))
 }
 
 fn names(dir: &Path) -> Vec<String> {
@@ -158,6 +158,11 @@ fn a_download_that_is_not_its_pin_is_kept_as_rejected_and_fails_the_verb_naming_
     assert_eq!(download.calls.borrow().len(), 5);
 }
 
+/// The file name of `tool`'s archive in the fixture pins.
+fn archive_name(tool: Tool) -> String {
+    format!("{}.tar.gz", tool.name())
+}
+
 #[test]
 fn a_download_that_fails_leaves_no_archive_and_fails_the_verb() {
     // Catches: a failed download that leaves a partial file under the archive's name or as
@@ -166,7 +171,8 @@ fn a_download_that_fails_leaves_no_archive_and_fails_the_verb() {
     let (pins, mut download) = fixture_pins(bytes_of);
     let url = "https://example.com/scepserver/v1.0.0/scepserver.tar.gz";
     download.served.remove(url);
-    std::fs::write(dir.join("scepserver.tar.gz.download"), b"partial").expect("write");
+    let partial = dir.join(format!("{}.download", archive_name(Tool::Scepserver)));
+    std::fs::write(&partial, b"partial").expect("write");
     let err = fetch_with(&download, &pins, &dir).expect_err("refused");
     assert_eq!(
         err,
@@ -176,7 +182,7 @@ fn a_download_that_fails_leaves_no_archive_and_fails_the_verb() {
         )])
     );
     assert!(!archive(&dir, Tool::Scepserver).exists());
-    assert!(!dir.join("scepserver.tar.gz.download").exists());
+    assert!(!partial.exists());
 }
 
 #[test]

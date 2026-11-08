@@ -11,7 +11,7 @@ The daemon fetches a package from the daemon config's `release_channel`, under t
 
 A GitHub release does not have that layout: its assets sit side by side in one list, and its
 index has an asset name of its own (`index.json`, `hello-index.json`,
-`hello-fail-ready-index.json`). `cargo xtask release channel-stage` lays one version of one
+`hello-fail-ready-index.json`, `mdm-index.json`). `cargo xtask release channel-stage` lays one version of one
 service out as the daemon reads it, in a plain directory that any static file origin or
 object-store sync can serve:
 

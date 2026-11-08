@@ -22,7 +22,8 @@ another unit holds.
 | `units/mdm-scep.service`, `units/mdm-nanohub.service`, `units/mdm-depserver.service` | The run units: started at install and observed by the daemon. |
 | `units/mdm-proxy.service` | The HTTPS proxy; it starts only once lego's certificate is there. |
 | `units/mdm-depsyncer.service` | NanoDEP's syncer; `mdm dep define-profile` enables it. |
-| `units/mdm-cert.service`, `units/mdm-cert.timer` | The certificate job and its twice-a-day timer; the job waits for the DNS credentials and restarts the proxy after each run. |
+| `units/mdm-cert.service` | Orders the first certificate, while lego has none; then restarts the proxy (which starts it). |
+| `units/mdm-cert-renew.service`, `units/mdm-cert.timer` | Renews the certificate within 30 days of its end (`lego renew --days 30`; earlier runs order nothing), once a day by the timer, then restarts the proxy if it runs. It wants `mdm-cert.service` first, so the timer also retries a first certificate that failed. Both jobs wait for the DNS credentials. |
 | `manifest.toml` | The hook (`bin/mdm update-hook`), the run units, the health URL `http://127.0.0.1:9004/version` and the params: the settings file `/etc/mdm/settings` and the hook's record directory `/var/lib/updater/hooks/mdm`. |
 
 The package is built for `linux-x86_64` only: the pinned tools are linux-amd64 builds.
@@ -46,11 +47,11 @@ Write two root-owned files on the MDM host.
    | `MDM_SLICE` | `mdm.slice` |
    | `MDM_NANOHUB_PORT`, `MDM_SCEP_PORT`, `MDM_DEP_PORT` | `9004`, `9005`, `9001` |
 
-   The ACME keys (`MDM_ACME_*`) are required: the package always carries the certificate job.
+   The ACME keys (`MDM_ACME_*`) are required: the package always carries the certificate jobs.
    Put no secret in this file.
 2. **The DNS provider's credentials**, `/etc/mdm/dns.env` (mode 0600, root's), holding the
    variables lego reads for `MDM_ACME_DNS_PROVIDER` (the list is in `config.example`). It may also
-   be written after the install: until it is there the certificate job does not run and the
+   be written after the install: until it is there the certificate jobs do not run and the
    proxy waits.
 
 Then assign `mdm` to the host (`hkctl services assign --service mdm --node-id <id>`; see
@@ -59,7 +60,9 @@ Then assign `mdm` to the host (`hkctl services assign --service mdm --node-id <i
 ## What each step of the hook does
 
 The daemon runs `bin/mdm update-hook <step>` as root, as for every hooked service
-([docs/conformance.md](../conformance.md) states the contract).
+([docs/conformance.md](../conformance.md) states the contract). Every step refuses a params
+file the contract's reader refuses, or one whose `settings` is not `/etc/mdm/settings`, and
+`prepare` refuses a release argument that is not the params' `updater.staged_release`.
 
 - **`prepare`** checks the host as the kit's `install` did (root, x86-64, `MDM_BIND` carried by an
   interface, the ports free or held by the package's own units, the SCEP depot empty or holding a
@@ -69,7 +72,7 @@ The daemon runs `bin/mdm update-hook <step>` as root, as for every hooked servic
   made once, never shown), the SCEP CA unless the depot holds one, the Caddyfile
   `/etc/mdm/Caddyfile`, and one drop-in `/etc/systemd/system/<unit>.d/settings.conf` for each
   unit that needs a site value: the slice's caps, the proxy's LAN, depsyncer's token name and the
-  certificate job's ACME settings. It starts nothing. What those last files held is kept in the
+  two certificate jobs' ACME settings. It starts nothing. What those last files held is kept in the
   hook's record first.
 - **`cutover`** reloads systemd, enables the proxy and the timer, restarts the run units and the
   timer, restarts the proxy when it has its certificate and depsyncer when it runs, and starts the

@@ -161,7 +161,7 @@ pub fn plan(
     out: &mut dyn Write,
 ) -> Result<Plan, MdmError> {
     let (c, host) = (&a.config, env.host);
-    preflight(host, c, a.replacing.as_ref(), out)?;
+    preflight(host, c, &kit_dirs(c), a.replacing.as_ref(), out)?;
     let binaries = binaries(host, &a.bin_dir, pins, a.max_archive)?;
     writeln!(out, "archives: every one matches its pin")?;
 
@@ -327,21 +327,36 @@ impl<'h> Restarts<'h> {
     }
 }
 
-/// The host checks, read only.
+/// The directories of the settings `install` refuses as a link: the state, the settings, the
+/// binaries and the pkgs.
+fn kit_dirs(c: &MdmConfig) -> Vec<String> {
+    [c.state(), c.etc(), c.bin(), c.pkg_dir()]
+        .iter()
+        .map(ToString::to_string)
+        .collect()
+}
+
+/// Refuses a link at any of `dirs`; a directory that is not there is no link.
+pub(crate) fn no_link_at(host: &dyn Host, dirs: &[String]) -> Result<(), MdmError> {
+    for path in dirs {
+        if host.stat(path)?.map(|m| m.kind) == Some(Kind::Other) {
+            return Err(MdmError::IsLink(path.clone()));
+        }
+    }
+    Ok(())
+}
+
+/// The host checks, read only; `dirs` are the directories refused as a link.
 pub(crate) fn preflight(
     host: &dyn Host,
     c: &MdmConfig,
+    dirs: &[String],
     replacing: Option<&UnitNames>,
     out: &mut dyn Write,
 ) -> Result<(), MdmError> {
     root_only(host, "install")?;
     architecture(host)?;
-    for path in [&c.state(), &c.etc(), &c.bin(), &c.pkg_dir()] {
-        let link = host.stat(path.as_str())?.map(|m| m.kind) == Some(Kind::Other);
-        if link {
-            return Err(MdmError::IsLink(path.to_string()));
-        }
-    }
+    no_link_at(host, dirs)?;
     // `ip -o -4 addr show`: `<n>: <if>    inet <addr>/<bits> brd ...`, one per line.
     let addrs = checked(host, &Cmd::new(IP).args(&["-o", "-4", "addr", "show"]))?;
     let bind = c.bind().to_string();

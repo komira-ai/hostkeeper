@@ -50,6 +50,7 @@ pub fn rendered_files() -> Vec<String> {
             package::PROXY,
             package::DEPSYNCER,
             package::CERT_SERVICE,
+            package::CERT_RENEW,
         ]
         .map(drop_in),
     );
@@ -72,6 +73,9 @@ pub fn package_example() -> String {
 
 /// `lego run --help` as the pinned lego prints it: every flag the certificate unit passes.
 pub const LEGO_HELP: &str = "   --accept-tos  --email value  --server value  --path value\n   --key-type value  --dns value  --domains value  --dns.resolvers value\n   --dns.propagation.wait value\n";
+
+/// `lego renew --help` as the pinned lego prints it: every flag the renewal unit passes.
+pub const LEGO_RENEW_HELP: &str = "   --email value  --server value  --path value  --key-type value\n   --dns value  --domains value  --dns.resolvers value  --dns.propagation.wait value\n   --days value\n";
 
 /// A host ready for the package's first `prepare`: root, x86-64, the bind address carried, no
 /// port held, the staged release unpacked with a lego that takes every flag, the settings
@@ -98,6 +102,7 @@ pub fn package_host() -> FakeHost {
     }
     host.reply_prefix(&["/usr/sbin/runuser"], 0, "");
     host.reply(&[LEGO, "run", "--help"], 0, LEGO_HELP);
+    host.reply(&[LEGO, "renew", "--help"], 0, LEGO_RENEW_HELP);
     for release in [STAGED, PREVIOUS] {
         for program in ["scepserver", "lego", "nanohub", "mdm"] {
             host.put_file(

@@ -1,14 +1,14 @@
 //! The six steps over the record, the host and its units.
 
 use std::io::Write;
-use std::path::PathBuf;
 
 use hostkeeper_hook::{Params, Report, Step};
 use hostkeeper_mdm_core::acme::Acme;
 use hostkeeper_mdm_core::commands::scep_ca_init_args;
 use hostkeeper_mdm_core::config::MdmConfig;
 use hostkeeper_mdm_core::package::{
-    self, CERT_SERVICE, CERT_TIMER, DEPSYNCER, ETC, HOOK_ENABLED, PROXY, RUN, STATE, USER,
+    self, CERT_RENEW, CERT_SERVICE, CERT_TIMER, DEPSYNCER, ETC, HOOK_ENABLED, PROXY, RUN, STATE,
+    USER,
 };
 use hostkeeper_mdm_core::render::{self, CADDYFILE_NAME};
 use hostkeeper_mdm_step::{
@@ -96,7 +96,7 @@ fn rendered(c: &MdmConfig, acme: &Acme) -> Result<Vec<Rendered>, MdmError> {
 fn rendered_paths() -> Vec<String> {
     let mut paths = vec![format!("{ETC}/{CADDYFILE_NAME}")];
     paths.extend(
-        [package::SLICE, PROXY, DEPSYNCER, CERT_SERVICE].map(|unit| {
+        [package::SLICE, PROXY, DEPSYNCER, CERT_SERVICE, CERT_RENEW].map(|unit| {
             format!(
                 "{UNITS_DIR}/{}/{}",
                 package::drop_in_dir(unit),
@@ -113,6 +113,17 @@ fn rendered_mode(path: &str) -> (u32, Account) {
         true => (0o640, Account::new("root", USER)),
         false => (0o644, Account::root()),
     }
+}
+
+/// The directories `prepare` refuses as a link: the state, the settings and the pkgs. Not the
+/// binaries': they are the package's, under the daemon's link `current` to the version that
+/// runs, and the walk to them refuses that link (the staged release's programs are checked by
+/// their own path).
+pub(crate) fn package_dirs(c: &MdmConfig) -> Vec<String> {
+    [c.state(), c.etc(), c.pkg_dir()]
+        .iter()
+        .map(ToString::to_string)
+        .collect()
 }
 
 /// The settings a step that reads them has.
@@ -133,9 +144,9 @@ pub(crate) struct Steps<'a> {
 }
 
 impl Steps<'_> {
-    pub(crate) fn run(&mut self, step: Step, artifact: Option<PathBuf>) -> Result<Report, Failure> {
+    pub(crate) fn run(&mut self, step: Step, staged: Option<String>) -> Result<Report, Failure> {
         match step {
-            Step::Prepare => self.prepare(artifact.unwrap_or_default()),
+            Step::Prepare => self.prepare(staged.unwrap_or_default()),
             Step::Cutover => self.cutover(),
             Step::Verify => self.verify(),
             Step::Rollback => self.rollback(),
@@ -168,13 +179,7 @@ impl Steps<'_> {
 
     /// Checks the host, the staged release and the settings, keeps what the files it renders
     /// held, then makes the user, the directories, the secrets, the CA and the rendered files.
-    fn prepare(&mut self, artifact: PathBuf) -> Result<Report, Failure> {
-        let staged = artifact.to_str().map(str::to_owned).ok_or_else(|| {
-            Failure::release(
-                "bad_artifact",
-                "the staged release's path is not UTF-8".into(),
-            )
-        })?;
+    fn prepare(&mut self, staged: String) -> Result<Report, Failure> {
         let host = Self::host(self.system);
         let host = host.as_ref();
         self.root(host)?;
@@ -188,8 +193,10 @@ impl Steps<'_> {
             }
         }
         let Settings { config: c, acme } = self.read_settings()?;
-        preflight(host, &c, None, self.log).map_err(Failure::from)?;
-        tls::check_lego(host, &format!("{staged}/bin/lego"))?;
+        preflight(host, &c, &package_dirs(&c), None, self.log).map_err(Failure::from)?;
+        let lego = format!("{staged}/bin/lego");
+        tls::check_lego(host, &lego, "run", &tls::LEGO_FLAGS)?;
+        tls::check_lego(host, &lego, "renew", &tls::LEGO_RENEW_FLAGS)?;
         let dns = dns_env();
         match host.stat(&dns).map_err(MdmError::from)? {
             Some(_) => {
@@ -231,6 +238,12 @@ impl Steps<'_> {
             let init = Cmd::new(&format!("{staged}/bin/scepserver")).args(&scep_ca_init_args(&c));
             p.run(init.as_user(USER));
         }
+        // A record of another version's update (one whose cleanup did not finish) keeps what
+        // the host held before that update, not before this one.
+        let version = self.params.target_version().unwrap_or_default();
+        if self.record.get(PREPARED)?.is_some_and(|v| v != version) {
+            self.record.forget_saved()?;
+        }
         let mut saves = Vec::new();
         for file in rendered(&c, &acme)? {
             if let Some(dir) = &file.dir {
@@ -248,7 +261,6 @@ impl Steps<'_> {
             self.record.save(path, before)?;
         }
         execute(&p.finish(), Mode::Apply, host, self.log).map_err(MdmError::from)?;
-        let version = self.params.target_version().unwrap_or_default();
         self.record.set(PREPARED, version)?;
         self.record.remove(CUTOVER)?;
         self.record.remove(VERIFIED)?;
@@ -681,3 +693,7 @@ fn notes(host: &dyn Host, c: &MdmConfig, has_certificate: bool) -> Vec<(String, 
     ));
     notes
 }
+
+#[cfg(test)]
+#[path = "steps_tests.rs"]
+mod tests;

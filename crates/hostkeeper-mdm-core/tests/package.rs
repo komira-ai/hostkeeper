@@ -109,7 +109,7 @@ fn a_fixed_key_may_be_given_only_with_the_packages_value() {
 }
 
 /// Catches a drop-in that does not carry the site's value, carries it under another name than
-/// the unit reads, or a change in their wording: the four drop-ins of the example site are
+/// the unit reads, or a change in their wording: the five drop-ins of the example site are
 /// their committed bytes.
 #[test]
 fn the_drop_ins_of_the_example_site_are_the_golden_bytes() {
@@ -126,6 +126,7 @@ fn the_drop_ins_of_the_example_site_are_the_golden_bytes() {
             "mdm-proxy.service.d/settings.conf",
             "mdm-depsyncer.service.d/settings.conf",
             "mdm-cert.service.d/settings.conf",
+            "mdm-cert-renew.service.d/settings.conf",
         ]
     );
     for (name, text) in got {
@@ -247,13 +248,25 @@ fn the_package_units_are_the_kits_units_on_the_packages_layout() {
             ],
             vec![
                 "ConditionPathExists=/etc/mdm/dns.env".to_owned(),
+                "ConditionPathExistsGlob=!/var/lib/mdm/lego/certificates/*.crt".to_owned(),
                 format!(
                     "ExecStart={bin}/lego run --accept-tos --email ${{MDM_ACME_EMAIL}} --server ${{MDM_ACME_SERVER}} --path /var/lib/mdm/lego --key-type ec256 --dns ${{MDM_ACME_DNS_PROVIDER}} --domains ${{MDM_DNS_NAME}} --dns.resolvers ${{MDM_ACME_RESOLVERS}} --dns.propagation.wait ${{MDM_ACME_PROPAGATION_WAIT}}"
                 ),
                 "ExecStartPost=+/usr/bin/systemctl restart mdm-proxy.service".to_owned(),
             ],
         ),
-        ("mdm-cert.timer", vec![], vec![]),
+        (
+            "mdm-cert.timer",
+            vec![
+                "Description=mdm TLS certificate renewal, twice a day".to_owned(),
+                "OnCalendar=*-*-* 04,16:23:00".to_owned(),
+            ],
+            vec![
+                "Description=mdm TLS certificate renewal, once a day".to_owned(),
+                "OnCalendar=*-*-* 04:23:00".to_owned(),
+                "Unit=mdm-cert-renew.service".to_owned(),
+            ],
+        ),
     ];
     for (name, kit_only, package_only) in differences {
         let ours = UNITS.iter().find(|u| u.name == name).expect(name);
@@ -273,5 +286,53 @@ fn the_package_units_are_the_kits_units_on_the_packages_layout() {
                 "{name}: {line}"
             );
         }
+    }
+}
+
+/// Catches a renewal job that orders a certificate on every run, or that drifts from the job of
+/// the first certificate: it is that job but for running only once lego has a certificate,
+/// after the first job (which it wants), `lego renew ... --days 30` in place of `lego run
+/// --accept-tos ...`, and restarting the proxy only if it runs.
+#[test]
+fn the_renewal_job_is_the_first_certificates_job_renewing_within_30_days() {
+    let unit = |name: &str| lines(UNITS.iter().find(|u| u.name == name).expect(name).text);
+    let first = unit("mdm-cert.service");
+    let renew = unit("mdm-cert-renew.service");
+    let changed = |l: &String| {
+        l.starts_with("Description=")
+            || l.starts_with("Wants=mdm-cert")
+            || l.starts_with("After=")
+            || l.starts_with("ConditionPathExistsGlob=")
+            || l.starts_with("ExecStart")
+    };
+    let same = |all: &[String]| {
+        all.iter()
+            .filter(|l| !changed(l))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(same(&first), same(&renew));
+    let exec = |all: &[String]| {
+        all.iter()
+            .find(|l| l.starts_with("ExecStart="))
+            .expect("an ExecStart")
+            .clone()
+    };
+    assert_eq!(
+        exec(&renew),
+        exec(&first)
+            .replace(" run --accept-tos ", " renew ")
+            .replace(
+                "${MDM_ACME_PROPAGATION_WAIT}",
+                "${MDM_ACME_PROPAGATION_WAIT} --days 30"
+            )
+    );
+    for line in [
+        "Wants=mdm-cert.service",
+        "After=network-online.target mdm-cert.service",
+        "ConditionPathExistsGlob=/var/lib/mdm/lego/certificates/*.crt",
+        "ExecStartPost=+/usr/bin/systemctl try-restart mdm-proxy.service",
+    ] {
+        assert!(renew.iter().any(|l| l == line), "{line}");
     }
 }

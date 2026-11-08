@@ -14,7 +14,7 @@ use hostkeeper_mdm_step::{Host, Kind};
 /// Catches a first `prepare` that does not make what the stack needs, makes it with other
 /// modes or owners, starts anything, or shows a secret: the user, the directories, the three
 /// secrets (made from the random source, never in the output), the CA by the staged release's
-/// `scepserver` as the service user, the Caddyfile and the four drop-ins, each with its mode and
+/// `scepserver` as the service user, the Caddyfile and the five drop-ins, each with its mode and
 /// owner; no unit is started or restarted, and the step succeeds with `reversible: true`.
 #[test]
 fn a_first_prepare_makes_the_user_the_state_the_secrets_the_ca_and_the_rendered_files() {
@@ -63,6 +63,7 @@ fn a_first_prepare_makes_the_user_the_state_the_secrets_the_ca_and_the_rendered_
         package::PROXY,
         package::DEPSYNCER,
         package::CERT_SERVICE,
+        package::CERT_RENEW,
     ] {
         assert_eq!(
             meta(&format!("{UNITS}/{unit}.d")),
@@ -118,7 +119,7 @@ fn a_second_prepare_changes_nothing() {
 #[test]
 fn prepare_refuses_a_host_the_install_refuses_and_changes_nothing() {
     type Setup = fn(&FakeHost);
-    let cases: [(&str, Setup, &str, Class); 9] = [
+    let cases: [(&str, Setup, &str, Class); 10] = [
         ("not_root", |_| {}, "not_root", Class::Environment),
         (
             "arm",
@@ -154,6 +155,12 @@ fn prepare_refuses_a_host_the_install_refuses_and_changes_nothing() {
         (
             "old-lego",
             |h| h.reply(&[LEGO, "run", "--help"], 0, "   --accept-tos\n"),
+            "bad_lego",
+            Class::Release,
+        ),
+        (
+            "lego-without-renew-days",
+            |h| h.reply(&[LEGO, "renew", "--help"], 0, "   --email value\n"),
             "bad_lego",
             Class::Release,
         ),
@@ -269,27 +276,41 @@ fn prepare_takes_the_ports_of_its_own_units_and_checks_the_dns_credentials() {
     }
 }
 
-/// Catches `prepare` taking a staged release whose path it cannot pass on, or a step that
-/// fails being reported as a refusal: a path that is not UTF-8 is the release's
-/// (`bad_artifact`), and a `useradd` that fails stops the plan at that step (`step_failed`,
-/// class `environment`).
+/// Catches `prepare` acting on another tree than the one the daemon verified, or a step that
+/// fails being reported as a refusal: a release argument that is not byte for byte the params'
+/// `updater.staged_release` (another path, or bytes that are not text) is refused (`params`)
+/// before anything runs, and a `useradd` that fails stops the plan at that step
+/// (`step_failed`, class `environment`).
 #[test]
-fn a_staged_path_that_is_not_text_and_a_step_that_fails_end_prepare() {
+fn a_release_other_than_the_staged_one_and_a_step_that_fails_end_prepare() {
     use std::os::unix::ffi::OsStringExt;
-    let run = Run::new("prepare-bytes");
+    let run = Run::new("prepare-other-release");
     let host = package_host();
-    let params = run.params(false);
-    let args = [
-        std::ffi::OsString::from("mdm"),
-        "update-hook".into(),
-        "prepare".into(),
+    for artifact in [
+        std::ffi::OsString::from(PREVIOUS),
+        std::ffi::OsString::from(format!("{STAGED}/")),
         std::ffi::OsString::from_vec(b"/var/lib/hostkeeper/packages/mdm/\xff".to_vec()),
-        "--params".into(),
-        params.into_os_string(),
-    ];
-    let ended = run_mdm(&host, &args);
-    assert_eq!(ended.code, 1);
-    assert_eq!(ended.report().reason.as_deref(), Some("bad_artifact"));
+    ] {
+        let args = [
+            std::ffi::OsString::from("mdm"),
+            "update-hook".into(),
+            "prepare".into(),
+            artifact.clone(),
+            "--params".into(),
+            run.params(false).into_os_string(),
+        ];
+        let ended = run_mdm(&host, &args);
+        assert_eq!(ended.code, 1, "{artifact:?}");
+        let report = ended.report();
+        assert_eq!(report.reason.as_deref(), Some("params"), "{artifact:?}");
+        assert!(
+            report
+                .detail
+                .unwrap_or_default()
+                .ends_with("which is not the params' updater.staged_release"),
+            "{artifact:?}"
+        );
+    }
     assert!(host.calls().is_empty());
 
     let run = Run::new("prepare-useradd");
@@ -321,6 +342,27 @@ fn a_staged_path_that_is_not_text_and_a_step_that_fails_end_prepare() {
         Some(
             "step 1 (useradd mdm (system user and group, home /var/lib/mdm, no login)) failed: exit status 9"
         )
+    );
+}
+
+/// Catches the prepare of a new version rolling back to what an earlier update found: after an
+/// update to another version whose cleanup never finished, its kept files are forgotten, and
+/// a rollback of this update puts back what was there before this one.
+#[test]
+fn a_record_of_another_versions_update_is_not_rolled_back_to() {
+    let run = Run::new("prepare-stale-record");
+    let host = package_host();
+    host.add_user("mdm", SVC);
+    host.put_file(CADDYFILE, 0o640, (0, SVC), b"BEFORE THE EARLIER UPDATE\n");
+    assert_eq!(run.prepare(&host, true).code, 0);
+    // The earlier update was to another version, and its record stayed.
+    std::fs::write(run.record().join("prepared"), "1.0.5").unwrap();
+    host.put_file(CADDYFILE, 0o640, (0, SVC), b"BEFORE THIS UPDATE\n");
+    assert_eq!(run.prepare(&host, true).code, 0);
+    assert_eq!(run.step(&host, &["rollback"], true).code, 0);
+    assert_eq!(
+        host.read(CADDYFILE).unwrap().unwrap(),
+        b"BEFORE THIS UPDATE\n"
     );
 }
 

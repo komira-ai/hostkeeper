@@ -14,12 +14,15 @@
 //!   package's `current` version, and starts and observes the [`RUN`] units. A package unit
 //!   is a `.service`, `.socket` or `.timer` (the manifest loader's kinds), so the kit's slice
 //!   and its path unit are not package units: the slice exists because the services name it,
-//!   with its caps in a drop-in, and the certificate job restarts the proxy itself after each
-//!   run, which the path unit did on a change of the certificate.
+//!   with its caps in a drop-in, and the certificate jobs restart the proxy themselves after
+//!   each run, which the path unit did on a change of the certificate. The kit's one
+//!   certificate job, which ordered a certificate on each run, is two: `mdm-cert.service`
+//!   orders the first while lego has none, and `mdm-cert-renew.service`, which the daily timer
+//!   runs, renews it within 30 days of its end.
 //! - **The site's values reach the units through drop-ins** ([`drop_ins`]): one
 //!   `/etc/systemd/system/<unit>.d/settings.conf` for each unit that needs a site value (the
 //!   slice's caps, the proxy's LAN, NanoDEP's token name for depsyncer, the ACME settings for
-//!   the certificate job). The hook's `prepare` writes them, with the Caddyfile, from the
+//!   the two certificate jobs). The hook's `prepare` writes them, with the Caddyfile, from the
 //!   settings.
 //! - **The manifest** ([`manifest`]): the hook is `bin/mdm update-hook`, the params name the
 //!   settings file ([`SETTINGS_FILE`]) and the hook's record directory ([`RECORD_DIR`]), and
@@ -108,13 +111,19 @@ pub const DEPSERVER: &str = "mdm-depserver.service";
 pub const DEPSYNCER: &str = "mdm-depsyncer.service";
 /// The HTTPS proxy.
 pub const PROXY: &str = "mdm-proxy.service";
-/// The certificate job.
+/// The certificate job: the first certificate.
 pub const CERT_SERVICE: &str = "mdm-cert.service";
-/// The certificate job's timer.
+/// The renewal job, which the timer runs.
+pub const CERT_RENEW: &str = "mdm-cert-renew.service";
+/// The renewal job's timer.
 pub const CERT_TIMER: &str = "mdm-cert.timer";
 
 /// Every unit file of the package, in the order of their names.
-pub const UNITS: [PackageUnit; 7] = [
+pub const UNITS: [PackageUnit; 8] = [
+    PackageUnit {
+        name: CERT_RENEW,
+        text: include_str!("../package/units/mdm-cert-renew.service"),
+    },
     PackageUnit {
         name: CERT_SERVICE,
         text: include_str!("../package/units/mdm-cert.service"),
@@ -218,7 +227,7 @@ pub fn drop_in_dir(unit: &str) -> String {
 
 /// The drop-ins of the settings `c` (with the package's layout, from [`settings`]) and `acme`,
 /// each named `<unit>.d/settings.conf`, in the order the hook writes them: the slice's caps,
-/// the proxy's LAN, depsyncer's token name and the certificate job's ACME settings. Every value
+/// the proxy's LAN, depsyncer's token name and the two certificate jobs' ACME settings. Every value
 /// is one the settings parser has checked to be a word systemd takes as it is: no space, quote,
 /// `$`, `%` or line break.
 pub fn drop_ins(c: &MdmConfig, acme: &Acme) -> Vec<Unit> {
@@ -248,7 +257,8 @@ pub fn drop_ins(c: &MdmConfig, acme: &Acme) -> Vec<Unit> {
         (SLICE, slice),
         (PROXY, proxy),
         (DEPSYNCER, depsyncer),
-        (CERT_SERVICE, cert),
+        (CERT_SERVICE, cert.clone()),
+        (CERT_RENEW, cert),
     ]
     .into_iter()
     .map(|(unit, text)| Unit {

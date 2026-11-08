@@ -261,7 +261,7 @@ fn rollback_of_an_update_puts_the_files_back_and_restarts_the_old_version() {
         host.read(&drop_in("mdm.slice")).unwrap().unwrap(),
         b"[Slice]\nMemoryMax=2G\n"
     );
-    for unit in [PROXY, DEPSYNCER, CERT_SERVICE] {
+    for unit in [PROXY, DEPSYNCER, CERT_SERVICE, package::CERT_RENEW] {
         assert_eq!(host.read(&drop_in(unit)).unwrap(), None, "{unit}");
     }
     assert_eq!(
@@ -423,8 +423,9 @@ fn a_step_while_another_holds_the_record_is_refused() {
 
 /// Catches a hook that acts on a command line or params file it cannot read: a missing or
 /// unknown step and `prepare` without its release exit 2 (`usage`); a step without
-/// `--params`, a params file that is not there, and one without `settings`, or with a
-/// relative `record_dir`, exit 1 (`params`). Every one writes a well-formed last line and
+/// `--params`, a params file that is not there, one without `settings`, with a relative
+/// `record_dir`, with a settings file other than the manifest's, or with a previous version
+/// and no previous release, exit 1 (`params`). Every one writes a well-formed last line and
 /// runs nothing.
 #[test]
 fn a_command_line_or_params_file_the_hook_cannot_read_is_refused() {
@@ -444,7 +445,23 @@ fn a_command_line_or_params_file_the_hook_cannot_read_is_refused() {
     let no_settings = run.scratch.path().join("no-settings.toml");
     std::fs::write(&no_settings, "record_dir = \"/r\"\n").unwrap();
     let relative = run.scratch.path().join("relative.toml");
-    std::fs::write(&relative, "settings = \"/s\"\nrecord_dir = \"r\"\n").unwrap();
+    std::fs::write(
+        &relative,
+        "settings = \"/etc/mdm/settings\"\nrecord_dir = \"r\"\n",
+    )
+    .unwrap();
+    let other = run.scratch.path().join("other-settings.toml");
+    std::fs::write(
+        &other,
+        "settings = \"/etc/elsewhere\"\nrecord_dir = \"/r\"\n",
+    )
+    .unwrap();
+    let half = run.scratch.path().join("half.toml");
+    std::fs::write(
+        &half,
+        "settings = \"/etc/mdm/settings\"\nrecord_dir = \"/r\"\n\"updater.previous_version\" = \"1.0.0\"\n",
+    )
+    .unwrap();
     for words in [
         vec!["cutover".to_owned()],
         vec![

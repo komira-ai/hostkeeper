@@ -12,8 +12,9 @@
 //!   interface carrying `MDM_BIND`; the loopback ports and 443 free or held by the package's
 //!   own active unit; the SCEP depot empty or holding a whole CA), the staged release (its
 //!   `bin/scepserver` and `bin/lego` are files, and that lego takes every flag the certificate
-//!   unit passes), and `/etc/mdm/dns.env` when it is there (a 0600 file of root's holding every
-//!   variable the DNS provider reads; without it the certificate job waits). Then it makes, each
+//!   unit passes to `lego run` and the renewal unit to `lego renew`), and `/etc/mdm/dns.env`
+//!   when it is there (a 0600 file of root's holding every variable the DNS provider reads;
+//!   without it the certificate jobs wait). Then it makes, each
 //!   only when the host differs: the user `mdm`; `/var/lib/mdm` and its subdirectories (0700,
 //!   the user's), `/etc/mdm` (0750, root and the user's group) and the pkg directory (0755,
 //!   root's); the three secrets, each made once and never shown; the SCEP CA, with the staged
@@ -44,6 +45,9 @@
 //!   `/var/lib/mdm/removed/<unix seconds>/` and reloads systemd. The state, the secrets, the
 //!   pkg directory and the user stay, as with `install --uninstall`.
 //!
+//! Every step refuses a params file the contract's reader refuses (`Params::validate`), or
+//! whose `settings` is not the manifest's ([`hostkeeper_mdm_core::package::SETTINGS_FILE`]);
+//! `prepare` refuses a release argument that is not byte for byte `updater.staged_release`.
 //! Every step takes the record directory's lock first and acts on the record, so a step run
 //! again does nothing more. The last line on standard output is the report; the plan and the
 //! commands go to standard error. Exit 0 success, 1 failure, 75 deferred, 2 a command line the
@@ -53,7 +57,10 @@ use std::ffi::OsString;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use hostkeeper_hook::{Class, EXIT_DEFERRED, EXIT_FAILURE, Invocation, Params, Report, Scalar};
+use hostkeeper_hook::{
+    Class, EXIT_DEFERRED, EXIT_FAILURE, Invocation, Params, Report, STAGED_RELEASE_KEY, Scalar,
+};
+use hostkeeper_mdm_core::package;
 
 use crate::{MdmError, System};
 
@@ -200,9 +207,27 @@ fn execute(args: &[OsString], system: &System<'_>, err: &mut dyn Write) -> Resul
         Failure::environment("params", "the step needs --params <file>".to_owned())
     })?;
     let params = read_params(&file)?;
+    params
+        .validate()
+        .map_err(|why| Failure::environment("params", format!("the params file: {why}")))?;
     let at = Where {
         settings: path_param(&params, SETTINGS_KEY)?,
         record_dir: PathBuf::from(path_param(&params, RECORD_DIR_KEY)?),
+    };
+    if at.settings != package::SETTINGS_FILE {
+        return Err(Failure::environment(
+            "params",
+            format!(
+                "the params key {SETTINGS_KEY} is {:?}, not the package's {:?}",
+                at.settings,
+                package::SETTINGS_FILE
+            ),
+        ));
+    }
+    // The argument of `prepare` is byte for byte the params' staged release (the contract).
+    let staged = match call.artifact.as_ref() {
+        None => None,
+        Some(artifact) => Some(staged_release(&params, artifact)?),
     };
     let record = record::Record::open(&at.record_dir)?;
     let mut steps = steps::Steps {
@@ -212,7 +237,23 @@ fn execute(args: &[OsString], system: &System<'_>, err: &mut dyn Write) -> Resul
         settings: &at.settings,
         log: err,
     };
-    steps.run(call.step, call.artifact)
+    steps.run(call.step, staged)
+}
+
+/// The staged release `prepare` was given, once it is the params' `updater.staged_release`.
+fn staged_release(params: &Params, artifact: &Path) -> Result<String, Failure> {
+    match params.staged_release() {
+        Some(staged) if staged.as_os_str() == artifact.as_os_str() => {
+            Ok(staged.to_string_lossy().into_owned())
+        }
+        _ => Err(Failure::environment(
+            "params",
+            format!(
+                "prepare was given {}, which is not the params' {STAGED_RELEASE_KEY}",
+                artifact.display()
+            ),
+        )),
+    }
 }
 
 fn read_params(file: &Path) -> Result<Params, Failure> {
