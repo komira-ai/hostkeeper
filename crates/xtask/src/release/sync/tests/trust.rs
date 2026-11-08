@@ -10,7 +10,9 @@ const AGENT_V: &str = "0.1.176";
 const MAIN: &str = "refs/heads/main";
 
 /// The trust list of tierstore (its `artifacts.yml`) and js-agent (jobscheduler's `release.yml`
-/// on `refs`).
+/// on `refs`). The committed list trusts jobscheduler's `artifacts.yml` for js-agent; these tests
+/// name `release.yml`, a workflow other than `artifacts.yml`, so a sync that verifies against
+/// `artifacts.yml` whatever the entry says fails them.
 fn tierstore_and_agent(refs: &[&str]) -> ChannelTrust {
     trust(&[
         entry(
