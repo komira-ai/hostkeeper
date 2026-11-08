@@ -20,17 +20,24 @@
 //!   the tailnet: the tag comes from one repository variable, never from the CI client's default
 //!   or a tag written into the caller;
 //! - a job of [`CALLERS`] for the file is missing, or does not call the CI client;
-//! - it is [`HELLO_FILE`] and runs on anything but `workflow_dispatch`, lacks the input `version`
-//!   (a required string) or `variant` (a required choice of exactly [`HELLO_VARIANTS`]), or its
-//!   caller does not pass `service: hello`, or a job of it lacks the exact `if:` [`HELLO_IF`] (a
-//!   dispatch from another branch runs nothing);
-//! - it is [`HELLO_FILE`] and its caller does not pass each of [`HELLO_FROM_RELEASE`] from the
-//!   output of that name of [`HELLO_RELEASE_JOB`], or passes a `package_digest` (one platform's
-//!   package for every host); or the `outputs` of [`HELLO_RELEASE_JOB`] are not exactly
-//!   [`HELLO_RELEASE_OUTPUTS`]; or its step `targets` does not run [`HELLO_TARGETS_RUN`].
+//! - it is the file of a proof run, [`HELLO_RUN`] or [`TEMPLATE_RUN`], and runs on anything but
+//!   `workflow_dispatch`, lacks the input `version` (a required string) or, for hello, `variant`
+//!   (a required choice of exactly [`HELLO_VARIANTS`]), or its caller does not pass the run's
+//!   `service`, or a job of it lacks the exact `if:` [`HELLO_IF`] (a dispatch from another branch
+//!   runs nothing);
+//! - it is the file of a proof run and its caller does not pass each of [`HELLO_FROM_RELEASE`]
+//!   from the output of that name of the run's release job, or passes a `package_digest` (one
+//!   platform's package for every host); or the `outputs` of the release job are not exactly
+//!   [`HELLO_RELEASE_OUTPUTS`]; or its step `targets` does not run the run's targets command.
+//!
+//! The caller template a service of another repository copies, the one `yaml` block of
+//! [`template_doc::DOC`], is linted under that file name ([`super::template_doc`]): [`TEMPLATE`]
+//! is its caller entry, which [`caller`] finds beside [`CALLERS`], and [`TEMPLATE_RUN`] holds it
+//! to the rules of `hello-desired.yml` for a placeholder service.
 
 use super::desired;
 use super::lint::{entries, entry, triggers, version_comment};
+use super::template_doc;
 use super::yaml::{Node, Value};
 
 /// The CI client, as a caller's `uses:` names it before the `@`.
@@ -97,6 +104,52 @@ pub const HELLO_RELEASE_OUTPUTS: [(&str, &str); 4] = [
 /// are written by the verb that checks the release's files, for hello.
 pub const HELLO_TARGETS_RUN: &str = "cargo xtask release targets --service hello ";
 
+/// A workflow that reads a release, writes its targets and calls the CI client with them, run by
+/// hand from main: `hello-desired.yml`, and the caller template of [`template_doc::DOC`].
+pub struct Proof {
+    /// The workflow file, or the page the template is read from.
+    pub file: &'static str,
+    /// Its job that calls the CI client.
+    pub job: &'static str,
+    /// Its job that reads the release and writes the targets.
+    pub release_job: &'static str,
+    /// The `service` its caller passes.
+    pub service: &'static str,
+    /// The values of its input `variant`, in order; none: it has no such input to check.
+    pub variants: &'static [&'static str],
+    /// The `run:` of the step `targets` of the release job, before its arguments.
+    pub targets_run: &'static str,
+}
+
+/// The hello proof run.
+pub const HELLO_RUN: Proof = Proof {
+    file: HELLO_FILE,
+    job: HELLO_JOB,
+    release_job: HELLO_RELEASE_JOB,
+    service: "hello",
+    variants: &HELLO_VARIANTS,
+    targets_run: HELLO_TARGETS_RUN,
+};
+
+/// The caller template: the same shape for the placeholder service `my-service`, whose targets
+/// come from the service's own command, shown as a verb of its own xtask.
+pub const TEMPLATE_RUN: Proof = Proof {
+    file: template_doc::DOC,
+    job: "set-desired",
+    release_job: "release",
+    service: "my-service",
+    variants: &[],
+    targets_run: "cargo xtask release targets ",
+};
+
+/// The caller entry of the template: not a job of this repository, so not in [`CALLERS`], but
+/// held to every rule of one.
+pub static TEMPLATE: Caller = Caller {
+    file: TEMPLATE_RUN.file,
+    job: TEMPLATE_RUN.job,
+    condition: HELLO_IF,
+};
+
 /// Every job of this repository that calls the CI client: the hello proof run, and
 /// hostkeeper's own deploy in release.yml ([`desired`]).
 pub const CALLERS: &[Caller] = &[
@@ -112,9 +165,14 @@ pub const CALLERS: &[Caller] = &[
     },
 ];
 
-/// The caller entry of the job `job` of `file`, if it is one.
+/// Every caller entry: [`CALLERS`], then [`TEMPLATE`].
+fn every_caller() -> impl Iterator<Item = &'static Caller> {
+    CALLERS.iter().chain(std::iter::once(&TEMPLATE))
+}
+
+/// The caller entry of the job `job` of `file` ([`CALLERS`] or [`TEMPLATE`]), if it is one.
 pub fn caller(file: &str, job: &str) -> Option<&'static Caller> {
-    CALLERS.iter().find(|c| c.file == file && c.job == job)
+    every_caller().find(|c| c.file == file && c.job == job)
 }
 
 /// The job-level `uses:` of `job`: the reusable workflow it calls, if any.
@@ -194,7 +252,7 @@ pub fn problems(file: &str, text: &str, doc: &Node) -> Vec<String> {
             ));
         }
     }
-    for c in CALLERS.iter().filter(|c| c.file == file) {
+    for c in every_caller().filter(|c| c.file == file) {
         let calls = jobs(doc)
             .find(|(name, _)| *name == c.job)
             .and_then(|(_, job)| job_uses(job))
@@ -206,8 +264,11 @@ pub fn problems(file: &str, text: &str, doc: &Node) -> Vec<String> {
             ));
         }
     }
-    if file == HELLO_FILE {
-        problems.extend(hello_problems(doc));
+    for run in [&HELLO_RUN, &TEMPLATE_RUN]
+        .into_iter()
+        .filter(|r| r.file == file)
+    {
+        problems.extend(proof_problems(run, doc));
     }
     problems
 }
@@ -248,17 +309,19 @@ fn text_of<'a>(map: Option<&'a Node>, key: &str) -> Option<&'a str> {
     map.and_then(|m| entry(m, key)).and_then(Node::as_str)
 }
 
-/// What `hello-desired.yml` must be beyond the rules of every caller.
-fn hello_problems(doc: &Node) -> Vec<String> {
+/// What the proof run `run` (`hello-desired.yml`, or the caller template) must be beyond the
+/// rules of every caller.
+fn proof_problems(run: &Proof, doc: &Node) -> Vec<String> {
+    let file = run.file;
     let mut problems = Vec::new();
     let on = entry(doc, "on");
     if on.map(triggers).unwrap_or_default() != ["workflow_dispatch"] {
-        problems.push(format!("{HELLO_FILE}: on must be workflow_dispatch only"));
+        problems.push(format!("{file}: on must be workflow_dispatch only"));
     }
     for (name, job) in jobs(doc) {
         if entry(job, "if").and_then(Node::as_str) != Some(HELLO_IF) {
             problems.push(format!(
-                "{HELLO_FILE}: job {name} needs the exact `if: {HELLO_IF}`"
+                "{file}: job {name} needs the exact `if: {HELLO_IF}`"
             ));
         }
     }
@@ -268,54 +331,57 @@ fn hello_problems(doc: &Node) -> Vec<String> {
     let input = |name: &str| inputs.and_then(|i| entry(i, name));
     let version = input("version");
     if text_of(version, "type") != Some("string") || text_of(version, "required") != Some("true") {
-        problems.push(format!(
-            "{HELLO_FILE}: input version must be a required string"
-        ));
+        problems.push(format!("{file}: input version must be a required string"));
     }
-    let variant = input("variant");
-    let options: Vec<&str> = match variant.and_then(|v| entry(v, "options")).map(|o| &o.value) {
-        Some(Value::Seq(items)) => items.iter().filter_map(Node::as_str).collect(),
-        _ => Vec::new(),
-    };
-    let choice =
-        text_of(variant, "type") == Some("choice") && text_of(variant, "required") == Some("true");
-    if !choice || options != HELLO_VARIANTS {
-        problems.push(format!(
-            "{HELLO_FILE}: input variant must be a required choice of exactly {HELLO_VARIANTS:?}"
-        ));
+    if !run.variants.is_empty() {
+        let variant = input("variant");
+        let options: Vec<&str> = match variant.and_then(|v| entry(v, "options")).map(|o| &o.value) {
+            Some(Value::Seq(items)) => items.iter().filter_map(Node::as_str).collect(),
+            _ => Vec::new(),
+        };
+        let choice = text_of(variant, "type") == Some("choice")
+            && text_of(variant, "required") == Some("true");
+        if !choice || options != run.variants {
+            problems.push(format!(
+                "{file}: input variant must be a required choice of exactly {:?}",
+                run.variants
+            ));
+        }
     }
-    let job = jobs(doc)
-        .find(|(name, _)| *name == HELLO_JOB)
-        .map(|(_, j)| j);
+    let job = jobs(doc).find(|(name, _)| *name == run.job).map(|(_, j)| j);
     let with = job.and_then(|j| entry(j, "with"));
-    if text_of(with, "service") != Some("hello") {
+    if text_of(with, "service") != Some(run.service) {
         problems.push(format!(
-            "{HELLO_FILE}: job {HELLO_JOB} must pass `service: hello`"
+            "{file}: job {} must pass `service: {}`",
+            run.job, run.service
         ));
     }
     for input in HELLO_FROM_RELEASE {
-        let want = format!("${{{{ needs.{HELLO_RELEASE_JOB}.outputs.{input} }}}}");
+        let want = format!("${{{{ needs.{}.outputs.{input} }}}}", run.release_job);
         if text_of(with, input) != Some(want.as_str()) {
             problems.push(format!(
-                "{HELLO_FILE}: job {HELLO_JOB} must pass `{input}: {want}`"
+                "{file}: job {} must pass `{input}: {want}`",
+                run.job
             ));
         }
     }
     if with.and_then(|w| entry(w, "package_digest")).is_some() {
         problems.push(format!(
-            "{HELLO_FILE}: job {HELLO_JOB} passes package_digest; the targets name each platform's package"
+            "{file}: job {} passes package_digest; the targets name each platform's package",
+            run.job
         ));
     }
-    problems.extend(hello_release_problems(doc));
+    problems.extend(release_job_problems(run, doc));
     problems
 }
 
-/// What the job [`HELLO_RELEASE_JOB`] of `hello-desired.yml` must be: its outputs exactly
-/// [`HELLO_RELEASE_OUTPUTS`], and its step `targets` running [`HELLO_TARGETS_RUN`].
-fn hello_release_problems(doc: &Node) -> Vec<String> {
+/// What the release job of the proof run `run` must be: its outputs exactly
+/// [`HELLO_RELEASE_OUTPUTS`], and its step `targets` running the run's targets command.
+fn release_job_problems(run: &Proof, doc: &Node) -> Vec<String> {
+    let (file, release_job) = (run.file, run.release_job);
     let mut problems = Vec::new();
     let job = jobs(doc)
-        .find(|(name, _)| *name == HELLO_RELEASE_JOB)
+        .find(|(name, _)| *name == release_job)
         .map(|(_, j)| j);
     let mut outputs: Vec<(&str, &str)> = job
         .and_then(|j| entry(j, "outputs"))
@@ -331,7 +397,7 @@ fn hello_release_problems(doc: &Node) -> Vec<String> {
     outputs.sort_unstable();
     if outputs != HELLO_RELEASE_OUTPUTS {
         problems.push(format!(
-            "{HELLO_FILE}: job {HELLO_RELEASE_JOB} outputs are {outputs:?}, not {HELLO_RELEASE_OUTPUTS:?}"
+            "{file}: job {release_job} outputs are {outputs:?}, not {HELLO_RELEASE_OUTPUTS:?}"
         ));
     }
     let steps = match job.and_then(|j| entry(j, "steps")).map(|s| &s.value) {
@@ -340,11 +406,12 @@ fn hello_release_problems(doc: &Node) -> Vec<String> {
     };
     let writes = steps.iter().any(|step| {
         text_of(Some(step), "id") == Some("targets")
-            && text_of(Some(step), "run").is_some_and(|r| r.starts_with(HELLO_TARGETS_RUN))
+            && text_of(Some(step), "run").is_some_and(|r| r.starts_with(run.targets_run))
     });
     if !writes {
         problems.push(format!(
-            "{HELLO_FILE}: job {HELLO_RELEASE_JOB} needs a step `targets` that runs `{HELLO_TARGETS_RUN}...`"
+            "{file}: job {release_job} needs a step `targets` that runs `{}...`",
+            run.targets_run
         ));
     }
     problems
