@@ -16,10 +16,11 @@ use std::process::ExitCode;
 use hostkeeper_daemon::cli::note_start;
 use hostkeeper_daemon::fallback::{FallbackError, Judged, main_for, record_start};
 use hostkeeper_daemon::packaged::{self, PackagedError};
-use hostkeeper_daemon::selfunits::{Installed, unit_files};
+use hostkeeper_daemon::selfunits::{Installed, UnitFile, install, unit_files};
 use hostkeeper_daemon::selfupdate::binary_dir;
 use hostkeeper_daemon::testing::FakeClock;
 use hostkeeper_launchd::PlatformKind;
+use hostkeeper_placed::testing::Event;
 use hostkeeper_steps::record::State;
 use hostkeeper_steps::{BadVersions, BootId, Clock, DaemonStart, Settled, Stamp, StartLog};
 use support::selfupdate::{HK, NEW, OLD, SelfRig, awaiting, fell_back, own};
@@ -61,10 +62,13 @@ fn packaged_binary(s: &SelfRig) -> PathBuf {
     path
 }
 
-/// What an exec was asked: the path and the arguments, and what `current` named at that moment.
+/// One exec: the path, the arguments, and what `current` named at that moment.
+type ExecCall = (PathBuf, Vec<OsString>, Option<PathBuf>);
+
+/// What each exec was asked.
 #[derive(Debug, Default)]
 struct Execs {
-    calls: RefCell<Vec<(PathBuf, Vec<OsString>, Option<PathBuf>)>>,
+    calls: RefCell<Vec<ExecCall>>,
 }
 
 impl Execs {
@@ -269,4 +273,35 @@ fn an_openrc_daemon_writes_no_units_of_its_own_update() {
     );
     assert_eq!(snapshot(s.rig.scratch.path()), before);
     assert_eq!(s.rig.placed_log.events(), []);
+}
+
+/// Catches an OpenRC install that tells systemd or launchd of a file it wrote (a `daemon-reload`
+/// or the bootout of a Mac's job, neither of which OpenRC has): a file that differs is written,
+/// and OpenRC is told nothing.
+#[test]
+fn a_file_written_on_openrc_tells_the_service_manager_nothing() {
+    let s = SelfRig::new("openrc-self-units-told");
+    let file = UnitFile {
+        dir: s.rig.scratch.path().join("units"),
+        name: "a-file".to_owned(),
+        text: "text\n".to_owned(),
+    };
+    s.rig.placed_log.clear();
+    let installed = install(
+        PlatformKind::Openrc,
+        std::slice::from_ref(&file),
+        &*s.rig.placed_fs,
+        &*s.rig.units,
+    )
+    .expect("installed");
+    assert_eq!(installed, Installed::Written(vec![file.path()]));
+    assert_eq!(
+        hostkeeper_placed::Fs::read(&*s.rig.placed_fs, &file.path()).expect("written"),
+        b"text\n"
+    );
+    let events = s.rig.placed_log.events();
+    assert!(
+        !events.iter().any(|event| matches!(event, Event::Unit(_))),
+        "{events:?}"
+    );
 }
