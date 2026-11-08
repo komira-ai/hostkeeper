@@ -14,7 +14,9 @@
 //!   in its step record for the restart until the new binary has run ([`settle`]), and a
 //!   version that fell back is kept in [`bad`], the local list of bad versions. On macOS the
 //!   fallback decides the burst of failed starts itself, from the daemon's [`starts`] log, with
-//!   [`should_fall_back`], the rule systemd's start limit keeps on Linux.
+//!   [`should_fall_back`], the rule systemd's start limit keeps on Linux. [`handover`] is what a
+//!   binary's start reads of a hand-over, the way a later release updates the updater without
+//!   moving `current` first (docs/design/two-programs.md, 4.3), and the settlement confirms one.
 //! - [`OLDEST_READER`] is the oldest release of hostkeeper that reads every file this one
 //!   writes: the floor of hostkeeper's own package, and what the daemon refuses an older release
 //!   of hostkeeper by ([`reader`]).
@@ -39,6 +41,7 @@ pub mod capture;
 pub mod clock;
 pub mod deadman;
 pub mod force;
+pub mod handover;
 pub mod launcher;
 pub mod prune;
 pub mod reader;

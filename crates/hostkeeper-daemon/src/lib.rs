@@ -32,6 +32,10 @@
 //!   install), which gives the binary directory its first binary.
 //! - [`packaged`]: `hostkeeper daemon` started from the packaged binary seeds the binary
 //!   directory as [`seed`] does and execs its `current`.
+//! - [`handover`]: the first thing `hostkeeper daemon` does, before it reads its config (after
+//!   the packaged start, which execs `current` first): a
+//!   hand-over of hostkeeper's own update into another binary (docs/design/two-programs.md, 4.3)
+//!   execs that binary while its start count lasts, and is settled failed once it cannot.
 //! - [`mac_config`]: the verb `mac-config`, which the pkg's `postinstall` runs to write the
 //!   daemon config from the managed preferences the MDM installed, and which the start of a
 //!   Mac's daemon runs when its config is not there.
@@ -86,6 +90,7 @@ pub mod executor;
 pub mod fallback;
 mod files;
 pub mod halt;
+pub mod handover;
 pub mod hook_log;
 pub mod installed;
 pub mod ipmi;
