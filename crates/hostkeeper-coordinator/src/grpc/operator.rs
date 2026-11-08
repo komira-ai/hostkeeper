@@ -32,7 +32,7 @@ use crate::channel::ChannelRefusal;
 use crate::desired::{Desired, DesiredError};
 use crate::operator::{Caller, entry_proto};
 use crate::ops::OperateError;
-use crate::service::ci_calls::Setter;
+use crate::service::ci_calls::{ReleaseError, Setter};
 use crate::service::{CiRefused, ConvergenceError, Coordinator, SetError};
 use crate::wait::{CallLimit, ConnectionWaits, MAX_WAIT_SECS, WaitRefused};
 use crate::write_record::{WriteAsk, WriteId, WriteRecord};
@@ -114,6 +114,8 @@ pub(crate) fn set_refusal(why: SetError) -> proto::ReleasesRefusal {
         SetError::Invalid(_) | SetError::UnparseableVersion | SetError::DigestConflict => {
             proto::ReleasesRefusal::InvalidRequest
         }
+        SetError::TargetInvalid(_) => proto::ReleasesRefusal::TargetInvalid,
+        SetError::ReleaseExists => proto::ReleasesRefusal::ReleaseExists,
         SetError::BelowMinVersion => proto::ReleasesRefusal::BelowMinVersion,
         SetError::BadVersion => proto::ReleasesRefusal::HeldBad,
         SetError::Channel(ChannelRefusal::NotInChannel) => proto::ReleasesRefusal::NotInChannel,
@@ -379,20 +381,58 @@ impl ReleasesApi for ReleasesService {
                 return Err(refusal::releases(proto::ReleasesRefusal::Unauthorized));
             }
         };
-        let (body, ask) = desired_body(request.into_inner()).map_err(refusal::releases)?;
+        let mut message = request.into_inner();
+        // A map left empty is a set without targets: proto3 sends no empty map.
+        let targets = std::mem::take(&mut message.targets);
+        let targets = (!targets.is_empty()).then_some(targets);
+        let (body, ask) = desired_body(message).map_err(refusal::releases)?;
         let setter = match &ci {
             Some(verified) => Setter::Ci(verified),
             None => Setter::Operator(&operator),
         };
         let (set, record) = self
             .coordinator
-            .set_desired_by(&setter, &body, &ask)
+            .set_desired_with(&setter, &body, &ask, targets)
             .await
             .map_err(|why| refusal::releases(set_refusal(why)))?;
         Ok(Response::new(proto::SetDesiredResponse {
             desired: Some(desired_proto(&set.desired)),
             record: record.as_ref().map(record_proto),
             dropped_roles: set.dropped_roles,
+        }))
+    }
+
+    async fn get_release(
+        &self,
+        request: Request<proto::GetReleaseRequest>,
+    ) -> Result<Response<proto::GetReleaseResponse>, Status> {
+        // CI's token or the operator's, as for `Converge`: a read, which changes nothing.
+        let ci = matches!(
+            request.extensions().get::<Admitted>(),
+            Some(Admitted::Ci(_))
+        );
+        if !ci && caller_of(&request).operator().is_err() {
+            return Err(refusal::releases(proto::ReleasesRefusal::Unauthorized));
+        }
+        let message = request.into_inner();
+        let service = match message.service.as_str() {
+            "" => self.coordinator.legacy_service(),
+            name => Some(name),
+        };
+        let service =
+            service.ok_or_else(|| refusal::releases(proto::ReleasesRefusal::InvalidRequest))?;
+        let release = self
+            .coordinator
+            .release_verified(service, &message.version)
+            .map_err(|why| {
+                refusal::releases(match why {
+                    ReleaseError::UnknownService => proto::ReleasesRefusal::UnknownService,
+                    ReleaseError::Unknown => proto::ReleasesRefusal::ReleaseUnknown,
+                })
+            })?;
+        Ok(Response::new(proto::GetReleaseResponse {
+            targets: release.targets().clone(),
+            release_index_digest: release.index_digest().map(ToString::to_string),
         }))
     }
 

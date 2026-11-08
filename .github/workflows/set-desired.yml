@@ -66,7 +66,7 @@ on:
         type: string
         required: false
       release_index:
-        description: The text of the version's release index (index.json), byte for byte, at most 3 KiB (the coordinator takes a request of at most 4 KiB). Each host is ordered the package its platform has in it. Comes with release_index_digest; not with package_digest.
+        description: The text of the version's release index (index.json), byte for byte, at most 3 KiB (a coordinator before SetDesired took targets takes a request of at most 4 KiB). Each host is ordered the package its platform has in it. Comes with release_index_digest; not with package_digest.
         type: string
         required: false
       release_index_digest:

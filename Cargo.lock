@@ -1462,6 +1462,7 @@ dependencies = [
  "hostkeeper-mdm-gate",
  "hostkeeper-oidc",
  "hostkeeper-proto",
+ "hostkeeper-release",
  "hostkeeper-testkit",
  "hostkeeper-tls",
  "hostkeeper-wire",
