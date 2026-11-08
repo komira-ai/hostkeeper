@@ -198,8 +198,9 @@ fn the_heartbeat_json_has_the_wire_names() {
         }],
         sent_unix: 0,
         renewal: hostkeeper_link::Renewal::default(),
+        trusted_root: None,
     };
-    let expected = serde_json::json!({
+    let mut expected = serde_json::json!({
         "platform": "darwin-arm64",
         "agent": { "name": "hostkeeper", "version": "0.9.0" },
         "agent_features": ["deferred-v1"],
@@ -229,6 +230,30 @@ fn the_heartbeat_json_has_the_wire_names() {
     });
     assert_eq!(beat.to_json(), expected);
     assert_eq!(beat.encoded_len(), expected.to_string().len());
+
+    // The trusted root counts toward the bound: its age when there is one, and its reason,
+    // `none` for a root that needs no attention.
+    let mut with_root = beat.clone();
+    with_root.trusted_root = Some(hostkeeper_link::TrustedRootFacts {
+        age_secs: Some(7),
+        reason: None,
+    });
+    expected["trusted_root_age_secs"] = serde_json::json!(7);
+    expected["trusted_root_reason"] = serde_json::json!("none");
+    assert_eq!(with_root.to_json(), expected);
+    for (reason, word) in [
+        (hostkeeper_link::RootReason::Stale, "stale"),
+        (hostkeeper_link::RootReason::Missing, "missing"),
+        (hostkeeper_link::RootReason::Unparseable, "unparseable"),
+    ] {
+        with_root.trusted_root = Some(hostkeeper_link::TrustedRootFacts {
+            age_secs: None,
+            reason: Some(reason),
+        });
+        let json = with_root.to_json();
+        assert_eq!(json["trusted_root_reason"], word);
+        assert!(json.get("trusted_root_age_secs").is_none(), "{word}");
+    }
     let deferred = verdict(
         &update("o-1", 1, "x", "2.0"),
         Outcome::Deferred {

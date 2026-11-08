@@ -304,9 +304,9 @@ fn member_service(service: &str, member: &Member, ops: &OpsState) -> proto::Host
 /// heard it, its agent and features, and one entry per service that heard it (each as
 /// [`service_beat`] says it). The coordinator's clock is not the wall clock, so the time of the
 /// last heartbeat is `unix_now` less the seconds the host has been silent. What the last
-/// heartbeat said of the host's clock and certificate is in the host's own fields
-/// (`cert_not_after_unix`, `last_renew_error`, `clock_skew_beats`), not in the heartbeat put
-/// back together.
+/// heartbeat said of the host's clock, certificate and trusted root is in the host's own fields
+/// (`cert_not_after_unix`, `last_renew_error`, `clock_skew_beats`, `trusted_root_age_secs`,
+/// `trusted_root_reason`), not in the heartbeat put back together.
 pub(crate) fn host(
     id: &HostId,
     node: &Node,
@@ -368,6 +368,8 @@ pub(crate) fn host(
         cert_not_after_unix: node.cert_not_after_unix,
         last_renew_error: node.last_renew_error.clone(),
         clock_skew_beats: node.skewed_beats,
+        trusted_root_age_secs: node.trusted_root.age_secs,
+        trusted_root_reason: node.trusted_root.reason.into(),
         role: node.role.clone(),
         node_id,
         // `Hosts.List` and `Hosts.Get` fill these in from the host inventory.

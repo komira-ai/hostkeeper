@@ -145,6 +145,9 @@ pub struct Node {
     pub cert_not_after_unix: Option<u64>,
     /// Why the host's last step of enrollment or renewal failed, as its last heartbeat said it.
     pub last_renew_error: Option<String>,
+    /// The host's Sigstore trusted root, as its last heartbeat said it: unknown after one that
+    /// said nothing of it.
+    pub trusted_root: crate::trusted_root::TrustedRootSaid,
     /// How many of its heartbeats since the coordinator started were skewed: counted by the
     /// fleet ([`Fleet::note_node`]), which replaces what the node given to it says.
     pub skewed_beats: u64,

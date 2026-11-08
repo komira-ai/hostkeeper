@@ -57,7 +57,7 @@ use hostkeeper_steps::Clock;
 use crate::console::ConsoleIssue;
 use crate::executor::Daemon;
 use crate::link_adapters::{
-    DaemonHalts, DaemonObserver, DaemonOrders, DaemonRecords, DaemonRenewal,
+    DaemonHalts, DaemonObserver, DaemonOrders, DaemonRecords, DaemonRenewal, DaemonTrustedRoot,
 };
 use crate::node::NodeState;
 use crate::notify::Watchdog;
@@ -162,8 +162,8 @@ impl Links {
         }));
     }
 
-    /// The heartbeat loop over `daemon`: its executor, held halts, installed services and
-    /// observer are the daemon's ([`crate::link_adapters`]); its step-record directory, where the
+    /// The heartbeat loop over `daemon`: its executor, held halts, installed services, observer
+    /// and trusted root are the daemon's ([`crate::link_adapters`]); its step-record directory, where the
     /// deferrals live, is the daemon's state directory; it announces this build's platform and
     /// the daemon's own version.
     pub fn heartbeater(&self, daemon: &Arc<Daemon>) -> Heartbeater {
@@ -184,6 +184,7 @@ impl Links {
                 dispatch: Arc::clone(&self.dispatch),
                 halts: Arc::new(DaemonHalts::new(Arc::clone(daemon))),
                 renewal: Arc::new(DaemonRenewal::new(self.renewal.clone())),
+                trusted_root: Arc::new(DaemonTrustedRoot::new(Arc::clone(daemon))),
                 clock: Arc::clone(&self.clock),
                 log: Arc::clone(&self.log),
             },

@@ -516,8 +516,7 @@ impl Coordinator {
     /// [`HeartbeatRefused`]: the heartbeat lists no services (none, or a list that was bad and
     /// dropped) and no legacy service is set.
     pub fn heartbeat(&self, who: Identity, beat: Heartbeat) -> Result<Answer, HeartbeatRefused> {
-        self.answer(who, beat, false, None)
-            .map(|(answer, _)| answer)
+        self.heartbeat_from(who, beat, None)
     }
 
     /// [`Self::heartbeat`] for a transport that carries typed orders (the `Order` of
@@ -526,7 +525,7 @@ impl Coordinator {
     /// which is sent instead of an update, and the answer's reply is then `nothing`. When the
     /// rollout gate orders an update with its terms (an agent that announced `order-v1`, a
     /// registered digest), the update is the typed order ([`Order::Update`]): the order id, try
-    /// and package digest of the answer's terms, which the answer carries too.
+    /// and package digest of the answer's terms, which the answer carries too, and `root` is kept.
     ///
     /// # Errors
     /// [`HeartbeatRefused`], as for [`Self::heartbeat`].
@@ -534,8 +533,9 @@ impl Coordinator {
         &self,
         who: Identity,
         beat: Heartbeat,
+        root: crate::trusted_root::TrustedRootSaid,
     ) -> Result<(Answer, Option<Order>), HeartbeatRefused> {
-        self.answer(who, beat, true, None)
+        self.answer(who, beat, true, None, root)
     }
 
     fn answer(
@@ -544,13 +544,14 @@ impl Coordinator {
         beat: Heartbeat,
         orders: bool,
         machine_id: Option<&str>,
+        root: crate::trusted_root::TrustedRootSaid,
     ) -> Result<(Answer, Option<Order>), HeartbeatRefused> {
         if self.legacy_for(&beat).is_none() && beat.services.is_none() {
             return Err(HeartbeatRefused);
         }
         let turn = self.turn_of(&who.host_id, machine_id);
         let asked = beat.agent_features.clone();
-        let (reply, order, terms, acks) = self.reply_to(who, beat, orders, turn);
+        let (reply, order, terms, acks) = self.reply_to(who, beat, orders, (turn, root));
         // Only an agent that announced features gets `features`: an older agent reads the
         // reply strictly and refuses a field it does not know.
         let features: Option<Vec<String>> = (!asked.is_empty()).then(|| {
@@ -594,7 +595,7 @@ impl Coordinator {
         who: Identity,
         mut beat: Heartbeat,
         orders: bool,
-        turn: Turn,
+        (turn, trusted_root): (Turn, crate::trusted_root::TrustedRootSaid),
     ) -> (ServiceReply, Option<Order>, Option<Terms>, Vec<VerdictAck>) {
         let now = (self.clock)();
         let own = crate::agent_service::own_beat(&self.services, &mut beat);
@@ -616,6 +617,7 @@ impl Coordinator {
             sent_unix: beat.sent_unix,
             cert_not_after_unix: beat.cert_not_after_unix,
             last_renew_error: beat.last_renew_error.clone(),
+            trusted_root,
             skewed_beats: 0,
         };
         // The halts are noted under the fleet's lock, which every decision and order below is
