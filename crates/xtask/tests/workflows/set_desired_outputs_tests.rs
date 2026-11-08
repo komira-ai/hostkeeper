@@ -18,7 +18,7 @@ use super::yaml;
 
 /// How a program ended after what it printed.
 #[derive(Debug, PartialEq, Eq)]
-enum Ended {
+pub(super) enum Ended {
     /// It ran to its end: jq exits 0.
     Done,
     /// `halt_error` with this exit code.
@@ -28,10 +28,10 @@ enum Ended {
 }
 
 /// The text of each value a program printed (jq's `--raw-output`), and how it ended.
-type Ran = (Vec<String>, Ended);
+pub(super) type Ran = (Vec<String>, Ended);
 
 /// Runs `program` with jq's `--null-input`, its variables bound to the texts of `vars`.
-fn run(program: &str, vars: &[(&str, String)]) -> Ran {
+pub(super) fn run(program: &str, vars: &[(&str, String)]) -> Ran {
     let defs = jaq_core::defs()
         .chain(jaq_std::defs())
         .chain(jaq_json::defs());

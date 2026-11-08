@@ -16,6 +16,11 @@ keeps steps 2 and 3 equal to the commands of that page, word for word, step 6 eq
 `./hkctl --version` check and expected output, and the downloaded asset and tag equal to its
 tables: a change to either file alone is refused.
 
+First of all, before it downloads anything, the job checks `tailnet_tag`, the tag the join would
+give the runner ([The tag and the ACL](#the-tag-and-the-acl)), and stops when it is not `tag:`
+followed by a Tailscale tag name. The value is checked whether or not the job joins; the join is
+the one step that reads it.
+
 1. Download `hkctl-<hostkeeper_version>` of the pinned hostkeeper release, one bash script for
    every platform, and its `SHA256SUMS`.
 2. Check the downloaded files against `SHA256SUMS`.
@@ -157,7 +162,7 @@ audience = "hostkeeper-ci"
 repository_id = "123456789"            # gh api repos/komira-ai/hostkeeper --jq .id
 repository = "komira-ai/hostkeeper"
 job_workflow_ref = [
-  "komira-ai/hostkeeper/.github/workflows/set-desired.yml@3018137f2c8806dd22bf2071a23565d4a2d64e8d",
+  "komira-ai/hostkeeper/.github/workflows/set-desired.yml@4859b4800897f2468c0f2131455721edfc537217",
 ]
 refs = ["refs/heads/main"]
 event_names = ["workflow_dispatch"]
@@ -210,6 +215,7 @@ the coordinator reads the file when it starts, so restart it afterwards. Nothing
 | `tailnet_client_id` | string | no |  | The client ID of the tailnet's federated identity for the calling repository. Not a secret. Needed when `join_tailnet` is true. |
 | `tailnet_audience` | string | no |  | The audience of that federated identity. Not a secret. Needed when `join_tailnet` is true. |
 | `tailnet_coordinator` | string | no |  | The coordinator's name or address on the tailnet. With `join_tailnet`, the join waits until it answers a `tailscale ping` (at most 3 minutes), so the first call does not race the tailnet's spread of the new node. Empty: no wait. |
+| `tailnet_tag` | string | no | `tag:hk-ci` | The tag the join gives the runner's node: the tag the federated identity's trust credential issues ([The tag and the ACL](#the-tag-and-the-acl)). `tag:` followed by a lower-case letter, then lower-case letters, digits and `-`; one tag, not a list. Any other value, the empty one included, ends the job at its first step, whether or not it joins. |
 
 ## Outputs
 
@@ -281,8 +287,8 @@ verification step and before the client runs:
 - it authenticates with workload identity federation: the action asks GitHub for an OIDC token
   for the federated identity's audience and exchanges it with Tailscale. No auth key or OAuth
   secret exists, in this repository or in the caller's secrets;
-- the node is ephemeral and pre-approved, tagged `tag:hk-ci`, and logged out when the job ends;
-  Tailscale removes it soon after.
+- the node is ephemeral and pre-approved, tagged `tailnet_tag` (`tag:hk-ci` unless the caller
+  passes another), and logged out when the job ends; Tailscale removes it soon after.
 
 Leave `join_tailnet` false when the coordinator's private listener is reachable from the runner
 some other way; then the step is skipped and no action runs in the job.
@@ -297,6 +303,8 @@ some other way; then the step is skipped and no action runs in the job.
       tailnet_client_id: ${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID }}
       tailnet_audience: ${{ vars.HOSTKEEPER_TAILNET_AUDIENCE }}
       tailnet_coordinator: hk-coordinator
+      # The tag the trust credential issues; tag:hk-ci when the variable is empty.
+      tailnet_tag: ${{ vars.HOSTKEEPER_TAILNET_TAG || 'tag:hk-ci' }}
 ```
 
 The client ID and the audience are not secrets (Tailscale shows both in its admin console), so
@@ -306,9 +314,17 @@ tailnet.
 
 ### The tag and the ACL
 
-`tag:hk-ci` is the one tag of the CI nodes. It may reach the coordinator's private listener and
-nothing else. Tag the coordinator's machine `tag:hk-coordinator`, and give the tailnet policy file
-this stanza, with the port of `coordinator_url` (443 when the URL names none):
+The runner's node carries one tag, `tailnet_tag`: whatever tag the trust credential of the
+caller's federated identity issues ([The federation](#the-federation-set-up-once-by-a-tailnet-admin)).
+Tailscale refuses the join when the job asks for a tag the credential does not issue. By default
+it is `tag:hk-ci`, a tag of its own for the CI client. A tailnet whose CI already joins with a
+credential of another tag, such as an organisation's credential whose nodes are `tag:ci`, passes
+that tag instead (`tailnet_tag: tag:ci`) and needs no second credential.
+
+Whichever tag it is, the ACL must let it reach the coordinator's private listener. Tag the
+coordinator's machine `tag:hk-coordinator`, and give the tailnet policy file this stanza, with the
+port of `coordinator_url` (443 when the URL names none) and the job's tag in place of `tag:hk-ci`
+(a tag already in the policy keeps its own `tagOwners` entry):
 
 ```jsonc
 {
@@ -327,9 +343,20 @@ this stanza, with the port of `coordinator_url` (443 when the URL names none):
 ```
 
 The policy is default-deny only once the default allow-all grant (`{"src": ["*"], "dst": ["*"], "ip": ["*"]}`) is
-removed: while it is there, `tag:hk-ci` reaches every node. The `tests` entry makes Tailscale
+removed: while it is there, the tag reaches every node. The `tests` entry makes Tailscale
 refuse a policy edit under which the tag can reach the coordinator's SSH port or cannot reach the
 listener. The heartbeat listener needs no grant for CI.
+
+With `tag:hk-ci` the node reaches the coordinator's private listener and nothing else. A tag
+shared with other CI jobs, such as `tag:ci`, keeps the grants those jobs need, and the join runs
+with all of them: the stanza adds the coordinator's listener to them and takes nothing away.
+
+`release.yml`'s `channel` job, which reads the release channel before this repository's own call
+of the workflow ([Deploying hostkeeper from GitHub Actions](github-actions.md)), does not join the
+tailnet: it reads `HOSTKEEPER_RELEASE_CHANNEL` from the runner as it is, so the channel must be
+reachable from a GitHub-hosted runner, and no grant to the channel's port is needed for it. Were
+the channel served only on the tailnet, a grant from the tag to the channel's port would not be
+enough: that job would have to join first, which it does not.
 
 ### The federation, set up once by a tailnet admin
 
@@ -347,7 +374,9 @@ calls the workflow. Nothing in this repository runs it.
    - optionally a custom claim `job_workflow_ref` that names
      `komira-ai/hostkeeper/.github/workflows/set-desired.yml` at the commit the service pins, so
      only this workflow can join;
-   - scope: **Auth Keys**, write, with the one tag `tag:hk-ci`.
+   - scope: **Auth Keys**, write, with the one tag the job passes as `tailnet_tag` (`tag:hk-ci`
+     unless it passes another). A credential the tailnet already has for its CI, with its own
+     tag, serves as well: give its subject this repository's job, and pass its tag.
 3. Copy the credential's client ID and audience into the service repository's variables
    `HOSTKEEPER_TAILNET_CLIENT_ID` and `HOSTKEEPER_TAILNET_AUDIENCE`.
 
@@ -362,7 +391,8 @@ program included. That is why it runs only after every verification step (it can
 was verified, only what runs after), only when `join_tailnet` is true, and only at the commit
 `set-desired.yml` pins: moving that pin is a reviewed change to this repository, and a service
 picks it up only when it moves its own pin of `set-desired.yml`. The tailnet token the action gets
-can add only ephemeral `tag:hk-ci` nodes, which reach only the coordinator's private listener.
+can add only ephemeral nodes of the credential's tag, which reach what the ACL grants that tag:
+with `tag:hk-ci` and the stanza above, only the coordinator's private listener.
 
 ### Not chosen: a reverse proxy
 
@@ -463,13 +493,14 @@ them.
 
 | step that failed | what it means | what to do |
 |---|---|---|
+| Check the tailnet tag | `tailnet_tag` is not `tag:` followed by a lower-case letter, then lower-case letters, digits and `-` (jq's error says so), with or without `join_tailnet`. Nothing is downloaded and the version is not set. | Pass one tag, such as `tag:ci`, or leave the input out for `tag:hk-ci`. |
 | Download hkctl of the hostkeeper release | No release `v<hostkeeper_version>`, or it has no `hkctl-<hostkeeper_version>` (a release before hkctl) or no `SHA256SUMS`. The version is not set. | Check the pin against the releases of `komira-ai/hostkeeper`. |
 | Check hkctl against SHA256SUMS | A downloaded file does not have the bytes `SHA256SUMS` lists. The version is not set. | Do not retry with another file. Report it to the hostkeeper maintainers. |
 | Verify the attestation of hkctl | hkctl has no attestation from `artifacts.yml` of `komira-ai/hostkeeper` on `refs/heads/main`, built on a GitHub-hosted runner from `hostkeeper_commit`. The version is not set. | Check that `hostkeeper_commit` is the commit of `hostkeeper_version`. If it is, the release is not the one that was built: report it. |
 | Compare the attested source commit | An attestation names another source commit than `hostkeeper_commit` (`jq` prints `false`). The version is not set. | As above. |
 | Install the verified hkctl | The runner could not write the file. The version is not set. | Run the job again. |
 | Check the version of the verified hkctl | hkctl does not say `hkctl <hostkeeper_version>+<first 12 hex digits of hostkeeper_commit>`. The version is not set. | Check the two pins belong together. |
-| Join the tailnet | Only with `join_tailnet`. Tailscale refused the federated identity (no credential for this client ID and audience, a subject that does not match the job, or a tag other than `tag:hk-ci` on the credential), or `tailnet_coordinator` did not answer a ping within 3 minutes. The version is not set. | Check the [federation](#the-federation-set-up-once-by-a-tailnet-admin) and the [ACL](#the-tag-and-the-acl). |
+| Join the tailnet | Only with `join_tailnet`. Tailscale refused the federated identity (no credential for this client ID and audience, a subject that does not match the job, or a `tailnet_tag` the credential does not issue), or `tailnet_coordinator` did not answer a ping within 3 minutes. The version is not set. | Check the [federation](#the-federation-set-up-once-by-a-tailnet-admin) and the [ACL](#the-tag-and-the-acl). |
 | Write the request of the set | No way of naming the release, `package_digest` with `release_index`, `release_index_digest` or `targets`, one of the index pair alone, or `targets` that are not one JSON object (jq's error names the rule). `reason` is empty. The version is not set. | Give one way of naming the release: `package_digest`, the index pair, or `targets` alone or with the index pair. |
 | Set the desired version | The coordinator refused the call, and `reason` is its token: `unauthorized` or `forbidden` (no allow-list entry admits this repository, workflow, audience or service), `unknown_service`, `invalid_request` (a service, version or digest the coordinator does not take), `index_digest_mismatch` (the digest is not the SHA-256 of the index text), `index_invalid` (the index is not this service's at this version, is given with a package digest, or does not list exactly the `hostkeeper-archive` entries of the targets), `held_bad` (the version is marked bad; only an operator can lift the mark, design 8.1), `keys_unavailable` (retry later), `not_in_channel` (the coordinator's release channel does not hold the version yet; retry once the channel sync has finished), `channel_digest_mismatch` (the channel's index of the version is not the index the set names, or does not list `package_digest`; do not retry), `target_invalid` (the targets break a rule of a release, [Targets](#targets)), `release_exists` (the version was set before with other targets; do not retry). `no_answer`: the coordinator could not be reached (with `join_tailnet` false this is what a GitHub-hosted runner gets, because the private listener is not reachable from it, [Reaching the coordinator](#reaching-the-coordinator)), GitHub issued no token (the calling job does not grant `id-token: write`), or hkctl refused a flag. `not_stored`: it answered with another version. The version is not set, except for `not_stored` and possibly `no_answer`: read `hkctl releases status --service <service>` before you retry. | Fix what the token names, then run the job again. |
 | Wait for the fleet to converge | The version is set. `halted`: a host halted the service, and no host is ordered until an operator clears the halt. `superseded`: the desired version changed while the job waited (an automatic rollback, or a newer release). `not_converged`: `max_polls` times 10 seconds passed and the fleet had not converged; the roll goes on. `invalid_wait`: `max_polls` is above 180 (or below 1). `too_many_waits`: the coordinator already holds 16 waits on its listener; run the job again. `no_answer`: the wait was cut (a restart of the coordinator, the network) or got no token. | Look at the service in the coordinator's UI or with `hkctl releases status`. |

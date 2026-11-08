@@ -2,44 +2,63 @@
 //! committed job, runs its `run:` steps in order with `bash -eo pipefail` (the shell GitHub runs
 //! a `run:` step with), and reads the outputs the job gives `set-desired`. Nothing is
 //! substituted in a command. The step `env` expressions are given the values a run of main gives
-//! them, and an expression the test does not know fails the test. The one action of the job,
-//! the download of the run's own `release-<tag>` artifact, is done by the test: it copies that
-//! artifact's `index.json` into the step's `path`.
+//! them, and an expression the test does not know fails the test. The two actions of the job are
+//! done by the test: the checkout of the newest release's commit (the test runs in this
+//! repository's own build, so it checks only that the commit is the newest release's), and the
+//! download of the run's own `release-<tag>` artifact, whose files it copies into the step's
+//! `path`. Each artifact holds what `release targets` reads of a release: hostkeeper's index, an
+//! archive per platform holding its `manifest.toml`, and each archive's bundle.
 //!
-//! `gh` and `curl` on the `PATH` are the test program `tests/bin/gh_fixture.rs`, which answers
-//! from scratch files, so no test reaches GitHub or a channel. `jq`, `cmp`, `sha256sum` and
-//! `cut` are the runner's own, as in the workflow.
+//! `gh`, `curl`, `cargo` and `rustup` on the `PATH` are the test program
+//! `tests/bin/gh_fixture.rs`, which answers from scratch files, so no test reaches GitHub or a
+//! channel; as `cargo` it runs this crate's real `xtask` binary, so the step that writes the
+//! targets runs the real `release targets`. `jq`, `cmp`, `sha256sum` and `cut` are the runner's
+//! own, as in the workflow.
 //!
-//! What is asserted is what decides whether hostkeeper's desired version is set: which step
-//! fails, and the outputs `version`, `release_index`, `release_index_digest` and `newest`.
-//! `set-desired` runs only when the job succeeds and `newest` is `true` (its `if:`,
-//! [`SET_IF`], which the lint holds).
+//! What is asserted is what decides whether hostkeeper's desired version is set, and with what:
+//! which step fails, and the outputs `version`, `release_index`, `release_index_digest`,
+//! `targets` and `newest`. `set-desired` runs only when the job succeeds and `newest` is `true`
+//! (its `if:`, [`SET_IF`], which the lint holds).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use sha2::Digest;
+use serde_json::json;
 
 use super::desired::{CHANNEL_JOB, SET_IF};
 use super::lint::{entries, entry};
+use super::release_files::{self, REPO, package_files, sha256, sorted};
 use super::testdir::TestDir;
 use super::{workflows, yaml};
 
 const GH: &str = env!("CARGO_BIN_EXE_xtask-gh-fixture");
+const XTASK: &str = env!("CARGO_BIN_EXE_xtask");
 
 /// The channel's base URL the runs are given (`vars.HOSTKEEPER_RELEASE_CHANNEL`); the fake
 /// `curl` serves `channel/channel.example/releases/...`.
 const CHANNEL: &str = "https://channel.example/releases";
 
-const REPO: &str = "komira-ai/hostkeeper";
+/// The commit the release `version` of the plan's matrix is built from: one of its own for each
+/// version, its digits padded to 40.
+fn commit_of(version: &str) -> String {
+    format!("{:0>40}", version.replace('.', ""))
+}
 
-/// A canonical release index of hostkeeper at `version`: one line, no final line break.
+/// The files of hostkeeper's release `version` that the job reads, by name.
+fn hostkeeper_files(version: &str) -> BTreeMap<String, Vec<u8>> {
+    package_files("hostkeeper", version, "index.json")
+}
+
+/// The canonical release index of hostkeeper at `version`: one line, no final line break.
 fn index(version: &str) -> String {
-    format!(
-        "{{\"packages\":[{{\"platform\":\"linux-x86_64\",\"sha256\":\"{}\",\"size\":1}}],\"service\":\"hostkeeper\",\"version\":\"{version}\"}}",
-        "a".repeat(64)
-    )
+    let files = hostkeeper_files(version);
+    String::from_utf8(files["index.json"].clone()).expect("UTF-8")
+}
+
+/// The targets the job must give for hostkeeper's release `version`.
+fn targets(version: &str) -> String {
+    release_files::targets("hostkeeper", version, version, &hostkeeper_files(version))
 }
 
 /// One run of the job: the scratch files, and what the run is given.
@@ -59,10 +78,12 @@ impl Site {
             std::fs::create_dir_all(root.join(dir)).expect("make a scratch directory");
         }
         // Hard links, not copies (as in tests/channel_sync.rs): the fake finds its data beside
-        // the name it was started by, and acts as curl when that name is `curl`.
-        for name in ["gh", "curl"] {
+        // the name it was started by, and acts as curl, cargo or rustup when started by that
+        // name. As cargo it runs the real xtask linked beside it.
+        for name in ["gh", "curl", "cargo", "rustup"] {
             std::fs::hard_link(GH, root.join("bin").join(name)).expect("install a fake");
         }
+        std::fs::hard_link(XTASK, root.join("bin/xtask")).expect("install xtask");
         let list: Vec<serde_json::Value> = published
             .iter()
             .map(|tag| serde_json::json!({ "tagName": tag }))
@@ -80,19 +101,31 @@ impl Site {
             .collect();
         let site = Site { root, matrix };
         for v in versions {
-            site.publish(v, &index(v));
+            site.publish(v);
         }
         site
     }
 
-    /// The run's artifact `release-v<version>` holds `index` as its `index.json`.
-    fn publish(&self, version: &str, index: &str) {
+    /// The run's artifact `release-v<version>` holds the files of that release.
+    fn publish(&self, version: &str) {
         let dir = self
             .root
             .join("artifacts")
             .join(format!("release-v{version}"));
         std::fs::create_dir_all(&dir).expect("make the artifact");
-        std::fs::write(dir.join("index.json"), index).expect("write the published index");
+        for (name, bytes) in hostkeeper_files(version) {
+            std::fs::write(dir.join(name), bytes).expect("write a file of the release");
+        }
+    }
+
+    /// Takes `name` out of the artifact of `version`, as a release missing that file.
+    fn withhold(&self, version: &str, name: &str) {
+        let path = self
+            .root
+            .join("artifacts")
+            .join(format!("release-v{version}"))
+            .join(name);
+        std::fs::remove_file(path).expect("remove a file of the artifact");
     }
 
     /// The channel serves `index` as hostkeeper's index of `version`.
@@ -110,10 +143,10 @@ impl Site {
             .matrix
             .iter()
             .map(|(version, tag)| {
-                serde_json::json!({"version": version, "tag": tag, "commit": "0".repeat(40)})
+                json!({"version": version, "tag": tag, "commit": commit_of(version)})
             })
             .collect();
-        serde_json::json!({ "include": include }).to_string()
+        json!({ "include": include }).to_string()
     }
 }
 
@@ -201,18 +234,28 @@ fn run(site: &Site) -> Ended {
         };
         let name = text_of(step, "name").unwrap_or_else(|| format!("step {}", at + 1));
         if let Some(uses) = text_of(step, "uses") {
+            let with = entry(step, "with").expect("an action of the job has `with`");
+            if uses.starts_with("actions/checkout@") {
+                let commit = evaluate(site, &outputs, &text_of(with, "ref").expect("ref"));
+                let (newest, _) = site.matrix.last().expect("a release");
+                assert_eq!(
+                    commit,
+                    commit_of(newest),
+                    "the checkout is of the newest release's commit"
+                );
+                continue;
+            }
             assert!(uses.starts_with("actions/download-artifact@"), "{uses}");
-            let with = entry(step, "with").expect("the download has `with`");
             let artifact = evaluate(site, &outputs, &text_of(with, "name").expect("name"));
             let into = work.join(text_of(with, "path").expect("path"));
             std::fs::create_dir_all(&into).expect("make the download directory");
-            let from = site
-                .root
-                .join("artifacts")
-                .join(&artifact)
-                .join("index.json");
-            if std::fs::copy(&from, into.join("index.json")).is_err() {
+            let from = site.root.join("artifacts").join(&artifact);
+            let Ok(listing) = std::fs::read_dir(&from) else {
                 return Ended::Failed(format!("download {artifact}"));
+            };
+            for file in listing {
+                let file = file.expect("list the artifact");
+                std::fs::copy(file.path(), into.join(file.file_name())).expect("copy a file");
             }
             continue;
         }
@@ -226,7 +269,9 @@ fn run(site: &Site) -> Ended {
             .env("PATH", &path)
             .env("GITHUB_OUTPUT", &output_file)
             .env("GITHUB_REPOSITORY", REPO)
-            .env("RUNNER_TEMP", site.root.join("temp"));
+            .env("RUNNER_TEMP", site.root.join("temp"))
+            // What xtask prints is also in the output file, which is what is read.
+            .stdout(std::process::Stdio::null());
         for (k, v) in entry(step, "env").map_or(&[][..], entries) {
             let (k, v) = (k.as_str().expect("env key"), v.as_str().expect("env value"));
             command.env(k, evaluate(site, &outputs, v));
@@ -243,17 +288,17 @@ fn run(site: &Site) -> Ended {
         .map_or(&[][..], entries)
         .iter()
         .map(|(k, v)| {
-            (
-                k.as_str().expect("output name").to_owned(),
-                evaluate(site, &outputs, v.as_str().expect("output value")),
-            )
+            let name = k.as_str().expect("output name").to_owned();
+            let mut value = evaluate(site, &outputs, v.as_str().expect("output value"));
+            if name == "targets" {
+                // The JSON's value, not the order its writer put the keys in.
+                let json = serde_json::from_str(&value).expect("targets are JSON");
+                value = sorted(json).to_string();
+            }
+            (name, value)
         })
         .collect();
     Ended::Passed(job_outputs)
-}
-
-fn sha256(text: &str) -> String {
-    hex::encode(sha2::Sha256::digest(text.as_bytes()))
 }
 
 /// The outputs of a run that passed for `version`, with `newest`.
@@ -261,8 +306,9 @@ fn passed(version: &str, newest: bool) -> Ended {
     let index = index(version);
     Ended::Passed(BTreeMap::from([
         ("newest".to_owned(), newest.to_string()),
-        ("release_index_digest".to_owned(), sha256(&index)),
+        ("release_index_digest".to_owned(), sha256(index.as_bytes())),
         ("release_index".to_owned(), index),
+        ("targets".to_owned(), targets(version)),
         ("version".to_owned(), version.to_owned()),
     ]))
 }
@@ -277,9 +323,11 @@ fn the_set_desired_job_runs_only_when_the_channel_job_says_newest() {
 }
 
 #[test]
-fn a_release_the_channel_serves_byte_for_byte_is_set_with_its_index_and_digest() {
+fn a_release_the_channel_serves_byte_for_byte_is_set_with_its_index_digest_and_targets() {
     // Catches: a job that does not pass on the published index and its SHA-256 exactly, or that
-    // reads the channel at another path than `<channel>/hostkeeper/<version>/index.json`.
+    // reads the channel at another path than `<channel>/hostkeeper/<version>/index.json`; and
+    // targets that are not one archive entry per platform of the release's own files (another
+    // store order, another asset path, another size or digest, no bundle, no floor).
     let site = Site::new("served", &["1.2.10"], &["v1.2.9", "v1.2.10"]);
     site.serve("1.2.10", &index("1.2.10"));
     let ended = run(&site);
@@ -346,4 +394,46 @@ fn a_channel_that_does_not_serve_the_version_stops_the_job() {
         Ended::Failed("Wait until the release channel serves the version's index".to_owned())
     );
     assert!(!ended.sets_desired());
+}
+
+#[test]
+fn of_several_releases_the_targets_are_the_newest_ones() {
+    // Catches: targets written from another release of the run than the version set, so that
+    // the set names one version and orders another's archives (the coordinator refuses the
+    // pair only when it holds the index too).
+    let site = Site::new(
+        "several-targets",
+        &["1.2.8", "1.2.9"],
+        &["v1.2.8", "v1.2.9"],
+    );
+    site.serve("1.2.9", &index("1.2.9"));
+    let Ended::Passed(outputs) = run(&site) else {
+        panic!("the job passes");
+    };
+    assert_eq!(outputs["targets"], targets("1.2.9"));
+    assert_ne!(outputs["targets"], targets("1.2.8"));
+}
+
+#[test]
+fn a_release_missing_an_archive_bundle_stops_the_job_before_the_set() {
+    // Catches: targets written for a release whose files do not all check out, or a failure of
+    // the targets step that the job goes on after: the set must not run with no targets.
+    for (n, withheld) in [
+        "hostkeeper-1.2.10-macos-arm64.tar.zst.sigstore.json",
+        "hostkeeper-1.2.10-linux-arm64.tar.zst",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let site = Site::new(&format!("withheld-{n}"), &["1.2.10"], &["v1.2.10"]);
+        site.withhold("1.2.10", withheld);
+        site.serve("1.2.10", &index("1.2.10"));
+        let ended = run(&site);
+        assert_eq!(
+            ended,
+            Ended::Failed("The targets of the release".to_owned()),
+            "{withheld}"
+        );
+        assert!(!ended.sets_desired());
+    }
 }

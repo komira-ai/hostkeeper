@@ -20,7 +20,11 @@
 //! - it is [`HELLO_FILE`] and runs on anything but `workflow_dispatch`, lacks the input `version`
 //!   (a required string) or `variant` (a required choice of exactly [`HELLO_VARIANTS`]), or its
 //!   caller does not pass `service: hello`, or a job of it lacks the exact `if:` [`HELLO_IF`] (a
-//!   dispatch from another branch runs nothing).
+//!   dispatch from another branch runs nothing);
+//! - it is [`HELLO_FILE`] and its caller does not pass each of [`HELLO_FROM_RELEASE`] from the
+//!   output of that name of [`HELLO_RELEASE_JOB`], or passes a `package_digest` (one platform's
+//!   package for every host); or the `outputs` of [`HELLO_RELEASE_JOB`] are not exactly
+//!   [`HELLO_RELEASE_OUTPUTS`]; or its step `targets` does not run [`HELLO_TARGETS_RUN`].
 
 use super::desired;
 use super::lint::{entries, entry, triggers, version_comment};
@@ -31,15 +35,16 @@ pub const SET_DESIRED: &str = "komira-ai/hostkeeper/.github/workflows/set-desire
 
 /// The revision of the CI client every job of [`CALLERS`] runs: the commit of this repository
 /// whose `set-desired.yml` it calls, which is also the commit the release [`CLIENT_RELEASE`] was
-/// built from. It is the first release whose `set-desired.yml` runs hkctl, one set and one held
-/// wait (docs/design/two-programs.md, section 5). Moving it is one reviewed change: these two
+/// built from. It is the first release whose `set-desired.yml` takes a release's targets
+/// (docs/design/packages.md, section 3.7), on the client of hkctl, one set and one held wait
+/// (docs/design/two-programs.md, section 5). Moving it is one reviewed change: these two
 /// values, the `uses:` line, `hostkeeper_version` and `hostkeeper_commit` of both callers, and the
 /// coordinator's allow-list entry (docs/deploy/github-actions.md, "The allow-list entry").
-pub const CLIENT_COMMIT: &str = "3018137f2c8806dd22bf2071a23565d4a2d64e8d";
+pub const CLIENT_COMMIT: &str = "4859b4800897f2468c0f2131455721edfc537217";
 
 /// The release built from [`CLIENT_COMMIT`], X.Y.Z: the one whose `hkctl-<version>` the CI client
 /// downloads and verifies.
-pub const CLIENT_RELEASE: &str = "0.1.166";
+pub const CLIENT_RELEASE: &str = "0.1.173";
 
 /// A job that calls [`SET_DESIRED`]: the workflow file, the job, and its `if:`, exactly.
 pub struct Caller {
@@ -57,6 +62,30 @@ pub const HELLO_IF: &str = "${{ github.ref == 'refs/heads/main' }}";
 /// The values of its input `variant`, in order: the build that passes, and the one whose
 /// `/readyz` answers 503 (docs/hello.md, step 4).
 pub const HELLO_VARIANTS: [&str; 2] = ["hello", "fail-ready"];
+/// Its job that reads the release and writes the targets.
+pub const HELLO_RELEASE_JOB: &str = "release";
+/// The inputs [`HELLO_JOB`] passes from the outputs of [`HELLO_RELEASE_JOB`], each from the
+/// output of its own name: every host is ordered its own platform's entry.
+pub const HELLO_FROM_RELEASE: [&str; 4] = [
+    "version",
+    "targets",
+    "release_index",
+    "release_index_digest",
+];
+/// The `outputs` of [`HELLO_RELEASE_JOB`], exactly, sorted by name: the targets from the step
+/// that runs [`HELLO_TARGETS_RUN`], the rest from the step that reads the index.
+pub const HELLO_RELEASE_OUTPUTS: [(&str, &str); 4] = [
+    ("release_index", "${{ steps.index.outputs.release_index }}"),
+    (
+        "release_index_digest",
+        "${{ steps.index.outputs.release_index_digest }}",
+    ),
+    ("targets", "${{ steps.targets.outputs.targets }}"),
+    ("version", "${{ steps.index.outputs.version }}"),
+];
+/// The `run:` of the step `targets` of [`HELLO_RELEASE_JOB`], before its arguments: the targets
+/// are written by the verb that checks the release's files, for hello.
+pub const HELLO_TARGETS_RUN: &str = "cargo xtask release targets --service hello ";
 
 /// Every job of this repository that calls the CI client: the hello proof run, and
 /// hostkeeper's own deploy in release.yml ([`desired`]).
@@ -247,6 +276,60 @@ fn hello_problems(doc: &Node) -> Vec<String> {
     if text_of(with, "service") != Some("hello") {
         problems.push(format!(
             "{HELLO_FILE}: job {HELLO_JOB} must pass `service: hello`"
+        ));
+    }
+    for input in HELLO_FROM_RELEASE {
+        let want = format!("${{{{ needs.{HELLO_RELEASE_JOB}.outputs.{input} }}}}");
+        if text_of(with, input) != Some(want.as_str()) {
+            problems.push(format!(
+                "{HELLO_FILE}: job {HELLO_JOB} must pass `{input}: {want}`"
+            ));
+        }
+    }
+    if with.and_then(|w| entry(w, "package_digest")).is_some() {
+        problems.push(format!(
+            "{HELLO_FILE}: job {HELLO_JOB} passes package_digest; the targets name each platform's package"
+        ));
+    }
+    problems.extend(hello_release_problems(doc));
+    problems
+}
+
+/// What the job [`HELLO_RELEASE_JOB`] of `hello-desired.yml` must be: its outputs exactly
+/// [`HELLO_RELEASE_OUTPUTS`], and its step `targets` running [`HELLO_TARGETS_RUN`].
+fn hello_release_problems(doc: &Node) -> Vec<String> {
+    let mut problems = Vec::new();
+    let job = jobs(doc)
+        .find(|(name, _)| *name == HELLO_RELEASE_JOB)
+        .map(|(_, j)| j);
+    let mut outputs: Vec<(&str, &str)> = job
+        .and_then(|j| entry(j, "outputs"))
+        .map_or(&[][..], entries)
+        .iter()
+        .map(|(k, v)| {
+            (
+                k.as_str().unwrap_or_default(),
+                v.as_str().unwrap_or_default(),
+            )
+        })
+        .collect();
+    outputs.sort_unstable();
+    if outputs != HELLO_RELEASE_OUTPUTS {
+        problems.push(format!(
+            "{HELLO_FILE}: job {HELLO_RELEASE_JOB} outputs are {outputs:?}, not {HELLO_RELEASE_OUTPUTS:?}"
+        ));
+    }
+    let steps = match job.and_then(|j| entry(j, "steps")).map(|s| &s.value) {
+        Some(Value::Seq(items)) => &items[..],
+        _ => &[],
+    };
+    let writes = steps.iter().any(|step| {
+        text_of(Some(step), "id") == Some("targets")
+            && text_of(Some(step), "run").is_some_and(|r| r.starts_with(HELLO_TARGETS_RUN))
+    });
+    if !writes {
+        problems.push(format!(
+            "{HELLO_FILE}: job {HELLO_RELEASE_JOB} needs a step `targets` that runs `{HELLO_TARGETS_RUN}...`"
         ));
     }
     problems
