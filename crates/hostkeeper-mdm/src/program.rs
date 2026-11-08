@@ -24,7 +24,8 @@ use crate::cli::{self, DepVerb, Layout, PushCertArgs};
 use crate::{System, hook};
 
 /// mdm: the program of the mdm service package: its update hook, and the Apple-facing verbs an
-/// operator runs as root on the MDM host. Every verb prints its plan by default; --apply acts.
+/// operator runs as root on the MDM host. push-cert and dep print their plan by default and act
+/// with --apply; update-hook carries out the step it is given at once.
 #[derive(Parser)]
 #[command(name = "mdm", version = crate::stamp::version())]
 struct Cli {

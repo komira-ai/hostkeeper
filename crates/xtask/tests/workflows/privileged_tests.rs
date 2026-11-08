@@ -558,6 +558,7 @@ fn the_committed_privileged_yml_passes_and_holds_the_one_sudo() {
     assert_eq!(
         targets["privileged"],
         BTreeSet::from([
+            "mdm_cert_units".to_owned(),
             "observer".to_owned(),
             "self_update".to_owned(),
             "tierstore_shaped".to_owned(),

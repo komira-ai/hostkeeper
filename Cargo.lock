@@ -1772,6 +1772,7 @@ dependencies = [
  "hostkeeper-hook",
  "hostkeeper-launchd",
  "hostkeeper-link",
+ "hostkeeper-mdm-core",
  "hostkeeper-observe",
  "hostkeeper-oidc",
  "hostkeeper-package",

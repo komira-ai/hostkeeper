@@ -8,7 +8,9 @@
 //! units, which are now the package's:
 //!
 //! - **`prepare <staged release>`** checks the host as `install` does before anything changes
-//!   (root; an x86-64 machine; no link at the state, settings, binary or pkg directory; an
+//!   (root; an x86-64 machine; no link at the state, settings or pkg directory, but not at the
+//!   binary directory, which runs through the daemon's link `current` to the version that
+//!   runs, so the staged release's programs are checked by their staged paths instead; an
 //!   interface carrying `MDM_BIND`; the loopback ports and 443 free or held by the package's
 //!   own active unit; the SCEP depot empty or holding a whole CA), the staged release (its
 //!   `bin/scepserver` and `bin/lego` are files, and that lego takes every flag the certificate
@@ -48,8 +50,10 @@
 //! Every step refuses a params file the contract's reader refuses (`Params::validate`), or
 //! whose `settings` is not the manifest's ([`hostkeeper_mdm_core::package::SETTINGS_FILE`]);
 //! `prepare` refuses a release argument that is not byte for byte `updater.staged_release`.
-//! Every step takes the record directory's lock first and acts on the record, so a step run
-//! again does nothing more. The last line on standard output is the report; the plan and the
+//! Every step takes the record directory's lock first and acts on the record. Run again,
+//! `prepare`, `rollback` and `cleanup` change nothing more; `verify` checks again; `cutover`
+//! (which needs only `prepare` recorded) and `uninstall` issue their systemctl commands again,
+//! which restarts the units once more and leaves them as the first run did. The last line on standard output is the report; the plan and the
 //! commands go to standard error. Exit 0 success, 1 failure, 75 deferred, 2 a command line the
 //! hook cannot read.
 

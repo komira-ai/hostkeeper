@@ -66,8 +66,9 @@ file the contract's reader refuses, or one whose `settings` is not `/etc/mdm/set
 
 - **`prepare`** checks the host as the kit's `install` did (root, x86-64, `MDM_BIND` carried by an
   interface, the ports free or held by the package's own units, the SCEP depot empty or holding a
-  whole CA, no link at the state, settings, binary or pkg directory), the staged release's lego,
-  and `dns.env` when it is there. Then it makes, each only when the host differs: the user `mdm`,
+  whole CA, no link at the state, settings or pkg directory), the staged release's `scepserver`
+  and `lego` (by their staged paths: the package's binary directory runs through the daemon's
+  link `current`, so it is not checked for a link), and `dns.env` when it is there. Then it makes, each only when the host differs: the user `mdm`,
   `/var/lib/mdm` and its subdirectories, `/etc/mdm`, `/var/lib/mdm-pkg`, the three secrets (each
   made once, never shown), the SCEP CA unless the depot holds one, the Caddyfile
   `/etc/mdm/Caddyfile`, and one drop-in `/etc/systemd/system/<unit>.d/settings.conf` for each
