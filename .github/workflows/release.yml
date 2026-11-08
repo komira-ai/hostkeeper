@@ -341,6 +341,10 @@ jobs:
   #          the service `hostkeeper` first, then the rest once they have baked, stage by stage by the
   #          service's update plan, which is longer than a job should hold the release group.
   #          The job ends once the coordinator stored the version (`reason` `not_waited`).
+  #          The join, when HOSTKEEPER_TAILNET_CLIENT_ID is set, asks for the tag of the
+  #          repository variable HOSTKEEPER_TAILNET_TAG (`tag:ci`), the one the federation's trust
+  #          credential issues; the client checks it at its first step, with or without the join,
+  #          so the variable must be set.
   set-desired:
     needs: [plan, channel]
     if: ${{ needs.plan.outputs.release == 'true' && github.ref == 'refs/heads/main' && vars.RELEASE_SETS_DESIRED == 'true' && needs.channel.outputs.newest == 'true' }}
@@ -364,3 +368,4 @@ jobs:
       tailnet_client_id: ${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID }}
       tailnet_audience: ${{ vars.HOSTKEEPER_TAILNET_AUDIENCE }}
       tailnet_coordinator: ${{ vars.HOSTKEEPER_TAILNET_COORDINATOR }}
+      tailnet_tag: ${{ vars.HOSTKEEPER_TAILNET_TAG }}

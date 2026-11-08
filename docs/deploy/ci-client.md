@@ -319,7 +319,10 @@ caller's federated identity issues ([The federation](#the-federation-set-up-once
 Tailscale refuses the join when the job asks for a tag the credential does not issue. By default
 it is `tag:hk-ci`, a tag of its own for the CI client. A tailnet whose CI already joins with a
 credential of another tag, such as an organisation's credential whose nodes are `tag:ci`, passes
-that tag instead (`tailnet_tag: tag:ci`) and needs no second credential.
+that tag instead (`tailnet_tag: tag:ci`) and needs no second credential. hostkeeper's own callers,
+`release.yml` and `hello-desired.yml`, do that: each passes `tag:ci` from the repository variable
+`HOSTKEEPER_TAILNET_TAG`, with no fallback, so the variable must be set
+([The repository variables](github-actions.md#the-repository-variables)).
 
 Whichever tag it is, the ACL must let it reach the coordinator's private listener. Tag the
 coordinator's machine `tag:hk-coordinator`, and give the tailnet policy file this stanza, with the
@@ -348,8 +351,9 @@ refuse a policy edit under which the tag can reach the coordinator's SSH port or
 listener. The heartbeat listener needs no grant for CI.
 
 With `tag:hk-ci` the node reaches the coordinator's private listener and nothing else. A tag
-shared with other CI jobs, such as `tag:ci`, keeps the grants those jobs need, and the join runs
-with all of them: the stanza adds the coordinator's listener to them and takes nothing away.
+shared with other CI jobs, such as `tag:ci` (the tag of hostkeeper's own callers), keeps the
+grants those jobs need, and the join runs with all of them: the stanza, with `tag:ci` in place of
+`tag:hk-ci`, adds the coordinator's listener to them and takes nothing away.
 
 `release.yml`'s `channel` job, which reads the release channel before this repository's own call
 of the workflow ([Deploying hostkeeper from GitHub Actions](github-actions.md)), does not join the
