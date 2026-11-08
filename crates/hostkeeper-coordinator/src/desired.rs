@@ -862,6 +862,27 @@ impl DesiredStore {
             .cloned()
     }
 
+    /// The releases of every service's desired version and of the `other` versions, by service
+    /// and version: those the decisions read ([`crate::picks`]). A version with none is not
+    /// listed.
+    pub(crate) fn releases_of(
+        &self,
+        other: Vec<(String, Version)>,
+    ) -> BTreeMap<(String, String), Arc<Kept>> {
+        let held = self.lock();
+        let wanted = held
+            .desired
+            .iter()
+            .map(|(service, d)| (service.clone(), d.version.clone()));
+        wanted
+            .chain(other)
+            .filter_map(|(service, version)| {
+                let kept = held.releases.get(&service)?.get(version.as_str())?.clone();
+                Some(((service, version.as_str().to_owned()), kept))
+            })
+            .collect()
+    }
+
     /// Takes the desired state of a commit of unknown outcome that `landing` found landed into
     /// memory, with what memory changed since laid over it (`docs/design/coordinator-storage.md`,
     /// section 4.4).

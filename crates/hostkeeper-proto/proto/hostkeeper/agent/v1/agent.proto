@@ -36,7 +36,8 @@
 // characters.
 //
 // Orders: an order is one verb with typed arguments (`Order`): a service name, a version, a
-// package digest, a halt generation, never a command, a path, a URL or a script. The daemon finds
+// package digest, a halt generation, and, for a version set with targets, the picked entry
+// (Targets below); never a command, a URL or a script of its own. The daemon finds
 // everything else (the release channel, the package of its own platform with its size and digest
 // in the version's release index, the hook, the units) in its own configuration, in the index and
 // in the manifest of the package that verified (design section 5.5). The coordinator fills
@@ -45,6 +46,19 @@
 // not `index_digest` (`index_digest_mismatch`), and a package whose SHA-256 is not
 // `package_digest` (`digest_mismatch`). An empty `index_digest` (an order of a coordinator before
 // it, or of a version set with one package digest) skips the index check.
+//
+// Targets: for a version set with targets (`hostkeeper.release.v1`), an `update`, `install`,
+// `force_rollback` or `force` sent over gRPC to a daemon that announced `target-v1` also carries
+// `target`: the one entry of the version's list for the host's platform that the coordinator
+// picked for the host, field for field as CI set it, with `package_digest` equal to its digest.
+// The coordinator picks the entry of the installer the host runs the service with
+// (`ServiceBeat.installer`), else the first entry whose installer the daemon lists
+// (`HeartbeatRequest.installers`), and sends no order when none fits. An entry names bytes by
+// digest and where to look for them, never an absolute URL, a credential or a script; its
+// manifest names a program inside the attested bytes to run as root, its arguments and paths of
+// the host, under the daemon's checks, and whoever sets the release chooses them. An order of a
+// version set with a digest or an index, an order to a daemon that did not announce `target-v1`,
+// and every order on the JSON route carry no target.
 //
 // Enrollment: a host with no certificate generates a P-256 key, keeps it, and sends `Enroll`
 // with a CSR for it and its claims. Its request is pending until an operator approves it
@@ -73,6 +87,7 @@ syntax = "proto3";
 package hostkeeper.agent.v1;
 
 import "hostkeeper/options.proto";
+import "hostkeeper/release/v1/release.proto";
 
 service Coordinator {
   // What the host runs and how it is, and the coordinator's answer: at most one order.
@@ -129,8 +144,9 @@ message HeartbeatRequest {
   // `halt-v1`, `forced-v1`, which announces that the daemon takes the `Force` verb,
   // `install-v1`, which announces that it takes the `Install` and `Uninstall` verbs, `abort-v1`,
   // which announces that it takes the `Abort` verb, `clear-record-v1`, which announces that it
-  // takes the `ClearRecord` verb, and `verdict-acks-v1`, which asks for
-  // `HeartbeatResponse.acks`): at most 16, each 1 to 32 bytes of `[a-z0-9-]`, none twice. An agent
+  // takes the `ClearRecord` verb, `verdict-acks-v1`, which asks for `HeartbeatResponse.acks`,
+  // and `target-v1`, which announces that it takes `target` in orders and lists `installers`):
+  // at most 16, each 1 to 32 bytes of `[a-z0-9-]`, none twice. An agent
   // that lists every service it runs in `services` announces `heartbeat-v2`; without it the
   // coordinator counts the host as unmanaged for every service but the legacy one, rather than
   // as missing them.
@@ -156,6 +172,13 @@ message HeartbeatRequest {
   // UNSPECIFIED: not reported, by an agent that predates the field or one that keeps no root;
   // the coordinator reads that as unknown, never as a root that needs no attention.
   TrustedRootReason trusted_root_reason = 9;
+  // The installers the daemon can run (`hostkeeper-archive`, `tarball`, `deb`, ...), decided once
+  // at its start: the coordinator orders an entry of a release only to a host whose daemon lists
+  // its installer. At most 16, each 1 to 32 bytes of `[a-z0-9-]`, none twice; a list that breaks
+  // a rule is dropped and the coordinator keeps the last one it read. Read only over gRPC, and
+  // only from a daemon that announced `target-v1`; one that did not counts as listing
+  // `hostkeeper-archive` alone.
+  repeated string installers = 10;
 }
 
 // Why the Sigstore trusted root a host checks packages with needs attention, as its daemon
@@ -227,6 +250,11 @@ message ServiceBeat {
   // the record already holds. Absent when the service has no step record, the record names no
   // try, or the agent predates the field.
   optional uint64 record_try = 12;
+  // The installer the host installed the service with, by the name it lists in
+  // `HeartbeatRequest.installers`: the coordinator orders the host that installer's entry of a
+  // release, wherever it stands in the list. Absent for `hostkeeper-archive`, and from an agent
+  // that predates it. 1 to 32 bytes of `[a-z0-9-]`; read only over gRPC.
+  optional string installer = 13;
 }
 
 // Whether a service serves what it should.
@@ -423,6 +451,9 @@ message Update {
   string package_digest = 3;
   // The SHA-256 of the version's release index; empty: not checked (see Orders above).
   string index_digest = 4;
+  // The entry of the version's release picked for the host; absent but for a version set with
+  // targets and a daemon that announced `target-v1` (see Targets above).
+  hostkeeper.release.v1.Target target = 5;
 }
 
 // The arguments of an `install`.
@@ -432,6 +463,9 @@ message Install {
   string package_digest = 3;
   // The SHA-256 of the version's release index; empty: not checked (see Orders above).
   string index_digest = 4;
+  // The entry of the version's release picked for the host; absent but for a version set with
+  // targets and a daemon that announced `target-v1` (see Targets above).
+  hostkeeper.release.v1.Target target = 5;
 }
 
 // The arguments of a `force_rollback`.
@@ -441,6 +475,9 @@ message ForceRollback {
   string package_digest = 3;
   // The SHA-256 of the version's release index; empty: not checked (see Orders above).
   string index_digest = 4;
+  // The entry of the version's release picked for the host; absent but for a version set with
+  // targets and a daemon that announced `target-v1` (see Targets above).
+  hostkeeper.release.v1.Target target = 5;
 }
 
 // The arguments of a `force`.
@@ -453,6 +490,9 @@ message Force {
   uint64 halt_generation = 4;
   // The SHA-256 of the version's release index; empty: not checked (see Orders above).
   string index_digest = 5;
+  // The entry of the version's release picked for the host; absent but for a version set with
+  // targets and a daemon that announced `target-v1` (see Targets above).
+  hostkeeper.release.v1.Target target = 6;
 }
 
 // The arguments of an `uninstall`.

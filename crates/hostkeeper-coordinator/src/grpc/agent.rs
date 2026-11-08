@@ -77,6 +77,12 @@ impl Api for AgentService {
         };
         let bytes = beat_map::json(request.get_ref(), self.coordinator.legacy_service());
         let root = Some(TrustedRootSaid::of(request.get_ref()));
+        // The installers have no key on the JSON route: read here, before the heartbeat is
+        // decided, so this heartbeat's own order is picked from them.
+        if !retiring {
+            self.coordinator
+                .hear_installers(&identity, request.get_ref());
+        }
         let caller = BeatCaller { identity, retiring };
         let (answer, order) = beat(&self.coordinator, caller, &bytes, root).map_err(beat_status)?;
         Ok(Response::new(response_of(answer, order)))

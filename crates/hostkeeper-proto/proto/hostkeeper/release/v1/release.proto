@@ -5,8 +5,8 @@
 // attested (docs/design/packages.md sections 3 and 4).
 //
 // Served by: nobody. This file declares messages and no service. `operator.proto` and
-// `agent.proto` are to import it, so the coordinator forwards to a host, field for field, the
-// entry CI sent.
+// `agent.proto` import it, so the coordinator forwards to a host, field for field, the entry CI
+// sent.
 //
 // Authentication: none; nothing here is called.
 //
