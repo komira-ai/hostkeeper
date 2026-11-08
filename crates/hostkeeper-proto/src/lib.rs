@@ -13,6 +13,9 @@
 //!   operator's holds; `Enrollment`, the hosts waiting for an operator's approval; `Audit`,
 //!   the log of every change; `Alerts`, the conditions that need a person; `Rollouts`, the
 //!   update plans; and `Mdm`, the devices the MDM policy gate knows.
+//! - `hostkeeper.release.v1`: no service; the messages of a release, a list of artifacts per
+//!   platform, one per installer, each with its manifest, which the operator and agent APIs are
+//!   to carry (docs/design/packages.md section 3.1).
 //! - `hostkeeper.local.v1`: `Admin`, what root on the host may ask of its daemon with the
 //!   coordinator down (status, abort, clear a corrupt step record).
 //!
@@ -41,6 +44,12 @@ pub mod hostkeeper {
         /// `Enrollment`, `Audit`, `Alerts`, `Rollouts` and `Mdm`.
         pub mod v1 {
             tonic::include_proto!("hostkeeper.operator.v1");
+        }
+    }
+    pub mod release {
+        /// A release: per platform, the artifacts of each installer and their manifests.
+        pub mod v1 {
+            tonic::include_proto!("hostkeeper.release.v1");
         }
     }
     pub mod local {

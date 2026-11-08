@@ -39,6 +39,7 @@ const PACKAGE: &str = "hostkeeper-package";
 const PLACED: &str = "hostkeeper-placed";
 const PRIVILEGED: &str = "hostkeeper-privileged";
 const PXE_SEED: &str = "hostkeeper-pxe-seed";
+const RELEASE: &str = "hostkeeper-release";
 const UI_TESTS: &str = "hostkeeper-ui-tests";
 const BINARY: &str = "hostkeeper";
 const HELLO: &str = "hello";
@@ -82,7 +83,7 @@ pub type Layer = (
 /// packet with its packet crate; the `mdm` package's certificate-unit test loads that package's
 /// units and drop-ins (`hostkeeper-mdm-core`) into the host's systemd. The binary's tests run
 /// the macOS pkg's postinstall (`hostkeeper-launchd`) against the binary.
-pub const LAYERS: [Layer; 30] = [
+pub const LAYERS: [Layer; 31] = [
     (BINARY, &[DAEMON], &[LAUNCHD]),
     (CI, &[PROTO], &[]),
     (CONFIG, &[], &[]),
@@ -160,6 +161,7 @@ pub const LAYERS: [Layer; 30] = [
     ),
     (PXE_PACKETS, &[WIRE], &[]),
     (PXE_SEED, &[CONFIG, ENROLLMENT, WIRE], &[]),
+    (RELEASE, &[CONFIG, PROTO], &[]),
     (STEPS, &[CONFIG, HOOK], &[]),
     (TLS, &[], &[]),
     (UI_TESTS, &[PROTO], &[COORDINATOR, OIDC]),
