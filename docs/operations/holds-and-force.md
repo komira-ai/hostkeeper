@@ -170,8 +170,8 @@ Every change is one JSON line of the audit file `<ops-file>.audit`, appended and
 
 A change is not made without its audit line. When the line cannot be appended (a full disk, a
 file that cannot be opened), the call is refused with `audit_unavailable` (gRPC `UNAVAILABLE`)
-and changes nothing: `Releases.Force`, `Services.Hold`, `Releases.SetDesired` by an operator,
-and every other call above that changes the ops state. Asking again once the disk has room is
+and changes nothing: `Releases.Force`, `Services.Hold`, `Releases.SetDesired` by an operator
+or with targets, and every other call above that changes the ops state. Asking again once the disk has room is
 safe. The line is appended before the ops file is written, so an audit line can name a change
 whose ops-file write then failed (`store_failed`), or the first lines of a force refused at a
 later one, never the other way round; a force, which

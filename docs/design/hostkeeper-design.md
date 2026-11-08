@@ -291,7 +291,7 @@ The operator API is protobuf services (`operator.proto`, PR #3) with an HTTP/JSO
 |---|---|---|
 | `Hosts` | `List`, `Get` (role; each service's installed version, health, hold and excluded marks; the last update with verdict, phase, class, reason, `detail`, try number and log lines), `Exclude`, `Include`, `SetLabels` | PR #3 |
 | `Releases` | `SetDesired`, `Converge`, `Force`, `UnmarkBad`, `ClearHalt`, `Status` | PR #3 |
-| `Releases` | `WaitConverged`: one held read that ends at convergence, a halt, another desired version or its `wait_secs` ([two-programs.md](two-programs.md) section 3.1) | Built (`crates/hostkeeper-coordinator/src/wait.rs`) |
+| `Releases` | `WaitConverged`: one held read that ends at convergence, a halt, another desired version or its `wait_secs` ([two-programs.md](two-programs.md) section 3.1); `SetDesired` with `targets` and `GetRelease` ([packages.md](packages.md) section 3) | Built (`crates/hostkeeper-coordinator/src/wait.rs`, `src/releases.rs`) |
 | `Releases` | `MarkBad`, `Halt`; `Force` gains targets (fleet, role or hosts) and `include_held` (section 5.6) | Designed (B1, B7) |
 | `Services` | `List` (includes holds), `Assign`, `Unassign`, `SetMinVersion` (per role or host), `Hold`, `Unhold` (host, role or fleet, section 5.4) | Designed (B1, B7, B23) |
 | `Hosts` | `Abort` (queued as an order for the host's next heartbeat; takes no slot), `Exclude --abandon` | Designed (B7) |
@@ -845,7 +845,7 @@ Naming: `updater` names (`/var/lib/updater/{state,hooks}`, unit names, reserved 
 
 1. **One service's rollout at a time, by default.** A service rolls out stage by stage, and a stage's hosts update in parallel only up to each role's `max_updating` (1, or 2 for `daemon` and `mac-daemon`, unless the desired state says more), so a role of N hosts with a ten-minute update and the default limit takes at least N times ten minutes for one service; the stages add a bake between them. Services wait for each other unless the coordinator is started with `--live-rollouts N` (an operator's `Force` is not held behind any of it, and may reach every host at once).
 2. **A slow drain blocks the farm** unless the service declares a bound (8.9).
-3. **Wire.** A heartbeat lists at most 16 services in the imported coordinator; the protobuf schema says 17. They must agree before the protobuf API is served (B1). Heartbeat bodies are capped at 16 KiB, control bodies at 4 KiB, a bearer at 8 KiB.
+3. **Wire.** A heartbeat lists at most 16 services in the imported coordinator; the protobuf schema says 17. They must agree before the protobuf API is served (B1). Heartbeat bodies are capped at 16 KiB, control bodies at 4 KiB (a `SetDesired` at 256 KiB), a bearer at 8 KiB.
 4. **Single coordinator,** no failover; its state is a handful of files, moving to one Postgres database (coordinator-storage.md, which also designs a standby, not built); a restart costs the quiet start and resets bake and deferral backoff.
 5. **A global lock around decisions and disk writes:** a slow disk on the coordinator, or with the state in Postgres a slow commit, stalls heartbeats. Acceptable at the farm sizes this targets.
 6. **One step at a time per host.** No parallel services on one host. Holds are per service, for one host, a role or the fleet.

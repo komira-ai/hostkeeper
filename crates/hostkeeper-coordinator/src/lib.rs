@@ -64,6 +64,9 @@
 //!   token or an operator token, the status read by the operator token;
 //! - [`channel`]: with `--release-channel`, the check that the release channel holds a version
 //!   before it is set, over the HTTPS fetch of [`channel_https`];
+//! - `releases`: the release each version was set with by `SetDesired` with targets, kept
+//!   beside the desired state, checked by the rules of `hostkeeper-release`, and read back by
+//!   `Releases.GetRelease`;
 //! - [`status`]: what an operator reads, and the convergence of a service;
 //! - [`alerts`]: the conditions that need a person, derived from what the coordinator holds,
 //!   answered by `Alerts.List` and logged with an `alert=` field;
@@ -141,6 +144,7 @@ pub mod orders;
 pub mod reconcile;
 pub mod registry;
 pub mod release_index;
+pub(crate) mod releases;
 pub mod rollouts;
 pub mod service;
 pub mod services;
@@ -179,6 +183,8 @@ mod audit_refusal_tests;
 mod audit_rotation_tests;
 #[cfg(test)]
 mod backup_refusal_tests;
+#[cfg(test)]
+mod backup_releases_tests;
 #[cfg(test)]
 mod backup_segment_tests;
 #[cfg(test)]
@@ -289,6 +295,10 @@ mod release_index_orders_tests;
 mod release_index_support;
 #[cfg(test)]
 mod release_index_tests;
+#[cfg(test)]
+mod release_set_tests;
+#[cfg(test)]
+mod releases_tests;
 #[cfg(test)]
 mod rollback_definition_tests;
 #[cfg(test)]

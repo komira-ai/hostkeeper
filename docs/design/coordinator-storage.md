@@ -6,10 +6,11 @@ section 10, the halts-file storage of the plan position in [rollout-update-plans
 and the device-record file of [hostkeeper-mdm.md](hostkeeper-mdm.md) section 6.1. Where they disagree with this document
 on where the coordinator keeps its state, this document wins. C1 to C4 and C6 are built: the storage trait and its
 fake (section 4.1), the enrollment crate's `Records` port, the Postgres store
-(`crates/hostkeeper-coordinator/src/store/postgres/`, with its migrations `0001` and `0002`, sections 3 to 8),
+(`crates/hostkeeper-coordinator/src/store/postgres/`, with its migrations `0001` to `0004`, sections 3 to 8),
 `import` and `export` (section 11: `crates/hostkeeper-coordinator/src/transfer.rs` and
 `crates/hostkeeper-coordinator/src/store/postgres/transfer.rs`), the generations and write ids (migration
-`0003`, section 3.2), and C5, the compose deployment with its backups, restore and drill (sections 9 and
+`0003`, section 3.2), the releases of a set with targets (migration `0004`, section 3.2, from
+[packages.md](packages.md) section 3.6), and C5, the compose deployment with its backups, restore and drill (sections 9 and
 10: `docs/deploy/coordinator/`, and the `xtask db-backup` verb in `crates/xtask/src/db_backup.rs`). Every other
 statement about new code is **Designed**, and section 13 lists the build items, C1 to C11, one pull request each. The tags are those of hostkeeper-design.md: **Built** names code on `main` with a path, **Designed** means
 nothing implements it yet.
@@ -126,11 +127,20 @@ desired(
 desired_digests(                         -- the Registry: every version CI set, at most 4096 a service
   service text, version text, release jsonb NOT NULL,   -- a digest string or an IndexRecord
   PRIMARY KEY (service, version))
+
+releases(                                -- migration 0004: the release a version was set with targets
+  service text, version text,
+  targets jsonb NOT NULL,                -- per platform, its TargetList as proto3 JSON
+  release_index_digest text,             -- the index set with the targets; NULL for none
+  PRIMARY KEY (service, version))
 ```
 
 A service's row and its registry rows change in one transaction, so they are never apart (today they are one file,
 `desired.rs`). The registry's cap and its eviction (keep the desired version, `last_good` and the bad versions) stay in
-Rust (`registry.rs`). `--legacy-service` keeps its meaning for the JSON routes; the single-state file form it selects is
+Rust (`registry.rs`). A version set with targets is written as one set with neither a digest nor an index, and its
+release in `releases`, in the same transaction; the releases of a service keep the registry's cap and eviction rule
+(`releases.rs`), and are what the file store keeps in `<state-file>.releases`. `0004` is `may-run`: an older release
+never reads the table. `--legacy-service` keeps its meaning for the JSON routes; the single-state file form it selects is
 a file encoding and has no table.
 
 **Generations and write ids.** The operator API already defines them (`SetDesiredRequest.if_generation` and `write_id`,
@@ -421,7 +431,7 @@ Each of these is one transaction, where today it is several file writes:
 These stay ordered sequences of transactions, because each partial state they can leave is already the safe side and is
 finished by the next call, as today:
 
-- **`set_desired`:** the operator's audit row, the desired state, the end of a standing force, the lift of an updater's
+- **`set_desired`:** the operator's audit row (and CI's, for a set with targets), the desired state and its release, the end of a standing force, the lift of an updater's
   halt. A failed lift leaves the service halted.
 - **`Hosts.Retire`:** the deny row, then the assignments and the `host_retire` row, then the retire. A failed middle
   step leaves the host refused, and a repeat finishes it.
@@ -493,7 +503,7 @@ that lowers it needs storage first. They are kept, with storage now the database
   today. For an operations change, a desired state, a force and a verdict acknowledgement, the audit row is in the same
   transaction as the change, so `audit_unavailable` (which keeps its proto value and its meaning) is never returned by
   the Postgres store: there is no case where the change is written and its line is not. `set_desired` writes its audit
-  row first, as today, so it cannot leave a change without its line. An enrollment change's audit row is the second
+  row first, as today (an operator's, and CI's with targets), so it cannot leave a change without its line. An enrollment change's audit row is the second
   transaction (section 4.2): when it fails, the change stands, the failure is logged, and `audit_to` writes the row at
   the next start, as today; an approval is never refused `audit_unavailable`. The runbook rows that speak of the audit
   file's disk (`enrollment.md`'s `audit_unavailable` row and its "free the disk of the audit file";
