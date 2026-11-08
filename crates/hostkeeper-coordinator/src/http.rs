@@ -84,6 +84,12 @@ pub const MAX_DESIRED_BYTES: usize = 4096;
 /// The most bytes of an operator action read.
 pub const MAX_OPERATOR_BYTES: usize = 4096;
 
+/// The most bytes of a `Releases.SetDesired` request read, on the gRPC route and the JSON
+/// gateway: a set with targets carries up to eight entries of 24 KiB on each platform
+/// (docs/design/packages.md, section 3.5). Every other operator method reads
+/// [`MAX_OPERATOR_BYTES`].
+pub const MAX_SET_DESIRED_BYTES: usize = 256 * 1024;
+
 /// The error code of a heartbeat from a host an operator denied (`COORDINATOR_REFUSAL_DENIED`).
 pub const DENIED: &str = "denied";
 
@@ -375,7 +381,10 @@ where
         Err(SetError::Unauthorized(_)) => error(StatusCode::UNAUTHORIZED, "unauthorized"),
         Err(SetError::Unavailable) => error(StatusCode::SERVICE_UNAVAILABLE, "unavailable"),
         Err(SetError::Forbidden) => error(StatusCode::FORBIDDEN, "forbidden"),
-        Err(why @ (SetError::Invalid(_) | SetError::UnparseableVersion)) => error(
+        Err(
+            why
+            @ (SetError::Invalid(_) | SetError::UnparseableVersion | SetError::TargetInvalid(_)),
+        ) => error(
             StatusCode::BAD_REQUEST,
             why.reason().unwrap_or("bad_request"),
         ),
@@ -383,6 +392,7 @@ where
             why @ (SetError::BelowMinVersion
             | SetError::BadVersion
             | SetError::DigestConflict
+            | SetError::ReleaseExists
             | SetError::Channel(_)),
         ) => {
             tracing::warn!(%why, "refused a desired state");

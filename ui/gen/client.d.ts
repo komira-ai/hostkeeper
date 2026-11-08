@@ -50,6 +50,7 @@ export interface Client {
     markBad(request: hostkeeper_operator_v1.MarkBadRequest): Promise<hostkeeper_operator_v1.MarkBadResponse>;
     halt(request: hostkeeper_operator_v1.HaltRequest): Promise<hostkeeper_operator_v1.HaltResponse>;
     waitConverged(request: hostkeeper_operator_v1.WaitConvergedRequest): Promise<hostkeeper_operator_v1.WaitConvergedResponse>;
+    getRelease(request: hostkeeper_operator_v1.GetReleaseRequest): Promise<hostkeeper_operator_v1.GetReleaseResponse>;
   };
   readonly rollouts: {
     advance(request: hostkeeper_operator_v1.AdvanceRequest): Promise<hostkeeper_operator_v1.AdvanceResponse>;
@@ -388,6 +389,14 @@ export namespace hostkeeper_operator_v1 {
   }
   export interface GetHostResponse {
     host?: hostkeeper_operator_v1.Host;
+  }
+  export interface GetReleaseRequest {
+    service?: string;
+    version?: string;
+  }
+  export interface GetReleaseResponse {
+    targets?: { [key: string]: hostkeeper_release_v1.TargetList };
+    releaseIndexDigest?: string;
   }
   export interface HaltRecord {
     nodeId?: string;
@@ -794,6 +803,7 @@ export namespace hostkeeper_operator_v1 {
     packageDigest?: string;
     releaseIndex?: string;
     releaseIndexDigest?: string;
+    targets?: { [key: string]: hostkeeper_release_v1.TargetList };
   }
   export interface SetDesiredResponse {
     desired?: hostkeeper_operator_v1.DesiredState;
@@ -878,5 +888,87 @@ export namespace hostkeeper_operator_v1 {
     generation?: string;
     replaced?: hostkeeper_operator_v1.Replaced;
     writeId?: string;
+  }
+}
+
+export namespace hostkeeper_release_v1 {
+  export interface Blob {
+    digest?: string;
+    bytes?: string;
+    locations?: hostkeeper_release_v1.Location[];
+  }
+  export interface Container {
+    unit?: string;
+    args?: string[];
+    ports?: hostkeeper_release_v1.Port[];
+    volumes?: hostkeeper_release_v1.Volume[];
+  }
+  export interface Hook {
+    command?: string[];
+    boot?: string;
+    timeoutSecs?: hostkeeper_release_v1.StepBounds;
+    verifyDeadlineSecs?: string;
+    promotionCeilingSecs?: string;
+    cleanupRetries?: number;
+  }
+  export interface InstallerBounds {
+    stageSecs?: string;
+    activateSecs?: string;
+    removeSecs?: string;
+  }
+  export interface Location {
+    store?: string;
+    locator?: string;
+  }
+  export interface Manifest {
+    package?: string;
+    hook?: hostkeeper_release_v1.Hook;
+    run?: string[];
+    healthUrl?: string;
+    place?: hostkeeper_release_v1.Place[];
+    params?: { [key: string]: hostkeeper_release_v1.Param };
+    minHostkeeper?: string;
+    containers?: hostkeeper_release_v1.Container[];
+    installerBounds?: hostkeeper_release_v1.InstallerBounds;
+  }
+  export interface Param {
+    text?: string;
+    integer?: string;
+    float?: number | "NaN" | "Infinity" | "-Infinity";
+    flag?: boolean;
+  }
+  export interface Place {
+    kind?: string;
+    source?: string;
+    path?: string;
+  }
+  export interface Port {
+    host?: number;
+    container?: number;
+    loopbackOnly?: boolean;
+  }
+  export interface StepBounds {
+    prepare?: string;
+    cutover?: string;
+    verify?: string;
+    rollback?: string;
+    cleanup?: string;
+    uninstall?: string;
+  }
+  export interface Target {
+    installer?: string;
+    locations?: hostkeeper_release_v1.Location[];
+    digest?: string;
+    bytes?: string;
+    attestation?: hostkeeper_release_v1.Blob;
+    manifest?: hostkeeper_release_v1.Manifest;
+  }
+  export interface TargetList {
+    entries?: hostkeeper_release_v1.Target[];
+  }
+  export interface Volume {
+    hostPath?: string;
+    containerPath?: string;
+    readOnly?: boolean;
   }
 }

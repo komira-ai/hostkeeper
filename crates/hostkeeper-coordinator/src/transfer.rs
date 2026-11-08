@@ -44,6 +44,7 @@ use crate::mdm::DEVICES_DIR;
 use crate::ops::{self, Marker, OpsState};
 use crate::ops_file;
 use crate::reconcile::COORDINATOR;
+use crate::releases::{self, releases_path};
 use crate::store::postgres::transfer::{self, ACTION_IMPORTED, MoveError, Moved};
 use crate::store::postgres::{DatabaseError, Dsn};
 use crate::store::{Files, Loaded};
@@ -341,6 +342,13 @@ fn render(
         .map_err(io::Error::from)
         .map_err(io_at(state))?;
     let mut files = vec![(state.clone(), text)];
+    if !loaded.desired.releases.is_empty() {
+        let path = releases_path(state);
+        let text = releases::encode_file(&loaded.desired.releases)
+            .map_err(io::Error::from)
+            .map_err(io_at(&path))?;
+        files.push((path, text));
+    }
     if !loaded.spent.is_empty() {
         let text = jti_file::text_of_spent(&loaded.spent);
         files.push((jti_path(state), text.into_bytes()));

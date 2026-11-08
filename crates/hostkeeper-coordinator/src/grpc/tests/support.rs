@@ -45,6 +45,8 @@ pub const SET_DESIRED: &str = "/hostkeeper.operator.v1.Releases/SetDesired";
 pub const CONVERGE: &str = "/hostkeeper.operator.v1.Releases/Converge";
 /// The path of `Releases.WaitConverged`, which takes CI's token or the operator's.
 pub const WAIT_CONVERGED: &str = "/hostkeeper.operator.v1.Releases/WaitConverged";
+/// The path of `Releases.GetRelease`.
+pub const GET_RELEASE: &str = "/hostkeeper.operator.v1.Releases/GetRelease";
 
 /// A coordinator the tests call through the router, and the rig that keeps its directory and
 /// its clock alive.

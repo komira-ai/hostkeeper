@@ -2,9 +2,11 @@
 //! control listener, with the request as proto3 canonical JSON and the token as
 //! `Authorization: Bearer <token>` (`docs/gateway.md`).
 //!
-//! The gateway has no rule of its own. It checks the caller as a gRPC call of the same path is
-//! checked ([`admit`]), before the body is read; turns the JSON into the method's request
-//! message with the protobuf descriptors; calls the same in-process gRPC service a gRPC call
+//! The gateway has one rule of its own, the null step of `Releases.SetDesired`
+//! ([`without_null_targets`]). It checks the caller as a gRPC call of the same path is
+//! checked ([`admit`]), before the body is read; reads a body of at most the method's limit
+//! ([`operator_limit`]); turns the JSON into the method's request message with the protobuf
+//! descriptors; calls the same in-process gRPC service a gRPC call
 //! reaches ([`serve_admitted`]); and turns the response message back into JSON. A refusal is
 //! `{"code":"<gRPC code name>","reason":"<token>"}` with the HTTP status of [`STATUS_TABLE`].
 //! The call has no deadline here beyond the read of its body: a held `Releases.WaitConverged`
@@ -27,12 +29,16 @@ use prost_reflect::{
 };
 use tonic::{Code, Status};
 
-use super::{admit, serve_admitted};
-use crate::http::{BoxError, MAX_OPERATOR_BYTES, Peer, Surface, read_body};
+use super::{SET_DESIRED, admit, operator_limit, serve_admitted};
+use crate::http::{BoxError, Peer, Surface, read_body};
 use crate::service::Coordinator;
 
 /// The one protobuf package the gateway serves.
 const PACKAGE: &str = "hostkeeper.operator.v1";
+
+/// The reason of the null step's refusal ([`without_null_targets`]): a set's `targets` that name
+/// no platform, the token `Releases` refuses such targets with.
+const TARGET_INVALID: &str = "target_invalid";
 
 /// The reason of a refusal the gateway makes before any adapter runs: a body that is not the
 /// method's request as JSON. It is a token of every refusal enum of the package.
@@ -109,8 +115,16 @@ where
         Ok(admitted) => admitted,
         Err(status) => return refusal(&status),
     };
-    let Some(bytes) = read_body(body, MAX_OPERATOR_BYTES, patience).await else {
+    let Some(bytes) = read_body(body, operator_limit(path), patience).await else {
         return refusal(&invalid());
+    };
+    let bytes = if path == SET_DESIRED {
+        match without_null_targets(&bytes) {
+            Ok(bytes) => bytes,
+            Err(status) => return refusal(&status),
+        }
+    } else {
+        bytes
     };
     let Some(message) = to_message(&method, &bytes) else {
         return refusal(&invalid());
@@ -137,6 +151,37 @@ where
 /// The refusal for a body the method's request cannot be read from.
 fn invalid() -> Status {
     Status::invalid_argument(INVALID_REQUEST)
+}
+
+/// The JSON body of a `Releases.SetDesired`, `bytes`, with each key of its `targets` object whose
+/// value is `null` dropped: a platform with no list, which proto3 JSON cannot hold as a map's
+/// value (docs/design/packages.md, section 3.2). A body that is no JSON object, or whose `targets`
+/// is not an object holding a `null`, is passed on as it came.
+///
+/// # Errors
+/// `target_invalid` (`INVALID_ARGUMENT`): a `targets` object that names no platform once its
+/// `null`s are dropped, as a set with targets that names none is refused.
+pub(crate) fn without_null_targets(bytes: &Bytes) -> Result<Bytes, Status> {
+    let Ok(mut body) = serde_json::from_slice::<serde_json::Value>(bytes) else {
+        return Ok(bytes.clone());
+    };
+    let Some(targets) = body
+        .get_mut("targets")
+        .and_then(serde_json::Value::as_object_mut)
+    else {
+        return Ok(bytes.clone());
+    };
+    if targets.is_empty() {
+        return Err(Status::invalid_argument(TARGET_INVALID));
+    }
+    if !targets.values().any(serde_json::Value::is_null) {
+        return Ok(bytes.clone());
+    }
+    targets.retain(|_, list| !list.is_null());
+    if targets.is_empty() {
+        return Err(Status::invalid_argument(TARGET_INVALID));
+    }
+    Ok(Bytes::from(body.to_string()))
 }
 
 /// The request message of `method` in the JSON `bytes`: one document, nothing after it, and no
