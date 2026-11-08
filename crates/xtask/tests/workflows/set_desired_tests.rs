@@ -9,11 +9,11 @@ use super::set_desired::{CLIENT_STEP, FILE, JOB, JOIN_INPUT, JOIN_STEP, VERIFY_S
 use super::yaml::{self, Node, Value};
 use super::{with_in, workflows_dir};
 
-/// A CI client that keeps every rule: the download, the three provenance checks, the unpack and
-/// the version check, then the join, then the client, bounded by `max_polls`. Its job's
-/// `runs-on` is on line 17; its steps are, from 1: download, checksum, attestation, commit,
-/// unpack, version, tailnet, set-desired.
-const CLIENT: &str = "\
+/// A CI client that keeps every rule: the download, the three provenance checks, the install and
+/// the version check, then the join, the CA, the request, the two calls and the outputs. Its
+/// job's `runs-on` is on line 24; its steps are, from 1: download, checksum, attestation, commit,
+/// install, version, tailnet, ca, request, set-desired, wait, outputs.
+pub(super) const CLIENT: &str = "\
 name: set-desired
 on:
   workflow_call:
@@ -27,6 +27,13 @@ on:
       join_tailnet:
         type: boolean
         default: false
+    outputs:
+      desired_version:
+        value: ${{ jobs.set-desired.outputs.desired_version }}
+      converged:
+        value: ${{ jobs.set-desired.outputs.converged }}
+      reason:
+        value: ${{ jobs.set-desired.outputs.reason }}
 permissions: {}
 jobs:
   set-desired:
@@ -34,16 +41,20 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    outputs:
+      desired_version: ${{ steps.outputs.outputs.desired_version }}
+      converged: ${{ steps.outputs.outputs.converged || 'false' }}
+      reason: ${{ steps.outputs.outputs.reason }}
     steps:
       - id: download
-        run: curl --fail --remote-name https://github.com/komira-ai/hostkeeper/releases/download/v1/a.tar.gz
+        run: curl --fail --remote-name https://github.com/komira-ai/hostkeeper/releases/download/v1/hkctl-1
       - id: checksum
         run: sha256sum --check --strict --ignore-missing SHA256SUMS
       - id: attestation
         env:
           HOSTKEEPER_COMMIT: ${{ inputs.hostkeeper_commit }}
         run: |
-          gh attestation verify a.tar.gz \\
+          gh attestation verify hkctl-1 \\
             --repo komira-ai/hostkeeper \\
             --signer-workflow komira-ai/hostkeeper/.github/workflows/artifacts.yml \\
             --source-ref refs/heads/main \\
@@ -54,10 +65,10 @@ jobs:
         env:
           HOSTKEEPER_COMMIT: ${{ inputs.hostkeeper_commit }}
         run: jq --exit-status '[.[].verificationResult.signature.certificate.sourceRepositoryDigest] | unique == [env.HOSTKEEPER_COMMIT]' verified.json
-      - id: unpack
-        run: tar --extract --gzip --file a.tar.gz --one-top-level=bin hostkeeper
+      - id: install
+        run: install -D --mode 0755 hkctl-1 \"$RUNNER_TEMP/hkctl-bin/hkctl\"
       - id: version
-        run: test \"$(\"$RUNNER_TEMP/hostkeeper-bin/hostkeeper\" --version)\" = \"hostkeeper 1.0.0+0123456789ab\"
+        run: test \"$(\"$RUNNER_TEMP/hkctl-bin/hkctl\" --version)\" = \"hkctl 1.0.0+0123456789ab\"
       - id: tailnet
         if: ${{ inputs.join_tailnet }}
         uses: tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be390056cd # v4.2.0
@@ -68,27 +79,94 @@ jobs:
           version: 1.94.2
           sha256sum: c6f99a5d774c7783b56902188d69e9756fc3dddfb08ac6be4cb2585f3fecdc32
           ping: ${{ inputs.tailnet_coordinator }}
+      - id: ca
+        run: printf '%s\\n' \"$CA\" > \"$RUNNER_TEMP/hkctl-coordinator-ca.pem\"
+      - id: request
+        run: jq --null-input '{}' > \"$RUNNER_TEMP/hkctl-request.json\"
       - id: set-desired
+        continue-on-error: true
         env:
+          SERVICE: ${{ inputs.service }}
+          COORDINATOR_URL: ${{ inputs.coordinator_url }}
+          AUDIENCE: ${{ inputs.audience }}
+        run: |
+          \"$RUNNER_TEMP/hkctl-bin/hkctl\" \\
+            --endpoint \"$COORDINATOR_URL\" \\
+            --ca-file \"$RUNNER_TEMP/hkctl-coordinator-ca.pem\" \\
+            --github-oidc-audience \"$AUDIENCE\" \\
+            --response-file \"$RUNNER_TEMP/hkctl-set.json\" \\
+            releases set-desired \\
+            --service \"$SERVICE\" \\
+            --request \"$RUNNER_TEMP/hkctl-request.json\" \\
+            2> \"$RUNNER_TEMP/hkctl-set.err\"
+      - id: wait
+        if: ${{ inputs.wait && steps.set-desired.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          SERVICE: ${{ inputs.service }}
+          VERSION: ${{ inputs.version }}
+          COORDINATOR_URL: ${{ inputs.coordinator_url }}
+          AUDIENCE: ${{ inputs.audience }}
           MAX_POLLS: ${{ inputs.max_polls }}
         run: |
-          \"$RUNNER_TEMP/hostkeeper-bin/hostkeeper\" ci set-desired \\
-            --service s \\
-            --max-polls \"$MAX_POLLS\"
+          \"$RUNNER_TEMP/hkctl-bin/hkctl\" \\
+            --endpoint \"$COORDINATOR_URL\" \\
+            --ca-file \"$RUNNER_TEMP/hkctl-coordinator-ca.pem\" \\
+            --github-oidc-audience \"$AUDIENCE\" \\
+            --response-file \"$RUNNER_TEMP/hkctl-wait.json\" \\
+            releases wait-converged \\
+            --service \"$SERVICE\" \\
+            --version \"$VERSION\" \\
+            --wait-secs \"${MAX_POLLS}0\" \\
+            2> \"$RUNNER_TEMP/hkctl-wait.err\"
+      - id: outputs
+        if: ${{ always() }}
+        env:
+          SERVICE: ${{ inputs.service }}
+          VERSION: ${{ inputs.version }}
+          WAIT: ${{ inputs.wait }}
+          SET_OUTCOME: ${{ steps.set-desired.outcome }}
+          WAIT_OUTCOME: ${{ steps.wait.outcome }}
+          SET_BODY: ${{ steps.set-desired.outcome == 'success' && format('{0}/hkctl-set.json', runner.temp) || '/dev/null' }}
+          SET_ERR: ${{ steps.set-desired.outcome == 'failure' && format('{0}/hkctl-set.err', runner.temp) || '/dev/null' }}
+          WAIT_BODY: ${{ steps.wait.outcome == 'success' && format('{0}/hkctl-wait.json', runner.temp) || '/dev/null' }}
+          WAIT_ERR: ${{ steps.wait.outcome == 'failure' && format('{0}/hkctl-wait.err', runner.temp) || '/dev/null' }}
+          OUTPUTS_PROGRAM: '\"reason=converged\"'
+        run: |
+          jq --null-input --raw-output \\
+            --arg service \"$SERVICE\" \\
+            --arg version \"$VERSION\" \\
+            --arg wait \"$WAIT\" \\
+            --arg set_outcome \"$SET_OUTCOME\" \\
+            --arg wait_outcome \"$WAIT_OUTCOME\" \\
+            --rawfile set_body \"$SET_BODY\" \\
+            --rawfile set_err \"$SET_ERR\" \\
+            --rawfile wait_body \"$WAIT_BODY\" \\
+            --rawfile wait_err \"$WAIT_ERR\" \\
+            \"$OUTPUTS_PROGRAM\" >> \"$GITHUB_OUTPUT\"
 ";
 
-/// The client step of [`CLIENT`], whole.
-const CLIENT_BLOCK: &str = "      - id: set-desired
+/// The set step of [`CLIENT`], whole.
+pub(super) const CLIENT_BLOCK: &str = "      - id: set-desired
+        continue-on-error: true
         env:
-          MAX_POLLS: ${{ inputs.max_polls }}
+          SERVICE: ${{ inputs.service }}
+          COORDINATOR_URL: ${{ inputs.coordinator_url }}
+          AUDIENCE: ${{ inputs.audience }}
         run: |
-          \"$RUNNER_TEMP/hostkeeper-bin/hostkeeper\" ci set-desired \\
-            --service s \\
-            --max-polls \"$MAX_POLLS\"
+          \"$RUNNER_TEMP/hkctl-bin/hkctl\" \\
+            --endpoint \"$COORDINATOR_URL\" \\
+            --ca-file \"$RUNNER_TEMP/hkctl-coordinator-ca.pem\" \\
+            --github-oidc-audience \"$AUDIENCE\" \\
+            --response-file \"$RUNNER_TEMP/hkctl-set.json\" \\
+            releases set-desired \\
+            --service \"$SERVICE\" \\
+            --request \"$RUNNER_TEMP/hkctl-request.json\" \\
+            2> \"$RUNNER_TEMP/hkctl-set.err\"
 ";
 
 /// The join step of [`CLIENT`], whole.
-const JOIN_BLOCK: &str = "      - id: tailnet
+pub(super) const JOIN_BLOCK: &str = "      - id: tailnet
         if: ${{ inputs.join_tailnet }}
         uses: tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be390056cd # v4.2.0
         with:
@@ -108,16 +186,16 @@ const JOIN_INPUT_BLOCK: &str =
 const ATTESTATION_ENV: &str = "      - id: attestation\n        env:\n          HOSTKEEPER_COMMIT: ${{ inputs.hostkeeper_commit }}\n";
 const COMMIT_ENV: &str = "      - id: commit\n        env:\n          HOSTKEEPER_COMMIT: ${{ inputs.hostkeeper_commit }}\n";
 
-fn real() -> String {
+pub(super) fn real() -> String {
     std::fs::read_to_string(workflows_dir().join(FILE)).expect("read set-desired.yml")
 }
 
-fn assert_client(text: &str, want: &[&str]) {
+pub(super) fn assert_client(text: &str, want: &[&str]) {
     assert_eq!(lint(FILE, text), want, "in:\n{text}");
 }
 
 /// The `id` of every step of the one job, in order (`-` for a step with none).
-fn step_ids(text: &str) -> Vec<String> {
+pub(super) fn step_ids(text: &str) -> Vec<String> {
     let doc = yaml::load(text).expect("the workflow parses");
     let jobs = entry(&doc, "jobs").expect("jobs");
     let job = entry(jobs, JOB).expect("the job");
@@ -137,7 +215,7 @@ fn step_ids(text: &str) -> Vec<String> {
 
 /// `text` with the block from the line `from` up to (not including) the line `to` moved to just
 /// before the line `before`.
-fn moved(text: &str, from: &str, to: &str, before: &str) -> String {
+pub(super) fn moved(text: &str, from: &str, to: &str, before: &str) -> String {
     let start = text.find(from).expect("the block's first line");
     let end = start + text[start..].find(to).expect("the line after the block");
     let block = text[start..end].to_owned();
@@ -167,38 +245,23 @@ fn the_oidc_request_comes_after_every_verification_step() {
         "      - id: checksum\n",
         &format!("{CLIENT_BLOCK}      - id: checksum\n"),
     );
-    let want = |client: usize, checksum: usize| {
-        let mut lines: Vec<String> = [
-            ("checksum", checksum),
-            ("attestation", checksum + 1),
-            ("commit", checksum + 2),
-            ("version", checksum + 4),
-        ]
-        .iter()
-        .map(|(id, at)| {
-            format!(
-                "the OIDC token step `set-desired` (step {client}) comes before the verification step `{id}` (step {at})"
-            )
-        })
-        .collect();
-        lines.push(format!(
-            "step {client} (`set-desired`) comes before the last verification step and runs the hostkeeper program"
-        ));
-        lines.push(format!(
-            "the join step `tailnet` (step {}) comes after the OIDC token step `set-desired` (step {client})",
-            checksum + 5
-        ));
-        lines
-    };
-    let early_want = want(2, 3);
-    let early_want: Vec<&str> = early_want.iter().map(String::as_str).collect();
+    // The set step at 2 and the checksum at 3: every later step is one further on.
+    let early_want = [
+        "the OIDC token step `set-desired` (step 2) comes before the verification step `checksum` (step 3)",
+        "the OIDC token step `set-desired` (step 2) comes before the verification step `attestation` (step 4)",
+        "the OIDC token step `set-desired` (step 2) comes before the verification step `commit` (step 5)",
+        "the OIDC token step `set-desired` (step 2) comes before the verification step `version` (step 7)",
+        "the set step `set-desired` (step 2) comes before `ca` (step 9), whose file it reads",
+        "the set step `set-desired` (step 2) comes before `request` (step 10), whose file it reads",
+        "step 2 (`set-desired`) comes before the last verification step and runs hkctl",
+        "the join step `tailnet` (step 8) comes after the OIDC token step `set-desired` (step 2)",
+    ];
     assert_client(&early, &early_want);
-    // The real file with its client step moved to just before the checksum: the download is
-    // step 1.
+    // The real file with its set step moved to just before the checksum: the download is step 1.
     let reordered = moved(
         &text,
         "      # The first step that requests an OIDC token for the coordinator",
-        "      - name: Remove the token file\n",
+        "      # One held call",
         "      # Verification 1 of 3",
     );
     assert_client(&reordered, &early_want);
@@ -216,10 +279,8 @@ fn nothing_before_verification_touches_the_token_or_ctl() {
             &["step 4 (`early`) comes before the last verification step and runs ctl"],
         ),
         (
-            "      - id: early\n        run: exec \"$RUNNER_TEMP/hostkeeper-bin/hostkeeper\" --version\n",
-            &[
-                "step 4 (`early`) comes before the last verification step and runs the hostkeeper program",
-            ],
+            "      - id: early\n        run: exec \"$RUNNER_TEMP/hkctl-bin/hkctl\" --version\n",
+            &["step 4 (`early`) comes before the last verification step and runs hkctl"],
         ),
         (
             "      - id: early\n        run: echo \"$ACTIONS_ID_TOKEN_REQUEST_TOKEN\"\n",
@@ -261,7 +322,7 @@ fn nothing_before_verification_touches_the_token_or_ctl() {
             "      - id: set-desired\n",
             "      - id: set-desired\n        if: ${{ always() }}\n",
         ),
-        &["step 8 (`set-desired`) has `if`, which could run the job on past it"],
+        &["step 10 (`set-desired`) has `if`, which could run the job on past it"],
     );
     // The order is read from the one step with the client's id: a second one is refused.
     assert_client(
@@ -328,6 +389,9 @@ fn the_workflow_has_no_pull_request_target_and_no_inherited_secrets() {
             "job set-desired: privileged on pull_request (`id-token: write`)",
             "`on` is not `workflow_call` alone",
             "no input `max_polls` of `type: number`",
+            "the output `desired_version` of `workflow_call` is not `${{ jobs.set-desired.outputs.desired_version }}`",
+            "the output `converged` of `workflow_call` is not `${{ jobs.set-desired.outputs.converged }}`",
+            "the output `reason` of `workflow_call` is not `${{ jobs.set-desired.outputs.reason }}`",
             "no input `join_tailnet` of `type: boolean` with `default: false`",
         ],
     );
@@ -341,7 +405,7 @@ fn the_workflow_has_no_pull_request_target_and_no_inherited_secrets() {
             "    runs-on: ubuntu-24.04\n",
             "    runs-on: ubuntu-24.04\n    secrets: inherit\n",
         ),
-        &["line 18: `secrets: inherit` hands every secret of the caller on"],
+        &["line 25: `secrets: inherit` hands every secret of the caller on"],
     );
     assert_client(
         &with_in(
@@ -357,7 +421,7 @@ fn the_workflow_has_no_pull_request_target_and_no_inherited_secrets() {
             "ci.yml",
             &with_in(CLIENT, "      id-token: write\n", "    secrets: inherit\n")
         ),
-        ["line 20: `secrets: inherit` hands every secret of the caller on"]
+        ["line 27: `secrets: inherit` hands every secret of the caller on"]
     );
 }
 
@@ -461,55 +525,6 @@ fn the_verification_step_names_the_signer_workflow_repo_and_ref() {
     );
 }
 
-#[test]
-fn the_poll_is_bounded_by_an_iteration_count_input() {
-    // Catches: the client run without its bound, with a bound that is not `max_polls`, or not
-    // run at all; and a loop of the shell's own in any step.
-    let text = real();
-    assert_client(&text, &[]);
-    assert!(text.contains("--max-polls \"$MAX_POLLS\""));
-    let flag = "            --max-polls \"$MAX_POLLS\"\n";
-    let no_bound = "the client step does not pass `--max-polls \"$MAX_POLLS\"` exactly once";
-    for changed in [
-        String::new(),
-        "            --max-polls 100000\n".to_owned(),
-        format!("            --max-polls 1 \\\n{flag}"),
-    ] {
-        assert_client(&with_in(CLIENT, flag, &changed), &[no_bound]);
-    }
-    assert_client(
-        &with_in(
-            CLIENT,
-            "MAX_POLLS: ${{ inputs.max_polls }}",
-            "MAX_POLLS: 100000",
-        ),
-        &["the client step's `MAX_POLLS` is not `${{ inputs.max_polls }}`"],
-    );
-    assert_client(
-        &with_in(CLIENT, "        type: number\n", "        type: string\n"),
-        &["no input `max_polls` of `type: number`"],
-    );
-    assert_client(
-        &with_in(CLIENT, " ci set-desired \\", " ctl releases set-desired \\"),
-        &["the client step does not run `$RUNNER_TEMP/hostkeeper-bin/hostkeeper ci set-desired`"],
-    );
-    let unpack =
-        "        run: tar --extract --gzip --file a.tar.gz --one-top-level=bin hostkeeper\n";
-    for (script, word) in [
-        ("while true; do sleep 10; done", "while"),
-        ("until false; do sleep 10; done", "until"),
-        ("for poll in 1 2 3; do sleep 10; done", "for"),
-    ] {
-        let want = format!(
-            "step 5 (`unpack`) has a `{word}` loop: the one loop is the client's, bounded by `max_polls`"
-        );
-        assert_client(
-            &with_in(CLIENT, unpack, &format!("        run: {script}\n")),
-            &[want.as_str()],
-        );
-    }
-}
-
 /// One input as the YAML declares it or the table documents it: name, type, whether it is
 /// required, default.
 type Input = (String, String, bool, String);
@@ -578,87 +593,6 @@ fn documented(markdown: &str) -> (Vec<Input>, Vec<String>) {
         .map(|row| row.first().cloned().unwrap_or_default())
         .collect();
     (inputs, outputs)
-}
-
-/// The steps of the real workflow's one job.
-fn steps_of(doc: &Node) -> Vec<Node> {
-    let jobs = entry(doc, "jobs").expect("jobs");
-    let job = entry(jobs, JOB).expect("the job");
-    match entry(job, "steps").map(|s| &s.value) {
-        Some(Value::Seq(steps)) => steps.clone(),
-        _ => panic!("the job has no steps"),
-    }
-}
-
-/// The step of the real workflow with `id`.
-fn step_of(doc: &Node, id: &str) -> Node {
-    steps_of(doc)
-        .into_iter()
-        .find(|s| entry(s, "id").and_then(Node::as_str) == Some(id))
-        .unwrap_or_else(|| panic!("no step {id}"))
-}
-
-/// The text of the scalar entry `key` of `map`.
-fn scalar<'a>(map: &'a Node, key: &str) -> Option<&'a str> {
-    entry(map, key).and_then(Node::as_str)
-}
-
-#[test]
-fn the_release_index_reaches_the_client_as_a_file_of_its_exact_text() {
-    // Catches: the index text put in a script (where the runner would interpolate it as code),
-    // written with a newline added (printf with a trailing newline, echo), written after the
-    // client ran, the client given the file when no index was passed, and the package digest or
-    // the index inputs being required, which would refuse a caller that uses the other way.
-    let text = real();
-    let doc = yaml::load(&text).expect("parses");
-    let write = step_of(&doc, "index");
-    assert_eq!(
-        entry(&write, "env").and_then(|e| scalar(e, "RELEASE_INDEX")),
-        Some("${{ inputs.release_index }}")
-    );
-    assert_eq!(
-        scalar(&write, "run"),
-        Some("printf '%s' \"$RELEASE_INDEX\" > \"$RUNNER_TEMP/hostkeeper-release-index.json\"")
-    );
-    let ids = step_ids(&text);
-    let at = |id: &str| ids.iter().position(|s| s == id).expect(id);
-    assert!(at("index") < at(CLIENT_STEP), "{ids:?}");
-    assert!(at("index") > at("version"), "{ids:?}");
-
-    let client = step_of(&doc, CLIENT_STEP);
-    let env = entry(&client, "env").expect("the client's env");
-    assert_eq!(
-        scalar(env, "RELEASE_INDEX_FILE"),
-        Some(
-            "${{ inputs.release_index != '' && format('{0}/hostkeeper-release-index.json', runner.temp) || '' }}"
-        )
-    );
-    assert_eq!(
-        scalar(env, "RELEASE_INDEX_DIGEST"),
-        Some("${{ inputs.release_index_digest }}")
-    );
-    let run = scalar(&client, "run").expect("the client's script");
-    for flag in [
-        "--release-index-file \"$RELEASE_INDEX_FILE\"",
-        "--release-index-digest \"$RELEASE_INDEX_DIGEST\"",
-        "--package-digest \"$PACKAGE_DIGEST\"",
-    ] {
-        assert!(run.contains(flag), "no {flag} in {run}");
-    }
-    // No script holds an expression: an input is read only through `env`.
-    for step in steps_of(&doc) {
-        let script = scalar(&step, "run").unwrap_or_default();
-        assert!(!script.contains("${{"), "{script}");
-    }
-    let call = entry(&doc, "on")
-        .and_then(|on| entry(on, "workflow_call"))
-        .expect("workflow_call");
-    let inputs = entry(call, "inputs").expect("inputs");
-    for name in ["package_digest", "release_index", "release_index_digest"] {
-        let input = entry(inputs, name).expect(name);
-        assert_eq!(scalar(input, "required"), Some("false"), "{name}");
-        assert_eq!(scalar(input, "type"), Some("string"), "{name}");
-    }
 }
 
 #[test]
@@ -788,7 +722,7 @@ fn the_join_runs_only_when_asked_after_every_check_and_before_the_token_step() {
     let first = moved(
         CLIENT,
         "      - id: tailnet\n",
-        "      - id: set-desired\n",
+        "      - id: ca\n",
         "      - id: checksum\n",
     );
     assert_client(
@@ -805,19 +739,20 @@ fn the_join_runs_only_when_asked_after_every_check_and_before_the_token_step() {
     let between = moved(
         CLIENT,
         "      - id: tailnet\n",
-        "      - id: set-desired\n",
-        "      - id: unpack\n",
+        "      - id: ca\n",
+        "      - id: install\n",
     );
     assert_client(
         &between,
         &["the join step `tailnet` (step 5) comes before the verification step `version` (step 7)"],
     );
-    // After the client.
+    // After the calls, last.
     let late = format!("{}{JOIN_BLOCK}", with_in(CLIENT, JOIN_BLOCK, ""));
     assert_client(
         &late,
         &[
-            "the join step `tailnet` (step 8) comes after the OIDC token step `set-desired` (step 7)",
+            "the outputs step `outputs` (step 11) is not the last step",
+            "the join step `tailnet` (step 12) comes after the OIDC token step `set-desired` (step 9)",
         ],
     );
     // The real file with its join moved to just before the attestation check.
@@ -872,14 +807,14 @@ fn the_join_action_is_pinned_federated_and_names_no_secret() {
         (
             "tailscale/github-action@v4",
             &[
-                "line 47: `uses: tailscale/github-action@v4` is not pinned to a 40-digit lowercase commit SHA",
+                "line 58: `uses: tailscale/github-action@v4` is not pinned to a 40-digit lowercase commit SHA",
                 unpinned,
             ],
         ),
         (
             "tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be39005",
             &[
-                "line 47: `uses: tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be39005` is not pinned to a 40-digit lowercase commit SHA",
+                "line 58: `uses: tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be39005` is not pinned to a 40-digit lowercase commit SHA",
                 unpinned,
             ],
         ),
