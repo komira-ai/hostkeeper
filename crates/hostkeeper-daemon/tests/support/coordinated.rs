@@ -254,6 +254,7 @@ pub fn link_order(ordered: &Ordered) -> Order {
         )),
         pb::order::Verb::Uninstall(a) => Verb::Uninstall(named(&a.service)),
         pb::order::Verb::Abort(a) => Verb::Abort(named(&a.service)),
+        pb::order::Verb::ClearRecord(a) => Verb::ClearRecord(named(&a.service)),
         other => panic!("a verb these scenarios do not order: {other:?}"),
     };
     Order {

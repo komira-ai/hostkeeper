@@ -84,6 +84,11 @@
 //! try from its first answer and stops nothing more. An
 //! abort of a service the loop runs no order of and does not list is not run: the abort that
 //! stops a step the daemon left running before a restart is the admin socket's.
+//!
+//! **Clear record.** A `clear_record` is one of the orders above, one at a time, and its
+//! verdict is sent like theirs, naming the version the service runs (a service the loop does
+//! not list is not run). It runs no update, so a deferral neither holds it back nor is ended by
+//! its verdict, and its service is not reported `updating` while it runs.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
@@ -350,9 +355,11 @@ impl Heartbeater {
                 let deferral = deferral_of(&result, now, retry_after_secs);
                 self.book.set(service, deferral, log);
             }
-            // A forced update runs no hook, so its verdict says nothing about the moment a
-            // deferral was about.
-            Outcome::Succeeded | Outcome::Failed if !result.forced => {
+            // A forced update runs no hook and a `clear_record` no update, so their verdicts say
+            // nothing about the moment a deferral was about.
+            Outcome::Succeeded | Outcome::Failed
+                if !result.forced & !matches!(order.verb, Verb::ClearRecord(_)) =>
+            {
                 self.book.end(service, &result.target, now, log);
             }
             Outcome::Succeeded | Outcome::Failed => {}
@@ -449,6 +456,7 @@ impl Heartbeater {
                 .running
                 .as_ref()
                 .filter(|running| running.service == name)
+                .filter(|running| !matches!(running.order.verb, Verb::ClearRecord(_)))
                 .map(|running| running.target.clone());
             let log = self.ports.log.as_ref();
             let deferred = self
@@ -677,7 +685,8 @@ impl Heartbeater {
         }
         let now = self.ports.clock.unix_secs();
         let log = self.ports.log.as_ref();
-        let declined = (!order.is_forced() & self.advertised.has(Feature::DeferredV1))
+        let clears = matches!(order.verb, Verb::ClearRecord(_));
+        let declined = (!order.is_forced() & !clears & self.advertised.has(Feature::DeferredV1))
             .then(|| self.book.get(&service, now, log))
             .flatten()
             .filter(|deferral| deferral.declines(&target, now));

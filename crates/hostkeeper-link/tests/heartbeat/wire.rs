@@ -122,7 +122,7 @@ fn heartbeat_bytes_equal_the_recorded_kbf_shape_for_the_same_facts() {
     );
     let mut expected = recorded.trim_end_matches('}').to_owned();
     expected.push_str(&format!(
-        r#","agent_features":["deferred-v1","halt-v1","heartbeat-v2","forced-v1","order-v1","verdict-acks-v1","grpc-v1","install-v1","abort-v1"],"agent":{{"name":"hostkeeper","version":"{agent}"}},"sent_unix":0}}"#
+        r#","agent_features":["deferred-v1","halt-v1","heartbeat-v2","forced-v1","order-v1","verdict-acks-v1","grpc-v1","install-v1","abort-v1","clear-record-v1"],"agent":{{"name":"hostkeeper","version":"{agent}"}},"sent_unix":0}}"#
     ));
     assert!(recorded.ends_with("}]}"), "{recorded}");
     assert_eq!(
@@ -162,7 +162,8 @@ fn heartbeat_bytes_equal_the_recorded_kbf_shape_for_the_same_facts() {
             "verdict-acks-v1",
             "grpc-v1",
             "install-v1",
-            "abort-v1"
+            "abort-v1",
+            "clear-record-v1"
         ]
     );
     assert_eq!(ours.agent_name(), "hostkeeper");
@@ -295,7 +296,7 @@ fn every_word_of_a_heartbeat_is_the_wires() {
                 },
             ],
             "agent_features": ["deferred-v1", "halt-v1", "heartbeat-v2", "forced-v1","order-v1", "verdict-acks-v1", "grpc-v1",
-                "install-v1", "abort-v1"],
+                "install-v1", "abort-v1", "clear-record-v1"],
             "agent": { "name": "hostkeeper", "version": "0.9.0" },
         })
     );

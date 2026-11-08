@@ -17,8 +17,8 @@
 //! services the daemon could run (a name outside its grammar names none), in the order of the
 //! service names. The `acks` are the verdicts the coordinator stored, each kept when the
 //! daemon's grammars read its service name and order id and dropped otherwise. An order is the loop's
-//! when its verb is `update`, `force`, `install`, `uninstall` or `abort` and the daemon's grammars
-//! read every word of it. Any other order (a verb the daemon does not run, no verb, or a word the
+//! when its verb is `update`, `force`, `install`, `uninstall`, `abort` or `clear_record` and the
+//! daemon's grammars read every word of it. Any other order (a verb the daemon does not run, no verb, or a word the
 //! daemon cannot read) is not run: it is returned beside the reply ([`Mapped::dropped`]), with
 //! why, for the link to log.
 
@@ -36,7 +36,7 @@ use crate::wire_map::acknowledged;
 
 /// Why an order whose verb the daemon does not run, or that has none, is not run.
 pub(crate) const NOT_RUN: &str =
-    "the daemon runs only update, force, install, uninstall and abort orders";
+    "the daemon runs only update, force, install, uninstall, abort and clear_record orders";
 /// Why an order whose words the daemon's grammars refuse is not run.
 pub(crate) const NOT_READ: &str =
     "its service, version, order id or digest is not one the daemon reads";
@@ -288,6 +288,9 @@ fn order_of(order: pb::Order) -> (Option<Order>, Option<Dropped>) {
             ("uninstall", Terms::Service(Verb::Uninstall, a.service))
         }
         Some(pb::order::Verb::Abort(a)) => ("abort", Terms::Service(Verb::Abort, a.service)),
+        Some(pb::order::Verb::ClearRecord(a)) => {
+            ("clear_record", Terms::Service(Verb::ClearRecord, a.service))
+        }
         _ => {
             let dropped = Dropped {
                 what: format!("order {order_id:?}"),
@@ -499,7 +502,8 @@ mod tests {
                     "verdict-acks-v1",
                     "grpc-v1",
                     "install-v1",
-                    "abort-v1"
+                    "abort-v1",
+                    "clear-record-v1"
                 ]
                 .map(str::to_owned)
                 .to_vec(),
@@ -735,7 +739,7 @@ mod tests {
 
     /// Proves an `update` order is the loop's update order with its id, try and terms, a `force`
     /// order is the loop's forced one, an `install` its install with the same terms, and an
-    /// `uninstall` and an `abort` the loop's of the service they name.
+    /// `uninstall`, an `abort` and a `clear_record` the loop's of the service they name.
     #[test]
     fn every_verb_the_loop_runs_is_its_order() {
         let target = Target {
@@ -786,10 +790,14 @@ mod tests {
         let aborted = reply(order(pb::order::Verb::Abort(pb::Abort {
             service: "web".to_owned(),
         })));
+        let cleared = reply(order(pb::order::Verb::ClearRecord(pb::ClearRecord {
+            service: "web".to_owned(),
+        })));
         let verbs = [
             (installed, Verb::Install(target)),
             (uninstalled, Verb::Uninstall(name("web"))),
             (aborted, Verb::Abort(name("web"))),
+            (cleared, Verb::ClearRecord(name("web"))),
         ];
         for (mapped, verb) in verbs {
             assert_eq!(
@@ -894,12 +902,9 @@ mod tests {
             service: "web".to_owned(),
             halt_generation: 2,
         })));
-        let record = reply(order(pb::order::Verb::ClearRecord(pb::ClearRecord {
-            service: "web".to_owned(),
-        })));
         let mut none = order(pb::order::Verb::Abort(pb::Abort::default()));
         none.order.as_mut().expect("an order").verb = None;
-        for mapped in [rollback, clear, record, reply(none)] {
+        for mapped in [rollback, clear, reply(none)] {
             assert_eq!(mapped.reply.order, None);
             let dropped = mapped.dropped.expect("dropped");
             assert_eq!(dropped.what, "order \"o-1\"");
@@ -958,6 +963,12 @@ mod tests {
                     service: String::new(),
                 }),
                 "abort order \"o-1\"",
+            ),
+            (
+                pb::order::Verb::ClearRecord(pb::ClearRecord {
+                    service: "../web".to_owned(),
+                }),
+                "clear_record order \"o-1\"",
             ),
         ];
         for (verb, what) in named {

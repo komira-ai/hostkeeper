@@ -1,8 +1,8 @@
-//! `clear_record` (design sections 4.1 and 7): set aside a step record that cannot be read, so that
-//! orders run for the service again. Run for the admin socket only: an order that carries it (the
-//! `clear_record` case of `hostkeeper.agent.v1`'s `Order`, which no coordinator sends this daemon,
-//! since it does not announce `clear-record-v1`) is refused `forbidden` by
-//! [`crate::Daemon::execute`] before any lock.
+//! `clear_record` (design sections 4.1 and 7; two-programs.md section 3.2): set aside a step
+//! record that cannot be read, so that orders run for the service again. The admin socket's
+//! `ClearRecord` ([`crate::Daemon::clear_record`]) and a coordinator's order (the `clear_record`
+//! case of `hostkeeper.agent.v1`'s `Order`, [`run`]) both come here. The executor dispatches the
+//! order before anything reads the record, so a record that does not read never refuses it.
 //!
 //! Under the service's lock, never waited for (`busy` when held). Only a record that does not
 //! read ([`RecordError::Corrupt`]) is cleared. An absent record, one that reads in any state, and
@@ -19,20 +19,39 @@ use std::fs::{self, File};
 use std::io;
 
 use hostkeeper_config::names::ServiceName;
+use hostkeeper_hook::Verdict;
 use hostkeeper_steps::record::{Loaded, RECORD_FILE, RecordError};
 
-use crate::executor::{Ctx, Refused};
+use crate::executor::{Ctx, Refused, Reply};
 use crate::locks::Holder;
 use crate::refusal::Refusal;
 
 /// The name a cleared record is kept under, beside where it was.
 pub const CORRUPT_FILE: &str = "step-record.json.corrupt";
 
+/// The reason of the verdict of a `clear_record` order that set the record aside.
+pub const REASON_RECORD_CLEARED: &str = "record_cleared";
+
 /// A record that was cleared.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Cleared {
     /// Why it did not read.
     pub why: String,
+}
+
+/// The coordinator's `clear_record` order: `Finished{Succeeded, record_cleared}` once the record
+/// is set aside, the refusal otherwise (`busy`, `record_reads`, `store_failed`). Its verdict is
+/// reported at the version the service runs; why the record did not read is not in it, and
+/// [`CORRUPT_FILE`] keeps the bytes.
+pub fn run(ctx: &Ctx, service: &ServiceName) -> Reply {
+    let cleared = |_| Reply::Finished {
+        verdict: Verdict::Succeeded {
+            promotion_pending: false,
+        },
+        reason: Some(REASON_RECORD_CLEARED.to_owned()),
+        resent: false,
+    };
+    clear_record(ctx, service).map_or_else(Reply::from, cleared)
 }
 
 /// Clears the corrupt step record of `service`.
