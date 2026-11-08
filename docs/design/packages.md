@@ -5,8 +5,10 @@ Status: design, for the maintainers' ruling. Build item A1 is **Built**: `releas
 (`crates/hostkeeper-release`). Build item A2 is **Built**: `SetDesired` with targets, its checks and refusals, the
 256 KiB limit, the gateway's null step, the audit entry, the releases in the file store and in Postgres, and
 `GetRelease` (`crates/hostkeeper-coordinator/src/releases.rs`, `service_ci.rs`, `store/postgres/releases.rs`).
-Build item A15 is **Built** (section 5.4). Build item A5 is **Built**: the CI client's
-`targets` input (`.github/workflows/set-desired.yml`), `cargo xtask release targets`
+Build item A3 is **Built**: the installers read from heartbeats over gRPC and shown, the pick of section 3.3, the
+picked entry in orders over gRPC, `target-v1` echoed, and `no_target`, `no_build_for_host` and `installer_dropped`
+(`crates/hostkeeper-coordinator/src/picks.rs`). Build item A15 is **Built** (section 5.4). Build item A5 is **Built**:
+the CI client's `targets` input (`.github/workflows/set-desired.yml`), `cargo xtask release targets`
 (`crates/xtask/src/release/targets.rs`), and its two callers, hostkeeper's deploy in `release.yml` and the hello
 proof run `hello-desired.yml`, which set each release with its targets, its release index and the index's digest,
 pinned to the CI client of release v0.1.173. Nothing else here is built. This is a revision of the design merged as
@@ -225,7 +227,8 @@ For a version set with targets, the coordinator picks for each host of the servi
 2. **Any other host** takes the first entry whose installer is in its daemon's `installers` (section 5.1). A daemon
    that does not announce `target-v1` counts as listing `hostkeeper-archive` alone (section 9.1). A `target-v1` daemon
    whose list the coordinator has not yet had over gRPC (after the daemon's or the coordinator's start; the list is
-   held in memory, as features are) is picked nothing until its first gRPC beat, and keeps the gate reason it had.
+   held in memory, as features are) is picked nothing until its first gRPC beat; the other rules keep their reasons,
+   and where none holds it is shown `not_a_member`: the coordinator has no word yet of what it can install.
 
 The pick is equality of the `installer` strings and nothing else. The coordinator never reads a format, a package name
 or a manifest to choose, so a new installer needs no coordinator change. CI decides the preference by the order of the
@@ -236,7 +239,9 @@ first, every new Linux host takes the tarball.
   rollout gate.
 - **Its platform has no list:** it is ordered nothing, keeps what it runs, and shows the gate reason
   `GATE_REASON_NO_TARGET`. `Releases.Status` and `Converge` list it apart, as they list `no_package_for_platform` hosts
-  today. It is never counted as failed, and it does not hold convergence: the version has converged when every host
+  today: `Converge` counts the hosts picked an entry and those picked none by why (`HostCounts.picked`, `no_target`,
+  `no_build_for_host`, `installer_dropped`), and `Hosts.Get` shows the reason of a host that does not report the
+  service beside its installers. It is never counted as failed, and it does not hold convergence: the version has converged when every host
   that was picked an entry runs it, and at least one was. A version set with targets that no host was picked for
   (every host `no_target` or `no_build_for_host`, as a misspelt installer gives) is not converged, and `Converge` says
   so with its counts of picked and unpicked hosts.
@@ -253,7 +258,7 @@ first, every new Linux host takes the tarball.
 The daemon announces its installers once per start, so the pick is the same for a host at every beat until the daemon
 restarts. A daemon given an entry of an installer it does not list (its list changed at a restart the coordinator has
 not yet seen over gRPC) answers `Deferred`, `environment`, `installer_not_listed`, fetches nothing, and is picked for
-again from the list in its next gRPC heartbeat.
+again from the list in its next gRPC heartbeat: that deferral opens no wait.
 
 **Only over gRPC.** A target travels only in a reply over gRPC, and the coordinator takes a host's `installers` only
 from a gRPC heartbeat, keeping the last list it got: the JSON route is frozen. When a host's heartbeat arrives over
@@ -450,7 +455,7 @@ in an outcome with a class and a reason. It has four steps:
 
 Installers are **built into the daemon**. Each is a module of a new crate, `hostkeeper-install`, behind one trait, and
 runs the format's tool by absolute path through the step launcher, as a hook step runs. A daemon lists the installers
-it can run in a new heartbeat field, `HeartbeatRequest.installers = 8`, decided once at start by the rules of section
+it can run in a new heartbeat field, `HeartbeatRequest.installers = 10`, decided once at start by the rules of section
 5.4, and names each installed service's installer in `ServiceBeat.installer = 13`. The coordinator orders an entry only
 to a host that lists its installer (section 3.3). A list, not a feature per installer, because the set depends on the
 host and grows with every format, and the feature list is capped at 16 names, of which eleven are taken once
@@ -817,11 +822,13 @@ Every proto change is additive (rule B8, and the "Extending" rules of `agent.pro
 - new file `release.proto`: `TargetList`, `Target`, `Blob`, `Location`, `Manifest`, `Hook`, `StepBounds`, `InstallerBounds`,
   `Place`, `Param`, `Container`, `Port`, `Volume`;
 - `operator.proto`: `SetDesiredRequest.targets = 8`; the RPC `Releases.GetRelease` and its messages;
-  `Host.installers = 19` (18 is `first_serving_unix`); `ReleasesRefusal` values `TARGET_INVALID = 25`, `RELEASE_EXISTS = 26` and
+  `Host.installers = 21` (19 and 20 are the trusted root's, `trusted_root_age_secs` and `trusted_root_reason`);
+  `HostCounts.picked = 6`, `no_target = 7`, `no_build_for_host = 8`, `installer_dropped = 9` and
+  `Convergence.installer_dropped = 10`, the counts and the hosts `Converge` gives (section 3.3); `ReleasesRefusal` values `TARGET_INVALID = 25`, `RELEASE_EXISTS = 26` and
   `RELEASE_UNKNOWN = 27` (23 and 24 are `WaitConverged`'s); `GateReason` values `GATE_REASON_NO_TARGET = 31`, `GATE_REASON_NO_BUILD_FOR_HOST = 32`
   and `GATE_REASON_INSTALLER_DROPPED = 33`. `GATE_REASON_NO_PACKAGE_FOR_PLATFORM = 24` keeps its meaning, for sets
   made with an index, and is not widened;
-- `agent.proto`: `HeartbeatRequest.installers = 8`; `ServiceBeat.installer = 13`; `target = 5` on `Update`, `Install` and `ForceRollback`, and
+- `agent.proto`: `HeartbeatRequest.installers = 10` (8 and 9 are the trusted root's); `ServiceBeat.installer = 13`; `target = 5` on `Update`, `Install` and `ForceRollback`, and
   `target = 6` on `Force`; the feature `target-v1`; the header's sentence on what an order carries (section 7.1).
 
 The host's files change additively too: `placed.json` gains the keys `installed` and `uninstalling_installed`, which an

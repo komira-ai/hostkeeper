@@ -49,6 +49,7 @@ fn install_id(n: u8) -> String {
 /// The update of `web` to `to`, whose package is [`digest`] `n`, at try `order_try`.
 fn update_order(to: &str, n: u8, order_try: u64) -> Order {
     Order::Update {
+        target: None,
         service: WEB.to_owned(),
         version: version(to),
         digest: hostkeeper_wire::wire::PackageDigest::parse(&digest(n)).expect("a digest"),

@@ -138,6 +138,7 @@ fn order_for(rig: &Rig, host: &str, b: Heartbeat) -> Option<Order> {
 /// one `n` registered and whose halt generation is `halt_generation`.
 fn forced(ver: &str, n: u8, halt_generation: u64, generation: u64) -> Order {
     Order::Force {
+        target: None,
         service: WEB.to_owned(),
         version: version(ver),
         digest: Digest::parse(&digest(n)).expect("a digest"),
@@ -748,6 +749,7 @@ async fn force_order_carries_the_registered_digest_and_no_command_field() {
             order_id: "force-1".to_owned(),
             r#try: 1,
             verb: Some(agent::order::Verb::Force(agent::Force {
+                target: None,
                 service: WEB.to_owned(),
                 version: "2.0".to_owned(),
                 package_digest: digest(7),

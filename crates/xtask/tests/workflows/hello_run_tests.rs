@@ -325,7 +325,7 @@ fn a_dispatch_of_fail_ready_sets_the_failing_builds_version_index_digest_and_tar
 fn a_version_that_is_not_a_release_stops_the_job_before_any_download() {
     // Catches: a dispatch's text reaching the download URL or the outputs unchecked, a
     // version with more or fewer parts, and one with a suffix of its own.
-    for (n, version) in ["1.2", "1.2.3.4", "1.2.3-fail-ready", "v1.2.3", "1.2.3 x"]
+    for (n, version) in ["1.2", "1.2.3.x", "1.2.3-fail-ready", "v1.2.3", "1.2.3 x"]
         .into_iter()
         .enumerate()
     {

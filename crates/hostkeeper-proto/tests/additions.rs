@@ -794,6 +794,7 @@ fn a_release_index_and_its_digest_are_kept_by_an_older_reader() {
     assert_eq!(back, set);
 
     let update = Update {
+        target: None,
         service: "db".to_owned(),
         version: "1.4".to_owned(),
         package_digest: "ab".repeat(32),
@@ -822,6 +823,7 @@ fn a_release_index_and_its_digest_are_kept_by_an_older_reader() {
     assert_eq!(before.index_digest, "");
 
     let force = Force {
+        target: None,
         service: "db".to_owned(),
         version: "1.4".to_owned(),
         package_digest: "ab".repeat(32),

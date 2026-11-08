@@ -15,7 +15,8 @@
 //! repeated in later heartbeats is the same episode and moves nothing.
 //!
 //! The episodes are kept in memory only: after a restart the first report starts the count
-//! again.
+//! again. A deferral of reason [`INSTALLER_NOT_LISTED`] opens no wait: the host is picked an
+//! entry again at its next heartbeat ([`crate::picks`]).
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -24,6 +25,10 @@ use hostkeeper_wire::HostId;
 use hostkeeper_wire::version::Version;
 use hostkeeper_wire::wire::{DeferredReport, Heartbeat};
 use serde::Deserialize;
+
+/// The reason of a deferral of an order whose entry is of an installer the daemon does not list
+/// (docs/design/packages.md, section 3.3): it opens no wait.
+pub const INSTALLER_NOT_LISTED: &str = "installer_not_listed";
 
 /// The longest cap a definition may set: a week.
 pub const MAX_BACKOFF_SECS: u64 = 7 * 24 * 3600;
@@ -123,6 +128,14 @@ impl Defers {
         let Some(report) = &beat.deferred else {
             return;
         };
+        // The daemon was ordered an entry of an installer it does not list: the coordinator's
+        // copy of its installers was one restart old, and the next heartbeat over gRPC brings
+        // the list the next pick reads ([`crate::picks`]). Nothing about the host's moment is
+        // waited for.
+        if report.reason.as_str() == INSTALLER_NOT_LISTED {
+            self.open.remove(key);
+            return;
+        }
         match self.open.get_mut(key) {
             Some(open) if open.target == report.target => {
                 if ordered {

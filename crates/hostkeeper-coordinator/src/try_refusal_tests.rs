@@ -62,6 +62,7 @@ fn refusal(target: &str, order_try: u64, reason: &str) -> UpdateResult {
 /// The update of `web` to `to`, whose package is [`digest`] 1, at try `order_try`.
 fn update_order(to: &str, order_try: u64) -> Order {
     Order::Update {
+        target: None,
         service: WEB.to_owned(),
         version: version(to),
         digest: hostkeeper_wire::wire::PackageDigest::parse(&digest(1)).expect("a digest"),

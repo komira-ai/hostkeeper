@@ -238,8 +238,9 @@ pub struct Member {
 /// service: it is left out while an operator holds the pair ([`crate::decide::Gate::Held`]), and
 /// while there is no `desired` state or it names no package for the host's platform (no digest,
 /// no release index, or an index that lists none: [`crate::decide::Skip::NoDigest`],
-/// [`crate::decide::Skip::NoPackageForPlatform`]), as [`crate::converge`] leaves such a host out
-/// of every count.
+/// [`crate::decide::Skip::NoPackageForPlatform`]; for a version set with targets, while it is
+/// picked no entry, [`crate::picks`]), as [`crate::converge`] leaves such a host out of every
+/// count.
 #[must_use]
 pub fn members(
     def: &ServiceDef,
@@ -255,7 +256,10 @@ pub fn members(
             // A host a selector selects is missing whether or not it could be ordered now.
             let installable = def.selector.is_some()
                 || (!fleet.is_held(&def.name, id)
-                    && desired.is_some_and(|d| d.package_for(node.platform).is_some()));
+                    && desired.is_some_and(|d| {
+                        crate::picks::picked(fleet, &def.name, &d.version, id)
+                            .unwrap_or_else(|| d.package_for(node.platform).is_some())
+                    }));
             let key = id.to_string();
             let reason = ops
                 .excluded
