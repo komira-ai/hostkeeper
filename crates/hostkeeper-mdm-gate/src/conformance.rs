@@ -334,9 +334,8 @@ fn not_whole(fresh: &dyn Fn() -> Box<dyn Subject>) -> Result<(), String> {
         .encode_to_vec()
     };
     let mut digest = good.clone();
-    if let Some(last) = digest.last_mut() {
-        *last ^= 1;
-    }
+    let last = digest.len() - 1;
+    digest[last] ^= 1;
     let undecodable = {
         let record = vec![0xff, 0xff];
         FilePb {
@@ -350,6 +349,23 @@ fn not_whole(fresh: &dyn Fn() -> Box<dyn Subject>) -> Result<(), String> {
         SCHEMA,
         &RecordPb {
             phase: 4,
+            ..record_pb("a-1")
+        },
+    );
+    let phase_zero = kept(
+        SCHEMA,
+        &RecordPb {
+            phase: 0,
+            ..record_pb("a-1")
+        },
+    );
+    let non_hex = kept(
+        SCHEMA,
+        &RecordPb {
+            sent: vec![SentPb {
+                uuid: format!("{}g", &uuid(1).as_str()[..35]),
+                request_type: "SecurityInfo".to_owned(),
+            }],
             ..record_pb("a-1")
         },
     );
@@ -373,7 +389,14 @@ fn not_whole(fresh: &dyn Fn() -> Box<dyn Subject>) -> Result<(), String> {
             ..record_pb("a-1")
         },
     );
-    let cases: [(&str, Vec<u8>, &str); 9] = [
+    let cases: [(&str, Vec<u8>, &str); 12] = [
+        ("empty", Vec::new(), "the file has no schema"),
+        ("phase 0", phase_zero, "the record's phase is unknown"),
+        (
+            "a UUID with a byte that is not hex",
+            non_hex,
+            "a sent command's UUID is malformed",
+        ),
         (
             "garbage",
             b"\xff\xff\xff".to_vec(),
@@ -459,9 +482,10 @@ fn unknown_field(fresh: &dyn Fn() -> Box<dyn Subject>) -> Result<(), String> {
             ..record_pb("a-1")
         },
     );
-    let back = load_of(fresh, "a-1", &later).map_err(|e| format!("the load failed: {e}"))?;
-    let without = load_of(fresh, "a-1", &kept(SCHEMA, &record_pb("a-1")))
-        .map_err(|e| format!("the load of the record without the field failed: {e}"))?;
+    let read =
+        |bytes: &[u8]| load_of(fresh, "a-1", bytes).map_err(|e| format!("the load failed: {e}"));
+    let back = read(&later)?;
+    let without = read(&kept(SCHEMA, &record_pb("a-1")))?;
     expect(back.len() == 1 && back == without, || {
         format!("a record with a field of a later release loaded as {back:?}, not {without:?}")
     })

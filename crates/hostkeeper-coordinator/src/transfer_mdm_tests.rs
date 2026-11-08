@@ -153,3 +153,32 @@ fn an_import_whose_device_rows_read_back_otherwise_is_rolled_back() {
     }
     assert_eq!(count(&database, "mdm_devices"), 0);
 }
+
+/// Proves: an export of a database holding a row of `mdm_devices` the gate's reader refuses is
+/// refused with the gate's own reason, naming the row, and writes no file.
+///
+/// Catches: an export that writes a record the file store would refuse at its start (the
+/// back-out would not start), or skips it and forgets the device.
+#[test]
+fn an_export_refuses_a_device_row_the_gate_cannot_read() {
+    let from = store_with_devices("transfer-mdm-torn-from");
+    let database = TestDatabase::new();
+    imported(&from, &database).expect("imported");
+    database
+        .run("INSERT INTO mdm_devices (enrollment_id, record) VALUES ('AAAA-1', '\\xffff')")
+        .expect("a torn row");
+    let mut into = Store::new("transfer-mdm-torn-into");
+    into.paths.enrollment_dir = Some(into.dir.path().join("enrollment"));
+    let refused = export(&export_flags(&database, &into), &FileLock, &clock())
+        .expect_err("a row the gate cannot read");
+    assert!(
+        matches!(refused, TransferError::Database(MoveError::Database(_))),
+        "{refused:?}"
+    );
+    assert_eq!(
+        refused.to_string(),
+        "database:mdm_devices/AAAA-1: the file is not a record; the gate does not guess what a \
+         device's record said, so fix or remove the file to start"
+    );
+    assert_eq!(into.files().len(), 0);
+}

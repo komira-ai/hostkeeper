@@ -85,6 +85,12 @@ enum Defect {
     SkipsOtherKeys,
     /// A load refuses a record holding a field it does not know.
     RefusesUnknownFields,
+    /// A load refuses a record that is not whole with another reason than the gate's.
+    OtherReason,
+    /// A load refuses a record of a newer schema naming another schema.
+    OtherSchema,
+    /// The save after a failed one answers Ok and writes nothing.
+    DropsTheSaveAfterAFailure,
 }
 
 /// A store in memory, wrong in the way `defect` says.
@@ -113,6 +119,8 @@ struct MemoryStore {
     defect: Defect,
     kept: Arc<Mutex<BTreeMap<String, Vec<u8>>>>,
     fail: Arc<AtomicBool>,
+    /// Whether the last save was told to fail ([`Defect::DropsTheSaveAfterAFailure`]).
+    dropping: AtomicBool,
 }
 
 fn refused() -> StoreError {
@@ -137,6 +145,18 @@ impl DeviceStore for MemoryStore {
                 (Ok(record), Defect::RefusesUnknownFields) if encode_record(&record) != *bytes => {
                     return Err(refused());
                 }
+                (Err(StoreError::Corrupt { path, .. }), Defect::OtherReason) => {
+                    return Err(StoreError::Corrupt {
+                        path,
+                        reason: "another reason".to_owned(),
+                    });
+                }
+                (Err(StoreError::NewerSchema { path, schema }), Defect::OtherSchema) => {
+                    return Err(StoreError::NewerSchema {
+                        path,
+                        schema: schema - 1,
+                    });
+                }
                 (outcome, _) => records.push(outcome?),
             }
         }
@@ -148,6 +168,11 @@ impl DeviceStore for MemoryStore {
             Defect::StaysFailed => self.fail.load(Ordering::SeqCst),
             _ => self.fail.swap(false, Ordering::SeqCst),
         };
+        if self.defect == Defect::DropsTheSaveAfterAFailure
+            && self.dropping.swap(failing, Ordering::SeqCst)
+        {
+            return Ok(());
+        }
         match (self.defect, failing) {
             (Defect::SaveFails, _) => return Err(refused()),
             (Defect::OkWhenFailing, true) => return Ok(()),
@@ -178,6 +203,7 @@ impl Subject for InMemory {
             defect: self.defect,
             kept: Arc::clone(&self.kept),
             fail: Arc::clone(&self.fail),
+            dropping: AtomicBool::new(false),
         })
     }
 
@@ -249,6 +275,9 @@ fn the_cases_fail_against_a_store_that_breaks_each_one() {
         ),
         (Defect::SkipsOtherKeys, vec![Clause::OtherKey]),
         (Defect::RefusesUnknownFields, vec![Clause::UnknownField]),
+        (Defect::OtherReason, vec![Clause::NotWhole]),
+        (Defect::OtherSchema, vec![Clause::NewerSchema]),
+        (Defect::DropsTheSaveAfterAFailure, vec![Clause::FailedSave]),
     ];
     for (defect, clauses) in cases {
         assert_eq!(failed_by(defect), clauses, "{defect:?}");
