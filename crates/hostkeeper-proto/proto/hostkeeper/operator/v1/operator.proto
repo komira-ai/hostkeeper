@@ -12,8 +12,10 @@
 // repository, workflow, ref or environment, event, runner; each token is good once), or the
 // operator token. `SetDesired` with CI's token sets only the services the admitting allow-list
 // entry names; with the operator token it sets any service the coordinator manages, audited as
-// `set_desired` under the token's name. `Releases.Converge` and `Releases.WaitConverged`, which
-// change nothing, take CI's OIDC token or the operator token, and answer either for any service.
+// `set_desired` under the token's name. A set with `targets` is audited as `set_desired` whoever
+// made it, CI's under `ci`. `Releases.Converge`, `Releases.WaitConverged` and
+// `Releases.GetRelease`, which change nothing, take CI's OIDC token or the operator token, and
+// answer either for any service.
 // Every other RPC takes the operator token only. The token is checked
 // before the request is read.
 //
@@ -66,6 +68,8 @@ syntax = "proto3";
 package hostkeeper.operator.v1;
 
 import "hostkeeper/agent/v1/agent.proto";
+// The release a set with targets names, per platform (`SetDesiredRequest.targets`).
+import "hostkeeper/release/v1/release.proto";
 // `AuditEntry` and `Actor`, which every service of the package answers.
 import public "hostkeeper/operator/v1/entry.proto";
 // The `Rollouts` service and the update plan (`RolloutPlan`) that `ServiceStatus` carries.
@@ -111,7 +115,8 @@ service Releases {
   // Set a service's desired state. The coordinator moves its hosts there by the service's update
   // plan, stage by stage (`Rollouts`), a role's `max_updating` at a time. Takes
   // CI's OIDC token (the services its allow-list entry names) or the operator token (any service
-  // the coordinator manages, audited as `set_desired` under the token's name).
+  // the coordinator manages, audited as `set_desired` under the token's name; a set with
+  // `targets` is audited by CI too). Its request is at most 256 KiB; every other method's 4 KiB.
   rpc SetDesired(SetDesiredRequest) returns (SetDesiredResponse);
   // How far a service's hosts are from its desired version. Changes nothing. Takes CI's OIDC
   // token or the operator token.
@@ -136,6 +141,10 @@ service Releases {
   // wait is over already, and otherwise after the change that ends it. Changes nothing. Takes
   // CI's OIDC token or the operator token, checked once, when the call is admitted.
   rpc WaitConverged(WaitConvergedRequest) returns (WaitConvergedResponse);
+  // The release a version of a service was set with: its targets, as set, and the digest of the
+  // release index that came with them. Changes nothing. Takes CI's OIDC token or the operator
+  // token, and answers either for any service.
+  rpc GetRelease(GetReleaseRequest) returns (GetReleaseResponse);
 }
 
 // The services the coordinator manages, which hosts run them, and the operator's holds.
@@ -269,6 +278,19 @@ enum ReleasesRefusal {
   RELEASES_REFUSAL_INVALID_WAIT = 23;
   // FAILED_PRECONDITION: `WaitConverged` while 16 waits are held already; retry once one ends.
   RELEASES_REFUSAL_TOO_MANY_WAITS = 24;
+  // INVALID_ARGUMENT: `SetDesired`'s `targets` break a rule of the release (no platform, a key
+  // that is not a platform, a list of no entry or more than 8, an installer twice in a list, an
+  // entry or its manifest that breaks its rule, or for the service `hostkeeper` a list but one
+  // `hostkeeper-archive` entry). Nothing changed.
+  RELEASES_REFUSAL_TARGET_INVALID = 25;
+  // FAILED_PRECONDITION: `SetDesired` of a version set before as another release: with other
+  // targets or another release index, with a package digest or an index where this set has
+  // targets, or with targets where this set names a package digest or an index. A release is
+  // immutable; a changed artifact, manifest or order of entries is a new version. Not retried.
+  RELEASES_REFUSAL_RELEASE_EXISTS = 26;
+  // NOT_FOUND: `GetRelease` of a version the service was never set with targets, or whose release
+  // was dropped with it from the registry.
+  RELEASES_REFUSAL_RELEASE_UNKNOWN = 27;
 }
 
 // Why `Services` refused a request. The token is the value's name without the prefix, in lower
@@ -647,7 +669,7 @@ message SetDesiredRequest {
   optional string write_id = 4;
   // The digest of the package CI registers for `desired.version` (64 lower-case hex characters),
   // the one package every host is ordered whatever its platform: for a fleet of one platform.
-  // Refused with `release_index` (`index_invalid`).
+  // Refused with `release_index` or with `targets` (`index_invalid`).
   optional string package_digest = 5;
   // The release index of `desired.version` (`index.json`, design section 5.5), byte for byte:
   // per platform, the package file, its size and its SHA-256. The coordinator checks that its
@@ -659,6 +681,16 @@ message SetDesiredRequest {
   // The SHA-256 of `release_index` (64 lower-case hex characters), as CI's release job wrote
   // it down when it published the index: the release this desired state names.
   optional string release_index_digest = 7;
+  // The release of `desired.version`, by platform (`linux-x86_64`, `linux-arm64`,
+  // `macos-arm64`, and no other key): for each, the artifacts in CI's order of preference, one
+  // per installer (docs/design/packages.md section 3). A platform with no list is left out; on
+  // the JSON gateway a key whose value is `null` is dropped first. Checked by the rules of the
+  // release (`target_invalid`). With `release_index`, the index lists exactly the platforms whose
+  // list holds a `hostkeeper-archive` entry, each with that entry's size and digest
+  // (`index_invalid`). The version is kept as this release, and set again only with the same
+  // targets and index (`release_exists`); the desired state is stored with neither a package
+  // digest nor an index digest. Every set with targets is audited, CI's as `ci`.
+  map<string, hostkeeper.release.v1.TargetList> targets = 8;
 }
 
 message SetDesiredResponse {
@@ -688,6 +720,20 @@ message Replaced {
 
 message ConvergeRequest {
   string service = 1;
+}
+
+message GetReleaseRequest {
+  // The service; empty names the legacy service, as for `Converge`.
+  string service = 1;
+  // The version, as it was set.
+  string version = 2;
+}
+
+message GetReleaseResponse {
+  // The targets the version was set with, each platform's entries in the order set.
+  map<string, hostkeeper.release.v1.TargetList> targets = 1;
+  // The SHA-256 of the release index set with them; absent when the set carried none.
+  optional string release_index_digest = 2;
 }
 
 message ConvergeResponse {

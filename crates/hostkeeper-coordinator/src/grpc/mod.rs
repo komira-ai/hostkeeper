@@ -12,9 +12,9 @@
 //! routes call and have no rule of their own.
 //!
 //! The caller is checked before the request is read ([`admit`]): a heartbeat by the host its
-//! client certificate names, `SetDesired`, `Converge` and `WaitConverged` by CI's token or the
-//! operator's (an operator's token is told first, so it spends no CI token), every other operator
-//! method by the
+//! client certificate names, `SetDesired`, `Converge`, `WaitConverged` and `GetRelease` by CI's
+//! token or the operator's (an operator's token is told first, so it spends no CI token), every
+//! other operator method by the
 //! operator's token, and `Enroll`, `Poll` and `Renew` by nothing here (the key a
 //! host proves, or the certificate `Renew` checks itself). What the check learns goes to the
 //! adapter as [`Admitted`] in the request's extensions, so a bearer is resolved once: a CI token
@@ -62,7 +62,8 @@ use self::operator::{
 use self::refusal::token_status;
 use crate::enrollment::MAX_MESSAGE_BYTES;
 use crate::http::{
-    BoxError, MAX_OPERATOR_BYTES, Peer, Surface, bearer_in, beat_caller, error, handle,
+    BoxError, MAX_OPERATOR_BYTES, MAX_SET_DESIRED_BYTES, Peer, Surface, bearer_in, beat_caller,
+    error, handle,
 };
 use crate::identity::Identity;
 use crate::operator::Caller;
@@ -118,6 +119,9 @@ const SET_DESIRED: &str = "/hostkeeper.operator.v1.Releases/SetDesired";
 const CONVERGE: &str = "/hostkeeper.operator.v1.Releases/Converge";
 /// The path of `Releases.WaitConverged`, which takes CI's token or the operator's, as `Converge`.
 const WAIT_CONVERGED: &str = "/hostkeeper.operator.v1.Releases/WaitConverged";
+/// The path of `Releases.GetRelease`, which takes CI's token or the operator's: it changes
+/// nothing.
+const GET_RELEASE: &str = "/hostkeeper.operator.v1.Releases/GetRelease";
 
 /// What the router learned of a caller before it read the request; the adapter finds it in the
 /// request's extensions.
@@ -193,8 +197,8 @@ enum Served {
 /// # Errors
 /// `UNIMPLEMENTED` for a path whose service this surface does not serve. Otherwise the
 /// refusal of the service the path names, as a status whose message is its token: a
-/// heartbeat's `forbidden` or `denied`; for `SetDesired`, `Converge` and `WaitConverged` with no
-/// operator token,
+/// heartbeat's `forbidden` or `denied`; for `SetDesired`, `Converge`, `WaitConverged` and
+/// `GetRelease` with no operator token,
 /// CI's `unauthorized` or `keys_unavailable`; the operator's `unauthorized` or `forbidden`.
 pub(crate) async fn admit(
     coordinator: &Coordinator,
@@ -220,7 +224,9 @@ pub(crate) async fn admit(
             })
         }
         Served::Agent => Ok(Admitted::Peer(peer.clone())),
-        Served::Operator if [SET_DESIRED, CONVERGE, WAIT_CONVERGED].contains(&path) => {
+        Served::Operator
+            if [SET_DESIRED, CONVERGE, WAIT_CONVERGED, GET_RELEASE].contains(&path) =>
+        {
             // An operator's token is told before CI's is verified: it is no CI token and
             // spends none.
             if let Ok(name) = coordinator.operator(bearer(headers)) {
@@ -275,10 +281,21 @@ where
     response
 }
 
+/// The most bytes an operator's call of `path` reads: [`MAX_SET_DESIRED_BYTES`] for
+/// `SetDesired`, [`MAX_OPERATOR_BYTES`] for every other method.
+pub(crate) fn operator_limit(path: &str) -> usize {
+    if path == SET_DESIRED {
+        MAX_SET_DESIRED_BYTES
+    } else {
+        MAX_OPERATOR_BYTES
+    }
+}
+
 /// Serves the gRPC call `request` with the tonic server of its service, in process, with
 /// `admitted` in its extensions for the adapter. The service's message limit applies to the
-/// request: 16 KiB for a heartbeat, 8 KiB for `Enroll`, `Poll` and `Renew`, 4 KiB for an
-/// operator's call. A path of a service this coordinator does not serve is `UNIMPLEMENTED`.
+/// request: 16 KiB for a heartbeat, 8 KiB for `Enroll`, `Poll` and `Renew`, 256 KiB for
+/// `SetDesired`, 4 KiB for every other operator's call. A path of a service this coordinator
+/// does not serve is `UNIMPLEMENTED`.
 pub(crate) async fn serve_admitted<B>(
     coordinator: &Arc<Coordinator>,
     admitted: Admitted,
@@ -309,7 +326,7 @@ where
         }
         Some(RELEASES) => {
             let server = ReleasesServer::new(ReleasesService::new(coordinator))
-                .max_decoding_message_size(MAX_OPERATOR_BYTES);
+                .max_decoding_message_size(operator_limit(path));
             call(server, request).await
         }
         Some(SERVICES) => {

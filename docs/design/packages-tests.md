@@ -1,7 +1,9 @@
 # Packages in any format: the tests of each build item
 
 Status: design, for the maintainers' ruling. The tests of A1 are **Built** (`crates/hostkeeper-release/tests/manifest.rs`,
-`crates/hostkeeper-proto/tests/additions_targets.rs`); nothing else here is built. This is section 12 of
+`crates/hostkeeper-proto/tests/additions_targets.rs`), and so are those of A2
+(`crates/hostkeeper-coordinator/tests/targets.rs`, `crates/hostkeeper-proto/tests/additions_releases.rs`, and the
+Postgres store's in `crates/hostkeeper-coordinator/src/store/postgres/tests/releases.rs`); nothing else here is built. This is section 12 of
 [packages.md](packages.md), kept in a file of its own so that one stays under 1000 lines (rule R12). Section numbers here
 are those of packages.md, and A1 to A15 are its build items (section 13).
 

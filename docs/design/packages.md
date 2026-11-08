@@ -2,8 +2,10 @@
 
 Status: design, for the maintainers' ruling. Build item A1 is **Built**: `release.proto`
 (`crates/hostkeeper-proto/proto/hostkeeper/release/v1/release.proto`) and the checks of sections 3.4, 4.4 and 7.1
-(`crates/hostkeeper-release`), which nothing calls yet. Build item A15 is **Built** (section 5.4). Nothing else here is
-built. This is a revision of the design merged as
+(`crates/hostkeeper-release`). Build item A2 is **Built**: `SetDesired` with targets, its checks and refusals, the
+256 KiB limit, the gateway's null step, the audit entry, the releases in the file store and in Postgres, and
+`GetRelease` (`crates/hostkeeper-coordinator/src/releases.rs`, `service_ci.rs`, `store/postgres/releases.rs`).
+Build item A15 is **Built** (section 5.4). Nothing else here is built. This is a revision of the design merged as
 komira-ai/hostkeeper#179. It keeps that design's stores, its digest and attestation checks before any byte is used, and its
 staged path for the daemons on hosts now. It replaces its package model: host facts, "most specific wins", artifact kinds
 and `Releases.Register` (section 0 says what replaces what). It changes three things in
@@ -188,7 +190,7 @@ The requested shape names the service `package_name`. The call keeps today's fie
 `desired.version`, because renaming a shipped field is not additive (rule B8). `GetRelease` answers what was set, for a
 mirror's sync job and for an operator. It takes the operator token or CI's OIDC token, as `Converge` does, and refuses
 a service the coordinator does not manage with `UNKNOWN_SERVICE` (today's value) and a version never set with targets
-with the new `RELEASE_UNKNOWN = 25`.
+with the new `RELEASE_UNKNOWN = 27`.
 
 ### 3.2 A map keyed by platform, not three fields
 
@@ -266,14 +268,14 @@ no entry of that installer is not ordered, and the host shows `installer_dropped
 
 | Check | Refusal (`ReleasesRefusal`) |
 |---|---|
-| At least one platform; each key one of the three platforms; each list of 1 to 8 entries | `TARGET_INVALID = 23` |
+| At least one platform; each key one of the three platforms; each list of 1 to 8 entries | `TARGET_INVALID = 25` |
 | Each entry's `installer` 1 to 32 bytes of `[a-z0-9-]`, and no installer twice in one list (a second entry of an installer could never be picked). The coordinator does not check that it knows the installer: an unknown one is never picked, since no daemon lists it | `TARGET_INVALID` |
 | Every digest 64 lower-case hex; `bytes` from 1 up; an attestation of 1 byte to 1 MiB; 1 to 8 locations for the artifact and for the attestation, each of a store name and a locator of the grammar of section 7.1; at most 2 KiB of locators in all per entry; at most 24 KiB per entry encoded | `TARGET_INVALID` |
 | The manifest of every entry passes the checks of section 4.4 that need no host and no knowledge of the installer's format (all but the host's bounds, the files on disk and the per-installer field rules, which A1's shared crate gives the daemon) | `TARGET_INVALID` |
 | The service `hostkeeper` with any list but one entry of `hostkeeper-archive` | `TARGET_INVALID` |
 | `targets` together with `package_digest` | `INDEX_INVALID` (today's value for a set with both forms) |
 | `targets` together with `release_index`: the index lists exactly the platforms whose list holds a `hostkeeper-archive` entry, each with that entry's size and digest | `INDEX_INVALID`; `INDEX_DIGEST_MISMATCH` as today |
-| The same service and version set before with other targets | `RELEASE_EXISTS = 24`, not retryable |
+| The same service and version set before with other targets | `RELEASE_EXISTS = 26`, not retryable |
 
 An index may list fewer than three platforms today (that is what `no_package_for_platform` is for), so a release with a
 null platform carries an index too.
@@ -288,7 +290,7 @@ using them (rule B8).
 
 Every `SetDesired` with targets is an audit entry, `set_desired`, whether CI or an operator made it, with the version,
 the CI token's repository, workflow and ref or the operator token's name, and for each entry of each platform its
-installer, the artifact's digest and the SHA-256 of the manifest's encoding. Today only an operator's set is audited (section 2). The manifest now
+installer, the artifact's digest and the SHA-256 of the manifest's encoding. Before A2 only an operator's set was audited (section 2). The manifest now
 decides root commands (section 8.2), so who set which manifest must be on record.
 
 ### 3.5 Size
@@ -811,8 +813,8 @@ Every proto change is additive (rule B8, and the "Extending" rules of `agent.pro
 - new file `release.proto`: `TargetList`, `Target`, `Blob`, `Location`, `Manifest`, `Hook`, `StepBounds`, `InstallerBounds`,
   `Place`, `Param`, `Container`, `Port`, `Volume`;
 - `operator.proto`: `SetDesiredRequest.targets = 8`; the RPC `Releases.GetRelease` and its messages;
-  `Host.installers = 19` (18 is `first_serving_unix`); `ReleasesRefusal` values `TARGET_INVALID = 23`, `RELEASE_EXISTS = 24` and
-  `RELEASE_UNKNOWN = 25`; `GateReason` values `GATE_REASON_NO_TARGET = 31`, `GATE_REASON_NO_BUILD_FOR_HOST = 32`
+  `Host.installers = 19` (18 is `first_serving_unix`); `ReleasesRefusal` values `TARGET_INVALID = 25`, `RELEASE_EXISTS = 26` and
+  `RELEASE_UNKNOWN = 27` (23 and 24 are `WaitConverged`'s); `GateReason` values `GATE_REASON_NO_TARGET = 31`, `GATE_REASON_NO_BUILD_FOR_HOST = 32`
   and `GATE_REASON_INSTALLER_DROPPED = 33`. `GATE_REASON_NO_PACKAGE_FOR_PLATFORM = 24` keeps its meaning, for sets
   made with an index, and is not widened;
 - `agent.proto`: `HeartbeatRequest.installers = 8`; `ServiceBeat.installer = 13`; `target = 5` on `Update`, `Install` and `ForceRollback`, and

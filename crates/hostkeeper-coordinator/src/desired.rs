@@ -48,6 +48,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::registry::{Digest, IndexRecord, Package, Registry, RegistryError, Release};
 use crate::release_index;
+use crate::releases::Release as Kept;
 use crate::services::Services;
 use crate::store::{BackendError, Commit, Files, Shared};
 use crate::write_record::{WriteAsk, WriteError, WriteId, WriteRecord};
@@ -429,7 +430,7 @@ impl Desired {
 
     /// Whether the state is acceptable: every limit key a role name, every count within
     /// [`MAX_COUNT`], and no package digest beside a release index.
-    fn checked(&self) -> Result<(), DesiredError> {
+    pub(crate) fn checked(&self) -> Result<(), DesiredError> {
         if self.release_digest.is_some() && self.release_index.is_some() {
             return Err(DesiredError::Malformed(
                 "release_digest and release_index are exclusive".to_owned(),
@@ -464,98 +465,12 @@ pub(crate) struct Held {
     /// How each service's writes are recorded ([`crate::write_record`]), kept only over a backend
     /// that keeps them; a service never written is not listed.
     pub(crate) records: BTreeMap<String, WriteRecord>,
-}
-
-/// One service's state as the file writes it: the desired state, then its registry when it holds
-/// any.
-#[derive(Serialize)]
-struct EntryOut<'a> {
-    #[serde(flatten)]
-    desired: &'a Desired,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    digests: Option<&'a Registry>,
-}
-
-/// The state file in its map form, as written.
-#[derive(Serialize)]
-struct MapFileOut<'a> {
-    services: BTreeMap<&'a str, EntryOut<'a>>,
-}
-
-/// The desired state and the registry of one service's entry in the file: the state's own keys,
-/// read strictly, and `digests`.
-fn parse_entry(value: serde_json::Value) -> Result<(Desired, Registry), DesiredError> {
-    let malformed = |e: serde_json::Error| DesiredError::Malformed(e.to_string());
-    let mut fields: serde_json::Map<String, serde_json::Value> =
-        serde_json::from_value(value).map_err(malformed)?;
-    let digests = match fields.remove("digests") {
-        Some(value) => Registry::read(value)?,
-        None => Registry::default(),
-    };
-    let desired: Desired = serde_json::from_value(fields.into()).map_err(malformed)?;
-    desired.checked()?;
-    Ok((desired, digests))
-}
-
-/// The services in `bytes`: a map file, or the single state of earlier builds as the
-/// legacy service's (`legacy`; with none set that file is refused).
-pub(crate) fn parse_file(bytes: &[u8], legacy: Option<&str>) -> Result<Held, DesiredError> {
-    let malformed = |e: serde_json::Error| DesiredError::Malformed(e.to_string());
-    let value: serde_json::Value = serde_json::from_slice(bytes).map_err(malformed)?;
-    let mut held = Held::default();
-    let Some(services) = value.get("services").cloned() else {
-        let name = legacy.ok_or(DesiredError::NoLegacyService)?;
-        let (desired, digests) = parse_entry(value)?;
-        held.insert(name, desired, digests);
-        return Ok(held);
-    };
-    if let Some(other) = value
-        .as_object()
-        .and_then(|map| map.keys().find(|key| *key != "services"))
-    {
-        return Err(DesiredError::Malformed(format!("unknown field `{other}`")));
-    }
-    let services: BTreeMap<String, serde_json::Value> =
-        serde_json::from_value(services).map_err(malformed)?;
-    for (name, entry) in services {
-        let (desired, digests) = parse_entry(entry)?;
-        held.insert(&name, desired, digests);
-    }
-    Ok(held)
-}
-
-/// The text of the file holding `held`: the single state of earlier builds while `legacy` is the
-/// only service, which earlier builds read and whose reader refuses the map form; the map
-/// otherwise.
-///
-/// # Errors
-/// The state could not be serialised.
-pub(crate) fn encode(held: &Held, legacy: Option<&str>) -> serde_json::Result<Vec<u8>> {
-    let encoded = match held.desired.iter().collect::<Vec<_>>().as_slice() {
-        [(name, only)] if Some(name.as_str()) == legacy => {
-            serde_json::to_vec_pretty(&held.entry(name, only))
-        }
-        _ => serde_json::to_vec_pretty(&MapFileOut {
-            services: held
-                .desired
-                .iter()
-                .map(|(name, desired)| (name.as_str(), held.entry(name, desired)))
-                .collect(),
-        }),
-    };
-    let mut text = encoded?;
-    text.push(b'\n');
-    Ok(text)
+    /// The releases each service's versions were set with ([`crate::releases`]), kept beside the
+    /// state and its registry, never in their file; a service with none is not listed.
+    pub(crate) releases: crate::releases::Books,
 }
 
 impl Held {
-    fn insert(&mut self, name: &str, desired: Desired, digests: Registry) {
-        self.desired.insert(name.to_owned(), desired);
-        if !digests.is_empty() {
-            self.digests.insert(name.to_owned(), digests);
-        }
-    }
-
     fn digests_of(&self, service: &str) -> Registry {
         self.digests.get(service).cloned().unwrap_or_default()
     }
@@ -564,15 +479,11 @@ impl Held {
     fn record_of(&self, service: &str) -> WriteRecord {
         self.records.get(service).cloned().unwrap_or_default()
     }
-
-    /// The entry of `name`, whose state is `desired`, as the file writes it.
-    fn entry<'a>(&'a self, name: &str, desired: &'a Desired) -> EntryOut<'a> {
-        EntryOut {
-            desired,
-            digests: self.digests.get(name).filter(|r| !r.is_empty()),
-        }
-    }
 }
+
+#[path = "desired_file.rs"]
+mod file;
+pub(crate) use file::{encode, parse_file};
 
 /// Why the state file could not be read or written.
 #[derive(Debug, thiserror::Error)]
@@ -629,6 +540,25 @@ pub struct DesiredStore {
 impl std::fmt::Debug for DesiredStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DesiredStore").finish_non_exhaustive()
+    }
+}
+
+/// What a write records beside the state: its version's digest or index in the registry, its
+/// release ([`crate::releases`]), and its write id.
+struct Staging {
+    digests: Option<(Version, Release)>,
+    release: Option<Arc<Kept>>,
+    id: Option<WriteId>,
+}
+
+impl Staging {
+    /// A write of `digests` alone.
+    const fn digests(digests: Option<(Version, Release)>) -> Self {
+        Self {
+            digests,
+            release: None,
+            id: None,
+        }
     }
 }
 
@@ -765,8 +695,10 @@ impl DesiredStore {
     }
 
     /// [`Self::record`] for a write that asks `ask` of the store: with `if_generation`, only
-    /// over that generation; with a write id, kept as the last write's. Answers the service's
-    /// record after the write, none over a backend that keeps no records.
+    /// over that generation; with a write id, kept as the last write's; with `release`, kept as
+    /// the release of the state's version in the same commit ([`crate::releases::record`], under
+    /// the cap's `keep`). Answers the service's record after the write, none over a backend that
+    /// keeps no records.
     ///
     /// # Errors
     /// [`WriteError`], as [`Self::admits`] (checked under the writers' lock, so no write lands
@@ -777,11 +709,17 @@ impl DesiredStore {
         desired: Desired,
         keep: impl Fn(&Version) -> bool,
         ask: &WriteAsk,
+        release: Option<Arc<Kept>>,
     ) -> Result<Option<WriteRecord>, WriteError> {
-        let release = desired
+        let digests = desired
             .release()
             .map(|release| (desired.version.clone(), release));
-        let staged = self.staged(service, desired, release, &keep, ask.write_id.clone());
+        let release = Staging {
+            digests,
+            release,
+            id: ask.write_id.clone(),
+        };
+        let staged = self.staged(service, desired, release, &keep);
         self.admit(&staged.before, service, ask)?;
         let record = staged.after.records.get(service).cloned();
         self.commit_staged(staged)?;
@@ -829,7 +767,7 @@ impl DesiredStore {
         release: Option<(Version, Release)>,
         keep: &dyn Fn(&Version) -> bool,
     ) -> Result<Recorded, StoreError> {
-        let staged = self.staged(service, desired, release, keep, None);
+        let staged = self.staged(service, desired, Staging::digests(release), keep);
         self.commit_staged(staged)
     }
 
@@ -869,19 +807,24 @@ impl DesiredStore {
         let release = desired
             .release()
             .map(|release| (desired.version.clone(), release));
-        self.staged(service, desired, release, &keep, None)
+        self.staged(service, desired, Staging::digests(release), &keep)
     }
 
-    /// The state with `desired` set for `service` and its release recorded; over a backend that
-    /// keeps write records, with the service's record raised by one write whose id is `id`.
+    /// The state with `desired` set for `service` and what `staging` records with it: its
+    /// version's digest or index in the registry, its release beside it; over a backend that
+    /// keeps write records, with the service's record raised by one write of `staging`'s id.
     fn staged(
         &self,
         service: &str,
         desired: Desired,
-        release: Option<(Version, Release)>,
+        staging: Staging,
         keep: &dyn Fn(&Version) -> bool,
-        id: Option<WriteId>,
     ) -> Staged<'_> {
+        let Staging {
+            digests: release,
+            release: kept,
+            id,
+        } = staging;
         let writer = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
         let before = self.lock().clone();
         let mut after = before.clone();
@@ -890,6 +833,10 @@ impl DesiredStore {
                 .record_of(service)
                 .after(before.desired.get(service), &desired, id);
             after.records.insert(service.to_owned(), record);
+        }
+        if let Some(kept) = kept {
+            let book = after.releases.entry(service.to_owned()).or_default();
+            crate::releases::record(book, &desired.version, kept, keep);
         }
         after.desired.insert(service.to_owned(), desired);
         if let Some((version, release)) = release {
@@ -903,6 +850,16 @@ impl DesiredStore {
             before,
             after,
         }
+    }
+
+    /// The release `version` of `service` was set with, if any.
+    #[must_use]
+    pub(crate) fn release(&self, service: &str, version: &str) -> Option<Arc<Kept>> {
+        self.lock()
+            .releases
+            .get(service)
+            .and_then(|book| book.get(version))
+            .cloned()
     }
 
     /// Takes the desired state of a commit of unknown outcome that `landing` found landed into

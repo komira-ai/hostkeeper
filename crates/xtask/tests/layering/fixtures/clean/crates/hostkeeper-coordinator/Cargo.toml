@@ -11,6 +11,7 @@ hostkeeper-enrollment = { path = "../hostkeeper-enrollment" }
 hostkeeper-mdm-gate = { path = "../hostkeeper-mdm-gate" }
 hostkeeper-proto = { path = "../hostkeeper-proto" }
 hostkeeper-config = { path = "../hostkeeper-config" }
+hostkeeper-release = { path = "../hostkeeper-release" }
 
 [dev-dependencies]
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }

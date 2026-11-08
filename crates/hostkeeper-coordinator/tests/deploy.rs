@@ -567,7 +567,7 @@ fn counts_sql_prints_the_rows_of_each_table_as_export_prints_them() {
         .map(str::to_owned)
         .collect();
     assert_eq!(counted, lines);
-    assert_eq!(counted.len(), 25, "{counted:?}");
+    assert_eq!(counted.len(), 26, "{counted:?}");
     assert!(
         counted.contains(&"  spent_tokens: 2 rows".to_owned()),
         "{counted:?}"

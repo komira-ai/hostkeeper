@@ -188,6 +188,7 @@ The rest of this page is the file store.
 | file | holds | without it |
 |---|---|---|
 | `--state-file` | The desired state of each service (version, limits, minimums) and the package digest of every version CI has set. | No service has a desired version until CI sets it again. |
+| `<state-file>.releases` | The release each version was set with by a `SetDesired` with targets: per platform, its artifacts in the order set, and the digest of the release index set with them ([packages.md](../design/packages.md) section 3.6). Written once a version is set with targets. A coordinator before targets does not read it. | `Releases.GetRelease` answers `release_unknown` for every version, and a version can be set again with other targets. |
 | `<state-file>.jti` | The ids of CI's OIDC tokens already spent, each with the second until which it is refused. | A CI token spent before the loss can be used again until it expires. |
 | `<state-file>.verdicts` | Per service and host, the last release verdict the coordinator acknowledged, and the verdicts it counts toward an automatic rollback. | A host whose daemon stopped resending its verdict is no longer read as having failed it, so it can be ordered that version again; the count toward an automatic rollback starts again. |
 | `<state-file>.lock` | Nothing: the lock `serve` holds while it runs, so a second coordinator on the same files is refused. | Nothing. It is not backed up. |
