@@ -78,7 +78,12 @@ makes that directory, owner only, on its first step.
    coordinator orders each host the package its own platform has in the index, so the proof
    can run on hosts of any platform the index lists. A host of a platform the index does not list
    is ordered nothing and shows the hold `no_package_for_platform`. A fleet of one platform may
-   name the one package digest instead (the `.sha256` file beside the package).
+   name the one package digest instead (the `.sha256` file beside the package). CI
+   (`hello-desired.yml`, below) names the release by its targets as well, one
+   `hostkeeper-archive` entry per platform the index lists, written by
+   `cargo xtask release targets --service hello` from the release's assets
+   (`docs/design/packages.md`, section 3.7); a daemon that reads targets is ordered its entry,
+   one before them the package the index lists.
 3. **The rollout entry.** Append `examples/hello/rollout.toml` to the coordinator's rollout file
    (`--rollout-file`). Replace the role `farm` with the role of the hosts that run the proof,
    and restart the coordinator. `cargo test -p hostkeeper-coordinator --test hello_rollout`
@@ -191,12 +196,19 @@ real service depends on it. Dispatch it from main (Actions, `hello-desired`, `Ru
 |---|---|---|
 | `version` | a release of this repository, `X.Y.Z` | The release whose hello package is set. |
 | `variant` | `hello` or `fail-ready` | `hello` sets `<version>`; `fail-ready` sets `<version>-fail-ready`, the build whose `/readyz` answers 503. |
-| `platform` | `linux-x86_64` (default), `linux-arm64`, `macos-arm64` | The platform of the proof's hosts: the digest set is that platform's one package digest (see "The release index"). |
 
-Its first job reads the SHA-256 of the package from the release's `.sha256` file beside it. Its
-second calls `set-desired.yml` pinned to a hostkeeper release, as any service pins it
-(`docs/deploy/ci-client.md`, "Pinning hostkeeper"), with `wait` left at `true`: the job waits for
-the fleet. The packages must be in the channel first ("Before you start", step 1).
+Its first job, `release`, downloads the variant's release index (`hello-index.json`, or
+`hello-fail-ready-index.json` for `fail-ready`) with each platform's archive and the archive's
+attestation bundle from the release, and runs `cargo xtask release targets --service hello`
+(with `--fail-ready` for the failing build) on them. The verb refuses, naming every problem, an
+index that is not hello's at the version or does not list every platform, and an archive, bundle
+or manifest that does not check out against it; then nothing is set. Its second job calls
+`set-desired.yml` with the targets, the index and the index's SHA-256, so each host, of any
+platform the index lists, is ordered its own platform's package. It is pinned to a hostkeeper
+release, as any service pins it (`docs/deploy/ci-client.md`, "Pinning hostkeeper"), with `wait`
+left at `true`: the job waits for the fleet. The packages must be in the channel first ("Before
+you start", step 1). Once it has set, `hkctl releases get-release --service hello --version <version>`
+answers the release's targets, one list per platform.
 
 Run it twice, in this order, with the same `version`, a release the hosts are not already at:
 
@@ -244,5 +256,3 @@ and the Host page's `Assigned services` shows hello with `State` `uninstalling`.
 
 - A hand-off without a gap: hello restarts. tierstore's port forward is its own (design
   `docs/design/host-updates.md`, section 4.1).
-- More than one platform in one proof from CI: `hello-desired.yml` sets one platform's package
-  digest. An operator can name the release index instead (see "The release index" above).

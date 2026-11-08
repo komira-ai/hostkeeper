@@ -196,7 +196,14 @@ const PUBLISH_MARKS: [&str; 6] = [
 ];
 
 /// The `cargo xtask release` verbs release.yml may run: none builds, packages or signs.
-const RELEASE_VERBS: [&str; 5] = ["check", "check-binary", "locate", "plan", "publish"];
+const RELEASE_VERBS: [&str; 6] = [
+    "check",
+    "check-binary",
+    "locate",
+    "plan",
+    "publish",
+    "targets",
+];
 
 /// Words of a `run:` that build, package or sign, refused in release.yml.
 const BUILD_WORDS: [&str; 8] = [
