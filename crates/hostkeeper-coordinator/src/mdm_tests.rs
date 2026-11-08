@@ -16,7 +16,7 @@ use crate::enrollment::tests::support::{FixedClock, HostKey, NOW, Rig, SERIAL, m
 use crate::enrollment::{
     DeviceStateError, DeviceStatus, MacAllowlist, MacDecline, MacOutcome, MacPolicy, os_random,
 };
-use crate::mdm::{DEVICES_DIR, Mdm, MdmFlags};
+use crate::mdm::{DEVICES_DIR, Devices, Mdm, MdmFlags};
 use crate::testutil::scratch;
 
 /// The allowlist entry of [`SERIAL`]: host id `mac-<serial>`, role `build`, service `kbf`.
@@ -80,9 +80,14 @@ pub(crate) fn mdm_with(dir: &Scratch, records: &[DeviceRecord]) -> Mdm {
     for record in records {
         store.save(record).expect("saved");
     }
-    Mdm::open(&flags_in(dir), dir.path(), FixedClock::at(NOW), os_random())
-        .expect("the gate opens")
-        .expect("the flags name a gate")
+    Mdm::open(
+        &flags_in(dir),
+        Devices::Files(dir.path()),
+        FixedClock::at(NOW),
+        os_random(),
+    )
+    .expect("the gate opens")
+    .expect("the flags name a gate")
 }
 
 /// The device status the gate says of `serial` through the coordinator's port.

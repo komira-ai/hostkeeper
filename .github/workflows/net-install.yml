@@ -125,8 +125,8 @@ jobs:
             target
           key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
           restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
-      # The deb of this commit, built as artifacts.yml builds it: the release binaries, the
-      # pinned gh and the Sigstore trusted root staged, then nfpm.
+      # The deb of this commit, built as artifacts.yml builds it: the static (musl) release
+      # programs, the pinned gh and the Sigstore trusted root staged, then nfpm.
       - name: Download nfpm (HTTPS only, redirects included)
         run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 5 --retry-delay 5 --retry-max-time 300 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/nfpm.tar.gz" "https://github.com/goreleaser/nfpm/releases/download/v$NFPM_VERSION/nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz"
       - name: Install nfpm (pinned checksum)
@@ -138,10 +138,12 @@ jobs:
         run: cargo xtask install-tool --download "$RUNNER_TEMP/gh.tar.gz" --sha256 "$GH_SHA256" --out target/privileged-tools/gh --extract tar.gz --member "gh_${GH_VERSION}_linux_amd64/bin/gh"
       - name: The Sigstore trusted root
         run: target/privileged-tools/gh attestation trusted-root > "$RUNNER_TEMP/trusted_root.json"
-      - name: Build hostkeeper and hostkeeper-pxe
-        run: cargo build --locked --release -p hostkeeper --bin hostkeeper -p hostkeeper-pxe --bin hostkeeper-pxe
-      - name: Stage gh and the trusted root for the deb
-        run: cargo xtask release nfpm-stage --arch amd64 --gh-version "$GH_VERSION" --gh-archive "$RUNNER_TEMP/gh.tar.gz" --gh-sha256 "$GH_SHA256" --trusted-root "$RUNNER_TEMP/trusted_root.json" --out target/nfpm
+      - name: Add the static target
+        run: rustup target add x86_64-unknown-linux-musl
+      - name: Build the static hostkeeper and hostkeeper-pxe
+        run: cargo build --locked --release --target x86_64-unknown-linux-musl -p hostkeeper --bin hostkeeper -p hostkeeper-pxe --bin hostkeeper-pxe
+      - name: Stage the static programs, gh and the trusted root for the deb
+        run: cargo xtask release nfpm-stage --arch amd64 --gh-version "$GH_VERSION" --gh-archive "$RUNNER_TEMP/gh.tar.gz" --gh-sha256 "$GH_SHA256" --trusted-root "$RUNNER_TEMP/trusted_root.json" --binaries target/x86_64-unknown-linux-musl/release --out target/nfpm
       - run: mkdir -p target/net-install
       - name: The deb
         env:

@@ -30,5 +30,6 @@ SELECT format('  %s: %s rows', name, rows) FROM (VALUES
   (23, 'enrollment_issued', (SELECT count(*) FROM enrollment_issued)),
   (24, 'enrollment_hosts', (SELECT count(*) FROM enrollment_hosts)),
   (25, 'enrollment_deny', (SELECT count(*) FROM enrollment_deny)),
-  (26, 'mac_nonces', (SELECT count(*) FROM mac_nonces))
+  (26, 'mac_nonces', (SELECT count(*) FROM mac_nonces)),
+  (27, 'mdm_devices', (SELECT count(*) FROM mdm_devices))
 ) AS counted (n, name, rows) ORDER BY n;

@@ -33,6 +33,9 @@ use clap::Args;
 use hostkeeper_enrollment::enroll::StoreError as RecordsError;
 use hostkeeper_enrollment::enroll::records::{FileRecords, Snapshot};
 use hostkeeper_enrollment::fs::RealFs;
+use hostkeeper_mdm_gate::{
+    DeviceRecord, DeviceStore as _, FileDeviceStore, StoreError as DevicesError, encode_record,
+};
 
 use crate::audit_file::{self, AuditLine, AuditLog, DEFAULT_ROTATION, Detail, UnixClock};
 use crate::backup::{self, BackupError, Report, StatePaths, restore_marker};
@@ -114,17 +117,13 @@ pub(crate) enum TransferError {
         /// The marker.
         path: PathBuf,
     },
-    /// The enrollment store holds the MDM gate's device records, which no table keeps yet.
+    /// A device record of the MDM gate is one `serve` refuses.
+    #[error("--enrollment-dir: the MDM device records: {0}")]
+    Devices(#[from] DevicesError),
+    /// The database holds the enrollment store or the MDM gate's device records, and no
+    /// `--enrollment-dir` says where they go.
     #[error(
-        "{path} holds the MDM gate's device records, which the database has no table for yet: a coordinator that runs the MDM gate stays on the file store"
-    )]
-    MdmDevices {
-        /// The directory of the records.
-        path: PathBuf,
-    },
-    /// The database holds the enrollment store and no `--enrollment-dir` says where it goes.
-    #[error(
-        "the database holds the enrollment store and --enrollment-dir is not given: exporting without it would lose the enrolled hosts"
+        "the database holds the enrollment store or the MDM gate's device records, and --enrollment-dir is not given: exporting without it would lose them"
     )]
     EnrollmentDirNeeded,
 }
@@ -143,10 +142,12 @@ fn io_at(path: &Path) -> impl FnOnce(io::Error) -> BackupError + '_ {
     }
 }
 
-/// The records of the enrollment store in `dir`, read without writing: a directory that is not
-/// there is refused (a store `serve` would make empty, so every host would enroll again), and so
-/// is one that holds the MDM gate's device records.
-fn read_records(dir: &Path) -> Result<Snapshot, TransferError> {
+/// The records of the enrollment store in `dir`, and the MDM gate's device records in its
+/// `mdm-devices`, read without writing by the readers `serve` uses: a directory that is not
+/// there is refused (a store `serve` would make empty, so every host would enroll again); a
+/// store without `mdm-devices` holds no device record. The device records are in the order of
+/// their enrollment ids.
+fn read_records(dir: &Path) -> Result<(Snapshot, Vec<DeviceRecord>), TransferError> {
     if !fs::symlink_metadata(dir).is_ok_and(|meta| meta.is_dir()) {
         return Err(BackupError::NoEnrollmentDir {
             path: dir.to_path_buf(),
@@ -154,15 +155,15 @@ fn read_records(dir: &Path) -> Result<Snapshot, TransferError> {
         .into());
     }
     let devices = dir.join(DEVICES_DIR);
-    let held = match fs::read_dir(&devices) {
-        Ok(mut entries) => entries.next().is_some(),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => false,
+    let mut records = match fs::read_dir(&devices) {
+        // The directory is there, so opening the store over it makes nothing.
+        Ok(_) => FileDeviceStore::open(Arc::new(RealFs), &devices)?.load()?,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Vec::new(),
         Err(e) => return Err(io_at(&devices)(e).into()),
     };
-    if held {
-        return Err(TransferError::MdmDevices { path: devices });
-    }
-    Ok(FileRecords::read_snapshot(Arc::new(RealFs), dir)?)
+    records.sort_by(|a, b| a.enrollment_id.as_str().cmp(b.enrollment_id.as_str()));
+    let snapshot = FileRecords::read_snapshot(Arc::new(RealFs), dir)?;
+    Ok((snapshot, records))
 }
 
 /// Everything the file store `paths` names holds, read by the strict readers `serve` uses and
@@ -200,9 +201,9 @@ fn read_files(paths: &StatePaths, legacy: Option<&str>, now: u64) -> Result<Move
         .and_then(|log| log.each_counted(&mut |line| audit.push(line)))
         .map_err(StartError::from)?;
     let pruned_before = audit_file::pruned_before(&active).map_err(StartError::from)?;
-    let records = match &paths.enrollment_dir {
+    let (records, devices) = match &paths.enrollment_dir {
         Some(dir) => read_records(dir)?,
-        None => Snapshot::default(),
+        None => (Snapshot::default(), Vec::new()),
     };
     Ok(Moved {
         loaded: Loaded {
@@ -213,6 +214,7 @@ fn read_files(paths: &StatePaths, legacy: Option<&str>, now: u64) -> Result<Move
         },
         audit,
         records,
+        devices,
         pruned_before,
         unread,
     })
@@ -371,7 +373,7 @@ fn render(
         };
         files.push((path, audit_file::history_text(&moved.audit)));
     }
-    if moved.records.is_empty() {
+    if moved.records.is_empty() && moved.devices.is_empty() {
         return Ok(files);
     }
     let Some(dir) = &paths.enrollment_dir else {
@@ -379,6 +381,11 @@ fn render(
     };
     for (path, bytes) in moved.records.files()? {
         files.push((dir.join(path), bytes));
+    }
+    // Each device record as `FileDeviceStore` writes it: `mdm-devices/<enrollment id>.pb`.
+    for record in &moved.devices {
+        let name = format!("{}.pb", record.enrollment_id);
+        files.push((dir.join(DEVICES_DIR).join(name), encode_record(record)));
     }
     Ok(files)
 }
@@ -424,3 +431,7 @@ mod export_tests;
 #[cfg(test)]
 #[path = "transfer_releases_tests.rs"]
 mod releases_tests;
+
+#[cfg(test)]
+#[path = "transfer_mdm_tests.rs"]
+mod mdm_tests;

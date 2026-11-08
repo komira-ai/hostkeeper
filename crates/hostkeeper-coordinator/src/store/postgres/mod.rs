@@ -1,6 +1,7 @@
 //! The Postgres store (`docs/design/coordinator-storage.md`, build item C3): the coordinator's
 //! state in the tables of migration `0001`, behind the same [`Backend`] as the files and the fake,
-//! and the enrollment store's records behind its `Records` port ([`PgRecords`]).
+//! the enrollment store's records behind its `Records` port ([`PgRecords`]), and the MDM gate's
+//! device records behind its `DeviceStore` ([`PgDevices`], migration `0005`).
 //!
 //! - **The start** ([`Postgres::open`]): open the writing session, take the coordinator's
 //!   advisory lock without waiting (another coordinator holding it refuses the start), run the
@@ -19,6 +20,7 @@
 //!   commit of unknown outcome is settled at the revival by the lease's counter, and what it
 //!   turned out to be is taken by the stores ([`Landing`]). Another epoch found deposes the store.
 
+mod devices;
 mod dsn;
 mod generations;
 pub(crate) mod migrate;
@@ -36,6 +38,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use hostkeeper_oidc::Clock;
 
+pub(crate) use devices::PgDevices;
 pub use dsn::DsnError;
 pub(crate) use dsn::{Dsn, TIMEOUTS, Timeouts};
 pub(crate) use records::PgRecords;

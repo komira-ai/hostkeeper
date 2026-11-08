@@ -41,9 +41,10 @@ the whole audit log, and the enrollment store. The design is
   `--enrollment-dir`, `--audit-max-bytes` and `--audit-retained-segments`, each named
   (`--database-dsn-file and --ops-file are both given: ...`), and it requires `--halt-marker-file`.
   Enrollment is on when `--ca-key-file` is given (with `--server-cert-file` and `--server-name`, as
-  with the file store); the enrollment store is the database's. The MDM gate's flags still need
-  `--enrollment-dir`, where its device records are, so the gate does not run on the database store
-  in this release.
+  with the file store); the enrollment store is the database's. The MDM gate runs on either store:
+  its flags need enrollment as with the file store (`--ca-key-file`, and `--enrollment-dir` or
+  `--database-dsn-file`), and on the database its device records are the rows of the table
+  `mdm_devices`.
 - **The start.** `serve` opens one session, takes the coordinator's advisory lock of the database
   without waiting, runs the migrations the database lacks (each in its own transaction, recorded in
   `schema_version`), raises the lease's epoch, and loads the state. Nothing is read or written
@@ -151,8 +152,9 @@ hostkeeper-coordinator import --state-file <file> [--ops-file <file>] [--enrollm
 - The entries of the ops file's audit ring that its audit file has no line of (changes older than
   the audit file) are not imported, and the import says how many; the row `state_imported` is
   numbered past them.
-- The MDM gate's device records (`<enrollment-dir>/mdm-devices`) have no table yet: an enrollment
-  store that holds them is refused, and a coordinator that runs the gate stays on the file store.
+- The MDM gate's device records (`<enrollment-dir>/mdm-devices/<enrollment id>.pb`) are read by the
+  gate's own reader, which refuses a record `serve` would refuse, and written as the rows of
+  `mdm_devices`; `export` writes them back as the same files, byte for byte.
 - No file is changed: the file coordinator can start again on the same files.
 
 A second import needs an empty database: drop it and create it again first.
