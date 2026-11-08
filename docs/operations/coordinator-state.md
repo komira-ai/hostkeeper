@@ -65,7 +65,7 @@ the whole audit log, and the enrollment store. The design is
   Decisions read memory: a heartbeat in the steady state runs no query.
 - **Generations and write ids.** The database keeps, with each service's desired state, its
   generation (one more for every accepted set, a set identical to the state held included, and a
-  force), the write id of the last set (`hostkeeper ctl releases set-desired --write-id`, 1 to
+  force), the write id of the last set (`hkctl releases set-desired --write-id`, 1 to
   128 visible ASCII characters), and the version and minimums the last change of version replaced.
   `Releases.SetDesired` answers them as its `record` and `Releases.Converge` shows them, so a writer
   that lost an answer can look up whether its write landed. A set with `--if-generation <n>` is

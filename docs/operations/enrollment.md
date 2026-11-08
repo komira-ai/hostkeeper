@@ -7,9 +7,14 @@ approval: there is no approve step for a server that matches its record
 that needs a second look, waits for an operator to [approve](#approve) it by hand. The
 coordinator's side (its flags, its CA, its state files) is
 [enrollment-coordinator.md](../enrollment-coordinator.md); every command, flag and exit code of
-`hostkeeper ctl` is [ctl.md](../ctl.md).
+`hkctl` is [cli.md](../cli.md).
 
-Every `hostkeeper ctl enrollment` call takes the operator token only: a CI token is refused with
+`hkctl` is the operator's command line. It is the release asset `hkctl-<version>`, verified as
+[verify-a-release.md](../deploy/verify-a-release.md) says, and needs bash 3.2 or later and curl
+7.55 or later. Only its owner may read its `--token-file` (mode 0600): `hkctl` refuses a file its
+group or others may read.
+
+Every `hkctl enrollment` call takes the operator token only: a CI token is refused with
 `forbidden`, no token with `unauthorized`, and a refused call changes nothing. An approval and
 every change to a record is an entry of the audit log, under the name of the token that made it.
 The commands below reach the coordinator's private listener (`--private-listen`):
@@ -26,7 +31,7 @@ are written as six pairs of hex digits separated all by `:` or all by `-`, or as
 digits, in either case, and are kept as lower-case `aa:bb:cc:dd:ee:ff`.
 
 ```
-hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment add-record --host-id web-17 --role web \
     --data-macs 00:00:5e:00:53:01 --data-macs 00:00:5e:00:53:02 \
     --bmc-mac 00:00:5e:00:53:a1 --serial SN-0042 --notes "rack 4, unit 17"
@@ -48,12 +53,12 @@ once: [The record is the approval](#the-record-is-the-approval) says how. Give t
 unless you want to approve its server by hand.
 
 ```
-hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment list-records --limit 50
 ```
 
 ```
-hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment remove-record --host-id web-17 --reason "wrong BMC MAC"
 ```
 
@@ -81,7 +86,7 @@ The flow for each server, from the operator's side:
 3. Enter the record:
 
 ```
-hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment add-record --host-id web-17 --role web \
     --data-macs 00:00:5e:00:53:01 --bmc-mac 00:00:5e:00:53:a1 \
     --approve-for-secs 43200 --notes "rack 4, unit 17"
@@ -140,7 +145,7 @@ window fields; the end of the window is audited `record_open` with the reason. A
 that matches it is approved then.
 
 ```
-hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment open-record --host-id web-17 --approve-for-secs 86400 \
     --reason "rack delayed to Thursday"
 ```
@@ -221,7 +226,7 @@ shows it ([Check the key hash](#check-the-key-hash)).
 ## The pending request and its match
 
 ```
-hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment list --limit 50
 ```
 
@@ -229,9 +234,9 @@ hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-
 and `key_sha256` (the same value: the SHA-256 of the request's public key), the host's `claims`
 (machine id, DMI serial and product UUID, network addresses, BMC MAC; serial and platform UUID on
 a Mac), `image`, `first_seen_unix`, `renewal_of` for a returning host, `duplicate_claim` and
-`mac_nonce_presented`, and how it matches the inventory. `--output json` prints the field names
-in lower camel case (`keySha256`) and leaves out a field at its default (`false`, an empty
-string).
+`mac_nonce_presented`, and how it matches the inventory. `hkctl` prints the gateway's JSON body,
+with the field names in lower camel case (`keySha256`) and a field at its default (`false`, an
+empty string) left out.
 
 The match is worked out when the request is listed and again when it is approved, from the
 records as they are then. A record matches a Linux request when one of its data MACs is among the
@@ -290,7 +295,7 @@ matches a Mac request when its serial equals the claimed serial, letters compare
 MACs are not compared. Record a Mac with `--serial` and no MAC:
 
 ```
-hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment add-record --host-id mac-03 --role build --serial C02XK1ABJG5J
 ```
 
@@ -325,7 +330,7 @@ gate pushes a nonce to the other at its next look.
 With `--mdm-pkg-allowlist` and `--mdm-host` the gate also sends the Mac the newest pkg on its
 allowlist, before its daemon has posted, and again an hour after the Mac's last answer until a
 request from it appears; each send is audited `mdm_install_sent` by `mdm-gate` with its count, and
-`hostkeeper ctl mdm list-devices` shows the count and the last send
+`hkctl mdm list-devices` shows the count and the last send
 ([enrollment-coordinator.md](../enrollment-coordinator.md)). A Mac whose count grows and that never
 posts did not install the pkg: read `/var/log/install.log` on the Mac.
 
@@ -392,7 +397,7 @@ answer: the host takes it at its next poll, within seconds.
 A request that matches one record, approved as that record's host id (no `--host-id`):
 
 ```
-hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment approve --request-id <request-id> --key-sha256 <key-sha256> \
     --role web --services api --reason "racked in row 4, key checked on the console"
 ```
@@ -401,7 +406,7 @@ A request that matches no record or several, or a renewal, approved under a host
 names:
 
 ```
-hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment approve --request-id <request-id> --key-sha256 <key-sha256> \
     --host-id web-17 --role web --reason "no record yet, key checked on the console"
 ```
@@ -417,7 +422,7 @@ hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-
 - the host id was denied (`denied` without it).
 
 ```
-hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment approve --request-id <request-id> --key-sha256 <key-sha256> \
     --host-id web-17 --role web --services api --replace true \
     --reason "web-17 rebuilt on new disks, key checked on the console"
@@ -430,7 +435,7 @@ When the approval stands but its services could not be assigned, the coordinator
 services of an approval were not assigned: assign them with Services.Assign`. Assign them:
 
 ```
-hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     services assign --node-id web-17 --service api
 ```
 
@@ -444,7 +449,7 @@ is answered `DENIED`, and a repost of the same key changes nothing. The rejectio
 rejected succeeds and audits nothing.
 
 ```
-hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment reject --request-id <request-id> --reason "not one of ours"
 ```
 
@@ -465,7 +470,7 @@ true`, under each service assigned to it once its heartbeat names that service, 
 `live` while it heartbeats within 45 seconds:
 
 ```
-hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     releases status --service api
 ```
 
@@ -491,7 +496,7 @@ logs `renewed the certificate of host:<id> (generation <n>)` and the coordinator
 certificate`. A refused renewal is logged on the node as `renewal refused: <token>`.
 
 Every heartbeat also says when the host's certificate ends, why its last enrollment or renewal
-step failed (until a step succeeds), and the host's own clock. `hostkeeper ctl hosts get
+step failed (until a step succeeds), and the host's own clock. `hkctl hosts get
 --node-id <id>` answers the first two as `cert_not_after_unix` and `last_renew_error`, and
 `clock_skew_beats`: how many of the host's heartbeats since the coordinator started said a time
 more than `--clock-skew-secs` (120 by default) from the coordinator's clock, either way. The Host
@@ -522,7 +527,7 @@ which is cancelled. What its role or the rollout file assigns is not. It is sent
 what it runs stays as it is. The reason may be left out.
 
 ```
-hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     hosts retire --node-id web-17 --reason "board failed, replaced by web-23"
 ```
 
@@ -573,7 +578,7 @@ approve; a queue that still fills needs a larger `--max-pending-enrollments` or 
 
 The `Enrollment` service (`list`, `approve`, `reject`, `add-record`, `list-records`,
 `remove-record`, `open-record`)
-refuses with exactly one of these tokens; `hostkeeper ctl` exits 2 on INVALID_ARGUMENT and
+refuses with exactly one of these tokens; `hkctl` exits 2 on INVALID_ARGUMENT and
 FAILED_PRECONDITION, 3 on UNAUTHENTICATED and PERMISSION_DENIED, and 1 on the others.
 
 | token | code | cause | fix |
