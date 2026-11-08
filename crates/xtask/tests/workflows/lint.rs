@@ -243,6 +243,23 @@ fn uses<'a>(node: &'a Node, out: &mut Vec<(usize, &'a str)>) {
     }
 }
 
+/// The comment after the `uses:` value `value` on the line `line` of `text` it is written on (for
+/// an alias, the line of its anchor), without its `#` and the blanks after it: past a closing
+/// quote, one or more spaces or tabs, then `#`. `None` when the line has no such comment.
+pub fn version_comment<'a>(text: &'a str, line: usize, value: &str) -> Option<&'a str> {
+    let source = text.lines().nth(line - 1).unwrap_or_default();
+    let after = source
+        .find(value)
+        .map(|at| &source[at + value.len()..])
+        .unwrap_or_default();
+    let after = after.strip_prefix(['\'', '"']).unwrap_or(after);
+    let spaced = after.trim_start_matches([' ', '\t']);
+    (spaced.len() < after.len())
+        .then(|| spaced.strip_prefix('#'))
+        .flatten()
+        .map(|c| c.trim_start_matches([' ', '\t']))
+}
+
 /// What is wrong with the `uses:` value `value` on `line` of `text`, if anything.
 fn pin_problem(text: &str, line: usize, value: &str) -> Option<String> {
     if value.starts_with('.') {
@@ -259,20 +276,7 @@ fn pin_problem(text: &str, line: usize, value: &str) -> Option<String> {
             "line {line}: `uses: {value}` is not pinned to a 40-digit lowercase commit SHA"
         ));
     }
-    // The comment after the value on the line the value is written on (for an alias, the line
-    // of its anchor): past a closing quote, one or more spaces or tabs, `#`, then `v<digit>`.
-    let source = text.lines().nth(line - 1).unwrap_or_default();
-    let after = source
-        .find(value)
-        .map(|at| &source[at + value.len()..])
-        .unwrap_or_default();
-    let after = after.strip_prefix(['\'', '"']).unwrap_or(after);
-    let spaced = after.trim_start_matches([' ', '\t']);
-    let comment = (spaced.len() < after.len())
-        .then(|| spaced.strip_prefix('#'))
-        .flatten()
-        .map(|c| c.trim_start_matches([' ', '\t']));
-    let versioned = comment.is_some_and(|c| {
+    let versioned = version_comment(text, line, value).is_some_and(|c| {
         c.strip_prefix('v')
             .is_some_and(|v| v.starts_with(|ch: char| ch.is_ascii_digit()))
     });
@@ -378,7 +382,7 @@ pub fn lint(file: &str, text: &str) -> Vec<String> {
     if net_install_file {
         problems.extend(net_install::problems(&doc));
     }
-    problems.extend(callers::problems(file, &doc));
+    problems.extend(callers::problems(file, text, &doc));
     problems
 }
 
