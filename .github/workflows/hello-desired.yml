@@ -3,22 +3,23 @@
 # with the OIDC token GitHub issues to this workflow. It is the same path a service's release job
 # takes, run by hand, so that path is proven on hello before a real service depends on it.
 #
-# Run by hand only (`workflow_dispatch`), from main. Three inputs:
+# Run by hand only (`workflow_dispatch`), from main. Two inputs:
 #
 # - `version`: a release of this repository, X.Y.Z, whose assets carry the hello packages;
 # - `variant`: `hello` sets `<version>`; `fail-ready` sets `<version>-fail-ready`, the build whose
-#   `/readyz` answers 503, which the hosts fail and the coordinator rolls back;
-# - `platform`: the platform of the hosts that run the proof. The desired state carries one
-#   package digest, which every host checks, so the proof runs on hosts of one platform
-#   (docs/hello.md, "One platform").
+#   `/readyz` answers 503, which the hosts fail and the coordinator rolls back.
 #
-# `digest` reads the SHA-256 of the variant's package for that platform from the release (the
-# `.sha256` file beside the package); it holds no token right but
-# `contents: read` and runs nothing of the release. `set-desired` calls the CI client, pinned
+# `release` reads the variant's release index (`hello-index.json` or
+# `hello-fail-ready-index.json`), its archives and their bundles from the release, and
+# `cargo xtask release targets` writes the targets: one hostkeeper-archive entry per platform the
+# index lists (docs/design/packages.md, section 3.7). It holds no token right but
+# `contents: read`, and runs nothing of the release. `set-desired` calls the CI client with the
+# targets, the index and the index's SHA-256, so each host, of any platform, is ordered its own
+# platform's package (a daemon before targets through the index). It is pinned
 # like any caller's: the `uses:` commit with its release as the comment, and `hostkeeper_version`
 # and `hostkeeper_commit` of that same release. The pin is the CI client's revision the workflow
-# lint names (`callers.rs`, `CLIENT_COMMIT`), the one release.yml pins too: the client on hkctl,
-# one set and one held wait. The coordinator, its CA and the audience are
+# lint names (`callers.rs`, `CLIENT_COMMIT`), the one release.yml pins too: the client that takes
+# targets, one set and one held wait. The coordinator, its CA and the audience are
 # repository variables; the coordinator's allow-list entry for this workflow names `hello`
 # (docs/deploy/ci-client.md, "The allow-list entry").
 #
@@ -40,15 +41,6 @@ on:
         options:
           - hello
           - fail-ready
-      platform:
-        description: The platform of the hosts that run the proof; the digest set is that platform's package.
-        type: choice
-        required: true
-        default: linux-x86_64
-        options:
-          - linux-x86_64
-          - linux-arm64
-          - macos-arm64
 
 permissions: {}
 
@@ -57,49 +49,63 @@ defaults:
     shell: bash
 
 jobs:
-  digest:
+  release:
     if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 15
     permissions:
       contents: read
     outputs:
-      version: ${{ steps.digest.outputs.version }}
-      package_digest: ${{ steps.digest.outputs.package_digest }}
+      version: ${{ steps.index.outputs.version }}
+      release_index: ${{ steps.index.outputs.release_index }}
+      release_index_digest: ${{ steps.index.outputs.release_index_digest }}
+      targets: ${{ steps.targets.outputs.targets }}
+    env:
+      RELEASE: ${{ inputs.version }}
+      VERSION: ${{ inputs.variant == 'fail-ready' && format('{0}-fail-ready', inputs.version) || inputs.version }}
+      INDEX: ${{ inputs.variant == 'fail-ready' && 'hello-fail-ready-index.json' || 'hello-index.json' }}
+      FAIL_READY: ${{ inputs.variant == 'fail-ready' && 'true' || '' }}
     steps:
-      # A release is X.Y.Z: nothing else reaches the URL or the job's outputs.
+      # A release is X.Y.Z: nothing else reaches the download or the job's outputs.
       - name: Refuse a version that is not X.Y.Z
-        env:
-          RELEASE: ${{ inputs.version }}
         run: '[[ "$RELEASE" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]'
-      # The `.sha256` file is `<64 hex>  <file name>`: its first field is the digest. A download
-      # that fails, or a first field that is not 64 lower-case hex digits, fails the step (the
-      # shell runs with `-e -o pipefail`), so nothing is set. Every host checks the package it
-      # fetches against the digest.
-      - name: The version and the SHA-256 of the variant's package
-        id: digest
-        env:
-          RELEASE: ${{ inputs.version }}
-          VERSION: ${{ inputs.variant == 'fail-ready' && format('{0}-fail-ready', inputs.version) || inputs.version }}
-          PLATFORM: ${{ inputs.platform }}
-        run: |
-          digest=$(curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --location "https://github.com/$GITHUB_REPOSITORY/releases/download/v$RELEASE/hello-$VERSION-$PLATFORM.tar.zst.sha256" | cut -d ' ' -f 1)
-          [[ "$digest" =~ ^[0-9a-f]{64}$ ]]
-          printf 'version=%s\npackage_digest=%s\n' "$VERSION" "$digest" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      - name: Compile xtask
+        run: cargo xtask --help
+      # The variant's index, and for each platform its archive and the archive's bundle, from
+      # the release's assets. One curl, its URL globs expanded by curl itself (the text is
+      # quoted); any transfer that fails ends it at once (`--fail-early`), so nothing is set.
+      - name: Download the variant's index, archives and bundles
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --fail-early --silent --show-error --location --create-dirs --output-dir "$RUNNER_TEMP/release" --remote-name-all "https://github.com/$GITHUB_REPOSITORY/releases/download/v$RELEASE/$INDEX" "https://github.com/$GITHUB_REPOSITORY/releases/download/v$RELEASE/hello-$VERSION-{linux-arm64,linux-x86_64,macos-arm64}.tar.zst{,.sigstore.json}"
+      # Refused, every problem named, unless the index is hello's at the version, lists every
+      # platform, and each archive, bundle and manifest checks out against it.
+      - name: The targets of the variant's package
+        id: targets
+        run: cargo xtask release targets --service hello ${FAIL_READY:+--fail-ready} --version "$RELEASE" --dir "$RUNNER_TEMP/release" --repo "$GITHUB_REPOSITORY" --output "$GITHUB_OUTPUT"
+      # The index is canonical (one line, no final line break: `release targets` refused
+      # anything else), so the output carries its exact bytes.
+      - name: The version, the release index and its SHA-256
+        id: index
+        run: printf 'version=%s\nrelease_index=%s\nrelease_index_digest=%s\n' "$VERSION" "$(< "$RUNNER_TEMP/release/$INDEX")" "$(sha256sum "$RUNNER_TEMP/release/$INDEX" | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
 
   set-desired:
-    needs: [digest]
+    needs: [release]
     if: ${{ github.ref == 'refs/heads/main' }}
     permissions:
       contents: read
       id-token: write
-    uses: komira-ai/hostkeeper/.github/workflows/set-desired.yml@3018137f2c8806dd22bf2071a23565d4a2d64e8d # v0.1.166
+    uses: komira-ai/hostkeeper/.github/workflows/set-desired.yml@4859b4800897f2468c0f2131455721edfc537217 # v0.1.173
     with:
       service: hello
-      version: ${{ needs.digest.outputs.version }}
-      package_digest: ${{ needs.digest.outputs.package_digest }}
-      hostkeeper_version: 0.1.166
-      hostkeeper_commit: 3018137f2c8806dd22bf2071a23565d4a2d64e8d
+      version: ${{ needs.release.outputs.version }}
+      targets: ${{ needs.release.outputs.targets }}
+      release_index: ${{ needs.release.outputs.release_index }}
+      release_index_digest: ${{ needs.release.outputs.release_index_digest }}
+      hostkeeper_version: 0.1.173
+      hostkeeper_commit: 4859b4800897f2468c0f2131455721edfc537217
       coordinator_url: ${{ vars.HOSTKEEPER_COORDINATOR_URL }}
       coordinator_ca: ${{ vars.HOSTKEEPER_COORDINATOR_CA }}
       audience: ${{ vars.HOSTKEEPER_CI_AUDIENCE }}

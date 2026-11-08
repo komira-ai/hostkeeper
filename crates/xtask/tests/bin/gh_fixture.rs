@@ -24,6 +24,11 @@
 //! release.yml (tests/workflows/channel_run_tests.rs): `curl ... --output <file> https://<rest>`
 //! copies `channel/<rest>` beside its own file to `<file>`, and when there is none fails as curl
 //! does for an HTTP 404 with `--fail` (exit 22). It never waits, whatever retry flags it is given.
+//!
+//! Started as `cargo`, for the same test: `cargo xtask <args>` runs the program `xtask` beside its
+//! own file (the test links this crate's real binary there) with `<args>`, and exits as it
+//! exits; anything else exits 2. Started as `rustup`: `rustup toolchain install` does nothing and
+//! succeeds (the toolchain is the one running the test); anything else exits 2.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -144,6 +149,29 @@ fn curl(dir: &Path, args: &[String]) -> ExitCode {
     }
 }
 
+/// The fake `cargo`: see the module's documentation.
+fn cargo(dir: &Path, args: &[String]) -> ExitCode {
+    let Some(("xtask", rest)) = args
+        .split_first()
+        .map(|(first, rest)| (first.as_str(), rest))
+    else {
+        return ExitCode::from(2);
+    };
+    match std::process::Command::new(dir.join("xtask"))
+        .args(rest)
+        .status()
+    {
+        Ok(status) if status.success() => ExitCode::SUCCESS,
+        Ok(status) => ExitCode::from(
+            status
+                .code()
+                .and_then(|c| u8::try_from(c).ok())
+                .unwrap_or(1),
+        ),
+        Err(_) => fail("cannot run xtask"),
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let Ok(exe) = std::env::current_exe() else {
@@ -152,8 +180,12 @@ fn main() -> ExitCode {
     let Some(dir) = exe.parent() else {
         return fail("no directory of its own");
     };
-    if exe.file_name().is_some_and(|name| name == "curl") {
-        return curl(dir, &args);
+    match exe.file_name().and_then(|name| name.to_str()) {
+        Some("curl") => return curl(dir, &args),
+        Some("cargo") => return cargo(dir, &args),
+        Some("rustup") if args == ["toolchain", "install"] => return ExitCode::SUCCESS,
+        Some("rustup") => return ExitCode::from(2),
+        _ => {}
     }
     let data: PathBuf = dir.join("releases");
     let logged = std::fs::OpenOptions::new()

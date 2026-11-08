@@ -35,16 +35,27 @@ jobs:
     uses: komira-ai/hostkeeper/.github/workflows/set-desired.yml@<commit> # v<release>
     with:
       service: hello
-      version: ${{ inputs.version }}
+      version: ${{ needs.release.outputs.version }}
+      targets: ${{ needs.release.outputs.targets }}
+      release_index: ${{ needs.release.outputs.release_index }}
+      release_index_digest: ${{ needs.release.outputs.release_index_digest }}
       hostkeeper_commit: <commit>
       hostkeeper_version: <release>
-  digest:
+  release:
     if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
+    outputs:
+      version: ${{ steps.index.outputs.version }}
+      targets: ${{ steps.targets.outputs.targets }}
+      release_index: ${{ steps.index.outputs.release_index }}
+      release_index_digest: ${{ steps.index.outputs.release_index_digest }}
     steps:
-      - run: echo
+      - id: targets
+        run: cargo xtask release targets --service hello --version 1.2.3 --dir d --repo o/r
+      - id: index
+        run: echo
 ";
 
 /// The CI client's revision written into `text` for `<commit>` and `<release>`.
@@ -144,6 +155,10 @@ fn a_renamed_caller_job_is_refused_and_the_listed_one_is_missing() {
             &format!("job set calls set-desired.yml, and {ONLY}"),
             "hello-desired.yml: job set-desired does not call set-desired.yml",
             "hello-desired.yml: job set-desired must pass `service: hello`",
+            "hello-desired.yml: job set-desired must pass `version: ${{ needs.release.outputs.version }}`",
+            "hello-desired.yml: job set-desired must pass `targets: ${{ needs.release.outputs.targets }}`",
+            "hello-desired.yml: job set-desired must pass `release_index: ${{ needs.release.outputs.release_index }}`",
+            "hello-desired.yml: job set-desired must pass `release_index_digest: ${{ needs.release.outputs.release_index_digest }}`",
         ],
     );
 }
@@ -402,12 +417,12 @@ fn a_caller_without_the_main_gate_is_refused() {
 
 #[test]
 fn a_job_of_the_hello_proof_run_without_the_main_gate_is_refused() {
-    // Catches: the digest job run from another branch, where it would read inputs unchecked.
+    // Catches: the release job run from another branch, where it would read inputs unchecked.
     assert_hello(
-        "  digest:\n    if: ${{ github.ref == 'refs/heads/main' }}\n",
-        "  digest:\n",
+        "  release:\n    if: ${{ github.ref == 'refs/heads/main' }}\n",
+        "  release:\n",
         &[
-            "hello-desired.yml: job digest needs the exact `if: ${{ github.ref == 'refs/heads/main' }}`",
+            "hello-desired.yml: job release needs the exact `if: ${{ github.ref == 'refs/heads/main' }}`",
         ],
     );
 }
@@ -561,4 +576,81 @@ fn a_hello_proof_run_for_another_service_is_refused() {
     let want = &["hello-desired.yml: job set-desired must pass `service: hello`"];
     assert_hello("      service: hello\n", "      service: tierstore\n", want);
     assert_hello("      service: hello\n", "", want);
+}
+
+#[test]
+fn a_hello_proof_run_that_does_not_set_the_release_jobs_targets_and_index_is_refused() {
+    // Catches: hello set without targets, or with a value of each input that no step of the
+    // release job checked (the dispatch's own input, another job's output).
+    for input in [
+        "version",
+        "targets",
+        "release_index",
+        "release_index_digest",
+    ] {
+        let line = format!("      {input}: ${{{{ needs.release.outputs.{input} }}}}\n");
+        let want = format!(
+            "hello-desired.yml: job set-desired must pass `{input}: ${{{{ needs.release.outputs.{input} }}}}`"
+        );
+        assert_hello(&line, "", &[&want]);
+        assert_hello(
+            &line,
+            &format!("      {input}: ${{{{ inputs.{input} }}}}\n"),
+            &[&want],
+        );
+    }
+}
+
+#[test]
+fn a_hello_proof_run_that_sets_one_package_digest_is_refused() {
+    // Catches: hello set by one platform's package digest beside the targets (the client refuses
+    // the pair) or instead of them (every host ordered one platform's package).
+    assert_hello(
+        "      service: hello\n",
+        "      service: hello\n      package_digest: ${{ needs.release.outputs.package_digest }}\n",
+        &[
+            "hello-desired.yml: job set-desired passes package_digest; the targets name each platform's package",
+        ],
+    );
+}
+
+#[test]
+fn a_hello_release_job_whose_outputs_are_not_its_steps_is_refused() {
+    // Catches: the targets or the index passed on from a value the verb did not write, and an
+    // output dropped.
+    let want = |got: &str| {
+        format!(
+            "hello-desired.yml: job release outputs are {got}, not [(\"release_index\", \"${{{{ steps.index.outputs.release_index }}}}\"), (\"release_index_digest\", \"${{{{ steps.index.outputs.release_index_digest }}}}\"), (\"targets\", \"${{{{ steps.targets.outputs.targets }}}}\"), (\"version\", \"${{{{ steps.index.outputs.version }}}}\")]"
+        )
+    };
+    assert_hello(
+        "      targets: ${{ steps.targets.outputs.targets }}\n",
+        "      targets: ${{ inputs.targets }}\n",
+        &[&want(
+            "[(\"release_index\", \"${{ steps.index.outputs.release_index }}\"), (\"release_index_digest\", \"${{ steps.index.outputs.release_index_digest }}\"), (\"targets\", \"${{ inputs.targets }}\"), (\"version\", \"${{ steps.index.outputs.version }}\")]",
+        )],
+    );
+    assert_hello(
+        "      version: ${{ steps.index.outputs.version }}\n",
+        "",
+        &[&want(
+            "[(\"release_index\", \"${{ steps.index.outputs.release_index }}\"), (\"release_index_digest\", \"${{ steps.index.outputs.release_index_digest }}\"), (\"targets\", \"${{ steps.targets.outputs.targets }}\")]",
+        )],
+    );
+}
+
+#[test]
+fn a_hello_release_job_whose_targets_are_not_written_by_the_verb_for_hello_is_refused() {
+    // Catches: targets echoed from text instead of written by the verb that checks the release's
+    // files, the verb run for hostkeeper's package instead of hello's, and the step renamed away
+    // from the output that reads it.
+    let want = "hello-desired.yml: job release needs a step `targets` that runs `cargo xtask release targets --service hello ...`";
+    let run = "        run: cargo xtask release targets --service hello --version 1.2.3 --dir d --repo o/r\n";
+    for to in [
+        "        run: echo 'targets={}' >> \"$GITHUB_OUTPUT\"\n",
+        "        run: cargo xtask release targets --version 1.2.3 --dir d --repo o/r\n",
+    ] {
+        assert_hello(run, to, &[want]);
+    }
+    assert_hello("      - id: targets\n", "      - id: entries\n", &[want]);
 }

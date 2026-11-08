@@ -265,11 +265,15 @@ jobs:
   #          bytes is never replaced, so it fails here and nothing is set. Last, it checks that
   #          no newer release is published already (a late run of an older commit): then
   #          set-desired is skipped, since setting this version would move the fleet back.
+  #          Once the served index compared equal, `cargo xtask release targets`, compiled from the
+  #          release's own commit, writes the release's targets from the same checked files: one
+  #          hostkeeper-archive entry per platform the index lists (docs/design/packages.md,
+  #          section 3.7), the index's own bytes, so the two agree.
   channel:
     needs: [plan, publish]
     if: ${{ needs.plan.outputs.release == 'true' && github.ref == 'refs/heads/main' && vars.RELEASE_SETS_DESIRED == 'true' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 50
     permissions:
       contents: read
     outputs:
@@ -277,12 +281,22 @@ jobs:
       version: ${{ steps.newest.outputs.version }}
       release_index: ${{ steps.index.outputs.release_index }}
       release_index_digest: ${{ steps.index.outputs.release_index_digest }}
+      targets: ${{ steps.targets.outputs.targets }}
     steps:
       - name: The newest version this run published
         id: newest
         env:
           MATRIX: ${{ needs.plan.outputs.matrix }}
-        run: jq --raw-output '.include[-1] | "version=\(.version)", "tag=\(.tag)"' <<< "$MATRIX" >> "$GITHUB_OUTPUT"
+        run: jq --raw-output '.include[-1] | "version=\(.version)", "tag=\(.tag)", "commit=\(.commit)"' <<< "$MATRIX" >> "$GITHUB_OUTPUT"
+      # The xtask of the release's own commit, as verify and publish run it, compiled before the
+      # files are downloaded (a checkout empties the workspace).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.newest.outputs.commit }}
+          persist-credentials: false
+      - run: rustup toolchain install
+      - name: Compile xtask
+        run: cargo xtask --help
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-${{ steps.newest.outputs.tag }}
@@ -301,6 +315,14 @@ jobs:
       - name: The release index and its SHA-256
         id: index
         run: printf 'release_index=%s\nrelease_index_digest=%s\n' "$(< dist/index.json)" "$(sha256sum dist/index.json | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+      # One hostkeeper-archive entry per platform the index lists, from the same checked files:
+      # the archive's two locations, its size and SHA-256, its bundle and its manifest's
+      # min_hostkeeper. The entries are the index's, so the index and the targets agree.
+      - name: The targets of the release
+        id: targets
+        env:
+          VERSION: ${{ steps.newest.outputs.version }}
+        run: cargo xtask release targets --version "$VERSION" --dir dist --repo "$GITHUB_REPOSITORY" --output "$GITHUB_OUTPUT"
       # `newest=true` only when the highest published X.Y.Z is this run's version.
       - name: Whether this run's release is the newest published
         id: latest
@@ -312,8 +334,9 @@ jobs:
   # set-desired  the CI client (set-desired.yml, docs/deploy/ci-client.md), pinned like any
   #          caller's, at the CI client's revision the workflow lint names (`callers.rs`,
   #          `CLIENT_COMMIT`), the one hello-desired.yml pins too. It runs that release's hkctl:
-  #          one call with an OIDC token, which names the release by its index and the
-  #          index's digest, so each host is ordered its own platform's package. It does not wait
+  #          one call with an OIDC token, which names the release by its targets, and by its
+  #          index and the index's digest, so each host is ordered its own platform's package (a
+  #          daemon before targets through the index). It does not wait
   #          for the fleet: the coordinator's rollout gate orders the hosts, the canary hosts of
   #          the service `hostkeeper` first, then the rest once they have baked, stage by stage by the
   #          service's update plan, which is longer than a job should hold the release group.
@@ -324,14 +347,15 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    uses: komira-ai/hostkeeper/.github/workflows/set-desired.yml@3018137f2c8806dd22bf2071a23565d4a2d64e8d # v0.1.166
+    uses: komira-ai/hostkeeper/.github/workflows/set-desired.yml@4859b4800897f2468c0f2131455721edfc537217 # v0.1.173
     with:
       service: hostkeeper
       version: ${{ needs.channel.outputs.version }}
       release_index: ${{ needs.channel.outputs.release_index }}
       release_index_digest: ${{ needs.channel.outputs.release_index_digest }}
-      hostkeeper_version: 0.1.166
-      hostkeeper_commit: 3018137f2c8806dd22bf2071a23565d4a2d64e8d
+      targets: ${{ needs.channel.outputs.targets }}
+      hostkeeper_version: 0.1.173
+      hostkeeper_commit: 4859b4800897f2468c0f2131455721edfc537217
       coordinator_url: ${{ vars.HOSTKEEPER_COORDINATOR_URL }}
       coordinator_ca: ${{ vars.HOSTKEEPER_COORDINATOR_CA }}
       audience: ${{ vars.HOSTKEEPER_CI_AUDIENCE }}

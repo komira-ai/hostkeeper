@@ -5,11 +5,11 @@ Status: design, for the maintainers' ruling. Build item A1 is **Built**: `releas
 (`crates/hostkeeper-release`). Build item A2 is **Built**: `SetDesired` with targets, its checks and refusals, the
 256 KiB limit, the gateway's null step, the audit entry, the releases in the file store and in Postgres, and
 `GetRelease` (`crates/hostkeeper-coordinator/src/releases.rs`, `service_ci.rs`, `store/postgres/releases.rs`).
-Build item A15 is **Built** (section 5.4). Build item A5 is **Built** in part: the CI client's
-`targets` input (`.github/workflows/set-desired.yml`) and `cargo xtask release targets`
-(`crates/xtask/src/release/targets.rs`); its callers move to targets in a pull request of their own, once a
-release carries that input, the farm's coordinator runs A2, and the callers' pin has moved to the hkctl
-client. Nothing else here is built. This is a revision of the design merged as
+Build item A15 is **Built** (section 5.4). Build item A5 is **Built**: the CI client's
+`targets` input (`.github/workflows/set-desired.yml`), `cargo xtask release targets`
+(`crates/xtask/src/release/targets.rs`), and its two callers, hostkeeper's deploy in `release.yml` and the hello
+proof run `hello-desired.yml`, which set each release with its targets, its release index and the index's digest,
+pinned to the CI client of release v0.1.173. Nothing else here is built. This is a revision of the design merged as
 komira-ai/hostkeeper#179. It keeps that design's stores, its digest and attestation checks before any byte is used, and its
 staged path for the daemons on hosts now. It replaces its package model: host facts, "most specific wins", artifact kinds
 and `Releases.Register` (section 0 says what replaces what). It changes three things in
