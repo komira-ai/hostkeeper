@@ -46,7 +46,7 @@ export function platformOrder(targets) {
 // What the coordinator's pick gives `host` (one host of Hosts.List) of the release `targets` for
 // `service`: `{installer, position}`, the picked entry's installer and its place in the list
 // from 1, or `{reason}`, why none is picked, as `GateReason` and the coordinator spell it:
-// - `no_target`: the release has no list for the host's platform, or the host said no platform;
+// - `no_target`: the release has no list for the host's platform;
 // - `unheard`: its daemon announced `target-v1` and the coordinator has read no installer of it;
 // - `installer_dropped`: the host runs the service with an installer the list has no entry of,
 //   or that its daemon no longer lists;
@@ -55,10 +55,16 @@ export function platformOrder(targets) {
 // A host runs the service when its last heartbeat names it with any health but absent; it runs it
 // with the installer that heartbeat names, `hostkeeper-archive` when it names none. A daemon that
 // did not announce `target-v1` lists `hostkeeper-archive` alone and runs everything from archives.
+// `{unknown}` says the page cannot tell: Hosts.List names no platform the page knows for the host
+// (it names none for a host whose only word of its services is that it is a member of them,
+// though the coordinator, which knows the host's platform, may pick it an entry).
 export function pickFor(host, service, targets) {
   const beat = (host && host.heartbeat) || {};
   const key = platformKey(beat.platform);
-  const entries = key !== null && targets && Object.prototype.hasOwnProperty.call(targets, key)
+  if (key === null) {
+    return { unknown: "platform not reported" };
+  }
+  const entries = targets && Object.prototype.hasOwnProperty.call(targets, key)
     ? list(targets[key], "entries")
     : null;
   if (entries === null) {
@@ -88,6 +94,9 @@ export function pickFor(host, service, targets) {
 
 // What the page says of a pick.
 export function pickLabel(pick) {
+  if (typeof pick.unknown === "string") {
+    return `unknown: ${pick.unknown}`;
+  }
   return typeof pick.reason === "string" ? `none: ${pick.reason}` : `${pick.installer} (entry ${pick.position})`;
 }
 

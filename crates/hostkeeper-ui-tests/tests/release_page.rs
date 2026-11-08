@@ -203,8 +203,9 @@ fn the_page_shows_every_platform_and_entry_in_order_with_an_unknown_installer_as
 /// the entry of the installer it runs it with (the archive when its heartbeat names none), one
 /// that does not given another entry than the first it lists, a host whose daemon predates
 /// `target-v1` not counted as listing the archive alone, a word of health `absent` read as
-/// running, a dropped installer, an unknown platform, a list not read yet or a platform with no
-/// list not said by its reason; a host of another service shown; the counts not counting each
+/// running, a dropped installer or a list not read yet not said by its reason; a host whose
+/// platform Hosts.List does not name given a reason of the coordinator's rather than shown as
+/// unknown; a host of another service shown; the counts not counting each
 /// pick once.
 #[test]
 fn each_host_of_the_service_is_shown_with_its_pick_or_why_it_has_none() {
@@ -290,7 +291,7 @@ fn each_host_of_the_service_is_shown_with_its_pick_or_why_it_has_none() {
                 "hostkeeper-archive (entry 1)"
             ),
             row("quiet-1", "linux-x86_64", "-", "-", "none: unheard"),
-            row("blank-1", "-", "-", "-", "none: no_target"),
+            row("blank-1", "-", "-", "-", "unknown: platform not reported"),
         ]])
     );
     assert_eq!(
@@ -302,8 +303,8 @@ fn each_host_of_the_service_is_shown_with_its_pick_or_why_it_has_none() {
             "hostkeeper-archive (entry 3): 2",
             "none: installer_dropped: 1",
             "none: no_build_for_host: 1",
-            "none: no_target: 1",
             "none: unheard: 1",
+            "unknown: platform not reported: 1",
         ]])
     );
     assert!(shown(&out).contains("Hosts of web (11)"), "{}", shown(&out));
@@ -542,11 +543,11 @@ export async function main() {
     assert_eq!(
         out["picks"],
         json!([
-            {"reason": "no_target"},
-            {"reason": "no_target"},
+            {"unknown": "platform not reported"},
+            {"unknown": "platform not reported"},
             {"reason": "no_target"},
             {"reason": "no_build_for_host"},
-            {"reason": "no_target"},
+            {"unknown": "platform not reported"},
             {"installer": "hostkeeper-archive", "position": 2},
             {"installer": "deb", "position": 1},
             {"reason": "installer_dropped"},
