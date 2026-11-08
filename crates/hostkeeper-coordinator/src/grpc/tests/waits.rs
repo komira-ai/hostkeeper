@@ -294,7 +294,8 @@ async fn a_wait_ends_superseded_when_another_version_is_set() {
 /// Proves: a blocked service keeps the wait (a host failed its update), and the wait ends
 /// `CONVERGED` once the host reports the version.
 ///
-/// Catches: a wait that gives up at `BLOCKED`, which `hostkeeper ci` waits through.
+/// Catches: a wait that gives up at `BLOCKED`, which the `hostkeeper ci` of older releases waits
+/// through.
 #[tokio::test(start_paused = true)]
 async fn a_blocked_service_keeps_the_wait_until_it_converges() {
     let world = world("wait-blocked").await;
