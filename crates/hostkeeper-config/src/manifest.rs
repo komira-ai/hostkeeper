@@ -407,16 +407,23 @@ fn timeouts(hook: &Fields<'_>) -> Result<Timeouts, ManifestRefusal> {
     })
 }
 
+/// Whether `name` may name a hook's additive boot step: 1 to [`MAX_BOOT_NAME`] bytes of
+/// `[a-z0-9_]`, and none of [`STEP_NAMES`]. The rule of `[hook] boot`, and of a release
+/// manifest's `hook.boot` (crate `hostkeeper-release`).
+pub fn is_boot_step(name: &str) -> bool {
+    let token = (1..=MAX_BOOT_NAME).contains(&name.len())
+        & name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() | b.is_ascii_digit() | (b == b'_'));
+    token & !STEP_NAMES.contains(&name)
+}
+
 /// The `boot` step: a reason-token-shaped name that is none of [`STEP_NAMES`].
 fn boot(hook: &Fields<'_>) -> Result<Option<String>, ManifestRefusal> {
     let Some(name) = hook.opt_string("boot")? else {
         return Ok(None);
     };
-    let token = (1..=MAX_BOOT_NAME).contains(&name.len())
-        & name
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() | b.is_ascii_digit() | (b == b'_'));
-    if !token | STEP_NAMES.contains(&name) {
+    if !is_boot_step(name) {
         return Err(hook
             .invalid(
                 "boot",
@@ -594,26 +601,51 @@ fn health(
     };
     let fields = Fields::new("health", table);
     let text = fields.string("url")?;
-    let parts = url::parts(text, true).map_err(|why| fields.invalid("url", why))?;
+    match check_health_url(service, run, text) {
+        Ok(()) => Ok(Some(text.to_owned())),
+        Err(HealthUrlError::PortWithoutInstance { unit }) => {
+            Err(ManifestRefusal::PortWithoutInstance { unit })
+        }
+        Err(why) => Err(fields.invalid("url", why.to_string()).into()),
+    }
+}
+
+/// Why a health URL is refused.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum HealthUrlError {
+    /// It is not a URL of the grammar: the reason, as a phrase after the URL.
+    #[error("{0}")]
+    Syntax(&'static str),
+    /// Another scheme than `http`, or a host that is not a loopback literal.
+    #[error("is not an http:// URL to a loopback address (127.0.0.1 or [::1])")]
+    NotLoopback,
+    /// `{port}` in the port's place, and a run unit that is not an instance named by its port.
+    #[error("has {{port}}, but the run unit {unit:?} is not an instance with a port number")]
+    PortWithoutInstance {
+        /// The first such unit.
+        unit: String,
+    },
+}
+
+/// The rule of a health URL, `[health] url` here and a release manifest's `health_url` (crate
+/// `hostkeeper-release`): `http://` to a loopback literal (design section 5.8). A `{port}` in the
+/// port's place needs every unit of `run` to be an instance whose name is its port; with no run
+/// unit there is nothing to probe, and the URL passes.
+pub fn check_health_url(service: &str, run: &[String], text: &str) -> Result<(), HealthUrlError> {
+    let parts = url::parts(text, true).map_err(HealthUrlError::Syntax)?;
     if (parts.scheme != "http") | !is_loopback(parts.host) {
-        return Err(fields
-            .invalid(
-                "url",
-                "is not an http:// URL to a loopback address (127.0.0.1 or [::1])",
-            )
-            .into());
+        return Err(HealthUrlError::NotLoopback);
     }
-    if parts.port == Some(url::PORT_PLACEHOLDER)
-        && let Some(unit) = run.iter().find(|unit| {
-            UnitName::of(service, unit, false)
-                .ok()
-                .and_then(|name| name.port())
-                .is_none()
-        })
-    {
-        return Err(ManifestRefusal::PortWithoutInstance { unit: unit.clone() });
+    let unit = run.iter().find(|unit| {
+        UnitName::of(service, unit, false)
+            .ok()
+            .and_then(|name| name.port())
+            .is_none()
+    });
+    match (parts.port == Some(url::PORT_PLACEHOLDER), unit) {
+        (true, Some(unit)) => Err(HealthUrlError::PortWithoutInstance { unit: unit.clone() }),
+        _ => Ok(()),
     }
-    Ok(Some(text.to_owned()))
 }
 
 /// A `[[files]] source`: `files/<path>` in the path grammar, present in the version directory
