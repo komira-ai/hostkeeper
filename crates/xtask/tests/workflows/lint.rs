@@ -60,7 +60,9 @@
 //! A workflow that tags or publishes is also held to [`release::publish_problems`].
 //!
 //! Every `curl` of a `run:` carries the HTTPS and failure guards and the retry options, and no
-//! `run:` downloads with `wget` or `gh release download` ([`downloads`]).
+//! `run:` downloads with `wget` or `gh release download` ([`downloads`]). Every `cargo xtask`
+//! call of a `run:` is one the binary's own command line accepts: its verb, its flags, and every
+//! required flag and argument given ([`xtask_calls`]).
 //!
 //! `set-desired.yml` is also held to the rules of [`set_desired`], which fix the order of its
 //! steps. Every workflow is held to the rules of [`callers`]: which jobs may call it, and how.
@@ -76,6 +78,7 @@ use super::net_install;
 use super::pr_device;
 use super::release::{self, PLAN_IF, RELEASE_IF, SIGN_IF};
 use super::set_desired;
+use super::xtask_calls;
 use super::yaml::{self, Node, Value};
 
 /// A write permission a job may hold: the workflow file, the job, the scope, and the `if:` of
@@ -384,6 +387,7 @@ pub fn lint(file: &str, text: &str) -> Vec<String> {
     }
     problems.extend(callers::problems(file, text, &doc));
     problems.extend(downloads::problems(&doc));
+    problems.extend(xtask_calls::problems(&doc));
     problems
 }
 
