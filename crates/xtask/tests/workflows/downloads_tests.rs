@@ -154,7 +154,8 @@ fn each_curl_of_a_line_is_held_to_its_own_options() {
 }
 
 /// Proves: a comment line, a word that only contains `curl`, and a quoted `curl` are not
-/// downloads, and a `run:` that is not a scalar (`defaults.run`) is not read as one.
+/// downloads, and a `run:` that is not a scalar (the `run:` mapping under `defaults:`) is not
+/// read as one.
 /// Catches: a rule that refuses a workflow for its comments or for another tool's name.
 #[test]
 fn a_comment_or_a_word_that_only_contains_curl_is_not_a_download() {
