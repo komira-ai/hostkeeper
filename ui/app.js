@@ -11,6 +11,7 @@ import { h, describeError, errorView, mount } from "./view.js";
 import * as fleet from "./pages/fleet.js";
 import * as host from "./pages/host.js";
 import * as rollout from "./pages/rollout.js";
+import * as release from "./pages/release.js";
 import * as holds from "./pages/holds.js";
 import * as enrollment from "./pages/enrollment.js";
 import * as inventory from "./pages/inventory.js";
@@ -20,6 +21,7 @@ const PAGES = [
   ["fleet", "Fleet", fleet],
   ["host", "Host", host],
   ["rollout", "Rollout", rollout],
+  ["release", "Release", release],
   ["holds", "Holds", holds],
   ["enrollment", "Enrollment", enrollment],
   ["inventory", "Inventory", inventory],

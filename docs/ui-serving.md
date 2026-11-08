@@ -48,6 +48,17 @@ it again.
   only while the plan waits for a manual advance), `Rollouts.Pause` (while it is not paused) and
   `Rollouts.Resume` (while it is paused), each with the reason typed in the section and a
   confirmation first.
+- **Release**: type a service and a version to see the release it was set with, as
+  `Releases.GetRelease` answers it: the digest of the release index, and for each platform its
+  entries in the order set (installer, digest, size, locations, attestation digest, package and
+  oldest daemon). An installer name is shown as it is, whatever it is. Below them, each host of
+  the service with the entry it is picked by the coordinator's rule
+  ([packages design](design/packages.md), section 3.3), worked out from `Hosts.List`: the entry of
+  the installer it runs the service with, else the first entry whose installer its daemon lists;
+  or why none (`no_target`, `no_build_for_host`, `installer_dropped`, or `unheard` while the
+  coordinator has read no installer of a daemon that announced `target-v1`). Counts of each pick
+  cover every host; the table shows the first 200. A refusal (`NOT_FOUND release_unknown` for a
+  version never set with targets) is shown as the API says it.
 - **Host**: the services assigned to that host, how each is assigned (to the host or through its
   role), the installed version against the desired one, and the minimum version.
 - Each action is one API call, and the Audit page shows it by the token's name. A refused call
