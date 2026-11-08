@@ -465,6 +465,8 @@ fn waiting(name: &str) -> SelfRig {
         version: NEW.to_owned(),
         verdict_promotion_pending: false,
         order_id: None,
+        next: None,
+        starts: None,
     });
     put_record(&s.rig, HK, &rec);
     let new = s.rig.scratch.path().join("new-binary");

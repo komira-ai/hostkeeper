@@ -63,6 +63,7 @@ use crate::admin_client::AdminCommand;
 use crate::console::{AGETTY, ConsoleIssue, ENROLLMENT_ISSUE};
 use crate::executor::{Daemon, Placement, Ports};
 use crate::files;
+use crate::handover::ProcessExec;
 use crate::ipmi::DevIpmi;
 use crate::links::{DaemonLog, HostLink, Links};
 use crate::mac::HostIoreg;
@@ -417,7 +418,9 @@ pub fn watchdog(flags: &DaemonFlags, systemd: &SystemdVars) -> Box<dyn Watchdog>
 }
 
 /// Starts the daemon and serves it, beating every `period` seconds and telling `watchdog` after
-/// each heartbeat, returning only on an error or for its own update.
+/// each heartbeat, returning only on an error or for its own update. Before anything else, a
+/// hand-over of its own update into another binary is acted on ([`crate::handover`]): that
+/// binary is exec'd with this process's arguments, and this one never returns here.
 fn daemon(
     settings: &Settings,
     period: NonZeroU64,
@@ -425,6 +428,8 @@ fn daemon(
     watchdog: Box<dyn Watchdog>,
 ) -> Result<(), StartError> {
     let own_version = HostkeeperVersion::parse(env!("CARGO_PKG_VERSION"))?;
+    let exec = ProcessExec::new(std::env::args_os().skip(1).collect());
+    crate::handover::at_daemon_start(&settings.state_dir, &own_version.to_string(), &exec);
     note_start(settings, Platform::host().kind, own_version, &host_clock());
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
