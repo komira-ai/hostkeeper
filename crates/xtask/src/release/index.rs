@@ -1,8 +1,9 @@
 //! The release index: which package file serves each platform of one version of a service. It
 //! sits beside the packages in the channel (`{channel}/{S}/{V}/index.json`, with
 //! `{S}-{V}-{platform}.tar.zst` and its `.sigstore.json` bundle) and is a release asset of
-//! hostkeeper itself. A release holds three, the same schema each ([`Package::index_name`]):
-//! `index.json` of the hostkeeper packages, `hello-index.json` of the hello packages and
+//! hostkeeper itself. A release holds four, the same schema each ([`Package::index_name`]):
+//! `index.json` of the hostkeeper packages, `hello-index.json` of the hello packages,
+//! `mdm-index.json` of the mdm package (linux-x86_64 only) and
 //! `hello-fail-ready-index.json` of hello's failing build (`service` `hello`, `version` the
 //! release's followed by `-fail-ready`, so its files are `hello-V-fail-ready-<platform>.tar.zst`):
 //!
@@ -257,7 +258,8 @@ impl ReleaseIndex {
 
 /// The `release index --service S [--fail-ready] --version V --dir D` verb: writes
 /// `D/<index name of the package>`, the index of the packages of `package` at the release
-/// `version` in `dir`, one per platform of [`Platform::RELEASED`]. A directory that lacks the
+/// `version` in `dir`, one per platform the package is built for ([`Package::platforms`]: every
+/// platform of [`Platform::RELEASED`], linux-x86_64 alone for mdm). A directory that lacks the
 /// package of any of them is refused, naming each missing file, and no index is written: a
 /// release lists every platform it ships.
 pub(crate) fn write_index(
@@ -266,7 +268,8 @@ pub(crate) fn write_index(
     version: &Version,
 ) -> Result<Vec<String>, Error> {
     let service = package.service().name();
-    let missing: Vec<String> = Platform::RELEASED
+    let missing: Vec<String> = package
+        .platforms()
         .iter()
         .map(|&p| package.package_name(version, p))
         .filter(|file| !dir.join(file).is_file())
@@ -276,7 +279,7 @@ pub(crate) fn write_index(
         return Err(Error::Refused(missing));
     }
     let version = package.version_text(version);
-    let index = ReleaseIndex::of_dir(dir, service, &version, &Platform::RELEASED)?;
+    let index = ReleaseIndex::of_dir(dir, service, &version, package.platforms())?;
     let path = dir.join(package.index_name());
     std::fs::write(&path, index.to_json())
         .map_err(Error::io(format!("write {}", path.display())))?;

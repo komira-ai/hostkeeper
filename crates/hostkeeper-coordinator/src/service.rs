@@ -617,6 +617,10 @@ impl Coordinator {
         // rule below reads what it read while the agent resent it.
         let acking =
             verdict_file::asks(&beat) && self.features.iter().any(|f| f == verdict_file::FEATURE);
+        // The verdict of a `clear_record` is no word on a release: no rule below reads it.
+        let cleared = fleet
+            .clear_records
+            .take_verdicts(&who.host_id, legacy, &mut beat);
         let mut heard = if acking {
             let wanted = |name: &str| self.desired.get(name).map(|want| want.version);
             let (heard, superseded) =
@@ -631,7 +635,7 @@ impl Coordinator {
                     );
                 }
             }
-            heard
+            heard.into_iter().chain(cleared).collect()
         } else {
             Vec::new()
         };

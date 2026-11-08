@@ -52,12 +52,16 @@ pub enum Feature {
     /// `abort-v1`: the daemon runs the `abort` order of the gRPC route ([`crate::Verb::Abort`]),
     /// beside the order it stops. Like `install-v1`, it says what the loop takes.
     AbortV1,
+    /// `clear-record-v1`: the daemon runs the `clear_record` order of the gRPC route
+    /// ([`crate::Verb::ClearRecord`]) and reports its verdict. Like `install-v1`, it says what
+    /// the loop takes.
+    ClearRecordV1,
 }
 
 /// The features every heartbeat announces, in this order. Each names something the loop does:
-/// `install-v1` and `abort-v1` are here because [`crate::Heartbeater`] hands those orders to the
-/// executor.
-pub const ANNOUNCED: [Feature; 9] = [
+/// `install-v1`, `abort-v1` and `clear-record-v1` are here because [`crate::Heartbeater`] hands
+/// those orders to the executor.
+pub const ANNOUNCED: [Feature; 10] = [
     Feature::DeferredV1,
     Feature::HaltV1,
     Feature::HeartbeatV2,
@@ -67,6 +71,7 @@ pub const ANNOUNCED: [Feature; 9] = [
     Feature::GrpcV1,
     Feature::InstallV1,
     Feature::AbortV1,
+    Feature::ClearRecordV1,
 ];
 
 impl Feature {
@@ -82,6 +87,7 @@ impl Feature {
             Feature::GrpcV1 => "grpc-v1",
             Feature::InstallV1 => "install-v1",
             Feature::AbortV1 => "abort-v1",
+            Feature::ClearRecordV1 => "clear-record-v1",
         }
     }
 

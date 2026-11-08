@@ -129,6 +129,13 @@ path = "tests/bin/failing_daemon.rs"
 [target.'cfg(target_os = "linux")'.dependencies]
 hostkeeper-pxe = { path = "../hostkeeper-pxe" }
 
+# The `lego` and `caddy` of `tests/mdm_cert_units.rs`: copied under both names into the test's
+# tree, it records how the `mdm` package's certificate and proxy units start it. A program of
+# the tests, outside the measured set like every file under `tests/`.
+[[bin]]
+name = "mdm-units-fixture"
+path = "tests/bin/mdm_units_fixture.rs"
+
 [features]
 # The tests that run as root against the host's systemd. Only privileged.yml, pr-device.yml's copies of
 # its jobs and net-install.yml turn it on.
@@ -170,6 +177,9 @@ tokio = { workspace = true, features = ["net", "rt", "sync", "time"] }
 tonic = { workspace = true, features = ["channel"] }
 tower = { workspace = true, features = ["util"] }
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }
+# The `mdm` package's units and the drop-ins of its settings, which `tests/mdm_cert_units.rs`
+# loads into the host's systemd.
+hostkeeper-mdm-core = { path = "../hostkeeper-mdm-core" }
 # The first-boot and end-to-end tests: the attestation bundle of the fixture package (base64),
 # the test CA of the coordinator's private listener and of the release
 # channel (rcgen), the release channel's TLS server (rustls), the JSON of the operator API's replies (serde_json),

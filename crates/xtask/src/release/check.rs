@@ -8,7 +8,8 @@
 //! 3. the `.sha256` file of each package holds exactly `<sha256 of the package>  <name>` and a
 //!    line break;
 //! 4. each release index (`index.json` of the hostkeeper packages, `hello-index.json` of the
-//!    hello packages, `hello-fail-ready-index.json` of hello's failing build) is the index of the
+//!    hello packages, `hello-fail-ready-index.json` of hello's failing build, `mdm-index.json` of
+//!    the mdm package) is the index of the
 //!    packages in the directory: it reads as the index of its service at the package's version
 //!    (the release's, and for hello's failing build the release's followed by `-fail-ready`),
 //!    lists every package with its size and SHA-256, and is written canonically;
@@ -161,7 +162,11 @@ fn check_index(
     problems: &mut Vec<String>,
 ) -> Result<(), Error> {
     let index_name = package.index_name();
-    let packages = Platform::RELEASED.map(|p| package.package_name(version, p));
+    let packages: Vec<String> = package
+        .platforms()
+        .iter()
+        .map(|&p| package.package_name(version, p))
+        .collect();
     if !present.contains(index_name) | !packages.iter().all(|p| present.contains(p)) {
         return Ok(());
     }
@@ -169,7 +174,7 @@ fn check_index(
     let bytes = std::fs::read(&path).map_err(Error::io(format!("read {}", path.display())))?;
     let text = String::from_utf8_lossy(&bytes);
     let (service, version) = (package.service().name(), package.version_text(version));
-    let expected = ReleaseIndex::of_dir(dir, service, &version, &Platform::RELEASED)?;
+    let expected = ReleaseIndex::of_dir(dir, service, &version, package.platforms())?;
     match ReleaseIndex::parse(&text, service, &version) {
         Err(e) => problems.push(format!("{index_name}: {e}")),
         Ok(read) if read != expected => problems.push(format!(

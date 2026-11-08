@@ -6,8 +6,8 @@
 //! any depth, is a free string, so an order cannot carry a command, a path or a URL; the daemon
 //! finds everything else in its own configuration and in the manifest of the package whose
 //! digest verified. The verbs are those of the protobuf `Order` the loop runs: `update`, the
-//! forced update, `install`, `uninstall` and `abort`; `force_rollback` and `clear_halt` are added
-//! here when the loop runs them.
+//! forced update, `install`, `uninstall`, `abort` and `clear_record`; `force_rollback` and
+//! `clear_halt` are added here when the loop runs them.
 
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_hook::{Class, Phase};
@@ -63,6 +63,9 @@ pub enum Verb {
     /// Stop the service's running step and end its order in the halt phase. It is not an order
     /// of its own for the verdicts: the order it stops reports how it ended.
     Abort(ServiceName),
+    /// Set aside the service's step record when it does not read. It runs no update: its
+    /// verdict names the version the service runs, and it neither waits for nor ends a deferral.
+    ClearRecord(ServiceName),
 }
 
 /// One order of the coordinator.
@@ -79,16 +82,16 @@ impl Order {
     pub fn service(&self) -> &ServiceName {
         match &self.verb {
             Verb::Update(target) | Verb::Force(target) | Verb::Install(target) => &target.service,
-            Verb::Uninstall(service) | Verb::Abort(service) => service,
+            Verb::Uninstall(service) | Verb::Abort(service) | Verb::ClearRecord(service) => service,
         }
     }
 
-    /// The version and package the order runs; none for an `uninstall` and an `abort`, which
-    /// name only the service.
+    /// The version and package the order runs; none for an `uninstall`, an `abort` and a
+    /// `clear_record`, which name only the service.
     pub fn target(&self) -> Option<&Target> {
         match &self.verb {
             Verb::Update(target) | Verb::Force(target) | Verb::Install(target) => Some(target),
-            Verb::Uninstall(_) | Verb::Abort(_) => None,
+            Verb::Uninstall(_) | Verb::Abort(_) | Verb::ClearRecord(_) => None,
         }
     }
 

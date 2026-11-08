@@ -9,8 +9,12 @@
 //! - `stamp` and `check-binary` ([`check_binary`]): the `--version` text of a shipped binary
 //!   ([`contract::stamp_of`]) and the check that a built binary prints exactly it.
 //! - `package` ([`package`]): the deterministic package of a service (`--service`, hostkeeper
-//!   unless it says `hello`; for hello `--fail-ready` builds its failing build), `.tar.zst`, and
-//!   its SHA-256.
+//!   unless it says `hello` or `mdm`; for hello `--fail-ready` builds its failing build; for mdm,
+//!   linux-x86_64 only, `--archives` names the pinned archives its tools come out of),
+//!   `.tar.zst`, and its SHA-256.
+//! - `mdm-fetch` ([`mdm_fetch`]): the build-time fetch of the mdm package, each pinned archive of
+//!   its tools downloaded with `curl` over HTTPS and checked against its pin
+//!   (`crates/hostkeeper-mdm-core/pins.txt`), a mismatch kept as `<archive>.rejected`.
 //! - `nfpm-stage` ([`package::nfpm_stage`]): the pinned `gh` of one architecture, out of its
 //!   release archive checked against its pinned SHA-256, and the Sigstore trusted root, checked
 //!   and staged for the deb and the rpm.
@@ -18,8 +22,9 @@
 //!   staged `gh` and trusted root at the daemon's paths, with their modes, root's, and the
 //!   console's issue link pointing at the daemon's issue file.
 //! - `index` ([`index`]): the release index of a package, `index.json` for hostkeeper,
-//!   `hello-index.json` for hello and `hello-fail-ready-index.json` for its failing build: which
-//!   package serves each platform, refused unless it has the package of every released platform.
+//!   `hello-index.json` for hello, `hello-fail-ready-index.json` for its failing build and
+//!   `mdm-index.json` for mdm: which package serves each platform, refused unless it has the
+//!   package of every platform the package is released for.
 //! - `netboot` ([`netboot`]): `netboot.json`, the boot sets of network install for the two Linux
 //!   platforms, rendered from the committed pins (`packaging/netboot/pins.toml`), which it
 //!   refuses unless each platform has its ISO, shim, GRUB, kernel and initrd, each pinned well
@@ -48,7 +53,8 @@
 //!   version already there.
 //!
 //! The names and formats a consumer relies on are in [`contract`]. The adapters that run `git`,
-//! `gh`, `pkgbuild` and `productbuild` are in [`git`], [`github`] and [`macos_pkg`], over the [`ports::Exec`]
+//! `gh`, `pkgbuild`, `productbuild` and `curl` are in [`git`], [`github`], [`macos_pkg`] and
+//! [`mdm_fetch`], over the [`ports::Exec`]
 //! port; the only code that starts
 //! a process is `real::SystemExec`, built in [`real`] alone.
 
@@ -68,6 +74,7 @@ mod hkctl;
 mod index;
 mod locate;
 mod macos_pkg;
+mod mdm_fetch;
 mod netboot;
 #[cfg(test)]
 mod no_network;
@@ -157,7 +164,7 @@ pub(crate) enum Verb {
     },
     /// Run a binary with `--version` and refuse it unless it prints exactly the stamp of this
     /// version and commit: `<file name> X.Y.Z+<12 hex>`, for a file named `hostkeeper`,
-    /// `hostkeeper-coordinator` or `hostkeeper-mdm`.
+    /// `hostkeeper-coordinator`, `hostkeeper-mdm` or `mdm` (the mdm package's program).
     CheckBinary {
         /// The binary to run, under the name it ships with.
         binary: PathBuf,
@@ -168,9 +175,10 @@ pub(crate) enum Verb {
     },
     /// Build the package of a service for one platform, and its `.sha256`.
     Package {
-        /// The service: hostkeeper (the default) or hello. Hello's manifest and units are
+        /// The service: hostkeeper (the default), hello or mdm. Hello's manifest and units are
         /// rendered for the platform, and it builds for every platform; hostkeeper's package for
-        /// macOS has no unit.
+        /// macOS has no unit; mdm's builds for linux-x86_64 only, with the pinned tools out of
+        /// `--archives`.
         #[arg(long, value_enum, default_value_t)]
         service: Service,
         #[arg(long, value_enum)]
@@ -198,9 +206,23 @@ pub(crate) enum Verb {
         /// `packaging/sigstore/trusted_root.json`); refused for hello.
         #[arg(long)]
         trusted_root: Option<PathBuf>,
+        /// The directory of the pinned archives of the mdm package, as `release mdm-fetch`
+        /// leaves it: each is checked against its pin, and its binaries go to `bin/`. Required
+        /// for mdm; refused for hostkeeper and hello.
+        #[arg(long)]
+        archives: Option<PathBuf>,
         /// The directory the package and its `.sha256` are written to.
         #[arg(long)]
         out: PathBuf,
+    },
+    /// Download the pinned archives of the tools the mdm package carries into a directory, with
+    /// `curl` over HTTPS, and refuse any whose SHA-256 is not its pin (kept beside as
+    /// `<file>.rejected`). An archive already there with its pin's SHA-256 is kept, not
+    /// downloaded again.
+    MdmFetch {
+        /// The directory the archives go to, made if missing.
+        #[arg(long)]
+        dir: PathBuf,
     },
     /// Stage the pinned `gh` and the Sigstore trusted root for the deb and the rpm: `gh` out of
     /// its release archive, refused unless the archive has the pinned SHA-256 and `gh` is a
@@ -237,11 +259,11 @@ pub(crate) enum Verb {
         staged: PathBuf,
     },
     /// Write the release index of a service's packages of a version in a directory, one entry
-    /// per released platform, refused when the package of any is missing: `index.json` for
-    /// hostkeeper, `hello-index.json` for hello and `hello-fail-ready-index.json` for its failing
-    /// build.
+    /// per platform the package is released for (linux-x86_64 alone for mdm), refused when the
+    /// package of any is missing: `index.json` for hostkeeper, `hello-index.json` for hello,
+    /// `hello-fail-ready-index.json` for its failing build and `mdm-index.json` for mdm.
     Index {
-        /// The service: hostkeeper (the default) or hello.
+        /// The service: hostkeeper (the default), hello or mdm.
         #[arg(long, value_enum, default_value_t)]
         service: Service,
         /// Index hello's failing build (`hello-fail-ready-index.json`). Refused for hostkeeper.
@@ -544,6 +566,7 @@ fn run_with(verb: Verb, ports: &Ports<'_>) -> Result<Vec<String>, Error> {
             unit,
             fail_ready,
             trusted_root,
+            archives,
             out,
         } => package::package(
             ports.git,
@@ -556,9 +579,11 @@ fn run_with(verb: Verb, ports: &Ports<'_>) -> Result<Vec<String>, Error> {
                 unit,
                 fail_ready,
                 trusted_root,
+                archives,
                 out,
             },
         ),
+        Verb::MdmFetch { dir } => mdm_fetch::fetch(ports.download, &dir),
         Verb::MacosPkg {
             version,
             binary,
@@ -657,7 +682,7 @@ impl Adapters for Lent<'_> {
 }
 
 /// The adapters wired over one [`Exec`]: git, gh (runs, issues, releases and attestations),
-/// the `--version` of a binary, `pkgbuild` and `cargo deny`, each running its program through a copy of `exec`. The real
+/// the `--version` of a binary, `pkgbuild`, `curl` and `cargo deny`, each running its program through a copy of `exec`. The real
 /// ones (`real::connect`) are these over the process-starting `Exec`; a test wires them over a
 /// fake one.
 struct Wired<E> {
@@ -665,6 +690,7 @@ struct Wired<E> {
     gh: Gh<E>,
     version_of: VersionOf<E>,
     pkgbuild: PkgbuildCli<E>,
+    curl: mdm_fetch::CurlCli<E>,
     deny: DenyCli<E>,
 }
 
@@ -675,6 +701,7 @@ impl<E: Exec + Clone> Wired<E> {
             gh: Gh::new(exec.clone()),
             version_of: VersionOf::new(exec.clone()),
             pkgbuild: PkgbuildCli::new(exec.clone()),
+            curl: mdm_fetch::CurlCli::new(exec.clone()),
             deny: DenyCli::new(exec),
         }
     }
@@ -691,6 +718,7 @@ impl<E: Exec> Adapters for Wired<E> {
             run_version: &self.version_of,
             pkgbuild: &self.pkgbuild,
             advisories: &self.deny,
+            download: &self.curl,
         }
     }
 }

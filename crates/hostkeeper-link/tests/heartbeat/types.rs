@@ -40,7 +40,7 @@ fn an_order_cannot_carry_a_command_path_or_url() {
     let _: u64 = order_try;
     let target = match verb {
         Verb::Update(target) | Verb::Force(target) | Verb::Install(target) => target,
-        Verb::Uninstall(service) | Verb::Abort(service) => {
+        Verb::Uninstall(service) | Verb::Abort(service) | Verb::ClearRecord(service) => {
             let _: ServiceName = service;
             return;
         }

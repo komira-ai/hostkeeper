@@ -1,0 +1,43 @@
+# mdm-cert.service: the TLS certificate of the MDM's DNS name, from an ACME CA
+# over DNS-01 by lego. A unit of the mdm package, linked by hostkeeper from the
+# package's current version. It orders the first certificate: it runs only while
+# lego has none (the hook's cutover starts it, and so does mdm-cert-renew.service);
+# once one is there, mdm-cert-renew.service renews it.
+#
+# The DNS provider's credentials are read from the root-only /etc/mdm/dns.env
+# (never argv); until the operator has written that file the job does not run.
+# The ACME settings (MDM_ACME_EMAIL, MDM_ACME_SERVER, MDM_ACME_DNS_PROVIDER,
+# MDM_DNS_NAME, MDM_ACME_RESOLVERS, MDM_ACME_PROPAGATION_WAIT) come from the
+# drop-in mdm-cert.service.d/settings.conf that the package's hook writes from
+# the settings. After each run the proxy is restarted, as root, so that it
+# starts with the certificate lego wrote.
+[Unit]
+Description=mdm TLS certificate (ACME, DNS-01)
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/mdm/dns.env
+ConditionPathExistsGlob=!/var/lib/mdm/lego/certificates/*.crt
+
+[Service]
+Type=oneshot
+User=mdm
+Group=mdm
+Slice=mdm.slice
+EnvironmentFile=/etc/mdm/dns.env
+ExecStart=/var/lib/hostkeeper/packages/mdm/current/bin/lego run --accept-tos --email ${MDM_ACME_EMAIL} --server ${MDM_ACME_SERVER} --path /var/lib/mdm/lego --key-type ec256 --dns ${MDM_ACME_DNS_PROVIDER} --domains ${MDM_DNS_NAME} --dns.resolvers ${MDM_ACME_RESOLVERS} --dns.propagation.wait ${MDM_ACME_PROPAGATION_WAIT}
+ExecStartPost=+/usr/bin/systemctl restart mdm-proxy.service
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ReadWritePaths=/var/lib/mdm/lego
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX

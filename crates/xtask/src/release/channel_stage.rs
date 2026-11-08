@@ -12,7 +12,7 @@
 //! one the daemon's fetch requests. The input is a directory of a release's assets (`--from`),
 //! where the packages and their bundles carry these same file names, and the release index of the
 //! version (`--index`, `<from>/index.json` unless named: a hostkeeper release also carries
-//! `hello-index.json` and `hello-fail-ready-index.json`).
+//! `hello-index.json`, `hello-fail-ready-index.json` and `mdm-index.json`).
 //!
 //! The output is a plain directory, for any static file origin or object-store sync to serve
 //! under the daemon config's `release_channel`. This verb copies files only: it uploads nothing,

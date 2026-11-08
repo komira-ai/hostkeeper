@@ -135,6 +135,7 @@ impl Description {
             manifest: self.manifest(kind, platform, version),
             units,
             trusted_root: None,
+            binaries: Vec::new(),
         })
     }
 

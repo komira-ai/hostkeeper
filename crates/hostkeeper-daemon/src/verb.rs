@@ -110,9 +110,7 @@ pub enum Verb {
         service: ServiceName,
         halt_generation: u64,
     },
-    /// The admin socket's `ClearRecord`, and the `clear_record` case of an order, which the
-    /// executor refuses `forbidden`: this daemon does not announce `clear-record-v1`, so no
-    /// coordinator sends it one.
+    /// The admin socket's `ClearRecord`, and the `clear_record` case of an order.
     ClearRecord(ServiceName),
 }
 

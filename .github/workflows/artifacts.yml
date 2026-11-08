@@ -5,8 +5,12 @@
 # with its `.sha256`; for each Linux platform the deb and the rpm, the `hostkeeper-coordinator`
 # binary as a tarball with its SBOM and its container image (`.image.tar`, an OCI image layout),
 # and the `hostkeeper-mdm` binary (the MDM kit's, Linux-only) as a tarball with its SBOM;
+# for linux-x86_64 the package of `mdm`, the MDM server stack as a service package
+# (docs/design/two-programs.md section 6.2), whose pinned tools are fetched and checked against
+# crates/hostkeeper-mdm-core/pins.txt here (`cargo xtask release mdm-fetch`), with its `.sha256`;
 # for macos-arm64 the installer pkg of a Mac's first install; the release indexes `index.json`,
-# `hello-index.json` and `hello-fail-ready-index.json` over the three packages each;
+# `hello-index.json` and `hello-fail-ready-index.json` over the three packages each, and
+# `mdm-index.json` over the one mdm package;
 # `netboot.json`, the boot sets of network install for both Linux platforms, rendered from
 # packaging/netboot/pins.toml; `hkctl-<version>`, the command line of the coordinator, one bash
 # script for every platform generated from the protos (`cargo xtask release hkctl`); one
@@ -26,8 +30,10 @@
 #   hostkeeper-coordinator-<version>-<linux-platform>.image.tar
 #   hostkeeper-mdm-<version>-<linux-platform>.tar.gz
 #   hostkeeper-mdm-<version>-<linux-platform>.cdx.json
+#   mdm-<version>-linux-x86_64.tar.zst              mdm-<version>-linux-x86_64.tar.zst.sha256
 #   hostkeeper-<version>-macos-arm64.pkg
-#   index.json   hello-index.json   hello-fail-ready-index.json   netboot.json   SHA256SUMS
+#   index.json   hello-index.json   hello-fail-ready-index.json   mdm-index.json   netboot.json
+#   SHA256SUMS
 #   hkctl-<version>
 #   <signed file>.sigstore.json
 #
@@ -36,8 +42,8 @@
 # into the workspace (`release set-version`) and builds with RELEASE_COMMIT set to the commit, so
 # `hostkeeper --version` prints `hostkeeper X.Y.Z+<12 hex>`, `hostkeeper-coordinator --version`
 # prints `hostkeeper-coordinator X.Y.Z+<12 hex>` and `hostkeeper-mdm --version` prints
-# `hostkeeper-mdm X.Y.Z+<12 hex>`; `release check-binary` refuses a binary that prints anything
-# else. `hello` is built from the same workspace, so it carries the
+# `hostkeeper-mdm X.Y.Z+<12 hex>`, and `mdm --version`, the mdm package's program, prints
+# `mdm X.Y.Z+<12 hex>`; `release check-binary` refuses a binary that prints anything else. `hello` is built from the same workspace, so it carries the
 # release version (`hello --version` prints `hello X.Y.Z`); its failing build is named
 # `<version>-fail-ready` in its manifest and index, and its server, started with `--fail-ready`,
 # answers `/version` with that name.
@@ -292,6 +298,25 @@ jobs:
       # a host can be rolled back from it. It is released and attested like the others.
       - name: hello's failing build and its SHA-256
         run: cargo xtask release package --service hello --fail-ready --platform "$PLATFORM" --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --binary target/release/hello --out dist
+      # The mdm package, for linux-x86_64 only (its pinned tools are linux-amd64 builds): its
+      # program bin/mdm, stamped like the binaries, and the pinned servers and lego, each archive
+      # downloaded over HTTPS and checked against its pin in crates/hostkeeper-mdm-core/pins.txt
+      # by mdm-fetch, then checked again by the package verb, which takes the binaries out.
+      # Nothing downloaded is run here.
+      - name: Build mdm, the program of the mdm package
+        if: matrix.platform == 'linux-x86_64'
+        env:
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: cargo build --locked --release -p hostkeeper-mdm --bin mdm
+      - name: mdm says the version and the commit
+        if: matrix.platform == 'linux-x86_64'
+        run: cargo xtask release check-binary target/release/mdm "$RELEASE_VERSION" "$GITHUB_SHA"
+      - name: The pinned archives of the mdm package
+        if: matrix.platform == 'linux-x86_64'
+        run: cargo xtask release mdm-fetch --dir "$RUNNER_TEMP/mdm-archives"
+      - name: The mdm package and its SHA-256
+        if: matrix.platform == 'linux-x86_64'
+        run: cargo xtask release package --service mdm --platform "$PLATFORM" --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --binary target/release/mdm --archives "$RUNNER_TEMP/mdm-archives" --out dist
       # The tarballs as a host takes them: unpacked with this runner's tar, the binary in each says
       # the version and the commit, as the built one did.
       - run: mkdir "$RUNNER_TEMP/unpacked"
@@ -553,6 +578,8 @@ jobs:
         run: cargo xtask release index --service hello --version "$RELEASE_VERSION" --dir dist
       - name: The release index of hello's failing build
         run: cargo xtask release index --service hello --fail-ready --version "$RELEASE_VERSION" --dir dist
+      - name: The release index of mdm
+        run: cargo xtask release index --service mdm --version "$RELEASE_VERSION" --dir dist
       - name: The boot sets of network install
         run: cargo xtask release netboot --pins packaging/netboot/pins.toml --version "$RELEASE_VERSION" --dir dist
       - name: The command line, hkctl
@@ -576,6 +603,7 @@ jobs:
             dist/index.json
             dist/hello-index.json
             dist/hello-fail-ready-index.json
+            dist/mdm-index.json
             dist/netboot.json
             dist/hkctl-${{ needs.version.outputs.version }}
           retention-days: 90
@@ -692,6 +720,14 @@ jobs:
         env:
           BUNDLE: ${{ steps.hello-fail-ready-linux-x86_64.outputs.bundle-path }}
         run: cp "$BUNDLE" "dist/hello-${V}-fail-ready-linux-x86_64.tar.zst.sigstore.json"
+      - id: mdm-package-linux-x86_64
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/mdm-${{ needs.version.outputs.version }}-linux-x86_64.tar.zst
+      - name: Name the bundle of the mdm package for linux-x86_64
+        env:
+          BUNDLE: ${{ steps.mdm-package-linux-x86_64.outputs.bundle-path }}
+        run: cp "$BUNDLE" "dist/mdm-${V}-linux-x86_64.tar.zst.sigstore.json"
       - id: deb-linux-x86_64
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
