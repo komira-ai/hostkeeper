@@ -16,6 +16,7 @@ mod nfpm;
 mod overlay;
 mod package;
 mod package_names;
+mod pacman_scripts;
 mod script;
 mod self_update;
 mod template;

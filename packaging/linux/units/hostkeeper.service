@@ -1,7 +1,7 @@
 # The hostkeeper daemon's package unit: the unit hostkeeper's own package carries as
 # units/hostkeeper.service (.github/workflows/artifacts.yml, `release package --unit`), which
 # the package's install links in /etc/systemd/system/, where it takes the place of the
-# bootstrap unit the deb, the rpm or a boot image installed (packaging/linux/hostkeeper.service,
+# bootstrap unit a Linux package or a boot image installed (packaging/linux/hostkeeper.service,
 # docs/design/two-programs.md section 4.1). It runs as root, with no sandbox and no capability
 # bound: the daemon runs the hooks and places the units of every service of the host
 # (docs/design/hostkeeper-design.md, section 5.3). Its configuration is its flags; of the

@@ -1,5 +1,5 @@
 # The hostkeeper daemon's bootstrap unit: installed at /usr/lib/systemd/system/hostkeeper.service
-# by the deb and the rpm (packaging/linux/nfpm.yaml) and by a boot image through
+# by the deb, the rpm and the Arch package (packaging/linux/nfpm.yaml) and by a boot image through
 # packaging/linux/overlay/ (docs/design/two-programs.md, section 4.1). It is in effect only until
 # hostkeeper's own package is first installed: that install links the package unit
 # (packaging/linux/units/hostkeeper.service) in /etc/systemd/system/, which takes its place. It

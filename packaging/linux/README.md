@@ -2,7 +2,7 @@
 
 What a Linux host needs before hostkeeper can deliver anything to it: the daemon, its unit
 and its config (`docs/design/hostkeeper-design.md`, sections 4.1 and 4.6). The files here are
-the sources of a deb, an rpm and a boot-image overlay. The deb and the rpm also carry
+the sources of a deb, an rpm, an Arch package and a boot-image overlay. The three packages also carry
 `/usr/bin/hostkeeper-pxe`, the boot server of network install
 (`docs/design/network-install.md`, section 3), with no unit: it runs only when an operator
 starts it, in the foreground. Building the binaries, building a boot image, signing and
@@ -10,12 +10,12 @@ publishing the packages are not here.
 
 | file | what |
 |---|---|
-| `hostkeeper.service` | the bootstrap unit, the one the deb, the rpm and a boot image install at `/usr/lib/systemd/system/hostkeeper.service`: the daemon as root, `Type=notify`, started as `/usr/bin/hostkeeper daemon` with its paths as flags and no `ExecStartPre=`, with `Restart=always` and no start limit of its own, and restarted by a 60-second watchdog its heartbeat loop feeds (`WatchdogSec=`, four heartbeat periods); it conflicts with kbf's update agent and its root half and is ordered after them, so a handoff stops one before it starts the other |
+| `hostkeeper.service` | the bootstrap unit, the one the deb, the rpm, the Arch package and a boot image install at `/usr/lib/systemd/system/hostkeeper.service`: the daemon as root, `Type=notify`, started as `/usr/bin/hostkeeper daemon` with its paths as flags and no `ExecStartPre=`, with `Restart=always` and no start limit of its own, and restarted by a 60-second watchdog its heartbeat loop feeds (`WatchdogSec=`, four heartbeat periods); it conflicts with kbf's update agent and its root half and is ordered after them, so a handoff stops one before it starts the other |
 | `units/hostkeeper.service` | the package unit, the one hostkeeper's own package carries as `units/hostkeeper.service` and its install links in `/etc/systemd/system/`: the same keys, but it starts `current` of the binary directory of its own update, after an `ExecStartPre=-` that seeds that directory |
 | `hostkeeper.tmpfiles.conf` | the daemon's directories and their modes, as `/usr/lib/tmpfiles.d/hostkeeper.conf` |
 | `hostkeeper.toml.template` | the daemon config with a `@@NAME@@` placeholder in each value that belongs to a site |
-| `nfpm.yaml` | the deb and the rpm, for nfpm |
-| `scripts/postinstall.sh`, `scripts/preremove.sh` | the packages' scripts: make the directories, enable the unit, disable it on removal |
+| `nfpm.yaml` | the deb, the rpm and the Arch package, for nfpm |
+| `scripts/postinstall.sh`, `scripts/preremove.sh` | the packages' scripts: make the directories, enable the unit (deb and rpm only), disable it on removal (deb and rpm only) |
 | `overlay/` | the same files laid out as an image root, for a boot-image build to copy |
 
 `cargo test -p xtask --test packaging` reads every file here and checks it: the keys and
@@ -27,7 +27,7 @@ daemon's exit after its own update and agrees with the drop-in the daemon writes
 package unit is the file hostkeeper's package is built with; that the directories are the
 design's with the design's modes, that the template is refused until each placeholder is filled
 and loads once they are, that the packages carry exactly the seven files (the daemon and `hostkeeper-pxe` among them) and the console's issue
-link and no key, certificate, token or config, that `gh` and the trusted root are installed at the daemon's own paths from
+link and no key, certificate, token or config, that the two programs, `gh` and the trusted root are installed at their paths from
 where `cargo xtask release nfpm-stage` writes them, that the scripts never start the unit, and
 that the overlay equals these sources.
 
@@ -85,13 +85,17 @@ socket at its default, `/run/hostkeeper/admin.sock`, and makes the directory its
 
 ## The packages
 
-`nfpm.yaml` says how to build them: one deb and one rpm for each Linux platform of hostkeeper's
-packages, `linux-x86_64` (`amd64` for the deb, `x86_64` for the rpm) and `linux-arm64` (`arm64`,
-`aarch64`). `hostkeeper_<version>_<arch>.deb` and `hostkeeper-<version>-1.<arch>.rpm` install:
+`nfpm.yaml` says how to build them: one deb, one rpm and one Arch package for each Linux platform
+of hostkeeper's packages, `linux-x86_64` (`amd64` for the deb, `x86_64` for the rpm and the Arch
+package) and `linux-arm64` (`arm64`, `aarch64`). The two programs in them, `hostkeeper` and
+`hostkeeper-pxe`, are the static (musl) build, so a package runs on every release of its family
+and needs no library of the host. `hostkeeper_<version>_<arch>.deb`,
+`hostkeeper-<version>-1.<arch>.rpm` and `hostkeeper-<version>-1-<arch>.pkg.tar.zst` install:
 
 | path | mode |
 |---|---|
 | `/usr/bin/hostkeeper` | 0755 |
+| `/usr/bin/hostkeeper-pxe` | 0755 |
 | `/usr/lib/systemd/system/hostkeeper.service` (the bootstrap unit) | 0644 |
 | `/usr/lib/tmpfiles.d/hostkeeper.conf` | 0644 |
 | `/usr/share/hostkeeper/hostkeeper.toml.template` | 0644 |
@@ -101,9 +105,13 @@ packages, `linux-x86_64` (`amd64` for the deb, `x86_64` for the rpm) and `linux-
 all owned by root. The last two are what the daemon checks every package's attestation with: a
 pinned `gh` (the distribution's own may have no `gh attestation`) and the Sigstore trusted root
 captured when the package was built. Before nfpm runs, `cargo xtask release nfpm-stage` checks
-the `gh` archive against its pin and writes both into `target/nfpm/`; where they come from, how
+that each program of `--binaries` is a static ELF of the architecture, checks the `gh` archive
+against its pin, and writes the two programs, `gh` and the trusted root into `target/nfpm/`;
+`cargo xtask release check-linux-pkg <package> --staged target/nfpm` then reads each built
+package back and refuses a program that has an interpreter or a NEEDED entry (a dynamic
+program) and any declared dependency, besides the files and the link below. Where they come from, how
 the pin is bumped and what a stale trusted root does are in
-`docs/deploy/verify-a-release.md`, "What the deb and the rpm check packages with".
+`docs/deploy/verify-a-release.md`, "What the Linux packages check packages with".
 
 The packages also install one link, `/etc/issue.d/hostkeeper.issue`, to
 `/run/hostkeeper/enrollment.issue`: the console's issue file, which the daemon writes after each
@@ -112,14 +120,21 @@ prompt of the machine's console shows the key hash to check before approving
 ([docs/operations/enrollment.md](../../docs/operations/enrollment.md#check-the-key-hash)). The
 link points at nothing until the daemon first writes the file.
 
-On a first install the post-install script makes the directories of `hostkeeper.conf` and
-enables the unit. It does not start it: the daemon first runs at the next
+On a first install of the deb or the rpm the post-install script makes the directories of
+`hostkeeper.conf` and enables the unit. It does not start it: the daemon first runs at the next
 boot, or when the operator runs `systemctl start hostkeeper.service`, from the copy of
 `/usr/bin/hostkeeper` its seed puts in the binary directory (above). The package unit
-(`units/hostkeeper.service`) is not installed by the deb or the rpm; hostkeeper's own package
+(`units/hostkeeper.service`) is not installed by any of the three packages; hostkeeper's own package
 brings it. An upgrade leaves the unit
 enabled or disabled as it was. Removing the package disables the unit; it does not stop a
 running daemon, and it removes none of the daemon's directories.
+
+The Arch package is installed with `pacman -U hostkeeper-<version>-1-<arch>.pkg.tar.zst`. pacman
+passes the scripts only the package's version, so they make the directories and reload systemd
+and do not enable the unit, and removing the package runs nothing: the operator runs
+`systemctl enable hostkeeper.service` (and `systemctl disable hostkeeper.service` before removing
+it). Arch's `systemd` package runs the tmpfiles rules and the reload on install and upgrade as
+well.
 
 The packages do not place `/etc/hostkeeper/hostkeeper.toml`, so an upgrade never replaces a
 host's config. Whoever installs the package places it:
