@@ -79,7 +79,7 @@ use crate::http::Surface;
 use crate::inventory::RecordWindow;
 use crate::listen::{CLIENT_PATIENCE, Listener, MAX_CONNECTIONS, accept_tcp, reload_every, serve};
 use crate::lock::{FileLock, LockError, LockGuard, StateLock};
-use crate::mdm::{Mdm, MdmFlags};
+use crate::mdm::{Devices, Mdm, MdmFlags};
 use crate::ops::OpsStore;
 use crate::service::{Clock, Coordinator};
 use crate::services::Services;
@@ -152,6 +152,9 @@ pub enum Command {
 
 /// The flags of `serve`.
 #[derive(Clone, Debug, Args)]
+// The store of the enrollment and the MDM gate's records: the directory or the database (which
+// refuses the directory beside it, naming it, at start).
+#[group(id = "records_store", args = ["enrollment_dir", "database_dsn_file"], multiple = true)]
 pub struct Serve {
     /// Where updaters dial (mutual TLS).
     #[arg(long)]
@@ -547,6 +550,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         marker,
         held,
         records,
+        devices,
     } = state::open_store(flags, legacy, lock, &oidc_clock)?;
     let verifier = Verifier::new(
         oidc,
@@ -614,12 +618,17 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
                 .map_or(DEFAULT_MAX_PENDING, |max| {
                     usize::try_from(max).unwrap_or(usize::MAX)
                 });
-            // clap holds the MDM gate's flags to --enrollment-dir, where its device records are.
-            let mdm = match &store {
-                StoreAt::Dir(dir) => {
-                    Mdm::open(&flags.mdm, dir, Arc::new(SystemClock), os_random())?
+            // The gate's device records are kept with the enrollment store: in its directory, or
+            // in the database, opened with it when the gate's flags are given.
+            let devices = match &store {
+                StoreAt::Dir(dir) => Some(Devices::Files(dir)),
+                StoreAt::Records(_) => devices.map(Devices::Store),
+            };
+            let mdm = match devices {
+                Some(devices) => {
+                    Mdm::open(&flags.mdm, devices, Arc::new(SystemClock), os_random())?
                 }
-                StoreAt::Records(_) => None,
+                None => None,
             };
             let enrollment = setup(
                 Arc::new(RealFs),

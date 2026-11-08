@@ -390,11 +390,14 @@ authentication as `nanohub`; the answer is NanoMDM's `APIResult` JSON. Because t
 signed, the gate reads a result only for a command UUID it sent that device and is still waiting
 on. Its tests read NanoMDM's recorded payloads (`crates/hostkeeper-mdm-gate/tests/fixtures/nanohub/`).
 
-The device record is durable, one per enrollment id, behind the gate's `DeviceStore` (**Built**).
-While the coordinator's state is files, it is a file, `<--enrollment-dir>/mdm-devices/<enrollment
-id>.pb`, which the coordinator's backup copies with the enrollment store. Once the Postgres store is
-built (task C3 of [coordinator-storage.md](coordinator-storage.md)), it is a row of the table
-`mdm_devices` that M8's migration adds there, as a second `DeviceStore`; the gate does not change. It holds the enrollment id, serial,
+The device record is durable, one per enrollment id, behind the gate's `DeviceStore` (**Built**),
+and the gate runs on either store of the coordinator. On the file store it is a file,
+`<--enrollment-dir>/mdm-devices/<enrollment id>.pb`, which the coordinator's backup copies with the
+enrollment store. On the database store (`--database-dsn-file`,
+[coordinator-storage.md](coordinator-storage.md) section 3.6) it is a row of the table
+`mdm_devices`, migration `0005`, holding the same bytes as the file (**Built**:
+`crates/hostkeeper-coordinator/src/store/postgres/devices.rs`); the gate does not change, and both
+stores pass the one case list of `crates/hostkeeper-mdm-gate/src/conformance.rs`. It holds the enrollment id, serial,
 enrolled, supervised, ADE, user-approved, the times of the last check-in, and the commands sent
 and not answered. The config profile's state and the last nonce (when it was issued, for which request, its pushes
 and its removal) are fields 18 and 19 of the record, added by M12 to schema 1 so the release
@@ -903,7 +906,7 @@ pull request.
 | M6a | komira-ai/kbf: freeze notes; delete `kbf-mdm`, `kbf-mdm-api` and their client in `kbf-server`; later, after M7, delete `mdm-core`, `host-step`, `mdm-host` and `kbf-deploy mdm` | M5 | S |
 | M6b | komira-ai/jobscheduler: after M7, delete `js-mdm-core`, `js-host-step`, `js-mdm` and their release workflow, release plan, test and coverage-baseline entries, with a pointer to hostkeeper | M7 | S |
 | M7 | Held, run by the owner of the MDM host: the read-only check of the live state, `migrate --apply`, `verify`, `dep define-profile`; the DNS record (section 9); the ABM checks (question Q2) | M5 | S |
-| M8 | The gate's device side: NanoHUB client (loopback, API key file), webhook listener on loopback, durable device records, `DeviceInformation` and `SecurityInfo`, the `DeviceState` implementation; coordinator flags `--mdm-api-url`, `--mdm-api-key-file`, `--mdm-webhook-listen`; `Mdm.ListDevices` in the operator API and its generated CLI verb; `docs/enrollment-coordinator.md` no longer says the gate is outside the coordinator; the table `mdm_devices` by its own migration, once C3 is built. **Built**: `crates/hostkeeper-mdm-gate`, wired in by `crates/hostkeeper-coordinator/src/mdm.rs`, its records files behind `DeviceStore` until the table is | M1; C3 of coordinator-storage.md for the table | L |
+| M8 | The gate's device side: NanoHUB client (loopback, API key file), webhook listener on loopback, durable device records, `DeviceInformation` and `SecurityInfo`, the `DeviceState` implementation; coordinator flags `--mdm-api-url`, `--mdm-api-key-file`, `--mdm-webhook-listen`; `Mdm.ListDevices` in the operator API and its generated CLI verb; `docs/enrollment-coordinator.md` no longer says the gate is outside the coordinator; the table `mdm_devices` by its own migration, once C3 is built. **Built**: `crates/hostkeeper-mdm-gate`, wired in by `crates/hostkeeper-coordinator/src/mdm.rs`, its records files of the file store or rows of the table `mdm_devices` (migration `0005`) behind `DeviceStore` | M1; C3 of coordinator-storage.md for the table | L |
 | M9 | Coordinator: the nonce's `request_id` (an added store field), `nonce_wrong_request`, the replacement of a wiped Mac's own host id, and the allowlist entry's services assigned at a nonce approval as at an operator's; `docs/enrollment-coordinator.md` and `docs/operations/enrollment.md` | M1 | M |
 | M10 | Pkg: the `productbuild` distribution layer, the `mac-config` verb, the three-command postinstall, `check-macos-pkg`, the `plist` dependency comment, `docs/macos.md` | M1 | M |
 | M11 | Device test of pkg signing (section 7.2) on one enrolled Mac; the results are written into this document, and they decide M15. **Built**: the kit and its runbook (section 7.2); the run waits for the Mac | M7, M8, M10 | S |
