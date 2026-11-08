@@ -89,23 +89,25 @@ fn gone(path: &Path) -> Vec<Event> {
 }
 
 /// What removing the units of a Linux host that has all of them writes, in order: the drop-in, its
-/// emptied directory, the fallback unit, then one `daemon-reload`.
+/// emptied directory, one `daemon-reload`, then the fallback unit.
 fn linux_removal() -> Vec<Event> {
     let mut wanted = gone(&dropin());
     wanted.push(Event::Fs(FsWrite::RemoveDir(dropin_dir())));
     wanted.push(Event::Fs(FsWrite::SyncDir(units())));
-    wanted.extend(gone(&fallback_unit_path()));
     wanted.push(Event::Unit(UnitCall::DaemonReload));
+    wanted.extend(gone(&fallback_unit_path()));
     wanted
 }
 
 /// The design's named test for the daemon side of the fallback files. Catches a start that leaves
 /// the fallback unit or its drop-in standing beside a hand-over, one that removes the unit before
-/// the drop-in whose `OnFailure=` names it, one that does not tell systemd, or one that tells it
-/// more than once: on Linux the drop-in goes first, then its emptied directory, then the fallback
-/// unit, each durably, then one `daemon-reload`; the second start finds nothing and does nothing.
+/// the drop-in whose `OnFailure=` names it, one that removes the unit before systemd is told (so a
+/// failed reload would leave nothing for the next start to retry), one that does not tell systemd,
+/// or one that tells it more than once: on Linux the drop-in goes first, then its emptied
+/// directory, each durably, then one `daemon-reload`, then the fallback unit, durably; the second
+/// start finds nothing and does nothing.
 #[test]
-fn on_linux_the_dropin_goes_before_the_fallback_unit_then_systemd_reloads_once() {
+fn on_linux_the_dropin_goes_then_systemd_reloads_once_then_the_fallback_unit_goes() {
     let rig = Rig::new("self-units-linux");
     armed_linux(&rig);
     let daemon = rig.daemon();
@@ -154,8 +156,8 @@ fn only_the_files_that_are_there_are_removed_and_a_directory_with_another_dropin
         removed.expect("removed"),
         Removed::Gone(vec![fallback_unit_path()])
     );
-    let mut wanted = gone(&fallback_unit_path());
-    wanted.push(Event::Unit(UnitCall::DaemonReload));
+    let mut wanted = vec![Event::Unit(UnitCall::DaemonReload)];
+    wanted.extend(gone(&fallback_unit_path()));
     assert_eq!(rig.placed_log.events(), wanted);
 
     let rig = Rig::new("self-units-no-fallback-unit");
@@ -218,11 +220,12 @@ fn on_macos_a_bootout_that_fails_is_the_error_and_the_plist_stays() {
     );
 }
 
-/// Catches a failed reload being hidden, or repeated at every later start: the error names the
-/// files removed and the refusal; the files stay removed; and the next start, finding none,
-/// removes nothing and does not reload.
+/// Catches a failed reload being hidden, or lost: the error names the files removed (the drop-in
+/// and its directory) and the refusal; those stay removed; the fallback unit is still there, so
+/// the next start reloads before it removes it; and the start after that, finding none, removes
+/// nothing and does not reload.
 #[test]
-fn a_failed_reload_is_the_error_and_the_files_stay_removed() {
+fn a_failed_reload_is_the_error_and_the_next_start_reloads_again() {
     let rig = Rig::new("self-units-reload-fails");
     armed_linux(&rig);
     rig.units.fail_reload();
@@ -235,16 +238,27 @@ fn a_failed_reload_is_the_error_and_the_files_stay_removed() {
         format!(
             "{:?} were removed, and the service manager could not be told: \
              DaemonReload failed: the fake fails this call",
-            [dropin(), dropin_dir(), fallback_unit_path()]
+            [dropin(), dropin_dir()]
         )
     );
-    assert!(!rig.there(dropin()) & !rig.there(fallback_unit_path()));
+    assert!(!rig.there(dropin()) & rig.there(fallback_unit_path()));
 
     rig.placed_log.clear();
     let working = Arc::new(FakeUnitControl::new(rig.placed_log.clone()));
     let daemon = rig.daemon_with(rig.placed_fs.clone(), working);
     let again = daemon.remove_self_units(PlatformKind::Linux);
-    assert_eq!(again.expect("removed"), Removed::Unchanged);
+    assert_eq!(
+        again.expect("removed"),
+        Removed::Gone(vec![fallback_unit_path()])
+    );
+    let mut wanted = vec![Event::Unit(UnitCall::DaemonReload)];
+    wanted.extend(gone(&fallback_unit_path()));
+    assert_eq!(rig.placed_log.events(), wanted);
+    assert!(!rig.there(fallback_unit_path()));
+
+    rig.placed_log.clear();
+    let third = daemon.remove_self_units(PlatformKind::Linux);
+    assert_eq!(third.expect("removed"), Removed::Unchanged);
     assert_eq!(rig.placed_log.events(), []);
 }
 
@@ -325,13 +339,53 @@ fn a_removal_or_read_that_fails_is_the_error_and_nothing_is_reloaded() {
         "{error:?}"
     );
     assert!(!rig.there(dropin()) & rig.there(fallback_unit_path()));
+    assert!(
+        !rig.placed_log
+            .events()
+            .contains(&Event::Unit(UnitCall::DaemonReload))
+    );
+
+    // The fallback unit cannot be looked up: the error names it, and nothing is reloaded.
+    let rig_unit = Rig::new("self-units-unit-read-fails");
+    armed_linux(&rig_unit);
+    // Reads, in order: the drop-in's lookup, the listing of its directory, the fallback unit's.
+    let unit_fails = Arc::new(
+        FaultFs::new(rig_unit.scratch.path(), rig_unit.placed_log.clone()).failing_read(3, false),
+    );
+    let error = rig_unit
+        .daemon_with(unit_fails, rig_unit.units.clone())
+        .remove_self_units(PlatformKind::Linux)
+        .expect_err("the lookup fails");
+    assert!(
+        matches!(&error, SelfUnitsError::Io { path, .. } if *path == fallback_unit_path()),
+        "{error:?}"
+    );
+    assert!(!rig_unit.there(dropin()) & rig_unit.there(fallback_unit_path()));
+    assert!(
+        !rig_unit
+            .placed_log
+            .events()
+            .contains(&Event::Unit(UnitCall::DaemonReload))
+    );
+
+    // The next start finds the fallback unit, so it reloads before it removes it.
+    rig.placed_log.clear();
+    let retried = rig.daemon().remove_self_units(PlatformKind::Linux);
+    assert_eq!(
+        retried.expect("removed"),
+        Removed::Gone(vec![fallback_unit_path()])
+    );
+    let mut wanted = vec![Event::Unit(UnitCall::DaemonReload)];
+    wanted.extend(gone(&fallback_unit_path()));
+    assert_eq!(rig.placed_log.events(), wanted);
 }
 
 /// Catches a failure of any one durable step of a removal being taken for success, or the removals
 /// after it going on: on Linux the six writes of a full removal (the drop-in and its directory's
 /// sync, the directory and the unit directory's sync, the fallback unit and its sync) each fail in
-/// turn, and each is the error naming the path it was working on, with nothing reloaded; on macOS
-/// the two writes of the plist's removal do the same.
+/// turn, and each is the error naming the path it was working on; a failure among the first four
+/// comes before the reload and reloads nothing, one of the last two comes after the one reload;
+/// on macOS the two writes of the plist's removal do the same.
 #[test]
 fn each_write_of_a_removal_that_fails_is_the_error_naming_its_path() {
     let linux = [
@@ -358,12 +412,13 @@ fn each_write_of_a_removal_that_fails_is_the_error_naming_its_path() {
             matches!(&error, SelfUnitsError::Io { path: at, .. } if *at == path),
             "write {n}: {error:?}"
         );
-        assert!(
-            !rig.placed_log
-                .events()
-                .contains(&Event::Unit(UnitCall::DaemonReload)),
-            "write {n}"
-        );
+        let reloads = rig
+            .placed_log
+            .events()
+            .iter()
+            .filter(|event| **event == Event::Unit(UnitCall::DaemonReload))
+            .count();
+        assert_eq!(reloads, usize::from(n > 4), "write {n}");
     }
     for n in 1..=2 {
         let rig = Rig::new(&format!("self-units-macos-write-{n}"));

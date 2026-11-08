@@ -11,13 +11,15 @@
 //! the previous binary back when the new one could not start. The hand-over has no unit and no
 //! job: the old binary execs the new one, three tries ([`crate::handover`]), so the two must
 //! never be armed at once. The daemon removes what it finds at every start, once it is ready
-//! ([`Daemon::remove_self_units`], [`remove`]), the drop-in first so that `OnFailure=` never names
-//! a unit that is not there, and then tells the service manager once: `daemon-reload` on Linux
-//! (without the drop-in the unit has no start limit again, and a daemon that cannot start is
-//! restarted every second); on macOS the job is booted out ([`UnitControl::stop_unit`]) before its
-//! plist is removed, since the launchd unit control's reload looks only at the links hostkeeper
-//! placed, never at a plain file. A start that finds none of them removes nothing and tells the
-//! service manager nothing.
+//! ([`Daemon::remove_self_units`], [`remove`]). On Linux the drop-in goes first, so that
+//! `OnFailure=` never names a unit that is not there; then systemd is told once
+//! (`daemon-reload`: without the drop-in the unit has no start limit again, and a daemon that
+//! cannot start is restarted every second); and only then the fallback unit goes. So a start
+//! whose reload fails, or that fails before it, leaves the fallback unit on disk, and the next
+//! start, finding it, reloads again before it removes it: a reload is never lost. On macOS the job
+//! is booted out ([`UnitControl::stop_unit`]) before its plist is removed, since the launchd unit
+//! control's reload looks only at the links hostkeeper placed, never at a plain file. A start
+//! that finds none of them removes nothing and tells the service manager nothing.
 //!
 //! A file that cannot be removed, or a service manager that cannot be told, is an error the
 //! caller logs as an alert ([`ALERT_SELF_UNITS`]) and answers every self-update `busy` for
@@ -52,7 +54,8 @@ pub const ALERT_SELF_UNITS: &str = "self_update_units";
 pub enum Removed {
     /// None of the files was there: nothing was removed, and the service manager was not told.
     Unchanged,
-    /// These paths were removed, in this order, and the service manager was told once.
+    /// These paths were removed, in this order, and the service manager was told once (on Linux
+    /// before the fallback unit was removed).
     Gone(Vec<PathBuf>),
 }
 
@@ -66,8 +69,9 @@ pub enum SelfUnitsError {
         #[source]
         source: io::Error,
     },
-    /// The service manager could not be told: on Linux after `removed` were removed, on macOS
-    /// (`removed` empty) before the job's plist was.
+    /// The service manager could not be told: on Linux after `removed` (the drop-in and its
+    /// directory, never the fallback unit) were removed, on macOS (`removed` empty) before the
+    /// job's plist was.
     #[error("{removed:?} were removed, and the service manager could not be told: {source}")]
     NotTold {
         removed: Vec<PathBuf>,
@@ -83,8 +87,8 @@ pub fn fallback_label() -> String {
 }
 
 /// Removes what the releases before the hand-over wrote on a host of `kind` whose unit directory
-/// is `unit_dir`, through `fs`, in the module's order, then tells the service manager through
-/// `units` when anything was there.
+/// is `unit_dir`, through `fs`, in the module's order, telling the service manager through `units`
+/// once when anything was there.
 pub fn remove(
     kind: PlatformKind,
     unit_dir: &Path,
@@ -116,17 +120,27 @@ fn remove_linux(
         fs.sync_dir(unit_dir).map_err(at)?;
         gone.push(dropin_dir.clone());
     }
-    take(fs, &unit_dir.join(FALLBACK_UNIT), unit_dir, &mut gone)?;
-    if gone.is_empty() {
+    let unit = unit_dir.join(FALLBACK_UNIT);
+    let unit_there = fs
+        .kind(&unit)
+        .map_err(|source| SelfUnitsError::Io {
+            path: unit.clone(),
+            source,
+        })?
+        .is_some();
+    if gone.is_empty() & !unit_there {
         return Ok(Removed::Unchanged);
     }
-    match units.daemon_reload() {
-        Ok(()) => Ok(Removed::Gone(gone)),
-        Err(source) => Err(SelfUnitsError::NotTold {
+    // Told before the fallback unit goes: a reload that fails leaves the unit for the next start,
+    // which reloads again.
+    if let Err(source) = units.daemon_reload() {
+        return Err(SelfUnitsError::NotTold {
             removed: gone,
             source,
-        }),
+        });
     }
+    take(fs, &unit, unit_dir, &mut gone)?;
+    Ok(Removed::Gone(gone))
 }
 
 fn remove_macos(

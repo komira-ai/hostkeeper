@@ -170,9 +170,9 @@ admin socket, until an update of hostkeeper itself asks it to exit so that its u
 new binary. This build fetches, verifies and unpacks packages, runs each step of a hook in a
 transient systemd unit of its own (the hook's standard error goes to the daemon's journal, under
 the unit's name), stops, starts and reloads units through `systemctl`, and observes each
-service for `Status`. Its launcher also runs the additive steps (`[hook] boot`, `uninstall`) and
-the self-update protocol probe, each in a transient unit of its own (on a Mac each step, additive
-step and probe is a launchd job, see [macOS](docs/macos.md)). Once the host is enrolled, its
+service for `Status`. Its launcher also runs the additive steps (`[hook] boot`, `uninstall`), each
+in a transient unit of its own (on a Mac each step and additive step is a launchd job, see
+[macOS](docs/macos.md)). Once the host is enrolled, its
 heartbeats go to the
 config's `coordinator` over mutual TLS, pinned to `ca_sha256` (JSON, then gRPC once the coordinator
 advertises it), and the coordinator's orders come back in the replies.

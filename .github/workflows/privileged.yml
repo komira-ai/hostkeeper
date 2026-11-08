@@ -5,9 +5,10 @@
 # meet the real thing: the step launcher's transient units and their bound, the dead-man's stop
 # by name, the observer's systemctl and /proc adapters, the unit control's systemctl
 # (daemon-reload, start, stop, is-active), hostkeeper's update of itself as a unit made of
-# packaging/linux/units/hostkeeper.service (and, for the bootstrap start, packaging/linux/hostkeeper.service) with its drop-in and fallback unit (the restart into the
-# new binary, the start limit, OnFailure=, the fallback's flip back, the settle at start, a
-# SIGKILL before and after the switch while the update waits for its restart), and, in
+# packaging/linux/units/hostkeeper.service (and, for the bootstrap start, packaging/linux/hostkeeper.service) by the hand-over (the
+# restart into the old binary, which execs the new one, the settle at the new binary's start,
+# three starts that do not settle falling back to the old one, a SIGKILL before and after the
+# exec while the update waits for its restart), and, in
 # tierstore_shaped.rs, the whole update path: the real daemon under a Type=notify unit and the
 # real coordinator in process update a tierstore-shaped package fetched from a loopback release
 # channel, checked by the pinned gh against a test trust root, unpacked, switched and run by its
@@ -20,12 +21,13 @@
 # start, and this build updating to itself under a newer version name; on the Mac the daemon started as a
 # launchd job and answering on its admin socket, a hook step as a launchd job stopped at its
 # bound, the observer's launchd and proc_pidpath adapters, and the package check's codesign and
-# quarantine verdicts, the probe of a new binary's self-update protocol as a launchd job, and in
+# quarantine verdicts, and in
 # device_mac_e2e.rs hello's macOS package installed, updated, rolled back and uninstalled by the
 # real daemon and coordinator, its plists linked into /Library/LaunchDaemons and loaded by
-# launchd, in device_mac_selfupdate.rs hostkeeper's update of itself under launchd (the probe of
-# the new binary, the switch, the clean exit, launchd starting the new binary, the settle at its
-# start, and an install of the running version with no probe and no restart), and in
+# launchd, in device_mac_selfupdate.rs hostkeeper's update of itself under launchd (the
+# hand-over, the clean exit, launchd starting the old binary, which execs the new one, the settle
+# at its start, a new binary that cannot start fallen back from, and an install of the running
+# version with no restart), and in
 # unpack_mac.rs a package with read-only
 # directories unpacked by the production unpacker, once as the runner's own user and once as
 # root. In the job first-boot the programs themselves
@@ -304,7 +306,8 @@ jobs:
   # and uninstalled by the real daemon under launchd, ordered by the real coordinator in process
   # and fetched from a loopback release channel checked by the pinned gh against a test trust
   # root, and, in device_mac_selfupdate.rs, hostkeeper updating itself from one version to the
-  # next as a launchd job, the new binary probed through the launcher. The tests print what they
+  # next as a launchd job by the hand-over, and falling back from a next binary that cannot
+  # start. The tests print what they
   # find (the proc_pidpath table, the verdicts of codesign, the daemon's Status) to the log, and a
   # failing end-to-end test what the Mac held.
   macos-device:
