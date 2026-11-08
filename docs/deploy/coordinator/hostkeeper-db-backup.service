@@ -1,0 +1,31 @@
+# One backup of the coordinator's database (docs/design/coordinator-storage.md, section 10): a
+# `pg_dump --format=custom` of the database `hostkeeper`, taken over the postgres container's own
+# socket while the coordinator runs (a dump is one consistent snapshot), into
+# /var/lib/hostkeeper-db-backup, which keeps the newest 28 dumps: a week, at one every six hours.
+# hostkeeper-db-backup.timer starts it; README.md beside this file is the runbook.
+#
+# `xtask db-backup` names each dump hostkeeper-db-<n>.dump, one past the highest there, writes it
+# with mode 0600, and keeps it only when the command succeeded and wrote something; only then does
+# it remove the oldest beyond --keep, so failing runs never remove the good dumps.
+#
+# Install:
+#   - the xtask binary of a hostkeeper checkout (`cargo build --release -p xtask`) as
+#     /usr/local/libexec/hostkeeper/xtask;
+#   - the compose deployment in /srv/hostkeeper-coordinator (README.md), with the postgres service;
+#   - this file and the timer in /etc/systemd/system;
+# then `systemctl enable --now hostkeeper-db-backup.timer`. It runs as root, which the docker
+# command needs. Copy /var/lib/hostkeeper-db-backup off the machine, as for the coordinator's other
+# backups.
+[Unit]
+Description=Dump the coordinator's database into /var/lib/hostkeeper-db-backup
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+StateDirectory=hostkeeper-db-backup
+StateDirectoryMode=0700
+UMask=0077
+ExecStart=/usr/local/libexec/hostkeeper/xtask db-backup --into /var/lib/hostkeeper-db-backup --keep 28 -- /usr/bin/docker compose --project-directory /srv/hostkeeper-coordinator --profile postgres exec -T postgres pg_dump --format=custom --username=hostkeeper --dbname=hostkeeper
+NoNewPrivileges=yes
+PrivateTmp=yes

@@ -99,6 +99,9 @@ hyper = { workspace = true, features = ["client"] }
 plist.workspace = true
 # The descriptors of the enrollment calls, read in their tests.
 prost-types.workspace = true
+# The compose file of the deployment (docs/deploy/coordinator/compose.yaml), whose coordinator
+# command the deployment test (tests/deploy.rs) starts, read with the workflow lint's YAML reader.
+saphyr-parser.workspace = true
 rustls = { workspace = true, features = ["tls12"] }
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "test-util", "time"] }
 
