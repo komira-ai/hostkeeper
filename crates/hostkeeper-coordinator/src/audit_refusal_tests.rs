@@ -65,7 +65,7 @@ fn d1_beat() -> hostkeeper_wire::wire::Heartbeat {
 /// A rig whose coordinator cannot append to its audit file while the flag answered is set (it
 /// starts set): `d1` heard, 1.0 and 2.0 of `web` registered and 2.0 desired, and one hold of
 /// `db` on `d1` made, audited, before the disk filled.
-async fn full_disk(test: &str) -> (Rig, Arc<AtomicBool>) {
+pub(crate) async fn full_disk(test: &str) -> (Rig, Arc<AtomicBool>) {
     let mut rig = rig(test, "");
     ask(&rig, "d1", DAEMON, d1_beat());
     set(&rig, WEB, "1.0", 1).await;

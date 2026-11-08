@@ -2,7 +2,8 @@
 //! [`Verb`] and hands it to the verb's module under `verbs/`, which answers with a [`Reply`].
 //! [`Daemon::status`] reports what the daemon holds for each service. [`Daemon::abort`] and
 //! [`Daemon::clear_record`] are also the admin socket's; [`Daemon::clear_halt`] is the
-//! coordinator's alone, and `clear_record` is never a coordinator's.
+//! coordinator's alone. This daemon runs `clear_record` only for the admin socket: it does not
+//! announce `clear-record-v1`, and refuses an order of that verb `forbidden`.
 //!
 //! The executor only dispatches: each verb is one module with one function taking the shared
 //! [`Ctx`] and its typed arguments, so that a later verb fills one file and one arm.
@@ -765,10 +766,11 @@ impl Daemon {
                 service,
                 halt_generation,
             } => verbs::clear_halt::run(ctx, service, halt_generation),
-            // The admin socket's alone: refused before any lock is taken or anything read.
+            // Run only for the admin socket: an order of it is refused before any lock is taken
+            // or anything read, as this daemon does not announce `clear-record-v1`.
             Verb::ClearRecord(service) => Reply::refused(
                 Refusal::Forbidden,
-                format!("`clear_record` of {service} is the admin socket's, not an order's"),
+                format!("`clear_record` of {service} is not run from an order by this daemon"),
             ),
         }
     }

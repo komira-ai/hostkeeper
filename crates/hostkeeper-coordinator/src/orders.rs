@@ -1,19 +1,21 @@
 //! The typed orders a heartbeat answer carries on a transport that carries them: the
 //! operator's, which go instead of the rollout gate's update (an `abort` an operator queued,
-//! `Hosts.Abort`, and the `force` of a standing force, [`crate::force`]); the gate's update
+//! `Hosts.Abort`, a `clear_record` one queued, `Hosts.ClearRecord` ([`crate::clear_record`]),
+//! and the `force` of a standing force, [`crate::force`]); the gate's update
 //! itself, with the terms the JSON answer carries ([`Order::Update`]); and the gate's own
 //! `install` and `uninstall` ([`crate::decide`]).
 //!
 //! They go only over a transport that carries typed orders
 //! ([`crate::service::Coordinator::heartbeat_with_orders`], the `Order` of
 //! `hostkeeper.agent.v1`), and only to a daemon that announced the order's feature: [`ABORT_FEATURE`]
-//! for an abort, [`crate::force::FEATURE`] for a force, [`INSTALL_FEATURE`] for an install or an
-//! uninstall. The JSON heartbeat route carries none of the operator's orders, an install or an
-//! uninstall, so its answers never name them, and an abort queued for a host that cannot be sent
-//! it waits. An abort and a force take no update slot; an install and an uninstall take it as an
-//! update does.
+//! for an abort, [`crate::clear_record::FEATURE`] for a clear-record, [`crate::force::FEATURE`]
+//! for a force, [`INSTALL_FEATURE`] for an install or an uninstall. The JSON heartbeat route
+//! carries none of the operator's orders, an install or an uninstall, so its answers never name
+//! them, and an abort or a clear-record queued for a host that cannot be sent it waits. An
+//! abort, a clear-record and a force take no update slot; an install and an uninstall take it as
+//! an update does.
 //!
-//! An abort is sent once: it is taken from the queue when it is answered. A force's order goes
+//! An abort and a clear-record are each sent once: taken from the queue when answered. A force's order goes
 //! to each host the force orders at every heartbeat until the host runs the version, is running
 //! the force (it reports updating to the version) or reported a verdict of the force's order id;
 //! so a lost answer is sent again, and a host that reported the force failed is not ordered
@@ -85,6 +87,14 @@ pub enum Order {
         /// The order's id: `abort-<n>`, the number of its audit entry.
         order_id: String,
     },
+    /// Set aside the service's step record when it does not read.
+    ClearRecord {
+        /// The service.
+        service: String,
+        /// The order's id: `clear-record-<n>`, the number of its audit entry
+        /// ([`crate::clear_record::order_id`]).
+        order_id: String,
+    },
     /// Hookless: stop the service's units, switch to the version, link, start them, report.
     Force {
         /// The service.
@@ -134,8 +144,8 @@ pub enum Order {
 
 impl Order {
     /// The order as `hostkeeper.agent.v1` says it: the verb and its typed arguments, the order
-    /// id, and the try (the first, for an `abort`, which the daemon keys by its own order id and
-    /// not by the service's step record).
+    /// id, and the try (the first, for an `abort` and a `clear_record`, which the daemon keys by
+    /// their own order id and not by the service's step record).
     #[must_use]
     pub fn to_proto(&self) -> agent::Order {
         let (order_id, order_try, verb) = match self {
@@ -160,6 +170,13 @@ impl Order {
                 order_id,
                 1,
                 agent::order::Verb::Abort(agent::Abort {
+                    service: service.clone(),
+                }),
+            ),
+            Self::ClearRecord { service, order_id } => (
+                order_id,
+                1,
+                agent::order::Verb::ClearRecord(agent::ClearRecord {
                     service: service.clone(),
                 }),
             ),
@@ -220,8 +237,9 @@ impl Order {
 }
 
 /// The operator's order for the host `id` at this heartbeat, if one is due: an abort queued for
-/// it first (taken, so it is sent once), then the force of the first of `services` (the order
-/// the gate goes by) whose standing force orders the host and is not done there.
+/// it first, then a clear-record queued for it (each taken, so it is sent once), then the force
+/// of the first of `services` (the order the gate goes by) whose standing force orders the host
+/// and is not done there.
 pub(crate) fn next(
     fleet: &mut Fleet,
     state: &OpsState,
@@ -232,6 +250,11 @@ pub(crate) fn next(
         && let Some((service, order_id)) = fleet.take_abort(id)
     {
         return Some(Order::Abort { service, order_id });
+    }
+    if fleet.announced(id, crate::clear_record::FEATURE)
+        && let Some((service, order_id)) = fleet.clear_records.take(id)
+    {
+        return Some(Order::ClearRecord { service, order_id });
     }
     if !fleet.announced(id, crate::force::FEATURE) {
         return None;

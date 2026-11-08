@@ -308,7 +308,8 @@ message ClearRecordResponse { string order_id = 1; }
   daemon that announces the feature `clear-record-v1`; to any other it refuses `daemon_too_old`, as `Force` does
   (`crates/hostkeeper-coordinator/src/force.rs`, **Built**). The order is a new case of `Order`'s `oneof verb` in
   `hostkeeper.agent.v1` (`agent.proto`, **Built**), with the service as its argument; a daemon that does not announce
-  the feature is never sent it.
+  the feature is never sent it. This bullet and the audit line below are **Built**
+  (`crates/hostkeeper-coordinator/src/clear_record.rs`): the order is sent once and takes no slot, as `Hosts.Abort`'s.
 - The daemon runs exactly what the admin socket's `ClearRecord` runs today
   (`crates/hostkeeper-daemon/src/verbs/clear_record.rs`, **Built**): under the service's lock without waiting
   (`busy`), it renames `step-record.json` to `step-record.json.corrupt` only when the record does not read; an absent

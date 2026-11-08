@@ -206,23 +206,24 @@ struct Contents {
     trusted_root: Option<Vec<u8>>,
 }
 
-/// The oldest daemon that takes hostkeeper's own package: the first whose unit starts the binary
-/// its self-update switches to (and which installs a service and updates hostkeeper by its
-/// follow-on). A daemon is always older than the release of hostkeeper it is ordered, so the
-/// package cannot ask for its own version: every daemon would answer the order `daemon_too_old`
-/// and no host would ever update hostkeeper.
-pub(crate) const MIN_HOSTKEEPER: Version = Version {
-    major: 0,
-    minor: 1,
-    patch: 53,
+/// The oldest daemon that takes hostkeeper's own package: [`hostkeeper_steps::OLDEST_READER`],
+/// the oldest release that reads every file this release writes, the one constant the daemon
+/// judges a release of hostkeeper by too (docs/design/two-programs.md, section 4.2). A daemon is
+/// always older than the release of hostkeeper it is ordered, so the package cannot ask for its
+/// own version: every daemon would answer the order `daemon_too_old` and no host would ever
+/// update hostkeeper.
+pub(crate) const OLDEST_READER: Version = Version {
+    major: hostkeeper_steps::OLDEST_READER.major,
+    minor: hostkeeper_steps::OLDEST_READER.minor,
+    patch: hostkeeper_steps::OLDEST_READER.patch,
 };
 
 /// The manifest of hostkeeper's package for `version` built for `platform`: it needs a daemon of
-/// [`MIN_HOSTKEEPER`] or later, or of its own version when that is older (a build of the
+/// [`OLDEST_READER`] or later, or of its own version when that is older (a build of the
 /// workspace's unreleased version), names the platform the daemon checks against its own, and
 /// with `units` runs [`UNIT_FILE`].
 fn manifest(version: &Version, platform: Platform, units: bool) -> String {
-    let floor = (*version).min(MIN_HOSTKEEPER);
+    let floor = (*version).min(OLDEST_READER);
     let platform = platform.name();
     let units = if units {
         format!("\n[units]\nrun = [\"{UNIT_FILE}\"]\n")

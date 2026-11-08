@@ -14,7 +14,7 @@ use hostkeeper_daemon::verbs::update::declared_params;
 use hostkeeper_daemon::{Refusal, Reply};
 use hostkeeper_hook::{Class, Phase, Step, Verdict};
 use hostkeeper_proto::hostkeeper::agent::v1::{
-    Abort, ClearHalt, Force, Install, Order, Uninstall, order,
+    Abort, ClearHalt, ClearRecord, Force, Install, Order, Uninstall, order,
 };
 use hostkeeper_steps::record::{Loaded, RECORD_FILE};
 use hostkeeper_steps::{RecordStore, tree_digest};
@@ -172,6 +172,13 @@ fn an_unspecified_or_malformed_order_is_refused_naming_the_field() {
                 halt_generation: 1,
             })),
             "clear_halt.service",
+            SERVICE_RULE,
+        ),
+        (
+            with_verb(order::Verb::ClearRecord(ClearRecord {
+                service: "-web".to_owned(),
+            })),
+            "clear_record.service",
             SERVICE_RULE,
         ),
     ];
