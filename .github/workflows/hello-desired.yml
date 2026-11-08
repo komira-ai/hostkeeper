@@ -19,9 +19,11 @@
 # like any caller's: the `uses:` commit with its release as the comment, and `hostkeeper_version`
 # and `hostkeeper_commit` of that same release. The pin is the CI client's revision the workflow
 # lint names (`callers.rs`, `CLIENT_COMMIT`), the one release.yml pins too: the client that takes
-# targets, one set and one held wait. The coordinator, its CA and the audience are
-# repository variables; the coordinator's allow-list entry for this workflow names `hello`
-# (docs/deploy/ci-client.md, "The allow-list entry").
+# targets and the tailnet tag, one set and one held wait. The coordinator, its CA, the audience
+# and the tailnet tag (`HOSTKEEPER_TAILNET_TAG`, `tag:ci`, which the client checks at its first
+# step even though this job does not join the tailnet) are repository variables; the
+# coordinator's allow-list entry for this workflow names `hello` (docs/deploy/ci-client.md, "The
+# allow-list entry").
 #
 # The workflow lint (crates/xtask/tests/workflows, `callers.rs`) holds this file to that shape.
 name: hello-desired
@@ -99,15 +101,16 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    uses: komira-ai/hostkeeper/.github/workflows/set-desired.yml@4859b4800897f2468c0f2131455721edfc537217 # v0.1.173
+    uses: komira-ai/hostkeeper/.github/workflows/set-desired.yml@2c767d1842a88edb7120073d2dff3b4bfccc834c # v0.1.184
     with:
       service: hello
       version: ${{ needs.release.outputs.version }}
       targets: ${{ needs.release.outputs.targets }}
       release_index: ${{ needs.release.outputs.release_index }}
       release_index_digest: ${{ needs.release.outputs.release_index_digest }}
-      hostkeeper_version: 0.1.173
-      hostkeeper_commit: 4859b4800897f2468c0f2131455721edfc537217
+      hostkeeper_version: 0.1.184
+      hostkeeper_commit: 2c767d1842a88edb7120073d2dff3b4bfccc834c
       coordinator_url: ${{ vars.HOSTKEEPER_COORDINATOR_URL }}
       coordinator_ca: ${{ vars.HOSTKEEPER_COORDINATOR_CA }}
       audience: ${{ vars.HOSTKEEPER_CI_AUDIENCE }}
+      tailnet_tag: ${{ vars.HOSTKEEPER_TAILNET_TAG }}

@@ -11,7 +11,7 @@ picked entry in orders over gRPC, `target-v1` echoed, and `no_target`, `no_build
 the CI client's `targets` input (`.github/workflows/set-desired.yml`), `cargo xtask release targets`
 (`crates/xtask/src/release/targets.rs`), and its two callers, hostkeeper's deploy in `release.yml` and the hello
 proof run `hello-desired.yml`, which set each release with its targets, its release index and the index's digest,
-pinned to the CI client of release v0.1.173. Nothing else here is built. This is a revision of the design merged as
+pinned to a CI client that takes targets (release v0.1.173 or later). Nothing else here is built. This is a revision of the design merged as
 komira-ai/hostkeeper#179. It keeps that design's stores, its digest and attestation checks before any byte is used, and its
 staged path for the daemons on hosts now. It replaces its package model: host facts, "most specific wins", artifact kinds
 and `Releases.Register` (section 0 says what replaces what). It changes three things in
