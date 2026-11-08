@@ -9,8 +9,9 @@
 //!   line [`TAG_COMMAND`], a space and one `'`-quoted program, and nothing else (so nothing can
 //!   run on past it, as `|| true` would);
 //! - the check step comes after the join step [`JOIN_STEP`];
-//! - a step other than those two, or the `env` of the workflow or of the job, names
-//!   [`TAG_VALUE`]: the join is the one step that uses the tag, and only once it is checked.
+//! - a step other than those two, or the `env` of the workflow or of the job, names the input
+//!   [`TAG_INPUT`], however spelt: the join is the one step that uses the tag, and only once it
+//!   is checked.
 //!
 //! The check step is one of [`CHECKED`](super::set_desired::CHECKED), so it has no `if:` and no
 //! `continue-on-error`, and one of [`ORDERED`](super::set_desired::ORDERED), so it is there
@@ -53,7 +54,7 @@ pub fn problems(doc: &Node, steps: &[Node]) -> Vec<String> {
     let job = entry(doc, "jobs").and_then(|jobs| entry(jobs, JOB));
     for (owner, node) in [("workflow", Some(doc)), ("job", job)] {
         if node.and_then(|n| entry(n, "env")).is_some_and(names_tag) {
-            problems.push(format!("the {owner}'s `env` names `{TAG_VALUE}`"));
+            problems.push(format!("the {owner}'s `env` names `{TAG_INPUT}`"));
         }
     }
     let at = |id: &str| steps.iter().position(|s| text(s, "id") == Some(id));
@@ -61,7 +62,7 @@ pub fn problems(doc: &Node, steps: &[Node]) -> Vec<String> {
         let id = text(step, "id");
         if id != Some(TAG_STEP) && id != Some(JOIN_STEP) && names_tag(step) {
             problems.push(format!(
-                "{} names `{TAG_VALUE}`: only the join reads the tag, once `{TAG_STEP}` checked it",
+                "{} names `{TAG_INPUT}`: only the join reads the tag, once `{TAG_STEP}` checked it",
                 label(i, step)
             ));
         }
@@ -89,11 +90,12 @@ pub fn problems(doc: &Node, steps: &[Node]) -> Vec<String> {
     problems
 }
 
-/// Whether any scalar of `node` names the tag input.
+/// Whether any scalar of `node` names the tag input, however the expression spells the read
+/// (`inputs.tailnet_tag`, with or without spaces inside `${{ }}`, or `inputs['tailnet_tag']`).
 fn names_tag(node: &Node) -> bool {
     let mut values = Vec::new();
     scalars(node, &mut values);
-    values.iter().any(|v| v.contains(TAG_VALUE))
+    values.iter().any(|v| v.contains(TAG_INPUT))
 }
 
 /// The program of the check step `step`: its script is one line, [`TAG_COMMAND`], a space and the

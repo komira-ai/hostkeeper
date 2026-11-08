@@ -214,14 +214,31 @@ fn no_step_but_the_join_reads_the_tag() {
             &format!("{ca}        env:\n          TAG: ${{{{ inputs.tailnet_tag }}}}\n"),
         ),
         &[
-            "step 9 (`ca`) names `${{ inputs.tailnet_tag }}`: only the join reads the tag, once `tailnet-tag` checked it",
+            "step 9 (`ca`) names `tailnet_tag`: only the join reads the tag, once `tailnet-tag` checked it",
         ],
     );
+    // However the expression spells the read.
+    for read in [
+        "${{inputs.tailnet_tag}}",
+        "${{ inputs['tailnet_tag'] }}",
+        "${{ format('{0}', inputs.tailnet_tag) }}",
+    ] {
+        assert_client(
+            &with_in(
+                CLIENT,
+                ca,
+                &format!("{ca}        env:\n          TAG: {read}\n"),
+            ),
+            &[
+                "step 9 (`ca`) names `tailnet_tag`: only the join reads the tag, once `tailnet-tag` checked it",
+            ],
+        );
+    }
     let other = "      - id: other\n        run: echo \"${{ inputs.tailnet_tag }}\"\n";
     assert_client(
         &with_in(CLIENT, TAG_BLOCK, &format!("{other}{TAG_BLOCK}")),
         &[
-            "step 1 (`other`) names `${{ inputs.tailnet_tag }}`: only the join reads the tag, once `tailnet-tag` checked it",
+            "step 1 (`other`) names `tailnet_tag`: only the join reads the tag, once `tailnet-tag` checked it",
         ],
     );
     assert_client(
@@ -230,7 +247,7 @@ fn no_step_but_the_join_reads_the_tag() {
             "    runs-on: ubuntu-24.04\n",
             "    runs-on: ubuntu-24.04\n    env:\n      TAG: ${{ inputs.tailnet_tag }}\n",
         ),
-        &["the job's `env` names `${{ inputs.tailnet_tag }}`"],
+        &["the job's `env` names `tailnet_tag`"],
     );
     assert_client(
         &with_in(
@@ -238,7 +255,7 @@ fn no_step_but_the_join_reads_the_tag() {
             "permissions: {}\n",
             "permissions: {}\nenv:\n  TAG: ${{ inputs.tailnet_tag }}\n",
         ),
-        &["the workflow's `env` names `${{ inputs.tailnet_tag }}`"],
+        &["the workflow's `env` names `tailnet_tag`"],
     );
     // The join itself names it, and the check: neither is a problem.
     assert!(JOIN_BLOCK.contains(TAG_VALUE) && TAG_BLOCK.contains(TAG_VALUE));
