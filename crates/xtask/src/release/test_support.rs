@@ -10,6 +10,12 @@ use super::package::linux_check;
 use super::package::nfpm_stage::{self, Arch};
 use super::package::{Request, package_dated};
 
+/// The command line of `cargo xtask`, every verb with its flags, as the binary parses it: the
+/// workflow lint holds every `cargo xtask` call of a workflow to it.
+pub fn cli() -> clap::Command {
+    <crate::Cli as clap::CommandFactory>::command()
+}
+
 /// The file names `release nfpm-stage` writes into its `--out`: `gh`, the trusted root, then
 /// the daemon and the boot server.
 pub const NFPM_STAGED: [&str; 4] = [

@@ -6,11 +6,12 @@ section 10, the halts-file storage of the plan position in [rollout-update-plans
 and the device-record file of [hostkeeper-mdm.md](hostkeeper-mdm.md) section 6.1. Where they disagree with this document
 on where the coordinator keeps its state, this document wins. C1 to C4 and C6 are built: the storage trait and its
 fake (section 4.1), the enrollment crate's `Records` port, the Postgres store
-(`crates/hostkeeper-coordinator/src/store/postgres/`, with its migrations `0001` to `0004`, sections 3 to 8),
+(`crates/hostkeeper-coordinator/src/store/postgres/`, with its migrations `0001` to `0005`, sections 3 to 8),
 `import` and `export` (section 11: `crates/hostkeeper-coordinator/src/transfer.rs` and
 `crates/hostkeeper-coordinator/src/store/postgres/transfer.rs`), the generations and write ids (migration
 `0003`, section 3.2), the releases of a set with targets (migration `0004`, section 3.2, from
-[packages.md](packages.md) section 3.6), and C5, the compose deployment with its backups, restore and drill (sections 9 and
+[packages.md](packages.md) section 3.6), the MDM gate's device records (migration `0005`, the table `mdm_devices`,
+sections 2 and 3.6: `crates/hostkeeper-coordinator/src/store/postgres/devices.rs`), and C5, the compose deployment with its backups, restore and drill (sections 9 and
 10: `docs/deploy/coordinator/`, and the `xtask db-backup` verb in `crates/xtask/src/db_backup.rs`). Every other
 statement about new code is **Designed**, and section 13 lists the build items, C1 to C11, one pull request each. The tags are those of hostkeeper-design.md: **Built** names code on `main` with a path, **Designed** means
 nothing implements it yet.
@@ -70,17 +71,19 @@ storage trait (section 4.1).
 | The platform of each inventory record (`linux-x86_64`, `linux-arm64`) | `platforms` of `<ops-file>.halts`, by host id | column `inventory.platform` |
 | The audit log | `<ops-file>.audit` and its sealed segments; the ring of 64 in the ops file | table `audit`; the ring is the newest 64 rows |
 | Enrollment requests, issued certificates, hosts, deny rows, Mac nonces, the serial counter | `--enrollment-dir/*.pb` | the tables of section 3.6 |
+| The MDM gate's device records | `--enrollment-dir/mdm-devices/<enrollment id>.pb` | table `mdm_devices` (section 3.6) |
 | The single-writer lock | `flock` on `<state-file>.lock`; the enrollment store's own `flock` on `<enrollment-dir>/lock` | an advisory lock on one session, and the row `lease` (section 5); the enrollment store keeps its in-process mutex |
 | Staged halts file, restore marker | `<ops-file>.halts.next`, `<state-file>.restore-unfinished` | gone: a transaction commits or does not |
 | The unfinished-halt marker | `<ops-file>.halts.unfinished` | a file still, named by `--halt-marker-file` (section 4.3) |
 | Rollout file, tokens, OIDC allow-list, TLS files, CA key and certificate, server certificate, Mac allowlist, MDM pkg allowlist, UI | files | files, unchanged |
 | Fleet, orders, bake, deferrals, tries, poll nonces, the enrollment store's live-machine map | memory | memory, unchanged |
 
-The MDM gate's device records (hostkeeper-mdm.md section 6.1, task M8, built before this store) are a table of the same
-database, `mdm_devices`, added by M8's migration (the next free number when it lands, after C3). Until then they are a
-file per device, `<--enrollment-dir>/mdm-devices/<enrollment id>.pb`, behind the gate's `DeviceStore`; the table is a
-second `DeviceStore`, and the import reads the files into it once the table lands; until then the import refuses an
-enrollment store that holds them.
+The MDM gate's device records (hostkeeper-mdm.md section 6.1, task M8) are kept where the coordinator keeps its other
+state, so the gate runs on either store. On the file store they are a file per device,
+`<--enrollment-dir>/mdm-devices/<enrollment id>.pb`; on the database they are the table `mdm_devices` of migration
+`0005` (**Built**). Both are the gate's `DeviceStore`, and both pass the gate's one case list
+(`crates/hostkeeper-mdm-gate/src/conformance.rs`). The import reads the files into the table and the export writes
+them back (section 11).
 
 ## 3. The schema
 
@@ -335,6 +338,23 @@ an export writes the same messages back. An expired request keeps the waiting st
 certificate, a host, a deny row and a nonce are never deleted, as today. The rules that are not a key (the pending cap,
 a machine id or MAC already bound, one certificate per request and round, a host id another key holds) stay in the
 enrollment crate's code, under its store lock, as today.
+
+```sql
+mdm_devices(enrollment_id text PRIMARY KEY,  -- 1 to 64 ASCII letters, digits and '-', NanoHUB's id
+  record bytea NOT NULL)                     -- the file's bytes: schema, record, the record's SHA-256
+```
+
+**Built** (migration `0005`, `may-run`: an older release never reads the table). A row holds the record as the
+gate's file holds it, the protobuf message the gate's own writer makes, and a load reads it with the gate's own
+reader, unlike the typed columns of the other tables (section 14). The record is the gate's: its fields are added
+by the gate's own additive rule (fields 18, 19 and 20 were added to schema 1 so the release before reads them),
+and the gate's reader already refuses a record that is not whole or is of a newer schema and skips a field it does
+not know, so the row is exactly as strict as the file, and a record moves between a file and a row byte for byte.
+As columns, every field the gate adds would be a migration of this store, and a second reader of the same record
+that could disagree with the gate's. A record of another enrollment id than its key is refused, as a file of
+another name is. A save is one transaction on the writing session, fenced as every commit is
+(`crates/hostkeeper-coordinator/src/store/postgres/devices.rs`); a save that fails, or whose outcome is not known,
+is an error, and the gate does not take the record.
 
 ### 3.7 Bookkeeping
 
@@ -617,8 +637,8 @@ daemon-config key of option (a) would be additions to public interfaces, flagged
 - **Flags beside it.** `--database-dsn-file` refuses `--state-file`, `--ops-file`, `--enrollment-dir`,
   `--audit-max-bytes` and `--audit-retained-segments`, naming the flag. It requires `--halt-marker-file`. Enrollment is
   on when `--ca-key-file` is given, which keeps requiring `--server-cert-file` and `--server-name`; the store is the
-  database's. The MDM gate's flags keep requiring `--enrollment-dir`, where the gate's device records are (section
-  2), so until M8's table lands the gate does not run on the database store. The file store stays selectable by `--state-file` for one release after the farm moves (section 11).
+  database's. The MDM gate's flags need enrollment, `--ca-key-file` with `--enrollment-dir` or
+  `--database-dsn-file`, and with the database its device records are the table `mdm_devices` (section 2). The file store stays selectable by `--state-file` for one release after the farm moves (section 11).
 
 ## 9. Deployment: compose
 
@@ -761,8 +781,9 @@ written whole by `FileRecords::read_snapshot` and `Snapshot::files`
 (`crates/hostkeeper-enrollment/src/enroll/records/files.rs`); the runbook is
 [coordinator-state.md](../operations/coordinator-state.md). Where C4 decided what this section leaves
 open: the ops file's audit ring entries that its audit file holds no line of are not imported (they
-have no time), and `state_imported` is numbered past them; until M8's table lands, an enrollment
-store that holds MDM device records is refused; and a history the import found pruned is exported
+have no time), and `state_imported` is numbered past them; the MDM gate's device records
+(`<enrollment-dir>/mdm-devices/*.pb`) are read by the gate's own reader and written as rows of
+`mdm_devices`, and `export` writes them back as the same files; and a history the import found pruned is exported
 as the sealed segment `<ops-file>.audit.2`, so the file store gives back the same
 `audit_pruned_before`. An import also refuses flags that name no file, and says how many audit
 lines it could not read and so did not import; `export` runs the migrations a start runs before it
@@ -911,6 +932,13 @@ on the database and the back-out window has closed.
 | `the_write_id_and_the_replaced_state_come_back_in_the_record` | `SetDesiredResponse.record` | C6 |
 | `an_older_release_is_refused_on_a_database_with_0003` | `0003` says `refuse` | C6 |
 | `a_service_image_not_pinned_by_digest_is_refused` | the workflow lint's new rule | C3 |
+| `the_device_store_cases_pass_on_postgres` | the gate's `DeviceStore` cases, the list the file store passes, on `mdm_devices` | M8 |
+| `the_cases_fail_against_a_store_that_breaks_each_one` | the gate's case list catches what each case claims | M8 |
+| `the_release_before_starts_on_a_database_with_0005_and_this_one_on_its` | `0005` says `may-run`, both ways | M8 |
+| `the_gate_on_the_database_keeps_its_records_in_mdm_devices` | the gate on `--database-dsn-file`, across a restart | M8 |
+| `a_device_row_the_gate_cannot_read_stops_the_start` | a row is as strict as a file | M8 |
+| `import_writes_each_device_record_file_as_a_row_of_mdm_devices` | the import of `mdm-devices/*.pb` | M8 |
+| `export_writes_the_device_records_back_as_the_files_they_were` | the back-out keeps the device records, byte for byte | M8 |
 
 ## 13. Build items, one pull request each, in this order
 
@@ -937,7 +965,7 @@ tests in its own pull request.
 | One database or one per store | One database, one schema. | The flows that cross stores (force, retire) can then commit together, and one lock covers everything. |
 | What decisions read | Memory, as today; the database is read at start, by lists and by the import. | A heartbeat costs no query, and the gate's code does not change. |
 | How a change reaches the database | The state before and after, compared in memory; only changed rows are written. | The stores' call sites and edits stay as they are; a change costs what it changes. |
-| Typed columns or the records' encodings as blobs | Typed columns, with `jsonb` only for the values that are JSON today. | The tables can be queried and constrained; each JSON value keeps its reader's strictness. |
+| Typed columns or the records' encodings as blobs | Typed columns, with `jsonb` only for the values that are JSON today; the MDM gate's device records alone are their file's bytes (section 3.6). | The tables can be queried and constrained; each JSON value keeps its reader's strictness. The device record is the gate's own format, versioned by the gate's additive rule, and its reader is already as strict as a row must be. |
 | Generations and write ids | Columns added by C6 with the API that honours them; not in `0001`. | They are what the operator API already describes; adding them before anything maintains them would store numbers that mean nothing. |
 | The audit's numbers | Assigned by the coordinator under its writers' lock, not by a sequence. | One writer; no gaps from rolled-back transactions; the import keeps the file numbers. |
 | Audit retention | Keep every row; the rotation flags stay with the file store. | The history is small in rows, and keeping it removes the "pruned before" cases. |

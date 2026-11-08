@@ -8,15 +8,16 @@ Postgres store's in `crates/hostkeeper-coordinator/src/store/postgres/tests/rele
 the pick's own bounds in `crates/hostkeeper-coordinator/src/picks_tests.rs`); and so are those of A4
 (`crates/hostkeeper-daemon/tests/stores.rs`, `crates/hostkeeper-package/tests/fetch.rs`); nothing else here is built. This is section 12 of
 [packages.md](packages.md), kept in a file of its own so that one stays under 1000 lines (rule R12). Section numbers here
-are those of packages.md, and A1 to A15 are its build items (section 13). A16, A17 and the re-scoped A7 are
-[packages-repositories.md](packages-repositories.md)'s (its section 8); the `deb`, `rpm`, `arch`, `apk` and `macos-pkg` cases
-are withdrawn with those installers, and the repository installer's cases are the five items before A15's.
+are those of packages.md, and A1 to A15 are its build items (section 13). A16, A17 and the re-scoped A7 and A9 are
+[packages-repositories.md](packages-repositories.md)'s (its section 8); the `deb`, `rpm`, `arch` and `apk` cases
+are withdrawn with those installers, and that file's cases are the five items before A15's: A16's, A7's two, A9's
+(`macos-pkg`) and A17's.
 
 Each item's tests are behaviour tests in Rust, in the crate the item changes (rules T8, T11, T12). Each runs with no
 network and no system path, through the fakes the crates already have (`Fetcher`, `Verifier`, the coordinator's backend
 fake, the step launcher's fake, the placer's roots under a scratch directory), and through a command port for the
 formats' tools. A host's `os-release` and the tools' paths are read under a scratch root the test makes. None asserts a
-time: a bound is tested on an injected clock (rule T10). Real `apt`, `dpkg`, `brew` and `podman`
+time: a bound is tested on an injected clock (rule T10). Real `apt`, `dpkg`, `installer`, `pkgutil` and `podman`
 run only in the device jobs (`privileged`, `macos-device`), whose tests count toward no coverage gate.
 
 - **Manifest and target checks (A1; `crates/hostkeeper-release/tests/manifest.rs`).** One case per check of sections
@@ -82,7 +83,7 @@ run only in the device jobs (`privileged`, `macos-device`), whose tests count to
   `/usr/lib/os-release` is read when `/etc/os-release` is missing; an unknown `ID`, an empty file, both files missing
   and a malformed line (no `=`, an unterminated quote) give no native format, so a Linux host announces
   `hostkeeper-archive` and `tarball` alone; `oci-image` is announced with `/usr/bin/podman` present and not without it
-  (A10); a macOS host announces `hostkeeper-archive` and `tarball`, and `brew` with a valid `.tap` entry, and never reads
+  (A10); a macOS host announces `hostkeeper-archive` and `tarball`, and `macos-pkg` with a valid `macos-pkg.toml`, and never reads
   `os-release`. The list is the same at every heartbeat of one start.
 - **Installers (A6 to A10; `crates/hostkeeper-install/tests/<installer>.rs`, device tests in
   `crates/hostkeeper-privileged/tests/install_<installer>.rs` and the macOS device suite).** For each installer:
@@ -154,31 +155,44 @@ run only in the device jobs (`privileged`, `macos-device`), whose tests count to
   is `package_digest_mismatch`; a package moved by hand with `apt-get install` is put back to the desired version and
   reported as drift; after the uninstall `dpkg-query` knows no `hello` and none of its files
   remain.
-- **The `brew` backend (A9; `crates/hostkeeper-install/tests/brew.rs` with the command port's fake, device tests in the
-  macOS device suite, `install_brew.rs`, in `macos-device`).** The start is refused for each defect of the `.tap` entry
-  (packages-repositories.md section 4.7): a remote that is not `https://` or `file:/`, an owner that is root, unknown,
-  or does not own the prefix or `bin/brew`, a prefix writable by others, a `.tap` file on Linux and a `.sources` file
-  on macOS; a Mac with the entry but no brew yet starts and does not announce `brew`, and group write for `admin` on
-  the prefix is accepted. Every brew and git run is started through `sudo` as the owner with exactly the fixed
-  environment and nothing inherited (the fake launcher records each), and none as root. Each row of section 4.7's failure table gives
-  its outcome and changes nothing: `repository_unknown`, `fetch_failed` for the tap and for the bottle,
-  `tap_rewritten` for a remote whose history does not fast-forward, `not_in_repository`, `package_digest_mismatch`,
-  `no_bottle_for_host`, `dependency_changes`, `manifest_invalid` for a formula not keg-only, with `post_install`, with
-  a bottle needing relocation, with per-tag bottles and with no plist in the tree; `order_invalid` for a
-  `package_version` with `:`, `~` or `+`; `store_digest_mismatch` for a bottle in the cache that is
-  not the pin (replaced after the formula's own check), `package_manager_busy`, and `brew_error` followed by the
-  rollback, or on a first install the removal. The tree is extracted from the daemon's own copy of the bottle, never
-  from the cache, and the placed plist's program is under `current/tree/`. `activate` installs from the cached bottle
-  with no download, links and pins; run twice, it changes nothing. A rollback switches `current` and relinks the kept
-  keg with no fetch and no install. `retire` uninstalls only the retired version's formula. `remove` uninstalls every
-  recorded formula and one installed by hand. Drift: another keg linked, a version installed by hand, and a keg whose
-  files differ from the tree each give a `drift` report, and the next update repairs it and ends `Succeeded`,
-  `drift_repaired`. The device tests, as a runner account that owns a Homebrew prefix, against a tap and bottles on
-  the runner's disk: install, update, roll back with the tap's remote removed, and uninstall a two-version `hello`;
-  an operator's `brew upgrade` leaves the pinned version; the job runs the sealed tree's program, as root; after the
-  uninstall no `hello` formula is installed and the plist is gone.
+- **The `macos-pkg` installer (A9; `crates/hostkeeper-install/tests/macos_pkg.rs` with the command port's fake, device
+  tests in the macOS device suite, `install_macos_pkg.rs`, in `macos-device`).** The start is refused for each defect of
+  `macos-pkg.toml` (packages-repositories.md section 4.7): a file not root-owned, one writable by group or others, an
+  unknown key, no signer, five signers, and a signer of 63 hex digits or with a letter past `f`; four signers start,
+  and the leaf's fingerprint as `pkgutil` prints it (upper case, spaced, over two lines, after an intermediate's and
+  the root's in the same output) matches its entry, while an intermediate's fingerprint as the entry does not. A Mac
+  without the file starts and does not announce `macos-pkg`. Each row of section 4.7's failure table gives its outcome
+  and changes nothing: `order_invalid` for an entry with `repository` and one with `package_version`; `signature` for
+  an unsigned package, an untrusted chain and a leaf no signer names, with nothing expanded; `manifest_invalid` for a
+  product archive of two components, a component not selected by default, a `Distribution` with a script, an
+  identifier other than `package`, a version other than the order's, an `install-location` other than `/`, a
+  `relocate`, a `bundle`, a `Bom` that lists a file the payload lacks and a payload file with a setuid bit the `Bom`
+  does not show, a `Bom` entry not owned by root, of group staff, group-writable, under `/usr/local` and under another
+  service's directory, a `run` label with no plist, one whose `Label` differs and one without `Disabled`;
+  `package_conflict` for a second service with the same identifier and for a payload file a receipt of another
+  identifier lists, while a file of the same identifier's receipt (installed by hand) and a file no receipt lists are
+  installed over; `unsafe_directory` for a parent that another account owns or can write; `package_manager_busy` in
+  the form the fake gives; and `installer_error` for a non-zero exit, a version not shown after it and an installed
+  file that differs from `tree/`, each followed by the rollback, or on a first install the removal. No tool run
+  fetches, and `installer` runs with `-allowUntrusted` (the fake launcher records each). `activate` twice is the same
+  as once; an update deletes the files of the previous `Bom` that the new one does not list and no other, records in
+  `created_dirs` only directories that were not there, and enables each `run` label and disables a dropped one. A
+  rollback installs the kept `.pkg` with no fetch and no signature check, with the signer taken out of the file, and
+  deletes the newer version's files and the directories it created. `retire` never runs `installer` or `pkgutil`.
+  `remove` deletes every file the receipt lists, a changed one too, leaves a file the receipt does not list and one a
+  receipt of another identifier also lists, deletes nothing through a linked parent, removes the created directories
+  left empty and never a directory that was there before, and forgets the receipt. Drift: a receipt at another
+  version, a receipt with no record, a record with no receipt, a payload file deleted and one with other bytes each
+  give a `drift` report, a file whose size, mode and time are unchanged is not hashed again, and the next update
+  repairs each and ends `Succeeded`, `drift_repaired`. The device tests, as root, against packages signed by an
+  identity the test makes and trusts for the run, served from an `https` store on loopback (section 4.7 there): install,
+  update, roll back with the store stopped and with the test's root taken out of the trust settings, and uninstall a
+  two-version `hello`; the installed plist's job shows disabled (`launchctl print-disabled system`) until `activate` enables it; an `installer
+  -pkg` of the older version by hand is put back and reported as drift; the job runs the installed program and the
+  observer matches it to the tree; after the uninstall `pkgutil --pkgs` lists no `hello` and none of its payload files
+  remain.
 - **Host setup (A17; `crates/hostkeeper-pxe` tests).** `--repositories` with a valid directory writes each file byte for
-  byte into the seed's user data, and the MDM kit carries a Mac's `.tap` entries the same way; a directory the daemon's loader refuses is refused before any seed is written, with
+  byte into the seed's user data, and a Mac's daemon renders `stores.toml` and `macos-pkg.toml` from the MDM kit's domains `dev.hostkeeper.stores` and `dev.hostkeeper.macos-pkg`, replacing a file that differs and refusing domains its loader refuses; a directory the daemon's loader refuses is refused before any seed is written, with
   the loader's reason.
 
 - **One build, every release (A15; `crates/xtask/tests/release_linux.rs`, and the `privileged` device job).**

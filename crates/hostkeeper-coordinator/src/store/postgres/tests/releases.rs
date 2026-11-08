@@ -411,7 +411,7 @@ fn the_release_before_runs_on_a_database_with_a_release_and_reads_the_third_form
     assert_eq!(
         db.rows("SELECT version FROM schema_version ORDER BY version")
             .len(),
-        4
+        migrate::SHIPPED.len()
     );
     let state = &held.desired["web"];
     assert_eq!(state.version.as_str(), "2.0");
