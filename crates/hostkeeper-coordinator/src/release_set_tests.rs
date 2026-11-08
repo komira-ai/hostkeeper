@@ -519,6 +519,34 @@ async fn the_channel_is_asked_only_for_a_set_without_targets_or_with_an_index() 
     );
 }
 
+/// Proves: a set with targets of a service already holding the most releases drops its oldest
+/// release no mark keeps in the same write and keeps the one just set, the decision being made
+/// under the marks of the service.
+#[tokio::test]
+async fn a_set_past_the_cap_drops_the_oldest_release() {
+    let mut held = desired::Held::default();
+    let old = Arc::new(Release::new(Targets::new(), None));
+    held.releases.insert(
+        LEGACY.to_owned(),
+        (0..MAX_REGISTRY)
+            .map(|n| (format!("1.{n}"), Arc::clone(&old)))
+            .collect(),
+    );
+    let mut rig = Rig::new("release-set-past-cap");
+    let text = hostkeeper_oidc::testkit::config_text(hostkeeper_oidc::testkit::STATIC_ISSUER);
+    rig.coordinator = Rig::start_over(
+        DesiredStore::over(Arc::new(Fake::new()), held),
+        &rig.clock,
+        &text,
+    );
+    operator_sets(&rig, &body("2.0"), Some(targets(LEGACY)))
+        .await
+        .expect("set");
+    assert!(kept(&rig, "1.0").is_none());
+    assert!(kept(&rig, "1.1").is_some());
+    assert!(kept(&rig, "2.0").is_some());
+}
+
 /// Proves: `release_verified` answers by cause: a service the coordinator does not manage is
 /// `UnknownService`, a version never set with targets (set with a digest, or never set) is
 /// `Unknown`.
