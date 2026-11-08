@@ -40,11 +40,12 @@ workflow      = ".github/workflows/artifacts.yml"
 refs          = ["refs/heads/main"]
 hosted_runner = true
 
-# js-agent, a service whose name is not its repository's: jobscheduler's release.yml builds,
-# signs and publishes it on each push to main.
+# js-agent, a service whose name is not its repository's: jobscheduler's release.yml builds and
+# publishes it on each push to main, and signs it through the artifacts.yml it calls, so its
+# attestations name artifacts.yml.
 [[service]]
 name          = "js-agent"
 repository    = "komira-ai/jobscheduler"
-workflow      = ".github/workflows/release.yml"
+workflow      = ".github/workflows/artifacts.yml"
 refs          = ["refs/heads/main"]
 hosted_runner = true
