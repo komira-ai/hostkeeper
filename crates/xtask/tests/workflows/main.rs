@@ -53,6 +53,8 @@ mod template_doc_tests;
 mod testdir;
 mod verify_doc;
 mod verify_doc_tests;
+mod xtask_calls;
+mod xtask_calls_tests;
 mod yaml;
 
 use std::path::PathBuf;
@@ -375,8 +377,8 @@ fn a_privileged_job_on_pull_request_is_refused() {
             "job test: privileged on pull_request (`cargo test --config \"target.'cfg(unix)'.runner = 'sudo'\"`)",
         ),
         (
-            "      - run: cargo xtask sudo-test\n",
-            "job test: privileged on pull_request (`cargo xtask sudo-test`)",
+            "      - run: cargo run --bin sudo-test\n",
+            "job test: privileged on pull_request (`cargo run --bin sudo-test`)",
         ),
         (
             "      - run: |\n          cargo build\n          docker run --privileged image\n",
