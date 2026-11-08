@@ -21,9 +21,8 @@
 //! - [`launcher`]: [`LaunchdLauncher`], the step runner's
 //!   [`StepLauncher`](hostkeeper_steps::StepLauncher): each step of a hook as a transient launchd
 //!   job, under the same contract as `hostkeeper_steps::SystemdLauncher`.
-//! - [`postinstall`]: the `postinstall` script of the macOS installer pkg, which gives the
-//!   self-update binary directory the daemon job starts its first binary, has the daemon config
-//!   written from the MDM's managed preferences, and loads the daemon's job.
+//! - [`postinstall`]: the `postinstall` script of the macOS installer pkg, which loads the
+//!   daemon's job once any copy loaded before is booted out.
 //! - [`platform`]: [`Platform`], the paths and unit directory that differ between Linux and
 //!   macOS.
 //! - [`fake`]: [`FakeLaunchctl`], the scripted `launchctl` every test drives.
