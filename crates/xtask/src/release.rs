@@ -319,9 +319,9 @@ pub(crate) enum Verb {
     },
     /// Build the installer pkg of a Mac's first install: `pkgbuild` builds a component pkg of the
     /// daemon binary, its launchd plist, its log directory and newsyslog file, the pinned `gh`
-    /// and the Sigstore trusted root, nothing else, and one script, a postinstall that seeds the
-    /// binary directory the plist starts `current` of, writes the config with `mac-config` and
-    /// loads the job; `productbuild` wraps the component as the unsigned distribution pkg.
+    /// and the Sigstore trusted root, nothing else, and one script, a postinstall that boots out
+    /// any copy of the daemon's job loaded before and loads the job, whose program is the binary
+    /// the pkg installs; `productbuild` wraps the component as the unsigned distribution pkg.
     MacosPkg {
         #[arg(long)]
         version: Version,

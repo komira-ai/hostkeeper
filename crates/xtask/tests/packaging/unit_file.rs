@@ -1,19 +1,21 @@
-//! The unit, `hostkeeper.service`: its command lines, its account, its restart policy, its lack
+//! The daemon's two units, the bootstrap `hostkeeper.service` and the package `units/hostkeeper.service`,
+//! each held to the checks of a unit: its command lines, its account, its restart policy, its lack
 //! of a start limit of its own and its watchdog, the units it conflicts with and the keys it sets.
 
 use hostkeeper_link::CALL_SECS;
 
 use crate::daemon_flags::parse_flags;
 use crate::unit::{self, Unit};
-use crate::{UNIT, altered, read, refuses};
+use crate::{Kind, SEED_LINE, altered, refuses};
 
-/// The daemon's command line: `current` of the binary directory of hostkeeper's own update (the
-/// binary the update chose; `self_update.rs` holds it to the daemon's `binary_dir`), the `daemon`
-/// verb with each path of design sections 4.1 and 10 spelled out as a flag, and the flag that
-/// makes it report ready to systemd. `daemon_flags.rs` parses this line with the binary's own flag
+/// The daemon's command line after its program: the `daemon` verb with each path of design
+/// sections 4.1 and 10 spelled out as a flag, and the flag that makes it report ready to systemd.
+/// No `--admin-socket`: every daemon defaults the socket to `/run/hostkeeper/admin.sock`. The
+/// program is [`Kind::program`]: `current` of the binary directory of hostkeeper's own update in
+/// the package unit (`self_update.rs` holds it to the daemon's `binary_dir`), the installed
+/// binary in the bootstrap unit. `daemon_flags.rs` parses this line with the binary's own flag
 /// parser.
-const DAEMON_COMMAND: [&str; 11] = [
-    "/var/lib/updater/state/hostkeeper/bin/current",
+const DAEMON_ARGS: [&str; 8] = [
     "daemon",
     "--config",
     "/etc/hostkeeper/hostkeeper.toml",
@@ -21,12 +23,10 @@ const DAEMON_COMMAND: [&str; 11] = [
     "/var/lib/updater/state",
     "--packages-dir",
     "/var/lib/hostkeeper/packages",
-    "--admin-socket",
-    "/run/hostkeeper/admin.sock",
     "--notify-systemd",
 ];
 
-/// The command line run before each start: the binary the package installed gives the binary
+/// The command line the package unit runs before each start: the binary the package installed gives the binary
 /// directory its first binary when `current` starts none (`self-update-seed`). Its `-` prefix,
 /// the one prefix a line of this unit has, lets the start go on when it fails: an older binary
 /// without the verb, under a unit an update placed, while `current` is already there.
@@ -51,36 +51,37 @@ const KBF_UNITS: [&str; 3] = [
     "kbf-host-local-frontend.service",
 ];
 
-/// Every key the unit sets, by section.
-const UNIT_KEYS: [(&str, &[&str]); 3] = [
-    (
-        "Unit",
-        &[
-            "Description",
-            "Documentation",
-            "After",
-            "Wants",
-            "Conflicts",
-            "StartLimitIntervalSec",
-        ],
-    ),
-    (
-        "Service",
-        &[
-            "Type",
-            "TimeoutStartSec",
-            "ExecStartPre",
-            "ExecStart",
-            "Restart",
-            "RestartSec",
-            "RestartMode",
-            "WatchdogSec",
-            "RuntimeDirectory",
-            "RuntimeDirectoryMode",
-        ],
-    ),
-    ("Install", &["WantedBy"]),
-];
+/// Every key a unit sets, by section: the package unit's also has the seed's `ExecStartPre`. No
+/// unit sets `RuntimeDirectory*`: the tmpfiles rules make the socket's directory.
+fn unit_keys(kind: Kind) -> Vec<(&'static str, Vec<&'static str>)> {
+    let mut service = vec![
+        "Type",
+        "TimeoutStartSec",
+        "ExecStart",
+        "Restart",
+        "RestartSec",
+        "RestartMode",
+        "WatchdogSec",
+    ];
+    if kind == Kind::Package {
+        service.push("ExecStartPre");
+    }
+    vec![
+        (
+            "Unit",
+            vec![
+                "Description",
+                "Documentation",
+                "After",
+                "Wants",
+                "Conflicts",
+                "StartLimitIntervalSec",
+            ],
+        ),
+        ("Service", service),
+        ("Install", vec!["WantedBy"]),
+    ]
+}
 
 /// Keys that take root, or a right of root, from the service: an account, a capability bound or
 /// a sandbox. The daemon is root by design (section 5.3).
@@ -103,7 +104,7 @@ const CONFINING_KEYS: [&str; 15] = [
 ];
 const CONFINING_PREFIXES: [&str; 3] = ["Protect", "Private", "Restrict"];
 
-fn check_command(text: &str) -> Result<(), String> {
+fn check_command(kind: Kind, text: &str) -> Result<(), String> {
     let unit = Unit::parse(text)?;
     for entry in &unit.entries {
         let key = entry.key.as_str();
@@ -124,8 +125,18 @@ fn check_command(text: &str) -> Result<(), String> {
         }
     }
     let words = unit::command_words(unit.single("Service", "ExecStart")?)?;
-    if words != DAEMON_COMMAND {
-        return Err(format!("ExecStart= runs {words:?}, not {DAEMON_COMMAND:?}"));
+    let wanted: Vec<&str> = std::iter::once(kind.program()).chain(DAEMON_ARGS).collect();
+    if words != wanted {
+        return Err(format!("ExecStart= runs {words:?}, not {wanted:?}"));
+    }
+    if kind == Kind::Bootstrap {
+        return match unit.values("Service", "ExecStartPre").is_empty() {
+            true => Ok(()),
+            false => Err(
+                "the bootstrap unit runs a command before the daemon (ExecStartPre=); the daemon it starts seeds itself"
+                    .to_owned(),
+            ),
+        };
     }
     let pre = unit.single("Service", "ExecStartPre")?;
     let seed = pre.strip_prefix('-').ok_or_else(|| {
@@ -140,167 +151,184 @@ fn check_command(text: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Catches a unit whose command line is not the daemon's: a program other than `current` of the
-/// binary directory (the deb's `/usr/bin/hostkeeper`, `previous`), a renamed or dropped flag, a
-/// flag without its value, another verb, a second command, a prefix that ignores a failure, a
-/// value taken from the environment, or any environment set for the daemon; and a unit whose seed
-/// before the start is missing, can stop the start, or is not the seed of the state directory
-/// with the package's binary.
+/// Catches a unit whose command line is not the daemon's: a program other than the unit's (the
+/// installed binary in the package unit, `current` in the bootstrap unit, `previous`), a renamed
+/// or dropped flag, an `--admin-socket`, a flag without its value, another verb, a second
+/// command, a prefix that ignores a failure, a value taken from the environment, or any
+/// environment set for the daemon; a package unit whose seed before the start is missing, can
+/// stop the start, or is not the seed of the state directory with the package's binary; and a
+/// bootstrap unit that runs any command before the start.
 #[test]
-fn unit_command_line_is_the_daemon_with_its_paths_and_no_environment() {
-    let text = read(UNIT);
-    assert_eq!(check_command(&text), Ok(()));
+fn each_units_command_line_is_the_daemon_with_its_paths_and_no_environment() {
     let line_end = "--notify-systemd\n";
-    let cases = [
-        (
-            altered(
-                &text,
-                line_end,
-                "--notify-systemd\nEnvironment=RUST_LOG=debug\n",
+    for kind in Kind::ALL {
+        let text = kind.read();
+        assert_eq!(check_command(kind, &text), Ok(()));
+        let program = kind.program();
+        let other = match kind {
+            Kind::Bootstrap => Kind::Package.program(),
+            Kind::Package => Kind::Bootstrap.program(),
+        };
+        let start = format!("ExecStart={program} daemon");
+        let mut cases = vec![
+            (
+                altered(
+                    &text,
+                    line_end,
+                    "--notify-systemd\nEnvironment=RUST_LOG=debug\n",
+                ),
+                "(Environment=)",
             ),
-            "(Environment=)",
-        ),
-        (
-            altered(
-                &text,
-                line_end,
-                "--notify-systemd\nEnvironmentFile=-/etc/default/hostkeeper\n",
+            (
+                altered(
+                    &text,
+                    line_end,
+                    "--notify-systemd\nEnvironmentFile=-/etc/default/hostkeeper\n",
+                ),
+                "(EnvironmentFile=)",
             ),
-            "(EnvironmentFile=)",
-        ),
-        (
-            altered(&text, line_end, "--notify-systemd\nPassEnvironment=HOME\n"),
-            "(PassEnvironment=)",
-        ),
-        (
-            altered(
-                &text,
-                line_end,
-                "--notify-systemd\nExecStartPost=/usr/bin/true\n",
+            (
+                altered(&text, line_end, "--notify-systemd\nPassEnvironment=HOME\n"),
+                "(PassEnvironment=)",
             ),
-            "ExecStartPost= runs a command",
-        ),
-        (
-            altered(
-                &text,
-                line_end,
-                "--notify-systemd\nExecStartPre=-/usr/bin/true\n",
+            (
+                altered(
+                    &text,
+                    line_end,
+                    "--notify-systemd\nExecStartPost=/usr/bin/true\n",
+                ),
+                "ExecStartPost= runs a command",
             ),
-            "sets ExecStartPre= 2 times",
-        ),
-        (
-            altered(&text, "ExecStartPre=-/usr/bin/", "ExecStartPre=/usr/bin/"),
-            "ExecStartPre= has no `-`",
-        ),
-        (
-            altered(
-                &text,
-                "self-update-seed --state-dir",
-                "self-update-seed --dir",
+            (
+                altered(
+                    &text,
+                    line_end,
+                    "--notify-systemd\nExecReload=/bin/kill -HUP $MAINPID\n",
+                ),
+                "ExecReload= runs a command",
             ),
-            "ExecStartPre= runs",
-        ),
-        (
-            altered(&text, " --binary /usr/bin/hostkeeper\n", "\n"),
-            "ExecStartPre= runs",
-        ),
-        (
-            altered(
-                &text,
-                "ExecStartPre=-/usr/bin/hostkeeper self-update-seed --state-dir /var/lib/updater/state --binary /usr/bin/hostkeeper\n",
-                "",
+            (
+                altered(
+                    &text,
+                    "--config /etc/hostkeeper/hostkeeper.toml",
+                    "--config $CONFIG",
+                ),
+                "holds `$`",
             ),
-            "[Service] has no ExecStartPre=",
-        ),
-        (
-            altered(
-                &text,
-                line_end,
-                "--notify-systemd\nExecReload=/bin/kill -HUP $MAINPID\n",
+            (
+                altered(
+                    &text,
+                    "--config /etc/hostkeeper/hostkeeper.toml",
+                    "--config %E/hostkeeper/hostkeeper.toml",
+                ),
+                "holds `%`",
             ),
-            "ExecReload= runs a command",
-        ),
-        (
-            altered(
-                &text,
-                "--config /etc/hostkeeper/hostkeeper.toml",
-                "--config $CONFIG",
+            (
+                altered(
+                    &text,
+                    &start,
+                    "ExecStart=/var/lib/updater/state/hostkeeper/bin/previous daemon",
+                ),
+                "ExecStart= runs",
             ),
-            "holds `$`",
-        ),
-        (
-            altered(
-                &text,
-                "--config /etc/hostkeeper/hostkeeper.toml",
-                "--config %E/hostkeeper/hostkeeper.toml",
+            (
+                altered(&text, &start, &format!("ExecStart={other} daemon")),
+                "ExecStart= runs",
             ),
-            "holds `%`",
-        ),
-        (
-            altered(&text, "current daemon --config", "previous daemon --config"),
-            "ExecStart= runs",
-        ),
-        (
-            altered(
-                &text,
-                "ExecStart=/var/lib/updater/state/hostkeeper/bin/current daemon",
-                "ExecStart=/usr/bin/hostkeeper daemon",
+            (
+                altered(
+                    &text,
+                    "daemon --config /etc/hostkeeper/hostkeeper.toml --state-dir",
+                    "daemon --config /etc/hostkeeper/hostkeeper.toml --state-directory",
+                ),
+                "ExecStart= runs",
             ),
-            "ExecStart= runs",
-        ),
-        (
-            altered(
-                &text,
-                "daemon --config /etc/hostkeeper/hostkeeper.toml --state-dir",
-                "daemon --config /etc/hostkeeper/hostkeeper.toml --state-directory",
+            (
+                altered(
+                    &text,
+                    "--packages-dir /var/lib/hostkeeper/packages ",
+                    "--packages-dir ",
+                ),
+                "ExecStart= runs",
             ),
-            "ExecStart= runs",
-        ),
-        (
-            altered(
-                &text,
-                "--packages-dir /var/lib/hostkeeper/packages ",
-                "--packages-dir ",
+            (
+                altered(&text, " daemon --config", " serve --config"),
+                "ExecStart= runs",
             ),
-            "ExecStart= runs",
-        ),
-        (
-            altered(&text, "current daemon --config", "current serve --config"),
-            "ExecStart= runs",
-        ),
-        (
-            altered(&text, " --notify-systemd\n", "\n"),
-            "ExecStart= runs",
-        ),
-        (
-            altered(
-                &text,
-                "--notify-systemd\n",
-                "--notify-systemd ; /usr/bin/true\n",
+            (
+                altered(&text, " --notify-systemd\n", "\n"),
+                "ExecStart= runs",
             ),
-            "a second command",
-        ),
-        (
-            altered(&text, "ExecStart=/var/lib/", "ExecStart=-/var/lib/"),
-            "has a prefix",
-        ),
-        (
-            altered(&text, "--admin-socket /run", "--admin-socket \"/run"),
-            "unclosed",
-        ),
-        (
-            altered(
-                &text,
-                line_end,
-                "--notify-systemd\nExecStart=/var/lib/updater/state/hostkeeper/bin/current daemon\n",
+            (
+                altered(
+                    &text,
+                    " --notify-systemd\n",
+                    " --notify-systemd --admin-socket /run/hostkeeper/admin.sock\n",
+                ),
+                "ExecStart= runs",
             ),
-            "sets ExecStart= 2 times",
-        ),
-    ];
-    refuses(check_command, &cases);
-    // A command line continued over two lines is one command line.
-    let continued = altered(&text, " --packages-dir", " \\\n    --packages-dir");
-    assert_eq!(check_command(&continued), Ok(()));
+            (
+                altered(&text, line_end, "--notify-systemd ; /usr/bin/true\n"),
+                "a second command",
+            ),
+            (
+                altered(&text, &start, &format!("ExecStart=-{program} daemon")),
+                "has a prefix",
+            ),
+            (
+                altered(&text, "--config /etc", "--config \"/etc"),
+                "unclosed",
+            ),
+            (
+                altered(
+                    &text,
+                    line_end,
+                    &format!("--notify-systemd\nExecStart={program} daemon\n"),
+                ),
+                "sets ExecStart= 2 times",
+            ),
+        ];
+        match kind {
+            Kind::Bootstrap => cases.push((
+                altered(&text, "ExecStart=", &format!("{SEED_LINE}ExecStart=")),
+                "the bootstrap unit runs a command before the daemon",
+            )),
+            Kind::Package => cases.extend([
+                (
+                    altered(
+                        &text,
+                        line_end,
+                        "--notify-systemd\nExecStartPre=-/usr/bin/true\n",
+                    ),
+                    "sets ExecStartPre= 2 times",
+                ),
+                (
+                    altered(&text, "ExecStartPre=-/usr/bin/", "ExecStartPre=/usr/bin/"),
+                    "ExecStartPre= has no `-`",
+                ),
+                (
+                    altered(
+                        &text,
+                        "self-update-seed --state-dir",
+                        "self-update-seed --dir",
+                    ),
+                    "ExecStartPre= runs",
+                ),
+                (
+                    altered(&text, " --binary /usr/bin/hostkeeper\n", "\n"),
+                    "ExecStartPre= runs",
+                ),
+                (
+                    altered(&text, SEED_LINE, ""),
+                    "[Service] has no ExecStartPre=",
+                ),
+            ]),
+        }
+        refuses(|t: &str| check_command(kind, t), &cases);
+        // A command line continued over two lines is one command line.
+        let continued = altered(&text, " --packages-dir", " \\\n    --packages-dir");
+        assert_eq!(check_command(kind, &continued), Ok(()));
+    }
 }
 
 fn is_confining(key: &str) -> bool {
@@ -332,55 +360,57 @@ fn check_root_notify(text: &str) -> Result<(), String> {
 /// `Type=notify` (systemd would count the daemon ready before its boot pass), or that a host
 /// does not start at boot.
 #[test]
-fn unit_runs_as_root_with_type_notify() {
-    let text = read(UNIT);
-    assert_eq!(check_root_notify(&text), Ok(()));
-    let after_type = "Type=notify\n";
-    let cases = [
-        (altered(&text, after_type, "Type=simple\n"), "Type=simple"),
-        (altered(&text, after_type, "Type=exec\n"), "Type=exec"),
-        (
-            altered(&text, after_type, "Type=notify\nUser=hostkeeper\n"),
-            "User= takes root",
-        ),
-        (
-            altered(&text, after_type, "Type=notify\nDynamicUser=yes\n"),
-            "DynamicUser= takes root",
-        ),
-        (
-            altered(&text, after_type, "Type=notify\nNoNewPrivileges=yes\n"),
-            "NoNewPrivileges= takes root",
-        ),
-        (
-            altered(&text, after_type, "Type=notify\nProtectSystem=strict\n"),
-            "ProtectSystem= takes root",
-        ),
-        (
-            altered(&text, after_type, "Type=notify\nPrivateTmp=yes\n"),
-            "PrivateTmp= takes root",
-        ),
-        (
-            altered(
-                &text,
-                after_type,
-                "Type=notify\nCapabilityBoundingSet=CAP_NET_ADMIN\n",
+fn each_unit_runs_as_root_with_type_notify() {
+    for kind in Kind::ALL {
+        let text = kind.read();
+        assert_eq!(check_root_notify(&text), Ok(()));
+        let after_type = "Type=notify\n";
+        let cases = [
+            (altered(&text, after_type, "Type=simple\n"), "Type=simple"),
+            (altered(&text, after_type, "Type=exec\n"), "Type=exec"),
+            (
+                altered(&text, after_type, "Type=notify\nUser=hostkeeper\n"),
+                "User= takes root",
             ),
-            "CapabilityBoundingSet= takes root",
-        ),
-        (
-            altered(
-                &text,
-                "WantedBy=multi-user.target",
-                "WantedBy=default.target",
+            (
+                altered(&text, after_type, "Type=notify\nDynamicUser=yes\n"),
+                "DynamicUser= takes root",
             ),
-            "WantedBy= is",
-        ),
-        (
-            altered(&text, "WantedBy=multi-user.target", "WantedBy="),
-            "WantedBy= is",
-        ),
-    ];
-    refuses(check_root_notify, &cases);
+            (
+                altered(&text, after_type, "Type=notify\nNoNewPrivileges=yes\n"),
+                "NoNewPrivileges= takes root",
+            ),
+            (
+                altered(&text, after_type, "Type=notify\nProtectSystem=strict\n"),
+                "ProtectSystem= takes root",
+            ),
+            (
+                altered(&text, after_type, "Type=notify\nPrivateTmp=yes\n"),
+                "PrivateTmp= takes root",
+            ),
+            (
+                altered(
+                    &text,
+                    after_type,
+                    "Type=notify\nCapabilityBoundingSet=CAP_NET_ADMIN\n",
+                ),
+                "CapabilityBoundingSet= takes root",
+            ),
+            (
+                altered(
+                    &text,
+                    "WantedBy=multi-user.target",
+                    "WantedBy=default.target",
+                ),
+                "WantedBy= is",
+            ),
+            (
+                altered(&text, "WantedBy=multi-user.target", "WantedBy="),
+                "WantedBy= is",
+            ),
+        ];
+        refuses(check_root_notify, &cases);
+    }
 }
 
 fn check_limits(text: &str) -> Result<(), String> {
@@ -458,100 +488,102 @@ fn check_watchdog(unit: &Unit) -> Result<(), String> {
 /// watchdog that is missing, not in whole seconds, or too short for the heartbeat the command
 /// line runs: under three periods, or under one period and the longest heartbeat call.
 #[test]
-fn unit_restarts_always_with_no_start_limit_of_its_own_and_a_watchdog_over_the_heartbeat() {
-    let text = read(UNIT);
-    assert_eq!(check_limits(&text), Ok(()));
-    let limit = "StartLimitIntervalSec=0\n";
-    let moved = altered(
-        &altered(&text, limit, ""),
-        "Restart=always\n",
-        &format!("Restart=always\n{limit}"),
-    );
-    let flags = "--notify-systemd\n";
-    let cases = [
-        (
-            altered(
-                &text,
-                "StartLimitIntervalSec=0",
-                "StartLimitIntervalSec=300",
+fn each_unit_restarts_always_with_no_start_limit_of_its_own_and_a_watchdog_over_the_heartbeat() {
+    for kind in Kind::ALL {
+        let text = kind.read();
+        assert_eq!(check_limits(&text), Ok(()));
+        let limit = "StartLimitIntervalSec=0\n";
+        let moved = altered(
+            &altered(&text, limit, ""),
+            "Restart=always\n",
+            &format!("Restart=always\n{limit}"),
+        );
+        let flags = "--notify-systemd\n";
+        let cases = [
+            (
+                altered(
+                    &text,
+                    "StartLimitIntervalSec=0",
+                    "StartLimitIntervalSec=300",
+                ),
+                "StartLimitIntervalSec=300: the unit has no start limit",
             ),
-            "StartLimitIntervalSec=300: the unit has no start limit",
-        ),
-        (altered(&text, limit, ""), "has no StartLimitIntervalSec="),
-        (moved, "is in [Service]"),
-        (
-            altered(&text, "TimeoutStartSec=infinity", "TimeoutStartSec=90"),
-            "TimeoutStartSec=90",
-        ),
-        (
-            altered(&text, "TimeoutStartSec=infinity\n", ""),
-            "has no TimeoutStartSec=",
-        ),
-        (
-            altered(&text, "Restart=always", "Restart=on-failure"),
-            "Restart=on-failure, not always",
-        ),
-        (
-            altered(&text, "Restart=always", "Restart=no"),
-            "Restart=no, not always",
-        ),
-        (
-            altered(&text, "RestartSec=1", "RestartSec=30"),
-            "RestartSec=30, not 1",
-        ),
-        (altered(&text, "RestartSec=1\n", ""), "has no RestartSec="),
-        (
-            altered(&text, "RestartMode=direct\n", "RestartMode=normal\n"),
-            "RestartMode=normal, not direct",
-        ),
-        (
-            altered(&text, "RestartMode=direct\n", ""),
-            "has no RestartMode=",
-        ),
-        (
-            altered(&text, "WatchdogSec=60\n", ""),
-            "has no WatchdogSec=",
-        ),
-        (
-            altered(&text, "WatchdogSec=60", "WatchdogSec=1min"),
-            "WatchdogSec=1min is not a whole number",
-        ),
-        (
-            altered(&text, "WatchdogSec=60", "WatchdogSec=44"),
-            "WatchdogSec=44 is under 45 seconds",
-        ),
-        (
-            altered(&text, flags, "--notify-systemd --heartbeat-secs 30\n"),
-            "WatchdogSec=60 is under 90 seconds",
-        ),
-        (
-            altered(&text, flags, "--notify-systemd --heartbeat-secs 0\n"),
-            "--heartbeat-secs",
-        ),
-    ];
-    refuses(check_limits, &cases);
-    // Three periods is enough, at the default heartbeat and at one the command line sets.
-    let at_three = altered(&text, "WatchdogSec=60", "WatchdogSec=45");
-    assert_eq!(check_limits(&at_three), Ok(()));
-    let set = altered(&text, flags, "--notify-systemd --heartbeat-secs 20\n");
-    assert_eq!(check_limits(&set), Ok(()));
-    // A short heartbeat needs a watchdog over one period and the longest call, not three
-    // periods alone.
-    let short = altered(
-        &altered(&text, flags, "--notify-systemd --heartbeat-secs 2\n"),
-        "WatchdogSec=60",
-        "WatchdogSec=12",
-    );
-    assert_eq!(
-        check_limits(&short),
-        Err(format!(
-            "WatchdogSec=12 is under 13 seconds: a heartbeat every 2 seconds, each call up to {CALL_SECS}, would be killed while it is healthy"
-        ))
-    );
-    assert_eq!(
-        check_limits(&altered(&short, "WatchdogSec=12", "WatchdogSec=13")),
-        Ok(())
-    );
+            (altered(&text, limit, ""), "has no StartLimitIntervalSec="),
+            (moved, "is in [Service]"),
+            (
+                altered(&text, "TimeoutStartSec=infinity", "TimeoutStartSec=90"),
+                "TimeoutStartSec=90",
+            ),
+            (
+                altered(&text, "TimeoutStartSec=infinity\n", ""),
+                "has no TimeoutStartSec=",
+            ),
+            (
+                altered(&text, "Restart=always", "Restart=on-failure"),
+                "Restart=on-failure, not always",
+            ),
+            (
+                altered(&text, "Restart=always", "Restart=no"),
+                "Restart=no, not always",
+            ),
+            (
+                altered(&text, "RestartSec=1", "RestartSec=30"),
+                "RestartSec=30, not 1",
+            ),
+            (altered(&text, "RestartSec=1\n", ""), "has no RestartSec="),
+            (
+                altered(&text, "RestartMode=direct\n", "RestartMode=normal\n"),
+                "RestartMode=normal, not direct",
+            ),
+            (
+                altered(&text, "RestartMode=direct\n", ""),
+                "has no RestartMode=",
+            ),
+            (
+                altered(&text, "WatchdogSec=60\n", ""),
+                "has no WatchdogSec=",
+            ),
+            (
+                altered(&text, "WatchdogSec=60", "WatchdogSec=1min"),
+                "WatchdogSec=1min is not a whole number",
+            ),
+            (
+                altered(&text, "WatchdogSec=60", "WatchdogSec=44"),
+                "WatchdogSec=44 is under 45 seconds",
+            ),
+            (
+                altered(&text, flags, "--notify-systemd --heartbeat-secs 30\n"),
+                "WatchdogSec=60 is under 90 seconds",
+            ),
+            (
+                altered(&text, flags, "--notify-systemd --heartbeat-secs 0\n"),
+                "--heartbeat-secs",
+            ),
+        ];
+        refuses(check_limits, &cases);
+        // Three periods is enough, at the default heartbeat and at one the command line sets.
+        let at_three = altered(&text, "WatchdogSec=60", "WatchdogSec=45");
+        assert_eq!(check_limits(&at_three), Ok(()));
+        let set = altered(&text, flags, "--notify-systemd --heartbeat-secs 20\n");
+        assert_eq!(check_limits(&set), Ok(()));
+        // A short heartbeat needs a watchdog over one period and the longest call, not three
+        // periods alone.
+        let short = altered(
+            &altered(&text, flags, "--notify-systemd --heartbeat-secs 2\n"),
+            "WatchdogSec=60",
+            "WatchdogSec=12",
+        );
+        assert_eq!(
+            check_limits(&short),
+            Err(format!(
+                "WatchdogSec=12 is under 13 seconds: a heartbeat every 2 seconds, each call up to {CALL_SECS}, would be killed while it is healthy"
+            ))
+        );
+        assert_eq!(
+            check_limits(&altered(&short, "WatchdogSec=12", "WatchdogSec=13")),
+            Ok(())
+        );
+    }
 }
 
 /// Keys that would start a kbf unit with this one, or tie this unit's life to it.
@@ -590,51 +622,53 @@ fn check_conflicts(text: &str) -> Result<(), String> {
 /// 12.3): a kbf unit missing from `Conflicts=` or misspelled there, or named in a key that
 /// would start it with this unit.
 #[test]
-fn the_unit_conflicts_with_kbfs_updater_units() {
-    let text = read(UNIT);
-    assert_eq!(check_conflicts(&text), Ok(()));
-    let all = KBF_UNITS.join(" ");
-    let conflicts = format!("Conflicts={all}");
-    let cases = [
-        (
-            altered(
-                &text,
-                &conflicts,
-                "Conflicts=kbf-updater-agent.service kbf-host-local.service",
+fn each_unit_conflicts_with_kbfs_updater_units() {
+    for kind in Kind::ALL {
+        let text = kind.read();
+        assert_eq!(check_conflicts(&text), Ok(()));
+        let all = KBF_UNITS.join(" ");
+        let conflicts = format!("Conflicts={all}");
+        let cases = [
+            (
+                altered(
+                    &text,
+                    &conflicts,
+                    "Conflicts=kbf-updater-agent.service kbf-host-local.service",
+                ),
+                "Conflicts= is",
             ),
-            "Conflicts= is",
-        ),
-        (
-            altered(
-                &text,
-                "Conflicts=kbf-updater-agent.service",
-                "Conflicts=kbf-update-agent.service",
+            (
+                altered(
+                    &text,
+                    "Conflicts=kbf-updater-agent.service",
+                    "Conflicts=kbf-update-agent.service",
+                ),
+                "Conflicts= is",
             ),
-            "Conflicts= is",
-        ),
-        (altered(&text, &conflicts, "Conflicts="), "Conflicts= is"),
-        (
-            altered(&text, &conflicts, &format!("Before={all}")),
-            "Conflicts= is",
-        ),
-        (
-            altered(
-                &text,
-                "Wants=network-online.target",
-                "Wants=network-online.target kbf-host-local.service",
+            (altered(&text, &conflicts, "Conflicts="), "Conflicts= is"),
+            (
+                altered(&text, &conflicts, &format!("Before={all}")),
+                "Conflicts= is",
             ),
-            "Wants= names kbf-host-local.service",
-        ),
-        (
-            altered(
-                &text,
-                "Wants=network-online.target\n",
-                "Wants=network-online.target\nBindsTo=kbf-updater-agent.service\n",
+            (
+                altered(
+                    &text,
+                    "Wants=network-online.target",
+                    "Wants=network-online.target kbf-host-local.service",
+                ),
+                "Wants= names kbf-host-local.service",
             ),
-            "BindsTo= names kbf-updater-agent.service",
-        ),
-    ];
-    refuses(check_conflicts, &cases);
+            (
+                altered(
+                    &text,
+                    "Wants=network-online.target\n",
+                    "Wants=network-online.target\nBindsTo=kbf-updater-agent.service\n",
+                ),
+                "BindsTo= names kbf-updater-agent.service",
+            ),
+        ];
+        refuses(check_conflicts, &cases);
+    }
 }
 
 fn check_handoff(text: &str) -> Result<(), String> {
@@ -659,41 +693,44 @@ fn check_handoff(text: &str) -> Result<(), String> {
 /// `Before=`, either one, either direction) links them; `Conflicts=` alone queues both jobs at
 /// once. So every unit this one conflicts with must also be ordered against it.
 #[test]
-fn the_handoff_with_kbfs_units_stops_one_before_starting_the_other() {
-    let text = read(UNIT);
-    assert_eq!(check_handoff(&text), Ok(()));
-    let after = format!("After={}\n", KBF_UNITS.join(" "));
-    // Ordered by Before= instead of After=: the stop still comes first.
-    let before = altered(&text, &after, &after.replace("After=", "Before="));
-    assert_eq!(check_handoff(&before), Ok(()));
-    let cases = [
-        (
-            altered(&text, &after, ""),
-            "kbf-updater-agent.service is in Conflicts= but in neither",
-        ),
-        (
-            altered(
-                &text,
-                &after,
-                "After=kbf-updater-agent.service kbf-host-local.service\n",
+fn each_units_handoff_with_kbfs_units_stops_one_before_starting_the_other() {
+    for kind in Kind::ALL {
+        let text = kind.read();
+        assert_eq!(check_handoff(&text), Ok(()));
+        let after = format!("After={}\n", KBF_UNITS.join(" "));
+        // Ordered by Before= instead of After=: the stop still comes first.
+        let before = altered(&text, &after, &after.replace("After=", "Before="));
+        assert_eq!(check_handoff(&before), Ok(()));
+        let cases = [
+            (
+                altered(&text, &after, ""),
+                "kbf-updater-agent.service is in Conflicts= but in neither",
             ),
-            "kbf-host-local-frontend.service is in Conflicts= but in neither",
-        ),
-        (
-            altered(&text, &after, "After=\n"),
-            "kbf-updater-agent.service is in Conflicts= but in neither",
-        ),
-    ];
-    refuses(check_handoff, &cases);
+            (
+                altered(
+                    &text,
+                    &after,
+                    "After=kbf-updater-agent.service kbf-host-local.service\n",
+                ),
+                "kbf-host-local-frontend.service is in Conflicts= but in neither",
+            ),
+            (
+                altered(&text, &after, "After=\n"),
+                "kbf-updater-agent.service is in Conflicts= but in neither",
+            ),
+        ];
+        refuses(check_handoff, &cases);
+    }
 }
 
-fn check_unit_keys(text: &str) -> Result<(), String> {
+fn check_unit_keys(kind: Kind, text: &str) -> Result<(), String> {
     let unit = Unit::parse(text)?;
+    let allowed = unit_keys(kind);
     for entry in &unit.entries {
-        let known = UNIT_KEYS
+        let known = allowed
             .iter()
             .find(|(section, _)| *section == entry.section)
-            .map_or(&[][..], |(_, keys)| *keys);
+            .map_or(&[][..], |(_, keys)| keys.as_slice());
         if !known.contains(&entry.key.as_str()) {
             return Err(format!(
                 "line {}: [{}] {}= is not a key of this unit",
@@ -701,7 +738,7 @@ fn check_unit_keys(text: &str) -> Result<(), String> {
             ));
         }
     }
-    for (section, keys) in UNIT_KEYS {
+    for (section, keys) in &allowed {
         if let Some(key) = keys.iter().find(|key| unit.values(section, key).is_empty()) {
             return Err(format!("[{section}] has no {key}="));
         }
@@ -709,66 +746,92 @@ fn check_unit_keys(text: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Catches a key the design does not name: a generated `OnFailure=` (the self-update fallback
+/// Catches, in either unit, a key the design does not name: a generated `OnFailure=` (the self-update fallback
 /// of section 6.6 is a drop-in the daemon writes), a timeout or a section added without a test,
-/// or a key the unit lost.
+/// a key the unit lost, `RuntimeDirectory=` (the socket's directory is the tmpfiles rules'), a seed
+/// in the bootstrap unit or none in the package unit.
 #[test]
-fn unit_holds_only_the_keys_the_design_names() {
-    let text = read(UNIT);
-    assert_eq!(check_unit_keys(&text), Ok(()));
-    let cases = [
-        (
-            altered(
-                &text,
-                "StartLimitIntervalSec=0\n",
-                "StartLimitIntervalSec=0\nOnFailure=hostkeeper-fallback.service\n",
+fn each_unit_holds_only_the_keys_the_design_names() {
+    for kind in Kind::ALL {
+        let text = kind.read();
+        assert_eq!(check_unit_keys(kind, &text), Ok(()));
+        let cases = [
+            (
+                altered(
+                    &text,
+                    "StartLimitIntervalSec=0\n",
+                    "StartLimitIntervalSec=0\nOnFailure=hostkeeper-fallback.service\n",
+                ),
+                "[Unit] OnFailure= is not",
             ),
-            "[Unit] OnFailure= is not",
-        ),
-        (
-            altered(
-                &text,
-                "StartLimitIntervalSec=0\n",
-                "StartLimitIntervalSec=0\nStartLimitBurst=3\n",
+            (
+                altered(
+                    &text,
+                    "StartLimitIntervalSec=0\n",
+                    "StartLimitIntervalSec=0\nStartLimitBurst=3\n",
+                ),
+                "[Unit] StartLimitBurst= is not",
             ),
-            "[Unit] StartLimitBurst= is not",
-        ),
-        (
-            altered(
-                &text,
-                "WatchdogSec=60\n",
-                "WatchdogSec=60\nWatchdogSignal=SIGKILL\n",
+            (
+                altered(
+                    &text,
+                    "WatchdogSec=60\n",
+                    "WatchdogSec=60\nWatchdogSignal=SIGKILL\n",
+                ),
+                "[Service] WatchdogSignal= is not",
             ),
-            "[Service] WatchdogSignal= is not",
-        ),
-        (
-            altered(&text, "WatchdogSec=60\n", ""),
-            "[Service] has no WatchdogSec=",
-        ),
-        (
-            altered(
-                &text,
-                "Restart=always\n",
-                "Restart=always\nRestartPreventExitStatus=0\n",
+            (
+                altered(&text, "WatchdogSec=60\n", ""),
+                "[Service] has no WatchdogSec=",
             ),
-            "[Service] RestartPreventExitStatus= is not",
-        ),
-        (
-            altered(
-                &text,
-                "[Install]\n",
-                "[Socket]\nListenStream=/run/hostkeeper/admin.sock\n\n[Install]\n",
+            (
+                altered(
+                    &text,
+                    "Restart=always\n",
+                    "Restart=always\nRestartPreventExitStatus=0\n",
+                ),
+                "[Service] RestartPreventExitStatus= is not",
             ),
-            "[Socket] ListenStream= is not",
-        ),
-        (
-            altered(&text, "Wants=network-online.target\n", ""),
-            "[Unit] has no Wants=",
-        ),
-        (
-            altered(&text, "RuntimeDirectoryMode=0700\n", ""),
-            "[Service] has no RuntimeDirectoryMode=",
-        ),
-    ];
-    refuses(check_unit_keys, &cases);
+            (
+                altered(
+                    &text,
+                    "[Install]\n",
+                    "[Socket]\nListenStream=/run/hostkeeper/admin.sock\n\n[Install]\n",
+                ),
+                "[Socket] ListenStream= is not",
+            ),
+            (
+                altered(&text, "Wants=network-online.target\n", ""),
+                "[Unit] has no Wants=",
+            ),
+            (
+                altered(
+                    &text,
+                    "WatchdogSec=60\n",
+                    "WatchdogSec=60\nRuntimeDirectory=hostkeeper\n",
+                ),
+                "[Service] RuntimeDirectory= is not",
+            ),
+            (
+                altered(
+                    &text,
+                    "WatchdogSec=60\n",
+                    "WatchdogSec=60\nRuntimeDirectoryMode=0700\n",
+                ),
+                "[Service] RuntimeDirectoryMode= is not",
+            ),
+        ];
+        let mut cases = cases.to_vec();
+        match kind {
+            Kind::Bootstrap => cases.push((
+                altered(&text, "ExecStart=", &format!("{SEED_LINE}ExecStart=")),
+                "[Service] ExecStartPre= is not",
+            )),
+            Kind::Package => cases.push((
+                altered(&text, SEED_LINE, ""),
+                "[Service] has no ExecStartPre=",
+            )),
+        }
+        refuses(|t: &str| check_unit_keys(kind, t), &cases);
+    }
 }

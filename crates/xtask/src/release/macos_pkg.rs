@@ -8,9 +8,9 @@
 //!   (`/usr/local/bin/hostkeeper`), mode 0755;
 //! - the daemon's launchd plist, `/Library/LaunchDaemons/<label>.plist` with the label
 //!   `hostkeeper_launchd::Label::daemon` (`dev.hostkeeper.hostkeeper`), mode 0644, the text
-//!   `hostkeeper_launchd::daemon_plist` writes for `DaemonJob::standard`, whose program is
-//!   `current` of the binary directory of hostkeeper's own update
-//!   (`hostkeeper_launchd::plist::DAEMON_PROGRAM`), not the binary above;
+//!   `hostkeeper_launchd::daemon_plist` writes for `DaemonJob::standard`, whose program is the
+//!   binary above: `hostkeeper daemon` started from that path seeds the binary directory of
+//!   hostkeeper's own update and execs `current` of it (`hostkeeper_daemon::packaged`);
 //! - the directory of the daemon's output files, `hostkeeper_launchd::DAEMON_LOG_DIR`
 //!   (`/var/log/hostkeeper`), empty: launchd opens the job's `StandardOutPath` and
 //!   `StandardErrorPath` there but does not make their directory;
@@ -39,12 +39,13 @@
 //! changes no system directory; `/usr/local/lib` and `/usr/local/lib/hostkeeper` are made with
 //! that mode when they are not there.
 //!
-//! The pkg has one script, `postinstall` ([`scripts`]), which runs three commands at install:
-//! the installed binary's `self-update-seed`, which points `current` of the binary directory at
-//! that binary when `current` starts nothing, so the job's first start works before any
-//! self-update; its `mac-config`, which writes `/etc/hostkeeper/hostkeeper.toml` from the managed
-//! preferences the MDM installed, keeps a config that is there and fails with neither; and
-//! `launchctl bootstrap`, which loads the daemon's job. The pkg carries no config of its own.
+//! The pkg has one script, `postinstall` ([`scripts`]), which runs two commands at install:
+//! `launchctl bootout` of any copy of the daemon's job loaded before, and `launchctl bootstrap`,
+//! which loads the job the pkg installed. It runs the installed binary at no point: the daemon's
+//! start does what the script once did (`hostkeeper_daemon::packaged` seeds the binary directory
+//! of hostkeeper's own update and execs `current`, `hostkeeper_daemon::mac_config::at_start`
+//! writes `/etc/hostkeeper/hostkeeper.toml` from the managed preferences the MDM installed). The
+//! pkg carries no config of its own.
 //!
 //! The file the verbs name is a distribution pkg ([`distribution`]): `pkgbuild` builds the
 //! component pkg that holds the payload and the script, and `productbuild` wraps it, as the one
@@ -69,7 +70,7 @@
 //! archive (the portable `odc` format) that `pkgutil --expand` does not expand, holds exactly
 //! the entries above with their modes, owners and bytes (the binary, `gh` and the trusted root
 //! those of the files it is given), the plist parsing as a launchd plist that names the daemon's
-//! label, the program `current` of the binary directory and the output files, and the newsyslog
+//! label, the program the installed binary and the output files, and the newsyslog
 //! file rotating exactly those output files.
 
 use std::collections::BTreeMap;
@@ -77,7 +78,7 @@ use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use hostkeeper_launchd::plist::{DAEMON_LOG_DIR, DAEMON_PROGRAM, INSTALLED_BINARY};
+use hostkeeper_launchd::plist::{DAEMON_LOG_DIR, INSTALLED_BINARY};
 use hostkeeper_launchd::{DaemonJob, Label, Platform as Launchd, daemon_plist};
 
 use super::contract::{Version, installer_name};
@@ -648,9 +649,9 @@ fn package_info_problems(text: &str, version: &Version, problems: &mut Vec<Strin
 }
 
 /// What is wrong with the launchd plist `bytes` of the payload, one line each: it must parse as
-/// a plist dictionary naming the daemon's label, running `current` of the binary directory of
-/// hostkeeper's own update (which the `postinstall` seeds from the binary of the payload), and sending
-/// its output to the files the newsyslog file rotates, in the log directory of the payload.
+/// a plist dictionary naming the daemon's label, running the binary of the payload (which, started
+/// as `hostkeeper daemon` from that path, seeds the binary directory of hostkeeper's own update
+/// and execs `current` of it), and sending its output to the files the newsyslog file rotates, in the log directory of the payload.
 fn plist_problems(bytes: &[u8], problems: &mut Vec<String>) {
     let what = shown(&plist_path());
     let value = match plist::Value::from_reader_xml(bytes) {
@@ -672,10 +673,10 @@ fn plist_problems(bytes: &[u8], problems: &mut Vec<String>) {
         .and_then(plist::Value::as_array)
         .and_then(|a| a.first())
         .and_then(plist::Value::as_string);
-    if program != Some(DAEMON_PROGRAM) {
+    if program != Some(INSTALLED_BINARY) {
         problems.push(format!(
-            "{what}: the job runs {program:?}, not {DAEMON_PROGRAM:?}, current of the binary \
-             directory a self-update switches"
+            "{what}: the job runs {program:?}, not {INSTALLED_BINARY:?}, the binary the pkg \
+             installs, whose start seeds the binary directory of a self-update and runs current"
         ));
     }
     for (key, want) in outputs() {
