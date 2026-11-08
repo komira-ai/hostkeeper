@@ -3,7 +3,7 @@
 //!
 //! An adapter has no rule of its own. A method that has a handler in the coordinator
 //! ([`crate::operator`], [`crate::hosts`], [`crate::force`], [`crate::assign`],
-//! [`crate::alerts`], [`crate::rollouts`], [`crate::operator_mdm`]) calls it with
+//! [`crate::alerts`], [`crate::rollouts`], [`crate::operator_mdm`], [`crate::wait`]) calls it with
 //! the caller the router admitted. A method the frozen JSON routes have (`Hosts.Include`,
 //! `Hosts.SetLabels`, `Releases.ClearHalt`, `Releases.SetDesired`, `Releases.Converge`,
 //! `Releases.Status`) builds the request that route reads and calls what that route calls. Every
@@ -13,6 +13,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_proto::hostkeeper::operator::v1::alerts_server::Alerts as AlertsApi;
@@ -33,6 +34,7 @@ use crate::operator::{Caller, entry_proto};
 use crate::ops::OperateError;
 use crate::service::ci_calls::Setter;
 use crate::service::{CiRefused, ConvergenceError, Coordinator, SetError};
+use crate::wait::{CallLimit, ConnectionWaits, MAX_WAIT_SECS, WaitRefused};
 use crate::write_record::{WriteAsk, WriteId, WriteRecord};
 
 /// What `operate` says of a service the coordinator does not manage.
@@ -123,6 +125,14 @@ pub(crate) fn set_refusal(why: SetError) -> proto::ReleasesRefusal {
             tracing::error!(%why, "the desired state could not be stored");
             proto::ReleasesRefusal::StoreFailed
         }
+    }
+}
+
+/// The refusal of `Releases` for a wait that was not held.
+pub(crate) fn wait_refusal(why: WaitRefused) -> proto::ReleasesRefusal {
+    match why {
+        WaitRefused::UnknownService => proto::ReleasesRefusal::UnknownService,
+        WaitRefused::TooMany => proto::ReleasesRefusal::TooManyWaits,
     }
 }
 
@@ -420,6 +430,57 @@ impl ReleasesApi for ReleasesService {
                 })
             })
             .map_err(|why| refusal::releases(converge_refusal(why)))
+    }
+
+    async fn wait_converged(
+        &self,
+        request: Request<proto::WaitConvergedRequest>,
+    ) -> Result<Response<proto::WaitConvergedResponse>, Status> {
+        // CI's token or the operator's, as for `Converge`: checked once, when the call was
+        // admitted, and never again while it is held.
+        let ci = matches!(
+            request.extensions().get::<Admitted>(),
+            Some(Admitted::Ci(_))
+        );
+        if !ci && caller_of(&request).operator().is_err() {
+            return Err(refusal::releases(proto::ReleasesRefusal::Unauthorized));
+        }
+        let limit = request.extensions().get::<CallLimit>().cloned();
+        let connection = request.extensions().get::<ConnectionWaits>().cloned();
+        let message = request.into_inner();
+        if message.wait_secs == 0 || message.wait_secs > MAX_WAIT_SECS {
+            return Err(refusal::releases(proto::ReleasesRefusal::InvalidWait));
+        }
+        let service = match message.service.as_str() {
+            "" => self.coordinator.legacy_service(),
+            name => Some(name),
+        };
+        let service = service
+            .filter(|_| !message.version.is_empty())
+            .ok_or_else(|| refusal::releases(proto::ReleasesRefusal::InvalidRequest))?;
+        let held = self
+            .coordinator
+            .hold_wait(service)
+            .map_err(|why| refusal::releases(wait_refusal(why)))?;
+        let wait = Duration::from_secs(message.wait_secs.into());
+        if let Some(limit) = limit {
+            limit.hold_for(wait);
+        }
+        let _connection = connection.as_ref().map(ConnectionWaits::hold);
+        let (outcome, convergence) = self
+            .coordinator
+            .wait_converged(&held, &message.version, wait)
+            .await;
+        let mut convergence = report::convergence(&convergence);
+        convergence.record = self
+            .coordinator
+            .write_record(service)
+            .as_ref()
+            .map(record_proto);
+        Ok(Response::new(proto::WaitConvergedResponse {
+            outcome: outcome.into(),
+            convergence: Some(convergence),
+        }))
     }
 
     async fn force(

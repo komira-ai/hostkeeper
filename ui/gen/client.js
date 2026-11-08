@@ -48,6 +48,7 @@ export function createClient(call) {
       status: (request) => call("hostkeeper.operator.v1.Releases/Status", request),
       markBad: (request) => call("hostkeeper.operator.v1.Releases/MarkBad", request),
       halt: (request) => call("hostkeeper.operator.v1.Releases/Halt", request),
+      waitConverged: (request) => call("hostkeeper.operator.v1.Releases/WaitConverged", request),
     }),
     rollouts: Object.freeze({
       advance: (request) => call("hostkeeper.operator.v1.Rollouts/Advance", request),

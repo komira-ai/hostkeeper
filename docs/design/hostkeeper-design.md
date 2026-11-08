@@ -291,6 +291,7 @@ The operator API is protobuf services (`operator.proto`, PR #3) with an HTTP/JSO
 |---|---|---|
 | `Hosts` | `List`, `Get` (role; each service's installed version, health, hold and excluded marks; the last update with verdict, phase, class, reason, `detail`, try number and log lines), `Exclude`, `Include`, `SetLabels` | PR #3 |
 | `Releases` | `SetDesired`, `Converge`, `Force`, `UnmarkBad`, `ClearHalt`, `Status` | PR #3 |
+| `Releases` | `WaitConverged`: one held read that ends at convergence, a halt, another desired version or its `wait_secs` ([two-programs.md](two-programs.md) section 3.1) | Built (`crates/hostkeeper-coordinator/src/wait.rs`) |
 | `Releases` | `MarkBad`, `Halt`; `Force` gains targets (fleet, role or hosts) and `include_held` (section 5.6) | Designed (B1, B7) |
 | `Services` | `List` (includes holds), `Assign`, `Unassign`, `SetMinVersion` (per role or host), `Hold`, `Unhold` (host, role or fleet, section 5.4) | Designed (B1, B7, B23) |
 | `Hosts` | `Abort` (queued as an order for the host's next heartbeat; takes no slot), `Exclude --abandon` | Designed (B7) |

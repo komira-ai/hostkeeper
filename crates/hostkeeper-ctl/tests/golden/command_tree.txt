@@ -83,6 +83,10 @@ flag releases mark-bad --reason STRING
 command releases halt /hostkeeper.operator.v1.Releases/Halt
 flag releases halt --service STRING
 flag releases halt --reason STRING
+command releases wait-converged /hostkeeper.operator.v1.Releases/WaitConverged
+flag releases wait-converged --service STRING
+flag releases wait-converged --version STRING
+flag releases wait-converged --wait-secs UINT32
 command services list /hostkeeper.operator.v1.Services/List
 command services assign /hostkeeper.operator.v1.Services/Assign
 flag services assign --node-id STRING

@@ -12,9 +12,9 @@
 // repository, workflow, ref or environment, event, runner; each token is good once), or the
 // operator token. `SetDesired` with CI's token sets only the services the admitting allow-list
 // entry names; with the operator token it sets any service the coordinator manages, audited as
-// `set_desired` under the token's name. `Releases.Converge`, which changes nothing, takes CI's
-// OIDC token or the operator token, and answers either for any service. Every other RPC takes the
-// operator token only. The token is checked
+// `set_desired` under the token's name. `Releases.Converge` and `Releases.WaitConverged`, which
+// change nothing, take CI's OIDC token or the operator token, and answer either for any service.
+// Every other RPC takes the operator token only. The token is checked
 // before the request is read.
 //
 // Refusals: a gRPC status whose message is exactly one token of the service's refusal enum
@@ -131,6 +131,11 @@ service Releases {
   // Halt a service by hand, as a host's halt report does: no host of it is ordered until the halt
   // is cleared.
   rpc Halt(HaltRequest) returns (HaltResponse);
+  // Hold the call until a service's hosts have converged on a version, or the wait ends another
+  // way (see `WaitOutcome`), for at most `wait_secs`. The coordinator answers at once when the
+  // wait is over already, and otherwise after the change that ends it. Changes nothing. Takes
+  // CI's OIDC token or the operator token, checked once, when the call is admitted.
+  rpc WaitConverged(WaitConvergedRequest) returns (WaitConvergedResponse);
 }
 
 // The services the coordinator manages, which hosts run them, and the operator's holds.
@@ -260,6 +265,10 @@ enum ReleasesRefusal {
   // desired version (design section 5.5), or comes without `release_index_digest`, or with
   // `package_digest`.
   RELEASES_REFUSAL_INDEX_INVALID = 22;
+  // INVALID_ARGUMENT: `WaitConverged`'s `wait_secs` is 0 or above 1800.
+  RELEASES_REFUSAL_INVALID_WAIT = 23;
+  // FAILED_PRECONDITION: `WaitConverged` while 16 waits are held already; retry once one ends.
+  RELEASES_REFUSAL_TOO_MANY_WAITS = 24;
 }
 
 // Why `Services` refused a request. The token is the value's name without the prefix, in lower
@@ -674,6 +683,34 @@ message ConvergeRequest {
 
 message ConvergeResponse {
   Convergence convergence = 1;
+}
+
+message WaitConvergedRequest {
+  // The service; empty names the legacy service, as for `Converge`.
+  string service = 1;
+  // The version the caller set; any other desired version ends the wait as SUPERSEDED.
+  string version = 2;
+  // How long to hold the call, 1 to 1800 seconds.
+  uint32 wait_secs = 3;
+}
+
+message WaitConvergedResponse {
+  WaitOutcome outcome = 1;
+  // As `Converge` answers it at the end of the wait.
+  Convergence convergence = 2;
+}
+
+// What ended a `WaitConverged` call. A state of BLOCKED or IN_PROGRESS keeps the call waiting.
+enum WaitOutcome {
+  WAIT_OUTCOME_UNSPECIFIED = 0;
+  // The service's state is CONVERGED on the version.
+  WAIT_OUTCOME_CONVERGED = 1;
+  // The service is halted.
+  WAIT_OUTCOME_HALTED = 2;
+  // The service's desired version is not the version.
+  WAIT_OUTCOME_SUPERSEDED = 3;
+  // `wait_secs` passed first.
+  WAIT_OUTCOME_DEADLINE = 4;
 }
 
 // How far a service's hosts are from its desired version.

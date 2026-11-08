@@ -12,12 +12,17 @@
 //! routes call and have no rule of their own.
 //!
 //! The caller is checked before the request is read ([`admit`]): a heartbeat by the host its
-//! client certificate names, `SetDesired` and `Converge` by CI's token or the operator's (an
-//! operator's token is told first, so it spends no CI token), every other operator method by the
+//! client certificate names, `SetDesired`, `Converge` and `WaitConverged` by CI's token or the
+//! operator's (an operator's token is told first, so it spends no CI token), every other operator
+//! method by the
 //! operator's token, and `Enroll`, `Poll` and `Renew` by nothing here (the key a
 //! host proves, or the certificate `Renew` checks itself). What the check learns goes to the
 //! adapter as [`Admitted`] in the request's extensions, so a bearer is resolved once: a CI token
 //! is good once.
+//!
+//! Every request the router answers tells the held `WaitConverged` calls to read their
+//! convergence again ([`crate::wait`]): a heartbeat, an operator's change and CI's set all come
+//! this way.
 //!
 //! A service is served on one surface only: the agent's on the heartbeat listener (and on the
 //! LAN listener of `--lan-listen`, a second listener of the same surface), the operator's on the
@@ -62,6 +67,7 @@ use crate::http::{
 use crate::identity::Identity;
 use crate::operator::Caller;
 use crate::service::{CiRefused, Coordinator, MAX_BEARER_BYTES};
+use crate::wait::CallLimit;
 
 pub(crate) mod agent;
 mod beat_map;
@@ -110,6 +116,8 @@ const HEARTBEAT: &str = "/hostkeeper.agent.v1.Coordinator/Heartbeat";
 const SET_DESIRED: &str = "/hostkeeper.operator.v1.Releases/SetDesired";
 /// The path of `Releases.Converge`, which takes CI's token or the operator's: it changes nothing.
 const CONVERGE: &str = "/hostkeeper.operator.v1.Releases/Converge";
+/// The path of `Releases.WaitConverged`, which takes CI's token or the operator's, as `Converge`.
+const WAIT_CONVERGED: &str = "/hostkeeper.operator.v1.Releases/WaitConverged";
 
 /// What the router learned of a caller before it read the request; the adapter finds it in the
 /// request's extensions.
@@ -125,9 +133,10 @@ pub(crate) enum Admitted {
         /// Whether its heartbeat is heard for its final report only.
         retiring: bool,
     },
-    /// `SetDesired` and `Converge` with CI's token: the verified token.
+    /// `SetDesired`, `Converge` and `WaitConverged` with CI's token: the verified token.
     Ci(Verified),
-    /// An operator method with the operator's token (`SetDesired` and `Converge` among them):
+    /// An operator method with the operator's token (`SetDesired`, `Converge` and
+    /// `WaitConverged` among them):
     /// the operator, and the bearer it sent.
     Operator {
         /// Who calls.
@@ -184,7 +193,8 @@ enum Served {
 /// # Errors
 /// `UNIMPLEMENTED` for a path whose service this surface does not serve. Otherwise the
 /// refusal of the service the path names, as a status whose message is its token: a
-/// heartbeat's `forbidden` or `denied`; for `SetDesired` and `Converge` with no operator token,
+/// heartbeat's `forbidden` or `denied`; for `SetDesired`, `Converge` and `WaitConverged` with no
+/// operator token,
 /// CI's `unauthorized` or `keys_unavailable`; the operator's `unauthorized` or `forbidden`.
 pub(crate) async fn admit(
     coordinator: &Coordinator,
@@ -210,7 +220,7 @@ pub(crate) async fn admit(
             })
         }
         Served::Agent => Ok(Admitted::Peer(peer.clone())),
-        Served::Operator if path == SET_DESIRED || path == CONVERGE => {
+        Served::Operator if [SET_DESIRED, CONVERGE, WAIT_CONVERGED].contains(&path) => {
             // An operator's token is told before CI's is verified: it is no CI token and
             // spends none.
             if let Ok(name) = coordinator.operator(bearer(headers)) {
@@ -339,13 +349,14 @@ where
 /// Answers the gRPC call `request` that came in on `surface` from `peer`: the caller is
 /// checked ([`admit`]) before the request is read, then the service of the path answers. A
 /// call that has not been answered after `patience` is `DEADLINE_EXCEEDED`: the bound covers the
-/// read of the request and the adapter, whose handlers do not await, so the bound cuts only a
-/// request that has not arrived.
+/// read of the request and the adapter, whose handlers do not await but one, so the bound cuts
+/// only a request that has not arrived. That one is a held `WaitConverged`, whose bound is moved
+/// to its `wait_secs` plus one patience once it is held ([`CallLimit`]).
 pub(crate) async fn grpc<B>(
     coordinator: &Arc<Coordinator>,
     surface: Surface,
     peer: &Peer,
-    request: Request<B>,
+    mut request: Request<B>,
     patience: Duration,
 ) -> Response<GrpcBody>
 where
@@ -364,9 +375,14 @@ where
         Ok(admitted) => admitted,
         Err(status) => return status.into_http(),
     };
-    match tokio::time::timeout(patience, serve_admitted(coordinator, admitted, request)).await {
-        Ok(response) => response,
-        Err(_) => Status::new(Code::DeadlineExceeded, "").into_http(),
+    let limit = CallLimit::new(patience);
+    request.extensions_mut().insert(limit.clone());
+    match limit
+        .bound(serve_admitted(coordinator, admitted, request))
+        .await
+    {
+        Some(response) => response,
+        None => Status::new(Code::DeadlineExceeded, "").into_http(),
     }
 }
 
@@ -383,7 +399,7 @@ fn is_grpc(headers: &HeaderMap) -> bool {
 /// private listener, a `POST` of a path that names a method of the operator API is the
 /// gateway's ([`gateway::answer`]), and any other method of such a path is a 405. Everything
 /// else is a JSON route ([`handle`]). A body that has not arrived whole after `patience` is a
-/// bad request, or a deadline exceeded for gRPC.
+/// bad request, or a deadline exceeded for gRPC. Once it is answered, the held waits read again.
 pub async fn route<B>(
     coordinator: &Arc<Coordinator>,
     surface: Surface,
@@ -396,20 +412,22 @@ where
     B::Data: Send,
     B::Error: Into<BoxError> + Send + 'static,
 {
-    if request.version() == Version::HTTP_2 && is_grpc(request.headers()) {
-        return grpc(coordinator, surface, peer, request, patience)
+    let answered = if request.version() == Version::HTTP_2 && is_grpc(request.headers()) {
+        grpc(coordinator, surface, peer, request, patience)
             .await
-            .map(Either::Right);
-    }
-    if surface == Surface::Control && gateway::is_method(request.uri().path()).is_some() {
+            .map(Either::Right)
+    } else if surface == Surface::Control && gateway::is_method(request.uri().path()).is_some() {
         let answered = if request.method() == Method::POST {
             gateway::answer(coordinator, peer, request, patience).await
         } else {
             error(StatusCode::METHOD_NOT_ALLOWED, "method_not_allowed")
         };
-        return answered.map(Either::Left);
-    }
-    handle(coordinator, surface, peer, request, patience)
-        .await
-        .map(Either::Left)
+        answered.map(Either::Left)
+    } else {
+        handle(coordinator, surface, peer, request, patience)
+            .await
+            .map(Either::Left)
+    };
+    coordinator.waits.changed();
+    answered
 }
