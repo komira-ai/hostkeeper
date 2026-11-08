@@ -112,6 +112,7 @@ fn order_for(rig: &Rig, host: &str, b: Heartbeat) -> Option<Order> {
 /// one `n` registered and whose halt generation is `halt_generation`.
 fn forced(ver: &str, n: u8, halt_generation: u64, generation: u64) -> Order {
     Order::Force {
+        target: None,
         service: WEB.to_owned(),
         version: version(ver),
         digest: Digest::parse(&digest(n)).expect("a digest"),

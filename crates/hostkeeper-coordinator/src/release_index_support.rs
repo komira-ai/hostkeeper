@@ -117,6 +117,7 @@ pub(crate) fn update_verb(
     index_digest: &str,
 ) -> Option<agent::order::Verb> {
     Some(agent::order::Verb::Update(agent::Update {
+        target: None,
         service: service.to_owned(),
         version: version.to_owned(),
         package_digest: package_digest.to_owned(),
@@ -133,6 +134,7 @@ pub(crate) fn install_verb(
     index_digest: &str,
 ) -> Option<agent::order::Verb> {
     Some(agent::order::Verb::Install(agent::Install {
+        target: None,
         service: service.to_owned(),
         version: version.to_owned(),
         package_digest: package_digest.to_owned(),
@@ -150,6 +152,7 @@ pub(crate) fn force_verb(
     halt_generation: u64,
 ) -> Option<agent::order::Verb> {
     Some(agent::order::Verb::Force(agent::Force {
+        target: None,
         service: service.to_owned(),
         version: version.to_owned(),
         package_digest: package_digest.to_owned(),

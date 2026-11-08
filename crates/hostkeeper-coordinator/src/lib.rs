@@ -141,6 +141,7 @@ pub mod ops;
 pub(crate) mod ops_file;
 pub mod order_terms;
 pub mod orders;
+pub(crate) mod picks;
 pub mod reconcile;
 pub mod registry;
 pub mod release_index;
@@ -279,6 +280,8 @@ mod ops_platform_tests;
 mod ops_tests;
 #[cfg(test)]
 mod order_terms_tests;
+#[cfg(test)]
+mod picks_tests;
 #[cfg(test)]
 mod plan_rollout_tests;
 #[cfg(test)]

@@ -45,7 +45,9 @@ none. The rollout status says why a host is not told: `unsupported` (its daemon 
 install, or, for hostkeeper itself, its daemon installed the desired release without switching
 to it and waits for the next: [hostkeeper's self-update after a bootstrap](self-update-after-bootstrap.md)), `no_digest` (CI set the desired version without a digest or a release index) or
 `no_package_for_platform` (the release index lists no package for the host's platform: the host
-is ordered nothing for this version, and that is not a failed install).
+is ordered nothing for this version, and that is not a failed install). For a version set with
+targets, the install names the entry picked for the host, and a host picked none is `no_target`
+or `no_build_for_host` ([holds-and-force.md](holds-and-force.md)).
 
 ## Uninstall
 
