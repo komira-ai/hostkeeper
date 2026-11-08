@@ -142,8 +142,10 @@ names.
 entry cannot tell two workflows of one repository apart that call the same pin: it admits any
 workflow of the repository that calls that pin from a ref in `refs`. In this repository the workflow
 lint (`cargo test -p xtask --test workflows`, `callers.rs`) holds the callers to a fixed list, so a
-new caller needs a reviewed change to the lint. Change `job_workflow_ref` in the same change as
-the `uses:` pin, or the coordinator refuses the token (`unauthorized`).
+new caller needs a reviewed change to the lint. Add the new commit to `job_workflow_ref`, and
+restart the coordinator, before the change that moves the `uses:` pin runs, or the coordinator
+refuses the token (`unauthorized`); keep the old commit listed while a run of the old pin may still
+call (a re-run of an older run uses its old pin).
 
 The entry for this repository's first caller, `hello-desired.yml`, the hello proof run
 ([docs/hello.md](../hello.md)):
@@ -155,7 +157,7 @@ audience = "hostkeeper-ci"
 repository_id = "123456789"            # gh api repos/komira-ai/hostkeeper --jq .id
 repository = "komira-ai/hostkeeper"
 job_workflow_ref = [
-  "komira-ai/hostkeeper/.github/workflows/set-desired.yml@f04696da7e2bdcbaf9112450ab651a1ab24e61bf",
+  "komira-ai/hostkeeper/.github/workflows/set-desired.yml@3018137f2c8806dd22bf2071a23565d4a2d64e8d",
 ]
 refs = ["refs/heads/main"]
 event_names = ["workflow_dispatch"]
@@ -174,10 +176,10 @@ services = ["hello"]
 
 `release.yml` sets hostkeeper's own desired version through the client too, while the
 repository variable `RELEASE_SETS_DESIRED` is `true` ([Deploying hostkeeper from GitHub
-Actions](github-actions.md)). The same entry covers it with three changes: `job_workflow_ref` adds
-`set-desired.yml` at the commit `release.yml` pins (when it is not the one above), `event_names`
-adds `workflow_run` and `schedule`, the events `release.yml` runs on, and `services` adds
-`hostkeeper`:
+Actions](github-actions.md)). It pins the same revision of `set-desired.yml` as
+`hello-desired.yml` (the workflow lint holds both callers to it), so the same entry covers it with
+two changes: `event_names` adds `workflow_run` and `schedule`, the events `release.yml` runs on,
+and `services` adds `hostkeeper`:
 
 ```toml
 event_names = ["workflow_dispatch", "workflow_run", "schedule"]

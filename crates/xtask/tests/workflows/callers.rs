@@ -11,19 +11,35 @@
 //!   pin, a full commit with a version comment, is the shared rule's), has another `if:` than its
 //!   entry gives, a `permissions` that is not exactly `contents: read` and `id-token: write`, or
 //!   passes `secrets` (the CI client takes none: the OIDC token is its one credential);
+//! - a job of [`CALLERS`] does not run the CI client's revision: its `uses:` is not pinned to
+//!   [`CLIENT_COMMIT`], the version comment on that line does not start with
+//!   `v`[`CLIENT_RELEASE`], or its `with` does not pass `hostkeeper_version: `[`CLIENT_RELEASE`]
+//!   and `hostkeeper_commit: `[`CLIENT_COMMIT`] (the release whose hkctl the job downloads, and
+//!   the commit its attestation must name);
 //! - a job of [`CALLERS`] for the file is missing, or does not call the CI client;
 //! - it is [`HELLO_FILE`] and runs on anything but `workflow_dispatch`, lacks the input `version`
 //!   (a required string) or `variant` (a required choice of exactly [`HELLO_VARIANTS`]), or its
-//!   caller does not pass `service: hello` and the `hostkeeper_commit` its `uses:` is pinned to,
-//!   or a job of it lacks the exact `if:` [`HELLO_IF`] (a dispatch from another branch runs
-//!   nothing).
+//!   caller does not pass `service: hello`, or a job of it lacks the exact `if:` [`HELLO_IF`] (a
+//!   dispatch from another branch runs nothing).
 
 use super::desired;
-use super::lint::{entries, entry, triggers};
+use super::lint::{entries, entry, triggers, version_comment};
 use super::yaml::{Node, Value};
 
 /// The CI client, as a caller's `uses:` names it before the `@`.
 pub const SET_DESIRED: &str = "komira-ai/hostkeeper/.github/workflows/set-desired.yml";
+
+/// The revision of the CI client every job of [`CALLERS`] runs: the commit of this repository
+/// whose `set-desired.yml` it calls, which is also the commit the release [`CLIENT_RELEASE`] was
+/// built from. It is the first release whose `set-desired.yml` runs hkctl, one set and one held
+/// wait (docs/design/two-programs.md, section 5). Moving it is one reviewed change: these two
+/// values, the `uses:` line, `hostkeeper_version` and `hostkeeper_commit` of both callers, and the
+/// coordinator's allow-list entry (docs/deploy/github-actions.md, "The allow-list entry").
+pub const CLIENT_COMMIT: &str = "3018137f2c8806dd22bf2071a23565d4a2d64e8d";
+
+/// The release built from [`CLIENT_COMMIT`], X.Y.Z: the one whose `hkctl-<version>` the CI client
+/// downloads and verifies.
+pub const CLIENT_RELEASE: &str = "0.1.166";
 
 /// A job that calls [`SET_DESIRED`]: the workflow file, the job, and its `if:`, exactly.
 pub struct Caller {
@@ -98,10 +114,13 @@ fn permissions(job: &Node) -> Vec<(&str, &str)> {
 }
 
 /// One line per rule of this module the workflow `doc` of the file `file` breaks.
-pub fn problems(file: &str, doc: &Node) -> Vec<String> {
+pub fn problems(file: &str, text: &str, doc: &Node) -> Vec<String> {
     let mut problems = Vec::new();
     for (name, job) in jobs(doc) {
-        let Some(uses) = job_uses(job).filter(|u| names_set_desired(u)) else {
+        let Some(uses_node) = entry(job, "uses") else {
+            continue;
+        };
+        let Some(uses) = uses_node.as_str().filter(|u| names_set_desired(u)) else {
             continue;
         };
         let Some(c) = caller(file, name) else {
@@ -129,6 +148,7 @@ pub fn problems(file: &str, doc: &Node) -> Vec<String> {
         if entry(job, "secrets").is_some() {
             problems.push(format!("job {name} passes secrets to set-desired.yml"));
         }
+        problems.extend(revision_problems(name, text, job, uses, uses_node.line()));
     }
     for c in CALLERS.iter().filter(|c| c.file == file) {
         let calls = jobs(doc)
@@ -148,8 +168,39 @@ pub fn problems(file: &str, doc: &Node) -> Vec<String> {
     problems
 }
 
+/// What keeps the caller job `name` from running the CI client's revision, [`CLIENT_COMMIT`] and
+/// [`CLIENT_RELEASE`]: its `uses:` value is `uses`, written on the line `line` of `text`.
+fn revision_problems(name: &str, text: &str, job: &Node, uses: &str, line: usize) -> Vec<String> {
+    let mut problems = Vec::new();
+    let pin = uses.split_once('@').map(|(_, at)| at);
+    if pin != Some(CLIENT_COMMIT) {
+        problems.push(format!(
+            "job {name} must pin set-desired.yml at the CI client's revision {CLIENT_COMMIT}, not `{uses}`"
+        ));
+    }
+    let release = format!("v{CLIENT_RELEASE}");
+    let comment = version_comment(text, line, uses).unwrap_or_default();
+    if comment.split_whitespace().next() != Some(release.as_str()) {
+        problems.push(format!(
+            "job {name} must name the CI client's release `# {release}` after its `uses:`, not `# {comment}`"
+        ));
+    }
+    let with = entry(job, "with");
+    for (input, want) in [
+        ("hostkeeper_version", CLIENT_RELEASE),
+        ("hostkeeper_commit", CLIENT_COMMIT),
+    ] {
+        if text_of(with, input) != Some(want) {
+            problems.push(format!(
+                "job {name} must pass `{input}: {want}`, the CI client's revision"
+            ));
+        }
+    }
+    problems
+}
+
 /// The text of a scalar entry of `map`, if there is one.
-fn text<'a>(map: Option<&'a Node>, key: &str) -> Option<&'a str> {
+fn text_of<'a>(map: Option<&'a Node>, key: &str) -> Option<&'a str> {
     map.and_then(|m| entry(m, key)).and_then(Node::as_str)
 }
 
@@ -172,7 +223,7 @@ fn hello_problems(doc: &Node) -> Vec<String> {
         .and_then(|d| entry(d, "inputs"));
     let input = |name: &str| inputs.and_then(|i| entry(i, name));
     let version = input("version");
-    if text(version, "type") != Some("string") || text(version, "required") != Some("true") {
+    if text_of(version, "type") != Some("string") || text_of(version, "required") != Some("true") {
         problems.push(format!(
             "{HELLO_FILE}: input version must be a required string"
         ));
@@ -183,7 +234,7 @@ fn hello_problems(doc: &Node) -> Vec<String> {
         _ => Vec::new(),
     };
     let choice =
-        text(variant, "type") == Some("choice") && text(variant, "required") == Some("true");
+        text_of(variant, "type") == Some("choice") && text_of(variant, "required") == Some("true");
     if !choice || options != HELLO_VARIANTS {
         problems.push(format!(
             "{HELLO_FILE}: input variant must be a required choice of exactly {HELLO_VARIANTS:?}"
@@ -193,18 +244,9 @@ fn hello_problems(doc: &Node) -> Vec<String> {
         .find(|(name, _)| *name == HELLO_JOB)
         .map(|(_, j)| j);
     let with = job.and_then(|j| entry(j, "with"));
-    if text(with, "service") != Some("hello") {
+    if text_of(with, "service") != Some("hello") {
         problems.push(format!(
             "{HELLO_FILE}: job {HELLO_JOB} must pass `service: hello`"
-        ));
-    }
-    let pin = job
-        .and_then(job_uses)
-        .and_then(|u| u.split_once('@'))
-        .map(|(_, at)| at);
-    if pin.is_none() || text(with, "hostkeeper_commit") != pin {
-        problems.push(format!(
-            "{HELLO_FILE}: job {HELLO_JOB} must pass the hostkeeper_commit its `uses:` is pinned to"
         ));
     }
     problems
