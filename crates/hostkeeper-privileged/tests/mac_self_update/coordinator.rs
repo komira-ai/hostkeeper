@@ -130,7 +130,11 @@ impl Relay {
             };
             let (answer, order) = self
                 .coordinator
-                .heartbeat_with_orders(who, beat)
+                .heartbeat_with_orders(
+                    who,
+                    beat,
+                    hostkeeper_coordinator::trusted_root::TrustedRootSaid::default(),
+                )
                 .unwrap_or_else(|e| panic!("the coordinator refused the heartbeat: {e:?}"));
             let acks: Vec<Value> = answer
                 .acks

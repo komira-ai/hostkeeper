@@ -38,8 +38,14 @@ impl Coordinator {
         beat: Heartbeat,
         machine_id: Option<&str>,
     ) -> Result<Answer, HeartbeatRefused> {
-        self.answer(who, beat, false, machine_id)
-            .map(|(answer, _)| answer)
+        self.answer(
+            who,
+            beat,
+            false,
+            machine_id,
+            crate::trusted_root::TrustedRootSaid::default(),
+        )
+        .map(|(answer, _)| answer)
     }
 
     /// The turn of a heartbeat of `host` from the daemon on `machine_id`, if the transport
@@ -148,10 +154,12 @@ impl Coordinator {
     /// and no order is made for it. When its update record is final (no service updating, no
     /// order outstanding: [`crate::fleet::Fleet::release_if_final`]), the host is forgotten, which frees the
     /// update slot it held, and its deny row is made final ([`Enrollment::retire`]), so its
-    /// later heartbeats are refused unread. Returns whether it was released.
+    /// later heartbeats are refused unread. What it said of its trusted root is not kept: the
+    /// host is unknown there. Returns whether it was released.
     pub fn final_report(&self, who: Identity, beat: Heartbeat) -> bool {
         let host = who.host_id.clone();
-        self.reply_to(who, beat, false, Turn::Hold);
+        let unknown = crate::trusted_root::TrustedRootSaid::default();
+        self.reply_to(who, beat, false, (Turn::Hold, unknown));
         let released = self.lock_fleet().release_if_final(&host, (self.clock)());
         if released {
             tracing::info!(host_id = %host, "a retiring host reported its update final: slot freed");

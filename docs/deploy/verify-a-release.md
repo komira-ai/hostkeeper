@@ -405,6 +405,16 @@ The admin `Status` reports the root the daemon uses:
 | `trusted_root_missing` | neither file is present |
 | `trusted_root_unparseable` | the file cannot be read, or is not one or more JSON trusted roots; this wins over `trusted_root_stale` |
 
+Every heartbeat on the gRPC route says the same of the root, as `trusted_root_age_secs` and
+`trusted_root_reason` (`TRUSTED_ROOT_REASON_NONE`, `_STALE`, `_MISSING` or `_UNPARSEABLE`); the
+frozen JSON route does not. The coordinator keeps what each host's last heartbeat said:
+`hkctl hosts get --node-id <id>` answers it in the host's `trusted_root_age_secs` and
+`trusted_root_reason`, the Host page of the operator web app shows it with a warning while the
+reason is stale, missing or unparseable, and `Alerts.List` holds a `trusted_root` alert (a
+warning, logged with `alert=trusted_root`) of each such host. A host whose last heartbeat said
+nothing of its root (an older daemon, or one that came by the JSON route) is unknown there:
+the reason is unspecified, no age is answered, and no alert is raised.
+
 The reason is a signal only. A stale root does not stop a package check: the check goes on with
 the root there is, and fails only if that root no longer verifies the package.
 

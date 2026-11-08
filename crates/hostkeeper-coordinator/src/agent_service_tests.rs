@@ -209,7 +209,11 @@ async fn an_agent_that_installed_its_release_without_running_it_waits_for_the_ne
     set(&rig, HK, "0.3.0").await;
     let answer = rig
         .coordinator
-        .heartbeat_with_orders(who("d1", "daemon"), installed())
+        .heartbeat_with_orders(
+            who("d1", "daemon"),
+            installed(),
+            crate::trusted_root::TrustedRootSaid::default(),
+        )
         .expect("answered")
         .0;
     assert_eq!(
@@ -328,6 +332,7 @@ fn only_an_order_v1_agent_named_after_a_managed_service_runs_it() {
         sent_unix: None,
         cert_not_after_unix: None,
         last_renew_error: None,
+        trusted_root: crate::trusted_root::TrustedRootSaid::default(),
         skewed_beats: 0,
     };
     assert!(runs_itself(&node, HK));

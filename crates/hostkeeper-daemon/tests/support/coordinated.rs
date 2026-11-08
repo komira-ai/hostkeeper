@@ -1,7 +1,8 @@
 //! The real coordinator in process, and a host whose heartbeat loop talks to it: the
 //! coordinator's heartbeat with typed orders (`Coordinator::heartbeat_with_orders`, what its
 //! gRPC route answers) behind a link that calls it as the host `host-1` of the role `daemon`,
-//! and the loop's beats and orders mapped to and from the coordinator's types word for word.
+//! and the loop's beats (with what each says of the daemon's trusted root) and orders mapped to
+//! and from the coordinator's types word for word.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -15,6 +16,7 @@ use hostkeeper_coordinator::ops::OpsStore;
 use hostkeeper_coordinator::orders::Order as Ordered;
 use hostkeeper_coordinator::service::{Clock, Coordinator};
 use hostkeeper_coordinator::services::Services;
+use hostkeeper_coordinator::trusted_root::TrustedRootSaid;
 use hostkeeper_coordinator::verdict_file::{VerdictFile, verdicts_path};
 use hostkeeper_daemon::Daemon;
 use hostkeeper_daemon::links::Links;
@@ -27,7 +29,7 @@ use hostkeeper_link::testing::{
 use hostkeeper_link::{
     Acknowledged, BeatOutcome, CertState, ClientIdentity, CoordinatorLink, DEFAULT_HEARTBEAT_SECS,
     Feature, Health, Heartbeat, Heartbeater, LinkError, Order, OrderId, OrderRef, OrderResult,
-    Outcome, PackageDigest, Reason, Reply, ServiceFacts, StopFlag, Target, Verb,
+    Outcome, PackageDigest, Reason, Reply, RootReason, ServiceFacts, StopFlag, Target, Verb,
 };
 use hostkeeper_oidc::testkit::{
     STATIC_ISSUER, StaticKeys, clock as oidc_clock, config_text, good_claims, jwks_of, keys, mint,
@@ -227,6 +229,23 @@ pub fn wire_beat(beat: &Heartbeat) -> wire::Heartbeat {
     }
 }
 
+/// What the loop's heartbeat says of the daemon's trusted root, as the coordinator's gRPC route
+/// reads it from the request: no report is no age and an unknown reason.
+pub fn root_said(beat: &Heartbeat) -> TrustedRootSaid {
+    let Some(root) = beat.trusted_root else {
+        return TrustedRootSaid::default();
+    };
+    TrustedRootSaid {
+        age_secs: root.age_secs,
+        reason: match root.reason {
+            None => pb::TrustedRootReason::None,
+            Some(RootReason::Stale) => pb::TrustedRootReason::Stale,
+            Some(RootReason::Missing) => pb::TrustedRootReason::Missing,
+            Some(RootReason::Unparseable) => pb::TrustedRootReason::Unparseable,
+        },
+    }
+}
+
 /// The coordinator's typed order as the loop reads it: the protobuf order it sends, word for
 /// word in the loop's types.
 pub fn link_order(ordered: &Ordered) -> Order {
@@ -279,7 +298,7 @@ impl CoordinatorLink for InProcess {
         };
         let (answer, ordered) = self
             .coordinator
-            .heartbeat_with_orders(who, wire_beat(beat))
+            .heartbeat_with_orders(who, wire_beat(beat), root_said(beat))
             .map_err(|_| LinkError::Refused(Reason::new("forbidden").expect("a token")))?;
         let order = ordered.as_ref().map(link_order);
         self.ordered
