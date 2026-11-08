@@ -151,7 +151,7 @@ audience = "hostkeeper-ci"
 repository_id = "123456789"            # gh api repos/komira-ai/hostkeeper --jq .id
 repository = "komira-ai/hostkeeper"
 job_workflow_ref = [
-  "komira-ai/hostkeeper/.github/workflows/set-desired.yml@4859b4800897f2468c0f2131455721edfc537217",
+  "komira-ai/hostkeeper/.github/workflows/set-desired.yml@2c767d1842a88edb7120073d2dff3b4bfccc834c",
 ]
 refs = ["refs/heads/main"]
 event_names = ["workflow_dispatch", "workflow_run", "schedule"]
@@ -176,9 +176,9 @@ the `uses:` line names a commit of this repository with its release as the comme
 OIDC token is a published release, verified before it runs, never the commit being released.
 
 Both callers of this repository, `release.yml` and `hello-desired.yml`, pin one revision: commit
-`4859b4800897f2468c0f2131455721edfc537217`, release `v0.1.173`, the first whose
-`set-desired.yml` takes a release's targets, on hkctl (one set, and for `hello-desired.yml` one
-held wait). A coordinator that does not take `SetDesired` with targets refuses their sets; the
+`2c767d1842a88edb7120073d2dff3b4bfccc834c`, release `v0.1.184`, the first whose
+`set-desired.yml` takes the tailnet tag (`tailnet_tag`), on top of a release's targets and hkctl
+(one set, and for `hello-desired.yml` one held wait). A coordinator that does not take `SetDesired` with targets refuses their sets; the
 coordinator is updated to one that does before the pin moves. The workflow
 lint (`cargo test -p xtask --test workflows`, `callers.rs`) names that revision, as
 `CLIENT_COMMIT` and `CLIENT_RELEASE`, and refuses a caller whose `uses:` commit, version comment,

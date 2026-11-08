@@ -351,15 +351,15 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    uses: komira-ai/hostkeeper/.github/workflows/set-desired.yml@4859b4800897f2468c0f2131455721edfc537217 # v0.1.173
+    uses: komira-ai/hostkeeper/.github/workflows/set-desired.yml@2c767d1842a88edb7120073d2dff3b4bfccc834c # v0.1.184
     with:
       service: hostkeeper
       version: ${{ needs.channel.outputs.version }}
       release_index: ${{ needs.channel.outputs.release_index }}
       release_index_digest: ${{ needs.channel.outputs.release_index_digest }}
       targets: ${{ needs.channel.outputs.targets }}
-      hostkeeper_version: 0.1.173
-      hostkeeper_commit: 4859b4800897f2468c0f2131455721edfc537217
+      hostkeeper_version: 0.1.184
+      hostkeeper_commit: 2c767d1842a88edb7120073d2dff3b4bfccc834c
       coordinator_url: ${{ vars.HOSTKEEPER_COORDINATOR_URL }}
       coordinator_ca: ${{ vars.HOSTKEEPER_COORDINATOR_CA }}
       audience: ${{ vars.HOSTKEEPER_CI_AUDIENCE }}

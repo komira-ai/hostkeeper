@@ -38,16 +38,17 @@ pub const SET_DESIRED: &str = "komira-ai/hostkeeper/.github/workflows/set-desire
 
 /// The revision of the CI client every job of [`CALLERS`] runs: the commit of this repository
 /// whose `set-desired.yml` it calls, which is also the commit the release [`CLIENT_RELEASE`] was
-/// built from. It is the first release whose `set-desired.yml` takes a release's targets
-/// (docs/design/packages.md, section 3.7), on the client of hkctl, one set and one held wait
-/// (docs/design/two-programs.md, section 5). Moving it is one reviewed change: these two
+/// built from. It is the first release whose `set-desired.yml` takes the tailnet tag,
+/// `tailnet_tag` ([`TAILNET_TAG`]), beside a release's targets (docs/design/packages.md, section
+/// 3.7), on the client of hkctl, one set and one held wait (docs/design/two-programs.md,
+/// section 5). Moving it is one reviewed change: these two
 /// values, the `uses:` line, `hostkeeper_version` and `hostkeeper_commit` of both callers, and the
 /// coordinator's allow-list entry (docs/deploy/github-actions.md, "The allow-list entry").
-pub const CLIENT_COMMIT: &str = "4859b4800897f2468c0f2131455721edfc537217";
+pub const CLIENT_COMMIT: &str = "2c767d1842a88edb7120073d2dff3b4bfccc834c";
 
 /// The release built from [`CLIENT_COMMIT`], X.Y.Z: the one whose `hkctl-<version>` the CI client
 /// downloads and verifies.
-pub const CLIENT_RELEASE: &str = "0.1.173";
+pub const CLIENT_RELEASE: &str = "0.1.184";
 
 /// What every job of [`CALLERS`] passes as `tailnet_tag`, exactly: the repository variable that
 /// holds the tag the tailnet's trust credential issues (docs/deploy/github-actions.md, "The

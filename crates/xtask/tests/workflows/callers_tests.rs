@@ -319,6 +319,49 @@ fn a_caller_pinned_to_the_ci_client_before_hkctl_is_refused() {
     );
 }
 
+/// The pin of the CI client before it took `tailnet_tag`, as both callers had it: release
+/// v0.1.173.
+const PRE_TAG_COMMIT: &str = "4859b4800897f2468c0f2131455721edfc537217";
+
+#[test]
+fn a_caller_pinned_to_the_ci_client_before_the_tailnet_tag_is_refused() {
+    // Catches: a caller left on, or moved back to, v0.1.173, whose set-desired.yml declares no
+    // input `tailnet_tag`: GitHub refuses the call of a workflow with an input it does not
+    // declare, so the whole caller workflow fails to start.
+    let text = with_in(
+        &with_in(
+            &with_in(
+                &hello(),
+                &uses(),
+                &format!(
+                    "    uses: komira-ai/hostkeeper/.github/workflows/set-desired.yml@{PRE_TAG_COMMIT} # v0.1.173\n"
+                ),
+            ),
+            &format!("      hostkeeper_commit: {CLIENT_COMMIT}\n"),
+            &format!("      hostkeeper_commit: {PRE_TAG_COMMIT}\n"),
+        ),
+        &format!("      hostkeeper_version: {CLIENT_RELEASE}\n"),
+        "      hostkeeper_version: 0.1.173\n",
+    );
+    assert_eq!(
+        hello_problems(&text),
+        [
+            format!(
+                "job set-desired must pin set-desired.yml at the CI client's revision {CLIENT_COMMIT}, not `komira-ai/hostkeeper/.github/workflows/set-desired.yml@{PRE_TAG_COMMIT}`"
+            ),
+            format!(
+                "job set-desired must name the CI client's release `# v{CLIENT_RELEASE}` after its `uses:`, not `# v0.1.173`"
+            ),
+            format!(
+                "job set-desired must pass `hostkeeper_version: {CLIENT_RELEASE}`, the CI client's revision"
+            ),
+            format!(
+                "job set-desired must pass `hostkeeper_commit: {CLIENT_COMMIT}`, the CI client's revision"
+            ),
+        ]
+    );
+}
+
 #[test]
 fn a_caller_whose_pin_alone_is_another_commit_is_refused() {
     // Catches: the `uses:` line moved without its inputs, so that the revision of set-desired.yml

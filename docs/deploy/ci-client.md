@@ -162,7 +162,7 @@ audience = "hostkeeper-ci"
 repository_id = "123456789"            # gh api repos/komira-ai/hostkeeper --jq .id
 repository = "komira-ai/hostkeeper"
 job_workflow_ref = [
-  "komira-ai/hostkeeper/.github/workflows/set-desired.yml@4859b4800897f2468c0f2131455721edfc537217",
+  "komira-ai/hostkeeper/.github/workflows/set-desired.yml@2c767d1842a88edb7120073d2dff3b4bfccc834c",
 ]
 refs = ["refs/heads/main"]
 event_names = ["workflow_dispatch"]
