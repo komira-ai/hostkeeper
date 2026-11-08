@@ -138,6 +138,35 @@ fn a_literal_value_is_checked_by_the_verbs_parser_and_a_variable_is_not() {
     assert_problems(&run(&with_flag("--arch amd64", "--arch=arm64")), &[]);
 }
 
+#[test]
+fn an_alternate_value_expansion_is_checked_both_unset_and_set() {
+    // Catches: `${FAIL_READY:+--fail-ready}` read as one unknown argument, and a flag that
+    // only appears when its variable is set going unchecked.
+    let call = "cargo xtask release targets --service hello ${FAIL_READY:+--fail-ready} --version \"$RELEASE\" --dir \"$RUNNER_TEMP/release\" --repo \"$GITHUB_REPOSITORY\" --output \"$GITHUB_OUTPUT\"";
+    assert_problems(&run(call), &[]);
+    assert_problems(
+        &run(&call.replace(":+--fail-ready", "+--fail-red")),
+        &[
+            "line 16: `cargo xtask release targets` (with `${FAIL_READY+--fail-red}` as `--fail-red`): unexpected argument found: `--fail-red`",
+        ],
+    );
+    // Set, the expansion's words are split, and a required flag left out is still found unset.
+    let nfpm = format!("{NFPM_STAGE} ${{B:+--binaries target/static}}");
+    assert_problems(
+        &run(&nfpm),
+        &missing_binaries(16).each_ref().map(String::as_str),
+    );
+    // A `${...}` that is not an alternate value is a value, as any word with `$` is.
+    assert_problems(
+        &run(&with_flag("--arch amd64", "--arch ${ARCH:-amd64}")),
+        &[],
+    );
+    assert_problems(
+        &run("cargo xtask release index ${1+x}"),
+        &["line 16: `cargo xtask release index`: unexpected argument found: `${1+x}`"],
+    );
+}
+
 /// The nfpm-stage call with `--binaries`, and the flag `from` written as `to`.
 fn with_flag(from: &str, to: &str) -> String {
     let call = format!("{NFPM_STAGE} --binaries target/static");
@@ -220,7 +249,7 @@ fn text_that_only_names_xtask_is_not_a_call() {
 
 #[test]
 fn quotes_and_backslashes_are_removed_as_the_shell_removes_them() {
-    // Catches: a word split at a quoted space, or a quote or backslash kept in a word, so a
+    // Catches: a word split at a quoted space or inside `${ }`, or a quote or backslash kept in a word, so a
     // good call is refused or a call's verb is misread.
     let found = commands("a \"b c\" 'd e' f\\ g \"h\\\"i\" ''\nj\\\nk 3>x l");
     assert_eq!(
@@ -236,6 +265,9 @@ fn quotes_and_backslashes_are_removed_as_the_shell_removes_them() {
             vec!["z", "w"]
         ]
     );
+    // A parameter expansion is one word, its spaces and nested braces included.
+    let found = commands("x ${A:+a b} ${B:-${C}} y");
+    assert_eq!(found, [vec!["x", "${A:+a b}", "${B:-${C}}", "y"]]);
     let words = |w: &[&str]| w.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
     assert_eq!(
         xtask_args(&words(&["X=1", "cargo", "xtask", "release"])),

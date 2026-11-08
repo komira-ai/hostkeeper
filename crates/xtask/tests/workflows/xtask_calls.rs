@@ -7,7 +7,9 @@
 //!
 //! A value that names a shell or workflow variable (it holds a `$`) is known only when the step
 //! runs, so it is taken as given; every other value is checked by the verb's own parser (an
-//! `--arch` that is not an architecture is refused). A call is found as `cargo xtask` (with any
+//! `--arch` that is not an architecture is refused). An alternate-value expansion
+//! (`${FAIL_READY:+--fail-ready}`) is two calls, one without its words and one with them, and
+//! each is checked. A call is found as `cargo xtask` (with any
 //! of cargo's options between, `cargo +nightly xtask`) anywhere in a
 //! command of a `run:` script, or as a path to the binary (`target/debug/xtask`) that starts
 //! one; a command starts a script, follows `|`, `&&`, `||`, `;`, `&` or a newline, or is inside
@@ -96,6 +98,23 @@ fn tokens(script: &str) -> Vec<Token> {
                 while i < c.len() && !(i >= from + 4 && c[i - 2..i] == ['}', '}']) {
                     word.push(c[i]);
                     i += 1;
+                }
+            }
+            // A parameter expansion (`${NAME:+a b}`) is one word up to its own `}`.
+            '$' if c.get(i) == Some(&'{') => {
+                started = true;
+                word.push('$');
+                let mut depth = 0;
+                while i < c.len() {
+                    let ch = c[i];
+                    word.push(ch);
+                    i += 1;
+                    match ch {
+                        '{' => depth += 1,
+                        '}' if depth == 1 => break,
+                        '}' => depth -= 1,
+                        _ => {}
+                    }
                 }
             }
             '#' if !started => {
@@ -284,24 +303,67 @@ fn describe(e: &clap::Error) -> String {
     out
 }
 
-/// Why the words `args` after `cargo xtask` would be refused by the binary, if they would.
+/// The word an alternate-value expansion stands for when its variable is set: `X` of
+/// `${NAME:+X}` or `${NAME+X}`.
+fn alternate(word: &str) -> Option<&str> {
+    let inner = word.strip_prefix("${")?.strip_suffix('}')?;
+    let at = inner.find('+')?;
+    let name = inner[..at].strip_suffix(':').unwrap_or(&inner[..at]);
+    let valid = name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    valid.then(|| &inner[at + 1..])
+}
+
+/// Every way `args` can reach the binary: each alternate-value expansion
+/// (`${FAIL_READY:+--fail-ready}`) left out, as when its variable is unset, and replaced by
+/// its words, as when it is set. Each way is labelled with the expansions it set.
+fn variants(args: &[String]) -> Vec<(Vec<String>, Vec<String>)> {
+    let mut out = vec![(Vec::new(), Vec::new())];
+    for word in args {
+        match alternate(word) {
+            Some(value) => {
+                let set = out.clone().into_iter().map(|(mut a, mut l)| {
+                    a.extend(value.split_whitespace().map(str::to_owned));
+                    l.push(format!("`{word}` as `{value}`"));
+                    (a, l)
+                });
+                let set: Vec<_> = set.collect();
+                out.extend(set);
+            }
+            None => out.iter_mut().for_each(|(a, _)| a.push(word.clone())),
+        }
+    }
+    out
+}
+
+/// Why the words `args` after `cargo xtask` would be refused by the binary, if they would, in
+/// any of their [`variants`].
 pub fn call_problem(args: &[String]) -> Option<String> {
     let cli = lenient(xtask::test_support::cli());
-    let path = verb_path(&cli, args);
-    let shown = std::iter::once("cargo xtask".to_owned())
-        .chain(path)
-        .collect::<Vec<_>>()
-        .join(" ");
-    match cli.try_get_matches_from(std::iter::once("xtask").chain(args.iter().map(String::as_str)))
-    {
-        Ok(_) => None,
-        Err(e) if e.kind() == ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand => {
-            Some(format!("`{shown}` names no verb"))
+    variants(args).into_iter().find_map(|(args, set)| {
+        let path = verb_path(&cli, &args);
+        let mut shown = std::iter::once("cargo xtask".to_owned())
+            .chain(path)
+            .collect::<Vec<_>>()
+            .join(" ");
+        shown = format!("`{shown}`");
+        if !set.is_empty() {
+            shown = format!("{shown} (with {})", set.join(", "));
         }
-        // `cargo xtask --help` is how a job compiles xtask before a step that holds the token.
-        Err(e) if e.kind() == ErrorKind::DisplayHelp => None,
-        Err(e) => Some(format!("`{shown}`: {}", describe(&e))),
-    }
+        let parsed = cli
+            .clone()
+            .try_get_matches_from(std::iter::once("xtask").chain(args.iter().map(String::as_str)));
+        match parsed {
+            Ok(_) => None,
+            Err(e) if e.kind() == ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand => {
+                Some(format!("{shown} names no verb"))
+            }
+            // `cargo xtask --help` is how a job compiles xtask before a step that holds the
+            // token.
+            Err(e) if e.kind() == ErrorKind::DisplayHelp => None,
+            Err(e) => Some(format!("{shown}: {}", describe(&e))),
+        }
+    })
 }
 
 /// One line per call of xtask in the workflow `doc` that the binary would refuse.
