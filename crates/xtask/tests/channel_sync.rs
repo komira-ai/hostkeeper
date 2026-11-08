@@ -499,7 +499,7 @@ fn the_trust_lists_of_the_runbook_and_the_deployment_load_and_name_each_services
     // Catches: a runbook example or committed trust list the sync refuses at its first run; a
     // committed list that lost a service; or an entry, in either, naming another repository,
     // workflow, ref or runner than the one that signs that service's packages (js-agent's by
-    // jobscheduler's release.yml, which no package since it calls artifacts.yml carries).
+    // jobscheduler's release.yml, which no package carries since release.yml calls artifacts.yml).
     use hostkeeper_config::channel_trust::ChannelTrust;
     let committed = std::fs::read_to_string(committed_trust_list()).expect("read the trust list");
     let committed = ChannelTrust::parse(&committed).expect("the committed trust list loads");
@@ -550,32 +550,29 @@ fn the_signer_check_names_each_way_an_entry_departs_from_its_services_signer() {
     .concat();
     let trust = ChannelTrust::parse(&text).expect("a trust list");
     let main_list = "[\"refs/heads/main\"]";
-    assert_eq!(
-        signer_problems(&trust, true),
-        [
-            format!(
-                "js-agent: (\"{JOBSCHEDULER}\", \".github/workflows/release.yml\", {main_list}, \
-                 true), not (\"{JOBSCHEDULER}\", \"{artifacts}\", {main_list}, true)"
-            ),
-            format!(
-                "tierstore: (\"{JOBSCHEDULER}\", \"{artifacts}\", {main_list}, true), not \
-                 (\"{TIERSTORE}\", \"{artifacts}\", {main_list}, true)"
-            ),
-            format!(
-                "hello: (\"komira-ai/hostkeeper\", \"{artifacts}\", [\"refs/tags/v*\"], true), \
-                 not (\"komira-ai/hostkeeper\", \"{artifacts}\", {main_list}, true)"
-            ),
-            format!(
-                "mdm: (\"komira-ai/hostkeeper\", \"{artifacts}\", {main_list}, false), not \
-                 (\"komira-ai/hostkeeper\", \"{artifacts}\", {main_list}, true)"
-            ),
-            "jobscheduler is not a service the trust list stages".to_owned(),
-            "hostkeeper is not listed".to_owned(),
-        ]
-    );
-    // A partial list (the runbook's) is not held to every service.
-    assert_eq!(
-        signer_problems(&trust, false).last().map(String::as_str),
-        Some("jobscheduler is not a service the trust list stages")
-    );
+    let departures = [
+        format!(
+            "js-agent: (\"{JOBSCHEDULER}\", \".github/workflows/release.yml\", {main_list}, \
+             true), not (\"{JOBSCHEDULER}\", \"{artifacts}\", {main_list}, true)"
+        ),
+        format!(
+            "tierstore: (\"{JOBSCHEDULER}\", \"{artifacts}\", {main_list}, true), not \
+             (\"{TIERSTORE}\", \"{artifacts}\", {main_list}, true)"
+        ),
+        format!(
+            "hello: (\"komira-ai/hostkeeper\", \"{artifacts}\", [\"refs/tags/v*\"], true), \
+             not (\"komira-ai/hostkeeper\", \"{artifacts}\", {main_list}, true)"
+        ),
+        format!(
+            "mdm: (\"komira-ai/hostkeeper\", \"{artifacts}\", {main_list}, false), not \
+             (\"komira-ai/hostkeeper\", \"{artifacts}\", {main_list}, true)"
+        ),
+        "jobscheduler is not a service the trust list stages".to_owned(),
+    ];
+    // A partial list (the runbook's) is held to the signer of each service it lists only.
+    assert_eq!(signer_problems(&trust, false), departures);
+    // The committed list is held to every service too.
+    let mut all = departures.to_vec();
+    all.push("hostkeeper is not listed".to_owned());
+    assert_eq!(signer_problems(&trust, true), all);
 }
