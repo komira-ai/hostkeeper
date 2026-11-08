@@ -3,10 +3,13 @@
 //!
 //! The gate is `hostkeeper_mdm_gate`, linked in, so the enrollment's question about a Mac
 //! serial is a library call and no RPC. With `--mdm-api-url`, `--mdm-api-key-file` and
-//! `--mdm-webhook-listen` (all three, and `--enrollment-dir`) the coordinator:
+//! `--mdm-webhook-listen` (all three, and enrollment: `--ca-key-file` with `--enrollment-dir` or
+//! `--database-dsn-file`) the coordinator:
 //!
-//! - opens the gate's device records, a file per device in `mdm-devices` under the enrollment
-//!   store (so `backup` and `restore` copy them); a record that does not read stops the start;
+//! - opens the gate's device records where it keeps its other state ([`Devices`]): with the file
+//!   store a file per device in `mdm-devices` under the enrollment store (so `backup` and
+//!   `restore` copy them), with the database the table `mdm_devices`; a record that does not read
+//!   stops the start;
 //! - reads NanoHUB's API key from its file, which must pass the secret file rule (the error
 //!   names the flag, never the path or the key);
 //! - serves NanoHUB's webhook on the loopback address `--mdm-webhook-listen`
@@ -46,9 +49,9 @@ use hostkeeper_enrollment::names::KeyHash;
 use hostkeeper_enrollment::validity::UnixClock;
 use hostkeeper_mdm_gate::{
     ApiKey, ApiKeyError, ApiUrl, ApiUrlError, CONFIG_FLAG, DaemonProfile, DaemonProfileError,
-    EnrollSide, Enrollments, EnrollmentsError, FileDeviceStore, Gate, IdentifierError, Install,
-    MdmHost, MdmHostError, NanoHub, Nonce, PkgAllowlist, PkgAllowlistError, ProfileIdentifier,
-    Random, StoreError, Waiting, enroll, webhook,
+    DeviceStore, EnrollSide, Enrollments, EnrollmentsError, FileDeviceStore, Gate, IdentifierError,
+    Install, MdmHost, MdmHostError, NanoHub, Nonce, PkgAllowlist, PkgAllowlistError,
+    ProfileIdentifier, Random, StoreError, Waiting, enroll, webhook,
 };
 
 use crate::enrollment::{
@@ -58,17 +61,28 @@ use crate::enrollment::{
 /// The directory of the gate's device records in the enrollment store.
 pub const DEVICES_DIR: &str = "mdm-devices";
 
+/// Where the gate's device records are kept.
+pub enum Devices<'a> {
+    /// A file per device in [`DEVICES_DIR`] under the file store's enrollment store, this
+    /// directory (`--enrollment-dir`), made when missing.
+    Files(&'a Path),
+    /// A store the coordinator opened, the database's (`--database-dsn-file`).
+    Store(Box<dyn DeviceStore>),
+}
+
 /// The flags of the MDM policy gate, all three or none.
 #[derive(Clone, Debug, Args)]
 pub struct MdmFlags {
     /// NanoHUB's API, on loopback: `http://<loopback address>:<port>`, as
     /// `http://127.0.0.1:9004`. With it the coordinator runs the MDM policy gate: it keeps a
     /// record per MDM device and answers whether a Mac is enrolled and supervised, so a Mac on
-    /// --mac-serial-allowlist can be approved by its nonce. Requires --mdm-api-key-file,
-    /// --mdm-webhook-listen and --enrollment-dir.
+    /// --mac-serial-allowlist can be approved by its nonce. Its records are kept with the
+    /// coordinator's other state: in --enrollment-dir, or in the database of
+    /// --database-dsn-file. Requires --mdm-api-key-file, --mdm-webhook-listen and
+    /// --ca-key-file, with --enrollment-dir or --database-dsn-file.
     #[arg(
         long,
-        requires_all = ["mdm_api_key_file", "mdm_webhook_listen", "enrollment_dir"]
+        requires_all = ["mdm_api_key_file", "mdm_webhook_listen", "ca_key_file", "records_store"]
     )]
     pub mdm_api_url: Option<String>,
     /// NanoHUB's API key (its -api-key): a file of one key, mode 0600 or 0400, owned by the
@@ -158,15 +172,15 @@ pub struct Mdm {
 }
 
 impl Mdm {
-    /// The gate the flags name, its records in `enrollment_dir`, its times from `clock` and
-    /// its command UUIDs from `random`; `None` without the flags.
+    /// The gate the flags name, its records in `devices`, its times from `clock` and its
+    /// command UUIDs from `random`; `None` without the flags, and then `devices` is not opened.
     ///
     /// # Errors
     /// [`MdmError`]: the URL is not loopback HTTP, the key file is refused, the webhook address
     /// is not loopback, or a device record does not read.
     pub fn open(
         flags: &MdmFlags,
-        enrollment_dir: &Path,
+        devices: Devices<'_>,
         clock: Arc<dyn UnixClock>,
         random: Random,
     ) -> Result<Option<Self>, MdmError> {
@@ -185,9 +199,14 @@ impl Mdm {
         }
         let side = side_of(flags)?;
         let install = install_of(flags, Arc::new(RealFs))?;
-        let store = FileDeviceStore::open(Arc::new(RealFs), &enrollment_dir.join(DEVICES_DIR))?;
-        let gate = Gate::open(Box::new(store), NanoHub::new(url, key), clock, random)?
-            .with_install(install);
+        let store: Box<dyn DeviceStore> = match devices {
+            Devices::Files(dir) => Box::new(FileDeviceStore::open(
+                Arc::new(RealFs),
+                &dir.join(DEVICES_DIR),
+            )?),
+            Devices::Store(store) => store,
+        };
+        let gate = Gate::open(store, NanoHub::new(url, key), clock, random)?.with_install(install);
         let (gate, attached) = match side {
             Some((identifier, config)) => {
                 let attached = Arc::new(Attached::default());

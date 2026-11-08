@@ -672,8 +672,8 @@ fn import_reads_the_halts_file_a_start_would_settle_on() {
 
 /// Proves: an import refuses what `serve` refuses before it touches the database: the marker of
 /// changes not yet written, the marker of a restore that stopped partway, an ops file of a newer
-/// schema, a missing enrollment directory, and the MDM gate's device records, which no table
-/// keeps yet.
+/// schema, a missing enrollment directory, and an MDM device record the gate's reader refuses,
+/// with the gate's own reason.
 ///
 /// Catches: an import that moves a state `serve` would not start on, or drops what the files hold.
 #[test]
@@ -709,12 +709,20 @@ fn import_refuses_what_serve_refuses() {
         Err(TransferError::Files(BackupError::NoEnrollmentDir { .. }))
     ));
     store.put("enrollment/mdm-devices/a.pb", b"a device");
-    match imported(&store, &database) {
-        Err(TransferError::MdmDevices { path }) => {
-            assert_eq!(path, store.dir.path().join("enrollment/mdm-devices"));
-        }
-        other => panic!("{other:?}"),
-    }
+    let refused = imported(&store, &database).expect_err("a device record serve refuses");
+    assert!(matches!(refused, TransferError::Devices(_)), "{refused:?}");
+    assert_eq!(
+        refused.to_string(),
+        format!(
+            "--enrollment-dir: the MDM device records: {}: the file is not a record; the gate \
+             does not guess what a device's record said, so fix or remove the file to start",
+            store
+                .dir
+                .path()
+                .join("enrollment/mdm-devices/a.pb")
+                .display()
+        )
+    );
     // The device records' directory that cannot be read as one is refused too.
     fs::remove_dir_all(store.dir.path().join("enrollment/mdm-devices")).expect("remove");
     store.put("enrollment/mdm-devices", b"not a directory");

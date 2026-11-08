@@ -1,8 +1,12 @@
 //! Where the gate's device records are kept: [`DeviceStore`], the one interface the gate reads
 //! and writes them through, and [`FileDeviceStore`], a file per device.
 //!
-//! The coordinator's state moves to a database; the records move with it as another
-//! implementation of [`DeviceStore`], and the gate does not change.
+//! The coordinator keeps them where it keeps its other state: in files with the file store, and
+//! in the table `mdm_devices` of its database with `--database-dsn-file`, another implementation
+//! of [`DeviceStore`] in the coordinator. The gate does not change. Every implementation keeps a
+//! record as the bytes [`encode_record`] makes and reads it back with [`decode_record`], so a
+//! record moves between them byte for byte, and [`crate::conformance`] holds each to the same
+//! cases.
 //!
 //! [`FileDeviceStore`] keeps `<dir>/<enrollment id>.pb`, mode 0600, written whole by
 //! [`write_atomic`] (a temporary file, fsync, rename, fsync of the directory). The file is a
@@ -19,7 +23,7 @@
 //! (task M14) are field 20, added to schema 1 the same way: a record without it is one with no
 //! pkg sent.
 //!
-//! Under the coordinator, the directory is `mdm-devices` in the enrollment store
+//! Under the coordinator's file store, the directory is `mdm-devices` in the enrollment store
 //! (`--enrollment-dir`), so `hostkeeper-coordinator backup` and `restore` copy it with the
 //! store's other `.pb` files.
 
@@ -296,8 +300,10 @@ fn phase_of(number: u32) -> Option<Phase> {
     }
 }
 
-/// The bytes of the file of `record`.
-fn encode(record: &DeviceRecord) -> Vec<u8> {
+/// The bytes a store keeps `record` as: the message of its file `<enrollment id>.pb`, which
+/// holds the schema, the record and the record's SHA-256. [`decode_record`] reads them back.
+#[must_use]
+pub fn encode_record(record: &DeviceRecord) -> Vec<u8> {
     let pb = RecordPb {
         enrollment_id: record.enrollment_id.as_str().to_owned(),
         udid: record.udid.clone(),
@@ -338,8 +344,30 @@ fn encode(record: &DeviceRecord) -> Vec<u8> {
     .encode_to_vec()
 }
 
-/// The record in the file `path`, whose bytes are `bytes`.
-fn decode(path: &Path, bytes: &[u8]) -> Result<DeviceRecord, StoreError> {
+/// The record a store keeps under the enrollment id `key` as `bytes`, the bytes
+/// [`encode_record`] made; `place` is where it is kept, as an error names it.
+///
+/// # Errors
+/// [`StoreError::Corrupt`]: the bytes are not a whole record this release reads, or the record
+/// is of another enrollment id than `key`. [`StoreError::NewerSchema`]: they are of a newer
+/// schema.
+pub fn decode_record(place: &Path, key: &str, bytes: &[u8]) -> Result<DeviceRecord, StoreError> {
+    decode(
+        place,
+        bytes,
+        |id| id.as_str() == key,
+        "the record's enrollment id is not its key",
+    )
+}
+
+/// The record at `path` whose bytes are `bytes`, kept under the enrollment id `kept_under`
+/// accepts; `elsewhere` is the reason it is refused when that refuses its id.
+fn decode(
+    path: &Path,
+    bytes: &[u8],
+    kept_under: impl Fn(&EnrollmentId) -> bool,
+    elsewhere: &str,
+) -> Result<DeviceRecord, StoreError> {
     let corrupt = |reason: &str| StoreError::Corrupt {
         path: path.to_path_buf(),
         reason: reason.to_owned(),
@@ -360,8 +388,8 @@ fn decode(path: &Path, bytes: &[u8]) -> Result<DeviceRecord, StoreError> {
     let pb = RecordPb::decode(file.record.as_slice())
         .map_err(|_| corrupt("the record does not decode"))?;
     let enrollment_id = EnrollmentId::parse(&pb.enrollment_id)
-        .filter(|id| path.file_name() == Some(format!("{id}.pb").as_ref()))
-        .ok_or_else(|| corrupt("the record's enrollment id is not its file's name"))?;
+        .filter(|id| kept_under(id))
+        .ok_or_else(|| corrupt(elsewhere))?;
     let phase = phase_of(pb.phase).ok_or_else(|| corrupt("the record's phase is unknown"))?;
     let mut sent = Vec::with_capacity(pb.sent.len());
     for one in pb.sent {
@@ -448,7 +476,10 @@ impl DeviceStore for FileDeviceStore {
             let path = self.dir.join(name);
             // A record listed a moment ago and gone now was removed by hand: it is not kept.
             if let Some(bytes) = self.fs.read(&path).map_err(io(&path))? {
-                records.push(decode(&path, &bytes)?);
+                let named =
+                    |id: &EnrollmentId| path.file_name() == Some(format!("{id}.pb").as_ref());
+                let elsewhere = "the record's enrollment id is not its file's name";
+                records.push(decode(&path, &bytes, named, elsewhere)?);
             }
         }
         Ok(records)
@@ -456,11 +487,16 @@ impl DeviceStore for FileDeviceStore {
 
     fn save(&self, record: &DeviceRecord) -> Result<(), StoreError> {
         let name = format!("{}.pb", record.enrollment_id);
-        write_atomic(&*self.fs, &self.dir, &name, &encode(record), FILE_MODE).map_err(|source| {
-            StoreError::Io {
-                path: self.dir.join(&name),
-                source,
-            }
+        write_atomic(
+            &*self.fs,
+            &self.dir,
+            &name,
+            &encode_record(record),
+            FILE_MODE,
+        )
+        .map_err(|source| StoreError::Io {
+            path: self.dir.join(&name),
+            source,
         })
     }
 }

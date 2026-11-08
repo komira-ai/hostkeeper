@@ -13,8 +13,8 @@ use tonic::Code;
 
 use super::support::{Served, call, decode, grpc_request, raw, served, served_built};
 use crate::http::Surface;
-use crate::mdm::Mdm;
 use crate::mdm::tests::{devices_dir, flags_in, mdm_with, record};
+use crate::mdm::{Devices, Mdm};
 use crate::operator_mdm::MAX_DEVICE_PAGE;
 use crate::testutil::{OPERATOR, Rig, ci_token, scratch};
 
@@ -307,7 +307,7 @@ async fn a_page_holds_at_most_the_cap_and_a_limit_of_zero_is_the_cap() {
     let flags = flags_in(&dir);
     let mdm = Mdm::open(
         &flags,
-        dir.path(),
+        Devices::Files(dir.path()),
         crate::enrollment::tests::support::FixedClock::at(1),
         crate::enrollment::os_random(),
     )
