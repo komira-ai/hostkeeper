@@ -15,6 +15,9 @@
 //! under the caller's locks) opens a new session and takes the lock again. With the lock it reads
 //! the lease: the same epoch, and the coordinator goes on; another, and another coordinator led
 //! meanwhile: the store is **deposed**, and the coordinator exits.
+//!
+//! A writer that ends (the store stopped or dropped) frees the lock before its session closes,
+//! so a successor takes it at once.
 
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -237,13 +240,14 @@ impl Drop for Writer {
     /// Lets go of the lock before the session closes, so the lock is free once the writer is
     /// gone. Closing a session only sends the server its end and returns; the server ends the
     /// session, and frees the lock with it, a moment later, when a successor may already be
-    /// trying the lock. The server answers the unlock once the lock is free. A lost session was
-    /// dropped when it was lost, so this waits on none that is known to be gone.
+    /// trying the lock. The server answers the unlock once the lock is free, within the session's
+    /// bounded waits. A transaction left open (a job that panicked in it) is rolled back first, so
+    /// an aborted one does not refuse the unlock. A lost writer holds no session: nothing to do.
     fn drop(&mut self) {
         if let Some(session) = self.session.as_mut() {
             // A session that cannot run it is broken, and the server frees the lock as it
             // ends it.
-            let _ = session.batch("SELECT pg_advisory_unlock_all()");
+            let _ = session.batch("ROLLBACK; SELECT pg_advisory_unlock_all()");
         }
     }
 }
