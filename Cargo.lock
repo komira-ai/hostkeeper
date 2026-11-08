@@ -1946,6 +1946,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "hostkeeper-release"
+version = "0.1.0"
+dependencies = [
+ "hostkeeper-config",
+ "hostkeeper-proto",
+ "prost",
+ "thiserror",
+]
+
+[[package]]
 name = "hostkeeper-steps"
 version = "0.1.0"
 dependencies = [

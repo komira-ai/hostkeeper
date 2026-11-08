@@ -23,6 +23,7 @@ const FILES: &[&str] = &[
     "hostkeeper/operator/v1/rollouts.proto",
     "hostkeeper/operator/v1/mdm.proto",
     "hostkeeper/local/v1/admin.proto",
+    "hostkeeper/release/v1/release.proto",
 ];
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -50,6 +51,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build_server(true)
         // No transport: the generated clients take any channel, and the crate needs no runtime.
         .build_transport(false)
+        // A release's maps (a manifest's params) are ordered, so a manifest encodes to the same
+        // bytes on every run: the audit entry of a set records the SHA-256 of that encoding.
+        .btree_map(".hostkeeper.release.v1")
         .compile_fds(compiler.file_descriptor_set())?;
 
     println!("cargo:rerun-if-changed=proto");
