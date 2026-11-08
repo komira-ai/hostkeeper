@@ -37,7 +37,7 @@ pub fn problems(doc: &Node) -> Vec<String> {
 }
 
 /// Every `run:` scalar of the tree, with its line.
-fn collect_runs<'a>(node: &'a Node, out: &mut Vec<(usize, &'a str)>) {
+pub fn collect_runs<'a>(node: &'a Node, out: &mut Vec<(usize, &'a str)>) {
     match &node.value {
         Value::Scalar { .. } => {}
         Value::Seq(items) => items.iter().for_each(|i| collect_runs(i, out)),
