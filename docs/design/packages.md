@@ -11,7 +11,7 @@ picked entry in orders over gRPC, `target-v1` echoed, and `no_target`, `no_build
 the CI client's `targets` input (`.github/workflows/set-desired.yml`), `cargo xtask release targets`
 (`crates/xtask/src/release/targets.rs`), and its two callers, hostkeeper's deploy in `release.yml` and the hello
 proof run `hello-desired.yml`, which set each release with its targets, its release index and the index's digest,
-pinned to the CI client of release v0.1.173. Build item A4 is **Built**: the host's `stores.toml` and the fetch and proof through the entry
+pinned to a CI client that takes targets (release v0.1.173 or later). Build item A4 is **Built**: the host's `stores.toml` and the fetch and proof through the entry
 (`crates/hostkeeper-package/src/stores.rs` and `entry.rs`), the order checks, the installers list and the refusals
 `order_invalid`, `installer_not_listed`, `manifest_invalid`, `no_store` and `store_digest_mismatch` (`crates/hostkeeper-daemon`),
 `target-v1` and the 32 KiB gRPC reply (`crates/hostkeeper-link`), and the `agent.proto` header. Nothing else here is built. This is a revision of the design merged as
