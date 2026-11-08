@@ -128,6 +128,20 @@ pub struct AwaitingRestart {
     /// then reported by no binary.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub order_id: Option<String>,
+    /// The version the link `next` of the binary directory was pointed at before this wait was
+    /// written: set on a hand-over (docs/design/two-programs.md, 4.3), where `current` is not
+    /// moved before the new binary has run, and the binary `current` starts execs `next`
+    /// ([`crate::handover`]). A wait without it was written the old way, `current` switched
+    /// first, and is settled as before. Additive: written only when set, and a record without it
+    /// loads as `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next: Option<String>,
+    /// How many times a binary that is not the version waited for has exec'd `next` for this
+    /// wait: the hand-over's start count, which ends at [`crate::handover::HAND_OVER_TRIES`].
+    /// Additive: written only when set, and a record without it loads as `None`, read as no
+    /// start yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub starts: Option<u32>,
 }
 
 /// How an update waiting for the restart ends ([`RecordStore::settle_awaiting_restart`]).

@@ -1,6 +1,6 @@
 # hostkeeper is two programs
 
-Status: design, for the maintainers' comments. Nothing here is built. Every statement about new code is **Designed**;
+Status: design, for the maintainers' comments. Every statement about new code is **Designed** until its item lands;
 **Built** names code on `main` with a path, as in [hostkeeper-design.md](hostkeeper-design.md). Section 9 lists the
 build items, one pull request each.
 
@@ -485,6 +485,12 @@ is confirmed after the switch is finished. A record without `next`, written the 
   earlier binary, each of which answers `self-update-fallback`. It already reads the hand-over, as `O` (steps 1 and 3)
   and as `N` (step 2). It needs to: a stage-2 daemon may be downgraded to a stage-1 release, which must then settle
   itself and move `current`.
+  **Built** (S1a): steps 1 to 3 in `crates/hostkeeper-steps/src/handover.rs`, run first in `hostkeeper daemon`,
+  before the config and before the daemon's own lock; the state directory's lock is taken only around the writes of
+  steps 1 and 3, and released by the exec (`crates/hostkeeper-daemon/src/handover.rs`); the settlement's case of step 2,
+  and the removal of a `next` with no wait, in `settle_with` (`crates/hostkeeper-steps/src/selfupdate.rs`); the
+  record's fields `next` and `starts` of `AwaitingRestart` (`crates/hostkeeper-steps/src/record.rs`). The
+  fallback verb leaves a hand-over alone: it moved no link (`crates/hostkeeper-daemon/src/fallback.rs`).
 - **Stage 2** hands over. At start, before it may run a self-update, it removes the fallback unit, the drop-in and the
   Mac job (drop-in first, so `OnFailure=` never names a missing unit), and reloads the service manager. Until they are
   gone it answers a self-update `busy` and raises the alert `self_update_units`, which exists today. So a fallback unit

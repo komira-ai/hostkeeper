@@ -28,6 +28,9 @@
 //!   each start where they differ, telling the service manager only then; [`seed`] is the verb
 //!   `self-update-seed` the unit runs before each start (on macOS the pkg's `postinstall`, at
 //!   install), which gives the binary directory its first binary.
+//! - [`handover`]: the first thing `hostkeeper daemon` does, before it reads its config: a
+//!   hand-over of hostkeeper's own update into another binary (docs/design/two-programs.md, 4.3)
+//!   execs that binary while its start count lasts, and is settled failed once it cannot.
 //! - [`mac_config`]: the verb `mac-config`, which the pkg's `postinstall` runs to write the
 //!   daemon config from the managed preferences the MDM installed.
 //! - [`adapters`]: the step launcher, service manager, unit directory, observer ports and package
@@ -81,6 +84,7 @@ pub mod executor;
 pub mod fallback;
 mod files;
 pub mod halt;
+pub mod handover;
 pub mod hook_log;
 pub mod installed;
 pub mod ipmi;
