@@ -54,6 +54,10 @@
 //!   package's attestation verified by its service's signer in the list, and staged into a
 //!   release channel by `channel-stage`, a new version renamed into place whole; never changes a
 //!   version already there.
+//! - `targets` ([`targets`]): the `targets` of the set that deploys a package of a release, one
+//!   `hostkeeper-archive` entry per platform its release index lists, read from the release's
+//!   assets and checked as the coordinator and the daemon check them, written as one line of
+//!   JSON for the CI client (`set-desired.yml`, input `targets`).
 //!
 //! The names and formats a consumer relies on are in [`contract`]. The adapters that run `git`,
 //! `gh`, `pkgbuild`, `productbuild` and `curl` are in [`git`], [`github`], [`macos_pkg`] and
@@ -88,6 +92,7 @@ mod publish;
 pub(crate) mod real;
 mod set_version;
 mod sync;
+mod targets;
 #[cfg(feature = "test-support")]
 pub mod test_support;
 mod version;
@@ -466,6 +471,34 @@ pub(crate) enum Verb {
         #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
         every_secs: Option<u64>,
     },
+    /// Write the `targets` of the set that deploys a package of the release: for each platform
+    /// its release index lists, one `hostkeeper-archive` entry with the archive's two locations
+    /// (the release channel's path, then the release asset), its size and SHA-256, its
+    /// `.sigstore.json` bundle, and the `min_hostkeeper` of the archive's own manifest. Refused,
+    /// every problem named, unless the index, every archive, bundle and manifest check out and
+    /// the entries pass the coordinator's checks. Prints `targets=<JSON>`.
+    Targets {
+        /// The service: hostkeeper (the default), hello or mdm.
+        #[arg(long, value_enum, default_value_t)]
+        service: Service,
+        /// The entries of hello's failing build (`hello-fail-ready-index.json`). Refused for
+        /// hostkeeper and mdm.
+        #[arg(long)]
+        fail_ready: bool,
+        /// The release, `X.Y.Z`: the tag `v<X.Y.Z>` holds the assets.
+        #[arg(long)]
+        version: Version,
+        /// The directory of the release's assets: the package's index, its archives and their
+        /// bundles.
+        #[arg(long)]
+        dir: PathBuf,
+        /// The repository of the release, `owner/name`.
+        #[arg(long)]
+        repo: Repo,
+        /// A file the `targets=` line is appended to (on Actions, `GITHUB_OUTPUT`).
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
     /// Publish a checked directory as the release of the version, at the commit.
     Publish {
         dir: PathBuf,
@@ -554,6 +587,23 @@ pub(crate) fn run<A: Adapters>(
             require: require_platforms,
             out,
         }),
+        Verb::Targets {
+            service,
+            fail_ready,
+            version,
+            dir,
+            repo,
+            output,
+        } => match Package::of(service, fail_ready) {
+            Some(package) => targets::targets(&targets::Request {
+                package,
+                version,
+                dir,
+                repo,
+                output,
+            }),
+            None => Err(Error::Failed(package::FAIL_READY_ONLY_HELLO.to_owned())),
+        },
         verb => run_with(verb, &connect().ports()),
     }
 }
@@ -684,7 +734,8 @@ fn run_with(verb: Verb, ports: &Ports<'_>) -> Result<Vec<String>, Error> {
         | Verb::NfpmStage { .. }
         | Verb::CheckLinuxPkg { .. }
         | Verb::CheckMacosPkg { .. }
-        | Verb::ChannelStage { .. } => run(verb, || Lent(*ports)),
+        | Verb::ChannelStage { .. }
+        | Verb::Targets { .. } => run(verb, || Lent(*ports)),
     }
 }
 
