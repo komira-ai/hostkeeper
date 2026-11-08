@@ -214,7 +214,7 @@ fn the_timer_starts_the_committed_unit_whose_command_stages_a_release_once_and_t
     // Catches: a timer that starts another unit or can start a run while one is going on; a unit
     // whose command does not parse, does not stage a published release, writes outside the one
     // path its sandbox lets it write, or changes the channel on a run with nothing new; or a
-    // committed trust list that does not stage js-agent from jobscheduler by its release.yml.
+    // committed trust list that does not stage js-agent from jobscheduler by its artifacts.yml.
     let timer = deploy_file("hostkeeper-channel-sync.timer");
     let service = unit_value(&timer, "Timer", "Unit").unwrap_or("hostkeeper-channel-sync.service");
     assert_eq!(service, "hostkeeper-channel-sync.service");
@@ -285,7 +285,7 @@ fn the_timer_starts_the_committed_unit_whose_command_stages_a_release_once_and_t
         calls.contains("--signer-workflow komira-ai/tierstore/.github/workflows/artifacts.yml")
     );
     assert!(
-        calls.contains("--signer-workflow komira-ai/jobscheduler/.github/workflows/release.yml")
+        calls.contains("--signer-workflow komira-ai/jobscheduler/.github/workflows/artifacts.yml")
     );
 
     let second = run();
@@ -420,30 +420,159 @@ fn the_committed_sidecar_stages_a_release_and_the_next_published_one_round_after
     assert_eq!(files(&s.channel), want);
 }
 
-#[test]
-fn the_trust_lists_of_the_runbook_and_the_deployment_load_and_name_the_examples_services() {
-    // Catches: a runbook example or committed trust list the sync refuses at its first run, or
-    // one that lost tierstore or js-agent (staged from a repository with another name).
-    use hostkeeper_config::channel_trust::ChannelTrust;
+/// Each service the committed trust list stages, with the repository whose releases carry it and
+/// the workflow whose attestation its packages carry: hostkeeper's artifacts.yml signs hostkeeper,
+/// hello and mdm; tierstore's signs tierstore; and jobscheduler's artifacts.yml, which its
+/// release.yml calls, signs js-agent. Every signer is on main and on a hosted runner.
+const SIGNERS: [(&str, &str, &str); 5] = [
+    (
+        "hostkeeper",
+        "komira-ai/hostkeeper",
+        ".github/workflows/artifacts.yml",
+    ),
+    (
+        "hello",
+        "komira-ai/hostkeeper",
+        ".github/workflows/artifacts.yml",
+    ),
+    (
+        "mdm",
+        "komira-ai/hostkeeper",
+        ".github/workflows/artifacts.yml",
+    ),
+    ("tierstore", TIERSTORE, ".github/workflows/artifacts.yml"),
+    ("js-agent", JOBSCHEDULER, ".github/workflows/artifacts.yml"),
+];
+
+/// How `trust` differs from [`SIGNERS`] for each service it lists, and, when `all` is true, the
+/// services of [`SIGNERS`] it does not list; empty when it agrees.
+fn signer_problems(
+    trust: &hostkeeper_config::channel_trust::ChannelTrust,
+    all: bool,
+) -> Vec<String> {
+    let mut problems = Vec::new();
+    for listed in trust.services() {
+        let name = listed.service.as_str();
+        let Some((_, repository, workflow)) = SIGNERS.iter().find(|(s, _, _)| *s == name) else {
+            problems.push(format!("{name} is not a service the trust list stages"));
+            continue;
+        };
+        let got = (
+            listed.repository.as_str(),
+            listed.signers.workflow.as_str(),
+            listed.signers.refs.clone(),
+            listed.signers.hosted_runner,
+        );
+        let want = (
+            *repository,
+            *workflow,
+            vec!["refs/heads/main".to_owned()],
+            true,
+        );
+        if got != want {
+            problems.push(format!("{name}: {got:?}, not {want:?}"));
+        }
+    }
+    for (name, _, _) in SIGNERS.iter().filter(|_| all) {
+        let service = ServiceName::new(name).expect("a name");
+        if trust.service(&service).is_none() {
+            problems.push(format!("{name} is not listed"));
+        }
+    }
+    problems
+}
+
+/// The runbook's trust list example, the first TOML block of `docs/deploy/release-channel.md`.
+fn runbook_trust_list() -> String {
     let doc_path =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/deploy/release-channel.md");
     let doc = std::fs::read_to_string(&doc_path).expect("read the runbook");
-    let block = doc
-        .split("```toml\n")
+    doc.split("```toml\n")
         .nth(1)
         .and_then(|rest| rest.split("```").next())
-        .expect("the runbook's trust list example");
+        .expect("the runbook's trust list example")
+        .to_owned()
+}
+
+#[test]
+fn the_trust_lists_of_the_runbook_and_the_deployment_load_and_name_each_services_signer() {
+    // Catches: a runbook example or committed trust list the sync refuses at its first run; a
+    // committed list that lost a service; or an entry, in either, naming another repository,
+    // workflow, ref or runner than the one that signs that service's packages (js-agent's by
+    // jobscheduler's release.yml, which no package carries since release.yml calls artifacts.yml).
+    use hostkeeper_config::channel_trust::ChannelTrust;
     let committed = std::fs::read_to_string(committed_trust_list()).expect("read the trust list");
-    for text in [block, committed.as_str()] {
-        let trust = ChannelTrust::parse(text).expect("the trust list loads");
-        let agent = trust
-            .service(&ServiceName::new("js-agent").expect("a name"))
-            .expect("js-agent is listed");
-        assert_eq!(agent.repository.as_str(), JOBSCHEDULER);
-        assert_eq!(agent.signers.workflow, ".github/workflows/release.yml");
-        let tierstore = trust
-            .service(&ServiceName::new("tierstore").expect("a name"))
-            .expect("tierstore is listed");
-        assert_eq!(tierstore.repository.as_str(), TIERSTORE);
-    }
+    let committed = ChannelTrust::parse(&committed).expect("the committed trust list loads");
+    assert_eq!(signer_problems(&committed, true), Vec::<String>::new());
+    let runbook = ChannelTrust::parse(&runbook_trust_list()).expect("the runbook's example loads");
+    assert_eq!(signer_problems(&runbook, false), Vec::<String>::new());
+    let names: Vec<&str> = runbook
+        .services()
+        .iter()
+        .map(|s| s.service.as_str())
+        .collect();
+    assert_eq!(names, ["tierstore", "js-agent"]);
+}
+
+#[test]
+fn the_signer_check_names_each_way_an_entry_departs_from_its_services_signer() {
+    // Catches: a signer check that passes an entry of the old js-agent workflow, another
+    // repository, a tag ref or a self-hosted runner, a service the list should not stage, or a
+    // committed list missing a service.
+    use hostkeeper_config::channel_trust::ChannelTrust;
+    let entry = |name: &str, repository: &str, workflow: &str, refs: &str, hosted: bool| {
+        format!(
+            "[[service]]\nname = \"{name}\"\nrepository = \"{repository}\"\n\
+             workflow = \"{workflow}\"\nrefs = [\"{refs}\"]\nhosted_runner = {hosted}\n"
+        )
+    };
+    let artifacts = ".github/workflows/artifacts.yml";
+    let main = "refs/heads/main";
+    let text = [
+        entry(
+            "js-agent",
+            JOBSCHEDULER,
+            ".github/workflows/release.yml",
+            main,
+            true,
+        ),
+        entry("tierstore", JOBSCHEDULER, artifacts, main, true),
+        entry(
+            "hello",
+            "komira-ai/hostkeeper",
+            artifacts,
+            "refs/tags/v*",
+            true,
+        ),
+        entry("mdm", "komira-ai/hostkeeper", artifacts, main, false),
+        entry("jobscheduler", JOBSCHEDULER, artifacts, main, true),
+    ]
+    .concat();
+    let trust = ChannelTrust::parse(&text).expect("a trust list");
+    let main_list = "[\"refs/heads/main\"]";
+    let departures = [
+        format!(
+            "js-agent: (\"{JOBSCHEDULER}\", \".github/workflows/release.yml\", {main_list}, \
+             true), not (\"{JOBSCHEDULER}\", \"{artifacts}\", {main_list}, true)"
+        ),
+        format!(
+            "tierstore: (\"{JOBSCHEDULER}\", \"{artifacts}\", {main_list}, true), not \
+             (\"{TIERSTORE}\", \"{artifacts}\", {main_list}, true)"
+        ),
+        format!(
+            "hello: (\"komira-ai/hostkeeper\", \"{artifacts}\", [\"refs/tags/v*\"], true), \
+             not (\"komira-ai/hostkeeper\", \"{artifacts}\", {main_list}, true)"
+        ),
+        format!(
+            "mdm: (\"komira-ai/hostkeeper\", \"{artifacts}\", {main_list}, false), not \
+             (\"komira-ai/hostkeeper\", \"{artifacts}\", {main_list}, true)"
+        ),
+        "jobscheduler is not a service the trust list stages".to_owned(),
+    ];
+    // A partial list (the runbook's) is held to the signer of each service it lists only.
+    assert_eq!(signer_problems(&trust, false), departures);
+    // The committed list is held to every service too.
+    let mut all = departures.to_vec();
+    all.push("hostkeeper is not listed".to_owned());
+    assert_eq!(signer_problems(&trust, true), all);
 }
