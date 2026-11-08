@@ -12,8 +12,8 @@ use crate::nfpm::{self, Config};
 use crate::script::{self, Command};
 use crate::{INSTALLED_UNIT, NFPM, POSTINSTALL, PREREMOVE, altered, config, read, refuses};
 
-const ENABLE: [&str; 3] = ["systemctl", "enable", "hostkeeper.service"];
-const DISABLE: [&str; 3] = ["systemctl", "disable", "hostkeeper.service"];
+pub(crate) const ENABLE: [&str; 3] = ["systemctl", "enable", "hostkeeper.service"];
+pub(crate) const DISABLE: [&str; 3] = ["systemctl", "disable", "hostkeeper.service"];
 /// The `case` patterns of a first install: deb `configure` with no previous version, rpm `1`.
 const FIRST_INSTALL: [&str; 2] = ["configure:", "1:"];
 /// The `case` patterns of a removal: deb `remove`, rpm `0`.
@@ -741,17 +741,17 @@ fn scripts_are_posix_sh_and_touch_only_the_unit_and_tmpfiles() {
     refuses(check_commands, &cases);
 }
 
-const TMPFILES_CREATE: [&str; 3] = ["systemd-tmpfiles", "--create", "hostkeeper.conf"];
-const DAEMON_RELOAD: [&str; 2] = ["systemctl", "daemon-reload"];
+pub(crate) const TMPFILES_CREATE: [&str; 3] = ["systemd-tmpfiles", "--create", "hostkeeper.conf"];
+pub(crate) const DAEMON_RELOAD: [&str; 2] = ["systemctl", "daemon-reload"];
 
 /// One run of a package script: what the package manager passes, the program that fails (if
 /// any), and the programs it must run and the status it must end with.
-struct Scenario {
-    name: &'static str,
-    args: &'static [&'static str],
-    failing: Option<&'static [&'static str]>,
-    ran: &'static [&'static [&'static str]],
-    status: i32,
+pub(crate) struct Scenario {
+    pub(crate) name: &'static str,
+    pub(crate) args: &'static [&'static str],
+    pub(crate) failing: Option<&'static [&'static str]>,
+    pub(crate) ran: &'static [&'static [&'static str]],
+    pub(crate) status: i32,
 }
 
 /// The post-install script's runs: a first install enables the unit, an upgrade does not; a
@@ -849,46 +849,9 @@ const PREREMOVE_RUNS: [Scenario; 5] = [
     },
 ];
 
-/// The post-install script as pacman runs it: nfpm inlines the script as the body of
-/// `post_install`, which pacman calls with the new version, `<pkgver>-<pkgrel>`, alone. No `case`
-/// arm matches that, so the directories are made and the unit is never enabled.
-const PACMAN_POSTINSTALL_RUNS: [Scenario; 3] = [
-    Scenario {
-        name: "pacman install",
-        args: &["1.2.3-1"],
-        failing: None,
-        ran: &[&TMPFILES_CREATE, &DAEMON_RELOAD],
-        status: 0,
-    },
-    Scenario {
-        name: "pacman install of another release",
-        args: &["1.2.4-2"],
-        failing: None,
-        ran: &[&TMPFILES_CREATE, &DAEMON_RELOAD],
-        status: 0,
-    },
-    Scenario {
-        name: "pacman install without a running systemd",
-        args: &["1.2.3-1"],
-        failing: Some(&DAEMON_RELOAD),
-        ran: &[&TMPFILES_CREATE, &DAEMON_RELOAD],
-        status: 0,
-    },
-];
-
-/// The pre-remove script as pacman runs it: `pre_remove` is called with the old version,
-/// `<pkgver>-<pkgrel>`, alone; no `case` arm matches it, so nothing runs.
-const PACMAN_PREREMOVE_RUNS: [Scenario; 1] = [Scenario {
-    name: "pacman removal",
-    args: &["1.2.3-1"],
-    failing: None,
-    ran: &[],
-    status: 0,
-}];
-
 /// Runs `text` through every scenario of `runs`, with each program a fake that fails only
 /// for the scenario's failing command.
-fn check_runs(text: &str, runs: &[Scenario]) -> Result<(), String> {
+pub(crate) fn check_runs(text: &str, runs: &[Scenario]) -> Result<(), String> {
     let commands = script::parse(text)?;
     for scenario in runs {
         let done = script::run(&commands, scenario.args, |words| {
@@ -989,53 +952,4 @@ fn package_scripts_run_their_steps_in_order_and_fail_as_the_package_manager_expe
         ),
     ];
     refuses(|t: &str| check_runs(t, &PREREMOVE_RUNS), &pre_cases);
-}
-
-/// Catches a package script that, run as pacman runs it (one argument, `<pkgver>-<pkgrel>`),
-/// enables the unit, disables it on removal, or leaves out the directories and the reload: the
-/// Arch package makes the directories and reloads systemd, never enables the unit, and its
-/// removal runs nothing.
-#[test]
-fn package_scripts_run_under_pacman_make_the_directories_and_never_enable() {
-    let post = read(POSTINSTALL);
-    let pre = read(PREREMOVE);
-    assert_eq!(check_runs(&post, &PACMAN_POSTINSTALL_RUNS), Ok(()));
-    assert_eq!(check_runs(&pre, &PACMAN_PREREMOVE_RUNS), Ok(()));
-    let always_enable = altered(
-        &post,
-        "case \"$1:$2\" in\n  configure: | 1:) systemctl enable hostkeeper.service ;;\nesac\n",
-        "systemctl enable hostkeeper.service\n",
-    );
-    let post_cases = [
-        (always_enable, "pacman install: the script ran"),
-        (
-            altered(&post, "systemd-tmpfiles --create hostkeeper.conf\n", ""),
-            "pacman install: the script ran",
-        ),
-        (
-            altered(&post, "systemctl daemon-reload || true\n", ""),
-            "pacman install: the script ran",
-        ),
-        (
-            altered(
-                &post,
-                "systemctl daemon-reload || true",
-                "systemctl daemon-reload",
-            ),
-            "pacman install without a running systemd: the script ran",
-        ),
-    ];
-    refuses(
-        |t: &str| check_runs(t, &PACMAN_POSTINSTALL_RUNS),
-        &post_cases,
-    );
-    let always_disable = altered(
-        &pre,
-        "case \"$1\" in\n  remove | 0) systemctl disable hostkeeper.service || true ;;\nesac\n",
-        "systemctl disable hostkeeper.service || true\n",
-    );
-    refuses(
-        |t: &str| check_runs(t, &PACMAN_PREREMOVE_RUNS),
-        &[(always_disable, "pacman removal: the script ran")],
-    );
 }

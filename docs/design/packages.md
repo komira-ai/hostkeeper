@@ -1,7 +1,7 @@
 # Packages in any format: a list of targets per platform, installers, and a manifest outside the artifact
 
-Status: design, for the maintainers' ruling. Nothing here is built. This is a revision of the design merged as
-komira-ai/hostkeeper#179. It keeps that design's stores, its digest and attestation checks before any byte is used, and its
+Status: design, for the maintainers' ruling. Nothing here is built but item A15 (section 5.4). This is a revision
+of the design merged as komira-ai/hostkeeper#179. It keeps that design's stores, its digest and attestation checks before any byte is used, and its
 staged path for the daemons on hosts now. It replaces its package model: host facts, "most specific wins", artifact kinds
 and `Releases.Register` (section 0 says what replaces what). It changes three things in
 [hostkeeper-design.md](hostkeeper-design.md) section 5.5 ("One package per operating system and CPU family", "The release
@@ -576,10 +576,18 @@ order is `Failed`, `environment`, `dependency_missing`: nothing is installed, th
 the version it runs. A glibc build on a release older than its baseline is refused there, by its declared baseline,
 instead of installing a program that cannot start. A static build declares nothing and passes on every release.
 
-hostkeeper's own Linux build does not qualify yet: it is `*-unknown-linux-gnu` built on Ubuntu 24.04 (glibc 2.39), and
-its `.deb` and `.rpm` declare no dependency, so they install on Debian 12 (glibc 2.36) or RHEL 9 (glibc 2.34), whose C
-library may lack symbols the binary needs. A15 builds it for musl, has `cargo xtask release check-linux-pkg` refuse a
-`NEEDED` entry and any declared dependency (the check a service's CI can run on its own tarball too), and adds nfpm's `archlinux` bootstrap package.
+**Built** (A15): hostkeeper's own Linux build qualifies. `hostkeeper` and `hostkeeper-pxe` are built for
+`x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl`, static, each on a runner of its architecture
+(`.github/workflows/artifacts.yml`; the C compiler of those targets in `.cargo/config.toml`), and that one build is the
+binary tarball, `bin/hostkeeper` of hostkeeper's own `hostkeeper-archive` package, and the programs of the `.deb`, the
+`.rpm` and nfpm's `archlinux` bootstrap package (`packaging/linux/nfpm.yaml`, staged by `cargo xtask release
+nfpm-stage`, which refuses a program with an interpreter or a `NEEDED` entry). `cargo xtask release check-linux-pkg`
+(`crates/xtask/src/release/package/linux_check.rs`) reads a `.deb`, an `.rpm`, an Arch package or a tarball back and
+refuses an ELF program in it with an interpreter or a `NEEDED` entry and any declared dependency: the check a
+service's CI can run on its own packages and tarball too. The `privileged` job installs the same `.deb`, `.rpm` and
+Arch package on the oldest and newest release of each family, each in a container, and starts the binaries
+(`crates/hostkeeper-privileged/tests/linux_packages.rs`, the releases in
+`crates/hostkeeper-privileged/linux-releases.toml`).
 
 ## 6. An update, a rollback and an uninstall
 
