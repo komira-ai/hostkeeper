@@ -806,7 +806,7 @@ archive through the channel, probes it with `self-update-protocol`, switches and
 fails to start, the fallback runs the old one, which reads `hostkeeper.toml` (unchanged, since the stores are in
 `stores.toml`), the step record (unchanged) and `placed.json` (whose unknown keys it keeps).
 
-The device tests on every pull request (`pr-device.yml`, jobs `privileged` and `macos-device`) prove each stage:
+The device tests of a pull request (`pr-device.yml`, jobs `privileged` and `macos-device`, the latter when the pull request changes a path the macOS jobs build or read) prove each stage:
 `a_daemon_the_deb_installed_is_installed_its_next_release_and_restarts_into_it` (`self_update.rs`),
 `a_daemon_the_pkg_installed_is_installed_its_next_release_and_restarts_into_it` (`device_mac_selfupdate.rs`), and
 `a_next_binary_that_cannot_start_spends_the_start_limit_and_the_fallback_puts_the_old_one_back` (`self_update.rs`), run
