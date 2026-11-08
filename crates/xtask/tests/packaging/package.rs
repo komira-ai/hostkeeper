@@ -5,15 +5,15 @@ use std::collections::BTreeMap;
 
 use hostkeeper_daemon::cli::{GH_BINARY, SIGSTORE_TRUSTED_ROOT};
 use hostkeeper_daemon::console::{ENROLLMENT_ISSUE, ISSUE_LINK};
-use xtask::test_support::NFPM_STAGED;
+use xtask::test_support::{LINUX_PKG_PROGRAMS, NFPM_STAGED};
 
 use crate::attestation_files::staged;
 use crate::nfpm::{self, Config};
 use crate::script::{self, Command};
 use crate::{INSTALLED_UNIT, NFPM, POSTINSTALL, PREREMOVE, altered, config, read, refuses};
 
-const ENABLE: [&str; 3] = ["systemctl", "enable", "hostkeeper.service"];
-const DISABLE: [&str; 3] = ["systemctl", "disable", "hostkeeper.service"];
+pub(crate) const ENABLE: [&str; 3] = ["systemctl", "enable", "hostkeeper.service"];
+pub(crate) const DISABLE: [&str; 3] = ["systemctl", "disable", "hostkeeper.service"];
 /// The `case` patterns of a first install: deb `configure` with no previous version, rpm `1`.
 const FIRST_INSTALL: [&str; 2] = ["configure:", "1:"];
 /// The `case` patterns of a removal: deb `remove`, rpm `0`.
@@ -63,6 +63,20 @@ fn check_nfpm_keys(text: &str) -> Result<(), String> {
 fn nfpm_config_holds_only_the_keys_it_needs() {
     let text = read(NFPM);
     assert_eq!(check_nfpm_keys(&text), Ok(()));
+    // The Arch package names the same packager as the deb's maintainer.
+    let config = config();
+    assert_eq!(
+        config.archlinux_field("packager"),
+        config.field("maintainer")
+    );
+    assert_eq!(config.archlinux_field("pkgbase"), Ok(None));
+    let none = Config::parse(&altered(
+        &text,
+        "archlinux:\n  packager:",
+        "other:\n  packager:",
+    ))
+    .expect("parses");
+    assert_eq!(none.archlinux_field("packager"), Ok(None));
     let maintainer =
         "maintainer: \"The hostkeeper project <https://github.com/komira-ai/hostkeeper>\"";
     let cases = [
@@ -102,6 +116,22 @@ fn nfpm_config_holds_only_the_keys_it_needs() {
             format!("{text}overrides:\n  rpm:\n    depends: [systemd]\n"),
             "[\"overrides\"]",
         ),
+        (
+            altered(
+                &text,
+                "archlinux:\n  packager:",
+                "archlinux:\n  pkgbase: hostkeeper\n  packager:",
+            ),
+            "[\"archlinux.pkgbase\"]",
+        ),
+        (
+            altered(
+                &text,
+                "archlinux:\n  packager: \"The hostkeeper project <https://github.com/komira-ai/hostkeeper>\"",
+                "archlinux:\n  packager: [a, b]",
+            ),
+            "[\"archlinux.packager is not text\"]",
+        ),
         (format!("{text}release: \"2\"\n"), "[\"release\"]"),
         (format!("{text}depends:\n  - curl\n"), "[\"depends\"]"),
         (
@@ -136,8 +166,9 @@ fn nfpm_config_holds_only_the_keys_it_needs() {
     refuses(check_nfpm_keys, &cases);
 }
 
-/// The seven files of the package, sorted as [`Config::files`] sorts them: `gh` and the trusted
-/// root at the daemon's own paths, from where `release nfpm-stage` writes them.
+/// The seven files of the package, sorted as [`Config::files`] sorts them: the two programs
+/// (the static build) at the paths `release check-linux-pkg` requires, and `gh` and the trusted
+/// root at the daemon's own paths, all from where `release nfpm-stage` writes them.
 pub fn package_files() -> Vec<nfpm::File> {
     let file = |dst: &str, src: &str, mode: &str| nfpm::File {
         dst: dst.to_owned(),
@@ -146,13 +177,10 @@ pub fn package_files() -> Vec<nfpm::File> {
         owner: "root".to_owned(),
         group: "root".to_owned(),
     };
+    let [(hostkeeper, hostkeeper_staged), (pxe, pxe_staged)] = LINUX_PKG_PROGRAMS;
     let mut files = vec![
-        file("/usr/bin/hostkeeper", "target/release/hostkeeper", "0755"),
-        file(
-            "/usr/bin/hostkeeper-pxe",
-            "target/release/hostkeeper-pxe",
-            "0755",
-        ),
+        file(hostkeeper, &staged(hostkeeper_staged), "0755"),
+        file(pxe, &staged(pxe_staged), "0755"),
         file(INSTALLED_UNIT, "packaging/linux/hostkeeper.service", "0644"),
         file(
             "/usr/lib/tmpfiles.d/hostkeeper.conf",
@@ -337,7 +365,7 @@ fn deb_manifest_lists_the_unit_the_binary_and_no_key_or_token() {
         (
             altered(
                 &text,
-                "  - src: target/release/hostkeeper-pxe\n    dst: /usr/bin/hostkeeper-pxe\n    file_info:\n      mode: 0755\n      owner: root\n      group: root\n",
+                "  - src: target/nfpm/hostkeeper-pxe\n    dst: /usr/bin/hostkeeper-pxe\n    file_info:\n      mode: 0755\n      owner: root\n      group: root\n",
                 "",
             ),
             "not [",
@@ -345,7 +373,23 @@ fn deb_manifest_lists_the_unit_the_binary_and_no_key_or_token() {
         (
             altered(
                 &text,
+                "  - src: target/nfpm/hostkeeper-pxe\n",
+                "  - src: target/nfpm/hostkeeper\n",
+            ),
+            "not [",
+        ),
+        (
+            altered(
+                &text,
+                "  - src: target/nfpm/hostkeeper-pxe\n",
                 "  - src: target/release/hostkeeper-pxe\n",
+            ),
+            "not [",
+        ),
+        (
+            altered(
+                &text,
+                "  - src: target/nfpm/hostkeeper\n",
                 "  - src: target/release/hostkeeper\n",
             ),
             "not [",
@@ -415,33 +459,42 @@ fn deb_manifest_lists_the_unit_the_binary_and_no_key_or_token() {
                 .to_owned()
         )
     );
-    // The rpm is held to the same list.
+    // The rpm and the Arch package are held to the same list.
     assert_eq!(check_manifest(&text, "rpm", repo_source), Ok(()));
+    assert_eq!(check_manifest(&text, "archlinux", repo_source), Ok(()));
+    let extra = "overrides:\n  archlinux:\n    contents:\n      - src: target/extra.conf\n        dst: /etc/extra.conf\n        file_info:\n          mode: 0644\n          owner: root\n          group: root\n";
+    let refused = check_manifest(&format!("{text}{extra}"), "archlinux", repo_source);
+    assert!(
+        refused.is_err_and(|m| m.contains("the archlinux carries")),
+        "an extra file in the Arch package alone is refused"
+    );
 }
 
 fn check_one_list(text: &str) -> Result<(), String> {
     let config = Config::parse(text)?;
-    let (deb, rpm) = (config.files("deb")?, config.files("rpm")?);
-    if deb != rpm {
-        return Err(format!("the deb carries {deb:?} and the rpm {rpm:?}"));
-    }
-    let (deb, rpm) = (config.links("deb")?, config.links("rpm")?);
-    if deb != rpm {
-        return Err(format!(
-            "the deb carries the links {deb:?} and the rpm {rpm:?}"
-        ));
-    }
-    let (deb, rpm) = (config.scripts("deb")?, config.scripts("rpm")?);
-    if deb != rpm {
-        return Err(format!(
-            "the deb runs the scripts {deb:?} and the rpm {rpm:?}"
-        ));
+    for other in ["rpm", "archlinux"] {
+        let (deb, rpm) = (config.files("deb")?, config.files(other)?);
+        if deb != rpm {
+            return Err(format!("the deb carries {deb:?} and the {other} {rpm:?}"));
+        }
+        let (deb, rpm) = (config.links("deb")?, config.links(other)?);
+        if deb != rpm {
+            return Err(format!(
+                "the deb carries the links {deb:?} and the {other} {rpm:?}"
+            ));
+        }
+        let (deb, rpm) = (config.scripts("deb")?, config.scripts(other)?);
+        if deb != rpm {
+            return Err(format!(
+                "the deb runs the scripts {deb:?} and the {other} {rpm:?}"
+            ));
+        }
     }
     Ok(())
 }
 
-/// Catches an override that gives one packager a file, a link or a script the other does not
-/// have.
+/// Catches an override that gives one packager (the deb, the rpm or the Arch package) a file, a
+/// link or a script the others do not have.
 #[test]
 fn rpm_and_deb_share_one_file_list() {
     let text = read(NFPM);
@@ -450,7 +503,13 @@ fn rpm_and_deb_share_one_file_list() {
     let extra_script = "overrides:\n  deb:\n    scripts:\n      postremove: packaging/linux/scripts/postremove.sh\n";
     let other_script = "overrides:\n  rpm:\n    scripts:\n      preremove: packaging/linux/scripts/preremove-rpm.sh\n";
     let extra_link = "overrides:\n  deb:\n    contents:\n      - src: /run/hostkeeper/other\n        dst: /etc/issue.d/other.issue\n        type: symlink\n";
+    let arch_file = extra_file.replace("rpm:", "archlinux:");
+    let arch_script = other_script.replace("rpm:", "archlinux:");
+    let arch_link = extra_link.replace("deb:", "archlinux:");
     let cases = [
+        (format!("{text}{arch_file}"), "the deb carries"),
+        (format!("{text}{arch_link}"), "the deb carries the links"),
+        (format!("{text}{arch_script}"), "the deb runs the scripts"),
         (format!("{text}{extra_file}"), "the deb carries"),
         (format!("{text}{extra_link}"), "the deb carries the links"),
         (format!("{text}{extra_script}"), "the deb runs the scripts"),
@@ -682,17 +741,17 @@ fn scripts_are_posix_sh_and_touch_only_the_unit_and_tmpfiles() {
     refuses(check_commands, &cases);
 }
 
-const TMPFILES_CREATE: [&str; 3] = ["systemd-tmpfiles", "--create", "hostkeeper.conf"];
-const DAEMON_RELOAD: [&str; 2] = ["systemctl", "daemon-reload"];
+pub(crate) const TMPFILES_CREATE: [&str; 3] = ["systemd-tmpfiles", "--create", "hostkeeper.conf"];
+pub(crate) const DAEMON_RELOAD: [&str; 2] = ["systemctl", "daemon-reload"];
 
 /// One run of a package script: what the package manager passes, the program that fails (if
 /// any), and the programs it must run and the status it must end with.
-struct Scenario {
-    name: &'static str,
-    args: &'static [&'static str],
-    failing: Option<&'static [&'static str]>,
-    ran: &'static [&'static [&'static str]],
-    status: i32,
+pub(crate) struct Scenario {
+    pub(crate) name: &'static str,
+    pub(crate) args: &'static [&'static str],
+    pub(crate) failing: Option<&'static [&'static str]>,
+    pub(crate) ran: &'static [&'static [&'static str]],
+    pub(crate) status: i32,
 }
 
 /// The post-install script's runs: a first install enables the unit, an upgrade does not; a
@@ -792,7 +851,7 @@ const PREREMOVE_RUNS: [Scenario; 5] = [
 
 /// Runs `text` through every scenario of `runs`, with each program a fake that fails only
 /// for the scenario's failing command.
-fn check_runs(text: &str, runs: &[Scenario]) -> Result<(), String> {
+pub(crate) fn check_runs(text: &str, runs: &[Scenario]) -> Result<(), String> {
     let commands = script::parse(text)?;
     for scenario in runs {
         let done = script::run(&commands, scenario.args, |words| {

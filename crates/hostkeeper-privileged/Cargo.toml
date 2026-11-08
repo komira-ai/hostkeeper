@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "The tests that run as root against the real service manager of a host (systemd, and launchd on a Mac) and that run the coordinator and the daemon as programs, in .github/workflows/privileged.yml and in pr-device.yml's copies of its jobs, and network install end to end in .github/workflows/net-install.yml, and the workload fixture they drive."
+description = "The tests that run as root against the real service manager of a host (systemd, and launchd on a Mac) and that run the coordinator and the daemon as programs, in .github/workflows/privileged.yml and in pr-device.yml's copies of its jobs, and the Linux packages installed on each release of linux-releases.toml, and network install end to end in .github/workflows/net-install.yml, and the workload fixture they drive."
 
 # The one place where the adapters behind the fakes of the pull-request set meet the real host:
 # the step launcher's transient units, the dead-man's stop by name, the observer's systemd and
@@ -17,7 +17,7 @@ description = "The tests that run as root against the real service manager of a 
 # as root, after a merge to main, and pr-device.yml's copies of its jobs do the same on every
 # pull request. The library is what they share and what can be tested without
 # root (the fixture's arguments and modes, the host check, the names and files of the rig, the
-# pin of the cross-release rig's previous release), and is measured by the 99% gate like any crate.
+# pin of the cross-release rig's previous release, the list of Linux releases and the container script of the packages test), and is measured by the 99% gate like any crate.
 [dependencies]
 # The daemon of the program `hostkeeper-device-daemon` (the macOS device tests' daemon, and the
 # first-boot tests' daemon), which forwards to its command line as the `hostkeeper`

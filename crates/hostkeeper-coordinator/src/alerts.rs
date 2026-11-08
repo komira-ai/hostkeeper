@@ -33,7 +33,10 @@
 //!   store), when it expires within `--alert-cert-window-secs`, or has expired;
 //! - `store_unreachable`: the store's link to its database is lost (`Fleet::store_lost`); it
 //!   stands until the link is back. While it stands, an enrollment store that cannot be read
-//!   gives no facts rather than refusing the list, so the alert is seen.
+//!   gives no facts rather than refusing the list, so the alert is seen;
+//! - `trusted_root`: a host heard since the start whose last heartbeat said its Sigstore trusted
+//!   root is stale, missing or unparseable ([`crate::trusted_root`]), one alert per host; a host
+//!   whose last heartbeat said nothing of the root (unknown) raises none.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
@@ -102,6 +105,8 @@ pub enum Kind {
     CertNearExpiry,
     /// The store's link to its database is lost.
     StoreUnreachable,
+    /// A host's trusted root is stale, missing or unparseable.
+    TrustedRoot,
 }
 
 impl Kind {
@@ -121,6 +126,7 @@ impl Kind {
             Self::SilentHost => "silent_host",
             Self::CertNearExpiry => "cert_near_expiry",
             Self::StoreUnreachable => "store_unreachable",
+            Self::TrustedRoot => "trusted_root",
         }
     }
 
@@ -136,7 +142,8 @@ impl Kind {
             | Self::HeldOnBadVersion
             | Self::AbandonedWhileUpdating
             | Self::SilentHost
-            | Self::CertNearExpiry => proto::AlertSeverity::Warning,
+            | Self::CertNearExpiry
+            | Self::TrustedRoot => proto::AlertSeverity::Warning,
         }
     }
 
@@ -154,6 +161,7 @@ impl Kind {
             Self::SilentHost => proto::AlertKind::SilentHost,
             Self::CertNearExpiry => proto::AlertKind::CertNearExpiry,
             Self::StoreUnreachable => proto::AlertKind::StoreUnreachable,
+            Self::TrustedRoot => proto::AlertKind::TrustedRoot,
         }
     }
 }
@@ -260,6 +268,7 @@ pub fn derive(
         thresholds.cert_window_secs,
     ));
     alerts.extend(store_unreachable(fleet));
+    alerts.extend(trusted_roots(fleet));
     alerts.sort_by(|a, b| a.subject.cmp(&b.subject));
     alerts.dedup_by(|a, b| a.subject == b.subject);
     alerts
@@ -491,6 +500,37 @@ fn store_unreachable(fleet: &Fleet) -> Option<Alert> {
         subject: Subject::of(Kind::StoreUnreachable),
         message: "the session with the database is lost: nothing is ordered, a change that lowers protection is refused, and one that raises it stands in memory until the session is back".to_owned(),
     })
+}
+
+/// `trusted_root`: each host heard since the start whose last heartbeat said its trusted root
+/// needs attention, with the reason and the age it said.
+fn trusted_roots(fleet: &Fleet) -> Vec<Alert> {
+    fleet
+        .nodes()
+        .filter_map(|(id, node)| {
+            let reason = node.trusted_root.attention()?;
+            let age = node
+                .trusted_root
+                .age_secs
+                .map_or_else(|| "no age".to_owned(), |age| format!("{age} s old"));
+            let then = if reason == "stale" {
+                "its package checks go on, and refuse every package signed after a Sigstore key \
+                 rotation the root does not hold"
+            } else {
+                "its package checks fail"
+            };
+            Some(Alert {
+                subject: Subject {
+                    host: id.to_string(),
+                    ..Subject::of(Kind::TrustedRoot)
+                },
+                message: format!(
+                    "{id} reports its Sigstore trusted root {reason} ({age}): {then}; update \
+                     hostkeeper on it, or copy a current root to it"
+                ),
+            })
+        })
+        .collect()
 }
 
 /// `cert_near_expiry`: the certificate the coordinator serves its hosts, when it expires

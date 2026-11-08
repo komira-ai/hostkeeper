@@ -153,6 +153,7 @@ fn a_reply_from_the_real_coordinator_maps_to_the_loops_reply() {
         services: Vec::new(),
         sent_unix: 0,
         renewal: hostkeeper_link::Renewal::default(),
+        trusted_root: None,
     };
     assert_eq!(
         json.heartbeat(&farm.host.identity(), &beat),
@@ -220,7 +221,11 @@ fn a_reply_from_the_real_coordinator_maps_to_the_loops_reply() {
     let who = identity_of(&request.peer, coordinator.prefixes()).expect("an updater");
     let again: wire::Heartbeat = serde_json::from_slice(&request.body).expect("a heartbeat");
     let (_, typed) = coordinator
-        .heartbeat_with_orders(who, again)
+        .heartbeat_with_orders(
+            who,
+            again,
+            hostkeeper_coordinator::trusted_root::TrustedRootSaid::default(),
+        )
         .expect("an answer");
     assert_eq!(
         typed.expect("a typed order").to_proto(),

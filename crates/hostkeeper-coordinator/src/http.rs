@@ -65,6 +65,7 @@ use crate::identity::Identity;
 use crate::ops::OperateError;
 use crate::orders::Order;
 use crate::service::{CiRefused, ConvergenceError, Coordinator, SetError};
+use crate::trusted_root::TrustedRootSaid;
 
 /// The path CI posts the desired state to.
 pub const DESIRED_PATH: &str = "/v1/desired";
@@ -282,8 +283,9 @@ pub(crate) fn beat_caller(
 /// answers it: the one path both the JSON route and the gRPC `Heartbeat` take once the body is
 /// read. The optional facts and the `services` list that were bad are counted and logged and
 /// the rest is answered. A retiring host is heard for its final report and then refused. With
-/// `typed`, the operator's order for the host, or the update as a typed order, comes beside the
-/// answer ([`Coordinator::heartbeat_with_orders`]).
+/// `typed`, what the gRPC heartbeat said of the host's trusted root, the operator's order for the
+/// host, or the update as a typed order, comes beside the answer
+/// ([`Coordinator::heartbeat_with_orders`]); the JSON route passes none.
 ///
 /// # Errors
 /// [`BeatRefused::BadRequest`] for bytes that are no heartbeat, or one that lists no service
@@ -292,7 +294,7 @@ pub(crate) fn beat(
     coordinator: &Coordinator,
     caller: BeatCaller,
     bytes: &[u8],
-    typed: bool,
+    typed: Option<TrustedRootSaid>,
 ) -> Result<(WireAnswer, Option<Order>), BeatRefused> {
     let BeatCaller { identity, retiring } = caller;
     let HeartbeatRead {
@@ -313,8 +315,8 @@ pub(crate) fn beat(
         coordinator.final_report(identity, beat);
         return Err(BeatRefused::Denied);
     }
-    let answered = if typed {
-        coordinator.heartbeat_with_orders(identity, beat)
+    let answered = if let Some(root) = typed {
+        coordinator.heartbeat_with_orders(identity, beat, root)
     } else {
         coordinator
             .heartbeat(identity, beat)
@@ -352,7 +354,7 @@ where
     let Some(bytes) = read(request, MAX_HEARTBEAT_BYTES, patience).await else {
         return beat_refusal(BeatRefused::BadRequest);
     };
-    match beat(coordinator, caller, &bytes, false) {
+    match beat(coordinator, caller, &bytes, None) {
         Ok((answer, _)) => json(StatusCode::OK, &answer),
         Err(why) => beat_refusal(why),
     }
