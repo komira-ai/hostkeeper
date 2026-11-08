@@ -86,6 +86,8 @@ jobs:
       # and checks its packages' attestations with it, offline, against a test trust root.
       GH_VERSION: 2.103.3
       GH_SHA256: d700207eae9ae98fe2b89535c2c087c07823d4628c56364695a5a07ef311c062
+      PREVIOUS_RELEASE_URL: https://github.com/komira-ai/hostkeeper/releases/download/v0.1.138/hostkeeper-0.1.138-macos-arm64.tar.gz
+      PREVIOUS_RELEASE_SHA256: 128ca92f16e157ba4eb7e3776f05ea54a94e7a79d1dbe81e647150e12ba93457
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -109,16 +111,24 @@ jobs:
         run: cargo xtask install-tool --download "$RUNNER_TEMP/gh.zip" --sha256 "$GH_SHA256" --out "$RUNNER_TEMP/gh-checked.zip"
       - name: Unpack gh where the tests find it
         run: unzip -o -j -q "$RUNNER_TEMP/gh-checked.zip" "gh_${GH_VERSION}_macOS_arm64/bin/gh" -d target/privileged-tools
+      # The released daemon self_update_across_releases.rs updates from: the binary tarball of the
+      # release crates/hostkeeper-privileged/previous-release.toml pins for this platform (the
+      # workflow lint holds PREVIOUS_RELEASE_URL and PREVIOUS_RELEASE_SHA256 equal to it). The test
+      # checks the file against the pin again and fetches nothing itself.
+      - name: Download the previous release (HTTPS only, redirects included)
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --location --output "$RUNNER_TEMP/previous-release.tar.gz" "$PREVIOUS_RELEASE_URL"
+      - name: Check the previous release (pinned checksum)
+        run: cargo xtask install-tool --download "$RUNNER_TEMP/previous-release.tar.gz" --sha256 "$PREVIOUS_RELEASE_SHA256" --out target/previous-release/hostkeeper.tar.gz
       # device_mac_e2e and device_mac_selfupdate run after device_mac, in the one step that runs
       # as root.
       - name: Build the macOS device tests as the runner's user
-        run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test device_mac --test device_mac_e2e --test device_mac_selfupdate --test unpack_mac
+        run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test device_mac --test device_mac_e2e --test device_mac_selfupdate --test self_update_across_releases --test unpack_mac
       # unpack_mac runs twice: here as the runner's user, as the release check of a package
       # unpacks it on a hosted runner, and below as root, as the daemon unpacks it on a host.
       - name: Run the macOS unpack tests as the runner's user
         run: cargo test -p hostkeeper-privileged --features privileged --locked --test unpack_mac -- --nocapture
       - name: Run the macOS device tests as root
-        run: cargo test -p hostkeeper-privileged --features privileged --locked --config "target.'cfg(unix)'.runner = 'sudo'" --test device_mac --test device_mac_e2e --test device_mac_selfupdate --test unpack_mac -- --test-threads=1 --nocapture
+        run: cargo test -p hostkeeper-privileged --features privileged --locked --config "target.'cfg(unix)'.runner = 'sudo'" --test device_mac --test device_mac_e2e --test device_mac_selfupdate --test self_update_across_releases --test unpack_mac -- --test-threads=1 --nocapture
       - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: ${{ github.event_name == 'push' && steps.cargo-cache.outputs.cache-hit != 'true' }}
         with:
@@ -138,6 +148,8 @@ jobs:
     env:
       GH_VERSION: 2.102.1
       GH_SHA256: 77b9e297e94c50336823d0f84de7ef1be60cba704601fa0d98f129f47a94987b
+      PREVIOUS_RELEASE_URL: https://github.com/komira-ai/hostkeeper/releases/download/v0.1.138/hostkeeper-0.1.138-linux-x86_64.tar.gz
+      PREVIOUS_RELEASE_SHA256: 423ec6f09f04030219014289b864403513d37298b13ec0548d39a600caad1948
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -170,10 +182,18 @@ jobs:
         run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --location --output "$RUNNER_TEMP/gh.tar.gz" "https://github.com/cli/cli/releases/download/v$GH_VERSION/gh_${GH_VERSION}_linux_amd64.tar.gz"
       - name: Install gh (pinned checksum)
         run: cargo xtask install-tool --download "$RUNNER_TEMP/gh.tar.gz" --sha256 "$GH_SHA256" --out target/privileged-tools/gh --extract tar.gz --member "gh_${GH_VERSION}_linux_amd64/bin/gh"
+      # The released daemon self_update_across_releases.rs updates from: the binary tarball of the
+      # release crates/hostkeeper-privileged/previous-release.toml pins for this platform (the
+      # workflow lint holds PREVIOUS_RELEASE_URL and PREVIOUS_RELEASE_SHA256 equal to it). The test
+      # checks the file against the pin again and fetches nothing itself.
+      - name: Download the previous release (HTTPS only, redirects included)
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --location --output "$RUNNER_TEMP/previous-release.tar.gz" "$PREVIOUS_RELEASE_URL"
+      - name: Check the previous release (pinned checksum)
+        run: cargo xtask install-tool --download "$RUNNER_TEMP/previous-release.tar.gz" --sha256 "$PREVIOUS_RELEASE_SHA256" --out target/previous-release/hostkeeper.tar.gz
       - name: Build the privileged tests as the runner's user
-        run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test transient_unit --test observer --test unit_control --test self_update --test tierstore_shaped
+        run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test transient_unit --test observer --test unit_control --test self_update --test tierstore_shaped --test self_update_across_releases
       - name: Run the privileged tests as root
-        run: cargo test -p hostkeeper-privileged --features privileged --locked --config "target.'cfg(unix)'.runner = 'sudo'" --test transient_unit --test observer --test unit_control --test self_update --test tierstore_shaped -- --test-threads=1
+        run: cargo test -p hostkeeper-privileged --features privileged --locked --config "target.'cfg(unix)'.runner = 'sudo'" --test transient_unit --test observer --test unit_control --test self_update --test tierstore_shaped --test self_update_across_releases -- --test-threads=1
       - name: The journal of the test units
         if: failure()
         run: journalctl --unit 'hostkeeper-ci-*' --no-pager

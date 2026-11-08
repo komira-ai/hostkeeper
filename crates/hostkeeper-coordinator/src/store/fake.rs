@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use super::{Backend, BackendError, Commit, Loaded};
+use super::{Backend, BackendError, Commit, Health, Loaded};
 use crate::audit_file::{AuditLine, Logged, Query};
 use crate::desired;
 use crate::ops::OpsState;
@@ -32,6 +32,9 @@ struct Durable {
     keeps_records: bool,
     #[cfg(test)]
     refuse: Option<Refusal>,
+    /// The health a test set ([`Fake::set_health`]); up otherwise.
+    #[cfg(test)]
+    health: Option<Health>,
 }
 
 /// The in-memory backend.
@@ -83,6 +86,12 @@ impl Fake {
     /// From now on, every commit is refused as a store that cannot write ([`store_failure`]).
     pub(crate) fn fail(&self) {
         self.refuse(|_| Some(store_failure()));
+    }
+
+    /// From now on, the fake answers `health` as its health ([`Backend::health`]), as a store
+    /// whose link is lost or that was deposed does; it still takes commits.
+    pub(crate) fn set_health(&self, health: Health) {
+        self.lock().health = Some(health);
     }
 
     /// From now on, every commit is taken again.
@@ -200,6 +209,14 @@ impl Backend for Fake {
 
     fn keeps_write_records(&self) -> bool {
         self.lock().keeps_records
+    }
+
+    fn health(&self) -> Health {
+        #[cfg(test)]
+        if let Some(health) = self.lock().health {
+            return health;
+        }
+        Health::Up
     }
 
     fn audit_pruned_before(&self) -> Result<Option<u64>, BackendError> {

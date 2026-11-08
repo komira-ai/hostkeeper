@@ -68,7 +68,8 @@
 //!   answered by `Alerts.List` and logged with an `alert=` field;
 //! - [`stamp`]: the commit and the version `--version` prints;
 //! - [`http`] and [`listen`]: the two HTTP surfaces (the heartbeat surface and the private
-//!   surface of CI and the operator) and the TLS listeners under them;
+//!   surface of CI and the operator) and the TLS listeners under them; `health`, the plain
+//!   loopback listener of `--health-listen` that answers `GET /healthz` to a probe;
 //! - [`grpc`]: the gRPC services on those surfaces (`hostkeeper.agent.v1.Coordinator` on the
 //!   heartbeat one, `hostkeeper.operator.v1` on the private one), the JSON gateway of the
 //!   operator API, and the router that tells them from the frozen JSON routes;
@@ -114,6 +115,7 @@ pub mod fleet;
 pub mod force;
 pub mod grpc;
 pub mod halt;
+pub(crate) mod health;
 pub mod holds;
 pub mod hosts;
 pub mod http;
