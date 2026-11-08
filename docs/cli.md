@@ -286,6 +286,21 @@ audited once.
 | `--node-id` | STRING | The host id the host was enrolled as. |
 | `--reason` | STRING | Why, for the audit log: 1 to 256 bytes with no control character, or empty for none. |
 
+#### `hkctl hosts clear-record`
+
+`/hostkeeper.operator.v1.Hosts/ClearRecord`
+
+Order the host to set aside its step record of the service when the record does not read
+(the `clear_record` verb of `hostkeeper.agent.v1`), at the host's next heartbeat; it takes no
+slot and is sent once. Only for a host whose daemon announced `clear-record-v1` in its last
+heartbeat; to any other it is refused `daemon_too_old` and nothing is ordered. The daemon's
+verdict comes back in a heartbeat like any order's. Audited `record_cleared`.
+
+| flag | value | meaning |
+|---|---|---|
+| `--node-id` | STRING | The host, heard from since the coordinator started. |
+| `--service` | STRING | The service whose step record the host sets aside; one the coordinator manages. |
+
 ### `mdm`
 
 The service `Mdm` of the package `hostkeeper.operator.v1`. The devices of the MDM policy gate.
