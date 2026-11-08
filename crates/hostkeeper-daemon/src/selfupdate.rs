@@ -267,8 +267,8 @@ pub fn read_protocol(exit: &ProbeExit) -> Result<u32, ProbeError> {
 }
 
 /// The daemon's request to exit with status 0 so that its unit starts the new binary: asked once
-/// the follow-on switched `current`; the admin socket's server waits for it ([`Restart::wait`]),
-/// answers what is in flight and returns.
+/// the follow-on switched `current`; [`crate::start::serve`] waits for it ([`Restart::wait`]),
+/// tells the loops to stop and returns.
 #[derive(Debug, Default)]
 pub struct Restart {
     asked: AtomicBool,

@@ -28,10 +28,10 @@
 //! - `trusted_root_unparseable`: the chosen file cannot be read, or is not a stream of JSON
 //!   trusted roots. This reason wins over `trusted_root_stale`.
 //!
-//! The report is a signal for people and nothing more: the admin `Status` reports it, and so
-//! does every gRPC heartbeat (`crate::link_adapters::DaemonTrustedRoot`), which the coordinator
-//! answers in `Hosts.Get` and alerts on (`trusted_root`). No decision of the daemon reads it, and
-//! a stale root does not stop a package check.
+//! The report is a signal for people and nothing more: [`crate::Daemon::status`] holds it, and
+//! every gRPC heartbeat carries it (`crate::link_adapters::DaemonTrustedRoot`), which the
+//! coordinator answers in `Hosts.Get` and alerts on (`trusted_root`). No decision of the daemon
+//! reads it, and a stale root does not stop a package check.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -62,7 +62,7 @@ pub enum RootProblem {
 }
 
 impl RootProblem {
-    /// The reason token the admin `Status` reports.
+    /// The reason token [`crate::Daemon::status`] reports.
     pub fn token(self) -> &'static str {
         match self {
             RootProblem::Stale => "trusted_root_stale",

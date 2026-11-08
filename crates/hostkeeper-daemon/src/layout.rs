@@ -2,9 +2,11 @@
 //! boot; a Mac has no tmpfiles, so the daemon makes the ones it is missing at each start, with
 //! the modes that file gives them.
 //!
-//! The other two directories of that file are made elsewhere: the state directory (and its
-//! lock) by [`crate::start`], and the admin socket's directory by [`crate::socket::bind`]. The
-//! config directory is the installer's, and a missing config is an error of its own.
+//! The other two directories of that file are not made here: the state directory (and its
+//! lock) is made by [`crate::start`], and `/run/hostkeeper`, where an older daemon bound its
+//! admin socket, is made by that file and the unit alone; this daemon binds no socket and makes
+//! nothing there. The config directory is the installer's, and a missing config is an error of
+//! its own.
 
 use std::fs::{self, DirBuilder, Permissions};
 use std::io;

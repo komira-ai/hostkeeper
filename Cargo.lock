@@ -1534,7 +1534,6 @@ dependencies = [
  "sha2",
  "thiserror",
  "tokio",
- "tokio-stream",
  "toml",
  "tonic",
  "tower",

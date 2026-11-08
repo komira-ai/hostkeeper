@@ -16,11 +16,9 @@ use std::fs;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::task::{Context, Poll};
 
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_hook::Step;
@@ -28,8 +26,6 @@ use hostkeeper_steps::{
     AdditiveCall, BootId, BootIdError, Clock, LaunchError, Layout, Protected, PruneReport,
     PruneStep, Seal, Staged, StepCall, StepExit, StepLauncher, tree_digest,
 };
-use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-use tonic::transport::server::Connected;
 
 use crate::locks::{ServiceGuard, ServiceLocks};
 use crate::notify::ReadyNotifier;
@@ -734,64 +730,6 @@ impl ReadyNotifier for FakeNotifier {
             false => Ok(()),
         }
     }
-}
-
-/// A connection that counts the bytes read from it: a test of a server shows with it that
-/// nothing of a refused connection was read.
-#[derive(Debug)]
-pub struct Counted<IO> {
-    io: IO,
-    read: Arc<AtomicUsize>,
-}
-
-impl<IO> Counted<IO> {
-    /// `io`, and the count of the bytes read from it.
-    pub fn new(io: IO) -> (Counted<IO>, Arc<AtomicUsize>) {
-        let read = Arc::new(AtomicUsize::new(0));
-        let counted = Counted {
-            io,
-            read: Arc::clone(&read),
-        };
-        (counted, read)
-    }
-}
-
-impl<IO: AsyncRead + Unpin> AsyncRead for Counted<IO> {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        let before = buf.filled().len();
-        let polled = Pin::new(&mut self.io).poll_read(cx, buf);
-        let read = buf.filled().len() - before;
-        self.read.fetch_add(read, Ordering::SeqCst);
-        polled
-    }
-}
-
-impl<IO: AsyncWrite + Unpin> AsyncWrite for Counted<IO> {
-    fn poll_write(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<io::Result<usize>> {
-        Pin::new(&mut self.io).poll_write(cx, buf)
-    }
-
-    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.io).poll_flush(cx)
-    }
-
-    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.io).poll_shutdown(cx)
-    }
-}
-
-impl<IO> Connected for Counted<IO> {
-    type ConnectInfo = ();
-
-    fn connect_info(&self) -> Self::ConnectInfo {}
 }
 
 /// A prune that deletes nothing: the prune of the tests that do not look at pruning.

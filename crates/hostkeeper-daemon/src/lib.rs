@@ -3,8 +3,8 @@
 //!
 //! - [`start`]: start-up, in order: the daemon config, the lock on the state directory, the
 //!   registration socket of kbf's agent unlinked, the sweep of package leftovers and the
-//!   reconciliation of the placed paths, the boot work, the admin socket; then serving: the
-//!   enrollment and heartbeat loops started ([`links`]), and the admin socket served.
+//!   reconciliation of the placed paths, the boot work; then serving: the enrollment and
+//!   heartbeat loops started ([`links`]). The daemon serves nothing on the host.
 //! - [`boot`]: the boot work: the switch each step record says was begun
 //!   ([`boot::switch_intent`]), the step records read against the boot id, each unfinished
 //!   update run to its verdict, the post-success watchers restarted ([`watchers`]), the
@@ -54,13 +54,12 @@
 //! - [`packages`]: the port of the package store, [`real_packages`] its real implementation
 //!   (fetch, prove, unpack and seal, with the one table that maps their failures onto
 //!   [`refusal`]), and [`installed`] what the host runs.
-//! - [`observer`]: what the admin `Status` reports of a running service.
-//! - [`trusted_root`]: the Sigstore trusted root package checks use, and the age and reason the
-//!   admin `Status` reports of it.
-//! - [`admin`] and [`socket`]: the root-only admin socket (`hostkeeper.local.v1.Admin`);
-//!   [`node`]: the host's enrollment and the heartbeat loop's link, which its `Status` reports
-//!   besides the services; [`admin_client`]: `hostkeeper admin`, its client on the host.
-//! - [`cli`]: `hostkeeper daemon` and its flags, `hostkeeper admin`, `hostkeeper ci`, and the
+//! - [`observer`]: what [`Daemon::status`] reports of a running service.
+//! - [`trusted_root`]: the Sigstore trusted root package checks use, and the age and reason
+//!   [`Daemon::status`] reports of it.
+//! - [`node`]: the host's enrollment and the heartbeat loop's link, as the loops last wrote them,
+//!   which [`Daemon::status`] reports besides the services.
+//! - [`cli`]: `hostkeeper daemon` and its flags, `hostkeeper ci`, and the
 //!   plumbing verbs `self-update-fallback` and `self-update-protocol`; the binary only forwards
 //!   to it.
 //! - [`stamp`]: the version `hostkeeper --version` prints, with the commit of a release build.
@@ -80,8 +79,6 @@
 //! `hostkeeper_steps::Clock`; nothing here reads the wall clock.
 
 pub mod adapters;
-pub mod admin;
-pub mod admin_client;
 pub mod boot;
 pub mod checks;
 pub mod cli;
@@ -112,7 +109,6 @@ pub mod refusal;
 pub mod seed;
 pub mod selfunits;
 pub mod selfupdate;
-pub mod socket;
 pub mod stamp;
 pub mod start;
 #[cfg(any(test, feature = "testing"))]

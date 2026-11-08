@@ -1,7 +1,6 @@
 //! The command line of the `hostkeeper` binary: `hostkeeper daemon` and its flags,
-//! `hostkeeper admin`, the client of the daemon's admin socket on the host
-//! ([`crate::admin_client`], docs/admin.md), `hostkeeper ci`, the CI client a service's release
-//! job runs once it has verified this binary (`hostkeeper_ci`, docs/deploy/ci-client.md), and the three plumbing verbs of hostkeeper's own update (design
+//! `hostkeeper ci`, the CI client a service's release job runs once it has verified this binary
+//! (`hostkeeper_ci`, docs/deploy/ci-client.md), and the three plumbing verbs of hostkeeper's own update (design
 //! section 6.6), which no operator runs: `hostkeeper self-update-fallback --dir <dir>`, what the
 //! generated fallback unit runs, and on a Mac the fallback timer job ([`crate::fallback`]);
 //! `hostkeeper self-update-protocol`, which prints this binary's self-update protocol and does
@@ -27,10 +26,14 @@
 //!
 //! Exit status of `hostkeeper daemon`: [`EXIT_FAILED`] when the daemon could not start or serve,
 //! `2` for a usage error (as clap reports it), [`EXIT_CONFIG`] when the daemon config did not
-//! load, [`EXIT_LOCKED`] when another daemon holds the state directory. The exit status of
-//! `hostkeeper admin` is the code [`crate::admin_client::exit`] assigns to the call, `2` for a
-//! usage error among them. A verb this binary does not have (`ctl`, the coordinator's command line,
-//! is `hkctl` now, docs/cli.md) is a usage error, `2`, as clap reports it.
+//! load, [`EXIT_LOCKED`] when another daemon holds the state directory. A verb this binary does
+//! not have is a usage error, `2`, as clap reports it: `ctl` (the coordinator's command line is
+//! `hkctl` now, docs/cli.md) and `admin` (the daemon serves no admin socket; a host's status,
+//! abort and clear-record go through the coordinator, docs/admin.md).
+//!
+//! `--admin-socket` is accepted and ignored: the package unit of every release before stage 2
+//! of docs/design/two-programs.md passes it, and a daemon started by such a unit must start.
+//! The daemon binds no socket at that path or any other.
 //!
 //! `--version` prints `hostkeeper X.Y.Z+<12 hex digits of the commit>` for a release build and
 //! `hostkeeper X.Y.Z` for a developer build ([`crate::stamp`]).
@@ -64,7 +67,6 @@ use rustls_pki_types::CertificateDer;
 use rustls_pki_types::pem::PemObject;
 
 use crate::adapters::{Adapters, RunnerLauncher, host_claims, host_clock, host_managed};
-use crate::admin_client::AdminCommand;
 use crate::console::{AGETTY, ConsoleIssue, ENROLLMENT_ISSUE};
 use crate::executor::{Daemon, Placement, Ports};
 use crate::files;
@@ -91,13 +93,6 @@ pub const DEFAULT_CONFIG: &str = "/etc/hostkeeper/hostkeeper.toml";
 pub const DEFAULT_STATE_DIR: &str = "/var/lib/updater/state";
 /// The default of `--packages-dir`.
 pub const DEFAULT_PACKAGES_DIR: &str = "/var/lib/hostkeeper/packages";
-/// The default of `--admin-socket`: the host platform's (`hostkeeper_launchd::Platform`'s
-/// `admin_socket`), `/var/run/hostkeeper/admin.sock` on macOS.
-pub const DEFAULT_ADMIN_SOCKET: &str = if cfg!(target_os = "macos") {
-    "/var/run/hostkeeper/admin.sock"
-} else {
-    "/run/hostkeeper/admin.sock"
-};
 /// The variable systemd sets for a `Type=notify` unit: the address of its notify socket.
 pub const NOTIFY_SOCKET: &str = "NOTIFY_SOCKET";
 /// The variable systemd sets for a unit with `WatchdogSec=`: the watchdog's timeout in
@@ -149,9 +144,6 @@ pub struct Cli {
 pub enum Command {
     /// Run the daemon: the one root process of the host.
     Daemon(DaemonFlags),
-    /// Call the host's daemon over its root-only admin socket: `status`, `abort`, `clear-record`
-    /// (docs/admin.md).
-    Admin(AdminCommand),
     /// The CI client: set a service's desired version from its release job and wait for the
     /// fleet (docs/deploy/ci-client.md).
     #[command(subcommand)]
@@ -243,15 +235,16 @@ pub struct DaemonFlags {
     /// The packages, a directory per service with its versions and `current` and `previous`.
     #[arg(long, default_value = DEFAULT_PACKAGES_DIR)]
     pub packages_dir: PathBuf,
-    /// The root-only admin socket, made mode 0600 in a directory of mode 0700.
-    #[arg(long, default_value = DEFAULT_ADMIN_SOCKET)]
-    pub admin_socket: PathBuf,
+    /// Accepted and ignored: the daemon binds no admin socket. The package unit of a release
+    /// before stage 2 of docs/design/two-programs.md passes it.
+    #[arg(long, hide = true, value_name = "PATH")]
+    pub admin_socket: Option<PathBuf>,
     /// Tell systemd the daemon is ready (`READY=1` on the notify socket systemd sets for a unit
     /// of `Type=notify`) once its boot work is over.
     #[arg(long)]
     pub notify_systemd: bool,
-    /// Days after which the Sigstore trusted root is reported `trusted_root_stale` in the admin
-    /// `Status`, at least 1. A signal only: package checks go on with the root there is.
+    /// Days after which the Sigstore trusted root is reported `trusted_root_stale`, at least 1.
+    /// A signal only: package checks go on with the root there is.
     #[arg(long, default_value_t = DEFAULT_TRUSTED_ROOT_MAX_AGE_DAYS)]
     pub trusted_root_max_age_days: NonZeroU64,
     /// The heartbeat loop's flag: `--heartbeat-secs`.
@@ -260,13 +253,14 @@ pub struct DaemonFlags {
 }
 
 impl DaemonFlags {
-    /// The settings of these flags; the daemon config is trusted when root owns it.
+    /// The settings of these flags; the daemon config is trusted when root owns it, and the run
+    /// directory is the host platform's. `--admin-socket` is in none of them.
     pub fn settings(&self) -> Settings {
         Settings {
             config: self.config.clone(),
             state_dir: self.state_dir.clone(),
             packages_dir: self.packages_dir.clone(),
-            admin_socket: self.admin_socket.clone(),
+            run_dir: Platform::host().run_dir,
             trusted_uid: 0,
             trusted_root_max_age_days: self.trusted_root_max_age_days,
         }
@@ -349,7 +343,6 @@ pub fn run(cli: Cli) -> ExitCode {
 pub fn run_with(cli: Cli, systemd: SystemdVars) -> ExitCode {
     let flags = match cli.command {
         Command::Daemon(flags) => flags,
-        Command::Admin(command) => return ExitCode::from(admin_on_terminal(&command)),
         Command::SelfUpdateFallback(flags) => return crate::fallback::main(&flags.dir),
         Command::SelfUpdateSeed(flags) => {
             return crate::seed::main(&flags.state_dir, &flags.binary);
@@ -388,13 +381,6 @@ pub fn exit_status(served: &Result<(), StartError>) -> u8 {
             error.exit_code()
         }
     }
-}
-
-/// `hostkeeper admin` ([`crate::admin_client::run`]) on the process's own streams.
-fn admin_on_terminal(command: &AdminCommand) -> u8 {
-    let mut stdout = std::io::stdout().lock();
-    let mut stderr = std::io::stderr().lock();
-    crate::admin_client::run(command, &mut stdout, &mut stderr)
 }
 
 /// The readiness notifier the flags ask for: systemd's with `--notify-systemd`, refused when no
@@ -476,7 +462,8 @@ async fn start_and_serve(
     let platform = Platform::host();
     let started = start_with(settings, &files, own_version, notifier, &platform)?;
     let links = host_links(started.daemon(), &files, period, platform.kind, watchdog);
-    start::serve(started, links).await
+    start::serve(started, links).await;
+    Ok(())
 }
 
 /// The enrollment and heartbeat loops of a host ([`Links`]), over the pki directory of `files`:
