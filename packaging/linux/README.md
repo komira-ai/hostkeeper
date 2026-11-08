@@ -23,7 +23,7 @@ command lines of each of the two units; that the bootstrap unit starts the insta
 `/usr/bin/hostkeeper`, one of the paths the daemon seeds and execs from, with no `ExecStartPre=`;
 that the package unit starts `current` of the daemon's binary directory after the `-` seed line;
 that neither passes `--admin-socket` or sets `RuntimeDirectory=`; that each restarts the
-daemon's exit after its own update and agrees with the drop-in the daemon writes; that the
+daemon's exit after its own update and sets no start limit; that the
 package unit is the file hostkeeper's package is built with; that the directories are the
 design's with the design's modes, that the template is refused until each placeholder is filled
 and loads once they are, that the packages carry exactly the seven files (the daemon and `hostkeeper-pxe` among them) and the console's issue
@@ -57,21 +57,19 @@ Neither unit passes `--admin-socket` or sets `RuntimeDirectory=`: the daemon bin
 socket at its default, `/run/hostkeeper/admin.sock`, and makes the directory itself;
 `hostkeeper.tmpfiles.conf` makes `/run/hostkeeper` at boot.
 
-- A self-update stages the new binary in `versions/`, switches `current`, and exits 0;
-  `Restart=always` starts the new binary. At each start the daemon writes, where they differ,
+- A self-update stages the new binary in `versions/`, points the link `next` at it and exits 0
+  (the hand-over, design section 4.3); `current` is not moved. `Restart=always` starts the binary
+  `current` names, the old one, which execs `next` while its start count lasts, raising the count
+  at each exec. The new binary's start finishes the switch (`previous` to the old binary,
+  `current` to itself) and confirms the update. A new binary that does not start, or exits before
+  it confirms, leaves the count raised; at the third such start the old binary settles the update
+  failed, marks the version bad and runs as the daemon, with `current` where it was. There is no
+  fallback unit and no start limit: the unit retries a daemon that cannot start every second
+  (`RestartSec=1`), however many times. The releases before the hand-over wrote
   `/etc/systemd/system/hostkeeper-fallback.service` and the drop-in
-  `/etc/systemd/system/hostkeeper.service.d/self-update.conf`, whose `OnFailure=` runs that unit,
-  and then runs `systemctl daemon-reload`. When the new binary fails three starts within 300
-  seconds, the fallback unit points `current` back at `previous` and starts the daemon again.
-  A new binary that confirmed its update at its start has run, and is not put back even when
-  that start fails later.
-  When no update is waiting for its restart (a config that does not load, three restarts for
-  another reason), the fallback puts nothing back and still starts the daemon again, so the
-  daemon is retried for good, three starts at a time (`RestartMode=direct` keeps systemd from
-  running the fallback before the three starts are spent, and the fallback has no start limit
-  of its own); before the daemon has first been ready
-  there is no drop-in, and the unit, which has no start limit of its own, retries it every
-  second.
+  `/etc/systemd/system/hostkeeper.service.d/self-update.conf`; the daemon removes both at its
+  start, drop-in first, and runs `systemctl daemon-reload`, and answers a self-update `busy` until
+  they are gone.
 - Once `current` exists, upgrading the deb or the rpm replaces `/usr/bin/hostkeeper` and does not
   change the binary the daemon runs: hostkeeper's own update does that. A self-update also links
   the unit its package carries in `/etc/systemd/system/`, which then takes the place of the one

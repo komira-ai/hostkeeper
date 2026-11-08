@@ -5,8 +5,7 @@
 //! - [`bootid`]: [`parse_boot_session_uuid`], the reading of the Mac's boot id
 //!   (`kern.bootsessionuuid`), and `SysctlBootId`, the step runner's
 //!   [`BootIdSource`](hostkeeper_steps::BootIdSource) on a Mac.
-//! - [`label`]: the reverse-DNS prefix and the labels of the daemon, of each step job and of each
-//!   probe job.
+//! - [`label`]: the reverse-DNS prefix and the labels of the daemon and of each step job.
 //! - [`plist`]: the XML property lists of the daemon, of a step job and of a service package's
 //!   job.
 //! - [`launchctl`]: the [`Launchctl`] port (one `launchctl` command), its real adapter

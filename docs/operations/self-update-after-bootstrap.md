@@ -38,8 +38,10 @@ first release after 0.1.100 that `hostkeeper --version` shows with that change) 
   unit file of the same name, as it is and does not claim it: the unit is already enabled, and
   systemd starts `hostkeeper.service` from `/etc/systemd/system`, where the install links the
   release's unit. An earlier daemon refuses the install `path_conflict` before it writes anything.
-- Before it stages the new binary, the daemon asks it for its self-update protocol in a transient
-  unit. An earlier Linux daemon has no way to run that probe and refuses every self-update
+- Before it stages the new binary, a daemon older than 0.1.163 asks it for its self-update protocol
+  in a transient unit (a daemon of 0.1.163 or later asks nothing: it judges a release by its
+  floor, and the verb `self-update-protocol` is still answered, printing 1, for those that
+  probe). An earlier Linux daemon has no way to run that probe and refuses every self-update
   `protocol_unreadable` (komira-ai/hostkeeper#102). A macOS daemon runs the probe as a launchd
   job from the release that carries that change on; an earlier one refuses every self-update
   `protocol_unreadable` the same way, even an install of the version it already runs. The probe

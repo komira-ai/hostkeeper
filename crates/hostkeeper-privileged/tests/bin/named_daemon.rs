@@ -7,7 +7,9 @@
 //! hook of hostkeeper's package, and `self-update-fallback` are the shipped code.
 //!
 //! `daemon` is the shipped daemon as `hostkeeper daemon` runs it (`hostkeeper_daemon::cli`): the
-//! start log, the host's files, ports and adapters (the release channel, the attestation check
+//! hand-over of its own update first (`hostkeeper_daemon::handover`: a binary that waits for a
+//! hand-over into another version execs that binary), the start log, the host's files, ports and
+//! adapters (the release channel, the attestation check
 //! with the host's `gh` and trusted root, the coordinator over mutual TLS, systemd or launchd),
 //! the start and the heartbeat and enrollment loops, served until it asks to exit for its own
 //! update. One thing differs: its version is the name of the file it runs from, its links
@@ -23,6 +25,7 @@ use std::process::ExitCode;
 use clap::Parser;
 use hostkeeper_daemon::adapters::host_clock;
 use hostkeeper_daemon::cli::{self, Cli, Command, DaemonFlags, HostFiles, SystemdVars};
+use hostkeeper_daemon::handover::{self, ProcessExec};
 use hostkeeper_daemon::start::{self, StartError};
 use hostkeeper_launchd::Platform;
 use hostkeeper_privileged::across::program_version;
@@ -71,6 +74,12 @@ fn daemon(flags: &DaemonFlags) -> ExitCode {
     let settings = flags.settings();
     let served = cli::notifier(flags, systemd.notify_socket).and_then(|notifier| {
         let platform = Platform::host();
+        let args = std::env::args_os().skip(1).collect();
+        handover::at_daemon_start(
+            &settings.state_dir,
+            &own.to_string(),
+            &ProcessExec::new(args),
+        );
         cli::note_start(&settings, platform.kind, own, &host_clock());
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()

@@ -20,15 +20,14 @@
 //!   tombstone in `placed.json`.
 //! - [`selfupdate`]: the update of hostkeeper itself (design section 6.6): an `update` of the
 //!   service `hostkeeper` refused while another service's update is unfinished, its new binary's
-//!   release judged by its floor (its new binary's protocol probed for a floor of
-//!   [`selfupdate::LEGACY_FLOOR`] or lower), its steps run under the step lock (built in for a
-//!   higher floor), then the follow-on that switches the
-//!   binary and asks the daemon to exit; at start, the update settled by the binary that runs.
-//!   [`fallback`] is the verb `self-update-fallback` the fallback unit runs (on macOS the
-//!   fallback timer job, and the verb then decides the burst from the start log itself), and
-//!   [`selfunits`] the drop-in and fallback unit (on macOS the fallback job) the daemon writes at
-//!   each start where they differ, telling the service manager only then; [`seed`] is the verb
-//!   `self-update-seed` the package unit runs before each start, which gives the binary
+//!   release judged against the daemon's oldest reader, its steps run under the step lock (built
+//!   in for a floor above [`selfupdate::LEGACY_FLOOR`]), then the follow-on that hands over to
+//!   the new binary and asks the daemon to exit; at start, the update settled by the binary that
+//!   runs. [`fallback`] is the verb `self-update-fallback` that the fallback unit and job of the
+//!   releases before the hand-over run (on macOS the job's verb decides the burst from the start
+//!   log itself), still answered; [`selfunits`] removes that unit, its drop-in and that job where
+//!   the daemon finds them at each start, telling the service manager only then; [`seed`] is the
+//!   verb `self-update-seed` the package unit runs before each start, which gives the binary
 //!   directory its first binary.
 //! - [`packaged`]: `hostkeeper daemon` started from the packaged binary seeds the binary
 //!   directory as [`seed`] does and execs its `current`.
@@ -61,7 +60,7 @@
 //!   [`node`]: the host's enrollment and the heartbeat loop's link, which its `Status` reports
 //!   besides the services; [`admin_client`]: `hostkeeper admin`, its client on the host.
 //! - [`cli`]: `hostkeeper daemon` and its flags, `hostkeeper admin`, and the
-//!   plumbing verbs `self-update-fallback` and `self-update-protocol`; the binary only forwards
+//!   plumbing verbs `self-update-fallback` and `self-update-protocol` (still answered); the binary only forwards
 //!   to it.
 //! - [`stamp`]: the version `hostkeeper --version` prints, with the commit of a release build.
 //! - [`refusal`]: the closed set of reason tokens.

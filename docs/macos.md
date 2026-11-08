@@ -51,13 +51,26 @@ The daemon never decides `leases_live` itself. It reads the exit like any other 
 and the order ends `Deferred` with the hook's reason and retry time.
 The token is `hostkeeper_hook::REASON_LEASES_LIVE`, beside `drain_bound`.
 
-### Self-update fallback
+### Self-update hand-over, and the fallback job of the releases before it
 
-On Linux the daemon's unit restarts it, and an `OnFailure=` unit runs the previous binary's
-`self-update-fallback` verb once the new binary has failed the start limit of the self-update
-drop-in (the base unit has none: it restarts the daemon for good). launchd has neither
-a start limit nor `OnFailure=`, so on a Mac the same verb is run by a timer job. Two plists
-serve it:
+hostkeeper updates itself by a hand-over (design section 4.3 of
+[two programs](design/two-programs.md)): the daemon stages the new binary as `versions/<N>`,
+points the link `next` of the binary directory at it, writes the record as waiting for the
+restart into `N` with a start count of 0, and exits 0. `current` is not moved. launchd starts the
+job's program again (`KeepAlive`), and the binary `current` names, the old one, execs `next`
+while the count lasts, raising it at each exec; the new binary's start finishes the switch and
+confirms the update. After three starts of the new binary that do not settle the update, the old
+binary settles it `Failed` and runs. There is no fallback job on a Mac, and no unit on Linux:
+launchd's relaunch pause (10 seconds, below) paces the tries, and the Mac fallback is tested under
+the real launchd (`a_next_binary_that_cannot_start_is_fallen_back_from_under_launchd`).
+
+A release before the hand-over switched `current` first and armed a timer job, `<label>.fallback`,
+that runs the previous binary's `self-update-fallback` verb (launchd has neither a start limit
+nor `OnFailure=`). A daemon of this release removes that job at each start where it finds it: it
+boots the job out and removes its plist, `/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.fallback.plist`
+(`hostkeeper_daemon::selfunits`), and answers a self-update `busy` until it has. The verb is
+still answered, and each start still adds itself to the start log, for the job of a release
+that has not yet updated. Two plists were involved:
 
 - the daemon's own `LaunchDaemons` plist, the one `hostkeeper_launchd::plist::daemon_plist`
   renders (see [One daemon, run by launchd](#one-daemon-run-by-launchd)). Its program is
@@ -71,23 +84,18 @@ serve it:
   `Restart=always`, because the daemon exits cleanly after switching to a new binary and must be
   started again, from what `current` names then. It sets no `ThrottleInterval`: launchd waits its
   default 10 seconds between two starts;
-- `hostkeeper_steps::selfupdate::launchd_fallback_job`: the job `<label>.fallback`, which runs
-  `previous self-update-fallback --dir <dir>` every `StartInterval` seconds and not at load.
-  The plist is deterministic (keys sorted, fixed indentation) and every path and the label in
-  it are XML-escaped. The daemon writes it at each start, once ready, as
-  `/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.fallback.plist` with an interval of 60
-  seconds, only when it differs from what is there, and then boots the job out and bootstraps it
-  again (`hostkeeper_daemon::selfunits`). Its `--dir` is the directory the daemon's own plist
-  starts `current` of, so the `current` it flips back is the one launchd starts next. Until the
-  first self-update there is no `previous`, and launchd cannot spawn the job's program when the
-  interval comes.
+- `hostkeeper_steps::selfupdate::launchd_fallback_job`: the job `<label>.fallback` of the releases
+  before the hand-over, which ran `previous self-update-fallback --dir <dir>` every
+  `StartInterval` seconds (60) and not at load, written by them as
+  `/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.fallback.plist`. Its `--dir` was the
+  directory the daemon's own plist starts `current` of. This daemon no longer writes it.
 
 launchd has no counterpart of the Linux package unit's `ExecStartPre=`, and needs none: the job's
 program is the installed binary, which seeds the binary directory at each start. A `current` that
 later starts nothing (removed by hand, or a link to a version that is gone) is seeded again by the
 next start, since the installed binary, not `current`, is what launchd runs.
 
-Since the timer runs the verb whether or not the new binary is failing, the verb decides the
+Since that timer ran the verb whether or not the new binary was failing, the verb decides the
 burst itself on a Mac (`hostkeeper_daemon::fallback::fallback_after_burst`). Each start of the
 daemon on a Mac first adds itself to the start log, `<state-dir>/hostkeeper/starts` (its version
 and a stamp of the monotonic clock; the last 16 starts are kept). The verb then flips `current`
@@ -105,7 +113,8 @@ run of the timer looks again:
 
 A start is written by the daemon itself, first thing; a new binary the system kills before it
 runs any of its code (a refused signature, another architecture) writes none, so this rule does
-not fall back from it.
+not fall back from it. The verb leaves a hand-over alone: it moved no link, and the start of the
+binary `current` names settles the update.
 
 On Linux the verb falls back at once, as before: systemd has already counted the starts, and
 nothing writes the start log.
@@ -217,18 +226,11 @@ timeout (a timeout of 0 is no bound). The unit of a `[hook] boot` step is
 `updater-<service>-boot-<generation>`, whatever the step's name, and its label
 `<prefix>.hostkeeper.step.<service>.boot.<generation>`.
 
-The probe of hostkeeper's own update (the daemon asking a new binary for its self-update
-protocol, `<binary> self-update-protocol`, before it stages it) runs the same way too, as one job
-with the label `<prefix>.hostkeeper.probe.<unit>` (`hostkeeper-self-update-protocol`), apart from
-every step label, so that a probe never boots out a step's job. It is bounded at 10 seconds (a
-bound of 0 is 1 second: a probe is never unbounded) and checked and read as on Linux: an absolute
-path to an executable file, the job's exit code (none when it was booted out at its bound or
-ended by a signal) and at most 64 bytes of its standard output. The binary is the file of the
-verified release the daemon just checked, so it passed the package check every Mach-O file of a
-release passes at unpack (no quarantine attribute, a valid code signature). A release of the
-version that already runs is not probed: none of its binary is staged. Nor is a release whose
-floor (`min_hostkeeper`) is above 0.1.53, which the daemon judges by the floor alone, as on Linux
-(the README's self-update section).
+Hostkeeper's own update asks nothing of the new binary since stage 2 of the staged path: the
+probe of its `self-update-protocol`, which ran as one job labelled
+`<prefix>.hostkeeper.probe.<unit>`, is gone, and a release is judged by its floor alone (the
+README's self-update section). The verb is still answered, printing `1`, for the daemons before
+stage 2 that probe.
 
 | how the job ended | the step's exit |
 |---|---|
@@ -257,8 +259,7 @@ with the error (resume stops the job by name if it is still there).
 
 The equivalence tests (`crates/hostkeeper-launchd/tests/equivalence.rs`) run the same scenarios
 against both launchers through the trait: a bounded step that overruns is stopped at its bound
-and failed, an unbounded one is not, a double stop is `Ok`, the capture keeps the tail, and a
-probe keeps its exit and output within its bound and is stopped past it. The
+and failed, an unbounded one is not, a double stop is `Ok`, and the capture keeps the tail. The
 real `launchctl` run is not part of the pull-request check (no Mac runs there): the host's
 launcher, `LaunchdLauncher::system`, is compiled on macOS only.
 
@@ -517,11 +518,6 @@ counted by the coverage gate; what they drive is measured against fakes on Linux
 - run the fixture hook in mode `sleep` as a step job through `LaunchdLauncher` with a bound of 5
   seconds: the job is booted out at the bound, the step has no exit code (a failed step), and
   launchd no longer holds the job;
-- probe the daemon binary's `self-update-protocol` as a launchd job through `LaunchdLauncher`
-  (the job `dev.hostkeeper.hostkeeper.probe.<unit>`): it exits 0 and prints exactly the protocol
-  and a newline, the daemon's probe reads that protocol, and launchd no longer holds the job; a
-  probe of a program that never ends, bounded at 1 second, is booted out at the bound with no
-  exit code;
 - read a running job, an ended job and an unknown label through the observer's service manager:
   active, inactive, not found;
 - read the boot id from `kern.bootsessionuuid` twice: a UUID, the same on both reads;
@@ -554,25 +550,28 @@ counted by the coverage gate; what they drive is measured against fakes on Linux
   `self_update.rs`): the daemon, a launchd job of the daemon's own plist from `current` of its
   binary directory, is ordered to the next version with releases the test seals in its package
   store and a coordinator of files the test writes:
-  - an installed daemon ordered the update: the new binary's protocol is asked through a launchd
-    job, `current` is switched, the daemon exits and launchd starts the new binary, which settles
-    the update `Succeeded`, with `previous` the old version, and reports it;
+  - an installed daemon ordered the update: it links `next` at the new binary and exits, launchd
+    starts the job's program, the old binary execs the new one, which finishes the switch
+    (`current` the new version, `previous` the old one), settles the update `Succeeded` and
+    reports it;
   - a daemon the pkg installed (no package of hostkeeper) ordered the install of the next
     release: the same, and the package is installed at the new version;
   - a daemon the pkg installed ordered the install of the version it runs: `Succeeded` at once,
-    with no probe and the same process;
+    with the same process;
+  - a next binary that cannot start: the old binary execs it three times, then settles the update
+    `Failed` (`self_update_fallback`), lists the version bad and runs, with `current` never
+    moved;
   - the real coordinator in the test's process, answering each heartbeat the daemon wrote (its
     rollout asks two healthy heartbeats of a host at its version), orders the update: the daemon
     restarts into the next version, the new binary reports the update's `Succeeded` under the
     coordinator's order id and its own job running, healthy and at the new version, and the
     coordinator reads the host baked and hostkeeper converged.
-  The fallback of a next binary that cannot start is not run there: the daemon of the test writes
-  its fallback job beside its placed units, not in `/Library/LaunchDaemons`.
 - update hostkeeper itself from the published release `previous-release.toml` pins to this build
   (`self_update_across_releases.rs`, the cross-release rig, which runs on Linux too; CONTRIBUTING.md
   says how the pin moves): the released daemon is the job `dev.hostkeeper.hostkeeper` of the
   daemon's own plist in `/Library/LaunchDaemons`, ordered by the real coordinator with packages
-  from the loopback release channel. It updates to this build, which settles the update
-  `Succeeded`; a version of this build that cannot start is fallen back from by the released
-  binary's own fallback job, which the daemon writes into `/Library/LaunchDaemons` and launchd
-  runs; and this build updates to itself under a newer version name.
+  from the loopback release channel. It updates to this build the old way, which settles the
+  update `Succeeded` and removes the released daemon's fallback job; a version of this build
+  that cannot start is fallen back from by the released binary's own fallback job, which the
+  released daemon wrote into `/Library/LaunchDaemons` and launchd runs; and this build updates to
+  itself under a newer version name by the hand-over.

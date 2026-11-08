@@ -6,8 +6,8 @@
 //! The daemon reads some paths from no flag: the CA bundle its package fetch trusts
 //! (`/etc/ssl/cert.pem`), `gh` and the Sigstore trusted root (`/usr/local/lib/hostkeeper`), the
 //! pki directory (`/etc/updater`), the placed-path state (`/var/lib/hostkeeper`) and launchd's
-//! directory (`/Library/LaunchDaemons`), where it links a package's plists and writes its own
-//! fallback job. A test that drives it for real puts files at those places, which is only safe on
+//! directory (`/Library/LaunchDaemons`), where it links a package's plists, and where a release
+//! before the hand-over writes its own fallback job, which a release of this build removes. A test that drives it for real puts files at those places, which is only safe on
 //! a throwaway machine, which the hosted runner of `privileged.yml` is. [`MacHost::new`] moves
 //! aside whatever is at the places it takes over (another test of the crate may have left it),
 //! and the drop boots out every job the test made or the daemon loaded, removes what the test
@@ -209,7 +209,8 @@ fn taken_places() -> Vec<PathBuf> {
     places
 }
 
-/// The daemon's fallback job, which it writes and loads at every start on a Mac.
+/// The fallback job of the releases before the hand-over, which such a daemon writes and loads at
+/// every start on a Mac, and which this build's daemon removes.
 fn fallback_label() -> Label {
     Label::parse(&hostkeeper_daemon::selfunits::fallback_label()).expect("a label")
 }

@@ -37,7 +37,7 @@ use crate::observer;
 use crate::packages::Packages;
 use crate::prune::{ForceLockPoint, Prune};
 use crate::refusal::Refusal;
-use crate::selfupdate::{self, LauncherProbe, ProtocolProbe, Restart};
+use crate::selfupdate::{self, Restart};
 use crate::trusted_root::RootReport;
 use crate::verb::{HookedVerb, Verb};
 use crate::verbs;
@@ -134,16 +134,24 @@ pub struct Ctx {
     deadman_poll_secs: Option<u64>,
     /// Ends the dead-men when the daemon is dropped.
     stop: Arc<AtomicBool>,
-    /// Asks a new hostkeeper binary for its self-update protocol.
-    probe: Arc<dyn ProtocolProbe>,
+    /// Whether the start could not remove the fallback files of the releases before the
+    /// hand-over: a self-update is `busy` while it is set ([`Ctx::hold_self_updates`]).
+    self_updates_held: AtomicBool,
     /// The daemon's request to exit so that its unit starts a new binary.
     restart: Restart,
 }
 
 impl Ctx {
-    /// The probe a new hostkeeper binary's self-update protocol is asked with.
-    pub fn probe(&self) -> &dyn ProtocolProbe {
-        &*self.probe
+    /// Holds the daemon's own update off, answering it `busy`, until the next start: set when
+    /// the start could not remove the fallback unit, drop-in and job of the releases before the
+    /// hand-over ([`crate::selfunits::remove`]), which a hand-over must never meet armed.
+    pub fn hold_self_updates(&self) {
+        self.self_updates_held.store(true, Ordering::SeqCst);
+    }
+
+    /// Whether [`Ctx::hold_self_updates`] was called.
+    pub fn self_updates_held(&self) -> bool {
+        self.self_updates_held.load(Ordering::SeqCst)
     }
 
     /// The daemon's request to exit with status 0 after the follow-on of its own update.
@@ -577,7 +585,6 @@ impl Daemon {
         own_version: HostkeeperVersion,
     ) -> Daemon {
         let halts = HaltStore::new(&dirs.state);
-        let probe = Arc::new(LauncherProbe::new(Arc::clone(&ports.launcher)));
         Daemon {
             ctx: Ctx {
                 config,
@@ -603,18 +610,11 @@ impl Daemon {
                 alerts: Arc::new(|line: &str| eprintln!("{line}")),
                 deadman_poll_secs: ports.deadman_poll_secs,
                 stop: Arc::new(AtomicBool::new(false)),
-                probe,
+                self_updates_held: AtomicBool::new(false),
                 restart: Restart::default(),
             },
             abort_tries: Mutex::default(),
         }
-    }
-
-    /// The same daemon, a new hostkeeper binary's self-update protocol asked of `probe` in place
-    /// of the step launcher: the seam of the tests of the protocol check.
-    pub fn with_probe(mut self, probe: Arc<dyn ProtocolProbe>) -> Daemon {
-        self.ctx.probe = probe;
-        self
     }
 
     /// The same daemon, every step record store it makes changed by `seam` as it is made: the

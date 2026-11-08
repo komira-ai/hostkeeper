@@ -265,16 +265,19 @@ The released daemon runs as the host's own daemon (`hostkeeper.service` where th
 it, or the launchd job `dev.hostkeeper.hostkeeper` where the pkg puts it), on the end-to-end rig:
 the real coordinator ordering hostkeeper, the loopback release channel, the pinned `gh` against
 the test's trust root, which the released daemon reads from the host's fixed path as this build
-does. This build is the program `hostkeeper-named-daemon` (the shipped daemon, its version the
-name of the file it runs from, so it runs as versions newer than the release) and
-`hostkeeper-failing-daemon` (whose `daemon` exits 1). The tests, each from the released daemon
-converged on its own version's package:
+does. This build is the program `hostkeeper-named-daemon` (the shipped daemon, its hand-over
+acted on first, its version the name of the file it runs from, so it runs as versions newer than
+the release) and `hostkeeper-failing-daemon` (whose `daemon` exits 1). The pin is release R1,
+v0.1.163, the last release that updates itself the old way; the tests, each from the released daemon
+converged on its own version's package, with its fallback unit and drop-in (or job) armed:
 
-- `the_released_daemon_updates_to_this_build_and_this_build_settles_it_succeeded`;
+- `the_released_daemon_updates_to_this_build_and_this_build_settles_it_succeeded`: the released
+  daemon updates the old way, and this build removes the released daemon's fallback files at its
+  start;
 - `this_build_made_to_fail_its_start_is_fallen_back_from_to_the_released_binary`: by the released
   binary's own fallback unit or job, the update `Failed`, `self_update_fallback`, reported to the
   coordinator;
-- `this_build_updates_to_itself_under_a_newer_version_name`.
+- `this_build_updates_to_itself_under_a_newer_version_name`: by the hand-over.
 
 To move the pin, in the pull request that needs it: set `tag` and `version`, and each platform's
 `url` and `sha256` from the release's `SHA256SUMS`, in `previous-release.toml`, and the same URL

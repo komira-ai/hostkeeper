@@ -8,12 +8,13 @@
 //!   rpm and the pkg leave a host. A binary that is missing or differs from the pin fails the
 //!   test by name; the test fetches nothing.
 //! - **This build** is the program `hostkeeper-named-daemon` (the shipped daemon on the host's
-//!   real ports, its version the name of the file it runs from) at versions newer than the pinned
-//!   release ([`newer`]), and `hostkeeper-failing-daemon` for a version made to fail its start.
+//!   real ports, its hand-over of its own update acted on first, its version the name of the file
+//!   it runs from) at versions newer than the pinned release ([`newer`]), and
+//!   `hostkeeper-failing-daemon` for a version made to fail its start.
 //! - **hostkeeper's package** of each version is built here as the release builder lays it out
 //!   (`crates/xtask/src/release/package.rs`): `bin/hostkeeper`, `files/trusted_root.json`,
 //!   `manifest.toml`, and on Linux `units/hostkeeper.service`; its manifest is the release's, the
-//!   floor the release builder writes for the build the binary comes from ([`floor`]) and the
+//!   floor the release builder of the build the binary comes from writes ([`floor`]) and the
 //!   no-op hook `bin/hostkeeper update-hook`. Two things differ from a
 //!   release, both because the test is a host of its own: the packaged trusted root is the test
 //!   signer's, the root the host's copy holds too (the daemon uses whichever of the two was
@@ -29,8 +30,10 @@
 //! - **The host** is the platform's ([`Host`]): on Linux the daemon's own unit
 //!   `hostkeeper.service` under systemd, installed where the deb installs it (`linux`); on a Mac
 //!   the daemon's own job `dev.hostkeeper.hostkeeper` under launchd, its plist where the pkg puts
-//!   it (`mac`). The daemon writes its fallback unit and drop-in, or its fallback job, into the
-//!   host's real unit directory, so the released binary's own fallback is what puts it back.
+//!   it (`mac`). The released daemon writes its fallback unit and drop-in, or its fallback job,
+//!   into the host's real unit directory, so the released binary's own fallback is what puts it
+//!   back when this build cannot start; this build removes them at its own start
+//!   ([`Host::fallback_files_present`]).
 //!
 //! Each test starts from [`Rig::installed`]: the released daemon has installed its own version's
 //! package, as a host the coordinator converged on the release is. Every wait is a bounded count
@@ -68,10 +71,9 @@ pub const HK: &str = "hostkeeper";
 pub const NAMED: &str = env!("CARGO_BIN_EXE_hostkeeper-named-daemon");
 /// This build's `hostkeeper` made to fail its start.
 pub const FAILING: &str = env!("CARGO_BIN_EXE_hostkeeper-failing-daemon");
-/// The floor of hostkeeper's package the release builder writes today (`OLDEST_READER` of
-/// `hostkeeper-steps`, and `min_hostkeeper` the lower of it and the build's version, in
-/// `crates/xtask/src/release/package.rs`): the daemon's `LEGACY_FLOOR`, so the released daemon
-/// and this build both probe the binary of a package of the rig and run its hook's command.
+/// The floor of hostkeeper's package the pinned release's builder wrote: its `OLDEST_READER`,
+/// 0.1.53 (`min_hostkeeper` is the lower of that and the release's version, in
+/// `crates/xtask/src/release/package.rs`), the daemon's `LEGACY_FLOOR`.
 pub const FLOOR: &str = "0.1.53";
 /// The reason of the verdict of a version whose new binary fell back.
 pub const FALLBACK_REASON: &str = "self_update_fallback";
@@ -127,18 +129,27 @@ pub fn newer(version: &str, step: u64) -> String {
 }
 
 /// The `min_hostkeeper` the release builder writes into a package of `build`'s binary: the lower
-/// of [`FLOOR`] and the version that build was built with. The released binary was built as the
-/// pinned release. This build was built with the workspace's version (`0.1.0` in a pull request,
-/// the release's own once `release set-version` ran), which is also the version its package
-/// store judges a package's floor against (`hostkeeper_unpack::running_hostkeeper`), whatever
-/// name the program runs under; a higher floor is `daemon_too_old` to it.
+/// of the `OLDEST_READER` of the build the binary comes from and the version that build was built
+/// with. The released binary was built as the pinned release: [`FLOOR`] and the release's
+/// version. This build's `OLDEST_READER` is `hostkeeper_steps::OLDEST_READER` (R1, 0.1.163) and
+/// its version the workspace's (`0.1.0` in a pull request, the release's own once `release
+/// set-version` ran), which is also the version its package store judges a package's floor
+/// against (`hostkeeper_unpack::running_hostkeeper`), whatever name the program runs under; a
+/// higher floor is `daemon_too_old` to it. In a pull request the floor is therefore the
+/// workspace's `0.1.0`, at or below the legacy floor, so the pinned release probes the binary of
+/// this build's package (which still answers `self-update-protocol`) and runs its hook's command.
 pub fn floor(build: Build, released: &str) -> String {
-    let floor = HostkeeperVersion::parse(FLOOR).expect("the floor is a version");
-    let built = match build {
-        Build::Released => HostkeeperVersion::parse(released).expect("the release is a version"),
-        Build::This | Build::Failing => hostkeeper_unpack::running_hostkeeper(),
+    let (oldest, built) = match build {
+        Build::Released => (
+            HostkeeperVersion::parse(FLOOR).expect("the floor is a version"),
+            HostkeeperVersion::parse(released).expect("the release is a version"),
+        ),
+        Build::This | Build::Failing => (
+            hostkeeper_steps::OLDEST_READER,
+            hostkeeper_unpack::running_hostkeeper(),
+        ),
     };
-    floor.min(built).to_string()
+    oldest.min(built).to_string()
 }
 
 /// The manifest of hostkeeper's package at `version` with the floor `floor`, as the release

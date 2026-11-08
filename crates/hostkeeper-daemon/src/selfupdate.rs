@@ -24,38 +24,39 @@
 //!    package;
 //! 6. the step lock, waited for (a running step of another service is never interrupted), and
 //!    the records of step 4 read again under it;
-//! 7. the release judged by its floor, its manifest's `min_hostkeeper` ([`judge`]), before
-//!    anything is staged, unless the release is the version that runs, whose binary is never
-//!    staged and so is neither judged nor asked (an install of the version a pkg or a hand
-//!    upgrade put on the host goes on to its steps without running the probe). A floor of
-//!    [`LEGACY_FLOOR`] or lower, which every release before stage 2 of
-//!    docs/design/two-programs.md declares, has the protocol of the new binary asked
-//!    ([`ProtocolProbe`]) of the file of the verified release: a protocol this daemon cannot
-//!    fall back from is `Failed` before the commit, of class release (`protocol_unsupported`),
-//!    and a probe that cannot be read is `Failed` before the commit, of class environment
-//!    (`protocol_unreadable`). A higher floor asks nothing: a release older than this daemon's
-//!    [`OLDEST_READER`] (or whose version is not `major.minor.patch`) is `Failed` before the
-//!    commit, of class release (`protocol_unsupported`), since it could not read this daemon's
-//!    files, and any other is accepted; a daemon older than the floor never gets here, since the
-//!    manifest's loader deferred the order `daemon_too_old` at step 5. A release without the
-//!    binary is `Failed` before the commit, of class release (`self_binary_missing`), and a
-//!    release that changed since it was verified, or cannot be read now, is refused
-//!    (`release_unreadable`). Nothing is written for any of them;
+//! 7. the release judged ([`judge`]) before anything is staged: a release older than this
+//!    daemon's [`OLDEST_READER`] (or whose version is not `major.minor.patch`) is `Failed` before
+//!    the commit, of class release (`protocol_unsupported`), since it could not read this
+//!    daemon's files, and any other is accepted, as is the version that runs, whose binary is
+//!    never staged (an install of the version a pkg or a hand upgrade put on the host goes on to
+//!    its steps). Nothing is asked of the new binary: a daemon older than the release's floor,
+//!    its manifest's `min_hostkeeper`, never gets here, since the manifest's loader deferred the
+//!    order `daemon_too_old` at step 5. A release without the binary is `Failed` before the
+//!    commit, of class release (`self_binary_missing`), and a release that changed since it was
+//!    verified, or cannot be read now, is refused (`release_unreadable`). Nothing is written for
+//!    any of them;
 //! 8. the hook's steps through the step runner, which holds the success back
 //!    ([`hostkeeper_steps::StepRunner::with_held_success`]). For a release whose floor is above
 //!    [`LEGACY_FLOOR`] the steps are built in ([`builtin_steps`]): each succeeds at once and no
 //!    command of the release runs, and the record is the one the hook's no-op command
 //!    (`bin/hostkeeper update-hook`, [`crate::update_hook`]) gives. Below it the command runs,
 //!    as every release before stage 3 answers it;
-//! 9. the follow-on ([`hostkeeper_steps::follow_on`]): the new binary staged in the binary
-//!    directory ([`binary_dir`]), the record written as waiting for the restart, `current`
-//!    switched. The reply is `Deferred` `awaiting_restart`, never `Succeeded`, and the daemon is
-//!    asked to exit with status 0 ([`Restart`]). Its unit (`packaging/linux/hostkeeper.service`)
-//!    starts `current` of the binary directory and has `Restart=always`, so that clean exit
-//!    starts the new binary; the drop-in and fallback unit the daemon writes at its start
-//!    (`crate::selfunits`) put the previous one back if the new one fails its start limit. The
-//!    step lock is released only after the switch, so a step of another service that waits for
-//!    it starts after the swap.
+//! 9. the follow-on ([`hostkeeper_steps::follow_on`]), the hand-over (docs/design/two-programs.md,
+//!    4.3): the new binary staged in the binary directory ([`binary_dir`]), the link `next`
+//!    pointed at it, the record written as waiting for the restart into it with a start count of
+//!    0. `current` is not moved. The reply is `Deferred` `awaiting_restart`, never `Succeeded`,
+//!    and the daemon is asked to exit with status 0 ([`Restart`]). Its unit
+//!    (`packaging/linux/units/hostkeeper.service`) starts `current` of the binary directory and
+//!    has `Restart=always`, so that clean exit starts the old binary again, which execs `next`
+//!    while its start count lasts ([`crate::handover`]); three starts of the new binary that do
+//!    not settle the update make the old one settle it `Failed` and run. The step lock is
+//!    released only after the hand-over, so a step of another service that waits for it starts
+//!    after it.
+//!
+//! Before any of this, while the fallback unit, the drop-in and the fallback job of the releases
+//! before the hand-over are not removed ([`crate::selfunits::remove`], which the daemon runs at
+//! each start), a self-update is answered `busy` ([`Ctx::hold_self_updates`]): the fallback
+//! files and a hand-over are never armed at once.
 //!
 //! At start, after the lock of the state directory and before the boot pass,
 //! [`Daemon::settle_self_update`] settles an update that waits for the restart
@@ -64,26 +65,22 @@
 //! `daemon_too_old`); any other binary records it `Failed` and its version bad. The binary that
 //! ran the order exited before its `Deferred` reached a heartbeat, and the coordinator ends the
 //! order once the host runs its target, so it never orders it again for a resend to be
-//! answered: the wait keeps the order's id, the settlement (by this start, or by the fallback
-//! verb before the previous binary starts) keeps it in the finished record, and every start
-//! of a daemon lists the record's verdict under that id and the record's try for the heartbeat
-//! to send until the coordinator acknowledges it (`crate::link_adapters::recorded`). A wait
-//! written by a daemon from before the id was kept names no order, and its verdict is reported
-//! by no binary.
+//! answered: the wait keeps the order's id, the settlement (by this start, or, for a wait of a
+//! release before the hand-over, by the fallback verb before the previous binary starts) keeps
+//! it in the finished record, and every start of a daemon lists the record's verdict under that
+//! id and the record's try for the heartbeat to send until the coordinator acknowledges it
+//! (`crate::link_adapters::recorded`). A wait written by a daemon from before the id was kept
+//! names no order, and its verdict is reported by no binary.
 //!
-//! The protocol rule, for a release whose floor is [`LEGACY_FLOOR`] or lower: a new binary of
-//! protocol `P` is accepted when `SELF_UPDATE_PROTOCOL <= P <= SELF_UPDATE_PROTOCOL + 1`. "Can
-//! fall back from" means that the previous binary reads every file the new one writes, which
-//! holds when a release of protocol `N + 1` adds readers and writes only formats protocol `N`
-//! reads, and only the release after it writes the formats of `N + 1`. The floor carries the
-//! same rule from stage 2 on: a release that writes a new format sets [`OLDEST_READER`] to the
+//! "Can fall back from" means that the binary that runs reads every file the new one writes. The
+//! floor carries that rule: a release that writes a new format sets [`OLDEST_READER`] to the
 //! release that first read it, and the release builder writes that as the floor of hostkeeper's
-//! package. [`SELF_UPDATE_PROTOCOL`] stays 1, because every daemon before stage 1 probes the
-//! releases of stage 1 and accepts only 1 or 2.
+//! package. [`SELF_UPDATE_PROTOCOL`] stays 1 and the verb `self-update-protocol` still prints
+//! it, because every daemon before stage 2 probes the releases it takes and accepts only 1 or 2;
+//! no daemon of this release probes anything.
 
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use hostkeeper_config::manifest::HostkeeperVersion;
@@ -94,8 +91,8 @@ use hostkeeper_steps::record::{
 };
 use hostkeeper_steps::selfupdate::settle_with;
 use hostkeeper_steps::{
-    ArtifactError, BadVersions, FollowOn, LaunchError, Layout, OLDEST_READER, ProbeCall, ProbeExit,
-    SelfUpdateError, Settled, StepLauncher, StepRunner, follow_on,
+    ArtifactError, BadVersions, FollowOn, Layout, OLDEST_READER, SelfUpdateError, Settled,
+    StepRunner, follow_on,
 };
 use tokio::sync::Notify;
 
@@ -108,27 +105,21 @@ use crate::verb::{Hooked, HookedVerb};
 use crate::verbs::force::SELF_SERVICE;
 use crate::verbs::update;
 
-/// The self-update protocol of this binary: what the verb `self-update-protocol` prints, and
-/// what a new binary's protocol is compared with ([`accepted`]). It is apart from the step
-/// runner's `UPDATER_PROTOCOL`, which an order's `min_updater_protocol` is compared with.
+/// The self-update protocol of this binary: what the verb `self-update-protocol` prints, frozen
+/// at 1. It is apart from the step runner's `UPDATER_PROTOCOL`, which an order's
+/// `min_updater_protocol` is compared with.
 pub const SELF_UPDATE_PROTOCOL: u32 = 1;
-/// The verb a new binary is asked for its protocol with.
+/// The verb that prints [`SELF_UPDATE_PROTOCOL`]: answered for the daemons before stage 2, which
+/// ask it of every release they take.
 pub const PROTOCOL_VERB: &str = "self-update-protocol";
-/// The transient unit the probe runs in.
-pub const PROBE_UNIT: &str = "hostkeeper-self-update-protocol";
-/// The bound of the probe, in seconds (`RuntimeMaxSec=`).
-pub const PROBE_TIMEOUT_SECS: u64 = 10;
-/// The most bytes of the probe's output that are read.
-pub const PROBE_OUTPUT_BYTES: usize = 64;
 /// The hostkeeper binary in a release of the service `hostkeeper`.
 pub const RELEASE_BINARY: &str = "bin/hostkeeper";
 /// The binary directory's name in the state directory of the service `hostkeeper`.
 pub const BINARY_DIR: &str = "bin";
 /// The reason of the `Deferred` of an update whose new binary has not run yet.
 pub const REASON_AWAITING_RESTART: &str = "awaiting_restart";
-/// The reason of the `Failed` of a new binary whose protocol could not be read.
-pub const REASON_PROTOCOL_UNREADABLE: &str = "protocol_unreadable";
-/// The reason of the `Failed` of a new binary whose protocol this daemon cannot fall back from.
+/// The reason of the `Failed` of a release this daemon cannot fall back to, or that could not
+/// read this daemon's files: one older than [`OLDEST_READER`].
 pub const REASON_PROTOCOL_UNSUPPORTED: &str = "protocol_unsupported";
 /// The reason of the `Failed` of a release that has no hostkeeper binary to stage.
 pub const REASON_SELF_BINARY_MISSING: &str = "self_binary_missing";
@@ -137,9 +128,8 @@ pub const REASON_SELF_BINARY_MISSING: &str = "self_binary_missing";
 pub const ALERT_SELF_UPDATE: &str = "self_update_unsettled";
 
 /// The floor every release of hostkeeper before stage 2 of docs/design/two-programs.md declares
-/// (`min_hostkeeper` of its package): a release whose floor is this or lower has its new binary's
-/// protocol probed and runs its hook's command; one whose floor is higher is judged by the floor
-/// and [`OLDEST_READER`] alone, and runs built-in steps ([`judge`], [`builtin_steps`]).
+/// (`min_hostkeeper` of its package): a release whose floor is above this runs built-in steps
+/// ([`builtin_steps`]); one whose floor is this or lower runs its hook's command.
 pub const LEGACY_FLOOR: HostkeeperVersion = HostkeeperVersion {
     major: 0,
     minor: 1,
@@ -149,30 +139,23 @@ pub const LEGACY_FLOOR: HostkeeperVersion = HostkeeperVersion {
 /// How step 7 judges a release of hostkeeper ([`judge`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Judgement {
-    /// Its new binary's protocol is asked ([`ProtocolProbe`]).
-    Probe,
-    /// It goes on to its steps with no probe.
+    /// It goes on to its steps.
     Accepted,
     /// It is `Failed` before the commit, of class release ([`REASON_PROTOCOL_UNSUPPORTED`]).
     Unsupported,
 }
 
-/// How a daemon of version `running` judges the release `version` of hostkeeper, whose package
-/// declares the floor `floor` (step 7 of the module): the version that runs is [`Accepted`]
-/// with no check; a floor of [`LEGACY_FLOOR`] or lower is [`Probe`]d; above it, a release older
-/// than [`OLDEST_READER`], or whose version is not `major.minor.patch`, is [`Unsupported`] (the
-/// backward rule), and any other is [`Accepted`]. The forward rule, a floor above `running`, is
-/// the manifest loader's, before this.
+/// How a daemon of version `running` judges the release `version` of hostkeeper (step 7 of the
+/// module): the version that runs is [`Accepted`] with no check; a release older than
+/// [`OLDEST_READER`], or whose version is not `major.minor.patch`, is [`Unsupported`] (the
+/// backward rule, since it could not read this daemon's files), and any other is [`Accepted`].
+/// The forward rule, a floor above `running`, is the manifest loader's, before this.
 ///
 /// [`Accepted`]: Judgement::Accepted
-/// [`Probe`]: Judgement::Probe
 /// [`Unsupported`]: Judgement::Unsupported
-pub fn judge(running: HostkeeperVersion, version: &str, floor: HostkeeperVersion) -> Judgement {
-    let target = HostkeeperVersion::parse(version).ok();
-    match (target, floor <= LEGACY_FLOOR) {
-        (Some(target), _) if target == running => Judgement::Accepted,
-        (_, true) => Judgement::Probe,
-        (Some(target), false) if target >= OLDEST_READER => Judgement::Accepted,
+pub fn judge(running: HostkeeperVersion, version: &str) -> Judgement {
+    match HostkeeperVersion::parse(version) {
+        Ok(target) if (target == running) | (target >= OLDEST_READER) => Judgement::Accepted,
         _ => Judgement::Unsupported,
     }
 }
@@ -190,80 +173,12 @@ pub fn protocol_line() -> String {
     format!("{SELF_UPDATE_PROTOCOL}\n")
 }
 
-/// Whether a new binary of protocol `protocol` is one this daemon can fall back from:
-/// [`SELF_UPDATE_PROTOCOL`] or the one after it.
-pub fn accepted(protocol: u32) -> bool {
-    (SELF_UPDATE_PROTOCOL..=SELF_UPDATE_PROTOCOL.saturating_add(1)).contains(&protocol)
-}
-
 /// The binary directory of hostkeeper's own update under the state directory `state_dir`:
 /// `<state-dir>/hostkeeper/bin`, with `versions/<version>`, `current` and `previous`
-/// ([`Layout::new`]). The fallback unit's `--dir` is this directory, and its parent is the state
-/// directory of the service `hostkeeper`, where the step record and the list of bad versions are.
+/// ([`Layout::new`]). Its parent is the state directory of the service `hostkeeper`, where the
+/// step record and the list of bad versions are.
 pub fn binary_dir(state_dir: &Path) -> PathBuf {
     state_dir.join(SELF_SERVICE).join(BINARY_DIR)
-}
-
-/// Asks a binary for its self-update protocol.
-pub trait ProtocolProbe: Send + Sync {
-    /// The protocol of `binary`, a file of a verified release.
-    fn protocol(&self, binary: &Path) -> Result<u32, ProbeError>;
-}
-
-/// Why a probe gave no protocol.
-#[derive(Debug, thiserror::Error)]
-pub enum ProbeError {
-    #[error("the probe could not run: {0}")]
-    Launch(#[from] LaunchError),
-    /// It ended with another status than 0, or was killed (`None`): by its bound, or a signal.
-    #[error("the probe ended with the status {0:?}")]
-    Exit(Option<i32>),
-    /// It printed something else than one line of decimal digits.
-    #[error("the probe printed {0:?}, which is not one line of a decimal number")]
-    Output(String),
-}
-
-/// The probe of the host: `<binary> self-update-protocol`, run through the step launcher in a
-/// transient unit bounded by [`PROBE_TIMEOUT_SECS`], at most [`PROBE_OUTPUT_BYTES`] of its output
-/// read.
-pub struct LauncherProbe {
-    launcher: Arc<dyn StepLauncher>,
-}
-
-impl LauncherProbe {
-    pub fn new(launcher: Arc<dyn StepLauncher>) -> LauncherProbe {
-        LauncherProbe { launcher }
-    }
-}
-
-impl ProtocolProbe for LauncherProbe {
-    fn protocol(&self, binary: &Path) -> Result<u32, ProbeError> {
-        let exit = self.launcher.run_probe(&ProbeCall {
-            service: SELF_SERVICE,
-            executable: binary,
-            args: &[PROTOCOL_VERB],
-            unit: PROBE_UNIT,
-            timeout_secs: PROBE_TIMEOUT_SECS,
-            output_bytes: PROBE_OUTPUT_BYTES,
-        })?;
-        read_protocol(&exit)
-    }
-}
-
-/// The protocol a probe printed: it exited 0, and its whole output is one line of decimal digits,
-/// the newline at its end optional, that is a `u32`.
-pub fn read_protocol(exit: &ProbeExit) -> Result<u32, ProbeError> {
-    if exit.code != Some(0) {
-        return Err(ProbeError::Exit(exit.code));
-    }
-    let text = String::from_utf8_lossy(&exit.output);
-    let line = text.strip_suffix('\n').unwrap_or(&text);
-    let digits = !exit.truncated & !line.is_empty() & line.bytes().all(|b| b.is_ascii_digit());
-    let printed = || ProbeError::Output(text.to_string());
-    match digits {
-        true => line.parse().map_err(|_| printed()),
-        false => Err(printed()),
-    }
 }
 
 /// The daemon's request to exit with status 0 so that its unit starts the new binary: asked once
@@ -371,6 +286,7 @@ fn steps(
     if let Some(answer) = update::answer(verb, order, last.as_deref())? {
         return Ok(answer);
     }
+    units_removed(ctx)?;
     others_idle(ctx, service)?;
     let prepared = update::prepare(ctx, verb, order, last.as_deref())?;
     files::make_private(&ctx.service_dir(service))
@@ -379,18 +295,17 @@ fn steps(
     let _step = guard.step(&ctx.step_lock);
     others_idle(ctx, service)?;
     let release = prepared.dir.staged();
-    let binary = match release.check(Path::new(RELEASE_BINARY)) {
-        Ok(binary) => binary,
+    match release.check(Path::new(RELEASE_BINARY)) {
+        Ok(_) => {}
         Err(ArtifactError::BadHookPath(_) | ArtifactError::HookMissing(_)) => {
             return Ok(failed(Class::Release, REASON_SELF_BINARY_MISSING));
         }
         // The tree cannot be read now, or is not the one verified: nothing runs from it.
         Err(error) => return Err(Reply::refused(Refusal::ReleaseUnreadable, error)),
-    };
+    }
     let running = ctx.own_version.to_string();
-    let judged = judge(ctx.own_version, version, prepared.floor);
-    if let Some(refused) = probed(judged, ctx.probe(), &binary) {
-        return Ok(refused);
+    if judge(ctx.own_version, version) == Judgement::Unsupported {
+        return Ok(failed(Class::Release, REASON_PROTOCOL_UNSUPPORTED));
     }
     let finished = match runner.run(&prepared.update) {
         Ok(finished) => finished,
@@ -416,24 +331,6 @@ fn steps(
     }
 }
 
-/// Step 7: the refusal of the new binary `binary` as `judged` says ([`judge`]), its protocol asked
-/// of `probe` when it says [`Judgement::Probe`]; `None` when it is accepted. A release of the
-/// version that runs is not asked: the follow-on stages no binary for it
-/// ([`FollowOn::NotNeeded`]), so nothing of it is ever run, and the order goes on as the module
-/// says (an install of it is `Succeeded` once its steps ran).
-fn probed(judged: Judgement, probe: &dyn ProtocolProbe, binary: &Path) -> Option<Reply> {
-    match judged {
-        Judgement::Accepted => return None,
-        Judgement::Unsupported => return Some(failed(Class::Release, REASON_PROTOCOL_UNSUPPORTED)),
-        Judgement::Probe => {}
-    }
-    match probe.protocol(binary) {
-        Ok(protocol) if accepted(protocol) => None,
-        Ok(_) => Some(failed(Class::Release, REASON_PROTOCOL_UNSUPPORTED)),
-        Err(_) => Some(failed(Class::Environment, REASON_PROTOCOL_UNREADABLE)),
-    }
-}
-
 /// The token of a follow-on that stopped: the release changed or cannot be read
 /// (`package_failed`), the binary directory could not be changed (`link_failed`), and the record
 /// or the list of bad versions could not be used (`store_failed`). A resend runs it again.
@@ -455,6 +352,24 @@ fn waiting_for(awaiting: &AwaitingRestart, version: &str) -> Result<Reply, Reply
             format!(
                 "{SELF_SERVICE} waits for its restart into {}",
                 awaiting.version
+            ),
+        )),
+    }
+}
+
+/// `Ok` unless the start could not remove the fallback files of the releases before the
+/// hand-over ([`Ctx::hold_self_updates`]): `busy` then, so that a fallback unit or job and a
+/// hand-over are never armed at once.
+fn units_removed(ctx: &Ctx) -> Result<(), Reply> {
+    match ctx.self_updates_held() {
+        false => Ok(()),
+        true => Err(Reply::refused(
+            Refusal::Busy,
+            format!(
+                "{SELF_SERVICE} updates itself only once the fallback files of the releases \
+                 before its hand-over are removed, which the start could not do: see the alert \
+                 {}",
+                crate::selfunits::ALERT_SELF_UNITS
             ),
         )),
     }

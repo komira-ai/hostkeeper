@@ -64,37 +64,6 @@ pub struct AdditiveCall<'a> {
     pub timeout_secs: u64,
 }
 
-/// One run of a probe: a verb of a binary that is not a hook, run once with nothing but its
-/// arguments, bounded, its standard output kept (`<executable> <args...>`). The daemon asks a new
-/// hostkeeper binary for its self-update protocol this way before it stages it.
-#[derive(Clone, Debug)]
-pub struct ProbeCall<'a> {
-    /// The service the binary belongs to.
-    pub service: &'a str,
-    /// The binary: a file of a verified release (see [`StepCall::executable`]).
-    pub executable: &'a Path,
-    /// Its arguments.
-    pub args: &'a [&'a str],
-    /// The deterministic name of the transient unit it runs in.
-    pub unit: &'a str,
-    /// The bound of the run, in seconds: the launcher sets `RuntimeMaxSec=` to it.
-    pub timeout_secs: u64,
-    /// The most bytes of standard output the launcher keeps; what passes it is dropped and
-    /// reported ([`ProbeExit::truncated`]).
-    pub output_bytes: usize,
-}
-
-/// How a probe ended, as the launcher saw it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ProbeExit {
-    /// The exit code; `None` when the probe was killed by its bound or by a signal.
-    pub code: Option<i32>,
-    /// Its standard output, at most [`ProbeCall::output_bytes`] of it.
-    pub output: Vec<u8>,
-    /// It wrote more than [`ProbeCall::output_bytes`].
-    pub truncated: bool,
-}
-
 /// How a step ended, as the launcher saw it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StepExit {
@@ -184,17 +153,6 @@ pub trait StepLauncher: Send + Sync {
         Err(LaunchError::NoStart(format!(
             "this launcher runs no additive step, so `{}` of {} did not start",
             call.step, call.service
-        )))
-    }
-
-    /// Runs a probe and waits for it to end, bounded by [`ProbeCall::timeout_secs`], keeping at
-    /// most [`ProbeCall::output_bytes`] of its standard output. A launcher that does not run
-    /// probes keeps this default, which starts nothing and answers [`LaunchError::NoStart`]
-    /// naming the unit: the caller reads it as a probe that could not run.
-    fn run_probe(&self, call: &ProbeCall<'_>) -> Result<ProbeExit, LaunchError> {
-        Err(LaunchError::NoStart(format!(
-            "this launcher runs no probe, so `{}` of {} did not start",
-            call.unit, call.service
         )))
     }
 }

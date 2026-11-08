@@ -1,14 +1,14 @@
-//! The update of hostkeeper itself through the daemon: the swap under the step lock, the record
-//! that waits for the restart, the start that settles it, the fallback verb and the local list of
-//! bad versions.
+//! The update of hostkeeper itself through the daemon: the hand-over under the step lock, the
+//! record that waits for the restart, the start that settles it, the fallback verb that the
+//! fallback units of the releases before the hand-over still run, and the local list of bad
+//! versions.
 
 mod support;
 
 use std::fs;
 use std::process::ExitCode;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
 
 use clap::Parser;
 use hostkeeper_config::names::ServiceName;
@@ -17,7 +17,7 @@ use hostkeeper_daemon::executor::RecordState;
 use hostkeeper_daemon::fallback::{self, FallbackError};
 use hostkeeper_daemon::selfupdate::{RELEASE_BINARY, binary_dir, protocol_line};
 use hostkeeper_daemon::start;
-use hostkeeper_daemon::testing::{FakeClock, Log, Signal, spawn};
+use hostkeeper_daemon::testing::{FakeClock, Log, spawn};
 use hostkeeper_daemon::{Daemon, Refusal, Reply, StoreSeam};
 use hostkeeper_hook::{Step, Verdict};
 use hostkeeper_launchd::PlatformKind;
@@ -33,8 +33,18 @@ fn hk_record(s: &SelfRig) -> Option<hostkeeper_steps::Record> {
 }
 
 /// The wait of the update to `version` an order of `SelfRig::order` ran: it keeps that order's
-/// id, for the binary that settles it to report the verdict under.
+/// id, for the binary that settles it to report the verdict under, and it is a hand-over, with
+/// `next` naming the version and no start yet.
 fn waiting_for(version: &str) -> Option<AwaitingRestart> {
+    Some(AwaitingRestart {
+        next: Some(version.to_owned()),
+        starts: Some(0),
+        ..waiting_the_old_way(version)?
+    })
+}
+
+/// The wait a release before the hand-over wrote: the order's id and no `next`.
+fn waiting_the_old_way(version: &str) -> Option<AwaitingRestart> {
     Some(AwaitingRestart {
         version: version.to_owned(),
         verdict_promotion_pending: false,
@@ -76,8 +86,9 @@ fn fail_the_start_limit(s: &SelfRig) {
 #[cfg(not(target_os = "macos"))]
 fn fail_the_start_limit(_: &SelfRig) {}
 
-/// A host that ran the swap to [`NEW`]: its record waits for the restart and `current` names the
-/// new binary; the daemon of [`OLD`] that ran it is returned.
+/// A host that ran the hand-over to [`NEW`]: its record waits for the restart with `next` naming
+/// the new binary, and `current` still names the old one; the daemon of [`OLD`] that ran it is
+/// returned.
 fn swapped(name: &str) -> (SelfRig, Daemon) {
     let s = SelfRig::new(name);
     let daemon = s.daemon();
@@ -85,11 +96,22 @@ fn swapped(name: &str) -> (SelfRig, Daemon) {
     (s, daemon)
 }
 
-/// Catches the old binary reporting the update succeeded: through the executor, the hook's steps
-/// run, the new binary is staged and `current` names it, and the record waits for the restart
-/// (`done` at `cleanup`, never `finished`); `Status` reports no result, the reply is `Deferred`
-/// `awaiting_restart`, and the daemon is asked to exit. A resend is answered the same from the
-/// record and runs nothing; an order for another version is `busy`.
+/// A host that a release before the hand-over updated to [`NEW`] the old way, which the fallback
+/// verb of its units still answers: `current` names the new binary and `previous` the old one, no
+/// `next` is linked, and the record waits for the restart with no `next`. The hand-over of
+/// [`swapped`] moved on to what the old updater wrote.
+fn swapped_the_old_way(name: &str) -> (SelfRig, Daemon) {
+    let (s, daemon) = swapped(name);
+    s.switch_the_old_way(NEW);
+    (s, daemon)
+}
+
+/// Catches the old binary reporting the update succeeded, or switching `current` itself: through
+/// the executor, the hook's steps run, the new binary is staged and `next` names it while
+/// `current` still names the old one, and the record waits for the restart (`done` at `cleanup`,
+/// never `finished`) with `next` and a start count of 0; `Status` reports no result, the reply is
+/// `Deferred` `awaiting_restart`, and the daemon is asked to exit. A resend is answered the same
+/// from the record and runs nothing; an order for another version is `busy`.
 #[test]
 fn the_record_says_awaiting_restart_not_succeeded_until_the_new_binary_has_run() {
     let s = SelfRig::new("su-awaiting");
@@ -101,16 +123,11 @@ fn the_record_says_awaiting_restart_not_succeeded_until_the_new_binary_has_run()
         s.hk_steps(),
         [Step::Prepare, Step::Cutover, Step::Verify, Step::Cleanup]
     );
-    assert_eq!(s.current().as_deref(), Some(NEW));
-    assert_eq!(
-        s.layout().previous().expect("previous").as_deref(),
-        Some(OLD)
-    );
+    assert_eq!(s.current().as_deref(), Some(OLD));
+    assert_eq!(s.layout().previous().expect("previous"), None);
+    assert_eq!(s.layout().next().expect("next").as_deref(), Some(NEW));
     let staged = fs::read_to_string(s.layout().version_path(NEW)).expect("the staged binary");
     assert_eq!(staged, format!("#!hostkeeper {NEW}\n"));
-    let probed = s.probe.asked();
-    assert_eq!(probed.len(), 1);
-    assert!(probed[0].ends_with(RELEASE_BINARY), "{probed:?}");
 
     let rec = hk_record(&s).expect("the record");
     assert_eq!(rec.step, Step::Cleanup);
@@ -132,12 +149,12 @@ fn the_record_says_awaiting_restart_not_succeeded_until_the_new_binary_has_run()
     let other = daemon.order(&s.order(LATER, 2));
     assert_eq!(other.refusal(), Some(Refusal::Busy), "{other:?}");
     assert_eq!(s.hk_steps().len(), 4, "nothing ran again");
-    assert_eq!(s.probe.asked().len(), 1);
 }
 
 /// Catches a confirmation that is skipped, repeated, or runs work again: the start of the new
-/// binary settles the record `Succeeded` in one write, a second settle writes nothing, and a
-/// resend of the order is answered `Succeeded` from the record with no launcher call.
+/// binary finishes the switch (`previous` the old binary, `current` the new one) and settles the
+/// record `Succeeded` in one write, removing `next`; a second settle writes nothing, and a resend
+/// of the order is answered `Succeeded` from the record with no launcher call.
 #[test]
 fn the_new_binary_confirms_on_first_start() {
     let (s, _old) = swapped("su-confirm");
@@ -186,7 +203,12 @@ fn the_new_binary_confirms_on_first_start() {
         }
     );
     assert_eq!(s.rig.launcher.runs().len(), ran);
-    assert_eq!(s.probe.asked().len(), 1);
+    assert_eq!(s.current().as_deref(), Some(NEW));
+    assert_eq!(
+        s.layout().previous().expect("previous").as_deref(),
+        Some(OLD)
+    );
+    assert_eq!(s.layout().next().expect("next"), None);
     assert!(!new.ctx().restart().requested());
 }
 
@@ -276,7 +298,8 @@ fn the_fallback_leaves_a_binary_no_update_waits_for() {
     assert_eq!(s.current().as_deref(), Some(NEW));
 }
 
-/// The design's named test. Catches a fallback after which the host could be ordered the same
+/// The design's named test, for a host a release before the hand-over updated the old way. Catches
+/// a fallback after which the host could be ordered the same
 /// broken version again: the fallback verb puts the previous binary back and records the update
 /// `Failed` after the commit, of class release, `self_update_fallback`, and the version bad; a
 /// resend of the order to the restarted old binary runs nothing and is answered with that failure.
@@ -284,7 +307,7 @@ fn the_fallback_leaves_a_binary_no_update_waits_for() {
 /// coordinator crate's test of the same name.)
 #[test]
 fn a_fallback_marks_the_version_bad_and_the_coordinator_stops_ordering_it() {
-    let (s, _old) = swapped("su-fallback");
+    let (s, _old) = swapped_the_old_way("su-fallback");
     let dir = binary_dir(&s.rig.state);
     let args: Vec<std::ffi::OsString> = vec![
         "hostkeeper".into(),
@@ -325,7 +348,7 @@ fn a_fallback_marks_the_version_bad_and_the_coordinator_stops_ordering_it() {
 /// still answered with its failure and runs nothing.
 #[test]
 fn a_later_order_for_another_version_does_not_forget_a_bad_version() {
-    let (s, _old) = swapped("su-later");
+    let (s, _old) = swapped_the_old_way("su-later");
     assert!(matches!(
         fallback::fallback(&binary_dir(&s.rig.state)),
         Ok(Settled::FellBack)
@@ -333,12 +356,14 @@ fn a_later_order_for_another_version_does_not_forget_a_bad_version() {
     s.release(LATER);
     let old = s.daemon_at(OLD);
     assert_eq!(old.order(&s.order(LATER, 2)), awaiting(false));
-    assert_eq!(s.current().as_deref(), Some(LATER));
+    assert_eq!(s.current().as_deref(), Some(OLD));
+    assert_eq!(s.layout().next().expect("next").as_deref(), Some(LATER));
     let later = s.daemon_at(LATER);
     assert_eq!(
         later.settle_self_update().expect("settled"),
         Settled::Confirmed
     );
+    assert_eq!(s.current().as_deref(), Some(LATER));
     let rec = hk_record(&s).expect("the record");
     assert_eq!(rec.target_version, LATER);
     let ran = s.hk_steps().len();
@@ -362,7 +387,7 @@ fn a_later_order_for_another_version_does_not_forget_a_bad_version() {
 /// non-zero naming the cause and writes nothing.
 #[test]
 fn the_fallback_flips_before_it_writes_and_is_idempotent() {
-    let (s, _old) = swapped("su-fallback-order");
+    let (s, _old) = swapped_the_old_way("su-fallback-order");
     let layout = s.layout();
     let stopped = RecordStore::new(&s.hk_state())
         .with_crash_gate(Arc::new(|point| point == CrashPoint::BeforeWrite(1)));
@@ -383,7 +408,7 @@ fn the_fallback_flips_before_it_writes_and_is_idempotent() {
     assert_eq!(s.current().as_deref(), Some(OLD), "flipped first");
     assert_eq!(
         hk_record(&s).expect("the record").progress.awaiting_restart,
-        waiting_for(NEW)
+        waiting_the_old_way(NEW)
     );
     assert_eq!(
         s.daemon_at(OLD).settle_self_update().expect("settled"),
@@ -414,7 +439,7 @@ fn the_fallback_flips_before_it_writes_and_is_idempotent() {
     assert_eq!(snapshot(&s.rig.state), before);
     assert!(hk_record(&s).is_none());
 
-    let (s, _old) = swapped("su-fallback-odd");
+    let (s, _old) = swapped_the_old_way("su-fallback-odd");
     let previous = s.layout().version_path(OLD);
     fs::set_permissions(
         previous,
@@ -474,7 +499,6 @@ fn self_update_waits_for_an_idle_step_lock() {
     let refused = daemon.order(&s.order(NEW, 1));
     assert_eq!(refused.refusal(), Some(Refusal::Busy), "{refused:?}");
     assert!(hk_record(&s).is_none());
-    assert!(s.probe.asked().is_empty());
     held.release();
     assert!(matches!(
         a.join().expect("a"),
@@ -484,24 +508,15 @@ fn self_update_waits_for_an_idle_step_lock() {
         }
     ));
 
-    let (probing, probed) = Signal::new();
-    let (release, released) = mpsc::channel::<()>();
-    let released = Mutex::new(released);
-    s.probe.set(move || {
-        probing.send(());
-        released
-            .lock()
-            .expect("the gate")
-            .recv()
-            .unwrap_or_default();
-        Ok(1)
-    });
+    let held_swap = s.rig.launcher.hold(HK, Step::Prepare);
     let fetched = s.rig.store.notified();
     let swap = {
         let (daemon, order) = (Arc::clone(&daemon), s.order(NEW, 1));
         spawn("the swap", move || daemon.order(&order))
     };
-    probed.wait(&swap).expect("the swap holds the step lock");
+    held_swap
+        .entered(&swap)
+        .expect("the swap holds the step lock");
     let b = {
         let daemon = Arc::clone(&daemon);
         spawn("b's order", move || {
@@ -509,7 +524,7 @@ fn self_update_waits_for_an_idle_step_lock() {
         })
     };
     while fetched.wait(&b).expect("b has its package") != "b 2.0" {}
-    release.send(()).expect("release the probe");
+    held_swap.release();
     assert_eq!(swap.join().expect("the swap"), awaiting(false));
     assert!(matches!(
         b.join().expect("b"),
@@ -525,13 +540,13 @@ fn self_update_waits_for_an_idle_step_lock() {
     assert!(waits < b_starts, "{events:?}");
 }
 
-/// Catches a switch that fails being taken for a swap: the follow-on stops `link_failed` with
-/// `current` unchanged and the record not waiting; a resend, once the way is clear, runs no step
-/// again and finishes the swap.
+/// Catches a link that fails being taken for a hand-over: the follow-on stops `link_failed` with
+/// `current` and `next` unchanged and the record not waiting; a resend, once the way is clear,
+/// runs no step again and finishes the hand-over.
 #[test]
-fn a_switch_that_fails_is_interrupted_and_finished_by_a_resend() {
-    let s = SelfRig::new("su-switch-fails");
-    let blocker = s.layout().dir().join("current.tmp");
+fn a_link_that_fails_is_interrupted_and_finished_by_a_resend() {
+    let s = SelfRig::new("su-link-fails");
+    let blocker = s.layout().dir().join("next.tmp");
     fs::create_dir(&blocker).expect("in the way");
     let daemon = s.daemon();
     let reply = daemon.order(&s.order(NEW, 1));
@@ -545,12 +560,13 @@ fn a_switch_that_fails_is_interrupted_and_finished_by_a_resend() {
     fs::remove_dir(&blocker).expect("clear the way");
     assert_eq!(daemon.order(&s.order(NEW, 1)), awaiting(false));
     assert_eq!(s.hk_steps().len(), 4, "no step ran again");
-    assert_eq!(s.current().as_deref(), Some(NEW));
+    assert_eq!(s.current().as_deref(), Some(OLD));
+    assert_eq!(s.layout().next().expect("next").as_deref(), Some(NEW));
 }
 
-/// Catches a follow-on that stops being answered as a swap: a record that cannot be written stops
-/// it `store_failed`, and a release whose binary changed after its steps ran stops it
-/// `package_failed`; neither asks the daemon to exit.
+/// Catches a follow-on that stops being answered as a hand-over: a record that cannot be written
+/// stops it `store_failed` with the link `next` taken back, and a release whose binary changed
+/// after its steps ran stops it `package_failed`; neither asks the daemon to exit.
 #[test]
 fn a_follow_on_that_stops_is_interrupted_with_its_token() {
     let s = SelfRig::new("su-follow-record");
@@ -561,6 +577,7 @@ fn a_follow_on_that_stops_is_interrupted_with_its_token() {
     let reply = daemon.order(&s.order(NEW, 1));
     assert_eq!(reply.refusal(), Some(Refusal::StoreFailed), "{reply:?}");
     assert_eq!(s.current().as_deref(), Some(OLD));
+    assert_eq!(s.layout().next().expect("next"), None);
     assert!(!daemon.ctx().restart().requested());
 
     let s = SelfRig::new("su-follow-changed");
@@ -629,7 +646,8 @@ fn hostkeeper_steps_that_stop_are_resumed_by_the_resend() {
     assert!(crashed.order(&s.order(NEW, 1)).refusal().is_some());
     assert_eq!(s.current().as_deref(), Some(OLD));
     assert_eq!(s.daemon().order(&s.order(NEW, 1)), awaiting(false));
-    assert_eq!(s.current().as_deref(), Some(NEW));
+    assert_eq!(s.current().as_deref(), Some(OLD));
+    assert_eq!(s.layout().next().expect("next").as_deref(), Some(NEW));
 }
 
 /// Catches the verb the fallback unit runs, or the protocol verb, doing more than they say: the

@@ -7,12 +7,13 @@
 //!   fallback, and it must read every file the release writes.
 //! - **Backward.** A daemon refuses a release of hostkeeper older than its own
 //!   [`OLDEST_READER`] before the commit, since that release could not read this daemon's files
-//!   (`hostkeeper_daemon::selfupdate`, for a release whose floor is above the daemon's
-//!   `LEGACY_FLOOR`).
+//!   (`hostkeeper_daemon::selfupdate`).
 //!
 //! The rule: a release that writes a new format sets [`OLDEST_READER`] to the release that first
-//! read it. Stage 1 of the design keeps it at 0.1.53, the floor every release before it declares,
-//! so every daemon of today updates to stage 1 the old way.
+//! read it. Stage 2 of the design sets it to R1, release 0.1.163, the first release that holds
+//! every pull request of stage 1: it reads a hand-over and settles it, so a stage-2 release can
+//! fall back to it, and no daemon older than R1 takes a stage-2 release (it defers it
+//! `daemon_too_old` before it probes or runs a hook).
 
 use hostkeeper_config::manifest::HostkeeperVersion;
 
@@ -20,5 +21,5 @@ use hostkeeper_config::manifest::HostkeeperVersion;
 pub const OLDEST_READER: HostkeeperVersion = HostkeeperVersion {
     major: 0,
     minor: 1,
-    patch: 53,
+    patch: 163,
 };

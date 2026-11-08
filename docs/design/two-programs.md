@@ -458,6 +458,11 @@ release that first read it.
   later judge it by its floor. The probe call, `ProtocolProbe`, `LauncherProbe`, `ProbeCall`, `ProbeExit`,
   `run_probe`, `probe_command`, `Label::probe` and `PROBE_UNIT` go. A downgrade below R1 is refused by the backward
   rule, so nothing is left to probe. The verb is still answered, printing `1`.
+  **Built** (S2a): `OLDEST_READER` is 0.1.163 (`crates/hostkeeper-steps/src/reader.rs`) and `judge` takes the running
+  version and the target's version alone (`crates/hostkeeper-daemon/src/selfupdate.rs`): the running version and any
+  release from `OLDEST_READER` on are `Accepted`, whatever floor they declare, and any older is `Unsupported`. The
+  probe machinery is gone from the daemon, the step launchers, `hostkeeper-launchd` and the tests; `LEGACY_FLOOR`
+  stays, for the one other question it answers, whether a release's hook steps are built in (4.4).
 - **Stage 3** sets `OLDEST_READER = R2` and deletes the verb and `SELF_UPDATE_PROTOCOL`. A daemon older than R2 defers
   the release before any probe.
 
@@ -518,6 +523,12 @@ is confirmed after the switch is finished. A record without `next`, written the 
   binary still writes its start to the start log at the top of `daemon` (`record_start`,
   `crates/hostkeeper-daemon/src/fallback.rs`, **Built**), as today: R1's Mac job, armed when R1 updates to a stage-2
   release the old way, falls back only on three starts of the new version recorded there.
+  **Built** (S2a): `follow_on` stages, links `next`, then writes the wait with `next` and a count of 0, and moves no
+  `current` (`crates/hostkeeper-steps/src/selfupdate.rs`); the start removes the fallback unit, the drop-in and the job
+  (`remove` in `crates/hostkeeper-daemon/src/selfunits.rs`, drop-in first, one `daemon-reload` on Linux; on a Mac the
+  job is booted out before its plist goes) and, when it cannot, raises `self_update_units`, holds the daemon's own
+  update (`Ctx::hold_self_updates`) and answers it `busy` until the next start, which tries again. A reload that
+  fails after the files are gone is the same error; the files stay gone.
 - **Stage 3** deletes `self-update-fallback`, `fallback.rs` (the start log with it), `selfunits.rs`, `fallback_unit`,
   `main_dropin` and `launchd_fallback_job`. No release of stage 3 is ever run by a fallback unit or judged by a fallback
   job: stage 1 is the last that writes them, a stage-2 daemon removes them before it updates, and stage 3's floor of R2
@@ -603,6 +614,19 @@ runs a released binary. The path needs that, so item X1 comes first:
   fallback files before its own update. A stage-2 binary started from the bootstrap unit seeds and hands over
   (`a_daemon_the_deb_installed_is_installed_its_next_release_and_restarts_into_it`, re-pointed at the bootstrap
   unit), and from the plist on a Mac (`a_daemon_the_pkg_installed_is_installed_its_next_release_and_restarts_into_it`).
+  **Built** (S2a): the Linux tests are those of `tests/self_update.rs`, on a host with neither a fallback unit nor a
+  drop-in; `a_daemon_killed_after_the_exec_is_settled_succeeded_by_the_new_binarys_start` holds the new binary at its
+  start (the fixture flag `--fixture-hold-start`) and kills it there, and
+  `a_daemon_killed_before_the_exec_falls_back_after_three_starts` kills the old daemon holding its exit, with a new
+  binary that cannot start. `a_unit_that_spends_its_start_limit_with_no_update_waiting_is_started_again` is
+  `a_unit_that_cannot_start_with_no_update_waiting_is_retried_until_it_can`: the unit has no start limit, so systemd
+  never leaves a daemon failed. On a Mac, `an_install_of_the_running_version_is_succeeded_without_a_probe_or_a_restart`
+  is `an_install_of_the_running_version_is_succeeded_without_a_restart`, and
+  `the_self_update_protocol_of_a_binary_is_probed_as_a_launchd_job` and its bound test are deleted with the probe. X1 is
+  pinned to R1 (`previous-release.toml`, v0.1.163, with the URLs and digests of `privileged.yml` and `pr-device.yml`);
+  it holds that R1 updates to this build the old way, that this build removes R1's fallback files at its start
+  (`fallback_files_present` of the rig's hosts), that R1's fallback unit and job fall back from a build that cannot
+  start, and that this build hands over to itself.
 - **Stage 3**: X1 pinned to R2; the binary's own tests (`crates/hostkeeper/tests/binary.rs`) assert that each deleted
   verb is a usage error, exit 2.
 - **Between stages**: the status check above, on the farm, before the floor pull request merges.
