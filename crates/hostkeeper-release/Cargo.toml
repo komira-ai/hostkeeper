@@ -1,0 +1,25 @@
+[package]
+name = "hostkeeper-release"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "The checks of a release's targets and manifests (hostkeeper.release.v1), as pure functions the coordinator and the daemon share."
+
+# docs/design/packages.md sections 3.4, 4.4 and 7.1, build item A1. A message goes in and the
+# first rule it breaks comes out: no file, socket, clock, process or hashed collection. What the
+# daemon checks of a staged tree it asks through a function its caller gives. crates/xtask/tests/
+# layering keeps the dependencies to these two.
+[dependencies]
+# The name, path and unit grammars, the refused prefixes, the health URL and boot step rules,
+# the platforms and the daemon's version: today's manifest rules, one copy of each.
+hostkeeper-config = { path = "../hostkeeper-config" }
+# The messages checked, generated from hostkeeper/release/v1/release.proto.
+hostkeeper-proto = { path = "../hostkeeper-proto" }
+prost.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true
