@@ -40,6 +40,12 @@ pub(crate) const INSTALLED_ISSUE_LINK: &str = "/etc/issue.d/hostkeeper.issue";
 /// What that link points at: `hostkeeper_daemon::console::ENROLLMENT_ISSUE`.
 pub(crate) const ISSUE_TARGET: &str = "/run/hostkeeper/enrollment.issue";
 
+/// Where the deb, the rpm and the Arch package install the daemon.
+pub(crate) const INSTALLED_HOSTKEEPER: &str = "/usr/bin/hostkeeper";
+
+/// Where they install the boot server of network install.
+pub(crate) const INSTALLED_PXE: &str = "/usr/bin/hostkeeper-pxe";
+
 /// Each checked file: where it is installed, the staged file it must equal, its mode.
 const CHECKED: [(&str, &str, u32); 2] = [
     (INSTALLED_GH, GH_FILE, 0o755),

@@ -20,6 +20,13 @@ pub const LINUX_PKG_INSTALLED: [&str; 2] = [
     linux_check::INSTALLED_TRUSTED_ROOT,
 ];
 
+/// The programs `release check-linux-pkg --staged` requires a deb, an rpm and an Arch package to
+/// install, each where it is installed and the file name `release nfpm-stage` stages it as.
+pub const LINUX_PKG_PROGRAMS: [(&str, &str); 2] = [
+    (linux_check::INSTALLED_HOSTKEEPER, nfpm_stage::HOSTKEEPER_FILE),
+    (linux_check::INSTALLED_PXE, nfpm_stage::PXE_FILE),
+];
+
 /// The console's issue link `release check-linux-pkg` requires a deb and an rpm to install, and
 /// what it must point at.
 pub const LINUX_PKG_LINK: (&str, &str) =

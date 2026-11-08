@@ -35,6 +35,13 @@ pub(crate) const GH_FILE: &str = "gh";
 /// The file name of the trusted root in the staging directory.
 pub(crate) const TRUSTED_ROOT_FILE: &str = "trusted_root.json";
 
+/// The file name of the daemon in the staging directory, and in the directory of `--binaries`.
+pub(crate) const HOSTKEEPER_FILE: &str = "hostkeeper";
+
+/// The file name of the boot server of network install in the staging directory, and in the
+/// directory of `--binaries`.
+pub(crate) const PXE_FILE: &str = "hostkeeper-pxe";
+
 /// What every line of a trusted root names as its `mediaType`, before its `;version=` part.
 pub(crate) const TRUSTED_ROOT_MEDIA_TYPE: &str = "application/vnd.dev.sigstore.trustedroot+json";
 
