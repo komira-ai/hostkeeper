@@ -24,7 +24,9 @@
 //!   bundle of each beside it
 //!   ([`package_problems`]), and attests the SBOM of each binary tarball ([`sbom_problem`]): a
 //!   host trusts only attested packages, so a release asset list that names a bundle needs the
-//!   steps that make it.
+//!   steps that make it. Its build job makes the mdm package with the steps of [`MDM_STEPS`],
+//!   each under [`MDM_IF`], and its sums job writes and uploads the mdm index ([`MDM_INDEX`],
+//!   [`mdm_problems`]).
 //!
 //! Which job may hold which write scope, under which `if:`, is [`super::lint::WRITE_ALLOWED`].
 
@@ -108,14 +110,40 @@ pub const ATTEST_RUNS: [&str; 2] = [
 /// them a file name, with no quote, no command separator and no substitution.
 pub const BUNDLE_COPY: (&str, &str) = ("cp \"$BUNDLE\" \"dist/", ".sigstore.json\"");
 
-/// The packages the release carries, each as the part of its file name before the version and the
-/// part between the version and the platform: `<prefix>-<version><middle>-<platform>.tar.zst`.
-/// They are hostkeeper's own, hello's, and hello's failing build.
-pub const PACKAGES: [(&str, &str); 3] =
-    [("hostkeeper", ""), ("hello", ""), ("hello", "-fail-ready")];
-
 /// The platforms the release ships packages for.
 pub const PLATFORMS: [&str; 3] = ["linux-x86_64", "linux-arm64", "macos-arm64"];
+
+/// The packages the release carries, each as the part of its file name before the version, the
+/// part between the version and the platform (`<prefix>-<version><middle>-<platform>.tar.zst`)
+/// and the platforms it is built for. They are hostkeeper's own, hello's, and hello's failing
+/// build on every platform, and mdm's on linux-x86_64 alone.
+pub const PACKAGES: [(&str, &str, &[&str]); 4] = [
+    ("hostkeeper", "", &PLATFORMS),
+    ("hello", "", &PLATFORMS),
+    ("hello", "-fail-ready", &PLATFORMS),
+    ("mdm", "", &["linux-x86_64"]),
+];
+
+/// The `if:` of each step of the build job that makes the mdm package: the linux-x86_64 leg of
+/// its matrix, the one platform the package is built for.
+pub const MDM_IF: &str = "matrix.platform == 'linux-x86_64'";
+
+/// The steps of the build job that make the mdm package, in order, each under [`MDM_IF`]: its
+/// program built with the commit, its stamp checked, the pinned archives fetched and checked
+/// against their pins, and the package built from them.
+pub const MDM_STEPS: [&str; 4] = [
+    "cargo build --locked --release -p hostkeeper-mdm --bin mdm",
+    "cargo xtask release check-binary target/release/mdm \"$RELEASE_VERSION\" \"$GITHUB_SHA\"",
+    "cargo xtask release mdm-fetch --dir \"$RUNNER_TEMP/mdm-archives\"",
+    "cargo xtask release package --service mdm --platform \"$PLATFORM\" --version \"$RELEASE_VERSION\" --commit \"$GITHUB_SHA\" --binary target/release/mdm --archives \"$RUNNER_TEMP/mdm-archives\" --out dist",
+];
+
+/// The step of the sums job that writes the mdm package's index, and the file its upload of the
+/// indexes must list, so the attest job finds every file SHA256SUMS lists.
+pub const MDM_INDEX: (&str, &str) = (
+    "cargo xtask release index --service mdm --version \"$RELEASE_VERSION\" --dir dist",
+    "dist/mdm-index.json",
+);
 
 /// The binary tarballs the release carries, each as its program (the stem of its file name,
 /// `<program>-<version>-<platform>.tar.gz`) and the platforms it ships for: hostkeeper's on
@@ -531,6 +559,58 @@ fn artifacts_problems(doc: &Node) -> Vec<String> {
         }
     }
     problems.extend(package_problems(attest));
+    problems.extend(mdm_problems(doc));
+    problems
+}
+
+/// What is wrong with the making of the mdm package: a step of [`MDM_STEPS`] missing from the
+/// build job, out of order, or under another `if:` than [`MDM_IF`] (the program built without
+/// the commit, a package built from archives no step fetched, or a step on a platform the
+/// package is not built for); or the sums job not writing its index ([`MDM_INDEX`]) or not
+/// uploading it with the other indexes.
+fn mdm_problems(doc: &Node) -> Vec<String> {
+    let mut problems = Vec::new();
+    let build = steps(job(doc, "build"));
+    let mut at = 0;
+    for want in MDM_STEPS {
+        let found = build[at..]
+            .iter()
+            .position(|s| text_of(Some(s), "run") == Some(want));
+        let Some(n) = found else {
+            problems.push(format!(
+                "artifacts.yml: job build does not run `{want}` (after the mdm steps before it)"
+            ));
+            continue;
+        };
+        let step = &build[at + n];
+        at += n + 1;
+        if text_of(Some(step), "if") != Some(MDM_IF) {
+            problems.push(format!(
+                "artifacts.yml: job build runs `{want}` without the exact `if: {MDM_IF}`"
+            ));
+        }
+        let stamped = text_of(entry(step, "env"), "RELEASE_COMMIT") == Some("${{ github.sha }}");
+        if want.starts_with("cargo build") && !stamped {
+            problems.push(format!(
+                "artifacts.yml: job build runs `{want}` without RELEASE_COMMIT: ${{{{ github.sha }}}}"
+            ));
+        }
+    }
+    let sums = job(doc, "sums");
+    let (index, uploaded) = MDM_INDEX;
+    if !step_values(sums, "run").contains(&index) {
+        problems.push(format!("artifacts.yml: job sums does not run `{index}`"));
+    }
+    let uploads = steps(sums).iter().any(|s| {
+        text_of(Some(s), "uses").is_some_and(|u| u.starts_with("actions/upload-artifact@"))
+            && text_of(entry(s, "with"), "path")
+                .is_some_and(|p| p.lines().any(|l| l.trim() == uploaded))
+    });
+    if !uploads {
+        problems.push(format!(
+            "artifacts.yml: job sums does not upload {uploaded} with the other indexes"
+        ));
+    }
     problems
 }
 
@@ -542,8 +622,8 @@ fn artifacts_problems(doc: &Node) -> Vec<String> {
 /// SBOM it does not attest ([`sbom_problem`]).
 fn package_problems(attest: Option<&Node>) -> Vec<String> {
     let mut problems = Vec::new();
-    for (prefix, middle) in PACKAGES {
-        for platform in PLATFORMS {
+    for (prefix, middle, platforms) in PACKAGES {
+        for platform in platforms {
             let subject = format!(
                 "dist/{prefix}-${{{{ needs.version.outputs.version }}}}{middle}-{platform}.tar.zst"
             );

@@ -39,6 +39,8 @@ are for the two Linux platforms; the installer pkg is for `macos-arm64`.
 | `hello-<version>-<platform>.tar.zst.sha256` | the SHA-256 of that package |
 | `hello-<version>-fail-ready-<platform>.tar.zst` | hello's failing build: the same package at the version `<version>-fail-ready`, whose unit (or plists) start `hello` with `--fail-ready`, so that it never reports ready (the build a host is rolled back from); it differs from the hello package only in the manifest's `version` and the command line its unit or plists start it with |
 | `hello-<version>-fail-ready-<platform>.tar.zst.sha256` | the SHA-256 of that package |
+| `mdm-<version>-linux-x86_64.tar.zst` | the package of `mdm`, the MDM server stack as a service hostkeeper installs (docs/design/two-programs.md section 6.2), for linux-x86_64 only: `manifest.toml`, `bin/mdm` (its hook and its operator verbs, built from `crates/hostkeeper-mdm`, which prints `mdm X.Y.Z+<first 12 hex digits of the commit>` for `--version`), the pinned servers and lego under `bin/` (`caddy`, `depserver`, `depsyncer`, `lego`, `nanohub`, `scepserver`, each taken out of its upstream archive after the archive matched its pin in `crates/hostkeeper-mdm-core/pins.txt`), and its units under `units/` |
+| `mdm-<version>-linux-x86_64.tar.zst.sha256` | the SHA-256 of that package |
 | `hostkeeper_<version>_<deb-arch>.deb` | the deb package: the daemon, its unit, its tmpfiles rules, its config template, the pinned `gh` and Sigstore trusted root it checks packages with, `/usr/bin/hostkeeper-pxe` (the boot server of network install, docs/design/network-install.md section 3, with no unit: it runs only when an operator starts it), and the link `/etc/issue.d/hostkeeper.issue` to the console's issue file the daemon writes while it waits for its enrollment |
 | `hostkeeper-<version>-1.<rpm-arch>.rpm` | the rpm package, with the same files and link |
 | `hostkeeper-coordinator-<version>-<linux-platform>.tar.gz` | the coordinator binary |
@@ -50,6 +52,7 @@ are for the two Linux platforms; the installer pkg is for `macos-arm64`.
 | `index.json` | the release index of the hostkeeper packages: for each of the three platforms the package file, its SHA-256 and size |
 | `hello-index.json` | the release index of the hello packages (`service` `hello`, `version` `<version>`) |
 | `hello-fail-ready-index.json` | the release index of hello's failing build (`service` `hello`, `version` `<version>-fail-ready`) |
+| `mdm-index.json` | the release index of the mdm package (`service` `mdm`, `version` `<version>`), which lists linux-x86_64 alone |
 | `hkctl-<version>` | the command line of the coordinator ([docs/cli.md](../cli.md)): one bash script for every platform, generated from the protobuf services, that calls the coordinator's JSON gateway with `curl`; it needs bash 3.2 or later and curl 7.55 or later. No host package carries it |
 | `netboot.json` | the boot sets of network install (docs/design/network-install.md, section 5): for each Linux platform the Ubuntu live-server ISO, the shim, the signed network GRUB, the kernel and the initrd a bare machine boots, each with the name it is served as, its size, its SHA-256 and where it comes from, rendered from `packaging/netboot/pins.toml` (`cargo xtask release netboot`) |
 | `SHA256SUMS` | the SHA-256 of every asset except itself and the bundles |
@@ -74,7 +77,8 @@ anyone can rebuild it from the commit and compare; before it is released it is a
 through its entrypoint with `--version`, which must print the coordinator's stamp.
 
 A release holds the assets of all three platforms; `cargo xtask release check` refuses one that
-lacks any of them, and each index lists the package of each. The pkg carries no installer
+lacks any of them, and each index lists the package of each, but for `mdm-index.json`, which
+lists the one platform the mdm package is built for. The pkg carries no installer
 signature (that needs an Apple Developer ID Installer identity, which this project does not hold):
 verify it by its attestation, steps 3 and 4, like any other asset. Names are only ever added,
 never renamed or removed, so a consumer ignores assets it does not know.
@@ -92,6 +96,7 @@ SHA256SUMS
 index.json
 hello-index.json
 hello-fail-ready-index.json
+mdm-index.json
 netboot.json
 netboot.json.sigstore.json
 hkctl-<version>
@@ -122,6 +127,9 @@ hello-<version>-<platform>.tar.zst.sha256
 hello-<version>-fail-ready-<platform>.tar.zst
 hello-<version>-fail-ready-<platform>.tar.zst.sigstore.json
 hello-<version>-fail-ready-<platform>.tar.zst.sha256
+mdm-<version>-linux-x86_64.tar.zst
+mdm-<version>-linux-x86_64.tar.zst.sigstore.json
+mdm-<version>-linux-x86_64.tar.zst.sha256
 ```
 
 ## What the deb and the rpm check packages with

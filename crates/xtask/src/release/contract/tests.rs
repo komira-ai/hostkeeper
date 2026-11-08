@@ -42,7 +42,7 @@ fn asset_names_are_the_documented_contract() {
     let v = version("7.8.9");
     let names = asset_names(&v, &Platform::RELEASED);
     assert_eq!(names, baseline_for(&v));
-    assert_eq!(names.len(), 70);
+    assert_eq!(names.len(), 74);
     assert_eq!(documented_names(DOC, &v), Ok(names.clone()));
     // The document changed alone: a name dropped, or one renamed.
     let image = "hostkeeper-coordinator-<version>-<linux-platform>.image.tar\n";
@@ -81,19 +81,20 @@ fn asset_name_list_only_grows() {
 #[test]
 fn tag_and_version_string_formats_are_pinned() {
     // Catches: a tag that is not `v<X.Y.Z>`, a `--version` text other than
-    // `hostkeeper X.Y.Z+<12 hex>` (`hostkeeper-coordinator ...` and `hostkeeper-mdm ...` for the
-    // other two shipped binaries), a shipped binary dropped, or a change of the signer identity.
+    // `hostkeeper X.Y.Z+<12 hex>` (`hostkeeper-coordinator ...`, `hostkeeper-mdm ...` and
+    // `mdm ...`, the mdm package's program, for the other shipped binaries), a shipped binary dropped, or a change of the signer identity.
     let v = version("0.1.27");
     let c = commit("0123456789abcdef0123456789abcdef01234567");
     assert_eq!(v.tag(), "v0.1.27");
     assert_eq!(Version::of_tag("v0.1.27"), Some(v));
     assert_eq!(stamp_string(&v, &c), "hostkeeper 0.1.27+0123456789ab");
     assert_eq!(
-        PROGRAMS.map(|p| stamp_of(p, &v, &c)),
+        STAMPED.map(|p| stamp_of(p, &v, &c)),
         [
             "hostkeeper 0.1.27+0123456789ab",
             "hostkeeper-coordinator 0.1.27+0123456789ab",
             "hostkeeper-mdm 0.1.27+0123456789ab",
+            "mdm 0.1.27+0123456789ab",
         ]
     );
     assert_eq!(RELEASE_COMMIT, "RELEASE_COMMIT");
@@ -218,9 +219,9 @@ fn the_attested_and_summed_names_partition_the_assets() {
     let v = version("0.1.3");
     let attested = attested_names(&v);
     let summed = summed_names(&v);
-    assert_eq!(attested.len(), 25);
-    assert_eq!(summed.len(), 44);
-    for index in [INDEX, HELLO_INDEX, HELLO_FAIL_READY_INDEX] {
+    assert_eq!(attested.len(), 26);
+    assert_eq!(summed.len(), 47);
+    for index in [INDEX, HELLO_INDEX, HELLO_FAIL_READY_INDEX, MDM_INDEX] {
         assert!(summed.contains(&index.to_owned()) & !attested.contains(&index.to_owned()));
     }
     // The boot sets of network install are summed and attested, with a bundle of their own, and
@@ -231,9 +232,19 @@ fn the_attested_and_summed_names_partition_the_assets() {
     assert!(attested.iter().all(|a| summed.contains(a)));
     assert!(!summed.iter().any(|n| is_bundle(n) | (n == SUMS)));
     for package in Package::ALL {
-        for platform in Platform::RELEASED {
+        for &platform in package.platforms() {
             assert!(attested.contains(&package.package_name(&v, platform)));
         }
+    }
+    // The mdm package is attested for linux-x86_64 and is no asset for any other platform.
+    assert!(attested.contains(&"mdm-0.1.3-linux-x86_64.tar.zst".to_owned()));
+    assert!(summed.contains(&"mdm-0.1.3-linux-x86_64.tar.zst.sha256".to_owned()));
+    for platform in [Platform::LinuxArm64, Platform::MacosArm64] {
+        let name = Package::Mdm.package_name(&v, platform);
+        assert!(
+            !summed.contains(&name) & !attested.contains(&name),
+            "{name}"
+        );
     }
     assert!(attested.contains(&installer_name(&v)));
     assert_eq!(
@@ -278,8 +289,8 @@ fn there_are_exactly_three_platforms_and_a_release_ships_all_three() {
 
 #[test]
 fn a_macos_platform_has_a_binary_a_package_an_installer_and_an_sbom_but_no_linux_assets() {
-    // Catches: a deb, an rpm, a coordinator, an MDM kit binary or an image named for macOS
-    // (the MDM kit is Linux-only), its packages (the
+    // Catches: a deb, an rpm, a coordinator, an MDM kit binary, an mdm package or an image named
+    // for macOS (the MDM kit and the mdm package are Linux-only), its packages (the
     // hostkeeper one, the hello one and hello's failing build) without a bundle or digest file,
     // or its installer pkg missing or not attested.
     let v = version("0.2.1");
@@ -306,6 +317,7 @@ fn a_macos_platform_has_a_binary_a_package_an_installer_and_an_sbom_but_no_linux
             "hostkeeper-0.2.1-macos-arm64.tar.zst.sha256",
             "hostkeeper-0.2.1-macos-arm64.tar.zst.sigstore.json",
             "index.json",
+            "mdm-index.json",
             "netboot.json",
             "netboot.json.sigstore.json",
         ]
@@ -362,25 +374,36 @@ fn the_services_and_packages_name_their_packages_and_indexes() {
     assert_eq!(Service::default(), Service::Hostkeeper);
     assert_eq!(Service::Hostkeeper.name(), "hostkeeper");
     assert_eq!(Service::Hello.name(), "hello");
+    assert_eq!(Service::Mdm.name(), "mdm");
     assert_eq!(
         Package::ALL,
-        [Package::Hostkeeper, Package::Hello, Package::HelloFailReady]
+        [
+            Package::Hostkeeper,
+            Package::Hello,
+            Package::HelloFailReady,
+            Package::Mdm
+        ]
     );
     assert_eq!(
         Package::ALL.map(Package::index_name),
         [
             "index.json",
             "hello-index.json",
-            "hello-fail-ready-index.json"
+            "hello-fail-ready-index.json",
+            "mdm-index.json"
         ]
     );
     assert_eq!(
         Package::ALL.map(|p| p.service().name()),
-        ["hostkeeper", "hello", "hello"]
+        ["hostkeeper", "hello", "hello", "mdm"]
     );
     assert_eq!(
         Package::ALL.map(|p| p.version_text(&v)),
-        ["1.2.3", "1.2.3", "1.2.3-fail-ready"]
+        ["1.2.3", "1.2.3", "1.2.3-fail-ready", "1.2.3"]
+    );
+    assert_eq!(
+        Package::Mdm.package_name(&v, Platform::LinuxX86_64),
+        "mdm-1.2.3-linux-x86_64.tar.zst"
     );
     assert_eq!(
         Package::Hello.package_name(&v, Platform::MacosArm64),
@@ -409,6 +432,19 @@ fn a_package_is_chosen_by_service_and_fail_ready_and_hostkeeper_has_no_failing_b
         Some(Package::HelloFailReady)
     );
     assert_eq!(Package::of(Service::Hostkeeper, true), None);
+    assert_eq!(Package::of(Service::Mdm, false), Some(Package::Mdm));
+    assert_eq!(Package::of(Service::Mdm, true), None);
+}
+
+#[test]
+fn the_mdm_package_is_released_for_linux_x86_64_alone_and_the_others_for_every_platform() {
+    // Catches: an mdm package or index asked for on linux-arm64 or macOS, whose pinned tools are
+    // linux-amd64 builds (a release would then be refused for lacking it), or another package
+    // losing a platform.
+    for package in [Package::Hostkeeper, Package::Hello, Package::HelloFailReady] {
+        assert_eq!(package.platforms(), Platform::RELEASED);
+    }
+    assert_eq!(Package::Mdm.platforms(), [Platform::LinuxX86_64]);
 }
 
 #[test]

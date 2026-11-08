@@ -1,8 +1,12 @@
 //! `release package`: the package of one service, the archive of design sections 4.7 and 5.5,
-//! built the same bytes every time for one commit and version. There are two services
-//! ([`Service`]): hostkeeper's own package, from a unit file given with `--unit`, and `hello`, the
+//! built the same bytes every time for one commit and version. There are three services
+//! ([`Service`]): hostkeeper's own package, from a unit file given with `--unit`; `hello`, the
 //! example service of `examples/hello`, whose manifest and units this module's [`hello`] child
-//! renders from one description for each platform's kind of unit. Hello's package has a failing
+//! renders from one description for each platform's kind of unit; and `mdm`, the MDM server
+//! stack (docs/design/two-programs.md section 6.2), whose manifest and units are
+//! `hostkeeper_mdm_core::package`'s and whose pinned tools [`mdm`] takes out of the archives
+//! given with `--archives`, each checked against its pin first. The mdm package is built for
+//! linux-x86_64 only. Hello's package has a failing
 //! build, `--fail-ready`: the same package at the version `<V>-fail-ready`, differing from hello's
 //! only in that version (the manifest's), in the unit's `ExecStart` and in the plists'
 //! `ProgramArguments`, which gain `--fail-ready`.
@@ -17,7 +21,9 @@
 //! (`<packages-dir>/hostkeeper/current/files/trusted_root.json`), so the manifest places no file
 //! and each update of hostkeeper brings the root its release was built with. Hello has `bin/hello`, and under `units/` on Linux
 //! `hello@.service`, on macOS `hello.a.plist` and `hello.b.plist` (a package holds one kind of
-//! unit). Directories are 0555. Hostkeeper's macos-arm64 package has no `units/` and its manifest
+//! unit). Mdm has `bin/mdm` and, beside it, the binaries of its pinned tools (`caddy`,
+//! `depserver`, `depsyncer`, `lego`, `nanohub`, `scepserver`, 0555), and its units under `units/`
+//! (0444). Directories are 0555. Hostkeeper's macos-arm64 package has no `units/` and its manifest
 //! no `[units]`: on a Mac the daemon's launchd job is the plist the installer pkg places
 //! (`macos_pkg`), and the manifest's plist labels are `<service>` or `<service>.<more>`, which the
 //! daemon's label, `dev.hostkeeper.hostkeeper`, is not. Every header has uid and gid 0, empty user
@@ -28,9 +34,12 @@
 //!
 //! Hostkeeper's package refuses `--fail-ready`, a missing `--trusted-root`, a missing `--unit` on
 //! Linux and any `--unit` on macOS; hello's refuses `--unit` and `--trusted-root`, and builds for
-//! every platform. Before the archive is built,
+//! every platform; mdm's refuses `--unit`, `--trusted-root`, `--fail-ready`, a missing
+//! `--archives` and any platform but linux-x86_64, and only mdm's takes `--archives`. Before the
+//! archive is built,
 //! every systemd unit is checked (design section 4.7: a unit names package files only through the
-//! service's own `current`; hello's unit starts its binary through that `current`, and
+//! service's own `current`; hello's unit starts its binary through that `current`, mdm's start a
+//! binary of `bin/` through it, and
 //! hostkeeper's starts [`SELF_UPDATE_CURRENT`], the binary its own update switches) and the entry
 //! list is checked against the rules of section 5.5 that apply to a list this module builds
 //! ([`check_entries`]).
@@ -51,6 +60,7 @@ use super::ports::GitHistory;
 
 mod hello;
 pub(super) mod linux_check;
+mod mdm;
 pub(super) mod nfpm_stage;
 
 /// Why a Linux package of hostkeeper needs `--unit`.
@@ -76,6 +86,20 @@ pub(super) const NEEDS_TRUSTED_ROOT: &str = "the hostkeeper package carries the 
 pub(super) const TRUSTED_ROOT_REFUSED: &str =
     "the hello package takes no --trusted-root: only hostkeeper's package carries the trusted root";
 
+/// Why `--archives` is refused for hostkeeper and hello.
+const ARCHIVES_ONLY_MDM: &str =
+    "--archives is an option of the mdm package: only it carries pinned third-party tools";
+
+/// Why the mdm package needs `--archives`.
+const MDM_NEEDS_ARCHIVES: &str = "the mdm package carries the pinned tools of hostkeeper-mdm-core's pins.txt: pass --archives with the directory `release mdm-fetch` filled";
+
+/// Why mdm's package takes no `--unit`, `--trusted-root` or `--fail-ready`.
+const MDM_REFUSED: &str = "the mdm package takes no --unit, --trusted-root or --fail-ready: its units are hostkeeper-mdm-core's, and it has no failing build";
+
+/// Why mdm's package is built for linux-x86_64 alone.
+const MDM_PLATFORM: &str =
+    "the mdm package is built for linux-x86_64 only: the pinned tools are linux-amd64 builds";
+
 /// Where hostkeeper's package holds the Sigstore trusted root: the daemon reads it there, under
 /// the version directory `current` names.
 const TRUSTED_ROOT_ENTRY: &str = "files/trusted_root.json";
@@ -97,6 +121,9 @@ pub(crate) struct Request {
     /// The Sigstore trusted root of the hostkeeper package, as `gh attestation trusted-root`
     /// prints it: `files/trusted_root.json` in the package. Hello's package carries none.
     pub(crate) trusted_root: Option<PathBuf>,
+    /// The directory of the pinned archives of the mdm package (`release mdm-fetch`); none for
+    /// the others.
+    pub(crate) archives: Option<PathBuf>,
     /// The directory the package and its digest file are written to.
     pub(crate) out: PathBuf,
 }
@@ -144,12 +171,43 @@ fn binary_path(service: &str) -> String {
 /// binary the update chose; the package's own `bin/hostkeeper` is what the update stages.
 pub(crate) const SELF_UPDATE_CURRENT: &str = "/var/lib/updater/state/hostkeeper/bin/current";
 
-/// The program the unit of `service` must start: [`SELF_UPDATE_CURRENT`] for hostkeeper, the
+/// The program the unit of `service` must start: [`SELF_UPDATE_CURRENT`] for hostkeeper, a
+/// binary of `bin/` through mdm's `current` for mdm (its units start the pinned tools), the
 /// service's binary through its `current` ([`binary_path`]) for any other.
-fn started_program(service: &str) -> String {
-    match service == Service::Hostkeeper.name() {
-        true => SELF_UPDATE_CURRENT.to_owned(),
-        false => binary_path(service),
+enum Started {
+    /// Exactly this program.
+    Exactly(String),
+    /// A file directly in this directory (the text ends with `/`).
+    Under(String),
+}
+
+impl Started {
+    fn of(service: &str) -> Started {
+        if service == Service::Hostkeeper.name() {
+            Started::Exactly(SELF_UPDATE_CURRENT.to_owned())
+        } else if service == Service::Mdm.name() {
+            Started::Under(format!("{PACKAGES}{}bin/", current(service)))
+        } else {
+            Started::Exactly(binary_path(service))
+        }
+    }
+
+    /// Whether `program` is one this allows.
+    fn allows(&self, program: &str) -> bool {
+        match self {
+            Started::Exactly(want) => program == want,
+            Started::Under(dir) => program
+                .strip_prefix(dir.as_str())
+                .is_some_and(|name| !name.is_empty() & !name.contains('/')),
+        }
+    }
+
+    /// What a refusal says the unit lacks.
+    fn wanted(&self) -> String {
+        match self {
+            Started::Exactly(want) => format!("naming {want}"),
+            Started::Under(dir) => format!("naming a program in {dir}"),
+        }
     }
 }
 
@@ -197,13 +255,15 @@ struct Unit {
     data: Vec<u8>,
 }
 
-/// What a service's package holds besides its binary: no units for hostkeeper on macOS, and
-/// the trusted root for hostkeeper only.
+/// What a service's package holds besides its binary: no units for hostkeeper on macOS, the
+/// trusted root for hostkeeper only, and more binaries for mdm only.
 struct Contents {
     manifest: String,
     units: Vec<Unit>,
     /// The bytes of `files/trusted_root.json`.
     trusted_root: Option<Vec<u8>>,
+    /// The other files of `bin/`, by name: mdm's pinned tools.
+    binaries: Vec<(String, Vec<u8>)>,
 }
 
 /// The oldest daemon that takes hostkeeper's own package: the first whose unit starts the binary
@@ -248,6 +308,8 @@ enum Source<'a> {
     NoUnit,
     /// Rendered for the platform.
     Rendered,
+    /// The mdm package's: its units and the tools out of the archives in this directory.
+    Mdm(&'a Path),
 }
 
 /// The package the request builds and where its units come from, or why the request asks for
@@ -257,6 +319,8 @@ fn source(request: &Request) -> Result<(Package, Source<'_>), Error> {
     let mac = request.platform == Platform::MacosArm64;
     let root = request.trusted_root.is_some();
     match (request.service, request.unit.as_deref()) {
+        (Service::Mdm, _) => mdm_source(request),
+        _ if request.archives.is_some() => refuse(ARCHIVES_ONLY_MDM),
         (Service::Hostkeeper, _) if request.fail_ready => refuse(FAIL_READY_ONLY_HELLO),
         (Service::Hostkeeper, _) if !root => refuse(NEEDS_TRUSTED_ROOT),
         (Service::Hello, _) if root => refuse(TRUSTED_ROOT_REFUSED),
@@ -272,6 +336,19 @@ fn source(request: &Request) -> Result<(Package, Source<'_>), Error> {
     }
 }
 
+/// [`source`] for the mdm package: its units and the directory of its archives, or why the
+/// request asks for something it does not take.
+fn mdm_source(request: &Request) -> Result<(Package, Source<'_>), Error> {
+    let refuse = |why: &str| Err(Error::Failed(why.to_owned()));
+    let other_input = request.unit.is_some() | request.trusted_root.is_some() | request.fail_ready;
+    match request.archives.as_deref() {
+        _ if other_input => refuse(MDM_REFUSED),
+        _ if request.platform != Platform::LinuxX86_64 => refuse(MDM_PLATFORM),
+        None => refuse(MDM_NEEDS_ARCHIVES),
+        Some(dir) => Ok((Package::Mdm, Source::Mdm(dir))),
+    }
+}
+
 /// Builds the package of `request` and its digest file; the lines to print.
 pub(crate) fn package(git: &dyn GitHistory, request: &Request) -> Result<Vec<String>, Error> {
     package_dated(request, || Ok(git.commit_time(&request.commit)?))
@@ -282,6 +359,16 @@ pub(crate) fn package(git: &dyn GitHistory, request: &Request) -> Result<Vec<Str
 pub(crate) fn package_dated(
     request: &Request,
     mtime: impl FnOnce() -> Result<u64, Error>,
+) -> Result<Vec<String>, Error> {
+    package_pinned(request, mtime, super::mdm_fetch::built_in_pins)
+}
+
+/// [`package_dated`], with the mdm package's pins from `pins` (asked for only when the package is
+/// mdm's) in place of hostkeeper-mdm-core's built-in pins.
+fn package_pinned(
+    request: &Request,
+    mtime: impl FnOnce() -> Result<u64, Error>,
+    pins: impl FnOnce() -> Result<hostkeeper_mdm_core::pins::Pins, Error>,
 ) -> Result<Vec<String>, Error> {
     let (kind, source) = source(request)?;
     let name = request.service.name();
@@ -296,16 +383,24 @@ pub(crate) fn package_dated(
                 data: read(path)?,
             }],
             trusted_root,
+            binaries: Vec::new(),
         },
         Source::NoUnit => Contents {
             manifest: manifest(&request.version, request.platform, false),
             units: Vec::new(),
             trusted_root,
+            binaries: Vec::new(),
         },
         Source::Rendered => hello::contents(
             request.platform,
             &kind.version_text(&request.version),
             request.fail_ready,
+        )?,
+        Source::Mdm(dir) => mdm::contents(
+            &pins()?,
+            dir,
+            &kind.version_text(&request.version),
+            &request.version.min(MIN_HOSTKEEPER).to_string(),
         )?,
     };
     for unit in contents
@@ -349,15 +444,16 @@ fn write(path: &Path, bytes: &[u8]) -> Result<(), Error> {
 fn check_unit(service: &str, origin: &str, unit: &[u8]) -> Result<(), Error> {
     let text = std::str::from_utf8(unit)
         .map_err(|_| Error::Failed(format!("{origin} is not UTF-8 text")))?;
-    let binary = started_program(service);
+    let started = Started::of(service);
     let starts_it = text.lines().any(|l| {
         l.strip_prefix("ExecStart=")
             .and_then(|command| command.split_whitespace().next())
-            == Some(binary.as_str())
+            .is_some_and(|program| started.allows(program))
     });
     if !starts_it {
         return Err(Error::Failed(format!(
-            "{origin} has no ExecStart line naming {binary}"
+            "{origin} has no ExecStart line {}",
+            started.wanted()
         )));
     }
     let current = current(service);
@@ -381,6 +477,12 @@ fn entries(service: &str, binary: Vec<u8>, contents: Contents) -> Vec<Entry> {
         Entry::file(&format!("bin/{service}"), 0o555, binary),
         Entry::file("manifest.toml", 0o444, contents.manifest.into_bytes()),
     ];
+    entries.extend(
+        contents
+            .binaries
+            .into_iter()
+            .map(|(name, bytes)| Entry::file(&format!("bin/{name}"), 0o555, bytes)),
+    );
     if let Some(root) = contents.trusted_root {
         entries.push(Entry::dir("files/"));
         entries.push(Entry::file(TRUSTED_ROOT_ENTRY, 0o444, root));

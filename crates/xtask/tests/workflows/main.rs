@@ -14,6 +14,7 @@ mod channel_run_tests;
 mod desired;
 mod desired_tests;
 mod lint;
+mod mdm_package_tests;
 mod net_install;
 mod net_install_tests;
 mod pr_device;

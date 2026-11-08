@@ -162,10 +162,6 @@ pub const HEALTH_URL: &str = "http://127.0.0.1:9004/version";
 /// The file name of every drop-in the hook writes, in `<unit>.d/`.
 pub const DROP_IN: &str = "settings.conf";
 
-/// The oldest daemon the package asks for: the floor of hostkeeper's own package, which every
-/// host of the farm runs or is newer than.
-pub const MIN_HOSTKEEPER: &str = "0.1.53";
-
 /// Why a host's settings file does not fit the package.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum PackageError {
@@ -275,8 +271,10 @@ pub const TIMEOUTS: [(&str, u64); 6] = [
 /// How long `verify` may keep deferring (the services coming up) before the update fails.
 pub const VERIFY_DEADLINE_SECS: u64 = 600;
 
-/// The package's `manifest.toml` for the version text `version`.
-pub fn manifest(version: &str) -> String {
+/// The package's `manifest.toml` for the version text `version`, asking for a daemon of
+/// `min_hostkeeper` or later (the builder gives the floor of hostkeeper's own package, or the
+/// package's version when that is older: a build of the workspace's unreleased version).
+pub fn manifest(version: &str, min_hostkeeper: &str) -> String {
     let timeouts: String = TIMEOUTS
         .iter()
         .map(|(step, secs)| format!("{step} = {secs}\n"))
@@ -291,7 +289,7 @@ pub fn manifest(version: &str) -> String {
          name = \"{SERVICE}\"\n\
          version = \"{version}\"\n\
          platform = \"{PLATFORM}\"\n\
-         min_hostkeeper = \"{MIN_HOSTKEEPER}\"\n\
+         min_hostkeeper = \"{min_hostkeeper}\"\n\
          \n\
          [hook]\n\
          command = [\"bin/{SERVICE}\", \"update-hook\"]\n\

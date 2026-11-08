@@ -40,8 +40,9 @@ fn a_new_release_with_good_sums_and_attestations_is_staged_with_its_exact_bytes(
 
 #[test]
 fn a_hostkeeper_release_is_checked_by_release_check_and_each_of_its_services_staged() {
-    // Catches: a hostkeeper release staged without `release check`, or only one of the three
-    // service versions its indexes name staged.
+    // Catches: a hostkeeper release staged without `release check`, only one of the four
+    // service versions its indexes name staged, or the mdm package, built for linux-x86_64
+    // alone, refused for lacking the other platforms (or staged with packages it does not have).
     let c = channel("sync-hostkeeper");
     let version: Version = "0.1.36".parse().expect("a version");
     let assets = hostkeeper_release(&version);
@@ -59,8 +60,15 @@ fn a_hostkeeper_release_is_checked_by_release_check_and_each_of_its_services_sta
         &assets,
         "hello-fail-ready-index.json",
     ));
+    want.extend(staged_for(
+        "mdm",
+        "0.1.36",
+        &assets,
+        "mdm-index.json",
+        &[Platform::LinuxX86_64],
+    ));
     assert_eq!(snapshot(&c.dir), want);
-    assert_eq!(lines.len(), 4, "{lines:?}");
+    assert_eq!(lines.len(), 5, "{lines:?}");
     assert!(
         verifier
             .signers
@@ -69,9 +77,10 @@ fn a_hostkeeper_release_is_checked_by_release_check_and_each_of_its_services_sta
             .all(|s| s == SIGNER_WORKFLOW)
     );
     // Every attested asset of the release, as `release check` verifies them; then the three
-    // packages of each of the three versions, by the trust list's signer of its service.
+    // packages of each of the three versions and mdm's one, by the trust list's signer of its
+    // service.
     let attested = crate::release::contract::attested_names(&version).len();
-    assert_eq!(verifier.calls.borrow().len(), 2 * attested + 2 * 9);
+    assert_eq!(verifier.calls.borrow().len(), 2 * attested + 2 * 10);
 }
 
 #[test]

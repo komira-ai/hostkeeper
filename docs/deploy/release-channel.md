@@ -109,7 +109,10 @@ of v<X.Y.Z>`), until the sync's xtask is built again from that release's commit 
 
 The trust list is a TOML file with one `[[service]]` table per service the channel stages. The
 committed [`channel-sync/trust-list.toml`](channel-sync/trust-list.toml) lists hostkeeper, hello,
-tierstore and js-agent:
+mdm, tierstore and js-agent. A hostkeeper release carries `mdm-index.json`, so a list without mdm
+has every hostkeeper release's mdm version refused (and the run fails after staging the rest);
+the mdm package is built for linux-x86_64 alone, and its version is staged with that one
+platform:
 
 ```toml
 # tierstore: its own repository, signed by its artifacts.yml on each push to main.

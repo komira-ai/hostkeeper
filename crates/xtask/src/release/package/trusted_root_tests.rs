@@ -111,6 +111,7 @@ fn the_entry_lists_of_hostkeeper_with_the_trusted_root_pass_the_shape_check() {
             data: Vec::new(),
         }],
         trusted_root: Some(TRUSTED_ROOT.to_vec()),
+        binaries: Vec::new(),
     };
     assert_eq!(
         check_entries(&entries("hostkeeper", Vec::new(), with_unit)),
@@ -120,6 +121,7 @@ fn the_entry_lists_of_hostkeeper_with_the_trusted_root_pass_the_shape_check() {
         manifest: manifest(&version(), Platform::MacosArm64, false),
         units: Vec::new(),
         trusted_root: Some(TRUSTED_ROOT.to_vec()),
+        binaries: Vec::new(),
     };
     assert_eq!(
         check_entries(&entries("hostkeeper", Vec::new(), without_unit)),

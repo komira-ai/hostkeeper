@@ -111,7 +111,7 @@ pub const LAYERS: [Layer; 31] = [
         &[CONFIG, HOOK, PROTO, STEPS, WIRE],
         &[COORDINATOR, ENROLL, OIDC, TLS],
     ),
-    (MDM, &[MDM_CORE, MDM_STEP], &[]),
+    (MDM, &[HOOK, MDM_CORE, MDM_STEP], &[]),
     (MDM_CORE, &[], &[]),
     (MDM_GATE, &[CONFIG, ENROLLMENT, WIRE], &[]),
     (MDM_STEP, &[], &[]),

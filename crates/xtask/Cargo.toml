@@ -31,6 +31,11 @@ hostkeeper-proto = { path = "../hostkeeper-proto" }
 # (`release macos-pkg`), and the launchd plists of a macOS service package
 # (`release package --service hello`), rendered with the renderer the daemon's own plists use.
 hostkeeper-launchd = { path = "../hostkeeper-launchd" }
+# The mdm package (`release package --service mdm`, `release mdm-fetch`): its manifest, units and
+# the pins of the tools it carries from hostkeeper-mdm-core, and the tools taken out of their
+# archives by the kit's own archive reader in hostkeeper-mdm.
+hostkeeper-mdm = { path = "../hostkeeper-mdm" }
+hostkeeper-mdm-core = { path = "../hostkeeper-mdm-core" }
 # The zstd compression of the hostkeeper package (`release package`).
 ruzstd.workspace = true
 # Reads back the launchd plist of the installer pkg (`release check-macos-pkg`); writes the

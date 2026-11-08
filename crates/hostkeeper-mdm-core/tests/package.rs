@@ -171,7 +171,10 @@ fn every_variable_a_unit_reads_is_set_by_its_drop_in() {
 /// units are files of the package, and its health URL names NanoHUB's fixed port.
 #[test]
 fn the_manifest_is_the_golden_bytes_and_names_the_packages_units() {
-    assert_eq!(manifest("1.2.3"), read("golden/package/manifest.toml"));
+    assert_eq!(
+        manifest("1.2.3", "0.1.53"),
+        read("golden/package/manifest.toml")
+    );
     for unit in RUN {
         assert!(UNITS.iter().any(|u| u.name == unit), "{unit}");
     }

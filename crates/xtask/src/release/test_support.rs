@@ -79,6 +79,7 @@ pub fn linux_package(
         unit: Some(unit.to_path_buf()),
         fail_ready: false,
         trusted_root: Some(trusted_root.to_path_buf()),
+        archives: None,
         out: out.to_path_buf(),
     };
     package_dated(&request, || Ok(mtime)).map_err(|e| e.to_string())
