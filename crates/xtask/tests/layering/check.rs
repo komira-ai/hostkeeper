@@ -24,6 +24,7 @@ const ENROLLMENT: &str = "hostkeeper-enrollment";
 const MDM_GATE: &str = "hostkeeper-mdm-gate";
 const OBSERVE: &str = "hostkeeper-observe";
 const LAUNCHD: &str = "hostkeeper-launchd";
+const OPENRC: &str = "hostkeeper-openrc";
 const MDM: &str = "hostkeeper-mdm";
 const MDM_STEP: &str = "hostkeeper-mdm-step";
 const PXE: &str = "hostkeeper-pxe";
@@ -82,7 +83,7 @@ pub type Layer = (
 /// packet with its packet crate; the `mdm` package's certificate-unit test loads that package's
 /// units and drop-ins (`hostkeeper-mdm-core`) into the host's systemd. The binary's tests run
 /// the macOS pkg's postinstall (`hostkeeper-launchd`) against the binary.
-pub const LAYERS: [Layer; 30] = [
+pub const LAYERS: [Layer; 31] = [
     (BINARY, &[DAEMON], &[LAUNCHD]),
     (CI, &[PROTO], &[]),
     (CONFIG, &[], &[]),
@@ -94,7 +95,8 @@ pub const LAYERS: [Layer; 30] = [
     (
         DAEMON,
         &[
-            CI, CONFIG, ENROLL, HOOK, LAUNCHD, LINK, OBSERVE, PACKAGE, PLACED, PROTO, STEPS, UNPACK,
+            CI, CONFIG, ENROLL, HOOK, LAUNCHD, LINK, OBSERVE, OPENRC, PACKAGE, PLACED, PROTO, STEPS,
+            UNPACK,
         ],
         &[COORDINATOR, HELLO, OIDC, TLS, WIRE],
     ),
@@ -115,6 +117,7 @@ pub const LAYERS: [Layer; 30] = [
     (MDM_STEP, &[], &[]),
     (OBSERVE, &[CONFIG, PROTO], &[HOOK, STEPS]),
     (OIDC, &[], &[]),
+    (OPENRC, &[OBSERVE, PLACED, STEPS], &[HOOK]),
     (PACKAGE, &[CONFIG, HOOK, STEPS], &[]),
     (PLACED, &[CONFIG], &[]),
     (

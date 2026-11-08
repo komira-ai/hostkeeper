@@ -95,6 +95,7 @@ impl Host {
             &self.state,
             OWN,
             &daemon_args(&self.state),
+            None,
             &exec,
         );
         Started {
@@ -305,7 +306,7 @@ fn a_binary_that_is_not_the_packaged_one_never_execs_current() {
     };
     let args = daemon_args(&host.state);
     assert!(
-        packaged::start(&image, &[&host.binary], &host.state, OWN, &args, &exec).is_none(),
+        packaged::start(&image, &[&host.binary], &host.state, OWN, &args, None, &exec).is_none(),
         "not packaged"
     );
     assert!(
@@ -315,6 +316,7 @@ fn a_binary_that_is_not_the_packaged_one_never_execs_current() {
             &host.state,
             OWN,
             &args,
+            None,
             &exec
         )
         .is_none()
@@ -331,6 +333,7 @@ fn a_binary_that_is_not_the_packaged_one_never_execs_current() {
         &image,
         &[&host.binary],
         SystemdVars::default(),
+        None,
         &exec,
     );
     assert_eq!(
@@ -366,6 +369,7 @@ fn the_command_line_of_the_packaged_binary_reaches_the_start() {
         &host.binary,
         &[&host.binary],
         SystemdVars::default(),
+        None,
         &exec,
     );
     assert_eq!(
@@ -389,6 +393,7 @@ fn the_command_line_of_the_packaged_binary_reaches_the_start() {
         &host.binary,
         &[&host.binary],
         SystemdVars::default(),
+        None,
         &exec,
     );
     assert_eq!(format!("{code:?}"), format!("{:?}", ExitCode::SUCCESS));
@@ -412,6 +417,7 @@ fn an_exec_that_fails_returns_its_error_and_the_start_names_current() {
         &host.state,
         OWN,
         &[],
+        None,
         &packaged::exec,
     )
     .expect("the exec returned");

@@ -49,11 +49,11 @@ pub const STATUS_DEADLINE: Deadline = Deadline {
     read: Duration::from_secs(1),
 };
 
-/// How long one `systemctl show` may take.
-const SYSTEMCTL_DEADLINE: Duration = Duration::from_secs(5);
+/// How long one `systemctl show`, or one `rc-service <service> status` on OpenRC, may take.
+pub const SHOW_DEADLINE: Duration = Duration::from_secs(5);
 
-/// How many bytes of a `systemctl show` answer are read.
-const SYSTEMCTL_OUTPUT_CAP: usize = 64 * 1024;
+/// How many bytes of a `systemctl show` (or an `rc-service` status) answer are read.
+pub const SHOW_OUTPUT_CAP: usize = 64 * 1024;
 
 /// The `/proc` tree of the host.
 const PROC: &str = "/proc";
@@ -271,7 +271,7 @@ pub fn observer_with(
 
 /// The host's systemd: `systemctl show`, bounded in time and output.
 pub fn systemd_manager() -> SystemdManager<ProcessRunner> {
-    SystemdManager::new(ProcessRunner::new(SYSTEMCTL_OUTPUT_CAP), SYSTEMCTL_DEADLINE)
+    SystemdManager::new(ProcessRunner::new(SHOW_OUTPUT_CAP), SHOW_DEADLINE)
 }
 
 /// The host's `/proc`.

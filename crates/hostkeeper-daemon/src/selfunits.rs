@@ -7,7 +7,11 @@
 //!   `OnFailure=` [`FALLBACK_UNIT`], the start limit, `Restart=always`), so that `OnFailure=` never
 //!   names a unit that is not there;
 //! - macOS: the fallback timer job ([`launchd_fallback_job`], labelled [`fallback_label`], every
-//!   [`FALLBACK_INTERVAL_SECS`] seconds), whose plist is [`fallback_label`]`.plist`.
+//!   [`FALLBACK_INTERVAL_SECS`] seconds), whose plist is [`fallback_label`]`.plist`;
+//! - OpenRC: none. The init script of hostkeeper's Alpine package starts the packaged binary,
+//!   which judges the burst from the start log and puts the previous binary back itself before
+//!   it execs `current` ([`crate::packaged`]), so no file of the daemon's is needed and nothing
+//!   is written: [`install`] answers [`Installed::Unchanged`].
 //!
 //! The paths they name are those of the binary directory ([`binary_dir`]) under the daemon's
 //! state directory, the directory its unit starts `current` of.
@@ -134,6 +138,7 @@ pub fn unit_files(kind: PlatformKind, unit_dir: &Path, state_dir: &Path) -> Vec<
             name: format!("{}.plist", fallback_label()),
             text: launchd_fallback_job(&layout, Label::daemon().as_str(), FALLBACK_INTERVAL_SECS),
         }],
+        PlatformKind::Openrc => Vec::new(),
     }
 }
 
@@ -187,7 +192,8 @@ fn put(fs: &dyn Fs, file: &UnitFile) -> io::Result<()> {
 }
 
 /// Tells the service manager of a host of `kind` that the files changed: `daemon-reload` on
-/// Linux; on macOS the fallback job booted out and bootstrapped from its plist again.
+/// Linux; on macOS the fallback job booted out and bootstrapped from its plist again; nothing on
+/// OpenRC, which has no files to tell of.
 fn tell(kind: PlatformKind, units: &dyn UnitControl) -> Result<(), UnitControlError> {
     match kind {
         PlatformKind::Linux => units.daemon_reload(),
@@ -196,6 +202,7 @@ fn tell(kind: PlatformKind, units: &dyn UnitControl) -> Result<(), UnitControlEr
             units.stop_unit(&label)?;
             units.start_unit(&label)
         }
+        PlatformKind::Openrc => Ok(()),
     }
 }
 

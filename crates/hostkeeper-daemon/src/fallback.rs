@@ -4,7 +4,10 @@
 //! `StartLimitIntervalSec=`; the unit `hostkeeper_steps::selfupdate::fallback_unit`, which the
 //! daemon writes at its start, `crate::selfunits`); on macOS the fallback timer job runs it every
 //! interval (`hostkeeper_steps::selfupdate::launchd_fallback_job`), and the verb decides the burst
-//! itself ([`fallback_after_burst`]). The verb is the same code on both; only what makes it act differs.
+//! itself ([`fallback_after_burst`]). On OpenRC no unit or job runs the verb: the packaged binary,
+//! which supervise-daemon starts at every start, runs [`fallback_after_burst`] itself before it
+//! execs `current` ([`crate::packaged`]), and the verb, run by hand, judges as on macOS. The code
+//! is the same on every system; only what makes it act differs.
 //!
 //! The fallback, in this order: `current` of the binary directory `<dir>` is pointed at
 //! `previous` again ([`Layout::flip_back`], which refuses a `previous` that is not an executable
@@ -26,15 +29,16 @@
 //! the unit ignores (`ExecStart=-`), and its `ExecStartPost=` lines still reset the daemon's unit
 //! and start it again: the daemon is retried for good, three starts at a time.
 //!
-//! On macOS the fallback runs only when all of these hold, and otherwise nothing is written:
+//! On macOS and OpenRC the fallback runs only when all of these hold, and otherwise nothing is
+//! written:
 //!
 //! - the record waits for the restart into a version;
 //! - no daemon holds the state directory's lock (a daemon that runs is not failing to start), and
 //!   the fallback holds it while it runs;
 //! - no other service's step record holds an unfinished update (the rule of the self-update
 //!   order itself, `crate::selfupdate`);
-//! - the start log ([`hostkeeper_steps::StartLog`], which each daemon start on macOS adds to,
-//!   [`record_start`]) holds [`START_LIMIT_BURST`] starts of that version within
+//! - the start log ([`hostkeeper_steps::StartLog`], which each daemon start on macOS and OpenRC
+//!   adds to, [`record_start`]) holds [`START_LIMIT_BURST`] starts of that version within
 //!   [`START_LIMIT_WINDOW_SECS`] ([`should_fall_back`]), the latest of them less than
 //!   [`START_LIMIT_WINDOW_SECS`] ago: a burst long past is not a binary failing now.
 //!
@@ -204,9 +208,10 @@ pub fn fallback_after_burst(dir: &Path, clock: &dyn Clock) -> Result<Judged, Fal
     )?))
 }
 
-/// On macOS, adds this start of the daemon of version `own` to the start log of the service
-/// `hostkeeper` under `state_dir` (stamped on `clock`), when that service has a state directory:
-/// `Ok(true)` when it was written. Nothing on Linux, where systemd counts the starts.
+/// On macOS and OpenRC, adds this start of the daemon of version `own` to the start log of the
+/// service `hostkeeper` under `state_dir` (stamped on `clock`), when that service has a state
+/// directory: `Ok(true)` when it was written. Nothing on Linux under systemd, which counts the
+/// starts.
 pub fn record_start(
     state_dir: &Path,
     kind: PlatformKind,
@@ -216,7 +221,7 @@ pub fn record_start(
     let dir = state_dir.join(SELF_SERVICE);
     let counted = match kind {
         PlatformKind::Linux => false,
-        PlatformKind::Macos => dir.is_dir(),
+        PlatformKind::Macos | PlatformKind::Openrc => dir.is_dir(),
     };
     if counted {
         StartLog::load(&dir)?.record(DaemonStart {
@@ -232,12 +237,12 @@ pub fn main(dir: &Path) -> ExitCode {
     main_for(dir, Platform::host().kind, &host_clock())
 }
 
-/// The verb on a host of `kind`: [`fallback`] on Linux, [`fallback_after_burst`] on `clock` on
-/// macOS, its error printed.
+/// The verb on a host of `kind`: [`fallback`] on Linux under systemd, [`fallback_after_burst`] on
+/// `clock` on macOS and OpenRC, its error printed.
 pub fn main_for(dir: &Path, kind: PlatformKind, clock: &dyn Clock) -> ExitCode {
     let done = match kind {
         PlatformKind::Linux => fallback(dir).map(|_| ()),
-        PlatformKind::Macos => fallback_after_burst(dir, clock).map(|_| ()),
+        PlatformKind::Macos | PlatformKind::Openrc => fallback_after_burst(dir, clock).map(|_| ()),
     };
     match done {
         Ok(()) => ExitCode::SUCCESS,
