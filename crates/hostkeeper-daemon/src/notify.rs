@@ -7,6 +7,11 @@
 //! platform-set marker, which `main` reads and hands in ([`crate::cli`]). Without the flag the
 //! daemon has [`NoNotifier`].
 //!
+//! [`ReadyFile`] is the readiness notice of a daemon under OpenRC (`--ready-file <file>`): the
+//! file is removed when the daemon starts, so that it never says an earlier process was ready,
+//! and written, with the daemon's pid, once the boot work is over. The init script of the Alpine
+//! package waits for it after the start (packaging/alpine/hostkeeper.initd).
+//!
 //! The watchdog notice: once the daemon is ready, its heartbeat loop says it is alive after each
 //! heartbeat, through the [`Watchdog`] port ([`crate::links`]). [`SystemdWatchdog`] sends
 //! `WATCHDOG=1` to the same notify socket, and only when systemd set `WATCHDOG_USEC` for the
@@ -14,9 +19,11 @@
 //! reads and hands in); without it, and without `--notify-systemd`, the notice is sent nowhere.
 
 use std::ffi::{OsStr, OsString};
+use std::fs;
 use std::io;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::net::{SocketAddr, UnixDatagram};
+use std::path::{Path, PathBuf};
 
 /// Tells whoever started the daemon that it is ready. The daemon calls it exactly once, after
 /// the start pass and the boot steps, whatever they ended as.
@@ -84,7 +91,46 @@ fn abstract_address(_name: &[u8]) -> io::Result<SocketAddr> {
     ))
 }
 
-/// The notifier of a daemon started without `--notify-systemd`: nobody waits for the notice.
+/// The readiness notice as a file: the daemon's pid and a line feed, written through a temporary
+/// file beside it (its name and `.tmp`) and renamed into place, so that whoever waits for the
+/// file never reads half of it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReadyFile {
+    path: PathBuf,
+}
+
+impl ReadyFile {
+    /// The notice of `path`, which is removed now (a missing file is fine): it says nothing of an
+    /// earlier process. An error is a file that is there and cannot be removed.
+    pub fn new(path: &Path) -> io::Result<ReadyFile> {
+        match fs::remove_file(path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
+        Ok(ReadyFile {
+            path: path.to_path_buf(),
+        })
+    }
+
+    /// The file.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl ReadyNotifier for ReadyFile {
+    fn ready(&self) -> io::Result<()> {
+        let mut tmp = self.path.clone().into_os_string();
+        tmp.push(".tmp");
+        let tmp = PathBuf::from(tmp);
+        fs::write(&tmp, format!("{}\n", std::process::id()))?;
+        fs::rename(&tmp, &self.path)
+    }
+}
+
+/// The notifier of a daemon started without `--notify-systemd` or `--ready-file`: nobody waits
+/// for the notice.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct NoNotifier;
 

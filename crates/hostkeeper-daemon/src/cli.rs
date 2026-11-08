@@ -73,7 +73,7 @@ use crate::ipmi::DevIpmi;
 use crate::links::{DaemonLog, HostLink, Links};
 use crate::mac::HostIoreg;
 use crate::notify::{
-    NoNotifier, NoWatchdog, ReadyNotifier, SystemdNotifier, SystemdWatchdog, Watchdog,
+    NoNotifier, NoWatchdog, ReadyFile, ReadyNotifier, SystemdNotifier, SystemdWatchdog, Watchdog,
 };
 use crate::observer::{OwnService, observer_with};
 use crate::prune::{LayoutPrune, NoLockPoint};
@@ -248,8 +248,12 @@ pub struct DaemonFlags {
     pub admin_socket: PathBuf,
     /// Tell systemd the daemon is ready (`READY=1` on the notify socket systemd sets for a unit
     /// of `Type=notify`) once its boot work is over.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "ready_file")]
     pub notify_systemd: bool,
+    /// Write this file once the boot work is over, and remove it first thing at the start
+    /// ([`ReadyFile`]): the readiness of a daemon under OpenRC, whose init script waits for it.
+    #[arg(long)]
+    pub ready_file: Option<PathBuf>,
     /// Days after which the Sigstore trusted root is reported `trusted_root_stale` in the admin
     /// `Status`, at least 1. A signal only: package checks go on with the root there is.
     #[arg(long, default_value_t = DEFAULT_TRUSTED_ROOT_MAX_AGE_DAYS)]
@@ -404,11 +408,19 @@ fn admin_on_terminal(command: &AdminCommand) -> u8 {
 }
 
 /// The readiness notifier the flags ask for: systemd's with `--notify-systemd`, refused when no
-/// notify socket was set; none without it.
+/// notify socket was set; the file of `--ready-file`, removed now, refused when it cannot be;
+/// none without either.
 pub fn notifier(
     flags: &DaemonFlags,
     notify_socket: Option<OsString>,
 ) -> Result<Box<dyn ReadyNotifier>, StartError> {
+    if let Some(path) = &flags.ready_file {
+        let file = ReadyFile::new(path).map_err(|source| StartError::Io {
+            path: path.clone(),
+            source,
+        })?;
+        return Ok(Box::new(file));
+    }
     match (flags.notify_systemd, notify_socket) {
         (false, _) => Ok(Box::new(NoNotifier)),
         (true, Some(socket)) => Ok(Box::new(SystemdNotifier::new(socket))),

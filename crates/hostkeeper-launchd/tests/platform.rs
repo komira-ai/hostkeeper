@@ -2,7 +2,9 @@
 
 use std::path::{Path, PathBuf};
 
-use hostkeeper_launchd::{OPENRC_MARKER, Platform, PlatformKind, REVERSE_DNS_PREFIX, SYSTEMD_MARKER};
+use hostkeeper_launchd::{
+    OPENRC_MARKER, Platform, PlatformKind, REVERSE_DNS_PREFIX, SYSTEMD_MARKER,
+};
 
 fn linux() -> Platform {
     Platform {

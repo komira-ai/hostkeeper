@@ -18,15 +18,19 @@
 # whatever its exit, a second after it ends, for good (respawn_max=0); the burst is the start
 # log's, judged at each start as above, not the supervisor's.
 #
-# notify="socket:ready" (OpenRC 0.62 and later) makes supervise-daemon set NOTIFY_SOCKET for the
-# daemon and wait for READY=1 before `rc-service hostkeeper start` returns; --notify-systemd makes
-# the daemon send it, after its boot pass (docs/design/hostkeeper-design.md, section 6.5).
-# supervise-daemon runs no watchdog.
+# The readiness notice: the daemon removes /run/hostkeeper/ready when it starts and writes it, with
+# its pid, once its boot pass is over (--ready-file; docs/design/hostkeeper-design.md, section
+# 6.5), and start_post waits for it, so `rc-service hostkeeper start` returns once the daemon is
+# ready. supervise-daemon's own notice (notify=) is not used: its start waits for the notice with
+# no end, also while it respawns a daemon that exits before it is ready (a config that does not
+# load), which would hold the runlevel, and the boot with it, for good. start_post instead stops
+# waiting, with an error said, as soon as supervise-daemon has had to start the daemon a second
+# time; the daemon is still supervised, and retried every second. supervise-daemon runs no
+# watchdog.
 description="hostkeeper, the update daemon of this host"
 supervisor=supervise-daemon
 command=/usr/bin/hostkeeper
-command_args="daemon --config /etc/hostkeeper/hostkeeper.toml --state-dir /var/lib/updater/state --packages-dir /var/lib/hostkeeper/packages --admin-socket /run/hostkeeper/admin.sock --notify-systemd"
-notify="socket:ready"
+command_args="daemon --config /etc/hostkeeper/hostkeeper.toml --state-dir /var/lib/updater/state --packages-dir /var/lib/hostkeeper/packages --admin-socket /run/hostkeeper/admin.sock --ready-file /run/hostkeeper/ready"
 respawn_delay=1
 respawn_max=0
 output_log=/var/log/hostkeeper.log
@@ -43,4 +47,17 @@ depend() {
 start_pre() {
 	checkpath --directory --mode 0755 --owner root:root /etc/hostkeeper /var/lib/hostkeeper /var/lib/hostkeeper/packages /var/lib/updater
 	checkpath --directory --mode 0700 --owner root:root /run/hostkeeper /var/lib/updater/state /var/lib/updater/hooks
+	rm -f /run/hostkeeper/ready
+}
+
+# Waits for the readiness notice of the daemon's first start; a start count past 1 is a daemon
+# that ended before it was ready.
+start_post() {
+	while [ ! -e /run/hostkeeper/ready ]; do
+		if [ "$(service_get_value start_count)" -gt 1 ]; then
+			eerror "hostkeeper ended before it was ready; supervise-daemon starts it again (see /var/log/hostkeeper.log)"
+			return 0
+		fi
+		sleep 1
+	done
 }

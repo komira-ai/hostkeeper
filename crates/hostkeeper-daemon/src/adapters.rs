@@ -253,7 +253,10 @@ pub fn host_systemctl() -> RunnerLauncher<ProcessRunner> {
 /// The host's launcher of the OpenRC unit control: `rc-service` as a child process, its output
 /// read to [`SYSTEMCTL_OUTPUT_CAP`], each command bounded by [`RC_SERVICE_DEADLINE`].
 pub fn host_rc_service() -> RunnerLauncher<ProcessRunner> {
-    RunnerLauncher::new(ProcessRunner::new(SYSTEMCTL_OUTPUT_CAP), RC_SERVICE_DEADLINE)
+    RunnerLauncher::new(
+        ProcessRunner::new(SYSTEMCTL_OUTPUT_CAP),
+        RC_SERVICE_DEADLINE,
+    )
 }
 
 /// The host's macOS set: `/bin/launchctl`, the host's step launcher, `proc_pidpath`, `codesign`

@@ -132,7 +132,7 @@ pub use executor::{
 };
 pub use files::WriteStep;
 pub use notify::{
-    NoNotifier, NoWatchdog, ReadyNotifier, SystemdNotifier, SystemdWatchdog, Watchdog,
+    NoNotifier, NoWatchdog, ReadyFile, ReadyNotifier, SystemdNotifier, SystemdWatchdog, Watchdog,
 };
 pub use refusal::Refusal;
 pub use verb::Verb;

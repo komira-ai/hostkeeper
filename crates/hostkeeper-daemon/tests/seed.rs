@@ -306,7 +306,16 @@ fn a_binary_that_is_not_the_packaged_one_never_execs_current() {
     };
     let args = daemon_args(&host.state);
     assert!(
-        packaged::start(&image, &[&host.binary], &host.state, OWN, &args, None, &exec).is_none(),
+        packaged::start(
+            &image,
+            &[&host.binary],
+            &host.state,
+            OWN,
+            &args,
+            None,
+            &exec
+        )
+        .is_none(),
         "not packaged"
     );
     assert!(
