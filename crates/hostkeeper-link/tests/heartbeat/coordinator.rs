@@ -233,6 +233,7 @@ fn a_reply_from_the_real_coordinator_maps_to_the_loops_reply() {
             order_id: ordered.id.as_str().to_owned(),
             r#try: ordered.order_try,
             verb: Some(agent::order::Verb::Update(agent::Update {
+                target: None,
                 service: "web".to_owned(),
                 version: "2.0".to_owned(),
                 package_digest: digest().as_str().to_owned(),

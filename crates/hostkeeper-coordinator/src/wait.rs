@@ -5,11 +5,12 @@
 //! after every request the router answers ([`Waits::changed`]): a heartbeat, an operator's change
 //! and CI's set each reach the coordinator through [`crate::grpc::route`], so no change of the
 //! fleet, the desired state or the ops state passes unseen. A read ends the wait with
-//! `SUPERSEDED` when the desired version is not the caller's (the first check, as `hostkeeper ci`
-//! makes it), `CONVERGED` when the state is converged, and `HALTED` when the service is halted;
-//! `BLOCKED` and `IN_PROGRESS` keep it waiting. At `wait_secs` it is read once more and answered
-//! with what that read says, `DEADLINE` when it is still `BLOCKED` or `IN_PROGRESS`. A wait reads
-//! memory only and writes nothing, no audit line among it.
+//! `SUPERSEDED` when the desired version is not the caller's (the first check, as the
+//! `hostkeeper ci` of older releases makes it), `CONVERGED` when the state is converged, and
+//! `HALTED` when the service is halted; `BLOCKED` and `IN_PROGRESS` keep it waiting. At
+//! `wait_secs` it is read once more and answered with what that read says, `DEADLINE` when it is
+//! still `BLOCKED` or `IN_PROGRESS`. A wait reads memory only and writes nothing, no audit line
+//! among it.
 //!
 //! The limits: at most [`MAX_WAIT_SECS`] a call, and at most [`MAX_WAITS`] held at once by a
 //! coordinator, which serves the operator API on its one private listener; the next is refused.
@@ -30,8 +31,8 @@ use crate::converge::{Convergence, State};
 use crate::service::Coordinator;
 use crate::services::ServiceDef;
 
-/// The longest a caller may ask a wait to be held: 30 minutes, the budget `hostkeeper ci` waits
-/// by default (180 reads, one every 10 seconds).
+/// The longest a caller may ask a wait to be held: 30 minutes, the default budget of
+/// `set-desired.yml`'s wait (`max_polls` 180, in tens of seconds).
 pub const MAX_WAIT_SECS: u32 = 1800;
 
 /// The most waits a coordinator holds at once: as many calls as one HTTP/2 connection may carry

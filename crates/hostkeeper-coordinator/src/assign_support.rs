@@ -101,6 +101,7 @@ pub(crate) fn absent(service: &str, running: &str) -> ServiceBeat {
 pub(crate) fn install(to: &str, n: u8) -> Order {
     let digest = Digest::parse(&digest(n)).expect("a digest");
     Order::Install {
+        target: None,
         service: WEB.to_owned(),
         version: version(to),
         order_id: install_order_id(&digest),

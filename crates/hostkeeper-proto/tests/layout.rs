@@ -518,9 +518,15 @@ const ORDER_FIELDS: [(&str, Kind); 7] = [
     ("halt_generation", Kind::Uint64),
 ];
 
+/// The one message a verb may carry: the entry of a release picked for the host
+/// (`docs/design/packages.md`, section 3.3), by its field name and its type. Its fields are the
+/// release's, which the crate `hostkeeper-release` and the daemon check before anything runs, so
+/// this check does not go into it.
+const ORDER_ENTRY: (&str, &str) = ("target", "hostkeeper.release.v1.Target");
+
 /// What in an order could carry more than a verb and its typed arguments: every field of the
 /// order, and of every message under it, must be one of `ORDER_FIELDS` with its type, singular,
-/// or a message field of the order's `verb` oneof.
+/// a message field of the order's `verb` oneof, or, in a verb, the singular [`ORDER_ENTRY`].
 fn order_field_problems(order: &prost_reflect::MessageDescriptor) -> Vec<String> {
     let mut problems = Vec::new();
     let mut todo = vec![order.clone()];
@@ -534,6 +540,12 @@ fn order_field_problems(order: &prost_reflect::MessageDescriptor) -> Vec<String>
                 && message.full_name() == order.full_name();
             if let (true, Kind::Message(inner)) = (verb, field.kind()) {
                 todo.push(inner);
+                continue;
+            }
+            let in_verb = message.full_name() != order.full_name();
+            let entry = matches!(field.kind(), Kind::Message(inner)
+                if (field.name(), inner.full_name()) == ORDER_ENTRY);
+            if in_verb && entry && !field.is_list() {
                 continue;
             }
             let allowed = ORDER_FIELDS
@@ -554,7 +566,8 @@ fn order_field_problems(order: &prost_reflect::MessageDescriptor) -> Vec<String>
 }
 
 /// Catches: an order field that could name a command, a path, a URL or a script, or any field
-/// beyond a verb's typed arguments, at any depth of the order.
+/// beyond a verb's typed arguments and the picked entry of a release, at any depth of the order;
+/// an entry repeated, outside a verb, or of another message.
 #[test]
 fn no_order_field_can_carry_a_command_path_or_url() {
     let pool = DescriptorPool::decode(hostkeeper_proto::FILE_DESCRIPTOR_SET).expect("decodes");
@@ -585,6 +598,7 @@ message Update {
   string service = 1;
   string command = 2;
   repeated string version = 3;
+  Extra target = 4;
 }
 message Extra { string url = 1; }
 "#,
@@ -598,7 +612,40 @@ message Extra { string url = 1; }
             "o.v1.Order.extra is message o.v1.Extra, not an order field",
             "o.v1.Order.try is string, not an order field",
             "o.v1.Update.command is string, not an order field",
+            "o.v1.Update.target is message o.v1.Extra, not an order field",
             "o.v1.Update.version is repeated string, not an order field",
+        ]
+    );
+
+    // The entry is let through in a verb, singular, and nowhere else; what is inside it is not
+    // gone into.
+    let entries = fixture_pool(
+        "e.proto",
+        r#"syntax = "proto3";
+package hostkeeper.release.v1;
+message Order {
+  string order_id = 1;
+  oneof verb { Update update = 3; Force force = 4; }
+  Target target = 5;
+}
+message Update { string service = 1; Target target = 2; }
+message Force { repeated Target target = 1; Other other = 2; }
+message Other { Target target = 1; }
+message Target { string command = 1; }
+"#,
+    );
+    let order = entries
+        .get_message_by_name("hostkeeper.release.v1.Order")
+        .expect("the order");
+    assert_eq!(
+        order_field_problems(&order),
+        [
+            "hostkeeper.release.v1.Force.other is message hostkeeper.release.v1.Other, not an order \
+             field",
+            "hostkeeper.release.v1.Force.target is repeated message hostkeeper.release.v1.Target, \
+             not an order field",
+            "hostkeeper.release.v1.Order.target is message hostkeeper.release.v1.Target, not an \
+             order field",
         ]
     );
 }

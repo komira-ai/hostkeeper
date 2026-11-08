@@ -540,23 +540,23 @@ main>section>figure.wide,main>section>.tblw.wide{width:min(72rem,calc(100vw - 3r
 <p>Two programs are built (<a href="https://github.com/komira-ai/hostkeeper/tree/main/crates/hostkeeper">crates/hostkeeper</a>,
 <a href="https://github.com/komira-ai/hostkeeper/tree/main/crates/hostkeeper-coordinator">crates/hostkeeper-coordinator</a>):</p>
 <ul>
-<li><code>hostkeeper</code>, the host program. Its verbs are <code>daemon</code>,
-<code>ci set-desired</code> (the CI client), and two plumbing verbs of its own update
+<li><code>hostkeeper</code>, the host program. Its verbs are <code>daemon</code> and two
+plumbing verbs of its own update
 (<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-daemon/src/cli.rs">crates/hostkeeper-daemon/src/cli.rs</a>).</li>
 <li><code>hostkeeper-coordinator serve</code>, the coordinator, shipped as a tarball and a container image
 (<a href="https://github.com/komira-ai/hostkeeper/blob/main/packaging/container/Dockerfile">packaging/container/Dockerfile</a>). No systemd unit for it
 is packaged, so the operator supervises it.</li>
 </ul>
 <p>Both programs take their configuration from flags and files, not environment variables. The only
-environment reads are platform-set: <code>NOTIFY_SOCKET</code> for <code>--notify-systemd</code>, and the GitHub Actions
-token request variables in <code>hostkeeper ci</code>.</p>
+environment reads are platform-set: systemd&rsquo;s <code>NOTIFY_SOCKET</code> and <code>WATCHDOG_USEC</code>, for
+<code>--notify-systemd</code>.</p>
 <h3 id="architecture">Architecture</h3>
 <figure class="wide" id="fig-arch"><div class="fig-wrap scroll"><svg viewBox="0 0 1000 470" role="img" aria-label="The parts of hostkeeper. On the left, CI&rsquo;s release job, hkctl and the web UI call the coordinator&rsquo;s private listener: CI with its OIDC token, the others with an operator token. In the middle, the coordinator has a private listener, a heartbeat listener, a CA and enrollment store, and plain files. On the right, each host runs the hostkeeper daemon as root, with an admin socket, one transient unit or launchd job per hook step, and its packages. The daemon dials the heartbeat listener for enrollment, polling and renewal, and for its heartbeat. The daemon fetches and verifies packages from a release channel over HTTPS, only inside an order."><defs><marker id="aa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk" d="M0 0L10 5L0 10z"/></marker><marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk-bad" d="M0 0L10 5L0 10z"/></marker></defs>
 <text x="10" y="30" class="t-s t-m">operators and CI</text>
 <rect class="box" x="10" y="40" width="240" height="72" rx="4"/>
 <text x="22" y="62" class="t-b">CI release job</text>
-<text x="22" y="80" class="t-mono">hostkeeper ci set-desired</text>
-<text x="22" y="100" class="t-s">Releases.SetDesired, Releases.Converge</text>
+<text x="22" y="80" class="t-mono">hkctl releases set-desired</text>
+<text x="22" y="100" class="t-s">Releases: SetDesired, WaitConverged</text>
 <rect class="box" x="10" y="130" width="240" height="48" rx="4"/>
 <text x="22" y="150" class="t-b">hkctl</text>
 <text x="22" y="168" class="t-s t-m">generated from the protos</text>
@@ -824,8 +824,9 @@ command per method of every non-local service. <code>hkctl</code> is one bash sc
 table, which calls the gateway with <code>curl</code>
 (<a href="https://github.com/komira-ai/hostkeeper/tree/main/crates/hostkeeper-hkctl">crates/hostkeeper-hkctl</a>, <a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/cli.md">docs/cli.md</a>). The test
 <code>docs_cli_md_is_current</code> regenerates <a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/cli.md">docs/cli.md</a> and fails when it differs, and a
-golden script makes a removed flag or a changed exit code fail. <code>hostkeeper ci set-desired</code>
-calls <code>Releases.SetDesired</code> and <code>Releases.Converge</code> over gRPC for a release job
+golden script makes a removed flag or a changed exit code fail. A release job runs
+<code>hkctl releases set-desired</code> and then <code>hkctl releases wait-converged</code>, one held call of
+<code>Releases.WaitConverged</code>
 (<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/deploy/ci-client.md">docs/deploy/ci-client.md</a>).</p>
 <p><strong>The web UI is built on the gateway.</strong> <a href="https://github.com/komira-ai/hostkeeper/tree/main/ui">ui/</a> is static HTML, one stylesheet and
 JavaScript modules, with no framework and no build step. Its pages are Fleet, Host, Rollout, Holds,
@@ -939,7 +940,11 @@ once that loop has a link.</p>
 token, and an operator may set it the same way with the operator&rsquo;s token. Beside the version, a set names the release: the text of the version&rsquo;s <code>index.json</code> and its SHA-256
 (or, for a fleet of one platform, one package digest). The coordinator checks the digest and that the index is the service&rsquo;s at that version, and keeps
 the index digest and the package digest of each platform, in the state file. Each host is then ordered the package of its own platform, and a host
-whose platform the index lists no package for is ordered nothing and shown as <code>no_package_for_platform</code>, not as failed. It refuses a version marked bad or below the service&rsquo;s <code>min_version</code>. A new desired
+whose platform the index lists no package for is ordered nothing and shown as <code>no_package_for_platform</code>, not as failed. A version may
+instead be set with targets: for each platform an ordered list of artifacts, one per installer. Each host is then ordered the entry of the installer
+it runs the service with, else the first entry whose installer its daemon lists over gRPC, and a host no entry fits is ordered nothing and shown as
+<code>no_target</code>, <code>no_build_for_host</code> or <code>installer_dropped</code>, not as failed
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-coordinator/src/picks.rs">crates/hostkeeper-coordinator/src/picks.rs</a>). It refuses a version marked bad or below the service&rsquo;s <code>min_version</code>. A new desired
 version ends a standing force and lifts a halt the updater raised, but not one a hook or an
 operator raised (<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-coordinator/src/desired.rs">crates/hostkeeper-coordinator/src/desired.rs</a>,
 <a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/design/hostkeeper-design.md#54-the-rollout-gate-which-hosts-may-update-now">design: The rollout gate</a>).</p>
@@ -1169,7 +1174,7 @@ paths (the CA bundle, <code>gh</code> and the trusted root use their Linux paths
 <rect class="box" x="20" y="14" width="300" height="62" rx="4"/>
 <text x="32" y="36" class="t-b">GitHub-hosted runners</text>
 <text x="32" y="54" class="t-s">a service&rsquo;s release job runs</text>
-<text x="32" y="68" class="t-mono">hostkeeper ci set-desired</text>
+<text x="32" y="68" class="t-mono">hkctl releases set-desired</text>
 <rect class="box" x="680" y="14" width="300" height="62" rx="4"/>
 <text x="692" y="36" class="t-b">release channel, over HTTPS</text>
 <text x="692" y="54" class="t-s">staged by the operator; packages and</text>

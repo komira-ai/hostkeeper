@@ -129,6 +129,7 @@ async fn the_json_answer_and_the_typed_order_carry_the_same_update() {
             order_id: json.order_id.expect("an order id").as_str().to_owned(),
             r#try: json.order_try.expect("a try"),
             verb: Some(agent::order::Verb::Update(agent::Update {
+                target: None,
                 service: "web".to_owned(),
                 version: "2.0".to_owned(),
                 package_digest: json.package_digest.expect("a digest").as_str().to_owned(),

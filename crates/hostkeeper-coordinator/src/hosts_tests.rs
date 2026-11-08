@@ -212,11 +212,13 @@ fn a_host_is_what_the_status_holds_of_it() {
         .expect("web's view of d1");
     assert_eq!(web.holds, vec![held], "the hold of d1 is in web's view");
     let expected = proto::Host {
+        installers: Vec::new(),
         node_id: "d1".to_owned(),
         role: "daemon".to_owned(),
         live: true,
         last_heartbeat_unix: UNIX + 2_000,
         heartbeat: Some(agent::HeartbeatRequest {
+            installers: Vec::new(),
             platform: agent::Platform::LinuxX8664.into(),
             agent: Some(agent::AgentInfo {
                 name: "hostkeeper-daemon".to_owned(),

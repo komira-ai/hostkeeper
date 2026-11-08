@@ -264,8 +264,12 @@ commit, so a release replaced after you pinned it is refused, not run.
 
 A pin of an older revision of `set-desired.yml` keeps working as it did: it downloads its own
 release's tarball and runs that release's `hostkeeper ci set-desired`, which polls
-`Releases.Converge`. The two ways differ for the coordinator's allow-list only in the commit of
-`job_workflow_ref`; move the pin and that entry together, as above.
+`Releases.Converge`. Keep such a pin's `hostkeeper_version` at a release that has that verb:
+newer releases of the `hostkeeper` binary have no `ci` verb (`hostkeeper ci` is a usage error,
+exit status 2), so an older revision given a newer `hostkeeper_version` fails without setting
+anything; move to the current revision instead. The two ways differ for the coordinator's
+allow-list only in the commit of `job_workflow_ref`; move the pin and that entry together, as
+above.
 
 ## Reaching the coordinator
 

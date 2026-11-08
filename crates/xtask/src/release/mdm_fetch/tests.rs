@@ -232,7 +232,8 @@ fn a_pin_table_that_does_not_read_is_named_as_hostkeeper_mdm_cores() {
 #[test]
 fn curl_is_run_https_only_with_no_curlrc_and_the_url_after_the_options() {
     // Catches: a download that reads a `.curlrc`, follows a redirect to plain HTTP, accepts TLS
-    // below 1.2, takes an HTTP error page as the archive, or reads the URL as an option.
+    // below 1.2, takes an HTTP error page as the archive, fails on GitHub's first 504 instead of
+    // retrying it, or reads the URL as an option.
     let url = "https://example.com/v1/a.zip";
     let line = [
         "curl",
@@ -243,6 +244,13 @@ fn curl_is_run_https_only_with_no_curlrc_and_the_url_after_the_options() {
         "=https",
         "--tlsv1.2",
         "--fail",
+        "--retry",
+        "5",
+        "--retry-delay",
+        "5",
+        "--retry-max-time",
+        "300",
+        "--retry-all-errors",
         "--silent",
         "--show-error",
         "--location",
