@@ -26,6 +26,11 @@
 //!
 //! The verb exits 0 when the config exists afterwards, written or kept, and [`EXIT_FAILED`]
 //! with the error on standard error otherwise.
+//!
+//! The start of a Mac's daemon runs the same steps on its `--config` before it reads it
+//! ([`at_start`], docs/design/two-programs.md, section 2.1), saying nothing for a config kept: a
+//! config that is not there is written from the managed preferences, and one that cannot be is
+//! the start's error ([`crate::start::StartError::MacConfig`], [`crate::start::EXIT_CONFIG`]).
 
 use std::fs::{self, DirBuilder, File, OpenOptions};
 use std::io::{self, Cursor, Write};
@@ -116,6 +121,13 @@ pub fn finish(result: Result<Configured, MacConfigError>, config: &Path) -> Exit
             ExitCode::from(EXIT_FAILED)
         }
     }
+}
+
+/// The start's step: [`mac_config`] of `managed` into `config`, the daemon config the start reads
+/// next, with `trusted_uid` the owner the managed file must have; `Ok` when the config is there
+/// afterwards, written or kept.
+pub fn at_start(managed: &Path, config: &Path, trusted_uid: u32) -> Result<(), MacConfigError> {
+    mac_config(managed, config, trusted_uid).map(drop)
 }
 
 /// The line said when the config is kept.

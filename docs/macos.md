@@ -225,7 +225,9 @@ path to an executable file, the job's exit code (none when it was booted out at 
 ended by a signal) and at most 64 bytes of its standard output. The binary is the file of the
 verified release the daemon just checked, so it passed the package check every Mach-O file of a
 release passes at unpack (no quarantine attribute, a valid code signature). A release of the
-version that already runs is not probed: none of its binary is staged.
+version that already runs is not probed: none of its binary is staged. Nor is a release whose
+floor (`min_hostkeeper`) is above 0.1.53, which the daemon judges by the floor alone, as on Linux
+(the README's self-update section).
 
 | how the job ended | the step's exit |
 |---|---|
@@ -438,6 +440,14 @@ exec '/bin/launchctl' bootstrap system '/Library/LaunchDaemons/dev.hostkeeper.ho
 3. `launchctl bootout` unloads a copy of the job loaded before, and its status is ignored
    because it fails when none is loaded. `launchctl bootstrap` loads the job, and `RunAtLoad`
    starts it. The script runs the bootstrap with `exec`, so its status is the install's.
+
+The daemon's start runs step 2 as well, on its `--config`, before it reads it
+(`hostkeeper_daemon::mac_config::at_start`): a Mac whose config is gone gets it again from the
+managed preferences at its next start, with no line for a config kept. A config that cannot be
+made (no managed file, a link at the config path, a managed file the loader refuses) stops the
+start with exit status 3, the message in `daemon.err.log`. And `/usr/local/bin/hostkeeper daemon`,
+which no plist starts yet, runs step 1's seed itself and execs `current` with its own arguments
+(`hostkeeper_daemon::packaged`).
 
 The manual path, for a Mac without an MDM: place `/etc/hostkeeper/hostkeeper.toml` first, then
 install the pkg. `mac-config` keeps that file, and the postinstall loads the job. Installing the

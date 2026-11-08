@@ -24,17 +24,29 @@
 //!    package;
 //! 6. the step lock, waited for (a running step of another service is never interrupted), and
 //!    the records of step 4 read again under it;
-//! 7. the protocol of the new binary ([`ProtocolProbe`]), asked of the file of the verified release
-//!    before anything is staged, unless the release is the version that runs, whose binary is never
-//!    staged and so is not asked (an install of the version a pkg or a hand upgrade put on the host
-//!    goes on to its steps without running the probe): a protocol this daemon cannot fall back from
-//!    is `Failed` before the commit, of class release (`protocol_unsupported`), and a probe that
-//!    cannot be read is `Failed` before the commit, of class environment (`protocol_unreadable`); a
-//!    release without the binary is `Failed` before the commit, of class release
-//!    (`self_binary_missing`), and a release that changed since it was verified, or cannot be read
-//!    now, is refused (`release_unreadable`). Nothing is written for any of them;
+//! 7. the release judged by its floor, its manifest's `min_hostkeeper` ([`judge`]), before
+//!    anything is staged, unless the release is the version that runs, whose binary is never
+//!    staged and so is neither judged nor asked (an install of the version a pkg or a hand
+//!    upgrade put on the host goes on to its steps without running the probe). A floor of
+//!    [`LEGACY_FLOOR`] or lower, which every release before stage 2 of
+//!    docs/design/two-programs.md declares, has the protocol of the new binary asked
+//!    ([`ProtocolProbe`]) of the file of the verified release: a protocol this daemon cannot
+//!    fall back from is `Failed` before the commit, of class release (`protocol_unsupported`),
+//!    and a probe that cannot be read is `Failed` before the commit, of class environment
+//!    (`protocol_unreadable`). A higher floor asks nothing: a release older than this daemon's
+//!    [`OLDEST_READER`] (or whose version is not `major.minor.patch`) is `Failed` before the
+//!    commit, of class release (`protocol_unsupported`), since it could not read this daemon's
+//!    files, and any other is accepted; a daemon older than the floor never gets here, since the
+//!    manifest's loader deferred the order `daemon_too_old` at step 5. A release without the
+//!    binary is `Failed` before the commit, of class release (`self_binary_missing`), and a
+//!    release that changed since it was verified, or cannot be read now, is refused
+//!    (`release_unreadable`). Nothing is written for any of them;
 //! 8. the hook's steps through the step runner, which holds the success back
-//!    ([`hostkeeper_steps::StepRunner::with_held_success`]);
+//!    ([`hostkeeper_steps::StepRunner::with_held_success`]). For a release whose floor is above
+//!    [`LEGACY_FLOOR`] the steps are built in ([`builtin_steps`]): each succeeds at once and no
+//!    command of the release runs, and the record is the one the hook's no-op command
+//!    (`bin/hostkeeper update-hook`, [`crate::update_hook`]) gives. Below it the command runs,
+//!    as every release before stage 3 answers it;
 //! 9. the follow-on ([`hostkeeper_steps::follow_on`]): the new binary staged in the binary
 //!    directory ([`binary_dir`]), the record written as waiting for the restart, `current`
 //!    switched. The reply is `Deferred` `awaiting_restart`, never `Succeeded`, and the daemon is
@@ -59,17 +71,22 @@
 //! written by a daemon from before the id was kept names no order, and its verdict is reported
 //! by no binary.
 //!
-//! The protocol rule: a new binary of protocol `P` is accepted when
-//! `SELF_UPDATE_PROTOCOL <= P <= SELF_UPDATE_PROTOCOL + 1`. "Can fall back from" means that the
-//! previous binary reads every file the new one writes, which holds when a release of protocol
-//! `N + 1` adds readers and writes only formats protocol `N` reads, and only the release after it
-//! writes the formats of `N + 1`.
+//! The protocol rule, for a release whose floor is [`LEGACY_FLOOR`] or lower: a new binary of
+//! protocol `P` is accepted when `SELF_UPDATE_PROTOCOL <= P <= SELF_UPDATE_PROTOCOL + 1`. "Can
+//! fall back from" means that the previous binary reads every file the new one writes, which
+//! holds when a release of protocol `N + 1` adds readers and writes only formats protocol `N`
+//! reads, and only the release after it writes the formats of `N + 1`. The floor carries the
+//! same rule from stage 2 on: a release that writes a new format sets [`OLDEST_READER`] to the
+//! release that first read it, and the release builder writes that as the floor of hostkeeper's
+//! package. [`SELF_UPDATE_PROTOCOL`] stays 1, because every daemon before stage 1 probes the
+//! releases of stage 1 and accepts only 1 or 2.
 
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_hook::{Class, Phase, Verdict};
 use hostkeeper_steps::record::{
@@ -77,7 +94,7 @@ use hostkeeper_steps::record::{
 };
 use hostkeeper_steps::selfupdate::settle_with;
 use hostkeeper_steps::{
-    ArtifactError, BadVersions, FollowOn, LaunchError, Layout, ProbeCall, ProbeExit,
+    ArtifactError, BadVersions, FollowOn, LaunchError, Layout, OLDEST_READER, ProbeCall, ProbeExit,
     SelfUpdateError, Settled, StepLauncher, StepRunner, follow_on,
 };
 use tokio::sync::Notify;
@@ -118,6 +135,55 @@ pub const REASON_SELF_BINARY_MISSING: &str = "self_binary_missing";
 /// The alert of an update that waits for the restart and could not be settled at start, or of a
 /// deferral a confirmed self-update could not clear.
 pub const ALERT_SELF_UPDATE: &str = "self_update_unsettled";
+
+/// The floor every release of hostkeeper before stage 2 of docs/design/two-programs.md declares
+/// (`min_hostkeeper` of its package): a release whose floor is this or lower has its new binary's
+/// protocol probed and runs its hook's command; one whose floor is higher is judged by the floor
+/// and [`OLDEST_READER`] alone, and runs built-in steps ([`judge`], [`builtin_steps`]).
+pub const LEGACY_FLOOR: HostkeeperVersion = HostkeeperVersion {
+    major: 0,
+    minor: 1,
+    patch: 53,
+};
+
+/// How step 7 judges a release of hostkeeper ([`judge`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Judgement {
+    /// Its new binary's protocol is asked ([`ProtocolProbe`]).
+    Probe,
+    /// It goes on to its steps with no probe.
+    Accepted,
+    /// It is `Failed` before the commit, of class release ([`REASON_PROTOCOL_UNSUPPORTED`]).
+    Unsupported,
+}
+
+/// How a daemon of version `running` judges the release `version` of hostkeeper, whose package
+/// declares the floor `floor` (step 7 of the module): the version that runs is [`Accepted`]
+/// with no check; a floor of [`LEGACY_FLOOR`] or lower is [`Probe`]d; above it, a release older
+/// than [`OLDEST_READER`], or whose version is not `major.minor.patch`, is [`Unsupported`] (the
+/// backward rule), and any other is [`Accepted`]. The forward rule, a floor above `running`, is
+/// the manifest loader's, before this.
+///
+/// [`Accepted`]: Judgement::Accepted
+/// [`Probe`]: Judgement::Probe
+/// [`Unsupported`]: Judgement::Unsupported
+pub fn judge(running: HostkeeperVersion, version: &str, floor: HostkeeperVersion) -> Judgement {
+    let target = HostkeeperVersion::parse(version).ok();
+    match (target, floor <= LEGACY_FLOOR) {
+        (Some(target), _) if target == running => Judgement::Accepted,
+        (_, true) => Judgement::Probe,
+        (Some(target), false) if target >= OLDEST_READER => Judgement::Accepted,
+        _ => Judgement::Unsupported,
+    }
+}
+
+/// Whether the update of `service` to a release whose floor is `floor` runs built-in steps
+/// ([`hostkeeper_steps::UpdateOrder::builtin_steps`]): hostkeeper's own package whose floor is
+/// above [`LEGACY_FLOOR`], whose hook's command no daemon runs (docs/design/two-programs.md,
+/// section 4.4).
+pub fn builtin_steps(service: &ServiceName, floor: HostkeeperVersion) -> bool {
+    (service.as_str() == SELF_SERVICE) & (floor > LEGACY_FLOOR)
+}
 
 /// What the verb `self-update-protocol` prints: [`SELF_UPDATE_PROTOCOL`] and a newline.
 pub fn protocol_line() -> String {
@@ -322,7 +388,8 @@ fn steps(
         Err(error) => return Err(Reply::refused(Refusal::ReleaseUnreadable, error)),
     };
     let running = ctx.own_version.to_string();
-    if let Some(refused) = probed(ctx.probe(), &binary, &running, version) {
+    let judged = judge(ctx.own_version, version, prepared.floor);
+    if let Some(refused) = probed(judged, ctx.probe(), &binary) {
         return Ok(refused);
     }
     let finished = match runner.run(&prepared.update) {
@@ -349,13 +416,16 @@ fn steps(
     }
 }
 
-/// Step 7: the refusal of the new binary `binary` of `version` by its protocol, asked of `probe`;
-/// `None` when it is accepted. A release of the version that runs (`running`) is not asked: the
-/// follow-on stages no binary for it ([`FollowOn::NotNeeded`]), so nothing of it is ever run, and
-/// the order goes on as the module says (an install of it is `Succeeded` once its steps ran).
-fn probed(probe: &dyn ProtocolProbe, binary: &Path, running: &str, version: &str) -> Option<Reply> {
-    if running == version {
-        return None;
+/// Step 7: the refusal of the new binary `binary` as `judged` says ([`judge`]), its protocol asked
+/// of `probe` when it says [`Judgement::Probe`]; `None` when it is accepted. A release of the
+/// version that runs is not asked: the follow-on stages no binary for it
+/// ([`FollowOn::NotNeeded`]), so nothing of it is ever run, and the order goes on as the module
+/// says (an install of it is `Succeeded` once its steps ran).
+fn probed(judged: Judgement, probe: &dyn ProtocolProbe, binary: &Path) -> Option<Reply> {
+    match judged {
+        Judgement::Accepted => return None,
+        Judgement::Unsupported => return Some(failed(Class::Release, REASON_PROTOCOL_UNSUPPORTED)),
+        Judgement::Probe => {}
     }
     match probe.protocol(binary) {
         Ok(protocol) if accepted(protocol) => None,

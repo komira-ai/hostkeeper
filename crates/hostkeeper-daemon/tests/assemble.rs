@@ -412,6 +412,7 @@ fn the_host_ports_are_built_from_flags_and_files_without_the_network() {
         trusted_root: rig.scratch.path().join("trusted_root.json"),
         pki: rig.scratch.path().join("pki"),
         console: None,
+        managed_config: None,
     };
     let error = host_ports(&config(), &rig.settings(), &files, OWN, linux())
         .err()
@@ -565,6 +566,7 @@ fn the_start_of_the_host_build_stops_at_the_ports_it_cannot_build() {
         trusted_root: rig.scratch.path().join("trusted_root.json"),
         pki: rig.scratch.path().join("pki"),
         console: None,
+        managed_config: None,
     };
     let notifier = FakeNotifier::new(Log::default());
     fs::write(&rig.packages, b"not a directory").expect("a file where the directory belongs");
@@ -629,6 +631,7 @@ fn linux_files(ca_bundle: &str) -> HostFiles {
             issue: PathBuf::from("/run/hostkeeper/enrollment.issue"),
             agetty: PathBuf::from("/sbin/agetty"),
         }),
+        managed_config: None,
     }
 }
 
@@ -638,7 +641,8 @@ const RHEL: &str = "/etc/pki/tls/certs/ca-bundle.crt";
 /// Catches a Mac given the Linux paths, under `/usr`, which is read-only on a Mac, and a CA
 /// bundle a Mac does not have: `gh` and the trusted root are where the installer pkg puts them,
 /// under `/usr/local/lib/hostkeeper`, the CA bundle is macOS's `/etc/ssl/cert.pem`, no Linux
-/// bundle is looked for, and no console's issue file is written.
+/// bundle is looked for, no console's issue file is written, and the start reads the managed
+/// preferences the pkg's postinstall reads.
 #[test]
 fn a_mac_keeps_gh_and_the_trusted_root_under_usr_local_and_reads_etc_ssl_cert_pem() {
     let mac = HostFiles {
@@ -647,6 +651,9 @@ fn a_mac_keeps_gh_and_the_trusted_root_under_usr_local_and_reads_etc_ssl_cert_pe
         trusted_root: PathBuf::from("/usr/local/lib/hostkeeper/trusted_root.json"),
         pki: PathBuf::from("/etc/updater/pki"),
         console: None,
+        managed_config: Some(PathBuf::from(
+            "/Library/Managed Preferences/dev.hostkeeper.config.plist",
+        )),
     };
     for present in [&[][..], &[DEBIAN, RHEL][..]] {
         assert_eq!(

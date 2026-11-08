@@ -20,7 +20,9 @@
 //!   tombstone in `placed.json`.
 //! - [`selfupdate`]: the update of hostkeeper itself (design section 6.6): an `update` of the
 //!   service `hostkeeper` refused while another service's update is unfinished, its new binary's
-//!   protocol checked, its steps run under the step lock, then the follow-on that switches the
+//!   release judged by its floor (its new binary's protocol probed for a floor of
+//!   [`selfupdate::LEGACY_FLOOR`] or lower), its steps run under the step lock (built in for a
+//!   higher floor), then the follow-on that switches the
 //!   binary and asks the daemon to exit; at start, the update settled by the binary that runs.
 //!   [`fallback`] is the verb `self-update-fallback` the fallback unit runs (on macOS the
 //!   fallback timer job, and the verb then decides the burst from the start log itself), and
@@ -28,11 +30,15 @@
 //!   each start where they differ, telling the service manager only then; [`seed`] is the verb
 //!   `self-update-seed` the unit runs before each start (on macOS the pkg's `postinstall`, at
 //!   install), which gives the binary directory its first binary.
-//! - [`handover`]: the first thing `hostkeeper daemon` does, before it reads its config: a
+//! - [`packaged`]: `hostkeeper daemon` started from the packaged binary seeds the binary
+//!   directory as [`seed`] does and execs its `current`.
+//! - [`handover`]: the first thing `hostkeeper daemon` does, before it reads its config (after
+//!   the packaged start, which execs `current` first): a
 //!   hand-over of hostkeeper's own update into another binary (docs/design/two-programs.md, 4.3)
 //!   execs that binary while its start count lasts, and is settled failed once it cannot.
 //! - [`mac_config`]: the verb `mac-config`, which the pkg's `postinstall` runs to write the
-//!   daemon config from the managed preferences the MDM installed.
+//!   daemon config from the managed preferences the MDM installed, and which the start of a
+//!   Mac's daemon runs when its config is not there.
 //! - [`adapters`]: the step launcher, service manager, unit directory, observer ports and package
 //!   check of the host's platform ([`adapters::Adapters::for_platform`]: systemd on Linux,
 //!   launchd on macOS), and the claims of its enrollment.
@@ -97,6 +103,7 @@ pub mod mac_config;
 pub mod node;
 pub mod notify;
 pub mod observer;
+pub mod packaged;
 pub mod packages;
 pub mod place;
 pub mod prune;
