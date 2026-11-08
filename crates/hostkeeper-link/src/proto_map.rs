@@ -894,9 +894,12 @@ mod tests {
             service: "web".to_owned(),
             halt_generation: 2,
         })));
+        let record = reply(order(pb::order::Verb::ClearRecord(pb::ClearRecord {
+            service: "web".to_owned(),
+        })));
         let mut none = order(pb::order::Verb::Abort(pb::Abort::default()));
         none.order.as_mut().expect("an order").verb = None;
-        for mapped in [rollback, clear, reply(none)] {
+        for mapped in [rollback, clear, record, reply(none)] {
             assert_eq!(mapped.reply.order, None);
             let dropped = mapped.dropped.expect("dropped");
             assert_eq!(dropped.what, "order \"o-1\"");

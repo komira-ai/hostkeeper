@@ -35,6 +35,7 @@ export interface Client {
     setLabels(request: hostkeeper_operator_v1.SetLabelsRequest): Promise<hostkeeper_operator_v1.SetLabelsResponse>;
     abort(request: hostkeeper_operator_v1.AbortRequest): Promise<hostkeeper_operator_v1.AbortResponse>;
     retire(request: hostkeeper_operator_v1.RetireRequest): Promise<hostkeeper_operator_v1.RetireResponse>;
+    clearRecord(request: hostkeeper_operator_v1.ClearRecordRequest): Promise<hostkeeper_operator_v1.ClearRecordResponse>;
   };
   readonly mdm: {
     listDevices(request: hostkeeper_operator_v1.ListDevicesRequest): Promise<hostkeeper_operator_v1.ListDevicesResponse>;
@@ -268,6 +269,13 @@ export namespace hostkeeper_operator_v1 {
   }
   export interface ClearHaltResponse {
     entry?: hostkeeper_operator_v1.AuditEntry;
+  }
+  export interface ClearRecordRequest {
+    nodeId?: string;
+    service?: string;
+  }
+  export interface ClearRecordResponse {
+    orderId?: string;
   }
   export interface ConvergeRequest {
     service?: string;

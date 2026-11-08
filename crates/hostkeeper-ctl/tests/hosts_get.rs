@@ -78,6 +78,13 @@ impl Hosts for Answers {
     ) -> Result<Response<proto::RetireResponse>, Status> {
         Err(Status::unimplemented("not in this test"))
     }
+
+    async fn clear_record(
+        &self,
+        _: Request<proto::ClearRecordRequest>,
+    ) -> Result<Response<proto::ClearRecordResponse>, Status> {
+        Err(Status::unimplemented("not in this test"))
+    }
 }
 
 /// `hostkeeper ctl hosts get --node-id <node>` with a token file in `dir`, against `memory`:

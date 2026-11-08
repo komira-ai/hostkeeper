@@ -86,7 +86,7 @@ What the host runs and how it is, and the coordinator's answer: at most one orde
 | flag | value | meaning |
 |---|---|---|
 | `--platform` | VALUE | The platform the host's releases are built for. |
-| `--features` | STRING, repeated | What this agent can use of the coordinator's side, by feature name (`deferred-v1`, `halt-v1`, `forced-v1`, which announces that the daemon takes the `Force` verb, `install-v1`, which announces that it takes the `Install` and `Uninstall` verbs, `abort-v1`, which announces that it takes the `Abort` verb, and `verdict-acks-v1`, which asks for `HeartbeatResponse.acks`): at most 16, each 1 to 32 bytes of `[a-z0-9-]`, none twice. An agent that lists every service it runs in `services` announces `heartbeat-v2`; without it the coordinator counts the host as unmanaged for every service but the legacy one, rather than as missing them. |
+| `--features` | STRING, repeated | What this agent can use of the coordinator's side, by feature name (`deferred-v1`, `halt-v1`, `forced-v1`, which announces that the daemon takes the `Force` verb, `install-v1`, which announces that it takes the `Install` and `Uninstall` verbs, `abort-v1`, which announces that it takes the `Abort` verb, `clear-record-v1`, which announces that it takes the `ClearRecord` verb, and `verdict-acks-v1`, which asks for `HeartbeatResponse.acks`): at most 16, each 1 to 32 bytes of `[a-z0-9-]`, none twice. An agent that lists every service it runs in `services` announces `heartbeat-v2`; without it the coordinator counts the host as unmanaged for every service but the legacy one, rather than as missing them. |
 | `--sent-unix` | UINT64 | The host's clock when it made the heartbeat, in seconds since the epoch: what the coordinator holds against its own clock to count the heartbeats of a host whose clock is off. Absent from an agent that predates it. |
 | `--cert-not-after-unix` | UINT64 | The last second the host's current certificate is valid, in seconds since the epoch. Absent from an agent that predates it and from a host that holds no certificate. |
 | `--last-renew-error` | STRING | Why the host's last step of enrollment or renewal failed, as the host words it, at most 256 bytes (a reader cuts a longer one at a character boundary); absent once a step succeeds, and from an agent that predates it. |
@@ -342,6 +342,21 @@ audited once.
 |---|---|---|
 | `--node-id` | STRING | The host id the host was enrolled as. |
 | `--reason` | STRING | Why, for the audit log: 1 to 256 bytes with no control character, or empty for none. |
+
+#### `hostkeeper ctl hosts clear-record`
+
+`/hostkeeper.operator.v1.Hosts/ClearRecord`
+
+Order the host to set aside its step record of the service when the record does not read
+(the `clear_record` verb of `hostkeeper.agent.v1`), at the host's next heartbeat; it takes no
+slot and is sent once. Only for a host whose daemon announced `clear-record-v1` in its last
+heartbeat; to any other it is refused `daemon_too_old` and nothing is ordered. The daemon's
+verdict comes back in a heartbeat like any order's. Audited `record_cleared`.
+
+| flag | value | meaning |
+|---|---|---|
+| `--node-id` | STRING | The host, heard from since the coordinator started. |
+| `--service` | STRING | The service whose step record the host sets aside; one the coordinator manages. |
 
 ### `mdm`
 
