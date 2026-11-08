@@ -2,10 +2,11 @@
 
 Status: design, for the maintainers' ruling. Nothing here is built. This amends [packages.md](packages.md),
 [packages-lifecycle.md](packages-lifecycle.md) and [packages-tests.md](packages-tests.md), as the maintainers ruled:
-hostkeeper installs a service's Linux package from a package repository with the system package manager
-(`apt-get install tierstore=<V>` from the suite the host is configured with). It does not fetch a package file and
-install that file. The repository's signing key is the trust. Where those three files disagree with this one about a
-Linux distribution's package, this one wins. Section 0 lists what it replaces. Section numbers like "packages.md
+hostkeeper installs a service's package from a package repository with the host's package manager
+(`apt-get install tierstore=<V>` from the suite the host is configured with; on a Mac, `brew install` from a tap). It
+does not fetch a package file and install that file. The repository's signing key (for a tap, which has none, the
+pin) is the trust. Where those three files disagree with this one about a service's package from a repository, this
+one wins. Section 0 lists what it replaces. Section numbers like "packages.md
 section 5.2" are that file's; a bare "section 3" is this file's.
 
 The release machinery that every repository of the project shares is moving to this flow: publish each release to
@@ -16,19 +17,19 @@ from the channel the order names, and nothing installs a managed package by hand
 stage (komira-ai/tierstore#255) moves to the testing channel. So hostkeeper's order for such a service says "install
 version V of package P, whose SHA-256 is D, from repository R". Nothing below is specific to tierstore.
 
-Scope: apt, designed in full. Every format the project publishes gets the same two channels, and the installer is
-one **repository installer** with a backend per package manager, so the next manager is a backend, not a new
-installer design (section 6). dnf is the next one and gets its own design once an RPM host exists; the others are
-later and not designed here.
+Scope: apt on Linux and Homebrew (`brew`) on macOS, both designed in full; the farm's Macs run services through
+Homebrew. Every format the project publishes gets the same two channels, and the installer is one **repository
+installer** with a backend per package manager, so the next manager is a backend, not a new installer design
+(section 6). dnf is the next one and gets its full design when the first RPM host exists.
 
 ## 0. What this replaces
 
 | Where | Before | After |
 |---|---|---|
 | packages.md 3.1, 3.4, 9.4: the target | Every entry is an artifact: `locations`, `digest`, `bytes`, `attestation`, `manifest` | Also a **repository entry**: `repository` and `package_version` set, a required `digest` pin, no other artifact field (section 2) |
-| packages.md 5.2, 5.4: `deb`, `rpm`, `arch`, `apk`, `macos-pkg` | Installers that fetch a package file by digest, check its attestation and install the file with the format's tool | Withdrawn. `apt` (A7) installs from a repository; the other formats are later and not designed here (section 6) |
-| packages.md 5.2, 5.3: "the daemon never runs `apt`"; "no installer fetches" | Every tool run has `PrivateNetwork=yes` | A repository installer fetches through the package manager, from the one repository the order names, in `stage` only, in two commands that run no package script. Every other tool run keeps `PrivateNetwork=yes` (section 4.6) |
-| packages.md 7.4, 8: trust for a Linux package | `[trusted_signers]` and the artifact's attestation | The repository's key, part of hostkeeper's host configuration placed at host setup, and the required digest pin. No attestation is checked or accepted for a repository entry (section 3) |
+| packages.md 5.2, 5.4: `deb`, `rpm`, `arch`, `apk`, `macos-pkg` | Installers that fetch a package file by digest, check its attestation and install the file with the format's tool | Withdrawn. `apt` (A7) installs from an apt repository and `brew` (A9) from a Homebrew tap (section 4.7); `dnf` (A8) is later (section 6); `arch` and `apk` are withdrawn with no successor |
+| packages.md 5.2, 5.3: "the daemon never runs `apt`"; "no installer fetches" | Every tool run has `PrivateNetwork=yes` | A repository installer fetches through the package manager, from the one repository the order names, in `stage` only. On Linux that is two commands that run no package script, and every other tool run keeps `PrivateNetwork=yes` (section 4.6); on macOS the fetches run as the prefix's owner and root runs only the pinned, sealed bottle (section 4.7) |
+| packages.md 7.4, 8: trust for a service's package | `[trusted_signers]` and the artifact's attestation | The repository's key, part of hostkeeper's host configuration placed at host setup, and the required digest pin; for a tap, the pin and a tap that only fast-forwards (section 4.7). No attestation is checked or accepted for a repository entry (section 3) |
 | packages-lifecycle.md 6.1, 6.4 to 6.6 for `deb` and `rpm` | The kept artifact; rollback installs it; `dpkg --purge`; a package installed by hand refused (`package_not_ours`) | The kept index and package apt fetched; rollback is a downgrade with apt; the hold; `dpkg --purge`; a package at a version hostkeeper did not set is drift, repaired and reported (section 4.4) |
 | packages-tests.md: `deb`, `rpm`, `arch`, `macos-pkg` cases | Device tests that install a fixture file | The cases of A16 and A7 (packages-tests.md), with a fixture repository on the runner's disk |
 
@@ -53,16 +54,23 @@ fetches it from the stores the entry names, checks its size, digest and Sigstore
     { "installer": "apt", "repository": "komira-testing", "package_version": "1.6.0-1",
       "digest": "<64 hex>", "manifest": { "package": "tierstore", "run": ["tierstore.service"], ... } },
     { "installer": "tarball", "locations": [...], "digest": "<64 hex>", "bytes": "...",
-      "attestation": {...}, "manifest": {...} } ] }
+      "attestation": {...}, "manifest": {...} } ] },
+  "macos-arm64": { "entries": [
+    { "installer": "brew", "repository": "komira-testing", "package_version": "1.6.0",
+      "digest": "<64 hex of the bottle>", "manifest": { "package": "tierstore", "run": ["tierstore"], ... } } ] }
   ```
 
 - `komira-testing` is not a URL. It names an entry of the host's own repository configuration, which host setup put
-  there with the repository's signing key, as part of hostkeeper's own configuration (section 3). The coordinator
+  there with the repository's signing key (a tap's entry has none), as part of hostkeeper's own configuration
+  (section 3). The coordinator
   never sends a URL, a suite or a key.
 - A Debian or Ubuntu host with that entry runs, in effect, `apt-get install tierstore=1.6.0-1` against that
   repository alone, refuses it unless its SHA-256 is the order's, holds the package (`apt-mark hold`), and starts the
   service's units itself. A package found at any other version is put back to the desired one and reported as drift.
-- A host without an `apt` repository configured does not announce `apt` and takes the next entry it can install (here
+- A Mac with that channel's tap configured runs `brew install` of `tierstore@1.6.0` from it as the Homebrew prefix's
+  owner, refuses it unless the bottle's SHA-256 is the order's, pins it, and runs the service as root from its own
+  sealed copy of the bottle (section 4.7).
+- A host without a repository configured does not announce `apt` or `brew` and takes the next entry it can install (here
   the tarball), or shows `no_build_for_host`, as today.
 
 **What does not change.** The pick of an entry by installer name; one installer per service on a host; the manifest
@@ -110,10 +118,10 @@ A repository entry is checked by A16's rules in the shared crate `hostkeeper-rel
 | The service `hostkeeper` with a repository entry (only one `hostkeeper-archive` entry is allowed, as today) | `TARGET_INVALID` |
 
 A repository entry whose manifest has no `package` is refused there too. The grammars are the union of the
-managers' (dpkg's and rpm's names and versions), so a later backend needs no coordinator change. An artifact entry is checked exactly as today.
+managers' (dpkg's, rpm's and Homebrew's names and versions), so a later backend needs no coordinator change. An artifact entry is checked exactly as today.
 A16 owns these checks, the two fields' comments and the header of `release.proto`, and the crate's installer set
 (`Installer`, `names_a_package`, `is_repository`); A7 owns the daemon's rules that depend on the installer: `apt`'s grammars for
-`package` and `package_version` and the manifest rules of section 3.4.
+`package` and `package_version` and the manifest rules of section 3.4, and A9 owns `brew`'s (section 4.7).
 
 The coordinator stores the entry as it was sent, as for every entry: in `<state-file>.releases` or the `releases`
 table's `targets` column, as proto3 JSON. A release stays immutable (packages.md section 3.4): the same version set
@@ -137,16 +145,17 @@ pull for it.
   picks the entry for it. It takes the next entry it lists, or shows `no_build_for_host`. A host that runs the service
   from a tarball keeps the tarball entry, wherever the `apt` entry stands (packages.md section 3.3). If such a daemon
   were sent an `apt` entry anyway, it answers `installer_not_listed`, as for any installer it does not list.
-- **A daemon with `apt`** given an artifact installer's entry with `repository` set, or an `apt` entry with
+- **A daemon with `apt` or `brew`** given an artifact installer's entry with `repository` set, or a repository entry with
   artifact fields, answers `Failed`, `release`, `order_invalid`.
 
 ### 2.4 The digest pin
 
-`digest` is **required** on every repository entry, from every caller: CI always knows the `.deb`'s SHA-256, because
-it built and published the file, and an operator who sets a version by hand copies it from the release. The daemon
+`digest` is **required** on every repository entry, from every caller: CI always knows the `.deb`'s (or the
+bottle's) SHA-256, because it built and published the file, and an operator who sets a version by hand copies it from the release. The daemon
 checks, before it downloads anything, that the `SHA256` field of the package's stanza in the repository's signed index
 equals it, and refuses the order otherwise (`Failed`, `release`, `package_digest_mismatch`). apt then checks the file
 it downloads against the same index, and the daemon hashes the downloaded file itself and compares it with the pin.
+For `brew` the pin is checked against the formula's bottle `sha256` instead (section 4.7).
 
 The order's `package_digest` for a repository entry is the pin (the coordinator fills it from the entry, A3), so
 packages.md section 8.1's rule that the entry's `digest` equals `package_digest` holds unchanged.
@@ -176,8 +185,8 @@ Components: main
 Signed-By: /etc/hostkeeper/repositories/komira.gpg
 ```
 
-The entry's name is the file's stem. The directory holds `<name>.sources` files and the keyrings they name, nothing
-else. A host's daemon reads it at start and refuses to start (as for a bad `stores.toml`, rule S2: configuration in
+The entry's name is the file's stem. On Linux the directory holds `<name>.sources` files and the keyrings they
+name, nothing else; on macOS it holds `<name>.tap` files (section 4.7). A host's daemon reads it at start and refuses to start (as for a bad `stores.toml`, rule S2: configuration in
 files) on any other file, a `.sources` file whose stem is not of the grammar of section 2.2, a file or keyring not
 root-owned or writable by group or others, or a stanza that is not exactly one
 stanza with `Types: deb`, one URI of `https://` or `file:/` (a repository on the host's own disk, as the device tests
@@ -204,7 +213,8 @@ and they are placed where that configuration is placed: at host setup. The coord
 (network-install.md), `hostkeeper-pxe` takes a directory of entries and keyrings with `--repositories <dir>`, checks
 it with the daemon's own loader before it writes a single seed (as it does `hostkeeper.toml`), and writes it to
 `/etc/hostkeeper/repositories/` through the same autoinstall user data. On a host set up by hand, the enrollment
-runbook (docs/operations/enrollment.md) gains the step that copies them. That is A17.
+runbook (docs/operations/enrollment.md) gains the step that copies them. On a Mac, the MDM kit that places
+`hostkeeper.toml` (hostkeeper-mdm.md) places the `.tap` entries too. That is A17.
 
 **Rotation is host setup's too.** The repository's owner publishes the next key ahead of time and signs the suites
 with both keys for an overlap. Host setup replaces the keyring with one that holds both keys, on every host, before
@@ -216,7 +226,8 @@ be taken back after it leaks.
 
 ### 3.3 What is trusted, and what is not used
 
-For a repository entry, the chain is apt's: the keyring on the host verifies the suite's `InRelease`, which lists the
+This section is apt's; a Homebrew tap has no signature, and section 4.7 says what a Mac trusts instead. For an apt
+entry, the chain is apt's: the keyring on the host verifies the suite's `InRelease`, which lists the
 SHA-256 of the `Packages` index, which lists the SHA-256 of the `.deb`. The pin ties that last digest to CI's.
 hostkeeper checks nothing about who built the bytes beyond that.
 
@@ -231,13 +242,13 @@ hostkeeper checks nothing about who built the bytes beyond that.
   the `run` units. For a repository entry the hook program is a file of the signed package (section 4.3), so the
   caller of `SetDesired` chooses among the package's programs, as it chooses among a tarball's today.
 
-| Guarantee (packages.md section 8.1) | Repository entry |
-|---|---|
-| An order names exact bytes | The pin, checked against the signed index and the downloaded file |
-| Integrity before any byte is used | apt verifies the suite's signature and every hash before it hands a file over; the daemon extracts nothing before that, and checks the pin |
-| Who decides the bytes | The holder of the repository's key and CI's pin, both; not `[trusted_signers]` |
-| What runs as root | The package's maintainer scripts, from the signed package, in `activate` and `remove`; the hook, a program of the signed package's tree |
-| Removal | The package, purged, whatever version is installed (section 4.4) |
+| Guarantee (packages.md section 8.1) | `apt` entry | `brew` entry (section 4.7) |
+|---|---|---|
+| An order names exact bytes | The pin, checked against the signed index and the downloaded file | The pin, checked against the formula's bottle `sha256` and the daemon's own copy |
+| Integrity before any byte is used | apt verifies the suite's signature and every hash before it hands a file over; the daemon extracts nothing before that, and checks the pin | The daemon extracts only its own copy of the bottle, after hashing it against the pin |
+| Who decides the bytes | The holder of the repository's key and CI's pin, both; not `[trusted_signers]` | CI's pin, through a tap that only fast-forwards |
+| What runs as root | The package's maintainer scripts, from the signed package, in `activate` and `remove`; the hook, a program of the signed package's tree | The sealed tree of the pinned bottle only (the program and the hook); the formula's Ruby runs as the owner, never as root |
+| Removal | The package, purged, whatever version is installed (section 4.4) | Every version of the service's formula, uninstalled |
 
 ### 3.4 The manifest of a repository entry
 
@@ -246,12 +257,13 @@ service:
 
 | Field | Repository entry |
 |---|---|
-| `package` | Required: the package's name, checked by the daemon against the package manager's grammar and against the package's own control field |
-| `hook` | Required. `command` empty: built-in steps. Otherwise a program of the package's extracted tree (`tree/usr/lib/<package>/…`), under today's rules. The bounds as today |
-| `run` | Required, 1 to 64: the units the package installs that hostkeeper starts, stops, enables and observes. Each must be a unit file of the package, under `lib/systemd/system/` or `usr/lib/systemd/system/` of its tree |
+| `package` | Required: the package's name, checked by the daemon against the package manager's grammar and against the package's own control field (for `brew`, the formula's name and version as `brew info` gives them) |
+| `hook` | Required. `command` empty: built-in steps. Otherwise a program of the package's extracted tree (`tree/usr/lib/<package>/…` for `apt`, a path of the keg such as `tree/libexec/…` for `brew`), under today's rules. The bounds as today |
+| `run` | Required, 1 to 64: the units the package installs that hostkeeper starts, stops, enables and observes. For `apt` each must be a unit file of the package, under `lib/systemd/system/` or `usr/lib/systemd/system/` of its tree; for `brew` a launchd label whose plist the bottle carries |
 | `health_url` | Optional, as today |
 | `installer_bounds` | Required: `stage_secs` bounds the index fetch, the download and the checks; `activate_secs` the install; `remove_secs` the purge |
-| `place`, `containers` | Refused: the package places its own files, and runs no image |
+| `place` | Refused for `apt`, whose package places its own files. For `brew`, required with exactly one `unit` entry per `run` label (the plist in the bottle and its path under `/Library/LaunchDaemons/`) and no `file` entry |
+| `containers` | Refused: the package runs no image |
 | `params` | Allowed only with a hook program, which reads them; refused with built-in steps, which read none |
 | `min_hostkeeper` | As today |
 
@@ -261,8 +273,8 @@ One installer kind, `repository`, in `hostkeeper-install`, does the steps of thi
 the version directory and its seal, the work directory that sees one repository, the pin, the two-phase fetch, the
 simulation, the hold, rollback from the kept copy, purge, drift, the units and the failure classes. What differs per
 manager is a **backend**: the commands that read the index, simulate, download, install, hold, query and purge, and
-how their output maps onto section 4.5's reasons. `apt` is the first backend and the only one designed here. A host
-announces the backend's name (`apt`) as its installer, so the coordinator's pick by name (packages.md section 3.3) is
+how their output maps onto section 4.5's reasons. `apt` (sections 4.1 to 4.6) and `brew` (section 4.7) are the two
+backends designed here. A host announces the backend's name (`apt`, `brew`) as its installer, so the coordinator's pick by name (packages.md section 3.3) is
 unchanged, and one host announces at most one backend: the one of its own package database (packages.md section 5.4).
 
 ### 4.1 When a daemon announces it
@@ -400,11 +412,136 @@ Every apt, dpkg and dpkg-deb run is a transient unit, as every tool run is. The 
 can reach are the one entry's URI. Every other run, the install and the purge included, has `PrivateNetwork=yes`, so
 a maintainer script cannot fetch anything either. packages.md section 5.3's rule "fetch nothing, and let no tool
 fetch" now reads: an installer fetches only in `stage`, only through its package manager, only from the repository the
-order names, and never while a package script runs.
+order names, and never while a package script runs. On macOS, where a launcher cannot cut the network, the brew
+backend's guarantee is section 4.7's instead: nothing it runs is root, and root runs only the pinned bottle's sealed
+tree.
+
+### 4.7 The `brew` backend (macOS)
+
+The project's macOS route is Homebrew: the release machinery publishes each release's formula and bottle to a
+testing tap, and promotes the same bottle to a stable tap. The farm's Macs run services this way. The backend follows
+section 4's shape step for step; this section says where Homebrew differs.
+
+**The entry.** A channel is a tap. Its entry is `/etc/hostkeeper/repositories/<name>.tap`, root:root 0644, under
+section 3.1's rules for the directory (on macOS the directory holds `.tap` files, on Linux `.sources` files; any
+other file refuses the start):
+
+```toml
+remote = "https://github.com/example/homebrew-testing"   # the tap's Git remote: https:// or, for tests, file:/
+prefix = "/opt/homebrew"                                  # the Homebrew prefix on this Mac
+owner  = "admin"                                          # the account that owns the prefix
+```
+
+The daemon refuses to start on an entry that does not parse, whose `remote` is not `https://` or `file:/`, whose
+`owner` is not an account of the host or is root, or whose prefix's `Cellar/`, `Library/Taps/` and resolved
+`bin/brew` are owned by another account or writable by others (group write for `admin`, Homebrew's own default, is
+allowed). A prefix or a `brew` not yet installed is not a refusal: the Mac does not announce `brew` until it is there,
+as a Linux host without apt's tools does not announce `apt` (section 4.1). The tap is tapped under a name of
+hostkeeper's, `hostkeeper/<name>`, so a formula's full name is `hostkeeper/<name>/<package>@<V>` and no tap the owner
+adds by hand can stand in for it. A Mac announces `brew` when it has at least one such entry and its brew. A7 owns the
+directory's loader (section 3.1); A9 owns the `.tap` schema and these checks. On a Mac the entries are placed by the
+MDM kit with `hostkeeper.toml` (hostkeeper-mdm.md), which is A17's Mac half.
+
+**The version: one formula per release, `<package>@<V>`.** A plain formula installs whatever version its file holds
+at the tap's head, so `brew install` has no way to say "version V", and `brew pin` stops upgrades but chooses no
+version. So the release machinery, which already generates tierstore's formula, writes a versioned formula per
+release, the file of the formula `tierstore@1.6.0`, and never edits it after; promotion copies it to the stable tap unchanged. The
+entry's `manifest.package` is the base name (`tierstore`), its `package_version` the formula's version (`1.6.0`),
+and the daemon installs `hostkeeper/<name>/<package>@<package_version>`. The brew backend refuses a
+`package_version` with `:`, `~` or `+`, which no formula name may hold (`order_invalid`). Each such formula is
+`keg_only :versioned_formula`, declares no dependency, defines no `post_install`, and has one bottle under the tag
+`all`, `cellar :any_skip_relocation` (a static build, which needs no rewriting at pour), so one SHA-256 serves every
+Mac; a formula with per-tag bottles is refused (`manifest_invalid`). The bottle carries the service's launchd plist in the keg, at the path the entry's `place`
+names.
+
+**Trust.** A tap has no signature. What a Mac trusts is the tap's Git remote over HTTPS, the pin, and nothing the
+prefix's owner can change:
+
+- The **pin is the integrity**: the daemon refuses a formula whose bottle `sha256` for the host's tag is not the
+  entry's `digest`, and hashes the downloaded bottle itself against it.
+- The tap's history only moves forward: the daemon updates it by fast-forward alone, and a remote whose history was
+  rewritten is refused (`tap_rewritten`).
+- **Homebrew runs as the prefix's owner, never as root.** It refuses to run as root, and it must not: a formula is
+  Ruby code that `brew` evaluates. The daemon is root and starts each `brew` and `git` run through the step launcher
+  as `/usr/bin/sudo --non-interactive --set-home --user=<owner> /usr/bin/env -i <environment> <command>`, so the
+  account switch, the owner's groups and its home are sudo's (no code of hostkeeper's changes its own uid), and the
+  environment is a fixed list with nothing inherited: `HOME`, `USER` and `LOGNAME` of the owner, `TMPDIR` a
+  per-service directory the owner owns, `PATH=<prefix>/bin:/usr/bin:/bin`, `HOMEBREW_NO_AUTO_UPDATE=1`,
+  `HOMEBREW_NO_INSTALL_CLEANUP=1`, `HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1`, `HOMEBREW_NO_ANALYTICS=1`,
+  `HOMEBREW_NO_ENV_HINTS=1`, and `HOMEBREW_CACHE` a per-service directory the owner owns. These are the child's
+  environment, set by the daemon; none is configuration the daemon reads (rule S2). The step launcher gains this
+  call, a tool run as another account with a given environment, in A9; today's launcher takes only a service, an
+  executable, a unit and a bound.
+- **Root never runs a byte from the prefix.** The prefix and its kegs are the owner's, so a program there could be
+  changed by anything that runs as the owner. The daemon copies the pinned bottle out of the cache into its own
+  root-owned staging directory, hashes the copy, and extracts that copy into the version's sealed `tree/`. The service
+  runs as root from `current/tree/`, never from the keg. Whatever runs as the owner (the tap's Ruby, `git`, `brew`)
+  can change the tap, the cache and the keg, and so can only change Homebrew's view of the service, which the
+  observer reports as drift; it cannot change what root runs. The keg is what Homebrew knows the service by: its version,
+  its pin, the link an operator's shell finds; the sealed tree is what runs.
+
+**The version directory** is section 4.2's, with `brew/` in place of `apt/`: `brew/<name>.tap` (the entry as it was
+at stage), `brew/<formula>.rb` (the formula file at the tap commit staged), `brew/commit` (that commit),
+`brew/<bottle>.tar.gz` (the pinned bottle), and `tree/`, the keg the bottle holds.
+
+| Step | Does | Network |
+|---|---|---|
+| `stage` | 1. Tap the channel if it is not (`brew tap hostkeeper/<name> <remote>`), then fast-forward it (`git -C <tap> fetch` and `merge --ff-only`); a fetch that fails is `fetch_failed`, history that does not fast-forward `tap_rewritten`. 2. `brew info --json=v2 <formula>`: the formula exists (else `not_in_repository`), its version is V, it is keg-only, it has no dependency (else `dependency_changes`), no `post_install` (else `manifest_invalid`), a bottle under the tag `all` (else `no_bottle_for_host`) whose cellar is `any_skip_relocation` (else `manifest_invalid`) and whose `sha256` is the pin (else `package_digest_mismatch`). 3. `brew fetch --force-bottle <formula>`, which downloads the bottle and checks it against the formula; find it with `brew --cache --force-bottle <formula>` and copy it to the staging directory and hash the copy against the pin. 4. Extract the copy with the bounded reader (packages.md section 5.2) into `tree/`, then the core's walk and `MacVerify` (packages.md section 5.2). 5. Every `run` label's plist is a file of the tree that the entry's `place` names, and passes the placer's lint: its program is under `current/tree/`. 6. Seal | Steps 1 and 3, as the owner; no package code runs as root |
+| `activate` | Under the host-wide installer lock: `brew install --force-bottle <formula>` from the cached bottle (the daemon puts its sealed copy back in the cache first, so nothing is downloaded); `brew unlink` the service's other kegs and `brew link --force <formula>`; `brew pin <formula>`; `brew list --versions <formula>` must show V; record in `placed.json` the installer `brew`, the formula, the version and the owner; place the plist from `current/tree/` into `/Library/LaunchDaemons/` as a link, by today's placement; switch `current` | None needed: the bottle is in the cache |
+| `retire` | `brew unpin` and `brew uninstall` the formula of a version that is neither `current` nor `previous`, then delete its version directory, so a crash between the two leaves a directory and no unrecorded keg | None |
+| `remove` | Remove the placed plist links; `brew unpin` and `brew uninstall --force` every formula of the service hostkeeper recorded (current and previous), and any other `hostkeeper/<name>/<package>@*` formula, of this service's package in its own tap, installed by hand (drift, reported) | None |
+
+**Who writes the launchd job: hostkeeper, from the bottle.** The formula's `service` block is not used, and
+`brew services` never runs. `brew services` would load the job as the owner, or as root from a plist that points into
+the owner's prefix, and it would compete with hostkeeper for the job's start and stop. The plist is a file of the
+pinned bottle, placed by hostkeeper exactly as a tarball's units are (packages.md section 4.4: a unit `place` entry,
+its program only through `current/`), so its text is part of the pinned bytes and never the unattested manifest's.
+hostkeeper loads, starts and stops the job, as for every macOS service.
+
+**Update, rollback, the hold, removal.**
+
+- **Update** to V: `stage` V, the hook's `prepare` from V's tree, `activate` V, then `cutover`, `verify`, `cleanup`.
+  Both kegs, V's and the previous P's, stay installed: they are two formulae.
+- **The hold** is `brew pin`. An operator's `brew upgrade` skips a pinned formula, and a versioned formula has no
+  newer version to move to anyway, since its file never changes.
+- **Rollback** to P: switch `current` back to P's tree, `brew unlink` V and `brew link --force` P's kept keg. Nothing
+  is fetched and nothing is installed, so the network and the tap need not be up.
+- **A version no longer on the host** is staged again from the tap, which keeps every versioned formula.
+- **Uninstall** keeps section 4.4's order with `remove` above. The service's data stays, as for every installer.
+
+**Drift.** At every heartbeat the observer reads the prefix directly, with no brew run: the service's kegs under
+`<prefix>/Cellar/<package>@*/` and the link `<prefix>/opt/<package>@<V>`. It compares the linked keg with `current`,
+and the keg's files with the sealed tree, leaving out what pouring adds (`INSTALL_RECEIPT.json` and `.brew/`). A different keg linked, a version of
+the service's formula installed outside hostkeeper, or a keg whose files differ from the tree is drift, reported as
+for apt (`ServiceBeat.drift`). The next `install` or `update` corrects it: it uninstalls an unrecorded keg,
+reinstalls a changed one from the sealed bottle (`brew unpin`, `brew reinstall --force-bottle`, since brew refuses
+to reinstall a pinned formula), and links and pins the desired
+version, and its verdict is `Succeeded`, `drift_repaired`. Since root runs only the sealed tree, a changed keg is a
+drift of Homebrew's view, never of what runs.
+
+**Failures.** As section 4.5, with these for brew:
+
+| What happened | Step | Outcome |
+|---|---|---|
+| The order's `repository` is not a `.tap` entry of this Mac | `stage` | `Failed`, `environment`, `repository_unknown` |
+| The tap's remote cannot be reached; the bottle cannot be downloaded | `stage` 1, 3 | `Deferred`, `environment`, `fetch_failed` |
+| The tap's history does not fast-forward | `stage` 1 | `Failed`, `environment`, `tap_rewritten` |
+| No formula `<package>@V` in the tap (`brew info` exits non-zero and the formula file is not in the tap) | `stage` 2 | `Deferred`, `environment`, `not_in_repository` |
+| The formula's `all` bottle `sha256` is not the pin | `stage` 2 | `Failed`, `release`, `package_digest_mismatch` |
+| The formula has no `all` bottle | `stage` 2 | `Failed`, `release`, `no_bottle_for_host` |
+| The formula declares a dependency | `stage` 2 | `Failed`, `environment`, `dependency_changes` |
+| The formula is not keg-only, defines `post_install`, needs relocation, has per-tag bottles, or its plist is not in the tree | `stage` 2, 5 | `Failed`, `release`, `manifest_invalid` |
+| The downloaded bottle is not the pin | `stage` 3 | `Deferred`, `environment`, `store_digest_mismatch` |
+| Another Homebrew process holds its lock | any | `Deferred`, `environment`, `package_manager_busy` |
+| `brew install`, `link` or `pin` failed, or V is not listed after it | `activate` | `Failed`, `release`, `brew_error`, with brew's last error line; rolled back to P, or a first install removed |
+
+A9's device tests run in the `macos-device` job against a tap and bottles on the runner's disk (`file:` remote and
+bottle URLs), installed as a runner account that owns a Homebrew prefix with no `homebrew/core` tap, and show that
+`activate` and a rollback fetch nothing.
 
 ## 5. Health and hand-over
 
-**The units are hostkeeper's to run.** The release machinery's install check on clean machines asserts that the
+**The units are hostkeeper's to run.** On Linux, the release machinery's install check on clean machines asserts that the
 package installs its units disabled and not started (tierstore's does today). hostkeeper then owns them as it owns a
 tarball's: each `activate` enables every `run` unit not yet enabled by writing its `WantedBy` links and recording
 them in `placed.json`, and takes away the links of a unit the version no longer runs, as hostkeeper-design.md section
@@ -412,6 +549,12 @@ them in `placed.json`, and takes away the links of a unit the version no longer 
 steps, in `force` and at its own start; `remove` takes the links away. A package whose own scripts enable or start its units is not stopped from doing so (packages-lifecycle.md
 section 6.2): its enablement link is left unclaimed, as today's rule says, and a start in `postinst` is a hand-over
 outside the hook. The install check is where such a package is refused, before any host sees it.
+
+**On a Mac** the same holds for the launchd job: hostkeeper places the plist from the sealed tree (section 4.7),
+loads and starts the job in built-in steps, in `force` and at its own start, and removes it in `remove`. The job's
+program is under `current/tree/`, so a rollback's switch of `current` re-points it. macOS has no hand-over of ports
+(hostkeeper-design.md), so an update of a Mac service is a restart. The observer hashes the running program against
+the sealed tree, which is the file it runs.
 
 **The first deploy.** A host that has never run the service gets an `install` order, as for any installer: `stage`,
 the hook's `prepare` if there is a hook, `activate` (install, hold, enable), then `cutover`, which starts the units, as
@@ -426,28 +569,29 @@ or by an earlier tool) reports it as drift, and the first `install` installs the
 **Later hand-offs.** With built-in steps, `cutover` restarts the `run` units: a gap of one restart. With a hook, the
 hook does the hand-over from the new version's tree, as for an archive: `prepare` runs before `activate`, and
 `cutover` after it. tierstore's port-forward hand-over (host-updates.md section 4.1) works this way, with one
-constraint every repository package has: apt installs one version at a time. During the hand-over the old process
+constraint every `apt` package has: apt installs one version at a time. During the hand-over the old process
 runs from the old files' inodes, which dpkg has replaced on disk. A hand-over that needs the old version's files at
-their paths (to re-execute, or to read its own data files) cannot be done from a repository package, and such a
+their paths (to re-execute, or to read its own data files) cannot be done from an `apt` package, and such a
 service stays a tarball. The package must not restart its units in its scripts (debhelper's `--no-start
 --no-restart-after-upgrade`), so the hook decides when the new version starts.
 
 **Observation.** packages-lifecycle.md section 6.6 is kept for a native package: the observer reads the first `run`
 unit's program from the unit text in `tree/`, and hashes the running process's executable against that file of the
 sealed tree. A process left from the previous version runs the old inode, whose bytes differ, and shows
-`version_mismatch`. The observer also reads the installed version with `dpkg-query`; a version other than the one
+`version_mismatch`. For `apt` the observer also reads the installed version with `dpkg-query` (for `brew`, the
+prefix, section 4.7); a version other than the one
 recorded is drift (section 4.4). The health URL is probed as today.
 
 ## 6. The next backends
 
 Every format the project publishes gets the same two channels, testing and stable, with the same bytes promoted, so
-each later manager is a backend of section 4's installer: an entry of its own kind under
-`/etc/hostkeeper/repositories/` with its key, a work directory that sees that repository alone, the pin against the
+each later manager is a backend of section 4's installer, shaped like `apt` rather than `brew` where its repository
+is signed: an entry of its own kind under `/etc/hostkeeper/repositories/` with its key, a work directory that sees that repository alone, the pin against the
 SHA-256 its signed metadata lists, a fetch in `stage` only, a kept index and package per version so a rollback needs
 no network, the manager's hold, purge, and drift. **dnf** (Fedora, RHEL and its rebuilds, Amazon Linux) is the next:
 a `.repo` entry with `gpgcheck=1`, `repo_gpgcheck=1` and its `gpgkey`, `dnf install package-V`, `dnf versionlock` as
-the hold and `dnf downgrade` for a rollback. It gets its own design pull request once an RPM host exists (A8). apk,
-pacman and Homebrew are later and not designed here (A13, A14, A9).
+the hold and `dnf downgrade` for a rollback. It gets its full design, in a pull request of its own, when the first RPM
+host exists (A8).
 
 ## 7. Compatibility and the staged path
 
@@ -459,11 +603,12 @@ Every change is additive (rule B8):
 - The coordinator's releases: the same JSON with two more keys, which a coordinator before A16 keeps on rewrite. A16's
   test starts the previous coordinator's reader on a releases file and a Postgres table holding a repository entry.
 - The host: `/etc/hostkeeper/repositories/` is a new directory an older daemon does not read; `placed.json`'s
-  `installed` gains the installer `apt` and the `repository` key, which an older binary keeps on rewrite
-  (`crates/hostkeeper-placed/src/store.rs`); a version directory with `apt/` is one an older binary does not hold,
+  `installed` gains the installers `apt` and `brew` and the `repository` key, which an older binary keeps on rewrite
+  (`crates/hostkeeper-placed/src/store.rs`); a version directory with `apt/` or `brew/` is one an older binary does
+  not hold,
   except after a fallback, which packages.md section 9.1 covers: the earlier binary reports such a service as
-  unreadable and leaves it, and a rollback of `hostkeeper` below A7 on a host that holds an `apt` version is
-  `rollback_below_installer`.
+  unreadable and leaves it, and a rollback of `hostkeeper` below A7 (A9 on a Mac) on a host that holds an `apt`
+  (`brew`) version is `rollback_below_installer`.
 - `agent.proto`: `ServiceBeat.drift = 14`, an optional message (the version found, the version recorded), which an
   older coordinator skips; its test is in `additions_installers.rs` beside `ServiceBeat.installer` (A7).
 - No refusal is relaxed or tightened for an artifact entry, and `deb`, `rpm`, `arch`, `apk` and `macos-pkg` were never
@@ -471,7 +616,8 @@ Every change is additive (rule B8):
   names them is still accepted, as a set with any unknown installer name is, and no host is ever picked for it.
 
 The stages of packages.md section 9.2 gain one line each: A16 is released with or after stage 1's coordinator and
-before any daemon announces `apt`; A7 is in stage 4, as every installer is; A17 follows A7. Stages 5 and 6 (A11, A12)
+before any daemon announces `apt` or `brew`; A7 and A9 are in stage 4, as every installer is; A17 follows A7 and
+A9. Stages 5 and 6 (A11, A12)
 and their order are unchanged.
 
 ## 8. The build items, re-scoped
@@ -487,14 +633,14 @@ own release stays `hostkeeper-archive` with its index, and the channel keeps hos
 | A6 | Unchanged; what a repository installer needs of A6's trait and loader, A7 adds |
 | A7 | The repository installer kind with its backend interface, and the `apt` backend: the installer trait's `stage` from a repository entry, `VersionDir::read` of a directory with `apt/` and no `artifact`, the two fetch commands as the only runs without `PrivateNetwork=yes`; the repository configuration and its checks at start, the announce rule, `stage` (update, index read, pin, download, control fields, extract, walk, units, simulation), `activate` with the hold and enablement, rollback by downgrade from the kept index and package, `retire`, `remove` by purge, drift and `ServiceBeat.drift` shown by the coordinator, the failure reasons of section 4.5, `coordinator_too_old` for an entry with no repository; replaces `deb` |
 | A8 | `dnf` backend (later): its own design pull request once an RPM host exists (section 6), then the backend; replaces `rpm`. Until then an RPM-family host takes the tarball |
-| A9 | Later, not designed here (a macOS repository backend); `macos-pkg` is withdrawn |
+| A9 | The `brew` backend (section 4.7): the `.tap` entry and its checks at start, the announce rule, brew and git run as the prefix's owner with the fixed environment, `stage` (fast-forward, `brew info`, pin, `brew fetch`, the copy, extract, walk, `MacVerify`, plist), `activate` (install from the cached bottle, link, pin), rollback by relinking, `retire` and `remove` with `brew uninstall`, drift, the failure reasons; after A7 and A16; replaces `macos-pkg` |
 | A10 | Unchanged (`oci-image`) |
 | A11 | Unchanged; repository services never used the channel and add nothing to its conditions |
 | A12 | Unchanged |
-| A13 | Later, not designed here (an Alpine backend, after a daemon that runs without systemd) |
-| A14 | Later, not designed here (an Arch backend); `arch` is withdrawn |
-| A16 (new) | `Target.repository` and `Target.package_version` in `release.proto`; `hostkeeper-release`'s checks of section 2.2 and its installer set (`apt` beside `hostkeeper-archive`, `tarball`, `oci-image`; `deb`, `rpm`, `arch`, `apk`, `macos-pkg` dropped; a later backend adds its name); the coordinator's audit of a repository entry; after A2, before A7 |
-| A17 (new) | Host setup places repository entries and keyrings: `hostkeeper-pxe --repositories <dir>` checked by the daemon's loader, the enrollment runbook's step, and a rotation runbook (section 3.2); after A7 |
+| A13 | Withdrawn, with `apk` |
+| A14 | Withdrawn, with `arch` |
+| A16 (new) | `Target.repository` and `Target.package_version` in `release.proto`; `hostkeeper-release`'s checks of section 2.2 and its installer set (`apt` and `brew` beside `hostkeeper-archive`, `tarball`, `oci-image`; `deb`, `rpm`, `arch`, `apk`, `macos-pkg` dropped; a later backend adds its name); the coordinator's audit of a repository entry; after A2, before A7 |
+| A17 (new) | Host setup places repository entries and keyrings: `hostkeeper-pxe --repositories <dir>` checked by the daemon's loader, the enrollment runbook's step, the MDM kit's `.tap` entries on a Mac, and a rotation runbook (section 3.2); after A7 and A9 |
 
 A5 (CI's archive entries for hostkeeper and `hello`) and A15 (the static build) are unaffected. A service's release
 workflow sends repository entries once A16 and A7 are released; that is the shared release machinery's change, not
@@ -528,3 +674,9 @@ an item of this repository.
 | The hook of a repository package | A program of the extracted tree of the downloaded package, or built-in steps | The program is part of the signed package, and the hook contract stays the same for every installer |
 | Key placement and rotation | Host setup (`hostkeeper-pxe --repositories`, the runbook), with an overlap of two keys | The coordinator never holds the trust root; a self-renewing keyring package cannot be revoked after a leak |
 | `deb`, `rpm`, `arch`, `apk`, `macos-pkg` | Withdrawn | The ruling: no package file is installed; no daemon ever listed them |
+| brew's version | One versioned formula per release, `<package>@<V>`, never edited after | `brew install` has no version argument, and `brew pin` chooses none |
+| Who runs brew | The prefix's owner, by the step launcher, with a fixed environment; never root | Homebrew refuses root, and a formula is Ruby that must not run as root |
+| What runs as root on a Mac | The pinned bottle's sealed copy in `current/tree/`, never the keg | The prefix is the owner's; root must run nothing the owner could change |
+| Who writes the launchd job | hostkeeper places the plist from the bottle, as a tarball's units; `brew services` is never used | The job's text is then part of the pinned bytes, and hostkeeper alone starts and stops it |
+| brew's trust | The pin (required), and a tap that only fast-forwards | A tap has no signature |
+| brew's hold and rollback | `brew pin`; rollback relinks the kept previous keg | Both kegs stay installed, so a rollback needs no network |

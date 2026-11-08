@@ -9,13 +9,13 @@ the pick's own bounds in `crates/hostkeeper-coordinator/src/picks_tests.rs`); no
 [packages.md](packages.md), kept in a file of its own so that one stays under 1000 lines (rule R12). Section numbers here
 are those of packages.md, and A1 to A15 are its build items (section 13). A16, A17 and the re-scoped A7 are
 [packages-repositories.md](packages-repositories.md)'s (its section 8); the `deb`, `rpm`, `arch`, `apk` and `macos-pkg` cases
-are withdrawn with those installers, and the repository installer's cases are the four items before A15's.
+are withdrawn with those installers, and the repository installer's cases are the five items before A15's.
 
 Each item's tests are behaviour tests in Rust, in the crate the item changes (rules T8, T11, T12). Each runs with no
 network and no system path, through the fakes the crates already have (`Fetcher`, `Verifier`, the coordinator's backend
 fake, the step launcher's fake, the placer's roots under a scratch directory), and through a command port for the
 formats' tools. A host's `os-release` and the tools' paths are read under a scratch root the test makes. None asserts a
-time: a bound is tested on an injected clock (rule T10). Real `apt`, `dpkg` and `podman`
+time: a bound is tested on an injected clock (rule T10). Real `apt`, `dpkg`, `brew` and `podman`
 run only in the device jobs (`privileged`, `macos-device`), whose tests count toward no coverage gate.
 
 - **Manifest and target checks (A1; `crates/hostkeeper-release/tests/manifest.rs`).** One case per check of sections
@@ -72,17 +72,18 @@ run only in the device jobs (`privileged`, `macos-device`), whose tests count to
   refused before any fetch; a bundle that does not list the digest (`not_attested`), and one bundle that lists the
   digests of every entry of the release accepted for each; an order without a target takes the channel; a reply of
   32 KiB read and one byte over refused. On earlier binaries: the mixed cases of section 9.3.
-- **Which installers a daemon announces (A6 for `hostkeeper-archive` and `tarball`, A7 to A10, A13, A14 for theirs;
+- **Which installers a daemon announces (A6 for `hostkeeper-archive` and `tarball`, A7 to A10 for theirs;
   `crates/hostkeeper-install/tests/announce.rs`).** One case per row of section 5.4's table, with `ID` alone and with
-  the family only in `ID_LIKE` (`linuxmint`, `rocky`, `amzn`, `opensuse-leap`, `manjaro`); an `ID` that maps to one
+  the family only in `ID_LIKE` (`linuxmint`, `rocky`, `amzn`, `opensuse-leap`), and `manjaro` (whose `arch` family no longer maps) announcing no native installer; an `ID` that maps to one
   family ahead of an `ID_LIKE` token of another; a Debian host with `/usr/bin/rpm` present announces `apt` and no
   other native installer; a Debian host without `dpkg`, with an apt older than 2.2, or with no repository entry,
   announces no native installer; quoted and unquoted values give the same family;
   `/usr/lib/os-release` is read when `/etc/os-release` is missing; an unknown `ID`, an empty file, both files missing
   and a malformed line (no `=`, an unterminated quote) give no native format, so a Linux host announces
   `hostkeeper-archive` and `tarball` alone; `oci-image` is announced with `/usr/bin/podman` present and not without it
-  (A10); a macOS host announces `hostkeeper-archive` and `tarball` and never reads `os-release`. The list is the same at every heartbeat of one start.
-- **Installers (A6 to A10, A13, A14; `crates/hostkeeper-install/tests/<installer>.rs`, device tests in
+  (A10); a macOS host announces `hostkeeper-archive` and `tarball`, and `brew` with a valid `.tap` entry, and never reads
+  `os-release`. The list is the same at every heartbeat of one start.
+- **Installers (A6 to A10; `crates/hostkeeper-install/tests/<installer>.rs`, device tests in
   `crates/hostkeeper-privileged/tests/install_<installer>.rs` and the macOS device suite).** For each installer:
   `stage` refuses a package whose identity is not `package` (and an OCI archive of two images), and runs no script
   (the fake tool records its calls). For every repository installer, the dependency check of section 5.4 runs after the
@@ -152,8 +153,31 @@ run only in the device jobs (`privileged`, `macos-device`), whose tests count to
   is `package_digest_mismatch`; a package moved by hand with `apt-get install` is put back to the desired version and
   reported as drift; after the uninstall `dpkg-query` knows no `hello` and none of its files
   remain.
+- **The `brew` backend (A9; `crates/hostkeeper-install/tests/brew.rs` with the command port's fake, device tests in the
+  macOS device suite, `install_brew.rs`, in `macos-device`).** The start is refused for each defect of the `.tap` entry
+  (packages-repositories.md section 4.7): a remote that is not `https://` or `file:/`, an owner that is root, unknown,
+  or does not own the prefix or `bin/brew`, a prefix writable by others, a `.tap` file on Linux and a `.sources` file
+  on macOS; a Mac with the entry but no brew yet starts and does not announce `brew`, and group write for `admin` on
+  the prefix is accepted. Every brew and git run is started through `sudo` as the owner with exactly the fixed
+  environment and nothing inherited (the fake launcher records each), and none as root. Each row of section 4.7's failure table gives
+  its outcome and changes nothing: `repository_unknown`, `fetch_failed` for the tap and for the bottle,
+  `tap_rewritten` for a remote whose history does not fast-forward, `not_in_repository`, `package_digest_mismatch`,
+  `no_bottle_for_host`, `dependency_changes`, `manifest_invalid` for a formula not keg-only, with `post_install`, with
+  a bottle needing relocation, with per-tag bottles and with no plist in the tree; `order_invalid` for a
+  `package_version` with `:`, `~` or `+`; `store_digest_mismatch` for a bottle in the cache that is
+  not the pin (replaced after the formula's own check), `package_manager_busy`, and `brew_error` followed by the
+  rollback, or on a first install the removal. The tree is extracted from the daemon's own copy of the bottle, never
+  from the cache, and the placed plist's program is under `current/tree/`. `activate` installs from the cached bottle
+  with no download, links and pins; run twice, it changes nothing. A rollback switches `current` and relinks the kept
+  keg with no fetch and no install. `retire` uninstalls only the retired version's formula. `remove` uninstalls every
+  recorded formula and one installed by hand. Drift: another keg linked, a version installed by hand, and a keg whose
+  files differ from the tree each give a `drift` report, and the next update repairs it and ends `Succeeded`,
+  `drift_repaired`. The device tests, as a runner account that owns a Homebrew prefix, against a tap and bottles on
+  the runner's disk: install, update, roll back with the tap's remote removed, and uninstall a two-version `hello`;
+  an operator's `brew upgrade` leaves the pinned version; the job runs the sealed tree's program, as root; after the
+  uninstall no `hello` formula is installed and the plist is gone.
 - **Host setup (A17; `crates/hostkeeper-pxe` tests).** `--repositories` with a valid directory writes each file byte for
-  byte into the seed's user data; a directory the daemon's loader refuses is refused before any seed is written, with
+  byte into the seed's user data, and the MDM kit carries a Mac's `.tap` entries the same way; a directory the daemon's loader refuses is refused before any seed is written, with
   the loader's reason.
 
 - **One build, every release (A15; `crates/xtask/tests/release_linux.rs`, and the `privileged` device job).**
