@@ -29,11 +29,11 @@ its tables: a change to either file alone is refused.
    coordinator's private listener ([Reaching the coordinator](#reaching-the-coordinator)). This is
    the first step that uses an action, and it runs after every check above.
 8. Only then run the verified program's CI client, `hostkeeper ci set-desired`, as one command.
-   It requests an OIDC token for the coordinator, writes it to a file only the runner can read,
-   and calls `hostkeeper ctl releases set-desired` with it, naming the release by the release index
-   and its digest, or by the one package digest. When `wait` is true it then reads
-   `hostkeeper ctl releases converge` until the fleet has converged, is halted, or the call is
-   refused, at most `max_polls` times, and writes the job's outputs.
+   It requests an OIDC token for the coordinator, keeps it in memory only, and calls the
+   `Releases` service's `SetDesired` with it, naming the release by the release index and its
+   digest, or by the one package digest. When `wait` is true it then reads the service's
+   `Converge` until the fleet has converged, is halted, or the call is refused, at most
+   `max_polls` times, and writes the job's outputs.
 
 **A failed verification means the version is not set.** Steps 1 to 4 run nothing of hostkeeper's,
 no step before step 7 uses an action, and no step before step 7 can request a token: the workflow
@@ -323,35 +323,29 @@ change can take up.
 
 ## The calls
 
-The client (`crates/hostkeeper-ci`) runs ctl inside its own process, so no token is
-ever an argument of a process. Its two calls are these commands, with the token in a file:
+The client (`crates/hostkeeper-ci`) calls the coordinator's operator listener directly, with the
+generated gRPC client of the `Releases` service over TLS, trusting only the certificates of
+`ca_file`. It runs no other program, so no token is ever an argument of a process, and it writes
+the token to no file: the token lives in the client's memory and in the call's
+`authorization: Bearer <token>` metadata, which is marked sensitive. Its two calls are these:
 
-```sh
-hostkeeper ctl --endpoint "$COORDINATOR_URL" --ca-file "$CA_FILE" --token-file "$TOKEN_FILE" --output json \
-  releases set-desired --service "$SERVICE" --package-digest "$PACKAGE_DIGEST" --request "$REQUEST_FILE"
-```
+- `SetDesired` with the service, the `desired` state holding the version, and either the
+  `package_digest`, or the `release_index` and its `release_index_digest`: the index is one string
+  of its exact text.
+- `Converge` with the service.
 
-where the request file is `{"desired":{"version":"<version>"}}` (the version is set through
-the request file because `DesiredState` is a message: see `docs/ctl.md`). With a release index the
-call has no `--package-digest`, and the request file carries the index and its digest in the
-canonical JSON names of the request, the index as one JSON string of its exact text:
-`{"desired":{"version":"<version>"},"releaseIndex":"<text of index.json>","releaseIndexDigest":"<hex>"}`.
 The client reads the index file before it requests any token (at most 3 KiB, UTF-8, so that the
 request fits the coordinator's 4 KiB), and does
 not hash or parse it: the coordinator does, and refuses a digest that is not the index's
 (`index_digest_mismatch`) or an index that is not this service's at this version
-(`index_invalid`). Then, once per poll,
-with a new token each time (the coordinator accepts each token once):
+(`index_invalid`). `SetDesired` is called once, and `Converge` once per poll,
+with a new token each time (the coordinator accepts each token once).
 
-```sh
-hostkeeper ctl --endpoint "$COORDINATOR_URL" --ca-file "$CA_FILE" --token-file "$TOKEN_FILE" --output json \
-  releases converge --service "$SERVICE"
-```
-
-Each token is requested from GitHub for the `audience` input, masked in the log, written to
-`hostkeeper-oidc-token` in the runner's temporary directory with mode 0600, and removed after its
-call. It is never an argument (another process on the runner can read a process's arguments) and
-never an environment variable.
+Each token is requested from GitHub for the `audience` input, masked in the log, and used for
+that one call. It is never an argument (another process on the runner can read a process's
+arguments), never an environment variable, and never written to a file. A call, the connection
+included, that is not done in 30 seconds is a call without an answer. The client's `--work-dir` (the
+runner's temporary directory) must name an existing directory, and nothing is written there.
 
 The first read comes right after the version is set; each later one 10 seconds after the one
 before. The client prints what a read reports, as one line (the state, the desired version, and
@@ -372,7 +366,7 @@ counts as one of the `max_polls` reads.
 | Check the version of the verified hostkeeper | The program does not say `hostkeeper <hostkeeper_version>+<first 12 hex digits of hostkeeper_commit>`. The version is not set. | Check the two pins belong together. |
 | Join the tailnet | Only with `join_tailnet`. Tailscale refused the federated identity (no credential for this client ID and audience, a subject that does not match the job, or a tag other than `tag:hk-ci` on the credential), or `tailnet_coordinator` did not answer a ping within 3 minutes. The version is not set. | Check the [federation](#the-federation-set-up-once-by-a-tailnet-admin) and the [ACL](#the-tag-and-the-acl). |
 | Set the desired version and wait for the fleet: before the call | An input breaks its rule (exit 2): a service name or version with other characters, neither a package digest nor an index with its digest (or both), a digest that is not 64 lower-case hex digits, an index larger than 3 KiB or not UTF-8, a URL that is not `https://`, a `max_polls` outside 1 to 1000. Or GitHub issued no token (`reason` is `no_answer`): the calling job does not grant `id-token: write`. The version is not set. | Fix the input, or grant `id-token: write` to the calling job. |
-| Set the desired version and wait for the fleet: the set | The coordinator refused the call, and `reason` is its token: `unauthorized` or `forbidden` (no allow-list entry admits this repository, workflow, audience or service), `unknown_service`, `invalid_request`, `index_digest_mismatch` (the digest is not the SHA-256 of the index text), `index_invalid` (the index is not this service's at this version, or is given without its digest, or with a package digest), `held_bad` (the version is marked bad; only an operator can lift the mark, design 8.1), `keys_unavailable` (retry later), `not_in_channel` (the coordinator's release channel does not hold the version yet; retry once the channel sync has finished), `channel_digest_mismatch` (the channel's index of the version is not the index the set names, or does not list `package_digest`; do not retry). `no_answer`: the coordinator could not be reached; with `join_tailnet` false this is what a GitHub-hosted runner gets, because the private listener is not reachable from it ([Reaching the coordinator](#reaching-the-coordinator)). `not_stored`: it answered with another version. The version is not set, except for `not_stored` and possibly `no_answer`: read `releases converge` before you retry. | Fix what the token names, then run the job again. |
+| Set the desired version and wait for the fleet: the set | The coordinator refused the call, and `reason` is its token: `unauthorized` or `forbidden` (no allow-list entry admits this repository, workflow, audience or service), `unknown_service`, `invalid_request`, `index_digest_mismatch` (the digest is not the SHA-256 of the index text), `index_invalid` (the index is not this service's at this version, or is given without its digest, or with a package digest), `held_bad` (the version is marked bad; only an operator can lift the mark, design 8.1), `keys_unavailable` (retry later), `not_in_channel` (the coordinator's release channel does not hold the version yet; retry once the channel sync has finished), `channel_digest_mismatch` (the channel's index of the version is not the index the set names, or does not list `package_digest`; do not retry). `no_answer`: the coordinator could not be reached; with `join_tailnet` false this is what a GitHub-hosted runner gets, because the private listener is not reachable from it ([Reaching the coordinator](#reaching-the-coordinator)). `not_stored`: it answered with another version. The version is not set, except for `not_stored` and possibly `no_answer`: read `hkctl releases converge` before you retry. | Fix what the token names, then run the job again. |
 | Set the desired version and wait for the fleet: the wait | The version is set. `halted`: a host halted the service, and no host is ordered until an operator clears the halt. `superseded`: the desired version changed while the job waited (an automatic rollback, or a newer release). `not_converged`: `max_polls` reads passed and the fleet had not converged; the roll goes on. A refusal token: the read was refused. | Look at the service in the coordinator's UI or with `hkctl releases status`. |
 
 ## What it does not do

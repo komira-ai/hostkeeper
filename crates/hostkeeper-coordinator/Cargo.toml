@@ -88,9 +88,6 @@ tracing-subscriber.workspace = true
 x509-parser.workspace = true
 
 [dev-dependencies]
-# `hostkeeper ctl` run against an in-process coordinator, through gRPC and the gateway
-# (`src/grpc/tests/ctl.rs`).
-hostkeeper-ctl = { path = "../hostkeeper-ctl" }
 hostkeeper-oidc = { path = "../hostkeeper-oidc", features = ["testkit"] }
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }
 # The HTTP/2 client that calls a listener in the listener's tests.

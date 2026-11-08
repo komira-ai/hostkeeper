@@ -15,8 +15,8 @@ use std::thread::{self, JoinHandle};
 
 use clap::Parser;
 use clap::error::ErrorKind;
-use hostkeeper_ctl::exit;
 use hostkeeper_daemon::admin::{self, Peer};
+use hostkeeper_daemon::admin_client::exit;
 use hostkeeper_daemon::admin_client::{self, AdminCommand, AdminVerb};
 use hostkeeper_daemon::cli::{self, Cli, Command, DEFAULT_ADMIN_SOCKET};
 use hostkeeper_daemon::node::LinkHealth;

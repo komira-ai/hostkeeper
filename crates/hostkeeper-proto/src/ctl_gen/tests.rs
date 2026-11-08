@@ -1,4 +1,4 @@
-//! The generator of `ctl`'s command table, run on fixture protos: the words of a name, how each
+//! The generator of the command table, run on fixture protos: the words of a name, how each
 //! kind of field becomes input, the comments, the order, and every refusal; and on the real
 //! descriptors, where it must succeed.
 
@@ -295,7 +295,7 @@ fn secret_option_on_a_non_string_or_bytes_field_fails_the_build() {
     );
 }
 
-/// Catches a streaming RPC written into the table, which `ctl` could not call.
+/// Catches a streaming RPC written into the table, which a command line could not call.
 #[test]
 fn a_streaming_rpc_fails_the_build() {
     for rpc in [
@@ -312,7 +312,7 @@ fn a_streaming_rpc_fails_the_build() {
     .expect_err("both");
     assert_eq!(
         refused.to_string(),
-        "hostkeeper.fixture.v1.S.Both: ctl makes unary calls only; this RPC streams"
+        "hostkeeper.fixture.v1.S.Both: the command table holds unary calls only; this RPC streams"
     );
 }
 
@@ -334,7 +334,7 @@ fn a_well_known_type_fails_the_build_and_recursion_is_checked_once() {
     );
     assert_eq!(
         refused.to_string(),
-        "hostkeeper.fixture.v1.S.Exec: reaches google.protobuf.Timestamp, a well-known type ctl \
+        "hostkeeper.fixture.v1.S.Exec: reaches google.protobuf.Timestamp, a well-known type the command table \
          does not write"
     );
     let t = table(
@@ -344,8 +344,8 @@ fn a_well_known_type_fails_the_build_and_recursion_is_checked_once() {
     assert!(t.contains("request: \"hostkeeper.fixture.v1.Tree\""), "{t}");
 }
 
-/// Catches two RPCs with one command, and a flag that two fields, or a field and `ctl` itself,
-/// would both take.
+/// Catches two RPCs with one command, and a flag that two fields, or a field and a generated command
+/// line itself, would both take.
 #[test]
 fn command_and_flag_clashes_fail_the_build() {
     let clash =
@@ -391,9 +391,9 @@ fn command_and_flag_clashes_fail_the_build() {
             flag: "help".to_owned()
         }
         .to_string(),
-        "m: the flag --help is taken twice or kept by ctl"
+        "m: the flag --help is taken twice or kept by the command lines"
     );
-    // Every flag ctl keeps is refused as a field.
+    // Every flag the command lines keep is refused as a field.
     for flag in RESERVED_FLAGS {
         let field = flag.replace('-', "_");
         let text = fixture(&format!(

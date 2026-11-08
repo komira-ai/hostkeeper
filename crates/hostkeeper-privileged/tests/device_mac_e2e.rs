@@ -24,7 +24,7 @@
 //! version, so the `stdout path` launchd prints names the version of the plist it loaded), the
 //! server's `/version` (the slot that serves), the daemon's `Status` on its admin socket (the
 //! observer: the service live, the running executable confirmed as the installed version's), and
-//! `hostkeeper ctl` against the coordinator (the heartbeat's report). Every wait is a bounded
+//! the operator API of the coordinator (the heartbeat's report). Every wait is a bounded
 //! count of tries of an explicit state; nothing is asserted about time.
 
 mod e2e;
@@ -69,19 +69,11 @@ impl Drop for Rig {
         if !std::thread::panicking() {
             return;
         }
-        let ctl = |args: &[&str]| {
-            let output = self.coordinator.ctl_output(args);
-            format!(
-                "{}{}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            )
-        };
         eprintln!(
             "the coordinator's view when the test failed:\nreleases status:\n{}\n\
              services list:\n{}\nrelease channel requests:\n{:#?}\nstep record:\n{:#?}\n",
-            ctl(&["releases", "status", "--service", SERVICE]),
-            ctl(&["services", "list"]),
+            self.coordinator.status_text(SERVICE),
+            self.coordinator.services_text(),
             self.channel.requests(),
             self.host.step_record(),
         );
@@ -428,25 +420,16 @@ fn failed_verify_rolls_back(rig: &Rig) {
     rig.wait_converged(V2);
 }
 
-/// The uninstall the operator orders (`services unassign --uninstall true`): once the
+/// The uninstall the operator orders (`Services.Unassign` with `uninstall`): once the
 /// coordinator lists hello uninstalling on no host, both plists are gone from
 /// `/Library/LaunchDaemons`, launchd holds neither job, hello's package directory is gone with
 /// every version, link and seal in it, `placed.json` (if any is left) holds no path and no
 /// tombstone of hello, the hook's slot
 /// markers are gone, nothing answers on the port, and `Status` no longer reports hello running.
 fn uninstall(rig: &Rig) {
-    rig.coordinator.ctl(&[
-        "services",
-        "unassign",
-        "--node-id",
-        HOST_ID,
-        "--service",
-        SERVICE,
-        "--uninstall",
-        "true",
-    ]);
+    rig.coordinator.unassign_uninstall(HOST_ID, SERVICE);
     wait_for("the uninstall of hello ends", COORDINATED, || {
-        let list = rig.coordinator.ctl(&["services", "list"]);
+        let list = rig.coordinator.services();
         let uninstalling_none = list["services"].as_array().is_some_and(|all| {
             all.iter()
                 .filter(|service| service["service"] == SERVICE)

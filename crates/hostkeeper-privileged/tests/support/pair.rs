@@ -2,7 +2,7 @@
 //! the harness of the first-boot tests (`tests/first_boot.rs`, `tests/install_uninstall.rs`).
 //!
 //! The tests drive the two only through what an operator and a host have: the coordinator's
-//! flags and its operator API (through `hostkeeper ctl`, the daemon binary's `ctl` verb), the
+//! flags and its operator API (the generated gRPC clients, through [`OperatorApi`]), the
 //! daemon's flags and config file, and the files the daemon keeps on the host. Each file the
 //! programs are given is in the test's scratch directory, except the paths the daemon fixes
 //! ([`HostPaths`]).
@@ -11,6 +11,7 @@ use std::fs;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use rcgen::{
     BasicConstraints, CertificateParams, CertifiedIssuer, DistinguishedName, DnType,
@@ -19,13 +20,14 @@ use rcgen::{
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
+use super::operator_api::{Approval, OperatorApi, must};
 use super::spawn::{Running, poll};
 
 /// The coordinator program, built by cargo with these tests: it forwards to the coordinator's
 /// command line, as the `hostkeeper-coordinator` binary does.
 pub const COORDINATOR: &str = env!("CARGO_BIN_EXE_hostkeeper-privileged-coordinator");
 /// The daemon program, built by cargo with these tests: it forwards to the daemon's command
-/// line, as the `hostkeeper` binary does (its `ctl` verb is the operator's client).
+/// line, as the `hostkeeper` binary does.
 pub const DAEMON: &str = env!("CARGO_BIN_EXE_hostkeeper-device-daemon");
 
 /// Where the daemon keeps its key and certificates: a path it fixes, with no flag.
@@ -118,7 +120,7 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
-/// A test certificate authority: of the coordinator's private listener (which the ctl dials) and
+/// A test certificate authority: of the coordinator's private listener (which the operator dials) and
 /// of the release channel.
 pub struct TestCa {
     issuer: CertifiedIssuer<'static, KeyPair>,
@@ -187,6 +189,8 @@ pub struct Coordinator {
     /// The LAN listener (`--lan-listen`), when it has one.
     pub lan: Option<SocketAddr>,
     run: Option<Running>,
+    /// The operator's calls, made at the first.
+    api: OnceLock<OperatorApi>,
 }
 
 impl Coordinator {
@@ -260,6 +264,7 @@ impl Coordinator {
             control: SocketAddr::from((address, 0)),
             lan: lan.then(|| SocketAddr::from((address, 0))),
             run: None,
+            api: OnceLock::new(),
         };
         coordinator.launch(true);
         coordinator
@@ -388,13 +393,13 @@ impl Coordinator {
         self.dir.join("ca/ca.key.cert")
     }
 
-    /// The CA of the private listener's certificate, PEM: what `hostkeeper ctl` and
-    /// `hostkeeper-pxe serve` take as `--ca-file`.
+    /// The CA of the private listener's certificate, PEM: what the operator's calls and
+    /// `hostkeeper-pxe serve` take as the CA.
     pub fn private_ca_path(&self) -> PathBuf {
         self.dir.join("private-ca.pem")
     }
 
-    /// The operator's token file (root's, mode 0600): what `hostkeeper ctl` and
+    /// The operator's token file (root's, mode 0600): what the operator's calls and
     /// `hostkeeper-pxe serve` take as `--token-file`.
     pub fn token_path(&self) -> PathBuf {
         self.dir.join("operator.token")
@@ -417,55 +422,27 @@ impl Coordinator {
         format!("https://localhost:{}", self.heartbeat.port())
     }
 
-    /// Runs `hostkeeper ctl <args>` against the private listener with the operator's token and
-    /// gives its JSON answer, or the exit status and what it printed.
-    pub fn ctl(&self, args: &[&str]) -> Result<Value, String> {
-        let endpoint = self.control_url();
-        let ca = self.private_ca_path().display().to_string();
-        let token = self.token_path().display().to_string();
-        let mut all = vec![
-            "ctl",
-            "--endpoint",
-            &endpoint,
-            "--ca-file",
-            &ca,
-            "--token-file",
-            &token,
-            "--output",
-            "json",
-        ];
-        all.extend_from_slice(args);
-        let out = super::run(DAEMON, &all);
-        if !out.status.success() {
-            return Err(format!(
-                "ctl {args:?} ended with {}: {}{}",
-                out.status,
-                String::from_utf8_lossy(&out.stdout),
-                String::from_utf8_lossy(&out.stderr)
-            ));
-        }
-        serde_json::from_slice(&out.stdout).map_err(|e| {
-            format!(
-                "ctl {args:?} printed no JSON ({e}): {}",
-                String::from_utf8_lossy(&out.stdout)
+    /// The operator's calls to the private listener, with the operator's token. Made at the first
+    /// call, when the listener's address is known.
+    pub fn api(&self) -> &OperatorApi {
+        self.api.get_or_init(|| {
+            OperatorApi::open(
+                &self.control_url(),
+                &self.private_ca_path(),
+                &self.token_path(),
             )
         })
     }
 
-    /// [`Self::ctl`], failing the test unless the call succeeds.
-    pub fn ctl_ok(&self, args: &[&str]) -> Value {
-        self.ctl(args).unwrap_or_else(|e| panic!("{e}"))
-    }
-
     /// The pending enrollment requests, as `enrollment list` gives them.
     pub fn pending(&self) -> Result<Vec<Value>, String> {
-        let list = self.ctl(&["enrollment", "list"])?;
+        let list = self.api().pending().map_err(|e| e.to_string())?;
         Ok(list["requests"].as_array().cloned().unwrap_or_default())
     }
 
     /// The entry of `service` in `services list`.
     pub fn service(&self, service: &str) -> Result<Value, String> {
-        let list = self.ctl(&["services", "list"])?;
+        let list = self.api().list_services().map_err(|e| e.to_string())?;
         list["services"]
             .as_array()
             .and_then(|all| all.iter().find(|s| s["service"] == service).cloned())
@@ -476,7 +453,7 @@ impl Coordinator {
     /// has heard from since it started, each with its role, its enrollment, its last heartbeat and
     /// how each service sees it.
     pub fn host(&self, node_id: &str) -> Result<Option<Value>, String> {
-        let list = self.ctl(&["hosts", "list"])?;
+        let list = self.api().list_hosts().map_err(|e| e.to_string())?;
         Ok(list["hosts"]
             .as_array()
             .and_then(|hosts| hosts.iter().find(|h| h["nodeId"] == node_id).cloned()))
@@ -507,20 +484,17 @@ impl Coordinator {
         });
         let id = request["requestId"].as_str().expect("a request id");
         let key = request["keySha256"].as_str().expect("a key hash");
-        self.ctl_ok(&[
-            "enrollment",
-            "approve",
-            "--request-id",
-            id,
-            "--key-sha256",
-            key,
-            "--host-id",
-            node_id,
-            "--role",
-            ROLE,
-            "--reason",
-            "first-boot test",
-        ]);
+        must(
+            "enrollment approve",
+            self.api().approve(&Approval {
+                request_id: id,
+                key_sha256: key,
+                host_id: node_id,
+                role: ROLE,
+                reason: "first-boot test",
+                ..Approval::default()
+            }),
+        );
         request
     }
 }

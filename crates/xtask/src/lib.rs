@@ -112,8 +112,8 @@ enum Verb {
     },
     /// The measurement of network install: one machine's events from power-on to serving and
     /// the intervals between them, with the person's wait apart from the machine's time, from
-    /// the log of `hostkeeper-pxe serve` and what `hostkeeper ctl` printed of its request and
-    /// host. Reads no clock.
+    /// the log of `hostkeeper-pxe serve` and the operator API's answers about its request and
+    /// host, as canonical JSON. Reads no clock.
     NetinstallReport(netinstall_report::Flags),
     /// One backup of the coordinator's database: run the dump command after `--` with its
     /// output into a new numbered file of `--into` (mode 0600), and keep the newest `--keep`

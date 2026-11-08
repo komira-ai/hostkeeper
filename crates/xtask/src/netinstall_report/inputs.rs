@@ -75,7 +75,7 @@ pub(crate) fn pxe_log(
     )
 }
 
-/// `text` as a JSON object, what `hostkeeper ctl --output json` prints.
+/// `text` as a JSON object: a reply of the operator API as proto3 canonical JSON.
 fn object(flag: &str, text: &str) -> Result<Value, Error> {
     let value: Value =
         serde_json::from_str(text).map_err(|e| Error::Refused(format!("{flag}: not JSON: {e}")))?;
@@ -83,13 +83,13 @@ fn object(flag: &str, text: &str) -> Result<Value, Error> {
         Ok(value)
     } else {
         Err(Error::Refused(format!(
-            "{flag}: not a JSON object, as `hostkeeper ctl --output json` prints"
+            "{flag}: not a JSON object, as the operator API's canonical JSON"
         )))
     }
 }
 
-/// The unix seconds of `key` in `object`, as ctl prints a `uint64` (a string of digits); `None`
-/// when it is absent or 0, which ctl leaves out.
+/// The unix seconds of `key` in `object`, as proto3 canonical JSON has a `uint64` (a string of digits); `None`
+/// when it is absent or 0, which canonical JSON leaves out.
 fn unix(flag: &str, object: &Value, key: &str) -> Result<Option<u64>, Error> {
     match object.get(key) {
         None => Ok(None),
@@ -104,7 +104,7 @@ fn unix(flag: &str, object: &Value, key: &str) -> Result<Option<u64>, Error> {
 }
 
 /// Pending: the earliest `firstSeenUnix` of the requests matched to the record of `host_id`,
-/// from what `enrollment list` printed. A list with no request of it (ctl prints an empty list
+/// from what `Enrollment.List` answered. A list with no request of it (canonical JSON leaves out an empty list
 /// as `{}`) is `None`.
 pub(crate) fn pending(text: &str, host_id: &str) -> Result<Option<u64>, Error> {
     let list = object("--pending", text)?;

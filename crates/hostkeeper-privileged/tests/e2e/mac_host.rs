@@ -53,7 +53,7 @@ use tonic::transport::{Endpoint, Uri};
 
 use super::hello::{SERVICE, SLOTS, label};
 
-/// The daemon program: `hostkeeper`, built with these tests (it holds `daemon` and `ctl`).
+/// The daemon program: `hostkeeper`, built with these tests (it holds `daemon`).
 pub const DAEMON: &str = env!("CARGO_BIN_EXE_hostkeeper-device-daemon");
 /// The CA bundle the daemon's package fetch trusts on a Mac (a fixed path of the daemon).
 const CA_BUNDLE: &str = "/etc/ssl/cert.pem";

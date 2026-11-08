@@ -14,8 +14,7 @@
 //! - This holds in every operator doc: each Markdown file of the repository but the design
 //!   documents (`docs/design/`, which also describe methods not built yet). There, an inline
 //!   code span that begins `hkctl` names a service and a method hkctl has, and flags that method
-//!   or hkctl has; and no fenced line begins `hostkeeper ctl`, but in the files of
-//!   [`OLD_CLI_LEFT`], each of which must still hold one.
+//!   or hkctl has; and no fenced line begins `hostkeeper ctl`.
 //! - The enrollment runbook uses the calls of the procedure: `add-record`, `list-records`,
 //!   `remove-record`, `open-record`, `list` and `approve` of `enrollment`.
 //! - The tokens of its two refusal tables are exactly the refusal tokens of the protos: the
@@ -51,14 +50,6 @@ const NETWORK_INSTALL_DOC: &str = "docs/operations/network-install.md";
 
 /// The design documents, from the repository root: not operator docs.
 const DESIGN_DIR: &str = "docs/design/";
-
-/// The operator docs that still hold a fenced `hostkeeper ctl` line, each with why. Each must
-/// hold one, so that the entry goes when the line does.
-const OLD_CLI_LEFT: &[(&str, &str)] = &[(
-    "docs/deploy/ci-client.md",
-    "its section `The calls` is what `hostkeeper ci` runs in its own process, until \
-     set-desired.yml calls hkctl",
-)];
 
 /// The calls the network-install runbook's steps need, as `service rpc`.
 const NETWORK_INSTALL_REQUIRED: &[&str] = &[
@@ -473,7 +464,7 @@ fn span_problems(span: &str, globals: &[Global]) -> Vec<String> {
 
 /// Every problem of the operator doc `path` (from the root) whose text is `doc`: a fenced `hkctl`
 /// line hkctl refuses, an inline `hkctl` span that names what hkctl does not have, and a fenced
-/// `hostkeeper ctl` line where [`OLD_CLI_LEFT`] does not keep one, or none where it does.
+/// `hostkeeper ctl` line.
 fn doc_problems(path: &str, doc: &str) -> Vec<String> {
     let mut problems = Vec::new();
     for line in hkctl_lines(doc) {
@@ -491,16 +482,10 @@ fn doc_problems(path: &str, doc: &str) -> Vec<String> {
             );
         }
     }
-    let old = lines_of(doc, &["hostkeeper", "ctl"]);
-    let left = OLD_CLI_LEFT.iter().any(|(p, _)| *p == path);
-    match (old.first(), left) {
-        (Some(line), false) => problems.push(format!(
+    if let Some(line) = lines_of(doc, &["hostkeeper", "ctl"]).first() {
+        problems.push(format!(
             "{path}: a fenced `hostkeeper ctl` line; the operator docs name hkctl: {line}"
-        )),
-        (None, true) => problems.push(format!(
-            "{path}: holds no fenced `hostkeeper ctl` line; take it out of OLD_CLI_LEFT"
-        )),
-        _ => {}
+        ));
     }
     problems
 }
@@ -541,9 +526,8 @@ fn fenced_call(rest: &str) -> String {
 }
 
 /// Catches the doc check passing a fenced `hostkeeper ctl` line, a line hkctl refuses, an inline
-/// span with a misspelled method or a flag of `hostkeeper ctl` only; an entry of
-/// [`OLD_CLI_LEFT`] kept after its file's last line went; and catches it refusing a placeholder,
-/// a span cut by a line break, or a fenced line that only mentions hkctl.
+/// span with a misspelled method or a flag of `hostkeeper ctl` only; and catches it refusing a
+/// placeholder, a span cut by a line break, or a fenced line that only mentions hkctl.
 #[test]
 fn the_doc_check_refuses_each_defect() {
     let good = fenced_call("hosts get --node-id <id>")
@@ -587,17 +571,6 @@ fn the_doc_check_refuses_each_defect() {
     for (doc, problem) in cases {
         assert_eq!(doc_problems("docs/x.md", &doc), [problem], "{doc}");
     }
-    let (left, _) = OLD_CLI_LEFT[0];
-    assert_eq!(
-        doc_problems(left, &fenced("hostkeeper ctl hosts get --node-id n")),
-        Vec::<String>::new()
-    );
-    assert_eq!(
-        doc_problems(left, &fenced_call("hosts get --node-id n")),
-        [format!(
-            "{left}: holds no fenced `hostkeeper ctl` line; take it out of OLD_CLI_LEFT"
-        )]
-    );
 }
 
 /// Catches the walk of the operator docs reading a design document, a file that is not

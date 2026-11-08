@@ -4,7 +4,7 @@
 //! own `fetch` sealed ([`pxe`]), the real coordinator with `--lan-listen` on the LAN
 //! (`support::pair`), a release channel on the LAN (`support::channel`), and a QEMU guest
 //! ([`guest`]). Every wait is on a progress event ([`events`]): a line of the guest's serial
-//! console, of `hostkeeper-pxe`'s log or of the router's DHCP, or an answer of `hostkeeper ctl`;
+//! console, of `hostkeeper-pxe`'s log or of the router's DHCP, or an answer of the operator API;
 //! each ends on its event or on the end of the guest, and the job's `timeout-minutes` is the
 //! only bound.
 //!
@@ -37,6 +37,7 @@ use socket2::{Domain, Protocol, Socket, Type};
 
 use crate::e2e::signer::FixtureSigner;
 use crate::support::channel::{Channel, Fixture, Package};
+use crate::support::operator_api::must;
 use crate::support::pair::{Coordinator, ROLE, TestCa, put, rollout};
 use crate::support::{Bench, FIXTURE};
 use events::{Bus, LineSink, Mark, Source};
@@ -157,22 +158,17 @@ impl Rig {
             bench,
         };
         let machine = rig.guest.machine();
-        rig.coordinator.ctl_ok(&[
-            "enrollment",
-            "add-record",
-            "--host-id",
-            host_id,
-            "--role",
-            ROLE,
-            "--data-macs",
-            machine.mac,
-            "--serial",
-            machine.serial,
-            "--platform",
-            machine.arch.ctl_platform(),
-            "--notes",
-            "the network-install test's guest",
-        ]);
+        must(
+            "enrollment add-record",
+            rig.coordinator.api().add_record(
+                host_id,
+                ROLE,
+                machine.mac,
+                machine.serial,
+                machine.arch.proto_platform(),
+                "the network-install test's guest",
+            ),
+        );
         rig
     }
 
@@ -332,11 +328,6 @@ impl Rig {
         .0
     }
 
-    /// `hostkeeper ctl`, failing the test unless it succeeds.
-    pub fn ctl(&self, args: &[&str]) -> Value {
-        self.coordinator.ctl_ok(args)
-    }
-
     /// The pending request that matches the guest's record and claims the guest's UUID and
     /// serial, once there is one other than those of `seen` (their key hashes).
     pub fn wait_request(&mut self, seen: &[String]) -> Value {
@@ -424,20 +415,25 @@ impl Rig {
         String::from_utf8_lossy(&id).trim().to_owned()
     }
 
-    /// The guest's record, as `enrollment list-records` gives it.
+    /// The guest's record, as `Enrollment.ListRecords` gives it.
     pub fn record(&self) -> Value {
-        let records = self.ctl(&["enrollment", "list-records"]);
+        let records = must(
+            "enrollment list-records",
+            self.coordinator.api().list_records(),
+        );
         records["records"]
             .as_array()
             .and_then(|all| all.iter().find(|r| r["hostId"] == self.host_id).cloned())
             .unwrap_or_else(|| panic!("no record of {}: {records}", self.host_id))
     }
 
-    /// The host as `hosts get` gives it, or why not.
+    /// The host as `Hosts.Get` gives it, or why not.
     pub fn host(&self) -> Result<Value, String> {
         self.coordinator
-            .ctl(&["hosts", "get", "--node-id", self.host_id])
+            .api()
+            .get_host(self.host_id)
             .map(|got| got["host"].clone())
+            .map_err(|e| e.to_string())
     }
 }
 

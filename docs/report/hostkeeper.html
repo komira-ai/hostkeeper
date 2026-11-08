@@ -201,7 +201,7 @@ main>section>figure.wide,main>section>.tblw.wide{width:min(72rem,calc(100vw - 3r
 <thead><tr><th>Piece</th><th>State on <code>main</code></th></tr></thead>
 <tbody>
 <tr><td>Coordinator: rollout gate, desired versions, holds, halts, force, audit, CA and enrollment</td><td>Built and tested in process</td></tr>
-<tr><td>Operator API over gRPC and the HTTP/JSON gateway; generated <code>hostkeeper ctl</code>; web UI</td><td>Built; every declared method has a handler (<a href="#apis">the two APIs</a>)</td></tr>
+<tr><td>Operator API over gRPC and the HTTP/JSON gateway; generated <code>hkctl</code>; web UI</td><td>Built; every declared method has a handler (<a href="#apis">the two APIs</a>)</td></tr>
 <tr><td>Assignment of services to roles and hosts; <code>install</code> and <code>uninstall</code> orders</td><td>Built in the coordinator, which sends them only to a daemon that announces <code>install-v1</code>; the daemon&rsquo;s heartbeat loop announces it and runs both over its link (below)</td></tr>
 <tr><td>Daemon: start-up, boot pass, step runner, dead-man, admin socket, enrollment loop</td><td>Built and running in the shipped binary; the enrollment loop&rsquo;s certificate request carries the subject <code>CN=host:pending</code> the CA accepts (<a href="#n-h5">h5</a>)</td></tr>
 <tr><td>Daemon: package fetch, attestation check, unpack, placed-path linking, force, prune</td><td>Built; reachable only through an order</td></tr>
@@ -409,7 +409,7 @@ main>section>figure.wide,main>section>.tblw.wide{width:min(72rem,calc(100vw - 3r
 <li id="n-h4"><strong>h4.</strong> The update plan (stages, a manual advance, pause and resume), the canary, the bake, holds and force are built in the coordinator, and <code>max_updating</code> and <code>min_up</code> pace the hosts of a stage per role. <code>Hosts.Abort</code> does not reach the shipped daemon; an abort is done on the host through the admin socket.</li>
 <li id="n-h5"><strong>h5.</strong> A host id is chosen by the operator and bound to the host&rsquo;s key at approval. It is not derived from a MAC address. MAC addresses, serials and the machine id travel as claims that help match an inventory record and authorise nothing. A Linux daemon reads its BMC&rsquo;s MAC over <code>/dev/ipmi0</code> and sends it as a claim; a host with no BMC sends none. The CA, approval, renewal and the pinned CA hash are built, and the daemon&rsquo;s certificate request carries the subject <code>CN=host:pending</code> the CA accepts.</li>
 <li id="n-h6"><strong>h6.</strong> One root daemon, in Rust, with its verbs compiled in and no interpreter on the host. Hooks are executables that services ship. The coordinator is a second program.</li>
-<li id="n-h7"><strong>h7.</strong> gRPC and an HTTP/JSON gateway serve every operator method. <code>hostkeeper ctl</code> is generated from the protos, the web UI is built and the audit file is append-only. A <code>SetDesired</code> by CI writes no audit entry of its own; one by an operator writes a <code>set_desired</code> entry.</li>
+<li id="n-h7"><strong>h7.</strong> gRPC and an HTTP/JSON gateway serve every operator method. <code>hkctl</code> is generated from the protos, the web UI is built and the audit file is append-only. A <code>SetDesired</code> by CI writes no audit entry of its own; one by an operator writes a <code>set_desired</code> entry.</li>
 <li id="n-h8"><strong>h8.</strong> State is plain files, with one coordinator and no database. There is no failover, and the operator supervises the coordinator.</li>
 <li id="n-a"><strong>a.</strong> nixos-rebuild was re-checked against the NixOS manual (stable, v26.05; the first part of that long page was read) and against the nixos-rebuild man page and the <code>system.autoUpgrade</code> module in nixpkgs, whose sources name no release. G2 is <span class="v-partial">partial</span>: <code>system.autoUpgrade</code> runs a systemd timer that rebuilds the host from a flake or a channel, a real pull mode, with no OIDC, no desired version set by CI and no signature check. A push with <code>--target-host</code> needs ssh.</li>
 <li id="n-b"><strong>b.</strong> Cachix Deploy: the agent connects to the vendor&rsquo;s backend over websockets and waits for a deployment, and CI starts one with a vendor-issued activate token (<code>CACHIX_ACTIVATE_TOKEN</code>). No OIDC appears in the pages read. comin polls git repositories and can check GPG and SSH commit signatures; it has no CI step.</li>
@@ -540,7 +540,7 @@ main>section>figure.wide,main>section>.tblw.wide{width:min(72rem,calc(100vw - 3r
 <p>Two programs are built (<a href="https://github.com/komira-ai/hostkeeper/tree/main/crates/hostkeeper">crates/hostkeeper</a>,
 <a href="https://github.com/komira-ai/hostkeeper/tree/main/crates/hostkeeper-coordinator">crates/hostkeeper-coordinator</a>):</p>
 <ul>
-<li><code>hostkeeper</code>, the host program. Its verbs are <code>daemon</code>, <code>ctl</code> (the generated command line),
+<li><code>hostkeeper</code>, the host program. Its verbs are <code>daemon</code>,
 <code>ci set-desired</code> (the CI client), and two plumbing verbs of its own update
 (<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-daemon/src/cli.rs">crates/hostkeeper-daemon/src/cli.rs</a>).</li>
 <li><code>hostkeeper-coordinator serve</code>, the coordinator, shipped as a tarball and a container image
@@ -551,14 +551,14 @@ is packaged, so the operator supervises it.</li>
 environment reads are platform-set: <code>NOTIFY_SOCKET</code> for <code>--notify-systemd</code>, and the GitHub Actions
 token request variables in <code>hostkeeper ci</code>.</p>
 <h3 id="architecture">Architecture</h3>
-<figure class="wide" id="fig-arch"><div class="fig-wrap scroll"><svg viewBox="0 0 1000 470" role="img" aria-label="The parts of hostkeeper. On the left, CI&rsquo;s release job, hostkeeper ctl and the web UI call the coordinator&rsquo;s private listener: CI with its OIDC token, the others with an operator token. In the middle, the coordinator has a private listener, a heartbeat listener, a CA and enrollment store, and plain files. On the right, each host runs the hostkeeper daemon as root, with an admin socket, one transient unit or launchd job per hook step, and its packages. The daemon dials the heartbeat listener for enrollment, polling and renewal, and for its heartbeat. The daemon fetches and verifies packages from a release channel over HTTPS, only inside an order."><defs><marker id="aa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk" d="M0 0L10 5L0 10z"/></marker><marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk-bad" d="M0 0L10 5L0 10z"/></marker></defs>
+<figure class="wide" id="fig-arch"><div class="fig-wrap scroll"><svg viewBox="0 0 1000 470" role="img" aria-label="The parts of hostkeeper. On the left, CI&rsquo;s release job, hkctl and the web UI call the coordinator&rsquo;s private listener: CI with its OIDC token, the others with an operator token. In the middle, the coordinator has a private listener, a heartbeat listener, a CA and enrollment store, and plain files. On the right, each host runs the hostkeeper daemon as root, with an admin socket, one transient unit or launchd job per hook step, and its packages. The daemon dials the heartbeat listener for enrollment, polling and renewal, and for its heartbeat. The daemon fetches and verifies packages from a release channel over HTTPS, only inside an order."><defs><marker id="aa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk" d="M0 0L10 5L0 10z"/></marker><marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk-bad" d="M0 0L10 5L0 10z"/></marker></defs>
 <text x="10" y="30" class="t-s t-m">operators and CI</text>
 <rect class="box" x="10" y="40" width="240" height="72" rx="4"/>
 <text x="22" y="62" class="t-b">CI release job</text>
 <text x="22" y="80" class="t-mono">hostkeeper ci set-desired</text>
 <text x="22" y="100" class="t-s">Releases.SetDesired, Releases.Converge</text>
 <rect class="box" x="10" y="130" width="240" height="48" rx="4"/>
-<text x="22" y="150" class="t-b">hostkeeper ctl</text>
+<text x="22" y="150" class="t-b">hkctl</text>
 <text x="22" y="168" class="t-s t-m">generated from the protos</text>
 <rect class="box" x="10" y="196" width="240" height="48" rx="4"/>
 <text x="22" y="216" class="t-b">web UI</text>
@@ -650,7 +650,7 @@ channel, the trusted signers and the daemon&rsquo;s bounds. A strict loader refu
 The coordinator cannot change it. The daemon&rsquo;s local interface is a unix socket that serves
 <code>hostkeeper.local.v1.Admin</code> (<code>Status</code>, <code>Abort</code>, <code>ClearRecord</code>) to root only
 (<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-daemon/src/admin.rs">crates/hostkeeper-daemon/src/admin.rs</a>).
-<code>hostkeeper ctl</code> has no command for it, so a root user needs a gRPC client of their own.</p>
+<code>hkctl</code> has no command for it, so a root user needs a gRPC client of their own.</p>
 <p><strong>The heartbeat link.</strong> The heartbeat client is in
 <a href="https://github.com/komira-ai/hostkeeper/tree/main/crates/hostkeeper-link">crates/hostkeeper-link</a>, with gRPC over mutual TLS
 (<code>GrpcMtlsLink</code>), a JSON form and one that negotiates between them. Each call is bounded to
@@ -714,7 +714,7 @@ and <code>restore</code>
 <rect class="box-acc" x="20" y="14" width="180" height="40" rx="4"/><text x="110" y="39" text-anchor="middle" class="t-s t-b">daemon, enrollment loop</text>
 <rect class="box-blue" x="270" y="14" width="180" height="40" rx="4"/><text x="360" y="39" text-anchor="middle" class="t-s t-b">coordinator, heartbeat listener</text>
 <rect class="box" x="520" y="14" width="180" height="40" rx="4"/><text x="610" y="39" text-anchor="middle" class="t-s t-b">CA and enrollment store</text>
-<rect class="box" x="770" y="14" width="180" height="40" rx="4"/><text x="860" y="39" text-anchor="middle" class="t-s t-b">operator, ctl or UI</text>
+<rect class="box" x="770" y="14" width="180" height="40" rx="4"/><text x="860" y="39" text-anchor="middle" class="t-s t-b">operator, hkctl or UI</text>
 <path class="life" d="M110 54V540"/><path class="life" d="M360 54V540"/><path class="life" d="M610 54V540"/><path class="life" d="M860 54V540"/>
 <path class="ln" marker-end="url(#ae)" d="M110 90H356"/><text x="118" y="84" class="t-s">TLS probe: the CA&rsquo;s hash must equal ca_sha256, else nothing is sent</text>
 <rect class="box-w" x="120" y="102" width="330" height="24" rx="3"/><text x="130" y="119" class="t-s">makes a P-256 key and writes it before posting</text>
@@ -818,13 +818,13 @@ a named bearer token (<code>--tokens-file</code>: names and SHA-256 hashes, re-r
 not, with no per-token grants. An operator&rsquo;s token is also admitted on <code>SetDesired</code>, under every refusal
 CI&rsquo;s set gets, and on <code>Converge</code>, which changes nothing; the frozen JSON routes stay CI&rsquo;s
 (<code>admit</code> in <a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-coordinator/src/grpc/mod.rs">crates/hostkeeper-coordinator/src/grpc/mod.rs</a>).</p>
-<p><strong><code>hostkeeper ctl</code> is generated from the protos.</strong> The build of <code>hostkeeper-proto</code> writes one
-command per method of every non-local service. <code>hostkeeper ctl</code> builds its command tree from that
-table at run time and calls over gRPC or the gateway (<code>--transport</code>)
-(<a href="https://github.com/komira-ai/hostkeeper/tree/main/crates/hostkeeper-ctl">crates/hostkeeper-ctl</a>, <a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/ctl.md">docs/ctl.md</a>). The test
-<code>docs_ctl_md_is_current</code> regenerates <a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/ctl.md">docs/ctl.md</a> and fails when it differs, and a
-golden command tree makes a removed flag or a changed exit code fail. <code>hostkeeper ci set-desired</code>
-wraps <code>ctl releases set-desired</code> and <code>releases converge</code> for a release job
+<p><strong><code>hkctl</code> is generated from the protos.</strong> The build of <code>hostkeeper-proto</code> writes one
+command per method of every non-local service. <code>hkctl</code> is one bash script emitted from that
+table, which calls the gateway with <code>curl</code>
+(<a href="https://github.com/komira-ai/hostkeeper/tree/main/crates/hostkeeper-hkctl">crates/hostkeeper-hkctl</a>, <a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/cli.md">docs/cli.md</a>). The test
+<code>docs_cli_md_is_current</code> regenerates <a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/cli.md">docs/cli.md</a> and fails when it differs, and a
+golden script makes a removed flag or a changed exit code fail. <code>hostkeeper ci set-desired</code>
+calls <code>Releases.SetDesired</code> and <code>Releases.Converge</code> over gRPC for a release job
 (<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/deploy/ci-client.md">docs/deploy/ci-client.md</a>).</p>
 <p><strong>The web UI is built on the gateway.</strong> <a href="https://github.com/komira-ai/hostkeeper/tree/main/ui">ui/</a> is static HTML, one stylesheet and
 JavaScript modules, with no framework and no build step. Its pages are Fleet, Host, Rollout, Holds,
@@ -1261,7 +1261,7 @@ canary = { count = 1 }
 
 [service.selector]
 labels = { demo = "yes" }</code></pre>
-<p>With it, tierstore goes first to one canary, which bakes for three healthy heartbeats, and then, stage by stage by the default plan, to the other hosts, each stage updating one host per role at a time until the desired state sets a larger <code>max_updating</code>; a failed release on two of them (the default threshold) marks the version bad and sets the desired version back. hello goes only to hosts the operator labels <code>demo=yes</code> (<code>hostkeeper ctl hosts set-labels</code>). A server is matched on a data MAC its record lists; the daemon also claims the BMC&rsquo;s MAC when it can read it, and a record that has a BMC MAC then needs it to agree, while a record without one accepts any.</p>
+<p>With it, tierstore goes first to one canary, which bakes for three healthy heartbeats, and then, stage by stage by the default plan, to the other hosts, each stage updating one host per role at a time until the desired state sets a larger <code>max_updating</code>; a failed release on two of them (the default threshold) marks the version bad and sets the desired version back. hello goes only to hosts the operator labels <code>demo=yes</code> (<code>hkctl hosts set-labels</code>). A server is matched on a data MAC its record lists; the daemon also claims the BMC&rsquo;s MAC when it can read it, and a record that has a BMC MAC then needs it to agree, while a record without one accepts any.</p>
 <details class="edge"><summary>Edge cases: what the lab cannot do yet on <code>main</code></summary>
 <ul>
 <li>A host is first given a service by an <code>install</code> order, which the coordinator sends only to a daemon that announces <code>install-v1</code>. The daemon&rsquo;s heartbeat loop announces it and runs the install. The lab&rsquo;s first deploy of tierstore is planned as a forced one (<code>Releases.Force</code>), which <a href="#open">the measurements</a> time; a force reaches only hosts that already announce the service.</li>
@@ -1348,7 +1348,7 @@ dead-man stopping a unit by name, a unit name reused after a failure, long outpu
 bytes, and the observer reading a real unit&rsquo;s state and its main process&rsquo;s executable digest.
 The workload is <code>hostkeeper-fixture-hook</code>. Its job <code>first-boot</code> runs the programs themselves:
 the coordinator and the daemon started as child processes on loopback and driven through
-<code>hostkeeper ctl</code>. <code>first_boot.rs</code> covers an enrollment, its approval, the host certificate,
+the generated gRPC clients. <code>first_boot.rs</code> covers an enrollment, its approval, the host certificate,
 heartbeats over mutual TLS and a restart of each program. <code>install_uninstall.rs</code> covers a package
 assigned and installed once across coordinator restarts, and kept by the daemon&rsquo;s boot pass, from a
 release channel the test serves over HTTPS, then updated to a new desired version, then uninstalled

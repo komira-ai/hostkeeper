@@ -2,8 +2,8 @@
 //! A host's first boot with the real programs: the coordinator (`hostkeeper-coordinator serve`,
 //! making its CA) and the daemon (`hostkeeper daemon`), each started by the test as a child
 //! process, on loopback, as root against the host's systemd. The test drives them only as an
-//! operator and a host do: the flags and files of each, the operator API through `hostkeeper
-//! ctl`, and the certificate the daemon keeps in its pki directory.
+//! operator and a host do: the flags and files of each, the operator API through its
+//! gRPC clients, and the certificate the daemon keeps in its pki directory.
 //!
 //! What it asserts: the daemon's enrollment request reaches the coordinator's pending list (the
 //! CA takes its subject, `CN=host:pending`), the operator's approval gives the daemon a
@@ -19,7 +19,7 @@
 //! them when it ends ([`support::pair::HostPaths`]). The tests of this file run one at a time
 //! (`--test-threads=1` in privileged.yml's job first-boot): they share those paths.
 //!
-//! Nothing here reads a clock. Each wait looks at a state (a ctl answer, a file) a bounded number
+//! Nothing here reads a clock. Each wait looks at a state (an operator API answer, a file) a bounded number
 //! of times ([`support::spawn::poll`]); the coordinator's port is the one the system gave its
 //! first start.
 

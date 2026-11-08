@@ -2,7 +2,7 @@
 //! A package assigned to an enrolled host, updated and taken off it, with the real programs: the
 //! coordinator and the daemon as child processes on loopback (`support::pair`), and a release
 //! channel the test serves over HTTPS (`support::channel`), as root against the host's systemd.
-//! The operator acts through `hostkeeper ctl` only; what the tests read is the coordinator's
+//! The operator acts through the operator API only; what the tests read is the coordinator's
 //! `hosts list` (and `services list` for the hosts uninstalling a service), the daemon's log (each
 //! line a hook step wrote, under its step's unit), and the host: the file the package places, its
 //! unit file and the link that enables it.
@@ -30,7 +30,8 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 use support::channel::{Channel, Fixture, HostTrust, Package, VERIFIER_DIR};
-use support::pair::{Coordinator, Daemon, HostPaths, PACKAGES_DIR, TestCa, put, rollout};
+use support::operator_api::must;
+use support::pair::{Coordinator, Daemon, HostPaths, PACKAGES_DIR, TestCa, rollout};
 use support::spawn::poll;
 use support::{Bench, FIXTURE};
 
@@ -59,7 +60,7 @@ struct Installed {
     _channel: Channel,
     _trust: HostTrust,
     _host: HostPaths,
-    bench: Bench,
+    _bench: Bench,
     placed: PathBuf,
     v2: Package,
 }
@@ -102,15 +103,8 @@ impl Installed {
         // 2. The operator sets the desired version and assigns the service to the host; the
         // coordinator is killed and started again at once, so the assignment and the desired
         // version it orders by are the ones it reads back.
-        set_desired(&coordinator, &scratch, &v1);
-        coordinator.ctl_ok(&[
-            "services",
-            "assign",
-            "--node-id",
-            NODE,
-            "--service",
-            SERVICE,
-        ]);
+        set_desired(&coordinator, &v1);
+        must("services assign", coordinator.api().assign(NODE, SERVICE));
         coordinator.restart();
 
         // 5. Once the install runs, the coordinator is killed and started again: the order
@@ -123,7 +117,7 @@ impl Installed {
             _channel: channel,
             _trust: trust,
             _host: host,
-            bench,
+            _bench: bench,
             placed,
             v2,
         };
@@ -229,23 +223,13 @@ fn named(list: &Value, key: &str) -> Value {
 }
 
 /// Sets the desired version of the fixture service to `package`'s, with its digest.
-fn set_desired(coordinator: &Coordinator, scratch: &Path, package: &Package) {
-    let request = scratch.join(format!("desired-{}.json", package.version));
-    put(
-        &request,
-        format!("{{\"desired\":{{\"version\":\"{}\"}}}}", package.version).as_bytes(),
-        0o644,
+fn set_desired(coordinator: &Coordinator, package: &Package) {
+    must(
+        "releases set-desired",
+        coordinator
+            .api()
+            .set_desired(SERVICE, &package.version, &package.digest),
     );
-    coordinator.ctl_ok(&[
-        "releases",
-        "set-desired",
-        "--service",
-        SERVICE,
-        "--package-digest",
-        &package.digest,
-        "--request",
-        &request.display().to_string(),
-    ]);
 }
 
 /// Catches an install order that is not sent or not run, one that runs a second time after a
@@ -272,10 +256,9 @@ fn an_assigned_package_installs_once_across_restarts_and_the_boot_pass_keeps_it(
 #[test]
 fn a_new_desired_version_is_installed_over_the_installed_one() {
     let mut host = Installed::new("install_update");
-    let scratch = host.bench.scratch().to_path_buf();
 
     // 3. A new desired version: the host converges to it.
-    set_desired(&host.coordinator, &scratch, &host.v2);
+    set_desired(&host.coordinator, &host.v2);
     host.wait_settled("2.0.0", 2);
     host.assert_on_host("2.0.0");
     host.assert_steps(2, "the update ran each step once");
@@ -294,7 +277,6 @@ fn a_new_desired_version_is_installed_over_the_installed_one() {
 #[test]
 fn an_update_after_a_coordinator_restart_that_forgot_the_install_runs_once() {
     let mut host = Installed::new("install_restart_update");
-    let scratch = host.bench.scratch().to_path_buf();
     host.coordinator.kill();
     std::fs::remove_file(host.coordinator.verdicts_path())
         .expect("the verdicts file, which holds the install's acknowledged verdict, is removed");
@@ -302,7 +284,7 @@ fn an_update_after_a_coordinator_restart_that_forgot_the_install_runs_once() {
     host.coordinator.start_again();
     host.wait_settled("1.0.0", 1);
 
-    set_desired(&host.coordinator, &scratch, &host.v2);
+    set_desired(&host.coordinator, &host.v2);
     host.wait_settled("2.0.0", 2);
     host.assert_on_host("2.0.0");
     host.assert_steps(2, "the install and the update ran each step once");
@@ -331,16 +313,10 @@ fn an_uninstall_takes_the_package_its_file_and_its_unit_off_the_host() {
     let package = Path::new(PACKAGES_DIR).join(SERVICE);
 
     // 4. The operator takes the service off the host with an uninstall.
-    host.coordinator.ctl_ok(&[
-        "services",
-        "unassign",
-        "--node-id",
-        NODE,
-        "--service",
-        SERVICE,
-        "--uninstall",
-        "true",
-    ]);
+    must(
+        "services unassign",
+        host.coordinator.api().unassign(NODE, SERVICE, true),
+    );
     let Installed {
         daemon,
         coordinator,

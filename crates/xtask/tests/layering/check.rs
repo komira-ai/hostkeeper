@@ -29,7 +29,6 @@ const MDM_STEP: &str = "hostkeeper-mdm-step";
 const PXE: &str = "hostkeeper-pxe";
 const PXE_PACKETS: &str = "hostkeeper-pxe-packets";
 const PROTO: &str = "hostkeeper-proto";
-const CTL: &str = "hostkeeper-ctl";
 const HKCTL: &str = "hostkeeper-hkctl";
 const CI: &str = "hostkeeper-ci";
 const DAEMON: &str = "hostkeeper-daemon";
@@ -55,8 +54,7 @@ pub type Layer = (
 
 /// Every crate of the workspace but those of [`NO_ROW`], in name order. The dev column is what
 /// each crate's tests use: the coordinator's tests turn on `hostkeeper-oidc`'s `testkit` feature
-/// (a fake issuer), which a dev-dependency can do and a normal dependency must not, and run
-/// `hostkeeper-ctl` against an in-process coordinator; the daemon's and the link's tests run a
+/// (a fake issuer), which a dev-dependency can do and a normal dependency must not; the daemon's and the link's tests run a
 /// coordinator in process, behind a listener's TLS (`hostkeeper-tls`), and the daemon's run the
 /// example service hello's hook in process;
 /// hello's tests read its output with the hook contract and load its package with the
@@ -81,23 +79,21 @@ pub type Layer = (
 /// hello with their program `hello-e2e`, which runs hello's hook and server and so needs hello
 /// as a normal dependency; and the network-install tests run `hostkeeper-pxe` (their program
 /// `hostkeeper-privileged-pxe`, which needs it as a normal dependency) and read a DHCP client's
-/// packet with its packet crate. The binary's tests read the protobuf descriptors, and run the macOS
-/// pkg's postinstall (`hostkeeper-launchd`) against the binary.
-pub const LAYERS: [Layer; 31] = [
-    (BINARY, &[DAEMON], &[LAUNCHD, PROTO]),
-    (CI, &[CTL], &[PROTO]),
+/// packet with its packet crate. The binary's tests run the macOS pkg's postinstall (`hostkeeper-launchd`)
+/// against the binary.
+pub const LAYERS: [Layer; 30] = [
+    (BINARY, &[DAEMON], &[LAUNCHD]),
+    (CI, &[PROTO], &[]),
     (CONFIG, &[], &[]),
     (
         COORDINATOR,
         &[CONFIG, ENROLLMENT, MDM_GATE, OIDC, PROTO, TLS, WIRE],
-        &[CTL, OIDC],
+        &[OIDC],
     ),
-    (CTL, &[PROTO], &[]),
     (
         DAEMON,
         &[
-            CI, CONFIG, CTL, ENROLL, HOOK, LAUNCHD, LINK, OBSERVE, PACKAGE, PLACED, PROTO, STEPS,
-            UNPACK,
+            CI, CONFIG, ENROLL, HOOK, LAUNCHD, LINK, OBSERVE, PACKAGE, PLACED, PROTO, STEPS, UNPACK,
         ],
         &[COORDINATOR, HELLO, OIDC, TLS, WIRE],
     ),

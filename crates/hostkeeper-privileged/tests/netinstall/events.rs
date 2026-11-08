@@ -4,7 +4,7 @@
 //!
 //! Every wait ends on its event or fails on the end of the guest (or of a program the test still
 //! needs); nothing here reads a clock or bounds a wait by time, and the job's `timeout-minutes` is
-//! the only bound. A wait on an answer of `hostkeeper ctl` ([`Bus::until`]) asks again after a
+//! the only bound. A wait on an answer of the operator API ([`Bus::until`]) asks again after a
 //! pause, and ends the same way.
 
 use std::fmt;

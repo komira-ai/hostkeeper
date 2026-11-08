@@ -4,19 +4,19 @@
 //! refusal token, or one of `no_answer`, `not_stored`, `superseded`, `halted`, `not_converged`.
 //! Every failure prints one `::error::` line that says whether the version is set.
 
-use std::ffi::OsString;
 use std::fs::OpenOptions;
 use std::io::{self, Write};
 
 use rustls_pki_types::CertificateDer;
 
+use hostkeeper_proto::hostkeeper::operator::v1::{
+    ConvergeRequest, DesiredState, SetDesiredRequest,
+};
+
 use crate::call::{Answer, call};
 use crate::flags::{Release, SetDesiredFlags, Settings, is_version, validate};
 use crate::observe::Convergence;
 use crate::ports::Ports;
-
-/// The request file of `releases set-desired`, in the work directory.
-pub(crate) const REQUEST_FILE: &str = "set-desired.json";
 
 /// How the flow ended; these are the job's outputs.
 #[derive(Debug, PartialEq, Eq)]
@@ -123,40 +123,33 @@ pub(crate) fn execute(settings: &Settings, ports: &mut dyn Ports) -> Outcome {
     poll(settings, ports)
 }
 
-/// `releases set-desired`: the version is set, or the outcome says why not.
+/// `SetDesired`: the version is set, or the outcome says why not.
 fn set_version(settings: &Settings, ports: &mut dyn Ports) -> Result<(), Outcome> {
     let (service, version) = (&settings.service, &settings.version);
-    let file = settings.work_dir.join(REQUEST_FILE);
-    // The request file is the canonical JSON of the request. The index is its own text, whole,
-    // in a string: JSON escapes it and the coordinator reads the same bytes back.
-    let request = match &settings.release {
-        Release::Package(_) => serde_json::json!({ "desired": { "version": version } }),
-        Release::Index { text, digest } => serde_json::json!({
-            "desired": { "version": version },
-            "releaseIndex": text,
-            "releaseIndexDigest": digest,
+    // The index is its own text, whole: the coordinator reads the same bytes back.
+    let mut request = SetDesiredRequest {
+        service: service.clone(),
+        desired: Some(DesiredState {
+            version: version.clone(),
+            ..DesiredState::default()
         }),
+        ..SetDesiredRequest::default()
+    };
+    match &settings.release {
+        Release::Package(digest) => request.package_digest = Some(digest.clone()),
+        Release::Index { text, digest } => {
+            request.release_index = Some(text.clone());
+            request.release_index_digest = Some(digest.clone());
+        }
     }
-    .to_string();
-    if let Err(e) = std::fs::write(&file, request) {
-        return Err(failed(
-            ports,
-            "",
-            "no_answer",
-            &format!(
-                "cannot write the request file {}: {e}; the version {version} of {service} is not set",
-                file.display()
-            ),
-        ));
-    }
-    let mut rpc: Vec<OsString> = vec!["set-desired".into(), "--service".into(), service.into()];
-    if let Release::Package(digest) = &settings.release {
-        rpc.extend(["--package-digest".into(), digest.into()]);
-    }
-    rpc.extend(["--request".into(), file.into_os_string()]);
-    match call(ports, settings, rpc) {
+    match call(ports, settings, |releases, target, bearer| {
+        releases.set_desired(target, bearer, request)
+    }) {
         Answer::Reply(reply) => {
-            let stored = reply["desired"]["version"].as_str();
+            let stored = reply
+                .desired
+                .as_ref()
+                .map(|desired| desired.version.as_str());
             if stored == Some(version.as_str()) {
                 return Ok(());
             }
@@ -195,7 +188,7 @@ fn set_version(settings: &Settings, ports: &mut dyn Ports) -> Result<(), Outcome
     }
 }
 
-/// `releases converge`, up to `max_polls` reads at a fixed pause.
+/// `Converge`, up to `max_polls` reads at a fixed pause.
 fn poll(settings: &Settings, ports: &mut dyn Ports) -> Outcome {
     let (service, version) = (&settings.service, &settings.version);
     let mut last: Option<String> = None;
@@ -203,8 +196,15 @@ fn poll(settings: &Settings, ports: &mut dyn Ports) -> Outcome {
         if n > 1 {
             ports.pause(settings.pause_secs);
         }
-        let rpc: Vec<OsString> = vec!["converge".into(), "--service".into(), service.into()];
-        let answer = call(ports, settings, rpc);
+        let answer = call(ports, settings, |releases, target, bearer| {
+            releases.converge(
+                target,
+                bearer,
+                ConvergeRequest {
+                    service: service.clone(),
+                },
+            )
+        });
         let line = match &answer {
             Answer::Reply(reply) => Convergence::of(reply).line(),
             Answer::Refused(token) => format!("refused: {token}"),
