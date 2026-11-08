@@ -201,6 +201,13 @@ places `hostkeeper.toml` first, then installs the pkg. The daemon's start finds 
 the job is loaded by the postinstall. This is the "operator's bootstrap" of the earlier `docs/macos.md`, with the job
 load moved into the pkg. The Mac is then approved by an operator, as a Linux host is.
 
+**The service installer's files.** A Mac that installs services from signed `.pkg` files
+([packages-repositories.md](packages-repositories.md) section 4.7, **Designed**) also needs `stores.toml` and
+`macos-pkg.toml`. The same config profile carries them as two more domains, `dev.hostkeeper.stores` and
+`dev.hostkeeper.macos-pkg`, and the daemon's start renders each with these steps, except that a file which differs
+from its managed preferences is replaced, so a signer rotation reaches the Mac at its next start. `hostkeeper.toml`
+keeps the rule above.
+
 Design sections 4.6 and 5.9 were changed with this document. Task M10 changed `docs/macos.md`
 and the postinstall check of `check-macos-pkg` (**Built**: `docs/macos.md`,
 `crates/xtask/src/release/macos_pkg.rs`).
@@ -641,6 +648,12 @@ names a format names that one, and `check-macos-pkg` reads both layers (**Built*
   pkg's. This changes release trust: whoever can push to `main` can then make an Apple-trusted pkg.
   It goes to the maintainers after one independent review. The workflow lint gains the job by
   name, with a negative case (rule T15).
+
+A service's `.pkg` (packages-repositories.md section 4.7) is signed by the same identity, but
+before its release is attested, so CI's pin names the signed bytes. With Developer ID that is
+the release machinery's signing above. With the farm identity, re-signing on the MDM host does not
+serve a service's package, whose digest CI has already pinned; that outcome reopens this section
+for services' packages.
 
 Notarization is not in either plan. Nothing Apple states requires it for an MDM install. The
 device test (pkg 3, or a Developer ID pkg if it comes to that) shows whether the install is
