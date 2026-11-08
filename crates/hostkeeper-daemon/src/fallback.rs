@@ -42,6 +42,11 @@
 //! the system kills before it runs any of its code (a refused signature, a binary for another
 //! architecture) writes none, and is not fallen back from by this rule.
 //!
+//! A wait for a hand-over (docs/design/two-programs.md, 4.3, [`crate::handover`]) moved no
+//! link: the fallback puts nothing back and writes nothing for it, on Linux exiting
+//! [`EXIT_FAILED`] ([`FallbackError::HandOver`]) and on macOS judging nothing
+//! ([`Judged::NotPending`]).
+//!
 //! It exits 0 when the previous binary is back or, on macOS, when there was nothing to do yet,
 //! and [`EXIT_FAILED`] with a message naming the cause when there is no `previous`, when no update
 //! waits for its restart, when `previous` is not an executable file, or when the record, the
@@ -79,6 +84,13 @@ pub enum FallbackError {
         .0.display()
     )]
     NothingWaits(PathBuf),
+    /// The update waits for a hand-over (docs/design/two-programs.md, 4.3): `current` was not
+    /// moved, and the start of the binary it names settles the update, so nothing is put back.
+    #[error(
+        "the update of hostkeeper waits for a hand-over, so {} is left as it is: the start of the binary `current` names settles it",
+        .0.display()
+    )]
+    HandOver(PathBuf),
     /// `previous` could not be read, or names what is not an executable file, or `current`
     /// could not be moved.
     #[error("the previous binary cannot be put back: {0}")]
@@ -100,7 +112,8 @@ pub enum FallbackError {
 /// What the fallback on macOS found when it ran.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Judged {
-    /// No update waits for the restart: nothing to judge.
+    /// No update waits for the restart, or one waits for a hand-over, which the start of the
+    /// binary `current` names settles: nothing to judge.
     NotPending,
     /// A daemon holds the state directory, or another service's update is unfinished: the
     /// words say which. Nothing was changed.
@@ -126,7 +139,11 @@ pub fn fallback_with(layout: &Layout, store: &RecordStore) -> Result<Settled, Fa
     if previous.is_none() {
         return Err(FallbackError::NoPrevious(layout.dir().to_path_buf()));
     }
-    if awaited(store)?.is_none() & (layout.current()? != previous) {
+    let awaiting = awaited(store)?;
+    if awaiting.as_ref().is_some_and(|a| a.next.is_some()) {
+        return Err(FallbackError::HandOver(layout.dir().to_path_buf()));
+    }
+    if awaiting.is_none() & (layout.current()? != previous) {
         return Err(FallbackError::NothingWaits(layout.dir().to_path_buf()));
     }
     layout.flip_back()?;
@@ -150,7 +167,8 @@ fn awaited(store: &RecordStore) -> Result<Option<AwaitingRestart>, SelfUpdateErr
 pub fn fallback_after_burst(dir: &Path, clock: &dyn Clock) -> Result<Judged, FallbackError> {
     let hk_state = dir.parent().unwrap_or(dir);
     let state = hk_state.parent().unwrap_or(hk_state);
-    let Some(awaiting) = awaited(&RecordStore::new(hk_state))? else {
+    let awaiting = awaited(&RecordStore::new(hk_state))?;
+    let Some(awaiting) = awaiting.filter(|a| a.next.is_none()) else {
         return Ok(Judged::NotPending);
     };
     let _lock = match lock_state_dir(state) {

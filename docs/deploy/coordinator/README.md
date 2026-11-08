@@ -79,6 +79,11 @@ command for the farm: the listen addresses (one interface's address each, never 
 `--server-name`, and any other flag the coordinator runs with today
 (`hostkeeper-coordinator serve --help`).
 
+The coordinator gets no compose `healthcheck`: compose runs one inside the container, which has
+no shell or client. To probe it from the machine, add `--health-listen` with a loopback address
+(for example `127.0.0.1:9100`) to the command, and point the machine's monitoring at
+`GET /healthz` ([coordinator-health.md](../coordinator-health.md)).
+
 The local volume, `/var/lib/hostkeeper-coordinator` in the container, holds the CA key
 (`ca.key`) and its certificate (`ca.key.cert`), the server certificate file (`server.pem`) and the
 marker (`halt-unfinished`). The image runs as 65532, which must own the volume's directory (to

@@ -336,7 +336,7 @@ fn word_count(text: &str, word: &str) -> usize {
 }
 
 /// The `run:` values of every step of `job`, in order.
-fn runs(job: &Node) -> Vec<&str> {
+pub fn runs(job: &Node) -> Vec<&str> {
     let steps = match entry(job, "steps").map(|s| &s.value) {
         Some(Value::Seq(steps)) => steps.as_slice(),
         _ => &[],
@@ -357,7 +357,8 @@ fn test_targets(run: &str) -> BTreeSet<String> {
         .collect()
 }
 
-const BUILD: &str = "cargo test -p hostkeeper-privileged --features privileged --locked --no-run";
+pub const BUILD: &str =
+    "cargo test -p hostkeeper-privileged --features privileged --locked --no-run";
 const RUN: &str = "cargo test -p hostkeeper-privileged --features privileged --locked --config \"target.'cfg(unix)'.runner = 'sudo'\"";
 
 /// How many times `sudo` stands as a word among the values of `node` (a comment is not a value).
@@ -479,6 +480,11 @@ const FIRST_BOOT_JOB: &str = "first-boot";
 const FIRST_BOOT_FIRST_LINE: &str = "#![cfg(all(target_os = \"linux\", feature = \"privileged\"))]";
 /// The first line of a privileged test file of [`MACOS_DEVICE_JOB`]: the tests against launchd.
 const MACOS_FIRST_LINE: &str = "#![cfg(all(target_os = \"macos\", feature = \"privileged\"))]";
+/// The first line of a privileged test file of both the Linux job and [`MACOS_DEVICE_JOB`]: one
+/// target whose tests run against systemd on Linux and against launchd on a Mac (the
+/// cross-release rig, `self_update_across_releases`).
+const BOTH_FIRST_LINE: &str =
+    "#![cfg(all(any(target_os = \"linux\", target_os = \"macos\"), feature = \"privileged\"))]";
 
 /// Whether `text` starts with the attribute `first`, as rustfmt may break it over lines: the same
 /// characters, whitespace aside, up to the attribute's closing bracket.
@@ -509,12 +515,18 @@ fn privileged_targets(first: &str) -> BTreeSet<String> {
 }
 
 /// The jobs of privileged.yml and the targets of each: the Linux job's, the first-boot job's and
-/// the macOS job's.
+/// the macOS job's. A target of both platforms is the Linux job's and the macOS job's.
 pub fn committed_targets() -> BTreeMap<&'static str, BTreeSet<String>> {
+    let both = privileged_targets(BOTH_FIRST_LINE);
+    let with_both = |first: &str| {
+        let mut targets = privileged_targets(first);
+        targets.extend(both.iter().cloned());
+        targets
+    };
     BTreeMap::from([
-        ("privileged", privileged_targets(LINUX_FIRST_LINE)),
+        ("privileged", with_both(LINUX_FIRST_LINE)),
         (FIRST_BOOT_JOB, privileged_targets(FIRST_BOOT_FIRST_LINE)),
-        (MACOS_DEVICE_JOB, privileged_targets(MACOS_FIRST_LINE)),
+        (MACOS_DEVICE_JOB, with_both(MACOS_FIRST_LINE)),
     ])
 }
 
@@ -560,6 +572,7 @@ fn the_committed_privileged_yml_passes_and_holds_the_one_sudo() {
         BTreeSet::from([
             "observer".to_owned(),
             "self_update".to_owned(),
+            "self_update_across_releases".to_owned(),
             "tierstore_shaped".to_owned(),
             "transient_unit".to_owned(),
             "unit_control".to_owned()
@@ -575,6 +588,7 @@ fn the_committed_privileged_yml_passes_and_holds_the_one_sudo() {
             "device_mac".to_owned(),
             "device_mac_e2e".to_owned(),
             "device_mac_selfupdate".to_owned(),
+            "self_update_across_releases".to_owned(),
             "unpack_mac".to_owned()
         ])
     );
@@ -907,5 +921,74 @@ fn the_shape_check_holds_each_job_to_its_own_targets() {
     assert_eq!(
         shape_problems(PRIVILEGED_WORKFLOW, &env, &targets),
         ["sudo is named 1 times outside the jobs"]
+    );
+}
+
+#[test]
+fn a_target_of_both_platforms_left_out_of_either_job_is_refused() {
+    // Catches: the cross-release rig, whose one target runs on Linux and on a Mac, dropped from
+    // the macOS job's steps or from the Linux job's while the other still runs it, or a first
+    // line of both platforms read as one job's only.
+    let text = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.github/workflows/privileged.yml"),
+    )
+    .expect("read privileged.yml");
+    let targets = committed_targets();
+    assert!(targets["privileged"].contains("self_update_across_releases"));
+    assert!(targets[MACOS_DEVICE_JOB].contains("self_update_across_releases"));
+    assert!(
+        privileged_targets(BOTH_FIRST_LINE).contains("self_update_across_releases"),
+        "its file starts with the first line of both platforms"
+    );
+    let set = |names: &[&str]| -> BTreeSet<String> {
+        names.iter().map(|name| (*name).to_owned()).collect()
+    };
+    let mac = set(&[
+        "device_mac",
+        "device_mac_e2e",
+        "device_mac_selfupdate",
+        "self_update_across_releases",
+        "unpack_mac",
+    ]);
+    let mac_left = set(&[
+        "device_mac",
+        "device_mac_e2e",
+        "device_mac_selfupdate",
+        "unpack_mac",
+    ]);
+    let dropped_mac = text.replace(
+        "--test device_mac_selfupdate --test self_update_across_releases --test unpack_mac",
+        "--test device_mac_selfupdate --test unpack_mac",
+    );
+    assert_ne!(dropped_mac, text);
+    assert_eq!(
+        shape_problems(PRIVILEGED_WORKFLOW, &dropped_mac, &targets),
+        [
+            format!(
+                "job macos-device: the build step names the test targets {mac_left:?}, not {mac:?}"
+            ),
+            format!(
+                "job macos-device: the run as root step names the test targets {mac_left:?}, not {mac:?}"
+            ),
+        ]
+    );
+    let linux = &targets["privileged"];
+    let mut linux_left = linux.clone();
+    linux_left.remove("self_update_across_releases");
+    let dropped_linux = text.replace(
+        "--test tierstore_shaped --test self_update_across_releases",
+        "--test tierstore_shaped",
+    );
+    assert_ne!(dropped_linux, text);
+    assert_eq!(
+        shape_problems(PRIVILEGED_WORKFLOW, &dropped_linux, &targets),
+        [
+            format!(
+                "job privileged: the build step names the test targets {linux_left:?}, not {linux:?}"
+            ),
+            format!(
+                "job privileged: the run as root step names the test targets {linux_left:?}, not {linux:?}"
+            ),
+        ]
     );
 }

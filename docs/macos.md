@@ -500,8 +500,8 @@ runner (`macos-15`) after every merge to `main` and by hand, as root, and in
 `.github/workflows/pr-device.yml`, a copy of it key for key, on every pull request, beside the
 job `macos-test`, which runs the tests of the Mac's crates on the same runner (CONTRIBUTING.md
 says which).
-Its tests (`crates/hostkeeper-privileged/tests/device_mac.rs`, `device_mac_e2e.rs` and
-`device_mac_selfupdate.rs`) are not
+Its tests (`crates/hostkeeper-privileged/tests/device_mac.rs`, `device_mac_e2e.rs`,
+`device_mac_selfupdate.rs` and `self_update_across_releases.rs`) are not
 counted by the coverage gate; what they drive is measured against fakes on Linux. They:
 
 - start the daemon as a launchd job of the system domain, with a config and directories of their
@@ -561,3 +561,11 @@ counted by the coverage gate; what they drive is measured against fakes on Linux
     coordinator reads the host baked and hostkeeper converged.
   The fallback of a next binary that cannot start is not run there: the daemon of the test writes
   its fallback job beside its placed units, not in `/Library/LaunchDaemons`.
+- update hostkeeper itself from the published release `previous-release.toml` pins to this build
+  (`self_update_across_releases.rs`, the cross-release rig, which runs on Linux too; CONTRIBUTING.md
+  says how the pin moves): the released daemon is the job `dev.hostkeeper.hostkeeper` of the
+  daemon's own plist in `/Library/LaunchDaemons`, ordered by the real coordinator with packages
+  from the loopback release channel. It updates to this build, which settles the update
+  `Succeeded`; a version of this build that cannot start is fallen back from by the released
+  binary's own fallback job, which the daemon writes into `/Library/LaunchDaemons` and launchd
+  runs; and this build updates to itself under a newer version name.

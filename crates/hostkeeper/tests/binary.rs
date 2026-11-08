@@ -142,3 +142,101 @@ fn the_trusted_root_age_limit_flag_is_taken_and_zero_is_a_usage_error() {
     assert!(stderr.contains("--trusted-root-max-age-days"), "{stderr}");
     assert!(!scratch.path().join("state").exists());
 }
+
+/// The version a hand-over waits for in
+/// [`a_hand_over_execs_next_with_the_same_arguments_until_its_count_is_spent`]: not this
+/// build's, so every start of the build is the old binary.
+const HANDED_TO: &str = "9.9.9";
+
+/// Catches a hand-over that is not a real exec with the process's own arguments, that keeps the
+/// state directory's lock across the exec, or that never ends: the record of the service
+/// `hostkeeper` waits for a hand-over into 9.9.9, and `versions/9.9.9` is a copy of this build,
+/// so each start of it is the old binary again and execs it again. `hostkeeper daemon` with a
+/// missing config execs itself with the same flags (a start that parsed others would not find
+/// the record), each exec taking the lock again (a lock kept across the exec would leave the
+/// record waiting), until the count is spent; that start settles the update `Failed`,
+/// `self_update_fallback`, marks 9.9.9 bad, removes `next` and switches nothing, and then stops
+/// at the missing config with its status, 3, saying on standard error exactly what the same
+/// command line says with no hand-over (an exec that came back would say so).
+#[test]
+fn a_hand_over_execs_next_with_the_same_arguments_until_its_count_is_spent() {
+    use std::fs;
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    let scratch = hostkeeper_testkit::Scratch::under(Path::new(env!("CARGO_TARGET_TMPDIR")), "ho")
+        .expect("a scratch dir");
+    let state = scratch.path().join("state");
+    let hk = state.join("hostkeeper");
+    let bin = hk.join("bin");
+    fs::create_dir_all(bin.join("versions")).expect("the binary directory");
+    for dir in [&state, &hk, &bin] {
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o700)).expect("its mode");
+    }
+    fs::copy(
+        env!("CARGO_BIN_EXE_hostkeeper"),
+        bin.join("versions").join(HANDED_TO),
+    )
+    .expect("this build as 9.9.9");
+    symlink(Path::new("versions").join(HANDED_TO), bin.join("next")).expect("next");
+    let record = format!(
+        r#"{{"schema":1,"service":"hostkeeper","target_version":"{HANDED_TO}","artifact_digest":"{a}","tarball_digest":"{c}","previous_digest":null,"generation":1,"params":"/state/hostkeeper/params.toml","step":"cleanup","attempt":1,"state":{{"state":"done","code":0,"last_line":null}},"hook":"new","progress":{{"committed":true,"promotion_pending":false,"then":null,"retry":0,"verify_started":null,"watching":null,"reason":null,"awaiting_restart":{{"version":"{HANDED_TO}","verdict_promotion_pending":false,"order_id":"order-1","next":"{HANDED_TO}","starts":0}}}},"order_try":1}}"#,
+        a = "ab".repeat(32),
+        c = "cd".repeat(32),
+    );
+    fs::write(hk.join("step-record.json"), record).expect("the record");
+
+    let config = scratch.path().join("missing.toml");
+    let daemon = |state: &Path| {
+        Command::new(env!("CARGO_BIN_EXE_hostkeeper"))
+            .arg("daemon")
+            .arg("--config")
+            .arg(&config)
+            .arg("--state-dir")
+            .arg(state)
+            .arg("--packages-dir")
+            .arg(scratch.path().join("packages"))
+            .arg("--admin-socket")
+            .arg(scratch.path().join("r/a.sock"))
+            .output()
+            .expect("run hostkeeper")
+    };
+    // What the same command line says with no hand-over: the config error, and nothing else.
+    let plain = daemon(&scratch.path().join("no-state"));
+    assert_eq!(plain.status.code(), Some(3), "{plain:?}");
+    let out = daemon(&state);
+    assert_eq!(out.status.code(), Some(3), "{out:?}");
+    // No exec came back and nothing went unread: the last start says only what a start with no
+    // hand-over says.
+    assert_eq!(
+        String::from_utf8_lossy(&out.stderr),
+        String::from_utf8_lossy(&plain.stderr)
+    );
+
+    // The record as the daemon writes it (pretty JSON): finished, failed after the commit of
+    // class release with the fallback's reason, the order id kept, no wait left.
+    let rec = fs::read_to_string(hk.join("step-record.json")).expect("the record");
+    for line in [
+        r#""state": "finished""#,
+        r#""Failed": {"#,
+        r#""phase": "after_commit""#,
+        r#""class": "release""#,
+        r#""reason": "self_update_fallback""#,
+        r#""report_order_id": "order-1""#,
+    ] {
+        assert!(rec.contains(line), "{line} in {rec}");
+    }
+    assert!(!rec.contains("awaiting_restart"), "{rec}");
+    let bad = fs::read_to_string(hk.join("bad-versions")).expect("the list of bad versions");
+    assert!(
+        bad.contains(&format!(r#""versions":["{HANDED_TO}"]"#)),
+        "{bad}"
+    );
+    assert!(
+        fs::symlink_metadata(bin.join("next")).is_err(),
+        "next is removed"
+    );
+    assert!(
+        fs::symlink_metadata(bin.join("current")).is_err(),
+        "nothing is switched"
+    );
+}

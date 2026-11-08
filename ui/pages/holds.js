@@ -21,7 +21,7 @@ export function holdScope(form) {
 export async function render(ctx) {
   let listed;
   try {
-    listed = await ctx.api.call("hostkeeper.operator.v1.Services/List", {});
+    listed = await ctx.api.services.list({});
   } catch (error) {
     return errorView("Holds", error);
   }
@@ -43,7 +43,7 @@ export async function render(ctx) {
       if (reasonProblem(reason) !== null) {
         return reasonProblem(reason);
       }
-      await ctx.api.call("hostkeeper.operator.v1.Services/Unhold",
+      await ctx.api.services.unhold(
         { scope: hold.scope, service: hold.service, reason });
       ctx.refresh();
       return `Released the hold of ${hold.service} (${scopeLabel(hold.scope)}).`;
@@ -78,7 +78,7 @@ export async function render(ctx) {
         if (typeof scope === "string") {
           return scope;
         }
-        await ctx.api.call("hostkeeper.operator.v1.Services/Hold", { scope, service, reason });
+        await ctx.api.services.hold({ scope, service, reason });
         ctx.refresh();
         return `Held ${service} (${scopeLabel(scope)}).`;
       })));

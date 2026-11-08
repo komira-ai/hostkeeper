@@ -48,6 +48,11 @@ pub enum StartError {
         "--lan-listen: {0} is a wildcard address; the LAN listener's address is named in the server certificate, so name the address of one interface"
     )]
     LanListen(SocketAddr),
+    /// `--health-listen` is not a loopback address.
+    #[error(
+        "--health-listen: {0} is not a loopback address; the health listener answers with no token and no TLS, so name an address of 127.0.0.0/8 or ::1"
+    )]
+    HealthListen(SocketAddr),
     /// The allow-list of CI's OIDC token is refused.
     #[error(transparent)]
     Oidc(#[from] ConfigError),
