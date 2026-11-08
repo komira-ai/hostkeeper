@@ -1,8 +1,9 @@
 #![cfg(all(target_os = "macos", feature = "privileged"))]
 //! hostkeeper's update of itself under the real launchd of a GitHub-hosted macOS runner, as root,
 //! in `.github/workflows/privileged.yml`'s job `macos-device` (and pr-device.yml's copy of it): the Mac twin of
-//! `tests/self_update.rs`. The daemon runs as a launchd job of the daemon's own plist from
-//! `current` of its binary directory, on the host's macOS adapters (its steps and the probe of a
+//! `tests/self_update.rs`. The daemon runs as a launchd job of the daemon's own plist, its program
+//! `current` of its binary directory or, for a Mac as the pkg leaves it, the packaged binary that
+//! seeds the binary directory and execs `current`, on the host's macOS adapters (its steps and the probe of a
 //! new binary as launchd jobs), and is ordered from [`N`] to [`NEXT`] (`mac_self_update` says
 //! how the Mac is made and what is a fixture).
 //!
@@ -10,8 +11,10 @@
 //! - an installed daemon ordered the update to the next version asks the new binary its
 //!   protocol through a launchd job, switches to it and exits; launchd starts the new binary,
 //!   which settles the update `Succeeded` and reports it;
-//! - a daemon the pkg installed (no package of hostkeeper) ordered the install of the next
-//!   release does the same, and the package is installed at the new version;
+//! - a daemon the pkg installed (no package of hostkeeper; its job's program the packaged binary,
+//!   the binary directory empty at the start) is started by launchd, seeds the binary directory
+//!   with itself as [`N`] and runs `current` in the same process; ordered the install of the next
+//!   release it does the same as above, and the package is installed at the new version;
 //! - a daemon the pkg installed ordered the install of the version it runs is `Succeeded` at once:
 //!   no probe, no restart, the binary directory as it was;
 //! - ordered by the real coordinator in the test's process (a rollout that bakes a host for two
@@ -89,7 +92,10 @@ fn an_installed_daemon_updated_to_the_next_version_restarts_into_it_under_launch
 }
 
 /// Catches the Mac a pkg installed staying on its first version (the case of a Mac upgraded by
-/// hand and then ordered the next release): no package of hostkeeper is installed, the
+/// hand and then ordered the next release), and a packaged start that does not seed or does not
+/// run `current` (the job's program is the packaged binary and the binary directory starts empty:
+/// the job's process runs [`N`]'s file of the binary directory, `current` names it, and nothing
+/// is `previous`): no package of hostkeeper is installed, the
 /// coordinator orders the install of [`NEXT`], and the daemon runs it as its self-update; the
 /// record settles `Succeeded` once the new binary started, the job runs it, and the package is
 /// installed at [`NEXT`].
@@ -97,6 +103,10 @@ fn an_installed_daemon_updated_to_the_next_version_restarts_into_it_under_launch
 fn a_daemon_the_pkg_installed_is_installed_its_next_release_and_restarts_into_it() {
     let host = MacSelfHost::new("install", Plan::Pkg(NEXT));
     let pid = host.runs(N);
+    assert!(
+        host.layout().previous().expect("previous").is_none(),
+        "the packaged start seeded the binary directory with one version"
+    );
     assert!(fs::read_link(host.service().join("current")).is_err());
     host.offer("install", NEXT);
     assert_restarted_into_next(&host, pid);
