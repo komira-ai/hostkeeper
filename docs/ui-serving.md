@@ -60,7 +60,9 @@ it again.
 - `/ui/` is the directory's `index.html`, and a path ending in `/` is the `index.html` of that
   directory.
 - Only files ending in `.html`, `.css`, `.js`, `.json`, `.svg`, `.png` or `.ico`, of at most
-  4 MiB, are served; anything else is `404`. A path that leaves the directory (`..`, an absolute
+  4 MiB, are served; anything else is `404`. So `ui/gen/client.d.ts`, the TypeScript declarations
+  of the generated client `ui/gen/client.js`, is in the image but not served: the app does not
+  load it. A path that leaves the directory (`..`, an absolute
   path, their percent-encoded or backslash forms, or a symbolic link to a file outside) is `404`,
   and the file outside is never opened. Hidden files (a name starting with `.`) are `404`.
 - Each file is read from disk on each request; nothing is cached in memory.

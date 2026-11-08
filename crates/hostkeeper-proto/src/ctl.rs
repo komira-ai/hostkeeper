@@ -4,7 +4,8 @@
 //! entry of [`COMMANDS`] at the next build.
 //!
 //! The command line itself (the clap tree, the request, the call and the output) is the crate
-//! `hostkeeper-ctl`, which reads this table; this crate stays code generation only.
+//! `hostkeeper-ctl`, which reads this table; the web app's client (`ui/gen/`) is generated from
+//! it too, by `hostkeeper-ui-tests`. This crate stays code generation only.
 //!
 //! How a request field becomes input ([`Input`]):
 //!

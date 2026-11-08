@@ -1,13 +1,18 @@
 // The data layer: the one place the app talks to the network.
 //
-// Every operator API method is a POST of the request's canonical JSON to
-// `/<package>.<Service>/<Method>` on the origin that served the app, with the operator's token in
-// the `Authorization` header. The reply is the response's canonical JSON, or, on a refusal, an
-// HTTP error status with the body `{"code": "<gRPC code>", "reason": "<refusal token>"}`.
+// The pages call the operator API through the client generated from the protos
+// (`gen/client.js`, its types in `gen/client.d.ts`): `api.<service>.<method>(request)`, as
+// `api.hosts.list(request)`. Each of its functions is one `call` of this module's: a
+// POST of the request's canonical JSON to `/<package>.<Service>/<Method>` on the origin that
+// served the app, with the operator's token in the `Authorization` header. The reply is the
+// response's canonical JSON, or, on a refusal, an HTTP error status with the body
+// `{"code": "<gRPC code>", "reason": "<refusal token>"}`.
 //
 // `fetch` and the token are injected (`createApi`), so tests run this module against a fake
 // gateway. No error this module throws carries the token, a header or a reply body: only the
 // code, the reason and the HTTP status, each checked against its grammar first.
+
+import { createClient } from "./gen/client.js";
 
 // A method's full name, as the descriptors spell it: `hostkeeper.operator.v1.Hosts/List`.
 const METHOD = /^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*\.[A-Z][A-Za-z0-9]*\/[A-Z][A-Za-z0-9]*$/;
@@ -66,12 +71,14 @@ function refusal(status, text, token) {
   return new ApiError(code, reason, status);
 }
 
+// The function that sends one call: `call(method, body)` posts `body` to `method`
+// (`<package>.<Service>/<Method>`) and resolves to the reply, or rejects with an `ApiError`.
 // `fetch` (a URL and an init object) is the browser's, or a test's fake. `getToken()` returns
 // the token or null. `clearToken(error, token)` is told that `token`, the one the refused call
 // sent, was refused: it forgets the token only if it is still the one held, so a late refusal of
 // a token the operator has since replaced signs nothing out.
-export function createApi({ fetch, getToken, clearToken }) {
-  async function call(method, body) {
+export function createCall({ fetch, getToken, clearToken }) {
+  return async function call(method, body) {
     if (typeof method !== "string" || !METHOD.test(method)) {
       throw new ApiError("BAD_METHOD", "", 0);
     }
@@ -126,6 +133,11 @@ export function createApi({ fetch, getToken, clearToken }) {
       throw new ApiError("BAD_REPLY", "", status);
     }
     return reply;
-  }
-  return { call };
+  };
+}
+
+// The client the pages call, `api.<service>.<method>(request)`: the generated one, over
+// `createCall`'s `call` with the same `fetch` and token.
+export function createApi(deps) {
+  return createClient(createCall(deps));
 }
