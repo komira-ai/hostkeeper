@@ -837,7 +837,7 @@ on the database and the back-out window has closed.
   request and round. Its negative cases run it against backends that are wrong in one way each (a commit that writes
   half, a load that drops order, a spend that forgets) and expect the failure of that clause, so the suite is shown to
   catch what it claims (rule T15).
-- **Postgres in CI, as jobscheduler runs it.** The existing `test` job gains a `postgres` service container pinned by
+- **Postgres in CI, as jobscheduler runs it.** The test jobs (now each `test-shard` of ci.yml) carry a `postgres` service container pinned by
   digest, with trust authentication on loopback and no password; no new job (rule B9). A GitHub service container
   takes no start command, so the trust setting is the image's own variable, `POSTGRES_HOST_AUTH_METHOD: trust`, in the
   workflow's `services:` block: a setting of a throwaway third-party container that lives for one job, as jobscheduler's
@@ -852,7 +852,7 @@ on the database and the back-out window has closed.
   `pg_terminate_backend` from a second session, a failed commit by a trigger the test installs, a refused setting by
   `ALTER DATABASE ... SET`; no test sleeps or bounds an elapsed time (rule T10).
 - **Coverage.** The Postgres store is a module of the coordinator crate, measured by the same gate at 99% of lines and
-  branches in the `test` job, which has the server. Nothing is excluded or feature-gated out of the measurement.
+  branches in the check `test`, over the test shards, each of which has the server. Nothing is excluded or feature-gated out of the measurement.
 - **Named tests**, by build item:
 
 | Test | Proves | Item |

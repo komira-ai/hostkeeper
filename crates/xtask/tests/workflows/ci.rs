@@ -18,7 +18,9 @@
 //!   ([`UNPACK`]); then [`GATE`] runs. [`REPORT`] and [`GATE`] are the commands of the one job
 //!   before the shards, unchanged.
 //! - No job or step of [`SHARD_JOB`] or [`GATE_JOB`] has `continue-on-error`, which would turn a
-//!   failed test or gate into a pass.
+//!   failed test or gate into a pass; and neither the workflow nor those jobs has `defaults`, nor
+//!   a step of theirs `shell` or `working-directory` ([`STEP_KEYS_REFUSED`]), which would change
+//!   what a pinned `run` does (`shell: echo {0}` makes `exit 1` pass).
 //!
 //! A profile or a binary that does not reach the gate can only lower what it measures, so the
 //! hand-over is pinned to fail early, in this lint, and not to keep a pass. `ci_tests.rs` shows each
@@ -103,6 +105,11 @@ pub fn problems(text: &str) -> Vec<String> {
     let jobs = entry(&doc, "jobs").map_or(&[][..], entries);
     let names: Vec<&str> = jobs.iter().filter_map(|(name, _)| name.as_str()).collect();
     let mut problems = Vec::new();
+    if entry(&doc, "defaults").is_some() {
+        problems.push(
+            "defaults is set on the workflow, which changes how every step's run runs".to_owned(),
+        );
+    }
     if names != JOBS {
         problems.push(format!(
             "jobs are {names:?}, not exactly {JOBS:?} in that order"
@@ -161,18 +168,24 @@ fn find(steps: &[Node], holds: impl Fn(&Node) -> bool) -> Option<usize> {
     steps.iter().position(holds)
 }
 
-/// The problems of `who` (`job <name>`) having `continue-on-error`, on the job or a step.
+/// The keys of a step that change whether its failure counts (`continue-on-error`) or what its
+/// `run` does (`shell`, `working-directory`), refused on every step of the shards and the gate.
+pub const STEP_KEYS_REFUSED: [&str; 3] = ["continue-on-error", "shell", "working-directory"];
+
+/// The problems of `who` (`job <name>`) having `continue-on-error` or `defaults` on the job, or
+/// a key of [`STEP_KEYS_REFUSED`] on a step.
 fn continue_problems(who: &str, job: &Node) -> Vec<String> {
     let mut problems = Vec::new();
-    if entry(job, "continue-on-error").is_some() {
-        problems.push(format!("{who}: continue-on-error is set on the job"));
+    for key in ["continue-on-error", "defaults"] {
+        if entry(job, key).is_some() {
+            problems.push(format!("{who}: {key} is set on the job"));
+        }
     }
     for (at, step) in steps(job).iter().enumerate() {
-        if entry(step, "continue-on-error").is_some() {
-            problems.push(format!(
-                "{who}: continue-on-error is set on step {}",
-                at + 1
-            ));
+        for key in STEP_KEYS_REFUSED {
+            if entry(step, key).is_some() {
+                problems.push(format!("{who}: {key} is set on step {}", at + 1));
+            }
         }
     }
     problems

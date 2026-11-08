@@ -402,6 +402,65 @@ fn continue_on_error_in_a_shard_or_the_gate_is_refused() {
     );
 }
 
+/// Proves: a `shell` or a `working-directory` on a step of a shard or of the gate, `defaults` on
+/// either job, and `defaults` on the workflow are each refused, naming where.
+/// Catches: a pinned `run` made to do nothing, such as the gate's `exit 1` under `shell: echo {0}`
+/// (a failed shard then passes) or the 99% gate run in another directory.
+#[test]
+fn a_shell_working_directory_or_defaults_that_changes_a_pinned_run_is_refused() {
+    let first = format!("        run: {SHARD_FAILED_RUN}\n");
+    assert_problems(
+        &edited(
+            GATE_JOB,
+            &first,
+            &format!("{first}        shell: echo {{0}}\n"),
+        ),
+        &[&format!("{COVERAGE}: shell is set on step 1")],
+    );
+    let gate = format!("        run: {GATE}\n");
+    assert_problems(
+        &edited(
+            GATE_JOB,
+            &gate,
+            &format!("{gate}        working-directory: crates\n"),
+        ),
+        &[&format!("{COVERAGE}: working-directory is set on step 12")],
+    );
+    let run = format!("        run: {}\n", test_run());
+    assert_problems(
+        &edited(
+            SHARD_JOB,
+            &run,
+            &format!("{run}        shell: sh -c 'exit 0' {{0}}\n"),
+        ),
+        &[&format!("{SHARD}: shell is set on step 10")],
+    );
+    let runner = format!("    runs-on: {RUNNER}\n");
+    let defaults = "    defaults:\n      run:\n        shell: echo {0}\n";
+    for (job, who) in [(SHARD_JOB, SHARD), (GATE_JOB, COVERAGE)] {
+        assert_problems(
+            &edited(job, &runner, &format!("{runner}{defaults}")),
+            &[&format!("{who}: defaults is set on the job")],
+        );
+    }
+    let top = with_top_defaults(&committed());
+    assert_problems(
+        &top,
+        &["defaults is set on the workflow, which changes how every step's run runs"],
+    );
+}
+
+/// `text` with a top-level `defaults` that runs every step under `echo`.
+fn with_top_defaults(text: &str) -> String {
+    let at = "\npermissions: {}\n";
+    assert_eq!(text.matches(at).count(), 1);
+    text.replacen(
+        at,
+        "\npermissions: {}\ndefaults:\n  run:\n    shell: echo {0}\n",
+        1,
+    )
+}
+
 /// Proves: a job added, removed, renamed or moved is refused, naming the jobs found; another job
 /// with the check name [`CHECK`] (by its `name` or its id) is refused; and a file that is not
 /// YAML is reported as such.
