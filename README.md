@@ -19,9 +19,9 @@ It is made of two programs:
   ([docs/conformance.md](docs/conformance.md)); nothing confines a hook at runtime;
 - **one coordinator**, `hostkeeper-coordinator serve`, which assigns services to hosts and holds
   the desired version of each, and moves hosts to it stage by stage, each service by its update
-  plan. Operators use it through the operator API, the generated `hostkeeper ctl`
-  ([docs/ctl.md](docs/ctl.md)) and the web UI (`ui/`). A new host asks the coordinator to enroll
-  it, and an operator approves the request. Macs are to be managed through a self-hosted MDM
+  plan. Operators use it through the operator API, `hkctl`, the generated command line
+  ([docs/cli.md](docs/cli.md)), and the web UI (`ui/`). A new host asks the coordinator to
+  enroll it, and an operator approves the request. Macs are to be managed through a self-hosted MDM
   server; of that part the pure core and the host-step layer of its install kit, and the policy
   gate linked into the coordinator (without the pkg install yet), are built
   ([macOS](docs/macos.md), [design](docs/design/hostkeeper-mdm.md)).
@@ -58,8 +58,9 @@ update coordinator, `hostkeeper-coordinator serve`. The parts are being moved he
 | [`hostkeeper-pxe-packets`](crates/hostkeeper-pxe-packets) | the packets of network install, with no socket and no inventory: proxyDHCP offers and ACKs for architectures 7, 9, 11, 16 and 19, router-mode learning of each client's address and architecture, and TFTP read requests (only served names, `hostkeeper/boot.efi` as the shim of the learned architecture) and transfers ([design](docs/design/network-install.md), item N7) |
 | [`hostkeeper-pxe-seed`](crates/hostkeeper-pxe-seed) | what a network-installed machine boots into: the fixed `grub.cfg`, the install or local-disk menu of a MAC, and its autoinstall seed, each a pure function of the inventory record, the daemon config and the flags ([design](docs/design/network-install.md), item N6) |
 | [`hostkeeper-wire`](crates/hostkeeper-wire) | what the coordinator and a host exchange: the heartbeat and its reply, versions, host ids, role names and platforms, the certificate identity, the secret-file rule |
-| [`hostkeeper-proto`](crates/hostkeeper-proto) | the protobuf services of the coordinator (`hostkeeper.agent.v1`, `hostkeeper.operator.v1`) and of the daemon's local admin socket (`hostkeeper.local.v1`), the command table of `hostkeeper ctl`, and the compatibility test |
+| [`hostkeeper-proto`](crates/hostkeeper-proto) | the protobuf services of the coordinator (`hostkeeper.agent.v1`, `hostkeeper.operator.v1`) and of the daemon's local admin socket (`hostkeeper.local.v1`), the command table `hostkeeper ctl`, `hkctl` and the UI's generated client are made from, and the compatibility test |
 | [`hostkeeper-ctl`](crates/hostkeeper-ctl) | `hostkeeper ctl`, the command line generated from those services: one command per RPC, over gRPC or the coordinator's HTTP/JSON gateway |
+| [`hostkeeper-hkctl`](crates/hostkeeper-hkctl) | `hkctl`, the operator's bash command line over the gateway: the emitter of its script from the same command table (`cargo xtask release hkctl` writes the asset `hkctl-<version>`), [docs/cli.md](docs/cli.md), and the scan that holds the script to bash 3.2 |
 | [`hostkeeper-ci`](crates/hostkeeper-ci) | `hostkeeper ci set-desired`, the CI client a service's release job runs once it has verified the hostkeeper release ([docs/deploy/ci-client.md](docs/deploy/ci-client.md)) |
 | [`hostkeeper-coordinator`](crates/hostkeeper-coordinator) | the update coordinator: the services and roles of a rollout file, the desired version of each service, the heartbeat endpoint, the operator endpoint, and the convergence of a fleet |
 | [`hostkeeper-enrollment`](crates/hostkeeper-enrollment) | the coordinator's certificate authority (profile, certificates, key file, CA bundle) and its durable enrollment store |
@@ -67,7 +68,7 @@ update coordinator, `hostkeeper-coordinator serve`. The parts are being moved he
 | [`hostkeeper-oidc`](crates/hostkeeper-oidc) | the verifier of OIDC tokens (CI tokens) against an allow-list, with its issuer keys fetched over HTTPS |
 | [`hostkeeper-mdm-core`](crates/hostkeeper-mdm-core) | the pure core of the MDM kit: its settings, the enrollment and ADE profiles, the systemd units and Caddyfile of the MDM services, and the pinned upstream tools ([design](docs/design/hostkeeper-mdm.md) section 8) |
 | [`hostkeeper-tls`](crates/hostkeeper-tls) | TLS server configuration reloaded from certificate files, with its reload metrics |
-| [`hostkeeper-ui-tests`](crates/hostkeeper-ui-tests) | the tests of the operator web app in [`ui/`](ui), run in a JavaScript engine against a fake gateway, and each call of [`ui/calls.json`](ui/calls.json) sent to the real coordinator with an operator's token; not shipped |
+| [`hostkeeper-ui-tests`](crates/hostkeeper-ui-tests) | the generator of the web app's API client ([`ui/gen/`](ui/gen), from the protos), and the tests of the operator web app in [`ui/`](ui), run in a JavaScript engine against a fake gateway, with each call of [`ui/calls.json`](ui/calls.json) sent to the real coordinator with an operator's token; not shipped |
 | [`hello`](examples/hello) | the example service: an HTTP server on loopback and its update hook, packaged for each release, which proves an install, an update and a rollback on the farm ([docs/hello.md](docs/hello.md)) |
 | `hostkeeper-testkit` | helpers the tests share |
 | [`hostkeeper-privileged`](crates/hostkeeper-privileged) | the tests that run as root against a host's real systemd, in `privileged.yml` after a merge to main and in `pr-device.yml` on every pull request, with the workload fixture `hostkeeper-fixture-hook` they drive, the end-to-end update of a tierstore-shaped package through the real coordinator and daemon, and network install end to end (in `net-install.yml` only, which no release waits for): a QEMU guest installed by the real `hostkeeper-pxe`, enrolled and given a service, reinstalled and retired (x86-64), and booted to its seed fetch (arm64) ([design](docs/design/network-install.md) section 11, item N10); not shipped |
@@ -75,7 +76,11 @@ update coordinator, `hostkeeper-coordinator serve`. The parts are being moved he
 
 The operator web app (`ui/`) is static files: HTML, one stylesheet and JavaScript modules, with
 no framework and no build step. Its pages (Fleet, Host, Rollout, Holds, Enrollment, Audit) call
-the coordinator's HTTP/JSON gateway with the operator's token, each button one method call. The
+the coordinator's HTTP/JSON gateway with the operator's token, each button one method call,
+through a client generated from the protos: `ui/gen/client.js`, one function per method of
+`hostkeeper.operator.v1` (`api.releases.setDesired(request)`), with its TypeScript declarations
+in `ui/gen/client.d.ts`. Both are checked in, and a test regenerates them and fails on any
+difference; `ui/calls.json`, the methods the pages call, is derived from the pages the same way. The
 coordinator serves it under `/ui/` of its private listener: the coordinator's container image
 holds it at `/usr/share/hostkeeper-coordinator/ui`, which the coordinator serves when started
 without `--ui-dir`, and `--ui-dir` names another directory
@@ -85,14 +90,16 @@ The design is [docs/design/hostkeeper-design.md](docs/design/hostkeeper-design.m
 [docs/design/host-updates.md](docs/design/host-updates.md) remains the long-form reference for
 the hook contract and the step record.
 
-Every command of `hostkeeper ctl`, with its flags and exit codes, is in [docs/ctl.md](docs/ctl.md),
-which a test regenerates from the protos and compares, so it cannot drift from them.
-Enrolling a node, from its inventory record to its first heartbeat, with every refusal on the
-way, is [docs/operations/enrollment.md](docs/operations/enrollment.md); a test parses each of
-its `hostkeeper ctl` lines with ctl's own parser. Installing a new Linux machine from the farm
-LAN with `hostkeeper-pxe`, and the router and board checks before the first one, is
-[docs/operations/network-install.md](docs/operations/network-install.md); its `hostkeeper ctl` and
-`hostkeeper-pxe` lines are parsed the same way.
+Every command of `hkctl`, with its flags and exit codes, is in [docs/cli.md](docs/cli.md), which a
+test of `hostkeeper-hkctl` regenerates from the protos and compares, so it cannot drift from them.
+Enrolling a node, from its inventory record to its first heartbeat, with every refusal on the way,
+is [docs/operations/enrollment.md](docs/operations/enrollment.md). Installing a new Linux machine
+from the farm LAN with `hostkeeper-pxe`, and the router and board checks before the first one, is
+[docs/operations/network-install.md](docs/operations/network-install.md); its `hostkeeper-pxe`
+lines are parsed with that program's own parser. A test (`crates/xtask/tests/enrollment_doc.rs`)
+reads every fenced `hkctl` line of every Markdown file but the design documents as hkctl reads
+it, against its command table and global flags, so a runbook's command cannot name a method, a
+flag or a value hkctl does not take.
 
 ## Build order
 
@@ -112,8 +119,8 @@ The items B1 to B28 of section 12.2 of the design, by theme. "Built" means the c
 - **Enrollment.** Built: B16 (certificate authority, enrollment and renewal), B17 (approval).
   Planned: B21 (adopting hosts that run kbf's agent).
 - **Operator surfaces.** Built: B1 (the protobuf services, every method of which has a handler:
-  none answers `UNIMPLEMENTED`), B10 (generated `hostkeeper ctl`, gRPC beside the gateway), B24
-  (the CI client), B25 (the UI).
+  none answers `UNIMPLEMENTED`), B10 (the generated command line: `hostkeeper ctl`, gRPC beside
+  the gateway, and `hkctl` over the gateway), B24 (the CI client), B25 (the UI).
 - **Platforms and packaging.** Built: B11 (deb, rpm, unit, boot-image overlay). Partly built:
   B18 (macOS: `hostkeeper-launchd`, the daemon's Mac adapters, package check and claims, and a
   device run of the daemon under launchd after each merge; no update has run through it on a

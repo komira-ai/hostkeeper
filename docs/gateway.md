@@ -1,10 +1,10 @@
 # The HTTP/JSON gateway
 
 The coordinator's private listener serves the operator API twice: as gRPC, and as plain HTTP with
-JSON bodies, the gateway. `hostkeeper ctl --transport gateway` and the operator web app
+JSON bodies, the gateway. `hkctl` (which has no other transport) and the operator web app
 ([docs/ui-serving.md](ui-serving.md)) call the gateway. Both ways reach the same handlers with
 the same checks; the gateway adds no rule of its own. Every command and request message is in
-[docs/ctl.md](ctl.md).
+[docs/cli.md](cli.md).
 
 ## Route
 
@@ -24,8 +24,8 @@ serves the gateway; the heartbeat listener never does.
 
 The caller sends `Authorization: Bearer <token>`, as a gRPC call sends it in its `authorization`
 metadata, and the token is checked before the body is read. `Releases.SetDesired` takes CI's
-OIDC token or an operator token; `Releases.Converge`, which changes nothing, also takes CI's OIDC
-token or an operator token. Each CI token is good once, and an operator token spends none. With CI's token `SetDesired` sets only the services
+OIDC token or an operator token; `Releases.Converge` and `Releases.WaitConverged`, which change
+nothing, also take CI's OIDC token or an operator token. Each CI token is good once, and an operator token spends none. With CI's token `SetDesired` sets only the services
 the admitting allow-list entry names. With an operator token it sets any service the coordinator
 manages, and the set is one audit entry, `set_desired`, under the token's name (the service, and
 as its reason the version, followed by `with package digest <digest>` when the call named one, or
@@ -50,6 +50,14 @@ A request body is one JSON document of at most 4 KiB with nothing after it. A fi
 does not have, a value of the wrong type, malformed JSON, a body that is too large and a body
 that does not arrive whole are all refused as `INVALID_ARGUMENT` with the reason
 `invalid_request`. A response is 200 with the response message.
+
+The gateway answers every call as soon as its handler does, and adds no deadline once the body
+is read. One method is held: `Releases.WaitConverged` answers when the service's hosts have
+converged on the version, the service is halted, another version is desired, or its `waitSecs`
+(1 to 1800) have passed, so a client's own timeout must be longer than `waitSecs`. A
+coordinator holds at most 16 such calls at once; the next is refused `FAILED_PRECONDITION` with
+the reason `too_many_waits`, and a `waitSecs` of 0 or above 1800 is `INVALID_ARGUMENT`
+`invalid_wait`.
 
 ## Errors
 

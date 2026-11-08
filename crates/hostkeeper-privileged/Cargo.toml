@@ -16,8 +16,8 @@ description = "The tests that run as root against the real service manager of a 
 # compiles and runs none of them; privileged.yml builds them as the runner's user and runs them
 # as root, after a merge to main, and pr-device.yml's copies of its jobs do the same on every
 # pull request. The library is what they share and what can be tested without
-# root (the fixture's arguments and modes, the host check, the names and files of the rig), and
-# is measured by the 99% gate like any crate.
+# root (the fixture's arguments and modes, the host check, the names and files of the rig, the
+# pin of the cross-release rig's previous release), and is measured by the 99% gate like any crate.
 [dependencies]
 # The daemon of the program `hostkeeper-device-daemon` (the macOS device tests' daemon, and the
 # first-boot tests' daemon and ctl), which forwards to its command line as the `hostkeeper`
@@ -32,6 +32,11 @@ hostkeeper-hook = { path = "../hostkeeper-hook" }
 hex.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
+# The cross-release rig's pin (`hostkeeper_privileged::across`): `previous-release.toml` read as
+# TOML, and the pinned release's binary tarball, a gzip'd tar, checked and opened.
+flate2.workspace = true
+tar.workspace = true
+toml.workspace = true
 # The program `hostkeeper-selfupdate-daemon` of the self-update tests: the daemon's command line
 # and start (above), on the Linux adapters and placement roots of the host's platform
 # (`hostkeeper-launchd`, `hostkeeper-placed`), with a package store of sealed trees
@@ -101,6 +106,23 @@ path = "tests/bin/tierstore_like.rs"
 name = "hello-e2e"
 path = "tests/bin/hello_e2e.rs"
 
+# The `hostkeeper` binary of this build in the cross-release rig
+# (`tests/self_update_across_releases.rs`): the daemon of `hostkeeper_daemon` on the host's real
+# ports (the release channel, the attestation check, the coordinator over mutual TLS), its version
+# the name of the file it runs from (`hostkeeper_privileged::across::program_version`), so that one
+# build staged under two names runs as two versions. Every other verb is forwarded to the daemon's
+# command line. A program of the tests, outside the measured set like every file under `tests/`.
+[[bin]]
+name = "hostkeeper-named-daemon"
+path = "tests/bin/named_daemon.rs"
+
+# The `hostkeeper` binary of this build made to fail its start, in the cross-release rig: every
+# verb but `daemon` forwarded to the daemon's command line (so it answers the probe and runs the
+# no-op hook); `daemon` adds its start to the start log, as the daemon's does first, and exits 1.
+[[bin]]
+name = "hostkeeper-failing-daemon"
+path = "tests/bin/failing_daemon.rs"
+
 # The boot server of the network-install tests' program `hostkeeper-privileged-pxe`, which
 # forwards to its command line as the `hostkeeper-pxe` binary does. It builds on Linux only, as
 # `hostkeeper-pxe` does (its sockets and its privilege drop are Linux's).
@@ -124,7 +146,7 @@ privileged = []
 # the real coordinator in process (a normal dependency, above) with its fake OIDC issuer's
 # config (`testkit`), the production attestation verifier (`gh` with a test trust root) and
 # package fetch, the certificates of the loopback release channel (rcgen, rustls, below; ureq
-# for its test client), the package archive (tar, ruzstd), and the Sigstore bundle of the
+# for its test client), the package archive (ruzstd, and tar of the normal dependencies), and the Sigstore bundle of the
 # fixture signer (p256, getrandom, and base64 below).
 getrandom.workspace = true
 hostkeeper-oidc = { path = "../hostkeeper-oidc", features = ["testkit"] }
@@ -132,7 +154,6 @@ hostkeeper-package = { path = "../hostkeeper-package" }
 p256.workspace = true
 ruzstd.workspace = true
 rustls-pki-types.workspace = true
-tar.workspace = true
 ureq.workspace = true
 # What the privileged tests drive: the production launcher and dead-man (`hostkeeper-steps`,
 # above), and the observer's real adapters; on a Mac the launchd adapters (`hostkeeper-launchd`,

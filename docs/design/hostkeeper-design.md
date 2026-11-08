@@ -137,7 +137,7 @@ force_start_secs       = 60
 
 Every table refuses unknown keys. A config that fails to load stops the daemon with an error naming the key; nothing changes on the host. There is no list of services in it: a host runs the services the coordinator assigns (section 5.7), and the daemon learns each service's lifecycle from the manifest of a package whose signature verified.
 
-**The verbs** are code. The coordinator can send every row but `clear_record`; the local CLI runs only the three marked local. No verb names a platform. An order carries the digest of the package of the host's platform and the digest of the release index; the daemon takes the package of its own platform and that package's size from the version's release index, which it checks against the index digest, and checks the package against the index entry and against the order's package digest (section 5.5). There is no other way to make the daemon do anything:
+**The verbs** are code. The coordinator can send every row, `clear_record` only to a daemon that announces `clear-record-v1` ([two-programs.md](two-programs.md) section 3.2); the local CLI runs only the three marked local. No verb names a platform. An order carries the digest of the package of the host's platform and the digest of the release index; the daemon takes the package of its own platform and that package's size from the version's release index, which it checks against the index digest, and checks the package against the index entry and against the order's package digest (section 5.5). There is no other way to make the daemon do anything:
 
 | Verb | Typed arguments | Meaning |
 |---|---|---|
@@ -291,6 +291,7 @@ The operator API is protobuf services (`operator.proto`, PR #3) with an HTTP/JSO
 |---|---|---|
 | `Hosts` | `List`, `Get` (role; each service's installed version, health, hold and excluded marks; the last update with verdict, phase, class, reason, `detail`, try number and log lines), `Exclude`, `Include`, `SetLabels` | PR #3 |
 | `Releases` | `SetDesired`, `Converge`, `Force`, `UnmarkBad`, `ClearHalt`, `Status` | PR #3 |
+| `Releases` | `WaitConverged`: one held read that ends at convergence, a halt, another desired version or its `wait_secs` ([two-programs.md](two-programs.md) section 3.1) | Built (`crates/hostkeeper-coordinator/src/wait.rs`) |
 | `Releases` | `MarkBad`, `Halt`; `Force` gains targets (fleet, role or hosts) and `include_held` (section 5.6) | Designed (B1, B7) |
 | `Services` | `List` (includes holds), `Assign`, `Unassign`, `SetMinVersion` (per role or host), `Hold`, `Unhold` (host, role or fleet, section 5.4) | Designed (B1, B7, B23) |
 | `Hosts` | `Abort` (queued as an order for the host's next heartbeat; takes no slot), `Exclude --abandon` | Designed (B7) |

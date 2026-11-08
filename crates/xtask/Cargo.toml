@@ -24,7 +24,8 @@ hex.workspace = true
 # package test loads the produced `manifest.toml` with the manifest loader.
 hostkeeper-config = { path = "../hostkeeper-config" }
 # The release asset `hkctl-<version>` (`release hkctl`): the script the emitter makes from the
-# command table of the protos. The enrollment runbook's test also reads the protos' descriptors.
+# command table of the protos. The operator docs' test (tests/enrollment_doc.rs) reads hkctl's
+# global flags from its docs/cli.md text, its command table, and the protos' descriptors.
 hostkeeper-hkctl = { path = "../hostkeeper-hkctl" }
 hostkeeper-proto = { path = "../hostkeeper-proto" }
 # The daemon's launchd label, plist and paths the macOS installer pkg installs
@@ -106,10 +107,8 @@ hostkeeper-wire = { path = "../hostkeeper-wire" }
 # checks the package's units and manifest against: the version a package names is the one its
 # server answers `/version` with.
 hello = { path = "../../examples/hello" }
-# The enrollment runbook's test (tests/enrollment_doc.rs) parses each `hostkeeper ctl` line of
-# docs/operations/enrollment.md with ctl's own parser over the generated command table, and
-# reads the refusal tokens from the protos' descriptors.
-hostkeeper-ctl = { path = "../hostkeeper-ctl" }
+# The operator docs' test (tests/enrollment_doc.rs) reads the refusal tokens from the protos'
+# descriptors.
 prost-reflect.workspace = true
 saphyr-parser.workspace = true
 

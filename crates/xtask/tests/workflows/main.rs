@@ -19,6 +19,8 @@ mod net_install;
 mod net_install_tests;
 mod pr_device;
 mod pr_device_tests;
+mod previous_release;
+mod previous_release_tests;
 mod privileged_tests;
 mod release;
 mod release_tests;

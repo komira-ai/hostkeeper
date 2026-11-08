@@ -86,7 +86,7 @@ What the host runs and how it is, and the coordinator's answer: at most one orde
 | flag | value | meaning |
 |---|---|---|
 | `--platform` | VALUE | The platform the host's releases are built for. |
-| `--features` | STRING, repeated | What this agent can use of the coordinator's side, by feature name (`deferred-v1`, `halt-v1`, `forced-v1`, which announces that the daemon takes the `Force` verb, `install-v1`, which announces that it takes the `Install` and `Uninstall` verbs, `abort-v1`, which announces that it takes the `Abort` verb, and `verdict-acks-v1`, which asks for `HeartbeatResponse.acks`): at most 16, each 1 to 32 bytes of `[a-z0-9-]`, none twice. An agent that lists every service it runs in `services` announces `heartbeat-v2`; without it the coordinator counts the host as unmanaged for every service but the legacy one, rather than as missing them. |
+| `--features` | STRING, repeated | What this agent can use of the coordinator's side, by feature name (`deferred-v1`, `halt-v1`, `forced-v1`, which announces that the daemon takes the `Force` verb, `install-v1`, which announces that it takes the `Install` and `Uninstall` verbs, `abort-v1`, which announces that it takes the `Abort` verb, `clear-record-v1`, which announces that it takes the `ClearRecord` verb, and `verdict-acks-v1`, which asks for `HeartbeatResponse.acks`): at most 16, each 1 to 32 bytes of `[a-z0-9-]`, none twice. An agent that lists every service it runs in `services` announces `heartbeat-v2`; without it the coordinator counts the host as unmanaged for every service but the legacy one, rather than as missing them. |
 | `--sent-unix` | UINT64 | The host's clock when it made the heartbeat, in seconds since the epoch: what the coordinator holds against its own clock to count the heartbeats of a host whose clock is off. Absent from an agent that predates it. |
 | `--cert-not-after-unix` | UINT64 | The last second the host's current certificate is valid, in seconds since the epoch. Absent from an agent that predates it and from a host that holds no certificate. |
 | `--last-renew-error` | STRING | Why the host's last step of enrollment or renewal failed, as the host words it, at most 256 bytes (a reader cuts a longer one at a character boundary); absent once a step succeeds, and from an agent that predates it. |
@@ -207,7 +207,7 @@ other request waits for `Approve` as before. A record with no role has no window
 | `--notes` | STRING | Empty for none. |
 | `--approve-until-unix` | UINT64 | The end of the record's window, unix seconds: after now, and within the coordinator's `--record-approve-max` of it. 0 for none given. |
 | `--approve-for-secs` | UINT64 | The length of the record's window from now, in seconds: at most the coordinator's `--record-approve-max`. 0 for none given. With neither, the window is the coordinator's `--record-approve-for`; with both, the call is refused `invalid_window`. A record that names no role takes neither, and has no window. |
-| `--platform` | VALUE | The platform to install the server as by network boot: `PLATFORM_LINUX_X86_64` or `PLATFORM_LINUX_ARM64` (`linux_x86_64` or `linux_arm64` as a flag of `hostkeeper ctl`); `PLATFORM_UNSPECIFIED` (the flag left out) for none. Any other value is refused `invalid_request`. |
+| `--platform` | VALUE | The platform to install the server as by network boot: `PLATFORM_LINUX_X86_64` or `PLATFORM_LINUX_ARM64` (`linux_x86_64` or `linux_arm64` as a command-line flag); `PLATFORM_UNSPECIFIED` (the flag left out) for none. Any other value is refused `invalid_request`. |
 
 #### `hostkeeper ctl enrollment list-records`
 
@@ -343,6 +343,21 @@ audited once.
 | `--node-id` | STRING | The host id the host was enrolled as. |
 | `--reason` | STRING | Why, for the audit log: 1 to 256 bytes with no control character, or empty for none. |
 
+#### `hostkeeper ctl hosts clear-record`
+
+`/hostkeeper.operator.v1.Hosts/ClearRecord`
+
+Order the host to set aside its step record of the service when the record does not read
+(the `clear_record` verb of `hostkeeper.agent.v1`), at the host's next heartbeat; it takes no
+slot and is sent once. Only for a host whose daemon announced `clear-record-v1` in its last
+heartbeat; to any other it is refused `daemon_too_old` and nothing is ordered. The daemon's
+verdict comes back in a heartbeat like any order's. Audited `record_cleared`.
+
+| flag | value | meaning |
+|---|---|---|
+| `--node-id` | STRING | The host, heard from since the coordinator started. |
+| `--service` | STRING | The service whose step record the host sets aside; one the coordinator manages. |
+
 ### `mdm`
 
 The service `Mdm` of the package `hostkeeper.operator.v1`. The devices of the MDM policy gate.
@@ -467,6 +482,21 @@ is cleared.
 |---|---|---|
 | `--service` | STRING |  |
 | `--reason` | STRING |  |
+
+#### `hostkeeper ctl releases wait-converged`
+
+`/hostkeeper.operator.v1.Releases/WaitConverged`
+
+Hold the call until a service's hosts have converged on a version, or the wait ends another
+way (see `WaitOutcome`), for at most `wait_secs`. The coordinator answers at once when the
+wait is over already, and otherwise after the change that ends it. Changes nothing. Takes
+CI's OIDC token or the operator token, checked once, when the call is admitted.
+
+| flag | value | meaning |
+|---|---|---|
+| `--service` | STRING | The service; empty names the legacy service, as for `Converge`. |
+| `--version` | STRING | The version the caller set; any other desired version ends the wait as SUPERSEDED. |
+| `--wait-secs` | UINT32 | How long to hold the call, 1 to 1800 seconds. |
 
 ### `rollouts`
 
