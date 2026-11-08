@@ -872,7 +872,11 @@ pub(crate) async fn forced_v1_is_acted_on() {
 
     let (answer, order) = rig
         .coordinator
-        .heartbeat_with_orders(who("d1", DAEMON), web_only("1.0"))
+        .heartbeat_with_orders(
+            who("d1", DAEMON),
+            web_only("1.0"),
+            crate::trusted_root::TrustedRootSaid::default(),
+        )
         .expect("answered");
     assert_eq!(order, Some(forced("2.0", 2, 1, 1)));
     assert_eq!(
@@ -890,6 +894,7 @@ pub(crate) async fn forced_v1_is_acted_on() {
         .heartbeat_with_orders(
             who("d1", DAEMON),
             beat_of(&unannounced, vec![runs(WEB, "1.0")]),
+            crate::trusted_root::TrustedRootSaid::default(),
         )
         .expect("answered");
     assert!(

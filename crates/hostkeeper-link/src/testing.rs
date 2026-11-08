@@ -13,13 +13,13 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_steps::{BootId, BootIdError, Clock};
 
-use crate::beat::{Health, Heartbeat, Liveness, Platform, Renewal};
+use crate::beat::{Health, Heartbeat, Liveness, Platform, Renewal, TrustedRootFacts};
 use crate::heartbeater::{DEFAULT_HEARTBEAT_SECS, Heartbeater, LoopConfig, Ports};
 use crate::order::{Order, OrderRef, OrderResult, Outcome, Reply};
 use crate::ports::{
     CertSource, CertState, ClientIdentity, CoordinatorLink, Dispatch, HeldHalts, Job, LinkError,
     Log, Observation, OrderSink, RecordedService, RenewalSource, ServiceObserver, ServiceRecords,
-    Sleeper, Tick, UnixClock,
+    Sleeper, Tick, TrustedRootSource, UnixClock,
 };
 
 /// A lock that a panicking test thread did not spoil: what it holds is still the fake's state.
@@ -423,6 +423,24 @@ impl RenewalSource for FakeRenewal {
     }
 }
 
+/// The daemon's report of its trusted root, as a test sets it: none until it does.
+#[derive(Default)]
+pub struct FakeTrustedRoot {
+    root: Mutex<Option<TrustedRootFacts>>,
+}
+
+impl FakeTrustedRoot {
+    pub fn set(&self, root: Option<TrustedRootFacts>) {
+        *lock(&self.root) = root;
+    }
+}
+
+impl TrustedRootSource for FakeTrustedRoot {
+    fn trusted_root(&self) -> Option<TrustedRootFacts> {
+        *lock(&self.root)
+    }
+}
+
 /// The unix second the [`World`]'s clock starts at.
 pub const START_UNIX: u64 = 2_000_000_000;
 
@@ -440,6 +458,7 @@ pub struct World {
     pub dispatch: Arc<ManualDispatch>,
     pub halts: Arc<FakeHalts>,
     pub renewal: Arc<FakeRenewal>,
+    pub trusted_root: Arc<FakeTrustedRoot>,
     pub clock: Arc<FakeClock>,
     pub log: Arc<RecordingLog>,
 }
@@ -462,6 +481,7 @@ impl World {
             dispatch: Arc::default(),
             halts: Arc::default(),
             renewal: Arc::default(),
+            trusted_root: Arc::default(),
             clock: Arc::new(FakeClock::new(START_UNIX, START_MONO)),
             log: Arc::default(),
         }
@@ -478,6 +498,7 @@ impl World {
             dispatch: self.dispatch.clone(),
             halts: self.halts.clone(),
             renewal: self.renewal.clone(),
+            trusted_root: self.trusted_root.clone(),
             clock: self.clock.clone(),
             log: self.log.clone(),
         }

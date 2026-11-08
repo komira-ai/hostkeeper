@@ -148,6 +148,32 @@ message HeartbeatRequest {
   // bytes (a reader cuts a longer one at a character boundary); absent once a step succeeds, and
   // from an agent that predates it.
   optional string last_renew_error = 7;
+  // The seconds since the Sigstore trusted root the daemon checks packages with was last written
+  // on the host, as the daemon's report of it says (the root's file has no field for when it was
+  // made). Absent when no file of the root is present, and from an agent that predates it.
+  optional uint64 trusted_root_age_secs = 8;
+  // Why that trusted root needs attention: `TRUSTED_ROOT_REASON_NONE` when it needs none.
+  // UNSPECIFIED: not reported, by an agent that predates the field or one that keeps no root;
+  // the coordinator reads that as unknown, never as a root that needs no attention.
+  TrustedRootReason trusted_root_reason = 9;
+}
+
+// Why the Sigstore trusted root a host checks packages with needs attention, as its daemon
+// reports it. The reason is a signal for people: the daemon checks packages with the root it has
+// whatever the reason.
+enum TrustedRootReason {
+  // Not reported.
+  TRUSTED_ROOT_REASON_UNSPECIFIED = 0;
+  // The root needs no attention.
+  TRUSTED_ROOT_REASON_NONE = 1;
+  // The root is older than the daemon's `--trusted-root-max-age-days`: the host has not taken an
+  // update of hostkeeper, or a root copied by hand, in that time.
+  TRUSTED_ROOT_REASON_STALE = 2;
+  // Neither file of the root is present on the host.
+  TRUSTED_ROOT_REASON_MISSING = 3;
+  // The file of the root cannot be read, or is not one or more JSON trusted roots; this wins over
+  // `TRUSTED_ROOT_REASON_STALE`.
+  TRUSTED_ROOT_REASON_UNPARSEABLE = 4;
 }
 
 // The platforms releases are built for.

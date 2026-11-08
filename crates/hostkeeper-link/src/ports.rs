@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_steps::Clock;
 
-use crate::beat::{Health, Heartbeat, Liveness, Oversize, Renewal};
+use crate::beat::{Health, Heartbeat, Liveness, Oversize, Renewal, TrustedRootFacts};
 use crate::names::Reason;
 use crate::order::{Order, OrderRef, OrderResult, Reply};
 
@@ -152,6 +152,13 @@ pub trait CertSource: Send + Sync {
 /// daemon's is the enrollment loop's state, which the loop sets after each of its steps.
 pub trait RenewalSource: Send + Sync {
     fn renewal(&self) -> Renewal;
+}
+
+/// The Sigstore trusted root the daemon checks packages with, read at every heartbeat: the
+/// daemon's is its package store's report of the root ([`TrustedRootFacts`]); none from a store
+/// that keeps no root.
+pub trait TrustedRootSource: Send + Sync {
+    fn trusted_root(&self) -> Option<TrustedRootFacts>;
 }
 
 /// One installed service, as its step record says.

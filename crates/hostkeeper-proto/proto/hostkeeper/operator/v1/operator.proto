@@ -404,6 +404,15 @@ message Host {
   // clock; absent until then, and when the host is not enrolled. Kept with the host's enrollment
   // as `first_heartbeat_unix` is, and cleared by the next approval of the host.
   optional uint64 first_serving_unix = 18;
+  // The age of the host's Sigstore trusted root, in seconds, as its last heartbeat said
+  // (`HeartbeatRequest.trusted_root_age_secs`); absent when it said none (no file of the root,
+  // or an agent that predates the field).
+  optional uint64 trusted_root_age_secs = 19;
+  // Why the host's trusted root needs attention, as its last heartbeat said
+  // (`HeartbeatRequest.trusted_root_reason`). UNSPECIFIED: unknown, the host's agent predates the
+  // field or keeps no root, or its last heartbeat came by the JSON route, which carries no
+  // trusted root.
+  hostkeeper.agent.v1.TrustedRootReason trusted_root_reason = 20;
 }
 
 // A host taken out of a service.
@@ -1227,6 +1236,13 @@ enum AlertKind {
   // that lowers protection, and keeps the changes that raise it in memory until the session is
   // back. Log token `store_unreachable`.
   ALERT_KIND_STORE_UNREACHABLE = 10;
+  // The host's last heartbeat said its Sigstore trusted root needs attention: stale, missing or
+  // unparseable (`Host.trusted_root_reason`). A stale root goes on checking packages, and refuses
+  // every package signed after a Sigstore key rotation it does not hold; with a missing or
+  // unparseable one every package check fails. Listed while the host's last heartbeat says a
+  // reason; a host whose last heartbeat said nothing of its root raises none. Log token
+  // `trusted_root`.
+  ALERT_KIND_TRUSTED_ROOT = 11;
 }
 
 // How soon an `Alert` needs a person.

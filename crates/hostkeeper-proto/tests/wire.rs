@@ -425,9 +425,23 @@ const RPCS: [(&str, &[&str]); 6] = [
     ),
 ];
 
-/// The fields of the enrollment, abort, retire, clear-record, audit and force-report messages,
-/// pinned by name and number.
-const FIELDS: [(&str, &[(&str, u32)]); 35] = [
+/// The fields of the heartbeat, enrollment, abort, retire, clear-record, audit and force-report
+/// messages, pinned by name and number.
+const FIELDS: [(&str, &[(&str, u32)]); 36] = [
+    (
+        "hostkeeper.agent.v1.HeartbeatRequest",
+        &[
+            ("platform", 1),
+            ("agent", 2),
+            ("features", 3),
+            ("services", 4),
+            ("sent_unix", 5),
+            ("cert_not_after_unix", 6),
+            ("last_renew_error", 7),
+            ("trusted_root_age_secs", 8),
+            ("trusted_root_reason", 9),
+        ],
+    ),
     (
         "hostkeeper.agent.v1.HeartbeatResponse",
         &[
@@ -600,6 +614,8 @@ const FIELDS: [(&str, &[(&str, u32)]); 35] = [
             ("clock_skew_beats", 16),
             ("first_heartbeat_unix", 17),
             ("first_serving_unix", 18),
+            ("trusted_root_age_secs", 19),
+            ("trusted_root_reason", 20),
         ],
     ),
     (
@@ -701,7 +717,7 @@ fn wire_names_are_pinned() {
     ];
     assert_eq!(fields, want.map(|(name, number)| (name.to_owned(), number)));
 
-    let cases: [(&str, &str, &[&str]); 16] = [
+    let cases: [(&str, &str, &[&str]); 17] = [
         (
             "hostkeeper.agent.v1.CoordinatorRefusal",
             "COORDINATOR_REFUSAL_",
@@ -736,6 +752,7 @@ fn wire_names_are_pinned() {
                 "silent_host",
                 "cert_near_expiry",
                 "store_unreachable",
+                "trusted_root",
             ],
         ),
         (
@@ -860,6 +877,11 @@ fn wire_names_are_pinned() {
             "hostkeeper.local.v1.EnrollmentState",
             "ENROLLMENT_STATE_",
             &["unenrolled", "pending", "enrolled", "unreadable"],
+        ),
+        (
+            "hostkeeper.agent.v1.TrustedRootReason",
+            "TRUSTED_ROOT_REASON_",
+            &["none", "stale", "missing", "unparseable"],
         ),
     ];
     for (name, prefix, want) in cases {

@@ -179,6 +179,7 @@ fn beat(services: Vec<ServiceFacts>) -> Heartbeat {
         services,
         sent_unix: 0,
         renewal: hostkeeper_link::Renewal::default(),
+        trusted_root: None,
     }
 }
 

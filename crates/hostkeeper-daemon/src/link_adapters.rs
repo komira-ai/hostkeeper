@@ -1,6 +1,6 @@
-//! The daemon behind five ports of the heartbeat loop (`hostkeeper_link`): the executor, the
-//! held halts, the installed services, the service observer and the enrollment loop's word on
-//! the certificate.
+//! The daemon behind six ports of the heartbeat loop (`hostkeeper_link`): the executor, the
+//! held halts, the installed services, the service observer, the enrollment loop's word on the
+//! certificate and the report of the Sigstore trusted root.
 //!
 //! [`DaemonOrders`] is the loop's [`OrderSink`]: it writes the loop's order (an update, a forced
 //! update, an install, an uninstall, an abort or a clear-record) as the protobuf `Order` that
@@ -19,6 +19,10 @@
 //!
 //! [`DaemonRenewal`] is its [`RenewalSource`]: the [`RenewalState`] the enrollment loop writes
 //! after each step ([`crate::links::Links::renewal`]), as it is when the heartbeat is made.
+//!
+//! [`DaemonTrustedRoot`] is its [`TrustedRootSource`]: the report of the trusted root the package
+//! store checks attestations with ([`crate::packages::Packages::trusted_root`], the one the admin
+//! `Status` reports), read when the heartbeat is made; none from a store that keeps no root.
 
 use std::io;
 use std::sync::Arc;
@@ -28,8 +32,8 @@ use hostkeeper_enroll::RenewalState;
 use hostkeeper_hook::{Phase, Verdict};
 use hostkeeper_link::{
     Health, HeldHalts, Liveness, Observation, Order, OrderId, OrderRef, OrderResult, OrderSink,
-    Outcome, Reason, RecordedService, Renewal, RenewalSource, ServiceObserver, ServiceRecords,
-    Target, Verb,
+    Outcome, Reason, RecordedService, Renewal, RenewalSource, RootReason, ServiceObserver,
+    ServiceRecords, Target, TrustedRootFacts, TrustedRootSource, Verb,
 };
 use hostkeeper_observe::{ServiceState, VersionView, beat_health};
 use hostkeeper_proto::hostkeeper::agent::v1 as wire;
@@ -40,6 +44,7 @@ use crate::executor::{Ctx, Daemon, Reply};
 use crate::installed::{self, CURRENT};
 use crate::observer;
 use crate::refusal::Refusal;
+use crate::trusted_root::{RootProblem, RootReport};
 use crate::verbs::force::SELF_SERVICE;
 
 /// The most bytes of a verdict's `detail` (`UpdateResult.detail` of `hostkeeper.agent.v1`).
@@ -431,5 +436,39 @@ impl RenewalSource for DaemonRenewal {
             cert_not_after_unix: noted.not_after,
             last_renew_error: noted.last_error,
         }
+    }
+}
+
+/// The heartbeat loop's [`TrustedRootSource`] over the daemon's package store.
+pub struct DaemonTrustedRoot {
+    daemon: Arc<Daemon>,
+}
+
+impl DaemonTrustedRoot {
+    pub fn new(daemon: Arc<Daemon>) -> DaemonTrustedRoot {
+        DaemonTrustedRoot { daemon }
+    }
+}
+
+impl TrustedRootSource for DaemonTrustedRoot {
+    fn trusted_root(&self) -> Option<TrustedRootFacts> {
+        self.daemon
+            .ctx()
+            .packages
+            .trusted_root()
+            .as_ref()
+            .map(root_facts)
+    }
+}
+
+/// The report of the trusted root in the loop's words: its age, and its problem as the reason.
+pub fn root_facts(report: &RootReport) -> TrustedRootFacts {
+    TrustedRootFacts {
+        age_secs: report.age_secs,
+        reason: report.problem.map(|problem| match problem {
+            RootProblem::Stale => RootReason::Stale,
+            RootProblem::Missing => RootReason::Missing,
+            RootProblem::Unparseable => RootReason::Unparseable,
+        }),
     }
 }
