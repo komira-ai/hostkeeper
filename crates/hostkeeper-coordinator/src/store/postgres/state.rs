@@ -352,7 +352,7 @@ fn key_text(key: &[KeyVal], i: usize) -> String {
 
 /// A value as the JSON its file holds: text as a string, JSON as itself; `None` for `NULL`, which
 /// the file leaves out.
-fn json_of(value: &Val) -> Option<serde_json::Value> {
+pub(crate) fn json_of(value: &Val) -> Option<serde_json::Value> {
     match value {
         Val::Text(text) => Some(text.clone().into()),
         Val::Json(value) => Some(value.clone()),

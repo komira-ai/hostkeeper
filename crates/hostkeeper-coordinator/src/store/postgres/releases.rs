@@ -15,7 +15,7 @@ use std::sync::Arc;
 use serde_json::json;
 
 use super::rows::{KeyTy, KeyVal, Rows, Table, Ty, Val};
-use super::state::place;
+use super::state::{json_of, place};
 use crate::desired::{DesiredError, StoreError};
 use crate::releases::{Books, Release};
 
@@ -56,12 +56,12 @@ pub(crate) fn of(rows: &Rows) -> Result<Books, StoreError> {
     for (key, values) in rows {
         let text = |i: usize| key.get(i).and_then(KeyVal::as_text).unwrap_or_default();
         let (service, version) = (text(0), text(1));
-        let mut stored = json!({});
-        if let Some(Val::Json(targets)) = values.first() {
-            stored["targets"] = targets.clone();
-        }
-        if let Some(Val::Text(digest)) = values.get(1) {
-            stored["release_index_digest"] = digest.as_str().into();
+        // The columns as the releases file holds them: `targets` is never NULL, and a NULL digest
+        // is a release set with no index, whose JSON has no digest.
+        let column = |i: usize| values.get(i).and_then(json_of);
+        let mut stored = json!({ "targets": column(0) });
+        if let Some(digest) = column(1) {
+            stored["release_index_digest"] = digest;
         }
         let release = Release::from_json(&stored).map_err(|why| StoreError::Invalid {
             path: place("releases"),
