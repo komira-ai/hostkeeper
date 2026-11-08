@@ -10,15 +10,17 @@
 //!   run is published, and not before), holds another token right than `contents: read`, has a
 //!   step with a key outside [`STEP_KEYS`] (an `if:` or a `continue-on-error`), or
 //!   its steps are not exactly [`CHANNEL_STEPS`], in that order, with their `with` and `env`: the
-//!   newest version of the run, the published index from the run's own `release-<tag>` artifact,
-//!   the wait for the channel, the byte comparison of the served index with the published one,
-//!   the index's text and SHA-256 as outputs, and whether no newer release is published; or its
-//!   `outputs` are not exactly [`CHANNEL_OUTPUTS`];
+//!   newest version of the run and its commit, xtask compiled from a checkout of that commit, the
+//!   published index from the run's own `release-<tag>` artifact, the wait for the channel, the
+//!   byte comparison of the served index with the published one, the index's text and SHA-256 as
+//!   outputs, the release's targets written by `cargo xtask release targets` from the same files,
+//!   and whether no newer release is published; or its `outputs` are not exactly
+//!   [`CHANNEL_OUTPUTS`];
 //! - [`JOB`] does not need exactly `plan` and [`CHANNEL_JOB`] (it calls the coordinator only once
 //!   the channel serves the release), or its `with` does not set `service: hostkeeper`, the
-//!   version, the release index and its digest from [`CHANNEL_JOB`] ([`WITH_FROM_CHANNEL`]), and
-//!   `wait: false`; or passes a `package_digest` (one package for every host, whatever its
-//!   platform).
+//!   version, the release index, its digest and the targets from [`CHANNEL_JOB`]
+//!   ([`WITH_FROM_CHANNEL`]), and `wait: false`; or passes a `package_digest` (one package for
+//!   every host, whatever its platform).
 //!
 //! That [`JOB`] calls the CI client of this repository at the CI client's revision
 //! ([`super::callers::CLIENT_COMMIT`], with its release's `hostkeeper_version` and
@@ -56,29 +58,39 @@ pub const STEP_KEYS: [&str; 6] = ["env", "id", "name", "run", "uses", "with"];
 /// The steps of [`CHANNEL_JOB`], in order, as [`step_shape`] writes them: a `run:` step as its
 /// command, an action as `uses <action>`, each followed by its `with` and its `env`, every entry
 /// as ` with <key>=<value>` or ` env <key>=<value>`, sorted by key.
-pub const CHANNEL_STEPS: [&str; 6] = [
-    r#"run jq --raw-output '.include[-1] | "version=\(.version)", "tag=\(.tag)"' <<< "$MATRIX" >> "$GITHUB_OUTPUT" env MATRIX=${{ needs.plan.outputs.matrix }}"#,
+pub const CHANNEL_STEPS: [&str; 10] = [
+    r#"run jq --raw-output '.include[-1] | "version=\(.version)", "tag=\(.tag)", "commit=\(.commit)"' <<< "$MATRIX" >> "$GITHUB_OUTPUT" env MATRIX=${{ needs.plan.outputs.matrix }}"#,
+    "uses actions/checkout with persist-credentials=false with ref=${{ steps.newest.outputs.commit }}",
+    "run rustup toolchain install",
+    "run cargo xtask --help",
     "uses actions/download-artifact with name=release-${{ steps.newest.outputs.tag }} with path=dist",
     r#"run curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --max-time 30 --retry 45 --retry-delay 40 --retry-max-time 1800 --retry-all-errors --output "$RUNNER_TEMP/served-index.json" "$RELEASE_CHANNEL/hostkeeper/$VERSION/index.json" env RELEASE_CHANNEL=${{ vars.HOSTKEEPER_RELEASE_CHANNEL }} env VERSION=${{ steps.newest.outputs.version }}"#,
     r#"run cmp dist/index.json "$RUNNER_TEMP/served-index.json""#,
     r#"run printf 'release_index=%s\nrelease_index_digest=%s\n' "$(< dist/index.json)" "$(sha256sum dist/index.json | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT""#,
+    r#"run cargo xtask release targets --version "$VERSION" --dir dist --repo "$GITHUB_REPOSITORY" --output "$GITHUB_OUTPUT" env VERSION=${{ steps.newest.outputs.version }}"#,
     r#"run gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --limit 100 --json tagName --jq '[.[].tagName | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")) | ltrimstr("v") | split(".") | map(tonumber)] | max | "newest=\(map(tostring) | join(".") == env.VERSION)"' >> "$GITHUB_OUTPUT" env GH_TOKEN=${{ github.token }} env VERSION=${{ steps.newest.outputs.version }}"#,
 ];
 
 /// The `outputs` of [`CHANNEL_JOB`], exactly, sorted by name.
-pub const CHANNEL_OUTPUTS: [(&str, &str); 4] = [
+pub const CHANNEL_OUTPUTS: [(&str, &str); 5] = [
     ("newest", "${{ steps.latest.outputs.newest }}"),
     ("release_index", "${{ steps.index.outputs.release_index }}"),
     (
         "release_index_digest",
         "${{ steps.index.outputs.release_index_digest }}",
     ),
+    ("targets", "${{ steps.targets.outputs.targets }}"),
     ("version", "${{ steps.newest.outputs.version }}"),
 ];
 
 /// The inputs [`JOB`] passes from the outputs of [`CHANNEL_JOB`], each from the output of its
 /// own name.
-pub const WITH_FROM_CHANNEL: [&str; 3] = ["version", "release_index", "release_index_digest"];
+pub const WITH_FROM_CHANNEL: [&str; 4] = [
+    "version",
+    "release_index",
+    "release_index_digest",
+    "targets",
+];
 
 fn job<'a>(doc: &'a Node, name: &str) -> Option<&'a Node> {
     entry(doc, "jobs").and_then(|jobs| entry(jobs, name))
