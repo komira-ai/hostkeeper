@@ -408,6 +408,7 @@ fn bare_beat() -> Heartbeat {
         services: Vec::new(),
         sent_unix: 0,
         renewal: Renewal::default(),
+        trusted_root: None,
     }
 }
 

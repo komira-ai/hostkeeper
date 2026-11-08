@@ -79,6 +79,7 @@ fn heartbeat_lists_installed_services_from_records_and_observer() {
         ],
         sent_unix: hostkeeper_link::testing::START_UNIX,
         renewal: hostkeeper_link::Renewal::default(),
+        trusted_root: None,
     };
     assert_eq!(rig.world.link.beats(), vec![expected]);
 
@@ -296,4 +297,38 @@ fn a_heartbeat_says_the_host_clock_and_the_enrollment_loops_word_on_the_certific
             ),
         ]
     );
+}
+
+/// Catches a heartbeat whose trusted root is read once and kept, read from anywhere but its
+/// source, or left out: each beat carries what the source says at that beat, none while it says
+/// none.
+#[test]
+fn a_heartbeat_carries_the_trusted_root_its_source_says_at_each_beat() {
+    use hostkeeper_link::{RootReason, TrustedRootFacts};
+
+    let rig = Rig::new("facts-trusted-root");
+    rig.install(Vec::new());
+    let mut heartbeater = rig.heartbeater();
+    assert_eq!(heartbeater.beat_once(), BeatOutcome::Sent);
+    let stale = TrustedRootFacts {
+        age_secs: Some(91 * 86_400),
+        reason: Some(RootReason::Stale),
+    };
+    rig.world.trusted_root.set(Some(stale));
+    assert_eq!(heartbeater.beat_once(), BeatOutcome::Sent);
+    let fresh = TrustedRootFacts {
+        age_secs: Some(60),
+        reason: None,
+    };
+    rig.world.trusted_root.set(Some(fresh));
+    assert_eq!(heartbeater.beat_once(), BeatOutcome::Sent);
+
+    let said: Vec<Option<TrustedRootFacts>> = rig
+        .world
+        .link
+        .beats()
+        .into_iter()
+        .map(|beat| beat.trusted_root)
+        .collect();
+    assert_eq!(said, [None, Some(stale), Some(fresh)]);
 }

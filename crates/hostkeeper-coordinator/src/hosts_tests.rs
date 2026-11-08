@@ -232,6 +232,8 @@ fn a_host_is_what_the_status_holds_of_it() {
             sent_unix: None,
             cert_not_after_unix: None,
             last_renew_error: None,
+            trusted_root_age_secs: None,
+            trusted_root_reason: 0,
         }),
         labels: HashMap::from([("rack".to_owned(), "r1".to_owned())]),
         exclusions: vec![proto::Exclusion {
@@ -258,6 +260,9 @@ fn a_host_is_what_the_status_holds_of_it() {
         cert_not_after_unix: None,
         last_renew_error: None,
         clock_skew_beats: 0,
+        // A heartbeat answered as the JSON route answers it says nothing of the trusted root: unknown.
+        trusted_root_age_secs: None,
+        trusted_root_reason: agent::TrustedRootReason::Unspecified.into(),
     };
     assert_eq!(host, expected);
     let listed = list(&rig, 0, "").expect("a page");

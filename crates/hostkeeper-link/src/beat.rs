@@ -9,7 +9,10 @@
 //! observer's detail), and is refused when that is not enough. The service, its version, its
 //! health, the update running and the last verdict are never dropped, nor are the host's clock
 //! and certificate facts ([`Heartbeat::sent_unix`], [`Heartbeat::renewal`]), whose one text is
-//! at most [`hostkeeper_wire::wire::MAX_RENEW_ERROR`] bytes.
+//! at most [`hostkeeper_wire::wire::MAX_RENEW_ERROR`] bytes, nor its trusted root
+//! ([`Heartbeat::trusted_root`]). The trusted root goes out on the gRPC route only (the JSON
+//! route is frozen), but counts toward the bound on both, as `trusted_root_age_secs` and
+//! `trusted_root_reason`.
 
 use hostkeeper_config::names::{ServiceName, Version};
 pub use hostkeeper_proto::MAX_SERVICES_PER_HEARTBEAT;
@@ -251,6 +254,38 @@ pub struct Renewal {
     pub last_renew_error: Option<String>,
 }
 
+/// Why the host's Sigstore trusted root needs attention, as the daemon's report of it says.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RootReason {
+    /// Older than the daemon's limit.
+    Stale,
+    /// No file of the root is present.
+    Missing,
+    /// The file cannot be read, or is not trusted roots.
+    Unparseable,
+}
+
+impl RootReason {
+    /// Its word in a heartbeat's bound: the reason's name in lowercase.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            RootReason::Stale => "stale",
+            RootReason::Missing => "missing",
+            RootReason::Unparseable => "unparseable",
+        }
+    }
+}
+
+/// What the daemon's report says of the Sigstore trusted root it checks packages with, which
+/// every gRPC heartbeat carries ([`crate::TrustedRootSource`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TrustedRootFacts {
+    /// The seconds since the root's file was last written; none when no file is present.
+    pub age_secs: Option<u64>,
+    /// Why the root needs attention; none when it needs none.
+    pub reason: Option<RootReason>,
+}
+
 /// One heartbeat.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Heartbeat {
@@ -266,10 +301,14 @@ pub struct Heartbeat {
     pub sent_unix: u64,
     /// The host's certificate, as the enrollment loop last said it.
     pub renewal: Renewal,
+    /// The trusted root, as the daemon reported it when the heartbeat was made; none from a
+    /// daemon that keeps no root to report, which the coordinator reads as unknown.
+    pub trusted_root: Option<TrustedRootFacts>,
 }
 
 impl Heartbeat {
-    /// The heartbeat as JSON, with the wire's names.
+    /// The heartbeat as JSON, with the wire's names: what the bound measures. The trusted root
+    /// is in it, though the JSON route sends none (`wire_map`).
     pub fn to_json(&self) -> Value {
         let features: Vec<&str> = self.features.iter().map(|f| f.as_str()).collect();
         let services: Vec<Value> = self.services.iter().map(ServiceFacts::to_json).collect();
@@ -287,6 +326,13 @@ impl Heartbeat {
         }
         if let Some(error) = &self.renewal.last_renew_error {
             beat.insert("last_renew_error".to_owned(), error.clone().into());
+        }
+        if let Some(root) = &self.trusted_root {
+            if let Some(age) = root.age_secs {
+                beat.insert("trusted_root_age_secs".to_owned(), age.into());
+            }
+            let reason = root.reason.map_or("none", RootReason::as_str);
+            beat.insert("trusted_root_reason".to_owned(), reason.into());
         }
         Value::Object(beat)
     }
