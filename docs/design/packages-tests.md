@@ -5,13 +5,15 @@ Status: design, for the maintainers' ruling. The tests of A1 are **Built** (`cra
 (`crates/hostkeeper-coordinator/tests/targets.rs`, `crates/hostkeeper-proto/tests/additions_releases.rs`, and the
 Postgres store's in `crates/hostkeeper-coordinator/src/store/postgres/tests/releases.rs`); nothing else here is built. This is section 12 of
 [packages.md](packages.md), kept in a file of its own so that one stays under 1000 lines (rule R12). Section numbers here
-are those of packages.md, and A1 to A15 are its build items (section 13).
+are those of packages.md, and A1 to A15 are its build items (section 13). A16, A17 and the re-scoped A7 are
+[packages-repositories.md](packages-repositories.md)'s (its section 8); the `deb`, `rpm`, `arch` and `macos-pkg` cases
+are withdrawn with those installers, and the repository installers' cases are the last three items below.
 
 Each item's tests are behaviour tests in Rust, in the crate the item changes (rules T8, T11, T12). Each runs with no
 network and no system path, through the fakes the crates already have (`Fetcher`, `Verifier`, the coordinator's backend
 fake, the step launcher's fake, the placer's roots under a scratch directory), and through a command port for the
 formats' tools. A host's `os-release` and the tools' paths are read under a scratch root the test makes. None asserts a
-time: a bound is tested on an injected clock (rule T10). Real `dpkg`, `rpm`, `apk`, `pacman`, `installer` and `podman`
+time: a bound is tested on an injected clock (rule T10). Real `apt`, `dpkg`, `dnf`, `apk`, `pacman`, `brew` and `podman`
 run only in the device jobs (`privileged`, `macos-device`), whose tests count toward no coverage gate.
 
 - **Manifest and target checks (A1; `crates/hostkeeper-release/tests/manifest.rs`).** One case per check of sections
@@ -38,14 +40,14 @@ run only in the device jobs (`privileged`, `macos-device`), whose tests count to
   lists in the order set. The previous coordinator starts on the new state, on the file store and on Postgres, and shows
   the version `no_digest`.
 - **Ordering (A3; `crates/hostkeeper-coordinator/tests/target_orders.rs`).** Over a mixed fleet (old and new daemons,
-  three platforms, hosts announcing `deb`, `rpm`, only `tarball`, and nothing): a host of a platform with no list is
-  `no_target`, not failed, not missing, and does not hold convergence; with the list `[deb, rpm, tarball]`, a host
-  announcing `deb` and `tarball` gets the `deb` entry, one announcing `rpm` and `tarball` the `rpm` entry, one
-  announcing only `tarball` the tarball, and with `[tarball, deb]` every one of them the tarball; with `[deb, rpm]` the
+  three platforms, hosts announcing `apt`, `dnf`, only `tarball`, and nothing): a host of a platform with no list is
+  `no_target`, not failed, not missing, and does not hold convergence; with the list `[apt, dnf, tarball]`, a host
+  announcing `apt` and `tarball` gets the `apt` entry, one announcing `dnf` and `tarball` the `dnf` entry, one
+  announcing only `tarball` the tarball, and with `[tarball, apt]` every one of them the tarball; with `[apt, dnf]` the
   tarball-only host is `no_build_for_host`, not failed, not missing, not holding convergence, and listed with its
   installers; an old daemon gets the list's `hostkeeper-archive` entry wherever it stands, as today, with the index
   digest and with none when the set had no index, and is `no_build_for_host` when the list has none; a host that runs
-  the service from its `tarball` gets the list's `tarball` entry although a `deb` entry comes first, and is
+  the service from its `tarball` gets the list's `tarball` entry although a `apt` entry comes first, and is
   `installer_dropped`, named by `Converge`, when the list has no `tarball` or its daemon no longer lists `tarball`; an
   old daemon that runs the service from archives, given a list with no archive entry, is `installer_dropped`; a list
   with a misspelt installer that no host is picked for leaves the version not converged, with the counts in
@@ -53,7 +55,7 @@ run only in the device jobs (`privileged`, `macos-device`), whose tests count to
   coordinator's; a `ForceRollback` to a version with no entry of the host's installer is not ordered
   (`installer_dropped`), and to a version set with an index is ordered as today; a target is sent only to a daemon that
   announced `target-v1`, only over gRPC, and the feature is echoed; one host beating over gRPC, then JSON, then gRPC
-  keeps its first installers list, gets an archive order in today's form and no `deb` order over JSON, and the `deb`
+  keeps its first installers list, gets an archive order in today's form and no `apt` order over JSON, and the `apt`
   order in the next gRPC reply; a host whose next gRPC beat lists other installers is picked for again from the new
   list; an order answered `installer_not_listed` is picked for again at the next beat; a `Force` and an `Install` to a
   version set with targets follow the same rules; a reply with the largest valid entry fits in 32 KiB.
@@ -71,36 +73,85 @@ run only in the device jobs (`privileged`, `macos-device`), whose tests count to
 - **Which installers a daemon announces (A6 for `hostkeeper-archive` and `tarball`, A7 to A10, A13, A14 for theirs;
   `crates/hostkeeper-install/tests/announce.rs`).** One case per row of section 5.4's table, with `ID` alone and with
   the family only in `ID_LIKE` (`linuxmint`, `rocky`, `amzn`, `opensuse-leap`, `manjaro`); an `ID` that maps to one
-  family ahead of an `ID_LIKE` token of another; a Debian host with `/usr/bin/rpm` present announces `deb` and not
-  `rpm`; a Debian host without `dpkg` announces no native format; quoted and unquoted values give the same family;
+  family ahead of an `ID_LIKE` token of another; a Debian host with `/usr/bin/rpm` present announces `apt` and no
+  other native installer; a Debian host without `dpkg`, with an apt older than 2.2, or with no repository entry,
+  announces no native installer; quoted and unquoted values give the same family;
   `/usr/lib/os-release` is read when `/etc/os-release` is missing; an unknown `ID`, an empty file, both files missing
   and a malformed line (no `=`, an unterminated quote) give no native format, so a Linux host announces
   `hostkeeper-archive` and `tarball` alone; `oci-image` is announced with `/usr/bin/podman` present and not without it
-  (A10); a macOS host announces `hostkeeper-archive`, `tarball` and `macos-pkg` and never reads `os-release`. The list is the same at every heartbeat of one start.
+  (A10); a macOS host announces `hostkeeper-archive` and `tarball` and never reads `os-release`. The list is the same at every heartbeat of one start.
 - **Installers (A6 to A10, A13, A14; `crates/hostkeeper-install/tests/<installer>.rs`, device tests in
   `crates/hostkeeper-privileged/tests/install_<installer>.rs` and the macOS device suite).** For each installer:
   `stage` refuses a package whose identity is not `package` (and an OCI archive of two images), and runs no script
-  (the fake tool records its calls). For `deb`, `rpm` and `arch` (and `apk` in A13), the dependency check of section
-  5.4 runs after the identity check and before `prepare`; when the tool's no-change mode refuses, the outcome is `dependency_missing`, the hook never runs and
-  nothing is installed. The walk after `stage` refuses an entry under a link, an absolute or escaping link, a hard
+  (the fake tool records its calls). For every repository installer, the dependency check of section 5.4 runs after the
+  identity check and before `prepare`; when the simulation refuses, the outcome is `dependency_missing`, the hook
+  never runs and nothing is installed. The walk after `stage` refuses an entry under a link, an absolute or escaping link, a hard
   link, a device, one entry over `max_entries` and one byte over `max_unpacked_bytes`; it makes a non-root owner root,
-  strips a setuid bit and sets modes; on macOS an unsigned Mach-O file is refused. Every tool run is in a unit with
-  `PrivateNetwork=yes` (the fake launcher records the unit's properties). `activate` twice is the same as once, and a
+  strips a setuid bit and sets modes; on macOS an unsigned Mach-O file is refused. Every tool run but a repository
+  installer's two fetch commands is in a unit with `PrivateNetwork=yes` (the fake launcher records the unit's properties). `activate` twice is the same as once, and a
   crash between the tool and the switch resumes to the same state. An `activate` that fails rolls back to `previous`,
   and a first install that fails is removed. A tool past its bound is stopped and the step fails `environment`. Two
-  services' `activate` never run the tool at once. Rollback installs the kept previous artifact with no fetch; for
-  `macos-pkg`, a file only the newer receipt lists is deleted and a changed one left. `retire` of version N-2 after
+  services' `activate` never run the tool at once. Rollback installs the kept previous artifact, or a repository
+  installer's kept index and package, with no fetch. `retire` of version N-2 after
   N-1 and N leaves every installed file of N untouched and never calls the tool. `remove` removes what `activate`
-  recorded, and leaves and reports a file changed since (`macos-pkg`), a package upgraded by hand (`deb`, `rpm`, `apk`,
-  `arch`), or an image another kept version uses or the runtime held before (`oci-image`). Then `package_not_ours`,
+  recorded, and leaves and reports a package upgraded by hand (every repository installer), or an image another kept version uses or the runtime held before (`oci-image`). Then `package_not_ours`,
   `package_conflict`, `installer_changed`, and `target_changed` for a sealed version ordered again with another
   manifest. The generated container unit for each combination of `args`, ports (loopback or not) and volumes
   (read-only or not) equals its golden text. The observer hashes the program a native unit names in `tree/` and
   reports `version_mismatch` for a process of another version, and the image digest for `oci-image`. The device tests
-  install, update, roll back and uninstall a two-version `hello` in each format on the hosted runner (`rpm`, `apk` and
-  `arch` in a container of their family), assert that nothing the fixture package's installer put there remains after
-  uninstall, and that a `.deb` and an `.rpm` declaring a dependency the host lacks are refused `dependency_missing`
-  with nothing installed.
+  install, update, roll back and uninstall a two-version `hello` with each installer on the hosted runner (a later
+  manager's in a container of its family), and assert that nothing the installer put there remains after uninstall.
+- **Repository entries (A16; `crates/hostkeeper-release/tests/repository.rs`, `crates/hostkeeper-coordinator/tests/targets.rs`,
+  `crates/hostkeeper-proto/tests/additions_repository.rs`).** One refusal per row of packages-repositories.md section 2.2:
+  a `repository` empty, of 32 bytes and of 33, or with an upper-case letter; a `package_version` absent, of 128 bytes
+  and of 129, starting with a letter, or with a space; a `package_version` on an entry without `repository`; a
+  repository entry with one location, with `bytes` 1, with an attestation; a pin of 63 hex digits and one with an
+  upper-case letter, and none accepted; `manifest.package` absent, of 128 bytes and of 129, starting with `-`; the
+  service `hostkeeper` with a repository entry. A list `[apt, tarball]` is accepted and stored; set again identical it
+  is accepted, and with another `package_version` or pin it is `release_exists`. The audit entry names the repository,
+  the package, its version and the pin, and `no pin` when there is none. The previous coordinator's reader starts on a
+  releases file and a Postgres table holding a repository entry and writes the entry back unchanged. A reader built
+  from the baseline keeps fields 7 and 8 and writes them back; the new reader reads an entry without them as an
+  artifact entry. The pick orders an `apt` entry only to a host whose daemon lists `apt`.
+- **The repository configuration (A7; `crates/hostkeeper-install/tests/repositories.rs`).** A valid entry loads with its
+  name, URI, suite, components and keyring; the start is refused for each defect of packages-repositories.md section
+  3.1: a name outside the grammar, a file or keyring not root-owned or group- or other-writable, two stanzas, a type
+  other than `deb`, two URIs, an `http://` URI, two suites, no component, a `Signed-By` that is relative, outside the
+  directory or an inline key, and each of `Trusted`, `Allow-Insecure`, `Allow-Weak`, `Allow-Downgrade-To-Insecure` and
+  `Check-Valid-Until: no`. An empty directory and a missing one load as no repository.
+- **The `apt` installer (A7; `crates/hostkeeper-install/tests/apt.rs` with the command port's fake, device tests in
+  `crates/hostkeeper-privileged/tests/install_apt.rs`).** Every apt run's command line carries every option of
+  packages-repositories.md section 4.2, its work directory and no host path for lists or caches (the fake records each
+  call). Each row of section 4.5 gives its outcome and changes nothing on the host: `repository_unknown`;
+  `fetch_failed`; `signature` for each of apt's signature errors; `not_in_repository`, deferred, for a missing version
+  and for a stanza of another architecture only; `package_digest_mismatch` for the index's digest and for the file's;
+  `package_too_large` at `max_package_bytes` plus one, and a package of exactly `max_package_bytes` accepted;
+  `store_digest_mismatch`; `manifest_invalid` for each control field and for a `run` unit not in the tree, and a
+  package of architecture `all` accepted; the simulation run before any download, and a held package updated;
+  `dependency_missing`; `dependency_changes` for an extra install, upgrade, downgrade and removal in the simulation,
+  and for a purge refused by a dependent; `package_manager_busy`; `dpkg_interrupted`; `dpkg_error` for a failing
+  maintainer script and for a version other than V after the install, each followed by the rollback to the previous
+  version, and on a first install by the purge. An `apt` entry with no `repository` is `coordinator_too_old`, deferred;
+  an `apt` entry with a location, and a `tarball` entry with a `repository`, are `order_invalid`. Only `stage`'s two
+  fetch commands run without `PrivateNetwork=yes`. `activate` sets the hold after the install and records the version;
+  run twice, the second run changes nothing; a crash between the install and the record resumes to the same state.
+  A rollback runs no `apt-get update` and no download, uses the previous version's sealed copy, and succeeds on a kept
+  index whose `Valid-Until` has passed. A later version that adds a `run` unit has it enabled, and one that drops a
+  unit has its links taken away. `remove` lifts the
+  hold and purges only while the recorded version is installed, and leaves a package moved by hand with
+  `installed_changed`. `package_not_ours` for an installed package no record names, by `install` and by `force`; and
+  `package_conflict` for one another service records. The first install enables the `run` units by recorded links and
+  `remove` takes them away; an enablement link the package made is left unclaimed. The device tests, against a
+  fixture repository on the runner's disk (`file:` URI) signed by a key the test makes, on the oldest and newest
+  Debian and Ubuntu releases the project lists: install, update, roll back with the repository removed from disk, and
+  uninstall a two-version `hello`; an unattended `apt-get upgrade` with the same repository in the system's sources
+  leaves the held version; a suite signed by another key is `signature`; a re-uploaded package under the same version
+  is `package_digest_mismatch` with a pin; after the uninstall `dpkg-query` knows no `hello` and none of its files
+  remain.
+- **Host setup (A17; `crates/hostkeeper-pxe` tests).** `--repositories` with a valid directory writes each file byte for
+  byte into the seed's user data; a directory the daemon's loader refuses is refused before any seed is written, with
+  the loader's reason.
+
 - **One build, every release (A15; `crates/xtask/tests/release_linux.rs`, and the `privileged` device job).**
   `cargo xtask release check-linux-pkg` refuses a package whose binary has a `NEEDED` entry (a fixture binary linked to
   `libssl`), one that declares a dependency, and a tarball holding a glibc build, and accepts the static build. The device job installs the same `.deb` on
@@ -125,5 +176,6 @@ This list is complete in this sense: it holds one case for every refusal, outcom
 in sections 3 to 7 and 9.1 of packages.md (stages 5 and 6 of section 9.2 are proved by A11's and A12's own tests,
 named in the build table's last column), one under and one over every limit, each step of the coordinator's pick of
 section 3.3 (first listed, kept installer, no match, old daemon), each row of the announce table of section 5.4, and
-every installer's four steps against crash, repeat, failure and removal. Each item's pull request names its tests
-(rule T8).
+every installer's four steps against crash, repeat, failure and removal. For a repository installer it also holds
+one case for every check of packages-repositories.md section 2.2, every refusal of its section 3.1, and every row of
+its section 4.5, which are all the outcomes that file names. Each item's pull request names its tests (rule T8).
