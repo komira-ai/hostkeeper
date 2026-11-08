@@ -2,14 +2,17 @@
 //!
 //! [`startup`] does, in this order: load the daemon config (a config that fails to load stops the
 //! daemon with an error naming the key, and nothing on the host changes: no directory, no lock
-//! file, no socket); take the exclusive lock on `<state-dir>/lock`, held for the daemon's life (a
-//! second daemon on the same state directory gets [`StartError::Locked`]); remove the
-//! registration socket kbf's agent may have left ([`Settings::kbf_run_dir`]), before any unit is
-//! touched; [`settle_self_update`]; [`before_records`] and [`boot_pass`]; bind the admin socket,
-//! removing a stale socket only now that the lock is held; [`after_boot`]; and, once the daemon
-//! is ready, [`install_self_units`] for the host's platform. [`serve`] then starts
-//! the enrollment and heartbeat loops ([`crate::links`]) and serves the admin socket, until the
-//! daemon is asked to exit for its own update ([`crate::selfupdate::Restart`]).
+//! file); take the exclusive lock on `<state-dir>/lock`, held for the daemon's life (a second
+//! daemon on the same state directory gets [`StartError::Locked`]); remove the registration
+//! socket kbf's agent may have left ([`Settings::kbf_run_dir`]), before any unit is touched;
+//! [`settle_self_update`]; [`before_records`] and [`boot_pass`]; [`after_boot`]; and, once the
+//! daemon is ready, [`install_self_units`] for the host's platform. [`serve`] then starts the
+//! enrollment and heartbeat loops ([`crate::links`]) and runs them until the daemon is asked to
+//! exit for its own update ([`crate::selfupdate::Restart`]).
+//!
+//! The daemon serves nothing on the host: it binds no socket and listens on no port. What it
+//! does is seen through the coordinator (`hkctl hosts get`), and orders reach it only in a
+//! heartbeat's answer (docs/design/two-programs.md, section 1).
 //!
 //! [`settle_self_update`] settles the update of hostkeeper itself that waits for this start
 //! (design section 6.6), before any step record is read by the boot pass: the new binary
@@ -24,14 +27,13 @@
 //! [`BootReport::reconciled`]. [`boot_pass`] reads the step records against the boot
 //! id, runs each unfinished update to its verdict and restarts the watchers
 //! ([`crate::boot`]). [`after_boot`] runs the manifest's `boot` steps, then sends the readiness
-//! notice. The admin socket is bound before [`after_boot`] but served only by [`serve`], after
-//! [`startup`] has returned: nothing is answered on it while the boot work runs.
+//! notice. No loop starts before [`startup`] has returned, so no order is taken while the boot
+//! work runs.
 
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::num::NonZeroU64;
 use std::os::unix::fs::OpenOptionsExt;
-use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -42,7 +44,6 @@ use hostkeeper_observe::unlink_stale_registration_socket;
 use hostkeeper_package::stores::StoresError;
 use hostkeeper_placed::BootView;
 
-use crate::admin;
 use crate::boot::{ALERT_START, BootError, BootReport, Stage, boot_changed};
 use crate::executor::{Daemon, Dirs, Ports};
 use crate::files;
@@ -51,12 +52,11 @@ use crate::links::Links;
 use crate::mac_config::MacConfigError;
 use crate::notify::{NoNotifier, ReadyNotifier};
 use crate::selfunits::ALERT_SELF_UNITS;
-use crate::socket;
 
 /// The lock file in the state directory.
 pub const LOCK_FILE: &str = "lock";
 
-/// The directory of kbf's agent under the run directory the admin socket's directory is in.
+/// The directory of kbf's agent under the run directory.
 const KBF_RUN_DIR: &str = "updater";
 
 /// The exit status of a daemon that could not start or serve for any reason but these below.
@@ -73,7 +73,9 @@ pub struct Settings {
     pub config: PathBuf,
     pub state_dir: PathBuf,
     pub packages_dir: PathBuf,
-    pub admin_socket: PathBuf,
+    /// The run directory, the host platform's (`hostkeeper_launchd::Platform`'s `run_dir`):
+    /// `/run` on Linux, `/var/run` on macOS.
+    pub run_dir: PathBuf,
     /// The account the daemon config must be owned by: root (0) on a host.
     pub trusted_uid: u32,
     /// Days after which the Sigstore trusted root is reported stale
@@ -82,14 +84,11 @@ pub struct Settings {
 }
 
 impl Settings {
-    /// The run directory kbf's agent kept its registration socket in, `updater` beside the
-    /// admin socket's directory (`/run/updater` for `/run/hostkeeper/admin.sock`).
+    /// The run directory kbf's agent kept its registration socket in: `updater` in the run
+    /// directory (`/run/updater` on Linux), where the admin socket's directory of an older daemon
+    /// put it beside `/run/hostkeeper`.
     pub fn kbf_run_dir(&self) -> PathBuf {
-        self.admin_socket
-            .parent()
-            .and_then(Path::parent)
-            .unwrap_or(Path::new("/"))
-            .join(KBF_RUN_DIR)
+        self.run_dir.join(KBF_RUN_DIR)
     }
 }
 
@@ -128,8 +127,6 @@ pub enum StartError {
         #[source]
         source: io::Error,
     },
-    #[error("the admin socket could not be served: {0}")]
-    Serve(#[from] tonic::transport::Error),
     #[error("the async runtime could not be made: {0}")]
     Runtime(io::Error),
     #[error("this daemon's own version is not major.minor.patch: {0}")]
@@ -156,7 +153,6 @@ impl StartError {
             }
             StartError::Locked { .. } => EXIT_LOCKED,
             StartError::Io { .. }
-            | StartError::Serve(_)
             | StartError::Runtime(_)
             | StartError::OwnVersion(_)
             | StartError::Boot(_)
@@ -173,11 +169,9 @@ fn io_at(path: &Path) -> impl Fn(io::Error) -> StartError + '_ {
     }
 }
 
-/// A daemon that started: its lock is held, its admin socket bound.
+/// A daemon that started: its lock is held and its boot work is over.
 pub struct Started {
     daemon: Arc<Daemon>,
-    listener: UnixListener,
-    socket_path: PathBuf,
     report: BootReport,
     /// Held while the daemon lives: one daemon per state directory.
     _lock: File,
@@ -225,7 +219,7 @@ pub fn load_config(settings: &Settings) -> Result<DaemonConfig, StartError> {
     })
 }
 
-/// Starts the daemon: the config, the lock, the boot work, the admin socket. `own_version` is
+/// Starts the daemon: the config, the lock, the boot work. `own_version` is
 /// the daemon's own, which a manifest's `min_hostkeeper` is compared with. Nobody is told it is
 /// ready ([`NoNotifier`]).
 pub fn startup(
@@ -259,13 +253,10 @@ pub fn startup_notifying(
     settle_self_update(&daemon, &mut report);
     before_records(&daemon, &mut report);
     boot_pass(&daemon, &mut report)?;
-    let listener = socket::bind(&settings.admin_socket).map_err(io_at(&settings.admin_socket))?;
     after_boot(&daemon, &mut report, notifier);
     install_self_units(&daemon, Platform::host().kind, &mut report);
     Ok(Started {
         daemon,
-        listener,
-        socket_path: settings.admin_socket.clone(),
         report,
         _lock: lock,
     })
@@ -357,21 +348,14 @@ fn install_self_units(daemon: &Daemon, kind: PlatformKind, report: &mut BootRepo
 }
 
 /// Serves a started daemon, holding its lock: starts its enrollment and heartbeat loops
-/// ([`Links::start`], the enrollment loop first), then serves the admin socket until the socket
-/// fails or the daemon is asked to exit for its own update: then the requests in flight are
-/// answered, the loops are told to stop, and this returns `Ok`, for the binary to exit with
-/// status 0. The readiness notice was sent by [`startup_notifying`], so neither loop starts
-/// before the boot work is over (design section 6.5); a socket that cannot be served starts
-/// neither.
-pub async fn serve(started: Started, links: Links) -> Result<(), StartError> {
-    let path = &started.socket_path;
-    let incoming = socket::incoming(started.listener).map_err(io_at(path))?;
+/// ([`Links::start`], the enrollment loop first) and returns once the daemon is asked to exit for
+/// its own update: then the loops are told to stop, and the binary exits with status 0. The
+/// readiness notice was sent by [`startup_notifying`], so neither loop starts before the boot
+/// work is over (design section 6.5).
+pub async fn serve(started: Started, links: Links) {
     let stop = links.stop.clone();
     links.start(&started.daemon);
-    let daemon = Arc::clone(&started.daemon);
-    let restart = async move { daemon.ctx().restart().wait().await };
     // `started._lock` stays held until this returns.
-    let served = admin::serve_until(Arc::clone(&started.daemon), incoming, restart).await;
+    started.daemon.ctx().restart().wait().await;
     stop.stop();
-    served.map_err(StartError::from)
 }

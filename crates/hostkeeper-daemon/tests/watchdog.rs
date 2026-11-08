@@ -193,8 +193,7 @@ fn each_heartbeat_is_followed_by_one_watchdog_notice_and_nothing_else_sends_one(
     assert_eq!(lines(&events), want);
 
     daemon.ctx().restart().request();
-    let ended = runtime.block_on(served).expect("the server task");
-    assert!(ended.is_ok(), "{ended:?}");
+    runtime.block_on(served).expect("the server task");
     assert_eq!(lines(&events), want, "stopping sends no watchdog notice");
     assert_eq!(
         log.lines(),

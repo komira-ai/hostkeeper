@@ -378,7 +378,6 @@ impl MacSelfHost {
             ("--config", text("hostkeeper.toml")),
             ("--state-dir", text("state")),
             ("--packages-dir", text("packages")),
-            ("--admin-socket", text("run/admin.sock")),
             ("--heartbeat-secs", "1".to_owned()),
         ] {
             argv.push(arg(flag.to_owned()));

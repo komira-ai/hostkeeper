@@ -21,7 +21,7 @@
 //!
 //! The store also reports the Sigstore trusted root its verifier checks attestations with
 //! ([`RealPackages::with_trusted_root`], [`crate::trusted_root`]): its age and, when it needs
-//! attention, a reason, which the admin `Status` carries.
+//! attention, a reason, which [`crate::Daemon::status`] carries.
 
 use std::io;
 use std::path::{Path, PathBuf};

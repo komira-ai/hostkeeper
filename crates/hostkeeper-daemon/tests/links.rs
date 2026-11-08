@@ -155,8 +155,7 @@ fn the_loops_start_only_after_ready_and_the_enrollment_loop_first() {
     assert!(!stop.is_stopped(), "the loops run while the daemon serves");
 
     daemon.ctx().restart().request();
-    let ended = runtime.block_on(served).expect("the server task");
-    assert!(ended.is_ok(), "{ended:?}");
+    runtime.block_on(served).expect("the server task");
     assert!(stop.is_stopped(), "the loops are told to stop");
     assert!(
         jobs.wait(&serving).is_err(),

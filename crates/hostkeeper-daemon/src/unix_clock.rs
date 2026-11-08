@@ -3,8 +3,8 @@
 //! shares, because a restart has no memory of the monotonic clock; the loop caps a deferral at
 //! `hostkeeper_link::deferral::MAX_RETRY_SECS` from now at every read, so a wrong clock can run
 //! a deferred target early, or hold it for at most that long, and nothing else. It also counts
-//! the age of the Sigstore trusted root ([`crate::trusted_root`]), a report of the admin
-//! `Status` that no decision reads. This file is the daemon's one read of the wall clock
+//! the age of the Sigstore trusted root ([`crate::trusted_root`]), a report of
+//! [`crate::Daemon::status`] that no decision reads. This file is the daemon's one read of the wall clock
 //! (crates/xtask/tests/wallclock/allowed.txt).
 
 use std::time::{SystemTime, UNIX_EPOCH};

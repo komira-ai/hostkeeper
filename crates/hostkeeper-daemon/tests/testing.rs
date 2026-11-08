@@ -1,14 +1,11 @@
 //! The test doubles themselves, where the tests of the daemon do not reach every path of them.
 
-use std::sync::atomic::Ordering;
-
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_daemon::locks::ServiceLocks;
 use hostkeeper_daemon::testing::{
-    Counted, Ending, FakeClock, Missed, ScriptedLauncher, Signal, lock_waits, spawn,
+    Ending, FakeClock, Missed, ScriptedLauncher, Signal, lock_waits, spawn,
 };
 use hostkeeper_steps::{BootIdError, Clock, StepLauncher};
-use tokio::io::{AsyncReadExt, AsyncWriteExt, duplex};
 
 /// Catches a fake clock that moves on its own, or does not move when slept on: a sleep moves
 /// it, a frozen one only by `advance`, a new boot id is reported, and a lost one cannot be read
@@ -58,28 +55,6 @@ fn a_stop_the_script_does_not_fail_works() {
         "updater-other-prepare-1"
     );
     assert_eq!(launcher.stops().len(), 2);
-}
-
-/// Catches a counting connection that counts what it does not read, or does not pass writes,
-/// flushes and shutdowns through.
-#[tokio::test]
-async fn a_counted_connection_counts_what_is_read_and_passes_the_rest() {
-    let (near, far) = duplex(64);
-    let (mut counted, read) = Counted::new(far);
-    let (mut near_read, mut near_write) = tokio::io::split(near);
-    near_write.write_all(b"abc").await.expect("write");
-    let mut buf = [0u8; 3];
-    counted.read_exact(&mut buf).await.expect("read");
-    assert_eq!((&buf, read.load(Ordering::SeqCst)), (b"abc", 3));
-    counted.write_all(b"de").await.expect("write back");
-    counted.flush().await.expect("flush");
-    counted.shutdown().await.expect("shutdown");
-    let mut back = Vec::new();
-    near_read
-        .read_to_end(&mut back)
-        .await
-        .expect("read to the end");
-    assert_eq!(back, b"de");
 }
 
 /// Catches a wait that drops a signal its party sent before it ended: a thread sends, then ends;

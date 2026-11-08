@@ -313,7 +313,8 @@ fn run_daemon(
             flags.link.heartbeat_secs,
             watchdog,
         );
-        start::serve(started, links).await
+        start::serve(started, links).await;
+        Ok(())
     })
 }
 

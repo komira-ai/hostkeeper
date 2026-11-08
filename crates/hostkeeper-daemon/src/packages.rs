@@ -160,7 +160,7 @@ pub trait Packages: Send + Sync {
     }
 
     /// The age of the Sigstore trusted root the store checks attestations with, and the reason
-    /// it needs attention, read now: what the admin `Status` reports of it. The default has no
+    /// it needs attention, read now: what [`crate::Daemon::status`] reports of it. The default has no
     /// root to report.
     fn trusted_root(&self) -> Option<RootReport> {
         None

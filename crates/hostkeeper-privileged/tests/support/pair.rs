@@ -521,9 +521,10 @@ impl Daemon {
         );
         put(&dir.join("hostkeeper.toml"), config.as_bytes(), 0o644);
         // The packages directory is the host's (made by the package that installs the daemon);
-        // the daemon makes its state directory and its admin socket's.
+        // the daemon makes its state directory.
         fs::create_dir_all(PACKAGES_DIR).expect("the packages directory");
-        // The admin socket's path is short (a socket's path is at most 107 bytes): right under the
+        // The `--admin-socket` path: the daemon of this checkout ignores the flag, an older
+        // release binds it, and a socket's path is at most 107 bytes, so it is right under the
         // scratch directory.
         let socket = scratch.join("run/a.sock");
         let mut daemon = Daemon {

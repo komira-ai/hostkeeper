@@ -7,7 +7,8 @@
 //! changes ([`unit_text`]): `ExecStart=` runs the same `current` of the binary directory with the
 //! same flags, at the test's directories (the end-to-end rig's tree, `super::super::e2e::host_root`),
 //! with the admin socket in the test's tree (`--admin-socket`, which the real line does not pass:
-//! the daemon would bind the default `/run/hostkeeper/admin.sock`) and with `--heartbeat-secs 1`;
+//! the older release would bind the default `/run/hostkeeper/admin.sock`; the daemon of this
+//! checkout ignores the flag and binds nothing) and with `--heartbeat-secs 1`;
 //! the seed (`ExecStartPre=`: the test stages the first binary itself) is left out. A change to
 //! the real `ExecStart=` that this does not know fails the test by name. The unit is installed
 //! where the deb installs it ([`DEB_UNIT`]) and enabled by the link `systemctl enable` makes

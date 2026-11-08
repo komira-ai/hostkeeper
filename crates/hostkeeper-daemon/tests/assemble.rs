@@ -132,7 +132,7 @@ fn the_daemon_reaches_ready_only_after_the_boot_pass_and_reconcile() {
     let rig = Rig::new("assemble-order");
     let dir = restoring_web(&rig);
     let run_dir = rig.settings().kbf_run_dir();
-    assert_eq!(run_dir, rig.scratch.path().join("updater"));
+    assert_eq!(run_dir, rig.run_dir.join("updater"));
     fs::create_dir_all(&run_dir).expect("the run dir");
     let stale = run_dir.join("register.sock");
     fs::write(&stale, "").expect("a stale registration socket");
@@ -269,8 +269,8 @@ fn orphans_are_removed_at_start_and_before_each_fetch() {
 }
 
 /// Catches a start that goes on past something it could not make safe: a path where the
-/// registration socket is that cannot be removed stops the start naming the path, with the admin
-/// socket never bound.
+/// registration socket is that cannot be removed stops the start naming the path, with nothing
+/// made in the run directory.
 #[test]
 fn a_registration_socket_that_cannot_be_removed_stops_the_start() {
     let rig = Rig::new("assemble-unlink");
@@ -284,7 +284,15 @@ fn a_registration_socket_that_cannot_be_removed_stops_the_start() {
         "{error}"
     );
     assert_eq!(error.exit_code(), EXIT_FAILED);
-    assert!(!rig.socket.exists());
+    let made: Vec<_> = fs::read_dir(&rig.run_dir)
+        .expect("the run directory the test made")
+        .map(|entry| entry.expect("an entry").file_name())
+        .collect();
+    assert_eq!(
+        made,
+        ["updater"],
+        "nothing else is made in the run directory"
+    );
 }
 
 /// Catches a sweep that fails silently, or a packages directory that cannot be listed stopping
@@ -377,23 +385,24 @@ fn a_reconciliation_that_cannot_run_is_in_the_report_and_an_alert() {
     );
 }
 
-/// Catches the run directory of kbf's agent taken from the wrong directory: `updater` beside the
-/// admin socket's directory, and `/updater` for a socket with no directory above it.
+/// Catches the run directory of kbf's agent taken from the wrong directory: `updater` under the
+/// settings' run directory, whatever shape the run directory has.
 #[test]
-fn the_registration_socket_directory_is_beside_the_admin_socket_directory() {
+fn the_registration_socket_directory_is_updater_under_the_run_directory() {
     let rig = Rig::new("assemble-run-dir");
     let rows = [
-        ("/run/hostkeeper/admin.sock", "/run/updater"),
-        ("/a/b/c/s.sock", "/a/b/updater"),
-        ("/s.sock", "/updater"),
-        ("s.sock", "/updater"),
+        ("/run", "/run/updater"),
+        ("/var/run", "/var/run/updater"),
+        ("/a/b/c", "/a/b/c/updater"),
+        ("/", "/updater"),
+        ("run", "run/updater"),
     ];
-    for (socket, expected) in rows {
+    for (run_dir, expected) in rows {
         let settings = Settings {
-            admin_socket: PathBuf::from(socket),
+            run_dir: PathBuf::from(run_dir),
             ..rig.settings()
         };
-        assert_eq!(settings.kbf_run_dir(), Path::new(expected), "{socket}");
+        assert_eq!(settings.kbf_run_dir(), Path::new(expected), "{run_dir}");
     }
 }
 

@@ -121,25 +121,25 @@ fn a_set_desired_job_that_runs_for_a_release_older_than_the_newest_is_refused() 
         ],
     );
     assert!(SET_IF.contains("needs.channel.outputs.newest == 'true'"));
-    assert!(CHANNEL_STEPS[5].contains(r#"== env.VERSION)"' >> "$GITHUB_OUTPUT""#));
+    assert!(CHANNEL_STEPS[9].contains(r#"== env.VERSION)"' >> "$GITHUB_OUTPUT""#));
     assert_problems(
         "      newest: ${{ steps.latest.outputs.newest }}\n",
         "",
         &[
-            "release.yml: job channel outputs are [(\"release_index\", \"${{ steps.index.outputs.release_index }}\"), (\"release_index_digest\", \"${{ steps.index.outputs.release_index_digest }}\"), (\"version\", \"${{ steps.newest.outputs.version }}\")], not [(\"newest\", \"${{ steps.latest.outputs.newest }}\"), (\"release_index\", \"${{ steps.index.outputs.release_index }}\"), (\"release_index_digest\", \"${{ steps.index.outputs.release_index_digest }}\"), (\"version\", \"${{ steps.newest.outputs.version }}\")]",
+            "release.yml: job channel outputs are [(\"release_index\", \"${{ steps.index.outputs.release_index }}\"), (\"release_index_digest\", \"${{ steps.index.outputs.release_index_digest }}\"), (\"targets\", \"${{ steps.targets.outputs.targets }}\"), (\"version\", \"${{ steps.newest.outputs.version }}\")], not [(\"newest\", \"${{ steps.latest.outputs.newest }}\"), (\"release_index\", \"${{ steps.index.outputs.release_index }}\"), (\"release_index_digest\", \"${{ steps.index.outputs.release_index_digest }}\"), (\"targets\", \"${{ steps.targets.outputs.targets }}\"), (\"version\", \"${{ steps.newest.outputs.version }}\")]",
         ],
     );
     // The highest published version compared as text of another field: never the newest.
     let got = problems_with("== env.VERSION)", "== env.TAG)");
     assert_eq!(got.len(), 1, "{got:?}");
-    assert!(got[0].starts_with("release.yml: job channel step 6 is "));
+    assert!(got[0].starts_with("release.yml: job channel step 10 is "));
 }
 
 #[test]
 fn a_deploy_job_that_goes_on_after_a_failure_is_refused() {
     // Catches: a failed wait or comparison that no longer stops the call.
     for (job, after) in [
-        ("channel", "    timeout-minutes: 40\n"),
+        ("channel", "    timeout-minutes: 50\n"),
         ("set-desired", "    needs: [plan, channel]\n"),
     ] {
         assert_problems(
@@ -166,7 +166,7 @@ fn a_channel_step_that_can_be_skipped_or_fail_quietly_is_refused() {
             compare,
             &format!("{compare}{line}"),
             &[&format!(
-                "release.yml: job channel step 4 has `{key}`, which a step of it may not"
+                "release.yml: job channel step 7 has `{key}`, which a step of it may not"
             )],
         );
     }
@@ -239,12 +239,12 @@ fn a_channel_wait_that_gives_up_on_a_missing_version_or_reads_another_channel_is
         let got = problems_with(from, to);
         assert_eq!(got.len(), 1 + usize::from(lacks.is_some()), "{got:?}");
         assert!(
-            got[0].starts_with("release.yml: job channel step 3 is `run curl "),
+            got[0].starts_with("release.yml: job channel step 6 is `run curl "),
             "{got:?}"
         );
         if from == wait {
             assert!(
-                got[0].ends_with(&format!(", not `{}`", CHANNEL_STEPS[2])),
+                got[0].ends_with(&format!(", not `{}`", CHANNEL_STEPS[5])),
                 "{got:?}"
             );
         }
@@ -263,16 +263,17 @@ fn a_channel_job_that_does_not_compare_the_served_index_is_refused() {
         compare,
         "",
         &[
-            "release.yml: job channel has 5 steps, not the 6 of desired::CHANNEL_STEPS",
-            &step_problem(4, CHANNEL_STEPS[4]),
-            &step_problem(5, CHANNEL_STEPS[5]),
+            "release.yml: job channel has 9 steps, not the 10 of desired::CHANNEL_STEPS",
+            &step_problem(7, CHANNEL_STEPS[7]),
+            &step_problem(8, CHANNEL_STEPS[8]),
+            &step_problem(9, CHANNEL_STEPS[9]),
         ],
     );
     assert_problems(
         "cmp dist/index.json",
         "cmp --quiet dist/index.json",
         &[&step_problem(
-            4,
+            7,
             "run cmp --quiet dist/index.json \"$RUNNER_TEMP/served-index.json\"",
         )],
     );
@@ -286,7 +287,7 @@ fn a_channel_job_that_reads_the_index_from_another_artifact_is_refused() {
         "          name: release-${{ steps.newest.outputs.tag }}\n",
         "          name: release-latest\n",
         &[&step_problem(
-            2,
+            5,
             "uses actions/download-artifact with name=release-latest with path=dist",
         )],
     );
@@ -294,7 +295,7 @@ fn a_channel_job_that_reads_the_index_from_another_artifact_is_refused() {
         "          path: dist\n",
         "          path: dist\n          run-id: ${{ github.event.workflow_run.id }}\n",
         &[&step_problem(
-            2,
+            5,
             "uses actions/download-artifact with name=release-${{ steps.newest.outputs.tag }} with path=dist with run-id=${{ github.event.workflow_run.id }}",
         )],
     );
@@ -302,7 +303,7 @@ fn a_channel_job_that_reads_the_index_from_another_artifact_is_refused() {
     assert_problems(
         last,
         &format!("{last}      - run: echo extra\n"),
-        &["release.yml: job channel has 7 steps, not the 6 of desired::CHANNEL_STEPS"],
+        &["release.yml: job channel has 11 steps, not the 10 of desired::CHANNEL_STEPS"],
     );
 }
 
@@ -314,7 +315,7 @@ fn a_channel_job_whose_outputs_are_not_its_checked_steps_is_refused() {
         "      release_index_digest: ${{ steps.index.outputs.release_index_digest }}\n",
         "      release_index_digest: ${{ steps.newest.outputs.release_index_digest }}\n",
         &[
-            "release.yml: job channel outputs are [(\"newest\", \"${{ steps.latest.outputs.newest }}\"), (\"release_index\", \"${{ steps.index.outputs.release_index }}\"), (\"release_index_digest\", \"${{ steps.newest.outputs.release_index_digest }}\"), (\"version\", \"${{ steps.newest.outputs.version }}\")], not [(\"newest\", \"${{ steps.latest.outputs.newest }}\"), (\"release_index\", \"${{ steps.index.outputs.release_index }}\"), (\"release_index_digest\", \"${{ steps.index.outputs.release_index_digest }}\"), (\"version\", \"${{ steps.newest.outputs.version }}\")]",
+            "release.yml: job channel outputs are [(\"newest\", \"${{ steps.latest.outputs.newest }}\"), (\"release_index\", \"${{ steps.index.outputs.release_index }}\"), (\"release_index_digest\", \"${{ steps.newest.outputs.release_index_digest }}\"), (\"targets\", \"${{ steps.targets.outputs.targets }}\"), (\"version\", \"${{ steps.newest.outputs.version }}\")], not [(\"newest\", \"${{ steps.latest.outputs.newest }}\"), (\"release_index\", \"${{ steps.index.outputs.release_index }}\"), (\"release_index_digest\", \"${{ steps.index.outputs.release_index_digest }}\"), (\"targets\", \"${{ steps.targets.outputs.targets }}\"), (\"version\", \"${{ steps.newest.outputs.version }}\")]",
         ],
     );
 }
@@ -476,5 +477,89 @@ fn a_set_desired_job_with_another_token_right_is_refused() {
             "job set-desired: `contents: write` is not allowed in release.yml",
             "job set-desired: permissions must be exactly contents: read and id-token: write",
         ],
+    );
+}
+
+#[test]
+fn a_channel_job_without_the_targets_or_with_targets_of_other_files_is_refused() {
+    // Catches: the set made without targets (each daemon that reads them then gets nothing new),
+    // and targets written from files the job did not compare with the channel, or for another
+    // version than the one set.
+    let targets = "      - name: The targets of the release\n        id: targets\n        env:\n          VERSION: ${{ steps.newest.outputs.version }}\n        run: cargo xtask release targets --version \"$VERSION\" --dir dist --repo \"$GITHUB_REPOSITORY\" --output \"$GITHUB_OUTPUT\"\n";
+    assert_problems(
+        targets,
+        "",
+        &[
+            "release.yml: job channel has 9 steps, not the 10 of desired::CHANNEL_STEPS",
+            &step_problem(9, CHANNEL_STEPS[9]),
+        ],
+    );
+    assert_problems(
+        "--version \"$VERSION\" --dir dist --repo",
+        "--version \"$VERSION\" --dir \"$RUNNER_TEMP\" --repo",
+        &[&step_problem(
+            9,
+            "run cargo xtask release targets --version \"$VERSION\" --dir \"$RUNNER_TEMP\" --repo \"$GITHUB_REPOSITORY\" --output \"$GITHUB_OUTPUT\" env VERSION=${{ steps.newest.outputs.version }}",
+        )],
+    );
+    assert_problems(
+        "          VERSION: ${{ steps.newest.outputs.version }}\n        run: cargo xtask release targets",
+        "          VERSION: ${{ needs.plan.outputs.version }}\n        run: cargo xtask release targets",
+        &[&step_problem(
+            9,
+            "run cargo xtask release targets --version \"$VERSION\" --dir dist --repo \"$GITHUB_REPOSITORY\" --output \"$GITHUB_OUTPUT\" env VERSION=${{ needs.plan.outputs.version }}",
+        )],
+    );
+}
+
+#[test]
+fn a_channel_job_whose_xtask_is_not_the_newest_releases_commit_is_refused() {
+    // Catches: targets written by the xtask of the tip of main or of another commit than the
+    // release's, and a checkout that leaves the token in the repository's git config.
+    assert_problems(
+        "          ref: ${{ steps.newest.outputs.commit }}\n",
+        "          ref: ${{ github.sha }}\n",
+        &[&step_problem(
+            2,
+            "uses actions/checkout with persist-credentials=false with ref=${{ github.sha }}",
+        )],
+    );
+    assert_problems(
+        "          ref: ${{ steps.newest.outputs.commit }}\n          persist-credentials: false\n",
+        "          ref: ${{ steps.newest.outputs.commit }}\n",
+        &[&step_problem(
+            2,
+            "uses actions/checkout with ref=${{ steps.newest.outputs.commit }}",
+        )],
+    );
+}
+
+#[test]
+fn a_channel_job_whose_targets_output_is_not_the_targets_step_is_refused() {
+    // Catches: targets passed on from a value no step of the job wrote from the checked files.
+    let found = problems_with(
+        "      targets: ${{ steps.targets.outputs.targets }}\n",
+        "      targets: ${{ steps.index.outputs.targets }}\n",
+    );
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(
+        found[0].starts_with("release.yml: job channel outputs are ")
+            && found[0].contains("(\"targets\", \"${{ steps.index.outputs.targets }}\")"),
+        "{found:?}"
+    );
+}
+
+#[test]
+fn a_set_desired_job_without_the_channel_jobs_targets_is_refused() {
+    // Catches: the set made with the index alone (no host is ordered by targets), and targets
+    // passed from another job than the one that checked the channel.
+    let want =
+        "release.yml: job set-desired must pass `targets: ${{ needs.channel.outputs.targets }}`";
+    let line = "      targets: ${{ needs.channel.outputs.targets }}\n";
+    assert_problems(line, "", &[want]);
+    assert_problems(
+        line,
+        "      targets: ${{ needs.plan.outputs.targets }}\n",
+        &[want],
     );
 }

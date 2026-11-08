@@ -3,7 +3,8 @@
 
 use std::path::Path;
 
-use hostkeeper_daemon::cli::DEFAULT_ADMIN_SOCKET;
+use hostkeeper_daemon::layout::RUN_SUBDIR;
+use hostkeeper_launchd::Platform;
 
 use crate::tmpfiles;
 use crate::unit::{self, Unit};
@@ -232,19 +233,25 @@ fn check_agreement(unit_text: &str, tmpfiles_text: &str) -> Result<(), String> {
         flag(&words, "--state-dir")?.to_owned(),
         flag(&words, "--packages-dir")?.to_owned(),
         parent(flag(&words, "--config")?),
-        // The daemon binds its admin socket at the default; the unit passes no path for it.
-        parent(DEFAULT_ADMIN_SOCKET),
+        // The daemon's run directory, which it makes 0700 at each start, and where a daemon
+        // before it binds its admin socket by default; the unit passes no path for it.
+        Platform::linux()
+            .run_dir
+            .join(RUN_SUBDIR)
+            .display()
+            .to_string(),
     ];
     if let Some(dir) = dirs.iter().find(|dir| mode_of(&lines, dir).is_none()) {
         return Err(format!(
-            "{dir}, on the unit's command line or the socket's default, has no tmpfiles line"
+            "{dir}, on the unit's command line or the daemon's run directory, has no tmpfiles line"
         ));
     }
     Ok(())
 }
 
 /// Catches the unit and the tmpfiles rules drifting apart: a directory the daemon is told to
-/// use, or the directory of the admin socket it defaults to, that no tmpfiles line makes, and a
+/// use, or its run directory (where an older daemon binds its admin socket), that no tmpfiles
+/// line makes, and a
 /// unit that makes `/run/hostkeeper` itself with a `RuntimeDirectory=`. Each of the two units is
 /// held to it.
 #[test]

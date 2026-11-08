@@ -18,6 +18,7 @@ mod desired_tests;
 mod downloads;
 mod downloads_tests;
 mod expr;
+mod hello_run_tests;
 mod lint;
 mod linux_packages_tests;
 mod linux_releases;
@@ -34,6 +35,7 @@ mod previous_release;
 mod previous_release_tests;
 mod privileged_tests;
 mod release;
+mod release_files;
 mod release_tests;
 #[path = "../hygiene/rust_text.rs"]
 mod rust_text;

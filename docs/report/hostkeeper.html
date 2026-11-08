@@ -204,7 +204,7 @@ main>section>figure.wide,main>section>.tblw.wide{width:min(72rem,calc(100vw - 3r
 <tr><td>Coordinator&rsquo;s state in Postgres: migrations, the advisory lock, <code>import</code> and <code>export</code></td><td>Built, tested against a real Postgres in CI, and the lab&rsquo;s coordinator runs on it; the file store it moved from is kept as the way back (<a href="#coordinator-state">its state</a>)</td></tr>
 <tr><td>Operator API over gRPC and the HTTP/JSON gateway; generated <code>hkctl</code>; web UI</td><td>Built; every declared method has a handler (<a href="#apis">the two APIs</a>)</td></tr>
 <tr><td>Assignment of services to roles and hosts; <code>install</code> and <code>uninstall</code> orders</td><td>Built in the coordinator, which sends them only to a daemon that announces <code>install-v1</code>; the daemon&rsquo;s heartbeat loop announces it and runs both over its link (below)</td></tr>
-<tr><td>Daemon: start-up, boot pass, step runner, dead-man, admin socket, enrollment loop</td><td>Built and running in the shipped binary; the enrollment loop&rsquo;s certificate request carries the subject <code>CN=host:pending</code> the CA accepts (<a href="#n-h5">h5</a>)</td></tr>
+<tr><td>Daemon: start-up, boot pass, step runner, dead-man, enrollment loop</td><td>Built and running in the shipped binary; the enrollment loop&rsquo;s certificate request carries the subject <code>CN=host:pending</code> the CA accepts (<a href="#n-h5">h5</a>)</td></tr>
 <tr><td>Daemon: package fetch, attestation check, unpack, placed-path linking, force, prune</td><td>Built; reachable only through an order</td></tr>
 <tr><td>Daemon heartbeat to the coordinator</td><td>Built and running in the shipped binary: JSON, then gRPC once the coordinator advertises it, over mutual TLS; the coordinator&rsquo;s orders reach an enrolled host</td></tr>
 <tr><td>Linux unit control (daemon-reload, start, stop) for linked units</td><td>Built: the Linux adapter set runs <code>systemctl</code> for each call; a privileged run starts, reloads and stops a real unit through it; the step launcher is wired</td></tr>
@@ -407,7 +407,7 @@ main>section>figure.wide,main>section>.tblw.wide{width:min(72rem,calc(100vw - 3r
 <li id="n-h1"><strong>h1.</strong> A daemon runs under launchd on a Mac: a device test starts it and asks its status, and an end-to-end device test enrolls it with a coordinator and installs, updates, rolls back and uninstalls hello&rsquo;s package, its plists linked into <code>/Library/LaunchDaemons</code> and loaded by launchd. On Linux the unit control runs <code>systemctl</code>; a privileged run starts, reloads and stops a real unit through it.</li>
 <li id="n-h2"><strong>h2.</strong> CI authenticates to the coordinator with a GitHub Actions OIDC token on <code>Releases.SetDesired</code> and <code>Releases.Converge</code>, and an operator&rsquo;s token may also set the desired version. Packages are attested in CI, and hosts only dial out. CI needs network reach to the coordinator&rsquo;s private listener, not to any host. Releases are published from <code>main</code> as GitHub releases, but no release channel that the daemon reads is hosted: the operator stages and serves one. The shipped daemon&rsquo;s heartbeat reaches the coordinator over mutual TLS once the host is enrolled, so a desired version reaches it in the reply.</li>
 <li id="n-h3"><strong>h3.</strong> The step contract (prepare, cutover, verify, cleanup, rollback), the rollback after a failed verify and the dead-man are built and tested in process. The service&rsquo;s hook does the hand-off; the daemon does not enforce zero dropped requests.</li>
-<li id="n-h4"><strong>h4.</strong> The update plan (stages, a manual advance, pause and resume), the canary, the bake, holds and force are built in the coordinator, and <code>max_updating</code> and <code>min_up</code> pace the hosts of a stage per role. <code>Hosts.Abort</code> does not reach the shipped daemon; an abort is done on the host through the admin socket.</li>
+<li id="n-h4"><strong>h4.</strong> The update plan (stages, a manual advance, pause and resume), the canary, the bake, holds and force are built in the coordinator, and <code>max_updating</code> and <code>min_up</code> pace the hosts of a stage per role. <code>Hosts.Abort</code> reaches every daemon that announces <code>abort-v1</code>; on a host the coordinator cannot reach, root stops the daemon.</li>
 <li id="n-h5"><strong>h5.</strong> A host id is chosen by the operator and bound to the host&rsquo;s key at approval. It is not derived from a MAC address. MAC addresses, serials and the machine id travel as claims that help match an inventory record and authorise nothing. A Linux daemon reads its BMC&rsquo;s MAC over <code>/dev/ipmi0</code> and sends it as a claim; a host with no BMC sends none. The CA, approval, renewal and the pinned CA hash are built, and the daemon&rsquo;s certificate request carries the subject <code>CN=host:pending</code> the CA accepts.</li>
 <li id="n-h6"><strong>h6.</strong> One root daemon, in Rust, with its verbs compiled in and no interpreter on the host. Hooks are executables that services ship. The coordinator is a second program.</li>
 <li id="n-h7"><strong>h7.</strong> gRPC and an HTTP/JSON gateway serve every operator method. <code>hkctl</code> is generated from the protos, the web UI is built and the audit log is append-only. A <code>SetDesired</code> by CI writes no audit entry of its own; one by an operator writes a <code>set_desired</code> entry.</li>
@@ -552,7 +552,7 @@ is packaged, so the operator supervises it.</li>
 environment reads are platform-set: systemd&rsquo;s <code>NOTIFY_SOCKET</code> and <code>WATCHDOG_USEC</code>, for
 <code>--notify-systemd</code>.</p>
 <h3 id="architecture">Architecture</h3>
-<figure class="wide" id="fig-arch"><div class="fig-wrap scroll"><svg viewBox="0 0 1000 470" role="img" aria-label="The parts of hostkeeper. On the left, CI&rsquo;s release job, hkctl and the web UI call the coordinator&rsquo;s private listener: CI with its OIDC token, the others with an operator token. In the middle, the coordinator has a private listener, a heartbeat listener, a CA, and its store, a Postgres database that holds the enrollment store too. On the right, each host runs the hostkeeper daemon as root, with an admin socket, one transient unit or launchd job per hook step, and its packages. The daemon dials the heartbeat listener for enrollment, polling and renewal, and for its heartbeat. The daemon fetches and verifies packages from a release channel over HTTPS, only inside an order."><defs><marker id="aa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk" d="M0 0L10 5L0 10z"/></marker><marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk-bad" d="M0 0L10 5L0 10z"/></marker></defs>
+<figure class="wide" id="fig-arch"><div class="fig-wrap scroll"><svg viewBox="0 0 1000 470" role="img" aria-label="The parts of hostkeeper. On the left, CI&rsquo;s release job, hkctl and the web UI call the coordinator&rsquo;s private listener: CI with its OIDC token, the others with an operator token. In the middle, the coordinator has a private listener, a heartbeat listener, a CA, and its store, a Postgres database that holds the enrollment store too. On the right, each host runs the hostkeeper daemon as root, serving nothing on the host, with one transient unit or launchd job per hook step, and its packages. The daemon dials the heartbeat listener for enrollment, polling and renewal, and for its heartbeat. The daemon fetches and verifies packages from a release channel over HTTPS, only inside an order."><defs><marker id="aa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk" d="M0 0L10 5L0 10z"/></marker><marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk-bad" d="M0 0L10 5L0 10z"/></marker></defs>
 <text x="10" y="30" class="t-s t-m">operators and CI</text>
 <rect class="box" x="10" y="40" width="240" height="72" rx="4"/>
 <text x="22" y="62" class="t-b">CI release job</text>
@@ -597,7 +597,7 @@ environment reads are platform-set: systemd&rsquo;s <code>NOTIFY_SOCKET</code> a
 <text x="878" y="30" text-anchor="middle" class="t-s t-m">each host, as root</text>
 <rect class="box-w" x="770" y="40" width="220" height="330" rx="4"/>
 <rect class="box" x="782" y="56" width="196" height="72" rx="4"/>
-<text x="794" y="76">admin socket, root only</text>
+<text x="794" y="76">serves nothing on the host</text>
 <text x="794" y="94" class="t-s">Admin.Status, Admin.Abort,</text>
 <text x="794" y="110" class="t-s">Admin.ClearRecord</text>
 <rect class="box-acc" x="782" y="146" width="196" height="56" rx="4"/>
@@ -658,10 +658,9 @@ Its one trust root is the root-owned config <code>/etc/hostkeeper/hostkeeper.tom
 coordinator&rsquo;s address, the SHA-256 of the fleet&rsquo;s CA certificate (<code>ca_sha256</code>), the release
 channel, the trusted signers and the daemon&rsquo;s bounds. A strict loader refuses unknown keys
 (<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-config/src/daemon.rs">crates/hostkeeper-config/src/daemon.rs</a>).
-The coordinator cannot change it. The daemon&rsquo;s local interface is a unix socket that serves
-<code>hostkeeper.local.v1.Admin</code> (<code>Status</code>, <code>Abort</code>, <code>ClearRecord</code>) to root only
-(<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-daemon/src/admin.rs">crates/hostkeeper-daemon/src/admin.rs</a>).
-<code>hkctl</code> has no command for it, so a root user needs a gRPC client of their own.</p>
+The coordinator cannot change it. The daemon serves nothing on the host: it binds no socket. A host&rsquo;s
+status, an abort and the clearing of a step record that does not read go through <code>hkctl</code> (<code>hosts get</code>,
+<code>hosts abort</code>, <code>hosts clear-record</code>); with the coordinator unreachable, root stops the daemon and renames the record by hand (<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/admin.md">docs/admin.md</a>).</p>
 <p><strong>The heartbeat link.</strong> The heartbeat client is in
 <a href="https://github.com/komira-ai/hostkeeper/tree/main/crates/hostkeeper-link">crates/hostkeeper-link</a>, with gRPC over mutual TLS
 (<code>GrpcMtlsLink</code>), a JSON form and one that negotiates between them. Each call is bounded to
@@ -1009,7 +1008,7 @@ hosts that have already announced the service in a heartbeat. It is refused for 
 service itself and for a version no set ever registered a digest for. <code>Hosts.Abort</code> is accepted and
 audited. The coordinator sends it only to a daemon that announced <code>abort-v1</code>. The daemon&rsquo;s heartbeat
 loop announces it and runs the abort beside the order it stops, whose verdict then reports the
-halt; on a host the coordinator cannot reach, an abort is done through the admin socket.</p>
+halt; on a host the coordinator cannot reach, root stops the daemon.</p>
 <p><strong>The audit trail.</strong> Every change to the ops store is one entry: who (operator token name, <code>ci</code> or
 <code>coordinator</code>), the action, the service, the host and the reason. In the database the entries are
 rows of the table <code>audit</code>, which refuses every update, delete and truncate; a change commits its
@@ -1344,7 +1343,7 @@ excludes it with <code>abandon</code>.</li>
 <li><strong>A hook hangs, fails or lies.</strong> A hang is stopped at its bound and is a failure. A failure before
 commit is rolled back. The halt exit code, or a rollback that fails (see
 <a href="#hooks">Update hooks</a>), halts the service on that host until cleared, and the
-coordinator halts the service fleet-wide. A step that cannot be stopped keeps the service locked until an operator aborts it through the host&rsquo;s admin socket (the coordinator&rsquo;s
+coordinator halts the service fleet-wide. A step that cannot be stopped keeps the service locked until an operator aborts it with <code>hkctl hosts abort</code> (the coordinator&rsquo;s
 <code>Hosts.Abort</code> does not reach the shipped daemon), and an abort tries the stop
 <span data-cell="c-abort" data-source="crates/hostkeeper-daemon/src/verbs/abort.rs" data-item="ABORT_STOP_ATTEMPTS">3</span>
 times. A hook that passes <code>verify</code> while its service is down is not caught by the daemon. The

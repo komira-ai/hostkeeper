@@ -7,11 +7,11 @@ Status: design, for the maintainers' ruling. Build item A1 is **Built**: `releas
 `GetRelease` (`crates/hostkeeper-coordinator/src/releases.rs`, `service_ci.rs`, `store/postgres/releases.rs`).
 Build item A3 is **Built**: the installers read from heartbeats over gRPC and shown, the pick of section 3.3, the
 picked entry in orders over gRPC, `target-v1` echoed, and `no_target`, `no_build_for_host` and `installer_dropped`
-(`crates/hostkeeper-coordinator/src/picks.rs`). Build item A15 is **Built** (section 5.4). Build item A5 is **Built** in
-part: the CI client's `targets` input (`.github/workflows/set-desired.yml`) and `cargo xtask release targets`
-(`crates/xtask/src/release/targets.rs`); its callers move to targets in a pull request of their own, once a
-release carries that input, the farm's coordinator runs A2, and the callers' pin has moved to the hkctl
-client. Build item A4 is **Built**: the host's `stores.toml` and the fetch and proof through the entry
+(`crates/hostkeeper-coordinator/src/picks.rs`). Build item A15 is **Built** (section 5.4). Build item A5 is **Built**:
+the CI client's `targets` input (`.github/workflows/set-desired.yml`), `cargo xtask release targets`
+(`crates/xtask/src/release/targets.rs`), and its two callers, hostkeeper's deploy in `release.yml` and the hello
+proof run `hello-desired.yml`, which set each release with its targets, its release index and the index's digest,
+pinned to the CI client of release v0.1.173. Build item A4 is **Built**: the host's `stores.toml` and the fetch and proof through the entry
 (`crates/hostkeeper-package/src/stores.rs` and `entry.rs`), the order checks, the installers list and the refusals
 `order_invalid`, `installer_not_listed`, `manifest_invalid`, `no_store` and `store_digest_mismatch` (`crates/hostkeeper-daemon`),
 `target-v1` and the 32 KiB gRPC reply (`crates/hostkeeper-link`), and the `agent.proto` header. Nothing else here is built. This is a revision of the design merged as
