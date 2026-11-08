@@ -75,7 +75,7 @@ jobs:
       - run: cargo fmt --all --check
       - name: Download cargo-deny (HTTPS only, redirects included)
         if: ${{ !cancelled() }}
-        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --location --output "$RUNNER_TEMP/cargo-deny.tar.gz" "https://github.com/EmbarkStudios/cargo-deny/releases/download/$DENY_VERSION/cargo-deny-$DENY_VERSION-x86_64-unknown-linux-musl.tar.gz"
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 5 --retry-delay 5 --retry-max-time 300 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/cargo-deny.tar.gz" "https://github.com/EmbarkStudios/cargo-deny/releases/download/$DENY_VERSION/cargo-deny-$DENY_VERSION-x86_64-unknown-linux-musl.tar.gz"
       - name: Install cargo-deny (pinned checksum)
         if: ${{ !cancelled() }}
         run: cargo xtask install-tool --download "$RUNNER_TEMP/cargo-deny.tar.gz" --sha256 "$DENY_SHA256" --out "$HOME/.cargo/bin/cargo-deny" --extract tar.gz --member "cargo-deny-$DENY_VERSION-x86_64-unknown-linux-musl/cargo-deny"
@@ -93,7 +93,7 @@ jobs:
         if: ${{ !cancelled() }}
       - name: Download actionlint (HTTPS only, redirects included)
         if: ${{ !cancelled() }}
-        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --location --output "$RUNNER_TEMP/actionlint.tar.gz" "https://github.com/rhysd/actionlint/releases/download/v$ACTIONLINT_VERSION/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 5 --retry-delay 5 --retry-max-time 300 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/actionlint.tar.gz" "https://github.com/rhysd/actionlint/releases/download/v$ACTIONLINT_VERSION/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
       - name: Install actionlint (pinned checksum)
         if: ${{ !cancelled() }}
         run: cargo xtask install-tool --download "$RUNNER_TEMP/actionlint.tar.gz" --sha256 "$ACTIONLINT_SHA256" --out "$HOME/.cargo/bin/actionlint" --extract tar.gz --member actionlint
@@ -164,12 +164,12 @@ jobs:
           persist-credentials: false
       - run: rustup toolchain install "$COVERAGE_TOOLCHAIN" --profile minimal --component llvm-tools-preview
       - name: Download cargo-llvm-cov (HTTPS only, redirects included)
-        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --location --output "$RUNNER_TEMP/cargo-llvm-cov.tar.gz" "https://github.com/taiki-e/cargo-llvm-cov/releases/download/v$LLVM_COV_VERSION/cargo-llvm-cov-x86_64-unknown-linux-gnu.tar.gz"
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 5 --retry-delay 5 --retry-max-time 300 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/cargo-llvm-cov.tar.gz" "https://github.com/taiki-e/cargo-llvm-cov/releases/download/v$LLVM_COV_VERSION/cargo-llvm-cov-x86_64-unknown-linux-gnu.tar.gz"
       - name: Install cargo-llvm-cov (pinned checksum)
         run: cargo "+$COVERAGE_TOOLCHAIN" xtask install-tool --download "$RUNNER_TEMP/cargo-llvm-cov.tar.gz" --sha256 "$LLVM_COV_SHA256" --out "$HOME/.cargo/bin/cargo-llvm-cov" --extract tar.gz --member cargo-llvm-cov
       - run: cargo "+$COVERAGE_TOOLCHAIN" llvm-cov --version
       - name: Download cargo-nextest (HTTPS only, redirects included)
-        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --location --output "$RUNNER_TEMP/cargo-nextest.tar.gz" "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-$NEXTEST_VERSION/cargo-nextest-$NEXTEST_VERSION-x86_64-unknown-linux-gnu.tar.gz"
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 5 --retry-delay 5 --retry-max-time 300 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/cargo-nextest.tar.gz" "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-$NEXTEST_VERSION/cargo-nextest-$NEXTEST_VERSION-x86_64-unknown-linux-gnu.tar.gz"
       - name: Install cargo-nextest (pinned checksum)
         run: cargo "+$COVERAGE_TOOLCHAIN" xtask install-tool --download "$RUNNER_TEMP/cargo-nextest.tar.gz" --sha256 "$NEXTEST_SHA256" --out "$HOME/.cargo/bin/cargo-nextest" --extract tar.gz --member cargo-nextest
       # This job's own cache key: no other job's cache is restored here (the lint job's holds a

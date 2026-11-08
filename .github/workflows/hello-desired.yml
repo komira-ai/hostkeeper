@@ -77,9 +77,11 @@ jobs:
         run: cargo xtask --help
       # The variant's index, and for each platform its archive and the archive's bundle, from
       # the release's assets. One curl, its URL globs expanded by curl itself (the text is
-      # quoted); any transfer that fails ends it at once (`--fail-early`), so nothing is set.
+      # quoted). A transient failure of a transfer is retried, as every download of a workflow is
+      # (`downloads.rs` of the workflow lint); one that still fails ends it at once
+      # (`--fail-early`), so nothing is set.
       - name: Download the variant's index, archives and bundles
-        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --fail-early --silent --show-error --location --create-dirs --output-dir "$RUNNER_TEMP/release" --remote-name-all "https://github.com/$GITHUB_REPOSITORY/releases/download/v$RELEASE/$INDEX" "https://github.com/$GITHUB_REPOSITORY/releases/download/v$RELEASE/hello-$VERSION-{linux-arm64,linux-x86_64,macos-arm64}.tar.zst{,.sigstore.json}"
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --fail-early --retry 5 --retry-delay 5 --retry-max-time 300 --retry-all-errors --silent --show-error --location --create-dirs --output-dir "$RUNNER_TEMP/release" --remote-name-all "https://github.com/$GITHUB_REPOSITORY/releases/download/v$RELEASE/$INDEX" "https://github.com/$GITHUB_REPOSITORY/releases/download/v$RELEASE/hello-$VERSION-{linux-arm64,linux-x86_64,macos-arm64}.tar.zst{,.sigstore.json}"
       # Refused, every problem named, unless the index is hello's at the version, lists every
       # platform, and each archive, bundle and manifest checks out against it.
       - name: The targets of the variant's package
