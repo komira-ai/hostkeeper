@@ -17,7 +17,7 @@
 //! - [`scenario`]: the states the tests start from, each built the same way by every test.
 //!
 //! `tests/tierstore_rig.rs` runs the parts that need no root (the archive shape, the channel's
-//! log) in the pull-request set.
+//! log, the held ports) in the pull-request set.
 
 #![allow(dead_code, reason = "each test file uses part of the end-to-end rig")]
 
@@ -92,12 +92,55 @@ pub fn wait_for(what: &str, tries: u32, mut done: impl FnMut() -> bool) {
     panic!("{what}: not reached after {tries} tries");
 }
 
-/// An unused loopback port: one the system gave to a listener on port 0, released at once.
+/// An unused loopback port: one the system gave to a listener on port 0, released at once. For a
+/// port nothing binds while the test runs (a package built only to be read); a port a unit of the
+/// test listens on later is a [`HeldPort`], since a released port is the system's to give again.
 pub fn free_port() -> u16 {
     TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
         .and_then(|listener| listener.local_addr())
         .map(|address| address.port())
         .expect("a loopback port")
+}
+
+/// A loopback port held for as long as this value lives: a TCP socket bound to `127.0.0.1:<port>`
+/// with `SO_REUSEADDR` that never listens, so it answers nothing.
+///
+/// Linux gives a held port to no one else: not to a `bind` to port 0 (the coordinator's
+/// listeners and the release channel's take theirs that way), not to a `connect`, and not to an
+/// explicit `bind` without `SO_REUSEADDR`. An explicit `bind` with `SO_REUSEADDR` and a `listen`
+/// on it succeed, again and again: the fixture's `serve` (`std::net::TcpListener::bind`, which
+/// sets it) takes the port each time a unit of it starts, and gives it back each time it stops.
+/// A port of [`free_port`] is free only until the next `bind` to port 0 takes it.
+pub struct HeldPort {
+    socket: socket2::Socket,
+    port: u16,
+}
+
+impl HeldPort {
+    /// A port the system picks, held.
+    pub fn new() -> HeldPort {
+        use socket2::{Domain, Protocol, SockAddr, Socket, Type};
+        let socket =
+            Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP)).expect("a TCP socket");
+        socket
+            .set_reuse_address(true)
+            .expect("SO_REUSEADDR on the held socket");
+        socket
+            .bind(&SockAddr::from(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))))
+            .expect("a loopback port");
+        let port = socket
+            .local_addr()
+            .ok()
+            .and_then(|address| address.as_socket())
+            .map(|address| address.port())
+            .expect("the held port");
+        HeldPort { socket, port }
+    }
+
+    /// The port held.
+    pub fn port(&self) -> u16 {
+        self.port
+    }
 }
 
 /// `GET <path>` over plain HTTP/1.1 to `127.0.0.1:<port>`: the status and the body, or `None`

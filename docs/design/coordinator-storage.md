@@ -527,6 +527,9 @@ that lowers it needs storage first. They are kept, with storage now the database
   coordinator's own.
 - **Every write on that session.** A transaction can commit only on the session that holds the lock. That is the fence:
   a coordinator that lost its session cannot commit anything, because the lock went with the session.
+- **Letting go.** A coordinator that ends (its store stopped or dropped) runs `pg_advisory_unlock_all` on the writing
+  session before it closes it, so the lock is free when the store is gone and a successor takes it at once. Closing the
+  session alone returns before the server has ended it and freed the lock.
 - **Losing the session.** When a commit or a check finds the session gone (the server restarted, the network dropped,
   the server ended it), the coordinator:
   1. orders nothing from then on, as in its quiet start, and its status says it is quiet; it refuses every storage-first

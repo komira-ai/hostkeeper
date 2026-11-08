@@ -8,10 +8,9 @@
 //! transfer with exit 22 or, on some builds and protocols, exit 56 (a receive error). Plain
 //! `--retry` retries exit 22 on a 504 and not exit 56: curl reads the HTTP status only after a
 //! result of 0 or 22. So `--retry-all-errors` is required too, bounded by `--retry` and
-//! `--retry-max-time`. A retry writes the `--output` file again from the start, and a check of a
-//! digest or an attestation is a command after the curl, which runs whatever curl retried. The one
-//! curl that writes to a pipe (`hello-desired.yml`) reads a `.sha256` file and fails closed on
-//! anything but one 64-hex digest, so bytes of a failed attempt before a retry fail the step.
+//! `--retry-max-time`. A retry writes the `--output` file (or, with `--remote-name-all`, each
+//! file it names) again from the start, and a check of a digest or an attestation is a command
+//! after the curl, which runs whatever curl retried.
 //!
 //! A `curl` is a word `curl` in a `run:`, on its own or after `(` or a backquote (`$(curl`), on a
 //! line that is not a comment (lines ending in `\` are joined first). Its options are the words
