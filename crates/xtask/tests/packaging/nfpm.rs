@@ -1,5 +1,5 @@
 //! `nfpm.yaml` read as nfpm (v2.48.0) reads it: the files and the links a package carries, its
-//! scripts and the names of its files, for one packager (`deb` or `rpm`).
+//! scripts and the names of its files, for one packager (`deb`, `rpm` or `archlinux`).
 
 use std::collections::BTreeMap;
 
@@ -7,8 +7,9 @@ use crate::yaml::{self, Node, Value};
 
 /// The keys nfpm.yaml may hold, at the top and in each table below it. A signing section
 /// (`deb.signature`, `rpm.signature`), a repository, an override for one packager, a
-/// dependency or a version suffix (`release`, `prerelease`, `epoch`) is none of them.
-pub const TOP_KEYS: [&str; 13] = [
+/// dependency or a version suffix (`release`, `prerelease`, `epoch`) is none of them. The one
+/// table of a packager is `archlinux`, which holds only [`ARCHLINUX_KEYS`].
+pub const TOP_KEYS: [&str; 14] = [
     "name",
     "arch",
     "platform",
@@ -22,7 +23,11 @@ pub const TOP_KEYS: [&str; 13] = [
     "license",
     "contents",
     "scripts",
+    "archlinux",
 ];
+/// The keys of the `archlinux` table: the name of the package's packager, which nfpm writes into
+/// `.PKGINFO`.
+pub const ARCHLINUX_KEYS: [&str; 1] = ["packager"];
 /// The top-level keys whose value nfpm decodes as a string.
 pub const TEXT_KEYS: [&str; 11] = [
     "name",
@@ -191,6 +196,13 @@ impl Config {
         if let Some(scripts) = top.get("scripts").copied() {
             out.extend(unknown(&map(scripts, "scripts")?, &SCRIPT_KEYS, "scripts."));
         }
+        if let Some(archlinux) = top.get("archlinux").copied() {
+            out.extend(unknown(
+                &map(archlinux, "archlinux")?,
+                &ARCHLINUX_KEYS,
+                "archlinux.",
+            ));
+        }
         if let Some(contents) = top.get("contents").copied() {
             for item in items(contents, "contents")? {
                 let entry = map(item, "a contents entry")?;
@@ -215,6 +227,15 @@ impl Config {
             .filter(|key| top.get(**key).is_some_and(|node| node.as_str().is_none()))
             .map(|key| format!("{key} is not text"))
             .collect();
+        if let Some(archlinux) = top.get("archlinux").copied()
+            && let Ok(table) = map(archlinux, "archlinux")
+        {
+            for key in ARCHLINUX_KEYS {
+                if table.get(key).is_some_and(|node| node.as_str().is_none()) {
+                    out.push(format!("archlinux.{key} is not text"));
+                }
+            }
+        }
         if let Some(platform) = top.get("platform").copied().and_then(Node::as_str)
             && platform != "linux"
         {
@@ -297,6 +318,17 @@ impl Config {
         Ok(out)
     }
 
+    /// The text of `key` of the `archlinux` table, if present.
+    pub fn archlinux_field(&self, key: &str) -> Result<Option<String>, String> {
+        let Some(table) = self.top().get("archlinux").copied() else {
+            return Ok(None);
+        };
+        match map(table, "archlinux")?.get(key).copied() {
+            Some(node) => text(node, key).map(Some),
+            None => Ok(None),
+        }
+    }
+
     /// The text of `key` with `${VERSION}` and `${ARCH}` expanded as nfpm expands them from
     /// its environment. Any other `$` is refused: nothing else comes from the environment.
     fn expanded(&self, key: &str, version: &str, arch: &str) -> Result<String, String> {
@@ -314,7 +346,7 @@ impl Config {
 
     /// The file name nfpm gives the package of `packager` built with `VERSION=version` and
     /// `ARCH=arch` (Go's architecture names, `amd64` and `arm64`): `ConventionalFileName` of
-    /// nfpm's `deb/deb.go` and `rpm/rpm.go`, with no release, prerelease or version metadata
+    /// nfpm's `deb/deb.go`, `rpm/rpm.go` and `arch/arch.go`, with no release, prerelease or version metadata
     /// (which [`TOP_KEYS`] does not allow, so the rpm's release is nfpm's default, 1).
     ///
     /// The inputs are the ones nfpm.yaml documents: `version` is `MAJOR.MINOR.PATCH` in digits
@@ -354,6 +386,16 @@ impl Config {
                     other => other,
                 };
                 Ok(format!("{package}-{package_version}-1.{rpm_arch}.rpm"))
+            }
+            "archlinux" => {
+                let arch_arch = match package_arch.as_str() {
+                    "amd64" => "x86_64",
+                    "arm64" => "aarch64",
+                    other => other,
+                };
+                Ok(format!(
+                    "{package}-{package_version}-1-{arch_arch}.pkg.tar.zst"
+                ))
             }
             other => Err(format!("no packager {other:?}")),
         }
