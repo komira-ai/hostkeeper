@@ -201,6 +201,22 @@ fn journal(units: &[&str]) -> String {
     String::from_utf8_lossy(&support::run(support::JOURNALCTL, &args).stdout).into_owned()
 }
 
+/// How many times systemd has skipped `unit` for an unmet condition, by its journal. Which job
+/// ran is told by this and by lego's calls, not by the unit's `ConditionResult`: systemd unloads
+/// a oneshot unit that has ended, and one loaded again has not evaluated its conditions yet.
+fn skipped(unit: &str) -> usize {
+    let _ = support::run(support::JOURNALCTL, &["--sync"]);
+    let text = support::run(
+        support::JOURNALCTL,
+        &["--no-pager", "--output=cat", "--unit", unit],
+    );
+    String::from_utf8_lossy(&text.stdout)
+        .lines()
+        .filter(|l| l.starts_with(&format!("{unit} - ")))
+        .filter(|l| l.contains("was skipped because of an unmet condition check"))
+        .count()
+}
+
 /// The lines lego was started with, so far.
 fn calls(tree: &Tree) -> Vec<String> {
     fs::read_to_string(tree.path("state/lego/calls"))
@@ -271,10 +287,19 @@ fn the_certificate_units_order_once_renew_after_and_restart_the_proxy() {
         );
     };
 
+    let skips = |want: [usize; 2]| {
+        let got = [skipped(&first), skipped(&renew)];
+        assert_eq!(
+            got,
+            want,
+            "skips of {first} and {renew}; the journal:\n{}",
+            journal(&units)
+        );
+    };
+
     support::run_ok(SYSTEMCTL, &["start", renew.as_str()]);
     assert_eq!(calls(&tree), Vec::<String>::new());
-    state(&first, "ConditionResult", "no");
-    state(&renew, "ConditionResult", "no");
+    skips([1, 1]);
     state(&proxy, "ActiveState", "inactive");
 
     let dns_env = tree.path("etc/dns.env");
@@ -294,16 +319,14 @@ fn the_certificate_units_order_once_renew_after_and_restart_the_proxy() {
     );
     let crt = tree.path(&format!("state/lego/certificates/{}.crt", c.dns_name()));
     assert!(crt.exists(), "the first job wrote the certificate");
-    state(&first, "ConditionResult", "yes");
-    state(&first, "Result", "success");
-    state(&renew, "Result", "success");
+    skips([1, 1]);
     state(&proxy, "ActiveState", "active");
     support::wait_until(|| proxy_starts(&tree) == 2);
 
     support::run_ok(SYSTEMCTL, &["start", renew.as_str()]);
     assert_eq!(calls(&tree).len(), 6, "{:?}", calls(&tree));
     assert_eq!(calls(&tree)[4], format!("renew {args} --days 30"));
-    state(&first, "ConditionResult", "no");
+    skips([2, 1]);
     state(&proxy, "ActiveState", "active");
     support::wait_until(|| proxy_starts(&tree) == 3);
 
