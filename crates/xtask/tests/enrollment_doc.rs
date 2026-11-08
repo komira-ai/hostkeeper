@@ -526,8 +526,9 @@ fn fenced_call(rest: &str) -> String {
 }
 
 /// Catches the doc check passing a fenced `hostkeeper ctl` line, a line hkctl refuses, an inline
-/// span with a misspelled method or a flag of `hostkeeper ctl` only; and catches it refusing a
-/// placeholder, a span cut by a line break, or a fenced line that only mentions hkctl.
+/// span with a misspelled method or a flag of `hostkeeper ctl` only, a fenced `hostkeeper ctl`
+/// line in the CI client's page, the last that held one; and catches it refusing a placeholder,
+/// a span cut by a line break, or a fenced line that only mentions hkctl.
 #[test]
 fn the_doc_check_refuses_each_defect() {
     let good = fenced_call("hosts get --node-id <id>")
@@ -571,6 +572,14 @@ fn the_doc_check_refuses_each_defect() {
     for (doc, problem) in cases {
         assert_eq!(doc_problems("docs/x.md", &doc), [problem], "{doc}");
     }
+    let ci = "docs/deploy/ci-client.md";
+    assert_eq!(
+        doc_problems(ci, &fenced("hostkeeper ctl releases converge --service s")),
+        [format!(
+            "{ci}: a fenced `hostkeeper ctl` line; the operator docs name hkctl: \
+             hostkeeper ctl releases converge --service s"
+        )]
+    );
 }
 
 /// Catches the walk of the operator docs reading a design document, a file that is not
