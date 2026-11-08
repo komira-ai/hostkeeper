@@ -40,16 +40,13 @@ use hostkeeper_config::daemon::DaemonConfig;
 use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_daemon::adapters::Adapters;
+use hostkeeper_daemon::boot::BOOT_ID_FILE;
 use hostkeeper_daemon::cli::{HostFiles, host_ports};
 use hostkeeper_daemon::start::Settings;
 use hostkeeper_daemon::verb::PackageDigest;
 use hostkeeper_launchd::launchctl::{JobStatus, bootout_args, bootstrap_args, print, print_args};
 use hostkeeper_launchd::{Label, Launchctl, LaunchctlProcess, Platform};
-use hostkeeper_proto::hostkeeper::local::v1::admin_client::AdminClient;
-use hostkeeper_proto::hostkeeper::local::v1::{StatusRequest, StatusResponse};
 use hostkeeper_steps::record::RECORD_FILE;
-use hyper_util::rt::TokioIo;
-use tonic::transport::{Endpoint, Uri};
 
 use super::hello::{SERVICE, SLOTS, label};
 
@@ -71,8 +68,9 @@ pub const PLACED_DIR: &str = "/var/lib/hostkeeper";
 pub const LAUNCHD_DIR: &str = "/Library/LaunchDaemons";
 /// The deadline of one `launchctl` command: `bootout` waits for the job to end.
 const LAUNCHCTL_DEADLINE: Duration = Duration::from_secs(60);
-/// How many reads of the admin socket [`MacHost::start_daemon`] makes before it gives up.
-const STATUS_TRIES: u32 = 240;
+/// How many looks [`MacHost::start_daemon`] takes at the job and the state directory before it
+/// gives up.
+const START_TRIES: u32 = 240;
 
 /// `launchctl`, as the daemon runs it.
 pub fn launchctl() -> LaunchctlProcess {
@@ -326,7 +324,9 @@ impl MacHost {
         dir
     }
 
-    /// The daemon's `--admin-socket` (short: a socket path is limited to about 100 bytes).
+    /// The `--admin-socket` the test passes (short: a socket path is limited to about 100 bytes).
+    /// The daemon of this checkout ignores it and binds nothing there; the older release that the
+    /// cross-release rig runs still binds it.
     pub fn admin_socket(&self) -> PathBuf {
         self.base.join("run").join("admin.sock")
     }
@@ -399,11 +399,13 @@ impl MacHost {
     }
 
     /// Starts the daemon as the launchd job `dev.hostkeeper.ci-<tag>-<pid>` of the system
-    /// domain, heartbeating every second, and waits until it answers `Status` on its admin
-    /// socket.
+    /// domain, heartbeating every second, and waits until launchd runs it and it has recorded the
+    /// boot id in its state directory (it has taken the state directory's lock before that). The
+    /// coordinator learns of the daemon once its enrollment is approved, which the caller does
+    /// next.
     ///
     /// # Panics
-    /// The job cannot be loaded, or the daemon never answers.
+    /// The job cannot be loaded, or never runs with its state directory taken.
     pub fn start_daemon(&self) {
         let label = Label::parse(&format!(
             "dev.hostkeeper.ci-{}-{}",
@@ -445,9 +447,26 @@ impl MacHost {
             "bootstrap {label}: {}",
             loaded.stderr_text()
         );
-        super::wait_for("the daemon answers Status", STATUS_TRIES, || {
-            self.status().is_ok()
-        });
+        self.wait_started(&label);
+    }
+
+    /// Waits until launchd runs the job `label` (`state = running`) and the daemon has recorded
+    /// the boot id in [`MacHost::state`] (it took the state directory's lock before that), the
+    /// signals that a daemon of this checkout and of the older release give alike.
+    ///
+    /// # Panics
+    /// The job never runs with the boot id recorded.
+    pub fn wait_started(&self, label: &Label) {
+        let boot_id = self.state().join(BOOT_ID_FILE);
+        super::wait_for(
+            "launchd runs the daemon and it has recorded the boot id",
+            START_TRIES,
+            || {
+                boot_id.exists()
+                    && job_fields(label)
+                        .is_some_and(|job| job.get("state").map(String::as_str) == Some("running"))
+            },
+        );
     }
 
     /// Takes each `(version, digest)` of `service` through the daemon's own package store on
@@ -467,7 +486,7 @@ impl MacHost {
             config: self.config_path(),
             state_dir: self.base.join("check-state"),
             packages_dir: self.base.join("check-packages"),
-            admin_socket: self.base.join("run").join("check.sock"),
+            run_dir: self.base.join("check-run"),
             trusted_uid: 0,
             trusted_root_max_age_days: NonZeroU64::new(3650).expect("not zero"),
         };
@@ -562,34 +581,6 @@ impl MacHost {
             config.bounds.attestation_timeout_secs
         ));
         out
-    }
-
-    /// The daemon's answer to `Status` on its admin socket.
-    pub fn status(&self) -> Result<StatusResponse, String> {
-        let path = self.admin_socket();
-        if !path.exists() {
-            return Err(format!("no socket at {}", path.display()));
-        }
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| format!("a runtime: {e}"))?;
-        let connector = tower::service_fn(move |_: Uri| {
-            let path = path.clone();
-            async move {
-                tokio::net::UnixStream::connect(path)
-                    .await
-                    .map(TokioIo::new)
-            }
-        });
-        runtime
-            .block_on(async move {
-                let channel = Endpoint::from_static("http://admin.invalid")
-                    .connect_with_connector_lazy(connector);
-                AdminClient::new(channel).status(StatusRequest {}).await
-            })
-            .map(|reply| reply.into_inner())
-            .map_err(|e| e.to_string())
     }
 
     /// What a failing test leaves to look at, printed: the daemon's output, the slots' output,

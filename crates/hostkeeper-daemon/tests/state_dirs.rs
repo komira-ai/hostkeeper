@@ -20,7 +20,7 @@ fn settings(root: &Path) -> Settings {
         config: root.join("hostkeeper.toml"),
         state_dir: root.join("var/lib/updater/state"),
         packages_dir: root.join("var/lib/hostkeeper/packages"),
-        admin_socket: root.join("run/hostkeeper/admin.sock"),
+        run_dir: root.join("run"),
         trusted_uid: 0,
         trusted_root_max_age_days: hostkeeper_daemon::cli::DEFAULT_TRUSTED_ROOT_MAX_AGE_DAYS,
     }
@@ -123,4 +123,34 @@ fn a_file_where_a_parent_directory_belongs_stops_the_start() {
         matches!(&error, StartError::Io { path, .. } if *path == settings.packages_dir),
         "{error}"
     );
+}
+
+/// Catches a start that leaves the daemon's run directory (`/var/run/hostkeeper` on a Mac, where
+/// the step jobs live) to the umask once no admin socket makes it: an empty root gets it mode
+/// 0700, one that is there with mode 0755 is set 0700 and keeps its contents, and a file there
+/// stops the start naming the path.
+#[test]
+fn the_run_directory_is_made_or_set_0700_and_a_file_there_stops_the_start() {
+    use hostkeeper_daemon::layout::RUN_SUBDIR;
+    let scratch = Scratch::new("state-dirs-run");
+    let settings = settings(scratch.path());
+    let run = settings.run_dir.join(RUN_SUBDIR);
+    ensure_state_dirs(&settings).expect("make them");
+    assert_eq!(mode(&run), 0o700);
+
+    fs::set_permissions(&run, fs::Permissions::from_mode(0o755)).expect("open it");
+    fs::create_dir(run.join("steps")).expect("a job directory");
+    ensure_state_dirs(&settings).expect("again");
+    assert_eq!(mode(&run), 0o700);
+    assert!(run.join("steps").is_dir());
+
+    fs::remove_dir(run.join("steps")).expect("remove");
+    fs::remove_dir(&run).expect("remove");
+    fs::write(&run, b"x").expect("a file");
+    let error = ensure_state_dirs(&settings).expect_err("a file");
+    assert!(
+        matches!(&error, StartError::Io { path, .. } if *path == run),
+        "{error}"
+    );
+    assert!(error.to_string().contains("is not a directory"), "{error}");
 }

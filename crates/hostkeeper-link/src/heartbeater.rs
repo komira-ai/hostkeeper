@@ -82,8 +82,7 @@
 //! it ended (in the halt phase); the abort's own answer is logged, never sent as a verdict. Each
 //! abort that arrives is run, a resend too: the executor answers a resend of the same order and
 //! try from its first answer and stops nothing more. An
-//! abort of a service the loop runs no order of and does not list is not run: the abort that
-//! stops a step the daemon left running before a restart is the admin socket's.
+//! abort of a service the loop runs no order of and does not list is not run.
 //!
 //! **Clear record.** A `clear_record` is one of the orders above, one at a time, and its
 //! verdict is sent like theirs, naming the version the service runs (a service the loop does
