@@ -16,7 +16,9 @@
 # `.sha256` file beside the package); it holds no token right but
 # `contents: read` and runs nothing of the release. `set-desired` calls the CI client, pinned
 # like any caller's: the `uses:` commit with its release as the comment, and `hostkeeper_version`
-# and `hostkeeper_commit` of that same release. The coordinator, its CA and the audience are
+# and `hostkeeper_commit` of that same release. The pin is the CI client's revision the workflow
+# lint names (`callers.rs`, `CLIENT_COMMIT`), the one release.yml pins too: the client on hkctl,
+# one set and one held wait. The coordinator, its CA and the audience are
 # repository variables; the coordinator's allow-list entry for this workflow names `hello`
 # (docs/deploy/ci-client.md, "The allow-list entry").
 #
@@ -91,13 +93,13 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    uses: komira-ai/hostkeeper/.github/workflows/set-desired.yml@f04696da7e2bdcbaf9112450ab651a1ab24e61bf # v0.1.35
+    uses: komira-ai/hostkeeper/.github/workflows/set-desired.yml@3018137f2c8806dd22bf2071a23565d4a2d64e8d # v0.1.166
     with:
       service: hello
       version: ${{ needs.digest.outputs.version }}
       package_digest: ${{ needs.digest.outputs.package_digest }}
-      hostkeeper_version: 0.1.35
-      hostkeeper_commit: f04696da7e2bdcbaf9112450ab651a1ab24e61bf
+      hostkeeper_version: 0.1.166
+      hostkeeper_commit: 3018137f2c8806dd22bf2071a23565d4a2d64e8d
       coordinator_url: ${{ vars.HOSTKEEPER_COORDINATOR_URL }}
       coordinator_ca: ${{ vars.HOSTKEEPER_COORDINATOR_CA }}
       audience: ${{ vars.HOSTKEEPER_CI_AUDIENCE }}

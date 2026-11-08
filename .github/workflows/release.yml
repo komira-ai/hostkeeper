@@ -310,7 +310,9 @@ jobs:
         run: gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --limit 100 --json tagName --jq '[.[].tagName | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")) | ltrimstr("v") | split(".") | map(tonumber)] | max | "newest=\(map(tostring) | join(".") == env.VERSION)"' >> "$GITHUB_OUTPUT"
 
   # set-desired  the CI client (set-desired.yml, docs/deploy/ci-client.md), pinned like any
-  #          caller's: one call with an OIDC token, which names the release by its index and the
+  #          caller's, at the CI client's revision the workflow lint names (`callers.rs`,
+  #          `CLIENT_COMMIT`), the one hello-desired.yml pins too. It runs that release's hkctl:
+  #          one call with an OIDC token, which names the release by its index and the
   #          index's digest, so each host is ordered its own platform's package. It does not wait
   #          for the fleet: the coordinator's rollout gate orders the hosts, the canary hosts of
   #          the service `hostkeeper` first, then the rest once they have baked, stage by stage by the
@@ -322,14 +324,14 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    uses: komira-ai/hostkeeper/.github/workflows/set-desired.yml@2321ed897b4b9269471eadf169d7f29989161b4a # v0.1.66
+    uses: komira-ai/hostkeeper/.github/workflows/set-desired.yml@3018137f2c8806dd22bf2071a23565d4a2d64e8d # v0.1.166
     with:
       service: hostkeeper
       version: ${{ needs.channel.outputs.version }}
       release_index: ${{ needs.channel.outputs.release_index }}
       release_index_digest: ${{ needs.channel.outputs.release_index_digest }}
-      hostkeeper_version: 0.1.66
-      hostkeeper_commit: 2321ed897b4b9269471eadf169d7f29989161b4a
+      hostkeeper_version: 0.1.166
+      hostkeeper_commit: 3018137f2c8806dd22bf2071a23565d4a2d64e8d
       coordinator_url: ${{ vars.HOSTKEEPER_COORDINATOR_URL }}
       coordinator_ca: ${{ vars.HOSTKEEPER_COORDINATOR_CA }}
       audience: ${{ vars.HOSTKEEPER_CI_AUDIENCE }}

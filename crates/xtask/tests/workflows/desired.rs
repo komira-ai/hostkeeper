@@ -16,12 +16,14 @@
 //!   `outputs` are not exactly [`CHANNEL_OUTPUTS`];
 //! - [`JOB`] does not need exactly `plan` and [`CHANNEL_JOB`] (it calls the coordinator only once
 //!   the channel serves the release), or its `with` does not set `service: hostkeeper`, the
-//!   version, the release index and its digest from [`CHANNEL_JOB`] ([`WITH_FROM_CHANNEL`]),
-//!   `wait: false`, and the `hostkeeper_commit` its `uses:` is pinned to; or passes a
-//!   `package_digest` (one package for every host, whatever its platform).
+//!   version, the release index and its digest from [`CHANNEL_JOB`] ([`WITH_FROM_CHANNEL`]), and
+//!   `wait: false`; or passes a `package_digest` (one package for every host, whatever its
+//!   platform).
 //!
-//! That [`JOB`] calls the CI client of this repository with exactly `contents: read` and
-//! `id-token: write` and no secrets is the rule of every caller ([`super::callers`]).
+//! That [`JOB`] calls the CI client of this repository at the CI client's revision
+//! ([`super::callers::CLIENT_COMMIT`], with its release's `hostkeeper_version` and
+//! `hostkeeper_commit`), with exactly `contents: read` and `id-token: write` and no secrets, is
+//! the rule of every caller ([`super::callers`]).
 
 use super::lint::{entries, entry};
 use super::yaml::{Node, Value};
@@ -234,15 +236,6 @@ fn caller_problems(caller: Option<&Node>) -> Vec<String> {
     }
     if text(with, "wait") != Some("false") {
         problems.push(format!("{FILE}: job {JOB} must pass `wait: false`"));
-    }
-    let pin = caller
-        .and_then(|j| text(Some(j), "uses"))
-        .and_then(|u| u.split_once('@'))
-        .map(|(_, at)| at);
-    if pin.is_none() || text(with, "hostkeeper_commit") != pin {
-        problems.push(format!(
-            "{FILE}: job {JOB} must pass the hostkeeper_commit its `uses:` is pinned to"
-        ));
     }
     problems
 }
