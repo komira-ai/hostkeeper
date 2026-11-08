@@ -2,6 +2,7 @@
 //! file passes, and each rule is shown to refuse its defect by putting the defect into the
 //! repository's `release.yml` and reading the exact problems the lint reports.
 
+use super::callers::{CLIENT_COMMIT, CLIENT_RELEASE};
 use super::desired::{CHANNEL_STEPS, DESIRED_IF, GATE, SET_IF};
 use super::lint::lint;
 use super::release::publish_problems;
@@ -358,18 +359,89 @@ fn a_set_desired_job_that_waits_for_the_fleet_is_refused() {
     }
 }
 
+/// The pin of the CI client before it ran hkctl, as release.yml had it: release v0.1.66.
+const OLD_COMMIT: &str = "2321ed897b4b9269471eadf169d7f29989161b4a";
+
+/// The `uses:` line of the job set-desired at `commit`, with the version comment `release`.
+fn uses_at(commit: &str, release: &str) -> String {
+    format!(
+        "    uses: komira-ai/hostkeeper/.github/workflows/set-desired.yml@{commit} # v{release}\n"
+    )
+}
+
 #[test]
 fn a_set_desired_job_whose_commit_is_not_its_pin_is_refused() {
     // Catches: the client downloaded from another commit than the `set-desired.yml` it calls.
-    let text = deploy_jobs();
-    let line = text
-        .lines()
-        .find(|l| l.starts_with("      hostkeeper_commit: "))
-        .expect("the job passes hostkeeper_commit");
     assert_problems(
-        &format!("{line}\n"),
-        "      hostkeeper_commit: 0123456789abcdef0123456789abcdef01234567\n",
-        &["release.yml: job set-desired must pass the hostkeeper_commit its `uses:` is pinned to"],
+        &format!("      hostkeeper_commit: {CLIENT_COMMIT}\n"),
+        &format!("      hostkeeper_commit: {OLD_COMMIT}\n"),
+        &[&format!(
+            "job set-desired must pass `hostkeeper_commit: {CLIENT_COMMIT}`, the CI client's revision"
+        )],
+    );
+}
+
+#[test]
+fn the_deploy_runs_the_ci_clients_revision() {
+    // Catches: release.yml's deploy left on a revision of set-desired.yml other than the one the
+    // lint names, the CI client on hkctl.
+    let deploy = deploy_jobs();
+    assert_eq!(
+        deploy
+            .matches(&uses_at(CLIENT_COMMIT, CLIENT_RELEASE))
+            .count(),
+        1
+    );
+    assert_eq!(
+        deploy
+            .matches(&format!("      hostkeeper_version: {CLIENT_RELEASE}\n"))
+            .count(),
+        1
+    );
+    assert_eq!(
+        deploy
+            .matches(&format!("      hostkeeper_commit: {CLIENT_COMMIT}\n"))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn a_deploy_pinned_to_the_ci_client_before_hkctl_is_refused() {
+    // Catches: release.yml moved back to the revision of v0.1.66, which runs `hostkeeper ci`
+    // polling `Releases.Converge`, in one consistent edit of the line and both inputs.
+    let text = release_yml();
+    let deploy = deploy_jobs();
+    let old = with_in(
+        &with_in(
+            &with_in(
+                &deploy,
+                &uses_at(CLIENT_COMMIT, CLIENT_RELEASE),
+                &uses_at(OLD_COMMIT, "0.1.66"),
+            ),
+            &format!("      hostkeeper_version: {CLIENT_RELEASE}\n"),
+            "      hostkeeper_version: 0.1.66\n",
+        ),
+        &format!("      hostkeeper_commit: {CLIENT_COMMIT}\n"),
+        &format!("      hostkeeper_commit: {OLD_COMMIT}\n"),
+    );
+    let changed = text.replacen(&deploy, &old, 1);
+    assert_eq!(
+        lint("release.yml", &changed),
+        [
+            format!(
+                "job set-desired must pin set-desired.yml at the CI client's revision {CLIENT_COMMIT}, not `komira-ai/hostkeeper/.github/workflows/set-desired.yml@{OLD_COMMIT}`"
+            ),
+            format!(
+                "job set-desired must name the CI client's release `# v{CLIENT_RELEASE}` after its `uses:`, not `# v0.1.66`"
+            ),
+            format!(
+                "job set-desired must pass `hostkeeper_version: {CLIENT_RELEASE}`, the CI client's revision"
+            ),
+            format!(
+                "job set-desired must pass `hostkeeper_commit: {CLIENT_COMMIT}`, the CI client's revision"
+            ),
+        ]
     );
 }
 
