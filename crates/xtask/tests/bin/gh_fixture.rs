@@ -24,6 +24,12 @@
 //! release.yml (tests/workflows/channel_run_tests.rs): `curl ... --output <file> https://<rest>`
 //! copies `channel/<rest>` beside its own file to `<file>`, and when there is none fails as curl
 //! does for an HTTP 404 with `--fail` (exit 22). It never waits, whatever retry flags it is given.
+//! With `--remote-name-all` and `--output-dir <dir>` instead (hello-desired.yml's download, its
+//! test tests/workflows/hello_run_tests.rs), each `https://` argument is a URL that may hold
+//! curl's globs, `{a,b,...}` sets one after another and not nested; each URL a glob expands to
+//! is copied the same way to `<dir>/<its last path segment>`, in order. A missing one is a
+//! failed transfer: with `--fail-early` it ends the run at once with exit 22; without it the
+//! run goes on, and exits as its last transfer did, as curl does.
 //!
 //! Started as `cargo`, for the same test: `cargo xtask <args>` runs the program `xtask` beside its
 //! own file (the test links this crate's real binary there) with `<args>`, and exits as it
@@ -131,8 +137,51 @@ fn answer(data: &Path, args: &[String]) -> ExitCode {
     }
 }
 
+/// Every URL the curl glob `url` names, in curl's order: the first set varies slowest.
+fn expand(url: &str) -> Vec<String> {
+    let Some((head, rest)) = url.split_once('{') else {
+        return vec![url.to_owned()];
+    };
+    let Some((set, tail)) = rest.split_once('}') else {
+        return vec![url.to_owned()];
+    };
+    set.split(',')
+        .flat_map(|choice| expand(&format!("{head}{choice}{tail}")))
+        .collect()
+}
+
+/// The fake `curl --remote-name-all --output-dir <dir> <url>...`: see the module's documentation.
+fn curl_remote_names(dir: &Path, args: &[String]) -> ExitCode {
+    let Some(into) = value(args, "--output-dir") else {
+        return ExitCode::from(2);
+    };
+    if std::fs::create_dir_all(into).is_err() {
+        return fail("cannot make the output directory");
+    }
+    let early = args.iter().any(|a| a == "--fail-early");
+    let mut last = ExitCode::SUCCESS;
+    for url in args.iter().filter(|a| a.starts_with("https://")) {
+        for one in expand(url) {
+            let rest = one.trim_start_matches("https://");
+            let name = rest.rsplit('/').next().unwrap_or_default();
+            last = ExitCode::SUCCESS;
+            if std::fs::copy(dir.join("channel").join(rest), Path::new(into).join(name)).is_err() {
+                eprintln!("curl: (22) The requested URL returned error: 404");
+                if early {
+                    return ExitCode::from(22);
+                }
+                last = ExitCode::from(22);
+            }
+        }
+    }
+    last
+}
+
 /// The fake `curl` of the channel: see the module's documentation.
 fn curl(dir: &Path, args: &[String]) -> ExitCode {
+    if args.iter().any(|a| a == "--remote-name-all") {
+        return curl_remote_names(dir, args);
+    }
     let (Some(output), Some(url)) = (value(args, "--output"), args.last()) else {
         return ExitCode::from(2);
     };
