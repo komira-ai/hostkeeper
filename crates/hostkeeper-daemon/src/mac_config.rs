@@ -1,7 +1,7 @@
 //! `hostkeeper mac-config [--managed <file>] [--config <file>]`: the daemon config of a Mac,
 //! written from the managed preferences its MDM installed (docs/design/hostkeeper-mdm.md,
-//! section 4). The pkg's `postinstall` runs it after the seed and before it loads the daemon's
-//! job.
+//! section 4). The start of a Mac's daemon runs it when the config is not there ([`at_start`]);
+//! the pkg's `postinstall` does not run it.
 //!
 //! 1. A config that is there as a regular file is kept: nothing is written and the managed
 //!    preferences are not read. It is the operator's, or an earlier run's. Anything else at the

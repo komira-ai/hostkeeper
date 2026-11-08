@@ -32,7 +32,7 @@ pub const NEW: &str = "0.2.0";
 pub const LATER: &str = "0.3.0";
 
 /// The unit file of the daemon, as the deb installs it and hostkeeper's package carries it.
-pub const SHIPPED_UNIT: &str = include_str!("../../../../packaging/linux/hostkeeper.service");
+pub const SHIPPED_UNIT: &str = include_str!("../../../../packaging/linux/units/hostkeeper.service");
 /// Where the deb installs it.
 pub const DEB_UNIT: &str = "/usr/lib/systemd/system/hostkeeper.service";
 /// The `WantedBy=` link of the deb's `systemctl enable`, in the rig's unit directory.
@@ -131,7 +131,7 @@ impl SelfRig {
     }
 
     /// The release of hostkeeper at `version` as CI packages it: its binary, its hook
-    /// `bin/hostkeeper update-hook`, and the unit the deb installs, `units/hostkeeper.service`,
+    /// `bin/hostkeeper update-hook`, and the unit hostkeeper's package carries, `units/hostkeeper.service`,
     /// which its manifest runs.
     pub fn shipped_release(&self, version: &str) -> PathBuf {
         let manifest = super::manifest(HK, version).replace(

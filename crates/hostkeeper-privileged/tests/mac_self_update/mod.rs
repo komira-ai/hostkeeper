@@ -13,9 +13,15 @@
 //!
 //! **The job.** Its plist is the daemon's own (`hostkeeper_launchd::plist::daemon_plist`:
 //! `RunAtLoad` and plain `KeepAlive` true, so that the clean exit the follow-on asks for starts
-//! `current` again), its program `current` of the test's binary directory, with the fixture's
-//! flags before the verb and the test's directories and `--heartbeat-secs 1` after it, its
-//! output in two files of the test's tree.
+//! the program again), with the fixture's flags before the verb and the test's directories and
+//! `--heartbeat-secs 1` after it, its output in two files of the test's tree. Its program is
+//! `current` of the test's binary directory ([`Plan::Installed`]) or, as the pkg's plist names the
+//! binary the pkg installed (`DaemonJob::standard`'s program, `/usr/local/bin/hostkeeper`), a copy
+//! of the fixture daemon at a packaged path of the test's tree, named by the version it stands
+//! for ([`Plan::Pkg`]; the fixture flag `--fixture-packaged` makes that path the packaged binary
+//! of the daemon's start). The binary directory of a [`Plan::Pkg`] Mac is empty: the packaged
+//! binary seeds it and execs `current`, in the process launchd started, so the job's process
+//! runs the binary directory's file of [`N`] after the start.
 //!
 //! **What this rig does not have.** The daemon writes its fallback job's plist into the unit
 //! directory of its placement (the fixture's `units/`, not `/Library/LaunchDaemons`) and loads it
@@ -165,7 +171,8 @@ pub enum Plan {
     /// hostkeeper's package at [`N`] installed (`current` of its package directory), the
     /// releases of [`N`] and [`NEXT`] in the store: the coordinator orders an `update`.
     Installed,
-    /// As the pkg leaves a Mac: the binary directory alone, no package of hostkeeper installed,
+    /// As the pkg leaves a Mac: the job's program the packaged binary (a copy of the fixture
+    /// daemon named [`N`]) and the binary directory empty, no package of hostkeeper installed,
     /// the release of the version given in the store: the coordinator orders an `install`.
     Pkg(&'static str),
 }
@@ -248,7 +255,7 @@ impl MacSelfHost {
         });
         let host = MacSelfHost { base, label, aside };
         host.make(plan);
-        host.load();
+        host.load(plan);
         host.runs(N);
         host
     }
@@ -288,19 +295,30 @@ impl MacSelfHost {
         dir(&self.service(), 0o755);
         match plan {
             Plan::Installed => {
+                let daemon = self.path("hostkeeper-selfupdate-daemon");
+                program(DAEMON, &daemon);
                 for version in [N, NEXT] {
                     self.release(version);
                 }
                 std::os::unix::fs::symlink(N, self.service().join("current"))
                     .expect("link current");
+                let layout = self.layout();
+                layout.stage(N, &daemon).expect("stage the first binary");
+                layout.switch(N).expect("switch to it");
             }
-            Plan::Pkg(version) => self.release(version),
+            Plan::Pkg(version) => {
+                self.release(version);
+                // The binary directory is left empty: the packaged binary seeds it.
+                dir(&self.path("packaged"), 0o755);
+                program(DAEMON, &self.packaged());
+            }
         }
-        let daemon = self.path("hostkeeper-selfupdate-daemon");
-        program(DAEMON, &daemon);
-        let layout = self.layout();
-        layout.stage(N, &daemon).expect("stage the first binary");
-        layout.switch(N).expect("switch to it");
+    }
+
+    /// The packaged binary of a [`Plan::Pkg`] Mac: a copy of the fixture daemon whose file name
+    /// is the version [`N`] it stands for.
+    fn packaged(&self) -> PathBuf {
+        self.path("packaged").join(N)
     }
 
     /// The release of hostkeeper at `version`, as the real store leaves it: the tree (manifest,
@@ -326,12 +344,17 @@ impl MacSelfHost {
     }
 
     /// The daemon's plist, as `daemon_plist` renders it, with the test's arguments around the
-    /// verb; its job bootstrapped.
-    fn load(&self) {
-        let current = self.layout().current_path();
+    /// verb; its job bootstrapped. Its program is the packaged binary under [`Plan::Pkg`] (with
+    /// `--fixture-packaged` among the fixture's flags) and `current` otherwise.
+    fn load(&self, plan: Plan) {
+        let pkg = matches!(plan, Plan::Pkg(_));
+        let program = match pkg {
+            true => self.packaged(),
+            false => self.layout().current_path(),
+        };
         let job = DaemonJob {
             label: self.label.clone(),
-            program: current,
+            program,
             stdout: self.path("daemon.out.log"),
             stderr: self.path("daemon.err.log"),
         };
@@ -343,8 +366,12 @@ impl MacSelfHost {
             arg(self.fixture().display().to_string()),
             arg("--fixture-own-unit".to_owned()),
             arg(self.label.to_string()),
-            arg("daemon".to_owned()),
         ];
+        if pkg {
+            argv.push(arg("--fixture-packaged".to_owned()));
+            argv.push(arg(self.packaged().display().to_string()));
+        }
+        argv.push(arg("daemon".to_owned()));
         for (flag, value) in [
             ("--config", text("hostkeeper.toml")),
             ("--state-dir", text("state")),
@@ -359,7 +386,7 @@ impl MacSelfHost {
         assert_eq!(
             rendered.matches(verb).count(),
             1,
-            "the daemon's plist runs `current daemon`:\n{rendered}"
+            "the daemon's plist runs its program with the verb `daemon`:\n{rendered}"
         );
         assert!(
             rendered.contains("<key>KeepAlive</key>\n\t<true/>"),

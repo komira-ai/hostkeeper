@@ -1,6 +1,6 @@
 # Linux packaging
 
-What a Linux host needs before hostkeeper can deliver anything to it: the daemon, its one unit
+What a Linux host needs before hostkeeper can deliver anything to it: the daemon, its unit
 and its config (`docs/design/hostkeeper-design.md`, sections 4.1 and 4.6). The files here are
 the sources of a deb, an rpm and a boot-image overlay. The deb and the rpm also carry
 `/usr/bin/hostkeeper-pxe`, the boot server of network install
@@ -10,36 +10,52 @@ publishing the packages are not here.
 
 | file | what |
 |---|---|
-| `hostkeeper.service` | the unit, the daemon's only one: the daemon as root, `Type=notify`, with its paths as flags, started from the binary directory of its own update with `Restart=always` and no start limit of its own, and restarted by a 60-second watchdog its heartbeat loop feeds (`WatchdogSec=`, four heartbeat periods); it conflicts with kbf's update agent and its root half and is ordered after them, so a handoff stops one before it starts the other. hostkeeper's own package carries it too |
+| `hostkeeper.service` | the bootstrap unit, the one the deb, the rpm and a boot image install at `/usr/lib/systemd/system/hostkeeper.service`: the daemon as root, `Type=notify`, started as `/usr/bin/hostkeeper daemon` with its paths as flags and no `ExecStartPre=`, with `Restart=always` and no start limit of its own, and restarted by a 60-second watchdog its heartbeat loop feeds (`WatchdogSec=`, four heartbeat periods); it conflicts with kbf's update agent and its root half and is ordered after them, so a handoff stops one before it starts the other |
+| `units/hostkeeper.service` | the package unit, the one hostkeeper's own package carries as `units/hostkeeper.service` and its install links in `/etc/systemd/system/`: the same keys, but it starts `current` of the binary directory of its own update, after an `ExecStartPre=-` that seeds that directory |
 | `hostkeeper.tmpfiles.conf` | the daemon's directories and their modes, as `/usr/lib/tmpfiles.d/hostkeeper.conf` |
 | `hostkeeper.toml.template` | the daemon config with a `@@NAME@@` placeholder in each value that belongs to a site |
 | `nfpm.yaml` | the deb and the rpm, for nfpm |
 | `scripts/postinstall.sh`, `scripts/preremove.sh` | the packages' scripts: make the directories, enable the unit, disable it on removal |
 | `overlay/` | the same files laid out as an image root, for a boot-image build to copy |
 
-`cargo test -p xtask --test packaging` reads every file here and checks it: the unit's keys and
-command lines, that it starts `current` of the daemon's binary directory and restarts the
-daemon's exit after its own update, that it agrees with the drop-in the daemon writes, that it is
-the one unit file and the one hostkeeper's package is built with, that the directories are the
+`cargo test -p xtask --test packaging` reads every file here and checks it: the keys and
+command lines of each of the two units; that the bootstrap unit starts the installed binary,
+`/usr/bin/hostkeeper`, one of the paths the daemon seeds and execs from, with no `ExecStartPre=`;
+that the package unit starts `current` of the daemon's binary directory after the `-` seed line;
+that neither passes `--admin-socket` or sets `RuntimeDirectory=`; that each restarts the
+daemon's exit after its own update and agrees with the drop-in the daemon writes; that the
+package unit is the file hostkeeper's package is built with; that the directories are the
 design's with the design's modes, that the template is refused until each placeholder is filled
 and loads once they are, that the packages carry exactly the seven files (the daemon and `hostkeeper-pxe` among them) and the console's issue
 link and no key, certificate, token or config, that `gh` and the trusted root are installed at the daemon's own paths from
 where `cargo xtask release nfpm-stage` writes them, that the scripts never start the unit, and
 that the overlay equals these sources.
 
-## The binary the unit starts
+## The binary the units start
 
-The unit does not start `/usr/bin/hostkeeper` itself. It starts
-`/var/lib/updater/state/hostkeeper/bin/current`, the binary directory of hostkeeper's own update
-(design section 6.6): each version is one executable in `versions/<version>`, and `current` and
-`previous` are links to them. Before each start, `ExecStartPre=` runs
-`/usr/bin/hostkeeper self-update-seed`, which, when `current` starts no executable file, copies
-`/usr/bin/hostkeeper` in as its own version and points `current` at it; otherwise it changes
-nothing. So the first start of a host runs the binary the package installed, and every later
-start runs the binary the last update chose. `/usr/bin/hostkeeper daemon` run by itself (by
-hand, or by a unit to come) does the same seed and then execs `current` with its own arguments
-(`hostkeeper_daemon::packaged`), keeping its process id; a binary started from `versions/` never
-does.
+There are two unit files, and they differ in the program they start.
+
+The bootstrap unit (`hostkeeper.service`) starts `/usr/bin/hostkeeper daemon`, the binary the
+deb or the rpm installed, with the daemon's paths as flags. That binary, started from a packaged
+path (`hostkeeper_daemon::packaged`), gives the binary directory
+of hostkeeper's own update (design section 6.6) its first binary when `current` starts nothing
+(under the state directory's lock), and then execs `current` with its own arguments, keeping its process id. In the binary directory each
+version is one executable in `versions/<version>`, and `current` and `previous` are links to
+them. So the first start of a host runs the binary the package installed, and every later start
+runs the binary the last update chose. A binary started from `versions/` never seeds or execs.
+
+The package unit (`units/hostkeeper.service`) is the one hostkeeper's own package carries. A
+self-update links it in `/etc/systemd/system/`, where it takes the place of the bootstrap unit.
+It starts `/var/lib/updater/state/hostkeeper/bin/current` itself, never `/usr/bin/hostkeeper`,
+which only a deb or rpm upgrade replaces and so is, on most hosts, older than `current`. Before
+each start, `ExecStartPre=-` runs `/usr/bin/hostkeeper self-update-seed`, which, when `current`
+starts no executable file, copies `/usr/bin/hostkeeper` in as its own version and points
+`current` at it; otherwise it changes nothing. The `-` lets a start go on when the installed
+binary is older and lacks the verb, since `current` is then already there.
+
+Neither unit passes `--admin-socket` or sets `RuntimeDirectory=`: the daemon binds the admin
+socket at its default, `/run/hostkeeper/admin.sock`, and makes the directory itself;
+`hostkeeper.tmpfiles.conf` makes `/run/hostkeeper` at boot.
 
 - A self-update stages the new binary in `versions/`, switches `current`, and exits 0;
   `Restart=always` starts the new binary. At each start the daemon writes, where they differ,
@@ -59,12 +75,12 @@ does.
 - Once `current` exists, upgrading the deb or the rpm replaces `/usr/bin/hostkeeper` and does not
   change the binary the daemon runs: hostkeeper's own update does that. A self-update also links
   the unit its package carries in `/etc/systemd/system/`, which then takes the place of the one
-  the package installed; the two are the same file.
+  the package installed; the two differ in the program they start (above).
 - The binary directory is under `/var/lib`, so the unit executes a file there: a host whose
   `/var/lib` is mounted `noexec`, or whose SELinux policy does not let systemd execute files of
   that directory, cannot start the daemon this way.
-- A host whose unit predates this one (`ExecStart=/usr/bin/hostkeeper`, `Restart=on-failure`)
-  gets it from the deb, the rpm or a boot image built from these files, not from a self-update:
+- A host whose unit predates these (`ExecStart=/usr/bin/hostkeeper`, `Restart=on-failure`)
+  gets one from the deb, the rpm or a boot image built from these files, not from a self-update:
   under that unit the daemon's exit after a self-update is final.
 
 ## The packages
@@ -76,7 +92,7 @@ packages, `linux-x86_64` (`amd64` for the deb, `x86_64` for the rpm) and `linux-
 | path | mode |
 |---|---|
 | `/usr/bin/hostkeeper` | 0755 |
-| `/usr/lib/systemd/system/hostkeeper.service` | 0644 |
+| `/usr/lib/systemd/system/hostkeeper.service` (the bootstrap unit) | 0644 |
 | `/usr/lib/tmpfiles.d/hostkeeper.conf` | 0644 |
 | `/usr/share/hostkeeper/hostkeeper.toml.template` | 0644 |
 | `/usr/lib/hostkeeper/gh` | 0755 |
@@ -99,7 +115,9 @@ link points at nothing until the daemon first writes the file.
 On a first install the post-install script makes the directories of `hostkeeper.conf` and
 enables the unit. It does not start it: the daemon first runs at the next
 boot, or when the operator runs `systemctl start hostkeeper.service`, from the copy of
-`/usr/bin/hostkeeper` its seed puts in the binary directory (above). An upgrade leaves the unit
+`/usr/bin/hostkeeper` its seed puts in the binary directory (above). The package unit
+(`units/hostkeeper.service`) is not installed by the deb or the rpm; hostkeeper's own package
+brings it. An upgrade leaves the unit
 enabled or disabled as it was. Removing the package disables the unit; it does not stop a
 running daemon, and it removes none of the daemon's directories.
 
@@ -128,15 +146,15 @@ unit by hand to its approval and first heartbeat, is
 
 | path | what |
 |---|---|
-| `usr/lib/systemd/system/hostkeeper.service` | the unit |
-| `etc/systemd/system/multi-user.target.wants/hostkeeper.service` | a link to the unit (relative, so it resolves in this tree too), which enables it |
+| `usr/lib/systemd/system/hostkeeper.service` | the bootstrap unit |
+| `etc/systemd/system/multi-user.target.wants/hostkeeper.service` | a link to the bootstrap unit (relative, so it resolves in this tree too), which enables it |
 | `usr/lib/tmpfiles.d/hostkeeper.conf` | the directories |
 | `etc/hostkeeper/hostkeeper.toml.template` | the config template |
 | `etc/issue.d/hostkeeper.issue` | a link to `/run/hostkeeper/enrollment.issue`, the console's issue file, as the packages install it |
 
 The image build copies the tree onto the image root (`cp -a overlay/. <image root>/`, keeping
 the link), installs the daemon as `/usr/bin/hostkeeper` and `gh` and the trusted root under
-`/usr/lib/hostkeeper/` (the deb or the rpm does that too; the unit's seed copies the daemon into
+`/usr/lib/hostkeeper/` (the deb or the rpm does that too; the daemon, started from there, copies itself into
 the binary directory at the first start), and
 fills `etc/hostkeeper/hostkeeper.toml.template` into `etc/hostkeeper/hostkeeper.toml` in the
 image, root's, mode 0600, as above. Nothing else. The overlay files are the files of this
