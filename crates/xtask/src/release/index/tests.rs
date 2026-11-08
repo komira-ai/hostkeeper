@@ -459,3 +459,40 @@ fn each_service_indexes_its_own_packages_under_its_own_file_name() {
     );
     assert!(!empty.join("hello-index.json").exists());
 }
+
+#[test]
+fn the_mdm_index_lists_its_one_platform_and_refuses_a_release_without_that_package() {
+    // Catches: an mdm index refused for lacking the linux-arm64 and macOS packages the mdm
+    // package is never built for, one that lists such a package if a file of that name is
+    // there, or one written without the linux-x86_64 package.
+    let dir = scratch("index-verb-mdm");
+    for p in Platform::ALL {
+        let file = package_file("mdm", VERSION, p);
+        std::fs::write(dir.join(file), p.name()).expect("write a package");
+    }
+    let path = dir.join("mdm-index.json");
+    assert_eq!(
+        write_index(&dir, Package::Mdm, &version()),
+        Ok(vec![format!(
+            "{}: the packages of mdm 1.5.0 for linux-x86_64",
+            path.display()
+        )])
+    );
+    let written = std::fs::read_to_string(&path).expect("read the index");
+    let read = ReleaseIndex::parse(&written, "mdm", VERSION).expect("the index reads");
+    assert_eq!(
+        read.packages.iter().map(|e| e.platform).collect::<Vec<_>>(),
+        [Platform::LinuxX86_64]
+    );
+
+    let without = scratch("index-verb-mdm-missing");
+    let file = package_file("mdm", VERSION, Platform::LinuxArm64);
+    std::fs::write(without.join(file), "linux-arm64").expect("write a package");
+    assert_eq!(
+        write_index(&without, Package::Mdm, &version()),
+        Err(Error::Refused(vec![missing(
+            "mdm-1.5.0-linux-x86_64.tar.zst"
+        )]))
+    );
+    assert!(!without.join("mdm-index.json").exists());
+}

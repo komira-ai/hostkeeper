@@ -60,12 +60,12 @@ fn a_good_directory_passes_with_two_verifier_calls_per_attested_asset() {
     assert_eq!(
         run(&verifier, &dir, &commit),
         Ok(vec![format!(
-            "release check: the 70 assets of v0.1.5 match SHA256SUMS, and 50 attestations of \
+            "release check: the 74 assets of v0.1.5 match SHA256SUMS, and 52 attestations of \
              commit {commit} verified online and from their bundles"
         )])
     );
     let calls = verifier.calls.borrow();
-    assert_eq!(calls.len(), 50);
+    assert_eq!(calls.len(), 52);
     for name in attested_names(&version()) {
         assert!(calls.contains(&format!("online {name}")), "{name}");
         assert!(
@@ -245,7 +245,7 @@ fn verify_fails_when_the_attested_commit_differs_from_the_pin() {
         ]
     );
     let everything = refused(run(&FakeVerifier::good(&other), &dir, &commit));
-    assert_eq!(everything.len(), 50);
+    assert_eq!(everything.len(), 52);
 }
 
 #[test]
@@ -306,7 +306,7 @@ fn a_verifier_error_is_listed_for_every_file() {
     let lines = refused(run(&fakes.verifier, &dir, &commit));
     let names = attested_names(&version());
     let first = &names[0];
-    assert_eq!(lines.len(), 50);
+    assert_eq!(lines.len(), 52);
     assert_eq!(
         lines[0],
         format!("{first} (online): verify: no attestation")
@@ -340,7 +340,7 @@ fn good_index_of(dir: &Path, package: Package) -> ReleaseIndex {
         dir,
         package.service().name(),
         &package.version_text(&version()),
-        &Platform::RELEASED,
+        package.platforms(),
     )
     .expect("index")
 }
@@ -365,6 +365,41 @@ fn an_index_that_is_not_the_release_index_is_listed_with_why() {
         vec![
             "index.json: index_invalid: the index is of hostkeeper 0.1.4, not hostkeeper 0.1.5"
                 .to_owned()
+        ]
+    );
+}
+
+#[test]
+fn the_mdm_index_is_held_to_its_one_package_and_to_its_service() {
+    // Catches: an mdm index that names a linux-arm64 package (which no release builds), or one
+    // of another service, passing the check because only hostkeeper's and hello's indexes are
+    // read.
+    let (dir, commit) = assets("check-index-mdm");
+    let verifier = FakeVerifier::good(&commit);
+    let good = good_index_of(&dir, Package::Mdm);
+    assert_eq!(good.packages.len(), 1);
+    let mut wider = good.clone();
+    let mut arm = wider.packages[0].clone();
+    arm.platform = Platform::LinuxArm64;
+    arm.file = "mdm-0.1.5-linux-arm64.tar.zst".to_owned();
+    wider.packages.insert(0, arm);
+    replace_index_of(&dir, Package::Mdm, &wider.to_json());
+    assert_eq!(
+        refused(run(&verifier, &dir, &commit)),
+        vec![
+            "mdm-index.json does not list exactly the packages of the directory with their sizes \
+             and SHA-256 digests"
+                .to_owned()
+        ]
+    );
+    let hello = good
+        .to_json()
+        .replace("\"service\":\"mdm\"", "\"service\":\"hello\"");
+    replace_index_of(&dir, Package::Mdm, &hello);
+    assert_eq!(
+        refused(run(&verifier, &dir, &commit)),
+        vec![
+            "mdm-index.json: index_invalid: the index is of hello 0.1.5, not mdm 0.1.5".to_owned()
         ]
     );
 }

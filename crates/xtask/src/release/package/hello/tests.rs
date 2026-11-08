@@ -62,6 +62,7 @@ fn request(
         unit: None,
         fail_ready,
         trusted_root: None,
+        archives: None,
         out: dir.join(out),
     }
 }

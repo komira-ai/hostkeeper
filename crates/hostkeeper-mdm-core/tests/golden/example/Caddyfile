@@ -1,5 +1,6 @@
-# Caddyfile of hostkeeper-mdm-proxy, rendered by `hostkeeper-mdm install` into
-# /etc/hostkeeper-mdm/Caddyfile. Edit the template in hostkeeper-mdm-core.
+# Caddyfile of hostkeeper-mdm-proxy, rendered by `hostkeeper-mdm install` (or the
+# `prepare` step of the mdm package's hook) into /etc/hostkeeper-mdm/Caddyfile. Edit the
+# template in hostkeeper-mdm-core.
 #
 # TLS only, on the LAN address only, with lego's certificate. Caddy's own ACME,
 # its HTTP->HTTPS redirect listener on :80 and its admin API are all off.

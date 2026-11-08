@@ -43,13 +43,13 @@ pub fn system_random(buf: &mut [u8]) -> io::Result<()> {
     getrandom::fill(buf).map_err(io::Error::from)
 }
 
-/// Runs the program: reads the arguments, acts on the machine, exits as documented.
-pub fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().collect();
+/// Calls `f` with the machine itself: the real host, the network, the services' APIs on
+/// loopback, the kernel's random source and the wall clock, read once (it names an uninstall
+/// snapshot, `MDM_STATE/removed/<unix seconds>`, and `push-cert` refuses a push certificate
+/// that has expired by it).
+pub(crate) fn with_machine<T>(f: impl FnOnce(&System<'_>) -> T) -> T {
     let net = Net::new(true);
     let api = HttpLoopback::new();
-    // The wall clock, read once: it names an uninstall snapshot (`MDM_STATE/removed/<unix
-    // seconds>`), and `push-cert` refuses a push certificate that has expired by it.
     let secs = SystemTime::now().duration_since(UNIX_EPOCH);
     let system = System {
         machine: &RealMachine,
@@ -58,12 +58,20 @@ pub fn main() -> ExitCode {
         random: &system_random,
         now: secs.map_or(0, |d| d.as_secs()),
     };
-    ExitCode::from(run(
-        &args,
-        &system,
-        &mut io::stdout().lock(),
-        &mut io::stderr().lock(),
-    ))
+    f(&system)
+}
+
+/// Runs the program: reads the arguments, acts on the machine, exits as documented.
+pub fn main() -> ExitCode {
+    let args: Vec<String> = std::env::args().collect();
+    with_machine(|system| {
+        ExitCode::from(run(
+            &args,
+            system,
+            &mut io::stdout().lock(),
+            &mut io::stderr().lock(),
+        ))
+    })
 }
 
 #[cfg(test)]
