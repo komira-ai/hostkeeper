@@ -265,7 +265,15 @@ fn a_step_that_runs_past_its_bound_gets_sigterm_and_has_no_code() {
 #[test]
 fn a_step_that_exits_zero_after_the_bounds_sigterm_still_has_no_code() {
     let rig = Rig::new("bound-term-exit", 1);
-    let hook = rig.script("hook", "trap 'echo late; exit 0' TERM\nwhile :; do :; done");
+    let armed = rig.path("armed");
+    rig.clock.gate_on(&armed);
+    let hook = rig.script(
+        "hook",
+        &format!(
+            "trap 'echo late; exit 0' TERM\n: > {}\nwhile :; do :; done",
+            armed.display()
+        ),
+    );
     let got = rig
         .launcher
         .run(&step_call(&hook, UNIT, secs(3)))
@@ -276,15 +284,24 @@ fn a_step_that_exits_zero_after_the_bounds_sigterm_still_has_no_code() {
 
 #[test]
 fn a_step_that_ignores_sigterm_gets_sigkill_after_the_stop_timeout() {
-    // Each read of the clock is 30 seconds: the bound (1) is over at the first look, and the
-    // stop timeout (90) three looks later.
+    // Each read of the clock is 30 seconds, once the script has set its trap: the bound (1) is
+    // over at the first look after, and the stop timeout (90) three looks later. The trap says
+    // the SIGTERM came and ignores it, so only the SIGKILL ends the step.
     let rig = Rig::new("bound-kill", 30);
-    let hook = rig.script("hook", "trap '' TERM\nwhile :; do :; done");
+    let armed = rig.path("armed");
+    rig.clock.gate_on(&armed);
+    let hook = rig.script(
+        "hook",
+        &format!(
+            "trap 'echo term' TERM\n: > {}\nwhile :; do :; done",
+            armed.display()
+        ),
+    );
     let got = rig
         .launcher
         .run(&step_call(&hook, UNIT, secs(1)))
         .expect("the step ran");
-    assert_eq!(got, exit(None, None));
+    assert_eq!(got, exit(None, Some("term")));
 }
 
 #[test]
@@ -608,10 +625,19 @@ fn a_probe_exit_code_and_a_probe_past_its_bound() {
     assert_eq!(got.code, None);
 
     // A probe that handles the bound's SIGTERM and exits 0 has no code either.
-    let polite = rig.script("polite", "trap 'exit 0' TERM\nwhile :; do :; done");
+    let armed = rig.path("armed");
+    rig.clock.gate_on(&armed);
+    let polite = rig.script(
+        "polite",
+        &format!(
+            "trap 'echo polite; exit 0' TERM\n: > {}\nwhile :; do :; done",
+            armed.display()
+        ),
+    );
     let got = rig
         .launcher
         .run_probe(&probe_call(&polite, &args, 5, 100))
         .expect("the probe ran");
     assert_eq!(got.code, None);
+    assert_eq!(got.output, b"polite\n");
 }

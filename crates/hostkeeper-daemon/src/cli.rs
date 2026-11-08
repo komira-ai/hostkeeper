@@ -250,8 +250,9 @@ pub struct DaemonFlags {
     /// of `Type=notify`) once its boot work is over.
     #[arg(long, conflicts_with = "ready_file")]
     pub notify_systemd: bool,
-    /// Write this file once the boot work is over, and remove it first thing at the start
-    /// ([`ReadyFile`]): the readiness of a daemon under OpenRC, whose init script waits for it.
+    /// Write this file, with the daemon's pid, once the boot work is over ([`ReadyFile`]): the
+    /// readiness of a daemon under OpenRC, whose init script removes it before a start and waits
+    /// for it after.
     #[arg(long)]
     pub ready_file: Option<PathBuf>,
     /// Days after which the Sigstore trusted root is reported `trusted_root_stale` in the admin
@@ -408,18 +409,13 @@ fn admin_on_terminal(command: &AdminCommand) -> u8 {
 }
 
 /// The readiness notifier the flags ask for: systemd's with `--notify-systemd`, refused when no
-/// notify socket was set; the file of `--ready-file`, removed now, refused when it cannot be;
-/// none without either.
+/// notify socket was set; the file of `--ready-file`; none without either.
 pub fn notifier(
     flags: &DaemonFlags,
     notify_socket: Option<OsString>,
 ) -> Result<Box<dyn ReadyNotifier>, StartError> {
     if let Some(path) = &flags.ready_file {
-        let file = ReadyFile::new(path).map_err(|source| StartError::Io {
-            path: path.clone(),
-            source,
-        })?;
-        return Ok(Box::new(file));
+        return Ok(Box::new(ReadyFile::new(path)));
     }
     match (flags.notify_systemd, notify_socket) {
         (false, _) => Ok(Box::new(NoNotifier)),

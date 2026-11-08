@@ -14,7 +14,9 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use hostkeeper_daemon::cli::note_start;
-use hostkeeper_daemon::fallback::{FallbackError, Judged, main_for, record_start};
+use hostkeeper_daemon::fallback::{
+    FallbackError, Judged, fallback_after_burst, main_for, record_start,
+};
 use hostkeeper_daemon::packaged::{self, PackagedError};
 use hostkeeper_daemon::selfunits::{Installed, UnitFile, install, unit_files};
 use hostkeeper_daemon::selfupdate::binary_dir;
@@ -183,6 +185,16 @@ fn a_burst_that_cannot_be_judged_does_not_stop_the_start() {
     started(&s, NEW, &[900, 910, 920]);
     let record = s.hk_state().join(hostkeeper_steps::record::RECORD_FILE);
     fs::write(&record, "{").expect("a record that is not one");
+    let judged = fallback_after_burst(&binary_dir(&s.rig.state), &*FakeClock::new());
+    assert!(
+        matches!(judged, Err(FallbackError::Settle(_))),
+        "the judge of this state fails: {judged:?}"
+    );
+    let said = packaged::judged(&judged).expect("a failed judge is said");
+    assert!(
+        said.starts_with("the burst of the update of hostkeeper is not judged: "),
+        "{said}"
+    );
     let execs = Execs::default();
     start_packaged(&s, &image, Some(&*FakeClock::new()), &execs);
     assert_eq!(s.current().as_deref(), Some(NEW));

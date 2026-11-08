@@ -24,10 +24,15 @@ pub const RC_SERVICE: &str = "/sbin/rc-service";
 /// The longest service name: an init script's file name.
 pub const MAX_SERVICE_NAME: usize = 255;
 
+/// A unit that is not the name of an OpenRC service ([`service_name`]).
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("{0:?} is not the name of an OpenRC service")]
+pub struct NotAServiceName(pub String);
+
 /// `Ok` with `unit` when it is a name of an init script that `rc-service` reads as a service and
 /// never as an option or a path: 1 to [`MAX_SERVICE_NAME`] bytes of ASCII letters, digits, `.`,
-/// `_` and `-`, the first a letter or a digit. `Err` says why not.
-pub fn service_name(unit: &str) -> Result<&str, String> {
+/// `_` and `-`, the first a letter or a digit.
+pub fn service_name(unit: &str) -> Result<&str, NotAServiceName> {
     let first_ok = unit
         .bytes()
         .next()
@@ -37,7 +42,7 @@ pub fn service_name(unit: &str) -> Result<&str, String> {
         .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'));
     match first_ok && rest_ok && unit.len() <= MAX_SERVICE_NAME {
         true => Ok(unit),
-        false => Err(format!("{unit:?} is not the name of an OpenRC service")),
+        false => Err(NotAServiceName(unit.to_owned())),
     }
 }
 
@@ -64,7 +69,7 @@ impl<L: CommandLauncher> RcService<L> {
             action: argv.join(" "),
             why,
         };
-        service_name(unit).map_err(error)?;
+        service_name(unit).map_err(|e| error(e.to_string()))?;
         self.launcher.run(&argv).map_err(error)
     }
 }

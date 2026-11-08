@@ -5,7 +5,7 @@ init script that runs it. The files here are the sources of an apk.
 
 | file | what |
 |---|---|
-| `hostkeeper.initd` | the init script, `/etc/init.d/hostkeeper`: supervise-daemon runs the daemon as root with the flags of `packaging/linux/hostkeeper.service`, waits for its `READY=1`, respawns it a second after it exits, and makes the daemon's directories before each start |
+| `hostkeeper.initd` | the init script, `/etc/init.d/hostkeeper`: supervise-daemon runs the daemon as root with the flags of `packaging/linux/hostkeeper.service`, `--ready-file /run/hostkeeper/ready` in place of `--notify-systemd`; `start_post` waits for that file (or for the daemon's first failed start), supervise-daemon respawns the daemon a second after it exits, and `start_pre` makes the daemon's directories and removes the ready file before each start |
 | `nfpm.yaml` | the apk, for nfpm |
 | `scripts/postinstall.sh`, `scripts/preremove.sh` | the apk's scripts: add the service to the default runlevel on a first install, take it out on removal |
 

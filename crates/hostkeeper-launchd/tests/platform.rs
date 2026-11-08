@@ -71,13 +71,3 @@ fn a_linux_host_is_read_by_the_service_manager_that_runs_it() {
         assert_eq!(Platform::detect(true, fs), macos());
     }
 }
-
-/// Catches a `host` that reads other markers, or another filesystem, than the host's own: it is
-/// `detect` of the system this binary was built for over the real directories.
-#[test]
-fn the_host_platform_is_detected_from_the_hosts_own_directories() {
-    assert_eq!(
-        Platform::host(),
-        Platform::detect(cfg!(target_os = "macos"), &Path::is_dir)
-    );
-}

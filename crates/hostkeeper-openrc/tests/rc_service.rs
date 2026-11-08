@@ -3,7 +3,7 @@
 //! `hostkeeper_placed::testing`, so no program runs.
 
 use hostkeeper_openrc::RcService;
-use hostkeeper_openrc::rc_service::{MAX_SERVICE_NAME, RC_SERVICE, service_name};
+use hostkeeper_openrc::rc_service::{MAX_SERVICE_NAME, NotAServiceName, RC_SERVICE, service_name};
 use hostkeeper_placed::testing::FakeLauncher;
 use hostkeeper_placed::{UnitControl, UnitControlError};
 
@@ -71,10 +71,18 @@ fn service_name_refuses_what_rc_service_would_read_as_an_option_or_a_path() {
     ] {
         assert_eq!(
             service_name(name),
-            Err(format!("{name:?} is not the name of an OpenRC service")),
+            Err(NotAServiceName(name.to_owned())),
             "{name:?}"
         );
     }
+}
+
+#[test]
+fn a_refused_name_says_which_name_it_is() {
+    assert_eq!(
+        NotAServiceName("-s".to_owned()).to_string(),
+        "\"-s\" is not the name of an OpenRC service"
+    );
 }
 
 #[test]

@@ -86,7 +86,7 @@ Trust is placed in three things: the package whose digest and attestation verifi
 ### 3.1 What is built
 
 | Piece | State | Where |
-|---|---|---|---|
+|---|---|---|
 | Hook contract, exit codes, last-line JSON, params file, next-step table, conformance harness | Built | `crates/hostkeeper-hook` |
 | Declaration with rights, loader, widening check, approval store and gate, `approve` command, transient-unit launch with user, capabilities and sandbox properties | Built, and the build order deletes or shrinks it: the daemon-config and manifest loaders replace the declaration loader, and the widening check, gate, approval store, `approve` command, account and reserved-path checks and the rights properties of the launch go (B2, B3) | `crates/hostkeeper-rights` |
 | Step runner, step record, artifact seal, dead-man, self-update layout for a single binary: `versions/<v>` files with `current` and `previous` symlinks, atomic switch by rename, staging, unit generation helpers. `Layout::stage`, `check_binary` and `switch` take one executable file, so they cannot be reused as they are for a package of directories: B5 and B27 generalise them (a tree check in place of `check_binary`, the seal for `Staged::check`) and a test pins the on-disk names `current`, `previous` and `<v>.seal` (the model for the package layout, section 4.7) | Built for one binary; Designed for packages | `crates/hostkeeper-steps` |
@@ -577,10 +577,10 @@ Designed (B8); replaces kbf's registration socket (`/run/updater/register.sock`)
 
 The figure is the order of [hostkeeper-mdm.md](hostkeeper-mdm.md): the nonce is pushed after the daemon's request is pending, and bound to it.
 
-The flow is the same; these differ:
+The flow is the same; these differ (a Linux host under OpenRC, an Alpine host, in the last column; [two-programs.md](two-programs.md) section 4.6):
 
 | Aspect | Linux | macOS | Linux under OpenRC (Alpine; [two-programs.md](two-programs.md) 4.6) |
-|---|---|---|
+|---|---|---|---|
 | Daemon | systemd unit | one launchd daemon, root | one supervise-daemon service, `/etc/init.d/hostkeeper`, root |
 | Hook run | transient systemd unit | one launchd job per step, as root, for timeout, kill and log capture only; no sandbox profile, no rights | a child process group of the daemon per step, bounded and killed by the daemon |
 | Placed units | symlinks in `/etc/systemd/system` | symlinks to plists in `/Library/LaunchDaemons` | `/etc/init.d`; a package's init scripts come with A13 |

@@ -18,15 +18,16 @@
 # whatever its exit, a second after it ends, for good (respawn_max=0); the burst is the start
 # log's, judged at each start as above, not the supervisor's.
 #
-# The readiness notice: the daemon removes /run/hostkeeper/ready when it starts and writes it, with
-# its pid, once its boot pass is over (--ready-file; docs/design/hostkeeper-design.md, section
-# 6.5), and start_post waits for it, so `rc-service hostkeeper start` returns once the daemon is
+# The readiness notice: start_pre removes /run/hostkeeper/ready, the daemon writes it, with its
+# pid, once its boot pass is over (--ready-file; docs/design/hostkeeper-design.md, section 6.5),
+# and start_post waits for it, so `rc-service hostkeeper start` returns once the daemon is
 # ready. supervise-daemon's own notice (notify=) is not used: its start waits for the notice with
 # no end, also while it respawns a daemon that exits before it is ready (a config that does not
 # load), which would hold the runlevel, and the boot with it, for good. start_post instead stops
 # waiting, with an error said, as soon as supervise-daemon has had to start the daemon a second
-# time; the daemon is still supervised, and retried every second. supervise-daemon runs no
-# watchdog.
+# time; the daemon is still supervised, and retried every second, and the start exits 0 (a failed
+# start would have OpenRC mark the service stopped while supervise-daemon runs it).
+# supervise-daemon runs no watchdog.
 description="hostkeeper, the update daemon of this host"
 supervisor=supervise-daemon
 command=/usr/bin/hostkeeper

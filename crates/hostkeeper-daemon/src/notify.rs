@@ -8,9 +8,11 @@
 //! daemon has [`NoNotifier`].
 //!
 //! [`ReadyFile`] is the readiness notice of a daemon under OpenRC (`--ready-file <file>`): the
-//! file is removed when the daemon starts, so that it never says an earlier process was ready,
-//! and written, with the daemon's pid, once the boot work is over. The init script of the Alpine
-//! package waits for it after the start (packaging/alpine/hostkeeper.initd).
+//! file is written, with the daemon's pid, once the boot work is over. The init script of the
+//! Alpine package removes it before a start and waits for it after
+//! (packaging/alpine/hostkeeper.initd); the daemon itself removes nothing, so a second daemon
+//! started by hand, which finds the state directory locked and exits, leaves the running one's
+//! file as it is.
 //!
 //! The watchdog notice: once the daemon is ready, its heartbeat loop says it is alive after each
 //! heartbeat, through the [`Watchdog`] port ([`crate::links`]). [`SystemdWatchdog`] sends
@@ -100,17 +102,11 @@ pub struct ReadyFile {
 }
 
 impl ReadyFile {
-    /// The notice of `path`, which is removed now (a missing file is fine): it says nothing of an
-    /// earlier process. An error is a file that is there and cannot be removed.
-    pub fn new(path: &Path) -> io::Result<ReadyFile> {
-        match fs::remove_file(path) {
-            Ok(()) => {}
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e),
-        }
-        Ok(ReadyFile {
+    /// The notice of `path`.
+    pub fn new(path: &Path) -> ReadyFile {
+        ReadyFile {
             path: path.to_path_buf(),
-        })
+        }
     }
 
     /// The file.

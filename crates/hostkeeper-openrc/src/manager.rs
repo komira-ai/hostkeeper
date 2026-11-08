@@ -108,7 +108,7 @@ impl<R: CommandRunner> OpenrcServiceManager<R> {
     }
 
     fn state(&self, unit: &str) -> Result<UnitState, String> {
-        service_name(unit)?;
+        service_name(unit).map_err(|e| e.to_string())?;
         if fs::symlink_metadata(self.init_dir.join(unit)).is_err() {
             return Ok(UnitState {
                 active: ActiveState::NotFound,

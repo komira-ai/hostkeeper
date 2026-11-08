@@ -23,12 +23,15 @@ pub const UNIT: &str = "updater-web-cutover-7";
 pub const PARAMS: &str = "/var/lib/updater/state/web/params.toml";
 
 /// A clock that moves `step` seconds each time it is read, and when it is told to sleep, so that
-/// a bound or a stop timeout passes by reading it, never by waiting.
+/// a bound or a stop timeout passes by reading it, never by waiting. With a gate, it stands still
+/// until the gate's file exists: a script that writes it once its trap is set is never signalled
+/// before.
 #[derive(Debug)]
 pub struct StepClock {
     now: AtomicU64,
     step: u64,
     reads: AtomicU64,
+    gate: Mutex<Option<PathBuf>>,
 }
 
 impl StepClock {
@@ -37,7 +40,19 @@ impl StepClock {
             now: AtomicU64::new(0),
             step,
             reads: AtomicU64::new(0),
+            gate: Mutex::new(None),
         }
+    }
+
+    /// From now on the clock stands still while `file` is not there.
+    pub fn gate_on(&self, file: &Path) {
+        *self.gate.lock().unwrap_or_else(PoisonError::into_inner) = Some(file.to_path_buf());
+    }
+
+    /// Whether the gate, if any, is open.
+    fn open(&self) -> bool {
+        let gate = self.gate.lock().unwrap_or_else(PoisonError::into_inner);
+        gate.as_deref().is_none_or(Path::exists)
     }
 
     /// How many times the clock was read.
@@ -49,7 +64,8 @@ impl StepClock {
 impl Clock for StepClock {
     fn mono_secs(&self) -> u64 {
         self.reads.fetch_add(1, Ordering::SeqCst);
-        self.now.fetch_add(self.step, Ordering::SeqCst)
+        let step = if self.open() { self.step } else { 0 };
+        self.now.fetch_add(step, Ordering::SeqCst)
     }
 
     fn boot_id(&self) -> Result<BootId, BootIdError> {

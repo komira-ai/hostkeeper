@@ -630,7 +630,8 @@ killed, as systemd kills what is left in a unit's group. A stop by the dead-man 
 as `SystemdLauncher` does. Each running step has a file under `/run/hostkeeper/steps/` with its pid and start time, so
 a daemon started again after a crash stops by name a step an earlier one left (resume), with the start time guarding
 against a pid used again. Two gaps remain, stated: a descendant that leaves the process group (`setsid`) is not killed
-with it; and a step whose daemon was killed runs on until the daemon is back and resume stops it, as on a Mac.
+with it; and a step whose daemon was killed runs on until the daemon is back and resume stops it, as on a Mac, or
+until it next writes to its output, whose reader was the daemon (`SIGPIPE`).
 
 **The package and its init script.** hostkeeper's Alpine package (`packaging/alpine/`, built by nfpm as an `apk`)
 carries the static musl daemon of A15 at `/usr/bin/hostkeeper`, the init script `/etc/init.d/hostkeeper`, the config
@@ -640,11 +641,12 @@ unit's flags, but `--ready-file /run/hostkeeper/ready` in place of `--notify-sys
 `respawn_max=0`, so any exit is followed by a start a second later, for good; `start_pre` makes the directories of
 `hostkeeper.tmpfiles.conf` and removes the ready file. supervise-daemon's own readiness notice (`notify=`) is not used:
 its start waits for it with no end, also while it respawns a daemon that exits before it is ready (a config that does
-not load), which would hold the runlevel, and the boot. The daemon removes the ready file when it starts and writes it,
-with its pid, after its boot pass (`ReadyFile`, `crates/hostkeeper-daemon/src/notify.rs`); `start_post` waits for it,
-and stops waiting, with the error said, once supervise-daemon has started the daemon a second time: the daemon is still
+not load), which would hold the runlevel, and the boot. The daemon writes the ready file, with its pid, after its boot
+pass (`ReadyFile`, `crates/hostkeeper-daemon/src/notify.rs`), and removes nothing; `start_post` waits for it, and stops
+waiting, with the error said, once supervise-daemon has started the daemon a second time: the daemon is still
 supervised and retried. So `rc-service hostkeeper start` returns when the daemon is ready, or at its first failed
-start, as `systemctl start` does for `Type=notify`.
+start, as `systemctl start` does for `Type=notify`; unlike it, the start exits 0 then, because a failed start would
+have OpenRC mark the service stopped while supervise-daemon goes on running it.
 
 **Self-update: the start and the fallback.** As on a Mac from stage 2 (4.1), the package is the only source of the
 script and the binary, and the script starts the packaged binary at every start, respawns included: it seeds the binary

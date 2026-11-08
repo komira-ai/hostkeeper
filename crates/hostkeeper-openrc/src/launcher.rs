@@ -61,7 +61,8 @@
 //! group (`setsid`, `setpgid`) is not killed with it. And unlike a systemd unit the step is not
 //! bounded by itself: if the daemon is killed while a bounded step runs, the step runs on until
 //! the daemon is back, finds the step `running` in its record and stops it by name (resume
-//! stops a unit found running before it runs the step again), as on a Mac.
+//! stops a unit found running before it runs the step again), as on a Mac; or until it next
+//! writes to its standard output or error, whose reading end was the daemon's (`SIGPIPE`).
 //!
 //! The decisions of the launcher are in methods and functions that are not generic, so each is
 //! measured once.

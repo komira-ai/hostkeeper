@@ -16,7 +16,7 @@
 //!    write does not stop the start;
 //! 3. `exec`s `current` with its own arguments, so the binary the self-update switched to runs
 //!    as the daemon in this process: the process id stays, and with it what the service manager
-//!    set (systemd's notify socket and watchdog, supervise-daemon's notify socket).
+//!    set (systemd's notify socket and watchdog).
 //!
 //! The trigger is the image's path and nothing else. A binary that runs from
 //! `versions/<version>` (through `current`, or by hand) is never one of the two, so it never

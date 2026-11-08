@@ -69,10 +69,11 @@ pub const SYSTEMCTL_DEADLINE: Duration = Duration::from_secs(300);
 /// the exit alone.
 pub const SYSTEMCTL_OUTPUT_CAP: usize = 4 * 1024;
 
-/// How long one `rc-service` command of the OpenRC unit control may run: `stop` and `start` wait
-/// for supervise-daemon, whose stop sends `SIGTERM` and, five seconds later, `SIGKILL`, and whose
-/// start waits for the readiness notice of a service with `notify=`, which a daemon sends after
-/// its boot work. A command still running then is killed; what it asked of OpenRC goes on.
+/// How long one `rc-service` command of the OpenRC unit control may run: `stop` waits for
+/// supervise-daemon, whose stop sends `SIGTERM` and, five seconds later, `SIGKILL`, and `start`
+/// for whatever the service's script waits for after its start (a `start_post`, or
+/// supervise-daemon's wait for a readiness notice). A command still running then is killed;
+/// what it asked of OpenRC goes on.
 pub const RC_SERVICE_DEADLINE: Duration = Duration::from_secs(300);
 /// The OpenRC service the daemon runs as: the init script `/etc/init.d/hostkeeper` of its Alpine
 /// package.
