@@ -15,6 +15,8 @@ mod desired;
 mod desired_tests;
 mod lint;
 mod linux_packages_tests;
+mod linux_releases;
+mod linux_releases_tests;
 mod mdm_package_tests;
 mod net_install;
 mod net_install_tests;

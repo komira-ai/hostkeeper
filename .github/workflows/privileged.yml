@@ -47,6 +47,13 @@
 # pull request. A release waits for a successful push run of
 # this workflow on its commit (release.yml); pr-device.yml is no part of a release.
 #
+# In the job privileged, linux_packages.rs also installs the deb, the rpm and the Arch package,
+# which the job builds from the static programs (musl) into target/linux-packages, in a
+# container of each release of crates/hostkeeper-privileged/linux-releases.toml (images pinned by
+# digest, each pulled in a step of its own; the workflow lint holds the steps to the list) and
+# runs the programs the packages install; the containers have no network and are removed when
+# they end, and the test writes nothing on the host.
+#
 # In each job the test binaries are built as the runner's own user; only their run is as root,
 # through the cargo runner `sudo`, the one use of it in the job (on the Mac, unpack_mac also runs
 # once as the runner's user, before the run as root). So no file of the Cargo registry
@@ -121,6 +128,8 @@ jobs:
       GH_SHA256: 77b9e297e94c50336823d0f84de7ef1be60cba704601fa0d98f129f47a94987b
       PREVIOUS_RELEASE_URL: https://github.com/komira-ai/hostkeeper/releases/download/v0.1.138/hostkeeper-0.1.138-linux-x86_64.tar.gz
       PREVIOUS_RELEASE_SHA256: 423ec6f09f04030219014289b864403513d37298b13ec0548d39a600caad1948
+      NFPM_VERSION: 2.48.0
+      NFPM_SHA256: 6d7f9a28b2f397934403950fcbba83f598b08d02edbe79a0815b3b4897341750
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -161,10 +170,61 @@ jobs:
         run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --location --output "$RUNNER_TEMP/previous-release.tar.gz" "$PREVIOUS_RELEASE_URL"
       - name: Check the previous release (pinned checksum)
         run: cargo xtask install-tool --download "$RUNNER_TEMP/previous-release.tar.gz" --sha256 "$PREVIOUS_RELEASE_SHA256" --out target/previous-release/hostkeeper.tar.gz
+      # The packages crates/hostkeeper-privileged/tests/linux_packages.rs installs in a container
+      # of each release of crates/hostkeeper-privileged/linux-releases.toml: the static programs,
+      # staged with the pinned gh and the trusted root, packed by nfpm as the deb, the rpm and the
+      # Arch package (artifacts.yml's build, with the same pins), into target/linux-packages. The
+      # images are pulled here, one step each (the workflow lint holds the steps to the list); the
+      # test pulls nothing and its containers have no network.
+      - name: Download nfpm (HTTPS only, redirects included)
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --location --output "$RUNNER_TEMP/nfpm.tar.gz" "https://github.com/goreleaser/nfpm/releases/download/v$NFPM_VERSION/nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz"
+      - name: Install nfpm (pinned checksum)
+        run: cargo xtask install-tool --download "$RUNNER_TEMP/nfpm.tar.gz" --sha256 "$NFPM_SHA256" --out target/privileged-tools/nfpm --extract tar.gz --member nfpm
+      - name: Add the static target
+        run: rustup target add x86_64-unknown-linux-musl
+      - name: Build the static programs
+        run: cargo build --locked --release --target x86_64-unknown-linux-musl -p hostkeeper --bin hostkeeper -p hostkeeper-pxe --bin hostkeeper-pxe
+      - name: Stage the programs, gh and the trusted root
+        run: cargo xtask release nfpm-stage --arch amd64 --gh-version "$GH_VERSION" --gh-archive "$RUNNER_TEMP/gh.tar.gz" --gh-sha256 "$GH_SHA256" --trusted-root packaging/sigstore/trusted_root.json --binaries target/x86_64-unknown-linux-musl/release --out target/nfpm
+      - name: Make the directory of the packages
+        run: mkdir -p target/linux-packages
+      - name: Build the deb
+        env:
+          VERSION: 0.1.0
+          ARCH: amd64
+        run: target/privileged-tools/nfpm package --config packaging/linux/nfpm.yaml --packager deb --target target/linux-packages
+      - name: Build the rpm
+        env:
+          VERSION: 0.1.0
+          ARCH: amd64
+        run: target/privileged-tools/nfpm package --config packaging/linux/nfpm.yaml --packager rpm --target target/linux-packages
+      - name: Build the Arch package
+        env:
+          VERSION: 0.1.0
+          ARCH: amd64
+        run: target/privileged-tools/nfpm package --config packaging/linux/nfpm.yaml --packager archlinux --target target/linux-packages
+      - name: Pull debian:12
+        run: docker pull debian@sha256:268fb24c39bca92d326dd83ea3abebe4a3f7751c804ffef23bb6d857dd343ff8
+      - name: Pull debian:13
+        run: docker pull debian@sha256:9c6e381421d0f48d1b8133e573f33c185ee16cbf505eda9c4a8a4791b25ea8a6
+      - name: Pull ubuntu:22.04
+        run: docker pull ubuntu@sha256:076e7bf82319619f28dd0aa9c02ab34b055ad37100395b4f49a2ffba04fb5e11
+      - name: Pull ubuntu:26.04
+        run: docker pull ubuntu@sha256:6a06111c3b0a8600feadb270aec771dc239bf407b25625f93f44ab00e11f4d3c
+      - name: Pull almalinux:8
+        run: docker pull almalinux@sha256:2d0f2eb2a83cc09dbc2eb92fade4dbe8f709628149e81aa00aec70630406603b
+      - name: Pull almalinux:10
+        run: docker pull almalinux@sha256:5a4b41a427c9717be8f4ac2a32aa22efbae5f9124fbcb79a6765394f312acfe8
+      - name: Pull opensuse/leap:16.0
+        run: docker pull opensuse/leap@sha256:a4115e2f5aea9712a7c73974fd94000a034fc3051ef29b5f7722fbf04070dd9d
+      - name: Pull opensuse/tumbleweed
+        run: docker pull opensuse/tumbleweed@sha256:871173bf717af0926bd92324ee6f73ba285e0721f0c8ac00ef2c77f1c88d979e
+      - name: Pull archlinux:base
+        run: docker pull archlinux@sha256:b1c2fe6e717bfd5673af8fc217e1e1c3ce0dcbb1d53c3414c8425e7ce79fc6d9
       - name: Build the privileged tests as the runner's user
-        run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test transient_unit --test observer --test unit_control --test self_update --test tierstore_shaped --test self_update_across_releases --test mdm_cert_units
+        run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test transient_unit --test observer --test unit_control --test self_update --test tierstore_shaped --test self_update_across_releases --test linux_packages --test mdm_cert_units
       - name: Run the privileged tests as root
-        run: cargo test -p hostkeeper-privileged --features privileged --locked --config "target.'cfg(unix)'.runner = 'sudo'" --test transient_unit --test observer --test unit_control --test self_update --test tierstore_shaped --test self_update_across_releases --test mdm_cert_units -- --test-threads=1
+        run: cargo test -p hostkeeper-privileged --features privileged --locked --config "target.'cfg(unix)'.runner = 'sudo'" --test transient_unit --test observer --test unit_control --test self_update --test tierstore_shaped --test self_update_across_releases --test linux_packages --test mdm_cert_units -- --test-threads=1
       - name: The journal of the test units
         if: failure()
         run: journalctl --unit 'hostkeeper-ci-*' --no-pager
