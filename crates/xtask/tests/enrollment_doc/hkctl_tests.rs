@@ -170,6 +170,23 @@ fn every_kind_of_flag_is_taken() {
     ] {
         assert_eq!(line(help), Ok(Parsed::Help), "{help}");
     }
+    for endpoint in [
+        "https://c.example.com",
+        "https://c.example.com/",
+        "https://c.example.com:8443",
+        "https://[2001:db8::1]:443/",
+        "https://[2001:db8::1]",
+        "https://<private-listener>",
+        "https://<private-listener>:8443",
+    ] {
+        assert_eq!(
+            line(&format!(
+                "--endpoint {endpoint} --ca-file c --token-file t things put"
+            )),
+            put,
+            "{endpoint}"
+        );
+    }
     assert_eq!(line("--version"), Ok(Parsed::Version));
     assert_eq!(
         line("--endpoint https://c.example.com --version"),
@@ -313,6 +330,46 @@ fn a_line_hkctl_refuses_is_refused() {
             "--token-stdin and --request both read stdin; at most one input may",
         ),
         ("--endpoint", "--endpoint needs a value"),
+        (
+            "--endpoint https:// --ca-file c --token-file t things put",
+            "--endpoint takes https://<host>[:<port>]",
+        ),
+        (
+            "--endpoint https://c.example.com/v1 --ca-file c --token-file t things put",
+            "--endpoint takes https://<host>[:<port>]",
+        ),
+        (
+            "--endpoint https://c.example.com:123456 --ca-file c --token-file t things put",
+            "--endpoint takes https://<host>[:<port>]",
+        ),
+        (
+            "--endpoint https://c.example.com:port --ca-file c --token-file t things put",
+            "--endpoint takes https://<host>[:<port>]",
+        ),
+        (
+            "--endpoint https://c.example.com: --ca-file c --token-file t things put",
+            "--endpoint takes https://<host>[:<port>]",
+        ),
+        (
+            "--endpoint https://[2001:db8::1]x --ca-file c --token-file t things put",
+            "--endpoint takes https://<host>[:<port>]",
+        ),
+        (
+            "--endpoint https://[] --ca-file c --token-file t things put",
+            "--endpoint takes https://<host>[:<port>]",
+        ),
+        (
+            "--endpoint https://[2001:db8::1 --ca-file c --token-file t things put",
+            "--endpoint takes https://<host>[:<port>]",
+        ),
+        (
+            "--endpoint https://c_d.example.com --ca-file c --token-file t things put",
+            "--endpoint takes https://<host>[:<port>]",
+        ),
+        (
+            "--endpoint https://<> --ca-file c --token-file t things put",
+            "--endpoint takes https://<host>[:<port>]",
+        ),
     ] {
         assert_eq!(line(text), Err(error.to_owned()), "{text}");
     }

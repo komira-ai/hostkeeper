@@ -10,9 +10,10 @@
 //! that reads stdin; a bool `true` or `false`, an enum one of its values, an integer in its kind's
 //! range, a float a JSON number; a map `key=value` with each key once; a secret only as
 //! `--<flag>-file` or `--<flag>-stdin`. What the script checks only once it runs (a file it reads,
-//! the endpoint's host, a request file's keys) is not read here, but a call needs what it needs
-//! of every line: `--endpoint` with an `https://` value, `--ca-file`, and exactly one of the
-//! token's three inputs.
+//! a request file's keys) is not read here, but a call needs what it needs of every line:
+//! `--endpoint` as `https://<host>[:<port>]` (a host of letters, digits, `.` and `-`, or `[...]`
+//! of an IPv6 address, or a placeholder `<...>` in its place; a port of one to five digits),
+//! `--ca-file`, and exactly one of the token's three inputs.
 
 use hostkeeper_proto::ctl::{Command, Field, FieldKind, Input, Label};
 
@@ -203,7 +204,7 @@ impl Line<'_> {
         if !has("endpoint") {
             return Err("a call needs --endpoint".to_owned());
         }
-        if !self.endpoint.starts_with("https://") {
+        if !is_endpoint(&self.endpoint) {
             return Err("--endpoint takes https://<host>[:<port>]".to_owned());
         }
         if !has("ca-file") {
@@ -247,6 +248,50 @@ fn switch(flag: &str, word: &str) -> Result<(), String> {
         return Err(format!("{flag} takes no value"));
     }
     Ok(())
+}
+
+/// Whether `value` is an endpoint the script takes, its pattern
+/// `^https://([A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])(:[0-9]{1,5})?/?$`, with a placeholder `<...>`
+/// (no white space in it) allowed for the host.
+fn is_endpoint(value: &str) -> bool {
+    let Some(rest) = value.strip_prefix("https://") else {
+        return false;
+    };
+    let rest = rest.strip_suffix('/').unwrap_or(rest);
+    // The host (`None` for an IPv6 address, already checked) and the port.
+    let (host, port) = match rest.strip_prefix('[') {
+        Some(v6) => {
+            let Some((address, after)) = v6.split_once(']') else {
+                return false;
+            };
+            let address_ok = !address.is_empty()
+                && address
+                    .chars()
+                    .all(|c| c.is_ascii_hexdigit() || c == ':' || c == '.');
+            let port = match after.strip_prefix(':') {
+                Some(port) => Some(port),
+                None if after.is_empty() => None,
+                None => return false,
+            };
+            if !address_ok {
+                return false;
+            }
+            (None, port)
+        }
+        None => match rest.split_once(':') {
+            Some((host, port)) => (Some(host), Some(port)),
+            None => (Some(rest), None),
+        },
+    };
+    let host_ok = host.is_none_or(|h| {
+        (h.len() > 2 && h.starts_with('<') && h.ends_with('>'))
+            || (!h.is_empty()
+                && h.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-'))
+    });
+    let port_ok =
+        port.is_none_or(|p| (1..=5).contains(&p.len()) && p.bytes().all(|b| b.is_ascii_digit()));
+    host_ok && port_ok
 }
 
 /// Whether `value` is a whole number of seconds, 1 to 999999.

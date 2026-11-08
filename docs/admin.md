@@ -121,8 +121,9 @@ it here and checks it against the coordinator's list before approving.
 | 2 | a usage error, or the daemon refused the request: `INVALID_ARGUMENT` (`invalid_request`) or `FAILED_PRECONDITION` (`nothing_running`, `record_reads`, `busy`) |
 | 3 | `UNAUTHENTICATED` or `PERMISSION_DENIED` |
 
-These are the codes of `hkctl` ([cli.md](cli.md)), from the mapping `hostkeeper ctl` has
-(`crates/hostkeeper-ctl/src/exit.rs`), which this command calls. A call that fails prints nothing on standard output and one line on standard error: `hostkeeper admin: <message>
-(<code>)` for an answer of the daemon, whose message is the refusal's token (for example
-`hostkeeper admin: not_installed (NotFound)`), and `hostkeeper admin: cannot connect to
-<socket>: <why>` for a socket that could not be reached.
+These are the codes of `hostkeeper admin`, from the mapping of gRPC codes `hostkeeper ctl` has
+(`crates/hostkeeper-ctl/src/exit.rs`), which this command calls; `hkctl` maps the gateway's codes
+the same way ([cli.md](cli.md)). A call that fails prints nothing on standard output and one
+line on standard error: `hostkeeper admin: <message> (<code>)` for an answer of the daemon, whose
+message is the refusal's token (for example `hostkeeper admin: not_installed (NotFound)`), and
+`hostkeeper admin: cannot connect to <socket>: <why>` for a socket that could not be reached.

@@ -408,12 +408,12 @@ fn flags_of(command: &Command) -> Vec<String> {
 /// service and for the rest after it; values are passed over.
 fn span_problems(span: &str, globals: &[Global]) -> Vec<String> {
     let commands = hkctl::served(COMMANDS);
-    let is_global = |w: &str| {
-        let flag = w.split('=').next().unwrap_or(w);
-        matches!(flag, "--help" | "-h" | "--version")
-            || globals
-                .iter()
-                .any(|g| flag.strip_prefix("--") == Some(g.name.as_str()))
+    // After the method, as in the script: a global flag but `--version`, which is hkctl's own
+    // only before the service.
+    let is_global = |flag: &str| {
+        globals
+            .iter()
+            .any(|g| flag.strip_prefix("--") == Some(g.name.as_str()))
     };
     let takes_value = |w: &str| {
         !w.contains('=')
@@ -421,7 +421,7 @@ fn span_problems(span: &str, globals: &[Global]) -> Vec<String> {
                 .iter()
                 .any(|g| g.value && w.strip_prefix("--") == Some(g.name.as_str()))
     };
-    let mut words = span.split_whitespace().skip(1).peekable();
+    let mut words = span.split_whitespace().skip(1);
     let mut names: Vec<String> = Vec::new();
     while names.len() < 2 {
         let Some(word) = words.next() else { break };
@@ -574,6 +574,10 @@ fn the_doc_check_refuses_each_defect() {
         (
             "`hkctl --output json\nhosts get --node-id n`".to_owned(),
             "docs/x.md: `hkctl --output json hosts get --node-id n`: hkctl has no service json",
+        ),
+        (
+            "`hkctl hosts get --node-id n --version`".to_owned(),
+            "docs/x.md: `hkctl hosts get --node-id n --version`: hosts get has no flag --version",
         ),
         (
             "`hkctl hosts get --transport=gateway`".to_owned(),
