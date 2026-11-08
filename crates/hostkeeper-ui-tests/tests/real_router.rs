@@ -155,6 +155,10 @@ const REQUESTS: &[(&str, &str)] = &[
             "fleet": {"confirmService": "kbf"}}"#,
     ),
     (
+        "hostkeeper.operator.v1.Releases/GetRelease",
+        r#"{"service": "kbf", "version": "1.2.3"}"#,
+    ),
+    (
         "hostkeeper.operator.v1.Releases/Halt",
         r#"{"service": "kbf", "reason": "bad canary"}"#,
     ),
