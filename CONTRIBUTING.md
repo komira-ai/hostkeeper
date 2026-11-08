@@ -71,8 +71,9 @@ cargo +nightly-2026-10-01 llvm-cov --workspace --locked --branch --lcov --output
 cargo run -p coverage-gate --locked -- --lcov target/lcov.info --root .
 ```
 
-Nothing privileged and nothing for macOS runs on a pull request, but in `pr-device.yml` (below),
-on every pull request. The workflow lint refuses such a
+Nothing privileged and nothing for macOS runs on a pull request, but in `pr-device.yml` (below):
+its privileged job on every pull request, its macOS jobs on every pull request that changes a path
+they build or read. The workflow lint refuses such a
 job in any other workflow that runs on `pull_request`, refuses a job as root (`sudo`, a privileged
 container) in any workflow but `privileged.yml`, `net-install.yml` and the three copies of
 `privileged.yml`'s jobs in `pr-device.yml`,
@@ -106,8 +107,8 @@ the same branch cancels the older, so on `main` only the newest commit's run is 
 
 ## The macOS and privileged jobs of a pull request
 
-`.github/workflows/pr-device.yml` runs on every pull request, beside `ci.yml`. Its four jobs are
-each a check of its own, required of every pull request:
+`.github/workflows/pr-device.yml` runs on every pull request, beside `ci.yml`. Its four checks are
+required of every pull request:
 
 - `macos-test`: the tests of the crates the `hostkeeper` and `hello` binaries are built from (the
   code a Mac runs: the daemon, the launchd adapters, the step launcher, placement, the package
@@ -124,8 +125,25 @@ each a check of its own, required of every pull request:
   `artifacts.yml` pins (the workflow lint holds the version and the SHA-256 equal to its).
 
 `macos-device`, `privileged` and `openrc-device` are copies of `privileged.yml`'s jobs of those
-names, key for key
-(the workflow lint compares them), so a pull request runs what will run after its merge. A newer
+names, key for key (the workflow lint compares them; `macos-device` but its name, needs and
+condition), so a pull request runs what will run after its merge. `privileged` and `openrc-device`
+run on every pull request.
+
+GitHub-hosted macOS runners are few, so the two macOS jobs run only when the pull request changes
+a path they build, test or read. A Linux job, `changes`, runs `git diff` from the merge base of the
+pull request's base and its head with the exclude pathspecs of its step, the skip list: the docs
+but `docs/macos.md` and `docs/conformance.md`, the top-level guides but `README.md` and
+`MIGRATION.md` (tests of the Mac's crates read those four), the workflows with no macOS job that
+no macOS job copies, and the test targets of `crates/hostkeeper-privileged` that `macos-device`
+does not build. When every changed path is on the list, the macOS jobs are skipped; any other path,
+a new one included, and a diff that cannot be computed run them. The checks `macos-test` and
+`macos-device` are Linux jobs of those names that run after the macOS jobs whatever they did: each
+passes when its macOS job (whose own check is `macos-test on macos-15` or
+`macos-device on macos-15`) passed, or was skipped by the path rule, which it then says, and fails
+otherwise. The workflow lint (`crates/xtask/tests/workflows`, `pr_paths.rs`) refuses an entry no
+reason covers: one that matches no file, a workflow with a macOS job, a test target the device job
+builds or another file includes, or a path a source the Mac compiles, or a file of a crate whose
+tests run on macOS, names. A push to `main` runs every macOS job, with no path rule. A newer
 push to the same pull request cancels the older run. These jobs hold no write scope and name no
 secret or token, and save no cache.
 

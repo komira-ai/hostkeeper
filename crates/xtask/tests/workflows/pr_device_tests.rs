@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 
 use super::lint::{PRIVILEGED_WORKFLOW, entries, entry, lint};
 use super::pr_device::{
-    CONCURRENCY_PROBLEM, FILE, GROUP, JOBS, ON_PROBLEM, TOP_LEVEL, crate_problems, mirror_problems,
-    same,
+    CONCURRENCY_PROBLEM, FILE, GATED_IF, GROUP, JOBS, ON_PROBLEM, TOP_LEVEL, crate_problems,
+    mirror_problems, same,
 };
 use super::yaml::{self, Node};
 use super::{CLEAN, with, with_in, workflows};
@@ -36,7 +36,13 @@ fn device_with(from: &str, to: &str) -> String {
 }
 
 /// The start of the job `macos-test`, once in the file.
-const MACOS_TEST: &str = "  macos-test:\n    runs-on: macos-15\n";
+const MACOS_TEST: &str = "  macos-test:\n    name: macos-test on macos-15\n    needs: changes\n    if: ${{ !cancelled() && !(needs.changes.result == 'success' && needs.changes.outputs.needed == 'false') }}\n    runs-on: macos-15\n";
+
+/// The start of the job `macos-device`, once in the file.
+const MACOS_DEVICE: &str = "  macos-device:\n    name: macos-device on macos-15\n    needs: changes\n    if: ${{ !cancelled() && !(needs.changes.result == 'success' && needs.changes.outputs.needed == 'false') }}\n    runs-on: macos-15\n";
+
+/// The start of the job `privileged`, once in the file.
+const PRIVILEGED: &str = "  privileged:\n    runs-on: ubuntu-24.04\n";
 
 /// The directories of the workspace crates the manifest `manifest` of the crate in `dir` depends on,
 /// through `[dependencies]` and `[build-dependencies]`, on any target (`[target.<cfg>.…]`): a
@@ -289,8 +295,7 @@ fn root_and_macos_on_a_pull_request_are_allowed_only_in_the_jobs_listed_for_them
         found[0].starts_with("job macos-test: privileged on pull_request (`sudo cargo test"),
         "{found:?}"
     );
-    let linux = "    runs-on: ubuntu-24.04\n    permissions:\n      contents: read\n    # A bound on the whole job, against a test that hangs; no test depends on it.\n    timeout-minutes: 60\n";
-    let text = device_with(linux, &linux.replace("ubuntu-24.04", "macos-15"));
+    let text = device_with(PRIVILEGED, "  privileged:\n    runs-on: macos-15\n");
     assert_eq!(
         problems(&text),
         [
@@ -395,40 +400,92 @@ fn the_concurrency_of_pr_device_yml_is_one_group_per_pull_request_that_cancels()
 }
 
 #[test]
-fn each_job_of_pr_device_yml_runs_on_every_pull_request_on_its_runner() {
-    // Catches: a job that a condition or another job's result can skip (a required check that
-    // then passes, or never reports, without its tests having run), a job the list does not name,
-    // one of the list missing, and a job on another runner.
-    let cases: [(&str, &str, &str); 5] = [
+fn each_job_of_pr_device_yml_runs_or_is_gated_as_its_kind_on_its_runner() {
+    // Catches: the privileged job or the changes job under a condition or after another job (a
+    // required check that then passes, or never reports, without its tests having run); a macOS
+    // job with another condition (one that skips it on a failed or unanswered changes job), with
+    // another name (which would take its gate's required name) or without needing changes; a job
+    // the list does not name, one of the list missing, and a job on another runner.
+    let cases: Vec<(&str, String, Vec<String>)> = vec![
         (
-            MACOS_TEST,
-            "  macos-test:\n    if: ${{ github.event.pull_request.draft == false }}\n    runs-on: macos-15\n",
-            "job macos-test: has `if`, and must run and report on every pull request",
+            PRIVILEGED,
+            "  privileged:\n    if: ${{ github.event.pull_request.draft == false }}\n    runs-on: ubuntu-24.04\n".to_owned(),
+            vec!["job privileged: has `if`, and must run and report on every pull request".to_owned()],
+        ),
+        (
+            PRIVILEGED,
+            "  privileged:\n    needs: changes\n    runs-on: ubuntu-24.04\n".to_owned(),
+            vec!["job privileged: has `needs`, and must run and report on every pull request".to_owned()],
+        ),
+        (
+            PRIVILEGED,
+            "  privileged:\n    name: privileged on linux\n    runs-on: ubuntu-24.04\n".to_owned(),
+            vec!["job privileged: has `name`, and must run and report on every pull request".to_owned()],
+        ),
+        (
+            "  changes:\n    runs-on: ubuntu-24.04\n",
+            "  changes:\n    if: ${{ github.event.pull_request.draft == false }}\n    runs-on: ubuntu-24.04\n".to_owned(),
+            vec![
+                "job changes: has `if`, and must run and report on every pull request".to_owned(),
+                "job changes: not pr_paths::CHANGES_TEMPLATE, key for key".to_owned(),
+            ],
         ),
         (
             MACOS_TEST,
-            "  macos-test:\n    needs: privileged\n    runs-on: macos-15\n",
-            "job macos-test: has `needs`, and must run and report on every pull request",
+            MACOS_TEST.replace("!cancelled() && ", ""),
+            vec![format!("job macos-test: must run under `if: {GATED_IF}`")],
         ),
         (
             MACOS_TEST,
-            "  macos-test:\n    runs-on: macos-14\n",
-            "job macos-test: runs on a runner outside [\"macos-15\"]",
+            MACOS_TEST.replace("== 'false'", "!= 'true'"),
+            vec![format!("job macos-test: must run under `if: {GATED_IF}`")],
+        ),
+        (
+            "    name: macos-test on macos-15\n",
+            "    name: macos-test\n".to_owned(),
+            vec!["job macos-test: must be named `macos-test on macos-15`".to_owned()],
+        ),
+        (
+            "    name: macos-test on macos-15\n    needs: changes\n",
+            "    name: macos-test on macos-15\n    needs: [changes, privileged]\n".to_owned(),
+            vec!["job macos-test: must need exactly changes".to_owned()],
         ),
         (
             MACOS_TEST,
-            "  macos-test:\n    runs-on: [macos-15]\n",
-            "job macos-test: runs on a runner outside [\"macos-15\"]",
+            MACOS_TEST.replace("    runs-on: macos-15\n", "    runs-on: macos-14\n"),
+            vec!["job macos-test: runs on a runner outside [\"macos-15\"]".to_owned()],
         ),
         (
-            "jobs:\n",
-            "jobs:\n  extra:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: cargo test\n",
-            "job extra is not a job of pr-device.yml",
+            MACOS_TEST,
+            MACOS_TEST.replace("    runs-on: macos-15\n", "    runs-on: [macos-15]\n"),
+            vec!["job macos-test: runs on a runner outside [\"macos-15\"]".to_owned()],
+        ),
+        (
+            "\njobs:\n",
+            "\njobs:\n  extra:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: cargo test\n".to_owned(),
+            vec!["job extra is not a job of pr-device.yml".to_owned()],
         ),
     ];
     for (from, to, want) in cases {
-        assert_eq!(problems(&device_with(from, to)), [want], "{to}");
+        assert_eq!(problems(&device_with(from, &to)), want, "{to}");
     }
+    // The device copy is held as macos-test is: its condition and its name.
+    let text = device_with(
+        MACOS_DEVICE,
+        &MACOS_DEVICE.replace("!cancelled() && ", "always() && "),
+    );
+    assert_eq!(
+        problems(&text),
+        [format!("job macos-device: must run under `if: {GATED_IF}`")]
+    );
+    let text = device_with(
+        MACOS_DEVICE,
+        &MACOS_DEVICE.replace("    needs: changes\n", ""),
+    );
+    assert_eq!(
+        problems(&text),
+        ["job macos-device: must need exactly changes"]
+    );
     // Jobs of the list missing: privileged and openrc-device, the last two, removed with every
     // line after the start of the first; and openrc-device alone.
     let text = device();
@@ -565,10 +622,19 @@ fn a_copy_that_drifted_from_privileged_yml_is_refused() {
     assert_eq!(mirror_problems(&device(), "").len(), 1);
     // A copy with an `if:` added is no copy either (and `problems` refuses the `if:` itself).
     let copy = device_with(
-        "  macos-device:\n    runs-on: macos-15\n",
-        "  macos-device:\n    if: ${{ always() }}\n    runs-on: macos-15\n",
+        PRIVILEGED,
+        "  privileged:\n    if: ${{ always() }}\n    runs-on: ubuntu-24.04\n",
+    );
+    assert_eq!(mirror_problems(&copy, &privileged), [drift("privileged")]);
+    // The gated copy is compared without its name, needs and `if:` (which `problems` holds), and
+    // with every other key: one added, or one of those three missing, is still compared.
+    let copy = device_with(
+        MACOS_DEVICE,
+        &format!("{MACOS_DEVICE}    continue-on-error: true\n"),
     );
     assert_eq!(mirror_problems(&copy, &privileged), [drift("macos-device")]);
+    let copy = device_with(MACOS_DEVICE, "  macos-device:\n    runs-on: macos-15\n");
+    assert_eq!(mirror_problems(&copy, &privileged), Vec::<String>::new());
 }
 
 #[test]

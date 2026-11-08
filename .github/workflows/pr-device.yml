@@ -1,8 +1,13 @@
 # The macOS and privileged jobs of every pull request. ci.yml runs the Linux checks (lint, test
 # and coverage) as before; this workflow adds what before ran only after a merge to main
 # (privileged.yml), so that a change that breaks the Mac or the service managers is red before it
-# merges. Its jobs, each on every pull request:
+# merges. Its jobs:
 #
+# - changes: on Linux, whether the pull request changes a path the macOS jobs build, test or read.
+#   It lists the paths changed between the merge base of the pull request's base and its head
+#   (the event's base and head SHAs) and answers `needed=false` only when every one is on the skip
+#   list of its step; any other path, a diff that cannot be computed, or an event that is not a
+#   pull request answers `needed=true`.
 # - macos-test: the tests of the crates the `hostkeeper` and `hello` binaries are built from (the
 #   code a Mac runs), on a GitHub-hosted macOS runner (macos-15), as the runner's user, with no
 #   fail-fast so that a run reports every failure. The rest of the workspace (the coordinator's
@@ -11,21 +16,32 @@
 # - macos-device: the device tests under launchd as root, privileged.yml's job of that name, step
 #   for step.
 # - privileged: the privileged tests against systemd as root, privileged.yml's job of that name,
-#   step for step.
+#   step for step. It runs on every pull request, whatever changes says.
 # - openrc-device: the daemon under OpenRC in an Alpine Linux container, as root, privileged.yml's
-#   job of that name, step for step.
+#   job of that name, step for step. It runs on every pull request, whatever changes says.
 #
-# Each is a check of its own name, required of every pull request. A pull request's newer run
-# cancels its older one. No job of it holds a write scope or names a secret or the token, and no
-# cache is saved from a pull request (each copied job's save step runs only on a push, which
-# never starts this workflow): the jobs restore the caches privileged.yml's runs on main saved,
-# and macos-test the one of macos-device. The workflow lint (crates/xtask/tests/workflows,
-# pr_device.rs) holds this file to its trigger, its concurrency, its top-level keys, its four
-# jobs and their runners, the copied jobs to privileged.yml's, and to no secret; it refuses a
-# macOS job or a job as root in any other workflow that runs for a pull request.
+# macos-test and macos-device run unless changes passed and answered `needed=false`; a changes
+# job that failed or gave no answer runs them. Their checks are named `macos-test on macos-15`
+# and `macos-device on macos-15`. The checks named `macos-test` and `macos-device`, required of
+# every pull request as before, are the jobs macos-test-check and macos-device-check: on Linux,
+# after the macOS job whatever it did, each passes when its macOS job passed, or states that the
+# path rule skipped it when it was skipped on `needed=false`, and fails otherwise. So each
+# required name is the check of exactly one job, which always runs. `privileged` and
+# `openrc-device` are checks of their own.
 #
-# privileged.yml still runs after every merge to main, and a release still waits for that run on
-# its commit (release.yml); this workflow is no part of a release.
+# A pull request's newer run cancels its older one. No job of it holds a write scope or names a
+# secret or the token, and no cache is saved from a pull request (each copied job's save step
+# runs only on a push, which never starts this workflow): the jobs restore the caches
+# privileged.yml's runs on main saved, and macos-test the one of macos-device. The workflow lint
+# (crates/xtask/tests/workflows, pr_device.rs and pr_paths.rs) holds this file to its trigger, its
+# concurrency, its top-level keys, its jobs, their runners and conditions, the copied jobs to
+# privileged.yml's (but the name, needs and condition of macos-device), the skip list to entries
+# no macOS job builds or reads, and to no secret; it refuses a macOS job or a job as root in any
+# other workflow that runs for a pull request.
+#
+# privileged.yml still runs every job, macos-device included, after every merge to main, and a
+# release still waits for that run on its commit (release.yml); this workflow is no part of a
+# release.
 name: pr-device
 
 on:
@@ -46,9 +62,94 @@ env:
   CARGO_INCREMENTAL: 0
 
 jobs:
+  # Whether the pull request changes a path the macOS jobs build, test or read: `needed` is
+  # `false` only on a pull request whose diff step exited 0, that is, when git found no changed
+  # path outside the skip list. git exits 1 when it finds one and 128 when it cannot compute the
+  # diff (a SHA missing or empty); either fails the step (continue-on-error keeps this job green)
+  # and answers `true`. The checkout holds the whole history, so the merge base of the two SHAs is
+  # in it; `--merge-base` diffs that merge base against the head, so what the base branch gained
+  # since (a merge from main into the pull request) is not counted, and `--no-renames` lists a
+  # rename as its old and its new path.
+  changes:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    timeout-minutes: 10
+    outputs:
+      needed: ${{ github.event_name != 'pull_request' || steps.diff.outcome != 'success' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      # The skip list: the paths no macOS job compiles, runs or reads (the workflow lint checks
+      # that no source a macOS job compiles, and no file of a crate whose tests run on macOS,
+      # names one). A path not on it, a new file included, runs the macOS jobs.
+      # - docs/*/** (agents, deploy, design, operations, report) and the files of docs/ but
+      #   macos.md and conformance.md (read by the tests of hostkeeper-launchd and
+      #   hostkeeper-hook, which run on macOS): prose for readers.
+      # - AGENTS.md, CLAUDE.md, CONTRIBUTING.md, SECURITY.md: the rules and guides for
+      #   contributors. README.md and MIGRATION.md are not on the list: the tests of
+      #   hostkeeper-daemon, hostkeeper-hook and hostkeeper-steps read them.
+      # - The workflows with no macOS job that no macOS job copies: advisories, ci, hello-desired,
+      #   net-install, set-desired and trusted-root. pr-device.yml, privileged.yml (whose jobs this
+      #   file copies), artifacts.yml and release.yml are not on the list.
+      # - The test targets of crates/hostkeeper-privileged that macos-device does not name with
+      #   `--test` and that no other file of the crate includes as a module: the Linux device,
+      #   package and network-install tests and their rigs. cargo builds only the targets a
+      #   `--test` names, so none of them is compiled on macOS. The modules the targets share
+      #   (support/, e2e/, shared/, across/, netinstall/) are not on the list.
+      - name: Changed paths outside the skip list (exit 1), or no diff (exit 128)
+        id: diff
+        continue-on-error: true
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: >-
+          git diff --quiet --no-renames --merge-base "$BASE_SHA" "$HEAD_SHA" -- .
+          ':(exclude,glob)docs/*/**'
+          ':(exclude,glob)docs/admin.md'
+          ':(exclude,glob)docs/cli.md'
+          ':(exclude,glob)docs/enrollment-coordinator.md'
+          ':(exclude,glob)docs/gateway.md'
+          ':(exclude,glob)docs/hello.md'
+          ':(exclude,glob)docs/package-format.md'
+          ':(exclude,glob)docs/service-observation.md'
+          ':(exclude,glob)docs/ui-serving.md'
+          ':(exclude,glob)AGENTS.md'
+          ':(exclude,glob)CLAUDE.md'
+          ':(exclude,glob)CONTRIBUTING.md'
+          ':(exclude,glob)SECURITY.md'
+          ':(exclude,glob).github/workflows/advisories.yml'
+          ':(exclude,glob).github/workflows/ci.yml'
+          ':(exclude,glob).github/workflows/hello-desired.yml'
+          ':(exclude,glob).github/workflows/net-install.yml'
+          ':(exclude,glob).github/workflows/set-desired.yml'
+          ':(exclude,glob).github/workflows/trusted-root.yml'
+          ':(exclude,glob)crates/hostkeeper-privileged/tests/first_boot.rs'
+          ':(exclude,glob)crates/hostkeeper-privileged/tests/fixture_hook.rs'
+          ':(exclude,glob)crates/hostkeeper-privileged/tests/hello_rig.rs'
+          ':(exclude,glob)crates/hostkeeper-privileged/tests/install_uninstall.rs'
+          ':(exclude,glob)crates/hostkeeper-privileged/tests/linux_packages.rs'
+          ':(exclude,glob)crates/hostkeeper-privileged/tests/mdm_cert_units.rs'
+          ':(exclude,glob)crates/hostkeeper-privileged/tests/net_install.rs'
+          ':(exclude,glob)crates/hostkeeper-privileged/tests/net_install_arm64.rs'
+          ':(exclude,glob)crates/hostkeeper-privileged/tests/net_install_rig.rs'
+          ':(exclude,glob)crates/hostkeeper-privileged/tests/observer.rs'
+          ':(exclude,glob)crates/hostkeeper-privileged/tests/self_update.rs'
+          ':(exclude,glob)crates/hostkeeper-privileged/tests/selfupdate_daemon.rs'
+          ':(exclude,glob)crates/hostkeeper-privileged/tests/tierstore_rig.rs'
+          ':(exclude,glob)crates/hostkeeper-privileged/tests/tierstore_shaped.rs'
+          ':(exclude,glob)crates/hostkeeper-privileged/tests/transient_unit.rs'
+          ':(exclude,glob)crates/hostkeeper-privileged/tests/unit_control.rs'
+
   # The tests of the Mac's crates, as the runner's user. The build restores the cache of
-  # privileged.yml's macos-device job (this job saves none), whose dependencies it shares.
+  # privileged.yml's macos-device job (this job saves none), whose dependencies it shares. Its
+  # check is `macos-test on macos-15`; the required check `macos-test` is macos-test-check.
   macos-test:
+    name: macos-test on macos-15
+    needs: changes
+    if: ${{ !cancelled() && !(needs.changes.result == 'success' && needs.changes.outputs.needed == 'false') }}
     runs-on: macos-15
     permissions:
       contents: read
@@ -75,8 +176,31 @@ jobs:
       - name: Run the tests of the Mac's crates
         run: cargo test --locked --no-fail-fast -p hello -p hostkeeper -p hostkeeper-config -p hostkeeper-daemon -p hostkeeper-enroll -p hostkeeper-hook -p hostkeeper-launchd -p hostkeeper-link -p hostkeeper-observe -p hostkeeper-openrc -p hostkeeper-package -p hostkeeper-placed -p hostkeeper-proto -p hostkeeper-steps -p hostkeeper-unpack -p hostkeeper-wire
 
-  # privileged.yml's job macos-device; the workflow lint holds it, key for key, to that job.
+  # The required check `macos-test`: it runs after macos-test whatever it did, cancelled included, and
+  # passes when macos-test passed, or when changes passed and answered `needed=false` and macos-test was
+  # skipped (the first step says so); it fails otherwise.
+  macos-test-check:
+    name: macos-test
+    needs: [changes, macos-test]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    permissions: {}
+    timeout-minutes: 5
+    steps:
+      - name: Skipped by the path rule
+        if: ${{ needs.macos-test.result == 'skipped' && needs.changes.result == 'success' && needs.changes.outputs.needed == 'false' }}
+        run: echo "macos-test was skipped by the path rule of pr-device.yml; every changed path is on the skip list of its job changes"
+      - name: macos-test on macos-15 did not pass
+        if: ${{ always() && !(needs.macos-test.result == 'success' || (needs.macos-test.result == 'skipped' && needs.changes.result == 'success' && needs.changes.outputs.needed == 'false')) }}
+        run: exit 1
+
+  # privileged.yml's job macos-device; the workflow lint holds it, key for key, to that job, but
+  # its name, needs and condition, which are macos-test's. Its check is `macos-device on
+  # macos-15`; the required check `macos-device` is macos-device-check.
   macos-device:
+    name: macos-device on macos-15
+    needs: changes
+    if: ${{ !cancelled() && !(needs.changes.result == 'success' && needs.changes.outputs.needed == 'false') }}
     runs-on: macos-15
     permissions:
       contents: read
@@ -139,6 +263,24 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
+
+  # The required check `macos-device`: it runs after macos-device whatever it did, cancelled included, and
+  # passes when macos-device passed, or when changes passed and answered `needed=false` and macos-device was
+  # skipped (the first step says so); it fails otherwise.
+  macos-device-check:
+    name: macos-device
+    needs: [changes, macos-device]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    permissions: {}
+    timeout-minutes: 5
+    steps:
+      - name: Skipped by the path rule
+        if: ${{ needs.macos-device.result == 'skipped' && needs.changes.result == 'success' && needs.changes.outputs.needed == 'false' }}
+        run: echo "macos-device was skipped by the path rule of pr-device.yml; every changed path is on the skip list of its job changes"
+      - name: macos-device on macos-15 did not pass
+        if: ${{ always() && !(needs.macos-device.result == 'success' || (needs.macos-device.result == 'skipped' && needs.changes.result == 'success' && needs.changes.outputs.needed == 'false')) }}
+        run: exit 1
 
   # privileged.yml's job privileged; the workflow lint holds it, key for key, to that job.
   privileged:

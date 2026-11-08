@@ -47,7 +47,8 @@
 # in every other workflow but net-install.yml, and
 # macOS in every workflow that runs for a pull request, but in pr-device.yml,
 # whose jobs privileged, macos-device and openrc-device are copies of this file's, step for step,
-# run on every pull request. A release waits for a successful push run of
+# run on a pull request (macos-device when the pull request changes a path the macOS jobs build
+# or read). A release waits for a successful push run of
 # this workflow on its commit (release.yml); pr-device.yml is no part of a release.
 #
 # In the job privileged, linux_packages.rs also installs the deb, the rpm and the Arch package,
