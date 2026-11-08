@@ -91,13 +91,20 @@ pub enum SetError {
     /// version disagrees with the set ([`crate::channel`]).
     #[error(transparent)]
     Channel(#[from] ChannelRefusal),
+    /// The set's targets break a rule of the release ([`hostkeeper_release::target`]).
+    #[error("target_invalid: {0}")]
+    TargetInvalid(hostkeeper_release::TargetError),
+    /// The version was set before as another release ([`crate::releases`]).
+    #[error("release_exists: the version was set before as another release")]
+    ReleaseExists,
 }
 
 impl SetError {
     /// The closed reason token of a refusal of the version itself (`below_min_version`,
     /// `unparseable_version`, `bad_version`, `digest_conflict`, `not_in_channel`,
-    /// `channel_digest_mismatch`) or of its release index (`index_invalid`,
-    /// `index_digest_mismatch`), which the answer says; `None` for every other error.
+    /// `channel_digest_mismatch`, `release_exists`), of its release index (`index_invalid`,
+    /// `index_digest_mismatch`) or of its targets (`target_invalid`), which the answer says;
+    /// `None` for every other error.
     #[must_use]
     pub const fn reason(&self) -> Option<&'static str> {
         match self {
@@ -107,6 +114,8 @@ impl SetError {
             Self::BadVersion => Some("bad_version"),
             Self::DigestConflict => Some("digest_conflict"),
             Self::Channel(refusal) => Some(refusal.token()),
+            Self::TargetInvalid(_) => Some("target_invalid"),
+            Self::ReleaseExists => Some("release_exists"),
             Self::Unauthorized(_)
             | Self::Unavailable
             | Self::Store(_)
@@ -810,32 +819,6 @@ impl Coordinator {
     ) -> Result<Set, SetError> {
         let verified = self.ci(bearer).await?;
         self.set_desired_verified(&verified, body).await
-    }
-
-    /// Why CI may not set `desired` for `service`, if it may not: the refusals of
-    /// [`Self::set_desired`], in that order.
-    fn refuse(&self, def: &ServiceDef, desired: &Desired) -> Result<(), SetError> {
-        let (service, version) = (def.name.as_str(), &desired.version);
-        if !def.version_scheme.parses(version) {
-            return Err(SetError::UnparseableVersion);
-        }
-        if def
-            .min_version
-            .as_ref()
-            .is_some_and(|floor| !version.at_least(floor))
-        {
-            return Err(SetError::BelowMinVersion);
-        }
-        if self.ops.marks(service).bad.contains(version) {
-            return Err(SetError::BadVersion);
-        }
-        let registered = self.desired.digests(service).get(version).cloned();
-        if let (Some(before), Some(now)) = (registered, desired.release())
-            && before != now
-        {
-            return Err(SetError::DigestConflict);
-        }
-        Ok(())
     }
 
     /// The name of the operator token in `bearer`: the token is compared by its SHA-256 in

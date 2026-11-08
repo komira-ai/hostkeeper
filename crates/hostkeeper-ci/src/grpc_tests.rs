@@ -10,10 +10,10 @@ use hostkeeper_proto::hostkeeper::operator::v1::releases_server::{
 };
 use hostkeeper_proto::hostkeeper::operator::v1::{
     ClearHaltRequest, ClearHaltResponse, ConvergeRequest, ConvergeResponse, Convergence,
-    ConvergenceState, DesiredState, ForceRequest, ForceResponse, HaltRequest, HaltResponse,
-    MarkBadRequest, MarkBadResponse, RoleCounts, SetDesiredRequest, SetDesiredResponse,
-    StatusRequest, StatusResponse, UnmarkBadRequest, UnmarkBadResponse, WaitConvergedRequest,
-    WaitConvergedResponse,
+    ConvergenceState, DesiredState, ForceRequest, ForceResponse, GetReleaseRequest,
+    GetReleaseResponse, HaltRequest, HaltResponse, MarkBadRequest, MarkBadResponse, RoleCounts,
+    SetDesiredRequest, SetDesiredResponse, StatusRequest, StatusResponse, UnmarkBadRequest,
+    UnmarkBadResponse, WaitConvergedRequest, WaitConvergedResponse,
 };
 use tonic::transport::{Identity, Server, ServerTlsConfig};
 use tonic::{Code, Request, Response, Status};
@@ -158,6 +158,13 @@ impl ReleasesService for Probe {
         &self,
         _: Request<WaitConvergedRequest>,
     ) -> Result<Response<WaitConvergedResponse>, Status> {
+        unimplemented()
+    }
+
+    async fn get_release(
+        &self,
+        _: Request<GetReleaseRequest>,
+    ) -> Result<Response<GetReleaseResponse>, Status> {
         unimplemented()
     }
 }

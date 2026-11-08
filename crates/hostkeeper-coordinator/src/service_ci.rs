@@ -6,7 +6,10 @@
 //! be set (CI: the services its allow-list entry names; an operator: any service the coordinator
 //! manages) and in who the audit names.
 
+use std::sync::Arc;
+
 use hostkeeper_oidc::Verified;
+use hostkeeper_wire::version::Version;
 
 use super::{ConvergenceError, Coordinator, Set, SetError, kept};
 use crate::converge::Convergence;
@@ -14,9 +17,45 @@ use crate::desired::{Desired, DesiredError};
 use crate::force::end_by_setter;
 use crate::halt::lift_by_setter;
 use crate::ops::{AuditEntry, Write};
+use crate::releases::{self, Release, Targets};
 use crate::services::ServiceDef;
 use crate::status::convergence_of;
 use crate::write_record::{WriteAsk, WriteRecord};
+
+/// Why `Releases.GetRelease` answers no release.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReleaseError {
+    /// The coordinator manages no such service.
+    UnknownService,
+    /// The version was never set with targets, or its release was dropped at the cap.
+    Unknown,
+}
+
+/// The release a set of `service` whose state is `desired` names with `targets`, judged by
+/// [`releases::checked`] with the release index of `body`, when it has one: `desired` holds its
+/// record, checked already, and `body` its text.
+fn release_of(
+    body: &[u8],
+    service: &str,
+    desired: &Desired,
+    targets: Targets,
+) -> Result<Release, SetError> {
+    let text = serde_json::from_slice::<serde_json::Value>(body)
+        .ok()
+        .and_then(|body| body.get("release_index")?.as_str().map(str::to_owned));
+    let index = desired
+        .release_index
+        .as_ref()
+        .zip(text.as_deref())
+        .map(|(record, text)| (text, &record.digest));
+    releases::checked(
+        service,
+        &desired.version,
+        targets,
+        desired.release_digest.is_some(),
+        index,
+    )
+}
 
 /// Who sets the desired state.
 pub(crate) enum Setter<'a> {
@@ -75,11 +114,46 @@ impl Coordinator {
         body: &[u8],
         ask: &WriteAsk,
     ) -> Result<(Set, Option<WriteRecord>), SetError> {
+        self.set_desired_with(setter, body, ask, None).await
+    }
+
+    /// [`Self::set_desired_by`] with the release `targets` of the version, when the set has
+    /// them (docs/design/packages.md, sections 3.4 to 3.6). After the body is read, the targets
+    /// are judged ([`releases::checked`]: `index_invalid` beside a package digest,
+    /// `target_invalid`, then `index_invalid` for an index that disagrees with them), and the
+    /// state is stored with neither a package digest nor an index, the release kept beside it
+    /// with the index's digest. With `--release-channel` the channel is asked only for a set
+    /// with an index. Under the fleet's lock, after the refusals of the state, a version set
+    /// before as another release is refused (`release_exists`, [`Self::refuse_release`]); then
+    /// the precondition of `ask`; then one audit entry `set_desired` by the setter, CI's as
+    /// `ci`, whose reason is [`releases::audit_reason`]; then the state and the release are
+    /// recorded in one commit.
+    ///
+    /// # Errors
+    /// [`SetError`], as [`Self::set_desired_by`] and above.
+    pub(crate) async fn set_desired_with(
+        &self,
+        setter: &Setter<'_>,
+        body: &[u8],
+        ask: &WriteAsk,
+        targets: Option<Targets>,
+    ) -> Result<(Set, Option<WriteRecord>), SetError> {
         if ask.needs_records() && !self.desired.keeps_write_records() {
             return Err(SetError::Invalid(DesiredError::Unrecorded));
         }
-        let (service, desired, dropped_roles) =
+        let (service, mut desired, dropped_roles) =
             Desired::parse_request_noting(body, &self.services, self.legacy.as_deref())?;
+        // The state as the set named its release, which the channel is asked about and which a
+        // set without targets is refused by.
+        let named = desired.clone();
+        let release = match targets {
+            None => None,
+            Some(targets) => {
+                let release = Arc::new(release_of(body, &service, &desired, targets)?);
+                desired.set_release(None);
+                Some(release)
+            }
+        };
         if let Setter::Ci(verified) = setter {
             // An allow-list entry that names no services stands for the legacy service.
             let admitted = match &verified.services {
@@ -97,8 +171,10 @@ impl Coordinator {
         }
         // The release channel before the fleet's lock, which is never held across a wait on the
         // network; a refusal here changes nothing.
-        if let Some(channel) = &self.channel {
-            channel.check(&service, &desired).await?;
+        if let Some(channel) = &self.channel
+            && (release.is_none() || named.release_index.is_some())
+        {
+            channel.check(&service, &named).await?;
         }
         let (actor, set_by) = match setter {
             Setter::Ci(verified) => (crate::reconcile::CI, verified.job_workflow_ref.clone()),
@@ -117,29 +193,53 @@ impl Coordinator {
                 .get(&service)
                 .ok_or(SetError::Invalid(DesiredError::UnknownService))?;
             self.refuse(def, &desired)?;
+            self.refuse_release(
+                &service,
+                &desired.version,
+                release.as_deref(),
+                named.release().is_some(),
+            )?;
             // The precondition before the audit entry: a set refused for it writes nothing.
             self.desired.admits(&service, ask)?;
             let marks = self.ops.marks(&service);
-            // An operator's set is audited before the desired state is written: a set whose
-            // audit line cannot be appended is refused (`audit_unavailable`) with nothing
-            // written.
-            if let Setter::Operator(name) = setter {
-                let mut entry = AuditEntry::new(name, "set_desired");
+            // An operator's set, and any set with targets, is audited before the desired state
+            // is written: a set whose audit line cannot be appended is refused
+            // (`audit_unavailable`) with nothing written.
+            let reason = match (setter, &release) {
+                (Setter::Ci(verified), Some(release)) => Some(releases::audit_reason(
+                    &desired.version,
+                    release,
+                    Some(&verified.job_workflow_ref),
+                )),
+                (Setter::Operator(_), Some(release)) => {
+                    Some(releases::audit_reason(&desired.version, release, None))
+                }
+                (Setter::Operator(_), None) => {
+                    Some(match (&desired.release_digest, &desired.release_index) {
+                        (Some(digest), _) => {
+                            format!("{} with package digest {digest}", desired.version)
+                        }
+                        (None, Some(index)) => {
+                            format!("{} with release index {}", desired.version, index.digest)
+                        }
+                        (None, None) => desired.version.to_string(),
+                    })
+                }
+                (Setter::Ci(_), None) => None,
+            };
+            if let Some(reason) = reason {
+                let mut entry = AuditEntry::new(actor, "set_desired");
                 entry.service = Some(service.clone());
-                entry.reason = Some(match (&desired.release_digest, &desired.release_index) {
-                    (Some(digest), _) => {
-                        format!("{} with package digest {digest}", desired.version)
-                    }
-                    (None, Some(index)) => {
-                        format!("{} with release index {}", desired.version, index.digest)
-                    }
-                    (None, None) => desired.version.to_string(),
-                });
+                entry.reason = Some(reason);
                 self.ops.change(Write::BeforeMemory, entry, |_| {})?;
             }
-            let record =
-                self.desired
-                    .record_as(&service, desired.clone(), |v| kept(&marks, v), ask)?;
+            let record = self.desired.record_as(
+                &service,
+                desired.clone(),
+                |v| kept(&marks, v),
+                ask,
+                release,
+            )?;
             // A set of another version ends a force that stands ([`crate::force`]), before
             // the lift: a lift that fails then leaves no force ordering the old version.
             end_by_setter(&self.ops, &service, &desired.version, actor, &set_by)?;
@@ -166,6 +266,76 @@ impl Coordinator {
             },
             record,
         ))
+    }
+
+    /// Why CI may not set `desired` for `service`, if it may not: the refusals of
+    /// [`Coordinator::set_desired`], in that order.
+    fn refuse(&self, def: &ServiceDef, desired: &Desired) -> Result<(), SetError> {
+        let (service, version) = (def.name.as_str(), &desired.version);
+        if !def.version_scheme.parses(version) {
+            return Err(SetError::UnparseableVersion);
+        }
+        if def
+            .min_version
+            .as_ref()
+            .is_some_and(|floor| !version.at_least(floor))
+        {
+            return Err(SetError::BelowMinVersion);
+        }
+        if self.ops.marks(service).bad.contains(version) {
+            return Err(SetError::BadVersion);
+        }
+        let registered = self.desired.digests(service).get(version).cloned();
+        if let (Some(before), Some(now)) = (registered, desired.release())
+            && before != now
+        {
+            return Err(SetError::DigestConflict);
+        }
+        Ok(())
+    }
+
+    /// Refuses a set of `version` of `service` as another release than the version was set
+    /// as (`release_exists`): with targets (`release`), when the version's release is another, or
+    /// when it has none and the registry names the version (set before with a digest or an
+    /// index); without targets, when the set names a digest or an index (`names_release`) and the
+    /// version has a release. A set with no digest, no index and no targets of a version with a
+    /// release changes its limits and keeps the release.
+    fn refuse_release(
+        &self,
+        service: &str,
+        version: &Version,
+        release: Option<&Release>,
+        names_release: bool,
+    ) -> Result<(), SetError> {
+        let kept = self.desired.release(service, version.as_str());
+        let exists = match (release, kept) {
+            (Some(new), Some(old)) => *old != *new,
+            (Some(_), None) => self.desired.digests(service).get(version).is_some(),
+            (None, kept) => names_release && kept.is_some(),
+        };
+        if exists {
+            return Err(SetError::ReleaseExists);
+        }
+        Ok(())
+    }
+
+    /// The release `version` of `service` was set with ([`crate::releases`]).
+    ///
+    /// # Errors
+    /// [`ReleaseError::UnknownService`]: the coordinator manages no such service.
+    /// [`ReleaseError::Unknown`]: the version was never set with targets, or its release was
+    /// dropped at the cap.
+    pub(crate) fn release_verified(
+        &self,
+        service: &str,
+        version: &str,
+    ) -> Result<Arc<Release>, ReleaseError> {
+        self.services
+            .get(service)
+            .ok_or(ReleaseError::UnknownService)?;
+        self.desired
+            .release(service, version)
+            .ok_or(ReleaseError::Unknown)
     }
 
     /// How the writes of `service` are recorded now, as `Releases.Converge` shows them: none

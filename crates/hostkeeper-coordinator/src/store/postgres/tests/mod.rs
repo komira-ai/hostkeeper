@@ -233,6 +233,7 @@ mod lost;
 mod reads;
 mod records;
 mod records_errors;
+mod releases;
 mod schema;
 mod serve;
 mod serving;

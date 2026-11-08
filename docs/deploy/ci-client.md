@@ -191,7 +191,7 @@ the coordinator reads the file when it starts, so restart it afterwards. Nothing
 | `service` | string | yes |  | The service whose desired version is set, as the coordinator names it. |
 | `version` | string | yes |  | The version of the service to set. |
 | `package_digest` | string | no |  | The SHA-256 of the one package of this version that every host is ordered, 64 lower-case hex digits. For a fleet of one platform: a host of another platform would refuse the package. Give this, or `release_index` with `release_index_digest`. |
-| `release_index` | string | no |  | The text of the version's release index (`index.json`), byte for byte, at most 3 KiB (the coordinator takes a request of at most 4 KiB, the index included; a three-platform index is under 1 KiB). Each host is ordered the package its own platform has in it. Comes with `release_index_digest`; not with `package_digest`. |
+| `release_index` | string | no |  | The text of the version's release index (`index.json`), byte for byte, at most 3 KiB (a coordinator before `SetDesired` took targets takes a request of at most 4 KiB, the index included; a three-platform index is under 1 KiB). Each host is ordered the package its own platform has in it. Comes with `release_index_digest`; not with `package_digest`. |
 | `release_index_digest` | string | no |  | The SHA-256 of `release_index`, 64 lower-case hex digits, as the release job that published the index wrote it down. The coordinator checks the index against it, and every host checks the index it fetches against it. |
 | `hostkeeper_version` | string | yes |  | The hostkeeper release whose command line, `hkctl`, makes the calls. |
 | `hostkeeper_commit` | string | yes |  | The commit of `komira-ai/hostkeeper` that release was built from, 40 lower-case hex digits. |
@@ -384,7 +384,8 @@ index.json>","releaseIndexDigest":"<hex>"}`: the canonical JSON names of the req
 one JSON string of its exact text. The request step builds it with `jq --arg` from the step's
 environment, and does not hash or parse the index: the coordinator does, and refuses a digest
 that is not the index's (`index_digest_mismatch`) or an index that is not this service's at this
-version (`index_invalid`). The coordinator takes a request of at most 4 KiB, the index included.
+version (`index_invalid`). A coordinator before `SetDesired` took targets takes a request of at
+most 4 KiB, the index included, so the index stays within 3 KiB.
 
 Then the wait, with `--wait-secs` ten times `max_polls`:
 
