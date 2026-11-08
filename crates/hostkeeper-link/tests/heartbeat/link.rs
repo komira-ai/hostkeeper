@@ -26,6 +26,7 @@ fn beat() -> Heartbeat {
         services: Vec::new(),
         sent_unix: 0,
         renewal: hostkeeper_link::Renewal::default(),
+        trusted_root: None,
     }
 }
 

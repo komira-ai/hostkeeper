@@ -88,7 +88,11 @@ fn told(
 ) -> (ServiceReply, Option<Order>, Vec<VerdictAck>) {
     let (answer, order) = rig
         .coordinator
-        .heartbeat_with_orders(who(host, "daemon"), beat_of(DAEMON, services))
+        .heartbeat_with_orders(
+            who(host, "daemon"),
+            beat_of(DAEMON, services),
+            crate::trusted_root::TrustedRootSaid::default(),
+        )
         .expect("answered");
     (answer.reply, order, answer.acks)
 }

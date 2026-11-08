@@ -12,7 +12,8 @@
 //! deferred verdict has no outcome on this wire: the service's `deferred` report says it (as
 //! kbf's agent does), so its `last_update` is left out. A service name or a version outside the
 //! wire's grammars cannot be sent, and the heartbeat is refused by name ([`Unsendable`]), never
-//! sent without it.
+//! sent without it. The route is frozen, so the daemon's trusted root, which came after it, is
+//! not sent on it: the gRPC route carries it (`proto_map`).
 //!
 //! **In.** The advertised features the daemon knows, and the halt clear generations of the
 //! services the daemon could run (a name outside its grammar names none). The `acks` are the

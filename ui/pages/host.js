@@ -1,8 +1,8 @@
 // Host: one host's services, holds, marks and last update, the host-inventory record its
 // enrollment matched (linked to the Inventory page) with that record's data MACs, BMC MAC and
-// serial, when it enrolled, its certificate as its last heartbeat said it, and what an operator
-// may do to it. The page reads the time from `ctx.now()` (unix seconds), once per rendering, to
-// say how soon the certificate ends.
+// serial, when it enrolled, its certificate and its Sigstore trusted root as its last heartbeat
+// said them, and what an operator may do to it. The page reads the time from `ctx.now()` (unix
+// seconds), once per rendering, to say how soon the certificate ends.
 // Calls: Hosts.Get, then Services.List for the services assigned to the host (it is called even
 // when Hosts.Get fails, and each failure is shown as is), then, when a service is assigned to the
 // host, Audit.List of the host's entries, page by page, to mark a service whose last uninstall was
@@ -90,6 +90,62 @@ function certificate(host, now) {
       ["Heartbeats with the clock off", skewed],
     ].map(([k, v]) => h("tr", {}, h("th", {}, k), h("td", {}, v)))),
     warnings.map((text) => h("p", { class: "warning", role: "alert" }, text)));
+}
+
+// Seconds in a day, the unit a trusted root's age is shown in.
+const DAY_SECS = 86400;
+
+// The state of a trusted root whose reason Hosts.Get answers as `reason` (`trustedRootReason`,
+// the enum's name; absent when unspecified): "stale", "missing" or "unparseable" when it needs
+// attention, "ok" when it needs none, and "unknown" when the host's last heartbeat said nothing
+// of it (absent, unspecified, or a value this page does not know).
+export function rootState(reason) {
+  switch (reason) {
+    case "TRUSTED_ROOT_REASON_NONE":
+      return "ok";
+    case "TRUSTED_ROOT_REASON_STALE":
+      return "stale";
+    case "TRUSTED_ROOT_REASON_MISSING":
+      return "missing";
+    case "TRUSTED_ROOT_REASON_UNPARSEABLE":
+      return "unparseable";
+    default:
+      return "unknown";
+  }
+}
+
+// What the page says of each state of a trusted root, and the warning of each that needs
+// attention.
+const ROOT_SAYS = {
+  ok: ["needs no attention", null],
+  stale: ["stale", "The Sigstore trusted root is stale: package checks go on with it, and refuse every package "
+    + "signed after a key rotation it does not hold. Update hostkeeper on the host, or copy a current root to it."],
+  missing: ["missing", "The host has no Sigstore trusted root: every package check on it fails."],
+  unparseable: ["unparseable", "The host's Sigstore trusted root cannot be read: every package check on it fails."],
+  unknown: ["not reported", null],
+};
+
+// The age of a trusted root as Hosts.Get answers it (`trustedRootAgeSecs`, a string or a number;
+// absent when the host said none): whole days and the seconds, or "not reported".
+export function rootAge(secs) {
+  const age = Number(secs);
+  if (secs === undefined || secs === null || secs === "" || !Number.isFinite(age) || age < 0) {
+    return "not reported";
+  }
+  return `${Math.floor(age / DAY_SECS)} days (${age} s)`;
+}
+
+// The trusted root of `host` as its last heartbeat said it: its state and age, and a warning when
+// it needs attention.
+function trustedRoot(host) {
+  const [said, warning] = ROOT_SAYS[rootState(host.trustedRootReason)];
+  return h("section", { class: "trusted-root" },
+    h("h3", {}, "Trusted root"),
+    table(["", ""], [
+      ["State", said],
+      ["Age", rootAge(host.trustedRootAgeSecs)],
+    ].map(([k, v]) => h("tr", {}, h("th", {}, k), h("td", {}, v)))),
+    warning === null ? [] : [h("p", { class: "warning", role: "alert" }, warning)]);
 }
 
 function lastUpdate(result) {
@@ -364,6 +420,7 @@ export async function render(ctx) {
       ...inventoryFacts(ctx, host),
     ].map(([k, v]) => h("tr", {}, h("th", {}, k), h("td", {}, v)))),
     certificate(host, now),
+    trustedRoot(host),
     h("fieldset", {},
       h("legend", {}, "Labels"),
       field("Labels (key=value, separated by commas)", "labels", labelsForm, "labels"),
