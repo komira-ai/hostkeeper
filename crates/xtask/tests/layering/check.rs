@@ -95,8 +95,8 @@ pub const LAYERS: [Layer; 31] = [
     (
         DAEMON,
         &[
-            CI, CONFIG, ENROLL, HOOK, LAUNCHD, LINK, OBSERVE, OPENRC, PACKAGE, PLACED, PROTO, STEPS,
-            UNPACK,
+            CI, CONFIG, ENROLL, HOOK, LAUNCHD, LINK, OBSERVE, OPENRC, PACKAGE, PLACED, PROTO,
+            STEPS, UNPACK,
         ],
         &[COORDINATOR, HELLO, OIDC, TLS, WIRE],
     ),

@@ -543,10 +543,10 @@ is the host's own and root-owned; a wrong one misleads only that host, and the f
 for another architecture or with dependencies the host lacks.
 
 **Built in v1:** `hostkeeper-archive`, `tarball`, `deb`, `rpm`, `macos-pkg`, and `oci-image` (question 2). **Later:**
-`arch` (A14); until then an Arch host takes the tarball. `apk` (A13) is later for a second reason: the daemon runs only
-under systemd (its step launcher's transient units, its unit's start limit and fallback), and Alpine runs OpenRC, so no
-Alpine host runs a daemon today. A13 waits on a daemon that runs without systemd (question 5) and designs `apk`'s steps
-then; the name and the family are reserved now, and CI builds no `.apk` until A13.
+`arch` (A14); until then an Arch host takes the tarball. `apk` (A13) is later: the daemon runs under OpenRC now, as
+an Alpine host runs it (question 5, answered: [two-programs.md](two-programs.md) 4.6, with hostkeeper's own Alpine
+package in `packaging/alpine/`), and A13 designs the `apk` installer's steps of a service package; the name and the
+family are reserved now, and CI builds no `.apk` of a service until A13.
 
 **One build, every release.** Distributions differ in their releases' libraries, not in the formats' tools. A service
 ships one `.deb` for every Debian and Ubuntu release, and one `.rpm` for every RHEL-family and openSUSE release, when:
@@ -871,7 +871,7 @@ The tests of every build item, the cases each covers and why that list is comple
 | A10 | `oci-image`, the generated units, the observer's image digest | A6 | `oci_image.rs`; `install_oci_image.rs` in `privileged` with podman |
 | A11 | Stage 5: the channel keeps only hostkeeper's archives; `channel-stage` and the other services in `channel-sync` go; their docs; hostkeeper's own workflow keeps sending its index | both conditions of stage 5 | Sets with an index still accepted; the workflow lint for hostkeeper's index; the supersession check of rule B22 |
 | A12 | Stage 6: the daemon drops the channel fetch and its `Platform` copy, and requires `target-v1` echoed | A11 | The daemon's `coordinator_too_old` test; the device tests of section 9.3 |
-| A13 (later) | `apk`: its steps, its dependency check | A6, and a daemon that runs without systemd (question 5) | `apk.rs`; `install_apk.rs` in an Alpine container |
+| A13 (later) | `apk`: its steps, its dependency check, a package's own OpenRC init script | A6; the daemon under OpenRC (question 5, answered) | `apk.rs`; `install_apk.rs` in an Alpine container |
 | A14 (later) | `arch`, its dependency check | A6 | `arch.rs`; `install_arch.rs` in an Arch container |
 | A15 | hostkeeper's own Linux build for musl, static; `check-linux-pkg` refuses a `NEEDED` entry and a declared dependency; nfpm's `archlinux` package beside the `.deb` and `.rpm`, attested like them; `docs/deploy/verify-a-release.md` names it | none | `release_linux.rs`; the same `.deb` and `.rpm` installed and started on the oldest and newest release of each family in `privileged` |
 
@@ -938,7 +938,7 @@ payload) by A10, and P10 and P12 (stages 5 and 6) by A11 and A12.
    itself (rule B8). Retiring it would raise the bootstrap floor, which needs a waiver of B8.
 4. **A registry whose token service is on another origin** (section 7.3). Out of v1; allowing one would need a
    `token_origin` key per store.
-5. **Alpine.** The daemon runs only under systemd, and Alpine runs OpenRC, so `apk` (A13) waits on a daemon with a
-   launcher for OpenRC or with no service manager. Until a design for that is asked for, an Alpine host runs no daemon.
+5. **Alpine.** Answered: the daemon runs under OpenRC beside systemd and launchd, chosen by what the host runs, with
+   its own Alpine package and init script ([two-programs.md](two-programs.md) section 4.6). A13 can run.
 6. **Changing a service's installer on a host in place** (a host that runs a tarball moving to the `.deb`). Out of v1:
    it is an uninstall and an install, and a release that drops a format its hosts run shows them `installer_dropped`.

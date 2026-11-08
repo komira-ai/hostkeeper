@@ -48,6 +48,12 @@
 //! updates to this build (the programs `hostkeeper-named-daemon`, versioned by the file it runs
 //! from, and `hostkeeper-failing-daemon`, which cannot start) through the end-to-end rig; its rig
 //! is `tests/across/`.
+//! `tests/openrc_device.rs` (first line
+//! `#![cfg(all(target_os = "linux", target_env = "gnu", feature = "privileged"))]`, privileged.yml's
+//! job `openrc-device`) runs the daemon on Alpine under OpenRC, in a container of the image
+//! `openrc/Dockerfile` whose init is OpenRC: hostkeeper's Alpine package installed and run under
+//! supervise-daemon, and the program `hostkeeper-selfupdate-daemon`, built for musl, updated to
+//! the next version and fallen back from; its rig is `tests/openrc/`.
 //!
 //! - [`across`]: the cross-release rig's pin of the previous release, the check of its
 //!   downloaded tarball against the pin, and the version a program of this build runs as.

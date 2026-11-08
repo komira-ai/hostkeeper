@@ -85,8 +85,16 @@ fn build_apk(base: &Path) -> PathBuf {
     let stage = base.join("stage");
     let root = repo();
     for (from, to, mode) in [
-        ("packaging/alpine/nfpm.yaml", "packaging/alpine/nfpm.yaml", 0o644),
-        ("packaging/alpine/hostkeeper.initd", "packaging/alpine/hostkeeper.initd", 0o755),
+        (
+            "packaging/alpine/nfpm.yaml",
+            "packaging/alpine/nfpm.yaml",
+            0o644,
+        ),
+        (
+            "packaging/alpine/hostkeeper.initd",
+            "packaging/alpine/hostkeeper.initd",
+            0o755,
+        ),
         (
             "packaging/alpine/scripts/postinstall.sh",
             "packaging/alpine/scripts/postinstall.sh",
@@ -102,7 +110,11 @@ fn build_apk(base: &Path) -> PathBuf {
             "packaging/linux/hostkeeper.toml.template",
             0o644,
         ),
-        ("packaging/sigstore/trusted_root.json", "target/nfpm/trusted_root.json", 0o644),
+        (
+            "packaging/sigstore/trusted_root.json",
+            "target/nfpm/trusted_root.json",
+            0o644,
+        ),
     ] {
         let to = stage.join(to);
         dir(to.parent().expect("a parent"), 0o755);
@@ -122,7 +134,13 @@ fn build_apk(base: &Path) -> PathBuf {
         .current_dir(&stage)
         .env("VERSION", OWN)
         .env("ARCH", "amd64")
-        .args(["package", "--config", "packaging/alpine/nfpm.yaml", "--packager", "apk"])
+        .args([
+            "package",
+            "--config",
+            "packaging/alpine/nfpm.yaml",
+            "--packager",
+            "apk",
+        ])
         .arg("--target")
         .arg(&out)
         .output()
@@ -153,7 +171,11 @@ fn install(host: &Alpine, apk: &Path, config: &str) {
 
 /// The daemon config `text` placed at `/etc/hostkeeper/hostkeeper.toml`, mode `mode`.
 fn place_config(host: &Alpine, config: &str, mode: u32) {
-    file(&host.base().join("hostkeeper.toml"), config.as_bytes(), 0o644);
+    file(
+        &host.base().join("hostkeeper.toml"),
+        config.as_bytes(),
+        0o644,
+    );
     host.exec_ok(&["mkdir", "-p", "/etc/hostkeeper"]);
     host.exec_ok(&[
         "cp",
@@ -178,13 +200,24 @@ fn the_alpine_package_installs_and_runs_the_daemon_under_openrc() {
     install(&host, &apk, CONFIG);
     let enabled = host.exec_ok(&["rc-update", "show", "default"]);
     assert!(
-        enabled.lines().any(|line| line.split('|').next().map(str::trim) == Some(SERVICE)),
+        enabled
+            .lines()
+            .any(|line| line.split('|').next().map(str::trim) == Some(SERVICE)),
         "the package enables the service in the default runlevel:\n{enabled}"
     );
 
     let started = host.exec(&["rc-service", SERVICE, "start"]);
-    assert!(started.status.success(), "{}\n{}", text(&started), host.logs());
-    assert!(!text(&started).contains("ended before it was ready"), "{}", text(&started));
+    assert!(
+        started.status.success(),
+        "{}\n{}",
+        text(&started),
+        host.logs()
+    );
+    assert!(
+        !text(&started).contains("ended before it was ready"),
+        "{}",
+        text(&started)
+    );
     let exe = version_file("/var/lib/updater/state", OWN);
     let pid = host.runs(&exe, None);
     assert_eq!(
@@ -236,7 +269,10 @@ fn a_daemon_that_cannot_become_ready_does_not_hold_its_start() {
         host.logs()
     );
     assert_eq!(host.ready(), None);
-    assert!(host.log().contains("the daemon config is not a file the host trusts"));
+    assert!(
+        host.log()
+            .contains("the daemon config is not a file the host trusts")
+    );
 
     host.exec_ok(&["chmod", "644", "/etc/hostkeeper/hostkeeper.toml"]);
     let pid = host.runs(&version_file("/var/lib/updater/state", OWN), None);
@@ -308,7 +344,11 @@ impl SelfUpdateHost {
             &base.join("hostkeeper"),
             0o755,
         );
-        host.exec_ok(&["cp", &format!("{HK_ROOT}/hostkeeper"), "/usr/bin/hostkeeper"]);
+        host.exec_ok(&[
+            "cp",
+            &format!("{HK_ROOT}/hostkeeper"),
+            "/usr/bin/hostkeeper",
+        ]);
         host.exec_ok(&["chmod", "755", "/usr/bin/hostkeeper"]);
         let fail = if fail_next {
             format!(" --fixture-fail-start {NEXT}")
@@ -321,7 +361,10 @@ impl SelfUpdateHost {
              {HK_ROOT}/packages --admin-socket /run/hostkeeper/admin.sock --ready-file {READY} \
              --heartbeat-secs 1\""
         );
-        let shipped: String = SHIPPED_ARGS.split_whitespace().collect::<Vec<_>>().join(" ");
+        let shipped: String = SHIPPED_ARGS
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
         assert_eq!(
             INIT_SCRIPT
                 .lines()
@@ -332,11 +375,20 @@ impl SelfUpdateHost {
         );
         let script = INIT_SCRIPT.replace(&shipped, &args);
         file(&base.join("hostkeeper.initd"), script.as_bytes(), 0o755);
-        host.exec_ok(&["cp", &format!("{HK_ROOT}/hostkeeper.initd"), "/etc/init.d/hostkeeper"]);
+        host.exec_ok(&[
+            "cp",
+            &format!("{HK_ROOT}/hostkeeper.initd"),
+            "/etc/init.d/hostkeeper",
+        ]);
         host.exec_ok(&["chmod", "755", "/etc/init.d/hostkeeper"]);
 
         let started = host.exec(&["rc-service", SERVICE, "start"]);
-        assert!(started.status.success(), "{}\n{}", text(&started), host.logs());
+        assert!(
+            started.status.success(),
+            "{}\n{}",
+            text(&started),
+            host.logs()
+        );
         let su = SelfUpdateHost { host };
         su.runs(N, None);
         su
@@ -373,14 +425,24 @@ impl SelfUpdateHost {
     fn current(&self) -> Option<String> {
         fs::read_link(self.hk_state().join("bin/current"))
             .ok()
-            .map(|target| target.to_string_lossy().trim_start_matches("versions/").to_owned())
+            .map(|target| {
+                target
+                    .to_string_lossy()
+                    .trim_start_matches("versions/")
+                    .to_owned()
+            })
     }
 
     /// The version `previous` of the binary directory names.
     fn previous(&self) -> Option<String> {
         fs::read_link(self.hk_state().join("bin/previous"))
             .ok()
-            .map(|target| target.to_string_lossy().trim_start_matches("versions/").to_owned())
+            .map(|target| {
+                target
+                    .to_string_lossy()
+                    .trim_start_matches("versions/")
+                    .to_owned()
+            })
     }
 
     fn record(&self) -> Option<Record> {
@@ -393,8 +455,8 @@ impl SelfUpdateHost {
 
     /// Every heartbeat the daemon sent so far.
     fn beats(&self) -> Vec<Value> {
-        let text =
-            fs::read_to_string(self.host.base().join("fixture/link/beats.jsonl")).unwrap_or_default();
+        let text = fs::read_to_string(self.host.base().join("fixture/link/beats.jsonl"))
+            .unwrap_or_default();
         text.lines()
             .filter_map(|line| serde_json::from_str(line).ok())
             .collect()
@@ -457,8 +519,16 @@ fn release(service: &Path, version: &str) {
     dir(&tree.join("bin"), 0o755);
     fs::set_permissions(&tree, std::os::unix::fs::PermissionsExt::from_mode(0o755))
         .expect("its mode");
-    file(&tree.join("manifest.toml"), manifest(version).as_bytes(), 0o644);
-    copy(&musl_program("hostkeeper-fixture-hook"), &tree.join("bin/hook"), 0o755);
+    file(
+        &tree.join("manifest.toml"),
+        manifest(version).as_bytes(),
+        0o644,
+    );
+    copy(
+        &musl_program("hostkeeper-fixture-hook"),
+        &tree.join("bin/hook"),
+        0o755,
+    );
     copy(
         &musl_program("hostkeeper-selfupdate-daemon"),
         &tree.join("bin/hostkeeper"),
@@ -543,7 +613,8 @@ fn a_next_binary_that_cannot_start_is_fallen_back_from_by_the_packaged_binary() 
     );
     let log = su.host.log();
     assert_eq!(
-        log.matches(&format!("version {NEXT} refuses to start")).count(),
+        log.matches(&format!("version {NEXT} refuses to start"))
+            .count(),
         3,
         "three starts of the new binary\n{log}"
     );

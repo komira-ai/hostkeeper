@@ -86,7 +86,7 @@ Trust is placed in three things: the package whose digest and attestation verifi
 ### 3.1 What is built
 
 | Piece | State | Where |
-|---|---|---|
+|---|---|---|---|
 | Hook contract, exit codes, last-line JSON, params file, next-step table, conformance harness | Built | `crates/hostkeeper-hook` |
 | Declaration with rights, loader, widening check, approval store and gate, `approve` command, transient-unit launch with user, capabilities and sandbox properties | Built, and the build order deletes or shrinks it: the daemon-config and manifest loaders replace the declaration loader, and the widening check, gate, approval store, `approve` command, account and reserved-path checks and the rights properties of the launch go (B2, B3) | `crates/hostkeeper-rights` |
 | Step runner, step record, artifact seal, dead-man, self-update layout for a single binary: `versions/<v>` files with `current` and `previous` symlinks, atomic switch by rename, staging, unit generation helpers. `Layout::stage`, `check_binary` and `switch` take one executable file, so they cannot be reused as they are for a package of directories: B5 and B27 generalise them (a tree check in place of `check_binary`, the seal for `Staged::check`) and a test pins the on-disk names `current`, `previous` and `<v>.seal` (the model for the package layout, section 4.7) | Built for one binary; Designed for packages | `crates/hostkeeper-steps` |
@@ -579,17 +579,17 @@ The figure is the order of [hostkeeper-mdm.md](hostkeeper-mdm.md): the nonce is 
 
 The flow is the same; these differ:
 
-| Aspect | Linux | macOS |
+| Aspect | Linux | macOS | Linux under OpenRC (Alpine; [two-programs.md](two-programs.md) 4.6) |
 |---|---|---|
-| Daemon | systemd unit | one launchd daemon, root |
-| Hook run | transient systemd unit | one launchd job per step, as root, for timeout, kill and log capture only; no sandbox profile, no rights |
-| Placed units | symlinks in `/etc/systemd/system` | symlinks to plists in `/Library/LaunchDaemons` |
-| Process identity | `/proc/<pid>/exe` | `proc_pidpath` plus device and inode check (to verify) |
-| Enrollment | operator approval | device enrollment through MDM, a package install, then auto-approval |
-| Hand-over of ports | nft redirect | none; tierstore on a Mac updates with a gap |
-| Live leases | the hook drains in `prepare` | a Mac with live leases defers, reason `leases_live` |
-| Package verification | attestation, archive shape | plus no quarantine attribute and a valid code signature |
-| Self-update | `OnFailure=` fallback | launchd `KeepAlive` plus a timer job that flips the link back |
+| Daemon | systemd unit | one launchd daemon, root | one supervise-daemon service, `/etc/init.d/hostkeeper`, root |
+| Hook run | transient systemd unit | one launchd job per step, as root, for timeout, kill and log capture only; no sandbox profile, no rights | a child process group of the daemon per step, bounded and killed by the daemon |
+| Placed units | symlinks in `/etc/systemd/system` | symlinks to plists in `/Library/LaunchDaemons` | `/etc/init.d`; a package's init scripts come with A13 |
+| Process identity | `/proc/<pid>/exe` | `proc_pidpath` plus device and inode check (to verify) | `/proc/<pid>/exe` |
+| Enrollment | operator approval | device enrollment through MDM, a package install, then auto-approval | operator approval |
+| Hand-over of ports | nft redirect | none; tierstore on a Mac updates with a gap | as Linux |
+| Live leases | the hook drains in `prepare` | a Mac with live leases defers, reason `leases_live` | as Linux |
+| Package verification | attestation, archive shape | plus no quarantine attribute and a valid code signature | as Linux |
+| Self-update | `OnFailure=` fallback | launchd `KeepAlive` plus a timer job that flips the link back | supervise-daemon respawns the packaged binary, which judges the burst and flips the link back before it execs `current` |
 
 Mac enrollment auto-approval, designed: the gate installs a managed config profile (coordinator, CA hash, release channel and trusted signers; no secret), then the hostkeeper installer pkg by allowlisted digest; the pkg's postinstall writes `hostkeeper.toml` from that profile and loads the launchd job; once the daemon's request is pending the gate pushes a per-device one-time nonce, bound to that request, as a managed configuration profile; the daemon enrolls with the nonce; the coordinator auto-approves only if the nonce is valid, unexpired (one hour), unused, consumed in the same durable transaction as the approval, issued for the claimed serial and the request, the gate reports the device enrolled and supervised, and the serial is on the allowlist. **MDM is part of hostkeeper, decided:** the policy gate and installer kit are components of this repository with their own design document, [hostkeeper-mdm.md](hostkeeper-mdm.md); this document states only the interface the enrollment path needs. The MDM profile identifier is renamed to `com.komira.hostkeeper.mdm`, the farm's setting, before any Mac enrolls (a build gate on B18).
 
