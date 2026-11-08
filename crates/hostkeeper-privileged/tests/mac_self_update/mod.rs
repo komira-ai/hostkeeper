@@ -543,23 +543,30 @@ impl MacSelfHost {
         }
     }
 
-    /// The real path of the binary directory's file of `version`.
-    pub fn binary_of(&self, version: &str) -> PathBuf {
-        fs::canonicalize(self.layout().version_path(version)).expect("the staged binary")
+    /// The real path of the binary directory's file of `version`, once it is there.
+    pub fn binary_of(&self, version: &str) -> Option<PathBuf> {
+        fs::canonicalize(self.layout().version_path(version)).ok()
     }
 
     /// Waits until the daemon's job has a process that runs the binary of `version`, checks that
-    /// `current` names it, and gives its pid.
+    /// `current` names it, and gives its pid. The file of `version` may not be there yet when the
+    /// wait begins: on a [`Plan::Pkg`] Mac the job's packaged binary puts it in at its start.
     pub fn runs(&self, version: &str) -> u32 {
-        let want = self.binary_of(version);
+        let shown = self.layout().version_path(version);
         let mut running = None;
-        wait(&format!("the daemon's job runs {}", want.display()), || {
-            self.check_not_stuck();
-            running = self
-                .pid()
-                .filter(|pid| DarwinPidInfo.path(*pid).is_ok_and(|path| path == want));
-            running.is_some()
-        });
+        wait(
+            &format!("the daemon's job runs {}", shown.display()),
+            || {
+                self.check_not_stuck();
+                let Some(want) = self.binary_of(version) else {
+                    return false;
+                };
+                running = self
+                    .pid()
+                    .filter(|pid| DarwinPidInfo.path(*pid).is_ok_and(|path| path == want));
+                running.is_some()
+            },
+        );
         assert_eq!(self.current().as_deref(), Some(version), "{}", self.logs());
         running.expect("a pid")
     }
