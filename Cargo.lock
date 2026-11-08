@@ -1375,6 +1375,7 @@ dependencies = [
  "hostkeeper-config",
  "hostkeeper-hook",
  "hostkeeper-testkit",
+ "rustix",
 ]
 
 [[package]]

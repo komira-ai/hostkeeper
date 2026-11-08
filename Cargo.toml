@@ -118,7 +118,8 @@ rustls-pki-types = { version = "1.15.1", features = ["std"] }
 swc_common = "=27.0.0"
 swc_ecma_ast = "=30.0.0"
 swc_ecma_parser = { version = "=47.0.0", default-features = false, features = ["typescript"] }
-# Safe system calls: the effective uid, flock, the monotonic clock, kill of a process group.
+# Safe system calls: the effective uid, flock, the monotonic clock, kill of a process group; and
+# `poll` on a listener in hello's socket tests.
 rustix = "1.1.5"
 # The YAML parser the workflow lint (crates/xtask/tests/workflows) reads each workflow with.
 saphyr-parser = "0.1.0"
