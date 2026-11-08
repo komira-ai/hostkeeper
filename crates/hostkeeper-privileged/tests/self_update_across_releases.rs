@@ -2,7 +2,8 @@
 //! hostkeeper's update of itself across releases, as root, from the published release that
 //! `previous-release.toml` pins to this build: on Linux under the real systemd of a hosted runner
 //! (`.github/workflows/privileged.yml`'s job `privileged`), on a Mac under the real launchd
-//! (its job `macos-device`), and in pr-device.yml's copies of both jobs on every pull request.
+//! (its job `macos-device`), and in pr-device.yml's copies of both jobs on a pull request (the
+//! macOS one when the pull request changes a path the macOS jobs build or read).
 //! The rig (`across`, on the end-to-end rig of `e2e`) runs the released daemon as the host's
 //! daemon, the real coordinator in process ordering hostkeeper, and this build's hostkeeper
 //! packages from a release channel on loopback, checked by the production attestation verifier.
