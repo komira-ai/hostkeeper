@@ -219,9 +219,8 @@ to the journal (`journalctl -u hostkeeper.service`), each beginning `hostkeeper 
   the coordinator refused the request; the token is in
   [Refusals of the host's calls](#refusals-of-the-hosts-calls).
 
-On the host, as root, `hostkeeper admin status` reports its enrollment over the daemon's admin
-socket (`/run/hostkeeper/admin.sock`, [docs/admin.md](../admin.md)), and a Linux node's console
-shows it ([Check the key hash](#check-the-key-hash)).
+On the host, as root, the daemon's journal (`journalctl -u hostkeeper`; [docs/admin.md](../admin.md)) says what the enrollment loop waits for, and a Linux node's console
+shows the key hash ([Check the key hash](#check-the-key-hash)).
 
 ## The pending request and its match
 
@@ -380,8 +379,7 @@ openssl pkey -inform DER -in /etc/updater/pki/pending/key -pubout -outform DER |
 
 The key is a P-256 key, PKCS#8 DER; the hash is that of its public key's DER
 SubjectPublicKeyInfo, and must equal `key_sha256` of the request. Once the host is enrolled, the
-same key is `/etc/updater/pki/current/key`. `hostkeeper admin status` gives it too, as
-`enrollment.key_sha256` ([docs/admin.md](../admin.md)).
+same key is `/etc/updater/pki/current/key`. The coordinator's `hkctl enrollment list` shows it as `key_sha256` ([docs/admin.md](../admin.md)).
 
 ## Approve
 

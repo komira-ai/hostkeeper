@@ -11,7 +11,7 @@ pub enum PlatformKind {
     Macos,
 }
 
-/// Where a host keeps its unit files and the admin socket, and how it names its jobs.
+/// Where a host keeps its unit files and its run directory, and how it names its jobs.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Platform {
     pub kind: PlatformKind,
@@ -19,7 +19,9 @@ pub struct Platform {
     pub unit_dir: PathBuf,
     /// The end of a unit file's name.
     pub unit_suffix: &'static str,
-    pub admin_socket: PathBuf,
+    /// The run directory: `/run` on Linux, `/var/run` on macOS. kbf's agent kept its
+    /// registration socket in `updater` under it, which the daemon removes at start.
+    pub run_dir: PathBuf,
     /// The reverse-DNS prefix of a job label; Linux unit names have none.
     pub label_prefix: Option<&'static str>,
 }
@@ -31,7 +33,7 @@ impl Platform {
             kind: PlatformKind::Linux,
             unit_dir: PathBuf::from("/etc/systemd/system"),
             unit_suffix: ".service",
-            admin_socket: PathBuf::from("/run/hostkeeper/admin.sock"),
+            run_dir: PathBuf::from("/run"),
             label_prefix: None,
         }
     }
@@ -42,7 +44,7 @@ impl Platform {
             kind: PlatformKind::Macos,
             unit_dir: PathBuf::from("/Library/LaunchDaemons"),
             unit_suffix: ".plist",
-            admin_socket: PathBuf::from("/var/run/hostkeeper/admin.sock"),
+            run_dir: PathBuf::from("/var/run"),
             label_prefix: Some(REVERSE_DNS_PREFIX),
         }
     }

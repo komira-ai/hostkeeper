@@ -230,9 +230,8 @@ fn the_start_settles_before_the_boot_pass_and_goes_on_when_it_cannot() {
 }
 
 /// Catches the old binary's daemon serving on after its own update asked it to exit, or exiting
-/// with a status its unit's `Restart=` does not restart: the admin socket's server returns `Ok`
-/// once the restart is asked for, which the command line exits with as 0; an error is its own
-/// status.
+/// with a status its unit's `Restart=` does not restart: the serve returns once the restart is
+/// asked for, which the command line exits with as 0; an error is its own status.
 #[tokio::test]
 async fn the_daemon_stops_serving_once_its_restart_is_asked() {
     let s = SelfRig::new("su-serve");
@@ -240,9 +239,8 @@ async fn the_daemon_stops_serving_once_its_restart_is_asked() {
     let daemon = Arc::clone(started.daemon());
     let served = tokio::spawn(start::serve(started, support::idle_links()));
     daemon.ctx().restart().request();
-    let ended = served.await.expect("the server task");
-    assert!(ended.is_ok(), "{ended:?}");
-    assert_eq!(cli::exit_status(&ended), 0);
+    served.await.expect("the server task");
+    assert_eq!(cli::exit_status(&Ok(())), 0);
     let failed = Err(start::StartError::NoNotifySocket);
     assert_eq!(cli::exit_status(&failed), EXIT_FAILED);
 }

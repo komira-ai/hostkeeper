@@ -289,8 +289,6 @@ fn the_notify_systemd_flag_needs_the_socket_systemd_sets() {
             rig.state.clone().into(),
             "--packages-dir".into(),
             rig.packages.clone().into(),
-            "--admin-socket".into(),
-            rig.socket.clone().into(),
         ];
         if notify {
             args.push("--notify-systemd".into());

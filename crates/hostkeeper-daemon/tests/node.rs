@@ -1,4 +1,4 @@
-//! What the daemon's loops write for the admin `Status` (`hostkeeper_daemon::node`): the
+//! What the daemon's loops write into its node state (`hostkeeper_daemon::node`): the
 //! heartbeat loop its link after each heartbeat, at the second of the links' clock, and the
 //! enrollment loop the host's enrollment after each step; a loop that does not run writes
 //! nothing.
@@ -12,9 +12,9 @@ use hostkeeper_config::daemon::Sha256Hex;
 use hostkeeper_daemon::links::Links;
 use hostkeeper_daemon::node::LinkHealth;
 use hostkeeper_enroll::{
-    CoordinatorEnroll, EnrollAnswer, EnrollRequest, Enrollment, LinuxClaims, OsEntropy, PkiDir,
-    Poll, PollAnswer, RenewAnswer, RenewRequest, Settings as EnrollSettings, SystemWallClock,
-    TransportError,
+    CoordinatorEnroll, EnrollAnswer, EnrollRequest, Enrollment, HostId, LinuxClaims, OsEntropy,
+    PkiDir, Poll, PollAnswer, RenewAnswer, RenewRequest, RequestId, Settings as EnrollSettings,
+    SystemWallClock, TransportError,
 };
 use hostkeeper_link::testing::{FakeClock, FakeLink, ManualDispatch, ScriptedSleeper, identity};
 use hostkeeper_link::{CertState, LinkError, Reply, StopFlag};
@@ -22,7 +22,7 @@ use support::{Rig, idle_links, open_once};
 
 const NOW: u64 = 1_900_000_000;
 
-/// Catches a heartbeat whose outcome does not reach `Status`, a second read from another clock,
+/// Catches a heartbeat whose outcome does not reach the node state, a second read from another clock,
 /// or an enrollment written by a loop that has no enroller: an enrolled host whose first
 /// heartbeat is answered and whose second is refused has the first's second as its last
 /// success and one failure; the enrollment loop, whose enroller could not be made, leaves no
@@ -83,7 +83,7 @@ impl CoordinatorEnroll for Down {
     }
 }
 
-/// Catches a step whose enrollment does not reach `Status`, or a host reported pending before it
+/// Catches a step whose enrollment does not reach the node state, or a host reported pending before it
 /// made a key: a host whose coordinator cannot be reached made no key, and its one step leaves
 /// it unenrolled; a heartbeat loop that never beat leaves no link.
 #[test]
@@ -117,4 +117,52 @@ fn the_enrollment_loop_writes_the_enrollment_after_its_step() {
     let node = &daemon.ctx().node;
     assert_eq!(node.enrollment(), Some(Enrollment::Unenrolled));
     assert_eq!(node.link(), None);
+}
+
+/// Catches a field of the enrollment or of the link dropped, or kept from an earlier state: no
+/// enrollment and no link before a loop wrote them, then for each of the four enrollment states,
+/// with the link never answered after three failures or answered at a second, the node state
+/// holds exactly what was written.
+#[test]
+fn the_node_state_holds_each_enrollment_state_and_the_link() {
+    let rig = Rig::new("node-states");
+    let daemon = rig.daemon();
+    let node = &daemon.ctx().node;
+    assert_eq!((node.enrollment(), node.link()), (None, None));
+
+    let failing = LinkHealth {
+        last_success_unix: None,
+        consecutive_failures: 3,
+    };
+    let answered = LinkHealth {
+        last_success_unix: Some(NOW + 15),
+        consecutive_failures: 0,
+    };
+    let key = "4f2a9c0e8b7d6a5f4e3d2c1b0a99887766554433221100ffeeddccbbaa998877";
+    let cases = [
+        (Enrollment::Unenrolled, failing),
+        (
+            Enrollment::Pending {
+                key_sha256: RequestId::parse(key).expect("a request id"),
+            },
+            failing,
+        ),
+        (
+            Enrollment::Enrolled {
+                host_id: HostId::new("web-17").expect("a host id"),
+                not_after: NOW + 604_800,
+            },
+            answered,
+        ),
+        (
+            Enrollment::Unreadable("the pki directory's generation 1 is corrupt".to_owned()),
+            answered,
+        ),
+    ];
+    for (enrollment, link) in cases {
+        node.set_enrollment(enrollment.clone());
+        node.set_link(link);
+        assert_eq!(node.enrollment(), Some(enrollment));
+        assert_eq!(node.link(), Some(link));
+    }
 }

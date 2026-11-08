@@ -1,8 +1,9 @@
 //! `clear_record` (design sections 4.1 and 7; two-programs.md section 3.2): set aside a step
-//! record that cannot be read, so that orders run for the service again. The admin socket's
-//! `ClearRecord` ([`crate::Daemon::clear_record`]) and a coordinator's order (the `clear_record`
-//! case of `hostkeeper.agent.v1`'s `Order`, [`run`]) both come here. The executor dispatches the
-//! order before anything reads the record, so a record that does not read never refuses it.
+//! record that cannot be read, so that orders run for the service again: a coordinator's order,
+//! the `clear_record` case of `hostkeeper.agent.v1`'s `Order` ([`run`]). The executor dispatches
+//! the order before anything reads the record, so a record that does not read never refuses it.
+//! On a host the coordinator cannot reach, root stops the daemon and renames the record by hand
+//! (docs/admin.md): that rename is the whole of what this verb does.
 //!
 //! Under the service's lock, never waited for (`busy` when held). Only a record that does not
 //! read ([`RecordError::Corrupt`]) is cleared. An absent record, one that reads in any state, and

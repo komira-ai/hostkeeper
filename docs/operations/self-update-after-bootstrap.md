@@ -180,8 +180,7 @@ coordinator, the others on the Mac as root.
    `sudo launchctl print system/dev.hostkeeper.hostkeeper` names the program
    `/usr/local/bin/hostkeeper`, `readlink` of
    `/var/lib/updater/state/hostkeeper/bin/current` names
-   `versions/<version>`, `sudo hostkeeper admin status` prints
-   `link.consecutive_failures: 0` after a heartbeat period, and
+   `versions/<version>`, and, after a heartbeat period,
    `hkctl hosts get --node-id <node id>` answers `heartbeat.agent.version` at the new
    version.
 

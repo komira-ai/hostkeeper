@@ -200,7 +200,7 @@ fn reported(
     }
 }
 
-/// Catches an observation reported in other words than the admin `Status`'s: every state of the
+/// Catches an observation reported in other words than `Daemon::status`'s: every state of the
 /// observer is its liveness (live is running); the version is reported only when the running
 /// executable confirmed it; the health is the heartbeat's (a mismatch or a failed probe is
 /// unhealthy, an absent service absent, a health nobody probed unhealthy); the detail is the

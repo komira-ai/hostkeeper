@@ -17,8 +17,9 @@
 //!   platform, one per installer, each with its manifest, which the operator API's
 //!   `SetDesired` and `GetRelease` carry, and an agent's order the one entry picked for its host
 //!   (docs/design/packages.md sections 3.1 and 3.3).
-//! - `hostkeeper.local.v1`: `Admin`, what root on the host may ask of its daemon with the
-//!   coordinator down (status, abort, clear a corrupt step record).
+//! - `hostkeeper.local.v1`: `Admin`, the admin socket's service, which no program serves any
+//!   more. Its file stays, frozen, in [`FILE_DESCRIPTOR_SET`], so the compatibility test holds
+//!   it to the last release; no code is generated from it (`build.rs`).
 //!
 //! Modules mirror the proto packages, because generated code names other packages by relative
 //! paths (`super::super::...`).
@@ -51,12 +52,6 @@ pub mod hostkeeper {
         /// A release: per platform, the artifacts of each installer and their manifests.
         pub mod v1 {
             tonic::include_proto!("hostkeeper.release.v1");
-        }
-    }
-    pub mod local {
-        /// The host-local service of the daemon: `Admin`, root's socket.
-        pub mod v1 {
-            tonic::include_proto!("hostkeeper.local.v1");
         }
     }
 }

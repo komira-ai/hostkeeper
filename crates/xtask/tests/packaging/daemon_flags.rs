@@ -7,8 +7,7 @@ use std::path::{Path, PathBuf};
 
 use clap::Parser;
 use hostkeeper_daemon::cli::{
-    Cli, Command, DEFAULT_ADMIN_SOCKET, DEFAULT_CONFIG, DEFAULT_PACKAGES_DIR, DEFAULT_STATE_DIR,
-    DaemonFlags, SeedFlags,
+    Cli, Command, DEFAULT_CONFIG, DEFAULT_PACKAGES_DIR, DEFAULT_STATE_DIR, DaemonFlags, SeedFlags,
 };
 
 use crate::tmpfiles;
@@ -214,12 +213,16 @@ fn parent_of(path: &Path) -> Result<&Path, String> {
         .ok_or_else(|| format!("{} has no parent directory", path.display()))
 }
 
+/// The default admin socket of a daemon before this one, which can still run under either unit
+/// after a fallback; this daemon binds no socket and ignores `--admin-socket`.
+const OLDER_DAEMON_SOCKET: &str = "/run/hostkeeper/admin.sock";
+
 fn check_paths(unit_text: &str, tmpfiles_text: &str, template_text: &str) -> Result<(), String> {
     let unit = Unit::parse(unit_text)?;
     let words = unit::command_words(unit.single("Service", "ExecStart")?)?;
     if words.iter().any(|w| w.starts_with("--admin-socket")) {
         return Err(
-            "ExecStart= sets --admin-socket; the daemon defaults the socket to its own path"
+            "ExecStart= sets --admin-socket; an older daemon binds its own default socket, and this one none"
                 .to_owned(),
         );
     }
@@ -249,12 +252,6 @@ fn check_paths(unit_text: &str, tmpfiles_text: &str, template_text: &str) -> Res
             &defaults.packages_dir,
             DEFAULT_PACKAGES_DIR,
         ),
-        (
-            "--admin-socket",
-            &flags.admin_socket,
-            &defaults.admin_socket,
-            DEFAULT_ADMIN_SOCKET,
-        ),
     ];
     for (flag, unit_value, parsed_default, constant) in literals {
         if unit_value != Path::new(constant) || parsed_default != Path::new(constant) {
@@ -275,11 +272,6 @@ fn check_paths(unit_text: &str, tmpfiles_text: &str, template_text: &str) -> Res
             DEFAULT_PACKAGES_DIR,
             "/var/lib/hostkeeper/packages",
         ),
-        (
-            "--admin-socket",
-            DEFAULT_ADMIN_SOCKET,
-            "/run/hostkeeper/admin.sock",
-        ),
     ];
     if let Some((flag, constant, literal)) = design.iter().find(|(_, c, l)| c != l) {
         return Err(format!(
@@ -291,7 +283,12 @@ fn check_paths(unit_text: &str, tmpfiles_text: &str, template_text: &str) -> Res
         .filter(|line| line.kind == "d")
         .map(|line| PathBuf::from(line.path))
         .collect();
-    let socket_dir = parent_of(Path::new(DEFAULT_ADMIN_SOCKET))?;
+    // The daemon binds no socket and the unit names none; a daemon before this one binds its
+    // default socket, whose directory the tmpfiles rules still make (design section 4).
+    if defaults.admin_socket.is_some() {
+        return Err("--admin-socket has a default, but the daemon ignores it".to_owned());
+    }
+    let socket_dir = parent_of(Path::new(OLDER_DAEMON_SOCKET))?;
     let wanted = [
         ("state directory", flags.state_dir.as_path()),
         ("packages directory", flags.packages_dir.as_path()),

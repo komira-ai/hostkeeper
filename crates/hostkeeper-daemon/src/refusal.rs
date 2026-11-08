@@ -112,10 +112,10 @@ pub enum Refusal {
     /// made now: the package is not judged, and the order is tried again later.
     VerifyUnavailable,
     /// `abort` of a service with no running step and none that could not be stopped: nothing is
-    /// written. The admin socket's `AdminRefusal` token.
+    /// written.
     NothingRunning,
     /// `clear_record` of a step record that reads, is absent, or is of a newer schema: only a
-    /// corrupt record is cleared. The admin socket's `AdminRefusal` token.
+    /// corrupt record is cleared.
     RecordReads,
     /// `clear_halt` with a halt generation not above the one the service is held under: nothing
     /// is written.
