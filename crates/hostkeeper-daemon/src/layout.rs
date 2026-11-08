@@ -2,32 +2,39 @@
 //! boot; a Mac has no tmpfiles, so the daemon makes the ones it is missing at each start, with
 //! the modes that file gives them.
 //!
-//! The other two directories of that file are not made here: the state directory (and its
-//! lock) is made by [`crate::start`], and `/run/hostkeeper`, where an older daemon bound its
-//! admin socket, is made by that file and the unit alone; this daemon binds no socket and makes
-//! nothing there. The config directory is the installer's, and a missing config is an error of
-//! its own.
+//! The state directory (and its lock) is made by [`crate::start`]. The daemon's run directory,
+//! [`RUN_SUBDIR`] in the platform's run directory (`/run/hostkeeper`, `/var/run/hostkeeper` on a
+//! Mac), is made or set mode 0700 at each start: an older daemon bound its admin socket there,
+//! and a Mac's step jobs live under it (`hostkeeper_launchd::launcher::STEP_JOBS_DIR`), whose
+//! launcher sets only each job's own directory 0700. This daemon binds no socket. The config
+//! directory is the installer's, and a missing config is an error of its own.
 
 use std::fs::{self, DirBuilder, Permissions};
 use std::io;
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
+use crate::files;
 use crate::start::{Settings, StartError};
 
 /// The name of the directory of the update hooks' records, beside the state directory
 /// (`/var/lib/updater/hooks` beside `/var/lib/updater/state`).
 pub const HOOKS_DIR: &str = "hooks";
 
+/// The daemon's directory in the platform's run directory.
+pub const RUN_SUBDIR: &str = "hostkeeper";
+
 /// Makes the packages directory (mode 0755) and the hooks directory (0700) when they are
 /// missing, and the parents they need (0755). A directory that exists is left as it is, its
 /// mode and contents included. Something at either path that is not a directory, a link
-/// included, stops the start.
+/// included, stops the start. Then the daemon's run directory ([`RUN_SUBDIR`]) is made, or set,
+/// mode 0700; something there that is not a directory stops the start too.
 pub fn ensure_state_dirs(settings: &Settings) -> Result<(), StartError> {
     for (dir, mode) in dirs(settings) {
         ensure_dir(&dir, mode).map_err(|source| StartError::Io { path: dir, source })?;
     }
-    Ok(())
+    let run = settings.run_dir.join(RUN_SUBDIR);
+    files::make_private(&run).map_err(|source| StartError::Io { path: run, source })
 }
 
 fn dirs(settings: &Settings) -> [(PathBuf, u32); 2] {

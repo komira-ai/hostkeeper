@@ -7,7 +7,6 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use hostkeeper_daemon::admin::service_record;
 use hostkeeper_daemon::checks::{force_allowed, installed_rule};
 use hostkeeper_daemon::installed::Lifecycle;
 use hostkeeper_daemon::testing::spawn;
@@ -17,7 +16,6 @@ use hostkeeper_hook::{Class, Phase, Step, Verdict};
 use hostkeeper_placed::error::{ClaimError, Owner};
 use hostkeeper_placed::{PlacedError, Tombstone};
 use hostkeeper_proto::hostkeeper::agent::v1::{Force, Order, order};
-use hostkeeper_proto::hostkeeper::local::v1::{Lifecycle as Life, StepOutcome};
 use support::{Rig, alerting, d, install, lines, name, snapshot, uninstall};
 
 fn force(service: &str) -> Order {
@@ -247,30 +245,16 @@ fn status_reports_removing_while_an_uninstall_is_unfinished() {
         }
     );
 
-    let wire: Vec<_> = status.services.iter().map(service_record).collect();
-    let lifecycles: Vec<i32> = wire.iter().map(|s| s.lifecycle).collect();
-    assert_eq!(
-        lifecycles,
-        [
-            Life::Running as i32,
-            Life::Absent as i32,
-            Life::Removing as i32,
-            Life::Installing as i32,
-            Life::Removing as i32
-        ]
-    );
-    let last = wire[4].last.as_ref().expect("the uninstall as last");
+    assert_eq!(last.finished.reason.as_deref(), Some("drain"));
+    // A service that runs a release reports its last order from its step record.
     assert_eq!(
         (
-            last.step.as_str(),
-            last.order_try,
-            last.outcome,
-            last.reason.as_str()
+            status.services[0].last_result(),
+            &status.services[0].uninstall
         ),
-        ("uninstall", 7, StepOutcome::Failed as i32, "drain")
+        (None, &None),
+        "api ran no order through this daemon"
     );
-    // A service that runs a release reports its last order from its step record.
-    assert_eq!(wire[0].last, None, "api ran no order through this daemon");
     gate.release();
     installing.join().expect("the install");
 

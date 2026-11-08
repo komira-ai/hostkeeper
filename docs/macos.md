@@ -134,8 +134,7 @@ observer's service manager and process probe, and the unit control over `launchc
 step launcher, observer and unit control (`systemctl`), and no package check. Each set names the
 unit the daemon runs as, which the observer watches as the service `hostkeeper`: on a Mac the
 daemon's job `dev.hostkeeper.hostkeeper`, since the macOS package of hostkeeper names no unit
-(docs/service-observation.md, "The daemon's own service"). The admin socket's default is the platform's (`/var/run/hostkeeper/admin.sock` on a Mac),
-in a directory the daemon makes mode 0700.
+(docs/service-observation.md, "The daemon's own service"). The daemon binds no socket; the platform's run directory (`/var/run` on a Mac) holds the `updater` directory of the registration-socket cleanup.
 
 #### One daemon, run by launchd
 
@@ -147,7 +146,7 @@ maintainers must confirm the prefix before any Mac enrolls, since a label is the
 |---|---|
 | config | `/etc/hostkeeper/hostkeeper.toml` |
 | state directory, packages directory | as on Linux (`/var/lib/updater/state`, `/var/lib/hostkeeper/packages`); both exist on macOS |
-| admin socket | `/var/run/hostkeeper/admin.sock` (macOS has a read-only root and no `/run`) |
+| run directory | `/var/run` (macOS has a read-only root and no `/run`); the daemon binds no socket there |
 | units linked from a package | `/Library/LaunchDaemons/<label>.plist`, a link to `<packages>/<service>/current/units/<label>.plist` |
 | the daemon's plist program | `/var/lib/updater/state/hostkeeper/bin/current`, which the pkg's `postinstall` points at `/usr/local/bin/hostkeeper` on a first install |
 | the `hostkeeper` of the command line | `/usr/local/bin/hostkeeper` |
@@ -515,7 +514,7 @@ Its tests (`crates/hostkeeper-privileged/tests/device_mac.rs`, `device_mac_e2e.r
 counted by the coverage gate; what they drive is measured against fakes on Linux. They:
 
 - start the daemon as a launchd job of the system domain, with a config and directories of their
-  own, call `Status` on its admin socket, and read the Mac's boot id in the `.boot-id` its start
+  own, read the Mac's boot id in the `.boot-id` its start
   pass wrote;
 - run the fixture hook in mode `sleep` as a step job through `LaunchdLauncher` with a bound of 5
   seconds: the job is booted out at the bound, the step has no exit code (a failed step), and

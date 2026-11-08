@@ -18,7 +18,7 @@
 # host's own unit hostkeeper.service (or its own launchd job dev.hostkeeper.hostkeeper) updating to
 # this build, falling back by its own fallback unit (or job) from this build made to fail its
 # start, and this build updating to itself under a newer version name; on the Mac the daemon started as a
-# launchd job and answering on its admin socket, a hook step as a launchd job stopped at its
+# launchd job and binding no socket, a hook step as a launchd job stopped at its
 # bound, the observer's launchd and proc_pidpath adapters, and the package check's codesign and
 # quarantine verdicts, the probe of a new binary's self-update protocol as a launchd job, and in
 # device_mac_e2e.rs hello's macOS package installed, updated, rolled back and uninstalled by the

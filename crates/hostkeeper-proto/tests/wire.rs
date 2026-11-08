@@ -1,4 +1,5 @@
-//! What the encoded messages do across versions, with the generated types: a reader of the
+//! What the encoded messages do across versions, with the generated types (the frozen
+//! `hostkeeper.local.v1` ones dynamic): a reader of the
 //! release before reads what it knows of a newer message and keeps the rest, a newer reader
 //! reads an older message, an unknown enum number reads as UNSPECIFIED and is kept, and an
 //! `optional` field tells absent from zero. The release before is this crate's descriptor set
@@ -15,11 +16,9 @@ use hostkeeper_proto::hostkeeper::agent::v1::{
     FailurePhase, Force, Health, HeartbeatRequest, HeartbeatResponse, Order, Outcome, PinReport,
     Platform, ServiceBeat, UpdateResult, order,
 };
-use hostkeeper_proto::hostkeeper::local::v1::{
-    AbortResponse, ClearRecordResponse, RecordProblem, ServiceRecord, StatusResponse, StepOutcome,
-    StepRecord,
-};
 
+#[path = "support/frozen.rs"]
+mod frozen;
 #[path = "support/kbf_tables.rs"]
 mod kbf_tables;
 
@@ -199,16 +198,24 @@ fn a_forced_update_that_failed_on_its_target_is_reported() {
     assert_eq!(service.health(), Health::Unhealthy);
     assert!(service.last_update.as_ref().is_some_and(|u| u.forced));
 
-    let record = StepRecord {
-        version: "1.5".to_owned(),
-        forced: true,
-        outcome: StepOutcome::Failed.into(),
-        order_try: 3,
-        ..StepRecord::default()
-    };
-    let read = StepRecord::decode(record.encode_to_vec().as_slice()).expect("decodes");
-    assert_eq!(read.outcome(), StepOutcome::Failed);
-    assert!(read.forced);
+    let record = frozen::local(
+        "StepRecord",
+        [
+            ("version", Value::String("1.5".to_owned())),
+            ("forced", Value::Bool(true)),
+            (
+                "outcome",
+                frozen::variant("StepOutcome", "STEP_OUTCOME_FAILED"),
+            ),
+            ("order_try", Value::U64(3)),
+        ],
+    );
+    let read = frozen::read_back(&record);
+    assert_eq!(frozen::enum_name(&read, "outcome"), "STEP_OUTCOME_FAILED");
+    assert_eq!(
+        read.get_field_by_name("forced").as_deref(),
+        Some(&Value::Bool(true))
+    );
 }
 
 /// Catches: outcomes that can only say a forced update failed on its target: one that failed
@@ -234,54 +241,35 @@ fn a_forced_update_that_failed_before_its_switch_is_reported() {
     assert_eq!(result.phase(), FailurePhase::BeforeCommit);
     assert_ne!(read.version, result.target);
 
-    let record = StepRecord {
-        version: "1.5".to_owned(),
-        forced: true,
-        outcome: StepOutcome::Failed.into(),
-        phase: FailurePhase::BeforeCommit.into(),
-        order_try: 4,
-        ..StepRecord::default()
-    };
-    let read = StepRecord::decode(record.encode_to_vec().as_slice()).expect("decodes");
-    assert_eq!(read.phase(), FailurePhase::BeforeCommit);
-    assert!(read.forced && !read.committed);
-}
-
-/// Catches: an Admin status that cannot say a step record is unreadable, an abort that cannot
-/// return the record it closed, and a clear that cannot say what it cleared.
-#[test]
-fn the_admin_calls_carry_a_record_problem_and_the_closed_record() {
-    let status = StatusResponse {
-        services: vec![ServiceRecord {
-            service: "db".to_owned(),
-            record_problem: RecordProblem::Unreadable.into(),
-            ..ServiceRecord::default()
-        }],
-        ..StatusResponse::default()
-    };
-    let read = StatusResponse::decode(status.encode_to_vec().as_slice()).expect("decodes");
-    assert_eq!(read.services[0].record_problem(), RecordProblem::Unreadable);
-    assert_eq!(read.services[0].current, None);
-
-    let aborted = AbortResponse {
-        record: Some(StepRecord {
-            order_id: "o-17".to_owned(),
-            order_try: 2,
-            outcome: StepOutcome::Failed.into(),
-            phase: FailurePhase::Halt.into(),
-            ..StepRecord::default()
-        }),
-    };
-    let read = AbortResponse::decode(aborted.encode_to_vec().as_slice()).expect("decodes");
-    let record = read.record.expect("a record");
-    assert_eq!(record.phase(), FailurePhase::Halt);
-    assert_eq!((record.order_id.as_str(), record.order_try), ("o-17", 2));
-
-    let cleared = ClearRecordResponse {
-        problem: RecordProblem::NewerSchema.into(),
-    };
-    let read = ClearRecordResponse::decode(cleared.encode_to_vec().as_slice()).expect("decodes");
-    assert_eq!(read.problem(), RecordProblem::NewerSchema);
+    let record = frozen::local(
+        "StepRecord",
+        [
+            ("version", Value::String("1.5".to_owned())),
+            ("forced", Value::Bool(true)),
+            (
+                "outcome",
+                frozen::variant("StepOutcome", "STEP_OUTCOME_FAILED"),
+            ),
+            (
+                "phase",
+                Value::EnumNumber(FailurePhase::BeforeCommit.into()),
+            ),
+            ("order_try", Value::U64(4)),
+        ],
+    );
+    let read = frozen::read_back(&record);
+    assert_eq!(
+        read.get_field_by_name("phase").as_deref(),
+        Some(&Value::EnumNumber(FailurePhase::BeforeCommit.into()))
+    );
+    assert_eq!(
+        read.get_field_by_name("forced").as_deref(),
+        Some(&Value::Bool(true))
+    );
+    assert_eq!(
+        read.get_field_by_name("committed").as_deref(),
+        Some(&Value::Bool(false))
+    );
 }
 
 /// Catches: an order that cannot say one verb with its typed arguments, or that reads back as

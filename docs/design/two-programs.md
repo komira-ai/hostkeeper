@@ -45,7 +45,9 @@ the rpm, and `hostkeeper-mdm` ships as its own tarball.
   `ui/gen/client.d.ts`). `ui/calls.json` is derived from it, not kept by hand.
 - CI sets a desired version with `hkctl`. The reusable workflow `set-desired.yml` keeps its inputs and outputs; the
   wait is one call to a new method, `Releases.WaitConverged`, instead of a loop in a client.
-- The daemon serves nothing on the host. `hostkeeper admin` and its socket are gone. `hkctl hosts get`, `hkctl hosts
+- The daemon serves nothing on the host. `hostkeeper admin` and its socket are gone (**Built**, K3: the daemon binds no
+  socket, `admin` is a usage error, `admin.rs`, `admin_client.rs` and `socket.rs` of `crates/hostkeeper-daemon/src` are
+  deleted). `hkctl hosts get`, `hkctl hosts
   abort` and a new `hkctl hosts clear-record` replace its three calls.
 - The network-install server and the MDM stack become service packages, `pxe` and `mdm`, that hostkeeper installs like
   any other service (section 6).
@@ -179,9 +181,9 @@ by the existing scanner (`call_sites`, **Built**) and checked against the real r
 |---|---|---|
 | `hostkeeper` | `daemon` | Kept, the only verb. Gains the seed, the Mac config and the hand-over (2.1). |
 | | `--version` | Kept (a flag). |
-| | `admin status` | Deleted. `hkctl hosts get --node-id <id>`; on a host the coordinator cannot reach, the journal or `daemon.err.log`. |
-| | `admin abort <service>` | Deleted. `hkctl hosts abort` (**Built**: `Hosts.Abort`, for daemons that announce `abort-v1`). Off-line: stop the daemon. |
-| | `admin clear-record <service>` | Deleted. `hkctl hosts clear-record` (new method, 3.2). Off-line: root stops the daemon and renames the record by hand, which is all the verb does (3.2). |
+| | `admin status` | Deleted (**Built**, K3). `hkctl hosts get --node-id <id>`; on a host the coordinator cannot reach, the journal or `daemon.err.log`. |
+| | `admin abort <service>` | Deleted (**Built**, K3). `hkctl hosts abort` (**Built**: `Hosts.Abort`, for daemons that announce `abort-v1`). Off-line: stop the daemon. |
+| | `admin clear-record <service>` | Deleted (**Built**, K3). `hkctl hosts clear-record` (new method, 3.2). Off-line: root stops the daemon and renames the record by hand, which is all the verb does (3.2). |
 | | `ctl <service> <rpc>` | Deleted. `hkctl <service> <rpc>`. |
 | | `ci set-desired` | Deleted. The workflow calls `hkctl releases set-desired` and `hkctl releases wait-converged` (section 5). |
 | | `self-update-protocol` | Deleted. The release's `min_hostkeeper` and the running daemon's compiled-in oldest reader decide (4.2). |
@@ -328,7 +330,7 @@ message ClearRecordResponse { string order_id = 1; }
   the gate from ordering it that version, and a failed clear holds no update slot.
 - **A host the coordinator cannot reach.** Root stops the daemon, which ends the running step. If the record must go
   before the link is back, root renames it by hand, `step-record.json` to `step-record.json.corrupt` in the service's
-  state directory: that rename is the whole of what the verb does. The runbook of K3 says so.
+  state directory: that rename is the whole of what the verb does. The runbook says so (`docs/admin.md`, **Built**, K3).
 - **Audit.** `ClearRecord` writes the audit line `record_cleared` with the operator, the host and the service.
 - **What a compromise gains.** A coordinator can already order any attested package installed, forced or uninstalled on
   any host. Renaming a record that does not read is less than that: it never clears a record that reads, so it cannot
@@ -339,7 +341,7 @@ message ClearRecordResponse { string order_id = 1; }
 `hostkeeper.local.v1` (the admin socket's package) is not deleted from the protos. Removing a package is a removal the
 compatibility rule refuses (rule B8, and the test asserts the four packages), and the format shipped: an older
 `/usr/bin/hostkeeper admin` on a host speaks it. Its file stays, frozen, with a header that no program serves it; no
-code is generated from it. Deleting the file needs an exception to rule B8 that only the maintainers can grant; this
+code is generated from it (**Built**, K3: `FROZEN` in `crates/hostkeeper-proto/build.rs`; `hostkeeper_proto::hostkeeper::local::v1` no longer exists, the file stays in the descriptor set and the compatibility test is unchanged). Deleting the file needs an exception to rule B8 that only the maintainers can grant; this
 design does not ask for one. The command generator already skips the packages `hostkeeper.local.v<n>` (`ctl_gen.rs`,
 **Built**).
 
@@ -373,7 +375,8 @@ after R1 and R2 are released and name them.
 
 `ctl`, `ci` and `admin` are not in this table: no daemon and no unit invokes them, so they go as soon as their callers
 have moved (K1 to K3, section 8), between stage 1 and stage 2. K3 deletes the socket and keeps the `--admin-socket`
-flag accepted, because units that pass it are live until stage 3.
+flag accepted and ignored, because units that pass it are live until stage 3 (**Built**: `DaemonFlags.admin_socket`, hidden,
+no default, `crates/hostkeeper-daemon/src/cli.rs`).
 
 Before the floor of a stage is raised, the operator checks that every host of the service `hostkeeper` runs the
 previous stage: `hkctl releases status --service hostkeeper` (or `hostkeeper ctl` before G3) shows every host at R1 (or
@@ -776,7 +779,7 @@ switches to the generated client in one pull request, with its tests.
 | S1b | Stage 1, the rest: `OLDEST_READER` at 0.1.53, `LEGACY_FLOOR` and the floor rule, the built-in steps for hostkeeper's package, the start from the packaged binary (seed and exec), the Mac config at start | X1 | the floor rule's tests; the built-in steps' record byte-equal to the no-op command's; the seed's tests (`tests/seed.rs`) and `tests/mac_config.rs` re-pointed at the start, each case kept (in place, locked, a dangling `current`, a config already there, a link refused, no managed file); every device test of 4.5; X1 |
 | K1 | Delete `hostkeeper ctl` and `crates/hostkeeper-ctl`; Rust callers use the tonic client through a `hostkeeper-testkit` helper | G1, G3 | `tests/cli_ctl.rs` replaced by `ctl` a usage error; the privileged e2e tests on the tonic helper; the layering test; `pr_device.rs` with the shorter crate list |
 | K2 | Delete `hostkeeper ci` and `crates/hostkeeper-ci` | CI2 | `ci` a usage error; the layering test; `pr_device.rs` |
-| K3 | Delete the admin socket, `hostkeeper admin`, `admin_client.rs`; freeze `local/v1/admin.proto` (3.3); keep `--admin-socket` accepted and ignored; runbooks to `hkctl` and the off-line rename of 3.2 | R1 converged (every daemon takes `clear-record`), G3 | `tests/admin.rs` and `tests/admin_cli.rs` replaced by: the daemon binds no socket, `admin` a usage error; the daemon starts with the exact argument list of today's unit and of the stage-2 unit; compat test unchanged |
+| K3 | Delete the admin socket, `hostkeeper admin`, `admin_client.rs`; freeze `local/v1/admin.proto` (3.3); keep `--admin-socket` accepted and ignored; runbooks to `hkctl` and the off-line rename of 3.2 | R1 converged (every daemon takes `clear-record`), G3 | `tests/admin.rs` and `tests/admin_cli.rs` replaced by: the daemon binds no socket, `admin` a usage error; the daemon starts with the exact argument list of today's unit and of the stage-2 unit; compat test unchanged. **Built** (K3): the daemon binds no socket and the platform's run directory replaces the socket path in `Settings` (`crates/hostkeeper-daemon/src/start.rs`, `crates/hostkeeper-launchd`); `docs/admin.md` is the runbook, and the packaging texts are unchanged until stage 2 |
 | S2a | Stage 2: `OLDEST_READER = R1`, the hand-over follow-on, the probe call and its plumbing deleted, the fallback files removed at start; the pin of X1 moved to R1 | R1 converged | the re-pointed and new device tests of 4.5, Linux and Mac; X1 pinned to R1 |
 | S2b | Stage 2: the package unit, the bootstrap unit, the plist and the postinstall (4.1) | S1b released | `crates/xtask/tests/packaging/{unit_file,daemon_flags,self_update}.rs`, `check-macos-pkg` and `crates/hostkeeper-launchd/tests/{plist,postinstall}.rs` on the new texts; the bootstrap-unit and pkg device tests of 4.5 |
 | S3 | Stage 3: `OLDEST_READER = R2`; delete `self-update-protocol`, `self-update-fallback`, `self-update-seed` (and the linked unit's line that calls it), `mac-config`, `update-hook` and its five step words, `--admin-socket`, `SELF_UPDATE_PROTOCOL`, `fallback.rs`, `selfunits.rs` and their texts; the pin of X1 moved to R2; the runbook of 4.1 | R2 converged | `crates/hostkeeper/tests/binary.rs`: each deleted verb and the flag exit 2; X1 pinned to R2; every device test of 4.5 |

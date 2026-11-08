@@ -21,8 +21,8 @@
 //! after each step ([`crate::links::Links::renewal`]), as it is when the heartbeat is made.
 //!
 //! [`DaemonTrustedRoot`] is its [`TrustedRootSource`]: the report of the trusted root the package
-//! store checks attestations with ([`crate::packages::Packages::trusted_root`], the one the admin
-//! `Status` reports), read when the heartbeat is made; none from a store that keeps no root.
+//! store checks attestations with ([`crate::packages::Packages::trusted_root`], the one
+//! [`Daemon::status`] reports), read when the heartbeat is made; none from a store that keeps no root.
 
 use std::io;
 use std::sync::Arc;

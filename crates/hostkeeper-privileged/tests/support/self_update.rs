@@ -14,7 +14,8 @@
 //!   these ([`test_unit`]): `ExecStart=` runs the same `current` and flags with the test's
 //!   directories, the fixture's own flags before the verb and `--heartbeat-secs 1` after it; the
 //!   seed (`ExecStartPre=`: the test stages the first binary itself) and the runtime directory of
-//!   the admin socket (the socket is in the scratch directory) are left out. A change to the
+//!   the unit's `--admin-socket` (the daemon ignores that flag now; its path is in the scratch
+//!   directory) are left out. A change to the
 //!   unit's `ExecStart=` that this does not know fails the test by name.
 //! - The fallback unit is `hostkeeper_steps::selfupdate::fallback_unit` of the test's binary
 //!   directory, naming the main unit.

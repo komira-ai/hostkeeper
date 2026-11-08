@@ -15,7 +15,6 @@ use std::sync::Arc;
 
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_daemon::adapters::Adapters;
-use hostkeeper_daemon::admin::service_state;
 use hostkeeper_daemon::cli::Unwired;
 use hostkeeper_daemon::link_adapters::observation;
 use hostkeeper_daemon::observer::{OwnService, STATUS_DEADLINE, SealedExe, observe, observer_with};
@@ -30,7 +29,6 @@ use hostkeeper_observe::{
     VersionView, beat_health,
 };
 use hostkeeper_proto::hostkeeper::agent::v1::Health;
-use hostkeeper_proto::hostkeeper::local::v1::{Liveness, Unhealthy};
 use hostkeeper_steps::Layout;
 use hostkeeper_unpack::{MacVerify, SignatureVerdict, VerifyIoError};
 use support::{OWN, Rig, d};
@@ -167,7 +165,7 @@ fn of_hk(rig: &Rig, observer: &hostkeeper_observe::Observer) -> Observation {
 /// launchd job), so the observer asked launchd nothing. Through the macOS adapters, the daemon
 /// observes its job `dev.hostkeeper.hostkeeper` as the service `hostkeeper`: live, at the version
 /// `current` names, confirmed by the executable the job's process runs (the binary directory's
-/// file of that version), and healthy, in the admin `Status` as in the heartbeat.
+/// file of that version), and healthy, as the heartbeat reports it.
 #[test]
 fn a_mac_daemon_observes_its_own_launchd_job_live_healthy_and_at_its_version() {
     let rig = mac_host("own-mac-live", RUNS, &[BEFORE, RUNS]);
@@ -189,12 +187,6 @@ fn a_mac_daemon_observes_its_own_launchd_job_live_healthy_and_at_its_version() {
             },
             None
         )
-    );
-    let wire = service_state(&seen);
-    assert_eq!(
-        (wire.liveness, wire.version.as_deref(), wire.healthy),
-        (Liveness::Live as i32, Some(RUNS), true),
-        "{wire:?}"
     );
     assert_eq!(beat_health(&seen), (Health::Healthy, Some(RUNS.to_owned())));
     let beat = observation(&seen);
@@ -229,11 +221,7 @@ fn the_daemons_own_job_is_stopped_absent_or_mismatched_as_launchd_and_its_proces
     let stopped = printed(&job(), "not running", "\tlast exit code = 1\n");
     let seen = of_hk(&rig, &mac_observer(&rig, stopped, &exe));
     assert_eq!(seen.state, ServiceState::Stopped);
-    let wire = service_state(&seen);
-    assert_eq!(
-        (wire.liveness, wire.healthy),
-        (Liveness::Stopped as i32, false)
-    );
+    assert_eq!(beat_health(&seen).0, Health::Unhealthy);
 
     let absent = LaunchctlOutput {
         code: Some(113),
@@ -252,11 +240,11 @@ fn the_daemons_own_job_is_stopped_absent_or_mismatched_as_launchd_and_its_proces
         (seen.state.clone(), seen.reason_token()),
         (ServiceState::Live, Some("version_mismatch"))
     );
-    let wire = service_state(&seen);
-    assert_eq!(
-        (wire.version.as_deref(), wire.healthy, wire.unhealthy),
-        (None, false, Unhealthy::VersionMismatch as i32)
+    assert!(
+        matches!(seen.version, VersionView::Mismatch { .. }),
+        "{seen:?}"
     );
+    assert_eq!(beat_health(&seen).0, Health::Unhealthy);
 
     // A fallback put the previous binary back: the package still names the version that fell
     // back, the binary directory's `current` the one the job runs, which is what is reported.
@@ -282,7 +270,7 @@ fn the_daemons_own_job_is_stopped_absent_or_mismatched_as_launchd_and_its_proces
             None
         )
     );
-    assert!(service_state(&seen).healthy);
+    assert_eq!(beat_health(&seen).0, Health::Healthy);
 
     // No binary directory: the package's version, which no file confirms.
     let unstaged = mac_host("own-mac-unstaged", RUNS, &[]);
@@ -293,7 +281,7 @@ fn the_daemons_own_job_is_stopped_absent_or_mismatched_as_launchd_and_its_proces
         (seen.state.clone(), seen.reason_token()),
         (ServiceState::Live, Some("version_unconfirmed"))
     );
-    assert!(service_state(&seen).healthy);
+    assert_eq!(beat_health(&seen).0, Health::Healthy);
 }
 
 /// Catches the daemon's own unit given to another service, or put in place of the units a
@@ -413,8 +401,11 @@ fn the_sealed_executable_of_hostkeeper_is_its_file_in_the_binary_directory() {
         (ServiceState::Live, None)
     );
     assert_eq!(
-        service_state(&seen).version.as_deref(),
-        Some(RUNS),
+        seen.version,
+        VersionView::Recorded {
+            version: RUNS.to_owned(),
+            confirmed: true,
+        },
         "{seen:?}"
     );
 }

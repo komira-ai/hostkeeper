@@ -403,7 +403,7 @@ is the notice to commit the new root, and it keeps the live root as its artifact
 The comparison is of bytes, so a change in how the runner's `gh` writes the same root also turns
 the run red. The run prints the `gh` version, and the fix is the same: commit the live output.
 
-The admin `Status` reports the root the daemon uses:
+`hkctl hosts get` reports the root the daemon uses, from every gRPC heartbeat:
 
 - `trusted_root_age_secs`: the seconds since that file was last written on the host (the format
   has no field for when the root was made). It is absent when there is no file.

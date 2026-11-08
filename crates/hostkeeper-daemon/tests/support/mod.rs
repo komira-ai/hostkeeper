@@ -10,8 +10,8 @@ pub mod selfupdate;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
 
 use hostkeeper_config::daemon::DaemonConfig;
 use hostkeeper_config::manifest::HostkeeperVersion;
@@ -40,14 +40,10 @@ use hostkeeper_placed::testing::{Event, FakeUnitControl, FaultFs, Log as PlacedL
 use hostkeeper_proto::hostkeeper::agent::v1::{
     Force, ForceRollback, Install, Order, Uninstall, Update, order,
 };
-use hostkeeper_proto::hostkeeper::local::v1::admin_client::AdminClient;
 use hostkeeper_steps::record::{Loaded, Record, State};
 use hostkeeper_steps::{
     AdditiveCall, CrashPoint, Finished, LaunchError, RecordStore, StepCall, StepExit, StepLauncher,
 };
-use hyper_util::rt::TokioIo;
-use tokio::io::DuplexStream;
-use tonic::transport::{Channel, Endpoint, Uri};
 
 /// Links whose loops never run: both are left unstarted on a dispatcher nobody runs, for a test
 /// that serves the daemon and is not about its loops.
@@ -251,7 +247,8 @@ pub struct Rig {
     pub state: PathBuf,
     pub packages: PathBuf,
     pub config: PathBuf,
-    pub socket: PathBuf,
+    /// The run directory the settings name (nothing is ever bound in it).
+    pub run_dir: PathBuf,
     pub clock: Arc<FakeClock>,
     pub launcher: Arc<ScriptedLauncher>,
     pub store: Arc<FakePackages>,
@@ -303,7 +300,7 @@ impl Rig {
             store: FakePackages::new(&packages),
             packages,
             config,
-            socket: root.join("r").join("a.sock"),
+            run_dir: root.join("run"),
             clock: FakeClock::new(),
             launcher: ScriptedLauncher::new(),
             units: Arc::new(FakeUnitControl::new(placed_log.clone())),
@@ -406,7 +403,7 @@ impl Rig {
             config: self.config.clone(),
             state_dir: self.state.clone(),
             packages_dir: self.packages.clone(),
-            admin_socket: self.socket.clone(),
+            run_dir: self.run_dir.clone(),
             trusted_uid: my_uid(),
             trusted_root_max_age_days: DEFAULT_TRUSTED_ROOT_MAX_AGE_DAYS,
         }
@@ -660,35 +657,6 @@ pub fn snapshot(dir: &Path) -> Vec<(PathBuf, String)> {
     }
     out.sort();
     out
-}
-
-/// Serves `daemon`'s admin service on one in-process connection from `peer`, as the admin socket
-/// does: the client's end, and the count of the bytes the server read. Needs a tokio runtime.
-pub fn admin_from(
-    daemon: Arc<Daemon>,
-    peer: hostkeeper_daemon::admin::Peer,
-) -> (AdminClient<Channel>, Arc<std::sync::atomic::AtomicUsize>) {
-    use tokio_stream::StreamExt;
-    let (near, far) = tokio::io::duplex(64 * 1024);
-    let (counted, read) = hostkeeper_daemon::testing::Counted::new(far);
-    let incoming = tokio_stream::iter([Ok((counted, peer))]).chain(tokio_stream::pending());
-    tokio::spawn(hostkeeper_daemon::admin::serve(daemon, incoming));
-    (client(near), read)
-}
-
-/// A client of the admin service over `io`, the other end of an in-process pipe.
-pub fn client(io: DuplexStream) -> AdminClient<Channel> {
-    let slot = Arc::new(Mutex::new(Some(io)));
-    let connector = tower::service_fn(move |_: Uri| {
-        let io = slot.lock().expect("the slot").take();
-        async move {
-            io.map(TokioIo::new)
-                .ok_or_else(|| std::io::Error::other("the pipe was used"))
-        }
-    });
-    let channel =
-        Endpoint::from_static("http://admin.invalid").connect_with_connector_lazy(connector);
-    AdminClient::new(channel)
 }
 
 /// A step launcher that puts a mark in the placed log for each step it runs (`run cutover`, and

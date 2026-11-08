@@ -177,8 +177,7 @@ coordinator, the others on the Mac as root.
 6. Check that it runs the pkg's binary through `current` and talks to the coordinator:
    `sudo launchctl print system/dev.hostkeeper.hostkeeper` names the program
    `/var/lib/updater/state/hostkeeper/bin/current`, `readlink` of that path names
-   `versions/<version>`, `sudo hostkeeper admin status` prints
-   `link.consecutive_failures: 0` after a heartbeat period, and
+   `versions/<version>`, and, after a heartbeat period,
    `hkctl hosts get --node-id <node id>` answers `heartbeat.agent.version` at the new
    version.
 

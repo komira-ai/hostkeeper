@@ -1521,12 +1521,9 @@ dependencies = [
  "hostkeeper-wire",
  "http-body-util",
  "hyper",
- "hyper-util",
  "ipmi-rs",
  "libc",
  "plist",
- "prost",
- "prost-types",
  "rcgen",
  "rustix",
  "rustls-pki-types",
@@ -1535,8 +1532,6 @@ dependencies = [
  "thiserror",
  "tokio",
  "toml",
- "tonic",
- "tower",
  "x509-cert",
 ]
 
@@ -1849,7 +1844,6 @@ dependencies = [
  "hostkeeper-testkit",
  "hostkeeper-unpack",
  "hostkeeper-wire",
- "hyper-util",
  "p256",
  "rcgen",
  "rustix",
@@ -1864,7 +1858,6 @@ dependencies = [
  "tokio",
  "toml",
  "tonic",
- "tower",
  "ureq",
  "x509-parser",
 ]

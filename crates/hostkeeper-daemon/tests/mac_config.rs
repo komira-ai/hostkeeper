@@ -85,7 +85,7 @@ impl Mac {
             config: self.config.clone(),
             state_dir: self.root().join("state"),
             packages_dir: packages,
-            admin_socket: self.root().join("run").join("admin.sock"),
+            run_dir: self.root().join("run"),
             trusted_uid: me(),
             trusted_root_max_age_days: NonZeroU64::MIN,
         };

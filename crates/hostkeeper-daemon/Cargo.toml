@@ -96,16 +96,10 @@ hyper.workspace = true
 # Its own tests turn on `testing`.
 hostkeeper-daemon = { path = ".", features = ["testing"] }
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }
-hyper-util = { workspace = true, features = ["tokio"] }
-# The admin service's calls, read from the protobuf descriptor set.
-prost.workspace = true
-prost-types.workspace = true
 # The effective uid: the owner the tests' daemon config is trusted for; an extended attribute
 # set on a scratch file, which the quarantine check reads.
 rustix = { workspace = true, features = ["fs", "process"] }
-tokio = { workspace = true, features = ["io-util", "macros", "net", "rt"] }
-tonic = { workspace = true, features = ["channel"] }
-tower = { workspace = true, features = ["util"] }
+tokio = { workspace = true, features = ["macros", "net", "rt"] }
 
 [lints]
 workspace = true
