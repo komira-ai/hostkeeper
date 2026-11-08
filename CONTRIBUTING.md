@@ -74,7 +74,7 @@ cargo run -p coverage-gate --locked -- --lcov target/lcov.info --root .
 Nothing privileged and nothing for macOS runs on a pull request, but in `pr-device.yml` (below),
 on every pull request. The workflow lint refuses such a
 job in any other workflow that runs on `pull_request`, refuses a job as root (`sudo`, a privileged
-container) in any workflow but `privileged.yml`, `net-install.yml` and the two copies of
+container) in any workflow but `privileged.yml`, `net-install.yml` and the three copies of
 `privileged.yml`'s jobs in `pr-device.yml`,
 refuses a write scope, a secret or the token in every workflow that runs on `pull_request`, and it
 also refuses an action that is not pinned
@@ -106,7 +106,7 @@ the same branch cancels the older, so on `main` only the newest commit's run is 
 
 ## The macOS and privileged jobs of a pull request
 
-`.github/workflows/pr-device.yml` runs on every pull request, beside `ci.yml`. Its three jobs are
+`.github/workflows/pr-device.yml` runs on every pull request, beside `ci.yml`. Its four jobs are
 each a check of its own, required of every pull request:
 
 - `macos-test`: the tests of the crates the `hostkeeper` and `hello` binaries are built from (the
@@ -118,8 +118,13 @@ each a check of its own, required of every pull request:
   either joins it.
 - `macos-device`: the device tests as root under launchd.
 - `privileged`: the privileged tests as root against systemd.
+- `openrc-device`: the daemon under OpenRC in an Alpine Linux container, as root. The job builds
+  the Alpine image (`crates/hostkeeper-privileged/openrc`), the programs the container runs for
+  `x86_64-unknown-linux-musl`, and the test `openrc_device.rs`, and downloads the nfpm that
+  `artifacts.yml` pins (the workflow lint holds the version and the SHA-256 equal to its).
 
-`macos-device` and `privileged` are copies of `privileged.yml`'s jobs of those names, key for key
+`macos-device`, `privileged` and `openrc-device` are copies of `privileged.yml`'s jobs of those
+names, key for key
 (the workflow lint compares them), so a pull request runs what will run after its merge. A newer
 push to the same pull request cancels the older run. These jobs hold no write scope and name no
 secret or token, and save no cache.
@@ -186,7 +191,9 @@ of the rig that need no root (the router's DHCP answers, the console's lines) in
 set.
 
 The files of the job `privileged` start with `#![cfg(feature = "privileged")]`, those of
-`first-boot` with `#![cfg(all(target_os = "linux", feature = "privileged"))]`, `net_install.rs` with
+`first-boot` with `#![cfg(all(target_os = "linux", feature = "privileged"))]`, `openrc_device.rs` (the job
+`openrc-device`) with `#![cfg(all(target_os = "linux", target_env = "gnu", feature = "privileged"))]`,
+`net_install.rs` with
 `#![cfg(all(target_os = "linux", target_arch = "x86_64", feature = "privileged"))]` and
 `net_install_arm64.rs` with `#![cfg(all(target_os = "linux", feature = "privileged",
 not(target_arch = "aarch64")))]`. The feature is off by default,

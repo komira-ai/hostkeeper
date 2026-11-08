@@ -285,8 +285,8 @@ fn root_and_macos_on_a_pull_request_are_allowed_only_in_the_jobs_listed_for_them
         found[0].starts_with("job macos-test: privileged on pull_request (`sudo cargo test"),
         "{found:?}"
     );
-    let linux = "    runs-on: ubuntu-24.04\n";
-    let text = device_with(linux, "    runs-on: macos-15\n");
+    let linux = "    runs-on: ubuntu-24.04\n    permissions:\n      contents: read\n    # A bound on the whole job, against a test that hangs; no test depends on it.\n    timeout-minutes: 60\n";
+    let text = device_with(linux, &linux.replace("ubuntu-24.04", "macos-15"));
     assert_eq!(
         problems(&text),
         [
@@ -350,7 +350,7 @@ fn the_trigger_of_pr_device_yml_is_pull_request_alone_with_no_filter() {
     // With no `on` it runs for no pull request, and its copies' root is refused as outside
     // privileged.yml.
     let none = problems(&device_with("on:\n  pull_request:\n\n", ""));
-    assert_eq!(none.len(), 3, "{none:?}");
+    assert_eq!(none.len(), 4, "{none:?}");
     assert!(
         none[0]
             .starts_with("job macos-device: privileged outside privileged.yml and net-install.yml")
@@ -359,7 +359,12 @@ fn the_trigger_of_pr_device_yml_is_pull_request_alone_with_no_filter() {
         none[1]
             .starts_with("job privileged: privileged outside privileged.yml and net-install.yml")
     );
-    assert_eq!(none[2], ON_PROBLEM);
+    assert!(
+        none[2].starts_with(
+            "job openrc-device: privileged outside privileged.yml and net-install.yml"
+        )
+    );
+    assert_eq!(none[3], ON_PROBLEM);
 }
 
 #[test]
@@ -420,12 +425,20 @@ fn each_job_of_pr_device_yml_runs_on_every_pull_request_on_its_runner() {
     for (from, to, want) in cases {
         assert_eq!(problems(&device_with(from, to)), [want], "{to}");
     }
-    // A job of the list missing: privileged, the last, removed with every line after its start.
+    // Jobs of the list missing: privileged and openrc-device, the last two, removed with every
+    // line after the start of the first; and openrc-device alone.
     let text = device();
     let at = text
         .find("  # privileged.yml's job privileged;")
         .expect("the copy");
-    assert_eq!(problems(&text[..at]), ["no job privileged"]);
+    assert_eq!(
+        problems(&text[..at]),
+        ["no job privileged", "no job openrc-device"]
+    );
+    let at = text
+        .find("  # privileged.yml's job openrc-device;")
+        .expect("the copy");
+    assert_eq!(problems(&text[..at]), ["no job openrc-device"]);
 }
 
 #[test]
@@ -538,7 +551,7 @@ fn a_copy_that_drifted_from_privileged_yml_is_refused() {
     let without = device()[..at].to_owned();
     assert_eq!(
         mirror_problems(&without, &privileged),
-        [drift("privileged")]
+        [drift("privileged"), drift("openrc-device")]
     );
     assert_eq!(
         mirror_problems("on: [unclosed\n", &privileged).len(),
