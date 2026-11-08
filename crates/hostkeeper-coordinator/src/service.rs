@@ -14,7 +14,7 @@ use hostkeeper_wire::wire::{Answer, Heartbeat, ORDER_FEATURE, ServiceReply, Verd
 use serde::Serialize;
 
 use crate::channel::{ChannelRefusal, ReleaseChannel};
-use crate::converge::{Convergence, role_counts};
+use crate::converge::role_counts;
 use crate::desired::{Desired, DesiredError, DesiredStore, StoreError};
 use crate::enrollment::Enrollment;
 use crate::fleet::{Fleet, Node, QUIET_START};
@@ -247,6 +247,8 @@ pub struct Coordinator {
     /// The release channel a set's version must be in (`--release-channel`); `None`: no set is
     /// checked against one.
     pub(crate) channel: Option<ReleaseChannel>,
+    /// The held `Releases.WaitConverged` calls ([`crate::wait`]).
+    pub(crate) waits: crate::wait::Waits,
     /// Told when CI's set of a desired state finds the fleet's lock held and waits for it: a
     /// test's progress event, so a race is made to happen rather than waited for.
     #[cfg(test)]
@@ -300,6 +302,7 @@ impl Coordinator {
             ui: None,
             alerts: crate::alerts::Book::default(),
             channel: None,
+            waits: crate::wait::Waits::default(),
             #[cfg(test)]
             set_waits: Mutex::new(None),
         }
@@ -969,22 +972,6 @@ impl Coordinator {
                 .as_deref()
                 .map(Enrollment::server_certificate),
         }
-    }
-
-    /// Where the hosts of `service` stand against its desired state, if `bearer` is a
-    /// GitHub Actions OIDC token the same allow-list accepts as for [`Self::set_desired`]
-    /// (any service may be read with any accepted token). The operator token is no CI token
-    /// and is refused. Read-only, and each token is good once.
-    ///
-    /// # Errors
-    /// [`ConvergenceError`].
-    pub async fn convergence(
-        &self,
-        bearer: Option<&str>,
-        service: &str,
-    ) -> Result<Convergence, ConvergenceError> {
-        self.ci(bearer).await?;
-        self.convergence_verified(service)
     }
 }
 

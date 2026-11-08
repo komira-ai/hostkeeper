@@ -400,6 +400,7 @@ const RPCS: [(&str, &[&str]); 6] = [
             "Status(StatusRequest) StatusResponse",
             "MarkBad(MarkBadRequest) MarkBadResponse",
             "Halt(HaltRequest) HaltResponse",
+            "WaitConverged(WaitConvergedRequest) WaitConvergedResponse",
         ],
     ),
     (
@@ -780,6 +781,8 @@ fn wire_names_are_pinned() {
                 "channel_digest_mismatch",
                 "index_digest_mismatch",
                 "index_invalid",
+                "invalid_wait",
+                "too_many_waits",
             ],
         ),
         (

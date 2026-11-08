@@ -159,6 +159,16 @@ fn every_refusal_value_has_the_code_and_token_its_proto_comment_names() {
                 InvalidArgument,
                 "index_invalid",
             ),
+            (
+                ReleasesRefusal::InvalidWait,
+                InvalidArgument,
+                "invalid_wait",
+            ),
+            (
+                ReleasesRefusal::TooManyWaits,
+                FailedPrecondition,
+                "too_many_waits",
+            ),
         ],
         refusal::releases,
     );
