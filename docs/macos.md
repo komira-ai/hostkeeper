@@ -61,10 +61,13 @@ serve it:
 
 - the daemon's own `LaunchDaemons` plist, the one `hostkeeper_launchd::plist::daemon_plist`
   renders (see [One daemon, run by launchd](#one-daemon-run-by-launchd)). Its program is
-  `current` of the binary directory, `/var/lib/updater/state/hostkeeper/bin/current`
-  (`hostkeeper_launchd::plist::DAEMON_PROGRAM`, the path `hostkeeper_daemon::selfupdate::binary_dir`
+  the installed binary, `/usr/local/bin/hostkeeper` (`hostkeeper_launchd::plist::INSTALLED_BINARY`),
+  run as `daemon`. Started from that path, the daemon seeds the binary directory of hostkeeper's
+  own update when `current` starts nothing and execs `current`
+  (`/var/lib/updater/state/hostkeeper/bin/current`, the path `hostkeeper_daemon::selfupdate::binary_dir`
   derives from the daemon's state directory), the link a self-update switches to the new binary,
-  as the Linux unit's `ExecStart=` is. `KeepAlive` is plain `true`, the counterpart of the unit's
+  with its own arguments (`hostkeeper_daemon::packaged`), at each start; so launchd's job runs the
+  binary the last update chose. `KeepAlive` is plain `true`, the counterpart of the unit's
   `Restart=always`, because the daemon exits cleanly after switching to a new binary and must be
   started again, from what `current` names then. It sets no `ThrottleInterval`: launchd waits its
   default 10 seconds between two starts;
@@ -79,12 +82,10 @@ serve it:
   first self-update there is no `previous`, and launchd cannot spawn the job's program when the
   interval comes.
 
-launchd has no counterpart of the unit's `ExecStartPre=`, so on a Mac the binary directory gets
-its first binary at install: the pkg's `postinstall` runs
-`/usr/local/bin/hostkeeper self-update-seed --state-dir /var/lib/updater/state --binary /usr/local/bin/hostkeeper`
-as its first command (see [Release and installer pkg](#release-and-installer-pkg)). A `current` that later starts
-nothing (removed by hand, or a link to a version that is gone) leaves launchd retrying a program it
-cannot spawn; installing the pkg again seeds it.
+launchd has no counterpart of the Linux package unit's `ExecStartPre=`, and needs none: the job's
+program is the installed binary, which seeds the binary directory at each start. A `current` that
+later starts nothing (removed by hand, or a link to a version that is gone) is seeded again by the
+next start, since the installed binary, not `current`, is what launchd runs.
 
 Since the timer runs the verb whether or not the new binary is failing, the verb decides the
 burst itself on a Mac (`hostkeeper_daemon::fallback::fallback_after_burst`). Each start of the
@@ -149,7 +150,7 @@ maintainers must confirm the prefix before any Mac enrolls, since a label is the
 | state directory, packages directory | as on Linux (`/var/lib/updater/state`, `/var/lib/hostkeeper/packages`); both exist on macOS |
 | admin socket | `/var/run/hostkeeper/admin.sock` (macOS has a read-only root and no `/run`) |
 | units linked from a package | `/Library/LaunchDaemons/<label>.plist`, a link to `<packages>/<service>/current/units/<label>.plist` |
-| the daemon's plist program | `/var/lib/updater/state/hostkeeper/bin/current`, which the pkg's `postinstall` points at `/usr/local/bin/hostkeeper` on a first install |
+| the daemon's plist program | `/usr/local/bin/hostkeeper daemon`, which seeds the binary directory when `current` starts nothing and execs `/var/lib/updater/state/hostkeeper/bin/current` |
 | the `hostkeeper` of the command line | `/usr/local/bin/hostkeeper` |
 | the daemon's logs | `/var/log/hostkeeper/daemon.out.log` and `daemon.err.log` |
 
@@ -359,7 +360,7 @@ and the directories that hold them (each 0755, as macOS has them already; `/usr/
 - `/usr/local/bin/hostkeeper`, mode 0755, the released binary;
 - `/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist`, mode 0644, the daemon's job as
   `hostkeeper_launchd::daemon_plist` writes it for `DaemonJob::standard` (label
-  `dev.hostkeeper.hostkeeper`, running `/var/lib/updater/state/hostkeeper/bin/current daemon`);
+  `dev.hostkeeper.hostkeeper`, running `/usr/local/bin/hostkeeper daemon`);
 - `/var/log/hostkeeper`, mode 0755, the empty directory of the daemon's logs;
 - `/etc/newsyslog.d/hostkeeper.conf`, mode 0644, the rotation of those logs
   ([The daemon's logs](#the-daemons-logs));
@@ -388,42 +389,42 @@ exists.)
 The file `hostkeeper-<v>-macos-arm64.pkg` is a distribution pkg: `productbuild` wraps the component
 pkg that `pkgbuild` makes from the payload and the script, and the wrapper holds the one
 component and nothing else (no installer script, no installation check, no volume check). The
-installer runs the component's one script, a `postinstall` of three commands, as root once the
-files are in place. Each command that fails ends the script with its status, which fails the
-install, and the last one is the script's own status:
+installer runs the component's one script, a `postinstall` of two commands, as root once the
+files are in place. The last one is the script's own status, which fails the install when the
+job cannot be loaded:
 
 ```
 #!/bin/sh
-# The hostkeeper pkg's postinstall: three commands, in order. One that fails ends the
-# script with its status and its message, which fails the install.
-# 1. When current of the binary directory of hostkeeper's own update starts nothing,
-#    put the binary the pkg installed there and point current at it; when current
-#    starts a binary, as after a self-update, change nothing.
-# 2. Write the daemon config from the managed preferences the MDM installed. A config
-#    that is there is kept; with neither, fail.
-# 3. Load the daemon's launchd job, once any copy loaded before is booted out (which
-#    fails when none is loaded).
-'/usr/local/bin/hostkeeper' self-update-seed --state-dir '/var/lib/updater/state' --binary '/usr/local/bin/hostkeeper' || exit
-'/usr/local/bin/hostkeeper' mac-config --managed '/Library/Managed Preferences/dev.hostkeeper.config.plist' --config '/etc/hostkeeper/hostkeeper.toml' || exit
+# The hostkeeper pkg's postinstall: load the daemon's launchd job, once any copy
+# loaded before is booted out (which fails when none is loaded). The job's program,
+# the binary the pkg installed, puts itself in the binary directory of hostkeeper's
+# own update when current starts nothing and runs current, at each start.
 '/bin/launchctl' bootout 'system/dev.hostkeeper.hostkeeper' 2>/dev/null
 exec '/bin/launchctl' bootstrap system '/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist'
 ```
 
-1. The seed is the one the Linux unit runs before each start (`hostkeeper_daemon::seed`): when
-   `current` of the binary directory starts nothing, it stages the installed binary as its version
-   (`versions/<version>`) and points `current` at it, so the job's first start runs it; when
-   `current` starts a binary, as after a self-update, it changes nothing, so installing the pkg again
-   never puts an older binary back over an update. A seed that cannot do its work fails the install
-   with its message: the binary or the directory cannot be read or written, or a daemon holds the
-   state directory's lock while `current` starts nothing (a daemon an older pkg started, which runs
-   `/usr/local/bin/hostkeeper`; boot its job out before installing).
+`launchctl bootout` unloads a copy of the job loaded before, and its status is ignored
+because it fails when none is loaded. `launchctl bootstrap` loads the job, and `RunAtLoad`
+starts it. The script runs the bootstrap with `exec`, so its status is the install's.
+
+The script no longer seeds the binary directory or writes the config; the daemon's start does
+both, each time it starts.
+
+1. The seed (`hostkeeper_daemon::seed`, run by `hostkeeper_daemon::packaged` when the running
+   binary is `/usr/local/bin/hostkeeper`): when `current` of the binary directory starts nothing,
+   it stages the installed binary as its version (`versions/<version>`) and points `current` at
+   it; when `current` starts a binary, as after a self-update, it changes nothing, so installing
+   the pkg again never puts an older binary back over an update. A seed that cannot do its work
+   ends the start with its message in `daemon.err.log`: the binary or the directory cannot be
+   read or written, or a daemon holds the state directory's lock while `current` starts nothing.
+   Then the start execs `current` with its own arguments.
 2. `hostkeeper mac-config [--managed <file>] [--config <file>]` (`hostkeeper_daemon::mac_config`)
-   writes the daemon config; the flags default to the paths in the script. A config that is there
-   as a regular file is kept: nothing is written, the managed file is not read, and the line
-   `hostkeeper mac-config: <path> exists and is kept; the managed config is not read` goes to
-   standard error. Anything else at the config path, a link or a directory, is left as it is and
-   refused (`<path> is there but is not a regular file; it is not replaced`), since the daemon
-   reads its config only from a regular file and not through a link. Otherwise the verb reads the managed preferences file, which the
+   writes the daemon config; the daemon's start runs it on its `--config`, before it reads it
+   (`hostkeeper_daemon::mac_config::at_start`), and the verb still exists. A config that is there
+   as a regular file is kept: nothing is written and the managed file is not read. Anything else
+   at the config path, a link or a directory, is left as it is and refused
+   (`<path> is there but is not a regular file; it is not replaced`), since the daemon
+   reads its config only from a regular file and not through a link. Otherwise it reads the managed preferences file, which the
    config profile of the MDM makes (see the farm's config profile in
    [hostkeeper-mdm.md](design/hostkeeper-mdm.md) section 4). It accepts that file only when root
    owns it, no one else can write it and it is a regular file (checked on the open file, so a link
@@ -435,23 +436,19 @@ exec '/bin/launchctl' bootstrap system '/Library/LaunchDaemons/dev.hostkeeper.ho
    the config's directory, synced, hard-linked to the config path, which fails when a config
    appeared meanwhile; that one is judged as above), as root's file of mode 0600, and its directory is made
    with mode 0755 when it is missing. The file starts with a comment that names the managed
-   preferences domain `dev.hostkeeper.config`. With neither a managed file nor a config, the verb
-   fails with a message that names both paths, and so does the install.
-3. `launchctl bootout` unloads a copy of the job loaded before, and its status is ignored
-   because it fails when none is loaded. `launchctl bootstrap` loads the job, and `RunAtLoad`
-   starts it. The script runs the bootstrap with `exec`, so its status is the install's.
+   preferences domain `dev.hostkeeper.config`. With neither a managed file nor a config, it
+   fails with a message that names both paths.
 
-The daemon's start runs step 2 as well, on its `--config`, before it reads it
-(`hostkeeper_daemon::mac_config::at_start`): a Mac whose config is gone gets it again from the
-managed preferences at its next start, with no line for a config kept. A config that cannot be
-made (no managed file, a link at the config path, a managed file the loader refuses) stops the
-start with exit status 3, the message in `daemon.err.log`. And `/usr/local/bin/hostkeeper daemon`,
-which no plist starts yet, runs step 1's seed itself and execs `current` with its own arguments
-(`hostkeeper_daemon::packaged`).
+A config that cannot be made at a start (no managed file, a link at the config path, a managed
+file the loader refuses) stops the start with exit status 3, the message in
+`/var/log/hostkeeper/daemon.err.log`, and launchd starts the job again, which stops again. So a
+pkg installed on a Mac with neither a config nor the managed preferences installs, loads its job,
+and the daemon refuses each start, naming the missing file in `daemon.err.log`; the install does
+not fail. The MDM gate installs the managed preferences before the pkg, so this is a hand install
+done out of order.
 
 The manual path, for a Mac without an MDM: place `/etc/hostkeeper/hostkeeper.toml` first, then
-install the pkg. `mac-config` keeps that file, and the postinstall loads the job. Installing the
-pkg with neither a config nor a managed file fails at `mac-config`, before the job is loaded.
+install the pkg. The daemon's start keeps that file, and the postinstall loads the job.
 
 The pkg carries no installer signature yet. Which identity will sign it, a farm installer
 identity whose root the MDM installs or an Apple Developer ID Installer identity, is decided by
@@ -475,7 +472,7 @@ archive that `pkgutil --expand` expanded, layer by layer.
   files `Bom`, `PackageInfo` and `Payload`, and the directory `Scripts` that `pkgutil` expands the
   pkg's scripts into, against the same three files. It refuses a missing part and any other file,
   mode, owner or bytes, any script but that `postinstall` (a regular file of mode 0755) with exactly
-  the bytes above, a plist whose program is not `current` of the binary directory or whose output
+  the bytes above, a plist whose program is not `/usr/local/bin/hostkeeper` or whose output
   paths are not the daemon's two log files, and a newsyslog file whose entries name other paths
   than those two.
 

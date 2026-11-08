@@ -10,12 +10,18 @@
 //! tmpfs), removed when the test ends, with the units under unit names of the test's rig.
 //!
 //! **The units.**
-//! - The main unit is `packaging/linux/hostkeeper.service` ([`REAL_UNIT`]), every line kept but
-//!   these ([`test_unit`]): `ExecStart=` runs the same `current` and flags with the test's
-//!   directories, the fixture's own flags before the verb and `--heartbeat-secs 1` after it; the
-//!   seed (`ExecStartPre=`: the test stages the first binary itself) and the runtime directory of
-//!   the admin socket (the socket is in the scratch directory) are left out. A change to the
-//!   unit's `ExecStart=` that this does not know fails the test by name.
+//! - The main unit is hostkeeper's package unit, `packaging/linux/units/hostkeeper.service`
+//!   ([`REAL_UNIT`]), or, for [`Plan::deb`], the bootstrap unit the deb installs,
+//!   `packaging/linux/hostkeeper.service` ([`BOOTSTRAP_UNIT`]), every line kept but these
+//!   ([`test_unit`]): `ExecStart=` runs the same program and flags with the test's directories,
+//!   the fixture's own flags before the verb, `--admin-socket` at the scratch directory (the real
+//!   units pass none, so the daemon would bind the host's default socket) and `--heartbeat-secs 1`
+//!   after the verb; the program is `current` of the test's binary directory for the package
+//!   unit, and for the bootstrap unit a copy of the fixture daemon at a packaged path of the
+//!   scratch directory, named by the version [`N`] it stands for (`--fixture-packaged`: the
+//!   packaged binary seeds the empty binary directory and execs `current`); the seed
+//!   (`ExecStartPre=`: the test stages the first binary itself) of the package unit is left out.
+//!   A change to the unit's `ExecStart=` that this does not know fails the test by name.
 //! - The fallback unit is `hostkeeper_steps::selfupdate::fallback_unit` of the test's binary
 //!   directory, naming the main unit.
 //! - The drop-in is `hostkeeper_steps::selfupdate::main_dropin` naming the fallback unit, with
@@ -50,8 +56,13 @@ use super::{FIXTURE, journal, property, run, run_ok, wait_until};
 
 /// The daemon program of these tests.
 pub const DAEMON: &str = env!("CARGO_BIN_EXE_hostkeeper-selfupdate-daemon");
-/// The unit file the deb, the rpm and the boot image install.
-pub const REAL_UNIT: &str = include_str!("../../../../packaging/linux/hostkeeper.service");
+/// The unit file hostkeeper's package carries, which starts `current` of the binary directory.
+pub const REAL_UNIT: &str = include_str!("../../../../packaging/linux/units/hostkeeper.service");
+/// The bootstrap unit file the deb, the rpm and the boot image install, which starts the packaged
+/// binary.
+pub const BOOTSTRAP_UNIT: &str = include_str!("../../../../packaging/linux/hostkeeper.service");
+/// Where the bootstrap unit's `ExecStart=` has the packaged binary.
+const PACKAGED_BINARY: &str = "/usr/bin/hostkeeper";
 /// The root-owned directory the test hosts are made in.
 pub const BASE: &str = "/run/hostkeeper-ci";
 /// Where systemd reads the drop-ins of a unit from at run time.
@@ -84,8 +95,9 @@ pub struct Plan {
     /// The host is as the deb leaves it: no package of hostkeeper installed (only the binary
     /// directory, as `self-update-seed` makes it), the unit enabled by a `WantedBy=` link to the
     /// unit the deb installs ([`DEB_UNIT`]) that `placed.json` does not list, and the release of
-    /// [`NEXT`] carrying the real unit, run ([`REAL_UNIT`], as CI packages it). The coordinator
-    /// orders it an `install`.
+    /// [`NEXT`] carrying the real unit, run ([`REAL_UNIT`], as CI packages it). The main unit is
+    /// the bootstrap unit ([`BOOTSTRAP_UNIT`]) over a packaged binary named [`N`], and the binary
+    /// directory is empty: the start seeds it. The coordinator orders it an `install`.
     pub deb: bool,
 }
 
@@ -185,6 +197,8 @@ pub struct Paths {
     pub packages: PathBuf,
     pub config: PathBuf,
     pub socket: PathBuf,
+    /// The directory of the packaged binary of a [`Plan::deb`] host.
+    pub packaged_dir: PathBuf,
     /// The fixture's directory: `link/`, `units/` (the unit directory the daemon places
     /// units in), `placed/`.
     pub fixture: PathBuf,
@@ -199,9 +213,15 @@ impl Paths {
             packages: root.join("packages"),
             config: root.join("hostkeeper.toml"),
             socket: root.join("admin.sock"),
+            packaged_dir: root.join("packaged"),
             fixture: root.join("fixture"),
             held: root.join("held"),
         }
+    }
+
+    /// The packaged binary of a [`Plan::deb`] host: named by the version it stands for.
+    pub fn packaged(&self) -> PathBuf {
+        self.packaged_dir.join(N)
     }
 
     /// The binary directory of hostkeeper's own update.
@@ -228,8 +248,8 @@ fn plain(path: &Path) -> String {
     text
 }
 
-/// The real unit `real` as the test's main unit (the module's list), with `fixture_flags`
-/// before the verb.
+/// The real unit `real` (the package unit or the bootstrap unit) as the test's main unit (the
+/// module's list), with `fixture_flags` before the verb.
 pub fn test_unit(real: &str, paths: &Paths, fixture_flags: &[String]) -> String {
     let mut out = String::new();
     let mut exec_starts = 0;
@@ -258,14 +278,22 @@ pub fn test_unit(real: &str, paths: &Paths, fixture_flags: &[String]) -> String 
         exec_starts += 1;
         let words: Vec<&str> = command.split_whitespace().collect();
         let current = format!("{REAL_STATE_DIR}/{HK}/bin/current");
+        let program = match words.first() {
+            Some(first) if *first == current => plain(&paths.bin().join("current")),
+            Some(&PACKAGED_BINARY) => plain(&paths.packaged()),
+            _ => {
+                panic!("the real unit starts neither `current` nor the packaged binary: {command}")
+            }
+        };
         assert_eq!(
-            words.get(..2),
-            Some(&[current.as_str(), "daemon"][..]),
-            "the real unit starts `current daemon`: {command}"
+            words.get(1),
+            Some(&"daemon"),
+            "the real unit starts `<program> daemon`: {command}"
         );
-        let mut daemon = vec![plain(&paths.bin().join("current"))];
+        let mut daemon = vec![program];
         daemon.extend(fixture_flags.iter().cloned());
         daemon.push("daemon".to_owned());
+        let mut socket_placed = false;
         let mut rest = words[2..].iter();
         while let Some(flag) = rest.next() {
             let ours = match *flag {
@@ -276,7 +304,10 @@ pub fn test_unit(real: &str, paths: &Paths, fixture_flags: &[String]) -> String 
                 "--config" => &paths.config,
                 "--state-dir" => &paths.state,
                 "--packages-dir" => &paths.packages,
-                "--admin-socket" => &paths.socket,
+                "--admin-socket" => {
+                    socket_placed = true;
+                    &paths.socket
+                }
                 other => panic!(
                     "the real unit's ExecStart= has a flag this test does not place: {other}"
                 ),
@@ -284,6 +315,9 @@ pub fn test_unit(real: &str, paths: &Paths, fixture_flags: &[String]) -> String 
             assert!(rest.next().is_some(), "{flag} has a value in the real unit");
             daemon.push((*flag).to_owned());
             daemon.push(plain(ours));
+        }
+        if !socket_placed {
+            daemon.extend(["--admin-socket".to_owned(), plain(&paths.socket)]);
         }
         daemon.extend(["--heartbeat-secs", "1"].map(str::to_owned));
         out.push_str(&format!("ExecStart={}\n", daemon.join(" ")));
@@ -355,10 +389,16 @@ impl Host {
             std::os::unix::fs::symlink(N, service.join("current")).expect("link current");
         }
         let layout = Layout::new(&paths.bin());
-        layout
-            .stage(N, Path::new(DAEMON))
-            .expect("stage the first binary");
-        layout.switch(N).expect("switch to it");
+        if plan.deb {
+            // The binary directory is left as it is: the packaged binary seeds it.
+            dir(&paths.packaged_dir, 0o755);
+            program(DAEMON, &paths.packaged());
+        } else {
+            layout
+                .stage(N, Path::new(DAEMON))
+                .expect("stage the first binary");
+            layout.switch(N).expect("switch to it");
+        }
 
         let main = service_unit(&self.main);
         // The daemon's observer watches its own unit, the test's, as the service `hostkeeper`.
@@ -374,10 +414,14 @@ impl Host {
         if plan.hold_exit {
             flags.extend(["--fixture-hold-exit".to_owned(), plain(&paths.held)]);
         }
+        if plan.deb {
+            flags.extend(["--fixture-packaged".to_owned(), plain(&paths.packaged())]);
+        }
+        let real = if plan.deb { BOOTSTRAP_UNIT } else { REAL_UNIT };
         let fallback = service_unit(&self.fallback);
         let units = [
             (&fallback, fallback_unit(&layout, &main)),
-            (&main, test_unit(REAL_UNIT, &paths, &flags)),
+            (&main, test_unit(real, &paths, &flags)),
         ];
         for (name, text) in units {
             let path = self.scratch.path().join(name);

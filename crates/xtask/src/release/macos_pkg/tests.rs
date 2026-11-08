@@ -354,8 +354,8 @@ fn gh_and_the_trusted_root_are_where_the_daemon_reads_them_on_a_mac() {
 #[test]
 fn the_plist_parses_and_names_the_label_and_the_binary_hostkeeper_launchd_uses() {
     // Catches: a plist that does not parse, that names another label than the daemon's, or that
-    // runs another program than `current` of the self-update binary directory (the binary the
-    // pkg installs among them).
+    // runs another program than the binary the pkg installs (`current` of the self-update binary
+    // directory among them).
     let text = plist_text().expect("the plist");
     assert_eq!(
         text,
@@ -374,10 +374,7 @@ fn the_plist_parses_and_names_the_label_and_the_binary_hostkeeper_launchd_uses()
         .iter()
         .filter_map(plist::Value::as_string)
         .collect();
-    assert_eq!(
-        args,
-        ["/var/lib/updater/state/hostkeeper/bin/current", "daemon"]
-    );
+    assert_eq!(args, ["/usr/local/bin/hostkeeper", "daemon"]);
     let mut problems = Vec::new();
     plist_problems(text.as_bytes(), &mut problems);
     assert_eq!(problems, Vec::<String>::new());
@@ -405,13 +402,13 @@ fn a_plist_that_does_not_parse_or_names_another_label_or_program_is_listed() {
         ),
         (
             text.replace(
-                "/var/lib/updater/state/hostkeeper/bin/current",
-                "/usr/local/bin/hostkeeper",
+                "<string>/usr/local/bin/hostkeeper</string>",
+                "<string>/var/lib/updater/state/hostkeeper/bin/current</string>",
             ),
             vec![format!(
-                "{at}: the job runs Some(\"/usr/local/bin/hostkeeper\"), not \
-                 \"/var/lib/updater/state/hostkeeper/bin/current\", current of the binary \
-                 directory a self-update switches"
+                "{at}: the job runs Some(\"/var/lib/updater/state/hostkeeper/bin/current\"), not \
+                 \"/usr/local/bin/hostkeeper\", the binary the pkg installs, whose start seeds \
+                 the binary directory of a self-update and runs current"
             )],
         ),
         (
@@ -429,9 +426,7 @@ fn a_plist_that_does_not_parse_or_names_another_label_or_program_is_listed() {
             "<?xml version=\"1.0\"?><plist version=\"1.0\"><dict></dict></plist>".to_owned(),
             vec![
                 format!("{at}: the label is None, not \"dev.hostkeeper.hostkeeper\""),
-                format!(
-                    "{at}: the job runs None, not \"/var/lib/updater/state/hostkeeper/bin/current\""
-                ),
+                format!("{at}: the job runs None, not \"/usr/local/bin/hostkeeper\""),
                 format!(
                     "{at}: StandardOutPath is None, not \"/var/log/hostkeeper/daemon.out.log\", \
                      the file the pkg's newsyslog entry rotates in the directory the pkg makes"

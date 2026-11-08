@@ -6,10 +6,9 @@
 //! ([`crate::fallback`]);
 //! `hostkeeper self-update-protocol`, which prints this binary's self-update protocol and does
 //! nothing else ([`crate::selfupdate::protocol_line`]); and `hostkeeper self-update-seed
-//! --state-dir <dir> --binary <file>`, which the daemon's unit runs before each start (on a Mac the
-//! pkg's `postinstall`, at install) to give the binary directory its first binary
-//! ([`crate::seed`]); and `hostkeeper mac-config [--managed <file>] [--config <file>]`, which the
-//! same `postinstall` runs next to write the daemon config from the managed preferences the MDM
+//! --state-dir <dir> --binary <file>`, which the package unit runs before each start to give the
+//! binary directory its first binary ([`crate::seed`]); and `hostkeeper mac-config [--managed
+//! <file>] [--config <file>]`, which writes the daemon config from the managed preferences the MDM
 //! installed ([`crate::mac_config`]). Configuration comes in as flags only, never from the
 //! environment (AGENTS.md S2); every default is a constant here.
 //!
@@ -18,8 +17,8 @@
 //! none, as `self-update-seed` does, and execs `current` with its own arguments
 //! ([`crate::packaged`], [`run_from`]); a Mac's daemon writes its config from the managed
 //! preferences when the config is not there, as `mac-config` does, before it reads it
-//! ([`start_with`], [`HostFiles::managed_config`]). The verbs stay for the units and the pkg
-//! that call them.
+//! ([`start_with`], [`HostFiles::managed_config`]). The verbs stay for the units and the
+//! releases that call them.
 //!
 //! The two values read from the environment are platform-set markers of systemd, and only
 //! `--notify-systemd` makes the daemon use them ([`SystemdVars`]): the address of the notify
