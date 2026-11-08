@@ -95,7 +95,7 @@ against its pin, and writes the two programs, `gh` and the trusted root into `ta
 package back and refuses a program that has an interpreter or a NEEDED entry (a dynamic
 program) and any declared dependency, besides the files and the link below. Where they come from, how
 the pin is bumped and what a stale trusted root does are in
-`docs/deploy/verify-a-release.md`, "What the deb and the rpm check packages with".
+`docs/deploy/verify-a-release.md`, "What the Linux packages check packages with".
 
 The packages also install one link, `/etc/issue.d/hostkeeper.issue`, to
 `/run/hostkeeper/enrollment.issue`: the console's issue file, which the daemon writes after each

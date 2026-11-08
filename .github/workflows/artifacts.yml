@@ -93,16 +93,16 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
-  # cargo-cyclonedx makes the SBOMs, nfpm the deb and the rpm: release binaries, checked
-  # against their published SHA-256 by `cargo xtask install-tool` before use (the digest of
-  # each platform's archive is in the build job's matrix).
+  # cargo-cyclonedx makes the SBOMs, nfpm the deb, the rpm and the Arch package: release
+  # binaries, checked against their published SHA-256 by `cargo xtask install-tool` before use
+  # (the digest of each platform's archive is in the build job's matrix).
   CYCLONEDX_VERSION: 0.5.9
   NFPM_VERSION: 2.48.0
-  # The gh the deb and the rpm install as /usr/lib/hostkeeper/gh, the one a host checks every
-  # package's attestation with (Ubuntu 24.04's own gh has no `gh attestation`). The SHA-256 of
+  # The gh the deb, the rpm and the Arch package install as /usr/lib/hostkeeper/gh, the one a
+  # host checks every package's attestation with (Ubuntu 24.04's own gh has no `gh attestation`). The SHA-256 of
   # each architecture's release archive is in the build job's matrix (`gh-sha256`), the one
   # cli/cli publishes in gh_<version>_checksums.txt; to bump it, change the version here and
-  # both digests together (docs/deploy/verify-a-release.md, "What the deb and the rpm check
+  # both digests together (docs/deploy/verify-a-release.md, "What the Linux packages check
   # packages with").
   GH_VERSION: 2.102.1
   # The BuildKit the image job builds with, by the digest of its multi-platform index.

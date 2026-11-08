@@ -154,7 +154,7 @@ jobs:
             target
           key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
           restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
-      # The gh a host checks every package's attestation with, the one the deb and the rpm install
+      # The gh a host checks every package's attestation with, the one the Linux packages install
       # as /usr/lib/hostkeeper/gh (artifacts.yml pins the same version and SHA-256): Ubuntu 24.04's
       # own gh has no `gh attestation`. tierstore_shaped.rs installs this file at that path and
       # checks its fixture's attestation with it, offline, against a test trust root.

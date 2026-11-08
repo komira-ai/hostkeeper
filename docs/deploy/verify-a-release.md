@@ -135,7 +135,7 @@ mdm-<version>-linux-x86_64.tar.zst.sigstore.json
 mdm-<version>-linux-x86_64.tar.zst.sha256
 ```
 
-## What the deb and the rpm check packages with
+## What the Linux packages check packages with
 
 A host checks the attestation of every package before it installs it, its first deploy of a
 service included, with `gh attestation verify` run offline (the commands of step 4). The deb, the
@@ -387,8 +387,8 @@ packages:
   `files/trusted_root.json`. The daemon reads it from
   `/var/lib/hostkeeper/packages/hostkeeper/current/files/trusted_root.json`, so each update of
   hostkeeper brings the root of its release.
-- The host's own copy is at `/usr/lib/hostkeeper/trusted_root.json` on Linux, where the deb and
-  the rpm put it ([What the deb and the rpm check packages with](#what-the-deb-and-the-rpm-check-packages-with)),
+- The host's own copy is at `/usr/lib/hostkeeper/trusted_root.json` on Linux, where the Linux
+  packages put it ([What the Linux packages check packages with](#what-the-linux-packages-check-packages-with)),
   and at `/usr/local/lib/hostkeeper/trusted_root.json` on a Mac, where the installer pkg puts it. It is
   the root of a host before its first update of hostkeeper, and the place to copy a root by hand.
 
