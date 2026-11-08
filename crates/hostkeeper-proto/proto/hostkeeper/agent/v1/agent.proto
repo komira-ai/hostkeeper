@@ -128,7 +128,8 @@ message HeartbeatRequest {
   // What this agent can use of the coordinator's side, by feature name (`deferred-v1`,
   // `halt-v1`, `forced-v1`, which announces that the daemon takes the `Force` verb,
   // `install-v1`, which announces that it takes the `Install` and `Uninstall` verbs, `abort-v1`,
-  // which announces that it takes the `Abort` verb, and `verdict-acks-v1`, which asks for
+  // which announces that it takes the `Abort` verb, `clear-record-v1`, which announces that it
+  // takes the `ClearRecord` verb, and `verdict-acks-v1`, which asks for
   // `HeartbeatResponse.acks`): at most 16, each 1 to 32 bytes of `[a-z0-9-]`, none twice. An agent
   // that lists every service it runs in `services` announces `heartbeat-v2`; without it the
   // coordinator counts the host as unmanaged for every service but the legacy one, rather than
@@ -380,6 +381,11 @@ message Order {
     Abort abort = 8;
     // Lift the service's halt.
     ClearHalt clear_halt = 9;
+    // Set aside the service's step record when it does not read: rename `step-record.json` to
+    // `step-record.json.corrupt`, under the service's lock, never waited for. A record that reads,
+    // an absent one and one of a newer schema are refused `record_reads` and not touched. Only for
+    // a daemon that announced `clear-record-v1`.
+    ClearRecord clear_record = 10;
   }
 }
 
@@ -430,6 +436,11 @@ message Uninstall {
 
 // The arguments of an `abort`.
 message Abort {
+  string service = 1;
+}
+
+// The arguments of a `clear_record`.
+message ClearRecord {
   string service = 1;
 }
 

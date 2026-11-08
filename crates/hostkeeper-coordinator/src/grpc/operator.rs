@@ -337,6 +337,17 @@ impl HostsApi for HostsService {
             .map(Response::new)
             .map_err(refusal::hosts)
     }
+
+    async fn clear_record(
+        &self,
+        request: Request<proto::ClearRecordRequest>,
+    ) -> Result<Response<proto::ClearRecordResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .clear_record(&caller, request.get_ref())
+            .map(Response::new)
+            .map_err(refusal::hosts)
+    }
 }
 
 /// The service of `Releases`.
