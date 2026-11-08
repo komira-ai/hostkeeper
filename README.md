@@ -19,12 +19,16 @@ It is made of two programs:
   ([docs/conformance.md](docs/conformance.md)); nothing confines a hook at runtime;
 - **one coordinator**, `hostkeeper-coordinator serve`, which assigns services to hosts and holds
   the desired version of each, and moves hosts to it stage by stage, each service by its update
-  plan. Operators use it through the operator API, `hkctl`, the generated command line
-  ([docs/cli.md](docs/cli.md)), and the web UI (`ui/`). A new host asks the coordinator to
-  enroll it, and an operator approves the request. Macs are to be managed through a self-hosted MDM
-  server; of that part the pure core and the host-step layer of its install kit, and the policy
-  gate linked into the coordinator (without the pkg install yet), are built
-  ([macOS](docs/macos.md), [design](docs/design/hostkeeper-mdm.md)).
+  plan. It keeps its state in one Postgres database, the desired versions, every operator change,
+  the enrollment store and an append-only audit log, and takes the database's lock so that a second
+  coordinator refuses to start; the plain files it kept before stay selectable as the way back
+  until they are removed ([docs/operations/coordinator-state.md](docs/operations/coordinator-state.md),
+  [design](docs/design/coordinator-storage.md)). Operators use it through the operator API,
+  `hkctl`, the generated command line ([docs/cli.md](docs/cli.md)), and the web UI (`ui/`). A new
+  host asks the coordinator to enroll it, and an operator approves the request. Macs are to be
+  managed through a self-hosted MDM server; of that part the pure core and the host-step layer of
+  its install kit, and the policy gate linked into the coordinator (without the pkg install yet,
+  and on the file store only for now), are built ([macOS](docs/macos.md), [design](docs/design/hostkeeper-mdm.md)).
 
 Every API is a protobuf service, and the command line is generated from those definitions.
 
@@ -61,7 +65,7 @@ update coordinator, `hostkeeper-coordinator serve`. The parts are being moved he
 | [`hostkeeper-wire`](crates/hostkeeper-wire) | what the coordinator and a host exchange: the heartbeat and its reply, versions, host ids, role names and platforms, the certificate identity, the secret-file rule |
 | [`hostkeeper-proto`](crates/hostkeeper-proto) | the protobuf services of the coordinator (`hostkeeper.agent.v1`, `hostkeeper.operator.v1`) and of the daemon's local admin socket (`hostkeeper.local.v1`), the messages of a release (`hostkeeper.release.v1`), the command table `hkctl` and the UI's generated client are made from, and the compatibility test |
 | [`hostkeeper-hkctl`](crates/hostkeeper-hkctl) | `hkctl`, the operator's bash command line over the gateway: the emitter of its script from the same command table (`cargo xtask release hkctl` writes the asset `hkctl-<version>`), [docs/cli.md](docs/cli.md), and the scan that holds the script to bash 3.2 |
-| [`hostkeeper-coordinator`](crates/hostkeeper-coordinator) | the update coordinator: the services and roles of a rollout file, the desired version of each service, the heartbeat endpoint, the operator endpoint, and the convergence of a fleet |
+| [`hostkeeper-coordinator`](crates/hostkeeper-coordinator) | the update coordinator: the services and roles of a rollout file, the desired version of each service, the heartbeat endpoint, the operator endpoint, the convergence of a fleet, and its state in Postgres (the migrations, the advisory lock, `import` and `export`) or in the file store kept as the way back |
 | [`hostkeeper-enrollment`](crates/hostkeeper-enrollment) | the coordinator's certificate authority (profile, certificates, key file, CA bundle) and its durable enrollment store |
 | [`hostkeeper-mdm-gate`](crates/hostkeeper-mdm-gate) | the MDM policy gate, linked into the coordinator: NanoHUB's command queue and webhook on loopback, a durable record per Mac, whether a Mac is enrolled and supervised, and the config profile and one-time nonce it installs on each allowlisted Mac ([design](docs/design/hostkeeper-mdm.md) sections 4 to 6) |
 | [`hostkeeper-oidc`](crates/hostkeeper-oidc) | the verifier of OIDC tokens (CI tokens) against an allow-list, with its issuer keys fetched over HTTPS |
@@ -115,7 +119,9 @@ The items B1 to B28 of section 12.2 of the design, by theme. "Built" means the c
   the assignment of services by the coordinator: roles in the rollout file, and the operator
   API's `Services.Assign` and `Services.Unassign`, which are served).
 - **Coordinator and rollout.** Built: B6 (the coordinator, its rollout file and operator tokens),
-  B7 (holds, halts, abort, exclude, force with targets, set-desired refusals).
+  B7 (holds, halts, abort, exclude, force with targets, set-desired refusals), and the
+  coordinator's state in Postgres (items C1 to C6 of
+  [coordinator-storage.md](docs/design/coordinator-storage.md); the lab's coordinator runs on it).
 - **Enrollment.** Built: B16 (certificate authority, enrollment and renewal), B17 (approval).
   Planned: B21 (adopting hosts that run kbf's agent).
 - **Operator surfaces.** Built: B1 (the protobuf services, every method of which has a handler:
