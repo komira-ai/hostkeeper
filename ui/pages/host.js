@@ -1,8 +1,8 @@
 // Host: one host's services, holds, marks and last update, the host-inventory record its
 // enrollment matched (linked to the Inventory page) with that record's data MACs, BMC MAC and
 // serial, when it enrolled, its certificate and its Sigstore trusted root as its last heartbeat
-// said them, and what an operator may do to it. The page reads the time from `ctx.now()` (unix seconds), once per rendering, to
-// say how soon the certificate ends.
+// said them, and what an operator may do to it. The page reads the time from `ctx.now()` (unix
+// seconds), once per rendering, to say how soon the certificate ends.
 // Calls: Hosts.Get, then Services.List for the services assigned to the host (it is called even
 // when Hosts.Get fails, and each failure is shown as is), then, when a service is assigned to the
 // host, Audit.List of the host's entries, page by page, to mark a service whose last uninstall was
