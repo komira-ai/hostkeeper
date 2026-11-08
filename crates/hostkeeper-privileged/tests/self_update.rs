@@ -454,7 +454,8 @@ fn real_lines(keys: &[&str]) -> String {
 /// The unit of a retry test: `main`, the fixture's `serve` behind an `ExecStartPre=` that fails
 /// until the gate file exists, with the start limit and restart settings of the real package
 /// unit (`StartLimitIntervalSec=`, `Restart=`, `RestartSec=`, `RestartMode=`) in place of the
-/// fixture's. `main` has been asked to start once.
+/// fixture's. `main` has been asked to start once, without waiting for the start job, which a
+/// unit that is retried for good never finishes.
 fn gated_rig(bench: &Bench) -> Gated {
     let rig = &bench.rig;
     let main = rig.unit();
@@ -490,10 +491,17 @@ fn gated_rig(bench: &Bench) -> Gated {
         SYSTEMCTL,
         &["link", "--system", main_file.to_str().expect("UTF-8")],
     );
-    // The start fails at its `ExecStartPre=`; systemd's restarts go on from there.
+    // The start fails at its `ExecStartPre=`; systemd's restarts go on from there. With no start
+    // limit the unit stays in its automatic restarts for good, which keeps a start job pending,
+    // so the start is not waited for.
     let _ = run(
         SYSTEMCTL,
-        &["start", "--system", service_unit(&main).as_str()],
+        &[
+            "start",
+            "--no-block",
+            "--system",
+            service_unit(&main).as_str(),
+        ],
     );
     Gated { main, gate }
 }
