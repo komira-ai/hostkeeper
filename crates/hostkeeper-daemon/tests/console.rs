@@ -454,6 +454,7 @@ fn the_host_links_write_the_issue_file_and_run_the_given_agetty() {
             issue: root.join("enrollment.issue"),
             agetty: agetty.clone(),
         }),
+        managed_config: None,
     };
     let links = host_links(
         &daemon,

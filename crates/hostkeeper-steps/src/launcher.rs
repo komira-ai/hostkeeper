@@ -110,6 +110,13 @@ pub struct StepExit {
     pub last_line: Option<String>,
 }
 
+/// How a built-in step ends (`UpdateOrder::builtin_steps`): as a hook that exits 0 and prints
+/// nothing, with no command launched.
+pub const BUILTIN_EXIT: StepExit = StepExit {
+    code: Some(0),
+    last_line: None,
+};
+
 /// Why a step could not be run to an end.
 #[derive(Debug, thiserror::Error)]
 pub enum LaunchError {

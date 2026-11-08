@@ -27,6 +27,9 @@ hostkeeper-config = { path = "../hostkeeper-config" }
 # command table of the protos. The enrollment runbook's test also reads the protos' descriptors.
 hostkeeper-hkctl = { path = "../hostkeeper-hkctl" }
 hostkeeper-proto = { path = "../hostkeeper-proto" }
+# `OLDEST_READER`, the floor of hostkeeper's own package (`release package`), the one constant
+# the daemon judges a release of hostkeeper by too; the channel-stage tests also use its `Clock`.
+hostkeeper-steps = { path = "../hostkeeper-steps" }
 # The daemon's launchd label, plist and paths the macOS installer pkg installs
 # (`release macos-pkg`), and the launchd plists of a macOS service package
 # (`release package --service hello`), rendered with the renderer the daemon's own plists use.
@@ -88,9 +91,8 @@ hostkeeper-hook = { path = "../hostkeeper-hook" }
 # loop's longest call.
 hostkeeper-link = { path = "../hostkeeper-link" }
 # The daemon's fetch and proof (`fetch_package`, `prove`), which the channel-stage tests run
-# against the staged tree through an in-process origin; hostkeeper-steps for their `Clock`.
+# against the staged tree through an in-process origin.
 hostkeeper-package = { path = "../hostkeeper-package" }
-hostkeeper-steps = { path = "../hostkeeper-steps" }
 # The daemon's unpacker (design 5.5), which the package test unpacks the produced archive with.
 hostkeeper-unpack = { path = "../hostkeeper-unpack" }
 # The netboot test holds the served names of the shim and GRUB in netboot.json to the ones the

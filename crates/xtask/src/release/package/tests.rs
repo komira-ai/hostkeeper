@@ -304,7 +304,7 @@ fn package_manifest_loads_with_the_b2_loader_and_names_the_hostkeeper_unit() {
 #[test]
 fn package_manifest_loads_with_the_manifest_loader_and_names_the_hostkeeper_unit() {
     // Catches: a package that a daemon older than its floor would accept (for this release, older
-    // than MIN_HOSTKEEPER: its own version), a hook command or bound other than the one the
+    // than OLDEST_READER: its own version), a hook command or bound other than the one the
     // manifest block sets.
     let (_dir, version_dir) = unpacked("package-manifest-loader");
     assert_eq!(
@@ -335,7 +335,7 @@ fn package_manifest_loads_with_the_manifest_loader_and_names_the_hostkeeper_unit
 fn the_manifest_text_is_exact() {
     // Catches: a changed key or value of the manifest that no loader check notices, a hook
     // table that no longer says its steps do nothing, and a floor that follows the release's own
-    // version past MIN_HOSTKEEPER (no daemon, always older than the release it is ordered, could
+    // version past OLDEST_READER (no daemon, always older than the release it is ordered, could
     // take it).
     assert_eq!(
         manifest(&version(), Platform::LinuxX86_64, true),
@@ -354,7 +354,14 @@ fn the_manifest_text_is_exact() {
         with_units
     );
     assert!(without.ends_with("cleanup = 300\n") & !without.contains("units"));
-    // A release from MIN_HOSTKEEPER on asks for MIN_HOSTKEEPER, not its own version.
+    // A release from OLDEST_READER on asks for OLDEST_READER, not its own version; stage 1 of
+    // docs/design/two-programs.md keeps it at 0.1.53, the floor of every release before it, and
+    // it is the daemon's own constant.
+    assert_eq!(
+        OLDEST_READER.to_string(),
+        hostkeeper_steps::OLDEST_READER.to_string()
+    );
+    assert_eq!(OLDEST_READER.to_string(), "0.1.53");
     for (release, floor) in [
         ("0.1.52", "0.1.52"),
         ("0.1.53", "0.1.53"),

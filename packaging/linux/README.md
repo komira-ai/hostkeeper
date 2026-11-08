@@ -36,7 +36,10 @@ The unit does not start `/usr/bin/hostkeeper` itself. It starts
 `/usr/bin/hostkeeper self-update-seed`, which, when `current` starts no executable file, copies
 `/usr/bin/hostkeeper` in as its own version and points `current` at it; otherwise it changes
 nothing. So the first start of a host runs the binary the package installed, and every later
-start runs the binary the last update chose.
+start runs the binary the last update chose. `/usr/bin/hostkeeper daemon` run by itself (by
+hand, or by a unit to come) does the same seed and then execs `current` with its own arguments
+(`hostkeeper_daemon::packaged`), keeping its process id; a binary started from `versions/` never
+does.
 
 - A self-update stages the new binary in `versions/`, switches `current`, and exits 0;
   `Restart=always` starts the new binary. At each start the daemon writes, where they differ,

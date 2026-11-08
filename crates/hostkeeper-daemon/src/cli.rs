@@ -15,6 +15,14 @@
 //! installed ([`crate::mac_config`]). Configuration comes in as flags only, never from the
 //! environment (AGENTS.md S2); every default is a constant here.
 //!
+//! `hostkeeper daemon` started from the packaged binary (`/usr/bin/hostkeeper`,
+//! `/usr/local/bin/hostkeeper`) gives the binary directory its first binary when `current` starts
+//! none, as `self-update-seed` does, and execs `current` with its own arguments
+//! ([`crate::packaged`], [`run_from`]); a Mac's daemon writes its config from the managed
+//! preferences when the config is not there, as `mac-config` does, before it reads it
+//! ([`start_with`], [`HostFiles::managed_config`]). The verbs stay for the units and the pkg
+//! that call them.
+//!
 //! The two values read from the environment are platform-set markers of systemd, and only
 //! `--notify-systemd` makes the daemon use them ([`SystemdVars`]): the address of the notify
 //! socket, and `WATCHDOG_USEC`, which says systemd runs a watchdog for the unit.
@@ -287,9 +295,47 @@ pub struct SystemdVars {
     pub watchdog_usec: Option<OsString>,
 }
 
-/// The entry point of the `hostkeeper` binary.
+/// The entry point of the `hostkeeper` binary: [`run_from`] with the process's own arguments
+/// and image, the paths a package installs the binary at, what systemd set and the process's
+/// own exec.
 pub fn main() -> ExitCode {
-    run_with(Cli::parse(), systemd_vars())
+    let exe = std::env::current_exe().unwrap_or_default();
+    run_from(
+        std::env::args_os().collect(),
+        &exe,
+        &crate::packaged::host_binaries(),
+        systemd_vars(),
+        &crate::packaged::exec,
+    )
+}
+
+/// Runs the command line `args` (the program's name first) of the binary whose image is `exe`:
+/// `hostkeeper daemon` from one of the `packaged` paths seeds and execs `current` with the
+/// arguments after the program's name ([`crate::packaged::start`], through `exec`), its error
+/// said on standard error as the daemon's and its status the exit status; anything else is
+/// [`run_with`] with `systemd`.
+pub fn run_from(
+    args: Vec<OsString>,
+    exe: &Path,
+    packaged: &[&Path],
+    systemd: SystemdVars,
+    exec: crate::packaged::Exec<'_>,
+) -> ExitCode {
+    let cli = Cli::parse_from(&args);
+    if let Command::Daemon(flags) = &cli.command
+        && let Some(error) = crate::packaged::start(
+            exe,
+            packaged,
+            &flags.state_dir,
+            env!("CARGO_PKG_VERSION"),
+            args.get(1..).unwrap_or_default(),
+            exec,
+        )
+    {
+        eprintln!("hostkeeper daemon: {error}");
+        return ExitCode::from(error.exit_code());
+    }
+    run_with(cli, systemd)
 }
 
 /// What systemd set for the process, if anything: the notify socket's address and the
@@ -579,9 +625,11 @@ pub fn host_enroller(
 }
 
 /// Starts the daemon on the ports of the host's build for `platform`, reading the host's own
-/// files from `files`, and returns it without serving: the config of `settings` is loaded, the
-/// platform's adapters are chosen ([`Adapters::for_platform`]), the ports are built
-/// ([`host_ports`]) and the start runs ([`start::startup_notifying`]).
+/// files from `files`, and returns it without serving: with the managed preferences of `files`
+/// (a Mac's), the config of `settings` is written from them when it is not there
+/// ([`crate::mac_config::at_start`]); the config is loaded, the platform's adapters are chosen
+/// ([`Adapters::for_platform`]), the ports are built ([`host_ports`]) and the start runs
+/// ([`start::startup_notifying`]).
 pub fn start_with(
     settings: &Settings,
     files: &HostFiles,
@@ -589,6 +637,9 @@ pub fn start_with(
     notifier: &dyn ReadyNotifier,
     platform: &Platform,
 ) -> Result<start::Started, StartError> {
+    if let Some(managed) = &files.managed_config {
+        crate::mac_config::at_start(managed, &settings.config, settings.trusted_uid)?;
+    }
     let config = start::load_config(settings)?;
     crate::layout::ensure_state_dirs(settings)?;
     Adapters::for_platform(platform)
@@ -609,6 +660,9 @@ pub struct HostFiles {
     pub pki: PathBuf,
     /// The console's issue file and the agetty that redraws it; none on a Mac.
     pub console: Option<ConsoleFiles>,
+    /// The managed preferences a Mac's MDM installs, which the start writes the daemon config
+    /// from when that is not there ([`crate::mac_config::at_start`]); none on Linux.
+    pub managed_config: Option<PathBuf>,
 }
 
 /// What the enrollment loop shows on the machine's console through ([`crate::console`]).
@@ -631,7 +685,8 @@ impl HostFiles {
     /// directory is [`PKI_DIR`] on both.
     ///
     /// - A Mac: [`CA_BUNDLE_MACOS`], [`GH_BINARY_MACOS`] and [`SIGSTORE_TRUSTED_ROOT_MACOS`],
-    ///   whatever `exists` says, and no console.
+    ///   whatever `exists` says, no console, and the managed preferences of
+    ///   `hostkeeper_launchd::postinstall::MANAGED_CONFIG`.
     /// - Linux: [`GH_BINARY`] and [`SIGSTORE_TRUSTED_ROOT`], and the first of [`CA_BUNDLE`]
     ///   (Debian family) and [`CA_BUNDLE_RHEL`] (RHEL family) that exists; [`CA_BUNDLE`] when
     ///   neither does, so the fetch reads a bundle that is not there and has no root to trust.
@@ -662,6 +717,8 @@ impl HostFiles {
             trusted_root: PathBuf::from(trusted_root),
             pki: PathBuf::from(PKI_DIR),
             console,
+            managed_config: (kind == PlatformKind::Macos)
+                .then(|| PathBuf::from(hostkeeper_launchd::postinstall::MANAGED_CONFIG)),
         }
     }
 }

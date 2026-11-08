@@ -15,6 +15,9 @@
 //!   version that fell back is kept in [`bad`], the local list of bad versions. On macOS the
 //!   fallback decides the burst of failed starts itself, from the daemon's [`starts`] log, with
 //!   [`should_fall_back`], the rule systemd's start limit keeps on Linux.
+//! - [`OLDEST_READER`] is the oldest release of hostkeeper that reads every file this one
+//!   writes: the floor of hostkeeper's own package, and what the daemon refuses an older release
+//!   of hostkeeper by ([`reader`]).
 //! - [`prune`] deletes the versions of a package directory that a confirmed switch leaves
 //!   behind: all but the ones `current` and `previous` name and the ones the caller protects
 //!   ([`prune_plan`], [`Layout::prune`]).
@@ -38,6 +41,7 @@ pub mod deadman;
 pub mod force;
 pub mod launcher;
 pub mod prune;
+pub mod reader;
 pub mod record;
 pub mod resume;
 pub mod runner;
@@ -55,11 +59,13 @@ pub use clock::{
 pub use deadman::{DeadMan, Watch};
 pub use force::{ForceFailure, ForcePhase, ForceRecord, ForceVerdict};
 pub use launcher::{
-    AdditiveCall, Bound, LaunchError, ProbeCall, ProbeExit, StepCall, StepExit, StepLauncher,
+    AdditiveCall, BUILTIN_EXIT, Bound, LaunchError, ProbeCall, ProbeExit, StepCall, StepExit,
+    StepLauncher,
 };
 pub use prune::{
     PRUNE_PREFIX, Protected, PruneInputs, PrunePlan, PruneReport, PruneStep, prune_plan,
 };
+pub use reader::OLDEST_READER;
 pub use record::{CrashGate, CrashPoint, Loaded, Record, RecordError, RecordStore, WriteFault};
 pub use resume::{REASON_REBOOTED, ResumeAction, resume, resume_action};
 pub use runner::{Bounds, Finished, RunError, StepRunner, Switch, Toward, UpdateOrder};
