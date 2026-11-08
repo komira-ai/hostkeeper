@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "hostkeeper's protobuf services, compiled from proto/ with protox, the command table that `hkctl` and the UI client are generated from, from them, and the check that keeps them compatible."
+description = "hostkeeper's protobuf services, compiled from proto/ with protox, the command table `hkctl` and the UI client are generated from, and the check that keeps them compatible."
 
 [dependencies]
 prost.workspace = true

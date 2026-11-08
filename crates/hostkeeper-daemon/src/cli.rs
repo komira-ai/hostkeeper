@@ -1,7 +1,7 @@
 //! The command line of the `hostkeeper` binary: `hostkeeper daemon` and its flags,
 //! `hostkeeper admin`, the client of the daemon's admin socket on the host
-//! ([`crate::admin_client`], docs/admin.md), `hostkeeper ci`, the CI client a service's release job runs once it has verified this binary (`hostkeeper_ci`,
-//! docs/deploy/ci-client.md), and the three plumbing verbs of hostkeeper's own update (design
+//! ([`crate::admin_client`], docs/admin.md), `hostkeeper ci`, the CI client a service's release
+//! job runs once it has verified this binary (`hostkeeper_ci`, docs/deploy/ci-client.md), and the three plumbing verbs of hostkeeper's own update (design
 //! section 6.6), which no operator runs: `hostkeeper self-update-fallback --dir <dir>`, what the
 //! generated fallback unit runs, and on a Mac the fallback timer job ([`crate::fallback`]);
 //! `hostkeeper self-update-protocol`, which prints this binary's self-update protocol and does

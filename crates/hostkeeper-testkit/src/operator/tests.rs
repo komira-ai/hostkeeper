@@ -6,6 +6,9 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use bytes::{Buf as _, BufMut as _, Bytes};
 use prost::Message as _;
 use prost_types::field_descriptor_proto::{Label, Type};
@@ -13,6 +16,7 @@ use prost_types::{
     DescriptorProto, EnumDescriptorProto, EnumValueDescriptorProto, FieldDescriptorProto,
     FileDescriptorProto, FileDescriptorSet,
 };
+use tokio_stream::StreamExt as _;
 use tonic::body::Body;
 use tonic::codec::{Codec, DecodeBuf, Decoder, EncodeBuf, Encoder};
 use tonic::codegen::Service;
@@ -145,6 +149,8 @@ fn pki() -> Pki {
 struct Loopback {
     _runtime: tokio::runtime::Runtime,
     port: u16,
+    /// The connections the server has accepted.
+    accepted: Arc<AtomicUsize>,
 }
 
 impl Loopback {
@@ -160,17 +166,20 @@ impl Loopback {
         let port = listener.local_addr().expect("its address").port();
         let tls =
             ServerTlsConfig::new().identity(Identity::from_pem(&pki.server_cert, &pki.server_key));
-        let server = Server::builder()
-            .tls_config(tls)
-            .expect("TLS")
-            .serve_with_incoming(
-                Echo,
-                tokio_stream::wrappers::TcpListenerStream::new(listener),
-            );
+        let server = Server::builder().tls_config(tls).expect("TLS");
+        let accepted = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&accepted);
+        let incoming =
+            tokio_stream::wrappers::TcpListenerStream::new(listener).map(move |connection| {
+                counted.fetch_add(1, Ordering::SeqCst);
+                connection
+            });
+        let server = server.serve_with_incoming(Echo, incoming);
         runtime.spawn(server);
         Loopback {
             _runtime: runtime,
             port,
+            accepted,
         }
     }
 }
@@ -214,6 +223,36 @@ fn a_call_carries_the_bearer_over_tls_and_a_status_comes_back_as_given() {
             (refused.code(), refused.message()),
             (Code::PermissionDenied, "forbidden")
         );
+    }
+}
+
+/// Proves: each call opens a connection of its own, so two calls are two connections the server
+/// accepts.
+///
+/// Catches: one connection kept across calls, which a test that kills and restarts the
+/// coordinator on the same address would write its next call to after the coordinator it
+/// reached is gone.
+#[test]
+fn each_call_connects_anew() {
+    let pki = pki();
+    let server = Loopback::start(&pki);
+    let operator = Operator::connect(
+        &format!("https://localhost:{}", server.port),
+        pki.ca_pem.as_bytes(),
+        "op-token",
+    )
+    .expect("an operator");
+    assert_eq!(
+        server.accepted.load(Ordering::SeqCst),
+        0,
+        "nothing before a call"
+    );
+    for calls in 1..=2 {
+        assert_eq!(
+            say(&operator, b"auth").expect("a call"),
+            Bytes::from_static(b"Bearer op-token")
+        );
+        assert_eq!(server.accepted.load(Ordering::SeqCst), calls);
     }
 }
 

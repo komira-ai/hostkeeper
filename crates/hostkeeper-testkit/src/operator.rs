@@ -2,7 +2,7 @@
 //! `hostkeeper-proto` over gRPC with TLS, with the operator's bearer token on every call, from a
 //! test that is not async.
 //!
-//! [`Operator::connect`] makes the channel once: `https://<host>[:<port>]`, trusting only the CA
+//! [`Operator::connect`] sets up the channel once: `https://<host>[:<port>]`, trusting only the CA
 //! the test names, with `authorization: Bearer <token>` added to each request. [`Operator::call`]
 //! hands the test a [`Channel`] to build a generated client on, runs the call on the operator's
 //! own runtime and gives back the reply's message. [`canonical_json`] turns a reply into the
@@ -60,16 +60,19 @@ pub enum OperatorError {
     Runtime(std::io::Error),
 }
 
-/// The operator's gRPC client: one channel and the runtime its calls run on.
+/// The operator's gRPC client: the endpoint, the token, and the runtime its calls run on.
 pub struct Operator {
     runtime: tokio::runtime::Runtime,
-    channel: Channel,
+    endpoint: Endpoint,
+    bearer: Bearer,
 }
 
 impl Operator {
     /// The channel to `endpoint` (`https://<host>[:<port>]`), trusting only the certificates of
     /// `ca_pem` for the name `<host>` (a DNS name or an IP address), each call carrying
-    /// `token`. Nothing is sent until the first call.
+    /// `token`. Nothing is sent until the first call, and each call connects anew: a test that
+    /// restarts the coordinator on the same address calls the new one, never a connection to the
+    /// old one.
     pub fn connect(endpoint: &str, ca_pem: &[u8], token: &str) -> Result<Operator, OperatorError> {
         let (uri, host) =
             https(endpoint).ok_or_else(|| OperatorError::Endpoint(endpoint.into()))?;
@@ -86,14 +89,10 @@ impl Operator {
             .enable_all()
             .build()
             .map_err(OperatorError::Runtime)?;
-        // A lazy channel spawns its connection's task, so it is made inside the runtime.
-        let channel = {
-            let _inside = runtime.enter();
-            endpoint.connect_lazy()
-        };
         Ok(Operator {
             runtime,
-            channel: InterceptedService::new(channel, Bearer(bearer)),
+            endpoint,
+            bearer: Bearer(bearer),
         })
     }
 
@@ -110,8 +109,14 @@ impl Operator {
         F: FnOnce(Channel) -> Fut,
         Fut: Future<Output = Result<Response<T>, Status>>,
     {
+        // A lazy channel spawns its connection's task, so it is made inside the runtime; it is
+        // dropped with its connection when the call ends.
+        let channel = {
+            let _inside = self.runtime.enter();
+            self.endpoint.connect_lazy()
+        };
         self.runtime
-            .block_on(call(self.channel.clone()))
+            .block_on(call(InterceptedService::new(channel, self.bearer.clone())))
             .map(Response::into_inner)
     }
 }
