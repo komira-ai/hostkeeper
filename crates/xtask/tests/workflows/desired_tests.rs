@@ -213,23 +213,44 @@ fn a_channel_wait_that_gives_up_on_a_missing_version_or_reads_another_channel_is
     // Catches: a wait that fails at the first 404 (the sync has not run yet), a read of the
     // channel over plain http, and a wait on another channel or version than the one set.
     let wait = "--retry-max-time 1800 --retry-all-errors --output";
-    let got = problems_with(wait, "--retry-max-time 1800 --output");
-    assert_eq!(got.len(), 1, "{got:?}");
-    assert!(
-        got[0].starts_with("release.yml: job channel step 3 is `run curl ")
-            && got[0].ends_with(&format!(", not `{}`", CHANNEL_STEPS[2])),
-        "{got:?}"
-    );
-    for (from, to) in [
-        ("curl --proto =https --tlsv1.2", "curl --tlsv1.2"),
+    // The download rule (`downloads.rs`) refuses the first two as well, on the step's line.
+    let line = release_yml()
+        .lines()
+        .position(|l| l.contains("--retry-max-time 1800"))
+        .map(|at| at + 1)
+        .expect("the channel wait");
+    for (from, to, lacks) in [
+        (
+            wait,
+            "--retry-max-time 1800 --output",
+            Some("`--retry-all-errors`"),
+        ),
+        (
+            "curl --proto =https --proto-redir =https --tlsv1.2",
+            "curl --proto-redir =https --tlsv1.2",
+            Some("`--proto =https`"),
+        ),
         (
             "RELEASE_CHANNEL: ${{ vars.HOSTKEEPER_RELEASE_CHANNEL }}",
             "RELEASE_CHANNEL: https://other.example",
+            None,
         ),
     ] {
         let got = problems_with(from, to);
-        assert_eq!(got.len(), 1, "{got:?}");
-        assert!(got[0].starts_with("release.yml: job channel step 3 is "));
+        assert_eq!(got.len(), 1 + usize::from(lacks.is_some()), "{got:?}");
+        assert!(
+            got[0].starts_with("release.yml: job channel step 3 is `run curl "),
+            "{got:?}"
+        );
+        if from == wait {
+            assert!(
+                got[0].ends_with(&format!(", not `{}`", CHANNEL_STEPS[2])),
+                "{got:?}"
+            );
+        }
+        if let Some(lacks) = lacks {
+            assert_eq!(got[1], format!("line {line}: a curl lacks {lacks}"));
+        }
     }
 }
 

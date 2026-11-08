@@ -10,8 +10,9 @@ use super::lint::entry;
 use super::privileged_tests::{BUILD, runs};
 use super::yaml::{self, Node};
 
-/// The step that downloads the pinned tarball: HTTPS only, the URL from the job's env.
-pub const DOWNLOAD: &str = "curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --location --output \"$RUNNER_TEMP/previous-release.tar.gz\" \"$PREVIOUS_RELEASE_URL\"";
+/// The step that downloads the pinned tarball: HTTPS only, a transient failure retried, the URL
+/// from the job's env.
+pub const DOWNLOAD: &str = "curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 5 --retry-delay 5 --retry-max-time 300 --retry-all-errors --silent --show-error --location --output \"$RUNNER_TEMP/previous-release.tar.gz\" \"$PREVIOUS_RELEASE_URL\"";
 /// The step that checks it against the pinned SHA-256 and puts it where the test reads it.
 pub const CHECK: &str = "cargo xtask install-tool --download \"$RUNNER_TEMP/previous-release.tar.gz\" --sha256 \"$PREVIOUS_RELEASE_SHA256\" --out target/previous-release/hostkeeper.tar.gz";
 
