@@ -12,7 +12,7 @@ use std::process::Command;
 use hello::VERSION;
 use hello::ports::Host;
 use hostkeeper_hook::{Outcome, Report};
-use support::{FakeProbe, FakeRunner, scratch};
+use support::{FakeProbe, FakeRunner, scratch, wait_until_acceptable};
 
 fn os(words: &[&str]) -> Vec<OsString> {
     words.iter().map(OsString::from).collect()
@@ -63,7 +63,7 @@ fn an_unknown_argument_is_exit_two_on_standard_error() {
 }
 
 /// Runs the server path with `words` on a listener the test hands in, with one client already
-/// connected that sent `request`; returns the port it was asked to listen on, what the program
+/// connected that sent `request` and waiting in the listener's queue; returns the port it was asked to listen on, what the program
 /// did, and the whole answer the client read.
 fn serve_one(words: &[&str], request: &str) -> (u16, Ran, String) {
     let asked = Cell::new(0u16);
@@ -75,6 +75,9 @@ fn serve_one(words: &[&str], request: &str) -> (u16, Ran, String) {
         let mut stream = TcpStream::connect(listener.local_addr()?)?;
         stream.write_all(request.as_bytes())?;
         client.set(Some(stream));
+        // The connection must be in the listener's queue before the server path's first accept,
+        // or that accept fails with `WouldBlock` and the client reads a reset (macOS).
+        wait_until_acceptable(&listener);
         Ok(listener)
     };
     let ran = run_with(words, &listen);
