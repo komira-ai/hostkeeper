@@ -1,5 +1,6 @@
 //! `hostkeeper ci set-desired`: the part of a service's CI that runs after its release job has
-//! verified the hostkeeper release.
+//! verified the hostkeeper release, in the revisions of `set-desired.yml` before it called
+//! `hkctl`; a caller pinned to one of them keeps running it (docs/deploy/ci-client.md).
 //!
 //! The order is the point. The release is verified first (by the workflow, before this runs),
 //! so that no OIDC token is ever asked for on behalf of a binary that was not checked. Then
