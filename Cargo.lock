@@ -5207,6 +5207,7 @@ dependencies = [
  "jaq-core",
  "jaq-json",
  "jaq-std",
+ "lzma-rs",
  "plist",
  "prost-reflect",
  "ruzstd",

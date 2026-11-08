@@ -123,10 +123,9 @@ fn build_apk(base: &Path) -> PathBuf {
     }
     // The daemon never runs `gh` while it waits for its enrollment: any executable stands in.
     file(&stage.join("target/nfpm/gh"), b"#!/bin/sh\nexit 1\n", 0o755);
-    dir(&stage.join("target/alpine"), 0o755);
     copy(
         &musl_program("hostkeeper"),
-        &stage.join("target/alpine/hostkeeper"),
+        &stage.join("target/nfpm/hostkeeper"),
         0o755,
     );
     let out = base.join("apk");

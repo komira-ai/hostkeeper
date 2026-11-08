@@ -16,11 +16,14 @@
 //!   its tools downloaded with `curl` over HTTPS and checked against its pin
 //!   (`crates/hostkeeper-mdm-core/pins.txt`), a mismatch kept as `<archive>.rejected`.
 //! - `nfpm-stage` ([`package::nfpm_stage`]): the pinned `gh` of one architecture, out of its
-//!   release archive checked against its pinned SHA-256, and the Sigstore trusted root, checked
-//!   and staged for the deb and the rpm.
-//! - `check-linux-pkg` ([`package::linux_check`]): a built deb or rpm, read back, installs the
-//!   staged `gh` and trusted root at the daemon's paths, with their modes, root's, and the
-//!   console's issue link pointing at the daemon's issue file.
+//!   release archive checked against its pinned SHA-256, the Sigstore trusted root, and the
+//!   static `hostkeeper` and `hostkeeper-pxe` of `--binaries`, each checked and staged for the
+//!   deb, the rpm and the Arch package.
+//! - `check-linux-pkg` ([`package::linux_check`]): a built deb, rpm, Arch package or tarball,
+//!   read back, holds no ELF program with an interpreter or a needed library and declares no
+//!   dependency; with `--staged` it also installs the staged `gh`, trusted root and programs at
+//!   the daemon's paths, with their modes, root's, and the console's issue link pointing at the
+//!   daemon's issue file.
 //! - `index` ([`index`]): the release index of a package, `index.json` for hostkeeper,
 //!   `hello-index.json` for hello, `hello-fail-ready-index.json` for its failing build and
 //!   `mdm-index.json` for mdm: which package serves each platform, refused unless it has the
@@ -224,10 +227,13 @@ pub(crate) enum Verb {
         #[arg(long)]
         dir: PathBuf,
     },
-    /// Stage the pinned `gh` and the Sigstore trusted root for the deb and the rpm: `gh` out of
-    /// its release archive, refused unless the archive has the pinned SHA-256 and `gh` is a
-    /// program of the architecture; the trusted root refused unless each line is one. Writes
-    /// `<out>/gh` (0755) and `<out>/trusted_root.json` (0644) only when both pass.
+    /// Stage the pinned `gh`, the Sigstore trusted root and the two static programs for the deb,
+    /// the rpm and the Arch package: `gh` out of its release archive, refused unless the archive
+    /// has the pinned SHA-256 and `gh` is a program of the architecture; the trusted root
+    /// refused unless each line is one; `hostkeeper` and `hostkeeper-pxe` of `--binaries`,
+    /// refused unless each is a 64-bit little-endian ELF of the architecture with no
+    /// interpreter and no needed library. Writes `<out>/gh`, `<out>/hostkeeper` and
+    /// `<out>/hostkeeper-pxe` (0755) and `<out>/trusted_root.json` (0644) only when all pass.
     NfpmStage {
         /// The architecture of the packages, as nfpm's `ARCH`.
         #[arg(long, value_enum)]
@@ -244,19 +250,26 @@ pub(crate) enum Verb {
         /// The output of `gh attestation trusted-root`.
         #[arg(long)]
         trusted_root: PathBuf,
-        /// The directory nfpm.yaml takes the two files from.
+        /// The directory holding the static `hostkeeper` and `hostkeeper-pxe`
+        /// (`target/<musl target>/release`).
+        #[arg(long)]
+        binaries: PathBuf,
+        /// The directory nfpm.yaml takes the files from.
         #[arg(long)]
         out: PathBuf,
     },
-    /// Read a built deb or rpm and refuse it unless it installs `/usr/lib/hostkeeper/gh` (a
-    /// regular file, 0755) and `/usr/lib/hostkeeper/trusted_root.json` (0644), both
-    /// root:root, with the bytes of the files `nfpm-stage` wrote.
+    /// Read a built deb, rpm, Arch package or tarball and refuse it if it holds an ELF program
+    /// with an interpreter or a needed library, or (not a tarball) declares a dependency. With
+    /// `--staged` (not for a tarball) also refuse it unless it installs `/usr/lib/hostkeeper/gh`,
+    /// `/usr/bin/hostkeeper` and `/usr/bin/hostkeeper-pxe` (regular files, 0755) and
+    /// `/usr/lib/hostkeeper/trusted_root.json` (0644), all root:root, with the bytes of the files
+    /// `nfpm-stage` wrote, and the console's issue link.
     CheckLinuxPkg {
-        /// The `.deb` or `.rpm` nfpm built.
+        /// The `.deb`, `.rpm`, Arch package (`.pkg.tar.zst`) or tarball.
         package: PathBuf,
         /// The directory `nfpm-stage` wrote (its `--out`).
         #[arg(long)]
-        staged: PathBuf,
+        staged: Option<PathBuf>,
     },
     /// Write the release index of a service's packages of a version in a directory, one entry
     /// per platform the package is released for (linux-x86_64 alone for mdm), refused when the
@@ -497,6 +510,7 @@ pub(crate) fn run<A: Adapters>(
             gh_archive,
             gh_sha256,
             trusted_root,
+            binaries,
             out,
         } => package::nfpm_stage::stage(&package::nfpm_stage::Request {
             arch,
@@ -504,9 +518,12 @@ pub(crate) fn run<A: Adapters>(
             gh_archive,
             gh_sha256,
             trusted_root,
+            binaries,
             out,
         }),
-        Verb::CheckLinuxPkg { package, staged } => package::linux_check::check(&package, &staged),
+        Verb::CheckLinuxPkg { package, staged } => {
+            package::linux_check::check(&package, staged.as_deref())
+        }
         Verb::CheckMacosPkg {
             expanded,
             version,

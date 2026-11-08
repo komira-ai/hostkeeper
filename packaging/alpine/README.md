@@ -28,9 +28,11 @@ device tests run the package on. It carries
 neither the systemd unit nor `hostkeeper-pxe`, the boot server of network install, which runs on
 a systemd host.
 
-The release pipeline does not build the apk yet. The apk of each release lands with the musl
-build of the release (A15 of `docs/design/packages.md`), and the apk installer of service
-packages with A13. Until then it is built by hand, as the header of `nfpm.yaml` says.
+The release pipeline does not publish the apk yet. It is built from the same static musl daemon
+the release stages for the deb, the rpm and the Arch package (A15 of `docs/design/packages.md`,
+`target/nfpm/hostkeeper`); publishing it (its asset name, attestation and verify document) is a
+change of its own, and the apk installer of service packages is A13. Until then it is built by
+hand, as the header of `nfpm.yaml` says.
 
 ## Installing
 

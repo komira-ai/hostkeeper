@@ -123,7 +123,7 @@ fn wanted_files() -> Vec<nfpm::File> {
         owner: "root".to_owned(),
         group: "root".to_owned(),
     };
-    files.push(own("/usr/bin/hostkeeper", "target/alpine/hostkeeper"));
+    files.push(own("/usr/bin/hostkeeper", "target/nfpm/hostkeeper"));
     files.push(own(
         "/etc/init.d/hostkeeper",
         "packaging/alpine/hostkeeper.initd",
@@ -219,7 +219,7 @@ fn apk_carries_the_daemon_its_init_script_and_the_files_it_checks_packages_with(
         (
             altered(
                 &text,
-                "src: target/alpine/hostkeeper",
+                "src: target/nfpm/hostkeeper",
                 "src: target/release/hostkeeper",
             ),
             "the apk carries",

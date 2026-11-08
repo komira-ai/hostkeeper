@@ -1,6 +1,8 @@
 # The apk of the hostkeeper daemon for Alpine Linux, which runs it under OpenRC
 # (packaging/alpine/hostkeeper.initd), for nfpm. Run from the repository root, after the daemon
-# is built for the architecture as a static musl binary and copied to target/alpine/hostkeeper:
+# is built for the architecture as a static musl binary and staged at target/nfpm/hostkeeper, as
+# for the deb, the rpm and the Arch package (`cargo xtask release nfpm-stage --binaries`,
+# packaging/linux/nfpm.yaml), so every Linux package carries the same file:
 #
 #   VERSION=<version> ARCH=<amd64|arm64> nfpm package --config packaging/alpine/nfpm.yaml --packager apk --target <directory>
 #
@@ -17,7 +19,7 @@
 # console's issue link (/etc/issue.d is a systemd host's directory; the console of an Alpine host
 # reads /etc/issue), and `hostkeeper-pxe`, the boot server of network install
 # (docs/design/network-install.md, section 3), which runs on a systemd host and is carried by
-# the deb and the rpm.
+# the deb, the rpm and the Arch package.
 #
 # The package depends on OpenRC 0.62 or later: OpenRC 0.62 (Alpine 3.22) is the oldest the
 # device tests run the package on. Its scripts are packaging/alpine/scripts/postinstall.sh, which apk runs as
@@ -43,7 +45,7 @@ license: Apache-2.0
 depends:
   - openrc>=0.62
 contents:
-  - src: target/alpine/hostkeeper
+  - src: target/nfpm/hostkeeper
     dst: /usr/bin/hostkeeper
     file_info:
       mode: 0755

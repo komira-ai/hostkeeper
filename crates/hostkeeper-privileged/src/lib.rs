@@ -57,6 +57,9 @@
 //!
 //! - [`across`]: the cross-release rig's pin of the previous release, the check of its
 //!   downloaded tarball against the pin, and the version a program of this build runs as.
+//! - [`linux_packages`]: the list of Linux releases the packages are installed on
+//!   (`linux-releases.toml`), the finding of the packages the job built, and the script and
+//!   arguments of the container each release runs (`tests/linux_packages.rs`, job `privileged`).
 //! - [`fixture`]: the workload fixture, the program `hostkeeper-fixture-hook` that speaks the hook
 //!   contract in the modes a test picks, and `serve`, a long-running main process for a unit. Its
 //!   interface is documented and kept stable for any test that drives it.
@@ -68,6 +71,7 @@
 pub mod across;
 pub mod fixture;
 pub mod host;
+pub mod linux_packages;
 pub mod rig;
 
 pub use fixture::{Ending, FixtureError, Me, Mode, PidFile, Run, StepRun};
