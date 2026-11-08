@@ -169,7 +169,7 @@ firmware from Ubuntu's archive (its only other use of `sudo`, which the workflow
 these two jobs for the packages it lists), downloads the ISO by its pinned URL, and, for x86-64,
 builds this commit's deb; `hostkeeper-pxe fetch` checks and seals the boot set from a release the
 test serves and signs. Every wait is on a line of the guest's serial console, of
-`hostkeeper-pxe`'s log or of the router's DHCP, or on an answer of `hostkeeper ctl`; the job's
+`hostkeeper-pxe`'s log or of the router's DHCP, or on an answer of the coordinator to the test's own call; the job's
 `timeout-minutes` is the only bound. What each run kept, passed or not, is the job's artifact:
 
 - `net_install.rs` (under KVM):
@@ -218,8 +218,9 @@ test process) and the real `hostkeeper daemon` (under a `Type=notify` unit, star
 in `prepare` and starts the new release beside the old in `cutover`. The package is fetched from
 a release channel the test serves over HTTPS on loopback, its attestation is checked by the pinned
 `gh` (the job's step `Install gh` puts it at `target/privileged-tools/gh`) against a trust root
-the test makes, and it is unpacked, sealed and switched by the daemon; `hostkeeper ctl` sets the
-desired version and reads the coordinator's answer. The tests:
+the test makes, and it is unpacked, sealed and switched by the daemon; the test sets the
+desired version and reads the coordinator's answer through the generated tonic clients
+(`hostkeeper-testkit`'s `operator` helper). The tests:
 
 - `a_tierstore_shaped_package_updates_end_to_end`: from `1.0.0` to `1.1.0`, the old release
   serving while `prepare` drains, then the new one serving and the host converged;

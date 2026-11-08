@@ -3,18 +3,17 @@
 use std::io::{self, Write};
 use std::time::Duration;
 
-use hostkeeper_ctl::Connect;
-use hostkeeper_ctl::transport::Network;
 use rustls_pki_types::CertificateDer;
 
+use crate::grpc::{Releases, Tonic};
 use crate::token::{OidcTokens, TokenError};
 
 /// The outside world of the flow.
 pub(crate) trait Ports {
     /// A new token for `audience`; the coordinator accepts each token once.
     fn token(&mut self, audience: &str) -> Result<String, TokenError>;
-    /// The transports `hostkeeper ctl` calls through.
-    fn connect(&self) -> &dyn Connect;
+    /// The calls of the Releases service.
+    fn releases(&self) -> &dyn Releases;
     /// Waits `secs` seconds.
     fn pause(&mut self, secs: u64);
     /// Prints one line on stdout.
@@ -26,8 +25,8 @@ impl<P: Ports + ?Sized> Ports for &mut P {
         (**self).token(audience)
     }
 
-    fn connect(&self) -> &dyn Connect {
-        (**self).connect()
+    fn releases(&self) -> &dyn Releases {
+        (**self).releases()
     }
 
     fn pause(&mut self, secs: u64) {
@@ -39,12 +38,12 @@ impl<P: Ports + ?Sized> Ports for &mut P {
     }
 }
 
-/// The real ports: tokens from the GitHub Actions OIDC endpoint, the network transports of
-/// `hostkeeper ctl`, the thread's sleep, and lines written to `out` (stdout, where the runner
+/// The real ports: tokens from the GitHub Actions OIDC endpoint, the gRPC client of the Releases
+/// service, the thread's sleep, and lines written to `out` (stdout, where the runner
 /// reads its log and its `::add-mask::` and `::error::` commands).
 pub(crate) struct NetworkPorts {
     tokens: OidcTokens,
-    network: Network,
+    releases: Tonic,
     out: Box<dyn Write>,
 }
 
@@ -61,7 +60,7 @@ impl NetworkPorts {
     ) -> NetworkPorts {
         NetworkPorts {
             tokens: OidcTokens::from_environment(roots),
-            network: Network,
+            releases: Tonic::new(),
             out,
         }
     }
@@ -72,8 +71,8 @@ impl Ports for NetworkPorts {
         self.tokens.token(audience)
     }
 
-    fn connect(&self) -> &dyn Connect {
-        &self.network
+    fn releases(&self) -> &dyn Releases {
+        &self.releases
     }
 
     fn pause(&mut self, secs: u64) {

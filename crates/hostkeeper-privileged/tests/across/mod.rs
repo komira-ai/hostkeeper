@@ -196,19 +196,11 @@ impl Drop for Rig {
         if !std::thread::panicking() {
             return;
         }
-        let ctl = |args: &[&str]| {
-            let output = self.coordinator.ctl_output(args);
-            format!(
-                "{}{}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            )
-        };
         eprintln!(
             "the coordinator's view when the test failed:\nreleases status:\n{}\n\
              releases converge:\n{}\nrelease channel requests:\n{:#?}\nstep record:\n{:#?}\n",
-            ctl(&["releases", "status", "--service", HK]),
-            ctl(&["releases", "converge", "--service", HK]),
+            self.coordinator.status_text(HK),
+            self.coordinator.converge_text(HK),
             self.channel.requests(),
             record_in(&self.host.root().state()),
         );
@@ -332,8 +324,8 @@ impl Rig {
         }
     }
 
-    /// Sets the desired version of hostkeeper to the published package `built`, through
-    /// `hostkeeper ctl`.
+    /// Sets the desired version of hostkeeper to the published package `built`, through the
+    /// operator API.
     pub fn order(&self, built: &Built) {
         self.coordinator
             .set_desired(HK, &built.version, &built.sha256);

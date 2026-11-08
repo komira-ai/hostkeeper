@@ -7,10 +7,7 @@ use std::fs;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use bytes::Bytes;
 use hostkeeper_config::names::ServiceName;
-use hostkeeper_ctl::transport::InMemory;
-use hostkeeper_ctl::{CtlTransport, PeerIdentity};
 use hostkeeper_daemon::admin::{self, Peer, step_record, verdict_into};
 use hostkeeper_daemon::executor::RecordState;
 use hostkeeper_daemon::halt::HaltStore;
@@ -24,6 +21,7 @@ use hostkeeper_hook::{Class, Phase, Step, Verdict};
 use hostkeeper_observe::{HealthView, Observation, ServiceState as Observed, VersionView};
 use hostkeeper_proto::FILE_DESCRIPTOR_SET;
 use hostkeeper_proto::hostkeeper::agent::v1::{FailureClass, FailurePhase};
+use hostkeeper_proto::hostkeeper::local::v1::admin_client::AdminClient;
 use hostkeeper_proto::hostkeeper::local::v1::{
     AbortRequest, ClearRecordRequest, Liveness, RecordProblem, ServiceState, StatusRequest,
     StepOutcome, StepRecord, Unhealthy,
@@ -34,8 +32,8 @@ use prost_types::FileDescriptorSet;
 use support::{OWN, Rig, client, config, d, snapshot, update};
 use tokio::io::duplex;
 use tokio_stream::StreamExt;
-use tonic::Code;
-use tonic::metadata::MetadataMap;
+use tonic::{Code, Status};
+use tower::ServiceExt as _;
 
 /// Serves `daemon` on one in-process connection from `peer`; the client's end, and the count
 /// of the bytes the server read.
@@ -43,7 +41,7 @@ fn connect(
     daemon: Arc<Daemon>,
     peer: Peer,
 ) -> (
-    hostkeeper_proto::hostkeeper::local::v1::admin_client::AdminClient<tonic::transport::Channel>,
+    AdminClient<tonic::transport::Channel>,
     Arc<std::sync::atomic::AtomicUsize>,
 ) {
     let (near, far) = duplex(64 * 1024);
@@ -229,8 +227,8 @@ async fn status_reports_running_version_last_result_and_held_halt() {
 /// service's calls in the protobuf descriptors are exactly `Status`, `Abort` and `ClearRecord`,
 /// the server answers `Status` by its path, and `ClearHalt` and `Update` by that service's path
 /// answer `UNIMPLEMENTED`, with nothing read or written.
-#[test]
-fn the_admin_socket_serves_exactly_status_abort_and_clear_record() {
+#[tokio::test]
+async fn the_admin_socket_serves_exactly_status_abort_and_clear_record() {
     let set = FileDescriptorSet::decode(FILE_DESCRIPTOR_SET).expect("the descriptors");
     let methods: Vec<&str> = set
         .file
@@ -246,17 +244,24 @@ fn the_admin_socket_serves_exactly_status_abort_and_clear_record() {
     let rig = Rig::new("admin-table");
     rig.add("web", "2.0.0");
     let daemon = Arc::new(rig.daemon());
-    let transport = InMemory::new(PeerIdentity::Anonymous).serve(admin::server(daemon));
-    let metadata = MetadataMap::new();
-    let status = transport.call("/hostkeeper.local.v1.Admin/Status", Bytes::new(), &metadata);
+    // The generated client called straight on the server, with no socket and so no peer check.
+    let status = AdminClient::new(admin::server(Arc::clone(&daemon)))
+        .status(StatusRequest {})
+        .await;
     assert!(status.is_ok(), "{status:?}");
     let before = snapshot(rig.scratch.path());
     for method in ["ClearHalt", "Update"] {
-        let path = format!("/hostkeeper.local.v1.Admin/{method}");
-        let refused = transport
-            .call(&path, Bytes::new(), &metadata)
-            .expect_err(method);
-        assert_eq!(refused.code(), Code::Unimplemented, "{method}");
+        let request =
+            tonic::codegen::http::Request::post(format!("/hostkeeper.local.v1.Admin/{method}"))
+                .header("content-type", "application/grpc")
+                .body(tonic::body::Body::empty())
+                .expect("a request");
+        let answer = admin::server(Arc::clone(&daemon))
+            .oneshot(request)
+            .await
+            .expect("an answer");
+        let status = Status::from_header_map(answer.headers()).expect("a status");
+        assert_eq!(status.code(), Code::Unimplemented, "{method}");
     }
     assert_eq!(snapshot(rig.scratch.path()), before);
     assert!(rig.launcher.runs().is_empty());

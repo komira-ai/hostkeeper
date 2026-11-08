@@ -36,8 +36,8 @@ const PACKAGE: &str = "hostkeeper.operator.v1";
 /// method's request as JSON. It is a token of every refusal enum of the package.
 const INVALID_REQUEST: &str = "invalid_request";
 
-/// Each gRPC status code, in gRPC number order, with its name (the one `hostkeeper ctl` reads)
-/// and the HTTP status the gateway answers it with.
+/// Each gRPC status code, in gRPC number order, with its name (the one `hkctl` and the web app
+/// read) and the HTTP status the gateway answers it with.
 pub const STATUS_TABLE: [(Code, &str, u16); 17] = [
     (Code::Ok, "OK", 200),
     (Code::Cancelled, "CANCELLED", 499),

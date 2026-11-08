@@ -29,11 +29,11 @@ its tables: a change to either file alone is refused.
    coordinator's private listener ([Reaching the coordinator](#reaching-the-coordinator)). This is
    the first step that uses an action, and it runs after every check above.
 8. Only then run the verified program's CI client, `hostkeeper ci set-desired`, as one command.
-   It requests an OIDC token for the coordinator, writes it to a file only the runner can read,
-   and calls `hostkeeper ctl releases set-desired` with it, naming the release by the release index
-   and its digest, or by the one package digest. When `wait` is true it then reads
-   `hostkeeper ctl releases converge` until the fleet has converged, is halted, or the call is
-   refused, at most `max_polls` times, and writes the job's outputs.
+   It requests an OIDC token for the coordinator, keeps it in memory only, and calls the
+   `Releases` service's `SetDesired` with it, naming the release by the release index and its
+   digest, or by the one package digest. When `wait` is true it then reads the service's
+   `Converge` until the fleet has converged, is halted, or the call is refused, at most
+   `max_polls` times, and writes the job's outputs.
 
 **A failed verification means the version is not set.** Steps 1 to 4 run nothing of hostkeeper's,
 no step before step 7 uses an action, and no step before step 7 can request a token: the workflow
@@ -323,35 +323,29 @@ change can take up.
 
 ## The calls
 
-The client (`crates/hostkeeper-ci`) runs ctl inside its own process, so no token is
-ever an argument of a process. Its two calls are these commands, with the token in a file:
+The client (`crates/hostkeeper-ci`) calls the coordinator's operator listener directly, with the
+generated gRPC client of the `Releases` service over TLS, trusting only the certificates of
+`ca_file`. It runs no other program, so no token is ever an argument of a process, and it writes
+the token to no file: the token lives in the client's memory and in the call's
+`authorization: Bearer <token>` metadata, which is marked sensitive. Its two calls are these:
 
-```sh
-hostkeeper ctl --endpoint "$COORDINATOR_URL" --ca-file "$CA_FILE" --token-file "$TOKEN_FILE" --output json \
-  releases set-desired --service "$SERVICE" --package-digest "$PACKAGE_DIGEST" --request "$REQUEST_FILE"
-```
+- `SetDesired` with the service, the `desired` state holding the version, and either the
+  `package_digest`, or the `release_index` and its `release_index_digest`: the index is one string
+  of its exact text.
+- `Converge` with the service.
 
-where the request file is `{"desired":{"version":"<version>"}}` (the version is set through
-the request file because `DesiredState` is a message: see `docs/ctl.md`). With a release index the
-call has no `--package-digest`, and the request file carries the index and its digest in the
-canonical JSON names of the request, the index as one JSON string of its exact text:
-`{"desired":{"version":"<version>"},"releaseIndex":"<text of index.json>","releaseIndexDigest":"<hex>"}`.
 The client reads the index file before it requests any token (at most 3 KiB, UTF-8, so that the
 request fits the coordinator's 4 KiB), and does
 not hash or parse it: the coordinator does, and refuses a digest that is not the index's
 (`index_digest_mismatch`) or an index that is not this service's at this version
-(`index_invalid`). Then, once per poll,
-with a new token each time (the coordinator accepts each token once):
+(`index_invalid`). `SetDesired` is called once, and `Converge` once per poll,
+with a new token each time (the coordinator accepts each token once).
 
-```sh
-hostkeeper ctl --endpoint "$COORDINATOR_URL" --ca-file "$CA_FILE" --token-file "$TOKEN_FILE" --output json \
-  releases converge --service "$SERVICE"
-```
-
-Each token is requested from GitHub for the `audience` input, masked in the log, written to
-`hostkeeper-oidc-token` in the runner's temporary directory with mode 0600, and removed after its
-call. It is never an argument (another process on the runner can read a process's arguments) and
-never an environment variable.
+Each token is requested from GitHub for the `audience` input, masked in the log, and used for
+that one call. It is never an argument (another process on the runner can read a process's
+arguments), never an environment variable, and never written to a file. A call, the connection
+included, that is not done in 30 seconds is a call without an answer. The client's `--work-dir` (the
+runner's temporary directory) must name an existing directory, and nothing is written there.
 
 The first read comes right after the version is set; each later one 10 seconds after the one
 before. The client prints what a read reports, as one line (the state, the desired version, and

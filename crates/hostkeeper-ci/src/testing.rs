@@ -1,109 +1,99 @@
-//! What the tests share: a fake coordinator behind the real `hostkeeper ctl`, and fake ports.
+//! What the tests share: a fake Releases service behind the port, and fake ports.
 
 use std::collections::VecDeque;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use bytes::Bytes;
-use hostkeeper_ctl::transport::ConnectError;
-use hostkeeper_ctl::{Connect, CtlTransport, Target};
 use hostkeeper_proto::hostkeeper::operator::v1::{
-    ConvergeResponse, Convergence, ConvergenceState, DesiredState, RoleCounts, SetDesiredResponse,
+    ConvergeRequest, ConvergeResponse, Convergence, ConvergenceState, DesiredState, RoleCounts,
+    SetDesiredRequest, SetDesiredResponse,
 };
-use prost::Message as _;
 use tonic::Status;
-use tonic::metadata::MetadataMap;
 
-use crate::call::TOKEN_FILE;
 use crate::flags::{SetDesiredFlags, Settings, validate};
 use crate::flow::set_desired;
+use crate::grpc::{Failure, Releases, Target};
 use crate::ports::Ports;
 use crate::token::TokenError;
 
-/// A reply of the fake coordinator: an encoded response, or the status the call ends with.
-pub(crate) type Reply = Result<Bytes, Status>;
+/// A reply of the fake coordinator to `SetDesired`: the response, or the status the call ends with.
+pub(crate) type SetReply = Result<SetDesiredResponse, Status>;
 
-/// A call the fake coordinator received.
-pub(crate) struct Call {
-    pub path: String,
-    pub request: Bytes,
-    pub bearer: String,
-}
+/// A reply of the fake coordinator to `Converge`.
+pub(crate) type ConvReply = Result<ConvergeResponse, Status>;
 
 /// Everything the fakes saw, in order.
 #[derive(Default)]
 pub(crate) struct Log {
     /// `token N`, `SetDesired`, `Converge`, `pause S`.
     pub events: Vec<String>,
-    pub calls: Vec<Call>,
+    /// The `SetDesired` requests.
+    pub sets: Vec<SetDesiredRequest>,
+    /// The `Converge` requests.
+    pub converges: Vec<ConvergeRequest>,
+    /// The bearer of each call, in the order of the calls.
+    pub bearers: Vec<String>,
     /// The lines printed on stdout.
     pub said: Vec<String>,
-    /// The mode and the text of the token file at the time of each call.
-    pub token_files: Vec<(u32, String)>,
-    /// The host, port and CA file of each target.
-    pub targets: Vec<(String, u16, PathBuf)>,
+    /// The endpoint and the CA file of each call's target.
+    pub targets: Vec<(String, PathBuf)>,
     pub audiences: Vec<String>,
 }
 
 pub(crate) type SharedLog = Arc<Mutex<Log>>;
 
 /// The coordinator: it answers `SetDesired` with one reply, and `Converge` with its replies in
-/// turn, the last one again and again.
+/// turn, the last one again and again. When `not_sent` is set, every call ends before anything
+/// is sent, with that text.
 #[derive(Clone)]
 pub(crate) struct Coordinator {
     log: SharedLog,
-    set_desired: Reply,
-    converge: Arc<Mutex<VecDeque<Reply>>>,
-    work_dir: PathBuf,
+    set_desired: SetReply,
+    converge: Arc<Mutex<VecDeque<ConvReply>>>,
+    not_sent: Option<String>,
 }
 
-impl Connect for Coordinator {
-    fn connect(&self, target: &Target) -> Result<Box<dyn CtlTransport>, ConnectError> {
-        self.log.lock().expect("lock").targets.push((
-            target.endpoint.host().to_owned(),
-            target.endpoint.port(),
-            target.ca_file.clone(),
-        ));
-        Ok(Box::new(self.clone()))
+impl Coordinator {
+    /// Records a call; the failure when the call is not to be sent.
+    fn record(&self, rpc: &str, target: &Target, bearer: &str) -> Result<(), Failure> {
+        let mut log = self.log.lock().expect("lock");
+        log.events.push(rpc.to_owned());
+        log.bearers.push(bearer.to_owned());
+        log.targets
+            .push((target.endpoint.clone(), target.ca_file.clone()));
+        self.not_sent
+            .clone()
+            .map_or(Ok(()), |why| Err(Failure::NotSent(why)))
     }
 }
 
-impl CtlTransport for Coordinator {
-    fn call(&self, path: &str, request: Bytes, metadata: &MetadataMap) -> Result<Bytes, Status> {
-        let token_file = self.work_dir.join(TOKEN_FILE);
-        let mode = std::fs::metadata(&token_file)
-            .expect("the token file exists while the call runs")
-            .permissions()
-            .mode()
-            & 0o777;
-        let text = std::fs::read_to_string(&token_file).expect("the token file is readable");
-        let bearer = metadata
-            .get("authorization")
-            .expect("an authorization header")
-            .to_str()
-            .expect("visible ASCII")
-            .to_owned();
-        let rpc = path.rsplit('/').next().expect("a path").to_owned();
-        {
-            let mut log = self.log.lock().expect("lock");
-            log.events.push(rpc.clone());
-            log.token_files.push((mode, text));
-            log.calls.push(Call {
-                path: path.to_owned(),
-                request,
-                bearer,
-            });
-        }
-        if rpc == "SetDesired" {
-            return self.set_desired.clone();
-        }
+impl Releases for Coordinator {
+    fn set_desired(
+        &self,
+        target: &Target,
+        bearer: &str,
+        request: SetDesiredRequest,
+    ) -> Result<SetDesiredResponse, Failure> {
+        self.record("SetDesired", target, bearer)?;
+        self.log.lock().expect("lock").sets.push(request);
+        self.set_desired.clone().map_err(Failure::Status)
+    }
+
+    fn converge(
+        &self,
+        target: &Target,
+        bearer: &str,
+        request: ConvergeRequest,
+    ) -> Result<ConvergeResponse, Failure> {
+        self.record("Converge", target, bearer)?;
+        self.log.lock().expect("lock").converges.push(request);
         let mut replies = self.converge.lock().expect("lock");
-        if replies.len() > 1 {
+        let reply = if replies.len() > 1 {
             replies.pop_front().expect("a reply")
         } else {
             replies.front().expect("a reply").clone()
-        }
+        };
+        reply.map_err(Failure::Status)
     }
 }
 
@@ -116,19 +106,24 @@ pub(crate) struct Fake {
 }
 
 impl Fake {
-    pub(crate) fn new(work_dir: &Path, set_desired: Reply, converge: Vec<Reply>) -> Fake {
+    pub(crate) fn new(set_desired: SetReply, converge: Vec<ConvReply>) -> Fake {
         let log = SharedLog::default();
         Fake {
             coordinator: Coordinator {
                 log: Arc::clone(&log),
                 set_desired,
                 converge: Arc::new(Mutex::new(converge.into())),
-                work_dir: work_dir.to_owned(),
+                not_sent: None,
             },
             log,
             issued: 0,
             token_fails: false,
         }
+    }
+
+    /// Makes every call end before anything is sent, with `why`.
+    pub(crate) fn not_sending(&mut self, why: &str) {
+        self.coordinator.not_sent = Some(why.to_owned());
     }
 }
 
@@ -144,7 +139,7 @@ impl Ports for Fake {
         Ok(format!("token-{}", self.issued))
     }
 
-    fn connect(&self) -> &dyn Connect {
+    fn releases(&self) -> &dyn Releases {
         &self.coordinator
     }
 
@@ -162,15 +157,14 @@ impl Ports for Fake {
 }
 
 /// The reply of `SetDesired` that stored `version`.
-pub(crate) fn stored(version: &str) -> Reply {
-    let response = SetDesiredResponse {
+pub(crate) fn stored(version: &str) -> SetReply {
+    Ok(SetDesiredResponse {
         desired: Some(DesiredState {
             version: version.to_owned(),
             ..DesiredState::default()
         }),
         ..SetDesiredResponse::default()
-    };
-    Ok(Bytes::from(response.encode_to_vec()))
+    })
 }
 
 /// One role's counts.
@@ -196,16 +190,15 @@ pub(crate) fn convergence(
     desired: Option<&str>,
     state: ConvergenceState,
     roles: Vec<RoleCounts>,
-) -> Reply {
-    let response = ConvergeResponse {
+) -> ConvReply {
+    Ok(ConvergeResponse {
         convergence: Some(Convergence {
             desired: desired.map(str::to_owned),
             state: state as i32,
             roles,
             ..Convergence::default()
         }),
-    };
-    Ok(Bytes::from(response.encode_to_vec()))
+    })
 }
 
 /// A directory of a test, beside the test binary in the target directory.
@@ -271,23 +264,35 @@ impl Ran {
         self.log.lock().expect("lock").events.clone()
     }
 
-    pub(crate) fn token_file_exists(&self) -> bool {
-        self.dir.path().join(TOKEN_FILE).exists()
+    /// The names in the work directory, sorted.
+    pub(crate) fn work_dir_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(self.dir.path())
+            .expect("read the work directory")
+            .map(|entry| {
+                entry
+                    .expect("an entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        names.sort();
+        names
     }
 }
 
 /// Runs `set_desired` on the fake coordinator, after `tweak` changed the flags.
 pub(crate) fn run_case(
     name: &str,
-    set_desired_reply: Reply,
-    converge: Vec<Reply>,
+    set_desired_reply: SetReply,
+    converge: Vec<ConvReply>,
     token_fails: bool,
     tweak: impl FnOnce(&mut SetDesiredFlags),
 ) -> Ran {
     let dir = scratch(name);
     let mut flags = flags(dir.path());
     tweak(&mut flags);
-    let mut fake = Fake::new(&flags.work_dir, set_desired_reply, converge);
+    let mut fake = Fake::new(set_desired_reply, converge);
     fake.token_fails = token_fails;
     let mut stderr = Vec::new();
     let code = set_desired(&flags, &mut stderr, |_| &mut fake);

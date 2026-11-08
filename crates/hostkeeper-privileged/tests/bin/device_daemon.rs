@@ -1,7 +1,7 @@
 //! `hostkeeper-device-daemon`: the `hostkeeper` binary for the macOS device tests
 //! (`tests/device_mac.rs`), which start the daemon as a launchd job, and for the first-boot tests
-//! (`tests/first_boot.rs`, `tests/install_uninstall.rs`), which start it as a child process and
-//! run its `ctl` verb; each needs its path (`CARGO_BIN_EXE_hostkeeper-device-daemon`). It only forwards to the daemon's command line, as
+//! (`tests/first_boot.rs`, `tests/install_uninstall.rs`), which start it as a child process; each needs its path
+//! (`CARGO_BIN_EXE_hostkeeper-device-daemon`). It only forwards to the daemon's command line, as
 //! the `hostkeeper` binary does; a program of the tests, not shipped.
 
 fn main() -> std::process::ExitCode {

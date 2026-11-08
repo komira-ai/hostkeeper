@@ -53,8 +53,8 @@ const H2: &[u8] = b"h2";
 /// The protocols a handshake offers, in the order of preference.
 const ALPN: [&[u8]; 2] = [H2, b"http/1.1"];
 
-/// The most requests one HTTP/2 connection serves at once. An updater or `hostkeeper ctl` sends
-/// one call at a time; the rest is slack for a client that pipelines.
+/// The most requests one HTTP/2 connection serves at once. An updater or a gRPC operator client
+/// sends one call at a time; the rest is slack for a client that pipelines.
 pub const MAX_STREAMS: u32 = 16;
 
 /// The most connections one listener serves at once. A client with a handshake, a head, a

@@ -29,6 +29,12 @@ use hostkeeper_steps::{BootId, BootIdError, Clock};
 use hostkeeper_testkit::Scratch;
 
 pub mod channel;
+#[allow(
+    clippy::duplicate_mod,
+    reason = "the operator's calls are shared by the two harnesses, which a test file may use both of"
+)]
+#[path = "../shared/operator_api.rs"]
+pub mod operator_api;
 pub mod pair;
 pub mod self_update;
 pub mod spawn;

@@ -9,30 +9,34 @@ publish.workspace = true
 description = "`hostkeeper ci set-desired`: what a service's CI runs after its release is verified, to set the desired version on the coordinator with a GitHub Actions OIDC token and wait for the fleet to converge."
 
 # The CI client of the design (section 4.5), for everything after a service's release job has
-# verified the hostkeeper release: it requests a GitHub Actions OIDC token, calls
-# `hostkeeper ctl releases set-desired` in-process, polls `releases converge` within a bound and
-# writes the job's outputs. Library only: the hostkeeper binary embeds `CiCommand`. The ports it
-# works through (token source, ctl transport, pause, stdout) are a trait, so the tests drive the
-# whole flow with fakes through the real `hostkeeper ctl`.
+# verified the hostkeeper release: it requests a GitHub Actions OIDC token, calls the coordinator's
+# `Releases.SetDesired` over gRPC with TLS, polls `Releases.Converge` within a bound and writes
+# the job's outputs. Library only: the hostkeeper binary embeds `CiCommand`. The ports it works
+# through (token source, the Releases calls, pause, stdout) are a trait, so the tests drive the
+# whole flow with fakes, and the real gRPC client against a loopback server.
 [dependencies]
 clap.workspace = true
-# `run` and `Connect`: the calls are made in-process, never as a child process.
-hostkeeper-ctl = { path = "../hostkeeper-ctl" }
-# The root certificates the OIDC token request trusts, parsed from PEM.
+# The Releases client and its request and response messages.
+hostkeeper-proto = { path = "../hostkeeper-proto" }
+# The root certificates the OIDC token request trusts, parsed from PEM; and the coordinator's CA
+# file, checked for a certificate.
 rustls-pki-types.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+# Each call runs on a current-thread runtime of its own (`rt`), within a bound (`time`).
+tokio = { workspace = true, features = ["rt", "time"] }
+# The gRPC client over TLS, trusting only the CA file.
+tonic = { workspace = true, features = ["channel", "tls-ring"] }
 ureq.workspace = true
 
 [dev-dependencies]
-bytes.workspace = true
-# The request and response messages the fake coordinator decodes and encodes.
-hostkeeper-proto = { path = "../hostkeeper-proto" }
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }
-prost.workspace = true
 # A test root certificate, made at run time so that none is committed.
 rcgen.workspace = true
-tonic.workspace = true
+# A loopback gRPC server with TLS (127.0.0.1, port 0) for the real client's tests.
+tokio = { workspace = true, features = ["net", "rt-multi-thread"] }
+tokio-stream = { workspace = true, features = ["net"] }
+tonic = { workspace = true, features = ["server", "tls-ring"] }
 
 [lints]
 workspace = true

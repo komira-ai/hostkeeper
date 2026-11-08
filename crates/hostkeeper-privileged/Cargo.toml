@@ -20,7 +20,7 @@ description = "The tests that run as root against the real service manager of a 
 # pin of the cross-release rig's previous release), and is measured by the 99% gate like any crate.
 [dependencies]
 # The daemon of the program `hostkeeper-device-daemon` (the macOS device tests' daemon, and the
-# first-boot tests' daemon and ctl), which forwards to its command line as the `hostkeeper`
+# first-boot tests' daemon), which forwards to its command line as the `hostkeeper`
 # binary does.
 hostkeeper-daemon = { path = "../hostkeeper-daemon" }
 # The coordinator of the first-boot tests' program `hostkeeper-privileged-coordinator`, which
@@ -63,7 +63,7 @@ name = "hostkeeper-fixture-hook"
 path = "tests/bin/fixture_hook.rs"
 
 # The daemon the macOS device tests start as a launchd job, and the first-boot tests as a child
-# process (and run as `hostkeeper ctl`): `hostkeeper`, built here so that the tests have its path.
+# process: `hostkeeper`, built here so that the tests have its path.
 # It only forwards to `hostkeeper_daemon::cli::main`.
 [[bin]]
 name = "hostkeeper-device-daemon"
@@ -158,8 +158,9 @@ hostkeeper-unpack = { path = "../hostkeeper-unpack" }
 # The macOS device test of the enrollment claims: `MacClaims` over the daemon's `HostIoreg`, the
 # real `ioreg`.
 hostkeeper-enroll = { path = "../hostkeeper-enroll" }
-# The macOS device test's `Status` call to the daemon's admin socket: the admin service's client,
-# over a Unix socket.
+# The macOS device test's `Status` call to the daemon's admin socket (the admin service's client,
+# over a Unix socket), and the operator's calls of the end-to-end and first-boot tests (the
+# generated clients of the operator API, and the descriptors their replies are read with).
 hostkeeper-proto = { path = "../hostkeeper-proto" }
 # The macOS self-update test that the real coordinator in process drives: each heartbeat read as
 # the coordinator's JSON route reads it, from the host it names.
@@ -171,7 +172,7 @@ tower = { workspace = true, features = ["util"] }
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }
 # The first-boot and end-to-end tests: the attestation bundle of the fixture package (base64),
 # the test CA of the coordinator's private listener and of the release
-# channel (rcgen), the release channel's TLS server (rustls), the JSON the ctl prints (serde_json),
+# channel (rcgen), the release channel's TLS server (rustls), the JSON of the operator API's replies (serde_json),
 # and the subject, serial and key of the certificate the daemon was issued (x509-parser).
 base64.workspace = true
 rcgen.workspace = true

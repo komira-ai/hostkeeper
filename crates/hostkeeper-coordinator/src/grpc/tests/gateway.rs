@@ -1,5 +1,5 @@
 //! The HTTP/JSON gateway of the operator API, driven in process through `crate::grpc::route` on
-//! the private surface with the HTTP/1.1 requests `hostkeeper ctl --transport gateway` sends.
+//! the private surface with the HTTP/1.1 requests a gateway client (`hkctl`, the web app) sends.
 
 use std::fmt::Debug;
 use std::sync::Arc;
