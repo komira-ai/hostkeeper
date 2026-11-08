@@ -14,8 +14,8 @@ description = "The tests that run as root against the real service manager of a 
 # unit file, drop-in and fallback unit. The tests under tests/ that do so start with `#![cfg(feature = "privileged")]`:
 # the feature is off by default and nothing of the workspace turns it on, so CI's `test` job
 # compiles and runs none of them; privileged.yml builds them as the runner's user and runs them
-# as root, after a merge to main, and pr-device.yml's copies of its jobs do the same on every
-# pull request. The library is what they share and what can be tested without
+# as root, after a merge to main, and pr-device.yml's copies of its jobs do the same on a pull
+# request (the macOS one when the pull request changes a path the macOS jobs build or read). The library is what they share and what can be tested without
 # root (the fixture's arguments and modes, the host check, the names and files of the rig, the
 # pin of the cross-release rig's previous release, the list of Linux releases and the container script of the packages test), and is measured by the 99% gate like any crate.
 [dependencies]
