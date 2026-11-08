@@ -47,6 +47,8 @@ hostkeeper-package = { path = "../hostkeeper-package" }
 # asks after units with.
 hostkeeper-placed = { path = "../hostkeeper-placed" }
 hostkeeper-proto = { path = "../hostkeeper-proto" }
+# The receipt check of an order's entry and the grammars of its locations (packages.md section 4.4).
+hostkeeper-release = { path = "../hostkeeper-release" }
 hostkeeper-steps = { path = "../hostkeeper-steps" }
 # Steps 3 and 4 of design section 5.5 (unpack, publish), which the real package store composes.
 hostkeeper-unpack = { path = "../hostkeeper-unpack" }

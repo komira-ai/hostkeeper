@@ -54,6 +54,9 @@ use serde_json::Value;
 
 use super::{FIXTURE, journal, property, run, run_ok, wait_until};
 
+#[path = "../shared/target_entry.rs"]
+pub mod target_entry;
+
 /// The daemon program of these tests.
 pub const DAEMON: &str = env!("CARGO_BIN_EXE_hostkeeper-selfupdate-daemon");
 /// The unit file hostkeeper's package carries, which starts `current` of the binary directory.
@@ -471,19 +474,45 @@ impl Host {
     /// The coordinator orders the update of hostkeeper to [`NEXT`], order [`ORDER`] try
     /// `order_try`, in every reply from now on.
     pub fn offer(&self, order_try: u64) {
-        self.order("update", order_try);
+        self.order("update", order_try, false);
     }
 
     /// The coordinator orders the install of hostkeeper at [`NEXT`], as it orders a host whose
     /// heartbeat lists no hostkeeper, order [`ORDER`] try `order_try`, in every reply from now
     /// on.
     pub fn offer_install(&self, order_try: u64) {
-        self.order("install", order_try);
+        self.order("install", order_try, false);
     }
 
-    fn order(&self, verb: &str, order_try: u64) {
+    /// [`Host::offer`], with the order set by targets: it carries [`Host::entry`].
+    pub fn offer_by_target(&self, order_try: u64) {
+        self.order("update", order_try, true);
+    }
+
+    /// [`Host::offer_install`], with the order set by targets: it carries [`Host::entry`].
+    pub fn offer_install_by_target(&self, order_try: u64) {
+        self.order("install", order_try, true);
+    }
+
+    /// The entry of the release of hostkeeper at [`NEXT`] that an order set by targets carries.
+    pub fn entry() -> Value {
+        target_entry::entry_json(HK, NEXT, DIGEST)
+    }
+
+    /// Every package the daemon's store was asked for so far, oldest first: the service, the
+    /// version and the entry the order carried (`null` for an order without one), as the
+    /// program records them.
+    pub fn asked(&self) -> Vec<Value> {
+        let text =
+            fs::read_to_string(self.paths().fixture.join("entries.jsonl")).unwrap_or_default();
+        text.lines()
+            .filter_map(|line| serde_json::from_str(line).ok())
+            .collect()
+    }
+
+    fn order(&self, verb: &str, order_try: u64, by_target: bool) {
         let link = self.paths().fixture.join("link");
-        let order = serde_json::json!({
+        let mut order = serde_json::json!({
             "id": ORDER,
             "try": order_try,
             "verb": verb,
@@ -491,6 +520,9 @@ impl Host {
             "version": NEXT,
             "digest": DIGEST,
         });
+        if by_target {
+            order["entry"] = Host::entry();
+        }
         let tmp = link.join("order.json.tmp");
         file(&tmp, order.to_string().as_bytes(), 0o644);
         fs::rename(&tmp, link.join("order.json")).expect("place the order");
@@ -666,6 +698,14 @@ impl Host {
     /// the fallback has put [`N`] back and the main unit runs it again.
     pub fn fall_back(&self) -> Record {
         self.offer(1);
+        let rec = self.settled();
+        self.runs(N);
+        rec
+    }
+
+    /// [`Host::fall_back`], with the order set by targets ([`Host::offer_by_target`]).
+    pub fn fall_back_by_target(&self) -> Record {
+        self.offer_by_target(1);
         let rec = self.settled();
         self.runs(N);
         rec

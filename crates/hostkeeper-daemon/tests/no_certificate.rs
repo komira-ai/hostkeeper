@@ -146,6 +146,7 @@ fn without_a_certificate_the_daemon_waits_and_names_the_missing_file() {
         ca_bundle: root.join("ca.pem"),
         gh: root.join("gh"),
         trusted_root: root.join("trusted_root.json"),
+        stores: root.join("stores.toml"),
         pki: root.join("pki"),
         console: None,
         managed_config: None,

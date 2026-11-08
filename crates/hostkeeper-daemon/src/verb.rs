@@ -11,6 +11,7 @@ use std::num::NonZeroU64;
 
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_proto::hostkeeper::agent::v1::{Order, order};
+use hostkeeper_proto::hostkeeper::release::v1::Target;
 
 use crate::checks;
 
@@ -64,7 +65,8 @@ impl HookedVerb {
 }
 
 /// The arguments of an order that names a package: `update`, `force_rollback`, `install`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// (Not `Eq`: the entry holds a float of its manifest.)
+#[derive(Clone, Debug, PartialEq)]
 pub struct Hooked {
     pub service: ServiceName,
     pub version: Version,
@@ -78,6 +80,10 @@ pub struct Hooked {
     /// record and reports it with its verdict; the update of the daemon itself keeps it in its
     /// wait for the restart ([`crate::selfupdate`]), for the next binary to report its verdict.
     pub order_id: Option<String>,
+    /// The entry the coordinator picked, as the order's wire `target` carries it, undecoded: its
+    /// checks are the executor's ([`crate::entry::check`]), not the grammar of decoding. `None`
+    /// for an order without one, which takes the release channel.
+    pub entry: Option<Target>,
 }
 
 /// The arguments of an `uninstall`.
@@ -89,7 +95,7 @@ pub struct Unhooked {
 }
 
 /// The arguments of a `force`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Forced {
     pub package: Hooked,
     /// Greater than the generation the service is held under: a force lifts a standing halt.
@@ -98,7 +104,7 @@ pub struct Forced {
 
 /// One verb with its typed arguments. The executor matches it exhaustively; a verb a later
 /// change builds fills its arm.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Verb {
     Update(Hooked),
     ForceRollback(Hooked),
@@ -148,6 +154,7 @@ fn hooked(
     verb: &str,
     (service_text, version, digest, index_digest): (&str, &str, &str, &str),
     (order_try, order_id): (NonZeroU64, &str),
+    entry: Option<&Target>,
 ) -> Result<Hooked, BadOrder> {
     let index_digest = match index_digest.is_empty() {
         true => None,
@@ -162,6 +169,7 @@ fn hooked(
         index_digest,
         order_try,
         order_id: Some(order_id.to_owned()).filter(|id| !id.is_empty()),
+        entry: entry.cloned(),
     })
 }
 
@@ -185,22 +193,26 @@ impl TryFrom<&Order> for Verb {
                 "update",
                 (&a.service, &a.version, &a.package_digest, &a.index_digest),
                 of,
+                a.target.as_ref(),
             )?),
             order::Verb::ForceRollback(a) => Verb::ForceRollback(hooked(
                 "force_rollback",
                 (&a.service, &a.version, &a.package_digest, &a.index_digest),
                 of,
+                a.target.as_ref(),
             )?),
             order::Verb::Install(a) => Verb::Install(hooked(
                 "install",
                 (&a.service, &a.version, &a.package_digest, &a.index_digest),
                 of,
+                a.target.as_ref(),
             )?),
             order::Verb::Force(a) => Verb::Force(Forced {
                 package: hooked(
                     "force",
                     (&a.service, &a.version, &a.package_digest, &a.index_digest),
                     of,
+                    a.target.as_ref(),
                 )?,
                 halt_generation: a.halt_generation,
             }),

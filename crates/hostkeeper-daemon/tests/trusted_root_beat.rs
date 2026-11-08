@@ -49,9 +49,10 @@ impl Packages for Rooted {
         version: &Version,
         digest: &PackageDigest,
         index_digest: Option<&PackageDigest>,
+        entry: Option<&hostkeeper_proto::hostkeeper::release::v1::Target>,
     ) -> Result<VersionDir, PackageError> {
         self.inner
-            .version_dir(service, version, digest, index_digest)
+            .version_dir(service, version, digest, index_digest, entry)
     }
 
     fn trusted_root(&self) -> Option<RootReport> {

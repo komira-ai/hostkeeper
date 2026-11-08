@@ -16,7 +16,7 @@ use std::time::Duration;
 use hostkeeper_steps::{Clock, Stamp};
 use sha2::{Digest, Sha256};
 
-use crate::ports::{Fetcher, Got, Limit, Sink, Stop, Url, remaining_secs};
+use crate::ports::{Fetcher, Got, Limit, Request, Sink, Stop, remaining_secs};
 
 /// The prefix of every staging file's name.
 pub(crate) const PREFIX: &str = ".fetch-";
@@ -142,7 +142,7 @@ pub(crate) struct Job<'a> {
     pub fetcher: &'a dyn Fetcher,
     pub clock: &'a dyn Clock,
     pub dir: &'a Path,
-    pub url: &'a Url,
+    pub request: Request<'a>,
     /// What the staging file's name ends in: `""`, or `.json` for a bundle.
     pub suffix: &'static str,
     pub cap: u64,
@@ -227,7 +227,7 @@ pub(crate) fn download(job: &Job<'_>, writer: OpenWriter) -> Result<Download, Fa
         connect_timeout: CONNECT_TIMEOUT,
         deadline: job.deadline.clone(),
     };
-    let got = job.fetcher.get(job.url, &mut sink, limit);
+    let got = job.fetcher.get_request(&job.request, &mut sink, limit);
     let Staging {
         hasher,
         count,

@@ -46,7 +46,7 @@ use crate::failure::{
     PACKAGE_DIGEST_MISMATCH, PackageFailure,
 };
 use crate::index::{MAX_INDEX_BYTES, Platform, ReleaseIndex, index_url, package_url};
-use crate::ports::{Fetcher, Url, after};
+use crate::ports::{Fetcher, Request, Url, after};
 use crate::stage::{self, Download, Fault, Job, OpenWriter, PREFIX, TempFile};
 
 /// What a fetch needs from the daemon: the network, the clock, the config's bounds and channel,
@@ -146,7 +146,7 @@ pub(crate) fn fetch_with(
         fetcher: env.fetcher,
         clock: env.clock,
         dir: &dir,
-        url: &index_at,
+        request: Request::plain(&index_at),
         suffix: "",
         cap: MAX_INDEX_BYTES,
         deadline: deadline.clone(),
@@ -178,7 +178,7 @@ pub(crate) fn fetch_with(
         fetcher: env.fetcher,
         clock: env.clock,
         dir: &dir,
-        url: &url,
+        request: Request::plain(&url),
         suffix: "",
         cap: entry.bytes,
         deadline,
@@ -198,7 +198,7 @@ pub(crate) fn fetch_with(
 }
 
 /// The refusal a fault of the package's download is.
-fn failure(fault: Fault) -> PackageFailure {
+pub(crate) fn failure(fault: Fault) -> PackageFailure {
     match fault {
         Fault::TooLarge => PackageFailure::release(PACKAGE_DIGEST_MISMATCH),
         Fault::Storage(e) if stage::is_full(&e) => PackageFailure::deferred(NO_SPACE),

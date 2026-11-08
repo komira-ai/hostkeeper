@@ -3,7 +3,7 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
 use std::rc::Rc;
 
 use super::*;
-use crate::ports::{Got, NetError, Sink, Url};
+use crate::ports::{Got, NetError, Request, Sink, Url};
 use crate::testing::{
     Failing, FakeClock, FakeFetcher, deliver, listing, scratch, serve, service_dir, sha256_hex,
 };
@@ -16,7 +16,7 @@ fn job<'a>(fetcher: &'a FakeFetcher, clock: &'a FakeClock, dir: &'a Path, url: &
         fetcher,
         clock,
         dir,
-        url,
+        request: Request::plain(url),
         suffix: "",
         cap: 10,
         deadline: clock.stamp(clock.mono_secs() + 100),

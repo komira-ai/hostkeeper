@@ -7,7 +7,7 @@ use crate::verdict;
 use clap::Parser;
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_link::{
-    DEFAULT_HEARTBEAT_SECS, DeferredReport, Feature, Health, Heartbeat, LinkError, Liveness,
+    DEFAULT_HEARTBEAT_SECS, DeferredReport, Entry, Feature, Health, Heartbeat, LinkError, Liveness,
     LoopFlags, Observed, Order, OrderId, OrderRef, Outcome, Oversize, PackageDigest, Platform,
     Reason, ReplyFault, ServiceFacts, Target, Verb, WordError,
 };
@@ -50,7 +50,9 @@ fn an_order_cannot_carry_a_command_path_or_url() {
         version: to,
         digest: package,
         index_digest: index,
+        entry,
     } = target;
+    let _: Option<Entry> = entry;
     let _: ServiceName = name;
     let _: Version = to;
     let _: PackageDigest = package;
@@ -199,6 +201,7 @@ fn the_heartbeat_json_has_the_wire_names() {
         sent_unix: 0,
         renewal: hostkeeper_link::Renewal::default(),
         trusted_root: None,
+        installers: Vec::new(),
     };
     let mut expected = serde_json::json!({
         "platform": "darwin-arm64",
@@ -287,4 +290,45 @@ fn the_heartbeat_period_flag_defaults_to_15_seconds_and_refuses_0() {
     assert!(Daemon::try_parse_from(["daemon", "--heartbeat-secs", "x"]).is_err());
     // `LoopConfig::period_secs` is a `NonZeroU64`: a period of 0 cannot be built.
     assert_eq!(NonZeroU64::new(0), None);
+}
+
+/// An entry of the release message with `installer` and one location, for the tests of equality.
+fn entry(installer: &str, bytes: u64) -> Entry {
+    use hostkeeper_proto::hostkeeper::release::v1 as release;
+    Entry::new(release::Target {
+        installer: installer.to_owned(),
+        locations: vec![release::Location {
+            store: "lan".to_owned(),
+            locator: "releases/web/2.0/web.tar".to_owned(),
+        }],
+        digest: "ab".repeat(32),
+        bytes,
+        attestation: None,
+        manifest: None,
+    })
+}
+
+/// `entry` on the update of `web` to 2.0, order `o-1` try 1.
+fn update_with(entry: Option<Entry>) -> Order {
+    let mut order = update("o-1", 1, "web", "2.0");
+    if let Verb::Update(target) = &mut order.verb {
+        target.entry = entry;
+    }
+    order
+}
+
+/// Proves an order carrying an entry equals its resend (an entry of the same bytes), and an
+/// entry that differs in one field (the installer, or the size) is another order, as is an
+/// order with no entry or an order with an entry against one with none.
+///
+/// Catches: orders compared without their entry, so a re-picked entry reads as the order
+/// already run; or compared by identity, so a resend reads as new.
+#[test]
+fn equal_entries_are_equal_orders_and_an_entry_differing_in_one_field_is_another_order() {
+    let resend = update_with(Some(entry("hostkeeper-archive", 4096)));
+    assert_eq!(resend, update_with(Some(entry("hostkeeper-archive", 4096))));
+    assert_ne!(resend, update_with(Some(entry("tarball", 4096))));
+    assert_ne!(resend, update_with(Some(entry("hostkeeper-archive", 4097))));
+    assert_ne!(resend, update_with(None));
+    assert_eq!(update_with(None), update_with(None));
 }

@@ -14,14 +14,16 @@
 //! ([`Unsendable`]), never sent without it. The daemon's trusted root goes out as its age and
 //! reason (`TRUSTED_ROOT_REASON_NONE` for a root that needs no attention); a heartbeat with no
 //! report of the root leaves the age out and the reason unspecified, which the coordinator reads
-//! as unknown. The JSON route has no field for it.
+//! as unknown. The JSON route has no field for it. The installers go out as `installers`, and the
+//! JSON route has no field for them either.
 //!
 //! **In.** The advertised features the daemon knows, and the halt clear generations of the
 //! services the daemon could run (a name outside its grammar names none), in the order of the
 //! service names. The `acks` are the verdicts the coordinator stored, each kept when the
 //! daemon's grammars read its service name and order id and dropped otherwise. An order is the loop's
 //! when its verb is `update`, `force`, `install`, `uninstall`, `abort` or `clear_record` and the
-//! daemon's grammars read every word of it. Any other order (a verb the daemon does not run, no verb, or a word the
+//! daemon's grammars read every word of it. An `update`, `force` or `install` carries the `target`
+//! entry as decoded (see [`Entry`]), with no check of it: the daemon judges it. Any other order (a verb the daemon does not run, no verb, or a word the
 //! daemon cannot read) is not run: it is returned beside the reply ([`Mapped::dropped`]), with
 //! why, for the link to log.
 
@@ -33,7 +35,7 @@ use hostkeeper_wire::wire::is_service_name;
 
 use crate::beat::{AGENT_NAME, Feature, Health, Heartbeat, Platform, RootReason, ServiceFacts};
 use crate::names::{OrderId, PackageDigest};
-use crate::order::{DeferredReport, Order, OrderResult, Outcome, Reply, Target, Verb};
+use crate::order::{DeferredReport, Entry, Order, OrderResult, Outcome, Reply, Target, Verb};
 use crate::ports::Unsendable;
 use crate::wire_map::acknowledged;
 
@@ -53,7 +55,7 @@ pub(crate) fn heartbeat(beat: &Heartbeat) -> Result<pb::HeartbeatRequest, Unsend
         .map(service)
         .collect::<Result<Vec<pb::ServiceBeat>, Unsendable>>()?;
     Ok(pb::HeartbeatRequest {
-        installers: Vec::new(),
+        installers: beat.installers.clone(),
         platform: platform(beat.platform).into(),
         agent: Some(pb::AgentInfo {
             name: AGENT_NAME.to_owned(),
@@ -252,11 +254,13 @@ struct TargetTerms {
     version: String,
     digest: String,
     index_digest: String,
+    /// The entry the coordinator picked, as decoded; none when the order names none.
+    entry: Option<Entry>,
 }
 
 /// What a protobuf verb names: a version and package, or the service alone.
 enum Terms {
-    Target(fn(Target) -> Verb, TargetTerms),
+    Target(fn(Target) -> Verb, Box<TargetTerms>),
     Service(fn(ServiceName) -> Verb, String),
 }
 
@@ -272,36 +276,39 @@ fn order_of(order: pb::Order) -> (Option<Order>, Option<Dropped>) {
             "update",
             Terms::Target(
                 Verb::Update,
-                TargetTerms {
+                Box::new(TargetTerms {
                     service: a.service,
                     version: a.version,
                     digest: a.package_digest,
                     index_digest: a.index_digest,
-                },
+                    entry: a.target.map(Entry::new),
+                }),
             ),
         ),
         Some(pb::order::Verb::Force(a)) => (
             "force",
             Terms::Target(
                 Verb::Force,
-                TargetTerms {
+                Box::new(TargetTerms {
                     service: a.service,
                     version: a.version,
                     digest: a.package_digest,
                     index_digest: a.index_digest,
-                },
+                    entry: a.target.map(Entry::new),
+                }),
             ),
         ),
         Some(pb::order::Verb::Install(a)) => (
             "install",
             Terms::Target(
                 Verb::Install,
-                TargetTerms {
+                Box::new(TargetTerms {
                     service: a.service,
                     version: a.version,
                     digest: a.package_digest,
                     index_digest: a.index_digest,
-                },
+                    entry: a.target.map(Entry::new),
+                }),
             ),
         ),
         Some(pb::order::Verb::Uninstall(a)) => {
@@ -355,6 +362,7 @@ fn target(terms: &TargetTerms) -> Option<Target> {
         version: Version::new(&terms.version).ok()?,
         digest: PackageDigest::new(&terms.digest).ok()?,
         index_digest,
+        entry: terms.entry.clone(),
     })
 }
 

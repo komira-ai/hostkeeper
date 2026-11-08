@@ -62,6 +62,7 @@ fn beat(platform: Platform, agent: &str, services: Vec<ServiceFacts>) -> Heartbe
         sent_unix: 0,
         renewal: hostkeeper_link::Renewal::default(),
         trusted_root: None,
+        installers: Vec::new(),
     }
 }
 
@@ -123,7 +124,7 @@ fn heartbeat_bytes_equal_the_recorded_kbf_shape_for_the_same_facts() {
     );
     let mut expected = recorded.trim_end_matches('}').to_owned();
     expected.push_str(&format!(
-        r#","agent_features":["deferred-v1","halt-v1","heartbeat-v2","forced-v1","order-v1","verdict-acks-v1","grpc-v1","install-v1","abort-v1","clear-record-v1"],"agent":{{"name":"hostkeeper","version":"{agent}"}},"sent_unix":0}}"#
+        r#","agent_features":["deferred-v1","halt-v1","heartbeat-v2","forced-v1","order-v1","verdict-acks-v1","grpc-v1","install-v1","abort-v1","clear-record-v1","target-v1"],"agent":{{"name":"hostkeeper","version":"{agent}"}},"sent_unix":0}}"#
     ));
     assert!(recorded.ends_with("}]}"), "{recorded}");
     assert_eq!(
@@ -164,7 +165,8 @@ fn heartbeat_bytes_equal_the_recorded_kbf_shape_for_the_same_facts() {
             "grpc-v1",
             "install-v1",
             "abort-v1",
-            "clear-record-v1"
+            "clear-record-v1",
+            "target-v1"
         ]
     );
     assert_eq!(ours.agent_name(), "hostkeeper");
@@ -297,7 +299,7 @@ fn every_word_of_a_heartbeat_is_the_wires() {
                 },
             ],
             "agent_features": ["deferred-v1", "halt-v1", "heartbeat-v2", "forced-v1","order-v1", "verdict-acks-v1", "grpc-v1",
-                "install-v1", "abort-v1", "clear-record-v1"],
+                "install-v1", "abort-v1", "clear-record-v1", "target-v1"],
             "agent": { "name": "hostkeeper", "version": "0.9.0" },
         })
     );
@@ -503,4 +505,20 @@ fn the_host_clock_and_certificate_go_out_on_the_json_route() {
     assert_eq!(body["sent_unix"], json!(0));
     assert_eq!(body.get("cert_not_after_unix"), None);
     assert_eq!(body.get("last_renew_error"), None);
+}
+
+/// Proves the JSON route sends no installers: a heartbeat that lists installers is the same
+/// body as one that lists none (the route is frozen; the installers go out on gRPC only).
+///
+/// Catches: the installers serialised into the JSON body the previous release's coordinator
+/// reads.
+#[test]
+fn the_json_body_carries_no_installers() {
+    let plain = beat(Platform::LinuxX86_64, "0.9.0", vec![facts("other", "1.0")]);
+    let mut listed = plain.clone();
+    listed.installers = vec!["hostkeeper-archive".to_owned()];
+    assert_eq!(
+        sent("wire-installers", &listed).body,
+        sent("wire-no-installers", &plain).body
+    );
 }

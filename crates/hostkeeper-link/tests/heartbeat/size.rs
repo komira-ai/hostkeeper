@@ -51,6 +51,7 @@ fn beat(services: Vec<ServiceFacts>) -> Heartbeat {
         sent_unix: 0,
         renewal: hostkeeper_link::Renewal::default(),
         trusted_root: None,
+        installers: Vec::new(),
     }
 }
 
@@ -242,4 +243,24 @@ fn the_bound_is_exact_and_dropping_stops_as_soon_as_the_heartbeat_fits() {
         assert_eq!(facts.deferred, report());
         assert_eq!(facts.observed, observed());
     }
+}
+
+/// Proves the installers count toward the heartbeat's bound as the trusted root does: a
+/// heartbeat whose only excess is its installers is refused with the length it has with them,
+/// and the same heartbeat with none fits.
+///
+/// Catches: installers sent on the gRPC route that the bound never measured, so a heartbeat
+/// over the coordinator's limit leaves the host.
+#[test]
+fn installers_count_toward_the_bound() {
+    let plain = beat(vec![required("web", 0)]);
+    assert_eq!(
+        fit(plain.clone()).map(|fitted| fitted.dropped),
+        Ok(Vec::new())
+    );
+    let mut crowded = plain.clone();
+    crowded.installers = vec!["i".repeat(MAX_HEARTBEAT_BYTES)];
+    let counted = crowded.encoded_len();
+    assert_eq!(counted, plain.encoded_len() + MAX_HEARTBEAT_BYTES + 18);
+    assert_eq!(fit(crowded), Err(Oversize::Bytes { len: counted }));
 }

@@ -482,7 +482,10 @@ impl MacHost {
         for package in versions {
             let digest = PackageDigest::new(&package.sha256).expect("a digest");
             let version = Version::new(&package.version).expect("a version");
-            if let Err(refused) = ports.packages.version_dir(&name, &version, &digest, None) {
+            if let Err(refused) = ports
+                .packages
+                .version_dir(&name, &version, &digest, None, None)
+            {
                 let why = self.explain_attestation(&parsed, package);
                 panic!("the daemon's package store refuses {service} {version}: {refused}\n{why}");
             }

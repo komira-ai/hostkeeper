@@ -98,7 +98,12 @@ fn an_installed_daemon_updated_to_the_next_version_restarts_into_it_under_launch
 /// is `previous`): no package of hostkeeper is installed, the
 /// coordinator orders the install of [`NEXT`], and the daemon runs it as its self-update; the
 /// record settles `Succeeded` once the new binary started, the job runs it, and the package is
-/// installed at [`NEXT`].
+/// installed at [`NEXT`]. The install is set by targets: the order carries the
+/// `hostkeeper-archive` entry of the release (a channel location, the digest of the order, an
+/// attestation blob, a manifest with its floor), which passes the daemon's receipt check, and the
+/// package store is given that entry. Catches: an entry the daemon refuses (`order_invalid`,
+/// `manifest_invalid`, `installer_not_listed`) on the Mac the pkg leaves, or one it drops on its
+/// way to the store, so that the install runs the channel path whatever the coordinator picked.
 #[test]
 fn a_daemon_the_pkg_installed_is_installed_its_next_release_and_restarts_into_it() {
     let host = MacSelfHost::new("install", Plan::Pkg(NEXT));
@@ -108,11 +113,23 @@ fn a_daemon_the_pkg_installed_is_installed_its_next_release_and_restarts_into_it
         "the packaged start seeded the binary directory with one version"
     );
     assert!(fs::read_link(host.service().join("current")).is_err());
-    host.offer("install", NEXT);
+    host.offer_by_target("install", NEXT);
     assert_restarted_into_next(&host, pid);
     assert_eq!(
         fs::read_link(host.service().join("current")).ok(),
         Some(PathBuf::from(NEXT))
+    );
+    let asked = host.asked();
+    let expected = serde_json::json!({
+        "service": HK,
+        "version": NEXT,
+        "entry": MacSelfHost::entry(NEXT),
+    });
+    assert!(!asked.is_empty(), "the store was asked for nothing");
+    assert!(
+        asked.iter().all(|line| *line == expected),
+        "the store was given the entry of the order: {asked:?}\n{}",
+        host.logs()
     );
 }
 

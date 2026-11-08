@@ -147,6 +147,7 @@ maintainers must confirm the prefix before any Mac enrolls, since a label is the
 | what | where |
 |---|---|
 | config | `/etc/hostkeeper/hostkeeper.toml` |
+| stores config | `/etc/hostkeeper/stores.toml`, optional; without it the one store is `release_channel` (docs/design/packages.md section 7) |
 | state directory, packages directory | as on Linux (`/var/lib/updater/state`, `/var/lib/hostkeeper/packages`); both exist on macOS |
 | admin socket | `/var/run/hostkeeper/admin.sock` (macOS has a read-only root and no `/run`) |
 | units linked from a package | `/Library/LaunchDaemons/<label>.plist`, a link to `<packages>/<service>/current/units/<label>.plist` |

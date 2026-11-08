@@ -256,6 +256,7 @@ pub fn link_order(ordered: &Ordered) -> Order {
         digest: PackageDigest::new(digest).expect("a digest"),
         index_digest: (!index.is_empty())
             .then(|| PackageDigest::new(index).expect("an index digest")),
+        entry: None,
     };
     let named = |service: &str| ServiceName::new(service).expect("a service");
     let verb = match order.verb.expect("a verb") {
@@ -429,6 +430,7 @@ pub fn hostkeeper_at(version: &str) -> Target {
         version: Version::new(version).expect("a version"),
         digest: PackageDigest::new(&d()).expect("a digest"),
         index_digest: None,
+        entry: None,
     }
 }
 

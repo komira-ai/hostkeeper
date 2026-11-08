@@ -204,6 +204,36 @@ impl Host {
         );
     }
 
+    /// Stops the daemon's unit, as an operator does before it changes the binary directory:
+    /// `systemctl stop` returns once the daemon has exited, and nothing runs the fallback.
+    ///
+    /// # Panics
+    /// The unit does not stop.
+    pub fn stop(&self) {
+        let stopped = systemctl(&["stop", MAIN]);
+        assert!(
+            stopped.status.success(),
+            "systemctl stop {MAIN} failed: {}\n{}",
+            String::from_utf8_lossy(&stopped.stderr),
+            self.logs()
+        );
+    }
+
+    /// Starts the daemon's unit again, on whatever `current` of the binary directory names now:
+    /// `systemctl start` returns once the daemon is ready.
+    ///
+    /// # Panics
+    /// The unit does not start.
+    pub fn start_again(&self) {
+        let started = systemctl(&["start", MAIN]);
+        assert!(
+            started.status.success(),
+            "systemctl start {MAIN} failed: {}\n{}",
+            String::from_utf8_lossy(&started.stderr),
+            self.logs()
+        );
+    }
+
     /// What the daemon's unit's main process runs (its `/proc/<pid>/exe`), while it has one.
     pub fn running(&self) -> Option<PathBuf> {
         let pid = property(MAIN, "MainPID");

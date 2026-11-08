@@ -236,6 +236,7 @@ fn reply_of(answer: &Answer) -> Reply {
                 version: Version::new(version.as_str()).expect("a version"),
                 digest: PackageDigest::new(digest.as_str()).expect("a digest"),
                 index_digest: None,
+                entry: None,
             }),
         }),
         _ => None,
@@ -350,6 +351,7 @@ fn first_beat() -> Heartbeat {
         sent_unix: 0,
         renewal: Renewal::default(),
         trusted_root: None,
+        installers: Vec::new(),
     }
 }
 
@@ -361,6 +363,7 @@ fn without_executor(daemon: &Arc<Daemon>, links: &Links) -> Heartbeater {
             agent_version: Version::from(OWN),
             state_dir: daemon.ctx().dirs.state.clone(),
             period_secs: links.period,
+            installers: Vec::new(),
         },
         Ports {
             link: Arc::clone(&links.link),
@@ -547,6 +550,7 @@ fn typed_order(order: &hostkeeper_coordinator::orders::Order) -> Order {
         version: Version::new(version).expect("a version"),
         digest: PackageDigest::new(digest).expect("a digest"),
         index_digest: None,
+        entry: None,
     };
     let verb = match proto.verb.expect("a verb") {
         agent::order::Verb::Update(a) => {

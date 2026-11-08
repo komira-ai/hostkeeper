@@ -155,6 +155,40 @@ impl Host {
         });
     }
 
+    /// Boots the daemon's job out, as an operator does before it changes the binary directory,
+    /// and waits until the job has no process.
+    ///
+    /// # Panics
+    /// The job still has a process after the tries.
+    pub fn stop(&self) {
+        bootout_quiet(&daemon_label());
+        wait_for("the daemon job has no process", STATUS_TRIES, || {
+            self.running().is_none()
+        });
+    }
+
+    /// Bootstraps the daemon's plist again, on whatever `current` of the binary directory names
+    /// now, and waits until the daemon answers `Status`.
+    ///
+    /// # Panics
+    /// The job cannot be loaded, or the daemon never answers.
+    pub fn start_again(&self) {
+        let plist = daemon_plist_path();
+        let loaded = launchctl()
+            .run(&bootstrap_args(&plist))
+            .expect("launchctl bootstrap ran");
+        assert_eq!(
+            loaded.code,
+            Some(0),
+            "bootstrap {}: {}",
+            daemon_label(),
+            loaded.stderr_text()
+        );
+        wait_for("the daemon answers Status", STATUS_TRIES, || {
+            self.root.status().is_ok()
+        });
+    }
+
     /// What the daemon job's process runs, while it has one.
     pub fn running(&self) -> Option<PathBuf> {
         match print(&launchctl(), &daemon_label()) {

@@ -366,6 +366,7 @@ fn files_under(root: &Path) -> HostFiles {
         ca_bundle: root.join("ca.pem"),
         gh: root.join("gh"),
         trusted_root: root.join("trusted_root.json"),
+        stores: root.join("stores.toml"),
         pki: root.join("pki"),
         console: None,
         managed_config: None,
@@ -409,6 +410,7 @@ fn bare_beat() -> Heartbeat {
         sent_unix: 0,
         renewal: Renewal::default(),
         trusted_root: None,
+        installers: Vec::new(),
     }
 }
 
@@ -532,7 +534,8 @@ fn the_link_of_host_links_answers_the_coordinators_reply() {
             Feature::ForcedV1,
             Feature::OrderV1,
             Feature::VerdictAcksV1,
-            Feature::GrpcV1
+            Feature::GrpcV1,
+            Feature::TargetV1
         ],
         "the announced features the coordinator echoes: all but install-v1 and abort-v1"
     );

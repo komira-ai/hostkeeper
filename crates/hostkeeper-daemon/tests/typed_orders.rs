@@ -253,6 +253,7 @@ fn web_at(version: &str) -> Target {
         version: Version::new(version).expect("a version"),
         digest: PackageDigest::new(&d()).expect("a digest"),
         index_digest: None,
+        entry: None,
     }
 }
 

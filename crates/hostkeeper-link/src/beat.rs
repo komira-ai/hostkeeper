@@ -12,7 +12,8 @@
 //! at most [`hostkeeper_wire::wire::MAX_RENEW_ERROR`] bytes, nor its trusted root
 //! ([`Heartbeat::trusted_root`]). The trusted root goes out on the gRPC route only (the JSON
 //! route is frozen), but counts toward the bound on both, as `trusted_root_age_secs` and
-//! `trusted_root_reason`.
+//! `trusted_root_reason`. The installers ([`Heartbeat::installers`]) are counted the same way, as
+//! `installers`.
 
 use hostkeeper_config::names::{ServiceName, Version};
 pub use hostkeeper_proto::MAX_SERVICES_PER_HEARTBEAT;
@@ -59,12 +60,16 @@ pub enum Feature {
     /// ([`crate::Verb::ClearRecord`]) and reports its verdict. Like `install-v1`, it says what
     /// the loop takes.
     ClearRecordV1,
+    /// `target-v1`: the daemon takes the `target` entry of an `update`, `force` or `install` of
+    /// the gRPC route ([`crate::Entry`]) and lists its `installers` in the heartbeat. Like
+    /// `install-v1`, it says what the loop takes.
+    TargetV1,
 }
 
 /// The features every heartbeat announces, in this order. Each names something the loop does:
-/// `install-v1`, `abort-v1` and `clear-record-v1` are here because [`crate::Heartbeater`] hands
+/// `install-v1`, `abort-v1`, `clear-record-v1` and `target-v1` are here because [`crate::Heartbeater`] hands
 /// those orders to the executor.
-pub const ANNOUNCED: [Feature; 10] = [
+pub const ANNOUNCED: [Feature; 11] = [
     Feature::DeferredV1,
     Feature::HaltV1,
     Feature::HeartbeatV2,
@@ -75,6 +80,7 @@ pub const ANNOUNCED: [Feature; 10] = [
     Feature::InstallV1,
     Feature::AbortV1,
     Feature::ClearRecordV1,
+    Feature::TargetV1,
 ];
 
 impl Feature {
@@ -91,6 +97,7 @@ impl Feature {
             Feature::InstallV1 => "install-v1",
             Feature::AbortV1 => "abort-v1",
             Feature::ClearRecordV1 => "clear-record-v1",
+            Feature::TargetV1 => "target-v1",
         }
     }
 
@@ -304,6 +311,10 @@ pub struct Heartbeat {
     /// The trusted root, as the daemon reported it when the heartbeat was made; none from a
     /// daemon that keeps no root to report, which the coordinator reads as unknown.
     pub trusted_root: Option<TrustedRootFacts>,
+    /// The installers the daemon can run, by name, given once at start: sent as `installers`
+    /// on the gRPC route only. The JSON route is frozen and sends none, but the bound counts
+    /// them on both, as the trusted root is counted.
+    pub installers: Vec<String>,
 }
 
 impl Heartbeat {
@@ -333,6 +344,9 @@ impl Heartbeat {
             }
             let reason = root.reason.map_or("none", RootReason::as_str);
             beat.insert("trusted_root_reason".to_owned(), reason.into());
+        }
+        if !self.installers.is_empty() {
+            beat.insert("installers".to_owned(), self.installers.clone().into());
         }
         Value::Object(beat)
     }

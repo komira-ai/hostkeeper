@@ -95,7 +95,8 @@ pub const LAYERS: [Layer; 30] = [
     (
         DAEMON,
         &[
-            CONFIG, ENROLL, HOOK, LAUNCHD, LINK, OBSERVE, PACKAGE, PLACED, PROTO, STEPS, UNPACK,
+            CONFIG, ENROLL, HOOK, LAUNCHD, LINK, OBSERVE, PACKAGE, PLACED, PROTO, RELEASE, STEPS,
+            UNPACK,
         ],
         &[COORDINATOR, HELLO, OIDC, TLS, WIRE],
     ),
@@ -116,7 +117,7 @@ pub const LAYERS: [Layer; 30] = [
     (MDM_STEP, &[], &[]),
     (OBSERVE, &[CONFIG, PROTO], &[HOOK, STEPS]),
     (OIDC, &[], &[]),
-    (PACKAGE, &[CONFIG, HOOK, STEPS], &[]),
+    (PACKAGE, &[CONFIG, HOOK, PROTO, RELEASE, STEPS], &[]),
     (PLACED, &[CONFIG], &[]),
     (
         PRIVILEGED,
@@ -129,6 +130,7 @@ pub const LAYERS: [Layer; 30] = [
             LAUNCHD,
             LINK,
             PLACED,
+            PROTO,
             PXE,
             STEPS,
         ],
@@ -138,7 +140,6 @@ pub const LAYERS: [Layer; 30] = [
             OBSERVE,
             OIDC,
             PACKAGE,
-            PROTO,
             PXE_PACKETS,
             UNPACK,
             WIRE,

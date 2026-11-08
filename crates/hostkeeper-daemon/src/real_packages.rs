@@ -7,6 +7,14 @@
 //! order names, then unpacks it ([`hostkeeper_unpack::unpack`]) and seals the version directory.
 //! It takes no lock: the daemon holds the service's lock around the call.
 //!
+//! An order that carries an entry takes another way to the same proven archive: the package is
+//! fetched from the entry's locations and the host's mirrors, through the host's stores
+//! ([`RealPackages::with_stores`], [`hostkeeper_package::entry::fetch_entry`]), and proven
+//! through the entry's attestation; the release index is not read, and each store that gave
+//! other bytes is logged as `store_digest_mismatch`. The digest compare, the unpack and the seal
+//! are the same, and so is the version directory they leave (no record of the entry in it). An
+//! order without an entry takes the release channel as before.
+//!
 //! Every failure of those libraries reaches the daemon as one [`PackageError::Refused`] built by
 //! [`refusal_of`], the one table that maps a library's reason token onto a [`Refusal`]. The
 //! outcome and the class are the library's own.
@@ -22,14 +30,18 @@ use std::sync::Arc;
 use hostkeeper_config::daemon::{Bounds, DaemonConfig, HttpsUrl, Sha256Hex, TrustedSigners};
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_hook::{Class, Outcome};
+use hostkeeper_package::entry::{EntryEnv, fetch_entry};
 use hostkeeper_package::fetch::FetchEnv;
 use hostkeeper_package::ports::{Fetcher, Verifier};
 use hostkeeper_package::prove::ProveEnv;
+use hostkeeper_package::stores::Stores;
 use hostkeeper_package::{
     ATTESTATION_UNAVAILABLE, FETCH_FAILED, INDEX_DIGEST_MISMATCH, INDEX_INVALID,
-    NO_PACKAGE_FOR_PLATFORM, NO_SPACE, NOT_ATTESTED, PACKAGE_DIGEST_MISMATCH, PackageFailure,
-    PackageOrder, Platform, fetch_package, prove, remove_orphan_fetches,
+    NO_PACKAGE_FOR_PLATFORM, NO_SPACE, NO_STORE, NOT_ATTESTED, PACKAGE_DIGEST_MISMATCH,
+    PackageFailure, PackageOrder, Platform, STORE_DIGEST_MISMATCH, VerifiedArchive, fetch_package,
+    prove, remove_orphan_fetches,
 };
+use hostkeeper_proto::hostkeeper::release::v1::Target;
 use hostkeeper_steps::{Clock, Staged};
 use hostkeeper_unpack::{
     HostFs, Limits, Owner, PackageFs, Platform as UnpackPlatform, REASON_ARTIFACT_CHANGED,
@@ -65,6 +77,8 @@ const PACKAGE_TOKENS: &[(&str, Refusal)] = &[
     (ATTESTATION_UNAVAILABLE, Refusal::AttestationUnavailable),
     (NO_SPACE, Refusal::NoSpace),
     (NOT_ATTESTED, Refusal::NotAttested),
+    (NO_STORE, Refusal::NoStore),
+    (STORE_DIGEST_MISMATCH, Refusal::StoreDigestMismatch),
 ];
 
 /// The reason token of an unpack error, and the refusal it is reported as.
@@ -136,6 +150,9 @@ fn refused(refusal: PackageRefusal) -> PackageError {
     PackageError::Refused(refusal)
 }
 
+/// Where the store writes a line for the log: a store that gave other bytes than an entry names.
+pub type Log = Arc<dyn Fn(&str) + Send + Sync>;
+
 /// Fetches, proves, unpacks and seals packages with the real libraries.
 pub struct RealPackages {
     fetcher: Box<dyn Fetcher + Send + Sync>,
@@ -143,6 +160,8 @@ pub struct RealPackages {
     clock: Arc<dyn Clock>,
     bounds: Bounds,
     release_channel: HttpsUrl,
+    stores: Stores,
+    log: Log,
     signers: TrustedSigners,
     root: PathBuf,
     platform: Platform,
@@ -170,6 +189,8 @@ impl RealPackages {
             clock,
             bounds: config.bounds.clone(),
             release_channel: config.release_channel.clone(),
+            stores: Stores::channel(&config.release_channel),
+            log: Arc::new(|line| eprintln!("hostkeeper daemon: {line}")),
             signers: config.trusted_signers.clone(),
             root: root.to_path_buf(),
             platform: Platform::current(),
@@ -177,6 +198,19 @@ impl RealPackages {
             check: None,
             trusted_root: None,
         })
+    }
+
+    /// The same store, resolving the locations of an entry through `stores`, the host's
+    /// `stores.toml` ([`hostkeeper_package::stores::load`]). A store made by [`RealPackages::open`]
+    /// has the one store `channel`, the release channel.
+    pub fn with_stores(self, stores: Stores) -> RealPackages {
+        RealPackages { stores, ..self }
+    }
+
+    /// The same store, writing its log lines (a `store_digest_mismatch` for each store that gave
+    /// other bytes than an entry names) through `log`; they go to standard error otherwise.
+    pub fn with_log(self, log: Log) -> RealPackages {
+        RealPackages { log, ..self }
     }
 
     /// The same store, with `check` judging every staged tree before it is sealed: on macOS the
@@ -195,15 +229,15 @@ impl RealPackages {
     }
 }
 
-impl Packages for RealPackages {
-    fn version_dir(
+impl RealPackages {
+    /// The archive of the release channel for `service` at `version`: the release index, the
+    /// package it lists and the proof of its attestation.
+    fn prove_channel(
         &self,
         service: &ServiceName,
         version: &Version,
-        digest: &PackageDigest,
         index_digest: Option<&PackageDigest>,
-    ) -> Result<VersionDir, PackageError> {
-        self.remove_orphans(service)?;
+    ) -> Result<VerifiedArchive, PackageError> {
         let order = PackageOrder {
             service: service.clone(),
             version: version.clone(),
@@ -226,8 +260,52 @@ impl Packages for RealPackages {
             bounds: &self.bounds,
             signers: &self.signers,
         };
-        let verified = prove(&proof, staged)
+        prove(&proof, staged).map_err(|failed| refused(refusal_of(Failure::Package(failed))))
+    }
+
+    /// The archive of `entry`: fetched from its locations (and the host's mirrors) and proven
+    /// through its attestation, with no release index. Each store that gave other bytes is logged
+    /// as a `store_digest_mismatch` naming it.
+    fn prove_entry(
+        &self,
+        service: &ServiceName,
+        entry: &Target,
+    ) -> Result<VerifiedArchive, PackageError> {
+        let env = EntryEnv {
+            fetcher: &*self.fetcher,
+            verifier: &*self.verifier,
+            clock: &*self.clock,
+            bounds: &self.bounds,
+            stores: &self.stores,
+            packages_root: &self.root,
+            signers: &self.signers,
+            platform: self.platform,
+        };
+        let proven = fetch_entry(&env, service, entry)
             .map_err(|failed| refused(refusal_of(Failure::Package(failed))))?;
+        for store in &proven.other_bytes {
+            (self.log)(&format!(
+                "{STORE_DIGEST_MISMATCH}: the store {store} gave other bytes than the entry names for {service}"
+            ));
+        }
+        Ok(proven.archive)
+    }
+}
+
+impl Packages for RealPackages {
+    fn version_dir(
+        &self,
+        service: &ServiceName,
+        version: &Version,
+        digest: &PackageDigest,
+        index_digest: Option<&PackageDigest>,
+        entry: Option<&Target>,
+    ) -> Result<VersionDir, PackageError> {
+        self.remove_orphans(service)?;
+        let verified = match entry {
+            Some(entry) => self.prove_entry(service, entry)?,
+            None => self.prove_channel(service, version, index_digest)?,
+        };
         if verified.sha256().as_str() != digest.as_str() {
             return Err(refused(refusal_of(Failure::OrderDigest {
                 expected: digest.as_str(),

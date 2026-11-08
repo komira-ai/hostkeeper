@@ -11,7 +11,10 @@ picked entry in orders over gRPC, `target-v1` echoed, and `no_target`, `no_build
 part: the CI client's `targets` input (`.github/workflows/set-desired.yml`) and `cargo xtask release targets`
 (`crates/xtask/src/release/targets.rs`); its callers move to targets in a pull request of their own, once a
 release carries that input, the farm's coordinator runs A2, and the callers' pin has moved to the hkctl
-client. Nothing else here is built. This is a revision of the design merged as
+client. Build item A4 is **Built**: the host's `stores.toml` and the fetch and proof through the entry
+(`crates/hostkeeper-package/src/stores.rs` and `entry.rs`), the order checks, the installers list and the refusals
+`order_invalid`, `installer_not_listed`, `manifest_invalid`, `no_store` and `store_digest_mismatch` (`crates/hostkeeper-daemon`),
+`target-v1` and the 32 KiB gRPC reply (`crates/hostkeeper-link`), and the `agent.proto` header. Nothing else here is built. This is a revision of the design merged as
 komira-ai/hostkeeper#179. It keeps that design's stores, its digest and attestation checks before any byte is used, and its
 staged path for the daemons on hosts now. It replaces its package model: host facts, "most specific wins", artifact kinds
 and `Releases.Register` (section 0 says what replaces what). It changes three things in
@@ -143,11 +146,11 @@ Every item is **Built** at the path given.
   whose platform the index does not list, with `GATE_REASON_NO_PACKAGE_FOR_PLATFORM`; such hosts are not counted as
   missing (`Skip::NoPackageForPlatform`, `crates/hostkeeper-coordinator/src/decide.rs` and `membership.rs`). Every
   operator method is capped at 4 KiB (`MAX_OPERATOR_BYTES`, `crates/hostkeeper-coordinator/src/http.rs`). A heartbeat
-  reply carries at most one order (`HeartbeatResponse.order = 1`), and the daemon reads a reply of at most 16 KiB
-  (`REPLY_MAX`, `crates/hostkeeper-link/src/mtls.rs`).
+  reply carries at most one order (`HeartbeatResponse.order = 1`), and the daemon reads a reply of at most 16 KiB on
+  the JSON route (`REPLY_MAX`, `crates/hostkeeper-link/src/mtls.rs`) and 32 KiB over gRPC (`GRPC_REPLY_MAX`, `grpc.rs`).
 - **The host's platform.** `HeartbeatRequest.platform` (values 1 to 3), from the daemon's compile target; `index_platform`
   (`crates/hostkeeper-coordinator/src/registry.rs`) maps it to `linux-x86_64`, `linux-arm64`, `macos-arm64`.
-- **Features.** At most 16 in `HeartbeatRequest.features`, ten today (`crates/hostkeeper-link/src/beat.rs`); the
+- **Features.** At most 16 in `HeartbeatRequest.features`, eleven today (`crates/hostkeeper-link/src/beat.rs`); the
   coordinator echoes those it supports, and sends a verb only to a daemon that announced it.
 - **Two routes and the audit.** The first heartbeat after start, and a gRPC one that failed in transport, go to the
   frozen JSON route (`crates/hostkeeper-link/src/negotiated.rs`). An operator's set is audited; CI's is only logged.

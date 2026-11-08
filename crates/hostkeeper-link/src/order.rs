@@ -2,7 +2,8 @@
 //! order (design 4.1 and 5.2).
 //!
 //! An [`Order`] is a verb and typed arguments only: an order id, a try, and a [`Target`] of a
-//! service name, a version, a package digest and optionally an index digest, each a word with a grammar. No field of it, at
+//! service name, a version, a package digest, optionally an index digest and optionally the
+//! [`Entry`] the coordinator picked, each a word with a grammar. No field of it, at
 //! any depth, is a free string, so an order cannot carry a command, a path or a URL; the daemon
 //! finds everything else in its own configuration and in the manifest of the package whose
 //! digest verified. The verbs are those of the protobuf `Order` the loop runs: `update`, the
@@ -11,6 +12,8 @@
 
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_hook::{Class, Phase};
+use hostkeeper_proto::hostkeeper::release::v1 as release;
+use prost::Message;
 use serde_json::{Value, json};
 
 use crate::beat::{Feature, Features};
@@ -45,7 +48,43 @@ pub struct Target {
     /// that hashes to another. None from a coordinator that does not send one (and on the JSON
     /// route): the index is not checked.
     pub index_digest: Option<PackageDigest>,
+    /// The entry of the version's targets the coordinator picked for this host (gRPC route
+    /// only; `target-v1`): none from a coordinator that picks none, and always none on the JSON
+    /// route. The link carries whatever entry the protobuf decoded; the daemon judges it.
+    pub entry: Option<Entry>,
 }
+
+/// The entry of a release's targets that an order carries: the protobuf `Target` of
+/// `hostkeeper.release.v1`, unchanged. Two entries are equal when their encoded bytes are, so
+/// a resent order compares equal to the one it repeats and an entry that differs in any field
+/// is another order (the message holds floating-point fields and so is not `Eq` itself).
+#[derive(Clone, Debug)]
+pub struct Entry(release::Target);
+
+impl Entry {
+    /// The entry as the protobuf decoded it.
+    pub fn new(target: release::Target) -> Entry {
+        Entry(target)
+    }
+
+    /// The protobuf entry, borrowed.
+    pub fn as_target(&self) -> &release::Target {
+        &self.0
+    }
+
+    /// The protobuf entry, owned.
+    pub fn into_target(self) -> release::Target {
+        self.0
+    }
+}
+
+impl PartialEq for Entry {
+    fn eq(&self, other: &Entry) -> bool {
+        self.0.encode_to_vec() == other.0.encode_to_vec()
+    }
+}
+
+impl Eq for Entry {}
 
 /// The verbs the loop runs.
 #[derive(Clone, Debug, PartialEq, Eq)]

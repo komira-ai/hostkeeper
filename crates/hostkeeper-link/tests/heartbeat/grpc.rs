@@ -42,13 +42,13 @@ use crate::{digest, order_id, reply, service, version};
 /// The connections the link is handed: the client ends of in-memory streams the test queued,
 /// in order. With none queued, the dial is refused.
 #[derive(Default)]
-struct DuplexDial {
+pub(crate) struct DuplexDial {
     ends: Mutex<VecDeque<DuplexStream>>,
     dialed: Mutex<Vec<(String, u16)>>,
 }
 
 impl DuplexDial {
-    fn queue(&self, end: DuplexStream) {
+    pub(crate) fn queue(&self, end: DuplexStream) {
         self.ends.lock().expect("the ends").push_back(end);
     }
 
@@ -147,7 +147,7 @@ fn fresh(name: &str) -> (Scratch, Arc<Coordinator>) {
     (dir, coordinator)
 }
 
-fn grpc_link(
+pub(crate) fn grpc_link(
     farm: &Farm,
     pki: &Pki,
     dial: &Arc<DuplexDial>,
@@ -180,11 +180,12 @@ fn beat(services: Vec<ServiceFacts>) -> Heartbeat {
         sent_unix: 0,
         renewal: hostkeeper_link::Renewal::default(),
         trusted_root: None,
+        installers: Vec::new(),
     }
 }
 
 /// The heartbeat of a host running `web` at 1.0.
-fn web_beat() -> Heartbeat {
+pub(crate) fn web_beat() -> Heartbeat {
     beat(vec![facts("web", "1.0")])
 }
 
@@ -204,6 +205,7 @@ fn expected_reply() -> Reply {
                 version: version("2.0"),
                 digest: digest(),
                 index_digest: None,
+                entry: None,
             }),
         }),
         features: vec![
@@ -214,6 +216,7 @@ fn expected_reply() -> Reply {
             Feature::OrderV1,
             Feature::VerdictAcksV1,
             Feature::GrpcV1,
+            Feature::TargetV1,
         ],
         halt_generations: vec![(service("web"), 1)],
         acknowledged: Vec::new(),
@@ -587,6 +590,7 @@ fn the_grpc_link_refuses_a_heartbeat_one_byte_over_the_bound_and_dials_for_one_a
                 version: version("2.0"),
                 digest: digest(),
                 index_digest: None,
+                entry: None,
             }),
         };
         let mut done = verdict(&order, Outcome::Failed);

@@ -87,8 +87,10 @@ impl Packages for SweepFails {
         version: &Version,
         digest: &PackageDigest,
         index_digest: Option<&PackageDigest>,
+        entry: Option<&hostkeeper_proto::hostkeeper::release::v1::Target>,
     ) -> Result<VersionDir, PackageError> {
-        self.0.version_dir(service, version, digest, index_digest)
+        self.0
+            .version_dir(service, version, digest, index_digest, entry)
     }
 
     fn remove_orphans(&self, _service: &ServiceName) -> Result<(), PackageError> {
@@ -410,6 +412,7 @@ fn the_host_ports_are_built_from_flags_and_files_without_the_network() {
         ca_bundle: rig.scratch.path().join("ca.pem"),
         gh: rig.scratch.path().join("gh"),
         trusted_root: rig.scratch.path().join("trusted_root.json"),
+        stores: rig.scratch.path().join("stores.toml"),
         pki: rig.scratch.path().join("pki"),
         console: None,
         managed_config: None,
@@ -564,6 +567,7 @@ fn the_start_of_the_host_build_stops_at_the_ports_it_cannot_build() {
         ca_bundle: rig.scratch.path().join("ca.pem"),
         gh: rig.scratch.path().join("gh"),
         trusted_root: rig.scratch.path().join("trusted_root.json"),
+        stores: rig.scratch.path().join("stores.toml"),
         pki: rig.scratch.path().join("pki"),
         console: None,
         managed_config: None,
@@ -626,6 +630,7 @@ fn linux_files(ca_bundle: &str) -> HostFiles {
         ca_bundle: PathBuf::from(ca_bundle),
         gh: PathBuf::from("/usr/lib/hostkeeper/gh"),
         trusted_root: PathBuf::from("/usr/lib/hostkeeper/trusted_root.json"),
+        stores: PathBuf::from("/etc/hostkeeper/stores.toml"),
         pki: PathBuf::from("/etc/updater/pki"),
         console: Some(ConsoleFiles {
             issue: PathBuf::from("/run/hostkeeper/enrollment.issue"),
@@ -649,6 +654,7 @@ fn a_mac_keeps_gh_and_the_trusted_root_under_usr_local_and_reads_etc_ssl_cert_pe
         ca_bundle: PathBuf::from("/etc/ssl/cert.pem"),
         gh: PathBuf::from("/usr/local/lib/hostkeeper/gh"),
         trusted_root: PathBuf::from("/usr/local/lib/hostkeeper/trusted_root.json"),
+        stores: PathBuf::from("/etc/hostkeeper/stores.toml"),
         pki: PathBuf::from("/etc/updater/pki"),
         console: None,
         managed_config: Some(PathBuf::from(
