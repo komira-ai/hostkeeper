@@ -1,20 +1,28 @@
-//! `hostkeeper mac-config`: the daemon config of a Mac, written from the managed preferences the
-//! MDM installed. Every path is in a scratch directory, and the trusted owner is the uid the
-//! tests run as (the verb itself trusts root).
+//! The daemon config of a Mac, written from the managed preferences the MDM installed: by the
+//! start of a Mac's daemon when its config is not there, before it reads it
+//! ([`hostkeeper_daemon::mac_config::at_start`], docs/design/two-programs.md, section 2.1), and by
+//! the verb `hostkeeper mac-config` the pkg's `postinstall` still runs. Every path is in a scratch
+//! directory, and the trusted owner is the uid the tests run as (the verb and the host's start
+//! trust root).
 
 use std::cell::Cell;
 use std::ffi::OsString;
 use std::fs;
+use std::num::NonZeroU64;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::Parser;
 use hostkeeper_config::daemon::{Bounds, DaemonConfig};
-use hostkeeper_daemon::cli::{self, Cli, DEFAULT_CONFIG, EXIT_FAILED};
+use hostkeeper_config::manifest::HostkeeperVersion;
+use hostkeeper_daemon::cli::{self, Cli, DEFAULT_CONFIG, EXIT_CONFIG, EXIT_FAILED, HostFiles};
 use hostkeeper_daemon::mac_config::{
     Configured, HEADER, MacConfigError, finish, kept_line, mac_config, mac_config_with,
 };
+use hostkeeper_daemon::notify::NoNotifier;
+use hostkeeper_daemon::start::{Settings, StartError};
+use hostkeeper_launchd::Platform;
 use hostkeeper_launchd::postinstall::{DAEMON_CONFIG, MANAGED_CONFIG};
 use hostkeeper_testkit::Scratch;
 use plist::{Dictionary, Value};
@@ -57,6 +65,48 @@ impl Mac {
 
     fn run(&self) -> Result<Configured, MacConfigError> {
         mac_config(&self.managed, &self.config, me())
+    }
+
+    /// The daemon's start ([`cli::start_with`]) on this Mac's config and managed preferences,
+    /// their trusted owner the test's uid, its packages directory a file: a start that gets past
+    /// its config stops there, `Io` naming it, before it builds anything of the host. The
+    /// platform's adapters are Linux's, which a start on any build makes.
+    fn start(&self) -> StartError {
+        self.start_reading(Some(self.managed.clone()))
+    }
+
+    /// [`Mac::start`] with `managed` as the host's managed preferences: none is a Linux host's.
+    fn start_reading(&self, managed: Option<PathBuf>) -> StartError {
+        let packages = self.root().join("packages");
+        if !packages.exists() {
+            fs::write(&packages, b"not a directory").expect("a file at the packages path");
+        }
+        let settings = Settings {
+            config: self.config.clone(),
+            state_dir: self.root().join("state"),
+            packages_dir: packages,
+            admin_socket: self.root().join("run").join("admin.sock"),
+            trusted_uid: me(),
+            trusted_root_max_age_days: NonZeroU64::MIN,
+        };
+        let files = HostFiles {
+            ca_bundle: self.root().join("ca.pem"),
+            gh: self.root().join("gh"),
+            trusted_root: self.root().join("trusted_root.json"),
+            pki: self.root().join("pki"),
+            console: None,
+            managed_config: managed,
+        };
+        let own = HostkeeperVersion::parse("1.0.0").expect("a version");
+        cli::start_with(&settings, &files, own, &NoNotifier, &Platform::linux())
+            .err()
+            .expect("the start stops")
+    }
+
+    /// The start went past its config, written or kept, and loaded it: it stopped at the
+    /// packages directory that is a file.
+    fn past_config(&self, error: &StartError) -> bool {
+        matches!(error, StartError::Io { path, .. } if *path == self.root().join("packages"))
     }
 
     /// The names in the config's directory.
@@ -317,15 +367,58 @@ fn a_bad_value_is_refused_with_the_loaders_reason() {
     assert!(mac.error().starts_with(LOADER_REFUSAL));
 }
 
-/// Catches a verb that reads the managed file, or changes the config, when a config is there:
-/// the file's bytes stay, the managed file is not even required, and the line names the file.
+/// Catches a start of a Mac's daemon with no config that does not make one from the managed
+/// preferences, or makes one it then does not read: the config is written (the header, mode
+/// 0600), the start loads it and goes on; a second start keeps it. A Linux host's start (no
+/// managed preferences) never reads them, and stops at its missing config.
 #[test]
-fn mac_config_keeps_an_existing_file() {
+fn the_start_writes_the_config_from_the_managed_preferences_and_reads_it() {
+    let mac = Mac::new("mac-config-start-writes");
+    mac.write_binary(full());
+    let error = mac.start_reading(None);
+    assert!(
+        matches!(&error, StartError::Config { path, .. } if *path == mac.config),
+        "{error}"
+    );
+    assert!(!mac.parent().exists());
+
+    let error = mac.start();
+    assert!(mac.past_config(&error), "{error}");
+    let written = fs::read_to_string(&mac.config).expect("the config");
+    assert!(written.starts_with(HEADER), "{written}");
+    DaemonConfig::parse(&written).expect("the loader accepts it");
+    assert_eq!(
+        fs::metadata(&mac.config)
+            .expect("stat")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
+    fs::remove_file(&mac.managed).expect("remove");
+    let error = mac.start();
+    assert!(mac.past_config(&error), "{error}");
+    assert_eq!(fs::read_to_string(&mac.config).expect("kept"), written);
+    assert_eq!(mac.names(), ["hostkeeper.toml"]);
+}
+
+/// Catches a start, or the verb, that reads the managed file, or changes the config, when a
+/// config is there: the file's bytes stay, the managed file is not even required, the start reads
+/// the config that is there (here one its loader refuses, naming it), and the verb's line names
+/// the file.
+#[test]
+fn a_config_already_there_is_kept_by_the_start_and_the_verb() {
     let mac = Mac::new("mac-config-keeps");
     fs::create_dir(mac.parent()).expect("dir");
     fs::write(&mac.config, b"the operator's config").expect("config");
     // A managed config is present and valid; it is not used.
     mac.write_xml(full());
+    let error = mac.start();
+    assert!(
+        matches!(&error, StartError::Config { path, .. } if *path == mac.config),
+        "{error}"
+    );
+    assert_eq!(error.exit_code(), EXIT_CONFIG);
     assert_eq!(mac.run().expect("kept"), Configured::Kept);
     assert_eq!(
         fs::read(&mac.config).expect("config"),
@@ -334,6 +427,11 @@ fn mac_config_keeps_an_existing_file() {
     assert_eq!(mac.names(), ["hostkeeper.toml"]);
     // Nor is it read: with no managed file at all the config is kept.
     fs::remove_file(&mac.managed).expect("remove");
+    let error = mac.start();
+    assert!(
+        matches!(&error, StartError::Config { path, .. } if *path == mac.config),
+        "{error}"
+    );
     assert_eq!(mac.run().expect("kept"), Configured::Kept);
     assert_eq!(
         kept_line(&mac.config),
@@ -345,8 +443,9 @@ fn mac_config_keeps_an_existing_file() {
 }
 
 /// Catches a link or a directory at the config path being kept as a config, which would load a
-/// daemon whose loader refuses it (it opens the config without following a link): each is refused,
-/// named, left as it is, and the managed file is not used to replace it.
+/// daemon whose loader refuses it (it opens the config without following a link): each is refused
+/// by the start (exit 3) and by the verb, named, left as it is, and the managed file is not used
+/// to replace it.
 #[test]
 fn a_link_or_a_directory_at_the_config_path_is_refused_and_left() {
     let mac = Mac::new("mac-config-kept-kinds");
@@ -359,6 +458,19 @@ fn a_link_or_a_directory_at_the_config_path_is_refused_and_left() {
         mac.config.display()
     );
     symlink(&target, &mac.config).expect("link");
+    let error = mac.start();
+    assert!(
+        matches!(
+            &error,
+            StartError::MacConfig(MacConfigError::NotAFile { .. })
+        ),
+        "{error}"
+    );
+    assert_eq!(
+        error.to_string(),
+        format!("the daemon config is not made from the managed preferences: {refused}")
+    );
+    assert_eq!(error.exit_code(), EXIT_CONFIG);
     assert_eq!(mac.error(), refused);
     assert!(
         fs::symlink_metadata(&mac.config)
@@ -368,24 +480,46 @@ fn a_link_or_a_directory_at_the_config_path_is_refused_and_left() {
     assert_eq!(fs::read(&target).expect("target"), b"elsewhere");
     fs::remove_file(&mac.config).expect("remove");
     fs::create_dir(&mac.config).expect("dir");
+    let error = mac.start();
+    assert!(
+        matches!(
+            &error,
+            StartError::MacConfig(MacConfigError::NotAFile { .. })
+        ),
+        "{error}"
+    );
     assert_eq!(mac.error(), refused);
     assert!(mac.config.is_dir());
     assert_eq!(mac.names(), ["hostkeeper.toml"]);
 }
 
-/// Catches a verb that succeeds with no config and no managed file, which would load a daemon
-/// that cannot start.
+/// Catches a start, or a verb, that goes on with no config and no managed file, which would run
+/// a daemon that cannot start: the start stops with the config's exit status (3) naming both
+/// files, before it makes anything, and the verb fails the same way.
 #[test]
-fn mac_config_fails_with_neither_a_managed_config_nor_a_file() {
+fn with_no_managed_file_and_no_config_the_start_and_the_verb_fail() {
     let mac = Mac::new("mac-config-neither");
-    assert_eq!(
-        mac.error(),
-        format!(
-            "neither a managed config ({}) nor a config ({}) is there",
-            mac.managed.display(),
-            mac.config.display()
-        )
+    let neither = format!(
+        "neither a managed config ({}) nor a config ({}) is there",
+        mac.managed.display(),
+        mac.config.display()
     );
+    let error = mac.start();
+    assert!(
+        matches!(
+            &error,
+            StartError::MacConfig(MacConfigError::Neither { .. })
+        ),
+        "{error}"
+    );
+    assert_eq!(
+        error.to_string(),
+        format!("the daemon config is not made from the managed preferences: {neither}")
+    );
+    assert_eq!(error.exit_code(), EXIT_CONFIG);
+    assert!(!mac.parent().exists());
+    assert!(!mac.root().join("state").exists());
+    assert_eq!(mac.error(), neither);
     assert!(!mac.parent().exists());
 }
 

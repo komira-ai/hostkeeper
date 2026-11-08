@@ -470,6 +470,7 @@ fn rebuild(
         declared_params: Params::default(),
         min_updater_protocol: None,
         order_try: rec.order_try,
+        builtin_steps: crate::selfupdate::builtin_steps(service, manifest.min_hostkeeper),
     };
     let package = Package {
         verb: HookedVerb::Update,
