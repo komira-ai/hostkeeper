@@ -24,7 +24,7 @@ use hostkeeper_wire::wire::{OrderId, PackageDigest, ServiceReply};
 use hostkeeper_wire::{HostId, Platform};
 
 use crate::ops_file;
-use crate::orders::Order;
+use crate::orders::{Order, PickedTarget};
 use crate::registry::{Digest, Package, Registry};
 
 /// What an update answer carries for an agent that announced `order-v1`.
@@ -95,8 +95,13 @@ pub(crate) fn of_beat(
 }
 
 /// The update `reply` with its `terms` as a typed order: what a transport that carries typed
-/// orders sends for it. None for any other reply, or without terms.
-pub(crate) fn typed(reply: &ServiceReply, terms: Option<&Terms>) -> Option<Order> {
+/// orders sends for it, with the entry `target` picked for the host of a version set with targets
+/// ([`crate::picks`]). None for any other reply, or without terms.
+pub(crate) fn typed(
+    reply: &ServiceReply,
+    terms: Option<&Terms>,
+    target: Option<PickedTarget>,
+) -> Option<Order> {
     match (reply, terms) {
         (
             ServiceReply::Update {
@@ -111,6 +116,7 @@ pub(crate) fn typed(reply: &ServiceReply, terms: Option<&Terms>) -> Option<Order
             index_digest: terms.index_digest.clone(),
             order_id: terms.order_id.as_str().to_owned(),
             order_try: terms.order_try,
+            target,
         }),
         _ => None,
     }

@@ -118,6 +118,7 @@ export namespace hostkeeper_agent_v1 {
     lastRenewError?: string;
     trustedRootAgeSecs?: string;
     trustedRootReason?: hostkeeper_agent_v1.TrustedRootReason;
+    installers?: string[];
   }
   export type Outcome = "OUTCOME_UNSPECIFIED" | "OUTCOME_SUCCEEDED" | "OUTCOME_FAILED";
   export interface PinReport {
@@ -141,6 +142,7 @@ export namespace hostkeeper_agent_v1 {
     deferred?: hostkeeper_agent_v1.DeferredReport;
     pinned?: hostkeeper_agent_v1.PinReport;
     recordTry?: string;
+    installer?: string;
   }
   export interface StepRun {
     name?: string;
@@ -303,6 +305,7 @@ export namespace hostkeeper_operator_v1 {
     coordinatorCommit?: string;
     record?: hostkeeper_operator_v1.WriteRecord;
     force?: hostkeeper_operator_v1.ForceRecord;
+    installerDropped?: string[];
   }
   export type ConvergenceState =
     | "CONVERGENCE_STATE_UNSPECIFIED"
@@ -392,7 +395,10 @@ export namespace hostkeeper_operator_v1 {
     | "GATE_REASON_STAGE_FAILED"
     | "GATE_REASON_STAGE_WAIT"
     | "GATE_REASON_BELOW_MIN_UP"
-    | "GATE_REASON_ROLLOUT_ELSEWHERE";
+    | "GATE_REASON_ROLLOUT_ELSEWHERE"
+    | "GATE_REASON_NO_TARGET"
+    | "GATE_REASON_NO_BUILD_FOR_HOST"
+    | "GATE_REASON_INSTALLER_DROPPED";
   export interface GetHostRequest {
     nodeId?: string;
   }
@@ -462,6 +468,7 @@ export namespace hostkeeper_operator_v1 {
     firstServingUnix?: string;
     trustedRootAgeSecs?: string;
     trustedRootReason?: hostkeeper_agent_v1.TrustedRootReason;
+    installers?: string[];
   }
   export interface HostCounts {
     missing?: number;
@@ -469,6 +476,10 @@ export namespace hostkeeper_operator_v1 {
     excluded?: number;
     unmanaged?: number;
     deferred?: number;
+    picked?: number;
+    noTarget?: number;
+    noBuildForHost?: number;
+    installerDropped?: number;
   }
   export type HostHeld =
     | "HOST_HELD_UNSPECIFIED"

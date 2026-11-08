@@ -22,10 +22,14 @@
 //! again. A pair an operator held after the force was ordered is not sent it, unless the force
 //! included held pairs.
 
+use std::sync::Arc;
+
 use hostkeeper_proto::hostkeeper::agent::v1 as agent;
+use hostkeeper_proto::hostkeeper::release::v1::Target;
 use hostkeeper_wire::HostId;
 use hostkeeper_wire::version::Version;
 use hostkeeper_wire::wire::PackageDigest;
+use prost::Message as _;
 
 use crate::fleet::Fleet;
 use crate::ops::OpsState;
@@ -58,6 +62,39 @@ fn index_text(digest: Option<&Digest>) -> String {
     digest.map(ToString::to_string).unwrap_or_default()
 }
 
+/// The entry of a release picked for a host ([`crate::picks`]), as an order carries it to a daemon
+/// that announced [`crate::picks::TARGET_FEATURE`]. Two are equal when they encode to the same
+/// bytes.
+#[derive(Clone, Debug)]
+pub struct PickedTarget(Arc<Target>);
+
+impl PickedTarget {
+    /// The entry `target`.
+    #[must_use]
+    pub fn new(target: Target) -> Self {
+        Self(Arc::new(target))
+    }
+
+    /// The entry.
+    #[must_use]
+    pub fn target(&self) -> &Target {
+        &self.0
+    }
+}
+
+impl PartialEq for PickedTarget {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.encode_to_vec() == other.0.encode_to_vec()
+    }
+}
+
+impl Eq for PickedTarget {}
+
+/// The entry as the agent's messages carry it.
+fn target_of(target: Option<&PickedTarget>) -> Option<Target> {
+    target.map(|picked| picked.target().clone())
+}
+
 /// An order a heartbeat answer carries as a typed order: an operator's, or the rollout gate's
 /// update with its terms, install or uninstall.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -79,6 +116,9 @@ pub enum Order {
         order_id: String,
         /// The try ([`Fleet::next_try`]).
         order_try: u64,
+        /// The entry of the release picked for the host, for a version set with targets and a
+        /// daemon that announced [`crate::picks::TARGET_FEATURE`]; its digest is `digest`.
+        target: Option<PickedTarget>,
     },
     /// Stop the service's running step and end its order in the halt phase.
     Abort {
@@ -112,6 +152,9 @@ pub enum Order {
         order_id: String,
         /// The try ([`Fleet::next_try`]).
         order_try: u64,
+        /// The entry of the release picked for the host, for a version set with targets and a
+        /// daemon that announced [`crate::picks::TARGET_FEATURE`]; its digest is `digest`.
+        target: Option<PickedTarget>,
     },
     /// Add a service the coordinator assigned to the host, by the update path with no previous
     /// version.
@@ -129,6 +172,9 @@ pub enum Order {
         order_id: String,
         /// The try ([`Fleet::next_try`]).
         order_try: u64,
+        /// The entry of the release picked for the host, for a version set with targets and a
+        /// daemon that announced [`crate::picks::TARGET_FEATURE`]; its digest is `digest`.
+        target: Option<PickedTarget>,
     },
     /// Stop the service's units, run its `uninstall` hook and remove its package and placed
     /// paths.
@@ -156,6 +202,7 @@ impl Order {
                 index_digest,
                 order_id,
                 order_try,
+                target,
             } => (
                 order_id,
                 *order_try,
@@ -164,6 +211,7 @@ impl Order {
                     version: version.to_string(),
                     package_digest: digest.as_str().to_owned(),
                     index_digest: index_text(index_digest.as_ref()),
+                    target: target_of(target.as_ref()),
                 }),
             ),
             Self::Abort { service, order_id } => (
@@ -188,6 +236,7 @@ impl Order {
                 halt_generation,
                 order_id,
                 order_try,
+                target,
             } => (
                 order_id,
                 *order_try,
@@ -197,6 +246,7 @@ impl Order {
                     package_digest: digest.to_string(),
                     halt_generation: *halt_generation,
                     index_digest: index_text(index_digest.as_ref()),
+                    target: target_of(target.as_ref()),
                 }),
             ),
             Self::Install {
@@ -206,6 +256,7 @@ impl Order {
                 index_digest,
                 order_id,
                 order_try,
+                target,
             } => (
                 order_id,
                 *order_try,
@@ -214,6 +265,7 @@ impl Order {
                     version: version.to_string(),
                     package_digest: digest.to_string(),
                     index_digest: index_text(index_digest.as_ref()),
+                    target: target_of(target.as_ref()),
                 }),
             ),
             Self::Uninstall {
@@ -282,8 +334,13 @@ fn force_for(fleet: &Fleet, state: &OpsState, service: &str, id: &HostId) -> Opt
     let ordered = force.hosts.iter().any(|host| host == id.as_str());
     let held = !force.include_held && fleet.is_held(service, id);
     // The package of the host's own platform; a platform the force's index does not list is
-    // ordered nothing (the plan left such a host out when it was made).
-    let package = force.package_for(host.beat.platform)?;
+    // ordered nothing (the plan left such a host out when it was made). Of a version set with
+    // targets, the entry picked for the host ([`crate::picks`]), as the rollout gate picks it;
+    // a host picked nothing, or whose installers are not read yet, is not sent the force.
+    let (package, target) = match crate::picks::order_of(fleet, service, &force.version, id) {
+        Some(picked) => picked.map(|o| (o.package, o.target))?,
+        None => (force.package_for(host.beat.platform)?, None),
+    };
     (ordered && !done && !held).then(|| Order::Force {
         service: service.to_owned(),
         version: force.version.clone(),
@@ -292,5 +349,6 @@ fn force_for(fleet: &Fleet, state: &OpsState, service: &str, id: &HostId) -> Opt
         halt_generation: force.halt_generation,
         order_id,
         order_try: fleet.next_try(service, id),
+        target,
     })
 }
