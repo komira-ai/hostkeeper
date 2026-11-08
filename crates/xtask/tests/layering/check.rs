@@ -40,6 +40,7 @@ const PACKAGE: &str = "hostkeeper-package";
 const PLACED: &str = "hostkeeper-placed";
 const PRIVILEGED: &str = "hostkeeper-privileged";
 const PXE_SEED: &str = "hostkeeper-pxe-seed";
+const RELEASE: &str = "hostkeeper-release";
 const UI_TESTS: &str = "hostkeeper-ui-tests";
 const BINARY: &str = "hostkeeper";
 const HELLO: &str = "hello";
@@ -163,6 +164,7 @@ pub const LAYERS: [Layer; 31] = [
     ),
     (PXE_PACKETS, &[WIRE], &[]),
     (PXE_SEED, &[CONFIG, ENROLLMENT, WIRE], &[]),
+    (RELEASE, &[CONFIG, PROTO], &[]),
     (STEPS, &[CONFIG, HOOK], &[]),
     (TLS, &[], &[]),
     (UI_TESTS, &[PROTO], &[COORDINATOR, OIDC]),

@@ -14,6 +14,8 @@
 //!   the loop keeps beating while a step runs;
 //! - [`HeldHalts`]: the persisted halt generations;
 //! - [`RenewalSource`]: what the enrollment loop last said of the host's certificate;
+//! - [`TrustedRootSource`]: the daemon's report of the Sigstore trusted root it checks packages
+//!   with;
 //! - [`UnixClock`], [`Log`] and [`Sleeper`].
 //!
 //! Its own types are in [`beat`] (what is sent, and the bound it keeps), [`order`] (the order,
@@ -52,7 +54,8 @@ mod wire_map;
 
 pub use beat::{
     ANNOUNCED, Feature, Features, Fitted, Health, Heartbeat, Liveness, MAX_HEARTBEAT_BYTES,
-    Observed, OptionalFact, Oversize, Platform, Renewal, ServiceFacts, fit,
+    Observed, OptionalFact, Oversize, Platform, Renewal, RootReason, ServiceFacts,
+    TrustedRootFacts, fit,
 };
 pub use deferral::{Deferral, DeferralError, Deferrals};
 pub use dial::{CALL_SECS, TcpDial, TcpTransport};
@@ -71,5 +74,5 @@ pub use ports::{
     CertSource, CertState, ClientIdentity, ClockSleeper, CoordinatorLink, Dispatch, HeldHalts, Job,
     LinkError, Log, Observation, OrderSink, RecordedService, RenewalSource, ReplyFault,
     ServiceObserver, ServiceRecords, Sleeper, StopFlag, ThreadDispatch, Tick, TrustFault,
-    UnixClock, Unsendable,
+    TrustedRootSource, UnixClock, Unsendable,
 };

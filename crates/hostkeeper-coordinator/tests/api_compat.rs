@@ -115,7 +115,11 @@ async fn the_json_answer_and_the_typed_order_carry_the_same_update() {
     let next: Heartbeat = serde_json::from_str(&beat(&["order-v1"])).expect("a heartbeat");
     let (answer, order) = rig
         .coordinator
-        .heartbeat_with_orders(who, next)
+        .heartbeat_with_orders(
+            who,
+            next,
+            hostkeeper_coordinator::trusted_root::TrustedRootSaid::default(),
+        )
         .expect("an answer");
     assert_eq!(answer, json, "the answer is the same on both");
     let typed = order.expect("a typed order").to_proto();

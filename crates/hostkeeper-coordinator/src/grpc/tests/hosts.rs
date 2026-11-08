@@ -33,7 +33,7 @@ const HOSTS_LIST: &str =
 
 /// A coordinator of the recorded kbf service with the enrollment of `enrollment`, its audit
 /// file's clock fixed.
-fn world_over(name: &str, enrollment: &EnrollmentRig) -> World {
+pub(super) fn world_over(name: &str, enrollment: &EnrollmentRig) -> World {
     let rig = Rig::new(name);
     let started =
         Rig::start(&rig.dir, &rig.clock).with_enrollment(Arc::clone(&enrollment.enrollment));
@@ -41,7 +41,7 @@ fn world_over(name: &str, enrollment: &EnrollmentRig) -> World {
 }
 
 /// The operator's gRPC call of `path` with `message`: the code, its message, and the reply.
-async fn operator_call<M: Message + Default>(
+pub(super) async fn operator_call<M: Message + Default>(
     world: &World,
     path: &str,
     message: impl Message,

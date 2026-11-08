@@ -44,6 +44,7 @@ fn node(seen: u64) -> Node {
         sent_unix: None,
         cert_not_after_unix: None,
         last_renew_error: None,
+        trusted_root: crate::trusted_root::TrustedRootSaid::default(),
         skewed_beats: 0,
     }
 }
@@ -587,6 +588,7 @@ fn alerts_come_by_kind_then_service_and_host() {
         Kind::SilentHost,
         Kind::CertNearExpiry,
         Kind::StoreUnreachable,
+        Kind::TrustedRoot,
     ];
     assert_eq!(
         all.map(Kind::log_token),
@@ -601,11 +603,12 @@ fn alerts_come_by_kind_then_service_and_host() {
             "silent_host",
             "cert_near_expiry",
             "store_unreachable",
+            "trusted_root",
         ]
     );
     assert_eq!(
         all.map(|kind| kind.proto() as i32),
-        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
     );
     let critical: Vec<Kind> = all
         .into_iter()
@@ -618,6 +621,70 @@ fn alerts_come_by_kind_then_service_and_host() {
             Kind::Duplicate,
             Kind::FailedCanary,
             Kind::StoreUnreachable
+        ]
+    );
+}
+
+/// Catches a `trusted_root` alert for a host whose root needs no attention or is unknown, one
+/// that does not name its host, its reason or its age, and one host's reason put on another:
+/// of five live hosts, the stale, missing and unparseable ones each raise one warning naming the
+/// host, the reason and the age it said (none for the missing one), in host order, and the hosts
+/// whose root needs no attention or said nothing of it raise none.
+#[test]
+fn trusted_root_names_each_host_whose_root_needs_attention() {
+    use crate::trusted_root::TrustedRootSaid;
+    use hostkeeper_proto::hostkeeper::agent::v1::TrustedRootReason;
+
+    let mut fleet = Fleet::new(Duration::ZERO, QUIET_START);
+    let roots = [
+        ("d1", Some(91 * 86_400), TrustedRootReason::Stale),
+        ("d2", Some(60), TrustedRootReason::None),
+        ("d3", None, TrustedRootReason::Missing),
+        ("d4", None, TrustedRootReason::Unspecified),
+        ("d5", Some(0), TrustedRootReason::Unparseable),
+    ];
+    for (host, age_secs, reason) in roots {
+        let mut said = node(990);
+        said.trusted_root = TrustedRootSaid { age_secs, reason };
+        fleet.note_node(id(host), said, UNIX);
+    }
+    let alerts: Vec<(Subject, proto::AlertSeverity, String)> =
+        derived(&fleet, &OpsState::default(), &quiet_store())
+            .into_iter()
+            .map(|alert| {
+                let severity = alert.subject.kind.severity();
+                (alert.subject, severity, alert.message)
+            })
+            .collect();
+    let then = "update hostkeeper on it, or copy a current root to it";
+    assert_eq!(
+        alerts,
+        [
+            (
+                subject(Kind::TrustedRoot, "", "d1", ""),
+                proto::AlertSeverity::Warning,
+                format!(
+                    "d1 reports its Sigstore trusted root stale (7862400 s old): its package \
+                     checks go on, and refuse every package signed after a Sigstore key rotation \
+                     the root does not hold; {then}"
+                ),
+            ),
+            (
+                subject(Kind::TrustedRoot, "", "d3", ""),
+                proto::AlertSeverity::Warning,
+                format!(
+                    "d3 reports its Sigstore trusted root missing (no age): its package checks \
+                     fail; {then}"
+                ),
+            ),
+            (
+                subject(Kind::TrustedRoot, "", "d5", ""),
+                proto::AlertSeverity::Warning,
+                format!(
+                    "d5 reports its Sigstore trusted root unparseable (0 s old): its package \
+                     checks fail; {then}"
+                ),
+            ),
         ]
     );
 }

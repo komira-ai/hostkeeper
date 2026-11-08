@@ -58,6 +58,8 @@ fn request(
         sent_unix: None,
         cert_not_after_unix: None,
         last_renew_error: None,
+        trusted_root_age_secs: None,
+        trusted_root_reason: 0,
     }
 }
 
