@@ -550,7 +550,7 @@ comment changes to say that no daemon runs the command. It keeps a straggler's a
 
 ### 4.5 How each step is proven
 
-Every pull request of the path runs the self-update device tests that exist today, unchanged in stage 1:
+The pull requests of the path run the self-update device tests that exist today, unchanged in stage 1 (the `privileged` job on every pull request, `macos-device` when the pull request changes a path the macOS jobs build or read):
 
 - **Linux, as root under systemd**, in `pr-device.yml`'s `privileged` job and `privileged.yml`
   (`crates/hostkeeper-privileged/tests/self_update.rs`): `a_next_binary_that_starts_settles_the_update_succeeded_and_is_what_the_unit_runs`,
