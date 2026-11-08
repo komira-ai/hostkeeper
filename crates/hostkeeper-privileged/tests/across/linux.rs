@@ -221,11 +221,21 @@ impl Host {
     }
 
     /// Starts the daemon's unit again, on whatever `current` of the binary directory names now:
-    /// `systemctl start` returns once the daemon is ready.
+    /// `systemctl reset-failed` first, as an operator's deliberate restart starts the unit's
+    /// start-limit count afresh (the self-update restarts before it and the one after it would
+    /// otherwise share one burst with it, and the next restart would hit the limit and run the
+    /// fallback), then `systemctl start`, which returns once the daemon is ready.
     ///
     /// # Panics
-    /// The unit does not start.
+    /// The unit's count cannot be reset, or the unit does not start.
     pub fn start_again(&self) {
+        let reset = systemctl(&["reset-failed", MAIN]);
+        assert!(
+            reset.status.success(),
+            "systemctl reset-failed {MAIN} failed: {}\n{}",
+            String::from_utf8_lossy(&reset.stderr),
+            self.logs()
+        );
         let started = systemctl(&["start", MAIN]);
         assert!(
             started.status.success(),
