@@ -133,6 +133,7 @@ fn an_unspecified_or_malformed_order_is_refused_naming_the_field() {
         ),
         (
             with_verb(order::Verb::Install(Install {
+                target: None,
                 service: "web".to_owned(),
                 version: "2.0.0".to_owned(),
                 package_digest: short.clone(),
@@ -143,6 +144,7 @@ fn an_unspecified_or_malformed_order_is_refused_naming_the_field() {
         ),
         (
             with_verb(order::Verb::Force(Force {
+                target: None,
                 service: "web".to_owned(),
                 version: ".1".to_owned(),
                 package_digest: ok.clone(),

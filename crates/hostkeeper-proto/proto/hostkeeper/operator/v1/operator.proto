@@ -435,6 +435,11 @@ message Host {
   // field or keeps no root, or its last heartbeat came by the JSON route, which carries no
   // trusted root.
   hostkeeper.agent.v1.TrustedRootReason trusted_root_reason = 20;
+  // The installers the host's daemon listed in its last heartbeat over gRPC
+  // (`HeartbeatRequest.installers`), which the coordinator picks the host's entry of a release
+  // by. Empty when the coordinator has read none since it started: the daemon predates the field
+  // or has beaten only over the JSON route.
+  repeated string installers = 21;
 }
 
 // A host taken out of a service.
@@ -540,6 +545,18 @@ enum GateReason {
   GATE_REASON_BELOW_MIN_UP = 29;
   // Other services' rollouts are live, as many as the coordinator's `--live-rollouts` lets be.
   GATE_REASON_ROLLOUT_ELSEWHERE = 30;
+  // The desired version was set with targets and none for the host's platform: the host is not
+  // ordered the version, keeps what it runs, and this is no failed update and no missing host.
+  GATE_REASON_NO_TARGET = 31;
+  // The desired version's list for the host's platform has no entry whose installer the host's
+  // daemon lists (`Host.installers`), and the host does not run the service: no build for this
+  // host. Not ordered, not failed, not missing, and it does not hold the convergence.
+  GATE_REASON_NO_BUILD_FOR_HOST = 32;
+  // The host runs the service with an installer the desired version's list has no entry of, or
+  // that its daemon no longer lists: it is not ordered the version, since a service changes its
+  // installer on a host only by an uninstall. Not failed, and `Convergence.installer_dropped`
+  // names it.
+  GATE_REASON_INSTALLER_DROPPED = 33;
 }
 
 // Whether a service counts a host.
@@ -788,6 +805,9 @@ message Convergence {
   WriteRecord record = 8;
   // The force that stands, if one does.
   ForceRecord force = 9;
+  // The hosts that run the service with an installer the desired version's list has no entry
+  // of, or that their daemon no longer lists (`GATE_REASON_INSTALLER_DROPPED`), by node id.
+  repeated string installer_dropped = 10;
 }
 
 enum ConvergenceState {
@@ -830,6 +850,13 @@ message HostCounts {
   uint32 unmanaged = 4;
   // Live, and declined the desired version for now. Also counted in `roles`.
   uint32 deferred = 5;
+  // For a desired version set with targets: the hosts of the service picked an entry of it, and
+  // those picked none, by why (`GateReason` 31 to 33). Hosts picked none are not counted in
+  // `roles`; a version no host is picked for is not converged.
+  uint32 picked = 6;
+  uint32 no_target = 7;
+  uint32 no_build_for_host = 8;
+  uint32 installer_dropped = 9;
 }
 
 // Fix a service on every targeted host at once, with no hook, because a broken hook is often
@@ -898,7 +925,9 @@ message ForceResponse {
 message SkippedHost {
   string node_id = 1;
   // Why, as a token: `daemon_too_old` (its daemon did not announce `forced-v1`), `held`,
-  // `unknown_target`. Open: a later coordinator adds reasons.
+  // `unknown_target`, `no_package_for_platform`, and for a version set with targets `no_target`,
+  // `no_build_for_host` and `installer_dropped` (as `GateReason` says them). Open: a later
+  // coordinator adds reasons.
   string reason = 2;
 }
 

@@ -164,6 +164,7 @@ fn order(verb: pb::order::Verb) -> pb::HeartbeatResponse {
 
 fn terms(service: &str, version: &str, digest: &str) -> pb::Update {
     pb::Update {
+        target: None,
         service: service.to_owned(),
         version: version.to_owned(),
         package_digest: digest.to_owned(),
@@ -205,6 +206,7 @@ fn a_heartbeat_with_every_fact_maps_to_the_request_field_for_field() {
     assert_eq!(
         request,
         pb::HeartbeatRequest {
+            installers: Vec::new(),
             platform: pb::Platform::LinuxArm64 as i32,
             agent: Some(pb::AgentInfo {
                 name: AGENT_NAME.to_owned(),
@@ -482,6 +484,7 @@ fn every_verb_the_loop_runs_is_its_order() {
     );
     assert_eq!(updated.dropped, None);
     let forced = reply(order(pb::order::Verb::Force(pb::Force {
+        target: None,
         service: "web".to_owned(),
         version: "2.0".to_owned(),
         package_digest: digest(),
@@ -498,6 +501,7 @@ fn every_verb_the_loop_runs_is_its_order() {
     );
     assert_eq!(forced.dropped, None);
     let installed = reply(order(pb::order::Verb::Install(pb::Install {
+        target: None,
         service: "web".to_owned(),
         version: "2.0".to_owned(),
         package_digest: digest(),
@@ -549,6 +553,7 @@ fn an_index_digest_of_an_order_is_kept_and_an_empty_one_is_none() {
             ..terms("web", "2.0", &digest())
         }))),
         reply(order(pb::order::Verb::Force(pb::Force {
+            target: None,
             service: "web".to_owned(),
             version: "2.0".to_owned(),
             package_digest: digest(),
@@ -556,6 +561,7 @@ fn an_index_digest_of_an_order_is_kept_and_an_empty_one_is_none() {
             index_digest: index_digest(),
         }))),
         reply(order(pb::order::Verb::Install(pb::Install {
+            target: None,
             service: "web".to_owned(),
             version: "2.0".to_owned(),
             package_digest: digest(),
@@ -593,6 +599,7 @@ fn a_malformed_index_digest_drops_the_order() {
                 ..terms("web", "2.0", &digest())
             }))),
             reply(order(pb::order::Verb::Install(pb::Install {
+                target: None,
                 service: "web".to_owned(),
                 version: "2.0".to_owned(),
                 package_digest: digest(),
@@ -612,6 +619,7 @@ fn a_malformed_index_digest_drops_the_order() {
 #[test]
 fn an_order_of_another_verb_or_none_is_dropped_with_why() {
     let rollback = reply(order(pb::order::Verb::ForceRollback(pb::ForceRollback {
+        target: None,
         service: "web".to_owned(),
         version: "1.0".to_owned(),
         package_digest: digest(),
@@ -649,6 +657,7 @@ fn an_order_with_an_unreadable_word_is_dropped_with_why() {
         assert_eq!(dropped.why, NOT_READ);
     }
     let mut forced = order(pb::order::Verb::Force(pb::Force {
+        target: None,
         service: "web".to_owned(),
         version: "2.0".to_owned(),
         package_digest: digest(),
@@ -664,6 +673,7 @@ fn an_order_with_an_unreadable_word_is_dropped_with_why() {
     let named = [
         (
             pb::order::Verb::Install(pb::Install {
+                target: None,
                 service: "web".to_owned(),
                 version: "2.0".to_owned(),
                 package_digest: "not-a-digest".to_owned(),
