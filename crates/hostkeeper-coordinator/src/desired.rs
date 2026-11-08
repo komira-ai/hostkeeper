@@ -543,8 +543,6 @@ impl std::fmt::Debug for DesiredStore {
     }
 }
 
-/// A desired state made and not yet in memory: what [`DesiredStore::stage`] answers, for a change
-/// that commits it with another part ([`crate::force`]). The store's writers wait while it lives.
 /// What a write records beside the state: its version's digest or index in the registry, its
 /// release ([`crate::releases`]), and its write id.
 struct Staging {
@@ -564,6 +562,8 @@ impl Staging {
     }
 }
 
+/// A desired state made and not yet in memory: what [`DesiredStore::stage`] answers, for a change
+/// that commits it with another part ([`crate::force`]). The store's writers wait while it lives.
 pub(crate) struct Staged<'a> {
     store: &'a DesiredStore,
     _writer: MutexGuard<'a, ()>,
