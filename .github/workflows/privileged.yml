@@ -43,8 +43,8 @@
 # crates/hostkeeper-privileged/previous-release.toml, and gives it no write scope; it refuses root
 # in every other workflow but net-install.yml, and
 # macOS in every workflow that runs for a pull request, but in pr-device.yml,
-# whose jobs privileged and macos-device are copies of this file's, step for step, run on every
-# pull request. A release waits for a successful push run of
+# whose jobs privileged and macos-device are copies of this file's, step for step, run on a pull
+# request (macos-device when the pull request changes a path the macOS jobs build or read). A release waits for a successful push run of
 # this workflow on its commit (release.yml); pr-device.yml is no part of a release.
 #
 # In the job privileged, linux_packages.rs also installs the deb, the rpm and the Arch package,
