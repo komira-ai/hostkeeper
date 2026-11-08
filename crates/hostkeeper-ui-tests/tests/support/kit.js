@@ -3,21 +3,33 @@
 // does, queries over the view trees pages return, and a fake document that records every element
 // it makes. The assertions are in the Rust tests; this only drives and reports.
 
-import { createApi } from "../ui/api.js";
+import { createApi, createCall } from "../ui/api.js";
 import * as session from "../ui/session.js";
 import { mount } from "../ui/view.js";
 
-// The data layer over the fake gateway, signed in with `token`, or signed out when it is null.
-export function api(token) {
+// What the data layer is given over the fake gateway, signed in with `token`, or signed out
+// when it is null.
+function gateway(token) {
   session.signOut();
   if (token !== null) {
     session.signIn(token);
   }
-  return createApi({
+  return {
     fetch: gatewayFetch,
     getToken: session.getToken,
     clearToken: (_, refused) => session.forget(refused),
-  });
+  };
+}
+
+// The generated client over the data layer and the fake gateway, signed in with `token`.
+export function api(token) {
+  return createApi(gateway(token));
+}
+
+// The data layer's own `call(method, body)` alone, signed in with `token`: how a test sends a
+// method name that no function of the client would.
+export function transport(token) {
+  return createCall(gateway(token));
 }
 
 // The time a page context reads, in unix seconds, unless a test gives another.

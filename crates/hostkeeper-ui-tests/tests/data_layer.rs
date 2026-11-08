@@ -3,6 +3,8 @@
 
 mod support;
 
+use hostkeeper_proto::ctl::COMMANDS;
+use hostkeeper_ui_tests::client_gen::functions;
 use serde_json::{Value, json};
 use support::Ui;
 
@@ -14,18 +16,43 @@ const FORCE: &str = "hostkeeper.operator.v1.Releases/Force";
 /// reason's grammar.
 const TOKEN: &str = "tok_7f3a9c41e2b85d06";
 
-/// A driver that signs in with `TOKEN`, calls `method` with `body` and returns what happened:
-/// `{reply}` or `{error: {name, message, code, reason, httpStatus, signInRequired}}`, and
-/// whether a token is still held.
+/// How a driver calls `method` through the generated client: `hosts.list` for
+/// `hostkeeper.operator.v1.Hosts/List`.
+fn function(method: &str) -> String {
+    functions(COMMANDS)
+        .into_iter()
+        .find(|f| f.method == method)
+        .unwrap_or_else(|| panic!("{method} is not a function of the generated client"))
+        .call()
+}
+
+/// A driver that signs in with `TOKEN`, calls `method` with `body` through the generated
+/// client and returns what happened: `{reply}` or
+/// `{error: {name, message, code, reason, httpStatus, signInRequired}}`, and whether a token is
+/// still held.
 fn call_driver(method: &str, body: &str) -> String {
+    driver(&format!("api(\"{TOKEN}\").{}", function(method)), body)
+}
+
+/// [`call_driver`], with the data layer's own `call` given `name` as the method: what no
+/// function of the client would send.
+fn raw_driver(name: &str, body: &str) -> String {
+    driver(
+        &format!("((request) => transport(\"{TOKEN}\")(\"{name}\", request))"),
+        body,
+    )
+}
+
+/// A driver that calls `call` (a function of one request) with `body`, as [`call_driver`]
+/// describes.
+fn driver(call: &str, body: &str) -> String {
     format!(
         r#"
-import {{ api }} from "../test/kit.js";
+import {{ api, transport }} from "../test/kit.js";
 import {{ getToken }} from "./session.js";
 export async function main() {{
-  const client = api("{TOKEN}");
   try {{
-    const reply = await client.call("{method}", {body});
+    const reply = await {call}({body});
     return {{ reply, signedIn: getToken() !== null }};
   }} catch (e) {{
     return {{
@@ -34,7 +61,7 @@ export async function main() {{
       signedIn: getToken() !== null,
     }};
   }}
-}}"#
+}}"#,
     )
 }
 
@@ -128,9 +155,10 @@ fn a_refusal_that_holds_the_token_loses_its_reason() {
 import {{ api }} from "../test/kit.js";
 import {{ describeError }} from "./view.js";
 export async function main() {{
-  try {{ await api("{token}").call("{LIST}", {{}}); return "replied"; }}
+  try {{ await api("{token}").{list}({{}}); return "replied"; }}
   catch (e) {{ return {{ message: e.message, reason: e.reason, shown: describeError(e), text: String(e) }}; }}
-}}"#
+}}"#,
+            list = function(LIST)
         ));
         assert_eq!(
             out,
@@ -145,9 +173,10 @@ export async function main() {{
         r#"
 import {{ api }} from "../test/kit.js";
 export async function main() {{
-  try {{ await api("TOK_DEMO_42").call("{LIST}", {{}}); return "replied"; }}
+  try {{ await api("TOK_DEMO_42").{list}({{}}); return "replied"; }}
   catch (e) {{ return [e.code, e.reason, e.message]; }}
-}}"#
+}}"#,
+        list = function(LIST)
     ));
     assert_eq!(
         out,
@@ -195,11 +224,12 @@ export async function main() {{
   const client = api(null);
   for (const pasted of [null, "", "   "]) {{
     out.push(signIn(pasted));
-    try {{ await client.call("{LIST}", {{}}); out.push("sent"); }}
+    try {{ await client.{list}({{}}); out.push("sent"); }}
     catch (e) {{ out.push([e.code, e.signInRequired, e.httpStatus]); }}
   }}
   return out;
-}}"#
+}}"#,
+        list = function(LIST)
     ));
     let refused = json!(["SIGN_IN_REQUIRED", true, 0]);
     assert_eq!(out, json!([false, refused, false, refused, false, refused]));
@@ -215,7 +245,7 @@ fn a_bad_method_name_sends_nothing() {
         "hostkeeper.operator.v1.Hosts.List",
         "/hostkeeper.operator.v1.Hosts/List",
     ] {
-        let out = ui.run(&call_driver(name, "{}"));
+        let out = ui.run(&raw_driver(name, "{}"));
         assert_eq!(out["error"]["code"], "BAD_METHOD", "{name}");
     }
     assert!(ui.requests().is_empty());
@@ -312,11 +342,12 @@ export async function main() {{
   const client = api("{TOKEN}");
   const out = [];
   for (let i = 0; i < 2; i++) {{
-    try {{ await client.call("{LIST}", {{}}); out.push("replied"); }}
+    try {{ await client.{list}({{}}); out.push("replied"); }}
     catch (e) {{ out.push([e.code, e.signInRequired]); }}
   }}
   return out;
-}}"#
+}}"#,
+            list = function(LIST)
         ));
         let first = if code.is_empty() || status == 401 {
             "UNAUTHENTICATED"
@@ -372,7 +403,7 @@ fn the_token_is_not_in_any_error_message_or_rendered_text() {
         assert!(!out.to_string().contains(TOKEN), "{status} {body}: {out}");
     }
     let mut ui = Ui::start();
-    let out = ui.run(&call_driver("not a method", "{}"));
+    let out = ui.run(&raw_driver("not a method", "{}"));
     assert!(!out.to_string().contains(TOKEN), "{out}");
 
     // The app: sign in through the form, fail every page's first call, then be refused.
@@ -401,7 +432,7 @@ export async function main() {{
   startApp({{ doc, root: doc.root, fetch: gatewayFetch, confirm: () => true, now: () => 1800000000 }});
   fire(domNamed(doc.root, "token"), "input", {{ target: {{ value: "{TOKEN}" }} }});
   fire(doc.root.children[0], "submit", {{ preventDefault() {{}} }});
-}}"#
+}}"#,
     ));
     let shown = ui.run(
         r#"
@@ -485,7 +516,7 @@ export async function main() {{
   startApp({{ doc, root: doc.root, fetch: gatewayFetch, confirm: () => true, now: () => 1800000000 }});
   fire(domNamed(doc.root, "token"), "input", {{ target: {{ value: "{TOKEN}" }} }});
   fire(doc.root.children[0], "submit", {{ preventDefault() {{}} }});
-}}"#
+}}"#,
     ));
     let shown = ui.run(
         r#"
@@ -516,7 +547,7 @@ export async function main() {{
   startApp({{ doc, root: doc.root, fetch: gatewayFetch, confirm: () => true, now: () => 1800000000 }});
   fire(domNamed(doc.root, "token"), "input", {{ target: {{ value: "{TOKEN}" }} }});
   fire(doc.root.children[0], "submit", {{ preventDefault() {{}} }});
-}}"#
+}}"#,
     ));
     let before = ui.run(
         r#"
@@ -638,7 +669,7 @@ export async function main() {{
   }}
   const unprepared = await sendForce(client, null, "1");
   return {{ count: prepared.count, wrong, right, failedOk: failed.ok, afterFailure, unprepared }};
-}}"#
+}}"#,
     ));
     assert_eq!(out["count"], 1);
     assert!(

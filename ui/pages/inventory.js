@@ -140,7 +140,7 @@ function recordRow(ctx, record, removal, opening, chosen) {
         if (reason !== "" && reasonProblem(reason) !== null) {
           return reasonProblem(reason);
         }
-        const reply = await ctx.api.call("hostkeeper.operator.v1.Enrollment/OpenRecord",
+        const reply = await ctx.api.enrollment.openRecord(
           Object.assign({ hostId: record.hostId, reason }, window));
         ctx.refresh();
         const until = reply.record ? reply.record.approveUntilUnix : undefined;
@@ -155,7 +155,7 @@ function recordRow(ctx, record, removal, opening, chosen) {
       if (reasonProblem(reason) !== null) {
         return reasonProblem(reason);
       }
-      await ctx.api.call("hostkeeper.operator.v1.Enrollment/RemoveRecord", { hostId: record.hostId, reason });
+      await ctx.api.enrollment.removeRecord({ hostId: record.hostId, reason });
       ctx.refresh();
       return `Removed the record of ${record.hostId}.`;
     })));
@@ -170,7 +170,7 @@ export async function render(ctx) {
   const kept = shown === "" ? {} : { enrolled: shown };
   let listed;
   try {
-    listed = await ctx.api.call("hostkeeper.operator.v1.Enrollment/ListRecords",
+    listed = await ctx.api.enrollment.listRecords(
       Object.assign({ limit: PAGE_SIZE, pageToken }, filter));
   } catch (error) {
     return errorView("Inventory", error);
@@ -228,7 +228,7 @@ export async function render(ctx) {
         if (typeof body === "string") {
           return body;
         }
-        const reply = await ctx.api.call("hostkeeper.operator.v1.Enrollment/AddRecord", body);
+        const reply = await ctx.api.enrollment.addRecord(body);
         ctx.refresh();
         return `Recorded ${reply.record ? reply.record.hostId : body.hostId}.`;
       })));

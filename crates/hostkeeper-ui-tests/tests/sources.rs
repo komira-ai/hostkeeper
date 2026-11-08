@@ -3,6 +3,8 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
+use hostkeeper_proto::ctl::COMMANDS;
+use hostkeeper_ui_tests::client_gen::functions;
 use hostkeeper_ui_tests::scan::{Finding, fetches, inline_code, network_and_code, token_keepers};
 use hostkeeper_ui_tests::{
     CallSite, UI_FILES, UiFile, UnknownCall, call_sites, check_calls, descriptor_methods,
@@ -16,16 +18,34 @@ fn descriptors() -> FileDescriptorSet {
         .expect("hostkeeper-proto's descriptors decode")
 }
 
+/// The modules that are not scanned for calls: the data layer, which sends them, and the
+/// generated client, which names every method.
+const SENDERS: [&str; 2] = ["api.js", "gen/client.js"];
+
 /// Every call site of every module of the app.
 fn sites() -> Vec<CallSite> {
     let mut out = Vec::new();
     for file in UI_FILES
         .iter()
-        .filter(|f| f.is_script() && f.path != "api.js")
+        .filter(|f| f.is_script() && !SENDERS.contains(&f.path))
     {
         out.extend(call_sites(file.path, file.text).unwrap_or_else(|e| panic!("{e}")));
     }
     out
+}
+
+/// The method a site calls, through the generated client's function.
+fn method(site: &CallSite) -> String {
+    functions(COMMANDS)
+        .into_iter()
+        .find(|f| f.call() == site.function)
+        .unwrap_or_else(|| {
+            panic!(
+                "{}:{}: api.{} is not a function of the generated client",
+                site.path, site.line, site.function
+            )
+        })
+        .method
 }
 
 fn listed() -> Vec<hostkeeper_ui_tests::Listed> {
@@ -48,7 +68,7 @@ fn every_ui_call_is_a_method_in_the_descriptors() {
     // Catches: a page that calls a method the protos do not define, or a method renamed in the
     // protos and not in the app (or the other way round), in the source or in calls.json.
     let set = descriptors();
-    let mut calls: Vec<String> = sites().into_iter().map(|s| s.method).collect();
+    let mut calls: Vec<String> = sites().iter().map(method).collect();
     calls.extend(listed().into_iter().map(|l| l.method));
     assert!(calls.len() > 1, "the app makes calls: {calls:?}");
     if let Err(unknown) = check_calls(&calls, &set) {
@@ -93,7 +113,7 @@ fn calls_json_matches_the_source() {
         let page = site
             .page()
             .unwrap_or_else(|| panic!("{}:{} calls outside pages/", site.path, site.line));
-        in_source.insert((site.method.clone(), page.to_owned()));
+        in_source.insert((method(&site), page.to_owned()));
     }
     let mut in_list = BTreeSet::new();
     for entry in listed() {
@@ -118,11 +138,12 @@ fn calls_json_matches_the_source() {
 fn only_the_rollout_page_calls_set_desired() {
     // Catches: a page other than Rollout that grows a set-desired call, a call site of it
     // outside pages/, a list that names it under another page, and a Rollout page that stops
-    // calling it while the list still names it.
+    // calling it while the list still names it. The generated client defines the function, and
+    // so names the method; it calls nothing by itself.
     let method = "hostkeeper.operator.v1.Releases/SetDesired";
     let callers: BTreeSet<String> = sites()
         .into_iter()
-        .filter(|s| s.method == method)
+        .filter(|s| self::method(s) == method)
         .map(|s| s.page().unwrap_or("outside pages/").to_owned())
         .collect();
     assert_eq!(callers, BTreeSet::from(["rollout".to_owned()]));
@@ -132,12 +153,17 @@ fn only_the_rollout_page_calls_set_desired() {
         .map(|l| l.pages)
         .collect();
     assert_eq!(pages, vec![vec!["rollout".to_owned()]]);
-    for file in UI_FILES
-        .iter()
-        .filter(|f| f.path != "pages/rollout.js" && f.path != "calls.json")
-    {
+    for file in UI_FILES.iter().filter(|f| {
+        ![
+            "pages/rollout.js",
+            "calls.json",
+            "gen/client.js",
+            "gen/client.d.ts",
+        ]
+        .contains(&f.path)
+    }) {
         assert!(
-            !file.text.contains("SetDesired"),
+            !file.text.contains("SetDesired") && !file.text.contains("setDesired"),
             "{} names SetDesired: only the Rollout page sets the desired version",
             file.path
         );
