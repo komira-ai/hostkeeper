@@ -25,6 +25,7 @@ fn force(service: &str) -> Order {
         order_id: format!("force-{service}"),
         r#try: 1,
         verb: Some(order::Verb::Force(Force {
+            target: None,
             service: service.to_owned(),
             version: "2.0.0".to_owned(),
             package_digest: d(),

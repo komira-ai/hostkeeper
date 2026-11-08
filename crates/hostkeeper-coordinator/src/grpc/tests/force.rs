@@ -14,6 +14,7 @@ use crate::testutil::OPERATOR;
 /// both healthy.
 fn daemon_beat(features: &[&str]) -> proto::HeartbeatRequest {
     proto::HeartbeatRequest {
+        installers: Vec::new(),
         platform: proto::Platform::LinuxArm64 as i32,
         agent: Some(proto::AgentInfo {
             name: "hostkeeper-daemon".to_owned(),
@@ -82,6 +83,7 @@ async fn the_grpc_response_advertises_forced_v1_with_the_force() {
     assert_eq!(
         order.verb,
         Some(proto::order::Verb::Force(proto::Force {
+            target: None,
             service: "other".to_owned(),
             version: "3.0".to_owned(),
             package_digest: "1".repeat(64),

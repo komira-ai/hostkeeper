@@ -47,6 +47,34 @@ or triggers an automatic rollback. It keeps what it runs, and is ordered again w
 whose index lists its platform is set. A version set with one package digest is ordered to every
 host, as before.
 
+## A release with targets: the entry each host is picked
+
+A version set with targets (`SetDesired` with `targets`, [packages.md](../design/packages.md)
+section 3) is ordered to each host as one entry of its platform's list: the entry of the
+installer the host runs the service with, wherever it stands in the list, else the first entry
+whose installer the host's daemon lists. The daemon lists its installers in its heartbeats over
+gRPC (`Hosts.Get` shows them as `installers`, and each service's in its heartbeat); a daemon that
+does not announce `target-v1` counts as listing `hostkeeper-archive` alone, and is ordered the
+archive entry in today's form. A host the release picks nothing for is ordered nothing for that
+version, keeps what it runs, and is never counted as failed or missing:
+
+- `no_target` (`GATE_REASON_NO_TARGET`): the release has no list for the host's platform;
+- `no_build_for_host` (`GATE_REASON_NO_BUILD_FOR_HOST`): the host does not run the service and no
+  entry is of an installer its daemon lists;
+- `installer_dropped` (`GATE_REASON_INSTALLER_DROPPED`): the host runs the service with an
+  installer the list has no entry of, or that its daemon no longer lists. A host changes a
+  service's installer only by an uninstall and an install.
+
+None of them holds the convergence, but `Converge` counts the hosts picked an entry and those
+picked none by why (`HostCounts.picked`, `no_target`, `no_build_for_host`,
+`installer_dropped`), names the `installer_dropped` hosts (`Convergence.installer_dropped`), and
+is not converged while no host was picked an entry (a misspelt installer, say). A host that does
+not report the service shows its `no_target` or `no_build_for_host` in `Hosts.Get`. A daemon
+announcing `target-v1` whose installers the coordinator has not read yet (its first heartbeat
+after its start, or any after the coordinator's start, comes over JSON) is ordered nothing until
+its next heartbeat over gRPC, and is held `not_a_member` meanwhile. Only an archive entry goes on
+the JSON heartbeat route; any other waits for the next heartbeat over gRPC.
+
 ## Marks
 
 - `Releases.MarkBad` marks a version of a service bad, any version the service's version scheme
@@ -116,7 +144,9 @@ The reply lists the hosts ordered (`targeted`), the held pairs it skipped (`held
 other hosts it does not order with a reason: `daemon_too_old` for a daemon that did not
 announce the `forced-v1` feature, `unknown_target` for a listed host that does not run the
 service, `no_package_for_platform` for a host whose platform the version's release index lists
-no package for. A held pair is ordered only when the call sets `include_held`, for that call only, and
+no package for, and, for a version set with targets, `no_target`, `no_build_for_host` or
+`installer_dropped` for a host the release picks no entry for (each host forced is ordered the
+entry the rollout gate would pick it). A held pair is ordered only when the call sets `include_held`, for that call only, and
 no hold is removed.
 
 A host that reports the force failed is not ordered again; a second force, to another version,

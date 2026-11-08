@@ -237,6 +237,9 @@ fn the_hold_strings_are_the_ones_the_status_documents() {
             Skip::Unsupported => "unsupported",
             Skip::NoDigest => "no_digest",
             Skip::NoPackageForPlatform => "no_package_for_platform",
+            Skip::NoTarget => "no_target",
+            Skip::NoBuildForHost => "no_build_for_host",
+            Skip::InstallerDropped => "installer_dropped",
         }
     };
     for g in [
@@ -269,6 +272,9 @@ fn the_hold_strings_are_the_ones_the_status_documents() {
         Skip::Unsupported,
         Skip::NoDigest,
         Skip::NoPackageForPlatform,
+        Skip::NoTarget,
+        Skip::NoBuildForHost,
+        Skip::InstallerDropped,
     ] {
         assert_eq!(json!(s), json!(skip(s)));
         assert_eq!(json!(Why::Skip(s)), json!(skip(s)));

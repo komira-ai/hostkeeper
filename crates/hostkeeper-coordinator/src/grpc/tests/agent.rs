@@ -51,6 +51,7 @@ fn request(
     services: Vec<proto::ServiceBeat>,
 ) -> proto::HeartbeatRequest {
     proto::HeartbeatRequest {
+        installers: Vec::new(),
         platform: proto::Platform::LinuxArm64 as i32,
         agent,
         features: features.iter().map(|name| (*name).to_owned()).collect(),
@@ -193,6 +194,7 @@ fn a_service_entry_is_the_json_entry_of_its_facts() {
         json!({"name": "svc", "version": "1.0"})
     );
     let full = proto::ServiceBeat {
+        installer: None,
         name: "svc".to_owned(),
         version: "3.1".to_owned(),
         health: proto::Health::Absent as i32,
