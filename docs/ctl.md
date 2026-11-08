@@ -207,7 +207,7 @@ other request waits for `Approve` as before. A record with no role has no window
 | `--notes` | STRING | Empty for none. |
 | `--approve-until-unix` | UINT64 | The end of the record's window, unix seconds: after now, and within the coordinator's `--record-approve-max` of it. 0 for none given. |
 | `--approve-for-secs` | UINT64 | The length of the record's window from now, in seconds: at most the coordinator's `--record-approve-max`. 0 for none given. With neither, the window is the coordinator's `--record-approve-for`; with both, the call is refused `invalid_window`. A record that names no role takes neither, and has no window. |
-| `--platform` | VALUE | The platform to install the server as by network boot: `PLATFORM_LINUX_X86_64` or `PLATFORM_LINUX_ARM64` (`linux_x86_64` or `linux_arm64` as a flag of `hostkeeper ctl`); `PLATFORM_UNSPECIFIED` (the flag left out) for none. Any other value is refused `invalid_request`. |
+| `--platform` | VALUE | The platform to install the server as by network boot: `PLATFORM_LINUX_X86_64` or `PLATFORM_LINUX_ARM64` (`linux_x86_64` or `linux_arm64` as a command-line flag); `PLATFORM_UNSPECIFIED` (the flag left out) for none. Any other value is refused `invalid_request`. |
 
 #### `hostkeeper ctl enrollment list-records`
 

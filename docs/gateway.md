@@ -1,10 +1,10 @@
 # The HTTP/JSON gateway
 
 The coordinator's private listener serves the operator API twice: as gRPC, and as plain HTTP with
-JSON bodies, the gateway. `hostkeeper ctl --transport gateway` and the operator web app
+JSON bodies, the gateway. `hkctl` (which has no other transport) and the operator web app
 ([docs/ui-serving.md](ui-serving.md)) call the gateway. Both ways reach the same handlers with
 the same checks; the gateway adds no rule of its own. Every command and request message is in
-[docs/ctl.md](ctl.md).
+[docs/cli.md](cli.md).
 
 ## Route
 

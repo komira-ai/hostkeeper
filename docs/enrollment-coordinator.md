@@ -116,8 +116,10 @@ coordinator's gRPC serving registers them. Both take the operator token only: a 
 `forbidden` and no token or any other `unauthorized`, before the request is looked at.
 
 ```
-hostkeeper ctl enrollment list --limit 50
-hostkeeper ctl enrollment approve --request-id <id> --key-sha256 <key_sha256 as listed> \
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+    enrollment list --limit 50
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+    enrollment approve --request-id <id> --key-sha256 <key-sha256> \
     --host-id web-17 --role web --services api --reason "racked in row 4"
 ```
 
@@ -311,7 +313,7 @@ is started with `-webhook-url http://<--mdm-webhook-listen>/webhook`.
 - **Its records.** One file per device under `mdm-devices/` (above), written before the gate acts
   on the event, so a restart loses nothing and a result of a command sent before the restart is
   still matched. A record that does not read stops the start. `Mdm.ListDevices` of the operator
-  API (`hostkeeper ctl mdm list-devices`, [docs/ctl.md](ctl.md)) lists them; it asks no device.
+  API (`hkctl mdm list-devices`, [docs/cli.md](cli.md)) lists them; it asks no device.
 
 - **Its enrollment side.** With `--mdm-profile-identifier` and `--mdm-daemon-config` the gate
   also acts for each device that is enrolled, has a serial from its `DeviceInformation` answer
@@ -373,7 +375,7 @@ is started with `-webhook-url http://<--mdm-webhook-listen>/webhook`.
     conditions hold. It never sends it again while the last send is unanswered (a Mac that is
     off), and sends at the next look one NanoHUB did not queue.
   - Each send NanoHUB queued is audited `mdm_install_sent` by `mdm-gate`, with the serial, the
-    digest, the version and the send's count. `hostkeeper ctl mdm list-devices` shows the count
+    digest, the version and the send's count. `hkctl mdm list-devices` shows the count
     (`install_sends`), the last send (`install_last_sent_unix`) and its digest
     (`install_sha256`). A new enrollment starts the count again.
 

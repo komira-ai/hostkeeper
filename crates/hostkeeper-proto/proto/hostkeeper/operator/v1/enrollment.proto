@@ -366,7 +366,7 @@ message AddRecordRequest {
   // no role takes neither, and has no window.
   uint64 approve_for_secs = 8;
   // The platform to install the server as by network boot: `PLATFORM_LINUX_X86_64` or
-  // `PLATFORM_LINUX_ARM64` (`linux_x86_64` or `linux_arm64` as a flag of `hostkeeper ctl`);
+  // `PLATFORM_LINUX_ARM64` (`linux_x86_64` or `linux_arm64` as a command-line flag);
   // `PLATFORM_UNSPECIFIED` (the flag left out) for none. Any other value is refused
   // `invalid_request`.
   hostkeeper.agent.v1.Platform platform = 9;

@@ -6,8 +6,8 @@ manual step of its own: enter its record, which is also its approval
 board that does not try network boot before its disk. The design, and the
 reason for every rule below, is [network-install.md](../design/network-install.md) (cited here as
 "the design"). Enrolling the machine once it has posted its request is
-[enrollment.md](enrollment.md), and every `hostkeeper ctl` command and flag is
-[ctl.md](../ctl.md).
+[enrollment.md](enrollment.md), and every `hkctl` command and flag is
+[cli.md](../cli.md).
 
 The parts:
 
@@ -19,15 +19,15 @@ The parts:
 - The coordinator, which `serve` reads before every answer to learn which machines may be
   installed, and which the installed daemon enrolls with over its LAN listener.
 
-The commands of `hostkeeper ctl` below reach the coordinator's private listener, as in
-[enrollment.md](enrollment.md): `https://<private-listener>` is its address, `<ca.pem>` the CA
-its certificate chains to, and `<token-file>` a file holding an operator token. The examples use
-the documentation addresses `192.0.2.0/24` for the farm LAN and `00:00:5e:00:53:xx` for MACs;
-put your own in their place.
+The commands of `hkctl` below reach the coordinator's private listener, as in
+[enrollment.md](enrollment.md), which also says where `hkctl` comes from:
+`https://<private-listener>` is its address, `<ca.pem>` the CA its certificate chains to, and
+`<token-file>` a file holding an operator token. The examples use the documentation addresses
+`192.0.2.0/24` for the farm LAN and `00:00:5e:00:53:xx` for MACs; put your own in their place.
 
 **The record's platform.** Router mode chooses the shim and the boot set by the record's platform,
 since the machine's own packets may state none, so every record of a machine to install in router
-mode names it: `hostkeeper ctl enrollment add-record --platform linux_x86_64` or
+mode names it: `hkctl enrollment add-record --platform linux_x86_64` or
 `--platform linux_arm64` ([enrollment.md](enrollment.md#record-the-server)). A record with no
 platform is still read, and `serve` logs `has no platform, which router mode needs` for its MACs:
 router mode installs nothing for it, and it gets the menu that boots its local disk. Proxy mode
@@ -66,12 +66,12 @@ can stay in the inventory: its `hostHeld` keeps the machine from being installed
 what `serve` will see:
 
 ```
-hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
-    --output json enrollment list-records --enrolled false
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+    enrollment list-records --enrolled false
 ```
 
-A record that will be installed shows `"hostHeld": "HOST_HELD_NONE"` and no `enrolled`
-(`--output json` leaves out a field at its default), and no pending request of `enrollment list`
+A record that will be installed shows `"hostHeld": "HOST_HELD_NONE"` and no `enrolled` (the
+gateway's JSON leaves out a field at its default), and no pending request of `enrollment list`
 names its host id as `record_host_id` or among `candidate_host_ids`.
 
 **A failed read installs nothing.** When either read fails (the private listener does not answer,
@@ -343,7 +343,7 @@ with no further step ([enrollment.md](enrollment.md#the-record-is-the-approval))
 before the machine boots.
 
 ```
-hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment add-record --host-id web-17 --role web \
     --data-macs 00:00:5e:00:53:01 --data-macs 00:00:5e:00:53:02 \
     --bmc-mac 00:00:5e:00:53:a1 --serial SN-0042 --platform linux_x86_64 \
@@ -380,7 +380,7 @@ daemon logs `enrolled as host:web-17`, and the record is used: `list-records` sh
 `RECORD_STATE_USED`, with the request that used it.
 
 ```
-hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment list-records --limit 50
 ```
 
@@ -394,12 +394,12 @@ than the record's, or is contested by another request. Approve those by hand, by
 the console, as in [enrollment.md](enrollment.md#approve):
 
 ```
-hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment list --limit 50
 ```
 
 ```
-hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment approve --request-id <request-id> --key-sha256 <key-sha256> \
     --role web --services api --reason "network install, key checked on the console"
 ```
@@ -424,22 +424,22 @@ with your wait (pending to approved) apart from the machine's time. Every time i
 components record; nothing is timed by hand. Keep three files of that machine:
 
 - `serve`'s standard error, as a file (`serve.log` below), for the whole run.
-- Before you approve, in step 2: the answer of `enrollment list` with `--output json`, saved as
+- Before you approve, in step 2: the answer of `enrollment list`, saved as
   `pending.json`. The request leaves the list at its approval, and its `firstSeenUnix` with it.
 
   ```
-  hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
-      --output json enrollment list --limit 50
+  hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+      enrollment list --limit 50
   ```
 
-- Once the host serves a service assigned to it: its `hosts get` with `--output json`, saved as
+- Once the host serves a service assigned to it: its `hosts get`, saved as
   `host.json`. Its `firstServingUnix` is there once a heartbeat since the approval reported a
   service the coordinator manages for the host (not hostkeeper itself) healthy, with no update of
   it under way; until then take it again.
 
   ```
-  hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
-      --output json hosts get --node-id web-17
+  hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+      hosts get --node-id web-17
   ```
 
 Then, in a checkout of hostkeeper, name the machine as its record does and the mode `serve` ran
@@ -493,7 +493,7 @@ to set one on a record, remove the record and add it again.
    console's key hash and approve with `--replace true`, the role and the services again:
 
    ```
-   hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+   hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
        enrollment approve --request-id <request-id> --key-sha256 <key-sha256> \
        --host-id web-17 --role web --services api --replace true \
        --reason "web-17 reinstalled from the network, key checked on the console"
