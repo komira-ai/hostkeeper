@@ -34,6 +34,7 @@ export function createClient(call) {
       setLabels: (request) => call("hostkeeper.operator.v1.Hosts/SetLabels", request),
       abort: (request) => call("hostkeeper.operator.v1.Hosts/Abort", request),
       retire: (request) => call("hostkeeper.operator.v1.Hosts/Retire", request),
+      clearRecord: (request) => call("hostkeeper.operator.v1.Hosts/ClearRecord", request),
     }),
     mdm: Object.freeze({
       listDevices: (request) => call("hostkeeper.operator.v1.Mdm/ListDevices", request),
