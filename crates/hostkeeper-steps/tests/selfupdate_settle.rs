@@ -84,6 +84,8 @@ fn waiting(mut rec: Record, version: &str) -> Record {
         version: version.to_owned(),
         verdict_promotion_pending: false,
         order_id: None,
+        next: None,
+        starts: None,
     });
     rec
 }
@@ -311,6 +313,8 @@ fn the_new_binary_confirms_once_after_its_hook() {
         version: "v2".to_owned(),
         verdict_promotion_pending: true,
         order_id: None,
+        next: None,
+        starts: None,
     });
     host.store().save(&pending).unwrap();
     assert!(
@@ -793,6 +797,8 @@ fn a_record_with_awaiting_restart_loads_in_the_old_reader_shape() {
             version: "1.5.0".to_owned(),
             verdict_promotion_pending: false,
             order_id: None,
+            next: None,
+            starts: None,
         })
     );
     let written = serde_json::to_value(&*rec).unwrap();
