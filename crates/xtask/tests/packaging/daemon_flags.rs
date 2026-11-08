@@ -51,11 +51,8 @@ pub fn parse_seed(words: &[String]) -> Result<SeedFlags, String> {
     }
 }
 
-/// A command line of the CI client that parses, which a unit of the daemon must not run.
-const CI_LINE: &str = "ci set-desired --service web --version 1.0.0 --package-digest \
-    0000000000000000000000000000000000000000000000000000000000000000 \
-    --endpoint https://coordinator.example --ca-file ca.pem --audience web-release \
-    --work-dir work --web-roots roots.pem";
+/// A command line of another verb that parses, which a unit of the daemon must not run.
+const OTHER_VERB_LINE: &str = "self-update-protocol";
 
 fn check_unit_lines(text: &str) -> Result<(), String> {
     let unit = Unit::parse(text)?;
@@ -188,7 +185,7 @@ fn every_unit_command_line_parses_under_the_binarys_own_flags() {
             altered(
                 &text,
                 "--notify-systemd\n",
-                &format!("--notify-systemd\nExecReload=/usr/bin/hostkeeper {CI_LINE}\n"),
+                &format!("--notify-systemd\nExecReload=/usr/bin/hostkeeper {OTHER_VERB_LINE}\n"),
             ),
             "not the daemon",
         ),
