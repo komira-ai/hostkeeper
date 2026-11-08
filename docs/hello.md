@@ -19,7 +19,7 @@ marked **specified, not built**, with the pull request that builds it.
 | running a hook step on a Mac | the daemon runs each step as a launchd job through `LaunchdLauncher` (`hostkeeper-launchd`), and links and loads the package's plists (`docs/macos.md`) | — |
 | the UI's pages and their calls | the pages, and the HTTP/JSON gateway they call (`docs/gateway.md`) | — |
 | assigning to a role | the rollout file's `roles`, `Services.Assign` (komira-ai/hostkeeper#45), the Rollout page's Assign, the coordinator's `install` order, and the daemon's heartbeat loop, which announces `install-v1` and runs the install | the daemon's heartbeat link to the coordinator: the shipped daemon gives its loop `NoLink`, so no order reaches a host |
-| setting the desired version | `hostkeeper ctl releases set-desired`, CI's set-desired workflow and its hello caller `hello-desired.yml`, the Rollout page's Set desired (through the gateway) | — |
+| setting the desired version | `hkctl releases set-desired`, CI's set-desired workflow and its hello caller `hello-desired.yml`, the Rollout page's Set desired (through the gateway) | — |
 | unassigning with uninstall | the daemon's uninstall verb, hello's `uninstall` step, `Services.Unassign` (komira-ai/hostkeeper#45), the Rollout page's Unassign, and the daemon's heartbeat loop, which runs the uninstall | the daemon's heartbeat link to the coordinator (`NoLink`) |
 
 ## The package
@@ -102,7 +102,7 @@ An alternative to the rollout entry: in the Rollout page, section `hello`, type 
 `Role` and press `Assign to the role`.
 
 A host enrolled after this joins the role through its approval:
-`hostkeeper ctl enrollment approve ... --role <role>`.
+`hkctl enrollment approve ... --role <role>`.
 
 **Watch:** nothing is ordered yet. The Rollout page's section `hello` shows `Desired` as
 `none set`. After an Assign in the page, `Assigned roles` lists the role and `Operator
@@ -118,8 +118,8 @@ Set the desired version to the first release, `<v1>`:
 jq -n --arg version <v1> --arg digest "$(sha256sum hello-index.json | cut -d' ' -f1)" \
   --rawfile index hello-index.json \
   '{desired: {version: $version}, releaseIndex: $index, releaseIndexDigest: $digest}' > desired.json
-hostkeeper ctl --endpoint <coordinator> --ca-file <ca.pem> --token-file <token> \
-  releases set-desired --service hello --request desired.json
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+    releases set-desired --service hello --request desired.json
 ```
 
 `--rawfile` keeps the index byte for byte, which its digest covers. The coordinator refuses an
@@ -225,10 +225,11 @@ loop does. **Specified, not built:** the heartbeat link that carries the order t
 (`NoLink`).
 Unassign hello in the Rollout page, section `hello`: type the role in `Role`, tick `Uninstall
 from each host that loses its last assignment`, press `Unassign from the role` and confirm. Or
-unassign it from the role (`--role <role>`) or from each host with ctl:
+unassign it from the role (`--role <role>`) or from each host with `hkctl`:
 
 ```sh
-hostkeeper ctl ... services unassign --node-id <host> --service hello --uninstall true
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+    services unassign --node-id <host> --service hello --uninstall true
 ```
 
 The daemon then runs hello's `uninstall` step, which stops both slots and removes the hook's

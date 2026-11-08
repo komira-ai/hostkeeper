@@ -60,8 +60,7 @@ issues to the job.
    package from the channel, checks it against the index and its attestation, and updates
    hostkeeper (design, section 6.6).
 
-Watch the roll on the UI's Rollout page, or with `hostkeeper ctl releases converge --service
-hostkeeper`.
+Watch the roll on the UI's Rollout page, or with `hkctl releases converge --service hostkeeper`.
 
 ## Turning it on and off
 

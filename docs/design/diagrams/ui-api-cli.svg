@@ -26,7 +26,7 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <text x="130" y="169" class="b" text-anchor="middle">Operator</text>
 <text x="130" y="187" class="t-m" text-anchor="middle">person with a token</text>
 <rect x="300" y="80" width="230" height="74" rx="5" class="box"/>
-<text x="415" y="99" class="b" text-anchor="middle">CLI (hostkeeper ctl)</text>
+<text x="415" y="99" class="b" text-anchor="middle">CLI (hkctl)</text>
 <text x="415" y="117" class="t-m" text-anchor="middle">generated from the API</text>
 <text x="415" y="135" class="t-m" text-anchor="middle">schema (B10)</text>
 <rect x="300" y="200" width="230" height="74" rx="5" class="box-p"/>
