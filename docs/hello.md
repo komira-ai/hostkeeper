@@ -90,9 +90,11 @@ makes that directory, owner only, on its first step.
    checks that the coordinator accepts this entry.
 4. **CI's allow-list.** If CI sets the desired version, the allow-list entry that admits its
    token names `hello` (`services = ["hello"]`). The entry for `hello-desired.yml`, below, is in
-   `docs/deploy/ci-client.md`, "The allow-list entry". The workflow also reads three repository
+   `docs/deploy/ci-client.md`, "The allow-list entry". The workflow also reads four repository
    variables: `HOSTKEEPER_COORDINATOR_URL`, `HOSTKEEPER_COORDINATOR_CA` (the PEM of the
-   coordinator's CA) and `HOSTKEEPER_CI_AUDIENCE` (the entry's `audience`).
+   coordinator's CA), `HOSTKEEPER_CI_AUDIENCE` (the entry's `audience`) and
+   `HOSTKEEPER_TAILNET_TAG` (`tag:ci`, passed as `tailnet_tag`; the CI client checks it at its
+   first step, so it must be set although the proof run does not join the tailnet).
 
 ## 1. Assign hello to a role
 

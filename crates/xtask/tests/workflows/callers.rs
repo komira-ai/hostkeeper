@@ -16,6 +16,9 @@
 //!   `v`[`CLIENT_RELEASE`], or its `with` does not pass `hostkeeper_version: `[`CLIENT_RELEASE`]
 //!   and `hostkeeper_commit: `[`CLIENT_COMMIT`] (the release whose hkctl the job downloads, and
 //!   the commit its attestation must name);
+//! - a job of [`CALLERS`] does not pass `tailnet_tag: `[`TAILNET_TAG`], whether or not it joins
+//!   the tailnet: the tag comes from one repository variable, never from the CI client's default
+//!   or a tag written into the caller;
 //! - a job of [`CALLERS`] for the file is missing, or does not call the CI client;
 //! - it is [`HELLO_FILE`] and runs on anything but `workflow_dispatch`, lacks the input `version`
 //!   (a required string) or `variant` (a required choice of exactly [`HELLO_VARIANTS`]), or its
@@ -35,16 +38,23 @@ pub const SET_DESIRED: &str = "komira-ai/hostkeeper/.github/workflows/set-desire
 
 /// The revision of the CI client every job of [`CALLERS`] runs: the commit of this repository
 /// whose `set-desired.yml` it calls, which is also the commit the release [`CLIENT_RELEASE`] was
-/// built from. It is the first release whose `set-desired.yml` takes a release's targets
-/// (docs/design/packages.md, section 3.7), on the client of hkctl, one set and one held wait
-/// (docs/design/two-programs.md, section 5). Moving it is one reviewed change: these two
+/// built from. It is the first release whose `set-desired.yml` takes the tailnet tag,
+/// `tailnet_tag` ([`TAILNET_TAG`]), beside a release's targets (docs/design/packages.md, section
+/// 3.7), on the client of hkctl, one set and one held wait (docs/design/two-programs.md,
+/// section 5). Moving it is one reviewed change: these two
 /// values, the `uses:` line, `hostkeeper_version` and `hostkeeper_commit` of both callers, and the
 /// coordinator's allow-list entry (docs/deploy/github-actions.md, "The allow-list entry").
-pub const CLIENT_COMMIT: &str = "4859b4800897f2468c0f2131455721edfc537217";
+pub const CLIENT_COMMIT: &str = "2c767d1842a88edb7120073d2dff3b4bfccc834c";
 
 /// The release built from [`CLIENT_COMMIT`], X.Y.Z: the one whose `hkctl-<version>` the CI client
 /// downloads and verifies.
-pub const CLIENT_RELEASE: &str = "0.1.173";
+pub const CLIENT_RELEASE: &str = "0.1.184";
+
+/// What every job of [`CALLERS`] passes as `tailnet_tag`, exactly: the repository variable that
+/// holds the tag the tailnet's trust credential issues (docs/deploy/github-actions.md, "The
+/// repository variables"). The CI client checks the tag whether or not the job joins, so an empty
+/// variable ends the job at its first step, before anything is downloaded.
+pub const TAILNET_TAG: &str = "${{ vars.HOSTKEEPER_TAILNET_TAG }}";
 
 /// A job that calls [`SET_DESIRED`]: the workflow file, the job, and its `if:`, exactly.
 pub struct Caller {
@@ -178,6 +188,11 @@ pub fn problems(file: &str, text: &str, doc: &Node) -> Vec<String> {
             problems.push(format!("job {name} passes secrets to set-desired.yml"));
         }
         problems.extend(revision_problems(name, text, job, uses, uses_node.line()));
+        if text_of(entry(job, "with"), "tailnet_tag") != Some(TAILNET_TAG) {
+            problems.push(format!(
+                "job {name} must pass `tailnet_tag: {TAILNET_TAG}`, the tag the tailnet's trust credential issues"
+            ));
+        }
     }
     for c in CALLERS.iter().filter(|c| c.file == file) {
         let calls = jobs(doc)
