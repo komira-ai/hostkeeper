@@ -91,3 +91,29 @@ fn install_with_a_settings_file_that_is_not_there_is_refused() {
     assert_eq!(err, format!("REFUSED: {settings} is not there\n"));
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
 }
+
+/// Catches the package's program not passing its exit code and its report line through: `mdm
+/// --version` exits 0 naming the program, and `mdm update-hook` with no step exits 2 with the
+/// contract's last line on stdout (it reads nothing from the host first).
+#[test]
+fn the_packages_program_exits_as_documented() {
+    let run = |args: &[&str]| {
+        let out = Command::new(env!("CARGO_BIN_EXE_mdm"))
+            .args(args)
+            .output()
+            .unwrap();
+        (
+            out.status.code(),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+        )
+    };
+    let (code, out) = run(&["--version"]);
+    assert_eq!(code, Some(0));
+    assert!(out.starts_with("mdm "), "{out}");
+    let (code, out) = run(&["update-hook"]);
+    assert_eq!(code, Some(2));
+    assert_eq!(
+        out,
+        "{\"class\":\"environment\",\"detail\":\"no step given\",\"promotion_pending\":false,\"reason\":\"usage\"}\n"
+    );
+}

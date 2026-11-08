@@ -3,8 +3,8 @@
 //!
 //! The adapters that answer them for real are `git::GitCli` ([`GitHistory`]), `github::Gh`
 //! ([`GitHubRuns`], [`ReleaseStore`], [`ReleaseSource`], [`Verifier`]), `check_binary::VersionOf`
-//! ([`RunVersion`]), `macos_pkg::PkgbuildCli` ([`BuildPkg`]) and
-//! `advisories::DenyCli` ([`AdvisoryCheck`]). Each runs its program through an [`Exec`], and the
+//! ([`RunVersion`]), `macos_pkg::PkgbuildCli` ([`BuildPkg`]), `mdm_fetch::CurlCli`
+//! ([`Download`]) and `advisories::DenyCli` ([`AdvisoryCheck`]). Each runs its program through an [`Exec`], and the
 //! one [`Exec`] that starts a process, `real::SystemExec`, is built in `real` only and named by
 //! no test.
 
@@ -211,6 +211,13 @@ pub(crate) trait BuildPkg {
     ) -> Result<(), PortError>;
 }
 
+/// Downloads a file over HTTPS (`release mdm-fetch`).
+pub(crate) trait Download {
+    /// Writes what `url` (an `https://` URL) serves to `file`, replacing it; an error leaves
+    /// nothing at `file` that the caller trusts (it checks the bytes after).
+    fn download(&self, url: &str, file: &Path) -> Result<(), PortError>;
+}
+
 /// How a process ended: its status was success or not, and its output.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Ran {
@@ -235,6 +242,7 @@ pub(crate) struct Ports<'a> {
     pub(crate) run_version: &'a dyn RunVersion,
     pub(crate) pkgbuild: &'a dyn BuildPkg,
     pub(crate) advisories: &'a dyn AdvisoryCheck,
+    pub(crate) download: &'a dyn Download,
 }
 
 /// What owns a set of adapters and lends them as [`Ports`]: the wired adapters (`Wired`, over

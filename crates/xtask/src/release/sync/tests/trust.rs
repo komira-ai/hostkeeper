@@ -260,6 +260,7 @@ fn a_hostkeeper_release_is_checked_by_release_check_and_each_service_by_its_entr
             &[MAIN],
         ),
         entry("hello", REPO, ".github/workflows/hello.yml", &[MAIN]),
+        entry("mdm", REPO, ".github/workflows/artifacts.yml", &[MAIN]),
     ]);
 
     let lines = refused_lines(sync(
@@ -268,9 +269,11 @@ fn a_hostkeeper_release_is_checked_by_release_check_and_each_service_by_its_entr
         &request_with(&c, trust),
     ));
 
-    // The indexes in the order of their asset names: hello's failing build, hello, hostkeeper.
-    assert_eq!(lines.len(), 4, "{lines:?}");
+    // The indexes in the order of their asset names: hello's failing build, hello, hostkeeper,
+    // mdm.
+    assert_eq!(lines.len(), 5, "{lines:?}");
     assert_eq!(lines[2], format!("staged {REPO} v1.4.0: hostkeeper 1.4.0"));
+    assert_eq!(lines[3], format!("staged {REPO} v1.4.0: mdm 1.4.0"));
     let hello_versions = ["1.4.0-fail-ready", "1.4.0"];
     for (line, v) in lines[..2].iter().zip(hello_versions) {
         let start = format!(

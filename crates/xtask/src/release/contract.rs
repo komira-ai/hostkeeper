@@ -17,9 +17,11 @@
 //! package (see `index`). A release ships every one of them ([`Platform::RELEASED`]), and a
 //! release missing one is refused. macos-arm64 also ships the installer pkg of a Mac's first
 //! install ([`installer_name`]); the two Linux platforms also ship the coordinator
-//! ([`COORDINATOR`]) and the MDM kit's binary ([`MDM`]). A release carries three kinds of package ([`Package`]):
+//! ([`COORDINATOR`]) and the MDM kit's binary ([`MDM`]). A release carries four kinds of package ([`Package`]):
 //! hostkeeper's own (`index.json`), `hello`, the example service of `examples/hello`
-//! (`hello-index.json`), and hello's failing build (`hello-fail-ready-index.json`). It also
+//! (`hello-index.json`), hello's failing build (`hello-fail-ready-index.json`), and `mdm`, the
+//! MDM server stack as a service package (`mdm-index.json`), for linux-x86_64 only
+//! ([`Package::platforms`]). It also
 //! carries `netboot.json` ([`NETBOOT`]), the boot sets of network install for the two Linux
 //! platforms, and `hkctl-<version>` ([`hkctl_name`]), the command line, one script for every
 //! platform.
@@ -74,6 +76,12 @@ pub(crate) const COORDINATOR: &str = "hostkeeper-coordinator";
 /// as a tarball with its SBOM.
 pub(crate) const MDM: &str = "hostkeeper-mdm";
 
+/// The name of the MDM server stack's service package (docs/design/two-programs.md section 6.2):
+/// its package name, the service of its release index and its program `bin/mdm`, which prints
+/// `mdm X.Y.Z+<12 hex>` for `--version`. Built for linux-x86_64 only: the pinned tools it carries
+/// are linux-amd64 builds.
+pub(crate) const MDM_SERVICE: &str = "mdm";
+
 /// Where the coordinator's container image holds the operator web app (`ui/` of the commit):
 /// the destination of the Dockerfile's `COPY ui`, and the default UI directory of the
 /// coordinator's `serve` (`hostkeeper_coordinator::config::DEFAULT_UI_DIR`).
@@ -88,6 +96,10 @@ pub(crate) const HKCTL: &str = hostkeeper_hkctl::PROGRAM;
 /// `--version` ([`stamp_of`]).
 pub(crate) const PROGRAMS: [&str; 3] = [PROGRAM, COORDINATOR, MDM];
 
+/// The binaries `release check-binary` holds to their stamp ([`stamp_of`]): the shipped binaries
+/// of [`PROGRAMS`] and `mdm`, the program the mdm package carries as `bin/mdm`.
+pub(crate) const STAMPED: [&str; 4] = [PROGRAMS[0], PROGRAMS[1], PROGRAMS[2], MDM_SERVICE];
+
 /// The file listing the SHA-256 of every asset but itself and the bundles.
 pub(crate) const SUMS: &str = "SHA256SUMS";
 
@@ -100,6 +112,10 @@ pub(crate) const HELLO_INDEX: &str = "hello-index.json";
 /// The release index of the failing build of hello: the same schema as [`INDEX`], `service`
 /// `hello`, its version the release's followed by [`FAIL_READY_SUFFIX`].
 pub(crate) const HELLO_FAIL_READY_INDEX: &str = "hello-fail-ready-index.json";
+
+/// The release index of the mdm package: the same schema as [`INDEX`], `service` `mdm`, its one
+/// platform linux-x86_64.
+pub(crate) const MDM_INDEX: &str = "mdm-index.json";
 
 /// The boot sets of network install: for each Linux platform the Ubuntu ISO, shim, network
 /// GRUB, kernel and initrd a bare machine boots, each with its size and SHA-256 (see `netboot`).
@@ -350,7 +366,7 @@ pub(crate) fn stamp_string(version: &Version, commit: &Commit) -> String {
     stamp_of(PROGRAM, version, commit)
 }
 
-/// The text the shipped binary `program` (one of [`PROGRAMS`]) prints for `--version`:
+/// The text the shipped binary `program` (one of [`STAMPED`]) prints for `--version`:
 /// `<program> X.Y.Z+<12 hex>`. The coordinator's is `hostkeeper-coordinator X.Y.Z+<12 hex>`, the
 /// MDM kit's `hostkeeper-mdm X.Y.Z+<12 hex>`.
 pub(crate) fn stamp_of(program: &str, version: &Version, commit: &Commit) -> String {
@@ -423,6 +439,9 @@ pub(crate) enum Service {
     /// The example service of `examples/hello`.
     #[value(name = "hello")]
     Hello,
+    /// The MDM server stack's service package.
+    #[value(name = "mdm")]
+    Mdm,
 }
 
 impl Service {
@@ -431,6 +450,7 @@ impl Service {
         match self {
             Service::Hostkeeper => PROGRAM,
             Service::Hello => HELLO,
+            Service::Mdm => MDM_SERVICE,
         }
     }
 }
@@ -438,22 +458,39 @@ impl Service {
 /// What a version is followed by in the version of the failing build of hello.
 pub(crate) const FAIL_READY_SUFFIX: &str = "-fail-ready";
 
-/// One kind of package a release carries: each has a package per platform and a release index of
-/// its own. The release carries hostkeeper's package, hello's and hello's failing build, the
-/// same package started with `--fail-ready`, which a host can be rolled back from: a host trusts
-/// only packages this repository's workflow attested, so the failing build is released and
-/// attested like the others.
+/// One kind of package a release carries: each has a package per platform it is built for
+/// ([`Package::platforms`]) and a release index of its own. The release carries hostkeeper's
+/// package, hello's and hello's failing build, the same package started with `--fail-ready`,
+/// which a host can be rolled back from (a host trusts only packages this repository's workflow
+/// attested, so the failing build is released and attested like the others), and mdm's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Package {
     Hostkeeper,
     Hello,
     HelloFailReady,
+    Mdm,
 }
+
+/// The platforms of the mdm package.
+const MDM_PLATFORMS: [Platform; 1] = [Platform::LinuxX86_64];
 
 impl Package {
     /// Every package, hostkeeper's first.
-    pub(crate) const ALL: [Package; 3] =
-        [Package::Hostkeeper, Package::Hello, Package::HelloFailReady];
+    pub(crate) const ALL: [Package; 4] = [
+        Package::Hostkeeper,
+        Package::Hello,
+        Package::HelloFailReady,
+        Package::Mdm,
+    ];
+
+    /// The platforms a release ships the package for, in [`Platform::RELEASED`] order: every one,
+    /// but linux-x86_64 alone for mdm.
+    pub(crate) fn platforms(self) -> &'static [Platform] {
+        match self {
+            Package::Hostkeeper | Package::Hello | Package::HelloFailReady => &Platform::RELEASED,
+            Package::Mdm => &MDM_PLATFORMS,
+        }
+    }
 
     /// The package `service` gives with or without `--fail-ready`; none for hostkeeper's failing
     /// build, which does not exist.
@@ -462,7 +499,8 @@ impl Package {
             (Service::Hostkeeper, false) => Some(Package::Hostkeeper),
             (Service::Hello, false) => Some(Package::Hello),
             (Service::Hello, true) => Some(Package::HelloFailReady),
-            (Service::Hostkeeper, true) => None,
+            (Service::Mdm, false) => Some(Package::Mdm),
+            (Service::Hostkeeper | Service::Mdm, true) => None,
         }
     }
 
@@ -471,6 +509,7 @@ impl Package {
         match self {
             Package::Hostkeeper => Service::Hostkeeper,
             Package::Hello | Package::HelloFailReady => Service::Hello,
+            Package::Mdm => Service::Mdm,
         }
     }
 
@@ -478,7 +517,7 @@ impl Package {
     /// release's own, or for the failing build the release's followed by [`FAIL_READY_SUFFIX`].
     pub(crate) fn version_text(self, version: &Version) -> String {
         match self {
-            Package::Hostkeeper | Package::Hello => version.to_string(),
+            Package::Hostkeeper | Package::Hello | Package::Mdm => version.to_string(),
             Package::HelloFailReady => format!("{version}{FAIL_READY_SUFFIX}"),
         }
     }
@@ -489,6 +528,7 @@ impl Package {
             Package::Hostkeeper => INDEX,
             Package::Hello => HELLO_INDEX,
             Package::HelloFailReady => HELLO_FAIL_READY_INDEX,
+            Package::Mdm => MDM_INDEX,
         }
     }
 
@@ -535,6 +575,8 @@ pub(crate) fn is_bundle(name: &str) -> bool {
 /// - `hostkeeper-<v>-<p>.tar.zst`, the hostkeeper package, and its `.sha256`;
 /// - `hello-<v>-<p>.tar.zst`, the hello package, and its `.sha256`;
 /// - `hello-<v>-fail-ready-<p>.tar.zst`, the failing build of hello, and its `.sha256`;
+/// - `mdm-<v>-<p>.tar.zst`, the mdm package, and its `.sha256`, for the platforms of
+///   [`Package::platforms`] only (linux-x86_64);
 /// - `hostkeeper-<v>-<p>.cdx.json`, the SBOM;
 ///
 /// and on Linux, with the deb and rpm architecture `<deb>` and `<rpm>`:
@@ -549,9 +591,9 @@ pub(crate) fn is_bundle(name: &str) -> bool {
 /// and on macOS `hostkeeper-<v>-macos-arm64.pkg`, the installer ([`installer_name`]);
 ///
 /// the bundle of each binary tarball (the three programs'), Linux package, installer, hostkeeper package, hello package,
-/// hello's failing build and image; and once, [`INDEX`] (the release index of the hostkeeper
-/// packages), [`HELLO_INDEX`] (that of the hello packages), [`HELLO_FAIL_READY_INDEX`] (that of the
-/// failing build), [`NETBOOT`] (the boot sets of network install) and its bundle, `hkctl-<v>`
+/// hello's failing build, mdm package and image; and once, [`INDEX`] (the release index of the
+/// hostkeeper packages), [`HELLO_INDEX`] (that of the hello packages), [`HELLO_FAIL_READY_INDEX`]
+/// (that of the failing build), [`MDM_INDEX`] (that of the mdm package), [`NETBOOT`] (the boot sets of network install) and its bundle, `hkctl-<v>`
 /// (the command line, [`hkctl_name`]) and its bundle, and `SHA256SUMS`.
 pub(crate) fn asset_names(version: &Version, platforms: &[Platform]) -> Vec<String> {
     let hkctl = hkctl_name(version);
@@ -566,7 +608,10 @@ pub(crate) fn asset_names(version: &Version, platforms: &[Platform]) -> Vec<Stri
     for &platform in platforms {
         let p = platform.name();
         let mut attested = vec![format!("{PROGRAM}-{version}-{p}.tar.gz")];
-        for kind in Package::ALL {
+        for kind in Package::ALL
+            .iter()
+            .filter(|k| k.platforms().contains(&platform))
+        {
             let package = kind.package_name(version, platform);
             names.push(format!("{package}{DIGEST_SUFFIX}"));
             attested.push(package);

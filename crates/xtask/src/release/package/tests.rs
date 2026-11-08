@@ -53,6 +53,7 @@ pub(super) fn request(dir: &Path, unit: &[u8], c: &Commit, p: Platform, out: &st
         unit: (p != Platform::MacosArm64).then(|| dir.join("hostkeeper.service")),
         fail_ready: false,
         trusted_root: Some(dir.join("trusted_root.json")),
+        archives: None,
         out: dir.join(out),
     }
 }
@@ -64,7 +65,7 @@ pub(super) struct Seen {
     pub(super) mode: u32,
     uid: u64,
     gid: u64,
-    mtime: u64,
+    pub(super) mtime: u64,
     user: String,
     group: String,
     ustar: bool,

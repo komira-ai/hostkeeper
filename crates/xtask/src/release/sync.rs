@@ -12,8 +12,8 @@
 //! are read through the [`ReleaseSource`] port, drafts left out, oldest version first; a release
 //! whose tag is not `v<X.Y.Z>` is skipped, and with `--since v<X.Y.Z>` so is every release older
 //! than that tag. A release carries one release index per service version it ships (`index.json`,
-//! and any `<name>-index.json`: a hostkeeper release carries hostkeeper's, hello's and hello's
-//! failing build's). For each release:
+//! and any `<name>-index.json`: a hostkeeper release carries hostkeeper's, hello's, hello's
+//! failing build's and mdm's). For each release:
 //!
 //! 1. its asset names must all be plain file names, and its commit a full commit id; a release
 //!    with no index is skipped;
@@ -38,7 +38,8 @@
 //!    A version with a package not so signed is refused, naming the service and the signer it
 //!    wants, and the release's other versions go on;
 //! 5. each `S/V` is staged by `release channel-stage` ([`channel_stage::stage`]), requiring a
-//!    package for every platform. A new version is staged into a work directory inside the
+//!    package for every platform (for a package of a hostkeeper release, every platform it is
+//!    built for: linux-x86_64 alone for mdm). A new version is staged into a work directory inside the
 //!    channel directory and then renamed to `S/V` as a whole, so a daemon never sees a version
 //!    that is half there; an unfinished one is completed in place, which never changes a file
 //!    already there.
@@ -71,7 +72,7 @@ use serde_json::Value;
 
 use super::channel_stage::{self, MAX_INDEX_BYTES};
 use super::check::{self, judge, sums_line};
-use super::contract::{Commit, REPO, Repo, SUMS, Signer, Version, bundle_of, is_bundle};
+use super::contract::{Commit, Package, REPO, Repo, SUMS, Signer, Version, bundle_of, is_bundle};
 use super::ports::{Release, ReleaseSource, Verifier};
 use super::{Error, file_sha256};
 
@@ -447,6 +448,24 @@ impl Context<'_> {
         Ok(trusted)
     }
 
+    /// The platforms the index of `shipped` must list a package for: for an index of a hostkeeper
+    /// release that is one of its packages' ([`Package::index_name`]), the platforms that package
+    /// is built for (linux-x86_64 alone for mdm), which `release check` has already held the
+    /// index to; every platform for any other.
+    fn required(&self, shipped: &Shipped) -> Vec<Platform> {
+        let ours = Package::ALL
+            .into_iter()
+            .find(|p| (self.repo.as_str() == REPO) & (p.index_name() == shipped.index_name));
+        match ours {
+            Some(package) => package
+                .platforms()
+                .iter()
+                .filter_map(|p| p.name().parse().ok())
+                .collect(),
+            None => Platform::ALL.to_vec(),
+        }
+    }
+
     /// Downloads the asset `name` into `dir`.
     fn download(&self, name: &str, dir: &Path) -> Result<(), Error> {
         Ok(self
@@ -473,7 +492,7 @@ impl Context<'_> {
             version: shipped.version.clone(),
             from: work.assets.clone(),
             index: Some(work.assets.join(&shipped.index_name)),
-            require: Platform::ALL.to_vec(),
+            require: self.required(shipped),
             out,
         })?;
         if *state != InChannel::Absent {

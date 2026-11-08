@@ -1,21 +1,23 @@
 //! The fakes the release tests run the verbs against: a git history held in memory, GitHub runs
 //! and issues, a release store, a source of published releases and their asset bytes, a
-//! verifier, a binary's `--version`, `pkgbuild`, the advisory check and a scripted [`Exec`]. Each
-//! records the writes it was asked for, so a test can assert that nothing was written.
+//! verifier, a binary's `--version`, `pkgbuild`, the advisory check, downloads and a scripted
+//! [`Exec`]. Each records the writes it was asked for, so a test can assert that nothing was
+//! written.
 
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::path::Path;
 
 use super::contract::{
-    Commit, DIGEST_SUFFIX, Package, Platform, Repo, SIGNER_REF, SIGNER_WORKFLOW, SUMS, Signer,
-    Version, attested_names, bundle_of, hkctl_name, summed_names,
+    Commit, DIGEST_SUFFIX, Package, Repo, SIGNER_REF, SIGNER_WORKFLOW, SUMS, Signer, Version,
+    attested_names, bundle_of, hkctl_name, summed_names,
 };
 use super::file_sha256;
 use super::index::ReleaseIndex;
 use super::ports::{
-    Adapters, AdvisoryCheck, Attestation, BuildPkg, Exec, GitHistory, GitHubRuns, Issue, PortError,
-    Ports, Ran, Release, ReleaseSource, ReleaseStore, Run, RunVersion, Said, StoredAsset, Verifier,
+    Adapters, AdvisoryCheck, Attestation, BuildPkg, Download, Exec, GitHistory, GitHubRuns, Issue,
+    PortError, Ports, Ran, Release, ReleaseSource, ReleaseStore, Run, RunVersion, Said,
+    StoredAsset, Verifier,
 };
 use crate::testdir::TestDir;
 use std::path::PathBuf;
@@ -51,7 +53,7 @@ pub(crate) fn write_assets(dir: &Path, version: &Version, marker: &str) {
     );
     for package in Package::ALL {
         let (service, text) = (package.service().name(), package.version_text(version));
-        let index = ReleaseIndex::of_dir(dir, service, &text, &Platform::RELEASED)
+        let index = ReleaseIndex::of_dir(dir, service, &text, package.platforms())
             .expect("index the packages");
         write(package.index_name(), index.to_json());
     }
@@ -754,6 +756,27 @@ impl Exec for FakeExec {
     }
 }
 
+/// A [`Download`] that answers from a map of URL to bytes: a URL it holds is written to the
+/// file, any other fails. Each call is recorded as `(url, file)`.
+#[derive(Default)]
+pub(crate) struct FakeDownload {
+    pub(crate) served: BTreeMap<String, Vec<u8>>,
+    pub(crate) calls: RefCell<Vec<(String, PathBuf)>>,
+}
+
+impl Download for FakeDownload {
+    fn download(&self, url: &str, file: &Path) -> Result<(), PortError> {
+        self.calls
+            .borrow_mut()
+            .push((url.to_owned(), file.to_path_buf()));
+        let bytes = self
+            .served
+            .get(url)
+            .ok_or_else(|| PortError::new(format!("curl {url}"), "exit status 22"))?;
+        std::fs::write(file, bytes).map_err(|e| PortError::new("write", e.to_string()))
+    }
+}
+
 /// Every fake, as the adapters of a verb.
 pub(crate) struct Fakes {
     pub(crate) git: FakeHistory,
@@ -764,6 +787,7 @@ pub(crate) struct Fakes {
     pub(crate) run_version: FakeRunVersion,
     pub(crate) pkgbuild: FakePkgbuild,
     pub(crate) advisories: FakeAdvisories,
+    pub(crate) download: FakeDownload,
 }
 
 impl Fakes {
@@ -793,6 +817,7 @@ impl Fakes {
                     stderr: String::new(),
                 },
             },
+            download: FakeDownload::default(),
         }
     }
 }
@@ -808,6 +833,7 @@ impl Adapters for Fakes {
             run_version: &self.run_version,
             pkgbuild: &self.pkgbuild,
             advisories: &self.advisories,
+            download: &self.download,
         }
     }
 }

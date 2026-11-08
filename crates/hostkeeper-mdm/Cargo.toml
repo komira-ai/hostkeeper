@@ -6,14 +6,22 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "The MDM kit's binary: fetch, install, tls, verify, push-cert, dep and migrate the MDM server stack on its Linux host, dry-run by default."
+description = "The MDM kit's binary (fetch, install, tls, verify, push-cert, dep and migrate the MDM server stack on its Linux host, dry-run by default) and mdm, the program of the mdm service package: its update hook and its push-cert and dep verbs."
 
 # docs/design/hostkeeper-mdm.md, task M4: the port of komira-ai/kbf's `mdm-host`. The pure
-# rendering is hostkeeper-mdm-core; the steps that touch the host are hostkeeper-mdm-step. It
-# depends on no other crate of the workspace (crates/xtask/tests/layering keeps it so).
+# rendering is hostkeeper-mdm-core; the steps that touch the host are hostkeeper-mdm-step; the
+# hook contract `mdm update-hook` keeps is hostkeeper-hook. It depends on no other crate of the
+# workspace (crates/xtask/tests/layering keeps it so).
 [[bin]]
 name = "hostkeeper-mdm"
 path = "src/main.rs"
+
+# The program of the `mdm` service package (docs/design/two-programs.md section 6.2), `bin/mdm`
+# in the package: its update hook and the operator's `push-cert` and `dep` verbs, over the same
+# library.
+[[bin]]
+name = "mdm"
+path = "src/bin/mdm.rs"
 
 [dependencies]
 # The Basic authentication of the calls to NanoHUB's and NanoDEP's APIs on loopback.
@@ -24,6 +32,9 @@ flate2.workspace = true
 # The kernel's random bytes the secrets are made of.
 getrandom = { workspace = true, features = ["std"] }
 hex.workspace = true
+# The hook contract of the `mdm` package's `update-hook`: its command line, params file and
+# last line.
+hostkeeper-hook = { path = "../hostkeeper-hook" }
 hostkeeper-mdm-core = { path = "../hostkeeper-mdm-core" }
 hostkeeper-mdm-step = { path = "../hostkeeper-mdm-step" }
 # The owner of `--bin-dir`, which `install` trusts for the paths below it.

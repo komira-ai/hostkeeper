@@ -79,8 +79,9 @@ pub type Layer = (
 /// hello with their program `hello-e2e`, which runs hello's hook and server and so needs hello
 /// as a normal dependency; and the network-install tests run `hostkeeper-pxe` (their program
 /// `hostkeeper-privileged-pxe`, which needs it as a normal dependency) and read a DHCP client's
-/// packet with its packet crate. The binary's tests run the macOS pkg's postinstall (`hostkeeper-launchd`)
-/// against the binary.
+/// packet with its packet crate; the `mdm` package's certificate-unit test loads that package's
+/// units and drop-ins (`hostkeeper-mdm-core`) into the host's systemd. The binary's tests run
+/// the macOS pkg's postinstall (`hostkeeper-launchd`) against the binary.
 pub const LAYERS: [Layer; 30] = [
     (BINARY, &[DAEMON], &[LAUNCHD]),
     (CI, &[PROTO], &[]),
@@ -108,7 +109,7 @@ pub const LAYERS: [Layer; 30] = [
         &[CONFIG, HOOK, PROTO, STEPS, WIRE],
         &[COORDINATOR, ENROLL, OIDC, TLS],
     ),
-    (MDM, &[MDM_CORE, MDM_STEP], &[]),
+    (MDM, &[HOOK, MDM_CORE, MDM_STEP], &[]),
     (MDM_CORE, &[], &[]),
     (MDM_GATE, &[CONFIG, ENROLLMENT, WIRE], &[]),
     (MDM_STEP, &[], &[]),
@@ -132,6 +133,7 @@ pub const LAYERS: [Layer; 30] = [
         ],
         &[
             ENROLL,
+            MDM_CORE,
             OBSERVE,
             OIDC,
             PACKAGE,
