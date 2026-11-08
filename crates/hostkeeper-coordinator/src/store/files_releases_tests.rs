@@ -184,7 +184,10 @@ fn the_releases_file_is_written_before_the_state_file() {
     let blocked = scratch("files-releases-io-first");
     let files = files_over(blocked.path());
     // A directory where the releases file's temporary file goes.
-    let temp = blocked.path().join("desired.json.releases.new");
+    let mut temp =
+        crate::releases::releases_path(&blocked.path().join("desired.json")).into_os_string();
+    temp.push(".new");
+    let temp = std::path::PathBuf::from(temp);
     fs::create_dir(&temp).expect("a directory");
     let refused =
         commit_of(&files, &desired::Held::default(), &held_with_release()).expect_err("io");
