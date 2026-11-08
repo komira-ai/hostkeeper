@@ -45,15 +45,19 @@
 //!   own update switched `current`), it creates `<file>` with its pid and blocks, unless `<file>`
 //!   is already there: the moment between the follow-on's switch and the exit it asks for, held
 //!   so that a test can kill it there.
-//! - `--fixture-packaged <version>`: this file is the binary a package installed, of that version
-//!   (its file name is no version: `/usr/bin/hostkeeper` in the Alpine container of
-//!   `tests/openrc_device.rs`). `daemon` then starts as the shipped binary does from a packaged
-//!   path (`hostkeeper_daemon::packaged::start`): it gives the binary directory this file as that
-//!   version when `current` starts nothing, judges the burst of a waiting self-update on an
-//!   OpenRC host, and execs `current` with every argument it was given but this flag.
+//! - `--fixture-packaged <path>`: the file `<path>` (a copy of this program, named by its
+//!   version) stands for the packaged binary (`hostkeeper_daemon::packaged::PACKAGED_BINARIES`):
+//!   a `daemon` run from it, or from its canonical form (a Mac's `/var` links to `/private/var`),
+//!   starts, before anything else, as the packaged binary does (`hostkeeper_daemon::packaged::
+//!   start`): it seeds the binary directory of `--state-dir` with itself as its version when
+//!   `current` starts nothing, and execs `current` with its own arguments, the fixture's flags
+//!   among them, so the `current` it execs runs as the daemon (it runs from `versions/<v>`, not
+//!   from `<path>`). On an OpenRC host it judges the burst of a waiting self-update first, as the
+//!   shipped packaged binary does there. A start that fails prints the error and exits with its
+//!   status.
 //!
-//! Every `daemon` adds its start to the start log first, as the shipped one does
-//! (`hostkeeper_daemon::cli::note_start`: on macOS and OpenRC only).
+//! Every `daemon` that runs as the daemon adds its start to the start log first, as the shipped
+//! one does (`hostkeeper_daemon::cli::note_start`: on macOS and OpenRC only).
 
 use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
@@ -99,10 +103,7 @@ struct Fixture {
     fail_start: Option<String>,
     hold_exit: Option<PathBuf>,
     own_unit: Option<String>,
-    packaged: Option<String>,
-    /// The fixture's flags as given, but `--fixture-packaged` and its value: what the packaged
-    /// start passes on to `current`.
-    passed: Vec<OsString>,
+    packaged: Option<PathBuf>,
 }
 
 /// The line a `daemon` of `version` writes before it exits at `--fixture-fail-start`.
@@ -120,14 +121,12 @@ fn main() -> ExitCode {
         Ok(taken) => taken,
         Err(why) => return usage(&why),
     };
-    let cli = match Cli::try_parse_from(
-        std::iter::once(OsString::from("hostkeeper")).chain(rest.iter().cloned()),
-    ) {
+    let cli = match Cli::try_parse_from(std::iter::once(OsString::from("hostkeeper")).chain(rest)) {
         Ok(cli) => cli,
         Err(error) => error.exit(),
     };
     match cli.command {
-        Command::Daemon(flags) => daemon_verb(&fixture, &flags, &rest),
+        Command::Daemon(flags) => daemon_verb(&fixture, &flags),
         command => {
             if matches!(command, Command::SelfUpdateProtocol) {
                 eprintln!("{}", probed_line());
@@ -153,19 +152,15 @@ fn take_fixture_flags(
         let flag = flag.to_string_lossy().into_owned();
         let value = args.next().ok_or_else(|| format!("{flag} takes a value"))?;
         match flag.as_str() {
-            "--fixture-dir" => fixture.dir = Some(PathBuf::from(&value)),
+            "--fixture-dir" => fixture.dir = Some(PathBuf::from(value)),
             "--fixture-fail-start" => {
                 fixture.fail_start = Some(value.to_string_lossy().into_owned());
             }
-            "--fixture-hold-exit" => fixture.hold_exit = Some(PathBuf::from(&value)),
+            "--fixture-hold-exit" => fixture.hold_exit = Some(PathBuf::from(value)),
             "--fixture-own-unit" => fixture.own_unit = Some(value.to_string_lossy().into_owned()),
-            "--fixture-packaged" => {
-                fixture.packaged = Some(value.to_string_lossy().into_owned());
-                continue;
-            }
+            "--fixture-packaged" => fixture.packaged = Some(PathBuf::from(value)),
             _ => return Err(format!("unknown flag {flag}")),
         }
-        fixture.passed.extend([OsString::from(flag), value]);
     }
     Ok((fixture, args.collect()))
 }
@@ -184,44 +179,8 @@ fn own_version(exe: &Path) -> Result<HostkeeperVersion, String> {
     })
 }
 
-/// `daemon` from the binary a package installed, as version `version`: the shipped packaged
-/// start, which returns only when it could not exec `current`.
-fn packaged_start(
-    fixture: &Fixture,
-    flags: &DaemonFlags,
-    rest: &[OsString],
-    version: &str,
-) -> ExitCode {
-    let exe = match std::env::current_exe() {
-        Ok(exe) => exe,
-        Err(e) => return usage(&format!("its own executable cannot be read: {e}")),
-    };
-    let args: Vec<OsString> = fixture.passed.iter().chain(rest).cloned().collect();
-    let clock = host_clock();
-    let burst = (Platform::host().kind == PlatformKind::Openrc).then_some(&clock as &dyn Clock);
-    let failed = packaged::start(
-        &exe,
-        &[exe.as_path()],
-        &flags.state_dir,
-        version,
-        &args,
-        burst,
-        &packaged::exec,
-    );
-    match failed {
-        Some(error) => {
-            eprintln!("{PROGRAM}: {error}");
-            ExitCode::from(error.exit_code())
-        }
-        None => usage("the packaged start did not take this binary for the packaged one"),
-    }
-}
-
 /// `daemon`, as the module says.
-fn daemon_verb(fixture: &Fixture, flags: &DaemonFlags, rest: &[OsString]) -> ExitCode {
-    if let Some(version) = &fixture.packaged {
-        return packaged_start(fixture, flags, rest, version);
-    }
+fn daemon_verb(fixture: &Fixture, flags: &DaemonFlags) -> ExitCode {
     let own = match std::env::current_exe()
         .map_err(|e| format!("its own executable cannot be read: {e}"))
         .and_then(|exe| fs::canonicalize(&exe).map_err(|e| format!("{}: {e}", exe.display())))
@@ -230,6 +189,9 @@ fn daemon_verb(fixture: &Fixture, flags: &DaemonFlags, rest: &[OsString]) -> Exi
         Ok(own) => own,
         Err(why) => return usage(&why),
     };
+    if let Some(code) = packaged_start(fixture, flags, &own) {
+        return code;
+    }
     cli::note_start(&flags.settings(), Platform::host().kind, own, &host_clock());
     if fixture.fail_start.as_deref() == Some(own.to_string().as_str()) {
         eprintln!("{}", refused_line(&own.to_string()));
@@ -248,6 +210,34 @@ fn daemon_verb(fixture: &Fixture, flags: &DaemonFlags, rest: &[OsString]) -> Exi
         }
     }
     ExitCode::from(cli::exit_status(&served))
+}
+
+/// The start of a `daemon` run from the file `--fixture-packaged` names, as the packaged binary
+/// starts (the module says how): `None` when the flag is absent or this is not that file, and
+/// the daemon starts in this process; otherwise the exit status of the error that ended the
+/// start (an exec that works does not return).
+fn packaged_start(
+    fixture: &Fixture,
+    flags: &DaemonFlags,
+    own: &HostkeeperVersion,
+) -> Option<ExitCode> {
+    let path = fixture.packaged.as_deref()?;
+    let canonical = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let image = std::env::current_exe().ok()?;
+    let args: Vec<OsString> = std::env::args_os().skip(1).collect();
+    let clock = host_clock();
+    let burst = Platform::host().kind == PlatformKind::Openrc;
+    let error = packaged::start(
+        &image,
+        &[path, canonical.as_path()],
+        &flags.state_dir,
+        &own.to_string(),
+        &args,
+        burst.then_some(&clock as &dyn Clock),
+        &packaged::exec,
+    )?;
+    eprintln!("{PROGRAM}: {error}");
+    Some(ExitCode::from(error.exit_code()))
 }
 
 /// Whether this process now holds its exit at `file`: it created it, with its pid. `false` when

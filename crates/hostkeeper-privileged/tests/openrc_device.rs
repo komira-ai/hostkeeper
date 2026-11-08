@@ -58,7 +58,7 @@ const INIT_SCRIPT: &str = include_str!("../../../packaging/alpine/hostkeeper.ini
 /// The line of the init script with the daemon's arguments, as shipped.
 const SHIPPED_ARGS: &str = "command_args=\"daemon --config /etc/hostkeeper/hostkeeper.toml \
     --state-dir /var/lib/updater/state --packages-dir /var/lib/hostkeeper/packages \
-    --admin-socket /run/hostkeeper/admin.sock --ready-file /run/hostkeeper/ready\"";
+    --ready-file /run/hostkeeper/ready\"";
 
 /// The daemon config: every key the loader requires. The installed daemon never reaches its
 /// addresses (it waits for its enrollment); the fixture's link, package store and enroller
@@ -342,8 +342,19 @@ cleanup = 1300
     )
 }
 
+/// Where a self-update test's packaged binary is, in the container: a copy of the musl
+/// `hostkeeper-selfupdate-daemon` named by its version, as the program's `--fixture-packaged`
+/// takes it, which `/usr/bin/hostkeeper` links to.
+const PACKAGED_DIR: &str = "/usr/lib/hostkeeper-fixture";
+
+/// The packaged binary of a self-update test, version [`N`].
+fn packaged() -> String {
+    format!("{PACKAGED_DIR}/{N}")
+}
+
 /// The Alpine host of a self-update test: the musl `hostkeeper-selfupdate-daemon` as the
-/// packaged binary `/usr/bin/hostkeeper` (version [`N`], `--fixture-packaged`), under the
+/// packaged binary (version [`N`], `--fixture-packaged`; [`packaged`], which the init script's
+/// `/usr/bin/hostkeeper` links to), under the
 /// shipped init script with only its daemon arguments changed to the test's tree; the releases of
 /// [`N`] and [`NEXT`] sealed in the package store with [`N`] installed; the coordinator files the
 /// test writes.
@@ -376,22 +387,21 @@ impl SelfUpdateHost {
             &base.join("hostkeeper"),
             0o755,
         );
-        host.exec_ok(&[
-            "cp",
-            &format!("{HK_ROOT}/hostkeeper"),
-            "/usr/bin/hostkeeper",
-        ]);
-        host.exec_ok(&["chmod", "755", "/usr/bin/hostkeeper"]);
+        host.exec_ok(&["mkdir", "-p", PACKAGED_DIR]);
+        host.exec_ok(&["cp", &format!("{HK_ROOT}/hostkeeper"), &packaged()]);
+        host.exec_ok(&["chmod", "755", &packaged()]);
+        host.exec_ok(&["ln", "-s", &packaged(), "/usr/bin/hostkeeper"]);
         let fail = if fail_next {
             format!(" --fixture-fail-start {NEXT}")
         } else {
             String::new()
         };
         let args = format!(
-            "command_args=\"--fixture-packaged {N} --fixture-dir {HK_ROOT}/fixture{fail} daemon \
+            "command_args=\"--fixture-packaged {packaged} --fixture-dir {HK_ROOT}/fixture{fail} daemon \
              --config {HK_ROOT}/hostkeeper.toml --state-dir {HK_ROOT}/state --packages-dir \
-             {HK_ROOT}/packages --admin-socket /run/hostkeeper/admin.sock --ready-file {READY} \
-             --heartbeat-secs 1\""
+             {HK_ROOT}/packages --ready-file {READY} \
+             --heartbeat-secs 1\"",
+            packaged = packaged(),
         );
         let shipped: String = SHIPPED_ARGS
             .split_whitespace()

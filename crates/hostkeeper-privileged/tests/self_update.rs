@@ -1,8 +1,9 @@
 #![cfg(feature = "privileged")]
 //! hostkeeper's update of itself under the host's systemd, as root: the daemon runs as the main
-//! unit made of `packaging/linux/hostkeeper.service`, with the drop-in and the fallback unit of
-//! `hostkeeper_steps::selfupdate`, from `current` of its binary directory, and is ordered to the
-//! next version (`support::self_update` says how the host is made and what is a fixture).
+//! unit made of hostkeeper's package unit (`packaging/linux/units/hostkeeper.service`), which
+//! starts `current` of its binary directory, or of the bootstrap unit the deb installs
+//! (`packaging/linux/hostkeeper.service`), which starts the packaged binary; with the drop-in and
+//! the fallback unit of `hostkeeper_steps::selfupdate`. It is ordered to the next version (`support::self_update` says how the host is made and what is a fixture).
 //!
 //! What each test proves:
 //! - a next binary that starts settles the update `Succeeded` and is what the unit runs;
@@ -18,11 +19,13 @@
 //!   starts the unit again, burst after burst, until it can start; with kbf's text, which lacks
 //!   the `-`, it is left failed.
 //!
-//! - a daemon the deb installed and enabled (no package of hostkeeper, the deb's `WantedBy=` link
-//!   in the unit directory) is ordered the install of the next release, which carries the real
+//! - a daemon the deb installed and enabled (the bootstrap unit over a packaged binary named by
+//!   its version, an empty binary directory, no package of hostkeeper, the deb's `WantedBy=` link
+//!   in the unit directory) starts by seeding the binary directory with the packaged binary and
+//!   running `current`; it is ordered the install of the next release, which carries the package
 //!   unit: the install places it around the deb's link, the probe of the new binary runs in its
-//!   transient unit through the shipped launcher, the unit restarts into the new binary, which
-//!   settles the install `Succeeded` and reports it.
+//!   transient unit through the shipped launcher, the unit restarts the packaged binary, which
+//!   runs the new `current`, which settles the install `Succeeded` and reports it.
 //!
 //! Every wait polls systemd or the files for a state (`support::wait_until`) and stops at once
 //! when the state can no longer come; no test asserts how long anything took.
@@ -107,7 +110,10 @@ fn a_next_binary_that_starts_settles_the_update_succeeded_and_is_what_the_unit_r
     });
 }
 
-/// Catches the self-update of a daemon the deb installed stopping after it placed the package
+/// Catches a deb whose bootstrap unit does not bring the daemon up (the packaged binary not
+/// seeding the empty binary directory, not running `current`, or its unit restarted into the
+/// packaged binary alone) and the self-update of a daemon the deb installed stopping after it
+/// placed the package
 /// (the deb's enable link refused as a placed path that `placed.json` does not list, the probe
 /// refused for a launcher that runs none, or a verdict never reported for a service that is not
 /// listed): ordered the install of [`NEXT`], the host runs it as its self-update; the record
@@ -115,7 +121,10 @@ fn a_next_binary_that_starts_settles_the_update_succeeded_and_is_what_the_unit_r
 /// `current` naming it and `previous` the deb's; the package is installed (`current` of the
 /// packages directory) with its unit linked in the unit directory and the deb's link left as
 /// the deb made it; the new daemon reports itself and hostkeeper at the new version with the
-/// install's verdict.
+/// install's verdict. Before the order, `current` names [`N`] (seeded by the packaged start,
+/// which left nothing `previous`) and the unit's main process runs `versions/N`; after it, the
+/// unit's main process runs `versions/NEXT` (the bootstrap unit restarted the packaged binary,
+/// which ran `current`).
 #[test]
 fn a_daemon_the_deb_installed_is_installed_its_next_release_and_restarts_into_it() {
     let host = Host::start(
@@ -126,6 +135,8 @@ fn a_daemon_the_deb_installed_is_installed_its_next_release_and_restarts_into_it
         },
     );
     host.runs(N);
+    assert_eq!(host.current().as_deref(), Some(N));
+    assert_eq!(host.layout().previous().expect("previous"), None);
     host.offer_install(1);
 
     let rec = host.settled();

@@ -5,7 +5,7 @@
 # meet the real thing: the step launcher's transient units and their bound, the dead-man's stop
 # by name, the observer's systemctl and /proc adapters, the unit control's systemctl
 # (daemon-reload, start, stop, is-active), hostkeeper's update of itself as a unit made of
-# packaging/linux/hostkeeper.service with its drop-in and fallback unit (the restart into the
+# packaging/linux/units/hostkeeper.service (and, for the bootstrap start, packaging/linux/hostkeeper.service) with its drop-in and fallback unit (the restart into the
 # new binary, the start limit, OnFailure=, the fallback's flip back, the settle at start, a
 # SIGKILL before and after the switch while the update waits for its restart), and, in
 # tierstore_shaped.rs, the whole update path: the real daemon under a Type=notify unit and the
@@ -72,8 +72,8 @@
 # (each moved aside if the host already has it and put back when the test ends) and the release
 # channel's CA appended to /etc/ssl/cert.pem, which is written back as it was, and for
 # device_mac_selfupdate a tree under /private/var; for self_update_across_releases the daemon's own
-# unit where the deb installs it (/usr/lib/systemd/system/hostkeeper.service, with its wants link)
-# and where a package links it (/etc/systemd/system/hostkeeper.service), or on the Mac its plist
+# bootstrap unit where the deb installs it (/usr/lib/systemd/system/hostkeeper.service, with its wants link)
+# and the package unit where a package links it (/etc/systemd/system/hostkeeper.service), or on the Mac its plist
 # where the pkg puts it (/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist), beside the fixed
 # paths of the end-to-end tests; and in first-boot
 # the daemon's fixed paths too: the pki directory /etc/updater, the self-update units under

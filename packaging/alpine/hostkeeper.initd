@@ -31,7 +31,7 @@
 description="hostkeeper, the update daemon of this host"
 supervisor=supervise-daemon
 command=/usr/bin/hostkeeper
-command_args="daemon --config /etc/hostkeeper/hostkeeper.toml --state-dir /var/lib/updater/state --packages-dir /var/lib/hostkeeper/packages --admin-socket /run/hostkeeper/admin.sock --ready-file /run/hostkeeper/ready"
+command_args="daemon --config /etc/hostkeeper/hostkeeper.toml --state-dir /var/lib/updater/state --packages-dir /var/lib/hostkeeper/packages --ready-file /run/hostkeeper/ready"
 respawn_delay=1
 respawn_max=0
 output_log=/var/log/hostkeeper.log

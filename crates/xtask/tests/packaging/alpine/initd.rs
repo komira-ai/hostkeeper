@@ -641,7 +641,7 @@ fn init_script_arguments_are_the_units_word_for_word() {
     let initd = read_alpine(INITD);
     let unit = read(UNIT);
     let tmpfiles = read(TMPFILES);
-    let args = "daemon --config /etc/hostkeeper/hostkeeper.toml --state-dir /var/lib/updater/state --packages-dir /var/lib/hostkeeper/packages --admin-socket /run/hostkeeper/admin.sock --ready-file /run/hostkeeper/ready";
+    let args = "daemon --config /etc/hostkeeper/hostkeeper.toml --state-dir /var/lib/updater/state --packages-dir /var/lib/hostkeeper/packages --ready-file /run/hostkeeper/ready";
     let with_args = |new: &str| altered(&initd, args, new);
     let initd_cases = [
         (
@@ -674,7 +674,7 @@ fn init_script_arguments_are_the_units_word_for_word() {
         ),
         (
             with_args(
-                "daemon --state-dir /var/lib/updater/state --config /etc/hostkeeper/hostkeeper.toml --packages-dir /var/lib/hostkeeper/packages --admin-socket /run/hostkeeper/admin.sock --ready-file /run/hostkeeper/ready",
+                "daemon --state-dir /var/lib/updater/state --config /etc/hostkeeper/hostkeeper.toml --packages-dir /var/lib/hostkeeper/packages --ready-file /run/hostkeeper/ready",
             ),
             "command_args is",
         ),
@@ -684,8 +684,8 @@ fn init_script_arguments_are_the_units_word_for_word() {
         (
             altered(
                 &unit,
-                "--admin-socket /run/hostkeeper/admin.sock",
-                "--admin-socket /run/hostkeeper/other.sock",
+                "--config /etc/hostkeeper/hostkeeper.toml",
+                "--config /etc/hostkeeper/other.toml",
             ),
             "command_args is",
         ),
