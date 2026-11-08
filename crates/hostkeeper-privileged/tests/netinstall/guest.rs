@@ -28,6 +28,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+use hostkeeper_proto::hostkeeper::agent::v1::Platform;
+
 use super::events::{Bus, Source};
 use super::program::Program;
 
@@ -103,11 +105,11 @@ impl Arch {
         }
     }
 
-    /// The platform as `hostkeeper ctl enrollment add-record --platform` spells it.
-    pub fn ctl_platform(self) -> &'static str {
+    /// The platform an inventory record states (`Enrollment.AddRecord`'s `platform`).
+    pub fn proto_platform(self) -> Platform {
         match self {
-            Arch::X86_64 => "linux_x86_64",
-            Arch::Arm64 => "linux_arm64",
+            Arch::X86_64 => Platform::LinuxX8664,
+            Arch::Arm64 => Platform::LinuxArm64,
         }
     }
 

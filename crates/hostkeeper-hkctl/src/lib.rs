@@ -36,7 +36,7 @@ const RUNTIME: &str = include_str!("runtime.bash");
 /// its value plus `--timeout-secs`.
 pub(crate) const HOLD_FIELD: &str = "wait_secs";
 
-/// The flags hkctl defines beyond those `hostkeeper ctl` keeps for itself (the generator's
+/// The flags hkctl defines beyond those the command table keeps for itself (the generator's
 /// `RESERVED_FLAGS`, which no field takes): no field may take these either. `--version` is
 /// hkctl's own only before the service, so a field may be named `version`.
 pub(crate) const OWN_FLAGS: [&str; 2] = ["github-oidc-audience", "response-file"];

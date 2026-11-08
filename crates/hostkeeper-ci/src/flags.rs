@@ -52,8 +52,8 @@ pub struct SetDesiredFlags {
     /// The pause, in seconds, between two reads of the convergence.
     #[arg(long, default_value_t = 10)]
     pub pause_secs: u64,
-    /// An existing directory (the runner's temp directory) for the token file and the request
-    /// file.
+    /// An existing directory (the runner's temp directory). It must exist; nothing is written
+    /// there: the flag is kept so that a workflow that passes it still runs.
     #[arg(long)]
     pub work_dir: PathBuf,
     /// The job's output file: `desired_version`, `converged` and `reason` are appended to it.
@@ -89,7 +89,6 @@ pub(crate) struct Settings {
     pub wait: bool,
     pub max_polls: u32,
     pub pause_secs: u64,
-    pub work_dir: PathBuf,
     pub github_output: Option<PathBuf>,
 }
 
@@ -242,7 +241,6 @@ pub(crate) fn validate(
         wait: flags.wait,
         max_polls: flags.max_polls,
         pause_secs: flags.pause_secs,
-        work_dir: flags.work_dir.clone(),
         github_output: flags.github_output.clone(),
     };
     Ok((settings, roots))

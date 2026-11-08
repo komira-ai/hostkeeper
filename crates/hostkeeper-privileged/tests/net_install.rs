@@ -3,7 +3,7 @@
 //! net-install.yml's job `net-install`): a QEMU guest with OVMF under KVM, an empty disk, a fixed
 //! UUID and serial, its NIC first in the boot order, on a LAN with no route out, with the
 //! router's DHCP faked by the test, the real `hostkeeper-pxe` and the real coordinator with its
-//! LAN listener (`netinstall`). The operator acts only through `hostkeeper ctl`, and the guest is
+//! LAN listener (`netinstall`). The operator acts only through the operator API, and the guest is
 //! only booted, rebooted (by its operator account) and read.
 //!
 //! In order, it checks:
@@ -20,8 +20,8 @@
 //! 4. Reinstall with `--reinstall`, in router mode (the record states its platform): the guest's
 //!    REQUEST learned, `hostkeeper/boot.efi` served as the x86-64 shim, the install menu and the
 //!    seed fetched; the reboot after the install got the local-disk menu (its MAC left the answer
-//!    set); then a request flagged `duplicate_claim`, an approval without `--replace` refused,
-//!    the `--replace` approval, and the old certificate's heartbeat refused `forbidden`.
+//!    set); then a request flagged `duplicate_claim`, an approval without `replace` refused,
+//!    the `replace` approval, and the old certificate's heartbeat refused `forbidden`.
 //! 5. The host retired (`Hosts.Retire`), the coordinator restarted, the guest network-booted
 //!    without `--reinstall`: no answer in proxy mode, the local-disk menu in router mode, and each
 //!    time the same installed system boots from its disk, with no seed fetched.
@@ -29,7 +29,7 @@
 //! The guest's console, the logs and the coordinator's are kept under
 //! `target/privileged-artifacts/net_install/`, with the inputs of the measurement of the first
 //! install that are not logs (design section 11, item N11): `pending.json`, the pending list as
-//! `enrollment list` gave it before the approval, and `host.json`, the host as `hosts get` gave
+//! `Enrollment.List` gave it before the approval, and `host.json`, the host as `Hosts.Get` gave
 //! it once the fixture service was installed, its serving time among them. The job's step after
 //! this test makes the report of them with `cargo xtask netinstall-report`; no test asserts a
 //! time.
@@ -45,7 +45,9 @@ use netinstall::guest::{Arch, Machine};
 use netinstall::pxe::Mode;
 use netinstall::{Rig, SERVICE, VERSION, fixture, heartbeat};
 use serde_json::Value;
-use support::pair::{Coordinator, ROLE, put};
+use support::operator_api::{Approval, must};
+use support::pair::{Coordinator, ROLE};
+use tonic::Code;
 
 /// The record's host id, and the guest's host name once installed.
 const HOST: &str = "net-1";
@@ -75,21 +77,26 @@ fn seen(host: &Value) -> Value {
         .unwrap_or(Value::Null)
 }
 
-/// A unix time the ctl prints (a string), as a number.
+/// A unix time the operator API's JSON has (a string), as a number.
 fn unix(value: &Value) -> Option<u64> {
     value.as_str().and_then(|s| s.parse().ok())
 }
 
-/// The host as `hosts get` gives it, or why not.
+/// The host as `Hosts.Get` gives it, or why not.
 fn host_of(coordinator: &Coordinator) -> Result<Value, String> {
     coordinator
-        .ctl(&["hosts", "get", "--node-id", HOST])
+        .api()
+        .get_host(HOST)
         .map(|got| got["host"].clone())
+        .map_err(|e| e.to_string())
 }
 
-/// The record's `hostHeld`, as `enrollment list-records` gives it.
+/// The record's `hostHeld`, as `Enrollment.ListRecords` gives it.
 fn host_held(coordinator: &Coordinator) -> Result<Value, String> {
-    let records = coordinator.ctl(&["enrollment", "list-records"])?;
+    let records = coordinator
+        .api()
+        .list_records()
+        .map_err(|e| e.to_string())?;
     records["records"]
         .as_array()
         .and_then(|all| all.iter().find(|r| r["hostId"] == HOST))
@@ -129,22 +136,12 @@ fn an_x86_64_machine_installs_by_network_enrolls_gets_its_service_is_reinstalled
     // file runs it on the record's role, so the host is assigned it at its approval.
     let package = fixture(&rig.signer);
     rig.channel.serve(&package);
-    let request = rig.scratch().join("desired.json");
-    put(
-        &request,
-        format!("{{\"desired\":{{\"version\":\"{VERSION}\"}}}}").as_bytes(),
-        0o644,
+    must(
+        "releases set-desired",
+        rig.coordinator
+            .api()
+            .set_desired(SERVICE, VERSION, &package.digest),
     );
-    rig.ctl(&[
-        "releases",
-        "set-desired",
-        "--service",
-        SERVICE,
-        "--package-digest",
-        &package.digest,
-        "--request",
-        &request.display().to_string(),
-    ]);
 
     // 1. Proxy mode: the install, and the reboot after it.
     rig.serve(Mode::Proxy, &[]);
@@ -182,7 +179,7 @@ fn an_x86_64_machine_installs_by_network_enrolls_gets_its_service_is_reinstalled
 
     // 2. Enrollment, approval, the first heartbeat and the fixture service.
     let request = rig.wait_request(&[]);
-    let pending = rig.ctl(&["enrollment", "list"]);
+    let pending = must("enrollment list", rig.coordinator.api().pending());
     rig.keep("pending.json", pending.to_string().as_bytes());
     let key = request["keySha256"]
         .as_str()
@@ -190,18 +187,16 @@ fn an_x86_64_machine_installs_by_network_enrolls_gets_its_service_is_reinstalled
         .to_owned();
     rig.console_shows(seeded, &key);
     rig.trust_channel();
-    let approved = rig.ctl(&[
-        "enrollment",
-        "approve",
-        "--request-id",
-        request["requestId"].as_str().expect("a request id"),
-        "--key-sha256",
-        &key,
-        "--role",
-        ROLE,
-        "--reason",
-        "network-install test: the key hash is the console's",
-    ]);
+    let approved = must(
+        "enrollment approve",
+        rig.coordinator.api().approve(&Approval {
+            request_id: request["requestId"].as_str().expect("a request id"),
+            key_sha256: &key,
+            role: ROLE,
+            reason: "network-install test: the key hash is the console's",
+            ..Approval::default()
+        }),
+    );
     assert_eq!(approved["hostId"], HOST, "the record's host id: {approved}");
     let coordinator = &rig.coordinator;
     let first = rig.bus.until("the host's first heartbeat", || {
@@ -216,7 +211,10 @@ fn an_x86_64_machine_installs_by_network_enrolls_gets_its_service_is_reinstalled
     // wait_installed saw, or the next.
     let coordinator = &rig.coordinator;
     let got = rig.bus.until("the host's serving time", || {
-        let got = coordinator.ctl(&["hosts", "get", "--node-id", HOST])?;
+        let got = coordinator
+            .api()
+            .get_host(HOST)
+            .map_err(|e| e.to_string())?;
         unix(&got["host"]["firstServingUnix"])
             .map(|_| got.clone())
             .ok_or_else(|| format!("{got}"))
@@ -303,27 +301,20 @@ fn an_x86_64_machine_installs_by_network_enrolls_gets_its_service_is_reinstalled
     let new_key = again["keySha256"].as_str().expect("a key hash").to_owned();
     rig.console_shows(seeded, &new_key);
     rig.trust_channel();
-    let approve = |replace: Option<&str>| {
-        let mut args = vec![
-            "enrollment",
-            "approve",
-            "--request-id",
-            again["requestId"].as_str().expect("a request id"),
-            "--key-sha256",
-            &new_key,
-            "--role",
-            ROLE,
-            "--reason",
-            "network-install test: reinstalled, the key hash is the console's",
-        ];
-        if let Some(replace) = replace {
-            args.extend(["--replace", replace]);
-        }
-        rig.coordinator.ctl(&args)
+    let approve = |replace: bool| {
+        rig.coordinator.api().approve(&Approval {
+            request_id: again["requestId"].as_str().expect("a request id"),
+            key_sha256: &new_key,
+            role: ROLE,
+            reason: "network-install test: reinstalled, the key hash is the console's",
+            replace,
+            ..Approval::default()
+        })
     };
-    let refused = approve(None).expect_err("approval of a duplicate claim without --replace");
-    assert!(refused.contains("refused: duplicate_claim"), "{refused}");
-    approve(Some("true")).expect("the --replace approval");
+    let refused = approve(false).expect_err("approval of a duplicate claim without replace");
+    assert_eq!(refused.code(), Code::FailedPrecondition, "{refused}");
+    assert_eq!(refused.message(), "duplicate_claim", "{refused}");
+    approve(true).expect("the replace approval");
     let ca_der = std::fs::read(rig.coordinator.ca_cert_path()).expect("the CA");
     let lan = rig.coordinator.lan.expect("the LAN listener");
     let (status, body) = heartbeat::post(lan, &ca_der, &old_cert, &old_key);
@@ -332,14 +323,12 @@ fn an_x86_64_machine_installs_by_network_enrolls_gets_its_service_is_reinstalled
     wait_installed(&mut rig, first_cert);
 
     // 5. Retired, the coordinator restarted, and booted from the network again.
-    rig.ctl(&[
-        "hosts",
-        "retire",
-        "--node-id",
-        HOST,
-        "--reason",
-        "network-install test: retired",
-    ]);
+    must(
+        "hosts retire",
+        rig.coordinator
+            .api()
+            .retire(HOST, "network-install test: retired"),
+    );
     let coordinator = &rig.coordinator;
     rig.bus.until("the record's host_held RETIRED", || {
         let held = host_held(coordinator)?;

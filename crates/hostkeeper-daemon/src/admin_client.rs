@@ -12,8 +12,8 @@
 //! the exit status is 0. A call the daemon refused, or that could not be made, writes one line to
 //! standard error, `hostkeeper admin: <message> (<code>)` for a gRPC status (its message is the
 //! refusal's token) and `hostkeeper admin: cannot connect to <socket>: <why>` for a socket that
-//! could not be reached, and exits with the code `hostkeeper_ctl::exit::code` gives the gRPC code
-//! (`exit::FAILURE` for a socket that could not be reached).
+//! could not be reached, and exits with the code [`exit::code`] gives the gRPC code
+//! ([`exit::FAILURE`] for a socket that could not be reached).
 //!
 //! In the text, an enum value is its name without its prefix, in lower case (`running`); a value
 //! this client does not know is `unknown_<number>`. A string field that is empty is `-`. A
@@ -24,7 +24,6 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use clap::{Args, Subcommand};
-use hostkeeper_ctl::exit;
 use hostkeeper_proto::hostkeeper::agent::v1::{FailureClass, FailurePhase};
 use hostkeeper_proto::hostkeeper::local::v1::admin_client::AdminClient;
 use hostkeeper_proto::hostkeeper::local::v1::{
@@ -38,6 +37,43 @@ use tonic::Status;
 use tonic::transport::{Channel, Endpoint, Uri};
 
 use crate::cli::DEFAULT_ADMIN_SOCKET;
+
+/// The exit codes of `hostkeeper admin` (docs/admin.md).
+pub mod exit {
+    use tonic::Code;
+
+    /// The call succeeded.
+    pub const SUCCESS: u8 = 0;
+    /// The call failed for any reason the codes below do not name: the socket could not be
+    /// reached, or the daemon answered another status.
+    pub const FAILURE: u8 = 1;
+    /// The daemon refused the request as it was made: `INVALID_ARGUMENT`, `FAILED_PRECONDITION`.
+    pub const USAGE: u8 = 2;
+    /// The daemon refused the caller: `UNAUTHENTICATED`, `PERMISSION_DENIED`.
+    pub const DENIED: u8 = 3;
+
+    /// The exit code of a call that ended with the gRPC status code `code`. Every code is named,
+    /// so a code tonic adds is a build error here, not a silent [`FAILURE`].
+    pub fn code(code: Code) -> u8 {
+        match code {
+            Code::Ok => SUCCESS,
+            Code::InvalidArgument | Code::FailedPrecondition => USAGE,
+            Code::Unauthenticated | Code::PermissionDenied => DENIED,
+            Code::Cancelled
+            | Code::Unknown
+            | Code::DeadlineExceeded
+            | Code::NotFound
+            | Code::AlreadyExists
+            | Code::ResourceExhausted
+            | Code::Aborted
+            | Code::OutOfRange
+            | Code::Unimplemented
+            | Code::Internal
+            | Code::Unavailable
+            | Code::DataLoss => FAILURE,
+        }
+    }
+}
 
 /// The program name the lines on standard error start with.
 pub const ADMIN_PROGRAM: &str = "hostkeeper admin";
@@ -382,6 +418,25 @@ pub fn clear_record_text(service: &str, answer: &ClearRecordResponse) -> String 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Proves: each of the 17 gRPC status codes, by its number, has the exit code docs/admin.md
+    /// gives it: 0 for OK, 2 for a request refused as made, 3 for a caller refused, 1 otherwise.
+    ///
+    /// Catches: a code moved to another exit code, so that a script reading the status takes a
+    /// refused caller for a bad request, or a failure for a success.
+    #[test]
+    fn every_grpc_code_has_its_exit_code() {
+        let want: [u8; 17] = [0, 1, 1, 2, 1, 1, 1, 3, 1, 2, 1, 1, 1, 1, 1, 1, 3];
+        for (number, want) in (0..).zip(want) {
+            let code = tonic::Code::from_i32(number);
+            assert_eq!(code as i32, number, "tonic knows the code {number}");
+            assert_eq!(exit::code(code), want, "{code:?}");
+        }
+        assert_eq!(
+            (exit::SUCCESS, exit::FAILURE, exit::USAGE, exit::DENIED),
+            (0, 1, 2, 3)
+        );
+    }
 
     /// Catches a runtime that could not be made reported as a refusal, or with another exit
     /// code than a failure.

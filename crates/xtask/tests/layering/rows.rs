@@ -110,7 +110,7 @@ fn layering_rules_cover_every_surviving_crate() {
     let fewer_dev: Vec<Layer> = LAYERS
         .iter()
         .map(|row| {
-            if row.0 == "hostkeeper-coordinator" {
+            if row.0 == "hostkeeper-hkctl" {
                 (row.0, row.1, oidc_only)
             } else {
                 *row
@@ -120,8 +120,8 @@ fn layering_rules_cover_every_surviving_crate() {
     assert_eq!(
         rows_cover(&fewer_dev, &metadata),
         refused(
-            "hostkeeper-coordinator has dev-dependencies on the workspace crates \
-             {hostkeeper-ctl, hostkeeper-oidc}, but its row in LAYERS names {hostkeeper-oidc}"
+            "hostkeeper-hkctl has dev-dependencies on the workspace crates \
+             {hostkeeper-coordinator, hostkeeper-oidc}, but its row in LAYERS names {hostkeeper-oidc}"
         )
     );
 }

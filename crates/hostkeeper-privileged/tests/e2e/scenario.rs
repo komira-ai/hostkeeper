@@ -85,19 +85,11 @@ impl Drop for Scenario {
         if !std::thread::panicking() {
             return;
         }
-        let ctl = |args: &[&str]| {
-            let output = self.coordinator.ctl_output(args);
-            format!(
-                "{}{}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            )
-        };
         let view = format!(
             "releases status:\n{}\nreleases converge:\n{}\nrelease channel requests:\n{:#?}\n\
              step record:\n{:#?}\n",
-            ctl(&["releases", "status", "--service", SERVICE]),
-            ctl(&["releases", "converge", "--service", SERVICE]),
+            self.coordinator.status_text(SERVICE),
+            self.coordinator.converge_text(SERVICE),
             self.channel.requests(),
             self.host.step_record(),
         );
@@ -197,7 +189,7 @@ impl Scenario {
     }
 
     /// Sets the desired version of the service to `version`, with its package's digest, through
-    /// `hostkeeper ctl`.
+    /// the operator API.
     pub fn order(&self, version: &str) {
         let digest = self.package(version).sha256.clone();
         self.coordinator.set_desired(SERVICE, version, &digest);
