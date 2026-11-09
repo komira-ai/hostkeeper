@@ -43,5 +43,5 @@ pub use placer::{Linking, PlacedLock, Placer};
 pub use reconcile::{BootView, Conflict, ReconcileReport, Side, SwitchIntent, Unresolved};
 pub use remove::Removal;
 pub use roots::{PackageDirs, Roots};
-pub use store::{Entry, PathKind, PathState, PlacedRecord, Store, Tombstone};
+pub use store::{Entry, InstalledEntry, PathKind, PathState, PlacedRecord, Store, Tombstone};
 pub use unit_control::{CommandLauncher, Systemctl, UnitControl, UnitControlError};

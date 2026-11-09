@@ -30,6 +30,7 @@ fn heartbeat_lists_installed_services_from_records_and_observer() {
             updating: Some(version("2.1")),
             last_result: Some(kept.clone()),
             record_try: Some(1),
+            installer: Some("tarball".to_owned()),
             ..recorded("y", "2.0")
         },
     ]);
@@ -62,6 +63,7 @@ fn heartbeat_lists_installed_services_from_records_and_observer() {
                     version: Some(version("1.0")),
                 }),
                 record_try: None,
+                installer: None,
             },
             ServiceFacts {
                 name: service("y"),
@@ -76,6 +78,7 @@ fn heartbeat_lists_installed_services_from_records_and_observer() {
                     version: None,
                 }),
                 record_try: Some(1),
+                installer: Some("tarball".to_owned()),
             },
         ],
         sent_unix: hostkeeper_link::testing::START_UNIX,
