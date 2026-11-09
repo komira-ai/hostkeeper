@@ -582,8 +582,9 @@ pub(crate) fn is_bundle(name: &str) -> bool {
 /// and on Linux, with the deb and rpm architecture `<deb>` and `<rpm>`:
 ///
 /// - `hostkeeper-coordinator-<v>-<p>.tar.gz`, the coordinator's binary;
-/// - `hostkeeper_<v>_<deb>.deb` and `hostkeeper-<v>-1.<rpm>.rpm`, the Linux packages (attested,
-///   and no service package: no `.sha256` and no release index);
+/// - `hostkeeper_<v>_<deb>.deb` and `hostkeeper-<v>-1.<rpm>.rpm`, the daemon's Linux packages, and
+///   `hostkeeper-coordinator_<v>_<deb>.deb` and `hostkeeper-coordinator-<v>-1.<rpm>.rpm`, the
+///   coordinator's (attested, and no service package: no `.sha256` and no release index);
 /// - `hostkeeper-coordinator-<v>-<p>.image.tar`, the coordinator's OCI image;
 /// - `hostkeeper-coordinator-<v>-<p>.cdx.json`, its SBOM;
 /// - `hostkeeper-mdm-<v>-<p>.tar.gz`, the MDM kit's binary, and `hostkeeper-mdm-<v>-<p>.cdx.json`,
@@ -592,7 +593,9 @@ pub(crate) fn is_bundle(name: &str) -> bool {
 /// and on macOS `hostkeeper-<v>-macos-arm64.pkg`, the installer ([`installer_name`]);
 ///
 /// the bundle of each binary tarball (the three programs'), Linux package, installer, hostkeeper package, hello package,
-/// hello's failing build, mdm package and image; and once, [`INDEX`] (the release index of the
+/// hello's failing build, mdm package and image; when both Linux platforms are given, once, the
+/// coordinator's image index `hostkeeper-coordinator-<v>.image.json`
+/// ([`super::image_index`]) and its bundle; and once, [`INDEX`] (the release index of the
 /// hostkeeper packages), [`HELLO_INDEX`] (that of the hello packages), [`HELLO_FAIL_READY_INDEX`]
 /// (that of the failing build), [`MDM_INDEX`] (that of the mdm package), [`NETBOOT`] (the boot sets of network install) and its bundle, `hkctl-<v>`
 /// (the command line, [`hkctl_name`]) and its bundle, and `SHA256SUMS`.
@@ -606,6 +609,12 @@ pub(crate) fn asset_names(version: &Version, platforms: &[Platform]) -> Vec<Stri
         hkctl,
     ];
     names.extend(Package::ALL.map(|p| p.index_name().to_owned()));
+    let linux = [Platform::LinuxX86_64, Platform::LinuxArm64];
+    if linux.iter().all(|p| platforms.contains(p)) {
+        let index = super::image_index::index_name(version);
+        names.push(bundle_of(&index));
+        names.push(index);
+    }
     for &platform in platforms {
         let p = platform.name();
         let mut attested = vec![format!("{PROGRAM}-{version}-{p}.tar.gz")];
@@ -623,6 +632,8 @@ pub(crate) fn asset_names(version: &Version, platforms: &[Platform]) -> Vec<Stri
                 format!("{COORDINATOR}-{version}-{p}.tar.gz"),
                 format!("{PROGRAM}_{version}_{deb}.deb"),
                 format!("{PROGRAM}-{version}-1.{rpm}.rpm"),
+                format!("{COORDINATOR}_{version}_{deb}.deb"),
+                format!("{COORDINATOR}-{version}-1.{rpm}.rpm"),
                 format!("{COORDINATOR}-{version}-{p}.image.tar"),
                 format!("{MDM}-{version}-{p}.tar.gz"),
             ]);

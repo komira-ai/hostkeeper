@@ -48,6 +48,16 @@
 #          publishes it (cargo xtask release publish). A release that holds exactly these files
 #          is success with nothing written; one that differs in any file fails naming it; a
 #          draft left by an earlier run with the same files is completed. Never rebuilds.
+# image    after every publish of the run, per release: the coordinator's multi-platform image
+#          into the registry, ghcr.io/komira-ai/hostkeeper-coordinator, tagged <X.Y.Z>. Nothing is
+#          built: `cargo xtask release image-layout` lays out the blobs and manifests of the two
+#          checked image tarballs and the checked image index (`hostkeeper-coordinator-<X.Y.Z>.image.json`,
+#          which artifacts.yml made of them and attested), and `skopeo copy --all
+#          --preserve-digests` pushes that layout, refusing any change of a digest; the registry
+#          then serves the image index by its SHA-256, byte for byte, or the job fails. So the
+#          digest the release notes name is the attested one. The one job that holds
+#          `packages: write`, with the job's own token; pushing the same release again changes
+#          nothing.
 # channel, set-desired
 #          only while the repository variable RELEASE_SETS_DESIRED is `true`, after every
 #          publish of the run: wait until the release channel serves the newest release, then set
@@ -246,6 +256,53 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: cargo xtask release publish dist --repo "$GITHUB_REPOSITORY" --version "$RELEASE_VERSION" --commit "$COMMIT"
+
+  image:
+    needs: [plan, publish]
+    if: ${{ needs.plan.outputs.release == 'true' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      max-parallel: 1
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      RELEASE_VERSION: ${{ matrix.version }}
+      IMAGE_REPOSITORY: ghcr.io/komira-ai/hostkeeper-coordinator
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ matrix.commit }}
+          persist-credentials: false
+      - run: rustup toolchain install
+      - name: Compile xtask
+        run: cargo xtask --help
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-${{ matrix.tag }}
+          path: dist
+      # The files verify checked, once more: they crossed the run's artifact store.
+      - name: Check the files against SHA256SUMS
+        working-directory: dist
+        run: sha256sum --check --strict SHA256SUMS
+      - name: The image's layout, of the two image tarballs and the image index they make
+        run: cargo xtask release image-layout dist --version "$RELEASE_VERSION" --out "$RUNNER_TEMP/layout"
+      - name: The image's digest, the SHA-256 of its image index
+        run: echo "IMAGE_DIGEST=sha256:$(sha256sum "dist/hostkeeper-coordinator-$RELEASE_VERSION.image.json" | cut -d ' ' -f 1)" >> "$GITHUB_ENV"
+      # The token is the job's own, `packages: write` on this repository's packages only; it is
+      # read from standard input and is on no command line.
+      - name: Sign in to the registry
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: skopeo login ghcr.io --username "$GITHUB_ACTOR" --password-stdin <<< "$GH_TOKEN"
+      - name: Push the image, refusing any change of a digest
+        run: skopeo copy --all --preserve-digests "oci:$RUNNER_TEMP/layout:$RELEASE_VERSION" "docker://$IMAGE_REPOSITORY:$RELEASE_VERSION"
+      - name: Read the image index back by its digest
+        run: skopeo inspect --raw "docker://$IMAGE_REPOSITORY@$IMAGE_DIGEST" > "$RUNNER_TEMP/served.json"
+      - name: The registry serves the released image index, byte for byte
+        run: cmp "$RUNNER_TEMP/served.json" "dist/hostkeeper-coordinator-$RELEASE_VERSION.image.json"
 
   # channel and set-desired: hostkeeper's own deploy (docs/deploy/github-actions.md). They run
   # only once every release of this run is published, and only while the repository variable

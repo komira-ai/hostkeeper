@@ -37,6 +37,8 @@
 //! - `macos-pkg` and `check-macos-pkg` ([`macos_pkg`]): the installer pkg of a Mac's first
 //!   install, and the check of its payload read back from the built pkg.
 //! - `compare-images` ([`compare_images`]): two OCI image tarballs are byte for byte equal.
+//! - `image-index`, `image-layout` ([`image_index`]): the coordinator's multi-platform image
+//!   index, made of the two image tarballs, and the OCI layout a registry push copies from.
 //! - `check-image-ui` ([`check_image_ui`]): the coordinator's image holds the operator web app
 //!   (`ui/`) at the path the coordinator serves by default, file for file, owned by root.
 //! - `plan` ([`plan`]): which commits since the last release are released, oldest first, and
@@ -78,6 +80,7 @@ pub(crate) mod fakes;
 pub(crate) mod git;
 mod github;
 mod hkctl;
+pub(crate) mod image_index;
 mod index;
 mod locate;
 mod macos_pkg;
@@ -275,6 +278,10 @@ pub(crate) enum Verb {
         /// The directory `nfpm-stage` wrote (its `--out`).
         #[arg(long)]
         staged: Option<PathBuf>,
+        /// For the coordinator's deb or rpm instead: the directory its program and `ui/` were
+        /// staged in.
+        #[arg(long, conflicts_with = "staged")]
+        coordinator_staged: Option<PathBuf>,
     },
     /// Write the release index of a service's packages of a version in a directory, one entry
     /// per platform the package is released for (linux-x86_64 alone for mdm), refused when the
@@ -371,6 +378,28 @@ pub(crate) enum Verb {
     },
     /// Refuse two OCI image tarballs unless they are byte for byte equal.
     CompareImages { a: PathBuf, b: PathBuf },
+    /// Write hostkeeper-coordinator-<version>.image.json into `dir`: the OCI image index
+    /// of the two image tarballs of the version there, linux/amd64 then linux/arm64.
+    ImageIndex {
+        /// The release's files.
+        dir: PathBuf,
+        /// The release's version.
+        #[arg(long)]
+        version: Version,
+    },
+    /// Write the OCI image layout of the coordinator's multi-platform image into the new
+    /// directory `out`: the blobs of the two image tarballs in `dir` and the image index there,
+    /// which must be theirs, named under the version.
+    ImageLayout {
+        /// The release's files.
+        dir: PathBuf,
+        /// The release's version.
+        #[arg(long)]
+        version: Version,
+        /// The layout's directory, which must not exist.
+        #[arg(long)]
+        out: PathBuf,
+    },
     /// Refuse the coordinator's OCI image tarball unless it holds the operator web app at
     /// /usr/share/hostkeeper-coordinator/ui: exactly the directories and files of `ui`, with
     /// their bytes, owned by root, files 0644 and directories 0755.
@@ -521,6 +550,8 @@ pub(crate) fn run<A: Adapters>(
         Verb::SetVersion { version, root } => set_version::set_version(&root, &version),
         Verb::Stamp { version, commit } => Ok(vec![contract::stamp_string(&version, &commit)]),
         Verb::CompareImages { a, b } => compare_images::compare_images(&a, &b),
+        Verb::ImageIndex { dir, version } => image_index::write_index(&dir, &version),
+        Verb::ImageLayout { dir, version, out } => image_index::write_layout(&dir, &version, &out),
         Verb::CheckImageUi { image, ui } => check_image_ui::check_image_ui(&image, &ui),
         Verb::Index {
             service,
@@ -554,8 +585,18 @@ pub(crate) fn run<A: Adapters>(
             binaries,
             out,
         }),
-        Verb::CheckLinuxPkg { package, staged } => {
-            package::linux_check::check(&package, staged.as_deref())
+        Verb::CheckLinuxPkg {
+            package,
+            staged,
+            coordinator_staged,
+        } => {
+            use package::linux_check::Staged;
+            let staged = match (&staged, &coordinator_staged) {
+                (Some(dir), _) => Some(Staged::Daemon(dir)),
+                (None, Some(dir)) => Some(Staged::Coordinator(dir)),
+                (None, None) => None,
+            };
+            package::linux_check::check(&package, staged)
         }
         Verb::CheckMacosPkg {
             expanded,
@@ -727,6 +768,8 @@ fn run_with(verb: Verb, ports: &Ports<'_>) -> Result<Vec<String>, Error> {
         Verb::SetVersion { .. }
         | Verb::Stamp { .. }
         | Verb::CompareImages { .. }
+        | Verb::ImageIndex { .. }
+        | Verb::ImageLayout { .. }
         | Verb::CheckImageUi { .. }
         | Verb::Index { .. }
         | Verb::Netboot { .. }

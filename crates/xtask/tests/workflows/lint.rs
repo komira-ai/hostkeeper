@@ -98,6 +98,8 @@ pub struct Allowed {
 /// - `release.yml` / `publish`: `contents`, to create the release and its tag.
 /// - `release.yml` / `plan`: `issues`, to open or update the one issue that tracks a release
 ///   held by a failed privileged run.
+/// - `release.yml` / `image`: `packages`, to push the coordinator's image, the checked bytes of
+///   the release, to this repository's package in the registry.
 /// - `advisories.yml` / `advisories`: `issues`, to open, rewrite or close the one issue that
 ///   lists the security advisories against the dependencies, on a run of main.
 pub const WRITE_ALLOWED: &[Allowed] = &[
@@ -124,6 +126,12 @@ pub const WRITE_ALLOWED: &[Allowed] = &[
         job: "plan",
         scope: "issues",
         condition: PLAN_IF,
+    },
+    Allowed {
+        file: "release.yml",
+        job: "image",
+        scope: "packages",
+        condition: RELEASE_IF,
     },
     Allowed {
         file: advisories::FILE,

@@ -71,7 +71,14 @@ pub const RELEASE_EXEMPT: &[(&str, &str)] = &[(
 
 /// The jobs of release.yml, sorted: the release (`plan`, `verify`, `publish`) and hostkeeper's
 /// own deploy ([`desired::CHANNEL_JOB`], [`desired::JOB`]).
-pub const RELEASE_JOBS: [&str; 5] = ["channel", "plan", "publish", "set-desired", "verify"];
+pub const RELEASE_JOBS: [&str; 6] = [
+    "channel",
+    "image",
+    "plan",
+    "publish",
+    "set-desired",
+    "verify",
+];
 
 /// The triggers release.yml may have.
 pub const RELEASE_TRIGGERS: [&str; 3] = ["schedule", "workflow_dispatch", "workflow_run"];
@@ -127,6 +134,10 @@ pub const PACKAGES: [(&str, &str, &[&str]); 4] = [
 /// The architectures of the two Linux platforms as the packages name them: the deb's, then the
 /// rpm's.
 pub const LINUX_ARCHES: [(&str, &str); 2] = [("amd64", "x86_64"), ("arm64", "aarch64")];
+
+/// The programs of the Linux packages the attest job signs: the daemon's deb and rpm
+/// (packaging/linux/nfpm.yaml) and the coordinator's (packaging/coordinator/nfpm.yaml).
+pub const LINUX_PACKAGE_PROGRAMS: [&str; 2] = ["hostkeeper", "hostkeeper-coordinator"];
 
 /// The `if:` of each step of the build job that makes the mdm package: the linux-x86_64 leg of
 /// its matrix, the one platform the package is built for.
@@ -196,9 +207,10 @@ const PUBLISH_MARKS: [&str; 6] = [
 ];
 
 /// The `cargo xtask release` verbs release.yml may run: none builds, packages or signs.
-const RELEASE_VERBS: [&str; 6] = [
+const RELEASE_VERBS: [&str; 7] = [
     "check",
     "check-binary",
+    "image-layout",
     "locate",
     "plan",
     "publish",
@@ -355,7 +367,7 @@ fn release_problems(doc: &Node) -> Vec<String> {
     jobs.sort_unstable();
     if jobs != RELEASE_JOBS {
         problems.push(format!(
-            "release.yml: jobs are {jobs:?}, not plan, verify, publish, channel and set-desired"
+            "release.yml: jobs are {jobs:?}, not plan, verify, publish, image, channel and set-desired"
         ));
     }
     for (name, condition, needs) in [
@@ -645,17 +657,20 @@ fn package_problems(attest: Option<&Node>) -> Vec<String> {
         }
     }
     let version = "${{ needs.version.outputs.version }}";
-    for (deb, rpm) in LINUX_ARCHES {
+    for ((deb, rpm), program) in LINUX_ARCHES
+        .into_iter()
+        .flat_map(|arches| LINUX_PACKAGE_PROGRAMS.map(|program| (arches, program)))
+    {
         let linux_packages = [
             (
-                format!("hostkeeper_{version}_{deb}.deb"),
-                format!("hostkeeper_<version>_{deb}.deb"),
-                format!("hostkeeper_${{V}}_{deb}.deb"),
+                format!("{program}_{version}_{deb}.deb"),
+                format!("{program}_<version>_{deb}.deb"),
+                format!("{program}_${{V}}_{deb}.deb"),
             ),
             (
-                format!("hostkeeper-{version}-1.{rpm}.rpm"),
-                format!("hostkeeper-<version>-1.{rpm}.rpm"),
-                format!("hostkeeper-${{V}}-1.{rpm}.rpm"),
+                format!("{program}-{version}-1.{rpm}.rpm"),
+                format!("{program}-<version>-1.{rpm}.rpm"),
+                format!("{program}-${{V}}-1.{rpm}.rpm"),
             ),
         ];
         for (subject, file, copied) in linux_packages {
@@ -663,6 +678,12 @@ fn package_problems(attest: Option<&Node>) -> Vec<String> {
             problems.extend(attest_problem(attest, &subject, &file, &copied));
         }
     }
+    problems.extend(attest_problem(
+        attest,
+        &format!("dist/hostkeeper-coordinator-{version}.image.json"),
+        "hostkeeper-coordinator-<version>.image.json",
+        "hostkeeper-coordinator-${V}.image.json",
+    ));
     for (program, platforms) in TARBALLS {
         for platform in platforms {
             let stem = format!("{program}-${{{{ needs.version.outputs.version }}}}-{platform}");

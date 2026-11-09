@@ -26,7 +26,7 @@ tag. A `[trusted_signers]` entry in a daemon config must name `artifacts.yml` on
 
 `<version>` is X.Y.Z. `<platform>` is `linux-x86_64`, `linux-arm64` or `macos-arm64`;
 `<linux-platform>` is `linux-x86_64` or `linux-arm64`; `<deb-arch>` is `amd64` or `arm64`;
-`<rpm-arch>` is `x86_64` or `aarch64`. The deb, the rpm, the coordinator and the MDM kit's
+`<rpm-arch>` is `x86_64` or `aarch64`. The debs, the rpms, the coordinator and the MDM kit's
 binary are for the two Linux platforms; the installer pkg is for `macos-arm64`.
 
 | Asset | Content |
@@ -46,6 +46,9 @@ binary are for the two Linux platforms; the installer pkg is for `macos-arm64`.
 | `hostkeeper-coordinator-<version>-<linux-platform>.tar.gz` | the coordinator binary |
 | `hostkeeper-coordinator-<version>-<linux-platform>.cdx.json` | its CycloneDX SBOM |
 | `hostkeeper-coordinator-<version>-<linux-platform>.image.tar` | the coordinator's container image `hostkeeper-coordinator:<version>`: a tarball that is an OCI image layout and that `docker load` also reads |
+| `hostkeeper-coordinator-<version>.image.json` | the OCI image index of the two images above (linux/amd64, then linux/arm64), made of them by `cargo xtask release image-index`: its SHA-256 is the digest of the multi-platform image `ghcr.io/komira-ai/hostkeeper-coordinator@sha256:<digest>` |
+| `hostkeeper-coordinator_<version>_<deb-arch>.deb` | the coordinator's deb package: the static coordinator, its unit (as the user `hostkeeper-coordinator`, with the flags of `/etc/hostkeeper-coordinator/serve.toml`), its sysusers.d entry, its tmpfiles rules, the template of `serve.toml` and the operator web app ([coordinator/package.md](coordinator/package.md)) |
+| `hostkeeper-coordinator-<version>-1.<rpm-arch>.rpm` | the coordinator's rpm package, with the same files |
 | `hostkeeper-mdm-<version>-<linux-platform>.tar.gz` | the MDM kit's binary, `hostkeeper-mdm` (`crates/hostkeeper-mdm`), which sets up and migrates the MDM server stack on its Linux host |
 | `hostkeeper-mdm-<version>-<linux-platform>.cdx.json` | its CycloneDX SBOM |
 | `hostkeeper-<version>-macos-arm64.pkg` | the installer of a Mac's first install: `/usr/local/bin/hostkeeper` (0755), `/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist` (0644), the log directory `/var/log/hostkeeper` (0755) and its rotation `/etc/newsyslog.d/hostkeeper.conf` (0644), the pinned `gh` at `/usr/local/lib/hostkeeper/gh` (0755) and the Sigstore trusted root at `/usr/local/lib/hostkeeper/trusted_root.json` (0644), owned by root and wheel; a distribution pkg (`productbuild` around the component pkg); the component's one script, a `postinstall`, boots out any loaded copy of the daemon's job and loads it (the plist's program is `/usr/local/bin/hostkeeper daemon`, which at each start points `/var/lib/updater/state/hostkeeper/bin/current` at itself when that starts nothing, writes `/etc/hostkeeper/hostkeeper.toml` from the MDM's managed preferences unless that file exists, and runs `current`); not signed, attested |
@@ -56,7 +59,7 @@ binary are for the two Linux platforms; the installer pkg is for `macos-arm64`.
 | `hkctl-<version>` | the command line of the coordinator ([docs/cli.md](../cli.md)): one bash script for every platform, generated from the protobuf services, that calls the coordinator's JSON gateway with `curl`; it needs bash 3.2 or later and curl 7.55 or later. No host package carries it |
 | `netboot.json` | the boot sets of network install (docs/design/network-install.md, section 5): for each Linux platform the Ubuntu live-server ISO, the shim, the signed network GRUB, the kernel and the initrd a bare machine boots, each with the name it is served as, its size, its SHA-256 and where it comes from, rendered from `packaging/netboot/pins.toml` (`cargo xtask release netboot`) |
 | `SHA256SUMS` | the SHA-256 of every asset except itself and the bundles |
-| `<asset>.sigstore.json` | the attestation bundle of each `.tar.gz`, `.tar.zst`, `.deb`, `.rpm`, `.image.tar` and `.pkg`, of `netboot.json` and of `hkctl-<version>` |
+| `<asset>.sigstore.json` | the attestation bundle of each `.tar.gz`, `.tar.zst`, `.deb`, `.rpm`, `.image.tar` and `.pkg`, of `netboot.json`, of the image index `hostkeeper-coordinator-<version>.image.json` and of `hkctl-<version>` |
 
 Each index has the same schema. An index is a lookup, not a trust anchor: it has no bundle of its
 own, and a host trusts a package for its own attestation and manifest, never for its entry in the
@@ -76,12 +79,29 @@ built twice from clean contexts and released only when the two builds are byte f
 anyone can rebuild it from the commit and compare; before it is released it is also loaded and run
 through its entrypoint with `--version`, which must print the coordinator's stamp.
 
+The same two images are also in the registry, as one multi-platform image: the release workflow
+pushes the blobs and manifests of the two tarballs and the image index, byte for byte (`skopeo copy
+--all --preserve-digests`), tagged `<version>`. Pull it by digest, the SHA-256 of the image index,
+which the release notes name:
+
+```sh
+docker pull ghcr.io/komira-ai/hostkeeper-coordinator@sha256:<digest>
+gh attestation verify oci://ghcr.io/komira-ai/hostkeeper-coordinator@sha256:<digest> \
+  --repo komira-ai/hostkeeper --signer-workflow komira-ai/hostkeeper/.github/workflows/artifacts.yml --source-ref refs/heads/main
+```
+
+The attestation is the one of the asset `hostkeeper-coordinator-<version>.image.json`, whose
+SHA-256 is that digest; each platform's manifest is the one of its `.image.tar`, at the same
+digest. A tag can be moved; a digest cannot, so a deployment pins the digest.
+
 A release holds the assets of all three platforms; `cargo xtask release check` refuses one that
 lacks any of them, and each index lists the package of each, but for `mdm-index.json`, which
 lists the one platform the mdm package is built for. The pkg carries no installer
 signature (that needs an Apple Developer ID Installer identity, which this project does not hold):
-verify it by its attestation, steps 3 and 4, like any other asset. Names are only ever added,
-never renamed or removed, so a consumer ignores assets it does not know.
+verify it by its attestation, steps 3 and 4, like any other asset. Names are added, never
+renamed, so a consumer ignores assets it does not know. A name is removed only when its asset is
+withdrawn: the Arch Linux package (`hostkeeper-<version>-1-<rpm-arch>.pkg.tar.zst`) is no longer
+built, by the maintainers' ruling that the Linux packages are deb and rpm.
 
 ### Every name
 
@@ -116,6 +136,12 @@ hostkeeper-coordinator-<version>-<linux-platform>.tar.gz.sigstore.json
 hostkeeper-coordinator-<version>-<linux-platform>.cdx.json
 hostkeeper-coordinator-<version>-<linux-platform>.image.tar
 hostkeeper-coordinator-<version>-<linux-platform>.image.tar.sigstore.json
+hostkeeper-coordinator-<version>.image.json
+hostkeeper-coordinator-<version>.image.json.sigstore.json
+hostkeeper-coordinator_<version>_<deb-arch>.deb
+hostkeeper-coordinator_<version>_<deb-arch>.deb.sigstore.json
+hostkeeper-coordinator-<version>-1.<rpm-arch>.rpm
+hostkeeper-coordinator-<version>-1.<rpm-arch>.rpm.sigstore.json
 hostkeeper-mdm-<version>-<linux-platform>.tar.gz
 hostkeeper-mdm-<version>-<linux-platform>.tar.gz.sigstore.json
 hostkeeper-mdm-<version>-<linux-platform>.cdx.json

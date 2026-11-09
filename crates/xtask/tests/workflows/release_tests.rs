@@ -265,11 +265,12 @@ fn publish_job_alone_holds_contents_write() {
 fn unpinned_action_is_refused_in_the_new_workflows() {
     // Catches: an action of a release workflow that a tag or branch move would change under us,
     // in the job that publishes and in the job that signs.
-    let download = "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1\n        with:\n          name: release-${{ matrix.tag }}";
+    // The publish job's download (the image job downloads the same artifact).
+    let download = "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1\n        with:\n          name: release-${{ matrix.tag }}\n          path: dist\n      # The same checks as verify";
     let text = with_in(
         &workflow("release.yml"),
         download,
-        "actions/download-artifact@v8\n        with:\n          name: release-${{ matrix.tag }}",
+        "actions/download-artifact@v8\n        with:\n          name: release-${{ matrix.tag }}\n          path: dist\n      # The same checks as verify",
     );
     assert_refused(
         "release.yml",
@@ -560,7 +561,7 @@ fn release_workflow_keeps_its_five_jobs_and_checks_the_binary() {
     assert_refused(
         "release.yml",
         &text,
-        "release.yml: jobs are [\"channel\", \"notify\", \"plan\", \"publish\", \"set-desired\", \"verify\"], not plan, verify, publish, channel and set-desired",
+        "release.yml: jobs are [\"channel\", \"image\", \"notify\", \"plan\", \"publish\", \"set-desired\", \"verify\"], not plan, verify, publish, image, channel and set-desired",
     );
     for program in ["hostkeeper", "hostkeeper-coordinator", "hostkeeper-mdm"] {
         let check = format!(
@@ -969,4 +970,54 @@ fn the_verify_doc_names_the_identity_the_attest_job_signs_with() {
     }
     assert!(workflow("artifacts.yml").contains(&format!("    if: {SIGN_IF}\n")));
     assert!(SIGN_IF.contains("refs/heads/main"));
+}
+
+#[test]
+fn only_the_image_job_of_release_yml_holds_packages_write_and_only_under_its_if() {
+    // Catches: a second job that can push to the registry, the image pushed by a run of another
+    // branch or event than a release of main, or a workflow other than release.yml pushing.
+    let pushers: Vec<(&str, &str, &str)> = WRITE_ALLOWED
+        .iter()
+        .filter(|a| a.scope == "packages")
+        .map(|a| (a.file, a.job, a.condition))
+        .collect();
+    assert_eq!(pushers, [("release.yml", "image", RELEASE_IF)]);
+    assert_eq!(
+        lint("release.yml", &workflow("release.yml")),
+        Vec::<String>::new()
+    );
+
+    let image_job = "  image:\n    needs: [plan, publish]\n";
+    let verify_scope = "      actions: read\n      attestations: read\n";
+    let in_verify = with_in(
+        &workflow("release.yml"),
+        verify_scope,
+        &format!("{verify_scope}      packages: write\n"),
+    );
+    assert_refused(
+        "release.yml",
+        &in_verify,
+        "job verify: `packages: write` is not allowed in release.yml",
+    );
+    let wider = with_in(
+        &workflow("release.yml"),
+        &format!("{image_job}    if: {RELEASE_IF}\n"),
+        &format!("{image_job}    if: ${{{{ github.ref == 'refs/heads/main' }}}}\n"),
+    );
+    assert_refused(
+        "release.yml",
+        &wider,
+        &format!("job image: `packages: write` needs the exact `if: {RELEASE_IF}`"),
+    );
+    let attest_scope = "      id-token: write\n      attestations: write\n";
+    let in_artifacts = with_in(
+        &workflow("artifacts.yml"),
+        attest_scope,
+        &format!("{attest_scope}      packages: write\n"),
+    );
+    assert_refused(
+        "artifacts.yml",
+        &in_artifacts,
+        "job attest: `packages: write` is not allowed in artifacts.yml",
+    );
 }

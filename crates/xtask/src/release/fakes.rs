@@ -9,10 +9,11 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use super::contract::{
-    Commit, DIGEST_SUFFIX, Package, Repo, SIGNER_REF, SIGNER_WORKFLOW, SUMS, Signer, Version,
-    attested_names, bundle_of, hkctl_name, summed_names,
+    Commit, DIGEST_SUFFIX, Package, Platform, Repo, SIGNER_REF, SIGNER_WORKFLOW, SUMS, Signer,
+    Version, attested_names, bundle_of, hkctl_name, summed_names,
 };
 use super::file_sha256;
+use super::image_index;
 use super::index::ReleaseIndex;
 use super::ports::{
     Adapters, AdvisoryCheck, Attestation, BuildPkg, Download, Exec, GitHistory, GitHubRuns, Issue,
@@ -43,8 +44,24 @@ pub(crate) fn write_assets(dir: &Path, version: &Version, marker: &str) {
         if name.ends_with(DIGEST_SUFFIX) | Package::ALL.iter().any(|p| name == p.index_name()) {
             continue;
         }
+        if *name == image_index::index_name(version) {
+            continue;
+        }
+        if let Some((_, arch)) = [
+            (Platform::LinuxX86_64, "amd64"),
+            (Platform::LinuxArm64, "arm64"),
+        ]
+        .into_iter()
+        .find(|(p, _)| *name == image_index::image_name(version, *p))
+        {
+            std::fs::write(dir.join(name), image_index::fake_image(arch, marker))
+                .expect("write an image");
+            continue;
+        }
         write(name, format!("{name} {marker}\n"));
     }
+    let image = image_index::index_bytes(dir, version).expect("the image index");
+    std::fs::write(dir.join(image_index::index_name(version)), image).expect("write the index");
     // The command line passes `release check` as the script `release hkctl` writes, stamped with
     // the 12 digits every commit of [`nth_commit`] below 2^32 starts with.
     write(
@@ -315,6 +332,8 @@ pub(crate) struct FakeStore {
     pub(crate) writes: RefCell<Vec<String>>,
     /// When set, uploads fail once this many have succeeded (a run cut short).
     pub(crate) uploads_left: Cell<Option<usize>>,
+    /// The notes of each draft created, in order.
+    pub(crate) notes: RefCell<Vec<String>>,
 }
 
 impl FakeStore {
@@ -354,9 +373,10 @@ impl ReleaseStore for FakeStore {
         _repo: &Repo,
         tag: &str,
         commit: &Commit,
-        _notes: &str,
+        notes: &str,
     ) -> Result<(), PortError> {
         self.write(format!("create {tag}"));
+        self.notes.borrow_mut().push(notes.to_owned());
         self.insert(Release {
             tag: tag.to_owned(),
             commit: commit.to_string(),
