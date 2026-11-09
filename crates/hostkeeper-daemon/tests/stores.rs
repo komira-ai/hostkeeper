@@ -735,7 +735,7 @@ fn the_update_of_hostkeeper_itself_goes_through_the_same_entry_checks_and_fetch(
 /// Catches the heartbeat and the receipt check listing different installers, and a start that
 /// does not decide them from the host: the host's ports announce what the `os-release` under the
 /// files' `os_root` gives (a Debian host: `hostkeeper-archive` alone in this build, its family
-/// `deb`; no file: no family), the daemon holds that announcement for every heartbeat of its
+/// `deb`, and on a Mac none, which never reads the file; no file: no family), the daemon holds that announcement for every heartbeat of its
 /// start, and the receipt check judges an entry against the same list (`apt`, which it does not
 /// list, is `installer_not_listed`).
 #[test]
@@ -759,7 +759,9 @@ fn the_installers_announced_are_the_ones_the_receipt_check_lists() {
     fs::write(etc.join("os-release"), "ID=debian\n").expect("os-release");
     let debian = ports(&host).announcement;
     assert_eq!(debian.names(), ["hostkeeper-archive"]);
-    assert_eq!(debian.family, Some(hostkeeper_install::Family::Deb));
+    // A Mac never reads os-release, so it has no family whatever the file says.
+    let family = (!cfg!(target_os = "macos")).then_some(hostkeeper_install::Family::Deb);
+    assert_eq!(debian.family, family);
 
     let world = World::new("stores-announce-daemon");
     let daemon = world.daemon(world.open(world.entry_routes()));
