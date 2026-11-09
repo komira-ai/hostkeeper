@@ -178,8 +178,8 @@ pub enum Stage {
     BootSteps,
     /// The readiness notice is sent.
     Ready,
-    /// The units of hostkeeper's own update are written where they differ
-    /// ([`crate::selfunits`]).
+    /// The fallback units and job of the releases before the hand-over are removed where they
+    /// are found ([`crate::selfunits`]).
     SelfUnits,
 }
 
@@ -339,9 +339,9 @@ pub struct BootReport {
     /// What the start settled of the update of hostkeeper itself that waited for the restart
     /// ([`Daemon::settle_self_update`]), or why it could not: `None` before the start did it.
     pub self_update: Option<Result<hostkeeper_steps::Settled, String>>,
-    /// What the start did with the units of hostkeeper's own update
-    /// ([`Daemon::install_self_units`]), or why it could not: `None` before the start did it.
-    pub self_units: Option<Result<crate::selfunits::Installed, String>>,
+    /// What the start did with the fallback units and job of the releases before the hand-over
+    /// ([`Daemon::remove_self_units`]), or why it could not: `None` before the start did it.
+    pub self_units: Option<Result<crate::selfunits::Removed, String>>,
 }
 
 /// Why the start pass could not run: the state directory cannot be listed.

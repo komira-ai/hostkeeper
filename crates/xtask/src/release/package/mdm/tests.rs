@@ -258,9 +258,9 @@ fn a_daemon_older_than_the_packages_floor_refuses_it() {
     // the units the package relies on taking it), one above it (no host of the farm could
     // install the package), or a build of an older version asking for a newer daemon than
     // itself (a workspace build no daemon of that build takes).
-    assert!(loaded_at("mdm-package-floor-ok", "0.1.60", 53).is_ok());
+    assert!(loaded_at("mdm-package-floor-ok", "0.1.200", 163).is_ok());
     assert!(matches!(
-        loaded_at("mdm-package-floor-old", "0.1.60", 52),
+        loaded_at("mdm-package-floor-old", "0.1.200", 162),
         Err(ManifestRefusal::DaemonTooOld { .. })
     ));
     assert!(loaded("mdm-package-floor-own", 5).is_ok());

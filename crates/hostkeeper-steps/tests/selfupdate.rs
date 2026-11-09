@@ -112,6 +112,37 @@ fn staging_adds_a_version_and_moves_no_link() {
     assert!(layout.stage("1.2.4", &s.path().join("absent")).is_err());
 }
 
+/// Catches a `next` that points at what no hand-over can start, or that moves another link: only a
+/// staged executable binary of the binary directory is linked, a repeat changes nothing, and
+/// `current` and `previous` stay as they were.
+#[test]
+fn next_points_only_at_a_staged_binary_of_the_binary_directory() {
+    let s = Scratch::new("su-next");
+    let layout = Layout::new(&s.path().join("bin"));
+    layout.stage("1.0.0", &binary(s.path(), "a", "a")).unwrap();
+    assert_eq!(layout.next().unwrap(), None);
+    assert_eq!(
+        layout.set_next("1.1.0").unwrap_err().kind(),
+        io::ErrorKind::NotFound
+    );
+    assert_eq!(
+        layout.set_next("a/b").unwrap_err().kind(),
+        io::ErrorKind::InvalidInput
+    );
+    assert_eq!(layout.next().unwrap(), None);
+    layout.set_next("1.0.0").unwrap();
+    layout.set_next("1.0.0").unwrap();
+    assert_eq!(layout.next().unwrap(), Some("1.0.0".to_owned()));
+    assert_eq!(links(&layout), (None, None));
+    layout.remove_next().unwrap();
+    assert_eq!(layout.next().unwrap(), None);
+    let packages = Layout::package(&s.path().join("packages"));
+    assert_eq!(
+        packages.set_next("1.0.0").unwrap_err().kind(),
+        io::ErrorKind::InvalidInput
+    );
+}
+
 /// Catches a switch that loses the way back: `previous` becomes what `current` was, a switch to
 /// the version already current changes nothing (so a repeat after a crash keeps the real previous
 /// one), and a version that was never staged is refused.
@@ -180,8 +211,9 @@ fn leftovers_of_a_crash_are_replaced_and_odd_files_refused() {
 }
 
 /// Catches a follow-on that restarts when it should not or not when it should: only a succeeded
-/// update that is not already this version stages, switches and asks for the restart; a repeat
-/// after a crash gives the same state; a failed update, or the new binary started, does nothing.
+/// update that is not already this version stages, points `next` and asks for the restart, and
+/// moves no `current`; a repeat after a crash gives the same state; a failed update, or the new
+/// binary started, does nothing.
 #[test]
 fn the_follow_on_restarts_only_after_a_success_that_changes_the_binary() {
     let s = Scratch::new("su-follow");
@@ -263,8 +295,12 @@ fn the_follow_on_restarts_only_after_a_success_that_changes_the_binary() {
         FollowOn::Restart
     );
     assert_eq!(
-        (layout.current().unwrap(), layout.previous().unwrap()),
-        (Some("v2".into()), Some("v1".into()))
+        (
+            layout.current().unwrap(),
+            layout.previous().unwrap(),
+            layout.next().unwrap()
+        ),
+        (Some("v1".into()), None, Some("v2".into()))
     );
     let pending = done(Verdict::Succeeded {
         promotion_pending: true,
@@ -318,21 +354,10 @@ fn a_binary_that_exits_at_start_is_replaced_by_the_previous() {
     let ran = Command::new(layout.current_path()).status().unwrap();
     assert!(ran.success());
 
-    let new = release(s.path(), "bad", &system_binary("false"));
-    assert_eq!(
-        follow_on(
-            &ok(),
-            &updating(&s, "bad"),
-            &layout,
-            "good",
-            "bad",
-            &new,
-            Path::new(UPDATER),
-            None
-        )
-        .unwrap(),
-        FollowOn::Restart
-    );
+    // The old way, which the fallback unit of a release before the hand-over still ran this
+    // verb for: the new binary is switched to before it has run.
+    layout.stage("bad", &system_binary("false")).unwrap();
+    layout.switch("bad").unwrap();
     for _ in 0..START_LIMIT_BURST {
         let started = Command::new(layout.current_path()).status().unwrap();
         assert!(!started.success());
@@ -476,12 +501,13 @@ fn the_follow_on_stages_only_a_binary_of_the_verified_release() {
     assert!(!layout.dir().join("versions/v2").exists());
     assert!(!layout.dir().join("versions/v3").exists());
     assert_eq!(links(&layout), (Some("v1".into()), None));
+    assert_eq!(layout.next().unwrap(), None);
 }
 
 /// Catches a follow-on to a version already in place copying over it, or never getting there: when
-/// `current` or `previous` already names the version (a repeat after a crash, or a return to the
-/// binary before), it is switched to without being staged again if its file holds the verified
-/// binary's bytes, and refused with nothing changed if it does not.
+/// `current` or `previous` already names the version (a return to the binary before), `next` is
+/// pointed at it without staging it again if its file holds the verified binary's bytes, and the
+/// follow-on is refused with nothing changed if it does not.
 #[test]
 fn the_follow_on_to_a_version_in_place_stages_nothing() {
     let s = Scratch::new("su-follow-in-place");
@@ -505,6 +531,8 @@ fn the_follow_on_to_a_version_in_place_stages_nothing() {
         .unwrap(),
         FollowOn::Restart
     );
+    // The start of v2 finishes the switch, as its settlement does.
+    layout.switch("v2").unwrap();
     // Back to the binary before, which `previous` names.
     let v1 = release(s.path(), "v1", &a);
     assert_eq!(
@@ -521,7 +549,8 @@ fn the_follow_on_to_a_version_in_place_stages_nothing() {
         .unwrap(),
         FollowOn::Restart
     );
-    assert_eq!(links(&layout), (Some("v1".into()), Some("v2".into())));
+    assert_eq!(links(&layout), (Some("v2".into()), Some("v1".into())));
+    assert_eq!(layout.next().unwrap(), Some("v1".into()));
     assert_eq!(version_text(&layout, "v1"), "a");
     // A release that calls itself v2 with other bytes than the v2 in place.
     let not_v2 = release(s.path(), "not-v2", &binary(s.path(), "z", "z"));
@@ -541,7 +570,8 @@ fn the_follow_on_to_a_version_in_place_stages_nothing() {
         "{err:?}"
     );
     assert_eq!(version_text(&layout, "v2"), "b");
-    assert_eq!(links(&layout), (Some("v1".into()), Some("v2".into())));
+    assert_eq!(links(&layout), (Some("v2".into()), Some("v1".into())));
+    assert_eq!(layout.next().unwrap(), Some("v1".into()));
 }
 
 /// The file of a version, its inode and its bytes, to see that it was not written over.
