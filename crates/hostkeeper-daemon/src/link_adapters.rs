@@ -29,7 +29,7 @@ use std::sync::Arc;
 
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_enroll::RenewalState;
-use hostkeeper_hook::{Phase, Verdict};
+use hostkeeper_hook::{Class, Phase, Verdict};
 use hostkeeper_link::{
     Health, HeldHalts, Liveness, Observation, Order, OrderId, OrderRef, OrderResult, OrderSink,
     Outcome, Reason, RecordedService, Renewal, RenewalSource, RootReason, ServiceObserver,
@@ -68,10 +68,11 @@ impl OrderSink for DaemonOrders {
 }
 
 /// `order` as the protobuf `Order` the daemon takes, every field as it is: the id, the try, and
-/// the target's service, version and digest, or the service alone. An update is an `update`, a
+/// the target's service, version, digest and entry, or the service alone. An update is an `update`, a
 /// forced update a `force`, an install an `install`, an uninstall an `uninstall`, an abort an
 /// `abort` and a clear-record a `clear_record`. The loop's order has no halt generation, so a
-/// `force` carries 0 and lifts no halt, and no entry of a release, so no verb carries a `target`.
+/// `force` carries 0 and lifts no halt. The entry of a release the order carries goes back on the
+/// verb's `target` unchanged; an order with none leaves it unset.
 pub fn wire_order(order: &Order) -> wire::Order {
     let terms = |target: &Target| {
         (
@@ -82,38 +83,39 @@ pub fn wire_order(order: &Order) -> wire::Order {
                 .index_digest
                 .as_ref()
                 .map_or_else(String::new, |d| d.as_str().to_owned()),
+            target.entry.as_ref().map(|entry| entry.as_target().clone()),
         )
     };
     let verb = match &order.verb {
         Verb::Update(target) => {
-            let (service, version, package_digest, index_digest) = terms(target);
+            let (service, version, package_digest, index_digest, entry) = terms(target);
             wire::order::Verb::Update(wire::Update {
                 service,
                 version,
                 package_digest,
                 index_digest,
-                target: None,
+                target: entry,
             })
         }
         Verb::Force(target) => {
-            let (service, version, package_digest, index_digest) = terms(target);
+            let (service, version, package_digest, index_digest, entry) = terms(target);
             wire::order::Verb::Force(wire::Force {
                 service,
                 version,
                 package_digest,
                 index_digest,
                 halt_generation: 0,
-                target: None,
+                target: entry,
             })
         }
         Verb::Install(target) => {
-            let (service, version, package_digest, index_digest) = terms(target);
+            let (service, version, package_digest, index_digest, entry) = terms(target);
             wire::order::Verb::Install(wire::Install {
                 service,
                 version,
                 package_digest,
                 index_digest,
-                target: None,
+                target: entry,
             })
         }
         Verb::Uninstall(service) => wire::order::Verb::Uninstall(wire::Uninstall {
@@ -140,7 +142,8 @@ pub fn wire_order(order: &Order) -> wire::Order {
 ///   gave none. A reason that is not a token is left out and said in the detail.
 /// - A refused or interrupted order is `failed` with the refusal's token as its reason and the
 ///   daemon's text as its detail, in no phase: a refusal is not a new halt, and the halt that
-///   caused `halted` was reported when it was raised.
+///   caused `halted` was reported when it was raised. The refusals of an order's entry that
+///   docs/design/packages.md names with a class ([`blamed`]) carry it, before the commit point.
 /// - An order that is already running is not started: it is answered `busy`, as the loop
 ///   answers an order that arrives while another one runs.
 ///
@@ -160,15 +163,32 @@ pub fn order_result(order: &Order, target: &Version, reply: &Reply) -> OrderResu
     match reply {
         Reply::Running => OrderResult::busy(order, target.clone()),
         Reply::Refused { refusal, detail } | Reply::Interrupted { refusal, detail } => {
+            let (phase, class) = blamed(*refusal).map_or((None, None), |class| {
+                (Some(Phase::BeforeCommit), Some(class))
+            });
             OrderResult {
                 reason: Reason::new(refusal.token()).ok(),
                 detail: Some(bounded(detail)),
+                phase,
+                class,
                 ..base
             }
         }
         Reply::Finished {
             verdict, reason, ..
         } => finished(base, verdict, reason.as_deref()),
+    }
+}
+
+/// The class a refusal of an order's entry is blamed on (docs/design/packages.md sections 4.4,
+/// 7.1 and 7.4): `release` for an entry the daemon cannot accept (`order_invalid`) or whose
+/// manifest it refuses (`manifest_invalid`), `environment` for an entry none of whose stores the
+/// host defines (`no_store`). Every other refusal names no class, as before.
+pub fn blamed(refusal: Refusal) -> Option<Class> {
+    match refusal {
+        Refusal::OrderInvalid | Refusal::ManifestInvalid => Some(Class::Release),
+        Refusal::NoStore => Some(Class::Environment),
+        _ => None,
     }
 }
 

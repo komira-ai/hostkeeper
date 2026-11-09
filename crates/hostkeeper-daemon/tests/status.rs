@@ -10,7 +10,7 @@ use std::sync::Arc;
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_daemon::executor::RecordState;
 use hostkeeper_daemon::halt::HaltStore;
-use hostkeeper_daemon::packages::{PackageError, Packages, VersionDir};
+use hostkeeper_daemon::packages::{Entry, PackageError, Packages, VersionDir};
 use hostkeeper_daemon::testing::spawn;
 use hostkeeper_daemon::trusted_root::{RootProblem, RootReport};
 use hostkeeper_daemon::verb::PackageDigest;
@@ -186,9 +186,10 @@ impl Packages for ReportingRoot {
         version: &hostkeeper_config::names::Version,
         digest: &PackageDigest,
         index_digest: Option<&PackageDigest>,
+        entry: Option<&Entry>,
     ) -> Result<VersionDir, PackageError> {
         self.inner
-            .version_dir(service, version, digest, index_digest)
+            .version_dir(service, version, digest, index_digest, entry)
     }
 
     fn trusted_root(&self) -> Option<RootReport> {

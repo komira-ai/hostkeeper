@@ -60,6 +60,8 @@ use hostkeeper_steps::{BadVersions, Layout, RecordStore, Seal, tree_digest};
 use serde_json::Value;
 
 pub mod coordinator;
+#[path = "../shared/target_entry.rs"]
+pub mod target_entry;
 
 /// The daemon program of these tests.
 pub const DAEMON: &str = env!("CARGO_BIN_EXE_hostkeeper-selfupdate-daemon");
@@ -453,8 +455,32 @@ impl MacSelfHost {
     /// The coordinator orders `verb` of hostkeeper at `version`, order [`ORDER`] try 1, in every
     /// reply from now on.
     pub fn offer(&self, verb: &str, version: &str) {
+        self.place_order(verb, version, false);
+    }
+
+    /// [`MacSelfHost::offer`], with the order set by targets: it carries [`MacSelfHost::entry`].
+    pub fn offer_by_target(&self, verb: &str, version: &str) {
+        self.place_order(verb, version, true);
+    }
+
+    /// The entry of the release of hostkeeper at `version` that an order set by targets carries.
+    pub fn entry(version: &str) -> Value {
+        target_entry::entry_json(HK, version, DIGEST)
+    }
+
+    /// Every package the daemon's store was asked for so far, oldest first: the service, the
+    /// version and the entry the order carried (`null` for an order without one), as the
+    /// program records them.
+    pub fn asked(&self) -> Vec<Value> {
+        let text = fs::read_to_string(self.fixture().join("entries.jsonl")).unwrap_or_default();
+        text.lines()
+            .filter_map(|line| serde_json::from_str(line).ok())
+            .collect()
+    }
+
+    fn place_order(&self, verb: &str, version: &str, by_target: bool) {
         let link = self.fixture().join("link");
-        let order = serde_json::json!({
+        let mut order = serde_json::json!({
             "id": ORDER,
             "try": 1,
             "verb": verb,
@@ -462,6 +488,9 @@ impl MacSelfHost {
             "version": version,
             "digest": DIGEST,
         });
+        if by_target {
+            order["entry"] = MacSelfHost::entry(version);
+        }
         let tmp = link.join("order.json.tmp");
         file(&tmp, order.to_string().as_bytes(), 0o644);
         fs::rename(&tmp, link.join("order.json")).expect("place the order");

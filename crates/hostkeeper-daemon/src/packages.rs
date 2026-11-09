@@ -14,11 +14,16 @@ use std::path::Path;
 use hostkeeper_config::manifest::Manifest;
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_hook::{Class, Outcome};
+use hostkeeper_proto::hostkeeper::release::v1::Target;
 use hostkeeper_steps::Staged;
 
 use crate::refusal::Refusal;
 use crate::trusted_root::RootReport;
 use crate::verb::PackageDigest;
+
+/// The entry an order carries: the one artifact of the release the coordinator picked for the
+/// host, with its locations, attestation and manifest.
+pub type Entry = Target;
 
 /// The unpacked version directory of one package, sealed: nothing from it runs unless the tree
 /// still has the digest it had when it was sealed ([`Staged::check`]).
@@ -135,13 +140,17 @@ impl PackageError {
 pub trait Packages: Send + Sync {
     /// The sealed version directory of `service` at `version`, whose package has `digest`. When
     /// `index_digest` is given, the release index must have that SHA-256 (checked before it is
-    /// read); `None` checks nothing.
+    /// read); `None` checks nothing. With `entry`, the entry the order carries (already judged by
+    /// [`crate::entry::check`]), the package is fetched from the entry's locations and proven
+    /// through its attestation, and the release index is not read; without one, it comes from
+    /// the release channel.
     fn version_dir(
         &self,
         service: &ServiceName,
         version: &Version,
         digest: &PackageDigest,
         index_digest: Option<&PackageDigest>,
+        entry: Option<&Entry>,
     ) -> Result<VersionDir, PackageError>;
 
     /// Removes what a crashed fetch or unpack of `service` left in its package directory. The

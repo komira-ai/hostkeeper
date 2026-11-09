@@ -63,6 +63,19 @@ fn assert_finished(rec: &Record, verdict: Verdict, reason: Option<&str>) {
     assert_eq!(rec.progress.awaiting_restart, None, "{rec:?}");
 }
 
+/// Checks that the daemon's package store was asked for [`NEXT`] of hostkeeper, and only ever
+/// with the entry that the order carried (a resend of the order may ask again).
+fn assert_store_was_given_the_entry(host: &Host) {
+    let asked = host.asked();
+    let expected = serde_json::json!({"service": HK, "version": NEXT, "entry": Host::entry()});
+    assert!(!asked.is_empty(), "the store was asked for nothing");
+    assert!(
+        asked.iter().all(|line| *line == expected),
+        "the store was given the entry of the order: {asked:?}\n{}",
+        host.journals()
+    );
+}
+
 fn succeeded() -> Verdict {
     Verdict::Succeeded {
         promotion_pending: false,
@@ -127,7 +140,13 @@ fn a_next_binary_that_starts_settles_the_update_succeeded_and_is_what_the_unit_r
 /// which left nothing `previous`) and the unit's main process runs `versions/N`; after it, the
 /// unit's main process runs `versions/NEXT` (the bootstrap unit restarted the packaged binary,
 /// which ran `current`, which exec'd `next`): a stage-2 binary started from the bootstrap unit
-/// seeds and hands over.
+/// seeds and hands over. The install is set by targets: the order carries the
+/// `hostkeeper-archive` entry of the release (a channel location, the digest of the order, an
+/// attestation blob, a manifest with its floor), which passes the daemon's receipt check, and the
+/// package store is given that entry, not an order without one. Catches: an entry the daemon
+/// refuses (`order_invalid`, `manifest_invalid`, `installer_not_listed`) on the host the deb
+/// leaves, or one it drops on its way to the store, so that the install runs the channel path
+/// whatever the coordinator picked.
 #[test]
 fn a_daemon_the_deb_installed_is_installed_its_next_release_and_restarts_into_it() {
     let host = Host::start(
@@ -140,11 +159,12 @@ fn a_daemon_the_deb_installed_is_installed_its_next_release_and_restarts_into_it
     host.runs(N);
     assert_eq!(host.current().as_deref(), Some(N));
     assert_eq!(host.layout().previous().expect("previous"), None);
-    host.offer_install(1);
+    host.offer_install_by_target(1);
 
     let rec = host.settled();
     assert_finished(&rec, succeeded(), None);
     host.runs(NEXT);
+    assert_store_was_given_the_entry(&host);
     assert_eq!(
         host.layout().previous().expect("previous").as_deref(),
         Some(N)
@@ -192,6 +212,11 @@ fn a_daemon_the_deb_installed_is_installed_its_next_release_and_restarts_into_it
 /// The new binary was started exactly [`HAND_OVER_TRIES`] times, `current` never moved (no
 /// `previous`, no `next`), the unit runs the old binary again, and systemd never failed the unit
 /// (no start limit, so no `OnFailure=` either).
+/// The update is set by targets: the order carries the `hostkeeper-archive` entry of the
+/// release, which the old daemon's receipt check passes and its package store is given, so the
+/// fall-back is proven for the version fetched through an entry. Catches: an entry order whose
+/// new binary is staged and handed over to but never falls back, or an entry the old daemon
+/// refuses before it stages.
 #[test]
 fn a_next_binary_that_cannot_start_three_times_is_fallen_back_from_by_the_old_one() {
     let host = Host::start(
@@ -203,9 +228,10 @@ fn a_next_binary_that_cannot_start_three_times_is_fallen_back_from_by_the_old_on
     );
     host.runs(N);
 
-    let rec = host.fall_back();
+    let rec = host.fall_back_by_target();
     assert_finished(&rec, fell_back(), Some(FALLBACK_REASON));
     assert!(host.next_is_bad());
+    assert_store_was_given_the_entry(&host);
     assert_eq!(host.layout().previous().expect("previous"), None);
     assert_eq!(host.layout().next().expect("next"), None);
 

@@ -75,7 +75,7 @@ bytes.workspace = true
 hostkeeper-coordinator = { path = "../hostkeeper-coordinator" }
 hostkeeper-oidc = { path = "../hostkeeper-oidc", features = ["testkit"] }
 http-body-util.workspace = true
-hyper.workspace = true
+hyper = { workspace = true, features = ["http2", "server"] }
 # Its own tests turn on `testing`.
 hostkeeper-link = { path = ".", features = ["testing"] }
 # The writer of the pki directory, so that `PkiCertSource` is tested on the layout enrollment

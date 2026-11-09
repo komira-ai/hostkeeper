@@ -3,6 +3,7 @@
 use std::io;
 use std::sync::Arc;
 
+use hostkeeper_link::DEFAULT_HEARTBEAT_SECS;
 use hostkeeper_link::testing::{FakeClock, ScriptedSleeper};
 use hostkeeper_link::{
     ANNOUNCED, Acknowledged, BeatOutcome, ClockSleeper, Health, Heartbeat, LinkError, Liveness,
@@ -80,6 +81,7 @@ fn heartbeat_lists_installed_services_from_records_and_observer() {
         sent_unix: hostkeeper_link::testing::START_UNIX,
         renewal: hostkeeper_link::Renewal::default(),
         trusted_root: None,
+        installers: Vec::new(),
     };
     assert_eq!(rig.world.link.beats(), vec![expected]);
 
@@ -331,4 +333,42 @@ fn a_heartbeat_carries_the_trusted_root_its_source_says_at_each_beat() {
         .map(|beat| beat.trusted_root)
         .collect();
     assert_eq!(said, [None, Some(stale), Some(fresh)]);
+}
+
+/// Proves the installers the loop was given at start go out in every heartbeat it makes, and a
+/// loop given none sends none.
+///
+/// Catches: installers read once and sent in the first heartbeat only, or never copied from
+/// the loop's configuration into the heartbeat.
+#[test]
+fn every_heartbeat_lists_the_installers_the_loop_was_given() {
+    use hostkeeper_link::{Heartbeater, LoopConfig};
+
+    let rig = Rig::new("facts-installers");
+    rig.install(Vec::new());
+    let mut heartbeater = Heartbeater::new(
+        LoopConfig {
+            platform: Platform::LinuxX86_64,
+            agent_version: version("0.9.0"),
+            state_dir: rig.state().to_path_buf(),
+            period_secs: DEFAULT_HEARTBEAT_SECS,
+            installers: vec!["hostkeeper-archive".to_owned()],
+        },
+        rig.world.ports(),
+    );
+    assert_eq!(heartbeater.beat_once(), BeatOutcome::Sent);
+    assert_eq!(heartbeater.beat_once(), BeatOutcome::Sent);
+    let said: Vec<Vec<String>> = rig
+        .world
+        .link
+        .beats()
+        .into_iter()
+        .map(|beat| beat.installers)
+        .collect();
+    assert_eq!(said, [["hostkeeper-archive"], ["hostkeeper-archive"]]);
+
+    let plain = Rig::new("facts-no-installers");
+    plain.install(Vec::new());
+    assert_eq!(plain.heartbeater().beat_once(), BeatOutcome::Sent);
+    assert_eq!(plain.world.link.beats()[0].installers, Vec::<String>::new());
 }

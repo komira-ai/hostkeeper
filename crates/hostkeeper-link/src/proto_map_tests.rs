@@ -48,6 +48,7 @@ fn beat(platform: Platform, services: Vec<ServiceFacts>) -> Heartbeat {
         sent_unix: 0,
         renewal: crate::Renewal::default(),
         trusted_root: None,
+        installers: Vec::new(),
     }
 }
 
@@ -222,7 +223,8 @@ fn a_heartbeat_with_every_fact_maps_to_the_request_field_for_field() {
                 "grpc-v1",
                 "install-v1",
                 "abort-v1",
-                "clear-record-v1"
+                "clear-record-v1",
+                "target-v1"
             ]
             .map(str::to_owned)
             .to_vec(),
@@ -468,6 +470,7 @@ fn every_verb_the_loop_runs_is_its_order() {
         version: version("2.0"),
         digest: PackageDigest::new(&digest()).expect("a digest"),
         index_digest: None,
+        entry: None,
     };
     let updated = reply(order(pb::order::Verb::Update(terms(
         "web",
@@ -707,4 +710,94 @@ fn an_order_with_an_unreadable_word_is_dropped_with_why() {
         assert_eq!(dropped.what, what);
         assert_eq!(dropped.why, NOT_READ);
     }
+}
+
+/// An entry with every field of the release message set, for the tests of the entry an order
+/// carries.
+fn entry() -> hostkeeper_proto::hostkeeper::release::v1::Target {
+    use hostkeeper_proto::hostkeeper::release::v1 as release;
+    release::Target {
+        installer: "hostkeeper-archive".to_owned(),
+        locations: vec![release::Location {
+            store: "lan".to_owned(),
+            locator: "releases/web/2.0/web.tar".to_owned(),
+        }],
+        digest: digest(),
+        bytes: 4096,
+        attestation: Some(release::Blob {
+            digest: index_digest(),
+            bytes: 512,
+            locations: vec![release::Location {
+                store: "github".to_owned(),
+                locator: "web/web.tar.sigstore.json".to_owned(),
+            }],
+        }),
+        manifest: None,
+        repository: None,
+        package_version: None,
+    }
+}
+
+/// Proves the `target` entry of an `update`, a `force` and an `install` reaches the loop's
+/// order field for field, whatever the entry holds (the link judges nothing of it: an entry of
+/// no installer and no locations is carried too), and that an order with no `target` carries
+/// none.
+///
+/// Catches: an entry dropped, read from the wrong verb, altered on the way, or refused by the
+/// link instead of left to the daemon.
+#[test]
+fn the_entry_of_an_update_a_force_and_an_install_is_carried_unchanged() {
+    use hostkeeper_proto::hostkeeper::release::v1 as release;
+    let carried = |mapped: super::Mapped| {
+        assert_eq!(mapped.dropped, None);
+        mapped
+            .reply
+            .order
+            .expect("an order")
+            .target()
+            .expect("a target")
+            .entry
+            .clone()
+    };
+    for picked in [entry(), release::Target::default()] {
+        let update = pb::order::Verb::Update(pb::Update {
+            target: Some(picked.clone()),
+            ..terms("web", "2.0", &digest())
+        });
+        let force = pb::order::Verb::Force(pb::Force {
+            target: Some(picked.clone()),
+            service: "web".to_owned(),
+            version: "2.0".to_owned(),
+            package_digest: digest(),
+            index_digest: String::new(),
+            halt_generation: 0,
+        });
+        let install = pb::order::Verb::Install(pb::Install {
+            target: Some(picked.clone()),
+            service: "web".to_owned(),
+            version: "2.0".to_owned(),
+            package_digest: digest(),
+            index_digest: String::new(),
+        });
+        for verb in [update, force, install] {
+            let entry = carried(reply(order(verb))).expect("an entry");
+            assert_eq!(entry.as_target(), &picked);
+            assert_eq!(entry.into_target(), picked);
+        }
+    }
+    let bare = pb::order::Verb::Update(terms("web", "2.0", &digest()));
+    assert_eq!(carried(reply(order(bare))), None);
+}
+
+/// Proves the installers of the heartbeat go out as `installers` of the request, in order, and
+/// that a heartbeat with none sends none.
+///
+/// Catches: the installers left out of the request, or reordered.
+#[test]
+fn the_installers_go_out_in_the_request() {
+    let mut full = beat(Platform::LinuxX86_64, Vec::new());
+    full.installers = vec!["hostkeeper-archive".to_owned(), "tarball".to_owned()];
+    assert_eq!(sent(&full).installers, ["hostkeeper-archive", "tarball"]);
+    let none = beat(Platform::LinuxX86_64, Vec::new());
+    assert_eq!(sent(&none).installers, Vec::<String>::new());
 }

@@ -29,9 +29,15 @@ pub const NO_SPACE: &str = "no_space";
 /// refused it.
 pub const NOT_ATTESTED: &str = "not_attested";
 
+/// No store of the host can be asked for the bytes of an order's entry: no mirror is defined and
+/// none of the entry's locations names a store the host defines.
+pub const NO_STORE: &str = "no_store";
+/// Only mirrors answered, and every one of them gave bytes other than the entry's.
+pub const STORE_DIGEST_MISMATCH: &str = "store_digest_mismatch";
+
 /// Every reason token this crate reports. The crate README lists the same set; a token is only
 /// ever added (`outcome_tokens_are_the_documented_set`).
-pub const REASONS: [&str; 8] = [
+pub const REASONS: [&str; 10] = [
     INDEX_INVALID,
     INDEX_DIGEST_MISMATCH,
     NO_PACKAGE_FOR_PLATFORM,
@@ -40,6 +46,8 @@ pub const REASONS: [&str; 8] = [
     ATTESTATION_UNAVAILABLE,
     NO_SPACE,
     NOT_ATTESTED,
+    NO_STORE,
+    STORE_DIGEST_MISMATCH,
 ];
 
 /// Why a package was not fetched or not proven.
@@ -60,6 +68,15 @@ impl PackageFailure {
         PackageFailure {
             outcome: Outcome::Failure,
             class: Class::Release,
+            reason,
+        }
+    }
+
+    /// `Outcome::Failure`, `Class::Environment`: this host cannot fetch the package.
+    pub(crate) const fn environment(reason: &'static str) -> PackageFailure {
+        PackageFailure {
+            outcome: Outcome::Failure,
+            class: Class::Environment,
             reason,
         }
     }

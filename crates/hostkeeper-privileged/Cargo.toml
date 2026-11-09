@@ -47,6 +47,11 @@ hostkeeper-config = { path = "../hostkeeper-config" }
 hostkeeper-launchd = { path = "../hostkeeper-launchd" }
 hostkeeper-link = { path = "../hostkeeper-link" }
 hostkeeper-placed = { path = "../hostkeeper-placed" }
+# The entry an order set by targets carries, which the program reads from its order file and
+# records the package store was given (`hostkeeper_proto::hostkeeper::release::v1`); and, for the
+# tests, the operator's calls of the end-to-end and first-boot tests (the generated clients of the
+# operator API, and the descriptors their replies are read with).
+hostkeeper-proto = { path = "../hostkeeper-proto" }
 hostkeeper-steps = { path = "../hostkeeper-steps" }
 serde_json.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread"] }
@@ -165,9 +170,6 @@ hostkeeper-unpack = { path = "../hostkeeper-unpack" }
 # The macOS device test of the enrollment claims: `MacClaims` over the daemon's `HostIoreg`, the
 # real `ioreg`.
 hostkeeper-enroll = { path = "../hostkeeper-enroll" }
-# The operator's calls of the end-to-end and first-boot tests (the generated clients of the
-# operator API, and the descriptors their replies are read with).
-hostkeeper-proto = { path = "../hostkeeper-proto" }
 # The macOS self-update test that the real coordinator in process drives: each heartbeat read as
 # the coordinator's JSON route reads it, from the host it names.
 hostkeeper-wire = { path = "../hostkeeper-wire" }

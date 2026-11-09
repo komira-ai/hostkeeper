@@ -37,7 +37,11 @@
 //
 // Orders: an order is one verb with typed arguments (`Order`): a service name, a version, a
 // package digest, a halt generation, and, for a version set with targets, the picked entry
-// (Targets below); never a command, a URL or a script of its own. The daemon finds
+// (Targets below). An order names bytes by digest and where to look for them. It never carries
+// an absolute URL, a credential or a script. A target's manifest names a program inside the
+// attested bytes to run as root, its arguments, and paths of the host, under the checks of the
+// daemon; whoever sets the release chooses them. An order may also name a package, its version
+// and a repository the host's configuration defines. The daemon finds
 // everything else (the release channel, the package of its own platform with its size and digest
 // in the version's release index, the hook, the units) in its own configuration, in the index and
 // in the manifest of the package that verified (design section 5.5). The coordinator fills
@@ -54,9 +58,11 @@
 // The coordinator picks the entry of the installer the host runs the service with
 // (`ServiceBeat.installer`), else the first entry whose installer the daemon lists
 // (`HeartbeatRequest.installers`), and sends no order when none fits. An entry names bytes by
-// digest and where to look for them, never an absolute URL, a credential or a script; its
-// manifest names a program inside the attested bytes to run as root, its arguments and paths of
-// the host, under the daemon's checks, and whoever sets the release chooses them. An order of a
+// digest and where to look for them (see Orders above). The daemon fetches through its host's
+// stores (`/etc/hostkeeper/stores.toml`; docs/design/packages.md section 7.4). An entry whose
+// digest is not `package_digest`, or whose locator breaks the grammar, is refused `order_invalid`;
+// an installer the daemon does not list is deferred `installer_not_listed`. A daemon that
+// announced `target-v1` reads replies up to 32 KiB over gRPC. An order of a
 // version set with a digest or an index, an order to a daemon that did not announce `target-v1`,
 // and every order on the JSON route carry no target.
 //

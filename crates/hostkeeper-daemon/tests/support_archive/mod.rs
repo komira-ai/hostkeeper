@@ -200,6 +200,19 @@ pub fn valid_archive() -> Vec<u8> {
     zstd(&tar.bytes)
 }
 
+/// The archive of a package that places nothing: the manifest without its `[[files]]`, `bin/x`
+/// and no unit, so that an order for it installs on a host whose placement is not set up.
+pub fn bare_archive() -> Vec<u8> {
+    let text = manifest();
+    let text = text.split("[[files]]").next().unwrap_or_default();
+    let mut tar = Tar::default();
+    tar.file("manifest.toml", 0o644, text.as_bytes())
+        .dir("bin")
+        .file("bin/x", 0o755, b"#!x\n")
+        .end();
+    zstd(&tar.bytes)
+}
+
 /// One DER element.
 fn tlv(tag: u8, content: &[u8]) -> Vec<u8> {
     let mut out = vec![tag];
@@ -230,7 +243,7 @@ fn certificate(source_ref: &str) -> Vec<u8> {
 }
 
 /// The attestation bundle of an archive with SHA-256 `sha`.
-fn bundle(sha: &str) -> String {
+pub fn bundle(sha: &str) -> String {
     let statement = format!(
         "{{\"_type\":\"https://in-toto.io/Statement/v1\",\"subject\":[{{\"name\":\"a\",\
          \"digest\":{{\"sha256\":\"{sha}\"}}}}],\"predicateType\":\"https://slsa.dev/provenance/v1\",\
@@ -380,6 +393,17 @@ impl Rig {
 
     /// A store over `packages` that serves `routes` and whose verifier answers `answer`.
     pub fn open(&self, routes: Vec<(String, Vec<u8>)>, answer: Answer) -> io::Result<RealPackages> {
+        self.open_at(&self.packages, routes, answer)
+    }
+
+    /// A store over the packages directory `packages`, which exists, that serves `routes` and
+    /// whose verifier answers `answer`.
+    pub fn open_at(
+        &self,
+        packages: &Path,
+        routes: Vec<(String, Vec<u8>)>,
+        answer: Answer,
+    ) -> io::Result<RealPackages> {
         let fetcher = FakeFetcher {
             routes,
             asked: Arc::clone(&self.fetched),
@@ -393,7 +417,7 @@ impl Rig {
             Box::new(verifier),
             FakeClock::new(),
             &self.config,
-            &self.packages,
+            packages,
             me(),
         )
     }

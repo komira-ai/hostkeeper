@@ -513,6 +513,7 @@ impl World {
                 agent_version,
                 state_dir: PathBuf::from(state_dir),
                 period_secs: DEFAULT_HEARTBEAT_SECS,
+                installers: Vec::new(),
             },
             self.ports(),
         )

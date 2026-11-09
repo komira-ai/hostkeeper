@@ -59,6 +59,7 @@ pub use beat::{
 };
 pub use deferral::{Deferral, DeferralError, Deferrals};
 pub use dial::{CALL_SECS, TcpDial, TcpTransport};
+pub use grpc::GRPC_REPLY_MAX;
 pub use grpc::{AsyncConn, GrpcDial, GrpcLinkError, GrpcMtlsLink};
 pub use heartbeater::{
     ACKED_KEPT, BeatOutcome, DEFAULT_HEARTBEAT_SECS, Heartbeater, LoopConfig, LoopFlags, Ports,
@@ -67,7 +68,7 @@ pub use mtls::{Conn, EndpointError, HEAD_MAX, JsonMtlsLink, REPLY_MAX, Transport
 pub use names::{OrderId, PackageDigest, Reason, WordError};
 pub use negotiated::NegotiatedLink;
 pub use order::{
-    Acknowledged, DeferredReport, Order, OrderRef, OrderResult, Outcome, Reply, Target, Verb,
+    Acknowledged, DeferredReport, Entry, Order, OrderRef, OrderResult, Outcome, Reply, Target, Verb,
 };
 pub use pki::PkiCertSource;
 pub use ports::{
