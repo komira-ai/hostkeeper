@@ -425,7 +425,9 @@ fn apt_promote_lists_the_tested_release_in_stable_and_write_no_pool_puts_the_ind
     };
     let o = promote(&sums, "1.2.3");
     assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
-    assert_eq!(stdout(&o), "apt promote: added 4, dropped 0, listed 4\n");
+    // Seven debs: the daemon's, the coordinator's and hello's for each architecture, mdm's for
+    // amd64.
+    assert_eq!(stdout(&o), "apt promote: added 7, dropped 0, listed 7\n");
     let packages = std::fs::read_to_string(out.join("dists/stable/main/binary-arm64/Packages"))
         .expect("Packages");
     assert!(
@@ -485,7 +487,7 @@ fn apt_promote_lists_the_tested_release_in_stable_and_write_no_pool_puts_the_ind
     let o = promote(&sums, "9.9.9");
     assert_eq!(o.status.code(), Some(1));
     assert!(
-        stderr(&o).contains("SHA256SUMS lists no hostkeeper-coordinator_9.9.9_amd64.deb"),
+        stderr(&o).contains("SHA256SUMS lists no hello_9.9.9_amd64.deb"),
         "{}",
         stderr(&o)
     );
@@ -711,7 +713,7 @@ fn apt_index_of_a_package_that_is_not_the_product_s_is_a_failure_naming_it() {
     let o = run(&theirs);
     assert_eq!(o.status.code(), Some(1));
     assert!(
-        stderr(&o).contains("hostkeeper-coordinator_1.2.3_amd64.deb is not in"),
+        stderr(&o).contains("hello_1.2.3_amd64.deb is not in"),
         "{}",
         stderr(&o)
     );

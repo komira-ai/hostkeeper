@@ -90,7 +90,7 @@ mod index;
 mod locate;
 mod macos_pkg;
 mod mdm_fetch;
-mod native;
+pub(crate) mod native;
 mod netboot;
 #[cfg(test)]
 mod no_network;

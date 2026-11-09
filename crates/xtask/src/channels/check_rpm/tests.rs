@@ -425,6 +425,22 @@ fn flags_out_of_their_form_are_usage_errors_before_anything_runs() {
 }
 
 #[test]
+fn a_package_that_is_a_deb_alone_is_a_usage_error_before_anything_runs() {
+    // Catches: check-rpm of hello's or mdm's package, which has no rpm, installing nothing and
+    // failing as if the repository were wrong.
+    let dir = scratch("deb_alone");
+    for name in ["hello", "mdm"] {
+        let package = HOSTKEEPER.package(name).expect("a package");
+        let machine = Machine::new(package);
+        assert_eq!(
+            check_rpm(&machine, &rpm(package, &dir)).unwrap_err(),
+            Error::Usage(format!("--package {name:?} is a .deb alone: it has no rpm"))
+        );
+        assert!(machine.calls().is_empty(), "{name}");
+    }
+}
+
+#[test]
 fn every_program_runs_in_the_container_through_docker_exec() {
     let exec = FakeExec::says("x86_64\n");
     let container = Container {

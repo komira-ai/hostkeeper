@@ -1,19 +1,24 @@
 //! What the channel verbs know of the product they publish, as data: the product's pool
-//! directory in the shared repository, the prefix of its role sessions, and its two Linux
-//! packages. Tierstore's verbs had these as constants of one package; here the package's name,
-//! its file names and the rules that differ between the daemon's package and the coordinator's
-//! are the values below, and no verb names `hostkeeper` or `hostkeeper-coordinator` itself.
+//! directory in the shared repository, the prefix of its role sessions, its Linux packages and
+//! its macOS installers. Tierstore's verbs had these as constants of one package; here the
+//! packages' names, their file names and the rules that differ between one package and another
+//! are the values below, and the verbs read them from [`HOSTKEEPER`], the one product of this
+//! repository.
 //!
 //! New in this repository; the rest of [`super`] is the copy of komira-ai/tierstore.
 //!
 //! What the install checks hold an installed package to ([`Package::files`], the user, whether
-//! the unit is enabled after the install, the packages to install first) and the stages the
-//! promotion decision reads ([`Product::stages`]) are data here too, and so are the names and the
-//! place of the macOS installer ([`Product::pkg_file`], [`Product::pkg_dir`]).
+//! the units are enabled after the install, the packages to install first, what the program says
+//! for `--version`) and the stages the promotion decision reads ([`Product::stages`]) are data
+//! here too, and so are the names and the place of the macOS installers
+//! ([`Product::pkg_files`], [`Product::pkg_dir`]).
 //!
-//! The index, write and promote verbs take every package of the product in one pass
-//! ([`Product::deb_files`], [`Product::rpm_files`]): the daemon's and the coordinator's, each for
-//! both architectures, so a release is listed in the repository whole or not at all.
+//! A release of this repository publishes the daemon's and the coordinator's packages, and the
+//! native packages of the services it releases (docs/design/packages-native.md, item A21):
+//! hello's `.deb` for both architectures and mdm's for amd64 alone (neither has an rpm), and
+//! beside hostkeeper's own installer hello's `.pkg`. The index, write and promote verbs take every
+//! package of the product in one pass ([`Product::deb_files`], [`Product::rpm_files`]), so a
+//! release is listed in the repository whole or not at all.
 
 /// A Linux architecture, in the two names the package formats give it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -24,17 +29,24 @@ pub(crate) struct Arch {
     pub(crate) rpm: &'static str,
 }
 
-/// The architectures every package is built for.
-pub(crate) const ARCHES: [Arch; 2] = [
-    Arch {
-        deb: "amd64",
-        rpm: "x86_64",
-    },
-    Arch {
-        deb: "arm64",
-        rpm: "aarch64",
-    },
-];
+/// The x86-64 architecture.
+pub(crate) const AMD64: Arch = Arch {
+    deb: "amd64",
+    rpm: "x86_64",
+};
+
+/// The 64-bit Arm architecture.
+pub(crate) const ARM64: Arch = Arch {
+    deb: "arm64",
+    rpm: "aarch64",
+};
+
+/// The architectures of the repository: every package is built for one or both.
+pub(crate) const ARCHES: [Arch; 2] = [AMD64, ARM64];
+
+/// The directory of every product's installers in the bucket, and the path the hosts' store of
+/// the installers' channel is rooted at (`https://packages.komira.ai/pkg/`).
+pub(crate) const PKG_ROOT: &str = "pkg/";
 
 /// The release number of every rpm: `nfpm` writes `1` and the release assets name it.
 pub(crate) const RPM_RELEASE: &str = "1";
@@ -44,20 +56,32 @@ pub(crate) const RPM_RELEASE: &str = "1";
 pub(crate) struct Package {
     /// The package name: the deb's `Package`, the rpm's name, and the start of both file names.
     pub(crate) name: &'static str,
+    /// The architectures the package is built for: mdm's `.deb` is built for amd64 alone (its
+    /// pinned tools are amd64 builds).
+    pub(crate) arches: &'static [Arch],
+    /// Whether the package is also an rpm. The services' native packages are `.deb`s alone
+    /// (docs/design/packages-native.md: `dnf` is later).
+    pub(crate) rpm: bool,
     /// Whether the rpm has a `%postun` script. `nfpm` writes `%preun` (from `preremove`) and no
     /// `%postun` for either package, so neither requires one; the signing reads it only where
     /// the spec says it is there.
     pub(crate) postun_required: bool,
     /// The program the package installs: its absolute path. The file name is the program's
-    /// name, and `<name> --version` prints `<name> <version>+<12 digits of the commit>`.
+    /// name, and `<name> --version` prints `<name> <version>`, followed by `+<12 digits of the
+    /// commit>` when [`Package::stamp_commit`] says so.
     pub(crate) binary: &'static str,
-    /// The systemd unit of the package, a file of `/usr/lib/systemd/system`.
-    pub(crate) unit: &'static str,
+    /// Whether the program's `--version` carries the commit: the shipped binaries' does
+    /// (`hostkeeper X.Y.Z+<commit>`), hello's says `hello X.Y.Z` alone.
+    pub(crate) stamp_commit: bool,
+    /// The systemd units of the package, files of `/usr/lib/systemd/system`: the check holds
+    /// each enabled or not as [`Package::enabled_after_install`] says.
+    pub(crate) units: &'static [&'static str],
     /// The system user the install creates, if it creates one.
     pub(crate) user: Option<&'static str>,
-    /// Whether the install enables the unit. The daemon's postinstall enables it on a first
-    /// install; the coordinator's enables nothing, because it cannot start unconfigured. Neither
-    /// package starts its unit.
+    /// Whether the install enables the units. The daemon's postinstall enables its unit on a
+    /// first install; the coordinator's enables nothing, because it cannot start unconfigured;
+    /// a service's native package has no script at all, its units enabled by hostkeeper's
+    /// installer alone. No package starts a unit.
     pub(crate) enabled_after_install: bool,
     /// The packages the check installs before the package: the daemon's deb declares no
     /// dependency, but its postinstall runs `systemd-tmpfiles` and `systemctl`.
@@ -105,7 +129,10 @@ pub(crate) struct Product {
     /// The directory of the macOS installer's versions below `pkg/` in the bucket.
     pub(crate) pkg_dir: &'static str,
     /// Its packages, in the order the verbs list them.
-    pub(crate) packages: [Package; 2],
+    pub(crate) packages: &'static [Package],
+    /// The names of the macOS installers a release ships, each `<name>-<version>-macos-arm64.pkg`
+    /// in the version's directory: the product's own and the native packages of its services.
+    pub(crate) installers: &'static [&'static str],
     /// The jobs `channels decide` reads, in the order it names them.
     pub(crate) stages: &'static [&'static str],
     /// The stages that may be `skipped`; every other stage must be `success`.
@@ -118,10 +145,24 @@ impl Product {
         self.packages.iter().find(|p| p.name == name)
     }
 
-    /// The file name of the macOS installer of `version`: `<name>-<version>-macos-arm64.pkg`. It
-    /// is unsigned and unnotarized until the owner has a Developer ID; nothing here signs it.
-    pub(crate) fn pkg_file(&self, version: &str) -> String {
-        format!("{}-{version}-macos-arm64.pkg", self.name)
+    /// The file names of the macOS installers of `version`, `<installer>-<version>-macos-arm64.pkg`
+    /// for each of [`Product::installers`], sorted. They are unsigned and unnotarized until the
+    /// owner has a Developer ID; nothing here signs them.
+    pub(crate) fn pkg_files(&self, version: &str) -> Vec<String> {
+        let mut files: Vec<String> = self
+            .installers
+            .iter()
+            .map(|name| format!("{name}-{version}-macos-arm64.pkg"))
+            .collect();
+        files.sort();
+        files
+    }
+
+    /// The path of the installer `file` of `version` below [`PKG_ROOT`]: what a Mac's store of
+    /// the `testing` channel, rooted there, fetches it by (`hostkeeper/<version>/<file>`).
+    pub(crate) fn pkg_locator(&self, version: &str, file: &str) -> String {
+        let prefix = self.pkg_prefix(version);
+        format!("{}{file}", prefix.strip_prefix(PKG_ROOT).unwrap_or(&prefix))
     }
 
     /// The key prefix of the installer's version, `pkg/<product>/<version>/`: the `testing`
@@ -135,15 +176,17 @@ impl Product {
         format!("{}/stable.json", self.pkg_dir)
     }
 
-    /// The file names of the debs of `version`, every package for every architecture, sorted.
+    /// The file names of the debs of `version`, every package for each of its architectures,
+    /// sorted.
     pub(crate) fn deb_files(&self, version: &str) -> Vec<String> {
-        self.entries(version, Package::deb_file)
+        self.entries(version, |_| true, Package::deb_file)
             .into_iter()
             .map(|(_, name)| name)
             .collect()
     }
 
-    /// The file names of the rpms of `version`, every package for every architecture, sorted.
+    /// The file names of the rpms of `version`, every package that is an rpm for each of its
+    /// architectures, sorted.
     pub(crate) fn rpm_files(&self, version: &str) -> Vec<String> {
         self.rpm_entries(version)
             .into_iter()
@@ -151,21 +194,23 @@ impl Product {
             .collect()
     }
 
-    /// The rpms of `version`, every package for every architecture, as the package and the file
-    /// name, sorted by file name.
+    /// The rpms of `version`, every package that is an rpm for each of its architectures, as the
+    /// package and the file name, sorted by file name.
     pub(crate) fn rpm_entries(&self, version: &str) -> Vec<(&Package, String)> {
-        self.entries(version, Package::rpm_file)
+        self.entries(version, |p| p.rpm, Package::rpm_file)
     }
 
     fn entries(
         &self,
         version: &str,
+        keep: impl Fn(&Package) -> bool,
         name: impl Fn(&Package, &str, &Arch) -> String,
     ) -> Vec<(&Package, String)> {
         let mut entries: Vec<(&Package, String)> = self
             .packages
             .iter()
-            .flat_map(|p| ARCHES.iter().map(move |a| (p, a)))
+            .filter(|p| keep(p))
+            .flat_map(|p| p.arches.iter().map(move |a| (p, a)))
             .map(|(p, a)| (p, name(p, version, a)))
             .collect();
         entries.sort_by(|a, b| a.1.cmp(&b.1));
@@ -173,18 +218,22 @@ impl Product {
     }
 }
 
-/// hostkeeper: the daemon's package and the coordinator's.
+/// hostkeeper: the daemon's package and the coordinator's, hello's and mdm's native packages, and
+/// the installers of hostkeeper and of hello.
 pub(crate) const HOSTKEEPER: Product = Product {
     name: "hostkeeper",
     pool_dir: "pool/hostkeeper",
     session_prefix: "hostkeeper-",
     pkg_dir: "pkg/hostkeeper",
-    packages: [
+    packages: &[
         Package {
             name: "hostkeeper",
+            arches: &ARCHES,
+            rpm: true,
             postun_required: false,
             binary: "/usr/bin/hostkeeper",
-            unit: "hostkeeper.service",
+            stamp_commit: true,
+            units: &["hostkeeper.service"],
             user: None,
             enabled_after_install: true,
             prerequisites: &["systemd"],
@@ -200,9 +249,12 @@ pub(crate) const HOSTKEEPER: Product = Product {
         },
         Package {
             name: "hostkeeper-coordinator",
+            arches: &ARCHES,
+            rpm: true,
             postun_required: false,
             binary: "/usr/bin/hostkeeper-coordinator",
-            unit: "hostkeeper-coordinator.service",
+            stamp_commit: true,
+            units: &["hostkeeper-coordinator.service"],
             user: Some("hostkeeper-coordinator"),
             enabled_after_install: false,
             prerequisites: &[],
@@ -215,7 +267,50 @@ pub(crate) const HOSTKEEPER: Product = Product {
                 "/usr/share/hostkeeper-coordinator/ui/index.html",
             ],
         },
+        Package {
+            name: "hello",
+            arches: &ARCHES,
+            rpm: false,
+            postun_required: false,
+            binary: "/usr/lib/hello/hello",
+            stamp_commit: false,
+            units: &["hello@a.service", "hello@b.service"],
+            user: None,
+            enabled_after_install: false,
+            prerequisites: &[],
+            files: &[
+                "/usr/lib/hello/hello",
+                "/usr/lib/hello/hostkeeper-hook",
+                "/usr/lib/systemd/system/hello@a.service",
+                "/usr/lib/systemd/system/hello@b.service",
+            ],
+        },
+        Package {
+            name: "mdm",
+            arches: &[AMD64],
+            rpm: false,
+            postun_required: false,
+            binary: "/usr/lib/mdm/mdm",
+            stamp_commit: true,
+            units: &MDM_UNITS,
+            user: None,
+            enabled_after_install: false,
+            prerequisites: &[],
+            files: &[
+                "/usr/lib/mdm/mdm",
+                "/usr/lib/mdm/hostkeeper-hook",
+                "/usr/lib/systemd/system/mdm-cert-renew.service",
+                "/usr/lib/systemd/system/mdm-cert.service",
+                "/usr/lib/systemd/system/mdm-cert.timer",
+                "/usr/lib/systemd/system/mdm-depserver.service",
+                "/usr/lib/systemd/system/mdm-depsyncer.service",
+                "/usr/lib/systemd/system/mdm-nanohub.service",
+                "/usr/lib/systemd/system/mdm-proxy.service",
+                "/usr/lib/systemd/system/mdm-scep.service",
+            ],
+        },
     ],
+    installers: &["hello", "hostkeeper"],
     stages: &[
         "testing-apt-write",
         "testing-apt-write-2",
@@ -238,6 +333,18 @@ pub(crate) const HOSTKEEPER: Product = Product {
         "check-pkg",
     ],
 };
+
+/// mdm's units, as its `.deb` installs them (`hostkeeper_mdm_core::package::UNITS`).
+const MDM_UNITS: [&str; 8] = [
+    "mdm-cert-renew.service",
+    "mdm-cert.service",
+    "mdm-cert.timer",
+    "mdm-depserver.service",
+    "mdm-depsyncer.service",
+    "mdm-nanohub.service",
+    "mdm-proxy.service",
+    "mdm-scep.service",
+];
 
 /// The architecture whose RPM name is `rpm`.
 pub(crate) fn arch_of_rpm(rpm: &str) -> Option<&'static Arch> {

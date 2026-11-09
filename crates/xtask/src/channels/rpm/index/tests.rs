@@ -142,7 +142,7 @@ fn an_index_is_not_built_without_the_etags_or_from_a_package_that_is_not_there()
     // A package whose header says another name than its file: not listed.
     let renamed = w.dir("renamed");
     std::fs::create_dir_all(&renamed).expect("dir");
-    for (package, arch) in crate::channels::fixtures::every() {
+    for (package, arch) in crate::channels::fixtures::every_rpm() {
         std::fs::copy(
             signed.join(package.rpm_file("1.2.3", arch)),
             renamed.join(package.rpm_file("1.2.9", arch)),

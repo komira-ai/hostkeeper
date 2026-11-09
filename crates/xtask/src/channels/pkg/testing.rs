@@ -18,34 +18,36 @@ pub(crate) fn scratch(name: &str) -> TestDir {
     TestDir::under(&beside.parent().expect("deps").join("xtask-pkg-unit"), name)
 }
 
-/// `dir` as the `release-assets` artifact of the release `version`: the installer and its
-/// bundle, and a `SHA256SUMS` that lists the installer and another file but not the bundle.
+/// `dir` as the `release-assets` artifact of the release `version`: the installers and their
+/// bundles, and a `SHA256SUMS` that lists the installers and another file but not the bundles.
 pub(crate) fn release_dir(dir: &std::path::Path, version: &str) {
-    let installer = HOSTKEEPER.pkg_file(version);
-    let bytes = format!("bytes of {installer}");
-    std::fs::write(dir.join(&installer), &bytes).expect("installer");
-    std::fs::write(
-        dir.join(format!("{installer}{BUNDLE_SUFFIX}")),
-        format!("bundle of {installer}"),
-    )
-    .expect("bundle");
-    let lines = [
-        sums::Line {
-            sha256: Sha256::of(b"another file"),
-            name: format!("hostkeeper-{version}-linux-x86_64.tar.gz"),
-        },
-        sums::Line {
+    let mut lines = vec![sums::Line {
+        sha256: Sha256::of(b"another file"),
+        name: format!("hostkeeper-{version}-linux-x86_64.tar.gz"),
+    }];
+    for installer in HOSTKEEPER.pkg_files(version) {
+        let bytes = format!("bytes of {installer}");
+        std::fs::write(dir.join(&installer), &bytes).expect("installer");
+        std::fs::write(
+            dir.join(format!("{installer}{BUNDLE_SUFFIX}")),
+            format!("bundle of {installer}"),
+        )
+        .expect("bundle");
+        lines.push(sums::Line {
             sha256: Sha256::of(bytes.as_bytes()),
             name: installer,
-        },
-    ];
+        });
+    }
     std::fs::write(dir.join(SUMS), sums::render(&lines)).expect("sums");
 }
 
-/// The names of the files of the version 1.2.3, sorted.
+/// The names of the files of the version 1.2.3, sorted: each installer, then its bundle.
 pub(crate) fn names() -> Vec<String> {
-    let installer = HOSTKEEPER.pkg_file("1.2.3");
-    vec![installer.clone(), format!("{installer}{BUNDLE_SUFFIX}")]
+    HOSTKEEPER
+        .pkg_files("1.2.3")
+        .into_iter()
+        .flat_map(|installer| [installer.clone(), format!("{installer}{BUNDLE_SUFFIX}")])
+        .collect()
 }
 
 /// The release 1.2.3 in a directory of its own, and the work directory beside it.
