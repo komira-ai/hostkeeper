@@ -23,6 +23,12 @@ bytes.workspace = true
 hostkeeper-config = { path = "../hostkeeper-config" }
 # The file-system port and the atomic write of a record, and the clock port the times come from.
 hostkeeper-enrollment = { path = "../hostkeeper-enrollment" }
+# The loader of the macos-pkg signers file (`--mdm-macos-pkg`), which judges the config profile's
+# `dev.hostkeeper.macos-pkg` domain as the Mac's daemon will.
+hostkeeper-install = { path = "../hostkeeper-install" }
+# The loader of the stores file (`--mdm-stores`), which judges the config profile's
+# `dev.hostkeeper.stores` domain as the Mac's daemon will.
+hostkeeper-package = { path = "../hostkeeper-package" }
 # The file rule of the API key file (`--mdm-api-key-file`), and the version of a pkg on the
 # allowlist (`--mdm-pkg-allowlist`).
 hostkeeper-wire = { path = "../hostkeeper-wire" }

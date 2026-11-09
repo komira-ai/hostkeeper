@@ -25,6 +25,7 @@ pub mod heartbeat;
 pub mod lan;
 pub mod program;
 pub mod pxe;
+pub mod repositories;
 pub mod router;
 
 use std::fs;
@@ -129,6 +130,8 @@ impl Rig {
             &daemon_config,
         );
         let ssh = Ssh::new(&scratch.join("ssh"), lan.address(GUEST));
+        let repositories = scratch.join("repositories");
+        repositories::write(&repositories);
 
         let guest = Guest::new(machine, &scratch.join("guest"), &lan.bridge_ns, &artifacts);
         let rig = Rig {
@@ -144,6 +147,7 @@ impl Rig {
             inputs: ServeInputs {
                 sealed,
                 daemon_config,
+                repositories,
                 ssh_keys: ssh.public.clone(),
                 serial_console: match guest.machine().arch {
                     guest::Arch::X86_64 => "ttyS0",

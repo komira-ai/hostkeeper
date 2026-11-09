@@ -36,6 +36,16 @@ pub const DAEMON_CONFIG: &str = "/etc/hostkeeper/hostkeeper.toml";
 /// (`hostkeeper_daemon::mac_config::at_start`).
 pub const MANAGED_CONFIG: &str = "/Library/Managed Preferences/dev.hostkeeper.config.plist";
 
+/// The managed preferences of the domain `dev.hostkeeper.stores`, which the daemon's start renders
+/// as the stores file, replacing one that differs (`hostkeeper_daemon::mac_files::stores`,
+/// docs/design/packages-repositories.md, section 4.7).
+pub const MANAGED_STORES: &str = "/Library/Managed Preferences/dev.hostkeeper.stores.plist";
+
+/// The managed preferences of the domain `dev.hostkeeper.macos-pkg`, which the daemon's start
+/// renders as the macos-pkg signers file, replacing one that differs
+/// (`hostkeeper_daemon::mac_files::macos_pkg`, docs/design/packages-repositories.md, section 4.7).
+pub const MANAGED_MACOS_PKG: &str = "/Library/Managed Preferences/dev.hostkeeper.macos-pkg.plist";
+
 /// The paths the `postinstall` names.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Postinstall {

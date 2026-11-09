@@ -201,6 +201,46 @@ Place the config:
 4. Make it root's and closed to writes by others: `chown root:root /etc/hostkeeper/hostkeeper.toml`
    and `chmod 0600 /etc/hostkeeper/hostkeeper.toml`.
 
+Place the repository entries, on a host that installs services from the project's package
+repository with `apt` ([packages-repositories.md](../design/packages-repositories.md) section 3.1).
+A host without them never announces `apt` and keeps taking the other entries of a release. As
+root:
+
+1. Make the directory: `install -d -o root -g root -m 0755 /etc/hostkeeper/repositories`.
+2. Fetch the repository's keyring into it:
+
+   ```
+   curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+     --output /etc/hostkeeper/repositories/komira-archive-keyring.gpg \
+     https://packages.komira.ai/apt/komira-archive-keyring.gpg
+   ```
+
+3. Write one entry per channel, `komira-testing.sources` and `komira-stable.sources`, each one
+   stanza. The testing one:
+
+   ```
+   Types: deb
+   URIs: https://packages.komira.ai/apt
+   Suites: testing
+   Components: main
+   Signed-By: /etc/hostkeeper/repositories/komira-archive-keyring.gpg
+   ```
+
+   The stable one is the same with `Suites: stable`. The entry's name is the file's stem, the
+   name a release's entry gives as its `repository`.
+4. Make every file root's and closed to writes by others:
+   `chown root:root /etc/hostkeeper/repositories/*` and
+   `chmod 0644 /etc/hostkeeper/repositories/*`.
+
+The directory holds those files and nothing else. The daemon checks it at its start and does not
+start on any defect: another file, a `.sources` whose name is not 1 to 32 bytes of `[a-z0-9-]`,
+a stanza that is not exactly one `deb` stanza with one `https://` or `file:/` URI, one suite, a
+component and `Signed-By` a keyring of the directory, a key that turns off apt's checks
+(`Trusted`, `Allow-Insecure`, `Allow-Weak`, `Allow-Downgrade-To-Insecure`, `Check-Valid-Until:
+no`), or a file not root's or writable by group or others. A host installed by network gets the
+same files from `hostkeeper-pxe serve --repositories` ([network-install.md](network-install.md)).
+Rotating the key is [repository-keys.md](repository-keys.md).
+
 Start the unit by hand, since the package does not: `systemctl start hostkeeper.service`. The unit
 is `Type=notify`, so the command returns once the daemon has finished its boot work. Its lines go
 to the journal (`journalctl -u hostkeeper.service`), each beginning `hostkeeper daemon: `:
@@ -213,6 +253,9 @@ to the journal (`journalctl -u hostkeeper.service`), each beginning `hostkeeper 
   (exit 3); nothing on the host changed. The loader reports one key at a time. systemd keeps
   starting the daemon again, so once the file is fixed the next start loads it; nothing needs
   resetting.
+- `/etc/hostkeeper/repositories: /etc/hostkeeper/repositories/<file>: <why>`: the repository
+  entries break a rule of the list above (exit 3); fix or remove the file named, and the next start
+  reads the directory again.
 - `the coordinator presents a CA whose SHA-256 is <hex>, not the pinned ca_sha256; nothing was
   sent`: `ca_sha256` or `coordinator` is wrong.
 - `the coordinator could not be reached: Enroll was answered with the status <code>: "<token>"`:

@@ -106,6 +106,7 @@ fn answered(byte: u8, at_unix: u64, acknowledged: bool) -> ProfileCommand {
             acknowledged,
             at_unix,
         }),
+        settings_sha256: None,
     }
 }
 
@@ -142,7 +143,7 @@ fn full(key: &str, phase: Phase) -> Result<DeviceRecord, String> {
     ];
     record.refused = vec!["DeviceInformation".to_owned(), "SecurityInfo".to_owned()];
     record.last_error = Some("DeviceInformation: the device answered Error".to_owned());
-    record.config_profile = Some(answered(3, 19, true));
+    record.config_profile = Some(answered(3, 19, true).with_settings("d".repeat(64)));
     record.nonce = Some(NonceRecord {
         serial: "C02SERIAL".to_owned(),
         request_id: KeyHash::from_bytes(&[9; 32]).ok_or("a key hash of the list is not one")?,

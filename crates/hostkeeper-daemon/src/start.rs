@@ -50,6 +50,7 @@ use crate::files;
 use crate::installed;
 use crate::links::Links;
 use crate::mac_config::MacConfigError;
+use crate::mac_files::MacFilesError;
 use crate::notify::{NoNotifier, ReadyNotifier};
 
 /// The lock file in the state directory.
@@ -105,6 +106,10 @@ pub enum StartError {
     /// preferences ([`crate::mac_config::at_start`]).
     #[error("the daemon config is not made from the managed preferences: {0}")]
     MacConfig(#[from] MacConfigError),
+    /// A Mac's stores file or macos-pkg signers file could not be written from its managed
+    /// preferences ([`crate::mac_files`]); the error names the managed file and the reason.
+    #[error("a file is not made from the managed preferences: {0}")]
+    MacFiles(#[from] MacFilesError),
     /// The host's `stores.toml` is not sound; the error names the file and, in its text, the store
     /// and the rule it breaks (never a credential).
     #[error("{}: {source}", path.display())]
@@ -164,6 +169,7 @@ impl StartError {
         match self {
             StartError::Config { .. }
             | StartError::MacConfig(_)
+            | StartError::MacFiles(_)
             | StartError::Stores { .. }
             | StartError::MacosPkg { .. }
             | StartError::Repositories { .. } => EXIT_CONFIG,

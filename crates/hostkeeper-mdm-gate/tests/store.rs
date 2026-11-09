@@ -415,6 +415,7 @@ fn full(id_text: &str) -> DeviceRecord {
             acknowledged: true,
             at_unix: 19,
         }),
+        settings_sha256: Some("d".repeat(64)),
     });
     record.nonce = Some(NonceRecord {
         serial: "C02SERIAL".to_owned(),
@@ -429,6 +430,7 @@ fn full(id_text: &str) -> DeviceRecord {
                 acknowledged: false,
                 at_unix: 22,
             }),
+            settings_sha256: None,
         }),
         removal: Some(ProfileCommand::new(CommandUuid::from_random([5; 16]), 23)),
     });
@@ -442,6 +444,7 @@ fn full(id_text: &str) -> DeviceRecord {
                 acknowledged: true,
                 at_unix: 25,
             }),
+            settings_sha256: None,
         },
     });
     record
@@ -675,6 +678,49 @@ fn the_install_field_is_read_by_the_release_before_it_and_the_other_way() {
         ("c".repeat(64).as_str(), 2, GOOD_UUID)
     );
     assert_eq!((install.last.sent_unix, install.last.answer), (30, None));
+}
+
+/// Catches: the config profile's settings digest (field 5 of its message) made a change the
+/// release before it cannot read (a reader of the profile's first two fields reads a record that
+/// has it, with the same command), a record written without it not read as one with no digest
+/// (which counts as different settings), or the digest lost or changed in the file.
+#[test]
+fn the_settings_digest_is_read_by_the_release_before_it_and_the_other_way() {
+    let scratch = scratch("store-settings-digest");
+    let dir = scratch.path().join("devices");
+    let record = full(UDID);
+    store_in(&dir).save(&record).expect("saved");
+    let bytes = std::fs::read(dir.join(format!("{UDID}.pb"))).expect("the file");
+    let file = FilePb::decode(bytes.as_slice()).expect("a file");
+    let before = EnrollFieldsPb::decode(file.record.as_slice()).expect("the release before");
+    let command = before.config_profile.expect("a config profile");
+    assert_eq!(
+        (command.uuid.as_str(), command.sent_unix),
+        (CommandUuid::from_random([3; 16]).as_str(), 18)
+    );
+    let loaded = store_in(&dir).load().expect("loads").remove(0);
+    let digest = loaded.config_profile.and_then(|c| c.settings_sha256);
+    assert_eq!(digest, Some("d".repeat(64)));
+
+    // A record the release before wrote: a config profile of two fields.
+    let mut old = good(UDID).encode_to_vec();
+    old.extend(
+        EnrollFieldsPb {
+            config_profile: Some(ProfilePb {
+                uuid: GOOD_UUID.to_owned(),
+                sent_unix: 40,
+            }),
+            nonce: None,
+        }
+        .encode_to_vec(),
+    );
+    let (_, loaded) = load_file("store-no-digest", &format!("{UDID}.pb"), &file_of(&old));
+    let command = loaded
+        .expect("read")
+        .remove(0)
+        .config_profile
+        .expect("sent");
+    assert_eq!((command.sent_unix, command.settings_sha256), (40, None));
 }
 
 /// Catches: a field lost in the file (any of the twenty, and those of the profile commands), an unset optional read back as set

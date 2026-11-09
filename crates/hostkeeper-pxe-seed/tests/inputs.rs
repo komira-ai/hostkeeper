@@ -356,3 +356,52 @@ fn an_iso_name_is_one_file_name_ending_in_iso() {
         "the ISO's served name is not 1 to 255 of A-Za-z0-9._+-, not starting with a dot and ending in .iso"
     );
 }
+
+/// Catches repository files that could leave the directory or collide: each refusal is asserted by
+/// its whole message, the accepted files are in name order, and their bytes are kept.
+#[test]
+fn repository_files_are_plain_names_in_order() {
+    use hostkeeper_pxe_seed::inputs::{
+        MAX_REPOSITORY_FILES, RepositoryFiles, RepositoryFilesError,
+    };
+    let file = |name: &str| (name.to_owned(), name.as_bytes().to_vec());
+    let refusal = |files: Vec<(String, Vec<u8>)>| {
+        RepositoryFiles::new(files)
+            .expect_err("refused")
+            .to_string()
+    };
+    assert_eq!(refusal(vec![]), "there is no repository file");
+    for bad in [
+        "",
+        ".hidden",
+        "a/b",
+        "../x",
+        "a b",
+        "a\"b",
+        &"a".repeat(256),
+    ] {
+        assert_eq!(
+            refusal(vec![file(bad)]),
+            format!(
+                "the repository file name {bad:?} is not 1 to 255 of A-Za-z0-9._+-, not starting with a dot"
+            )
+        );
+    }
+    assert_eq!(
+        refusal(vec![file("a.gpg"), file("b.sources"), file("a.gpg")]),
+        "the repository file name \"a.gpg\" is given twice"
+    );
+    let many: Vec<_> = (0..=MAX_REPOSITORY_FILES)
+        .map(|i| file(&format!("f{i}")))
+        .collect();
+    assert_eq!(
+        RepositoryFiles::new(many),
+        Err(RepositoryFilesError::TooMany(MAX_REPOSITORY_FILES + 1))
+    );
+    let longest = "a".repeat(255);
+    let ok = RepositoryFiles::new(vec![file("z.sources"), file(&longest), file("a+b_c-d.gpg")])
+        .expect("plain names");
+    let names: Vec<&str> = ok.files().iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(names, ["a+b_c-d.gpg", longest.as_str(), "z.sources"]);
+    assert_eq!(ok.files()[2].1, b"z.sources");
+}

@@ -143,6 +143,10 @@ struct ProfilePb {
     acknowledged: Option<bool>,
     #[prost(uint64, tag = "4")]
     answered_unix: u64,
+    /// The config profile's settings digest; absent on the other commands and on a record
+    /// written before the field.
+    #[prost(string, optional, tag = "5")]
+    settings_sha256: Option<String>,
 }
 
 #[derive(Clone, PartialEq, prost::Message)]
@@ -224,6 +228,7 @@ fn profile_pb(command: &ProfileCommand) -> ProfilePb {
         sent_unix: command.sent_unix,
         acknowledged: command.answer.map(|answer| answer.acknowledged),
         answered_unix: command.answer.map_or(0, |answer| answer.at_unix),
+        settings_sha256: command.settings_sha256.clone(),
     }
 }
 
@@ -235,6 +240,7 @@ fn profile_of(pb: ProfilePb) -> Option<ProfileCommand> {
             acknowledged,
             at_unix: pb.answered_unix,
         }),
+        settings_sha256: pb.settings_sha256,
     })
 }
 

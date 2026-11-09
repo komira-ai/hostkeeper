@@ -318,6 +318,8 @@ fn serve_help_lists_the_gate_flags_and_no_environment_variable() {
         "--mdm-webhook-listen <MDM_WEBHOOK_LISTEN>",
         "--mdm-profile-identifier <MDM_PROFILE_IDENTIFIER>",
         "--mdm-daemon-config <MDM_DAEMON_CONFIG>",
+        "--mdm-stores <MDM_STORES>",
+        "--mdm-macos-pkg <MDM_MACOS_PKG>",
         "--mdm-pkg-allowlist <MDM_PKG_ALLOWLIST>",
         "--mdm-host <MDM_HOST>",
     ] {
@@ -527,6 +529,62 @@ fn the_enrollment_side_flags_go_together_with_the_gate() {
         .collect();
     let text = refusal(&files, &refused);
     assert!(text.starts_with("--mdm-daemon-config: "), "{text}");
+}
+
+/// Catches: `--mdm-stores` or `--mdm-macos-pkg` accepted without the profile identifier (each
+/// alone, with the gate only), or a stores file with a credential file or a signers file the
+/// daemon's loader refuses let through the start, or refused with a text that does not name the
+/// flag.
+#[test]
+fn the_stores_and_signers_flags_need_the_profile_and_are_checked_at_start() {
+    let files = Files::new("mdm-stores-flags");
+    files.put("hostkeeper.toml", DAEMON_CONFIG, 0o644);
+    let stores = "[[store]]\nname = \"lan\"\nkind = \"https\"\nbase = \"https://m.example/\"\n";
+    files.put("stores.toml", stores, 0o644);
+    files.put(
+        "macos-pkg.toml",
+        &format!("signers = [\"{}\"]\n", "ab".repeat(32)),
+        0o644,
+    );
+    let stores_flag = ["--mdm-stores", "=stores.toml"];
+    let signers_flag = ["--mdm-macos-pkg", "=macos-pkg.toml"];
+    for alone in [stores_flag, signers_flag] {
+        let args: Vec<&str> = good().into_iter().chain(alone).collect();
+        assert_eq!(
+            hostkeeper_coordinator::config::main(files.args(&args)),
+            ExitCode::from(2),
+            "{args:?}"
+        );
+    }
+    let side = [
+        "--mdm-profile-identifier",
+        IDENTIFIER,
+        "--mdm-daemon-config",
+        "=hostkeeper.toml",
+    ];
+    let all: Vec<&str> = good()
+        .into_iter()
+        .chain(side)
+        .chain(stores_flag)
+        .chain(signers_flag)
+        .collect();
+    assert!(start(&files, &all).is_ok());
+
+    files.put(
+        "stores.toml",
+        &format!("{stores}basic_auth_file = \"/x\"\n"),
+        0o644,
+    );
+    assert_eq!(
+        refusal(&files, &all),
+        "--mdm-stores: store \"lan\" names a credential file (basic_auth_file or bearer_file): a profile carries no secret, and the file is not on the Mac"
+    );
+    files.put("stores.toml", stores, 0o644);
+    files.put("macos-pkg.toml", "signers = [\"zz\"]\n", 0o644);
+    assert_eq!(
+        refusal(&files, &all),
+        "--mdm-macos-pkg: the signers names \"zz\", which is not 64 hex digits"
+    );
 }
 
 /// Catches: a pkg flag accepted without its partner or without the enrollment side

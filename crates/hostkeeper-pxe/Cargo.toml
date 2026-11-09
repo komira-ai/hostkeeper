@@ -34,6 +34,9 @@ hostkeeper-config = { path = "../hostkeeper-config" }
 hostkeeper-package = { path = "../hostkeeper-package" }
 # The MAC grammar of the inventory (`MacAddress`).
 hostkeeper-enrollment = { path = "../hostkeeper-enrollment" }
+# The daemon's own loader of the host's repository entries (`load_as`), which checks the
+# directory `--repositories` names before a seed is made, and its file reader.
+hostkeeper-install = { path = "../hostkeeper-install" }
 # The operator API's messages and clients: `Enrollment.ListRecords`, `Enrollment.List`, `Hosts.List`.
 hostkeeper-proto = { path = "../hostkeeper-proto" }
 # The packets of `serve`: proxyDHCP answers, router-mode learning, TFTP requests and transfers.

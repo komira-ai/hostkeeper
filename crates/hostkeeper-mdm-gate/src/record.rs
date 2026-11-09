@@ -75,6 +75,10 @@ pub struct ProfileCommand {
     pub sent_unix: u64,
     /// The device's answer; `None` before one.
     pub answer: Option<ProfileAnswer>,
+    /// For the config profile: the SHA-256 (64 lower-case hex digits) of the settings the
+    /// command carried. It counts as delivered only once the device acknowledged the command.
+    /// `None` on a command that carries none, and on a record written before the field.
+    pub settings_sha256: Option<String>,
 }
 
 impl ProfileCommand {
@@ -85,6 +89,16 @@ impl ProfileCommand {
             uuid,
             sent_unix: now,
             answer: None,
+            settings_sha256: None,
+        }
+    }
+
+    /// This command carrying the settings whose digest is `sha256`.
+    #[must_use]
+    pub fn with_settings(self, sha256: String) -> Self {
+        Self {
+            settings_sha256: Some(sha256),
+            ..self
         }
     }
 
@@ -170,7 +184,8 @@ pub struct DeviceRecord {
     /// The last thing that went wrong with a command for it: NanoHUB refused it, or the device
     /// answered an error.
     pub last_error: Option<String>,
-    /// The `InstallProfile` of the farm's config profile in this enrollment.
+    /// The `InstallProfile` of the farm's config profile in this enrollment: the last one sent,
+    /// which a change of the profile's settings replaces.
     pub config_profile: Option<ProfileCommand>,
     /// The last nonce issued for the device, in this enrollment or an earlier one.
     pub nonce: Option<NonceRecord>,

@@ -10,8 +10,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use hostkeeper_enrollment::fs::{Fs, RealFs};
 use hostkeeper_enrollment::names::KeyHash;
 use hostkeeper_mdm_gate::{
-    DaemonProfile, EnrollSide, Enrollments, EnrollmentsError, Gate, Install, MdmHost, Nonce,
-    PkgAllowlist, ProfileIdentifier, Random, StoreError, Waiting,
+    ConfigProfile, DaemonProfile, EnrollSide, Enrollments, EnrollmentsError, Gate, Install,
+    MdmHost, Nonce, PkgAllowlist, ProfileIdentifier, Random, StoreError, Waiting,
 };
 use plist::{Dictionary, Value};
 
@@ -168,9 +168,19 @@ pub fn request(n: u8, uuid: &str, posted: u64) -> Waiting {
 
 /// The enrollment side over `fake`.
 pub fn side(fake: &Arc<FakeEnrollments>) -> EnrollSide {
+    side_of(fake, config())
+}
+
+/// The config profile of [`CONFIG`] alone.
+pub fn config() -> ConfigProfile {
+    ConfigProfile::new(DaemonProfile::from_toml(CONFIG).expect("the loader accepts it"))
+}
+
+/// The enrollment side over `fake` with the config profile `config`.
+pub fn side_of(fake: &Arc<FakeEnrollments>, config: ConfigProfile) -> EnrollSide {
     EnrollSide {
         identifier: ProfileIdentifier::parse(IDENTIFIER).expect("an identifier"),
-        config: DaemonProfile::from_toml(CONFIG).expect("the loader accepts it"),
+        config,
         enrollments: Arc::clone(fake) as Arc<dyn Enrollments>,
     }
 }
@@ -183,6 +193,8 @@ pub struct EnrollRig {
     allowlist: Option<String>,
     /// The file system the gate keeps its records through.
     fs: Arc<dyn Fs>,
+    /// The config profile the gate sends.
+    config: ConfigProfile,
 }
 
 impl EnrollRig {
@@ -203,12 +215,15 @@ impl EnrollRig {
     async fn on(name: &str, fs: Arc<dyn Fs>, random: Random) -> Self {
         let mut rig = Rig::new(name).await;
         let fake = Arc::new(FakeEnrollments::default());
-        rig.gate = gate_on(&rig, &fake, random, Arc::clone(&fs), None).expect("the gate opens");
+        let config = config();
+        rig.gate =
+            gate_on(&rig, &fake, random, Arc::clone(&fs), None, &config).expect("the gate opens");
         Self {
             rig,
             fake,
             allowlist: None,
             fs,
+            config,
         }
     }
 
@@ -227,6 +242,22 @@ impl EnrollRig {
             random,
             Arc::clone(&self.fs),
             self.allowlist.as_deref(),
+            &self.config,
+        )
+        .expect("the gate opens");
+    }
+
+    /// A new gate over the same directory and fake whose config profile is `config`, drawing
+    /// its UUIDs from `random`, as after a restart of the coordinator with other flags.
+    pub fn reconfigure(&mut self, config: ConfigProfile, random: Random) {
+        self.config = config;
+        self.rig.gate = gate_on(
+            &self.rig,
+            &self.fake,
+            random,
+            Arc::clone(&self.fs),
+            self.allowlist.as_deref(),
+            &self.config,
         )
         .expect("the gate opens");
     }
@@ -240,6 +271,7 @@ impl EnrollRig {
             counting(),
             Arc::new(RealFs),
             self.allowlist.as_deref(),
+            &self.config,
         )?;
         Ok(())
     }
@@ -339,6 +371,7 @@ fn gate_on(
     random: Random,
     fs: Arc<dyn Fs>,
     allowlist: Option<&str>,
+    config: &ConfigProfile,
 ) -> Result<Gate, StoreError> {
     let install = allowlist.map(|text| Install {
         allowlist: PkgAllowlist::parse(text).expect("the allowlist parses"),
@@ -346,7 +379,7 @@ fn gate_on(
         fs: Arc::new(RealFs),
     });
     Ok(open_on(fs, &rig.dir(), &rig.hub, &rig.clock, random)?
-        .with_enrollment(side(fake))
+        .with_enrollment(side_of(fake, config.clone()))
         .with_install(install))
 }
 
