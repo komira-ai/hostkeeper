@@ -15,7 +15,9 @@
 //!    lists every package with its size and SHA-256, and is written canonically;
 //! 5. `hkctl-<version>` is a bash script whose one version line is the stamp of the version and
 //!    the pinned commit (`hkctl::problems`);
-//! 6. each attested asset verifies twice, online and from its bundle, and every attestation
+//! 6. the coordinator's image index is the one its two image tarballs make, byte for byte
+//!    ([`super::image_index`]): its SHA-256 is the digest of the image a registry serves;
+//! 7. each attested asset verifies twice, online and from its bundle, and every attestation
 //!    returned names this repository's signer workflow and ref, the pinned commit, and the
 //!    SHA-256 of the file.
 
@@ -27,6 +29,7 @@ use super::contract::{
     bundle_of, hkctl_name, summed_names,
 };
 use super::hkctl;
+use super::image_index;
 use super::index::ReleaseIndex;
 use super::ports::{Attestation, PortError, Verifier};
 use super::{Error, file_sha256};
@@ -49,6 +52,7 @@ pub(crate) fn check(
         check_index(dir, package, version, &present, &mut problems)?;
     }
     check_hkctl(dir, (version, commit), &present, &mut problems)?;
+    check_image_index(dir, version, &present, &mut problems);
     let attested = attested_names(version);
     for name in attested.iter().filter(|n| present.contains(*n)) {
         check_attestations(verifier, dir, name, commit, &mut problems)?;
@@ -75,6 +79,26 @@ fn regular_files(dir: &Path) -> Result<BTreeSet<String>, Error> {
         .filter(|e| e.file_type().is_ok_and(|kind| kind.is_file()))
         .map(|e| e.file_name().to_string_lossy().into_owned())
         .collect())
+}
+
+/// Step 6: the image index is the one the two image tarballs make. It is skipped when the index
+/// or a tarball is absent (step 1 reported that).
+fn check_image_index(
+    dir: &Path,
+    version: &Version,
+    present: &BTreeSet<String>,
+    problems: &mut Vec<String>,
+) {
+    let needed = [
+        image_index::index_name(version),
+        image_index::image_name(version, Platform::LinuxX86_64),
+        image_index::image_name(version, Platform::LinuxArm64),
+    ];
+    if needed.iter().all(|n| present.contains(n))
+        && let Err(why) = image_index::check_index(dir, version)
+    {
+        problems.push(why.to_string());
+    }
 }
 
 /// Step 1: the files present are exactly the assets of the version.

@@ -1,6 +1,5 @@
 //! `cargo xtask release check-linux-pkg` and `release nfpm-stage --binaries`, run as the built
-//! program on packages and programs crafted byte by byte: a deb, an rpm, an Arch package and a
-//! tarball, holding a static-pie program (accepted), a program linked to `libssl.so.3` or built
+//! program on packages and programs crafted byte by byte: a deb, an rpm and a tarball, holding a static-pie program (accepted), a program linked to `libssl.so.3` or built
 //! for glibc (refused), or declaring a dependency (refused). The exit status is 0 for an
 //! accepted package, 1 for a refused one and 2 for a usage error. No toolchain, no network.
 
@@ -136,10 +135,6 @@ fn gzip(bytes: &[u8]) -> Vec<u8> {
     e.finish().expect("gzip")
 }
 
-fn zstd(bytes: &[u8]) -> Vec<u8> {
-    ruzstd::encoding::compress_to_vec(bytes, ruzstd::encoding::CompressionLevel::Fastest)
-}
-
 /// A tar of `entries` owned by uid and gid 0 with the names `owner` and `group`, and `link`
 /// as the console's issue link.
 fn tar(entries: &[Entry], owner: &str, link: bool) -> Vec<u8> {
@@ -198,17 +193,6 @@ fn deb(entries: &[Entry], control: &str, link: bool) -> Vec<u8> {
         }
     }
     out
-}
-
-/// An Arch package of `entries`: a zstd tar with a `.PKGINFO` and owners without names.
-fn arch(entries: &[Entry], pkginfo: &str, link: bool) -> Vec<u8> {
-    let mut all = vec![entry(".PKGINFO", 0o644, pkginfo.as_bytes().to_vec())];
-    all.extend(entries.iter().map(|e| Entry {
-        path: e.path,
-        mode: e.mode,
-        data: e.data.clone(),
-    }));
-    zstd(&tar(&all, "", link))
 }
 
 /// A gzip tarball of `entries`.
@@ -347,7 +331,7 @@ fn write(dir: &TestDir, name: &str, bytes: &[u8]) -> PathBuf {
     path
 }
 
-/// The four formats of a package holding `entries`, declaring nothing, as `(name, bytes)`.
+/// The three formats of a package holding `entries`, declaring nothing, as `(name, bytes)`.
 fn formats(entries: &[Entry]) -> Vec<(&'static str, Vec<u8>)> {
     vec![
         (
@@ -355,16 +339,12 @@ fn formats(entries: &[Entry]) -> Vec<(&'static str, Vec<u8>)> {
             deb(entries, "Package: hostkeeper\n", false),
         ),
         ("hostkeeper.rpm", rpm(entries, &[], false)),
-        (
-            "hostkeeper.pkg.tar.zst",
-            arch(entries, "pkgname = hostkeeper\n", false),
-        ),
         ("hostkeeper.tar.gz", tarball(entries)),
     ]
 }
 
 #[test]
-fn a_static_build_is_accepted_in_a_deb_an_rpm_an_arch_package_and_a_tarball() {
+fn a_static_build_is_accepted_in_a_deb_an_rpm_and_a_tarball() {
     let d = dir("accept");
     for (name, bytes) in formats(&programs(static_pie(), static_pie())) {
         let package = write(&d, name, &bytes);
@@ -451,11 +431,6 @@ fn a_package_that_declares_a_dependency_is_refused() {
                 false,
             ),
             "declares the dependency glibc >= 2.34",
-        ),
-        (
-            "hostkeeper.pkg.tar.zst",
-            arch(&entries, "pkgname = hostkeeper\ndepend = glibc\n", false),
-            "declares the dependency glibc",
         ),
     ];
     for (name, bytes, line) in cases {
@@ -604,10 +579,6 @@ fn nfpm_stage_takes_the_static_programs_of_binaries_and_a_checked_package_carrie
             deb(&entries, "Package: hostkeeper\n", true),
         ),
         ("hostkeeper.rpm", rpm(&entries, &[], true)),
-        (
-            "hostkeeper.pkg.tar.zst",
-            arch(&entries, "pkgname = hostkeeper\n", true),
-        ),
     ];
     for (name, bytes) in packages {
         let package = write(&stage.dir, name, &bytes);
@@ -660,4 +631,206 @@ fn nfpm_stage_without_binaries_is_a_usage_error() {
     let o = run(&stage.dir, &args);
     assert_eq!(o.status.code(), Some(2), "{}", stderr(&o));
     assert!(!stage.out().exists());
+}
+
+const COORDINATOR_UI: &str = "usr/share/hostkeeper-coordinator/ui";
+
+/// The files the coordinator's nfpm.yaml installs, with a two-file web app, the program being
+/// `program`.
+fn coordinator_entries(program: Vec<u8>) -> Vec<Entry> {
+    vec![
+        entry("usr/bin/hostkeeper-coordinator", 0o755, program),
+        entry(
+            "usr/share/hostkeeper-coordinator/ui/index.html",
+            0o644,
+            b"<html>".to_vec(),
+        ),
+        entry(
+            "usr/share/hostkeeper-coordinator/ui/pages/host.js",
+            0o644,
+            b"host page".to_vec(),
+        ),
+        entry(
+            "usr/lib/systemd/system/hostkeeper-coordinator.service",
+            0o644,
+            b"[Unit]".to_vec(),
+        ),
+        entry(
+            "usr/lib/sysusers.d/hostkeeper-coordinator.conf",
+            0o644,
+            b"u".to_vec(),
+        ),
+        entry(
+            "usr/lib/tmpfiles.d/hostkeeper-coordinator.conf",
+            0o644,
+            b"d".to_vec(),
+        ),
+        entry(
+            "usr/share/hostkeeper-coordinator/serve.toml.template",
+            0o644,
+            b"#".to_vec(),
+        ),
+    ]
+}
+
+/// The coordinator's deb and rpm of `entries`, each needing systemd alone.
+fn coordinator_packages(entries: &[Entry]) -> Vec<(&'static str, Vec<u8>)> {
+    vec![
+        (
+            "hostkeeper-coordinator.deb",
+            deb(
+                entries,
+                "Package: hostkeeper-coordinator\nDepends: systemd\n",
+                false,
+            ),
+        ),
+        (
+            "hostkeeper-coordinator.rpm",
+            rpm(entries, &["systemd"], false),
+        ),
+    ]
+}
+
+/// A directory `d/staged` holding the coordinator's program and web app as the build job
+/// stages them.
+fn stage_coordinator(d: &TestDir) -> PathBuf {
+    let staged = d.join("staged");
+    std::fs::create_dir_all(staged.join("ui/pages")).expect("staged");
+    std::fs::write(staged.join("hostkeeper-coordinator"), static_pie()).expect("program");
+    std::fs::write(staged.join("ui/index.html"), b"<html>").expect("index");
+    std::fs::write(staged.join("ui/pages/host.js"), b"host page").expect("page");
+    staged
+}
+
+fn check_coordinator(d: &TestDir, package: &Path, staged: &Path) -> Output {
+    run(
+        d,
+        &[
+            "release",
+            "check-linux-pkg",
+            path_str(package),
+            "--coordinator-staged",
+            path_str(staged),
+        ],
+    )
+}
+
+#[test]
+fn a_coordinator_package_that_installs_the_staged_files_is_accepted_in_a_deb_and_an_rpm() {
+    let d = dir("coordinator-accept");
+    let staged = stage_coordinator(&d);
+    for (name, bytes) in coordinator_packages(&coordinator_entries(static_pie())) {
+        let package = write(&d, name, &bytes);
+        let o = check_coordinator(&d, &package, &staged);
+        assert_eq!(o.status.code(), Some(0), "{name}: {}", stderr(&o));
+        let out = stdout(&o);
+        let at = package.display();
+        for line in [
+            "/usr/bin/hostkeeper-coordinator is 755 root:root and the staged bytes".to_owned(),
+            format!("/{COORDINATOR_UI} holds the 2 staged files, 644 root:root"),
+            "/usr/lib/systemd/system/hostkeeper-coordinator.service is 644 root:root".to_owned(),
+            "/usr/bin/hostkeeper-coordinator is a static ELF program".to_owned(),
+            "declares only systemd".to_owned(),
+        ] {
+            assert!(out.contains(&format!("{at}: {line}\n")), "{name}: {out}");
+        }
+        assert_eq!(stderr(&o), "", "{name}");
+    }
+}
+
+#[test]
+fn a_coordinator_package_with_a_changed_binary_is_refused_with_its_line() {
+    let d = dir("coordinator-binary");
+    let staged = stage_coordinator(&d);
+    let changed = elf(None, &["libssl.so.3"]);
+    for (name, bytes) in coordinator_packages(&coordinator_entries(changed)) {
+        let package = write(&d, name, &bytes);
+        let o = check_coordinator(&d, &package, &staged);
+        assert_eq!(o.status.code(), Some(1), "{name}: {}", stdout(&o));
+        let err = stderr(&o);
+        let at = package.display();
+        assert!(
+            err.contains(&format!(
+                "{at}: /usr/bin/hostkeeper-coordinator: its bytes are not those of {}\n",
+                staged.join("hostkeeper-coordinator").display()
+            )),
+            "{name}: {err}"
+        );
+        assert!(
+            err.contains(&format!(
+                "{at}: /usr/bin/hostkeeper-coordinator: ELF program linked to libssl.so.3\n"
+            )),
+            "{name}: {err}"
+        );
+        assert_eq!(stdout(&o), "", "{name}");
+    }
+}
+
+#[test]
+fn a_coordinator_package_missing_a_ui_file_is_refused_with_its_line() {
+    let d = dir("coordinator-ui");
+    let staged = stage_coordinator(&d);
+    let entries: Vec<Entry> = coordinator_entries(static_pie())
+        .into_iter()
+        .filter(|e| !e.path.ends_with("ui/pages/host.js"))
+        .collect();
+    for (name, bytes) in coordinator_packages(&entries) {
+        let package = write(&d, name, &bytes);
+        let o = check_coordinator(&d, &package, &staged);
+        assert_eq!(o.status.code(), Some(1), "{name}: {}", stdout(&o));
+        assert_eq!(
+            stderr(&o),
+            format!(
+                "xtask: {}: /{COORDINATOR_UI}/pages/host.js: not in the package\n",
+                package.display()
+            ),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn coordinator_staged_with_staged_is_a_usage_error() {
+    let d = dir("coordinator-usage");
+    let staged = stage_coordinator(&d);
+    let (name, bytes) = coordinator_packages(&coordinator_entries(static_pie())).remove(0);
+    let package = write(&d, name, &bytes);
+    let o = run(
+        &d,
+        &[
+            "release",
+            "check-linux-pkg",
+            path_str(&package),
+            "--staged",
+            path_str(&staged),
+            "--coordinator-staged",
+            path_str(&staged),
+        ],
+    );
+    assert_eq!(o.status.code(), Some(2), "{}", stdout(&o));
+    assert!(stderr(&o).contains("cannot be used with"), "{}", stderr(&o));
+    assert_eq!(stdout(&o), "");
+}
+
+#[test]
+fn coordinator_staged_with_service_is_a_usage_error() {
+    let d = dir("coordinator-service-usage");
+    let staged = stage_coordinator(&d);
+    let (name, bytes) = coordinator_packages(&coordinator_entries(static_pie())).remove(0);
+    let package = write(&d, name, &bytes);
+    let o = run(
+        &d,
+        &[
+            "release",
+            "check-linux-pkg",
+            path_str(&package),
+            "--service",
+            "hello",
+            "--coordinator-staged",
+            path_str(&staged),
+        ],
+    );
+    assert_eq!(o.status.code(), Some(2), "{}", stdout(&o));
+    assert!(stderr(&o).contains("cannot be used with"), "{}", stderr(&o));
+    assert_eq!(stdout(&o), "");
 }

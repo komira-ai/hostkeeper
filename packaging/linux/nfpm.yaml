@@ -1,13 +1,12 @@
-# The deb, the rpm and the Arch package of the hostkeeper daemon (docs/design/hostkeeper-design.md,
+# The deb and the rpm of the hostkeeper daemon (docs/design/hostkeeper-design.md,
 # section 4.6), for nfpm. Run from the repository root, after the programs are staged:
 #
-#   VERSION=<version> ARCH=<amd64|arm64> nfpm package --config packaging/linux/nfpm.yaml --packager <deb|rpm|archlinux> --target <directory>
+#   VERSION=<version> ARCH=<amd64|arm64> nfpm package --config packaging/linux/nfpm.yaml --packager <deb|rpm> --target <directory>
 #
 # VERSION is the release's MAJOR.MINOR.PATCH in digits, with no `v` and no prerelease or build
 # suffix. ARCH is amd64 for the platform linux-x86_64 and arm64 for linux-arm64. nfpm expands
-# ${VERSION} and ${ARCH} and names the files hostkeeper_<version>_<arch>.deb (amd64, arm64),
-# hostkeeper-<version>-1.<arch>.rpm (x86_64, aarch64) and
-# hostkeeper-<version>-1-<arch>.pkg.tar.zst (x86_64, aarch64). The packages carry the daemon, its
+# ${VERSION} and ${ARCH} and names the files hostkeeper_<version>_<arch>.deb (amd64, arm64) and
+# hostkeeper-<version>-1.<arch>.rpm (x86_64, aarch64). The packages carry the daemon, its
 # unit, its tmpfiles rules, the template of its config, the pinned `gh` and the Sigstore trusted
 # root its attestation check runs on, the boot server of network install, `hostkeeper-pxe`
 # (docs/design/network-install.md, section 3), which has no unit and runs only when an operator
@@ -15,7 +14,7 @@
 # issue file the daemon writes while the host waits for its enrollment
 # (/run/hostkeeper/enrollment.issue), and nothing else: no key, no certificate, no token and no
 # hostkeeper.toml, which whoever installs the package places (packaging/linux/README.md). The
-# deb, the rpm and the Arch package carry the same files, the same link and the same scripts.
+# deb and the rpm carry the same files, the same link and the same scripts.
 #
 # The two programs are the static (musl) build of `hostkeeper` and `hostkeeper-pxe`, so one
 # package runs on every release of its family; `gh` and the trusted root are pinned downloads.
@@ -93,5 +92,3 @@ contents:
 scripts:
   postinstall: packaging/linux/scripts/postinstall.sh
   preremove: packaging/linux/scripts/preremove.sh
-archlinux:
-  packager: "The hostkeeper project <https://github.com/komira-ai/hostkeeper>"

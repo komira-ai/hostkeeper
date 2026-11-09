@@ -36,7 +36,7 @@ fn touch(dir: &Path, names: &[&str]) {
 #[test]
 fn the_committed_list_pins_every_image_and_covers_each_format() {
     let releases = parse_releases(RELEASES_TEXT).expect("the committed list parses");
-    assert_eq!(releases.len(), 9);
+    assert_eq!(releases.len(), 8);
     for format in Format::ALL {
         assert!(releases.iter().any(|r| r.format == format), "{format:?}");
         assert!(!format.as_str().is_empty());
@@ -95,7 +95,12 @@ fn a_list_with_any_defect_is_refused() {
         ),
         (
             entry("a", "apk", &pinned()),
-            "release \"a\" has the format \"apk\", not deb, rpm or arch".to_owned(),
+            "release \"a\" has the format \"apk\", not deb or rpm".to_owned(),
+        ),
+        // The Arch package is withdrawn: a release of that format is refused, not installed.
+        (
+            entry("a", "arch", &pinned()),
+            "release \"a\" has the format \"arch\", not deb or rpm".to_owned(),
         ),
         (
             entry("a", "deb", "debian:12"),
@@ -147,16 +152,16 @@ fn the_one_package_of_each_format_is_found_and_anything_else_fails_by_name() {
             .starts_with(&format!("{}: cannot list", missing.display()))
     );
 
-    touch(dir.path(), &["a.deb", "a.rpm", "README"]);
-    let err = find_packages(dir.path()).expect_err("no arch package");
+    touch(dir.path(), &["a.deb", "README"]);
+    let err = find_packages(dir.path()).expect_err("no rpm");
     assert_eq!(
         err.to_string(),
         format!(
-            "{} holds 0 files ending .pkg.tar.zst, not one: build the packages as the job's steps do",
+            "{} holds 0 files ending .rpm, not one: build the packages as the job's steps do",
             dir.path().display()
         )
     );
-    touch(dir.path(), &["a.pkg.tar.zst", "b.deb"]);
+    touch(dir.path(), &["a.rpm", "b.deb"]);
     let err = find_packages(dir.path()).expect_err("two debs");
     assert_eq!(
         err,
@@ -170,10 +175,9 @@ fn the_one_package_of_each_format_is_found_and_anything_else_fails_by_name() {
     let found = find_packages(dir.path()).expect("one of each");
     assert_eq!(found.file_name(Format::Deb), "a.deb");
     assert_eq!(found.file_name(Format::Rpm), "a.rpm");
-    assert_eq!(found.file_name(Format::Arch), "a.pkg.tar.zst");
 
     let odd = scratch("find-odd");
-    touch(odd.path(), &["a b.deb", "a.rpm", "a.pkg.tar.zst"]);
+    touch(odd.path(), &["a b.deb", "a.rpm"]);
     let err = find_packages(odd.path()).expect_err("an odd name");
     assert_eq!(err, LinuxPackagesError::BadFileName("a b.deb".to_owned()));
     assert_eq!(
@@ -189,10 +193,6 @@ fn the_script_installs_with_the_formats_tool_and_runs_each_program() {
     let cases = [
         (Format::Deb, "dpkg -i /packages/h.deb >&2"),
         (Format::Rpm, "rpm -i /packages/h.rpm >&2"),
-        (
-            Format::Arch,
-            "pacman -U --noconfirm /packages/h.pkg.tar.zst >&2",
-        ),
     ];
     for (format, install) in cases {
         let file = format!("h{}", format.suffix());
@@ -228,7 +228,6 @@ fn the_docker_run_pulls_nothing_has_no_network_and_mounts_the_packages_read_only
         dir: "/t/linux-packages".into(),
         deb: "h.deb".to_owned(),
         rpm: "h.rpm".to_owned(),
-        arch: "h.pkg.tar.zst".to_owned(),
     };
     let release = Release {
         name: "debian:12".to_owned(),
