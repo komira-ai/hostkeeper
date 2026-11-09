@@ -12,6 +12,7 @@ mod alpine;
 mod attestation_files;
 mod config_template;
 mod container;
+mod coordinator;
 mod daemon_flags;
 mod directories;
 mod nfpm;

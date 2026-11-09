@@ -5,8 +5,10 @@
 //! `/usr/lib/hostkeeper/trusted_root.json`, 0644, each owned by root and group root, each with
 //! the bytes of the file staged for it; and the console's issue link,
 //! `/etc/issue.d/hostkeeper.issue`, a link that points at `/run/hostkeeper/enrollment.issue`
-//! (`hostkeeper_daemon::console`), a path that exists only on a running host. Every way the
-//! package differs is reported, one line each.
+//! (`hostkeeper_daemon::console`), a path that exists only on a running host. With
+//! `--coordinator-staged` it is the coordinator's package instead, checked against the files staged
+//! for it, and may declare the one dependency `systemd` ([`coordinator`]). Every way the package
+//! differs is reported, one line each.
 //!
 //! The package is told apart by its first bytes and read with no tool:
 //!
@@ -220,9 +222,19 @@ fn read(package: &Path, bytes: &[u8]) -> Result<Contents, Error> {
     }
 }
 
+/// The files a package is checked against: the daemon's ([`nfpm_stage`](super::nfpm_stage)) or
+/// the coordinator's ([`coordinator`]).
+#[derive(Clone, Copy)]
+pub(crate) enum Staged<'a> {
+    /// The daemon's deb or rpm, against the directory `nfpm-stage` wrote.
+    Daemon(&'a Path),
+    /// The coordinator's deb or rpm, against the directory the build job staged it in.
+    Coordinator(&'a Path),
+}
+
 /// Checks the package at `package`: the lines to print. With `staged`, also against the files
 /// staged there.
-pub(crate) fn check(package: &Path, staged: Option<&Path>) -> Result<Vec<String>, Error> {
+pub(crate) fn check(package: &Path, staged: Option<Staged<'_>>) -> Result<Vec<String>, Error> {
     let bytes = std::fs::read(package).map_err(Error::io(format!("read {}", package.display())))?;
     let contents = read(package, &bytes)?;
     let name = package.display();
@@ -231,9 +243,19 @@ pub(crate) fn check(package: &Path, staged: Option<&Path>) -> Result<Vec<String>
             "{name}: --staged does not apply to a tarball, which installs nothing at the daemon's paths"
         )));
     }
+    let mut ui_files = 0;
     let mut problems = match staged {
-        Some(staged) => staged_problems(&contents.files, staged)?,
+        Some(Staged::Daemon(staged)) => staged_problems(&contents.files, staged)?,
+        Some(Staged::Coordinator(staged)) => {
+            let (problems, files) = coordinator::staged_problems(&contents.files, staged)?;
+            ui_files = files;
+            problems
+        }
         None => Vec::new(),
+    };
+    let allowed: &[&str] = match staged {
+        Some(Staged::Coordinator(_)) => &coordinator::ALLOWED_DEPENDS,
+        _ => &[],
     };
     let (static_programs, elf_problems) = programs(&contents.files);
     problems.extend(elf_problems);
@@ -241,6 +263,7 @@ pub(crate) fn check(package: &Path, staged: Option<&Path>) -> Result<Vec<String>
         contents
             .depends
             .iter()
+            .filter(|dependency| !allowed.contains(&dependency.as_str()))
             .map(|dependency| format!("declares the dependency {dependency}")),
     );
     if !problems.is_empty() {
@@ -252,7 +275,10 @@ pub(crate) fn check(package: &Path, staged: Option<&Path>) -> Result<Vec<String>
         ));
     }
     let mut lines = Vec::new();
-    if staged.is_some() {
+    if let Some(Staged::Coordinator(_)) = staged {
+        lines.extend(coordinator::passed(&name.to_string(), ui_files));
+    }
+    if let Some(Staged::Daemon(_)) = staged {
         lines.extend(CHECKED.iter().map(|(dst, _, mode)| {
             format!("{name}: {dst} is {mode:o} root:root and the staged bytes")
         }));
@@ -269,12 +295,16 @@ pub(crate) fn check(package: &Path, staged: Option<&Path>) -> Result<Vec<String>
         lines.push(format!("{name}: holds no ELF program"));
     }
     if contents.kind != Kind::Tarball {
-        lines.push(format!("{name}: declares no dependency"));
+        lines.push(match contents.depends.as_slice() {
+            [] => format!("{name}: declares no dependency"),
+            some => format!("{name}: declares only {}", some.join(", ")),
+        });
     }
     Ok(lines)
 }
 
 mod archive;
+mod coordinator;
 mod rpm;
 #[cfg(test)]
 mod tests;

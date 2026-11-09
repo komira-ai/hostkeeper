@@ -4,7 +4,9 @@
 //! under the same lock; `import` and `export` move the state from those files into the database
 //! and back ([`crate::transfer`]).
 //!
-//! Everything is a flag; the coordinator reads no environment variable. Without
+//! Everything is a flag; the coordinator reads no environment variable. `serve --config <file>`
+//! takes flags from a TOML file, put in place of it before the arguments are parsed
+//! ([`config_file`]). Without
 //! `--enrollment-dir` it holds no CA key: its certificate and key are files the farm CA issued,
 //! and the CA certificate it checks updaters against is a file too. With it, it is also the
 //! hosts' CA ([`crate::enrollment`]): `--ca-key-file` is the CA's key (made with `--ca-init`),
@@ -92,6 +94,9 @@ use crate::verdict_file::VerdictFile;
 #[path = "config_error.rs"]
 mod error;
 
+#[path = "config_file.rs"]
+mod config_file;
+
 pub use error::StartError;
 
 /// The times the flags take, in seconds.
@@ -156,6 +161,12 @@ pub enum Command {
 // refuses the directory beside it, naming it, at start).
 #[group(id = "records_store", args = ["enrollment_dir", "database_dsn_file"], multiple = true)]
 pub struct Serve {
+    /// A TOML file of flags of `serve`, each key a flag's name without `--` (a string or an
+    /// integer is its value, `true` a flag with no value, an array the flag once per element),
+    /// put in place of this flag before the others are parsed: a flag it gives may not be given
+    /// again.
+    #[arg(long, value_name = "FILE")]
+    pub config: Option<PathBuf>,
     /// Where updaters dial (mutual TLS).
     #[arg(long)]
     pub heartbeat_listen: SocketAddr,
@@ -939,6 +950,13 @@ fn runtime(flags: Serve) -> Result<(), StartError> {
 /// `--ui-dir` serves [`DEFAULT_UI_DIR`] when it is a directory ([`Serve::with_default_ui_dir`]).
 #[must_use]
 pub fn main(args: Vec<OsString>) -> ExitCode {
+    let args = match config_file::expand(args, config_file::read_file) {
+        Ok(args) => args,
+        Err(why) => {
+            eprintln!("hostkeeper-coordinator: {why}");
+            return ExitCode::from(2);
+        }
+    };
     let cli = match Cli::try_parse_from(args) {
         Ok(cli) => cli,
         Err(usage) => {

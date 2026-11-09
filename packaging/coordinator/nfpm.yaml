@@ -1,0 +1,82 @@
+# The deb and the rpm of the hostkeeper coordinator, for nfpm. Run from the repository root,
+# after the program and the web app are staged:
+#
+#   VERSION=<version> ARCH=<amd64|arm64> nfpm package --config packaging/coordinator/nfpm.yaml --packager <deb|rpm> --target <directory>
+#
+# VERSION is the release's MAJOR.MINOR.PATCH in digits, with no `v` and no prerelease or build
+# suffix. ARCH is amd64 for the platform linux-x86_64 and arm64 for linux-arm64. nfpm expands
+# ${VERSION} and ${ARCH} and names the files hostkeeper-coordinator_<version>_<arch>.deb (amd64,
+# arm64) and hostkeeper-coordinator-<version>-1.<arch>.rpm (x86_64, aarch64). The packages carry
+# the coordinator, its unit, its sysusers.d entry (the user hostkeeper-coordinator), its
+# tmpfiles rules, the template of /etc/hostkeeper-coordinator/serve.toml (the flags the unit
+# starts it with) and the operator web app it serves by default, and nothing else: no key, no
+# certificate, no token and no serve.toml, which whoever installs the package places
+# (docs/deploy/coordinator/package.md). The deb and the rpm carry the same files and the same
+# scripts.
+#
+# The program is the static (musl) build of `hostkeeper-coordinator`, so one package runs on
+# every release of its family; the one dependency is systemd. It and the web app are taken from
+# target/nfpm-coordinator/, which the build job of .github/workflows/artifacts.yml fills: the
+# program, checked as a static ELF of the architecture that says the release's version, and ui/
+# with every directory 0755 and every file 0644, as the container image holds it. `cargo xtask
+# release check-linux-pkg <package> --staged target/nfpm-coordinator` reads each built package
+# back and refuses it when a program has an interpreter or a NEEDED entry, when it declares a
+# dependency other than systemd, or unless it installs the staged files as staged.
+name: hostkeeper-coordinator
+arch: "${ARCH}"
+platform: linux
+version: "${VERSION}"
+section: admin
+priority: optional
+maintainer: "The hostkeeper project <https://github.com/komira-ai/hostkeeper>"
+description: |-
+  hostkeeper-coordinator, the update coordinator of a fleet.
+  It tells each host's hostkeeper daemon which version of each service to run,
+  each service by its update plan, and serves the operator web app.
+vendor: komira-ai
+homepage: https://github.com/komira-ai/hostkeeper
+license: Apache-2.0
+# systemd-sysusers and systemd-tmpfiles, which the post-install script runs, and the unit's
+# manager.
+depends:
+  - systemd
+contents:
+  - src: target/nfpm-coordinator/hostkeeper-coordinator
+    dst: /usr/bin/hostkeeper-coordinator
+    file_info:
+      mode: 0755
+      owner: root
+      group: root
+  - src: target/nfpm-coordinator/ui
+    dst: /usr/share/hostkeeper-coordinator/ui
+    type: tree
+    file_info:
+      owner: root
+      group: root
+  - src: packaging/coordinator/hostkeeper-coordinator.service
+    dst: /usr/lib/systemd/system/hostkeeper-coordinator.service
+    file_info:
+      mode: 0644
+      owner: root
+      group: root
+  - src: packaging/coordinator/hostkeeper-coordinator.sysusers.conf
+    dst: /usr/lib/sysusers.d/hostkeeper-coordinator.conf
+    file_info:
+      mode: 0644
+      owner: root
+      group: root
+  - src: packaging/coordinator/hostkeeper-coordinator.tmpfiles.conf
+    dst: /usr/lib/tmpfiles.d/hostkeeper-coordinator.conf
+    file_info:
+      mode: 0644
+      owner: root
+      group: root
+  - src: packaging/coordinator/serve.toml.template
+    dst: /usr/share/hostkeeper-coordinator/serve.toml.template
+    file_info:
+      mode: 0644
+      owner: root
+      group: root
+scripts:
+  postinstall: packaging/coordinator/scripts/postinstall.sh
+  preremove: packaging/coordinator/scripts/preremove.sh
