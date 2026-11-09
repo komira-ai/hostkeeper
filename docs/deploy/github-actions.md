@@ -37,10 +37,14 @@ issues to the job.
    `<channel>/hostkeeper/<X.Y.Z>/index.json` every 40 seconds, a 404 included, until the
    channel serves it, for at most 30 minutes. The served index must then be the published one,
    byte for byte. Then `cargo xtask release targets`, compiled from the release's own commit,
-   writes the release's targets from the same checked files: one `hostkeeper-archive` entry per
-   platform the index lists, with the archive's two locations (the channel's path, then the
-   release asset), its size and SHA-256, its attestation bundle and the `min_hostkeeper` of its
-   manifest ([packages design](../design/packages.md), section 3.7). A file of the release that
+   writes the release's targets from the same checked files: per platform the index lists,
+   hostkeeper's native entry first (an `apt` entry of the daemon's `.deb` in the repository's
+   `testing` suite, or a `macos-pkg` entry of the installer pkg in the `testing` store; see
+   [package-repositories.md](package-repositories.md)), then one `hostkeeper-archive` entry, with
+   the archive's two locations (the channel's path, then the release asset), its size and
+   SHA-256, its attestation bundle and the `min_hostkeeper` of its manifest
+   ([packages design](../design/packages.md), section 3.7). A host whose daemon announces the
+   native installer moves to hostkeeper's package; any other keeps its archive. A file of the release that
    does not check out fails the job, and nothing is set. Last, it lists the published releases:
    when a higher version than the run's is published already (a late run of an older commit,
    released after a newer one), the next step is skipped, so that the fleet is never moved back.

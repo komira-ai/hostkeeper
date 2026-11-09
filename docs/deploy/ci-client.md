@@ -466,13 +466,13 @@ This repository builds the targets of its own releases with `cargo xtask release
 --service <hostkeeper|hello|mdm> [--fail-ready] --version <X.Y.Z> --dir <assets> --repo
 komira-ai/hostkeeper`, from the release's assets: for each platform the package's index lists,
 one `hostkeeper-archive` entry with the archive's size and SHA-256, its `.sigstore.json` bundle,
-both locations, and the `min_hostkeeper` of the archive's own `manifest.toml`. For `hello` and
-`mdm` (not their failing build, and not `hostkeeper` yet) each list holds first the native entry
-of the platform's native package, an `apt` entry of the repository entry `komira-testing` or a
+both locations, and the `min_hostkeeper` of the archive's own `manifest.toml`. For `hostkeeper`,
+`hello` and `mdm` (not hello's failing build) each list holds first the native entry of the
+platform's native package, an `apt` entry of the repository entry `komira-testing` or a
 `macos-pkg` entry of the store `komira-testing`, its manifest the archive's own with no hook
-command ([package-repositories.md](package-repositories.md), "The services' native packages and
-their entries"): a host whose daemon announces that installer moves to it, any other keeps its
-archive. It refuses a release whose index, archives, native packages, bundles or manifests do not
+command ([package-repositories.md](package-repositories.md), "The native packages and their
+entries"): a host whose daemon announces that installer moves to it, any other keeps its
+archive. hostkeeper's native packages are the daemon's `.deb` and its installer pkg. It refuses a release whose index, archives, native packages, bundles or manifests do not
 check out, and entries the coordinator or the daemon would refuse, and prints `targets=<JSON>`
 (appended to `--output`).
 
@@ -486,7 +486,8 @@ targets of `release targets` agree with the index they are read from.
 **What the coordinator checks.** It refuses targets that break the rules of a release
 (`target_invalid`: an unknown platform, a list of no entry or more than 8, an installer twice, a
 digest, size, location or manifest out of its bounds, or for the service `hostkeeper` a list but
-one `hostkeeper-archive` entry), and the same version set before with other targets
+one native entry with at most one `hostkeeper-archive` entry after it, or one `hostkeeper-archive`
+entry alone), and the same version set before with other targets
 (`release_exists`, do not retry: a release never changes; set a new version). A set with targets
 is at most 256 KiB, the index included. `hkctl releases get-release --service <service>
 --version <version>` reads back what was set. A coordinator before targets refuses the set for

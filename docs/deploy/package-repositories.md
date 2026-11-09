@@ -101,25 +101,33 @@ The `version` it names gives the directory; the `files` give the SHA-256 and the
 The installer is also the attested release asset of the same name (see [verify-a-release.md](verify-a-release.md)),
 so its attestation can be verified as for any other asset.
 
-## The services' native packages and their entries
+## The native packages and their entries
 
 `hello`'s and `mdm`'s native packages (docs/design/packages-native.md, item A21) are the release's
 assets `hello_<version>_<arch>.deb`, `hello-<version>-macos-arm64.pkg` and `mdm_<version>_amd64.deb`,
 published with hostkeeper's own in the same passes, so a release is listed whole. hello's failing build
-(`<version>-fail-ready`) is not published: its version is not `X.Y.Z`.
+(`<version>-fail-ready`) is not published: its version is not `X.Y.Z`. hostkeeper's own native
+packages (item A23) are the daemon's `hostkeeper_<version>_<arch>.deb` and the installer
+`hostkeeper-<version>-macos-arm64.pkg`, the packages a host is set up from.
 
-`cargo xtask release targets --service hello` (and `--service mdm`) lists each platform's native entry
-before its archive one, both naming the channel `komira-testing`:
+`cargo xtask release targets` (`--service hostkeeper`, the default, and `--service hello` and
+`--service mdm`) lists each platform's native entry before its archive one, both naming the channel
+`komira-testing`:
 
 - on Linux an `apt` entry of the host's repository entry `komira-testing`, the `testing` suite above
   (`/etc/hostkeeper/repositories/komira-testing.sources`, placed by host setup), at the release's
   version, pinned by the `.deb`'s SHA-256;
-- on a Mac a `macos-pkg` entry at `hostkeeper/<version>/hello-<version>-macos-arm64.pkg` in the store
-  `komira-testing` of the Mac's `/etc/hostkeeper/stores.toml`, an `https` store rooted at
-  `https://packages.komira.ai/pkg/`.
+- on a Mac a `macos-pkg` entry at `hostkeeper/<version>/<service>-<version>-macos-arm64.pkg` in the
+  store `komira-testing` of the Mac's `/etc/hostkeeper/stores.toml`, an `https` store rooted at
+  `https://packages.komira.ai/pkg/`; its package is the `.pkg`'s identifier, for hostkeeper's
+  installer the daemon's launchd label `dev.hostkeeper.hostkeeper`.
 
-A host whose daemon does not announce the native installer, or has no such entry or store, is picked
-the archive entry, as before.
+hostkeeper's entries carry the floor of its archive (`min_hostkeeper`, the oldest daemon that reads
+the release) and no hook: its daemon updates itself through its package with built-in steps
+(docs/design/packages-native.md, section 10.4). A host whose daemon does not announce the native
+installer, or has no such entry or store, is picked the archive entry, as before. A host picked an
+entry before the publish below has put its package into `testing` defers it (`not_in_repository`,
+or a failed fetch from the store) and takes it once it is there.
 
 ## What the release workflow does
 
@@ -127,7 +135,11 @@ All of these run for the newest release of a run only: when one run releases sev
 package channels take the last, since a repository serves the newest version and it carries the
 changes of the older ones. Each job is a green no-op until the settings below exist.
 
-1. **Testing.** For apt, then for rpm, three jobs: `testing-<kind>-read` reads the current index and the
+1. **Testing.** Every job that signs or puts the release's files first checks them against the
+   release's `SHA256SUMS` and checks each asset's attestation by this repository's workflow at the
+   release's commit (`cargo xtask release check`), as `verify` did; the workflow lint
+   (`crates/xtask/tests/workflows/packages.rs`) holds every such job to those two steps, right
+   after the download and before any other verb. For apt, then for rpm, three jobs: `testing-<kind>-read` reads the current index and the
    ETag of each of its objects from the bucket, `testing-<kind>-index` merges the packages into it
    (every other product's entries are kept) and signs it, and `testing-<kind>-write` uploads each
    package once, then the index, with `If-Match` on the ETags that were read. The signing key and the
