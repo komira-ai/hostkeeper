@@ -329,3 +329,33 @@ fn every_caller_of_the_repository_joins_the_tailnet_when_the_client_id_is_set() 
         }
     }
 }
+
+#[test]
+fn a_channel_step_that_writes_an_expression_into_its_script_is_refused() {
+    // Catches: the channel's URL (or any value) written into a `run:` as `${{ ... }}`, where a
+    // value holding shell syntax runs as part of the script, in place of the step's `env:` that
+    // the command reads as its flag `--channel "$RELEASE_CHANNEL"`.
+    let from = "        env:\n          RELEASE_CHANNEL: ${{ vars.HOSTKEEPER_RELEASE_CHANNEL }}\n        run: cargo xtask release channel-host --channel \"$RELEASE_CHANNEL\" --output";
+    let inline = "        run: cargo xtask release channel-host --channel '${{ vars.HOSTKEEPER_RELEASE_CHANNEL }}' --output";
+    let got = release_problems(from, inline);
+    assert_eq!(
+        got,
+        [
+            step_problem(
+                HOST_AT + 1,
+                &format!(
+                    "if {JOIN_IF} run cargo xtask release channel-host --channel '${{{{ vars.HOSTKEEPER_RELEASE_CHANNEL }}}}' --output \"$GITHUB_OUTPUT\""
+                ),
+            ),
+            format!(
+                "release.yml: job channel step {} writes an expression into its `run:`; pass the value through `env:`",
+                HOST_AT + 1
+            ),
+        ]
+    );
+    // No run of the committed job writes one.
+    let release = yaml::load(&workflow("release.yml")).expect("release.yml parses");
+    for step in steps(&release, "channel") {
+        assert!(!text(step, "run").unwrap_or_default().contains("${{"));
+    }
+}

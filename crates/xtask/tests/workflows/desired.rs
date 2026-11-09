@@ -18,7 +18,9 @@
 //!   byte comparison of the served index with the published one, the index's text and SHA-256 as
 //!   outputs, the release's targets written by `cargo xtask release targets` from the same files,
 //!   and whether no newer release is published; or its `outputs` are not exactly
-//!   [`CHANNEL_OUTPUTS`]; or its join does not use [`JOIN_USES`], the action and commit of the
+//!   [`CHANNEL_OUTPUTS`]; or a step's `run:` holds an expression (`${{`): a value reaches a
+//!   command through the step's `env:` and, for a command of ours, a flag, never as text
+//!   written into the script, which a value holding shell syntax would run; or its join does not use [`JOIN_USES`], the action and commit of the
 //!   CI client's join (a test keeps the two the same);
 //! - [`JOB`] does not need exactly `plan` and [`CHANNEL_JOB`] (it calls the coordinator only once
 //!   the channel serves the release), or its `with` does not set `service: hostkeeper`, the
@@ -244,6 +246,14 @@ fn channel_problems(channel: Option<&Node>) -> Vec<String> {
         if got != want {
             problems.push(format!(
                 "{FILE}: job {CHANNEL_JOB} step {} is `{got}`, not `{want}`",
+                at + 1
+            ));
+        }
+    }
+    for (at, step) in steps.iter().enumerate() {
+        if text(Some(step), "run").is_some_and(|run| run.contains("${{")) {
+            problems.push(format!(
+                "{FILE}: job {CHANNEL_JOB} step {} writes an expression into its `run:`; pass the value through `env:`",
                 at + 1
             ));
         }
