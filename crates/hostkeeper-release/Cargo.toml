@@ -21,5 +21,11 @@ hostkeeper-proto = { path = "../hostkeeper-proto" }
 prost.workspace = true
 thiserror.workspace = true
 
+[dev-dependencies]
+# The `Target` of the release before build item A16, without its fields 7 and 8, to write an
+# entry as that release did (tests/manifest/repository.rs).
+prost-reflect.workspace = true
+prost-types.workspace = true
+
 [lints]
 workspace = true

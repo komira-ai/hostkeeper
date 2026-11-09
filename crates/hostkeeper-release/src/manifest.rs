@@ -62,7 +62,7 @@ pub enum ManifestError {
     #[error("min_hostkeeper {0}")]
     MinHostkeeper(BadHostkeeperVersion),
     /// A field the entry's installer needs is absent.
-    #[error("the manifest of a {installer} entry needs {field}")]
+    #[error("the manifest of the {installer} entry needs {field}")]
     Missing {
         /// The entry's installer.
         installer: Installer,
@@ -70,7 +70,7 @@ pub enum ManifestError {
         field: &'static str,
     },
     /// A field the entry's installer refuses is present.
-    #[error("the manifest of a {installer} entry may not have {field}")]
+    #[error("the manifest of the {installer} entry may not have {field}")]
     Refused {
         /// The entry's installer.
         installer: Installer,

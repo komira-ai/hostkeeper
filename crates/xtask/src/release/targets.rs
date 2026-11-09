@@ -183,6 +183,9 @@ fn entry_of(
             min_hostkeeper: floor,
             ..Manifest::default()
         }),
+        // An archive is an artifact entry: no repository, no package version.
+        repository: None,
+        package_version: None,
     })
 }
 

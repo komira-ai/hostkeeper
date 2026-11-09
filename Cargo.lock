@@ -1927,6 +1927,8 @@ dependencies = [
  "hostkeeper-config",
  "hostkeeper-proto",
  "prost",
+ "prost-reflect",
+ "prost-types",
  "thiserror",
 ]
 

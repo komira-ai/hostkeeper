@@ -14,12 +14,18 @@
 //! - [`Release`] is what is kept, and [`record`] keeps it under the registry's cap
 //!   ([`MAX_REGISTRY`]), dropping the oldest release no mark keeps.
 //! - [`encode_file`] and [`parse_file`] are the file `<state-file>.releases`; a release's
-//!   JSON ([`Release::to_json`], [`Release::from_json`]) is also the Postgres store's.
+//!   JSON ([`Release::to_json`], [`Release::read`]) is also the Postgres store's.
 //! - [`audit_reason`] is the reason of a set's `set_desired` audit entry.
 //!
 //! The targets are written as proto3 canonical JSON. They are read without refusing a field this
 //! build does not know, and a release read is written back as it was read, so a coordinator rolled
-//! back keeps what a newer one wrote.
+//! back keeps what a newer one wrote: one before packages-repositories.md's A16 keeps the
+//! `repository` and `packageVersion` of a repository entry, though its own copy of the entry
+//! lacks them (section 2.3 there).
+//!
+//! An entry is a repository entry when its `repository` is set, never by its installer's name
+//! ([`hostkeeper_release::target::is_repository_entry`]); the coordinator stores, answers and
+//! orders it as it does any entry, and only its audit entry names it otherwise.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -82,6 +88,11 @@ static TARGET_LIST: LazyLock<Option<MessageDescriptor>> = LazyLock::new(|| {
         .get_message_by_name("hostkeeper.release.v1.TargetList")
 });
 
+/// This build's descriptor of `TargetList`, by which the stores read a release's lists.
+pub(crate) fn target_list() -> Option<&'static MessageDescriptor> {
+    TARGET_LIST.as_ref()
+}
+
 impl Release {
     /// The release of `targets`, set with the index of SHA-256 `index_digest`, if any.
     #[must_use]
@@ -121,20 +132,23 @@ impl Release {
         out
     }
 
-    /// The release stored as `value`; a key or a field this build does not know is kept as read.
+    /// The release stored as `value`, its lists read by the descriptor `list` of `TargetList`:
+    /// this build's ([`target_list`]), or in the tests of rule B8 a release before's. A key or a
+    /// field the descriptor does not know is kept as read.
     ///
     /// # Errors
     /// Why `value` is no release: no `targets` object, a platform's list that does not read, or a
     /// digest that is not 64 lower-case hex characters.
-    pub(crate) fn from_json(value: &Value) -> Result<Self, String> {
+    pub(crate) fn read(value: &Value, list: Option<&MessageDescriptor>) -> Result<Self, String> {
         let json = value
             .get("targets")
             .filter(|targets| targets.is_object())
             .ok_or("no targets")?;
+        let descriptor = list;
         let mut targets = Targets::new();
         for (platform, list) in json.as_object().into_iter().flatten() {
-            let read =
-                list_of(list).ok_or_else(|| format!("the list of {platform} does not read"))?;
+            let read = list_of(list, descriptor)
+                .ok_or_else(|| format!("the list of {platform} does not read"))?;
             targets.insert(platform.clone(), read);
         }
         let index_digest = match value.get("release_index_digest") {
@@ -166,9 +180,9 @@ fn list_json(list: &TargetList) -> Value {
         .unwrap_or_default()
 }
 
-/// The list `value` holds as proto3 JSON, fields this build does not know left out.
-fn list_of(value: &Value) -> Option<TargetList> {
-    let descriptor = TARGET_LIST.as_ref()?.clone();
+/// The list `value` holds as proto3 JSON, read by `descriptor`, fields it does not know left out.
+fn list_of(value: &Value, descriptor: Option<&MessageDescriptor>) -> Option<TargetList> {
+    let descriptor = descriptor?.clone();
     let options = DeserializeOptions::new().deny_unknown_fields(false);
     DynamicMessage::deserialize_with_options(descriptor, value.clone(), &options)
         .ok()?
@@ -290,6 +304,17 @@ pub(crate) fn encode_file(books: &Books) -> serde_json::Result<Vec<u8>> {
 /// [`DesiredError::Malformed`]: not the file's JSON, a version that is not one, or a release that
 /// does not read, named by service and version.
 pub(crate) fn parse_file(bytes: &[u8]) -> Result<Books, DesiredError> {
+    parse_file_by(bytes, target_list())
+}
+
+/// [`parse_file`] with each release's lists read by the descriptor `list` ([`Release::read`]).
+///
+/// # Errors
+/// As [`parse_file`].
+pub(crate) fn parse_file_by(
+    bytes: &[u8],
+    list: Option<&MessageDescriptor>,
+) -> Result<Books, DesiredError> {
     let malformed = |why: String| DesiredError::Malformed(format!("the releases: {why}"));
     let value: Value = serde_json::from_slice(bytes).map_err(|e| malformed(e.to_string()))?;
     let services = value
@@ -304,7 +329,7 @@ pub(crate) fn parse_file(bytes: &[u8]) -> Result<Books, DesiredError> {
         let mut book = Book::new();
         for (version, release) in versions {
             Version::parse(version).map_err(|e| malformed(format!("{service} {version}: {e}")))?;
-            let release = Release::from_json(release)
+            let release = Release::read(release, list)
                 .map_err(|e| malformed(format!("{service} {version}: {e}")))?;
             book.insert(version.clone(), Arc::new(release));
         }
@@ -320,7 +345,9 @@ pub(crate) fn parse_file(bytes: &[u8]) -> Result<Books, DesiredError> {
 /// (`by workflow <owner>/<repo>/<path>@<ref>`) and the release index (`and release index
 /// <digest>`) when there are, then for each platform in the order of its spelling its entries in
 /// order, each as its installer, its artifact's digest, and `manifest` with the SHA-256 of the
-/// manifest's encoding.
+/// manifest's encoding. A repository entry names, between its installer and its digest (the pin),
+/// `repository <name> package <manifest.package> package_version <version>`
+/// (packages-repositories.md section 2.2).
 #[must_use]
 pub(crate) fn audit_reason(version: &Version, release: &Release, workflow: Option<&str>) -> String {
     let mut reason = format!("{version} with targets");
@@ -343,8 +370,20 @@ pub(crate) fn audit_reason(version: &Version, release: &Release, workflow: Optio
                         .as_ref()
                         .map(|manifest| manifest.encode_to_vec())
                         .unwrap_or_default();
+                    let from = match &entry.repository {
+                        None => String::new(),
+                        Some(repository) => format!(
+                            " repository {repository} package {} package_version {}",
+                            entry
+                                .manifest
+                                .as_ref()
+                                .and_then(|m| m.package.as_deref())
+                                .unwrap_or_default(),
+                            entry.package_version.as_deref().unwrap_or_default()
+                        ),
+                    };
                     format!(
-                        "{} {} manifest {}",
+                        "{}{from} {} manifest {}",
                         entry.installer,
                         entry.digest,
                         ops_file::digest(&manifest)
