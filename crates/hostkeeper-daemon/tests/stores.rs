@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex};
 
 use hostkeeper_daemon::adapters::{Adapters, RunnerLauncher, SYSTEMCTL_DEADLINE};
 use hostkeeper_daemon::cli::{EXIT_CONFIG, HostFiles, SIGNERS_FILE, host_ports, load_signers};
+use hostkeeper_daemon::entry::MACOS_PKG_ATTESTED;
 use hostkeeper_daemon::real_packages::{Log, RealPackages};
 use hostkeeper_daemon::start::StartError;
 use hostkeeper_daemon::{Daemon, Ports, Refusal, Reply};
@@ -310,6 +311,31 @@ fn an_entry_whose_digest_is_not_the_orders_package_digest_is_order_invalid() {
     let daemon = world.daemon(world.open(world.entry_routes()));
     let reply = daemon.order(&world.install(&world.entry));
     assert_eq!(reply.refusal(), Some(Refusal::OrderInvalid), "{reply:?}");
+    world.untouched();
+}
+
+/// Catches a `macos-pkg` entry that carries an attestation being fetched, or deferred as though
+/// it could be checked: it is refused `order_invalid`, nothing fetched or written; the same entry
+/// with no attestation is not `order_invalid` (this daemon does not list `macos-pkg`, so it is
+/// deferred `installer_not_listed`).
+#[test]
+fn a_macos_pkg_entry_with_an_attestation_is_order_invalid_and_one_without_is_not() {
+    let world = World::new("stores-macos-pkg-attested");
+    let daemon = world.daemon(world.open(world.entry_routes()));
+    let mut attested = world.entry.clone();
+    attested.installer = "macos-pkg".into();
+    assert!(attested.attestation.is_some());
+    let reply = daemon.order(&world.good_install_with(&attested));
+    assert_eq!(reply.refusal(), Some(Refusal::OrderInvalid), "{reply:?}");
+    let Reply::Refused { detail, .. } = &reply else {
+        panic!("a refusal: {reply:?}")
+    };
+    assert_eq!(detail, MACOS_PKG_ATTESTED);
+    world.untouched();
+    let mut bare = attested;
+    bare.attestation = None;
+    let reply = daemon.order(&world.good_install_with(&bare));
+    assert_ne!(reply.refusal(), Some(Refusal::OrderInvalid), "{reply:?}");
     world.untouched();
 }
 
