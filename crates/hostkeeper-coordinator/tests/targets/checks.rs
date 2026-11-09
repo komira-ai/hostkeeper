@@ -17,7 +17,9 @@ use super::{
     GET_RELEASE, OPERATOR, Rig, SET_DESIRED, ci_token, gateway, grpc, proto, rig, set, set_json,
     targets,
 };
-use crate::support::targets::{Answered, digest, entry, grpc_bytes, list, location};
+use crate::support::targets::{
+    Answered, digest, entry, grpc_bytes, list, location, repository_entry,
+};
 
 /// `INVALID_ARGUMENT`.
 pub(super) const INVALID_ARGUMENT: i32 = 3;
@@ -177,7 +179,10 @@ const SELF_THREE: [(&str, char, u64); 3] = [
 /// one installer, an artifact digest that is not 64 lower-case hex characters, a size of 0, no
 /// attestation, an attestation of 0 bytes, nine locations, a locator that leaves its store, more
 /// than 2 KiB of locators in an entry, an entry over 24 KiB, a manifest that breaks a rule, and
-/// for `hostkeeper` a list with a tarball entry and one with two entries. Each refusal is the
+/// for `hostkeeper` a list with a tarball entry, one with two entries and one with its archive
+/// entry before its native one; and of a native entry (packages-native.md, A18), a `macos-pkg`
+/// entry with an attestation and an entry of `macos-pkg` or `apt` with a hook command, and a
+/// boot step without a command on any other. Each refusal is the
 /// rule the row names, which the check of `hostkeeper-release` states, and changes no file, adds
 /// no audit entry and leaves the version without a release.
 ///
@@ -316,7 +321,7 @@ async fn each_rule_of_section_3_4_refuses_the_set_target_invalid() {
                 "linux-x86_64".to_owned(),
                 list(vec![entry("hostkeeper", "tarball", 'a', 1000)]),
             )]),
-            "the list of linux-x86_64 for the service hostkeeper is not one hostkeeper-archive entry"
+            "the list of linux-x86_64 for the service hostkeeper is not one native entry with at most one hostkeeper-archive entry after it, nor one hostkeeper-archive entry"
                 .to_owned(),
         ),
         (
@@ -329,11 +334,71 @@ async fn each_rule_of_section_3_4_refuses_the_set_target_invalid() {
                     entry("hostkeeper", "tarball", 'b', 1000),
                 ]),
             )]),
-            "the list of linux-x86_64 for the service hostkeeper is not one hostkeeper-archive entry"
+            "the list of linux-x86_64 for the service hostkeeper is not one native entry with at most one hostkeeper-archive entry after it, nor one hostkeeper-archive entry"
                 .to_owned(),
         ),
     ];
-    for (why, service, broken, message) in rows {
+    let mac = |change: fn(&mut Target)| {
+        let mut pkg = entry("web", "macos-pkg", 'a', 1000);
+        pkg.manifest.as_mut().expect("a manifest").run = vec!["web".to_owned()];
+        change(&mut pkg);
+        BTreeMap::from([("macos-arm64".to_owned(), list(vec![pkg]))])
+    };
+    let native_rows: Vec<(&str, &str, Targets, String)> = vec![
+        (
+            "a macos-pkg entry with an attestation",
+            "web",
+            mac(|pkg| pkg.attestation = web_entry("deb", 'a').attestation),
+            "entry 0 of macos-arm64: the macos-pkg entry has an attestation; a package's signature and the pin are its trust, and no daemon checks one".to_owned(),
+        ),
+        (
+            "a macos-pkg entry with a hook command",
+            "web",
+            mac(|pkg| {
+                let hook = pkg.manifest.as_mut().and_then(|m| m.hook.as_mut());
+                hook.expect("a hook").command = vec!["bin/web".to_owned()];
+            }),
+            "entry 0 of macos-arm64: hook.command is set on a native entry; a native package's hook is its program at its fixed path".to_owned(),
+        ),
+        (
+            "an apt entry with a hook command",
+            "web",
+            BTreeMap::from([(
+                "linux-x86_64".to_owned(),
+                list(vec![{
+                    let mut apt = repository_entry("web", "2.0-1", 'a');
+                    let hook = apt.manifest.as_mut().and_then(|m| m.hook.as_mut());
+                    hook.expect("a hook").command = vec!["bin/web".to_owned()];
+                    apt
+                }]),
+            )]),
+            "entry 0 of linux-x86_64: hook.command is set on a native entry; a native package's hook is its program at its fixed path".to_owned(),
+        ),
+        (
+            "a boot step without a command on a deb entry",
+            "web",
+            with_first(|e| {
+                let hook = e.manifest.as_mut().and_then(|m| m.hook.as_mut()).expect("a hook");
+                hook.command.clear();
+                hook.boot = Some("restore".to_owned());
+            }),
+            "entry 0 of linux-x86_64: hook.boot \"restore\" needs a hook.command; the built-in steps have no boot step".to_owned(),
+        ),
+        (
+            "hostkeeper with its archive entry before its native one",
+            "hostkeeper",
+            BTreeMap::from([(
+                "linux-x86_64".to_owned(),
+                list(vec![
+                    entry("hostkeeper", "hostkeeper-archive", 'a', 1000),
+                    repository_entry("hostkeeper", "2.0-1", 'b'),
+                ]),
+            )]),
+            "the list of linux-x86_64 for the service hostkeeper is not one native entry with at most one hostkeeper-archive entry after it, nor one hostkeeper-archive entry"
+                .to_owned(),
+        ),
+    ];
+    for (why, service, broken, message) in rows.into_iter().chain(native_rows) {
         assert_eq!(judged(service, &broken), message, "{why}: the rule");
         refused(
             &rig,

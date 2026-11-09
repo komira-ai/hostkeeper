@@ -75,13 +75,15 @@ import public "hostkeeper/operator/v1/entry.proto";
 // The `Rollouts` service and the update plan (`RolloutPlan`) that `ServiceStatus` carries.
 import public "hostkeeper/operator/v1/rollouts.proto";
 
-// The hosts the coordinator has heard from, and what an operator decides about them.
+// The hosts the coordinator has heard from or enrolled, and what an operator decides about them.
 service Hosts {
-  // Every host heard from since the coordinator started, by node id, a page at a time. Changes
-  // nothing.
+  // Every host heard from since the coordinator started and, when the coordinator has an
+  // enrollment, every host it enrolled that is not denied, by node id, a page at a time. A host
+  // enrolled and not heard since the coordinator started is listed as not live, with what its
+  // enrollment kept of what it runs (`Host.running`). Changes nothing.
   rpc List(ListHostsRequest) returns (ListHostsResponse);
-  // One host heard from since the coordinator started; `unknown_host` for any other. Changes
-  // nothing.
+  // One host heard from since the coordinator started; `unknown_host` for any other, an enrolled
+  // host not heard since included. Changes nothing.
   rpc Get(GetHostRequest) returns (GetHostResponse);
   // Take a host out of a service: its heartbeats do not count for the service and it is not
   // ordered. A second exclusion of the same host and service replaces the first.
@@ -379,11 +381,13 @@ message Host {
   string node_id = 1;
   // From the host's certificate.
   string role = 2;
-  // It heartbeated within the last 45 seconds.
+  // It heartbeated within the last 45 seconds; false for a host not heard since the coordinator
+  // started.
   bool live = 3;
-  // When its last heartbeat arrived.
+  // When its last heartbeat arrived; 0 for a host not heard since the coordinator started.
   uint64 last_heartbeat_unix = 4;
-  // Its last heartbeat, as it sent it.
+  // Its last heartbeat, as it sent it. For a host not heard since the coordinator started, only
+  // `agent` is set, from what the host's enrollment kept of its daemon (`running`).
   hostkeeper.agent.v1.HeartbeatRequest heartbeat = 5;
   // The labels an operator set on it.
   map<string, string> labels = 6;
@@ -440,6 +444,28 @@ message Host {
   // by. Empty when the coordinator has read none since it started: the daemon predates the field
   // or has beaten only over the JSON route.
   repeated string installers = 21;
+  // Each service the host's daemon said it runs (a service it reported `absent` is left out),
+  // by service name, from the last heartbeat the coordinator took it from. For a host not heard
+  // since the coordinator started, what the host's enrollment kept of it; empty when it kept
+  // nothing. The daemon's own version is `heartbeat.agent.version`.
+  repeated RunningService running = 22;
+  // When the coordinator accepted the heartbeat `running` was taken from, in unix seconds by the
+  // same clock as `last_heartbeat_unix`; absent when nothing is known of what the host runs. For
+  // a host not heard since the coordinator started, the time of the heartbeat that last changed
+  // what its enrollment kept (a heartbeat that says the same writes nothing).
+  optional uint64 running_unix = 23;
+}
+
+// One service a host runs, as its daemon said in a heartbeat (packages-native.md section 10.6).
+message RunningService {
+  string service = 1;
+  // The version it reported.
+  string version = 2;
+  // The installer it runs it with: the name the daemon gave (`ServiceBeat.installer`);
+  // `hostkeeper-archive` when it gave none or its daemon does not announce `target-v1`. Empty
+  // when not known: a `target-v1` daemon whose installers the coordinator has not read over
+  // gRPC since it started, and nothing kept of the host.
+  string installer = 3;
 }
 
 // A host taken out of a service.
@@ -554,8 +580,10 @@ enum GateReason {
   GATE_REASON_NO_BUILD_FOR_HOST = 32;
   // The host runs the service with an installer the desired version's list has no entry of, or
   // that its daemon no longer lists: it is not ordered the version, since a service changes its
-  // installer on a host only by an uninstall. Not failed, and `Convergence.installer_dropped`
-  // names it.
+  // installer on a host only by an uninstall, or by the move to native packages
+  // (docs/design/packages-native.md section 10.6: from `hostkeeper-archive` to a native entry its
+  // daemon lists, and back to the archive entry of a lower version whose list has no native
+  // entry). Not failed, and `Convergence.installer_dropped` names it.
   GATE_REASON_INSTALLER_DROPPED = 33;
 }
 

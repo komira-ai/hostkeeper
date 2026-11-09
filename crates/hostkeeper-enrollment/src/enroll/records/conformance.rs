@@ -181,6 +181,21 @@ fn host(name: &str, key: &KeyHash) -> pb::Host {
         duplicate: false,
         first_heartbeat_unix: None,
         first_serving_unix: None,
+        running: None,
+    }
+}
+
+/// What a daemon said it runs, with one service of `version`.
+fn running(version: &str, at_unix: u64) -> pb::Running {
+    pb::Running {
+        agent_name: "hostkeeper".to_owned(),
+        agent_version: "0.2.0".to_owned(),
+        services: vec![pb::RunningService {
+            service: "api".to_owned(),
+            version: version.to_owned(),
+            installer: "deb".to_owned(),
+        }],
+        at_unix,
     }
 }
 
@@ -198,6 +213,7 @@ fn every_kind() -> Vec<Record> {
             duplicate: true,
             first_heartbeat_unix: Some(1_800_000_300),
             first_serving_unix: Some(1_800_000_360),
+            running: Some(running("1.0", 1_800_000_380)),
             ..host("web-1", &id)
         }),
         Record::Request(pb::Request {
@@ -435,13 +451,31 @@ fn host_marks(subject: &dyn Subject) -> Result<(), String> {
     holds_all(&*subject.open(), &[Record::Host(serving.clone())])?;
     subject
         .open()
-        .set_duplicate(&serving)
+        .set_running(&serving, running("1.0", 1_800_000_480))
+        .map_err(failed("what the host runs"))?;
+    let runs = pb::Host {
+        running: Some(running("1.0", 1_800_000_480)),
+        ..serving
+    };
+    holds_all(&*subject.open(), &[Record::Host(runs.clone())])?;
+    subject
+        .open()
+        .set_running(&runs, running("1.1", 1_800_000_500))
+        .map_err(failed("what the host runs, again"))?;
+    let newer = pb::Host {
+        running: Some(running("1.1", 1_800_000_500)),
+        ..runs
+    };
+    holds_all(&*subject.open(), &[Record::Host(newer.clone())])?;
+    subject
+        .open()
+        .set_duplicate(&newer)
         .map_err(failed("the duplicate mark"))?;
     holds_all(
         &*subject.open(),
         &[Record::Host(pb::Host {
             duplicate: true,
-            ..serving
+            ..newer
         })],
     )
 }
