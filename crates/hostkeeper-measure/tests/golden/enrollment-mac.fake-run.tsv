@@ -1,0 +1,48 @@
+# Plan enrollment-mac, run fake-run: A Mac enrolled through the MDM gate and running its first service. Written by `hostkeeper-measure analyze` from the run's records.
+# A raw row is one value of a measure; a derived row is computed from the raw rows of its measure,
+# as its how column says. A time is the difference of two stamps of the one clock its how column
+# names: the coordinator's (whole seconds; a host's heartbeat stamp up to one poll interval late)
+# or the runner's (up to one poll interval late). A last value is only of a complete repetition.
+# kind	id	value	unit	how	cells
+raw	install-rep-1	30	s	plan enrollment-mac, run fake-run, repetition 1: the MDM enrollment to the package sent; coordinator clock	
+derived	install-n	1		plan enrollment-mac, run fake-run: the number of raw rows of install	
+derived	install-missing	0		plan enrollment-mac, run fake-run: the values of install the repetitions did not record	
+derived	install-min	30	s	plan enrollment-mac, run fake-run: the least raw value of install	
+derived	install-median	30	s	plan enrollment-mac, run fake-run: the median raw value of install	
+derived	install-max	30	s	plan enrollment-mac, run fake-run: the greatest raw value of install	
+raw	nonce-approval-rep-1	1	s	plan enrollment-mac, run fake-run, repetition 1: the daemon's request to its approval by the nonce; coordinator clock	
+derived	nonce-approval-n	1		plan enrollment-mac, run fake-run: the number of raw rows of nonce-approval	
+derived	nonce-approval-missing	0		plan enrollment-mac, run fake-run: the values of nonce-approval the repetitions did not record	
+derived	nonce-approval-min	1	s	plan enrollment-mac, run fake-run: the least raw value of nonce-approval	
+derived	nonce-approval-median	1	s	plan enrollment-mac, run fake-run: the median raw value of nonce-approval	
+derived	nonce-approval-max	1	s	plan enrollment-mac, run fake-run: the greatest raw value of nonce-approval	
+raw	issue-rep-1	4	s	plan enrollment-mac, run fake-run, repetition 1: the approval to the certificate issued; coordinator clock	
+derived	issue-n	1		plan enrollment-mac, run fake-run: the number of raw rows of issue	
+derived	issue-missing	0		plan enrollment-mac, run fake-run: the values of issue the repetitions did not record	
+derived	issue-min	4	s	plan enrollment-mac, run fake-run: the least raw value of issue	
+derived	issue-median	4	s	plan enrollment-mac, run fake-run: the median raw value of issue	
+derived	issue-max	4	s	plan enrollment-mac, run fake-run: the greatest raw value of issue	
+raw	first-heartbeat-rep-1	6	s	plan enrollment-mac, run fake-run, repetition 1: the certificate issued to the first heartbeat; coordinator clock	
+derived	first-heartbeat-n	1		plan enrollment-mac, run fake-run: the number of raw rows of first-heartbeat	
+derived	first-heartbeat-missing	0		plan enrollment-mac, run fake-run: the values of first-heartbeat the repetitions did not record	
+derived	first-heartbeat-min	6	s	plan enrollment-mac, run fake-run: the least raw value of first-heartbeat	
+derived	first-heartbeat-median	6	s	plan enrollment-mac, run fake-run: the median raw value of first-heartbeat	
+derived	first-heartbeat-max	6	s	plan enrollment-mac, run fake-run: the greatest raw value of first-heartbeat	
+raw	first-serving-rep-1	25	s	plan enrollment-mac, run fake-run, repetition 1: the first heartbeat to the first service serving; coordinator clock	
+derived	first-serving-n	1		plan enrollment-mac, run fake-run: the number of raw rows of first-serving	
+derived	first-serving-missing	0		plan enrollment-mac, run fake-run: the values of first-serving the repetitions did not record	
+derived	first-serving-min	25	s	plan enrollment-mac, run fake-run: the least raw value of first-serving	
+derived	first-serving-median	25	s	plan enrollment-mac, run fake-run: the median raw value of first-serving	
+derived	first-serving-max	25	s	plan enrollment-mac, run fake-run: the greatest raw value of first-serving	
+raw	total-rep-1	141	s	plan enrollment-mac, run fake-run, repetition 1: the MDM enrollment to the first service serving; coordinator clock	
+derived	total-n	1		plan enrollment-mac, run fake-run: the number of raw rows of total	
+derived	total-missing	0		plan enrollment-mac, run fake-run: the values of total the repetitions did not record	
+derived	total-min	141	s	plan enrollment-mac, run fake-run: the least raw value of total	
+derived	total-median	141	s	plan enrollment-mac, run fake-run: the median raw value of total	
+derived	total-max	141	s	plan enrollment-mac, run fake-run: the greatest raw value of total	
+raw	erase-to-enrolled-rep-1	300	s	plan enrollment-mac, run fake-run, repetition 1: the operator's erase to the MDM enrollment, on the runner's clock; runner clock	
+derived	erase-to-enrolled-n	1		plan enrollment-mac, run fake-run: the number of raw rows of erase-to-enrolled	
+derived	erase-to-enrolled-missing	0		plan enrollment-mac, run fake-run: the values of erase-to-enrolled the repetitions did not record	
+derived	erase-to-enrolled-min	300	s	plan enrollment-mac, run fake-run: the least raw value of erase-to-enrolled	
+derived	erase-to-enrolled-median	300	s	plan enrollment-mac, run fake-run: the median raw value of erase-to-enrolled	
+derived	erase-to-enrolled-max	300	s	plan enrollment-mac, run fake-run: the greatest raw value of erase-to-enrolled	
