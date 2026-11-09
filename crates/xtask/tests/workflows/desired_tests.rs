@@ -125,7 +125,7 @@ fn a_set_desired_job_that_runs_for_a_release_older_than_the_newest_is_refused() 
         ],
     );
     assert!(SET_IF.contains("needs.channel.outputs.newest == 'true'"));
-    assert!(CHANNEL_STEPS[11].contains(r#"== env.VERSION)"' >> "$GITHUB_OUTPUT""#));
+    assert!(CHANNEL_STEPS[13].contains(r#"== env.VERSION)"' >> "$GITHUB_OUTPUT""#));
     assert_problems(
         "      newest: ${{ steps.latest.outputs.newest }}\n",
         "",
@@ -136,7 +136,7 @@ fn a_set_desired_job_that_runs_for_a_release_older_than_the_newest_is_refused() 
     // The highest published version compared as text of another field: never the newest.
     let got = problems_with("== env.VERSION)", "== env.TAG)");
     assert_eq!(got.len(), 1, "{got:?}");
-    assert!(got[0].starts_with("release.yml: job channel step 12 is "));
+    assert!(got[0].starts_with("release.yml: job channel step 14 is "));
 }
 
 #[test]
@@ -169,7 +169,7 @@ fn a_channel_step_that_can_be_skipped_or_fail_quietly_is_refused() {
             compare,
             &format!("{compare}{line}"),
             &[&format!(
-                "release.yml: job channel step 9 has `{key}`, which a step of it may not"
+                "release.yml: job channel step 11 has `{key}`, which a step of it may not"
             )],
         );
     }
@@ -178,9 +178,9 @@ fn a_channel_step_that_can_be_skipped_or_fail_quietly_is_refused() {
         compare,
         &format!("{compare}        if: ${{{{ false }}}}\n"),
         &[
-            "release.yml: job channel step 9 has `if`, which a step of it may not",
+            "release.yml: job channel step 11 has `if`, which a step of it may not",
             &step_problem(
-                9,
+                11,
                 "if ${{ false }} run cmp dist/index.json \"$RUNNER_TEMP/served-index.json\"",
             ),
         ],
@@ -257,12 +257,12 @@ fn a_channel_wait_that_gives_up_on_a_missing_version_or_reads_another_channel_is
         let got = problems_with(from, to);
         assert_eq!(got.len(), 1 + usize::from(lacks.is_some()), "{got:?}");
         assert!(
-            got[0].starts_with("release.yml: job channel step 8 is `run curl "),
+            got[0].starts_with("release.yml: job channel step 10 is `run curl "),
             "{got:?}"
         );
         if from == wait {
             assert!(
-                got[0].ends_with(&format!(", not `{}`", CHANNEL_STEPS[7])),
+                got[0].ends_with(&format!(", not `{}`", CHANNEL_STEPS[9])),
                 "{got:?}"
             );
         }
@@ -281,17 +281,17 @@ fn a_channel_job_that_does_not_compare_the_served_index_is_refused() {
         compare,
         "",
         &[
-            "release.yml: job channel has 11 steps, not the 12 of desired::CHANNEL_STEPS",
-            &step_problem(9, CHANNEL_STEPS[9]),
-            &step_problem(10, CHANNEL_STEPS[10]),
+            "release.yml: job channel has 13 steps, not the 14 of desired::CHANNEL_STEPS",
             &step_problem(11, CHANNEL_STEPS[11]),
+            &step_problem(12, CHANNEL_STEPS[12]),
+            &step_problem(13, CHANNEL_STEPS[13]),
         ],
     );
     assert_problems(
         "cmp dist/index.json",
         "cmp --quiet dist/index.json",
         &[&step_problem(
-            9,
+            11,
             "run cmp --quiet dist/index.json \"$RUNNER_TEMP/served-index.json\"",
         )],
     );
@@ -305,7 +305,7 @@ fn a_channel_job_that_reads_the_index_from_another_artifact_is_refused() {
         "          name: release-${{ steps.newest.outputs.tag }}\n",
         "          name: release-latest\n",
         &[&step_problem(
-            5,
+            8,
             "uses actions/download-artifact with name=release-latest with path=dist",
         )],
     );
@@ -313,7 +313,7 @@ fn a_channel_job_that_reads_the_index_from_another_artifact_is_refused() {
         "          path: dist\n",
         "          path: dist\n          run-id: ${{ github.event.workflow_run.id }}\n",
         &[&step_problem(
-            5,
+            8,
             "uses actions/download-artifact with name=release-${{ steps.newest.outputs.tag }} with path=dist with run-id=${{ github.event.workflow_run.id }}",
         )],
     );
@@ -321,7 +321,7 @@ fn a_channel_job_that_reads_the_index_from_another_artifact_is_refused() {
     assert_problems(
         last,
         &format!("{last}      - run: echo extra\n"),
-        &["release.yml: job channel has 13 steps, not the 12 of desired::CHANNEL_STEPS"],
+        &["release.yml: job channel has 15 steps, not the 14 of desired::CHANNEL_STEPS"],
     );
 }
 
@@ -508,15 +508,15 @@ fn a_channel_job_without_the_targets_or_with_targets_of_other_files_is_refused()
         targets,
         "",
         &[
-            "release.yml: job channel has 11 steps, not the 12 of desired::CHANNEL_STEPS",
-            &step_problem(11, CHANNEL_STEPS[11]),
+            "release.yml: job channel has 13 steps, not the 14 of desired::CHANNEL_STEPS",
+            &step_problem(13, CHANNEL_STEPS[13]),
         ],
     );
     assert_problems(
         "--version \"$VERSION\" --dir dist --repo",
         "--version \"$VERSION\" --dir \"$RUNNER_TEMP\" --repo",
         &[&step_problem(
-            11,
+            13,
             "run cargo xtask release targets --version \"$VERSION\" --dir \"$RUNNER_TEMP\" --repo \"$GITHUB_REPOSITORY\" --output \"$GITHUB_OUTPUT\" env VERSION=${{ steps.newest.outputs.version }}",
         )],
     );
@@ -524,7 +524,7 @@ fn a_channel_job_without_the_targets_or_with_targets_of_other_files_is_refused()
         "          VERSION: ${{ steps.newest.outputs.version }}\n        run: cargo xtask release targets",
         "          VERSION: ${{ needs.plan.outputs.version }}\n        run: cargo xtask release targets",
         &[&step_problem(
-            11,
+            13,
             "run cargo xtask release targets --version \"$VERSION\" --dir dist --repo \"$GITHUB_REPOSITORY\" --output \"$GITHUB_OUTPUT\" env VERSION=${{ needs.plan.outputs.version }}",
         )],
     );
@@ -538,7 +538,7 @@ fn a_channel_job_whose_xtask_is_not_the_newest_releases_commit_is_refused() {
         "          ref: ${{ steps.newest.outputs.commit }}\n",
         "          ref: ${{ github.sha }}\n",
         &[&step_problem(
-            2,
+            5,
             "uses actions/checkout with persist-credentials=false with ref=${{ github.sha }}",
         )],
     );
@@ -546,7 +546,7 @@ fn a_channel_job_whose_xtask_is_not_the_newest_releases_commit_is_refused() {
         "          ref: ${{ steps.newest.outputs.commit }}\n          persist-credentials: false\n",
         "          ref: ${{ steps.newest.outputs.commit }}\n",
         &[&step_problem(
-            2,
+            5,
             "uses actions/checkout with ref=${{ steps.newest.outputs.commit }}",
         )],
     );
@@ -579,5 +579,44 @@ fn a_set_desired_job_without_the_channel_jobs_targets_is_refused() {
         line,
         "      targets: ${{ needs.plan.outputs.targets }}\n",
         &[want],
+    );
+}
+
+#[test]
+fn a_host_step_run_by_the_xtask_of_the_releases_commit_is_refused() {
+    // Catches: the checkout before the host step given the release's `ref` (the verb then runs
+    // from a commit that may predate it), and that checkout made to run without a client ID.
+    let own = "      - if: ${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID != '' }}\n        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          persist-credentials: false\n";
+    let line = release_yml()
+        .lines()
+        .position(|l| l.contains("run: cargo xtask release channel-host"))
+        .map(|at| at + 2)
+        .expect("the host step");
+    assert_problems(
+        own,
+        &own.replace(
+            "          persist-credentials: false\n",
+            "          ref: ${{ steps.newest.outputs.commit }}\n          persist-credentials: false\n",
+        ),
+        &[
+            &step_problem(
+                2,
+                "if ${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID != '' }} uses actions/checkout with persist-credentials=false with ref=${{ steps.newest.outputs.commit }}",
+            ),
+            &format!(
+                "release.yml: job channel step 4 (line {line}) runs the xtask of `${{{{ steps.newest.outputs.commit }}}}`, which may be as old as release 0.1.208: `cargo xtask release channel-host` is not a verb of release 0.1.208"
+            ),
+        ],
+    );
+    assert_problems(
+        own,
+        &own.replace(
+            "      - if: ${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID != '' }}\n        uses",
+            "      - uses",
+        ),
+        &[&step_problem(
+            2,
+            "uses actions/checkout with persist-credentials=false",
+        )],
     );
 }
