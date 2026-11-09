@@ -436,8 +436,11 @@ fn store_of(text: StoreText, owner: u32) -> Result<Store, Rule> {
     })
 }
 
-/// The stores `text` defines.
-fn parse(text: &[u8], owner: u32) -> Result<Stores, StoresError> {
+/// The stores the bytes of a stores file define, or the first defect in them: the check [`load`]
+/// makes of the file it has read, without the checks of the file itself (owner, mode, size). A
+/// store's credential file is read as [`load`] reads it, and must be a regular file (not a link)
+/// owned by `owner` with mode 0600.
+pub fn parse(text: &[u8], owner: u32) -> Result<Stores, StoresError> {
     let text =
         std::str::from_utf8(text).map_err(|_| StoresError::Syntax("not UTF-8 text".to_owned()))?;
     let file: FileText =

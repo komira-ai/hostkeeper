@@ -459,6 +459,8 @@ fn the_host_links_write_the_issue_file_and_run_the_given_agetty() {
             agetty: agetty.clone(),
         }),
         managed_config: None,
+        managed_stores: None,
+        managed_macos_pkg: None,
     };
     let links = host_links(
         &daemon,

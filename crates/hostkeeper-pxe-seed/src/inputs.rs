@@ -276,3 +276,68 @@ impl DaemonConfigText {
         &self.0
     }
 }
+
+/// The longest repository file name, in bytes: a file name.
+pub const MAX_REPOSITORY_NAME: usize = 255;
+
+/// The most files of a host's repository directory a seed carries.
+pub const MAX_REPOSITORY_FILES: usize = 64;
+
+/// Why the repository files of a seed were refused.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum RepositoryFilesError {
+    /// No file: the directory names nothing an install could use.
+    #[error("there is no repository file")]
+    Empty,
+    /// More than [`MAX_REPOSITORY_FILES`].
+    #[error("there are {0} repository files, over {MAX_REPOSITORY_FILES}")]
+    TooMany(usize),
+    /// A name that is not one plain file name.
+    #[error(
+        "the repository file name {0:?} is not 1 to 255 of A-Za-z0-9._+-, not starting with a dot"
+    )]
+    Name(String),
+    /// Two files of one name.
+    #[error("the repository file name {0:?} is given twice")]
+    Duplicate(String),
+}
+
+/// The files of the installed host's `/etc/hostkeeper/repositories/` (packages-repositories.md
+/// section 3.2), as the seed writes them: each a file name and its bytes, in name order. The
+/// caller has checked the files with the daemon's own loader; this checks only that each name is
+/// one plain file name, so a seed's `write_files` path cannot leave the directory.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RepositoryFiles(Vec<(String, Vec<u8>)>);
+
+impl RepositoryFiles {
+    /// `files` sorted by name, once each name is one plain file name, none is given twice, and
+    /// there is at least one and at most [`MAX_REPOSITORY_FILES`].
+    pub fn new(mut files: Vec<(String, Vec<u8>)>) -> Result<RepositoryFiles, RepositoryFilesError> {
+        if files.is_empty() {
+            return Err(RepositoryFilesError::Empty);
+        }
+        if files.len() > MAX_REPOSITORY_FILES {
+            return Err(RepositoryFilesError::TooMany(files.len()));
+        }
+        files.sort_by(|a, b| a.0.cmp(&b.0));
+        for (name, _) in &files {
+            let plain = (1..=MAX_REPOSITORY_NAME).contains(&name.len())
+                & name
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() | matches!(b, b'.' | b'_' | b'+' | b'-'))
+                & !name.starts_with('.');
+            if !plain {
+                return Err(RepositoryFilesError::Name(name.clone()));
+            }
+        }
+        if let Some(pair) = files.windows(2).find(|pair| pair[0].0 == pair[1].0) {
+            return Err(RepositoryFilesError::Duplicate(pair[0].0.clone()));
+        }
+        Ok(RepositoryFiles(files))
+    }
+
+    /// The files, `(name, bytes)`, in name order.
+    pub fn files(&self) -> &[(String, Vec<u8>)] {
+        &self.0
+    }
+}
