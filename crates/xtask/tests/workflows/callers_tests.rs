@@ -19,6 +19,12 @@ on:
       version:
         type: string
         required: true
+      variant:
+        type: choice
+        required: true
+        options:
+          - hello
+          - fail-ready
 permissions: {}
 jobs:
   set-desired:
@@ -64,7 +70,7 @@ fn hello() -> String {
     at_client(HELLO)
 }
 
-/// The `uses:` line of [`hello`], line 15.
+/// The `uses:` line of [`hello`], line 21.
 fn uses() -> String {
     at_client(
         "    uses: komira-ai/hostkeeper/.github/workflows/set-desired.yml@<commit> # v<release>\n",
@@ -187,7 +193,7 @@ fn a_local_set_desired_is_refused() {
         &uses(),
         "    uses: ./.github/workflows/set-desired.yml\n",
         &[
-            "line 15: `uses: ./.github/workflows/set-desired.yml` names a local path",
+            "line 21: `uses: ./.github/workflows/set-desired.yml` names a local path",
             "job set-desired calls ./.github/workflows/set-desired.yml, not komira-ai/hostkeeper/.github/workflows/set-desired.yml",
             &format!(
                 "job set-desired must pin set-desired.yml at the CI client's revision {CLIENT_COMMIT}, not `./.github/workflows/set-desired.yml`"
@@ -207,7 +213,7 @@ fn a_set_desired_pinned_to_a_branch_is_refused() {
             "    uses: komira-ai/hostkeeper/.github/workflows/set-desired.yml@main # v<release>\n",
         ),
         &[
-            "line 15: `uses: komira-ai/hostkeeper/.github/workflows/set-desired.yml@main` is not pinned to a 40-digit lowercase commit SHA",
+            "line 21: `uses: komira-ai/hostkeeper/.github/workflows/set-desired.yml@main` is not pinned to a 40-digit lowercase commit SHA",
             &format!(
                 "job set-desired must pin set-desired.yml at the CI client's revision {CLIENT_COMMIT}, not `komira-ai/hostkeeper/.github/workflows/set-desired.yml@main`"
             ),
@@ -379,7 +385,7 @@ fn a_version_comment_other_than_the_client_release_is_refused() {
         )
     };
     let unversioned = format!(
-        "line 15: `uses: komira-ai/hostkeeper/.github/workflows/set-desired.yml@{CLIENT_COMMIT}` has no version comment (`# v1.2.3`) on its line"
+        "line 21: `uses: komira-ai/hostkeeper/.github/workflows/set-desired.yml@{CLIENT_COMMIT}` has no version comment (`# v1.2.3`) on its line"
     );
     // Each comment, and whether the shared rule refuses it too, as no version at all.
     for (got, no_version) in [
@@ -604,7 +610,7 @@ fn a_caller_that_passes_secrets_is_refused() {
         "    with:\n",
         "    secrets: inherit\n    with:\n",
         &[
-            "line 16: `secrets: inherit` hands every secret of the caller on",
+            "line 22: `secrets: inherit` hands every secret of the caller on",
             "job set-desired passes secrets to set-desired.yml",
         ],
     );
@@ -625,6 +631,7 @@ fn a_hello_proof_run_on_another_trigger_is_refused() {
         [
             want,
             "hello-desired.yml: input version must be a required string",
+            "hello-desired.yml: input variant must be a required choice of exactly [\"hello\", \"fail-ready\"]",
         ]
     );
 }
@@ -650,24 +657,56 @@ fn a_version_input_that_is_not_a_required_string_is_refused() {
 }
 
 #[test]
-fn a_proof_run_that_offers_the_failing_build_or_another_input_is_refused() {
-    // Catches: the `variant` choice of hello and its failing build put back while the failing
-    // build has no native package (its run would fail at the targets step, or set nothing a
-    // host takes), and any other input beside the version.
-    let variant = "      variant:\n        type: choice\n        required: true\n        options:\n          - hello\n          - fail-ready\n";
-    let version = "        required: true\npermissions: {}\n";
+fn a_variant_input_other_than_the_choice_of_hello_and_fail_ready_is_refused() {
+    let want = &[
+        "hello-desired.yml: input variant must be a required choice of exactly [\"hello\", \"fail-ready\"]",
+    ];
+    // A third value.
     assert_hello(
-        version,
-        &format!("        required: true\n{variant}permissions: {{}}\n"),
-        &[
-            "hello-desired.yml: input variant is not one of [\"version\"]; a proof run sets one release's package",
-        ],
+        "          - fail-ready\n",
+        "          - fail-ready\n          - other\n",
+        want,
     );
+    // One value missing.
+    assert_hello("          - fail-ready\n", "", want);
+    // The two in the other order: the first is the default a dispatch shows.
     assert_hello(
-        version,
-        "        required: true\n      dry_run:\n        type: boolean\npermissions: {}\n",
+        "          - hello\n          - fail-ready\n",
+        "          - fail-ready\n          - hello\n",
+        want,
+    );
+    // Free text instead of a choice.
+    assert_hello("        type: choice\n", "        type: string\n", want);
+    // Not required.
+    assert_hello(
+        "        type: choice\n        required: true\n",
+        "        type: choice\n        required: false\n",
+        want,
+    );
+    // Options that are not a list.
+    assert_hello(
+        "        options:\n          - hello\n          - fail-ready\n",
+        "        options: hello\n",
+        want,
+    );
+    // No such input.
+    assert_hello(
+        "      variant:\n        type: choice\n        required: true\n        options:\n          - hello\n          - fail-ready\n",
+        "",
+        want,
+    );
+}
+
+#[test]
+fn a_proof_run_that_offers_another_input_beside_version_and_variant_is_refused() {
+    // Catches: an input beside the release and the variant of the choice (a dry run, a package
+    // digest) that a run of the proof would have to honour. The failing build is offered as the
+    // `variant` choice, so a `variant` is allowed; before, an input of that name was refused.
+    assert_hello(
+        "          - fail-ready\npermissions: {}\n",
+        "          - fail-ready\n      dry_run:\n        type: boolean\npermissions: {}\n",
         &[
-            "hello-desired.yml: input dry_run is not one of [\"version\"]; a proof run sets one release's package",
+            "hello-desired.yml: input dry_run is not one of [\"version\"] or variant; a proof run sets one release's package",
         ],
     );
 }

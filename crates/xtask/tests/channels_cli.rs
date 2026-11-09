@@ -358,3 +358,31 @@ fn channels_assume_takes_the_token_url_as_a_flag_that_must_be_https() {
     }
     assert!(!d.join("env").exists());
 }
+
+/// Proves the suite `testing-fail`, hello's failing build alone, is an apt suite only: every rpm
+/// verb that takes a suite refuses it as a usage error, while `apt read` takes it.
+///
+/// Catches: the rpm tree gaining a `testing-fail` directory the failing build (which has no rpm)
+/// never needs.
+#[test]
+fn testing_fail_is_a_suite_of_apt_and_no_rpm_verb_takes_it() {
+    let d = dir("channels-rpm-testing-fail");
+    for verb in ["read", "index", "write"] {
+        let o = run(
+            &d,
+            &["channels", "rpm", "repo", verb, "--suite", "testing-fail"],
+        );
+        assert_eq!(o.status.code(), Some(2), "rpm repo {verb}: {}", stderr(&o));
+        assert!(
+            stderr(&o).contains("invalid value 'testing-fail' for '--suite <SUITE>'"),
+            "rpm repo {verb}: {}",
+            stderr(&o)
+        );
+    }
+    let o = run(&d, &["channels", "apt", "read", "--suite", "testing-fail"]);
+    assert!(
+        !stderr(&o).contains("invalid value 'testing-fail'"),
+        "{}",
+        stderr(&o)
+    );
+}

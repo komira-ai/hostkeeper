@@ -458,7 +458,8 @@ skips a store it does not define. A `hostkeeper-archive` manifest holds `minHost
 the hook, units and files are in the attested `manifest.toml` inside the archive.
 
 This repository builds the targets of its own releases with `cargo xtask release targets
---service <hostkeeper|hello|mdm> --version <X.Y.Z> --dir <assets> --repo komira-ai/hostkeeper`,
+--service <hostkeeper|hello|mdm> [--fail-ready] --version <X.Y.Z> --dir <assets> --repo
+komira-ai/hostkeeper`,
 from the release's assets, and sets them with no index: its releases list native entries alone
 ([packages-native.md](../design/packages-native.md), section 10.5). For each Linux platform the
 package's index lists, the one native entry of the package's `.deb`, an `apt` entry of the
@@ -469,8 +470,12 @@ no daemon announces `macos-pkg`. A host whose daemon does not announce `apt` is 
 (`installer_dropped`). `--repo` is read and not used. It refuses a release whose index, Linux
 archives and their manifests, `.deb`s or their bundles do not check out, and entries the
 coordinator or the daemon would refuse, and prints `targets=<JSON>` (appended to `--output`).
-`--fail-ready` (hello's failing build) is refused by name: that build has no package the
-repository holds.
+`--fail-ready` (hello only, explicit only) writes hello's failing build instead: per Linux
+platform one `apt` entry of the repository entry `komira-testing-fail` (the suite
+`testing-fail`) at the Debian version `<X.Y.Z>~fail.ready`, pinned by the SHA-256 of the release's
+`hello_<X.Y.Z>-fail-ready_<arch>.deb`, its manifest the failing build's archive's; it refuses a
+`.deb` whose control is not hello at that version for the architecture, or whose bundle does
+not list it. `hello-desired.yml` passes it for its `fail-ready` variant.
 
 **Give the index too while daemons before targets run.** A daemon that does not announce
 `target-v1` is never sent a target: it is ordered the archive through the release channel, by

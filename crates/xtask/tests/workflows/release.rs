@@ -159,6 +159,13 @@ pub const MDM_STEPS: [&str; 4] = [
     "cargo xtask release package --service mdm --platform \"$PLATFORM\" --version \"$RELEASE_VERSION\" --commit \"$GITHUB_SHA\" --binary target/release/mdm --archives \"$RUNNER_TEMP/mdm-archives\" --out dist",
 ];
 
+/// The runs of the build job that make hello's failing build's `.deb` into `dist/`, where the
+/// attest job and SHA256SUMS find it, and read it back there.
+pub const FAIL_READY_DEB_RUNS: [&str; 2] = [
+    "cargo xtask release deb --service hello --fail-ready --platform \"$PLATFORM\" --version \"$RELEASE_VERSION\" --commit \"$GITHUB_SHA\" --binary target/release/hello --out dist",
+    "cargo xtask release check-linux-pkg \"dist/hello_${RELEASE_VERSION}-fail-ready_$ARCH.deb\" --service hello",
+];
+
 /// The step of the sums job that writes the mdm package's index, and the file its upload of the
 /// indexes must list, so the attest job finds every file SHA256SUMS lists.
 pub const MDM_INDEX: (&str, &str) = (
@@ -184,11 +191,14 @@ pub const ATTESTED_FILES: [(&str, &str); 1] = [("dist/netboot.json", "netboot.js
 
 /// The native packages of the services the release ships (docs/design/packages-native.md, item
 /// A21), each as its name with `<version>` for the version: hello's `.deb` for each Linux
-/// architecture and its `.pkg`, and mdm's `.deb` for amd64. Each has a bundle, which the
-/// installer channel publishes beside it.
-pub const NATIVE_FILES: [&str; 4] = [
+/// architecture, its failing build's `.deb` for each (named by the service version,
+/// `<version>-fail-ready`) and its `.pkg`, and mdm's `.deb` for amd64. Each has a bundle, which
+/// the installer channel publishes beside it.
+pub const NATIVE_FILES: [&str; 6] = [
     "hello_<version>_amd64.deb",
     "hello_<version>_arm64.deb",
+    "hello_<version>-fail-ready_amd64.deb",
+    "hello_<version>-fail-ready_arm64.deb",
     "hello-<version>-macos-arm64.pkg",
     "mdm_<version>_amd64.deb",
 ];
@@ -620,8 +630,20 @@ fn artifacts_problems(doc: &Node) -> Vec<String> {
     }
     problems.extend(package_problems(attest));
     problems.extend(mdm_problems(doc));
+    problems.extend(fail_ready_deb_problems(doc));
     problems.extend(pkg_signing::problems(doc));
     problems
+}
+
+/// One line per run of [`FAIL_READY_DEB_RUNS`] that the build job does not have: the failing
+/// build's `.deb` built or checked outside `dist/` is no file the attest job signs.
+fn fail_ready_deb_problems(doc: &Node) -> Vec<String> {
+    let runs = step_values(job(doc, "build"), "run");
+    FAIL_READY_DEB_RUNS
+        .into_iter()
+        .filter(|want| !runs.contains(want))
+        .map(|want| format!("artifacts.yml: job build does not run `{want}`"))
+        .collect()
 }
 
 /// What is wrong with the making of the mdm package: a step of [`MDM_STEPS`] missing from the

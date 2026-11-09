@@ -12,9 +12,26 @@
 
 use crate::channels::{Error, spec};
 
-pub use crate::channels::apt::state::{
-    ABSENT, ETAGS_FILE, Suite, etag_of, parse_etags, render_etags,
-};
+pub use crate::channels::apt::state::{ABSENT, ETAGS_FILE, etag_of, parse_etags, render_etags};
+
+/// The suites of the rpm tree: `testing` holds a release from the moment it is published, `stable`
+/// gets the same entries after the checks passed. The apt repository's suite `testing-fail`, hello's
+/// failing build alone, has no rpm counterpart: that build has no rpm.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum Suite {
+    Stable,
+    Testing,
+}
+
+impl Suite {
+    /// The name: the directory below `rpm/`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Suite::Stable => "stable",
+            Suite::Testing => "testing",
+        }
+    }
+}
 
 /// The key prefix of everything the rpm tree serves.
 pub const KEY_ROOT: &str = "rpm/";

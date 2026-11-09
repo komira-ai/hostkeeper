@@ -23,8 +23,9 @@
 //!   is set, so a coordinator served only on the tailnet is reachable from every caller;
 //! - a job of [`CALLERS`] for the file is missing, or does not call the CI client;
 //! - it is the file of a proof run, [`HELLO_RUN`] or [`TEMPLATE_RUN`], and runs on anything but
-//!   `workflow_dispatch`, lacks the input `version` (a required string) or has an input not in
-//!   [`PROOF_INPUTS`] (hello's failing build is not offered), or its caller does not pass the run's
+//!   `workflow_dispatch`, lacks the input `version` (a required string) or, for hello, `variant`
+//!   (a required choice of exactly [`HELLO_VARIANTS`]), has an input not in [`PROOF_INPUTS`]
+//!   (and `variant` for hello alone), or its caller does not pass the run's
 //!   `service`, or a job of it lacks the exact `if:` [`HELLO_IF`] (a dispatch from another branch
 //!   runs nothing);
 //! - it is the file of a proof run and its caller does not pass each of the run's inputs from
@@ -100,9 +101,11 @@ pub const HELLO_FILE: &str = "hello-desired.yml";
 pub const HELLO_JOB: &str = "set-desired";
 /// Its `if:`: a dispatch from main only.
 pub const HELLO_IF: &str = "${{ github.ref == 'refs/heads/main' }}";
-/// The inputs of a proof run, exactly: the release whose package it sets. hello's failing build
-/// is not offered: it has no native package, and a release is set with native entries alone
-/// (docs/hello.md, step 4, suspended).
+/// The values of hello's input `variant`, in order: the build that passes, and the one whose
+/// `/readyz` answers 503 (docs/hello.md, step 4).
+pub const HELLO_VARIANTS: [&str; 2] = ["hello", "fail-ready"];
+/// The inputs every proof run has: the release whose package it sets. A run with `variants` has
+/// the input `variant` too, and no other.
 pub const PROOF_INPUTS: [&str; 1] = ["version"];
 /// Its job that reads the release and writes the targets.
 pub const HELLO_RELEASE_JOB: &str = "release";
@@ -153,6 +156,8 @@ pub struct Proof {
     pub release_job: &'static str,
     /// The `service` its caller passes.
     pub service: &'static str,
+    /// The values of its input `variant`, in order; none: it has no such input.
+    pub variants: &'static [&'static str],
     /// The `run:` of the step `targets` of the release job, before its arguments.
     pub targets_run: &'static str,
     /// The inputs its caller passes from the outputs of the release job, each from the output
@@ -168,6 +173,7 @@ pub const HELLO_RUN: Proof = Proof {
     job: HELLO_JOB,
     release_job: HELLO_RELEASE_JOB,
     service: "hello",
+    variants: &HELLO_VARIANTS,
     targets_run: HELLO_TARGETS_RUN,
     from_release: &HELLO_FROM_RELEASE,
     release_outputs: &HELLO_RELEASE_OUTPUTS,
@@ -180,6 +186,7 @@ pub const TEMPLATE_RUN: Proof = Proof {
     job: "set-desired",
     release_job: "release",
     service: "my-service",
+    variants: &[],
     targets_run: "cargo xtask release targets ",
     from_release: &TEMPLATE_FROM_RELEASE,
     release_outputs: &TEMPLATE_RELEASE_OUTPUTS,
@@ -383,11 +390,28 @@ fn proof_problems(run: &Proof, doc: &Node) -> Vec<String> {
     if text_of(version, "type") != Some("string") || text_of(version, "required") != Some("true") {
         problems.push(format!("{file}: input version must be a required string"));
     }
+    if !run.variants.is_empty() {
+        let variant = input("variant");
+        let options: Vec<&str> = match variant.and_then(|v| entry(v, "options")).map(|o| &o.value) {
+            Some(Value::Seq(items)) => items.iter().filter_map(Node::as_str).collect(),
+            _ => Vec::new(),
+        };
+        let choice = text_of(variant, "type") == Some("choice")
+            && text_of(variant, "required") == Some("true");
+        if !choice || options != run.variants {
+            problems.push(format!(
+                "{file}: input variant must be a required choice of exactly {:?}",
+                run.variants
+            ));
+        }
+    }
     for (name, _) in inputs.map_or(&[][..], entries) {
         let name = name.as_str().unwrap_or_default();
-        if !PROOF_INPUTS.contains(&name) {
+        let variant = name == "variant" && !run.variants.is_empty();
+        if !PROOF_INPUTS.contains(&name) && !variant {
             problems.push(format!(
-                "{file}: input {name} is not one of {PROOF_INPUTS:?}; a proof run sets one release's package"
+                "{file}: input {name} is not one of {PROOF_INPUTS:?}{}; a proof run sets one release's package",
+                if run.variants.is_empty() { "" } else { " or variant" }
             ));
         }
     }

@@ -92,7 +92,7 @@ impl Lab {
     /// The `SHA256SUMS` of the release files in `debs`.
     fn sums(&self, debs: &Path, version: &str) -> PathBuf {
         let mut text = String::new();
-        for name in package_names(version).expect("names") {
+        for name in package_names(version, Suite::Stable).expect("names") {
             let bytes = std::fs::read(debs.join(&name)).expect("deb");
             text.push_str(&format!("{}  {name}\n", sha256_hex(&bytes)));
         }
@@ -151,8 +151,11 @@ impl Lab {
             let path = self.path(&format!(
                 "{tag}-promoted/dists/stable/main/binary-{arch}/Packages"
             ));
-            for s in
-                parse_packages(&std::fs::read_to_string(path).expect("packages")).expect("parse")
+            for s in parse_packages(
+                &std::fs::read_to_string(path).expect("packages"),
+                Suite::Stable,
+            )
+            .expect("parse")
             {
                 out.push((
                     s.package,

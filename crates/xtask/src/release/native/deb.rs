@@ -3,7 +3,10 @@
 //!
 //! The file is `<package>_<version>_<arch>.deb` (`amd64` for linux-x86_64, `arm64` for
 //! linux-arm64), where `<version>` is the release's, `<version>-fail-ready` for hello's failing
-//! build (the version its program answers `/version` with). It is an `ar` archive of three
+//! build (the version its program answers `/version` with). The `Version` of its `control` is the
+//! package's Debian version ([`Package::deb_version`]): the release's, or `<version>~fail.ready`
+//! for the failing build, which sorts below the release; so the failing build's file name and its
+//! `control` differ in the version, by design. It is an `ar` archive of three
 //! members in this order, each dated the commit's committer time, owned by 0 and 0, mode 0644:
 //!
 //! - `debian-binary`, `2.0` and a line break;
@@ -134,7 +137,7 @@ pub(crate) fn deb_with(
     let version = package.version_text(&request.version);
     let bytes = build(
         name,
-        &version,
+        &package.deb_version(&request.version),
         arch,
         &description(request.service),
         &files,

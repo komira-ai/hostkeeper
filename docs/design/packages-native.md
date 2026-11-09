@@ -424,3 +424,43 @@ these items: whichever of S3 and A19 lands second carries the other's change to 
 | tierstore | Never an archive; its first deploy under hostkeeper is `apt` | An archive would be built only to be deleted, and its hand-over fits `apt` |
 | Rule B8 | Three waivers, made by the ruling that ends the format: the bootstrap floor rises to A19's release; a set with `package_digest` or `release_index` orders nothing; `hostkeeper-archive`, `tarball` and `oci-image` leave the installer set. No proto field is removed or renumbered | The format cannot end otherwise. The B8 tests in both directions: X1 runs the previous release on a host holding native versions and the move's records (A19, A24), and a daemon from A25 starts on a host holding an archive `previous` (A25) |
 | A host that cannot move | Named by stage 9's counts; brought up, or removed and installed afresh | No host is left on a daemon nothing can update |
+
+### 10.10 hello's failing build in a suite of its own
+
+A24 set every release with native entries alone, and so suspended hello's failing-build proof (docs/hello.md section 4):
+the failing build's `.deb` was built (A20) but not published, because the shared repository's suites list `X.Y.Z`
+alone. That proof is the farm's live evidence that a failing update halts, rolls back to the previous version, and
+holds no other service's rollout. This item publishes the build where a native installer can take it, without letting
+it near a release:
+
+- **Version.** The failing build's service version stays `X.Y.Z-fail-ready`: the set names it, the build's `/version`
+  answers it and its hook compares the two. Its `.deb`'s Debian version is `X.Y.Z~fail.ready`. A `~` sorts before
+  everything, the end of the version included, so dpkg and apt order it below the release `X.Y.Z` it was built from.
+  `X.Y.Z-fail-ready` would read as Debian revision `ready` of an upstream `X.Y.Z-fail`, ordered above the release. A
+  service version allows no `~`, so the two cannot be taken for each other. The release asset keeps the name
+  `hello_X.Y.Z-fail-ready_<arch>.deb`: a release host may rename an asset whose name has a `~`. It is attested like
+  every native package. The failing build's `.pkg` is not released: no daemon announces `macos-pkg` yet.
+- **Suite.** `testing-fail` is a suite of the same repository with the same archive key and the same pool. It lists
+  hello's failing build alone, at `X.Y.Z~fail.ready`, under the pool name `hello_X.Y.Z~fail.ready_<arch>.deb` its
+  control gives. `testing` and `stable` still list `X.Y.Z` alone, and each suite refuses the other's form. It is never
+  promoted. `release.yml` writes it in one attempt of three jobs, `testing-fail-apt-read`, `-index` and `-write`, which
+  no promotion waits for: its publish holds no release. Only this product's releases write the suite, so a lost race
+  means two runs published at once; the write fails instead of retrying, and the next release publishes again.
+- **Entry.** `cargo xtask release targets --service hello --fail-ready`, and nothing without that flag, writes per
+  Linux platform one `apt` entry of repository `komira-testing-fail` at package version `X.Y.Z~fail.ready`, pinned by
+  that `.deb`'s SHA-256, with the failing build's archive manifest. `hello-desired.yml`'s `variant` input
+  (`hello` or `fail-ready`) chooses it. The entry is additive in value only: no field of `Target` is added or changed
+  (rule B8).
+- **Host.** A host that runs the proof carries the repository entry `komira-testing-fail.sources` (`Suites:
+  testing-fail`, the same keyring as `komira-testing`), placed and checked by host setup like the others. The daemon
+  reads it at its start. A host without it fails the order at stage with the class `environment` and the reason
+  `repository_unknown` (packages-repositories.md section 3.1), which is not the release failure the proof waits for.
+- **Rollback.** Unchanged. The host rolls back to the kept previous version from its sealed copy, with no fetch,
+  whatever repository entry that version came from.
+
+| Question | Decision | Why |
+|---|---|---|
+| The failing build's Debian version | `X.Y.Z~fail.ready` | Valid, never ordered above or equal to a release, and unlike any service version |
+| Where it is published | A suite of its own, `testing-fail`, hello's failing build alone | `testing` and `stable` keep their one version form; no host takes it without an entry naming the suite |
+| Whether its publish gates promotion | No | The failing build is never promoted, and a proof build must not hold a release |
+| How it is chosen | Only by `--fail-ready`, from the `fail-ready` variant | A normal set can never name it |

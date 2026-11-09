@@ -32,7 +32,7 @@ fn the_package_files_of_a_version_are_every_package_for_each_of_its_architecture
     // version's files; an mdm asked for arm64, which it is not built for.
     let dir = scratch("package-files");
     release_files(&dir, "1.2.3");
-    let files = package_files(&dir, "1.2.3").expect("files");
+    let files = package_files(&dir, "1.2.3", Suite::Testing).expect("files");
     let names: Vec<&str> = files.iter().map(|(n, _)| n.as_str()).collect();
     assert_eq!(
         names,
@@ -48,12 +48,16 @@ fn the_package_files_of_a_version_are_every_package_for_each_of_its_architecture
     );
     assert_eq!(files[0].1, dir.join("hello_1.2.3_amd64.deb"));
     std::fs::remove_file(dir.join("hostkeeper_1.2.3_arm64.deb")).expect("remove");
-    let e = package_files(&dir, "1.2.3").unwrap_err().to_string();
+    let e = package_files(&dir, "1.2.3", Suite::Testing)
+        .unwrap_err()
+        .to_string();
     assert!(e.contains("hostkeeper_1.2.3_arm64.deb is not in"), "{e}");
     // The coordinator's package is as much part of the release as the daemon's.
     release_files(&dir, "1.2.3");
     std::fs::remove_file(dir.join("hostkeeper-coordinator_1.2.3_amd64.deb")).expect("remove");
-    let e = package_files(&dir, "1.2.3").unwrap_err().to_string();
+    let e = package_files(&dir, "1.2.3", Suite::Testing)
+        .unwrap_err()
+        .to_string();
     assert!(
         e.contains("hostkeeper-coordinator_1.2.3_amd64.deb is not in"),
         "{e}"
@@ -62,12 +66,14 @@ fn the_package_files_of_a_version_are_every_package_for_each_of_its_architecture
     for missing in ["hello_1.2.3_arm64.deb", "mdm_1.2.3_amd64.deb"] {
         release_files(&dir, "1.2.3");
         std::fs::remove_file(dir.join(missing)).expect("remove");
-        let e = package_files(&dir, "1.2.3").unwrap_err().to_string();
+        let e = package_files(&dir, "1.2.3", Suite::Testing)
+            .unwrap_err()
+            .to_string();
         assert!(e.contains(&format!("{missing} is not in")), "{e}");
     }
-    assert!(package_files(&dir, "1.2.4").is_err());
+    assert!(package_files(&dir, "1.2.4", Suite::Testing).is_err());
     assert!(matches!(
-        package_files(&dir, "v1.2.3"),
+        package_files(&dir, "v1.2.3", Suite::Testing),
         Err(Error::Usage(_))
     ));
 }
