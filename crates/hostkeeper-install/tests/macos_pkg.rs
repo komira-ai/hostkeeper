@@ -1,5 +1,5 @@
 //! The steps of the `macos-pkg` installer (packages-repositories.md section 4.7) against a fake
-//! Mac: `check_entry`, `announces`, `stage`, `activate` (an update, a rollback, a repair of
+//! Mac: `Order::of`, `announces`, `stage`, `activate` (an update, a rollback, a repair of
 //! drift), `remove`, `retire`, and the observer's `drift::observe`.
 
 #[path = "macos_pkg/activate.rs"]
@@ -19,14 +19,20 @@ use std::fs;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::PathBuf;
 
+use hostkeeper_config::daemon::Sha256Hex;
+use hostkeeper_config::names::{ServiceName, Version};
+use hostkeeper_install::StageOrder;
 use hostkeeper_install::host::Ids;
 use hostkeeper_install::macos_pkg::drift::{Drift, Seen, observe};
 use hostkeeper_install::macos_pkg::record::PkgRecord;
 use hostkeeper_install::macos_pkg::signers::{Fingerprint, Signers};
-use hostkeeper_install::macos_pkg::{Activated, Order, announces, check_entry};
+use hostkeeper_install::macos_pkg::{Activated, Bounds, Order, announces};
 use hostkeeper_install::tools::{Tool, ToolOutput};
 use hostkeeper_install::{Class, Failure, Outcome, Reason};
+use hostkeeper_launchd::Label;
 use hostkeeper_launchd::launchctl::OUTPUT_MAX;
+use hostkeeper_proto::hostkeeper::release::v1::{Blob, Hook, InstallerBounds, Manifest, Target};
+use std::time::Duration;
 use support::*;
 
 pub const BOTH: [&str; 2] = [SERVICE, "svc.worker"];

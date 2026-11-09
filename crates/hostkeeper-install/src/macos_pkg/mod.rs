@@ -1,14 +1,16 @@
 //! The `macos-pkg` installer (packages-repositories.md section 4.7): a service from a signed flat
 //! `.pkg`, installed by `installer` as root.
 //!
-//! An artifact installer, as `tarball` is: the core fetches and proves the `.pkg` (size, digest,
-//! attestation) before any step here reads a byte of it, gives `stage` the verified file and a
-//! staging directory, then walks, checks (`MacVerify`) and seals what `stage` made, and switches
-//! `current` after `activate`. The steps:
+//! An artifact installer: the core fetches the `.pkg` and checks its size and digest against the
+//! entry's pin before any step here reads a byte of it (a `macos-pkg` entry carries no
+//! attestation; the pin and the package's signature are the whole check, packages-native.md
+//! section 10.3), gives `stage` the file and a staging directory, then walks, checks
+//! (`MacVerify`) and seals what `stage` made, and switches `current` after `activate`. The
+//! order is A6's [`StageOrder`], read by [`Order::of`]. The steps:
 //!
 //! | Step | Here |
 //! |---|---|
-//! | [`MacosPkg::stage`] | The identifier no other service records; `pkgutil --check-signature` against the host's [`signers`]; `pkgutil --expand-full`; the [`shape`] of the expansion; the `Bom` against the payload, and the jobs ([`payload`]); `artifact`, `tree/` and `macos-pkg/{PackageInfo,Bom}` in the staging directory |
+//! | [`MacosPkg::stage`] | The identifier no other service records; `pkgutil --check-signature` against the host's [`signers`]; `pkgutil --expand-full`; the [`shape`] of the expansion, with no script (`package_scripts`); the `Bom` against the payload, and the jobs ([`payload`]); the [`hook`] at its fixed path; `artifact`, `tree/` and `macos-pkg/{PackageInfo,Bom}` in the staging directory |
 //! | [`MacosPkg::activate`] | Under the [`InstallerLock`]: the parents of the payload paths safe, no payload file another receipt lists, the record pending, `installer -allowUntrusted -pkg <dir>/artifact -target /`, the receipt's version and every installed file proved against `tree/`, the files of the version it replaces that this one does not list deleted, then the created directories left empty, the `run` labels enabled and a dropped one disabled, the record done. A rollback is the `activate` of the kept previous version. Drift found on the way is reported, and repaired by the install |
 //! | [`MacosPkg::retire`] | The version directory and its seal deleted; no tool runs |
 //! | [`MacosPkg::remove`] | Under the lock: every file and link the receipt or a kept version's `Bom` lists, changed or not, but one another receipt lists or one under a linked parent; the created directories left empty, deepest first; `pkgutil --forget` |
@@ -35,6 +37,7 @@ use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_launchd::Label;
 
 use crate::host::Host;
+use crate::installer::StageOrder;
 use crate::lock::InstallerLock;
 use crate::outcome::{Failure, Reason};
 use crate::tools::{Tool, ToolOutput, Tools};
@@ -75,19 +78,63 @@ pub struct Bounds {
     pub remove: Duration,
 }
 
-/// The check before `stage`: a `macos-pkg` entry is an artifact entry, which names no repository
-/// and no package version (`Failed`, `release`, `order_invalid`).
-pub fn check_entry(has_repository: bool, has_package_version: bool) -> Result<(), Failure> {
-    match (has_repository, has_package_version) {
-        (false, false) => Ok(()),
-        (true, _) => Err(Failure::new(
-            Reason::OrderInvalid,
-            "a macos-pkg entry names a repository",
-        )),
-        (false, true) => Err(Failure::new(
-            Reason::OrderInvalid,
-            "a macos-pkg entry names a package version",
-        )),
+impl Order {
+    /// The order of A6's `stage` ([`StageOrder`]) as `macos-pkg` acts on it: its entry's
+    /// manifest's `package` (the identifier), `run` (the jobs), `installer_bounds` and
+    /// `hook.boot`. An order with no entry, or whose entry names a repository, a package version
+    /// or an attestation (a `macos-pkg` entry carries none: packages-native.md section 10.3), is
+    /// `order_invalid`; a manifest missing what `macos-pkg` needs is `manifest_invalid`.
+    pub fn of(stage: &StageOrder<'_>) -> Result<Order, Failure> {
+        let invalid = |detail: &str| Failure::new(Reason::OrderInvalid, detail);
+        let entry = stage
+            .entry
+            .ok_or_else(|| invalid("a macos-pkg order carries no entry"))?;
+        if entry.repository.is_some() {
+            return Err(invalid("a macos-pkg entry names a repository"));
+        }
+        if entry.package_version.is_some() {
+            return Err(invalid("a macos-pkg entry names a package version"));
+        }
+        if entry.attestation.is_some() {
+            return Err(invalid("a macos-pkg entry carries an attestation"));
+        }
+        let manifest_invalid = |detail: String| Failure::new(Reason::ManifestInvalid, detail);
+        let manifest = entry
+            .manifest
+            .as_ref()
+            .ok_or_else(|| manifest_invalid("the entry carries no manifest".into()))?;
+        let identifier = manifest
+            .package
+            .clone()
+            .filter(|package| !package.is_empty())
+            .ok_or_else(|| manifest_invalid("the manifest names no package".into()))?;
+        let run = manifest
+            .run
+            .iter()
+            .map(|label| {
+                Label::parse(label)
+                    .map_err(|e| manifest_invalid(format!("the run label {label:?}: {e}")))
+            })
+            .collect::<Result<Vec<Label>, Failure>>()?;
+        let bounds = manifest
+            .installer_bounds
+            .as_ref()
+            .ok_or_else(|| manifest_invalid("the manifest has no installer_bounds".into()))?;
+        Ok(Order {
+            service: stage.service.clone(),
+            version: stage.version.clone(),
+            identifier,
+            run,
+            bounds: Bounds {
+                stage: Duration::from_secs(bounds.stage_secs),
+                activate: Duration::from_secs(bounds.activate_secs),
+                remove: Duration::from_secs(bounds.remove_secs),
+            },
+            boot: manifest
+                .hook
+                .as_ref()
+                .is_some_and(|hook| hook.boot.is_some()),
+        })
     }
 }
 

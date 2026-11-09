@@ -1,25 +1,138 @@
-//! Tests of `check_entry`, `announces` and `stage`.
+//! Tests of `Order::of`, `announces` and `stage`.
 
 use super::*;
 
-/// Catches: an entry that names a repository or a package version being accepted.
+/// A `macos-pkg` entry of `svc`: an artifact entry whose manifest names the package, runs both
+/// jobs and has its installer bounds.
+fn entry() -> Target {
+    Target {
+        installer: "macos-pkg".into(),
+        digest: "ab".repeat(32),
+        bytes: 1,
+        manifest: Some(Manifest {
+            package: Some(IDENTIFIER.into()),
+            run: BOTH.iter().map(|l| (*l).to_owned()).collect(),
+            installer_bounds: Some(InstallerBounds {
+                stage_secs: 60,
+                activate_secs: 120,
+                remove_secs: 30,
+            }),
+            ..Manifest::default()
+        }),
+        ..Target::default()
+    }
+}
+
+fn order_of(entry: Option<&Target>) -> Result<Order, Failure> {
+    let service = ServiceName::new(SERVICE).unwrap();
+    let version = Version::new("1.0").unwrap();
+    let digest = Sha256Hex::parse(&"ab".repeat(32)).unwrap();
+    Order::of(&StageOrder {
+        service: &service,
+        version: &version,
+        package_digest: &digest,
+        entry,
+    })
+}
+
+/// Catches: A6's stage order read with another identifier, other jobs, other bounds or another
+/// `boot` than its entry's manifest gives.
 #[test]
-fn an_entry_with_a_repository_or_a_package_version_is_order_invalid() {
-    assert!(check_entry(false, false).is_ok());
-    for (repository, package_version) in [(true, false), (false, true), (true, true)] {
-        let err = check_entry(repository, package_version).unwrap_err();
-        assert_eq!(err.reason(), Reason::OrderInvalid);
+fn the_order_is_read_from_the_stage_orders_entry() {
+    let mut order = Rig::new("order-of").order_run("1.0", &BOTH);
+    order.bounds = Bounds {
+        stage: Duration::from_secs(60),
+        activate: Duration::from_secs(120),
+        remove: Duration::from_secs(30),
+    };
+    assert_eq!(order_of(Some(&entry())).unwrap(), order);
+    let mut booted = entry();
+    if let Some(manifest) = booted.manifest.as_mut() {
+        manifest.hook = Some(Hook {
+            boot: Some("check".into()),
+            ..Hook::default()
+        });
+    }
+    assert!(order_of(Some(&booted)).unwrap().boot);
+}
+
+/// Catches: an order with no entry, or an entry naming a repository, a package version or an
+/// attestation, being staged; each is `order_invalid` before anything runs.
+#[test]
+fn an_order_with_no_entry_or_a_repository_a_package_version_or_an_attestation_is_order_invalid() {
+    let with = |f: fn(&mut Target)| {
+        let mut entry = entry();
+        f(&mut entry);
+        entry
+    };
+    let cases = [
+        (None, "a macos-pkg order carries no entry"),
+        (
+            Some(with(|e| e.repository = Some("komira".into()))),
+            "a macos-pkg entry names a repository",
+        ),
+        (
+            Some(with(|e| e.package_version = Some("1.0-1".into()))),
+            "a macos-pkg entry names a package version",
+        ),
+        (
+            Some(with(|e| e.attestation = Some(Blob::default()))),
+            "a macos-pkg entry carries an attestation",
+        ),
+    ];
+    for (entry, detail) in cases {
+        let err = order_of(entry.as_ref()).unwrap_err();
+        assert_eq!(err.reason(), Reason::OrderInvalid, "{detail}");
         assert_eq!(err.reason().class(), Class::Release);
         assert_eq!(err.reason().outcome(), Outcome::Failed);
+        assert_eq!(err.detail(), detail);
     }
-    assert_eq!(
-        check_entry(true, false).unwrap_err().detail(),
-        "a macos-pkg entry names a repository"
-    );
-    assert_eq!(
-        check_entry(false, true).unwrap_err().detail(),
-        "a macos-pkg entry names a package version"
-    );
+}
+
+/// Catches: a manifest with no package, an empty package, a `run` entry that is no launchd label
+/// or no installer bounds being read as an order.
+#[test]
+fn a_manifest_missing_what_macos_pkg_needs_is_manifest_invalid() {
+    let with = |f: fn(&mut Manifest)| {
+        let mut entry = entry();
+        if let Some(manifest) = entry.manifest.as_mut() {
+            f(manifest);
+        }
+        entry
+    };
+    let cases = [
+        (
+            Target {
+                manifest: None,
+                ..entry()
+            },
+            "the entry carries no manifest".to_owned(),
+        ),
+        (
+            with(|m| m.package = None),
+            "the manifest names no package".to_owned(),
+        ),
+        (
+            with(|m| m.package = Some(String::new())),
+            "the manifest names no package".to_owned(),
+        ),
+        (
+            with(|m| m.run = vec!["a label".into()]),
+            format!(
+                "the run label \"a label\": {}",
+                Label::parse("a label").unwrap_err()
+            ),
+        ),
+        (
+            with(|m| m.installer_bounds = None),
+            "the manifest has no installer_bounds".to_owned(),
+        ),
+    ];
+    for (entry, detail) in cases {
+        let err = order_of(Some(&entry)).unwrap_err();
+        assert_eq!(err.reason(), Reason::ManifestInvalid, "{detail}");
+        assert_eq!(err.detail(), detail);
+    }
 }
 
 /// Catches: a Mac announcing `macos-pkg` without `installer`, without `pkgutil` or without a signer.
