@@ -148,6 +148,8 @@ pub fn print(program: &str, args: &[&str]) -> Printed {
 
 /// Puts the host as it was before the package: unheld, purged, unlinked, reloaded.
 fn clean_host() {
+    // A daemon test starts the unit (`hkaptfix serve` runs until it is stopped).
+    print("systemctl", &["stop", "hkaptfix.service"]);
     print("apt-mark", &["unhold", PACKAGE]);
     print("dpkg", &["--purge", PACKAGE]);
     let _ = fs::remove_file(LINK);
@@ -267,6 +269,21 @@ impl Rig {
             specs,
             Signing::Signed(&self.entry_key),
         );
+    }
+
+    /// The host's repository configuration: the one entry, for the rig's repository.
+    pub fn repositories(&self) -> &Repositories {
+        &self.repositories
+    }
+
+    /// The rig's own directory.
+    pub fn scratch(&self) -> &Path {
+        &self.scratch_path
+    }
+
+    /// The pin of the package at `package_version`, as the repository was built.
+    pub fn pin(&self, package_version: &str) -> String {
+        self.order(package_version).pin
     }
 
     /// The tools of the service, run by the production launcher.

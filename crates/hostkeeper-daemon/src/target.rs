@@ -54,35 +54,44 @@ pub enum TargetError {
     Invalid(String),
 }
 
-/// The entry's message descriptor.
-fn descriptor() -> Result<prost_reflect::MessageDescriptor, TargetError> {
-    let invalid = |why: String| TargetError::Invalid(why);
+/// The entry's message descriptor, from the compiled descriptor set.
+fn descriptor() -> Option<prost_reflect::MessageDescriptor> {
     DescriptorPool::decode(FILE_DESCRIPTOR_SET)
-        .map_err(|e| invalid(e.to_string()))?
+        .ok()?
         .get_message_by_name(TARGET_MESSAGE)
-        .ok_or_else(|| invalid(format!("no message {TARGET_MESSAGE}")))
 }
 
-/// `entry` as proto3 canonical JSON.
+/// `entry` as proto3 canonical JSON. The encoding of a decoded entry cannot fail: an `Err`
+/// says the compiled descriptor set has no entry message.
 pub fn to_json(entry: &Target) -> Result<Vec<u8>, TargetError> {
-    let invalid = |why: String| TargetError::Invalid(why);
-    let message = DynamicMessage::decode(descriptor()?, entry.encode_to_vec().as_slice())
-        .map_err(|e| invalid(e.to_string()))?;
-    let mut writer = serde_json::Serializer::new(Vec::new());
-    message
-        .serialize_with_options(&mut writer, &SerializeOptions::new())
-        .map_err(|e| invalid(e.to_string()))?;
-    Ok(writer.into_inner())
+    let encoded = || {
+        let message =
+            DynamicMessage::decode(descriptor()?, entry.encode_to_vec().as_slice()).ok()?;
+        let mut writer = serde_json::Serializer::new(Vec::new());
+        message
+            .serialize_with_options(&mut writer, &SerializeOptions::new())
+            .ok()?;
+        Some(writer.into_inner())
+    };
+    encoded().ok_or(TargetError::Invalid(NO_DESCRIPTOR.to_owned()))
+}
+
+/// What [`to_json`] and [`from_json`] say when the compiled descriptor set has no entry message.
+const NO_DESCRIPTOR: &str = "the compiled descriptor set has no entry message";
+
+/// The text of `error`.
+fn text(error: impl std::fmt::Display) -> String {
+    error.to_string()
 }
 
 /// The entry `bytes` hold, as [`to_json`] writes it.
 pub fn from_json(bytes: &[u8]) -> Result<Target, TargetError> {
-    let invalid = |why: String| TargetError::Invalid(why);
+    let descriptor = descriptor().ok_or(TargetError::Invalid(NO_DESCRIPTOR.to_owned()))?;
     let mut reader = serde_json::Deserializer::from_slice(bytes);
-    DynamicMessage::deserialize(descriptor()?, &mut reader)
-        .map_err(|e| invalid(e.to_string()))?
-        .transcode_to::<Target>()
-        .map_err(|e| invalid(e.to_string()))
+    DynamicMessage::deserialize(descriptor, &mut reader)
+        .map_err(text)
+        .and_then(|message| message.transcode_to::<Target>().map_err(text))
+        .map_err(TargetError::Invalid)
 }
 
 /// Writes `entry` as `target.json` in the staging directory `stage`, mode 0444, durably.
