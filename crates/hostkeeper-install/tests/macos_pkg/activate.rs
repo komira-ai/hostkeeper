@@ -644,3 +644,30 @@ fn activate_reports_io_error_for_a_missing_tree_a_failing_record_store_or_lock()
         "lock"
     );
 }
+
+/// Catches: a rollback after an `activate` that failed once its `installer` ran (`current` still
+/// names the previous version, so the core gives no `from`) leaving the files only the failed
+/// version installed, which then no receipt and no kept `Bom` would list.
+#[test]
+fn a_rollback_with_no_from_after_a_cut_short_update_deletes_what_the_failed_version_installed() {
+    let i = installed("act-cut-short");
+    let rig = &i.rig;
+    rig.mac.add(v2().with_install(other_bytes()));
+    let order2 = rig.order("2.0");
+    let dir2 = rig.stage(&order2, "svc-2.0");
+    let (files, record) = (rig.snapshot(), rig.records.get(SERVICE));
+    assert_eq!(
+        reason(rig.activate(&order2, &dir2, Some(&i.dir1))),
+        Reason::InstallerError
+    );
+    assert!(
+        rig.paths().contains(&home("lib/x")),
+        "the failed version's installer ran"
+    );
+    assert_eq!(
+        rig.activate(&i.order1, &i.dir1, None).unwrap(),
+        Activated { drift: None }
+    );
+    assert_eq!(rig.snapshot(), files, "{:?}", rig.paths());
+    assert_eq!(rig.records.get(SERVICE), record);
+}

@@ -54,11 +54,28 @@ impl MacosPkg<'_> {
             .records
             .load(&order.service)
             .map_err(|e| Failure::new(Reason::IoError, e.to_string()))?;
-        let drift = self.drift(&record, found.as_ref(), from, &old_tree)?;
-        let replaced: BTreeSet<String> = match (&drift, &found) {
-            (Some(_), Some(receipt)) => self.listed(order, receipt, deadline)?,
-            _ => files_of(&old_tree),
+        let reference = match from {
+            Some(old) => Some((old, &old_tree)),
+            None if record
+                .as_ref()
+                .is_some_and(|r| r.version == order.version.as_str()) =>
+            {
+                Some((dir, &tree))
+            }
+            None => None,
         };
+        let drift = self.drift(&record, found.as_ref(), reference)?;
+        // The files to delete once this version is installed: those of the version it replaces,
+        // and, when what is installed is not what the record proves (drift, or an `activate`
+        // cut short after its `installer` ran), every file the receipt lists now.
+        let cut_short = record.as_ref().is_some_and(|r| r.pending)
+            && found
+                .as_ref()
+                .is_some_and(|f| f.version != order.version.as_str());
+        let mut replaced: BTreeSet<String> = files_of(&old_tree);
+        if let (true, Some(receipt)) = (drift.is_some() || cut_short, &found) {
+            replaced.extend(self.listed(order, receipt, deadline)?);
+        }
 
         self.check_parents(&tree)?;
         self.check_owners(order, &tree, deadline)?;
@@ -113,14 +130,14 @@ impl MacosPkg<'_> {
 
     /// The drift the host shows against the record: a receipt at another version, a receipt with
     /// no record, a record with no receipt, or, at the recorded version, an installed file that
-    /// differs from the recorded version's tree. A pending record is an `activate` cut short,
-    /// not drift.
+    /// differs from the recorded version's tree (`reference`: the version `current` names, or
+    /// the version being activated when the record names it). A pending record is an `activate`
+    /// cut short, not drift.
     fn drift(
         &self,
         record: &Option<PkgRecord>,
         found: Option<&receipt::Receipt>,
-        from: Option<&Path>,
-        old_tree: &BTreeMap<String, Meta>,
+        reference: Option<(&Path, &BTreeMap<String, Meta>)>,
     ) -> Result<Option<Option<String>>, Failure> {
         let version = |r: Option<&receipt::Receipt>| r.map(|r| r.version.clone());
         match (record, found) {
@@ -128,8 +145,8 @@ impl MacosPkg<'_> {
             (None, None) => Ok(None),
             (None, Some(_)) | (Some(_), None) => Ok(Some(version(found))),
             (Some(r), Some(receipt)) if receipt.version != r.version => Ok(Some(version(found))),
-            (Some(_), Some(_)) => match from {
-                Some(old) => match self.differs(&old.join(TREE), old_tree)? {
+            (Some(_), Some(_)) => match reference {
+                Some((dir, tree)) => match self.differs(&dir.join(TREE), tree)? {
                     true => Ok(Some(version(found))),
                     false => Ok(None),
                 },

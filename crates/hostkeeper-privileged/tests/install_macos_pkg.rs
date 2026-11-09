@@ -18,8 +18,9 @@
 //!   lists, in the forms `hostkeeper_install` parses.
 //! - `a_signed_package_is_installed_updated_rolled_back_and_removed`: `stage` refuses an unsigned
 //!   package, one signed by a root the Mac does not trust and one whose leaf no signer names, then
-//!   install, update, rollback (after the test's root is taken out of the trust settings) and
-//!   removal of a two-version fixture.
+//!   install, update (the job enabled by launchd's own override), a hand install of the older
+//!   version found as drift and put back by the next install, rollback (after the test's root is
+//!   taken out of the trust settings) and removal of a two-version fixture.
 //!
 //! It runs as root and says so when it does not: it never skips. Like the other device tests it is
 //! not counted by the coverage gate.
@@ -37,7 +38,7 @@ use hostkeeper_install::host::Host;
 use hostkeeper_install::lock::InstallerLock;
 use hostkeeper_install::macos_pkg::record::{PkgRecord, RecordError, Records};
 use hostkeeper_install::macos_pkg::signers::{Fingerprint, Signers};
-use hostkeeper_install::macos_pkg::{Bounds, MacosPkg, Order, receipt, signature};
+use hostkeeper_install::macos_pkg::{Bounds, MacosPkg, Order, Seen, drift, receipt, signature};
 use hostkeeper_install::{Failure, HostTools, Reason};
 use hostkeeper_launchd::Label;
 use hostkeeper_testkit::Scratch;
@@ -598,6 +599,18 @@ impl Rig {
     }
 }
 
+/// Whether launchd's override enables `label`: `launchctl print-disabled system` prints
+/// `"<label>" => enabled` (or `=> false` on older releases) once `launchctl enable` ran.
+fn enabled_by_launchd(label: &str) -> bool {
+    let printed = run("/bin/launchctl", &["print-disabled", "system"]);
+    let key = format!("\"{label}\" =>");
+    printed.lines().any(|line| {
+        line.trim()
+            .strip_prefix(&key)
+            .is_some_and(|rest| matches!(rest.trim(), "enabled" | "false"))
+    })
+}
+
 /// The version of the receipt of the fixture's identifier; `None` when there is none.
 fn receipt_version() -> Option<String> {
     let out = run_any("/usr/sbin/pkgutil", &["--pkg-info-plist", IDENTIFIER]);
@@ -788,6 +801,46 @@ fn a_signed_package_is_installed_updated_rolled_back_and_removed() {
         record.created_dirs
     );
 
+    assert!(
+        enabled_by_launchd(SERVICE),
+        "activate enabled the job of the run label"
+    );
+
+    // (d') A hand install of 1.0.0 over 1.1.0 is drift, which the observer sees with no tool run
+    // and the next install of 1.1.0 (`current`, so no `from`) puts back as `drift_repaired`.
+    run(
+        "/usr/sbin/installer",
+        &[
+            "-allowUntrusted",
+            "-pkg",
+            text(&dir100.join("artifact")),
+            "-target",
+            "/",
+        ],
+    );
+    let mut seen = Seen::default();
+    let found = drift::observe(
+        &rig.host,
+        IDENTIFIER,
+        rig.records.get().as_ref(),
+        Some(&dir110),
+        &mut seen,
+    )
+    .expect("the observer reads the receipt")
+    .expect("the hand install is drift");
+    assert_eq!(
+        (found.found.as_deref(), found.recorded.as_deref()),
+        (Some("1.0.0"), Some("1.1.0"))
+    );
+    let repaired = rig
+        .installer(&signers)
+        .activate(&rig.order("1.1.0"), &dir110, None)
+        .unwrap_or_else(|f| panic!("{f}"));
+    assert_eq!(repaired.drift, Some(Some("1.0.0".to_owned())));
+    assert_eq!(receipt_version().as_deref(), Some("1.1.0"));
+    assert_absent(&format!("{SUPPORT}/legacy.txt"));
+    assert_installed(&format!("{SUPPORT}/lib/new.txt"), 0o644);
+
     // (e) Roll back to 1.0.0 with the test's root out of the trust settings: the kept package is
     // installed with `-allowUntrusted`, its signature not checked again.
     guard.untrust();
@@ -826,6 +879,12 @@ fn a_signed_package_is_installed_updated_rolled_back_and_removed() {
         assert_absent(&path);
     }
     assert_eq!(receipt_version(), None, "pkgutil forgot the receipt");
+    let pkgs = run("/usr/sbin/pkgutil", &["--pkgs"]);
+    assert!(
+        !pkgs.lines().any(|line| line.trim() == IDENTIFIER),
+        "pkgutil --pkgs lists no {IDENTIFIER}"
+    );
+
     assert!(
         fs::metadata("/Library/LaunchDaemons").is_ok(),
         "the directory that was there stays"

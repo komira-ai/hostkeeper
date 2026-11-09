@@ -353,3 +353,24 @@ fn a_receipt_listing_that_cannot_be_read_during_a_repair_is_io_error() {
         );
     }
 }
+
+/// Catches: an install of the version `current` already names (no `from`) putting a file edited
+/// by hand back without reporting `drift_repaired`.
+#[test]
+fn an_install_of_the_current_version_over_an_edited_file_repairs_it_as_drift() {
+    let i = installed("repair-same-version");
+    let files = i.rig.snapshot();
+    i.rig.write(&home("svc"), b"tampered program", 0o755);
+    assert_eq!(
+        i.rig.activate(&i.order1, &i.dir1, None).unwrap(),
+        Activated {
+            drift: Some(Some("1.0".into()))
+        }
+    );
+    assert_eq!(i.rig.snapshot(), files);
+    assert_eq!(
+        i.rig.activate(&i.order1, &i.dir1, None).unwrap(),
+        Activated { drift: None },
+        "once repaired, the same install finds nothing"
+    );
+}
