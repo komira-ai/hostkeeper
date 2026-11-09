@@ -13,7 +13,8 @@
 //! the step's `path`, and the tailnet join, which records what it was given, pings each host of
 //! its `ping` (a host that is not a node of the tailnet fails the step) and, for a channel served
 //! only on the tailnet, makes the channel reachable from then on. Each artifact holds what `release targets` reads of a release: hostkeeper's index, an
-//! archive per platform holding its `manifest.toml`, and each archive's bundle.
+//! archive per platform holding its `manifest.toml`, each archive's bundle, and its native
+//! packages with theirs.
 //!
 //! `gh`, `curl`, `cargo` and `rustup` on the `PATH` are the test program
 //! `tests/bin/gh_fixture.rs`, which answers from scratch files, so no test reaches GitHub or a
@@ -66,9 +67,12 @@ fn commit_of(version: &str) -> String {
     format!("{:0>40}", version.replace('.', ""))
 }
 
-/// The files of hostkeeper's release `version` that the job reads, by name.
+/// The files of hostkeeper's release `version` that the job reads, by name: its archives, their
+/// bundles and its index, and its native packages (its `.deb`s and its installer) with theirs.
 fn hostkeeper_files(version: &str) -> BTreeMap<String, Vec<u8>> {
-    package_files("hostkeeper", version, "index.json")
+    let mut files = package_files("hostkeeper", version, "index.json");
+    files.extend(release_files::native_files("hostkeeper", version));
+    files
 }
 
 /// The canonical release index of hostkeeper at `version`: one line, no final line break.
@@ -77,14 +81,15 @@ fn index(version: &str) -> String {
     String::from_utf8(files["index.json"].clone()).expect("UTF-8")
 }
 
-/// The targets the job must give for hostkeeper's release `version`.
+/// The targets the job must give for hostkeeper's release `version`: each platform's native
+/// entry, then its archive entry (docs/design/packages-native.md, item A23).
 fn targets(version: &str) -> String {
     release_files::targets(
         "hostkeeper",
         version,
         version,
         &hostkeeper_files(version),
-        false,
+        true,
     )
 }
 
@@ -461,8 +466,10 @@ fn the_set_desired_job_runs_only_when_the_channel_job_says_newest() {
 fn a_release_the_channel_serves_byte_for_byte_is_set_with_its_index_digest_and_targets() {
     // Catches: a job that does not pass on the published index and its SHA-256 exactly, or that
     // reads the channel at another path than `<channel>/hostkeeper/<version>/index.json`; and
-    // targets that are not one archive entry per platform of the release's own files (another
-    // store order, another asset path, another size or digest, no bundle, no floor).
+    // targets that are not, per platform of the release's own files, hostkeeper's native entry
+    // (its `.deb` from the testing suite, its installer from the testing store) and then one
+    // archive entry (another store order, another asset path, another size or digest, no
+    // bundle, no floor).
     let site = Site::new("served", &["1.2.10"], &["v1.2.9", "v1.2.10"]);
     site.serve("1.2.10", &index("1.2.10"));
     let ended = run(&site);
@@ -550,12 +557,16 @@ fn of_several_releases_the_targets_are_the_newest_ones() {
 }
 
 #[test]
-fn a_release_missing_an_archive_bundle_stops_the_job_before_the_set() {
-    // Catches: targets written for a release whose files do not all check out, or a failure of
-    // the targets step that the job goes on after: the set must not run with no targets.
+fn a_release_missing_an_archive_bundle_or_a_native_package_stops_the_job_before_the_set() {
+    // Catches: targets written for a release whose files do not all check out (an archive, a
+    // bundle, or one of hostkeeper's native packages, whose entry would pin bytes no store
+    // holds), or a failure of the targets step that the job goes on after: the set must not run
+    // with no targets.
     for (n, withheld) in [
         "hostkeeper-1.2.10-macos-arm64.tar.zst.sigstore.json",
         "hostkeeper-1.2.10-linux-arm64.tar.zst",
+        "hostkeeper_1.2.10_amd64.deb",
+        "hostkeeper-1.2.10-macos-arm64.pkg.sigstore.json",
     ]
     .into_iter()
     .enumerate()

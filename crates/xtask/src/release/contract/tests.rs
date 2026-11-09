@@ -390,12 +390,15 @@ fn a_macos_platform_has_a_binary_a_package_an_installer_and_an_sbom_but_no_linux
 }
 
 #[test]
-fn the_native_packages_are_hellos_on_every_platform_and_mdms_on_linux_x86_64_each_attested() {
-    // Catches: a native package named other than the one `release deb` and `release macos-pkg`
-    // write, one shipped for a platform its package is not built for (mdm on arm64 or macOS),
-    // hostkeeper's own `.deb` or hello's failing build given a native name of this kind (the
-    // failing build's version is not X.Y.Z, which the shared repository's index requires), and
-    // a native package without its bundle or with a `.sha256` it does not have.
+fn the_native_packages_are_hostkeepers_and_hellos_on_every_platform_and_mdms_on_linux_x86_64_each_attested()
+ {
+    // Catches: a native package named other than the one `release deb`, `release macos-pkg` and
+    // nfpm write, one shipped for a platform its package is not built for (mdm on arm64 or
+    // macOS), hostkeeper's own native packages named other than the daemon's `.deb` and the
+    // installer the release ships (its entry would pin a file the release does not have), hello's
+    // failing build given a native name (its version is not X.Y.Z, which the shared repository's
+    // index requires), a native package without its bundle or with a `.sha256` it does not have,
+    // and an asset listed twice.
     let v = version("0.2.1");
     let names = |package: Package| -> Vec<Option<String>> {
         Platform::RELEASED
@@ -415,11 +418,25 @@ fn the_native_packages_are_hellos_on_every_platform_and_mdms_on_linux_x86_64_eac
         names(Package::Mdm),
         [Some("mdm_0.2.1_amd64.deb".to_owned()), None, None]
     );
-    assert_eq!(names(Package::Hostkeeper), [None, None, None]);
+    assert_eq!(
+        names(Package::Hostkeeper),
+        [
+            Some("hostkeeper_0.2.1_amd64.deb".to_owned()),
+            Some("hostkeeper_0.2.1_arm64.deb".to_owned()),
+            Some(installer_name(&v)),
+        ]
+    );
+    assert_eq!(installer_name(&v), "hostkeeper-0.2.1-macos-arm64.pkg");
     assert_eq!(names(Package::HelloFailReady), [None, None, None]);
     let all = asset_names(&v, &Platform::RELEASED);
+    let mut once = all.clone();
+    once.dedup();
+    assert_eq!(once, all, "every asset is listed once");
     let attested = attested_names(&v);
     for native in [
+        "hostkeeper_0.2.1_amd64.deb",
+        "hostkeeper_0.2.1_arm64.deb",
+        "hostkeeper-0.2.1-macos-arm64.pkg",
         "hello_0.2.1_amd64.deb",
         "hello_0.2.1_arm64.deb",
         "hello-0.2.1-macos-arm64.pkg",

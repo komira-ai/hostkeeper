@@ -2,8 +2,9 @@
 //! tests of the workflows' jobs ([`super::channel_run_tests`], [`super::hello_run_tests`]): an
 //! archive per platform holding only its `manifest.toml`, each archive's bundle (unsigned, its
 //! statement listing the archive's SHA-256), and the canonical release index of the archives;
-//! for hello, its native packages ([`native_files`]): a `.deb` per Linux architecture holding
-//! only its `control`, and in place of the `.pkg` bytes of its own, each with its bundle. And
+//! for hostkeeper and hello, their native packages ([`native_files`]): a `.deb` per Linux
+//! architecture holding only its `control`, and in place of the `.pkg` bytes of its own, each
+//! with its bundle. And
 //! the targets the verb must write for them, written here from the files themselves.
 
 use std::collections::BTreeMap;

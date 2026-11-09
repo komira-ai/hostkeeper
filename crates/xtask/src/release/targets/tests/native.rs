@@ -280,6 +280,45 @@ fn every_problem_of_the_native_packages_is_named_at_once_and_nothing_is_written(
 }
 
 #[test]
+fn hostkeepers_release_without_its_installer_or_with_another_packages_deb_is_refused() {
+    // Catches: hostkeeper's list written with a pin no store holds (its installer missing), or
+    // with the coordinator's `.deb` under the daemon's name (both are built by nfpm into one
+    // directory), which a host's apt would install as another package; and the verb stopping at
+    // the first of the two.
+    let (root, dist) = dist("targets-hostkeeper-native-problems");
+    built(&dist, Package::Hostkeeper);
+    let output = root.join("github_output");
+    let files = vec![native_hello::File {
+        path: "/usr/bin/hostkeeper-coordinator".to_owned(),
+        mode: 0o755,
+        data: b"a program".to_vec(),
+    }];
+    let coordinator = native_deb::build(
+        "hostkeeper-coordinator",
+        "0.1.5",
+        "amd64",
+        "a coordinator",
+        &files,
+        1_800_000_000,
+    )
+    .expect("a .deb");
+    replace_native(&dist, "hostkeeper_0.1.5_amd64.deb", &coordinator);
+    std::fs::remove_file(dist.join("hostkeeper-0.1.5-macos-arm64.pkg")).expect("remove");
+    assert_eq!(
+        targets(&request(&dist, Package::Hostkeeper, Some(output.clone()))),
+        Err(Error::Refused(vec![
+            "hostkeeper_0.1.5_amd64.deb: its control names the Package hostkeeper-coordinator, \
+             not hostkeeper"
+                .to_owned(),
+            "hostkeeper-0.1.5-macos-arm64.pkg: missing: the release ships the native package of \
+             every platform it lists"
+                .to_owned(),
+        ]))
+    );
+    assert!(!output.exists(), "nothing is written on a refusal");
+}
+
+#[test]
 fn a_bundle_without_its_native_package_is_not_read() {
     // Catches: a bundle checked against a package that is not there (there are no bytes to hold
     // it to), naming a second problem for the one missing file.

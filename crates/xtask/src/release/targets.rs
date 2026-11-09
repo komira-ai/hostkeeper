@@ -22,31 +22,36 @@
 //! location is the release asset itself, for a host whose `stores.toml` defines that store. A
 //! daemon skips a store it does not define (section 7.4).
 //!
-//! **The native entry** (docs/design/packages-native.md section 10.6, item A21). hello's
-//! (stage 7) and mdm's (stage 8) lists hold the native entry of the platform before the archive
-//! one, so a host whose daemon announces the native installer moves to it and any other host
-//! keeps its archive. The native packages are the release's assets ([`Package::native_name`])
-//! that the release publishes to the project's repository: a `.deb` to the suite `testing`, a
-//! `.pkg` to the installers' `testing` directory ([`crate::channels::spec`]).
+//! **The native entry** (docs/design/packages-native.md section 10.6, items A21 and A23).
+//! hello's (stage 7), mdm's and hostkeeper's own (stage 8) lists hold the native entry of the
+//! platform before the archive one, so a host whose daemon announces the native installer moves
+//! to it and any other host keeps its archive. The native packages are the release's assets
+//! ([`Package::native_name`]) that the release publishes to the project's repository: a `.deb`
+//! to the suite `testing`, a `.pkg` to the installers' `testing` directory
+//! ([`crate::channels::spec`]). hostkeeper's are the daemon's `.deb` and the installer, the
+//! packages that bootstrap a host (section 10.4).
 //!
 //! ```text
 //! Linux   installer apt, repository komira-testing (the host's entry of the testing suite),
 //!         package_version the release's, digest the .deb's SHA-256 (the pin); no location,
 //!         no size, no attestation
-//! macOS   installer macos-pkg, location komira-testing hostkeeper/<release>/hello-<release>-
+//! macOS   installer macos-pkg, location komira-testing hostkeeper/<release>/<service>-<release>-
 //!         macos-arm64.pkg (the Mac's store of the testing directory, rooted at pkg/),
 //!         digest and bytes the .pkg's; no attestation (the key and the pin bind the bytes,
 //!         packages-native.md section 10.3)
 //! manifest the archive's own manifest.toml as an entry's manifest: its hook without the
-//!         command (the package's hook is its program at the fixed path), its run units, health
-//!         URL, params and min_hostkeeper; `package` the package's name (`hello`, `mdm`, or the
-//!         .pkg's identifier); the installer's bounds ([`INSTALLER_BOUNDS`])
+//!         command (the package's hook is its program at the fixed path; hostkeeper's package
+//!         has none, and its daemon runs built-in steps), its run units, health URL, params and
+//!         min_hostkeeper (hostkeeper's: `OLDEST_READER`, as its archive's); `package` the
+//!         package's name (`hostkeeper`, `hello`, `mdm`) or the .pkg's identifier (hostkeeper's
+//!         the daemon's launchd label, hello's its own); the installer's bounds
+//!         ([`INSTALLER_BOUNDS`])
 //! ```
 //!
 //! Each native package must be a regular file whose bundle lists its SHA-256, and a `.deb`'s
-//! `control` must name the service, the version and the architecture. hostkeeper's own list
-//! gains its native entry with item A23, and hello's failing build has none: its version is not
-//! the `X.Y.Z` the shared repository takes, so it is not published there.
+//! `control` must name the service, the version and the architecture. hello's failing build has
+//! no native entry: its version is not the `X.Y.Z` the shared repository takes, so it is not
+//! published there.
 //!
 //! Everything is checked before anything is written, and a refusal lists every problem found:
 //! the index as `release channel-stage` checks it (canonical, of the service at the version);
@@ -82,7 +87,7 @@ use super::channel_stage::{
 };
 use super::contract::{Package, Platform, Repo, Version, bundle_of};
 use super::native::pkg::IDENTIFIER as HELLO_PKG_IDENTIFIER;
-use super::{Error, answer};
+use super::{Error, answer, macos_pkg};
 use crate::channels::apt::{control, deb};
 use crate::channels::spec;
 
@@ -177,8 +182,8 @@ pub(crate) fn targets(request: &Request) -> Result<Vec<String>, Error> {
     for entry in index.packages() {
         let (target, archive) = entry_of(request, &service, &version, &tag, entry, &mut problems)?;
         let mut entries = Vec::new();
-        // hello's and mdm's lists hold their native entry first (stages 7 and 8); hostkeeper's
-        // gains its own with item A23, and hello's failing build has none.
+        // hello's (stage 7), mdm's and hostkeeper's (stage 8) lists hold their native entry
+        // first; hello's failing build has none.
         if let Some(name) = package.native_name(&request.version, release_platform(entry.platform))
         {
             let native = native_of(
@@ -316,11 +321,16 @@ fn native_of(
                 .map(|why| format!("{name}: {why}")),
         );
     }
-    let (installer, package_name) = match linux {
-        Some(_) => (Installer::Apt, service.as_str()),
-        None => (Installer::MacosPkg, HELLO_PKG_IDENTIFIER),
+    // A `.deb` is installed by its control's `Package`, the service; a `.pkg` by its identifier:
+    // hostkeeper's installer's is the daemon's launchd label, which its daemon takes as its own
+    // package, and hello's is its own (mdm has no `.pkg`).
+    let (installer, package_name) = match (linux, package) {
+        (Some(_), _) => (Installer::Apt, service.as_str().to_owned()),
+        (None, Package::Hostkeeper) => (Installer::MacosPkg, macos_pkg::identifier()),
+        (None, _) => (Installer::MacosPkg, HELLO_PKG_IDENTIFIER.to_owned()),
     };
-    let manifest = match archive.map(|(floor, table)| native_manifest(table, package_name, floor)) {
+    let manifest = match archive.map(|(floor, table)| native_manifest(table, &package_name, floor))
+    {
         Some(Ok(manifest)) => manifest,
         Some(Err(why)) => {
             let archive = package.package_name(&request.version, platform);
