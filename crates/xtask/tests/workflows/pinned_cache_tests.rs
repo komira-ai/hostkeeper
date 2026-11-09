@@ -24,7 +24,7 @@ const RESTORE: &str = "      - id: gh-cache
 
 const DOWNLOAD: &str = "      - id: gh-download
         if: ${{ steps.gh-cache.outputs.cache-hit != 'true' }}
-        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 5 --retry-delay 5 --retry-max-time 300 --retry-all-errors --silent --show-error --location --output \"$RUNNER_TEMP/gh.tar.gz\" \"https://github.com/cli/cli/releases/download/v$GH_VERSION/gh_${GH_VERSION}_linux_amd64.tar.gz\"
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --output \"$RUNNER_TEMP/gh.tar.gz\" \"https://github.com/cli/cli/releases/download/v$GH_VERSION/gh_${GH_VERSION}_linux_amd64.tar.gz\"
 ";
 
 const NOTE: &str = "      - if: ${{ !cancelled() && steps.gh-download.outcome == 'failure' }}
@@ -150,7 +150,7 @@ fn a_release_download_without_its_check_is_refused() {
     );
     let curl = |rest: &str| {
         format!(
-            "      - run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 5 --retry-delay 5 --retry-max-time 300 --retry-all-errors {rest}\n"
+            "      - run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors {rest}\n"
         )
     };
     let asset = "https://github.com/o/r/releases/download/v1/a.tgz";

@@ -240,7 +240,7 @@ jobs:
       - name: Download gh on a cache miss (HTTPS only, redirects included)
         id: gh-download
         if: ${{ steps.gh-cache.outputs.cache-hit != 'true' }}
-        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 5 --retry-delay 5 --retry-max-time 300 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/gh.zip" "https://github.com/cli/cli/releases/download/v$GH_VERSION/gh_${GH_VERSION}_macOS_arm64.zip"
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/gh.zip" "https://github.com/cli/cli/releases/download/v$GH_VERSION/gh_${GH_VERSION}_macOS_arm64.zip"
       - name: Say why the job stops when gh.zip is neither cached nor downloadable
         if: ${{ !cancelled() && steps.gh-download.outcome == 'failure' }}
         run: echo "::error::gh.zip is not in the actions cache and its download from GitHub failed, so this job cannot go on until GitHub serves it again"
@@ -268,7 +268,7 @@ jobs:
       - name: Download the previous release on a cache miss (HTTPS only, redirects included)
         id: previous-release-download
         if: ${{ steps.previous-release-cache.outputs.cache-hit != 'true' }}
-        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 5 --retry-delay 5 --retry-max-time 300 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/previous-release.tar.gz" "$PREVIOUS_RELEASE_URL"
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/previous-release.tar.gz" "$PREVIOUS_RELEASE_URL"
       - name: Say why the job stops when previous-release.tar.gz is neither cached nor downloadable
         if: ${{ !cancelled() && steps.previous-release-download.outcome == 'failure' }}
         run: echo "::error::previous-release.tar.gz is not in the actions cache and its download from GitHub failed, so this job cannot go on until GitHub serves it again"
@@ -369,7 +369,7 @@ jobs:
       - name: Download gh on a cache miss (HTTPS only, redirects included)
         id: gh-download
         if: ${{ steps.gh-cache.outputs.cache-hit != 'true' }}
-        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 5 --retry-delay 5 --retry-max-time 300 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/gh.tar.gz" "https://github.com/cli/cli/releases/download/v$GH_VERSION/gh_${GH_VERSION}_linux_amd64.tar.gz"
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/gh.tar.gz" "https://github.com/cli/cli/releases/download/v$GH_VERSION/gh_${GH_VERSION}_linux_amd64.tar.gz"
       - name: Say why the job stops when gh.tar.gz is neither cached nor downloadable
         if: ${{ !cancelled() && steps.gh-download.outcome == 'failure' }}
         run: echo "::error::gh.tar.gz is not in the actions cache and its download from GitHub failed, so this job cannot go on until GitHub serves it again"
@@ -395,7 +395,7 @@ jobs:
       - name: Download the previous release on a cache miss (HTTPS only, redirects included)
         id: previous-release-download
         if: ${{ steps.previous-release-cache.outputs.cache-hit != 'true' }}
-        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 5 --retry-delay 5 --retry-max-time 300 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/previous-release.tar.gz" "$PREVIOUS_RELEASE_URL"
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/previous-release.tar.gz" "$PREVIOUS_RELEASE_URL"
       - name: Say why the job stops when previous-release.tar.gz is neither cached nor downloadable
         if: ${{ !cancelled() && steps.previous-release-download.outcome == 'failure' }}
         run: echo "::error::previous-release.tar.gz is not in the actions cache and its download from GitHub failed, so this job cannot go on until GitHub serves it again"
@@ -423,7 +423,7 @@ jobs:
       - name: Download nfpm on a cache miss (HTTPS only, redirects included)
         id: nfpm-download
         if: ${{ steps.nfpm-cache.outputs.cache-hit != 'true' }}
-        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 5 --retry-delay 5 --retry-max-time 300 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/nfpm.tar.gz" "https://github.com/goreleaser/nfpm/releases/download/v$NFPM_VERSION/nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz"
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/nfpm.tar.gz" "https://github.com/goreleaser/nfpm/releases/download/v$NFPM_VERSION/nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz"
       - name: Say why the job stops when nfpm.tar.gz is neither cached nor downloadable
         if: ${{ !cancelled() && steps.nfpm-download.outcome == 'failure' }}
         run: echo "::error::nfpm.tar.gz is not in the actions cache and its download from GitHub failed, so this job cannot go on until GitHub serves it again"
@@ -547,7 +547,7 @@ jobs:
       - name: Download nfpm on a cache miss (HTTPS only, redirects included)
         id: nfpm-download
         if: ${{ steps.nfpm-cache.outputs.cache-hit != 'true' }}
-        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 5 --retry-delay 5 --retry-max-time 300 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/nfpm.tar.gz" "https://github.com/goreleaser/nfpm/releases/download/v$NFPM_VERSION/nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz"
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/nfpm.tar.gz" "https://github.com/goreleaser/nfpm/releases/download/v$NFPM_VERSION/nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz"
       - name: Say why the job stops when nfpm.tar.gz is neither cached nor downloadable
         if: ${{ !cancelled() && steps.nfpm-download.outcome == 'failure' }}
         run: echo "::error::nfpm.tar.gz is not in the actions cache and its download from GitHub failed, so this job cannot go on until GitHub serves it again"

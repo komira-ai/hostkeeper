@@ -195,7 +195,7 @@ jobs:
       - name: Download cargo-cyclonedx on a cache miss (HTTPS only, redirects included)
         id: cyclonedx-download
         if: ${{ steps.cyclonedx-cache.outputs.cache-hit != 'true' }}
-        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 5 --retry-delay 5 --retry-max-time 300 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/cyclonedx.tar.xz" "https://github.com/CycloneDX/cyclonedx-rust-cargo/releases/download/cargo-cyclonedx-$CYCLONEDX_VERSION/cargo-cyclonedx-$TARGET.tar.xz"
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/cyclonedx.tar.xz" "https://github.com/CycloneDX/cyclonedx-rust-cargo/releases/download/cargo-cyclonedx-$CYCLONEDX_VERSION/cargo-cyclonedx-$TARGET.tar.xz"
       - name: Say why the job stops when cyclonedx.tar.xz is neither cached nor downloadable
         if: ${{ !cancelled() && steps.cyclonedx-download.outcome == 'failure' }}
         run: echo "::error::cyclonedx.tar.xz is not in the actions cache and its download from GitHub failed, so this job cannot go on until GitHub serves it again"
@@ -224,7 +224,7 @@ jobs:
         if: ${{ steps.nfpm-cache.outputs.cache-hit != 'true' }}
         env:
           ARCHIVE: ${{ matrix.nfpm-archive }}
-        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 5 --retry-delay 5 --retry-max-time 300 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/nfpm.tar.gz" "https://github.com/goreleaser/nfpm/releases/download/v$NFPM_VERSION/nfpm_${NFPM_VERSION}_$ARCHIVE.tar.gz"
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/nfpm.tar.gz" "https://github.com/goreleaser/nfpm/releases/download/v$NFPM_VERSION/nfpm_${NFPM_VERSION}_$ARCHIVE.tar.gz"
       - name: Say why the job stops when nfpm.tar.gz is neither cached nor downloadable
         if: ${{ !cancelled() && steps.nfpm-download.outcome == 'failure' }}
         run: echo "::error::nfpm.tar.gz is not in the actions cache and its download from GitHub failed, so this job cannot go on until GitHub serves it again"
@@ -305,7 +305,7 @@ jobs:
         if: ${{ steps.gh-cache.outputs.cache-hit != 'true' }}
         env:
           ARCH: ${{ matrix.deb-arch }}
-        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 5 --retry-delay 5 --retry-max-time 300 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/gh.tar.gz" "https://github.com/cli/cli/releases/download/v$GH_VERSION/gh_${GH_VERSION}_linux_$ARCH.tar.gz"
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/gh.tar.gz" "https://github.com/cli/cli/releases/download/v$GH_VERSION/gh_${GH_VERSION}_linux_$ARCH.tar.gz"
       - name: Say why the job stops when gh.tar.gz is neither cached nor downloadable
         if: ${{ !cancelled() && steps.gh-download.outcome == 'failure' }}
         run: echo "::error::gh.tar.gz is not in the actions cache and its download from GitHub failed, so this job cannot go on until GitHub serves it again"
@@ -499,7 +499,7 @@ jobs:
       - name: Download cargo-cyclonedx on a cache miss (HTTPS only, redirects included)
         id: cyclonedx-download
         if: ${{ steps.cyclonedx-cache.outputs.cache-hit != 'true' }}
-        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 5 --retry-delay 5 --retry-max-time 300 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/cyclonedx.tar.xz" "https://github.com/CycloneDX/cyclonedx-rust-cargo/releases/download/cargo-cyclonedx-$CYCLONEDX_VERSION/cargo-cyclonedx-$TARGET.tar.xz"
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/cyclonedx.tar.xz" "https://github.com/CycloneDX/cyclonedx-rust-cargo/releases/download/cargo-cyclonedx-$CYCLONEDX_VERSION/cargo-cyclonedx-$TARGET.tar.xz"
       - name: Say why the job stops when cyclonedx.tar.xz is neither cached nor downloadable
         if: ${{ !cancelled() && steps.cyclonedx-download.outcome == 'failure' }}
         run: echo "::error::cyclonedx.tar.xz is not in the actions cache and its download from GitHub failed, so this job cannot go on until GitHub serves it again"
@@ -569,7 +569,7 @@ jobs:
       - name: Download gh on a cache miss (HTTPS only, redirects included)
         id: gh-download
         if: ${{ steps.gh-cache.outputs.cache-hit != 'true' }}
-        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 5 --retry-delay 5 --retry-max-time 300 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/gh.zip" "https://github.com/cli/cli/releases/download/v$GH_VERSION/gh_${GH_VERSION}_macOS_arm64.zip"
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/gh.zip" "https://github.com/cli/cli/releases/download/v$GH_VERSION/gh_${GH_VERSION}_macOS_arm64.zip"
       - name: Say why the job stops when gh.zip is neither cached nor downloadable
         if: ${{ !cancelled() && steps.gh-download.outcome == 'failure' }}
         run: echo "::error::gh.zip is not in the actions cache and its download from GitHub failed, so this job cannot go on until GitHub serves it again"
