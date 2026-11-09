@@ -90,6 +90,7 @@ impl Mac {
             trusted_root_max_age_days: NonZeroU64::MIN,
         };
         let files = HostFiles {
+            repositories: None,
             os_root: self.root().join("os"),
             ca_bundle: self.root().join("ca.pem"),
             gh: self.root().join("gh"),
