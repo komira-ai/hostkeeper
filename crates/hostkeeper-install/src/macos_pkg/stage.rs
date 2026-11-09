@@ -11,7 +11,8 @@
 //!
 //! The payload's hook, at its fixed path, is checked with the payload ([`hook`]).
 //!
-//! No package script runs and no tool fetches: `pkgutil` only reads the file, and `lsbom` the
+//! No package script runs at `stage` and no tool fetches (hostkeeper's own `.pkg`, [`own`], may carry
+//! the script `postinstall`, which `installer` runs at `activate`, not here): `pkgutil` only reads the file, and `lsbom` the
 //! `Bom`. The signature is checked before anything is expanded.
 
 use std::fs;
@@ -20,7 +21,7 @@ use std::path::Path;
 
 use super::payload::{self, LSBOM_ARGS};
 use super::{
-    ARTIFACT, INSTALLER_PKG, META, MacosPkg, Order, TREE, arg, hook, io, shape, signature,
+    ARTIFACT, INSTALLER_PKG, META, MacosPkg, Order, TREE, arg, hook, io, own, shape, signature,
 };
 use crate::host::{self, remove_tree};
 use crate::outcome::{Failure, Reason};
@@ -78,7 +79,8 @@ impl MacosPkg<'_> {
         }
         let invalid =
             |e: &dyn std::fmt::Display| Failure::new(Reason::ManifestInvalid, e.to_string());
-        let component = shape::check(&expanded, &order.identifier, order.version.as_str())
+        let own = own::is_own(order.service.as_str(), &order.identifier);
+        let component = shape::check(&expanded, &order.identifier, order.version.as_str(), own)
             .map_err(|e| match e.is_scripts() {
                 true => Failure::new(Reason::PackageScripts, e.to_string()),
                 false => invalid(&e),
@@ -106,10 +108,14 @@ impl MacosPkg<'_> {
             .map_err(|e| invalid(&e))?;
         let walked = host::walk(&component.payload(), self.host.ids())
             .map_err(|e| io("the expanded payload", e))?;
-        payload::check(&bom, &walked, order.service.as_str(), &order.run)
-            .map_err(|e| invalid(&e))?;
+        match own {
+            true => own::check(&bom, &walked),
+            false => payload::check(&bom, &walked, order.service.as_str(), &order.run),
+        }
+        .map_err(|e| invalid(&e))?;
         hook::check(&walked, order.service.as_str(), order.boot).map_err(|e| invalid(&e))?;
-        payload::check_jobs(&component.payload(), &bom, &order.run).map_err(|e| invalid(&e))?;
+        payload::check_jobs(&component.payload(), &bom, &order.run, !own)
+            .map_err(|e| invalid(&e))?;
 
         let meta = staging.join(META);
         fs::create_dir(&meta).map_err(|e| io("the staging directory", e))?;

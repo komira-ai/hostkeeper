@@ -963,4 +963,6 @@ pub(crate) fn check(
 #[cfg(test)]
 mod check_tests;
 #[cfg(test)]
+mod own_tests;
+#[cfg(test)]
 pub(crate) mod tests;

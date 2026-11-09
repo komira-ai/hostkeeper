@@ -3,7 +3,8 @@
 //! same kinds, modes and owners; every entry is root's, of group `wheel` or `admin`, with no
 //! setuid, setgid or sticky bit, writable by neither group nor others, no device or fifo, and at
 //! a path of the payload rule; every `run` label is the plist of its path in the payload, of that
-//! `Label`, `Disabled`, whose program is a file of the payload.
+//! `Label`, `Disabled`, whose program is a file of the payload. hostkeeper's own `.pkg` is held to
+//! its own list of paths instead, and its job need not be `Disabled` ([`super::own`]).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -57,6 +58,12 @@ pub enum PayloadError {
     Special(String),
     #[error("{0} is outside {1}/ and the run labels' plists")]
     Outside(String, String),
+    #[error("{0} is not on hostkeeper's own package's list")]
+    OutsideOwn(String),
+    #[error(
+        "{0} is {1:?} with mode {2:o}, and hostkeeper's own package lists {3:?} with mode {4:o}"
+    )]
+    OwnEntry(String, Kind, u32, Kind, u32),
     #[error("{0} must be a directory")]
     NotDir(String),
     #[error("the run label {0} has no plist {1} in the payload")]
@@ -107,30 +114,39 @@ pub fn check(
     service: &str,
     run: &[Label],
 ) -> Result<(), PayloadError> {
+    let plists: BTreeSet<String> = run.iter().map(plist_path).collect();
+    let home = service_dir(service);
+    check_with(bom, payload, &|path, meta| {
+        entry(path, meta, &home, &plists)
+    })
+}
+
+/// [`check`] with the rule of one entry given: the `Bom` and the payload list the same paths with
+/// the same kinds, modes and owners, and `rule` accepts each entry.
+pub fn check_with(
+    bom: &BTreeMap<String, Meta>,
+    payload: &BTreeMap<String, Meta>,
+    rule: &dyn Fn(&str, &Meta) -> Result<(), PayloadError>,
+) -> Result<(), PayloadError> {
     if let Some(path) = bom.keys().find(|path| !payload.contains_key(*path)) {
         return Err(PayloadError::NotInPayload(path.clone()));
     }
     if let Some(path) = payload.keys().find(|path| !bom.contains_key(*path)) {
         return Err(PayloadError::NotInBom(path.clone()));
     }
-    let plists: BTreeSet<String> = run.iter().map(plist_path).collect();
-    let home = service_dir(service);
     for (path, listed) in bom {
         let found = payload[path];
         if *listed != found {
             return Err(PayloadError::Differs(path.clone(), *listed, found));
         }
-        entry(path, listed, &home, &plists)?;
+        rule(path, listed)?;
     }
     Ok(())
 }
 
-fn entry(
-    path: &str,
-    meta: &Meta,
-    home: &str,
-    plists: &BTreeSet<String>,
-) -> Result<(), PayloadError> {
+/// The rules every entry of every package keeps: owned by root, of group `wheel` or `admin`, no
+/// setuid, setgid or sticky bit, not writable by group or others, no device or fifo.
+pub fn owned(path: &str, meta: &Meta) -> Result<(), PayloadError> {
     if meta.uid != 0 {
         return Err(PayloadError::NotRoot(path.into(), meta.uid));
     }
@@ -143,6 +159,16 @@ fn entry(
     if meta.kind == Kind::Other {
         return Err(PayloadError::Special(path.into()));
     }
+    Ok(())
+}
+
+fn entry(
+    path: &str,
+    meta: &Meta,
+    home: &str,
+    plists: &BTreeSet<String>,
+) -> Result<(), PayloadError> {
+    owned(path, meta)?;
     let under_home = path == home || path.starts_with(&format!("{home}/"));
     if ABOVE.contains(&path) {
         return match meta.kind {
@@ -157,12 +183,13 @@ fn entry(
 }
 
 /// Checks each `run` label's plist in the expanded payload at `payload` (which stands for `/`):
-/// its `Label`, `Disabled` true, and a program (`Program`, else the first of `ProgramArguments`)
+/// its `Label`, `Disabled` true when `disabled` (not for hostkeeper's own job, which its script loads: [`super::own`]), and a program (`Program`, else the first of `ProgramArguments`)
 /// that is a file of `bom`.
 pub fn check_jobs(
     payload: &Path,
     bom: &BTreeMap<String, Meta>,
     run: &[Label],
+    disabled: bool,
 ) -> Result<(), PayloadError> {
     for label in run {
         let path = plist_path(label);
@@ -186,7 +213,8 @@ pub fn check_jobs(
                 label.as_str().into(),
             ));
         }
-        if job.get("Disabled").and_then(Value::as_boolean) != Some(true) {
+        let not_disabled = job.get("Disabled").and_then(Value::as_boolean) != Some(true);
+        if disabled & not_disabled {
             return Err(PayloadError::NotDisabled(path));
         }
         let program = program(job).unwrap_or_default();
