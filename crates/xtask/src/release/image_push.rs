@@ -120,13 +120,20 @@ impl<E: Exec> Registry for SkopeoCli<E> {
     }
 }
 
-/// The real wait: says why on standard error, then sleeps.
-pub(crate) struct Sleep;
+/// What the real wait says on standard error before it sleeps `secs` after an attempt that failed
+/// for `why`.
+pub(crate) fn notice(secs: u64, why: &str) -> String {
+    format!("{why}; trying again in {secs} seconds")
+}
+
+/// The real wait: says [`notice`] on standard error, then sleeps through its function (the wired
+/// one is `std::thread::sleep`; a test hands in one that records the duration).
+pub(crate) struct Sleep(pub(crate) fn(std::time::Duration));
 
 impl Wait for Sleep {
     fn wait(&self, secs: u64, why: &str) {
-        eprintln!("{why}; trying again in {secs} seconds");
-        std::thread::sleep(std::time::Duration::from_secs(secs));
+        eprintln!("{}", notice(secs, why));
+        (self.0)(std::time::Duration::from_secs(secs));
     }
 }
 

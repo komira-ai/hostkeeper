@@ -313,7 +313,28 @@ fn the_push_image_verb_pushes_the_layout_it_is_given_through_the_registry_port()
 }
 
 #[test]
-fn the_real_wait_of_no_seconds_returns() {
-    // Catches: the real wait wired in panicking or blocking; nothing is timed.
-    Sleep.wait(0, "attempt 1 of 5 failed: a reason");
+fn the_real_wait_says_why_and_sleeps_the_seconds_it_is_given() {
+    // Catches: the real wait sleeping another duration than the attempt's (minutes read as
+    // seconds, or no sleep at all), or a failed attempt left unsaid while the job waits.
+    thread_local! {
+        static SLEPT: std::cell::RefCell<Vec<std::time::Duration>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+    fn record(d: std::time::Duration) {
+        SLEPT.with(|s| s.borrow_mut().push(d));
+    }
+    let wait = Sleep(record);
+    wait.wait(240, "attempt 3 of 5 failed: skopeo copy: unauthorized");
+    wait.wait(0, "attempt 1 of 5 failed: r");
+    assert_eq!(
+        SLEPT.with(|s| s.borrow().clone()),
+        [
+            std::time::Duration::from_secs(240),
+            std::time::Duration::ZERO
+        ]
+    );
+    assert_eq!(
+        notice(240, "attempt 3 of 5 failed: skopeo copy: unauthorized"),
+        "attempt 3 of 5 failed: skopeo copy: unauthorized; trying again in 240 seconds"
+    );
 }

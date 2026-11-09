@@ -22,6 +22,7 @@ pub(crate) struct Wired<E> {
     curl: mdm_fetch::CurlCli<E>,
     deny: DenyCli<E>,
     skopeo: image_push::SkopeoCli<E>,
+    sleep: image_push::Sleep,
 }
 
 impl<E: Exec + Clone> Wired<E> {
@@ -34,6 +35,7 @@ impl<E: Exec + Clone> Wired<E> {
             curl: mdm_fetch::CurlCli::new(exec.clone()),
             deny: DenyCli::new(exec.clone()),
             skopeo: image_push::SkopeoCli::new(exec),
+            sleep: image_push::Sleep(std::thread::sleep),
         }
     }
 }
@@ -51,7 +53,7 @@ impl<E: Exec> Adapters for Wired<E> {
             advisories: &self.deny,
             download: &self.curl,
             registry: &self.skopeo,
-            wait: &image_push::Sleep,
+            wait: &self.sleep,
         }
     }
 }
