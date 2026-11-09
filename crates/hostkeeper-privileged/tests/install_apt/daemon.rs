@@ -93,7 +93,10 @@ pub fn daemon_with(rig: &Rig, store: Arc<dyn Packages>) -> (Daemon, Vec<String>,
     fs::set_permissions(BASE, fs::Permissions::from_mode(0o755)).expect("its mode");
     let scratch = Scratch::under(Path::new(BASE), "apt-daemon").expect("the daemon's directory");
     let base = scratch.path().to_path_buf();
-    fs::set_permissions(&base, fs::Permissions::from_mode(0o755)).expect("its mode");
+    // Closed to others, as the rig's own work directory under the runner's home is: apt then
+    // fetches and verifies as root, which reads the rig's key and repository there, and not as
+    // `_apt`, which cannot (on a host the key and the work directory are readable to `_apt`).
+    fs::set_permissions(&base, fs::Permissions::from_mode(0o700)).expect("its mode");
     let (state, packages, placed) = (
         base.join("state"),
         base.join("packages"),

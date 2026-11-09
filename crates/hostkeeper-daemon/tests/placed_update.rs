@@ -40,6 +40,7 @@ fn hooked_switch(
         max_package_bytes: 1 << 20,
         repaired: Arc::default(),
         tool_runs: Arc::default(),
+        log: Arc::new(|_: &str| {}),
     };
     let switch = hooked(roots, fs, units, own, repository);
     move |toward, order| switch(toward, order).map_err(|error| error.to_string())

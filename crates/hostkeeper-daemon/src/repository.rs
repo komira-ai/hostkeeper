@@ -225,7 +225,14 @@ pub struct Repository {
     /// The counter that numbers every tool run's unit, shared by all of the daemon's steps and
     /// heartbeat reads ([`LauncherTools::sharing`]).
     pub tool_runs: Arc<AtomicU64>,
+    /// Where the daemon's log lines go: a stage's failure is said there with its detail
+    /// ([`ALERT_STAGE_FAILED`]), which the order's verdict does not carry.
+    pub log: Arc<dyn Fn(&str) + Send + Sync>,
 }
+
+/// The alert of a stage that failed or deferred, with the failure's reason and detail (apt's
+/// own last line): at error level for a failure, at warn level for a deferral.
+pub const ALERT_STAGE_FAILED: &str = "stage_failed";
 
 /// The first number of the daemon's tool units: its process id in the high half, so that a
 /// daemon started again never names a unit a run of the one before it may still hold.
@@ -343,6 +350,17 @@ impl Repository {
         })
     }
 
+    /// The verdict of a stage of `service` that ended with `failure` ([`finished`]), said in
+    /// the log with its detail.
+    fn stage_failed(&self, service: &ServiceName, failure: &Failure) -> Reply {
+        let detail = format!("service={service}: {failure}");
+        (self.log)(&match failure.reason().outcome() {
+            Outcome::Failed => crate::boot::alert_line(ALERT_STAGE_FAILED, &detail),
+            Outcome::Deferred => crate::boot::warn_line(ALERT_STAGE_FAILED, &detail),
+        });
+        finished(failure)
+    }
+
     /// The order of `entry` for `service` at `version`.
     fn order(
         &self,
@@ -365,7 +383,7 @@ impl Repository {
     ) -> Result<VersionDir, Reply> {
         let order = self
             .order(backend, service, version, entry)
-            .map_err(|failure| finished(&failure))?;
+            .map_err(|failure| self.stage_failed(service, &failure))?;
         let digest = Sha256Hex::parse(&order.pin).ok_or_else(|| {
             Reply::refused(Refusal::OrderInvalid, "the entry's digest is no SHA-256")
         })?;
@@ -394,7 +412,9 @@ impl Repository {
                     let refused = refusal_of(real_packages::Failure::Unpack(&error));
                     Reply::refused(refused.refusal, refused.detail)
                 }
-                FillError::Fill(StageFailure::Installer(failure)) => finished(&failure),
+                FillError::Fill(StageFailure::Installer(failure)) => {
+                    self.stage_failed(service, &failure)
+                }
                 FillError::Fill(StageFailure::Changed(_)) => Reply::Finished {
                     verdict: Verdict::Failed {
                         phase: Phase::BeforeCommit,
