@@ -18,6 +18,7 @@ use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_hook::Verdict;
 use hostkeeper_install::Announcement;
+use hostkeeper_install::repository::Drift;
 use hostkeeper_observe::{Observation, Observer};
 use hostkeeper_placed::{Fs, PlacedError, Placer, Roots, UnitControl};
 use hostkeeper_proto::hostkeeper::agent::v1::Order;
@@ -28,6 +29,7 @@ use hostkeeper_steps::{
 };
 
 use crate::boot::{ALERT_INTERRUPTED, ALERT_JOURNAL, ALERT_UNSTOPPABLE, ALERT_WATCHER, alert_line};
+use crate::builtin::BuiltinPorts;
 use crate::checks;
 use crate::halt::HaltStore;
 use crate::installed::{self, CURRENT, Lifecycle};
@@ -37,6 +39,7 @@ use crate::observer;
 use crate::packages::Packages;
 use crate::prune::{ForceLockPoint, Prune};
 use crate::refusal::Refusal;
+use crate::repository::{Repository, RepositoryPorts};
 use crate::selfupdate::{self, Restart};
 use crate::trusted_root::RootReport;
 use crate::verb::{HookedVerb, Verb};
@@ -82,6 +85,10 @@ pub struct Ports {
     /// ([`hostkeeper_install::announce`]): what the heartbeat lists and what the receipt check
     /// of an entry judges its installer against.
     pub announcement: Announcement,
+    /// What the repository installer works with: the host's repository entries, the packages
+    /// directory a repository version is staged in, the work directories and the installer
+    /// lock ([`crate::repository`]).
+    pub repository: Arc<RepositoryPorts>,
 }
 
 /// Where placed-path linking works (design section 4.7, "Placed paths"): the directories as the
@@ -121,6 +128,12 @@ pub struct Ctx {
     /// The installers the daemon announces ([`Ports::announcement`]), the same at every
     /// heartbeat of one start.
     pub announcement: Announcement,
+    /// What the repository installer works with ([`Ports::repository`]).
+    pub repository_ports: Arc<RepositoryPorts>,
+    /// The drift each service's last repository `activate` repaired, until its verdict takes it.
+    repaired: Arc<Mutex<BTreeMap<String, Drift>>>,
+    /// The counter of the repository installer's tool units ([`Repository::tool_runs`]).
+    tool_runs: Arc<std::sync::atomic::AtomicU64>,
     pub locks: ServiceLocks,
     pub step_lock: StepLock,
     pub halts: HaltStore,
@@ -241,6 +254,34 @@ impl Ctx {
     }
 
     /// The placed-path linker of this host.
+    /// The repository installer with this daemon's ports ([`crate::repository`]).
+    pub fn repository(&self) -> Repository {
+        Repository {
+            launcher: Arc::clone(&self.launcher),
+            ports: Arc::clone(&self.repository_ports),
+            clock: Arc::clone(&self.clock),
+            roots: self.placement.roots.clone(),
+            fs: Arc::clone(&self.placement.fs),
+            units: Arc::clone(&self.units),
+            max_package_bytes: self.config.bounds.max_package_bytes,
+            repaired: Arc::clone(&self.repaired),
+            tool_runs: Arc::clone(&self.tool_runs),
+            log: Arc::clone(&self.alerts),
+        }
+    }
+
+    /// The built-in steps over this daemon's ports ([`crate::builtin`]).
+    pub fn builtin_ports(&self) -> BuiltinPorts {
+        BuiltinPorts {
+            units: Arc::clone(&self.units),
+            clock: Arc::clone(&self.clock),
+            observer: Arc::clone(&self.observer),
+            packages: self.dirs.packages.clone(),
+            binaries: crate::selfupdate::binary_dir(&self.dirs.state),
+            own: self.own_version,
+        }
+    }
+
     pub fn placer(&self) -> Placer<'_> {
         Placer::new(
             self.placement.roots.clone(),
@@ -282,6 +323,7 @@ impl Ctx {
                     Arc::clone(&self.placement.fs),
                     Arc::clone(&self.units),
                     self.own_version,
+                    self.repository(),
                 ),
                 Arc::clone(&self.clock),
                 Arc::clone(&self.alerts),
@@ -291,7 +333,8 @@ impl Ctx {
                 Arc::clone(&self.clock),
                 self.store(service),
             )
-            .with_switch(switch);
+            .with_switch(switch)
+            .with_builtin(crate::builtin::builtin(self.builtin_ports()));
             let runner = selfupdate::runner_for(runner, service);
             self.watch(runner.watch());
             Arc::new(runner)
@@ -590,6 +633,11 @@ impl Daemon {
                 force_lock_point: ports.force_lock_point,
                 observer: ports.observer,
                 announcement: ports.announcement,
+                repository_ports: ports.repository,
+                repaired: Arc::default(),
+                tool_runs: Arc::new(std::sync::atomic::AtomicU64::new(
+                    crate::repository::first_tool_run(),
+                )),
                 locks: ServiceLocks::default(),
                 step_lock: StepLock::default(),
                 halts,

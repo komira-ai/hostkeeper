@@ -227,7 +227,7 @@ fn write_tree(src: &Path, spec: &Spec, architecture: &str) {
     put(
         src,
         "usr/bin/hkaptfix",
-        &format!("#!/bin/sh\necho hkaptfix {version}\n"),
+        &format!("#!/bin/sh\n[ \"$1\" = serve ] && exec sleep infinity\necho hkaptfix {version}\n"),
         0o755,
     );
     put(

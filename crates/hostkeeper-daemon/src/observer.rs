@@ -28,6 +28,8 @@ use std::time::Duration;
 
 use hostkeeper_config::manifest::{Expected, HostkeeperVersion, Manifest};
 use hostkeeper_config::names::{PLIST_SUFFIX, ServiceName, UNIT_SUFFIXES, UnitName, Version};
+use hostkeeper_install::repository::TREE;
+use hostkeeper_install::repository::tree::unit_file;
 use hostkeeper_observe::proc::digest_open_file;
 use hostkeeper_observe::{
     Current, Deadline, ExpectedExe, HttpHealthClient, Observation, ObserveOptions, Observer,
@@ -79,7 +81,7 @@ pub fn service_input(
         version: version.clone(),
         platform: hostkeeper_config::platform::Platform::current(),
     };
-    let manifest = Manifest::load(&dir, &expected, own).ok()?;
+    let manifest = crate::target::manifest(&dir, &expected, own).ok()?;
     let started = (service.as_str() == SELF_SERVICE)
         .then(|| Layout::new(binaries).current().ok().flatten())
         .flatten();
@@ -169,6 +171,9 @@ impl SealedExe {
             .is_ok_and(|seal| seal.is_file());
         sealed.then_some(())?;
         let dir = service_dir.join(version);
+        if fs::symlink_metadata(dir.join(crate::target::TARGET_FILE)).is_ok() {
+            return repository_exe(&dir, &expected, &self.own);
+        }
         let manifest = Manifest::load(&dir, &expected, &self.own).ok()?;
         let unit = manifest.run.first()?;
         let word = if UNIT_SUFFIXES.iter().any(|suffix| unit.ends_with(suffix)) {
@@ -190,6 +195,30 @@ impl SealedExe {
             .filter(|rest| is_plain(rest))?;
         Some(dir.join(rest))
     }
+}
+
+/// Where the executable of the repository version in `dir` is (packages-lifecycle.md section
+/// 6.6): the first `run` unit's file in the extracted tree (`tree/usr/lib/systemd/system/<unit>`
+/// or `tree/lib/systemd/system/<unit>`, the template's for an instance), its `ExecStart=` program
+/// an absolute path of plain names that the package installs, and the file at that path under
+/// `tree/`: for a `.deb` that installs `/usr/bin/x`, `tree/usr/bin/x`.
+fn repository_exe(dir: &Path, expected: &Expected, own: &HostkeeperVersion) -> Option<PathBuf> {
+    let manifest = crate::target::manifest(dir, expected, own).ok()?;
+    let unit = manifest.run.first()?;
+    let template = UnitName::of(expected.name.as_str(), unit, false)
+        .ok()
+        .and_then(|name| name.template());
+    let tree = dir.join(TREE);
+    let text = std::iter::once(unit.clone())
+        .chain(template)
+        .find_map(|file| unit_file(&tree, &file))
+        .and_then(|rel| fs::read_to_string(tree.join(rel)).ok())?;
+    let program = exec_start(&text)?;
+    let rest = Path::new(program)
+        .strip_prefix("/")
+        .ok()
+        .filter(|rest| is_plain(rest))?;
+    Some(tree.join(rest))
 }
 
 /// The program of the first `ExecStart=` line of a systemd unit: its first word, without the

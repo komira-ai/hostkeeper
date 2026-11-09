@@ -6,9 +6,10 @@
 //! ([`StartError::Repositories`]) and a missing or empty directory is no repository. A Mac has
 //! no repository entries and never reads the directory.
 //!
-//! This build registers no repository installer ([`hostkeeper_install::REGISTERED`]), so
-//! [`announced`] never adds one to the list: a coordinator never orders an entry this daemon
-//! would defer. It says on standard error once when the host could run one.
+//! [`announced`] adds `apt` to the list when the host may run it (section 4.1: a `deb` host with
+//! apt's tools, apt 2.2 or later, and at least one entry), since this build registers its
+//! backend ([`hostkeeper_install::REGISTERED`]) and the order path runs it
+//! ([`crate::repository`]).
 
 use std::path::Path;
 
@@ -33,20 +34,13 @@ pub fn load(files: &HostFiles) -> Result<Repositories, StartError> {
     }
 }
 
-/// `announcement` with the host's native repository installer added when the build registers
-/// its steps ([`hostkeeper_install::repository::announce::announced`]). When the host could run
-/// one that this build does not register, a line on standard error says so.
+/// `announcement` with the host's native repository installer added when the host may run it
+/// and the build registers it ([`hostkeeper_install::repository::announce::announced`]).
 pub fn announced(
     announcement: Announcement,
     os_root: &Path,
     repositories: &Repositories,
 ) -> Announcement {
     let found = native(announcement.family, os_root, repositories);
-    if let Some(installer) = found.filter(|installer| !REGISTERED.contains(installer)) {
-        eprintln!(
-            "hostkeeper daemon: this host could run the installer {}, and this build does not announce it yet",
-            installer.as_str()
-        );
-    }
     with_native(announcement, found, &REGISTERED)
 }

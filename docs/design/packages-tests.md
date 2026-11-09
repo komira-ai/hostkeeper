@@ -13,7 +13,8 @@ and registry (`crates/hostkeeper-install/tests/installer.rs`), of A9 the steps a
 `crates/hostkeeper-privileged/tests/install_macos_pkg.rs`), and of A7 the repository configuration
 (`crates/hostkeeper-install/tests/repositories.rs`), the `apt` installer against the command port's fake
 (`crates/hostkeeper-install/tests/apt.rs`) and its device test (`crates/hostkeeper-privileged/tests/install_apt.rs`),
-the announce rule of `apt` (`tests/announce.rs`), and `ServiceBeat.drift`
+the announce rule of `apt` (`tests/announce.rs`), the daemon's order path of `apt`
+(`crates/hostkeeper-daemon/tests/apt*.rs`, `repositories.rs`, and the daemon case of `install_apt.rs`), and `ServiceBeat.drift`
 (`crates/hostkeeper-proto/tests/additions_installers.rs`, `crates/hostkeeper-link/src/proto_map_tests.rs`,
 `crates/hostkeeper-coordinator/tests/drift_shown.rs`); nothing else here is built. This is section 12 of
 [packages.md](packages.md), kept in a file of its own so that one stays under 1000 lines (rule R12). Section numbers here

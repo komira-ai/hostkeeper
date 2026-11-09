@@ -33,9 +33,8 @@ use hostkeeper_steps::record::{Loaded, State};
 use hostkeeper_steps::{Layout, Protected, PruneReport, Seal, read_seal};
 
 use crate::executor::Ctx;
-use crate::installers;
+use crate::installers::{self, Steps};
 use crate::locks::ServiceGuard;
-use hostkeeper_install::InstallerSteps;
 
 /// The alert of a prune that failed; the verdict of the order stands.
 pub const ALERT_PRUNE: &str = "prune_failed";
@@ -135,8 +134,13 @@ pub fn confirmed_switch(
     }
 }
 
-/// The `retire` of `steps` for each version of `deleted`: what failed, one line each.
-fn retire(steps: &dyn InstallerSteps, deleted: &BTreeSet<String>) -> Vec<String> {
+/// The `retire` of `steps` for each version of `deleted`: what failed, one line each. A
+/// repository version's `retire` is the deletion of its directory and seal, which the prune
+/// already made: nothing more runs, and no tool touches the installed package.
+fn retire(steps: Steps, deleted: &BTreeSet<String>) -> Vec<String> {
+    let Steps::Artifact(steps) = steps else {
+        return Vec::new();
+    };
     let retired = |version: &String| {
         let version = Version::new(version).map_err(|error| error.to_string());
         version.and_then(|v| steps.retire(&v).map_err(|error| error.to_string()))
@@ -156,7 +160,7 @@ fn protected(
     ctx: &Ctx,
     layout: &Layout,
     service: &ServiceName,
-) -> Result<(Protected, &'static dyn InstallerSteps), String> {
+) -> Result<(Protected, Steps), String> {
     let mut protect = Protected::default();
     let rec = match ctx.store(service).load() {
         Ok(Loaded::Absent) => None,

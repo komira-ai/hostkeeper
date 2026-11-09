@@ -634,7 +634,7 @@ fn an_uninstall_of_a_service_of_an_installer_without_steps_removes_nothing() {
     let mut record = rig.placed_record();
     record.installed.insert(
         "web".to_owned(),
-        hostkeeper_placed::InstalledEntry::new("apt"),
+        hostkeeper_placed::InstalledEntry::new("macos-pkg"),
     );
     rig.save_placed(&record);
     let reply = daemon.order(&uninstall("web", 1));
@@ -642,8 +642,9 @@ fn an_uninstall_of_a_service_of_an_installer_without_steps_removes_nothing() {
         reply,
         Reply::Interrupted {
             refusal: Refusal::LinkFailed,
-            detail: "web is installed by the installer \"apt\", which this daemon has no steps of"
-                .to_owned(),
+            detail:
+                "web is installed by the installer \"macos-pkg\", which this daemon has no steps of"
+                    .to_owned(),
         }
     );
     let after = rig.placed_record();

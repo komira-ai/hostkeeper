@@ -103,17 +103,25 @@ directory (the directory itself is not an entry), in the byte order of the entri
 
 ```text
 record  = length header [bytes]
-length  = u64, little-endian: the length of header plus, for a file, its size
+length  = u64, little-endian: the length of header plus, for a file or a link, its size
 header  = kind NUL name NUL mode NUL size NUL
-kind    = "f" (a regular file) or "d" (a directory)
+kind    = "f" (a regular file), "d" (a directory) or "l" (a symbolic link)
 name    = the full relative name, as bytes, "/" between components
-mode    = the permission bits (mode & 0o7777), four octal digits: "0555" or "0444"
-size    = the size in bytes, in decimal; "0" for a directory
-bytes   = the file's contents (files only)
+mode    = the permission bits (mode & 0o7777), four octal digits: "0555" or "0444"; "0000" for a link
+size    = the size in bytes, in decimal; "0" for a directory; the length of the target text for a link
+bytes   = the file's contents (files only); the link's target text (links only)
 ```
 
-The owner and the times are not hashed: the archive does not carry them into the tree. A tree
-holding anything other than regular files and directories has no digest. The test
+The owner and the times are not hashed: the archive does not carry them into the tree. A link's
+own mode bits are not hashed either (they mean nothing and differ between Linux and macOS): its
+record has mode `0000`, and its bytes are the target text as `readlink` gives it, never followed
+or resolved. A link is an entry only inside the `tree/` directory of a version directory (the
+name has `tree` as its first component and at least one more, as in `tree/usr/lib/x`), where a
+repository installer keeps what `dpkg-deb --extract` made; a link anywhere else, `tree` itself
+included, and anything other than regular files, directories and those links, give no digest. The
+check of a staged release never follows a link and still refuses a foreign owner, a setuid or
+setgid bit and a group- or other-writable file or directory; a hook program and a `place` source
+must not pass through a link. A tree with no link has the digest it had before links were allowed. The test
 `the_tree_digest_has_a_fixed_value` holds the digest of a fixed tree as a literal.
 
 ## The seal

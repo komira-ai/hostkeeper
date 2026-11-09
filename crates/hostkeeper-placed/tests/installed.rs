@@ -136,3 +136,44 @@ fn installer_of_reads_the_recorded_installer() {
     assert_eq!(record.installer_of("web"), Some("apt"));
     assert_eq!(record.installer_of("api"), None);
 }
+
+/// A repository package's entry, with every key it can hold, is read by the previous reader,
+/// which writes it back as it was; this release reads it back as saved. An entry of the
+/// installer alone is written without the other keys.
+#[test]
+fn a_repository_entry_crosses_the_release_boundary_in_both_directions() {
+    let world = World::new("installed-package");
+    let mut entry = InstalledEntry::new("apt");
+    entry.package = Some("web".to_owned());
+    entry.version = Some("1:1.4.0-1".to_owned());
+    entry.repository = Some("main".to_owned());
+    entry.links = ["/etc/systemd/system/multi-user.target.wants/web.service".to_owned()].into();
+    entry.pending = true;
+    let mut record = PlacedRecord::default();
+    record.installed.insert("web".to_owned(), entry);
+    record
+        .installed
+        .insert("api".to_owned(), InstalledEntry::new("apt"));
+    save(&world, &record).expect("saves");
+    let written = fs::read(world.host(PLACED)).expect("written");
+    let value: Value = serde_json::from_slice(&written).expect("json");
+    assert_eq!(
+        value["installed"],
+        json!({
+            "api": {"installer": "apt"},
+            "web": {
+                "installer": "apt",
+                "package": "web",
+                "version": "1:1.4.0-1",
+                "repository": "main",
+                "links": ["/etc/systemd/system/multi-user.target.wants/web.service"],
+                "pending": true
+            }
+        })
+    );
+
+    let previous: PreviousRecord = serde_json::from_slice(&written).expect("it reads");
+    let rewritten = serde_json::to_vec_pretty(&previous).expect("it writes");
+    fs::write(world.host(PLACED), &rewritten).expect("the previous release's write");
+    assert_eq!(world.record(), record);
+}

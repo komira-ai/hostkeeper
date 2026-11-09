@@ -9,9 +9,10 @@
 # and closes it when none remain. The run is green whatever it finds: the issue is the signal.
 # It fails only when cargo-deny or the GitHub API failed, and then leaves the issue as it is.
 #
-# cargo-deny is the release binary ci.yml pins, at the same version and SHA-256: `curl --proto
-# =https --proto-redir =https` downloads it, and `cargo xtask install-tool` checks the SHA-256
-# before anything is unpacked or installed.
+# cargo-deny is the release binary ci.yml pins, at the same version and SHA-256: restored from
+# the actions cache under that version and SHA-256, or else downloaded by `curl --proto =https
+# --proto-redir =https`, and `cargo xtask install-tool` checks the SHA-256 before anything is
+# unpacked or installed; only a checked archive is saved to the cache.
 #
 # `issues: write` is the one write scope, held by the one job, under the `if:` the workflow lint
 # (crates/xtask/tests/workflows) requires for it: a run of main. A run of another ref, by hand,
@@ -51,10 +52,28 @@ jobs:
         with:
           persist-credentials: false
       - run: rustup toolchain install
-      - name: Download cargo-deny (HTTPS only, redirects included)
+      - name: Restore the pinned cargo-deny.tar.gz from the cache
+        id: cargo-deny-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/cargo-deny.tar.gz
+          key: pinned-cargo-deny-${{ env.DENY_VERSION }}-${{ env.DENY_SHA256 }}
+      - name: Download cargo-deny on a cache miss (HTTPS only, redirects included)
+        id: cargo-deny-download
+        if: ${{ steps.cargo-deny-cache.outputs.cache-hit != 'true' }}
         run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/cargo-deny.tar.gz" "https://github.com/EmbarkStudios/cargo-deny/releases/download/$DENY_VERSION/cargo-deny-$DENY_VERSION-x86_64-unknown-linux-musl.tar.gz"
+      - name: Say why the job stops when cargo-deny.tar.gz is neither cached nor downloadable
+        if: ${{ !cancelled() && steps.cargo-deny-download.outcome == 'failure' }}
+        run: echo "::error::cargo-deny.tar.gz is not in the actions cache and its download from GitHub failed, so this job cannot go on until GitHub serves it again"
       - name: Install cargo-deny (pinned checksum)
+        id: cargo-deny-check
         run: cargo xtask install-tool --download "$RUNNER_TEMP/cargo-deny.tar.gz" --sha256 "$DENY_SHA256" --out "$HOME/.cargo/bin/cargo-deny" --extract tar.gz --member "cargo-deny-$DENY_VERSION-x86_64-unknown-linux-musl/cargo-deny"
+      - name: Save the checked cargo-deny.tar.gz to the cache
+        if: ${{ !cancelled() && steps.cargo-deny-check.outcome == 'success' && steps.cargo-deny-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/cargo-deny.tar.gz
+          key: ${{ steps.cargo-deny-cache.outputs.cache-primary-key }}
       - run: cargo deny --version
       - name: Keep the advisories issue
         env:

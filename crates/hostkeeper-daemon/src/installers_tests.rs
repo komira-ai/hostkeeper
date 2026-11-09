@@ -1,5 +1,6 @@
-//! A host with no switch refuses one, and an installer the record names that this build has no
-//! steps of, or that is no installer, is refused with what is recorded.
+//! A host with no switch refuses one; a recorded `apt` service has the repository installer's
+//! steps; an installer the record names that this build has no steps of, or that is no
+//! installer, is refused with what is recorded.
 
 use std::path::Path;
 
@@ -9,7 +10,7 @@ use hostkeeper_placed::testing::{FakeUnitControl, Log};
 use hostkeeper_placed::{InstalledEntry, PlacedRecord, Placer, RealFs, Roots};
 use hostkeeper_release::Installer;
 
-use super::{PlacerHost, installer_of, steps_for};
+use super::{PlacerHost, Steps, installer_of, steps_for};
 
 fn web() -> ServiceName {
     ServiceName::new("web").expect("a name")
@@ -34,7 +35,7 @@ fn a_host_with_no_switch_refuses_one() {
 }
 
 #[test]
-fn a_recorded_installer_is_read_and_one_without_steps_is_refused() {
+fn a_recorded_installer_is_read_apt_has_its_backend_and_one_without_steps_is_refused() {
     let mut record = PlacedRecord::default();
     assert_eq!(
         installer_of(&record, &web()),
@@ -50,8 +51,19 @@ fn a_recorded_installer_is_read_and_one_without_steps_is_refused() {
     assert_eq!(installer_of(&record, &web()), Ok(Installer::Apt));
     assert_eq!(
         steps_for(&record, &web()).map(|steps| steps.installer()),
+        Ok(Installer::Apt)
+    );
+    assert!(matches!(
+        steps_for(&record, &web()),
+        Ok(Steps::Repository(_))
+    ));
+    record
+        .installed
+        .insert("web".to_owned(), InstalledEntry::new("macos-pkg"));
+    assert_eq!(
+        steps_for(&record, &web()).map(|steps| steps.installer()),
         Err(
-            "web is installed by the installer \"apt\", which this daemon has no steps of"
+            "web is installed by the installer \"macos-pkg\", which this daemon has no steps of"
                 .to_owned()
         )
     );

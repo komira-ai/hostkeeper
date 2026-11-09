@@ -41,6 +41,7 @@ pub mod deadman;
 pub mod force;
 pub mod handover;
 pub mod launcher;
+mod order_util;
 pub mod prune;
 pub mod reader;
 pub mod record;
@@ -48,6 +49,7 @@ pub mod resume;
 pub mod runner;
 pub mod seal;
 pub mod selfupdate;
+mod switch;
 pub mod systemd;
 
 pub use artifact::{ArtifactError, EntryKind, Staged, Tree, TreeEntry, read_tree, tree_digest};
@@ -68,7 +70,9 @@ pub use prune::{
 pub use reader::OLDEST_READER;
 pub use record::{CrashGate, CrashPoint, Loaded, Record, RecordError, RecordStore, WriteFault};
 pub use resume::{REASON_REBOOTED, ResumeAction, resume, resume_action};
-pub use runner::{Bounds, Finished, RunError, StepRunner, Switch, Toward, UpdateOrder};
+pub use runner::{
+    Bounds, Builtin, Finished, RunError, StepRunner, Switch, SwitchError, Toward, UpdateOrder,
+};
 pub use seal::{MAX_SEAL_BYTES, SEAL_SCHEMA, Seal, SealError, read_seal};
 pub use selfupdate::{FollowOn, Layout, SelfUpdateError, Settled, follow_on, settle, settle_with};
 pub use systemd::{Captured, Program, Spawner, StepLog, SystemdLauncher, SystemdRunProcess};

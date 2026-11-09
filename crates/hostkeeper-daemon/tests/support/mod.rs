@@ -334,7 +334,20 @@ impl Rig {
             prune: Arc::new(NoPrune),
             force_lock_point: Arc::new(NoLockPoint),
             observer: Arc::clone(&self.observer),
+            repository: self.repository_ports(Default::default()),
         }
+    }
+
+    /// The repository installer's ports on the rig's host, with the entries `repositories`.
+    pub fn repository_ports(
+        &self,
+        repositories: hostkeeper_install::repository::Repositories,
+    ) -> Arc<hostkeeper_daemon::repository::RepositoryPorts> {
+        hostkeeper_daemon::testing::repository_ports(
+            &self.packages,
+            self.scratch.path(),
+            repositories,
+        )
     }
 
     /// A daemon on the rig's directories whose placement goes through `fs` and `units`, with no

@@ -66,8 +66,10 @@
 # In the job privileged, install_apt.rs also runs the apt backend of the repository installer as
 # root against the runner's own apt, dpkg and systemd: a signed fixture repository the test builds
 # on disk with dpkg-deb and gpg is installed from, updated, rolled back with the repository
-# removed, drifted and uninstalled, and the backend's `apt-get update` and simulation run in a
-# container of each deb release of linux-releases.toml (no network, no pull).
+# removed, drifted and uninstalled; the daemon's own order path runs an apt service over the same
+# repository (install, update, force_rollback, uninstall, its unit started); and the backend's
+# `apt-get update` and simulation run in a container of each deb release of linux-releases.toml
+# (no network, no pull).
 #
 # In each job the test binaries are built as the runner's own user; only their run is as root,
 # through the cargo runner `sudo`, the one use of it in the job (on the Mac, unpack_mac also runs
@@ -174,28 +176,82 @@ jobs:
       # as /usr/lib/hostkeeper/gh (artifacts.yml pins the same version and SHA-256): Ubuntu 24.04's
       # own gh has no `gh attestation`. tierstore_shaped.rs installs this file at that path and
       # checks its fixture's attestation with it, offline, against a test trust root.
-      - name: Download gh (HTTPS only, redirects included)
+      - name: Restore the pinned gh.tar.gz from the cache
+        id: gh-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/gh.tar.gz
+          key: pinned-gh-${{ env.GH_VERSION }}-${{ env.GH_SHA256 }}
+      - name: Download gh on a cache miss (HTTPS only, redirects included)
+        id: gh-download
+        if: ${{ steps.gh-cache.outputs.cache-hit != 'true' }}
         run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/gh.tar.gz" "https://github.com/cli/cli/releases/download/v$GH_VERSION/gh_${GH_VERSION}_linux_amd64.tar.gz"
+      - name: Say why the job stops when gh.tar.gz is neither cached nor downloadable
+        if: ${{ !cancelled() && steps.gh-download.outcome == 'failure' }}
+        run: echo "::error::gh.tar.gz is not in the actions cache and its download from GitHub failed, so this job cannot go on until GitHub serves it again"
       - name: Install gh (pinned checksum)
+        id: gh-check
         run: cargo xtask install-tool --download "$RUNNER_TEMP/gh.tar.gz" --sha256 "$GH_SHA256" --out target/privileged-tools/gh --extract tar.gz --member "gh_${GH_VERSION}_linux_amd64/bin/gh"
+      - name: Save the checked gh.tar.gz to the cache
+        if: ${{ !cancelled() && steps.gh-check.outcome == 'success' && steps.gh-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/gh.tar.gz
+          key: ${{ steps.gh-cache.outputs.cache-primary-key }}
       # The released daemon self_update_across_releases.rs updates from: the binary tarball of the
       # release crates/hostkeeper-privileged/previous-release.toml pins for this platform (the
       # workflow lint holds PREVIOUS_RELEASE_URL and PREVIOUS_RELEASE_SHA256 equal to it). The test
       # checks the file against the pin again and fetches nothing itself.
-      - name: Download the previous release (HTTPS only, redirects included)
+      - name: Restore the pinned previous-release.tar.gz from the cache
+        id: previous-release-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/previous-release.tar.gz
+          key: pinned-previous-release-${{ env.PREVIOUS_RELEASE_URL }}-${{ env.PREVIOUS_RELEASE_SHA256 }}
+      - name: Download the previous release on a cache miss (HTTPS only, redirects included)
+        id: previous-release-download
+        if: ${{ steps.previous-release-cache.outputs.cache-hit != 'true' }}
         run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/previous-release.tar.gz" "$PREVIOUS_RELEASE_URL"
+      - name: Say why the job stops when previous-release.tar.gz is neither cached nor downloadable
+        if: ${{ !cancelled() && steps.previous-release-download.outcome == 'failure' }}
+        run: echo "::error::previous-release.tar.gz is not in the actions cache and its download from GitHub failed, so this job cannot go on until GitHub serves it again"
       - name: Check the previous release (pinned checksum)
+        id: previous-release-check
         run: cargo xtask install-tool --download "$RUNNER_TEMP/previous-release.tar.gz" --sha256 "$PREVIOUS_RELEASE_SHA256" --out target/previous-release/hostkeeper.tar.gz
+      - name: Save the checked previous-release.tar.gz to the cache
+        if: ${{ !cancelled() && steps.previous-release-check.outcome == 'success' && steps.previous-release-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/previous-release.tar.gz
+          key: ${{ steps.previous-release-cache.outputs.cache-primary-key }}
       # The packages crates/hostkeeper-privileged/tests/linux_packages.rs installs in a container
       # of each release of crates/hostkeeper-privileged/linux-releases.toml: the static programs,
       # staged with the pinned gh and the trusted root, packed by nfpm as the deb and the rpm
       # (artifacts.yml's build, with the same pins), into target/linux-packages. The
       # images are pulled here, one step each (the workflow lint holds the steps to the list); the
       # test pulls nothing and its containers have no network.
-      - name: Download nfpm (HTTPS only, redirects included)
+      - name: Restore the pinned nfpm.tar.gz from the cache
+        id: nfpm-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/nfpm.tar.gz
+          key: pinned-nfpm-${{ env.NFPM_VERSION }}-${{ env.NFPM_SHA256 }}
+      - name: Download nfpm on a cache miss (HTTPS only, redirects included)
+        id: nfpm-download
+        if: ${{ steps.nfpm-cache.outputs.cache-hit != 'true' }}
         run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/nfpm.tar.gz" "https://github.com/goreleaser/nfpm/releases/download/v$NFPM_VERSION/nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz"
+      - name: Say why the job stops when nfpm.tar.gz is neither cached nor downloadable
+        if: ${{ !cancelled() && steps.nfpm-download.outcome == 'failure' }}
+        run: echo "::error::nfpm.tar.gz is not in the actions cache and its download from GitHub failed, so this job cannot go on until GitHub serves it again"
       - name: Install nfpm (pinned checksum)
+        id: nfpm-check
         run: cargo xtask install-tool --download "$RUNNER_TEMP/nfpm.tar.gz" --sha256 "$NFPM_SHA256" --out target/privileged-tools/nfpm --extract tar.gz --member nfpm
+      - name: Save the checked nfpm.tar.gz to the cache
+        if: ${{ !cancelled() && steps.nfpm-check.outcome == 'success' && steps.nfpm-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/nfpm.tar.gz
+          key: ${{ steps.nfpm-cache.outputs.cache-primary-key }}
       - name: Add the static target
         run: rustup target add x86_64-unknown-linux-musl
       - name: Build the static programs
@@ -348,20 +404,56 @@ jobs:
             target
           key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
           restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
-      - name: Download gh (HTTPS only, redirects included)
+      - name: Restore the pinned gh.zip from the cache
+        id: gh-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/gh.zip
+          key: pinned-gh-${{ env.GH_VERSION }}-${{ env.GH_SHA256 }}
+      - name: Download gh on a cache miss (HTTPS only, redirects included)
+        id: gh-download
+        if: ${{ steps.gh-cache.outputs.cache-hit != 'true' }}
         run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/gh.zip" "https://github.com/cli/cli/releases/download/v$GH_VERSION/gh_${GH_VERSION}_macOS_arm64.zip"
+      - name: Say why the job stops when gh.zip is neither cached nor downloadable
+        if: ${{ !cancelled() && steps.gh-download.outcome == 'failure' }}
+        run: echo "::error::gh.zip is not in the actions cache and its download from GitHub failed, so this job cannot go on until GitHub serves it again"
       - name: Check gh (pinned checksum)
+        id: gh-check
         run: cargo xtask install-tool --download "$RUNNER_TEMP/gh.zip" --sha256 "$GH_SHA256" --out "$RUNNER_TEMP/gh-checked.zip"
+      - name: Save the checked gh.zip to the cache
+        if: ${{ !cancelled() && steps.gh-check.outcome == 'success' && steps.gh-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/gh.zip
+          key: ${{ steps.gh-cache.outputs.cache-primary-key }}
       - name: Unpack gh where the tests find it
         run: unzip -o -j -q "$RUNNER_TEMP/gh-checked.zip" "gh_${GH_VERSION}_macOS_arm64/bin/gh" -d target/privileged-tools
       # The released daemon self_update_across_releases.rs updates from: the binary tarball of the
       # release crates/hostkeeper-privileged/previous-release.toml pins for this platform (the
       # workflow lint holds PREVIOUS_RELEASE_URL and PREVIOUS_RELEASE_SHA256 equal to it). The test
       # checks the file against the pin again and fetches nothing itself.
-      - name: Download the previous release (HTTPS only, redirects included)
+      - name: Restore the pinned previous-release.tar.gz from the cache
+        id: previous-release-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/previous-release.tar.gz
+          key: pinned-previous-release-${{ env.PREVIOUS_RELEASE_URL }}-${{ env.PREVIOUS_RELEASE_SHA256 }}
+      - name: Download the previous release on a cache miss (HTTPS only, redirects included)
+        id: previous-release-download
+        if: ${{ steps.previous-release-cache.outputs.cache-hit != 'true' }}
         run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/previous-release.tar.gz" "$PREVIOUS_RELEASE_URL"
+      - name: Say why the job stops when previous-release.tar.gz is neither cached nor downloadable
+        if: ${{ !cancelled() && steps.previous-release-download.outcome == 'failure' }}
+        run: echo "::error::previous-release.tar.gz is not in the actions cache and its download from GitHub failed, so this job cannot go on until GitHub serves it again"
       - name: Check the previous release (pinned checksum)
+        id: previous-release-check
         run: cargo xtask install-tool --download "$RUNNER_TEMP/previous-release.tar.gz" --sha256 "$PREVIOUS_RELEASE_SHA256" --out target/previous-release/hostkeeper.tar.gz
+      - name: Save the checked previous-release.tar.gz to the cache
+        if: ${{ !cancelled() && steps.previous-release-check.outcome == 'success' && steps.previous-release-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/previous-release.tar.gz
+          key: ${{ steps.previous-release-cache.outputs.cache-primary-key }}
       # device_mac_e2e and device_mac_selfupdate run after device_mac, in the one step that runs
       # as root.
       - name: Build the macOS device tests as the runner's user
@@ -418,10 +510,28 @@ jobs:
             target
           key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
           restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
-      - name: Download nfpm (HTTPS only, redirects included)
+      - name: Restore the pinned nfpm.tar.gz from the cache
+        id: nfpm-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/nfpm.tar.gz
+          key: pinned-nfpm-${{ env.NFPM_VERSION }}-${{ env.NFPM_SHA256 }}
+      - name: Download nfpm on a cache miss (HTTPS only, redirects included)
+        id: nfpm-download
+        if: ${{ steps.nfpm-cache.outputs.cache-hit != 'true' }}
         run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/nfpm.tar.gz" "https://github.com/goreleaser/nfpm/releases/download/v$NFPM_VERSION/nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz"
+      - name: Say why the job stops when nfpm.tar.gz is neither cached nor downloadable
+        if: ${{ !cancelled() && steps.nfpm-download.outcome == 'failure' }}
+        run: echo "::error::nfpm.tar.gz is not in the actions cache and its download from GitHub failed, so this job cannot go on until GitHub serves it again"
       - name: Install nfpm (pinned checksum)
+        id: nfpm-check
         run: cargo xtask install-tool --download "$RUNNER_TEMP/nfpm.tar.gz" --sha256 "$NFPM_SHA256" --out target/privileged-tools/nfpm --extract tar.gz --member nfpm
+      - name: Save the checked nfpm.tar.gz to the cache
+        if: ${{ !cancelled() && steps.nfpm-check.outcome == 'success' && steps.nfpm-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/nfpm.tar.gz
+          key: ${{ steps.nfpm-cache.outputs.cache-primary-key }}
       - name: Build the Alpine image the tests run in
         run: docker build --tag hostkeeper-openrc-device crates/hostkeeper-privileged/openrc
       # The programs the container runs, built for musl, the libc of Alpine. ring's C code is
