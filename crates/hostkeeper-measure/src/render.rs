@@ -95,7 +95,7 @@ pub fn markdown(a: &Analysis) -> String {
         ));
     }
     out.push_str(
-        "\nA coordinator time is the difference of two of the coordinator's stamps, in whole seconds, so within a second either way. A runner time is the difference of the runner's clock at the polls that saw the two events, each up to one poll interval after the event.\n\n**What the report states from it.**\n\n",
+        "\nA coordinator time is the difference of two of the coordinator's stamps, which are whole seconds: an audit entry's time, or a host's last heartbeat as the coordinator listed it at the poll that saw the event, which can be later than the heartbeat that reported the change by up to one poll interval. A runner time is the difference of the runner's clock at the polls that saw the two events, each up to one poll interval after the event.\n\n**What the report states from it.**\n\n",
     );
     for s in &p.states {
         out.push_str(&format!("- {}\n", statement(a, s)));
@@ -134,7 +134,7 @@ pub fn markdown(a: &Analysis) -> String {
 pub fn tsv(a: &Analysis) -> String {
     let p = &a.plan;
     let mut out = format!(
-        "# Plan {}, run {}: {}. Written by `hostkeeper-measure analyze` from the run's records.\n# A raw row is one value of a measure; a derived row is computed from the raw rows of its measure,\n# as its how column says. A time is the difference of two stamps of the one clock its how column\n# names: the coordinator's (whole seconds) or the runner's (up to one poll interval late).\n# kind\tid\tvalue\tunit\thow\tcells\n",
+        "# Plan {}, run {}: {}. Written by `hostkeeper-measure analyze` from the run's records.\n# A raw row is one value of a measure; a derived row is computed from the raw rows of its measure,\n# as its how column says. A time is the difference of two stamps of the one clock its how column\n# names: the coordinator's (whole seconds; a host's heartbeat stamp up to one poll interval late)\n# or the runner's (up to one poll interval late). A last value is only of a complete repetition.\n# kind\tid\tvalue\tunit\thow\tcells\n",
         p.id, a.run, p.title
     );
     let run = format!("plan {}, run {}", p.id, a.run);

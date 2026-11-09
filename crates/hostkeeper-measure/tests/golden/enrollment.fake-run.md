@@ -16,7 +16,7 @@ A new host from its first contact with the coordinator to enrolled and running i
 | `first-serving` | the first heartbeat to the first service serving | s | 1 | 0 | 30 | 30 | 30 | coordinator |
 | `total` | the request to the first service serving | s | 1 | 0 | 71 | 71 | 71 | coordinator |
 
-A coordinator time is the difference of two of the coordinator's stamps, in whole seconds, so within a second either way. A runner time is the difference of the runner's clock at the polls that saw the two events, each up to one poll interval after the event.
+A coordinator time is the difference of two of the coordinator's stamps, which are whole seconds: an audit entry's time, or a host's last heartbeat as the coordinator listed it at the poll that saw the event, which can be later than the heartbeat that reported the change by up to one poll interval. A runner time is the difference of the runner's clock at the polls that saw the two events, each up to one poll interval after the event.
 
 **What the report states from it.**
 

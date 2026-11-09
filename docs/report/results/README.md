@@ -41,8 +41,8 @@ check --plan <file>` checks one, and the crate's documentation
 No plan has been run yet. A run of a plan becomes a result in three steps:
 
 1. `hostkeeper-measure run --plan crates/hostkeeper-measure/plans/<plan>.toml --run-id <run>
-   --param ... --dry-run` prints every step of every repetition with its parameters, and runs
-   nothing.
+   --param ... --dry-run` prints every step of every repetition with its parameters, and calls
+   nothing and writes nothing; it reads the parameters' files to check them.
 2. The same with `--run-dir <dir> --hkctl <hkctl> --endpoint <url> --ca-file <ca> --token-file
    <token>` in place of `--dry-run` runs it with `hkctl` and the operator's token, writing into the
    run directory, outside the repository.
@@ -87,8 +87,12 @@ below.
 | `timed-out` | a watch | the condition did not hold within the plan's timeout |
 
 A time the analysis computes is the difference of two stamps of one clock: the coordinator's when
-both events have its stamp (whole seconds), the runner's otherwise (each stamp up to one poll
-interval late). A repetition that did not record what a measure needs adds to its `missing` count.
+both events have its stamp, the runner's otherwise (each stamp up to one poll interval late). The
+coordinator's stamps are whole seconds: an audit entry's time is when the change was made, and a
+host's heartbeat stamp is the last heartbeat the coordinator had when the runner polled, up to one
+poll interval later than the heartbeat that reported the change. A repetition that did not record
+what a measure needs adds to its `missing` count; a time to the last of all hosts (a `last` span) is
+taken only from a repetition that ended complete.
 
 ### Runs
 

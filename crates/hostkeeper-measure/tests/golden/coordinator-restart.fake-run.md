@@ -16,7 +16,7 @@ What a restart of the coordinator on its Postgres store costs the fleet: the ope
 | `host-back` | the coordinator seen gone to the host back | s | 9 | 0 | 8 | 18 | 31 | runner |
 | `heartbeat-gap` | the longest time between two heartbeats of a host | s | 9 | 0 | 15 | 30 | 45 | coordinator |
 
-A coordinator time is the difference of two of the coordinator's stamps, in whole seconds, so within a second either way. A runner time is the difference of the runner's clock at the polls that saw the two events, each up to one poll interval after the event.
+A coordinator time is the difference of two of the coordinator's stamps, which are whole seconds: an audit entry's time, or a host's last heartbeat as the coordinator listed it at the poll that saw the event, which can be later than the heartbeat that reported the change by up to one poll interval. A runner time is the difference of the runner's clock at the polls that saw the two events, each up to one poll interval after the event.
 
 **What the report states from it.**
 

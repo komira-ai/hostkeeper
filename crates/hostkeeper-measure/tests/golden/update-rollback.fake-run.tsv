@@ -1,7 +1,8 @@
 # Plan update-rollback, run fake-run: An update and a rollback on one host. Written by `hostkeeper-measure analyze` from the run's records.
 # A raw row is one value of a measure; a derived row is computed from the raw rows of its measure,
 # as its how column says. A time is the difference of two stamps of the one clock its how column
-# names: the coordinator's (whole seconds) or the runner's (up to one poll interval late).
+# names: the coordinator's (whole seconds; a host's heartbeat stamp up to one poll interval late)
+# or the runner's (up to one poll interval late). A last value is only of a complete repetition.
 # kind	id	value	unit	how	cells
 raw	update-rep-1-host-1	12	s	plan update-rollback, run fake-run, repetition 1, host-1: SetDesired to the host's succeeded update; coordinator clock	
 raw	update-rep-2-host-1	16	s	plan update-rollback, run fake-run, repetition 2, host-1: SetDesired to the host's succeeded update; coordinator clock	

@@ -678,7 +678,7 @@ fn the_dry_run_prints_every_step_of_every_repetition_and_calls_nothing() {
     );
     assert!(out.starts_with(&first), "{out}");
     assert!(
-        out.ends_with("dry run: nothing was called, written or read\n"),
+        out.ends_with("dry run: nothing was called or written and the operator was asked nothing; the parameter files were read to check them\n"),
         "{out}"
     );
     assert_eq!(out.matches("\nrepetition ").count(), 5);

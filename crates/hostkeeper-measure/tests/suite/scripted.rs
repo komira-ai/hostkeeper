@@ -335,12 +335,13 @@ fn the_slots_of_a_step_are_filled_from_the_parameters_or_refused() {
         fill("A.B", false).expect_err("not a slot").to_string(),
         "{A.B} is not a slot of a step"
     );
-    let missing = support::params(&["i=/nonexistent/index.json"]);
+    let absent = scratch.path().join("absent.json");
+    let missing = support::params(&[&format!("i={}", absent.display())]);
     for value in [json!(["{file:i}"]), json!({"k": "{sha256:i}"})] {
         let err = fill::render_json(&missing, &value, 1, None, false).expect_err("no file");
         assert!(
             err.to_string()
-                .starts_with("parameter \"i\": reading /nonexistent/index.json: "),
+                .starts_with(&format!("parameter \"i\": reading {}: ", absent.display())),
             "{err}"
         );
     }

@@ -593,7 +593,7 @@ fn run_with_dry_run_prints_the_steps_and_writes_nothing() {
     assert_eq!((code, err.as_str()), (ExitCode::SUCCESS, ""));
     assert_eq!(
         out,
-        "plan cli: The command line\nhosts: Every live host.\nrepetitions: 1\nevery call is `hkctl --endpoint <endpoint> --ca-file <ca file> --token-file <token file> <command>`\nrepetition 1:\n  start: hkctl hosts list (the live hosts)\n  status: call `hkctl releases status --request <file: {\"service\":\"hello\"}>`\n  ask: ask the operator: Say when.\n  up: watch every 1 s, at most 5 s (a timeout ends the repetition): every host is live\ndry run: nothing was called, written or read\n"
+        "plan cli: The command line\nhosts: Every live host.\nrepetitions: 1\nevery call is `hkctl --endpoint <endpoint> --ca-file <ca file> --token-file <token file> <command>`\nrepetition 1:\n  start: hkctl hosts list (the live hosts)\n  status: call `hkctl releases status --request <file: {\"service\":\"hello\"}>`\n  ask: ask the operator: Say when.\n  up: watch every 1 s, at most 5 s (a timeout ends the repetition): every host is live\ndry run: nothing was called or written and the operator was asked nothing; the parameter files were read to check them\n"
     );
     assert!(rig.calls().is_empty());
     // With every live flag given too, --dry-run still runs nothing.

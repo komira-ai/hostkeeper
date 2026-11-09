@@ -2,13 +2,16 @@
 //! no file and no environment, and the same records give the same numbers.
 //!
 //! A time is the difference of two stamps of one clock, never of two clocks:
-//! - the coordinator's, when both events carry its stamp (whole seconds, so a difference is
-//!   good to a second either way);
+//! - the coordinator's, when both events carry its stamp: whole seconds, either an audit entry's
+//!   time or the last heartbeat of a host the coordinator listed at the poll that saw the event,
+//!   which can be later than the heartbeat that reported the change by up to one poll interval;
 //! - otherwise the runner's, whose stamp of an event seen by a poll is up to one poll interval
 //!   late.
 //!
 //! A repetition that did not record what a measure needs adds to its `missing` count, and no
-//! number is made up for it. Only repetitions that started are counted.
+//! number is made up for it. A `last` span is the time to the last of all its events, so a
+//! repetition that ended early (its watch timed out, a call failed) gives none: it is missing.
+//! Only repetitions that started are counted.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -157,7 +160,7 @@ pub fn analyze(plan: &Plan, info: &RunInfo, records: &[Record]) -> Result<Analys
     let results = plan
         .measurements
         .iter()
-        .map(|m| measure(m, &started, records))
+        .map(|m| measure(m, &started, &ended, records))
         .collect();
     Ok(Analysis {
         plan: plan.clone(),
@@ -201,7 +204,7 @@ fn seconds(from: u64, to: u64) -> f64 {
     (to - from) / 1000.0
 }
 
-fn measure(m: &Measure, started: &[u32], records: &[Record]) -> Measured {
+fn measure(m: &Measure, started: &[u32], ended: &[(u32, String)], records: &[Record]) -> Measured {
     let mut values = Vec::new();
     let mut missing = 0;
     for &rep in started {
@@ -209,7 +212,8 @@ fn measure(m: &Measure, started: &[u32], records: &[Record]) -> Measured {
             Kind::Span { from, to, pick } => {
                 let froms = events(records, rep, from);
                 let tos = events(records, rep, to);
-                if tos.is_empty() || froms.is_empty() {
+                let partial = *pick == Choose::Last && ended.iter().any(|(r, _)| *r == rep);
+                if tos.is_empty() || froms.is_empty() || partial {
                     missing += 1;
                     continue;
                 }

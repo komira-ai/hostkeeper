@@ -1,7 +1,8 @@
 # Plan enrollment-mac, run fake-run: A Mac enrolled through the MDM gate and running its first service. Written by `hostkeeper-measure analyze` from the run's records.
 # A raw row is one value of a measure; a derived row is computed from the raw rows of its measure,
 # as its how column says. A time is the difference of two stamps of the one clock its how column
-# names: the coordinator's (whole seconds) or the runner's (up to one poll interval late).
+# names: the coordinator's (whole seconds; a host's heartbeat stamp up to one poll interval late)
+# or the runner's (up to one poll interval late). A last value is only of a complete repetition.
 # kind	id	value	unit	how	cells
 raw	install-rep-1	30	s	plan enrollment-mac, run fake-run, repetition 1: the MDM enrollment to the package sent; coordinator clock	
 derived	install-n	1		plan enrollment-mac, run fake-run: the number of raw rows of install	

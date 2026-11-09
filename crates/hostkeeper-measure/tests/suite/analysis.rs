@@ -177,11 +177,11 @@ fn each_kind_of_measure_reads_one_clock_counts_what_is_missing_and_makes_up_noth
     );
     assert_eq!(
         by("last").values,
-        [
-            v(1, None, 15.0, Some(Clock::Coordinator)),
-            v(2, None, 3.5, Some(Clock::Runner))
-        ]
+        [v(1, None, 15.0, Some(Clock::Coordinator))]
     );
+    // Repetition 2 ended early: the time to its last back would be the time to the last host
+    // back so far, not to the last host, so it is missing.
+    assert_eq!(by("last").missing, 1);
     // Each back from its own host's first heartbeat; host-3 has none, so it is missing.
     assert_eq!(
         by("each").values,

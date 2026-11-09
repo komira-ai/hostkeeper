@@ -8,7 +8,7 @@
 //! - The runner ([`runner`]): carries a plan out against a coordinator through `hkctl` alone
 //!   ([`coordinator::Hkctl`]: the coordinator's endpoint and CA as flags, the operator's token
 //!   from a file) and records one event per line ([`record`]). Its dry run prints what it would do
-//!   and runs nothing.
+//!   and calls nothing.
 //! - The analysis ([`analysis`]) and its output ([`render`]): pure functions from a run's records
 //!   to the numbers of the plan's measures, a section of the results page and a result file of
 //!   `docs/report/results`.
@@ -17,8 +17,8 @@
 //!
 //! - `hostkeeper-measure check --plan FILE...` reads and checks plans.
 //! - `hostkeeper-measure run --plan FILE --run-id ID [--param NAME[@REP]=VALUE]... --dry-run`
-//!   prints the steps of every repetition with the parameters filled in. It calls no `hkctl` and
-//!   writes nothing.
+//!   prints the steps of every repetition with the parameters filled in. It calls no `hkctl`, writes
+//!   nothing and asks the operator nothing; it reads the parameters' files to check them.
 //! - `hostkeeper-measure run --plan FILE --run-id ID [--param ...]... --run-dir DIR --hkctl PATH
 //!   --endpoint URL --ca-file PATH --token-file PATH` runs the plan. It writes `run.json`,
 //!   `records.jsonl` (one event per line, appended and flushed as each is seen), the request files

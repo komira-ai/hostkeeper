@@ -17,7 +17,8 @@ fn word(arg: &str) -> String {
 }
 
 /// Prints what [`crate::runner::run`] would do with the same plan and parameters, and runs
-/// nothing: no `hkctl`, no file written, no line read from the operator.
+/// nothing: no `hkctl`, no file written, no line read from the operator. It reads the files the
+/// parameters name, to check them as the run does.
 pub fn dry_run(plan: &Plan, params: &Params, out: &mut dyn Write) -> Result<(), RunError> {
     params.check(plan)?;
     check_files(plan, params)?;
@@ -81,6 +82,6 @@ pub fn dry_run(plan: &Plan, params: &Params, out: &mut dyn Write) -> Result<(), 
             text.push_str(&format!("  {}: {line}\n", step.id));
         }
     }
-    text.push_str("dry run: nothing was called, written or read\n");
+    text.push_str("dry run: nothing was called or written and the operator was asked nothing; the parameter files were read to check them\n");
     out.write_all(text.as_bytes()).map_err(RunError::Console)
 }
