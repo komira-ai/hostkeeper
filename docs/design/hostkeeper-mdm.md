@@ -149,7 +149,13 @@ installs before the pkg** (first by the pkg's postinstall; since the units and p
    `dev.hostkeeper.config`. The keys are those of `hostkeeper.toml` (design section 4.1):
    `coordinator`, `ca_sha256`, `release_channel`, the `trusted_signers` dictionary
    (`organisation`, `workflow`, `refs`, `hosted_runner`) and an optional `bounds` dictionary. Holds
-   no secret.
+   no secret. The same payload carries, when the coordinator has the file for it, two more domains:
+   `dev.hostkeeper.stores` (the keys of `stores.toml`, from `--mdm-stores`) and
+   `dev.hostkeeper.macos-pkg` (the key of `macos-pkg.toml`, `signers`, from `--mdm-macos-pkg`),
+   each file judged at the coordinator's start by the loader that reads it on the Mac, so a profile
+   the daemon would refuse is refused when the coordinator starts. A stores file that names a credential file
+   (`basic_auth_file`, `bearer_file`) is refused: a profile carries no secret, and the file is
+   not on the Mac. Both flags require `--mdm-profile-identifier`.
 2. On that profile's `Acknowledged`, the gate sends the pkg (section 7).
 3. The config is written by the code of `mac_config` (**Built**: `crates/hostkeeper-daemon/src/mac_config.rs`),
    which the pkg's postinstall first ran as a command and which the daemon now runs at each start
@@ -187,12 +193,29 @@ Why the profile and not the pkg:
 
 The daemon still reads only `hostkeeper.toml`. Its Linux and Mac config paths stay one code path,
 and the file stays the host's only trust root (design section 4.1). After the first write, local
-root changes the file and the MDM does not: the gate never sends the config profile again to a Mac
-it has seen approved. A changed farm config, or a wrong first one, reaches a Mac only when local
+root changes the file and the MDM does not: a changed `hostkeeper.toml` in the profile never replaces
+the Mac's file, because the daemon writes `hostkeeper.toml` only when it is absent. A changed farm config, or a wrong first one, reaches a Mac only when local
 root replaces the file and restarts the job (`launchctl kickstart -k
 system/dev.hostkeeper.hostkeeper`), as on a Linux host.
 
-The gate sends the pkg on the config profile's `Acknowledged`. Whether macOS has written the
+The gate does send the config profile again, with the same identifier so that it replaces the one
+on the Mac, when its settings change (**Built**: `crates/hostkeeper-mdm-gate/src/enroll.rs`,
+`config_resend.rs` tests). With each config profile command the gate records the SHA-256 of the
+payload's `PayloadContent` written as an XML property list (the settings alone, with no UUID;
+`ConfigProfile::settings_sha256`). At a look of a device that is enrolled, has a serial no other
+live enrollment has and is on the allowlist, approved or not, the profile is due when the device
+acknowledged the last config profile command carrying a different digest, or none (a record
+written before the field counts as different, so every Mac gets the new domains once). The
+digest counts as delivered only when the device answered `Acknowledged`; a command not yet
+answered is never sent again, so a change is sent once however many webhook events and looks
+follow; one answered with an error is sent again `CONFIG_RESEND_SECS` (an hour) after the answer,
+as before, and never sooner; one NanoHUB did not queue is sent again at the next look. A Mac
+approved in this enrollment is sent nothing else (no nonce, no pkg), and its nonce profile's
+removal goes first, the config profile at the next look; a Mac with no config profile command in
+this enrollment that is already approved is sent none. On a Mac not yet approved, the pkg waits
+for the new profile's `Acknowledged`, as it waits for the first.
+
+The gate sends the pkg on the config profile's `Acknowledged` (on a profile sent again, on its own). Whether macOS has written the
 managed preferences file by the time it answers is to verify in M16. If it has not, the daemon's
 start fails and launchd starts it again, and it starts once the file is there.
 
@@ -202,11 +225,16 @@ the job is loaded by the postinstall. This is the "operator's bootstrap" of the 
 load moved into the pkg. The Mac is then approved by an operator, as a Linux host is.
 
 **The service installer's files.** A Mac that installs services from signed `.pkg` files
-([packages-repositories.md](packages-repositories.md) section 4.7, **Designed**) also needs `stores.toml` and
+([packages-repositories.md](packages-repositories.md) section 4.7) also needs `stores.toml` and
 `macos-pkg.toml`. The same config profile carries them as two more domains, `dev.hostkeeper.stores` and
 `dev.hostkeeper.macos-pkg`, and the daemon's start renders each with these steps, except that a file which differs
-from its managed preferences is replaced, so a signer rotation reaches the Mac at its next start. `hostkeeper.toml`
-keeps the rule above.
+from its managed preferences is replaced. **Built**: the daemon's step (`crates/hostkeeper-daemon/src/mac_files.rs`),
+and the gate's side: the flags `--mdm-stores` and
+`--mdm-macos-pkg` (`crates/hostkeeper-coordinator/src/mdm.rs`), the domains and the loader checks
+(`crates/hostkeeper-mdm-gate/src/profile.rs`: `StoresProfile`, `MacosPkgProfile`, `ConfigProfile`), and the profile sent
+again when its settings change, above. So a signer rotation, and the new domains on a Mac enrolled before them, reach an
+approved Mac: the coordinator is restarted with the new file, the gate sends the profile once, and the Mac's daemon
+replaces its file at its next start. `hostkeeper.toml` keeps the rule above.
 
 Design sections 4.6 and 5.9 were changed with this document. Task M10 changed `docs/macos.md`
 and the postinstall check of `check-macos-pkg` (**Built**: `docs/macos.md`,
@@ -402,6 +430,8 @@ enrolled, supervised, ADE, user-approved, the times of the last check-in, and th
 and not answered. The config profile's state and the last nonce (when it was issued, for which request, its pushes
 and its removal) are fields 18 and 19 of the record, added by M12 to schema 1 so the release
 before reads it (`the_enrollment_fields_are_read_by_the_release_before_them_and_the_other_way`);
+the settings digest of the config profile is field 5 of the profile message, an optional field added the same way
+(`the_settings_digest_is_read_by_the_release_before_it_and_the_other_way`);
 the install tries are field 20, added by M14 the same way (**Built**: the digest last sent, the count NanoHUB
 queued and the last send with its answer, forgotten with the enrollment;
 `the_install_field_is_read_by_the_release_before_it_and_the_other_way`). `status(serial)`

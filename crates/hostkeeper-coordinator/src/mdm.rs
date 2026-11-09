@@ -20,7 +20,11 @@
 //! With `--mdm-profile-identifier` and `--mdm-daemon-config` as well, the gate runs its
 //! enrollment side ([`hostkeeper_mdm_gate::enroll`]): it installs the config profile on each
 //! allowlisted Mac, and pushes the one-time nonce once the Mac's daemon has posted its request.
-//! The daemon config file is checked at start by the daemon's own loader. The gate asks the
+//! The daemon config file is checked at start by the daemon's own loader. With `--mdm-stores`
+//! and `--mdm-macos-pkg` the config profile also carries the domains `dev.hostkeeper.stores` and
+//! `dev.hostkeeper.macos-pkg`, each file checked at start by the loader that reads it on the
+//! Mac; a stores file that names a credential file is refused. The gate sends the config
+//! profile again to a Mac whose settings it has not acknowledged. The gate asks the
 //! coordinator's enrollment through [`hostkeeper_mdm_gate::Enrollments`], attached once the
 //! enrollment is built ([`Mdm::attach`]), is told of each new request, and looks at every
 //! device once a minute besides ([`hostkeeper_mdm_gate::enroll::run`]).
@@ -48,10 +52,11 @@ use hostkeeper_enrollment::fs::{Fs, RealFs};
 use hostkeeper_enrollment::names::KeyHash;
 use hostkeeper_enrollment::validity::UnixClock;
 use hostkeeper_mdm_gate::{
-    ApiKey, ApiKeyError, ApiUrl, ApiUrlError, CONFIG_FLAG, DaemonProfile, DaemonProfileError,
-    DeviceStore, EnrollSide, Enrollments, EnrollmentsError, FileDeviceStore, Gate, IdentifierError,
-    Install, MdmHost, MdmHostError, NanoHub, Nonce, PkgAllowlist, PkgAllowlistError,
-    ProfileIdentifier, Random, StoreError, Waiting, enroll, webhook,
+    ApiKey, ApiKeyError, ApiUrl, ApiUrlError, CONFIG_FLAG, ConfigProfile, DaemonProfile,
+    DaemonProfileError, DeviceStore, EnrollSide, Enrollments, EnrollmentsError, FileDeviceStore,
+    Gate, IdentifierError, Install, MACOS_PKG_FLAG, MacosPkgProfile, MacosPkgProfileError, MdmHost,
+    MdmHostError, NanoHub, Nonce, PkgAllowlist, PkgAllowlistError, ProfileIdentifier, Random,
+    STORES_FLAG, StoreError, StoresProfile, StoresProfileError, Waiting, enroll, webhook,
 };
 
 use crate::enrollment::{
@@ -105,6 +110,20 @@ pub struct MdmFlags {
     /// the daemon's own loader. It holds no secret. Requires --mdm-profile-identifier.
     #[arg(long, requires = "mdm_profile_identifier")]
     pub mdm_daemon_config: Option<PathBuf>,
+    /// The stores the config profile carries, as the domain `dev.hostkeeper.stores`: the keys of
+    /// a `stores.toml`, checked at start by the daemon's own loader. The daemon replaces its
+    /// stores.toml from it at its start. It holds no secret: a store that names a credential
+    /// file (`basic_auth_file`, `bearer_file`) is refused, since the file is not on the Mac.
+    /// Requires --mdm-profile-identifier.
+    #[arg(long, requires = "mdm_profile_identifier")]
+    pub mdm_stores: Option<PathBuf>,
+    /// The macos-pkg signers the config profile carries, as the domain
+    /// `dev.hostkeeper.macos-pkg`: the key of a `macos-pkg.toml` (`signers`, 1 to 4 SHA-256
+    /// fingerprints of leaf certificates), checked at start by the daemon's own loader. The
+    /// daemon replaces its macos-pkg.toml from it at its start. Requires
+    /// --mdm-profile-identifier.
+    #[arg(long, requires = "mdm_profile_identifier")]
+    pub mdm_macos_pkg: Option<PathBuf>,
     /// The pkg allowlist: a TOML file of root's that no one else can write, of `[[pkg]]`
     /// entries, each the pkg's `sha256`, its `version` and its `path` (`<sha256>.pkg` in the
     /// MDM kit's pkg directory). With it the gate sends each Mac on --mac-serial-allowlist the
@@ -140,9 +159,11 @@ pub enum MdmError {
     /// `--mdm-profile-identifier` is not a reverse-DNS name.
     #[error(transparent)]
     Identifier(#[from] IdentifierError),
-    /// `--mdm-daemon-config` cannot be read.
-    #[error("{CONFIG_FLAG} {path}: {source}")]
+    /// A file of `--mdm-daemon-config`, `--mdm-stores` or `--mdm-macos-pkg` cannot be read.
+    #[error("{flag} {path}: {source}")]
     ConfigRead {
+        /// The flag.
+        flag: &'static str,
         /// The file.
         path: String,
         /// What the system said.
@@ -152,6 +173,12 @@ pub enum MdmError {
     /// `--mdm-daemon-config` is refused by the daemon's loader.
     #[error(transparent)]
     Config(#[from] DaemonProfileError),
+    /// `--mdm-stores` is refused: a credential file, or the daemon's loader refuses it.
+    #[error(transparent)]
+    Stores(#[from] StoresProfileError),
+    /// `--mdm-macos-pkg` is refused by the daemon's loader.
+    #[error(transparent)]
+    MacosPkg(#[from] MacosPkgProfileError),
     /// `--mdm-pkg-allowlist` is refused.
     #[error(transparent)]
     PkgAllowlist(#[from] PkgAllowlistError),
@@ -284,8 +311,9 @@ impl Mdm {
     }
 }
 
-/// The enrollment side's identifier and daemon config, when its two flags are given.
-fn side_of(flags: &MdmFlags) -> Result<Option<(ProfileIdentifier, DaemonProfile)>, MdmError> {
+/// The enrollment side's identifier and config profile, when its two flags are given: the
+/// daemon config, with the stores and the signers when their flags are.
+fn side_of(flags: &MdmFlags) -> Result<Option<(ProfileIdentifier, ConfigProfile)>, MdmError> {
     let (Some(identifier), Some(config)) =
         (&flags.mdm_profile_identifier, &flags.mdm_daemon_config)
     else {
@@ -293,11 +321,24 @@ fn side_of(flags: &MdmFlags) -> Result<Option<(ProfileIdentifier, DaemonProfile)
         return Ok(None);
     };
     let identifier = ProfileIdentifier::parse(identifier)?;
-    let text = std::fs::read_to_string(config).map_err(|source| MdmError::ConfigRead {
-        path: config.display().to_string(),
+    let mut profile = ConfigProfile::new(DaemonProfile::from_toml(&text_of(CONFIG_FLAG, config)?)?);
+    if let Some(path) = &flags.mdm_stores {
+        profile = profile.with_stores(StoresProfile::from_toml(&text_of(STORES_FLAG, path)?)?);
+    }
+    if let Some(path) = &flags.mdm_macos_pkg {
+        let text = text_of(MACOS_PKG_FLAG, path)?;
+        profile = profile.with_macos_pkg(MacosPkgProfile::from_toml(&text)?);
+    }
+    Ok(Some((identifier, profile)))
+}
+
+/// The text of the file `path`, which the flag `flag` names.
+fn text_of(flag: &'static str, path: &Path) -> Result<String, MdmError> {
+    std::fs::read_to_string(path).map_err(|source| MdmError::ConfigRead {
+        flag,
+        path: path.display().to_string(),
         source,
-    })?;
-    Ok(Some((identifier, DaemonProfile::from_toml(&text)?)))
+    })
 }
 
 /// The pkg install, when `--mdm-pkg-allowlist` and `--mdm-host` are given: the allowlist read

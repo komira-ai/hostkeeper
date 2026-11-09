@@ -27,6 +27,9 @@
 //! docs/design/two-programs.md, section 2.1), saying nothing for a config kept: a config that
 //! is not there is written from the managed preferences, and one that cannot be is the start's
 //! error ([`crate::start::StartError::MacConfig`], [`crate::start::EXIT_CONFIG`]).
+//!
+//! The same start renders two more domains to their files, by [`crate::mac_files`], using this
+//! module's rendering of a property list as TOML.
 
 use std::fs::{self, DirBuilder, File, OpenOptions};
 use std::io::{self, Cursor, Write};
@@ -132,7 +135,17 @@ pub fn mac_config_with(
             source,
         },
     })?;
-    let text = render(managed, &bytes)?;
+    let text = render(&bytes).map_err(|error| match error {
+        RenderError::NotPlist(source) => MacConfigError::NotPlist {
+            path: managed.to_path_buf(),
+            source,
+        },
+        RenderError::NotDictionary => MacConfigError::NotDictionary {
+            path: managed.to_path_buf(),
+        },
+        RenderError::Unsupported { key, kind } => MacConfigError::Unsupported { key, kind },
+        RenderError::IntegerRange { key } => MacConfigError::IntegerRange { key },
+    })?;
     DaemonConfig::parse(&text)?;
     let written = write_new(config, &format!("{HEADER}{text}"), between).map_err(|source| {
         MacConfigError::Io {
@@ -160,21 +173,32 @@ fn existing(config: &Path) -> Option<Result<Configured, MacConfigError>> {
     })
 }
 
+/// Why a property list has no TOML form ([`render`]).
+#[derive(Debug, thiserror::Error)]
+pub enum RenderError {
+    /// The bytes are not a property list.
+    #[error("not a property list: {0}")]
+    NotPlist(plist::Error),
+    /// The top level of the property list is not a dictionary.
+    #[error("not a dictionary at its top level")]
+    NotDictionary,
+    /// A value has no TOML form.
+    #[error("{key} is {kind}, which a TOML file cannot hold")]
+    Unsupported { key: String, kind: &'static str },
+    /// An integer does not fit a signed 64-bit integer.
+    #[error("{key} does not fit a signed 64-bit integer")]
+    IntegerRange { key: String },
+}
+
 /// The property list in `bytes`, as the text of a TOML document.
-fn render(managed: &Path, bytes: &[u8]) -> Result<String, MacConfigError> {
-    let value =
-        Value::from_reader(Cursor::new(bytes)).map_err(|source| MacConfigError::NotPlist {
-            path: managed.to_path_buf(),
-            source,
-        })?;
+pub(crate) fn render(bytes: &[u8]) -> Result<String, RenderError> {
+    let value = Value::from_reader(Cursor::new(bytes)).map_err(RenderError::NotPlist)?;
     match value {
         Value::Dictionary(dict) => {
             let table = table(&dict, "")?;
             Ok(table.to_string())
         }
-        _ => Err(MacConfigError::NotDictionary {
-            path: managed.to_path_buf(),
-        }),
+        _ => Err(RenderError::NotDictionary),
     }
 }
 
@@ -187,15 +211,15 @@ fn dotted(key: &str, name: &str) -> String {
 }
 
 /// A dictionary as a TOML table; `key` is the dotted key of the dictionary, empty at the top.
-fn table(dict: &plist::Dictionary, key: &str) -> Result<toml::Table, MacConfigError> {
+fn table(dict: &plist::Dictionary, key: &str) -> Result<toml::Table, RenderError> {
     dict.iter()
         .map(|(name, value)| Ok((name.clone(), convert(value, &dotted(key, name))?)))
         .collect()
 }
 
 /// A property list value as a TOML value; `key` names it in an error.
-fn convert(value: &Value, key: &str) -> Result<toml::Value, MacConfigError> {
-    let unsupported = |kind| MacConfigError::Unsupported {
+fn convert(value: &Value, key: &str) -> Result<toml::Value, RenderError> {
+    let unsupported = |kind| RenderError::Unsupported {
         key: key.to_string(),
         kind,
     };
@@ -213,7 +237,7 @@ fn convert(value: &Value, key: &str) -> Result<toml::Value, MacConfigError> {
         Value::Integer(int) => {
             int.as_signed()
                 .map(toml::Value::Integer)
-                .ok_or_else(|| MacConfigError::IntegerRange {
+                .ok_or_else(|| RenderError::IntegerRange {
                     key: key.to_string(),
                 })
         }

@@ -14,6 +14,8 @@
 //! 2. A pending request appears, matched to the record, with claims equal to the guest's UUID and
 //!    serial; the console shows its key hash; `Approve` by that hash succeeds; the first
 //!    heartbeat arrives; the fixture service assigned to the host's role reports installed.
+//!    The installed system holds exactly the repository files `serve --repositories` was given,
+//!    root's with mode 0644.
 //! 3. Router mode, the enrolled guest rebooted: `hostkeeper-pxe` learns its address from its
 //!    REQUEST, serves `hostkeeper/boot.efi` as the x86-64 shim, and its local-disk menu; its
 //!    heartbeat comes back from the same disk.
@@ -220,6 +222,9 @@ fn an_x86_64_machine_installs_by_network_enrolls_gets_its_service_is_reinstalled
             .ok_or_else(|| format!("{got}"))
     });
     rig.keep("host.json", got.to_string().as_bytes());
+    // The seed wrote the repository entries the operator gave `serve`, and the daemon, whose
+    // loader refuses to start on a defect, started on them.
+    netinstall::repositories::assert_installed(&rig.ssh);
 
     // 3. Router mode: the enrolled guest boots its disk.
     rig.serve(Mode::Router, &[]);

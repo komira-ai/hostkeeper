@@ -12,8 +12,12 @@ fixed path, the refusal of scripts and the path rule of packages-native.md secti
 confined (`StepLauncher::run_tool`); the daemon's check of the configuration at start and its answers
 `order_invalid` and `coordinator_too_old` to an entry of the wrong kind; and `ServiceBeat.drift`, sent over gRPC and
 shown by `Hosts.List` and `Hosts.Get`. The daemon's order path does not run `apt` yet, so no daemon announces it: that
-needs the version directory's `target.json`, `VersionDir::read` and built-in steps of A6's row. Nothing else here is
-built. This amends [packages.md](packages.md),
+needs the version directory's `target.json`, `VersionDir::read` and built-in steps of A6's row. Build item A17 is
+**Built**: `hostkeeper-pxe serve --repositories` checked by the loader's `load_as` (`crates/hostkeeper-pxe/src/serve.rs`,
+`crates/hostkeeper-pxe-seed/src/seed.rs`), the enrollment runbook's step, the MDM profile's two domains and their
+re-send (`crates/hostkeeper-mdm-gate/src/profile.rs`, `enroll.rs`), the daemon's rendering of them
+(`crates/hostkeeper-daemon/src/mac_config.rs`), and the rotation runbook
+([repository-keys.md](../operations/repository-keys.md)). Nothing else here is built. This amends [packages.md](packages.md),
 [packages-lifecycle.md](packages-lifecycle.md) and [packages-tests.md](packages-tests.md), as the maintainers ruled:
 hostkeeper installs a Linux service's package from a package repository with the host's package manager
 (`apt-get install tierstore=<V>` from the suite the host is configured with). It does not fetch a `.deb` and install
@@ -537,9 +541,16 @@ managed-preference domains, `dev.hostkeeper.stores` and `dev.hostkeeper.macos-pk
 `stores.toml` and `macos-pkg.toml`. The daemon's start renders each to its file by the steps of `mac_config::at_start` (the property
 list as TOML, checked by the daemon's own loader before it is written) with one difference: the managed preferences
 are these files' source, so a file that differs from them is replaced, and a rotation the MDM pushes takes effect at
-the daemon's next start. `hostkeeper.toml` keeps its rule (written only when there is none), since it holds the trust
-root a reinstall must not change. A Mac with neither domain keeps whatever files its operator wrote. That is A17's Mac
-half.
+the daemon's next start. The coordinator takes the two files as `--mdm-stores` and `--mdm-macos-pkg` and checks each
+with the daemon's own loader at its start; a store naming a credential file is refused, since a profile carries no
+secret. The gate keeps, with the config profile it sent a Mac, the SHA-256 of the profile's settings, and records it
+as delivered only once the Mac acknowledges that profile. It sends the config profile again to an enrolled Mac on its
+allowlist, approved or not, once whenever the settings it would send now differ from those delivered (a record with
+none counts as different, so a Mac enrolled before the two domains gets them once); a send answered with an error is
+tried again only after the gate's resend delay, never in a loop. The nonce and the pkg keep their rules.
+`hostkeeper.toml` keeps its rule (written only when there is none), since it holds the trust root a reinstall must
+not change, so a profile sent again never changes it. A Mac with neither domain keeps whatever files its operator
+wrote. That is A17's Mac half.
 
 **When a daemon announces it.** A macOS daemon announces `macos-pkg` when `/usr/sbin/installer` and `/usr/sbin/pkgutil`
 are present and `/etc/hostkeeper/macos-pkg.toml` names at least one signer (every file there passed the checks above,

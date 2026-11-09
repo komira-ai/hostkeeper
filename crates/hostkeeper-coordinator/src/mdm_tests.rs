@@ -64,6 +64,8 @@ pub(crate) fn flags_in(dir: &Scratch) -> MdmFlags {
         mdm_webhook_listen: Some("127.0.0.1:9100".parse().expect("an address")),
         mdm_profile_identifier: None,
         mdm_daemon_config: None,
+        mdm_stores: None,
+        mdm_macos_pkg: None,
         mdm_pkg_allowlist: None,
         mdm_host: None,
     }
