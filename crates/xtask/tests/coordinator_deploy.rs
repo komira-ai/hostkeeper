@@ -97,7 +97,7 @@ fn pinned(reference: &str, name: &str) -> bool {
 }
 
 /// Proves: the compose file has exactly the two services; neither has `environment` or
-/// `env_file`; both use the host's network; Postgres is `postgres:16` by the digest of CI's test
+/// `env_file`; both use the host's network; Postgres is `postgres:16` by the digest of CI's test shards'
 /// service, optional behind the profile `postgres`, listening on loopback only, with its data on
 /// the named volume, the SQL files mounted read-only where the runbook runs them, and a health
 /// check of the role and database `init.sql` makes; the coordinator is a release's image by
@@ -130,7 +130,7 @@ fn the_compose_file_sets_no_environment_and_pins_both_images_by_digest() {
             .expect("ci.yml is YAML");
     let tested = text(entry(
         entry(
-            entry(entry(entry(&ci, "jobs"), "test"), "services"),
+            entry(entry(entry(&ci, "jobs"), "test-shard"), "services"),
             "postgres",
         ),
         "image",
