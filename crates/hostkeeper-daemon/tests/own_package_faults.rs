@@ -337,3 +337,17 @@ fn the_new_binary_is_the_package_s_own_path_in_the_version_s_tree() {
         "tree/usr/local/bin/hostkeeper"
     );
 }
+
+/// Proves an order of hostkeeper on a host whose `placed.json` cannot be read is refused
+/// `store_failed` before anything is staged: the rollback table cannot be judged without it.
+#[test]
+fn an_order_of_hostkeeper_with_placed_json_unreadable_is_refused_before_staging() {
+    let nr = NativeRig::new("own-placed-unreadable");
+    let placed = nr.rig.scratch.path().join("placed/placed.json");
+    fs::write(&placed, "{").unwrap();
+    let pin = nr.publish(V2);
+    let reply = nr.daemon_at(V1).order(&install_hk(V2, &pin, 1));
+    assert_eq!(reply.refusal(), Some(Refusal::StoreFailed), "{reply:?}");
+    assert!(nr.host.calls().is_empty());
+    assert!(!nr.version_dir(V2).exists());
+}
