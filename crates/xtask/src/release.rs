@@ -82,6 +82,7 @@ pub(crate) mod contract;
 mod doc_tests;
 #[cfg(test)]
 pub(crate) mod fakes;
+mod files;
 pub(crate) mod git;
 mod github;
 mod hkctl;
@@ -99,6 +100,7 @@ mod plan;
 pub(crate) mod ports;
 mod publish;
 pub(crate) mod real;
+mod run_state;
 mod set_version;
 mod sync;
 mod targets;
@@ -107,16 +109,17 @@ pub mod test_support;
 mod version;
 
 use std::fmt;
-use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::advisories::DenyCli;
 use check_binary::VersionOf;
 use contract::{Commit, Package, Platform, Repo, Service, Version};
+pub(crate) use files::{answer, file_sha256};
 use git::GitCli;
 use github::Gh;
 use macos_pkg::PkgbuildCli;
-use ports::{Adapters, Exec, PortError, Ports, Run};
+use ports::{Adapters, Exec, PortError, Ports};
+pub(crate) use run_state::{RunState, state};
 
 /// Why a release verb failed.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -293,7 +296,7 @@ pub(crate) enum Verb {
         staged: Option<PathBuf>,
         /// For the coordinator's deb or rpm instead: the directory its program and `ui/` were
         /// staged in.
-        #[arg(long, conflicts_with = "staged")]
+        #[arg(long, conflicts_with_all = ["staged", "service"])]
         coordinator_staged: Option<PathBuf>,
         /// The service whose `.deb` this is: hello or mdm.
         #[arg(long, value_enum, conflicts_with = "coordinator_staged")]
@@ -960,77 +963,6 @@ impl<E: Exec> Adapters for Wired<E> {
             advisories: &self.deny,
             download: &self.curl,
         }
-    }
-}
-
-/// Appends `lines` (`key=value`) to `output`, when there is one, and returns them to print.
-pub(crate) fn answer(output: Option<&Path>, lines: Vec<String>) -> Result<Vec<String>, Error> {
-    if let Some(path) = output {
-        let mut text = lines.join("\n");
-        text.push('\n');
-        std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-            .and_then(|mut f| f.write_all(text.as_bytes()))
-            .map_err(Error::io(format!("append to {}", path.display())))?;
-    }
-    Ok(lines)
-}
-
-/// The SHA-256 of the file at `path`, 64 lowercase hex digits, read in one streaming pass.
-pub(crate) fn file_sha256(path: &Path) -> Result<String, Error> {
-    use sha2::Digest;
-    let what = format!("read {}", path.display());
-    let mut file = std::fs::File::open(path).map_err(Error::io(&what))?;
-    let mut hasher = sha2::Sha256::new();
-    let mut buf = vec![0_u8; 1 << 16];
-    loop {
-        let n = file.read(&mut buf).map_err(Error::io(&what))?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buf[..n]);
-    }
-    Ok(hex::encode(hasher.finalize()))
-}
-
-/// Where a workflow stands for one commit: its latest push run on `main` for that commit.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum RunState {
-    /// No push run on `main` for the commit.
-    Missing,
-    /// The latest such run has not completed.
-    Pending(u64),
-    /// The latest such run succeeded.
-    Succeeded(u64),
-    /// The latest such run failed (`failure`, `timed_out` or `startup_failure`).
-    Failed(u64),
-    /// The latest such run completed otherwise (`cancelled`, `skipped`, ...): not green, not
-    /// red.
-    Other(u64, String),
-}
-
-/// The state of a workflow for `commit` from its `runs`: only push runs on `main` whose head is
-/// exactly `commit` count, and of those the latest (highest id). A pull-request run, a run on
-/// another branch and a run for another commit never count.
-pub(crate) fn state(runs: &[Run], commit: &Commit) -> RunState {
-    let latest = runs
-        .iter()
-        .filter(|r| {
-            (r.event == "push") & (r.branch == contract::MAIN) & (r.head_sha == commit.as_str())
-        })
-        .max_by_key(|r| r.id);
-    let Some(run) = latest else {
-        return RunState::Missing;
-    };
-    match (run.status.as_str(), run.conclusion.as_deref()) {
-        ("completed", Some("success")) => RunState::Succeeded(run.id),
-        ("completed", Some("failure" | "timed_out" | "startup_failure")) => {
-            RunState::Failed(run.id)
-        }
-        ("completed", other) => RunState::Other(run.id, other.unwrap_or("none").to_owned()),
-        _ => RunState::Pending(run.id),
     }
 }
 
