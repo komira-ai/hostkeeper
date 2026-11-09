@@ -312,7 +312,7 @@ fn move_to_apt(host: &Host) {
 /// same name, a move refused as `installer_changed`, and a unit left stopped by the move.
 #[test]
 fn a_service_installed_from_the_archive_moves_to_apt_and_its_unit_is_the_packages() {
-    let host = Host::new("move-native-forward");
+    let host = Host::new("apt-move");
     move_to_apt(&host);
 
     assert!(
@@ -363,7 +363,7 @@ fn a_service_installed_from_the_archive_moves_to_apt_and_its_unit_is_the_package
 /// archive's unit unplaced or the unit stopped, and one that fetches what the host keeps.
 #[test]
 fn the_moves_rollback_purges_the_package_and_places_the_archive_unit_again() {
-    let host = Host::new("move-native-rollback");
+    let host = Host::new("apt-move-back");
     move_to_apt(&host);
     fs::remove_dir_all(&host.rig.repo).expect("remove the repository from the disk");
 
