@@ -534,10 +534,7 @@ fn the_linux_adapters_are_the_systemd_set() {
 /// directory is under.
 #[test]
 fn the_run_directory_of_the_settings_is_the_host_platforms() {
-    let flags = match Cli::parse_from(["hostkeeper", "daemon"]).command {
-        Command::Daemon(flags) => flags,
-        other => panic!("not the daemon: {other:?}"),
-    };
+    let Command::Daemon(flags) = Cli::parse_from(["hostkeeper", "daemon"]).command;
     assert_eq!(flags.settings().run_dir, Platform::host().run_dir);
 }
 

@@ -1,21 +1,19 @@
 //! The first binary of the binary directory the daemon's unit starts `current` of: given by the
 //! start of `hostkeeper daemon` from the packaged binary, which then execs `current`
-//! ([`hostkeeper_daemon::packaged`], docs/design/two-programs.md, section 2.1), and by the verb
-//! `hostkeeper self-update-seed` the units and the pkg still run. Either puts it in before the
-//! first start and never over a `current` that starts a binary.
+//! ([`hostkeeper_daemon::packaged`], docs/design/two-programs.md, section 2.1). It is put in
+//! before the first start and never over a `current` that starts a binary.
 
 mod support;
 
 use std::cell::RefCell;
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use clap::Parser;
-use hostkeeper_daemon::cli::{self, Cli, EXIT_CONFIG, EXIT_FAILED, EXIT_LOCKED, SystemdVars};
+use hostkeeper_daemon::cli::{self, EXIT_CONFIG, EXIT_FAILED, EXIT_LOCKED, SystemdVars};
 use hostkeeper_daemon::packaged::{self, PACKAGED_BINARIES, PackagedError};
 use hostkeeper_daemon::seed::{SeedError, Seeded, seed};
 use hostkeeper_daemon::selfupdate::binary_dir;
@@ -219,8 +217,7 @@ fn a_start_cut_short_after_staging_is_finished_by_the_next() {
 /// nothing, or that execs a `current` it could not repair: with the state directory locked, it
 /// writes nothing, execs nothing and ends with the status of a locked start; with no binary to
 /// copy, or a `previous` that names this version with its file gone (which staging refuses to
-/// write over), it fails naming the path and execs nothing. The verb, which the unit still runs,
-/// answers each with the same status.
+/// write over), it fails naming the path and execs nothing.
 #[test]
 fn a_start_that_cannot_seed_writes_nothing_execs_nothing_and_says_why() {
     let host = Host::new("seed-locked");
@@ -236,18 +233,6 @@ fn a_start_that_cannot_seed_writes_nothing_execs_nothing_and_says_why() {
     assert_eq!(error.exit_code(), EXIT_LOCKED);
     assert!(started.execs.is_empty());
     assert!(!host.state.join("hostkeeper").exists());
-    let run = |host: &Host| {
-        let args: [&OsStr; 6] = [
-            "hostkeeper".as_ref(),
-            "self-update-seed".as_ref(),
-            "--state-dir".as_ref(),
-            host.state.as_os_str(),
-            "--binary".as_ref(),
-            host.binary.as_os_str(),
-        ];
-        format!("{:?}", cli::run(Cli::parse_from(args)))
-    };
-    assert_eq!(run(&host), format!("{:?}", ExitCode::from(EXIT_LOCKED)));
     drop(held);
 
     let host = Host::new("seed-no-binary");
@@ -264,7 +249,6 @@ fn a_start_that_cannot_seed_writes_nothing_execs_nothing_and_says_why() {
     assert!(started.execs.is_empty());
     assert_eq!(host.layout().current().expect("current"), None);
     assert!(!binary_dir(&host.state).exists(), "nothing was made");
-    assert_eq!(run(&host), format!("{:?}", ExitCode::from(EXIT_FAILED)));
 
     let host = Host::new("seed-previous-gone");
     host.switched(OWN, b"the old binary");
@@ -296,7 +280,7 @@ fn a_binary_that_is_not_the_packaged_one_never_execs_current() {
     let host = Host::new("seed-not-packaged");
     host.switched(OWN, b"the binary of the update");
     let image = host.layout().version_path(OWN);
-    // The binary directory: a Mac's daemon also adds its start to the start log beside it.
+    // The binary directory, which a start that execs nothing leaves as it was.
     let before = snapshot(host.layout().dir());
     let execs = RefCell::new(Vec::new());
     let exec = |path: &Path, _: &[OsString]| {
@@ -345,7 +329,7 @@ fn a_binary_that_is_not_the_packaged_one_never_execs_current() {
 /// status than the start's: `hostkeeper daemon` whose image is a packaged path seeds and execs
 /// `current` with exactly the arguments after the program's name, and ends with the status of
 /// what stopped it (an exec that returned is the failed start's); the packaged paths are the
-/// deb's and rpm's and the pkg's. Any other verb from the packaged binary runs as it is.
+/// deb's and rpm's and the pkg's.
 #[test]
 fn the_command_line_of_the_packaged_binary_reaches_the_start() {
     assert_eq!(
@@ -377,22 +361,6 @@ fn the_command_line_of_the_packaged_binary_reaches_the_start() {
         [(host.layout().current_path(), daemon_args(&host.state))]
     );
     assert_eq!(host.started(), b"the installed binary");
-
-    let seed_verb: Vec<OsString> = ["hostkeeper", "self-update-seed", "--state-dir"]
-        .map(OsString::from)
-        .into_iter()
-        .chain([host.state.as_os_str().to_owned(), "--binary".into()])
-        .chain([host.binary.as_os_str().to_owned()])
-        .collect();
-    let code = cli::run_from(
-        seed_verb,
-        &host.binary,
-        &[&host.binary],
-        SystemdVars::default(),
-        &exec,
-    );
-    assert_eq!(format!("{code:?}"), format!("{:?}", ExitCode::SUCCESS));
-    assert!(execs.borrow().is_empty());
 }
 
 /// Catches an exec of the process that hides its failure: a `current` that cannot be run returns
@@ -429,21 +397,16 @@ fn an_exec_that_fails_returns_its_error_and_the_start_names_current() {
     );
 }
 
-/// Catches the verb not reaching the seed: on the command line it seeds and exits 0, and a
-/// symlinked `current` that starts the binary already is left.
+/// Catches a `current` that is a link to an executable file elsewhere being replaced or not
+/// started: it starts the binary already, so the seed leaves it ([`Seeded::InPlace`]) and the
+/// packaged start execs it.
 #[test]
-fn the_verb_seeds_and_exits_zero() {
-    let host = Host::new("seed-verb");
-    let args: [&OsStr; 6] = [
-        "hostkeeper".as_ref(),
-        "self-update-seed".as_ref(),
-        "--state-dir".as_ref(),
-        host.state.as_os_str(),
-        "--binary".as_ref(),
-        host.binary.as_os_str(),
-    ];
-    let code = cli::run(Cli::parse_from(args));
-    assert_eq!(format!("{code:?}"), format!("{:?}", ExitCode::SUCCESS));
+fn a_current_linked_to_an_executable_elsewhere_is_started_in_place() {
+    let host = Host::new("seed-link-elsewhere");
+    assert_eq!(
+        seed(&host.state, &host.binary, OWN).expect("seeded"),
+        Seeded::Seeded
+    );
     assert_eq!(host.started(), b"the installed binary");
     // A version named by a link of its own to an executable file starts too.
     let other = host.scratch.path().join("elsewhere");

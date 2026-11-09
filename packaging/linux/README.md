@@ -11,7 +11,7 @@ publishing the packages are not here.
 | file | what |
 |---|---|
 | `hostkeeper.service` | the bootstrap unit, the one the deb, the rpm and a boot image install at `/usr/lib/systemd/system/hostkeeper.service`: the daemon as root, `Type=notify`, started as `/usr/bin/hostkeeper daemon` with its paths as flags and no `ExecStartPre=`, with `Restart=always` and no start limit of its own, and restarted by a 60-second watchdog its heartbeat loop feeds (`WatchdogSec=`, four heartbeat periods); it conflicts with kbf's update agent and its root half and is ordered after them, so a handoff stops one before it starts the other |
-| `units/hostkeeper.service` | the package unit, the one hostkeeper's own package carries as `units/hostkeeper.service` and its install links in `/etc/systemd/system/`: the same keys, but it starts `current` of the binary directory of its own update, after an `ExecStartPre=-` that seeds that directory |
+| `units/hostkeeper.service` | the package unit, the one hostkeeper's own package carries as `units/hostkeeper.service` and its install links in `/etc/systemd/system/`: the same keys, but it starts `current` of the binary directory of its own update |
 | `hostkeeper.tmpfiles.conf` | the daemon's directories and their modes, as `/usr/lib/tmpfiles.d/hostkeeper.conf` |
 | `hostkeeper.toml.template` | the daemon config with a `@@NAME@@` placeholder in each value that belongs to a site |
 | `nfpm.yaml` | the deb and the rpm, for nfpm |
@@ -20,9 +20,10 @@ publishing the packages are not here.
 
 `cargo test -p xtask --test packaging` reads every file here and checks it: the keys and
 command lines of each of the two units; that the bootstrap unit starts the installed binary,
-`/usr/bin/hostkeeper`, one of the paths the daemon seeds and execs from, with no `ExecStartPre=`;
-that the package unit starts `current` of the daemon's binary directory after the `-` seed line;
-that neither passes `--admin-socket` or sets `RuntimeDirectory=`; that each restarts the
+`/usr/bin/hostkeeper`, one of the paths the daemon seeds and execs from;
+that the package unit starts `current` of the daemon's binary directory;
+that neither has an `ExecStartPre=`, passes a flag the binary's parser refuses (`--admin-socket`
+among them) or sets `RuntimeDirectory=`; that each restarts the
 daemon's exit after its own update and sets no start limit; that the
 package unit is the file hostkeeper's package is built with; that the directories are the
 design's with the design's modes, that the template is refused until each placeholder is filled
@@ -47,15 +48,15 @@ runs the binary the last update chose. A binary started from `versions/` never s
 The package unit (`units/hostkeeper.service`) is the one hostkeeper's own package carries. A
 self-update links it in `/etc/systemd/system/`, where it takes the place of the bootstrap unit.
 It starts `/var/lib/updater/state/hostkeeper/bin/current` itself, never `/usr/bin/hostkeeper`,
-which only a deb or rpm upgrade replaces and so is, on most hosts, older than `current`. Before
-each start, `ExecStartPre=-` runs `/usr/bin/hostkeeper self-update-seed`, which, when `current`
-starts no executable file, copies `/usr/bin/hostkeeper` in as its own version and points
-`current` at it; otherwise it changes nothing. The `-` lets a start go on when the installed
-binary is older and lacks the verb, since `current` is then already there.
+which only a deb or rpm upgrade replaces and so is, on most hosts, older than `current`. It has
+no `ExecStartPre=`: `current` exists before the unit is linked, because the bootstrap unit's
+start gave the binary directory its first binary. A host that loses `current` (the link or the
+file it names) has a unit that starts nothing; the repair is in
+[docs/operations/self-update-after-bootstrap.md](../../docs/operations/self-update-after-bootstrap.md),
+"A current that starts nothing".
 
-Neither unit passes `--admin-socket` or sets `RuntimeDirectory=`: the daemon binds no socket
-and makes `/run/hostkeeper` mode 0700 itself, where an older daemon binds the admin socket at
-its default, `/run/hostkeeper/admin.sock`; `hostkeeper.tmpfiles.conf` makes it at boot.
+Neither unit sets `RuntimeDirectory=`: the daemon binds no socket and makes `/run/hostkeeper`
+mode 0700 itself; `hostkeeper.tmpfiles.conf` makes it at boot.
 
 - A self-update stages the new binary in `versions/`, points the link `next` at it and exits 0
   (the hand-over, design section 4.3); `current` is not moved. `Restart=always` starts the binary
@@ -65,11 +66,7 @@ its default, `/run/hostkeeper/admin.sock`; `hostkeeper.tmpfiles.conf` makes it a
   it confirms, leaves the count raised; at the third such start the old binary settles the update
   failed, marks the version bad and runs as the daemon, with `current` where it was. There is no
   fallback unit and no start limit: the unit retries a daemon that cannot start every second
-  (`RestartSec=1`), however many times. The releases before the hand-over wrote
-  `/etc/systemd/system/hostkeeper-fallback.service` and the drop-in
-  `/etc/systemd/system/hostkeeper.service.d/self-update.conf`; the daemon removes both at its
-  start, drop-in first, and runs `systemctl daemon-reload`, and answers a self-update `busy` until
-  they are gone.
+  (`RestartSec=1`), however many times.
 - Once `current` exists, upgrading the deb or the rpm replaces `/usr/bin/hostkeeper` and does not
   change the binary the daemon runs: hostkeeper's own update does that. A self-update also links
   the unit its package carries in `/etc/systemd/system/`, which then takes the place of the one
@@ -167,8 +164,7 @@ directory, byte for byte; the test above fails when they differ.
 
 ## Debugging a wedged node
 
-The daemon binds no admin socket and `hostkeeper admin` is gone; an older daemon that still runs
-under this unit binds `/run/hostkeeper/admin.sock` until the host updates. The status of a host is
+The daemon binds no admin socket and `hostkeeper admin` is gone. The status of a host is
 `hkctl hosts get --node-id <id>`: whether the host is live, its last heartbeat, and each
 service's lifecycle, health and step records (a pending request's `key_sha256`, to check
 against the host, is in `hkctl enrollment list`). `hkctl hosts abort` stops a hung step and

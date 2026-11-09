@@ -1,7 +1,6 @@
 //! What stops or bounds an update of hostkeeper itself before anything is staged: other services'
-//! unfinished updates, a release older than the daemon's oldest reader, the fallback files the
-//! start could not remove, the list of bad versions, the verbs that never update hostkeeper; and
-//! what a confirmed self-update clears.
+//! unfinished updates, a release older than the daemon's oldest reader, the list of bad
+//! versions, the verbs that never update hostkeeper; and what a confirmed self-update clears.
 
 mod support;
 
@@ -11,10 +10,8 @@ use std::sync::Arc;
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_daemon::checks;
 use hostkeeper_daemon::executor::RecordState;
-use hostkeeper_daemon::selfunits::ALERT_SELF_UNITS;
 use hostkeeper_daemon::selfupdate::{
-    PROTOCOL_VERB, REASON_PROTOCOL_UNSUPPORTED, REASON_SELF_BINARY_MISSING, RELEASE_BINARY,
-    Restart, SELF_UPDATE_PROTOCOL, binary_dir,
+    REASON_PROTOCOL_UNSUPPORTED, REASON_SELF_BINARY_MISSING, RELEASE_BINARY, Restart, binary_dir,
 };
 use hostkeeper_daemon::verb::HookedVerb;
 use hostkeeper_daemon::{Refusal, Reply};
@@ -119,56 +116,27 @@ fn an_unreadable_step_record_of_another_service_blocks_the_self_update() {
     assert!(s.rig.record(HK).is_none());
 }
 
-/// Catches an update to a release the daemon cannot fall back to being staged, or the verb a
-/// daemon before stage 2 probes with being gone: a release older than the oldest reader (0.1.163)
-/// is `Failed` before the commit, of class release, `protocol_unsupported`, with the binary
-/// directory as it was, no record and no step run; one at the oldest reader is handed over to; the
-/// verb is still answered, and `SELF_UPDATE_PROTOCOL` stays 1.
+/// Catches an update to a release the daemon cannot fall back to being staged: a release older
+/// than the oldest reader (0.1.194) is `Failed` before the commit, of class release,
+/// `protocol_unsupported`, with the binary directory as it was, no record and no step run; one at
+/// the oldest reader is handed over to.
 #[test]
 fn a_release_older_than_the_oldest_reader_is_refused_before_anything_is_staged() {
-    assert_eq!(
-        (SELF_UPDATE_PROTOCOL, PROTOCOL_VERB),
-        (1, "self-update-protocol")
-    );
     let s = SelfRig::new("su-below-reader");
-    s.release("0.1.162");
+    s.release("0.1.193");
     let bin = binary_dir(&s.rig.state);
     let before = snapshot(&bin);
     assert_eq!(
-        s.daemon().order(&s.order("0.1.162", 1)),
+        s.daemon().order(&s.order("0.1.193", 1)),
         refused_before_commit(Class::Release, REASON_PROTOCOL_UNSUPPORTED)
     );
     assert_eq!(snapshot(&bin), before);
     assert!(s.rig.record(HK).is_none());
     assert!(s.hk_steps().is_empty());
 
-    s.release("0.1.163");
-    assert_eq!(s.daemon().order(&s.order("0.1.163", 1)), awaiting(false));
-    assert_eq!(s.layout().next().expect("next").as_deref(), Some("0.1.163"));
-}
-
-/// Catches a start that could not remove the fallback files of the releases before the hand-over
-/// going on to hand over while they stand: an order for hostkeeper is `busy`, naming the alert,
-/// with nothing staged, linked or recorded, once the start called `hold_self_updates`.
-#[test]
-fn a_self_update_is_busy_while_the_fallback_files_could_not_be_removed() {
-    let s = SelfRig::new("su-units-held");
-    let daemon = s.daemon();
-    assert!(!daemon.ctx().self_updates_held());
-    daemon.ctx().hold_self_updates();
-    assert!(daemon.ctx().self_updates_held());
-    let bin = binary_dir(&s.rig.state);
-    let before = snapshot(&bin);
-    let reply = daemon.order(&s.order(NEW, 1));
-    let Reply::Refused { refusal, detail } = &reply else {
-        panic!("{reply:?}");
-    };
-    assert_eq!(*refusal, Refusal::Busy);
-    assert!(detail.contains(ALERT_SELF_UNITS), "{detail}");
-    assert_eq!(snapshot(&bin), before);
-    assert!(s.rig.record(HK).is_none());
-    assert!(s.hk_steps().is_empty());
-    assert!(!daemon.ctx().restart().requested());
+    s.release("0.1.194");
+    assert_eq!(s.daemon().order(&s.order("0.1.194", 1)), awaiting(false));
+    assert_eq!(s.layout().next().expect("next").as_deref(), Some("0.1.194"));
 }
 
 /// Catches a release with no hostkeeper binary being staged: it is `Failed` before the

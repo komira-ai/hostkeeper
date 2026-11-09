@@ -26,15 +26,10 @@
 //! **The fallback.** The hand-over has no fallback job (docs/design/two-programs.md, section
 //! 4.3): a next binary that cannot start is execed three times by the old binary, which then
 //! settles the update failed ([`Plan::InstalledFailingNext`], [`MacSelfHost::refused_starts`]),
-//! under the same launchd the job runs in. The daemon removes the fallback job of the releases
-//! before the hand-over from the unit directory of its placement (the fixture's `units/`, where
-//! there is none: nothing is booted out). A fallback plist the Mac already has (an earlier
-//! daemon writes it at its start) is booted out and moved aside by [`MacSelfHost::new`] and put
-//! back when the host is dropped, so a fallback job of another tree never runs `previous` of
-//! this one.
+//! under the same launchd the job runs in.
 //!
-//! Dropping the host boots out the daemon's job and the fallback label, prints the daemon's
-//! output when the test is failing, and removes the tree.
+//! Dropping the host boots out the daemon's job, prints the daemon's output when the test is
+//! failing, and removes the tree.
 //!
 //! **The coordinator.** By default the test writes it ([`MacSelfHost::offer`]); a test may answer
 //! each heartbeat with the real coordinator in its process instead ([`coordinator::Relay`]). The
@@ -51,7 +46,6 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use hostkeeper_config::platform::Platform;
-use hostkeeper_daemon::selfunits::fallback_label;
 use hostkeeper_launchd::launchctl::{JobStatus, bootout_args, bootstrap_args, print};
 use hostkeeper_launchd::procid::darwin::DarwinPidInfo;
 use hostkeeper_launchd::{DaemonJob, Label, Launchctl, LaunchctlProcess, PidInfo, daemon_plist};
@@ -81,8 +75,6 @@ pub const ORDER: &str = "self-update-1";
 const AWAITING_REASON: &str = "awaiting_restart";
 /// The reason of the verdict of a version whose new binary failed its tries.
 pub const FALLBACK_REASON: &str = "self_update_fallback";
-/// Where launchd reads the plists of the system domain.
-const LAUNCHD_DIR: &str = "/Library/LaunchDaemons";
 /// How many times a wait reads its state, and the pause between two reads.
 const READS: u32 = 1500;
 const PAUSE: Duration = Duration::from_millis(200);
@@ -189,23 +181,6 @@ pub enum Plan {
 pub struct MacSelfHost {
     base: PathBuf,
     label: Label,
-    /// Where the Mac's own fallback plist was moved aside to, when it had one: put back when the
-    /// host is dropped.
-    aside: Option<PathBuf>,
-}
-
-/// The plist of the daemon's fallback job in `/Library/LaunchDaemons`.
-fn fallback_plist() -> PathBuf {
-    Path::new(LAUNCHD_DIR).join(format!("{}.plist", fallback_label()))
-}
-
-/// Moves `from` to `to`: a rename, or a copy and a removal when the two are on different
-/// volumes.
-fn move_file(from: &Path, to: &Path) -> std::io::Result<()> {
-    fs::rename(from, to).or_else(|_| {
-        fs::copy(from, to)?;
-        fs::remove_file(from)
-    })
 }
 
 impl Drop for MacSelfHost {
@@ -213,24 +188,7 @@ impl Drop for MacSelfHost {
         if std::thread::panicking() {
             eprintln!("{}", self.logs());
         }
-        for label in [
-            Some(self.label.clone()),
-            Label::parse(&fallback_label()).ok(),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            let _ = launchctl().run(&bootout_args(&label));
-        }
-        if let Some(aside) = &self.aside
-            && let Err(e) = move_file(aside, &fallback_plist())
-        {
-            eprintln!(
-                "the fallback plist moved aside to {} was not put back: {e}",
-                aside.display()
-            );
-            return;
-        }
+        let _ = launchctl().run(&bootout_args(&self.label));
         let _ = fs::remove_dir_all(&self.base);
     }
 }
@@ -248,19 +206,7 @@ impl MacSelfHost {
         // `create_dir_all` would take over a directory that is already there.
         fs::create_dir(&base).unwrap_or_else(|e| panic!("create {}: {e}", base.display()));
         let label = Label::parse(&format!("dev.hostkeeper.ci-su{tag}-{pid}")).expect("a job label");
-        // A fallback job of this Mac's own (an earlier daemon's, which writes it at its start)
-        // would run another tree's `previous`: it is booted out and its plist moved aside, and
-        // put back when the test ends, so the daemon under test never loads it.
-        let fallback = fallback_plist();
-        let aside = fs::symlink_metadata(&fallback).is_ok().then(|| {
-            let fallback_job = Label::parse(&fallback_label()).expect("the fallback label");
-            let _ = launchctl().run(&bootout_args(&fallback_job));
-            let aside = base.join("fallback.plist.aside");
-            move_file(&fallback, &aside)
-                .unwrap_or_else(|e| panic!("move {} aside: {e}", fallback.display()));
-            aside
-        });
-        let host = MacSelfHost { base, label, aside };
+        let host = MacSelfHost { base, label };
         host.make(plan);
         host.load(plan);
         host.runs(N);
@@ -294,7 +240,6 @@ impl MacSelfHost {
         dir(&self.state(), 0o700);
         dir(&self.state().join(HK), 0o700);
         dir(&self.path("packages"), 0o755);
-        dir(&self.path("run"), 0o700);
         for sub in ["link", "units", "placed"] {
             dir(&self.fixture().join(sub), 0o755);
         }

@@ -6,15 +6,14 @@ use hostkeeper_link::CALL_SECS;
 
 use crate::daemon_flags::parse_flags;
 use crate::unit::{self, Unit};
-use crate::{Kind, SEED_LINE, altered, refuses};
+use crate::{Kind, altered, refuses};
 
 /// The daemon's command line after its program: the `daemon` verb with each path of design
 /// sections 4.1 and 10 spelled out as a flag, and the flag that makes it report ready to systemd.
-/// No `--admin-socket`: every daemon defaults the socket to `/run/hostkeeper/admin.sock`. The
-/// program is [`Kind::program`]: `current` of the binary directory of hostkeeper's own update in
-/// the package unit (`self_update.rs` holds it to the daemon's `binary_dir`), the installed
-/// binary in the bootstrap unit. `daemon_flags.rs` parses this line with the binary's own flag
-/// parser.
+/// No `--admin-socket`: the binary has no such flag. The program is [`Kind::program`]: `current`
+/// of the binary directory of hostkeeper's own update in the package unit (`self_update.rs` holds
+/// it to the daemon's `binary_dir`), the installed binary in the bootstrap unit.
+/// `daemon_flags.rs` parses this line with the binary's own flag parser.
 const DAEMON_ARGS: [&str; 8] = [
     "daemon",
     "--config",
@@ -24,20 +23,6 @@ const DAEMON_ARGS: [&str; 8] = [
     "--packages-dir",
     "/var/lib/hostkeeper/packages",
     "--notify-systemd",
-];
-
-/// The command line the package unit runs before each start: the binary the package installed gives the binary
-/// directory its first binary when `current` starts none (`self-update-seed`). Its `-` prefix,
-/// the one prefix a line of this unit has, lets the start go on when it fails: an older binary
-/// without the verb, under a unit an update placed, while `current` is already there.
-/// `daemon_flags.rs` parses it with the binary's own flag parser.
-const SEED_COMMAND: [&str; 6] = [
-    "/usr/bin/hostkeeper",
-    "self-update-seed",
-    "--state-dir",
-    "/var/lib/updater/state",
-    "--binary",
-    "/usr/bin/hostkeeper",
 ];
 
 /// kbf's update agent and the root half that serves it, as kbf v0.0.64 names their units in
@@ -51,10 +36,11 @@ const KBF_UNITS: [&str; 3] = [
     "kbf-host-local-frontend.service",
 ];
 
-/// Every key a unit sets, by section: the package unit's also has the seed's `ExecStartPre`. No
-/// unit sets `RuntimeDirectory*`: the tmpfiles rules make the socket's directory.
-fn unit_keys(kind: Kind) -> Vec<(&'static str, Vec<&'static str>)> {
-    let mut service = vec![
+/// Every key a unit sets, by section. No unit sets `ExecStartPre` (the binary has no seed verb: the
+/// start of `/usr/bin/hostkeeper daemon` seeds) or `RuntimeDirectory*` (the tmpfiles rules make the
+/// run directory).
+fn unit_keys() -> Vec<(&'static str, Vec<&'static str>)> {
+    let service = vec![
         "Type",
         "TimeoutStartSec",
         "ExecStart",
@@ -63,9 +49,6 @@ fn unit_keys(kind: Kind) -> Vec<(&'static str, Vec<&'static str>)> {
         "RestartMode",
         "WatchdogSec",
     ];
-    if kind == Kind::Package {
-        service.push("ExecStartPre");
-    }
     vec![
         (
             "Unit",
@@ -117,9 +100,9 @@ fn check_command(kind: Kind, text: &str) -> Result<(), String> {
                 entry.line
             ));
         }
-        if key.starts_with("Exec") && !matches!(key, "ExecStart" | "ExecStartPre") {
+        if key.starts_with("Exec") && key != "ExecStart" {
             return Err(format!(
-                "line {}: {key}= runs a command besides the daemon and its seed",
+                "line {}: {key}= runs a command besides the daemon",
                 entry.line
             ));
         }
@@ -129,25 +112,6 @@ fn check_command(kind: Kind, text: &str) -> Result<(), String> {
     if words != wanted {
         return Err(format!("ExecStart= runs {words:?}, not {wanted:?}"));
     }
-    if kind == Kind::Bootstrap {
-        return match unit.values("Service", "ExecStartPre").is_empty() {
-            true => Ok(()),
-            false => Err(
-                "the bootstrap unit runs a command before the daemon (ExecStartPre=); the daemon it starts seeds itself"
-                    .to_owned(),
-            ),
-        };
-    }
-    let pre = unit.single("Service", "ExecStartPre")?;
-    let seed = pre.strip_prefix('-').ok_or_else(|| {
-        format!("ExecStartPre= has no `-`: a seed that fails would stop the start: {pre:?}")
-    })?;
-    let words = unit::command_words(seed)?;
-    if words != SEED_COMMAND {
-        return Err(format!(
-            "ExecStartPre= runs {words:?}, not {SEED_COMMAND:?}"
-        ));
-    }
     Ok(())
 }
 
@@ -155,9 +119,7 @@ fn check_command(kind: Kind, text: &str) -> Result<(), String> {
 /// installed binary in the package unit, `current` in the bootstrap unit, `previous`), a renamed
 /// or dropped flag, an `--admin-socket`, a flag without its value, another verb, a second
 /// command, a prefix that ignores a failure, a value taken from the environment, or any
-/// environment set for the daemon; a package unit whose seed before the start is missing, can
-/// stop the start, or is not the seed of the state directory with the package's binary; and a
-/// bootstrap unit that runs any command before the start.
+/// environment set for the daemon; and a unit that runs any command before the start.
 #[test]
 fn each_units_command_line_is_the_daemon_with_its_paths_and_no_environment() {
     let line_end = "--notify-systemd\n";
@@ -288,42 +250,20 @@ fn each_units_command_line_is_the_daemon_with_its_paths_and_no_environment() {
                 "sets ExecStart= 2 times",
             ),
         ];
-        match kind {
-            Kind::Bootstrap => cases.push((
-                altered(&text, "ExecStart=", &format!("{SEED_LINE}ExecStart=")),
-                "the bootstrap unit runs a command before the daemon",
-            )),
-            Kind::Package => cases.extend([
-                (
-                    altered(
-                        &text,
-                        line_end,
-                        "--notify-systemd\nExecStartPre=-/usr/bin/true\n",
-                    ),
-                    "sets ExecStartPre= 2 times",
+        cases.extend([
+            (
+                altered(&text, "ExecStart=", "ExecStartPre=-/usr/bin/true\nExecStart="),
+                "ExecStartPre= runs a command besides the daemon",
+            ),
+            (
+                altered(
+                    &text,
+                    "ExecStart=",
+                    "ExecStartPre=-/usr/bin/hostkeeper self-update-seed --state-dir /var/lib/updater/state --binary /usr/bin/hostkeeper\nExecStart=",
                 ),
-                (
-                    altered(&text, "ExecStartPre=-/usr/bin/", "ExecStartPre=/usr/bin/"),
-                    "ExecStartPre= has no `-`",
-                ),
-                (
-                    altered(
-                        &text,
-                        "self-update-seed --state-dir",
-                        "self-update-seed --dir",
-                    ),
-                    "ExecStartPre= runs",
-                ),
-                (
-                    altered(&text, " --binary /usr/bin/hostkeeper\n", "\n"),
-                    "ExecStartPre= runs",
-                ),
-                (
-                    altered(&text, SEED_LINE, ""),
-                    "[Service] has no ExecStartPre=",
-                ),
-            ]),
-        }
+                "ExecStartPre= runs a command besides the daemon",
+            ),
+        ]);
         refuses(|t: &str| check_command(kind, t), &cases);
         // A command line continued over two lines is one command line.
         let continued = altered(&text, " --packages-dir", " \\\n    --packages-dir");
@@ -425,7 +365,7 @@ fn check_limits(text: &str) -> Result<(), String> {
     let interval = unit.single("Unit", "StartLimitIntervalSec")?;
     if interval != "0" {
         return Err(format!(
-            "StartLimitIntervalSec={interval}: the unit has no start limit of its own (0); the self-update drop-in sets it"
+            "StartLimitIntervalSec={interval}: the unit has no start limit of its own (0)"
         ));
     }
     let restart = unit.single("Service", "Restart")?;
@@ -437,13 +377,13 @@ fn check_limits(text: &str) -> Result<(), String> {
     let delay = unit.single("Service", "RestartSec")?;
     if delay != "1" {
         return Err(format!(
-            "RestartSec={delay}, not 1, the delay of the self-update drop-in"
+            "RestartSec={delay}, not 1, the second between the tries of a hand-over"
         ));
     }
     let mode = unit.single("Service", "RestartMode")?;
     if mode != "direct" {
         return Err(format!(
-            "RestartMode={mode}, not direct: OnFailure= would run the fallback at every failed start, not at the start limit"
+            "RestartMode={mode}, not direct: an automatic restart goes straight to the next start without the failed state"
         ));
     }
     let timeout = unit.single("Service", "TimeoutStartSec")?;
@@ -479,11 +419,10 @@ fn check_watchdog(unit: &Unit) -> Result<(), String> {
     Ok(())
 }
 
-/// Catches a start limit in the unit itself (which, before the daemon has first been ready and
-/// written the self-update drop-in, would leave a daemon that fails three starts failed with no
-/// fallback to start it again), limits put where systemd does not read them, a restart policy
+/// Catches a start limit in the unit itself (which would leave a daemon that fails its starts
+/// failed, with nothing to start it again), limits put where systemd does not read them, a restart policy
 /// that does not restart a daemon that exited cleanly for its own update (`on-failure`, the
-/// policy that left a self-updated host down), a restart delay other than the drop-in's, a start
+/// policy that left a self-updated host down), a restart delay other than one second, a start
 /// timeout that would stop a daemon during a long boot pass (design section 6.5), and a
 /// watchdog that is missing, not in whole seconds, or too short for the heartbeat the command
 /// line runs: under three periods, or under one period and the longest heartbeat call.
@@ -723,9 +662,9 @@ fn each_units_handoff_with_kbfs_units_stops_one_before_starting_the_other() {
     }
 }
 
-fn check_unit_keys(kind: Kind, text: &str) -> Result<(), String> {
+fn check_unit_keys(text: &str) -> Result<(), String> {
     let unit = Unit::parse(text)?;
-    let allowed = unit_keys(kind);
+    let allowed = unit_keys();
     for entry in &unit.entries {
         let known = allowed
             .iter()
@@ -746,15 +685,15 @@ fn check_unit_keys(kind: Kind, text: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Catches, in either unit, a key the design does not name: a generated `OnFailure=` (the self-update fallback
-/// of section 6.6 is a drop-in the daemon writes), a timeout or a section added without a test,
-/// a key the unit lost, `RuntimeDirectory=` (the socket's directory is the tmpfiles rules'), a seed
-/// in the bootstrap unit or none in the package unit.
+/// Catches, in either unit, a key the design does not name: a generated `OnFailure=` (the update has no
+/// fallback unit), a timeout or a section added without a test,
+/// a key the unit lost, `RuntimeDirectory=` (the run directory is the tmpfiles rules'), and an
+/// `ExecStartPre=` seed line.
 #[test]
 fn each_unit_holds_only_the_keys_the_design_names() {
     for kind in Kind::ALL {
         let text = kind.read();
-        assert_eq!(check_unit_keys(kind, &text), Ok(()));
+        assert_eq!(check_unit_keys(&text), Ok(()));
         let cases = [
             (
                 altered(
@@ -822,16 +761,14 @@ fn each_unit_holds_only_the_keys_the_design_names() {
             ),
         ];
         let mut cases = cases.to_vec();
-        match kind {
-            Kind::Bootstrap => cases.push((
-                altered(&text, "ExecStart=", &format!("{SEED_LINE}ExecStart=")),
-                "[Service] ExecStartPre= is not",
-            )),
-            Kind::Package => cases.push((
-                altered(&text, SEED_LINE, ""),
-                "[Service] has no ExecStartPre=",
-            )),
-        }
-        refuses(|t: &str| check_unit_keys(kind, t), &cases);
+        cases.push((
+            altered(
+                &text,
+                "ExecStart=",
+                "ExecStartPre=-/usr/bin/true\nExecStart=",
+            ),
+            "[Service] ExecStartPre= is not",
+        ));
+        refuses(check_unit_keys, &cases);
     }
 }

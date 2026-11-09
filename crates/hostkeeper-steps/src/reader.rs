@@ -10,10 +10,11 @@
 //!   (`hostkeeper_daemon::selfupdate`).
 //!
 //! The rule: a release that writes a new format sets [`OLDEST_READER`] to the release that first
-//! read it. Stage 2 of the design sets it to R1, release 0.1.163, the first release that holds
-//! every pull request of stage 1: it reads a hand-over and settles it, so a stage-2 release can
-//! fall back to it, and no daemon older than R1 takes a stage-2 release (it defers it
-//! `daemon_too_old` before it probes or runs a hook).
+//! read it. Stage 3 of the design sets it to R2, release 0.1.194, the first release that holds
+//! every pull request of stage 2: it hands over to a new binary and writes no fallback unit or
+//! job, so a stage-3 release, which has neither the fallback verbs, the start log nor
+//! `--admin-socket`, can fall back to it. A daemon older than R2 defers a release of this line
+//! `daemon_too_old` before anything of it runs.
 
 use hostkeeper_config::manifest::HostkeeperVersion;
 
@@ -21,5 +22,5 @@ use hostkeeper_config::manifest::HostkeeperVersion;
 pub const OLDEST_READER: HostkeeperVersion = HostkeeperVersion {
     major: 0,
     minor: 1,
-    patch: 163,
+    patch: 194,
 };

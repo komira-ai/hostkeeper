@@ -541,8 +541,7 @@ main>section>figure.wide,main>section>.tblw.wide{width:min(72rem,calc(100vw - 3r
 <p>Two programs are built (<a href="https://github.com/komira-ai/hostkeeper/tree/main/crates/hostkeeper">crates/hostkeeper</a>,
 <a href="https://github.com/komira-ai/hostkeeper/tree/main/crates/hostkeeper-coordinator">crates/hostkeeper-coordinator</a>):</p>
 <ul>
-<li><code>hostkeeper</code>, the host program. Its verbs are <code>daemon</code> and two
-plumbing verbs of its own update
+<li><code>hostkeeper</code>, the host program. Its one verb is <code>daemon</code>
 (<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-daemon/src/cli.rs">crates/hostkeeper-daemon/src/cli.rs</a>).</li>
 <li><code>hostkeeper-coordinator serve</code>, the coordinator, shipped as a tarball and a container image
 (<a href="https://github.com/komira-ai/hostkeeper/blob/main/packaging/container/Dockerfile">packaging/container/Dockerfile</a>). No systemd unit for it
@@ -1164,12 +1163,10 @@ runs is not mistaken for the running one.</li>
 <li>Every unpacked package is checked for the quarantine attribute, and every Mach-O file must carry
 a valid code signature (ad-hoc accepted; no team identity or notarisation check).</li>
 <li>Enrollment claims are the serial number and platform UUID from <code>ioreg</code>.</li>
-<li>Self-update: launchd has no start limit, so <code>hostkeeper self-update-fallback</code> counts starts
-itself and falls back after
-<span data-cell="c-burst" data-source="crates/hostkeeper-steps/src/selfupdate.rs" data-item="START_LIMIT_BURST">3</span>
-starts within
-<span data-cell="c-burst-window" data-source="crates/hostkeeper-steps/src/selfupdate.rs" data-item="START_LIMIT_WINDOW_SECS">300 s</span>.
-The timer job meant to run it is rendered but not installed.</li>
+<li>Self-update: launchd has no start limit and the daemon arms no fallback job. The old binary hands over to the new one and,
+after
+<span data-cell="c-burst" data-source="crates/hostkeeper-steps/src/handover.rs" data-item="HAND_OVER_TRIES">3</span>
+starts of it that do not settle the update, settles the update failed and runs.</li>
 <li>The installer is an unsigned distribution <code>.pkg</code> (<code>productbuild</code> around one component pkg) holding the binary, the daemon&rsquo;s plist, its log directory and
 newsyslog file, the pinned <code>gh</code> and the Sigstore trusted root. Its <code>postinstall</code> loads the daemon&rsquo;s job, whose program is the installed binary: each start seeds the binary directory, writes <code>hostkeeper.toml</code> from the MDM&rsquo;s managed preferences when it is absent, and execs <code>current</code>.</li>
 </ul>

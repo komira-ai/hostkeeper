@@ -38,16 +38,12 @@ first release after 0.1.100 that `hostkeeper --version` shows with that change) 
   unit file of the same name, as it is and does not claim it: the unit is already enabled, and
   systemd starts `hostkeeper.service` from `/etc/systemd/system`, where the install links the
   release's unit. An earlier daemon refuses the install `path_conflict` before it writes anything.
-- Before it stages the new binary, a daemon older than 0.1.163 asks it for its self-update protocol
-  in a transient unit (a daemon of 0.1.163 or later asks nothing: it judges a release by its
-  floor, and the verb `self-update-protocol` is still answered, printing 1, for those that
-  probe). An earlier Linux daemon has no way to run that probe and refuses every self-update
-  `protocol_unreadable` (komira-ai/hostkeeper#102). A macOS daemon runs the probe as a launchd
-  job from the release that carries that change on; an earlier one refuses every self-update
-  `protocol_unreadable` the same way, even an install of the version it already runs. The probe
-  is run by the daemon that runs, not by the release, so such a Mac is brought once, by hand, to
-  that release or a later one (stage its binary in the binary directory, switch `current` to it,
-  and `launchctl kickstart -k system/dev.hostkeeper.hostkeeper`) before it is included again.
+- A daemon judges a release by its floor and asks nothing of its binary. A daemon older than the
+  floor the release's package declares (`min_hostkeeper`, 0.1.194 for the release that deleted
+  the old self-update verbs and the releases after it) defers the release `daemon_too_old`. Such
+  a host is brought to 0.1.194 or a later release first, by hand if it cannot update itself:
+  stage that release's binary in the binary directory, switch `current` to it, and restart the
+  unit (`hostkeeper.service`, or the job `dev.hostkeeper.hostkeeper` on a Mac).
 
 A verdict of a service the heartbeat does not list, such as the refusal of an install that wrote
 nothing, is sent in the next heartbeat. The service is listed `absent` at the order's target with
@@ -62,8 +58,8 @@ The daemon that runs a self-update exits before its verdict (`Deferred`, `awaiti
 reaches a heartbeat, and the coordinator ends the order once the host runs its target, so it never
 orders it again. The next binary reports the verdict instead: the daemon that ran the order keeps
 the order's id in its step record, the settlement keeps it beside the settled verdict (the new
-binary's `Succeeded`, or after a fallback the `Failed` `self_update_fallback`, whether the
-fallback unit or job or the previous binary's start settled it), and every start of the daemon
+binary's `Succeeded`, or after a fallback the `Failed` `self_update_fallback`, settled by
+the previous binary's start), and every start of the daemon
 sends that verdict under that id and try, from its first heartbeat until the coordinator
 acknowledges it; the record then stops keeping it. The coordinator then holds it as
 the host's last update of hostkeeper, in place of an older verdict. A daemon keeps the id from the
@@ -81,9 +77,11 @@ upgrade does: stage that release's binary in the binary directory, switch `curre
 `hostkeeper.service`. From that release on, the coordinator's install, and every update after it,
 runs as the self-update. Until then, hold or exclude the host for the service `hostkeeper`.
 
-The release's hook is its own binary, `bin/hostkeeper update-hook`, which a daemon's step
-launcher runs as `bin/hostkeeper <step> ...`; every step does nothing. Its manifest asks for a
-daemon of 0.1.53 or later, so that the daemon that runs now, older than the release, takes it.
+The release's manifest keeps a `[hook]` table that names `bin/hostkeeper update-hook`, because
+the loader requires a bounded one, but no daemon runs it and the binary has no such verb. Its
+floor is above `LEGACY_FLOOR` (0.1.53), so every daemon that can take the release runs the
+daemon's built-in steps, each of which succeeds at once; a daemon older than the floor reads the
+table and defers the release `daemon_too_old`.
 
 ## Daemons before this change
 
@@ -117,6 +115,35 @@ the host again past the refused try in the same answer, and the host is neither 
 holds back its stage. A host a coordinator of an earlier release left failed here on such a
 refusal is ordered again once the coordinator runs this release.
 
+## A current that starts nothing
+
+The link `current` of the binary directory (`<state-dir>/hostkeeper/bin/current`) can name a
+binary that does not start: a link to a version that is gone, or a hand edit. The package unit's
+`ExecStart=` runs `current`, so systemd then reports a failure to execute at every restart and no
+daemon runs. The unit of the release that deleted `self-update-seed` has no `ExecStartPre=` line
+that repairs it; the packaged binary does it when it is run as the daemon.
+
+As root, stop the unit and run the packaged binary once by hand with the unit's flags, copied
+from `systemctl cat hostkeeper` and without `--notify-systemd`, which needs the notify socket of
+a unit:
+
+```
+systemctl stop hostkeeper
+/usr/bin/hostkeeper daemon --config /etc/hostkeeper/hostkeeper.toml \
+    --state-dir /var/lib/updater/state --packages-dir /var/lib/hostkeeper/packages
+```
+
+Started from `/usr/bin/hostkeeper`, the daemon puts that binary in the binary directory as its
+own version when `current` starts nothing, points `current` at it, and execs `current` with its
+own arguments (`hostkeeper_daemon::packaged`), so the daemon you see runs from the binary
+directory. Stop it with Ctrl-C, then `systemctl start hostkeeper`: the unit runs `current`. A Mac
+needs nothing, since its job runs the installed binary, which does this at each start (see
+[macOS](../macos.md#self-update-hand-over)).
+
+An older packaged binary has no seed in `daemon`; it answers the old verb `self-update-seed`
+instead. Run that verb (`/usr/bin/hostkeeper self-update-seed --state-dir
+/var/lib/updater/state --binary /usr/bin/hostkeeper`), or install a newer deb or rpm.
+
 ## Macs
 
 A Mac reaches the desired release of hostkeeper by itself, as a Linux host does, once two things
@@ -129,7 +156,7 @@ hold:
   start, or, in a pkg before that, `current` of the binary directory itself,
   `/var/lib/updater/state/hostkeeper/bin/current` (`sudo launchctl print
   system/dev.hostkeeper.hostkeeper` names the program). That job runs the binary the
-  self-update switched to ([macOS](../macos.md#self-update-fallback)). The plist of a
+  self-update switched to ([macOS](../macos.md#self-update-hand-over)). The plist of a
   still earlier pkg starts
   `/usr/local/bin/hostkeeper` with no `daemon` argument, which does not exec `current`, so after each self-update the Mac restarts into the binary
   it ran, which records the update `Failed` after the commit (`self_update_fallback`) and the

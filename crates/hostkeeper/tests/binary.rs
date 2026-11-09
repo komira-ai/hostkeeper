@@ -41,8 +41,6 @@ fn a_missing_config_exits_with_the_config_status() {
         .arg(scratch.path().join("state"))
         .arg("--packages-dir")
         .arg(scratch.path().join("packages"))
-        .arg("--admin-socket")
-        .arg(scratch.path().join("r/a.sock"))
         .output()
         .expect("run hostkeeper");
     assert_eq!(out.status.code(), Some(3), "{out:?}");
@@ -131,18 +129,73 @@ fn version_prints_the_release_stamp() {
     assert_eq!(String::from_utf8_lossy(&out.stdout), expected);
 }
 
-/// Catches the protocol verb of the real binary printing anything but its protocol, or failing:
-/// `hostkeeper self-update-protocol` exits 0 and prints exactly `1` and a newline, which is what
-/// the daemon of the release before reads before it stages this binary.
+/// Proves: the real binary answers each verb of the update before the hand-over as a usage
+/// error: exit status 2, clap's unknown verb naming it on stderr, and nothing on stdout, with
+/// the arguments the units, the pkg and the releases called it with.
+///
+/// Catches: a removed verb (`self-update-protocol`, `self-update-fallback`, `self-update-seed`,
+/// `mac-config`, `update-hook` or one of its step words) left in the binary, or one that does
+/// something and exits 0.
 #[test]
-fn self_update_protocol_verb_prints_only_the_constant() {
+fn the_verbs_of_the_update_before_the_hand_over_are_usage_errors() {
+    for args in [
+        &["self-update-protocol"][..],
+        &["self-update-fallback", "--dir", "x"],
+        &["self-update-seed", "--state-dir", "x", "--binary", "y"],
+        &["mac-config"],
+        &["update-hook", "prepare"],
+        &["prepare"],
+        &["cutover"],
+        &["verify"],
+        &["rollback"],
+        &["cleanup"],
+    ] {
+        let out = Command::new(env!("CARGO_BIN_EXE_hostkeeper"))
+            .args(args)
+            .output()
+            .expect("run hostkeeper");
+        assert_eq!(out.status.code(), Some(2), "{args:?}: {out:?}");
+        assert!(out.stdout.is_empty(), "{args:?}: {out:?}");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.starts_with(&format!("error: unrecognized subcommand '{}'\n", args[0])),
+            "{args:?}: {stderr}"
+        );
+    }
+}
+
+/// Proves: the real binary answers `hostkeeper daemon --admin-socket <path>`, the flag of the
+/// units before stage 2, as a usage error: exit status 2, clap's unexpected argument naming the
+/// flag on stderr, nothing on stdout, and nothing made on disk.
+///
+/// Catches: the flag accepted and ignored again, so that a daemon started by such a unit goes
+/// on to read its config.
+#[test]
+fn the_admin_socket_flag_is_a_usage_error() {
+    let scratch = hostkeeper_testkit::Scratch::under(
+        Path::new(env!("CARGO_TARGET_TMPDIR")),
+        "bin-admin-socket",
+    )
+    .expect("a scratch dir");
     let out = Command::new(env!("CARGO_BIN_EXE_hostkeeper"))
-        .arg("self-update-protocol")
+        .arg("daemon")
+        .arg("--config")
+        .arg(scratch.path().join("missing.toml"))
+        .arg("--state-dir")
+        .arg(scratch.path().join("state"))
+        .arg("--admin-socket")
+        .arg(scratch.path().join("r/a.sock"))
         .output()
         .expect("run hostkeeper");
-    assert!(out.status.success(), "{out:?}");
-    assert_eq!(String::from_utf8_lossy(&out.stdout), "1\n");
-    assert!(out.stderr.is_empty(), "{out:?}");
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    assert!(out.stdout.is_empty(), "{out:?}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.starts_with("error: unexpected argument '--admin-socket' found\n"),
+        "{stderr}"
+    );
+    assert!(!scratch.path().join("state").exists());
+    assert!(!scratch.path().join("r").exists());
 }
 
 /// Catches `--trusted-root-max-age-days` not accepted by the real binary, or a limit of 0 let
@@ -163,8 +216,6 @@ fn the_trusted_root_age_limit_flag_is_taken_and_zero_is_a_usage_error() {
             .arg(scratch.path().join("state"))
             .arg("--packages-dir")
             .arg(scratch.path().join("packages"))
-            .arg("--admin-socket")
-            .arg(scratch.path().join("r/a.sock"))
             .arg("--trusted-root-max-age-days")
             .arg(days)
             .output()
@@ -234,8 +285,6 @@ fn a_hand_over_execs_next_with_the_same_arguments_until_its_count_is_spent() {
             .arg(state)
             .arg("--packages-dir")
             .arg(scratch.path().join("packages"))
-            .arg("--admin-socket")
-            .arg(scratch.path().join("r/a.sock"))
             .output()
             .expect("run hostkeeper")
     };

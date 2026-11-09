@@ -376,8 +376,8 @@ fn the_manifest_carries_the_digest_the_mac_checks() {
     );
 }
 
-/// Catches: a pkg sent before the Mac acknowledged its config profile (the postinstall's
-/// `mac-config` would find no managed config), or after an error answer to it; a pkg held
+/// Catches: a pkg sent before the Mac acknowledged its config profile (the daemon's start
+/// would find no managed config), or after an error answer to it; a pkg held
 /// back from an unsupervised Mac (it needs none, and is approved by an operator); a gate
 /// without the pkg install sending one.
 #[tokio::test]

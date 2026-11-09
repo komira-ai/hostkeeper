@@ -13,8 +13,8 @@ use std::sync::atomic::AtomicU64;
 use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_daemon::selfupdate::{
-    Judgement, LEGACY_FLOOR, REASON_PROTOCOL_UNSUPPORTED, RELEASE_BINARY, SELF_UPDATE_PROTOCOL,
-    binary_dir, builtin_steps, judge, protocol_line,
+    Judgement, LEGACY_FLOOR, REASON_PROTOCOL_UNSUPPORTED, RELEASE_BINARY, binary_dir,
+    builtin_steps, judge,
 };
 use hostkeeper_daemon::testing::manifest;
 use hostkeeper_daemon::{Daemon, Refusal, Reply};
@@ -76,22 +76,20 @@ impl Host {
 
 /// Catches a backward rule that lets through a release older than this daemon's oldest reader,
 /// refuses one it can fall back to, or looks at the floor: the version that runs is accepted with
-/// no check; the oldest reader (0.1.163) and anything newer is accepted, whatever floor its
+/// no check; the oldest reader (0.1.194) and anything newer is accepted, whatever floor its
 /// package declares; anything older, or a version that is not `major.minor.patch`, is refused.
-/// The verb a daemon before stage 2 probes with still prints 1, and the constants are the
-/// design's: the legacy floor 0.1.53, the oldest reader R1.
+/// The constants are the design's: the legacy floor 0.1.53, the oldest reader R2.
 #[test]
 fn the_backward_rule_judges_a_release_by_the_oldest_reader_alone() {
     assert_eq!(LEGACY_FLOOR, v("0.1.53"));
-    assert_eq!(OLDEST_READER, v("0.1.163"));
-    assert_eq!(SELF_UPDATE_PROTOCOL, 1);
-    assert_eq!(protocol_line(), "1\n");
+    assert_eq!(OLDEST_READER, v("0.1.194"));
     let running = v(DAEMON);
     for (version, judged) in [
         (DAEMON, Judgement::Accepted),
         (TARGET, Judgement::Accepted),
-        ("0.1.163", Judgement::Accepted),
+        ("0.1.194", Judgement::Accepted),
         ("2.0.0", Judgement::Accepted),
+        ("0.1.193", Judgement::Unsupported),
         ("0.1.162", Judgement::Unsupported),
         ("0.1.53", Judgement::Unsupported),
         ("0.0.900", Judgement::Unsupported),
@@ -124,7 +122,7 @@ fn a_floor_above_the_daemon_is_deferred_before_any_step() {
     assert_eq!(snapshot(&bin), before);
 }
 
-/// Catches a release whose floor is the legacy floor (R1 and the stage-1 releases after it) being
+/// Catches a release whose floor is the legacy floor (the releases before stage 2 declare it; R2 and later ones declare a higher floor) being
 /// refused, probed or run built in: it is accepted as the oldest reader or newer, runs its hook's
 /// command for each step, and is handed over to.
 #[test]
@@ -181,11 +179,11 @@ fn a_floor_above_the_legacy_floor_runs_builtin_steps() {
 fn a_release_older_than_the_oldest_reader_is_refused_before_anything_is_staged() {
     for (n, floor) in [ABOVE, "0.1.53"].into_iter().enumerate() {
         let host = Host::new(&format!("floor-backward-{n}"));
-        host.release("0.1.162", floor);
+        host.release("0.1.193", floor);
         let bin = binary_dir(&host.s.rig.state);
         let before = snapshot(&bin);
         assert_eq!(
-            host.order("0.1.162"),
+            host.order("0.1.193"),
             refused_before_commit(Class::Release, REASON_PROTOCOL_UNSUPPORTED),
             "floor {floor}"
         );

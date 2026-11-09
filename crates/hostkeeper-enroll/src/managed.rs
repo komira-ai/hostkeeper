@@ -4,8 +4,8 @@
 //! The MDM's policy gate installs a profile whose one payload sets two keys of that domain:
 //! `nonce`, the 32 bytes as data, and `request_id`, the request's key hash as 64 lower-case hex
 //! digits. macOS writes the effective preferences of the domain to [`MANAGED_ENROLLMENT`], a
-//! property list, binary or XML, whose top-level dictionary holds the keys, as `mac-config` reads
-//! the domain `dev.hostkeeper.config`. Keys other than the two are ignored.
+//! property list, binary or XML, whose top-level dictionary holds the keys, as the daemon's start
+//! reads the domain `dev.hostkeeper.config`. Keys other than the two are ignored.
 //!
 //! [`ManagedPreferences`] is the port the enroller reads the file through, in each step that
 //! enrolls; [`ManagedFile`] is its implementation over the file, which it accepts only when the

@@ -17,8 +17,8 @@
 # update of itself from the published release crates/hostkeeper-privileged/previous-release.toml
 # pins to this build, with the same coordinator, channel and verifier: the released daemon as the
 # host's own unit hostkeeper.service (or its own launchd job dev.hostkeeper.hostkeeper) updating to
-# this build, falling back by its own fallback unit (or job) from this build made to fail its
-# start, and this build updating to itself under a newer version name; on the Mac the daemon started as a
+# this build by the hand-over, and falling back to its own binary (three tries, then the update
+# settles Failed) from this build made to fail its start, and this build updating to itself under a newer version name; on the Mac the daemon started as a
 # launchd job and binding no socket, a hook step as a launchd job stopped at its
 # bound, the observer's launchd and proc_pidpath adapters, and the package check's codesign and
 # quarantine verdicts, and in
@@ -71,7 +71,7 @@
 # /run/systemd/system; on the Mac, what the daemon's fixed paths name: the step jobs' directory
 # under /var/run, and the pki directory its enrollment loop opens, and for device_mac_e2e a tree
 # under /private/var, gh and the trusted root in /usr/local/lib/hostkeeper, the placed state in
-# /var/lib/hostkeeper, hello's plists and the daemon's fallback job in /Library/LaunchDaemons
+# /var/lib/hostkeeper, hello's plists in /Library/LaunchDaemons
 # (each moved aside if the host already has it and put back when the test ends) and the release
 # channel's CA appended to /etc/ssl/cert.pem, which is written back as it was, and for
 # device_mac_selfupdate a tree under /private/var; for self_update_across_releases the daemon's own
@@ -133,8 +133,8 @@ jobs:
     env:
       GH_VERSION: 2.102.1
       GH_SHA256: 77b9e297e94c50336823d0f84de7ef1be60cba704601fa0d98f129f47a94987b
-      PREVIOUS_RELEASE_URL: https://github.com/komira-ai/hostkeeper/releases/download/v0.1.163/hostkeeper-0.1.163-linux-x86_64.tar.gz
-      PREVIOUS_RELEASE_SHA256: 2fef129d7e136587c70df122efe767aa291de1ccecde15b6dd132f109980266d
+      PREVIOUS_RELEASE_URL: https://github.com/komira-ai/hostkeeper/releases/download/v0.1.194/hostkeeper-0.1.194-linux-x86_64.tar.gz
+      PREVIOUS_RELEASE_SHA256: eefc00d78d22f49a019599885ab4295a462df9c519288028713a5fb08985862e
       NFPM_VERSION: 2.48.0
       NFPM_SHA256: 6d7f9a28b2f397934403950fcbba83f598b08d02edbe79a0815b3b4897341750
     steps:
@@ -374,8 +374,8 @@ jobs:
       # and checks its packages' attestations with it, offline, against a test trust root.
       GH_VERSION: 2.103.3
       GH_SHA256: d700207eae9ae98fe2b89535c2c087c07823d4628c56364695a5a07ef311c062
-      PREVIOUS_RELEASE_URL: https://github.com/komira-ai/hostkeeper/releases/download/v0.1.163/hostkeeper-0.1.163-macos-arm64.tar.gz
-      PREVIOUS_RELEASE_SHA256: 6b20de414f41382bf993a192c62095a602660e60356899b55a9602492c6d1485
+      PREVIOUS_RELEASE_URL: https://github.com/komira-ai/hostkeeper/releases/download/v0.1.194/hostkeeper-0.1.194-macos-arm64.tar.gz
+      PREVIOUS_RELEASE_SHA256: aedad067db46af7ed065683ab6dd7c46b87fb4558db21b31082003394654ca6b
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

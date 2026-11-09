@@ -1,7 +1,7 @@
 //! The built-in steps of hostkeeper's own package (docs/design/two-programs.md, section 4.4):
-//! the step runner, given an order whose steps are built in, writes the record the hook's no-op
-//! command (`bin/hostkeeper update-hook`, [`hostkeeper_daemon::update_hook`]) gives when it is
-//! run for each step, byte for byte, and runs nothing.
+//! the step runner, given an order whose steps are built in, writes the record a hook command
+//! that exits 0 and prints nothing gives when it is run for each step, byte for byte, and runs
+//! nothing.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -9,7 +9,6 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use hostkeeper_daemon::update_hook;
 use hostkeeper_hook::{Params, Step, Verdict};
 use hostkeeper_steps::record::RECORD_FILE;
 use hostkeeper_steps::{
@@ -18,10 +17,8 @@ use hostkeeper_steps::{
 };
 use hostkeeper_testkit::Scratch;
 
-/// The hook of the package, as the host's launcher runs it: the program with the step's own
-/// arguments (the binary answers `hostkeeper <step> ...` for `update-hook <step> ...`), here the
-/// hook's own code on exactly those arguments ([`update_hook::run`]), which prints nothing: its
-/// exit code and no last line. Every step it ran is kept.
+/// A hook command that does nothing, as the host's launcher runs it: every step exits 0 with no
+/// last line. Every step it ran is kept.
 #[derive(Default)]
 struct NoOpCommand {
     ran: Mutex<Vec<(Step, PathBuf)>>,
@@ -33,10 +30,8 @@ impl StepLauncher for NoOpCommand {
             .lock()
             .expect("the runs")
             .push((call.invocation.step, call.executable.to_path_buf()));
-        let outcome = update_hook::run(call.invocation.to_args())
-            .map_err(|error| LaunchError::NoStart(error.to_string()))?;
         Ok(StepExit {
-            code: Some(outcome.code()),
+            code: Some(0),
             last_line: None,
         })
     }

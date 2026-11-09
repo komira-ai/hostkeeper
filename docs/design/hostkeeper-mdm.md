@@ -151,7 +151,7 @@ installs before the pkg** (first by the pkg's postinstall; since the units and p
    (`organisation`, `workflow`, `refs`, `hosted_runner`) and an optional `bounds` dictionary. Holds
    no secret.
 2. On that profile's `Acknowledged`, the gate sends the pkg (section 7).
-3. The config is written by the code of `mac-config` (**Built**: `crates/hostkeeper-daemon/src/mac_config.rs`),
+3. The config is written by the code of `mac_config` (**Built**: `crates/hostkeeper-daemon/src/mac_config.rs`),
    which the pkg's postinstall first ran as a command and which the daemon now runs at each start
    (`mac_config::at_start`), as its first step on a Mac. The postinstall is two commands:
    `launchctl bootout` and `launchctl bootstrap`, below. The code reads the managed preferences of the domain, which macOS
@@ -341,7 +341,7 @@ adapter always sent `mac_nonce` empty. Now:
 - The nonce is never logged. Its type's `Debug` shows no byte of it, as the coordinator's
   `MacNonce` does.
 
-The `mac-config` code and the daemon's nonce read use the same plist reader, the
+The `mac_config` code and the daemon's nonce read use the same plist reader, the
 `plist` crate. It is already declared in the root `Cargo.toml` (rule R5) and used by xtask's
 `check-macos-pkg` and by tests. M10 added the production use (**Built**:
 `crates/hostkeeper-daemon/src/mac_config.rs`), updated the root comment that called it
@@ -518,7 +518,7 @@ names). What the build decides beyond the text above:
   ([coordinator-storage.md](coordinator-storage.md) section 2); what the gate writes, the sends,
   is in the device record.
 - The pkg is sent once the device has acknowledged the config profile, because the daemon's start
-  (`mac-config`'s code) reads the managed config. Whether the managed preferences file exists by then is
+  (`mac_config`'s code) reads the managed config. Whether the managed preferences file exists by then is
   to verify (M16); if it does not, the daemon refuses its starts until it does, and launchd starts it again. Supervision is not required, as section 6.3 says.
 - The manifest's `bundle-identifier` is the pkg identifier `dev.hostkeeper.hostkeeper`, its
   `bundle-version` the entry's version and its `title` `hostkeeper <version>`.
