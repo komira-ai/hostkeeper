@@ -12,6 +12,7 @@ use std::path::Path;
 use std::process::Command;
 
 const HOOK: &str = "hostkeeper-hook";
+const INSTALL: &str = "hostkeeper-install";
 const CONFIG: &str = "hostkeeper-config";
 const STEPS: &str = "hostkeeper-steps";
 const TESTKIT: &str = "hostkeeper-testkit";
@@ -83,7 +84,7 @@ pub type Layer = (
 /// packet with its packet crate; the `mdm` package's certificate-unit test loads that package's
 /// units and drop-ins (`hostkeeper-mdm-core`) into the host's systemd. The binary's tests run
 /// the macOS pkg's postinstall (`hostkeeper-launchd`) against the binary.
-pub const LAYERS: [Layer; 31] = [
+pub const LAYERS: [Layer; 32] = [
     (BINARY, &[DAEMON], &[LAUNCHD]),
     (CONFIG, &[], &[]),
     (
@@ -96,8 +97,8 @@ pub const LAYERS: [Layer; 31] = [
     (
         DAEMON,
         &[
-            CONFIG, ENROLL, HOOK, LAUNCHD, LINK, OBSERVE, OPENRC, PACKAGE, PLACED, PROTO, RELEASE,
-            STEPS, UNPACK,
+            CONFIG, ENROLL, HOOK, INSTALL, LAUNCHD, LINK, OBSERVE, OPENRC, PACKAGE, PLACED, PROTO,
+            RELEASE, STEPS, UNPACK,
         ],
         &[COORDINATOR, HELLO, OIDC, TLS, WIRE],
     ),
@@ -106,6 +107,7 @@ pub const LAYERS: [Layer; 31] = [
     (HELLO, &[], &[CONFIG, HOOK]),
     (HKCTL, &[PROTO], &[COORDINATOR, OIDC]),
     (HOOK, &[], &[]),
+    (INSTALL, &[CONFIG, PROTO, RELEASE, UNPACK], &[]),
     (LAUNCHD, &[HOOK, OBSERVE, PLACED, STEPS], &[]),
     (
         LINK,

@@ -312,7 +312,8 @@ impl ServiceRecords for DaemonRecords {
 /// record holds, finished or not, none when it is absent, newer or unreadable or names no try.
 /// The record keeps no order id of a hooked order, so no verdict is given back from it: after a
 /// restart the coordinator's resend of the order is answered from the record (design 8.3), and
-/// the try tells a coordinator that never heard the verdict which try to number past.
+/// the try tells a coordinator that never heard the verdict which try to number past. The
+/// installer is the one `placed.json` records for it, none for a `hostkeeper-archive` service.
 ///
 /// The one verdict given back is that of a settled update of hostkeeper itself, as the service
 /// `hostkeeper`'s: its record keeps the order's id until the coordinator acknowledges the
@@ -336,14 +337,23 @@ pub fn recorded(ctx: &Ctx, service: ServiceName) -> Option<RecordedService> {
         }
         _ => (None, None, None),
     };
+    let installer = recorded_installer(ctx, &service);
     Some(RecordedService {
         name: service,
         version,
         updating,
         last_result,
         record_try,
-        installer: None,
+        installer,
     })
+}
+
+/// The installer `placed.json` records for `service`, as the heartbeat names it
+/// (`ServiceBeat.installer`): none for a `hostkeeper-archive` service, which has no entry, and
+/// none when the record cannot be read.
+fn recorded_installer(ctx: &Ctx, service: &ServiceName) -> Option<String> {
+    let record = ctx.placer().store().load().ok()?;
+    record.installer_of(service.as_str()).map(str::to_owned)
 }
 
 /// The verdict a finished record of an update of hostkeeper itself keeps to report: under the

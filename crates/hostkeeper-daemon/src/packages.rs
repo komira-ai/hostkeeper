@@ -42,12 +42,10 @@ impl VersionDir {
         }
     }
 
-    /// A sealed directory with the manifest the store parsed from it.
-    pub fn with_manifest(staged: Staged, manifest: Manifest) -> VersionDir {
-        VersionDir {
-            staged,
-            manifest: Some(manifest),
-        }
+    /// A sealed directory with the manifest its installer's stage read from the artifact, when
+    /// its installer has one inside it.
+    pub fn staged_with(staged: Staged, manifest: Option<Manifest>) -> VersionDir {
+        VersionDir { staged, manifest }
     }
 
     /// The manifest the store parsed from the directory, when it kept it.
