@@ -49,6 +49,7 @@ use hostkeeper_steps::{Clock, Switch, SwitchError, Toward, UpdateOrder};
 
 use crate::boot::{WARN_SWITCH_RETRIED, warn_line};
 use crate::installers::{self, PlacerHost, Steps};
+use crate::own_package;
 use crate::repository::Repository;
 use crate::target;
 use crate::verbs::force::SELF_SERVICE;
@@ -75,17 +76,61 @@ pub fn hooked_switch(
 ) -> Switch {
     Arc::new(move |toward: Toward, order: &UpdateOrder| {
         let staged = target::read(order.staged.dir()).map_err(|e| SwitchError::Failed(text(e)))?;
-        if let Some(entry) = staged {
-            return repository_switch(&repository, toward, order, &entry);
-        }
         let placer = Placer::new(roots.clone(), &*fs, &*units);
-        let done = match toward {
-            Toward::Target => activate(&placer, order, &own),
-            Toward::Back => back(&placer, &*fs, order, &own),
-            Toward::Confirmed => confirmed(&placer, order, &own),
-        };
-        done.map_err(SwitchError::Failed)
+        if order.service == SELF_SERVICE {
+            let record = placer
+                .store()
+                .load()
+                .map_err(|e| SwitchError::Failed(text(e)))?;
+            if own_package::deferred(staged.as_ref(), &record) {
+                // Its new binary switches, once it has started ([`crate::own_package`]).
+                return Ok(());
+            }
+        }
+        if let Some(entry) = staged {
+            return repository_switch(&repository, &placer, toward, order, &entry, &own);
+        }
+        archive_switch(&placer, &*fs, &repository, toward, order, &own)
     })
+}
+
+/// The switch of an order whose target is a `hostkeeper-archive` version. When the service
+/// runs from a native package (`placed.json` records its installer), the order is the move's
+/// rollback (docs/design/packages-native.md, section 10.6): before `cutover` the package is
+/// purged first ([`remove_native`]); before `rollback`, back to the native version it replaced,
+/// the archive's paths go and that version is activated again from its sealed directory.
+fn archive_switch(
+    placer: &Placer<'_>,
+    fs: &dyn Fs,
+    repository: &Repository,
+    toward: Toward,
+    order: &UpdateOrder,
+    own: &HostkeeperVersion,
+) -> Result<(), SwitchError> {
+    let failed = |why: String| SwitchError::Failed(why);
+    match toward {
+        Toward::Target => {
+            let (service, _) = names(order).map_err(failed)?;
+            let record = placer.store().load().map_err(|e| failed(text(e)))?;
+            if record.installer_of(service.as_str()).is_some() {
+                remove_native(placer, repository, &service)?;
+            }
+            activate(placer, order, own).map_err(failed)
+        }
+        Toward::Back => {
+            if let (Some(previous), Some(version)) =
+                (&order.previous, order.previous_version.as_deref())
+                && let Some(sealed) = target::read(previous.dir()).map_err(|e| failed(text(e)))?
+            {
+                let (service, _) = names(order).map_err(failed)?;
+                let version = Version::new(version).map_err(|e| failed(text(e)))?;
+                placer.unlink_all(&service).map_err(|e| failed(text(e)))?;
+                return repository.activate_version(&service, &version, previous.dir(), &sealed);
+            }
+            back(placer, fs, order, own).map_err(failed)
+        }
+        Toward::Confirmed => confirmed(placer, order, own).map_err(failed),
+    }
 }
 
 /// `switch` tried up to [`SWITCH_ATTEMPTS`] times: a failed try but the last is logged through
@@ -123,14 +168,30 @@ pub fn retried(
 /// `cutover` the installer's `activate` of the target; before `rollback` the previous version's
 /// `activate` from its own sealed `target.json`, or for a first install the package's removal;
 /// nothing to confirm, as nothing was placed.
+///
+/// The move of a service from `hostkeeper-archive` (docs/design/packages-native.md, section
+/// 10.6) is this switch too: before the target's `activate`, every path `placed.json` lists for
+/// the service is taken away ([`Placer::unlink_all`]: a placed unit in `/etc/systemd/system/`
+/// would hide the package's unit of the same name; `cutover` restarts the units, so none is
+/// stopped here). Its rollback, a previous version without `target.json`, purges the package
+/// ([`Repository::remove`]) and places the archive version again ([`relink_archive`]), taking
+/// it from its sealed directory and fetching nothing.
 fn repository_switch(
     repository: &Repository,
+    placer: &Placer<'_>,
     toward: Toward,
     order: &UpdateOrder,
     entry: &Target,
+    own: &HostkeeperVersion,
 ) -> Result<(), SwitchError> {
     match toward {
-        Toward::Target => repository.activate(order, entry),
+        Toward::Target => {
+            let (service, _) = names(order).map_err(SwitchError::Failed)?;
+            placer
+                .unlink_all(&service)
+                .map_err(|e| SwitchError::Failed(text(e)))?;
+            repository.activate(order, entry)
+        }
         Toward::Back => match (&order.previous, order.previous_version.as_deref()) {
             (Some(previous), Some(version)) => {
                 let version = Version::new(version)
@@ -138,9 +199,20 @@ fn repository_switch(
                     .map_err(SwitchError::Failed)?;
                 let sealed = target::read(previous.dir())
                     .map_err(text)
-                    .and_then(|sealed| sealed.ok_or_else(|| no_target(order, &version)))
                     .map_err(SwitchError::Failed)?;
-                repository.back(order, entry, Some((&version, previous.dir(), &sealed)))
+                match sealed {
+                    Some(sealed) => {
+                        repository.back(order, entry, Some((&version, previous.dir(), &sealed)))
+                    }
+                    None => {
+                        let (service, _) = names(order).map_err(SwitchError::Failed)?;
+                        repository
+                            .remove(&service, entry)
+                            .map_err(crate::repository::switch_error)?;
+                        relink_archive(placer, &service, &version, previous.dir(), own)
+                            .map_err(SwitchError::Failed)
+                    }
+                }
             }
             (None, None) => repository.back(order, entry, None),
             _ => Err(SwitchError::Failed(half(order))),
@@ -149,14 +221,50 @@ fn repository_switch(
     }
 }
 
-/// Why the release `version` that `order` replaces cannot be switched back to as a repository
-/// version: it has no `target.json` (an order never moves a service between installers).
-fn no_target(order: &UpdateOrder, version: &Version) -> String {
-    format!(
-        "the release {version} that {} replaces has no {}",
-        order.service,
-        target::TARGET_FILE
-    )
+/// The archive version `version` of `service`, in `dir`, placed again: `current` switched to it
+/// and its paths linked and committed ([`Placer::relink_to`]).
+fn relink_archive(
+    placer: &Placer<'_>,
+    service: &ServiceName,
+    version: &Version,
+    dir: &Path,
+    own: &HostkeeperVersion,
+) -> Result<(), String> {
+    let manifest = manifest_of(dir, service, version, own)?;
+    placer.switch_current(service, version).map_err(text)?;
+    placer.relink_to(&manifest).map_err(text).map(drop)
+}
+
+/// The native package of `service`, whose `current` version is a repository version, taken off
+/// the host before an archive version is placed: the move's rollback by an order of the archive
+/// version (docs/design/packages-native.md, section 10.6). Nothing when `current` is no
+/// repository version.
+fn remove_native(
+    placer: &Placer<'_>,
+    repository: &Repository,
+    service: &ServiceName,
+) -> Result<(), SwitchError> {
+    let current = placer
+        .current(service.as_str())
+        .map_err(|e| SwitchError::Failed(text(e)))?;
+    // The packages directory as this process reads it, as every `target.json` is read.
+    let dir = current.map(|current| {
+        repository
+            .ports
+            .packages_dir
+            .join(service.as_str())
+            .join(current)
+    });
+    let sealed = match dir {
+        Some(dir) => target::read(&dir).map_err(|e| SwitchError::Failed(text(e)))?,
+        None => None,
+    };
+    match sealed {
+        Some(entry) => repository
+            .remove(service, &entry)
+            .map_err(crate::repository::switch_error),
+        None => Ok(()),
+    }
 }
 
 /// Why an order that names only half of the release it replaces cannot be switched back.

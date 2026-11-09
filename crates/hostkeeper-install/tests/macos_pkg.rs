@@ -8,6 +8,8 @@ mod activate;
 mod drift;
 #[path = "macos_pkg/host_errors.rs"]
 mod host_errors;
+#[path = "macos_pkg/own.rs"]
+mod own;
 #[path = "macos_pkg/remove.rs"]
 mod remove;
 #[path = "macos_pkg/stage.rs"]

@@ -120,7 +120,11 @@ fn the_postinstall_runs_no_seed_and_no_mac_config_of_the_installed_binary() {
     }
     let code: Vec<&str> = text.lines().filter(|line| !line.starts_with('#')).collect();
     assert_eq!(code.len(), 2, "{code:?}");
-    assert!(code[0].contains("bootout"));
+    assert_eq!(
+        code[0],
+        "'/bin/launchctl' print 'system/dev.hostkeeper.hostkeeper' >/dev/null 2>&1 && exit 0"
+    );
+    assert!(!text.contains("bootout"));
     assert!(code[1].starts_with("exec ") && code[1].contains("bootstrap system"));
     assert!(code[1].contains(&shown(&plist_path())));
 }

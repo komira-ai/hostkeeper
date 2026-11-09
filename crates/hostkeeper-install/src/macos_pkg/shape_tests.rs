@@ -45,14 +45,14 @@ fn product(dir: &Path, text: &str) {
 }
 
 fn refused(dir: &Path) -> ShapeError {
-    check(dir, ID, VERSION).unwrap_err()
+    check(dir, ID, VERSION, false).unwrap_err()
 }
 
 #[test]
 fn a_component_package_is_its_own_component() {
     let dir = scratch("shcomp");
     component(dir.path(), &package_info(""));
-    let found = check(dir.path(), ID, VERSION).unwrap();
+    let found = check(dir.path(), ID, VERSION, false).unwrap();
     assert_eq!(found.dir, dir.path());
     assert_eq!(found.package_info(), dir.path().join("PackageInfo"));
     assert_eq!(found.bom(), dir.path().join("Bom"));
@@ -64,7 +64,7 @@ fn a_product_archive_with_one_component_finds_it() {
     let dir = scratch("shprod");
     product(dir.path(), &distribution("start_selected=\"true\"", REF));
     fs::create_dir(dir.path().join("Resources")).unwrap();
-    let found = check(dir.path(), ID, VERSION).unwrap();
+    let found = check(dir.path(), ID, VERSION, false).unwrap();
     assert_eq!(found.dir, dir.path().join("hello.pkg"));
 }
 
@@ -108,7 +108,7 @@ fn the_same_path_named_twice_is_one_path() {
     let dir = scratch("shsame");
     let refs = format!("{REF}{REF}");
     product(dir.path(), &distribution("", &refs));
-    assert!(check(dir.path(), ID, VERSION).is_ok());
+    assert!(check(dir.path(), ID, VERSION, false).is_ok());
 }
 
 #[test]
@@ -117,7 +117,7 @@ fn a_percent_escaped_path_names_the_decoded_directory() {
     component(&dir.path().join("my hello.pkg"), &package_info(""));
     let refs = format!("<pkg-ref id=\"{ID}\">#my%20hello.pkg</pkg-ref>");
     fs::write(dir.path().join("Distribution"), distribution("", &refs)).unwrap();
-    let found = check(dir.path(), ID, VERSION).unwrap();
+    let found = check(dir.path(), ID, VERSION, false).unwrap();
     assert_eq!(found.dir, dir.path().join("my hello.pkg"));
 }
 
@@ -178,7 +178,7 @@ fn a_choice_with_every_switch_true_is_accepted() {
     let dir = scratch("shchoiceok");
     let attrs = "start_selected=\"true\" selected=\"true\" start_enabled=\"true\" enabled=\"true\"";
     product(dir.path(), &distribution(attrs, REF));
-    assert!(check(dir.path(), ID, VERSION).is_ok());
+    assert!(check(dir.path(), ID, VERSION, false).is_ok());
 }
 
 /// Catches: an install-time script of a `Distribution` going unnoticed.
@@ -278,7 +278,7 @@ fn the_package_info_pkgbuild_writes_is_accepted() {
              <strict-identifier/><relocate/><scripts/>",
         ),
     );
-    check(dir.path(), ID, VERSION).unwrap();
+    check(dir.path(), ID, VERSION, false).unwrap();
 }
 
 #[test]
@@ -484,4 +484,55 @@ fn a_script_archive_in_a_product_archives_component_is_a_script() {
         refused(dir.path()),
         ShapeError::Scripts("the component holds \"Scripts\"".into())
     );
+}
+
+/// Hostkeeper's own component, with a `Scripts` directory holding `postinstall` alone as a
+/// regular file, is accepted; a `postinstall` that is a link, or a `Scripts` with nothing in it,
+/// is not, and a package that is not hostkeeper's own refuses the directory.
+#[test]
+fn an_own_component_may_hold_a_postinstall_alone_as_a_regular_file() {
+    let own = |dir: &Path| check(dir, ID, VERSION, true);
+    let dir = scratch("shown-ok");
+    component(dir.path(), &package_info(""));
+    fs::create_dir(dir.path().join("Scripts")).unwrap();
+    fs::write(dir.path().join("Scripts/postinstall"), b"#!/bin/sh\n").unwrap();
+    assert_eq!(own(dir.path()).unwrap().dir, dir.path());
+    assert_eq!(
+        refused(dir.path()),
+        ShapeError::Scripts("the component holds \"Scripts\"".into())
+    );
+
+    let linked = scratch("shown-link");
+    component(linked.path(), &package_info(""));
+    fs::create_dir(linked.path().join("Scripts")).unwrap();
+    fs::write(linked.path().join("target"), b"x").unwrap();
+    std::os::unix::fs::symlink(
+        linked.path().join("target"),
+        linked.path().join("Scripts/postinstall"),
+    )
+    .unwrap();
+    assert_eq!(
+        own(linked.path()).unwrap_err(),
+        ShapeError::Scripts("the component's \"postinstall\" is not a regular file".into())
+    );
+
+    let empty = scratch("shown-empty");
+    component(empty.path(), &package_info(""));
+    fs::create_dir(empty.path().join("Scripts")).unwrap();
+    assert_eq!(
+        own(empty.path()).unwrap_err(),
+        ShapeError::Scripts("the component's \"Scripts\" holds , not \"postinstall\" alone".into())
+    );
+}
+
+/// A `Scripts` entry of hostkeeper's own component that is no directory cannot be read.
+#[test]
+fn an_own_scripts_entry_that_is_no_directory_is_unreadable() {
+    let dir = scratch("shown-file");
+    component(dir.path(), &package_info(""));
+    fs::write(dir.path().join("Scripts"), b"x").unwrap();
+    assert!(matches!(
+        check(dir.path(), ID, VERSION, true),
+        Err(ShapeError::Read(what, _)) if what == "the component's Scripts"
+    ));
 }

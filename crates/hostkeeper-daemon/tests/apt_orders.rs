@@ -75,30 +75,11 @@ fn an_install_that_finds_the_package_manager_busy_is_deferred_and_leaves_nothing
     assert_eq!(recorded(&daemon), None);
 }
 
-/// Proves a service keeps the installer it was installed with: a service installed from the
-/// release channel and then ordered an apt entry ends `Failed`, `release`, `installer_changed`
-/// with nothing fetched and nothing installed, and `current` stays.
-///
-/// Catches: an apt entry that takes over an archive service, replacing its files by a package.
-#[test]
-fn an_archive_service_ordered_an_apt_entry_is_installer_changed() {
-    let apt = AptRig::new("apt-archive-to-apt");
-    let daemon = apt.daemon();
-    apt.rig.running(SERVICE, "1.0.0");
-    let two = apt.publish(package("2.0.0-1"));
-    assert_eq!(
-        daemon.order(&update_of("2.0.0", "2.0.0-1", &two, 1)),
-        failed(Class::Release, "installer_changed")
-    );
-    assert!(apt.host.calls().is_empty(), "no tool ran");
-    assert_eq!(apt.host.installed(SERVICE), None);
-    assert_eq!(linked(&apt, "current").as_deref(), Some("1.0.0"));
-    assert!(!apt.version_dir("2.0.0").exists());
-}
-
-/// Proves the same rule the other way round: an apt service ordered an update from the release
-/// channel (no entry) ends `Failed`, `release`, `installer_changed`, with nothing fetched from the
-/// package port and the installed package untouched.
+/// Proves a service keeps the installer it was installed with: an apt service ordered an update
+/// from the release channel (no entry) to an archive version that is not the one the move
+/// replaced ends `Failed`, `release`, `installer_changed`, with nothing fetched from the package
+/// port and the installed package untouched. (The move from archives to apt, and its rollback to
+/// the archive version kept as `previous`, are `tests/move_native.rs`'s.)
 ///
 /// Catches: an archive update that replaces an apt service's version directory beside its
 /// package.

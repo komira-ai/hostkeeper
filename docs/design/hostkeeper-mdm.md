@@ -159,8 +159,8 @@ installs before the pkg** (first by the pkg's postinstall; since the units and p
 2. On that profile's `Acknowledged`, the gate sends the pkg (section 7).
 3. The config is written by the code of `mac_config` (**Built**: `crates/hostkeeper-daemon/src/mac_config.rs`),
    which the pkg's postinstall first ran as a command and which the daemon now runs at each start
-   (`mac_config::at_start`), as its first step on a Mac. The postinstall is two commands:
-   `launchctl bootout` and `launchctl bootstrap`, below. The code reads the managed preferences of the domain, which macOS
+   (`mac_config::at_start`), as its first step on a Mac. The postinstall asks launchd whether the
+   job is loaded (`launchctl print`) and, only when it is not, runs `launchctl bootstrap`, below. The code reads the managed preferences of the domain, which macOS
      writes to `/Library/Managed Preferences/dev.hostkeeper.config.plist` (a binary or XML
      plist). The path, the file's owner and its mode are to verify on a device (tasks M11 and
      M16), because Apple's payload schema does not state them. The verb accepts the file only when
@@ -175,10 +175,12 @@ installs before the pkg** (first by the pkg's postinstall; since the units and p
        the message in `/var/log/hostkeeper/daemon.err.log`, and launchd starts it again, which
        fails again, until the profile is in place; the install itself succeeds. Installing the
        pkg by hand without a config is an error the operator reads in that log.
-   - `launchctl bootstrap system /Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist`, after
-     any earlier copy of the job is booted out. It no longer waits for a config file.
+   - `launchctl bootstrap system /Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist`, when
+     launchd does not have the job loaded; a loaded job is left alone, so that an install the
+     daemon itself runs never boots it out (packages-native.md section 10.4). It no longer waits
+     for a config file.
 
-   The two commands are **Built** as the pkg's postinstall
+   The question and the bootstrap are **Built** as the pkg's postinstall
    (`crates/hostkeeper-launchd/src/postinstall.rs`), and `check-macos-pkg` holds the script to its
    exact bytes (`crates/xtask/src/release/macos_pkg.rs`).
 

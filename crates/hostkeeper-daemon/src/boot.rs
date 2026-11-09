@@ -336,6 +336,13 @@ pub struct BootReport {
     /// What the start settled of the update of hostkeeper itself that waited for the restart
     /// ([`Daemon::settle_self_update`]), or why it could not: `None` before the start did it.
     pub self_update: Option<Result<hostkeeper_steps::Settled, String>>,
+    /// How the start's try of the `activate` of hostkeeper's own package went
+    /// ([`Daemon::activate_own_package`]): `None` when none waited.
+    pub own_activate: Option<crate::own_package::OwnActivate>,
+    /// The version of hostkeeper's own package the start adopted
+    /// ([`crate::own_package`], "The adoption"), `None` when it adopted none, or why it could
+    /// not: `None` before the start looked.
+    pub adopted: Option<Result<Option<String>, String>>,
 }
 
 /// Why the start pass could not run: the state directory cannot be listed.

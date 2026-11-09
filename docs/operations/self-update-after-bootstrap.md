@@ -195,8 +195,8 @@ coordinator, the others on the Mac as root.
    sudo rm -f /var/lib/updater/state/hostkeeper/bin/current
    ```
 
-5. Install the pkg. The installer runs the `postinstall`, which boots out any loaded copy of the
-   job and loads the job. The job's first start seeds `current` and keeps the
+5. Install the pkg. The installer runs the `postinstall`, which loads the job (step 3 left it not
+   loaded; the script never boots out a job that is loaded). The job's first start seeds `current` and keeps the
    `/etc/hostkeeper/hostkeeper.toml` the Mac has (the pkg never replaces it). If the Mac has
    neither that file nor a managed config, the install succeeds and the daemon refuses each
    start, naming the missing file in `/var/log/hostkeeper/daemon.err.log`.

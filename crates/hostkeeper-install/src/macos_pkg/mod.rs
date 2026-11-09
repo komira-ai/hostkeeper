@@ -10,7 +10,7 @@
 //!
 //! | Step | Here |
 //! |---|---|
-//! | [`MacosPkg::stage`] | The identifier no other service records; `pkgutil --check-signature` against the host's [`signers`]; `pkgutil --expand-full`; the [`shape`] of the expansion, with no script (`package_scripts`); the `Bom` against the payload, and the jobs ([`payload`]); the [`hook`] at its fixed path; `artifact`, `tree/` and `macos-pkg/{PackageInfo,Bom,artifact.pkg}` in the staging directory |
+//! | [`MacosPkg::stage`] | The identifier no other service records; `pkgutil --check-signature` against the host's [`signers`]; `pkgutil --expand-full`; the [`shape`] of the expansion, with no script (`package_scripts`; hostkeeper's own package, [`own`], may carry its `postinstall`); the `Bom` against the payload (against its own list for [`own`]), and the jobs ([`payload`]); the [`hook`] at its fixed path; `artifact`, `tree/` and `macos-pkg/{PackageInfo,Bom,artifact.pkg}` in the staging directory |
 //! | [`MacosPkg::activate`] | Under the [`InstallerLock`]: the parents of the payload paths safe, no payload file another receipt lists, the record pending, `installer -allowUntrusted -pkg <dir>/macos-pkg/artifact.pkg -target /`, the receipt's version and every installed file proved against `tree/`, the files of the version it replaces that this one does not list deleted, then the created directories left empty, the `run` labels enabled and a dropped one disabled, the record done. A rollback is the `activate` of the kept previous version. Drift found on the way is reported, and repaired by the install |
 //! | [`MacosPkg::retire`] | The version directory and its seal deleted; no tool runs |
 //! | [`MacosPkg::remove`] | Under the lock: every file and link the receipt or a kept version's `Bom` lists, changed or not, but one another receipt lists or one under a linked parent; the created directories left empty, deepest first; `pkgutil --forget` |
@@ -20,6 +20,7 @@
 pub mod activate;
 pub mod drift;
 pub mod hook;
+pub mod own;
 pub mod payload;
 pub mod receipt;
 pub mod record;

@@ -69,6 +69,8 @@ pub struct FakePkg {
     /// Directories the component's expansion holds beside its `Bom`, `PackageInfo` and `Payload`
     /// (`Scripts` for a package with scripts).
     pub component_extras: Vec<String>,
+    /// The files of each directory of `component_extras` (a package's scripts).
+    pub script_files: Vec<String>,
     /// Whether the component has a `Payload` (`pkgbuild --nopayload` makes one without).
     pub has_payload: bool,
     pub package_info: Option<String>,
@@ -92,6 +94,7 @@ impl FakePkg {
             distribution: None,
             extras: Vec::new(),
             component_extras: Vec::new(),
+            script_files: vec!["postinstall".into()],
             has_payload: true,
             package_info: None,
             payload: BTreeMap::new(),
@@ -484,7 +487,9 @@ impl FakeMac {
         fs::write(comp.join("Bom"), format!("fake-bom:{}", pkg.name)).unwrap();
         for extra in &pkg.component_extras {
             fs::create_dir_all(comp.join(extra)).unwrap();
-            fs::write(comp.join(extra).join("postinstall"), b"#!/bin/sh\n").unwrap();
+            for file in &pkg.script_files {
+                fs::write(comp.join(extra).join(file), b"#!/bin/sh\n").unwrap();
+            }
         }
         if !pkg.has_payload {
             return;

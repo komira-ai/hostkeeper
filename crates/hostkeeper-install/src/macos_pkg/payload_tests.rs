@@ -279,7 +279,7 @@ fn jobs_verdict(name: &str, value: Option<Value>) -> Result<(), PayloadError> {
         fs::create_dir_all(real.parent().unwrap()).unwrap();
         value.to_file_xml(&real).unwrap();
     }
-    check_jobs(dir.path(), &valid(), &[label()])
+    check_jobs(dir.path(), &valid(), &[label()], true)
 }
 
 #[test]
@@ -290,7 +290,7 @@ fn a_disabled_job_of_the_labels_name_with_a_payload_program_passes() {
 #[test]
 fn no_run_label_needs_no_plist() {
     let dir = scratch("pjnone");
-    assert_eq!(check_jobs(dir.path(), &valid(), &[]), Ok(()));
+    assert_eq!(check_jobs(dir.path(), &valid(), &[], true), Ok(()));
 }
 
 #[test]
@@ -299,12 +299,12 @@ fn a_run_label_whose_plist_the_bom_does_not_list_is_refused() {
     let mut bom = valid();
     bom.remove(PLIST);
     assert_eq!(
-        check_jobs(tmp.path(), &bom, &[label()]),
+        check_jobs(tmp.path(), &bom, &[label()], true),
         Err(PayloadError::NoPlist(LABEL.into(), PLIST.into()))
     );
     bom.insert(PLIST.into(), dir());
     assert_eq!(
-        check_jobs(tmp.path(), &bom, &[label()]),
+        check_jobs(tmp.path(), &bom, &[label()], true),
         Err(PayloadError::NoPlist(LABEL.into(), PLIST.into()))
     );
 }
@@ -333,7 +333,7 @@ fn a_plist_that_is_not_a_plist_is_refused() {
     let real = dir.path().join(PLIST.trim_start_matches('/'));
     fs::create_dir_all(real.parent().unwrap()).unwrap();
     fs::write(&real, b"not a plist at all").unwrap();
-    let got = check_jobs(dir.path(), &valid(), &[label()]);
+    let got = check_jobs(dir.path(), &valid(), &[label()], true);
     assert!(matches!(got, Err(PayloadError::BadPlist(path, _)) if path == PLIST));
 }
 
@@ -359,6 +359,26 @@ fn a_plist_whose_label_differs_or_is_missing_is_refused() {
             String::new(),
             LABEL.into()
         ))
+    );
+}
+
+/// A job that is not `Disabled` passes when the caller does not require it (hostkeeper's own
+/// job, which its script loads), and is refused when it does.
+#[test]
+fn a_job_need_not_be_disabled_when_the_caller_says_so() {
+    let dir = scratch("pjnotdisabled");
+    let real = dir.path().join(PLIST.trim_start_matches('/'));
+    fs::create_dir_all(real.parent().unwrap()).unwrap();
+    job(vec![
+        ("Label", Value::String(LABEL.into())),
+        ("Program", Value::String(BIN.into())),
+    ])
+    .to_file_xml(&real)
+    .unwrap();
+    assert_eq!(check_jobs(dir.path(), &valid(), &[label()], false), Ok(()));
+    assert_eq!(
+        check_jobs(dir.path(), &valid(), &[label()], true),
+        Err(PayloadError::NotDisabled(PLIST.into()))
     );
 }
 

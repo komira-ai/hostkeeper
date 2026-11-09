@@ -19,7 +19,8 @@ pub const TREE: &str = "tree";
 pub const CONTROL: &str = "control";
 
 /// The only service whose package may carry maintainer scripts: hostkeeper's own, for the
-/// service `hostkeeper` (packages-native.md section 10.4).
+/// service `hostkeeper` (packages-native.md section 10.4). Its tree is also held to its own list
+/// instead of the path rule ([`tree::OWN_FILES`]), when the package is named `hostkeeper` too.
 pub const OWN: &str = "hostkeeper";
 
 /// The SHA-256 of the file at `path`, lower-case hex.

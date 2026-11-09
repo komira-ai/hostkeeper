@@ -355,22 +355,27 @@ exists.)
 The file `hostkeeper-<v>-macos-arm64.pkg` is a distribution pkg: `productbuild` wraps the component
 pkg that `pkgbuild` makes from the payload and the script, and the wrapper holds the one
 component and nothing else (no installer script, no installation check, no volume check). The
-installer runs the component's one script, a `postinstall` of two commands, as root once the
-files are in place. The last one is the script's own status, which fails the install when the
-job cannot be loaded:
+installer runs the component's one script, a `postinstall` of two lines, as root once the
+files are in place. The bootstrap's status is the script's own, which fails the install when the
+job is not loaded and cannot be:
 
 ```
 #!/bin/sh
-# The hostkeeper pkg's postinstall: load the daemon's launchd job, once any copy
-# loaded before is booted out (which fails when none is loaded). The job's program,
-# the binary the pkg installed, puts itself in the binary directory of hostkeeper's
-# own update when current starts nothing and runs current, at each start.
-'/bin/launchctl' bootout 'system/dev.hostkeeper.hostkeeper' 2>/dev/null
+# The hostkeeper pkg's postinstall: load the daemon's launchd job when launchd does
+# not have it loaded, and leave it alone when it does. An installer the daemon
+# itself runs (its self-update) must not boot the running daemon out, so the job is
+# never booted out here; its new plist takes effect at the next boot. A first
+# install, or a host where the job is not loaded, gets it loaded.
+'/bin/launchctl' print 'system/dev.hostkeeper.hostkeeper' >/dev/null 2>&1 && exit 0
 exec '/bin/launchctl' bootstrap system '/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist'
 ```
 
-`launchctl bootout` unloads a copy of the job loaded before, and its status is ignored
-because it fails when none is loaded. `launchctl bootstrap` loads the job, and `RunAtLoad`
+`launchctl print` exits 0 when launchd has the job loaded and non-zero (113) when it does not; its
+output is discarded. A loaded job is left alone: the script exits 0 and never runs
+`launchctl bootout`, because an `installer -pkg` that the daemon itself runs (its self-update
+through the `macos-pkg` installer) must not boot the running daemon out in the middle of its
+update. The plist's new text then takes effect at the next boot. When the job is not loaded (a
+first install, or a host that booted it out) `launchctl bootstrap` loads it, and `RunAtLoad`
 starts it. The script runs the bootstrap with `exec`, so its status is the install's.
 
 The script no longer seeds the binary directory or writes the config; the daemon's start does
