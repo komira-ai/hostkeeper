@@ -7,7 +7,8 @@
 # The `hello-` names are the packages and release indexes of the example service, examples/hello, and
 # of its failing build (`hello-<version>-fail-ready-*`, the same package started with `--fail-ready`).
 # The `mdm-` names are the package and release index of the MDM server stack's service package, built for
-# linux-x86_64 only.
+# linux-x86_64 only. `hello_<version>_<arch>.deb`, `hello-<version>-macos-arm64.pkg` and `mdm_<version>_amd64.deb` are
+# the services' native packages (docs/design/packages-native.md, item A21).
 SHA256SUMS
 hello-<version>-fail-ready-linux-arm64.tar.zst
 hello-<version>-fail-ready-linux-arm64.tar.zst.sha256
@@ -92,6 +93,14 @@ hostkeeper-coordinator_<version>_amd64.deb
 hostkeeper-coordinator_<version>_amd64.deb.sigstore.json
 hostkeeper-coordinator_<version>_arm64.deb
 hostkeeper-coordinator_<version>_arm64.deb.sigstore.json
+hello-<version>-macos-arm64.pkg
+hello-<version>-macos-arm64.pkg.sigstore.json
+hello_<version>_amd64.deb
+hello_<version>_amd64.deb.sigstore.json
+hello_<version>_arm64.deb
+hello_<version>_arm64.deb.sigstore.json
+mdm_<version>_amd64.deb
+mdm_<version>_amd64.deb.sigstore.json
 withdrawn: hostkeeper-<version>-1-aarch64.pkg.tar.zst
 withdrawn: hostkeeper-<version>-1-aarch64.pkg.tar.zst.sigstore.json
 withdrawn: hostkeeper-<version>-1-x86_64.pkg.tar.zst

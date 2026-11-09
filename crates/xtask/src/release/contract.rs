@@ -541,6 +541,24 @@ impl Package {
             platform.name()
         )
     }
+
+    /// The file name of the native package of the release `version` for `platform` that the
+    /// release ships as an asset and publishes to the repository's `testing` channel
+    /// (docs/design/packages-native.md, item A21): `<service>_<v>_<deb>.deb` on a Linux platform,
+    /// `<service>-<v>-macos-arm64.pkg` on macOS. Only hello's and mdm's, on their platforms:
+    /// hostkeeper's own `.deb` and installer are assets of their own ([`asset_names`]), and hello's
+    /// failing build has none, since its version `<v>-fail-ready` is not the `X.Y.Z` every entry
+    /// of the shared repository's index must be.
+    pub(crate) fn native_name(self, version: &Version, platform: Platform) -> Option<String> {
+        if !matches!(self, Package::Hello | Package::Mdm) || !self.platforms().contains(&platform) {
+            return None;
+        }
+        let service = self.service().name();
+        Some(match platform.linux_arches() {
+            Some((deb, _)) => format!("{service}_{version}_{deb}.deb"),
+            None => format!("{service}-{version}-{}{INSTALLER_SUFFIX}", platform.name()),
+        })
+    }
 }
 
 /// The file name of the installer pkg of `version`, the first install of a Mac (design section
@@ -592,8 +610,12 @@ pub(crate) fn is_bundle(name: &str) -> bool {
 ///
 /// and on macOS `hostkeeper-<v>-macos-arm64.pkg`, the installer ([`installer_name`]);
 ///
+/// and the native packages of the services ([`Package::native_name`]): `hello_<v>_<deb>.deb` on
+/// each Linux platform and `hello-<v>-macos-arm64.pkg` on macOS, and `mdm_<v>_amd64.deb` on
+/// linux-x86_64 (attested, no `.sha256`);
+///
 /// the bundle of each binary tarball (the three programs'), Linux package, installer, hostkeeper package, hello package,
-/// hello's failing build, mdm package and image; when both Linux platforms are given, once, the
+/// hello's failing build, mdm package, native package and image; when both Linux platforms are given, once, the
 /// coordinator's image index `hostkeeper-coordinator-<v>.image.json`
 /// ([`super::image_index`]) and its bundle; and once, [`INDEX`] (the release index of the
 /// hostkeeper packages), [`HELLO_INDEX`] (that of the hello packages), [`HELLO_FAIL_READY_INDEX`]
@@ -625,6 +647,7 @@ pub(crate) fn asset_names(version: &Version, platforms: &[Platform]) -> Vec<Stri
             let package = kind.package_name(version, platform);
             names.push(format!("{package}{DIGEST_SUFFIX}"));
             attested.push(package);
+            attested.extend(kind.native_name(version, platform));
         }
         names.push(format!("{PROGRAM}-{version}-{p}.cdx.json"));
         if let Some((deb, rpm)) = platform.linux_arches() {

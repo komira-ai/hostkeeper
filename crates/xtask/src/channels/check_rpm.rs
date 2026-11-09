@@ -204,6 +204,12 @@ pub(crate) fn check_rpm(host: &dyn RpmHost, r: &Rpm) -> Result<Vec<String>, Erro
             r.arch
         )));
     };
+    if !package.rpm {
+        return Err(Error::Usage(format!(
+            "--package {:?} is a .deb alone: it has no rpm",
+            package.name
+        )));
+    }
     url_flag("--url", r.url)?;
     if !r.work.starts_with('/') || r.work.ends_with('/') {
         return Err(Error::Usage(format!(
@@ -278,8 +284,10 @@ pub(crate) fn check_rpm(host: &dyn RpmHost, r: &Rpm) -> Result<Vec<String>, Erro
     {
         problems.push(format!("the user {user} does not exist"));
     }
-    let links = unit_links(host, package.unit)?;
-    problems.extend(enabled_problems(package, &links));
+    for unit in package.units {
+        let links = unit_links(host, unit)?;
+        problems.extend(enabled_problems(package, unit, &links));
+    }
     let pids = running_pids(host, package.comm())?;
     problems.extend(running_problems(&pids));
     if !problems.is_empty() {

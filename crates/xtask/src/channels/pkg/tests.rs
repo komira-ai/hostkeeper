@@ -5,20 +5,34 @@ use super::*;
 type Change = fn(&mut Request);
 
 #[test]
-fn the_files_of_a_version_are_the_installer_and_its_bundle_held_to_the_release_sums() {
+fn the_files_of_a_version_are_each_installer_and_its_bundle_held_to_the_release_sums() {
+    // Catches: hello's installer left out of the version's directory, or its sums.
     let f = Fixture::new("collect");
     let entries = collect(&f.release, "1.2.3").expect("collected");
     let listed: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+    assert_eq!(
+        listed,
+        [
+            "hello-1.2.3-macos-arm64.pkg",
+            "hello-1.2.3-macos-arm64.pkg.sigstore.json",
+            "hostkeeper-1.2.3-macos-arm64.pkg",
+            "hostkeeper-1.2.3-macos-arm64.pkg.sigstore.json",
+        ]
+    );
     assert_eq!(listed, names());
     assert_eq!(
         entries[0].size,
+        "bytes of hello-1.2.3-macos-arm64.pkg".len() as u64
+    );
+    assert_eq!(
+        entries[2].size,
         "bytes of hostkeeper-1.2.3-macos-arm64.pkg".len() as u64
     );
     assert_eq!(
         sums_text(&entries),
         format!(
-            "{}  hostkeeper-1.2.3-macos-arm64.pkg\n{}  hostkeeper-1.2.3-macos-arm64.pkg.sigstore.json\n",
-            entries[0].sha256, entries[1].sha256
+            "{}  hello-1.2.3-macos-arm64.pkg\n{}  hello-1.2.3-macos-arm64.pkg.sigstore.json\n{}  hostkeeper-1.2.3-macos-arm64.pkg\n{}  hostkeeper-1.2.3-macos-arm64.pkg.sigstore.json\n",
+            entries[0].sha256, entries[1].sha256, entries[2].sha256, entries[3].sha256
         )
     );
 }
@@ -60,7 +74,10 @@ fn a_file_that_is_not_what_the_release_sums_list_is_refused() {
     };
     assert_eq!(
         problems,
-        ["SHA256SUMS does not list hostkeeper-1.2.3-macos-arm64.pkg"]
+        [
+            "SHA256SUMS does not list hello-1.2.3-macos-arm64.pkg",
+            "SHA256SUMS does not list hostkeeper-1.2.3-macos-arm64.pkg"
+        ]
     );
 
     // A bundle the sums do list is held to its digest too.
@@ -76,6 +93,28 @@ fn a_file_that_is_not_what_the_release_sums_list_is_refused() {
         collect(&h.release, "1.2.3"),
         Err(Error::Refused(_))
     ));
+}
+
+#[test]
+fn a_release_whose_sums_do_not_list_hellos_installer_is_refused() {
+    // Catches: hello's installer published from a release whose SHA256SUMS does not vouch for
+    // it, while hostkeeper's is listed.
+    let f = Fixture::new("collect-no-hello");
+    let sums_path = f.release.join(SUMS);
+    let text: String = std::fs::read_to_string(&sums_path)
+        .expect("sums")
+        .lines()
+        .filter(|l| !l.ends_with("  hello-1.2.3-macos-arm64.pkg"))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    std::fs::write(&sums_path, text).expect("sums");
+    let Error::Refused(problems) = collect(&f.release, "1.2.3").unwrap_err() else {
+        panic!("refused")
+    };
+    assert_eq!(
+        problems,
+        ["SHA256SUMS does not list hello-1.2.3-macos-arm64.pkg"]
+    );
 }
 
 #[test]
@@ -155,14 +194,15 @@ fn the_verbs_run_through_the_port_and_name_the_programs_they_use() {
         &exec,
     )
     .expect("uploaded");
-    assert_eq!(said.len(), 3);
+    // Two installers and their bundles, then the directory's sums.
+    assert_eq!(said.len(), 5);
     assert!(
         exec.calls
             .borrow()
             .iter()
             .all(|(program, _)| program == "aws")
     );
-    assert_eq!(exec.calls.borrow().len(), 3);
+    assert_eq!(exec.calls.borrow().len(), 5);
 
     // The promotion reads the bucket back through the same port; the stand-in's answers are
     // not the files, so it refuses at the first one.
@@ -183,7 +223,7 @@ fn the_verbs_run_through_the_port_and_name_the_programs_they_use() {
     assert_eq!(
         refused,
         Error::Failed(
-            "pkg/hostkeeper/1.2.3/hostkeeper-1.2.3-macos-arm64.pkg could not be read back: boom"
+            "pkg/hostkeeper/1.2.3/hello-1.2.3-macos-arm64.pkg could not be read back: boom"
                 .to_owned()
         )
     );

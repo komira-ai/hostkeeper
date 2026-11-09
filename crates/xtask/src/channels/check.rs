@@ -100,16 +100,18 @@ pub(super) fn url_flag(flag: &str, url: &str) -> Result<(), Error> {
     }
 }
 
-/// The text the program of `package` prints for `--version`.
+/// The text the program of `package` prints for `--version`: `<program> <version>`, followed by
+/// `+<12 digits of the commit>` when the package's program says its commit.
 pub(super) fn stamp(package: &Package, version: &str, commit: &str) -> Result<String, Error> {
     let commit: Commit = commit
         .parse()
         .map_err(|e| Error::Usage(format!("--commit {commit:?}: {e}")))?;
-    Ok(format!(
-        "{} {version}+{}",
-        package.program(),
-        commit.short()
-    ))
+    let program = package.program();
+    Ok(if package.stamp_commit {
+        format!("{program} {version}+{}", commit.short())
+    } else {
+        format!("{program} {version}")
+    })
 }
 
 /// The binary of `package` says the release it is.
@@ -123,14 +125,13 @@ pub(super) fn says(host: &dyn Host, package: &Package, stamp: &str) -> Result<St
     Ok(stamp.to_owned())
 }
 
-/// The problem, if the install did not leave the unit as the spec says: the links that enable
-/// it, as found.
-pub(super) fn enabled_problems(package: &Package, links: &[String]) -> Vec<String> {
+/// The problem, if the install did not leave the package's unit `unit` as the spec says: the
+/// links that enable it, as found.
+pub(super) fn enabled_problems(package: &Package, unit: &str, links: &[String]) -> Vec<String> {
     if package.enabled_after_install {
         if links.is_empty() {
             return vec![format!(
-                "the service is not enabled: no link to {} is in etc/systemd/system, and the package enables it on a first install",
-                package.unit
+                "the service is not enabled: no link to {unit} is in etc/systemd/system, and the package enables it on a first install"
             )];
         }
         return Vec::new();
@@ -228,10 +229,13 @@ fn installed_problems(r: &Apt, installed: &str, user_exists: Option<bool>) -> Ve
     if let (Some(user), Some(false)) = (package.user, user_exists) {
         problems.push(format!("the user {user} does not exist"));
     }
-    problems.extend(enabled_problems(
-        package,
-        &enabled_links(r.root, package.unit),
-    ));
+    for unit in package.units {
+        problems.extend(enabled_problems(
+            package,
+            unit,
+            &enabled_links(r.root, unit),
+        ));
+    }
     problems.extend(running_problems(&running(r.root, package.comm())));
     problems
 }
@@ -248,6 +252,12 @@ pub(crate) fn check_apt(host: &dyn Host, r: &Apt) -> Result<Vec<String>, Error> 
         return Err(Error::Usage(format!(
             "--arch {:?} is not amd64 or arm64",
             r.arch
+        )));
+    }
+    if !r.package.arches.iter().any(|a| a.deb == r.arch) {
+        return Err(Error::Usage(format!(
+            "--arch {:?}: {} is not built for it",
+            r.arch, r.package.name
         )));
     }
     url_flag("--apt-url", r.apt_url)?;
