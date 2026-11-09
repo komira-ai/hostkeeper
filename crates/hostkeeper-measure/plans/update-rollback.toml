@@ -1,0 +1,96 @@
+# An update and a rollback of one service on one host. docs/report/results/README.md describes
+# the plans and how a run becomes a result; `hostkeeper-measure check --plan` checks this file.
+id = "update-rollback"
+title = "An update and a rollback on one host"
+measures = """
+On one host, the time from the order to `Succeeded` for an update of the example service hello \
+to a new version (fetched from the release channel), and for a rollback to the version it ran \
+before, which the host keeps as `previous`, so the rollback fetches nothing. The update is a \
+`hkctl releases set-desired`; the rollback is a `hkctl releases force` of the previous version to \
+that host alone. A force marks the version it leaves bad, so each repetition updates to a new \
+version and rolls back to the same base version."""
+records = """
+The set and the force, each stamped by its audit entry (`set_desired`, `force`); for the host, \
+the first poll of `hkctl hosts list` that shows it ordered and the first that shows the version \
+installed by a succeeded update with hello healthy, each stamped with the host's last heartbeat \
+as the coordinator received it. The runner polls every second."""
+repetitions = 5
+states = [
+    "An update of hello on one host took {update.median} s from SetDesired to its succeeded update (median of {update.n} repetitions, from {update.min} s to {update.max} s), of which the host's own update, from its order, took {update-order.median} s.",
+    "A rollback to the previous version, which fetches nothing, took {rollback.median} s from the force to its succeeded update (from {rollback.min} s to {rollback.max} s).",
+]
+
+[hosts]
+says = "The one host hello is assigned to (label one host demo=yes and no other): host-1 in the records."
+pick = "service"
+service = "hello"
+exactly = 1
+
+[[param]]
+name = "previous"
+says = "The hello version the host runs before the first repetition; each repetition rolls back to it."
+
+[[param]]
+name = "version"
+says = "The hello version the repetition updates to: a new one each repetition, since the force marks it bad."
+per_repetition = true
+
+[[param]]
+name = "index"
+says = "The file holding that release's index.json, byte for byte as the release channel serves it."
+per_repetition = true
+
+[[step]]
+id = "update"
+do = "call"
+args = ["releases", "set-desired"]
+audit = "set_desired"
+request = { service = "hello", desired = { version = "{version}" }, releaseIndex = "{file:index}", releaseIndexDigest = "{sha256:index}" }
+
+[[step]]
+id = "updated"
+do = "watch"
+until = { what = "updated", service = "hello", version = "{version}", healthy = true }
+poll_secs = 1
+timeout_secs = 900
+
+[[step]]
+id = "rollback"
+do = "call"
+args = ["releases", "force", "--service", "hello", "--version", "{previous}", "--reason", "measurement: roll back to the previous version"]
+audit = "force"
+request = { hosts = { nodeIds = ["{host}"] } }
+
+[[step]]
+id = "rolled-back"
+do = "watch"
+until = { what = "updated", service = "hello", version = "{previous}", healthy = true }
+poll_secs = 1
+timeout_secs = 900
+
+[[measure]]
+id = "update"
+kind = "span"
+says = "SetDesired to the host's succeeded update"
+unit = "s"
+from = "update/called"
+to = "updated/updated"
+pick = "each"
+
+[[measure]]
+id = "update-order"
+kind = "span"
+says = "the host ordered to its succeeded update"
+unit = "s"
+from = "updated/ordered"
+to = "updated/updated"
+pick = "each"
+
+[[measure]]
+id = "rollback"
+kind = "span"
+says = "the force to the host's succeeded rollback"
+unit = "s"
+from = "rollback/called"
+to = "rolled-back/updated"
+pick = "each"

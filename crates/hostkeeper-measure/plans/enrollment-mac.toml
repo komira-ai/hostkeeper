@@ -1,0 +1,144 @@
+# A Mac enrolled through the MDM gate, from its erase to running its first service.
+# docs/report/results/README.md describes the plans and how a run becomes a result;
+# `hostkeeper-measure check --plan` checks this file.
+id = "enrollment-mac"
+title = "A Mac enrolled through the MDM gate and running its first service"
+measures = """
+A Mac of the farm, erased and enrolled anew through Automated Device Enrollment, from its MDM \
+enrollment to running its first service, through the MDM gate's steps: the hostkeeper package \
+sent, the daemon's enrollment request, the one-time nonce pushed, the approval by that nonce, \
+the certificate issued, the first heartbeat and the first service serving. Every step but the \
+erase is timed by the coordinator's own stamps. Run it when a Mac is erased for the purpose, with \
+no other enrollment pending."""
+records = """
+The operator's erase, stamped by the runner; the Mac's `enrolledSinceUnix` as \
+`hkctl mdm list-devices` lists it; the audit entries `mdm_install_sent`, `enroll_requested`, \
+`mdm_nonce_pushed`, `enroll_approve` by `mdm-nonce` and `enroll_issued`, each with its time; and \
+the host's `firstHeartbeatUnix` and `firstServingUnix`. The runner polls every 5 s for the MDM \
+enrollment and every 2 s for the rest."""
+repetitions = 1
+states = [
+    "An erased Mac was enrolled and serving its first service {total.max} s after its MDM enrollment.",
+    "The MDM gate sent the package {install.max} s after the MDM enrollment and approved the daemon's request by its nonce {nonce-approval.max} s after the request; the certificate took {issue.max} s more, the first heartbeat {first-heartbeat.max} s and the first service serving {first-serving.max} s.",
+]
+
+[hosts]
+says = "One Mac of the farm, erased and enrolled anew: host-1 in the records."
+pick = "none"
+
+[[step]]
+id = "erase"
+do = "operator"
+says = "Erase the Mac and let it enroll through Automated Device Enrollment; press Enter when the erase starts."
+
+[[step]]
+id = "mdm"
+do = "watch"
+until = { what = "mdm-enrolled" }
+poll_secs = 5
+timeout_secs = 7200
+
+[[step]]
+id = "install-sent"
+do = "watch"
+until = { what = "audit", actions = ["mdm_install_sent"] }
+poll_secs = 2
+timeout_secs = 1800
+
+[[step]]
+id = "requested"
+do = "watch"
+until = { what = "audit", actions = ["enroll_requested"] }
+poll_secs = 2
+timeout_secs = 1800
+
+[[step]]
+id = "nonce"
+do = "watch"
+until = { what = "audit", actions = ["mdm_nonce_pushed"] }
+poll_secs = 2
+timeout_secs = 1800
+
+[[step]]
+id = "approved"
+do = "watch"
+until = { what = "audit", actions = ["enroll_approve"], by_name = "mdm-nonce" }
+poll_secs = 2
+timeout_secs = 1800
+
+[[step]]
+id = "issued"
+do = "watch"
+until = { what = "audit", actions = ["enroll_issued"] }
+poll_secs = 2
+timeout_secs = 900
+
+[[step]]
+id = "serving"
+do = "watch"
+until = { what = "beating" }
+poll_secs = 2
+timeout_secs = 1800
+
+[[measure]]
+id = "install"
+kind = "span"
+says = "the MDM enrollment to the package sent"
+unit = "s"
+from = "mdm/enrolled"
+to = "install-sent/seen"
+pick = "first"
+
+[[measure]]
+id = "nonce-approval"
+kind = "span"
+says = "the daemon's request to its approval by the nonce"
+unit = "s"
+from = "requested/seen"
+to = "approved/seen"
+pick = "first"
+
+[[measure]]
+id = "issue"
+kind = "span"
+says = "the approval to the certificate issued"
+unit = "s"
+from = "approved/seen"
+to = "issued/seen"
+pick = "first"
+
+[[measure]]
+id = "first-heartbeat"
+kind = "span"
+says = "the certificate issued to the first heartbeat"
+unit = "s"
+from = "issued/seen"
+to = "serving/first-heartbeat"
+pick = "first"
+
+[[measure]]
+id = "first-serving"
+kind = "span"
+says = "the first heartbeat to the first service serving"
+unit = "s"
+from = "serving/first-heartbeat"
+to = "serving/first-serving"
+pick = "first"
+
+[[measure]]
+id = "total"
+kind = "span"
+says = "the MDM enrollment to the first service serving"
+unit = "s"
+from = "mdm/enrolled"
+to = "serving/first-serving"
+pick = "first"
+
+[[measure]]
+id = "erase-to-enrolled"
+kind = "span"
+says = "the operator's erase to the MDM enrollment, on the runner's clock"
+unit = "s"
+from = "erase/done"
+to = "mdm/enrolled"
+pick = "first"

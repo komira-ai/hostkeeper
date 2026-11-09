@@ -34,6 +34,14 @@ also be signed by an identity the host's configuration names, a package found at
 service is installed and removed by its receipt. Where the two files
 disagree, that one wins; its section 0 lists what it replaces, and its section 8 re-scopes A4, A6 to A14 (A13 and A14 withdrawn).
 
+**Revised by [packages-native.md](packages-native.md)** (section 10 of packages-repositories.md). hostkeeper's own
+format ends: once the farm has moved, every service and hostkeeper itself install only through `apt` and `macos-pkg`
+(`apk` for the Alpine daemon, `dnf` later). `hostkeeper-archive` is deleted (A25), `tarball` and `oci-image` are
+withdrawn (A10 with it), so wherever this file makes the tarball a host's fallback, a host takes its native entry or
+none; a package's hook is a program at a fixed path of the package, a service's package has no maintainer scripts,
+the host checks no attestation, and the release channel ends. Its stages 5 to 10 replace stages 5 and 6 of section 9.2, its
+A18 to A28 replace A11 and A12, and where it disagrees with this file, it wins.
+
 Today a service can be deployed by hostkeeper only as hostkeeper's own package: a `tar.zst` archive holding
 `manifest.toml`, `bin/`, `units/` and `files/`. Every service must repackage what it builds into that shape, even when it
 already ships a `.deb`, an `.rpm`, a macOS `.pkg` or an OCI image. This design removes hostkeeper's package format:
@@ -802,13 +810,13 @@ on every host (`Hosts.List`).
 | 2 | CI of this repository and of `hello` sets every release with `hostkeeper-archive` entries and the release index (A5) | `channel-sync` keeps filling the channel | The archive entries are the same bytes the index lists, and the coordinator checks that they agree (section 3.4) |
 | 3 | Daemon: `target-v1`, `stores.toml`, fetch and proof through the target, `hostkeeper-archive` through the target (A4) | An order without a target is fetched through the channel as today | The old daemon updates to it through the channel. The new one is sent targets only once it announces `target-v1` and the coordinator echoes it |
 | 4 | Installers: `tarball` and built-in steps (A6), then `apt`, `macos-pkg` and `oci-image` (A7, A9, A10), later `dnf` (A8) | Archives keep being set for old daemons | An entry is ordered only to a daemon that lists its installer; a host keeps the installer it runs |
-| 5 | Retire the channel for every service but `hostkeeper` (A11) | A set with an index or a digest is still accepted (rule B8). The channel keeps hostkeeper's own archives, so a host installed from an older deb, rpm or pkg can still update itself | Every host announces `target-v1`, and each retired service's last three releases answer `GetRelease`, both shown in A11's pull request |
-| 6 | Daemon: drop the channel fetch and the index parser's `Platform` copy (A12) | The channel of hostkeeper's archives stays for old bootstrap packages | The daemon requires `target-v1` echoed; against an older coordinator its orders are `Deferred`, `coordinator_too_old` |
+| 5 | Replaced by packages-native.md section 10.6. Was: retire the channel for every service but `hostkeeper` (A11) | A set with an index or a digest is still accepted (rule B8). The channel keeps hostkeeper's own archives, so a host installed from an older deb, rpm or pkg can still update itself | Every host announces `target-v1`, and each retired service's last three releases answer `GetRelease`, both shown in A11's pull request |
+| 6 | Replaced by packages-native.md section 10.6. Was: the daemon drops the channel fetch and the index parser's `Platform` copy (A12) | The channel of hostkeeper's archives stays for old bootstrap packages | The daemon requires `target-v1` echoed; against an older coordinator its orders are `Deferred`, `coordinator_too_old` |
 
 ### 9.3 Self-update at every stage
 
 hostkeeper updates itself as the service `hostkeeper`. Its own release stays `hostkeeper-archive` on all three
-platforms at every stage: the self-update path needs `bin/hostkeeper` in a sealed tree, and an old daemon must always
+platforms at every stage of this section (packages-native.md section 10.4 moves it to its `.deb` and `.pkg`): the self-update path needs `bin/hostkeeper` in a sealed tree, and an old daemon must always
 be able to fetch the next release. The deb, rpm and pkg that bootstrap a host are not installed through an installer;
 they are what installs the daemon in the first place.
 
@@ -903,9 +911,9 @@ The tests of every build item, the cases each covers and why that list is comple
 | A7 | The repository installer and its `apt` backend (packages-repositories.md section 8): the repository configuration, `stage` from the repository, the pin, the simulation, `activate` with the hold, rollback by downgrade, `remove` by purge, drift, the failure reasons; the observer reading units from the tree | A6, A16 | `apt.rs`; `install_apt.rs` in `privileged`, against a signed fixture repository on disk |
 | A8 (later) | A `dnf` backend (packages-repositories.md section 6), after a design pull request of its own once an RPM host exists | A7 | Named by its design |
 | A9 | The `macos-pkg` installer (packages-repositories.md section 4.7): the signers file, `stage` with the signature check and expansion, `activate` with `installer`, rollback from the kept `.pkg`, removal by the receipt, drift | A6, A7, M11 (hostkeeper-mdm.md) | `macos_pkg.rs`; `install_macos_pkg.rs` in the macOS device suite in `macos-device`, against signed fixture packages |
-| A10 | `oci-image`, the generated units, the observer's image digest | A6 | `oci_image.rs`; `install_oci_image.rs` in `privileged` with podman |
-| A11 | Stage 5: the channel keeps only hostkeeper's archives; `channel-stage` and the other services in `channel-sync` go; their docs; hostkeeper's own workflow keeps sending its index | both conditions of stage 5 | Sets with an index still accepted; the workflow lint for hostkeeper's index; the supersession check of rule B22 |
-| A12 | Stage 6: the daemon drops the channel fetch and its `Platform` copy, and requires `target-v1` echoed | A11 | The daemon's `coordinator_too_old` test; the device tests of section 9.3 |
+| A10 | Withdrawn by packages-native.md (10.8). Was: `oci-image`, the generated units, the observer's image digest | A6 | `oci_image.rs`; `install_oci_image.rs` in `privileged` with podman |
+| A11 | Withdrawn by packages-native.md (10.8), replaced by A24, A25 and A28. Was: stage 5: the channel keeps only hostkeeper's archives; `channel-stage` and the other services in `channel-sync` go; their docs; hostkeeper's own workflow keeps sending its index | both conditions of stage 5 | Sets with an index still accepted; the workflow lint for hostkeeper's index; the supersession check of rule B22 |
+| A12 | Withdrawn by packages-native.md (10.8), replaced by A24, A25 and A28. Was: stage 6: the daemon drops the channel fetch and its `Platform` copy, and requires `target-v1` echoed | A11 | The daemon's `coordinator_too_old` test; the device tests of section 9.3 |
 | A13 | Withdrawn, with `apk` | | |
 | A14 | Withdrawn, with `arch` | | |
 | A15 | hostkeeper's own Linux build for musl, static; `check-linux-pkg` refuses a `NEEDED` entry and a declared dependency; the `.deb` and `.rpm`, attested, which `docs/deploy/verify-a-release.md` names (the `archlinux` package A15 also built is withdrawn, section 5.4) | none | `release_linux.rs`; the same `.deb` and `.rpm` installed and started on the oldest and newest release of each family in `privileged` |
@@ -961,7 +969,7 @@ payload) by A10, and P10 and P12 (stages 5 and 6) by A11 and A12.
 | An OCI image's units | Generated from a fixed template; args after the image; structured ports and volumes | An unattested manifest must not write unit text or runtime options, which are a root command line |
 | Rollback of hostkeeper below an installer in use | Refused by the daemon, from a compiled table of each installer's first release | The daemon knows what its disk holds; the coordinator does not |
 | An earlier binary after a fallback | Reports the services it cannot read and leaves them; never uninstalls them | A fallback cannot be refused, and must not remove what it does not understand |
-| hostkeeper's own release | `hostkeeper-archive` at every stage, with its index for as long as the channel keeps it | Self-update needs `bin/hostkeeper` in a sealed tree, and every old daemon must fetch the next release |
+| hostkeeper's own release | `hostkeeper-archive` at every stage, with its index for as long as the channel keeps it; packages-native.md section 10.4 moves it to its `.deb` and `.pkg` | Self-update needs `bin/hostkeeper` in a sealed tree, and every old daemon must fetch the next release |
 | Host facts and variant builds | Later (section 11), as an optional field on `Target` | Installers chosen by equality need no matching |
 
 ## 15. Questions for the maintainers
@@ -969,11 +977,15 @@ payload) by A10, and P10 and P12 (stages 5 and 6) by A11 and A12.
 1. **Attest the manifest too.** Section 8.2 states that whoever may call `SetDesired` for a service decides root
    commands on its hosts, as ruled. CI could write each manifest as a file of the release and attest it in the same
    step as the artifacts; the daemon would verify it as it verifies the artifact, and the coordinator would forward it
-   unchanged. It is additive (an optional `Blob manifest_attestation` on the entry) and could follow A4.
-2. **The OCI installer in v1.** A10 is designed and can wait if no service ships an image yet. The tarball route of
-   section 5.1 covers an image in the meantime.
-3. **The hostkeeper-only channel after stage 5.** Kept, so a host installed from an old deb or pkg can still update
-   itself (rule B8). Retiring it would raise the bootstrap floor, which needs a waiver of B8.
+   unchanged. It is additive (an optional `Blob manifest_attestation` on the entry) and could follow A4. Answered by
+   packages-native.md section 10.2: the hook is a program at a fixed path of the signed package, so the manifest no
+   longer chooses a root program or its arguments, and the host checks no attestation (10.3).
+2. **The OCI installer in v1.** Answered: A10 is withdrawn, since no service we run ships an image to a host
+   (packages-native.md section 10.1).
+3. **The hostkeeper-only channel after stage 5.** Answered: the channel ends once the first release with no archive
+   entry has converged on every host (packages-native.md section 10.5). That raises the bootstrap floor to A19's
+   release, as ruled with the format's end: a host set up later from an older `.deb` or `.pkg` is shown
+   `no_build_for_host` for `hostkeeper` and is set up again from the current one (10.6).
 4. **A registry whose token service is on another origin** (section 7.3). Out of v1; allowing one would need a
    `token_origin` key per store.
 5. **Alpine.** Answered: the daemon runs under OpenRC beside systemd and launchd, chosen by what the host runs, with
