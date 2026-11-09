@@ -321,6 +321,7 @@ impl Rig {
 
     pub fn ports(&self) -> Ports {
         Ports {
+            announcement: Default::default(),
             launcher: self.launcher.clone(),
             packages: self.store.clone(),
             clock: self.clock.clone(),

@@ -29,6 +29,10 @@ hostkeeper-config = { path = "../hostkeeper-config" }
 # claims.
 hostkeeper-enroll = { path = "../hostkeeper-enroll" }
 hostkeeper-hook = { path = "../hostkeeper-hook" }
+# The installers: their contract and registry, which the package store stages through and the
+# switch, the prune and the uninstall go through, and the installers the daemon announces
+# (docs/design/packages.md, section 5).
+hostkeeper-install = { path = "../hostkeeper-install" }
 # The BMC's MAC address, claimed in a Linux host's enrollment request: `Get LAN Configuration
 # Parameters` sent to `/dev/ipmi0` (`ipmi`).
 ipmi-rs.workspace = true
@@ -53,7 +57,7 @@ hostkeeper-proto = { path = "../hostkeeper-proto" }
 # The receipt check of an order's entry and the grammars of its locations (packages.md section 4.4).
 hostkeeper-release = { path = "../hostkeeper-release" }
 hostkeeper-steps = { path = "../hostkeeper-steps" }
-# Steps 3 and 4 of design section 5.5 (unpack, publish), which the real package store composes.
+# The package port of the real store's stage (`PackageFs`, `HostFs`) and its errors.
 hostkeeper-unpack = { path = "../hostkeeper-unpack" }
 # `O_NOFOLLOW` for the lock file.
 libc.workspace = true

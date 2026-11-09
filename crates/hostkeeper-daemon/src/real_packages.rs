@@ -4,7 +4,9 @@
 //! package of the order ([`hostkeeper_package::fetch_package`], which refuses a release index
 //! whose SHA-256 is not the order's index digest, when the order has one), proves it
 //! ([`hostkeeper_package::prove`]), compares the proven archive's SHA-256 with the digest the
-//! order names, then unpacks it ([`hostkeeper_unpack::unpack`]) and seals the version directory.
+//! order names, then stages it with the steps of its installer ([`hostkeeper_install::steps_of`]:
+//! the entry's, `hostkeeper-archive` for an order of the release channel, whose stage is
+//! [`hostkeeper_unpack::unpack`]) and seals the version directory.
 //! It takes no lock: the daemon holds the service's lock around the call.
 //!
 //! An order that carries an entry takes another way to the same proven archive: the package is
@@ -30,6 +32,7 @@ use std::sync::Arc;
 use hostkeeper_config::daemon::{Bounds, DaemonConfig, HttpsUrl, Sha256Hex, TrustedSigners};
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_hook::{Class, Outcome};
+use hostkeeper_install::{InstallerSteps, StageEnv, StageError, StageOrder, steps_of};
 use hostkeeper_package::entry::{EntryEnv, fetch_entry};
 use hostkeeper_package::fetch::FetchEnv;
 use hostkeeper_package::ports::{Fetcher, Verifier};
@@ -42,12 +45,13 @@ use hostkeeper_package::{
     prove, remove_orphan_fetches,
 };
 use hostkeeper_proto::hostkeeper::release::v1::Target;
+use hostkeeper_release::Installer;
 use hostkeeper_steps::{Clock, Staged};
 use hostkeeper_unpack::{
     HostFs, Limits, Owner, PackageFs, Platform as UnpackPlatform, REASON_ARTIFACT_CHANGED,
     REASON_BAD_ARCHIVE, REASON_DAEMON_TOO_OLD, REASON_DIGEST_MISMATCH, REASON_IO_ERROR,
     REASON_MANIFEST_MISMATCH, REASON_NO_SPACE, REASON_RESERVED_VERSION, REASON_VERIFY_UNAVAILABLE,
-    REASON_VERSION_TOO_LONG, UnpackError, UnpackOrder,
+    REASON_VERSION_TOO_LONG, UnpackError,
 };
 
 use crate::adapters::PackageCheck;
@@ -134,6 +138,27 @@ pub fn refusal_of(failure: Failure<'_>) -> PackageRefusal {
         class,
         detail,
     }
+}
+
+/// The steps of the installer that stages `entry` ([`hostkeeper_install::steps_of`]): the
+/// entry's, or `hostkeeper-archive` for an order of the release channel. An installer this build
+/// has no steps of is `installer_not_listed`, deferred, as the receipt check answers it.
+fn stage_steps(entry: Option<&Target>) -> Result<&'static dyn InstallerSteps, PackageError> {
+    let installer = match entry {
+        None => Some(Installer::HostkeeperArchive),
+        Some(entry) => entry.installer.parse::<Installer>().ok(),
+    };
+    installer.and_then(steps_of).ok_or_else(|| {
+        refused(PackageRefusal {
+            refusal: Refusal::InstallerNotListed,
+            outcome: Outcome::Deferred,
+            class: Class::Environment,
+            detail: format!(
+                "this daemon has no installer {:?} to stage the entry with",
+                entry.map_or("", |entry| entry.installer.as_str())
+            ),
+        })
+    })
 }
 
 /// A failure of the host's disk that no library classified: tried again later.
@@ -312,26 +337,27 @@ impl Packages for RealPackages {
                 found: verified.sha256().as_str(),
             })));
         }
-        let unpack_order = UnpackOrder {
-            service: service.clone(),
-            version: version.clone(),
-            platform: hostkeeper_config::platform::Platform::current(),
-            package_digest: verified.sha256().clone(),
+        let steps = stage_steps(entry)?;
+        let order = StageOrder {
+            service,
+            version,
+            package_digest: verified.sha256(),
+            entry,
         };
-        let unpacked = hostkeeper_unpack::unpack(
-            verified.path(),
-            &unpack_order,
-            &Limits::from(&self.bounds),
-            &*self.fs,
-            match &self.check {
+        let env = StageEnv {
+            limits: Limits::from(&self.bounds),
+            fs: &*self.fs,
+            platform: match &self.check {
                 Some(mac) => UnpackPlatform::MacOs(mac.as_ref()),
                 None => UnpackPlatform::Linux,
             },
-        )
-        .map_err(|error| refused(refusal_of(Failure::Unpack(&error))))?;
+        };
+        let unpacked = steps
+            .stage(verified.path(), &order, env)
+            .map_err(|StageError::Unpack(error)| refused(refusal_of(Failure::Unpack(&error))))?;
         let staged =
             Staged::seal(&unpacked.dir).map_err(|error| refused(io_refusal(error.to_string())))?;
-        Ok(VersionDir::with_manifest(staged, unpacked.manifest))
+        Ok(VersionDir::staged_with(staged, unpacked.manifest))
     }
 
     fn remove_orphans(&self, service: &ServiceName) -> Result<(), PackageError> {
