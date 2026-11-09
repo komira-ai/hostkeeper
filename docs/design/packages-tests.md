@@ -8,7 +8,9 @@ Postgres store's in `crates/hostkeeper-coordinator/src/store/postgres/tests/rele
 the pick's own bounds in `crates/hostkeeper-coordinator/src/picks_tests.rs`), and so are those of A4
 (`crates/hostkeeper-daemon/tests/stores.rs`, `crates/hostkeeper-package/tests/fetch.rs`) and of A16 (below), and
 of A6 the announce cases of `hostkeeper-archive` (`crates/hostkeeper-install/tests/announce.rs`) and the contract
-and registry (`crates/hostkeeper-install/tests/installer.rs`), and of A7 the repository configuration
+and registry (`crates/hostkeeper-install/tests/installer.rs`), of A9 the steps and signers file of `macos-pkg`
+(`crates/hostkeeper-install/tests/macos_pkg.rs` and the crate's unit tests, the device tests in
+`crates/hostkeeper-privileged/tests/install_macos_pkg.rs`), and of A7 the repository configuration
 (`crates/hostkeeper-install/tests/repositories.rs`), the `apt` installer against the command port's fake
 (`crates/hostkeeper-install/tests/apt.rs`) and its device test (`crates/hostkeeper-privileged/tests/install_apt.rs`),
 the announce rule of `apt` (`tests/announce.rs`), and `ServiceBeat.drift`

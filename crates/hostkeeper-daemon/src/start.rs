@@ -38,6 +38,7 @@ use std::sync::Arc;
 
 use hostkeeper_config::daemon::{ConfigError, DaemonConfig};
 use hostkeeper_config::manifest::{BadHostkeeperVersion, HostkeeperVersion};
+use hostkeeper_install::macos_pkg::signers::SignersError;
 use hostkeeper_install::repository::config::RepositoriesError;
 use hostkeeper_observe::unlink_stale_registration_socket;
 use hostkeeper_package::stores::StoresError;
@@ -112,6 +113,13 @@ pub enum StartError {
         #[source]
         source: StoresError,
     },
+    /// The Mac's `macos-pkg.toml` is not sound; the error names the file and the rule it breaks.
+    #[error("{}: {source}", path.display())]
+    MacosPkg {
+        path: PathBuf,
+        #[source]
+        source: SignersError,
+    },
     /// The host's repository configuration directory is not sound; the error names the file and
     /// the rule it breaks.
     #[error("{}: {source}", path.display())]
@@ -157,6 +165,7 @@ impl StartError {
             StartError::Config { .. }
             | StartError::MacConfig(_)
             | StartError::Stores { .. }
+            | StartError::MacosPkg { .. }
             | StartError::Repositories { .. } => EXIT_CONFIG,
             StartError::Locked { .. } => EXIT_LOCKED,
             StartError::Io { .. }

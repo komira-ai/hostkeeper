@@ -249,13 +249,13 @@ jobs:
       # device_mac_e2e and device_mac_selfupdate run after device_mac, in the one step that runs
       # as root.
       - name: Build the macOS device tests as the runner's user
-        run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test device_mac --test device_mac_e2e --test device_mac_selfupdate --test self_update_across_releases --test unpack_mac
+        run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test device_mac --test device_mac_e2e --test device_mac_selfupdate --test install_macos_pkg --test self_update_across_releases --test unpack_mac
       # unpack_mac runs twice: here as the runner's user, as the release check of a package
       # unpacks it on a hosted runner, and below as root, as the daemon unpacks it on a host.
       - name: Run the macOS unpack tests as the runner's user
         run: cargo test -p hostkeeper-privileged --features privileged --locked --test unpack_mac -- --nocapture
       - name: Run the macOS device tests as root
-        run: cargo test -p hostkeeper-privileged --features privileged --locked --config "target.'cfg(unix)'.runner = 'sudo'" --test device_mac --test device_mac_e2e --test device_mac_selfupdate --test self_update_across_releases --test unpack_mac -- --test-threads=1 --nocapture
+        run: cargo test -p hostkeeper-privileged --features privileged --locked --config "target.'cfg(unix)'.runner = 'sudo'" --test device_mac --test device_mac_e2e --test device_mac_selfupdate --test install_macos_pkg --test self_update_across_releases --test unpack_mac -- --test-threads=1 --nocapture
       - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: ${{ github.event_name == 'push' && steps.cargo-cache.outputs.cache-hit != 'true' }}
         with:

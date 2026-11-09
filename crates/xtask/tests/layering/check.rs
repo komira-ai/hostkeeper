@@ -84,7 +84,9 @@ pub type Layer = (
 /// `hostkeeper-privileged-pxe`, which needs it as a normal dependency) and read a DHCP client's
 /// packet with its packet crate; the `mdm` package's certificate-unit test loads that package's
 /// units and drop-ins (`hostkeeper-mdm-core`) into the host's systemd. The binary's tests run
-/// the macOS pkg's postinstall (`hostkeeper-launchd`) against the binary.
+/// the macOS pkg's postinstall (`hostkeeper-launchd`) against the binary. The daemon reads the
+/// macos-pkg installer's signers file at its start (`hostkeeper-install`), and the privileged
+/// tests run that installer's steps against the Mac's real tools.
 pub const LAYERS: [Layer; 33] = [
     (BINARY, &[DAEMON], &[LAUNCHD]),
     (CONFIG, &[], &[]),
@@ -108,7 +110,11 @@ pub const LAYERS: [Layer; 33] = [
     (HELLO, &[], &[CONFIG, HOOK]),
     (HKCTL, &[PROTO], &[COORDINATOR, OIDC]),
     (HOOK, &[], &[]),
-    (INSTALL, &[CONFIG, PROTO, RELEASE, STEPS, UNPACK], &[]),
+    (
+        INSTALL,
+        &[CONFIG, LAUNCHD, PROTO, RELEASE, STEPS, UNPACK],
+        &[],
+    ),
     (LAUNCHD, &[HOOK, OBSERVE, PLACED, STEPS], &[]),
     (
         LINK,

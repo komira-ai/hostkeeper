@@ -4,20 +4,40 @@
 //!
 //! - [`installer`]: the contract ([`InstallerSteps`]: `stage`, `activate`, `retire`, `remove`),
 //!   the host's side of it ([`Host`]), and the registry of this build's installers
-//!   ([`steps_of`]), today `hostkeeper-archive` alone.
+//!   ([`steps_of`]).
 //! - [`announce`]: which installers the daemon announces, decided once at its start from its
 //!   platform and the host's `os-release` (section 5.4).
+//! - [`macos_pkg`]: `macos-pkg`, a service from a signed flat `.pkg` installed by `installer`
+//!   (packages-repositories.md section 4.7), with its signers file, its receipts, its record and
+//!   the observer's drift check, over the ports below.
+//! - [`repository`]: the repository installer kind and its `apt` backend (packages-repositories.md):
+//!   the host's repository entries, stage, activate, rollback, remove and drift.
+//! - [`tools`]: the tools an installer runs by absolute path, behind the [`Tools`] port.
+//! - [`host`]: the host's file system under a root, and the accounts its checks trust.
+//! - [`lock`]: the host-wide installer lock.
+//! - [`outcome`]: a step's failure, its class and its reason.
 //!
-//! An installer reads no byte of an artifact before the core has checked its size, its digest
-//! and its attestation (`hostkeeper-package`), runs no script of the package while it stages,
-//! and writes, while it stages, only into the staging directory of the version.
+//! An installer reads no byte of an artifact before the core has checked its size and its
+//! digest, runs no script of the package while it stages, and writes, while it stages, only into
+//! the staging directory of the version. `macos-pkg`'s ports and logic are measured on Linux
+//! against fakes; its real tools run on a Mac only, in `crates/hostkeeper-privileged`'s
+//! `install_macos_pkg.rs` (the `macos-device` job).
 
 pub mod announce;
+pub mod host;
 pub mod installer;
+pub mod lock;
+pub mod macos_pkg;
+pub mod outcome;
 pub mod repository;
+pub mod tools;
 
 pub use announce::{Announcement, Family, announce};
 pub use installer::{
     Archive, Host, HostError, InstallerSteps, REGISTERED, StageEnv, StageError, StageOrder,
     StagedVersion, steps_of,
 };
+pub use outcome::{Class, Failure, Outcome, Reason};
+#[cfg(target_os = "macos")]
+pub use tools::HostTools;
+pub use tools::{Tool, Tools};

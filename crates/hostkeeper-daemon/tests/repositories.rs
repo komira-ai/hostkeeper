@@ -35,6 +35,7 @@ const VERSION: &str = "1.0.0";
 fn files(root: &Path, repositories: Option<PathBuf>) -> HostFiles {
     HostFiles {
         repositories,
+        macos_pkg_signers: None,
         os_root: root.join("os"),
         ca_bundle: root.join("ca.pem"),
         gh: root.join("gh"),

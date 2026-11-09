@@ -92,6 +92,7 @@ impl Mac {
             gh: self.root().join("gh"),
             trusted_root: self.root().join("trusted_root.json"),
             stores: self.root().join("stores.toml"),
+            macos_pkg_signers: None,
             pki: self.root().join("pki"),
             console: None,
             managed_config: managed,

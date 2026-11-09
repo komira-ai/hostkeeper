@@ -12,12 +12,13 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use hostkeeper_daemon::adapters::{Adapters, RunnerLauncher, SYSTEMCTL_DEADLINE};
-use hostkeeper_daemon::cli::{EXIT_CONFIG, HostFiles, host_ports};
+use hostkeeper_daemon::cli::{EXIT_CONFIG, HostFiles, SIGNERS_FILE, host_ports, load_signers};
+use hostkeeper_daemon::entry::MACOS_PKG_ATTESTED;
 use hostkeeper_daemon::real_packages::{Log, RealPackages};
 use hostkeeper_daemon::start::StartError;
 use hostkeeper_daemon::{Daemon, Ports, Refusal, Reply};
 use hostkeeper_hook::{Step, Verdict};
-use hostkeeper_launchd::Platform;
+use hostkeeper_launchd::{Platform, PlatformKind};
 use hostkeeper_link::{ANNOUNCED, Feature};
 use hostkeeper_observe::fake::FakeCommandRunner;
 use hostkeeper_package::stores::{self, Rule, Stores, StoresError};
@@ -310,6 +311,31 @@ fn an_entry_whose_digest_is_not_the_orders_package_digest_is_order_invalid() {
     let daemon = world.daemon(world.open(world.entry_routes()));
     let reply = daemon.order(&world.install(&world.entry));
     assert_eq!(reply.refusal(), Some(Refusal::OrderInvalid), "{reply:?}");
+    world.untouched();
+}
+
+/// Catches a `macos-pkg` entry that carries an attestation being fetched, or deferred as though
+/// it could be checked: it is refused `order_invalid`, nothing fetched or written; the same entry
+/// with no attestation is not `order_invalid` (this daemon does not list `macos-pkg`, so it is
+/// deferred `installer_not_listed`).
+#[test]
+fn a_macos_pkg_entry_with_an_attestation_is_order_invalid_and_one_without_is_not() {
+    let world = World::new("stores-macos-pkg-attested");
+    let daemon = world.daemon(world.open(world.entry_routes()));
+    let mut attested = world.entry.clone();
+    attested.installer = "macos-pkg".into();
+    assert!(attested.attestation.is_some());
+    let reply = daemon.order(&world.good_install_with(&attested));
+    assert_eq!(reply.refusal(), Some(Refusal::OrderInvalid), "{reply:?}");
+    let Reply::Refused { detail, .. } = &reply else {
+        panic!("a refusal: {reply:?}")
+    };
+    assert_eq!(detail, MACOS_PKG_ATTESTED);
+    world.untouched();
+    let mut bare = attested;
+    bare.attestation = None;
+    let reply = daemon.order(&world.good_install_with(&bare));
+    assert_ne!(reply.refusal(), Some(Refusal::OrderInvalid), "{reply:?}");
     world.untouched();
 }
 
@@ -607,6 +633,7 @@ fn files(root: &Path, stores: PathBuf) -> HostFiles {
         gh: root.join("gh"),
         trusted_root: root.join("trusted_root.json"),
         stores,
+        macos_pkg_signers: None,
         pki: root.join("pki"),
         console: None,
         managed_config: None,
@@ -817,4 +844,83 @@ fn the_store_stages_only_with_the_steps_of_a_registered_installer() {
         .expect("staged");
     assert!(dir.dir().ends_with(format!("{SERVICE}/{VERSION}")));
     assert!(dir.manifest().is_some(), "the archive's manifest is kept");
+}
+
+/// The host files of a Mac with `signers` as its signers file, under `root`.
+fn mac_files(root: &Path, signers: PathBuf) -> HostFiles {
+    HostFiles {
+        macos_pkg_signers: Some(signers),
+        ..files(root, root.join("stores.toml"))
+    }
+}
+
+/// The signers file text of one signer.
+const ONE_SIGNER: &str =
+    "signers = [\"0000000000000000000000000000000000000000000000000000000000000001\"]\n";
+
+/// Catches a start that goes on past a `macos-pkg.toml` it cannot trust: a signers file writable
+/// by others is `StartError::MacosPkg` naming that file, with the config's exit status, before the
+/// packages directory is touched.
+#[test]
+fn an_unsound_signers_file_refuses_the_start_naming_the_file() {
+    let rig = Rig::new("signers-start");
+    let path = rig.scratch.path().join("macos-pkg.toml");
+    fs::write(&path, ONE_SIGNER).expect("the signers file");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o666)).expect("its mode");
+    let adapters = Adapters::linux(
+        &Platform::linux(),
+        RunnerLauncher::new(FakeCommandRunner::default(), SYSTEMCTL_DEADLINE),
+    );
+    let host = mac_files(rig.scratch.path(), path.clone());
+    let error = host_ports(&config(), &rig.settings(), &host, OWN, adapters)
+        .err()
+        .expect("the start is refused");
+    assert!(
+        matches!(&error, StartError::MacosPkg { path: named, .. } if *named == path),
+        "{error}"
+    );
+    assert!(
+        error.to_string().starts_with(&path.display().to_string()),
+        "{error}"
+    );
+    assert_eq!(error.exit_code(), EXIT_CONFIG);
+    assert!(
+        !rig.packages.exists(),
+        "the packages directory is not touched"
+    );
+}
+
+/// Catches a start that refuses a Mac with no signers file, or that drops a sound one: no file
+/// loads as none, and a sound file owned by the expected uid loads its signer.
+#[test]
+fn a_missing_signers_file_starts_and_a_sound_one_loads() {
+    let rig = Rig::new("signers-load");
+    let path = rig.scratch.path().join("macos-pkg.toml");
+    let host = mac_files(rig.scratch.path(), path.clone());
+    assert!(
+        load_signers(&host, my_uid())
+            .expect("no file starts")
+            .is_none()
+    );
+    fs::write(&path, ONE_SIGNER).expect("the signers file");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).expect("its mode");
+    let signers = load_signers(&host, my_uid())
+        .expect("a sound file loads")
+        .expect("its signers");
+    assert_eq!(signers.fingerprints().len(), 1);
+    let wrong = load_signers(&host, my_uid() + 1).expect_err("another owner is refused");
+    assert_eq!(wrong.exit_code(), EXIT_CONFIG);
+}
+
+/// Catches a Linux host reading the Mac's signers file: Linux and OpenRC have no macos-pkg path,
+/// a Mac has `SIGNERS_FILE`, and a host with no path loads no signers.
+#[test]
+fn only_a_mac_has_a_signers_file_path() {
+    for kind in [PlatformKind::Linux, PlatformKind::Openrc] {
+        let host = HostFiles::for_platform(kind, |_| true);
+        assert_eq!(host.macos_pkg_signers, None);
+        assert!(load_signers(&host, 0).expect("nothing to read").is_none());
+    }
+    let mac = HostFiles::for_platform(PlatformKind::Macos, |_| false);
+    assert_eq!(mac.macos_pkg_signers, Some(PathBuf::from(SIGNERS_FILE)));
 }

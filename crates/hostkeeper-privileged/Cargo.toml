@@ -169,7 +169,9 @@ hostkeeper-unpack = { path = "../hostkeeper-unpack" }
 # The macOS device test of the enrollment claims: `MacClaims` over the daemon's `HostIoreg`, the
 # real `ioreg`.
 hostkeeper-enroll = { path = "../hostkeeper-enroll" }
-# The device test of the apt backend (`tests/install_apt.rs`): the repository installer's own
+# The macOS device test of the macos-pkg installer (`tests/install_macos_pkg.rs`): `MacosPkg` over
+# the real `HostTools`, and the signature and receipt forms it pins;
+# and the device test of the apt backend (`tests/install_apt.rs`): the repository installer's own
 # steps over the production launcher, and the backend's readers of apt's output, against the real
 # apt of the runner and of each deb release's container.
 hostkeeper-install = { path = "../hostkeeper-install" }

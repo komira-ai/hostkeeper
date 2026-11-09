@@ -34,7 +34,12 @@
 //! `macos-device`) is the Mac twin of `tests/self_update.rs`: the program
 //! `hostkeeper-selfupdate-daemon` as a launchd job from `current` of its binary directory,
 //! updated and installed to the next version and restarted into it by launchd, with its rig in
-//! `tests/mac_self_update/`. The network-install tests (`tests/net_install.rs`, first line
+//! `tests/mac_self_update/`.
+//! `tests/install_macos_pkg.rs` (a macOS file, in the job `macos-device`) drives
+//! `hostkeeper_install`'s `MacosPkg` as root with the Mac's real `pkgutil`, `installer`, `lsbom`
+//! and `launchctl`, against M11's unsigned fixture forms built at test time: nothing is signed and
+//! no trust setting or keychain is changed, and only `pkgutil --check-signature` of a fixture the
+//! test names is answered by the test. The network-install tests (`tests/net_install.rs`, first line
 //! `#![cfg(all(target_os = "linux", target_arch = "x86_64", feature = "privileged"))]`, job
 //! `net-install`, and `tests/net_install_arm64.rs`, job `net-install-arm64`, both in
 //! `.github/workflows/net-install.yml`) install a QEMU guest
