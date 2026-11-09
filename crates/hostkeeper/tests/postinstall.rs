@@ -17,6 +17,9 @@ use std::process::{Command, Output};
 use hostkeeper_launchd::postinstall::Postinstall;
 use hostkeeper_testkit::Scratch;
 
+/// Held by each write and run of a script ([`Mac::install`]), the only fork of these tests.
+static EXECS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// The job the script asks about.
 const JOB: &str = "system/dev.hostkeeper.hostkeeper";
 
@@ -104,8 +107,13 @@ impl Mac {
     }
 
     /// Writes the script into a directory of its own, mode 0755, and runs it as the installer
-    /// does.
+    /// does. The write and the run hold [`EXECS`]: a test of this binary that forks while
+    /// another holds its script open for writing hands the child that descriptor until the
+    /// child's own exec, and an exec of the script in that moment fails `ETXTBSY`.
     fn install(&self) -> Output {
+        let _one = EXECS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let scripts = self.scratch.path().join("scripts");
         fs::create_dir_all(&scripts).expect("the scripts directory");
         let script = scripts.join("postinstall");
