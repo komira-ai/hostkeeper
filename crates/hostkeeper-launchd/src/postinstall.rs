@@ -1,12 +1,16 @@
 //! The `postinstall` script of the macOS installer pkg (docs/design/two-programs.md, section
 //! 4.1). The installer runs it as root once the payload is in place, with the path of the pkg,
 //! the install location, the target volume and the root of the volume as its arguments, which
-//! the script ignores. It runs two commands: `launchctl bootout system/<label>`, which boots out
-//! any copy of the daemon's job loaded before, and then `launchctl bootstrap system <plist>`,
-//! which loads the job the pkg installed (its `RunAtLoad` starts it). The boot-out's status and
-//! standard error are not judged: it fails when no copy is loaded, as on a first install, and a
-//! copy it could not boot out makes the bootstrap fail, with `launchctl`'s message, which fails
-//! the install. The bootstrap's status is the script's.
+//! the script ignores. It asks launchd whether the daemon's job is loaded (`launchctl print
+//! system/<label>`, its output discarded: it exits 0 when the job is loaded and non-zero, 113,
+//! when it is not). A loaded job is left alone and the script exits 0: an `installer -pkg` the
+//! daemon itself runs (its self-update through macos-pkg, docs/design/packages-native.md, section
+//! 10.4) must not boot the running daemon out in the middle of its update, so the script never
+//! runs `launchctl bootout`, and the plist's new text takes effect at the next boot. When the job
+//! is not loaded (a first install, or a host that booted it out) the script runs `launchctl
+//! bootstrap system <plist>`, which loads the job the pkg installed (its `RunAtLoad` starts it);
+//! that status is the script's, so a failing bootstrap fails the install with `launchctl`'s
+//! message.
 //!
 //! The script writes nothing else. The daemon's start does what a postinstall did before
 //! (`hostkeeper_daemon::packaged`, `hostkeeper_daemon::mac_config::at_start`): the job's program,
@@ -67,11 +71,12 @@ impl Postinstall {
         let job = quoted(Path::new(&format!("system/{}", Label::daemon())));
         format!(
             "#!/bin/sh\n\
-             # The hostkeeper pkg's postinstall: load the daemon's launchd job, once any copy\n\
-             # loaded before is booted out (which fails when none is loaded). The job's program,\n\
-             # the binary the pkg installed, puts itself in the binary directory of hostkeeper's\n\
-             # own update when current starts nothing and runs current, at each start.\n\
-             {launchctl} bootout {job} 2>/dev/null\n\
+             # The hostkeeper pkg's postinstall: load the daemon's launchd job when launchd does\n\
+             # not have it loaded, and leave it alone when it does. An installer the daemon\n\
+             # itself runs (its self-update) must not boot the running daemon out, so the job is\n\
+             # never booted out here; its new plist takes effect at the next boot. A first\n\
+             # install, or a host where the job is not loaded, gets it loaded.\n\
+             {launchctl} print {job} >/dev/null 2>&1 && exit 0\n\
              exec {launchctl} bootstrap system {plist}\n"
         )
     }

@@ -413,8 +413,8 @@ bootstraps the job only when it is not loaded.
   admin socket's directory itself). `packaging/linux/README.md` describes both.
 - **macOS.** The pkg is the only source of the plist and of `/usr/local/bin/hostkeeper` (hostkeeper's package carries
   no units on macOS), so the two always match. Stage 2 makes `daemon_plist` start `/usr/local/bin/hostkeeper daemon`,
-  which seeds and execs `current` at each start, and the postinstall script two lines: `launchctl bootout` and
-  `launchctl bootstrap` (`crates/hostkeeper-launchd/src/postinstall.rs`, held byte for byte by `check-macos-pkg`).
+  which seeds and execs `current` at each start, and the postinstall script two lines: a quiet `launchctl print` of the job that ends the script when it is
+  loaded (no `bootout`, packages-native 10.4) and `launchctl bootstrap` (`crates/hostkeeper-launchd/src/postinstall.rs`, held byte for byte by `check-macos-pkg`).
   **Built** (S2b): `DaemonJob::standard` runs `INSTALLED_BINARY` (`crates/hostkeeper-launchd/src/plist.rs`, which no
   longer has `DAEMON_PROGRAM`), and `Postinstall` has the two commands and nothing else; `docs/macos.md` describes
   both.

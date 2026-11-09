@@ -1,11 +1,15 @@
 //! The pkg's one script, `postinstall` ([`postinstall_text`], the text
-//! `hostkeeper_launchd::postinstall::Postinstall::pkg` writes for the pkg's paths). It runs two
-//! commands, in order:
+//! `hostkeeper_launchd::postinstall::Postinstall::pkg` writes for the pkg's paths). It asks, then
+//! loads:
 //!
-//! 1. `launchctl bootout` of the daemon's job, which boots out any copy loaded before; its status
-//!    and standard error are not judged (it fails when none is loaded).
-//! 2. `launchctl bootstrap` of the daemon's plist, which loads the job (its `RunAtLoad` starts it);
-//!    its status is the script's, so a failure fails the install with its message.
+//! 1. `launchctl print` of the daemon's job, its output discarded: when the job is loaded the
+//!    script exits 0 and touches nothing. An `installer -pkg` the daemon itself runs (its
+//!    self-update through macos-pkg, docs/design/packages-native.md, section 10.4) must not boot
+//!    the running daemon out in the middle of its update; the plist's new text takes effect at
+//!    the next boot. The script never runs `launchctl bootout`.
+//! 2. `launchctl bootstrap` of the daemon's plist, when the job is not loaded (a first install, or
+//!    a host that booted it out), which loads the job (its `RunAtLoad` starts it); its status is
+//!    the script's, so a failure fails the install with its message.
 //!
 //! The script runs the installed binary at no point. The job's program is that binary
 //! (`hostkeeper_launchd::plist::INSTALLED_BINARY`), and `hostkeeper daemon` started from it seeds
@@ -39,7 +43,8 @@ pub(super) const SCRIPT_MODE: u32 = 0o755;
 /// The element `pkgbuild` writes in `PackageInfo` for a `postinstall` in the scripts directory.
 const POSTINSTALL_ELEMENT: &str = "<postinstall file=\"./postinstall\"";
 
-/// The text of `postinstall`: the boot-out and the load of the daemon's job, for the pkg's paths.
+/// The text of `postinstall`: the check that the daemon's job is loaded and the load of it when
+/// it is not, for the pkg's paths.
 pub(super) fn postinstall_text() -> String {
     Postinstall::pkg().script()
 }
