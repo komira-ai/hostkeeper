@@ -23,7 +23,7 @@ use hostkeeper_privileged::fixture::{self, FAILED_REASON, Mode, ok_report};
 use hostkeeper_privileged::{Rig, SERVICE};
 use hostkeeper_steps::{
     Bound, Captured, DeadMan, RING_BYTES, StepCall, StepExit, StepLauncher, SystemdLauncher,
-    SystemdRunProcess, ToolCall, Watch,
+    SystemdRunProcess, ToolCall, ToolNetwork, Watch,
 };
 use support::{Bench, FakeClock, StopOnDrop};
 
@@ -345,6 +345,10 @@ fn tool<'a>(unit: &'a str, program: &'a Path, args: &'a [std::ffi::OsString]) ->
         program,
         args,
         timeout_secs: 600,
+        network: ToolNetwork::Offline,
+        writable: None,
+        working_dir: None,
+        env: &[],
     }
 }
 
@@ -367,8 +371,8 @@ fn a_tool_runs_in_a_real_transient_unit_with_no_network() {
         .expect("the launcher runs the tool");
     assert_eq!(exit.code, Some(0), "{exit:?}");
     assert_eq!(
-        exit.last_line.as_deref(),
-        Some("3 /proc/net/dev"),
+        String::from_utf8_lossy(&exit.stdout).trim(),
+        "3 /proc/net/dev",
         "{exit:?}"
     );
 
@@ -401,4 +405,65 @@ fn a_tool_runs_in_a_real_transient_unit_with_no_network() {
             "a tool the launcher stopped has no exit code"
         );
     });
+}
+
+/// Catches a fetch run that loses the host's network or writes outside its paths: the
+/// repository installer's two fetch commands run as `ToolNetwork::Fetch`, confined to the paths
+/// they may write (packages-repositories.md section 4.6). `wc -l /proc/net/dev` in such a unit
+/// counts more than the two header lines and `lo`, so it keeps the network; `touch` in the
+/// writable directory, in its working directory, with the call's environment, exits 0, and
+/// `touch` of a file beside that directory, which `ProtectSystem=strict` leaves read-only, fails.
+#[test]
+fn a_fetch_tool_keeps_the_network_and_writes_only_its_paths() {
+    let bench = Bench::new("tool_fetch");
+    let rig = &bench.rig;
+    let launcher = launcher();
+    let base =
+        Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("tool-fetch-{}", std::process::id()));
+    let writable = base.join("work");
+    std::fs::create_dir_all(&writable).expect("the writable directory");
+    let paths = [writable.as_path()];
+    let fetch = |unit: &str, program: &str, args: &[&str]| {
+        let args: Vec<std::ffi::OsString> = args.iter().map(std::ffi::OsString::from).collect();
+        launcher
+            .run_tool(&ToolCall {
+                network: ToolNetwork::Fetch,
+                writable: Some(&paths),
+                working_dir: Some(&writable),
+                env: &[("HK_FIXTURE", "x")],
+                ..tool(unit, Path::new(program), &args)
+            })
+            .expect("the launcher runs the tool")
+    };
+
+    let exit = fetch(&rig.unit(), "/usr/bin/wc", &["-l", "/proc/net/dev"]);
+    let lines: u32 = String::from_utf8_lossy(&exit.stdout)
+        .split_whitespace()
+        .next()
+        .and_then(|n| n.parse().ok())
+        .expect("a count");
+    assert!(
+        lines > 3,
+        "a fetch unit sees the host's interfaces: {exit:?}"
+    );
+
+    let inside = fetch(&rig.unit(), "/usr/bin/sh", &["-c", "touch \"$HK_FIXTURE\""]);
+    assert_eq!(inside.code, Some(0), "{inside:?}");
+    assert!(
+        writable.join("x").is_file(),
+        "touch ran in the working directory"
+    );
+
+    let outside = base.join("outside");
+    let refused = fetch(
+        &rig.unit(),
+        "/usr/bin/touch",
+        &[&outside.display().to_string()],
+    );
+    assert_ne!(refused.code, Some(0), "{refused:?}");
+    assert!(
+        !outside.exists(),
+        "nothing was written beside the writable directory"
+    );
+    let _ = std::fs::remove_dir_all(&base);
 }
