@@ -449,6 +449,7 @@ impl Heartbeater {
                 updating,
                 last_result,
                 record_try,
+                installer,
             } = recorded;
             if self.seen.insert(name.as_str().to_owned())
                 && let Some(result) = last_result
@@ -481,6 +482,7 @@ impl Heartbeater {
                     version: observation.version,
                 }),
                 record_try,
+                installer,
                 name,
             });
         }
@@ -564,6 +566,7 @@ impl Heartbeater {
                 version: None,
             }),
             record_try: None,
+            installer: None,
             name,
         }
     }

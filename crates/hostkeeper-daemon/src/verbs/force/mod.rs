@@ -157,7 +157,13 @@ pub fn run(ctx: &Ctx, order: Forced) -> Reply {
     }
     // The entry of the order, when it carries one, is judged before anything is fetched.
     let judged = order.package.entry.as_ref().map_or(Ok(()), |entry| {
-        entry::check(ctx.own_version, &service, &order.package.digest, entry)
+        entry::check(
+            ctx.own_version,
+            &ctx.announcement.installers,
+            &service,
+            &order.package.digest,
+            entry,
+        )
     });
     if let Err(refused) = judged {
         return refused;

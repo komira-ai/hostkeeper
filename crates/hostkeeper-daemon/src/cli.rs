@@ -72,6 +72,8 @@ use crate::selfupdate::binary_dir;
 use crate::start::{self, Settings, StartError};
 use crate::trusted_root::{PACKAGED_TRUSTED_ROOT, TrustedRoot};
 use crate::unix_clock::SystemUnixClock;
+use hostkeeper_install::announce::OsHost;
+use hostkeeper_install::{Announcement, Family};
 
 pub use crate::start::{EXIT_CONFIG, EXIT_FAILED, EXIT_LOCKED};
 
@@ -499,6 +501,9 @@ pub struct HostFiles {
     /// The managed preferences a Mac's MDM installs, which the start writes the daemon config
     /// from when that is not there ([`crate::mac_config::at_start`]); none on Linux.
     pub managed_config: Option<PathBuf>,
+    /// The directory the host's `os-release` is read under, which the installers the daemon
+    /// announces are decided by ([`hostkeeper_install::announce`]): `/`.
+    pub os_root: PathBuf,
 }
 
 /// What the enrollment loop shows on the machine's console through ([`crate::console`]).
@@ -558,6 +563,7 @@ impl HostFiles {
             console,
             managed_config: (kind == PlatformKind::Macos)
                 .then(|| PathBuf::from(hostkeeper_launchd::postinstall::MANAGED_CONFIG)),
+            os_root: PathBuf::from("/"),
         }
     }
 }
@@ -628,7 +634,9 @@ impl Verifier for HostVerifier {
 /// observer looks through the adapters and TCP ([`observer_with`]); the unit control is the
 /// adapters' (`systemctl` on Linux, `launchctl` on macOS). Placed paths are linked under the
 /// host's own directories and the adapters' unit directory, `--packages-dir` being the packages
-/// directory; the prune of step 18 of a force deletes nothing yet. The directory `gh` runs in
+/// directory; the prune of step 18 of a force deletes nothing yet. The installers the daemon
+/// announces are decided here, once, from the host's `os-release` under the `os_root` of
+/// `files` ([`hostkeeper_install::announce`]). The directory `gh` runs in
 /// (`<state-dir>/.gh`) is made mode 0700 here. `Err` when the stores file of `files` is not sound
 /// ([`StartError::Stores`]; one that is not there gives the store `channel`), when that directory
 /// cannot be made or the packages directory cannot be opened.
@@ -639,6 +647,7 @@ pub fn host_ports(
     own_version: HostkeeperVersion,
     adapters: Adapters,
 ) -> Result<Ports, StartError> {
+    let announcement = announced(&files.os_root);
     let stores = hostkeeper_package::stores::load(&files.stores, &config.release_channel, 0)
         .map_err(|source| StartError::Stores {
             path: files.stores.clone(),
@@ -707,7 +716,23 @@ pub fn host_ports(
                 binary_dir: binary_dir(&settings.state_dir),
             },
         )),
+        announcement,
     })
+}
+
+/// The installers the daemon announces, decided from the host's `os-release` under `os_root`
+/// ([`hostkeeper_install::announce`]), said once on standard error.
+fn announced(os_root: &Path) -> Announcement {
+    let announcement = hostkeeper_install::announce(OsHost {
+        macos: cfg!(target_os = "macos"),
+        root: os_root,
+    });
+    eprintln!(
+        "hostkeeper daemon: announces the installers {}; the os-release family is {}",
+        announcement.names().join(", "),
+        announcement.family.map_or("none", Family::as_str)
+    );
+    announcement
 }
 
 /// A service manager and a step launcher that run nothing: each refuses. No platform's adapters

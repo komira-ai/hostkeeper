@@ -4,7 +4,8 @@
 //! every hooked order: an `install`, which has no release to replace, and an `update`, a
 //! `force_rollback` and a `force` that has a hook, which have one.
 //!
-//! - [`Toward::Target`], before `cutover`: the target's manifest read from its version
+//! - [`Toward::Target`], before `cutover`: the `activate` of the service's installer
+//!   ([`crate::installers`]), whose switch is the target's manifest read from its version
 //!   directory, [`Placer::desired`], [`Placer::begin`] (its paths `pending`), [`Placer::link`],
 //!   [`Placer::switch_current`] to the target (`previous` becomes the release it replaces) and
 //!   [`Placer::reload`]. A first install also commits its paths here ([`Placer::commit`]: there
@@ -46,6 +47,7 @@ use hostkeeper_placed::{Fs, Placer, Roots, UnitControl};
 use hostkeeper_steps::{Clock, Switch, Toward, UpdateOrder};
 
 use crate::boot::{WARN_SWITCH_RETRIED, warn_line};
+use crate::installers::{self, PlacerHost};
 use crate::verbs::force::SELF_SERVICE;
 
 /// How many times a switch is tried before its error stops the update.
@@ -68,7 +70,7 @@ pub fn hooked_switch(
     Arc::new(move |toward: Toward, order: &UpdateOrder| {
         let placer = Placer::new(roots.clone(), &*fs, &*units);
         match toward {
-            Toward::Target => forward(&placer, order, &own),
+            Toward::Target => activate(&placer, order, &own),
             Toward::Back => back(&placer, &*fs, order, &own),
             Toward::Confirmed => confirmed(&placer, order, &own),
         }
@@ -125,6 +127,25 @@ fn manifest_of(
         platform: hostkeeper_config::platform::Platform::current(),
     };
     Manifest::load(dir, &expected, own).map_err(text)
+}
+
+/// The `activate` of the installer `placed.json` records for the order's service, the host's
+/// switch being [`forward`].
+fn activate(
+    placer: &Placer<'_>,
+    order: &UpdateOrder,
+    own: &HostkeeperVersion,
+) -> Result<(), String> {
+    let (service, version) = names(order)?;
+    let record = placer.store().load().map_err(text)?;
+    let steps = installers::steps_for(&record, &service)?;
+    let switch = |_: &Version| forward(placer, order, own);
+    let host = PlacerHost {
+        placer,
+        service: &service,
+        switch: Some(&switch),
+    };
+    steps.activate(&host, &version).map_err(text)
 }
 
 /// Places the target: its paths `pending`, its links, `current`, `daemon-reload`; and, for a

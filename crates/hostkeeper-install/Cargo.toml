@@ -1,0 +1,33 @@
+[package]
+name = "hostkeeper-install"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "The host daemon's installers: the installer contract, the registry of the installers it is built with, and the installers a daemon announces."
+
+# docs/design/packages.md, section 5: an installer is built into the daemon, behind one trait,
+# and this crate holds them. It writes only the version directory it stages; the switch, the
+# placement and the step launcher are the daemon's, behind ports.
+[dependencies]
+# The platform, names and digests of an order.
+hostkeeper-config = { path = "../hostkeeper-config" }
+# The entry an order carries (`Target`).
+hostkeeper-proto = { path = "../hostkeeper-proto" }
+# The installers' names.
+hostkeeper-release = { path = "../hostkeeper-release" }
+# The bounded reader: today's unpack, the stage of hostkeeper-archive.
+hostkeeper-unpack = { path = "../hostkeeper-unpack" }
+thiserror.workspace = true
+
+[dev-dependencies]
+hostkeeper-testkit = { path = "../hostkeeper-testkit" }
+# The archive digests and the running user of the stage's tests.
+hex.workspace = true
+rustix = { workspace = true, features = ["process"] }
+sha2.workspace = true
+
+[lints]
+workspace = true

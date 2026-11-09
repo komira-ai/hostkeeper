@@ -165,7 +165,7 @@ impl Links {
     /// The heartbeat loop over `daemon`: its executor, held halts, installed services, observer
     /// and trusted root are the daemon's ([`crate::link_adapters`]); its step-record directory, where the
     /// deferrals live, is the daemon's state directory; it announces this build's platform and
-    /// the daemon's own version.
+    /// the daemon's own version, and the installers the daemon decided at its start.
     pub fn heartbeater(&self, daemon: &Arc<Daemon>) -> Heartbeater {
         let ctx = daemon.ctx();
         Heartbeater::new(
@@ -174,7 +174,7 @@ impl Links {
                 agent_version: Version::from(ctx.own_version),
                 state_dir: ctx.dirs.state.clone(),
                 period_secs: self.period,
-                installers: crate::entry::installer_names(),
+                installers: ctx.announcement.names(),
             },
             Ports {
                 link: Arc::clone(&self.link),

@@ -17,9 +17,12 @@
 //! for the service, and the version the confirmed switch went to. A version staged by an update
 //! that did not switch stays until the next confirmed switch, so a retry needs no fetch.
 //!
-//! The rule and the deletion are `hostkeeper_steps::prune`. A prune that fails, wholly or for one
-//! version, is logged as the alert [`ALERT_PRUNE`] and never changes the verdict of the order
-//! that confirmed the switch; the next confirmed switch tries again.
+//! The rule and the deletion are `hostkeeper_steps::prune`: the deletion of a version's directory
+//! and seal, which is the same for every installer. Each version deleted is then given to the
+//! `retire` of the service's installer ([`crate::installers`]; `hostkeeper-archive` has nothing
+//! more to drop). A prune that fails, wholly or for one version, and a `retire` that fails, are
+//! logged as the alert [`ALERT_PRUNE`] and never change the verdict of the order that confirmed
+//! the switch; the next confirmed switch tries again.
 
 use std::collections::BTreeSet;
 use std::io;
@@ -30,7 +33,9 @@ use hostkeeper_steps::record::{Loaded, State};
 use hostkeeper_steps::{Layout, Protected, PruneReport, Seal, read_seal};
 
 use crate::executor::Ctx;
+use crate::installers;
 use crate::locks::ServiceGuard;
+use hostkeeper_install::InstallerSteps;
 
 /// The alert of a prune that failed; the verdict of the order stands.
 pub const ALERT_PRUNE: &str = "prune_failed";
@@ -102,8 +107,8 @@ pub fn confirmed_switch(
         ctx.alert(ALERT_PRUNE, &format!("service={service}: {error}"));
     };
     let layout = Layout::package(&ctx.dirs.packages.join(service.as_str()));
-    let mut protect = match protected(ctx, &layout, service) {
-        Ok(protect) => protect,
+    let (mut protect, steps) = match protected(ctx, &layout, service) {
+        Ok(protected) => protected,
         Err(why) => {
             failed(why);
             return None;
@@ -112,12 +117,13 @@ pub fn confirmed_switch(
     protect.switch_targets.insert(to.to_string());
     match ctx.prune.prune(&layout, &protect, held) {
         Ok(report) => {
-            if !report.failed.is_empty() {
-                let each: Vec<String> = report
-                    .failed
-                    .iter()
-                    .map(|(version, why)| format!("{version}: {why}"))
-                    .collect();
+            let mut each: Vec<String> = report
+                .failed
+                .iter()
+                .map(|(version, why)| format!("{version}: {why}"))
+                .collect();
+            each.extend(retire(steps, &report.deleted));
+            if !each.is_empty() {
                 failed(each.join("; "));
             }
             Some(report)
@@ -129,12 +135,28 @@ pub fn confirmed_switch(
     }
 }
 
+/// The `retire` of `steps` for each version of `deleted`: what failed, one line each.
+fn retire(steps: &dyn InstallerSteps, deleted: &BTreeSet<String>) -> Vec<String> {
+    let retired = |version: &String| {
+        let version = Version::new(version).map_err(|error| error.to_string());
+        version.and_then(|v| steps.retire(&v).map_err(|error| error.to_string()))
+    };
+    let failed = |v: &String| retired(v).err().map(|why| format!("{v}: retire: {why}"));
+    deleted.iter().filter_map(failed).collect()
+}
+
 /// What the records of `service` say is still in use, besides `current` and `previous`: of an
 /// unfinished step record, its target and the release it replaces (the version whose seal holds
 /// the record's `previous_digest`); the target of a force record with no verdict; and the version
-/// of each `placed.json` entry still `pending` for the service. An error, with nothing pruned,
-/// when a record cannot be read: what it holds cannot be known.
-fn protected(ctx: &Ctx, layout: &Layout, service: &ServiceName) -> Result<Protected, String> {
+/// of each `placed.json` entry still `pending` for the service; and the steps of the installer
+/// `placed.json` records for it, whose `retire` each deleted version is given. An error, with
+/// nothing pruned, when a record cannot be read, or names an installer this daemon has no steps
+/// of: what it holds cannot be known, or not undone.
+fn protected(
+    ctx: &Ctx,
+    layout: &Layout,
+    service: &ServiceName,
+) -> Result<(Protected, &'static dyn InstallerSteps), String> {
     let mut protect = Protected::default();
     let rec = match ctx.store(service).load() {
         Ok(Loaded::Absent) => None,
@@ -167,7 +189,8 @@ fn protected(ctx: &Ctx, layout: &Layout, service: &ServiceName) -> Result<Protec
         .filter(|(_, entry)| entry.state == PathState::Pending)
         .map(|(_, entry)| entry.version.clone());
     protect.switch_targets.extend(pending);
-    Ok(protect)
+    let steps = installers::steps_for(&placed, service)?;
+    Ok((protect, steps))
 }
 
 /// The versions of `layout` whose seal holds the tree digest `digest`. A seal that cannot be read

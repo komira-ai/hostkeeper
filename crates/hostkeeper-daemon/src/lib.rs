@@ -45,8 +45,11 @@
 //! - [`hook_log`]: what the host's step launcher kept of a hook's standard error, as lines of the
 //!   daemon's log under the step's unit.
 //! - [`packages`]: the port of the package store, [`real_packages`] its real implementation
-//!   (fetch, prove, unpack and seal, with the one table that maps their failures onto
-//!   [`refusal`]), and [`installed`] what the host runs.
+//!   (fetch, prove, the stage of the entry's installer and seal, with the one table that maps
+//!   their failures onto [`refusal`]), and [`installed`] what the host runs.
+//! - [`installers`]: the installer each installed service is recorded with, whose steps
+//!   (`hostkeeper_install`) the switch, the prune and the uninstall run, the placer doing what
+//!   they ask of the host.
 //! - [`observer`]: what [`Daemon::status`] reports of a running service.
 //! - [`trusted_root`]: the Sigstore trusted root package checks use, and the age and reason
 //!   [`Daemon::status`] reports of it.
@@ -81,6 +84,7 @@ pub mod halt;
 pub mod handover;
 pub mod hook_log;
 pub mod installed;
+pub mod installers;
 pub mod ipmi;
 pub mod layout;
 pub mod link_adapters;

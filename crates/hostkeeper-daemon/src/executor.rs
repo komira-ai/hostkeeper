@@ -17,6 +17,7 @@ use hostkeeper_config::daemon::DaemonConfig;
 use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_hook::Verdict;
+use hostkeeper_install::Announcement;
 use hostkeeper_observe::{Observation, Observer};
 use hostkeeper_placed::{Fs, PlacedError, Placer, Roots, UnitControl};
 use hostkeeper_proto::hostkeeper::agent::v1::Order;
@@ -77,6 +78,10 @@ pub struct Ports {
     pub force_lock_point: Arc<dyn ForceLockPoint>,
     /// Looks at how each installed service runs: what `Status` reports of it.
     pub observer: Arc<Observer>,
+    /// The installers the daemon announces, decided once at its start
+    /// ([`hostkeeper_install::announce`]): what the heartbeat lists and what the receipt check
+    /// of an entry judges its installer against.
+    pub announcement: Announcement,
 }
 
 /// Where placed-path linking works (design section 4.7, "Placed paths"): the directories as the
@@ -113,6 +118,9 @@ pub struct Ctx {
     pub force_lock_point: Arc<dyn ForceLockPoint>,
     /// Observes the installed services; it takes none of the daemon's locks.
     pub observer: Arc<Observer>,
+    /// The installers the daemon announces ([`Ports::announcement`]), the same at every
+    /// heartbeat of one start.
+    pub announcement: Announcement,
     pub locks: ServiceLocks,
     pub step_lock: StepLock,
     pub halts: HaltStore,
@@ -581,6 +589,7 @@ impl Daemon {
                 prune: ports.prune,
                 force_lock_point: ports.force_lock_point,
                 observer: ports.observer,
+                announcement: ports.announcement,
                 locks: ServiceLocks::default(),
                 step_lock: StepLock::default(),
                 halts,
