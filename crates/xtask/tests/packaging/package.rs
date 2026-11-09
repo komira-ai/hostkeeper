@@ -63,20 +63,6 @@ fn check_nfpm_keys(text: &str) -> Result<(), String> {
 fn nfpm_config_holds_only_the_keys_it_needs() {
     let text = read(NFPM);
     assert_eq!(check_nfpm_keys(&text), Ok(()));
-    // The Arch package names the same packager as the deb's maintainer.
-    let config = config();
-    assert_eq!(
-        config.archlinux_field("packager"),
-        config.field("maintainer")
-    );
-    assert_eq!(config.archlinux_field("pkgbase"), Ok(None));
-    let none = Config::parse(&altered(
-        &text,
-        "archlinux:\n  packager:",
-        "other:\n  packager:",
-    ))
-    .expect("parses");
-    assert_eq!(none.archlinux_field("packager"), Ok(None));
     let maintainer =
         "maintainer: \"The hostkeeper project <https://github.com/komira-ai/hostkeeper>\"";
     let cases = [
@@ -116,21 +102,10 @@ fn nfpm_config_holds_only_the_keys_it_needs() {
             format!("{text}overrides:\n  rpm:\n    depends: [systemd]\n"),
             "[\"overrides\"]",
         ),
+        // The Arch package is withdrawn: its table is a key nfpm.yaml no longer needs.
         (
-            altered(
-                &text,
-                "archlinux:\n  packager:",
-                "archlinux:\n  pkgbase: hostkeeper\n  packager:",
-            ),
-            "[\"archlinux.pkgbase\"]",
-        ),
-        (
-            altered(
-                &text,
-                "archlinux:\n  packager: \"The hostkeeper project <https://github.com/komira-ai/hostkeeper>\"",
-                "archlinux:\n  packager: [a, b]",
-            ),
-            "[\"archlinux.packager is not text\"]",
+            format!("{text}archlinux:\n  packager: \"The hostkeeper project\"\n"),
+            "[\"archlinux\"]",
         ),
         (format!("{text}release: \"2\"\n"), "[\"release\"]"),
         (format!("{text}depends:\n  - curl\n"), "[\"depends\"]"),
@@ -459,42 +434,39 @@ fn deb_manifest_lists_the_unit_the_binary_and_no_key_or_token() {
                 .to_owned()
         )
     );
-    // The rpm and the Arch package are held to the same list.
+    // The rpm is held to the same list.
     assert_eq!(check_manifest(&text, "rpm", repo_source), Ok(()));
-    assert_eq!(check_manifest(&text, "archlinux", repo_source), Ok(()));
-    let extra = "overrides:\n  archlinux:\n    contents:\n      - src: target/extra.conf\n        dst: /etc/extra.conf\n        file_info:\n          mode: 0644\n          owner: root\n          group: root\n";
-    let refused = check_manifest(&format!("{text}{extra}"), "archlinux", repo_source);
+    let extra = "overrides:\n  rpm:\n    contents:\n      - src: target/extra.conf\n        dst: /etc/extra.conf\n        file_info:\n          mode: 0644\n          owner: root\n          group: root\n";
+    let refused = check_manifest(&format!("{text}{extra}"), "rpm", repo_source);
     assert!(
-        refused.is_err_and(|m| m.contains("the archlinux carries")),
-        "an extra file in the Arch package alone is refused"
+        refused.is_err_and(|m| m.contains("the rpm carries")),
+        "an extra file in the rpm alone is refused"
     );
 }
 
 fn check_one_list(text: &str) -> Result<(), String> {
     let config = Config::parse(text)?;
-    for other in ["rpm", "archlinux"] {
-        let (deb, rpm) = (config.files("deb")?, config.files(other)?);
-        if deb != rpm {
-            return Err(format!("the deb carries {deb:?} and the {other} {rpm:?}"));
-        }
-        let (deb, rpm) = (config.links("deb")?, config.links(other)?);
-        if deb != rpm {
-            return Err(format!(
-                "the deb carries the links {deb:?} and the {other} {rpm:?}"
-            ));
-        }
-        let (deb, rpm) = (config.scripts("deb")?, config.scripts(other)?);
-        if deb != rpm {
-            return Err(format!(
-                "the deb runs the scripts {deb:?} and the {other} {rpm:?}"
-            ));
-        }
+    let (deb, rpm) = (config.files("deb")?, config.files("rpm")?);
+    if deb != rpm {
+        return Err(format!("the deb carries {deb:?} and the rpm {rpm:?}"));
+    }
+    let (deb, rpm) = (config.links("deb")?, config.links("rpm")?);
+    if deb != rpm {
+        return Err(format!(
+            "the deb carries the links {deb:?} and the rpm {rpm:?}"
+        ));
+    }
+    let (deb, rpm) = (config.scripts("deb")?, config.scripts("rpm")?);
+    if deb != rpm {
+        return Err(format!(
+            "the deb runs the scripts {deb:?} and the rpm {rpm:?}"
+        ));
     }
     Ok(())
 }
 
-/// Catches an override that gives one packager (the deb, the rpm or the Arch package) a file, a
-/// link or a script the others do not have.
+/// Catches an override that gives one packager (the deb or the rpm) a file, a link or a script
+/// the other does not have.
 #[test]
 fn rpm_and_deb_share_one_file_list() {
     let text = read(NFPM);
@@ -503,13 +475,7 @@ fn rpm_and_deb_share_one_file_list() {
     let extra_script = "overrides:\n  deb:\n    scripts:\n      postremove: packaging/linux/scripts/postremove.sh\n";
     let other_script = "overrides:\n  rpm:\n    scripts:\n      preremove: packaging/linux/scripts/preremove-rpm.sh\n";
     let extra_link = "overrides:\n  deb:\n    contents:\n      - src: /run/hostkeeper/other\n        dst: /etc/issue.d/other.issue\n        type: symlink\n";
-    let arch_file = extra_file.replace("rpm:", "archlinux:");
-    let arch_script = other_script.replace("rpm:", "archlinux:");
-    let arch_link = extra_link.replace("deb:", "archlinux:");
     let cases = [
-        (format!("{text}{arch_file}"), "the deb carries"),
-        (format!("{text}{arch_link}"), "the deb carries the links"),
-        (format!("{text}{arch_script}"), "the deb runs the scripts"),
         (format!("{text}{extra_file}"), "the deb carries"),
         (format!("{text}{extra_link}"), "the deb carries the links"),
         (format!("{text}{extra_script}"), "the deb runs the scripts"),

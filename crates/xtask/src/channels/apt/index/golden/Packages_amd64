@@ -1,0 +1,32 @@
+Package: hostkeeper
+Version: 1.2.3
+Architecture: amd64
+Maintainer: The hostkeeper project <https://github.com/komira-ai/hostkeeper>
+Installed-Size: 1
+Section: admin
+Priority: optional
+Homepage: https://github.com/komira-ai/hostkeeper
+Filename: pool/hostkeeper/hostkeeper_1.2.3_amd64.deb
+Size: 1074
+SHA256: f140b2a8cf4bb9719a79655c1d0d1fe9354989dca00ed49dc5a5e0567e813550
+Description: the update daemon of a host
+ Keeps the services of a host at the versions its coordinator names.
+ .
+ A static binary: it needs nothing else installed.
+
+Package: hostkeeper
+Version: 1.2.2
+Architecture: amd64
+Maintainer: The hostkeeper project <https://github.com/komira-ai/hostkeeper>
+Installed-Size: 1
+Section: admin
+Priority: optional
+Homepage: https://github.com/komira-ai/hostkeeper
+Filename: pool/hostkeeper/hostkeeper_1.2.2_amd64.deb
+Size: 1074
+SHA256: 7e02646af0b775a4233a8f6510e1433f84c9302c74aec3328ceb0edaa12adcce
+Description: the update daemon of a host
+ Keeps the services of a host at the versions its coordinator names.
+ .
+ A static binary: it needs nothing else installed.
+

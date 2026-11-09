@@ -2,15 +2,18 @@
 # binary as a tarball with its CycloneDX SBOM and hostkeeper's own package (`.tar.zst` with its
 # `.sha256`), and the package of `hello`, the example service of examples/hello, and of its failing
 # build (the same package started with `--fail-ready`, which a host can be rolled back from), each
-# with its `.sha256`; for each Linux platform the deb, the rpm and the Arch package, the `hostkeeper-coordinator`
-# binary as a tarball with its SBOM and its container image (`.image.tar`, an OCI image layout),
+# with its `.sha256`; for each Linux platform the deb and the rpm, the `hostkeeper-coordinator`
+# binary as a tarball with its SBOM, its container image (`.image.tar`, an OCI image layout) and
+# its deb and rpm (packaging/coordinator/nfpm.yaml, the static build with a systemd unit),
 # and the `hostkeeper-mdm` binary (the MDM kit's, Linux-only) as a tarball with its SBOM;
 # for linux-x86_64 the package of `mdm`, the MDM server stack as a service package
 # (docs/design/two-programs.md section 6.2), whose pinned tools are fetched and checked against
 # crates/hostkeeper-mdm-core/pins.txt here (`cargo xtask release mdm-fetch`), with its `.sha256`;
 # for macos-arm64 the installer pkg of a Mac's first install; the release indexes `index.json`,
 # `hello-index.json` and `hello-fail-ready-index.json` over the three packages each, and
-# `mdm-index.json` over the one mdm package;
+# `mdm-index.json` over the one mdm package; the coordinator's image index over its two images
+# (`cargo xtask release image-index`), whose SHA-256 is the digest release.yml pushes the
+# multi-platform image under;
 # `netboot.json`, the boot sets of network install for both Linux platforms, rendered from
 # packaging/netboot/pins.toml; `hkctl-<version>`, the command line of the coordinator, one bash
 # script for every platform generated from the protos (`cargo xtask release hkctl`); one
@@ -25,10 +28,11 @@
 #   hello-<version>-<platform>.tar.zst              hello-<version>-<platform>.tar.zst.sha256
 #   hello-<version>-fail-ready-<platform>.tar.zst   hello-<version>-fail-ready-<platform>.tar.zst.sha256
 #   hostkeeper_<version>_<deb-arch>.deb             hostkeeper-<version>-1.<rpm-arch>.rpm
-#   hostkeeper-<version>-1-<rpm-arch>.pkg.tar.zst
 #   hostkeeper-coordinator-<version>-<linux-platform>.tar.gz
 #   hostkeeper-coordinator-<version>-<linux-platform>.cdx.json
 #   hostkeeper-coordinator-<version>-<linux-platform>.image.tar
+#   hostkeeper-coordinator_<version>_<deb-arch>.deb  hostkeeper-coordinator-<version>-1.<rpm-arch>.rpm
+#   hostkeeper-coordinator-<version>.image.json
 #   hostkeeper-mdm-<version>-<linux-platform>.tar.gz
 #   hostkeeper-mdm-<version>-<linux-platform>.cdx.json
 #   mdm-<version>-linux-x86_64.tar.zst              mdm-<version>-linux-x86_64.tar.zst.sha256
@@ -93,12 +97,12 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
-  # cargo-cyclonedx makes the SBOMs, nfpm the deb, the rpm and the Arch package: release
+  # cargo-cyclonedx makes the SBOMs, nfpm the deb and the rpm: release
   # binaries, checked against their published SHA-256 by `cargo xtask install-tool` before use
   # (the digest of each platform's archive is in the build job's matrix).
   CYCLONEDX_VERSION: 0.5.9
   NFPM_VERSION: 2.48.0
-  # The gh the deb, the rpm and the Arch package install as /usr/lib/hostkeeper/gh, the one a
+  # The gh the deb and the rpm install as /usr/lib/hostkeeper/gh, the one a
   # host checks every package's attestation with (Ubuntu 24.04's own gh has no `gh attestation`). The SHA-256 of
   # each architecture's release archive is in the build job's matrix (`gh-sha256`), the one
   # cli/cli publishes in gh_<version>_checksums.txt; to bump it, change the version here and
@@ -260,6 +264,12 @@ jobs:
         env:
           RELEASE_COMMIT: ${{ github.sha }}
         run: cargo build --locked --release --target "$MUSL_TARGET" -p hostkeeper --bin hostkeeper -p hostkeeper-pxe --bin hostkeeper-pxe
+      # The coordinator's deb and rpm carry its static build, so one package runs on every
+      # release of its family; the tarball and the image keep the gnu build above.
+      - name: Build hostkeeper-coordinator (static, for its Linux packages)
+        env:
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: cargo build --locked --release --target "$MUSL_TARGET" -p hostkeeper-coordinator --bin hostkeeper-coordinator
       # hello takes its version from the workspace, so it needs no RELEASE_COMMIT.
       - name: Build hello
         run: cargo build --locked --release -p hello --bin hello
@@ -267,6 +277,8 @@ jobs:
         run: cargo xtask release check-binary "target/$MUSL_TARGET/release/hostkeeper" "$RELEASE_VERSION" "$GITHUB_SHA"
       - name: hostkeeper-coordinator says the version and the commit
         run: cargo xtask release check-binary target/release/hostkeeper-coordinator "$RELEASE_VERSION" "$GITHUB_SHA"
+      - name: The static hostkeeper-coordinator says the version and the commit
+        run: cargo xtask release check-binary "target/$MUSL_TARGET/release/hostkeeper-coordinator" "$RELEASE_VERSION" "$GITHUB_SHA"
       - name: hostkeeper-mdm says the version and the commit
         run: cargo xtask release check-binary target/release/hostkeeper-mdm "$RELEASE_VERSION" "$GITHUB_SHA"
       - name: SBOM
@@ -335,8 +347,7 @@ jobs:
           SHA256: ${{ matrix.gh-sha256 }}
         run: cargo xtask release nfpm-stage --arch "$ARCH" --gh-version "$GH_VERSION" --gh-archive "$RUNNER_TEMP/gh.tar.gz" --gh-sha256 "$SHA256" --trusted-root "$RUNNER_TEMP/trusted_root.json" --binaries "target/$MUSL_TARGET/release" --out target/nfpm
       # nfpm reads VERSION and ARCH into packaging/linux/nfpm.yaml and names the files
-      # hostkeeper_<version>_<deb-arch>.deb, hostkeeper-<version>-1.<rpm-arch>.rpm and
-      # hostkeeper-<version>-1-<rpm-arch>.pkg.tar.zst.
+      # hostkeeper_<version>_<deb-arch>.deb and hostkeeper-<version>-1.<rpm-arch>.rpm.
       - name: The deb
         env:
           VERSION: ${{ needs.version.outputs.version }}
@@ -347,11 +358,6 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
           ARCH: ${{ matrix.deb-arch }}
         run: nfpm package --config packaging/linux/nfpm.yaml --packager rpm --target dist
-      - name: The Arch package
-        env:
-          VERSION: ${{ needs.version.outputs.version }}
-          ARCH: ${{ matrix.deb-arch }}
-        run: nfpm package --config packaging/linux/nfpm.yaml --packager archlinux --target dist
       # Each package read back: it installs the staged gh and trusted root at the daemon's paths,
       # 0755 and 0644, root's, with the staged bytes, hostkeeper and hostkeeper-pxe in
       # /usr/bin, 0755, root's, with the staged bytes, and the console's issue link
@@ -365,12 +371,41 @@ jobs:
         env:
           RPM_ARCH: ${{ matrix.rpm-arch }}
         run: cargo xtask release check-linux-pkg "dist/hostkeeper-$RELEASE_VERSION-1.$RPM_ARCH.rpm" --staged target/nfpm
-      - name: The Arch package installs the staged files
-        env:
-          RPM_ARCH: ${{ matrix.rpm-arch }}
-        run: cargo xtask release check-linux-pkg "dist/hostkeeper-$RELEASE_VERSION-1-$RPM_ARCH.pkg.tar.zst" --staged target/nfpm
       - name: The binary tarball holds no dynamically linked program
         run: cargo xtask release check-linux-pkg "dist/hostkeeper-$RELEASE_VERSION-$PLATFORM.tar.gz"
+      # The coordinator's deb and rpm (packaging/coordinator/nfpm.yaml) take the static program
+      # and the operator web app from target/nfpm-coordinator/: ui/ with every directory 0755
+      # and every file 0644, as the image holds it.
+      - run: mkdir target/nfpm-coordinator
+      - name: Stage the static hostkeeper-coordinator
+        run: cp "target/$MUSL_TARGET/release/hostkeeper-coordinator" target/nfpm-coordinator/hostkeeper-coordinator
+      - name: Stage the operator web app
+        run: cp -R ui target/nfpm-coordinator/ui
+      - name: The web app's modes
+        run: chmod -R u=rwX,go=rX target/nfpm-coordinator/ui
+      # nfpm names the files hostkeeper-coordinator_<version>_<deb-arch>.deb and
+      # hostkeeper-coordinator-<version>-1.<rpm-arch>.rpm.
+      - name: The coordinator's deb
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          ARCH: ${{ matrix.deb-arch }}
+        run: nfpm package --config packaging/coordinator/nfpm.yaml --packager deb --target dist
+      - name: The coordinator's rpm
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          ARCH: ${{ matrix.deb-arch }}
+        run: nfpm package --config packaging/coordinator/nfpm.yaml --packager rpm --target dist
+      # Each read back: the staged program at /usr/bin/hostkeeper-coordinator, 0755, root's, a
+      # static ELF; the web app file for file, 0644, root's; the unit, the sysusers.d entry, the
+      # tmpfiles rules and the template, 0644, root's; no dependency but systemd.
+      - name: The coordinator's deb installs the staged files
+        env:
+          ARCH: ${{ matrix.deb-arch }}
+        run: cargo xtask release check-linux-pkg "dist/hostkeeper-coordinator_${RELEASE_VERSION}_$ARCH.deb" --coordinator-staged target/nfpm-coordinator
+      - name: The coordinator's rpm installs the staged files
+        env:
+          RPM_ARCH: ${{ matrix.rpm-arch }}
+        run: cargo xtask release check-linux-pkg "dist/hostkeeper-coordinator-$RELEASE_VERSION-1.$RPM_ARCH.rpm" --coordinator-staged target/nfpm-coordinator
       # The package carries its own unit (packaging/linux/units/hostkeeper.service), not the
       # bootstrap unit the Linux packages install (packaging/linux/hostkeeper.service): it seeds
       # the binary directory and starts the binary the self-update switches. It also
@@ -762,6 +797,10 @@ jobs:
         run: cargo xtask release netboot --pins packaging/netboot/pins.toml --version "$RELEASE_VERSION" --dir dist
       - name: The command line, hkctl
         run: cargo xtask release hkctl --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --out dist
+      # The OCI image index of the two image tarballs: its SHA-256 is the digest of the
+      # multi-platform image release.yml pushes to the registry.
+      - name: The coordinator's image index
+        run: cargo xtask release image-index dist --version "$RELEASE_VERSION"
       # In the C locale, so the lines are in the byte order of the names; written outside dist,
       # so that SHA256SUMS does not list itself.
       - name: SHA256SUMS
@@ -784,6 +823,7 @@ jobs:
             dist/mdm-index.json
             dist/netboot.json
             dist/hkctl-${{ needs.version.outputs.version }}
+            dist/hostkeeper-coordinator-${{ needs.version.outputs.version }}.image.json
           retention-days: 90
           if-no-files-found: error
 
@@ -922,14 +962,22 @@ jobs:
         env:
           BUNDLE: ${{ steps.rpm-linux-x86_64.outputs.bundle-path }}
         run: cp "$BUNDLE" "dist/hostkeeper-${V}-1.x86_64.rpm.sigstore.json"
-      - id: arch-linux-x86_64
+      - id: coordinator-deb-linux-x86_64
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: dist/hostkeeper-${{ needs.version.outputs.version }}-1-x86_64.pkg.tar.zst
-      - name: Name the bundle of the Arch package for linux-x86_64
+          subject-path: dist/hostkeeper-coordinator_${{ needs.version.outputs.version }}_amd64.deb
+      - name: Name the bundle of the coordinator's deb for linux-x86_64
         env:
-          BUNDLE: ${{ steps.arch-linux-x86_64.outputs.bundle-path }}
-        run: cp "$BUNDLE" "dist/hostkeeper-${V}-1-x86_64.pkg.tar.zst.sigstore.json"
+          BUNDLE: ${{ steps.coordinator-deb-linux-x86_64.outputs.bundle-path }}
+        run: cp "$BUNDLE" "dist/hostkeeper-coordinator_${V}_amd64.deb.sigstore.json"
+      - id: coordinator-rpm-linux-x86_64
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/hostkeeper-coordinator-${{ needs.version.outputs.version }}-1.x86_64.rpm
+      - name: Name the bundle of the coordinator's rpm for linux-x86_64
+        env:
+          BUNDLE: ${{ steps.coordinator-rpm-linux-x86_64.outputs.bundle-path }}
+        run: cp "$BUNDLE" "dist/hostkeeper-coordinator-${V}-1.x86_64.rpm.sigstore.json"
       - id: image-linux-x86_64
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
@@ -1002,14 +1050,22 @@ jobs:
         env:
           BUNDLE: ${{ steps.rpm-linux-arm64.outputs.bundle-path }}
         run: cp "$BUNDLE" "dist/hostkeeper-${V}-1.aarch64.rpm.sigstore.json"
-      - id: arch-linux-arm64
+      - id: coordinator-deb-linux-arm64
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: dist/hostkeeper-${{ needs.version.outputs.version }}-1-aarch64.pkg.tar.zst
-      - name: Name the bundle of the Arch package for linux-arm64
+          subject-path: dist/hostkeeper-coordinator_${{ needs.version.outputs.version }}_arm64.deb
+      - name: Name the bundle of the coordinator's deb for linux-arm64
         env:
-          BUNDLE: ${{ steps.arch-linux-arm64.outputs.bundle-path }}
-        run: cp "$BUNDLE" "dist/hostkeeper-${V}-1-aarch64.pkg.tar.zst.sigstore.json"
+          BUNDLE: ${{ steps.coordinator-deb-linux-arm64.outputs.bundle-path }}
+        run: cp "$BUNDLE" "dist/hostkeeper-coordinator_${V}_arm64.deb.sigstore.json"
+      - id: coordinator-rpm-linux-arm64
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/hostkeeper-coordinator-${{ needs.version.outputs.version }}-1.aarch64.rpm
+      - name: Name the bundle of the coordinator's rpm for linux-arm64
+        env:
+          BUNDLE: ${{ steps.coordinator-rpm-linux-arm64.outputs.bundle-path }}
+        run: cp "$BUNDLE" "dist/hostkeeper-coordinator-${V}-1.aarch64.rpm.sigstore.json"
       - id: image-linux-arm64
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
@@ -1058,6 +1114,14 @@ jobs:
         env:
           BUNDLE: ${{ steps.pkg-macos-arm64.outputs.bundle-path }}
         run: cp "$BUNDLE" "dist/hostkeeper-${V}-macos-arm64.pkg.sigstore.json"
+      - id: image-index
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/hostkeeper-coordinator-${{ needs.version.outputs.version }}.image.json
+      - name: Name the bundle of the coordinator's image index
+        env:
+          BUNDLE: ${{ steps.image-index.outputs.bundle-path }}
+        run: cp "$BUNDLE" "dist/hostkeeper-coordinator-${V}.image.json.sigstore.json"
       - id: netboot
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:

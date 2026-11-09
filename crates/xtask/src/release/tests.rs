@@ -1,4 +1,5 @@
 use std::cell::Cell;
+use std::io::Read;
 use std::path::Path;
 
 use clap::Parser;
@@ -7,7 +8,7 @@ use super::*;
 use crate::release::fakes::{
     FakeHistory, FakeStore, FakeVerifier, Fakes, nth_commit, scratch, write_assets,
 };
-use crate::release::ports::{Release, Said};
+use crate::release::ports::{Release, Run, Said};
 use crate::testdir::TestDir;
 
 const REPO: &str = contract::REPO;

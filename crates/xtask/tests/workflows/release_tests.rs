@@ -265,11 +265,12 @@ fn publish_job_alone_holds_contents_write() {
 fn unpinned_action_is_refused_in_the_new_workflows() {
     // Catches: an action of a release workflow that a tag or branch move would change under us,
     // in the job that publishes and in the job that signs.
-    let download = "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1\n        with:\n          name: release-${{ matrix.tag }}";
+    // The publish job's download (the image job downloads the same artifact).
+    let download = "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1\n        with:\n          name: release-${{ matrix.tag }}\n          path: dist\n      # The same checks as verify";
     let text = with_in(
         &workflow("release.yml"),
         download,
-        "actions/download-artifact@v8\n        with:\n          name: release-${{ matrix.tag }}",
+        "actions/download-artifact@v8\n        with:\n          name: release-${{ matrix.tag }}\n          path: dist\n      # The same checks as verify",
     );
     assert_refused(
         "release.yml",
@@ -539,9 +540,9 @@ fn release_workflow_publishes_one_tag_at_a_time_across_its_groups() {
 }
 
 #[test]
-fn release_workflow_keeps_its_five_jobs_and_checks_the_binary() {
-    // Catches: a job added beside plan, verify, publish and the two deploy jobs (which could
-    // write or build without a rule about it), publish no longer waiting for verify, and verify
+fn release_workflow_keeps_its_jobs_and_checks_the_binary() {
+    // Catches: a job added beside plan, verify, publish, image, the two deploy jobs and the
+    // package channels (which could write or build without a rule about it), publish no longer waiting for verify, and verify
     // no longer running the binary it is about to release.
     let text = with_in(
         &workflow("release.yml"),
@@ -560,7 +561,7 @@ fn release_workflow_keeps_its_five_jobs_and_checks_the_binary() {
     assert_refused(
         "release.yml",
         &text,
-        "release.yml: jobs are [\"channel\", \"notify\", \"plan\", \"publish\", \"set-desired\", \"verify\"], not plan, verify, publish, channel and set-desired",
+        "release.yml: jobs are [\"channel\", \"check-apt\", \"check-pkg\", \"check-rpm\", \"image\", \"newest\", \"notify\", \"plan\"",
     );
     for program in ["hostkeeper", "hostkeeper-coordinator", "hostkeeper-mdm"] {
         let check = format!(

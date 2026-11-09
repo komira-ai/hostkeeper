@@ -592,8 +592,8 @@ ships one `.deb` for every Debian and Ubuntu release, and one `.rpm` for every R
 
 1. It builds **one binary per platform**: static (Rust's `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl`,
    no `NEEDED` entry), or linked against glibc alone at a stated baseline, built on the oldest release it serves.
-2. It wraps **that same build** into every format of its list. nfpm, which already builds hostkeeper's `.deb` and
-   `.rpm` from `packaging/linux/nfpm.yaml`, emits `archlinux` from the same file. So every entry of a
+2. It wraps **that same build** into every format of its list. nfpm builds hostkeeper's `.deb` and `.rpm` from
+   the one `packaging/linux/nfpm.yaml`. So every entry of a
    platform holds the same program bytes. The `tarball` entry of a Linux list must be the static build: a tarball
    declares no dependency, so nothing on the host could refuse a glibc build too new for it. A glibc-baseline build
    goes only in formats that declare its baseline.
@@ -616,15 +616,17 @@ instead of installing a program that cannot start. A static build declares nothi
 **Built** (A15): hostkeeper's own Linux build qualifies. `hostkeeper` and `hostkeeper-pxe` are built for
 `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl`, static, each on a runner of its architecture
 (`.github/workflows/artifacts.yml`; the C compiler of those targets in `.cargo/config.toml`), and that one build is the
-binary tarball, `bin/hostkeeper` of hostkeeper's own `hostkeeper-archive` package, and the programs of the `.deb`, the
-`.rpm` and nfpm's `archlinux` bootstrap package (`packaging/linux/nfpm.yaml`, staged by `cargo xtask release
+binary tarball, `bin/hostkeeper` of hostkeeper's own `hostkeeper-archive` package, and the programs of the `.deb` and the
+`.rpm` (`packaging/linux/nfpm.yaml`, staged by `cargo xtask release
 nfpm-stage`, which refuses a program with an interpreter or a `NEEDED` entry). `cargo xtask release check-linux-pkg`
-(`crates/xtask/src/release/package/linux_check.rs`) reads a `.deb`, an `.rpm`, an Arch package or a tarball back and
+(`crates/xtask/src/release/package/linux_check.rs`) reads a `.deb`, an `.rpm` or a tarball back and
 refuses an ELF program in it with an interpreter or a `NEEDED` entry and any declared dependency: the check a
-service's CI can run on its own packages and tarball too. The `privileged` job installs the same `.deb`, `.rpm` and
-Arch package on the oldest and newest release of each family, each in a container, and starts the binaries
+service's CI can run on its own packages and tarball too. The `privileged` job installs the same `.deb` and `.rpm`
+on the oldest and newest release of each family, each in a container, and starts the binaries
 (`crates/hostkeeper-privileged/tests/linux_packages.rs`, the releases in
-`crates/hostkeeper-privileged/linux-releases.toml`).
+`crates/hostkeeper-privileged/linux-releases.toml`). The Arch package that A15 also built is withdrawn by the
+maintainers' ruling (apt and the macOS pkg, dnf later; no pacman, no apk): the release no longer builds, attests or
+checks it, and its two names and their bundles are listed as withdrawn in the asset contract's test.
 
 ## 6. An update, a rollback and an uninstall
 
@@ -920,7 +922,7 @@ The tests of every build item, the cases each covers and why that list is comple
 | A12 | Withdrawn by packages-native.md (10.8), replaced by A24, A25 and A28. Was: stage 6: the daemon drops the channel fetch and its `Platform` copy, and requires `target-v1` echoed | A11 | The daemon's `coordinator_too_old` test; the device tests of section 9.3 |
 | A13 | Withdrawn, with `apk` | | |
 | A14 | Withdrawn, with `arch` | | |
-| A15 | hostkeeper's own Linux build for musl, static; `check-linux-pkg` refuses a `NEEDED` entry and a declared dependency; nfpm's `archlinux` package beside the `.deb` and `.rpm`, attested like them; `docs/deploy/verify-a-release.md` names it | none | `release_linux.rs`; the same `.deb` and `.rpm` installed and started on the oldest and newest release of each family in `privileged` |
+| A15 | hostkeeper's own Linux build for musl, static; `check-linux-pkg` refuses a `NEEDED` entry and a declared dependency; the `.deb` and `.rpm`, attested, which `docs/deploy/verify-a-release.md` names (the `archlinux` package A15 also built is withdrawn, section 5.4) | none | `release_linux.rs`; the same `.deb` and `.rpm` installed and started on the oldest and newest release of each family in `privileged` |
 | A16 | `Target.repository` and `Target.package_version`; the checks of repository entries; the installer set; the audit of a repository entry (packages-repositories.md section 8) | A2 | `repository.rs`, `additions_repository.rs`; the previous coordinator on a stored repository entry |
 | A17 | Host setup places repository entries and keyrings (`hostkeeper-pxe --repositories`, the runbooks, the MDM kit's channel stores and signers on a Mac, rendered at the daemon's start) | A7, A9 | `hostkeeper-pxe`'s tests of `--repositories` |
 

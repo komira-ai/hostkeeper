@@ -1,6 +1,8 @@
 //! The `macos-pkg` and `check-macos-pkg` verbs from their command lines: each flag reaches the
 //! pkg builder or the check, and neither verb asks for adapters it does not read.
 
+use std::path::Path;
+
 use super::tests::{connects, empty, text, verb};
 use super::*;
 use crate::release::fakes::scratch;
