@@ -1,11 +1,7 @@
-// Generated from the protobuf descriptors of hostkeeper-proto by hostkeeper-ui-tests
-// (`client_gen`). Do not edit: `cargo test -p hostkeeper-ui-tests --test client` fails when
-// this file differs from what the descriptors make, and writes the current text beside its test
-// binary.
-//
-// The types of `client.js`: each request and reply as proto3 JSON writes it. What each
-// method does, and what each field holds, is said beside it in its `.proto` file under
-// `crates/hostkeeper-proto/proto`.
+// Generated from hostkeeper-proto's descriptors by hostkeeper-ui-tests (`client_gen`). Do not
+// edit: `cargo test -p hostkeeper-ui-tests --test client` fails when this file differs from what
+// the descriptors make, and writes the current text beside its test binary.
+// The types of `client.js`, in proto3 JSON; each is described in `crates/hostkeeper-proto/proto`.
 
 /** Sends `request` to `method` (`<package>.<Service>/<Method>`) and resolves to the reply. */
 export type Call = (method: string, request: object) => Promise<object>;
@@ -85,6 +81,7 @@ export namespace hostkeeper_agent_v1 {
     | "COMMIT_STATE_UNCOMMITTED"
     | "COMMIT_STATE_COMMITTED";
   export interface DeferredReport { target?: string; reason?: string; retryAfterSecs?: string; }
+  export interface DriftReport { found?: string; recorded?: string; }
   export type FailureClass =
     | "FAILURE_CLASS_UNSPECIFIED"
     | "FAILURE_CLASS_RELEASE"
@@ -134,6 +131,7 @@ export namespace hostkeeper_agent_v1 {
     pinned?: hostkeeper_agent_v1.PinReport;
     recordTry?: string;
     installer?: string;
+    drift?: hostkeeper_agent_v1.DriftReport;
   }
   export interface StepRun { name?: string; attempt?: number; }
   export type TrustedRootReason =

@@ -1,7 +1,6 @@
-// Generated from the protobuf descriptors of hostkeeper-proto by hostkeeper-ui-tests
-// (`client_gen`). Do not edit: `cargo test -p hostkeeper-ui-tests --test client` fails when
-// this file differs from what the descriptors make, and writes the current text beside its test
-// binary.
+// Generated from hostkeeper-proto's descriptors by hostkeeper-ui-tests (`client_gen`). Do not
+// edit: `cargo test -p hostkeeper-ui-tests --test client` fails when this file differs from what
+// the descriptors make, and writes the current text beside its test binary.
 //
 // `createClient(call)` returns one object per service of the operator API, each with one
 // function per method: `releases.setDesired(request)` is
