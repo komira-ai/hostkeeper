@@ -170,7 +170,9 @@ installed afresh ([network-install.md](network-install.md)).
    id and `--arg installer apt` prints `true`. A host that prints `false` with its daemon
    running is one of:
    - not a `deb` host, or one whose apt tools are missing, or whose installed `apt` is older than
-     2.2: it stays on archives, and stage 9 names it;
+     2.2: it would stay on archives, and every later stage waits for it. Bring it up (the apt
+     tools, `apt` 2.2 or later), or remove it from the fleet and install it afresh
+     ([network-install.md](network-install.md));
    - a host whose daemon is older than A19's release: stage 5 does not hold on it;
    - a host whose last heartbeat came over the JSON route: wait for the next one.
 
@@ -183,8 +185,8 @@ files, or by hand ([repository-keys.md](repository-keys.md)). Its daemon reads t
 (`launchctl kickstart -k system/dev.hostkeeper.hostkeeper`), and the check is `announces` with
 `--arg installer macos-pkg`. No host of the farm is a Mac today.
 
-**Holds when** `not-announcing` with `--arg installer apt` prints `0`, or names only hosts that
-cannot run `apt`, which stage 9 will name too.
+**Holds when** `not-announcing` with `--arg installer apt` prints `0`. A host it still names
+keeps stages 7 to 9 from holding, since it runs its services from archives.
 
 **Back out**, on one host, while it runs no service from `apt`: as root, remove the directory's
 files and the directory, and restart the daemon. It stops announcing `apt`, and the next release
@@ -204,8 +206,13 @@ Follow it with `hkctl releases converge --service hello`, and with `service-not-
 
 **Holds when** `service-not-native` with `--arg service hello` prints `0`.
 
-**Back out**: set `hello`'s release without the native entry: a host that moved is rolled back to
-the archive version it kept as `previous`, from its sealed copy, with nothing fetched. The
+**Back out**: set `hello` again to a version lower than the one the moved hosts run, whose release
+has no native entry: the version before stage 7, with its release as it was set
+(`hkctl releases get-release --service hello --version <previous>` gives its targets). Or force
+that version (`hkctl releases force`, [holds-and-force.md](holds-and-force.md#force)). A host
+that moved is then picked the archive entry and rolled back to the archive version it kept as
+`previous`, from its sealed copy, with nothing fetched. A version that is not lower is no back-out:
+a host that moved is picked nothing for it (`installer_dropped`) and stays on its `.deb`. The
 automatic rollback of a failed move does the same on one host. Once the next update of `hello`
 on a host has retired that archive version, the move there cannot be undone.
 
@@ -222,7 +229,8 @@ confirms that it starts, then installs its own `.deb`, takes the archive's unit 
 
 **Holds when** both print `0`.
 
-**Back out**: the same as stage 7, for each service. A rollback of `hostkeeper` to a release
+**Back out**: the same as stage 7, for each service, but `hostkeeper` is never forced (a force
+of it is refused `self_service`): set its lower version. A rollback of `hostkeeper` to a release
 older than A19's on a host where `hostkeeper` moved is refused `rollback_below_installer`, before
 anything switches.
 
