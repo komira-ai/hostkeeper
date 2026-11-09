@@ -23,21 +23,15 @@
 //!   release judged against the daemon's oldest reader, its steps run under the step lock (built
 //!   in for a floor above [`selfupdate::LEGACY_FLOOR`]), then the follow-on that hands over to
 //!   the new binary and asks the daemon to exit; at start, the update settled by the binary that
-//!   runs. [`fallback`] is the verb `self-update-fallback` that the fallback unit and job of the
-//!   releases before the hand-over run (on macOS the job's verb decides the burst from the start
-//!   log itself), still answered; [`selfunits`] removes that unit, its drop-in and that job where
-//!   the daemon finds them at each start, telling the service manager only then; [`seed`] is the
-//!   verb `self-update-seed` the package unit runs before each start, which gives the binary
-//!   directory its first binary.
+//!   runs. [`seed`] gives the binary directory its first binary, for the packaged start.
 //! - [`packaged`]: `hostkeeper daemon` started from the packaged binary seeds the binary
-//!   directory as [`seed`] does and execs its `current`.
+//!   directory ([`seed`]) and execs its `current`.
 //! - [`handover`]: the first thing `hostkeeper daemon` does, before it reads its config (after
 //!   the packaged start, which execs `current` first): a
 //!   hand-over of hostkeeper's own update into another binary (docs/design/two-programs.md, 4.3)
 //!   execs that binary while its start count lasts, and is settled failed once it cannot.
-//! - [`mac_config`]: the verb `mac-config`, which writes the daemon config from the managed
-//!   preferences the MDM installed, and which the start of a Mac's daemon runs when its config is
-//!   not there.
+//! - [`mac_config`]: the daemon config written from the managed preferences the MDM installed,
+//!   which the start of a Mac's daemon does when its config is not there.
 //! - [`adapters`]: the step launcher, service manager, unit directory, observer ports and package
 //!   check of the host's platform ([`adapters::Adapters::for_platform`]: systemd on Linux,
 //!   launchd on macOS), and the claims of its enrollment.
@@ -58,9 +52,7 @@
 //!   [`Daemon::status`] reports of it.
 //! - [`node`]: the host's enrollment and the heartbeat loop's link, as the loops last wrote them,
 //!   which [`Daemon::status`] reports besides the services.
-//! - [`cli`]: `hostkeeper daemon` and its flags, and the
-//!   plumbing verbs `self-update-fallback` and `self-update-protocol` (still answered); the binary only forwards
-//!   to it.
+//! - [`cli`]: `hostkeeper daemon` and its flags, the one verb; the binary only forwards to it.
 //! - [`stamp`]: the version `hostkeeper --version` prints, with the commit of a release build.
 //! - [`refusal`]: the closed set of reason tokens.
 //! - [`link_adapters`]: the daemon as the executor, the held halts, the installed services and
@@ -84,7 +76,6 @@ pub mod cli;
 pub mod console;
 pub mod entry;
 pub mod executor;
-pub mod fallback;
 mod files;
 pub mod halt;
 pub mod handover;
@@ -107,7 +98,6 @@ pub mod prune;
 pub mod real_packages;
 pub mod refusal;
 pub mod seed;
-pub mod selfunits;
 pub mod selfupdate;
 pub mod stamp;
 pub mod start;
@@ -116,7 +106,6 @@ pub mod testing;
 pub mod trusted_root;
 pub mod uninstall;
 pub mod unix_clock;
-pub mod update_hook;
 pub mod verb;
 pub mod verbs;
 pub mod watchers;

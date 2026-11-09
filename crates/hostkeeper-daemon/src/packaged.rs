@@ -3,11 +3,10 @@
 //! ([`PACKAGED_BINARIES`]: the deb's and the rpm's `/usr/bin/hostkeeper`, the pkg's
 //! `/usr/local/bin/hostkeeper`), the start, before it reads its config or writes anything else:
 //!
-//! 1. seeds the binary directory of hostkeeper's own update with the running image, as
-//!    `hostkeeper self-update-seed --binary <image>` does ([`crate::seed`]): nothing is written
-//!    when `current` starts an executable file, and otherwise, under the state directory's lock
-//!    (released before the next step), the image is put in as this binary's version and
-//!    `current` points at it;
+//! 1. seeds the binary directory of hostkeeper's own update with the running image
+//!    ([`crate::seed`]): nothing is written when `current` starts an executable file, and
+//!    otherwise, under the state directory's lock (released before the next step), the image is
+//!    put in as this binary's version and `current` points at it;
 //! 2. `exec`s `current` with its own arguments, so the binary the self-update switched to runs
 //!    as the daemon in this process: the process id stays, and with it what the service manager
 //!    set (systemd's notify socket and watchdog).

@@ -503,7 +503,6 @@ impl Coordinator {
 /// the running program.
 pub struct Daemon {
     dir: PathBuf,
-    socket: PathBuf,
     run: Option<Running>,
 }
 
@@ -523,15 +522,7 @@ impl Daemon {
         // The packages directory is the host's (made by the package that installs the daemon);
         // the daemon makes its state directory.
         fs::create_dir_all(PACKAGES_DIR).expect("the packages directory");
-        // The `--admin-socket` path: the daemon of this checkout ignores the flag, an older
-        // release binds it, and a socket's path is at most 107 bytes, so it is right under the
-        // scratch directory.
-        let socket = scratch.join("run/a.sock");
-        let mut daemon = Daemon {
-            dir,
-            socket,
-            run: None,
-        };
+        let mut daemon = Daemon { dir, run: None };
         daemon.launch();
         daemon
     }
@@ -546,8 +537,6 @@ impl Daemon {
             &path("state"),
             "--packages-dir",
             PACKAGES_DIR,
-            "--admin-socket",
-            &self.socket.display().to_string(),
             "--heartbeat-secs",
             "1",
         ]

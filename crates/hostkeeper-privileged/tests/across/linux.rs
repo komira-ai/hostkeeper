@@ -2,30 +2,26 @@
 //! host's systemd, as the deb leaves a host.
 //!
 //! **The unit.** The text is the package unit, `packaging/linux/units/hostkeeper.service`
-//! ([`REAL_UNIT`]; the unit that starts `current`, because the released binary the rig pins
-//! predates the packaged start, so the deb's bootstrap unit would not start it), with three
-//! changes ([`unit_text`]): `ExecStart=` runs the same `current` of the binary directory with the
-//! same flags, at the test's directories (the end-to-end rig's tree, `super::super::e2e::host_root`),
-//! with the admin socket in the test's tree (`--admin-socket`, which the real line does not pass:
-//! the older release would bind the default `/run/hostkeeper/admin.sock`; the daemon of this
-//! checkout ignores the flag and binds nothing) and with `--heartbeat-secs 1`;
-//! the seed (`ExecStartPre=`: the test stages the first binary itself) is left out. A change to
-//! the real `ExecStart=` that this does not know fails the test by name. The unit is installed
-//! where the deb installs it ([`DEB_UNIT`]) and enabled by the link `systemctl enable` makes
-//! ([`WANTS_LINK`]); each hostkeeper package of the rig carries the same text as
-//! `units/hostkeeper.service`, which the daemon links into `/etc/systemd/system` ([`LINKED_UNIT`])
+//! ([`REAL_UNIT`]; the unit that starts `current`, because the rig stages the released binary as
+//! `current` itself and does not run the deb's packaged start), with one change ([`unit_text`]):
+//! `ExecStart=` runs the same `current` of the binary directory with the same flags, at the
+//! test's directories (the end-to-end rig's tree, `super::super::e2e::host_root`) and with
+//! `--heartbeat-secs 1`. A change to the real `ExecStart=` that this does not know fails the
+//! test by name. The unit is installed where the deb installs it ([`DEB_UNIT`]) and enabled by
+//! the link `systemctl enable` makes ([`WANTS_LINK`]); each hostkeeper package of the rig
+//! carries the same text as `units/hostkeeper.service`, which the daemon links into
+//! `/etc/systemd/system` ([`LINKED_UNIT`])
 //! in its place, as a release's unit takes the deb's place on a host.
 //!
-//! **The fallback.** The released daemon writes its fallback unit (`hostkeeper-fallback.service`)
-//! and the drop-in that names it into `/etc/systemd/system` at its start, as on any host; its
-//! own texts are what systemd runs when this build fails its start. This build removes both at
-//! its own start ([`Host::fallback_files_present`]).
+//! **The fallback.** The hand-over has no fallback unit and no drop-in
+//! (docs/design/two-programs.md, section 4.3): when this build fails its start, the released
+//! daemon execs it three times and then settles the update failed, under the same unit.
 //!
 //! These are fixed places of the host, which is why the rig runs only on a throwaway runner:
 //! [`Host::new`] moves aside whatever is at them (with the end-to-end rig's own, which
 //! [`HostRoot`] takes over) and the drop stops the units, removes what the test and the daemon
 //! put there and puts back what was moved aside, failed or not. A failing test first prints the
-//! journal of both units and of hostkeeper's step units, and keeps them with the end-to-end
+//! journal of the daemon's unit and of hostkeeper's step units, and keeps them with the end-to-end
 //! rig's artifacts.
 
 use std::fs;
@@ -33,7 +29,6 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use hostkeeper_daemon::selfunits::{DROPIN_DIR, DROPIN_FILE};
 use hostkeeper_daemon::selfupdate::binary_dir;
 use hostkeeper_steps::Layout;
 
@@ -46,8 +41,6 @@ pub const REAL_UNIT: &str = include_str!("../../../../packaging/linux/units/host
 const REAL_EXEC_START: &str = "ExecStart=/var/lib/updater/state/hostkeeper/bin/current daemon --config /etc/hostkeeper/hostkeeper.toml --state-dir /var/lib/updater/state --packages-dir /var/lib/hostkeeper/packages --notify-systemd";
 /// The daemon's own unit.
 pub const MAIN: &str = "hostkeeper.service";
-/// The fallback unit the daemon writes.
-pub const FALLBACK: &str = "hostkeeper-fallback.service";
 /// Where the deb installs [`MAIN`].
 pub const DEB_UNIT: &str = "/usr/lib/systemd/system/hostkeeper.service";
 /// Where the daemon links the unit of hostkeeper's package.
@@ -56,10 +49,6 @@ pub const LINKED_UNIT: &str = "/etc/systemd/system/hostkeeper.service";
 pub const WANTS_LINK: &str = "/etc/systemd/system/multi-user.target.wants/hostkeeper.service";
 /// The glob of the transient units the daemon runs hostkeeper's hook steps in.
 const STEP_UNITS: &str = "updater-hostkeeper-*.service";
-/// The transient unit the released daemon probes a new binary's protocol in.
-const PROBE: &str = "hostkeeper-self-update-protocol.service";
-/// Where systemd looks for the units the daemon places and writes.
-const UNIT_DIR: &str = "/etc/systemd/system";
 /// Where `journalctl` is.
 const JOURNALCTL: &str = "/usr/bin/journalctl";
 
@@ -91,23 +80,18 @@ pub fn unit_text(root: &HostRoot) -> String {
         "packaging/linux/units/hostkeeper.service starts the daemon another way than this rig knows"
     );
     let exec_start = format!(
-        "ExecStart={} daemon --config {} --state-dir {} --packages-dir {} --admin-socket {} \
+        "ExecStart={} daemon --config {} --state-dir {} --packages-dir {} \
          --notify-systemd --heartbeat-secs 1",
         plain(&Layout::new(&binary_dir(&root.state())).current_path()),
         plain(&root.config_path()),
         plain(&root.state()),
         plain(&root.packages()),
-        plain(&root.admin_socket()),
     );
     let mut text = String::new();
     for line in lines {
-        if [
-            "ExecStartPre=",
-            "RuntimeDirectory=",
-            "RuntimeDirectoryMode=",
-        ]
-        .iter()
-        .any(|key| line.starts_with(key))
+        if ["RuntimeDirectory=", "RuntimeDirectoryMode="]
+            .iter()
+            .any(|key| line.starts_with(key))
         {
             continue;
         }
@@ -153,7 +137,7 @@ impl Host {
     /// # Panics
     /// The test is not root under systemd, or a place cannot be moved aside.
     pub fn new(tag: &str) -> Host {
-        let _ = systemctl(&["stop", MAIN, FALLBACK]);
+        let _ = systemctl(&["stop", MAIN]);
         let root = HostRoot::new(tag);
         let pid = std::process::id();
         let saved = taken_places()
@@ -210,7 +194,7 @@ impl Host {
     }
 
     /// Stops the daemon's unit, as an operator does before it changes the binary directory:
-    /// `systemctl stop` returns once the daemon has exited, and nothing runs the fallback.
+    /// `systemctl stop` returns once the daemon has exited.
     ///
     /// # Panics
     /// The unit does not stop.
@@ -225,10 +209,8 @@ impl Host {
     }
 
     /// Starts the daemon's unit again, on whatever `current` of the binary directory names now:
-    /// `systemctl reset-failed` first, as an operator's deliberate restart starts the unit's
-    /// start-limit count afresh (the self-update restarts before it and the one after it would
-    /// otherwise share one burst with it, and the next restart would hit the limit and run the
-    /// fallback), then `systemctl start`, which returns once the daemon is ready.
+    /// `systemctl reset-failed` first, so that the unit starts with no failure of an earlier run
+    /// held against it, then `systemctl start`, which returns once the daemon is ready.
     ///
     /// # Panics
     /// The unit's count cannot be reset, or the unit does not start.
@@ -258,24 +240,9 @@ impl Host {
         }
     }
 
-    /// Whether systemd ran the daemon's fallback unit, to its end with success.
-    pub fn fallback_ran(&self) -> bool {
-        !property(FALLBACK, "InvocationID").is_empty() && property(FALLBACK, "Result") == "success"
-    }
-
-    /// Whether the fallback unit or the drop-in of the releases before the hand-over is in the unit
-    /// directory: what the released daemon writes at its start and this build removes at its.
-    pub fn fallback_files_present(&self) -> bool {
-        let dir = Path::new(UNIT_DIR);
-        [dir.join(FALLBACK), dir.join(DROPIN_DIR).join(DROPIN_FILE)]
-            .iter()
-            .any(|file| fs::symlink_metadata(file).is_ok())
-    }
-
-    /// The journal of the daemon's unit, of its fallback, of the probe and of hostkeeper's step
-    /// units.
+    /// The journal of the daemon's unit and of hostkeeper's step units.
     pub fn logs(&self) -> String {
-        [MAIN, FALLBACK, PROBE, STEP_UNITS]
+        [MAIN, STEP_UNITS]
             .map(|unit| format!("--- journal of {unit}:\n{}", journal(unit)))
             .join("\n")
     }
@@ -293,9 +260,7 @@ impl Drop for Host {
                 let _ = fs::write(dir.join("journal-hostkeeper.txt"), logs);
             }
         }
-        // The fallback last: its `ExecStartPost=` starts the daemon's unit.
-        let _ = systemctl(&["stop", MAIN, STEP_UNITS, PROBE, FALLBACK]);
-        let _ = systemctl(&["stop", MAIN]);
+        let _ = systemctl(&["stop", MAIN, STEP_UNITS]);
         for place in taken_places() {
             let _ = fs::remove_file(&place);
         }
@@ -303,6 +268,6 @@ impl Drop for Host {
             let _ = fs::rename(aside, place);
         }
         let _ = systemctl(&["daemon-reload"]);
-        let _ = systemctl(&["reset-failed", MAIN, FALLBACK]);
+        let _ = systemctl(&["reset-failed", MAIN]);
     }
 }

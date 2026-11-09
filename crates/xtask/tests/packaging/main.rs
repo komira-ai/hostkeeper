@@ -83,15 +83,12 @@ fn refuses(check: impl Fn(&str) -> Result<(), String>, cases: &[(String, &str)])
     }
 }
 
-/// The package unit's seed line, with its newline.
-const SEED_LINE: &str = "ExecStartPre=-/usr/bin/hostkeeper self-update-seed --state-dir /var/lib/updater/state --binary /usr/bin/hostkeeper\n";
-
 /// One of the daemon's two units.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Kind {
     /// The unit the deb, the rpm and a boot image install: it starts the installed binary.
     Bootstrap,
-    /// The unit hostkeeper's own package carries: it seeds, then starts `current`.
+    /// The unit hostkeeper's own package carries: it starts `current`.
     Package,
 }
 

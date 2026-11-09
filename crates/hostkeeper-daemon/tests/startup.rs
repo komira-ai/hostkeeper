@@ -142,16 +142,13 @@ fn the_command_line_exits_with_the_config_errors_status() {
 /// trusted when root owns it, and the README states each default and each exit status.
 #[test]
 fn daemon_flag_defaults_are_the_documented_ones() {
-    let Command::Daemon(flags) = Cli::parse_from(["hostkeeper", "daemon"]).command else {
-        panic!("`hostkeeper daemon` parses as the daemon command");
-    };
+    let Command::Daemon(flags) = Cli::parse_from(["hostkeeper", "daemon"]).command;
     assert_eq!(
         flags,
         DaemonFlags {
             config: DEFAULT_CONFIG.into(),
             state_dir: DEFAULT_STATE_DIR.into(),
             packages_dir: DEFAULT_PACKAGES_DIR.into(),
-            admin_socket: None,
             notify_systemd: false,
             ready_file: None,
             trusted_root_max_age_days: DEFAULT_TRUSTED_ROOT_MAX_AGE_DAYS,
@@ -182,12 +179,6 @@ fn daemon_flag_defaults_are_the_documented_ones() {
     for line in documented {
         assert!(readme.contains(&line), "the README does not state {line}");
     }
-    // `--admin-socket` is hidden and ignored: the README says so in its row.
-    let row = readme
-        .lines()
-        .find(|line| line.starts_with("| `--admin-socket` |"))
-        .expect("the README's row of `--admin-socket`");
-    assert!(row.contains("accepted and ignored"), "{row}");
 }
 
 /// Catches the config and lock errors sharing an exit status with each other or with a usage

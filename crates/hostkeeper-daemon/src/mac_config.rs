@@ -1,7 +1,6 @@
-//! `hostkeeper mac-config [--managed <file>] [--config <file>]`: the daemon config of a Mac,
-//! written from the managed preferences its MDM installed (docs/design/hostkeeper-mdm.md,
-//! section 4). The start of a Mac's daemon runs it when the config is not there ([`at_start`]);
-//! the pkg's `postinstall` does not run it.
+//! The daemon config of a Mac, written from the managed preferences its MDM installed
+//! (docs/design/hostkeeper-mdm.md, section 4). The start of a Mac's daemon writes it when the
+//! config is not there ([`at_start`]).
 //!
 //! 1. A config that is there as a regular file is kept: nothing is written and the managed
 //!    preferences are not read. It is the operator's, or an earlier run's. Anything else at the
@@ -24,31 +23,25 @@
 //!    path, which fails when the config appeared meanwhile (that file is judged as in 1), and the
 //!    temporary file is removed, with no copy left behind on any failure.
 //!
-//! The verb exits 0 when the config exists afterwards, written or kept, and [`EXIT_FAILED`]
-//! with the error on standard error otherwise.
-//!
-//! The start of a Mac's daemon runs the same steps on its `--config` before it reads it
-//! ([`at_start`], docs/design/two-programs.md, section 2.1), saying nothing for a config kept: a
-//! config that is not there is written from the managed preferences, and one that cannot be is
-//! the start's error ([`crate::start::StartError::MacConfig`], [`crate::start::EXIT_CONFIG`]).
+//! The start of a Mac's daemon does this for its `--config` before it reads it ([`at_start`],
+//! docs/design/two-programs.md, section 2.1), saying nothing for a config kept: a config that
+//! is not there is written from the managed preferences, and one that cannot be is the start's
+//! error ([`crate::start::StartError::MacConfig`], [`crate::start::EXIT_CONFIG`]).
 
 use std::fs::{self, DirBuilder, File, OpenOptions};
 use std::io::{self, Cursor, Write};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
 
 use hostkeeper_config::daemon::{ConfigError, DaemonConfig};
 use hostkeeper_config::trust::{TrustError, read_trusted};
 use plist::Value;
 
-use crate::start::EXIT_FAILED;
-
 /// The comment the written file starts with.
 pub const HEADER: &str =
     "# Written by hostkeeper mac-config from the managed preferences of dev.hostkeeper.config.\n";
 
-/// What the verb did.
+/// What [`mac_config`] did.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Configured {
     /// The config was written from the managed preferences.
@@ -57,7 +50,7 @@ pub enum Configured {
     Kept,
 }
 
-/// Why no config exists after the verb.
+/// Why no config exists after [`mac_config`].
 #[derive(Debug, thiserror::Error)]
 pub enum MacConfigError {
     /// There is no config and no managed preferences file to make one from.
@@ -101,41 +94,11 @@ pub enum MacConfigError {
     },
 }
 
-/// The verb with the real effects: root is the trusted owner of the managed file. Prints a line
-/// on standard error when the config is kept, and the error when there is none.
-pub fn main(managed: &Path, config: &Path) -> ExitCode {
-    finish(mac_config(managed, config, 0), config)
-}
-
-/// The exit status of the verb for `result`, with the line it says on standard error: nothing
-/// for a config written, [`kept_line`] for one kept, the error for none.
-pub fn finish(result: Result<Configured, MacConfigError>, config: &Path) -> ExitCode {
-    match result {
-        Ok(Configured::Written) => ExitCode::SUCCESS,
-        Ok(Configured::Kept) => {
-            eprintln!("{}", kept_line(config));
-            ExitCode::SUCCESS
-        }
-        Err(error) => {
-            eprintln!("hostkeeper mac-config: {error}");
-            ExitCode::from(EXIT_FAILED)
-        }
-    }
-}
-
 /// The start's step: [`mac_config`] of `managed` into `config`, the daemon config the start reads
 /// next, with `trusted_uid` the owner the managed file must have; `Ok` when the config is there
 /// afterwards, written or kept.
 pub fn at_start(managed: &Path, config: &Path, trusted_uid: u32) -> Result<(), MacConfigError> {
     mac_config(managed, config, trusted_uid).map(drop)
-}
-
-/// The line said when the config is kept.
-pub fn kept_line(config: &Path) -> String {
-    format!(
-        "hostkeeper mac-config: {} exists and is kept; the managed config is not read",
-        config.display()
-    )
 }
 
 /// Writes `config` from `managed`, as the module says; `trusted_uid` is the owner the managed

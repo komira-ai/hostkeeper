@@ -15,10 +15,10 @@ use std::sync::Arc;
 
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_daemon::adapters::Adapters;
+use hostkeeper_daemon::adapters::MAIN_UNIT;
 use hostkeeper_daemon::cli::Unwired;
 use hostkeeper_daemon::link_adapters::observation;
 use hostkeeper_daemon::observer::{OwnService, STATUS_DEADLINE, SealedExe, observe, observer_with};
-use hostkeeper_daemon::selfunits::MAIN_UNIT;
 use hostkeeper_daemon::selfupdate::binary_dir;
 use hostkeeper_launchd::launchctl::print_args;
 use hostkeeper_launchd::{FakeLaunchctl, Label, LaunchctlOutput, PidInfo, PidInfoError, Platform};
@@ -246,10 +246,11 @@ fn the_daemons_own_job_is_stopped_absent_or_mismatched_as_launchd_and_its_proces
     );
     assert_eq!(beat_health(&seen).0, Health::Unhealthy);
 
-    // A fallback put the previous binary back: the package still names the version that fell
-    // back, the binary directory's `current` the one the job runs, which is what is reported.
+    // The previous binary is back (the hand-over fell back, or an operator put it there): the
+    // package still names the version that fell back, the binary directory's `current` the one
+    // the job runs, which is what is reported.
     Layout::new(&binary_dir(&rig.state))
-        .flip_back()
+        .switch(BEFORE)
         .expect("the previous binary back");
     let seen = of_hk(
         &rig,

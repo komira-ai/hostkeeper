@@ -9,18 +9,18 @@
 # daemon binary out of it, and fetches nothing itself (hostkeeper_privileged::across).
 #
 # The pin moves only by a pull request: to the release each floor pull request of the staged path
-# names (S2a to R1, S3 to R2), in that same pull request.
-tag = "v0.1.163"
-version = "0.1.163"
+# names (S2a to R1, S3 to R2), in that same pull request. The pin is R2, v0.1.194.
+tag = "v0.1.194"
+version = "0.1.194"
 
 [linux-arm64]
-url = "https://github.com/komira-ai/hostkeeper/releases/download/v0.1.163/hostkeeper-0.1.163-linux-arm64.tar.gz"
-sha256 = "1408e18baecfd568b39565b89a78158dab6c8e4a1f4326ca0340cdd18fc1150c"
+url = "https://github.com/komira-ai/hostkeeper/releases/download/v0.1.194/hostkeeper-0.1.194-linux-arm64.tar.gz"
+sha256 = "91bb180a1c570a11cb62275fa88aa5cbfbd2b7d781f1ff90b68754f485ec397c"
 
 [linux-x86_64]
-url = "https://github.com/komira-ai/hostkeeper/releases/download/v0.1.163/hostkeeper-0.1.163-linux-x86_64.tar.gz"
-sha256 = "2fef129d7e136587c70df122efe767aa291de1ccecde15b6dd132f109980266d"
+url = "https://github.com/komira-ai/hostkeeper/releases/download/v0.1.194/hostkeeper-0.1.194-linux-x86_64.tar.gz"
+sha256 = "eefc00d78d22f49a019599885ab4295a462df9c519288028713a5fb08985862e"
 
 [macos-arm64]
-url = "https://github.com/komira-ai/hostkeeper/releases/download/v0.1.163/hostkeeper-0.1.163-macos-arm64.tar.gz"
-sha256 = "6b20de414f41382bf993a192c62095a602660e60356899b55a9602492c6d1485"
+url = "https://github.com/komira-ai/hostkeeper/releases/download/v0.1.194/hostkeeper-0.1.194-macos-arm64.tar.gz"
+sha256 = "aedad067db46af7ed065683ab6dd7c46b87fb4558db21b31082003394654ca6b"

@@ -10,7 +10,7 @@
 //! ([`PRIVILEGED`]). They drive the production adapters
 //! (`hostkeeper_steps::SystemdLauncher`, `hostkeeper_steps::DeadMan`, the observer's
 //! `SystemdManager` and `ProcProbe`, the Linux unit control, and the daemon's own update under
-//! hostkeeper's unit file, drop-in and fallback unit), never a copy of them. The macOS device tests
+//! hostkeeper's unit file), never a copy of them. The macOS device tests
 //! (`tests/device_mac.rs`, first line `#![cfg(all(target_os = "macos", feature = "privileged"))]`)
 //! do the same on a Mac, in privileged.yml's job `macos-device`, against launchd: the daemon
 //! (the program `hostkeeper-device-daemon`, which forwards to `hostkeeper_daemon::cli::main`),

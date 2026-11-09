@@ -508,7 +508,7 @@ changed file takes effect at the daemon's next start.
 
 **How a managed Mac gets the two files.** The MDM kit's config profile (hostkeeper-mdm.md section 4) carries two more
 managed-preference domains, `dev.hostkeeper.stores` and `dev.hostkeeper.macos-pkg`, whose keys are those of
-`stores.toml` and `macos-pkg.toml`. The daemon's start renders each to its file by `mac-config`'s steps (the property
+`stores.toml` and `macos-pkg.toml`. The daemon's start renders each to its file by the steps of `mac_config::at_start` (the property
 list as TOML, checked by the daemon's own loader before it is written) with one difference: the managed preferences
 are these files' source, so a file that differs from them is replaced, and a rotation the MDM pushes takes effect at
 the daemon's next start. `hostkeeper.toml` keeps its rule (written only when there is none), since it holds the trust

@@ -1,14 +1,11 @@
 //! `hostkeeper-selfupdate-daemon`: the hostkeeper binary of the privileged self-update tests
 //! (`tests/self_update.rs`), a program of the tests, not shipped.
 //!
-//! Every verb but `daemon` is forwarded to the daemon's command line as the `hostkeeper` binary
-//! forwards it (`hostkeeper_daemon::cli::run_with`): `self-update-protocol` and
-//! `self-update-fallback`, which the releases before the hand-over ask of a new binary and run
-//! with the previous one, are the shipped code.
+//! `daemon` is the only verb, as the `hostkeeper` binary's (`hostkeeper_daemon::cli::Cli`).
 //!
-//! `daemon` is the shipped daemon (`hostkeeper_daemon::start`: the settle of a waiting
-//! self-update, the boot pass, the readiness notice, the removal of the fallback units of the
-//! releases before the hand-over, the heartbeat loop, the executor and its follow-on) on the
+//! It is the shipped daemon (`hostkeeper_daemon::start`: the settle of a waiting
+//! self-update, the boot pass, the readiness notice, the heartbeat loop, the executor and its
+//! follow-on) on the
 //! host's Linux adapters (the step launcher's transient units, `systemctl`), started as
 //! `hostkeeper daemon` starts: from the packaged binary, then the hand-over of its own update
 //! (`hostkeeper_daemon::handover`, run first, so a binary that waits for a hand-over into another
@@ -38,8 +35,7 @@
 //! variable but the notify socket systemd sets for a `Type=notify` unit:
 //!
 //! - `--fixture-dir <dir>` (required by `daemon`): `link/` (above), `units/` (the unit directory
-//!   the daemon places units in and removes the fallback units of the releases before the
-//!   hand-over from, `hostkeeper_daemon::selfunits`) and `placed/` (the placed-path state
+//!   the daemon places units in) and `placed/` (the placed-path state
 //!   directory). The host's own unit and state directories are never written.
 //! - `--fixture-fail-start <version>`: a `daemon` of that version writes one line to standard
 //!   error ([`refused_line`]) and exits 1 before it does anything else: a new binary that cannot
@@ -125,14 +121,13 @@ fn main() -> ExitCode {
         Ok(taken) => taken,
         Err(why) => return usage(&why),
     };
-    let cli = match Cli::try_parse_from(std::iter::once(OsString::from("hostkeeper")).chain(rest)) {
+    let Cli {
+        command: Command::Daemon(flags),
+    } = match Cli::try_parse_from(std::iter::once(OsString::from("hostkeeper")).chain(rest)) {
         Ok(cli) => cli,
         Err(error) => error.exit(),
     };
-    match cli.command {
-        Command::Daemon(flags) => daemon_verb(&fixture, &flags),
-        command => cli::run_with(Cli { command }, systemd_vars()),
-    }
+    daemon_verb(&fixture, &flags)
 }
 
 fn usage(why: &str) -> ExitCode {

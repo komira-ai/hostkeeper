@@ -57,8 +57,8 @@ impl SelfRig {
     }
 
     /// A rig whose host runs hostkeeper at [`OLD`] as the deb or the pkg installs it: its binary
-    /// directory with [`OLD`] staged and `current`, as `self-update-seed` leaves it at the first
-    /// start, and no package of hostkeeper installed (nothing under the packages directory names
+    /// directory with [`OLD`] staged and `current`, as the packaged start's seed leaves it at the
+    /// first start, and no package of hostkeeper installed (nothing under the packages directory names
     /// it `current`). The release of [`NEW`], with its binary, is in the package store.
     pub fn bootstrapped(name: &str) -> SelfRig {
         let rig = Rig::new(name);
@@ -87,8 +87,8 @@ impl SelfRig {
     }
 
     /// The release of hostkeeper at `version` as CI packages it: its binary, its hook
-    /// `bin/hostkeeper update-hook`, and the unit hostkeeper's package carries, `units/hostkeeper.service`,
-    /// which its manifest runs.
+    /// `bin/hostkeeper update-hook` (which no daemon runs), and the unit hostkeeper's package
+    /// carries, `units/hostkeeper.service`, which its manifest runs.
     pub fn shipped_release(&self, version: &str) -> PathBuf {
         let manifest = super::manifest(HK, version).replace(
             r#"command = ["bin/hook", "update-hook"]"#,
@@ -159,8 +159,7 @@ impl SelfRig {
     }
 
     /// Turns the hand-over an order of hostkeeper to `version` left (`next` linked, the wait naming
-    /// it with a start count) into what a release before the hand-over wrote, which the fallback
-    /// verb of its units still answers: `current` switched to `version`, `previous` the old
+    /// it with a start count) into what a release before the hand-over wrote: `current` switched to `version`, `previous` the old
     /// binary, no `next`, and a wait with no `next` and no count.
     pub fn switch_the_old_way(&self, version: &str) {
         let layout = self.layout();

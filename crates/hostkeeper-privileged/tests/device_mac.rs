@@ -557,9 +557,8 @@ fn sockets_under(dir: &Path) -> Vec<PathBuf> {
 
 /// Catches a daemon that does not start under launchd on a Mac, starts under no boot id, or
 /// binds a socket: the daemon binary, as a job of the system domain with a config, state and
-/// packages directories of its own (and an `--admin-socket` path it accepts and ignores), is
-/// `running`, its start pass wrote the Mac's boot id, and nothing is bound at the socket path or
-/// anywhere else in its scratch tree.
+/// packages directories of its own, is `running`, its start pass wrote the Mac's boot id, and
+/// nothing is bound anywhere in its scratch tree.
 #[test]
 fn the_daemon_starts_under_launchd_and_binds_no_socket() {
     as_root();
@@ -585,7 +584,6 @@ hosted_runner = true
     let state = root.join("state");
     let packages = root.join("packages");
     fs::create_dir_all(&packages).expect("the packages directory");
-    let socket = root.join("run").join("admin.sock");
     let text = |path: &Path| path.display().to_string();
     let daemon = label("daemon");
     let argv = [
@@ -597,8 +595,6 @@ hosted_runner = true
         text(&state),
         "--packages-dir".to_owned(),
         text(&packages),
-        "--admin-socket".to_owned(),
-        text(&socket),
     ];
     let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
     let _booted = bootstrap(&daemon, &argv, root);
@@ -621,11 +617,5 @@ hosted_runner = true
     let written = fs::read_to_string(&boot_id).expect("the boot id file");
     let id = SysctlBootId.read().expect("kern.bootsessionuuid");
     assert_eq!(written, id.as_str());
-    assert!(
-        !socket.exists(),
-        "the daemon bound {}: {}",
-        socket.display(),
-        log("stderr")
-    );
     assert_eq!(sockets_under(root), Vec::<PathBuf>::new());
 }

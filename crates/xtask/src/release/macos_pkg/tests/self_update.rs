@@ -2,9 +2,8 @@
 //! the daemon's own code: its plist starts the binary the pkg installs with `daemon`, one of the
 //! paths the daemon's start knows as packaged (`hostkeeper_daemon::packaged`), which seeds the
 //! binary directory the daemon derives from its state directory
-//! (`hostkeeper_daemon::selfupdate::binary_dir`) and execs `current` of it; the fallback job of
-//! the releases before the hand-over, which the daemon removes at its start, is not the pkg's job;
-//! and the postinstall runs no seed.
+//! (`hostkeeper_daemon::selfupdate::binary_dir`) and execs `current` of it; and the postinstall
+//! runs no seed.
 
 use std::cell::RefCell;
 use std::ffi::OsString;
@@ -13,7 +12,6 @@ use std::os::unix::fs::PermissionsExt;
 use clap::Parser;
 use hostkeeper_daemon::cli::{Cli, Command, DEFAULT_STATE_DIR};
 use hostkeeper_daemon::packaged::{PACKAGED_BINARIES, PackagedError, start};
-use hostkeeper_daemon::selfunits::fallback_label;
 use hostkeeper_daemon::selfupdate::binary_dir;
 use hostkeeper_launchd::plist::{DAEMON_STATE_DIR, INSTALLED_BINARY};
 
@@ -44,9 +42,7 @@ fn parsed(words: &[String]) -> Command {
 /// daemon derives from the state directory of the `daemon` command the plist runs.
 fn started_dir() -> PathBuf {
     let args = program_arguments(&plist_text().expect("the plist"));
-    let Command::Daemon(flags) = parsed(&args) else {
-        panic!("the plist runs {args:?}, not the daemon");
-    };
+    let Command::Daemon(flags) = parsed(&args);
     binary_dir(&flags.state_dir)
 }
 
@@ -59,9 +55,7 @@ fn the_shipped_plist_starts_the_installed_binary_the_daemons_start_knows_as_pack
     // whose program is not the path the payload installs the binary at; and a job whose
     // arguments the daemon would not run as the daemon with its default state directory.
     let args = program_arguments(&plist_text().expect("the plist"));
-    let Command::Daemon(flags) = parsed(&args) else {
-        panic!("the plist runs {args:?}, not the daemon");
-    };
+    let Command::Daemon(flags) = parsed(&args);
     assert_eq!(flags.state_dir, Path::new(DEFAULT_STATE_DIR));
     assert_eq!(DAEMON_STATE_DIR, DEFAULT_STATE_DIR);
     assert_eq!(args[0], INSTALLED_BINARY);
@@ -70,7 +64,7 @@ fn the_shipped_plist_starts_the_installed_binary_the_daemons_start_knows_as_pack
 }
 
 #[test]
-fn the_job_programs_start_seeds_and_runs_current_of_the_directory_the_fallback_names() {
+fn the_job_programs_start_seeds_and_runs_current_of_the_directory_of_its_state_dir() {
     // Catches: a packaged start that does not give the job's first start a binary (the seed puts
     // the image in as `current`), that execs anything but `current` of the binary directory of
     // the state directory with the job's own arguments, or that execs a second time once the
@@ -108,21 +102,6 @@ fn the_job_programs_start_seeds_and_runs_current_of_the_directory_the_fallback_n
     called.borrow_mut().clear();
     assert!(start(&current, &[image.as_path()], &state, "0.1.5", &args, &exec).is_none());
     assert!(called.borrow().is_empty());
-}
-
-#[test]
-fn the_fallback_job_the_daemon_removes_is_not_the_job_the_pkg_installs() {
-    // Catches: a daemon that removes the plist of the job the pkg installs (its start would
-    // leave the Mac with no daemon job at the next boot), or one that boots out another job than
-    // the fallback of a release before the hand-over, `<daemon label>.fallback`, which the pkg
-    // does not ship, so a Mac that updated the old way keeps a timer job beside a hand-over.
-    let mac = Launchd::macos();
-    let label = fallback_label();
-    assert_eq!(label, format!("{}.fallback", Label::daemon()));
-    let removed = mac.unit_dir.join(format!("{label}{}", mac.unit_suffix));
-    let installed = Path::new("/").join(plist_path());
-    assert_ne!(removed, installed);
-    assert_eq!(removed.parent(), installed.parent());
 }
 
 #[test]

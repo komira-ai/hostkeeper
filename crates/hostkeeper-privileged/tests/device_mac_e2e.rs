@@ -323,8 +323,7 @@ fn hello_installs_updates_rolls_back_and_uninstalls_under_launchd() {
 /// both slots' plists are links in `/Library/LaunchDaemons` into `current`, resolving to
 /// `1.0.0`'s; launchd holds both jobs, loaded from `1.0.0`'s plists and running `1.0.0`'s
 /// program; `hello.a` serves `1.0.0` and `hello.b` does not run; the heartbeat
-/// reports hello healthy on `1.0.0`; and the daemon bound no socket at the `--admin-socket` it
-/// was given.
+/// reports hello healthy on `1.0.0`.
 fn install(rig: &Rig) {
     for slot in SLOTS {
         assert!(
@@ -342,10 +341,6 @@ fn install(rig: &Rig) {
     }
     rig.wait_serving("a", V1);
     rig.wait_observed(V1);
-    assert!(
-        !rig.host.admin_socket().exists(),
-        "the daemon binds no admin socket"
-    );
 }
 
 /// The update to `1.1.0`: `current` is `1.1.0` and `previous` `1.0.0`; both plists still are

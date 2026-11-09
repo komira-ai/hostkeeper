@@ -135,11 +135,12 @@ pub(crate) struct Request {
 /// The `[hook]` tables of the manifest: the one place the hook values are set. The manifest
 /// loader requires a hook with bounded steps, and a manifest without one is refused before its
 /// floor is read, which would count the release failed on a daemon too old to take it; so
-/// hostkeeper's own package carries one: the package's own binary, `hostkeeper update-hook`
-/// (`hostkeeper_daemon::update_hook`), whose every step does nothing, because hostkeeper's
-/// self-update is compiled into the daemon (design sections 4.4 and 6.6). No daemon runs it: the
-/// floor is above the legacy floor, so a daemon that takes the release runs built-in steps, and an
-/// older one defers it. The manifest says so in a comment.
+/// hostkeeper's own package carries one. Its command is a placeholder: no daemon runs it, and
+/// the shipped binary has no `update-hook` verb (its parser refuses it). Hostkeeper's
+/// self-update is compiled into the daemon (design sections 4.4 and 6.6), and the floor, the
+/// release's `hostkeeper_steps::OLDEST_READER`, is above the legacy floor, so every daemon that
+/// takes the release runs built-in steps; one older than the floor reads this table and defers
+/// the release as `daemon_too_old`. The manifest says so in a comment.
 const HOOK: &str = r#"# No daemon runs this hook's command: a daemon that takes this release runs built-in steps
 # that do nothing, and an older one defers it. The table is here because every manifest has a
 # bounded hook, and the floor is read after it.
@@ -174,8 +175,9 @@ fn binary_path(service: &str) -> String {
 /// What hostkeeper's own unit starts: `current` of the binary directory of its own update, under
 /// the daemon's default state directory (`hostkeeper_daemon::selfupdate::binary_dir`, which the
 /// packaging test holds this to). The self-update stages each new binary there and switches this
-/// link, and its fallback switches it back (design section 6.6), so the unit always starts the
-/// binary the update chose; the package's own `bin/hostkeeper` is what the update stages.
+/// link, and a settle that finds the new binary failed leaves it where it was (design section
+/// 6.6), so the unit always starts the binary the update chose; the package's own
+/// `bin/hostkeeper` is what the update stages.
 pub(crate) const SELF_UPDATE_CURRENT: &str = "/var/lib/updater/state/hostkeeper/bin/current";
 
 /// The program the unit of `service` must start: [`SELF_UPDATE_CURRENT`] for hostkeeper, a

@@ -14,14 +14,11 @@
 //!   ([`REAL_UNIT`]), or, for [`Plan::deb`], the bootstrap unit the deb installs,
 //!   `packaging/linux/hostkeeper.service` ([`BOOTSTRAP_UNIT`]), every line kept but these
 //!   ([`test_unit`]): `ExecStart=` runs the same program and flags with the test's directories,
-//!   the fixture's own flags before the verb, `--admin-socket` at the scratch directory (the real
-//!   units pass none, so a daemon before this checkout's would bind the host's default socket;
-//!   this checkout's ignores the flag) and `--heartbeat-secs 1`
-//!   after the verb; the program is `current` of the test's binary directory for the package
-//!   unit, and for the bootstrap unit a copy of the fixture daemon at a packaged path of the
-//!   scratch directory, named by the version [`N`] it stands for (`--fixture-packaged`: the
-//!   packaged binary seeds the empty binary directory and execs `current`); the seed
-//!   (`ExecStartPre=`: the test stages the first binary itself) of the package unit is left out.
+//!   the fixture's own flags before the verb and `--heartbeat-secs 1` after it; the program is
+//!   `current` of the test's binary directory for the package unit, and for the bootstrap unit a
+//!   copy of the fixture daemon at a packaged path of the scratch directory, named by the version
+//!   [`N`] it stands for (`--fixture-packaged`: the packaged binary seeds the empty binary
+//!   directory and execs `current`).
 //!   A change to the unit's `ExecStart=` that this does not know fails the test by name.
 //! - There is no fallback unit and no drop-in: the hand-over has neither
 //!   (docs/design/two-programs.md, section 4.3), and the unit has no start limit, so a daemon that
@@ -93,7 +90,7 @@ pub struct Plan {
     /// the update (`--fixture-hold-start`).
     pub hold_start: bool,
     /// The host is as the deb leaves it: no package of hostkeeper installed (only the binary
-    /// directory, as `self-update-seed` makes it), the unit enabled by a `WantedBy=` link to the
+    /// directory, as the packaged start seeds it), the unit enabled by a `WantedBy=` link to the
     /// unit the deb installs ([`DEB_UNIT`]) that `placed.json` does not list, and the release of
     /// [`NEXT`] carrying the real unit, run ([`REAL_UNIT`], as CI packages it). The main unit is
     /// the bootstrap unit ([`BOOTSTRAP_UNIT`]) over a packaged binary named [`N`], and the binary
@@ -191,7 +188,6 @@ pub struct Paths {
     pub state: PathBuf,
     pub packages: PathBuf,
     pub config: PathBuf,
-    pub socket: PathBuf,
     /// The directory of the packaged binary of a [`Plan::deb`] host.
     pub packaged_dir: PathBuf,
     /// The fixture's directory: `link/`, `units/` (the unit directory the daemon places
@@ -209,7 +205,6 @@ impl Paths {
             state: root.join("state"),
             packages: root.join("packages"),
             config: root.join("hostkeeper.toml"),
-            socket: root.join("admin.sock"),
             packaged_dir: root.join("packaged"),
             fixture: root.join("fixture"),
             held: root.join("held"),
@@ -252,13 +247,9 @@ pub fn test_unit(real: &str, paths: &Paths, fixture_flags: &[String]) -> String 
     let mut out = String::new();
     let mut exec_starts = 0;
     for line in real.lines() {
-        let dropped = [
-            "ExecStartPre=",
-            "RuntimeDirectory=",
-            "RuntimeDirectoryMode=",
-        ]
-        .iter()
-        .any(|key| line.starts_with(key));
+        let dropped = ["RuntimeDirectory=", "RuntimeDirectoryMode="]
+            .iter()
+            .any(|key| line.starts_with(key));
         if dropped {
             continue;
         }
@@ -291,7 +282,6 @@ pub fn test_unit(real: &str, paths: &Paths, fixture_flags: &[String]) -> String 
         let mut daemon = vec![program];
         daemon.extend(fixture_flags.iter().cloned());
         daemon.push("daemon".to_owned());
-        let mut socket_placed = false;
         let mut rest = words[2..].iter();
         while let Some(flag) = rest.next() {
             let ours = match *flag {
@@ -302,10 +292,6 @@ pub fn test_unit(real: &str, paths: &Paths, fixture_flags: &[String]) -> String 
                 "--config" => &paths.config,
                 "--state-dir" => &paths.state,
                 "--packages-dir" => &paths.packages,
-                "--admin-socket" => {
-                    socket_placed = true;
-                    &paths.socket
-                }
                 other => panic!(
                     "the real unit's ExecStart= has a flag this test does not place: {other}"
                 ),
@@ -313,9 +299,6 @@ pub fn test_unit(real: &str, paths: &Paths, fixture_flags: &[String]) -> String 
             assert!(rest.next().is_some(), "{flag} has a value in the real unit");
             daemon.push((*flag).to_owned());
             daemon.push(plain(ours));
-        }
-        if !socket_placed {
-            daemon.extend(["--admin-socket".to_owned(), plain(&paths.socket)]);
         }
         daemon.extend(["--heartbeat-secs", "1"].map(str::to_owned));
         out.push_str(&format!("ExecStart={}\n", daemon.join(" ")));
