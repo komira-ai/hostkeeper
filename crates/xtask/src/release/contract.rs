@@ -458,6 +458,22 @@ impl Service {
 /// What a version is followed by in the version of the failing build of hello.
 pub(crate) const FAIL_READY_SUFFIX: &str = "-fail-ready";
 
+/// What a version is followed by in the Debian version of the failing build's `.deb`
+/// ([`Package::deb_version`]): `X.Y.Z~fail.ready`. A `~` sorts before everything, the end of the
+/// version included, so dpkg and apt order the failing build below the release `X.Y.Z` it is built
+/// from; never above it, as `X.Y.Z-fail-ready` (a Debian revision `ready` of `X.Y.Z-fail`) would.
+/// The service version stays [`FAIL_READY_SUFFIX`]'s: a service version allows no `~`.
+pub(crate) const FAIL_READY_DEB_SUFFIX: &str = "~fail.ready";
+
+/// The repository entry an apt entry of a release names (`/etc/hostkeeper/repositories/<name>.sources`
+/// on a host): the shared repository's `testing` suite.
+pub(crate) const TESTING_ENTRY: &str = "komira-testing";
+
+/// The repository entry the apt entry of hello's failing build names: the suite `testing-fail` of
+/// the same repository, which holds that build alone (docs/design/packages-native.md, section
+/// 10.10).
+pub(crate) const TESTING_FAIL_ENTRY: &str = "komira-testing-fail";
+
 /// One kind of package a release carries: each has a package per platform it is built for
 /// ([`Package::platforms`]) and a release index of its own. The release carries hostkeeper's
 /// package, hello's and hello's failing build, the same package started with `--fail-ready`,
@@ -522,6 +538,25 @@ impl Package {
         }
     }
 
+    /// The Debian version of the package's `.deb` for the release `version`: the release's own,
+    /// or for the failing build the release's followed by [`FAIL_READY_DEB_SUFFIX`], which a
+    /// service version cannot carry, so its `.deb` is never taken for the release's.
+    pub(crate) fn deb_version(self, version: &Version) -> String {
+        match self {
+            Package::Hostkeeper | Package::Hello | Package::Mdm => version.to_string(),
+            Package::HelloFailReady => format!("{version}{FAIL_READY_DEB_SUFFIX}"),
+        }
+    }
+
+    /// The repository entry the package's apt entry names: [`TESTING_FAIL_ENTRY`] for the failing
+    /// build, [`TESTING_ENTRY`] for every other.
+    pub(crate) fn repository_entry(self) -> &'static str {
+        match self {
+            Package::Hostkeeper | Package::Hello | Package::Mdm => TESTING_ENTRY,
+            Package::HelloFailReady => TESTING_FAIL_ENTRY,
+        }
+    }
+
     /// The file name of the package's release index.
     pub(crate) fn index_name(self) -> &'static str {
         match self {
@@ -543,22 +578,29 @@ impl Package {
     }
 
     /// The file name of the native package of the release `version` for `platform` that the
-    /// release ships as an asset and publishes to the repository's `testing` channel
-    /// (docs/design/packages-native.md, items A21 and A23): `<service>_<v>_<deb>.deb` on a Linux
-    /// platform, `<service>-<v>-macos-arm64.pkg` on macOS, on the package's platforms. hostkeeper's
-    /// are the daemon's `.deb` that nfpm builds and the installer ([`installer_name`]), which
-    /// [`asset_names`] lists with the daemon's other packages. Hello's failing build has none,
-    /// since its version `<v>-fail-ready` is not the `X.Y.Z` every entry of the shared repository's
-    /// index must be.
+    /// release ships as an asset and publishes to the repository (docs/design/packages-native.md,
+    /// items A21 and A23): `<service>_<v>_<deb>.deb` on a Linux platform,
+    /// `<service>-<v>-macos-arm64.pkg` on macOS, on the package's platforms. hostkeeper's are the
+    /// daemon's `.deb` that nfpm builds and the installer ([`installer_name`]), which
+    /// [`asset_names`] lists with the daemon's other packages. Hello's failing build has its
+    /// `.deb` alone, `hello_<v>-fail-ready_<deb>.deb`, named by its service version: its Debian
+    /// version ([`Package::deb_version`]) carries a `~`, which an asset name does not, and the
+    /// suite `testing-fail` lists it under that version. Its `.pkg` is not released (no daemon
+    /// announces `macos-pkg` yet).
     pub(crate) fn native_name(self, version: &Version, platform: Platform) -> Option<String> {
-        if (self == Package::HelloFailReady) || !self.platforms().contains(&platform) {
+        if !self.platforms().contains(&platform) {
             return None;
         }
         let service = self.service().name();
-        Some(match platform.linux_arches() {
-            Some((deb, _)) => format!("{service}_{version}_{deb}.deb"),
-            None => format!("{service}-{version}-{}{INSTALLER_SUFFIX}", platform.name()),
-        })
+        let text = self.version_text(version);
+        match platform.linux_arches() {
+            Some((deb, _)) => Some(format!("{service}_{text}_{deb}.deb")),
+            None if self == Package::HelloFailReady => None,
+            None => Some(format!(
+                "{service}-{text}-{}{INSTALLER_SUFFIX}",
+                platform.name()
+            )),
+        }
     }
 }
 
@@ -611,10 +653,10 @@ pub(crate) fn is_bundle(name: &str) -> bool {
 ///
 /// and on macOS `hostkeeper-<v>-macos-arm64.pkg`, the installer ([`installer_name`]);
 ///
-/// and the native packages of the services ([`Package::native_name`]): `hello_<v>_<deb>.deb` on
-/// each Linux platform and `hello-<v>-macos-arm64.pkg` on macOS, and `mdm_<v>_amd64.deb` on
-/// linux-x86_64 (attested, no `.sha256`); hostkeeper's own are its `.deb` and its installer
-/// above, each listed once;
+/// and the native packages of the services ([`Package::native_name`]): `hello_<v>_<deb>.deb` and
+/// the failing build's `hello_<v>-fail-ready_<deb>.deb` on each Linux platform,
+/// `hello-<v>-macos-arm64.pkg` on macOS, and `mdm_<v>_amd64.deb` on linux-x86_64 (attested, no
+/// `.sha256`); hostkeeper's own are its `.deb` and its installer above, each listed once;
 ///
 /// the bundle of each binary tarball (the three programs'), Linux package, installer, hostkeeper package, hello package,
 /// hello's failing build, mdm package, native package and image; when both Linux platforms are given, once, the
