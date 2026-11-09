@@ -1,0 +1,54 @@
+# The command line of xtask at release 0.1.208 (commit 22880ebf409a35539d7ebe66abb80a4277119880), as release_ref::surface writes it.
+advisories --repo=!
+channels apt index --current=! --date=! --debs=! --description=! --keep= --label=! --origin=! --out=! --suite= --version=!
+channels apt promote --date=! --description=! --keep= --label=! --origin=! --out=! --stable=! --sums=! --testing=! --version=!
+channels apt read --aws= --bucket=! --out=! --suite=
+channels apt sign --dir=! --fingerprint=! --gpg= --output= --work=!
+channels apt write --aws= --bucket=! --debs= --distribution-id=! --hostname=! --last --next=! --no-pool --output= --suite= --version=
+channels assume --aws= --env-file=! --region=! --role-arn=! --session-name=! --token-url=!
+channels check-apt --apt-url= --arch=! --commit=! --package=! --root= --version=!
+channels check-rpm --arch=! --commit=! --container=! --docker= --package=! --scratch=! --url= --version=! --work=!
+channels decide --output= --result=
+channels gate --label=! --output= --require= --setting=!
+channels pkg check --curl= --sums=! --url=! --version=! --work=!
+channels pkg promote --attempts= --aws= --bucket=! --commit=! --dir=! --distribution-id= --tag=! --work=!
+channels pkg upload --aws= --bucket=! --commit=! --dir=! --tag=! --work=!
+channels rpm check-signed --dir=! --fingerprint= --signed-sums= --sums=! --version=!
+channels rpm promote --date=! --keep= --out=! --signed-sums=! --stable=! --sums=! --testing=! --version=!
+channels rpm repo index --current=! --date=! --keep= --out=! --rpms=! --suite= --version=!
+channels rpm repo read --aws= --bucket=! --out=! --suite=
+channels rpm repo sign --dir=! --fingerprint=! --gpg= --output= --work=!
+channels rpm repo write --aws= --bucket=! --curl= --distribution-id=! --hostname=! --last --next=! --no-pool --output= --rpms= --suite= --version=
+channels rpm sign --fingerprint=! --gpg= --out=! --output= --rpms=! --signed-at=! --sums=! --version=! --work=!
+db-backup --into=! --keep=! <command>!...
+install-tool --download=! --extract= --member= --out=! --sha256=!
+mdm-signing-test build --out=! --profile-identifier=!
+mdm-signing-test record --answer=! --installed= --kit=! --note= --step=! --trusted=
+mdm-signing-test report --kit=!
+mdm-signing-test send --api-key-file=! --api-url=! --apply --enrollment-id=! --kit=! --mdm-host=! --step=!
+netinstall-report --host-id=! --host=! --mac=! --mode=! --pending=! --pxe-log=!
+release channel-stage --from=! --index= --out=! --require-platforms= --service=! --version=!
+release channel-sync --channel-dir=! --every-secs= --since= --trust-list=!
+release check --commit=! --version=! <dir>!
+release check-binary <binary>! <version>! <commit>!
+release check-image-ui <image>! <ui>!
+release check-linux-pkg --coordinator-staged= --service= --staged= <package>!
+release check-macos-pkg --binary=! --fail-ready --gh= --service= --trusted-root= --version=! <expanded>!
+release compare-images <a>! <b>!
+release deb --archives= --binary=! --commit=! --fail-ready --out=! --platform=! --service=! --version=!
+release hkctl --commit=! --out=! --version=!
+release image-index --version=! <dir>!
+release image-layout --env-file= --out=! --version=! <dir>!
+release index --dir=! --fail-ready --service= --version=!
+release locate --commit=! --output= --repo=!
+release macos-pkg --binary=! --fail-ready --gh= --out=! --service= --stage=! --trusted-root= --version=!
+release mdm-fetch --dir=!
+release netboot --dir=! --pins=! --version=!
+release nfpm-stage --arch=! --binaries=! --gh-archive=! --gh-sha256=! --gh-version=! --out=! --trusted-root=!
+release package --archives= --binary=! --commit=! --fail-ready --out=! --platform=! --service= --trusted-root= --unit= --version=!
+release plan --commit=! --freeze= --output= --repo=! --version-file=
+release publish --commit=! --repo=! --version=! <dir>!
+release set-version --root= --version=!
+release stamp --commit=! --version=!
+release targets --dir=! --fail-ready --output= --repo=! --service= --version=!
+release version --commit=! --output= --version-file=
