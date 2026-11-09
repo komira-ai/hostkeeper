@@ -1,10 +1,11 @@
 //! `hostkeeper-named-daemon`: the `hostkeeper` binary of this build in the cross-release rig
 //! (`tests/self_update_across_releases.rs`), a program of the tests, not shipped.
 //!
-//! `daemon` is the only verb, as the `hostkeeper` binary's (`hostkeeper_daemon::cli::Cli`), and
-//! it is the shipped daemon as `hostkeeper daemon` runs it (`hostkeeper_daemon::cli`): the
-//! hand-over of its own update first (`hostkeeper_daemon::handover`: a binary that waits for a
-//! hand-over into another version execs that binary), the host's files, ports and adapters (the
+//! It parses the `hostkeeper` binary's command line (`hostkeeper_daemon::cli::Cli`) and takes
+//! only its `daemon` verb (any other is a usage error), and it is the shipped daemon as
+//! `hostkeeper daemon` runs it (`hostkeeper_daemon::cli`): the hand-over of its own update first
+//! (`hostkeeper_daemon::handover`: a binary that waits for a hand-over into another version execs
+//! that binary), the host's files, ports and adapters (the
 //! release channel, the attestation check with the host's `gh` and trusted root, the coordinator
 //! over mutual TLS, systemd or launchd), the start and the heartbeat and enrollment loops, served
 //! until it asks to exit for its own
@@ -31,9 +32,11 @@ const PROGRAM: &str = "hostkeeper-named-daemon";
 const EXIT_USAGE: u8 = 2;
 
 fn main() -> ExitCode {
-    let Cli {
-        command: Command::Daemon(flags),
-    } = Cli::parse();
+    let Cli { command } = Cli::parse();
+    let Command::Daemon(flags) = command else {
+        eprintln!("{PROGRAM}: `daemon` is the only verb of this program");
+        return ExitCode::from(EXIT_USAGE);
+    };
     daemon(&flags)
 }
 

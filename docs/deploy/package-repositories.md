@@ -115,7 +115,8 @@ packages (item A23) are the daemon's `hostkeeper_<version>_<arch>.deb` and the i
 `komira-testing`:
 
 - on Linux an `apt` entry of the host's repository entry `komira-testing`, the `testing` suite above
-  (`/etc/hostkeeper/repositories/komira-testing.sources`, placed by host setup), at the release's
+  (`/etc/hostkeeper/repositories/komira-testing.sources`, placed by host setup, which checks the
+  directory with `hostkeeper check-repositories` before and after it places it), at the release's
   version, pinned by the `.deb`'s SHA-256;
 - on a Mac a `macos-pkg` entry at `hostkeeper/<version>/<service>-<version>-macos-arm64.pkg` in the
   store `komira-testing` of the Mac's `/etc/hostkeeper/stores.toml`, an `https` store rooted at

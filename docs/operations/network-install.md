@@ -141,10 +141,11 @@ root's, with no write for group or others (`chown -R root:root`, `chmod 0755` th
 `chmod 0644` the files); each keyring is at most 1 MiB. `serve` checks the directory at its start
 with the daemon's own loader, as if it were at `/etc/hostkeeper/repositories/`, and refuses to
 start on what the daemon would refuse (a `Trusted: yes`, a `Signed-By` naming `<dir>`, a file no
-entry names, a link), naming the file; on a directory that is missing or holds no entry; on a
-keyring over 1 MiB; and on a file name a seed cannot carry (anything but `A-Za-z0-9._+-`, or a name
+entry names, a link, a keyring over 1 MiB, or armored without a `.asc` name), naming the file;
+on a directory that is missing or holds no entry; and on a file name a seed cannot carry (anything but `A-Za-z0-9._+-`, or a name
 starting with `.`). Check
-the loader's decision before the install window, not on the first machine.
+the loader's decision before the install window, not on the first machine:
+`hostkeeper check-repositories --dir <dir>`, run as root, judges `<dir>` the same way.
 
 ### 4. Choose the host of `hostkeeper-pxe`, and its token
 
