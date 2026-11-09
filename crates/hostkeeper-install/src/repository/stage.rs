@@ -1,6 +1,7 @@
-//! `stage` (packages-repositories.md section 4.3, packages-native.md section 10.2's order of
-//! checks): every check before the next reads a byte, and nothing outside the work directory
-//! and the staging directory is written.
+//! `stage` (packages-repositories.md section 4.3, packages-native.md section 10.2): every check
+//! before the next reads a byte, and nothing outside the work directory and the staging
+//! directory is written. The one rule on the package's files is that the hook program the
+//! manifest names is an executable regular file of it.
 
 use std::fs;
 use std::io::Read;
@@ -9,19 +10,11 @@ use std::path::Path;
 use sha2::{Digest, Sha256};
 
 use super::outcome::{Failure, Reason};
-use super::tree::{self, Rules};
 use super::{Order, RepositoryInstaller, Staged, io_failure, record_failure};
+use crate::program;
 
 /// The directory of the staged tree.
 pub const TREE: &str = "tree";
-
-/// The directory of the work directory the control members are extracted into.
-pub const CONTROL: &str = "control";
-
-/// The only service whose package may carry maintainer scripts: hostkeeper's own, for the
-/// service `hostkeeper` (packages-native.md section 10.4). Its tree is also held to its own list
-/// instead of the path rule ([`tree::OWN_FILES`]), when the package is named `hostkeeper` too.
-pub const OWN: &str = "hostkeeper";
 
 /// The SHA-256 of the file at `path`, lower-case hex.
 pub fn file_sha256(path: &Path) -> std::io::Result<String> {
@@ -133,42 +126,54 @@ impl RepositoryInstaller<'_> {
                 ),
             ));
         }
-        let control = work.join(CONTROL);
-        fs::create_dir(&control).map_err(|e| io_failure("the control directory", e))?;
-        let members = backend.control_members(tools, &file, &control, bound)?;
-        let own = (order.service.as_str() == OWN) & (package == OWN);
-        let scripts: Vec<&String> = members
-            .iter()
-            .filter(|m| !backend.allowed_members().contains(&m.as_str()))
-            .collect();
-        if !scripts.is_empty() && !own {
-            let names: Vec<&str> = scripts.iter().map(|s| s.as_str()).collect();
-            return Err(fail(
-                Reason::PackageScripts,
-                format!(
-                    "the package carries the maintainer scripts {}",
-                    names.join(", ")
-                ),
-            ));
-        }
         let tree_dir = staging.join(TREE);
         fs::create_dir(&tree_dir).map_err(|e| io_failure("the tree", e))?;
         backend.extract(tools, &file, &tree_dir, bound)?;
-        let rules = Rules {
-            service: order.service.as_str(),
-            package,
-            run: &order.run,
-            boot: order.boot.as_deref(),
-            params: order.params,
+        normalize(&tree_dir).map_err(|e| io_failure("the tree", e))?;
+        let hook = match order.hook.as_deref() {
+            Some(program) => {
+                program::check(&tree_dir, program)
+                    .map_err(|e| fail(Reason::ManifestInvalid, format!("the hook program: {e}")))?;
+                true
+            }
+            None => false,
         };
-        let hook = tree::check(&tree_dir, &rules)
-            .map_err(|e| fail(Reason::ManifestInvalid, e.to_string()))?;
-        super::enable::wanted(&tree_dir, &order.run)
-            .map_err(|e| fail(Reason::ManifestInvalid, e.to_string()))?;
         let meta = staging.join(backend.meta_dir());
         backend
             .keep(&work, &file, &meta, &order.repository)
             .map_err(|e| io_failure("the version's copy of the index", e))?;
         Ok(Staged { hook })
     }
+}
+
+/// Makes the extracted tree one the steps' trust check of the sealed tree accepts: every entry
+/// that is not a link loses its setuid, setgid and group and other write bits, and an entry
+/// another user owns than the tree directory goes to the tree directory's owner and group. dpkg
+/// installs from the kept package, not from this copy, so nothing installed changes.
+fn normalize(tree: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt, lchown};
+    let root = fs::metadata(tree)?;
+    let (uid, gid) = (root.uid(), root.gid());
+    let mut todo = vec![tree.to_path_buf()];
+    while let Some(dir) = todo.pop() {
+        for entry in fs::read_dir(&dir)? {
+            let path = entry?.path();
+            let meta = fs::symlink_metadata(&path)?;
+            if (meta.uid() != uid) | (meta.gid() != gid) {
+                lchown(&path, Some(uid), Some(gid))?;
+            }
+            if meta.file_type().is_symlink() {
+                continue;
+            }
+            let mode = meta.permissions().mode() & 0o7777;
+            let clean = mode & !0o6022;
+            if clean != mode {
+                fs::set_permissions(&path, fs::Permissions::from_mode(clean))?;
+            }
+            if meta.is_dir() {
+                todo.push(path);
+            }
+        }
+    }
+    Ok(())
 }

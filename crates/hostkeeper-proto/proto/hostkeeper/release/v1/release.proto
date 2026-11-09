@@ -126,12 +126,14 @@ message Manifest {
 
 // The service's hook, with the contract of `crates/hostkeeper-hook`.
 message Hook {
-  // A program in the staged tree and its leading arguments. The program is a relative path of
-  // plain names, a regular file reached through no link. Empty: the daemon's built-in steps,
-  // and the only value `oci-image` takes.
+  // A program and its leading arguments, given before the step's name. For a native installer
+  // (`apt`, `macos-pkg`) the program is an absolute path of plain names, a file the package
+  // installs; for any other it is a relative path of plain names, a regular file of the staged
+  // tree reached through no link. Empty: the daemon's built-in steps, and the only value
+  // `oci-image` takes.
   repeated string command = 1;
   // The hook's additive step run at boot: 1 to 64 bytes of `[a-z0-9_]`, no step's name. Needs a
-  // `command`.
+  // `command`, whatever the installer.
   optional string boot = 2;
   // The bound of each step.
   StepBounds timeout_secs = 3;

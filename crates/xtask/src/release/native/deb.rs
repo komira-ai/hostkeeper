@@ -8,9 +8,8 @@
 //!
 //! - `debian-binary`, `2.0` and a line break;
 //! - `control.tar.gz`, a gzip ustar of the directory `./` and the file `control` alone (the tar
-//!   writer drops a leading `./` from every other name, which dpkg reads the same): no maintainer
-//!   script, so
-//!   dpkg runs nothing of the package's own at install, upgrade or removal. `control` names the
+//!   writer drops a leading `./` from every other name, which dpkg reads the same): this builder
+//!   writes no maintainer script. `control` names the
 //!   package, its version and architecture, the maintainer, the installed size and the
 //!   description, and declares no dependency (the programs are those the archive package
 //!   carries, built for the release runner's glibc);

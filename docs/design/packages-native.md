@@ -70,70 +70,85 @@ distribution with no entry it can install shows `no_build_for_host`, as today; n
 
 | Today's archive | In a `.deb` | In a `.pkg` | Who acts on it |
 |---|---|---|---|
-| `bin/<program>` | `/usr/bin/<program>`, or `/usr/lib/<package>/` for a program no one types | `/Library/Application Support/<service>/bin/` | The format's tool installs it; the service runs from where it is installed (sections 4.7, 5) |
-| `units/` | `/usr/lib/systemd/system/<unit>`, installed disabled | `/Library/LaunchDaemons/<label>.plist`, `Disabled` true | hostkeeper enables, starts, stops and observes them (section 5) |
-| `files/` and `[[files]]` | The package's own files: `/etc/<service>/…` as conffiles, `/usr/share/<package>/…` | Under `/Library/Application Support/<service>/` | The format's tool; removed by the purge or the receipt |
-| `[hook] command` | The program `/usr/lib/<package>/hostkeeper-hook` | The program `/Library/Application Support/<service>/hostkeeper-hook` | hostkeeper runs it from the sealed tree, as today (below) |
+| `bin/<program>` | Wherever the package puts it, usually `/usr/bin/<program>`, or `/usr/lib/<package>/` for a program no one types | Wherever the package puts it, usually under `/Library/Application Support/<service>/bin/` | The format's tool installs it; the service runs from where it is installed (sections 4.7, 5) |
+| `units/` | The package's unit files, wherever it puts them, usually `/usr/lib/systemd/system/<unit>`; the package may enable them | The package's plists, usually `/Library/LaunchDaemons/<label>.plist` | hostkeeper starts, stops and observes the `run` units, and starts a `run` unit that nothing enables (section 5) |
+| `files/` and `[[files]]` | The package's own files, wherever it puts them: `/etc/<service>/…` as conffiles, `/usr/share/<package>/…` | The package's own files, usually under `/Library/Application Support/<service>/` | The format's tool; removed by the purge or the receipt |
+| `[hook] command` | The entry's `hook.command`: the absolute path of a program the package installs, and leading arguments | The same | hostkeeper runs the program's sealed copy in the version's `tree/` (below) |
 | `manifest.toml`'s name, version, platform | Control fields `Package`, `Version`, `Architecture` | `PackageInfo`'s `identifier` and `version` | Checked against the order at `stage` (sections 4.3, 4.7) |
 | `manifest.toml`'s `min_hostkeeper`, `[units] run`, `[health] url`, `[hook]` bounds and `boot`, `[params]` | The entry's manifest in the call (packages.md section 4.2), as for every entry since A1 | The same | Checked by the coordinator and the daemon (packages.md section 4.4) |
 | The archive's Sigstore bundle | The repository's signature and the pin (section 3.3) | The package's signature and the pin (section 4.7) | 10.3 |
 | Per-host settings | Not in any package: host setup's, as `hostkeeper.toml` is | The same | The operator |
 
-**The hook at a fixed path.** A package that has a hand-over carries its hook at one path: `usr/lib/<package>/hostkeeper-hook`
-in a `.deb`, `Library/Application Support/<service>/hostkeeper-hook` in a `.pkg`. A package without one
-gets the built-in steps (packages-lifecycle.md section 6.3); whether it has one is the file's presence, checked at
-`stage`. The entry's `hook.command` must be empty for every native installer, and `hook.boot` is then allowed, refused
-at `stage` when the package has no hook (A18 changes both rules of `hostkeeper-release`, which today refuses `boot` with
-an empty command; no caller sends a native entry yet). The hook's bounds, `verify_deadline_secs`, `boot`,
-`promotion_ceiling_secs` and `cleanup_retries` stay in the manifest's `Hook`. The file is the hook program itself,
-called with the step as its first argument: a service whose hook today is its own binary with a verb (`tierstore
-update-hook`) ships a two-line wrapper there; tierstore's packaging, in its own repository, adds it. The
-daemon runs `<version dir>/tree/<path> <step> [<version dir>] --params <file>` in a transient unit, under the step's
-bound: the contract of `crates/hostkeeper-hook` is unchanged (the steps `prepare`, `cutover`, `verify`, `rollback`,
-`cleanup`, `uninstall` and `boot`, the exit codes, the last line, the params file). The program comes from the sealed
-tree, so `prepare` runs before `activate`, from the version being installed, as today. Why fixed: the caller of
-`SetDesired` no longer chooses which program of the package runs as root, nor its arguments. What that caller decides
-(packages.md section 8.2) narrows to the params, the bounds, the `run` units and the health URL; the program is part of
-the signed bytes, at a path the package's builder chose.
+**The hook is the manifest's command.** The entry's `hook.command` names the hook. Its first element is the absolute
+path (the grammar of `hostkeeper_config::names::check_path`) of a file the package installs; the elements after it are
+leading arguments. A tierstore entry with `["/usr/bin/tierstore", "update-hook"]` runs `/usr/bin/tierstore update-hook
+<step> [<version dir>] --params <file>`, in a transient unit under the step's bound: the contract of
+`crates/hostkeeper-hook` is unchanged (the steps `prepare`, `cutover`, `verify`, `rollback`, `cleanup`, `uninstall` and
+`boot`, the exit codes, the last line, the params file). A service ships no wrapper for it. An empty `command` gets the
+built-in steps (packages-lifecycle.md section 6.3), and `hook.boot` needs a command, for every installer. The hook's
+bounds, `timeout_secs`, `verify_deadline_secs`, `boot`, `promotion_ceiling_secs` and `cleanup_retries`, stay in the
+manifest's `Hook`.
 
-**What replaces `manifest.toml`: nothing hostkeeper-specific in the package but the hook.** The package's identity is
-in its own control fields. What hostkeeper needs to run the service is the entry's manifest, the message A1 built,
-which the coordinator and the daemon check and every set audits. A small hostkeeper file inside the package was
-weighed: it would be signed with the package, but it would be a second place for what the manifest says, a
+The daemon runs the sealed copy of that file in the version's extracted tree, `<version dir>/tree/<path>`, following
+links inside the tree as if it were the root of the host (a link to `/usr/lib/tierstore/tierstore` is read from the
+tree, never from the host). So `prepare` runs before `activate`, from the version being installed, as it always did; and
+`rollback` runs the previous version's program from its kept tree, which works also after a first install's package was
+purged. The seal's digest covers the program. `stage` refuses (`Failed`, `release`, `manifest_invalid`, the text naming
+the command and why) only a command whose program is not an executable regular file of the extracted package, or whose
+first element is not an absolute path (the coordinator refuses the latter earlier).
+
+What the caller of `SetDesired` decides is therefore wider than before (packages.md section 8.2): the program among the
+files of the package, and its leading arguments, besides the params, the bounds, the `run` units and the health URL.
+That is acceptable because the manifest is checked by the coordinator and by the daemon and every set is audited, and
+because the program is still a file of the signed, pinned bytes: the caller cannot name a program the package does not
+contain.
+
+**What replaces `manifest.toml`: nothing hostkeeper-specific in the package at all.** The package's identity is
+in its own control fields. What hostkeeper needs to run the service, the hook included, is the entry's manifest, the
+message A1 built, which the coordinator and the daemon check and every set audits. A small hostkeeper file inside the
+package was weighed: it would be signed with the package, but it would be a second place for what the manifest says, a
 hostkeeper format again, and one more file every service's packaging writes.
 
-**Maintainer scripts: none.** A service's `.deb` has no `preinst`, `postinst`, `prerm`, `postrm`, `config` or `triggers`
-in its control archive, only `control`, `md5sums` and `conffiles`; dpkg needs none of the scripts. A service's `.pkg`
-has no `Scripts` in its component and no script in its `Distribution` (the latter refused already, section 4.7). What a
-script would do at install is done by the unit (`StateDirectory=`, `DynamicUser=`), by the hook's `prepare`, which runs
-as root, or by host setup. The daemon refuses a package with a script at `stage`, before anything is installed:
-`Failed`, `release`, `package_scripts`.
+**Maintainer scripts run.** A `.deb` may have `preinst`, `postinst`, `prerm`, `postrm`, `config` and `triggers`, and a
+`.pkg` may have `Scripts` in its component and `preinstall` and `postinstall` (`PackageInfo`'s pre and post scripts too).
+The `package_scripts` reason is no longer produced; its token stays in the enums so that a report from an older daemon
+still parses. What a script must not do is start a unit before the hand-over, and that is held on the two formats
+differently:
 
-**Where a package's files may go.** Without scripts a package could still act through its files, so a service's `.deb`
-holds files only under `/usr/bin/`, `/usr/lib/<package>/`, `/usr/share/<package>/`, `/usr/share/doc/<package>/`,
-`/etc/<service>/`, and its units in `/usr/lib/systemd/system/`, as section 4.7's rule does for a `.pkg`. The units there
-are plain unit files named for the service, `<service>.<kind>`, `<service>-*.<kind>` or `<service>@*.<kind>` of the
-kinds `service`, `socket` and `timer`, whether or not they are `run` units (mdm's hook enables units that are not,
-10.9). Anything else (an enablement link under `/etc/systemd/system/`, a cron file, a `sudoers.d` file, a generator, an
-`ld.so.conf.d` file, a drop-in directory, a link, or a unit of another name in `/usr/lib/systemd/system/`) is
-`manifest_invalid` at `stage`. So nothing of the package's own runs as root at install, only the format's tool and the
-triggers of the host's own packages (`man-db`, systemd's reload), as for any install; nothing of the package can enable
-or start its units (section 5's install check becomes a check at `stage`); and a Mac's install no longer runs package
-code with the network. The one exception is hostkeeper's own package (10.4).
+- **On `apt`**, the installer writes `/usr/sbin/policy-rc.d` (mode 0755, `exit 101`) around the `apt-get install` of
+  `activate` (install, upgrade, downgrade and rollback) and around each `dpkg --purge` try of `remove`. `invoke-rc.d`
+  and `deb-systemd-invoke` honour it, so no script of the package, nor of a dependency apt installs in the same run,
+  starts, stops or restarts a service. The file is removed afterwards, on success and on failure, and a stale one (a
+  killed run) is removed at daemon start before any package-manager call. A `policy-rc.d` that is not hostkeeper's own
+  text, an operator's, is left untouched and not replaced, and then rules. A `postinst` may enable the package's units,
+  and they stay enabled; hostkeeper starts them at `cutover`.
+- **On a Mac**, the `.pkg`'s scripts run when `installer` runs them, during `activate`, before `cutover`, and nothing
+  holds back a job they load. A service whose `.pkg` scripts bootstrap its job starts it before `cutover`, so such a
+  service needs the built-in steps or a hook that tolerates it. Booting out and bootstrapping the `run` labels at
+  `cutover` stays hostkeeper's.
+
+**What hostkeeper does not decide about a package's files.** There is no path rule, unit-name rule, or rule about
+links, drop-ins, cron files or `sudoers.d` files: the package installs what it installs, and dpkg's own refusal of a
+file another package owns stays dpkg's. What stays is integrity, not shape: the order's SHA-256 pin, apt's signature
+check (the `.pkg` signer check on a Mac), `apt-mark hold` once installed, and `package_not_ours` for a package of the
+same name installed by hand. The `run` units are not checked against the package either: hostkeeper never refuses one.
+It writes the `[Install]` links (`WantedBy=`, `RequiredBy=`) of a `run` unit whose file is in the tree, as before, and
+leaves any link already there. At `cutover` and at every daemon start it starts each `run` unit that has no such link
+(no `[Install]` targets, or no unit file in the package), so a unit that nothing enables still runs.
 
 **What the daemon checks before it runs anything**, in order, each before the next reads a byte:
 
 1. **The order**: the entry's shape and kind, the installer listed, `min_hostkeeper`, the manifest's checks
-   (packages.md section 4.4), `hook.command` empty.
+   (packages.md section 4.4), `hook.command`'s first element absolute and `hook.boot` only with a command.
 2. **The bytes**: for `apt`, the suite's signature by the host's keyring, the stanza's `SHA256` equal to the pin and
    its `Size` within bounds, the simulation, the downloaded file hashed equal to the pin (section 4.3); for
    `macos-pkg`, the size and digest equal to the pin, then the signature's leaf among the host's signers (section 4.7).
 3. **The identity**: the control fields or `PackageInfo` equal to `package`, the version and the architecture.
-4. **No scripts**, as above.
-5. **The tree**, extracted with no script run: the core's bounded walk (and `MacVerify` on a Mac); every `run` unit or
-   label a file of the tree, every plist `Disabled`; every file within the path rule above (section 4.7's on a Mac); the hook,
-   when present, a regular executable file at its path, reached through no link.
-6. **The seal**. Only then the hook's `prepare`, from the tree, and `activate`, the format's tool under its bound.
+4. **The tree**, extracted with no script run: the core's bounded walk (and `MacVerify` on a Mac). The copy's modes
+   are then normalized: setuid, setgid and group or other write bits are stripped and a foreign owner is changed to the
+   tree directory's owner, since dpkg installs from the kept `.deb`, not from this copy. The manifest's hook program,
+   when it names one, is an executable regular file of the tree (links followed inside the tree).
+5. **The seal**. Only then the hook's `prepare`, from the tree, and `activate`, the format's tool under its bound.
 
 ### 10.3 Trust: the key, the signature and the pin; the attestation leaves the host
 
@@ -212,7 +227,7 @@ archive. two-programs.md section 10 had the package unit start `current` for goo
 old as the host's last `.deb`; from A19 it is the last version that confirmed. On a Mac the plist already starts
 `/usr/local/bin/hostkeeper` (two-programs.md section 4.1).
 
-**hostkeeper's own package keeps its scripts**, the one exception to 10.2's rule. It is also the bootstrap package,
+**hostkeeper's own package has scripts**, like any package (10.2). It is also the bootstrap package,
 installed by dpkg or by MDM before any daemon runs, so it makes its directories and enables its own unit or job. Its
 scripts are the texts the packaging tests hold today, with one change: the `.pkg`'s postinstall bootstraps the
 job only when launchd does not have it loaded, so an `installer` the daemon itself runs never boots the daemon out
@@ -221,9 +236,8 @@ keeps a Mac from installing an older `.pkg` whose postinstall boots the job out.
 at the next boot; the packaging tests hold it unchanged, and a release that changes it says so in its notes. The
 `.deb`'s postinst already enables the unit only on a first install and never starts or restarts it, and its prerm
 acts only on `remove`; every shipped `.deb` has those texts (A19's device test upgrades from the `.deb` of the release
-X1 pins). The daemon allows scripts only when both the service and the package are `hostkeeper`; the repository's
-signature, or the package's, is their trust, as for every byte. Its file paths are its own package's list
-(packaging/linux/nfpm.yaml, docs/macos.md), held by its packaging tests, not the rule of 10.2 for a service.
+X1 pins). The repository's signature, or the package's, is their trust, as for every byte. Its file list is
+packaging/linux/nfpm.yaml and docs/macos.md, held by its packaging tests; the daemon applies no rule of its own to it.
 
 **The bootstrap install is adopted.** A host set up from the `.deb` or the `.pkg` holds `hostkeeper` in its package
 database with no record. A daemon with a native installer that finds, at its start, its own package at the version
@@ -303,7 +317,7 @@ does is not one we run.
   between native installers, is `installer_changed`, as today. The move is an update: `stage` the native version, the
   hook's `prepare` from its tree, then `activate`, which first takes away the archive version's placed units and files
   (listed in `placed.json`; a placed unit in `/etc/systemd/system/` would hide the package's unit of the same name),
-  then installs the package and enables its units; then `cutover`, `verify` and `cleanup`. The archive version stays
+  then installs the package; then `cutover`, `verify` and `cleanup`. The archive version stays
   on the host as `previous` until the next update's `retire`.
 - **The move's rollback**, automatic or a `ForceRollback`, before or after the move settled: `activate` the archive
   version again. It purges the native package (for a service; for `hostkeeper`, the package stays at the version apt
@@ -378,12 +392,12 @@ does is not one we run.
 | # | Item, one pull request | After | In parallel with |
 |---|---|---|---|
 | A6 | The installer trait, the version directory (`target.json`, `tree/`), the walk, built-in steps, `installed` and its tombstone, `ServiceBeat.installer`, `installer_changed` with the move's exception (10.6). `tarball`, `place`, the gzip and xz decoders and the free layout are taken out | A4 | A18, A20 |
-| A7 | The repository installer and `apt` (section 8), plus the hook at its fixed path, the refusal of scripts and the path rule (10.2) | A6, A16 | A18, A20 |
-| A9 | `macos-pkg` (section 4.7) without the attestation check, plus the hook's fixed path and the refusal of scripts | A6, A7, M11 | A17's Linux half, A18 to A24 on Linux |
+| A7 | The repository installer and `apt` (section 8), plus the manifest's hook program checked at `stage` and the `policy-rc.d` guard around dpkg (10.2) | A6, A16 | A18, A20 |
+| A9 | `macos-pkg` (section 4.7) without the attestation check, plus the manifest's hook program checked at `stage` | A6, A7, M11 | A17's Linux half, A18 to A24 on Linux |
 | A17 | Host setup places the repository entries and keys, and on a Mac the stores and signers (section 8) | A7, A9 | A19 |
-| A18 | Coordinator and `hostkeeper-release`: the move's pick, the rollback across the move, `hostkeeper`'s list rule (10.4), `hook.command` empty and `boot` allowed for native entries, no attestation on a `macos-pkg` entry, each host's services and installers in `Hosts.List` | A16 | A6, A7, A20 |
-| A19 | Daemon: `hostkeeper`'s self-update through a native installer (10.4), the bootstrap install adopted and held, the move and its rollback (10.6), scripts allowed in `hostkeeper`'s package alone, the `.pkg`'s postinstall that bootstraps only a job not loaded, the `rollback_below_installer` row | A7, A18 (A9 for the Mac half) | A20, A17 |
-| A20 | Packaging: `hello` and its fail-ready build as a `.deb` and a `.pkg`, `mdm` as a `.deb` (its paths and units moved, docs/operations/mdm-package.md), each with its hook at the fixed path and no script | none | A6 to A19 |
+| A18 | Coordinator and `hostkeeper-release`: the move's pick, the rollback across the move, `hostkeeper`'s list rule (10.4), an absolute `hook.command` and `boot` with a command accepted for native entries, no attestation on a `macos-pkg` entry, each host's services and installers in `Hosts.List` | A16 | A6, A7, A20 |
+| A19 | Daemon: `hostkeeper`'s self-update through a native installer (10.4), the bootstrap install adopted and held, the move and its rollback (10.6), the `.pkg`'s postinstall that bootstraps only a job not loaded, the `rollback_below_installer` row | A7, A18 (A9 for the Mac half) | A20, A17 |
+| A20 | Packaging: `hello` and its fail-ready build as a `.deb` and a `.pkg`, `mdm` as a `.deb` (its paths and units moved, docs/operations/mdm-package.md), each with its hook command naming its program | none | A6 to A19 |
 | A21 | `hello`'s (stage 7) and then `mdm`'s (stage 8) release: the packages to the repository's testing suite and the testing store through the shared release machinery; `release targets` lists the native entry before the archive one; `hello-desired.yml` the same | A18 released, A20, the project's repository | A19 |
 | A22 | The runbook of the move: per host the repository entries, the restart and the check that `apt` is announced; the stages' conditions and stage 9's two queries | A17, A18 | A19 to A21 |
 | A23 | hostkeeper's own release (stage 8): its `.deb` and `.pkg` through the release machinery, the native entry before the archive one | A19 released, A21 | none |
@@ -404,10 +418,10 @@ these items: whichever of S3 and A19 lands second carries the other's change to 
 | Installers in the end state | `apt` and `macos-pkg`; `dnf` when an RPM host is run; no `apk` or `pacman` (a later design may add `apk`) | Those are the hosts we run; a backend for a host we do not run is a speculative port (rule B20) |
 | `tarball` | Withdrawn, never built | Every host we run has a native installer |
 | `oci-image` (A10) | Withdrawn | No service we run ships an image to a host; the coordinator's image is not a hostkeeper service |
-| What replaces `manifest.toml` | The package's control fields for its identity, the entry's manifest for the rest; nothing hostkeeper-specific in the package but the hook | The manifest is built, checked twice and audited; a file in the package would be a second place and a hostkeeper format again |
-| The hook | The program at a fixed path of the package, run from the sealed tree with today's contract; `hook.command` empty, `boot` allowed | The caller of `SetDesired` no longer picks a root program or its arguments |
-| Maintainer scripts and paths | None in a service's package, refused at `stage` (`package_scripts`); files only under its own paths; hostkeeper's own package keeps its bootstrap scripts | dpkg and `installer` need none; with none, only the format's tool runs at install and nothing enables or starts the units but hostkeeper |
-| Units a service's package installs | Plain unit files named for the service (`<service>.<kind>`, `<service>-*.<kind>`, `<service>@*.<kind>`; kinds `service`, `socket`, `timer`) in `/usr/lib/systemd/system/`, run units or not; no drop-in, link or unit of another name there | mdm's package has units its hook enables that are not run units (the proxy, depsyncer, the certificate jobs and their timer); the name rule keeps a package from shadowing a unit of the host or changing one through a drop-in |
+| What replaces `manifest.toml` | The package's control fields for its identity, the entry's manifest for the rest; nothing hostkeeper-specific in the package at all | The manifest is built, checked twice and audited; a file in the package would be a second place and a hostkeeper format again |
+| The hook | The manifest's `hook.command`: an absolute path of a file the package installs, and leading arguments; run from its sealed copy in the version's tree with today's contract; empty means the built-in steps | One convention for a service to follow, the hook contract; the program is still a file of the signed, pinned bytes, and the manifest is checked twice and audited |
+| Maintainer scripts and paths | Allowed, with any paths; on `apt` a `policy-rc.d` that exits 101 is written around every dpkg run that can run a script; `package_scripts` is no longer produced | Hostkeeper installs any package; what it holds is integrity (pin, signature, hold, `package_not_ours`), and the hand-over stays hostkeeper's because no script can start a unit meanwhile |
+| Units a service's package installs | Any; hostkeeper never refuses a `run` unit, writes the `[Install]` links of one whose file is in the tree, and starts at `cutover` and at every daemon start each `run` unit with no such link | A unit with no `[Install]` is a valid way to ship a unit hostkeeper alone starts |
 | The attestation | Leaves the host; the publish job that alone holds the signing keys checks it before it signs; a `macos-pkg` entry carries none | The key and the pin bind the bytes on every platform; one trust model; the loss is stated in 10.3 |
 | `release_channel` and `[trusted_signers]` | Still accepted by the loader; the daemon stops reading them | An older binary requires them after a fallback, `hostkeeper-pxe` reads the signers, and `hostkeeper.toml` is never rewritten |
 | `hostkeeper-package` | Shrunk, not deleted: pxe's attestation check and `macos-pkg`'s fetch by digest stay | Both still have users; moving them would only rename them |

@@ -127,10 +127,11 @@ fn natives(dist: &Path, package: Package) {
 
 /// The hook bounds, units, health URL and params of hello's archive manifest for `units`
 /// (`systemd` or `launchd`), as a native entry's manifest names them in JSON.
-fn hello_manifest(package: &str, run: [&str; 2], units: &str) -> Value {
+fn hello_manifest(package: &str, run: [&str; 2], units: &str, program: &str) -> Value {
     json!({
         "package": package,
         "hook": {
+            "command": [program, "update-hook"],
             "timeoutSecs": {
                 "prepare": "30", "cutover": "60", "verify": "30", "rollback": "60",
                 "cleanup": "30", "uninstall": "60",
@@ -162,13 +163,23 @@ fn expected_native(dist: &Path, platform: Platform) -> Value {
             "locations": [{"store": "komira-testing", "locator": format!("hostkeeper/0.1.5/{name}")}],
             "digest": digest,
             "bytes": bytes.to_string(),
-            "manifest": hello_manifest("dev.hostkeeper.hello", ["hello.a", "hello.b"], "launchd"),
+            "manifest": hello_manifest(
+                "dev.hostkeeper.hello",
+                ["hello.a", "hello.b"],
+                "launchd",
+                "/Library/Application Support/hello/bin/hello",
+            ),
         });
     }
     json!({
         "installer": "apt",
         "digest": digest,
-        "manifest": hello_manifest("hello", ["hello@a.service", "hello@b.service"], "systemd"),
+        "manifest": hello_manifest(
+            "hello",
+            ["hello@a.service", "hello@b.service"],
+            "systemd",
+            "/usr/lib/hello/hello",
+        ),
         "repository": "komira-testing",
         "packageVersion": "0.1.5",
     })
@@ -323,8 +334,8 @@ fn hostkeeper_lists_its_deb_and_its_installer_before_its_archive_on_every_platfo
     // not a repository entry of the testing suite pinned by the daemon's `.deb`'s own SHA-256 at
     // the release's version, an installer entry whose location is not where the installers'
     // testing directory holds it, that carries an attestation or names hello's identifier, a
-    // native manifest with another floor than the archive's (`OLDEST_READER`), the archive's
-    // placeholder hook command, or no run unit on Linux; and the archive entry after it changed:
+    // native manifest with another floor than the archive's (`OLDEST_READER`), a hook command on hostkeeper's entry (it
+    // runs built-in steps), or no run unit on Linux; and the archive entry after it changed:
     // other bytes than the index lists, a platform left out, the bundle's size or digest not the
     // bundle's own, a location misspelt, the channel not first, or a manifest that carries more
     // than `min_hostkeeper`.
@@ -356,14 +367,19 @@ fn hostkeepers_native_entries_name_the_package_its_daemon_takes_as_its_own() {
     // Catches: a native entry of hostkeeper whose package its daemon does not take as its own
     // package (a `.pkg` identifier other than the daemon's launchd label, which the installer
     // builder and the daemon share, or a `.deb` package other than `hostkeeper`), so the daemon
-    // would refuse the bootstrap package's scripts and paths at stage; or a run unit that is not
-    // a unit file of the daemon's own `.deb`, which stage refuses.
+    // would refuse the package as not its own; a run unit that nfpm.yaml does not install in the
+    // daemon's own `.deb`; or a hook command on it.
     let (_root, dist) = dist("targets-hostkeeper-own");
     built(&dist, Package::Hostkeeper);
     let got = answered(&targets(&request(&dist, Package::Hostkeeper, None)).expect("the targets"));
     for (platform, list) in got.as_object().expect("an object") {
         let native = &list["entries"][0]["manifest"];
         let package = native["package"].as_str().expect("a package");
+        assert_eq!(
+            native["hook"].get("command"),
+            None,
+            "{platform}: hostkeeper's daemon runs built-in steps"
+        );
         if platform == "macos-arm64" {
             assert!(
                 hostkeeper_install::macos_pkg::own::is_own("hostkeeper", package),
@@ -379,12 +395,16 @@ fn hostkeepers_native_entries_name_the_package_its_daemon_takes_as_its_own() {
         assert_eq!(package, "hostkeeper", "{platform}");
         let run = native["run"].as_array().expect("run units");
         assert!(!run.is_empty(), "{platform}");
+        let nfpm = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packaging/linux/nfpm.yaml"),
+        )
+        .expect("read nfpm.yaml");
         for unit in run {
-            let file = format!("usr/lib/systemd/system/{}", unit.as_str().expect("a unit"));
-            assert!(
-                hostkeeper_install::repository::tree::OWN_FILES.contains(&file.as_str()),
-                "{file}"
+            let file = format!(
+                "dst: /usr/lib/systemd/system/{}\n",
+                unit.as_str().expect("a unit")
             );
+            assert!(nfpm.contains(&file), "nfpm.yaml installs no {file}");
         }
     }
 }
@@ -397,7 +417,7 @@ fn hello_lists_its_native_entry_before_its_archive_on_every_platform() {
     // own SHA-256 at the release's version, a `.pkg` entry whose location is not where the
     // installers' testing directory holds it or that carries an attestation, and a native
     // manifest that is not the archive's own (its hook bounds, run units, health URL, params and
-    // floor) with no hook command, the package's name and the installer's bounds.
+    // floor), the hook command naming the program the package installs, the package's name and the installer's bounds.
     let (_root, dist) = dist("targets-hello");
     built(&dist, Package::Hello);
     let got = answered(&targets(&request(&dist, Package::Hello, None)).expect("the targets"));
@@ -530,6 +550,7 @@ fn mdm_gets_its_one_platform_its_native_entry_first_and_the_floor_its_manifest_n
         "manifest": {
             "package": "mdm",
             "hook": {
+                "command": ["/usr/lib/mdm/mdm", "update-hook"],
                 "timeoutSecs": {
                     "prepare": "300", "cutover": "120", "verify": "60", "rollback": "120",
                     "cleanup": "30", "uninstall": "120",

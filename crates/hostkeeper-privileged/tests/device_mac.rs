@@ -470,6 +470,7 @@ fn a_fixture_hook_runs_as_a_launchd_job_and_is_stopped_at_its_timeout() {
     let _booted = Booted(step_label.clone());
     let call = StepCall {
         service: "hkci",
+        hook_args: &[],
         invocation: Invocation {
             step: Step::Prepare,
             // `prepare` is given a staged release; the fixture only reads its params.

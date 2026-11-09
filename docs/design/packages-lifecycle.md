@@ -8,7 +8,7 @@ and drift are that file's section 4; a Mac's `.pkg` comes through the `macos-pkg
 4.7; the `deb`, `rpm`, `arch` and `apk` cases below are withdrawn with those installers. Revised by
 [packages-native.md](packages-native.md): the `tarball` and `oci-image` cases below are withdrawn, the
 `hostkeeper-archive` cases hold only until the move of its section 10.6 and are deleted with it, a hook is the
-program at its fixed path in the tree (its section 10.2), and hostkeeper's own update installs its package after the
+manifest's `hook.command`, run from its program's sealed copy in the tree (its section 10.2), and hostkeeper's own update installs its package after the
 new binary confirms (its section 10.4).
 
 ## 6. An update, a rollback and an uninstall
@@ -61,17 +61,18 @@ An update runs, in order:
 6. After a confirmed switch: installer `retire` of every version but `current` and `previous` (today's prune).
 
 The installer changes what is on disk. The hook changes what runs: it stops the old processes, drains, migrates, starts
-the new ones and says whether the new release serves. A package whose own scripts restart the service (a `postinst`
-running `deb-systemd-invoke restart`) does the hand-over outside the hook. hostkeeper does not suppress that. A service
-that needs the hook's hand-over builds its packages so their scripts do not start or restart its units (debhelper's
-`--no-start --no-restart-after-upgrade`, an `.rpm` without `%systemd_postun_with_restart`), and its `cutover` restarts
-them. The service's conformance tests check it. The daemon enables the `run` units it places (`tarball`,
-`hostkeeper-archive`) and those of a repository package or a `macos-pkg` package, which installs them disabled
-(packages-repositories.md sections 5 and 4.7); a link a package's scripts made is left unclaimed. The placer's unit lint applies only to placed units.
+the new ones and says whether the new release serves. A package whose own scripts restart the service (a `postinst` running `deb-systemd-invoke restart`)
+would do the hand-over outside the hook. On `apt` the installer prevents it: it holds a `policy-rc.d` that exits 101
+around every dpkg run that can run a script (packages-native.md section 10.2), so the packager need not build its
+packages with `--no-start --no-restart-after-upgrade`; the hook's `cutover` or the built-in steps start the units. On a
+`macos-pkg` nothing holds a script back, and a job it loads starts before `cutover`. The daemon writes the `[Install]`
+links of the `run` units it places (`tarball`, `hostkeeper-archive`) and of a repository package's units whose files are
+in the tree, leaves a link a package's scripts made, and starts a `run` unit that has no link at `cutover` and at every
+daemon start (packages-repositories.md sections 5 and 4.7). The placer's unit lint applies only to placed units.
 
 ### 6.3 Built-in steps, for a service with no hand-over of its own
 
-A manifest whose `hook.command` is empty gets the daemon's built-in steps, which are shipped code like an installer:
+A manifest whose `hook.command` is empty gets the daemon's built-in steps (a non-empty command is the absolute path of a file the package installs, with leading arguments, packages-native.md section 10.2), which are shipped code like an installer:
 `prepare` and `cleanup` do nothing; `cutover` restarts every `run` unit and waits for it to be active within its bound;
 `verify` passes when every `run` unit is active and `health_url`, if any, answers 2xx, and defers otherwise until
 `verify_deadline_secs`; `rollback` restarts the units again, after the switch back; `uninstall` does nothing. This is

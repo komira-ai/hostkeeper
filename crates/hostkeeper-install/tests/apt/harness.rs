@@ -186,8 +186,10 @@ impl Env {
             keys.join("main.gpg").display()
         );
         let entry = parse(REPO, &text, &keys).expect("a repository entry");
+        let host = FakeHost::new(&lock_path, Arc::clone(&events));
+        host.watch_root(&root);
         Env {
-            host: FakeHost::new(&lock_path, Arc::clone(&events)),
+            host,
             records: MemRecords {
                 events: Arc::clone(&events),
                 ..MemRecords::default()
@@ -322,8 +324,7 @@ pub fn order_of(service: &str, deb: &Deb, run: &[&str]) -> Order {
         repository: REPO.to_owned(),
         pin: deb.pin(),
         run: run.iter().map(|u| (*u).to_owned()).collect(),
-        boot: None,
-        params: false,
+        hook: None,
         bounds: Bounds {
             stage: STAGE_SECS,
             activate: ACTIVATE_SECS,

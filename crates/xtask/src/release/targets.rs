@@ -39,9 +39,11 @@
 //!         macos-arm64.pkg (the Mac's store of the testing directory, rooted at pkg/),
 //!         digest and bytes the .pkg's; no attestation (the key and the pin bind the bytes,
 //!         packages-native.md section 10.3)
-//! manifest the archive's own manifest.toml as an entry's manifest: its hook without the
-//!         command (the package's hook is its program at the fixed path; hostkeeper's package
-//!         has none, and its daemon runs built-in steps), its run units, health URL, params and
+//! manifest the archive's own manifest.toml as an entry's manifest: its hook with the command
+//!         `<path the package installs its program at> update-hook` (hello's `.deb`
+//!         /usr/lib/hello/hello, its `.pkg` /Library/Application Support/hello/bin/hello,
+//!         mdm's /usr/lib/mdm/mdm; hostkeeper's package has no command, and its daemon runs
+//!         built-in steps), its run units, health URL, params and
 //!         min_hostkeeper (hostkeeper's: `OLDEST_READER`, as its archive's); `package` the
 //!         package's name (`hostkeeper`, `hello`, `mdm`) or the .pkg's identifier (hostkeeper's
 //!         the daemon's launchd label, hello's its own); the installer's bounds
@@ -74,6 +76,7 @@ use hostkeeper_config::index::{PackageEntry, attestation_path, package_path};
 use hostkeeper_config::manifest::{HostkeeperVersion, MAX_MANIFEST_BYTES};
 use hostkeeper_config::names::{ServiceName, Version as ServiceVersion};
 use hostkeeper_config::platform::Platform as IndexPlatform;
+use hostkeeper_mdm_core::package as mdm_package;
 use hostkeeper_proto::hostkeeper::release::v1::{
     Blob, Hook, InstallerBounds, Location, Manifest, Param, StepBounds, Target, TargetList, param,
 };
@@ -86,6 +89,7 @@ use super::channel_stage::{
     regular_file,
 };
 use super::contract::{Package, Platform, Repo, Version, bundle_of};
+use super::native::hello as native_hello;
 use super::native::pkg::IDENTIFIER as HELLO_PKG_IDENTIFIER;
 use super::{Error, answer, macos_pkg};
 use crate::channels::apt::{control, deb};
@@ -329,7 +333,9 @@ fn native_of(
         (None, Package::Hostkeeper) => (Installer::MacosPkg, macos_pkg::identifier()),
         (None, _) => (Installer::MacosPkg, HELLO_PKG_IDENTIFIER.to_owned()),
     };
-    let manifest = match archive.map(|(floor, table)| native_manifest(table, &package_name, floor))
+    let program = native_program(package, linux.is_some());
+    let manifest = match archive
+        .map(|(floor, table)| native_manifest(table, &package_name, floor, program.as_deref()))
     {
         Some(Ok(manifest)) => manifest,
         Some(Err(why)) => {
@@ -407,9 +413,29 @@ fn control_problems(bytes: &[u8], service: &str, version: &str, arch: &str) -> V
     .collect()
 }
 
+/// The absolute path the native package of `package` installs its program at (a `.deb` if
+/// `linux`, else a `.pkg`), from the constants the package builders write the files by; none for
+/// hostkeeper, whose daemon runs built-in steps.
+fn native_program(package: Package, linux: bool) -> Option<String> {
+    match (package, linux) {
+        (Package::Hostkeeper, _) => None,
+        (Package::Mdm, _) => Some(format!("{}/{}", mdm_package::DEB_BIN, mdm_package::SERVICE)),
+        (_, true) => Some(native_hello::DEB_PROGRAM.to_owned()),
+        (_, false) => Some(native_hello::PKG_PROGRAM.to_owned()),
+    }
+}
+
 /// The manifest of a native entry from the archive's manifest `table` and its floor `floor` (as
-/// [`archive_floor`] read them), naming the package `package`; or why it cannot be one.
-fn native_manifest(table: &toml::Table, package: &str, floor: &str) -> Result<Manifest, String> {
+/// [`archive_floor`] read them), naming the package `package`; or why it cannot be one. With
+/// `program`, the absolute path the package installs its program at, the entry's hook command is
+/// that path and the arguments after the program in the archive's command (`update-hook`); with
+/// none, it is empty.
+fn native_manifest(
+    table: &toml::Table,
+    package: &str,
+    floor: &str,
+    program: Option<&str>,
+) -> Result<Manifest, String> {
     if let Some(key) = table.keys().find(|k| !MANIFEST_KEYS.contains(&k.as_str())) {
         return Err(format!(
             "{key} has no counterpart in a native entry, whose package installs its own files"
@@ -488,8 +514,7 @@ fn native_manifest(table: &toml::Table, package: &str, floor: &str) -> Result<Ma
     Ok(Manifest {
         package: Some(package.to_owned()),
         hook: Some(Hook {
-            // The package's hook is its program at the fixed path: an entry names no command.
-            command: Vec::new(),
+            command: native_command(hook, program)?,
             boot: optional_string(hook, "hook", "boot")?,
             timeout_secs: Some(StepBounds {
                 prepare: optional_number(timeouts, "hook.timeout_secs", "prepare")?.unwrap_or(0),
@@ -514,6 +539,28 @@ fn native_manifest(table: &toml::Table, package: &str, floor: &str) -> Result<Ma
         containers: Vec::new(),
         installer_bounds: Some(INSTALLER_BOUNDS),
     })
+}
+
+/// The hook command of a native entry: `program` and the archive command's arguments after its
+/// program, or none without a `program`.
+fn native_command(hook: &toml::Table, program: Option<&str>) -> Result<Vec<String>, String> {
+    let Some(program) = program else {
+        return Ok(Vec::new());
+    };
+    let command = hook
+        .get("command")
+        .and_then(toml::Value::as_array)
+        .and_then(|items| {
+            items
+                .iter()
+                .map(|i| i.as_str().map(str::to_owned))
+                .collect::<Option<Vec<_>>>()
+        })
+        .filter(|items| !items.is_empty())
+        .ok_or("hook.command is not a non-empty list of strings")?;
+    Ok(std::iter::once(program.to_owned())
+        .chain(command.into_iter().skip(1))
+        .collect())
 }
 
 /// The table `key` of `table`, if there is one.

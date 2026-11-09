@@ -34,8 +34,8 @@ pub enum Reason {
     ManifestInvalid,
     /// Another service records the identifier, or another package's receipt lists a payload file.
     PackageConflict,
-    /// The package carries a script that `installer` would run as root (packages-native.md
-    /// section 10.2: a service's package has none).
+    /// No longer produced: a package may carry scripts, which `installer` runs. The token stays
+    /// so a report of an older daemon still parses.
     PackageScripts,
     /// A parent directory of a payload path is not root's, or another account can write it.
     UnsafeDirectory,

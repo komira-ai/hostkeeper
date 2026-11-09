@@ -361,7 +361,9 @@ fn only_an_apt_entry_has_a_backend() {
 }
 
 /// Proves a failure that fails the order before the commit point is `Failed` with its class and
-/// token, and one a later try may pass is `Deferred` for [`DEFER_SECS`], never resent.
+/// token, and one a later try may pass is `Deferred` for [`DEFER_SECS`], never resent. The
+/// `package_scripts` reason is no longer produced by any installer; its token still maps, so a
+/// report from an older daemon is read as before.
 #[test]
 fn a_failure_before_the_runner_is_a_failed_or_deferred_verdict() {
     let reply = |reason| finished(&Failure::new(reason, "detail"));
@@ -591,6 +593,7 @@ fn order(scratch: &Scratch, service: &str, version: &str) -> UpdateOrder {
         staged: hostkeeper_steps::Staged::seal(&dir).expect("sealed"),
         previous: None,
         hook_binary: PathBuf::from("bin/hook"),
+        hook_args: Vec::new(),
         bounds: hostkeeper_steps::Bounds {
             prepare_secs: 1,
             cutover_secs: 1,

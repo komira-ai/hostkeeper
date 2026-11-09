@@ -120,6 +120,7 @@ fn order(scratch: &Path, builtin_steps: bool) -> UpdateOrder {
         staged: release(scratch, "0.1.70"),
         previous: Some(release(scratch, "0.1.60")),
         hook_binary: PathBuf::from("bin/hostkeeper"),
+        hook_args: Vec::new(),
         bounds: Bounds {
             prepare_secs: 300,
             cutover_secs: 300,

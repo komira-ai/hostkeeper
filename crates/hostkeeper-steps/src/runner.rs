@@ -137,6 +137,9 @@ pub struct UpdateOrder {
     pub previous: Option<Staged>,
     /// The hook executable within a release: the program of the manifest's `[hook] command`.
     pub hook_binary: PathBuf,
+    /// The arguments of the manifest's hook command after its program, given before the step;
+    /// empty for the built-in steps. The `rollback` fallback to the previous release uses them too.
+    pub hook_args: Vec<String>,
     pub bounds: Bounds,
     /// The manifest's `[params]` table.
     pub declared_params: Params,
@@ -716,6 +719,7 @@ impl StepRunner {
                     artifact,
                     params: Some(rec.params.clone()),
                 },
+                hook_args: &order.hook_args,
                 executable,
                 unit: &unit,
                 bound,

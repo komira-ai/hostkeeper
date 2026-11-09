@@ -319,6 +319,7 @@ impl Rig {
             staged: Staged::seal(&self.new_dir).unwrap(),
             previous: Some(Staged::seal(&self.old_dir).unwrap()),
             hook_binary: PathBuf::from("hook"),
+            hook_args: Vec::new(),
             bounds: Rig::bounds(),
             declared_params: declared,
             min_updater_protocol: None,

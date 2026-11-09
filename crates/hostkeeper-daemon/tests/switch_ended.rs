@@ -22,6 +22,7 @@ fn order(dir: &Path) -> UpdateOrder {
         staged: Staged::seal(dir).expect("a sealed tree"),
         previous: None,
         hook_binary: "hook".into(),
+        hook_args: Vec::new(),
         bounds: Bounds {
             prepare_secs: 1,
             cutover_secs: 1,

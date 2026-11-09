@@ -7,7 +7,6 @@ use plist::{Dictionary, Value};
 
 use super::*;
 
-const SERVICE: &str = "hello";
 const LABEL: &str = "com.example.hello";
 const HOME: &str = "/Library/Application Support/hello";
 const BIN: &str = "/Library/Application Support/hello/bin/hello";
@@ -60,12 +59,11 @@ fn valid() -> BTreeMap<String, Meta> {
 }
 
 fn verdict(tree: &BTreeMap<String, Meta>) -> Result<(), PayloadError> {
-    check(tree, tree, SERVICE, &[label()])
+    check(tree, tree)
 }
 
 #[test]
-fn the_expected_paths_of_a_service_and_a_label() {
-    assert_eq!(service_dir("hello"), HOME);
+fn the_expected_path_of_a_labels_plist() {
     assert_eq!(plist_path(&label()), PLIST);
 }
 
@@ -123,7 +121,7 @@ fn a_valid_payload_passes_and_a_payload_with_no_job_needs_no_plist() {
     assert_eq!(verdict(&valid()), Ok(()));
     let mut tree = valid();
     tree.remove(PLIST);
-    assert_eq!(check(&tree, &tree, SERVICE, &[]), Ok(()));
+    assert_eq!(check(&tree, &tree), Ok(()));
 }
 
 /// Catches: a Bom that lists a file the payload lacks passing, so `installer` writes less.
@@ -133,7 +131,7 @@ fn a_bom_entry_the_payload_lacks_is_refused() {
     let mut payload = valid();
     payload.remove(BIN);
     assert_eq!(
-        check(&bom, &payload, SERVICE, &[label()]),
+        check(&bom, &payload),
         Err(PayloadError::NotInPayload(BIN.into()))
     );
 }
@@ -144,7 +142,7 @@ fn a_payload_entry_the_bom_does_not_list_is_refused() {
     let payload = valid();
     bom.remove(BIN);
     assert_eq!(
-        check(&bom, &payload, SERVICE, &[label()]),
+        check(&bom, &payload),
         Err(PayloadError::NotInBom(BIN.into()))
     );
 }
@@ -156,7 +154,7 @@ fn a_payload_file_whose_mode_differs_from_the_boms_is_refused() {
     let mut payload = valid();
     payload.insert(BIN.into(), file(0o4755));
     assert_eq!(
-        check(&bom, &payload, SERVICE, &[label()]),
+        check(&bom, &payload),
         Err(PayloadError::Differs(BIN.into(), file(0o755), file(0o4755)))
     );
 }
@@ -207,51 +205,24 @@ fn a_fifo_or_a_device_is_refused() {
     assert_eq!(verdict(&tree), Err(PayloadError::Special(BIN.into())));
 }
 
-/// Catches: files placed under `/usr/local` or in another service's directory.
+/// A package chooses its own paths: files in other directories, other services' directories, a
+/// plist that is a link and a directory above the payload that is a file all pass the rule.
 #[test]
-fn paths_outside_the_services_directory_and_its_plists_are_refused() {
+fn paths_are_the_packages_own_to_choose() {
     for path in [
         "/usr/local/bin/hello",
         "/Library/Application Support/other/x",
-        "/Library/Application Support/hello2",
-        "/Library/Application Support/hellox/y",
         "/Library/LaunchDaemons/other.plist",
-        "/Library/LaunchDaemons/sub/x",
-        "/etc/passwd",
+        "/etc/hello.conf",
+        "/Library/Application Support/hello/deep/er/file",
     ] {
         let mut tree = valid();
         tree.insert(path.into(), file(0o644));
-        assert_eq!(
-            verdict(&tree),
-            Err(PayloadError::Outside(path.into(), HOME.into())),
-            "{path}"
-        );
+        assert_eq!(verdict(&tree), Ok(()), "{path}");
     }
-}
-
-#[test]
-fn a_plist_that_is_not_a_regular_file_is_outside() {
     let mut tree = valid();
     tree.insert(PLIST.into(), meta(Kind::Link, 0o755, GID_WHEEL));
-    assert_eq!(
-        verdict(&tree),
-        Err(PayloadError::Outside(PLIST.into(), HOME.into()))
-    );
-}
-
-#[test]
-fn a_directory_above_the_payload_must_be_a_directory() {
-    for above in ABOVE {
-        let mut tree = valid();
-        tree.insert(above.into(), file(0o644));
-        assert_eq!(verdict(&tree), Err(PayloadError::NotDir(above.into())));
-    }
-}
-
-#[test]
-fn the_service_directory_itself_and_files_below_it_are_inside() {
-    let mut tree = valid();
-    tree.insert(format!("{HOME}/deep/er/file"), file(0o600));
+    tree.insert("/Library".into(), file(0o644));
     assert_eq!(verdict(&tree), Ok(()));
 }
 
@@ -279,18 +250,18 @@ fn jobs_verdict(name: &str, value: Option<Value>) -> Result<(), PayloadError> {
         fs::create_dir_all(real.parent().unwrap()).unwrap();
         value.to_file_xml(&real).unwrap();
     }
-    check_jobs(dir.path(), &valid(), &[label()], true)
+    check_jobs(dir.path(), &valid(), &[label()])
 }
 
 #[test]
-fn a_disabled_job_of_the_labels_name_with_a_payload_program_passes() {
+fn a_job_of_the_labels_name_with_a_payload_program_passes() {
     assert_eq!(jobs_verdict("pjgood", Some(job(good_job()))), Ok(()));
 }
 
 #[test]
 fn no_run_label_needs_no_plist() {
     let dir = scratch("pjnone");
-    assert_eq!(check_jobs(dir.path(), &valid(), &[], true), Ok(()));
+    assert_eq!(check_jobs(dir.path(), &valid(), &[]), Ok(()));
 }
 
 #[test]
@@ -299,12 +270,12 @@ fn a_run_label_whose_plist_the_bom_does_not_list_is_refused() {
     let mut bom = valid();
     bom.remove(PLIST);
     assert_eq!(
-        check_jobs(tmp.path(), &bom, &[label()], true),
+        check_jobs(tmp.path(), &bom, &[label()]),
         Err(PayloadError::NoPlist(LABEL.into(), PLIST.into()))
     );
     bom.insert(PLIST.into(), dir());
     assert_eq!(
-        check_jobs(tmp.path(), &bom, &[label()], true),
+        check_jobs(tmp.path(), &bom, &[label()]),
         Err(PayloadError::NoPlist(LABEL.into(), PLIST.into()))
     );
 }
@@ -333,7 +304,7 @@ fn a_plist_that_is_not_a_plist_is_refused() {
     let real = dir.path().join(PLIST.trim_start_matches('/'));
     fs::create_dir_all(real.parent().unwrap()).unwrap();
     fs::write(&real, b"not a plist at all").unwrap();
-    let got = check_jobs(dir.path(), &valid(), &[label()], true);
+    let got = check_jobs(dir.path(), &valid(), &[label()]);
     assert!(matches!(got, Err(PayloadError::BadPlist(path, _)) if path == PLIST));
 }
 
@@ -362,29 +333,10 @@ fn a_plist_whose_label_differs_or_is_missing_is_refused() {
     );
 }
 
-/// A job that is not `Disabled` passes when the caller does not require it (hostkeeper's own
-/// job, which its script loads), and is refused when it does.
+/// A job needs no `Disabled` key, or any value of it: the package decides whether its job runs
+/// at load.
 #[test]
-fn a_job_need_not_be_disabled_when_the_caller_says_so() {
-    let dir = scratch("pjnotdisabled");
-    let real = dir.path().join(PLIST.trim_start_matches('/'));
-    fs::create_dir_all(real.parent().unwrap()).unwrap();
-    job(vec![
-        ("Label", Value::String(LABEL.into())),
-        ("Program", Value::String(BIN.into())),
-    ])
-    .to_file_xml(&real)
-    .unwrap();
-    assert_eq!(check_jobs(dir.path(), &valid(), &[label()], false), Ok(()));
-    assert_eq!(
-        check_jobs(dir.path(), &valid(), &[label()], true),
-        Err(PayloadError::NotDisabled(PLIST.into()))
-    );
-}
-
-/// Catches: a job that starts at load because it is not shipped disabled.
-#[test]
-fn a_plist_not_disabled_is_refused() {
+fn a_job_need_not_be_disabled() {
     let mut absent = good_job();
     absent.remove(1);
     let mut off = good_job();
@@ -392,10 +344,7 @@ fn a_plist_not_disabled_is_refused() {
     let mut text = good_job();
     text[1].1 = Value::String("true".into());
     for (name, entries) in [("pjabsent", absent), ("pjoff", off), ("pjtext", text)] {
-        assert_eq!(
-            jobs_verdict(name, Some(job(entries))),
-            Err(PayloadError::NotDisabled(PLIST.into()))
-        );
+        assert_eq!(jobs_verdict(name, Some(job(entries))), Ok(()), "{name}");
     }
 }
 

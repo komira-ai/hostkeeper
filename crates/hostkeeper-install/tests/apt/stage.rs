@@ -59,7 +59,7 @@ fn the_simulation_runs_before_any_download_and_under_the_installer_lock() {
     let env = Env::new("apt-order");
     env.installed(&deb(V1), &["mdm.service"]);
     let calls = env.host.calls();
-    let labels: Vec<&str> = calls.iter().take(8).map(|c| c.label.as_str()).collect();
+    let labels: Vec<&str> = calls.iter().take(7).map(|c| c.label.as_str()).collect();
     assert_eq!(
         labels,
         [
@@ -69,11 +69,10 @@ fn the_simulation_runs_before_any_download_and_under_the_installer_lock() {
             "apt-get simulate",
             "apt-get download",
             "dpkg-deb --field",
-            "dpkg-deb --control",
             "dpkg-deb --extract",
         ]
     );
-    for call in &calls[..8] {
+    for call in &calls[..7] {
         assert_eq!(
             call.locked,
             call.label == "apt-get simulate",
@@ -279,31 +278,6 @@ fn each_control_field_is_checked_and_all_is_accepted() {
     env.host.each_entry(|e| e.arch = "amd64".to_owned());
     let (staged, _) = env.stage(&order);
     staged.expect("a package of architecture all stages");
-}
-
-/// Proves a `run` unit that is not a unit file of the package is `manifest_invalid`.
-#[test]
-fn a_run_unit_not_in_the_tree_is_refused() {
-    let env = Env::new("apt-run-missing");
-    let mut order = env.publish(&deb(V1));
-    order.run = vec!["mdm.service".to_owned(), "mdm-ghost.service".to_owned()];
-    let failure = refused(&env, &order);
-    assert_failure(&failure, Reason::ManifestInvalid, Release, Failed);
-    assert!(failure.detail().contains("mdm-ghost.service"));
-}
-
-/// Proves a run unit whose `WantedBy` is not a unit name is `manifest_invalid`, in the stage.
-#[test]
-fn a_unit_wanted_by_a_bad_name_is_refused() {
-    let env = Env::new("apt-bad-target");
-    let package = deb(V1).file(
-        &format!("{UNIT_DIR}/mdm.service"),
-        0o644,
-        &unit(Some("not a name")),
-    );
-    let order = env.publish(&package);
-    let failure = refused(&env, &order);
-    assert_failure(&failure, Reason::ManifestInvalid, Release, Failed);
 }
 
 /// Proves another service's record of the package is `package_conflict`, failed, release, before

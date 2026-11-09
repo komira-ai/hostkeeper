@@ -10,8 +10,8 @@
 //!
 //! | Step | Here |
 //! |---|---|
-//! | [`MacosPkg::stage`] | The identifier no other service records; `pkgutil --check-signature` against the host's [`signers`]; `pkgutil --expand-full`; the [`shape`] of the expansion, with no script (`package_scripts`; hostkeeper's own package, [`own`], may carry its `postinstall`); the `Bom` against the payload (against its own list for [`own`]), and the jobs ([`payload`]); the [`hook`] at its fixed path; `artifact`, `tree/` and `macos-pkg/{PackageInfo,Bom,artifact.pkg}` in the staging directory |
-//! | [`MacosPkg::activate`] | Under the [`InstallerLock`]: the parents of the payload paths safe, no payload file another receipt lists, the record pending, `installer -allowUntrusted -pkg <dir>/macos-pkg/artifact.pkg -target /`, the receipt's version and every installed file proved against `tree/`, the files of the version it replaces that this one does not list deleted, then the created directories left empty, the `run` labels enabled and a dropped one disabled, the record done. A rollback is the `activate` of the kept previous version. Drift found on the way is reported, and repaired by the install |
+//! | [`MacosPkg::stage`] | The identifier no other service records; `pkgutil --check-signature` against the host's [`signers`]; `pkgutil --expand-full`; the [`shape`] of the expansion (its `Distribution` rules and its `PackageInfo`'s identifier, version, location and bundles; a `Scripts` directory and the `PackageInfo`'s script elements are accepted); the `Bom` against the payload, and the jobs ([`payload`]); the manifest's hook program, an executable regular file of the payload ([`crate::program`]); `artifact`, `tree/` and `macos-pkg/{PackageInfo,Bom,artifact.pkg}` in the staging directory |
+//! | [`MacosPkg::activate`] | Under the [`InstallerLock`]: the parents of the payload paths safe, no payload file another receipt lists, the record pending, `installer -allowUntrusted -pkg <dir>/macos-pkg/artifact.pkg -target /` (which runs the package's scripts), the receipt's version and every installed file proved against `tree/`, the files of the version it replaces that this one does not list deleted, then the created directories left empty, the `run` labels enabled and a dropped one disabled, the record done. A rollback is the `activate` of the kept previous version. Drift found on the way is reported, and repaired by the install |
 //! | [`MacosPkg::retire`] | The version directory and its seal deleted; no tool runs |
 //! | [`MacosPkg::remove`] | Under the lock: every file and link the receipt or a kept version's `Bom` lists, changed or not, but one another receipt lists or one under a linked parent; the created directories left empty, deepest first; `pkgutil --forget` |
 //!
@@ -19,7 +19,6 @@
 
 pub mod activate;
 pub mod drift;
-pub mod hook;
 pub mod own;
 pub mod payload;
 pub mod receipt;
@@ -71,8 +70,10 @@ pub struct Order {
     /// The entry's manifest's `run`: the launchd labels of the jobs the package installs.
     pub run: Vec<Label>,
     pub bounds: Bounds,
-    /// Whether the entry's manifest sets `hook.boot`, which needs the package's [`hook`].
-    pub boot: bool,
+    /// The program of the entry's manifest's `hook.command` (its first word, an absolute path),
+    /// when the command is not empty: `stage` checks that the payload installs it as an
+    /// executable regular file.
+    pub hook: Option<String>,
 }
 
 /// The bounds of the installer's steps (the manifest's `installer_bounds`); each tool run of a step
@@ -87,7 +88,7 @@ pub struct Bounds {
 impl Order {
     /// The order of A6's `stage` ([`StageOrder`]) as `macos-pkg` acts on it: its entry's
     /// manifest's `package` (the identifier), `run` (the jobs), `installer_bounds` and
-    /// `hook.boot`. An order with no entry, or whose entry names a repository, a package version
+    /// `hook.command`'s program. An order with no entry, or whose entry names a repository, a package version
     /// or an attestation (a `macos-pkg` entry carries none: packages-native.md section 10.3), is
     /// `order_invalid`; a manifest missing what `macos-pkg` needs is `manifest_invalid`.
     pub fn of(stage: &StageOrder<'_>) -> Result<Order, Failure> {
@@ -126,6 +127,15 @@ impl Order {
             .installer_bounds
             .as_ref()
             .ok_or_else(|| manifest_invalid("the manifest has no installer_bounds".into()))?;
+        let hook = match manifest.hook.as_ref().and_then(|hook| hook.command.first()) {
+            Some(program) if program.starts_with('/') => Some(program.clone()),
+            Some(program) => {
+                return Err(manifest_invalid(format!(
+                    "the hook command's program {program:?} is not an absolute path"
+                )));
+            }
+            None => None,
+        };
         Ok(Order {
             service: stage.service.clone(),
             version: stage.version.clone(),
@@ -136,10 +146,7 @@ impl Order {
                 activate: Duration::from_secs(bounds.activate_secs),
                 remove: Duration::from_secs(bounds.remove_secs),
             },
-            boot: manifest
-                .hook
-                .as_ref()
-                .is_some_and(|hook| hook.boot.is_some()),
+            hook,
         })
     }
 }

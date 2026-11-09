@@ -455,9 +455,8 @@ fn update_order(
         artifact_digest: order.digest.to_string(),
         staged: dir.staged().clone(),
         previous,
-        // The program only: the leading arguments of `command` have no field in the step
-        // launcher's call yet, which carries the step's own arguments alone.
         hook_binary: hook.command.first().map(PathBuf::from).unwrap_or_default(),
+        hook_args: hook.command.iter().skip(1).cloned().collect(),
         bounds: Bounds {
             // `prepare = 0` is the unbounded `prepare` of the manifest.
             prepare_secs: timeouts.prepare.map_or(0, NonZeroU64::get),
@@ -475,8 +474,8 @@ fn update_order(
         declared_params,
         min_updater_protocol: None,
         order_try: Some(order.order_try.get()),
-        // A version with no hook program (a repository package without one) runs the built-in
-        // steps ([`crate::builtin`]).
+        // A version whose manifest names no command (a repository package without one) runs the
+        // built-in steps ([`crate::builtin`]).
         builtin_steps: selfupdate::builtin_steps(&order.service, manifest.min_hostkeeper)
             | hook.command.is_empty(),
     }

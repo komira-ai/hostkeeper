@@ -24,10 +24,10 @@
 //!   dependency; with `--staged` it also installs the staged `gh`, trusted root and programs at
 //!   the daemon's paths, with their modes, root's, and the console's issue link pointing at the
 //!   daemon's issue file; with `--service hello` or `--service mdm` it reads a service's `.deb`
-//!   against the rules of docs/design/packages-native.md section 10.2 instead.
-//! - `deb` ([`native::deb`]): the `.deb` of hello, of its failing build or of mdm, with the hook
-//!   at `/usr/lib/<service>/hostkeeper-hook`, the units installed disabled and no maintainer
-//!   script.
+//!   against what this repository's builder writes instead.
+//! - `deb` ([`native::deb`]): the `.deb` of hello, of its failing build or of mdm, with the
+//!   program at `/usr/lib/<service>/`, the units in `/usr/lib/systemd/system/` and no hook
+//!   wrapper (the manifest's `hook.command` names the program).
 //! - `index` ([`index`]): the release index of a package, `index.json` for hostkeeper,
 //!   `hello-index.json` for hello, `hello-fail-ready-index.json` for its failing build and
 //!   `mdm-index.json` for mdm: which package serves each platform, refused unless it has the
@@ -287,11 +287,10 @@ pub(crate) enum Verb {
     /// `nfpm-stage` wrote, and the console's issue link.
     ///
     /// With `--service hello` or `--service mdm` (not with `--staged`), read a service's `.deb`
-    /// (`release deb`) instead and refuse it unless its control archive holds no maintainer
-    /// script, its `Package` is the service, every file is at a path of the service's (its units
-    /// plain files named for it in `/usr/lib/systemd/system/`), every entry is root's and
-    /// writable by root alone, its hook is `/usr/lib/<service>/hostkeeper-hook` (a regular file,
-    /// 0755) and its units' programs are files of the package; it declares no dependency.
+    /// (`release deb`) instead and refuse it unless its `Package` is the service, every entry is
+    /// root's and writable by root alone and its units' programs are files of the package; it
+    /// declares no dependency. These are checks of this repository's own build: nothing is
+    /// checked about its scripts, paths or unit names.
     CheckLinuxPkg {
         /// The `.deb`, `.rpm` or tarball.
         package: PathBuf,
@@ -307,9 +306,8 @@ pub(crate) enum Verb {
         service: Option<Service>,
     },
     /// Build the `.deb` of hello (and of its failing build, `--fail-ready`) or of mdm for one
-    /// Linux platform: the program and its hook at `/usr/lib/<service>/`, the units in
-    /// `/usr/lib/systemd/system/`, installed disabled, and no maintainer script
-    /// (docs/design/packages-native.md section 10.2). mdm's is built for linux-x86_64 only, with
+    /// Linux platform: the program at `/usr/lib/<service>/` and the units in
+    /// `/usr/lib/systemd/system/` (docs/design/packages-native.md section 10.2). mdm's is built for linux-x86_64 only, with
     /// the pinned tools out of `--archives`. Writes `<service>_<version>_<arch>.deb`.
     Deb {
         /// The service: hello or mdm (hostkeeper's `.deb` is nfpm's).

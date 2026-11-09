@@ -31,6 +31,10 @@ pub struct StepCall<'a> {
     /// The step and its arguments, in the form `Invocation::to_args` prints: `prepare` carries
     /// the staged release as its `<artifact>`, every step carries `--params <file>`.
     pub invocation: Invocation,
+    /// The arguments of the manifest's hook command after its program, given before the step
+    /// (`update-hook` in `["/usr/bin/tierstore", "update-hook"]`); empty for a hook that takes the
+    /// step first. The same for every step of an order, the `rollback` fallback included.
+    pub hook_args: &'a [String],
     /// The hook executable: a file of the verified release the runner checked with
     /// `Staged::check` just before (see its guarantees), the previous release's only for the
     /// `rollback` fallback. The launcher executes this path as it is.

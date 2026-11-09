@@ -91,11 +91,69 @@ fn a_manifest_the_native_entry_cannot_carry_whole_is_refused_by_its_key() {
     ];
     for (text, why) in cases {
         assert_eq!(
-            native_manifest(&table(&text), "hello", "0.1.0"),
+            native_manifest(&table(&text), "hello", "0.1.0", None),
             Err(why.to_owned()),
             "{text}"
         );
     }
+}
+
+#[test]
+fn a_program_given_is_the_command_with_the_archives_arguments_after_its_program() {
+    // Catches: an entry whose command is the archive's relative one (the daemon refuses it for a
+    // native package), one that loses `update-hook`, and an archive command that is not a
+    // non-empty list of strings sent on as an empty command.
+    let program = "/usr/lib/hello/hello";
+    let got = native_manifest(&table(HOOK), "hello", "0.1.2", Some(program)).expect("a manifest");
+    assert_eq!(
+        got.hook.expect("a hook").command,
+        [program, "update-hook"].map(str::to_owned)
+    );
+    let none = native_manifest(&table(HOOK), "hello", "0.1.2", None).expect("a manifest");
+    assert_eq!(none.hook.expect("a hook").command, Vec::<String>::new());
+    for bad in [
+        "command = 7",
+        "command = []",
+        "command = [\"bin/hello\", 3]",
+    ] {
+        let text = HOOK.replace("command = [\"bin/hello\", \"update-hook\"]", bad);
+        assert_eq!(
+            native_manifest(&table(&text), "hello", "0.1.2", Some(program)),
+            Err("hook.command is not a non-empty list of strings".to_owned()),
+            "{bad}"
+        );
+    }
+    let text = HOOK.replace("command = [\"bin/hello\", \"update-hook\"]\n", "");
+    assert_eq!(
+        native_manifest(&table(&text), "hello", "0.1.2", Some(program)),
+        Err("hook.command is not a non-empty list of strings".to_owned())
+    );
+}
+
+#[test]
+fn the_program_a_package_installs_is_where_its_builder_writes_it() {
+    // Catches: a command naming a path the package does not install: hello's `.deb` and `.pkg`
+    // and mdm's `.deb` each hold a file at the program path, and hostkeeper has none.
+    let installed = |files: Vec<native_hello::File>, program: &str| {
+        files.iter().any(|f| f.path == program && f.mode == 0o755)
+    };
+    let hello_deb = native_program(Package::Hello, true).expect("a program");
+    assert!(installed(
+        native_hello::deb_files(b"p".to_vec(), false),
+        &hello_deb
+    ));
+    let hello_pkg = native_program(Package::Hello, false).expect("a program");
+    assert!(installed(
+        native_hello::pkg_files(b"p".to_vec(), false).expect("files"),
+        &hello_pkg
+    ));
+    let mdm = native_program(Package::Mdm, true).expect("a program");
+    assert!(installed(
+        crate::release::native::mdm::deb_files(b"p".to_vec(), Vec::new()),
+        &mdm
+    ));
+    assert_eq!(native_program(Package::Hostkeeper, true), None);
+    assert_eq!(native_program(Package::Hostkeeper, false), None);
 }
 
 #[test]
@@ -108,7 +166,7 @@ fn every_optional_field_of_the_archives_hook_and_every_kind_of_param_is_carried(
         "[hook.timeout_secs]",
         "boot = \"seed\"\npromotion_ceiling_secs = 900\ncleanup_retries = 2\n[hook.timeout_secs]\nuninstall = 45",
     ) + "[params]\nratio = 0.5\nquiet = true\nname = \"a\"\ncount = -3\n";
-    let got = native_manifest(&table(&text), "hello", "0.1.2").expect("a manifest");
+    let got = native_manifest(&table(&text), "hello", "0.1.2", None).expect("a manifest");
     let mut params = BTreeMap::new();
     for (key, value) in [
         ("count", param::Value::Integer(-3)),

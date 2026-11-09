@@ -87,6 +87,7 @@ fn a_step_is_run_as_its_invocation_prints_it_in_a_clean_environment() {
     );
     let call = hostkeeper_steps::StepCall {
         service: "web",
+        hook_args: &[],
         invocation: Invocation {
             step: Step::Prepare,
             artifact: Some(PathBuf::from("/stage/release")),

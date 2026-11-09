@@ -1,8 +1,12 @@
-//! The package's tree, its hook and its control members at `stage`: the paths a service's
-//! package may install, the hook's rules and the maintainer scripts (packages-native.md section
-//! 10.2).
+//! The package's files, its units, its hook program and its maintainer scripts at `stage`
+//! (packages-native.md section 10.2): the one rule on the files is that the hook program the
+//! manifest names is an executable regular file of the package.
 
-use hostkeeper_install::repository::{Class, Failure, Order, Outcome, Reason};
+use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
+
+use hostkeeper_install::repository::enable;
+use hostkeeper_install::repository::{Class, Failure, Order, Outcome, Reason, Staged};
 
 use crate::apt_fake::Deb;
 use crate::harness::*;
@@ -10,18 +14,14 @@ use crate::harness::*;
 use Class::Release;
 use Outcome::Failed;
 
-/// Stages `package` for `service` with `run` and `edit` applied to its order, and answers the
-/// result.
+/// Stages `package` for `service` with `edit` applied to its order (the run unit `mdm.service`),
+/// and answers the result.
 fn stage_with(
     name: &str,
     service: &str,
     package: &Deb,
     edit: impl FnOnce(&mut Order),
-) -> (
-    Env,
-    Result<hostkeeper_install::repository::Staged, Failure>,
-    std::path::PathBuf,
-) {
+) -> (Env, Result<Staged, Failure>, std::path::PathBuf) {
     let env = Env::new(name);
     env.host.publish(URI, package.clone());
     let mut order = order_of(service, package, &["mdm.service"]);
@@ -30,285 +30,234 @@ fn stage_with(
     (env, result, dir)
 }
 
-/// [`stage_with`] for the other modules of this suite.
-pub fn tree_stage(
-    name: &str,
-    service: &str,
-    package: &Deb,
-    edit: impl FnOnce(&mut Order),
-) -> (
-    Env,
-    Result<hostkeeper_install::repository::Staged, Failure>,
-    std::path::PathBuf,
-) {
-    stage_with(name, service, package, edit)
-}
-
-fn stage_package(
-    name: &str,
-    package: &Deb,
-) -> (
-    Env,
-    Result<hostkeeper_install::repository::Staged, Failure>,
-    std::path::PathBuf,
-) {
+fn stage_package(name: &str, package: &Deb) -> (Env, Result<Staged, Failure>, std::path::PathBuf) {
     stage_with(name, SERVICE, package, |_| {})
 }
 
-/// Proves each path kind a service's package may not install is `manifest_invalid`, failed,
-/// release, naming the path, with nothing kept: an enablement link under `etc/systemd/system`,
-/// a cron file, a `sudoers.d` file, a unit of another name, a drop-in directory of a unit, a link
-/// in the unit directory (of either unit directory), a unit of a kind that is not service,
-/// socket or timer, a unit whose name only starts like the service's, a program outside the
-/// allowed directories, and a named pipe.
+/// [`stage_with`] for a package whose hook program is `program`.
+fn stage_hooked(
+    name: &str,
+    package: &Deb,
+    program: &str,
+) -> (Env, Result<Staged, Failure>, std::path::PathBuf) {
+    stage_with(name, SERVICE, package, |o| {
+        o.hook = Some(program.to_owned());
+    })
+}
+
+fn mode_of(path: &Path) -> u32 {
+    std::fs::symlink_metadata(path)
+        .unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+        .permissions()
+        .mode()
+        & 0o7777
+}
+
+/// Proves each maintainer script, preinst, postinst, prerm, postrm, config and triggers, goes on:
+/// the package stages, no control member is read, and it installs.
 #[test]
-fn every_refused_path_kind_is_manifest_invalid() {
+fn each_maintainer_script_stages_and_installs() {
+    for script in [
+        "preinst", "postinst", "prerm", "postrm", "config", "triggers",
+    ] {
+        let env = Env::new("apt-script");
+        env.installed(&deb(V1).member(script), &["mdm.service"]);
+        assert!(!env.has_run("dpkg-deb --control"), "{script}");
+        let found = env.host.installed(PACKAGE).expect(script);
+        assert_eq!(found.version, V1, "{script}");
+    }
+}
+
+/// Proves a package may install files anywhere: under `/opt`, `/etc/cron.d`, a drop-in directory
+/// of a unit, a link in a unit directory, an enablement link, a unit of another name and kind, a
+/// file in another package's directory and a program outside `usr/bin`.
+#[test]
+fn files_anywhere_stage() {
     let wants = "etc/systemd/system/multi-user.target.wants/mdm.service";
-    let cases: Vec<(&str, Deb, &str)> = vec![
+    let package = deb(V1)
+        .file("opt/mdm/run", 0o755, "x")
+        .file("etc/cron.d/mdm", 0o644, "x")
+        .file("etc/sudoers.d/mdm", 0o440, "x")
+        .file(&format!("{UNIT_DIR}/other.service"), 0o644, &unit(None))
+        .file(&format!("{UNIT_DIR}/mdm.mount"), 0o644, &unit(None))
+        .file(&format!("{UNIT_DIR}/mdm.service.d/x.conf"), 0o644, "x")
+        .link(&format!("{UNIT_DIR}/mdm-link.service"), "mdm.service")
+        .link(wants, "/usr/lib/systemd/system/mdm.service")
+        .file("usr/lib/other/x", 0o644, "x");
+    let (_env, result, dir) = stage_package("apt-anywhere", &package);
+    assert!(!result.expect("every path stages").hook);
+    for path in package.tree.keys() {
+        assert!(
+            std::fs::symlink_metadata(dir.join("tree").join(path)).is_ok(),
+            "{path}"
+        );
+    }
+    assert!(dir.join("apt").exists());
+}
+
+/// Proves hostkeeper's own package stages like any other, scripts and files anywhere included.
+#[test]
+fn hostkeepers_own_package_stages_like_any_other() {
+    let package = Deb::new("hostkeeper", V1, "amd64")
+        .file("usr/bin/hostkeeper", 0o755, "x")
+        .file("usr/lib/tmpfiles.d/hostkeeper.conf", 0o644, "x")
+        .link(
+            "etc/issue.d/hostkeeper.issue",
+            "/run/hostkeeper/enrollment.issue",
+        )
+        .member("preinst")
+        .member("postinst");
+    let (_, result, _) = stage_with("apt-own", "hostkeeper", &package, |o| {
+        o.run = vec!["hostkeeper.service".to_owned()];
+    });
+    result.expect("hostkeeper's own package stages");
+}
+
+/// Proves a run unit with no `[Install]` section stages and activates with no enablement link,
+/// and `enable::unlinked` lists it, with the run unit that has a link left out.
+#[test]
+fn a_run_unit_with_no_install_section_gets_no_link_and_is_listed() {
+    let env = Env::new("apt-no-install");
+    let package = deb(V1).file(&format!("{UNIT_DIR}/mdm-bare.service"), 0o644, &unit(None));
+    let run = ["mdm.service", "mdm-bare.service"];
+    let (_, dir) = env.installed(&package, &run);
+    let record = env.records.saved().pop().expect("a record");
+    assert_eq!(
+        record.links.into_iter().collect::<Vec<_>>(),
+        ["/etc/systemd/system/multi-user.target.wants/mdm.service"]
+    );
+    let run: Vec<String> = run.iter().map(|u| (*u).to_owned()).collect();
+    assert_eq!(
+        enable::unlinked(&dir.join("tree"), &run),
+        ["mdm-bare.service"]
+    );
+}
+
+/// Proves a run unit with no unit file in the tree stages and activates, gets no link, and
+/// `enable::unlinked` lists it, in the order of the run list.
+#[test]
+fn a_run_unit_with_no_unit_file_gets_no_link_and_is_listed() {
+    let env = Env::new("apt-no-unit-file");
+    let run = ["mdm-ghost.service", "mdm.service", "mdm-late.service"];
+    let (_, dir) = env.installed(&deb(V1), &run);
+    let record = env.records.saved().pop().expect("a record");
+    assert_eq!(record.links.len(), 1, "{:?}", record.links);
+    let run: Vec<String> = run.iter().map(|u| (*u).to_owned()).collect();
+    assert_eq!(
+        enable::unlinked(&dir.join("tree"), &run),
+        ["mdm-ghost.service", "mdm-late.service"]
+    );
+}
+
+/// Proves a `WantedBy` target that is not a unit name yields no link and no refusal: the unit
+/// stages, activates, is listed by `enable::unlinked`, and a good target beside it still links.
+#[test]
+fn a_wanted_by_target_that_is_not_a_unit_name_yields_no_link() {
+    let env = Env::new("apt-bad-target");
+    let text = "[Service]\nExecStart=/usr/bin/mdm\n[Install]\nWantedBy=not a name\nWantedBy=bad\n";
+    let package = deb(V1).file(&format!("{UNIT_DIR}/mdm.service"), 0o644, text);
+    let (_, dir) = env.installed(&package, &["mdm.service"]);
+    assert!(
+        env.records
+            .saved()
+            .pop()
+            .expect("a record")
+            .links
+            .is_empty()
+    );
+    assert!(!env.dirs.root.join("etc/systemd/system").exists());
+    assert_eq!(
+        enable::unlinked(&dir.join("tree"), &["mdm.service".to_owned()]),
+        ["mdm.service"]
+    );
+    let mixed = "[Install]\nWantedBy=bad multi-user.target\n";
+    let package = deb(V2).file(&format!("{UNIT_DIR}/mdm.service"), 0o644, mixed);
+    let (_, dir) = env.installed(&package, &["mdm.service"]);
+    let links = env.records.saved().pop().expect("a record").links;
+    assert_eq!(links.len(), 1, "{links:?}");
+    assert!(enable::unlinked(&dir.join("tree"), &["mdm.service".to_owned()]).is_empty());
+}
+
+/// Proves the hook program check: a program that is a regular executable file stages with
+/// `Staged.hook` true; with no command the package stages with it false.
+#[test]
+fn a_hook_program_that_is_executable_stages() {
+    let with = deb(V1).file("usr/bin/mdm-hook", 0o755, "#!/bin/sh\n");
+    let (_, result, _) = stage_hooked("apt-hook", &with, "/usr/bin/mdm-hook");
+    assert!(result.expect("a hook").hook);
+    let (_, result, _) = stage_package("apt-no-hook", &with);
+    assert!(!result.expect("no hook").hook);
+}
+
+/// Proves a link to an executable file of the package passes, followed inside the tree: an
+/// absolute target from the tree's root.
+#[test]
+fn a_hook_program_that_is_a_link_to_an_executable_stages() {
+    let package = deb(V1)
+        .file("opt/mdm/bin/mdm", 0o755, "#!/bin/sh\n")
+        .link("usr/bin/mdm-hook", "/opt/mdm/bin/mdm");
+    let (_, result, _) = stage_hooked("apt-hook-link", &package, "/usr/bin/mdm-hook");
+    assert!(result.expect("a linked hook").hook);
+}
+
+/// Proves a hook program that is absent, not executable, a directory or in a link loop is
+/// `manifest_invalid`, release, failed, naming the command and why, and nothing is kept.
+#[test]
+fn a_hook_program_that_is_not_an_executable_file_is_manifest_invalid() {
+    let program = "/usr/bin/mdm-hook";
+    let cases = [
+        ("absent", deb(V1), "is not a file the package installs"),
         (
-            "an enablement link",
-            deb(V1).link(wants, "/usr/lib/systemd/system/mdm.service"),
-            "etc/systemd",
+            "not executable",
+            deb(V1).file("usr/bin/mdm-hook", 0o644, "x"),
+            "is not executable",
         ),
         (
-            "a cron file",
-            deb(V1).file("etc/cron.d/mdm", 0o644, "x"),
-            "etc/cron.d",
+            "a directory",
+            deb(V1).dir("usr/bin/mdm-hook", 0o755),
+            "is not a regular file",
         ),
         (
-            "a sudoers file",
-            deb(V1).file("etc/sudoers.d/mdm", 0o440, "x"),
-            "etc/sudoers.d",
+            "a link loop",
+            deb(V1)
+                .link("usr/bin/mdm-hook", "/usr/bin/mdm-other")
+                .link("usr/bin/mdm-other", "/usr/bin/mdm-hook"),
+            "more than 40 links",
         ),
-        (
-            "a unit of another name",
-            deb(V1).file(&format!("{UNIT_DIR}/other.service"), 0o644, &unit(None)),
-            "other.service",
-        ),
-        (
-            "a drop-in directory",
-            deb(V1).file(&format!("{UNIT_DIR}/mdm.service.d/x.conf"), 0o644, "x"),
-            "mdm.service.d",
-        ),
-        (
-            "a link in the unit directory",
-            deb(V1).link(&format!("{UNIT_DIR}/mdm-link.service"), "mdm.service"),
-            "mdm-link.service",
-        ),
-        (
-            "a link in the other unit directory",
-            deb(V1).link("lib/systemd/system/mdm-link.service", "x"),
-            "mdm-link.service",
-        ),
-        (
-            "a unit of kind mount",
-            deb(V1).file(&format!("{UNIT_DIR}/mdm.mount"), 0o644, &unit(None)),
-            "mdm.mount",
-        ),
-        (
-            "a unit named like the service's",
-            deb(V1).file(&format!("{UNIT_DIR}/mdmx.service"), 0o644, &unit(None)),
-            "mdmx.service",
-        ),
-        (
-            "a unit with no kind",
-            deb(V1).file(&format!("{UNIT_DIR}/mdm"), 0o644, &unit(None)),
-            "system/mdm",
-        ),
-        (
-            "a program in /opt",
-            deb(V1).file("opt/mdm/run", 0o755, "x"),
-            "opt",
-        ),
-        (
-            "a file in another package's directory",
-            deb(V1).file("usr/lib/other/x", 0o644, "x"),
-            "usr/lib/other",
-        ),
-        ("a named pipe", deb(V1).fifo("usr/bin/pipe"), "usr/bin/pipe"),
     ];
-    for (what, package, named) in cases {
-        let (env, result, dir) = stage_package("apt-refused-paths", &package);
+    for (what, package, why) in cases {
+        let (env, result, dir) = stage_hooked("apt-hook-refused", &package, program);
         let failure = result.expect_err(what);
         assert_failure(&failure, Reason::ManifestInvalid, Release, Failed);
-        assert!(failure.detail().contains(named), "{what}: {failure}");
+        assert!(failure.detail().contains(program), "{what}: {failure}");
+        assert!(failure.detail().contains(why), "{what}: {failure}");
         assert!(!dir.join("apt").exists(), "{what}");
         assert!(env.records.saved().is_empty() & env.host.all_installed().is_empty());
     }
 }
 
-/// Proves every allowed path goes on: the program in `usr/bin`, files under `usr/lib/<package>`,
-/// `usr/share/<package>`, `usr/share/doc/<package>` and `etc/<service>`, and the eight units of
-/// the package `mdm` (a socket, a timer, a template, a worker service) in either unit directory,
-/// run units or not; the checksum and conffile members go on.
+/// Proves the extracted tree is normalized: a file loses its setuid, setgid, group-write and
+/// other-write bits and keeps its execute bits, a directory loses its group and other write
+/// bits, a link is left alone, and the dpkg install still sees the kept package.
 #[test]
-fn every_allowed_path_goes_on() {
-    let package = mdm_deb(V1)
-        .file("usr/lib/mdm/libmdm.so", 0o644, "x")
-        .file("usr/share/mdm/data", 0o644, "x")
-        .file("usr/share/doc/mdm/copyright", 0o644, "x")
-        .file("etc/mdm/mdm.conf", 0o644, "x")
-        .file("lib/systemd/system/mdm-late.service", 0o644, &unit(None))
-        .member("conffiles");
-    let (_env, result, dir) = stage_package("apt-allowed", &package);
-    let staged = result.expect("every allowed path stages");
-    assert!(!staged.hook);
-    for path in package.tree.keys() {
-        assert!(dir.join("tree").join(path).exists(), "{path}");
-    }
-    let units = listing(&dir.join("tree/usr/lib/systemd/system"));
-    assert_eq!(units.len(), 8, "{units:?}");
-}
-
-/// Proves the unit-name rule: `<service>.<kind>`, `<service>-*.<kind>` and `<service>@*.<kind>`
-/// of the kinds service, socket and timer go on, in the stage itself.
-#[test]
-fn units_named_for_the_service_stage() {
-    for name in [
-        "mdm.service",
-        "mdm.socket",
-        "mdm.timer",
-        "mdm-a.b_c.service",
-        "mdm@x.service",
-        "mdm@.timer",
-    ] {
-        let package = deb(V1).file(&format!("{UNIT_DIR}/{name}"), 0o644, &unit(None));
-        let (_, result, _) = stage_package("apt-unit-names", &package);
-        result.expect(name);
-    }
-}
-
-/// Proves a hook, `usr/lib/<package>/hostkeeper-hook`, that is a regular executable file stages
-/// with `Staged.hook` true and that a package without one stages with it false.
-#[test]
-fn a_hook_is_found_and_its_absence_is_not_an_error() {
-    let with = deb(V1).file("usr/lib/mdm/hostkeeper-hook", 0o755, "#!/bin/sh\n");
-    let (_, result, _) = stage_package("apt-hook", &with);
-    assert!(result.expect("a hook").hook);
-    let (_, result, _) = stage_package("apt-no-hook", &deb(V1));
-    assert!(!result.expect("no hook").hook);
-}
-
-/// Proves a hook that is a link, a directory or not executable is `manifest_invalid`, and a
-/// package whose `usr/lib/<package>` is a link or a file is refused by the path rule.
-#[test]
-fn a_hook_that_is_not_a_plain_executable_is_refused() {
-    let hook = "usr/lib/mdm/hostkeeper-hook";
-    let cases = [
-        ("a link", deb(V1).link(hook, "/bin/sh"), "a link"),
-        (
-            "a directory",
-            deb(V1).dir(hook, 0o755),
-            "not a regular file",
-        ),
-        (
-            "not executable",
-            deb(V1).file(hook, 0o644, "x"),
-            "not executable",
-        ),
-    ];
-    for (what, package, why) in cases {
-        let (_, result, _) = stage_package("apt-hook-refused", &package);
-        let failure = result.expect_err(what);
-        assert_failure(&failure, Reason::ManifestInvalid, Release, Failed);
-        assert!(failure.detail().contains(why), "{what}: {failure}");
-    }
-    for (what, package) in [
-        (
-            "a linked package directory",
-            deb(V1).link("usr/lib/mdm", "../share/mdm"),
-        ),
-        (
-            "a file for the package directory",
-            deb(V1).file("usr/lib/mdm", 0o644, "x"),
-        ),
-    ] {
-        let (_, result, _) = stage_package("apt-hook-parent", &package);
-        let failure = result.expect_err(what);
-        assert_failure(&failure, Reason::ManifestInvalid, Release, Failed);
-        assert!(
-            failure
-                .detail()
-                .contains("installs /usr/lib/mdm, outside the paths"),
-            "{what}: {failure}"
-        );
-    }
-}
-
-/// Proves a manifest that names a boot step, or has params, needs a hook: without one the
-/// stage is `manifest_invalid`, with one it goes on.
-#[test]
-fn a_boot_step_and_params_need_a_hook() {
-    let plain = deb(V1);
-    let hooked = deb(V1).file("usr/lib/mdm/hostkeeper-hook", 0o755, "x");
-    for (what, edit) in [
-        (
-            "boot",
-            (|o: &mut Order| o.boot = Some("migrate".to_owned())) as fn(&mut Order),
-        ),
-        ("params", |o: &mut Order| o.params = true),
-    ] {
-        let (_, result, _) = stage_with("apt-boot-plain", SERVICE, &plain, edit);
-        let failure = result.expect_err(what);
-        assert_failure(&failure, Reason::ManifestInvalid, Release, Failed);
-        let (_, result, _) = stage_with("apt-boot-hooked", SERVICE, &hooked, edit);
-        assert!(result.expect(what).hook);
-    }
-}
-
-/// Proves each maintainer script, preinst, postinst, prerm, postrm, config and triggers, is
-/// `package_scripts`, failed, release, naming the script, and that nothing is extracted or kept.
-#[test]
-fn each_maintainer_script_is_refused() {
-    for script in [
-        "preinst", "postinst", "prerm", "postrm", "config", "triggers",
-    ] {
-        let (env, result, dir) = stage_package("apt-script", &deb(V1).member(script));
-        let failure = result.expect_err(script);
-        assert_failure(&failure, Reason::PackageScripts, Release, Failed);
-        assert!(failure.detail().contains(script), "{failure}");
-        assert!(
-            !env.has_run("dpkg-deb --extract"),
-            "{script}: the package was extracted"
-        );
-        assert!(!dir.join("tree").exists() & !dir.join("apt").exists());
-    }
-}
-
-/// Proves the control file, the checksums and the conffiles are not scripts and go on.
-#[test]
-fn control_checksums_and_conffiles_go_on() {
-    let package = deb(V1).member("conffiles");
-    let (_, result, _) = stage_package("apt-members", &package);
-    result.expect("no script");
-}
-
-/// Proves scripts are allowed for the package `hostkeeper` of the service `hostkeeper` only: they
-/// go on there, and are refused for hostkeeper's package under another service and for another
-/// package under the service `hostkeeper`.
-#[test]
-fn scripts_are_allowed_for_hostkeepers_own_package_alone() {
-    let own = |package: &str| {
-        Deb::new(package, V1, "amd64")
-            .file("usr/bin/hostkeeper", 0o755, "x")
-            .file(
-                &format!("{UNIT_DIR}/hostkeeper.service"),
-                0o644,
-                &unit(None),
-            )
-            .member("preinst")
-            .member("postinst")
-    };
-    let (_, result, _) = stage_with("apt-own", "hostkeeper", &own("hostkeeper"), |o| {
-        o.run = vec!["hostkeeper.service".to_owned()];
-    });
-    result.expect("hostkeeper's own package may carry scripts");
-    let (_, result, _) = stage_with("apt-own-elsewhere", SERVICE, &own("hostkeeper"), |_| {});
-    let failure = result.expect_err("a script under another service");
-    assert_eq!(failure.reason(), Reason::PackageScripts);
-    let (_, result, _) = stage_with("apt-other-own", "hostkeeper", &own("hostkeeperd"), |o| {
-        o.run = vec!["hostkeeper.service".to_owned()];
-    });
-    let failure = result.expect_err("another package under hostkeeper");
-    assert_eq!(failure.reason(), Reason::PackageScripts);
+fn the_extracted_tree_loses_setuid_setgid_and_group_and_other_write() {
+    let package = deb(V1)
+        .file("usr/bin/suid", 0o4755, "x")
+        .file("usr/bin/sgid", 0o2775, "x")
+        .file("usr/share/mdm/open", 0o666, "x")
+        .file("usr/share/mdm/plain", 0o640, "x")
+        .dir("srv/mdm", 0o777)
+        .link("usr/bin/mdm-link", "/usr/bin/suid");
+    let (_env, result, dir) = stage_package("apt-normalize", &package);
+    result.expect("the package stages");
+    let tree = dir.join("tree");
+    assert_eq!(mode_of(&tree.join("usr/bin/suid")), 0o755);
+    assert_eq!(mode_of(&tree.join("usr/bin/sgid")), 0o755);
+    assert_eq!(mode_of(&tree.join("usr/share/mdm/open")), 0o644);
+    assert_eq!(mode_of(&tree.join("usr/share/mdm/plain")), 0o640);
+    assert_eq!(mode_of(&tree.join("srv/mdm")), 0o755);
+    assert_eq!(
+        std::fs::read_link(tree.join("usr/bin/mdm-link")).expect("a link"),
+        Path::new("/usr/bin/suid")
+    );
 }

@@ -27,8 +27,8 @@
 //!   a file no receipt lists, in the forms `hostkeeper_install` parses.
 //! - `a_package_is_refused_unsigned_then_installed_updated_repaired_rolled_back_and_removed`:
 //!   `stage` refuses both unsigned forms (real) and a leaf no signer names (the answered call);
-//!   the real expansion of each form passes `stage`'s checks; then install, update (with a hook at
-//!   its fixed path, the job enabled by launchd's own override), a hand install of the older
+//!   the real expansion of each form passes `stage`'s checks; then install, update (with a hook
+//!   program the payload installs and the order names, the job enabled by launchd's own override), a hand install of the older
 //!   version found as drift and put back by the next install, rollback with no signature check,
 //!   and removal of a two-version fixture.
 //!
@@ -58,7 +58,7 @@ const SERVICE: &str = "hk-a9-fixture";
 const IDENTIFIER: &str = "dev.hostkeeper.a9-fixture";
 const SUPPORT: &str = "/Library/Application Support/hk-a9-fixture";
 const PLIST: &str = "/Library/LaunchDaemons/hk-a9-fixture.plist";
-/// The hook of 1.1.0, at its fixed path.
+/// The hook program of 1.1.0: the payload installs it here and the order names it.
 const HOOK: &str = "/Library/Application Support/hk-a9-fixture/hostkeeper-hook";
 /// The most any program the test runs is waited for before it is killed and the test fails
 /// naming it: a bound on a hang, not a measure of time.
@@ -193,7 +193,7 @@ impl Tools for Signed {
 }
 
 /// The fixture's content at `version`: 1.0.0 has `legacy.txt` and 1.1.0 drops it; 1.1.0 adds
-/// `lib/new.txt` in a directory 1.0.0 lacks, and its hook at the fixed path.
+/// `lib/new.txt` in a directory 1.0.0 lacks, and its hook program.
 fn payload(root: &Path, version: &str) {
     let service = root.join("Library/Application Support/hk-a9-fixture");
     let mut dirs = vec![
@@ -385,7 +385,7 @@ impl Rig {
                 activate: wait,
                 remove: wait,
             },
-            boot: false,
+            hook: None,
         }
     }
 
@@ -588,11 +588,12 @@ fn a_package_is_refused_unsigned_then_installed_updated_repaired_rolled_back_and
         record.created_dirs
     );
 
-    // (d) Update to 1.1.0, whose hook (at its fixed path) lets the order set `hook.boot`: the
-    // dropped file goes, the new file, directory and hook come.
+    // (d) Update to 1.1.0, whose order names the hook program its payload installs (and `stage`
+    // finds it in the expanded payload): the dropped file goes, the new file, directory and
+    // hook come.
     rig.tools.answer_for(&v110.product);
     let mut order110 = rig.order("1.1.0");
-    order110.boot = true;
+    order110.hook = Some(HOOK.to_owned());
     let dir110 = rig
         .stage(&signers, &order110, &v110.product)
         .unwrap_or_else(|(f, _)| panic!("{f}"));

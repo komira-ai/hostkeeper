@@ -280,7 +280,6 @@ pub(crate) const HOSTKEEPER: Product = Product {
             prerequisites: &[],
             files: &[
                 "/usr/lib/hello/hello",
-                "/usr/lib/hello/hostkeeper-hook",
                 "/usr/lib/systemd/system/hello@a.service",
                 "/usr/lib/systemd/system/hello@b.service",
             ],
@@ -298,7 +297,6 @@ pub(crate) const HOSTKEEPER: Product = Product {
             prerequisites: &[],
             files: &[
                 "/usr/lib/mdm/mdm",
-                "/usr/lib/mdm/hostkeeper-hook",
                 "/usr/lib/systemd/system/mdm-cert-renew.service",
                 "/usr/lib/systemd/system/mdm-cert.service",
                 "/usr/lib/systemd/system/mdm-cert.timer",
