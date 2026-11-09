@@ -348,12 +348,17 @@ impl Rig {
 
     /// [`Rig::start`], then the released version's package installed by the coordinator's
     /// order: the install of the version that runs, which the daemon takes without a restart.
+    /// It returns once the host has reported that order `OUTCOME_SUCCEEDED`, not only once the
+    /// coordinator counts the host converged: the host runs that version from its start, so it is
+    /// counted converged while the install order may still be running, and a test's next order
+    /// sent then would be answered `busy` with it.
     pub fn installed(tag: &str) -> Rig {
         let rig = Rig::start(tag);
         let released = rig.released.clone();
         let built = rig.publish(&released, Build::Released);
         rig.order(&built);
         rig.wait_converged(&released);
+        rig.wait_reported(&released, "OUTCOME_SUCCEEDED");
         rig
     }
 
