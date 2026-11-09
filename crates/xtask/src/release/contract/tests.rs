@@ -86,7 +86,7 @@ fn asset_names_are_the_documented_contract() {
     let v = version("7.8.9");
     let names = asset_names(&v, &Platform::RELEASED);
     assert_eq!(names, baseline_for(&v));
-    assert_eq!(names.len(), 92);
+    assert_eq!(names.len(), 96);
     assert_eq!(documented_names(DOC, &v), Ok(names.clone()));
     // The document changed alone: a name dropped, or one renamed.
     let image = "hostkeeper-coordinator-<version>-<linux-platform>.image.tar\n";
@@ -282,8 +282,8 @@ fn the_attested_and_summed_names_partition_the_assets() {
     let v = version("0.1.3");
     let attested = attested_names(&v);
     let summed = summed_names(&v);
-    assert_eq!(attested.len(), 35);
-    assert_eq!(summed.len(), 56);
+    assert_eq!(attested.len(), 37);
+    assert_eq!(summed.len(), 58);
     for index in [INDEX, HELLO_INDEX, HELLO_FAIL_READY_INDEX, MDM_INDEX] {
         assert!(summed.contains(&index.to_owned()) & !attested.contains(&index.to_owned()));
     }
@@ -396,8 +396,8 @@ fn the_native_packages_are_hostkeepers_and_hellos_on_every_platform_and_mdms_on_
     // nfpm write, one shipped for a platform its package is not built for (mdm on arm64 or
     // macOS), hostkeeper's own native packages named other than the daemon's `.deb` and the
     // installer the release ships (its entry would pin a file the release does not have), hello's
-    // failing build given a native name (its version is not X.Y.Z, which the shared repository's
-    // index requires), a native package without its bundle or with a `.sha256` it does not have,
+    // failing build given a macOS `.pkg` (none is released) or a `.deb` named by its Debian
+    // version `X.Y.Z~fail.ready` (an asset name carries the service version), a native package without its bundle or with a `.sha256` it does not have,
     // and an asset listed twice.
     let v = version("0.2.1");
     let names = |package: Package| -> Vec<Option<String>> {
@@ -427,7 +427,14 @@ fn the_native_packages_are_hostkeepers_and_hellos_on_every_platform_and_mdms_on_
         ]
     );
     assert_eq!(installer_name(&v), "hostkeeper-0.2.1-macos-arm64.pkg");
-    assert_eq!(names(Package::HelloFailReady), [None, None, None]);
+    assert_eq!(
+        names(Package::HelloFailReady),
+        [
+            Some("hello_0.2.1-fail-ready_amd64.deb".to_owned()),
+            Some("hello_0.2.1-fail-ready_arm64.deb".to_owned()),
+            None
+        ]
+    );
     let all = asset_names(&v, &Platform::RELEASED);
     let mut once = all.clone();
     once.dedup();
@@ -440,6 +447,8 @@ fn the_native_packages_are_hostkeepers_and_hellos_on_every_platform_and_mdms_on_
         "hello_0.2.1_amd64.deb",
         "hello_0.2.1_arm64.deb",
         "hello-0.2.1-macos-arm64.pkg",
+        "hello_0.2.1-fail-ready_amd64.deb",
+        "hello_0.2.1-fail-ready_arm64.deb",
         "mdm_0.2.1_amd64.deb",
     ] {
         assert!(attested.contains(&native.to_owned()), "{native}");
@@ -677,4 +686,38 @@ fn a_release_waits_for_ci_privileged_and_artifacts_only() {
         REQUIRED_WORKFLOWS,
         ["ci.yml", "privileged.yml", "artifacts.yml"]
     );
+}
+
+#[test]
+fn the_failing_builds_debian_version_sorts_below_the_release_and_the_others_are_the_releases() {
+    // Catches: a failing build whose `.deb` carries the service version (a Debian revision that
+    // sorts above the release), or another package given a suffix.
+    let v = version("0.2.1");
+    assert_eq!(Package::Hostkeeper.deb_version(&v), "0.2.1");
+    assert_eq!(Package::Hello.deb_version(&v), "0.2.1");
+    assert_eq!(Package::Mdm.deb_version(&v), "0.2.1");
+    assert_eq!(Package::HelloFailReady.deb_version(&v), "0.2.1~fail.ready");
+    assert_eq!(FAIL_READY_DEB_SUFFIX, "~fail.ready");
+    // The service version of the failing build allows no `~`; its asset name does not carry one.
+    assert_eq!(Package::HelloFailReady.version_text(&v), "0.2.1-fail-ready");
+    for platform in Platform::RELEASED {
+        if let Some(name) = Package::HelloFailReady.native_name(&v, platform) {
+            assert!(!name.contains('~'), "{name}");
+        }
+    }
+}
+
+#[test]
+fn only_the_failing_build_names_the_testing_fail_repository_entry() {
+    // Catches: the failing build's apt entry naming the repository entry of the release's suite
+    // (its host would then take it from `testing`), or a release naming the failing suite.
+    assert_eq!(Package::Hostkeeper.repository_entry(), "komira-testing");
+    assert_eq!(Package::Hello.repository_entry(), "komira-testing");
+    assert_eq!(Package::Mdm.repository_entry(), "komira-testing");
+    assert_eq!(
+        Package::HelloFailReady.repository_entry(),
+        "komira-testing-fail"
+    );
+    assert_eq!(TESTING_ENTRY, "komira-testing");
+    assert_eq!(TESTING_FAIL_ENTRY, "komira-testing-fail");
 }
