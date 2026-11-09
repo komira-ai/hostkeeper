@@ -1,5 +1,6 @@
 //! `nfpm.yaml` read as nfpm (v2.48.0) reads it: the files and the links a package carries, its
-//! scripts and the names of its files, for one packager (`deb`, `rpm` or `archlinux`).
+//! scripts, dependencies and the names of its files, for one packager (`deb`, `rpm`, `archlinux`
+//! or `apk`).
 
 use std::collections::BTreeMap;
 
@@ -318,6 +319,17 @@ impl Config {
         Ok(out)
     }
 
+    /// The entries of the top-level `depends` list, as written; none when the key is absent.
+    pub fn depends(&self) -> Result<Vec<String>, String> {
+        match self.top().get("depends").copied() {
+            Some(node) => items(node, "depends")?
+                .iter()
+                .map(|item| text(item, "a depends entry"))
+                .collect(),
+            None => Ok(Vec::new()),
+        }
+    }
+
     /// The text of `key` of the `archlinux` table, if present.
     pub fn archlinux_field(&self, key: &str) -> Result<Option<String>, String> {
         let Some(table) = self.top().get("archlinux").copied() else {
@@ -346,8 +358,9 @@ impl Config {
 
     /// The file name nfpm gives the package of `packager` built with `VERSION=version` and
     /// `ARCH=arch` (Go's architecture names, `amd64` and `arm64`): `ConventionalFileName` of
-    /// nfpm's `deb/deb.go`, `rpm/rpm.go` and `arch/arch.go`, with no release, prerelease or version metadata
-    /// (which [`TOP_KEYS`] does not allow, so the rpm's release is nfpm's default, 1).
+    /// nfpm's `deb/deb.go`, `rpm/rpm.go`, `arch/arch.go` and `apk/apk.go`, with no release,
+    /// prerelease or version metadata (which [`TOP_KEYS`] does not allow, so the rpm's release is
+    /// nfpm's default, 1).
     ///
     /// The inputs are the ones nfpm.yaml documents: `version` is `MAJOR.MINOR.PATCH` in digits
     /// (nfpm would drop a `v` prefix and move a prerelease or build suffix into the version in
@@ -396,6 +409,14 @@ impl Config {
                 Ok(format!(
                     "{package}-{package_version}-1-{arch_arch}.pkg.tar.zst"
                 ))
+            }
+            "apk" => {
+                let apk_arch = match package_arch.as_str() {
+                    "amd64" => "x86_64",
+                    "arm64" => "aarch64",
+                    other => other,
+                };
+                Ok(format!("{package}_{package_version}_{apk_arch}.apk"))
             }
             other => Err(format!("no packager {other:?}")),
         }
