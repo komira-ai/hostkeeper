@@ -28,6 +28,7 @@ const LAUNCHD: &str = "hostkeeper-launchd";
 const OPENRC: &str = "hostkeeper-openrc";
 const MDM: &str = "hostkeeper-mdm";
 const MDM_STEP: &str = "hostkeeper-mdm-step";
+const MEASURE: &str = "hostkeeper-measure";
 const PXE: &str = "hostkeeper-pxe";
 const PXE_PACKETS: &str = "hostkeeper-pxe-packets";
 const PROTO: &str = "hostkeeper-proto";
@@ -118,6 +119,7 @@ pub const LAYERS: [Layer; 32] = [
     (MDM_CORE, &[], &[]),
     (MDM_GATE, &[CONFIG, ENROLLMENT, WIRE], &[]),
     (MDM_STEP, &[], &[]),
+    (MEASURE, &[], &[]),
     (OBSERVE, &[CONFIG, PROTO], &[HOOK, STEPS]),
     (OIDC, &[], &[]),
     (OPENRC, &[OBSERVE, PLACED, STEPS], &[HOOK]),

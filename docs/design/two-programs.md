@@ -387,6 +387,11 @@ downgrades are allowed by the rule of 4.2.
 
 ### 4.1 Unit, plist and pkg texts
 
+**Revised by [packages-native.md](packages-native.md) section 10.4** once its A19 is built: hostkeeper updates
+itself from its `.deb` and `.pkg`, installed by the new binary after it confirms, so the `.deb`'s unit, starting
+`/usr/bin/hostkeeper`, is the only unit; the package unit below goes with the archive, and the `.pkg`'s postinstall
+bootstraps the job only when it is not loaded.
+
 - **Linux, hostkeeper's package unit** (`units/hostkeeper.service`, linked by every update): it keeps
   `ExecStart=.../bin/current daemon ...` for good. It must: `/usr/bin/hostkeeper` is replaced only by a deb or rpm
   upgrade, so on most hosts it is an older binary, which would run itself and never hand over to the updated one.
@@ -543,6 +548,9 @@ load a record a stage-2 writer made, and an old-way record, and settle each.
 
 ### 4.4 The hook of hostkeeper's own package
 
+**Revised by [packages-native.md](packages-native.md) section 10.4:** hostkeeper's native package has no hook and
+no `manifest.toml`; its steps are the built-in ones, and its floor is the entry's `min_hostkeeper`.
+
 Every manifest has a bounded `[hook]` (`manifest.rs`, `hook()`, **Built**). hostkeeper's package has a no-op one,
 `command = ["bin/hostkeeper", "update-hook"]`, which the old daemon runs from the new release at step 8 through the
 step runner, whose held success the follow-on needs (`follow_on` takes the runner's finished record).
@@ -635,6 +643,10 @@ runs a released binary. The path needs that, so item X1 comes first:
 - **Between stages**: the status check above, on the farm, before the floor pull request merges.
 
 ### 4.6 OpenRC: the daemon on Alpine
+
+**Revised by [packages-native.md](packages-native.md) section 10.1:** with the tarball withdrawn, an Alpine host's
+services, and the daemon itself, are installed through an `apk` backend (its A26 and A27), which the archive's
+deletion waits for.
 
 An Alpine host runs OpenRC, not systemd, and the daemon runs there as the same program with the same flow, config,
 package paths and state directory; what differs is behind the ports that already carry systemd and launchd
