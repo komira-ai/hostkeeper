@@ -44,7 +44,7 @@ const XTASK: &str = env!("CARGO_BIN_EXE_xtask");
 /// `curl` serves `channel/channel.example/releases/...`.
 const CHANNEL: &str = "https://channel.example/releases";
 
-/// The base URL of a channel served only on the tailnet, as the farm's: a port of its own.
+/// The base URL of a channel served only on the tailnet, on a port of its own.
 const TAILNET_CHANNEL: &str = "https://channel.example:30443/releases";
 
 /// The tailnet's name of the channel's host: the one node of the tailnet the join can ping.

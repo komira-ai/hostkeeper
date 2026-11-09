@@ -89,8 +89,9 @@ before its first run. The workflow lint of this repository holds that template t
   its release as the comment, and passes that release and commit as `hostkeeper_version` and
   `hostkeeper_commit` ([Pinning hostkeeper](#pinning-hostkeeper));
 - passes `service`, `version`, `targets`, `release_index` and `release_index_digest`, the
-  coordinator's address, CA and audience, and `tailnet_tag`, from the job that read the release
-  and from repository variables.
+  coordinator's address, CA and audience, `tailnet_tag`, and the join inputs `join_tailnet`
+  (true when `HOSTKEEPER_TAILNET_CLIENT_ID` is set), `tailnet_client_id`, `tailnet_audience` and
+  `tailnet_coordinator`, from the job that read the release and from repository variables.
 
 `release_index` is the text of the `index.json` the publish job wrote (design, section 5.5), and
 `release_index_digest` its SHA-256, taken from the file the publish job uploaded: the two must be

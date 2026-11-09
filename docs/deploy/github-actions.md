@@ -31,8 +31,8 @@ issues to the job.
    tagged `HOSTKEEPER_TAILNET_TAG` authenticated with an OIDC token), and waits until the
    channel's host, the host of `HOSTKEEPER_RELEASE_CHANNEL` without its port or path, answers a
    `tailscale ping`: a channel served only on the tailnet is reachable from the runner. Empty, it
-   does not join, and the channel must be reachable from the runner as it is. It
-   reads `<channel>/hostkeeper/<X.Y.Z>/index.json` every 40 seconds, a 404 included, until the
+   does not join, and the channel must be reachable from the runner as it is. It reads
+   `<channel>/hostkeeper/<X.Y.Z>/index.json` every 40 seconds, a 404 included, until the
    channel serves it, for at most 30 minutes. The served index must then be the published one,
    byte for byte. Then `cargo xtask release targets`, compiled from the release's own commit,
    writes the release's targets from the same checked files: one `hostkeeper-archive` entry per
