@@ -133,6 +133,7 @@ jobs:
           ':(exclude,glob)crates/hostkeeper-privileged/tests/install_uninstall.rs'
           ':(exclude,glob)crates/hostkeeper-privileged/tests/linux_packages.rs'
           ':(exclude,glob)crates/hostkeeper-privileged/tests/mdm_cert_units.rs'
+          ':(exclude,glob)crates/hostkeeper-privileged/tests/move_native.rs'
           ':(exclude,glob)crates/hostkeeper-privileged/tests/net_install.rs'
           ':(exclude,glob)crates/hostkeeper-privileged/tests/net_install_arm64.rs'
           ':(exclude,glob)crates/hostkeeper-privileged/tests/net_install_rig.rs'
@@ -382,9 +383,9 @@ jobs:
       - name: Pull opensuse/tumbleweed
         run: docker pull opensuse/tumbleweed@sha256:871173bf717af0926bd92324ee6f73ba285e0721f0c8ac00ef2c77f1c88d979e
       - name: Build the privileged tests as the runner's user
-        run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test transient_unit --test observer --test unit_control --test self_update --test tierstore_shaped --test self_update_across_releases --test linux_packages --test mdm_cert_units --test install_apt
+        run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test transient_unit --test observer --test unit_control --test self_update --test tierstore_shaped --test self_update_across_releases --test linux_packages --test mdm_cert_units --test install_apt --test move_native
       - name: Run the privileged tests as root
-        run: cargo test -p hostkeeper-privileged --features privileged --locked --config "target.'cfg(unix)'.runner = 'sudo'" --test transient_unit --test observer --test unit_control --test self_update --test tierstore_shaped --test self_update_across_releases --test linux_packages --test mdm_cert_units --test install_apt -- --test-threads=1
+        run: cargo test -p hostkeeper-privileged --features privileged --locked --config "target.'cfg(unix)'.runner = 'sudo'" --test transient_unit --test observer --test unit_control --test self_update --test tierstore_shaped --test self_update_across_releases --test linux_packages --test mdm_cert_units --test install_apt --test move_native -- --test-threads=1
       - name: The journal of the test units
         if: failure()
         run: journalctl --unit 'hostkeeper-ci-*' --no-pager

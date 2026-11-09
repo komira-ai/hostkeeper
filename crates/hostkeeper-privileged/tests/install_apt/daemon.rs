@@ -76,6 +76,12 @@ impl Packages for NoStore {
 
 /// The daemon on the rig's host, and the installers the host announces.
 pub fn daemon(rig: &Rig) -> (Daemon, Vec<String>) {
+    daemon_with(rig, Arc::new(NoStore))
+}
+
+/// [`daemon`] with `store` as its package store: the archive versions of a service that moves to
+/// apt are served by it.
+pub fn daemon_with(rig: &Rig, store: Arc<dyn Packages>) -> (Daemon, Vec<String>) {
     let base = rig.scratch();
     let (state, packages, placed) = (
         base.join("state"),
@@ -103,7 +109,7 @@ pub fn daemon(rig: &Rig) -> (Daemon, Vec<String>) {
     );
     let ports = Ports {
         launcher: Arc::new(SystemdLauncher::system()),
-        packages: Arc::new(NoStore),
+        packages: store,
         clock: Arc::new(SystemClock::new(Box::new(ProcBootId::host()))),
         deadman_poll_secs: None,
         units: Arc::new(Systemctl::new(host_systemctl())),
