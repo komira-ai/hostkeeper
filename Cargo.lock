@@ -1851,6 +1851,7 @@ dependencies = [
  "hostkeeper-daemon",
  "hostkeeper-enroll",
  "hostkeeper-hook",
+ "hostkeeper-install",
  "hostkeeper-launchd",
  "hostkeeper-link",
  "hostkeeper-mdm-core",

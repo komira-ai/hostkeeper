@@ -55,6 +55,13 @@
 //! `openrc/Dockerfile` whose init is OpenRC: hostkeeper's Alpine package installed and run under
 //! supervise-daemon, and the program `hostkeeper-selfupdate-daemon`, built for musl, updated to
 //! the next version and fallen back from; its rig is `tests/openrc/`.
+//! `tests/install_apt.rs` (first line `#![cfg(feature = "privileged")]`, the job `privileged`)
+//! runs the `apt` backend of the repository installer (`hostkeeper_install::repository`) as root
+//! against the runner's own apt, dpkg and systemd, with a signed fixture repository the test
+//! builds on disk with `dpkg-deb` and `gpg`: install, update, rollback with the repository
+//! removed, an upgrade that leaves the held version, drift put back, the refusals of `stage`,
+//! and uninstall; and the backend's `apt-get update` and simulation in a container of each deb
+//! release of `linux-releases.toml`. Its rig is `tests/install_apt/`.
 //!
 //! - [`across`]: the cross-release rig's pin of the previous release, the check of its
 //!   downloaded tarball against the pin, and the version a program of this build runs as.

@@ -573,6 +573,7 @@ fn the_committed_privileged_yml_passes_and_holds_the_one_sudo() {
     assert_eq!(
         targets["privileged"],
         BTreeSet::from([
+            "install_apt".to_owned(),
             "linux_packages".to_owned(),
             "mdm_cert_units".to_owned(),
             "observer".to_owned(),

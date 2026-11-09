@@ -140,6 +140,7 @@ pub const LAYERS: [Layer; 32] = [
         ],
         &[
             ENROLL,
+            INSTALL,
             MDM_CORE,
             OBSERVE,
             OIDC,
