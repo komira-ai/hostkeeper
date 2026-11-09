@@ -12,7 +12,13 @@
 # `release` reads the variant's release index (`hello-index.json` or
 # `hello-fail-ready-index.json`), its archives and their bundles from the release, and
 # `cargo xtask release targets` writes the targets: one hostkeeper-archive entry per platform the
-# index lists (docs/design/packages.md, section 3.7). It holds no token right but
+# index lists (docs/design/packages.md, section 3.7). For `hello` it also reads hello's native
+# packages, its .deb for each Linux architecture and its .pkg with their bundles, and each
+# platform's list holds the native entry before the archive one (docs/design/packages-native.md,
+# item A21, the canary of stage 7): a host whose daemon announces `apt` (or `macos-pkg`) is moved
+# to the package of the repository's testing suite (or the installers' testing directory), and
+# any other host keeps its archive. The failing build has no native package (its version is not
+# the X.Y.Z the repository takes), so its lists hold its archives alone. It holds no token right but
 # `contents: read`, and runs nothing of the release. `set-desired` calls the CI client with the
 # targets, the index and the index's SHA-256, so each host, of any platform, is ordered its own
 # platform's package (a daemon before targets through the index). It is pinned
@@ -84,8 +90,14 @@ jobs:
       # (`--fail-early`), so nothing is set.
       - name: Download the variant's index, archives and bundles
         run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --fail-early --retry 5 --retry-delay 5 --retry-max-time 300 --retry-all-errors --silent --show-error --location --create-dirs --output-dir "$RUNNER_TEMP/release" --remote-name-all "https://github.com/$GITHUB_REPOSITORY/releases/download/v$RELEASE/$INDEX" "https://github.com/$GITHUB_REPOSITORY/releases/download/v$RELEASE/hello-$VERSION-{linux-arm64,linux-x86_64,macos-arm64}.tar.zst{,.sigstore.json}"
+      # hello's native packages and their bundles, for `hello` only, the same way.
+      - name: Download hello's native packages and bundles
+        if: ${{ inputs.variant == 'hello' }}
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --fail-early --retry 5 --retry-delay 5 --retry-max-time 300 --retry-all-errors --silent --show-error --location --create-dirs --output-dir "$RUNNER_TEMP/release" --remote-name-all "https://github.com/$GITHUB_REPOSITORY/releases/download/v$RELEASE/hello_${RELEASE}_{amd64,arm64}.deb{,.sigstore.json}" "https://github.com/$GITHUB_REPOSITORY/releases/download/v$RELEASE/hello-$RELEASE-macos-arm64.pkg{,.sigstore.json}"
       # Refused, every problem named, unless the index is hello's at the version, lists every
-      # platform, and each archive, bundle and manifest checks out against it.
+      # platform, and each archive, bundle and manifest checks out against it, and for `hello`
+      # each native package is there, its bundle lists it and a .deb's control is hello's at
+      # the version for its architecture.
       - name: The targets of the variant's package
         id: targets
         run: cargo xtask release targets --service hello ${FAIL_READY:+--fail-ready} --version "$RELEASE" --dir "$RUNNER_TEMP/release" --repo "$GITHUB_REPOSITORY" --output "$GITHUB_OUTPUT"
