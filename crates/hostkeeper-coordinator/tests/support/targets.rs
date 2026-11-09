@@ -36,7 +36,14 @@ pub fn location(locator: &str) -> Location {
     }
 }
 
-/// A manifest that passes every rule a manifest keeps, for the service `service` on Linux.
+/// Whether `installer` is native (packages-native.md section 10): its hook is the package's
+/// program at a fixed path, so its manifest names no `hook.command`.
+pub fn is_native(installer: &str) -> bool {
+    installer == "apt" || installer == "macos-pkg"
+}
+
+/// A manifest that passes every rule a manifest keeps, for the service `service` on Linux: a
+/// hook program for an installer that is not native, none for a native one.
 pub fn manifest(service: &str, installer: &str) -> Manifest {
     if installer == "hostkeeper-archive" {
         return Manifest {
@@ -47,7 +54,11 @@ pub fn manifest(service: &str, installer: &str) -> Manifest {
     Manifest {
         package: (installer == "deb" || installer == "rpm").then(|| service.to_owned()),
         hook: Some(Hook {
-            command: vec![format!("bin/{service}"), "update-hook".to_owned()],
+            command: if is_native(installer) {
+                Vec::new()
+            } else {
+                vec![format!("bin/{service}"), "update-hook".to_owned()]
+            },
             timeout_secs: Some(StepBounds {
                 prepare: 0,
                 cutover: 10,
@@ -71,9 +82,9 @@ pub fn manifest(service: &str, installer: &str) -> Manifest {
 }
 
 /// An entry of `installer` for `service` whose artifact's digest is all `c` and whose size is
-/// `bytes`.
+/// `bytes`, with an attestation but for `macos-pkg`, whose entry carries none.
 pub fn entry(service: &str, installer: &str, c: char, bytes: u64) -> Target {
-    Target {
+    let attested = Target {
         installer: installer.to_owned(),
         locations: vec![location(&format!(
             "example-org/{service}/releases/download/v2.0/{service}-{installer}"
@@ -89,7 +100,14 @@ pub fn entry(service: &str, installer: &str, c: char, bytes: u64) -> Target {
         }),
         manifest: Some(manifest(service, installer)),
         ..Target::default()
+    };
+    if installer == "macos-pkg" {
+        return Target {
+            attestation: None,
+            ..attested
+        };
     }
+    attested
 }
 
 /// A repository entry of `service` (packages-repositories.md section 2.1): `apt` from the

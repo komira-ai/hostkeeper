@@ -95,8 +95,8 @@ fn releases_file(rig: &super::Rig) -> String {
 /// starting with a letter and one with a space; a package version on an entry without a
 /// repository; a location, a size of 1 and an attestation; no pin, one of 63 hex digits and one
 /// with an upper-case letter; no `manifest.package`, one of 129 bytes and one starting with `-`;
-/// the installer `hostkeeper-archive` from a repository; and the service `hostkeeper` with a
-/// repository entry.
+/// the installer `hostkeeper-archive` from a repository; and the service `hostkeeper` with its
+/// repository entry after its archive entry (its native entry first is accepted, A18).
 ///
 /// Catches: a row of section 2.2 that the coordinator forgot to ask of a set, or one that a
 /// refusal leaves a trace of.
@@ -249,10 +249,13 @@ async fn each_row_of_section_2_2_refuses_the_set_target_invalid() {
             ),
         ),
         (
-            "the service hostkeeper with a repository entry",
+            "the service hostkeeper with its repository entry after its archive entry",
             "hostkeeper",
-            BTreeMap::from([("linux-x86_64".to_owned(), list(vec![own]))]),
-            "the list of linux-x86_64 for the service hostkeeper is not one hostkeeper-archive entry"
+            BTreeMap::from([(
+                "linux-x86_64".to_owned(),
+                list(vec![entry("hostkeeper", "hostkeeper-archive", 'b', 1000), own]),
+            )]),
+            "the list of linux-x86_64 for the service hostkeeper is not one native entry with at most one hostkeeper-archive entry after it, nor one hostkeeper-archive entry"
                 .to_owned(),
         ),
     ];

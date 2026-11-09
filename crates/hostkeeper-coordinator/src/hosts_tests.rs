@@ -265,6 +265,16 @@ fn a_host_is_what_the_status_holds_of_it() {
         // A heartbeat answered as the JSON route answers it says nothing of the trusted root: unknown.
         trusted_root_age_secs: None,
         trusted_root_reason: agent::TrustedRootReason::Unspecified.into(),
+        // A daemon that does not announce `target-v1` runs every service from archives.
+        running: [DB, WEB]
+            .into_iter()
+            .map(|service| proto::RunningService {
+                service: service.to_owned(),
+                version: "1.0".to_owned(),
+                installer: "hostkeeper-archive".to_owned(),
+            })
+            .collect(),
+        running_unix: Some(UNIX + 2_000),
     };
     assert_eq!(host, expected);
     let listed = list(&rig, 0, "").expect("a page");

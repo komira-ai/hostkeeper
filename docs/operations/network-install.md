@@ -59,9 +59,9 @@ coordinator's durable enrollment store holds for its host id, read from the stor
 Only `HOST_HELD_NONE` (no host by that id) is installed. `HOST_HELD_APPROVED` (a host is approved
 as that id), `HOST_HELD_DENIED` (retired with `hosts retire`, not final yet), `HOST_HELD_RETIRED`
 (retired, final) and `HOST_HELD_UNSPECIFIED` (a coordinator of a release before the field, or one
-without enrollment) are not. `hosts list` is not what decides: it lists only the hosts heard from
-since the coordinator started, so after a restart a retired host, or an approved host that has
-not yet sent a heartbeat, is missing from it, though its record is held. A retired host's record
+without enrollment) are not. `hosts list` is not what decides: it lists the hosts heard from
+since the coordinator started and the enrolled hosts that are not denied, so a retired host is
+missing from it after a restart, though its record is held. A retired host's record
 can stay in the inventory: its `hostHeld` keeps the machine from being installed again. To see
 what `serve` will see:
 

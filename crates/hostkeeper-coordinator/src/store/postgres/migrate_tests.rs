@@ -4,7 +4,7 @@ use super::*;
 
 /// The SHA-256 of each shipped migration file, in hex. A shipped migration is never edited: a
 /// change is a migration of its own, so these only grow.
-const PINNED: [(i32, &str, &str); 5] = [
+const PINNED: [(i32, &str, &str); 6] = [
     (
         1,
         "state",
@@ -30,6 +30,11 @@ const PINNED: [(i32, &str, &str); 5] = [
         "mdm_devices",
         "9ffd9dc58ad104072ebccea2c3b570a4f8879f40d2b5271197dd30706ed273d0",
     ),
+    (
+        6,
+        "host_running",
+        "02a0c986c0884717965f5526d7af642322c78fdedb115e7809522bf2ef0dd789",
+    ),
 ];
 
 fn hex(bytes: &[u8]) -> String {
@@ -51,9 +56,10 @@ fn what(statement: &str) -> String {
 
 /// Proves: the migrations this build ships are the ones that were released: their numbers and
 /// names are exactly [(1, "state"), (2, "first_serving"), (3, "generations"), (4, "releases"),
-/// (5, "mdm_devices")], each file's SHA-256 is the pinned one, and every one passes the header
-/// rule, the lint and the numbering; the first three say older releases must not run on them, and
-/// `releases` and `mdm_devices` that they may (an older release never reads either table).
+/// (5, "mdm_devices"), (6, "host_running")], each file's SHA-256 is the pinned one, and every
+/// one passes the header rule, the lint and the numbering; the first three say older releases
+/// must not run on them, and `releases`, `mdm_devices` and `host_running` that they may (an
+/// older release never reads any of the three tables).
 ///
 /// Catches: an edit to a shipped migration (a database that ran the old text would differ from
 /// one that runs the new), and a shipped file the runner would refuse at every start.
@@ -67,7 +73,8 @@ fn the_shipped_migrations_are_unchanged() {
             (2, "first_serving"),
             (3, "generations"),
             (4, "releases"),
-            (5, "mdm_devices")
+            (5, "mdm_devices"),
+            (6, "host_running")
         ]
     );
     let hashes: Vec<(i32, &str, String)> = SHIPPED
@@ -90,6 +97,7 @@ fn the_shipped_migrations_are_unchanged() {
             (3, "generations", OlderReleases::Refuse),
             (4, "releases", OlderReleases::MayRun),
             (5, "mdm_devices", OlderReleases::MayRun),
+            (6, "host_running", OlderReleases::MayRun),
         ]
     );
 }

@@ -140,9 +140,9 @@ coordinator's durable enrollment store holds for the record's host id, read from
 (no host by that id), `APPROVED` (a host approved as the id and not denied), `DENIED` (`Hosts.Retire` denied the id and
 its retirement is not final yet) or `RETIRED` (denied and final), and `UNSPECIFIED` from a coordinator of a release
 before the field or one without enrollment. Only `NONE` admits a record; every other value, `UNSPECIFIED` included,
-leaves it out, so a coordinator that has not said installs nothing. `Hosts.List` cannot carry the rule: it lists only
-the hosts heard from since the coordinator started, and a retired host is refused at its heartbeat, so after a
-coordinator restart a retired host, or an approved host that has not yet sent a heartbeat, is not listed, and its
+leaves it out, so a coordinator that has not said installs nothing. `Hosts.List` cannot carry the rule: it lists the
+hosts heard from since the coordinator started and the enrolled hosts that are not denied, and a retired host is
+refused at its heartbeat, so after a coordinator restart a retired host is not listed, and its
 record would look free to install. `host_held` is the same before and after a restart, and the same for a host never
 heard from as for one heartbeating.
 
@@ -619,7 +619,7 @@ by hand. A machine that is retired instead of reinstalled is denied by host id, 
 | A machine boots network first while `hostkeeper-pxe` is not running, router mode | Its TFTP request gets no reply. The firmware tries its next boot device after its own wait **[V]**, and nothing is installed (section 3). |
 | An enrolled host boots network first | Not in the answer set (section 3): no answer in proxy mode, the local-disk menu in router mode, so it boots from disk. With `--reinstall` naming it, it is reinstalled. |
 | A retired host whose record is still in the inventory | Not in the answer set: its record's `host_held` is `RETIRED` (or `DENIED` until the retirement is final), read from the enrollment store, also after a coordinator restart (section 3). |
-| An approved host that has not sent a heartbeat since the coordinator started | Not in the answer set: its record's `host_held` is `APPROVED`, though `Hosts.List` does not list it (section 3). |
+| An approved host that has not sent a heartbeat since the coordinator started | Not in the answer set: its record's `host_held` is `APPROVED`, read from the store (section 3). |
 | A coordinator of a release before `host_held`, or without enrollment | Every record's `host_held` is `UNSPECIFIED`, so none is in the answer set: no proxy offer, or the local-disk menu, until the coordinator says `NONE` (section 3). |
 | An installed machine waiting for approval reboots, or `hostkeeper-pxe` is restarted meanwhile | Not in the answer set: a pending request matches its record (section 3). |
 | A machine reboots after its install, with network boot still first | Its MAC left the answer set at its seed fetch, so it boots the disk; after a restart of `hostkeeper-pxe`, a pending request or its host keeps it out. |

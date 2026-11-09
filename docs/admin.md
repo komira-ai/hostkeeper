@@ -26,8 +26,15 @@ The answer is the coordinator's view of the host: whether it is live, when its l
 arrived, that heartbeat as the host sent it (its agent version, the trusted root's age and reason in
 `trusted_root_age_secs` and `trusted_root_reason`, see
 [The trusted root on a host](deploy/verify-a-release.md#the-trusted-root-on-a-host), and each
-service's lifecycle, health and step records), and how each service the coordinator manages sees it. A host the coordinator has not heard from since it
-started is refused `unknown_host`.
+service's lifecycle, health and step records), and how each service the coordinator manages sees it,
+and `running`: each service the host's daemon said it runs (not one it reported absent) with its
+version and the installer it runs it with (`hostkeeper-archive` for a daemon that announces none),
+and `running_unix`, when the coordinator took it from a heartbeat. A host the coordinator has not
+heard from since it started is refused `unknown_host` by `hosts get`; `hosts list` lists it all the
+same when it is enrolled and not denied, not live, with the daemon's version and `running` as its
+enrollment kept them from its last change (the installer of a service is empty when the daemon
+announces `target-v1` and the coordinator has read its installers over neither gRPC nor an earlier
+record).
 
 The enrollment of a host that has no certificate yet is read at the coordinator, not on the host:
 `hkctl enrollment list` shows the request with its `key_sha256`, which an operator at the host's

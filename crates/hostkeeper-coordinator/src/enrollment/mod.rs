@@ -55,7 +55,7 @@ mod setup;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use hostkeeper_enrollment::ca::{Ca, CaBundle, Signer};
-use hostkeeper_enrollment::enroll::EnrollmentStore;
+use hostkeeper_enrollment::enroll::{EnrollmentStore, HostRunning};
 use hostkeeper_enrollment::names::HostId;
 use hostkeeper_enrollment::validity::UnixClock;
 pub use hostkeeper_proto::hostkeeper::agent::v1::CoordinatorRefusal;
@@ -337,6 +337,19 @@ impl Enrollment {
         let now = self.clock.now_unix();
         if let Some(Err(why)) = store_host(host).map(|host| self.store.note_serving(&host, now)) {
             tracing::warn!(%why, host_id = %host, "a first serving heartbeat was not recorded");
+        }
+    }
+
+    /// Records that a heartbeat of `host` accepted now, by the enrollment's clock, said the host
+    /// runs `running`: it is kept with the host ([`EnrollmentStore::note_running`]) when it
+    /// differs from what the host record holds. A host the store never approved is not tracked;
+    /// a store that cannot be written is logged, and the next heartbeat tries again.
+    pub fn note_running(&self, host: &hostkeeper_wire::HostId, running: &HostRunning) {
+        let now = self.clock.now_unix();
+        if let Some(Err(why)) =
+            store_host(host).map(|host| self.store.note_running(&host, running, now))
+        {
+            tracing::warn!(%why, host_id = %host, "what a host runs was not recorded");
         }
     }
 

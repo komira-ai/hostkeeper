@@ -1,5 +1,6 @@
 //! The checks of `hostkeeper-release` (docs/design/packages.md sections 3.4, 4.4 and 7.1, and
-//! packages-repositories.md section 2.2; packages-tests.md, A1 and A16): one case per rule, each under and over every limit, on releases
+//! packages-repositories.md section 2.2, packages-native.md sections 10.2 to 10.4; packages-tests.md, A1,
+//! A16 and A18): one case per rule, each under and over every limit, on releases
 //! that pass every other rule (`support`).
 //!
 //! One test binary, so every arm of a function is covered by the same binary.
@@ -15,6 +16,8 @@ mod grammar;
 mod hook;
 #[path = "manifest/installers.rs"]
 mod installers;
+#[path = "manifest/native.rs"]
+mod native;
 #[path = "manifest/paths.rs"]
 mod paths;
 #[path = "manifest/receipt.rs"]

@@ -12,8 +12,8 @@ use super::rows::{
     DenyState, HostRow, RequestRow, SCHEMA, claims_of_pb, claims_to_pb, corrupt, deny_state,
 };
 use super::{
-    Approval, ApprovalRecord, ApproveError, Claims, Decision, NewRequest, PostError, PostOutcome,
-    RecordedApproval, RequestState, RequestView, StoreError,
+    Approval, ApprovalRecord, ApproveError, Claims, Decision, HostRunning, NewRequest, PostError,
+    PostOutcome, RecordedApproval, RequestState, RequestView, StoreError,
 };
 use crate::ca::check_request;
 use crate::fs::Fs;
@@ -48,6 +48,10 @@ pub struct EnrollmentStore {
     /// managed service installed and healthy ([`EnrollmentStore::note_serving`]); an approval
     /// of the host takes it out.
     pub(super) served: Mutex<BTreeSet<HostId>>,
+    /// Per host, what its host record is known to hold of what it runs, so a heartbeat that says
+    /// the same takes neither the lock nor a read ([`EnrollmentStore::note_running`]); an
+    /// approval of the host takes it out.
+    pub(super) running: Mutex<BTreeMap<HostId, HostRunning>>,
 }
 
 impl std::fmt::Debug for EnrollmentStore {
@@ -83,6 +87,7 @@ impl EnrollmentStore {
             max_pending: DEFAULT_MAX_PENDING,
             heard: Mutex::new(BTreeSet::new()),
             served: Mutex::new(BTreeSet::new()),
+            running: Mutex::new(BTreeMap::new()),
         }
     }
 
@@ -576,6 +581,8 @@ impl EnrollmentStore {
             // first heartbeat that reports a managed service serving.
             first_heartbeat_unix: None,
             first_serving_unix: None,
+            // ... and for what its daemon says it runs.
+            running: None,
         }));
         row.set_state(RequestState::Approved);
         row.pb.approved = Some(pb::Approval {
@@ -608,6 +615,10 @@ impl EnrollmentStore {
             .unwrap_or_else(PoisonError::into_inner)
             .remove(host);
         self.served
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(host);
+        self.running
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .remove(host);

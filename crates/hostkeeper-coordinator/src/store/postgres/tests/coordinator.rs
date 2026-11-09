@@ -652,6 +652,7 @@ fn host_record(host: &str, role: &str) -> pb::Host {
         duplicate: false,
         first_heartbeat_unix: None,
         first_serving_unix: None,
+        running: None,
     }
 }
 
