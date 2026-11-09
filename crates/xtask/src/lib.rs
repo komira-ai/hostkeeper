@@ -19,7 +19,7 @@
 //!   (`netinstall_report`). The end-to-end job `net-install` runs it; an operator
 //!   runs it once on the first real machine (`docs/operations/network-install.md`).
 //! - `channels <verb>`: a release's Linux packages (deb and rpm, the daemon's and the
-//!   coordinator's) and its macOS installer (unsigned) reaching the repositories at
+//!   coordinator's) and its macOS installer (signed by the release, not notarized) reaching the repositories at
 //!   `packages.komira.ai`: testing first, the install checks, then the decision to promote and
 //!   the promotion. Copied from komira-ai/tierstore (`channels`).
 //! - `db-backup`: one dump of the coordinator's database into a directory of dumps, keeping the

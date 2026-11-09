@@ -3,7 +3,7 @@
 
 use super::lint::lint;
 use super::pkg_signing::{
-    BUILD_PKG, CHECK_JOB, CHECK_SIGNATURE, DELETE_KEYCHAIN, DELETE_P12, IDENTITY,
+    BUILD_PKG, CHECK_JOB, CHECK_SIGNATURE, CHECK_STEPS, DELETE_KEYCHAIN, DELETE_P12, IDENTITY,
     PUBLISHED_ARTIFACT, SAME_FILES, SIGN, SIGN_ENV, SIGN_JOB, SIGN_STEPS, SIGNED_ARTIFACT, SUMS_IF,
     Step, UNSIGNED_ARTIFACT,
 };
@@ -253,54 +253,110 @@ fn a_secret_named_outside_the_signing_steps_is_refused() {
     assert_refused(&other, &step_problem(2));
 }
 
-#[test]
-fn the_signature_check_missing_or_after_the_upload_is_refused() {
-    // Catches: a signed pkg published without its signature checked against the identity and
-    // Apple's chain, checked only after it was uploaded (a failed check would leave it in the
-    // release files), or not compared with the unsigned pkg that build-macos checked.
-    let text = artifacts_yml();
-    let check = run_line(CHECK_SIGNATURE);
-    let without = with_in(&text, &check, "        run: echo nothing\n");
-    let want = format!(
-        "artifacts.yml: job {CHECK_JOB} does not run `{CHECK_SIGNATURE}` before its upload"
-    );
-    assert_refused(&without, &want);
-    let upload = format!(
+/// The problem of the step `n` (from 1) of the check job that is not the `n`th of
+/// [`CHECK_STEPS`].
+fn check_step_problem(n: usize) -> String {
+    format!(
+        "artifacts.yml: job {CHECK_JOB}: step {n} is not {:?}",
+        CHECK_STEPS[n - 1]
+    )
+}
+
+/// The check step, as the file writes it.
+fn check_step() -> String {
+    format!(
+        "      - name: The signature is the identity's, under Apple's chain, with a trusted timestamp\n{}",
+        run_line(CHECK_SIGNATURE)
+    )
+}
+
+/// The upload of the check job, as the file writes it.
+fn published_upload() -> String {
+    format!(
         "      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1\n        with:\n          name: {PUBLISHED_ARTIFACT}\n          path: dist/\n          retention-days: 90\n          if-no-files-found: error\n"
+    )
+}
+
+#[test]
+fn the_signature_check_missing_skipped_or_after_the_upload_is_refused() {
+    // Catches: a signed pkg published without its signature checked against the identity and
+    // Apple's chain, a check whose failure does not fail the job (`continue-on-error`, on the
+    // step or the job) or that never runs (an `if:`), a check only after the upload (a failed
+    // check would leave the pkg in the release files), or no comparison with the unsigned pkg
+    // that build-macos checked.
+    let text = artifacts_yml();
+    let check = check_step();
+    let without = with_in(
+        &text,
+        &run_line(CHECK_SIGNATURE),
+        "        run: echo nothing\n",
     );
+    assert_refused(&without, &check_step_problem(5));
     let late = with_in(
-        &without,
-        &upload,
-        &format!("{upload}      - name: Check\n{check}"),
+        &with_in(&text, &check, ""),
+        &published_upload(),
+        &format!("{}{check}", published_upload()),
     );
-    assert_refused(&late, &want);
+    assert_refused(&late, &check_step_problem(5));
+    assert_refused(&late, &check_step_problem(9));
+    for key in [
+        "continue-on-error: true",
+        "if: ${{ false }}",
+        "shell: sh",
+        "working-directory: unsigned",
+    ] {
+        let skipped = with_in(
+            &text,
+            &check,
+            &check.replace(
+                "        run: cargo",
+                &format!("        {key}\n        run: cargo"),
+            ),
+        );
+        assert_refused(&skipped, &check_step_problem(5));
+    }
+    let whole_job = with_in(
+        &text,
+        &format!("  {CHECK_JOB}:\n    needs: [version, sign-pkg]\n"),
+        &format!("  {CHECK_JOB}:\n    continue-on-error: true\n    needs: [version, sign-pkg]\n"),
+    );
+    assert_refused(
+        &whole_job,
+        &format!("artifacts.yml: job {CHECK_JOB} has the key continue-on-error"),
+    );
 
     let no_diff = with_in(&text, &run_line(SAME_FILES), "        run: echo same\n");
-    assert_refused(
-        &no_diff,
-        &format!("artifacts.yml: job {CHECK_JOB} does not run `{SAME_FILES}` before its upload"),
-    );
-    let check_header = format!("  {CHECK_JOB}:\n    needs: [version, sign-pkg]\n");
+    assert_refused(&no_diff, &check_step_problem(8));
     let unordered = with_in(
         &text,
-        &check_header,
+        &format!("  {CHECK_JOB}:\n    needs: [version, sign-pkg]\n"),
         &format!("  {CHECK_JOB}:\n    needs: [version, build-macos]\n"),
     );
     assert_refused(
         &unordered,
         &format!("artifacts.yml: job {CHECK_JOB} must need exactly [\"sign-pkg\", \"version\"]"),
     );
+    let env = format!(
+        "    env:\n      RELEASE_VERSION: ${{{{ needs.version.outputs.version }}}}\n      IDENTITY: \"{IDENTITY}\"\n    steps:\n      - uses: actions/checkout@"
+    );
+    let want_env = format!(
+        "artifacts.yml: job {CHECK_JOB} must have exactly the env [(\"RELEASE_VERSION\", \"${{{{ needs.version.outputs.version }}}}\"), (\"IDENTITY\", {IDENTITY:?})]"
+    );
     let identity = with_in(
         &text,
-        &format!(
-            "    timeout-minutes: 30\n    permissions:\n      contents: read\n    env:\n      RELEASE_VERSION: ${{{{ needs.version.outputs.version }}}}\n      IDENTITY: \"{IDENTITY}\"\n"
+        &env,
+        &env.replace(
+            IDENTITY,
+            "Developer ID Installer: Someone Else (AAAAAAAAAA)",
         ),
-        "    timeout-minutes: 30\n    permissions:\n      contents: read\n    env:\n      RELEASE_VERSION: ${{ needs.version.outputs.version }}\n      IDENTITY: \"Developer ID Installer: Someone Else (AAAAAAAAAA)\"\n",
     );
-    assert_refused(
-        &identity,
-        &format!("artifacts.yml: job {CHECK_JOB} must set IDENTITY to {IDENTITY:?}"),
+    assert_refused(&identity, &want_env);
+    let extra = with_in(
+        &text,
+        &env,
+        &env.replace("    steps:", "      RUSTFLAGS: -Cfoo\n    steps:"),
     );
+    assert_refused(&extra, &want_env);
 }
 
 #[test]
@@ -340,28 +396,45 @@ fn the_recorded_sha256_of_the_pkg_is_of_the_signed_file() {
         &signed_download,
         "          name: pkg-signed-macos-arm64\n          path: signed\n",
     );
-    assert_refused(
-        &unsigned_published,
-        &format!(
-            "artifacts.yml: job {CHECK_JOB} does not download {SIGNED_ARTIFACT} into dist before its upload"
-        ),
-    );
+    assert_refused(&unsigned_published, &check_step_problem(4));
     let published = format!("          name: {PUBLISHED_ARTIFACT}\n          path: dist/\n");
     let elsewhere = with_in(
         &text,
         &published,
         &format!("          name: {PUBLISHED_ARTIFACT}\n          path: unsigned/\n"),
     );
-    let one_upload = format!(
-        "artifacts.yml: job {CHECK_JOB} must upload dist/ as {PUBLISHED_ARTIFACT}, its one upload"
-    );
-    assert_refused(&elsewhere, &one_upload);
+    assert_refused(&elsewhere, &check_step_problem(9));
     let unnamed = with_in(
         &text,
         &published,
         "          name: assets-macos-arm64-pkg\n          path: dist/\n",
     );
-    assert_refused(&unnamed, &one_upload);
+    assert_refused(&unnamed, &check_step_problem(9));
+    // The unsigned pkg fetched over the checked one, under the same name, before the upload.
+    let swapped = with_in(
+        &text,
+        &published_upload(),
+        &format!(
+            "      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1\n        with:\n          name: {UNSIGNED_ARTIFACT}\n          path: dist\n{}",
+            published_upload()
+        ),
+    );
+    assert_refused(
+        &swapped,
+        &format!("artifacts.yml: job {CHECK_JOB} has 10 steps, not the 9 of CHECK_STEPS"),
+    );
+    assert_refused(&swapped, &check_step_problem(9));
+    // The signing job fed a pkg of another run.
+    let other_run = with_in(
+        &text,
+        &format!(
+            "          name: {UNSIGNED_ARTIFACT}\n          path: unsigned\n      - name: The identity"
+        ),
+        &format!(
+            "          name: {UNSIGNED_ARTIFACT}\n          path: unsigned\n          run-id: 1\n      - name: The identity"
+        ),
+    );
+    assert_refused(&other_run, &step_problem(1));
 
     let from_build = with_in(
         &text,
@@ -412,4 +485,36 @@ fn an_artifacts_yml_without_the_signing_jobs_is_refused_for_each() {
     );
     let renamed = renamed.replace("image, check-pkg]", "image, check-installer]");
     assert_refused(&renamed, &format!("artifacts.yml: has no job {CHECK_JOB}"));
+}
+
+#[test]
+fn a_signing_step_or_job_with_a_key_of_its_own_is_refused() {
+    // Catches: a signing that may fail without failing the job (so check-pkg is fed whatever
+    // dist/ holds), a cleanup that may be skipped by its own key, or the signing job taking a
+    // container, a strategy or an env of its own.
+    let text = artifacts_yml();
+    let sign = run_line(SIGN);
+    let lenient = with_in(
+        &text,
+        &sign,
+        &format!("        continue-on-error: true\n{sign}"),
+    );
+    assert_refused(&lenient, &step_problem(10));
+    let cleanup = run_line(DELETE_KEYCHAIN);
+    let timed = with_in(
+        &text,
+        &cleanup,
+        &format!("        timeout-minutes: 0\n{cleanup}"),
+    );
+    assert_refused(&timed, &step_problem(11));
+    let header = format!("    environment: {SIGN_ENV}\n");
+    let job_key = with_in(
+        &text,
+        &header,
+        &format!("{header}    continue-on-error: true\n"),
+    );
+    assert_refused(
+        &job_key,
+        &format!("artifacts.yml: job {SIGN_JOB} has the key continue-on-error"),
+    );
 }

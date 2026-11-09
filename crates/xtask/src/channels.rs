@@ -21,8 +21,8 @@
 //!   organisation's products share.
 //! - `channels rpm sign|check-signed|promote|repo ...` ([`rpm`]): the same packages as RPMs,
 //!   signed, into the rpm tree of the same repository.
-//! - `channels pkg upload|promote|check ...` ([`pkg`]): the macOS installer (unsigned until the
-//!   owner has a Developer ID) into `pkg/hostkeeper/<version>/` of the same bucket, and the
+//! - `channels pkg upload|promote|check ...` ([`pkg`]): the macOS installer (signed by the
+//!   release, not notarized) into `pkg/hostkeeper/<version>/` of the same bucket, and the
 //!   pointer `pkg/hostkeeper/stable.json` to the promoted one.
 //! - `channels check-apt --package <p> ...` ([`check`]) and `channels check-rpm --package <p>
 //!   ...` ([`check_rpm`]): a package installed from the suite `testing` on a clean machine and
