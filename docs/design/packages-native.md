@@ -363,9 +363,11 @@ does is not one we run.
   xtask's `channel_sync.rs`, `package_launch.rs` and the index tests; the layering rows of the deleted crates. The
   device tests that run archives today are not deleted, and keep every case (rule T7): `tierstore_shaped.rs`,
   `hello_rig.rs` and the self-update tests are re-pointed at `.deb` and `.pkg` fixtures by A19 to A21, the rollout
-  tests at `hello`'s fail-ready `.deb` (A20). `openrc_device.rs` keeps every case too; its two self-update cases
-  update through an archive and, with no `apk` backend, have no native installer to move to, so A25 does not delete
-  the archive path they use without the maintainers' ruling on them.
+  tests at `hello`'s fail-ready `.deb` (A20). The one exception is `openrc_device.rs`'s two self-update cases: A25
+  deletes them, on purpose, together with the archive path they update through, because that path is no longer a
+  supported way to update an OpenRC host. No host we run is Alpine and no `apk` backend is planned (the 2026-11-08
+  ruling), so an OpenRC host updates hostkeeper by reinstall. The `openrc-device` check stays required for what an
+  OpenRC host still does (the daemon's start, stop, restart and status under OpenRC), and A25 does not drop it.
 
 ### 10.8 The build items, re-scoped
 
@@ -382,7 +384,7 @@ does is not one we run.
 | A22 | The runbook of the move: per host the repository entries, the restart and the check that `apt` is announced; the stages' conditions and stage 9's two queries | A17, A18 | A19 to A21 |
 | A23 | hostkeeper's own release (stage 8): its `.deb` and `.pkg` through the release machinery, the native entry before the archive one | A19 released, A21 | none |
 | A24 | Stage 9: every release with native entries alone; `release.yml` without the channel wait and the index (10.5); X1's pin moved to a release from A19 on | Stage 9's counts zero; A9 built, or else `macos-arm64` left out of every list while no Mac is enrolled (its hosts would show `no_target`) | none |
-| A25 | Deletion in the daemon, the coordinator and the crates (10.7) | A24 converged | A28 |
+| A25 | Deletion in the daemon, the coordinator and the crates (10.7), with `openrc_device.rs`'s two self-update cases: the archive path they update through is removed as a supported path, an OpenRC host updating by reinstall; the required `openrc-device` check stays | A24 converged | A28 |
 | A26 | Withdrawn: the backends are `apt` and `macos-pkg`, with `dnf` later, and no `apk` or `pacman` (the 2026-11-08 ruling). Was: the design of the `apk` backend for Alpine | | |
 | A27 | Withdrawn by the same ruling. Was: the `apk` backend, the Alpine package published to an apk repository, and the OpenRC device tests on it | | |
 | A28 | Deletion in xtask, the workflows and the docs (10.7) | A24 converged | A25 |
