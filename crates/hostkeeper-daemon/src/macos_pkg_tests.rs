@@ -377,3 +377,37 @@ fn a_pkg_entry_whose_digest_is_no_sha256_is_order_invalid() {
     );
     assert!(store.asked().is_empty());
 }
+
+/// Catches: a `placed.json` that cannot be read taken as a service with no record (a `.pkg`
+/// staged with no conflict check, a removal that removes nothing), or a save that reports
+/// success. Each of the record store's three calls is the store's error.
+#[test]
+fn a_pkg_record_store_that_cannot_read_placed_json_fails_each_call() {
+    let scratch = scratch("pkg-record-faults");
+    let mut repository = repository(&scratch, None);
+    repository.fs = Arc::new(FaultFs::new(scratch.path(), Log::new()).failing_read(1, true));
+    let records = repository.records();
+    let other = ServiceName::new("other").expect("a name");
+    assert!(Records::load(&records, &hello()).is_err());
+    assert!(Records::holder(&records, "dev.hostkeeper.hello", &other).is_err());
+    assert!(
+        Records::save(
+            &records,
+            &hello(),
+            &PkgRecord::new("dev.hostkeeper.hello", "1.0.0")
+        )
+        .is_err()
+    );
+}
+
+/// Catches: a removal handed a kept version that is not on the host. A `previous` that names a
+/// version whose directory is gone is no kept version.
+#[test]
+fn a_kept_link_to_a_version_gone_is_not_kept() {
+    let scratch = scratch("pkg-kept-gone");
+    let repository = repository(&scratch, None);
+    let packages = scratch.path().join("packages/hello");
+    fs::create_dir_all(&packages).expect("the service's directory");
+    std::os::unix::fs::symlink("0.9.0", packages.join("previous")).expect("the link");
+    assert_eq!(repository.kept(&hello()), Ok(Vec::new()));
+}
