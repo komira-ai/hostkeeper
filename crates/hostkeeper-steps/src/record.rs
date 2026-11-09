@@ -111,6 +111,40 @@ pub struct Progress {
     /// without it loads as `None`; the next update writes a new record without it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub report_order_id: Option<String>,
+    /// The update of the updater itself has run its new binary, which confirmed itself, and the
+    /// `activate` of its own native package (`apt-get install hostkeeper=<V>` and the hold, or
+    /// `installer -pkg`) is still to be done (docs/design/packages-native.md, section 10.4,
+    /// step 5): the record stays unfinished (`done` at `cleanup`) until that `activate` ends it
+    /// ([`RecordStore::settle_activate`]), so that a crash between the confirmation and the end of
+    /// `activate` is resumed by the next start, and the verdict is reported only after it.
+    /// Written only by the new binary, after its confirmation, so no older binary meets it.
+    /// Additive: written only when set, and a record without it loads as `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activate: Option<PendingActivate>,
+}
+
+/// The `activate` of the updater's own package that waits to be done ([`Progress::activate`]).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingActivate {
+    /// The version whose package is to be installed: the binary that runs.
+    pub version: String,
+    /// What the `Succeeded` the `activate` ends with says of the promotion.
+    pub verdict_promotion_pending: bool,
+    /// The coordinator's id of the order the update ran for, when it came with one: kept as
+    /// [`Progress::report_order_id`] when the `activate` ends. Written only when set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub order_id: Option<String>,
+}
+
+/// How the `activate` of the updater's own package ended ([`RecordStore::settle_activate`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Activated {
+    /// The package is installed: `Succeeded`, with `reason` (`drift_repaired` when the package
+    /// was found at a version hostkeeper did not set).
+    Succeeded { reason: Option<String> },
+    /// The package could not be installed: `Failed` after the commit (the new binary runs), of
+    /// `class`, with the installer's `reason` (`dpkg_error`, `installer_error`).
+    Failed { class: Class, reason: String },
 }
 
 /// An update of the updater itself waiting for its new binary to start.
@@ -152,6 +186,10 @@ pub enum Settlement {
     /// Another binary runs: `Failed` after the commit, of class release,
     /// [`REASON_SELF_UPDATE_FALLBACK`].
     FellBack,
+    /// The new binary runs, and its own package is still to be installed
+    /// ([`Progress::activate`]): the record stays unfinished, its verdict written by the
+    /// `activate` ([`RecordStore::settle_activate`]).
+    Activate,
 }
 
 /// The step record.
@@ -383,6 +421,9 @@ impl RecordStore {
     /// the one to report the verdict under ([`Progress::report_order_id`]): `Succeeded` for
     /// [`Settlement::Confirmed`], with the promotion the field kept, and `Failed` after the
     /// commit, of class release, [`REASON_SELF_UPDATE_FALLBACK`], for [`Settlement::FellBack`].
+    /// For [`Settlement::Activate`] the record stays unfinished, the wait replaced by the
+    /// `activate` still to be done ([`Progress::activate`], which keeps the order id), in the
+    /// same one write.
     /// `false`, and nothing written, when the record is absent, newer, or waits for no restart.
     pub fn settle_awaiting_restart(&self, outcome: Settlement) -> Result<bool, RecordError> {
         let _held = self.hold();
@@ -393,20 +434,99 @@ impl RecordStore {
         let Some(awaiting) = rec.progress.awaiting_restart.take() else {
             return Ok(false);
         };
-        rec.progress.report_order_id = awaiting.order_id;
-        rec.state = match outcome {
-            Settlement::Confirmed => State::Finished {
+        match outcome {
+            Settlement::Activate => {
+                rec.progress.activate = Some(PendingActivate {
+                    version: awaiting.version,
+                    verdict_promotion_pending: awaiting.verdict_promotion_pending,
+                    order_id: awaiting.order_id,
+                });
+            }
+            Settlement::Confirmed => {
+                rec.progress.report_order_id = awaiting.order_id;
+                rec.state = State::Finished {
+                    verdict: Verdict::Succeeded {
+                        promotion_pending: awaiting.verdict_promotion_pending,
+                    },
+                    reason: None,
+                };
+            }
+            Settlement::FellBack => {
+                rec.progress.report_order_id = awaiting.order_id;
+                rec.state = State::Finished {
+                    verdict: Verdict::Failed {
+                        phase: Phase::AfterCommit,
+                        class: Class::Release,
+                    },
+                    reason: Some(REASON_SELF_UPDATE_FALLBACK.to_owned()),
+                };
+            }
+        }
+        self.save(&rec)?;
+        Ok(true)
+    }
+
+    /// Under the record lock, marks the unfinished update to `version`, which the binary that
+    /// runs already is, as waiting for the `activate` of its own package ([`Progress::activate`]),
+    /// with the promotion of `finished` and `order_id`: an update or an install of the version
+    /// that runs, which needs no restart. A record that already waits for it is not written
+    /// again. `false`, and nothing written, when the record holds no unfinished update to
+    /// `version` (or is absent or newer).
+    pub fn pend_activate(
+        &self,
+        version: &str,
+        verdict_promotion_pending: bool,
+        order_id: Option<&str>,
+    ) -> Result<bool, RecordError> {
+        let _held = self.hold();
+        let mut rec = match self.load()? {
+            Loaded::Current(rec) => rec,
+            Loaded::Absent | Loaded::Newer { .. } => return Ok(false),
+        };
+        let unfinished = !matches!(rec.state, State::Finished { .. });
+        if !(unfinished & (rec.target_version == version)) {
+            return Ok(false);
+        }
+        let pending = PendingActivate {
+            version: version.to_owned(),
+            verdict_promotion_pending,
+            order_id: order_id.map(str::to_owned),
+        };
+        if rec.progress.activate.as_ref() != Some(&pending) {
+            rec.progress.awaiting_restart = None;
+            rec.progress.activate = Some(pending);
+            self.save(&rec)?;
+        }
+        Ok(true)
+    }
+
+    /// Under the record lock, closes the update whose own package's `activate` waited
+    /// ([`Progress::activate`]) as `ended` says, in one write: the field cleared, its order id
+    /// kept as the one to report the verdict under ([`Progress::report_order_id`]). `false`, and
+    /// nothing written, when the record is absent, newer, or waits for no `activate`.
+    pub fn settle_activate(&self, ended: Activated) -> Result<bool, RecordError> {
+        let _held = self.hold();
+        let mut rec = match self.load()? {
+            Loaded::Current(rec) => rec,
+            Loaded::Absent | Loaded::Newer { .. } => return Ok(false),
+        };
+        let Some(pending) = rec.progress.activate.take() else {
+            return Ok(false);
+        };
+        rec.progress.report_order_id = pending.order_id;
+        rec.state = match ended {
+            Activated::Succeeded { reason } => State::Finished {
                 verdict: Verdict::Succeeded {
-                    promotion_pending: awaiting.verdict_promotion_pending,
+                    promotion_pending: pending.verdict_promotion_pending,
                 },
-                reason: None,
+                reason,
             },
-            Settlement::FellBack => State::Finished {
+            Activated::Failed { class, reason } => State::Finished {
                 verdict: Verdict::Failed {
                     phase: Phase::AfterCommit,
-                    class: Class::Release,
+                    class,
                 },
-                reason: Some(REASON_SELF_UPDATE_FALLBACK.to_owned()),
+                reason: Some(reason),
             },
         };
         self.save(&rec)?;

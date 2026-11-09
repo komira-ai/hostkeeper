@@ -93,6 +93,7 @@ fn expected(name: &str) -> Record {
                 reason: Some("remote_down".to_owned()),
                 awaiting_restart: None,
                 report_order_id: None,
+                activate: None,
             },
             ..base("api", "1.4.2", 12, Step::Rollback)
         },
@@ -304,6 +305,7 @@ fn kbf_ci_record() -> Record {
             reason: Some("remote_down".to_owned()),
             awaiting_restart: None,
             report_order_id: None,
+            activate: None,
         },
         order_try: None,
         forced: false,

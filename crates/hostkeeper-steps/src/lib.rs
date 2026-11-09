@@ -74,5 +74,7 @@ pub use runner::{
     Bounds, Builtin, Finished, RunError, StepRunner, Switch, SwitchError, Toward, UpdateOrder,
 };
 pub use seal::{MAX_SEAL_BYTES, SEAL_SCHEMA, Seal, SealError, read_seal};
-pub use selfupdate::{FollowOn, Layout, SelfUpdateError, Settled, follow_on, settle, settle_with};
+pub use selfupdate::{
+    FollowOn, Layout, SelfUpdateError, Settled, follow_on, settle, settle_activating, settle_with,
+};
 pub use systemd::{Captured, Program, Spawner, StepLog, SystemdLauncher, SystemdRunProcess};

@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "service": "hostkeeper",
+  "target_version": "1.6.0",
+  "artifact_digest": "abababababababababababababababababababababababababababababababab",
+  "tarball_digest": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+  "previous_digest": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+  "generation": 4,
+  "params": "/state/hostkeeper/params.toml",
+  "step": "cleanup",
+  "attempt": 1,
+  "state": {
+    "state": "done",
+    "code": 0,
+    "last_line": null
+  },
+  "hook": "new",
+  "progress": {
+    "committed": true,
+    "promotion_pending": false,
+    "then": null,
+    "retry": 0,
+    "verify_started": null,
+    "watching": null,
+    "reason": null,
+    "activate": {
+      "version": "1.6.0",
+      "verdict_promotion_pending": false,
+      "order_id": "order-7"
+    }
+  },
+  "order_try": 2
+}
