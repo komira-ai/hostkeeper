@@ -12,6 +12,7 @@ mod host_errors;
 mod remove;
 #[path = "macos_pkg/stage.rs"]
 mod stage;
+#[path = "macos_pkg/support/mod.rs"]
 mod support;
 
 use std::fs;

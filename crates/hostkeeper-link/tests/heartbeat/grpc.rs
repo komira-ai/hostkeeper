@@ -168,6 +168,7 @@ fn facts(name: &str, at: &str) -> ServiceFacts {
         health_detail: None,
         observed: None,
         record_try: None,
+        installer: None,
     }
 }
 

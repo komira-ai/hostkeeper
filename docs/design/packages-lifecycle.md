@@ -5,7 +5,11 @@ in a file of its own so that one stays under 1000 lines (rule R12). Section numb
 Amended by [packages-repositories.md](packages-repositories.md): a Linux distribution's package comes from a
 repository through the `apt` backend of one repository installer, whose version directory, rollback, hold, purge
 and drift are that file's section 4; a Mac's `.pkg` comes through the `macos-pkg` installer of that file's section
-4.7; the `deb`, `rpm`, `arch` and `apk` cases below are withdrawn with those installers.
+4.7; the `deb`, `rpm`, `arch` and `apk` cases below are withdrawn with those installers. Revised by
+[packages-native.md](packages-native.md): the `tarball` and `oci-image` cases below are withdrawn, the
+`hostkeeper-archive` cases hold only until the move of its section 10.6 and are deleted with it, a hook is the
+program at its fixed path in the tree (its section 10.2), and hostkeeper's own update installs its package after the
+new binary confirms (its section 10.4).
 
 ## 6. An update, a rollback and an uninstall
 

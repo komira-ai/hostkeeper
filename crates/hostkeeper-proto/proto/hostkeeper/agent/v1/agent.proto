@@ -57,7 +57,12 @@
 // picked for the host, field for field as CI set it, with `package_digest` equal to its digest.
 // The coordinator picks the entry of the installer the host runs the service with
 // (`ServiceBeat.installer`), else the first entry whose installer the daemon lists
-// (`HeartbeatRequest.installers`), and sends no order when none fits. An entry names bytes by
+// (`HeartbeatRequest.installers`), and sends no order when none fits. The move to native packages
+// (docs/design/packages-native.md section 10.6) makes two exceptions: a host that runs the service
+// from `hostkeeper-archive` is picked a native entry (`apt`, `macos-pkg`, any repository entry)
+// whose installer its daemon lists, before the archive entry; and a host that runs it with a native
+// installer, ordered a lower version whose list has no native entry, is picked that list's
+// `hostkeeper-archive` entry (the move's rollback). An entry names bytes by
 // digest and where to look for them (see Orders above). The daemon fetches through its host's
 // stores (`/etc/hostkeeper/stores.toml`; docs/design/packages.md section 7.4). An entry whose
 // digest is not `package_digest`, or whose locator breaks the grammar, is refused `order_invalid`;

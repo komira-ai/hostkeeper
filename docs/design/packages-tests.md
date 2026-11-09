@@ -6,15 +6,18 @@ Status: design, for the maintainers' ruling. The tests of A1 are **Built** (`cra
 Postgres store's in `crates/hostkeeper-coordinator/src/store/postgres/tests/releases.rs`), and so are those of A3
 (`crates/hostkeeper-coordinator/tests/target_orders.rs`, `crates/hostkeeper-proto/tests/additions_installers.rs`, and
 the pick's own bounds in `crates/hostkeeper-coordinator/src/picks_tests.rs`), and so are those of A4
-(`crates/hostkeeper-daemon/tests/stores.rs`, `crates/hostkeeper-package/tests/fetch.rs`) and of A16 (below),
-and those of A9's installer steps and signers file (`crates/hostkeeper-install/tests/macos_pkg.rs` and the crate's unit
-tests, the device tests in `crates/hostkeeper-privileged/tests/install_macos_pkg.rs`), which the daemon's order path
-runs once A6's dispatch to installers lands; nothing else here is built. This is section 12 of
+(`crates/hostkeeper-daemon/tests/stores.rs`, `crates/hostkeeper-package/tests/fetch.rs`) and of A16 (below), and
+of A6 the announce cases of `hostkeeper-archive` (`crates/hostkeeper-install/tests/announce.rs`) and the contract
+and registry (`crates/hostkeeper-install/tests/installer.rs`), and of A9 the steps and signers file of `macos-pkg`
+(`crates/hostkeeper-install/tests/macos_pkg.rs` and the crate's unit tests, the device tests in
+`crates/hostkeeper-privileged/tests/install_macos_pkg.rs`); nothing else here is built. This is section 12 of
 [packages.md](packages.md), kept in a file of its own so that one stays under 1000 lines (rule R12). Section numbers here
 are those of packages.md, and A1 to A15 are its build items (section 13). A16, A17 and the re-scoped A7 and A9 are
 [packages-repositories.md](packages-repositories.md)'s (its section 8); the `deb`, `rpm`, `arch` and `apk` cases
 are withdrawn with those installers, and that file's cases are the five items before A15's: A16's, A7's two, A9's
-(`macos-pkg`) and A17's.
+(`macos-pkg`) and A17's. Revised by [packages-native.md](packages-native.md): its items A18 to A28, and what it changes
+in A6, A7 and A9, have the cases of the last section below; the `tarball` and `oci-image` cases are withdrawn with those
+installers, and the archive's cases go with the code A24 deletes.
 
 Each item's tests are behaviour tests in Rust, in the crate the item changes (rules T8, T11, T12). Each runs with no
 network and no system path, through the fakes the crates already have (`Fetcher`, `Verifier`, the coordinator's backend
@@ -220,10 +223,89 @@ run only in the device jobs (`privileged`, `macos-device`), whose tests count to
   release before an installer of a version the host holds is `rollback_below_installer`, and one to a release that has
   it goes on.
 
+### The items of packages-native.md
+
+Every test runs with the fakes of the general rules above; real `apt`, `dpkg`, `apk`, `installer` and `pkgutil` run
+only in the device jobs, against a signed fixture repository and signed fixture packages on the runner's disk.
+
+- **The hook, scripts and paths (A7, A9, A27; `crates/hostkeeper-install/tests/apt.rs`, `macos_pkg.rs`, `apk.rs`).** A
+  package with `hostkeeper-hook` at its path runs it for each step with today's arguments, and one without it gets the
+  built-in steps; a hook path that is a link, a directory or not executable is `manifest_invalid`; `hook.boot` with no
+  hook in the package is `manifest_invalid` at `stage`; an entry with a non-empty `hook.command` is `manifest_invalid`.
+  A `.deb` whose control archive holds each of `preinst`, `postinst`, `prerm`, `postrm`, `config` and `triggers`, one
+  case each, a `.pkg` with a `Scripts` archive, and an `.apk` with a script, are `package_scripts` before anything is
+  installed; a `.deb` with only `control`, `md5sums` and `conffiles` goes on. A file at each allowed path goes on, and
+  one at each refused kind of path (an enablement link under `/etc/systemd/system/`, `/etc/cron.d/`,
+  `/etc/sudoers.d/`, a unit not in `run`) is `manifest_invalid`. Scripts in a package named `hostkeeper` for the
+  service `hostkeeper` go on; the same package set for another service, and another package set for `hostkeeper`, are
+  `package_scripts`. A `macos-pkg` order with an attestation is `order_invalid`, and one without is fetched and
+  installed with no `gh` run (the command port's record is empty).
+- **The coordinator (A18; `crates/hostkeeper-coordinator/tests/target_move.rs`, `crates/hostkeeper-release/tests/manifest/native.rs`).**
+  The pick over a fleet of every kind of host: a host running the service from archives that lists `apt` is picked the
+  `apt` entry wherever it stands in the list; one that lists no native installer of the list, and a daemon before
+  `target-v1`, are picked the archive entry; a host running `apt` is never picked the archive entry; a list with no
+  native entry its daemon lists leaves an archive host on the archive entry. A rollback of a host whose installer is
+  native to a release with no native entry carries the archive entry, and one to a release with a native entry
+  carries that. `hostkeeper`'s list: one native entry accepted, a native entry and one archive entry after it
+  accepted, the archive entry first, two archive entries and two native entries each `target_invalid`. A `macos-pkg`
+  entry with an attestation, and a native entry with a hook command, are `target_invalid`; a native entry with `boot`
+  and an empty command is accepted. `Hosts.List` gives each host's services with their installer, for a host that
+  heartbeats and for one that has not since the coordinator's start; `additions_hosts.rs` is the B8 test of the new
+  field in both directions.
+- **hostkeeper's own update (A19; `crates/hostkeeper-daemon/tests/selfupdate_native.rs`, device tests
+  `self_update.rs` and `device_mac_selfupdate.rs` re-pointed).** The new binary is taken from the tree's packaged path,
+  and a package without it is `self_binary_missing`; the package database is not touched before the new binary
+  confirms; after the confirm `activate` runs once and the verdict follows it; a crash between the confirm and the end
+  of `activate` is resumed by the next start, which runs it once; a deferred `activate` (`package_manager_busy`) stays
+  pending and runs at the deferral's retry; a failed one is `Failed` with its class, the new binary keeps running,
+  nothing is rolled back and drift is reported; a new binary that cannot start three times leaves the package
+  database at the old version; an older reader reads a record with the pending field as having none. At start, a host
+  whose package database lists `hostkeeper` at the running version and holds no archive version records it installed
+  by its installer and holds it; one at another version, or one with an archive version of `hostkeeper`, records
+  nothing. The device job upgrades the `.deb` of the release X1 pins to the new one while the daemon runs, and the
+  daemon's process id is unchanged. A Mac's `installer` of hostkeeper's own `.pkg` with the job loaded leaves it running
+  (same process id), and with no job loaded bootstraps it.
+- **The move (A19; `crates/hostkeeper-daemon/tests/move_native.rs`, device test `move_native.rs` in `privileged`).**
+  A service on archives with a placed unit moves to `apt`: the placed unit and files are gone before the package's unit
+  is enabled, the package's unit is the one systemd runs, and the archive version is `previous`; `installer_changed`
+  for `apt` to archive, for `apt` to `macos-pkg`, and for a native installer to another; the move's rollback before
+  and after it settled purges the package, places the archive's paths again and records `hostkeeper-archive`, with no
+  fetch (the fetch port's record is empty); after the next update's `retire`, a rollback to the archive version is
+  refused. hostkeeper's move: the archive's package unit is gone from `/etc/systemd/system/`, the `.deb`'s unit is
+  enabled, the running daemon is not restarted, and its next start runs `current` through `/usr/bin/hostkeeper`; a
+  move whose new binary cannot start leaves the archive's unit and version in place. A rollback of `hostkeeper` to a
+  release before A19 on a host where it moved is `rollback_below_installer`, and one to A19's release goes on. X1 runs
+  the previous release's binary on a host holding a native version and the move's records: it reports the service as
+  unreadable and leaves it (the B8 test of the old reader on new data).
+- **Packaging (A20; `crates/xtask/tests/packaging/`, `check-linux-pkg`, `check-macos-pkg`).** `hello`'s `.deb` and
+  `.pkg`, its fail-ready build's, and `mdm`'s `.deb` carry the hook at its path, no script, files only at allowed paths
+  and units installed disabled; `check-linux-pkg` refuses a fixture `.deb` with a `postinst`; the `.pkg`'s postinstall
+  text is held byte for byte (`crates/hostkeeper-launchd/tests/postinstall.rs`, A19).
+- **Release workflows (A21, A23, A24; the workflow lint, `crates/xtask/src/release/targets/tests.rs`).** `release
+  targets` writes the native entry before the archive one for each platform (A21, A23) and the native entry alone
+  (A24); the lint holds the publish steps to the release machinery's call and, from A24, refuses the channel wait and
+  any index output while it keeps the `targets` job that `set-desired` needs; X1's pin is a release from A19 on.
+- **The runbook (A22; `crates/xtask/tests/enrollment_doc.rs`).** Every `hkctl` command of the runbook is one of
+  `hkctl`'s table, as for the enrollment runbook.
+- **`apk` (A27; `crates/hostkeeper-install/tests/apk.rs`, and `openrc_device.rs` and `selfupdate_openrc.rs` on an
+  `.apk` fixture repository).** The cases its design (A26) names, one per check and failure row, as A7's for `apt`; the
+  OpenRC device tests keep every case they have today.
+- **Deletion (A25, A28).** The layering test without the deleted crates' rows; `the_protos_keep_every_rule_against_the_baseline`
+  unchanged; a set with `package_digest` or `release_index` accepted and ordering nothing, every host
+  `no_build_for_host`, and `Converge` not converged; a stored release with archive entries and an index loads, and its
+  archive entries are never picked; a daemon from A25 started on a host with an archive version of a service it runs
+  natively removes that version's directory and nothing else (the B8 test of the new reader on old data);
+  `hostkeeper.toml` with `release_channel` and `[trusted_signers]` loads, and `hostkeeper-pxe` still checks a seed's
+  attestation against them; the coverage gate at 99% on every crate that lost code.
+
 This list is complete in this sense: it holds one case for every refusal, outcome, gate reason, alert and bound named
 in sections 3 to 7 and 9.1 of packages.md (stages 5 and 6 of section 9.2 are proved by A11's and A12's own tests,
 named in the build table's last column), one under and one over every limit, each step of the coordinator's pick of
 section 3.3 (first listed, kept installer, no match, old daemon), each row of the announce table of section 5.4, and
 every installer's four steps against crash, repeat, failure and removal. For a repository installer it also holds
 one case for every check of packages-repositories.md section 2.2, every refusal of its section 3.1, and every row of
-its section 4.5, which are all the outcomes that file names. Each item's pull request names its tests (rule T8).
+its section 4.5, which are all the outcomes that file names. For packages-native.md it holds one case for every check
+of its section 10.2's list and path rule, each new refusal (`package_scripts`, the move's `installer_changed`, the
+rollback below A19), each row of the pick with the move's exception, each step of hostkeeper's own update against
+crash, deferral, failure and repeat, the B8 tests in both directions for each format the change touches, and each
+stage's condition of 10.6. Each item's pull request names its tests (rule T8).

@@ -7,7 +7,14 @@
 //! 1. a host that runs the service takes the entry of the installer it runs it with
 //!    (`ServiceBeat.installer`, absent for `hostkeeper-archive`), wherever it stands in the list,
 //!    while its daemon still lists that installer; else it is picked nothing,
-//!    [`Pick::InstallerDropped`];
+//!    [`Pick::InstallerDropped`]. Two exceptions make the move to native packages
+//!    (packages-native.md section 10.6): a host that runs it from `hostkeeper-archive` takes the
+//!    first native entry ([`is_native_entry`]) whose installer its daemon lists, wherever it
+//!    stands, before the archive entry; and a host that runs it with a native installer, going
+//!    back to a version lower than the one it runs (a rollback, automatic or an operator's set or
+//!    force) whose list has no native entry, takes that list's `hostkeeper-archive` entry while
+//!    its daemon lists it: the move's rollback, which the daemon makes from the archive version
+//!    it keeps. No other change of installer is ever picked;
 //! 2. any other host takes the first entry whose installer its daemon lists
 //!    (`HeartbeatRequest.installers`); else it is picked nothing, [`Pick::NoBuildForHost`];
 //! 3. a host of a platform the release has no list for is picked nothing, [`Pick::NoTarget`].
@@ -32,6 +39,7 @@ use hostkeeper_proto::hostkeeper::operator::v1 as operator;
 use hostkeeper_proto::hostkeeper::release::v1::Target;
 use hostkeeper_release::Installer;
 use hostkeeper_release::grammar::is_installer_name;
+use hostkeeper_release::target::is_native_entry;
 use hostkeeper_wire::HostId;
 use hostkeeper_wire::version::Version;
 use hostkeeper_wire::wire::Health;
@@ -169,6 +177,19 @@ fn runs(fleet: &Fleet, service: &str, id: &HostId) -> bool {
         .is_some_and(|host| host.beat.health != Health::Absent)
 }
 
+/// Whether `installer` is native ([`Installer::is_native`]) by its exact spelling.
+fn is_native(installer: &str) -> bool {
+    installer.parse().is_ok_and(Installer::is_native)
+}
+
+/// Whether ordering the host `id` `service` at `version` goes back: the host's last word of the
+/// service names a later version, by [`Version::at_least`].
+fn rolls_back(fleet: &Fleet, service: &str, version: &Version, id: &HostId) -> bool {
+    fleet
+        .get_in(service, id)
+        .is_some_and(|host| !version.at_least(&host.beat.version))
+}
+
 /// The pick for the host `id` of `service` at `version`, with the release it is of; `None` when
 /// the version has no release kept.
 pub(crate) fn pick<'a>(
@@ -196,10 +217,29 @@ pub(crate) fn pick<'a>(
     };
     let lists = |installer: &str| listed.iter().any(|name| name == installer);
     let picked = if runs(fleet, service, id) {
-        list.entries
-            .iter()
-            .find(|entry| entry.installer == running && lists(running))
-            .map_or(Pick::InstallerDropped, Pick::Entry)
+        let listed_of = |installer: &str| {
+            list.entries
+                .iter()
+                .find(|entry| entry.installer == installer && lists(installer))
+        };
+        let native = || {
+            list.entries
+                .iter()
+                .find(|entry| is_native_entry(entry) && lists(&entry.installer))
+        };
+        let found = if running == ARCHIVE {
+            // The move: a native entry its daemon lists before the archive it runs.
+            native().or_else(|| listed_of(ARCHIVE))
+        } else {
+            listed_of(running).or_else(|| {
+                // The move's rollback: back to a version whose list has no native entry.
+                let back = rolls_back(fleet, service, version, id)
+                    && is_native(running)
+                    && !list.entries.iter().any(is_native_entry);
+                back.then(|| listed_of(ARCHIVE)).flatten()
+            })
+        };
+        found.map_or(Pick::InstallerDropped, Pick::Entry)
     } else {
         list.entries
             .iter()

@@ -12,6 +12,7 @@ use std::path::Path;
 use std::process::Command;
 
 const HOOK: &str = "hostkeeper-hook";
+const INSTALL: &str = "hostkeeper-install";
 const CONFIG: &str = "hostkeeper-config";
 const STEPS: &str = "hostkeeper-steps";
 const TESTKIT: &str = "hostkeeper-testkit";
@@ -24,7 +25,6 @@ const ENROLLMENT: &str = "hostkeeper-enrollment";
 const MDM_GATE: &str = "hostkeeper-mdm-gate";
 const OBSERVE: &str = "hostkeeper-observe";
 const LAUNCHD: &str = "hostkeeper-launchd";
-const INSTALL: &str = "hostkeeper-install";
 const OPENRC: &str = "hostkeeper-openrc";
 const MDM: &str = "hostkeeper-mdm";
 const MDM_STEP: &str = "hostkeeper-mdm-step";
@@ -110,7 +110,7 @@ pub const LAYERS: [Layer; 33] = [
     (HELLO, &[], &[CONFIG, HOOK]),
     (HKCTL, &[PROTO], &[COORDINATOR, OIDC]),
     (HOOK, &[], &[]),
-    (INSTALL, &[CONFIG, LAUNCHD], &[]),
+    (INSTALL, &[CONFIG, LAUNCHD, PROTO, RELEASE, UNPACK], &[]),
     (LAUNCHD, &[HOOK, OBSERVE, PLACED, STEPS], &[]),
     (
         LINK,

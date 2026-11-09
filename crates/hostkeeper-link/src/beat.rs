@@ -13,7 +13,7 @@
 //! ([`Heartbeat::trusted_root`]). The trusted root goes out on the gRPC route only (the JSON
 //! route is frozen), but counts toward the bound on both, as `trusted_root_age_secs` and
 //! `trusted_root_reason`. The installers ([`Heartbeat::installers`]) are counted the same way, as
-//! `installers`.
+//! `installers`; a service's `installer` ([`ServiceFacts::installer`]) likewise.
 
 use hostkeeper_config::names::{ServiceName, Version};
 pub use hostkeeper_proto::MAX_SERVICES_PER_HEARTBEAT;
@@ -230,6 +230,10 @@ pub struct ServiceFacts {
     /// The try the service's step record holds, sent in every heartbeat; none when the service
     /// has no step record, or its record names no try.
     pub record_try: Option<u64>,
+    /// The installer the service's installed release came through; none for
+    /// `hostkeeper-archive`, and for a service with no step record. Sent as `installer` on the
+    /// gRPC route only, and counted toward the bound on both.
+    pub installer: Option<String>,
 }
 
 impl ServiceFacts {
@@ -245,6 +249,7 @@ impl ServiceFacts {
             "health_detail": self.health_detail,
             "observed": self.observed.as_ref().map(Observed::to_json),
             "record_try": self.record_try,
+            "installer": self.installer,
         })
     }
 }

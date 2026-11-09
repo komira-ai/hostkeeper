@@ -3,8 +3,8 @@
 //! the private listener, with the operator token, the inventory (`Enrollment.ListRecords`, each
 //! record with its `host_held`, what the coordinator's durable enrollment store holds for its host
 //! id, and its `state`, where its approval window stands) and the pending requests (`Enrollment.List`), every page of each. `Hosts.List` is not read:
-//! it lists only the hosts heard from since the coordinator started (section 3, "`host_held` is
-//! the rule").
+//! it lists no denied host, so after a restart a retired host's record would look free (section 3,
+//! "`host_held` is the rule").
 //!
 //! [`Coordinator::snapshot`] reads both and gives a [`Snapshot`], or a [`ReadError`] when
 //! any call fails: the listener does not answer, the token is refused (any status the call ends

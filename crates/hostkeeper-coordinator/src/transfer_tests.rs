@@ -743,7 +743,7 @@ fn import_refuses_what_serve_refuses() {
 }
 
 /// Proves: the enrollment store moves whole: a host enrolled on the files (its request, its
-/// certificate, its host row, the serial counter) and a deny row are in the database after the
+/// certificate, its host row, its record of what it runs, the serial counter) and a deny row are in the database after the
 /// import as the files held them, and a store started on the database knows the host.
 ///
 /// Catches: a record kind the import leaves out, or a serial counter that starts again from the
@@ -752,6 +752,19 @@ fn import_refuses_what_serve_refuses() {
 fn import_moves_the_enrollment_store_whole() {
     let enrolling = Enrolling::new("transfer-enrolled");
     enrolled(&enrolling.enrollment, &HostKey::new(), "m-1", "web-1");
+    enrolling
+        .enrollment
+        .store()
+        .note_running(
+            &host_id("web-1"),
+            &hostkeeper_enrollment::enroll::HostRunning {
+                agent_name: "hostkeeper".to_owned(),
+                agent_version: "0.2.0".to_owned(),
+                services: Vec::new(),
+            },
+            NOW + 60,
+        )
+        .expect("noted");
     enrolling
         .enrollment
         .store()
@@ -767,11 +780,13 @@ fn import_moves_the_enrollment_store_whole() {
         ("enrollment_requests", files.requests.len()),
         ("enrollment_issued", files.issued.len()),
         ("enrollment_hosts", files.hosts.len()),
+        ("enrollment_host_running", 1),
         ("enrollment_deny", files.deny.len()),
     ] {
         assert_eq!((table, count(&database, table)), (table, rows));
         assert!(rows > 0, "{table}");
     }
+    assert!(files.hosts.iter().any(|h| h.running.is_some()));
     let next = files.serial.expect("a serial was taken");
     assert_eq!(
         database.rows("SELECT next FROM enrollment_serial"),

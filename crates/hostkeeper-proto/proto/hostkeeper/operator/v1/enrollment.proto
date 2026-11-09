@@ -253,8 +253,7 @@ message InventoryRecord {
   bool enrolled = 9;
   // What the coordinator's enrollment store holds for the record's host id, read from the store
   // at each call: the same before and after a coordinator restart, and the same for a host never
-  // heard from as for one heartbeating (`Hosts.List` lists only the hosts heard from since the
-  // coordinator started). Only `HOST_HELD_NONE` says no host holds the id; `UNSPECIFIED` (a
+  // heard from as for one heartbeating. Only `HOST_HELD_NONE` says no host holds the id; `UNSPECIFIED` (a
   // coordinator of a release before this field, or one without enrollment) says nothing.
   HostHeld host_held = 10;
   // The end of the record's approval window, unix seconds: the coordinator approves a request

@@ -43,16 +43,21 @@ no fixed port and no root, and they write only under Cargo's target directory.
 
 ## What CI checks on a pull request
 
-`.github/workflows/ci.yml` runs two jobs on GitHub-hosted runners:
+`.github/workflows/ci.yml` runs these jobs on GitHub-hosted runners; its gate is the checks `lint`
+and `test`:
 
 - `lint`: the format, `cargo deny check bans licenses sources` (the licence allow-list and the
   sources are in `deny.toml`), clippy with warnings as errors (the banned methods are in
   `clippy.toml`), the build of `hostkeeper-hook` alone without its `conformance` feature
   (`cargo check -p hostkeeper-hook --lib`), actionlint, and the workflow lint
   (`cargo test -p xtask --test workflows`).
-- `test`: every test under `cargo llvm-cov` with branch coverage, then `coverage-gate`, which
-  fails when any crate of the workspace is under 99.00% of its lines or of its branches. Every
-  crate is judged; there is no way to exclude one (rules T1 to T4).
+- `test-shard` (two jobs, `test-shard (1)` and `test-shard (2)`): every test under
+  `cargo llvm-cov` with branch coverage, split in two by `cargo nextest --partition hash:<shard>/2`
+  so that each test runs in exactly one shard.
+- `test` (the job `coverage`): fails unless both shards passed, then merges what they measured
+  and runs `coverage-gate`, which fails when any crate of the workspace is under 99.00% of its
+  lines or of its branches. Every crate is judged; there is no way to exclude one (rules T1 to
+  T4).
 
 Security advisories are not checked on a pull request: a new advisory against a crate already in
 `Cargo.lock` would fail every open pull request for something none of them did. Instead
@@ -215,7 +220,7 @@ The files of the job `privileged` start with `#![cfg(feature = "privileged")]`, 
 `#![cfg(all(target_os = "linux", target_arch = "x86_64", feature = "privileged"))]` and
 `net_install_arm64.rs` with `#![cfg(all(target_os = "linux", feature = "privileged",
 not(target_arch = "aarch64")))]`. The feature is off by default,
-so `cargo test --workspace` and CI's `test` job compile none of them, and they count toward no
+so `cargo test --workspace` and CI's test shards compile none of them, and they count toward no
 coverage gate; the crate's library (the workload fixture `hostkeeper-fixture-hook`, the host
 check, the rig) is tested without root in the pull-request set like any crate. A privileged test
 refuses to start unless it runs as root on a host whose service manager is systemd.

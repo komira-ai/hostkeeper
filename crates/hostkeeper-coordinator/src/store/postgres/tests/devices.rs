@@ -102,7 +102,7 @@ fn a_device_store_that_cannot_reach_the_database_says_so() {
 }
 
 /// A session on `db` and `f` run with it on a thread of its own.
-fn with_session<R: Send + 'static>(
+pub(super) fn with_session<R: Send + 'static>(
     db: &TestDatabase,
     f: impl FnOnce(&mut Session) -> R + Send + 'static,
 ) -> R {
@@ -118,7 +118,7 @@ fn with_session<R: Send + 'static>(
 /// `mdm_devices`) starts on a database this release migrated and whose gate keeps a device: its
 /// runner refuses nothing and runs nothing, because `0005` says `may-run`, and its load reads the
 /// state this release loads. And the other way: this release starts on a database the release
-/// before migrated, runs `0005` alone, and its gate holds no device.
+/// before migrated, runs `0005` and `0006`, and its gate holds no device.
 ///
 /// Catches: a device table that makes the previous coordinator refuse to start (the back-out of a
 /// release would need the database restored), or a migration that this release does not run on a
@@ -159,7 +159,7 @@ fn the_release_before_starts_on_a_database_with_0005_and_this_one_on_its() {
     store.stop();
     assert_eq!(
         older.rows("SELECT version FROM schema_version ORDER BY version"),
-        (1..=5)
+        (1..=6)
             .map(|n| vec![Some(n.to_string())])
             .collect::<Vec<_>>()
     );

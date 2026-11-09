@@ -36,6 +36,7 @@ fn facts(service: &str, at: &str) -> ServiceFacts {
         health_detail: None,
         observed: None,
         record_try: None,
+        installer: None,
     }
 }
 
@@ -800,4 +801,51 @@ fn the_installers_go_out_in_the_request() {
     assert_eq!(sent(&full).installers, ["hostkeeper-archive", "tarball"]);
     let none = beat(Platform::LinuxX86_64, Vec::new());
     assert_eq!(sent(&none).installers, Vec::<String>::new());
+}
+
+/// Proves a service's installer goes out as `installer` of its `ServiceBeat` on the gRPC route
+/// when it has one and is left absent when it has none.
+///
+/// Catches: the installer dropped on the way to the message, or sent as an empty text for a
+/// service that has none.
+#[test]
+fn a_services_installer_goes_out_as_installer_when_it_has_one() {
+    let mut tarball = facts("web", "1.0");
+    tarball.installer = Some("tarball".to_owned());
+    let request = sent(&beat(
+        Platform::LinuxX86_64,
+        vec![tarball, facts("db", "1.0")],
+    ));
+    assert_eq!(request.services[0].installer.as_deref(), Some("tarball"));
+    assert_eq!(request.services[1].installer, None);
+}
+
+/// Proves the frozen JSON route never carries a service's installer: its message has no field
+/// for it, and no key of that name appears in the body.
+///
+/// Catches: the installer leaking into the JSON route's body.
+#[test]
+fn the_json_route_never_carries_a_services_installer() {
+    let mut tarball = facts("web", "1.0");
+    tarball.installer = Some("tarball".to_owned());
+    let mapped = crate::wire_map::heartbeat(&beat(Platform::LinuxX86_64, vec![tarball]))
+        .expect("a heartbeat");
+    let body = serde_json::to_string(&mapped).expect("JSON");
+    assert!(!body.contains("installer"), "{body}");
+    assert!(!body.contains("tarball"), "{body}");
+}
+
+/// Proves the size measure counts a service's installer: the heartbeat that names one is longer
+/// than the same heartbeat with none by the text, its quotes, less the `null` it replaces.
+///
+/// Catches: the installer left out of the bytes the bound measures.
+#[test]
+fn the_size_measure_counts_a_services_installer() {
+    let plain = beat(Platform::LinuxX86_64, vec![facts("web", "1.0")]);
+    let mut named = plain.clone();
+    named.services[0].installer = Some("tarball".to_owned());
+    assert_eq!(
+        named.encoded_len() - plain.encoded_len(),
+        "tarball".len() + 2 - "null".len()
+    );
 }

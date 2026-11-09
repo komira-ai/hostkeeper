@@ -24,6 +24,7 @@ fn required(name: &str, detail_len: usize) -> ServiceFacts {
         health_detail: None,
         observed: None,
         record_try: None,
+        installer: None,
     }
 }
 

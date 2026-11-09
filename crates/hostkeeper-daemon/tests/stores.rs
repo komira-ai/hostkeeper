@@ -601,6 +601,7 @@ fn no_stores_file_gives_the_channel_store() {
 /// The host files of a Linux host with `stores` as its stores file, under `root`.
 fn files(root: &Path, stores: PathBuf) -> HostFiles {
     HostFiles {
+        os_root: root.join("os"),
         ca_bundle: root.join("ca.pem"),
         gh: root.join("gh"),
         trusted_root: root.join("trusted_root.json"),
@@ -732,14 +733,90 @@ fn the_update_of_hostkeeper_itself_goes_through_the_same_entry_checks_and_fetch(
     assert_eq!(s.rig.store.entries(), [Some(sound)]);
 }
 
-/// Catches the heartbeat and the receipt check listing different installers: the names the
-/// heartbeat announces are exactly the installers the receipt check accepts.
+/// Catches the heartbeat and the receipt check listing different installers, and a start that
+/// does not decide them from the host: the host's ports announce what the `os-release` under the
+/// files' `os_root` gives (a Debian host: `hostkeeper-archive` alone in this build, its family
+/// `deb`, and on a Mac none, which never reads the file; no file: no family), the daemon holds that announcement for every heartbeat of its
+/// start, and the receipt check judges an entry against the same list (`apt`, which it does not
+/// list, is `installer_not_listed`).
 #[test]
 fn the_installers_announced_are_the_ones_the_receipt_check_lists() {
-    use hostkeeper_daemon::entry::{INSTALLERS, installer_names};
-    assert_eq!(installer_names(), ["hostkeeper-archive"]);
-    let listed: Vec<&str> = INSTALLERS.iter().map(|i| i.as_str()).collect();
-    assert_eq!(listed, ["hostkeeper-archive"]);
+    let rig = Rig::new("stores-announce");
+    let stores = rig.scratch.path().join("no-stores.toml");
+    let host = files(rig.scratch.path(), stores);
+    let ports = |host: &HostFiles| {
+        let adapters = Adapters::linux(
+            &Platform::linux(),
+            RunnerLauncher::new(FakeCommandRunner::default(), SYSTEMCTL_DEADLINE),
+        );
+        fs::create_dir_all(&rig.packages).expect("the packages directory");
+        host_ports(&config(), &rig.settings(), host, OWN, adapters).expect("the ports")
+    };
+    let none = ports(&host).announcement;
+    assert_eq!(none.names(), ["hostkeeper-archive"]);
+    assert_eq!(none.family, None);
+    let etc = host.os_root.join("etc");
+    fs::create_dir_all(&etc).expect("etc under the root");
+    fs::write(etc.join("os-release"), "ID=debian\n").expect("os-release");
+    let debian = ports(&host).announcement;
+    assert_eq!(debian.names(), ["hostkeeper-archive"]);
+    // A Mac never reads os-release, so it has no family whatever the file says.
+    let family = (!cfg!(target_os = "macos")).then_some(hostkeeper_install::Family::Deb);
+    assert_eq!(debian.family, family);
+
+    let world = World::new("stores-announce-daemon");
+    let daemon = world.daemon(world.open(world.entry_routes()));
+    assert_eq!(daemon.ctx().announcement.names(), ["hostkeeper-archive"]);
+    let mut apt = world.entry.clone();
+    apt.installer = "apt".to_owned();
+    let order = with_entry(install(SERVICE, VERSION, &apt.digest, 1), &apt);
+    assert_eq!(daemon.order(&order), not_listed());
+    world.untouched();
+}
+
+/// Catches a store that stages an entry with the steps of another installer: an entry the
+/// receipt check did not judge, of an installer this build has no steps of (`apt`) or of a name
+/// that is no installer, is fetched and proven as any entry and then refused
+/// `installer_not_listed`, deferred, with no version directory made; the same bytes as a
+/// `hostkeeper-archive` entry are staged.
+#[test]
+fn the_store_stages_only_with_the_steps_of_a_registered_installer() {
+    use hostkeeper_daemon::packages::Packages as _;
+    use hostkeeper_hook::{Class, Outcome};
+    let world = World::new("stores-registry");
+    let packages = world.open(world.entry_routes());
+    let digest =
+        hostkeeper_daemon::verb::PackageDigest::new(&world.entry.digest).expect("a digest");
+    let service = hostkeeper_config::names::ServiceName::new(SERVICE).expect("a name");
+    let version = hostkeeper_config::names::Version::new(VERSION).expect("a version");
+    for installer in ["apt", "not-an-installer"] {
+        let mut entry = world.entry.clone();
+        entry.installer = installer.to_owned();
+        let error = packages
+            .version_dir(&service, &version, &digest, None, Some(&entry))
+            .expect_err("no steps");
+        assert_eq!(
+            (error.refusal(), error.outcome(), error.class()),
+            (
+                Refusal::InstallerNotListed,
+                Outcome::Deferred,
+                Class::Environment
+            ),
+            "{installer}"
+        );
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "this daemon has no installer {installer:?} to stage the entry with (installer_not_listed)"
+            )
+        );
+        assert!(!world.rig.packages.join(SERVICE).join(VERSION).exists());
+    }
+    let dir = packages
+        .version_dir(&service, &version, &digest, None, Some(&world.entry))
+        .expect("staged");
+    assert!(dir.dir().ends_with(format!("{SERVICE}/{VERSION}")));
+    assert!(dir.manifest().is_some(), "the archive's manifest is kept");
 }
 
 /// The host files of a Mac with `signers` as its signers file, under `root`.

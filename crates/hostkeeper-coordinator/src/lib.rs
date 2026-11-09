@@ -147,6 +147,7 @@ pub mod registry;
 pub mod release_index;
 pub(crate) mod releases;
 pub mod rollouts;
+mod running;
 pub mod service;
 pub mod services;
 pub mod stages;
@@ -322,6 +323,8 @@ mod rollouts_refusal_tests;
 mod rollouts_restart_tests;
 #[cfg(test)]
 mod rollouts_state_tests;
+#[cfg(test)]
+mod running_tests;
 #[cfg(test)]
 mod self_update_fallback_tests;
 #[cfg(test)]

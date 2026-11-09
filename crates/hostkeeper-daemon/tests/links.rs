@@ -292,6 +292,7 @@ fn the_host_enroller_is_made_from_the_config_and_the_pki_directory() {
 
 fn files_under(root: &Path) -> HostFiles {
     HostFiles {
+        os_root: root.join("os"),
         ca_bundle: root.join("ca.pem"),
         gh: root.join("gh"),
         trusted_root: root.join("trusted_root.json"),

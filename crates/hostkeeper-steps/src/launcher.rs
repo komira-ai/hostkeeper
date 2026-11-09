@@ -1,8 +1,10 @@
 //! What the runner needs from whatever runs one step of a hook. The runner decides which step
 //! runs next, with which executable, from which release and by when; the launcher runs it and
 //! reports how it ended. [`crate::systemd::SystemdLauncher`] is the launcher of the host: a
-//! transient systemd unit per step, as root, with `RuntimeMaxSec=` and nothing else.
+//! transient systemd unit per step, as root, with `RuntimeMaxSec=` and nothing else; a tool run
+//! ([`ToolCall`]) is a unit that also has no network (`PrivateNetwork=yes`).
 
+use std::ffi::OsString;
 use std::io;
 use std::num::NonZeroU64;
 use std::path::Path;
@@ -61,6 +63,23 @@ pub struct AdditiveCall<'a> {
     /// The deterministic name of the transient unit: `updater-<service>-<step>-<generation>`.
     pub unit: &'a str,
     /// The bound of the run, in seconds.
+    pub timeout_secs: u64,
+}
+
+/// One run of a format's tool (an installer unpacking a package, docs/design/packages.md, 5.3):
+/// a program run by absolute path in a unit of its own, bounded, with no network.
+#[derive(Clone, Debug)]
+pub struct ToolCall<'a> {
+    /// The service the run is for.
+    pub service: &'a str,
+    /// The deterministic name of the transient unit. A launcher that runs the tool as a unit
+    /// uses it; it is stopped by name.
+    pub unit: &'a str,
+    /// The tool, an absolute path.
+    pub program: &'a Path,
+    /// The tool's arguments, after its program.
+    pub args: &'a [OsString],
+    /// The bound of the run, in seconds; 0 is no bound.
     pub timeout_secs: u64,
 }
 
@@ -153,6 +172,17 @@ pub trait StepLauncher: Send + Sync {
         Err(LaunchError::NoStart(format!(
             "this launcher runs no additive step, so `{}` of {} did not start",
             call.step, call.service
+        )))
+    }
+
+    /// Runs a format's tool and waits for it to end, in a unit that has no network, bounded by
+    /// the call's timeout. A launcher that runs no tool keeps this default, which starts
+    /// nothing and answers [`LaunchError::NoStart`] naming the program.
+    fn run_tool(&self, call: &ToolCall<'_>) -> Result<StepExit, LaunchError> {
+        Err(LaunchError::NoStart(format!(
+            "this launcher runs no tool, so {} for {} did not start",
+            call.program.display(),
+            call.service
         )))
     }
 }

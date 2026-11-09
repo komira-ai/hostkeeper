@@ -446,6 +446,7 @@ fn the_host_links_write_the_issue_file_and_run_the_given_agetty() {
     let root = rig.scratch.path();
     let agetty = root.join("no-agetty");
     let files = HostFiles {
+        os_root: root.join("os"),
         ca_bundle: root.join("ca.pem"),
         gh: root.join("gh"),
         trusted_root: root.join("trusted_root.json"),
