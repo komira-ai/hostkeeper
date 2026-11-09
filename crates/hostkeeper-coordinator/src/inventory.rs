@@ -42,7 +42,7 @@
 //! Apart from the match, each record says what the enrollment store holds for its host id
 //! (`host_held`, [`Coordinator::host_held`]): no host, an approved host, or a denied or retired
 //! one. It is read from the store by host id, so it holds after a restart and for a host never
-//! heard from, which `Hosts.List` (the hosts heard from since start) does not show.
+//! heard from, and for a denied or retired host, which `Hosts.List` does not show when it is not heard.
 //!
 //! A record may also state the platform its server is installed as by network boot
 //! ([`InventoryRecord::platform`]: `linux-x86_64` or `linux-arm64`), which `hostkeeper-pxe` needs

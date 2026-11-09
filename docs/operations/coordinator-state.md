@@ -155,6 +155,8 @@ hostkeeper-coordinator import --state-file <file> [--ops-file <file>] [--enrollm
 - The MDM gate's device records (`<enrollment-dir>/mdm-devices/<enrollment id>.pb`) are read by the
   gate's own reader, which refuses a record `serve` would refuse, and written as the rows of
   `mdm_devices`; `export` writes them back as the same files, byte for byte.
+- What each host's daemon last said it runs, kept in the host's file (`hosts/<host id>.pb`), is the
+  row of the host in `enrollment_host_running`; `export` writes it back into the host's file.
 - No file is changed: the file coordinator can start again on the same files.
 
 A second import needs an empty database: drop it and create it again first.

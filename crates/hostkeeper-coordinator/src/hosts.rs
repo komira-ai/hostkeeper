@@ -22,7 +22,10 @@
 //!
 //! All three take the operator token only, as every call of [`crate::operator`] does.
 
+use std::collections::BTreeSet;
 use std::sync::PoisonError;
+
+use hostkeeper_enrollment::enroll::EnrolledHost;
 use std::time::Duration;
 
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
@@ -83,31 +86,49 @@ impl Coordinator {
             0 => MAX_HOSTS_PAGE,
             limit => limit.min(MAX_HOSTS_PAGE),
         };
+        let enrolled_ids = self
+            .enrolled_ids()
+            .map_err(unreadable(proto::HostsRefusal::StoreFailed))?;
         let now = (self.clock)();
         let unix_now = self.ops.unix_now();
-        let (mut hosts, more) = {
+        let (page, more) = {
             let fleet = self.lock_fleet();
             let status = self.status_in(&fleet, now);
             let desired = self.desired.all();
-            let mut rest = fleet
+            let past = |id: &HostId| after.as_ref().is_none_or(|after| id > after);
+            let ids: BTreeSet<HostId> = fleet
                 .nodes()
-                .filter(|(id, _)| after.as_ref().is_none_or(|after| *id > after));
-            let hosts: Vec<proto::Host> = rest
+                .map(|(id, _)| id)
+                .chain(&enrolled_ids)
+                .filter(|id| past(id))
+                .cloned()
+                .collect();
+            let mut rest = ids.into_iter();
+            let page: Vec<(HostId, Option<proto::Host>)> = rest
                 .by_ref()
                 .take(size)
-                .map(|(id, node)| {
-                    let mut host = report::host(id, node, &status, now, unix_now);
-                    crate::picks::show(&fleet, id, &mut host, &self.services, &desired);
-                    host
+                .map(|id| {
+                    let heard = fleet.node(&id).map(|node| {
+                        let mut host = report::host(&id, node, &status, now, unix_now);
+                        crate::picks::show(&fleet, &id, &mut host, &self.services, &desired);
+                        host
+                    });
+                    (id, heard)
                 })
                 .collect();
-            (hosts, rest.next().is_some())
+            (page, rest.next().is_some())
         };
-        self.show_inventory_of(&mut hosts)?;
-        let next_page_token = match hosts.last() {
-            Some(last) if more => last.node_id.clone(),
+        let next_page_token = match page.last() {
+            Some((last, _)) if more => last.to_string(),
             _ => String::new(),
         };
+        let enrolled = page
+            .iter()
+            .map(|(id, _)| self.enrolled_host(id.as_str()))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(unreadable(proto::HostsRefusal::StoreFailed))?;
+        let (mut hosts, shown) = self.page_hosts(page, enrolled);
+        self.show_inventory_with(&mut hosts, &shown);
         Ok(proto::ListHostsResponse {
             hosts,
             next_page_token,
@@ -146,27 +167,25 @@ impl Coordinator {
             }
             host
         };
+        let enrolled = self
+            .enrolled_host(&host.node_id)
+            .map_err(unreadable(proto::HostsRefusal::StoreFailed))?;
         let mut hosts = [host];
-        self.show_inventory_of(&mut hosts)?;
+        self.show_running(&mut hosts[0], &id, enrolled.as_ref());
+        self.show_inventory_with(&mut hosts, &[enrolled]);
         let [host] = hosts;
         Ok(proto::GetHostResponse { host: Some(host) })
     }
 
-    /// Fills in each of `hosts` from the host inventory ([`show_inventory`]).
-    /// The enrollment store is read first, then the records under the ops file's lock.
-    fn show_inventory_of(&self, hosts: &mut [proto::Host]) -> Result<(), proto::HostsRefusal> {
-        let enrolled = hosts
-            .iter()
-            .map(|host| self.enrolled_host(&host.node_id))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(unreadable(proto::HostsRefusal::StoreFailed))?;
+    /// Fills in each of `hosts` from the host inventory, `enrolled` being what the enrollment
+    /// store holds of each, under the ops file's lock.
+    fn show_inventory_with(&self, hosts: &mut [proto::Host], enrolled: &[Option<EnrolledHost>]) {
         self.ops.read(|state| {
             let index = RecordIndex::new(&state.inventory);
-            for (host, enrolled) in hosts.iter_mut().zip(&enrolled) {
+            for (host, enrolled) in hosts.iter_mut().zip(enrolled) {
                 show_inventory(host, enrolled.as_ref(), &index);
             }
         });
-        Ok(())
     }
 
     /// `Hosts.Retire`: revokes the enrolled host `node_id`, as the module says. The fleet's
@@ -217,6 +236,7 @@ impl Coordinator {
         let update_in_flight = !fleet.release_if_final(&id, (self.clock)());
         drop(fleet);
         if !update_in_flight {
+            self.running.forget(&id);
             tracing::info!(host_id = %id, "a retired host held no update: slot freed");
             enrollment.retire(&id);
         }
