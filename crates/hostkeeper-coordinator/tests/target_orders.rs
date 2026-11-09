@@ -19,7 +19,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use support::beats::{Daemon, FORCE, converge, grpc_beat, host, json_beat, reason, runs, said};
 use support::rig::{Rig, Spec};
-use support::targets::{SET_DESIRED, digest, entry, grpc, list};
+use support::targets::{SET_DESIRED, digest, entry, grpc, list, repository_entry};
 use support::{OPERATOR, ci_token};
 
 const SERVICES: &str = r#"
@@ -225,6 +225,38 @@ async fn a_host_no_entry_fits_is_no_build_for_host_and_holds_no_convergence() {
             .services[0]
             .installer,
         Some("deb".to_owned())
+    );
+}
+
+/// Proves: with the list `[apt from a repository, tarball]` (packages-repositories.md section
+/// 2), a new host whose daemon lists `apt` is ordered the repository entry over gRPC, whole (its
+/// repository, package version and pin), with the pin as the package digest; one listing only
+/// `tarball` is ordered the tarball; and an old daemon, which counts as listing
+/// `hostkeeper-archive` alone, is ordered nothing and held `no_build_for_host`.
+/// Catches: a repository entry ordered to a daemon that does not list its installer, picked by
+/// anything but the equality of installer names, or sent without its two fields.
+#[tokio::test]
+async fn an_apt_entry_is_ordered_only_to_a_host_whose_daemon_lists_apt() {
+    let rig = rig("pick-repository");
+    let apt = repository_entry("web", "1:2.0-1", 'a');
+    set(&rig, "2.0", x86(vec![apt.clone(), web("tarball", 'c')])).await;
+    rig.at(LATER);
+    let lists_apt = Daemon::new("r1", X86, &[ARCHIVE, "tarball", "apt"]);
+    let order = said(&grpc_beat(&rig, &lists_apt).await).expect("an install");
+    assert_eq!(
+        (order.0, order.3.as_str(), order.5),
+        ("install", digest('a').as_str(), Some(apt))
+    );
+    let tarball_only = Daemon::new("r2", X86, &[ARCHIVE, "tarball"]);
+    assert_eq!(
+        picked(said(&grpc_beat(&rig, &tarball_only).await)),
+        Some(("install", "tarball".to_owned(), digest('c')))
+    );
+    let old = Daemon::old("r3", X86);
+    assert_eq!(said(&grpc_beat(&rig, &old).await), None);
+    assert_eq!(
+        reason(&rig, "web", "r3").await,
+        proto::GateReason::NoBuildForHost
     );
 }
 

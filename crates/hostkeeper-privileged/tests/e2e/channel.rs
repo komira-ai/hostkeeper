@@ -333,6 +333,12 @@ impl ReleaseChannel {
         locked(&self.state).requests.clone()
     }
 
+    /// The body published at `path`, when there is one: the bytes the channel serves, as a
+    /// coordinator's set of a version's release index names them.
+    pub fn object(&self, path: &str) -> Option<Vec<u8>> {
+        locked(&self.state).objects.get(path).cloned()
+    }
+
     /// How many times `path` was requested.
     pub fn count(&self, path: &str) -> u64 {
         locked(&self.state)

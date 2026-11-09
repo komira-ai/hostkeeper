@@ -85,7 +85,7 @@ fn a_hostkeeper_archive_manifest_holds_only_min_hostkeeper() {
             field: "hook"
         }
         .to_string(),
-        "the manifest of a hostkeeper-archive entry may not have hook"
+        "the manifest of the hostkeeper-archive entry may not have hook"
     );
 }
 
@@ -106,25 +106,19 @@ fn every_installer_but_the_archive_needs_a_hook_and_installer_bounds() {
     }
     assert_eq!(
         ManifestError::Missing {
-            installer: Installer::Deb,
+            installer: Installer::MacosPkg,
             field: "package"
         }
         .to_string(),
-        "the manifest of a deb entry needs package"
+        "the manifest of the macos-pkg entry needs package"
     );
 }
 
-/// Catches: a native package's manifest passing without the package's identity, or a
-/// manifest of a format with no package database passing with one.
+/// Catches: a native package's manifest (`apt`'s, `macos-pkg`'s) passing without the package's
+/// identity, or a manifest of a format with no package database passing with one.
 #[test]
 fn package_is_required_for_native_formats_and_refused_for_the_others() {
-    for installer in [
-        Installer::Deb,
-        Installer::Rpm,
-        Installer::Apk,
-        Installer::Arch,
-        Installer::MacosPkg,
-    ] {
+    for installer in [Installer::Apt, Installer::MacosPkg] {
         assert!(installer.names_a_package(), "{installer}");
         let mut m = manifest(installer);
         m.package = None;
@@ -143,20 +137,13 @@ fn package_is_required_for_native_formats_and_refused_for_the_others() {
 /// passing for anything but an image, or an image passing without one.
 #[test]
 fn place_is_for_a_tarball_and_containers_for_an_image_only() {
-    for installer in [
-        Installer::Deb,
-        Installer::Rpm,
-        Installer::Apk,
-        Installer::Arch,
-        Installer::MacosPkg,
-        Installer::OciImage,
-    ] {
+    for installer in [Installer::Apt, Installer::MacosPkg, Installer::OciImage] {
         let mut m = manifest(installer);
         m.place = vec![place("file", "files/a", "/etc/web/a")];
         refused(installer, &m, "place");
     }
     // An image is Linux only; a container's unit is a systemd unit.
-    for installer in [Installer::Deb, Installer::Rpm, Installer::Tarball] {
+    for installer in [Installer::Apt, Installer::Tarball] {
         let mut m = manifest(installer);
         m.run.push("web-api.service".to_owned());
         m.containers = vec![container()];
@@ -178,7 +165,8 @@ fn a_hook_command_for_an_image_is_refused() {
     refused(Installer::OciImage, &m, "hook.command");
 }
 
-/// Catches: an installer's spelling that does not round trip, or an unknown or differently
+/// Catches: an installer's spelling that does not round trip, a withdrawn installer (`deb`,
+/// `rpm`, `arch`, `apk`) still read as one a daemon may list, or an unknown or differently
 /// cased name read as an installer.
 #[test]
 fn the_installers_read_their_own_spellings_only() {
@@ -186,21 +174,27 @@ fn the_installers_read_their_own_spellings_only() {
     assert_eq!(
         spellings,
         [
-            "apk",
-            "arch",
-            "deb",
+            "apt",
             "hostkeeper-archive",
             "macos-pkg",
             "oci-image",
-            "rpm",
             "tarball"
         ]
+    );
+    let mut sorted = Installer::ALL;
+    sorted.sort();
+    assert_eq!(
+        sorted,
+        Installer::ALL,
+        "declared in the order of the spellings"
     );
     for installer in Installer::ALL {
         assert_eq!(installer.as_str().parse::<Installer>(), Ok(installer));
         assert_eq!(installer.to_string(), installer.as_str());
     }
-    for unknown in ["snap", "DEB", "", "flatpak"] {
+    for unknown in [
+        "deb", "rpm", "arch", "apk", "dnf", "snap", "APT", "", "flatpak",
+    ] {
         assert_eq!(
             unknown.parse::<Installer>(),
             Err(UnknownInstaller(unknown.to_owned()))
@@ -210,4 +204,19 @@ fn the_installers_read_their_own_spellings_only() {
         UnknownInstaller("snap".to_owned()).to_string(),
         "\"snap\" is not an installer this daemon knows"
     );
+}
+
+/// Catches: an artifact installer taken for a repository backend or the other way, which would
+/// have the daemon look for a repository on an archive's entry, or a repository backend that
+/// needs no package name.
+#[test]
+fn apt_alone_is_a_backend_of_the_repository_installer() {
+    let repository: Vec<Installer> = Installer::ALL
+        .into_iter()
+        .filter(|installer| installer.is_repository())
+        .collect();
+    assert_eq!(repository, [Installer::Apt]);
+    for installer in repository {
+        assert!(installer.names_a_package(), "{installer}");
+    }
 }

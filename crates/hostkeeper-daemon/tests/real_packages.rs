@@ -20,8 +20,8 @@ use hostkeeper_daemon::verb::PackageDigest;
 use hostkeeper_hook::{Class, Outcome};
 use hostkeeper_package::{
     ATTESTATION_UNAVAILABLE, FETCH_FAILED, INDEX_DIGEST_MISMATCH, INDEX_INVALID,
-    NO_PACKAGE_FOR_PLATFORM, NO_SPACE, NOT_ATTESTED, PACKAGE_DIGEST_MISMATCH, PackageFailure,
-    REASONS,
+    NO_PACKAGE_FOR_PLATFORM, NO_SPACE, NO_STORE, NOT_ATTESTED, PACKAGE_DIGEST_MISMATCH,
+    PackageFailure, REASONS, STORE_DIGEST_MISMATCH,
 };
 use hostkeeper_unpack::{MacVerify, Rule, SignatureVerdict, UnpackError, VerifyIoError};
 use support_archive::{Answer, Rig, SERVICE, VERSION, index, sha256_hex, valid_archive};
@@ -80,6 +80,16 @@ fn every_package_failure_maps_to_one_closed_reason() {
         ),
         (NO_SPACE, Refusal::NoSpace, DEFERRED),
         (NOT_ATTESTED, Refusal::NotAttested, RELEASE),
+        (
+            NO_STORE,
+            Refusal::NoStore,
+            (Outcome::Failure, Class::Environment),
+        ),
+        (
+            STORE_DIGEST_MISMATCH,
+            Refusal::StoreDigestMismatch,
+            DEFERRED,
+        ),
     ];
     let mut covered: Vec<&str> = package_rows.iter().map(|row| row.0).collect();
     covered.sort_unstable();
@@ -303,6 +313,7 @@ impl Packages for Plain {
         _version: &Version,
         _digest: &PackageDigest,
         _index_digest: Option<&PackageDigest>,
+        _entry: Option<&hostkeeper_proto::hostkeeper::release::v1::Target>,
     ) -> Result<VersionDir, PackageError> {
         Err(PackageError::Other("no packages".to_owned()))
     }
@@ -362,7 +373,13 @@ fn orphans_are_removed_before_each_fetch() {
     fs::write(service.join(".fetch-1-1"), "x").expect("write");
     let store = rig.open(Vec::new(), Answer::Confirms).expect("open");
     let error = store
-        .version_dir(&Rig::service(), &Rig::version(), &digest_of(b"a"), None)
+        .version_dir(
+            &Rig::service(),
+            &Rig::version(),
+            &digest_of(b"a"),
+            None,
+            None,
+        )
         .expect_err("the channel has nothing");
     assert_refused(&error, Refusal::FetchFailed, DEFERRED);
     assert_eq!(names(&service), Vec::<String>::new());
@@ -389,7 +406,7 @@ fn a_sweep_that_cannot_run_defers_the_order() {
             .expect_err("the sweep fails");
         assert_refused(&error, Refusal::PackageIoError, DEFERRED);
         let ordered = store
-            .version_dir(&Rig::service(), &Rig::version(), &digest, None)
+            .version_dir(&Rig::service(), &Rig::version(), &digest, None, None)
             .expect_err("the order is deferred");
         assert_eq!(ordered, error);
         assert!(rig.fetched.lock().expect("log").is_empty());
@@ -420,7 +437,13 @@ fn a_fixture_archive_flows_through_fetch_prove_and_unpack_to_a_sealed_version_di
     let sha = sha256_hex(&archive);
     let store = rig.store(&archive, Answer::Confirms);
     let dir = store
-        .version_dir(&Rig::service(), &Rig::version(), &digest_of(&archive), None)
+        .version_dir(
+            &Rig::service(),
+            &Rig::version(),
+            &digest_of(&archive),
+            None,
+            None,
+        )
         .expect("the package is had");
 
     let version_dir = rig.packages.join(SERVICE).join(VERSION);
@@ -443,7 +466,13 @@ fn a_fixture_archive_flows_through_fetch_prove_and_unpack_to_a_sealed_version_di
     );
 
     let again = store
-        .version_dir(&Rig::service(), &Rig::version(), &digest_of(&archive), None)
+        .version_dir(
+            &Rig::service(),
+            &Rig::version(),
+            &digest_of(&archive),
+            None,
+            None,
+        )
         .expect("a second order finds the version whole");
     assert_eq!(again.staged(), dir.staged());
 }
@@ -460,6 +489,7 @@ fn an_order_that_names_another_digest_than_the_index_unpacks_nothing() {
             &Rig::service(),
             &Rig::version(),
             &digest_of(b"other bytes"),
+            None,
             None,
         )
         .expect_err("the digest is not the order's");
@@ -486,6 +516,7 @@ fn an_index_that_is_not_the_one_the_order_names_is_refused_before_anything_else_
             &Rig::version(),
             &digest_of(&archive),
             Some(&named),
+            None,
         )
         .expect_err("not the index the order names");
     assert_refused(&error, Refusal::IndexDigestMismatch, RELEASE);
@@ -511,6 +542,7 @@ fn an_index_with_the_ordered_digest_is_used_and_the_package_digest_is_still_chec
             &Rig::version(),
             &digest_of(&archive),
             Some(&named),
+            None,
         )
         .expect("the package is had");
     assert_eq!(dir.dir(), rig.packages.join(SERVICE).join(VERSION));
@@ -524,6 +556,7 @@ fn an_index_with_the_ordered_digest_is_used_and_the_package_digest_is_still_chec
             &Rig::version(),
             &digest_of(b"other bytes"),
             Some(&named),
+            None,
         )
         .expect_err("the package digest is not the order's");
     assert_refused(&error, Refusal::DigestMismatch, RELEASE);
@@ -538,7 +571,13 @@ fn a_package_the_verifier_rejects_is_not_attested() {
     let archive = valid_archive();
     let store = rig.store(&archive, Answer::Rejects);
     let error = store
-        .version_dir(&Rig::service(), &Rig::version(), &digest_of(&archive), None)
+        .version_dir(
+            &Rig::service(),
+            &Rig::version(),
+            &digest_of(&archive),
+            None,
+            None,
+        )
         .expect_err("not attested");
     assert_refused(&error, Refusal::NotAttested, RELEASE);
     assert!(!rig.packages.join(SERVICE).join(VERSION).exists());
@@ -552,7 +591,13 @@ fn a_verifier_that_cannot_run_defers_the_order() {
     let archive = valid_archive();
     let store = rig.store(&archive, Answer::Unavailable);
     let error = store
-        .version_dir(&Rig::service(), &Rig::version(), &digest_of(&archive), None)
+        .version_dir(
+            &Rig::service(),
+            &Rig::version(),
+            &digest_of(&archive),
+            None,
+            None,
+        )
         .expect_err("no verdict");
     assert_refused(&error, Refusal::AttestationUnavailable, DEFERRED);
     assert!(!rig.packages.join(SERVICE).join(VERSION).exists());
@@ -567,7 +612,13 @@ fn an_archive_that_is_not_a_package_is_a_bad_archive() {
     let archive = b"this is not a zstd frame".to_vec();
     let store = rig.store(&archive, Answer::Confirms);
     let error = store
-        .version_dir(&Rig::service(), &Rig::version(), &digest_of(&archive), None)
+        .version_dir(
+            &Rig::service(),
+            &Rig::version(),
+            &digest_of(&archive),
+            None,
+            None,
+        )
         .expect_err("not an archive");
     assert_refused(&error, Refusal::BadArchive, RELEASE);
     assert_eq!(names(&rig.packages.join(SERVICE)), Vec::<String>::new());
@@ -588,7 +639,13 @@ fn a_version_directory_that_cannot_be_sealed_defers_the_order() {
     let archive = valid_archive();
     let store = rig.store(&archive, Answer::Confirms);
     let error = store
-        .version_dir(&Rig::service(), &Rig::version(), &digest_of(&archive), None)
+        .version_dir(
+            &Rig::service(),
+            &Rig::version(),
+            &digest_of(&archive),
+            None,
+            None,
+        )
         .expect_err("the path cannot be sealed");
     assert_refused(&error, Refusal::PackageIoError, DEFERRED);
 }
@@ -636,7 +693,13 @@ impl MacVerify for Judge {
 fn the_package_check_of_the_platform_judges_every_staged_tree_before_it_is_sealed() {
     let archive = valid_archive();
     let order = |store: &RealPackages| {
-        store.version_dir(&Rig::service(), &Rig::version(), &digest_of(&archive), None)
+        store.version_dir(
+            &Rig::service(),
+            &Rig::version(),
+            &digest_of(&archive),
+            None,
+            None,
+        )
     };
 
     let rig = Rig::new("check-quarantined");

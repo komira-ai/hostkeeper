@@ -9,6 +9,7 @@
 //! includes it by path. A call blocks, so it is made from a thread that is not inside a tokio
 //! runtime, which is every test's thread.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
@@ -21,6 +22,7 @@ use hostkeeper_proto::hostkeeper::operator::v1::{
     enrollment_client::EnrollmentClient, force_request::Targets, hosts_client::HostsClient,
     releases_client::ReleasesClient, services_client::ServicesClient,
 };
+use hostkeeper_proto::hostkeeper::release::v1::TargetList;
 use hostkeeper_testkit::operator::{Operator, canonical_json};
 use serde_json::Value;
 use tonic::Status;
@@ -251,6 +253,35 @@ impl OperatorApi {
                     ..DesiredState::default()
                 }),
                 package_digest: Some(digest.to_owned()),
+                ..SetDesiredRequest::default()
+            },
+            "SetDesiredResponse"
+        )
+    }
+
+    /// `Releases.SetDesired` of `service` at `version` by targets: `targets` by platform, and
+    /// the text of the version's release index with its SHA-256 `index_digest` (64 lower-case hex
+    /// digits), as CI's set gives them.
+    pub fn set_desired_targets(
+        &self,
+        service: &str,
+        version: &str,
+        targets: BTreeMap<String, TargetList>,
+        index: &str,
+        index_digest: &str,
+    ) -> Result<Value, Status> {
+        rpc!(
+            self,
+            ReleasesClient.set_desired,
+            SetDesiredRequest {
+                service: service.to_owned(),
+                desired: Some(DesiredState {
+                    version: version.to_owned(),
+                    ..DesiredState::default()
+                }),
+                release_index: Some(index.to_owned()),
+                release_index_digest: Some(index_digest.to_owned()),
+                targets: targets.into_iter().collect(),
                 ..SetDesiredRequest::default()
             },
             "SetDesiredResponse"

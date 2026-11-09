@@ -12,7 +12,9 @@
 //!   ([`checks::try_rule_with`] held to [`Checks::for_force`]): a resend of a force that ended is
 //!   answered from its record, `try_conflict` and `stale_try` are as for any order, and neither
 //!   `busy` (for a hooked update of the service) nor `halted` applies. A version below the
-//!   running one is not refused: the host keeps no floor of its own.
+//!   running one is not refused: the host keeps no floor of its own. The order's entry, when it
+//!   carries one, is judged next by [`crate::entry::check`], as for any order that names a
+//!   package, and the port is given it.
 //! - Steps 1 to 3, before anything on the host changes ([`obtain`]): the version directory, as
 //!   the host holds it when its tree still has its seal's digest and the seal names the order's
 //!   package digest, else from the [`crate::packages::Packages`] port (fetched, verified,
@@ -47,11 +49,13 @@ use std::path::{Path, PathBuf};
 use hostkeeper_config::manifest::{Class as ManifestClass, Expected, Manifest};
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_hook::{Class, Phase, Step, Verdict};
+use hostkeeper_proto::hostkeeper::release::v1::Target as Entry;
 use hostkeeper_steps::record::{HookSel, Progress, Record, SCHEMA, State};
 use hostkeeper_steps::{Finished, ForcePhase, ForceRecord, Layout, Seal, read_seal};
 
 use crate::boot::ALERT_UNSTOPPABLE;
 use crate::checks::{self, Checks, OrderKey, TryRule};
+use crate::entry;
 use crate::executor::{Ctx, Reply};
 use crate::files;
 use crate::installed::{self, CURRENT};
@@ -151,6 +155,13 @@ pub fn run(ctx: &Ctx, order: Forced) -> Reply {
             );
         }
     }
+    // The entry of the order, when it carries one, is judged before anything is fetched.
+    let judged = order.package.entry.as_ref().map_or(Ok(()), |entry| {
+        entry::check(ctx.own_version, &service, &order.package.digest, entry)
+    });
+    if let Err(refused) = judged {
+        return refused;
+    }
     // The try rules let through a force record with no verdict only for this very order.
     let unfinished = last.and_then(|rec| {
         let force = rec.force.clone().filter(|force| force.verdict.is_none())?;
@@ -163,7 +174,11 @@ pub fn run(ctx: &Ctx, order: Forced) -> Reply {
                 &guard,
                 &service,
                 (rec, force),
-                (&package, order.package.index_digest.as_ref()),
+                (
+                    &package,
+                    order.package.index_digest.as_ref(),
+                    order.package.entry.as_ref(),
+                ),
             ),
             Err(reply) => reply,
         },
@@ -189,7 +204,7 @@ pub fn resume(ctx: &Ctx, service: &ServiceName, rec: Record, force: ForceRecord)
         digest,
     };
     match locked(ctx, service, &package, None) {
-        Ok(guard) => resume_with(ctx, &guard, service, (rec, force), (&package, None)),
+        Ok(guard) => resume_with(ctx, &guard, service, (rec, force), (&package, None, None)),
         Err(reply) => reply,
     }
 }
@@ -207,7 +222,11 @@ fn fresh<'c>(
         ctx,
         service,
         &order.package.version,
-        (&order.package.digest, order.package.index_digest.as_ref()),
+        (
+            &order.package.digest,
+            order.package.index_digest.as_ref(),
+            order.package.entry.as_ref(),
+        ),
     ) {
         Ok(target) => target,
         Err(failed) => return failed,
@@ -238,14 +257,14 @@ fn resume_with(
     guard: &ServiceGuard<'_>,
     service: &ServiceName,
     journal: (Record, ForceRecord),
-    (package, index_digest): (&Package, Option<&PackageDigest>),
+    (package, index_digest, entry): (&Package, Option<&PackageDigest>, Option<&Entry>),
 ) -> Reply {
     let (rec, force) = journal;
     match obtain(
         ctx,
         service,
         &package.version,
-        (&package.digest, index_digest),
+        (&package.digest, index_digest, entry),
     ) {
         Ok(target) => switch::run(ctx, guard, rec, force, &target.manifest),
         Err(reply) => reply,
@@ -260,14 +279,14 @@ fn obtain(
     ctx: &Ctx,
     service: &ServiceName,
     version: &Version,
-    (digest, index_digest): (&PackageDigest, Option<&PackageDigest>),
+    (digest, index_digest, entry): (&PackageDigest, Option<&PackageDigest>, Option<&Entry>),
 ) -> Result<Target, Reply> {
     let (dir, tree_digest) = match on_disk(ctx, service, version, digest) {
         Some(found) => found,
         None => {
             let dir = ctx
                 .packages
-                .version_dir(service, version, digest, index_digest)
+                .version_dir(service, version, digest, index_digest, entry)
                 .map_err(|error| {
                     let refusal = checks::package_refusal(&error);
                     failed_before(package_class(&error), refusal.token())

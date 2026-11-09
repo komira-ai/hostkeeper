@@ -31,7 +31,7 @@ use crate::failure::{ATTESTATION_UNAVAILABLE, NO_SPACE, NOT_ATTESTED, PackageFai
 use crate::fetch::StagedArchive;
 use crate::index::Platform;
 use crate::ports::{
-    Attest, CommitId, Fetcher, SourceRef, Verifier, VerifyError, after, remaining_secs,
+    Attest, CommitId, Fetcher, Request, SourceRef, Verifier, VerifyError, after, remaining_secs,
 };
 use crate::stage::{self, Download, Fault, Job, OpenWriter, TempFile};
 
@@ -112,33 +112,13 @@ pub(crate) fn prove_with(
         fetcher: env.fetcher,
         clock: env.clock,
         dir: &staged.dir,
-        url: &url,
+        request: Request::plain(&url),
         // `gh` reads the extension of the bundle file it is given to choose its parser.
         suffix: ".json",
         cap: MAX_BUNDLE_BYTES,
         deadline: deadline.clone(),
     };
     let Download { file: bundle, .. } = stage::download(&job, writer).map_err(bundle_failure)?;
-    let bytes = stage::read_back(bundle.path(), MAX_BUNDLE_BYTES)
-        .map_err(|_| PackageFailure::deferred(ATTESTATION_UNAVAILABLE))?;
-    let facts = bundle::read(&bytes)
-        .ok()
-        .filter(|facts| facts.lists(staged.sha256.as_str()))
-        .ok_or(PackageFailure::release(NOT_ATTESTED))?;
-    // The budget is checked before the verifier is asked and again when it answers, so a proof
-    // that ran out of time is never taken for one.
-    in_time(&deadline, env.clock)?;
-    let request = Attest {
-        archive: staged.file.path(),
-        bundle: bundle.path(),
-        sha256: &staged.sha256,
-        commit: &facts.commit,
-        source_ref: &facts.source_ref,
-        signers: env.signers,
-        deadline: &deadline,
-    };
-    let attested = env.verifier.verify(&request).map_err(verify_failure)?;
-    in_time(&deadline, env.clock)?;
     let StagedArchive {
         file,
         platform,
@@ -146,6 +126,58 @@ pub(crate) fn prove_with(
         size,
         ..
     } = staged;
+    let subject = Subject {
+        file,
+        platform,
+        sha256,
+        size,
+    };
+    attest(env, subject, bundle.path(), &deadline)
+}
+
+/// An archive whose size and SHA-256 are what an order named, not yet attested.
+pub(crate) struct Subject {
+    pub file: TempFile,
+    pub platform: Platform,
+    pub sha256: Sha256Hex,
+    pub size: u64,
+}
+
+/// Reads the bundle at `bundle`, which is already downloaded, and asks the verifier whether it
+/// attests `subject`, all by `deadline`: the part of a proof that does not depend on where the
+/// bundle came from.
+pub(crate) fn attest(
+    env: &ProveEnv<'_>,
+    subject: Subject,
+    bundle: &Path,
+    deadline: &Stamp,
+) -> Result<VerifiedArchive, PackageFailure> {
+    let bytes = stage::read_back(bundle, MAX_BUNDLE_BYTES)
+        .map_err(|_| PackageFailure::deferred(ATTESTATION_UNAVAILABLE))?;
+    let facts = bundle::read(&bytes)
+        .ok()
+        .filter(|facts| facts.lists(subject.sha256.as_str()))
+        .ok_or(PackageFailure::release(NOT_ATTESTED))?;
+    // The budget is checked before the verifier is asked and again when it answers, so a proof
+    // that ran out of time is never taken for one.
+    in_time(deadline, env.clock)?;
+    let request = Attest {
+        archive: subject.file.path(),
+        bundle,
+        sha256: &subject.sha256,
+        commit: &facts.commit,
+        source_ref: &facts.source_ref,
+        signers: env.signers,
+        deadline,
+    };
+    let attested = env.verifier.verify(&request).map_err(verify_failure)?;
+    in_time(deadline, env.clock)?;
+    let Subject {
+        file,
+        platform,
+        sha256,
+        size,
+    } = subject;
     Ok(VerifiedArchive {
         file,
         platform,

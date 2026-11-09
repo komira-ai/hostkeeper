@@ -14,9 +14,19 @@
 //! - [`bundle::read`] reads an attestation bundle for the commit, the ref and the digests the
 //!   verifier is asked to confirm; `hostkeeper-pxe fetch` uses it with the same verifier.
 //!
+//! - [`entry::fetch_entry`] does both through an order's entry (a `hostkeeper.release.v1.Target`)
+//!   instead of the release index: the artifact, then its attestation bundle, each from the
+//!   host's [`stores::Stores`] (the mirrors first, then the entry's locations, each source with
+//!   its own deadline, credential and redirects), the first bytes with the expected size and
+//!   SHA-256 winning, then the same verifier. It returns a [`entry::Proven`]: the same
+//!   [`prove::VerifiedArchive`] and the stores that gave other bytes.
+//! - [`stores::load`] reads `/etc/hostkeeper/stores.toml` once, at start; [`stores::Stores::channel`]
+//!   is the one store of a host without the file.
+//!
 //! The network and the verifier are ports ([`ports::Fetcher`], [`ports::Verifier`]); [`net`] and
-//! [`gh`] are their real adapters. Every deadline is a point on the injected
-//! [`hostkeeper_steps::Clock`]. A refusal is a [`PackageFailure`]: an outcome, a class and one of
+//! [`gh`] are their real adapters ([`net::NetFetcher`] also follows a store's redirects, sends
+//! its credential to its own origin only and answers an OCI token challenge). Every deadline is a
+//! point on the injected [`hostkeeper_steps::Clock`]. A refusal is a [`PackageFailure`]: an outcome, a class and one of
 //! the reason tokens in [`REASONS`].
 //!
 //! The release channel is not trusted: its bytes are only counted, hashed and written to the
@@ -24,12 +34,14 @@
 //! confirm. Nothing here opens, decompresses or unpacks the archive.
 
 pub mod bundle;
+pub mod entry;
 pub mod fetch;
 pub mod gh;
 pub mod index;
 pub mod net;
 pub mod ports;
 pub mod prove;
+pub mod stores;
 
 mod der;
 mod failure;
@@ -46,8 +58,8 @@ mod fixtures_tests;
 
 pub use failure::{
     ATTESTATION_UNAVAILABLE, FETCH_FAILED, INDEX_DIGEST_MISMATCH, INDEX_INVALID,
-    NO_PACKAGE_FOR_PLATFORM, NO_SPACE, NOT_ATTESTED, PACKAGE_DIGEST_MISMATCH, PackageFailure,
-    REASONS,
+    NO_PACKAGE_FOR_PLATFORM, NO_SPACE, NO_STORE, NOT_ATTESTED, PACKAGE_DIGEST_MISMATCH,
+    PackageFailure, REASONS, STORE_DIGEST_MISMATCH,
 };
 pub use fetch::{PackageOrder, StagedArchive, fetch_package, remove_orphan_fetches};
 pub use index::{IndexEntry, IndexInvalid, Platform, ReleaseIndex, index_url, package_url};

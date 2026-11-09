@@ -174,6 +174,7 @@ impl Links {
                 agent_version: Version::from(ctx.own_version),
                 state_dir: ctx.dirs.state.clone(),
                 period_secs: self.period,
+                installers: crate::entry::installer_names(),
             },
             Ports {
                 link: Arc::clone(&self.link),

@@ -32,7 +32,8 @@ fn round_trip<M: prost::Message + Default + PartialEq + std::fmt::Debug>(message
 }
 
 /// Every message of the file, each field as `name number type label`, in number order, as
-/// packages.md sections 3.1 and 4.2 give them. `label` is `repeated`, `optional` (proto3
+/// packages.md sections 3.1 and 4.2 give them, with the two fields packages-repositories.md
+/// section 2.1 adds to `Target`. `label` is `repeated`, `optional` (proto3
 /// `optional`), `map` or `-`.
 const SHAPE: &[(&str, &[&str])] = &[
     ("TargetList", &["entries 1 Target repeated"]),
@@ -45,6 +46,9 @@ const SHAPE: &[(&str, &[&str])] = &[
             "bytes 4 uint64 -",
             "attestation 5 Blob -",
             "manifest 6 Manifest -",
+            // packages-repositories.md section 2.1 (A16): `tests/additions_repository.rs`.
+            "repository 7 string optional",
+            "package_version 8 string optional",
         ],
     ),
     (
@@ -314,6 +318,7 @@ fn target() -> release::Target {
             )],
         }),
         manifest: Some(manifest()),
+        ..release::Target::default()
     }
 }
 

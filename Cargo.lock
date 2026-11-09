@@ -1498,6 +1498,7 @@ dependencies = [
  "hostkeeper-package",
  "hostkeeper-placed",
  "hostkeeper-proto",
+ "hostkeeper-release",
  "hostkeeper-steps",
  "hostkeeper-testkit",
  "hostkeeper-tls",
@@ -1801,6 +1802,8 @@ dependencies = [
  "hex",
  "hostkeeper-config",
  "hostkeeper-hook",
+ "hostkeeper-proto",
+ "hostkeeper-release",
  "hostkeeper-steps",
  "hostkeeper-testkit",
  "libc",
@@ -1811,6 +1814,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "thiserror",
+ "toml",
  "ureq",
 ]
 
@@ -1956,6 +1960,8 @@ dependencies = [
  "hostkeeper-config",
  "hostkeeper-proto",
  "prost",
+ "prost-reflect",
+ "prost-types",
  "thiserror",
 ]
 

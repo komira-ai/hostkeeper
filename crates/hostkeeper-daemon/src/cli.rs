@@ -88,6 +88,9 @@ pub use crate::start::{EXIT_CONFIG, EXIT_FAILED, EXIT_LOCKED};
 
 /// The default of `--config`.
 pub const DEFAULT_CONFIG: &str = "/etc/hostkeeper/hostkeeper.toml";
+/// The host's stores, beside the daemon config ([`DEFAULT_CONFIG`]) on both platforms; a host
+/// without the file has the one store `channel`, the release channel.
+pub const STORES_FILE: &str = "/etc/hostkeeper/stores.toml";
 /// The default of `--state-dir`.
 pub const DEFAULT_STATE_DIR: &str = "/var/lib/updater/state";
 /// The default of `--packages-dir`.
@@ -610,6 +613,9 @@ pub struct HostFiles {
     pub gh: PathBuf,
     /// The Sigstore trusted root.
     pub trusted_root: PathBuf,
+    /// The stores file ([`hostkeeper_package::stores`]); a start refuses a file that is not sound,
+    /// and takes the one store `channel` when it is not there.
+    pub stores: PathBuf,
     /// The pki directory, which the enrollment loop writes and the heartbeat loop reads.
     pub pki: PathBuf,
     /// The console's issue file and the agetty that redraws it; none on a Mac.
@@ -671,6 +677,7 @@ impl HostFiles {
             ca_bundle: PathBuf::from(ca_bundle),
             gh: PathBuf::from(gh),
             trusted_root: PathBuf::from(trusted_root),
+            stores: PathBuf::from(STORES_FILE),
             pki: PathBuf::from(PKI_DIR),
             console,
             managed_config: (kind == PlatformKind::Macos)
@@ -746,8 +753,9 @@ impl Verifier for HostVerifier {
 /// adapters' (`systemctl` on Linux, `launchctl` on macOS). Placed paths are linked under the
 /// host's own directories and the adapters' unit directory, `--packages-dir` being the packages
 /// directory; the prune of step 18 of a force deletes nothing yet. The directory `gh` runs in
-/// (`<state-dir>/.gh`) is made mode 0700 here. `Err` when that directory cannot be made or the
-/// packages directory cannot be opened.
+/// (`<state-dir>/.gh`) is made mode 0700 here. `Err` when the stores file of `files` is not sound
+/// ([`StartError::Stores`]; one that is not there gives the store `channel`), when that directory
+/// cannot be made or the packages directory cannot be opened.
 pub fn host_ports(
     config: &DaemonConfig,
     settings: &Settings,
@@ -755,6 +763,11 @@ pub fn host_ports(
     own_version: HostkeeperVersion,
     adapters: Adapters,
 ) -> Result<Ports, StartError> {
+    let stores = hostkeeper_package::stores::load(&files.stores, &config.release_channel, 0)
+        .map_err(|source| StartError::Stores {
+            path: files.stores.clone(),
+            source,
+        })?;
     let clock: Arc<dyn Clock> = Arc::new(host_clock());
     let fetcher = NetFetcher::new(
         UreqTransport::new(&tls_roots(&files.ca_bundle)),
@@ -789,6 +802,7 @@ pub fn host_ports(
         path: settings.packages_dir.clone(),
         source,
     })?
+    .with_stores(stores)
     .with_package_check(adapters.package_check)
     .with_trusted_root(trusted_root);
     Ok(Ports {

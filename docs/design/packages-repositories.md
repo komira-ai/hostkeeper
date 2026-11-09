@@ -1,6 +1,10 @@
 # Packages from a package repository: the target names a package, a version and a repository
 
-Status: design, for the maintainers' ruling. Nothing here is built. This amends [packages.md](packages.md),
+Status: design, for the maintainers' ruling. Build item A16 is **Built**: `Target.repository` and
+`Target.package_version` (`crates/hostkeeper-proto/proto/hostkeeper/release/v1/release.proto`), the checks of section
+2.2 and the installer set (`crates/hostkeeper-release/src/target.rs`, `installer.rs`, `grammar.rs`), and the
+coordinator's audit of a repository entry and its release before's reader on what it stores
+(`crates/hostkeeper-coordinator/src/releases.rs`). Nothing else here is built. This amends [packages.md](packages.md),
 [packages-lifecycle.md](packages-lifecycle.md) and [packages-tests.md](packages-tests.md), as the maintainers ruled:
 hostkeeper installs a Linux service's package from a package repository with the host's package manager
 (`apt-get install tierstore=<V>` from the suite the host is configured with). It does not fetch a `.deb` and install

@@ -82,6 +82,7 @@ pub mod boot;
 pub mod checks;
 pub mod cli;
 pub mod console;
+pub mod entry;
 pub mod executor;
 pub mod fallback;
 mod files;

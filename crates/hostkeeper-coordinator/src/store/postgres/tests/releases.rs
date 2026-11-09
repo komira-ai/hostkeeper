@@ -20,8 +20,11 @@ use crate::grpc::Admitted;
 use crate::grpc::operator::ReleasesService;
 use crate::registry::Digest;
 use crate::releases::{Release, Targets};
+use crate::releases_tests::{repository_targets, target_list_before};
 use crate::store::postgres::migrate;
+use crate::store::postgres::releases;
 use crate::store::postgres::rows::Tables;
+use crate::store::postgres::rows::Val;
 use crate::store::postgres::session::Session;
 use crate::store::postgres::state;
 use crate::store::postgres::{Postgres, TIMEOUTS};
@@ -82,6 +85,7 @@ fn entry(installer: &str, c: char) -> Target {
             }],
         }),
         manifest: Some(manifest(installer)),
+        ..Target::default()
     }
 }
 
@@ -424,6 +428,62 @@ fn the_release_before_runs_on_a_database_with_a_release_and_reads_the_third_form
             .is_none_or(|registry| registry.is_empty())
     );
     assert!(held.releases.is_empty());
+}
+
+/// Proves: the reader of a coordinator before packages-repositories.md's A16 starts on a
+/// `releases` table this release wrote with a repository entry: its load reads every row, its own
+/// copy of the entry has no repository and no package version, and the rows it would write back
+/// are exactly the rows stored, the entry's `repository` and `packageVersion` included; this
+/// release opened again on the database reads the entry with both.
+///
+/// Catches: a row with a repository entry that stops an older coordinator's load, or that it
+/// writes back without the two keys.
+#[test]
+fn the_previous_coordinators_reader_starts_on_a_table_holding_a_repository_entry() {
+    let db = TestDatabase::new();
+    let (store, loaded) = db.open("this release").expect("the store opens");
+    let desired = desired_store(&store, loaded);
+    let release = Release::new(repository_targets("web"), None);
+    set_with(&desired, "2.0", release.clone());
+    store.stop();
+
+    let stored = with_session(&db, |session| {
+        let table = &releases::TABLE;
+        session
+            .query(&table.select(), &[])
+            .and_then(|rows| table.rows_of(&rows))
+            .expect("the table reads")
+    });
+    let before = target_list_before();
+    let books = releases::of_by(&stored, Some(&before)).expect("the release before loads it");
+    let first = &books["web"]["2.0"].targets()["linux-x86_64"].entries[0];
+    assert_eq!(
+        (first.repository.clone(), first.package_version.clone()),
+        (None, None)
+    );
+    assert_eq!(
+        (first.installer.as_str(), first.locations.len()),
+        ("apt", 0)
+    );
+    assert_eq!(releases::rows(&books), stored);
+    let row = stored.values().next().expect("one row");
+    let Val::Json(targets) = &row[0] else {
+        panic!("targets is JSON: {row:?}");
+    };
+    assert_eq!(
+        targets["linux-x86_64"]["entries"][0]["packageVersion"],
+        serde_json::json!("1:1.6.0-1")
+    );
+
+    let (store, loaded) = db
+        .open("this release again")
+        .expect("the store opens again");
+    assert_eq!(*loaded.desired.releases["web"]["2.0"], release);
+    assert_eq!(
+        loaded.desired.releases["web"]["2.0"].targets(),
+        &repository_targets("web")
+    );
+    store.stop();
 }
 
 /// A coordinator over `database`, and its `Releases`.

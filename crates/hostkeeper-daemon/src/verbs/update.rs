@@ -6,12 +6,13 @@
 //! record and the try rules ([`checks::try_rule`]); where the service is in its life
 //! ([`checks::installed_rule`]: nothing while it is being uninstalled, `install` only with no
 //! release installed, `update` and `force_rollback` only with one); an `update` below the
-//! running version is refused; the package from the [`crate::packages::Packages`] port, outside
-//! the step lock; its manifest, read by the manifest's loader for the order's service and
-//! version and this daemon's version; the release it replaces, none for an `install`; the paths
-//! it places checked against `placed.json` and the disk (`path_conflict`); then the step lock
-//! and [`hostkeeper_steps::StepRunner::run`], whose verdict is the reply. Every refusal before
-//! the runner writes nothing. An order that ends `Succeeded`, `promotion_pending` or not,
+//! running version is refused; the order's entry, when it carries one, judged by
+//! [`crate::entry::check`] (nothing is fetched for an entry that fails); the package from the
+//! [`crate::packages::Packages`] port, outside the step lock; its manifest, read by the manifest's
+//! loader for the order's service and version and this daemon's version; the release it
+//! replaces, none for an `install`; the paths it places checked against `placed.json` and the
+//! disk (`path_conflict`); then the step lock and [`hostkeeper_steps::StepRunner::run`], whose
+//! verdict is the reply. Every refusal before the runner writes nothing. An order that ends `Succeeded`, `promotion_pending` or not,
 //! confirms its switch: under its locks, before a pending promotion is watched, the service's
 //! package directory is pruned to `current` and `previous` ([`crate::prune::confirmed_switch`]),
 //! keeping the order's target. A resend answered from the record prunes nothing.
@@ -34,6 +35,7 @@ use hostkeeper_steps::record::{Loaded, Record, RecordError};
 use hostkeeper_steps::{Bounds, Finished, RunError, Staged, UpdateOrder};
 
 use crate::checks::{self, OrderKey, TryRule};
+use crate::entry;
 use crate::executor::{Ctx, Reply};
 use crate::files;
 use crate::installed::{self, CURRENT, PREVIOUS};
@@ -232,6 +234,9 @@ pub(crate) fn prepare(
         let running = running.as_ref().map_or("", Version::as_str);
         Reply::refused(refusal, format!("{} is below {running}", order.version))
     })?;
+    if let Some(entry) = &order.entry {
+        entry::check(ctx.own_version, service, &order.digest, entry)?;
+    }
     let dir = ctx
         .packages
         .version_dir(
@@ -239,6 +244,7 @@ pub(crate) fn prepare(
             &order.version,
             &order.digest,
             order.index_digest.as_ref(),
+            order.entry.as_ref(),
         )
         .map_err(|e| Reply::refused(checks::package_refusal(&e), e))?;
     let expected = Expected {

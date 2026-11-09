@@ -22,6 +22,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_hook::Step;
+use hostkeeper_proto::hostkeeper::release::v1::Target;
 use hostkeeper_steps::{
     AdditiveCall, BootId, BootIdError, Clock, LaunchError, Layout, Protected, PruneReport,
     PruneStep, Seal, Staged, StepCall, StepExit, StepLauncher, tree_digest,
@@ -544,6 +545,7 @@ pub struct FakePackages {
     failures: Mutex<BTreeMap<(String, String), PackageError>>,
     asked: Mutex<Vec<(String, String)>>,
     index_digests: Mutex<Vec<Option<String>>>,
+    entries: Mutex<Vec<Option<Target>>>,
     swept: Mutex<Vec<String>>,
     notify: Mutex<Vec<Notice<String>>>,
 }
@@ -561,6 +563,7 @@ impl FakePackages {
             failures: Mutex::default(),
             asked: Mutex::default(),
             index_digests: Mutex::default(),
+            entries: Mutex::default(),
             swept: Mutex::default(),
             notify: Mutex::default(),
         })
@@ -619,6 +622,12 @@ impl FakePackages {
         lock(&self.index_digests).clone()
     }
 
+    /// The entry of every package asked for, in the order of [`FakePackages::asked`]: `None` for
+    /// an order that carried none.
+    pub fn entries(&self) -> Vec<Option<Target>> {
+        lock(&self.entries).clone()
+    }
+
     /// Every service whose orphans were asked to be removed, in order.
     pub fn swept(&self) -> Vec<String> {
         lock(&self.swept).clone()
@@ -639,8 +648,10 @@ impl Packages for FakePackages {
         version: &Version,
         _digest: &PackageDigest,
         index_digest: Option<&PackageDigest>,
+        entry: Option<&Target>,
     ) -> Result<VersionDir, PackageError> {
         let key = (service.to_string(), version.to_string());
+        lock(&self.entries).push(entry.cloned());
         lock(&self.asked).push(key.clone());
         lock(&self.index_digests).push(index_digest.map(|d| d.as_str().to_owned()));
         for notice in lock(&self.notify).iter() {

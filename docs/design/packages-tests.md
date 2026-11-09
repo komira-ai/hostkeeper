@@ -5,7 +5,9 @@ Status: design, for the maintainers' ruling. The tests of A1 are **Built** (`cra
 (`crates/hostkeeper-coordinator/tests/targets.rs`, `crates/hostkeeper-proto/tests/additions_releases.rs`, and the
 Postgres store's in `crates/hostkeeper-coordinator/src/store/postgres/tests/releases.rs`), and so are those of A3
 (`crates/hostkeeper-coordinator/tests/target_orders.rs`, `crates/hostkeeper-proto/tests/additions_installers.rs`, and
-the pick's own bounds in `crates/hostkeeper-coordinator/src/picks_tests.rs`); nothing else here is built. This is section 12 of
+the pick's own bounds in `crates/hostkeeper-coordinator/src/picks_tests.rs`), and so are those of A4
+(`crates/hostkeeper-daemon/tests/stores.rs`, `crates/hostkeeper-package/tests/fetch.rs`) and of A16 (below);
+nothing else here is built. This is section 12 of
 [packages.md](packages.md), kept in a file of its own so that one stays under 1000 lines (rule R12). Section numbers here
 are those of packages.md, and A1 to A15 are its build items (section 13). A16, A17 and the re-scoped A7 and A9 are
 [packages-repositories.md](packages-repositories.md)'s (its section 8); the `deb`, `rpm`, `arch` and `apk` cases
@@ -105,7 +107,9 @@ run only in the device jobs (`privileged`, `macos-device`), whose tests count to
   reports `version_mismatch` for a process of another version, and the image digest for `oci-image`. The device tests
   install, update, roll back and uninstall a two-version `hello` with each installer on the hosted runner (a later
   manager's in a container of its family), and assert that nothing the installer put there remains after uninstall.
-- **Repository entries (A16; `crates/hostkeeper-release/tests/repository.rs`, `crates/hostkeeper-coordinator/tests/targets.rs`,
+- **Repository entries (A16; `crates/hostkeeper-release/tests/manifest/repository.rs`, in the crate's one test binary,
+  `crates/hostkeeper-coordinator/tests/targets/repository.rs` and `tests/target_orders.rs`, the previous coordinator's
+  reader in `crates/hostkeeper-coordinator/src/releases_tests.rs` and `src/store/postgres/tests/releases.rs`, and
   `crates/hostkeeper-proto/tests/additions_repository.rs`).** One refusal per row of packages-repositories.md section 2.2:
   a `repository` empty, of 32 bytes and of 33, or with an upper-case letter; a `package_version` absent, of 128 bytes
   and of 129, starting with a letter, or with a space; a `package_version` on an entry without `repository`; a

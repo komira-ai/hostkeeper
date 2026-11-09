@@ -41,6 +41,7 @@ use hostkeeper_config::daemon::{ConfigError, DaemonConfig};
 use hostkeeper_config::manifest::{BadHostkeeperVersion, HostkeeperVersion};
 use hostkeeper_launchd::{Platform, PlatformKind};
 use hostkeeper_observe::unlink_stale_registration_socket;
+use hostkeeper_package::stores::StoresError;
 use hostkeeper_placed::BootView;
 
 use crate::boot::{ALERT_START, BootError, BootReport, Stage, boot_changed};
@@ -105,6 +106,14 @@ pub enum StartError {
     /// preferences ([`crate::mac_config::at_start`]).
     #[error("the daemon config is not made from the managed preferences: {0}")]
     MacConfig(#[from] MacConfigError),
+    /// The host's `stores.toml` is not sound; the error names the file and, in its text, the store
+    /// and the rule it breaks (never a credential).
+    #[error("{}: {source}", path.display())]
+    Stores {
+        path: PathBuf,
+        #[source]
+        source: StoresError,
+    },
     /// Another daemon holds the state directory, or its lock cannot be taken.
     #[error("another daemon holds {}, or its lock cannot be taken: {source}", path.display())]
     Locked {
@@ -139,7 +148,9 @@ impl StartError {
     /// The exit status of the daemon for this error.
     pub fn exit_code(&self) -> u8 {
         match self {
-            StartError::Config { .. } | StartError::MacConfig(_) => EXIT_CONFIG,
+            StartError::Config { .. } | StartError::MacConfig(_) | StartError::Stores { .. } => {
+                EXIT_CONFIG
+            }
             StartError::Locked { .. } => EXIT_LOCKED,
             StartError::Io { .. }
             | StartError::Runtime(_)
