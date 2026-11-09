@@ -1,0 +1,39 @@
+[package]
+name = "hostkeeper-install"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "The daemon's built-in installers (packages design section 5.1): the macos-pkg installer of a signed flat .pkg, its signers file, and the ports its tools run behind."
+
+# packages.md section 5.1: installers are built into the daemon, each a module of this crate.
+# The parsing and every step are ports and pure logic measured on Linux against fakes; the real
+# tools run only on a Mac, in the macos-device job of `crates/hostkeeper-privileged`.
+[dependencies]
+# `ServiceName` and `Version`, the names an order carries.
+hostkeeper-config = { path = "../hostkeeper-config" }
+# `Label`, a launchd label of a `run` entry, and `LaunchctlProcess`, the bounded child-process
+# runner every tool (`pkgutil`, `installer`, `lsbom`, `launchctl`) runs through.
+hostkeeper-launchd = { path = "../hostkeeper-launchd" }
+# `O_NOFOLLOW` for the signers file's open.
+libc.workspace = true
+# The receipts and launchd plists, and `pkgutil`'s `-plist` answers.
+plist.workspace = true
+# The record the installer keeps (`installed` of placed.json).
+serde.workspace = true
+# Hashes of installed files against their sealed copies in `tree/`.
+sha2.workspace = true
+thiserror.workspace = true
+# The signers file, `/etc/hostkeeper/macos-pkg.toml`.
+toml.workspace = true
+hex.workspace = true
+
+[dev-dependencies]
+hostkeeper-testkit = { path = "../hostkeeper-testkit" }
+# The record's JSON form, asserted by the tests.
+serde_json.workspace = true
+
+[lints]
+workspace = true

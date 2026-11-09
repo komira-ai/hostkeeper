@@ -1604,6 +1604,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "hostkeeper-install"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "hostkeeper-config",
+ "hostkeeper-launchd",
+ "hostkeeper-testkit",
+ "libc",
+ "plist",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "toml",
+]
+
+[[package]]
 name = "hostkeeper-launchd"
 version = "0.1.0"
 dependencies = [
