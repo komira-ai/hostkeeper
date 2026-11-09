@@ -4,7 +4,7 @@
 //! statement listing the archive's SHA-256), and the canonical release index of the archives;
 //! for hostkeeper and hello, their native packages ([`native_files`]): a `.deb` per Linux
 //! architecture holding only its `control`, and in place of the `.pkg` bytes of its own, each
-//! with its bundle. And
+//! with its bundle; for hello's failing build, its `.deb`s ([`fail_ready_files`]). And
 //! the targets the verb must write for them, written here from the files themselves.
 
 use std::collections::BTreeMap;
@@ -144,6 +144,31 @@ pub fn native_files(service: &str, version: &str) -> BTreeMap<String, Vec<u8>> {
     files
 }
 
+/// The failing build of hello at the release `release`, by name: its `.deb` per Linux
+/// architecture, named for the service version (`hello_<release>-fail-ready_<arch>.deb`) and
+/// holding the Debian version `<release>~fail.ready`, each with its bundle. Its `.pkg` is not
+/// released.
+pub fn fail_ready_files(release: &str) -> BTreeMap<String, Vec<u8>> {
+    let mut files = BTreeMap::new();
+    for platform in [Platform::LinuxX86_64, Platform::LinuxArm64] {
+        let name = fail_ready_name(release, platform);
+        let arch = if platform == Platform::LinuxX86_64 {
+            "amd64"
+        } else {
+            "arm64"
+        };
+        let bytes = deb("hello", &format!("{release}~fail.ready"), arch);
+        files.insert(format!("{name}.sigstore.json"), bundle(&bytes));
+        files.insert(name, bytes);
+    }
+    files
+}
+
+/// The release asset name of hello's failing build at `release` on the Linux `platform`.
+fn fail_ready_name(release: &str, platform: Platform) -> String {
+    native_name("hello", &format!("{release}-fail-ready"), platform)
+}
+
 /// The archive name of `service` at the package version `version` for `platform`.
 pub fn archive_name(service: &str, version: &str, platform: Platform) -> String {
     format!("{service}-{version}-{platform}.tar.zst")
@@ -179,24 +204,53 @@ pub fn package_files(service: &str, version: &str, index_name: &str) -> BTreeMap
 /// `macos-pkg` entry of the store `komira-testing` at the installers' testing path), its
 /// manifest the archive's. As [`sorted`] JSON text.
 pub fn targets(service: &str, release: &str, files: &BTreeMap<String, Vec<u8>>) -> String {
+    lists(&Platform::ALL, |platform| {
+        let name = native_name(service, release, platform);
+        let bytes = &files[&name];
+        native_entry(service, platform, (&name, bytes), "komira-testing", release)
+    })
+}
+
+/// The targets `release targets --fail-ready` must write for hello's failing build at the
+/// release `release`, from `files` ([`fail_ready_files`]): per Linux platform, an `apt` entry of
+/// the repository `komira-testing-fail` at the Debian version `<release>~fail.ready`, pinned by
+/// the failing build's `.deb`; no list for macOS, where the failing build has no `.pkg`. As
+/// [`sorted`] JSON text.
+pub fn fail_ready_targets(release: &str, files: &BTreeMap<String, Vec<u8>>) -> String {
+    lists(&[Platform::LinuxArm64, Platform::LinuxX86_64], |platform| {
+        let name = fail_ready_name(release, platform);
+        let bytes = &files[&name];
+        let version = format!("{release}~fail.ready");
+        native_entry(
+            "hello",
+            platform,
+            (&name, bytes),
+            "komira-testing-fail",
+            &version,
+        )
+    })
+}
+
+/// The lists of `platforms`, each the one entry `entry` makes, as [`sorted`] JSON text.
+fn lists(platforms: &[Platform], entry: impl Fn(Platform) -> Value) -> String {
     let mut lists = serde_json::Map::new();
-    for platform in Platform::ALL {
-        let entries = [native_entry(service, release, platform, files)];
-        lists.insert(platform.to_string(), json!({"entries": entries}));
+    for platform in platforms.iter().copied() {
+        lists.insert(platform.to_string(), json!({"entries": [entry(platform)]}));
     }
     sorted(Value::Object(lists)).to_string()
 }
 
-/// The native entry `release targets` must write for `service`'s native package of `files` at
-/// the release `release` on `platform`.
+/// The native entry `release targets` must write for `service`'s native package `name` of
+/// `bytes` on `platform`: on Linux the `.deb`'s, of the repository entry `repository` at the
+/// Debian version `version`; on macOS the `.pkg`'s, of the store `komira-testing` at the
+/// installers' testing path of the release `version`.
 fn native_entry(
     service: &str,
-    release: &str,
     platform: Platform,
-    files: &BTreeMap<String, Vec<u8>>,
+    (name, bytes): (&str, &[u8]),
+    repository: &str,
+    version: &str,
 ) -> Value {
-    let name = native_name(service, release, platform);
-    let bytes = &files[&name];
     let package = match platform {
         Platform::MacosArm64 => format!("dev.hostkeeper.{service}"),
         _ => service.to_owned(),
@@ -214,7 +268,7 @@ fn native_entry(
     match platform {
         Platform::MacosArm64 => json!({
             "installer": "macos-pkg",
-            "locations": [{"store": "komira-testing", "locator": format!("hostkeeper/{release}/{name}")}],
+            "locations": [{"store": "komira-testing", "locator": format!("hostkeeper/{version}/{name}")}],
             "digest": sha256(bytes),
             "bytes": bytes.len().to_string(),
             "manifest": manifest,
@@ -223,8 +277,8 @@ fn native_entry(
             "installer": "apt",
             "digest": sha256(bytes),
             "manifest": manifest,
-            "repository": "komira-testing",
-            "packageVersion": release,
+            "repository": repository,
+            "packageVersion": version,
         }),
     }
 }

@@ -107,15 +107,19 @@ fn the_deb_is_the_same_bytes_for_the_same_inputs_and_dated_by_the_commit() {
 }
 
 #[test]
-fn the_failing_builds_deb_carries_the_fail_ready_version() {
-    // Catches: a failing build named or versioned as the good one, which apt could not tell
-    // apart from it.
+fn the_failing_builds_deb_is_named_by_its_service_version_and_carries_the_tilde_version() {
+    // Catches: a failing build whose control says the service version (a Debian revision that
+    // sorts above the release) or whose file name carries the `~` an asset name may not.
     let d = scratch("native-deb-fail-ready");
     let mut r = request(&d, Service::Hello, Platform::LinuxArm64);
     r.fail_ready = true;
     let lines = build(&r, no_pins).expect("built");
     assert!(lines[0].starts_with("hello_0.1.5-fail-ready_arm64.deb: sha256 "));
     let path = d.join("out/hello_0.1.5-fail-ready_arm64.deb");
+    let bytes = std::fs::read(&path).expect("read");
+    let text = crate::channels::apt::deb::control_of(&bytes).expect("control");
+    assert!(text.starts_with("Package: hello\nVersion: 0.1.5~fail.ready\nArchitecture: arm64\n"));
+    assert!(!d.join("out/hello_0.1.5~fail.ready_arm64.deb").exists());
     check_service(&path, Service::Hello).expect("passes");
 }
 

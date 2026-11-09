@@ -2,18 +2,19 @@
 //! the job `set-desired`: each test reads the committed workflow, runs the job's `run:` steps in
 //! order with `bash -eo pipefail` under the job's and each step's `env`, then evaluates
 //! `set-desired`'s `with` from the job's outputs. Nothing is substituted in a command. The
-//! expressions are evaluated as GitHub does for the forms the workflow uses (an input, a step's
-//! or a job's output); any other form, and a step with an `if:`, fails the test. The one action
-//! of the job, the checkout, is done by the test: it runs in this repository's own build.
+//! expressions are evaluated as GitHub does for the forms the workflow uses (an input, a quoted
+//! text, `format('{0}...', ...)`, a comparison with a text, `a && b || c`, a step's or a job's
+//! output); any other form, and a step with an `if:`, fails the test. The one action of the job,
+//! the checkout, is done by the test: it runs in this repository's own build.
 //!
 //! `curl`, `cargo` and `rustup` on the `PATH` are the test program `tests/bin/gh_fixture.rs`.
 //! As `curl` it serves the release's assets from scratch files (no test reaches GitHub); as
 //! `cargo` it runs this crate's real `xtask` binary, so the step that writes the targets runs the
 //! real `release targets --service hello`. `sha256sum` and `cut` are the runner's own.
 //!
-//! Each release published here carries hello's build and its failing build, so a job that read
-//! the failing build's index or archives would set the wrong one; the failing build is not
-//! offered (docs/hello.md, step 4, suspended).
+//! Each release published here carries hello's build and its failing build (archives, indexes and
+//! `.deb`s), so a job that read the other variant's index, archives or `.deb`s would set the
+//! wrong one.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -21,7 +22,9 @@ use std::process::Command;
 
 use super::callers::{HELLO_FILE, HELLO_JOB, HELLO_RELEASE_JOB};
 use super::lint::{entries, entry};
-use super::release_files::{REPO, native_files, package_files, sorted, targets};
+use super::release_files::{
+    REPO, fail_ready_files, fail_ready_targets, native_files, package_files, sorted, targets,
+};
 use super::testdir::TestDir;
 use super::{workflows, yaml};
 
@@ -32,7 +35,7 @@ const XTASK: &str = env!("CARGO_BIN_EXE_xtask");
 const RELEASE: &str = "1.2.3";
 
 /// The files of hello's release `release` and of its failing build: their archives, bundles and
-/// indexes, and hello's native packages.
+/// indexes, hello's native packages and the failing build's `.deb`s.
 fn release_files(release: &str) -> BTreeMap<String, Vec<u8>> {
     let mut files = package_files("hello", release, "hello-index.json");
     files.extend(package_files(
@@ -41,6 +44,7 @@ fn release_files(release: &str) -> BTreeMap<String, Vec<u8>> {
         "hello-fail-ready-index.json",
     ));
     files.extend(native_files("hello", release));
+    files.extend(fail_ready_files(release));
     files
 }
 
@@ -100,8 +104,20 @@ struct Scope<'a> {
 }
 
 impl Scope<'_> {
-    /// The value of one expression: an input, or an output of a step or of the job `release`.
-    fn expression(&self, term: &str) -> String {
+    /// The value of one operand: a quoted text, `format('{0}...', <operand>)`, an input, or an
+    /// output of a step or of the job `release`.
+    fn operand(&self, term: &str) -> String {
+        let term = term.trim();
+        if let Some(text) = term.strip_prefix('\'').and_then(|t| t.strip_suffix('\'')) {
+            return text.to_owned();
+        }
+        if let Some(args) = term
+            .strip_prefix("format('")
+            .and_then(|t| t.strip_suffix(')'))
+        {
+            let (pattern, arg) = args.split_once("', ").expect("format('<text>', <operand>)");
+            return pattern.replace("{0}", &self.operand(arg));
+        }
         match term.split('.').collect::<Vec<_>>().as_slice() {
             ["inputs", name] => self
                 .inputs
@@ -120,6 +136,25 @@ impl Scope<'_> {
             }
             _ => panic!("the test does not know the expression `{term}`"),
         }
+    }
+
+    /// The value of `expr`: `<a> == '<text>' && <b> || <c>` (GitHub's: `b` when the comparison
+    /// holds and `b` is not empty, else `c`), or an operand.
+    fn expression(&self, expr: &str) -> String {
+        if let Some((left, otherwise)) = expr.split_once(" || ") {
+            let (condition, then) = left.split_once(" && ").expect("`a && b || c`");
+            let value = self.condition(condition).then(|| self.operand(then));
+            return value
+                .filter(|v| !v.is_empty())
+                .unwrap_or_else(|| self.operand(otherwise));
+        }
+        self.operand(expr)
+    }
+
+    /// Whether `<a> == '<text>'` holds.
+    fn condition(&self, condition: &str) -> bool {
+        let (left, right) = condition.split_once(" == ").expect("`<a> == '<text>'`");
+        self.operand(left) == self.operand(right)
     }
 
     /// `value` with each `${{ ... }}` evaluated.
@@ -162,9 +197,9 @@ fn read_outputs(path: &Path) -> BTreeMap<String, String> {
         .collect()
 }
 
-/// Runs the committed job `release` of hello-desired.yml for a dispatch with `version`, then
-/// evaluates the inputs `set-desired` is given from its outputs.
-fn dispatch(site: &Site, version: &str) -> Ended {
+/// Runs the committed job `release` of hello-desired.yml for a dispatch with `version` and
+/// `variant`, then evaluates the inputs `set-desired` is given from its outputs.
+fn dispatch(site: &Site, version: &str, variant: &str) -> Ended {
     let text = workflows()
         .into_iter()
         .find(|(file, _)| file == HELLO_FILE)
@@ -177,7 +212,7 @@ fn dispatch(site: &Site, version: &str) -> Ended {
         Some(yaml::Value::Seq(items)) => items,
         _ => panic!("the job release has no steps"),
     };
-    let inputs = BTreeMap::from([("version", version)]);
+    let inputs = BTreeMap::from([("version", version), ("variant", variant)]);
     let mut outputs: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
     let none = BTreeMap::new();
     let path = format!("{}:/usr/bin:/bin", site.root.join("bin").display());
@@ -249,6 +284,18 @@ fn dispatch(site: &Site, version: &str) -> Ended {
     Ended::Set(given)
 }
 
+/// What `set-desired` must be given for the failing build of the release [`RELEASE`]: its
+/// version and the targets of its own `.deb`s alone.
+fn set_fail_ready() -> Ended {
+    Ended::Set(BTreeMap::from([
+        (
+            "targets".to_owned(),
+            fail_ready_targets(RELEASE, &release_files(RELEASE)),
+        ),
+        ("version".to_owned(), format!("{RELEASE}-fail-ready")),
+    ]))
+}
+
 /// What `set-desired` must be given for the release [`RELEASE`]: its version and the targets of
 /// hello's own `.deb`s and `.pkg` alone.
 fn set_with() -> Ended {
@@ -268,7 +315,38 @@ fn a_dispatch_sets_hellos_version_with_its_native_targets_alone() {
     // the `.deb`s or the `.pkg` not downloaded or not read), an index or its digest still given to `set-desired`,
     // and the job's outputs not the ones set-desired is given.
     let site = Site::new("hello");
-    assert_eq!(dispatch(&site, RELEASE), set_with());
+    assert_eq!(dispatch(&site, RELEASE, "hello"), set_with());
+}
+
+#[test]
+fn a_dispatch_of_fail_ready_sets_the_failing_builds_version_with_its_testing_fail_targets() {
+    // Catches: `--fail-ready` not given to the verb (it would write hello's targets for the
+    // failing build's version), the release's own version set instead of
+    // `<version>-fail-ready`, hello's `.debs` or archives read for the failing build, and
+    // entries not naming the repository `komira-testing-fail` at `<version>~fail.ready` with
+    // the digest of the failing build's own `.deb`.
+    let site = Site::new("fail-ready");
+    let set = dispatch(&site, RELEASE, "fail-ready");
+    assert_eq!(set, set_fail_ready());
+    assert_ne!(set, set_with());
+}
+
+#[test]
+fn a_dispatch_of_hello_never_sets_the_failing_build_though_its_assets_are_there() {
+    // Catches: the failing build's `.deb`s or archives read for a normal set: with the
+    // release's own `.deb`s gone, hello's dispatch stops at the download (it does not fall back
+    // to the failing build's), and with them there the entries are not the failing build's.
+    let site = Site::new("hello-not-fail");
+    assert_eq!(
+        dispatch(&site, RELEASE, "hello"),
+        set_with(),
+        "the failing build's assets are in the site"
+    );
+    std::fs::remove_file(site.asset("hello_1.2.3_arm64.deb")).expect("remove an asset");
+    assert_eq!(
+        dispatch(&site, RELEASE, "hello"),
+        Ended::Failed("Download the variant's index, Linux archives and .debs".to_owned())
+    );
 }
 
 #[test]
@@ -282,7 +360,7 @@ fn a_version_that_is_not_a_release_stops_the_job_before_any_download() {
     {
         let site = Site::new(&format!("version-{n}"));
         assert_eq!(
-            dispatch(&site, version),
+            dispatch(&site, version, "hello"),
             Ended::Failed("Refuse a version that is not X.Y.Z".to_owned()),
             "{version:?}"
         );
@@ -310,8 +388,8 @@ fn a_release_without_its_index_an_archive_a_deb_or_its_pkg_stops_at_the_download
         let site = Site::new(&format!("missing-{n}"));
         std::fs::remove_file(site.asset(missing)).expect("remove an asset");
         assert_eq!(
-            dispatch(&site, RELEASE),
-            Ended::Failed("Download hello's index, Linux archives and .debs".to_owned()),
+            dispatch(&site, RELEASE, "hello"),
+            Ended::Failed("Download the variant's index, Linux archives and .debs".to_owned()),
             "{missing}"
         );
     }
@@ -329,7 +407,7 @@ fn a_release_without_what_no_list_carries_is_still_set() {
     ] {
         std::fs::remove_file(site.asset(missing)).expect("remove an asset");
     }
-    assert_eq!(dispatch(&site, RELEASE), set_with());
+    assert_eq!(dispatch(&site, RELEASE, "hello"), set_with());
 }
 
 #[test]
@@ -339,8 +417,8 @@ fn a_native_package_its_bundle_does_not_list_stops_at_the_targets() {
     let site = Site::new("native-replaced");
     std::fs::write(site.asset("hello_1.2.3_amd64.deb"), b"other bytes").expect("replace");
     assert_eq!(
-        dispatch(&site, RELEASE),
-        Ended::Failed("The targets of hello's package".to_owned())
+        dispatch(&site, RELEASE, "hello"),
+        Ended::Failed("The targets of the variant's package".to_owned())
     );
 }
 
@@ -355,7 +433,7 @@ fn an_archive_that_is_not_the_one_its_index_lists_stops_at_the_targets() {
     )
     .expect("replace an archive");
     assert_eq!(
-        dispatch(&site, RELEASE),
-        Ended::Failed("The targets of hello's package".to_owned())
+        dispatch(&site, RELEASE, "hello"),
+        Ended::Failed("The targets of the variant's package".to_owned())
     );
 }

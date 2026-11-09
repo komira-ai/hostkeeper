@@ -96,9 +96,10 @@ fn built(dist: &Path, package: Package) {
 fn natives(dist: &Path, package: Package) {
     let service = package.service().name();
     for platform in package.platforms() {
-        let name = package
-            .native_name(&release(), *platform)
-            .expect("a native package");
+        // The failing build has no `.pkg`.
+        let Some(name) = package.native_name(&release(), *platform) else {
+            continue;
+        };
         let bytes = match native_deb::arch(*platform) {
             Some(arch) => {
                 let program = |path: &str| {
@@ -110,10 +111,12 @@ fn natives(dist: &Path, package: Package) {
                 };
                 let files = match package {
                     Package::Hello => native_hello::deb_files(b"a program".to_vec(), false),
+                    Package::HelloFailReady => native_hello::deb_files(b"a program".to_vec(), true),
                     Package::Hostkeeper => program("/usr/bin/hostkeeper"),
                     _ => program("/usr/lib/mdm/mdm"),
                 };
-                native_deb::build(service, "0.1.5", arch, "a service", &files, 1_800_000_000)
+                let version = package.deb_version(&release());
+                native_deb::build(service, &version, arch, "a service", &files, 1_800_000_000)
                     .expect("build the .deb")
             }
             None => format!("the .pkg of {service}").into_bytes(),
@@ -356,24 +359,6 @@ fn hello_lists_its_deb_on_linux_and_its_pkg_on_macos_alone() {
         })
     );
     read_back_as_the_coordinator("hello", &got);
-}
-
-#[test]
-fn hellos_failing_build_has_no_native_package_and_is_refused_by_name() {
-    // Catches: the failing build given a list of its archives alone, which a host that runs
-    // hello natively is never ordered (the coordinator drops it, `installer_dropped`), so a set
-    // of it would order nobody and say nothing; or a list with no entry at all, refused by the
-    // coordinator only once CI has called. Its whole release is there: the refusal is by name.
-    let (_root, dist) = dist("targets-hello-fail-ready");
-    built(&dist, Package::HelloFailReady);
-    assert_eq!(
-        targets(&request(&dist, Package::HelloFailReady, None)),
-        Err(Error::Failed(
-            "hello 0.1.5-fail-ready: no native package: a release lists native entries alone, \
-             and only a package the project's repository takes has one"
-                .to_owned()
-        ))
-    );
 }
 
 #[test]
@@ -711,7 +696,7 @@ fn an_entry() -> Target {
             installer_bounds: Some(INSTALLER_BOUNDS),
             ..Manifest::default()
         }),
-        repository: Some(TESTING.to_owned()),
+        repository: Some(crate::release::contract::TESTING_ENTRY.to_owned()),
         package_version: Some("0.1.5".to_owned()),
         ..Target::default()
     }
@@ -808,4 +793,5 @@ fn the_verb_runs_without_adapters_and_refuses_a_failing_build_of_hostkeeper() {
     assert_eq!(Service::default(), Service::Hostkeeper);
 }
 
+mod fail_ready;
 mod native;

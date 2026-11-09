@@ -18,14 +18,22 @@
 //! `testing` directory ([`crate::channels::spec`]). hostkeeper's are the daemon's `.deb` and the
 //! installer, the packages that bootstrap a host (section 10.4).
 //!
+//! **Hello's failing build is listed only when asked for** (`--fail-ready`): its `.deb`
+//! `hello_<v>-fail-ready_<arch>.deb` is in the suite `testing-fail`, which lists it alone, under
+//! the Debian version `<v>~fail.ready` ([`Package::deb_version`]), so a normal set never takes
+//! it, and a call without `--fail-ready` reads none of its files.
+//!
 //! ```text
-//! Linux   installer apt, repository komira-testing (the host's entry of the testing suite),
-//!         package_version the release's, digest the .deb's SHA-256 (the pin); no location,
-//!         no size, no attestation
+//! Linux   installer apt, repository komira-testing (the host's entry of the testing suite;
+//!         the failing build's: komira-testing-fail, [`Package::repository_entry`]),
+//!         package_version the .deb's Debian version ([`Package::deb_version`]: the release's,
+//!         the failing build's `<v>~fail.ready`), digest the .deb's SHA-256 (the pin); no
+//!         location, no size, no attestation
 //! macOS   installer macos-pkg, location komira-testing hostkeeper/<release>/<service>-<release>-
 //!         macos-arm64.pkg (the Mac's store of the testing directory, rooted at pkg/),
 //!         digest and bytes the .pkg's; no attestation (the key and the pin bind the bytes,
-//!         packages-native.md section 10.3), no repository, no package version
+//!         packages-native.md section 10.3), no repository, no package version; the failing
+//!         build has no `.pkg`, so no macOS list
 //! manifest the archive's own manifest.toml as an entry's manifest: its hook without the
 //!         command (the package's hook is its program at the fixed path; hostkeeper's package
 //!         has none, and its daemon runs built-in steps), its run units, health URL, params and
@@ -40,11 +48,6 @@
 //! `manifest.toml` is where a native entry's manifest comes from: the archive is read only from
 //! the bytes the index lists (its size and SHA-256 measured again), and its manifest must name
 //! the service, the version and the platform and carry a `min_hostkeeper`.
-//!
-//! **A package with no native package is refused by name**, before any package is read: hello's
-//! failing build, whose version `<v>-fail-ready` is not the `X.Y.Z` the shared repository takes,
-//! so it is not published there and a host that installs hello natively could take no entry of
-//! it.
 //!
 //! Each native package must be a regular file whose bundle lists its SHA-256, and a `.deb`'s
 //! `control` must name the service, the version and the architecture; a `.pkg` has no control
@@ -81,7 +84,7 @@ use super::channel_stage::{
     MAX_BUNDLE_BYTES, bundle_problem, file_name, load_index, measure_file, read_capped,
     regular_file,
 };
-use super::contract::{Package, Platform, Version, bundle_of};
+use super::contract::{Package, Platform, TESTING_ENTRY, Version, bundle_of};
 use super::native::pkg::IDENTIFIER as HELLO_PKG_IDENTIFIER;
 use super::{Error, answer, macos_pkg};
 use crate::channels::apt::{control, deb};
@@ -89,12 +92,6 @@ use crate::channels::spec;
 
 /// The name of the archive's manifest, at the top of the archive.
 const MANIFEST_ENTRY: &str = "manifest.toml";
-
-/// The channel a native entry names: on Linux the host's repository entry of the suite
-/// `testing` (packages-repositories.md section 3.1), on a Mac its store of the installers'
-/// `testing` directory. A release is set from `testing`; its promotion to `stable` copies the
-/// same bytes, so the pin is the same from either.
-pub(crate) const TESTING: &str = "komira-testing";
 
 /// The bounds of a native installer's own steps, in seconds: the fetch and the checks of
 /// `stage` (mdm's `.deb` carries its pinned servers), the package manager's install of
@@ -167,24 +164,13 @@ pub(crate) fn targets(request: &Request) -> Result<Vec<String>, Error> {
         )));
     }
     // Every list is its platform's native entry alone: a Linux platform's `.deb`, the Mac's
-    // signed `.pkg`.
-    let natives = index
-        .packages()
-        .iter()
-        .map(|entry| {
-            let platform = release_platform(entry.platform);
-            let arch = platform.linux_arches().map(|(deb, _)| deb);
-            package
-                .native_name(&request.version, platform)
-                .map(|name| (entry, arch, name))
-        })
-        .collect::<Option<Vec<_>>>()
-        .ok_or_else(|| {
-            Error::Failed(format!(
-                "{service} {version}: no native package: a release lists native entries alone, \
-                 and only a package the project's repository takes has one"
-            ))
-        })?;
+    // signed `.pkg`; the failing build has no `.pkg`, so no macOS list.
+    let natives = index.packages().iter().filter_map(|entry| {
+        let platform = release_platform(entry.platform);
+        let name = package.native_name(&request.version, platform)?;
+        let arch = platform.linux_arches().map(|(deb, _)| deb);
+        Some((entry, arch, name))
+    });
     let mut problems = Vec::new();
     let mut lists = Vec::new();
     for (entry, arch, name) in natives {
@@ -273,7 +259,7 @@ fn native_of(
             problems.push(format!("{bundle_name}: {why}"));
         }
     }
-    let version = package.version_text(&request.version);
+    let version = package.deb_version(&request.version);
     // Only a `.deb` has a control to read; a `.pkg` is held to its bundle and its digest.
     if let (Some(arch), Some(_)) = (arch, &measured) {
         let bytes = std::fs::read(dir.join(name))
@@ -316,7 +302,7 @@ fn native_of(
                 bytes: 0,
                 attestation: None,
                 manifest: Some(manifest),
-                repository: Some(TESTING.to_owned()),
+                repository: Some(package.repository_entry().to_owned()),
                 package_version: Some(version),
             },
         ),
@@ -325,7 +311,7 @@ fn native_of(
             Target {
                 installer: installer.as_str().to_owned(),
                 locations: vec![Location {
-                    store: TESTING.to_owned(),
+                    store: TESTING_ENTRY.to_owned(),
                     locator: spec::HOSTKEEPER.pkg_locator(&request.version.to_string(), name),
                 }],
                 digest: measured.sha256,
@@ -348,9 +334,10 @@ fn release_platform(platform: IndexPlatform) -> Platform {
     }
 }
 
-/// What is wrong with the `.deb` `bytes` as the package of `service` at `version` for `arch`:
-/// its `control` read back out of it must name each, since the host's package manager installs
-/// it by those fields and the daemon holds `package_version` to its `Version`.
+/// What is wrong with the `.deb` `bytes` as the package of `service` at the Debian version
+/// `version` for `arch`: its `control` read back out of it must name each, since the host's
+/// package manager installs it by those fields and the daemon holds `package_version` to its
+/// `Version`.
 fn control_problems(bytes: &[u8], service: &str, version: &str, arch: &str) -> Vec<String> {
     let fields = match deb::control_of(bytes).and_then(|text| control::parse(&text)) {
         Ok(fields) => fields,

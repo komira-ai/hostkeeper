@@ -83,12 +83,14 @@ makes that directory, owner only, on its first step.
 1. **Releases.** Each release of this repository carries, per platform,
    `hello-<version>-<platform>.tar.zst` and its attestation, and `hello-index.json`. It also
    carries the failing build, version `<version>-fail-ready`, with
-   `hello-fail-ready-index.json`. Stage each version into the channel's tree with
-   `cargo xtask release channel-stage --service hello --version <version> --from <assets>
-   --index <assets>/hello-index.json --out <tree>` (and `--version <version>-fail-ready
-   --index <assets>/hello-fail-ready-index.json` for the failing build), which lays out
+   `hello-fail-ready-index.json`, and a `.deb` for each Linux architecture of each
+   (`hello_<version>_<arch>.deb`, `hello_<version>-fail-ready_<arch>.deb`) with its attestation
+   bundle. A set by hand with an index (step 2) reads the channel: stage the version into the
+   channel's tree with `cargo xtask release channel-stage --service hello --version <version>
+   --from <assets> --index <assets>/hello-index.json --out <tree>`, which lays out
    `hello/<version>/index.json` beside its packages and their bundles
-   ([docs/deploy/release-channel.md](deploy/release-channel.md)). A host fetches nothing else.
+   ([docs/deploy/release-channel.md](deploy/release-channel.md)). The failing build is not set
+   that way: its proof is the dispatch of step 4, with native entries alone.
 2. **The release index.** The desired state names the release by its index,
    `hello-index.json`, and the SHA-256 of that file (`sha256sum hello-index.json`). The
    coordinator orders each host the package its own platform has in the index, so the proof
@@ -103,7 +105,10 @@ makes that directory, owner only, on its first step.
    alone. A daemon that announces `apt` (or, on a Mac, `macos-pkg`: its signers file loaded,
    `/usr/sbin/installer` and `/usr/sbin/pkgutil` present) is ordered it; any other is ordered
    nothing (`installer_dropped`, or `no_build_for_host` when the pick finds no build for the
-   host).
+   host). The failing build's `.deb` is in the separate suite `testing-fail` and has the Debian
+   version `<version>~fail.ready` (`~` sorts below `<version>`, so apt never takes it for the
+   release); only the dispatch of step 4 orders it, with the repository entry
+   `komira-testing-fail`. The failing build has no `.pkg`, so it orders no Mac.
 3. **The rollout entry.** Append `examples/hello/rollout.toml` to the coordinator's rollout file
    (`--rollout-file`). Replace the role `farm` with the role of the hosts that run the proof,
    and restart the coordinator. `cargo test -p hostkeeper-coordinator --test hello_rollout`
@@ -119,6 +124,14 @@ makes that directory, owner only, on its first step.
    `HOSTKEEPER_TAILNET_COORDINATOR`: with the client ID set, the CI client joins the tailnet
    before its call, as `release.yml`'s does, so a coordinator served only on the tailnet is
    reachable; empty, it does not join.
+5. **The failing build's repository entry** (step 4 only). A host that is to take the failing
+   build needs the repository entry `komira-testing-fail` besides `komira-testing`: the file
+   `/etc/hostkeeper/repositories/komira-testing-fail.sources`, with `Suites: testing-fail` and
+   the same keyring as `komira-testing`. Place it, check the directory with
+   `hostkeeper check-repositories --dir /etc/hostkeeper/repositories`, and restart the daemon,
+   which reads the entries at start. A host without the entry fails the order at stage with the
+   class `environment` and the reason `repository_unknown`, which is not the `not_ready` rollback
+   the proof waits for, and the failing build is never installed on it.
 
 ## 1. Assign hello to a role
 
@@ -157,8 +170,8 @@ hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <tok
 index whose SHA-256 is not the digest (`index_digest_mismatch`) and one that is not hello's at
 `<v1>` (`index_invalid`).
 
-Or let CI do it: dispatch `hello-desired.yml` with `version` `<v1>` (see "The proof from CI"
-below).
+Or let CI do it: dispatch `hello-desired.yml` with `version` `<v1>` and `variant` `hello`
+(see "The proof from CI" below).
 
 Or use the Rollout page, section `hello`: type `<v1>` in `Version`, the SHA-256 of the index in `Release
 index digest` and the text of `hello-index.json` in `Release index`, press `Set desired` and
@@ -190,19 +203,13 @@ that served `<v1>` is stopped. When the hosts have baked, `<v2>` is the last goo
 
 ## 4. A failing build: watch the automatic rollback
 
-**Suspended.** Since every release is set with native entries alone (stage 9 of
-`docs/design/packages-native.md`, section 10.6), this step cannot run: the failing build has no
-package the project's repository holds (its version `<v2>-fail-ready` is not the `X.Y.Z` the
-repository takes), so a host that runs hello from `apt` could take no entry of it, and
-`hello-desired.yml` no longer offers it (`cargo xtask release targets --service hello
---fail-ready` is refused by name). It resumes once the failing build is published where a
-native installer can take it. What the step proved, as it ran:
-
-Set the desired version to `<v2>-fail-ready`, with the digest of its package (the Rollout page's
-`Set desired`). That build runs
-the server with `--fail-ready`, so `/readyz` answers 503. Its `/version` answers
-`<v2>-fail-ready`, its own version, so a probe of `/version` tells it from `<v2>` (`verify` stops at
-the 503 and never compares it).
+Set the desired version to `<v2>-fail-ready`: dispatch `hello-desired.yml` with `version` `<v2>`
+and `variant` `fail-ready` ("The proof from CI" below). Each Linux platform's list then holds
+one `apt` entry of the failing build's `.deb`, from the repository entry `komira-testing-fail`
+(the suite `testing-fail`) at the Debian version `<v2>~fail.ready`; the hosts need that entry
+("Before you start", item 5). That build runs the server with `--fail-ready`, so `/readyz`
+answers 503. Its `/version` answers `<v2>-fail-ready`, its own version, so a probe of `/version`
+tells it from `<v2>` (`verify` stops at the 503 and never compares it).
 
 **Watch:**
 
@@ -217,39 +224,58 @@ the 503 and never compares it).
 One failed host is enough for the rollback: the entry sets `rollback_after_failed` to
 `min_hosts = 1`.
 
+**Another service is not held.** While the failing build is in flight on the canary, hello's
+update holds the farm's live rollout, and another service's new version waits. Once the canary
+reports the failure, the failing build's rollout stops there and hello is rolled back, and the
+live rollout is free (komira-ai/hostkeeper#259): the other service's hosts are ordered as usual.
+
 ## The proof from CI: hello-desired.yml
 
 `.github/workflows/hello-desired.yml` sets hello's desired version through the CI client
 (`set-desired.yml`) with the OIDC token GitHub issues to the job. That is the path a service's
 release job takes, so a run of it proves that path, from CI to the coordinator, on hello before a
 real service depends on it. Dispatch it from main (Actions, `hello-desired`, `Run workflow`, or
-`gh workflow run hello-desired.yml --ref main -f version=<v>`). Its one input:
+`gh workflow run hello-desired.yml --ref main -f version=<v> -f variant=<variant>`). Its inputs:
 
 | input | values | meaning |
 |---|---|---|
 | `version` | a release of this repository, `X.Y.Z` | The release whose hello package is set. |
+| `variant` | `hello` or `fail-ready` | `hello` sets `<version>`; `fail-ready` sets `<version>-fail-ready`, the build whose `/readyz` answers 503. |
 
-The failing build is not offered: its proof (step 4) is suspended.
-
-Its first job, `release`, downloads hello's release index (`hello-index.json`), its archive for
-each platform (whose `manifest.toml` the native entry takes), its `.deb` for each Linux
-architecture with the `.deb`'s attestation bundle, and its signed `.pkg` with the `.pkg`'s bundle,
-and runs `cargo xtask release targets --service hello` on them: each Linux platform's list holds
-hello's `.deb` entry alone and the macOS list its `.pkg`'s `macos-pkg` entry alone
-(docs/design/packages-native.md, section 10.5), which a Mac whose daemon announces `macos-pkg`
-takes; a Mac that does not is ordered nothing. The verb refuses, naming every problem, an index
-that is not hello's at the version or does not list every platform, and an archive, manifest,
-`.deb`, `.pkg` or bundle that does not check out; then nothing is set. Its second job calls `set-desired.yml` with the targets alone, so each host is ordered its
+Its first job, `release`, downloads the variant's release index (`hello-index.json`, or
+`hello-fail-ready-index.json` for `fail-ready`), its Linux archives (whose `manifest.toml` the
+native entry takes) and its `.deb` for each Linux architecture with the `.deb`'s attestation
+bundle, and for `hello` its macOS archive and its signed `.pkg` with the `.pkg`'s bundle, and runs
+`cargo xtask release targets --service hello` (with `--fail-ready` for the failing build) on them:
+each platform's list holds the variant's native entry alone (docs/design/packages-native.md,
+section 10.5). For `hello` a Linux entry names the repository entry `komira-testing` and the
+Debian version `<version>`, and the macOS list holds the `.pkg`'s `macos-pkg` entry, which a Mac
+whose daemon announces `macos-pkg` takes (a Mac that does not is ordered nothing); for
+`fail-ready` the entry names `komira-testing-fail` and `<version>~fail.ready`, the `.deb` named
+`hello_<version>-fail-ready_<arch>.deb` in the release, and macOS has no list (the failing build
+has no `.pkg`). The verb refuses, naming every problem, an index that is not hello's at the
+version or does not list every platform, and an archive, manifest, `.deb`, `.pkg` or bundle that
+does not check out; then nothing is set. Its second job calls `set-desired.yml` with the targets alone, so each host is ordered its
 own platform's `.deb`. It is pinned to a hostkeeper release, as any service pins it
 (`docs/deploy/ci-client.md`, "Pinning hostkeeper"), with `wait` left at `true`: the job waits
 for the fleet. Once it has set, `hkctl releases get-release --service hello --version <version>`
 answers the release's targets, one list per platform.
 
-Run it with a release the hosts are not already at. The coordinator stores `<version>` as
-hello's desired version. The canary host updates first, bakes, then the others stage by stage,
-as in step 2. The job ends green, with the outputs `desired_version` `<version>`, `converged`
-`true` and `reason` `converged`. The wait is one call (`hkctl releases wait-converged`) that the
-coordinator holds until the fleet has converged, at most 30 minutes (`max_polls` left at 180).
+Run it twice, in this order, with the same `version`, a release the hosts are not already at:
+
+1. **`variant: hello`.** The coordinator stores `<version>` as hello's desired version. The canary
+   host updates first, bakes, then the others stage by stage, as in step 2. The job ends green,
+   with the outputs `desired_version` `<version>`, `converged` `true` and `reason` `converged`.
+   The wait is one call (`hkctl releases wait-converged`) that the coordinator holds until the
+   fleet has converged, at most 30 minutes (`max_polls` left at 180).
+2. **`variant: fail-ready`.** The coordinator stores `<version>-fail-ready`. The canary host fails
+   its `verify` (`not_ready`, phase `gate_release`) and rolls itself back. The coordinator marks
+   `<version>-fail-ready` bad and sets the desired version back to `<version>`, the last good one,
+   as in step 4, and orders no other host. The job fails, with `desired_version`
+   `<version>-fail-ready`, `converged` `false` and `reason` `superseded`: another desired version
+   replaced the one it set. That failure is the proof's expected outcome. A second run of the same
+   `fail-ready` version fails at once with `reason` `held_bad`, because the version is marked bad;
+   use the next release for another run.
 
 A run refused before anything is set says so in its `reason` (`docs/deploy/ci-client.md`, "When it
 fails"): `unauthorized` or `forbidden` when the allow-list entry does not admit the token, for
