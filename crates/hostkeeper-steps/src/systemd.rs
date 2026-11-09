@@ -43,7 +43,8 @@
 //! ```text
 //! systemd-run --system --quiet --wait --collect --pipe --unit=<unit>
 //!     --property=RuntimeMaxSec=<secs|infinity> [--property=PrivateNetwork=yes]
-//!     [--property=ProtectSystem=strict --property=ReadWritePaths=<path>...]
+//!     [--property=ProtectSystem=strict --property=PrivateTmp=yes
+//!      --property=ReadWritePaths=<path>...]
 //!     [--working-directory=<dir>] [--setenv=NAME=VALUE...] -- <program> <args...>
 //! ```
 //!
@@ -181,8 +182,10 @@ pub fn additive_command(call: &AdditiveCall<'_>) -> Result<Vec<OsString>, Launch
 /// `infinity`). After `RuntimeMaxSec=` come, in this order:
 ///
 /// - `--property=PrivateNetwork=yes` for [`ToolNetwork::Offline`] (none for a fetch);
-/// - `--property=ProtectSystem=strict` and one `--property=ReadWritePaths=<path>` per path of
-///   [`ToolCall::writable`], when it is `Some`;
+/// - `--property=ProtectSystem=strict`, `--property=PrivateTmp=yes` and one
+///   `--property=ReadWritePaths=<path>` per path of [`ToolCall::writable`], when it is `Some`:
+///   a `/tmp` of the unit's own, writable, which `ProtectSystem=strict` would leave read-only
+///   (apt runs `gpgv` with its files there, and calls a suite it cannot verify not signed);
 /// - `--working-directory=<dir>` for [`ToolCall::working_dir`];
 /// - one `--setenv=NAME=VALUE` per pair of [`ToolCall::env`], in order;
 ///
@@ -209,6 +212,7 @@ pub fn tool_command(call: &ToolCall<'_>) -> Result<Vec<OsString>, LaunchError> {
     }
     if let Some(paths) = call.writable {
         properties.push("ProtectSystem=strict".to_owned());
+        properties.push("PrivateTmp=yes".to_owned());
         for path in paths {
             let text = path.to_string_lossy();
             if !path.is_absolute() {
