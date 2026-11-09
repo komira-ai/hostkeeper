@@ -246,8 +246,8 @@ pub(crate) fn write_layout(
     )])
 }
 
-/// Appends `IMAGE_DIGEST=<digest>` to the env file (`GITHUB_ENV`), for the steps that push and
-/// read back the image by its digest.
+/// Appends `IMAGE_DIGEST=<digest>` to the env file (`GITHUB_ENV`) a caller names. (release.yml
+/// no longer reads it: `release push-image` takes the digest from the image index.)
 fn append_digest(env_file: &Path, digest: &str) -> Result<(), Error> {
     use std::io::Write;
     std::fs::OpenOptions::new()

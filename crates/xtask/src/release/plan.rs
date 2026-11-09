@@ -216,9 +216,9 @@ fn resume(
         if !names.contains(&job) {
             continue;
         }
-        let ended = (run.status == "completed")
-            .then(|| run.conclusion.clone().unwrap_or_else(|| "none".to_owned()));
-        match (failed.is_empty(), ended.as_deref()) {
+        let ended =
+            (run.status == "completed").then(|| run.conclusion.as_deref().unwrap_or("none"));
+        match (failed.is_empty(), ended) {
             (true, Some("success")) => {
                 let line = format!("{tag} of {commit}: its release run {} succeeded", run.id);
                 return Ok((Some(line), None));

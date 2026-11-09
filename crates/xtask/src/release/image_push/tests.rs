@@ -258,11 +258,11 @@ fn a_skopeo_that_fails_is_an_error_with_its_command_line_and_stderr() {
         "--all",
         "--preserve-digests",
         "oci:/l:0.1.5",
-        "docker://r:0.1.5",
+        "docker://ghcr.io/komira-ai/hostkeeper-coordinator:0.1.5",
     ];
     let exec = FakeExec::default().on(&copy, false, "", "level=fatal msg=\"unauthorized\"\n");
     assert_eq!(
-        SkopeoCli::new(exec).copy(Path::new("/l"), "0.1.5", "r"),
+        SkopeoCli::new(exec).copy(Path::new("/l"), "0.1.5", IMAGE_REPOSITORY),
         Err(PortError::new(
             copy.join(" "),
             "level=fatal msg=\"unauthorized\""
@@ -310,4 +310,10 @@ fn the_push_image_verb_pushes_the_layout_it_is_given_through_the_registry_port()
         Ok(vec![pushed_line(1)])
     );
     assert_eq!(*fakes.registry.calls.borrow(), [copy_call(), served_call()]);
+}
+
+#[test]
+fn the_real_wait_of_no_seconds_returns() {
+    // Catches: the real wait wired in panicking or blocking; nothing is timed.
+    Sleep.wait(0, "attempt 1 of 5 failed: a reason");
 }
