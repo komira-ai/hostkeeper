@@ -1,9 +1,12 @@
 //! `install-tool --download <file> --sha256 <hex> --out <path> [--extract tar.gz --member <path>]`:
-//! installs a pinned tool for a CI job from a file the job downloaded.
+//! installs a pinned tool for a CI job from a file the job restored from the actions cache or
+//! downloaded.
 //!
-//! The download itself is not done here. The workflow step before this one runs `curl` with
-//! `--proto =https --proto-redir =https`, so the transfer and its redirects are HTTPS only, and
-//! this verb has no network code. What it does, in this order:
+//! The download itself is not done here. On a cache miss a workflow step before this one runs
+//! `curl` with `--proto =https --proto-redir =https`, so the transfer and its redirects are HTTPS
+//! only, and this verb has no network code; a cached file is one such a download wrote and this
+//! verb passed before it was saved, and is checked again here all the same. What it does, in this
+//! order:
 //!
 //! 1. The whole download is read into memory.
 //! 2. Its SHA-256 is compared with `--sha256`. A mismatch is refused here, before any byte is

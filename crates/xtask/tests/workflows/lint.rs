@@ -61,9 +61,9 @@
 //! A workflow that tags or publishes is also held to [`release::publish_problems`].
 //!
 //! Every `curl` of a `run:` carries the HTTPS and failure guards and the retry options, and no
-//! `run:` downloads with `wget` or `gh release download` ([`downloads`]). Every download of the
-//! pinned gh is restored from the actions cache first, checked against its pin whichever way it
-//! came, and cached once checked ([`gh_cache`]). Every `cargo xtask`
+//! `run:` downloads with `wget` or `gh release download` ([`downloads`]). Every pinned download
+//! is restored from the actions cache first, checked against its pin whichever way it came, and
+//! cached once checked ([`pinned_cache`]). Every `cargo xtask`
 //! call of a `run:` is one the binary's own command line accepts: its verb, its flags, and every
 //! required flag and argument given ([`xtask_calls`]).
 //!
@@ -77,8 +77,8 @@
 use super::advisories;
 use super::callers;
 use super::downloads;
-use super::gh_cache;
 use super::net_install;
+use super::pinned_cache;
 use super::pr_device;
 use super::release::{self, PLAN_IF, RELEASE_IF, SIGN_IF};
 use super::set_desired;
@@ -396,7 +396,7 @@ pub fn lint(file: &str, text: &str) -> Vec<String> {
     }
     problems.extend(callers::problems(file, text, &doc));
     problems.extend(downloads::problems(&doc));
-    problems.extend(gh_cache::problems(&doc));
+    problems.extend(pinned_cache::problems(&doc));
     problems.extend(xtask_calls::problems(&doc));
     problems
 }

@@ -184,25 +184,61 @@ jobs:
       - run: rustup toolchain install
       - name: The static target
         run: rustup target add "$MUSL_TARGET"
-      - name: Download cargo-cyclonedx (HTTPS only, redirects included)
-        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 5 --retry-delay 5 --retry-max-time 300 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/cyclonedx.tar.xz" "https://github.com/CycloneDX/cyclonedx-rust-cargo/releases/download/cargo-cyclonedx-$CYCLONEDX_VERSION/cargo-cyclonedx-$TARGET.tar.xz"
       # install-tool unpacks gzip tars only: it checks the xz archive and copies it, and tar
       # unpacks the checked copy.
+      - name: Restore the pinned cyclonedx.tar.xz from the cache
+        id: cyclonedx-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/cyclonedx.tar.xz
+          key: pinned-cyclonedx-${{ env.CYCLONEDX_VERSION }}-${{ matrix.cyclonedx-sha256 }}
+      - name: Download cargo-cyclonedx on a cache miss (HTTPS only, redirects included)
+        id: cyclonedx-download
+        if: ${{ steps.cyclonedx-cache.outputs.cache-hit != 'true' }}
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 5 --retry-delay 5 --retry-max-time 300 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/cyclonedx.tar.xz" "https://github.com/CycloneDX/cyclonedx-rust-cargo/releases/download/cargo-cyclonedx-$CYCLONEDX_VERSION/cargo-cyclonedx-$TARGET.tar.xz"
+      - name: Say why the job stops when cyclonedx.tar.xz is neither cached nor downloadable
+        if: ${{ !cancelled() && steps.cyclonedx-download.outcome == 'failure' }}
+        run: echo "::error::cyclonedx.tar.xz is not in the actions cache and its download from GitHub failed, so this job cannot go on until GitHub serves it again"
       - name: Check cargo-cyclonedx (pinned checksum)
+        id: cyclonedx-check
         env:
           SHA256: ${{ matrix.cyclonedx-sha256 }}
         run: cargo xtask install-tool --download "$RUNNER_TEMP/cyclonedx.tar.xz" --sha256 "$SHA256" --out "$RUNNER_TEMP/cyclonedx-checked.tar.xz"
+      - name: Save the checked cyclonedx.tar.xz to the cache
+        if: ${{ !cancelled() && steps.cyclonedx-check.outcome == 'success' && steps.cyclonedx-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/cyclonedx.tar.xz
+          key: ${{ steps.cyclonedx-cache.outputs.cache-primary-key }}
       - name: Install cargo-cyclonedx
         run: tar -xJf "$RUNNER_TEMP/cyclonedx-checked.tar.xz" -C "$HOME/.cargo/bin" --strip-components 1 "cargo-cyclonedx-$TARGET/cargo-cyclonedx"
       - run: cargo cyclonedx --version
-      - name: Download nfpm (HTTPS only, redirects included)
+      - name: Restore the pinned nfpm.tar.gz from the cache
+        id: nfpm-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/nfpm.tar.gz
+          key: pinned-nfpm-${{ env.NFPM_VERSION }}-${{ matrix.nfpm-sha256 }}
+      - name: Download nfpm on a cache miss (HTTPS only, redirects included)
+        id: nfpm-download
+        if: ${{ steps.nfpm-cache.outputs.cache-hit != 'true' }}
         env:
           ARCHIVE: ${{ matrix.nfpm-archive }}
         run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 5 --retry-delay 5 --retry-max-time 300 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/nfpm.tar.gz" "https://github.com/goreleaser/nfpm/releases/download/v$NFPM_VERSION/nfpm_${NFPM_VERSION}_$ARCHIVE.tar.gz"
+      - name: Say why the job stops when nfpm.tar.gz is neither cached nor downloadable
+        if: ${{ !cancelled() && steps.nfpm-download.outcome == 'failure' }}
+        run: echo "::error::nfpm.tar.gz is not in the actions cache and its download from GitHub failed, so this job cannot go on until GitHub serves it again"
       - name: Install nfpm (pinned checksum)
+        id: nfpm-check
         env:
           SHA256: ${{ matrix.nfpm-sha256 }}
         run: cargo xtask install-tool --download "$RUNNER_TEMP/nfpm.tar.gz" --sha256 "$SHA256" --out "$HOME/.cargo/bin/nfpm" --extract tar.gz --member nfpm
+      - name: Save the checked nfpm.tar.gz to the cache
+        if: ${{ !cancelled() && steps.nfpm-check.outcome == 'success' && steps.nfpm-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/nfpm.tar.gz
+          key: ${{ steps.nfpm-cache.outputs.cache-primary-key }}
       - run: nfpm --version
       # The workspace's version is the release's; `Cargo.lock` gets it too, so the `--locked`
       # build accepts it. The SBOM step must leave the lock file exactly as written here.
@@ -258,31 +294,29 @@ jobs:
       # roots of the Sigstore public-good instance and of GitHub's instance through their TUF
       # repositories, verified from the TUF root gh embeds; it needs no token. The packages
       # carry the root of their build, so each release carries a fresh one.
-      # The pinned gh archive comes from the actions cache when a run before this one cached
-      # this version and SHA-256, and from GitHub only when none did; the check below holds
-      # it to the pin whichever way it came, and only a checked archive is cached.
-      - name: Restore the pinned gh archive from the cache
+      - name: Restore the pinned gh.tar.gz from the cache
         id: gh-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/gh.tar.gz
-          key: gh-${{ env.GH_VERSION }}-${{ matrix.gh-sha256 }}
+          key: pinned-gh-${{ env.GH_VERSION }}-${{ matrix.gh-sha256 }}
       - name: Download gh on a cache miss (HTTPS only, redirects included)
         id: gh-download
         if: ${{ steps.gh-cache.outputs.cache-hit != 'true' }}
         env:
           ARCH: ${{ matrix.deb-arch }}
         run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 5 --retry-delay 5 --retry-max-time 300 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/gh.tar.gz" "https://github.com/cli/cli/releases/download/v$GH_VERSION/gh_${GH_VERSION}_linux_$ARCH.tar.gz"
-      - name: Say why the job stops when gh is neither cached nor downloadable
+      - name: Say why the job stops when gh.tar.gz is neither cached nor downloadable
         if: ${{ !cancelled() && steps.gh-download.outcome == 'failure' }}
-        run: echo "::error::gh $GH_VERSION is not in the actions cache and its download from GitHub failed, so this job cannot go on until GitHub serves the release again"
+        run: echo "::error::gh.tar.gz is not in the actions cache and its download from GitHub failed, so this job cannot go on until GitHub serves it again"
       - name: Install gh (pinned checksum)
+        id: gh-check
         env:
           ARCH: ${{ matrix.deb-arch }}
           SHA256: ${{ matrix.gh-sha256 }}
         run: cargo xtask install-tool --download "$RUNNER_TEMP/gh.tar.gz" --sha256 "$SHA256" --out "$RUNNER_TEMP/gh/gh" --extract tar.gz --member "gh_${GH_VERSION}_linux_$ARCH/bin/gh"
-      - name: Save the checked gh archive to the cache
-        if: ${{ steps.gh-cache.outputs.cache-hit != 'true' }}
+      - name: Save the checked gh.tar.gz to the cache
+        if: ${{ !cancelled() && steps.gh-check.outcome == 'success' && steps.gh-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/gh.tar.gz
@@ -456,10 +490,28 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - run: rustup toolchain install
-      - name: Download cargo-cyclonedx (HTTPS only, redirects included)
+      - name: Restore the pinned cyclonedx.tar.xz from the cache
+        id: cyclonedx-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/cyclonedx.tar.xz
+          key: pinned-cyclonedx-${{ env.CYCLONEDX_VERSION }}-${{ env.CYCLONEDX_SHA256 }}
+      - name: Download cargo-cyclonedx on a cache miss (HTTPS only, redirects included)
+        id: cyclonedx-download
+        if: ${{ steps.cyclonedx-cache.outputs.cache-hit != 'true' }}
         run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 5 --retry-delay 5 --retry-max-time 300 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/cyclonedx.tar.xz" "https://github.com/CycloneDX/cyclonedx-rust-cargo/releases/download/cargo-cyclonedx-$CYCLONEDX_VERSION/cargo-cyclonedx-$TARGET.tar.xz"
+      - name: Say why the job stops when cyclonedx.tar.xz is neither cached nor downloadable
+        if: ${{ !cancelled() && steps.cyclonedx-download.outcome == 'failure' }}
+        run: echo "::error::cyclonedx.tar.xz is not in the actions cache and its download from GitHub failed, so this job cannot go on until GitHub serves it again"
       - name: Check cargo-cyclonedx (pinned checksum)
+        id: cyclonedx-check
         run: cargo xtask install-tool --download "$RUNNER_TEMP/cyclonedx.tar.xz" --sha256 "$CYCLONEDX_SHA256" --out "$RUNNER_TEMP/cyclonedx-checked.tar.xz"
+      - name: Save the checked cyclonedx.tar.xz to the cache
+        if: ${{ !cancelled() && steps.cyclonedx-check.outcome == 'success' && steps.cyclonedx-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/cyclonedx.tar.xz
+          key: ${{ steps.cyclonedx-cache.outputs.cache-primary-key }}
       # The macOS image keeps cargo outside $HOME/.cargo/bin, so the tool goes into a directory of
       # its own on the PATH.
       - run: mkdir "$RUNNER_TEMP/bin"
@@ -508,26 +560,24 @@ jobs:
       # The same binary and plists, started with --fail-ready (see the Linux build job).
       - name: hello's failing build and its SHA-256
         run: cargo xtask release package --service hello --fail-ready --platform "$PLATFORM" --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --binary target/release/hello --out dist
-      # The pinned gh archive comes from the actions cache when a run before this one cached
-      # this version and SHA-256, and from GitHub only when none did; the check below holds
-      # it to the pin whichever way it came, and only a checked archive is cached.
-      - name: Restore the pinned gh archive from the cache
+      - name: Restore the pinned gh.zip from the cache
         id: gh-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/gh.zip
-          key: gh-${{ env.GH_VERSION }}-${{ env.GH_SHA256 }}
+          key: pinned-gh-${{ env.GH_VERSION }}-${{ env.GH_SHA256 }}
       - name: Download gh on a cache miss (HTTPS only, redirects included)
         id: gh-download
         if: ${{ steps.gh-cache.outputs.cache-hit != 'true' }}
         run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 5 --retry-delay 5 --retry-max-time 300 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/gh.zip" "https://github.com/cli/cli/releases/download/v$GH_VERSION/gh_${GH_VERSION}_macOS_arm64.zip"
-      - name: Say why the job stops when gh is neither cached nor downloadable
+      - name: Say why the job stops when gh.zip is neither cached nor downloadable
         if: ${{ !cancelled() && steps.gh-download.outcome == 'failure' }}
-        run: echo "::error::gh $GH_VERSION is not in the actions cache and its download from GitHub failed, so this job cannot go on until GitHub serves the release again"
+        run: echo "::error::gh.zip is not in the actions cache and its download from GitHub failed, so this job cannot go on until GitHub serves it again"
       - name: Check gh (pinned checksum)
+        id: gh-check
         run: cargo xtask install-tool --download "$RUNNER_TEMP/gh.zip" --sha256 "$GH_SHA256" --out "$RUNNER_TEMP/gh-checked.zip"
-      - name: Save the checked gh archive to the cache
-        if: ${{ steps.gh-cache.outputs.cache-hit != 'true' }}
+      - name: Save the checked gh.zip to the cache
+        if: ${{ !cancelled() && steps.gh-check.outcome == 'success' && steps.gh-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/gh.zip

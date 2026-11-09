@@ -76,7 +76,8 @@ struct Cli {
 enum Verb {
     /// Check a downloaded file against its pinned SHA-256 and install it (mode 0755).
     InstallTool {
-        /// The downloaded file (the workflow's `curl --proto =https` step wrote it).
+        /// The downloaded file (the workflow's `curl --proto =https` step wrote it, or the
+        /// actions cache restored it).
         #[arg(long)]
         download: PathBuf,
         /// The SHA-256 of the download (before unpacking), 64 lowercase hex digits.
