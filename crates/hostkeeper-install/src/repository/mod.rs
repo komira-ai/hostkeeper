@@ -53,6 +53,7 @@ pub use config::{Repositories, Repository};
 pub use lock::InstallerLock;
 pub use outcome::{Class, DRIFT_REPAIRED, Failure, Outcome, Reason};
 pub use record::{PackageRecord, RecordError, Records};
+pub use stage::TREE;
 pub use tools::{Network, Pause, Run, Tool, ToolOutput, Tools};
 
 /// The bounds of the installer's own steps, in seconds (the manifest's `installer_bounds`).

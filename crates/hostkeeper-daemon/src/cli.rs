@@ -51,6 +51,8 @@ use hostkeeper_placed::roots::STATE_DIR;
 use hostkeeper_placed::{RealFs, Roots, UnitControl, UnitControlError};
 use hostkeeper_steps::{Clock, LaunchError, StepCall, StepExit, StepLauncher};
 use hostkeeper_unpack::Owner;
+
+use crate::repository::RepositoryPorts;
 use rustls_pki_types::CertificateDer;
 use rustls_pki_types::pem::PemObject;
 
@@ -690,6 +692,12 @@ pub fn host_ports(
     let _signers = load_signers(files, 0)?;
     let repositories = repositories::load(files)?;
     let announcement = repositories::announced(announcement, &files.os_root, &repositories);
+    let repository = RepositoryPorts::new(
+        &settings.packages_dir,
+        Path::new("/"),
+        repositories,
+        Owner::ROOT,
+    );
     let clock: Arc<dyn Clock> = Arc::new(host_clock());
     let fetcher = NetFetcher::new(
         UreqTransport::new(&tls_roots(&files.ca_bundle)),
@@ -754,6 +762,7 @@ pub fn host_ports(
             },
         )),
         announcement,
+        repository: Arc::new(repository),
     })
 }
 

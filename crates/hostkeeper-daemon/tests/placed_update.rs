@@ -12,6 +12,7 @@ use std::sync::Arc;
 use hostkeeper_config::manifest::{Expected, Manifest};
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_daemon::place::hooked_switch as hooked;
+use hostkeeper_daemon::repository::Repository;
 use hostkeeper_daemon::testing::spawn;
 use hostkeeper_daemon::{Daemon, Refusal, Reply};
 use hostkeeper_hook::{Params, Step, Verdict};
@@ -20,14 +21,26 @@ use hostkeeper_placed::{PathState, PlacedRecord};
 use hostkeeper_steps::{Bounds, Staged, Toward, UpdateOrder};
 use support::{OWN, Rig, Tap, config, d, install, roots, update};
 
-/// The daemon's switch with its error as the text of a failure, which is all these tests judge.
+/// The daemon's switch on `rig`'s host with its error as the text of a failure, which is all
+/// these tests judge.
 fn hooked_switch(
+    rig: &Rig,
     roots: hostkeeper_placed::Roots,
     fs: Arc<dyn hostkeeper_placed::Fs + Send + Sync>,
     units: Arc<dyn hostkeeper_placed::UnitControl + Send + Sync>,
     own: hostkeeper_config::manifest::HostkeeperVersion,
 ) -> impl Fn(Toward, &UpdateOrder) -> Result<(), String> {
-    let switch = hooked(roots, fs, units, own);
+    let repository = Repository {
+        launcher: rig.launcher.clone(),
+        ports: rig.repository_ports(Default::default()),
+        clock: rig.clock.clone(),
+        roots: roots.clone(),
+        fs: Arc::clone(&fs),
+        units: Arc::clone(&units),
+        max_package_bytes: 1 << 20,
+        repaired: Arc::default(),
+    };
+    let switch = hooked(roots, fs, units, own, repository);
     move |toward, order| switch(toward, order).map_err(|error| error.to_string())
 }
 
@@ -293,7 +306,7 @@ fn order(
 fn the_switch_refuses_an_order_it_cannot_read_and_writes_nothing() {
     let rig = Rig::new("placed-bad-order");
     let _daemon = installed(&rig);
-    let switch = hooked_switch(roots(), rig.placed_fs.clone(), rig.units.clone(), OWN);
+    let switch = hooked_switch(&rig, roots(), rig.placed_fs.clone(), rig.units.clone(), OWN);
     let toward = [Toward::Target, Toward::Back, Toward::Confirmed];
 
     let half = "the order for web names only half of the release it replaces";
@@ -342,7 +355,7 @@ fn the_switch_refuses_an_order_it_cannot_read_and_writes_nothing() {
 fn a_back_with_a_previous_version_that_is_no_name_writes_nothing() {
     let rig = Rig::new("placed-bad-previous");
     let _daemon = installed(&rig);
-    let switch = hooked_switch(roots(), rig.placed_fs.clone(), rig.units.clone(), OWN);
+    let switch = hooked_switch(&rig, roots(), rig.placed_fs.clone(), rig.units.clone(), OWN);
     let version_error = Version::new("x y").expect_err("not a version").to_string();
     let bad = order(&rig, "2.0.0", Some("x y"), Some("1.0.0"));
     assert_eq!(switch(Toward::Back, &bad), Err(version_error));
@@ -358,7 +371,7 @@ fn a_back_whose_current_cannot_be_switched_changes_nothing() {
     let rig = Rig::new("placed-back-fault");
     let _daemon = installed(&rig);
     let order = order(&rig, "2.0.0", Some("1.0.0"), Some("1.0.0"));
-    let switch = hooked_switch(roots(), rig.placed_fs.clone(), rig.units.clone(), OWN);
+    let switch = hooked_switch(&rig, roots(), rig.placed_fs.clone(), rig.units.clone(), OWN);
     assert_eq!(switch(Toward::Target, &order), Ok(()));
     assert_eq!(link(&rig, "current").as_deref(), Some("2.0.0"));
     let record = rig.placed_record();
@@ -368,7 +381,7 @@ fn a_back_whose_current_cannot_be_switched_changes_nothing() {
         1,
         rig.placed_log.clone(),
     ));
-    let failing = hooked_switch(roots(), faulty.clone(), rig.units.clone(), OWN);
+    let failing = hooked_switch(&rig, roots(), faulty.clone(), rig.units.clone(), OWN);
     let why = failing(Toward::Back, &order).expect_err("the first write fails");
     assert!(why.contains("injected failure of write 1"), "{why}");
     assert_eq!(faulty.writes(), 1);
@@ -387,7 +400,7 @@ fn a_target_whose_unit_runs_a_package_file_outside_current_is_refused_unwritten(
     let text = rig.unit_text("web").replace("/current/", "/2.0.0/");
     fs::write(&unit, text).expect("a unit that names its version directory");
     let record = rig.placed_record();
-    let switch = hooked_switch(roots(), rig.placed_fs.clone(), rig.units.clone(), OWN);
+    let switch = hooked_switch(&rig, roots(), rig.placed_fs.clone(), rig.units.clone(), OWN);
     let order = order(&rig, "2.0.0", Some("1.0.0"), Some("1.0.0"));
     for toward in [Toward::Target, Toward::Confirmed] {
         let why = switch(toward, &order).expect_err("the unit is refused");

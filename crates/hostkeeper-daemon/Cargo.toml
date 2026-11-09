@@ -66,6 +66,10 @@ libc.workspace = true
 # The Mac config written at start reads the managed preferences of the MDM, a property list, binary or XML
 # (`mac_config`).
 plist.workspace = true
+# `target.json`, the sealed copy of a repository version's entry: the entry encoded, then written
+# and read as proto3 canonical JSON through its descriptor (`target`).
+prost.workspace = true
+prost-reflect = { workspace = true, features = ["serde"] }
 # `lgetxattr`: the quarantine attribute of a staged entry on a Mac, read without following a
 # link and without unsafe code (`mac`).
 rustix = { workspace = true, features = ["fs"] }

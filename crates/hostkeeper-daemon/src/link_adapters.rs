@@ -31,9 +31,9 @@ use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_enroll::RenewalState;
 use hostkeeper_hook::{Class, Phase, Verdict};
 use hostkeeper_link::{
-    Health, HeldHalts, Liveness, Observation, Order, OrderId, OrderRef, OrderResult, OrderSink,
-    Outcome, Reason, RecordedService, Renewal, RenewalSource, RootReason, ServiceObserver,
-    ServiceRecords, Target, TrustedRootFacts, TrustedRootSource, Verb,
+    Drift, Health, HeldHalts, Liveness, Observation, Order, OrderId, OrderRef, OrderResult,
+    OrderSink, Outcome, Reason, RecordedService, Renewal, RenewalSource, RootReason,
+    ServiceObserver, ServiceRecords, Target, TrustedRootFacts, TrustedRootSource, Verb,
 };
 use hostkeeper_observe::{ServiceState, VersionView, beat_health};
 use hostkeeper_proto::hostkeeper::agent::v1 as wire;
@@ -397,10 +397,11 @@ pub const NOT_OBSERVED: &str = "not_observed";
 
 impl ServiceObserver for DaemonObserver {
     /// One observation of `service` ([`observer::observe`]); a service the daemon does not
-    /// observe is `unobserved`, never absent or stopped.
+    /// observe is `unobserved`, never absent or stopped. A repository package's observation also
+    /// carries its drift ([`drift`]).
     fn observe(&self, service: &ServiceName) -> Observation {
         let ctx = self.daemon.ctx();
-        observer::observe(
+        let observed = observer::observe(
             self.daemon.observer(),
             &ctx.dirs.packages,
             &crate::selfupdate::binary_dir(&ctx.dirs.state),
@@ -416,7 +417,38 @@ impl ServiceObserver for DaemonObserver {
                 drift: None,
             },
             |seen| observation(&seen),
-        )
+        );
+        Observation {
+            drift: drift(ctx, service),
+            ..observed
+        }
+    }
+}
+
+/// The drift of `service` at this heartbeat (packages-repositories.md section 4.4): for a
+/// version `current` names that a repository installer staged, the version the package manager
+/// shows against the one `placed.json` records, when they differ. `None` for every other
+/// service, while an install is pending, and when the installed version cannot be read, which is
+/// logged.
+pub fn drift(ctx: &Ctx, service: &ServiceName) -> Option<Drift> {
+    let version = installed::linked_version(&ctx.dirs.packages, service, CURRENT)?;
+    let dir = ctx
+        .dirs
+        .packages
+        .join(service.as_str())
+        .join(version.as_str());
+    let entry = crate::target::read(&dir).ok().flatten()?;
+    match ctx.repository().drift(service, &entry) {
+        Ok(found) => found.map(|drift| Drift {
+            found: drift.found,
+            recorded: drift.recorded,
+        }),
+        Err(failure) => {
+            ctx.log(&format!(
+                "service={service}: the installed version could not be read for its drift: {failure}"
+            ));
+            None
+        }
     }
 }
 
@@ -450,8 +482,7 @@ pub fn observation(seen: &hostkeeper_observe::Observation) -> Observation {
         version,
         health,
         health_detail: seen.reason_token().map(str::to_owned),
-        // No installer of this build reports drift yet: the apt installer's drift is read by
-        // `hostkeeper-install`'s repository installer once the daemon runs it.
+        // The repository installer's drift is added by the daemon's observer ([`drift`]).
         drift: None,
     }
 }

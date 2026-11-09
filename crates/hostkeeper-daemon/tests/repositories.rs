@@ -16,7 +16,7 @@ use hostkeeper_daemon::repositories;
 use hostkeeper_daemon::start::StartError;
 use hostkeeper_daemon::{Daemon, Ports, Refusal, Reply};
 use hostkeeper_hook::{Step, Verdict};
-use hostkeeper_install::repository::announce::{APT_TOOLS, DPKG_STATUS, native};
+use hostkeeper_install::repository::announce::{APT_TOOLS, DPKG_STATUS};
 use hostkeeper_install::repository::config::{self, REPOSITORIES_DIR, Repositories};
 use hostkeeper_install::{Announcement, Family, announce};
 use hostkeeper_launchd::{Platform, PlatformKind};
@@ -152,14 +152,15 @@ fn only_a_linux_host_has_a_repositories_path() {
     assert!(repositories::load(&mac).expect("no directory").is_empty());
 }
 
-/// Proves a Debian host that could run apt (its tools, an installed apt 2.6 and a valid
-/// repository entry) still announces `hostkeeper-archive` alone, because this build registers no
-/// steps of apt, while the host's own check finds apt; a host with no repository and one with
-/// apt below 2.2 give the same list.
+/// Proves a Debian host announces `apt` exactly when packages-repositories.md section 4.1 says:
+/// with its tools, an installed apt 2.6 and one valid repository entry, the list is
+/// `hostkeeper-archive` then `apt`; with no repository entry, or with apt below 2.2, it is
+/// `hostkeeper-archive` alone; the family is kept either way.
 ///
-/// Catches: an announcement of an installer whose entry this daemon would defer.
+/// Catches: a host announcing `apt` with nothing to install from, or not announcing it when it
+/// could run it.
 #[test]
-fn a_debian_host_that_could_run_apt_announces_the_archive_alone() {
+fn a_debian_host_announces_apt_with_a_repository_entry_and_not_without() {
     let rig = Rig::new("repositories-announce");
     let root = rig.scratch.path().join("os");
     debian_with_apt(&root, "2.6.1");
@@ -169,19 +170,40 @@ fn a_debian_host_that_could_run_apt_announces_the_archive_alone() {
     });
     assert_eq!(base.family, Some(Family::Deb));
     let entries = one_repository(&rig.scratch.path().join("repositories"));
-    assert_eq!(
-        native(base.family, &root, &entries),
-        Some(Installer::Apt),
-        "the host could run apt"
-    );
     let announced = repositories::announced(base.clone(), &root, &entries);
-    assert_eq!(announced.names(), ["hostkeeper-archive"]);
+    assert_eq!(announced.names(), ["hostkeeper-archive", "apt"]);
     assert_eq!(announced.family, Some(Family::Deb));
 
     let none = repositories::announced(base.clone(), &root, &Repositories::default());
     assert_eq!(none.names(), ["hostkeeper-archive"]);
     debian_with_apt(&root, "2.1.9");
-    assert_eq!(native(base.family, &root, &entries), None);
+    let old = repositories::announced(base.clone(), &root, &entries);
+    assert_eq!(old.names(), ["hostkeeper-archive"]);
+}
+
+/// Proves the start hands the repository installer the entries it loaded and the host's
+/// directories: a host with no repositories directory gives no entry, the packages directory
+/// its own, the work directories and the installer lock beside it, and `/` as the root.
+///
+/// Catches: a repository installer that stages against another directory than the daemon's
+/// packages, or with entries the start did not check.
+#[test]
+fn the_start_gives_the_repository_installer_its_entries_and_directories() {
+    let rig = Rig::new("repositories-ports");
+    fs::create_dir_all(&rig.packages).expect("the packages directory");
+    let host = files(
+        rig.scratch.path(),
+        Some(rig.scratch.path().join("no-repositories")),
+    );
+    let ports = start(&rig, &host).expect("the ports");
+    let repository = &ports.repository;
+    assert!(repository.repositories.is_empty());
+    assert_eq!(repository.packages_dir, rig.packages);
+    assert_eq!(repository.owner, hostkeeper_unpack::Owner::ROOT);
+    let state = rig.packages.parent().expect("a parent");
+    assert_eq!(repository.dirs.work, state.join("apt"));
+    assert_eq!(repository.dirs.root, Path::new("/"));
+    assert_eq!(repository.lock, state.join("installer.lock"));
 }
 
 /// A manifest of `apt` for the package `mdm`.

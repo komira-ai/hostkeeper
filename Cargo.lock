@@ -1533,6 +1533,8 @@ dependencies = [
  "ipmi-rs",
  "libc",
  "plist",
+ "prost",
+ "prost-reflect",
  "rcgen",
  "rustix",
  "rustls-pki-types",

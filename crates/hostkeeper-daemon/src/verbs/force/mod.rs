@@ -287,7 +287,21 @@ fn obtain(
     version: &Version,
     (digest, index_digest, entry): (&PackageDigest, Option<&PackageDigest>, Option<&Entry>),
 ) -> Result<Target, Reply> {
-    let (dir, tree_digest) = match on_disk(ctx, service, version, digest) {
+    let repository = entry.and_then(|entry| {
+        crate::repository::backend_of_entry(entry).map(|backend| (backend, entry))
+    });
+    let staged = match repository {
+        // A repository entry is staged, or found sealed for the same entry, by its installer.
+        Some((backend, entry)) => {
+            let dir = ctx
+                .repository()
+                .stage(backend, service, version, entry)
+                .map_err(force_reply)?;
+            Some((dir.dir().to_path_buf(), dir.staged().digest().to_owned()))
+        }
+        None => on_disk(ctx, service, version, digest),
+    };
+    let (dir, tree_digest) = match staged {
         Some(found) => found,
         None => {
             let dir = ctx
@@ -301,11 +315,14 @@ fn obtain(
         }
     };
     let manifest = read_manifest(ctx, service, version, &dir)?;
-    let placer = ctx.placer();
-    placer
-        .desired(&manifest)
-        .and_then(|claims| placer.check(&claims))
-        .map_err(|error| failed_before(error.class(), error.reason()))?;
+    // A repository package places nothing: the package manager installs its files.
+    if repository.is_none() {
+        let placer = ctx.placer();
+        placer
+            .desired(&manifest)
+            .and_then(|claims| placer.check(&claims))
+            .map_err(|error| failed_before(error.class(), error.reason()))?;
+    }
     Ok(Target {
         manifest,
         tree_digest,
@@ -346,8 +363,19 @@ fn read_manifest(
         version: version.clone(),
         platform: hostkeeper_config::platform::Platform::current(),
     };
-    Manifest::load(dir, &expected, &ctx.own_version)
+    crate::target::manifest(dir, &expected, &ctx.own_version)
         .map_err(|error| failed_before(error.class(), Refusal::from(&error).token()))
+}
+
+/// A force's answer for a repository stage that ended before anything on the host changed: its
+/// verdict as it is, a refusal as `Failed` before the commit with the refusal's token.
+fn force_reply(reply: Reply) -> Reply {
+    match reply {
+        Reply::Refused { refusal, .. } | Reply::Interrupted { refusal, .. } => {
+            failed_before(ManifestClass::Environment, refusal.token())
+        }
+        finished => finished,
+    }
 }
 
 /// The verdict of a force that failed before anything on the host changed.

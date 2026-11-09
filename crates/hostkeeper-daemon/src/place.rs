@@ -44,10 +44,13 @@ use std::sync::Arc;
 use hostkeeper_config::manifest::{Expected, HostkeeperVersion, Manifest};
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_placed::{Fs, Placer, Roots, UnitControl};
+use hostkeeper_proto::hostkeeper::release::v1::Target;
 use hostkeeper_steps::{Clock, Switch, SwitchError, Toward, UpdateOrder};
 
 use crate::boot::{WARN_SWITCH_RETRIED, warn_line};
-use crate::installers::{self, PlacerHost};
+use crate::installers::{self, PlacerHost, Steps};
+use crate::repository::Repository;
+use crate::target;
 use crate::verbs::force::SELF_SERVICE;
 
 /// How many times a switch is tried before its error stops the update.
@@ -60,14 +63,21 @@ fn text(error: impl std::fmt::Display) -> String {
 }
 
 /// The switch of a hooked order on the host of `roots`, through `fs` and `units`; a manifest is
-/// read against the daemon's version `own`. One try: the daemon runs it [`retried`].
+/// read against the daemon's version `own`. A target staged by a repository installer (its
+/// version directory holds `target.json`) is switched by `repository` ([`repository_switch`]).
+/// One try: the daemon runs it [`retried`].
 pub fn hooked_switch(
     roots: Roots,
     fs: Arc<dyn Fs + Send + Sync>,
     units: Arc<dyn UnitControl + Send + Sync>,
     own: HostkeeperVersion,
+    repository: Repository,
 ) -> Switch {
     Arc::new(move |toward: Toward, order: &UpdateOrder| {
+        let staged = target::read(order.staged.dir()).map_err(|e| SwitchError::Failed(text(e)))?;
+        if let Some(entry) = staged {
+            return repository_switch(&repository, toward, order, &entry);
+        }
         let placer = Placer::new(roots.clone(), &*fs, &*units);
         let done = match toward {
             Toward::Target => activate(&placer, order, &own),
@@ -109,6 +119,48 @@ pub fn retried(
     })
 }
 
+/// The switch of an order whose target the repository installer staged for `entry`: before
+/// `cutover` the installer's `activate` of the target; before `rollback` the previous version's
+/// `activate` from its own sealed `target.json`, or for a first install the package's removal;
+/// nothing to confirm, as nothing was placed.
+fn repository_switch(
+    repository: &Repository,
+    toward: Toward,
+    order: &UpdateOrder,
+    entry: &Target,
+) -> Result<(), SwitchError> {
+    let failed = |e: String| SwitchError::Failed(e);
+    match toward {
+        Toward::Target => repository.activate(order, entry),
+        Toward::Back => match (&order.previous, order.previous_version.as_deref()) {
+            (Some(previous), Some(version)) => {
+                let version = Version::new(version).map_err(|e| failed(text(e)))?;
+                let sealed = target::read(previous.dir())
+                    .map_err(|e| failed(text(e)))?
+                    .ok_or_else(|| {
+                        failed(format!(
+                            "the release {version} that {} replaces has no {}",
+                            order.service,
+                            target::TARGET_FILE
+                        ))
+                    })?;
+                repository.back(order, entry, Some((&version, previous.dir(), &sealed)))
+            }
+            (None, None) => repository.back(order, entry, None),
+            _ => Err(failed(half(order))),
+        },
+        Toward::Confirmed => Ok(()),
+    }
+}
+
+/// Why an order that names only half of the release it replaces cannot be switched back.
+fn half(order: &UpdateOrder) -> String {
+    format!(
+        "the order for {} names only half of the release it replaces",
+        order.service
+    )
+}
+
 /// The service and the target of `order`, in their grammars.
 fn names(order: &UpdateOrder) -> Result<(ServiceName, Version), String> {
     let service = ServiceName::new(&order.service).map_err(text)?;
@@ -128,7 +180,7 @@ fn manifest_of(
         version: version.clone(),
         platform: hostkeeper_config::platform::Platform::current(),
     };
-    Manifest::load(dir, &expected, own).map_err(text)
+    target::manifest(dir, &expected, own).map_err(text)
 }
 
 /// The `activate` of the installer `placed.json` records for the order's service, the host's
@@ -140,7 +192,12 @@ fn activate(
 ) -> Result<(), String> {
     let (service, version) = names(order)?;
     let record = placer.store().load().map_err(text)?;
-    let steps = installers::steps_for(&record, &service)?;
+    let Steps::Artifact(steps) = installers::steps_for(&record, &service)? else {
+        return Err(format!(
+            "{service} is recorded with a repository installer, and {version} has no {}",
+            target::TARGET_FILE
+        ));
+    };
     let switch = |_: &Version| forward(placer, order, own);
     let host = PlacerHost {
         placer,
@@ -188,10 +245,7 @@ fn back(
             Ok(())
         }
         (None, None) => uninstall_first(placer, fs, order),
-        _ => Err(format!(
-            "the order for {} names only half of the release it replaces",
-            order.service
-        )),
+        _ => Err(half(order)),
     }
 }
 

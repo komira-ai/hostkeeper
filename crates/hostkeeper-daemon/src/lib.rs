@@ -74,6 +74,7 @@
 
 pub mod adapters;
 pub mod boot;
+pub mod builtin;
 pub mod checks;
 pub mod cli;
 pub mod console;
@@ -102,10 +103,12 @@ pub mod prune;
 pub mod real_packages;
 pub mod refusal;
 pub mod repositories;
+pub mod repository;
 pub mod seed;
 pub mod selfupdate;
 pub mod stamp;
 pub mod start;
+pub mod target;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 pub mod trusted_root;
