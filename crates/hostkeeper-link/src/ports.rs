@@ -175,6 +175,9 @@ pub struct RecordedService {
     /// The try the step record holds, finished or not; none when the record names none or
     /// cannot be read.
     pub record_try: Option<u64>,
+    /// The installer the installed release came through (`tarball`); none for
+    /// `hostkeeper-archive`. Sent on the gRPC route only.
+    pub installer: Option<String>,
 }
 
 /// The services installed on the host, from their step records: never a list of names from a

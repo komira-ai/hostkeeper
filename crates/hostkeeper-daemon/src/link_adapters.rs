@@ -342,6 +342,7 @@ pub fn recorded(ctx: &Ctx, service: ServiceName) -> Option<RecordedService> {
         updating,
         last_result,
         record_try,
+        installer: None,
     })
 }
 

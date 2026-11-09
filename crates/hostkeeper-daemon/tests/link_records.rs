@@ -43,6 +43,7 @@ fn tried(
         updating: updating.map(version),
         last_result: None,
         record_try,
+        installer: None,
     }
 }
 
