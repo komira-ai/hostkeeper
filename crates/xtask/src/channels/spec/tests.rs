@@ -211,21 +211,6 @@ fn the_installers_and_their_two_channels_are_named_from_the_product() {
             "hostkeeper-1.2.3-macos-arm64.pkg"
         ]
     );
-    // What a Mac's store of the testing channel, rooted at pkg/, fetches an installer by.
-    assert_eq!(
-        HOSTKEEPER.pkg_locator("1.2.3", "hello-1.2.3-macos-arm64.pkg"),
-        "hostkeeper/1.2.3/hello-1.2.3-macos-arm64.pkg"
-    );
-    assert_eq!(
-        format!(
-            "{PKG_ROOT}{}",
-            HOSTKEEPER.pkg_locator("1.2.3", "hello-1.2.3-macos-arm64.pkg")
-        ),
-        format!(
-            "{}hello-1.2.3-macos-arm64.pkg",
-            HOSTKEEPER.pkg_prefix("1.2.3")
-        )
-    );
     assert_eq!(HOSTKEEPER.pkg_prefix("1.2.3"), "pkg/hostkeeper/1.2.3/");
     assert_eq!(HOSTKEEPER.pkg_stable_key(), "pkg/hostkeeper/stable.json");
     assert_eq!(HOSTKEEPER.pkg_dir, format!("pkg/{}", HOSTKEEPER.name));

@@ -44,10 +44,6 @@ pub(crate) const ARM64: Arch = Arch {
 /// The architectures of the repository: every package is built for one or both.
 pub(crate) const ARCHES: [Arch; 2] = [AMD64, ARM64];
 
-/// The directory of every product's installers in the bucket, and the path the hosts' store of
-/// the installers' channel is rooted at (`https://packages.komira.ai/pkg/`).
-pub(crate) const PKG_ROOT: &str = "pkg/";
-
 /// The release number of every rpm: `nfpm` writes `1` and the release assets name it.
 pub(crate) const RPM_RELEASE: &str = "1";
 
@@ -156,13 +152,6 @@ impl Product {
             .collect();
         files.sort();
         files
-    }
-
-    /// The path of the installer `file` of `version` below [`PKG_ROOT`]: what a Mac's store of
-    /// the `testing` channel, rooted there, fetches it by (`hostkeeper/<version>/<file>`).
-    pub(crate) fn pkg_locator(&self, version: &str, file: &str) -> String {
-        let prefix = self.pkg_prefix(version);
-        format!("{}{file}", prefix.strip_prefix(PKG_ROOT).unwrap_or(&prefix))
     }
 
     /// The key prefix of the installer's version, `pkg/<product>/<version>/`: the `testing`

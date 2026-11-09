@@ -1,7 +1,6 @@
-//! The rule of [`super::release_ref`]: the repository's workflows pass; the job `channel` of
-//! `release.yml` as it was, which ran `release channel-host` from the checkout of a release
-//! older than the verb, is refused; and each defect is shown refused, by the exact problem, in
-//! a small workflow of one job.
+//! The rule of [`super::release_ref`]: the repository's workflows pass, and each defect is shown
+//! refused, by the exact problem, in a small workflow of one job (a verb newer than the floor,
+//! such as `release channel-host`, run from the checkout of a release older than it).
 
 // clap's command line, named apart from `std::process::Command` (which no test here starts).
 use clap::{Arg, ArgAction, Command as Cli};
@@ -45,38 +44,6 @@ fn floor(command: &str) -> Option<String> {
     floor_problem(SURFACE_FILE, &args)
 }
 
-/// The repository's `release.yml`.
-fn release_yml() -> String {
-    workflows()
-        .into_iter()
-        .find(|(file, _)| file == "release.yml")
-        .map(|(_, text)| text)
-        .expect("release.yml exists")
-}
-
-/// `text` (the repository's `release.yml`) with its job `channel` as it was before its host step
-/// ran from a checkout of the workflow's own commit: no such checkout, and the host step after
-/// the release's checkout and download, right before the join.
-pub fn before_the_fix(text: &str) -> String {
-    // The steps are found by their keys, not their comments: the own checkout (the one under
-    // the client ID's `if:`), the host step, and the comment-free end of the host step's `run:`.
-    let own = text
-        .find("      - if: ${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID != '' }}\n        uses: actions/checkout@")
-        .expect("the own checkout");
-    let host = own
-        + text[own..]
-            .find("      - name: The release channel's host\n")
-            .expect("the host step");
-    let run = "--output \"$GITHUB_OUTPUT\"\n";
-    let end = host + text[host..].find(run).expect("the host step's run") + run.len();
-    let step = &text[host..end];
-    let join = "      - name: Join the tailnet\n";
-    let without = format!("{}{}", &text[..own], &text[end..]);
-    let moved = without.replacen(join, &format!("{step}{join}"), 1);
-    assert_ne!(moved, without, "the join follows");
-    moved
-}
-
 #[test]
 fn the_repository_workflows_call_from_a_release_checkout_only_what_the_floor_has() {
     // Catches: a job of a workflow that runs, from the checkout of a release's commit, a verb or
@@ -85,27 +52,6 @@ fn the_repository_workflows_call_from_a_release_checkout_only_what_the_floor_has
         let doc = yaml::load(&text).expect("every workflow parses");
         assert_eq!(problems(&file, &doc), Vec::<String>::new(), "{file}");
     }
-}
-
-#[test]
-fn the_channel_job_that_ran_channel_host_from_the_release_checkout_is_refused() {
-    // Catches: the channel job as it ran, failing with `unrecognized subcommand 'channel-host'`
-    // when the run released a commit older than the verb; the fix runs the verb from a
-    // checkout of the workflow's own commit.
-    let text = before_the_fix(&release_yml());
-    let doc = yaml::load(&text).expect("release.yml parses");
-    let line = text
-        .lines()
-        .position(|l| l.contains("run: cargo xtask release channel-host"))
-        .map(|at| at + 1)
-        .expect("the host step");
-    assert_eq!(
-        problems("release.yml", &doc),
-        [format!(
-            "release.yml: job channel step 6 (line {line}) runs the xtask of `${{{{ steps.newest.outputs.commit }}}}`, which may be as old as release {}: `cargo xtask release channel-host` is not a verb of release {}",
-            FLOOR.0, FLOOR.0
-        )]
-    );
 }
 
 #[test]

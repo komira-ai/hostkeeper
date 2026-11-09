@@ -15,7 +15,8 @@
 # hook in step units, roll it back on a failed verify, and force it back to the previous version
 # with the channel down; in self_update_across_releases.rs, on Linux and on the Mac, hostkeeper's
 # update of itself from the published release crates/hostkeeper-privileged/previous-release.toml
-# pins to this build, with the same coordinator, channel and verifier: the released daemon as the
+# pins to this build, with the same coordinator (on Linux through its .deb from a loopback apt
+# repository, on the Mac through the channel and verifier): the released daemon as the
 # host's own unit hostkeeper.service (or its own launchd job dev.hostkeeper.hostkeeper) updating to
 # this build by the hand-over, and falling back to its own binary (three tries, then the update
 # settles Failed) from this build made to fail its start, and this build updating to itself under a newer version name; on the Mac the daemon started as a
@@ -144,8 +145,8 @@ jobs:
     env:
       GH_VERSION: 2.102.1
       GH_SHA256: 77b9e297e94c50336823d0f84de7ef1be60cba704601fa0d98f129f47a94987b
-      PREVIOUS_RELEASE_URL: https://github.com/komira-ai/hostkeeper/releases/download/v0.1.194/hostkeeper-0.1.194-linux-x86_64.tar.gz
-      PREVIOUS_RELEASE_SHA256: eefc00d78d22f49a019599885ab4295a462df9c519288028713a5fb08985862e
+      PREVIOUS_RELEASE_URL: https://github.com/komira-ai/hostkeeper/releases/download/v0.1.218/hostkeeper-0.1.218-linux-x86_64.tar.gz
+      PREVIOUS_RELEASE_SHA256: f6a483efffc178273d22a49d3412aae4596162a476608c89cf7d2d380ae6e7ea
       NFPM_VERSION: 2.48.0
       NFPM_SHA256: 6d7f9a28b2f397934403950fcbba83f598b08d02edbe79a0815b3b4897341750
     steps:
@@ -385,8 +386,8 @@ jobs:
       # and checks its packages' attestations with it, offline, against a test trust root.
       GH_VERSION: 2.103.3
       GH_SHA256: d700207eae9ae98fe2b89535c2c087c07823d4628c56364695a5a07ef311c062
-      PREVIOUS_RELEASE_URL: https://github.com/komira-ai/hostkeeper/releases/download/v0.1.194/hostkeeper-0.1.194-macos-arm64.tar.gz
-      PREVIOUS_RELEASE_SHA256: aedad067db46af7ed065683ab6dd7c46b87fb4558db21b31082003394654ca6b
+      PREVIOUS_RELEASE_URL: https://github.com/komira-ai/hostkeeper/releases/download/v0.1.218/hostkeeper-0.1.218-macos-arm64.tar.gz
+      PREVIOUS_RELEASE_SHA256: 5f2a333b3c180f94538ed3fee80e7941f6c33c0e2d42684cf3d367554cebcce7
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

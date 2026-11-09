@@ -348,13 +348,8 @@ shared with other CI jobs, such as `tag:ci` (the tag of hostkeeper's own callers
 grants those jobs need, and the join runs with all of them: the stanza, with `tag:ci` in place of
 `tag:hk-ci`, adds the coordinator's listener to them and takes nothing away.
 
-`release.yml`'s `channel` job, which reads the release channel before this repository's own call
-of the workflow ([Deploying hostkeeper from GitHub Actions](github-actions.md)), joins the tailnet
-too when `HOSTKEEPER_TAILNET_CLIENT_ID` is set, with the same action, tarball, federated identity
-and tag, and pings the channel's host in place of the coordinator; so a channel served only on the
-tailnet is reachable, once the ACL grants the tag the channel's host and port beside the
-coordinator's listener. With the variable empty it does not join, and reads the channel from the
-runner as it is.
+This repository's own deploy ([Deploying hostkeeper from GitHub Actions](github-actions.md))
+reads no release channel: its one join is the CI client's.
 
 ### The federation, set up once by a tailnet admin
 
@@ -463,25 +458,26 @@ skips a store it does not define. A `hostkeeper-archive` manifest holds `minHost
 the hook, units and files are in the attested `manifest.toml` inside the archive.
 
 This repository builds the targets of its own releases with `cargo xtask release targets
---service <hostkeeper|hello|mdm> [--fail-ready] --version <X.Y.Z> --dir <assets> --repo
-komira-ai/hostkeeper`, from the release's assets: for each platform the package's index lists,
-one `hostkeeper-archive` entry with the archive's size and SHA-256, its `.sigstore.json` bundle,
-both locations, and the `min_hostkeeper` of the archive's own `manifest.toml`. For `hostkeeper`,
-`hello` and `mdm` (not hello's failing build) each list holds first the native entry of the
-platform's native package, an `apt` entry of the repository entry `komira-testing` or a
-`macos-pkg` entry of the store `komira-testing`, its manifest the archive's own with no hook
-command ([package-repositories.md](package-repositories.md), "The native packages and their
-entries"): a host whose daemon announces that installer moves to it, any other keeps its
-archive. hostkeeper's native packages are the daemon's `.deb` and its installer pkg. It refuses a release whose index, archives, native packages, bundles or manifests do not
-check out, and entries the coordinator or the daemon would refuse, and prints `targets=<JSON>`
-(appended to `--output`).
+--service <hostkeeper|hello|mdm> --version <X.Y.Z> --dir <assets> --repo komira-ai/hostkeeper`,
+from the release's assets, and sets them with no index: its releases list native entries alone
+([packages-native.md](../design/packages-native.md), section 10.5). For each Linux platform the
+package's index lists, the one native entry of the package's `.deb`, an `apt` entry of the
+repository entry `komira-testing` pinned by the `.deb`'s SHA-256, its manifest the archive's own
+`manifest.toml` with no hook command ([package-repositories.md](package-repositories.md), "The
+native packages and their entries"); no `hostkeeper-archive` entry, and no list for macOS while
+no daemon announces `macos-pkg`. A host whose daemon does not announce `apt` is ordered nothing
+(`installer_dropped`). `--repo` is read and not used. It refuses a release whose index, Linux
+archives and their manifests, `.deb`s or their bundles do not check out, and entries the
+coordinator or the daemon would refuse, and prints `targets=<JSON>` (appended to `--output`).
+`--fail-ready` (hello's failing build) is refused by name: that build has no package the
+repository holds.
 
 **Give the index too while daemons before targets run.** A daemon that does not announce
 `target-v1` is never sent a target: it is ordered the archive through the release channel, by
 the index. So a set whose lists hold `hostkeeper-archive` entries also gives `release_index` and
 `release_index_digest`, and the coordinator refuses the set (`index_invalid`) unless the index
-lists exactly the platforms with an archive entry, each with that entry's size and SHA-256. The
-targets of `release targets` agree with the index they are read from.
+lists exactly the platforms with an archive entry, each with that entry's size and SHA-256. A
+set of native entries alone gives no index.
 
 **What the coordinator checks.** It refuses targets that break the rules of a release
 (`target_invalid`: an unknown platform, a list of no entry or more than 8, an installer twice, a

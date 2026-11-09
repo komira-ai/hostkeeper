@@ -1,34 +1,31 @@
 //! The rules of hostkeeper's own deploy in `release.yml` (docs/deploy/github-actions.md): the
-//! job [`CHANNEL_JOB`], which waits until the release channel serves the newest release of the
-//! run, and the job [`JOB`], which sets it as hostkeeper's desired version through the CI client.
+//! job [`TARGETS_JOB`], which writes the targets of the newest release of the run, and the job
+//! [`JOB`], which sets it as hostkeeper's desired version through the CI client. A release is set
+//! with native entries alone (docs/design/packages-native.md section 10.5, A24): no host fetches
+//! it from the release channel, so nothing waits for the channel, and no index is given.
 //! [`problems`] refuses `release.yml` when:
-//! - [`CHANNEL_JOB`] lacks the exact `if:` [`DESIRED_IF`] (a release of main, only while the
+//! - [`TARGETS_JOB`] lacks the exact `if:` [`DESIRED_IF`] (a release of main, only while the
 //!   repository variable [`GATE`] is `true`, so that the deploy can be turned off), or [`JOB`]
 //!   the exact `if:` [`SET_IF`] (the same, and only when this run's release is the newest
 //!   published); or either job has `continue-on-error`;
-//! - [`CHANNEL_JOB`] does not need exactly `plan` and `publish` (it runs once every release of the
-//!   run is published, and not before), holds other token rights than exactly
-//!   [`CHANNEL_PERMISSIONS`], has a step with a key outside [`STEP_KEYS`] (a `continue-on-error`,
-//!   or an `if:` on any step but those that run only with a client ID, whose `if:` is in their
-//!   [`CHANNEL_STEPS`] entry), or its steps are not exactly [`CHANNEL_STEPS`], in that order,
-//!   with their `if`, `with` and `env`: the newest version of the run and its commit, only
-//!   when [`JOIN_IF`] holds the channel's host (the step [`HOST_STEP`]) by the xtask of a
-//!   checkout of the workflow's own commit (the release's commit may lack the verb), xtask
-//!   compiled from a checkout of the release's commit, the published index from the run's own
-//!   `release-<tag>` artifact, only when [`JOIN_IF`] holds the tailnet join that pings the
-//!   host, the wait for the channel, the
-//!   byte comparison of the served index with the published one, the index's text and SHA-256 as
-//!   outputs, the release's targets written by `cargo xtask release targets` from the same files,
-//!   and whether no newer release is published; or its `outputs` are not exactly
-//!   [`CHANNEL_OUTPUTS`]; or a step's `run:` holds an expression (`${{`): a value reaches a
-//!   command through the step's `env:` and, for a command of ours, a flag, never as text
-//!   written into the script, which a value holding shell syntax would run; or its join does not use [`JOIN_USES`], the action and commit of the
-//!   CI client's join (a test keeps the two the same);
-//! - [`JOB`] does not need exactly `plan` and [`CHANNEL_JOB`] (it calls the coordinator only once
-//!   the channel serves the release), or its `with` does not set `service: hostkeeper`, the
-//!   version, the release index, its digest and the targets from [`CHANNEL_JOB`]
-//!   ([`WITH_FROM_CHANNEL`]), and `wait: false`; or passes a `package_digest` (one package for
-//!   every host, whatever its platform).
+//! - [`TARGETS_JOB`] does not need exactly `plan` and `publish` (it runs once every release of
+//!   the run is published, and not before), holds other token rights than exactly
+//!   [`TARGETS_PERMISSIONS`] (reading the repository: it joins no tailnet), has a step with a key
+//!   outside [`STEP_KEYS`] (an `if:` that could skip it, a `continue-on-error`), or its steps are
+//!   not exactly [`TARGETS_STEPS`], in that order, with their `with` and `env`: the newest
+//!   version of the run and its commit, xtask compiled from a checkout of the release's commit,
+//!   the release's files from the run's own `release-<tag>` artifact, the release's targets
+//!   written by `cargo xtask release targets` from those files, and whether no newer release is
+//!   published; so no step waits for the release channel, compares an index or writes one out;
+//!   or its `outputs` are not exactly [`TARGETS_OUTPUTS`]; or a step's `run:` holds an
+//!   expression (`${{`): a value reaches a command through the step's `env:` and, for a command
+//!   of ours, a flag, never as text written into the script, which a value holding shell syntax
+//!   would run;
+//! - [`JOB`] does not need exactly `plan` and [`TARGETS_JOB`] (it calls the coordinator only
+//!   with the release's targets), or its `with` does not set `service: hostkeeper`, the version
+//!   and the targets from [`TARGETS_JOB`] ([`WITH_FROM_TARGETS`]), and `wait: false`; or passes
+//!   one of [`NOT_PASSED`]: a `package_digest` (one package for every host, whatever its
+//!   platform), a `release_index` or a `release_index_digest` (a release is set with no index).
 //!
 //! That [`JOB`] calls the CI client of this repository at the CI client's revision
 //! ([`super::callers::CLIENT_COMMIT`], with its release's `hostkeeper_version` and
@@ -41,8 +38,8 @@ use super::yaml::{Node, Value};
 /// The workflow the two jobs are in.
 pub const FILE: &str = "release.yml";
 
-/// The job that waits for the release channel.
-pub const CHANNEL_JOB: &str = "channel";
+/// The job that writes the targets of the release.
+pub const TARGETS_JOB: &str = "targets";
 
 /// The job that calls the CI client.
 pub const JOB: &str = "set-desired";
@@ -51,90 +48,54 @@ pub const JOB: &str = "set-desired";
 /// value, skips them.
 pub const GATE: &str = "RELEASE_SETS_DESIRED";
 
-/// The `if:` of [`CHANNEL_JOB`]: a release of main was planned, and [`GATE`] is `true`.
+/// The `if:` of [`TARGETS_JOB`]: a release of main was planned, and [`GATE`] is `true`.
 pub const DESIRED_IF: &str = "${{ needs.plan.outputs.release == 'true' && github.ref == 'refs/heads/main' && vars.RELEASE_SETS_DESIRED == 'true' }}";
 
-/// The `if:` of [`JOB`]: [`DESIRED_IF`], and [`CHANNEL_JOB`] found this run's release the newest
+/// The `if:` of [`JOB`]: [`DESIRED_IF`], and [`TARGETS_JOB`] found this run's release the newest
 /// published, so that a late run of an older commit never moves the fleet back.
-pub const SET_IF: &str = "${{ needs.plan.outputs.release == 'true' && github.ref == 'refs/heads/main' && vars.RELEASE_SETS_DESIRED == 'true' && needs.channel.outputs.newest == 'true' }}";
+pub const SET_IF: &str = "${{ needs.plan.outputs.release == 'true' && github.ref == 'refs/heads/main' && vars.RELEASE_SETS_DESIRED == 'true' && needs.targets.outputs.newest == 'true' }}";
 
-/// The keys a step of [`CHANNEL_JOB`] may have: no `if:` that could skip it (but the `if:`
-/// [`JOIN_IF`] of the steps that run only with a client ID, which [`CHANNEL_STEPS`] writes), no
+/// The keys a step of [`TARGETS_JOB`] may have: no `if:` that could skip it, no
 /// `continue-on-error` that could let it fail, no `shell` or `working-directory` that could
 /// change what its command does.
 pub const STEP_KEYS: [&str; 6] = ["env", "id", "name", "run", "uses", "with"];
 
-/// The token rights of [`CHANNEL_JOB`], exactly, sorted: it reads the repository, and the join
-/// asks GitHub for an OIDC token, as the CI client's join does.
-pub const CHANNEL_PERMISSIONS: [(&str, &str); 2] = [("contents", "read"), ("id-token", "write")];
+/// The token rights of [`TARGETS_JOB`], exactly: it reads the repository, and asks GitHub for no
+/// OIDC token, since it joins no tailnet.
+pub const TARGETS_PERMISSIONS: [(&str, &str); 1] = [("contents", "read")];
 
-/// The `if:` of the steps of [`CHANNEL_JOB`] that run only with a client ID (the checkout of the
-/// workflow's own commit, its toolchain, the host step and the tailnet join), and the value every caller
-/// of the CI client passes as `join_tailnet`: the repository variable of the federated identity's
-/// client ID is set. Empty, the runner does not join, and reaches the channel as it is.
+/// The value every caller of the CI client passes as `join_tailnet`: the repository variable of
+/// the federated identity's client ID is set. Empty, the CI client's runner does not join.
 pub const JOIN_IF: &str = "${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID != '' }}";
 
-/// The `id` of the step of [`CHANNEL_JOB`] that writes the channel's host, which the join pings.
-pub const HOST_STEP: &str = "channel-host";
-
-/// The `uses:` of the join step of [`CHANNEL_JOB`], before its version comment: the CI client's
-/// join action at the same commit (`set-desired.yml`, step `tailnet`).
-pub const JOIN_USES: &str = "tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be390056cd";
-
-/// The index in [`CHANNEL_STEPS`] of the checkout of the workflow's own commit, of the step
-/// [`HOST_STEP`] that runs its xtask, of the checkout of the release's commit, of the join, and
-/// of the wait right after the join.
-pub const OWN_CHECKOUT_AT: usize = 1;
-/// See [`OWN_CHECKOUT_AT`].
-pub const HOST_AT: usize = 3;
-/// See [`OWN_CHECKOUT_AT`].
-pub const RELEASE_CHECKOUT_AT: usize = 4;
-/// See [`OWN_CHECKOUT_AT`].
-pub const JOIN_AT: usize = 8;
-/// See [`OWN_CHECKOUT_AT`].
-pub const WAIT_AT: usize = 9;
-
-/// The steps of [`CHANNEL_JOB`], in order, as [`step_shape`] writes them: `if <condition> ` first
-/// when the step has an `if:`, then a `run:` step as its command, an action as `uses <action>`,
-/// each followed by its `with` and its `env`, every entry as ` with <key>=<value>` or
-/// ` env <key>=<value>`, sorted by key.
-pub const CHANNEL_STEPS: [&str; 14] = [
+/// The steps of [`TARGETS_JOB`], in order, as [`step_shape`] writes them: `if <condition> ` first
+/// when the step has an `if:` (which none may), then a `run:` step as its command, an action as
+/// `uses <action>`, each followed by its `with` and its `env`, every entry as ` with <key>=<value>`
+/// or ` env <key>=<value>`, sorted by key.
+pub const TARGETS_STEPS: [&str; 7] = [
     r#"run jq --raw-output '.include[-1] | "version=\(.version)", "tag=\(.tag)", "commit=\(.commit)"' <<< "$MATRIX" >> "$GITHUB_OUTPUT" env MATRIX=${{ needs.plan.outputs.matrix }}"#,
-    "if ${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID != '' }} uses actions/checkout with persist-credentials=false",
-    "if ${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID != '' }} run rustup toolchain install",
-    r#"if ${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID != '' }} run cargo xtask release channel-host --channel "$RELEASE_CHANNEL" --output "$GITHUB_OUTPUT" env RELEASE_CHANNEL=${{ vars.HOSTKEEPER_RELEASE_CHANNEL }}"#,
     "uses actions/checkout with persist-credentials=false with ref=${{ steps.newest.outputs.commit }}",
     "run rustup toolchain install",
     "run cargo xtask --help",
     "uses actions/download-artifact with name=release-${{ steps.newest.outputs.tag }} with path=dist",
-    "if ${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID != '' }} uses tailscale/github-action with audience=${{ vars.HOSTKEEPER_TAILNET_AUDIENCE }} with oauth-client-id=${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID }} with ping=${{ steps.channel-host.outputs.hostname }} with sha256sum=c6f99a5d774c7783b56902188d69e9756fc3dddfb08ac6be4cb2585f3fecdc32 with tags=${{ vars.HOSTKEEPER_TAILNET_TAG }} with use-cache=false with version=1.94.2",
-    r#"run curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --max-time 30 --retry 45 --retry-delay 40 --retry-max-time 1800 --retry-all-errors --output "$RUNNER_TEMP/served-index.json" "$RELEASE_CHANNEL/hostkeeper/$VERSION/index.json" env RELEASE_CHANNEL=${{ vars.HOSTKEEPER_RELEASE_CHANNEL }} env VERSION=${{ steps.newest.outputs.version }}"#,
-    r#"run cmp dist/index.json "$RUNNER_TEMP/served-index.json""#,
-    r#"run printf 'release_index=%s\nrelease_index_digest=%s\n' "$(< dist/index.json)" "$(sha256sum dist/index.json | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT""#,
     r#"run cargo xtask release targets --version "$VERSION" --dir dist --repo "$GITHUB_REPOSITORY" --output "$GITHUB_OUTPUT" env VERSION=${{ steps.newest.outputs.version }}"#,
     r#"run gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --limit 100 --json tagName --jq '[.[].tagName | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")) | ltrimstr("v") | split(".") | map(tonumber)] | max | "newest=\(map(tostring) | join(".") == env.VERSION)"' >> "$GITHUB_OUTPUT" env GH_TOKEN=${{ github.token }} env VERSION=${{ steps.newest.outputs.version }}"#,
 ];
 
-/// The `outputs` of [`CHANNEL_JOB`], exactly, sorted by name.
-pub const CHANNEL_OUTPUTS: [(&str, &str); 5] = [
+/// The `outputs` of [`TARGETS_JOB`], exactly, sorted by name.
+pub const TARGETS_OUTPUTS: [(&str, &str); 3] = [
     ("newest", "${{ steps.latest.outputs.newest }}"),
-    ("release_index", "${{ steps.index.outputs.release_index }}"),
-    (
-        "release_index_digest",
-        "${{ steps.index.outputs.release_index_digest }}",
-    ),
     ("targets", "${{ steps.targets.outputs.targets }}"),
     ("version", "${{ steps.newest.outputs.version }}"),
 ];
 
-/// The inputs [`JOB`] passes from the outputs of [`CHANNEL_JOB`], each from the output of its
+/// The inputs [`JOB`] passes from the outputs of [`TARGETS_JOB`], each from the output of its
 /// own name.
-pub const WITH_FROM_CHANNEL: [&str; 4] = [
-    "version",
-    "release_index",
-    "release_index_digest",
-    "targets",
-];
+pub const WITH_FROM_TARGETS: [&str; 2] = ["version", "targets"];
+
+/// The inputs of the CI client [`JOB`] may not pass: one package for every host, or a release
+/// index, of which a set of native entries alone has none.
+pub const NOT_PASSED: [&str; 3] = ["package_digest", "release_index", "release_index_digest"];
 
 fn job<'a>(doc: &'a Node, name: &str) -> Option<&'a Node> {
     entry(doc, "jobs").and_then(|jobs| entry(jobs, name))
@@ -174,7 +135,7 @@ fn pairs<'a>(node: &'a Node, key: &str) -> Vec<(&'a str, &'a str)> {
     found
 }
 
-/// The step as [`CHANNEL_STEPS`] writes it.
+/// The step as [`TARGETS_STEPS`] writes it.
 fn step_shape(step: &Node) -> String {
     let mut shape = text(Some(step), "if").map_or_else(String::new, |c| format!("if {c} "));
     shape.push_str(&match text(Some(step), "run") {
@@ -197,7 +158,7 @@ fn step_shape(step: &Node) -> String {
 /// One line per rule of this module that the workflow `doc` of `release.yml` breaks.
 pub fn problems(doc: &Node) -> Vec<String> {
     let mut problems = Vec::new();
-    for (name, condition) in [(CHANNEL_JOB, DESIRED_IF), (JOB, SET_IF)] {
+    for (name, condition) in [(TARGETS_JOB, DESIRED_IF), (JOB, SET_IF)] {
         let j = job(doc, name);
         if text(j, "if") != Some(condition) {
             problems.push(format!(
@@ -210,52 +171,51 @@ pub fn problems(doc: &Node) -> Vec<String> {
             ));
         }
     }
-    problems.extend(channel_problems(job(doc, CHANNEL_JOB)));
+    problems.extend(targets_problems(job(doc, TARGETS_JOB)));
     problems.extend(caller_problems(job(doc, JOB)));
     problems
 }
 
-fn channel_problems(channel: Option<&Node>) -> Vec<String> {
+fn targets_problems(targets: Option<&Node>) -> Vec<String> {
     let mut problems = Vec::new();
-    let got = needs(channel);
+    let got = needs(targets);
     if got != ["plan", "publish"] {
         problems.push(format!(
-            "{FILE}: job {CHANNEL_JOB} needs {got:?}, not [\"plan\", \"publish\"]"
+            "{FILE}: job {TARGETS_JOB} needs {got:?}, not [\"plan\", \"publish\"]"
         ));
     }
-    if channel.map(|j| pairs(j, "permissions")) != Some(CHANNEL_PERMISSIONS.to_vec()) {
+    if targets.map(|j| pairs(j, "permissions")) != Some(TARGETS_PERMISSIONS.to_vec()) {
         problems.push(format!(
-            "{FILE}: job {CHANNEL_JOB} must hold exactly `contents: read` and `id-token: write`"
+            "{FILE}: job {TARGETS_JOB} must hold exactly `contents: read`"
         ));
     }
-    let steps = match channel.and_then(|j| entry(j, "steps")).map(|s| &s.value) {
+    let steps = match targets.and_then(|j| entry(j, "steps")).map(|s| &s.value) {
         Some(Value::Seq(items)) => &items[..],
         _ => &[],
     };
     for (at, step) in steps.iter().enumerate() {
         for (key, _) in entries(step) {
             let key = key.as_str().unwrap_or_default();
-            let joins = key == "if" && CHANNEL_STEPS.get(at).is_some_and(|s| s.starts_with("if "));
-            if !STEP_KEYS.contains(&key) && !joins {
+            if !STEP_KEYS.contains(&key) {
                 problems.push(format!(
-                    "{FILE}: job {CHANNEL_JOB} step {} has `{key}`, which a step of it may not",
+                    "{FILE}: job {TARGETS_JOB} step {} has `{key}`, which a step of it may not",
                     at + 1
                 ));
             }
         }
     }
     let shapes: Vec<String> = steps.iter().map(step_shape).collect();
-    if shapes.len() != CHANNEL_STEPS.len() {
+    if shapes.len() != TARGETS_STEPS.len() {
         problems.push(format!(
-            "{FILE}: job {CHANNEL_JOB} has {} steps, not the {} of desired::CHANNEL_STEPS",
+            "{FILE}: job {TARGETS_JOB} has {} steps, not the {} of desired::TARGETS_STEPS",
             shapes.len(),
-            CHANNEL_STEPS.len()
+            TARGETS_STEPS.len()
         ));
     }
-    for (at, (got, want)) in shapes.iter().zip(CHANNEL_STEPS).enumerate() {
+    for (at, (got, want)) in shapes.iter().zip(TARGETS_STEPS).enumerate() {
         if got != want {
             problems.push(format!(
-                "{FILE}: job {CHANNEL_JOB} step {} is `{got}`, not `{want}`",
+                "{FILE}: job {TARGETS_JOB} step {} is `{got}`, not `{want}`",
                 at + 1
             ));
         }
@@ -263,28 +223,15 @@ fn channel_problems(channel: Option<&Node>) -> Vec<String> {
     for (at, step) in steps.iter().enumerate() {
         if text(Some(step), "run").is_some_and(|run| run.contains("${{")) {
             problems.push(format!(
-                "{FILE}: job {CHANNEL_JOB} step {} writes an expression into its `run:`; pass the value through `env:`",
+                "{FILE}: job {TARGETS_JOB} step {} writes an expression into its `run:`; pass the value through `env:`",
                 at + 1
             ));
         }
     }
-    if steps.get(HOST_AT).and_then(|s| text(Some(s), "id")) != Some(HOST_STEP) {
+    let outputs = targets.map(|j| pairs(j, "outputs")).unwrap_or_default();
+    if outputs != TARGETS_OUTPUTS {
         problems.push(format!(
-            "{FILE}: job {CHANNEL_JOB} step {} does not have `id: {HOST_STEP}`, the host the join pings",
-            HOST_AT + 1
-        ));
-    }
-    let uses = steps.get(JOIN_AT).and_then(|s| text(Some(s), "uses"));
-    if uses != Some(JOIN_USES) {
-        problems.push(format!(
-            "{FILE}: job {CHANNEL_JOB} step {} does not use `{JOIN_USES}`, the CI client's join",
-            JOIN_AT + 1
-        ));
-    }
-    let outputs = channel.map(|j| pairs(j, "outputs")).unwrap_or_default();
-    if outputs != CHANNEL_OUTPUTS {
-        problems.push(format!(
-            "{FILE}: job {CHANNEL_JOB} outputs are {outputs:?}, not {CHANNEL_OUTPUTS:?}"
+            "{FILE}: job {TARGETS_JOB} outputs are {outputs:?}, not {TARGETS_OUTPUTS:?}"
         ));
     }
     problems
@@ -293,25 +240,27 @@ fn channel_problems(channel: Option<&Node>) -> Vec<String> {
 fn caller_problems(caller: Option<&Node>) -> Vec<String> {
     let mut problems = Vec::new();
     let got = needs(caller);
-    if got != [CHANNEL_JOB, "plan"] {
+    if got != ["plan", TARGETS_JOB] {
         problems.push(format!(
-            "{FILE}: job {JOB} needs {got:?}, not [\"{CHANNEL_JOB}\", \"plan\"]"
+            "{FILE}: job {JOB} needs {got:?}, not [\"plan\", \"{TARGETS_JOB}\"]"
         ));
     }
     let with = caller.and_then(|j| entry(j, "with"));
     if text(with, "service") != Some("hostkeeper") {
         problems.push(format!("{FILE}: job {JOB} must pass `service: hostkeeper`"));
     }
-    for input in WITH_FROM_CHANNEL {
-        let want = format!("${{{{ needs.{CHANNEL_JOB}.outputs.{input} }}}}");
+    for input in WITH_FROM_TARGETS {
+        let want = format!("${{{{ needs.{TARGETS_JOB}.outputs.{input} }}}}");
         if text(with, input) != Some(want.as_str()) {
             problems.push(format!("{FILE}: job {JOB} must pass `{input}: {want}`"));
         }
     }
-    if with.and_then(|w| entry(w, "package_digest")).is_some() {
-        problems.push(format!(
-            "{FILE}: job {JOB} passes package_digest; the release index names each platform's package"
-        ));
+    for input in NOT_PASSED {
+        if with.and_then(|w| entry(w, input)).is_some() {
+            problems.push(format!(
+                "{FILE}: job {JOB} passes {input}; a release is set with its native entries alone, each platform's its own"
+            ));
+        }
     }
     if text(with, "wait") != Some("false") {
         problems.push(format!("{FILE}: job {JOB} must pass `wait: false`"));

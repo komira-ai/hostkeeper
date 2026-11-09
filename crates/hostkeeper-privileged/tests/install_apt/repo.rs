@@ -392,7 +392,18 @@ pub fn publish(repo: &Path, work: &Path, specs: &[Spec], signing: Signing<'_>) -
             sha256: digest,
         });
     }
-    fs::write(index_dir.join("Packages"), &packages).expect("write the index");
+    write_index(repo, &architecture, &packages, signing);
+    built
+}
+
+/// Writes the suite's `Packages` index `packages` for `architecture` in `repo` (made when
+/// missing), and its `Release` file, signed as `signing` says: what [`publish`] does after the
+/// packages are built, for a caller that builds its own.
+pub fn write_index(repo: &Path, architecture: &str, packages: &str, signing: Signing<'_>) {
+    let binary = format!("main/binary-{architecture}");
+    let index_dir = repo.join("dists").join(SUITE).join(&binary);
+    fs::create_dir_all(&index_dir).expect("make the repository's directories");
+    fs::write(index_dir.join("Packages"), packages).expect("write the index");
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("the clock is after the epoch")
@@ -420,5 +431,4 @@ pub fn publish(repo: &Path, work: &Path, specs: &[Spec], signing: Signing<'_>) -
         Signing::Signed(key) | Signing::Expired(key) => key.clearsign(&release_file, &in_release),
         Signing::Unsigned => {}
     }
-    built
 }

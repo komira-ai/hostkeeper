@@ -96,13 +96,13 @@ makes that directory, owner only, on its first step.
    can run on hosts of any platform the index lists. A host of a platform the index does not list
    is ordered nothing and shows the hold `no_package_for_platform`. A fleet of one platform may
    name the one package digest instead (the `.sha256` file beside the package). CI
-   (`hello-desired.yml`, below) names the release by its targets as well, written by
+   (`hello-desired.yml`, below) names the release by its targets alone, with no index, written by
    `cargo xtask release targets --service hello` from the release's assets
-   (`docs/design/packages.md`, section 3.7): per platform the index lists, hello's native entry
-   (its `.deb` from the repository's `testing` suite, its `.pkg` from the installers' `testing`
-   directory, docs/deploy/package-repositories.md) before one `hostkeeper-archive` entry. A
-   daemon that announces the native installer is ordered the native entry, any other daemon that
-   reads targets the archive entry, and one before them the package the index lists.
+   (`docs/design/packages.md`, section 3.7; `docs/design/packages-native.md`, section 10.5): per
+   Linux platform, hello's native entry alone, its `.deb` from the repository's `testing` suite
+   (docs/deploy/package-repositories.md), and no list for macOS while no daemon announces
+   `macos-pkg`. A daemon that announces `apt` is ordered it; any other is ordered nothing
+   (`installer_dropped`).
 3. **The rollout entry.** Append `examples/hello/rollout.toml` to the coordinator's rollout file
    (`--rollout-file`). Replace the role `farm` with the role of the hosts that run the proof,
    and restart the coordinator. `cargo test -p hostkeeper-coordinator --test hello_rollout`
@@ -156,8 +156,8 @@ hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <tok
 index whose SHA-256 is not the digest (`index_digest_mismatch`) and one that is not hello's at
 `<v1>` (`index_invalid`).
 
-Or let CI do it: dispatch `hello-desired.yml` with `version` `<v1>` and `variant` `hello`
-(see "The proof from CI" below).
+Or let CI do it: dispatch `hello-desired.yml` with `version` `<v1>` (see "The proof from CI"
+below).
 
 Or use the Rollout page, section `hello`: type `<v1>` in `Version`, the SHA-256 of the index in `Release
 index digest` and the text of `hello-index.json` in `Release index`, press `Set desired` and
@@ -189,9 +189,16 @@ that served `<v1>` is stopped. When the hosts have baked, `<v2>` is the last goo
 
 ## 4. A failing build: watch the automatic rollback
 
+**Suspended.** Since every release is set with native entries alone (stage 9 of
+`docs/design/packages-native.md`, section 10.6), this step cannot run: the failing build has no
+package the project's repository holds (its version `<v2>-fail-ready` is not the `X.Y.Z` the
+repository takes), so a host that runs hello from `apt` could take no entry of it, and
+`hello-desired.yml` no longer offers it (`cargo xtask release targets --service hello
+--fail-ready` is refused by name). It resumes once the failing build is published where a
+native installer can take it. What the step proved, as it ran:
+
 Set the desired version to `<v2>-fail-ready`, with the digest of its package (the Rollout page's
-`Set desired` does it, or dispatch `hello-desired.yml` with `version` `<v2>` and `variant`
-`fail-ready`). That build runs
+`Set desired`). That build runs
 the server with `--fail-ready`, so `/readyz` answers 503. Its `/version` answers
 `<v2>-fail-ready`, its own version, so a probe of `/version` tells it from `<v2>` (`verify` stops at
 the 503 and never compares it).
@@ -215,46 +222,32 @@ One failed host is enough for the rollback: the entry sets `rollback_after_faile
 (`set-desired.yml`) with the OIDC token GitHub issues to the job. That is the path a service's
 release job takes, so a run of it proves that path, from CI to the coordinator, on hello before a
 real service depends on it. Dispatch it from main (Actions, `hello-desired`, `Run workflow`, or
-`gh workflow run hello-desired.yml --ref main -f version=<v> -f variant=<variant>`). Its inputs:
+`gh workflow run hello-desired.yml --ref main -f version=<v>`). Its one input:
 
 | input | values | meaning |
 |---|---|---|
 | `version` | a release of this repository, `X.Y.Z` | The release whose hello package is set. |
-| `variant` | `hello` or `fail-ready` | `hello` sets `<version>`; `fail-ready` sets `<version>-fail-ready`, the build whose `/readyz` answers 503. |
 
-Its first job, `release`, downloads the variant's release index (`hello-index.json`, or
-`hello-fail-ready-index.json` for `fail-ready`) with each platform's archive and the archive's
-attestation bundle from the release, for `hello` also hello's native packages (its `.deb` for
-each Linux architecture and its `.pkg`) and their bundles, and runs
-`cargo xtask release targets --service hello` (with `--fail-ready` for the failing build) on them.
-For `hello` each platform's list holds the native entry before the archive one, so a host set up
-for the repository moves to hello's native package (the canary of the move to native packages,
-docs/design/packages-native.md section 10.6, stage 7); the failing build has no native package,
-and its lists hold its archives alone. The verb refuses, naming every problem, an index that is
-not hello's at the version or does not list every platform, and an archive, native package,
-bundle or manifest that does not check out against it; then nothing is set. Its second job calls
-`set-desired.yml` with the targets, the index and the index's SHA-256, so each host, of any
-platform the index lists, is ordered its own platform's package. It is pinned to a hostkeeper
-release, as any service pins it (`docs/deploy/ci-client.md`, "Pinning hostkeeper"), with `wait`
-left at `true`: the job waits for the fleet. The packages must be in the channel first ("Before
-you start", step 1). Once it has set, `hkctl releases get-release --service hello --version <version>`
+The failing build is not offered: its proof (step 4) is suspended.
+
+Its first job, `release`, downloads hello's release index (`hello-index.json`), its Linux
+archives (whose `manifest.toml` the native entry takes) and its `.deb` for each Linux
+architecture with the `.deb`'s attestation bundle, and runs
+`cargo xtask release targets --service hello` on them: each Linux platform's list holds hello's
+native entry alone (docs/design/packages-native.md, section 10.5), and macOS has none. The verb
+refuses, naming every problem, an index that is not hello's at the version or does not list every
+platform, and an archive, manifest, `.deb` or bundle that does not check out; then nothing is
+set. Its second job calls `set-desired.yml` with the targets alone, so each host is ordered its
+own platform's `.deb`. It is pinned to a hostkeeper release, as any service pins it
+(`docs/deploy/ci-client.md`, "Pinning hostkeeper"), with `wait` left at `true`: the job waits
+for the fleet. Once it has set, `hkctl releases get-release --service hello --version <version>`
 answers the release's targets, one list per platform.
 
-Run it twice, in this order, with the same `version`, a release the hosts are not already at:
-
-1. **`variant: hello`.** The coordinator stores `<version>` as hello's desired version. The canary
-   host updates first, bakes, then the others stage by stage, as in step 2. The job ends green,
-   with the outputs `desired_version` `<version>`, `converged` `true` and `reason` `converged`. The
-   wait is one call (`hkctl releases wait-converged`) that the coordinator holds until the fleet
-   has converged, at most 30 minutes (`max_polls` left at 180).
-2. **`variant: fail-ready`.** The coordinator stores `<version>-fail-ready`. The canary host fails
-   its `verify` (`not_ready`, phase `gate_release`) and rolls itself back. The coordinator marks
-   `<version>-fail-ready` bad and sets the desired version back to `<version>`, the last good one,
-   as in step 4, and orders no other host. The job fails, with `desired_version`
-   `<version>-fail-ready`, `converged` `false` and `reason` `superseded`: another desired version
-   replaced the one it set. That failure is the proof's expected outcome. A second run of the same
-   `fail-ready` version fails at once with `reason` `held_bad`, because the version is marked bad;
-   use the next release for another run.
+Run it with a release the hosts are not already at. The coordinator stores `<version>` as
+hello's desired version. The canary host updates first, bakes, then the others stage by stage,
+as in step 2. The job ends green, with the outputs `desired_version` `<version>`, `converged`
+`true` and `reason` `converged`. The wait is one call (`hkctl releases wait-converged`) that the
+coordinator holds until the fleet has converged, at most 30 minutes (`max_polls` left at 180).
 
 A run refused before anything is set says so in its `reason` (`docs/deploy/ci-client.md`, "When it
 fails"): `unauthorized` or `forbidden` when the allow-list entry does not admit the token, for

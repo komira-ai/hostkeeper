@@ -75,14 +75,14 @@ pub const RELEASE_EXEMPT: &[(&str, &str)] = &[(
 )];
 
 /// The jobs of release.yml, sorted, but the package channels ([`packages::job_names`]): the release
-/// (`plan`, `verify`, `publish`, `image`) and hostkeeper's own deploy ([`desired::CHANNEL_JOB`],
+/// (`plan`, `verify`, `publish`, `image`) and hostkeeper's own deploy ([`desired::TARGETS_JOB`],
 /// [`desired::JOB`]).
 pub const RELEASE_JOBS: [&str; 6] = [
-    "channel",
     "image",
     "plan",
     "publish",
     "set-desired",
+    "targets",
     "verify",
 ];
 
@@ -224,8 +224,7 @@ const PUBLISH_MARKS: [&str; 6] = [
 ];
 
 /// The `cargo xtask release` verbs release.yml may run: none builds, packages or signs.
-const RELEASE_VERBS: [&str; 8] = [
-    "channel-host",
+const RELEASE_VERBS: [&str; 7] = [
     "check",
     "check-binary",
     "image-layout",
@@ -388,7 +387,7 @@ fn release_problems(doc: &Node) -> Vec<String> {
     want.sort();
     if jobs != want {
         problems.push(format!(
-            "release.yml: jobs are {jobs:?}, not plan, verify, publish, image, channel, set-desired and the jobs of the package channels ({want:?})"
+            "release.yml: jobs are {jobs:?}, not plan, verify, publish, image, targets, set-desired and the jobs of the package channels ({want:?})"
         ));
     }
     for (name, condition, needs) in [

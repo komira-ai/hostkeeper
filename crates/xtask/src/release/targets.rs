@@ -1,69 +1,54 @@
 //! `release targets`: the `targets` of the set that deploys one package of a release, read from
-//! the release's assets (docs/design/packages.md, section 3.7, build item A5). For each platform
-//! the package's release index lists, one `hostkeeper-archive` entry:
+//! the release's assets (docs/design/packages.md, section 3.7; docs/design/packages-native.md,
+//! section 10.5, item A24). For each Linux platform the package's release index lists, one native
+//! entry and nothing else: a release is set with native entries alone, with no
+//! `hostkeeper-archive` entry and no index, so a host installs it from the project's package
+//! repository (stage 9 of packages-native.md section 10.6).
+//!
+//! **macOS is left out of every list.** No daemon announces `macos-pkg` yet, so a Mac could take
+//! no entry of a `macos-arm64` list; with none, a Mac shows `no_target` (packages-native.md
+//! section 10.8, A24's condition; no Mac is enrolled). The release still ships its `.pkg`s, and
+//! they are not read here.
+//!
+//! The native packages are the release's `.deb`s ([`Package::native_name`]), which the release
+//! publishes to the project's repository, suite `testing` ([`crate::channels::spec`]).
+//! hostkeeper's is the daemon's `.deb`, the package that bootstraps a host (section 10.4).
 //!
 //! ```text
-//! installer    hostkeeper-archive
-//! locations    channel  S/V/S-V-{platform}.tar.zst                       (the release channel)
-//!              github   <repo>/releases/download/v<release>/S-V-{platform}.tar.zst
-//! digest       the archive's SHA-256, bytes its size: the index's, measured again
-//! attestation  the archive's `.sigstore.json` bundle: its SHA-256, its size, the same two
-//!              stores at the bundle's path
-//! manifest     { min_hostkeeper }: the `min_hostkeeper` of the archive's own manifest.toml
-//! ```
-//!
-//! The entries are the same bytes the index lists, so the set's index and its targets agree as
-//! the coordinator requires (section 3.4). A `hostkeeper-archive` manifest carries nothing but
-//! `min_hostkeeper`: the hook, units, files and params are in the attested `manifest.toml` inside
-//! the archive, and its `min_hostkeeper` is the one copied, so the two never differ.
-//!
-//! The `channel` location comes first: it is the store a daemon has when it has no
-//! `stores.toml` (section 7.2), the one every archive is fetched from today. The `github`
-//! location is the release asset itself, for a host whose `stores.toml` defines that store. A
-//! daemon skips a store it does not define (section 7.4).
-//!
-//! **The native entry** (docs/design/packages-native.md section 10.6, items A21 and A23).
-//! hello's (stage 7), mdm's and hostkeeper's own (stage 8) lists hold the native entry of the
-//! platform before the archive one, so a host whose daemon announces the native installer moves
-//! to it and any other host keeps its archive. The native packages are the release's assets
-//! ([`Package::native_name`]) that the release publishes to the project's repository: a `.deb`
-//! to the suite `testing`, a `.pkg` to the installers' `testing` directory
-//! ([`crate::channels::spec`]). hostkeeper's are the daemon's `.deb` and the installer, the
-//! packages that bootstrap a host (section 10.4).
-//!
-//! ```text
-//! Linux   installer apt, repository komira-testing (the host's entry of the testing suite),
-//!         package_version the release's, digest the .deb's SHA-256 (the pin); no location,
-//!         no size, no attestation
-//! macOS   installer macos-pkg, location komira-testing hostkeeper/<release>/<service>-<release>-
-//!         macos-arm64.pkg (the Mac's store of the testing directory, rooted at pkg/),
-//!         digest and bytes the .pkg's; no attestation (the key and the pin bind the bytes,
-//!         packages-native.md section 10.3)
+//! entry    installer apt, repository komira-testing (the host's entry of the testing suite),
+//!          package_version the release's, digest the .deb's SHA-256 (the pin); no location,
+//!          no size, no attestation
 //! manifest the archive's own manifest.toml as an entry's manifest: its hook with the command
-//!         `<path the package installs its program at> update-hook` (hello's `.deb`
-//!         /usr/lib/hello/hello, its `.pkg` /Library/Application Support/hello/bin/hello,
-//!         mdm's /usr/lib/mdm/mdm; hostkeeper's package has no command, and its daemon runs
-//!         built-in steps), its run units, health URL, params and
-//!         min_hostkeeper (hostkeeper's: `OLDEST_READER`, as its archive's); `package` the
-//!         package's name (`hostkeeper`, `hello`, `mdm`) or the .pkg's identifier (hostkeeper's
-//!         the daemon's launchd label, hello's its own); the installer's bounds
-//!         ([`INSTALLER_BOUNDS`])
+//!          `<path the .deb installs its program at> update-hook` (hello's /usr/lib/hello/hello,
+//!          mdm's /usr/lib/mdm/mdm; hostkeeper's package has no command, and its daemon runs
+//!          built-in steps), its run units, health URL, params and
+//!          min_hostkeeper (hostkeeper's: `OLDEST_READER`, as its archive's); `package` the
+//!          package's name (`hostkeeper`, `hello`, `mdm`); the installer's bounds
+//!          ([`INSTALLER_BOUNDS`])
 //! ```
+//!
+//! **The archive is read, not listed.** Until the archive builders are deleted (A28), the
+//! release still ships each platform's `hostkeeper-archive` package, and its attested
+//! `manifest.toml` is where a native entry's manifest comes from: the archive is read only from
+//! the bytes the index lists (its size and SHA-256 measured again), and its manifest must name
+//! the service, the version and the platform and carry a `min_hostkeeper`.
+//!
+//! **A package with no native package is refused by name**, before any package is read: hello's
+//! failing build, whose version `<v>-fail-ready` is not the `X.Y.Z` the shared repository takes,
+//! so it is not published there and a host that installs hello natively could take no entry of
+//! it.
 //!
 //! Each native package must be a regular file whose bundle lists its SHA-256, and a `.deb`'s
-//! `control` must name the service, the version and the architecture. hello's failing build has
-//! no native entry: its version is not the `X.Y.Z` the shared repository takes, so it is not
-//! published there.
+//! `control` must name the service, the version and the architecture.
 //!
 //! Everything is checked before anything is written, and a refusal lists every problem found:
 //! the index as `release channel-stage` checks it (canonical, of the service at the version);
 //! that it lists every platform the package is released for; each archive a regular file with
-//! the index's size and SHA-256; each bundle a regular file of at most 1 MiB listing that
-//! SHA-256; each archive holding a `manifest.toml` of the service, version and platform with a
-//! `min_hostkeeper`; each native package as above. Then the entries pass the coordinator's
-//! checks of a set's targets and the daemon's of each entry's manifest for its installer (crate
-//! `hostkeeper-release`). The answer is one line, `targets=<JSON>`, the targets as proto3
-//! canonical JSON keyed by platform, appended to `--output` when given (on Actions,
+//! the index's size and SHA-256, holding a `manifest.toml` of the service, version and platform
+//! with a `min_hostkeeper`; each native package as above. Then the entries pass the
+//! coordinator's checks of a set's targets and the daemon's of each entry's manifest for its
+//! installer (crate `hostkeeper-release`). The answer is one line, `targets=<JSON>`, the targets
+//! as proto3 canonical JSON keyed by platform, appended to `--output` when given (on Actions,
 //! `GITHUB_OUTPUT`).
 
 use std::collections::BTreeMap;
@@ -72,40 +57,33 @@ use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
-use hostkeeper_config::index::{PackageEntry, attestation_path, package_path};
+use hostkeeper_config::index::{PackageEntry, package_path};
 use hostkeeper_config::manifest::{HostkeeperVersion, MAX_MANIFEST_BYTES};
 use hostkeeper_config::names::{ServiceName, Version as ServiceVersion};
 use hostkeeper_config::platform::Platform as IndexPlatform;
 use hostkeeper_mdm_core::package as mdm_package;
 use hostkeeper_proto::hostkeeper::release::v1::{
-    Blob, Hook, InstallerBounds, Location, Manifest, Param, StepBounds, Target, TargetList, param,
+    Hook, InstallerBounds, Manifest, Param, StepBounds, Target, TargetList, param,
 };
 use hostkeeper_release::{Installer, manifest, target};
 use prost_reflect::{DescriptorPool, DynamicMessage, MessageDescriptor};
 use serde_json::{Map, Value};
 
 use super::channel_stage::{
-    MAX_BUNDLE_BYTES, Measure, bundle_problem, file_name, load_index, measure_file, read_capped,
+    MAX_BUNDLE_BYTES, bundle_problem, file_name, load_index, measure_file, read_capped,
     regular_file,
 };
-use super::contract::{Package, Platform, Repo, Version, bundle_of};
+use super::contract::{Package, Platform, Version, bundle_of};
 use super::native::hello as native_hello;
-use super::native::pkg::IDENTIFIER as HELLO_PKG_IDENTIFIER;
-use super::{Error, answer, macos_pkg};
+use super::{Error, answer};
 use crate::channels::apt::{control, deb};
-use crate::channels::spec;
 
-/// The store of the release channel: the one a daemon without `stores.toml` has.
-pub(crate) const CHANNEL_STORE: &str = "channel";
-/// The store of GitHub's release assets, as a host's `stores.toml` names it.
-pub(crate) const GITHUB_STORE: &str = "github";
 /// The name of the archive's manifest, at the top of the archive.
 const MANIFEST_ENTRY: &str = "manifest.toml";
 
-/// The channel a native entry names: on Linux the host's repository entry of the suite
-/// `testing` (packages-repositories.md section 3.1), on a Mac its store of the installers'
-/// `testing` directory. A release is set from `testing`; its promotion to `stable` copies the
-/// same bytes, so the pin is the same from either.
+/// The repository entry a native entry names: the host's entry of the suite `testing`
+/// (packages-repositories.md section 3.1). A release is set from `testing`; its promotion to
+/// `stable` copies the same bytes, so the pin is the same from either.
 pub(crate) const TESTING: &str = "komira-testing";
 
 /// The bounds of a native installer's own steps, in seconds: the fetch and the checks of
@@ -142,8 +120,6 @@ pub(crate) struct Request {
     pub(crate) version: Version,
     /// The directory of the release's assets.
     pub(crate) dir: PathBuf,
-    /// The repository whose release it is, `owner/name`.
-    pub(crate) repo: Repo,
     /// A file the `targets=` line is appended to.
     pub(crate) output: Option<PathBuf>,
 }
@@ -180,28 +156,40 @@ pub(crate) fn targets(request: &Request) -> Result<Vec<String>, Error> {
             released.join(", ")
         )));
     }
-    let tag = format!("{}/releases/download/v{}", request.repo, request.version);
+    // macOS is left out of every list: no daemon announces `macos-pkg` yet, so a Mac could take
+    // no entry of it (with no list, its hosts show `no_target`; none is enrolled).
+    let natives = index
+        .packages()
+        .iter()
+        .filter_map(|entry| {
+            let platform = release_platform(entry.platform);
+            let (arch, _) = platform.linux_arches()?;
+            Some(
+                package
+                    .native_name(&request.version, platform)
+                    .map(|name| (entry, arch, name)),
+            )
+        })
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| {
+            Error::Failed(format!(
+                "{service} {version}: no native package: a release lists native entries alone, \
+                 and only a package the project's repository takes has one"
+            ))
+        })?;
     let mut problems = Vec::new();
     let mut lists = Vec::new();
-    for entry in index.packages() {
-        let (target, archive) = entry_of(request, &service, &version, &tag, entry, &mut problems)?;
-        let mut entries = Vec::new();
-        // hello's (stage 7), mdm's and hostkeeper's (stage 8) lists hold their native entry
-        // first; hello's failing build has none.
-        if let Some(name) = package.native_name(&request.version, release_platform(entry.platform))
-        {
-            let native = native_of(
-                request,
-                &service,
-                entry.platform,
-                &name,
-                archive.as_ref(),
-                &mut problems,
-            )?;
-            entries.extend(native);
-        }
-        entries.push((Installer::HostkeeperArchive, target));
-        lists.push((entry.platform, entries));
+    for (entry, arch, name) in natives {
+        let archive = archive_of(request, &service, &version, entry, &mut problems)?;
+        let native = native_of(
+            request,
+            &service,
+            entry.platform,
+            (arch, &name),
+            archive.as_ref(),
+            &mut problems,
+        )?;
+        lists.push((entry.platform, native.into_iter().collect()));
     }
     if !problems.is_empty() {
         return Err(Error::Refused(problems));
@@ -211,76 +199,40 @@ pub(crate) fn targets(request: &Request) -> Result<Vec<String>, Error> {
     answer(request.output.as_deref(), vec![format!("targets={json}")])
 }
 
-/// The entry of the archive `entry` names, and the archive's floor and manifest when it was read;
-/// every problem goes to `problems`.
-fn entry_of(
+/// The floor and manifest of the archive `entry` names, read only from the bytes the index lists;
+/// none when it cannot be read, and every problem goes to `problems`.
+fn archive_of(
     request: &Request,
     service: &ServiceName,
     version: &ServiceVersion,
-    tag: &str,
     entry: &PackageEntry,
     problems: &mut Vec<String>,
-) -> Result<(Target, Option<(String, toml::Table)>), Error> {
+) -> Result<Option<(String, toml::Table)>, Error> {
     let dir = &request.dir;
     let rel = package_path(service, version, entry.platform);
     let name = file_name(&rel);
-    let listed = Measure {
-        bytes: entry.bytes,
-        sha256: entry.sha256.as_str().to_owned(),
-    };
-    let mut floor = String::new();
-    let mut read = None;
-    if regular_file(dir, name, "missing, but the index lists it", problems)? {
-        let got = measure_file(&dir.join(name))?;
-        if got != listed {
-            problems.push(format!(
-                "{name}: package_digest_mismatch: {} bytes with SHA-256 {}, but the index lists \
-                 {} bytes with SHA-256 {}",
-                got.bytes, got.sha256, listed.bytes, listed.sha256
-            ));
-        } else {
-            // Read only from the bytes the entry names.
-            match archive_floor(&dir.join(name), service, version, entry.platform) {
-                Ok((found, table)) => {
-                    floor = found.to_string();
-                    read = Some((floor.clone(), table));
-                }
-                Err(why) => problems.push(format!("{name}: {why}")),
-            }
+    if !regular_file(dir, name, "missing, but the index lists it", problems)? {
+        return Ok(None);
+    }
+    let got = measure_file(&dir.join(name))?;
+    if got.bytes != entry.bytes || got.sha256 != entry.sha256.as_str() {
+        problems.push(format!(
+            "{name}: package_digest_mismatch: {} bytes with SHA-256 {}, but the index lists {} \
+             bytes with SHA-256 {}",
+            got.bytes,
+            got.sha256,
+            entry.bytes,
+            entry.sha256.as_str()
+        ));
+        return Ok(None);
+    }
+    match archive_floor(&dir.join(name), service, version, entry.platform) {
+        Ok((floor, table)) => Ok(Some((floor.to_string(), table))),
+        Err(why) => {
+            problems.push(format!("{name}: {why}"));
+            Ok(None)
         }
     }
-    let bundle_rel = attestation_path(service, version, entry.platform);
-    let bundle_name = file_name(&bundle_rel);
-    let missing = "missing: every archive entry carries its attestation bundle";
-    let bundle = if regular_file(dir, bundle_name, missing, problems)? {
-        let bytes = read_capped(&dir.join(bundle_name), MAX_BUNDLE_BYTES)?;
-        if let Some(why) = bundle_problem(&bytes, name, &listed.sha256) {
-            problems.push(format!("{bundle_name}: {why}"));
-        }
-        Measure::of(&bytes)
-    } else {
-        // Never sent: the missing bundle refuses the release before any entry is written.
-        Measure::of(b"")
-    };
-    let target = Target {
-        installer: Installer::HostkeeperArchive.as_str().to_owned(),
-        locations: locations(&rel, tag, name),
-        digest: listed.sha256,
-        bytes: listed.bytes,
-        attestation: Some(Blob {
-            digest: bundle.sha256,
-            bytes: bundle.bytes,
-            locations: locations(&bundle_rel, tag, bundle_name),
-        }),
-        manifest: Some(Manifest {
-            min_hostkeeper: floor,
-            ..Manifest::default()
-        }),
-        // An archive is an artifact entry: no repository, no package version.
-        repository: None,
-        package_version: None,
-    };
-    Ok((target, read))
 }
 
 /// The native entry of `request`'s package for `platform` with its installer, from its native
@@ -291,11 +243,10 @@ fn native_of(
     request: &Request,
     service: &ServiceName,
     platform: IndexPlatform,
-    name: &str,
+    (arch, name): (&str, &str),
     archive: Option<&(String, toml::Table)>,
     problems: &mut Vec<String>,
 ) -> Result<Option<(Installer, Target)>, Error> {
-    let platform = release_platform(platform);
     let package = request.package;
     let dir = &request.dir;
     let missing = "missing: the release ships the native package of every platform it lists";
@@ -315,8 +266,7 @@ fn native_of(
         }
     }
     let version = package.version_text(&request.version);
-    let linux = platform.linux_arches();
-    if let (Some((arch, _)), Some(_)) = (linux, &measured) {
+    if measured.is_some() {
         let bytes = std::fs::read(dir.join(name))
             .map_err(Error::io(format!("read {}", dir.join(name).display())))?;
         problems.extend(
@@ -325,21 +275,14 @@ fn native_of(
                 .map(|why| format!("{name}: {why}")),
         );
     }
-    // A `.deb` is installed by its control's `Package`, the service; a `.pkg` by its identifier:
-    // hostkeeper's installer's is the daemon's launchd label, which its daemon takes as its own
-    // package, and hello's is its own (mdm has no `.pkg`).
-    let (installer, package_name) = match (linux, package) {
-        (Some(_), _) => (Installer::Apt, service.as_str().to_owned()),
-        (None, Package::Hostkeeper) => (Installer::MacosPkg, macos_pkg::identifier()),
-        (None, _) => (Installer::MacosPkg, HELLO_PKG_IDENTIFIER.to_owned()),
-    };
-    let program = native_program(package, linux.is_some());
-    let manifest = match archive
-        .map(|(floor, table)| native_manifest(table, &package_name, floor, program.as_deref()))
-    {
+    // A `.deb` is installed by its control's `Package`, the service.
+    let program = native_program(package);
+    let native = archive
+        .map(|(floor, table)| native_manifest(table, service.as_str(), floor, program.as_deref()));
+    let manifest = match native {
         Some(Ok(manifest)) => manifest,
         Some(Err(why)) => {
-            let archive = package.package_name(&request.version, platform);
+            let archive = package.package_name(&request.version, release_platform(platform));
             problems.push(format!("{archive}: {MANIFEST_ENTRY}: {why}"));
             return Ok(None);
         }
@@ -348,38 +291,21 @@ fn native_of(
     let Some(measured) = measured else {
         return Ok(None);
     };
-    Ok(Some(match installer {
-        Installer::Apt => (
-            installer,
-            Target {
-                installer: installer.as_str().to_owned(),
-                locations: Vec::new(),
-                digest: measured.sha256,
-                // A repository entry is pinned by its digest alone: no size, no location.
-                bytes: 0,
-                attestation: None,
-                manifest: Some(manifest),
-                repository: Some(TESTING.to_owned()),
-                package_version: Some(version),
-            },
-        ),
-        _ => (
-            installer,
-            Target {
-                installer: installer.as_str().to_owned(),
-                locations: vec![Location {
-                    store: TESTING.to_owned(),
-                    locator: spec::HOSTKEEPER.pkg_locator(&request.version.to_string(), name),
-                }],
-                digest: measured.sha256,
-                bytes: measured.bytes,
-                attestation: None,
-                manifest: Some(manifest),
-                repository: None,
-                package_version: None,
-            },
-        ),
-    }))
+    let installer = Installer::Apt;
+    Ok(Some((
+        installer,
+        Target {
+            installer: installer.as_str().to_owned(),
+            locations: Vec::new(),
+            digest: measured.sha256,
+            // A repository entry is pinned by its digest alone: no size, no location.
+            bytes: 0,
+            attestation: None,
+            manifest: Some(manifest),
+            repository: Some(TESTING.to_owned()),
+            package_version: Some(version),
+        },
+    )))
 }
 
 /// The release's platform of the index's `platform`.
@@ -413,15 +339,13 @@ fn control_problems(bytes: &[u8], service: &str, version: &str, arch: &str) -> V
     .collect()
 }
 
-/// The absolute path the native package of `package` installs its program at (a `.deb` if
-/// `linux`, else a `.pkg`), from the constants the package builders write the files by; none for
-/// hostkeeper, whose daemon runs built-in steps.
-fn native_program(package: Package, linux: bool) -> Option<String> {
-    match (package, linux) {
-        (Package::Hostkeeper, _) => None,
-        (Package::Mdm, _) => Some(format!("{}/{}", mdm_package::DEB_BIN, mdm_package::SERVICE)),
-        (_, true) => Some(native_hello::DEB_PROGRAM.to_owned()),
-        (_, false) => Some(native_hello::PKG_PROGRAM.to_owned()),
+/// The absolute path the `.deb` of `package` installs its program at, from the constants the
+/// package builders write the files by; none for hostkeeper, whose daemon runs built-in steps.
+fn native_program(package: Package) -> Option<String> {
+    match package {
+        Package::Hostkeeper => None,
+        Package::Mdm => Some(format!("{}/{}", mdm_package::DEB_BIN, mdm_package::SERVICE)),
+        _ => Some(native_hello::DEB_PROGRAM.to_owned()),
     }
 }
 
@@ -607,20 +531,6 @@ fn optional_string(table: &toml::Table, name: &str, key: &str) -> Result<Option<
                 .ok_or_else(|| format!("{name}.{key} is not a string"))
         })
         .transpose()
-}
-
-/// The two locations of a file: its path in the release channel, then its release asset.
-fn locations(channel_path: &str, tag: &str, name: &str) -> Vec<Location> {
-    vec![
-        Location {
-            store: CHANNEL_STORE.to_owned(),
-            locator: channel_path.to_owned(),
-        },
-        Location {
-            store: GITHUB_STORE.to_owned(),
-            locator: format!("{tag}/{name}"),
-        },
-    ]
 }
 
 /// The `min_hostkeeper` of the archive at `path` and its `manifest.toml`, which must name the

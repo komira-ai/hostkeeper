@@ -58,8 +58,8 @@ const PROCESS_TESTS: [(&str, &str); 16] = [
         "runs the xtask binary as a process on crafted packages",
     ),
     (
-        "tests/workflows/channel_run_tests.rs",
-        "runs the committed steps of release.yml's channel job with bash, with a fake gh, curl and cargo",
+        "tests/workflows/targets_run_tests.rs",
+        "runs the committed steps of release.yml's targets job with bash, with a fake gh and cargo",
     ),
     (
         "tests/workflows/hello_run_tests.rs",

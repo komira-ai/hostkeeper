@@ -342,6 +342,22 @@ impl CoordinatorHandle {
         );
     }
 
+    /// Sets the desired version of `service` to `version` by targets alone, as CI's set of a
+    /// release whose entries are all native does: `targets` by platform, no release index and no
+    /// index digest.
+    pub fn set_desired_targets_alone(
+        &self,
+        service: &str,
+        version: &str,
+        targets: BTreeMap<String, TargetList>,
+    ) {
+        must(
+            "releases set-desired by targets alone",
+            self.api
+                .set_desired_targets_alone(service, version, targets),
+        );
+    }
+
     /// Forces `service` to `version` on the host `host_id` at once, with no hook.
     pub fn force(&self, service: &str, version: &str, host_id: &str) {
         must(
