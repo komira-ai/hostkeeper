@@ -1,6 +1,5 @@
 # mdm-nanohub.service: NanoHUB (NanoMDM + KMFDDM + NanoCMD in one process). A
-# unit of the mdm package, linked by hostkeeper from the package's current
-# version.
+# unit of the mdm package.
 #
 # Listens on loopback only; the Macs reach /mdm through mdm-proxy (TLS on the
 # LAN address). Its API (/api/v1/, one all-powerful key) is NOT proxied: only

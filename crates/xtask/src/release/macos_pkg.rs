@@ -85,7 +85,7 @@ use super::contract::{Version, installer_name};
 use super::ports::{BuildPkg, Exec, PortError};
 use super::{Error, file_sha256};
 
-mod distribution;
+pub(crate) mod distribution;
 mod scripts;
 
 use distribution::{COMPONENT, DISTRIBUTION, distribution_problems, open_tag};
@@ -376,7 +376,7 @@ pub(crate) struct Request {
 }
 
 /// Makes the directory `at` with [`DIR_MODE`].
-fn make_dir(at: &Path) -> Result<(), Error> {
+pub(crate) fn make_dir(at: &Path) -> Result<(), Error> {
     std::fs::create_dir(at).map_err(Error::io(format!("create {}", at.display())))?;
     std::fs::set_permissions(at, std::fs::Permissions::from_mode(DIR_MODE))
         .map_err(Error::io(format!("set the mode of {}", at.display())))
@@ -423,10 +423,11 @@ pub(crate) fn build(pkgbuild: &dyn BuildPkg, request: &Request) -> Result<Vec<St
     std::fs::create_dir_all(&request.out)
         .map_err(Error::io(format!("create {}", request.out.display())))?;
     let component = stage.join(COMPONENT);
-    pkgbuild.build_pkg(&root, &scripts, &identifier(), &request.version, &component)?;
+    let version = request.version.to_string();
+    pkgbuild.build_pkg(&root, Some(&scripts), &identifier(), &version, &component)?;
     let name = installer_name(&request.version);
     let product = request.out.join(&name);
-    pkgbuild.build_product(&component, &identifier(), &request.version, &product)?;
+    pkgbuild.build_product(&component, &identifier(), &version, &product)?;
     let hex = file_sha256(&product)?;
     Ok(vec![format!("{name}: sha256 {hex}")])
 }
@@ -477,26 +478,27 @@ impl<E: Exec> BuildPkg for PkgbuildCli<E> {
     fn build_pkg(
         &self,
         root: &Path,
-        scripts: &Path,
+        scripts: Option<&Path>,
         identifier: &str,
-        version: &Version,
+        version: &str,
         pkg: &Path,
     ) -> Result<(), PortError> {
-        let args = vec![
-            "--root".to_owned(),
-            utf8("pkgbuild", root)?,
-            "--scripts".to_owned(),
-            utf8("pkgbuild", scripts)?,
+        let mut args = vec!["--root".to_owned(), utf8("pkgbuild", root)?];
+        if let Some(scripts) = scripts {
+            args.push("--scripts".to_owned());
+            args.push(utf8("pkgbuild", scripts)?);
+        }
+        args.extend([
             "--identifier".to_owned(),
             identifier.to_owned(),
             "--version".to_owned(),
-            version.to_string(),
+            version.to_owned(),
             "--install-location".to_owned(),
             INSTALL_LOCATION.to_owned(),
             "--ownership".to_owned(),
             "recommended".to_owned(),
             utf8("pkgbuild", pkg)?,
-        ];
+        ]);
         self.run("pkgbuild", &args)
     }
 
@@ -504,7 +506,7 @@ impl<E: Exec> BuildPkg for PkgbuildCli<E> {
         &self,
         component: &Path,
         identifier: &str,
-        version: &Version,
+        version: &str,
         product: &Path,
     ) -> Result<(), PortError> {
         let args = vec![
@@ -513,7 +515,7 @@ impl<E: Exec> BuildPkg for PkgbuildCli<E> {
             "--identifier".to_owned(),
             identifier.to_owned(),
             "--version".to_owned(),
-            version.to_string(),
+            version.to_owned(),
             utf8("productbuild", product)?,
         ];
         self.run("productbuild", &args)
@@ -600,7 +602,7 @@ pub(crate) fn read_odc(bytes: &[u8]) -> Result<Vec<CpioEntry>, String> {
 
 /// The path of a payload entry from the install location: `.` is `""`, `./x` is `x`; any other
 /// name is kept, and so matches no entry of the payload.
-fn payload_path(name: &str) -> &str {
+pub(crate) fn payload_path(name: &str) -> &str {
     match name {
         "." => "",
         _ => name.strip_prefix("./").unwrap_or(name),
@@ -614,7 +616,7 @@ fn shown(path: &str) -> String {
 
 /// The attributes of the `<pkg-info ...>` element of `text`, or none when it has no such
 /// element or its attributes are not `name="value"` pairs.
-fn pkg_info_attributes(text: &str) -> Option<BTreeMap<String, String>> {
+pub(crate) fn pkg_info_attributes(text: &str) -> Option<BTreeMap<String, String>> {
     let start = text.find("<pkg-info")? + "<pkg-info".len();
     open_tag(&text[start..]).map(|(attributes, ..)| attributes)
 }
@@ -771,7 +773,7 @@ fn payload_problems(
 /// The entries of the `Payload` of the expanded pkg `expanded`, a gzip-compressed portable cpio
 /// archive; the inner `Err` says why its bytes are not such an archive, the outer one that the
 /// file could not be opened.
-fn read_payload(expanded: &Path) -> Result<Result<Vec<CpioEntry>, String>, Error> {
+pub(crate) fn read_payload(expanded: &Path) -> Result<Result<Vec<CpioEntry>, String>, Error> {
     let name = "Payload";
     let path = expanded.join(name);
     let file = std::fs::File::open(&path).map_err(Error::io(format!("read {}", path.display())))?;
@@ -813,7 +815,7 @@ fn list(dir: &Path) -> Result<Vec<Listed>, Error> {
 /// Checks that the directory `dir` of an expanded pkg holds exactly the regular files `files` and
 /// the directories `dirs`: every other entry is a problem that says the directory `holds only`
 /// `only`, and every one missing is a problem. The names that are there, as they must be.
-fn layer(
+pub(crate) fn layer(
     dir: &Path,
     files: &[&str],
     dirs: &[&str],
@@ -939,4 +941,4 @@ pub(crate) fn check(
 #[cfg(test)]
 mod check_tests;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

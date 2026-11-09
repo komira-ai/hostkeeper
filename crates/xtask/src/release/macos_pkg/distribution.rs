@@ -102,10 +102,28 @@ fn elements(text: &str, name: &str) -> Option<Vec<Element>> {
     Some(found)
 }
 
-/// What is wrong with the `Distribution` text `text` of the pkg of `version`, one line each.
+/// What is wrong with the `Distribution` text `text` of hostkeeper's pkg of `version`, one line
+/// each.
 pub(super) fn distribution_problems(text: &str, version: &Version, problems: &mut Vec<String>) {
-    let who = identifier();
-    let version = version.to_string();
+    product_problems(
+        text,
+        &identifier(),
+        COMPONENT,
+        &version.to_string(),
+        problems,
+    );
+}
+
+/// What is wrong with the `Distribution` text `text` of a product of the one component file
+/// `component`, whose identifier is `who` and version `version`, one line each.
+pub(crate) fn product_problems(
+    text: &str,
+    who: &str,
+    component: &str,
+    version: &str,
+    problems: &mut Vec<String>,
+) {
+    let (who, version) = (who.to_owned(), version.to_owned());
     if !text.contains(&format!("<{ROOT_ELEMENT}")) {
         problems.push(format!("Distribution has no <{ROOT_ELEMENT}> element"));
     }
@@ -119,7 +137,7 @@ pub(super) fn distribution_problems(text: &str, version: &Version, problems: &mu
     }
     match elements(text, "pkg-ref") {
         None => problems.push("Distribution has an unreadable <pkg-ref> element".to_owned()),
-        Some(refs) => pkg_ref_problems(&refs, &who, &version, problems),
+        Some(refs) => pkg_ref_problems(&refs, &who, component, &version, problems),
     }
     match elements(text, "product") {
         None => problems.push("Distribution has an unreadable <product> element".to_owned()),
@@ -144,8 +162,14 @@ pub(super) fn distribution_problems(text: &str, version: &Version, problems: &mu
 /// What is wrong with the `<pkg-ref>` elements `refs`: each names the identifier and no other
 /// component and concludes with nothing; exactly one refers to the component file, at the
 /// version.
-fn pkg_ref_problems(refs: &[Element], who: &str, version: &str, problems: &mut Vec<String>) {
-    let target = format!("#{COMPONENT}");
+fn pkg_ref_problems(
+    refs: &[Element],
+    who: &str,
+    component: &str,
+    version: &str,
+    problems: &mut Vec<String>,
+) {
+    let target = format!("#{component}");
     for pkg_ref in refs {
         let id = pkg_ref.attribute("id");
         if id != Some(who) {
