@@ -7,7 +7,8 @@
 
 use super::callers::{CALLERS, HELLO_FILE, JOIN_FROM_VARS};
 use super::desired::{
-    CHANNEL_STEPS, HOST_AT, HOST_STEP, JOIN_AT, JOIN_IF, JOIN_USES, STEP_KEYS, WAIT_AT,
+    CHANNEL_STEPS, HOST_AT, HOST_STEP, JOIN_AT, JOIN_IF, JOIN_USES, OWN_CHECKOUT_AT,
+    RELEASE_CHECKOUT_AT, STEP_KEYS, WAIT_AT,
 };
 use super::lint::{ID_TOKEN_ALLOWED, entries, entry, lint};
 use super::set_desired;
@@ -69,10 +70,32 @@ fn step_problem(n: usize, got: &str) -> String {
 
 #[test]
 fn the_channel_job_joins_the_tailnet_right_before_the_wait_only_with_a_client_id() {
-    // Catches: the rules' own indexes drifting from the steps they name: the host step, the join
-    // right after it, then the wait, and the join's `if:` written as anything but the client ID
-    // being set.
-    assert!(CHANNEL_STEPS[HOST_AT].starts_with(&format!("if {JOIN_IF} run ")));
+    // Catches: the rules' own indexes drifting from the steps they name: the checkout of the
+    // workflow's own commit, the host step run by its xtask, the checkout of the release's
+    // commit after it, the join, then the wait right after it, and the `if:` of the join's steps
+    // written as anything but the client ID being set.
+    assert_eq!(
+        CHANNEL_STEPS[OWN_CHECKOUT_AT],
+        format!("if {JOIN_IF} uses actions/checkout with persist-credentials=false")
+    );
+    assert_eq!(
+        CHANNEL_STEPS[OWN_CHECKOUT_AT + 1],
+        format!("if {JOIN_IF} run rustup toolchain install")
+    );
+    assert!(CHANNEL_STEPS[HOST_AT].starts_with(&format!(
+        "if {JOIN_IF} run cargo xtask release channel-host "
+    )));
+    const { assert!(OWN_CHECKOUT_AT < HOST_AT && HOST_AT < RELEASE_CHECKOUT_AT) };
+    assert!(
+        CHANNEL_STEPS[OWN_CHECKOUT_AT + 1..RELEASE_CHECKOUT_AT]
+            .iter()
+            .all(|s| !s.contains("actions/checkout"))
+    );
+    assert_eq!(
+        CHANNEL_STEPS[RELEASE_CHECKOUT_AT],
+        "uses actions/checkout with persist-credentials=false with ref=${{ steps.newest.outputs.commit }}"
+    );
+    assert_eq!(JOIN_AT + 1, WAIT_AT);
     assert!(
         CHANNEL_STEPS[JOIN_AT].starts_with(&format!("if {JOIN_IF} uses tailscale/github-action "))
     );
@@ -89,7 +112,10 @@ fn the_channel_job_joins_the_tailnet_right_before_the_wait_only_with_a_client_id
     let guarded: Vec<usize> = (0..CHANNEL_STEPS.len())
         .filter(|&at| CHANNEL_STEPS[at].starts_with("if "))
         .collect();
-    assert_eq!(guarded, [HOST_AT, JOIN_AT]);
+    assert_eq!(
+        guarded,
+        [OWN_CHECKOUT_AT, OWN_CHECKOUT_AT + 1, HOST_AT, JOIN_AT]
+    );
     assert!(!STEP_KEYS.contains(&"if"));
     assert!(ID_TOKEN_ALLOWED.contains(&("release.yml", "channel")));
 }
@@ -136,9 +162,11 @@ fn a_channel_wait_without_the_join_is_refused() {
     // tailnet when the client ID is set; and the join moved after the wait.
     let release = workflow("release.yml");
     let join = join_text(&release).to_owned();
-    let mut want = vec![
-        "release.yml: job channel has 11 steps, not the 12 of desired::CHANNEL_STEPS".to_owned(),
-    ];
+    let mut want = vec![format!(
+        "release.yml: job channel has {} steps, not the {} of desired::CHANNEL_STEPS",
+        CHANNEL_STEPS.len() - 1,
+        CHANNEL_STEPS.len()
+    )];
     let shapes = CHANNEL_STEPS;
     // Without the join every later step moves up by one: step n holds the shape of step n + 1.
     for (n, got) in shapes.iter().enumerate().skip(JOIN_AT + 1) {

@@ -326,7 +326,7 @@ fn alternate(word: &str) -> Option<&str> {
 /// Every way `args` can reach the binary: each alternate-value expansion
 /// (`${FAIL_READY:+--fail-ready}`) left out, as when its variable is unset, and replaced by
 /// its words, as when it is set. Each way is labelled with the expansions it set.
-fn variants(args: &[String]) -> Vec<(Vec<String>, Vec<String>)> {
+pub fn variants(args: &[String]) -> Vec<(Vec<String>, Vec<String>)> {
     let mut out = vec![(Vec::new(), Vec::new())];
     for word in args {
         match alternate(word) {

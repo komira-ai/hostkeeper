@@ -51,6 +51,8 @@ mod privileged_tests;
 mod release;
 mod release_files;
 mod release_native_tests;
+mod release_ref;
+mod release_ref_tests;
 mod release_tests;
 #[path = "../hygiene/rust_text.rs"]
 mod rust_text;

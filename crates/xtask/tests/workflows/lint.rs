@@ -67,7 +67,9 @@
 //! Every `curl` of a `run:` carries the HTTPS and failure guards and the retry options, and no
 //! `run:` downloads with `wget` or `gh release download` ([`downloads`]). Every `cargo xtask`
 //! call of a `run:` is one the binary's own command line accepts: its verb, its flags, and every
-//! required flag and argument given ([`xtask_calls`]).
+//! required flag and argument given ([`xtask_calls`]); and one that runs from a checkout of
+//! another commit than the workflow's own (a release's) is one the command line of a published
+//! release accepts too, since that commit may be older than the workflow ([`release_ref`]).
 //!
 //! `set-desired.yml` is also held to the rules of [`set_desired`], which fix the order of its
 //! steps. Every workflow is held to the rules of [`callers`]: which jobs may call it, and how.
@@ -85,6 +87,7 @@ use super::one_command;
 use super::packages;
 use super::pr_device;
 use super::release::{self, PLAN_IF, RELEASE_IF, SIGN_IF};
+use super::release_ref;
 use super::set_desired;
 use super::xtask_calls;
 use super::yaml::{self, Node, Value};
@@ -418,6 +421,7 @@ pub fn lint(file: &str, text: &str) -> Vec<String> {
         problems.extend(one_command::problems(&doc));
     }
     problems.extend(xtask_calls::problems(&doc));
+    problems.extend(release_ref::problems(file, &doc));
     problems
 }
 

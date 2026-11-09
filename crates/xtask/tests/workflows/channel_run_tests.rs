@@ -3,10 +3,13 @@
 //! a `run:` step with), and reads the outputs the job gives `set-desired`. Nothing is
 //! substituted in a command. The step `env` expressions are given the values a run of main gives
 //! them, and an expression the test does not know fails the test. A step's `if:` is evaluated:
-//! the one the job has, [`JOIN_IF`], holds when the run is given a tailnet client ID. The three
-//! actions of the job are done by the test: the checkout of the newest release's commit (the
-//! test runs in this repository's own build, so it checks only that the commit is the newest
-//! release's), the download of the run's own `release-<tag>` artifact, whose files it copies into
+//! the one the job has, [`JOIN_IF`], holds when the run is given a tailnet client ID. The
+//! actions of the job are done by the test: a checkout, of the workflow's own commit (no `ref`)
+//! or of the newest release's (any other `ref` is the newest release's commit, or the test
+//! fails); the test runs in this repository's own build, so after a checkout of the release's
+//! commit a call of xtask runs only if the command line of the oldest release that commit can
+//! be ([`super::release_ref::FLOOR`]) accepts it, and the step fails as that binary would
+//! otherwise; the download of the run's own `release-<tag>` artifact, whose files it copies into
 //! the step's `path`, and the tailnet join, which records what it was given, pings each host of
 //! its `ping` (a host that is not a node of the tailnet fails the step) and, for a channel served
 //! only on the tailnet, makes the channel reachable from then on. Each artifact holds what `release targets` reads of a release: hostkeeper's index, an
@@ -34,6 +37,7 @@ use std::cell::RefCell;
 use super::desired::{CHANNEL_JOB, JOIN_IF, SET_IF};
 use super::lint::{entries, entry};
 use super::release_files::{self, REPO, package_files, sha256, sorted};
+use super::release_ref::{self, SURFACE_FILE, floor_problem};
 use super::testdir::TestDir;
 use super::{workflows, yaml};
 
@@ -331,6 +335,8 @@ fn run_text(site: &Site, text: &str) -> Ended {
     let work = site.root.join("work");
     let path = format!("{}:/usr/bin:/bin", site.root.join("bin").display());
     let mut outputs: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+    // Whether the last checkout was of the release's commit, not of the workflow's own.
+    let mut release_checkout = false;
     for (at, step) in steps.iter().enumerate() {
         let text_of = |node: &yaml::Node, key: &str| {
             entry(node, key)
@@ -357,13 +363,15 @@ fn run_text(site: &Site, text: &str) -> Ended {
                 continue;
             }
             if uses.starts_with("actions/checkout@") {
-                let commit = evaluate(site, &outputs, &text_of(with, "ref").expect("ref"));
-                let (newest, _) = site.matrix.last().expect("a release");
-                assert_eq!(
-                    commit,
-                    commit_of(newest),
-                    "the checkout is of the newest release's commit"
-                );
+                release_checkout = text_of(with, "ref").is_some_and(|r| {
+                    let (newest, _) = site.matrix.last().expect("a release");
+                    assert_eq!(
+                        evaluate(site, &outputs, &r),
+                        commit_of(newest),
+                        "a checkout of a ref is of the newest release's commit"
+                    );
+                    true
+                });
                 continue;
             }
             assert!(uses.starts_with("actions/download-artifact@"), "{uses}");
@@ -381,6 +389,12 @@ fn run_text(site: &Site, text: &str) -> Ended {
             continue;
         }
         let script = text_of(step, "run").expect("a step runs or uses");
+        let refused = release_ref::calls(step)
+            .into_iter()
+            .any(|(_, args)| floor_problem(SURFACE_FILE, &args).is_some());
+        if release_checkout && refused {
+            return Ended::Failed(name);
+        }
         let output_file: PathBuf = site.root.join("temp").join(format!("output-{at}"));
         let mut command = Command::new("bash");
         command
@@ -686,4 +700,28 @@ fn a_bad_channel_with_a_client_id_stops_the_job_before_the_join() {
         );
         assert!(site.joins.borrow().is_empty(), "{channel}");
     }
+}
+
+#[test]
+fn the_host_step_runs_when_the_release_is_older_than_its_verb() {
+    // Catches: the host step run by the xtask of the release's commit, which fails with
+    // `unrecognized subcommand 'channel-host'` whenever the run releases a commit older than
+    // the verb (the job stopped there, and nothing was set); the committed job runs it from the
+    // workflow's own commit and passes. Without a client ID the step is skipped either way.
+    let before = super::release_ref_tests::before_the_fix(&release_yml());
+    let site = Site::new("older-release", &["1.2.10"], &["v1.2.10"])
+        .on_tailnet(TAILNET_CHANNEL, CLIENT_ID);
+    site.serve("1.2.10", &index("1.2.10"));
+    assert_eq!(
+        run_text(&site, &before),
+        Ended::Failed("The release channel's host".to_owned())
+    );
+    assert!(site.joins.borrow().is_empty());
+    let site = Site::new("older-release-fixed", &["1.2.10"], &["v1.2.10"])
+        .on_tailnet(TAILNET_CHANNEL, CLIENT_ID);
+    site.serve("1.2.10", &index("1.2.10"));
+    assert_eq!(run(&site), passed("1.2.10", true));
+    let site = Site::new("older-release-no-client", &["1.2.10"], &["v1.2.10"]);
+    site.serve("1.2.10", &index("1.2.10"));
+    assert_eq!(run_text(&site, &before), passed("1.2.10", true));
 }
