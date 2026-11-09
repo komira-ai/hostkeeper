@@ -1,0 +1,16 @@
+Package: hostkeeper
+Version: 1.2.3
+Architecture: arm64
+Maintainer: The hostkeeper project <https://github.com/komira-ai/hostkeeper>
+Installed-Size: 1
+Section: admin
+Priority: optional
+Homepage: https://github.com/komira-ai/hostkeeper
+Filename: pool/hostkeeper/hostkeeper_1.2.3_arm64.deb
+Size: 1074
+SHA256: f8349539b6237841914d3f8ff986e6b77c11ce26930c526b2ddb0e08538ed72a
+Description: the update daemon of a host
+ Keeps the services of a host at the versions its coordinator names.
+ .
+ A static binary: it needs nothing else installed.
+

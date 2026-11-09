@@ -56,7 +56,7 @@
 # or read). A release waits for a successful push run of
 # this workflow on its commit (release.yml); pr-device.yml is no part of a release.
 #
-# In the job privileged, linux_packages.rs also installs the deb, the rpm and the Arch package,
+# In the job privileged, linux_packages.rs also installs the deb and the rpm,
 # which the job builds from the static programs (musl) into target/linux-packages, in a
 # container of each release of crates/hostkeeper-privileged/linux-releases.toml (images pinned by
 # digest, each pulled in a step of its own; the workflow lint holds the steps to the list) and
@@ -182,8 +182,8 @@ jobs:
         run: cargo xtask install-tool --download "$RUNNER_TEMP/previous-release.tar.gz" --sha256 "$PREVIOUS_RELEASE_SHA256" --out target/previous-release/hostkeeper.tar.gz
       # The packages crates/hostkeeper-privileged/tests/linux_packages.rs installs in a container
       # of each release of crates/hostkeeper-privileged/linux-releases.toml: the static programs,
-      # staged with the pinned gh and the trusted root, packed by nfpm as the deb, the rpm and the
-      # Arch package (artifacts.yml's build, with the same pins), into target/linux-packages. The
+      # staged with the pinned gh and the trusted root, packed by nfpm as the deb and the rpm
+      # (artifacts.yml's build, with the same pins), into target/linux-packages. The
       # images are pulled here, one step each (the workflow lint holds the steps to the list); the
       # test pulls nothing and its containers have no network.
       - name: Download nfpm (HTTPS only, redirects included)
@@ -208,11 +208,6 @@ jobs:
           VERSION: 0.1.0
           ARCH: amd64
         run: target/privileged-tools/nfpm package --config packaging/linux/nfpm.yaml --packager rpm --target target/linux-packages
-      - name: Build the Arch package
-        env:
-          VERSION: 0.1.0
-          ARCH: amd64
-        run: target/privileged-tools/nfpm package --config packaging/linux/nfpm.yaml --packager archlinux --target target/linux-packages
       - name: Pull debian:12
         run: docker pull debian@sha256:268fb24c39bca92d326dd83ea3abebe4a3f7751c804ffef23bb6d857dd343ff8
       - name: Pull debian:13
@@ -229,8 +224,6 @@ jobs:
         run: docker pull opensuse/leap@sha256:a4115e2f5aea9712a7c73974fd94000a034fc3051ef29b5f7722fbf04070dd9d
       - name: Pull opensuse/tumbleweed
         run: docker pull opensuse/tumbleweed@sha256:871173bf717af0926bd92324ee6f73ba285e0721f0c8ac00ef2c77f1c88d979e
-      - name: Pull archlinux:base
-        run: docker pull archlinux@sha256:b1c2fe6e717bfd5673af8fc217e1e1c3ce0dcbb1d53c3414c8425e7ce79fc6d9
       - name: Build the privileged tests as the runner's user
         run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test transient_unit --test observer --test unit_control --test self_update --test tierstore_shaped --test self_update_across_releases --test linux_packages --test mdm_cert_units
       - name: Run the privileged tests as root

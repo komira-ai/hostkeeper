@@ -866,3 +866,114 @@ fn netinstall_report_of_a_missing_file_fails_with_status_1_and_a_bad_mac_with_2(
         stderr(&o)
     );
 }
+
+#[test]
+fn channels_gate_with_no_setting_set_is_a_green_notice_and_writes_enabled_false_with_status_0() {
+    let d = dir("channels-gate");
+    let out = d.join("out");
+    let o = run(
+        &d,
+        &[
+            "channels",
+            "gate",
+            "--label",
+            "testing-apt-read",
+            "--setting",
+            "APT_BUCKET=",
+            "--output",
+            out.to_str().expect("utf8"),
+        ],
+    );
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+    assert!(
+        stdout(&o).starts_with("::notice title=The testing-apt-read job is off::"),
+        "{}",
+        stdout(&o)
+    );
+    assert_eq!(
+        std::fs::read_to_string(out).expect("out"),
+        "enabled=false\n"
+    );
+}
+
+#[test]
+fn channels_with_flags_that_do_not_fit_is_a_usage_error_with_status_2_and_a_failed_step_status_1() {
+    // A session name of another product, and a gate with some but not all of its settings.
+    let d = dir("channels-exit");
+    let o = run(
+        &d,
+        &[
+            "channels",
+            "assume",
+            "--role-arn",
+            "arn:aws:iam::123456789012:role/release",
+            "--session-name",
+            "other-product-1",
+            "--region",
+            "us-east-1",
+            "--token-url",
+            "https://token.example/request",
+            "--env-file",
+            d.join("env").to_str().expect("utf8"),
+        ],
+    );
+    assert_eq!(o.status.code(), Some(2), "{}", stderr(&o));
+    assert!(
+        stderr(&o).contains("--session-name does not start with \"hostkeeper-\""),
+        "{}",
+        stderr(&o)
+    );
+    let o = run(
+        &d,
+        &[
+            "channels",
+            "gate",
+            "--label",
+            "testing-apt-read",
+            "--setting",
+            "APT_BUCKET=set",
+            "--setting",
+            "APT_DISTRIBUTION_ID=",
+        ],
+    );
+    assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
+    assert!(
+        stderr(&o).contains("set all of them or none"),
+        "{}",
+        stderr(&o)
+    );
+}
+
+#[test]
+fn channels_assume_outside_a_job_with_a_token_is_a_failure_with_status_1() {
+    // Catches: the credentials step going on without the runner's token request, which only a job
+    // with `id-token: write` is offered. The variables are taken out of the environment, so the
+    // test is the same on a runner that has them.
+    let d = dir("channels-assume");
+    let o = Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .current_dir(&*d)
+        .env_remove("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
+        .args([
+            "channels",
+            "assume",
+            "--role-arn",
+            "arn:aws:iam::123456789012:role/release",
+            "--session-name",
+            "hostkeeper-apt-1",
+            "--region",
+            "us-east-1",
+            "--token-url",
+            "https://token.example/request",
+            "--env-file",
+            d.join("env").to_str().expect("utf8"),
+        ])
+        .output()
+        .expect("run xtask");
+    assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
+    assert!(
+        stderr(&o).contains("the runner offers no OIDC token"),
+        "{}",
+        stderr(&o)
+    );
+    assert!(!d.join("env").exists());
+}

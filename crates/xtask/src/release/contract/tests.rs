@@ -6,6 +6,29 @@ const BASELINE: &str = include_str!("../../../tests/release/asset_names.baseline
 /// What stands for the version in the baseline.
 const PLACEHOLDER: &str = "<version>";
 
+/// The asset names a release once held and no longer does, `<version>` standing for X.Y.Z, each
+/// with why it left. A name leaves the list of `asset_names` only by being added here (and
+/// marked `withdrawn: ` in the baseline) in the same pull request: consumers fetch
+/// assets by name, so a name is withdrawn only when nothing fetches it.
+const WITHDRAWN: [(&str, &str); 4] = [
+    ("hostkeeper-<version>-1-aarch64.pkg.tar.zst", ARCH_WITHDRAWN),
+    (
+        "hostkeeper-<version>-1-aarch64.pkg.tar.zst.sigstore.json",
+        ARCH_WITHDRAWN,
+    ),
+    ("hostkeeper-<version>-1-x86_64.pkg.tar.zst", ARCH_WITHDRAWN),
+    (
+        "hostkeeper-<version>-1-x86_64.pkg.tar.zst.sigstore.json",
+        ARCH_WITHDRAWN,
+    ),
+];
+
+/// Why the Arch Linux package and its bundle left the release.
+const ARCH_WITHDRAWN: &str = "the Arch package is withdrawn (no daemon ever listed the arch installer, docs/design/packages-repositories.md section 0)";
+
+/// What marks a withdrawn name in the baseline.
+const WITHDRAWN_MARK: &str = "withdrawn: ";
+
 fn commit(text: &str) -> Commit {
     text.parse().expect("a commit")
 }
@@ -18,8 +41,29 @@ fn version(text: &str) -> Version {
 fn baseline_for(version: &Version) -> Vec<String> {
     let mut names: Vec<String> = BASELINE
         .lines()
-        .filter(|l| !l.starts_with('#') & !l.trim().is_empty())
+        .filter(|l| !l.starts_with('#') & !l.trim().is_empty() & !l.starts_with(WITHDRAWN_MARK))
         .map(|l| l.replace(PLACEHOLDER, &version.to_string()))
+        .collect();
+    names.sort();
+    names
+}
+
+/// The names the baseline marks withdrawn, with `version` in place of the placeholder, sorted.
+fn withdrawn_in_baseline(version: &Version) -> Vec<String> {
+    let mut names: Vec<String> = BASELINE
+        .lines()
+        .filter_map(|l| l.strip_prefix(WITHDRAWN_MARK))
+        .map(|l| l.replace(PLACEHOLDER, &version.to_string()))
+        .collect();
+    names.sort();
+    names
+}
+
+/// The names of [`WITHDRAWN`], with `version` in place of the placeholder, sorted.
+fn withdrawn_for(version: &Version) -> Vec<String> {
+    let mut names: Vec<String> = WITHDRAWN
+        .iter()
+        .map(|(n, _)| n.replace(PLACEHOLDER, &version.to_string()))
         .collect();
     names.sort();
     names
@@ -42,7 +86,7 @@ fn asset_names_are_the_documented_contract() {
     let v = version("7.8.9");
     let names = asset_names(&v, &Platform::RELEASED);
     assert_eq!(names, baseline_for(&v));
-    assert_eq!(names.len(), 78);
+    assert_eq!(names.len(), 84);
     assert_eq!(documented_names(DOC, &v), Ok(names.clone()));
     // The document changed alone: a name dropped, or one renamed.
     let image = "hostkeeper-coordinator-<version>-<linux-platform>.image.tar\n";
@@ -57,14 +101,33 @@ fn asset_names_are_the_documented_contract() {
 }
 
 #[test]
-fn asset_name_list_only_grows() {
-    // Catches: a released name that the current list no longer holds; adding a name is allowed.
+fn asset_name_list_only_grows_but_for_the_withdrawn_names() {
+    // Catches: a released name that the current list no longer holds, unless it is withdrawn
+    // with its reason; a withdrawn name shipped again, or withdrawn in the baseline and not in
+    // WITHDRAWN (or the other way round); adding a name is allowed.
     let v = version("0.1.4");
     let current = asset_names(&v, &Platform::RELEASED);
     assert_eq!(
         missing_from(&baseline_for(&v), &current),
         Vec::<String>::new()
     );
+    let withdrawn = withdrawn_for(&v);
+    assert_eq!(withdrawn_in_baseline(&v), withdrawn);
+    assert!(
+        withdrawn.iter().all(|n| !current.contains(n)),
+        "{withdrawn:?}"
+    );
+    assert!(WITHDRAWN.iter().all(|(_, why)| !why.is_empty()));
+    // A name whose removal is not in WITHDRAWN is reported: the Arch package of the baseline
+    // before its withdrawal, against the current list.
+    let mut before = baseline_for(&v);
+    before.extend(withdrawn.iter().cloned());
+    let unexplained: Vec<String> = missing_from(&before, &current)
+        .into_iter()
+        .filter(|n| !withdrawn.contains(n))
+        .collect();
+    assert_eq!(unexplained, Vec::<String>::new());
+    assert_eq!(missing_from(&before, &current), withdrawn);
     // The check itself: a removed name and a renamed one are both reported, an added one is not.
     let mut changed = current.clone();
     changed.retain(|n| n != SUMS);
@@ -219,8 +282,8 @@ fn the_attested_and_summed_names_partition_the_assets() {
     let v = version("0.1.3");
     let attested = attested_names(&v);
     let summed = summed_names(&v);
-    assert_eq!(attested.len(), 28);
-    assert_eq!(summed.len(), 49);
+    assert_eq!(attested.len(), 31);
+    assert_eq!(summed.len(), 52);
     for index in [INDEX, HELLO_INDEX, HELLO_FAIL_READY_INDEX, MDM_INDEX] {
         assert!(summed.contains(&index.to_owned()) & !attested.contains(&index.to_owned()));
     }
@@ -366,27 +429,23 @@ fn a_linux_platform_ships_the_mdm_binary_attested_with_its_sbom() {
 }
 
 #[test]
-fn a_linux_platform_ships_the_arch_package_attested_and_no_other_platform_does() {
-    // Catches: the Arch package missing from a Linux platform, named with the rpm's dot instead
-    // of its dash, shipped without its bundle, given a digest file or a place in the sums-only
-    // package names, or shipped for macOS.
+fn no_platform_ships_the_withdrawn_arch_package() {
+    // Catches: the Arch package (or its bundle) shipped again on any platform after its
+    // withdrawal, attested or summed.
     let v = version("0.2.1");
-    for (platform, arch) in [
-        (Platform::LinuxX86_64, "x86_64"),
-        (Platform::LinuxArm64, "aarch64"),
-    ] {
+    for platform in Platform::RELEASED {
         let names = asset_names(&v, &[platform]);
-        let arch_package = format!("hostkeeper-0.2.1-1-{arch}.pkg.tar.zst");
-        assert!(names.contains(&arch_package), "{arch_package}");
-        assert!(names.contains(&format!("{arch_package}.sigstore.json")));
-        assert!(!names.contains(&format!("{arch_package}.sha256")));
-        assert!(attested_names(&v).contains(&arch_package));
+        assert!(
+            !names.iter().any(|n| n.contains(".pkg.tar.zst")),
+            "{platform:?}: {names:?}"
+        );
     }
     assert!(
-        !asset_names(&v, &[Platform::MacosArm64])
+        !attested_names(&v)
             .iter()
             .any(|n| n.contains(".pkg.tar.zst"))
     );
+    assert!(!summed_names(&v).iter().any(|n| n.contains(".pkg.tar.zst")));
 }
 
 #[test]

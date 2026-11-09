@@ -3,12 +3,12 @@
 //! job built, the script a container runs, and the arguments of `docker run`.
 //!
 //! **The list.** `linux-releases.toml` beside this crate's manifest ([`RELEASES_TEXT`]) holds one
-//! `[[release]]` table per release, with exactly the keys `name`, `format` (`deb`, `rpm` or
-//! `arch`) and `image`, which must be pinned by digest (`<repository>@sha256:<64 hex digits>`).
+//! `[[release]]` table per release, with exactly the keys `name`, `format` (`deb` or `rpm`)
+//! and `image`, which must be pinned by digest (`<repository>@sha256:<64 hex digits>`).
 //! [`parse_releases`] refuses anything else: another key, a missing key, a key that is not text,
 //! an unknown format, an image that is not pinned, a name listed twice, an empty list.
 //!
-//! **The packages.** The job builds the deb, the rpm and the Arch package into one directory
+//! **The packages.** The job builds the deb and the rpm into one directory
 //! ([`PACKAGES_DIR`] of the target directory). [`find_packages`] gives the one file of each format
 //! and fails by name when a format has none or more than one.
 //!
@@ -57,8 +57,8 @@ pub enum LinuxPackagesError {
     /// A key holds something other than text, or the releases are not an array of tables.
     #[error("the list's {0} is not {1}")]
     WrongType(String, &'static str),
-    /// A release names a format that is none of `deb`, `rpm`, `arch`.
-    #[error("release {name:?} has the format {format:?}, not deb, rpm or arch")]
+    /// A release names a format that is neither `deb` nor `rpm`.
+    #[error("release {name:?} has the format {format:?}, not deb or rpm")]
     BadFormat { name: String, format: String },
     /// A release's image is not `<repository>@sha256:<64 lower-case hex digits>`.
     #[error("release {name:?} has the image {image:?}, which is not pinned by digest")]
@@ -91,19 +91,17 @@ pub enum LinuxPackagesError {
 pub enum Format {
     Deb,
     Rpm,
-    Arch,
 }
 
 impl Format {
     /// Every format.
-    pub const ALL: [Format; 3] = [Format::Deb, Format::Rpm, Format::Arch];
+    pub const ALL: [Format; 2] = [Format::Deb, Format::Rpm];
 
     /// The name of the format in the list.
     pub fn as_str(self) -> &'static str {
         match self {
             Format::Deb => "deb",
             Format::Rpm => "rpm",
-            Format::Arch => "arch",
         }
     }
 
@@ -112,7 +110,6 @@ impl Format {
         match self {
             Format::Deb => ".deb",
             Format::Rpm => ".rpm",
-            Format::Arch => ".pkg.tar.zst",
         }
     }
 
@@ -121,7 +118,6 @@ impl Format {
         match self {
             Format::Deb => format!("dpkg -i {path}"),
             Format::Rpm => format!("rpm -i {path}"),
-            Format::Arch => format!("pacman -U --noconfirm {path}"),
         }
     }
 
@@ -227,7 +223,6 @@ pub struct Packages {
     pub dir: PathBuf,
     deb: String,
     rpm: String,
-    arch: String,
 }
 
 impl Packages {
@@ -236,7 +231,6 @@ impl Packages {
         match format {
             Format::Deb => &self.deb,
             Format::Rpm => &self.rpm,
-            Format::Arch => &self.arch,
         }
     }
 }
@@ -280,7 +274,6 @@ pub fn find_packages(dir: &Path) -> Result<Packages, LinuxPackagesError> {
         dir: dir.to_path_buf(),
         deb: one(Format::Deb)?,
         rpm: one(Format::Rpm)?,
-        arch: one(Format::Arch)?,
     })
 }
 

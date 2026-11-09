@@ -1,7 +1,9 @@
 # The asset names of a hostkeeper release, one per line, `<version>` standing for X.Y.Z: the
 # contract that cargo xtask release (crates/xtask/src/release/contract.rs, asset_names) keeps.
 # A name may be added (add it here in the same pull request); a name is never removed or
-# renamed, since consumers fetch assets by these names. Lines starting with `#` are comments.
+# renamed, since consumers fetch assets by these names, unless it is withdrawn: a line
+# `withdrawn: <name>` is a name a release once held and no longer does, each listed with its reason
+# in crates/xtask/src/release/contract/tests.rs (WITHDRAWN). Lines starting with `#` are comments.
 # The `hello-` names are the packages and release indexes of the example service, examples/hello, and
 # of its failing build (`hello-<version>-fail-ready-*`, the same package started with `--fail-ready`).
 # The `mdm-` names are the package and release index of the MDM server stack's service package, built for
@@ -80,7 +82,17 @@ mdm-<version>-linux-x86_64.tar.zst.sigstore.json
 mdm-index.json
 netboot.json
 netboot.json.sigstore.json
-hostkeeper-<version>-1-aarch64.pkg.tar.zst
-hostkeeper-<version>-1-aarch64.pkg.tar.zst.sigstore.json
-hostkeeper-<version>-1-x86_64.pkg.tar.zst
-hostkeeper-<version>-1-x86_64.pkg.tar.zst.sigstore.json
+hostkeeper-coordinator-<version>-1.aarch64.rpm
+hostkeeper-coordinator-<version>-1.aarch64.rpm.sigstore.json
+hostkeeper-coordinator-<version>-1.x86_64.rpm
+hostkeeper-coordinator-<version>-1.x86_64.rpm.sigstore.json
+hostkeeper-coordinator-<version>.image.json
+hostkeeper-coordinator-<version>.image.json.sigstore.json
+hostkeeper-coordinator_<version>_amd64.deb
+hostkeeper-coordinator_<version>_amd64.deb.sigstore.json
+hostkeeper-coordinator_<version>_arm64.deb
+hostkeeper-coordinator_<version>_arm64.deb.sigstore.json
+withdrawn: hostkeeper-<version>-1-aarch64.pkg.tar.zst
+withdrawn: hostkeeper-<version>-1-aarch64.pkg.tar.zst.sigstore.json
+withdrawn: hostkeeper-<version>-1-x86_64.pkg.tar.zst
+withdrawn: hostkeeper-<version>-1-x86_64.pkg.tar.zst.sigstore.json

@@ -1,0 +1,12 @@
+Origin: komira
+Label: komira
+Suite: stable
+Codename: stable
+Date: Mon, 21 Sep 2026 14:13:20 UTC
+Architectures: amd64 arm64
+Components: main
+Description: komira packages
+Acquire-By-Hash: yes
+SHA256:
+ dba6e7936ffe33481c9b059089017efc51fabc89c93ecba4bb3ce6d8c6de3b11 1072 main/binary-amd64/Packages
+ 76d180cc665b8abfe1317881abc2a946af1a6cf6c9e8cc66f605fe42be7a1720 536 main/binary-arm64/Packages

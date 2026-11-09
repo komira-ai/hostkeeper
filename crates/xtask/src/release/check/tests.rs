@@ -60,12 +60,12 @@ fn a_good_directory_passes_with_two_verifier_calls_per_attested_asset() {
     assert_eq!(
         run(&verifier, &dir, &commit),
         Ok(vec![format!(
-            "release check: the 78 assets of v0.1.5 match SHA256SUMS, and 56 attestations of \
+            "release check: the 84 assets of v0.1.5 match SHA256SUMS, and 62 attestations of \
              commit {commit} verified online and from their bundles"
         )])
     );
     let calls = verifier.calls.borrow();
-    assert_eq!(calls.len(), 56);
+    assert_eq!(calls.len(), 62);
     for name in attested_names(&version()) {
         assert!(calls.contains(&format!("online {name}")), "{name}");
         assert!(
@@ -245,7 +245,7 @@ fn verify_fails_when_the_attested_commit_differs_from_the_pin() {
         ]
     );
     let everything = refused(run(&FakeVerifier::good(&other), &dir, &commit));
-    assert_eq!(everything.len(), 56);
+    assert_eq!(everything.len(), 62);
 }
 
 #[test]
@@ -306,7 +306,7 @@ fn a_verifier_error_is_listed_for_every_file() {
     let lines = refused(run(&fakes.verifier, &dir, &commit));
     let names = attested_names(&version());
     let first = &names[0];
-    assert_eq!(lines.len(), 56);
+    assert_eq!(lines.len(), 62);
     assert_eq!(
         lines[0],
         format!("{first} (online): verify: no attestation")
@@ -774,5 +774,44 @@ fn an_hkctl_asset_that_is_not_the_releases_script_is_listed() {
     assert_eq!(
         refused(run(&verifier, &dir, &commit)),
         [format!("missing {name}")]
+    );
+}
+
+#[test]
+fn an_image_index_that_is_not_the_one_of_the_two_image_tarballs_is_listed() {
+    // Catches: a release whose registry digest (the image index's SHA-256) names manifests other
+    // than its two image tarballs', or a check that skips the image index.
+    let (dir, commit) = assets("check-image-index");
+    let name = "hostkeeper-coordinator-0.1.5.image.json";
+    let good = std::fs::read(dir.join(name)).expect("read");
+    std::fs::write(dir.join(name), b"{}").expect("write");
+    let lines = refused(run(&FakeVerifier::good(&commit), &dir, &commit));
+    let made = format!(
+        "sha256:{}",
+        hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&good))
+    );
+    let have = format!(
+        "sha256:{}",
+        hex::encode(<sha2::Sha256 as sha2::Digest>::digest(b"{}"))
+    );
+    assert!(
+        lines.contains(&format!(
+            "{name} is not the image index of the two image tarballs: it is {have}, they make {made}"
+        )),
+        "{lines:?}"
+    );
+
+    // Without its tarballs the index is not judged: their absence is listed instead.
+    let (dir, commit) = assets("check-image-index-absent");
+    std::fs::remove_file(dir.join("hostkeeper-coordinator-0.1.5-linux-arm64.image.tar"))
+        .expect("remove");
+    let lines = refused(run(&FakeVerifier::good(&commit), &dir, &commit));
+    assert!(
+        lines.contains(&"missing hostkeeper-coordinator-0.1.5-linux-arm64.image.tar".to_owned()),
+        "{lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|l| l.contains("is not the image index")),
+        "{lines:?}"
     );
 }

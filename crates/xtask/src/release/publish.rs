@@ -21,6 +21,7 @@ use super::contract::{
     ARTIFACTS_WORKFLOW, Commit, Platform, RELEASE_COMMIT, REPO, Repo, SIGNER_REF, SIGNER_WORKFLOW,
     Version, asset_names, stamp_string,
 };
+use super::image_index::{self, IMAGE_REPOSITORY};
 use super::ports::{Ports, Release, StoredAsset};
 use super::{Error, file_sha256};
 
@@ -84,9 +85,12 @@ pub(crate) fn publish(
             theirs.into_keys().collect()
         }
         None => {
-            ports
-                .store
-                .create_draft(repo, &tag, commit, &notes(version, commit))?;
+            ports.store.create_draft(
+                repo,
+                &tag,
+                commit,
+                &notes(version, commit, &image_digest(&local, version)),
+            )?;
             BTreeSet::new()
         }
     };
@@ -119,9 +123,19 @@ pub(crate) fn publish(
     Ok(lines)
 }
 
-/// The release notes of `version` built from `commit`: what it is, who built and signed it, and
-/// the command that verifies a file of it.
-pub(crate) fn notes(version: &Version, commit: &Commit) -> String {
+/// The SHA-256 of the coordinator's image index among the checked assets `local`: the digest of
+/// the multi-platform image the `image` job of release.yml pushes.
+fn image_digest(local: &BTreeMap<String, String>, version: &Version) -> String {
+    local
+        .get(&image_index::index_name(version))
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// The release notes of `version` built from `commit`: what it is, who built and signed it, the
+/// command that verifies a file of it, and the coordinator's image by `image` (the SHA-256 of its
+/// image index).
+pub(crate) fn notes(version: &Version, commit: &Commit, image: &str) -> String {
     format!(
         "hostkeeper v{version}, built from commit {commit}. Each binary was built with \
          {RELEASE_COMMIT} set to that commit and prints `{}` for --version.\n\
@@ -130,8 +144,14 @@ pub(crate) fn notes(version: &Version, commit: &Commit) -> String {
          To verify a file:\n\
          \n\
          gh attestation verify <file> --repo {REPO} --signer-workflow {SIGNER_WORKFLOW} \
-         --source-ref {SIGNER_REF} --source-digest {commit}\n",
-        stamp_string(version, commit)
+         --source-ref {SIGNER_REF} --source-digest {commit}\n\
+         \n\
+         The coordinator's image, for linux/amd64 and linux/arm64 (tagged {version}; pin the \
+         digest, which is the SHA-256 of the asset {index}, attested like every file):\n\
+         \n\
+         docker pull {IMAGE_REPOSITORY}@sha256:{image}\n",
+        stamp_string(version, commit),
+        index = image_index::index_name(version),
     )
 }
 
