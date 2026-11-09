@@ -129,6 +129,10 @@ message RolloutPlan {
   optional string pause_reason = 8;
   // Every eligible host has rolled: it runs the desired version and has baked.
   bool finished = 9;
+  // When `waiting` is ROLLOUT_ELSEWHERE, the services whose live rollouts hold this one, by
+  // name: each has a host updating, under an order or baking, or a plan under way. Empty
+  // otherwise. A failed host or a halt never makes a service's rollout live.
+  repeated string waiting_on = 10;
 }
 
 // One stage of a plan.

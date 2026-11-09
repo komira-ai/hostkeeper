@@ -130,6 +130,7 @@ pub(crate) mod intents;
 pub mod inventory;
 pub mod jti_file;
 pub mod listen;
+mod live;
 pub mod lock;
 pub mod mdm;
 pub mod membership;
@@ -257,6 +258,8 @@ mod inventory_platform_tests;
 mod inventory_tests;
 #[cfg(test)]
 mod inventory_window_tests;
+#[cfg(test)]
+mod live_tests;
 #[cfg(test)]
 mod marks_support;
 #[cfg(test)]

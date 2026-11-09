@@ -44,6 +44,8 @@ use crate::canary::Canary;
 use crate::decide::Gate;
 use crate::desired::Desired;
 use crate::fleet::{Fleet, Host};
+pub use crate::live::is_live;
+use crate::live::live_elsewhere;
 use crate::membership::HEARTBEAT_V2;
 use crate::orders::INSTALL_FEATURE;
 use crate::rollouts::{Pause, Rollout};
@@ -625,6 +627,17 @@ fn state_of(
         .last_update
         .as_ref()
         .is_some_and(|r| r.outcome == Outcome::Failed && r.target == want.version);
+    // A halted update or install leaves the version in place without a rollback: the host
+    // reports it, unhealthy (a first install: installed, never started), and is failed, not
+    // updating, until it beats healthy.
+    if at
+        && failed
+        && !ordered
+        && host.beat.updating.is_none()
+        && host.beat.health != Health::Healthy
+    {
+        return HostState::Failed;
+    }
     if at && !ordered && host.beat.updating.is_none() {
         if !fleet.is_up(service, id, host, now) {
             return HostState::Updating;
@@ -719,33 +732,6 @@ fn no_slot(def: &ServiceDef, want: &Desired, fleet: &Fleet, id: &HostId, now: Du
     occupying + unseen >= cap as usize
 }
 
-/// Whether the rollout of `def` is live: one of its pairs holds an update slot or bakes the
-/// desired version `want`, or its plan is under way ([`View::under_way`]) and neither halted nor
-/// at a version marked bad. The pairs a standing force orders are left out; a held pair counts
-/// only while it runs an update or has an order outstanding.
-#[must_use]
-pub fn is_live(def: &ServiceDef, want: Option<&Desired>, fleet: &Fleet, now: Duration) -> bool {
-    let service = def.name.as_str();
-    let slot = fleet
-        .ordered_unseen(service, now)
-        .any(|o| !fleet.is_forced(service, o))
-        || fleet
-            .occupants_of(service)
-            .filter(|(o, _)| !fleet.is_forced(service, o))
-            .any(|(o, h)| {
-                if fleet.is_held(service, o) {
-                    return h.beat.updating.is_some() || fleet.is_ordered(service, o, now);
-                }
-                fleet.holds_slot(service, o, h, now)
-                    || want.is_some_and(|w| {
-                        fleet.is_baking(service, o, h, &w.version, def.bake_beats, now)
-                    })
-            });
-    slot || want.is_some_and(|want| {
-        !fleet.is_stopped(service, &want.version) && current(def, want, fleet, now).under_way()
-    })
-}
-
 /// Whether `service` may not start a rollout now: its own is not live and as many other
 /// services' are as `--live-rollouts` lets be.
 pub(crate) fn elsewhere(
@@ -763,7 +749,7 @@ pub(crate) fn elsewhere(
     match kept {
         Some(Some(held)) => held,
         Some(None) => {
-            let held = elsewhere_now(services, all, service, fleet, now);
+            let held = live_elsewhere(services, all, service, fleet, now).is_some();
             MEMO.with(|memo| {
                 memo.borrow_mut()
                     .as_mut()
@@ -771,27 +757,8 @@ pub(crate) fn elsewhere(
             });
             held
         }
-        None => elsewhere_now(services, all, service, fleet, now),
+        None => live_elsewhere(services, all, service, fleet, now).is_some(),
     }
-}
-
-fn elsewhere_now(
-    services: &Services,
-    all: &BTreeMap<String, Desired>,
-    service: &str,
-    fleet: &Fleet,
-    now: Duration,
-) -> bool {
-    let live = |def: &ServiceDef| is_live(def, all.get(&def.name), fleet, now);
-    if services.get(service).is_some_and(live) {
-        return false;
-    }
-    let others = services
-        .defs()
-        .filter(|def| def.name != service)
-        .filter(|def| live(def))
-        .count();
-    others >= fleet.live_rollouts()
 }
 
 thread_local! {

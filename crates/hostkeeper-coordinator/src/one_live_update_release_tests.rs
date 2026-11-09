@@ -1,7 +1,8 @@
 //! One rollout live at a time across services (`stages.rs`, `elsewhere`, `--live-rollouts`
 //! default 1): when a slot one service holds is released, as another service sees it. Each
 //! holder keeps its service's rollout live until its own service's rule releases it (its
-//! desired version, its `bake_beats`, the order's age, a deferral, a healthy beat), and holders
+//! desired version, its `bake_beats`, the order's age, a deferral); a failed host is no holder
+//! of the others' rollouts, only of its own service's slots. Holders
 //! of several services and hosts release the fleet only when the last of them does; until then
 //! the services that are not live are held with `rollout_elsewhere`. A host takes part in a plan
 //! only while it is live, so the asking host beats before each question. Every time is
@@ -227,25 +228,22 @@ fn a_deferral_of_the_ordered_version_frees_the_slot_for_another_service() {
 }
 
 /// Behaviour: a host silent past the down limit still holds the slot while its last word was
-/// updating or failed and unhealthy, and stops holding it while its last word was a bake: a
-/// bake needs live beats. The silent baker holds at 144 s and frees at 145 s (45 s after its
-/// last beat). The asking host `d2` beats just before each question. Catches liveness applied
-/// to an update or a failure, and a silent bake that holds the fleet for ever.
+/// updating, and stops holding it while its last word was a bake: a bake needs live beats. A
+/// host whose last word was a failure, unhealthy, holds no other service's rollout, silent or
+/// not. The silent baker holds at 144 s and frees at 145 s (45 s after its last beat). The asking
+/// host `d2` beats just before each question. Catches liveness applied to an update, a silent
+/// failure holding the fleet, and a silent bake that holds the fleet for ever.
 #[test]
 fn a_silent_holder_keeps_the_slot_unless_it_was_only_baking() {
-    for (holder, b) in [
-        ("updating", updating(beat("1.0"), "2.0")),
-        ("failed and unhealthy", failed_unhealthy("2.0")),
-    ] {
-        let mut f = Farm::new();
-        f.daemon("c", "d1", b, 100);
-        f.daemon("a", "d2", beat("1.0"), 1_000);
-        assert_eq!(
-            f.why("a", "d2", 1_000),
-            gate(Gate::RolloutElsewhere),
-            "{holder}"
-        );
-    }
+    let mut f = Farm::new();
+    f.daemon("c", "d1", updating(beat("1.0"), "2.0"), 100);
+    f.daemon("a", "d2", beat("1.0"), 1_000);
+    assert_eq!(f.why("a", "d2", 1_000), gate(Gate::RolloutElsewhere));
+    let mut f = Farm::new();
+    f.daemon("c", "d1", failed_unhealthy("2.0"), 100);
+    f.daemon("a", "d2", beat("1.0"), 1_000);
+    assert_eq!(f.why("a", "d2", 1_000), go("2.0"), "failed and unhealthy");
+
     let mut f = Farm::new();
     f.daemon("b", "d1", beat("5.0"), 100);
     f.daemon("a", "d2", beat("1.0"), 144);
@@ -254,14 +252,15 @@ fn a_silent_holder_keeps_the_slot_unless_it_was_only_baking() {
     assert_eq!(f.why("a", "d2", 145), go("2.0"));
 }
 
-/// Behaviour: holders of services the coordinator does not order keep the rollout live all the
-/// same: a host updating `third`, which has no desired state, and a host whose update of
-/// `broken` failed and is unhealthy, each hold `c` on another host (`rollout_elsewhere`) until
-/// they are done or healthy. A failure that stands keeps `broken`'s own rollout going while a
-/// host is left to roll (`stage_failed` for it, `rollout_elsewhere` for `c`) until an operator
-/// acknowledges it. Catches the count taken only over services that can be ordered.
+/// Behaviour: a holder of a service the coordinator does not order keeps the rollout live all
+/// the same: a host updating `third`, which has no desired state, holds `c` on another host
+/// (`rollout_elsewhere`) until it is done. A host whose update of `broken` failed and is
+/// unhealthy does not: `c` is ordered while it stands, healthy or not, and while `broken` has a
+/// host left to roll behind it (`stage_failed` for that host) until an operator acknowledges
+/// the failure. Catches the count taken only over services that can be ordered, and a failure
+/// of one service, or its plan held by it, holding another service's rollout.
 #[test]
-fn a_service_with_no_desired_state_or_a_failed_host_still_holds_its_slot() {
+fn a_service_with_no_desired_state_holds_its_slot_and_a_failed_host_does_not() {
     let elsewhere = gate(Gate::RolloutElsewhere);
     let mut f = Farm::new();
     f.daemon("third", "d1", updating(beat("1.0"), "2.0"), 100);
@@ -273,14 +272,14 @@ fn a_service_with_no_desired_state_or_a_failed_host_still_holds_its_slot() {
     let mut f = Farm::new();
     f.daemon("broken", "d1", failed_unhealthy("2.0"), 100);
     f.daemon("c", "d2", beat("1.0"), 100);
-    assert_eq!(f.why("c", "d2", 100), elsewhere, "broken failed");
+    assert_eq!(f.why("c", "d2", 100), go("2.0"), "broken failed");
     let mut healthy = failed_unhealthy("2.0");
     healthy.health = Health::Healthy;
     f.daemon("broken", "d1", healthy, 115);
     assert_eq!(f.why("c", "d2", 115), go("2.0"), "broken healthy");
 
     f.daemon("broken", "d3", beat("1.0"), 115);
-    assert_eq!(f.why("c", "d2", 115), elsewhere, "broken has d3 to roll");
+    assert_eq!(f.why("c", "d2", 115), go("2.0"), "broken has d3 to roll");
     assert_eq!(
         f.why("broken", "d3", 115),
         gate(Gate::StageFailed),
@@ -297,7 +296,7 @@ fn a_service_with_no_desired_state_or_a_failed_host_still_holds_its_slot() {
 
 /// Behaviour: a fleet that a coordinator allowing several rollouts left with several holders,
 /// of three services: `a` has `d1` updating and `d3` ordered and then baking, `b` has `s1`
-/// failed and unhealthy and `d3` baking, `broken` has `d2` with a promotion pending. `c` on `d4`
+/// failed and unhealthy (which holds only `b`'s own slots) and `d3` baking, `broken` has `d2` with a promotion pending. `c` on `d4`
 /// is held with `rollout_elsewhere` while any holder is left, bakes included, and is ordered
 /// only after the last bake ends. Catches a hold that lifts when the first holder or the first
 /// host is done, and a host's bake of one service hidden by its slot for another.

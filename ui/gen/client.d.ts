@@ -645,6 +645,7 @@ export namespace hostkeeper_operator_v1 {
     pausedBy?: string;
     pauseReason?: string;
     finished?: boolean;
+    waitingOn?: string[];
   }
   export interface RunningService { service?: string; version?: string; installer?: string; }
   export interface ServiceEntry {
