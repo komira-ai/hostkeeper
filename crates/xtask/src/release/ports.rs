@@ -77,6 +77,9 @@ pub(crate) trait GitHubRuns {
     /// The runs of the workflow file `workflow` for the head commit `commit`, of any event and
     /// branch: the caller picks the ones that count.
     fn runs(&self, repo: &Repo, workflow: &str, commit: &Commit) -> Result<Vec<Run>, PortError>;
+    /// The names of the jobs of the run `run`, as its latest attempt lists them (a re-run of
+    /// failed jobs lists every job of the run, the ones it did not run again too).
+    fn job_names(&self, repo: &Repo, run: u64) -> Result<Vec<String>, PortError>;
     /// Whether `commit` is on `main`: `main` is the commit or a descendant of it.
     fn on_main(&self, repo: &Repo, commit: &Commit) -> Result<bool, PortError>;
     /// The open issues.
@@ -222,6 +225,22 @@ pub(crate) trait Download {
     fn download(&self, url: &str, file: &Path) -> Result<(), PortError>;
 }
 
+/// The registry the coordinator's image is pushed to (`skopeo`, read by `image_push`).
+pub(crate) trait Registry {
+    /// Copies every image of the OCI layout `layout`, the one its `index.json` names `tag`, to
+    /// `repository:tag`, keeping every digest (`skopeo copy --all --preserve-digests`): a
+    /// manifest the copy would have to change fails it.
+    fn copy(&self, layout: &Path, tag: &str, repository: &str) -> Result<(), PortError>;
+    /// The bytes the registry serves for `repository@digest` (`skopeo inspect --raw`).
+    fn served(&self, repository: &str, digest: &str) -> Result<Vec<u8>, PortError>;
+}
+
+/// The wait between two attempts of a verb that tries again.
+pub(crate) trait Wait {
+    /// Waits `secs` seconds after an attempt that failed for `why`.
+    fn wait(&self, secs: u64, why: &str);
+}
+
 /// How a process ended: its status was success or not, and its output.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Ran {
@@ -247,6 +266,8 @@ pub(crate) struct Ports<'a> {
     pub(crate) pkgbuild: &'a dyn BuildPkg,
     pub(crate) advisories: &'a dyn AdvisoryCheck,
     pub(crate) download: &'a dyn Download,
+    pub(crate) registry: &'a dyn Registry,
+    pub(crate) wait: &'a dyn Wait,
 }
 
 /// What owns a set of adapters and lends them as [`Ports`]: the wired adapters (`Wired`, over
