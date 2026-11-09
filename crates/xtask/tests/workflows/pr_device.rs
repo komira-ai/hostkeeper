@@ -30,7 +30,8 @@
 use std::collections::BTreeSet;
 
 use super::lint::{
-    MACOS_DEVICE_JOB, MACOS_DEVICE_RUNNERS, PRIVILEGED_RUNNERS, entries, entry, triggers,
+    MACOS_DEVICE_JOB, MACOS_DEVICE_RUNNERS, OPENRC_DEVICE_JOB, PRIVILEGED_RUNNERS, entries, entry,
+    triggers,
 };
 use super::pr_paths;
 use super::yaml::{self, Node, Value};
@@ -133,6 +134,14 @@ pub const JOBS: &[Job] = &[
     },
     Job {
         name: PRIVILEGED_JOB,
+        macos: false,
+        root: true,
+        mirrors: true,
+        runners: PRIVILEGED_RUNNERS,
+        kind: Kind::Always,
+    },
+    Job {
+        name: OPENRC_DEVICE_JOB,
         macos: false,
         root: true,
         mirrors: true,
