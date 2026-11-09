@@ -189,12 +189,22 @@ fn a_refusal_of_the_real_gateway_exits_with_its_code_and_says_its_reason() {
         b"",
         &[],
     );
+    // The probe that follows asks the coordinator's version route: this coordinator is older than
+    // the script's stamp (1.2.3), and says which version it runs.
+    let seen = gateway.seen();
+    let probe = seen.last().expect("the probe");
+    assert_eq!(probe.target(), "/v1/version?at_least=1.2.3");
+    let said: serde_json::Value = serde_json::from_slice(&probe.answer).expect("a version");
+    assert_eq!(said["error"], "coordinator_older");
+    let version = said["version"].as_str().expect("a version");
     assert_eq!(
-        (ran.code, ran.stdout.as_str(), ran.stderr.as_str()),
+        (ran.code, ran.stdout.as_str(), ran.stderr),
         (
             2,
             "",
-            "hkctl: the coordinator answered INVALID_ARGUMENT\nrefused: invalid_request\n"
+            format!(
+                "hkctl: the coordinator answered INVALID_ARGUMENT\nhkctl: the coordinator is older than this hkctl (1.2.3): it runs {version}; update the coordinator, then call again\nrefused: coordinator_older\n"
+            )
         )
     );
 }

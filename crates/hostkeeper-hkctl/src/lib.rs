@@ -171,7 +171,12 @@ stdin. No token or secret is ever written to a file, put in an argument list or 
 environment: curl reads each through a pipe.
 
 The answer, the gateway's JSON, goes to stdout or to `--response-file`; diagnostics go to \
-stderr. A refusal prints `refused: <reason>` when its reason is a token of `[a-z0-9_]{1,64}`.";
+stderr. A refusal prints `refused: <reason>` when its reason is a token of `[a-z0-9_]{1,64}`. \
+A call refused `invalid_request` makes one more call, with no token, to the coordinator's \
+`GET /v1/version?at_least=<this hkctl's release>`: when that says the coordinator is older (`409`, \
+or `404` from a coordinator before the route), hkctl says so on stderr, with the coordinator's \
+version when it gave one, and the reason it prints is `coordinator_older`; any other answer, or \
+none, leaves `invalid_request`.";
 
 /// Why a command table cannot be written as a script.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
