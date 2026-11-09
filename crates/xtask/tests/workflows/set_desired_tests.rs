@@ -4,7 +4,6 @@
 
 use std::path::Path;
 
-use super::desired;
 use super::lint::{ID_TOKEN_ALLOWED, entries, entry, lint};
 use super::set_desired::{CLIENT_STEP, FILE, JOB, JOIN_INPUT, JOIN_STEP, VERIFY_STEPS};
 use super::yaml::{self, Node, Value};

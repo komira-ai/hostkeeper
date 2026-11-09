@@ -85,7 +85,11 @@ fn no_job_of_release_yml_holds_id_token_and_the_targets_job_reads_the_repository
     // Catches: the OIDC scope the old channel job's join held left on the targets job, which
     // joins nothing, or granted to another job of release.yml, such as `verify`, which runs the
     // downloaded binaries.
-    assert!(ID_TOKEN_ALLOWED.iter().all(|(file, _)| *file != "release.yml"));
+    assert!(
+        ID_TOKEN_ALLOWED
+            .iter()
+            .all(|(file, _)| *file != "release.yml")
+    );
     let release = workflow("release.yml");
     for job in ["  verify:\n", "  targets:\n"] {
         let at = release.find(job).expect("release.yml has the job");
@@ -100,9 +104,7 @@ fn no_job_of_release_yml_holds_id_token_and_the_targets_job_reads_the_repository
             "job {name}: `id-token: write` is not allowed in release.yml"
         )];
         if name == "targets" {
-            want.push(
-                "release.yml: job targets must hold exactly `contents: read`".to_owned(),
-            );
+            want.push("release.yml: job targets must hold exactly `contents: read`".to_owned());
         }
         assert_eq!(lint("release.yml", &text), want, "{name}");
     }
@@ -143,7 +145,10 @@ fn a_targets_job_that_joins_the_tailnet_and_waits_for_the_channel_is_refused() {
     let release = yaml::load(&workflow("release.yml")).expect("release.yml parses");
     for step in steps(&release, "targets") {
         let run = text(step, "run").unwrap_or_default();
-        assert!(!run.contains("index.json") && !run.contains("CHANNEL"), "{run}");
+        assert!(
+            !run.contains("index.json") && !run.contains("CHANNEL"),
+            "{run}"
+        );
         assert!(text(step, "uses").is_none_or(|u| !u.starts_with("tailscale/")));
     }
 }

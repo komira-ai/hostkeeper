@@ -273,16 +273,16 @@ fn native_of(
         );
     }
     // A `.deb` is installed by its control's `Package`, the service.
-    let manifest = match archive.map(|(floor, table)| native_manifest(table, service.as_str(), floor))
-    {
-        Some(Ok(manifest)) => manifest,
-        Some(Err(why)) => {
-            let archive = package.package_name(&request.version, release_platform(platform));
-            problems.push(format!("{archive}: {MANIFEST_ENTRY}: {why}"));
-            return Ok(None);
-        }
-        None => return Ok(None),
-    };
+    let manifest =
+        match archive.map(|(floor, table)| native_manifest(table, service.as_str(), floor)) {
+            Some(Ok(manifest)) => manifest,
+            Some(Err(why)) => {
+                let archive = package.package_name(&request.version, release_platform(platform));
+                problems.push(format!("{archive}: {MANIFEST_ENTRY}: {why}"));
+                return Ok(None);
+            }
+            None => return Ok(None),
+        };
     let Some(measured) = measured else {
         return Ok(None);
     };

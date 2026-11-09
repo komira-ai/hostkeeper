@@ -20,19 +20,18 @@
 //!
 //! Anything else exits 2.
 //!
-//! Started as `curl` (a link named `curl`), it is the fake origin of the release channel test of
-//! release.yml (tests/workflows/channel_run_tests.rs): `curl ... --output <file> https://<rest>`
-//! copies `channel/<rest>` beside its own file to `<file>`, and when there is none fails as curl
-//! does for an HTTP 404 with `--fail` (exit 22). It never waits, whatever retry flags it is given.
-//! With `--remote-name-all` and `--output-dir <dir>` instead (hello-desired.yml's download, its
-//! test tests/workflows/hello_run_tests.rs), each `https://` argument is a URL that may hold
-//! curl's globs, `{a,b,...}` sets one after another and not nested; each URL a glob expands to
-//! is copied the same way to `<dir>/<its last path segment>`, in order. A missing one is a
-//! failed transfer: with `--fail-early` it ends the run at once with exit 22; without it the
-//! run goes on, and exits as its last transfer did, as curl does.
+//! Started as `curl` (a link named `curl`), it is the fake origin of hello-desired.yml's download
+//! (its test tests/workflows/hello_run_tests.rs): `curl --remote-name-all --output-dir <dir>
+//! <url>...` takes each `https://` argument as a URL that may hold curl's globs, `{a,b,...}` sets
+//! one after another and not nested, and copies each URL `https://<rest>` a glob expands to from
+//! `channel/<rest>` beside its own file to `<dir>/<its last path segment>`, in order. A missing
+//! one is a failed transfer, as curl's for an HTTP 404 with `--fail`: with `--fail-early` it ends
+//! the run at once with exit 22; without it the run goes on, and exits as its last transfer did,
+//! as curl does. It never waits, whatever retry flags it is given. Any other `curl` exits 2.
 //!
-//! Started as `cargo`, for the same test: `cargo xtask <args>` runs the program `xtask` beside its
-//! own file (the test links this crate's real binary there) with `<args>`, and exits as it
+//! Started as `cargo`, for that test and the run test of release.yml's job `targets`
+//! (tests/workflows/targets_run_tests.rs): `cargo xtask <args>` runs the program `xtask` beside
+//! its own file (the test links this crate's real binary there) with `<args>`, and exits as it
 //! exits; anything else exits 2. Started as `rustup`: `rustup toolchain install` does nothing and
 //! succeeds (the toolchain is the one running the test); anything else exits 2.
 
@@ -177,25 +176,12 @@ fn curl_remote_names(dir: &Path, args: &[String]) -> ExitCode {
     last
 }
 
-/// The fake `curl` of the channel: see the module's documentation.
+/// The fake `curl`: see the module's documentation.
 fn curl(dir: &Path, args: &[String]) -> ExitCode {
     if args.iter().any(|a| a == "--remote-name-all") {
         return curl_remote_names(dir, args);
     }
-    let (Some(output), Some(url)) = (value(args, "--output"), args.last()) else {
-        return ExitCode::from(2);
-    };
-    let Some(rest) = url.strip_prefix("https://") else {
-        eprintln!("curl: (1) Protocol not supported or disabled");
-        return ExitCode::from(1);
-    };
-    match std::fs::copy(dir.join("channel").join(rest), output) {
-        Ok(_) => ExitCode::SUCCESS,
-        Err(_) => {
-            eprintln!("curl: (22) The requested URL returned error: 404");
-            ExitCode::from(22)
-        }
-    }
+    ExitCode::from(2)
 }
 
 /// The fake `cargo`: see the module's documentation.

@@ -430,10 +430,7 @@ fn mdm_gets_its_one_platform_its_native_entry_alone_and_the_floor_its_manifest_n
         "repository": "komira-testing",
         "packageVersion": "0.1.5",
     });
-    assert_eq!(
-        got,
-        json!({"linux-x86_64": alone(native)})
-    );
+    assert_eq!(got, json!({"linux-x86_64": alone(native)}));
     read_back_as_the_coordinator("mdm", &got);
 }
 
@@ -676,7 +673,10 @@ fn entries_the_coordinator_or_the_daemon_would_refuse_are_never_written() {
     let Err(Error::Failed(why)) = checked(&hello, &one(long)) else {
         panic!("a repository name too long is written");
     };
-    assert!(why.starts_with("target_invalid: entry 0 of linux-x86_64: "), "{why}");
+    assert!(
+        why.starts_with("target_invalid: entry 0 of linux-x86_64: "),
+        "{why}"
+    );
 
     let mut more = an_entry();
     if let Some(manifest) = more.manifest.as_mut() {
@@ -685,7 +685,10 @@ fn entries_the_coordinator_or_the_daemon_would_refuse_are_never_written() {
     let Err(Error::Failed(why)) = checked(&hello, &one(more)) else {
         panic!("a manifest with no hook is written");
     };
-    assert!(why.starts_with("manifest_invalid: linux-x86_64: apt: "), "{why}");
+    assert!(
+        why.starts_with("manifest_invalid: linux-x86_64: apt: "),
+        "{why}"
+    );
 }
 
 /// The argv of the `release` command, as clap reads it.

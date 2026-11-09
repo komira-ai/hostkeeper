@@ -1,31 +1,26 @@
-//! The job `channel` of the repository's `release.yml`, run for real: each test reads the
+//! The job `targets` of the repository's `release.yml`, run for real: each test reads the
 //! committed job, runs its `run:` steps in order with `bash -eo pipefail` (the shell GitHub runs
 //! a `run:` step with), and reads the outputs the job gives `set-desired`. Nothing is
 //! substituted in a command. The step `env` expressions are given the values a run of main gives
-//! them, and an expression the test does not know fails the test. A step's `if:` is evaluated:
-//! the one the job has, [`JOIN_IF`], holds when the run is given a tailnet client ID. The
-//! actions of the job are done by the test: a checkout, of the workflow's own commit (no `ref`)
-//! or of the newest release's (any other `ref` is the newest release's commit, or the test
-//! fails); the test runs in this repository's own build, so after a checkout of the release's
-//! commit a call of xtask runs only if the command line of the oldest release that commit can
-//! be ([`super::release_ref::FLOOR`]) accepts it, and the step fails as that binary would
-//! otherwise; the download of the run's own `release-<tag>` artifact, whose files it copies into
-//! the step's `path`, and the tailnet join, which records what it was given, pings each host of
-//! its `ping` (a host that is not a node of the tailnet fails the step) and, for a channel served
-//! only on the tailnet, makes the channel reachable from then on. Each artifact holds what `release targets` reads of a release: hostkeeper's index, an
-//! archive per platform holding its `manifest.toml`, each archive's bundle, and its native
-//! packages with theirs.
+//! them, and an expression the test does not know fails the test; a step with an `if:` fails it
+//! too (the job has none). The actions of the job are done by the test: the checkout of the
+//! newest release's commit (any other `ref` fails the test); the test runs in this repository's
+//! own build, so after that checkout a call of xtask runs only if the command line of the oldest
+//! release that commit can be ([`super::release_ref::FLOOR`]) accepts it, and the step fails as
+//! that binary would otherwise; and the download of the run's own `release-<tag>` artifact, whose
+//! files it copies into the step's `path`. Each artifact holds what `release targets` reads of a
+//! release: hostkeeper's index, an archive per platform holding its `manifest.toml`, each
+//! archive's bundle, and its native packages with theirs.
 //!
-//! `gh`, `curl`, `cargo` and `rustup` on the `PATH` are the test program
-//! `tests/bin/gh_fixture.rs`, which answers from scratch files, so no test reaches GitHub or a
-//! channel; as `cargo` it runs this crate's real `xtask` binary, so the step that writes the
-//! targets runs the real `release targets`. `jq`, `cmp`, `sha256sum` and `cut` are the runner's
-//! own, as in the workflow.
+//! `gh`, `cargo` and `rustup` on the `PATH` are the test program `tests/bin/gh_fixture.rs`,
+//! which answers from scratch files, so no test reaches GitHub; as `cargo` it runs this crate's
+//! real `xtask` binary, so the step that writes the targets runs the real `release targets`.
+//! `jq` is the runner's own, as in the workflow. No `curl` is on the `PATH`: the job reads no
+//! release channel, so a step that did would fail.
 //!
 //! What is asserted is what decides whether hostkeeper's desired version is set, and with what:
-//! which step fails, and the outputs `version`, `release_index`, `release_index_digest`,
-//! `targets` and `newest`. `set-desired` runs only when the job succeeds and `newest` is `true`
-//! (its `if:`, [`SET_IF`], which the lint holds).
+//! which step fails, and the outputs `version`, `targets` and `newest`. `set-desired` runs only
+//! when the job succeeds and `newest` is `true` (its `if:`, [`SET_IF`], which the lint holds).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -33,33 +28,15 @@ use std::process::Command;
 
 use serde_json::json;
 
-use std::cell::RefCell;
-
-use super::desired::{CHANNEL_JOB, JOIN_IF, SET_IF};
+use super::desired::{SET_IF, TARGETS_JOB};
 use super::lint::{entries, entry};
-use super::release_files::{self, REPO, package_files, sha256, sorted};
+use super::release_files::{self, REPO, package_files, sorted};
 use super::release_ref::{self, SURFACE_FILE, floor_problem};
 use super::testdir::TestDir;
 use super::{workflows, yaml};
 
 const GH: &str = env!("CARGO_BIN_EXE_xtask-gh-fixture");
 const XTASK: &str = env!("CARGO_BIN_EXE_xtask");
-
-/// The channel's base URL the runs are given (`vars.HOSTKEEPER_RELEASE_CHANNEL`); the fake
-/// `curl` serves `channel/channel.example/releases/...`.
-const CHANNEL: &str = "https://channel.example/releases";
-
-/// The base URL of a channel served only on the tailnet, on a port of its own.
-const TAILNET_CHANNEL: &str = "https://channel.example:30443/releases";
-
-/// The tailnet's name of the channel's host: the one node of the tailnet the join can ping.
-const TAILNET_NODE: &str = "channel.example";
-
-/// What a run on the tailnet is given as `vars.HOSTKEEPER_TAILNET_CLIENT_ID`,
-/// `vars.HOSTKEEPER_TAILNET_AUDIENCE` and `vars.HOSTKEEPER_TAILNET_TAG`.
-const CLIENT_ID: &str = "fixture-client";
-const AUDIENCE: &str = "api.tailscale.com/fixture-client";
-const TAG: &str = "tag:ci";
 
 /// The commit the release `version` of the plan's matrix is built from: one of its own for each
 /// version, its digits padded to 40.
@@ -75,22 +52,10 @@ fn hostkeeper_files(version: &str) -> BTreeMap<String, Vec<u8>> {
     files
 }
 
-/// The canonical release index of hostkeeper at `version`: one line, no final line break.
-fn index(version: &str) -> String {
-    let files = hostkeeper_files(version);
-    String::from_utf8(files["index.json"].clone()).expect("UTF-8")
-}
-
-/// The targets the job must give for hostkeeper's release `version`: each platform's native
-/// entry, then its archive entry (docs/design/packages-native.md, item A23).
+/// The targets the job must give for hostkeeper's release `version`: each Linux platform's
+/// native entry alone (docs/design/packages-native.md section 10.5, A24).
 fn targets(version: &str) -> String {
-    release_files::targets(
-        "hostkeeper",
-        version,
-        version,
-        &hostkeeper_files(version),
-        true,
-    )
+    release_files::targets("hostkeeper", version, &hostkeeper_files(version))
 }
 
 /// One run of the job: the scratch files, and what the run is given.
@@ -98,30 +63,21 @@ struct Site {
     root: TestDir,
     /// The plan's matrix, oldest first: `(version, tag)`.
     matrix: Vec<(String, String)>,
-    /// `vars.HOSTKEEPER_RELEASE_CHANNEL`.
-    channel: String,
-    /// `vars.HOSTKEEPER_TAILNET_CLIENT_ID`; empty: the repository has none.
-    client_id: String,
-    /// Whether the channel is served only on the tailnet: the fake `curl` finds it only once
-    /// the job has joined.
-    tailnet_only: bool,
-    /// The `with` of each tailnet join the run did, evaluated, in order.
-    joins: RefCell<Vec<BTreeMap<String, String>>>,
 }
 
 impl Site {
     /// A run whose plan released `versions`, oldest first, while `published` are the tags of
     /// the repository's published releases (the run's own among them).
     fn new(name: &str, versions: &[&str], published: &[&str]) -> Site {
-        let base = Path::new(env!("CARGO_TARGET_TMPDIR")).join("channel-run");
+        let base = Path::new(env!("CARGO_TARGET_TMPDIR")).join("targets-run");
         let root = TestDir::under(&base, name);
         for dir in ["bin/releases", "work", "temp", "artifacts"] {
             std::fs::create_dir_all(root.join(dir)).expect("make a scratch directory");
         }
         // Hard links, not copies (as in tests/channel_sync.rs): the fake finds its data beside
-        // the name it was started by, and acts as curl, cargo or rustup when started by that
-        // name. As cargo it runs the real xtask linked beside it.
-        for name in ["gh", "curl", "cargo", "rustup"] {
+        // the name it was started by, and acts as cargo or rustup when started by that name. As
+        // cargo it runs the real xtask linked beside it.
+        for name in ["gh", "cargo", "rustup"] {
             std::fs::hard_link(GH, root.join("bin").join(name)).expect("install a fake");
         }
         std::fs::hard_link(XTASK, root.join("bin/xtask")).expect("install xtask");
@@ -140,42 +96,11 @@ impl Site {
             .iter()
             .map(|v| ((*v).to_owned(), format!("v{v}")))
             .collect();
-        let site = Site {
-            root,
-            matrix,
-            channel: CHANNEL.to_owned(),
-            client_id: String::new(),
-            tailnet_only: false,
-            joins: RefCell::new(Vec::new()),
-        };
+        let site = Site { root, matrix };
         for v in versions {
             site.publish(v);
         }
         site
-    }
-
-    /// The channel is `channel`, served only on the tailnet, and the repository's tailnet client
-    /// ID is `client_id` (empty: none).
-    fn on_tailnet(mut self, channel: &str, client_id: &str) -> Site {
-        self.channel = channel.to_owned();
-        self.client_id = client_id.to_owned();
-        self.tailnet_only = true;
-        self
-    }
-
-    /// The directory the fake `curl` serves the channel from, once the runner reaches it.
-    fn reachable(&self) -> PathBuf {
-        self.root.join("bin/channel")
-    }
-
-    /// Where the channel is served from before the runner joins the tailnet: [`Site::reachable`]
-    /// unless the channel is served only on the tailnet.
-    fn served_from(&self) -> PathBuf {
-        if self.tailnet_only {
-            self.root.join("tailnet/channel")
-        } else {
-            self.reachable()
-        }
     }
 
     /// The run's artifact `release-v<version>` holds the files of that release.
@@ -198,21 +123,6 @@ impl Site {
             .join(format!("release-v{version}"))
             .join(name);
         std::fs::remove_file(path).expect("remove a file of the artifact");
-    }
-
-    /// The channel serves `index` as hostkeeper's index of `version`.
-    fn serve(&self, version: &str, index: &str) {
-        let rest = self
-            .channel
-            .strip_prefix("https://")
-            .expect("an https channel");
-        let dir = self
-            .served_from()
-            .join(rest)
-            .join("hostkeeper")
-            .join(version);
-        std::fs::create_dir_all(&dir).expect("make the channel's version directory");
-        std::fs::write(dir.join("index.json"), index).expect("write the served index");
     }
 
     fn matrix_json(&self) -> String {
@@ -259,10 +169,6 @@ fn evaluate(
         let expr = &after[..end];
         let resolved = match expr.split('.').collect::<Vec<_>>().as_slice() {
             ["needs", "plan", "outputs", "matrix"] => site.matrix_json(),
-            ["vars", "HOSTKEEPER_RELEASE_CHANNEL"] => site.channel.clone(),
-            ["vars", "HOSTKEEPER_TAILNET_CLIENT_ID"] => site.client_id.clone(),
-            ["vars", "HOSTKEEPER_TAILNET_AUDIENCE"] => AUDIENCE.to_owned(),
-            ["vars", "HOSTKEEPER_TAILNET_TAG"] => TAG.to_owned(),
             ["github", "token"] => "fixture-token".to_owned(),
             ["steps", id, "outputs", key] => steps
                 .get(*id)
@@ -288,31 +194,6 @@ fn read_outputs(path: &Path) -> BTreeMap<String, String> {
         .collect()
 }
 
-/// Whether the step runs: it has no `if:`, or its `if:` holds in a run of `site`.
-fn runs(site: &Site, step: &yaml::Node) -> bool {
-    match entry(step, "if").and_then(yaml::Node::as_str) {
-        None => true,
-        Some(JOIN_IF) => !site.client_id.is_empty(),
-        Some(other) => panic!("the test does not know the condition `{other}`"),
-    }
-}
-
-/// The tailnet join of a run of `site`, given the step's `with`, evaluated: records it, pings
-/// each host of `ping` (failing on one that is not [`TAILNET_NODE`]), and makes a channel served
-/// only on the tailnet reachable.
-fn join(site: &Site, with: BTreeMap<String, String>) -> bool {
-    let ping = with.get("ping").cloned().unwrap_or_default();
-    site.joins.borrow_mut().push(with);
-    if ping.split(',').any(|host| host != TAILNET_NODE) {
-        return false;
-    }
-    let tailnet = site.served_from();
-    if site.tailnet_only && tailnet.exists() {
-        std::fs::rename(tailnet, site.reachable()).expect("reach the tailnet's channel");
-    }
-    true
-}
-
 /// The repository's `release.yml`.
 fn release_yml() -> String {
     workflows()
@@ -322,25 +203,25 @@ fn release_yml() -> String {
         .expect("release.yml exists")
 }
 
-/// Runs the committed job `channel` against `site`.
+/// Runs the committed job `targets` against `site`.
 fn run(site: &Site) -> Ended {
     run_text(site, &release_yml())
 }
 
-/// Runs the job `channel` of the workflow `text` against `site`.
+/// Runs the job `targets` of the workflow `text` against `site`.
 fn run_text(site: &Site, text: &str) -> Ended {
     let doc = yaml::load(text).expect("release.yml parses");
     let job = entry(&doc, "jobs")
-        .and_then(|jobs| entry(jobs, CHANNEL_JOB))
-        .expect("release.yml has the job channel");
+        .and_then(|jobs| entry(jobs, TARGETS_JOB))
+        .expect("release.yml has the job targets");
     let steps = match entry(job, "steps").map(|s| &s.value) {
         Some(yaml::Value::Seq(items)) => items,
-        _ => panic!("the job channel has no steps"),
+        _ => panic!("the job targets has no steps"),
     };
     let work = site.root.join("work");
     let path = format!("{}:/usr/bin:/bin", site.root.join("bin").display());
     let mut outputs: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
-    // Whether the last checkout was of the release's commit, not of the workflow's own.
+    // Whether the release's commit was checked out.
     let mut release_checkout = false;
     for (at, step) in steps.iter().enumerate() {
         let text_of = |node: &yaml::Node, key: &str| {
@@ -349,34 +230,20 @@ fn run_text(site: &Site, text: &str) -> Ended {
                 .map(str::to_owned)
         };
         let name = text_of(step, "name").unwrap_or_else(|| format!("step {}", at + 1));
-        if !runs(site, step) {
-            continue;
+        if let Some(condition) = text_of(step, "if") {
+            panic!("the test does not know the condition `{condition}` of {name}");
         }
         if let Some(uses) = text_of(step, "uses") {
             let with = entry(step, "with").expect("an action of the job has `with`");
-            if uses.starts_with("tailscale/github-action@") {
-                let given = entries(with)
-                    .iter()
-                    .map(|(k, v)| {
-                        let k = k.as_str().expect("with key").to_owned();
-                        (k, evaluate(site, &outputs, v.as_str().expect("with value")))
-                    })
-                    .collect();
-                if !join(site, given) {
-                    return Ended::Failed(name);
-                }
-                continue;
-            }
             if uses.starts_with("actions/checkout@") {
-                release_checkout = text_of(with, "ref").is_some_and(|r| {
-                    let (newest, _) = site.matrix.last().expect("a release");
-                    assert_eq!(
-                        evaluate(site, &outputs, &r),
-                        commit_of(newest),
-                        "a checkout of a ref is of the newest release's commit"
-                    );
-                    true
-                });
+                let r = text_of(with, "ref").expect("a checkout of the release's commit");
+                let (newest, _) = site.matrix.last().expect("a release");
+                assert_eq!(
+                    evaluate(site, &outputs, &r),
+                    commit_of(newest),
+                    "a checkout of a ref is of the newest release's commit"
+                );
+                release_checkout = true;
                 continue;
             }
             assert!(uses.starts_with("actions/download-artifact@"), "{uses}");
@@ -443,35 +310,30 @@ fn run_text(site: &Site, text: &str) -> Ended {
 
 /// The outputs of a run that passed for `version`, with `newest`.
 fn passed(version: &str, newest: bool) -> Ended {
-    let index = index(version);
     Ended::Passed(BTreeMap::from([
         ("newest".to_owned(), newest.to_string()),
-        ("release_index_digest".to_owned(), sha256(index.as_bytes())),
-        ("release_index".to_owned(), index),
         ("targets".to_owned(), targets(version)),
         ("version".to_owned(), version.to_owned()),
     ]))
 }
 
 #[test]
-fn the_set_desired_job_runs_only_when_the_channel_job_says_newest() {
+fn the_set_desired_job_runs_only_when_the_targets_job_says_newest() {
     // Catches: this test's reading of `set-desired`'s `if:` drifting from the workflow's.
-    assert!(SET_IF.contains("needs.channel.outputs.newest == 'true'"));
+    assert!(SET_IF.contains("needs.targets.outputs.newest == 'true'"));
     assert!(!Ended::Failed("x".to_owned()).sets_desired());
     assert!(!passed("1.2.9", false).sets_desired());
     assert!(passed("1.2.9", true).sets_desired());
 }
 
 #[test]
-fn a_release_the_channel_serves_byte_for_byte_is_set_with_its_index_digest_and_targets() {
-    // Catches: a job that does not pass on the published index and its SHA-256 exactly, or that
-    // reads the channel at another path than `<channel>/hostkeeper/<version>/index.json`; and
-    // targets that are not, per platform of the release's own files, hostkeeper's native entry
-    // (its `.deb` from the testing suite, its installer from the testing store) and then one
-    // archive entry (another store order, another asset path, another size or digest, no
-    // bundle, no floor).
-    let site = Site::new("served", &["1.2.10"], &["v1.2.9", "v1.2.10"]);
-    site.serve("1.2.10", &index("1.2.10"));
+fn a_release_is_set_with_its_native_targets_alone_and_no_channel_is_read() {
+    // Catches: targets that are not, per Linux platform of the release's own files,
+    // hostkeeper's `.deb` from the testing suite alone (an archive entry still in a list, a list
+    // for macOS, another digest); an index or its digest still given to `set-desired`; and a
+    // step that reads the release channel (no `curl` is on the runner's `PATH` here, so it
+    // would fail).
+    let site = Site::new("native", &["1.2.10"], &["v1.2.9", "v1.2.10"]);
     let ended = run(&site);
     assert_eq!(ended, passed("1.2.10", true));
     assert!(ended.sets_desired());
@@ -482,7 +344,6 @@ fn a_release_older_than_one_already_published_is_not_set() {
     // Catches: the newest picked by text, where `1.2.9` sorts after `1.2.10`, and a late run of
     // an older commit setting its version after a newer one was published.
     let site = Site::new("older", &["1.2.9"], &["v1.2.9", "v1.2.10"]);
-    site.serve("1.2.9", &index("1.2.9"));
     let ended = run(&site);
     assert_eq!(ended, passed("1.2.9", false));
     assert!(!ended.sets_desired());
@@ -492,9 +353,7 @@ fn a_release_older_than_one_already_published_is_not_set() {
 fn of_several_releases_in_one_run_only_the_newest_is_set() {
     // Catches: the first entry of the matrix (the oldest) taken for the newest.
     let site = Site::new("several", &["1.2.8", "1.2.9"], &["v1.2.8", "v1.2.9"]);
-    site.serve("1.2.9", &index("1.2.9"));
-    let ended = run(&site);
-    assert_eq!(ended, passed("1.2.9", true));
+    assert_eq!(run(&site), passed("1.2.9", true));
 }
 
 #[test]
@@ -506,49 +365,18 @@ fn tags_that_are_not_a_release_version_do_not_count_as_newer() {
         &["1.2.10"],
         &["latest", "v1.3.0-rc1", "v1.2.10", "v1.2.9"],
     );
-    site.serve("1.2.10", &index("1.2.10"));
     assert_eq!(run(&site), passed("1.2.10", true));
-}
-
-#[test]
-fn a_channel_that_serves_other_bytes_stops_the_job_before_any_output() {
-    // Catches: a set made from the published index while the channel serves another index of
-    // the same version, which it never replaces.
-    let site = Site::new("other-bytes", &["1.2.10"], &["v1.2.10"]);
-    site.serve("1.2.10", &format!("{}\n", index("1.2.10")));
-    let ended = run(&site);
-    assert_eq!(
-        ended,
-        Ended::Failed("The channel serves the published index, byte for byte".to_owned())
-    );
-    assert!(!ended.sets_desired());
-}
-
-#[test]
-fn a_channel_that_does_not_serve_the_version_stops_the_job() {
-    // Catches: a job that goes on when the channel answers 404, because the sync has not staged
-    // the release (here: it never does); and a channel serving only another version.
-    let site = Site::new("missing", &["1.2.10"], &["v1.2.10"]);
-    site.serve("1.2.9", &index("1.2.9"));
-    let ended = run(&site);
-    assert_eq!(
-        ended,
-        Ended::Failed("Wait until the release channel serves the version's index".to_owned())
-    );
-    assert!(!ended.sets_desired());
 }
 
 #[test]
 fn of_several_releases_the_targets_are_the_newest_ones() {
     // Catches: targets written from another release of the run than the version set, so that
-    // the set names one version and orders another's archives (the coordinator refuses the
-    // pair only when it holds the index too).
+    // the set names one version and orders another's packages.
     let site = Site::new(
         "several-targets",
         &["1.2.8", "1.2.9"],
         &["v1.2.8", "v1.2.9"],
     );
-    site.serve("1.2.9", &index("1.2.9"));
     let Ended::Passed(outputs) = run(&site) else {
         panic!("the job passes");
     };
@@ -557,23 +385,22 @@ fn of_several_releases_the_targets_are_the_newest_ones() {
 }
 
 #[test]
-fn a_release_missing_an_archive_bundle_or_a_native_package_stops_the_job_before_the_set() {
-    // Catches: targets written for a release whose files do not all check out (an archive, a
-    // bundle, or one of hostkeeper's native packages, whose entry would pin bytes no store
-    // holds), or a failure of the targets step that the job goes on after: the set must not run
-    // with no targets.
+fn a_release_missing_an_archive_or_a_deb_stops_the_job_before_the_set_and_its_pkg_is_not_read() {
+    // Catches: targets written for a release whose files do not all check out (a Linux archive,
+    // whose manifest the entry takes, or one of hostkeeper's `.deb`s or its bundle, whose entry
+    // would pin bytes no repository holds), or a failure of the targets step that the job goes
+    // on after: the set must not run with no targets. The installer pkg and its bundle are not
+    // read, since macOS has no list.
     for (n, withheld) in [
-        "hostkeeper-1.2.10-macos-arm64.tar.zst.sigstore.json",
         "hostkeeper-1.2.10-linux-arm64.tar.zst",
         "hostkeeper_1.2.10_amd64.deb",
-        "hostkeeper-1.2.10-macos-arm64.pkg.sigstore.json",
+        "hostkeeper_1.2.10_arm64.deb.sigstore.json",
     ]
     .into_iter()
     .enumerate()
     {
         let site = Site::new(&format!("withheld-{n}"), &["1.2.10"], &["v1.2.10"]);
         site.withhold("1.2.10", withheld);
-        site.serve("1.2.10", &index("1.2.10"));
         let ended = run(&site);
         assert_eq!(
             ended,
@@ -582,157 +409,33 @@ fn a_release_missing_an_archive_bundle_or_a_native_package_stops_the_job_before_
         );
         assert!(!ended.sets_desired());
     }
-}
-
-/// The join step of the repository's `release.yml`, from its comment-free first line to the
-/// comment before the wait.
-fn join_step(text: &str) -> &str {
-    let start = text
-        .find("      - name: Join the tailnet\n")
-        .expect("the channel job has the join");
-    let end = start
-        + text[start..]
-            .find("      # curl's own retries")
-            .expect("the wait follows the join");
-    &text[start..end]
-}
-
-/// The step after the wait, which a moved join is put before.
-const COMPARE: &str = "      - name: The channel serves the published index, byte for byte\n";
-
-#[test]
-fn a_channel_served_only_on_the_tailnet_is_read_after_the_join() {
-    // Catches: a channel job that cannot reach a channel served only on the tailnet (the wait
-    // fails after half an hour, and nothing is set), a join that is not given the repository's
-    // federated identity and tag, and a join that does not wait for the channel's host, without
-    // its port, to answer before the wait starts.
-    let site =
-        Site::new("tailnet", &["1.2.10"], &["v1.2.10"]).on_tailnet(TAILNET_CHANNEL, CLIENT_ID);
-    site.serve("1.2.10", &index("1.2.10"));
-    let ended = run(&site);
-    assert_eq!(ended, passed("1.2.10", true));
-    assert_eq!(
-        *site.joins.borrow(),
-        [BTreeMap::from([
-            ("audience".to_owned(), AUDIENCE.to_owned()),
-            ("oauth-client-id".to_owned(), CLIENT_ID.to_owned()),
-            ("ping".to_owned(), TAILNET_NODE.to_owned()),
-            (
-                "sha256sum".to_owned(),
-                "c6f99a5d774c7783b56902188d69e9756fc3dddfb08ac6be4cb2585f3fecdc32".to_owned()
-            ),
-            ("tags".to_owned(), TAG.to_owned()),
-            ("use-cache".to_owned(), "false".to_owned()),
-            ("version".to_owned(), "1.94.2".to_owned()),
-        ])]
-    );
-}
-
-#[test]
-fn a_wait_without_the_join_does_not_reach_a_channel_served_only_on_the_tailnet() {
-    // Catches: the job as it was before the join (the wait runs on a runner off the tailnet and
-    // cannot resolve the channel), and a join placed after the wait.
-    let text = release_yml();
-    let join = join_step(&text);
-    let without = text.replacen(join, "", 1);
-    let after = without.replacen(COMPARE, &format!("{join}{COMPARE}"), 1);
-    for (name, changed) in [("no-join", without), ("join-after", after)] {
-        let site =
-            Site::new(name, &["1.2.10"], &["v1.2.10"]).on_tailnet(TAILNET_CHANNEL, CLIENT_ID);
-        site.serve("1.2.10", &index("1.2.10"));
-        let ended = run_text(&site, &changed);
-        assert_eq!(
-            ended,
-            Ended::Failed("Wait until the release channel serves the version's index".to_owned()),
-            "{name}"
-        );
-        assert!(!ended.sets_desired(), "{name}");
-    }
-}
-
-#[test]
-fn without_a_tailnet_client_id_the_job_does_not_join() {
-    // Catches: a join (or the host step) that runs with the repository variable empty, as the
-    // CI client does not; then the channel must be reachable as it is, and one served only on
-    // the tailnet is not.
-    let site = Site::new("no-client", &["1.2.10"], &["v1.2.10"]);
-    site.serve("1.2.10", &index("1.2.10"));
-    assert_eq!(run(&site), passed("1.2.10", true));
-    assert!(site.joins.borrow().is_empty());
-    let site =
-        Site::new("no-client-tailnet", &["1.2.10"], &["v1.2.10"]).on_tailnet(TAILNET_CHANNEL, "");
-    site.serve("1.2.10", &index("1.2.10"));
-    assert_eq!(
-        run(&site),
-        Ended::Failed("Wait until the release channel serves the version's index".to_owned())
-    );
-    assert!(site.joins.borrow().is_empty());
-}
-
-#[test]
-fn a_join_that_pings_another_host_than_the_channels_fails_before_the_wait() {
-    // Catches: the join made to ping the coordinator, or nothing, in place of the channel's
-    // host: the test's tailnet has the channel's host alone, so the ping of another fails.
-    let text = release_yml();
-    let changed = text.replacen(
-        "          ping: ${{ steps.channel-host.outputs.hostname }}\n",
-        "          ping: coordinator.example\n",
-        1,
-    );
-    assert_ne!(changed, text);
-    let site =
-        Site::new("other-ping", &["1.2.10"], &["v1.2.10"]).on_tailnet(TAILNET_CHANNEL, CLIENT_ID);
-    site.serve("1.2.10", &index("1.2.10"));
-    assert_eq!(
-        run_text(&site, &changed),
-        Ended::Failed("Join the tailnet".to_owned())
-    );
-}
-
-#[test]
-fn a_bad_channel_with_a_client_id_stops_the_job_before_the_join() {
-    // Catches: a join (holding the OIDC token) that runs after the host step failed, and a host
-    // step that accepts a channel that is not an https URL of a host. Every shape the step
-    // accepts and refuses is in the unit tests of `release channel-host`.
-    for (n, channel) in [
-        "https://",
-        "http://channel.example",
-        "https://user@channel.example",
+    for (n, withheld) in [
+        "hostkeeper-1.2.10-macos-arm64.pkg",
+        "hostkeeper-1.2.10-macos-arm64.pkg.sigstore.json",
     ]
     .into_iter()
     .enumerate()
     {
-        let site = Site::new(&format!("bad-channel-{n}"), &["1.2.10"], &["v1.2.10"])
-            .on_tailnet(channel, CLIENT_ID);
-        assert_eq!(
-            run(&site),
-            Ended::Failed("The release channel's host".to_owned()),
-            "{channel}"
-        );
-        assert!(site.joins.borrow().is_empty(), "{channel}");
+        let site = Site::new(&format!("withheld-pkg-{n}"), &["1.2.10"], &["v1.2.10"]);
+        site.withhold("1.2.10", withheld);
+        assert_eq!(run(&site), passed("1.2.10", true), "{withheld}");
     }
 }
 
 #[test]
-fn the_host_step_runs_when_the_release_is_older_than_its_verb() {
-    // Catches: the host step run by the xtask of the release's commit, which fails with
-    // `unrecognized subcommand 'channel-host'` whenever the run releases a commit older than
-    // the verb (the job stopped there, and nothing was set); the committed job runs it from the
-    // workflow's own commit and passes. Without a client ID the step is skipped either way.
-    let before = super::release_ref_tests::before_the_fix(&release_yml());
-    let site = Site::new("older-release", &["1.2.10"], &["v1.2.10"])
-        .on_tailnet(TAILNET_CHANNEL, CLIENT_ID);
-    site.serve("1.2.10", &index("1.2.10"));
+fn the_job_as_it_was_before_a24_fails_without_a_channel() {
+    // Catches: the wait for the release channel back in the job (here the runner has no `curl`
+    // and the run is given no channel), which would hold every release on a channel no host
+    // reads any more; `run_text` refuses its `if:` steps and unknown expressions, so the test
+    // puts back the wait alone.
+    let text = release_yml();
+    let wait = "      - name: Wait for the release channel\n        run: curl --fail --output \"$RUNNER_TEMP/served-index.json\" https://channel.example/releases/hostkeeper/index.json\n";
+    let at = "      - name: The targets of the release\n";
+    assert_eq!(text.matches(at).count(), 1);
+    let changed = text.replacen(at, &format!("{wait}{at}"), 1);
+    let site = Site::new("channel-wait", &["1.2.10"], &["v1.2.10"]);
     assert_eq!(
-        run_text(&site, &before),
-        Ended::Failed("The release channel's host".to_owned())
+        run_text(&site, &changed),
+        Ended::Failed("Wait for the release channel".to_owned())
     );
-    assert!(site.joins.borrow().is_empty());
-    let site = Site::new("older-release-fixed", &["1.2.10"], &["v1.2.10"])
-        .on_tailnet(TAILNET_CHANNEL, CLIENT_ID);
-    site.serve("1.2.10", &index("1.2.10"));
-    assert_eq!(run(&site), passed("1.2.10", true));
-    let site = Site::new("older-release-no-client", &["1.2.10"], &["v1.2.10"]);
-    site.serve("1.2.10", &index("1.2.10"));
-    assert_eq!(run_text(&site, &before), passed("1.2.10", true));
 }
