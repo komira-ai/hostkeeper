@@ -46,6 +46,13 @@ hostkeeper-mdm-core = { path = "../hostkeeper-mdm-core" }
 # The xz decoder of `release check-linux-pkg`, which reads a tarball compressed with xz; pure
 # Rust.
 lzma-rs.workspace = true
+# The RPM header reader of `channels rpm` (the repository's `primary.xml`, the signature
+# header), and the builder its tests make packages with.
+rpm.workspace = true
+# The TLS of `channels assume`'s token request: the ring provider ureq is built with, and the
+# host's roots.
+rustls.workspace = true
+rustls-native-certs.workspace = true
 # The zstd compression of the hostkeeper package (`release package`), and the zstd decoder of
 # `release check-linux-pkg` (a tarball).
 ruzstd.workspace = true
@@ -64,6 +71,8 @@ serde_json.workspace = true
 sha2.workspace = true
 tar.workspace = true
 thiserror.workspace = true
+# The OIDC token request of `channels assume` (the runner's, over HTTPS).
+ureq.workspace = true
 # The member manifests `release set-version` checks.
 toml.workspace = true
 

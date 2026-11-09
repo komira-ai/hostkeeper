@@ -118,3 +118,11 @@ fleetdm.com
 # The namespace of OpenSSH's own names for its security-key types, which the SSH keys file of a
 # network-install seed accepts (hostkeeper-pxe-seed's keys.rs).
 =openssh.com
+
+# The organisation's package repository (apt and rpm), which `cargo xtask channels` publishes into
+# and the install checks read from (crates/xtask/src/channels, .github/workflows/release.yml).
+=packages.komira.ai
+# The audience AWS STS trusts a GitHub Actions OIDC token for (`cargo xtask channels assume`), and
+# the namespace of the rpm repository metadata (`repomd.xml`, `primary.xml`) the rpm channel writes.
+=sts.amazonaws.com
+=linux.duke.edu
