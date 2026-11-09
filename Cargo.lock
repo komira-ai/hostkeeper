@@ -1729,6 +1729,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "hostkeeper-measure"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "hex",
+ "hostkeeper-measure",
+ "hostkeeper-testkit",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "toml",
+]
+
+[[package]]
 name = "hostkeeper-observe"
 version = "0.1.0"
 dependencies = [

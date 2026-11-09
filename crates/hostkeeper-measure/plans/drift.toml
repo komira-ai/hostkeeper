@@ -1,0 +1,96 @@
+# A hand-made change on a host: its detection and its repair. docs/report/results/README.md
+# describes the plans and how a run becomes a result; `hostkeeper-measure check --plan` checks
+# this file.
+id = "drift"
+title = "A hand-made change on a host, detected and repaired"
+measures = """
+After a hand-made change to what hostkeeper placed for hello on one host, the time until the \
+coordinator shows it, and the time to repair it with the next order. The daemon does not report \
+drift yet (`ServiceBeat.drift` is designed, not built): the coordinator sees a change only when \
+the observer finds hello's running executable is not the one sealed for its version, which it \
+reports as unhealthy. A placed file or unit changed by hand is put back only when the daemon \
+starts or switches versions, so such a change is recorded as not detected within the watch's \
+timeout. The repair is the next order: an update to a new version, which links every placed \
+path again. When `ServiceBeat.drift` is built, the detection watch reads it instead."""
+records = """
+The operator's change, stamped by the runner when the operator confirms it; the first poll of \
+`hkctl hosts list` that shows hello unhealthy on the host, or the timeout; the repair's set, \
+stamped by its `set_desired` audit entry; and the first poll that shows the new version \
+installed by a succeeded update with hello healthy, stamped with the host's last heartbeat."""
+repetitions = 3
+states = [
+    "The coordinator showed {detection.n} of the hand-made changes, {detection.median} s after each was made (median, from {detection.min} s to {detection.max} s); {detection.missing} it did not show within the watch's timeout.",
+    "The next order repaired it {repair.median} s after SetDesired (from {repair.min} s to {repair.max} s).",
+]
+
+[hosts]
+says = "The one host hello is assigned to (label one host demo=yes and no other): host-1 in the records."
+pick = "service"
+service = "hello"
+exactly = 1
+
+[[param]]
+name = "change"
+says = "The hand-made change the operator makes, in words: for example, hello's running executable replaced by another build."
+
+[[param]]
+name = "version"
+says = "The hello version the repair updates to: a new one each repetition."
+per_repetition = true
+
+[[param]]
+name = "index"
+says = "The file holding that release's index.json, byte for byte as the release channel serves it."
+per_repetition = true
+
+[[step]]
+id = "change"
+do = "operator"
+says = "On the host {host}, make the hand-made change: {change}."
+
+[[step]]
+id = "detected"
+do = "watch"
+until = { what = "health", service = "hello", health = "unhealthy" }
+poll_secs = 2
+timeout_secs = 600
+on_timeout = "continue"
+
+[[step]]
+id = "repair"
+do = "call"
+args = ["releases", "set-desired"]
+audit = "set_desired"
+request = { service = "hello", desired = { version = "{version}" }, releaseIndex = "{file:index}", releaseIndexDigest = "{sha256:index}" }
+
+[[step]]
+id = "repaired"
+do = "watch"
+until = { what = "updated", service = "hello", version = "{version}", healthy = true }
+poll_secs = 1
+timeout_secs = 900
+
+[[measure]]
+id = "detection"
+kind = "span"
+says = "the operator's change to the coordinator showing hello unhealthy"
+unit = "s"
+from = "change/done"
+to = "detected/health"
+pick = "first"
+
+[[measure]]
+id = "undetected"
+kind = "count"
+says = "changes the watch did not see within its timeout"
+unit = "changes"
+of = "detected/timed-out"
+
+[[measure]]
+id = "repair"
+kind = "span"
+says = "SetDesired of the repair to the host's succeeded, healthy update"
+unit = "s"
+from = "repair/called"
+to = "repaired/updated"
+pick = "first"
