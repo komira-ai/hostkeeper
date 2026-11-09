@@ -29,8 +29,8 @@
 //!   step record; a force that stops a running update flags its record `forced`, and the runner
 //!   then closes it `forced_over` and launches nothing more.
 //! - [`SystemdLauncher`] is the [`StepLauncher`] of the host: one transient systemd unit per
-//!   step, with `RuntimeMaxSec=` and nothing else (a tool run also has no network,
-//!   [`StepLauncher::run_tool`]); [`capture`] bounds what is kept of a hook's output.
+//!   step, with `RuntimeMaxSec=` and nothing else (a tool run is offline unless a fetch, and may
+//!   be confined to listed paths, [`StepLauncher::run_tool`]); [`capture`] bounds what is kept of a hook's output.
 //!
 //! The crate names no service and reads no manifest: the runner is given the order and its
 //! bounds, and runs each step through the [`StepLauncher`] it is given.
@@ -63,6 +63,7 @@ pub use deadman::{DeadMan, Watch};
 pub use force::{ForceFailure, ForcePhase, ForceRecord, ForceVerdict};
 pub use launcher::{
     AdditiveCall, BUILTIN_EXIT, Bound, LaunchError, StepCall, StepExit, StepLauncher, ToolCall,
+    ToolExit, ToolNetwork,
 };
 pub use prune::{
     PRUNE_PREFIX, Protected, PruneInputs, PrunePlan, PruneReport, PruneStep, prune_plan,
