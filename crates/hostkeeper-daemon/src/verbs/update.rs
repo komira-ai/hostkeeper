@@ -273,10 +273,10 @@ pub(crate) fn prepare(
             entry,
         )?;
     }
-    let backend = order
+    let native = order
         .entry
         .as_ref()
-        .and_then(|entry| repository::backend_of_entry(entry).map(|backend| (backend, entry)));
+        .and_then(|entry| repository::native_of_entry(entry).map(|native| (native, entry)));
     let moved_back = same_installer(
         ctx,
         service,
@@ -284,12 +284,12 @@ pub(crate) fn prepare(
         &order.version,
         order.entry.as_ref(),
     )?;
-    let dir = match (moved_back, backend) {
+    let dir = match (moved_back, native) {
         // The move's rollback: the archive version the host keeps, from its sealed copy.
         (true, _) => VersionDir::new(sealed(ctx, service, &order.version)?),
-        (false, Some((backend, entry))) => {
+        (false, Some((native, entry))) => {
             ctx.repository()
-                .stage(backend, service, &order.version, entry)?
+                .stage(native, service, &order.version, entry)?
         }
         (false, None) => ctx
             .packages
@@ -316,9 +316,9 @@ pub(crate) fn prepare(
         }
     };
     // The runner's switch places this package, whether or not it replaces a release: its paths
-    // are checked now, before anything changes. A repository package places nothing: the
-    // package manager installs its files.
-    if backend.is_none() {
+    // are checked now, before anything changes. A native package places nothing: its installer
+    // installs its files.
+    if native.is_none() {
         claims_check(ctx, &manifest)?;
     }
     let declared = declared_params(&manifest.params)?;

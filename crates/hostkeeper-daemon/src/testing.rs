@@ -30,7 +30,7 @@ use hostkeeper_steps::{
 
 use crate::locks::{ServiceGuard, ServiceLocks};
 use crate::notify::ReadyNotifier;
-use crate::packages::{PackageError, Packages, VersionDir};
+use crate::packages::{PackageError, Packages, Pinned, VersionDir};
 use crate::prune::Prune;
 use crate::verb::PackageDigest;
 use crate::watchers::Watchers;
@@ -567,6 +567,7 @@ pub struct FakePackages {
     asked: Mutex<Vec<(String, String)>>,
     index_digests: Mutex<Vec<Option<String>>>,
     entries: Mutex<Vec<Option<Target>>>,
+    pinned: Mutex<BTreeMap<(String, String), Vec<u8>>>,
     swept: Mutex<Vec<String>>,
     notify: Mutex<Vec<Notice<String>>>,
 }
@@ -585,6 +586,7 @@ impl FakePackages {
             asked: Mutex::default(),
             index_digests: Mutex::default(),
             entries: Mutex::default(),
+            pinned: Mutex::default(),
             swept: Mutex::default(),
             notify: Mutex::default(),
         })
@@ -649,6 +651,13 @@ impl FakePackages {
         lock(&self.entries).clone()
     }
 
+    /// Serves `bytes` as the artifact of `service` whose entry's digest is `digest`
+    /// ([`Packages::pinned`]); an entry with another digest is `package_digest_mismatch`
+    /// ([`PackageError::DigestMismatch`]).
+    pub fn add_pinned(&self, service: &str, digest: &str, bytes: &[u8]) {
+        lock(&self.pinned).insert((service.to_owned(), digest.to_owned()), bytes.to_vec());
+    }
+
     /// Every service whose orphans were asked to be removed, in order.
     pub fn swept(&self) -> Vec<String> {
         lock(&self.swept).clone()
@@ -688,9 +697,42 @@ impl Packages for FakePackages {
         failure.map_or_else(seal, Err)
     }
 
+    /// The bytes [`FakePackages::add_pinned`] gave for the entry's digest, written to a file
+    /// under the service's package directory that is removed when the answer is dropped; the
+    /// failure [`FakePackages::fail`] set for the service at the entry's digest wins. Each ask is
+    /// one of [`FakePackages::asked`], keyed by the digest, and its entry one of
+    /// [`FakePackages::entries`].
+    fn pinned(&self, service: &ServiceName, entry: &Target) -> Result<Pinned, PackageError> {
+        let key = (service.to_string(), entry.digest.clone());
+        lock(&self.entries).push(Some(entry.clone()));
+        lock(&self.asked).push(key.clone());
+        if let Some(failure) = lock(&self.failures).get(&key).cloned() {
+            return Err(failure);
+        }
+        let bytes = lock(&self.pinned)
+            .get(&key)
+            .cloned()
+            .ok_or_else(|| PackageError::DigestMismatch(format!("no artifact of {}", key.1)))?;
+        let dir = self.root.join(service.as_str());
+        dir_0755(&dir);
+        let file = PinnedFile(dir.join(format!(".fetch-pinned-{}", entry.digest)));
+        fs::write(&file.0, bytes).map_err(|e| PackageError::Other(e.to_string()))?;
+        let path = file.0.clone();
+        Ok(Pinned::new(&path, Box::new(file)))
+    }
+
     fn remove_orphans(&self, service: &ServiceName) -> Result<(), PackageError> {
         lock(&self.swept).push(service.to_string());
         Ok(())
+    }
+}
+
+/// A file [`FakePackages::pinned`] wrote, removed when dropped.
+struct PinnedFile(PathBuf);
+
+impl Drop for PinnedFile {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
     }
 }
 

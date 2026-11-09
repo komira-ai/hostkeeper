@@ -16,8 +16,9 @@
 //!   `packaging/linux/nfpm.yaml` lays it out, in a signed apt repository on loopback; the
 //!   coordinator in process orders it by targets alone, the one `apt` entry of
 //!   `release targets` for the host's platform and no release index, as CI's set of a release
-//!   does from A24 on, and the daemon installs it through its entry. macOS (`archive`): no daemon
-//!   announces `macos-pkg` yet, so a Mac keeps the archive orders it had, set by the entry and the
+//!   does from A24 on, and the daemon installs it through its entry. macOS (`archive`): the rig's
+//!   Mac has no signers file, so neither daemon announces `macos-pkg` there, and it keeps the
+//!   archive orders it had, set by the entry and the
 //!   release index; the released daemon and this build both announce `target-v1` and take the
 //!   entry through the release channel.
 //! - **The rest is the end-to-end rig** (`tests/e2e/`): the real coordinator in process,

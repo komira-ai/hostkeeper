@@ -6,7 +6,8 @@
 //!
 //! A repository installer's service (`apt`) is recorded with its package
 //! ([`crate::repository::PlacedRecords`]), and its steps are the repository installer's over the
-//! installer's backend ([`Steps::Repository`]). A service recorded with an installer this build
+//! installer's backend ([`Steps::Repository`]); a `macos-pkg` service's are the `macos-pkg`
+//! installer's ([`Steps::MacosPkg`], [`crate::macos_pkg`]). A service recorded with an installer this build
 //! has no steps of (one a newer binary installed before a fallback, packages.md section 9.1) is
 //! refused with what is recorded: the daemon reports it and leaves it as it is.
 
@@ -35,6 +36,9 @@ pub enum Steps {
     /// A repository installer, whose steps the daemon runs over its backend
     /// ([`crate::repository`]).
     Repository(&'static dyn Backend),
+    /// The `macos-pkg` installer, whose steps the daemon runs over its own ports
+    /// ([`crate::macos_pkg`]).
+    MacosPkg,
 }
 
 impl Steps {
@@ -43,6 +47,7 @@ impl Steps {
         match self {
             Steps::Artifact(steps) => steps.installer(),
             Steps::Repository(backend) => backend.installer(),
+            Steps::MacosPkg => Installer::MacosPkg,
         }
     }
 }
@@ -53,6 +58,7 @@ pub fn steps_for(record: &PlacedRecord, service: &ServiceName) -> Result<Steps, 
     steps_of(installer)
         .map(Steps::Artifact)
         .or_else(|| backend_of(installer).map(Steps::Repository))
+        .or_else(|| (installer == Installer::MacosPkg).then_some(Steps::MacosPkg))
         .ok_or_else(|| unknown(service, installer.as_str()))
 }
 

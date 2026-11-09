@@ -26,10 +26,12 @@ use std::path::Path;
 use hostkeeper_config::manifest::{
     Expected, Hook, HostkeeperVersion, Manifest, ManifestRefusal, Timeouts,
 };
+use hostkeeper_install::macos_pkg;
 use hostkeeper_install::repository::TREE;
 use hostkeeper_install::repository::tree::hook_path;
 use hostkeeper_proto::FILE_DESCRIPTOR_SET;
 use hostkeeper_proto::hostkeeper::release::v1::{Param, Target, param};
+use hostkeeper_release::Installer;
 use prost::Message;
 use prost_reflect::{DescriptorPool, DynamicMessage, SerializeOptions};
 
@@ -172,10 +174,13 @@ pub fn of_entry(
         uninstall: bounds.uninstall.and_then(NonZeroU64::new),
     };
     // The package's own hook, at its fixed path in the sealed tree; none: the built-in steps.
-    let program = manifest
-        .package
-        .as_deref()
-        .map(|package| format!("{TREE}/{}", hook_path(package)))
+    // A `.pkg`'s is in the service's directory (`macos-pkg`), a `.deb`'s under its package's.
+    let fixed = match entry.installer == Installer::MacosPkg.as_str() {
+        true => Some(macos_pkg::hook::hook_path(expected.name.as_str())),
+        false => manifest.package.as_deref().map(hook_path),
+    };
+    let program = fixed
+        .map(|path| format!("{TREE}/{}", path.trim_start_matches('/')))
         .filter(|program| fs::symlink_metadata(dir.join(program)).is_ok_and(|m| m.is_file()));
     let params = manifest
         .params

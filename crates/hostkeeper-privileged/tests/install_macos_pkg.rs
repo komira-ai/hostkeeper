@@ -32,7 +32,15 @@
 //!   version found as drift and put back by the next install, rollback with no signature check,
 //!   and removal of a two-version fixture.
 //!
-//! The two tests run one after the other (`--test-threads=1`, which the workflow lint holds). It
+//! - `a_mac_daemon_announces_macos_pkg_with_its_signers_file_and_installs_the_ordered_pkg`: the
+//!   daemon's own order path in this process (`install_macos_pkg/daemon.rs`) on the Mac's
+//!   adapters and tools: with no signers file it announces `hostkeeper-archive` alone and defers
+//!   an order of the `.pkg` `installer_not_listed`, fetching nothing; with the signers file
+//!   (loaded by the daemon's loader) and the Mac's `installer` and `pkgutil` it announces
+//!   `macos-pkg`, refuses the unsigned `.pkg` at `stage` (`signature`, real `pkgutil`, nothing
+//!   staged or installed), installs the answered one, updates it, and uninstalls it.
+//!
+//! The tests run one after the other (`--test-threads=1`, which the workflow lint holds). It
 //! runs as root and says so when it does not: it never skips. Like the other device tests it is
 //! not counted by the coverage gate.
 
@@ -53,6 +61,9 @@ use hostkeeper_install::tools::{ToolError, ToolOutput};
 use hostkeeper_install::{Failure, HostTools, Reason, Tool, Tools};
 use hostkeeper_launchd::{Label, Launchctl, LaunchctlProcess};
 use hostkeeper_testkit::Scratch;
+
+#[path = "install_macos_pkg/daemon.rs"]
+mod daemon;
 
 const SERVICE: &str = "hk-a9-fixture";
 const IDENTIFIER: &str = "dev.hostkeeper.a9-fixture";
@@ -192,9 +203,11 @@ impl Tools for Signed {
     }
 }
 
-/// The fixture's content at `version`: 1.0.0 has `legacy.txt` and 1.1.0 drops it; 1.1.0 adds
-/// `lib/new.txt` in a directory 1.0.0 lacks, and its hook at the fixed path.
-fn payload(root: &Path, version: &str) {
+/// The fixture's content at `version`: 1.0.0 has `legacy.txt` and a later version drops it and
+/// adds `lib/new.txt` in a directory 1.0.0 lacks; 1.1.0 also has its hook at the fixed path.
+/// With `job`, it carries the plist of the job [`SERVICE`]; without, `/Library/LaunchDaemons`
+/// is only a directory above the service's files.
+fn payload(root: &Path, version: &str, job: bool) {
     let service = root.join("Library/Application Support/hk-a9-fixture");
     let mut dirs = vec![
         root.join("Library"),
@@ -203,24 +216,25 @@ fn payload(root: &Path, version: &str) {
         service.join("bin"),
         root.join("Library/LaunchDaemons"),
     ];
-    let mut files: Vec<(PathBuf, String, u32)> = vec![
-        (
-            service.join("bin/fixture"),
-            format!("#!/bin/sh\necho {version}\n"),
-            0o755,
-        ),
-        (
-            root.join("Library/LaunchDaemons/hk-a9-fixture.plist"),
-            format!(
-                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \
+    let mut files: Vec<(PathBuf, String, u32)> = vec![(
+        service.join("bin/fixture"),
+        format!("#!/bin/sh\necho {version}\n"),
+        0o755,
+    )];
+    let plist = (
+        root.join("Library/LaunchDaemons/hk-a9-fixture.plist"),
+        format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \
                  \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
                  <plist version=\"1.0\"><dict>\n<key>Label</key><string>{SERVICE}</string>\n\
                  <key>Disabled</key><true/>\n<key>ProgramArguments</key><array>\
                  <string>{SUPPORT}/bin/fixture</string></array>\n</dict></plist>\n"
-            ),
-            0o644,
         ),
-    ];
+        0o644,
+    );
+    if job {
+        files.push(plist);
+    }
     if version == "1.0.0" {
         files.push((
             service.join("legacy.txt"),
@@ -234,6 +248,8 @@ fn payload(root: &Path, version: &str) {
             "added in 1.1.0\n".into(),
             0o644,
         ));
+    }
+    if version == "1.1.0" {
         files.push((
             service.join("hostkeeper-hook"),
             "#!/bin/sh\nexit 0\n".into(),
@@ -260,9 +276,14 @@ struct Forms {
 }
 
 fn build_unsigned(dir: &Path, version: &str) -> Forms {
+    build_unsigned_with(dir, version, true)
+}
+
+/// [`build_unsigned`], the payload carrying the job's plist only when `job`.
+fn build_unsigned_with(dir: &Path, version: &str, job: bool) -> Forms {
     let root = dir.join(format!("root-{version}"));
     fs::create_dir(&root).expect("create the payload root");
-    payload(&root, version);
+    payload(&root, version, job);
     let component = dir.join(format!("component-{version}.pkg"));
     run(
         "/usr/bin/pkgbuild",
@@ -716,4 +737,106 @@ fn a_package_is_refused_unsigned_then_installed_updated_repaired_rolled_back_and
         launch_daemons_before,
         "/Library/LaunchDaemons is on a Mac to begin with"
     );
+}
+
+/// The daemon's verdict and reason of `reply`, which must be a finished order.
+fn finished(reply: hostkeeper_daemon::Reply) -> (hostkeeper_hook::Verdict, Option<String>) {
+    match reply {
+        hostkeeper_daemon::Reply::Finished {
+            verdict, reason, ..
+        } => (verdict, reason),
+        other => panic!("the order did not finish: {other:?}"),
+    }
+}
+
+/// Proves, with the daemon's order path on this Mac: a Mac without the signers file announces no
+/// `macos-pkg` and is ordered no `.pkg` (`installer_not_listed`, nothing fetched); with the file
+/// and the Mac's `installer` and `pkgutil`, it announces `macos-pkg`, refuses an unsigned `.pkg`
+/// at `stage` with the real `pkgutil` (`Failed`, `environment`, `signature`, nothing staged,
+/// installed or received), installs the `.pkg` it is ordered (the receipt, the files root's,
+/// the version sealed with its `target.json`), updates it (a file the new version drops is
+/// deleted), and uninstalls it (no receipt, no file, no version directory).
+///
+/// Catches: a Mac daemon that announces `macos-pkg` without its signers file, does not announce
+/// it with one, stages an unsigned package, or does not run the `.pkg` it is ordered through the
+/// installer's steps.
+#[test]
+fn a_mac_daemon_announces_macos_pkg_with_its_signers_file_and_installs_the_ordered_pkg() {
+    require_root();
+    let _undo = Undo;
+    let dir = scratch("pkg-daemon");
+    // The entries run no job, so the packages carry no job's plist.
+    let v100 = build_unsigned_with(dir.path(), "1.0.0", false);
+    let v120 = build_unsigned_with(dir.path(), "1.2.0", false);
+    let signers_file = dir.path().join("macos-pkg.toml");
+    let deferred = (
+        hostkeeper_hook::Verdict::Deferred {
+            retry_after_secs: Some(hostkeeper_daemon::entry::NOT_LISTED_RETRY_SECS),
+        },
+        Some("installer_not_listed".to_owned()),
+    );
+    let succeeded = (
+        hostkeeper_hook::Verdict::Succeeded {
+            promotion_pending: false,
+        },
+        None,
+    );
+
+    let without = daemon::daemon(&signers_file);
+    assert_eq!(without.names, ["hostkeeper-archive"], "no signers file");
+    let one = without.publish("1.0.0", &v100.component, true);
+    assert_eq!(
+        finished(without.daemon.order(&daemon::install("1.0.0", &one, 1))),
+        deferred
+    );
+    assert!(without.store.asked().is_empty(), "nothing fetched");
+    assert_eq!(receipt_version(), None);
+    drop(without);
+
+    fs::write(&signers_file, format!("signers = [\"{LEAF}\"]\n")).expect("the signers file");
+    fs::set_permissions(&signers_file, fs::Permissions::from_mode(0o644)).expect("its mode");
+    let mac = daemon::daemon(&signers_file);
+    assert_eq!(mac.names, ["hostkeeper-archive", "macos-pkg"]);
+
+    let unsigned = mac.publish("1.0.0", &v100.product, false);
+    let refused = finished(mac.daemon.order(&daemon::install("1.0.0", &unsigned, 1)));
+    assert_eq!(
+        refused,
+        (
+            hostkeeper_hook::Verdict::Failed {
+                phase: hostkeeper_hook::Phase::BeforeCommit,
+                class: hostkeeper_hook::Class::Environment,
+            },
+            Some("signature".to_owned())
+        )
+    );
+    assert_eq!(receipt_version(), None, "nothing installed");
+    let service = mac.packages.join(SERVICE);
+    assert!(!service.join("1.0.0").exists(), "nothing staged");
+
+    let one = mac.publish("1.0.0", &v100.component, true);
+    assert_eq!(
+        finished(mac.daemon.order(&daemon::install("1.0.0", &one, 2))),
+        succeeded
+    );
+    assert_eq!(receipt_version().as_deref(), Some("1.0.0"));
+    assert_installed(&format!("{SUPPORT}/bin/fixture"), 0o755);
+    assert_installed(&format!("{SUPPORT}/legacy.txt"), 0o644);
+    assert!(service.join("1.0.0/target.json").is_file());
+    assert!(service.join("1.0.0.seal").is_file());
+
+    let two = mac.publish("1.2.0", &v120.component, true);
+    assert_eq!(
+        finished(mac.daemon.order(&daemon::update("1.2.0", &two, 3))),
+        succeeded
+    );
+    assert_eq!(receipt_version().as_deref(), Some("1.2.0"));
+    assert_installed(&format!("{SUPPORT}/lib/new.txt"), 0o644);
+    assert_absent(&format!("{SUPPORT}/legacy.txt"));
+
+    assert_eq!(finished(mac.daemon.order(&daemon::uninstall(4))), succeeded);
+    assert_eq!(receipt_version(), None);
+    assert_absent(&format!("{SUPPORT}/bin/fixture"));
+    assert_absent(SUPPORT);
+    assert!(!service.exists(), "the version directories remain");
 }

@@ -165,8 +165,9 @@ packages are published.**
   (network-install.md), on the hop before any key is on the new host, against `[trusted_signers]`. So the pinned `gh`,
   `packaging/sigstore/trusted_root.json` and its refresh workflow `trusted-root.yml` stay, for it.
 - A `macos-pkg` entry carries no attestation, and A18 makes the coordinator refuse one, as it refuses one on a
-  repository entry (section 2.2): an attestation nobody checks must not look checked. No daemon lists `macos-pkg` yet
-  (A9 is not built), so nothing that shipped changes.
+  repository entry (section 2.2): an attestation nobody checks must not look checked. No daemon listed `macos-pkg`
+  when A18 shipped, so nothing that shipped changed; a Mac's daemon lists it from the release that runs its steps
+  (`crates/hostkeeper-daemon/src/macos_pkg.rs`), with the signers file loaded and `installer` and `pkgutil` present.
 
 ### 10.4 hostkeeper's own update
 

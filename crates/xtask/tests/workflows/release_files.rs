@@ -174,42 +174,57 @@ pub fn package_files(service: &str, version: &str, index_name: &str) -> BTreeMap
 }
 
 /// The targets `release targets` must write for `files` (from [`package_files`] of `service` and
-/// [`native_files`]) of the release `release`: per Linux platform, the native entry alone (an
-/// `apt` entry of the repository `komira-testing` pinned by the `.deb`'s SHA-256), its manifest
-/// the archive's; no list for macOS, while no daemon announces `macos-pkg`. As [`sorted`] JSON
-/// text.
+/// [`native_files`]) of the release `release`: per platform, the native entry alone (an `apt`
+/// entry of the repository `komira-testing` pinned by the `.deb`'s SHA-256, or on macOS a
+/// `macos-pkg` entry of the store `komira-testing` at the installers' testing path), its
+/// manifest the archive's. As [`sorted`] JSON text.
 pub fn targets(service: &str, release: &str, files: &BTreeMap<String, Vec<u8>>) -> String {
     let mut lists = serde_json::Map::new();
-    for platform in [Platform::LinuxArm64, Platform::LinuxX86_64] {
+    for platform in Platform::ALL {
         let entries = [native_entry(service, release, platform, files)];
         lists.insert(platform.to_string(), json!({"entries": entries}));
     }
     sorted(Value::Object(lists)).to_string()
 }
 
-/// The native entry `release targets` must write for `service`'s `.deb` of `files` at the release
-/// `release` on the Linux `platform`.
+/// The native entry `release targets` must write for `service`'s native package of `files` at
+/// the release `release` on `platform`.
 fn native_entry(
     service: &str,
     release: &str,
     platform: Platform,
     files: &BTreeMap<String, Vec<u8>>,
 ) -> Value {
-    let bytes = &files[&native_name(service, release, platform)];
-    json!({
-        "installer": "apt",
-        "digest": sha256(bytes),
-        "manifest": {
-            "package": service,
-            "hook": {
-                "timeoutSecs": {"cutover": "60", "verify": "30", "rollback": "60", "cleanup": "30"},
-                "verifyDeadlineSecs": "120",
-            },
-            "run": [run_unit(service, platform)],
-            "minHostkeeper": FLOOR,
-            "installerBounds": {"stageSecs": "600", "activateSecs": "300", "removeSecs": "300"},
+    let name = native_name(service, release, platform);
+    let bytes = &files[&name];
+    let package = match platform {
+        Platform::MacosArm64 => format!("dev.hostkeeper.{service}"),
+        _ => service.to_owned(),
+    };
+    let manifest = json!({
+        "package": package,
+        "hook": {
+            "timeoutSecs": {"cutover": "60", "verify": "30", "rollback": "60", "cleanup": "30"},
+            "verifyDeadlineSecs": "120",
         },
-        "repository": "komira-testing",
-        "packageVersion": release,
-    })
+        "run": [run_unit(service, platform)],
+        "minHostkeeper": FLOOR,
+        "installerBounds": {"stageSecs": "600", "activateSecs": "300", "removeSecs": "300"},
+    });
+    match platform {
+        Platform::MacosArm64 => json!({
+            "installer": "macos-pkg",
+            "locations": [{"store": "komira-testing", "locator": format!("hostkeeper/{release}/{name}")}],
+            "digest": sha256(bytes),
+            "bytes": bytes.len().to_string(),
+            "manifest": manifest,
+        }),
+        _ => json!({
+            "installer": "apt",
+            "digest": sha256(bytes),
+            "manifest": manifest,
+            "repository": "komira-testing",
+            "packageVersion": release,
+        }),
+    }
 }

@@ -22,8 +22,8 @@
 //! and the release channel, which is asked for nothing of hostkeeper
 //! (`across::Rig::assert_native`).
 //!
-//! **On a Mac the orders are the archive's still**: no daemon announces `macos-pkg` yet, so the
-//! Mac half of the rig (`across::mac`, `across::archive`) orders the one `hostkeeper-archive`
+//! **On a Mac the orders are the archive's still**: the rig's Mac has no signers file, so no
+//! daemon there announces `macos-pkg`, and the Mac half of the rig (`across::mac`, `across::archive`) orders the one `hostkeeper-archive`
 //! entry, with the release index for a daemon before `target-v1`; the pinned release and this
 //! build both announce `target-v1`, so each takes the entry: this file's Mac assertions look at
 //! the release channel (no index of the version fetched, the archive and the bundle fetched at

@@ -52,8 +52,9 @@ fn hostkeeper_files(version: &str) -> BTreeMap<String, Vec<u8>> {
     files
 }
 
-/// The targets the job must give for hostkeeper's release `version`: each Linux platform's
-/// native entry alone (docs/design/packages-native.md section 10.5, A24).
+/// The targets the job must give for hostkeeper's release `version`: each platform's native
+/// entry alone, a `.deb`'s for Linux and the signed `.pkg`'s for macOS (docs/design/
+/// packages-native.md section 10.5, A24).
 fn targets(version: &str) -> String {
     release_files::targets("hostkeeper", version, &hostkeeper_files(version))
 }
@@ -328,9 +329,9 @@ fn the_set_desired_job_runs_only_when_the_targets_job_says_newest() {
 
 #[test]
 fn a_release_is_set_with_its_native_targets_alone_and_no_channel_is_read() {
-    // Catches: targets that are not, per Linux platform of the release's own files,
-    // hostkeeper's `.deb` from the testing suite alone (an archive entry still in a list, a list
-    // for macOS, another digest); an index or its digest still given to `set-desired`; and a
+    // Catches: targets that are not, per platform of the release's own files, hostkeeper's
+    // `.deb` from the testing suite or its `.pkg` from the installers' testing directory alone
+    // (an archive entry still in a list, no list for macOS, another digest); an index or its digest still given to `set-desired`; and a
     // step that reads the release channel (no `curl` is on the runner's `PATH` here, so it
     // would fail).
     let site = Site::new("native", &["1.2.10"], &["v1.2.9", "v1.2.10"]);
@@ -385,16 +386,18 @@ fn of_several_releases_the_targets_are_the_newest_ones() {
 }
 
 #[test]
-fn a_release_missing_an_archive_or_a_deb_stops_the_job_before_the_set_and_its_pkg_is_not_read() {
-    // Catches: targets written for a release whose files do not all check out (a Linux archive,
-    // whose manifest the entry takes, or one of hostkeeper's `.deb`s or its bundle, whose entry
-    // would pin bytes no repository holds), or a failure of the targets step that the job goes
-    // on after: the set must not run with no targets. The installer pkg and its bundle are not
-    // read, since macOS has no list.
+fn a_release_missing_an_archive_a_deb_or_its_pkg_stops_the_job_before_the_set() {
+    // Catches: targets written for a release whose files do not all check out (an archive, whose
+    // manifest the entry takes, one of hostkeeper's `.deb`s or its installer pkg, or a bundle of
+    // any of them, whose entry would pin bytes no store holds), or a failure of the targets step
+    // that the job goes on after: the set must not run with no targets.
     for (n, withheld) in [
         "hostkeeper-1.2.10-linux-arm64.tar.zst",
+        "hostkeeper-1.2.10-macos-arm64.tar.zst",
         "hostkeeper_1.2.10_amd64.deb",
         "hostkeeper_1.2.10_arm64.deb.sigstore.json",
+        "hostkeeper-1.2.10-macos-arm64.pkg",
+        "hostkeeper-1.2.10-macos-arm64.pkg.sigstore.json",
     ]
     .into_iter()
     .enumerate()
@@ -408,17 +411,6 @@ fn a_release_missing_an_archive_or_a_deb_stops_the_job_before_the_set_and_its_pk
             "{withheld}"
         );
         assert!(!ended.sets_desired());
-    }
-    for (n, withheld) in [
-        "hostkeeper-1.2.10-macos-arm64.pkg",
-        "hostkeeper-1.2.10-macos-arm64.pkg.sigstore.json",
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let site = Site::new(&format!("withheld-pkg-{n}"), &["1.2.10"], &["v1.2.10"]);
-        site.withhold("1.2.10", withheld);
-        assert_eq!(run(&site), passed("1.2.10", true), "{withheld}");
     }
 }
 

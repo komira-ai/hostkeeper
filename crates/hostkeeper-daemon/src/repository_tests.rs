@@ -473,6 +473,7 @@ fn repository_with_units(scratch: &Scratch) -> (Repository, Arc<FakeUnitControl>
     let repository = Repository {
         launcher: ScriptedLauncher::new(),
         ports: crate::testing::repository_ports(&packages, scratch.path(), Repositories::default()),
+        packages: crate::testing::FakePackages::new(&packages),
         clock: FakeClock::new(),
         roots: roots(),
         fs: Arc::new(FaultFs::new(scratch.path(), log.clone())),

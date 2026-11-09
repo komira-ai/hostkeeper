@@ -99,9 +99,11 @@ makes that directory, owner only, on its first step.
    `cargo xtask release targets --service hello` from the release's assets
    (`docs/design/packages.md`, section 3.7; `docs/design/packages-native.md`, section 10.5): per
    Linux platform, hello's native entry alone, its `.deb` from the repository's `testing` suite
-   (docs/deploy/package-repositories.md), and no list for macOS while no daemon announces
-   `macos-pkg`. A daemon that announces `apt` is ordered it; any other is ordered nothing
-   (`installer_dropped`).
+   (docs/deploy/package-repositories.md), and for macOS its signed `.pkg`'s `macos-pkg` entry
+   alone. A daemon that announces `apt` (or, on a Mac, `macos-pkg`: its signers file loaded,
+   `/usr/sbin/installer` and `/usr/sbin/pkgutil` present) is ordered it; any other is ordered
+   nothing (`installer_dropped`, or `no_build_for_host` when the pick finds no build for the
+   host).
 3. **The rollout entry.** Append `examples/hello/rollout.toml` to the coordinator's rollout file
    (`--rollout-file`). Replace the role `farm` with the role of the hosts that run the proof,
    and restart the coordinator. `cargo test -p hostkeeper-coordinator --test hello_rollout`
@@ -229,14 +231,15 @@ real service depends on it. Dispatch it from main (Actions, `hello-desired`, `Ru
 
 The failing build is not offered: its proof (step 4) is suspended.
 
-Its first job, `release`, downloads hello's release index (`hello-index.json`), its Linux
-archives (whose `manifest.toml` the native entry takes) and its `.deb` for each Linux
-architecture with the `.deb`'s attestation bundle, and runs
-`cargo xtask release targets --service hello` on them: each Linux platform's list holds hello's
-native entry alone (docs/design/packages-native.md, section 10.5), and macOS has none. The verb
-refuses, naming every problem, an index that is not hello's at the version or does not list every
-platform, and an archive, manifest, `.deb` or bundle that does not check out; then nothing is
-set. Its second job calls `set-desired.yml` with the targets alone, so each host is ordered its
+Its first job, `release`, downloads hello's release index (`hello-index.json`), its archive for
+each platform (whose `manifest.toml` the native entry takes), its `.deb` for each Linux
+architecture with the `.deb`'s attestation bundle, and its signed `.pkg` with the `.pkg`'s bundle,
+and runs `cargo xtask release targets --service hello` on them: each Linux platform's list holds
+hello's `.deb` entry alone and the macOS list its `.pkg`'s `macos-pkg` entry alone
+(docs/design/packages-native.md, section 10.5), which a Mac whose daemon announces `macos-pkg`
+takes; a Mac that does not is ordered nothing. The verb refuses, naming every problem, an index
+that is not hello's at the version or does not list every platform, and an archive, manifest,
+`.deb`, `.pkg` or bundle that does not check out; then nothing is set. Its second job calls `set-desired.yml` with the targets alone, so each host is ordered its
 own platform's `.deb`. It is pinned to a hostkeeper release, as any service pins it
 (`docs/deploy/ci-client.md`, "Pinning hostkeeper"), with `wait` left at `true`: the job waits
 for the fleet. Once it has set, `hkctl releases get-release --service hello --version <version>`

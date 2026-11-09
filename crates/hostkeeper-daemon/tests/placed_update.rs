@@ -33,6 +33,7 @@ fn hooked_switch(
     let repository = Repository {
         launcher: rig.launcher.clone(),
         ports: rig.repository_ports(Default::default()),
+        packages: rig.store.clone(),
         clock: rig.clock.clone(),
         roots: roots.clone(),
         fs: Arc::clone(&fs),

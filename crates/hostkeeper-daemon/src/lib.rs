@@ -100,6 +100,7 @@ pub mod locks;
 pub mod mac;
 pub mod mac_config;
 pub mod mac_files;
+pub mod macos_pkg;
 pub mod node;
 pub mod notify;
 pub mod observer;

@@ -20,6 +20,9 @@
 //!   its own deadline, credential and redirects), the first bytes with the expected size and
 //!   SHA-256 winning, then the same verifier. It returns a [`entry::Proven`]: the same
 //!   [`prove::VerifiedArchive`] and the stores that gave other bytes.
+//! - [`entry::fetch_pinned`] is the artifact half of that alone, for an entry with no
+//!   attestation (a `macos-pkg` entry): the same sources, and no bundle, no verifier. It returns
+//!   an [`entry::Pinned`], the staging file with the entry's size and SHA-256.
 //! - [`stores::load`] reads `/etc/hostkeeper/stores.toml` once, at start; [`stores::Stores::channel`]
 //!   is the one store of a host without the file.
 //!

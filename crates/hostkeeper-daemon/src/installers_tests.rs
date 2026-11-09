@@ -60,10 +60,18 @@ fn a_recorded_installer_is_read_apt_has_its_backend_and_one_without_steps_is_ref
     record
         .installed
         .insert("web".to_owned(), InstalledEntry::new("macos-pkg"));
+    assert!(matches!(steps_for(&record, &web()), Ok(Steps::MacosPkg)));
+    assert_eq!(
+        steps_for(&record, &web()).map(|steps| steps.installer()),
+        Ok(Installer::MacosPkg)
+    );
+    record
+        .installed
+        .insert("web".to_owned(), InstalledEntry::new("oci-image"));
     assert_eq!(
         steps_for(&record, &web()).map(|steps| steps.installer()),
         Err(
-            "web is installed by the installer \"macos-pkg\", which this daemon has no steps of"
+            "web is installed by the installer \"oci-image\", which this daemon has no steps of"
                 .to_owned()
         )
     );

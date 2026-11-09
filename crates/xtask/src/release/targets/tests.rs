@@ -149,12 +149,23 @@ fn hello_manifest(package: &str, run: [&str; 2], units: &str) -> Value {
     })
 }
 
-/// The native entry the verb must write for hello's `.deb` of `dist` on the Linux `platform`.
+/// The native entry the verb must write for hello's package of `dist` on `platform`: its `.deb`,
+/// or on a Mac its `.pkg`.
 fn expected_native(dist: &Path, platform: Platform) -> Value {
     let name = Package::Hello
         .native_name(&release(), platform)
         .expect("a native package");
     let digest = file_sha256(&dist.join(&name)).expect("hash");
+    if platform == Platform::MacosArm64 {
+        let bytes = std::fs::metadata(dist.join(&name)).expect("the .pkg").len();
+        return json!({
+            "installer": "macos-pkg",
+            "locations": [{"store": "komira-testing", "locator": format!("hostkeeper/0.1.5/{name}")}],
+            "digest": digest,
+            "bytes": bytes.to_string(),
+            "manifest": hello_manifest("dev.hostkeeper.hello", ["hello.a", "hello.b"], "launchd"),
+        });
+    }
     json!({
         "installer": "apt",
         "digest": digest,
@@ -188,14 +199,14 @@ fn answered(lines: &[String]) -> Value {
 }
 
 /// Reads `targets` back as the coordinator does (proto3 JSON, no unknown field), checks them by
-/// its rules for `service`, and holds every platform's list to one `apt` entry: no
-/// `hostkeeper-archive` entry, which a release no longer lists, and no list for macOS.
+/// its rules for `service`, and holds every Linux platform's list to one `apt` entry and the
+/// `macos-arm64` list to one `macos-pkg` entry: no `hostkeeper-archive` entry, which a release
+/// no longer lists.
 fn read_back_as_the_coordinator(service: &str, targets: &Value) {
     let descriptor = TARGET_LIST.clone().expect("the descriptor");
     let options = DeserializeOptions::new().deny_unknown_fields(true);
     let mut lists = BTreeMap::new();
     let object = targets.as_object().expect("an object");
-    assert!(!object.contains_key("macos-arm64"), "{targets}");
     for (platform, list) in object {
         let read: TargetList =
             DynamicMessage::deserialize_with_options(descriptor.clone(), list.clone(), &options)
@@ -203,7 +214,12 @@ fn read_back_as_the_coordinator(service: &str, targets: &Value) {
                 .transcode_to()
                 .expect("a TargetList");
         let installers: Vec<&str> = read.entries.iter().map(|e| e.installer.as_str()).collect();
-        assert_eq!(installers, ["apt"], "{platform}");
+        let want = if platform == "macos-arm64" {
+            "macos-pkg"
+        } else {
+            "apt"
+        };
+        assert_eq!(installers, [want], "{platform}");
         lists.insert(platform.clone(), read);
     }
     let service = ServiceName::new(service).expect("a service");
@@ -211,41 +227,58 @@ fn read_back_as_the_coordinator(service: &str, targets: &Value) {
 }
 
 /// The native entry the verb must write for hostkeeper's own `.deb` on the Linux `platform` of
-/// `dist`: the daemon's `.deb` from the testing suite, with the archive's hook bounds, its run
-/// unit, and its floor `floor`.
+/// `dist`: the daemon's `.deb` from the testing suite, or on a Mac the installer from the
+/// installers' testing directory, with the archive's hook bounds, its run unit on Linux, and its
+/// floor `floor`.
 fn expected_hostkeeper_native(dist: &Path, platform: Platform, floor: &str) -> Value {
     let name = Package::Hostkeeper
         .native_name(&release(), platform)
         .expect("a native package");
+    let digest = file_sha256(&dist.join(&name)).expect("hash");
+    let mut manifest = json!({
+        "hook": {
+            "timeoutSecs": {
+                "prepare": "300", "cutover": "300", "verify": "300", "rollback": "300",
+                "cleanup": "300",
+            },
+            "verifyDeadlineSecs": "600",
+        },
+        "minHostkeeper": floor,
+        "installerBounds": {"stageSecs": "600", "activateSecs": "300", "removeSecs": "300"},
+    });
+    if platform == Platform::MacosArm64 {
+        manifest["package"] = json!("dev.hostkeeper.hostkeeper");
+        let bytes = std::fs::metadata(dist.join(&name)).expect("the .pkg").len();
+        return json!({
+            "installer": "macos-pkg",
+            "locations": [{"store": "komira-testing", "locator": format!("hostkeeper/0.1.5/{name}")}],
+            "digest": digest,
+            "bytes": bytes.to_string(),
+            "manifest": manifest,
+        });
+    }
+    manifest["package"] = json!("hostkeeper");
+    manifest["run"] = json!(["hostkeeper.service"]);
     json!({
         "installer": "apt",
-        "digest": file_sha256(&dist.join(&name)).expect("hash"),
-        "manifest": {
-            "package": "hostkeeper",
-            "hook": {
-                "timeoutSecs": {
-                    "prepare": "300", "cutover": "300", "verify": "300", "rollback": "300",
-                    "cleanup": "300",
-                },
-                "verifyDeadlineSecs": "600",
-            },
-            "run": ["hostkeeper.service"],
-            "minHostkeeper": floor,
-            "installerBounds": {"stageSecs": "600", "activateSecs": "300", "removeSecs": "300"},
-        },
+        "digest": digest,
+        "manifest": manifest,
         "repository": "komira-testing",
         "packageVersion": "0.1.5",
     })
 }
 
 #[test]
-fn hostkeeper_lists_its_deb_alone_on_linux_and_nothing_for_macos() {
+fn hostkeeper_lists_its_deb_on_linux_and_its_installer_on_macos_alone() {
     // Catches: hostkeeper's list with its archive entry still in it (stage 9 sets native entries
-    // alone, and the channel that serves the archive ends) or without its native entry, a list
-    // for macOS (no daemon announces `macos-pkg`), a `.deb` entry that is not a repository entry
-    // of the testing suite pinned by the daemon's `.deb`'s own SHA-256 at the release's version,
-    // a native manifest with another floor than the archive's (`OLDEST_READER`), the archive's
-    // placeholder hook command, or no run unit.
+    // alone, and the channel that serves the archive ends) or without its native entry, no list
+    // for macOS (a Mac whose daemon announces `macos-pkg` is then ordered nothing), a `.deb`
+    // entry that is not a repository entry of the testing suite pinned by the daemon's `.deb`'s
+    // own SHA-256 at the release's version, an installer entry whose location is not where the
+    // installers' testing directory holds it, that carries an attestation, a repository or a
+    // package version, or names hello's identifier, a native manifest with another floor than
+    // the archive's (`OLDEST_READER`), the archive's placeholder hook command, or no run unit
+    // on Linux.
     let (_root, dist) = dist("targets-hostkeeper");
     built(&dist, Package::Hostkeeper);
     let floor = release().min(OLDEST_READER).to_string();
@@ -257,6 +290,7 @@ fn hostkeeper_lists_its_deb_alone_on_linux_and_nothing_for_macos() {
         json!({
             "linux-arm64": entry(Platform::LinuxArm64),
             "linux-x86_64": entry(Platform::LinuxX86_64),
+            "macos-arm64": entry(Platform::MacosArm64),
         })
     );
     read_back_as_the_coordinator("hostkeeper", &got);
@@ -265,15 +299,28 @@ fn hostkeeper_lists_its_deb_alone_on_linux_and_nothing_for_macos() {
 #[test]
 fn hostkeepers_native_entries_name_the_package_its_daemon_takes_as_its_own() {
     // Catches: a native entry of hostkeeper whose package its daemon does not take as its own
-    // package (a `.deb` package other than `hostkeeper`), so the daemon would refuse the
-    // bootstrap package's scripts and paths at stage; or a run unit that is not a unit file of
-    // the daemon's own `.deb`, which stage refuses.
+    // package (a `.pkg` identifier other than the daemon's launchd label, which the installer
+    // builder and the daemon share, or a `.deb` package other than `hostkeeper`), so the daemon
+    // would refuse the bootstrap package's scripts and paths at stage; or a run unit that is not
+    // a unit file of the daemon's own `.deb`, which stage refuses.
     let (_root, dist) = dist("targets-hostkeeper-own");
     built(&dist, Package::Hostkeeper);
     let got = answered(&targets(&request(&dist, Package::Hostkeeper, None)).expect("the targets"));
     for (platform, list) in got.as_object().expect("an object") {
         let native = &list["entries"][0]["manifest"];
         let package = native["package"].as_str().expect("a package");
+        if platform == "macos-arm64" {
+            assert!(
+                hostkeeper_install::macos_pkg::own::is_own("hostkeeper", package),
+                "{package}"
+            );
+            assert_eq!(
+                native.get("run"),
+                None,
+                "a Mac's daemon is the installer's job"
+            );
+            continue;
+        }
         assert_eq!(package, "hostkeeper", "{platform}");
         let run = native["run"].as_array().expect("run units");
         assert!(!run.is_empty(), "{platform}");
@@ -288,10 +335,12 @@ fn hostkeepers_native_entries_name_the_package_its_daemon_takes_as_its_own() {
 }
 
 #[test]
-fn hello_lists_its_deb_alone_on_linux_and_nothing_for_macos() {
-    // Catches: hello's list with its archive entry still in it or without its native entry, a
+fn hello_lists_its_deb_on_linux_and_its_pkg_on_macos_alone() {
+    // Catches: hello's list with its archive entry still in it or without its native entry, no
     // list for macOS, a `.deb` entry that is not a repository entry of the testing suite pinned
-    // by the `.deb`'s own SHA-256 at the release's version, and a native manifest that is not
+    // by the `.deb`'s own SHA-256 at the release's version, a `.pkg` entry whose location is not
+    // where the installers' testing directory holds it or that carries an attestation, and a
+    // native manifest that is not
     // the archive's own (its hook bounds, run units, health URL, params and floor) with no hook
     // command, the package's name and the installer's bounds.
     let (_root, dist) = dist("targets-hello");
@@ -303,6 +352,7 @@ fn hello_lists_its_deb_alone_on_linux_and_nothing_for_macos() {
         json!({
             "linux-arm64": entry(Platform::LinuxArm64),
             "linux-x86_64": entry(Platform::LinuxX86_64),
+            "macos-arm64": entry(Platform::MacosArm64),
         })
     );
     read_back_as_the_coordinator("hello", &got);
@@ -553,7 +603,8 @@ fn a_file_that_is_not_a_zstd_tar_is_refused() {
 #[test]
 fn every_problem_of_the_release_is_named_at_once() {
     // Catches: an archive of other bytes than the index lists read for its manifest, a missing
-    // archive, or a native package's bundle over the daemon's cap given an entry; or the verb
+    // archive, a native package's bundle over the daemon's cap given an entry, a Mac's missing
+    // `.pkg` or its missing bundle passed over; or the verb
     // stopping at the first problem, so a release with several is fixed one run at a time. An
     // archive's own bundle is no longer read: no entry carries it.
     let (_root, dist) = dist("targets-every-problem");
@@ -564,13 +615,12 @@ fn every_problem_of_the_release_is_named_at_once() {
     // linux-x86_64: no archive and no archive bundle.
     std::fs::remove_file(dist.join(name(Platform::LinuxX86_64))).expect("remove");
     std::fs::remove_file(dist.join(bundle_of(&name(Platform::LinuxX86_64)))).expect("remove");
-    // linux-arm64 too: its .deb's bundle over 1 MiB. macos-arm64: no .pkg and no bundle, which
-    // are not read, since macOS has no list.
+    // linux-arm64 too: its .deb's bundle over 1 MiB. macos-arm64: no .pkg and no bundle.
     let deb = Package::Hello
         .native_name(&release(), Platform::LinuxArm64)
         .expect("a .deb");
-    let pkg_bundle = bundle_of(&deb);
-    std::fs::write(dist.join(&pkg_bundle), vec![b' '; (1 << 20) + 1]).expect("rewrite");
+    let deb_bundle = bundle_of(&deb);
+    std::fs::write(dist.join(&deb_bundle), vec![b' '; (1 << 20) + 1]).expect("rewrite");
     let pkg = Package::Hello
         .native_name(&release(), Platform::MacosArm64)
         .expect("a .pkg");
@@ -596,9 +646,16 @@ fn every_problem_of_the_release_is_named_at_once() {
                 arm.sha256.as_str()
             ),
             format!(
-                "{pkg_bundle}: longer than 1048576 bytes, the most the daemon reads of a bundle"
+                "{deb_bundle}: longer than 1048576 bytes, the most the daemon reads of a bundle"
             ),
             "hello-0.1.5-linux-x86_64.tar.zst: missing, but the index lists it".to_owned(),
+            format!(
+                "{pkg}: missing: the release ships the native package of every platform it lists"
+            ),
+            format!(
+                "{}: missing: every native package carries its attestation bundle",
+                bundle_of(&pkg)
+            ),
         ]))
     );
 }

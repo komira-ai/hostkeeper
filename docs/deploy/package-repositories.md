@@ -111,14 +111,19 @@ packages (item A23) are the daemon's `hostkeeper_<version>_<arch>.deb` and the i
 `hostkeeper-<version>-macos-arm64.pkg`, the packages a host is set up from.
 
 `cargo xtask release targets` (`--service hostkeeper`, the default, and `--service hello` and
-`--service mdm`) lists, for each Linux platform, the native entry alone (docs/design/packages-native.md,
-section 10.5, A24): an `apt` entry of the host's repository entry `komira-testing`, the `testing` suite
+`--service mdm`) lists, for each platform, the native entry alone (docs/design/packages-native.md,
+section 10.5, A24): for each Linux platform an `apt` entry of the host's repository entry `komira-testing`, the `testing` suite
 above (`/etc/hostkeeper/repositories/komira-testing.sources`, placed by host setup, which checks the
 directory with `hostkeeper check-repositories` before and after it places it), at the release's
-version, pinned by the `.deb`'s SHA-256. It writes no `hostkeeper-archive` entry, and no list for macOS
-while no daemon announces `macos-pkg`: the release's `.pkg`s are still published to the store, and a
-Mac (none is enrolled) would show `no_target`. hello's failing build is refused by name: it has no
-package here.
+version, pinned by the `.deb`'s SHA-256; for `macos-arm64` (hostkeeper and hello; mdm has no
+macOS platform) a `macos-pkg` entry of the signed `.pkg`, located in the store `komira-testing` at
+`hostkeeper/<version>/<file>` (the installers' `testing` directory, rooted at `pkg/`) and pinned by
+its SHA-256 and size. It writes no `hostkeeper-archive` entry, and the macOS list carries the
+`.pkg`'s entry alone, which a Mac whose daemon announces `macos-pkg` (its signers file
+`/etc/hostkeeper/macos-pkg.toml` loaded, `/usr/sbin/installer` and `/usr/sbin/pkgutil` present)
+takes; a Mac that does not announce it is ordered nothing (`installer_dropped` or
+`no_build_for_host`, as the coordinator's pick gives). hello's failing build is refused by name: it
+has no package here.
 
 hostkeeper's entries carry the floor of its archive (`min_hostkeeper`, the oldest daemon that reads
 the release) and no hook: its daemon updates itself through its package with built-in steps

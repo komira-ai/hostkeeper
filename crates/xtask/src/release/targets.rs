@@ -1,29 +1,38 @@
 //! `release targets`: the `targets` of the set that deploys one package of a release, read from
 //! the release's assets (docs/design/packages.md, section 3.7; docs/design/packages-native.md,
-//! section 10.5, item A24). For each Linux platform the package's release index lists, one native
+//! section 10.5, item A24). For each platform the package's release index lists, one native
 //! entry and nothing else: a release is set with native entries alone, with no
 //! `hostkeeper-archive` entry and no index, so a host installs it from the project's package
-//! repository (stage 9 of packages-native.md section 10.6).
+//! repository (a Linux host) or from the signed installer (a Mac), stage 9 of packages-native.md
+//! section 10.6.
 //!
-//! **macOS is left out of every list.** No daemon announces `macos-pkg` yet, so a Mac could take
-//! no entry of a `macos-arm64` list; with none, a Mac shows `no_target` (packages-native.md
-//! section 10.8, A24's condition; no Mac is enrolled). The release still ships its `.pkg`s, and
-//! they are not read here.
+//! **The `macos-arm64` list is the signed `.pkg`'s `macos-pkg` entry alone.** A Mac whose daemon
+//! announces `macos-pkg` (its signers file `/etc/hostkeeper/macos-pkg.toml` loaded, and
+//! `/usr/sbin/installer` and `/usr/sbin/pkgutil` present) takes it; a Mac that does not announce
+//! it is ordered nothing (the coordinator's pick gives it `installer_dropped` or
+//! `no_build_for_host`). The `.pkg` is the release's signed installer; its location is the
+//! Mac's store of the installers' `testing` directory.
 //!
-//! The native packages are the release's `.deb`s ([`Package::native_name`]), which the release
-//! publishes to the project's repository, suite `testing` ([`crate::channels::spec`]).
-//! hostkeeper's is the daemon's `.deb`, the package that bootstraps a host (section 10.4).
+//! The native packages are the release's `.deb`s and `.pkg`s ([`Package::native_name`]), which
+//! the release publishes to the project's repository, suite `testing`, and to the installers'
+//! `testing` directory ([`crate::channels::spec`]). hostkeeper's are the daemon's `.deb` and the
+//! installer, the packages that bootstrap a host (section 10.4).
 //!
 //! ```text
-//! entry    installer apt, repository komira-testing (the host's entry of the testing suite),
-//!          package_version the release's, digest the .deb's SHA-256 (the pin); no location,
-//!          no size, no attestation
+//! Linux   installer apt, repository komira-testing (the host's entry of the testing suite),
+//!         package_version the release's, digest the .deb's SHA-256 (the pin); no location,
+//!         no size, no attestation
+//! macOS   installer macos-pkg, location komira-testing hostkeeper/<release>/<service>-<release>-
+//!         macos-arm64.pkg (the Mac's store of the testing directory, rooted at pkg/),
+//!         digest and bytes the .pkg's; no attestation (the key and the pin bind the bytes,
+//!         packages-native.md section 10.3), no repository, no package version
 //! manifest the archive's own manifest.toml as an entry's manifest: its hook without the
-//!          command (the package's hook is its program at the fixed path; hostkeeper's package
-//!          has none, and its daemon runs built-in steps), its run units, health URL, params and
-//!          min_hostkeeper (hostkeeper's: `OLDEST_READER`, as its archive's); `package` the
-//!          package's name (`hostkeeper`, `hello`, `mdm`); the installer's bounds
-//!          ([`INSTALLER_BOUNDS`])
+//!         command (the package's hook is its program at the fixed path; hostkeeper's package
+//!         has none, and its daemon runs built-in steps), its run units, health URL, params and
+//!         min_hostkeeper (hostkeeper's: `OLDEST_READER`, as its archive's); `package` the
+//!         package's name (`hostkeeper`, `hello`, `mdm`) or the .pkg's identifier (hostkeeper's
+//!         the daemon's launchd label, hello's its own); the installer's bounds
+//!         ([`INSTALLER_BOUNDS`])
 //! ```
 //!
 //! **The archive is read, not listed.** Until the archive builders are deleted (A28), the
@@ -38,13 +47,14 @@
 //! it.
 //!
 //! Each native package must be a regular file whose bundle lists its SHA-256, and a `.deb`'s
-//! `control` must name the service, the version and the architecture.
+//! `control` must name the service, the version and the architecture; a `.pkg` has no control
+//! to read.
 //!
 //! Everything is checked before anything is written, and a refusal lists every problem found:
 //! the index as `release channel-stage` checks it (canonical, of the service at the version);
 //! that it lists every platform the package is released for; each archive a regular file with
 //! the index's size and SHA-256, holding a `manifest.toml` of the service, version and platform
-//! with a `min_hostkeeper`; each native package as above. Then the entries pass the
+//! with a `min_hostkeeper`; each native package, a Mac's `.pkg` included, as above. Then the entries pass the
 //! coordinator's checks of a set's targets and the daemon's of each entry's manifest for its
 //! installer (crate `hostkeeper-release`). The answer is one line, `targets=<JSON>`, the targets
 //! as proto3 canonical JSON keyed by platform, appended to `--output` when given (on Actions,
@@ -61,7 +71,7 @@ use hostkeeper_config::manifest::{HostkeeperVersion, MAX_MANIFEST_BYTES};
 use hostkeeper_config::names::{ServiceName, Version as ServiceVersion};
 use hostkeeper_config::platform::Platform as IndexPlatform;
 use hostkeeper_proto::hostkeeper::release::v1::{
-    Hook, InstallerBounds, Manifest, Param, StepBounds, Target, TargetList, param,
+    Hook, InstallerBounds, Location, Manifest, Param, StepBounds, Target, TargetList, param,
 };
 use hostkeeper_release::{Installer, manifest, target};
 use prost_reflect::{DescriptorPool, DynamicMessage, MessageDescriptor};
@@ -72,15 +82,18 @@ use super::channel_stage::{
     regular_file,
 };
 use super::contract::{Package, Platform, Version, bundle_of};
-use super::{Error, answer};
+use super::native::pkg::IDENTIFIER as HELLO_PKG_IDENTIFIER;
+use super::{Error, answer, macos_pkg};
 use crate::channels::apt::{control, deb};
+use crate::channels::spec;
 
 /// The name of the archive's manifest, at the top of the archive.
 const MANIFEST_ENTRY: &str = "manifest.toml";
 
-/// The repository entry a native entry names: the host's entry of the suite `testing`
-/// (packages-repositories.md section 3.1). A release is set from `testing`; its promotion to
-/// `stable` copies the same bytes, so the pin is the same from either.
+/// The channel a native entry names: on Linux the host's repository entry of the suite
+/// `testing` (packages-repositories.md section 3.1), on a Mac its store of the installers'
+/// `testing` directory. A release is set from `testing`; its promotion to `stable` copies the
+/// same bytes, so the pin is the same from either.
 pub(crate) const TESTING: &str = "komira-testing";
 
 /// The bounds of a native installer's own steps, in seconds: the fetch and the checks of
@@ -153,19 +166,17 @@ pub(crate) fn targets(request: &Request) -> Result<Vec<String>, Error> {
             released.join(", ")
         )));
     }
-    // macOS is left out of every list: no daemon announces `macos-pkg` yet, so a Mac could take
-    // no entry of it (with no list, its hosts show `no_target`; none is enrolled).
+    // Every list is its platform's native entry alone: a Linux platform's `.deb`, the Mac's
+    // signed `.pkg`.
     let natives = index
         .packages()
         .iter()
-        .filter_map(|entry| {
+        .map(|entry| {
             let platform = release_platform(entry.platform);
-            let (arch, _) = platform.linux_arches()?;
-            Some(
-                package
-                    .native_name(&request.version, platform)
-                    .map(|name| (entry, arch, name)),
-            )
+            let arch = platform.linux_arches().map(|(deb, _)| deb);
+            package
+                .native_name(&request.version, platform)
+                .map(|name| (entry, arch, name))
         })
         .collect::<Option<Vec<_>>>()
         .ok_or_else(|| {
@@ -240,7 +251,7 @@ fn native_of(
     request: &Request,
     service: &ServiceName,
     platform: IndexPlatform,
-    (arch, name): (&str, &str),
+    (arch, name): (Option<&str>, &str),
     archive: Option<&(String, toml::Table)>,
     problems: &mut Vec<String>,
 ) -> Result<Option<(Installer, Target)>, Error> {
@@ -263,7 +274,8 @@ fn native_of(
         }
     }
     let version = package.version_text(&request.version);
-    if measured.is_some() {
+    // Only a `.deb` has a control to read; a `.pkg` is held to its bundle and its digest.
+    if let (Some(arch), Some(_)) = (arch, &measured) {
         let bytes = std::fs::read(dir.join(name))
             .map_err(Error::io(format!("read {}", dir.join(name).display())))?;
         problems.extend(
@@ -272,35 +284,59 @@ fn native_of(
                 .map(|why| format!("{name}: {why}")),
         );
     }
-    // A `.deb` is installed by its control's `Package`, the service.
-    let manifest =
-        match archive.map(|(floor, table)| native_manifest(table, service.as_str(), floor)) {
-            Some(Ok(manifest)) => manifest,
-            Some(Err(why)) => {
-                let archive = package.package_name(&request.version, release_platform(platform));
-                problems.push(format!("{archive}: {MANIFEST_ENTRY}: {why}"));
-                return Ok(None);
-            }
-            None => return Ok(None),
-        };
+    // A `.deb` is installed by its control's `Package`, the service; a `.pkg` by its identifier:
+    // hostkeeper's installer's is the daemon's launchd label, which its daemon takes as its own
+    // package, and hello's is its own (mdm has no `.pkg`).
+    let (installer, package_name) = match (arch, package) {
+        (Some(_), _) => (Installer::Apt, service.as_str().to_owned()),
+        (None, Package::Hostkeeper) => (Installer::MacosPkg, macos_pkg::identifier()),
+        (None, _) => (Installer::MacosPkg, HELLO_PKG_IDENTIFIER.to_owned()),
+    };
+    let manifest = match archive.map(|(floor, table)| native_manifest(table, &package_name, floor))
+    {
+        Some(Ok(manifest)) => manifest,
+        Some(Err(why)) => {
+            let archive = package.package_name(&request.version, release_platform(platform));
+            problems.push(format!("{archive}: {MANIFEST_ENTRY}: {why}"));
+            return Ok(None);
+        }
+        None => return Ok(None),
+    };
     let Some(measured) = measured else {
         return Ok(None);
     };
-    let installer = Installer::Apt;
-    Ok(Some((
-        installer,
-        Target {
-            installer: installer.as_str().to_owned(),
-            locations: Vec::new(),
-            digest: measured.sha256,
-            // A repository entry is pinned by its digest alone: no size, no location.
-            bytes: 0,
-            attestation: None,
-            manifest: Some(manifest),
-            repository: Some(TESTING.to_owned()),
-            package_version: Some(version),
-        },
-    )))
+    Ok(Some(match installer {
+        Installer::Apt => (
+            installer,
+            Target {
+                installer: installer.as_str().to_owned(),
+                locations: Vec::new(),
+                digest: measured.sha256,
+                // A repository entry is pinned by its digest alone: no size, no location.
+                bytes: 0,
+                attestation: None,
+                manifest: Some(manifest),
+                repository: Some(TESTING.to_owned()),
+                package_version: Some(version),
+            },
+        ),
+        _ => (
+            installer,
+            Target {
+                installer: installer.as_str().to_owned(),
+                locations: vec![Location {
+                    store: TESTING.to_owned(),
+                    locator: spec::HOSTKEEPER.pkg_locator(&request.version.to_string(), name),
+                }],
+                digest: measured.sha256,
+                bytes: measured.bytes,
+                attestation: None,
+                manifest: Some(manifest),
+                repository: None,
+                package_version: None,
+            },
+        ),
+    }))
 }
 
 /// The release's platform of the index's `platform`.

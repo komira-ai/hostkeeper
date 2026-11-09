@@ -361,6 +361,35 @@ fn the_hook_is_the_packages_program_only_when_it_is_a_regular_file() {
     assert!(command(&entry()).is_empty(), "a directory is no program");
 }
 
+/// Catches: a `macos-pkg` version's hook looked for under the `.deb`'s path, or under its
+/// package identifier. A `.pkg`'s hook is at `tree/Library/Application Support/<service>/
+/// hostkeeper-hook` (the service's directory, whatever the identifier), and the `.deb`'s path in
+/// the same tree is not its hook.
+#[test]
+fn a_macos_pkg_versions_hook_is_in_the_services_directory() {
+    let dir = scratch("target-pkg-hook");
+    let pkg = with_manifest(|manifest| manifest.package = Some("dev.web.server".to_owned()));
+    let pkg = Target {
+        installer: "macos-pkg".to_owned(),
+        ..pkg
+    };
+    let command = |entry: &Target| of(dir.path(), entry).expect("accepted").hook.command;
+    let deb_path = dir.path().join("tree/usr/lib/dev.web.server");
+    fs::create_dir_all(&deb_path).expect("tree");
+    fs::write(deb_path.join("hostkeeper-hook"), b"#!/bin/sh\n").expect("hook");
+    assert!(
+        command(&pkg).is_empty(),
+        "the .deb's path is no .pkg's hook"
+    );
+    let home = dir.path().join("tree/Library/Application Support/web");
+    fs::create_dir_all(&home).expect("tree");
+    fs::write(home.join("hostkeeper-hook"), b"#!/bin/sh\n").expect("hook");
+    assert_eq!(
+        command(&pkg),
+        vec!["tree/Library/Application Support/web/hostkeeper-hook".to_owned()]
+    );
+}
+
 /// Proves each kind of param becomes the TOML scalar of the same type, and a param with no value
 /// refuses the entry naming `params`.
 #[test]

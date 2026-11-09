@@ -784,7 +784,7 @@ fn a_service_of_an_installer_without_steps_prunes_nothing() {
     let placed = rig.scratch.path().join("placed/placed.json");
     fs::write(
         &placed,
-        r#"{"schema":1,"paths":{},"installed":{"web":{"installer":"macos-pkg"}}}"#,
+        r#"{"schema":1,"paths":{},"installed":{"web":{"installer":"oci-image"}}}"#,
     )
     .expect("placed.json");
     let before = snapshot(&rig.packages);
@@ -793,7 +793,7 @@ fn a_service_of_an_installer_without_steps_prunes_nothing() {
     assert_eq!(
         lines(&alerts),
         [
-            "hostkeeper daemon: level=error alert=prune_failed service=web: the old versions of web could not be pruned: web is installed by the installer \"macos-pkg\", which this daemon has no steps of"
+            "hostkeeper daemon: level=error alert=prune_failed service=web: the old versions of web could not be pruned: web is installed by the installer \"oci-image\", which this daemon has no steps of"
         ]
     );
 

@@ -250,7 +250,7 @@ fn dispatch(site: &Site, version: &str) -> Ended {
 }
 
 /// What `set-desired` must be given for the release [`RELEASE`]: its version and the targets of
-/// hello's own `.deb`s alone.
+/// hello's own `.deb`s and `.pkg` alone.
 fn set_with() -> Ended {
     Ended::Set(BTreeMap::from([
         (
@@ -264,8 +264,8 @@ fn set_with() -> Ended {
 #[test]
 fn a_dispatch_sets_hellos_version_with_its_native_targets_alone() {
     // Catches: the job reading the failing build's index or archives, targets not hello's own
-    // `.deb` alone per Linux platform (an archive entry still in a list, a list for macOS, the
-    // `.deb`s not downloaded or not read), an index or its digest still given to `set-desired`,
+    // native package alone per platform (an archive entry still in a list, no list for macOS,
+    // the `.deb`s or the `.pkg` not downloaded or not read), an index or its digest still given to `set-desired`,
     // and the job's outputs not the ones set-desired is given.
     let site = Site::new("hello");
     assert_eq!(dispatch(&site, RELEASE), set_with());
@@ -290,16 +290,19 @@ fn a_version_that_is_not_a_release_stops_the_job_before_any_download() {
 }
 
 #[test]
-fn a_release_without_its_index_a_linux_archive_or_a_deb_stops_at_the_download() {
+fn a_release_without_its_index_an_archive_a_deb_or_its_pkg_stops_at_the_download() {
     // Catches: a download that goes on past a missing file (curl without `--fail-early` ends
-    // with the last transfer's status), and so a set made without the index, a Linux archive
-    // whose manifest the entry takes, or a platform's `.deb` or its bundle (its hosts would
+    // with the last transfer's status), and so a set made without the index, an archive whose
+    // manifest the entry takes, or a platform's `.deb` or `.pkg` or its bundle (its hosts would
     // never be ordered).
     for (n, missing) in [
         "hello-index.json",
         "hello-1.2.3-linux-arm64.tar.zst",
+        "hello-1.2.3-macos-arm64.tar.zst",
         "hello_1.2.3_arm64.deb",
         "hello_1.2.3_amd64.deb.sigstore.json",
+        "hello-1.2.3-macos-arm64.pkg",
+        "hello-1.2.3-macos-arm64.pkg.sigstore.json",
     ]
     .into_iter()
     .enumerate()
@@ -316,14 +319,11 @@ fn a_release_without_its_index_a_linux_archive_or_a_deb_stops_at_the_download() 
 
 #[test]
 fn a_release_without_what_no_list_carries_is_still_set() {
-    // Catches: the job downloading or reading files no entry is made of: macOS's archive and
-    // installer (macOS has no list), and the archives' bundles (no archive entry is written).
+    // Catches: the job downloading or reading files no entry is made of: the archives' bundles
+    // (no archive entry is written).
     let site = Site::new("unread");
     for missing in [
-        "hello-1.2.3-macos-arm64.tar.zst",
         "hello-1.2.3-macos-arm64.tar.zst.sigstore.json",
-        "hello-1.2.3-macos-arm64.pkg",
-        "hello-1.2.3-macos-arm64.pkg.sigstore.json",
         "hello-1.2.3-linux-arm64.tar.zst.sigstore.json",
         "hello-1.2.3-linux-x86_64.tar.zst.sigstore.json",
     ] {

@@ -342,7 +342,8 @@ jobs:
   #          release targets`, compiled from the release's own commit (the workflow lint,
   #          `release_ref.rs`, holds its command line to that of a published release), writes
   #          the targets from those files: per Linux platform, hostkeeper's .deb in `testing`
-  #          alone, pinned by its SHA-256; no list for macOS. Last, it checks
+  #          alone, pinned by its SHA-256; for macOS, its signed .pkg alone (a Mac whose daemon
+  #          announces `macos-pkg` takes it; any other is ordered nothing). Last, it checks
   #          that no newer release is published already (a late run of an older commit): then
   #          set-desired is skipped, since setting this version would move the fleet back.
   targets:
@@ -376,7 +377,8 @@ jobs:
           name: release-${{ steps.newest.outputs.tag }}
           path: dist
       # Per Linux platform, from the checked files: hostkeeper's .deb alone, pinned by its
-      # SHA-256, its manifest the archive's own; no list for macOS.
+      # SHA-256, and for macOS its signed .pkg alone, pinned by its SHA-256 and size, its
+      # manifest the archive's own.
       - name: The targets of the release
         id: targets
         env:

@@ -21,13 +21,15 @@ fn holding(entries: &[(&str, &str)]) -> PlacedRecord {
     record
 }
 
-/// Each installer's row: `hostkeeper-archive` has every release, `apt` the release its steps
-/// came in, and an installer this release has no steps of has no row.
+/// Each installer's row: `hostkeeper-archive` has every release, `apt` and `macos-pkg` the
+/// release their steps came in, and an installer this release has no steps of has no row.
 #[test]
 fn each_installer_has_the_release_it_arrived_in() {
     assert_eq!(floor_of(Installer::HostkeeperArchive), Some(v("0.0.0")));
     assert_eq!(floor_of(Installer::Apt), Some(INSTALLER_FLOORS[0].1));
-    for none in [Installer::MacosPkg, Installer::Tarball, Installer::OciImage] {
+    assert_eq!(floor_of(Installer::MacosPkg), Some(v("0.1.223")));
+    assert!(INSTALLER_FLOORS[1].1 > INSTALLER_FLOORS[0].1);
+    for none in [Installer::Tarball, Installer::OciImage] {
         assert_eq!(floor_of(none), None, "{none:?}");
     }
     assert!(SELF_NATIVE_FLOOR > INSTALLER_FLOORS[0].1);

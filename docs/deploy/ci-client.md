@@ -461,13 +461,15 @@ This repository builds the targets of its own releases with `cargo xtask release
 --service <hostkeeper|hello|mdm> --version <X.Y.Z> --dir <assets> --repo komira-ai/hostkeeper`,
 from the release's assets, and sets them with no index: its releases list native entries alone
 ([packages-native.md](../design/packages-native.md), section 10.5). For each Linux platform the
-package's index lists, the one native entry of the package's `.deb`, an `apt` entry of the
+package's index lists, the one native entry of the package's `.deb`: an `apt` entry of the
 repository entry `komira-testing` pinned by the `.deb`'s SHA-256, its manifest the archive's own
 `manifest.toml` with no hook command ([package-repositories.md](package-repositories.md), "The
-native packages and their entries"); no `hostkeeper-archive` entry, and no list for macOS while
-no daemon announces `macos-pkg`. A host whose daemon does not announce `apt` is ordered nothing
-(`installer_dropped`). `--repo` is read and not used. It refuses a release whose index, Linux
-archives and their manifests, `.deb`s or their bundles do not check out, and entries the
+native packages and their entries"); no `hostkeeper-archive` entry. The `macos-arm64` list carries
+the signed `.pkg`'s `macos-pkg` entry alone, which a Mac whose daemon announces `macos-pkg`
+(signers file loaded, `installer` and `pkgutil` present) takes. A host whose daemon does not
+announce the installer of its list is ordered nothing (`installer_dropped`, or `no_build_for_host`
+as the coordinator's pick gives). `--repo` is read and not used. It refuses a release whose index,
+archives and their manifests, `.deb`s, `.pkg`s or their bundles do not check out, and entries the
 coordinator or the daemon would refuse, and prints `targets=<JSON>` (appended to `--output`).
 `--fail-ready` (hello's failing build) is refused by name: that build has no package the
 repository holds.

@@ -66,8 +66,8 @@
 //!   releases are set with native entries alone (packages-native.md section 10.5), and it goes
 //!   with the channel's other verbs (A28).
 //! - `targets` ([`targets`]): the `targets` of the set that deploys a package of a release, one
-//!   native entry per platform its release index lists and nothing else, read from the
-//!   release's assets and checked as the coordinator and the daemon check them, written as one
+//!   native entry per platform its release index lists (`.deb` or `.pkg`) and nothing else,
+//!   read from the release's assets and checked as the coordinator and the daemon check them, written as one
 //!   line of JSON for the CI client (`set-desired.yml`, input `targets`).
 //!
 //! The names and formats a consumer relies on are in [`contract`]. The adapters that run `git`,
@@ -594,13 +594,13 @@ pub(crate) enum Verb {
         #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
         every_secs: Option<u64>,
     },
-    /// Write the `targets` of the set that deploys a package of the release: for each Linux
-    /// platform its release index lists, the package's `.deb` alone, an `apt` entry of the
-    /// repository's testing suite whose manifest and `min_hostkeeper` are the archive's own
-    /// manifest's; no list for macOS while no daemon announces `macos-pkg`. Refused, every
-    /// problem named, unless the index, every Linux archive and its manifest, and every `.deb`
-    /// and its bundle check out and the entries pass the coordinator's checks; refused by name
-    /// for a package with no native package (hello's failing build). Prints `targets=<JSON>`.
+    /// Write the `targets` of the set that deploys a package of the release: per platform its
+    /// release index lists, the package's native entry alone (a Linux `.deb`'s `apt` entry of the
+    /// testing suite, the Mac's signed `.pkg`'s `macos-pkg` entry), whose manifest and
+    /// `min_hostkeeper` are the platform's archive manifest's. Refused, every problem named,
+    /// unless the index, every archive and its manifest, and every native package and its
+    /// bundle check out and the entries pass the coordinator's checks; refused by name for a
+    /// package with no native package (hello's failing build). Prints `targets=<JSON>`.
     Targets {
         /// The service: hostkeeper (the default), hello or mdm.
         #[arg(long, value_enum, default_value_t)]
