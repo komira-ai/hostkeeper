@@ -411,8 +411,10 @@ fn a_tool_runs_in_a_real_transient_unit_with_no_network() {
 /// repository installer's two fetch commands run as `ToolNetwork::Fetch`, confined to the paths
 /// they may write (packages-repositories.md section 4.6). `wc -l /proc/net/dev` in such a unit
 /// counts more than the two header lines and `lo`, so it keeps the network; `touch` in the
-/// writable directory, in its working directory, with the call's environment, exits 0, and
-/// `touch` of a file beside that directory, which `ProtectSystem=strict` leaves read-only, fails.
+/// writable directory, in its working directory, with the call's environment, exits 0; `touch`
+/// in `/tmp`, the unit's own (`PrivateTmp=yes`: apt runs `gpgv` with its files there), exits 0
+/// and leaves nothing in the host's `/tmp`; and `touch` of a file beside the writable directory,
+/// which `ProtectSystem=strict` leaves read-only, fails.
 #[test]
 fn a_fetch_tool_keeps_the_network_and_writes_only_its_paths() {
     let bench = Bench::new("tool_fetch");
@@ -453,6 +455,15 @@ fn a_fetch_tool_keeps_the_network_and_writes_only_its_paths() {
         writable.join("x").is_file(),
         "touch ran in the working directory"
     );
+
+    let tmp = format!("/tmp/hk-fetch-{}", std::process::id());
+    let in_tmp = fetch(&rig.unit(), "/usr/bin/touch", &[&tmp]);
+    assert_eq!(
+        in_tmp.code,
+        Some(0),
+        "the unit's /tmp is writable: {in_tmp:?}"
+    );
+    assert!(!Path::new(&tmp).exists(), "the unit's /tmp is its own");
 
     let outside = base.join("outside");
     let refused = fetch(
