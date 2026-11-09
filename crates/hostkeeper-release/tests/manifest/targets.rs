@@ -14,7 +14,9 @@ use hostkeeper_release::{
 };
 use prost::Message as _;
 
-use crate::support::{LINUX, entry, list, location, pad_manifest_to, targets, web};
+use crate::support::{
+    LINUX, entry, list, location, named, named_list, pad_manifest_to, targets, web,
+};
 
 fn check(targets: &BTreeMap<String, TargetList>) -> Result<(), TargetError> {
     target::check(&web(), targets)
@@ -24,14 +26,16 @@ fn check_entry(entry: &Target) -> Result<(), EntryError> {
     target::check_entry(&web(), LINUX, entry)
 }
 
-const NATIVE: [Installer; 3] = [Installer::Deb, Installer::Rpm, Installer::Tarball];
+/// Artifact entries of installers no daemon lists any more (`deb`, `rpm`) beside a `tarball`: a
+/// set naming withdrawn installers is still accepted, and no host is ever picked for them.
+const NATIVE: [&str; 3] = ["deb", "rpm", "tarball"];
 
 /// Catches: the requested shape refused: three platforms of one list each, or a null platform
 /// left out.
 #[test]
 fn a_release_of_lists_for_some_platforms_passes() {
     let all = targets(&[
-        ("linux-x86_64", list(&NATIVE)),
+        ("linux-x86_64", named_list(&NATIVE)),
         ("linux-arm64", list(&[Installer::Tarball])),
         ("macos-arm64", list(&[Installer::MacosPkg])),
     ]);
@@ -49,7 +53,10 @@ fn the_targets_name_one_to_three_of_the_platforms_and_no_other_key() {
         "the targets name no platform"
     );
     for key in ["linux-riscv64", "Linux-x86_64", "linux_x86_64", ""] {
-        let set = targets(&[("linux-x86_64", list(&NATIVE)), (key, list(&NATIVE))]);
+        let set = targets(&[
+            ("linux-x86_64", named_list(&NATIVE)),
+            (key, named_list(&NATIVE)),
+        ]);
         assert_eq!(
             check(&set),
             Err(TargetError::UnknownPlatform(UnknownPlatform(
@@ -104,10 +111,7 @@ fn a_list_holds_1_to_8_entries() {
 /// picked; or one installer in two platforms' lists refused.
 #[test]
 fn a_list_names_no_installer_twice() {
-    let twice = targets(&[(
-        "linux-x86_64",
-        list(&[Installer::Deb, Installer::Tarball, Installer::Deb]),
-    )]);
+    let twice = targets(&[("linux-x86_64", named_list(&["deb", "tarball", "deb"]))]);
     assert_eq!(
         check(&twice),
         Err(TargetError::DuplicateInstaller {
@@ -139,8 +143,8 @@ fn hostkeeper_is_set_with_one_hostkeeper_archive_entry_per_list_only() {
     ]);
     assert_eq!(target::check(&hostkeeper, &ok), Ok(()));
     // Manifests of hostkeeper's own: no unit or placed file of the service `web`.
-    let own = |installers: &[Installer]| {
-        let mut list = list(installers);
+    let own = |names: &[&str]| {
+        let mut list = named_list(names);
         for entry in &mut list.entries {
             let manifest = entry.manifest.as_mut().expect("a manifest");
             manifest.run.clear();
@@ -149,9 +153,9 @@ fn hostkeeper_is_set_with_one_hostkeeper_archive_entry_per_list_only() {
         list
     };
     for bad in [
-        own(&[Installer::Tarball]),
-        own(&[Installer::HostkeeperArchive, Installer::Tarball]),
-        own(&[Installer::Deb, Installer::HostkeeperArchive]),
+        own(&["tarball"]),
+        own(&["hostkeeper-archive", "tarball"]),
+        own(&["deb", "hostkeeper-archive"]),
     ] {
         let set = targets(&[("linux-x86_64", archive.clone()), ("linux-arm64", bad)]);
         assert_eq!(
@@ -168,7 +172,7 @@ fn hostkeeper_is_set_with_one_hostkeeper_archive_entry_per_list_only() {
         .to_string(),
         "the list of macos-arm64 for the service hostkeeper is not one hostkeeper-archive entry"
     );
-    let other = targets(&[("linux-arm64", list(&[Installer::Tarball, Installer::Deb]))]);
+    let other = targets(&[("linux-arm64", named_list(&["tarball", "deb"]))]);
     assert_eq!(check(&other), Ok(()));
 }
 
@@ -194,7 +198,7 @@ fn of_several_broken_platforms_the_first_spelling_is_the_answer() {
 /// a broken list, given in both orders, are refused for the same one.
 #[test]
 fn the_answer_does_not_depend_on_the_order_the_keys_are_given_in() {
-    let good = list(&NATIVE);
+    let good = named_list(&NATIVE);
     let empty = entries(0);
     let keys = [
         ("windows-x86_64".to_owned(), good.clone()),
@@ -234,10 +238,10 @@ fn the_answer_does_not_depend_on_the_order_the_keys_are_given_in() {
 fn each_lists_manifests_are_judged_by_its_own_platform() {
     let set = targets(&[
         ("macos-arm64", list(&[Installer::MacosPkg])),
-        ("linux-arm64", list(&[Installer::Deb])),
+        ("linux-arm64", named_list(&["deb"])),
     ]);
     assert_eq!(check(&set), Ok(()));
-    let crossed = targets(&[("macos-arm64", list(&[Installer::Deb]))]);
+    let crossed = targets(&[("macos-arm64", named_list(&["deb"]))]);
     assert!(matches!(
         check(&crossed),
         Err(TargetError::Entry {
@@ -251,7 +255,7 @@ fn each_lists_manifests_are_judged_by_its_own_platform() {
 /// Catches: an entry's error reported without its platform and place, or not at all.
 #[test]
 fn an_entry_that_breaks_a_rule_is_named_by_platform_and_place() {
-    let mut bad = list(&NATIVE);
+    let mut bad = named_list(&NATIVE);
     bad.entries[1].bytes = 0;
     let set = targets(&[("linux-x86_64", bad)]);
     let err = check(&set).expect_err("refused");
@@ -312,7 +316,7 @@ fn every_digest_is_64_lower_case_hex_characters() {
     ] {
         let artifact = Target {
             digest: bad.to_owned(),
-            ..entry(Installer::Deb)
+            ..named("deb")
         };
         assert_eq!(
             check_entry(&artifact),
@@ -322,7 +326,7 @@ fn every_digest_is_64_lower_case_hex_characters() {
             }),
             "{bad}"
         );
-        let mut bundle = entry(Installer::Deb);
+        let mut bundle = named("deb");
         bundle.attestation.as_mut().expect("a bundle").digest = bad.to_owned();
         assert_eq!(
             check_entry(&bundle),
@@ -335,7 +339,7 @@ fn every_digest_is_64_lower_case_hex_characters() {
     }
     let digits = Target {
         digest: "0123456789abcdef".repeat(4),
-        ..entry(Installer::Deb)
+        ..named("deb")
     };
     assert_eq!(check_entry(&digits), Ok(()));
     assert_eq!(
@@ -353,7 +357,7 @@ fn every_digest_is_64_lower_case_hex_characters() {
 fn an_artifact_is_1_byte_or_more() {
     let sized = |bytes| Target {
         bytes,
-        ..entry(Installer::Deb)
+        ..named("deb")
     };
     assert_eq!(check_entry(&sized(0)), Err(EntryError::ZeroBytes));
     assert_eq!(check_entry(&sized(1)), Ok(()));
@@ -366,7 +370,7 @@ fn an_artifact_is_1_byte_or_more() {
 fn an_attestation_is_required_and_1_byte_to_1_mib() {
     let none = Target {
         attestation: None,
-        ..entry(Installer::Deb)
+        ..named("deb")
     };
     assert_eq!(check_entry(&none), Err(EntryError::NoAttestation));
     assert_eq!(
@@ -379,7 +383,7 @@ fn an_attestation_is_required_and_1_byte_to_1_mib() {
         (MAX_ATTESTATION_BYTES, true),
         (MAX_ATTESTATION_BYTES + 1, false),
     ] {
-        let mut e = entry(Installer::Deb);
+        let mut e = named("deb");
         e.attestation.as_mut().expect("a bundle").bytes = bytes;
         let want = if ok {
             Ok(())
@@ -406,7 +410,7 @@ fn an_artifact_and_its_attestation_each_have_1_to_8_locations() {
     for (count, ok) in [(0, false), (1, true), (8, true), (9, false)] {
         let artifact = Target {
             locations: at(count),
-            ..entry(Installer::Deb)
+            ..named("deb")
         };
         let want = |of| {
             if ok {
@@ -419,9 +423,9 @@ fn an_artifact_and_its_attestation_each_have_1_to_8_locations() {
         let bundle = Target {
             attestation: Some(Blob {
                 locations: at(count),
-                ..entry(Installer::Deb).attestation.expect("a bundle")
+                ..named("deb").attestation.expect("a bundle")
             }),
-            ..entry(Installer::Deb)
+            ..named("deb")
         };
         assert_eq!(check_entry(&bundle), want("attestation"), "{count}");
     }
@@ -443,7 +447,7 @@ fn every_location_names_a_store_and_a_locator_of_the_grammar() {
     for store in ["", "GitHub", "lan_mirror", long.as_str()] {
         let e = Target {
             locations: vec![location(store, "a/b")],
-            ..entry(Installer::Deb)
+            ..named("deb")
         };
         assert_eq!(
             check_entry(&e),
@@ -454,11 +458,11 @@ fn every_location_names_a_store_and_a_locator_of_the_grammar() {
     assert_eq!(
         check_entry(&Target {
             locations: vec![location(&"s".repeat(32), "a/b")],
-            ..entry(Installer::Deb)
+            ..named("deb")
         }),
         Ok(())
     );
-    let mut bundle = entry(Installer::Deb);
+    let mut bundle = named("deb");
     bundle.attestation.as_mut().expect("a bundle").locations = vec![location("github", "../x")];
     assert_eq!(
         check_entry(&bundle),
@@ -479,7 +483,7 @@ fn every_location_names_a_store_and_a_locator_of_the_grammar() {
 
 /// An entry whose locators, the artifact's and the attestation's, are `total` bytes in all.
 fn locators_of(total: usize) -> Target {
-    let mut e = entry(Installer::Deb);
+    let mut e = named("deb");
     // Three locators of the artifact and one of the bundle, the last taking the remainder.
     let part = total / 4;
     e.locations = vec![
@@ -551,14 +555,14 @@ fn an_entry_of_24_kib_passes_its_limit_and_one_byte_more_is_refused() {
 fn every_entry_has_a_manifest_passing_the_rules_of_every_manifest() {
     let none = Target {
         manifest: None,
-        ..entry(Installer::Deb)
+        ..named("deb")
     };
     assert_eq!(check_entry(&none), Err(EntryError::NoManifest));
     assert_eq!(
         EntryError::NoManifest.to_string(),
         "the entry has no manifest"
     );
-    let mut bad = entry(Installer::Deb);
+    let mut bad = named("deb");
     bad.manifest.as_mut().expect("a manifest").run = vec!["api.service".to_owned()];
     let err = check_entry(&bad).expect_err("refused");
     assert!(matches!(
@@ -570,7 +574,7 @@ fn every_entry_has_a_manifest_passing_the_rules_of_every_manifest() {
         "the run entry \"api.service\" does not begin with the service name, alone or followed by `-`"
     );
     // A deb manifest without its package: the installer's rule, the daemon's alone.
-    let mut native = entry(Installer::Deb);
+    let mut native = named("deb");
     native.manifest.as_mut().expect("a manifest").package = None;
     assert_eq!(check_entry(&native), Ok(()));
 }

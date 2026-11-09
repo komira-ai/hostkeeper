@@ -20,7 +20,7 @@ use super::{
 use crate::support::targets::{Answered, digest, entry, grpc_bytes, list, location};
 
 /// `INVALID_ARGUMENT`.
-const INVALID_ARGUMENT: i32 = 3;
+pub(super) const INVALID_ARGUMENT: i32 = 3;
 /// `NOT_FOUND`.
 const NOT_FOUND: i32 = 5;
 
@@ -60,7 +60,7 @@ async fn operator_sets(rig: &Rig, request: &proto::SetDesiredRequest) -> Answere
 
 /// A rig that has kept `web` at 1.0 with targets, so that the state and the audit it leaves
 /// are not empty.
-async fn rig_with_web(name: &str) -> Rig {
+pub(super) async fn rig_with_web(name: &str) -> Rig {
     let rig = rig(name);
     let answered = operator_sets(&rig, &set("web", "1.0", targets("web"))).await;
     assert_eq!(answered.code, 0, "{answered:?}");
@@ -69,7 +69,12 @@ async fn rig_with_web(name: &str) -> Rig {
 
 /// Sets `request` as CI and asserts that it is refused `(code, token)`, that no file of the
 /// coordinator changed, and that `service` at `version` has no release.
-async fn refused(rig: &Rig, request: &proto::SetDesiredRequest, refusal: (i32, &str), why: &str) {
+pub(super) async fn refused(
+    rig: &Rig,
+    request: &proto::SetDesiredRequest,
+    refusal: (i32, &str),
+    why: &str,
+) {
     let before = files(rig);
     let answered = grpc(rig, SET_DESIRED, Some(&ci_token()), request).await;
     assert_eq!(answered.refusal(), refusal, "{why}: {answered:?}");
@@ -104,7 +109,7 @@ fn web_entry(installer: &str, c: char) -> Target {
 }
 
 /// What `hostkeeper_release::target::check` says of `all`, for `service`, as its message.
-fn judged(service: &str, all: &Targets) -> String {
+pub(super) fn judged(service: &str, all: &Targets) -> String {
     target::check(&name(service), all)
         .expect_err("the targets break a rule")
         .to_string()

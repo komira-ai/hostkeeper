@@ -88,6 +88,24 @@ pub fn entry(service: &str, installer: &str, c: char, bytes: u64) -> Target {
             ))],
         }),
         manifest: Some(manifest(service, installer)),
+        ..Target::default()
+    }
+}
+
+/// A repository entry of `service` (packages-repositories.md section 2.1): `apt` from the
+/// repository `komira-testing` at `package_version`, pinned by the digest all `c`, its manifest
+/// naming the package `service`; no location, no size and no attestation.
+pub fn repository_entry(service: &str, package_version: &str, c: char) -> Target {
+    Target {
+        installer: "apt".to_owned(),
+        digest: digest(c),
+        manifest: Some(Manifest {
+            package: Some(service.to_owned()),
+            ..manifest(service, "apt")
+        }),
+        repository: Some("komira-testing".to_owned()),
+        package_version: Some(package_version.to_owned()),
+        ..Target::default()
     }
 }
 

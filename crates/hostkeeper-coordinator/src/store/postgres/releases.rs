@@ -12,6 +12,7 @@
 
 use std::sync::Arc;
 
+use prost_reflect::MessageDescriptor;
 use serde_json::json;
 
 use super::rows::{KeyTy, KeyVal, Rows, Table, Ty, Val};
@@ -52,6 +53,15 @@ pub(crate) fn rows(books: &Books) -> Rows {
 /// # Errors
 /// [`StoreError::Invalid`]: a row does not read; the error names its service and version.
 pub(crate) fn of(rows: &Rows) -> Result<Books, StoreError> {
+    of_by(rows, crate::releases::target_list())
+}
+
+/// [`of`] with each release's lists read by the descriptor `list` ([`Release::read`]): this
+/// build's, or in the tests of rule B8 a release before's.
+///
+/// # Errors
+/// As [`of`].
+pub(crate) fn of_by(rows: &Rows, list: Option<&MessageDescriptor>) -> Result<Books, StoreError> {
     let mut books = Books::new();
     for (key, values) in rows {
         let text = |i: usize| key.get(i).and_then(KeyVal::as_text).unwrap_or_default();
@@ -63,7 +73,7 @@ pub(crate) fn of(rows: &Rows) -> Result<Books, StoreError> {
         if let Some(digest) = column(1) {
             stored["release_index_digest"] = digest;
         }
-        let release = Release::from_json(&stored).map_err(|why| StoreError::Invalid {
+        let release = Release::read(&stored, list).map_err(|why| StoreError::Invalid {
             path: place("releases"),
             source: DesiredError::Malformed(format!("the row {service} {version}: {why}")),
         })?;

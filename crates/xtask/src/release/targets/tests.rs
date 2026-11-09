@@ -518,6 +518,7 @@ fn an_entry() -> Target {
             min_hostkeeper: "0.1.0".to_owned(),
             ..Manifest::default()
         }),
+        ..Target::default()
     }
 }
 
@@ -547,7 +548,7 @@ fn entries_the_coordinator_or_the_daemon_would_refuse_are_never_written() {
     assert_eq!(
         checked(&hello, &[(IndexPlatform::LinuxX86_64, more)]),
         Err(Error::Failed(
-            "manifest_invalid: linux-x86_64: the manifest of a hostkeeper-archive entry may not have run"
+            "manifest_invalid: linux-x86_64: the manifest of the hostkeeper-archive entry may not have run"
                 .to_owned()
         ))
     );

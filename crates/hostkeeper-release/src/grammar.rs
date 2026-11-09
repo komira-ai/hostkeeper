@@ -1,10 +1,13 @@
-//! The small grammars of a release: a SHA-256 digest, an installer's and a store's name, and a
-//! locator (packages.md sections 3.4 and 7.1).
+//! The small grammars of a release: a SHA-256 digest, an installer's, a store's and a
+//! repository's name, a locator (packages.md sections 3.4 and 7.1), and a repository entry's
+//! package name and version (packages-repositories.md section 2.2).
 
-/// The most bytes of an installer's name, and of a store's.
+/// The most bytes of an installer's name, of a store's and of a repository's.
 pub const MAX_NAME: usize = 32;
 /// The most bytes of a locator.
 pub const MAX_LOCATOR: usize = 1024;
+/// The most bytes of a repository entry's package name, and of its package version.
+pub const MAX_PACKAGE: usize = 128;
 
 /// Whether `text` is a SHA-256 digest as 64 lower-case hex characters.
 pub fn is_sha256(text: &str) -> bool {
@@ -31,6 +34,37 @@ pub fn is_installer_name(text: &str) -> bool {
 /// Whether `text` may name a store of a host's `stores.toml`: 1 to 32 bytes of `[a-z0-9-]`.
 pub fn is_store_name(text: &str) -> bool {
     is_name(text)
+}
+
+/// Whether `text` may name an entry of a host's repository configuration: 1 to 32 bytes of
+/// `[a-z0-9-]`, the stem of its `.sources` file.
+pub fn is_repository_name(text: &str) -> bool {
+    is_name(text)
+}
+
+/// Whether `text` may be a repository entry's `package_version`: 1 to [`MAX_PACKAGE`] bytes of
+/// `[A-Za-z0-9.+~:_-]`, a digit first. The union of dpkg's and rpm's versions, epoch and
+/// revision included, so a later backend needs no change here; a backend's own grammar is the
+/// daemon's.
+pub fn is_package_version(text: &str) -> bool {
+    (1..=MAX_PACKAGE).contains(&text.len())
+        & text.as_bytes().first().is_some_and(u8::is_ascii_digit)
+        & text
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() | b".+~:_-".contains(&b))
+}
+
+/// Whether `text` may be a repository entry's `manifest.package`: 1 to [`MAX_PACKAGE`] bytes of
+/// `[A-Za-z0-9+._@-]`, a letter or digit first. The union of dpkg's and rpm's names.
+pub fn is_package_name(text: &str) -> bool {
+    (1..=MAX_PACKAGE).contains(&text.len())
+        & text
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        & text
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() | b"+._@-".contains(&b))
 }
 
 /// Why a locator is refused, in the order the checks run.

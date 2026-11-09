@@ -42,6 +42,7 @@ fn list(digest: &str) -> release::TargetList {
                 locations: Vec::new(),
             }),
             manifest: Some(release::Manifest::default()),
+            ..release::Target::default()
         }],
     }
 }

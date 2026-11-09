@@ -10,6 +10,10 @@ mod checks;
 /// previous coordinator on the new state.
 #[path = "targets/kept.rs"]
 mod kept;
+/// Repository entries (packages-repositories.md section 2, build item A16): the refusals of
+/// section 2.2, what is kept and audited, and the release before's reader on what is kept.
+#[path = "targets/repository.rs"]
+mod repository;
 
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use support::rig::{Rig, Spec};
