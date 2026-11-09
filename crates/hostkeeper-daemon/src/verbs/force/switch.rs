@@ -180,10 +180,13 @@ fn parts(
         .check_tree(target.version.as_str())
         .map_err(link_failed)?;
     match &repository {
-        Some(entry) => ctx
-            .repository()
-            .activate_version(service, &target.version, &dir, entry)
-            .map_err(link_failed)?,
+        // A force reports no `drift_repaired`: what its `activate` repaired is dropped.
+        Some(entry) => {
+            let repository = ctx.repository();
+            let activated = repository.activate_version(service, &target.version, &dir, entry);
+            drop(repository.take_repaired(service));
+            activated.map_err(link_failed)?
+        }
         None => drop(
             placer
                 .switch_current(service, &target.version)

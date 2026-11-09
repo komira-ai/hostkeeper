@@ -22,7 +22,7 @@
 //!
 //! ```text
 //! record  = length header [bytes]
-//! length  = u64, little-endian: the length of header plus, for a file, its size
+//! length  = u64, little-endian: the length of header plus, for a file or a link, its size
 //! header  = kind NUL name NUL mode NUL size NUL
 //! kind    = "f" (a regular file), "d" (a directory) or "l" (a symbolic link)
 //! name    = the full relative name, as bytes
@@ -123,8 +123,9 @@ impl Staged {
     /// tree that runs. The links above the tree are resolved here, once: the `Staged` names the
     /// real path of its parent joined with the tree's own name, which is not resolved, so a tree
     /// that is itself a link stays one and [`Staged::check`] refuses it. A parent that cannot be
-    /// resolved is [`ArtifactError::Io`]. resolved. A tree holding a link outside `tree/` or anything else that is neither a
-    /// regular file, a directory nor a link inside `tree/` is [`ArtifactError::Unsupported`].
+    /// resolved is [`ArtifactError::Io`]. A tree holding a link outside `tree/`, or anything else
+    /// that is neither a regular file, a directory nor a link inside `tree/`, is
+    /// [`ArtifactError::Unsupported`].
     pub fn seal(dir: &Path) -> Result<Staged, ArtifactError> {
         let untrusted = || ArtifactError::Untrusted(dir.to_path_buf());
         if !dir.is_absolute() || !dir.components().skip(1).all(is_plain) {

@@ -479,6 +479,7 @@ fn repository_with_units(scratch: &Scratch) -> (Repository, Arc<FakeUnitControl>
         units: units.clone(),
         max_package_bytes: 1 << 20,
         repaired: Arc::default(),
+        tool_runs: Arc::default(),
     };
     (repository, units, log)
 }
@@ -800,4 +801,41 @@ fn the_switch_back_fails_when_current_cannot_be_unlinked() {
         .expect_err("cannot unlink");
     assert!(matches!(error, SwitchError::Failed(_)), "{error:?}");
     assert!(fs::symlink_metadata(&current).is_ok());
+}
+
+/// Proves every tool run of the daemon's repository installer has a unit of its own, however
+/// many ports the daemon makes: two heartbeat reads of the same service, each through a port of
+/// its own, run their `dpkg-query` in two units, numbered by the daemon's one counter.
+///
+/// Catches: a heartbeat's read and an order's step asking systemd for the same transient unit.
+#[test]
+fn each_tool_run_of_the_daemon_has_a_unit_of_its_own() {
+    let scratch = scratch("repo-units");
+    let mut repository = repository(&scratch);
+    let launcher = ScriptedLauncher::new();
+    let units = Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::clone(&units);
+    launcher.answer_tools(Arc::new(move |call: &hostkeeper_steps::ToolCall<'_>| {
+        seen.lock().expect("the units").push(call.unit.to_owned());
+        Ok(hostkeeper_steps::ToolExit {
+            code: Some(1),
+            stdout: Vec::new(),
+            stderr: b"dpkg-query: no packages found matching web\n".to_vec(),
+            cut: false,
+        })
+    }));
+    repository.launcher = launcher;
+    repository.tool_runs = Arc::new(std::sync::atomic::AtomicU64::new(first_tool_run()));
+    for _ in 0..2 {
+        let _ = repository.drift(&web(), &apt_entry(None));
+    }
+    let first = first_tool_run();
+    assert_eq!(
+        *units.lock().expect("the units"),
+        [
+            format!("hostkeeper-install-web-dpkg-query-{first}"),
+            format!("hostkeeper-install-web-dpkg-query-{}", first + 1),
+        ]
+    );
+    assert_eq!(first >> 32, u64::from(std::process::id()));
 }

@@ -139,6 +139,9 @@ fn steps(
     // runs, so the prune never waits for the promotion. The watcher then runs here, under the
     // same locks, and its end is the reply.
     let update = &prepared.update;
+    // Only this update's own `activate` may make it `drift_repaired`: what an earlier force or a
+    // resumed update left is dropped.
+    drop(ctx.repository().take_repaired(service));
     let ended = runner.run_until_watching(update);
     if let Ok(Finished {
         verdict: Verdict::Succeeded { promotion_pending },

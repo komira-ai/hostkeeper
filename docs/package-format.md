@@ -103,7 +103,7 @@ directory (the directory itself is not an entry), in the byte order of the entri
 
 ```text
 record  = length header [bytes]
-length  = u64, little-endian: the length of header plus, for a file, its size
+length  = u64, little-endian: the length of header plus, for a file or a link, its size
 header  = kind NUL name NUL mode NUL size NUL
 kind    = "f" (a regular file), "d" (a directory) or "l" (a symbolic link)
 name    = the full relative name, as bytes, "/" between components

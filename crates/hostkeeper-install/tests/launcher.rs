@@ -192,6 +192,33 @@ fn each_run_has_a_unit_of_its_own() {
     assert_eq!(other.seen()[0].unit, "hostkeeper-install-web-dpkg-0");
 }
 
+/// Proves two ports that share a counter never name the same unit, whichever of them runs: a
+/// daemon makes a port for each step and each heartbeat's read of the same service, which may
+/// run at once. The counter goes on from where the caller set it.
+///
+/// Catches: a heartbeat's `dpkg-query` and an order's asking systemd for the same transient unit.
+#[test]
+fn ports_that_share_a_counter_never_name_the_same_unit() {
+    let fake = Fake::default();
+    let runs = std::sync::atomic::AtomicU64::new(7);
+    let order = LauncherTools::sharing(&fake, "web", &runs);
+    let beat = LauncherTools::sharing(&fake, "web", &runs);
+    for tools in [&order, &beat, &order] {
+        tools
+            .run(&Run::offline(Tool::DpkgQuery, Vec::new(), 1))
+            .expect("the run");
+    }
+    let units: Vec<String> = fake.seen().into_iter().map(|s| s.unit).collect();
+    assert_eq!(
+        units,
+        [
+            "hostkeeper-install-web-dpkg-query-7",
+            "hostkeeper-install-web-dpkg-query-8",
+            "hostkeeper-install-web-dpkg-query-9"
+        ]
+    );
+}
+
 /// Proves the launcher's exit becomes the tool's output: the code (or none), both streams and the
 /// cut flag.
 #[test]

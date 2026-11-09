@@ -132,6 +132,8 @@ pub struct Ctx {
     pub repository_ports: Arc<RepositoryPorts>,
     /// The drift each service's last repository `activate` repaired, until its verdict takes it.
     repaired: Arc<Mutex<BTreeMap<String, Drift>>>,
+    /// The counter of the repository installer's tool units ([`Repository::tool_runs`]).
+    tool_runs: Arc<std::sync::atomic::AtomicU64>,
     pub locks: ServiceLocks,
     pub step_lock: StepLock,
     pub halts: HaltStore,
@@ -263,6 +265,7 @@ impl Ctx {
             units: Arc::clone(&self.units),
             max_package_bytes: self.config.bounds.max_package_bytes,
             repaired: Arc::clone(&self.repaired),
+            tool_runs: Arc::clone(&self.tool_runs),
         }
     }
 
@@ -631,6 +634,9 @@ impl Daemon {
                 announcement: ports.announcement,
                 repository_ports: ports.repository,
                 repaired: Arc::default(),
+                tool_runs: Arc::new(std::sync::atomic::AtomicU64::new(
+                    crate::repository::first_tool_run(),
+                )),
                 locks: ServiceLocks::default(),
                 step_lock: StepLock::default(),
                 halts,

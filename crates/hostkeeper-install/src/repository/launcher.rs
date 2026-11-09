@@ -14,22 +14,49 @@ use super::tools::{Network, Run, ToolError, ToolOutput, Tools};
 pub struct LauncherTools<'a> {
     launcher: &'a dyn StepLauncher,
     service: String,
-    runs: AtomicU64,
+    runs: Runs<'a>,
+}
+
+/// The counter of the runs that numbers their units.
+enum Runs<'a> {
+    /// This port's own, from 0.
+    Own(AtomicU64),
+    /// One the caller shares between ports, so that no two of them name the same unit.
+    Shared(&'a AtomicU64),
 }
 
 impl<'a> LauncherTools<'a> {
-    /// The tools of `service`, run by `launcher`.
+    /// The tools of `service`, run by `launcher`, their units numbered from 0.
     pub fn new(launcher: &'a dyn StepLauncher, service: &str) -> LauncherTools<'a> {
         LauncherTools {
             launcher,
             service: service.to_owned(),
-            runs: AtomicU64::new(0),
+            runs: Runs::Own(AtomicU64::new(0)),
+        }
+    }
+
+    /// The tools of `service`, run by `launcher`, their units numbered by `runs`: a daemon makes
+    /// a port for each step and each heartbeat's read, and two of them may run a tool at once,
+    /// so they share one counter and a unit is never the name of another run's.
+    pub fn sharing(
+        launcher: &'a dyn StepLauncher,
+        service: &str,
+        runs: &'a AtomicU64,
+    ) -> LauncherTools<'a> {
+        LauncherTools {
+            launcher,
+            service: service.to_owned(),
+            runs: Runs::Shared(runs),
         }
     }
 
     /// The unit the next run of `tool` has.
     fn unit(&self, tool: &str) -> String {
-        let n = self.runs.fetch_add(1, Ordering::Relaxed);
+        let runs = match &self.runs {
+            Runs::Own(runs) => runs,
+            Runs::Shared(runs) => *runs,
+        };
+        let n = runs.fetch_add(1, Ordering::Relaxed);
         format!("hostkeeper-install-{}-{tool}-{n}", self.service)
     }
 }

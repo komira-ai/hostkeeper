@@ -24,6 +24,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use hostkeeper_config::daemon::Sha256Hex;
@@ -221,6 +222,15 @@ pub struct Repository {
     /// The drift each service's last `activate` found and repaired, until its update's verdict
     /// takes it ([`Repository::take_repaired`]).
     pub repaired: Arc<Mutex<BTreeMap<String, Drift>>>,
+    /// The counter that numbers every tool run's unit, shared by all of the daemon's steps and
+    /// heartbeat reads ([`LauncherTools::sharing`]).
+    pub tool_runs: Arc<AtomicU64>,
+}
+
+/// The first number of the daemon's tool units: its process id in the high half, so that a
+/// daemon started again never names a unit a run of the one before it may still hold.
+pub fn first_tool_run() -> u64 {
+    u64::from(std::process::id()) << 32
 }
 
 /// Why a version could not be staged.
@@ -318,7 +328,7 @@ impl Repository {
         service: &ServiceName,
         step: impl FnOnce(&RepositoryInstaller<'_>) -> R,
     ) -> R {
-        let tools = LauncherTools::new(&*self.launcher, service.as_str());
+        let tools = LauncherTools::sharing(&*self.launcher, service.as_str(), &self.tool_runs);
         let records = PlacedRecords {
             roots: self.roots.clone(),
             fs: Arc::clone(&self.fs),

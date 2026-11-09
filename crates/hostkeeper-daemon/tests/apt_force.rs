@@ -109,3 +109,29 @@ fn a_force_whose_stage_fails_is_failed_before_commit_and_changes_nothing() {
     assert_eq!(linked(&apt, "current").as_deref(), Some("1.0.0"));
     assert!(!apt.version_dir("1.1.0").exists());
 }
+
+/// Proves a force that installs over drift leaves no `drift_repaired` behind for a later order:
+/// a package moved by hand is put back by a force, and the next update, which finds the package
+/// where its record says, ends `Succeeded` with no reason.
+///
+/// Catches: a drift that a force repaired being reported by the next update, which repaired
+/// nothing.
+#[test]
+fn a_force_that_repairs_drift_leaves_no_reason_for_the_next_update() {
+    let apt = AptRig::new("apt-force-drift");
+    let daemon = apt.daemon();
+    let one = apt.publish(package("1.0.0-1"));
+    let two = apt.publish(package("2.0.0-1"));
+    assert_eq!(
+        daemon.order(&install_of("1.0.0", "1.0.0-1", &one, 1)),
+        succeeded()
+    );
+    apt.host.set_installed(SERVICE, "0.9.0-1", 'i', false);
+    let order = with_entry(force(SERVICE, "1.0.0", &one, 2, 0), &entry("1.0.0-1", &one));
+    assert_eq!(daemon.order(&order), succeeded());
+    assert_eq!(apt.host.installed(SERVICE), held("1.0.0-1"));
+    assert_eq!(
+        daemon.order(&update_of("2.0.0", "2.0.0-1", &two, 3)),
+        succeeded()
+    );
+}

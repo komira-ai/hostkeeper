@@ -4,7 +4,7 @@ Status: design, for the maintainers' ruling. Build item A16 is **Built**: `Targe
 `Target.package_version` (`crates/hostkeeper-proto/proto/hostkeeper/release/v1/release.proto`), the checks of section
 2.2 and the installer set (`crates/hostkeeper-release/src/target.rs`, `installer.rs`, `grammar.rs`), and the
 coordinator's audit of a repository entry and its release before's reader on what it stores
-(`crates/hostkeeper-coordinator/src/releases.rs`). Build item A7 is **Built** in part: the repository installer
+(`crates/hostkeeper-coordinator/src/releases.rs`). Build item A7 is **Built**: the repository installer
 kind, its backend interface and the `apt` backend (`crates/hostkeeper-install/src/repository/`: the configuration of
 section 3.1, the announce rule of section 4.1, `stage`, `activate` with the hold and the enablement, rollback from the
 kept index and package, `retire`, `remove` by purge, drift and the failure reasons of section 4.5, with the hook at its

@@ -172,23 +172,25 @@ fn the_daemon_installs_updates_rolls_back_and_uninstalls_an_apt_service() {
         None,
     );
     let (one, two) = (rig.pin("1.0-1"), rig.pin("2.0-1"));
+    let active = || {
+        print("systemctl", &["is-active", "hkaptfix.service"])
+            .text
+            .trim()
+            .to_owned()
+    };
 
     assert_eq!(
         finished(daemon.order(&daemon::install("1.0-1", &one, 1))),
         succeeded
     );
     assert_installed("1.0-1");
-    assert_eq!(
-        print("systemctl", &["is-active", "hkaptfix.service"])
-            .text
-            .trim(),
-        "active"
-    );
+    assert_eq!(active(), "active");
     assert_eq!(
         finished(daemon.order(&daemon::update("2.0-1", &two, 2))),
         succeeded
     );
     assert_installed("2.0-1");
+    assert_eq!(active(), "active");
 
     fs::remove_dir_all(&rig.repo).expect("remove the repository from the disk");
     let mut back = daemon::update("1.0-1", &one, 3);
@@ -209,6 +211,7 @@ fn the_daemon_installs_updates_rolls_back_and_uninstalls_an_apt_service() {
     }
     assert_eq!(finished(daemon.order(&back)), succeeded);
     assert_installed("1.0-1");
+    assert_eq!(active(), "active");
 
     let packages = rig.scratch().join("packages").join(PACKAGE);
     let reply = finished(daemon.order(&daemon::uninstall(4)));
@@ -223,6 +226,11 @@ fn the_daemon_installs_updates_rolls_back_and_uninstalls_an_apt_service() {
     );
     assert!(!held().iter().any(|p| p == PACKAGE), "the hold remains");
     assert!(!packages.exists(), "the version directories remain");
+    assert_ne!(
+        active(),
+        "active",
+        "the unit still runs after the uninstall"
+    );
 }
 
 /// Proves: the version hostkeeper installed is held, so an upgrade of the host that sees a newer
