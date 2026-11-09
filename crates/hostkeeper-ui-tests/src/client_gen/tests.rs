@@ -189,10 +189,7 @@ fn every_kind_of_field_is_declared_as_proto3_json_writes_it() {
     let expected = format!(
         "{}{}",
         header(),
-        r#"//
-// The types of `client.js`: each request and reply as proto3 JSON writes it. What each
-// method does, and what each field holds, is said beside it in its `.proto` file under
-// `crates/hostkeeper-proto/proto`.
+        r#"// The types of `client.js`, in proto3 JSON; each is described in `crates/hostkeeper-proto/proto`.
 
 /** Sends `request` to `method` (`<package>.<Service>/<Method>`) and resolves to the reply. */
 export type Call = (method: string, request: object) => Promise<object>;
