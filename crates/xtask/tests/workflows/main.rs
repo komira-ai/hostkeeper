@@ -14,6 +14,7 @@ mod advisories;
 mod both_platforms_tests;
 mod callers;
 mod callers_tests;
+mod channel_join_tests;
 mod channel_run_tests;
 mod desired;
 mod desired_tests;

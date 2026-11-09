@@ -348,11 +348,12 @@ grants those jobs need, and the join runs with all of them: the stanza, with `ta
 `tag:hk-ci`, adds the coordinator's listener to them and takes nothing away.
 
 `release.yml`'s `channel` job, which reads the release channel before this repository's own call
-of the workflow ([Deploying hostkeeper from GitHub Actions](github-actions.md)), does not join the
-tailnet: it reads `HOSTKEEPER_RELEASE_CHANNEL` from the runner as it is, so the channel must be
-reachable from a GitHub-hosted runner, and no grant to the channel's port is needed for it. Were
-the channel served only on the tailnet, a grant from the tag to the channel's port would not be
-enough: that job would have to join first, which it does not.
+of the workflow ([Deploying hostkeeper from GitHub Actions](github-actions.md)), joins the tailnet
+too when `HOSTKEEPER_TAILNET_CLIENT_ID` is set, with the same action, tarball, federated identity
+and tag, and pings the channel's host in place of the coordinator; so a channel served only on the
+tailnet is reachable, once the ACL grants the tag the channel's host and port beside the
+coordinator's listener. With the variable empty it does not join, and reads the channel from the
+runner as it is.
 
 ### The federation, set up once by a tailnet admin
 

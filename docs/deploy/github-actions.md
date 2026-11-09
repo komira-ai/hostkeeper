@@ -25,7 +25,13 @@ issues to the job.
    `<channel>/hostkeeper/<X.Y.Z>/` ([Stage a release into the release channel](release-channel.md#sync-new-releases-into-the-channel)).
    CI does not push into the channel: nothing in a workflow can write to that host.
 4. **Wait for the channel** (job `channel` of `release.yml`). The job takes the newest release
-   the run published and its release index, `index.json`, from the files `verify` checked. It
+   the run published and its release index, `index.json`, from the files `verify` checked. When
+   `HOSTKEEPER_TAILNET_CLIENT_ID` is set, it first joins the tailnet as the CI client does (the
+   same pinned action and Tailscale tarball, the same repository variables, an ephemeral node
+   tagged `HOSTKEEPER_TAILNET_TAG` authenticated with an OIDC token), and waits until the
+   channel's host, the host of `HOSTKEEPER_RELEASE_CHANNEL` without its port or path, answers a
+   `tailscale ping`: a channel served only on the tailnet is reachable from the runner. Empty, it
+   does not join, and the channel must be reachable from the runner as it is. It
    reads `<channel>/hostkeeper/<X.Y.Z>/index.json` every 40 seconds, a 404 included, until the
    channel serves it, for at most 30 minutes. The served index must then be the published one,
    byte for byte. Then `cargo xtask release targets`, compiled from the release's own commit,
@@ -36,10 +42,11 @@ issues to the job.
    does not check out fails the job, and nothing is set. Last, it lists the published releases:
    when a higher version than the run's is published already (a late run of an older commit,
    released after a newer one), the next step is skipped, so that the fleet is never moved back.
-   The job reads the repository (`contents: read`) and holds no other token right.
+   The job reads the repository (`contents: read`) and holds `id-token: write` for the join, and
+   no other token right.
 5. **Set the desired version** (job `set-desired` of `release.yml`). The job calls the CI client
    ([set-desired.yml](ci-client.md)) once: it verifies the pinned hostkeeper release's `hkctl`,
-   joins the tailnet when the job is configured to, and runs `hkctl releases set-desired` for the
+   joins the tailnet when `HOSTKEEPER_TAILNET_CLIENT_ID` is set, and runs `hkctl releases set-desired` for the
    service `hostkeeper` at `<X.Y.Z>`; hkctl requests the OIDC token itself and hands it to the
    call through a pipe, never a file or an argument. The call names the release
    by its targets, and by its index and the index's SHA-256, so each host is ordered the package
@@ -94,14 +101,14 @@ federation's client ID are all public values, so they are variables, not secrets
 | variable | meaning |
 |---|---|
 | `RELEASE_SETS_DESIRED` | `true` turns the deploy on. |
-| `HOSTKEEPER_RELEASE_CHANNEL` | The base URL of the release channel, `https://<host>[/<path>]`, the same as the daemon config's `release_channel` and the coordinator's `--release-channel`. A GitHub-hosted runner must reach it. |
+| `HOSTKEEPER_RELEASE_CHANNEL` | The base URL of the release channel, `https://<host>[:<port>][/<path>]`, the same as the daemon config's `release_channel` and the coordinator's `--release-channel`. The runner of the job `channel` must reach it: on the tailnet, when `HOSTKEEPER_TAILNET_CLIENT_ID` is set (then `<host>` is the channel host's name or address on the tailnet, letters, digits, `.` and `-`), or as it is otherwise. |
 | `HOSTKEEPER_COORDINATOR_URL` | The coordinator's private listener, `https://<host>[:<port>]` (shared with `hello-desired.yml`). |
 | `HOSTKEEPER_COORDINATOR_CA` | The PEM certificates of the CA the coordinator's certificate chains to (shared). |
 | `HOSTKEEPER_CI_AUDIENCE` | The audience of the OIDC token, as the allow-list entry names it (shared). |
-| `HOSTKEEPER_TAILNET_CLIENT_ID` | The client ID of the tailnet's federated identity. Empty: the job does not join the tailnet, and the coordinator must be reachable from the runner some other way. |
-| `HOSTKEEPER_TAILNET_AUDIENCE` | The audience of that federated identity. |
-| `HOSTKEEPER_TAILNET_COORDINATOR` | The coordinator's name on the tailnet, which the join pings until it answers. |
-| `HOSTKEEPER_TAILNET_TAG` | The tag the join gives the runner's node, the one the federation's trust credential issues: `tag:ci` (shared). Both callers pass it as `tailnet_tag`. It must be set, even with `HOSTKEEPER_TAILNET_CLIENT_ID` empty: the CI client checks the tag at its first step, with or without the join, and an empty one ends the job there, before anything is downloaded or set. |
+| `HOSTKEEPER_TAILNET_CLIENT_ID` | The client ID of the tailnet's federated identity (shared). Set: the job `channel` and both calls of the CI client join the tailnet. Empty: none of them joins, and the channel and the coordinator must be reachable from the runner some other way. |
+| `HOSTKEEPER_TAILNET_AUDIENCE` | The audience of that federated identity (shared). |
+| `HOSTKEEPER_TAILNET_COORDINATOR` | The coordinator's name on the tailnet, which the CI client's join pings until it answers (shared). The job `channel` pings the channel's host instead. |
+| `HOSTKEEPER_TAILNET_TAG` | The tag the join gives the runner's node, the one the federation's trust credential issues: `tag:ci` (shared). Both callers pass it as `tailnet_tag`, and the job `channel` joins with it. It must be set, even with `HOSTKEEPER_TAILNET_CLIENT_ID` empty: the CI client checks the tag at its first step, with or without the join, and an empty one ends the job there, before anything is downloaded or set. |
 
 The tailnet, its tag (`HOSTKEEPER_TAILNET_TAG`, `tag:ci`), its ACL and its federation
 are set up as for any caller of the CI client
@@ -111,7 +118,9 @@ repository, the federation's subject is
 `repo:komira-ai/hostkeeper:ref:refs/heads/main`, its trust credential issues `tag:ci`, and the
 ACL's stanza names `tag:ci` in place of `tag:hk-ci`. `tag:ci` is shared with other CI jobs, so
 the join keeps the grants they need; the stanza adds the coordinator's private listener to them
-and takes nothing away. The callers name no fallback tag: the CI client's default, `tag:hk-ci`,
+and takes nothing away. For a channel served only on the tailnet, the ACL also grants `tag:ci`
+the channel's host and port (the port of `HOSTKEEPER_RELEASE_CHANNEL`, 443 when it names none):
+the job `channel` joins with that tag, pings the channel's host and reads the channel there. The callers name no fallback tag: the CI client's default, `tag:hk-ci`,
 is not a tag this repository's credential issues, so an unset variable fails at the client's
 first step rather than at the join.
 
@@ -194,7 +203,9 @@ cause is fixed, use **Re-run failed jobs** on the release run: it runs `channel`
 
 | job and step | what it means | what to do |
 |---|---|---|
-| `channel`: Wait until the release channel serves the version's index | The channel did not serve `hostkeeper/<X.Y.Z>/index.json` within 30 minutes, or `HOSTKEEPER_RELEASE_CHANNEL` is empty or not `https://`. Nothing is set. | Look at the channel sync's log (`systemctl status hostkeeper-channel-sync.service`, or the sidecar's): a release it refused is listed there. Re-run once it is staged. |
+| `channel`: The release channel's host | Only with `HOSTKEEPER_TAILNET_CLIENT_ID` set: `HOSTKEEPER_RELEASE_CHANNEL` is empty or not `https://<host>[:<port>][/<path>]`. Nothing is joined or set. | Fix the variable, then re-run. |
+| `channel`: Join the tailnet | Only with `HOSTKEEPER_TAILNET_CLIENT_ID` set: the runner did not join (the federated identity or its tag, as for the CI client's join), or the channel's host did not answer a `tailscale ping` (it is not on the tailnet under that name, or the ACL does not grant the tag the channel's host). Nothing is set. | Fix the tailnet variables, the channel's name or the ACL, then re-run. |
+| `channel`: Wait until the release channel serves the version's index | The channel did not serve `hostkeeper/<X.Y.Z>/index.json` within 30 minutes, or `HOSTKEEPER_RELEASE_CHANNEL` is empty or not `https://`, or the runner cannot reach the channel (`Could not resolve host`: a channel served only on the tailnet, while `HOSTKEEPER_TAILNET_CLIENT_ID` is empty; or the ACL does not grant the tag the channel's port). Nothing is set. | Look at the channel sync's log (`systemctl status hostkeeper-channel-sync.service`, or the sidecar's): a release it refused is listed there. Re-run once it is staged. For a channel the runner cannot reach, set the tailnet variables or fix the ACL. |
 | `channel`: The channel serves the published index, byte for byte | The channel holds another index for this version. A release in the channel never changes, so this does not mend itself. Nothing is set. | Find out how the channel came to hold other bytes; fix the channel by hand. |
 | `set-desired`: any verification step | The pinned hostkeeper release is not the one that was built ([When it fails](ci-client.md#when-it-fails)). Nothing is set. | Check the pin. |
 | `set-desired`: Set the desired version | The coordinator refused the call, and `reason` is its token: `unauthorized` or `forbidden` (the allow-list entry, above), `not_in_channel` (the coordinator does not reach the channel the runner reached, or reads another one), `held_bad`, `below_min_version`, `no_answer` (the coordinator is not reachable: the tailnet variables) ([the full table](ci-client.md#when-it-fails)). | Fix what the token names, then re-run. |

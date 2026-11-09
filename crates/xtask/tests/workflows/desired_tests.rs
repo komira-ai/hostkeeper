@@ -121,7 +121,7 @@ fn a_set_desired_job_that_runs_for_a_release_older_than_the_newest_is_refused() 
         ],
     );
     assert!(SET_IF.contains("needs.channel.outputs.newest == 'true'"));
-    assert!(CHANNEL_STEPS[9].contains(r#"== env.VERSION)"' >> "$GITHUB_OUTPUT""#));
+    assert!(CHANNEL_STEPS[11].contains(r#"== env.VERSION)"' >> "$GITHUB_OUTPUT""#));
     assert_problems(
         "      newest: ${{ steps.latest.outputs.newest }}\n",
         "",
@@ -132,7 +132,7 @@ fn a_set_desired_job_that_runs_for_a_release_older_than_the_newest_is_refused() 
     // The highest published version compared as text of another field: never the newest.
     let got = problems_with("== env.VERSION)", "== env.TAG)");
     assert_eq!(got.len(), 1, "{got:?}");
-    assert!(got[0].starts_with("release.yml: job channel step 10 is "));
+    assert!(got[0].starts_with("release.yml: job channel step 12 is "));
 }
 
 #[test]
@@ -159,17 +159,28 @@ fn a_channel_step_that_can_be_skipped_or_fail_quietly_is_refused() {
     let compare = "      - name: The channel serves the published index, byte for byte\n";
     for (key, line) in [
         ("continue-on-error", "        continue-on-error: true\n"),
-        ("if", "        if: ${{ false }}\n"),
         ("shell", "        shell: sh\n"),
     ] {
         assert_problems(
             compare,
             &format!("{compare}{line}"),
             &[&format!(
-                "release.yml: job channel step 7 has `{key}`, which a step of it may not"
+                "release.yml: job channel step 9 has `{key}`, which a step of it may not"
             )],
         );
     }
+    // An `if:` is also part of the step's shape, so the step no longer matches its entry.
+    assert_problems(
+        compare,
+        &format!("{compare}        if: ${{{{ false }}}}\n"),
+        &[
+            "release.yml: job channel step 9 has `if`, which a step of it may not",
+            &step_problem(
+                9,
+                "if ${{ false }} run cmp dist/index.json \"$RUNNER_TEMP/served-index.json\"",
+            ),
+        ],
+    );
 }
 
 #[test]
@@ -192,16 +203,19 @@ fn a_channel_job_that_does_not_wait_for_every_publish_is_refused() {
 fn a_channel_job_with_another_token_right_than_reading_the_repository_is_refused() {
     // Catches: a write scope in the job that reads an outside origin, and the permissions left
     // to the repository's default.
-    let read = "    permissions:\n      contents: read\n    outputs:\n";
+    let read = "    permissions:\n      contents: read\n      id-token: write\n    outputs:\n";
     for to in [
-        "    permissions:\n      contents: write\n    outputs:\n",
-        "    permissions:\n      contents: read\n      actions: read\n    outputs:\n",
+        "    permissions:\n      contents: write\n      id-token: write\n    outputs:\n",
+        "    permissions:\n      contents: read\n      id-token: write\n      actions: read\n    outputs:\n",
+        "    permissions:\n      contents: read\n    outputs:\n",
+        "    permissions:\n      id-token: write\n    outputs:\n",
         "    outputs:\n",
     ] {
         let found = problems_with(read, to);
         assert!(
             found.contains(
-                &"release.yml: job channel must hold exactly `contents: read`".to_owned()
+                &"release.yml: job channel must hold exactly `contents: read` and `id-token: write`"
+                    .to_owned()
             ),
             "{to:?}: {found:?}"
         );
@@ -231,20 +245,20 @@ fn a_channel_wait_that_gives_up_on_a_missing_version_or_reads_another_channel_is
             Some("`--proto =https`"),
         ),
         (
-            "RELEASE_CHANNEL: ${{ vars.HOSTKEEPER_RELEASE_CHANNEL }}",
-            "RELEASE_CHANNEL: https://other.example",
+            "RELEASE_CHANNEL: ${{ vars.HOSTKEEPER_RELEASE_CHANNEL }}\n          VERSION:",
+            "RELEASE_CHANNEL: https://other.example\n          VERSION:",
             None,
         ),
     ] {
         let got = problems_with(from, to);
         assert_eq!(got.len(), 1 + usize::from(lacks.is_some()), "{got:?}");
         assert!(
-            got[0].starts_with("release.yml: job channel step 6 is `run curl "),
+            got[0].starts_with("release.yml: job channel step 8 is `run curl "),
             "{got:?}"
         );
         if from == wait {
             assert!(
-                got[0].ends_with(&format!(", not `{}`", CHANNEL_STEPS[5])),
+                got[0].ends_with(&format!(", not `{}`", CHANNEL_STEPS[7])),
                 "{got:?}"
             );
         }
@@ -263,17 +277,17 @@ fn a_channel_job_that_does_not_compare_the_served_index_is_refused() {
         compare,
         "",
         &[
-            "release.yml: job channel has 9 steps, not the 10 of desired::CHANNEL_STEPS",
-            &step_problem(7, CHANNEL_STEPS[7]),
-            &step_problem(8, CHANNEL_STEPS[8]),
+            "release.yml: job channel has 11 steps, not the 12 of desired::CHANNEL_STEPS",
             &step_problem(9, CHANNEL_STEPS[9]),
+            &step_problem(10, CHANNEL_STEPS[10]),
+            &step_problem(11, CHANNEL_STEPS[11]),
         ],
     );
     assert_problems(
         "cmp dist/index.json",
         "cmp --quiet dist/index.json",
         &[&step_problem(
-            7,
+            9,
             "run cmp --quiet dist/index.json \"$RUNNER_TEMP/served-index.json\"",
         )],
     );
@@ -303,7 +317,7 @@ fn a_channel_job_that_reads_the_index_from_another_artifact_is_refused() {
     assert_problems(
         last,
         &format!("{last}      - run: echo extra\n"),
-        &["release.yml: job channel has 11 steps, not the 10 of desired::CHANNEL_STEPS"],
+        &["release.yml: job channel has 13 steps, not the 12 of desired::CHANNEL_STEPS"],
     );
 }
 
@@ -471,8 +485,8 @@ fn a_deploy_pinned_to_the_ci_client_before_hkctl_is_refused() {
 fn a_set_desired_job_with_another_token_right_is_refused() {
     // Catches: a write scope beside id-token in the job whose steps hold the OIDC token.
     assert_problems(
-        "      contents: read\n      id-token: write\n",
-        "      contents: write\n      id-token: write\n",
+        "      contents: read\n      id-token: write\n    uses:",
+        "      contents: write\n      id-token: write\n    uses:",
         &[
             "job set-desired: `contents: write` is not allowed in release.yml",
             "job set-desired: permissions must be exactly contents: read and id-token: write",
@@ -490,15 +504,15 @@ fn a_channel_job_without_the_targets_or_with_targets_of_other_files_is_refused()
         targets,
         "",
         &[
-            "release.yml: job channel has 9 steps, not the 10 of desired::CHANNEL_STEPS",
-            &step_problem(9, CHANNEL_STEPS[9]),
+            "release.yml: job channel has 11 steps, not the 12 of desired::CHANNEL_STEPS",
+            &step_problem(11, CHANNEL_STEPS[11]),
         ],
     );
     assert_problems(
         "--version \"$VERSION\" --dir dist --repo",
         "--version \"$VERSION\" --dir \"$RUNNER_TEMP\" --repo",
         &[&step_problem(
-            9,
+            11,
             "run cargo xtask release targets --version \"$VERSION\" --dir \"$RUNNER_TEMP\" --repo \"$GITHUB_REPOSITORY\" --output \"$GITHUB_OUTPUT\" env VERSION=${{ steps.newest.outputs.version }}",
         )],
     );
@@ -506,7 +520,7 @@ fn a_channel_job_without_the_targets_or_with_targets_of_other_files_is_refused()
         "          VERSION: ${{ steps.newest.outputs.version }}\n        run: cargo xtask release targets",
         "          VERSION: ${{ needs.plan.outputs.version }}\n        run: cargo xtask release targets",
         &[&step_problem(
-            9,
+            11,
             "run cargo xtask release targets --version \"$VERSION\" --dir dist --repo \"$GITHUB_REPOSITORY\" --output \"$GITHUB_OUTPUT\" env VERSION=${{ needs.plan.outputs.version }}",
         )],
     );

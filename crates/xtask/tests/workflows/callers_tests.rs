@@ -41,6 +41,10 @@ jobs:
       release_index_digest: ${{ needs.release.outputs.release_index_digest }}
       hostkeeper_commit: <commit>
       hostkeeper_version: <release>
+      join_tailnet: ${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID != '' }}
+      tailnet_client_id: ${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID }}
+      tailnet_audience: ${{ vars.HOSTKEEPER_TAILNET_AUDIENCE }}
+      tailnet_coordinator: ${{ vars.HOSTKEEPER_TAILNET_COORDINATOR }}
       tailnet_tag: ${{ vars.HOSTKEEPER_TAILNET_TAG }}
   release:
     if: ${{ github.ref == 'refs/heads/main' }}
@@ -455,8 +459,12 @@ fn no_tag() -> String {
 fn a_caller_that_joins_the_tailnet_without_the_tailnet_tag_is_refused() {
     // Catches: a caller that joins with the CI client's default tag, `tag:hk-ci`, instead of the
     // one the federation's trust credential issues, which Tailscale refuses at the join.
-    let join = "      join_tailnet: ${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID != '' }}\n      tailnet_client_id: ${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID }}\n";
-    assert_hello(TAG_LINE, join, &[&no_tag()]);
+    // The proof run joins the tailnet when the client ID is set, as release.yml's call does.
+    assert!(
+        hello().contains("      join_tailnet: "),
+        "the proof run joins"
+    );
+    assert_hello(TAG_LINE, "", &[&no_tag()]);
     // The repository's own caller that joins, release.yml, with its `tailnet_tag` taken out.
     let release = workflows()
         .into_iter()
