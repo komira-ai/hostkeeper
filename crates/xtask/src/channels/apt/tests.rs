@@ -2,6 +2,10 @@ use super::testing::*;
 use super::*;
 use crate::channels::fixtures::FakeExec;
 
+/// The key files the sign verbs get from the environment, as fixed strings.
+const FIXED: &dyn Fn(&std::path::Path) -> Result<crate::channels::apt::sign::Secrets, Error> =
+    &|work| crate::channels::apt::sign::write_secrets(work, "k", "p");
+
 #[test]
 fn a_failed_aws_call_is_told_by_what_it_says() {
     // Catches: a lost race read as a failure (or the reverse), and a missing key read as a denial.
@@ -95,7 +99,7 @@ fn every_verb_is_wired_to_its_implementation_and_reports_what_it_meets_first() {
     let dir = scratch("dispatch");
     let p = |name: &str| dir.join(name);
     let exec = FakeExec::missing();
-    let fails = |v: Verb| run(v, &exec).unwrap_err().to_string();
+    let fails = |v: Verb| run_with(v, &exec, FIXED).unwrap_err().to_string();
     let e = fails(Verb::Read {
         suite: Suite::Testing,
         bucket: "apt-bucket".to_owned(),
@@ -116,21 +120,20 @@ fn every_verb_is_wired_to_its_implementation_and_reports_what_it_meets_first() {
         keep: 25,
     });
     assert!(e.contains("run `apt read` first"), "{e}");
-    std::fs::write(p("key"), "k").expect("key");
-    std::fs::write(p("pass"), "p").expect("pass");
     std::fs::create_dir_all(p("next/dists/testing")).expect("dir");
     std::fs::write(p("next/dists/testing/Release"), "Suite: testing\n").expect("release");
     let e = fails(Verb::Sign {
         dir: p("next/dists/testing"),
         work: p("work"),
         fingerprint: "F767235D83B0410CFAF4779E8738AD1BE061EEDD".to_owned(),
-        key_file: p("key"),
-        passphrase_file: p("pass"),
         gpg: PathBuf::from(NOWHERE),
         output: None,
     });
     assert!(e.contains(NOWHERE), "{e}");
-    assert!(!p("key").exists(), "the key is removed whatever came of it");
+    assert!(
+        !p("work/signing-key.asc").exists() && !p("work/signing-passphrase").exists(),
+        "the key and the passphrase are removed whatever came of it"
+    );
     let e = fails(Verb::Promote {
         testing: p("t"),
         stable: p("s"),

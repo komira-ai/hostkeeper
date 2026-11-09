@@ -3,6 +3,15 @@ use std::cell::RefCell;
 use super::*;
 use crate::channels::fixtures::FakeExec;
 use crate::channels::spec::HOSTKEEPER;
+use crate::testdir::TestDir;
+
+fn scratch(name: &str) -> TestDir {
+    let beside = std::env::current_exe().expect("test binary");
+    TestDir::under(
+        &beside.parent().expect("deps").join("xtask-check-rpm-unit"),
+        name,
+    )
+}
 
 const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
 const URL: &str = "https://packages.komira.ai";
@@ -15,7 +24,7 @@ fn coordinator() -> &'static Package {
     &HOSTKEEPER.packages[1]
 }
 
-/// A container that answers for `uname`, `sh`, `dnf`, `rpm`, `curl`, `getent` and the installed
+/// A container that answers for `uname`, `test`, `find`, `dnf`, `rpm`, `curl`, `getent` and the installed
 /// binary, as one of a clean image on which the package was installed.
 struct Machine {
     package: &'static Package,
@@ -30,6 +39,11 @@ struct Machine {
     links: &'static str,
     /// What looking for a running process prints.
     running: &'static str,
+    /// Whether `find` exits non-zero while it prints what it found, as it does for a miss or a
+    /// process that vanished.
+    find_fails: bool,
+    /// What the copy into the container is refused with.
+    copy_refused: Option<&'static str>,
     user: bool,
     /// A command line (joined) containing this text is refused.
     refuse: Option<&'static str>,
@@ -47,6 +61,8 @@ impl Machine {
             omit: Vec::new(),
             links: "",
             running: "",
+            find_fails: false,
+            copy_refused: None,
             user: true,
             refuse: None,
         }
@@ -77,18 +93,25 @@ impl Host for Machine {
                 stderr: format!("refused: {text}\n"),
             });
         }
-        let script = args.get(1).map_or("", String::as_str);
         match name.as_str() {
             "uname" => answer(&format!("{}\n", self.machine)),
             "rpm" if args[0] == "-q" => answer(self.installed),
             "rpm" if args[0] == "-K" => answer(self.checked),
-            "sh" if script.starts_with("test -f") => Ok(Answer {
-                ok: !self.omit.contains(&args[3].as_str()),
+            "test" => Ok(Answer {
+                ok: !self.omit.contains(&args[1].as_str()),
                 stdout: String::new(),
                 stderr: String::new(),
             }),
-            "sh" if script.starts_with("ls ") => answer(self.links),
-            "sh" if script.starts_with("grep ") => answer(self.running),
+            "find" => Ok(Answer {
+                ok: !self.find_fails,
+                stdout: (if args[0] == "/proc" {
+                    self.running
+                } else {
+                    self.links
+                })
+                .to_owned(),
+                stderr: String::new(),
+            }),
             "getent" => Ok(Answer {
                 ok: self.user,
                 stdout: String::new(),
@@ -105,7 +128,18 @@ impl Host for Machine {
     }
 }
 
-fn rpm(package: &'static Package) -> Rpm<'static> {
+impl RpmHost for Machine {
+    fn copy_in(&self, local: &Path, dest: &str) -> Result<(), Error> {
+        let text = std::fs::read_to_string(local).expect("the file is on the runner");
+        self.calls.borrow_mut().push(format!("copy {dest} {text}"));
+        match self.copy_refused {
+            Some(why) => Err(Error::Failed(why.to_owned())),
+            None => Ok(()),
+        }
+    }
+}
+
+fn rpm<'a>(package: &'static Package, scratch: &'a Path) -> Rpm<'a> {
     Rpm {
         package,
         arch: "x86_64",
@@ -113,14 +147,16 @@ fn rpm(package: &'static Package) -> Rpm<'static> {
         commit: COMMIT,
         url: URL,
         work: "/work",
+        scratch,
     }
 }
 
 #[test]
 fn the_daemon_is_installed_with_dnf_from_the_testing_tree_after_systemd() {
+    let dir = scratch("the_daemon_is_installed_with_d");
     let mut machine = Machine::new(daemon());
     machine.links = "/etc/systemd/system/multi-user.target.wants/hostkeeper.service\n";
-    let said = check_rpm(&machine, &rpm(daemon())).expect("checked");
+    let said = check_rpm(&machine, &rpm(daemon(), &dir)).expect("checked");
     let calls = machine.calls();
     let order: Vec<&str> = calls
         .iter()
@@ -130,7 +166,7 @@ fn the_daemon_is_installed_with_dnf_from_the_testing_tree_after_systemd() {
         order,
         [
             "uname",
-            "sh",
+            "copy",
             "dnf",
             "dnf",
             "rpm",
@@ -138,15 +174,15 @@ fn the_daemon_is_installed_with_dnf_from_the_testing_tree_after_systemd() {
             "curl",
             "rpm",
             "/usr/bin/hostkeeper",
-            "sh",
-            "sh",
-            "sh",
-            "sh",
-            "sh",
-            "sh",
-            "sh",
-            "sh",
-            "sh"
+            "test",
+            "test",
+            "test",
+            "test",
+            "test",
+            "test",
+            "test",
+            "find",
+            "find"
         ]
     );
     assert_eq!(calls[2], "dnf install -y systemd");
@@ -164,12 +200,33 @@ fn the_daemon_is_installed_with_dnf_from_the_testing_tree_after_systemd() {
         "curl --proto =https --tlsv1.2 --fail --silent --show-error --output /work/hostkeeper-1.2.3-1.x86_64.rpm https://packages.komira.ai/rpm/pool/hostkeeper/hostkeeper-1.2.3-1.x86_64.rpm"
     );
     assert_eq!(calls[7], "rpm -K /work/hostkeeper-1.2.3-1.x86_64.rpm");
-    assert!(
-        calls[1].contains("gpgcheck=1")
-            && calls[1].ends_with("/etc/yum.repos.d/komira-testing.repo")
+    assert_eq!(
+        calls[1],
+        format!(
+            "copy /etc/yum.repos.d/komira-testing.repo {}",
+            repo_file(URL)
+        )
     );
-    assert!(calls[1].contains("baseurl=https://packages.komira.ai/rpm/testing/$basearch"));
-    assert!(calls[1].contains("repo_gpgcheck=1"));
+    assert_eq!(
+        repo_file(URL),
+        "[komira-testing]\nname=komira-ai packages (testing)\nbaseurl=https://packages.komira.ai/rpm/testing/$basearch\nenabled=1\ngpgcheck=1\nrepo_gpgcheck=1\ngpgkey=https://packages.komira.ai/apt/komira-archive-keyring.asc\n"
+    );
+    // Every file is asked after with `test -f`, and the unit's links and the processes with
+    // `find` and its own arguments: no shell.
+    assert!(calls.contains(&"test -f /usr/bin/hostkeeper-pxe".to_owned()));
+    assert_eq!(
+        calls[calls.len() - 2],
+        "find /etc/systemd/system -maxdepth 2 -path /etc/systemd/system/*.wants/hostkeeper.service -o -path /etc/systemd/system/hostkeeper.service"
+    );
+    assert_eq!(
+        calls[calls.len() - 1],
+        "find /proc -mindepth 2 -maxdepth 2 -name comm -exec grep -l -x hostkeeper {} +"
+    );
+    assert!(
+        calls
+            .iter()
+            .all(|c| !c.starts_with("sh ") && !c.contains(" -c "))
+    );
     assert_eq!(
         said,
         [
@@ -180,25 +237,23 @@ fn the_daemon_is_installed_with_dnf_from_the_testing_tree_after_systemd() {
 
 #[test]
 fn the_coordinator_needs_no_prerequisite_and_its_user_and_unit_are_checked() {
+    let dir = scratch("the_coordinator_needs_no_prere");
     let machine = Machine::new(coordinator());
-    let said = check_rpm(&machine, &rpm(coordinator())).expect("checked");
+    let said = check_rpm(&machine, &rpm(coordinator(), &dir)).expect("checked");
     let calls = machine.calls();
     assert_eq!(calls[2], "dnf install -y hostkeeper-coordinator-1.2.3");
     assert!(calls.contains(&"getent passwd hostkeeper-coordinator".to_owned()));
+    assert!(calls.contains(&"test -f /usr/share/hostkeeper-coordinator/ui/index.html".to_owned()));
     assert!(
         calls
             .iter()
-            .any(|c| c.ends_with("sh /usr/share/hostkeeper-coordinator/ui/index.html"))
+            .any(|c| c.starts_with("find /etc/systemd/system ")
+                && c.ends_with("-path /etc/systemd/system/hostkeeper-coordinator.service"))
     );
     assert!(
         calls
             .iter()
-            .any(|c| c.ends_with("sh hostkeeper-coordinator.service"))
-    );
-    assert!(
-        calls
-            .iter()
-            .any(|c| c.ends_with("sh hostkeeper-coord") || c.ends_with("sh hostkeeper-coor"))
+            .any(|c| c.starts_with("find /proc ") && c.contains(" -x hostkeeper-coor "))
     );
     assert_eq!(
         said,
@@ -210,10 +265,11 @@ fn the_coordinator_needs_no_prerequisite_and_its_user_and_unit_are_checked() {
 
 #[test]
 fn the_other_architecture_is_installed_by_its_file_name() {
+    let dir = scratch("the_other_architecture_is_inst");
     let mut machine = Machine::new(coordinator());
     machine.machine = "aarch64";
     machine.installed = "1.2.3-1.aarch64";
-    let mut r = rpm(coordinator());
+    let mut r = rpm(coordinator(), &dir);
     r.arch = "aarch64";
     check_rpm(&machine, &r).expect("checked");
     assert!(
@@ -225,10 +281,11 @@ fn the_other_architecture_is_installed_by_its_file_name() {
 
 #[test]
 fn a_package_missing_files_or_its_user_is_named() {
+    let dir = scratch("a_package_missing_files_or_its");
     let mut machine = Machine::new(coordinator());
     machine.omit = coordinator().files.to_vec();
     machine.user = false;
-    let Err(Error::Refused(problems)) = check_rpm(&machine, &rpm(coordinator())) else {
+    let Err(Error::Refused(problems)) = check_rpm(&machine, &rpm(coordinator(), &dir)) else {
         panic!("not refused");
     };
     let mut want: Vec<String> = coordinator()
@@ -242,11 +299,12 @@ fn a_package_missing_files_or_its_user_is_named() {
 
 #[test]
 fn a_unit_enabled_against_the_spec_and_a_process_that_runs_are_named() {
+    let dir = scratch("a_unit_enabled_against_the_spe");
     let mut machine = Machine::new(coordinator());
     machine.links = "/etc/systemd/system/multi-user.target.wants/hostkeeper-coordinator.service\n";
-    machine.running = "42\n";
+    machine.running = "/proc/self/comm\n/proc/42/comm\n/proc/x1/comm\n/proc//comm\nstray\n";
     assert_eq!(
-        check_rpm(&machine, &rpm(coordinator())).unwrap_err(),
+        check_rpm(&machine, &rpm(coordinator(), &dir)).unwrap_err(),
         Error::Refused(vec![
             "the service is enabled: /etc/systemd/system/multi-user.target.wants/hostkeeper-coordinator.service exists, and the package enables nothing".to_owned(),
             "the service is running (process 42), and the package starts nothing".to_owned(),
@@ -255,7 +313,7 @@ fn a_unit_enabled_against_the_spec_and_a_process_that_runs_are_named() {
     // The daemon is enabled by its postinstall: no link is a failure.
     let machine = Machine::new(daemon());
     assert_eq!(
-        check_rpm(&machine, &rpm(daemon())).unwrap_err(),
+        check_rpm(&machine, &rpm(daemon(), &dir)).unwrap_err(),
         Error::Refused(vec![
             "the service is not enabled: no link to hostkeeper.service is in etc/systemd/system, and the package enables it on a first install".to_owned()
         ])
@@ -264,10 +322,11 @@ fn a_unit_enabled_against_the_spec_and_a_process_that_runs_are_named() {
 
 #[test]
 fn a_package_at_another_version_or_an_rpm_whose_signature_is_not_ok_is_named() {
+    let dir = scratch("a_package_at_another_version_o");
     let mut machine = Machine::new(coordinator());
     machine.installed = "1.2.2-1.x86_64";
     machine.checked = "/work/p.rpm: digests SIGNATURES NOT OK\n";
-    let Err(Error::Refused(problems)) = check_rpm(&machine, &rpm(coordinator())) else {
+    let Err(Error::Refused(problems)) = check_rpm(&machine, &rpm(coordinator(), &dir)) else {
         panic!("not refused");
     };
     assert_eq!(
@@ -285,7 +344,7 @@ fn a_package_at_another_version_or_an_rpm_whose_signature_is_not_ok_is_named() {
         let mut machine = Machine::new(coordinator());
         machine.checked = checked;
         assert!(matches!(
-            check_rpm(&machine, &rpm(coordinator())),
+            check_rpm(&machine, &rpm(coordinator(), &dir)),
             Err(Error::Refused(_))
         ));
     }
@@ -293,10 +352,11 @@ fn a_package_at_another_version_or_an_rpm_whose_signature_is_not_ok_is_named() {
 
 #[test]
 fn a_binary_that_says_another_release_is_refused() {
+    let dir = scratch("a_binary_that_says_another_rel");
     let mut machine = Machine::new(coordinator());
     machine.says = Some("hostkeeper-coordinator 1.2.3+ffffffffffff\n".to_owned());
     assert_eq!(
-        check_rpm(&machine, &rpm(coordinator()))
+        check_rpm(&machine, &rpm(coordinator(), &dir))
             .unwrap_err()
             .to_string(),
         "the binary says \"hostkeeper-coordinator 1.2.3+ffffffffffff\\n\", not \"hostkeeper-coordinator 1.2.3+0123456789ab\""
@@ -306,21 +366,19 @@ fn a_binary_that_says_another_release_is_refused() {
 #[test]
 fn a_program_that_fails_is_named_with_what_it_said_and_a_machine_of_another_architecture_is_refused()
  {
+    let dir = scratch("a_program_that_fails_is_named_");
     for (refuse, program) in [
         ("uname", "uname -m"),
-        ("printf", "printf"),
         ("install -y hostkeeper-coordinator-1.2.3", "dnf install"),
         ("--qf", "rpm -q"),
         ("--import", "rpm --import"),
         ("--output", "--output"),
         ("-K", "rpm -K"),
         ("--version", "hostkeeper-coordinator --version"),
-        ("ls /etc", "ls /etc"),
-        ("grep -l", "grep -l"),
     ] {
         let mut machine = Machine::new(coordinator());
         machine.refuse = Some(refuse);
-        let e = check_rpm(&machine, &rpm(coordinator()))
+        let e = check_rpm(&machine, &rpm(coordinator(), &dir))
             .unwrap_err()
             .to_string();
         assert!(
@@ -331,7 +389,7 @@ fn a_program_that_fails_is_named_with_what_it_said_and_a_machine_of_another_arch
     let mut machine = Machine::new(daemon());
     machine.refuse = Some("install -y systemd");
     assert!(
-        check_rpm(&machine, &rpm(daemon()))
+        check_rpm(&machine, &rpm(daemon(), &dir))
             .unwrap_err()
             .to_string()
             .starts_with("dnf install -y systemd failed: refused")
@@ -339,7 +397,7 @@ fn a_program_that_fails_is_named_with_what_it_said_and_a_machine_of_another_arch
     let mut machine = Machine::new(coordinator());
     machine.machine = "aarch64";
     assert_eq!(
-        check_rpm(&machine, &rpm(coordinator()))
+        check_rpm(&machine, &rpm(coordinator(), &dir))
             .unwrap_err()
             .to_string(),
         "this machine is aarch64, not x86_64: the check would install another package"
@@ -348,6 +406,7 @@ fn a_program_that_fails_is_named_with_what_it_said_and_a_machine_of_another_arch
 
 #[test]
 fn flags_out_of_their_form_are_usage_errors_before_anything_runs() {
+    let dir = scratch("flags_out_of_their_form_are_us");
     let machine = Machine::new(coordinator());
     for change in [
         |r: &mut Rpm| r.version = "1.2",
@@ -358,7 +417,7 @@ fn flags_out_of_their_form_are_usage_errors_before_anything_runs() {
         |r: &mut Rpm| r.work = "/work/",
         |r: &mut Rpm| r.commit = "abc",
     ] {
-        let mut r = rpm(coordinator());
+        let mut r = rpm(coordinator(), &dir);
         change(&mut r);
         assert!(matches!(check_rpm(&machine, &r), Err(Error::Usage(_))));
     }
@@ -396,5 +455,117 @@ fn every_program_runs_in_the_container_through_docker_exec() {
         name: "c".to_owned(),
     };
     let e = container.run(Path::new("uname"), &[]).unwrap_err();
+    assert!(e.to_string().starts_with("/nowhere/docker: "), "{e}");
+}
+
+#[test]
+fn what_find_prints_is_read_even_when_it_exits_non_zero() {
+    // A missing directory, or a process that vanished while `find` walked, makes it exit
+    // non-zero; its words still count.
+    let dir = scratch("find_exits_non_zero");
+    let mut machine = Machine::new(coordinator());
+    machine.find_fails = true;
+    machine.links = "/etc/systemd/system/multi-user.target.wants/hostkeeper-coordinator.service\n";
+    machine.running = "/proc/7/comm\n";
+    let Err(Error::Refused(problems)) = check_rpm(&machine, &rpm(coordinator(), &dir)) else {
+        panic!("not refused");
+    };
+    assert_eq!(problems.len(), 2, "{problems:?}");
+    assert!(problems[0].starts_with("the service is enabled: "));
+    assert!(problems[1].contains("(process 7)"));
+    // No answer at all is a miss, not a failure.
+    let mut machine = Machine::new(coordinator());
+    machine.find_fails = true;
+    check_rpm(&machine, &rpm(coordinator(), &dir)).expect("checked");
+}
+
+#[test]
+fn a_link_directly_in_the_system_directory_enables_the_unit_too() {
+    let dir = scratch("a_link_in_the_system_directory");
+    let mut machine = Machine::new(daemon());
+    machine.links = "/etc/systemd/system/hostkeeper.service\n";
+    check_rpm(&machine, &rpm(daemon(), &dir)).expect("enabled");
+}
+
+#[test]
+fn the_repository_file_is_written_on_the_runner_and_copied_in_and_a_refused_copy_is_named() {
+    let dir = scratch("the_repository_file_copy");
+    let mut machine = Machine::new(coordinator());
+    machine.copy_refused = Some("docker cp failed: no such container");
+    assert_eq!(
+        check_rpm(&machine, &rpm(coordinator(), &dir)).unwrap_err(),
+        Error::Failed("docker cp failed: no such container".to_owned())
+    );
+    // The file is in the scratch directory, with the contents of repo_file, and nothing ran in
+    // the container after the copy failed.
+    assert_eq!(
+        std::fs::read_to_string(dir.join("komira-testing.repo")).expect("file"),
+        repo_file(URL)
+    );
+    let order: Vec<String> = machine
+        .calls()
+        .iter()
+        .map(|c| c.split(' ').next().unwrap_or_default().to_owned())
+        .collect();
+    assert_eq!(order, ["uname", "copy"]);
+}
+
+#[test]
+fn a_scratch_directory_that_cannot_be_written_is_named() {
+    let dir = scratch("a_scratch_that_is_a_file");
+    std::fs::write(dir.join("file"), "x").expect("file");
+    let machine = Machine::new(coordinator());
+    let blocked = dir.join("file");
+    let e = check_rpm(&machine, &rpm(coordinator(), &blocked)).unwrap_err();
+    assert!(
+        matches!(&e, Error::Spawn { what, .. } if what.starts_with("write ") && what.ends_with("komira-testing.repo")),
+        "{e}"
+    );
+}
+
+#[test]
+fn the_repository_file_goes_into_the_container_with_docker_cp_on_the_runner() {
+    let exec = FakeExec::says("");
+    let container = Container {
+        exec: &exec,
+        docker: PathBuf::from("docker"),
+        name: "check-rpm".to_owned(),
+    };
+    container
+        .copy_in(Path::new("/runner/komira-testing.repo"), REPO_FILE)
+        .expect("copied");
+    assert_eq!(
+        *exec.calls.borrow(),
+        [(
+            "docker".to_owned(),
+            vec![
+                "cp".to_owned(),
+                "/runner/komira-testing.repo".to_owned(),
+                "check-rpm:/etc/yum.repos.d/komira-testing.repo".to_owned()
+            ]
+        )]
+    );
+    let refused = FakeExec::fails("no such container\n");
+    let container = Container {
+        exec: &refused,
+        docker: PathBuf::from("docker"),
+        name: "c".to_owned(),
+    };
+    assert_eq!(
+        container
+            .copy_in(Path::new("/runner/r"), REPO_FILE)
+            .unwrap_err(),
+        Error::Failed(
+            "docker cp /runner/r c:/etc/yum.repos.d/komira-testing.repo failed: no such container"
+                .to_owned()
+        )
+    );
+    let missing = FakeExec::missing();
+    let container = Container {
+        exec: &missing,
+        docker: PathBuf::from("/nowhere/docker"),
+        name: "c".to_owned(),
+    };
+    let e = container.copy_in(Path::new("/r"), REPO_FILE).unwrap_err();
     assert!(e.to_string().starts_with("/nowhere/docker: "), "{e}");
 }

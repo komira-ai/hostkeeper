@@ -62,6 +62,8 @@
 //!
 //! A workflow that tags or publishes is also held to [`release::publish_problems`].
 //!
+//! In `release.yml` every `run:` is one command on one line ([`one_command`]).
+//!
 //! Every `curl` of a `run:` carries the HTTPS and failure guards and the retry options, and no
 //! `run:` downloads with `wget` or `gh release download` ([`downloads`]). Every `cargo xtask`
 //! call of a `run:` is one the binary's own command line accepts: its verb, its flags, and every
@@ -78,6 +80,7 @@ use super::advisories;
 use super::callers;
 use super::downloads;
 use super::net_install;
+use super::one_command;
 use super::packages;
 use super::pr_device;
 use super::release::{self, PLAN_IF, RELEASE_IF, SIGN_IF};
@@ -404,6 +407,9 @@ pub fn lint(file: &str, text: &str) -> Vec<String> {
     }
     problems.extend(callers::problems(file, text, &doc));
     problems.extend(downloads::problems(&doc));
+    if file == one_command::FILE {
+        problems.extend(one_command::problems(&doc));
+    }
     problems.extend(xtask_calls::problems(&doc));
     problems
 }

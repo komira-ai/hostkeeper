@@ -1,12 +1,13 @@
-//! `channels rpm repo sign --dir <dir> --work <dir> --fingerprint <fpr>[,<fpr>...] --key-file <file>
-//! --passphrase-file <file> [--gpg <program>] [--output <file>]`: `repomd.xml.asc`, the detached
+//! `channels rpm repo sign --dir <dir> --work <dir> --fingerprint <fpr>[,<fpr>...] [--gpg <program>]
+//! [--output <file>]`: `repomd.xml.asc`, the detached
 //! armored signature of each architecture's `repomd.xml`, verified.
 //!
 //! `dir` is `<next>/<suite>`, what `rpm repo index` or `rpm promote` wrote. The key is the signing
 //! subkey of the archive key, selected as `apt sign` selects it (the fingerprint and `!`); several
 //! fingerprints (a key rotation) give one signature each. With `repo_gpgcheck=1`, `dnf` verifies this
 //! file, and `repomd.xml` then vouches for every metadata file. The passphrase is a file, with the
-//! loopback pinentry; the key, the passphrase and the keyring are removed when the verb ends,
+//! loopback pinentry; the key and the passphrase come from the step's environment and are written
+//! below `--work` by [`crate::channels::apt::sign::secrets_from_env`]; the key, the passphrase and the keyring are removed when the verb ends,
 //! whatever happened. `signed=true` is appended to `--output` when every signature verifies.
 //!
 //! Copied from komira-ai/tierstore at ff4777831c08fc13aa025b54e6e0531c2f350f4f

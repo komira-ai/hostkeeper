@@ -911,6 +911,8 @@ fn channels_with_flags_that_do_not_fit_is_a_usage_error_with_status_2_and_a_fail
             "other-product-1",
             "--region",
             "us-east-1",
+            "--token-url",
+            "https://token.example/request",
             "--env-file",
             d.join("env").to_str().expect("utf8"),
         ],
@@ -950,7 +952,6 @@ fn channels_assume_outside_a_job_with_a_token_is_a_failure_with_status_1() {
     let d = dir("channels-assume");
     let o = Command::new(env!("CARGO_BIN_EXE_xtask"))
         .current_dir(&*d)
-        .env_remove("ACTIONS_ID_TOKEN_REQUEST_URL")
         .env_remove("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
         .args([
             "channels",
@@ -961,6 +962,8 @@ fn channels_assume_outside_a_job_with_a_token_is_a_failure_with_status_1() {
             "hostkeeper-apt-1",
             "--region",
             "us-east-1",
+            "--token-url",
+            "https://token.example/request",
             "--env-file",
             d.join("env").to_str().expect("utf8"),
         ])

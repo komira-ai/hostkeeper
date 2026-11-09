@@ -10,8 +10,8 @@
 //! unsigned, attested ones plus one entry in the signature header ([`layout`], [`sign`]).
 //!
 //! - `channels rpm sign --rpms <dir> --out <dir> --version <V> --sums <file> --work <dir>
-//!   --fingerprint <fpr> --key-file <f> --passphrase-file <f> --signed-at <epoch>` ([`sign`]): each
-//!   package signed, verified, and listed with its new digest in `SHA256SUMS.signed`.
+//!   --fingerprint <fpr> --signed-at <epoch>` ([`sign`]): each
+//!   package signed with the key of `APT_GPG_PRIVATE_KEY` and `APT_GPG_PASSPHRASE`, verified, and listed with its new digest in `SHA256SUMS.signed`.
 //! - `channels rpm check-signed --dir <dir> --version <V> --sums <file>` ([`sign`]): each package is
 //!   signed, undamaged, and the attested package once its signature is taken out. Reads no key.
 //! - `channels rpm repo read --bucket <b> --out <dir>` ([`read`]): the current `repodata` and the
@@ -23,8 +23,8 @@
 //! - `channels rpm promote --testing <dir> --stable <dir> --out <dir> --version <V> --sums <file>
 //!   --signed-sums <file> --date <epoch>` ([`promote`]): the entries of a release `testing` lists,
 //!   merged into the `repodata` of `stable`; reads no cloud and no key.
-//! - `channels rpm repo sign --dir <dir> --work <dir> --fingerprint <fpr> --key-file <f>
-//!   --passphrase-file <f>` ([`repo_sign`]): `repomd.xml.asc` of each architecture, verified. The key.
+//! - `channels rpm repo sign --dir <dir> --work <dir> --fingerprint <fpr>` ([`repo_sign`]):
+//!   `repomd.xml.asc` of each architecture, verified. The key, from the same two variables.
 //! - `channels rpm repo write --bucket <b> --distribution-id <id> --hostname <h> --next <dir> --rpms
 //!   <dir> --version <V>` ([`write`]): the packages into the pool with `If-None-Match`, the
 //!   `repodata` after them, `repomd.xml` and its signature with `If-Match` on the ETags that were
@@ -56,7 +56,7 @@ use clap::Subcommand;
 
 pub use state::Suite;
 
-use super::apt::sign::ExecGpg;
+use super::apt::sign::{self as apt_sign, ExecGpg};
 use super::aws::ExecAws;
 use super::host::ExecHost;
 use super::{Error, is_plain_version, spec};
@@ -129,18 +129,12 @@ pub enum Verb {
         /// The release's `SHA256SUMS`: each package is held to its digest.
         #[arg(long)]
         sums: PathBuf,
-        /// Where the private keyring is made; it is removed at the end.
+        /// Where the key files and the private keyring are made; they are removed at the end.
         #[arg(long)]
         work: PathBuf,
         /// The signing subkey's fingerprint, or several separated by commas (the first signs).
         #[arg(long)]
         fingerprint: String,
-        /// The armored private key; removed at the end.
-        #[arg(long)]
-        key_file: PathBuf,
-        /// The file holding the key's passphrase; removed at the end.
-        #[arg(long)]
-        passphrase_file: PathBuf,
         /// The time of the signature, seconds since the epoch: the same value gives the same bytes.
         #[arg(long)]
         signed_at: u64,
@@ -251,18 +245,12 @@ pub enum RepoVerb {
         /// `<next>/<suite>` of the new `repodata`.
         #[arg(long)]
         dir: PathBuf,
-        /// Where the private keyring is made; it is removed at the end.
+        /// Where the key files and the private keyring are made; they are removed at the end.
         #[arg(long)]
         work: PathBuf,
         /// The signing subkey's fingerprint, or several separated by commas (a key rotation).
         #[arg(long)]
         fingerprint: String,
-        /// The armored private key; removed at the end.
-        #[arg(long)]
-        key_file: PathBuf,
-        /// The file holding the key's passphrase; removed at the end.
-        #[arg(long)]
-        passphrase_file: PathBuf,
         /// The `gpg` program.
         #[arg(long, default_value = "gpg")]
         gpg: PathBuf,
@@ -317,6 +305,16 @@ pub enum RepoVerb {
 /// # Errors
 /// Whatever the verb refuses or fails on.
 pub fn run(verb: Verb, exec: &dyn Exec) -> Result<Vec<String>, Error> {
+    run_with(verb, exec, &apt_sign::secrets_from_env)
+}
+
+/// [`run`], getting the signing key files below `--work` from `secrets` (the tests write fixed
+/// strings in place of the environment).
+pub(crate) fn run_with(
+    verb: Verb,
+    exec: &dyn Exec,
+    secrets: &dyn Fn(&Path) -> Result<apt_sign::Secrets, Error>,
+) -> Result<Vec<String>, Error> {
     match verb {
         Verb::Sign {
             rpms,
@@ -325,26 +323,27 @@ pub fn run(verb: Verb, exec: &dyn Exec) -> Result<Vec<String>, Error> {
             sums,
             work,
             fingerprint,
-            key_file,
-            passphrase_file,
             signed_at,
             gpg,
             output,
-        } => sign::sign(
-            &ExecGpg::new(exec, gpg),
-            &sign::Request {
-                rpms: &rpms,
-                out: &out,
-                version: &version,
-                sums: &sums,
-                work: &work,
-                fingerprints: &fingerprint,
-                key_file: &key_file,
-                passphrase_file: &passphrase_file,
-                signed_at,
-            },
-            output.as_deref(),
-        ),
+        } => {
+            let secrets = secrets(&work)?;
+            sign::sign(
+                &ExecGpg::new(exec, gpg),
+                &sign::Request {
+                    rpms: &rpms,
+                    out: &out,
+                    version: &version,
+                    sums: &sums,
+                    work: &work,
+                    fingerprints: &fingerprint,
+                    key_file: &secrets.key_file,
+                    passphrase_file: &secrets.passphrase_file,
+                    signed_at,
+                },
+                output.as_deref(),
+            )
+        }
         Verb::CheckSigned {
             dir,
             version,
@@ -377,11 +376,15 @@ pub fn run(verb: Verb, exec: &dyn Exec) -> Result<Vec<String>, Error> {
             date,
             keep,
         }),
-        Verb::Repo { verb } => run_repo(verb, exec),
+        Verb::Repo { verb } => run_repo(verb, exec, secrets),
     }
 }
 
-fn run_repo(verb: RepoVerb, exec: &dyn Exec) -> Result<Vec<String>, Error> {
+fn run_repo(
+    verb: RepoVerb,
+    exec: &dyn Exec,
+    secrets: &dyn Fn(&Path) -> Result<apt_sign::Secrets, Error>,
+) -> Result<Vec<String>, Error> {
     match verb {
         RepoVerb::Read {
             suite,
@@ -410,21 +413,22 @@ fn run_repo(verb: RepoVerb, exec: &dyn Exec) -> Result<Vec<String>, Error> {
             dir,
             work,
             fingerprint,
-            key_file,
-            passphrase_file,
             gpg,
             output,
-        } => repo_sign::sign(
-            &ExecGpg::new(exec, gpg),
-            &repo_sign::Request {
-                dir: &dir,
-                work: &work,
-                fingerprints: &fingerprint,
-                key_file: &key_file,
-                passphrase_file: &passphrase_file,
-            },
-            output.as_deref(),
-        ),
+        } => {
+            let secrets = secrets(&work)?;
+            repo_sign::sign(
+                &ExecGpg::new(exec, gpg),
+                &repo_sign::Request {
+                    dir: &dir,
+                    work: &work,
+                    fingerprints: &fingerprint,
+                    key_file: &secrets.key_file,
+                    passphrase_file: &secrets.passphrase_file,
+                },
+                output.as_deref(),
+            )
+        }
         RepoVerb::Write {
             suite,
             bucket,

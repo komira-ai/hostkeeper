@@ -4,12 +4,19 @@
 //! each architecture and in a clean container of each distribution (pinned by digest).
 //!
 //! The verb runs on the runner and the system it checks is the container: every program runs in
-//! it with `docker exec <container>` ([`Container`]). (The `xtask` binary of the runner is built
-//! against a newer C library than these distributions have, so it cannot run in them.) A test
-//! hands [`Host`] a stand-in instead.
+//! it with `docker exec <container> <program> <args>`, each argument its own, no shell
+//! ([`Container`]). (The `xtask` binary of the runner is built against a newer C library than
+//! these distributions have, so it cannot run in them.) A test hands [`RpmHost`] a stand-in
+//! instead. The container has `coreutils`, `findutils` and `grep` and no `procps-ng`, so the
+//! checks use `test`, `find` and `grep` alone: `test -f` for a file, `find /etc/systemd/system`
+//! for the unit's links, and `find /proc` with `grep -l -x` on each `comm` file for the processes
+//! (the pid is read out of the path in Rust). `find` and `grep` exit non-zero for a miss or for a
+//! process that vanished while `find` walked, so their words are read whatever the status.
 //!
-//! In the container it writes the repository file of the suite `testing` (`gpgcheck=1` and
-//! `repo_gpgcheck=1`, the key at `<url>/apt/komira-archive-keyring.asc`), installs the packages
+//! The repository file of the suite `testing` (`gpgcheck=1` and `repo_gpgcheck=1`, the key at
+//! `<url>/apt/komira-archive-keyring.asc`) is written on the runner, in the directory `--scratch`
+//! (the workflow passes `$RUNNER_TEMP`), and copied into the container with `docker cp`
+//! ([`RpmHost::copy_in`]), run on the runner. In the container the verb installs the packages
 //! the spec lists as prerequisites and then `<package>-<version>` with `dnf` (which verifies the
 //! signature of the repository metadata and of the package, and imports the key), and holds the
 //! installed system to what the package promises ([`Package`]): the package is at the version
@@ -41,6 +48,16 @@ pub(crate) const REPO_FILE: &str = "/etc/yum.repos.d/komira-testing.repo";
 /// The key's path on the repository host (the same key signs the apt and the rpm tree).
 pub(crate) const KEY_PATH: &str = "apt/komira-archive-keyring.asc";
 
+/// The container, behind a trait so a test answers in place of it: its programs, and a file put
+/// into it.
+pub(crate) trait RpmHost: Host {
+    /// Copies the runner's file `local` to `dest` in the container.
+    ///
+    /// # Errors
+    /// The copy could not be started or failed (naming it and what it said).
+    fn copy_in(&self, local: &Path, dest: &str) -> Result<(), Error>;
+}
+
 /// A container: every program runs in it, through `docker exec`.
 pub(crate) struct Container<'a> {
     pub(crate) exec: &'a dyn Exec,
@@ -60,6 +77,25 @@ impl Host for Container<'_> {
     }
 }
 
+impl RpmHost for Container<'_> {
+    fn copy_in(&self, local: &Path, dest: &str) -> Result<(), Error> {
+        let args = [
+            "cp".to_owned(),
+            local.display().to_string(),
+            format!("{}:{dest}", self.name),
+        ];
+        let answer = run_program(self.exec, &self.docker, &args)?;
+        if answer.ok {
+            return Ok(());
+        }
+        Err(Error::Failed(format!(
+            "docker {} failed: {}",
+            args.join(" "),
+            answer.stderr.trim_end()
+        )))
+    }
+}
+
 /// What `check-rpm` is asked.
 pub(crate) struct Rpm<'a> {
     pub(crate) package: &'a Package,
@@ -71,7 +107,12 @@ pub(crate) struct Rpm<'a> {
     pub(crate) url: &'a str,
     /// A directory of the container to download the package to.
     pub(crate) work: &'a str,
+    /// A directory of the runner the repository file is written to before it is copied in.
+    pub(crate) scratch: &'a Path,
 }
+
+/// The name of the repository file on the runner, in the scratch directory.
+const SCRATCH_FILE: &str = "komira-testing.repo";
 
 /// The repository file of the suite `testing`: signed metadata and signed packages, no other.
 pub(crate) fn repo_file(url: &str) -> String {
@@ -80,11 +121,71 @@ pub(crate) fn repo_file(url: &str) -> String {
     )
 }
 
-/// The lines `sh -c <script> sh <arg>` prints; the script ends in `true`, so that a miss is an
-/// empty answer and not a failure.
-fn lines_of(host: &dyn Host, script: &str, arg: &str) -> Result<Vec<String>, Error> {
-    let said = must(host, "sh", &["-c", script, "sh", arg])?;
-    Ok(said.lines().map(str::to_owned).collect())
+/// Whether `test -f path` says the file is there.
+fn is_file(host: &dyn Host, path: &str) -> Result<bool, Error> {
+    Ok(host.run(Path::new("test"), &strings(&["-f", path]))?.ok)
+}
+
+/// The links that enable `unit`: what `find` prints of `/etc/systemd/system`, whatever its status
+/// (a directory that is not there is an empty answer).
+fn unit_links(host: &dyn Host, unit: &str) -> Result<Vec<String>, Error> {
+    let wants = format!("/etc/systemd/system/*.wants/{unit}");
+    let direct = format!("/etc/systemd/system/{unit}");
+    let answer = host.run(
+        Path::new("find"),
+        &strings(&[
+            "/etc/systemd/system",
+            "-maxdepth",
+            "2",
+            "-path",
+            &wants,
+            "-o",
+            "-path",
+            &direct,
+        ]),
+    )?;
+    Ok(answer.stdout.lines().map(str::to_owned).collect())
+}
+
+/// The pids of the processes whose `comm` is `comm`: the `/proc/<pid>/comm` files `grep -l -x`
+/// names, whatever the status of `find` and `grep` (a process may vanish while `find` walks).
+fn running_pids(host: &dyn Host, comm: &str) -> Result<Vec<String>, Error> {
+    let answer = host.run(
+        Path::new("find"),
+        &strings(&[
+            "/proc",
+            "-mindepth",
+            "2",
+            "-maxdepth",
+            "2",
+            "-name",
+            "comm",
+            "-exec",
+            "grep",
+            "-l",
+            "-x",
+            comm,
+            "{}",
+            "+",
+        ]),
+    )?;
+    Ok(answer
+        .stdout
+        .lines()
+        .filter_map(|line| {
+            let pid = line.strip_prefix("/proc/")?.strip_suffix("/comm")?;
+            (!pid.is_empty() && pid.bytes().all(|b| b.is_ascii_digit())).then(|| pid.to_owned())
+        })
+        .collect())
+}
+
+/// Writes the repository file to the scratch directory and copies it into the container.
+fn install_repo_file(host: &dyn RpmHost, r: &Rpm) -> Result<(), Error> {
+    let local = r.scratch.join(SCRATCH_FILE);
+    std::fs::create_dir_all(r.scratch)
+        .and_then(|()| std::fs::write(&local, repo_file(r.url)))
+        .map_err(Error::spawn(format!("write {}", local.display())))?;
+    host.copy_in(&local, REPO_FILE)
 }
 
 /// The `check-rpm` verb: the lines to print.
@@ -94,7 +195,7 @@ fn lines_of(host: &dyn Host, script: &str, arg: &str) -> Result<Vec<String>, Err
 /// another architecture, a package whose signature `rpm -K` does not accept, a binary that does
 /// not say the release, or one problem per way the installed system is not what the package
 /// promises.
-pub(crate) fn check_rpm(host: &dyn Host, r: &Rpm) -> Result<Vec<String>, Error> {
+pub(crate) fn check_rpm(host: &dyn RpmHost, r: &Rpm) -> Result<Vec<String>, Error> {
     version_flag(r.version)?;
     let package = r.package;
     let Some(arch) = spec::arch_of_rpm(r.arch) else {
@@ -119,17 +220,7 @@ pub(crate) fn check_rpm(host: &dyn Host, r: &Rpm) -> Result<Vec<String>, Error> 
             r.arch
         )));
     }
-    must(
-        host,
-        "sh",
-        &[
-            "-c",
-            "printf '%s' \"$1\" > \"$2\"",
-            "sh",
-            &repo_file(r.url),
-            REPO_FILE,
-        ],
-    )?;
+    install_repo_file(host, r)?;
     for prerequisite in package.prerequisites {
         must(host, "dnf", &["install", "-y", prerequisite])?;
     }
@@ -176,8 +267,7 @@ pub(crate) fn check_rpm(host: &dyn Host, r: &Rpm) -> Result<Vec<String>, Error> 
     }
     let said = says(host, package, &stamp)?;
     for path in package.files {
-        let args = ["-c", "test -f \"$1\"", "sh", path].map(str::to_owned);
-        if !host.run(Path::new("sh"), &args)?.ok {
+        if !is_file(host, path)? {
             problems.push(format!("{path} is not installed"));
         }
     }
@@ -188,17 +278,9 @@ pub(crate) fn check_rpm(host: &dyn Host, r: &Rpm) -> Result<Vec<String>, Error> 
     {
         problems.push(format!("the user {user} does not exist"));
     }
-    let links = lines_of(
-        host,
-        "ls /etc/systemd/system/*.wants/\"$1\" /etc/systemd/system/\"$1\" 2>/dev/null; true",
-        package.unit,
-    )?;
+    let links = unit_links(host, package.unit)?;
     problems.extend(enabled_problems(package, &links));
-    let pids = lines_of(
-        host,
-        "grep -l -x \"$1\" /proc/[0-9]*/comm 2>/dev/null | cut -d/ -f3; true",
-        package.comm(),
-    )?;
+    let pids = running_pids(host, package.comm())?;
     problems.extend(running_problems(&pids));
     if !problems.is_empty() {
         return Err(Error::Refused(problems));

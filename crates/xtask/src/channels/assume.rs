@@ -3,9 +3,10 @@
 //! list of others, and `aws-actions/configure-aws-credentials` is not on it).
 //!
 //! 1. The runner offers a token request (`ACTIONS_ID_TOKEN_REQUEST_URL`, authorised by
-//!    `ACTIONS_ID_TOKEN_REQUEST_TOKEN`) to a job that holds `id-token: write`. Both are set by the
-//!    platform, the second is a secret; they are the only environment this verb reads, each by
-//!    name in [`platform_value`].
+//!    `ACTIONS_ID_TOKEN_REQUEST_TOKEN`) to a job that holds `id-token: write`. The URL is
+//!    configuration, so the step passes it as `--token-url "$ACTIONS_ID_TOKEN_REQUEST_URL"` and
+//!    it must be an `https` URL. The bearer is secret material set by the platform; it is the only
+//!    environment this verb reads, by name in [`platform_value`].
 //! 2. The token is asked for with the audience `sts.amazonaws.com` over HTTPS.
 //! 3. `aws sts assume-role-with-web-identity` exchanges it for the role's credentials.
 //! 4. `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` and the region are
@@ -45,7 +46,8 @@ const MAX_TOKEN_ANSWER: u64 = 1024 * 1024;
 
 /// The token request the runner offers the job.
 pub struct Oidc {
-    /// `ACTIONS_ID_TOKEN_REQUEST_URL`.
+    /// The token request URL (`--token-url`, which the step fills from
+    /// `ACTIONS_ID_TOKEN_REQUEST_URL`).
     pub url: String,
     /// `ACTIONS_ID_TOKEN_REQUEST_TOKEN`, a secret.
     pub bearer: String,
@@ -54,31 +56,36 @@ pub struct Oidc {
 /// One non-empty value the platform sets in the environment of a job.
 #[expect(
     clippy::disallowed_methods,
-    reason = "the OIDC token request is offered by the runner in its environment and nowhere else (AGENTS.md S2: a platform-set value, and secret material)"
+    reason = "the bearer of the OIDC token request is offered by the runner in its environment and nowhere else (AGENTS.md S2: secret material)"
 )]
 pub(crate) fn platform_value(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.is_empty())
 }
 
-/// The token request of this job.
+/// The token request of this job: `url` is the flag `--token-url`, the bearer is the runner's.
 ///
 /// # Errors
-/// The runner offers none: the job lacks `id-token: write`.
-pub fn oidc_from_env() -> Result<Oidc, Error> {
-    oidc_from_env_with(platform_value)
+/// A URL that is not an `https` URL (usage), or no bearer: the job lacks `id-token: write`.
+pub fn oidc_from_env(url: &str) -> Result<Oidc, Error> {
+    oidc_with(url, platform_value)
 }
 
-/// [`oidc_from_env`], reading the values through `value` (the tests pass a stand-in).
-fn oidc_from_env_with(value: impl Fn(&str) -> Option<String>) -> Result<Oidc, Error> {
-    let missing = || {
-        Error::Failed(
-            "the runner offers no OIDC token (the job needs `permissions: id-token: write`)"
+/// [`oidc_from_env`], reading the bearer through `value` (the tests pass a stand-in).
+fn oidc_with(url: &str, value: impl Fn(&str) -> Option<String>) -> Result<Oidc, Error> {
+    if !url.starts_with("https://") || url.chars().any(char::is_control) {
+        return Err(Error::Usage(
+            "--token-url is not an https URL (the step passes \"$ACTIONS_ID_TOKEN_REQUEST_URL\", which the job has when it holds `id-token: write`)"
                 .to_owned(),
-        )
-    };
+        ));
+    }
     Ok(Oidc {
-        url: value("ACTIONS_ID_TOKEN_REQUEST_URL").ok_or_else(missing)?,
-        bearer: value("ACTIONS_ID_TOKEN_REQUEST_TOKEN").ok_or_else(missing)?,
+        url: url.to_owned(),
+        bearer: value("ACTIONS_ID_TOKEN_REQUEST_TOKEN").ok_or_else(|| {
+            Error::Failed(
+                "the runner offers no OIDC token (the job needs `permissions: id-token: write`)"
+                    .to_owned(),
+            )
+        })?,
     })
 }
 

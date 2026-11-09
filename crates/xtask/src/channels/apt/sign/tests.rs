@@ -289,3 +289,88 @@ fn the_key_files_are_removed_when_the_flags_are_refused_before_any_signing() {
     assert!(!s.dir.join("key.asc").exists() && !s.dir.join("pass").exists());
     assert!(gpg.calls.borrow().is_empty());
 }
+
+#[test]
+fn the_key_and_the_passphrase_are_written_below_work_with_mode_0600_exactly() {
+    // Catches: a secret readable by other users, a trailing newline added to it, and a stale
+    // file of another mode kept.
+    let dir = scratch("secrets-written");
+    let work = dir.join("work/nested");
+    let secrets = write_secrets(&work, "KEY\nLINES\n", "pass phrase").expect("written");
+    assert_eq!(secrets.key_file, work.join("signing-key.asc"));
+    assert_eq!(secrets.passphrase_file, work.join("signing-passphrase"));
+    for (path, text) in [
+        (&secrets.key_file, "KEY\nLINES\n"),
+        (&secrets.passphrase_file, "pass phrase"),
+    ] {
+        assert_eq!(std::fs::read_to_string(path).expect("file"), text);
+        let mode = std::fs::metadata(path).expect("meta").permissions().mode();
+        assert_eq!(mode & 0o777, 0o600, "{}", path.display());
+    }
+    std::fs::set_permissions(&secrets.key_file, std::fs::Permissions::from_mode(0o644))
+        .expect("loosen");
+    let again = write_secrets(&work, "NEW", "p").expect("rewritten");
+    assert_eq!(
+        std::fs::read_to_string(&again.key_file).expect("key"),
+        "NEW"
+    );
+    let mode = std::fs::metadata(&again.key_file)
+        .expect("meta")
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o600);
+}
+
+#[test]
+fn a_secret_that_cannot_be_written_is_named_and_leaves_no_key_behind() {
+    let dir = scratch("secrets-refused");
+    let work = dir.join("work");
+    // The passphrase's path is a directory: the second file cannot be made.
+    std::fs::create_dir_all(work.join("signing-passphrase")).expect("dir");
+    let e = write_secrets(&work, "KEY-TEXT", "PASS-TEXT")
+        .err()
+        .expect("refused");
+    assert!(
+        matches!(&e, Error::Spawn { what, .. } if *what == format!("write {}", work.join("signing-passphrase").display())),
+        "{e}"
+    );
+    assert!(!e.to_string().contains("KEY-TEXT") && !e.to_string().contains("PASS-TEXT"));
+    assert!(!work.join("signing-key.asc").exists());
+    // A work directory that is a file cannot be made at all.
+    let file = dir.join("file");
+    std::fs::write(&file, "x").expect("file");
+    let e = write_secrets(&file, "k", "p").err().expect("refused");
+    assert!(
+        matches!(&e, Error::Spawn { what, .. } if *what == format!("create {}", file.display())),
+        "{e}"
+    );
+}
+
+#[test]
+fn a_secret_variable_that_is_not_set_is_a_usage_error_naming_it() {
+    // Catches: a missing key taken for an empty one, signing with nothing. The name is nobody's.
+    let Err(e) = secret_var("HOSTKEEPER_XTASK_TEST_NAME_NOBODY_SETS") else {
+        panic!("taken");
+    };
+    assert_eq!(
+        e,
+        Error::Usage(
+            "HOSTKEEPER_XTASK_TEST_NAME_NOBODY_SETS is not set: the signing key comes from it"
+                .to_owned()
+        )
+    );
+    // PATH is set in every environment a test runs in.
+    assert!(secret_var("PATH").is_ok_and(|v| !v.is_empty()));
+}
+
+#[test]
+fn the_environment_variables_are_the_key_and_the_passphrase_of_the_sign_verbs() {
+    // The process environment is not set here (the process test sets it on a child): whichever
+    // way it is, the answer is the files below `--work`, or a usage error naming the variable.
+    let dir = scratch("secrets-from-env");
+    match secrets_from_env(&dir.join("work")) {
+        Ok(secrets) => assert!(secrets.key_file.is_file() && secrets.passphrase_file.is_file()),
+        Err(Error::Usage(m)) => assert!(m.starts_with(KEY_VAR) || m.starts_with(PASSPHRASE_VAR)),
+        Err(e) => panic!("{e}"),
+    }
+}

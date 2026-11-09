@@ -50,6 +50,10 @@ pub const NEWEST_TAG: &str = "${{ needs.newest.outputs.tag }}";
 /// The artifact that holds the release's files (`verify` uploaded it).
 pub const RELEASE_ARTIFACT: &str = "release-${{ needs.newest.outputs.tag }}";
 
+/// The value of `--token-url` of every `channels assume` step: the token request the runner
+/// offers a job with `id-token: write`, passed as a flag and not read from the environment.
+pub const TOKEN_URL: &str = "$ACTIONS_ID_TOKEN_REQUEST_URL";
+
 /// The prefix of the name of every session the role is assumed under (`spec.rs` of the verbs).
 pub const SESSION_PREFIX: &str = "hostkeeper-";
 
@@ -560,6 +564,16 @@ fn row_problems(row: &Row, job: &Node) -> Vec<String> {
         if !session.starts_with(SESSION_PREFIX) {
             say(format!(
                 "assumes the role under the session {session:?}, which does not start with {SESSION_PREFIX}"
+            ));
+        }
+    }
+    for call in calls
+        .iter()
+        .filter(|c| channel_verb(c).as_deref() == Some("assume"))
+    {
+        if flag_values(std::slice::from_ref(call), "--token-url") != [TOKEN_URL] {
+            say(format!(
+                "assumes the role without `--token-url \"{TOKEN_URL}\"`: the verb takes the token request's URL as a flag"
             ));
         }
     }

@@ -190,6 +190,7 @@ pub(crate) fn write_layout(
     dir: &Path,
     version: &Version,
     out: &Path,
+    env_file: Option<&Path>,
 ) -> Result<Vec<String>, Error> {
     let digest = check_index(dir, version)?;
     let index = std::fs::read(dir.join(index_name(version)))
@@ -235,11 +236,26 @@ pub(crate) fn write_layout(
         &out.join("index.json"),
         &serde_json::to_vec(&top).unwrap_or_default(),
     )?;
+    if let Some(env_file) = env_file {
+        append_digest(env_file, &digest)?;
+    }
     Ok(vec![format!(
         "{}: the image {version} ({digest}), {} blobs",
         out.display(),
         blobs.len()
     )])
+}
+
+/// Appends `IMAGE_DIGEST=<digest>` to the env file (`GITHUB_ENV`), for the steps that push and
+/// read back the image by its digest.
+fn append_digest(env_file: &Path, digest: &str) -> Result<(), Error> {
+    use std::io::Write;
+    std::fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(env_file)
+        .and_then(|mut f| f.write_all(format!("IMAGE_DIGEST={digest}\n").as_bytes()))
+        .map_err(Error::io(format!("append to {}", env_file.display())))
 }
 
 /// Writes `bytes` to the new file `path`, refusing one that exists.

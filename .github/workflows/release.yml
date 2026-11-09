@@ -310,10 +310,8 @@ jobs:
       - name: Check the files against SHA256SUMS
         working-directory: dist
         run: sha256sum --check --strict SHA256SUMS
-      - name: The image's layout, of the two image tarballs and the image index they make
-        run: cargo xtask release image-layout dist --version "$RELEASE_VERSION" --out "$RUNNER_TEMP/layout"
-      - name: The image's digest, the SHA-256 of its image index
-        run: echo "IMAGE_DIGEST=sha256:$(sha256sum "dist/hostkeeper-coordinator-$RELEASE_VERSION.image.json" | cut -d ' ' -f 1)" >> "$GITHUB_ENV"
+      - name: The image's layout, of the two image tarballs and the image index they make, and its digest (the SHA-256 of the image index) as IMAGE_DIGEST
+        run: cargo xtask release image-layout dist --version "$RELEASE_VERSION" --out "$RUNNER_TEMP/layout" --env-file "$GITHUB_ENV"
       # The token is the job's own, `packages: write` on this repository's packages only; it is
       # read from standard input and is on no command line.
       - name: Sign in to the registry
@@ -532,7 +530,7 @@ jobs:
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           ROLE_ARN: ${{ vars.APT_PUBLISH_ROLE_ARN }}
-        run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-testing-apt-read-$GITHUB_RUN_ID" --region us-east-1 --env-file "$GITHUB_ENV"
+        run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-testing-apt-read-$GITHUB_RUN_ID" --region us-east-1 --token-url "$ACTIONS_ID_TOKEN_REQUEST_URL" --env-file "$GITHUB_ENV"
       - name: Read the current index and the ETag of each object from S3 (never through the CDN, which caches the index)
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
@@ -587,13 +585,15 @@ jobs:
         with:
           name: release-${{ needs.newest.outputs.tag }}
           path: dist
-      - name: The files match SHA256SUMS and are the attested assets of this commit
+      - name: The files match SHA256SUMS
+        if: ${{ steps.gate.outputs.enabled == 'true' }}
+        working-directory: dist
+        run: sha256sum --check --strict SHA256SUMS
+      - name: The files are the attested assets of this commit
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          (cd dist && sha256sum --check --strict SHA256SUMS)
-          cargo xtask release check dist --version "${TAG#v}" --commit "$COMMIT"
+        run: cargo xtask release check dist --version "${TAG#v}" --commit "$COMMIT"
       - name: Merge the .debs into the index that was read (the entries of every other product are kept)
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
@@ -606,11 +606,7 @@ jobs:
           APT_GPG_FINGERPRINT: ${{ vars.APT_GPG_FINGERPRINT }}
           APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
           APT_GPG_PASSPHRASE: ${{ secrets.APT_GPG_PASSPHRASE }}
-        run: |
-          umask 077
-          printf '%s' "$APT_GPG_PRIVATE_KEY" > "$RUNNER_TEMP/apt-key.asc"
-          printf '%s' "$APT_GPG_PASSPHRASE" > "$RUNNER_TEMP/apt-passphrase"
-          cargo xtask channels apt sign --dir "$RUNNER_TEMP/apt-next/dists/testing" --work "$RUNNER_TEMP/apt-sign" --fingerprint "$APT_GPG_FINGERPRINT" --key-file "$RUNNER_TEMP/apt-key.asc" --passphrase-file "$RUNNER_TEMP/apt-passphrase" --output "$GITHUB_OUTPUT"
+        run: cargo xtask channels apt sign --dir "$RUNNER_TEMP/apt-next/dists/testing" --work "$RUNNER_TEMP/apt-sign" --fingerprint "$APT_GPG_FINGERPRINT" --output "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         with:
@@ -664,18 +660,20 @@ jobs:
         with:
           name: release-${{ needs.newest.outputs.tag }}
           path: dist
-      - name: The files match SHA256SUMS and are the attested assets of this commit
+      - name: The files match SHA256SUMS
+        if: ${{ steps.gate.outputs.enabled == 'true' }}
+        working-directory: dist
+        run: sha256sum --check --strict SHA256SUMS
+      - name: The files are the attested assets of this commit
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          (cd dist && sha256sum --check --strict SHA256SUMS)
-          cargo xtask release check dist --version "${TAG#v}" --commit "$COMMIT"
+        run: cargo xtask release check dist --version "${TAG#v}" --commit "$COMMIT"
       - name: Assume the apt publish role through OIDC
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           ROLE_ARN: ${{ vars.APT_PUBLISH_ROLE_ARN }}
-        run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-testing-apt-write-$GITHUB_RUN_ID" --region us-east-1 --env-file "$GITHUB_ENV"
+        run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-testing-apt-write-$GITHUB_RUN_ID" --region us-east-1 --token-url "$ACTIONS_ID_TOKEN_REQUEST_URL" --env-file "$GITHUB_ENV"
       - name: Upload the .debs once each, then write the signed index with If-Match on the ETags that were read, then invalidate /apt/dists/*
         id: put
         if: ${{ steps.gate.outputs.enabled == 'true' }}
@@ -721,7 +719,7 @@ jobs:
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           ROLE_ARN: ${{ vars.APT_PUBLISH_ROLE_ARN }}
-        run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-testing-apt-read-2-$GITHUB_RUN_ID" --region us-east-1 --env-file "$GITHUB_ENV"
+        run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-testing-apt-read-2-$GITHUB_RUN_ID" --region us-east-1 --token-url "$ACTIONS_ID_TOKEN_REQUEST_URL" --env-file "$GITHUB_ENV"
       - name: Read the current index and the ETag of each object from S3 (never through the CDN, which caches the index)
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
@@ -776,13 +774,15 @@ jobs:
         with:
           name: release-${{ needs.newest.outputs.tag }}
           path: dist
-      - name: The files match SHA256SUMS and are the attested assets of this commit
+      - name: The files match SHA256SUMS
+        if: ${{ steps.gate.outputs.enabled == 'true' }}
+        working-directory: dist
+        run: sha256sum --check --strict SHA256SUMS
+      - name: The files are the attested assets of this commit
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          (cd dist && sha256sum --check --strict SHA256SUMS)
-          cargo xtask release check dist --version "${TAG#v}" --commit "$COMMIT"
+        run: cargo xtask release check dist --version "${TAG#v}" --commit "$COMMIT"
       - name: Merge the .debs into the index that was read (the entries of every other product are kept)
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
@@ -795,11 +795,7 @@ jobs:
           APT_GPG_FINGERPRINT: ${{ vars.APT_GPG_FINGERPRINT }}
           APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
           APT_GPG_PASSPHRASE: ${{ secrets.APT_GPG_PASSPHRASE }}
-        run: |
-          umask 077
-          printf '%s' "$APT_GPG_PRIVATE_KEY" > "$RUNNER_TEMP/apt-key.asc"
-          printf '%s' "$APT_GPG_PASSPHRASE" > "$RUNNER_TEMP/apt-passphrase"
-          cargo xtask channels apt sign --dir "$RUNNER_TEMP/apt-next/dists/testing" --work "$RUNNER_TEMP/apt-sign" --fingerprint "$APT_GPG_FINGERPRINT" --key-file "$RUNNER_TEMP/apt-key.asc" --passphrase-file "$RUNNER_TEMP/apt-passphrase" --output "$GITHUB_OUTPUT"
+        run: cargo xtask channels apt sign --dir "$RUNNER_TEMP/apt-next/dists/testing" --work "$RUNNER_TEMP/apt-sign" --fingerprint "$APT_GPG_FINGERPRINT" --output "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         with:
@@ -853,18 +849,20 @@ jobs:
         with:
           name: release-${{ needs.newest.outputs.tag }}
           path: dist
-      - name: The files match SHA256SUMS and are the attested assets of this commit
+      - name: The files match SHA256SUMS
+        if: ${{ steps.gate.outputs.enabled == 'true' }}
+        working-directory: dist
+        run: sha256sum --check --strict SHA256SUMS
+      - name: The files are the attested assets of this commit
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          (cd dist && sha256sum --check --strict SHA256SUMS)
-          cargo xtask release check dist --version "${TAG#v}" --commit "$COMMIT"
+        run: cargo xtask release check dist --version "${TAG#v}" --commit "$COMMIT"
       - name: Assume the apt publish role through OIDC
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           ROLE_ARN: ${{ vars.APT_PUBLISH_ROLE_ARN }}
-        run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-testing-apt-write-2-$GITHUB_RUN_ID" --region us-east-1 --env-file "$GITHUB_ENV"
+        run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-testing-apt-write-2-$GITHUB_RUN_ID" --region us-east-1 --token-url "$ACTIONS_ID_TOKEN_REQUEST_URL" --env-file "$GITHUB_ENV"
       - name: Upload the .debs once each, then write the signed index with If-Match on the ETags that were read, then invalidate /apt/dists/*
         id: put
         if: ${{ steps.gate.outputs.enabled == 'true' }}
@@ -910,7 +908,7 @@ jobs:
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           ROLE_ARN: ${{ vars.APT_PUBLISH_ROLE_ARN }}
-        run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-testing-apt-read-3-$GITHUB_RUN_ID" --region us-east-1 --env-file "$GITHUB_ENV"
+        run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-testing-apt-read-3-$GITHUB_RUN_ID" --region us-east-1 --token-url "$ACTIONS_ID_TOKEN_REQUEST_URL" --env-file "$GITHUB_ENV"
       - name: Read the current index and the ETag of each object from S3 (never through the CDN, which caches the index)
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
@@ -965,13 +963,15 @@ jobs:
         with:
           name: release-${{ needs.newest.outputs.tag }}
           path: dist
-      - name: The files match SHA256SUMS and are the attested assets of this commit
+      - name: The files match SHA256SUMS
+        if: ${{ steps.gate.outputs.enabled == 'true' }}
+        working-directory: dist
+        run: sha256sum --check --strict SHA256SUMS
+      - name: The files are the attested assets of this commit
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          (cd dist && sha256sum --check --strict SHA256SUMS)
-          cargo xtask release check dist --version "${TAG#v}" --commit "$COMMIT"
+        run: cargo xtask release check dist --version "${TAG#v}" --commit "$COMMIT"
       - name: Merge the .debs into the index that was read (the entries of every other product are kept)
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
@@ -984,11 +984,7 @@ jobs:
           APT_GPG_FINGERPRINT: ${{ vars.APT_GPG_FINGERPRINT }}
           APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
           APT_GPG_PASSPHRASE: ${{ secrets.APT_GPG_PASSPHRASE }}
-        run: |
-          umask 077
-          printf '%s' "$APT_GPG_PRIVATE_KEY" > "$RUNNER_TEMP/apt-key.asc"
-          printf '%s' "$APT_GPG_PASSPHRASE" > "$RUNNER_TEMP/apt-passphrase"
-          cargo xtask channels apt sign --dir "$RUNNER_TEMP/apt-next/dists/testing" --work "$RUNNER_TEMP/apt-sign" --fingerprint "$APT_GPG_FINGERPRINT" --key-file "$RUNNER_TEMP/apt-key.asc" --passphrase-file "$RUNNER_TEMP/apt-passphrase" --output "$GITHUB_OUTPUT"
+        run: cargo xtask channels apt sign --dir "$RUNNER_TEMP/apt-next/dists/testing" --work "$RUNNER_TEMP/apt-sign" --fingerprint "$APT_GPG_FINGERPRINT" --output "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         with:
@@ -1042,18 +1038,20 @@ jobs:
         with:
           name: release-${{ needs.newest.outputs.tag }}
           path: dist
-      - name: The files match SHA256SUMS and are the attested assets of this commit
+      - name: The files match SHA256SUMS
+        if: ${{ steps.gate.outputs.enabled == 'true' }}
+        working-directory: dist
+        run: sha256sum --check --strict SHA256SUMS
+      - name: The files are the attested assets of this commit
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          (cd dist && sha256sum --check --strict SHA256SUMS)
-          cargo xtask release check dist --version "${TAG#v}" --commit "$COMMIT"
+        run: cargo xtask release check dist --version "${TAG#v}" --commit "$COMMIT"
       - name: Assume the apt publish role through OIDC
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           ROLE_ARN: ${{ vars.APT_PUBLISH_ROLE_ARN }}
-        run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-testing-apt-write-3-$GITHUB_RUN_ID" --region us-east-1 --env-file "$GITHUB_ENV"
+        run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-testing-apt-write-3-$GITHUB_RUN_ID" --region us-east-1 --token-url "$ACTIONS_ID_TOKEN_REQUEST_URL" --env-file "$GITHUB_ENV"
       - name: Upload the .debs once each, then write the signed index with If-Match on the ETags that were read, then invalidate /apt/dists/*
         id: put
         if: ${{ steps.gate.outputs.enabled == 'true' }}
@@ -1119,7 +1117,7 @@ jobs:
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           ROLE_ARN: ${{ vars.APT_PUBLISH_ROLE_ARN }}
-        run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-apt-$GITHUB_RUN_ID" --region us-east-1 --env-file "$GITHUB_ENV"
+        run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-apt-$GITHUB_RUN_ID" --region us-east-1 --token-url "$ACTIONS_ID_TOKEN_REQUEST_URL" --env-file "$GITHUB_ENV"
       - name: Read the current repodata and the ETag of repomd.xml and its signature from S3 (never through the CDN, which caches the index)
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
@@ -1174,13 +1172,15 @@ jobs:
         with:
           name: release-${{ needs.newest.outputs.tag }}
           path: dist
-      - name: The files match SHA256SUMS and are the attested assets of this commit
+      - name: The files match SHA256SUMS
+        if: ${{ steps.gate.outputs.enabled == 'true' }}
+        working-directory: dist
+        run: sha256sum --check --strict SHA256SUMS
+      - name: The files are the attested assets of this commit
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          (cd dist && sha256sum --check --strict SHA256SUMS)
-          cargo xtask release check dist --version "${TAG#v}" --commit "$COMMIT"
+        run: cargo xtask release check dist --version "${TAG#v}" --commit "$COMMIT"
       - name: Sign the .rpms with the signing subkey (the signature header only; the same bytes for the same commit), then remove the key
         id: sign-rpms
         if: ${{ steps.gate.outputs.enabled == 'true' }}
@@ -1188,11 +1188,7 @@ jobs:
           APT_GPG_FINGERPRINT: ${{ vars.APT_GPG_FINGERPRINT }}
           APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
           APT_GPG_PASSPHRASE: ${{ secrets.APT_GPG_PASSPHRASE }}
-        run: |
-          umask 077
-          printf '%s' "$APT_GPG_PRIVATE_KEY" > "$RUNNER_TEMP/rpm-key.asc"
-          printf '%s' "$APT_GPG_PASSPHRASE" > "$RUNNER_TEMP/rpm-passphrase"
-          cargo xtask channels rpm sign --rpms dist --out "$RUNNER_TEMP/rpm-signed" --version "${TAG#v}" --sums dist/SHA256SUMS --work "$RUNNER_TEMP/rpm-sign-packages" --fingerprint "$APT_GPG_FINGERPRINT" --key-file "$RUNNER_TEMP/rpm-key.asc" --passphrase-file "$RUNNER_TEMP/rpm-passphrase" --signed-at "$(git show --no-patch --format=%ct HEAD)"
+        run: cargo xtask channels rpm sign --rpms dist --out "$RUNNER_TEMP/rpm-signed" --version "${TAG#v}" --sums dist/SHA256SUMS --work "$RUNNER_TEMP/rpm-sign-packages" --fingerprint "$APT_GPG_FINGERPRINT" --signed-at "$(git show --no-patch --format=%ct HEAD)"
       - name: Merge the signed .rpms into the repodata that was read (the packages of every other product are kept)
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         run: cargo xtask channels rpm repo index --suite testing --current "$RUNNER_TEMP/rpm-current" --out "$RUNNER_TEMP/rpm-next" --rpms "$RUNNER_TEMP/rpm-signed" --version "${TAG#v}" --date "$(date +%s)"
@@ -1203,11 +1199,7 @@ jobs:
           APT_GPG_FINGERPRINT: ${{ vars.APT_GPG_FINGERPRINT }}
           APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
           APT_GPG_PASSPHRASE: ${{ secrets.APT_GPG_PASSPHRASE }}
-        run: |
-          umask 077
-          printf '%s' "$APT_GPG_PRIVATE_KEY" > "$RUNNER_TEMP/rpm-key.asc"
-          printf '%s' "$APT_GPG_PASSPHRASE" > "$RUNNER_TEMP/rpm-passphrase"
-          cargo xtask channels rpm repo sign --dir "$RUNNER_TEMP/rpm-next/testing" --work "$RUNNER_TEMP/rpm-sign" --fingerprint "$APT_GPG_FINGERPRINT" --key-file "$RUNNER_TEMP/rpm-key.asc" --passphrase-file "$RUNNER_TEMP/rpm-passphrase" --output "$GITHUB_OUTPUT"
+        run: cargo xtask channels rpm repo sign --dir "$RUNNER_TEMP/rpm-next/testing" --work "$RUNNER_TEMP/rpm-sign" --fingerprint "$APT_GPG_FINGERPRINT" --output "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         with:
@@ -1273,13 +1265,15 @@ jobs:
         with:
           name: release-${{ needs.newest.outputs.tag }}
           path: dist
-      - name: The files match SHA256SUMS and are the attested assets of this commit
+      - name: The files match SHA256SUMS
+        if: ${{ steps.gate.outputs.enabled == 'true' }}
+        working-directory: dist
+        run: sha256sum --check --strict SHA256SUMS
+      - name: The files are the attested assets of this commit
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          (cd dist && sha256sum --check --strict SHA256SUMS)
-          cargo xtask release check dist --version "${TAG#v}" --commit "$COMMIT"
+        run: cargo xtask release check dist --version "${TAG#v}" --commit "$COMMIT"
       - name: The signed .rpms are the attested packages plus a signature (checked against SHA256SUMS and the digests of the signing job)
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         run: cargo xtask channels rpm check-signed --dir "$RUNNER_TEMP/rpm-signed" --version "${TAG#v}" --sums dist/SHA256SUMS --signed-sums "$RUNNER_TEMP/rpm-signed/SHA256SUMS.signed"
@@ -1287,7 +1281,7 @@ jobs:
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           ROLE_ARN: ${{ vars.APT_PUBLISH_ROLE_ARN }}
-        run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-apt-$GITHUB_RUN_ID" --region us-east-1 --env-file "$GITHUB_ENV"
+        run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-apt-$GITHUB_RUN_ID" --region us-east-1 --token-url "$ACTIONS_ID_TOKEN_REQUEST_URL" --env-file "$GITHUB_ENV"
       - name: Upload the .rpms once each, then write the signed repodata with If-Match on the ETags that were read, then invalidate /rpm/testing/<arch>/repodata/*
         id: put
         if: ${{ steps.gate.outputs.enabled == 'true' }}
@@ -1333,7 +1327,7 @@ jobs:
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           ROLE_ARN: ${{ vars.APT_PUBLISH_ROLE_ARN }}
-        run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-apt-$GITHUB_RUN_ID" --region us-east-1 --env-file "$GITHUB_ENV"
+        run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-apt-$GITHUB_RUN_ID" --region us-east-1 --token-url "$ACTIONS_ID_TOKEN_REQUEST_URL" --env-file "$GITHUB_ENV"
       - name: Read the current repodata and the ETag of repomd.xml and its signature from S3 (never through the CDN, which caches the index)
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
@@ -1388,13 +1382,15 @@ jobs:
         with:
           name: release-${{ needs.newest.outputs.tag }}
           path: dist
-      - name: The files match SHA256SUMS and are the attested assets of this commit
+      - name: The files match SHA256SUMS
+        if: ${{ steps.gate.outputs.enabled == 'true' }}
+        working-directory: dist
+        run: sha256sum --check --strict SHA256SUMS
+      - name: The files are the attested assets of this commit
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          (cd dist && sha256sum --check --strict SHA256SUMS)
-          cargo xtask release check dist --version "${TAG#v}" --commit "$COMMIT"
+        run: cargo xtask release check dist --version "${TAG#v}" --commit "$COMMIT"
       - name: Sign the .rpms with the signing subkey (the signature header only; the same bytes for the same commit), then remove the key
         id: sign-rpms
         if: ${{ steps.gate.outputs.enabled == 'true' }}
@@ -1402,11 +1398,7 @@ jobs:
           APT_GPG_FINGERPRINT: ${{ vars.APT_GPG_FINGERPRINT }}
           APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
           APT_GPG_PASSPHRASE: ${{ secrets.APT_GPG_PASSPHRASE }}
-        run: |
-          umask 077
-          printf '%s' "$APT_GPG_PRIVATE_KEY" > "$RUNNER_TEMP/rpm-key.asc"
-          printf '%s' "$APT_GPG_PASSPHRASE" > "$RUNNER_TEMP/rpm-passphrase"
-          cargo xtask channels rpm sign --rpms dist --out "$RUNNER_TEMP/rpm-signed" --version "${TAG#v}" --sums dist/SHA256SUMS --work "$RUNNER_TEMP/rpm-sign-packages" --fingerprint "$APT_GPG_FINGERPRINT" --key-file "$RUNNER_TEMP/rpm-key.asc" --passphrase-file "$RUNNER_TEMP/rpm-passphrase" --signed-at "$(git show --no-patch --format=%ct HEAD)"
+        run: cargo xtask channels rpm sign --rpms dist --out "$RUNNER_TEMP/rpm-signed" --version "${TAG#v}" --sums dist/SHA256SUMS --work "$RUNNER_TEMP/rpm-sign-packages" --fingerprint "$APT_GPG_FINGERPRINT" --signed-at "$(git show --no-patch --format=%ct HEAD)"
       - name: Merge the signed .rpms into the repodata that was read (the packages of every other product are kept)
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         run: cargo xtask channels rpm repo index --suite testing --current "$RUNNER_TEMP/rpm-current" --out "$RUNNER_TEMP/rpm-next" --rpms "$RUNNER_TEMP/rpm-signed" --version "${TAG#v}" --date "$(date +%s)"
@@ -1417,11 +1409,7 @@ jobs:
           APT_GPG_FINGERPRINT: ${{ vars.APT_GPG_FINGERPRINT }}
           APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
           APT_GPG_PASSPHRASE: ${{ secrets.APT_GPG_PASSPHRASE }}
-        run: |
-          umask 077
-          printf '%s' "$APT_GPG_PRIVATE_KEY" > "$RUNNER_TEMP/rpm-key.asc"
-          printf '%s' "$APT_GPG_PASSPHRASE" > "$RUNNER_TEMP/rpm-passphrase"
-          cargo xtask channels rpm repo sign --dir "$RUNNER_TEMP/rpm-next/testing" --work "$RUNNER_TEMP/rpm-sign" --fingerprint "$APT_GPG_FINGERPRINT" --key-file "$RUNNER_TEMP/rpm-key.asc" --passphrase-file "$RUNNER_TEMP/rpm-passphrase" --output "$GITHUB_OUTPUT"
+        run: cargo xtask channels rpm repo sign --dir "$RUNNER_TEMP/rpm-next/testing" --work "$RUNNER_TEMP/rpm-sign" --fingerprint "$APT_GPG_FINGERPRINT" --output "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         with:
@@ -1487,13 +1475,15 @@ jobs:
         with:
           name: release-${{ needs.newest.outputs.tag }}
           path: dist
-      - name: The files match SHA256SUMS and are the attested assets of this commit
+      - name: The files match SHA256SUMS
+        if: ${{ steps.gate.outputs.enabled == 'true' }}
+        working-directory: dist
+        run: sha256sum --check --strict SHA256SUMS
+      - name: The files are the attested assets of this commit
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          (cd dist && sha256sum --check --strict SHA256SUMS)
-          cargo xtask release check dist --version "${TAG#v}" --commit "$COMMIT"
+        run: cargo xtask release check dist --version "${TAG#v}" --commit "$COMMIT"
       - name: The signed .rpms are the attested packages plus a signature (checked against SHA256SUMS and the digests of the signing job)
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         run: cargo xtask channels rpm check-signed --dir "$RUNNER_TEMP/rpm-signed" --version "${TAG#v}" --sums dist/SHA256SUMS --signed-sums "$RUNNER_TEMP/rpm-signed/SHA256SUMS.signed"
@@ -1501,7 +1491,7 @@ jobs:
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           ROLE_ARN: ${{ vars.APT_PUBLISH_ROLE_ARN }}
-        run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-apt-$GITHUB_RUN_ID" --region us-east-1 --env-file "$GITHUB_ENV"
+        run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-apt-$GITHUB_RUN_ID" --region us-east-1 --token-url "$ACTIONS_ID_TOKEN_REQUEST_URL" --env-file "$GITHUB_ENV"
       - name: Upload the .rpms once each, then write the signed repodata with If-Match on the ETags that were read, then invalidate /rpm/testing/<arch>/repodata/*
         id: put
         if: ${{ steps.gate.outputs.enabled == 'true' }}
@@ -1547,7 +1537,7 @@ jobs:
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           ROLE_ARN: ${{ vars.APT_PUBLISH_ROLE_ARN }}
-        run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-apt-$GITHUB_RUN_ID" --region us-east-1 --env-file "$GITHUB_ENV"
+        run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-apt-$GITHUB_RUN_ID" --region us-east-1 --token-url "$ACTIONS_ID_TOKEN_REQUEST_URL" --env-file "$GITHUB_ENV"
       - name: Read the current repodata and the ETag of repomd.xml and its signature from S3 (never through the CDN, which caches the index)
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
@@ -1602,13 +1592,15 @@ jobs:
         with:
           name: release-${{ needs.newest.outputs.tag }}
           path: dist
-      - name: The files match SHA256SUMS and are the attested assets of this commit
+      - name: The files match SHA256SUMS
+        if: ${{ steps.gate.outputs.enabled == 'true' }}
+        working-directory: dist
+        run: sha256sum --check --strict SHA256SUMS
+      - name: The files are the attested assets of this commit
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          (cd dist && sha256sum --check --strict SHA256SUMS)
-          cargo xtask release check dist --version "${TAG#v}" --commit "$COMMIT"
+        run: cargo xtask release check dist --version "${TAG#v}" --commit "$COMMIT"
       - name: Sign the .rpms with the signing subkey (the signature header only; the same bytes for the same commit), then remove the key
         id: sign-rpms
         if: ${{ steps.gate.outputs.enabled == 'true' }}
@@ -1616,11 +1608,7 @@ jobs:
           APT_GPG_FINGERPRINT: ${{ vars.APT_GPG_FINGERPRINT }}
           APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
           APT_GPG_PASSPHRASE: ${{ secrets.APT_GPG_PASSPHRASE }}
-        run: |
-          umask 077
-          printf '%s' "$APT_GPG_PRIVATE_KEY" > "$RUNNER_TEMP/rpm-key.asc"
-          printf '%s' "$APT_GPG_PASSPHRASE" > "$RUNNER_TEMP/rpm-passphrase"
-          cargo xtask channels rpm sign --rpms dist --out "$RUNNER_TEMP/rpm-signed" --version "${TAG#v}" --sums dist/SHA256SUMS --work "$RUNNER_TEMP/rpm-sign-packages" --fingerprint "$APT_GPG_FINGERPRINT" --key-file "$RUNNER_TEMP/rpm-key.asc" --passphrase-file "$RUNNER_TEMP/rpm-passphrase" --signed-at "$(git show --no-patch --format=%ct HEAD)"
+        run: cargo xtask channels rpm sign --rpms dist --out "$RUNNER_TEMP/rpm-signed" --version "${TAG#v}" --sums dist/SHA256SUMS --work "$RUNNER_TEMP/rpm-sign-packages" --fingerprint "$APT_GPG_FINGERPRINT" --signed-at "$(git show --no-patch --format=%ct HEAD)"
       - name: Merge the signed .rpms into the repodata that was read (the packages of every other product are kept)
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         run: cargo xtask channels rpm repo index --suite testing --current "$RUNNER_TEMP/rpm-current" --out "$RUNNER_TEMP/rpm-next" --rpms "$RUNNER_TEMP/rpm-signed" --version "${TAG#v}" --date "$(date +%s)"
@@ -1631,11 +1619,7 @@ jobs:
           APT_GPG_FINGERPRINT: ${{ vars.APT_GPG_FINGERPRINT }}
           APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
           APT_GPG_PASSPHRASE: ${{ secrets.APT_GPG_PASSPHRASE }}
-        run: |
-          umask 077
-          printf '%s' "$APT_GPG_PRIVATE_KEY" > "$RUNNER_TEMP/rpm-key.asc"
-          printf '%s' "$APT_GPG_PASSPHRASE" > "$RUNNER_TEMP/rpm-passphrase"
-          cargo xtask channels rpm repo sign --dir "$RUNNER_TEMP/rpm-next/testing" --work "$RUNNER_TEMP/rpm-sign" --fingerprint "$APT_GPG_FINGERPRINT" --key-file "$RUNNER_TEMP/rpm-key.asc" --passphrase-file "$RUNNER_TEMP/rpm-passphrase" --output "$GITHUB_OUTPUT"
+        run: cargo xtask channels rpm repo sign --dir "$RUNNER_TEMP/rpm-next/testing" --work "$RUNNER_TEMP/rpm-sign" --fingerprint "$APT_GPG_FINGERPRINT" --output "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         with:
@@ -1701,13 +1685,15 @@ jobs:
         with:
           name: release-${{ needs.newest.outputs.tag }}
           path: dist
-      - name: The files match SHA256SUMS and are the attested assets of this commit
+      - name: The files match SHA256SUMS
+        if: ${{ steps.gate.outputs.enabled == 'true' }}
+        working-directory: dist
+        run: sha256sum --check --strict SHA256SUMS
+      - name: The files are the attested assets of this commit
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          (cd dist && sha256sum --check --strict SHA256SUMS)
-          cargo xtask release check dist --version "${TAG#v}" --commit "$COMMIT"
+        run: cargo xtask release check dist --version "${TAG#v}" --commit "$COMMIT"
       - name: The signed .rpms are the attested packages plus a signature (checked against SHA256SUMS and the digests of the signing job)
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         run: cargo xtask channels rpm check-signed --dir "$RUNNER_TEMP/rpm-signed" --version "${TAG#v}" --sums dist/SHA256SUMS --signed-sums "$RUNNER_TEMP/rpm-signed/SHA256SUMS.signed"
@@ -1715,7 +1701,7 @@ jobs:
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           ROLE_ARN: ${{ vars.APT_PUBLISH_ROLE_ARN }}
-        run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-apt-$GITHUB_RUN_ID" --region us-east-1 --env-file "$GITHUB_ENV"
+        run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-apt-$GITHUB_RUN_ID" --region us-east-1 --token-url "$ACTIONS_ID_TOKEN_REQUEST_URL" --env-file "$GITHUB_ENV"
       - name: Upload the .rpms once each, then write the signed repodata with If-Match on the ETags that were read, then invalidate /rpm/testing/<arch>/repodata/*
         id: put
         if: ${{ steps.gate.outputs.enabled == 'true' }}
@@ -1767,18 +1753,20 @@ jobs:
         with:
           name: release-${{ needs.newest.outputs.tag }}
           path: dist
-      - name: The files match SHA256SUMS and are the attested assets of this commit
+      - name: The files match SHA256SUMS
+        if: ${{ steps.gate.outputs.enabled == 'true' }}
+        working-directory: dist
+        run: sha256sum --check --strict SHA256SUMS
+      - name: The files are the attested assets of this commit
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          (cd dist && sha256sum --check --strict SHA256SUMS)
-          cargo xtask release check dist --version "${TAG#v}" --commit "$COMMIT"
+        run: cargo xtask release check dist --version "${TAG#v}" --commit "$COMMIT"
       - name: Assume the apt publish role through OIDC
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           ROLE_ARN: ${{ vars.APT_PUBLISH_ROLE_ARN }}
-        run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-testing-pkg-upload-$GITHUB_RUN_ID" --region us-east-1 --env-file "$GITHUB_ENV"
+        run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-testing-pkg-upload-$GITHUB_RUN_ID" --region us-east-1 --token-url "$ACTIONS_ID_TOKEN_REQUEST_URL" --env-file "$GITHUB_ENV"
       - name: Put the installer, its bundle and their SHA256SUMS once each (the pointer is not touched)
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
@@ -1869,7 +1857,7 @@ jobs:
         env:
           PACKAGE: ${{ matrix.package }}
           ARCH: ${{ matrix.arch }}
-        run: cargo xtask channels check-rpm --package "$PACKAGE" --container check-rpm --arch "$ARCH" --version "${TAG#v}" --commit "$COMMIT" --work /root
+        run: cargo xtask channels check-rpm --package "$PACKAGE" --container check-rpm --arch "$ARCH" --version "${TAG#v}" --commit "$COMMIT" --work /root --scratch "$RUNNER_TEMP"
 
   # check-pkg: the installer, its bundle and the directory's SHA256SUMS as packages.komira.ai
   # serves them (HTTPS), against the release's SHA256SUMS.
@@ -1983,14 +1971,17 @@ jobs:
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           ROLE_ARN: ${{ vars.APT_PUBLISH_ROLE_ARN }}
-        run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-apt-$GITHUB_RUN_ID" --region us-east-1 --env-file "$GITHUB_ENV"
-      - name: Read the index of testing (what is promoted) and of stable (what it is merged into), with the ETag of each object, from S3
+        run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-apt-$GITHUB_RUN_ID" --region us-east-1 --token-url "$ACTIONS_ID_TOKEN_REQUEST_URL" --env-file "$GITHUB_ENV"
+      - name: Read the index of testing (what is promoted), with the ETag of each object, from S3
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           APT_BUCKET: ${{ vars.APT_BUCKET }}
-        run: |
-          cargo xtask channels apt read --suite testing --bucket "$APT_BUCKET" --out "$RUNNER_TEMP/apt-read/testing"
-          cargo xtask channels apt read --suite stable --bucket "$APT_BUCKET" --out "$RUNNER_TEMP/apt-read/stable"
+        run: cargo xtask channels apt read --suite testing --bucket "$APT_BUCKET" --out "$RUNNER_TEMP/apt-read/testing"
+      - name: Read the index of stable (what it is merged into), with the ETag of each object, from S3
+        if: ${{ steps.gate.outputs.enabled == 'true' }}
+        env:
+          APT_BUCKET: ${{ vars.APT_BUCKET }}
+        run: cargo xtask channels apt read --suite stable --bucket "$APT_BUCKET" --out "$RUNNER_TEMP/apt-read/stable"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         with:
@@ -2040,13 +2031,15 @@ jobs:
         with:
           name: release-${{ needs.newest.outputs.tag }}
           path: dist
-      - name: The files match SHA256SUMS and are the attested assets of this commit
+      - name: The files match SHA256SUMS
+        if: ${{ steps.gate.outputs.enabled == 'true' }}
+        working-directory: dist
+        run: sha256sum --check --strict SHA256SUMS
+      - name: The files are the attested assets of this commit
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          (cd dist && sha256sum --check --strict SHA256SUMS)
-          cargo xtask release check dist --version "${TAG#v}" --commit "$COMMIT"
+        run: cargo xtask release check dist --version "${TAG#v}" --commit "$COMMIT"
       - name: Promote the entries of this release that testing lists into the index of stable (held to the digests of SHA256SUMS; the entries of every other product are kept)
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
@@ -2059,11 +2052,7 @@ jobs:
           APT_GPG_FINGERPRINT: ${{ vars.APT_GPG_FINGERPRINT }}
           APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
           APT_GPG_PASSPHRASE: ${{ secrets.APT_GPG_PASSPHRASE }}
-        run: |
-          umask 077
-          printf '%s' "$APT_GPG_PRIVATE_KEY" > "$RUNNER_TEMP/apt-key.asc"
-          printf '%s' "$APT_GPG_PASSPHRASE" > "$RUNNER_TEMP/apt-passphrase"
-          cargo xtask channels apt sign --dir "$RUNNER_TEMP/apt-next/dists/stable" --work "$RUNNER_TEMP/apt-sign" --fingerprint "$APT_GPG_FINGERPRINT" --key-file "$RUNNER_TEMP/apt-key.asc" --passphrase-file "$RUNNER_TEMP/apt-passphrase" --output "$GITHUB_OUTPUT"
+        run: cargo xtask channels apt sign --dir "$RUNNER_TEMP/apt-next/dists/stable" --work "$RUNNER_TEMP/apt-sign" --fingerprint "$APT_GPG_FINGERPRINT" --output "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         with:
@@ -2115,7 +2104,7 @@ jobs:
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           ROLE_ARN: ${{ vars.APT_PUBLISH_ROLE_ARN }}
-        run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-apt-$GITHUB_RUN_ID" --region us-east-1 --env-file "$GITHUB_ENV"
+        run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-apt-$GITHUB_RUN_ID" --region us-east-1 --token-url "$ACTIONS_ID_TOKEN_REQUEST_URL" --env-file "$GITHUB_ENV"
       - name: Write the signed index of stable with If-Match on the ETags that were read (the packages are in the pool already), then invalidate /apt/dists/*
         id: put
         if: ${{ steps.gate.outputs.enabled == 'true' }}
@@ -2161,14 +2150,17 @@ jobs:
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           ROLE_ARN: ${{ vars.APT_PUBLISH_ROLE_ARN }}
-        run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-apt-$GITHUB_RUN_ID" --region us-east-1 --env-file "$GITHUB_ENV"
-      - name: Read the index of testing (what is promoted) and of stable (what it is merged into), with the ETag of each object, from S3
+        run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-apt-$GITHUB_RUN_ID" --region us-east-1 --token-url "$ACTIONS_ID_TOKEN_REQUEST_URL" --env-file "$GITHUB_ENV"
+      - name: Read the index of testing (what is promoted), with the ETag of each object, from S3
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           APT_BUCKET: ${{ vars.APT_BUCKET }}
-        run: |
-          cargo xtask channels apt read --suite testing --bucket "$APT_BUCKET" --out "$RUNNER_TEMP/apt-read/testing"
-          cargo xtask channels apt read --suite stable --bucket "$APT_BUCKET" --out "$RUNNER_TEMP/apt-read/stable"
+        run: cargo xtask channels apt read --suite testing --bucket "$APT_BUCKET" --out "$RUNNER_TEMP/apt-read/testing"
+      - name: Read the index of stable (what it is merged into), with the ETag of each object, from S3
+        if: ${{ steps.gate.outputs.enabled == 'true' }}
+        env:
+          APT_BUCKET: ${{ vars.APT_BUCKET }}
+        run: cargo xtask channels apt read --suite stable --bucket "$APT_BUCKET" --out "$RUNNER_TEMP/apt-read/stable"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         with:
@@ -2218,13 +2210,15 @@ jobs:
         with:
           name: release-${{ needs.newest.outputs.tag }}
           path: dist
-      - name: The files match SHA256SUMS and are the attested assets of this commit
+      - name: The files match SHA256SUMS
+        if: ${{ steps.gate.outputs.enabled == 'true' }}
+        working-directory: dist
+        run: sha256sum --check --strict SHA256SUMS
+      - name: The files are the attested assets of this commit
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          (cd dist && sha256sum --check --strict SHA256SUMS)
-          cargo xtask release check dist --version "${TAG#v}" --commit "$COMMIT"
+        run: cargo xtask release check dist --version "${TAG#v}" --commit "$COMMIT"
       - name: Promote the entries of this release that testing lists into the index of stable (held to the digests of SHA256SUMS; the entries of every other product are kept)
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
@@ -2237,11 +2231,7 @@ jobs:
           APT_GPG_FINGERPRINT: ${{ vars.APT_GPG_FINGERPRINT }}
           APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
           APT_GPG_PASSPHRASE: ${{ secrets.APT_GPG_PASSPHRASE }}
-        run: |
-          umask 077
-          printf '%s' "$APT_GPG_PRIVATE_KEY" > "$RUNNER_TEMP/apt-key.asc"
-          printf '%s' "$APT_GPG_PASSPHRASE" > "$RUNNER_TEMP/apt-passphrase"
-          cargo xtask channels apt sign --dir "$RUNNER_TEMP/apt-next/dists/stable" --work "$RUNNER_TEMP/apt-sign" --fingerprint "$APT_GPG_FINGERPRINT" --key-file "$RUNNER_TEMP/apt-key.asc" --passphrase-file "$RUNNER_TEMP/apt-passphrase" --output "$GITHUB_OUTPUT"
+        run: cargo xtask channels apt sign --dir "$RUNNER_TEMP/apt-next/dists/stable" --work "$RUNNER_TEMP/apt-sign" --fingerprint "$APT_GPG_FINGERPRINT" --output "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         with:
@@ -2293,7 +2283,7 @@ jobs:
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           ROLE_ARN: ${{ vars.APT_PUBLISH_ROLE_ARN }}
-        run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-apt-$GITHUB_RUN_ID" --region us-east-1 --env-file "$GITHUB_ENV"
+        run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-apt-$GITHUB_RUN_ID" --region us-east-1 --token-url "$ACTIONS_ID_TOKEN_REQUEST_URL" --env-file "$GITHUB_ENV"
       - name: Write the signed index of stable with If-Match on the ETags that were read (the packages are in the pool already), then invalidate /apt/dists/*
         id: put
         if: ${{ steps.gate.outputs.enabled == 'true' }}
@@ -2339,14 +2329,17 @@ jobs:
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           ROLE_ARN: ${{ vars.APT_PUBLISH_ROLE_ARN }}
-        run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-apt-$GITHUB_RUN_ID" --region us-east-1 --env-file "$GITHUB_ENV"
-      - name: Read the index of testing (what is promoted) and of stable (what it is merged into), with the ETag of each object, from S3
+        run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-apt-$GITHUB_RUN_ID" --region us-east-1 --token-url "$ACTIONS_ID_TOKEN_REQUEST_URL" --env-file "$GITHUB_ENV"
+      - name: Read the index of testing (what is promoted), with the ETag of each object, from S3
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           APT_BUCKET: ${{ vars.APT_BUCKET }}
-        run: |
-          cargo xtask channels apt read --suite testing --bucket "$APT_BUCKET" --out "$RUNNER_TEMP/apt-read/testing"
-          cargo xtask channels apt read --suite stable --bucket "$APT_BUCKET" --out "$RUNNER_TEMP/apt-read/stable"
+        run: cargo xtask channels apt read --suite testing --bucket "$APT_BUCKET" --out "$RUNNER_TEMP/apt-read/testing"
+      - name: Read the index of stable (what it is merged into), with the ETag of each object, from S3
+        if: ${{ steps.gate.outputs.enabled == 'true' }}
+        env:
+          APT_BUCKET: ${{ vars.APT_BUCKET }}
+        run: cargo xtask channels apt read --suite stable --bucket "$APT_BUCKET" --out "$RUNNER_TEMP/apt-read/stable"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         with:
@@ -2396,13 +2389,15 @@ jobs:
         with:
           name: release-${{ needs.newest.outputs.tag }}
           path: dist
-      - name: The files match SHA256SUMS and are the attested assets of this commit
+      - name: The files match SHA256SUMS
+        if: ${{ steps.gate.outputs.enabled == 'true' }}
+        working-directory: dist
+        run: sha256sum --check --strict SHA256SUMS
+      - name: The files are the attested assets of this commit
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          (cd dist && sha256sum --check --strict SHA256SUMS)
-          cargo xtask release check dist --version "${TAG#v}" --commit "$COMMIT"
+        run: cargo xtask release check dist --version "${TAG#v}" --commit "$COMMIT"
       - name: Promote the entries of this release that testing lists into the index of stable (held to the digests of SHA256SUMS; the entries of every other product are kept)
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
@@ -2415,11 +2410,7 @@ jobs:
           APT_GPG_FINGERPRINT: ${{ vars.APT_GPG_FINGERPRINT }}
           APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
           APT_GPG_PASSPHRASE: ${{ secrets.APT_GPG_PASSPHRASE }}
-        run: |
-          umask 077
-          printf '%s' "$APT_GPG_PRIVATE_KEY" > "$RUNNER_TEMP/apt-key.asc"
-          printf '%s' "$APT_GPG_PASSPHRASE" > "$RUNNER_TEMP/apt-passphrase"
-          cargo xtask channels apt sign --dir "$RUNNER_TEMP/apt-next/dists/stable" --work "$RUNNER_TEMP/apt-sign" --fingerprint "$APT_GPG_FINGERPRINT" --key-file "$RUNNER_TEMP/apt-key.asc" --passphrase-file "$RUNNER_TEMP/apt-passphrase" --output "$GITHUB_OUTPUT"
+        run: cargo xtask channels apt sign --dir "$RUNNER_TEMP/apt-next/dists/stable" --work "$RUNNER_TEMP/apt-sign" --fingerprint "$APT_GPG_FINGERPRINT" --output "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         with:
@@ -2471,7 +2462,7 @@ jobs:
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           ROLE_ARN: ${{ vars.APT_PUBLISH_ROLE_ARN }}
-        run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-apt-$GITHUB_RUN_ID" --region us-east-1 --env-file "$GITHUB_ENV"
+        run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-apt-$GITHUB_RUN_ID" --region us-east-1 --token-url "$ACTIONS_ID_TOKEN_REQUEST_URL" --env-file "$GITHUB_ENV"
       - name: Write the signed index of stable with If-Match on the ETags that were read (the packages are in the pool already), then invalidate /apt/dists/*
         id: put
         if: ${{ steps.gate.outputs.enabled == 'true' }}
@@ -2522,14 +2513,17 @@ jobs:
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           ROLE_ARN: ${{ vars.APT_PUBLISH_ROLE_ARN }}
-        run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-apt-$GITHUB_RUN_ID" --region us-east-1 --env-file "$GITHUB_ENV"
-      - name: Read the repodata of testing (what is promoted) and of stable (what it is merged into), with the ETag of each replaced object, from S3
+        run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-apt-$GITHUB_RUN_ID" --region us-east-1 --token-url "$ACTIONS_ID_TOKEN_REQUEST_URL" --env-file "$GITHUB_ENV"
+      - name: Read the repodata of testing (what is promoted), with the ETag of each replaced object, from S3
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           APT_BUCKET: ${{ vars.APT_BUCKET }}
-        run: |
-          cargo xtask channels rpm repo read --suite testing --bucket "$APT_BUCKET" --out "$RUNNER_TEMP/rpm-read/testing"
-          cargo xtask channels rpm repo read --suite stable --bucket "$APT_BUCKET" --out "$RUNNER_TEMP/rpm-read/stable"
+        run: cargo xtask channels rpm repo read --suite testing --bucket "$APT_BUCKET" --out "$RUNNER_TEMP/rpm-read/testing"
+      - name: Read the repodata of stable (what it is merged into), with the ETag of each replaced object, from S3
+        if: ${{ steps.gate.outputs.enabled == 'true' }}
+        env:
+          APT_BUCKET: ${{ vars.APT_BUCKET }}
+        run: cargo xtask channels rpm repo read --suite stable --bucket "$APT_BUCKET" --out "$RUNNER_TEMP/rpm-read/stable"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         with:
@@ -2579,13 +2573,15 @@ jobs:
         with:
           name: release-${{ needs.newest.outputs.tag }}
           path: dist
-      - name: The files match SHA256SUMS and are the attested assets of this commit
+      - name: The files match SHA256SUMS
+        if: ${{ steps.gate.outputs.enabled == 'true' }}
+        working-directory: dist
+        run: sha256sum --check --strict SHA256SUMS
+      - name: The files are the attested assets of this commit
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          (cd dist && sha256sum --check --strict SHA256SUMS)
-          cargo xtask release check dist --version "${TAG#v}" --commit "$COMMIT"
+        run: cargo xtask release check dist --version "${TAG#v}" --commit "$COMMIT"
       - name: Sign the .rpms with the signing subkey (the signature header only; the same bytes for the same commit), then remove the key
         id: sign-rpms
         if: ${{ steps.gate.outputs.enabled == 'true' }}
@@ -2593,11 +2589,7 @@ jobs:
           APT_GPG_FINGERPRINT: ${{ vars.APT_GPG_FINGERPRINT }}
           APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
           APT_GPG_PASSPHRASE: ${{ secrets.APT_GPG_PASSPHRASE }}
-        run: |
-          umask 077
-          printf '%s' "$APT_GPG_PRIVATE_KEY" > "$RUNNER_TEMP/rpm-key.asc"
-          printf '%s' "$APT_GPG_PASSPHRASE" > "$RUNNER_TEMP/rpm-passphrase"
-          cargo xtask channels rpm sign --rpms dist --out "$RUNNER_TEMP/rpm-signed" --version "${TAG#v}" --sums dist/SHA256SUMS --work "$RUNNER_TEMP/rpm-sign-packages" --fingerprint "$APT_GPG_FINGERPRINT" --key-file "$RUNNER_TEMP/rpm-key.asc" --passphrase-file "$RUNNER_TEMP/rpm-passphrase" --signed-at "$(git show --no-patch --format=%ct HEAD)"
+        run: cargo xtask channels rpm sign --rpms dist --out "$RUNNER_TEMP/rpm-signed" --version "${TAG#v}" --sums dist/SHA256SUMS --work "$RUNNER_TEMP/rpm-sign-packages" --fingerprint "$APT_GPG_FINGERPRINT" --signed-at "$(git show --no-patch --format=%ct HEAD)"
       - name: Promote the entries of this release that testing lists into the repodata of stable (held to the digests of SHA256SUMS and of the signed packages; the packages of every other product are kept)
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         run: cargo xtask channels rpm promote --testing "$RUNNER_TEMP/rpm-read/testing" --stable "$RUNNER_TEMP/rpm-read/stable" --out "$RUNNER_TEMP/rpm-next" --version "${TAG#v}" --sums dist/SHA256SUMS --signed-sums "$RUNNER_TEMP/rpm-signed/SHA256SUMS.signed" --date "$(date +%s)"
@@ -2608,11 +2600,7 @@ jobs:
           APT_GPG_FINGERPRINT: ${{ vars.APT_GPG_FINGERPRINT }}
           APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
           APT_GPG_PASSPHRASE: ${{ secrets.APT_GPG_PASSPHRASE }}
-        run: |
-          umask 077
-          printf '%s' "$APT_GPG_PRIVATE_KEY" > "$RUNNER_TEMP/rpm-key.asc"
-          printf '%s' "$APT_GPG_PASSPHRASE" > "$RUNNER_TEMP/rpm-passphrase"
-          cargo xtask channels rpm repo sign --dir "$RUNNER_TEMP/rpm-next/stable" --work "$RUNNER_TEMP/rpm-sign" --fingerprint "$APT_GPG_FINGERPRINT" --key-file "$RUNNER_TEMP/rpm-key.asc" --passphrase-file "$RUNNER_TEMP/rpm-passphrase" --output "$GITHUB_OUTPUT"
+        run: cargo xtask channels rpm repo sign --dir "$RUNNER_TEMP/rpm-next/stable" --work "$RUNNER_TEMP/rpm-sign" --fingerprint "$APT_GPG_FINGERPRINT" --output "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         with:
@@ -2664,7 +2652,7 @@ jobs:
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           ROLE_ARN: ${{ vars.APT_PUBLISH_ROLE_ARN }}
-        run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-apt-$GITHUB_RUN_ID" --region us-east-1 --env-file "$GITHUB_ENV"
+        run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-apt-$GITHUB_RUN_ID" --region us-east-1 --token-url "$ACTIONS_ID_TOKEN_REQUEST_URL" --env-file "$GITHUB_ENV"
       - name: Write the signed repodata of stable with If-Match on the ETags that were read (the packages are in the pool already), then invalidate /rpm/stable/<arch>/repodata/*
         id: put
         if: ${{ steps.gate.outputs.enabled == 'true' }}
@@ -2710,14 +2698,17 @@ jobs:
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           ROLE_ARN: ${{ vars.APT_PUBLISH_ROLE_ARN }}
-        run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-apt-$GITHUB_RUN_ID" --region us-east-1 --env-file "$GITHUB_ENV"
-      - name: Read the repodata of testing (what is promoted) and of stable (what it is merged into), with the ETag of each replaced object, from S3
+        run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-apt-$GITHUB_RUN_ID" --region us-east-1 --token-url "$ACTIONS_ID_TOKEN_REQUEST_URL" --env-file "$GITHUB_ENV"
+      - name: Read the repodata of testing (what is promoted), with the ETag of each replaced object, from S3
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           APT_BUCKET: ${{ vars.APT_BUCKET }}
-        run: |
-          cargo xtask channels rpm repo read --suite testing --bucket "$APT_BUCKET" --out "$RUNNER_TEMP/rpm-read/testing"
-          cargo xtask channels rpm repo read --suite stable --bucket "$APT_BUCKET" --out "$RUNNER_TEMP/rpm-read/stable"
+        run: cargo xtask channels rpm repo read --suite testing --bucket "$APT_BUCKET" --out "$RUNNER_TEMP/rpm-read/testing"
+      - name: Read the repodata of stable (what it is merged into), with the ETag of each replaced object, from S3
+        if: ${{ steps.gate.outputs.enabled == 'true' }}
+        env:
+          APT_BUCKET: ${{ vars.APT_BUCKET }}
+        run: cargo xtask channels rpm repo read --suite stable --bucket "$APT_BUCKET" --out "$RUNNER_TEMP/rpm-read/stable"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         with:
@@ -2767,13 +2758,15 @@ jobs:
         with:
           name: release-${{ needs.newest.outputs.tag }}
           path: dist
-      - name: The files match SHA256SUMS and are the attested assets of this commit
+      - name: The files match SHA256SUMS
+        if: ${{ steps.gate.outputs.enabled == 'true' }}
+        working-directory: dist
+        run: sha256sum --check --strict SHA256SUMS
+      - name: The files are the attested assets of this commit
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          (cd dist && sha256sum --check --strict SHA256SUMS)
-          cargo xtask release check dist --version "${TAG#v}" --commit "$COMMIT"
+        run: cargo xtask release check dist --version "${TAG#v}" --commit "$COMMIT"
       - name: Sign the .rpms with the signing subkey (the signature header only; the same bytes for the same commit), then remove the key
         id: sign-rpms
         if: ${{ steps.gate.outputs.enabled == 'true' }}
@@ -2781,11 +2774,7 @@ jobs:
           APT_GPG_FINGERPRINT: ${{ vars.APT_GPG_FINGERPRINT }}
           APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
           APT_GPG_PASSPHRASE: ${{ secrets.APT_GPG_PASSPHRASE }}
-        run: |
-          umask 077
-          printf '%s' "$APT_GPG_PRIVATE_KEY" > "$RUNNER_TEMP/rpm-key.asc"
-          printf '%s' "$APT_GPG_PASSPHRASE" > "$RUNNER_TEMP/rpm-passphrase"
-          cargo xtask channels rpm sign --rpms dist --out "$RUNNER_TEMP/rpm-signed" --version "${TAG#v}" --sums dist/SHA256SUMS --work "$RUNNER_TEMP/rpm-sign-packages" --fingerprint "$APT_GPG_FINGERPRINT" --key-file "$RUNNER_TEMP/rpm-key.asc" --passphrase-file "$RUNNER_TEMP/rpm-passphrase" --signed-at "$(git show --no-patch --format=%ct HEAD)"
+        run: cargo xtask channels rpm sign --rpms dist --out "$RUNNER_TEMP/rpm-signed" --version "${TAG#v}" --sums dist/SHA256SUMS --work "$RUNNER_TEMP/rpm-sign-packages" --fingerprint "$APT_GPG_FINGERPRINT" --signed-at "$(git show --no-patch --format=%ct HEAD)"
       - name: Promote the entries of this release that testing lists into the repodata of stable (held to the digests of SHA256SUMS and of the signed packages; the packages of every other product are kept)
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         run: cargo xtask channels rpm promote --testing "$RUNNER_TEMP/rpm-read/testing" --stable "$RUNNER_TEMP/rpm-read/stable" --out "$RUNNER_TEMP/rpm-next" --version "${TAG#v}" --sums dist/SHA256SUMS --signed-sums "$RUNNER_TEMP/rpm-signed/SHA256SUMS.signed" --date "$(date +%s)"
@@ -2796,11 +2785,7 @@ jobs:
           APT_GPG_FINGERPRINT: ${{ vars.APT_GPG_FINGERPRINT }}
           APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
           APT_GPG_PASSPHRASE: ${{ secrets.APT_GPG_PASSPHRASE }}
-        run: |
-          umask 077
-          printf '%s' "$APT_GPG_PRIVATE_KEY" > "$RUNNER_TEMP/rpm-key.asc"
-          printf '%s' "$APT_GPG_PASSPHRASE" > "$RUNNER_TEMP/rpm-passphrase"
-          cargo xtask channels rpm repo sign --dir "$RUNNER_TEMP/rpm-next/stable" --work "$RUNNER_TEMP/rpm-sign" --fingerprint "$APT_GPG_FINGERPRINT" --key-file "$RUNNER_TEMP/rpm-key.asc" --passphrase-file "$RUNNER_TEMP/rpm-passphrase" --output "$GITHUB_OUTPUT"
+        run: cargo xtask channels rpm repo sign --dir "$RUNNER_TEMP/rpm-next/stable" --work "$RUNNER_TEMP/rpm-sign" --fingerprint "$APT_GPG_FINGERPRINT" --output "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         with:
@@ -2852,7 +2837,7 @@ jobs:
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           ROLE_ARN: ${{ vars.APT_PUBLISH_ROLE_ARN }}
-        run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-apt-$GITHUB_RUN_ID" --region us-east-1 --env-file "$GITHUB_ENV"
+        run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-apt-$GITHUB_RUN_ID" --region us-east-1 --token-url "$ACTIONS_ID_TOKEN_REQUEST_URL" --env-file "$GITHUB_ENV"
       - name: Write the signed repodata of stable with If-Match on the ETags that were read (the packages are in the pool already), then invalidate /rpm/stable/<arch>/repodata/*
         id: put
         if: ${{ steps.gate.outputs.enabled == 'true' }}
@@ -2898,14 +2883,17 @@ jobs:
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           ROLE_ARN: ${{ vars.APT_PUBLISH_ROLE_ARN }}
-        run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-apt-$GITHUB_RUN_ID" --region us-east-1 --env-file "$GITHUB_ENV"
-      - name: Read the repodata of testing (what is promoted) and of stable (what it is merged into), with the ETag of each replaced object, from S3
+        run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-apt-$GITHUB_RUN_ID" --region us-east-1 --token-url "$ACTIONS_ID_TOKEN_REQUEST_URL" --env-file "$GITHUB_ENV"
+      - name: Read the repodata of testing (what is promoted), with the ETag of each replaced object, from S3
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           APT_BUCKET: ${{ vars.APT_BUCKET }}
-        run: |
-          cargo xtask channels rpm repo read --suite testing --bucket "$APT_BUCKET" --out "$RUNNER_TEMP/rpm-read/testing"
-          cargo xtask channels rpm repo read --suite stable --bucket "$APT_BUCKET" --out "$RUNNER_TEMP/rpm-read/stable"
+        run: cargo xtask channels rpm repo read --suite testing --bucket "$APT_BUCKET" --out "$RUNNER_TEMP/rpm-read/testing"
+      - name: Read the repodata of stable (what it is merged into), with the ETag of each replaced object, from S3
+        if: ${{ steps.gate.outputs.enabled == 'true' }}
+        env:
+          APT_BUCKET: ${{ vars.APT_BUCKET }}
+        run: cargo xtask channels rpm repo read --suite stable --bucket "$APT_BUCKET" --out "$RUNNER_TEMP/rpm-read/stable"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         with:
@@ -2955,13 +2943,15 @@ jobs:
         with:
           name: release-${{ needs.newest.outputs.tag }}
           path: dist
-      - name: The files match SHA256SUMS and are the attested assets of this commit
+      - name: The files match SHA256SUMS
+        if: ${{ steps.gate.outputs.enabled == 'true' }}
+        working-directory: dist
+        run: sha256sum --check --strict SHA256SUMS
+      - name: The files are the attested assets of this commit
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          (cd dist && sha256sum --check --strict SHA256SUMS)
-          cargo xtask release check dist --version "${TAG#v}" --commit "$COMMIT"
+        run: cargo xtask release check dist --version "${TAG#v}" --commit "$COMMIT"
       - name: Sign the .rpms with the signing subkey (the signature header only; the same bytes for the same commit), then remove the key
         id: sign-rpms
         if: ${{ steps.gate.outputs.enabled == 'true' }}
@@ -2969,11 +2959,7 @@ jobs:
           APT_GPG_FINGERPRINT: ${{ vars.APT_GPG_FINGERPRINT }}
           APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
           APT_GPG_PASSPHRASE: ${{ secrets.APT_GPG_PASSPHRASE }}
-        run: |
-          umask 077
-          printf '%s' "$APT_GPG_PRIVATE_KEY" > "$RUNNER_TEMP/rpm-key.asc"
-          printf '%s' "$APT_GPG_PASSPHRASE" > "$RUNNER_TEMP/rpm-passphrase"
-          cargo xtask channels rpm sign --rpms dist --out "$RUNNER_TEMP/rpm-signed" --version "${TAG#v}" --sums dist/SHA256SUMS --work "$RUNNER_TEMP/rpm-sign-packages" --fingerprint "$APT_GPG_FINGERPRINT" --key-file "$RUNNER_TEMP/rpm-key.asc" --passphrase-file "$RUNNER_TEMP/rpm-passphrase" --signed-at "$(git show --no-patch --format=%ct HEAD)"
+        run: cargo xtask channels rpm sign --rpms dist --out "$RUNNER_TEMP/rpm-signed" --version "${TAG#v}" --sums dist/SHA256SUMS --work "$RUNNER_TEMP/rpm-sign-packages" --fingerprint "$APT_GPG_FINGERPRINT" --signed-at "$(git show --no-patch --format=%ct HEAD)"
       - name: Promote the entries of this release that testing lists into the repodata of stable (held to the digests of SHA256SUMS and of the signed packages; the packages of every other product are kept)
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         run: cargo xtask channels rpm promote --testing "$RUNNER_TEMP/rpm-read/testing" --stable "$RUNNER_TEMP/rpm-read/stable" --out "$RUNNER_TEMP/rpm-next" --version "${TAG#v}" --sums dist/SHA256SUMS --signed-sums "$RUNNER_TEMP/rpm-signed/SHA256SUMS.signed" --date "$(date +%s)"
@@ -2984,11 +2970,7 @@ jobs:
           APT_GPG_FINGERPRINT: ${{ vars.APT_GPG_FINGERPRINT }}
           APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
           APT_GPG_PASSPHRASE: ${{ secrets.APT_GPG_PASSPHRASE }}
-        run: |
-          umask 077
-          printf '%s' "$APT_GPG_PRIVATE_KEY" > "$RUNNER_TEMP/rpm-key.asc"
-          printf '%s' "$APT_GPG_PASSPHRASE" > "$RUNNER_TEMP/rpm-passphrase"
-          cargo xtask channels rpm repo sign --dir "$RUNNER_TEMP/rpm-next/stable" --work "$RUNNER_TEMP/rpm-sign" --fingerprint "$APT_GPG_FINGERPRINT" --key-file "$RUNNER_TEMP/rpm-key.asc" --passphrase-file "$RUNNER_TEMP/rpm-passphrase" --output "$GITHUB_OUTPUT"
+        run: cargo xtask channels rpm repo sign --dir "$RUNNER_TEMP/rpm-next/stable" --work "$RUNNER_TEMP/rpm-sign" --fingerprint "$APT_GPG_FINGERPRINT" --output "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         with:
@@ -3040,7 +3022,7 @@ jobs:
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           ROLE_ARN: ${{ vars.APT_PUBLISH_ROLE_ARN }}
-        run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-apt-$GITHUB_RUN_ID" --region us-east-1 --env-file "$GITHUB_ENV"
+        run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-apt-$GITHUB_RUN_ID" --region us-east-1 --token-url "$ACTIONS_ID_TOKEN_REQUEST_URL" --env-file "$GITHUB_ENV"
       - name: Write the signed repodata of stable with If-Match on the ETags that were read (the packages are in the pool already), then invalidate /rpm/stable/<arch>/repodata/*
         id: put
         if: ${{ steps.gate.outputs.enabled == 'true' }}
@@ -3089,18 +3071,20 @@ jobs:
         with:
           name: release-${{ needs.newest.outputs.tag }}
           path: dist
-      - name: The files match SHA256SUMS and are the attested assets of this commit
+      - name: The files match SHA256SUMS
+        if: ${{ steps.gate.outputs.enabled == 'true' }}
+        working-directory: dist
+        run: sha256sum --check --strict SHA256SUMS
+      - name: The files are the attested assets of this commit
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          (cd dist && sha256sum --check --strict SHA256SUMS)
-          cargo xtask release check dist --version "${TAG#v}" --commit "$COMMIT"
+        run: cargo xtask release check dist --version "${TAG#v}" --commit "$COMMIT"
       - name: Assume the apt publish role through OIDC
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           ROLE_ARN: ${{ vars.APT_PUBLISH_ROLE_ARN }}
-        run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-promote-pkg-$GITHUB_RUN_ID" --region us-east-1 --env-file "$GITHUB_ENV"
+        run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-promote-pkg-$GITHUB_RUN_ID" --region us-east-1 --token-url "$ACTIONS_ID_TOKEN_REQUEST_URL" --env-file "$GITHUB_ENV"
       - name: Read the testing directory back against SHA256SUMS, then move the pointer pkg/hostkeeper/stable.json to this release (never to an older one) and invalidate it
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:

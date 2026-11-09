@@ -129,6 +129,24 @@ changes of the older ones. Each job is a green no-op until the settings below ex
 Re-running the failed jobs of a run resumes it: every write is write-once or idempotent, and
 `promote-check` reads the results again.
 
+## How the steps run
+
+Every step of `release.yml` is one command on one line (the workflow lint refuses a `run: |` block,
+`&&` or `;`); what is more than a command is a verb of `cargo xtask`, which has tests.
+
+- **Secrets.** The `apt sign`, `rpm sign` and `rpm repo sign` steps carry `APT_GPG_PRIVATE_KEY` and
+  `APT_GPG_PASSPHRASE` in their environment. The verb writes them to files (mode 0600) below its
+  `--work` directory, signs, and removes the files and the keyring when it ends, whatever happened. A
+  variable that is not set is a usage error (exit status 2) naming it. Neither is ever an argument.
+- **The token request.** The `channels assume` steps pass the runner's token request URL as
+  `--token-url "$ACTIONS_ID_TOKEN_REQUEST_URL"` (an `https` URL); only the bearer
+  (`ACTIONS_ID_TOKEN_REQUEST_TOKEN`, secret material) is read from the environment.
+- **The Fedora check.** `check-rpm` runs each program in the container as `docker exec <container>
+  <program> <args>`, with no shell: `test -f` for a file, `find` for the unit's links and for the
+  processes (`/proc/<pid>/comm`, read with `grep -l -x`; the image has no `procps-ng`). The
+  repository file is written on the runner in `--scratch` (`$RUNNER_TEMP`) and put in the container
+  with `docker cp`.
+
 ## What the owner sets
 
 The jobs do nothing until the repository's environments hold their settings (a job with none of its

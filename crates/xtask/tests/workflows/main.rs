@@ -31,6 +31,8 @@ mod linux_releases_tests;
 mod mdm_package_tests;
 mod net_install;
 mod net_install_tests;
+mod one_command;
+mod one_command_tests;
 mod openrc;
 mod openrc_tests;
 mod packages;

@@ -122,6 +122,8 @@ fn channels_install_checks_and_the_installer_verbs_with_flags_that_do_not_fit_ar
                 "0123456789abcdef0123456789abcdef01234567",
                 "--work",
                 "/work",
+                "--scratch",
+                "scratch",
             ],
             "--package \"other-product\" is none of",
         ),
@@ -152,4 +154,207 @@ fn channels_install_checks_and_the_installer_verbs_with_flags_that_do_not_fit_ar
         assert_eq!(o.status.code(), Some(2), "{args:?}: {}", stderr(&o));
         assert!(stderr(&o).contains(why), "{args:?}: {}", stderr(&o));
     }
+}
+
+const FINGERPRINT: &str = "0123456789ABCDEF0123456789ABCDEF01234567";
+
+fn run_env(cwd: &Path, args: &[&str], set: &[(&str, &str)], unset: &[&str]) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_xtask"));
+    command.current_dir(cwd).args(args);
+    for name in unset {
+        command.env_remove(name);
+    }
+    for (name, value) in set {
+        command.env(name, value);
+    }
+    command.output().expect("run xtask")
+}
+
+#[test]
+fn the_sign_verbs_take_the_key_and_passphrase_from_the_environment_and_leave_no_file() {
+    // The key and the passphrase are written below --work (so gpg is reached, here a program
+    // that is not there) and are gone when the verb ends, whatever it came to.
+    let d = dir("channels-sign-env");
+    std::fs::create_dir_all(d.join("next/dists/testing")).expect("dir");
+    std::fs::write(d.join("next/dists/testing/Release"), "Suite: testing\n").expect("release");
+    let gpg = d.join("no-such-gpg").display().to_string();
+    let work = d.join("work");
+    let work_arg = work.display().to_string();
+    let set = [
+        ("APT_GPG_PRIVATE_KEY", "PRIVATE-KEY-TEXT"),
+        ("APT_GPG_PASSPHRASE", "PASSPHRASE-TEXT"),
+    ];
+    let o = run_env(
+        &d,
+        &[
+            "channels",
+            "apt",
+            "sign",
+            "--dir",
+            "next/dists/testing",
+            "--work",
+            &work_arg,
+            "--fingerprint",
+            FINGERPRINT,
+            "--gpg",
+            &gpg,
+        ],
+        &set,
+        &[],
+    );
+    assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
+    assert!(stderr(&o).contains(&gpg), "{}", stderr(&o));
+    assert!(
+        !stderr(&o).contains("PRIVATE-KEY-TEXT") && !stderr(&o).contains("PASSPHRASE-TEXT"),
+        "{}",
+        stderr(&o)
+    );
+    let left: Vec<_> = std::fs::read_dir(&work)
+        .expect("work")
+        .map(|e| e.expect("entry").file_name())
+        .collect();
+    assert!(left.is_empty(), "left behind: {left:?}");
+}
+
+#[test]
+fn a_sign_verb_without_its_key_variable_is_status_2_naming_the_variable() {
+    let d = dir("channels-sign-no-env");
+    let work = d.join("work").display().to_string();
+    let fpr = FINGERPRINT;
+    let apt = [
+        "channels",
+        "apt",
+        "sign",
+        "--dir",
+        "d",
+        "--work",
+        &work,
+        "--fingerprint",
+        fpr,
+    ];
+    let rpm = [
+        "channels",
+        "rpm",
+        "sign",
+        "--rpms",
+        "r",
+        "--out",
+        "o",
+        "--version",
+        "1.2.3",
+        "--sums",
+        "s",
+        "--work",
+        &work,
+        "--fingerprint",
+        fpr,
+        "--signed-at",
+        "1",
+    ];
+    let repo = [
+        "channels",
+        "rpm",
+        "repo",
+        "sign",
+        "--dir",
+        "d",
+        "--work",
+        &work,
+        "--fingerprint",
+        fpr,
+    ];
+    for args in [&apt[..], &rpm[..], &repo[..]] {
+        let o = run_env(
+            &d,
+            args,
+            &[("APT_GPG_PASSPHRASE", "p")],
+            &["APT_GPG_PRIVATE_KEY"],
+        );
+        assert_eq!(o.status.code(), Some(2), "{args:?}: {}", stderr(&o));
+        assert!(
+            stderr(&o).contains("APT_GPG_PRIVATE_KEY is not set"),
+            "{args:?}: {}",
+            stderr(&o)
+        );
+        let o = run_env(
+            &d,
+            args,
+            &[("APT_GPG_PRIVATE_KEY", "k")],
+            &["APT_GPG_PASSPHRASE"],
+        );
+        assert_eq!(o.status.code(), Some(2), "{args:?}: {}", stderr(&o));
+        assert!(
+            stderr(&o).contains("APT_GPG_PASSPHRASE is not set"),
+            "{args:?}: {}",
+            stderr(&o)
+        );
+    }
+    assert!(!d.join("work").exists(), "nothing is written without both");
+}
+
+#[test]
+fn the_sign_verbs_no_longer_take_key_files_as_flags() {
+    let d = dir("channels-sign-no-files");
+    let o = run(
+        &d,
+        &[
+            "channels",
+            "apt",
+            "sign",
+            "--dir",
+            "d",
+            "--work",
+            "w",
+            "--fingerprint",
+            FINGERPRINT,
+            "--key-file",
+            "k",
+            "--passphrase-file",
+            "p",
+        ],
+    );
+    assert_eq!(o.status.code(), Some(2), "{}", stderr(&o));
+    assert!(stderr(&o).contains("--key-file"), "{}", stderr(&o));
+}
+
+#[test]
+fn channels_assume_takes_the_token_url_as_a_flag_that_must_be_https() {
+    let d = dir("channels-assume-url");
+    let base = [
+        "channels",
+        "assume",
+        "--role-arn",
+        "arn:aws:iam::123456789012:role/release",
+        "--session-name",
+        "hostkeeper-release-1",
+        "--region",
+        "us-east-1",
+        "--env-file",
+        "env",
+    ];
+    // The variable the runner sets is not the source: without the flag the verb is a usage
+    // error of clap, and the variable does not stand in for it.
+    let o = run_env(
+        &d,
+        &base,
+        &[(
+            "ACTIONS_ID_TOKEN_REQUEST_URL",
+            "https://token.example/request",
+        )],
+        &[],
+    );
+    assert_eq!(o.status.code(), Some(2), "{}", stderr(&o));
+    assert!(stderr(&o).contains("--token-url"), "{}", stderr(&o));
+    for url in ["", "http://token.example/request"] {
+        let mut args = base.to_vec();
+        args.extend(["--token-url", url]);
+        let o = run(&d, &args);
+        assert_eq!(o.status.code(), Some(2), "{url:?}: {}", stderr(&o));
+        assert!(
+            stderr(&o).contains("--token-url is not an https URL"),
+            "{url:?}: {}",
+            stderr(&o)
+        );
+    }
+    assert!(!d.join("env").exists());
 }

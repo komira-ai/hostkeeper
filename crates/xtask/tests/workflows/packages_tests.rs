@@ -254,7 +254,7 @@ fn a_job_that_runs_a_verb_of_another_row_is_refused() {
     // Catches: the job with the key assuming the role (so that one compromised step holds both),
     // a read job that also writes, and an index job that signs what the other index job signs.
     let text = release_yml();
-    let assume = "      - run: cargo xtask channels assume --role-arn x --session-name hostkeeper-x --region us-east-1 --env-file \"$GITHUB_ENV\"\n";
+    let assume = "      - run: cargo xtask channels assume --role-arn x --session-name hostkeeper-x --region us-east-1 --token-url \"$ACTIONS_ID_TOKEN_REQUEST_URL\" --env-file \"$GITHUB_ENV\"\n";
     let step = |job: &str, run: &str| {
         let (start, end) = job_range(&text, job);
         let job_text = text[start..end].trim_end_matches('\n');
@@ -274,7 +274,7 @@ fn a_job_that_runs_a_verb_of_another_row_is_refused() {
     assert_refused(
         &step(
             "testing-apt-index",
-            "      - run: cargo xtask channels rpm sign --rpms r --out o --version 1.2.3 --sums s --work w --fingerprint f --key-file k --passphrase-file p --signed-at 1",
+            "      - run: cargo xtask channels rpm sign --rpms r --out o --version 1.2.3 --sums s --work w --fingerprint f --signed-at 1",
         ),
         "release.yml: job testing-apt-index runs the `channels` verbs",
     );
@@ -447,6 +447,26 @@ fn a_session_of_the_role_starts_with_the_products_prefix() {
             "--session-name \"other-",
         ),
         "release.yml: job testing-apt-read assumes the role under the session \"other-testing-apt-read-$GITHUB_RUN_ID\"",
+    );
+}
+
+#[test]
+fn every_assume_step_passes_the_token_request_url_as_a_flag() {
+    // Catches: a step that leaves the URL to the environment (the flag dropped), or passes
+    // another value for it.
+    let text = release_yml();
+    let flag = " --token-url \"$ACTIONS_ID_TOKEN_REQUEST_URL\"";
+    assert!(text.matches(flag).count() >= 1);
+    let want = "release.yml: job testing-apt-read assumes the role without `--token-url \"$ACTIONS_ID_TOKEN_REQUEST_URL\"`";
+    assert_refused(&in_job(&text, "testing-apt-read", flag, ""), want);
+    assert_refused(
+        &in_job(
+            &text,
+            "testing-apt-read",
+            flag,
+            " --token-url \"https://token.example/request\"",
+        ),
+        want,
     );
 }
 

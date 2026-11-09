@@ -18,8 +18,9 @@
 //!   ...` ([`promote`]): the entries of a release `testing` lists, merged into the index of
 //!   `stable`; reads no cloud and no key. The write that follows is `apt write --suite stable
 //!   --no-pool`.
-//! - `channels apt sign --dir <dir> --work <dir> --fingerprint <fpr> --key-file <f>
-//!   --passphrase-file <f>` ([`sign`]): `InRelease` and `Release.gpg`, verified. Jobs `testing-apt-index` and `stable-apt-index`: the key, no cloud role.
+//! - `channels apt sign --dir <dir> --work <dir> --fingerprint <fpr>` ([`sign`]):
+//!   `InRelease` and `Release.gpg`, verified; the key and passphrase come from `APT_GPG_PRIVATE_KEY`
+//!   and `APT_GPG_PASSPHRASE`. Jobs `testing-apt-index` and `stable-apt-index`: the key, no cloud role.
 //! - `channels apt write --bucket <b> --distribution-id <id> --hostname <h> --next <dir> --debs
 //!   <dir> --version <V>` ([`write`]): the packages into the pool with `If-None-Match`, the index
 //!   with `If-Match` on the ETags that were read (`--no-pool` instead of `--debs` and `--version`:
@@ -112,18 +113,12 @@ pub enum Verb {
         /// `dists/<suite>` of the new index.
         #[arg(long)]
         dir: PathBuf,
-        /// Where the private keyring is made; it is removed at the end.
+        /// Where the key files and the private keyring are made; they are removed at the end.
         #[arg(long)]
         work: PathBuf,
         /// The signing subkey's fingerprint, or several separated by commas (a key rotation).
         #[arg(long)]
         fingerprint: String,
-        /// The armored private key; removed at the end.
-        #[arg(long)]
-        key_file: PathBuf,
-        /// The file holding the key's passphrase; removed at the end.
-        #[arg(long)]
-        passphrase_file: PathBuf,
         /// The `gpg` program.
         #[arg(long, default_value = "gpg")]
         gpg: PathBuf,
@@ -209,6 +204,16 @@ pub enum Verb {
 /// # Errors
 /// Whatever the verb refuses or fails on.
 pub fn run(verb: Verb, exec: &dyn Exec) -> Result<Vec<String>, Error> {
+    run_with(verb, exec, &sign::secrets_from_env)
+}
+
+/// [`run`], getting the signing key files below `--work` from `secrets` (the tests write fixed
+/// strings in place of the environment).
+pub(crate) fn run_with(
+    verb: Verb,
+    exec: &dyn Exec,
+    secrets: &dyn Fn(&Path) -> Result<sign::Secrets, Error>,
+) -> Result<Vec<String>, Error> {
     match verb {
         Verb::Read {
             suite,
@@ -243,21 +248,22 @@ pub fn run(verb: Verb, exec: &dyn Exec) -> Result<Vec<String>, Error> {
             dir,
             work,
             fingerprint,
-            key_file,
-            passphrase_file,
             gpg,
             output,
-        } => sign::sign(
-            &sign::ExecGpg::new(exec, gpg),
-            &sign::Request {
-                dir: &dir,
-                work: &work,
-                fingerprints: &fingerprint,
-                key_file: &key_file,
-                passphrase_file: &passphrase_file,
-            },
-            output.as_deref(),
-        ),
+        } => {
+            let secrets = secrets(&work)?;
+            sign::sign(
+                &sign::ExecGpg::new(exec, gpg),
+                &sign::Request {
+                    dir: &dir,
+                    work: &work,
+                    fingerprints: &fingerprint,
+                    key_file: &secrets.key_file,
+                    passphrase_file: &secrets.passphrase_file,
+                },
+                output.as_deref(),
+            )
+        }
         Verb::Promote {
             testing,
             stable,

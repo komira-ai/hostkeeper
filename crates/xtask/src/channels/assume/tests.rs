@@ -464,7 +464,7 @@ fn a_missing_oidc_offer_fails_before_anything_is_masked() {
         writes: Vec::new(),
     };
     let aws = FakeAws::says(true, STS, "");
-    let offer = || oidc_from_env_with(|_| None);
+    let offer = || oidc_with("https://token.example/request", |_| None);
     let result = assume(
         &aws,
         &mut log,
@@ -488,35 +488,48 @@ fn a_missing_oidc_offer_fails_before_anything_is_masked() {
 }
 
 #[test]
-fn the_offer_is_the_url_and_the_bearer_the_platform_sets() {
-    // Catches: the two names swapped, and one missing taken for the pair.
-    let only = |set: &'static [(&'static str, &'static str)]| {
-        oidc_from_env_with(move |name| {
-            set.iter()
-                .find(|(n, _)| *n == name)
-                .map(|(_, v)| (*v).to_owned())
-        })
-    };
-    let both = only(&[
-        (
-            "ACTIONS_ID_TOKEN_REQUEST_URL",
-            "https://token.example/request",
-        ),
-        ("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "b"),
-    ])
-    .expect("both");
+fn the_offer_is_the_flags_url_and_the_bearer_the_platform_sets() {
+    // Catches: the url read from the environment instead of the flag, and a missing bearer
+    // taken for one.
+    let bearer = |name: &str| (name == "ACTIONS_ID_TOKEN_REQUEST_TOKEN").then(|| "b".to_owned());
+    let both = oidc_with("https://token.example/request", bearer).expect("both");
     assert_eq!(
         (both.url.as_str(), both.bearer.as_str()),
         ("https://token.example/request", "b")
     );
-    assert!(
-        only(&[(
-            "ACTIONS_ID_TOKEN_REQUEST_URL",
-            "https://token.example/request"
-        )])
-        .is_err()
-    );
-    assert!(only(&[("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "b")]).is_err());
+    // The url is never looked up by name.
+    let asked = RefCell::new(Vec::new());
+    oidc_with("https://token.example/request", |name| {
+        asked.borrow_mut().push(name.to_owned());
+        Some("b".to_owned())
+    })
+    .expect("offer");
+    assert_eq!(*asked.borrow(), ["ACTIONS_ID_TOKEN_REQUEST_TOKEN"]);
+}
+
+#[test]
+fn a_token_url_that_is_not_https_is_a_usage_error_before_the_bearer_is_read() {
+    // Catches: an empty flag (an unset variable in the step) or a plain-http URL reaching the
+    // request.
+    for url in [
+        "",
+        "http://token.example/request",
+        "token.example",
+        "https://a\nb",
+    ] {
+        let Err(e) = oidc_with(url, |_| panic!("the bearer is not read")) else {
+            panic!("{url:?} is taken");
+        };
+        assert!(
+            matches!(&e, Error::Usage(m) if m.starts_with("--token-url is not an https URL")),
+            "{url:?}: {e}"
+        );
+    }
+}
+
+#[test]
+fn the_real_offer_takes_its_url_from_the_flag() {
+    assert!(matches!(oidc_from_env("not a url"), Err(Error::Usage(_))));
 }
 
 #[test]

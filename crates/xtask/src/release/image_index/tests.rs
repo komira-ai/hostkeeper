@@ -339,7 +339,7 @@ fn the_layout_holds_every_blob_once_and_names_the_index_under_the_version() {
     write_index(&dir, &version()).expect("written");
     let index = std::fs::read(dir.join(index_name(&version()))).expect("read");
     let out = dir.join("layout");
-    let said = write_layout(&dir, &version(), &out).expect("written");
+    let said = write_layout(&dir, &version(), &out, None).expect("written");
     // Two configs, one shared layer, two manifests and the index.
     assert_eq!(
         said,
@@ -372,7 +372,7 @@ fn the_layout_holds_every_blob_once_and_names_the_index_under_the_version() {
     }
     assert_eq!(names.len(), 6);
 
-    let again = write_layout(&dir, &version(), &out).expect_err("exists");
+    let again = write_layout(&dir, &version(), &out, None).expect_err("exists");
     assert!(
         again
             .to_string()
@@ -387,7 +387,7 @@ fn a_layout_is_refused_for_a_stale_index_or_a_blob_that_is_not_its_digest() {
     write_good(&dir);
     std::fs::write(dir.join(index_name(&version())), b"{}").expect("write");
     let out = dir.join("layout");
-    let refused = write_layout(&dir, &version(), &out).expect_err("stale");
+    let refused = write_layout(&dir, &version(), &out, None).expect_err("stale");
     assert!(
         refused
             .to_string()
@@ -409,7 +409,7 @@ fn a_layout_is_refused_for_a_stale_index_or_a_blob_that_is_not_its_digest() {
     write_index(&dir, &version()).expect("written");
     let out = dir.join("layout");
     assert_eq!(
-        write_layout(&dir, &version(), &out)
+        write_layout(&dir, &version(), &out, None)
             .expect_err("blob")
             .to_string(),
         format!(
@@ -418,4 +418,29 @@ fn a_layout_is_refused_for_a_stale_index_or_a_blob_that_is_not_its_digest() {
         )
     );
     assert!(!out.exists(), "nothing is written");
+}
+
+#[test]
+fn the_layout_appends_the_digest_of_the_index_to_the_env_file_and_an_unwritable_one_is_named() {
+    let dir = scratch("image-layout-env");
+    write_good(&dir);
+    write_index(&dir, &version()).expect("written");
+    let index = std::fs::read(dir.join(index_name(&version()))).expect("read");
+    let env = dir.join("github-env");
+    std::fs::write(&env, "EARLIER=1\n").expect("write");
+    write_layout(&dir, &version(), &dir.join("layout"), Some(&env)).expect("written");
+    assert_eq!(
+        std::fs::read_to_string(&env).expect("read"),
+        format!("EARLIER=1\nIMAGE_DIGEST=sha256:{}\n", hex_of(&index))
+    );
+    let missing = dir.join("no-such-dir").join("github-env");
+    let refused = write_layout(&dir, &version(), &dir.join("layout-2"), Some(&missing))
+        .expect_err("unwritable");
+    assert_eq!(
+        refused.to_string(),
+        format!(
+            "append to {}: No such file or directory (os error 2)",
+            missing.display()
+        )
+    );
 }

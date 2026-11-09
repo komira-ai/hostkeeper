@@ -2,6 +2,10 @@ use super::testing::*;
 use super::*;
 use crate::channels::fixtures::FakeExec;
 
+/// The key files the sign verbs get from the environment, as fixed strings.
+const FIXED: &dyn Fn(&std::path::Path) -> Result<crate::channels::apt::sign::Secrets, Error> =
+    &|work| crate::channels::apt::sign::write_secrets(work, "k", "p");
+
 const NOWHERE: &str = "/nonexistent/program";
 
 #[test]
@@ -79,7 +83,11 @@ fn every_verb_is_wired_to_its_implementation_and_reports_what_it_meets_first() {
     // there, so each ends where it first needs one; the others end at the first file they read.
     let dir = scratch("dispatch");
     let p = |name: &str| dir.join(name);
-    let spawn = |v: Verb| run(v, &FakeExec::missing()).unwrap_err().to_string();
+    let spawn = |v: Verb| {
+        run_with(v, &FakeExec::missing(), FIXED)
+            .unwrap_err()
+            .to_string()
+    };
     let e = spawn(Verb::Sign {
         rpms: p("dist"),
         out: p("out"),
@@ -87,16 +95,12 @@ fn every_verb_is_wired_to_its_implementation_and_reports_what_it_meets_first() {
         sums: p("SHA256SUMS"),
         work: p("work"),
         fingerprint: FPR.to_owned(),
-        key_file: p("key"),
-        passphrase_file: p("pass"),
         signed_at: 1,
         gpg: PathBuf::from(NOWHERE),
         output: None,
     });
     assert!(e.contains("SHA256SUMS"), "{e}");
     release_files(&dir, "1.2.3");
-    std::fs::write(p("key"), "k").expect("key");
-    std::fs::write(p("pass"), "p").expect("pass");
     let e = spawn(Verb::Sign {
         rpms: dir.to_path_buf(),
         out: p("out"),
@@ -104,14 +108,12 @@ fn every_verb_is_wired_to_its_implementation_and_reports_what_it_meets_first() {
         sums: p("SHA256SUMS"),
         work: p("work"),
         fingerprint: FPR.to_owned(),
-        key_file: p("key"),
-        passphrase_file: p("pass"),
         signed_at: 1,
         gpg: PathBuf::from(NOWHERE),
         output: None,
     });
     assert!(e.contains(NOWHERE), "{e}");
-    assert!(!p("key").exists());
+    assert!(!p("work/signing-key.asc").exists() && !p("work/signing-passphrase").exists());
     let e = spawn(Verb::CheckSigned {
         dir: dir.to_path_buf(),
         version: "1.2.3".to_owned(),
@@ -153,14 +155,11 @@ fn every_verb_is_wired_to_its_implementation_and_reports_what_it_meets_first() {
     });
     assert!(e.contains("rpm repo read"), "{e}");
     std::fs::create_dir_all(p("next/testing")).expect("dir");
-    std::fs::write(p("key"), "k").expect("key");
     let e = spawn(Verb::Repo {
         verb: RepoVerb::Sign {
             dir: p("next/testing"),
             work: p("work"),
             fingerprint: FPR.to_owned(),
-            key_file: p("key"),
-            passphrase_file: p("pass"),
             gpg: PathBuf::from(NOWHERE),
             output: None,
         },

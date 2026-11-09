@@ -399,6 +399,9 @@ pub(crate) enum Verb {
         /// The layout's directory, which must not exist.
         #[arg(long)]
         out: PathBuf,
+        /// An env file (`GITHUB_ENV`) to append `IMAGE_DIGEST=<the index's digest>` to.
+        #[arg(long)]
+        env_file: Option<PathBuf>,
     },
     /// Refuse the coordinator's OCI image tarball unless it holds the operator web app at
     /// /usr/share/hostkeeper-coordinator/ui: exactly the directories and files of `ui`, with
@@ -551,7 +554,12 @@ pub(crate) fn run<A: Adapters>(
         Verb::Stamp { version, commit } => Ok(vec![contract::stamp_string(&version, &commit)]),
         Verb::CompareImages { a, b } => compare_images::compare_images(&a, &b),
         Verb::ImageIndex { dir, version } => image_index::write_index(&dir, &version),
-        Verb::ImageLayout { dir, version, out } => image_index::write_layout(&dir, &version, &out),
+        Verb::ImageLayout {
+            dir,
+            version,
+            out,
+            env_file,
+        } => image_index::write_layout(&dir, &version, &out, env_file.as_deref()),
         Verb::CheckImageUi { image, ui } => check_image_ui::check_image_ui(&image, &ui),
         Verb::Index {
             service,

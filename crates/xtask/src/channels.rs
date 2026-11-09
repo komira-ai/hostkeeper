@@ -12,7 +12,8 @@
 //! - `channels gate --label <job> --setting NAME=VALUE... [--output <file>]` ([`gate`]): whether
 //!   a job has the settings it needs. None set: `enabled=false` and a notice, the job ends green
 //!   and writes nothing. All set: `enabled=true`. Some set: red, naming the missing ones.
-//! - `channels assume --role-arn <arn> --session-name <name> --region <r> --env-file <file>`
+//! - `channels assume --role-arn <arn> --session-name <name> --region <r>
+//!   --token-url <url> --env-file <file>`
 //!   ([`assume`]): the job's AWS credentials from its OIDC token, into the env file; the step
 //!   `release.yml` runs where an action would otherwise do it.
 //! - `channels apt read|index|promote|sign|write ...` ([`apt`]): the Debian packages of the
@@ -160,6 +161,10 @@ pub(crate) enum Verb {
         /// The region the later steps use.
         #[arg(long)]
         region: String,
+        /// The token request URL the runner offers a job with `id-token: write`; the step
+        /// passes `"$ACTIONS_ID_TOKEN_REQUEST_URL"`. It must be an `https` URL.
+        #[arg(long)]
+        token_url: String,
         /// Where the `AWS_*` lines are appended.
         #[arg(long)]
         env_file: PathBuf,
@@ -228,6 +233,10 @@ pub(crate) enum Verb {
         /// A directory of the container to download the package to.
         #[arg(long)]
         work: String,
+        /// A directory of the runner the repository file is written to before `docker cp` copies
+        /// it into the container (the workflow passes `$RUNNER_TEMP`).
+        #[arg(long)]
+        scratch: PathBuf,
         /// The `docker` program.
         #[arg(long, default_value = "docker")]
         docker: PathBuf,
@@ -259,12 +268,13 @@ pub(crate) fn run(verb: Verb, exec: &dyn Exec) -> Result<Vec<String>, Error> {
             role_arn,
             session_name,
             region,
+            token_url,
             env_file,
             aws,
         } => assume::assume(
             &aws::ExecAws::new(exec, aws),
             &mut std::io::stdout().lock(),
-            &assume::oidc_from_env,
+            &|| assume::oidc_from_env(&token_url),
             &assume::Request {
                 role_arn: &role_arn,
                 session_name: &session_name,
@@ -302,6 +312,7 @@ pub(crate) fn run(verb: Verb, exec: &dyn Exec) -> Result<Vec<String>, Error> {
             commit,
             url,
             work,
+            scratch,
             docker,
         } => check_rpm::check_rpm(
             &check_rpm::Container {
@@ -316,6 +327,7 @@ pub(crate) fn run(verb: Verb, exec: &dyn Exec) -> Result<Vec<String>, Error> {
                 commit: &commit,
                 url: &url,
                 work: &work,
+                scratch: &scratch,
             },
         ),
         Verb::Decide { results, output } => {

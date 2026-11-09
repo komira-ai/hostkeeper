@@ -1,20 +1,23 @@
-//! `channels apt-sign --dir <dir> --work <dir> --fingerprint <fpr>[,<fpr>...] --key-file <file>
-//! --passphrase-file <file> [--gpg <program>] [--output <file>]`: `InRelease` (clear signed) and
-//! `Release.gpg` (detached) of `<dir>/Release`, verified.
+//! `channels apt sign --dir <dir> --work <dir> --fingerprint <fpr>[,<fpr>...] [--gpg <program>]
+//! [--output <file>]`: `InRelease` (clear signed) and `Release.gpg` (detached) of
+//! `<dir>/Release`, verified.
 //!
 //! The index is signed with the signing subkey of the archive key: the key spec is the subkey's
 //! fingerprint followed by `!`, which makes gpg use exactly that key and no other. Several
 //! fingerprints (a key rotation) give one signature per key, in both files. The passphrase is
 //! never an argument (arguments are readable by every process of the machine): it is a file, with
-//! the loopback pinentry. The key and passphrase files are written by the job from its secrets;
-//! they and the keyring in a private directory (0700) below `--work` are removed when the verb
-//! ends, whatever happened. A fingerprint that is not among the secret keys imported fails before
+//! the loopback pinentry. The key and the passphrase come from the step's environment
+//! (`APT_GPG_PRIVATE_KEY`, `APT_GPG_PASSPHRASE`: secret material, read in [`secrets_from_env`]
+//! and nowhere else); the verb writes them to files (0600) below `--work`, and they and the
+//! keyring in a private directory (0700) below `--work` are removed when the verb ends, whatever
+//! happened. A fingerprint that is not among the secret keys imported fails before
 //! anything is signed. `signed=true` is appended to `--output` when both files verify.
 //!
 //! Copied from komira-ai/tierstore at ff4777831c08fc13aa025b54e6e0531c2f350f4f
 //! (`crates/xtask/src/channels/apt/sign.rs`), adapted to this repository (see [`crate::channels`]).
 
-use std::os::unix::fs::DirBuilderExt;
+use std::io::Write as _;
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
 use crate::channels::Error;
@@ -48,7 +51,73 @@ impl Gpg for ExecGpg<'_> {
     }
 }
 
-/// What `apt-sign` is asked.
+/// The environment variable holding the armored private key.
+pub(crate) const KEY_VAR: &str = "APT_GPG_PRIVATE_KEY";
+
+/// The environment variable holding the key's passphrase.
+pub(crate) const PASSPHRASE_VAR: &str = "APT_GPG_PASSPHRASE";
+
+/// The files below `--work` the key and the passphrase are written to; the sign verbs remove them.
+pub(crate) struct Secrets {
+    pub(crate) key_file: PathBuf,
+    pub(crate) passphrase_file: PathBuf,
+}
+
+/// The value of the secret variable `name`.
+///
+/// # Errors
+/// The variable is unset or empty (a usage error naming it).
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the signing key and its passphrase are secret material the job passes in its environment, never as arguments (AGENTS.md S2: secret material)"
+)]
+fn secret_var(name: &str) -> Result<String, Error> {
+    std::env::var(name)
+        .ok()
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| Error::Usage(format!("{name} is not set: the signing key comes from it")))
+}
+
+/// [`write_secrets`] of the key and passphrase in the environment, for the `sign` verbs.
+///
+/// # Errors
+/// A variable that is not set (usage), or a file that cannot be written.
+pub(crate) fn secrets_from_env(work: &Path) -> Result<Secrets, Error> {
+    write_secrets(work, &secret_var(KEY_VAR)?, &secret_var(PASSPHRASE_VAR)?)
+}
+
+/// Writes the key and the passphrase, mode 0600, to new files below `work` (which is made when
+/// missing). Neither value is ever in an error. A failure removes what was written.
+///
+/// # Errors
+/// A directory or a file that cannot be written.
+pub(crate) fn write_secrets(work: &Path, key: &str, passphrase: &str) -> Result<Secrets, Error> {
+    let secrets = Secrets {
+        key_file: work.join("signing-key.asc"),
+        passphrase_file: work.join("signing-passphrase"),
+    };
+    std::fs::create_dir_all(work).map_err(Error::spawn(format!("create {}", work.display())))?;
+    for (path, text) in [
+        (&secrets.key_file, key),
+        (&secrets.passphrase_file, passphrase),
+    ] {
+        let _ = std::fs::remove_file(path);
+        let written = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path)
+            .and_then(|mut f| f.write_all(text.as_bytes()));
+        if let Err(e) = written {
+            let _ = std::fs::remove_file(&secrets.key_file);
+            let _ = std::fs::remove_file(&secrets.passphrase_file);
+            return Err(Error::spawn(format!("write {}", path.display()))(e));
+        }
+    }
+    Ok(secrets)
+}
+
+/// What `apt sign` is asked.
 pub struct Request<'a> {
     pub dir: &'a Path,
     pub work: &'a Path,
