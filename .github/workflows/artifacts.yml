@@ -811,8 +811,9 @@ jobs:
   # boot sets of network install (it reads no network), then SHA256SUMS over every file but itself
   # (the bundles come later, from attest). The attest job signs these sums, so they are the one
   # list of what a release holds.
-  # On a push to main it waits for check-pkg, which publishes the signed pkg; on a run by hand,
-  # which signs nothing, check-pkg is skipped and the sums are made without the pkg.
+  # On a push to main it waits for check-pkg, which publishes the signed pkgs (the installer and
+  # hello's); on a run by hand, which signs nothing, check-pkg is skipped and the sums are made
+  # without them.
   sums:
     needs: [version, build, build-macos, image, check-pkg]
     if: ${{ !cancelled() && !failure() }}

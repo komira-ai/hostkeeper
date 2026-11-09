@@ -484,9 +484,11 @@ A run by hand signs nothing: it builds and checks the unsigned pkgs and makes th
 them.
 The workflow lint (`crates/xtask/tests/workflows/pkg_signing.rs`) holds these jobs to their
 steps: the signing job's exact steps, with the cleanup under `always()` after the signing; the
-secrets named in that job alone; the check before the one upload of the pkg; and `sums` after it.
+secrets named in that job alone; the checks of both pkgs before the one upload of them; and
+`sums` after it.
 
-On a Mac, `pkgutil --check-signature hostkeeper-<version>-macos-arm64.pkg` shows the signature.
+On a Mac, `pkgutil --check-signature hostkeeper-<version>-macos-arm64.pkg` (or
+`hello-<version>-macos-arm64.pkg`) shows the signature.
 The MDM gate takes the release's pkg as it is: its digest on the allowlist is the line of
 `SHA256SUMS`, the signed file's ([enrollment-coordinator.md](enrollment-coordinator.md)).
 

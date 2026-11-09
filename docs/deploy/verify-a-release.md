@@ -106,11 +106,13 @@ by the Developer ID Installer identity `Developer ID Installer: Komira AI, Inc. 
 under Apple's Developer ID Certification Authority and Apple Root CA, with a trusted timestamp;
 the release signs it before it sums and attests it, so `SHA256SUMS` and the attestation name the
 signed bytes. Verify it by its attestation, steps 3 and 4, like any other asset, and on a Mac
-also by its signature: `pkgutil --check-signature hostkeeper-<version>-macos-arm64.pkg` prints
+also by its signature: `pkgutil --check-signature hostkeeper-<version>-macos-arm64.pkg` (or
+`hello-<version>-macos-arm64.pkg`) prints
 `Status: signed by a developer certificate issued by Apple for distribution`, a `Signed with a
-trusted timestamp on:` line and that chain of three. The pkg is not notarized: an MDM installs
-it with `InstallEnterpriseApplication`, which does not ask for notarization; a double click on a
-downloaded copy is refused by Gatekeeper, so install it by MDM or with `sudo installer -pkg`.
+trusted timestamp on:` line and that chain of three. Neither pkg is notarized: an MDM installs
+the installer with `InstallEnterpriseApplication`, and a host's `macos-pkg` installer stages
+hello's, and neither asks for notarization; a double click on a downloaded copy is refused by
+Gatekeeper, so install the installer by MDM or with `sudo installer -pkg`.
 Names are added, never renamed, so a consumer ignores assets it does not know. A name is removed only when its asset is
 withdrawn: the Arch Linux package (`hostkeeper-<version>-1-<rpm-arch>.pkg.tar.zst`) is no longer
 built, by the maintainers' ruling that the Linux packages are deb and rpm.
