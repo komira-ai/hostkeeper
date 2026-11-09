@@ -56,7 +56,7 @@ jobs:
           TAILNET_TAG: ${{ inputs.tailnet_tag }}
         run: jq --null-input --arg tag \"$TAILNET_TAG\" 'empty'
       - id: download
-        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 5 --retry-delay 5 --retry-max-time 300 --retry-all-errors --remote-name https://github.com/komira-ai/hostkeeper/releases/download/v1/hkctl-1
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --remote-name https://github.com/komira-ai/hostkeeper/releases/download/v1/hkctl-1
       - id: checksum
         run: sha256sum --check --strict --ignore-missing SHA256SUMS
       - id: attestation
