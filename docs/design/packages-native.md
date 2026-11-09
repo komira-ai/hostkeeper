@@ -26,7 +26,8 @@ channel and attested:
 
 tierstore is next. It runs on the lab's hosts outside hostkeeper today. No host of the farm is a Mac (none is enrolled,
 hostkeeper-mdm.md section 2), and none runs Alpine or an RPM-family distribution. The daemon itself is shipped for
-Alpine under OpenRC (two-programs.md section 4.6), with its own `.apk` and the required `openrc-device` check.
+Alpine under OpenRC (two-programs.md section 4.6), with its own `.apk` and the required `openrc-device` check. That
+OpenRC support stays, as built, but no `apk` backend is planned: no host we run is Alpine.
 
 **The end state.** Two installers, each the format's own tool run by the daemon as root:
 
@@ -34,14 +35,12 @@ Alpine under OpenRC (two-programs.md section 4.6), with its own `.apk` and the r
 |---|---|---|
 | Debian, Ubuntu and their derivatives | `apt` (A7) | A repository entry: `repository`, `package_version`, the required `digest` pin, the manifest (section 2) |
 | macOS | `macos-pkg` (A9) | An artifact entry: `locations` naming the testing or stable store of section 4.7, `digest`, `bytes`, the manifest; no attestation (10.3) |
-| Alpine | `apk` (A26, A27), a backend of the repository installer: a signed `APKINDEX`, a key of the host's configuration, the pin | As `apt` |
 | An RPM-family host | `dnf` (A8, later, section 6) | As `apt` |
-| Any other host | None | |
+| Any other host, Alpine included | None | |
 
-`apk` is in the end state because the daemon already ships for Alpine: without it an Alpine daemon could not update
-itself once archives stop, and the `openrc-device` check could not keep its self-update cases (rule T7). It is not yet
-designed: A26 is its design pull request, as `dnf` would have, shaped like section 4's `apt`, A27 builds it, and the
-deletion (A25) waits for it. `dnf` waits for the first RPM-family host, since no daemon of ours ships for one.
+`dnf` waits for the first RPM-family host, since no daemon of ours ships for one. `apk` (and `pacman`) is not a
+backend: the backends are `apt` and `macos-pkg`, with `dnf` later (A26 and A27 withdrawn, 10.8). A later design may
+add an `apk` backend, as a repository installer shaped like section 4's `apt`, if a host we run is Alpine.
 
 Withdrawn: `hostkeeper-archive` (deleted by A25, after the move of 10.6), `tarball` (never built; taken out of A6) and
 `oci-image` (A10 withdrawn: nothing we run ships a container image to a host; the coordinator ships as an image, but it
@@ -81,7 +80,7 @@ distribution with no entry it can install shows `no_build_for_host`, as today; n
 | Per-host settings | Not in any package: host setup's, as `hostkeeper.toml` is | The same | The operator |
 
 **The hook at a fixed path.** A package that has a hand-over carries its hook at one path: `usr/lib/<package>/hostkeeper-hook`
-in a `.deb` or an `.apk`, `Library/Application Support/<service>/hostkeeper-hook` in a `.pkg`. A package without one
+in a `.deb`, `Library/Application Support/<service>/hostkeeper-hook` in a `.pkg`. A package without one
 gets the built-in steps (packages-lifecycle.md section 6.3); whether it has one is the file's presence, checked at
 `stage`. The entry's `hook.command` must be empty for every native installer, and `hook.boot` is then allowed, refused
 at `stage` when the package has no hook (A18 changes both rules of `hostkeeper-release`, which today refuses `boot` with
@@ -103,22 +102,21 @@ which the coordinator and the daemon check and every set audits. A small hostkee
 weighed: it would be signed with the package, but it would be a second place for what the manifest says, a
 hostkeeper format again, and one more file every service's packaging writes.
 
-**Maintainer scripts: none.** A service's `.deb` has no `preinst`, `postinst`, `prerm`, `postrm`, `config` or
-`triggers` in its control archive, only `control`, `md5sums` and `conffiles`; dpkg needs none of the scripts. A
-service's `.pkg` has no `Scripts` in its component and no script in its `Distribution` (the latter refused already,
-section 4.7); an `.apk` has no `.pre-install` or other script (A27). What a script would do at install is done by the
-unit (`StateDirectory=`, `DynamicUser=`), by the hook's `prepare`, which runs as root, or by host setup. The daemon
-refuses a package with a script at `stage`, before anything is installed: `Failed`, `release`, `package_scripts`.
+**Maintainer scripts: none.** A service's `.deb` has no `preinst`, `postinst`, `prerm`, `postrm`, `config` or `triggers`
+in its control archive, only `control`, `md5sums` and `conffiles`; dpkg needs none of the scripts. A service's `.pkg`
+has no `Scripts` in its component and no script in its `Distribution` (the latter refused already, section 4.7). What a
+script would do at install is done by the unit (`StateDirectory=`, `DynamicUser=`), by the hook's `prepare`, which runs
+as root, or by host setup. The daemon refuses a package with a script at `stage`, before anything is installed:
+`Failed`, `release`, `package_scripts`.
 
-**Where a package's files may go.** Without scripts a package could still act through its files, so a service's
-`.deb` (and `.apk`) holds files only under `/usr/bin/`, `/usr/lib/<package>/`, `/usr/share/<package>/`,
-`/usr/share/doc/<package>/`, `/etc/<service>/`, and its `run` units in `/usr/lib/systemd/system/` (or its init
-scripts in `/etc/init.d/` on Alpine), as section 4.7's rule does for a `.pkg`. Anything else (an enablement link under
-`/etc/systemd/system/`, a cron file, a `sudoers.d` file, a generator, an `ld.so.conf.d` file, a unit it does not
-`run`) is `manifest_invalid` at `stage`. So nothing of the package's own runs as root at install, only the format's
-tool and the triggers of the host's own packages (`man-db`, systemd's reload), as for any install; nothing of the
-package can enable or start its units (section 5's install check becomes a check at `stage`); and a Mac's install no
-longer runs package code with the network. The one exception is hostkeeper's own package (10.4).
+**Where a package's files may go.** Without scripts a package could still act through its files, so a service's `.deb`
+holds files only under `/usr/bin/`, `/usr/lib/<package>/`, `/usr/share/<package>/`, `/usr/share/doc/<package>/`,
+`/etc/<service>/`, and its `run` units in `/usr/lib/systemd/system/`, as section 4.7's rule does for a `.pkg`. Anything
+else (an enablement link under `/etc/systemd/system/`, a cron file, a `sudoers.d` file, a generator, an `ld.so.conf.d`
+file, a unit it does not `run`) is `manifest_invalid` at `stage`. So nothing of the package's own runs as root at
+install, only the format's tool and the triggers of the host's own packages (`man-db`, systemd's reload), as for any
+install; nothing of the package can enable or start its units (section 5's install check becomes a check at `stage`);
+and a Mac's install no longer runs package code with the network. The one exception is hostkeeper's own package (10.4).
 
 **What the daemon checks before it runs anything**, in order, each before the next reads a byte:
 
@@ -264,12 +262,12 @@ nor an automatic release moves a service before its stage.
 
 | Stage | What | Starts when | Still answered | Back out |
 |---|---|---|---|---|
-| 5 | Daemons with the native installers (A6, A7; A9 on a Mac; A27 on Alpine), the move and the read of stage 9 (A18, A19); the native packages built (A20) | A4's release runs on every host | Every release lists archive entries alone, ordered as today; a daemon before `target-v1` fetches through the channel | Set the previous release; nothing has moved |
+| 5 | Daemons with the native installers (A6, A7; A9 on a Mac), the move and the read of stage 9 (A18, A19); the native packages built (A20) | A4's release runs on every host | Every release lists archive entries alone, ordered as today; a daemon before `target-v1` fetches through the channel | Set the previous release; nothing has moved |
 | 6 | Host setup places the repository entries and the key on each host (A17's runbook, A22) and restarts its daemon, which then announces `apt` | Stage 5 on every host | A host not yet set up keeps its archives | Remove the entries and restart: the host stops announcing `apt` |
 | 7 | `hello`'s release lists its native entry before its archive one (A21), and `hello` moves through its rollout plan, the canary of the move | Stage 6 on at least one host | A host not yet set up is picked the archive entry | Set `hello`'s release without the native entry; the move's rollback (below) |
 | 8 | `mdm`'s release (A21) and then `hostkeeper`'s (A23) list their native entry before the archive one, and they move the same way | `hello` moved on every host | The same | The same |
 | 9 | Archives stop (A24): every release set with native entries alone; the channel ends (10.5) | Both of stage 9's counts are zero (below) | Nothing of the archive | Set a release with archive entries again: the code is still there |
-| 10 | Deletion (A25, A28) | Stage 9's release converged on every host, and A27 built | Nothing | A rollback of `hostkeeper` below A25 is allowed: A19 to A24 read native versions |
+| 10 | Deletion (A25, A28) | Stage 9's release converged on every host | Nothing | A rollback of `hostkeeper` below A25 is allowed: A19 to A24 read native versions |
 
 **Stage 9's condition** is two counts over every host the registry holds, whether or not it heartbeats: hosts that
 run any service from `hostkeeper-archive`, and hosts whose daemon is older than A19's release (a daemon before
@@ -280,7 +278,7 @@ pull request shows both at zero. A host that keeps either count above zero is na
 up, or removes it from the fleet and installs it afresh (network-install.md). So no host is left on a daemon that
 nothing can update.
 
-After stage 9 a host set up from a `.deb`, `.pkg` or `.apk` older than A19's release has a daemon that can install
+After stage 9 a host set up from a `.deb` or `.pkg` older than A19's release has a daemon that can install
 nothing a release lists: it shows `no_build_for_host` for `hostkeeper`, and is set up again from the current package.
 The runbooks (enrollment, network install, the MDM kit) install the newest release's.
 
@@ -365,8 +363,9 @@ does is not one we run.
   xtask's `channel_sync.rs`, `package_launch.rs` and the index tests; the layering rows of the deleted crates. The
   device tests that run archives today are not deleted, and keep every case (rule T7): `tierstore_shaped.rs`,
   `hello_rig.rs` and the self-update tests are re-pointed at `.deb` and `.pkg` fixtures by A19 to A21, the rollout
-  tests at `hello`'s fail-ready `.deb` (A20), and `openrc_device.rs` and `selfupdate_openrc.rs` at an `.apk` fixture
-  repository by A27.
+  tests at `hello`'s fail-ready `.deb` (A20). `openrc_device.rs` keeps every case too; its two self-update cases
+  update through an archive and, with no `apk` backend, have no native installer to move to, so A25 does not delete
+  the archive path they use without the maintainers' ruling on them.
 
 ### 10.8 The build items, re-scoped
 
@@ -383,25 +382,25 @@ does is not one we run.
 | A22 | The runbook of the move: per host the repository entries, the restart and the check that `apt` is announced; the stages' conditions and stage 9's two queries | A17, A18 | A19 to A21 |
 | A23 | hostkeeper's own release (stage 8): its `.deb` and `.pkg` through the release machinery, the native entry before the archive one | A19 released, A21 | none |
 | A24 | Stage 9: every release with native entries alone; `release.yml` without the channel wait and the index (10.5); X1's pin moved to a release from A19 on | Stage 9's counts zero; A9 built, or else `macos-arm64` left out of every list while no Mac is enrolled (its hosts would show `no_target`) | none |
-| A25 | Deletion in the daemon, the coordinator and the crates (10.7) | A24 converged, A27 | A28 |
-| A26 | The design of the `apk` backend for Alpine, a pull request of design only, like section 4 for `apt` | A7 | A18 to A24 |
-| A27 | The `apk` backend, the Alpine package published to an apk repository through the release machinery, and the OpenRC device tests on it | A26 | A18 to A24 |
+| A25 | Deletion in the daemon, the coordinator and the crates (10.7) | A24 converged | A28 |
+| A26 | Withdrawn: the backends are `apt` and `macos-pkg`, with `dnf` later, and no `apk` or `pacman` (the 2026-11-08 ruling). Was: the design of the `apk` backend for Alpine | | |
+| A27 | Withdrawn by the same ruling. Was: the `apk` backend, the Alpine package published to an apk repository, and the OpenRC device tests on it | | |
 | A28 | Deletion in xtask, the workflows and the docs (10.7) | A24 converged | A25 |
 
-Withdrawn: A10 (`oci-image`), A11 and A12 (replaced by stages 9 and 10), as A13 and A14 were. A5 is built; A21 and A23
-change what its steps send. A8 (`dnf`) stays later. two-programs.md's S3 is independent of these items: whichever of
-S3 and A19 lands second carries the other's change to the self-update code.
+Withdrawn: A10 (`oci-image`), A11 and A12 (replaced by stages 9 and 10), A26 and A27 (`apk`), as A13 and A14 were.
+A5 is built; A21 and A23 change what its steps send. A8 (`dnf`) stays later. two-programs.md's S3 is independent of
+these items: whichever of S3 and A19 lands second carries the other's change to the self-update code.
 
 ### 10.9 Decisions
 
 | Question | Decision | Why |
 |---|---|---|
-| Installers in the end state | `apt` and `macos-pkg`, and `apk` for the Alpine daemon already shipped; `dnf` when an RPM host is run | Those are the hosts a daemon of ours ships for; a backend no daemon needs is a speculative port (rule B20) |
-| `tarball` | Withdrawn, never built | Every host a daemon ships for has a native installer |
+| Installers in the end state | `apt` and `macos-pkg`; `dnf` when an RPM host is run; no `apk` or `pacman` (a later design may add `apk`) | Those are the hosts we run; a backend for a host we do not run is a speculative port (rule B20) |
+| `tarball` | Withdrawn, never built | Every host we run has a native installer |
 | `oci-image` (A10) | Withdrawn | No service we run ships an image to a host; the coordinator's image is not a hostkeeper service |
 | What replaces `manifest.toml` | The package's control fields for its identity, the entry's manifest for the rest; nothing hostkeeper-specific in the package but the hook | The manifest is built, checked twice and audited; a file in the package would be a second place and a hostkeeper format again |
 | The hook | The program at a fixed path of the package, run from the sealed tree with today's contract; `hook.command` empty, `boot` allowed | The caller of `SetDesired` no longer picks a root program or its arguments |
-| Maintainer scripts and paths | None in a service's package, refused at `stage` (`package_scripts`); files only under its own paths; hostkeeper's own package keeps its bootstrap scripts | dpkg, apk and `installer` need none; with none, only the format's tool runs at install and nothing enables or starts the units but hostkeeper |
+| Maintainer scripts and paths | None in a service's package, refused at `stage` (`package_scripts`); files only under its own paths; hostkeeper's own package keeps its bootstrap scripts | dpkg and `installer` need none; with none, only the format's tool runs at install and nothing enables or starts the units but hostkeeper |
 | The attestation | Leaves the host; the publish job that alone holds the signing keys checks it before it signs; a `macos-pkg` entry carries none | The key and the pin bind the bytes on every platform; one trust model; the loss is stated in 10.3 |
 | `release_channel` and `[trusted_signers]` | Still accepted by the loader; the daemon stops reading them | An older binary requires them after a fallback, `hostkeeper-pxe` reads the signers, and `hostkeeper.toml` is never rewritten |
 | `hostkeeper-package` | Shrunk, not deleted: pxe's attestation check and `macos-pkg`'s fetch by digest stay | Both still have users; moving them would only rename them |
