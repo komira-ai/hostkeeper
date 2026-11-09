@@ -1,0 +1,11 @@
+[Unit]
+Description=hello, the example service of hostkeeper (slot a)
+ConditionPathExists=/var/lib/updater/hooks/hello/slots/a
+
+[Service]
+ExecStart=/usr/lib/hello/hello --port 9310
+DynamicUser=yes
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

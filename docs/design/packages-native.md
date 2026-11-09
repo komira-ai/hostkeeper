@@ -111,12 +111,15 @@ as root, or by host setup. The daemon refuses a package with a script at `stage`
 
 **Where a package's files may go.** Without scripts a package could still act through its files, so a service's `.deb`
 holds files only under `/usr/bin/`, `/usr/lib/<package>/`, `/usr/share/<package>/`, `/usr/share/doc/<package>/`,
-`/etc/<service>/`, and its `run` units in `/usr/lib/systemd/system/`, as section 4.7's rule does for a `.pkg`. Anything
-else (an enablement link under `/etc/systemd/system/`, a cron file, a `sudoers.d` file, a generator, an `ld.so.conf.d`
-file, a unit it does not `run`) is `manifest_invalid` at `stage`. So nothing of the package's own runs as root at
-install, only the format's tool and the triggers of the host's own packages (`man-db`, systemd's reload), as for any
-install; nothing of the package can enable or start its units (section 5's install check becomes a check at `stage`);
-and a Mac's install no longer runs package code with the network. The one exception is hostkeeper's own package (10.4).
+`/etc/<service>/`, and its units in `/usr/lib/systemd/system/`, as section 4.7's rule does for a `.pkg`. The units there
+are plain unit files named for the service, `<service>.<kind>`, `<service>-*.<kind>` or `<service>@*.<kind>` of the
+kinds `service`, `socket` and `timer`, whether or not they are `run` units (mdm's hook enables units that are not,
+10.9). Anything else (an enablement link under `/etc/systemd/system/`, a cron file, a `sudoers.d` file, a generator, an
+`ld.so.conf.d` file, a drop-in directory, a link, or a unit of another name in `/usr/lib/systemd/system/`) is
+`manifest_invalid` at `stage`. So nothing of the package's own runs as root at install, only the format's tool and the
+triggers of the host's own packages (`man-db`, systemd's reload), as for any install; nothing of the package can enable
+or start its units (section 5's install check becomes a check at `stage`); and a Mac's install no longer runs package
+code with the network. The one exception is hostkeeper's own package (10.4).
 
 **What the daemon checks before it runs anything**, in order, each before the next reads a byte:
 
@@ -403,6 +406,7 @@ these items: whichever of S3 and A19 lands second carries the other's change to 
 | What replaces `manifest.toml` | The package's control fields for its identity, the entry's manifest for the rest; nothing hostkeeper-specific in the package but the hook | The manifest is built, checked twice and audited; a file in the package would be a second place and a hostkeeper format again |
 | The hook | The program at a fixed path of the package, run from the sealed tree with today's contract; `hook.command` empty, `boot` allowed | The caller of `SetDesired` no longer picks a root program or its arguments |
 | Maintainer scripts and paths | None in a service's package, refused at `stage` (`package_scripts`); files only under its own paths; hostkeeper's own package keeps its bootstrap scripts | dpkg and `installer` need none; with none, only the format's tool runs at install and nothing enables or starts the units but hostkeeper |
+| Units a service's package installs | Plain unit files named for the service (`<service>.<kind>`, `<service>-*.<kind>`, `<service>@*.<kind>`; kinds `service`, `socket`, `timer`) in `/usr/lib/systemd/system/`, run units or not; no drop-in, link or unit of another name there | mdm's package has units its hook enables that are not run units (the proxy, depsyncer, the certificate jobs and their timer); the name rule keeps a package from shadowing a unit of the host or changing one through a drop-in |
 | The attestation | Leaves the host; the publish job that alone holds the signing keys checks it before it signs; a `macos-pkg` entry carries none | The key and the pin bind the bytes on every platform; one trust model; the loss is stated in 10.3 |
 | `release_channel` and `[trusted_signers]` | Still accepted by the loader; the daemon stops reading them | An older binary requires them after a fallback, `hostkeeper-pxe` reads the signers, and `hostkeeper.toml` is never rewritten |
 | `hostkeeper-package` | Shrunk, not deleted: pxe's attestation check and `macos-pkg`'s fetch by digest stay | Both still have users; moving them would only rename them |

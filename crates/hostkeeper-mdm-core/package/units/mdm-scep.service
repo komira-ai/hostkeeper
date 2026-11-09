@@ -1,6 +1,5 @@
 # mdm-scep.service: the SCEP server that issues each Mac its MDM identity
-# certificate at enrollment. A unit of the mdm package, linked by hostkeeper
-# from the package's current version.
+# certificate at enrollment. A unit of the mdm package.
 #
 # Loopback only, and its sockets may talk to loopback only (IPAddressDeny).
 # The challenge comes from EnvironmentFile as SCEP_CHALLENGE_PASSWORD, never

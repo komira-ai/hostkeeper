@@ -1,7 +1,7 @@
 # mdm-depsyncer.service: NanoDEP's syncer, which fetches the devices Apple
-# Business Manager assigns to this MDM. A unit of the mdm package, linked by
-# hostkeeper from the package's current version; `mdm dep define-profile`
-# enables and starts it once NanoDEP holds Apple's token.
+# Business Manager assigns to this MDM. A unit of the mdm package;
+# `mdm dep define-profile` enables and starts it once NanoDEP holds Apple's
+# token.
 #
 # MDM_DEP_NAME, NanoDEP's name for the token, comes from the drop-in
 # mdm-depsyncer.service.d/settings.conf that the package's hook writes from
