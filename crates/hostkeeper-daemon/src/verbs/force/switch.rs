@@ -33,7 +33,6 @@ use hostkeeper_placed::{PathKind, PlacedError, Placer};
 use hostkeeper_steps::record::{Record, State};
 use hostkeeper_steps::{ForceFailure, ForcePhase, ForceRecord, ForceVerdict, Layout, RecordStore};
 
-use super::FORCE_POLL_SECS;
 use crate::executor::{Ctx, Reply};
 use crate::locks::ServiceGuard;
 use crate::prune;
@@ -168,17 +167,36 @@ fn parts(
     journal(store, rec, force, ForcePhase::Started)?;
     stop_left(ctx, &placer, service, force.from_version.as_deref()).map_err(link_failed)?;
     journal(store, rec, force, ForcePhase::UnitsStopped)?;
-    placer.unlink_unlisted(target).map_err(link_failed)?;
-    journal(store, rec, force, ForcePhase::Unlinked)?;
     let layout = Layout::package(&ctx.dirs.packages.join(service.as_str()));
+    let dir = layout.version_path(target.version.as_str());
+    // A repository version places nothing: its installer's `activate` installs the package,
+    // enables its units and switches `current` once the package manager shows it.
+    let repository = crate::target::read(&dir).map_err(link_failed)?;
+    if repository.is_none() {
+        placer.unlink_unlisted(target).map_err(link_failed)?;
+    }
+    journal(store, rec, force, ForcePhase::Unlinked)?;
     layout
         .check_tree(target.version.as_str())
         .map_err(link_failed)?;
-    placer
-        .switch_current(service, &target.version)
-        .map_err(link_failed)?;
+    match &repository {
+        // A force reports no `drift_repaired`: what its `activate` repaired is dropped.
+        Some(entry) => {
+            let repository = ctx.repository();
+            let activated = repository.activate_version(service, &target.version, &dir, entry);
+            drop(repository.take_repaired(service));
+            activated.map_err(link_failed)?
+        }
+        None => drop(
+            placer
+                .switch_current(service, &target.version)
+                .map_err(link_failed)?,
+        ),
+    }
     journal(store, rec, force, ForcePhase::Switched)?;
-    link(&placer, target).map_err(link_failed)?;
+    if repository.is_none() {
+        link(&placer, target).map_err(link_failed)?;
+    }
     journal(store, rec, force, ForcePhase::Linked)?;
     placer
         .reload()
@@ -209,7 +227,7 @@ fn stop_left(
                 version,
                 platform: hostkeeper_config::platform::Platform::current(),
             };
-            Manifest::load(&dir, &expected, &ctx.own_version).ok()
+            crate::target::manifest(&dir, &expected, &ctx.own_version).ok()
         });
     let mut units: BTreeSet<String> = manifest
         .map(|manifest| manifest.run)
@@ -242,32 +260,14 @@ fn link(placer: &Placer<'_>, target: &Manifest) -> Result<(), PlacedError> {
 }
 
 /// Steps 14 and 15: starts each of `run`, then asks after each until it has been seen active
-/// once, every [`FORCE_POLL_SECS`] on the daemon's clock, within `force_start_secs` of the start.
-/// An answer that is an error counts as not active.
+/// once, every [`super::FORCE_POLL_SECS`] on the daemon's clock, within `force_start_secs` of the start
+/// ([`crate::builtin::start_and_wait`]). An answer that is an error counts as not active.
 fn start(ctx: &Ctx, run: &[String]) -> Result<(), String> {
-    for unit in run {
-        ctx.units
-            .start_unit(unit)
-            .map_err(|error| error.to_string())?;
-    }
-    let bound = ctx.config.bounds.force_start_secs;
-    // The wait is of this process, so of this boot: the monotonic clock alone measures it, and an
-    // unreadable boot id never makes it endless.
-    let began = ctx.clock.mono_secs();
-    let mut waiting: Vec<&String> = run.iter().collect();
-    loop {
-        waiting.retain(|unit| !ctx.units.is_active(unit).unwrap_or(false));
-        if waiting.is_empty() {
-            return Ok(());
-        }
-        let spent = ctx.clock.mono_secs().saturating_sub(began);
-        if spent >= bound {
-            let names: Vec<&str> = waiting.iter().map(|unit| unit.as_str()).collect();
-            return Err(format!(
-                "not active within force_start_secs ({bound}): {}",
-                names.join(", ")
-            ));
-        }
-        ctx.clock.sleep_secs(FORCE_POLL_SECS.min(bound - spent));
-    }
+    crate::builtin::start_and_wait(
+        &*ctx.units,
+        &*ctx.clock,
+        run,
+        ctx.config.bounds.force_start_secs,
+        "force_start_secs",
+    )
 }

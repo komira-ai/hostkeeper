@@ -378,3 +378,23 @@ fn the_staged_directory_must_be_absolute_and_plain() {
         );
     }
 }
+
+/// Catches a change of the digest of a tree with no link (formats change additively only): a
+/// fixed small tree keeps the digest it had before links were allowed in `tree/`.
+#[test]
+fn a_tree_with_no_link_keeps_its_digest() {
+    let s = Scratch::new("art-golden");
+    let p = s.path();
+    fs::create_dir_all(p.join("bin")).unwrap();
+    fs::write(p.join("bin/hook"), "#!hook\n").unwrap();
+    fs::write(p.join("VERSION"), "2.0.0\n").unwrap();
+    fs::set_permissions(p.join("bin"), fs::Permissions::from_mode(0o555)).unwrap();
+    fs::set_permissions(p.join("bin/hook"), fs::Permissions::from_mode(0o555)).unwrap();
+    fs::set_permissions(p.join("VERSION"), fs::Permissions::from_mode(0o444)).unwrap();
+    let digest = tree_digest(p).unwrap();
+    fs::set_permissions(p.join("bin"), fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(
+        digest,
+        "f5bc6d1e5400b1db4138cafc7349424d6ddfc966ee06fe95840acc9dca63f1d6"
+    );
+}

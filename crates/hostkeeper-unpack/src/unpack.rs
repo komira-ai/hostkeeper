@@ -113,17 +113,8 @@ pub fn unpack(
     let service = Path::new(order.service.as_str());
     let version = order.version.as_str();
     let layout = Layout::package(&fs.real_path(service));
-    if let Err(refused) = layout.check_name(version) {
-        let version = version.to_owned();
-        return Err(match refused.kind() {
-            io::ErrorKind::InvalidFilename => UnpackError::VersionTooLong { version },
-            _ => UnpackError::ReservedVersion { version },
-        });
-    }
-    fs.create_service(service)
-        .map_err(|e| UnpackError::of_io("cannot create the service directory", e))?;
-    let _lock = lock(service, fs)?;
-    remove_orphans_locked(service, fs)?;
+    check_name(&layout, version)?;
+    let _lock = begin(service, fs)?;
     if let Some(found) = existing(&layout, order, fs)? {
         return Ok(found);
     }
@@ -132,15 +123,42 @@ pub fn unpack(
         .map_err(|e| UnpackError::of_io("cannot create the staging directory", e))?;
     let result = stage_and_publish(archive, order, limits, fs, platform, &layout, &stage);
     if result.is_err() {
-        // What a failed cleanup leaves, the next remove_orphans removes. The seal goes only
-        // when the version is known to be absent: after the tree's rename it is the version's.
-        let _ = fs.remove_tree(&stage);
-        let _ = fs.remove_tree(&seal::temporary(service, version));
-        if let Ok(false) = fs.exists(&service.join(version)) {
-            let _ = fs.remove_tree(&seal::placed(service, version));
-        }
+        clean_up(fs, service, version, &stage);
     }
     result
+}
+
+/// Refuses a version name that is one of the package directory's own names, or too long.
+pub(crate) fn check_name(layout: &Layout, version: &str) -> Result<(), UnpackError> {
+    if let Err(refused) = layout.check_name(version) {
+        let version = version.to_owned();
+        return Err(match refused.kind() {
+            io::ErrorKind::InvalidFilename => UnpackError::VersionTooLong { version },
+            _ => UnpackError::ReservedVersion { version },
+        });
+    }
+    Ok(())
+}
+
+/// The start of every publish of `service`: creates its directory when it is missing, takes its
+/// unpack lock (held until the returned guard is dropped) and removes its orphans.
+pub(crate) fn begin(service: &Path, fs: &dyn PackageFs) -> Result<ServiceLock, UnpackError> {
+    fs.create_service(service)
+        .map_err(|e| UnpackError::of_io("cannot create the service directory", e))?;
+    let guard = lock(service, fs)?;
+    remove_orphans_locked(service, fs)?;
+    Ok(guard)
+}
+
+/// What a failed publish removes: the staging directory, the temporary seal and a seal without
+/// its version. What a failed cleanup leaves, the next remove_orphans removes. The seal goes
+/// only when the version is known to be absent: after the tree's rename it is the version's.
+pub(crate) fn clean_up(fs: &dyn PackageFs, service: &Path, version: &str, stage: &Path) {
+    let _ = fs.remove_tree(stage);
+    let _ = fs.remove_tree(&seal::temporary(service, version));
+    if let Ok(false) = fs.exists(&service.join(version)) {
+        let _ = fs.remove_tree(&seal::placed(service, version));
+    }
 }
 
 /// The service's unpack lock.
@@ -197,8 +215,31 @@ fn existing(
 ) -> Result<Option<Unpacked>, UnpackError> {
     let version = order.version.as_str();
     let dir = layout.version_path(version);
+    let service = order.service.as_str();
+    let Some(seal) = sealed(layout, service, version, &order.package_digest, fs)? else {
+        return Ok(None);
+    };
+    let manifest = Manifest::load(&dir, &expected(order), &running_hostkeeper())?;
+    settle_if_open(fs, service, version, &dir)?;
+    Ok(Some(Unpacked {
+        dir,
+        seal,
+        manifest,
+        fresh: false,
+    }))
+}
+
+/// The seal of `version` when it is on the host: `None` when there is no such directory, the seal
+/// when it is for the package digest `digest` and the tree has its digest, an error otherwise.
+pub(crate) fn sealed(
+    layout: &Layout,
+    service: &str,
+    version: &str,
+    digest: &Sha256Hex,
+    fs: &dyn PackageFs,
+) -> Result<Option<Seal>, UnpackError> {
     let present = fs
-        .exists(&Path::new(order.service.as_str()).join(version))
+        .exists(&Path::new(service).join(version))
         .map_err(|e| UnpackError::of_io("cannot look at the version", e))?;
     if !present {
         return Ok(None);
@@ -224,33 +265,37 @@ fn existing(
         },
         other => unreadable(other.to_string()),
     })?;
-    if seal.package_digest() != order.package_digest.as_str() {
+    if seal.package_digest() != digest.as_str() {
         return Err(changed(format!(
             "was sealed for the archive {}, not {}",
             seal.package_digest(),
-            order.package_digest.as_str()
+            digest.as_str()
         )));
     }
     match layout.check_tree(version) {
         Err(e) if e.kind() == io::ErrorKind::InvalidData => return Err(changed(e.to_string())),
         checked => checked.map_err(|e| UnpackError::of_io("cannot read the version", e))?,
     }
-    let manifest = Manifest::load(&dir, &expected(order), &running_hostkeeper())?;
+    Ok(Some(seal))
+}
+
+/// Makes the directory `dir` of `version` 0555 unless it is.
+pub(crate) fn settle_if_open(
+    fs: &dyn PackageFs,
+    service: &str,
+    version: &str,
+    dir: &Path,
+) -> Result<(), UnpackError> {
     // A crash between the publish's rename of the tree and the mode after it leaves the version
     // sealed and whole but still 0700; this is where it is made 0555. The mode of the version
     // directory is not part of the tree digest, so the seal is untouched; a version already 0555
     // is not written to (one that cannot be looked at is settled, and the settle says why).
-    let read_only = std::fs::symlink_metadata(&dir)
+    let read_only = std::fs::symlink_metadata(dir)
         .is_ok_and(|meta| meta.permissions().mode() & 0o7777 == 0o555);
     if !read_only {
-        settle(fs, Path::new(order.service.as_str()), version)?;
+        settle(fs, Path::new(service), version)?;
     }
-    Ok(Some(Unpacked {
-        dir,
-        seal,
-        manifest,
-        fresh: false,
-    }))
+    Ok(())
 }
 
 fn expected(order: &UnpackOrder) -> Expected {
@@ -259,6 +304,17 @@ fn expected(order: &UnpackOrder) -> Expected {
         version: order.version.clone(),
         platform: order.platform,
     }
+}
+
+/// The seal of a tree with the digest `tree` for the package digest `package`. Both are 64
+/// lower-case hex digits (`read_tree`'s and `Sha256Hex`'s), so the seal is always made; the error
+/// is built eagerly so that no code path exists only for it.
+pub(crate) fn make_seal(tree: &str, package: &Sha256Hex) -> Result<Seal, UnpackError> {
+    let unsealable = UnpackError::Io {
+        what: "cannot seal",
+        source: io::Error::other("a digest that is not 64 lower-case hex digits"),
+    };
+    Seal::new(tree, package.as_str()).ok().ok_or(unsealable)
 }
 
 /// The pass, the checks after it, the seal and the publish, into the staging directory `stage`.
@@ -313,15 +369,7 @@ fn stage_and_publish(
             at: pass.produced,
         });
     }
-    // Both digests are 64 lower-case hex digits (read_tree's and Sha256Hex's), so the seal is
-    // always made; the error is built eagerly so that no code path exists only for it.
-    let unsealable = UnpackError::Io {
-        what: "cannot seal",
-        source: io::Error::other("a digest that is not 64 lower-case hex digits"),
-    };
-    let seal = Seal::new(&tree.digest, order.package_digest.as_str())
-        .ok()
-        .ok_or(unsealable)?;
+    let seal = make_seal(&tree.digest, &order.package_digest)?;
     let service = Path::new(order.service.as_str());
     publish(fs, service, stage, order.version.as_str(), &seal)?;
     Ok(Unpacked {

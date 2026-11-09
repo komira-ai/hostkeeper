@@ -37,7 +37,7 @@ fn switching(rig: &Rig, log: &Lines, failing: &Arc<AtomicBool>) -> StepRunner {
             .expect("the log")
             .push(format!("switch {toward:?} {}", order.target_version));
         match fail.load(Ordering::SeqCst) {
-            true => Err("the link could not be made".to_owned()),
+            true => Err("the link could not be made".to_owned().into()),
             false => Ok(()),
         }
     });
@@ -258,7 +258,7 @@ fn confirming(rig: &Rig, log: &Lines, failing: &Arc<AtomicBool>) -> StepRunner {
         };
         seen.push(format!("record {} {kind}", rec.step));
         match fail.load(Ordering::SeqCst) {
-            true => Err("the paths could not be committed".to_owned()),
+            true => Err("the paths could not be committed".to_owned().into()),
             false => Ok(()),
         }
     });

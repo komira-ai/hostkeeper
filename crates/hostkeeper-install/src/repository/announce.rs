@@ -6,9 +6,10 @@
 //! of [`super::config`], or the daemon did not start). A host announces at most one native
 //! installer, the one of its own package database.
 //!
-//! The daemon announces it only once its order path runs the installer: [`announced`] keeps
-//! an installer the build has no steps of off the list, so the coordinator never orders an
-//! entry the host would defer.
+//! The daemon announces it because its build registers the installer
+//! ([`crate::REGISTERED`]) and its order path runs it: [`announced`] adds the host's native
+//! installer only when `registered` holds it, so the coordinator never orders an entry the host
+//! would defer.
 
 use std::fs::File;
 use std::io::{BufRead, BufReader};

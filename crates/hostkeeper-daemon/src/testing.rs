@@ -25,7 +25,7 @@ use hostkeeper_hook::Step;
 use hostkeeper_proto::hostkeeper::release::v1::Target;
 use hostkeeper_steps::{
     AdditiveCall, BootId, BootIdError, Clock, LaunchError, Layout, Protected, PruneReport,
-    PruneStep, Seal, Staged, StepCall, StepExit, StepLauncher, tree_digest,
+    PruneStep, Seal, Staged, StepCall, StepExit, StepLauncher, ToolCall, ToolExit, tree_digest,
 };
 
 use crate::locks::{ServiceGuard, ServiceLocks};
@@ -279,11 +279,21 @@ pub struct ScriptedLauncher {
     stop_seen: Mutex<Vec<Notice<String>>>,
     running: AtomicUsize,
     most_running: AtomicUsize,
+    tools: Mutex<Option<ToolAnswer>>,
 }
+
+/// What answers each tool run ([`StepLauncher::run_tool`]) of a [`ScriptedLauncher`].
+pub type ToolAnswer = Arc<dyn Fn(&ToolCall<'_>) -> Result<ToolExit, LaunchError> + Send + Sync>;
 
 impl ScriptedLauncher {
     pub fn new() -> Arc<ScriptedLauncher> {
         Arc::new(ScriptedLauncher::default())
+    }
+
+    /// Every later tool run is answered by `answer`; with none, a tool run is refused as by a
+    /// launcher that runs no tool.
+    pub fn answer_tools(&self, answer: ToolAnswer) {
+        *lock(&self.tools) = Some(answer);
     }
 
     /// The exit codes of the next runs of `step` for `service`.
@@ -404,6 +414,17 @@ impl ScriptedLauncher {
 }
 
 impl StepLauncher for ScriptedLauncher {
+    fn run_tool(&self, call: &ToolCall<'_>) -> Result<ToolExit, LaunchError> {
+        let answer = lock(&self.tools).clone();
+        match answer {
+            Some(answer) => answer(call),
+            None => Err(LaunchError::NoStart(format!(
+                "the scripted launcher runs no tool: {}",
+                call.program.display()
+            ))),
+        }
+    }
+
     fn run(&self, call: &StepCall<'_>) -> Result<StepExit, LaunchError> {
         let key = (call.service.to_owned(), call.invocation.step);
         note(&self.log, format!("run {}", call.unit));
@@ -834,4 +855,27 @@ impl Prune for RecordingPrune {
             false => Ok(()),
         })
     }
+}
+
+/// The repository installer's ports of a test host whose root is `root` and whose packages
+/// directory is `packages_dir`, with the repository entries `repositories`: what is staged is
+/// given to the owner of `root`, the test's own user.
+pub fn repository_ports(
+    packages_dir: &Path,
+    root: &Path,
+    repositories: hostkeeper_install::repository::Repositories,
+) -> Arc<crate::repository::RepositoryPorts> {
+    use std::os::unix::fs::MetadataExt;
+    let owner = fs::metadata(root).map_or(hostkeeper_unpack::Owner::ROOT, |made| {
+        hostkeeper_unpack::Owner {
+            uid: made.uid(),
+            gid: made.gid(),
+        }
+    });
+    Arc::new(crate::repository::RepositoryPorts::new(
+        packages_dir,
+        root,
+        repositories,
+        owner,
+    ))
 }

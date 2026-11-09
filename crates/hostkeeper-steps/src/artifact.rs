@@ -22,22 +22,28 @@
 //!
 //! ```text
 //! record  = length header [bytes]
-//! length  = u64, little-endian: the length of header plus, for a file, its size
+//! length  = u64, little-endian: the length of header plus, for a file or a link, its size
 //! header  = kind NUL name NUL mode NUL size NUL
-//! kind    = "f" (a regular file) or "d" (a directory)
+//! kind    = "f" (a regular file), "d" (a directory) or "l" (a symbolic link)
 //! name    = the full relative name, as bytes
-//! mode    = the permission bits (mode & 0o7777), four octal digits ("0555", "0444")
-//! size    = the file's size in bytes, in decimal; "0" for a directory
-//! bytes   = the file's contents (files only)
+//! mode    = the permission bits (mode & 0o7777), four octal digits ("0555", "0444"); "0000"
+//!           for a link, whose own bits mean nothing and differ between systems
+//! size    = the file's size in bytes, in decimal; "0" for a directory; the length of the
+//!           target text for a link
+//! bytes   = the file's contents (files only); the link's target text, as `readlink` gives it,
+//!           never followed or resolved (links only)
 //! ```
 //!
-//! Nothing else is hashed: not the owner, not the times. A tree holding anything other than
-//! regular files and directories (a link, a device, a pipe) has no digest
-//! ([`ArtifactError::Unsupported`]).
+//! Nothing else is hashed: not the owner, not the times. A link is an entry only inside the
+//! `tree/` directory of a version (its full relative name has `tree` as its first component and
+//! at least one more: `tree/usr/lib/x`, never `tree` itself, `apt/x` or a top-level `x`). A tree
+//! holding a link anywhere else, or anything other than regular files, directories and those
+//! links (a device, a pipe), has no digest ([`ArtifactError::Unsupported`]). A tree with no link
+//! has the digest it had before links were allowed.
 
 use std::fs::{self, File};
 use std::io::{self, Read};
-use std::os::unix::ffi::OsStrExt;
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 
@@ -48,7 +54,9 @@ use sha2::{Digest, Sha256};
 pub enum ArtifactError {
     #[error("cannot read the staged release: {0}")]
     Io(#[from] io::Error),
-    #[error("the staged release holds {0:?}, which is neither a regular file nor a directory")]
+    #[error(
+        "the staged release holds {0:?}, which is neither a regular file nor a directory (a link is taken only inside tree/)"
+    )]
     Unsupported(PathBuf),
     #[error("the staged release changed after it was verified: it was {expected}, it is {found}")]
     Changed { expected: String, found: String },
@@ -67,6 +75,8 @@ pub enum ArtifactError {
 pub enum EntryKind {
     File,
     Dir,
+    /// A symbolic link inside `tree/`, hashed by its target text.
+    Link,
 }
 
 /// One entry of a tree as the digest read it.
@@ -75,11 +85,11 @@ pub struct TreeEntry {
     /// The full relative name, `/`-separated.
     pub name: Vec<u8>,
     pub kind: EntryKind,
-    /// The permission bits (`mode & 0o7777`).
+    /// The permission bits (`mode & 0o7777`); 0 for a link.
     pub mode: u32,
-    /// The size in bytes; 0 for a directory.
+    /// The size in bytes; 0 for a directory; the length of the target text for a link.
     pub size: u64,
-    /// The SHA-256 of a file's contents; `None` for a directory.
+    /// The SHA-256 of a file's contents or of a link's target text; `None` for a directory.
     pub content: Option<[u8; 32]>,
 }
 
@@ -113,8 +123,9 @@ impl Staged {
     /// tree that runs. The links above the tree are resolved here, once: the `Staged` names the
     /// real path of its parent joined with the tree's own name, which is not resolved, so a tree
     /// that is itself a link stays one and [`Staged::check`] refuses it. A parent that cannot be
-    /// resolved is [`ArtifactError::Io`]. A tree holding a link or anything else that is neither a
-    /// regular file nor a directory is [`ArtifactError::Unsupported`].
+    /// resolved is [`ArtifactError::Io`]. A tree holding a link outside `tree/`, or anything else
+    /// that is neither a regular file, a directory nor a link inside `tree/`, is
+    /// [`ArtifactError::Unsupported`].
     pub fn seal(dir: &Path) -> Result<Staged, ArtifactError> {
         let untrusted = || ArtifactError::Untrusted(dir.to_path_buf());
         if !dir.is_absolute() || !dir.components().skip(1).all(is_plain) {
@@ -150,8 +161,8 @@ impl Staged {
     /// exec. A launcher that runs the path must run it from here, not from a path it built.
     ///
     /// `hook` is the program of the manifest's `[hook] command`: relative, plain names only, a
-    /// regular file of the tree reached without passing a link at any component, so it cannot lead
-    /// out of the tree.
+    /// regular file of the tree reached without passing a link at any component (each is looked at
+    /// without following it), so it cannot lead out of the tree.
     pub fn check(&self, hook: &Path) -> Result<PathBuf, ArtifactError> {
         self.check_as(hook, &trusted_owners(), &host_owner)
     }
@@ -161,14 +172,50 @@ impl Staged {
     ///
     /// Besides the digest: the tree and every directory above it must be real directories owned
     /// by a trusted user and not writable by group or others, and every entry inside the tree must
-    /// be a regular file or a directory (no link), owned by a trusted user, not setuid or setgid,
-    /// and not writable by group or others ([`ArtifactError::Untrusted`] naming the entry).
+    /// be a regular file or a directory, or a link inside `tree/`, owned by a trusted user; a
+    /// file or directory is also not setuid or setgid and not writable by group or others (a
+    /// link's own mode is not looked at). Any other link is [`ArtifactError::Untrusted`] naming
+    /// the entry, as is any entry that breaks a rule.
     pub fn check_as(
         &self,
         hook: &Path,
         trusted: &[u32],
         owner: &dyn Fn(&fs::Metadata) -> (u32, u32),
     ) -> Result<PathBuf, ArtifactError> {
+        self.check_tree_as(trusted, owner)?;
+        if hook.as_os_str().is_empty() || !hook.components().all(is_plain) {
+            return Err(ArtifactError::BadHookPath(hook.to_path_buf()));
+        }
+        // `hook` is plain names, and each component is looked at without following it: every
+        // one but the last a real directory, the last a regular file, so a link inside `tree/`
+        // is never on the way.
+        let parts: Vec<Component<'_>> = hook.components().collect();
+        let mut at = self.dir.clone();
+        for (i, part) in parts.iter().enumerate() {
+            at.push(part);
+            let last = i + 1 == parts.len();
+            let sound = fs::symlink_metadata(&at)
+                .is_ok_and(|meta| if last { meta.is_file() } else { meta.is_dir() });
+            if !sound {
+                return Err(ArtifactError::HookMissing(hook.to_path_buf()));
+            }
+        }
+        Ok(at)
+    }
+
+    /// [`Staged::check_as`] without a hook: the place, every entry's trust and the digest, with
+    /// the host's trusted owners. For a release whose steps are built in and run nothing from
+    /// the tree.
+    pub fn check_tree(&self) -> Result<(), ArtifactError> {
+        self.check_tree_as(&trusted_owners(), &host_owner)
+    }
+
+    /// [`Staged::check_tree`] with the trusted owners and the way an owner is read given.
+    pub fn check_tree_as(
+        &self,
+        trusted: &[u32],
+        owner: &dyn Fn(&fs::Metadata) -> (u32, u32),
+    ) -> Result<(), ArtifactError> {
         check_place(&self.dir, trusted, owner)?;
         let found = walk(&self.dir, Some((trusted, owner)))?.digest;
         if found != self.digest {
@@ -177,16 +224,7 @@ impl Staged {
                 found,
             });
         }
-        if hook.as_os_str().is_empty() || !hook.components().all(is_plain) {
-            return Err(ArtifactError::BadHookPath(hook.to_path_buf()));
-        }
-        // The walk above refused every link in the tree and `hook` is plain names, so no
-        // component on the way is a link; the last is looked at without following it.
-        let at = self.dir.join(hook);
-        if !fs::symlink_metadata(&at).is_ok_and(|meta| meta.is_file()) {
-            return Err(ArtifactError::HookMissing(hook.to_path_buf()));
-        }
-        Ok(at)
+        Ok(())
     }
 }
 
@@ -229,7 +267,8 @@ fn is_plain(component: Component<'_>) -> bool {
 }
 
 /// The digest of the tree below `dir` (the format is in the module documentation). Lower-case
-/// hex. Links are never followed: a tree holding one has no digest.
+/// hex. Links are never followed: a link inside `tree/` is hashed by its target text, and a tree
+/// holding one anywhere else has no digest.
 pub fn tree_digest(dir: &Path) -> Result<String, ArtifactError> {
     Ok(read_tree(dir)?.digest)
 }
@@ -244,7 +283,7 @@ pub fn read_tree(dir: &Path) -> Result<Tree, ArtifactError> {
 pub(crate) type Trust<'a> = (&'a [u32], &'a dyn Fn(&fs::Metadata) -> (u32, u32));
 
 /// Reads the tree below `dir`. With `trust`, an entry that breaks a trust rule is
-/// [`ArtifactError::Untrusted`] (a link included); without, a link is
+/// [`ArtifactError::Untrusted`] (a link outside `tree/` included); without, such a link is
 /// [`ArtifactError::Unsupported`].
 pub(crate) fn walk(dir: &Path, trust: Option<Trust<'_>>) -> Result<Tree, ArtifactError> {
     let mut found = Vec::new();
@@ -254,8 +293,17 @@ pub(crate) fn walk(dir: &Path, trust: Option<Trust<'_>>) -> Result<Tree, Artifac
     let mut entries = Vec::with_capacity(found.len());
     for (rel, meta) in found {
         let name = rel.as_os_str().as_bytes().to_vec();
-        let mode = meta.permissions().mode() & 0o7777;
-        let (kind, size, content) = if meta.is_dir() {
+        let mode = match meta.is_symlink() {
+            true => 0,
+            false => meta.permissions().mode() & 0o7777,
+        };
+        let (kind, size, content) = if meta.is_symlink() {
+            let target = fs::read_link(dir.join(&rel))?.into_os_string().into_vec();
+            let size = target.len() as u64;
+            put_header(&mut hasher, b'l', &name, mode, size);
+            hasher.update(&target);
+            (EntryKind::Link, size, Some(Sha256::digest(&target).into()))
+        } else if meta.is_dir() {
             put_header(&mut hasher, b'd', &name, mode, 0);
             (EntryKind::Dir, 0, None)
         } else {
@@ -278,8 +326,15 @@ pub(crate) fn walk(dir: &Path, trust: Option<Trust<'_>>) -> Result<Tree, Artifac
     })
 }
 
+/// Whether the full relative name `rel` is inside `tree/`: `tree` is its first component and it
+/// has at least one more.
+fn inside_tree(rel: &Path) -> bool {
+    let mut parts = rel.components();
+    parts.next() == Some(Component::Normal("tree".as_ref())) && parts.next().is_some()
+}
+
 /// Every entry below `dir` (relative to the tree root `rel`), each looked at without following
-/// it. Only regular files and directories are taken.
+/// it. Only regular files, directories and links inside `tree/` are taken.
 fn list(
     dir: &Path,
     rel: &Path,
@@ -293,10 +348,16 @@ fn list(
         let meta = fs::symlink_metadata(&path)?;
         let kind = meta.file_type();
         if let Some((trusted, owner)) = trust {
-            let mode = meta.mode() & 0o7777;
-            // One comparison: a link, a foreign owner, setuid or setgid, writable by others.
+            // A link's own mode means nothing: it is read as 0 (no bit to refuse).
+            let allowed = kind.is_symlink() && inside_tree(&rel);
+            let mode = match allowed {
+                true => 0,
+                false => meta.mode() & 0o7777,
+            };
+            // One comparison: a link outside tree/, a foreign owner, setuid or setgid, writable
+            // by others.
             let sound = (
-                !kind.is_symlink(),
+                allowed || !kind.is_symlink(),
                 trusted.contains(&owner(&meta).0),
                 mode & 0o6000 == 0,
                 mode & 0o022 == 0,
@@ -308,7 +369,7 @@ fn list(
         if kind.is_dir() {
             list(&path, &rel, trust, found)?;
             found.push((rel, meta));
-        } else if kind.is_file() {
+        } else if kind.is_file() || (kind.is_symlink() && inside_tree(&rel)) {
             found.push((rel, meta));
         } else {
             return Err(ArtifactError::Unsupported(rel));

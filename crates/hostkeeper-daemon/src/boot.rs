@@ -445,7 +445,8 @@ fn rebuild(
         version: version.clone(),
         platform: hostkeeper_config::platform::Platform::current(),
     };
-    let manifest = Manifest::load(&dir, &expected, &ctx.own_version).map_err(unresumable)?;
+    let manifest =
+        crate::target::manifest(&dir, &expected, &ctx.own_version).map_err(unresumable)?;
     let order = UpdateOrder {
         service: service.to_string(),
         target_version: version.to_string(),
@@ -464,7 +465,9 @@ fn rebuild(
         declared_params: Params::default(),
         min_updater_protocol: None,
         order_try: rec.order_try,
-        builtin_steps: crate::selfupdate::builtin_steps(service, manifest.min_hostkeeper),
+        // As the update made it: a version with no hook program runs the built-in steps.
+        builtin_steps: crate::selfupdate::builtin_steps(service, manifest.min_hostkeeper)
+            | manifest.hook.command.is_empty(),
     };
     let package = Package {
         verb: HookedVerb::Update,
@@ -877,7 +880,7 @@ impl Daemon {
             version: version.clone(),
             platform: hostkeeper_config::platform::Platform::current(),
         };
-        let manifest = Manifest::load(&dir, &expected, &ctx.own_version).map_err(text)?;
+        let manifest = crate::target::manifest(&dir, &expected, &ctx.own_version).map_err(text)?;
         let Some(step) = manifest.hook.boot.as_deref() else {
             return Ok(None);
         };

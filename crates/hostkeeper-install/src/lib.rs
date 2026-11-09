@@ -4,7 +4,7 @@
 //!
 //! - [`installer`]: the contract ([`InstallerSteps`]: `stage`, `activate`, `retire`, `remove`),
 //!   the host's side of it ([`Host`]), and the registry of this build's installers
-//!   ([`steps_of`]).
+//!   ([`steps_of`], [`backend_of`]).
 //! - [`announce`]: which installers the daemon announces, decided once at its start from its
 //!   platform and the host's `os-release` (section 5.4).
 //! - [`macos_pkg`]: `macos-pkg`, a service from a signed flat `.pkg` installed by `installer`
@@ -35,7 +35,7 @@ pub mod tools;
 pub use announce::{Announcement, Family, announce};
 pub use installer::{
     Archive, Host, HostError, InstallerSteps, REGISTERED, StageEnv, StageError, StageOrder,
-    StagedVersion, steps_of,
+    StagedVersion, backend_of, steps_of,
 };
 pub use outcome::{Class, Failure, Outcome, Reason};
 #[cfg(target_os = "macos")]

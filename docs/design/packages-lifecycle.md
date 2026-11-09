@@ -1,6 +1,6 @@
 # Packages in any format: an update, a rollback and an uninstall
 
-Status: design, for the maintainers' ruling. Nothing here is built. This is section 6 of [packages.md](packages.md), kept
+Status: design, for the maintainers' ruling. **Built** for a repository installer's version (`crates/hostkeeper-daemon/src/target.rs`, `repository.rs`, `builtin.rs`): section 6.1's `target.json` and its reader (`target::manifest`, `manifest.toml` for an archive version), the `l` tree record, `target_changed`; the built-in steps of 6.3; 6.4's `apt` row; 6.5's `remove` of `apt` with the `installed` entry's package keys; 6.6 for a repository package. `install-record.json`, `uninstalling_installed` and the other installers' rows are not built. This is section 6 of [packages.md](packages.md), kept
 in a file of its own so that one stays under 1000 lines (rule R12). Section numbers here are those of packages.md.
 Amended by [packages-repositories.md](packages-repositories.md): a Linux distribution's package comes from a
 repository through the `apt` backend of one repository installer, whose version directory, rollback, hold, purge

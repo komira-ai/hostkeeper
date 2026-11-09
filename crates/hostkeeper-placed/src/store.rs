@@ -14,13 +14,18 @@
 //!     }
 //!   },
 //!   "uninstalling": { "other": {}, "old": { "hook_done": true } },
-//!   "installed": { "web": { "installer": "apt" } }
+//!   "installed": {
+//!     "web": { "installer": "apt", "package": "web", "version": "1.4.0-1", "repository": "main",
+//!              "links": ["/etc/systemd/system/multi-user.target.wants/web.service"] }
+//!   }
 //! }
 //! ```
 //!
 //! `installed` maps a service to its installer, for a service of an installer other than
 //! `hostkeeper-archive` (packages-lifecycle.md section 6.5; a service with no entry is a
-//! `hostkeeper-archive` one, as every service installed before the key existed is). The
+//! `hostkeeper-archive` one, as every service installed before the key existed is), and for a
+//! repository package also its package, version, repository and the enablement links its
+//! `activate` wrote, `pending` while an install is under way. The
 //! installer's name is kept as written: the daemon refuses to act for a service of one it has
 //! no steps of, and the record is read whatever it names. It is written only when not empty,
 //! so a record without it is written as it was before it existed, and a release that does not
@@ -35,7 +40,7 @@
 //! ([`crate::PlacedLock`]). Every write is a temporary file in the same directory, an `fsync`
 //! of the file, a rename and an `fsync` of the directory.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -142,21 +147,45 @@ pub struct Tombstone {
     extra: Map<String, Value>,
 }
 
-/// How a service was installed, when not by `hostkeeper-archive`.
+/// How a service was installed, when not by `hostkeeper-archive`. A repository package's entry
+/// also names the package, the version installed (or being installed while `pending`), the
+/// repository and the enablement links its `activate` wrote (packages-repositories.md section
+/// 4.3); each of these keys is written only when set, so an entry of the installer alone is
+/// written as before.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct InstalledEntry {
     /// The installer's name, as the entry spells it.
     pub installer: String,
+    /// The package, as the package manager knows it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package: Option<String>,
+    /// The version the package manager installed, as it spells it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// The entry of the host's repository configuration the version came from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repository: Option<String>,
+    /// The enablement links of the `run` units the installer wrote, absolute.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub links: BTreeSet<String>,
+    /// Written before the install, cleared once the package manager shows `version`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub pending: bool,
     /// The keys of a newer writer, kept on rewrite.
     #[serde(flatten)]
     extra: Map<String, Value>,
 }
 
 impl InstalledEntry {
-    /// An entry for `installer`.
+    /// An entry for `installer`, naming nothing else.
     pub fn new(installer: &str) -> InstalledEntry {
         InstalledEntry {
             installer: installer.to_owned(),
+            package: None,
+            version: None,
+            repository: None,
+            links: BTreeSet::new(),
+            pending: false,
             extra: Map::new(),
         }
     }

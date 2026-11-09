@@ -4,12 +4,15 @@
 //! existed is) and runs its steps through the registry ([`hostkeeper_install::steps_of`]), the
 //! placer doing what the steps ask of the host ([`PlacerHost`]).
 //!
-//! A service recorded with an installer this build has no steps of (one a newer binary
-//! installed before a fallback, packages.md section 9.1) is refused with what is recorded: the
-//! daemon reports it and leaves it as it is.
+//! A repository installer's service (`apt`) is recorded with its package
+//! ([`crate::repository::PlacedRecords`]), and its steps are the repository installer's over the
+//! installer's backend ([`Steps::Repository`]). A service recorded with an installer this build
+//! has no steps of (one a newer binary installed before a fallback, packages.md section 9.1) is
+//! refused with what is recorded: the daemon reports it and leaves it as it is.
 
 use hostkeeper_config::names::{ServiceName, Version};
-use hostkeeper_install::{Host, HostError, InstallerSteps, steps_of};
+use hostkeeper_install::repository::Backend;
+use hostkeeper_install::{Host, HostError, InstallerSteps, backend_of, steps_of};
 use hostkeeper_placed::{PlacedRecord, Placer};
 use hostkeeper_release::Installer;
 
@@ -24,13 +27,33 @@ pub fn installer_of(record: &PlacedRecord, service: &ServiceName) -> Result<Inst
     }
 }
 
+/// The steps of an installer this daemon has.
+#[derive(Clone, Copy)]
+pub enum Steps {
+    /// An artifact installer's four steps.
+    Artifact(&'static dyn InstallerSteps),
+    /// A repository installer, whose steps the daemon runs over its backend
+    /// ([`crate::repository`]).
+    Repository(&'static dyn Backend),
+}
+
+impl Steps {
+    /// The installer the steps are of.
+    pub fn installer(self) -> Installer {
+        match self {
+            Steps::Artifact(steps) => steps.installer(),
+            Steps::Repository(backend) => backend.installer(),
+        }
+    }
+}
+
 /// The steps of the installer `record` holds for `service` ([`installer_of`]).
-pub fn steps_for(
-    record: &PlacedRecord,
-    service: &ServiceName,
-) -> Result<&'static dyn InstallerSteps, String> {
+pub fn steps_for(record: &PlacedRecord, service: &ServiceName) -> Result<Steps, String> {
     let installer = installer_of(record, service)?;
-    steps_of(installer).ok_or_else(|| unknown(service, installer.as_str()))
+    steps_of(installer)
+        .map(Steps::Artifact)
+        .or_else(|| backend_of(installer).map(Steps::Repository))
+        .ok_or_else(|| unknown(service, installer.as_str()))
 }
 
 fn unknown(service: &ServiceName, name: &str) -> String {

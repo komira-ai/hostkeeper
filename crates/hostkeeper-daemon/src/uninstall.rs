@@ -36,6 +36,7 @@ use hostkeeper_config::manifest::{Expected, Manifest};
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_hook::{Class, Outcome, Phase, Report, Step, Verdict};
 use hostkeeper_placed::{FileKind, Fs, PlacedError, RealFs, Tombstone};
+use hostkeeper_proto::hostkeeper::release::v1::Target;
 use hostkeeper_steps::record::{Loaded, PARAMS_FILE, RECORD_FILE};
 use hostkeeper_steps::{AdditiveCall, Finished, Layout, Seal, Staged, StepExit, read_seal};
 
@@ -45,7 +46,7 @@ use crate::executor::{Ctx, Reply};
 use crate::files;
 use crate::halt::HELD_HALT_FILE;
 use crate::installed::{self, CURRENT, PREVIOUS};
-use crate::installers::{self, PlacerHost};
+use crate::installers::{self, PlacerHost, Steps};
 use crate::refusal::Refusal;
 use crate::verbs::update::last_record;
 
@@ -147,11 +148,13 @@ fn begin(ctx: &Ctx, service: &ServiceName) -> Result<Option<Tombstone>, Reply> {
         Some(version) => {
             let release = current_release(ctx, service, &version)
                 .map_err(|why| Reply::refused(Refusal::ReleaseUnreadable, why))?;
-            release.bound().ok_or_else(|| {
-                unsupported(format!(
-                    "the manifest of {service} {version} has no [hook.timeout_secs] uninstall"
-                ))
-            })?;
+            if !release.builtin() {
+                release.bound().ok_or_else(|| {
+                    unsupported(format!(
+                        "the manifest of {service} {version} has no [hook.timeout_secs] uninstall"
+                    ))
+                })?;
+            }
             false
         }
         None => {
@@ -220,6 +223,13 @@ impl Release {
     fn bound(&self) -> Option<NonZeroU64> {
         self.manifest.hook.timeout_secs.uninstall
     }
+
+    /// Whether the release runs the built-in steps (no hook program), whose `uninstall` runs
+    /// nothing: it can always be uninstalled, whatever its bounds say (packages-lifecycle.md
+    /// section 6.3).
+    fn builtin(&self) -> bool {
+        self.manifest.hook.command.is_empty()
+    }
 }
 
 /// The release of `service` at `version`: its manifest read for the service and version, its
@@ -233,15 +243,18 @@ fn current_release(ctx: &Ctx, service: &ServiceName, version: &Version) -> Resul
         version: version.clone(),
         platform: hostkeeper_config::platform::Platform::current(),
     };
-    let manifest = Manifest::load(&dir, &expected, &ctx.own_version).map_err(text)?;
+    let manifest = crate::target::manifest(&dir, &expected, &ctx.own_version).map_err(text)?;
     let seal = read_seal(&layout.seal_path(version.as_str())).map_err(text)?;
     let seal = Seal::parse(&seal).map_err(text)?;
     let staged = Staged::seal(&dir).map_err(text)?;
     if staged.digest() != seal.tree_digest() {
         return Err(format!("{} is not the tree its seal names", dir.display()));
     }
-    let hook = manifest.hook.command.first().map(PathBuf::from);
-    let executable = staged.check(&hook.unwrap_or_default()).map_err(text)?;
+    let executable = match manifest.hook.command.first() {
+        Some(hook) => staged.check(Path::new(hook)).map_err(text)?,
+        // The built-in steps run no program: the tree is checked all the same.
+        None => staged.check_tree().map(|()| PathBuf::new()).map_err(text)?,
+    };
     Ok(Release {
         version: version.clone(),
         dir,
@@ -262,12 +275,15 @@ fn stop_and_run_hook(ctx: &Ctx, service: &ServiceName) -> Result<(), Reply> {
         })?;
     let release = current_release(ctx, service, &version)
         .map_err(|why| interrupted(Refusal::ReleaseUnreadable, why))?;
-    let bound = release.bound().ok_or_else(|| {
-        interrupted(
-            Refusal::UninstallUnsupported,
-            format!("the manifest of {service} {version} has no [hook.timeout_secs] uninstall"),
-        )
-    })?;
+    let bound = match release.builtin() {
+        true => None,
+        false => Some(release.bound().ok_or_else(|| {
+            interrupted(
+                Refusal::UninstallUnsupported,
+                format!("the manifest of {service} {version} has no [hook.timeout_secs] uninstall"),
+            )
+        })?),
+    };
     for unit in &release.manifest.run {
         ctx.units.stop_unit(unit).map_err(|error| {
             ctx.alert(REASON_UNIT_STUCK, &format!("service={service}: {error}"));
@@ -278,6 +294,10 @@ fn stop_and_run_hook(ctx: &Ctx, service: &ServiceName) -> Result<(), Reply> {
             finished(environment, Some(REASON_UNIT_STUCK.to_owned()))
         })?;
     }
+    // The built-in `uninstall` runs nothing.
+    let Some(bound) = bound else {
+        return Ok(());
+    };
     let exit = run_hook(ctx, service, &release, bound)?;
     let report = Report::read(exit.last_line.as_deref().unwrap_or(""));
     // How each end of the step is read: the `uninstall` row of `hostkeeper_hook::next`.
@@ -365,15 +385,22 @@ fn remove(ctx: &Ctx, service: &ServiceName) -> Reply {
         .store()
         .load()
         .map_err(|error| error.to_string())
-        .and_then(|record| installers::steps_for(&record, service))
-        .and_then(|steps| {
+        .and_then(|record| installers::steps_for(&record, service));
+    let removed = match removed {
+        Ok(Steps::Artifact(steps)) => {
             let host = PlacerHost {
                 placer: &placer,
                 service,
                 switch: None,
             };
             steps.remove(&host).map_err(|error| error.to_string())
-        });
+        }
+        Ok(Steps::Repository(_)) => match remove_repository(ctx, service) {
+            Ok(()) => Ok(()),
+            Err(reply) => return reply,
+        },
+        Err(error) => Err(error),
+    };
     if let Err(error) = removed {
         return link_failed(error);
     }
@@ -404,6 +431,39 @@ fn remove(ctx: &Ctx, service: &ServiceName) -> Reply {
         ),
         Err(error) => link_failed(error),
     }
+}
+
+/// Step 5 for a repository package: the installer's `remove` (unhold, purge, the enablement
+/// links, `daemon-reload`, the record dropped), within the `remove_secs` of the version
+/// `current` names. A failure is the uninstall's verdict, with its class and reason, and the
+/// tombstone stays, so the next uninstall order runs the step again.
+fn remove_repository(ctx: &Ctx, service: &ServiceName) -> Result<(), Reply> {
+    let entry = installed::linked_version(&ctx.dirs.packages, service, CURRENT)
+        .map(|version| {
+            ctx.dirs
+                .packages
+                .join(service.as_str())
+                .join(version.as_str())
+        })
+        .map(|dir| crate::target::read(&dir))
+        .transpose()
+        .map_err(|error| link_failed(error.to_string()))?
+        .flatten();
+    let recorded = ctx
+        .placer()
+        .store()
+        .load()
+        .ok()
+        .and_then(|record| record.installer_of(service.as_str()).map(str::to_owned));
+    // A `current` gone (a resume after step 6 began) leaves the record's installer, and the
+    // bound the installer falls back to.
+    let entry = entry.unwrap_or_else(|| Target {
+        installer: recorded.unwrap_or_default(),
+        ..Target::default()
+    });
+    ctx.repository()
+        .remove(service, &entry)
+        .map_err(|failure| crate::repository::finished(&failure))
 }
 
 /// The names in `dir`, sorted; none when it is gone.

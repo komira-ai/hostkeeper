@@ -4,15 +4,18 @@ Status: design, for the maintainers' ruling. Build item A16 is **Built**: `Targe
 `Target.package_version` (`crates/hostkeeper-proto/proto/hostkeeper/release/v1/release.proto`), the checks of section
 2.2 and the installer set (`crates/hostkeeper-release/src/target.rs`, `installer.rs`, `grammar.rs`), and the
 coordinator's audit of a repository entry and its release before's reader on what it stores
-(`crates/hostkeeper-coordinator/src/releases.rs`). Build item A7 is **Built** in part: the repository installer
+(`crates/hostkeeper-coordinator/src/releases.rs`). Build item A7 is **Built**: the repository installer
 kind, its backend interface and the `apt` backend (`crates/hostkeeper-install/src/repository/`: the configuration of
 section 3.1, the announce rule of section 4.1, `stage`, `activate` with the hold and the enablement, rollback from the
 kept index and package, `retire`, `remove` by purge, drift and the failure reasons of section 4.5, with the hook at its
 fixed path, the refusal of scripts and the path rule of packages-native.md section 10.2); the tool runs that fetch,
 confined (`StepLauncher::run_tool`); the daemon's check of the configuration at start and its answers
 `order_invalid` and `coordinator_too_old` to an entry of the wrong kind; and `ServiceBeat.drift`, sent over gRPC and
-shown by `Hosts.List` and `Hosts.Get`. The daemon's order path does not run `apt` yet, so no daemon announces it: that
-needs the version directory's `target.json`, `VersionDir::read` and built-in steps of A6's row. Build item A17 is
+shown by `Hosts.List` and `Hosts.Get`. The daemon runs it (`crates/hostkeeper-daemon/src/repository.rs`): a host
+announces `apt` as section 4.1 says, an order of an `apt` entry is staged into a sealed version directory with its
+`target.json` (section 4.2; `target.rs`), activated before `cutover`, rolled back from the kept previous version,
+purged at uninstall and read for drift at each heartbeat, each failure the order's verdict with the class and reason
+of section 4.5; a package without a hook runs the built-in steps (`builtin.rs`). Build item A17 is
 **Built**: `hostkeeper-pxe serve --repositories` checked by the loader's `load_as` (`crates/hostkeeper-pxe/src/serve.rs`,
 `crates/hostkeeper-pxe-seed/src/seed.rs`), the enrollment runbook's step, the MDM profile's two domains and their
 re-send (`crates/hostkeeper-mdm-gate/src/profile.rs`, `enroll.rs`), the daemon's rendering of them

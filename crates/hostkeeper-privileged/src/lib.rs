@@ -65,8 +65,10 @@
 //! against the runner's own apt, dpkg and systemd, with a signed fixture repository the test
 //! builds on disk with `dpkg-deb` and `gpg`: install, update, rollback with the repository
 //! removed, an upgrade that leaves the held version, drift put back, the refusals of `stage`,
-//! and uninstall; and the backend's `apt-get update` and simulation in a container of each deb
-//! release of `linux-releases.toml`. Its rig is `tests/install_apt/`.
+//! and uninstall; the daemon's own order path over the same host (`Daemon::order`: `apt`
+//! announced, then an install, an update, a `force_rollback` with the repository removed and an
+//! uninstall, `tests/install_apt/daemon.rs`); and the backend's `apt-get update` and simulation
+//! in a container of each deb release of `linux-releases.toml`. Its rig is `tests/install_apt/`.
 //!
 //! - [`across`]: the cross-release rig's pin of the previous release, the check of its
 //!   downloaded tarball against the pin, and the version a program of this build runs as.
