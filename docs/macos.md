@@ -411,10 +411,10 @@ both, each time it starts.
    (`HostFiles::managed_macos_pkg`) become `/etc/hostkeeper/macos-pkg.toml`. A domain that is not
    there changes nothing: the operator's file stays and none is made. A domain that is there is
    read and rendered as above, judged by the file's own loader (the stores loader, which also
-   reads their credential files, or the signers loader) before anything is written, and the file
-   starts with a comment naming the domain. Unlike the config, the managed preferences are these
-   files' source: a file that holds exactly the rendered text is left alone, and one that differs
-   is replaced (a new file in the same directory, mode 0644, synced and renamed over it), so a
+   reads their credential files, or the signers loader) before anything is written, and refused
+   when the file would be larger than that loader reads; the file starts with a comment naming the
+   domain. Unlike the config, the managed preferences are these files' source: a file that holds
+   exactly the rendered text, root's with mode 0644, is left alone, and any other is replaced (a new file in the same directory, mode 0644, synced and renamed over it), so a
    rotation the MDM pushes takes effect at the next start. A link or a directory at the file's
    path is refused and left. Any refusal stops the start with exit status 3, naming the managed
    file and the reason.

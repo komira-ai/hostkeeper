@@ -648,15 +648,94 @@ fn a_failure_to_write_is_an_error_naming_the_target() {
     let taken = mac
         .etc()
         .join(format!(".hostkeeper-mac-files.{}.tmp", std::process::id()));
-    fs::write(&taken, "mine").expect("a file of the temporary's name");
+    fs::create_dir(&taken).expect("a directory of the temporary's name");
     let error = mac.pkg().expect_err("name taken");
     assert!(matches!(error, MacFilesError::Io { .. }), "{error}");
-    assert_eq!(fs::read_to_string(&taken).expect("untouched"), "mine");
+    assert!(taken.is_dir());
     assert!(!mac.signers.exists());
-    fs::remove_file(&taken).expect("remove");
+    fs::remove_dir(&taken).expect("remove");
     let under_file = mac.root().join("a file");
     fs::write(&under_file, "x").expect("file");
     let error = mac_files::macos_pkg(&mac.managed_pkg, &under_file.join("macos-pkg.toml"), me())
         .expect_err("under a file");
     assert!(matches!(error, MacFilesError::Io { .. }), "{error}");
+}
+
+/// Catches a start killed between making its temporary file and renaming it that stops every
+/// later start with the same process id: a regular file left at the temporary's name is removed,
+/// and the target is written.
+#[test]
+fn a_temporary_left_by_a_killed_start_is_removed() {
+    let mac = Mac::new("mac-files-stale");
+    mac.write(&mac.managed_pkg, signers_of(&[LEAF_A]));
+    fs::create_dir(mac.etc()).expect("etc");
+    let stale = mac
+        .etc()
+        .join(format!(".hostkeeper-mac-files.{}.tmp", std::process::id()));
+    fs::write(&stale, "left behind").expect("a stale temporary");
+    assert_eq!(mac.pkg().expect("written"), Rendered::Written);
+    assert_eq!(mac.etc_names(), vec!["macos-pkg.toml".to_owned()]);
+    signers::load(&mac.signers, me())
+        .expect("the loader reads it")
+        .expect("it is there");
+}
+
+/// Catches a file with the rendered bytes that the loader would still refuse being kept: a target
+/// with the right bytes but mode 0666 is written again, mode 0644.
+#[test]
+fn a_file_with_the_rendered_bytes_and_another_mode_is_written_again() {
+    let mac = Mac::new("mac-files-mode");
+    mac.write(&mac.managed_pkg, signers_of(&[LEAF_A]));
+    assert_eq!(mac.pkg().expect("first"), Rendered::Written);
+    fs::set_permissions(&mac.signers, fs::Permissions::from_mode(0o666)).expect("opened up");
+    assert_eq!(mac.pkg().expect("second"), Rendered::Written);
+    let mode = fs::metadata(&mac.signers)
+        .expect("the file")
+        .permissions()
+        .mode()
+        & 0o7777;
+    assert_eq!(mode, 0o644);
+    assert_eq!(mac.pkg().expect("third"), Rendered::Unchanged);
+}
+
+/// Catches a managed stores domain the loader accepts as text that would make a file the start's
+/// load refuses as too large, after the working file was replaced: it is refused before any
+/// write, naming its size and the cap, and the file there stays as it was.
+#[test]
+fn a_domain_that_renders_over_the_loaders_cap_is_refused_and_changes_nothing() {
+    let mac = Mac::new("mac-files-large");
+    mac.write(&mac.managed_stores, store("lan", vec![]));
+    assert_eq!(mac.stores().expect("first"), Rendered::Written);
+    let before = fs::read(&mac.stores).expect("the file");
+    let many: Vec<Value> = (0..800)
+        .map(|n| {
+            Value::Dictionary(dict(vec![
+                ("name", text(&format!("store-{n}"))),
+                ("kind", text("https")),
+                ("base", text("https://store.example/a/path/long/enough/")),
+            ]))
+        })
+        .collect();
+    mac.write(
+        &mac.managed_stores,
+        dict(vec![("store", Value::Array(many))]),
+    );
+    let error = mac.stores().expect_err("too large");
+    let MacFilesError::TooLarge { bytes, cap, .. } = error else {
+        panic!("not TooLarge: {error}");
+    };
+    assert_eq!(cap, stores::MAX_STORES_BYTES);
+    assert!(bytes as u64 > cap);
+    assert_eq!(
+        error_text(&mac),
+        format!(
+            "the managed preferences {} of dev.hostkeeper.stores render to {bytes} bytes, over the {cap} its file may hold",
+            mac.managed_stores.display()
+        )
+    );
+    assert_eq!(fs::read(&mac.stores).expect("the file"), before);
+}
+
+fn error_text(mac: &Mac) -> String {
+    mac.stores().expect_err("refused").to_string()
 }

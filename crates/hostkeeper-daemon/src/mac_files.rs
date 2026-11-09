@@ -14,13 +14,16 @@
 //!    refused.
 //! 3. The text is judged by the daemon's own loader before anything is written: the stores by
 //!    [`hostkeeper_package::stores::parse`] (which reads their credential files as the load does)
-//!    and the signers by [`hostkeeper_install::macos_pkg::signers::parse`]. A refusal is the
-//!    loader's reason.
+//!    and the signers by [`hostkeeper_install::macos_pkg::signers::parse`], and the file with its
+//!    header must be no larger than the loader reads ([`stores::MAX_STORES_BYTES`],
+//!    [`signers::MAX_SIGNERS_BYTES`]). A refusal is the loader's reason, or
+//!    [`MacFilesError::TooLarge`].
 //! 4. The managed preferences are the file's source, so a target that differs is replaced, unlike
-//!    the daemon config: a target holding exactly the rendered bytes is left alone (not written),
-//!    and otherwise a new temporary file in the target's directory (made mode 0755 when missing),
-//!    mode 0644, written and synced, is renamed over the target, and the directory is synced. No
-//!    temporary file is left on any failure.
+//!    the daemon config: a target holding exactly the rendered bytes, owned by the trusted owner
+//!    with mode 0644, is left alone (not written), and otherwise a new temporary file in the
+//!    target's directory (made mode 0755 when missing), mode 0644, written and synced, is renamed
+//!    over the target, and the directory is synced. A temporary file of the same name left by a
+//!    start that was killed is removed first, and no temporary file is left on any error.
 //! 5. Something at the target path that is not a regular file (a link, a directory) is refused and
 //!    left as it is ([`MacFilesError::NotAFile`]): the loaders read only a regular file.
 //!
@@ -29,7 +32,7 @@
 
 use std::fs::{self, DirBuilder, File, OpenOptions};
 use std::io::{self, Write};
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
 use hostkeeper_config::trust::{TrustError, read_trusted};
@@ -89,6 +92,14 @@ pub enum MacFilesError {
         #[source]
         source: SignersError,
     },
+    /// The rendered file is larger than its loader reads.
+    #[error("the managed preferences {} of {domain} render to {bytes} bytes, over the {cap} its file may hold", path.display())]
+    TooLarge {
+        domain: &'static str,
+        path: PathBuf,
+        bytes: usize,
+        cap: u64,
+    },
     /// Something other than a regular file is at the target path; it is left as it is.
     #[error("{} is there but is not a regular file; it is not replaced", path.display())]
     NotAFile { path: PathBuf },
@@ -105,7 +116,11 @@ pub enum MacFilesError {
 /// `trusted_uid` is the owner the managed file must have and the owner the stores' credential
 /// files must have.
 pub fn stores(managed: &Path, target: &Path, trusted_uid: u32) -> Result<Rendered, MacFilesError> {
-    render_to(managed, target, trusted_uid, STORES_DOMAIN, |text| {
+    let domain = Domain {
+        name: STORES_DOMAIN,
+        cap: stores::MAX_STORES_BYTES,
+    };
+    render_to(managed, target, trusted_uid, domain, |text| {
         stores::parse(text.as_bytes(), trusted_uid)
             .map(drop)
             .map_err(|source| MacFilesError::Stores {
@@ -122,7 +137,11 @@ pub fn macos_pkg(
     target: &Path,
     trusted_uid: u32,
 ) -> Result<Rendered, MacFilesError> {
-    render_to(managed, target, trusted_uid, MACOS_PKG_DOMAIN, |text| {
+    let domain = Domain {
+        name: MACOS_PKG_DOMAIN,
+        cap: signers::MAX_SIGNERS_BYTES,
+    };
+    render_to(managed, target, trusted_uid, domain, |text| {
         signers::parse(text.as_bytes())
             .map(drop)
             .map_err(|source| MacFilesError::Signers {
@@ -132,12 +151,18 @@ pub fn macos_pkg(
     })
 }
 
+/// A domain: its name, and the most bytes its file may hold.
+struct Domain {
+    name: &'static str,
+    cap: u64,
+}
+
 /// The module's steps for the domain `domain`, `check` being its loader.
 fn render_to(
     managed: &Path,
     target: &Path,
     trusted_uid: u32,
-    domain: &'static str,
+    Domain { name: domain, cap }: Domain,
     check: impl FnOnce(&str) -> Result<(), MacFilesError>,
 ) -> Result<Rendered, MacFilesError> {
     if fs::symlink_metadata(managed).is_err_and(|e| e.kind() == io::ErrorKind::NotFound) {
@@ -155,7 +180,15 @@ fn render_to(
     })?;
     check(&text)?;
     let file = format!("# Written by hostkeeper from the managed preferences of {domain}.\n{text}");
-    replace(target, file.as_bytes()).map_err(|error| match error {
+    if file.len() as u64 > cap {
+        return Err(MacFilesError::TooLarge {
+            domain,
+            path: managed.to_path_buf(),
+            bytes: file.len(),
+            cap,
+        });
+    }
+    replace(target, file.as_bytes(), trusted_uid).map_err(|error| match error {
         Replace::NotAFile => MacFilesError::NotAFile {
             path: target.to_path_buf(),
         },
@@ -180,11 +213,13 @@ impl From<io::Error> for Replace {
     }
 }
 
-/// Makes `target` hold `bytes`, as the module's steps 4 and 5 say.
-fn replace(target: &Path, bytes: &[u8]) -> Result<Rendered, Replace> {
+/// Makes `target` hold `bytes`, owned by `owner` with mode 0644, as the module's steps 4 and 5
+/// say.
+fn replace(target: &Path, bytes: &[u8], owner: u32) -> Result<Rendered, Replace> {
     match fs::symlink_metadata(target) {
         Ok(meta) if meta.file_type().is_file() => {
-            if fs::read(target)? == bytes {
+            let sound = (meta.uid() == owner) & (meta.mode() & 0o7777 == 0o644);
+            if sound && fs::read(target)? == bytes {
                 return Ok(Rendered::Unchanged);
             }
         }
@@ -201,6 +236,10 @@ fn replace(target: &Path, bytes: &[u8]) -> Result<Rendered, Replace> {
         .mode(0o755)
         .create(parent)?;
     let path = parent.join(temporary_name());
+    match fs::remove_file(&path) {
+        Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(Replace::Io(error)),
+        _ => {}
+    }
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)

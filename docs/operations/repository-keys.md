@@ -1,8 +1,9 @@
 # Repository entries and keys: placing and rotating them
 
 A host's trust in the packages it installs is part of its host configuration, placed by host setup
-and never sent by the coordinator ([packages-repositories.md](../design/packages-repositories.md)
-sections 3.2 and 4.7):
+([packages-repositories.md](../design/packages-repositories.md) sections 3.2 and 4.7). No order
+names a key; on a Mac with MDM the coordinator's gate carries the files in the config profile,
+from files its operator gives it:
 
 - **A Linux host** installs a service's `.deb` with `apt` from a channel of the project's package
   repository. It trusts the keyring that its entries in `/etc/hostkeeper/repositories/` name.
@@ -10,8 +11,10 @@ sections 3.2 and 4.7):
   of `/etc/hostkeeper/stores.toml`, and trusts a `.pkg` only when its leaf certificate is one of the
   signers in `/etc/hostkeeper/macos-pkg.toml`.
 
-hostkeeper never changes these files, and no order can name a key. So a key rotation is host setup's
-work, on every host, ahead of the repository's own change.
+hostkeeper never changes a Linux host's repository entries or keyrings. A Mac's daemon writes its
+two files only from the managed preferences the operator's MDM files define. So a key rotation is
+host setup's work, on every host, ahead of the repository's own change: by hand or `hostkeeper-pxe`
+on Linux, and through the coordinator's MDM files on a managed Mac.
 
 ## Where each host gets them
 
