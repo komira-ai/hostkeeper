@@ -398,7 +398,7 @@ fn download_reads_hash_failures_apart_from_fetch_failures() {
     let other = run(
         100,
         "",
-        "E: Failed to fetch https://r/x.deb  Could not resolve 'r'\n",
+        "E: Failed to fetch https://repo.example.com/x.deb  Could not resolve 'repo.example.com'\n",
     );
     assert_eq!(failed(parse::download(&other)).0, Reason::FetchFailed);
     assert_eq!(
