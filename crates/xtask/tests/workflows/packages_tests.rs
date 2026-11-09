@@ -902,3 +902,47 @@ fn the_failing_builds_jobs_are_not_stages_of_the_promotion() {
         "release.yml: job check-apt needs [",
     );
 }
+
+#[test]
+fn the_failing_builds_jobs_keep_the_signing_key_and_the_cloud_role_apart_and_check_the_files() {
+    // Catches: a testing-fail job that holds both the archive key and the publish role, signs
+    // outside the signing environment, or signs and publishes files it has not checked against
+    // SHA256SUMS and their attestations.
+    let text = release_yml();
+    assert_refused(
+        &in_job(
+            &text,
+            "testing-fail-apt-index",
+            "      attestations: read\n",
+            "      attestations: read\n      id-token: write\n",
+        ),
+        "release.yml: job testing-fail-apt-index needs exactly the permissions",
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "testing-fail-apt-index",
+            "environment: apt-signing",
+            "environment: apt-publish",
+        ),
+        "release.yml: job testing-fail-apt-index is in the environment Some(\"apt-publish\"), not Some(\"apt-signing\")",
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "testing-fail-apt-write",
+            "          APT_BUCKET: ${{ vars.APT_BUCKET }}\n",
+            "          APT_BUCKET: ${{ vars.APT_BUCKET }}\n          KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}\n",
+        ),
+        "release.yml: job testing-fail-apt-write names the secret Some(\"APT_GPG_PRIVATE_KEY\"), which only the signing jobs may name, and only the key's",
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "testing-fail-apt-write",
+            "run: sha256sum --check --strict SHA256SUMS",
+            "run: ls",
+        ),
+        "release.yml: job testing-fail-apt-write needs the step `sha256sum --check --strict SHA256SUMS` in `dist` right after the download of the release's files",
+    );
+}

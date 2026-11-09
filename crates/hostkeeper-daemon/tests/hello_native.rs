@@ -8,6 +8,10 @@
 //! The fake serves one repository per URI, so each suite of the shared apt repository is a
 //! `file:` URI of its own here; the host's two entries differ in name, URI and suite as the
 //! real ones differ in name and suite.
+//!
+//! Linux only: hello's `.deb` and its systemd units (`hello@a.service`) exist on Linux alone, and a
+//! Mac's daemon refuses a run entry that is no launchd label before any step runs.
+#![cfg(target_os = "linux")]
 
 mod support;
 mod support_apt;
