@@ -7,7 +7,8 @@
 //! none ([`crate::seed::seed`]) and execs `current` with its own arguments ([`crate::packaged`],
 //! [`run_from`]); a Mac's daemon writes its config from the managed preferences when the config
 //! is not there ([`crate::mac_config::at_start`]), before it reads it ([`start_with`],
-//! [`HostFiles::managed_config`]).
+//! [`HostFiles::managed_config`]), then its stores and signers files from their managed
+//! preferences ([`crate::mac_files`]).
 //!
 //! The two values read from the environment are platform-set markers of systemd, and only
 //! `--notify-systemd` makes the daemon use them ([`SystemdVars`]): the address of the notify
@@ -465,7 +466,8 @@ pub fn host_enroller(
 /// Starts the daemon on the ports of the host's build for `platform`, reading the host's own
 /// files from `files`, and returns it without serving: with the managed preferences of `files`
 /// (a Mac's), the config of `settings` is written from them when it is not there
-/// ([`crate::mac_config::at_start`]); the config is loaded, the platform's adapters are chosen
+/// ([`crate::mac_config::at_start`]), and the stores file and the signers file are rendered from
+/// their domains when those are there ([`crate::mac_files`]); the config is loaded, the platform's adapters are chosen
 /// ([`Adapters::for_platform`]), the ports are built ([`host_ports`]) and the start runs
 /// ([`start::startup_notifying`]).
 pub fn start_with(
@@ -477,6 +479,16 @@ pub fn start_with(
 ) -> Result<start::Started, StartError> {
     if let Some(managed) = &files.managed_config {
         crate::mac_config::at_start(managed, &settings.config, settings.trusted_uid)?;
+    }
+    if let Some(managed) = &files.managed_stores {
+        crate::mac_files::stores(managed, &files.stores, settings.trusted_uid)?;
+    }
+    if let Some((managed, target)) = files
+        .managed_macos_pkg
+        .as_deref()
+        .zip(files.macos_pkg_signers.as_deref())
+    {
+        crate::mac_files::macos_pkg(managed, target, settings.trusted_uid)?;
     }
     let config = start::load_config(settings)?;
     crate::layout::ensure_state_dirs(settings)?;
@@ -508,6 +520,13 @@ pub struct HostFiles {
     /// The managed preferences a Mac's MDM installs, which the start writes the daemon config
     /// from when that is not there ([`crate::mac_config::at_start`]); none on Linux.
     pub managed_config: Option<PathBuf>,
+    /// The managed preferences of the domain `dev.hostkeeper.stores`, which the start renders as
+    /// `stores`, replacing a file that differs ([`crate::mac_files::stores`]); none on Linux.
+    pub managed_stores: Option<PathBuf>,
+    /// The managed preferences of the domain `dev.hostkeeper.macos-pkg`, which the start renders
+    /// as `macos_pkg_signers`, replacing a file that differs ([`crate::mac_files::macos_pkg`]);
+    /// none on Linux.
+    pub managed_macos_pkg: Option<PathBuf>,
     /// The directory of repository entries ([`hostkeeper_install::repository::config`]), which a
     /// start refuses when it is not sound; none on a Mac, which has no repository entries and
     /// never reads the directory.
@@ -538,8 +557,8 @@ impl HostFiles {
     ///
     /// - A Mac: [`CA_BUNDLE_MACOS`], [`GH_BINARY_MACOS`] and [`SIGSTORE_TRUSTED_ROOT_MACOS`],
     ///   whatever `exists` says, no console, the managed preferences of
-    ///   `hostkeeper_launchd::postinstall::MANAGED_CONFIG`, and the signers file [`SIGNERS_FILE`]
-    ///   beside `stores.toml`.
+    ///   `hostkeeper_launchd::postinstall::MANAGED_CONFIG`, `MANAGED_STORES` and
+    ///   `MANAGED_MACOS_PKG`, and the signers file [`SIGNERS_FILE`] beside `stores.toml`.
     /// - Linux: [`GH_BINARY`] and [`SIGSTORE_TRUSTED_ROOT`], and the first of [`CA_BUNDLE`]
     ///   (Debian family) and [`CA_BUNDLE_RHEL`] (RHEL family) that exists; [`CA_BUNDLE`] when
     ///   neither does, so the fetch reads a bundle that is not there and has no root to trust.
@@ -576,6 +595,10 @@ impl HostFiles {
             console,
             managed_config: (kind == PlatformKind::Macos)
                 .then(|| PathBuf::from(hostkeeper_launchd::postinstall::MANAGED_CONFIG)),
+            managed_stores: (kind == PlatformKind::Macos)
+                .then(|| PathBuf::from(hostkeeper_launchd::postinstall::MANAGED_STORES)),
+            managed_macos_pkg: (kind == PlatformKind::Macos)
+                .then(|| PathBuf::from(hostkeeper_launchd::postinstall::MANAGED_MACOS_PKG)),
             repositories: (kind != PlatformKind::Macos)
                 .then(|| PathBuf::from(hostkeeper_install::repository::config::REPOSITORIES_DIR)),
             os_root: PathBuf::from("/"),

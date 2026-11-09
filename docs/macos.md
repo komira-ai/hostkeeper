@@ -122,8 +122,8 @@ maintainers must confirm the prefix before any Mac enrolls, since a label is the
 | what | where |
 |---|---|
 | config | `/etc/hostkeeper/hostkeeper.toml` |
-| stores config | `/etc/hostkeeper/stores.toml`, optional; without it the one store is `release_channel` (docs/design/packages.md section 7) |
-| macos-pkg signers | `/etc/hostkeeper/macos-pkg.toml`, optional, read at the start of a Mac only; a file that is not sound (a link, not root's, writable by others, not TOML of the signers) stops the start with the config exit status |
+| stores config | `/etc/hostkeeper/stores.toml`, optional; without it the one store is `release_channel` (docs/design/packages.md section 7). On a managed Mac the daemon's start writes it from the managed preferences of `dev.hostkeeper.stores` when that domain is there, replacing a file that differs |
+| macos-pkg signers | `/etc/hostkeeper/macos-pkg.toml`, optional, read at the start of a Mac only; on a managed Mac the daemon's start writes it from the managed preferences of `dev.hostkeeper.macos-pkg` when that domain is there, replacing a file that differs; a file that is not sound (a link, not root's, writable by others, not TOML of the signers) stops the start with the config exit status |
 | state directory, packages directory | as on Linux (`/var/lib/updater/state`, `/var/lib/hostkeeper/packages`); both exist on macOS |
 | run directory | `/var/run` (macOS has a read-only root and no `/run`); the daemon binds no socket there |
 | units linked from a package | `/Library/LaunchDaemons/<label>.plist`, a link to `<packages>/<service>/current/units/<label>.plist` |
@@ -404,6 +404,20 @@ both, each time it starts.
    with mode 0755 when it is missing. The file starts with a comment that names the managed
    preferences domain `dev.hostkeeper.config`. With neither a managed file nor a config, it
    fails with a message that names both paths.
+   Right after the config, the start renders two more domains to their files
+   (`hostkeeper_daemon::mac_files`), each judged alone. The managed preferences of
+   `dev.hostkeeper.stores` (`HostFiles::managed_stores`, `/Library/Managed Preferences/dev.hostkeeper.stores.plist`)
+   become `/etc/hostkeeper/stores.toml`, and those of `dev.hostkeeper.macos-pkg`
+   (`HostFiles::managed_macos_pkg`) become `/etc/hostkeeper/macos-pkg.toml`. A domain that is not
+   there changes nothing: the operator's file stays and none is made. A domain that is there is
+   read and rendered as above, judged by the file's own loader (the stores loader, which also
+   reads their credential files, or the signers loader) before anything is written, and the file
+   starts with a comment naming the domain. Unlike the config, the managed preferences are these
+   files' source: a file that holds exactly the rendered text is left alone, and one that differs
+   is replaced (a new file in the same directory, mode 0644, synced and renamed over it), so a
+   rotation the MDM pushes takes effect at the next start. A link or a directory at the file's
+   path is refused and left. Any refusal stops the start with exit status 3, naming the managed
+   file and the reason.
 
 A config that cannot be made at a start (no managed file, a link at the config path, a managed
 file the loader refuses) stops the start with exit status 3, the message in

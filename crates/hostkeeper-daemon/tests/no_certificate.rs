@@ -153,6 +153,8 @@ fn without_a_certificate_the_daemon_waits_and_names_the_missing_file() {
         pki: root.join("pki"),
         console: None,
         managed_config: None,
+        managed_stores: None,
+        managed_macos_pkg: None,
     };
     let notifier = FakeNotifier::new(Events::default());
     let started = start::startup_notifying(&rig.settings(), rig.ports(), OWN, &*notifier)
