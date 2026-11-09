@@ -87,6 +87,36 @@ impl NativeRig {
         }
     }
 
+    /// The ports, placement going through `fs` (a filesystem that fails where the test says).
+    pub fn ports_with_fs(&self, fs: Arc<hostkeeper_placed::testing::FaultFs>) -> Ports {
+        Ports {
+            placement: hostkeeper_daemon::Placement {
+                roots: crate::support::roots(),
+                fs,
+            },
+            ..self.ports()
+        }
+    }
+
+    /// The scratch directory as `/`, for a [`hostkeeper_placed::testing::FaultFs`].
+    pub fn root(&self) -> PathBuf {
+        self.rig.scratch.path().to_path_buf()
+    }
+
+    /// A daemon of `version` whose placement goes through `fs`.
+    pub fn daemon_with_fs(
+        &self,
+        version: &str,
+        fs: Arc<hostkeeper_placed::testing::FaultFs>,
+    ) -> Daemon {
+        Daemon::new(
+            config(),
+            self.rig.dirs(),
+            self.ports_with_fs(fs),
+            own(version),
+        )
+    }
+
     /// A daemon of `version` on the host, the way an order reaches it (no start).
     pub fn daemon_at(&self, version: &str) -> Daemon {
         Daemon::new(config(), self.rig.dirs(), self.ports(), own(version))

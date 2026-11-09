@@ -95,6 +95,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_hook::{Class, Phase, Verdict};
+use hostkeeper_placed::PlacedRecord;
 use hostkeeper_proto::hostkeeper::release::v1::Target;
 use hostkeeper_release::Installer;
 use hostkeeper_steps::record::{
@@ -313,7 +314,7 @@ fn steps(
         return Ok(answer);
     }
     others_idle(ctx, service)?;
-    below_installer(ctx, version)?;
+    let placed = below_installer(ctx, version)?;
     let prepared = update::prepare(ctx, verb, order, last.as_deref())?;
     files::make_private(&ctx.service_dir(service))
         .map_err(|e| Reply::refused(Refusal::StoreFailed, e))?;
@@ -344,18 +345,19 @@ fn steps(
     files::make_private(layout.dir()).map_err(|e| Reply::refused(Refusal::StoreFailed, e))?;
     let store = ctx.store(service);
     let order_id = order.order_id.as_deref();
-    let left = own_package::deferred_at(ctx, prepared.dir.dir())
-        .map_err(|e| Reply::refused(Refusal::ReleaseUnreadable, e))?;
+    // `placed.json` as the rollback's check read it: only this order, under the service's lock,
+    // changes hostkeeper's installer.
+    let left = own_package::deferred(staged.as_ref(), &placed);
     if let (true, true, Verdict::Succeeded { promotion_pending }) =
         (running == version, left, &finished.verdict)
     {
         // The version that runs needs no restart: its package is activated now, the record
         // waiting for it first so that a crash in between is resumed by the next start.
-        return match store.pend_activate(version, *promotion_pending, order_id) {
-            Ok(true) => Ok(activated(ctx, service)),
-            Ok(false) => Ok(update::ran(Ok(finished))),
-            Err(error) => Err(Reply::refused(Refusal::StoreFailed, error)),
-        };
+        // The runner held the success back, so the record holds this update unfinished.
+        store
+            .pend_activate(version, *promotion_pending, order_id)
+            .map_err(|e| Reply::refused(Refusal::StoreFailed, e))?;
+        return Ok(activated(ctx, service));
     }
     match follow_on(
         &finished, &store, &layout, &running, version, release, binary, order_id,
@@ -375,15 +377,15 @@ fn steps(
 /// A rollback of hostkeeper below an installer of what the host holds
 /// ([`rollback_floor::below`]): `Failed` before the commit, of class release,
 /// [`REASON_ROLLBACK_BELOW_INSTALLER`], with nothing staged; `placed.json` that cannot be read
-/// refuses the order (`store_failed`).
-fn below_installer(ctx: &Ctx, version: &str) -> Result<(), Reply> {
+/// refuses the order (`store_failed`). `placed.json` as it read it.
+fn below_installer(ctx: &Ctx, version: &str) -> Result<PlacedRecord, Reply> {
     let record = ctx
         .placer()
         .store()
         .load()
         .map_err(|e| Reply::refused(Refusal::StoreFailed, e))?;
     match rollback_floor::below(&record, ctx.own_version, version) {
-        None => Ok(()),
+        None => Ok(record),
         Some(why) => {
             ctx.alert(ALERT_SELF_UPDATE, &format!("service={SELF_SERVICE}: {why}"));
             Err(failed(Class::Release, REASON_ROLLBACK_BELOW_INSTALLER))

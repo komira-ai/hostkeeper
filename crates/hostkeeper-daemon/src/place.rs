@@ -244,20 +244,22 @@ fn remove_native(
     repository: &Repository,
     service: &ServiceName,
 ) -> Result<(), SwitchError> {
-    let failed = |why: String| SwitchError::Failed(why);
-    let Some(current) = placer
+    let current = placer
         .current(service.as_str())
-        .map_err(|e| failed(text(e)))?
-    else {
-        return Ok(());
-    };
+        .map_err(|e| SwitchError::Failed(text(e)))?;
     // The packages directory as this process reads it, as every `target.json` is read.
-    let dir = repository
-        .ports
-        .packages_dir
-        .join(service.as_str())
-        .join(&current);
-    match target::read(&dir).map_err(|e| failed(text(e)))? {
+    let dir = current.map(|current| {
+        repository
+            .ports
+            .packages_dir
+            .join(service.as_str())
+            .join(current)
+    });
+    let sealed = match dir {
+        Some(dir) => target::read(&dir).map_err(|e| SwitchError::Failed(text(e)))?,
+        None => None,
+    };
+    match sealed {
         Some(entry) => repository
             .remove(service, &entry)
             .map_err(crate::repository::switch_error),

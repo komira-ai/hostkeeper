@@ -23,11 +23,12 @@ use hostkeeper_placed::InstalledEntry;
 use hostkeeper_steps::record::{Activated, PendingActivate, State};
 use hostkeeper_steps::{CrashPoint, Settled};
 
+use hostkeeper_placed::testing::{FaultFs, Log as PlacedLog};
 use support::selfupdate::{HK, awaiting, put_record, record_of};
 use support::{alerting, crash_at, d, lines, name, update};
 use support_apt::seen::{held, web};
 use support_apt::{AptRig, SERVICE};
-use support_native::{NativeRig, V1, V2, install_hk, pv};
+use support_native::{NativeRig, V1, V2, install_hk, pv, update_hk};
 
 /// A host that runs [`V2`] after its hand-over from [`V1`], adopted, whose new binary confirmed
 /// itself and has its package still to activate.
@@ -350,4 +351,146 @@ fn an_order_of_hostkeeper_with_placed_json_unreadable_is_refused_before_staging(
     assert_eq!(reply.refusal(), Some(Refusal::StoreFailed), "{reply:?}");
     assert!(nr.host.calls().is_empty());
     assert!(!nr.version_dir(V2).exists());
+}
+
+/// A filesystem over the host's root whose `n`-th write and every later one fail.
+fn failing_at(nr: &NativeRig, n: u64) -> Arc<FaultFs> {
+    Arc::new(FaultFs::failing_at(&nr.root(), n, PlacedLog::new()))
+}
+
+/// Proves a failure of the host's files during the `activate` is tried again, not ended, with
+/// nothing recorded as done: the move's first unlink of hostkeeper's archive paths, and the
+/// switch of `current` after the package was installed (the 9th write of an `activate`: the
+/// record's two saves come first, four writes each), each defer `io_error`, the record still
+/// waiting; a try on a sound host then ends it `Succeeded`.
+#[test]
+fn a_failure_of_the_host_s_files_in_the_activate_is_tried_again() {
+    let nr = NativeRig::new("own-io-move");
+    nr.install_from_archives();
+    let pin = nr.publish(V2);
+    assert_eq!(
+        nr.daemon_at(V1).order(&update_hk(V2, &pin, 2)),
+        awaiting(false)
+    );
+    nr.daemon_at(V2).settle_self_update().unwrap();
+    let ended = nr
+        .daemon_with_fs(V2, failing_at(&nr, 1))
+        .activate_own_package();
+    assert!(
+        matches!(ended, Some(OwnActivate::Deferred { ref reason, .. }) if reason == "io_error"),
+        "{ended:?}"
+    );
+    assert!(nr.record().unwrap().progress.activate.is_some());
+    assert_eq!(
+        nr.host.installed(HK),
+        None,
+        "nothing installed before the unlink"
+    );
+    assert_eq!(
+        nr.daemon_at(V2).activate_own_package(),
+        Some(OwnActivate::Ended(Activated::Succeeded { reason: None }))
+    );
+
+    let nr = confirmed("own-io-current");
+    let ended = nr
+        .daemon_with_fs(V2, failing_at(&nr, 9))
+        .activate_own_package();
+    assert!(
+        matches!(ended, Some(OwnActivate::Deferred { ref reason, .. }) if reason == "io_error"),
+        "{ended:?}"
+    );
+    assert!(nr.record().unwrap().progress.activate.is_some());
+    assert_eq!(nr.linked("current"), None);
+}
+
+/// Proves the move's rollback of hostkeeper is tried again when the host's files fail: the
+/// archive version's `current` cannot be switched, the `activate` defers `io_error`, and
+/// hostkeeper stays recorded as `apt` until a try on a sound host places the archive again.
+#[test]
+fn a_move_rollback_the_host_s_files_refuse_is_tried_again() {
+    let nr = NativeRig::new("own-io-archive");
+    nr.install_from_archives();
+    let pin = nr.publish(V2);
+    assert_eq!(
+        nr.daemon_at(V1).order(&update_hk(V2, &pin, 2)),
+        awaiting(false)
+    );
+    drop(nr.start(V2));
+    assert_eq!(
+        nr.daemon_at(V2)
+            .order(&support::force_rollback(HK, V1, &d(), 3)),
+        awaiting(false)
+    );
+    nr.daemon_at(V1).settle_self_update().unwrap();
+    let ended = nr
+        .daemon_with_fs(V1, failing_at(&nr, 1))
+        .activate_own_package();
+    assert!(
+        matches!(ended, Some(OwnActivate::Deferred { ref reason, .. }) if reason == "io_error"),
+        "{ended:?}"
+    );
+    assert_eq!(nr.installed().map(|e| e.installer), Some("apt".to_owned()));
+    assert_eq!(
+        nr.daemon_at(V1).activate_own_package(),
+        Some(OwnActivate::Ended(Activated::Succeeded { reason: None }))
+    );
+    assert_eq!(nr.installed(), None);
+}
+
+/// Proves a failed `activate` whose record cannot be written whole again is still ended
+/// `Failed`, with an alert that the drift's record was not written: the 5th write, the second
+/// save, is the one that fails.
+#[test]
+fn a_failed_activate_whose_record_cannot_be_written_again_says_so() {
+    let nr = confirmed("own-unpend-fails");
+    nr.host.edit(|s| s.faults.noop = true);
+    let (daemon, log) = alerting(nr.daemon_with_fs(V2, failing_at(&nr, 5)));
+    let ended = daemon.activate_own_package();
+    assert!(
+        matches!(ended, Some(OwnActivate::Ended(Activated::Failed { ref reason, .. })) if reason == "dpkg_error"),
+        "{ended:?}"
+    );
+    assert!(
+        lines(&log)
+            .iter()
+            .any(|line| line.contains("the record of the failed activate")),
+        "{:?}",
+        lines(&log)
+    );
+    assert_eq!(
+        nr.record().unwrap().state,
+        support_native::activate_failed("dpkg_error")
+    );
+}
+
+/// Proves an adoption the host refuses is no adoption: an installer lock that cannot be taken,
+/// and a record that cannot be written, each make the start's adoption an error that names it,
+/// and nothing is recorded.
+#[test]
+fn an_adoption_the_host_refuses_records_nothing() {
+    let nr = NativeRig::new("own-adopt-lock");
+    nr.host.set_installed(HK, &pv(V1), 'i', false);
+    fs::create_dir_all(nr.rig.scratch.path().join("installer.lock")).unwrap();
+    let adopted = nr.start(V1).boot_report().adopted.clone();
+    assert!(
+        matches!(adopted, Some(Err(ref e)) if e.contains("the installer lock")),
+        "{adopted:?}"
+    );
+    assert_eq!(nr.installed(), None);
+
+    let nr = NativeRig::new("own-adopt-write");
+    nr.host.set_installed(HK, &pv(V1), 'i', false);
+    fs::create_dir_all(&nr.rig.state).unwrap();
+    let started = hostkeeper_daemon::start::startup(
+        &nr.rig.settings(),
+        nr.ports_with_fs(failing_at(&nr, 1)),
+        support::selfupdate::own(V1),
+    )
+    .expect("the start goes on");
+    assert!(
+        matches!(started.boot_report().adopted, Some(Err(_))),
+        "{:?}",
+        started.boot_report().adopted
+    );
+    assert_eq!(nr.installed(), None);
 }
