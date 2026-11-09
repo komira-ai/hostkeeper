@@ -372,3 +372,26 @@ fn the_install_reports_the_hosts_state() {
         assert_eq!(failure.reason(), reason);
     }
 }
+
+/// Proves a version's copy of the index holds the index's bytes when apt left it as a link to the
+/// repository's file (an uncompressed index of a `file:` repository): with the served file gone,
+/// the activate still finds the package in the version directory's copy and installs it.
+///
+/// Catches: a copy that skips a linked index, after which every activate is `Unable to locate
+/// package` (as on a host whose apt keeps such an index uncompressed).
+#[test]
+fn an_index_apt_left_as_a_link_is_kept_as_its_bytes() {
+    let env = Env::new("apt-index-link");
+    env.host.edit(|s| s.faults.index_as_link = true);
+    let (order, dir) = env.staged(&deb(V1), &["mdm.service"]);
+    let served = crate::apt_fake::served_dir(&env.dirs.work);
+    assert!(
+        served.is_dir(),
+        "the fake served the index from outside the work directory"
+    );
+    std::fs::remove_dir_all(&served).expect("the served index goes");
+    env.installer()
+        .activate(&order, &dir)
+        .expect("activates from the kept copy");
+    assert_eq!(env.host.installed(PACKAGE).expect("installed").version, V1);
+}

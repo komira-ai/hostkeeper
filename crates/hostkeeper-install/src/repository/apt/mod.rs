@@ -102,12 +102,14 @@ fn make_dirs(dirs: &[PathBuf]) -> io::Result<()> {
         .try_for_each(|dir| fs::DirBuilder::new().recursive(true).create(dir))
 }
 
-/// Copies every regular file of `from` that is not in [`NOT_KEPT`] into `to`.
+/// Copies every regular file of `from` that is not in [`NOT_KEPT`] into `to`, a link to a regular
+/// file as the file's bytes: apt leaves an uncompressed index of a `file:` repository as a link
+/// to the repository's own file, which a later `activate` must not need.
 fn copy_files(from: &Path, to: &Path) -> io::Result<()> {
     // An entry that cannot be read is not copied, and the install that needs it then fails.
     let mut names: Vec<_> = fs::read_dir(from)?
         .flatten()
-        .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+        .filter(|e| fs::metadata(e.path()).is_ok_and(|m| m.is_file()))
         .map(|e| e.file_name())
         .filter(|n| !NOT_KEPT.iter().any(|k| n == *k))
         .collect();
