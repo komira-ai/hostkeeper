@@ -66,8 +66,10 @@
 # In the job privileged, install_apt.rs also runs the apt backend of the repository installer as
 # root against the runner's own apt, dpkg and systemd: a signed fixture repository the test builds
 # on disk with dpkg-deb and gpg is installed from, updated, rolled back with the repository
-# removed, drifted and uninstalled, and the backend's `apt-get update` and simulation run in a
-# container of each deb release of linux-releases.toml (no network, no pull).
+# removed, drifted and uninstalled; the daemon's own order path runs an apt service over the same
+# repository (install, update, force_rollback, uninstall, its unit started); and the backend's
+# `apt-get update` and simulation run in a container of each deb release of linux-releases.toml
+# (no network, no pull).
 #
 # In each job the test binaries are built as the runner's own user; only their run is as root,
 # through the cargo runner `sudo`, the one use of it in the job (on the Mac, unpack_mac also runs

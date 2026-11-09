@@ -17,17 +17,21 @@
 //! step launcher ([`hostkeeper_steps::StepLauncher::run_tool`]), by absolute path, bounded, in a
 //! unit with no network.
 //!
-//! The registry ([`steps_of`]) is the closed list of installers the daemon is built with, which
-//! no manifest can extend (section 5.1, "Why built in, and not delivered"). This build holds one:
+//! The registry ([`steps_of`] and [`backend_of`]) is the closed list of installers the daemon is
+//! built with, which no manifest can extend (section 5.1, "Why built in, and not delivered").
+//! This build holds two:
 //!
 //! - **`hostkeeper-archive`** ([`Archive`]): hostkeeper's own package, its manifest inside the
 //!   attested bytes. `stage` is today's unpack, bounds and shape rules exactly
 //!   ([`hostkeeper_unpack::unpack`]); `activate` is today's switch and placement; `retire` has
 //!   nothing to do beyond the core's deletion; `remove` is today's unlinking of what
 //!   `placed.json` records.
+//! - **`apt`** ([`crate::repository::apt::Apt`]): the repository installer's backend
+//!   (packages-repositories.md section 4). Its steps are not [`InstallerSteps`]: nothing is
+//!   fetched as an artifact, and each step works on the version directory and the order's entry
+//!   ([`crate::repository::RepositoryInstaller`]), so the daemon runs them itself.
 //!
-//! The repository installer's `apt` backend (A7) and `macos-pkg` (A9) are added here, each a
-//! module implementing [`InstallerSteps`].
+//! `macos-pkg` (A9) has its module and is not registered: the daemon does not run it yet.
 
 use std::path::{Path, PathBuf};
 
@@ -38,6 +42,9 @@ use hostkeeper_config::platform::Platform as PackagePlatform;
 use hostkeeper_proto::hostkeeper::release::v1::Target;
 use hostkeeper_release::Installer;
 use hostkeeper_unpack::{Limits, PackageFs, Platform, UnpackError, UnpackOrder, unpack};
+
+use crate::repository::Backend;
+use crate::repository::apt::Apt;
 
 /// Why a step the host does for an installer failed, as the host words it.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -119,14 +126,29 @@ pub trait InstallerSteps: Send + Sync {
     fn remove(&self, host: &dyn Host) -> Result<(), HostError>;
 }
 
-/// The installers this build has the steps of, in the order of their spellings.
-pub const REGISTERED: [Installer; 1] = [Installer::HostkeeperArchive];
+/// The installers this build has the steps of, in the order of their spellings: each artifact
+/// installer [`steps_of`] has, and each repository installer [`backend_of`] has.
+pub const REGISTERED: [Installer; 2] = [Installer::HostkeeperArchive, Installer::Apt];
 
-/// The steps of `installer`, `None` for one this build has no steps of.
+/// The steps of the artifact installer `installer`, `None` for one this build has no steps of
+/// and for a repository installer, whose steps are [`crate::repository::RepositoryInstaller`]'s
+/// over its backend ([`backend_of`]).
 pub fn steps_of(installer: Installer) -> Option<&'static dyn InstallerSteps> {
     match installer {
         Installer::HostkeeperArchive => Some(&Archive),
         Installer::Apt | Installer::MacosPkg | Installer::OciImage | Installer::Tarball => None,
+    }
+}
+
+/// The backend of the repository installer `installer`, `None` for an artifact installer and
+/// for a repository installer this build has no backend of.
+pub fn backend_of(installer: Installer) -> Option<&'static dyn Backend> {
+    match installer {
+        Installer::Apt => Some(&Apt),
+        Installer::HostkeeperArchive
+        | Installer::MacosPkg
+        | Installer::OciImage
+        | Installer::Tarball => None,
     }
 }
 
