@@ -44,7 +44,7 @@ use std::sync::Arc;
 use hostkeeper_config::manifest::{Expected, HostkeeperVersion, Manifest};
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_placed::{Fs, Placer, Roots, UnitControl};
-use hostkeeper_steps::{Clock, Switch, Toward, UpdateOrder};
+use hostkeeper_steps::{Clock, Switch, SwitchError, Toward, UpdateOrder};
 
 use crate::boot::{WARN_SWITCH_RETRIED, warn_line};
 use crate::installers::{self, PlacerHost};
@@ -69,18 +69,19 @@ pub fn hooked_switch(
 ) -> Switch {
     Arc::new(move |toward: Toward, order: &UpdateOrder| {
         let placer = Placer::new(roots.clone(), &*fs, &*units);
-        match toward {
+        let done = match toward {
             Toward::Target => activate(&placer, order, &own),
             Toward::Back => back(&placer, &*fs, order, &own),
             Toward::Confirmed => confirmed(&placer, order, &own),
-        }
+        };
+        done.map_err(SwitchError::Failed)
     })
 }
 
 /// `switch` tried up to [`SWITCH_ATTEMPTS`] times: a failed try but the last is logged through
 /// `log` (one line, `alert=switch_retried`, with what failed) and tried again after
 /// [`SWITCH_RETRY_SECS`] of `clock`; the last try's result is the switch's.
-pub(crate) fn retried(
+pub fn retried(
     switch: Switch,
     clock: Arc<dyn Clock>,
     log: Arc<dyn Fn(&str) + Send + Sync>,
@@ -89,7 +90,7 @@ pub(crate) fn retried(
         let mut attempt = 1;
         loop {
             match switch(toward, order) {
-                Err(why) if attempt < SWITCH_ATTEMPTS => {
+                Err(SwitchError::Failed(why)) if attempt < SWITCH_ATTEMPTS => {
                     log(&warn_line(
                         WARN_SWITCH_RETRIED,
                         &format!(
@@ -101,6 +102,7 @@ pub(crate) fn retried(
                     clock.sleep_secs(SWITCH_RETRY_SECS);
                     attempt += 1;
                 }
+                // Success, the last failure, or an installer's verdict (`Ended`): not retried.
                 ended => return ended,
             }
         }

@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use hostkeeper_config::manifest::{Expected, Manifest};
 use hostkeeper_config::names::{ServiceName, Version};
-use hostkeeper_daemon::place::hooked_switch;
+use hostkeeper_daemon::place::hooked_switch as hooked;
 use hostkeeper_daemon::testing::spawn;
 use hostkeeper_daemon::{Daemon, Refusal, Reply};
 use hostkeeper_hook::{Params, Step, Verdict};
@@ -19,6 +19,17 @@ use hostkeeper_placed::testing::{Event, FaultFs, FsWrite, UnitCall};
 use hostkeeper_placed::{PathState, PlacedRecord};
 use hostkeeper_steps::{Bounds, Staged, Toward, UpdateOrder};
 use support::{OWN, Rig, Tap, config, d, install, roots, update};
+
+/// The daemon's switch with its error as the text of a failure, which is all these tests judge.
+fn hooked_switch(
+    roots: hostkeeper_placed::Roots,
+    fs: Arc<dyn hostkeeper_placed::Fs + Send + Sync>,
+    units: Arc<dyn hostkeeper_placed::UnitControl + Send + Sync>,
+    own: hostkeeper_config::manifest::HostkeeperVersion,
+) -> impl Fn(Toward, &UpdateOrder) -> Result<(), String> {
+    let switch = hooked(roots, fs, units, own);
+    move |toward, order| switch(toward, order).map_err(|error| error.to_string())
+}
 
 fn succeeded() -> Reply {
     Reply::Finished {
