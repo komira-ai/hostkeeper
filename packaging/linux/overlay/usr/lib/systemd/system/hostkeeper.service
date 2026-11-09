@@ -1,8 +1,10 @@
 # The hostkeeper daemon's bootstrap unit: installed at /usr/lib/systemd/system/hostkeeper.service
 # by the deb and the rpm (packaging/linux/nfpm.yaml) and by a boot image through
-# packaging/linux/overlay/ (docs/design/two-programs.md, section 4.1). It is in effect only until
-# hostkeeper's own package is first installed: that install links the package unit
-# (packaging/linux/units/hostkeeper.service) in /etc/systemd/system/, which takes its place. It
+# packaging/linux/overlay/ (docs/design/two-programs.md, section 4.1). While hostkeeper is
+# installed from its archive package, that install's package unit
+# (packaging/linux/units/hostkeeper.service), linked in /etc/systemd/system/, takes its place; an
+# update through this deb leaves this one, and hostkeeper's move to it takes the package unit
+# away (docs/design/packages-native.md, sections 10.4 and 10.6). It
 # runs as root, with no sandbox and no capability bound: the daemon runs the hooks and places the
 # units of every service of the host (docs/design/hostkeeper-design.md, section 5.3). Its
 # configuration is its flags; of the environment it reads only what systemd sets for it,
