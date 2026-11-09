@@ -197,3 +197,19 @@ fn the_guard_makes_its_directories_and_leaves_what_is_not_ours() {
     std::fs::write(root.join("blocked"), "x").expect("a file");
     Guard::hold(&root.join("blocked")).expect_err("a file is not a root");
 }
+
+/// Proves the guard takes away only a file that is still its own when it ends: a policy file a
+/// package of the run put in its place stays, byte for byte. Catches the guard deleting a file
+/// dpkg installed and still lists.
+#[test]
+fn a_policy_file_a_package_put_in_place_during_the_run_stays() {
+    let env = Env::new("apt-policy-replaced");
+    let guard = Guard::hold(&env.dirs.root).expect("held");
+    let packaged = "#!/bin/sh\nexit 0\n";
+    std::fs::write(policy_path(&env), packaged).expect("replaced");
+    drop(guard);
+    assert_eq!(
+        std::fs::read_to_string(policy_path(&env)).expect("still there"),
+        packaged
+    );
+}

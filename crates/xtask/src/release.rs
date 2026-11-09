@@ -388,7 +388,7 @@ pub(crate) enum Verb {
     /// program is the binary the pkg installs; `productbuild` wraps the component as the unsigned distribution pkg.
     ///
     /// With `--service hello`, hello's `.pkg` instead (`hello-<version>-macos-arm64.pkg`, or of
-    /// its failing build with `--fail-ready`): the program and its hook under
+    /// its failing build with `--fail-ready`): the program under
     /// `/Library/Application Support/hello/`, the two slots' plists in `/Library/LaunchDaemons/`
     /// with `Disabled` true, and no script; `--gh` and `--trusted-root` are refused.
     MacosPkg {
@@ -429,9 +429,9 @@ pub(crate) enum Verb {
     /// owners and bytes.
     ///
     /// With `--service hello` (and `--fail-ready` for its failing build), check hello's `.pkg`
-    /// instead: one component with no script, whose payload is exactly the program, the hook
-    /// and the two slots' disabled plists at hello's paths; `--gh` and `--trusted-root` are
-    /// refused.
+    /// instead: one component with no script, whose payload is exactly the program and the two
+    /// slots' disabled plists at hello's paths, as its builder writes them; `--gh` and
+    /// `--trusted-root` are refused.
     CheckMacosPkg {
         /// The directory `pkgutil --expand` wrote of the distribution pkg.
         expanded: PathBuf,

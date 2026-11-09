@@ -17,8 +17,9 @@
 //! that file's copy in the sealed tree (`tree/usr/bin/web` for `/usr/bin/web`, links followed
 //! inside the tree), with the rest of the command as leading arguments; an empty command gives the
 //! service the built-in steps (packages-lifecycle.md section 6.3, [`crate::builtin`]). A version
-//! staged by an older daemon has an empty command in its sealed copy and may carry its hook at
-//! [`LEGACY_HOOK`]; the reader still runs that file for such a version.
+//! staged by an older daemon has an empty command in its sealed copy, no [`MANIFEST_HOOK_FILE`],
+//! and may carry its hook at `tree/usr/lib/<package>/hostkeeper-hook`; the reader still runs that
+//! file for such a version, and for no version this daemon staged.
 
 use std::collections::BTreeSet;
 use std::fs::{self, File};
@@ -30,16 +31,22 @@ use std::path::Path;
 use hostkeeper_config::manifest::{
     Expected, Hook, HostkeeperVersion, Manifest, ManifestRefusal, Timeouts,
 };
+use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_install::program;
 use hostkeeper_install::repository::TREE;
 use hostkeeper_proto::FILE_DESCRIPTOR_SET;
 use hostkeeper_proto::hostkeeper::release::v1::{Param, Target, param};
+use hostkeeper_steps::PreviousHook;
 use prost::Message;
 use prost_reflect::{DescriptorPool, DynamicMessage, SerializeOptions};
 
+/// The file [`write`] puts beside `target.json`, empty: the version was staged by a daemon that
+/// takes the hook from the manifest alone, so [`legacy_hook`] is never read for it.
+pub const MANIFEST_HOOK_FILE: &str = "manifest-hook";
+
 /// Where a version staged by an older daemon carries its hook when its sealed command is empty:
-/// `tree/usr/lib/<package>/hostkeeper-hook`, as a regular file. Read for compatibility only; a
-/// version is no longer staged this way.
+/// `tree/usr/lib/<package>/hostkeeper-hook`, as a regular file. Read for compatibility only, for
+/// a version directory without [`MANIFEST_HOOK_FILE`].
 fn legacy_hook(package: &str) -> String {
     format!("{TREE}/usr/lib/{package}/hostkeeper-hook")
 }
@@ -47,7 +54,9 @@ fn legacy_hook(package: &str) -> String {
 /// The command of the hook: the manifest's, with its program mapped into the sealed tree.
 fn hook_command(dir: &Path, package: Option<&str>, command: &[String]) -> Vec<String> {
     let Some((program, args)) = command.split_first() else {
+        let older = fs::symlink_metadata(dir.join(MANIFEST_HOOK_FILE)).is_err();
         return package
+            .filter(|_| older)
             .map(legacy_hook)
             .filter(|legacy| fs::symlink_metadata(dir.join(legacy)).is_ok_and(|m| m.is_file()))
             .into_iter()
@@ -124,18 +133,49 @@ pub fn from_json(bytes: &[u8]) -> Result<Target, TargetError> {
         .map_err(TargetError::Invalid)
 }
 
-/// Writes `entry` as `target.json` in the staging directory `stage`, mode 0444, durably.
+/// Writes `entry` as `target.json` in the staging directory `stage`, and the empty
+/// [`MANIFEST_HOOK_FILE`] beside it, each mode 0444, durably.
 pub fn write(stage: &Path, entry: &Target) -> Result<(), TargetError> {
     let json = to_json(entry)?;
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o444)
-        .open(stage.join(TARGET_FILE))?;
-    file.write_all(&json)?;
-    file.set_permissions(fs::Permissions::from_mode(0o444))?;
-    file.sync_all()?;
+    for (name, bytes) in [
+        (TARGET_FILE, json.as_slice()),
+        (MANIFEST_HOOK_FILE, &[][..]),
+    ] {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o444)
+            .open(stage.join(name))?;
+        file.write_all(bytes)?;
+        file.set_permissions(fs::Permissions::from_mode(0o444))?;
+        file.sync_all()?;
+    }
     Ok(())
+}
+
+/// The hook of the version directory `dir` of `service` at `version`, as its own sealed manifest
+/// names it, for the `rollback` fallback to that version: `None` for a version without
+/// `target.json` (its fallback runs the new version's hook path, as before), one whose manifest
+/// names no hook, or one that cannot be read (the fallback then finds no hook and fails, as a
+/// hook that cannot start).
+pub fn previous_hook(
+    dir: &Path,
+    service: &ServiceName,
+    version: &Version,
+    own: &HostkeeperVersion,
+) -> Option<PreviousHook> {
+    read(dir).ok()??;
+    let expected = Expected {
+        name: service.clone(),
+        version: version.clone(),
+        platform: hostkeeper_config::platform::Platform::current(),
+    };
+    let manifest = manifest(dir, &expected, own).ok()?;
+    let (binary, args) = manifest.hook.command.split_first()?;
+    Some(PreviousHook {
+        binary: binary.into(),
+        args: args.to_vec(),
+    })
 }
 
 /// The entry the version directory `dir` was staged for; `None` when it has no `target.json`

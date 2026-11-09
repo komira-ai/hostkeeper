@@ -1,7 +1,9 @@
 //! The policy file hostkeeper holds in place while the package manager runs a package's
 //! maintainer scripts (packages-native.md section 10.2): `usr/sbin/policy-rc.d` under the host's
-//! root answers 101 ("action not allowed") to every `invoke-rc.d` call, so a script cannot start
-//! or stop a unit; hostkeeper does that itself, in the order of the update.
+//! root answers 101 ("action not allowed") to every `invoke-rc.d` and `deb-systemd-invoke` call,
+//! so a script that starts or stops a unit through them (as debhelper's do) does nothing;
+//! hostkeeper does that itself, in the order of the update. A script that calls `systemctl`
+//! itself is not held back.
 //!
 //! A [`Guard`] writes the file before a run and takes it away when dropped. A file already there
 //! that is not byte-equal to [`TEXT`] is an operator's own: it is left as it is, the host's own
@@ -68,8 +70,10 @@ impl Guard {
 
 impl Drop for Guard {
     fn drop(&mut self) {
-        if self.ours {
-            // A file that cannot be removed is found again by `clear_stale` at the next start.
+        // Removed only while it is still ours: a package the run installed may have put its own
+        // policy file there, which stays. A file that cannot be removed is found again by
+        // `clear_stale` at the next start.
+        if self.ours && matches!(is_ours(&self.path), Ok(Some(true))) {
             let _ = fs::remove_file(&self.path);
         }
     }

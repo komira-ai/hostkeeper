@@ -23,6 +23,7 @@ fn order(dir: &Path) -> UpdateOrder {
         previous: None,
         hook_binary: "hook".into(),
         hook_args: Vec::new(),
+        previous_hook: None,
         bounds: Bounds {
             prepare_secs: 1,
             cutover_secs: 1,

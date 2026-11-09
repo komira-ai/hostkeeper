@@ -38,7 +38,7 @@ whose hand-over needs the old files), sections 10.1 and 10.6 say what holds inst
 `macos-pkg` entry carries no attestation, and the host checks none: wherever this file names the attestation of a
 `.pkg` (sections 1, 3.3, 4.7, 9), the pin and the signature are the whole check, and the publish job checks the
 attestation before it signs (10.3); `[trusted_signers]` then guards no install, only `hostkeeper-pxe`'s check. Any package may have maintainer scripts (10.2): on `apt` a `policy-rc.d` that exits 101
-is written around the dpkg runs, so a script starts nothing before the hand-over. A package's hook is the manifest's
+is written around the dpkg runs, so a script that starts through `invoke-rc.d` or `deb-systemd-invoke` starts nothing before the hand-over. A package's hook is the manifest's
 `hook.command`, an absolute path of a file of the package and leading arguments (10.2), so the caller of `SetDesired`
 chooses the program among the package's files and its arguments (section 3.3). And hostkeeper's own release is a native entry per platform (10.4),
 so where this file says it stays `hostkeeper-archive`, that holds only until the move of 10.6.
@@ -286,7 +286,7 @@ hostkeeper checks nothing about who built the bytes beyond that.
 | An order names exact bytes | The pin, checked against the signed index and the downloaded file | The entry's `digest`, checked against the fetched file, as for every artifact |
 | Integrity before any byte is used | apt verifies the suite's signature and every hash before it hands a file over; the daemon extracts nothing before that, and checks the pin | The core checks size, digest and attestation, then `pkgutil` the signature, before anything is expanded |
 | Who decides the bytes | The holder of the repository's key and CI's pin, both; not `[trusted_signers]` | CI's pin, `[trusted_signers]` for the attestation, and the holder of a configured signing identity, all three |
-| What runs as root | The package's maintainer scripts, from the signed package, in `activate` and `remove`, with a `policy-rc.d` that exits 101 in place so that none starts a service; the hook, the sealed copy in the tree of a file of the signed package | The package's scripts and payload, from the pinned and signed `.pkg`, in `activate`, as `installer` runs them; the hook, the sealed copy in the tree of a file of the payload |
+| What runs as root | The package's maintainer scripts, from the signed package, in `activate` and `remove`, with a `policy-rc.d` that exits 101 in place so that none starts a service through `invoke-rc.d` or `deb-systemd-invoke`; the hook, the sealed copy in the tree of a file of the signed package | The package's scripts and payload, from the pinned and signed `.pkg`, in `activate`, as `installer` runs them; the hook, the sealed copy in the tree of a file of the payload |
 | Removal | The package, purged, whatever version is installed (section 4.4) | Every file the receipt lists, then the receipt (`pkgutil --forget`) |
 
 ### 3.4 The manifest of a repository entry
@@ -671,8 +671,8 @@ the form each gives.
 `apt-get install` and `dpkg --purge` the installer holds a `policy-rc.d` that exits 101 (written to
 `/usr/sbin/policy-rc.d`, mode 0755, removed afterwards on success and on failure; a stale one is removed at daemon
 start before any package-manager call; an operator's own is left untouched and then rules), which `invoke-rc.d` and
-`deb-systemd-invoke` honour, so no script of the package, nor of a dependency apt installs in the same run, starts or
-restarts a service: the start is the hand-over's. A `postinst` may enable the units, and they stay enabled. hostkeeper
+`deb-systemd-invoke` honour, so through them no script of the package, nor of a dependency apt installs in the same
+run, starts or restarts a service (one that calls `systemctl` itself is not held back): the start is the hand-over's. A `postinst` may enable the units, and they stay enabled. hostkeeper
 never refuses a `run` unit. Each `activate` writes the `WantedBy=` and `RequiredBy=` links of every `run` unit whose
 file is in the tree and takes away the links of a unit the version no longer runs (recorded in `placed.json`, as
 hostkeeper-design.md section 4.7 does for placed units), leaving any link already there, so those units start at host
@@ -802,7 +802,7 @@ an item of this repository.
 | A package at a version hostkeeper did not set, or installed outside it | Drift: the desired version is installed over it, held and recorded; reported (`ServiceBeat.drift`, `drift_repaired`), never refused | hostkeeper is the reconciler and nothing installs by hand; only a `Force` moves a version off the plan |
 | One installer per manager, or one kind | One `repository` installer kind with a backend per manager; the announced name is the backend's | The steps, checks and classes are the same for every manager; the pick by name stays unchanged |
 | The repositories | Two channels, testing and stable, of one repository and key, as host configuration | CI decides the version per host; hostkeeper installs exactly that from the channel named |
-| Who starts the units | hostkeeper: at host boot by the `WantedBy` links it writes for a unit whose file is in the tree, else directly at `cutover` and at daemon start; no script starts one meanwhile (`policy-rc.d`) | The package may enable its units however it likes; the hand-over needs the start to be hostkeeper's |
+| Who starts the units | hostkeeper: at host boot by the `WantedBy` links it writes for a unit whose file is in the tree, else directly at `cutover` and at daemon start; no script starts one meanwhile through `invoke-rc.d` or `deb-systemd-invoke` (`policy-rc.d`) | The package may enable its units however it likes; the hand-over needs the start to be hostkeeper's |
 | The hook of a repository package | The manifest's `hook.command`: a file of the downloaded package, run as its sealed copy in the tree, or built-in steps | The program is part of the signed package, and the hook contract stays the same for every installer |
 | Key placement and rotation | Host setup (`hostkeeper-pxe --repositories`, the runbook), with an overlap of two keys | The coordinator never holds the trust root; a self-renewing keyring package cannot be revoked after a leak |
 | `deb`, `rpm`, `arch`, `apk` | Withdrawn | The ruling: no Linux package file is installed; no daemon ever listed them |

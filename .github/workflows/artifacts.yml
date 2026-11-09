@@ -457,9 +457,10 @@ jobs:
       - name: The packaged hostkeeper-mdm says the version and the commit
         run: cargo xtask release check-binary "$RUNNER_TEMP/unpacked/hostkeeper-mdm" "$RELEASE_VERSION" "$GITHUB_SHA"
       # The native packages of the services (docs/design/packages-native.md, items A20 and A21):
-      # hello's .deb and its failing build's, and on linux-x86_64 mdm's, each with its hook at
-      # /usr/lib/<service>/hostkeeper-hook, its units in /usr/lib/systemd/system/ and no
-      # maintainer script, read back by check-linux-pkg --service. hello's and mdm's go to dist/:
+      # hello's .deb and its failing build's, and on linux-x86_64 mdm's, read back by
+      # check-linux-pkg --service: the package named for the service, every entry root's and not
+      # writable by others, each unit starting a file of the package, no dependency. The release
+      # manifest names each one's hook command. hello's and mdm's go to dist/:
       # release assets, summed and attested, that the release publishes to the repository's
       # testing suite. The failing build's goes to native/, an artifact of its own and no asset:
       # its version, <version>-fail-ready, is not the X.Y.Z the shared repository's index takes.
@@ -467,18 +468,18 @@ jobs:
         run: cargo xtask release deb --service hello --platform "$PLATFORM" --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --binary target/release/hello --out dist
       - name: hello's failing build's .deb
         run: cargo xtask release deb --service hello --fail-ready --platform "$PLATFORM" --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --binary target/release/hello --out native
-      - name: hello's .deb has its hook, no script, files only at its paths and its units disabled
+      - name: hello's .deb is named for hello, root's, and its units start its own files
         env:
           ARCH: ${{ matrix.deb-arch }}
         run: cargo xtask release check-linux-pkg "dist/hello_${RELEASE_VERSION}_$ARCH.deb" --service hello
-      - name: hello's failing build's .deb has its hook, no script, files only at its paths and its units disabled
+      - name: hello's failing build's .deb is named for hello, root's, and its units start its own files
         env:
           ARCH: ${{ matrix.deb-arch }}
         run: cargo xtask release check-linux-pkg "native/hello_${RELEASE_VERSION}-fail-ready_$ARCH.deb" --service hello
       - name: mdm's .deb
         if: matrix.platform == 'linux-x86_64'
         run: cargo xtask release deb --service mdm --platform "$PLATFORM" --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --binary target/release/mdm --archives "$RUNNER_TEMP/mdm-archives" --out dist
-      - name: mdm's .deb has its hook, no script, files only at its paths and its units disabled
+      - name: mdm's .deb is named for mdm, root's, and its units start its own files
         if: matrix.platform == 'linux-x86_64'
         run: cargo xtask release check-linux-pkg "dist/mdm_${RELEASE_VERSION}_amd64.deb" --service mdm
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -651,9 +652,9 @@ jobs:
       - name: The packaged hostkeeper says the version and the commit
         run: cargo xtask release check-binary "$RUNNER_TEMP/unpacked/hostkeeper" "$RELEASE_VERSION" "$GITHUB_SHA"
       # hello's .pkg and its failing build's (docs/design/packages-native.md, items A20 and A21):
-      # one component with no script, the program and its hook under
-      # /Library/Application Support/hello/ and the two slots' plists, Disabled, in
-      # /Library/LaunchDaemons/, read back from the expanded product. hello's goes to pkg/, unsigned,
+      # one component with no script, the program under /Library/Application Support/hello/ and
+      # the two slots' plists, Disabled, in /Library/LaunchDaemons/, read back from the expanded
+      # product: what hello's builder writes, not a rule of the daemon's. hello's goes to pkg/, unsigned,
       # beside the installer: sign-pkg signs it and check-pkg publishes it, a release asset the
       # release puts in the testing directory of the installers. The failing build's goes to
       # native/, as on Linux, and is never signed or released.
@@ -665,9 +666,9 @@ jobs:
         run: pkgutil --expand "pkg/hello-$RELEASE_VERSION-$PLATFORM.pkg" "$RUNNER_TEMP/hello-pkg-expanded"
       - name: Expand hello's failing build's .pkg
         run: pkgutil --expand "native/hello-$RELEASE_VERSION-fail-ready-$PLATFORM.pkg" "$RUNNER_TEMP/hello-fail-ready-pkg-expanded"
-      - name: hello's .pkg has its hook, no script, files only at its paths and its jobs disabled
+      - name: hello's .pkg is exactly what its builder writes
         run: cargo xtask release check-macos-pkg "$RUNNER_TEMP/hello-pkg-expanded" --service hello --version "$RELEASE_VERSION" --binary target/release/hello
-      - name: hello's failing build's .pkg has its hook, no script, files only at its paths and its jobs disabled
+      - name: hello's failing build's .pkg is exactly what its builder writes
         run: cargo xtask release check-macos-pkg "$RUNNER_TEMP/hello-fail-ready-pkg-expanded" --service hello --fail-ready --version "$RELEASE_VERSION" --binary target/release/hello
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

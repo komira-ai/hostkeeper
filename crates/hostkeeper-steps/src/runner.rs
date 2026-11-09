@@ -40,7 +40,9 @@ use crate::artifact::{ArtifactError, Staged};
 use crate::clock::{BootId, Clock, Stamp};
 use crate::deadman::Watch;
 use crate::launcher::{BUILTIN_EXIT, Bound, LaunchError, StepCall, StepExit, StepLauncher};
-use crate::order_util::{longest_step_unit, path_str, same_update, wait_secs};
+use crate::order_util::{
+    PreviousHook, hook_of, longest_step_unit, path_str, same_update, wait_secs,
+};
 use crate::record::{HookSel, Loaded, Progress, Record, RecordError, RecordStore, SCHEMA, State};
 pub use crate::switch::{Builtin, Switch, SwitchError, Toward};
 
@@ -138,8 +140,11 @@ pub struct UpdateOrder {
     /// The hook executable within a release: the program of the manifest's `[hook] command`.
     pub hook_binary: PathBuf,
     /// The arguments of the manifest's hook command after its program, given before the step;
-    /// empty for the built-in steps. The `rollback` fallback to the previous release uses them too.
+    /// empty for the built-in steps.
     pub hook_args: Vec<String>,
+    /// The previous release's own hook, for the `rollback` fallback to it; `None`: the fallback
+    /// runs [`Self::hook_binary`] and [`Self::hook_args`] from the previous release.
+    pub previous_hook: Option<PreviousHook>,
     pub bounds: Bounds,
     /// The manifest's `[params]` table.
     pub declared_params: Params,
@@ -610,7 +615,7 @@ impl StepRunner {
             // Built-in steps exec nothing: the tree is checked without a hook, and the
             // executable passed on is empty.
             None if order.builtin_steps => release.check_tree().map(|()| PathBuf::new()),
-            None => release.check(&order.hook_binary),
+            None => release.check(hook_of(order, rec.hook).0),
         };
         let ran = match checked {
             Ok(executable) => match self.launch(order, rec, &executable)? {
@@ -719,7 +724,7 @@ impl StepRunner {
                     artifact,
                     params: Some(rec.params.clone()),
                 },
-                hook_args: &order.hook_args,
+                hook_args: hook_of(order, rec.hook).1,
                 executable,
                 unit: &unit,
                 bound,

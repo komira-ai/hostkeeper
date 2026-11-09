@@ -117,8 +117,9 @@ differently:
 
 - **On `apt`**, the installer writes `/usr/sbin/policy-rc.d` (mode 0755, `exit 101`) around the `apt-get install` of
   `activate` (install, upgrade, downgrade and rollback) and around each `dpkg --purge` try of `remove`. `invoke-rc.d`
-  and `deb-systemd-invoke` honour it, so no script of the package, nor of a dependency apt installs in the same run,
-  starts, stops or restarts a service. The file is removed afterwards, on success and on failure, and a stale one (a
+  and `deb-systemd-invoke` (what debhelper's generated scripts call) honour it, so through them no script of the
+  package, nor of a dependency apt installs in the same run, starts, stops or restarts a service; a script that calls
+  `systemctl` itself is not held back. The file is removed afterwards, on success and on failure, and a stale one (a
   killed run) is removed at daemon start before any package-manager call. A `policy-rc.d` that is not hostkeeper's own
   text, an operator's, is left untouched and not replaced, and then rules. A `postinst` may enable the package's units,
   and they stay enabled; hostkeeper starts them at `cutover`.
@@ -420,7 +421,7 @@ these items: whichever of S3 and A19 lands second carries the other's change to 
 | `oci-image` (A10) | Withdrawn | No service we run ships an image to a host; the coordinator's image is not a hostkeeper service |
 | What replaces `manifest.toml` | The package's control fields for its identity, the entry's manifest for the rest; nothing hostkeeper-specific in the package at all | The manifest is built, checked twice and audited; a file in the package would be a second place and a hostkeeper format again |
 | The hook | The manifest's `hook.command`: an absolute path of a file the package installs, and leading arguments; run from its sealed copy in the version's tree with today's contract; empty means the built-in steps | One convention for a service to follow, the hook contract; the program is still a file of the signed, pinned bytes, and the manifest is checked twice and audited |
-| Maintainer scripts and paths | Allowed, with any paths; on `apt` a `policy-rc.d` that exits 101 is written around every dpkg run that can run a script; `package_scripts` is no longer produced | Hostkeeper installs any package; what it holds is integrity (pin, signature, hold, `package_not_ours`), and the hand-over stays hostkeeper's because no script can start a unit meanwhile |
+| Maintainer scripts and paths | Allowed, with any paths; on `apt` a `policy-rc.d` that exits 101 is written around every dpkg run that can run a script; `package_scripts` is no longer produced | Hostkeeper installs any package; what it holds is integrity (pin, signature, hold, `package_not_ours`), and the hand-over stays hostkeeper's because no script starts a unit through `invoke-rc.d` or `deb-systemd-invoke` meanwhile |
 | Units a service's package installs | Any; hostkeeper never refuses a `run` unit, writes the `[Install]` links of one whose file is in the tree, and starts at `cutover` and at every daemon start each `run` unit with no such link | A unit with no `[Install]` is a valid way to ship a unit hostkeeper alone starts |
 | The attestation | Leaves the host; the publish job that alone holds the signing keys checks it before it signs; a `macos-pkg` entry carries none | The key and the pin bind the bytes on every platform; one trust model; the loss is stated in 10.3 |
 | `release_channel` and `[trusted_signers]` | Still accepted by the loader; the daemon stops reading them | An older binary requires them after a fallback, `hostkeeper-pxe` reads the signers, and `hostkeeper.toml` is never rewritten |

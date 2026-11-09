@@ -474,6 +474,9 @@ fn rebuild(
             .map(PathBuf::from)
             .unwrap_or_default(),
         hook_args: manifest.hook.command.iter().skip(1).cloned().collect(),
+        previous_hook: (params.previous_release().zip(params.previous_version()))
+            .and_then(|(dir, version)| Some((dir, Version::new(version).ok()?)))
+            .and_then(|(dir, v)| crate::target::previous_hook(&dir, service, &v, &ctx.own_version)),
         bounds: bounds(&manifest.hook),
         // Written to the params file when the update began; a resumed update does not write it.
         declared_params: Params::default(),

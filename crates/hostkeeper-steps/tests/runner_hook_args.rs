@@ -71,3 +71,32 @@ fn the_rollback_fallback_to_the_previous_release_keeps_the_hook_args() {
     };
     assert_eq!(executable, &rig.old_dir.join("hook"));
 }
+
+/// The `rollback` that falls back to the previous release runs that release's own hook, program
+/// and leading arguments, when the order names it (`previous_hook`): the new release's hook path
+/// need not exist in the old tree.
+#[test]
+fn the_rollback_fallback_runs_the_previous_releases_own_hook_when_the_order_names_it() {
+    let rig = Rig::new("hook-args-previous-hook");
+    fs::remove_file(rig.new_dir.join("hook")).unwrap();
+    fs::remove_file(rig.old_dir.join("hook")).unwrap();
+    fs::write(rig.old_dir.join("old-hook"), "#!hook old\n").unwrap();
+    let seen = recording(&rig);
+    let mut order = rig.order();
+    order.hook_args = vec!["update-hook".to_owned()];
+    order.previous_hook = Some(hostkeeper_steps::PreviousHook {
+        binary: "old-hook".into(),
+        args: vec!["hook".to_owned(), "--old".to_owned()],
+    });
+    rig.runner().run(&order).unwrap();
+    let seen = seen.lock().unwrap();
+    assert_eq!(
+        *seen,
+        [(Step::Rollback, vec!["hook".to_owned(), "--old".to_owned()])]
+    );
+    let runs = rig.fake.runs();
+    let support::Event::Run { executable, .. } = &runs[0] else {
+        unreachable!()
+    };
+    assert_eq!(executable, &rig.old_dir.join("old-hook"));
+}

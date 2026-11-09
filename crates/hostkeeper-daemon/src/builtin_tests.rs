@@ -143,6 +143,7 @@ impl Rig {
             previous: before,
             hook_binary: PathBuf::from("bin/hook"),
             hook_args: Vec::new(),
+            previous_hook: None,
             bounds: Bounds {
                 prepare_secs: 60,
                 cutover_secs: 60,

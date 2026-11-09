@@ -28,7 +28,7 @@
 use std::num::NonZeroU64;
 use std::path::PathBuf;
 
-use hostkeeper_config::manifest::{Expected, Manifest};
+use hostkeeper_config::manifest::{Expected, HostkeeperVersion, Manifest};
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_config::platform::Platform;
 use hostkeeper_hook::{Class, Phase};
@@ -322,7 +322,7 @@ pub(crate) fn prepare(
         claims_check(ctx, &manifest)?;
     }
     let declared = declared_params(&manifest.params)?;
-    let update = update_order(order, &dir, &manifest, previous, declared);
+    let update = update_order(order, &dir, &manifest, previous, declared, &ctx.own_version);
     Ok(Prepared { dir, update })
 }
 
@@ -444,9 +444,13 @@ fn update_order(
     manifest: &Manifest,
     previous: Option<(Version, Staged)>,
     declared_params: Params,
+    own: &HostkeeperVersion,
 ) -> UpdateOrder {
     let hook = &manifest.hook;
     let timeouts = &hook.timeout_secs;
+    let previous_hook = previous.as_ref().and_then(|(version, staged)| {
+        crate::target::previous_hook(staged.dir(), &order.service, version, own)
+    });
     let (previous_version, previous) = previous.map(|(v, s)| (v.to_string(), s)).unzip();
     UpdateOrder {
         service: order.service.to_string(),
@@ -457,6 +461,7 @@ fn update_order(
         previous,
         hook_binary: hook.command.first().map(PathBuf::from).unwrap_or_default(),
         hook_args: hook.command.iter().skip(1).cloned().collect(),
+        previous_hook,
         bounds: Bounds {
             // `prepare = 0` is the unbounded `prepare` of the manifest.
             prepare_secs: timeouts.prepare.map_or(0, NonZeroU64::get),

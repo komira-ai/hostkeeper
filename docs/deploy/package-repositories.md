@@ -136,7 +136,9 @@ Ship the `.deb` or `.pkg` as you would anyway: the binary where you want it, you
 plist. hostkeeper imposes no rule on a package's files, paths, units or scripts; what it checks is the bytes (the
 order's SHA-256 pin and the repository's or the package's signature) and that no package of the same name was installed
 by hand. Around its own `apt-get install` and `dpkg --purge` it keeps a `postinst` from starting or restarting the unit
-until the hand-over (a `policy-rc.d` that exits 101, present only while hostkeeper runs the package manager). A `.pkg`
+through `invoke-rc.d` or `deb-systemd-invoke`, as debhelper's scripts do, until the hand-over (a `policy-rc.d` that
+exits 101, present only while hostkeeper runs the package manager); a script that calls `systemctl` itself is not
+held back. A `.pkg`
 has no such guard: the scripts run when `installer` runs them, before `cutover`, so a `.pkg` whose scripts load its job
 needs the built-in steps or a hook that tolerates it.
 

@@ -301,5 +301,10 @@ fn the_manifest_hook_runs_the_steps_and_its_rollback_runs_when_verify_fails() {
         verify.is_some() && rollback > verify,
         "rollback follows the failed verify:\n{log}"
     );
-    assert!(dpkg_version().is_some(), "{PACKAGE} stays installed");
+    // The switch back reinstalled the previous package before `rollback` ran.
+    assert_eq!(
+        dpkg_version().as_deref(),
+        Some("4.0-hook"),
+        "{PACKAGE} is back at the previous version"
+    );
 }

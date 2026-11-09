@@ -62,8 +62,8 @@ An update runs, in order:
 
 The installer changes what is on disk. The hook changes what runs: it stops the old processes, drains, migrates, starts
 the new ones and says whether the new release serves. A package whose own scripts restart the service (a `postinst` running `deb-systemd-invoke restart`)
-would do the hand-over outside the hook. On `apt` the installer prevents it: it holds a `policy-rc.d` that exits 101
-around every dpkg run that can run a script (packages-native.md section 10.2), so the packager need not build its
+would do the hand-over outside the hook. On `apt` the installer prevents it for a script that goes through `invoke-rc.d` or `deb-systemd-invoke`,
+as debhelper's do: it holds a `policy-rc.d` that exits 101 around every dpkg run that can run a script (packages-native.md section 10.2), so the packager need not build its
 packages with `--no-start --no-restart-after-upgrade`; the hook's `cutover` or the built-in steps start the units. On a
 `macos-pkg` nothing holds a script back, and a job it loads starts before `cutover`. The daemon writes the `[Install]`
 links of the `run` units it places (`tarball`, `hostkeeper-archive`) and of a repository package's units whose files are

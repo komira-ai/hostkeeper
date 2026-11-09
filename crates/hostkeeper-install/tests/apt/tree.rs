@@ -261,3 +261,21 @@ fn the_extracted_tree_loses_setuid_setgid_and_group_and_other_write() {
         Path::new("/usr/bin/suid")
     );
 }
+
+/// Proves the tree directory itself is normalized too (dpkg gives it the package's `./` entry,
+/// here group-writable) and that a fifo of the package is left out of the copy, which the seal
+/// cannot hold, while the package still stages. Catches a stage that accepts a package whose
+/// sealed tree every step then refuses.
+#[test]
+fn the_tree_directory_is_normalized_and_a_fifo_is_left_out_of_the_copy() {
+    let package = deb(V1)
+        .dir("", 0o775)
+        .fifo("run/mdm/pipe")
+        .file("usr/bin/mdm", 0o755, "x");
+    let (_env, result, dir) = stage_package("apt-normalize-root", &package);
+    result.expect("the package stages");
+    let tree = dir.join("tree");
+    assert_eq!(mode_of(&tree), 0o755);
+    assert!(std::fs::symlink_metadata(tree.join("run/mdm/pipe")).is_err());
+    assert_eq!(mode_of(&tree.join("usr/bin/mdm")), 0o755);
+}

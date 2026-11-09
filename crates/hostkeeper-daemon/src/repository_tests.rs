@@ -594,6 +594,7 @@ fn order(scratch: &Scratch, service: &str, version: &str) -> UpdateOrder {
         previous: None,
         hook_binary: PathBuf::from("bin/hook"),
         hook_args: Vec::new(),
+        previous_hook: None,
         bounds: hostkeeper_steps::Bounds {
             prepare_secs: 1,
             cutover_secs: 1,
