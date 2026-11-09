@@ -152,7 +152,7 @@ pub fn release_files(dir: &Path, version: &str) {
         .ok()
         .and_then(|t| sums::parse(&t).ok())
         .unwrap_or_default();
-    for (package, arch) in fixtures::every() {
+    for (package, arch) in fixtures::every_rpm() {
         let bytes = fixtures::rpm(package, version, arch, false);
         let name = package.rpm_file(version, arch);
         std::fs::write(dir.join(&name), &bytes).expect("write");

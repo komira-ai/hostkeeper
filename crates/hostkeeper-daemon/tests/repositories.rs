@@ -44,6 +44,8 @@ fn files(root: &Path, repositories: Option<PathBuf>) -> HostFiles {
         pki: root.join("pki"),
         console: None,
         managed_config: None,
+        managed_stores: None,
+        managed_macos_pkg: None,
     }
 }
 

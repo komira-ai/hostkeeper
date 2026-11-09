@@ -427,6 +427,8 @@ fn the_host_ports_are_built_from_flags_and_files_without_the_network() {
         pki: rig.scratch.path().join("pki"),
         console: None,
         managed_config: None,
+        managed_stores: None,
+        managed_macos_pkg: None,
     };
     let error = host_ports(&config(), &rig.settings(), &files, OWN, linux())
         .err()
@@ -585,6 +587,8 @@ fn the_start_of_the_host_build_stops_at_the_ports_it_cannot_build() {
         pki: rig.scratch.path().join("pki"),
         console: None,
         managed_config: None,
+        managed_stores: None,
+        managed_macos_pkg: None,
     };
     let notifier = FakeNotifier::new(Log::default());
     fs::write(&rig.packages, b"not a directory").expect("a file where the directory belongs");
@@ -654,6 +658,8 @@ fn linux_files(ca_bundle: &str) -> HostFiles {
             agetty: PathBuf::from("/sbin/agetty"),
         }),
         managed_config: None,
+        managed_stores: None,
+        managed_macos_pkg: None,
     }
 }
 
@@ -680,6 +686,12 @@ fn a_mac_keeps_gh_and_the_trusted_root_under_usr_local_and_reads_etc_ssl_cert_pe
         console: None,
         managed_config: Some(PathBuf::from(
             "/Library/Managed Preferences/dev.hostkeeper.config.plist",
+        )),
+        managed_stores: Some(PathBuf::from(
+            "/Library/Managed Preferences/dev.hostkeeper.stores.plist",
+        )),
+        managed_macos_pkg: Some(PathBuf::from(
+            "/Library/Managed Preferences/dev.hostkeeper.macos-pkg.plist",
         )),
     };
     for present in [&[][..], &[DEBIAN, RHEL][..]] {

@@ -205,9 +205,20 @@ run only in the device jobs (`privileged`, `macos-device`), whose tests count to
   -pkg` of the older version by hand is put back and reported as drift; the job runs the installed program and the
   observer matches it to the tree; after the uninstall `pkgutil --pkgs` lists no `hello` and none of its payload files
   remain.
-- **Host setup (A17; `crates/hostkeeper-pxe` tests).** `--repositories` with a valid directory writes each file byte for
-  byte into the seed's user data, and a Mac's daemon renders `stores.toml` and `macos-pkg.toml` from the MDM kit's domains `dev.hostkeeper.stores` and `dev.hostkeeper.macos-pkg`, replacing a file that differs and refusing domains its loader refuses; a directory the daemon's loader refuses is refused before any seed is written, with
-  the loader's reason.
+- **Host setup (A17; **Built**).** `hostkeeper-pxe serve --repositories` with a directory the daemon's loader accepts
+  serves a seed whose user data writes each file byte for byte, root:root 0644, before `hostkeeper.toml`
+  (`crates/hostkeeper-pxe/src/serve/tests/repositories.rs`, the golden `user-data-repositories.yaml` of
+  `crates/hostkeeper-pxe-seed/tests/seed.rs`); a directory the loader refuses, a missing or empty one, and a keyring
+  over the cap are refused at the start with the loader's reason, before any socket; the loader judges a source
+  directory as it will be placed (`crates/hostkeeper-install/tests/repositories_placed.rs`). The network-install guest
+  test serves with `--repositories` and checks the installed host's `/etc/hostkeeper/repositories/`
+  (`crates/hostkeeper-privileged/tests/net_install.rs`, in `net-install.yml`). A Mac's daemon renders `stores.toml`
+  and `macos-pkg.toml` from `dev.hostkeeper.stores` and `dev.hostkeeper.macos-pkg`, replacing a file that differs,
+  keeping the operator's files without the domains, and refusing what its loaders refuse
+  (`crates/hostkeeper-daemon/tests/mac_files.rs`); the gate's profile carries both domains, checked by the loaders
+  at the coordinator's start, and is sent again once per change of its settings
+  (`crates/hostkeeper-mdm-gate/tests/profile.rs`, `config_resend.rs`, `store.rs`); and the profile for a Mac renders
+  to the signers and stores the `macos-pkg` installer's loaders read (`crates/hostkeeper-daemon/tests/mdm_profile_files.rs`).
 
 - **One build, every release (A15; `crates/xtask/tests/release_linux.rs`, and the `privileged` device job).**
   `cargo xtask release check-linux-pkg` refuses a package whose binary has a `NEEDED` entry (a fixture binary linked to

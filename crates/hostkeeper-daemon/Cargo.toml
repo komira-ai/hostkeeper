@@ -106,6 +106,9 @@ hostkeeper-tls = { path = "../hostkeeper-tls" }
 rcgen.workspace = true
 http-body-util.workspace = true
 hyper.workspace = true
+# tests/mdm_profile_files.rs: the MDM gate's config profile, as the coordinator builds it, whose
+# stores and macos-pkg domains a Mac's daemon renders to the files its loaders read.
+hostkeeper-mdm-gate = { path = "../hostkeeper-mdm-gate" }
 # Its own tests turn on `testing`.
 hostkeeper-daemon = { path = ".", features = ["testing"] }
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }
