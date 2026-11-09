@@ -96,6 +96,7 @@ mod netboot;
 #[cfg(test)]
 mod no_network;
 mod package;
+mod pkg_signature;
 mod plan;
 pub(crate) mod ports;
 mod publish;
@@ -452,6 +453,15 @@ pub(crate) enum Verb {
         #[arg(long)]
         trusted_root: Option<PathBuf>,
     },
+    /// Refuse a signed installer pkg unless `pkgutil --check-signature` says the Mac trusts its
+    /// signature, signed with a trusted timestamp, by exactly the identity, Apple's Developer ID
+    /// intermediate and Apple's root.
+    CheckPkgSignature {
+        pkg: PathBuf,
+        /// The Developer ID Installer identity that must have signed it.
+        #[arg(long)]
+        identity: String,
+    },
     /// Refuse two OCI image tarballs unless they are byte for byte equal.
     CompareImages { a: PathBuf, b: PathBuf },
     /// Write hostkeeper-coordinator-<version>.image.json into `dir`: the OCI image index
@@ -788,6 +798,9 @@ fn run_with(verb: Verb, ports: &Ports<'_>) -> Result<Vec<String>, Error> {
             },
         ),
         Verb::MdmFetch { dir } => mdm_fetch::fetch(ports.download, &dir),
+        Verb::CheckPkgSignature { pkg, identity } => {
+            pkg_signature::check(ports.pkgbuild, &pkg, &identity)
+        }
         Verb::MacosPkg {
             service,
             fail_ready,

@@ -37,6 +37,8 @@ mod openrc;
 mod openrc_tests;
 mod packages;
 mod packages_tests;
+mod pkg_signing;
+mod pkg_signing_tests;
 mod pr_device;
 mod pr_device_gate_tests;
 mod pr_device_tests;

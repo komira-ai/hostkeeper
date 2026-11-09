@@ -53,7 +53,7 @@ binary are for the two Linux platforms; the installer pkg is for `macos-arm64`.
 | `hostkeeper-coordinator-<version>-1.<rpm-arch>.rpm` | the coordinator's rpm package, with the same files |
 | `hostkeeper-mdm-<version>-<linux-platform>.tar.gz` | the MDM kit's binary, `hostkeeper-mdm` (`crates/hostkeeper-mdm`), which sets up and migrates the MDM server stack on its Linux host |
 | `hostkeeper-mdm-<version>-<linux-platform>.cdx.json` | its CycloneDX SBOM |
-| `hostkeeper-<version>-macos-arm64.pkg` | the installer of a Mac's first install: `/usr/local/bin/hostkeeper` (0755), `/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist` (0644), the log directory `/var/log/hostkeeper` (0755) and its rotation `/etc/newsyslog.d/hostkeeper.conf` (0644), the pinned `gh` at `/usr/local/lib/hostkeeper/gh` (0755) and the Sigstore trusted root at `/usr/local/lib/hostkeeper/trusted_root.json` (0644), owned by root and wheel; a distribution pkg (`productbuild` around the component pkg); the component's one script, a `postinstall`, boots out any loaded copy of the daemon's job and loads it (the plist's program is `/usr/local/bin/hostkeeper daemon`, which at each start points `/var/lib/updater/state/hostkeeper/bin/current` at itself when that starts nothing, writes `/etc/hostkeeper/hostkeeper.toml` from the MDM's managed preferences unless that file exists, and runs `current`); not signed, attested |
+| `hostkeeper-<version>-macos-arm64.pkg` | the installer of a Mac's first install: `/usr/local/bin/hostkeeper` (0755), `/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist` (0644), the log directory `/var/log/hostkeeper` (0755) and its rotation `/etc/newsyslog.d/hostkeeper.conf` (0644), the pinned `gh` at `/usr/local/lib/hostkeeper/gh` (0755) and the Sigstore trusted root at `/usr/local/lib/hostkeeper/trusted_root.json` (0644), owned by root and wheel; a distribution pkg (`productbuild` around the component pkg); the component's one script, a `postinstall`, boots out any loaded copy of the daemon's job and loads it (the plist's program is `/usr/local/bin/hostkeeper daemon`, which at each start points `/var/lib/updater/state/hostkeeper/bin/current` at itself when that starts nothing, writes `/etc/hostkeeper/hostkeeper.toml` from the MDM's managed preferences unless that file exists, and runs `current`); signed by the Developer ID Installer identity `Developer ID Installer: Komira AI, Inc. (U7RTX4XD3X)` with a trusted timestamp, not notarized, attested |
 | `index.json` | the release index of the hostkeeper packages: for each of the three platforms the package file, its SHA-256 and size |
 | `hello-index.json` | the release index of the hello packages (`service` `hello`, `version` `<version>`) |
 | `hello-fail-ready-index.json` | the release index of hello's failing build (`service` `hello`, `version` `<version>-fail-ready`) |
@@ -98,10 +98,17 @@ digest. A tag can be moved; a digest cannot, so a deployment pins the digest.
 
 A release holds the assets of all three platforms; `cargo xtask release check` refuses one that
 lacks any of them, and each index lists the package of each, but for `mdm-index.json`, which
-lists the one platform the mdm package is built for. The pkg carries no installer
-signature (that needs an Apple Developer ID Installer identity, which this project does not hold):
-verify it by its attestation, steps 3 and 4, like any other asset. Names are added, never
-renamed, so a consumer ignores assets it does not know. A name is removed only when its asset is
+lists the one platform the mdm package is built for. The pkg carries an installer signature
+by the Developer ID Installer identity `Developer ID Installer: Komira AI, Inc. (U7RTX4XD3X)`,
+under Apple's Developer ID Certification Authority and Apple Root CA, with a trusted timestamp;
+the release signs it before it sums and attests it, so `SHA256SUMS` and the attestation name the
+signed bytes. Verify it by its attestation, steps 3 and 4, like any other asset, and on a Mac
+also by its signature: `pkgutil --check-signature hostkeeper-<version>-macos-arm64.pkg` prints
+`Status: signed by a developer certificate issued by Apple for distribution`, a `Signed with a
+trusted timestamp on:` line and that chain of three. The pkg is not notarized: an MDM installs
+it with `InstallEnterpriseApplication`, which does not ask for notarization; a double click on a
+downloaded copy is refused by Gatekeeper, so install it by MDM or with `sudo installer -pkg`.
+Names are added, never renamed, so a consumer ignores assets it does not know. A name is removed only when its asset is
 withdrawn: the Arch Linux package (`hostkeeper-<version>-1-<rpm-arch>.pkg.tar.zst`) is no longer
 built, by the maintainers' ruling that the Linux packages are deb and rpm.
 
@@ -414,7 +421,7 @@ installer into the package repositories of `packages.komira.ai`, `testing` first
 install checks ([Package repositories](package-repositories.md)). Those jobs run the same checks as
 `publish`, the sums and `cargo xtask release check`, on the files they download, before they sign an
 index or write anything; the files they upload are the verified ones, byte for byte, and the macOS
-installer in them is as unsigned as the asset.
+installer in them is the signed asset.
 
 ## The trusted root on a host
 

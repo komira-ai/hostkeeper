@@ -36,6 +36,7 @@
 use super::desired;
 use super::lint::{entries, entry, pinned_by_digest, runs_on_pull_requests, triggers};
 use super::packages;
+use super::pkg_signing;
 use super::yaml::{self, Node, Value};
 
 /// The `if:` of the attest job: a push to main. The only condition under which a token can sign.
@@ -608,6 +609,7 @@ fn artifacts_problems(doc: &Node) -> Vec<String> {
     }
     problems.extend(package_problems(attest));
     problems.extend(mdm_problems(doc));
+    problems.extend(pkg_signing::problems(doc));
     problems
 }
 

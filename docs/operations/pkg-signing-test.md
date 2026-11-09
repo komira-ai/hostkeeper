@@ -9,6 +9,22 @@ configuration profile installed? The answer decides task M15:
 - if it does not, the release workflow signs with Developer ID Installer, and question Q4 asks
   for that identity.
 
+**The Developer ID Installer identity exists**, `Developer ID Installer: Komira AI, Inc.
+(U7RTX4XD3X)`, and the release already signs its pkg with it, on a push to `main`
+([macos.md](../macos.md), "The installer's signature"). Q4 is answered, and the release pkg the
+MDM gate sends is a Developer ID pkg whatever this test finds. The test still decides whether the
+farm identity works too, which a service's pkg signed by the operator would need (design section
+7.3).
+
+`productsign` on GitHub's hosted `macos-15` runner signs with the Developer ID identity from a
+keychain of the job: the identity's chain ends in Apple Root CA, which every Mac trusts, so the
+question of the build step below (does `productsign` sign with an identity whose root the Mac
+does not trust) concerns the farm identity of this kit only. A run of the test can add the
+Developer ID case without a new kit: put the release's pkg on the gate's allowlist
+([enrollment-coordinator.md](../enrollment-coordinator.md)) and read its install on the Mac as
+for pkg 3 below. If a Mac refuses it and install.log names notarization, record that in the
+design's section 7.2: notarization is not in the release, by design section 7.3.
+
 The test needs one Mac that is enrolled in the farm's MDM. A Mac enrolled by Path A or Path B will
 do. The run is held: the owner of the MDM host runs it. Nothing reaches a Mac until a `send` is
 given `--apply`.
@@ -50,7 +66,7 @@ config yet, which would leave a Mac that has the pkg's job loaded and failing, a
 would blur the signature's outcome.
 
 The pkgs and the release pkg are signed the same way: `productsign` over a `productbuild`
-distribution pkg.
+distribution pkg. The kit signs with no timestamp; the release signs with a trusted timestamp.
 
 The kit's directory holds three things:
 

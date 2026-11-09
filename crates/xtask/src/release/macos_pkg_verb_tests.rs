@@ -134,3 +134,39 @@ fn macos_pkg_builds_through_the_pkgbuild_and_productbuild_port_with_its_flags() 
         b"{}\n"
     );
 }
+
+#[test]
+fn check_pkg_signature_reads_the_named_pkg_through_the_pkg_port_against_the_identity() {
+    // Catches: the pkg path or `--identity` not reaching the check, or the check run without
+    // the port that runs pkgutil.
+    let mut fakes = empty();
+    fakes.pkgbuild.signature = Some(Err(PortError::new("pkgutil", "Status: no signature")));
+    let v = verb(&[
+        "check-pkg-signature",
+        "dist/x.pkg",
+        "--identity",
+        "Developer ID Installer: Komira AI, Inc. (U7RTX4XD3X)",
+    ]);
+    assert_eq!(
+        run_with(v, &fakes.ports()),
+        Err(Error::Port(PortError::new(
+            "pkgutil",
+            "Status: no signature"
+        )))
+    );
+    assert_eq!(
+        fakes.pkgbuild.signature_calls.borrow().as_slice(),
+        [Path::new("dist/x.pkg").to_owned()]
+    );
+    let other = verb(&[
+        "check-pkg-signature",
+        "dist/x.pkg",
+        "--identity",
+        "Apple Root CA",
+    ]);
+    assert!(matches!(
+        run_with(other, &fakes.ports()),
+        Err(Error::Failed(_))
+    ));
+    assert_eq!(fakes.pkgbuild.signature_calls.borrow().len(), 1);
+}

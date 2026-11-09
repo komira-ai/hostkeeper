@@ -3,7 +3,7 @@
 //!
 //! The adapters that answer them for real are `git::GitCli` ([`GitHistory`]), `github::Gh`
 //! ([`GitHubRuns`], [`ReleaseStore`], [`ReleaseSource`], [`Verifier`]), `check_binary::VersionOf`
-//! ([`RunVersion`]), `macos_pkg::PkgbuildCli` ([`BuildPkg`]), `mdm_fetch::CurlCli`
+//! ([`RunVersion`]), `macos_pkg::PkgbuildCli` ([`BuildPkg`], `pkgutil` too), `mdm_fetch::CurlCli`
 //! ([`Download`]) and `advisories::DenyCli` ([`AdvisoryCheck`]). Each runs its program through an [`Exec`], and the
 //! one [`Exec`] that starts a process, `real::SystemExec`, is built in `real` only and named by
 //! no test.
@@ -185,8 +185,8 @@ pub(crate) trait AdvisoryCheck {
     fn check_advisories(&self) -> Result<Said, PortError>;
 }
 
-/// Builds a macOS installer package from a directory tree (`pkgbuild`) and wraps it as a
-/// distribution package (`productbuild`).
+/// Builds a macOS installer package from a directory tree (`pkgbuild`), wraps it as a
+/// distribution package (`productbuild`), and reads a package's signature (`pkgutil`).
 pub(crate) trait BuildPkg {
     /// Builds the component `pkg` from the tree `root`, installed at `/`, with the package identifier
     /// `identifier` and the version text `version`, every entry owned by root and wheel, and the
@@ -209,6 +209,10 @@ pub(crate) trait BuildPkg {
         version: &str,
         product: &Path,
     ) -> Result<(), PortError>;
+
+    /// What `pkgutil --check-signature` prints of the pkg `pkg`; an error when it exits other
+    /// than 0 (an unsigned pkg, or a signature the Mac does not trust).
+    fn check_signature(&self, pkg: &Path) -> Result<String, PortError>;
 }
 
 /// Downloads a file over HTTPS (`release mdm-fetch`).
