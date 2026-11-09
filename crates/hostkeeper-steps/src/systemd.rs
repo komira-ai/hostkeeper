@@ -2,8 +2,9 @@
 //! `RuntimeMaxSec=` and nothing else (docs/design/hostkeeper-design.md, section 5.3). The unit
 //! is there for the timeout, for the kill of its whole control group, and for the capture of the
 //! exit code, the last line of standard output and the log; a hook's unit confines nothing. A
-//! tool run ([`StepLauncher::run_tool`], docs/design/packages.md, 5.3) is the same unit with
-//! `PrivateNetwork=yes`: the tool has no network.
+//! tool run ([`StepLauncher::run_tool`], docs/design/packages.md, 5.3) is the same unit, offline
+//! (`PrivateNetwork=yes`) unless the call is a fetch ([`ToolNetwork`]), and confined to the paths
+//! it may write when the call lists them ([`ToolCall::writable`]).
 //!
 //! The command lines are pure functions ([`command`], [`additive_command`],
 //! [`tool_command`], [`stop_command`]). Starting a program sits
@@ -41,10 +42,13 @@
 //!
 //! ```text
 //! systemd-run --system --quiet --wait --collect --pipe --unit=<unit>
-//!     --property=RuntimeMaxSec=<secs|infinity> --property=PrivateNetwork=yes -- <program> <args...>
+//!     --property=RuntimeMaxSec=<secs|infinity> [--property=PrivateNetwork=yes]
+//!     [--property=ProtectSystem=strict --property=ReadWritePaths=<path>...]
+//!     [--working-directory=<dir>] [--setenv=NAME=VALUE...] -- <program> <args...>
 //! ```
 //!
-//! and its exit, last line, log and bound are read as for a step.
+//! and its exit and log are read as for a step; it answers the kept bytes of both streams
+//! ([`ToolExit`]) instead of a last line.
 //!
 //! A step (or an additive step) that [`StepLauncher::stop`] stopped is reported with no exit
 //! code, whatever `systemd-run` exited with. systemd counts the end of a service's main process
@@ -67,7 +71,8 @@ use hostkeeper_hook::Step;
 
 use crate::capture::Ring;
 use crate::launcher::{
-    AdditiveCall, Bound, LaunchError, StepCall, StepExit, StepLauncher, ToolCall,
+    AdditiveCall, Bound, LaunchError, StepCall, StepExit, StepLauncher, ToolCall, ToolExit,
+    ToolNetwork,
 };
 
 /// Where `systemd-run` is.
@@ -93,11 +98,13 @@ fn runtime_max_sec(bound: Bound) -> String {
 }
 
 /// The arguments of `systemd-run` that run `executable` with `rest` in the transient unit `unit`,
-/// with `RuntimeMaxSec=` set to `max_sec` and then each of `properties` (`NAME=value`).
+/// with `RuntimeMaxSec=` set to `max_sec`, then each of `properties` (`NAME=value`), then each
+/// of `options` (whole `systemd-run` flags), all before the `--`.
 fn unit_line(
     unit: &str,
     max_sec: &str,
-    properties: &[&str],
+    properties: &[String],
+    options: &[String],
     executable: &Path,
     rest: impl IntoIterator<Item = OsString>,
 ) -> Vec<OsString> {
@@ -112,6 +119,7 @@ fn unit_line(
             .iter()
             .map(|p| OsString::from(format!("--property={p}"))),
     );
+    args.extend(options.iter().map(OsString::from));
     args.push("--".into());
     args.push(executable.into());
     args.extend(rest);
@@ -142,6 +150,7 @@ pub fn command(call: &StepCall<'_>) -> Result<Vec<OsString>, LaunchError> {
         call.unit,
         &runtime_max_sec(call.bound),
         &[],
+        &[],
         call.executable,
         call.invocation.to_args(),
     ))
@@ -162,29 +171,97 @@ pub fn additive_command(call: &AdditiveCall<'_>) -> Result<Vec<OsString>, Launch
         call.unit,
         &runtime_max_sec(bound),
         &[],
+        &[],
         call.executable,
         rest,
     ))
 }
 
-/// The arguments of `systemd-run` that run a tool: the line of a step with
-/// `--property=PrivateNetwork=yes` after `RuntimeMaxSec=`, then `<program> <args...>`, bounded by
-/// `timeout_secs` (0 is no bound: `infinity`). A relative program is refused, as for [`command`].
+/// The arguments of `systemd-run` that run a tool, bounded by `timeout_secs` (0 is no bound:
+/// `infinity`). After `RuntimeMaxSec=` come, in this order:
+///
+/// - `--property=PrivateNetwork=yes` for [`ToolNetwork::Offline`] (none for a fetch);
+/// - `--property=ProtectSystem=strict` and one `--property=ReadWritePaths=<path>` per path of
+///   [`ToolCall::writable`], when it is `Some`;
+/// - `--working-directory=<dir>` for [`ToolCall::working_dir`];
+/// - one `--setenv=NAME=VALUE` per pair of [`ToolCall::env`], in order;
+///
+/// then `--`, the program and its arguments.
+///
+/// Refused as [`LaunchError::Launcher`]: a relative program, working directory or writable path,
+/// a writable path with whitespace in it (`ReadWritePaths=` would read it as two paths), an
+/// environment name that is not `[A-Z_][A-Z0-9_]*`, a value with a NUL or a newline, and a fetch
+/// with [`ToolCall::writable`] `None`.
 pub fn tool_command(call: &ToolCall<'_>) -> Result<Vec<OsString>, LaunchError> {
+    let refuse = |what: String| Err(LaunchError::Launcher(what));
     if !call.program.is_absolute() {
-        return Err(LaunchError::Launcher(format!(
+        return refuse(format!(
             "the tool {:?} is not an absolute path",
             call.program
-        )));
+        ));
+    }
+    if call.network == ToolNetwork::Fetch && call.writable.is_none() {
+        return refuse("a tool that fetches must run confined, with a writable list".to_owned());
+    }
+    let mut properties = Vec::new();
+    if call.network == ToolNetwork::Offline {
+        properties.push("PrivateNetwork=yes".to_owned());
+    }
+    if let Some(paths) = call.writable {
+        properties.push("ProtectSystem=strict".to_owned());
+        for path in paths {
+            let text = path.to_string_lossy();
+            if !path.is_absolute() {
+                return refuse(format!(
+                    "the writable path {path:?} is not an absolute path"
+                ));
+            }
+            if text.contains(char::is_whitespace) {
+                return refuse(format!("the writable path {path:?} holds whitespace"));
+            }
+            properties.push(format!("ReadWritePaths={text}"));
+        }
+    }
+    let mut options = Vec::new();
+    if let Some(dir) = call.working_dir {
+        if !dir.is_absolute() {
+            return refuse(format!(
+                "the working directory {dir:?} is not an absolute path"
+            ));
+        }
+        options.push(format!("--working-directory={}", dir.to_string_lossy()));
+    }
+    for (name, value) in call.env {
+        if !valid_env_name(name) {
+            return refuse(format!(
+                "the environment name {name:?} is not [A-Z_][A-Z0-9_]*"
+            ));
+        }
+        if value.contains(['\0', '\n']) {
+            return refuse(format!(
+                "the value of the environment variable {name} holds a NUL or a newline"
+            ));
+        }
+        options.push(format!("--setenv={name}={value}"));
     }
     let bound = NonZeroU64::new(call.timeout_secs).map_or(Bound::Unbounded, Bound::Secs);
     Ok(unit_line(
         call.unit,
         &runtime_max_sec(bound),
-        &["PrivateNetwork=yes"],
+        &properties,
+        &options,
         call.program,
         call.args.iter().cloned(),
     ))
+}
+
+/// Whether `name` is `[A-Z_][A-Z0-9_]*`.
+fn valid_env_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_uppercase() || c == '_')
+        && chars.all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
 }
 
 /// The arguments of `systemctl` that stop a unit and wait for it to end.
@@ -327,10 +404,24 @@ impl<S: Spawner> SystemdLauncher<S> {
     /// uninstall, stops the unit it may find running before it runs it again) says nothing of
     /// this run; a stop made while it runs does.
     fn run_unit(&self, unit: &str, args: &[OsString]) -> Result<StepExit, LaunchError> {
+        let (captured, code) = self.run_captured(unit, args)?;
+        Ok(StepExit {
+            code,
+            last_line: captured.stdout.last_line(),
+        })
+    }
+
+    /// [`Self::run_unit`]'s run: what was captured, and the exit code it reads as.
+    fn run_captured(
+        &self,
+        unit: &str,
+        args: &[OsString],
+    ) -> Result<(Captured, Option<i32>), LaunchError> {
         stops(&self.stopped_units).remove(unit);
         let captured = self.spawn(Program::SystemdRun, args)?;
         let was_stopped = stops(&self.stopped_units).remove(unit);
-        Ok(step_exit(self.log.as_ref(), unit, &captured, was_stopped))
+        let code = ended(self.log.as_ref(), unit, &captured, was_stopped);
+        Ok((captured, code))
     }
 }
 
@@ -347,22 +438,15 @@ fn stops(stopped: &Mutex<BTreeSet<String>>) -> MutexGuard<'_, BTreeSet<String>> 
     stopped.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// How a step ended, after `log` (if any) was given what was captured. A step that `stop`
-/// stopped while it ran has no exit code: `systemd-run` exits `0` for a hook that the stop's
-/// `SIGTERM` ended (see the module's documentation), and a step stopped at its bound failed.
-fn step_exit(
-    log: Option<&StepLog>,
-    unit: &str,
-    captured: &Captured,
-    was_stopped: bool,
-) -> StepExit {
+/// The exit code a run ended with, after `log` (if any) was given what was captured. A run that
+/// `stop` stopped while it ran has no exit code: `systemd-run` exits `0` for a hook that the
+/// stop's `SIGTERM` ended (see the module's documentation), and a step stopped at its bound
+/// failed.
+fn ended(log: Option<&StepLog>, unit: &str, captured: &Captured, was_stopped: bool) -> Option<i32> {
     if let Some(log) = log {
         log(unit, captured);
     }
-    StepExit {
-        code: if was_stopped { None } else { captured.code },
-        last_line: captured.stdout.last_line(),
-    }
+    if was_stopped { None } else { captured.code }
 }
 
 /// Whether `systemctl stop` stopped the unit: exit `0`, or [`EXIT_NOT_LOADED`] (nothing to stop).
@@ -405,12 +489,18 @@ impl<S: Spawner> StepLauncher for SystemdLauncher<S> {
         self.run_unit(call.unit, &args)
     }
 
-    /// Runs the tool as [`StepLauncher::run`] runs a step, in a unit with `PrivateNetwork=yes`
-    /// ([`tool_command`]).
-    fn run_tool(&self, call: &ToolCall<'_>) -> Result<StepExit, LaunchError> {
+    /// Runs the tool as [`StepLauncher::run`] runs a step, in the unit [`tool_command`] makes,
+    /// and answers the kept bytes of both its streams.
+    fn run_tool(&self, call: &ToolCall<'_>) -> Result<ToolExit, LaunchError> {
         let args = tool_command(call)?;
         executable(call.program)?;
-        self.run_unit(call.unit, &args)
+        let (captured, code) = self.run_captured(call.unit, &args)?;
+        Ok(ToolExit {
+            code,
+            stdout: captured.stdout.bytes(),
+            stderr: captured.stderr.bytes(),
+            cut: captured.stdout.cut() || captured.stderr.cut(),
+        })
     }
 
     fn stop(&self, unit: &str) -> Result<(), LaunchError> {
