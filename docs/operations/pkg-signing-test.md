@@ -17,9 +17,11 @@ farm identity works too, which a service's pkg signed by the operator would need
 7.3).
 
 `productsign` on GitHub's hosted `macos-15` runner signs with the Developer ID identity from a
-keychain of the job: the identity's chain ends in Apple Root CA, which every Mac trusts, so the
-question of the build step below (does `productsign` sign with an identity whose root the Mac
-does not trust) concerns the farm identity of this kit only. A run of the test can add the
+keychain of the job, as the release's job `sign-pkg` does on every push to `main`: the identity's
+chain ends in Apple Root CA, which every Mac trusts. The question of the build step below (does
+`productsign` sign with an identity whose root the Mac does not trust), and the refusal a macOS 15
+runner showed for such an identity ("What a macOS 15 runner showed", below), concern the farm
+identity of this kit only. A run of the test can add the
 Developer ID case without a new kit: put the release's pkg on the gate's allowlist
 ([enrollment-coordinator.md](../enrollment-coordinator.md)) and read its install on the Mac as
 for pkg 3 below. If a Mac refuses it and install.log names notarization, record that in the
