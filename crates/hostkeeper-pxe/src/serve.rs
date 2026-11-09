@@ -7,8 +7,9 @@
 //!
 //! 1. The files the flags name are read as the starting user (root on a host): the daemon
 //!    config, with the daemon's own loader (a config the daemon would refuse is refused here,
-//!    before a seed is made), the SSH keys file, and the coordinator's CA; the token file is
-//!    opened and checked, not read.
+//!    before a seed is made), the repository directory `--repositories` names, if given, with
+//!    the daemon's loader of repository entries (see `crate::repositories`), the SSH keys file,
+//!    and the coordinator's CA; the token file is opened and checked, not read.
 //! 2. Every socket is bound ([`sockets`]): the ports are below 1024.
 //! 3. The process drops to `--user-id` and `--group-id` ([`crate::privilege`]).
 //! 4. The token is read from the descriptor opened in step 1, and the sealed directory is checked
@@ -113,6 +114,11 @@ pub(crate) fn serve_with(flags: &ServeFlags, owner: u32, ports: ServePorts) -> R
         })?;
     let daemon_config =
         DaemonConfigText::parse(&config).map_err(|e| shown(&flags.daemon_config, &e))?;
+    let repositories = flags
+        .repositories
+        .as_deref()
+        .map(|dir| crate::repositories::read(dir, owner))
+        .transpose()?;
     let keys = std::fs::read_to_string(&flags.ssh_authorized_keys)
         .map_err(|e| shown(&flags.ssh_authorized_keys, &e))
         .and_then(|text| {
@@ -146,6 +152,7 @@ pub(crate) fn serve_with(flags: &ServeFlags, owner: u32, ports: ServePorts) -> R
         keys,
         install_disk: flags.install_disk.clone().unwrap_or_default(),
         serial_console: flags.serial_console.clone(),
+        repositories,
         reinstall: flags.reinstall.iter().cloned().collect(),
         tftp_timeout: Duration::from_millis(flags.tftp_timeout_ms),
     };

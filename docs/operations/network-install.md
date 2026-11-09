@@ -115,6 +115,35 @@ gain one: every machine of the answer set fetches it over plain HTTP. Make it ro
 writes by group and others (`chown root:root`, `chmod 0600`): `fetch` and `serve` load it with the
 daemon's own loader and refuse what the daemon would refuse, before a seed is made.
 
+### 3a. Write the repository entries of the installed hosts
+
+Optional. With `--repositories <dir>`, every seed also writes the files of `<dir>` to
+`/etc/hostkeeper/repositories/` on the installed host, before its `hostkeeper.toml`, so the daemon
+starts with its repository entries (packages-repositories.md, sections 3.1 and 3.2). `<dir>` holds
+one `<name>.sources` file per entry and the keyrings they name, and nothing else. Each stanza is
+exactly `Types: deb`, one `URIs:` of `https://` or `file:/`, one `Suites:`, `Components:`, and
+`Signed-By: /etc/hostkeeper/repositories/<keyring>`: the path the file will have on the host, not
+the path in `<dir>`. For the project's channels, `komira-testing.sources` and
+`komira-stable.sources` read:
+
+```
+Types: deb
+URIs: https://packages.komira.ai/apt
+Suites: testing
+Components: main
+Signed-By: /etc/hostkeeper/repositories/komira-archive-keyring.gpg
+```
+
+(`Suites: stable` for `komira-stable.sources`), and the keyring `komira-archive-keyring.gpg` is
+fetched from `https://packages.komira.ai/apt/komira-archive-keyring.gpg` (see
+[package-repositories.md](../deploy/package-repositories.md)). Make the directory and its files
+root's, with no write for group or others (`chown -R root:root`, `chmod 0755` the directory,
+`chmod 0644` the files); each keyring is at most 1 MiB. `serve` checks the directory at its start
+with the daemon's own loader, as if it were at `/etc/hostkeeper/repositories/`, and refuses to
+start on what the daemon would refuse (a `Trusted: yes`, a `Signed-By` naming `<dir>`, a file no
+entry names, a link), naming the file, and on a directory that is missing or holds no entry. Check
+the loader's decision before the install window, not on the first machine.
+
 ### 4. Choose the host of `hostkeeper-pxe`, and its token
 
 `hostkeeper-pxe` needs a NIC on the farm LAN (in both modes it reads the DHCP broadcasts there)
@@ -211,7 +240,7 @@ As root, on the `hostkeeper-pxe` host. Proxy mode:
 ```
 hostkeeper-pxe serve --mode proxy --address 192.0.2.10 --interface <farm-lan-nic> \
     --dir <boot-dir> --daemon-config <installed-hostkeeper.toml> \
-    --ssh-authorized-keys <operator-ssh-keys> \
+    --ssh-authorized-keys <operator-ssh-keys> --repositories <repositories-dir> \
     --coordinator https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     --user-id 65534 --group-id 65534
 ```
@@ -233,6 +262,8 @@ hostkeeper-pxe serve --mode router --address 192.0.2.10 --interface <farm-lan-ni
   a private key block, or with no key, is refused.
 - `--user-id`, `--group-id`: the unprivileged user and group to drop to, as numbers (on Ubuntu,
   65534 is `nobody` and `nogroup`; a user made for it does as well).
+- `--repositories`: the directory of step 3a, optional; without it a seed writes no repository
+  entry.
 - `--install-disk`: the disk the installer writes, `serial=<glob>`, `model=<glob>` or
   `path=<glob>`, the smallest of those it matches. Without it, the smallest SSD (a disk the
   kernel reports as not rotational). Only that disk is written. See the disks of the board check.

@@ -553,6 +553,7 @@ fn serve_takes_its_flags_and_reports_its_refusal() {
         "--ssh-authorized-keys",
         "--install-disk",
         "--serial-console",
+        "--repositories",
         "--reinstall",
         "--user-id",
         "--group-id",
@@ -593,6 +594,7 @@ fn serve_takes_its_flags_and_reports_its_refusal() {
     let (mut out, mut err) = (Vec::new(), Vec::new());
     let refused = |flags: &ServeFlags| {
         assert_eq!(flags.mode, ModeFlag::Router);
+        assert_eq!(flags.repositories, None);
         Err("the coordinator could not be read".to_owned())
     };
     let status = run(argv(&with_mode), &unreached, &refused, &mut out, &mut err);
