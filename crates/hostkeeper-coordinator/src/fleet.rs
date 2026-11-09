@@ -104,10 +104,10 @@ impl Host {
             && !self.beat.promotion_pending
     }
 
-    /// Whether the host holds an update slot (a service's plan counts them against the role's
-    /// `max_updating`, [`crate::stages`]): it is updating, its promotion is pending, or its last
-    /// update failed and it has not yet heartbeated healthy. A failed install that left the service absent
-    /// (staged, never run) holds none: like a failed update rolled back, nothing of it runs.
+    /// Whether the host holds an update slot of its service, counted against its role's
+    /// `max_updating` ([`crate::stages`]): updating, promotion pending, or failed and not yet
+    /// healthy. A failed install rolled back to nothing (reported absent) holds none; one halted
+    /// after its switch is installed, unhealthy, and does. Neither makes a rollout live.
     #[must_use]
     pub fn holds_slot(&self) -> bool {
         let failed = self

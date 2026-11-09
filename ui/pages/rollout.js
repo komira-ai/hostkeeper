@@ -299,7 +299,9 @@ function waitStage(plan) {
   }
 }
 
-// Why the plan orders no new host: the wait with its stage, and the pause with who and why.
+// Why the plan orders no new host: the wait with its stage or, for another service's rollout,
+// the services it waits on (none from a coordinator that does not name them), and the pause
+// with who and why.
 export function planWaiting(plan) {
   if (!plan) {
     return "-";
@@ -307,7 +309,12 @@ export function planWaiting(plan) {
   const parts = [];
   if (plan.waiting !== "PLAN_WAIT_PAUSED") {
     const stage = waitStage(plan);
-    parts.push(enumLabel(plan.waiting, "PLAN_WAIT_") + (stage === null ? "" : `, stage ${stage}`));
+    const on = (plan.waitingOn || []).join(", ");
+    parts.push(
+      enumLabel(plan.waiting, "PLAN_WAIT_") +
+        (stage === null ? "" : `, stage ${stage}`) +
+        (on === "" ? "" : ` on ${on}`),
+    );
   }
   if (plan.paused === true) {
     parts.push(`paused by ${plan.pausedBy || "-"}: ${plan.pauseReason || "-"}`);
