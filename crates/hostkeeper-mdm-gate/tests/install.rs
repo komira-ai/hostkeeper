@@ -444,3 +444,31 @@ async fn a_send_nanohub_did_not_queue_is_sent_at_the_next_look() {
     look(&starved, 1_006).await;
     assert_eq!(starved.installs().len(), 1);
 }
+
+/// Catches: a pkg sent to a Mac whose config profile was sent again for new settings and not yet
+/// acknowledged (the pkg's postinstall would read the old settings); a pkg never sent once the
+/// new profile is acknowledged.
+#[tokio::test]
+async fn a_config_profile_sent_again_holds_the_pkg_until_it_is_acknowledged() {
+    let mut rig = rig("install-config-again", true).await;
+    answer_last(&rig, "InstallProfile", "Acknowledged", 1_005).await;
+    assert_eq!(rig.installs().len(), 1);
+    answer_last(&rig, INSTALL, "Acknowledged", 1_010).await;
+
+    let stores =
+        "[[store]]\nname = \"lan\"\nkind = \"https\"\nbase = \"https://mirror.example/\"\n";
+    let config = support::enrollment::config()
+        .with_stores(hostkeeper_mdm_gate::StoresProfile::from_toml(stores).expect("stores"));
+    rig.reconfigure(config, support::counting_from(100));
+    let due = 1_010 + INSTALL_RESEND_SECS;
+    look(&rig, due).await;
+    let installed = rig.installed().len();
+    assert_eq!(installed, 2, "the changed config profile is sent");
+    look(&rig, due + 1).await;
+    assert_eq!(rig.installs().len(), 1, "the pkg waits for the new profile");
+
+    answer_last(&rig, "InstallProfile", "Acknowledged", due + 2).await;
+    look(&rig, due + 3).await;
+    assert_eq!(rig.installs().len(), 2);
+    assert_eq!(rig.installed().len(), installed);
+}

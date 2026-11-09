@@ -32,6 +32,7 @@ use hostkeeper_proto::hostkeeper::release::v1::{
     Hook, InstallerBounds, Manifest, StepBounds, Target,
 };
 use hostkeeper_steps::{ProcBootId, SystemClock, SystemdLauncher};
+use hostkeeper_testkit::Scratch;
 use hostkeeper_unpack::Owner;
 
 use super::repo::PACKAGE;
@@ -74,15 +75,25 @@ impl Packages for NoStore {
     }
 }
 
-/// The daemon on the rig's host, and the installers the host announces.
-pub fn daemon(rig: &Rig) -> (Daemon, Vec<String>) {
+/// The root-owned directory the daemon's own directories are made in: a sealed version is
+/// trusted only below directories that root owns (`Staged::check`), which the rig's scratch
+/// directory under `target/` is not.
+pub const BASE: &str = "/run/hostkeeper-ci";
+
+/// The daemon on the rig's host, the installers the host announces, and the root-owned
+/// directory its state, packages and placed record are in, kept until the test ends.
+pub fn daemon(rig: &Rig) -> (Daemon, Vec<String>, Scratch) {
     daemon_with(rig, Arc::new(NoStore))
 }
 
 /// [`daemon`] with `store` as its package store: the archive versions of a service that moves to
 /// apt are served by it.
-pub fn daemon_with(rig: &Rig, store: Arc<dyn Packages>) -> (Daemon, Vec<String>) {
-    let base = rig.scratch();
+pub fn daemon_with(rig: &Rig, store: Arc<dyn Packages>) -> (Daemon, Vec<String>, Scratch) {
+    fs::create_dir_all(BASE).expect("the root-owned base");
+    fs::set_permissions(BASE, fs::Permissions::from_mode(0o755)).expect("its mode");
+    let scratch = Scratch::under(Path::new(BASE), "apt-daemon").expect("the daemon's directory");
+    let base = scratch.path().to_path_buf();
+    fs::set_permissions(&base, fs::Permissions::from_mode(0o755)).expect("its mode");
     let (state, packages, placed) = (
         base.join("state"),
         base.join("packages"),
@@ -130,7 +141,7 @@ pub fn daemon_with(rig: &Rig, store: Arc<dyn Packages>) -> (Daemon, Vec<String>)
     };
     let config = DaemonConfig::parse(CONFIG).expect("the config");
     let dirs = Dirs { state, packages };
-    (Daemon::new(config, dirs, ports, OWN), names)
+    (Daemon::new(config, dirs, ports, OWN), names, scratch)
 }
 
 /// The version of the release of `package_version`: its upstream part, as the rig's orders name

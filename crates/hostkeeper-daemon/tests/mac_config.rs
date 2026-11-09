@@ -96,6 +96,8 @@ impl Mac {
             pki: self.root().join("pki"),
             console: None,
             managed_config: managed,
+            managed_stores: None,
+            managed_macos_pkg: None,
         };
         let own = HostkeeperVersion::parse("1.0.0").expect("a version");
         cli::start_with(&settings, &files, own, &NoNotifier, &Platform::linux())

@@ -98,6 +98,7 @@ pub mod links;
 pub mod locks;
 pub mod mac;
 pub mod mac_config;
+pub mod mac_files;
 pub mod node;
 pub mod notify;
 pub mod observer;

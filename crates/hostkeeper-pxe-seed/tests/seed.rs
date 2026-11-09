@@ -370,3 +370,46 @@ fn a_disk_glob_with_yaml_special_characters_reads_back_as_written() {
         );
     }
 }
+
+/// Catches repository files that are not written first, byte for byte, root-owned and mode 0644
+/// at `/etc/hostkeeper/repositories/<name>` in name order, or that disturb the daemon config's
+/// own entry: the seed is its golden, and the YAML read back has each file's fields in name order
+/// before the daemon config's, whose content decodes to the given bytes.
+#[test]
+fn repository_files_are_written_first_byte_for_byte() {
+    let mut build = Build::new(LinuxPlatform::X86_64);
+    build.repositories = Some(support::repository_files());
+    let user_data = build.seed().user_data;
+    assert_eq!(
+        user_data,
+        include_str!("golden/user-data-repositories.yaml")
+    );
+    let files: Vec<(String, String)> = scalars(&user_data)
+        .into_iter()
+        .filter(|(path, _)| path.starts_with(".autoinstall.user-data.write_files["))
+        .collect();
+    let mut paths = Vec::new();
+    for (index, (name, bytes)) in support::repository_files().files().iter().enumerate() {
+        let at = format!(".autoinstall.user-data.write_files[{index}]");
+        let get = |field: &str| {
+            files
+                .iter()
+                .find(|(path, _)| *path == format!("{at}.{field}"))
+                .map(|(_, value)| value.clone())
+                .expect("the field")
+        };
+        paths.push(get("path"));
+        assert_eq!(get("path"), format!("/etc/hostkeeper/repositories/{name}"));
+        assert_eq!(get("owner"), "root:root");
+        assert_eq!(get("permissions"), "0644");
+        assert_eq!(get("encoding"), "b64");
+        assert_eq!(STANDARD.decode(get("content")).expect("base64"), *bytes);
+    }
+    assert!(paths.windows(2).all(|pair| pair[0] < pair[1]), "name order");
+    assert!(files.iter().any(
+        |(path, value)| path == ".autoinstall.user-data.write_files[3].path"
+            && value == "/etc/hostkeeper/hostkeeper.toml"
+    ));
+    // Three files of five fields, the daemon config's five and the datasource file's four.
+    assert_eq!(files.len(), 3 * 5 + 5 + 4);
+}

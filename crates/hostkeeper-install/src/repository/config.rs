@@ -103,6 +103,8 @@ pub enum FileFault {
     Writable { found: u32 },
     #[error("is over {MAX_SOURCES_BYTES} bytes")]
     TooLarge,
+    #[error("is over {0} bytes")]
+    Over(u64),
     #[error("is not UTF-8")]
     NotUtf8,
     #[error("cannot be read: {0}")]
@@ -161,6 +163,19 @@ pub enum RepositoriesError {
 
 /// The entries of `dir`, every file owned by `owner_uid`. A missing directory is no entry.
 pub fn load(dir: &Path, owner_uid: u32) -> Result<Repositories, RepositoriesError> {
+    load_as(dir, dir, owner_uid)
+}
+
+/// The entries of `dir` as a host will see them at `placed`: [`load`]'s rules over the files in
+/// `dir`, with each stanza's `Signed-By` judged against `placed` (so a keyring is
+/// `placed/<file>`) and the keyring itself judged at `dir/<file>`. Every error names a file in
+/// `dir`; an entry's `keyring` is the path under `placed`. `hostkeeper-pxe serve` checks the
+/// operator's directory this way before it writes the files to `placed` on an installed host.
+pub fn load_as(
+    dir: &Path,
+    placed: &Path,
+    owner_uid: u32,
+) -> Result<Repositories, RepositoriesError> {
     let file = |path: &Path, fault| RepositoriesError::File {
         path: path.to_path_buf(),
         fault,
@@ -183,20 +198,21 @@ pub fn load(dir: &Path, owner_uid: u32) -> Result<Repositories, RepositoriesErro
     for name in names {
         let path = dir.join(&name);
         match name.to_str().and_then(|n| n.strip_suffix(SOURCES_SUFFIX)) {
-            Some(stem) => entries.push(load_entry(dir, &path, stem, owner_uid)?),
+            Some(stem) => entries.push(load_entry(placed, &path, stem, owner_uid)?),
             None => {
                 others.insert(path);
             }
         }
     }
-    let named: BTreeSet<&PathBuf> = entries.iter().map(|e| &e.keyring).collect();
-    if let Some(stray) = others.iter().find(|path| !named.contains(path)) {
+    let in_dir = |entry: &Repository| dir.join(entry.keyring.file_name().unwrap_or_default());
+    let named: BTreeSet<PathBuf> = entries.iter().map(in_dir).collect();
+    if let Some(stray) = others.iter().find(|path| !named.contains(*path)) {
         return Err(RepositoriesError::Stray {
             path: stray.clone(),
         });
     }
     for entry in &entries {
-        keyring_fault(&entry.keyring, owner_uid).map_err(|fault| RepositoriesError::Keyring {
+        keyring_fault(&in_dir(entry), owner_uid).map_err(|fault| RepositoriesError::Keyring {
             path: dir.join(format!("{}{SOURCES_SUFFIX}", entry.name)),
             fault,
         })?;
@@ -204,9 +220,9 @@ pub fn load(dir: &Path, owner_uid: u32) -> Result<Repositories, RepositoriesErro
     Ok(Repositories::new(entries))
 }
 
-/// The entry of the file `path`, named `stem`.
+/// The entry of the file `path`, named `stem`, its keyring in `placed`.
 fn load_entry(
-    dir: &Path,
+    placed: &Path,
     path: &Path,
     stem: &str,
     owner_uid: u32,
@@ -221,7 +237,7 @@ fn load_entry(
         path: path.to_path_buf(),
         fault,
     })?;
-    parse(stem, &text, dir).map_err(|rule| RepositoriesError::Stanza {
+    parse(stem, &text, placed).map_err(|rule| RepositoriesError::Stanza {
         path: path.to_path_buf(),
         rule,
     })
@@ -265,6 +281,17 @@ fn keyring_fault(path: &Path, owner_uid: u32) -> Result<(), FileFault> {
 
 /// The text of `path`, opened without following a link and judged on the open file.
 fn read_checked(path: &Path, owner_uid: u32) -> Result<String, FileFault> {
+    let bytes = read_file(path, owner_uid, MAX_SOURCES_BYTES).map_err(|fault| match fault {
+        FileFault::Over(_) => FileFault::TooLarge,
+        other => other,
+    })?;
+    String::from_utf8(bytes).map_err(|_| FileFault::NotUtf8)
+}
+
+/// The bytes of the regular file `path`, opened without following a link and judged on the open
+/// file by the rule of every file (owned by `owner_uid`, not writable by group or others); a file
+/// over `max` bytes is [`FileFault::Over`].
+pub fn read_file(path: &Path, owner_uid: u32, max: u64) -> Result<Vec<u8>, FileFault> {
     let file = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
@@ -276,13 +303,13 @@ fn read_checked(path: &Path, owner_uid: u32) -> Result<String, FileFault> {
     let meta = file.metadata().map_err(unreadable)?;
     judge(&meta, owner_uid, false)?;
     let mut bytes = Vec::new();
-    file.take(MAX_SOURCES_BYTES + 1)
+    file.take(max.saturating_add(1))
         .read_to_end(&mut bytes)
         .map_err(unreadable)?;
-    if bytes.len() as u64 > MAX_SOURCES_BYTES {
-        return Err(FileFault::TooLarge);
+    if bytes.len() as u64 > max {
+        return Err(FileFault::Over(max));
     }
-    String::from_utf8(bytes).map_err(|_| FileFault::NotUtf8)
+    Ok(bytes)
 }
 
 /// The fields of each stanza of `text`, keys lower-cased, a continuation line joined to its

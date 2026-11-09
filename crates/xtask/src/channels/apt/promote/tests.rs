@@ -237,7 +237,7 @@ fn a_promotion_lists_the_testing_entries_in_stable_with_no_package_written_and_k
     lab.publish(Suite::Testing, "t", &lab.debs, "1.2.3");
     let sums = lab.sums(&lab.debs, "1.2.3");
     let said = lab.promote("p", "1.2.3", &sums).expect("promote");
-    assert_eq!(said, ["apt promote: added 4, dropped 0, listed 5"]);
+    assert_eq!(said, ["apt promote: added 7, dropped 0, listed 8"]);
     let listed = lab.listed("p");
     let digest = |name: &str, arch: &str| {
         sha256_hex(&std::fs::read(lab.debs.join(format!("{name}_1.2.3_{arch}.deb"))).expect("deb"))
@@ -247,6 +247,11 @@ fn a_promotion_lists_the_testing_entries_in_stable_with_no_package_written_and_k
         [
             ("example".to_owned(), "9.9.9".to_owned(), "ee".to_owned()),
             (
+                "hello".to_owned(),
+                "1.2.3".to_owned(),
+                digest("hello", "amd64")
+            ),
+            (
                 "hostkeeper".to_owned(),
                 "1.2.3".to_owned(),
                 digest("hostkeeper", "amd64")
@@ -255,6 +260,12 @@ fn a_promotion_lists_the_testing_entries_in_stable_with_no_package_written_and_k
                 "hostkeeper-coordinator".to_owned(),
                 "1.2.3".to_owned(),
                 digest("hostkeeper-coordinator", "amd64")
+            ),
+            ("mdm".to_owned(), "1.2.3".to_owned(), digest("mdm", "amd64")),
+            (
+                "hello".to_owned(),
+                "1.2.3".to_owned(),
+                digest("hello", "arm64")
             ),
             (
                 "hostkeeper".to_owned(),
@@ -302,7 +313,7 @@ fn promoting_a_version_twice_writes_the_same_index_and_changes_no_entry() {
     lab.promote("one", "1.2.3", &sums).expect("first");
     lab.write_stable("one");
     let said = lab.promote("two", "1.2.3", &sums).expect("second");
-    assert_eq!(said, ["apt promote: added 0, dropped 0, listed 5"]);
+    assert_eq!(said, ["apt promote: added 0, dropped 0, listed 8"]);
     assert_eq!(lab.listed("one"), lab.listed("two"));
     for rel in [
         "main/binary-amd64/Packages",
@@ -325,7 +336,7 @@ fn a_version_testing_does_not_list_is_refused_and_nothing_is_written() {
     let sums = lab.sums(&lab.debs, "1.2.4");
     let e = lab.promote("p", "1.2.4", &sums).unwrap_err().to_string();
     assert!(
-        e.contains("testing does not list hostkeeper-coordinator_1.2.4_amd64.deb"),
+        e.contains("testing does not list hello_1.2.4_amd64.deb"),
         "{e}"
     );
     assert!(!lab.path("p-promoted").exists());
@@ -499,8 +510,5 @@ fn a_write_without_a_pool_needs_no_packages_and_with_one_needs_them() {
     let e = write::write(&lab.aws, &with_pool, None)
         .unwrap_err()
         .to_string();
-    assert!(
-        e.contains("hostkeeper-coordinator_1.2.3_amd64.deb is not in"),
-        "{e}"
-    );
+    assert!(e.contains("hello_1.2.3_amd64.deb is not in"), "{e}");
 }

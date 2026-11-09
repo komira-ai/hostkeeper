@@ -149,15 +149,18 @@ fn tree_itself_as_a_link_is_refused() {
     assert!(matches!(err, ArtifactError::Unsupported(_)), "{err:?}");
 
     // A sealed tree whose `tree` is swapped for a link to a copy of itself fails the check.
+    // The copy is outside the version directory, so the link is the version's one defect.
     let v = version("tl-tree-swapped");
     let staged = Staged::seal(v.path()).unwrap();
-    fs::rename(v.path().join("tree"), v.path().join("copy")).unwrap();
-    symlink("copy", v.path().join("tree")).unwrap();
+    let copy = v.path().with_extension("copy");
+    fs::rename(v.path().join("tree"), &copy).unwrap();
+    symlink(&copy, v.path().join("tree")).unwrap();
     let err = staged.check_tree().unwrap_err();
     assert!(
         matches!(&err, ArtifactError::Untrusted(r) if r == Path::new("tree")),
         "{err:?}"
     );
+    fs::remove_dir_all(&copy).unwrap();
 }
 
 /// A link inside `tree/` still needs a trusted owner (read without following it).

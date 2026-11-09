@@ -82,6 +82,16 @@ pub fn counting() -> Random {
     })
 }
 
+/// Random bytes that count from `first`: a gate opened after another one in a test draws UUIDs
+/// the other did not.
+pub fn counting_from(first: u8) -> Random {
+    let next = Arc::new(AtomicU8::new(first));
+    Box::new(move |buffer: &mut [u8]| {
+        buffer.fill(next.fetch_add(1, Ordering::SeqCst));
+        true
+    })
+}
+
 /// Random bytes that count, as many draws as the budget says (`-1`: any number), then none.
 pub fn budgeted() -> (Random, Arc<std::sync::atomic::AtomicI64>) {
     let budget = Arc::new(std::sync::atomic::AtomicI64::new(-1));

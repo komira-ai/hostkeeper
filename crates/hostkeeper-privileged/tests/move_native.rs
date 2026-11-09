@@ -31,7 +31,7 @@ mod rig;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_daemon::Daemon;
@@ -104,7 +104,8 @@ fn make_archive_version(packages: &Path) {
 /// The package store of the archive: the sealed version directory the test made, and the
 /// versions it was asked for.
 struct ArchiveStore {
-    root: PathBuf,
+    /// The daemon's packages directory, set once the daemon's directories are made.
+    root: OnceLock<PathBuf>,
     asked: Mutex<Vec<String>>,
 }
 
@@ -127,7 +128,11 @@ impl Packages for ArchiveStore {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .push(format!("{service} {version}"));
-        let dir = self.root.join(service.as_str()).join(version.as_str());
+        let root = self
+            .root
+            .get()
+            .ok_or_else(|| PackageError::Other("the store has no directory yet".to_owned()))?;
+        let dir = root.join(service.as_str()).join(version.as_str());
         Staged::seal(&dir)
             .map(VersionDir::new)
             .map_err(|e| PackageError::Other(format!("{}: {e}", dir.display())))
@@ -164,26 +169,32 @@ struct Host {
     // Dropped in the order declared: the guard first, the rig (which purges the package) last.
     _placed: PlacedUnit,
     rig: Rig,
+    /// The daemon's root-owned directory: its state, packages and placed record.
+    base: hostkeeper_testkit::Scratch,
 }
 
 impl Host {
     fn new(name: &str) -> Host {
         let rig = Rig::new(name, Trust::Entry);
         let placed = PlacedUnit::new();
-        let packages = rig.scratch().join("packages");
-        fs::create_dir_all(&packages).expect("the packages directory");
-        make_archive_version(&packages);
         let store = Arc::new(ArchiveStore {
-            root: packages,
+            root: OnceLock::new(),
             asked: Mutex::new(Vec::new()),
         });
-        let (daemon, names) = daemon::daemon_with(&rig, store.clone());
+        let (daemon, names, base) = daemon::daemon_with(&rig, store.clone());
         assert_eq!(names, ["hostkeeper-archive", "apt"]);
+        let packages = base.path().join("packages");
+        make_archive_version(&packages);
+        store
+            .root
+            .set(packages)
+            .expect("the store's directory is set once");
         Host {
             daemon,
             store,
             _placed: placed,
             rig,
+            base,
         }
     }
 
@@ -206,7 +217,7 @@ impl Host {
 
     /// The link `name` of the service's package directory: the version it names.
     fn linked(&self, name: &str) -> Option<String> {
-        fs::read_link(self.rig.scratch().join("packages").join(PACKAGE).join(name))
+        fs::read_link(self.base.path().join("packages").join(PACKAGE).join(name))
             .ok()
             .map(|target| target.to_string_lossy().into_owned())
     }

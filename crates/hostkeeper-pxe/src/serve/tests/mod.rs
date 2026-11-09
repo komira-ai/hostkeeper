@@ -12,6 +12,7 @@ mod http;
 mod inventory;
 mod proxy;
 mod reads;
+mod repositories;
 mod router;
 mod sealed;
 mod start;

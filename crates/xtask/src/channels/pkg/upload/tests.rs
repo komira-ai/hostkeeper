@@ -11,9 +11,9 @@ fn keys() -> Vec<String> {
 }
 
 #[test]
-fn the_first_upload_puts_the_installer_its_bundle_and_the_sums_once_each_and_no_pointer() {
-    // The installer is unsigned: what an upload writes is the testing directory of a version and
-    // nothing that a user following the stable pointer would see.
+fn the_first_upload_puts_each_installer_its_bundle_and_the_sums_once_each_and_no_pointer() {
+    // An upload signs nothing: what it writes is the testing directory of a version and nothing
+    // that a user following the stable pointer would see.
     let f = Fixture::new("first");
     let aws = FakeAws::new();
     let said = upload(&aws, &f.request("")).expect("uploaded");
@@ -51,13 +51,15 @@ fn the_first_upload_puts_the_installer_its_bundle_and_the_sums_once_each_and_no_
         [
             "application/octet-stream",
             "application/json",
+            "application/octet-stream",
+            "application/json",
             "text/plain; charset=utf-8"
         ]
     );
 }
 
 #[test]
-fn the_sums_of_the_directory_list_exactly_the_installer_and_its_bundle() {
+fn the_sums_of_the_directory_list_exactly_the_installers_and_their_bundles() {
     let f = Fixture::new("contents");
     let aws = FakeAws::new();
     upload(&aws, &f.request("")).expect("uploaded");
@@ -68,10 +70,18 @@ fn the_sums_of_the_directory_list_exactly_the_installer_and_its_bundle() {
     assert_eq!(listed, names());
     assert_eq!(
         lines[0].sha256,
-        Sha256::of(b"bytes of hostkeeper-1.2.3-macos-arm64.pkg")
+        Sha256::of(b"bytes of hello-1.2.3-macos-arm64.pkg")
     );
     assert_eq!(
         lines[1].sha256,
+        Sha256::of(b"bundle of hello-1.2.3-macos-arm64.pkg")
+    );
+    assert_eq!(
+        lines[2].sha256,
+        Sha256::of(b"bytes of hostkeeper-1.2.3-macos-arm64.pkg")
+    );
+    assert_eq!(
+        lines[3].sha256,
         Sha256::of(b"bundle of hostkeeper-1.2.3-macos-arm64.pkg")
     );
 }
@@ -139,12 +149,13 @@ fn a_refusal_that_is_not_a_412_fails_with_the_answer_and_stops() {
     assert_eq!(
         e,
         Error::Failed(format!(
-            "put {PREFIX}hostkeeper-1.2.3-macos-arm64.pkg: Access Denied"
+            "put {PREFIX}hello-1.2.3-macos-arm64.pkg: Access Denied"
         ))
     );
+    // The first put refused, nothing after it is tried.
     assert_eq!(
-        aws.keys_put().last().map(String::as_str),
-        Some(format!("{PREFIX}hostkeeper-1.2.3-macos-arm64.pkg").as_str())
+        aws.keys_put(),
+        [format!("{PREFIX}hello-1.2.3-macos-arm64.pkg")]
     );
 }
 

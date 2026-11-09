@@ -122,8 +122,8 @@ maintainers must confirm the prefix before any Mac enrolls, since a label is the
 | what | where |
 |---|---|
 | config | `/etc/hostkeeper/hostkeeper.toml` |
-| stores config | `/etc/hostkeeper/stores.toml`, optional; without it the one store is `release_channel` (docs/design/packages.md section 7) |
-| macos-pkg signers | `/etc/hostkeeper/macos-pkg.toml`, optional, read at the start of a Mac only; a file that is not sound (a link, not root's, writable by others, not TOML of the signers) stops the start with the config exit status |
+| stores config | `/etc/hostkeeper/stores.toml`, optional; without it the one store is `release_channel` (docs/design/packages.md section 7). On a managed Mac the daemon's start writes it from the managed preferences of `dev.hostkeeper.stores` when that domain is there, replacing a file that differs |
+| macos-pkg signers | `/etc/hostkeeper/macos-pkg.toml`, optional, read at the start of a Mac only; on a managed Mac the daemon's start writes it from the managed preferences of `dev.hostkeeper.macos-pkg` when that domain is there, replacing a file that differs; a file that is not sound (a link, not root's, writable by others, not TOML of the signers) stops the start with the config exit status |
 | state directory, packages directory | as on Linux (`/var/lib/updater/state`, `/var/lib/hostkeeper/packages`); both exist on macOS |
 | run directory | `/var/run` (macOS has a read-only root and no `/run`); the daemon binds no socket there |
 | units linked from a package | `/Library/LaunchDaemons/<label>.plist`, a link to `<packages>/<service>/current/units/<label>.plist` |
@@ -409,6 +409,20 @@ both, each time it starts.
    with mode 0755 when it is missing. The file starts with a comment that names the managed
    preferences domain `dev.hostkeeper.config`. With neither a managed file nor a config, it
    fails with a message that names both paths.
+   Right after the config, the start renders two more domains to their files
+   (`hostkeeper_daemon::mac_files`), each judged alone. The managed preferences of
+   `dev.hostkeeper.stores` (`HostFiles::managed_stores`, `/Library/Managed Preferences/dev.hostkeeper.stores.plist`)
+   become `/etc/hostkeeper/stores.toml`, and those of `dev.hostkeeper.macos-pkg`
+   (`HostFiles::managed_macos_pkg`) become `/etc/hostkeeper/macos-pkg.toml`. A domain that is not
+   there changes nothing: the operator's file stays and none is made. A domain that is there is
+   read and rendered as above, judged by the file's own loader (the stores loader, which also
+   reads their credential files, or the signers loader) before anything is written, and refused
+   when the file would be larger than that loader reads; the file starts with a comment naming the
+   domain. Unlike the config, the managed preferences are these files' source: a file that holds
+   exactly the rendered text, root's with mode 0644, is left alone, and any other is replaced (a new file in the same directory, mode 0644, synced and renamed over it), so a
+   rotation the MDM pushes takes effect at the next start. A link or a directory at the file's
+   path is refused and left. Any refusal stops the start with exit status 3, naming the managed
+   file and the reason.
 
 A config that cannot be made at a start (no managed file, a link at the config path, a managed
 file the loader refuses) stops the start with exit status 3, the message in
@@ -459,13 +473,15 @@ pkg's plist.
 
 The released pkg is signed with the Developer ID Installer identity
 `Developer ID Installer: Komira AI, Inc. (U7RTX4XD3X)`, because the MDM's
-`InstallEnterpriseApplication` installs only a signed pkg. It is not notarized: nothing Apple
+`InstallEnterpriseApplication` installs only a signed pkg. hello's `.pkg`
+(`hello-<version>-macos-arm64.pkg`) is signed the same way, in the same jobs, because a host's
+`macos-pkg` installer stages only a signed pkg; each step below is done for both. It is not notarized: nothing Apple
 states asks an MDM-installed pkg for notarization (design section 7.3), and the release adds it
 only if a Mac refuses the signed pkg without it. The signing is in `.github/workflows/artifacts.yml`,
 on a push to `main` only, in three jobs:
 
-1. `build-macos` builds the unsigned pkg into `pkg/` and checks it (above); it is never a release
-   file, only the artifact `pkg-unsigned-macos-arm64`.
+1. `build-macos` builds the unsigned pkgs into `pkg/` and checks them (above); they are never
+   release files, only the artifact `pkg-unsigned-macos-arm64`.
 2. `sign-pkg`, in the environment `pkg-signing`, runs no repository code (no checkout, no cargo),
    so no build script or dependency runs where the key is. It decodes the PKCS#12 of the secret
    `MACOS_INSTALLER_P12` (the identity's key and certificate and Apple's Developer ID G2
@@ -479,16 +495,19 @@ on a push to `main` only, in three jobs:
    trusted status, a trusted timestamp and the chain of exactly the identity, `Developer ID
    Certification Authority` and `Apple Root CA`, naming every difference; it then expands the
    signed and the unsigned pkg and refuses any file that differs, so the signing changed nothing
-   `check-macos-pkg` checked. Only then is the signed pkg the release file
-   `hostkeeper-<version>-macos-arm64.pkg`: `SHA256SUMS`, the attestation and the release are of
-   its bytes.
+   `check-macos-pkg` checked. Only then is each signed pkg the release file
+   `hostkeeper-<version>-macos-arm64.pkg` or `hello-<version>-macos-arm64.pkg`: `SHA256SUMS`,
+   the attestation and the release are of its bytes.
 
-A run by hand signs nothing: it builds and checks the unsigned pkg and makes the sums without it.
+A run by hand signs nothing: it builds and checks the unsigned pkgs and makes the sums without
+them.
 The workflow lint (`crates/xtask/tests/workflows/pkg_signing.rs`) holds these jobs to their
 steps: the signing job's exact steps, with the cleanup under `always()` after the signing; the
-secrets named in that job alone; the check before the one upload of the pkg; and `sums` after it.
+secrets named in that job alone; the checks of both pkgs before the one upload of them; and
+`sums` after it.
 
-On a Mac, `pkgutil --check-signature hostkeeper-<version>-macos-arm64.pkg` shows the signature.
+On a Mac, `pkgutil --check-signature hostkeeper-<version>-macos-arm64.pkg` (or
+`hello-<version>-macos-arm64.pkg`) shows the signature.
 The MDM gate takes the release's pkg as it is: its digest on the allowlist is the line of
 `SHA256SUMS`, the signed file's ([enrollment-coordinator.md](enrollment-coordinator.md)).
 
