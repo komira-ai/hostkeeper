@@ -14,7 +14,7 @@ use hostkeeper_steps::record::{
     AwaitingRestart, HookSel, Progress, REASON_SELF_UPDATE_FALLBACK, RECORD_FILE, SCHEMA,
     Settlement, State,
 };
-use hostkeeper_steps::selfupdate::{START_LIMIT_BURST, fallback_unit, main_dropin, settle_with};
+use hostkeeper_steps::selfupdate::settle_with;
 use hostkeeper_steps::{
     BAD_VERSIONS_FILE, BadVersions, BadVersionsError, CrashPoint, Finished, FollowOn, ForceRecord,
     Layout, Loaded, MAX_BAD_VERSIONS, Record, RecordError, RecordStore, ResumeAction,
@@ -936,21 +936,4 @@ fn only_the_deferrals_of_an_old_updater_are_cleared() {
         store.clear_updater_old(),
         Err(RecordError::Corrupt(_))
     ));
-}
-
-/// Catches any later edit of the generated unit texts the fallback depends on: the drop-in of
-/// hostkeeper's own unit and its fallback unit, for the binary directory under the default state
-/// directory, byte for byte.
-#[test]
-fn the_generated_dropin_and_fallback_unit_are_unchanged() {
-    assert_eq!(START_LIMIT_BURST, 3);
-    assert_eq!(
-        main_dropin("hostkeeper-fallback.service", START_LIMIT_BURST),
-        "[Unit]\nOnFailure=hostkeeper-fallback.service\nStartLimitIntervalSec=300\nStartLimitBurst=3\n\n[Service]\nRestart=always\nRestartSec=1\nRestartMode=direct\n"
-    );
-    let layout = Layout::new(Path::new("/var/lib/updater/state/hostkeeper/bin"));
-    assert_eq!(
-        fallback_unit(&layout, "hostkeeper.service"),
-        "[Unit]\nDescription=Put the previous updater binary back after the new one failed to start\nStartLimitIntervalSec=0\n\n[Service]\nType=oneshot\nExecStart=-/var/lib/updater/state/hostkeeper/bin/previous self-update-fallback --dir /var/lib/updater/state/hostkeeper/bin\nExecStartPost=/usr/bin/systemctl reset-failed hostkeeper.service\nExecStartPost=/usr/bin/systemctl start --no-block hostkeeper.service\n"
-    );
 }

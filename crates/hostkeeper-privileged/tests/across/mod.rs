@@ -14,8 +14,12 @@
 //! - **hostkeeper's package** of each version is built here as the release builder lays it out
 //!   (`crates/xtask/src/release/package.rs`): `bin/hostkeeper`, `files/trusted_root.json`,
 //!   `manifest.toml`, and on Linux `units/hostkeeper.service`; its manifest is the release's, the
-//!   floor the release builder of the build the binary comes from writes ([`floor`]) and the
-//!   no-op hook `bin/hostkeeper update-hook`. Two things differ from a
+//!   floor the release builder of the build the binary comes from writes ([`floor`]) and its
+//!   hook. The released version's hook is the release's own, `bin/hostkeeper update-hook`, which
+//!   the released daemon does not run (it runs its built-in steps at that floor); this build's is
+//!   the workload fixture `bin/hook` (ending every step 0), because a dev build's floor is at or
+//!   below the daemon's legacy floor and a daemon then runs the hook's command, which this
+//!   build's binary has no verb for. Two things differ from a
 //!   release, both because the test is a host of its own: the packaged trusted root is the test
 //!   signer's, the root the host's copy holds too (the daemon uses whichever of the two was
 //!   written last, so a packaged production root would refuse every later package), and the
@@ -30,10 +34,9 @@
 //! - **The host** is the platform's ([`Host`]): on Linux the daemon's own unit
 //!   `hostkeeper.service` under systemd, installed where the deb installs it (`linux`); on a Mac
 //!   the daemon's own job `dev.hostkeeper.hostkeeper` under launchd, its plist where the pkg puts
-//!   it (`mac`). The released daemon writes its fallback unit and drop-in, or its fallback job,
-//!   into the host's real unit directory, so the released binary's own fallback is what puts it
-//!   back when this build cannot start; this build removes them at its own start
-//!   ([`Host::fallback_files_present`]).
+//!   it (`mac`). The released daemon updates by the hand-over, so it writes no fallback unit,
+//!   drop-in or job: when this build cannot start, the released binary is what runs again, after
+//!   its three tries.
 //!
 //! Each test starts from [`Rig::installed`]: the released daemon has installed its own version's
 //! package, as a host the coordinator converged on the release is. Every wait is a bounded count
@@ -69,14 +72,17 @@ pub use mac::Host;
 
 /// The service of hostkeeper itself.
 pub const HK: &str = "hostkeeper";
+/// The workload fixture, the hook of the packages of this build.
+pub const HOOK: &str = env!("CARGO_BIN_EXE_hostkeeper-fixture-hook");
 /// This build's `hostkeeper`, its version the name of the file it runs from.
 pub const NAMED: &str = env!("CARGO_BIN_EXE_hostkeeper-named-daemon");
 /// This build's `hostkeeper` made to fail its start.
 pub const FAILING: &str = env!("CARGO_BIN_EXE_hostkeeper-failing-daemon");
 /// The floor of hostkeeper's package the pinned release's builder wrote: its `OLDEST_READER`,
-/// 0.1.53 (`min_hostkeeper` is the lower of that and the release's version, in
-/// `crates/xtask/src/release/package.rs`), the daemon's `LEGACY_FLOOR`.
-pub const FLOOR: &str = "0.1.53";
+/// 0.1.163 (`min_hostkeeper` is the lower of that and the release's version, in
+/// `crates/xtask/src/release/package.rs`), above the daemon's `LEGACY_FLOOR`, so the released
+/// daemon runs its built-in steps for its own package.
+pub const FLOOR: &str = "0.1.163";
 /// The reason of the verdict of a version whose new binary fell back.
 pub const FALLBACK_REASON: &str = "self_update_fallback";
 
@@ -133,13 +139,13 @@ pub fn newer(version: &str, step: u64) -> String {
 /// The `min_hostkeeper` the release builder writes into a package of `build`'s binary: the lower
 /// of the `OLDEST_READER` of the build the binary comes from and the version that build was built
 /// with. The released binary was built as the pinned release: [`FLOOR`] and the release's
-/// version. This build's `OLDEST_READER` is `hostkeeper_steps::OLDEST_READER` (R1, 0.1.163) and
+/// version. This build's `OLDEST_READER` is `hostkeeper_steps::OLDEST_READER` (R2, 0.1.194) and
 /// its version the workspace's (`0.1.0` in a pull request, the release's own once `release
 /// set-version` ran), which is also the version its package store judges a package's floor
 /// against (`hostkeeper_unpack::running_hostkeeper`), whatever name the program runs under; a
 /// higher floor is `daemon_too_old` to it. In a pull request the floor is therefore the
-/// workspace's `0.1.0`, at or below the legacy floor, so the pinned release probes the binary of
-/// this build's package (which still answers `self-update-protocol`) and runs its hook's command.
+/// workspace's `0.1.0`, at or below the legacy floor, so a daemon runs the hook's command of
+/// this build's package: the workload fixture ([`manifest`]).
 pub fn floor(build: Build, released: &str) -> String {
     let (oldest, built) = match build {
         Build::Released => (
@@ -154,14 +160,19 @@ pub fn floor(build: Build, released: &str) -> String {
     oldest.min(built).to_string()
 }
 
-/// The manifest of hostkeeper's package at `version` with the floor `floor`, as the release
-/// builder writes it.
-pub fn manifest(version: &str, floor: &str) -> String {
+/// The manifest of hostkeeper's package of `build` at `version` with the floor `floor`, as the
+/// release builder writes it; this build's hook is the workload fixture `bin/hook` in mode `ok`
+/// ([`HOOK`]) in place of `bin/hostkeeper update-hook`, which its binary has no verb for.
+pub fn manifest(version: &str, floor: &str, build: Build) -> String {
     let platform = Platform::current();
     let units = if cfg!(target_os = "linux") {
         "\n[units]\nrun = [\"hostkeeper.service\"]\n"
     } else {
         ""
+    };
+    let (command, params) = match build {
+        Build::Released => ("\"bin/hostkeeper\", \"update-hook\"", ""),
+        Build::This | Build::Failing => ("\"bin/hook\"", "\n[params]\n\"fixture.mode\" = \"ok\"\n"),
     };
     format!(
         "schema = 1\n\
@@ -171,7 +182,7 @@ pub fn manifest(version: &str, floor: &str) -> String {
          min_hostkeeper = \"{floor}\"\n\
          \n\
          [hook]\n\
-         command = [\"bin/hostkeeper\", \"update-hook\"]\n\
+         command = [{command}]\n\
          verify_deadline_secs = 600\n\
          \n\
          [hook.timeout_secs]\n\
@@ -180,7 +191,7 @@ pub fn manifest(version: &str, floor: &str) -> String {
          verify = 300\n\
          rollback = 300\n\
          cleanup = 300\n\
-         {units}"
+         {params}{units}"
     )
 }
 
@@ -337,12 +348,17 @@ impl Rig {
 
     /// [`Rig::start`], then the released version's package installed by the coordinator's
     /// order: the install of the version that runs, which the daemon takes without a restart.
+    /// It returns once the host has reported that order `OUTCOME_SUCCEEDED`, not only once the
+    /// coordinator counts the host converged: the host runs that version from its start, so it is
+    /// counted converged while the install order may still be running, and a test's next order
+    /// sent then would be answered `busy` with it.
     pub fn installed(tag: &str) -> Rig {
         let rig = Rig::start(tag);
         let released = rig.released.clone();
         let built = rig.publish(&released, Build::Released);
         rig.order(&built);
         rig.wait_converged(&released);
+        rig.wait_reported(&released, "OUTCOME_SUCCEEDED");
         rig
     }
 
@@ -360,9 +376,11 @@ impl Rig {
     pub fn publish(&self, version: &str, build: Build) -> Built {
         let binary = self.binary(build);
         let floor = floor(build, &self.released);
-        let manifest = manifest(version, &floor);
+        let manifest = manifest(version, &floor, build);
         let root = self.signer.trusted_root_jsonl();
         let unit = Host::package_unit(self.host.root());
+        let hook = (build != Build::Released)
+            .then(|| fs::read(HOOK).unwrap_or_else(|e| panic!("read {HOOK}: {e}")));
         let mut entries = vec![
             ArchiveEntry {
                 name: "bin/",
@@ -390,6 +408,13 @@ impl Rig {
                 data: manifest.as_bytes(),
             },
         ];
+        if let Some(hook) = &hook {
+            entries.push(ArchiveEntry {
+                name: "bin/hook",
+                mode: 0o555,
+                data: hook,
+            });
+        }
         if let Some(unit) = &unit {
             entries.push(ArchiveEntry {
                 name: "units/",

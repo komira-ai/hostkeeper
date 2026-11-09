@@ -107,8 +107,7 @@ When the link is down, root works on the host itself.
 A daemon from before this change still binds its admin socket (`/run/hostkeeper/admin.sock`,
 `/var/run/hostkeeper/admin.sock` on a Mac) and still serves `hostkeeper.local.v1.Admin` to root. An
 older `hostkeeper admin status|abort|clear-record` keeps working against it until the host updates.
-The newer daemon accepts the flag `--admin-socket <path>` that its unit still passes and ignores it:
-it binds nothing. The flag goes in a later stage of
-[the design](design/two-programs.md#4-the-staged-path-for-the-daemon). The file
+The current daemon binds nothing and has no `--admin-socket` flag: the flag is a usage error
+(exit 2). See [the design](design/two-programs.md#4-the-staged-path-for-the-daemon). The file
 `crates/hostkeeper-proto/proto/hostkeeper/local/v1/admin.proto` stays, frozen, because the older
 binary speaks it; no program serves it and no code is generated from it.

@@ -11,7 +11,7 @@ description = "The step runner of the host updater: the step record and its resu
 # The step runner of the generic host updater (docs/design/hostkeeper-design.md, sections 6.2 to 6.6):
 # the persisted step record and its resume, the dead-man that enforces the bounds on a thread of
 # its own, the exit codes read as outcomes through `hostkeeper-hook`, the check of the staged
-# artifact before any run, and the updater's own update with its fallback. It runs a step through
+# artifact before any run, and the updater's own update. It runs a step through
 # a `StepLauncher` it is given and knows no service and no manifest; `systemd.rs` is the
 # launcher of the host (one transient unit per step, `RuntimeMaxSec=` and nothing else).
 # Synchronous, threads and blocking files. It depends on `hostkeeper-hook` and, for the one rule
@@ -44,8 +44,6 @@ test-support = []
 # Its own tests turn on `test-support`.
 hostkeeper-steps = { path = ".", features = ["test-support"] }
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }
-# Decodes the launchd plists of `selfupdate` in their tests.
-plist.workspace = true
 
 [lints]
 workspace = true

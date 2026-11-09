@@ -515,8 +515,8 @@ fn a_daemon_the_deb_enabled_installs_its_own_release_restarts_into_it_and_conver
     );
 }
 
-/// A release older than the daemon's oldest reader (0.1.163).
-const BELOW: &str = "0.1.162";
+/// A release older than the daemon's oldest reader (0.1.194).
+const BELOW: &str = "0.1.193";
 
 /// Catches the verdict of hostkeeper's own install kept unsent while hostkeeper is not listed (a
 /// daemon the deb installed lists no service `hostkeeper` until its package is placed), which

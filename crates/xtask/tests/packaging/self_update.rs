@@ -1,23 +1,22 @@
 //! The two units as hostkeeper's own update relies on them (design section 6.6, two-programs.md
 //! section 4.1): the bootstrap unit starts the installed binary, one of the paths a daemon
 //! seeds from (`hostkeeper_daemon::packaged::PACKAGED_BINARIES`), which gives the binary
-//! directory its first binary and execs `current`; the package unit seeds that directory itself
-//! and starts `current` of the daemon's binary directory (`hostkeeper_daemon::selfupdate::
-//! binary_dir`) under the state directory it gives the daemon. Both restart the status the
-//! daemon exits with once it has handed over to a new binary; and neither sets a start limit,
-//! since the daemon removes the drop-in and the fallback unit of the releases before the
-//! hand-over (`hostkeeper_daemon::selfunits`) and a daemon that cannot start is retried for good.
+//! directory its first binary and execs `current`; the package unit starts `current` of the
+//! daemon's binary directory (`hostkeeper_daemon::selfupdate::binary_dir`) under the state
+//! directory it gives the daemon, and neither unit runs a command before the daemon. Both restart
+//! the status the daemon exits with once it has handed over to a new binary; and neither sets a
+//! start limit, since a daemon that cannot start is retried for good.
 
 use std::path::{Path, PathBuf};
 
+use hostkeeper_daemon::adapters::MAIN_UNIT;
 use hostkeeper_daemon::cli::{DEFAULT_STATE_DIR, exit_status};
 use hostkeeper_daemon::packaged::PACKAGED_BINARIES;
-use hostkeeper_daemon::selfunits::{FALLBACK_UNIT, MAIN_UNIT};
 use hostkeeper_daemon::selfupdate::binary_dir;
 
-use crate::daemon_flags::{parse_flags, parse_seed};
+use crate::daemon_flags::parse_flags;
 use crate::unit::{self, Unit};
-use crate::{INSTALLED_UNIT, Kind, SEED_LINE, altered, config, refuses};
+use crate::{INSTALLED_UNIT, Kind, altered, config, refuses};
 
 /// The words of the command line of `key` in `[Service]`, its `-` prefix dropped.
 fn words(unit: &Unit, key: &str) -> Result<Vec<String>, String> {
@@ -185,98 +184,46 @@ fn installed_binary() -> Result<String, String> {
         .ok_or_else(|| "the packages carry no daemon binary".to_owned())
 }
 
-fn check_seed(kind: Kind, text: &str) -> Result<(), String> {
+fn check_no_pre(text: &str) -> Result<(), String> {
     let unit = Unit::parse(text)?;
-    if kind == Kind::Bootstrap {
-        return match unit.values("Service", "ExecStartPre").is_empty() {
-            true => Ok(()),
-            false => Err(
-                "the bootstrap unit has an ExecStartPre= seed; the daemon it starts seeds itself"
-                    .to_owned(),
-            ),
-        };
+    match unit.values("Service", "ExecStartPre").is_empty() {
+        true => Ok(()),
+        false => Err(
+            "the unit has an ExecStartPre=; the daemon it starts seeds the binary directory itself"
+                .to_owned(),
+        ),
     }
-    let (_, state) = start_of(&unit)?;
-    let words = words(&unit, "ExecStartPre")?;
-    let seed = parse_seed(&words)?;
-    if seed.state_dir != state {
-        return Err(format!(
-            "the seed fills {}, and the daemon's state directory is {}",
-            seed.state_dir.display(),
-            state.display()
-        ));
-    }
-    let installed = installed_binary()?;
-    let program = Path::new(&words[0]);
-    if (program != Path::new(&installed)) | (seed.binary != Path::new(&installed)) {
-        return Err(format!(
-            "the seed is run by {} with --binary {}, not by and with the installed {installed}",
-            program.display(),
-            seed.binary.display()
-        ));
-    }
-    Ok(())
 }
 
-/// Catches a first start with nothing to start: a seed in the package unit that fills another
-/// state directory than the daemon's, or that is not the binary the packages install, run with
-/// that binary (another path is not on every host, and would stage something else as this
-/// version).
+/// Catches a unit that seeds before the daemon starts: the binary has no seed verb, and the
+/// daemon it starts seeds the binary directory itself (`hostkeeper_daemon::packaged`), so an
+/// `ExecStartPre=` in either unit is a command that fails at every start or a second seeder of the
+/// same directory.
 #[test]
-fn the_package_units_seed_fills_the_daemons_binary_directory_from_the_installed_binary() {
-    let text = Kind::Package.read();
-    assert_eq!(installed_binary().as_deref(), Ok("/usr/bin/hostkeeper"));
-    assert_eq!(check_seed(Kind::Package, &text), Ok(()));
-    let cases = [
-        (
-            altered(
-                &text,
-                "seed --state-dir /var/lib/updater/state",
-                "seed --state-dir /var/lib/updater/other",
+fn no_unit_runs_a_seed_before_the_daemon() {
+    for kind in Kind::ALL {
+        let text = kind.read();
+        assert_eq!(check_no_pre(&text), Ok(()));
+        let cases = [
+            (
+                altered(
+                    &text,
+                    "ExecStart=",
+                    "ExecStartPre=-/usr/bin/hostkeeper self-update-seed --state-dir /var/lib/updater/state --binary /usr/bin/hostkeeper\nExecStart=",
+                ),
+                "the unit has an ExecStartPre=",
             ),
-            "the seed fills /var/lib/updater/other",
-        ),
-        (
-            altered(
-                &text,
-                "--binary /usr/bin/hostkeeper",
-                "--binary /usr/local/bin/hostkeeper",
+            (
+                altered(
+                    &text,
+                    "ExecStart=",
+                    "ExecStartPre=/usr/bin/true\nExecStart=",
+                ),
+                "the unit has an ExecStartPre=",
             ),
-            "with --binary /usr/local/bin/hostkeeper",
-        ),
-        (
-            altered(
-                &text,
-                "ExecStartPre=-/usr/bin/hostkeeper",
-                "ExecStartPre=-/opt/hostkeeper",
-            ),
-            "the seed is run by /opt/hostkeeper",
-        ),
-        (
-            altered(&text, SEED_LINE, ""),
-            "[Service] has no ExecStartPre=",
-        ),
-    ];
-    refuses(|t: &str| check_seed(Kind::Package, t), &cases);
-}
-
-/// Catches a bootstrap unit that seeds: the daemon it starts seeds the binary directory itself
-/// (`hostkeeper_daemon::packaged`), so an `ExecStartPre=` there is a second seeder of the same
-/// directory, and the package unit built from the wrong file would have no seed.
-#[test]
-fn the_bootstrap_unit_runs_no_seed() {
-    let text = Kind::Bootstrap.read();
-    assert_eq!(check_seed(Kind::Bootstrap, &text), Ok(()));
-    let seeded = altered(&text, "ExecStart=", &format!("{}ExecStart=", SEED_LINE));
-    refuses(
-        |t: &str| check_seed(Kind::Bootstrap, t),
-        &[(seeded, "the bootstrap unit has an ExecStartPre= seed")],
-    );
-    let package = Kind::Package.read();
-    refuses(
-        |t: &str| check_seed(Kind::Bootstrap, t),
-        &[(package, "the bootstrap unit has an ExecStartPre= seed")],
-    );
+        ];
+        refuses(check_no_pre, &cases);
+    }
 }
 
 /// Whether systemd restarts a service of `policy` that exited with `status` by itself, as
@@ -350,9 +297,7 @@ fn each_units_restart_policy_restarts_the_exit_status_of_the_daemon_after_stagin
 }
 
 /// Whether the unit `text` retries a daemon that cannot start for good: it sets no start limit
-/// of its own, so with the drop-in the releases before the hand-over wrote removed (the daemon
-/// removes it at its start) systemd never leaves the unit failed, and it waits one second
-/// between starts.
+/// of its own, so systemd never leaves the unit failed, and it waits one second between starts.
 fn check_retries_for_good(text: &str) -> Result<(), String> {
     let unit = Unit::parse(text)?;
     let interval = unit.single("Unit", "StartLimitIntervalSec")?;
@@ -373,11 +318,9 @@ fn check_retries_for_good(text: &str) -> Result<(), String> {
 /// Catches a unit that leaves the daemon failed: the hand-over has no fallback unit to start the
 /// daemon again after a start limit, so a unit with a start limit of its own (an interval, or a
 /// burst) would stop retrying a daemon that cannot start, and a restart delay other than one
-/// second changes how fast the three tries of a hand-over are spent. The unit is held to the
-/// drop-in's removal by the daemon's own test (`tests/self_units.rs` of `hostkeeper-daemon`).
+/// second changes how fast the three tries of a hand-over are spent.
 #[test]
 fn each_unit_retries_a_daemon_that_cannot_start_for_good_with_no_fallback_unit() {
-    assert_eq!(FALLBACK_UNIT, "hostkeeper-fallback.service");
     assert_eq!(
         Path::new(INSTALLED_UNIT).file_name(),
         Some(MAIN_UNIT.as_ref())

@@ -354,9 +354,7 @@ fn without_watchdog_usec_the_systemd_watchdog_sends_nothing() {
 
 fn daemon_flags(args: &[&str]) -> hostkeeper_daemon::cli::DaemonFlags {
     let all = ["hostkeeper", "daemon"].iter().chain(args);
-    let Command::Daemon(flags) = Cli::parse_from(all).command else {
-        panic!("`hostkeeper daemon` parses as the daemon command");
-    };
+    let Command::Daemon(flags) = Cli::parse_from(all).command;
     flags
 }
 
