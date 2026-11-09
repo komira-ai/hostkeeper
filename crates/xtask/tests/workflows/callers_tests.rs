@@ -19,12 +19,6 @@ on:
       version:
         type: string
         required: true
-      variant:
-        type: choice
-        required: true
-        options:
-          - hello
-          - fail-ready
 permissions: {}
 jobs:
   set-desired:
@@ -37,8 +31,6 @@ jobs:
       service: hello
       version: ${{ needs.release.outputs.version }}
       targets: ${{ needs.release.outputs.targets }}
-      release_index: ${{ needs.release.outputs.release_index }}
-      release_index_digest: ${{ needs.release.outputs.release_index_digest }}
       hostkeeper_commit: <commit>
       hostkeeper_version: <release>
       join_tailnet: ${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID != '' }}
@@ -52,14 +44,12 @@ jobs:
     permissions:
       contents: read
     outputs:
-      version: ${{ steps.index.outputs.version }}
+      version: ${{ steps.version.outputs.version }}
       targets: ${{ steps.targets.outputs.targets }}
-      release_index: ${{ steps.index.outputs.release_index }}
-      release_index_digest: ${{ steps.index.outputs.release_index_digest }}
     steps:
       - id: targets
         run: cargo xtask release targets --service hello --version 1.2.3 --dir d --repo o/r
-      - id: index
+      - id: version
         run: echo
 ";
 
@@ -74,7 +64,7 @@ fn hello() -> String {
     at_client(HELLO)
 }
 
-/// The `uses:` line of [`hello`], line 21.
+/// The `uses:` line of [`hello`], line 15.
 fn uses() -> String {
     at_client(
         "    uses: komira-ai/hostkeeper/.github/workflows/set-desired.yml@<commit> # v<release>\n",
@@ -118,7 +108,7 @@ fn the_jobs_that_call_set_desired_are_exactly_the_listed_callers() {
 }
 
 #[test]
-fn the_hello_proof_run_of_the_repository_is_a_dispatch_of_hello_or_fail_ready() {
+fn the_hello_proof_run_of_the_repository_is_a_dispatch_of_one_release() {
     // Catches: hello-desired.yml deleted, or the real file out of its shape (the lint of every
     // workflow reads it too; this names it).
     let text = workflows()
@@ -162,8 +152,6 @@ fn a_renamed_caller_job_is_refused_and_the_listed_one_is_missing() {
             "hello-desired.yml: job set-desired must pass `service: hello`",
             "hello-desired.yml: job set-desired must pass `version: ${{ needs.release.outputs.version }}`",
             "hello-desired.yml: job set-desired must pass `targets: ${{ needs.release.outputs.targets }}`",
-            "hello-desired.yml: job set-desired must pass `release_index: ${{ needs.release.outputs.release_index }}`",
-            "hello-desired.yml: job set-desired must pass `release_index_digest: ${{ needs.release.outputs.release_index_digest }}`",
         ],
     );
 }
@@ -199,7 +187,7 @@ fn a_local_set_desired_is_refused() {
         &uses(),
         "    uses: ./.github/workflows/set-desired.yml\n",
         &[
-            "line 21: `uses: ./.github/workflows/set-desired.yml` names a local path",
+            "line 15: `uses: ./.github/workflows/set-desired.yml` names a local path",
             "job set-desired calls ./.github/workflows/set-desired.yml, not komira-ai/hostkeeper/.github/workflows/set-desired.yml",
             &format!(
                 "job set-desired must pin set-desired.yml at the CI client's revision {CLIENT_COMMIT}, not `./.github/workflows/set-desired.yml`"
@@ -219,7 +207,7 @@ fn a_set_desired_pinned_to_a_branch_is_refused() {
             "    uses: komira-ai/hostkeeper/.github/workflows/set-desired.yml@main # v<release>\n",
         ),
         &[
-            "line 21: `uses: komira-ai/hostkeeper/.github/workflows/set-desired.yml@main` is not pinned to a 40-digit lowercase commit SHA",
+            "line 15: `uses: komira-ai/hostkeeper/.github/workflows/set-desired.yml@main` is not pinned to a 40-digit lowercase commit SHA",
             &format!(
                 "job set-desired must pin set-desired.yml at the CI client's revision {CLIENT_COMMIT}, not `komira-ai/hostkeeper/.github/workflows/set-desired.yml@main`"
             ),
@@ -391,7 +379,7 @@ fn a_version_comment_other_than_the_client_release_is_refused() {
         )
     };
     let unversioned = format!(
-        "line 21: `uses: komira-ai/hostkeeper/.github/workflows/set-desired.yml@{CLIENT_COMMIT}` has no version comment (`# v1.2.3`) on its line"
+        "line 15: `uses: komira-ai/hostkeeper/.github/workflows/set-desired.yml@{CLIENT_COMMIT}` has no version comment (`# v1.2.3`) on its line"
     );
     // Each comment, and whether the shared rule refuses it too, as no version at all.
     for (got, no_version) in [
@@ -616,7 +604,7 @@ fn a_caller_that_passes_secrets_is_refused() {
         "    with:\n",
         "    secrets: inherit\n    with:\n",
         &[
-            "line 22: `secrets: inherit` hands every secret of the caller on",
+            "line 16: `secrets: inherit` hands every secret of the caller on",
             "job set-desired passes secrets to set-desired.yml",
         ],
     );
@@ -637,7 +625,6 @@ fn a_hello_proof_run_on_another_trigger_is_refused() {
         [
             want,
             "hello-desired.yml: input version must be a required string",
-            "hello-desired.yml: input variant must be a required choice of exactly [\"hello\", \"fail-ready\"]",
         ]
     );
 }
@@ -663,37 +650,25 @@ fn a_version_input_that_is_not_a_required_string_is_refused() {
 }
 
 #[test]
-fn a_variant_input_other_than_the_choice_of_hello_and_fail_ready_is_refused() {
-    let want = &[
-        "hello-desired.yml: input variant must be a required choice of exactly [\"hello\", \"fail-ready\"]",
-    ];
-    // A third value.
+fn a_proof_run_that_offers_the_failing_build_or_another_input_is_refused() {
+    // Catches: the `variant` choice of hello and its failing build put back while the failing
+    // build has no native package (its run would fail at the targets step, or set nothing a
+    // host takes), and any other input beside the version.
+    let variant = "      variant:\n        type: choice\n        required: true\n        options:\n          - hello\n          - fail-ready\n";
+    let version = "        required: true\npermissions: {}\n";
     assert_hello(
-        "          - fail-ready\n",
-        "          - fail-ready\n          - other\n",
-        want,
+        version,
+        &format!("        required: true\n{variant}permissions: {{}}\n"),
+        &[
+            "hello-desired.yml: input variant is not one of [\"version\"]; a proof run sets one release's package",
+        ],
     );
-    // One value missing.
-    assert_hello("          - fail-ready\n", "", want);
-    // The two in the other order: the first is the default a dispatch shows.
     assert_hello(
-        "          - hello\n          - fail-ready\n",
-        "          - fail-ready\n          - hello\n",
-        want,
-    );
-    // Free text instead of a choice.
-    assert_hello("        type: choice\n", "        type: string\n", want);
-    // Not required.
-    assert_hello(
-        "        type: choice\n        required: true\n",
-        "        type: choice\n        required: false\n",
-        want,
-    );
-    // Options that are not a list.
-    assert_hello(
-        "        options:\n          - hello\n          - fail-ready\n",
-        "        options: hello\n",
-        want,
+        version,
+        "        required: true\n      dry_run:\n        type: boolean\npermissions: {}\n",
+        &[
+            "hello-desired.yml: input dry_run is not one of [\"version\"]; a proof run sets one release's package",
+        ],
     );
 }
 
@@ -705,15 +680,10 @@ fn a_hello_proof_run_for_another_service_is_refused() {
 }
 
 #[test]
-fn a_hello_proof_run_that_does_not_set_the_release_jobs_targets_and_index_is_refused() {
+fn a_hello_proof_run_that_does_not_set_the_release_jobs_targets_is_refused() {
     // Catches: hello set without targets, or with a value of each input that no step of the
     // release job checked (the dispatch's own input, another job's output).
-    for input in [
-        "version",
-        "targets",
-        "release_index",
-        "release_index_digest",
-    ] {
+    for input in ["version", "targets"] {
         let line = format!("      {input}: ${{{{ needs.release.outputs.{input} }}}}\n");
         let want = format!(
             "hello-desired.yml: job set-desired must pass `{input}: ${{{{ needs.release.outputs.{input} }}}}`"
@@ -723,6 +693,23 @@ fn a_hello_proof_run_that_does_not_set_the_release_jobs_targets_and_index_is_ref
             &line,
             &format!("      {input}: ${{{{ inputs.{input} }}}}\n"),
             &[&want],
+        );
+    }
+}
+
+#[test]
+fn a_hello_proof_run_that_passes_an_index_is_refused() {
+    // Catches: an index or its digest given beside hello's native targets, which the
+    // coordinator would hold the targets to (an index of archives they no longer list).
+    for input in ["release_index", "release_index_digest"] {
+        assert_hello(
+            "      service: hello\n",
+            &format!(
+                "      service: hello\n      {input}: ${{{{ needs.release.outputs.{input} }}}}\n"
+            ),
+            &[&format!(
+                "hello-desired.yml: job set-desired passes {input}; a release is set with native entries alone, and no index"
+            )],
         );
     }
 }
@@ -742,25 +729,32 @@ fn a_hello_proof_run_that_sets_one_package_digest_is_refused() {
 
 #[test]
 fn a_hello_release_job_whose_outputs_are_not_its_steps_is_refused() {
-    // Catches: the targets or the index passed on from a value the verb did not write, and an
-    // output dropped.
+    // Catches: the targets passed on from a value the verb did not write, an output dropped, and
+    // an index written out again.
     let want = |got: &str| {
         format!(
-            "hello-desired.yml: job release outputs are {got}, not [(\"release_index\", \"${{{{ steps.index.outputs.release_index }}}}\"), (\"release_index_digest\", \"${{{{ steps.index.outputs.release_index_digest }}}}\"), (\"targets\", \"${{{{ steps.targets.outputs.targets }}}}\"), (\"version\", \"${{{{ steps.index.outputs.version }}}}\")]"
+            "hello-desired.yml: job release outputs are {got}, not [(\"targets\", \"${{{{ steps.targets.outputs.targets }}}}\"), (\"version\", \"${{{{ steps.version.outputs.version }}}}\")]"
         )
     };
     assert_hello(
         "      targets: ${{ steps.targets.outputs.targets }}\n",
         "      targets: ${{ inputs.targets }}\n",
         &[&want(
-            "[(\"release_index\", \"${{ steps.index.outputs.release_index }}\"), (\"release_index_digest\", \"${{ steps.index.outputs.release_index_digest }}\"), (\"targets\", \"${{ inputs.targets }}\"), (\"version\", \"${{ steps.index.outputs.version }}\")]",
+            "[(\"targets\", \"${{ inputs.targets }}\"), (\"version\", \"${{ steps.version.outputs.version }}\")]",
         )],
     );
     assert_hello(
-        "      version: ${{ steps.index.outputs.version }}\n",
+        "      version: ${{ steps.version.outputs.version }}\n",
         "",
         &[&want(
-            "[(\"release_index\", \"${{ steps.index.outputs.release_index }}\"), (\"release_index_digest\", \"${{ steps.index.outputs.release_index_digest }}\"), (\"targets\", \"${{ steps.targets.outputs.targets }}\")]",
+            "[(\"targets\", \"${{ steps.targets.outputs.targets }}\")]",
+        )],
+    );
+    assert_hello(
+        "      version: ${{ steps.version.outputs.version }}\n",
+        "      version: ${{ steps.version.outputs.version }}\n      release_index: ${{ steps.index.outputs.release_index }}\n",
+        &[&want(
+            "[(\"release_index\", \"${{ steps.index.outputs.release_index }}\"), (\"targets\", \"${{ steps.targets.outputs.targets }}\"), (\"version\", \"${{ steps.version.outputs.version }}\")]",
         )],
     );
 }

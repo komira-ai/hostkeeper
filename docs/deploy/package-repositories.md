@@ -111,24 +111,21 @@ packages (item A23) are the daemon's `hostkeeper_<version>_<arch>.deb` and the i
 `hostkeeper-<version>-macos-arm64.pkg`, the packages a host is set up from.
 
 `cargo xtask release targets` (`--service hostkeeper`, the default, and `--service hello` and
-`--service mdm`) lists each platform's native entry before its archive one, both naming the channel
-`komira-testing`:
-
-- on Linux an `apt` entry of the host's repository entry `komira-testing`, the `testing` suite above
-  (`/etc/hostkeeper/repositories/komira-testing.sources`, placed by host setup, which checks the
-  directory with `hostkeeper check-repositories` before and after it places it), at the release's
-  version, pinned by the `.deb`'s SHA-256;
-- on a Mac a `macos-pkg` entry at `hostkeeper/<version>/<service>-<version>-macos-arm64.pkg` in the
-  store `komira-testing` of the Mac's `/etc/hostkeeper/stores.toml`, an `https` store rooted at
-  `https://packages.komira.ai/pkg/`; its package is the `.pkg`'s identifier, for hostkeeper's
-  installer the daemon's launchd label `dev.hostkeeper.hostkeeper`.
+`--service mdm`) lists, for each Linux platform, the native entry alone (docs/design/packages-native.md,
+section 10.5, A24): an `apt` entry of the host's repository entry `komira-testing`, the `testing` suite
+above (`/etc/hostkeeper/repositories/komira-testing.sources`, placed by host setup, which checks the
+directory with `hostkeeper check-repositories` before and after it places it), at the release's
+version, pinned by the `.deb`'s SHA-256. It writes no `hostkeeper-archive` entry, and no list for macOS
+while no daemon announces `macos-pkg`: the release's `.pkg`s are still published to the store, and a
+Mac (none is enrolled) would show `no_target`. hello's failing build is refused by name: it has no
+package here.
 
 hostkeeper's entries carry the floor of its archive (`min_hostkeeper`, the oldest daemon that reads
 the release) and no hook: its daemon updates itself through its package with built-in steps
-(docs/design/packages-native.md, section 10.4). A host whose daemon does not announce the native
-installer, or has no such entry or store, is picked the archive entry, as before. A host picked an
-entry before the publish below has put its package into `testing` defers it (`not_in_repository`,
-or a failed fetch from the store) and takes it once it is there.
+(docs/design/packages-native.md, section 10.4). A host whose daemon does not announce `apt`, or has no
+such entry, is ordered nothing (`installer_dropped`); stage 9's counts are zero before such a release
+is set (docs/operations/move-to-native.md). A host picked an entry before the publish below has put its
+package into `testing` defers it (`not_in_repository`) and takes it once it is there.
 
 ## What the release workflow does
 

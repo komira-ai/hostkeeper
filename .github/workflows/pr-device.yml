@@ -214,8 +214,8 @@ jobs:
       # and checks its packages' attestations with it, offline, against a test trust root.
       GH_VERSION: 2.103.3
       GH_SHA256: d700207eae9ae98fe2b89535c2c087c07823d4628c56364695a5a07ef311c062
-      PREVIOUS_RELEASE_URL: https://github.com/komira-ai/hostkeeper/releases/download/v0.1.194/hostkeeper-0.1.194-macos-arm64.tar.gz
-      PREVIOUS_RELEASE_SHA256: aedad067db46af7ed065683ab6dd7c46b87fb4558db21b31082003394654ca6b
+      PREVIOUS_RELEASE_URL: https://github.com/komira-ai/hostkeeper/releases/download/v0.1.218/hostkeeper-0.1.218-macos-arm64.tar.gz
+      PREVIOUS_RELEASE_SHA256: 5f2a333b3c180f94538ed3fee80e7941f6c33c0e2d42684cf3d367554cebcce7
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -330,8 +330,8 @@ jobs:
     env:
       GH_VERSION: 2.102.1
       GH_SHA256: 77b9e297e94c50336823d0f84de7ef1be60cba704601fa0d98f129f47a94987b
-      PREVIOUS_RELEASE_URL: https://github.com/komira-ai/hostkeeper/releases/download/v0.1.194/hostkeeper-0.1.194-linux-x86_64.tar.gz
-      PREVIOUS_RELEASE_SHA256: eefc00d78d22f49a019599885ab4295a462df9c519288028713a5fb08985862e
+      PREVIOUS_RELEASE_URL: https://github.com/komira-ai/hostkeeper/releases/download/v0.1.218/hostkeeper-0.1.218-linux-x86_64.tar.gz
+      PREVIOUS_RELEASE_SHA256: f6a483efffc178273d22a49d3412aae4596162a476608c89cf7d2d380ae6e7ea
       NFPM_VERSION: 2.48.0
       NFPM_SHA256: 6d7f9a28b2f397934403950fcbba83f598b08d02edbe79a0815b3b4897341750
     steps:

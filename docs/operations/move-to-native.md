@@ -250,11 +250,14 @@ does not hold its convergence. A host either query names is brought up, or remov
 and installed afresh ([network-install.md](network-install.md)), so that no host is left with a
 daemon that nothing can update. The pull request of stage 9 (A24) shows both queries' output.
 
-**The work.** Every release is set with native entries alone (A24). Once A24's release has
+**The work.** Every release is set with native entries alone (A24): per Linux platform the
+`.deb`'s `apt` entry, and no list for macOS while no daemon announces `macos-pkg` (no Mac is
+enrolled; one would show `no_target`). `release.yml` no longer waits for the channel. Once A24's release has
 converged on every host, stop the channel's sync, remove `--release-channel` from the
 coordinator's deployment, and delete the channel's tree (packages-native.md section 10.5).
 
-**Back out**: set a release with archive entries again; the code is still there.
+**Back out**: set a release with archive entries again; the code is still there (the
+`cargo xtask release targets` of a commit before A24 writes them, with the release's index).
 
 ## Stage 10: deletion
 

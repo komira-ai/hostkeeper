@@ -1,5 +1,5 @@
 //! The files of a package's release that `cargo xtask release targets` reads, made for the run
-//! tests of the workflows' jobs ([`super::channel_run_tests`], [`super::hello_run_tests`]): an
+//! tests of the workflows' jobs ([`super::targets_run_tests`], [`super::hello_run_tests`]): an
 //! archive per platform holding only its `manifest.toml`, each archive's bundle (unsigned, its
 //! statement listing the archive's SHA-256), and the canonical release index of the archives;
 //! for hostkeeper and hello, their native packages ([`native_files`]): a `.deb` per Linux
@@ -173,92 +173,43 @@ pub fn package_files(service: &str, version: &str, index_name: &str) -> BTreeMap
     files
 }
 
-/// The targets `release targets` must write for `files` (from [`package_files`] of `service` at
-/// the package version `version`, and with `native` [`native_files`] too), released under the tag
-/// `v<release>`: per platform, with `native` the native entry first (an `apt` entry of the
-/// repository `komira-testing` pinned by the `.deb`'s SHA-256, or a `macos-pkg` entry of the
-/// store `komira-testing` at the installers' testing path), its manifest the archive's; then one
-/// `hostkeeper-archive` entry, the channel's path of each file first, then its release asset,
-/// its size and SHA-256, its bundle's, and the manifest's `min_hostkeeper`. As [`sorted`] JSON
+/// The targets `release targets` must write for `files` (from [`package_files`] of `service` and
+/// [`native_files`]) of the release `release`: per Linux platform, the native entry alone (an
+/// `apt` entry of the repository `komira-testing` pinned by the `.deb`'s SHA-256), its manifest
+/// the archive's; no list for macOS, while no daemon announces `macos-pkg`. As [`sorted`] JSON
 /// text.
-pub fn targets(
-    service: &str,
-    version: &str,
-    release: &str,
-    files: &BTreeMap<String, Vec<u8>>,
-    native: bool,
-) -> String {
-    let asset = format!("{REPO}/releases/download/v{release}");
-    let locations = |name: &str| {
-        json!([
-            {"store": "channel", "locator": format!("{service}/{version}/{name}")},
-            {"store": "github", "locator": format!("{asset}/{name}")},
-        ])
-    };
+pub fn targets(service: &str, release: &str, files: &BTreeMap<String, Vec<u8>>) -> String {
     let mut lists = serde_json::Map::new();
-    for platform in Platform::ALL {
-        let name = archive_name(service, version, platform);
-        let attestation = format!("{name}.sigstore.json");
-        let entry = json!({
-            "installer": "hostkeeper-archive",
-            "locations": locations(&name),
-            "digest": sha256(&files[&name]),
-            "bytes": files[&name].len().to_string(),
-            "attestation": {
-                "digest": sha256(&files[&attestation]),
-                "bytes": files[&attestation].len().to_string(),
-                "locations": locations(&attestation),
-            },
-            "manifest": {"minHostkeeper": FLOOR},
-        });
-        let mut entries = Vec::new();
-        if native {
-            entries.push(native_entry(service, release, platform, files));
-        }
-        entries.push(entry);
+    for platform in [Platform::LinuxArm64, Platform::LinuxX86_64] {
+        let entries = [native_entry(service, release, platform, files)];
         lists.insert(platform.to_string(), json!({"entries": entries}));
     }
     sorted(Value::Object(lists)).to_string()
 }
 
-/// The native entry `release targets` must write for `service`'s native package of `files` at
-/// the release `release` on `platform`.
+/// The native entry `release targets` must write for `service`'s `.deb` of `files` at the release
+/// `release` on the Linux `platform`.
 fn native_entry(
     service: &str,
     release: &str,
     platform: Platform,
     files: &BTreeMap<String, Vec<u8>>,
 ) -> Value {
-    let name = native_name(service, release, platform);
-    let bytes = &files[&name];
-    let package = match platform {
-        Platform::MacosArm64 => format!("dev.hostkeeper.{service}"),
-        _ => service.to_owned(),
-    };
-    let manifest = json!({
-        "package": package,
-        "hook": {
-            "timeoutSecs": {"cutover": "60", "verify": "30", "rollback": "60", "cleanup": "30"},
-            "verifyDeadlineSecs": "120",
+    let bytes = &files[&native_name(service, release, platform)];
+    json!({
+        "installer": "apt",
+        "digest": sha256(bytes),
+        "manifest": {
+            "package": service,
+            "hook": {
+                "timeoutSecs": {"cutover": "60", "verify": "30", "rollback": "60", "cleanup": "30"},
+                "verifyDeadlineSecs": "120",
+            },
+            "run": [run_unit(service, platform)],
+            "minHostkeeper": FLOOR,
+            "installerBounds": {"stageSecs": "600", "activateSecs": "300", "removeSecs": "300"},
         },
-        "run": [run_unit(service, platform)],
-        "minHostkeeper": FLOOR,
-        "installerBounds": {"stageSecs": "600", "activateSecs": "300", "removeSecs": "300"},
-    });
-    match platform {
-        Platform::MacosArm64 => json!({
-            "installer": "macos-pkg",
-            "locations": [{"store": "komira-testing", "locator": format!("hostkeeper/{release}/{name}")}],
-            "digest": sha256(bytes),
-            "bytes": bytes.len().to_string(),
-            "manifest": manifest,
-        }),
-        _ => json!({
-            "installer": "apt",
-            "digest": sha256(bytes),
-            "manifest": manifest,
-            "repository": "komira-testing",
-            "packageVersion": release,
-        }),
-    }
+        "repository": "komira-testing",
+        "packageVersion": release,
+    })
 }

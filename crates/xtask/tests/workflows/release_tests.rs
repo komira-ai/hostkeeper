@@ -561,7 +561,7 @@ fn release_workflow_keeps_its_jobs_and_checks_the_binary() {
     assert_refused(
         "release.yml",
         &text,
-        "release.yml: jobs are [\"channel\", \"check-apt\", \"check-pkg\", \"check-rpm\", \"image\", \"newest\", \"notify\", \"plan\"",
+        "release.yml: jobs are [\"check-apt\", \"check-pkg\", \"check-rpm\", \"image\", \"newest\", \"notify\", \"plan\"",
     );
     for program in ["hostkeeper", "hostkeeper-coordinator", "hostkeeper-mdm"] {
         let check = format!(

@@ -23,14 +23,17 @@
 //!   is set, so a coordinator served only on the tailnet is reachable from every caller;
 //! - a job of [`CALLERS`] for the file is missing, or does not call the CI client;
 //! - it is the file of a proof run, [`HELLO_RUN`] or [`TEMPLATE_RUN`], and runs on anything but
-//!   `workflow_dispatch`, lacks the input `version` (a required string) or, for hello, `variant`
-//!   (a required choice of exactly [`HELLO_VARIANTS`]), or its caller does not pass the run's
+//!   `workflow_dispatch`, lacks the input `version` (a required string) or has an input not in
+//!   [`PROOF_INPUTS`] (hello's failing build is not offered), or its caller does not pass the run's
 //!   `service`, or a job of it lacks the exact `if:` [`HELLO_IF`] (a dispatch from another branch
 //!   runs nothing);
-//! - it is the file of a proof run and its caller does not pass each of [`HELLO_FROM_RELEASE`]
-//!   from the output of that name of the run's release job, or passes a `package_digest` (one
-//!   platform's package for every host); or the `outputs` of the release job are not exactly
-//!   [`HELLO_RELEASE_OUTPUTS`]; or its step `targets` does not run the run's targets command.
+//! - it is the file of a proof run and its caller does not pass each of the run's inputs from
+//!   its release job ([`HELLO_FROM_RELEASE`] for hello: the version and the targets alone;
+//!   [`TEMPLATE_FROM_RELEASE`] for the template) from the output of that name, passes an input
+//!   of [`INDEX_INPUTS`] the run does not list (hello sets native entries alone, with no index),
+//!   or passes a `package_digest` (one platform's package for every host); or the `outputs` of
+//!   the release job are not exactly the run's ([`HELLO_RELEASE_OUTPUTS`],
+//!   [`TEMPLATE_RELEASE_OUTPUTS`]); or its step `targets` does not run the run's targets command.
 //!
 //! The caller template a service of another repository copies, the one `yaml` block of
 //! [`template_doc::DOC`], is linted under that file name ([`super::template_doc`]): [`TEMPLATE`]
@@ -97,22 +100,36 @@ pub const HELLO_FILE: &str = "hello-desired.yml";
 pub const HELLO_JOB: &str = "set-desired";
 /// Its `if:`: a dispatch from main only.
 pub const HELLO_IF: &str = "${{ github.ref == 'refs/heads/main' }}";
-/// The values of its input `variant`, in order: the build that passes, and the one whose
-/// `/readyz` answers 503 (docs/hello.md, step 4).
-pub const HELLO_VARIANTS: [&str; 2] = ["hello", "fail-ready"];
+/// The inputs of a proof run, exactly: the release whose package it sets. hello's failing build
+/// is not offered: it has no native package, and a release is set with native entries alone
+/// (docs/hello.md, step 4, suspended).
+pub const PROOF_INPUTS: [&str; 1] = ["version"];
 /// Its job that reads the release and writes the targets.
 pub const HELLO_RELEASE_JOB: &str = "release";
 /// The inputs [`HELLO_JOB`] passes from the outputs of [`HELLO_RELEASE_JOB`], each from the
-/// output of its own name: every host is ordered its own platform's entry.
-pub const HELLO_FROM_RELEASE: [&str; 4] = [
+/// output of its own name: the version and its targets alone, native entries every host is
+/// ordered its own platform's of (docs/design/packages-native.md section 10.5, A24).
+pub const HELLO_FROM_RELEASE: [&str; 2] = ["version", "targets"];
+/// The `outputs` of [`HELLO_RELEASE_JOB`], exactly, sorted by name: the targets from the step
+/// that runs [`HELLO_TARGETS_RUN`], the version from the step `version`.
+pub const HELLO_RELEASE_OUTPUTS: [(&str, &str); 2] = [
+    ("targets", "${{ steps.targets.outputs.targets }}"),
+    ("version", "${{ steps.version.outputs.version }}"),
+];
+/// The inputs of the CI client that carry a release index. hello's caller passes none of them:
+/// a release is set with native entries alone, and no index.
+pub const INDEX_INPUTS: [&str; 2] = ["release_index", "release_index_digest"];
+/// The inputs the caller template passes from the outputs of its release job: a service of
+/// another repository still ships archives, and gives the index with its targets so that a
+/// daemon before targets is ordered its archive (docs/deploy/service-caller.md).
+pub const TEMPLATE_FROM_RELEASE: [&str; 4] = [
     "version",
     "targets",
     "release_index",
     "release_index_digest",
 ];
-/// The `outputs` of [`HELLO_RELEASE_JOB`], exactly, sorted by name: the targets from the step
-/// that runs [`HELLO_TARGETS_RUN`], the rest from the step that reads the index.
-pub const HELLO_RELEASE_OUTPUTS: [(&str, &str); 4] = [
+/// The `outputs` of the template's release job, exactly, sorted by name.
+pub const TEMPLATE_RELEASE_OUTPUTS: [(&str, &str); 4] = [
     ("release_index", "${{ steps.index.outputs.release_index }}"),
     (
         "release_index_digest",
@@ -136,10 +153,13 @@ pub struct Proof {
     pub release_job: &'static str,
     /// The `service` its caller passes.
     pub service: &'static str,
-    /// The values of its input `variant`, in order; none: it has no such input to check.
-    pub variants: &'static [&'static str],
     /// The `run:` of the step `targets` of the release job, before its arguments.
     pub targets_run: &'static str,
+    /// The inputs its caller passes from the outputs of the release job, each from the output
+    /// of its own name; an input of [`INDEX_INPUTS`] not among them may not be passed at all.
+    pub from_release: &'static [&'static str],
+    /// The `outputs` of its release job, exactly, sorted by name.
+    pub release_outputs: &'static [(&'static str, &'static str)],
 }
 
 /// The hello proof run.
@@ -148,8 +168,9 @@ pub const HELLO_RUN: Proof = Proof {
     job: HELLO_JOB,
     release_job: HELLO_RELEASE_JOB,
     service: "hello",
-    variants: &HELLO_VARIANTS,
     targets_run: HELLO_TARGETS_RUN,
+    from_release: &HELLO_FROM_RELEASE,
+    release_outputs: &HELLO_RELEASE_OUTPUTS,
 };
 
 /// The caller template: the same shape for the placeholder service `my-service`, whose targets
@@ -159,8 +180,9 @@ pub const TEMPLATE_RUN: Proof = Proof {
     job: "set-desired",
     release_job: "release",
     service: "my-service",
-    variants: &[],
     targets_run: "cargo xtask release targets ",
+    from_release: &TEMPLATE_FROM_RELEASE,
+    release_outputs: &TEMPLATE_RELEASE_OUTPUTS,
 };
 
 /// The caller entry of the template: not a job of this repository, so not in [`CALLERS`], but
@@ -361,18 +383,11 @@ fn proof_problems(run: &Proof, doc: &Node) -> Vec<String> {
     if text_of(version, "type") != Some("string") || text_of(version, "required") != Some("true") {
         problems.push(format!("{file}: input version must be a required string"));
     }
-    if !run.variants.is_empty() {
-        let variant = input("variant");
-        let options: Vec<&str> = match variant.and_then(|v| entry(v, "options")).map(|o| &o.value) {
-            Some(Value::Seq(items)) => items.iter().filter_map(Node::as_str).collect(),
-            _ => Vec::new(),
-        };
-        let choice = text_of(variant, "type") == Some("choice")
-            && text_of(variant, "required") == Some("true");
-        if !choice || options != run.variants {
+    for (name, _) in inputs.map_or(&[][..], entries) {
+        let name = name.as_str().unwrap_or_default();
+        if !PROOF_INPUTS.contains(&name) {
             problems.push(format!(
-                "{file}: input variant must be a required choice of exactly {:?}",
-                run.variants
+                "{file}: input {name} is not one of {PROOF_INPUTS:?}; a proof run sets one release's package"
             ));
         }
     }
@@ -384,11 +399,22 @@ fn proof_problems(run: &Proof, doc: &Node) -> Vec<String> {
             run.job, run.service
         ));
     }
-    for input in HELLO_FROM_RELEASE {
+    for input in run.from_release {
         let want = format!("${{{{ needs.{}.outputs.{input} }}}}", run.release_job);
         if text_of(with, input) != Some(want.as_str()) {
             problems.push(format!(
                 "{file}: job {} must pass `{input}: {want}`",
+                run.job
+            ));
+        }
+    }
+    for input in INDEX_INPUTS
+        .into_iter()
+        .filter(|i| !run.from_release.contains(i))
+    {
+        if with.and_then(|w| entry(w, input)).is_some() {
+            problems.push(format!(
+                "{file}: job {} passes {input}; a release is set with native entries alone, and no index",
                 run.job
             ));
         }
@@ -403,8 +429,8 @@ fn proof_problems(run: &Proof, doc: &Node) -> Vec<String> {
     problems
 }
 
-/// What the release job of the proof run `run` must be: its outputs exactly
-/// [`HELLO_RELEASE_OUTPUTS`], and its step `targets` running the run's targets command.
+/// What the release job of the proof run `run` must be: its outputs exactly the run's
+/// `release_outputs`, and its step `targets` running the run's targets command.
 fn release_job_problems(run: &Proof, doc: &Node) -> Vec<String> {
     let (file, release_job) = (run.file, run.release_job);
     let mut problems = Vec::new();
@@ -423,9 +449,10 @@ fn release_job_problems(run: &Proof, doc: &Node) -> Vec<String> {
         })
         .collect();
     outputs.sort_unstable();
-    if outputs != HELLO_RELEASE_OUTPUTS {
+    if outputs != run.release_outputs {
         problems.push(format!(
-            "{file}: job {release_job} outputs are {outputs:?}, not {HELLO_RELEASE_OUTPUTS:?}"
+            "{file}: job {release_job} outputs are {outputs:?}, not {:?}",
+            run.release_outputs
         ));
     }
     let steps = match job.and_then(|j| entry(j, "steps")).map(|s| &s.value) {

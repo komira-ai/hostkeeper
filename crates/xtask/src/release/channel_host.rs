@@ -1,5 +1,7 @@
-//! `release channel-host`: the host of the release channel's base URL, the name or address the
-//! channel job of `release.yml` pings when it joins the tailnet before it reads the channel.
+//! `release channel-host`: the host of the release channel's base URL, the name or address a job
+//! pings when it joins the tailnet before it reads the channel. `release.yml`'s channel job ran
+//! it until releases were set with native entries alone (packages-native.md section 10.5); no
+//! workflow runs it now, and it goes with the channel's other verbs (A28).
 //!
 //! The channel is given as the flag `--channel`, `https://<host>[:<port>][/<path>]` (the
 //! repository variable `HOSTKEEPER_RELEASE_CHANNEL`). The host is a DNS name or an IPv4

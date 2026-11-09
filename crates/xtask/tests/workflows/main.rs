@@ -14,8 +14,7 @@ mod advisories;
 mod both_platforms_tests;
 mod callers;
 mod callers_tests;
-mod channel_join_tests;
-mod channel_run_tests;
+
 mod ci;
 mod ci_tests;
 mod desired;
@@ -68,6 +67,8 @@ mod set_desired_outputs_tests;
 mod set_desired_tag;
 mod set_desired_tag_tests;
 mod set_desired_tests;
+mod tailnet_join_tests;
+mod targets_run_tests;
 mod template_doc;
 mod template_doc_tests;
 #[path = "../../src/testdir.rs"]

@@ -215,5 +215,7 @@ Two ways to run it, both in [`channel-sync/`](channel-sync/) and both reading th
 2. `channel-sync` stages it into the channel (within one timer period).
 3. Only then is the desired version set ([ci-client.md](ci-client.md)). A version set before the
    channel holds it leaves every host failing its fetch (`fetch_failed`) and retrying until it
-   arrives. For hostkeeper's own releases, `release.yml` waits for the channel to serve the
-   release and then sets it ([Deploying hostkeeper from GitHub Actions](github-actions.md)).
+   arrives. hostkeeper's own releases (hostkeeper, hello and mdm) are set with native entries
+   alone and no index, so no host fetches them from the channel and `release.yml` does not wait
+   for it ([Deploying hostkeeper from GitHub Actions](github-actions.md);
+   [packages-native.md](../design/packages-native.md), section 10.5).
