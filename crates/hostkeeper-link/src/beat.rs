@@ -20,6 +20,7 @@ pub use hostkeeper_proto::MAX_SERVICES_PER_HEARTBEAT;
 use serde_json::{Map, Value, json};
 
 use crate::order::{DeferredReport, OrderResult};
+use crate::ports::Drift;
 
 /// The most bytes of a heartbeat: its JSON on the JSON route, its encoded message on the gRPC one.
 pub const MAX_HEARTBEAT_BYTES: usize = 16 * 1024;
@@ -234,12 +235,16 @@ pub struct ServiceFacts {
     /// `hostkeeper-archive`, and for a service with no step record. Sent as `installer` on the
     /// gRPC route only, and counted toward the bound on both.
     pub installer: Option<String>,
+    /// The drift the installer found at this heartbeat; none when it found none. Sent over gRPC
+    /// only (`ServiceBeat.drift`): the JSON route is frozen and has no field for it, but the bound
+    /// counts it on both, as it counts the installers.
+    pub drift: Option<Drift>,
 }
 
 impl ServiceFacts {
     /// The facts as JSON, with the wire's names.
     pub fn to_json(&self) -> Value {
-        json!({
+        let mut facts = json!({
             "name": self.name.as_str(),
             "version": self.version.as_str(),
             "health": self.health.as_str(),
@@ -250,7 +255,14 @@ impl ServiceFacts {
             "observed": self.observed.as_ref().map(Observed::to_json),
             "record_try": self.record_try,
             "installer": self.installer,
-        })
+        });
+        if let (Some(drift), Some(map)) = (&self.drift, facts.as_object_mut()) {
+            map.insert(
+                "drift".to_owned(),
+                json!({ "found": drift.found, "recorded": drift.recorded }),
+            );
+        }
+        facts
     }
 }
 

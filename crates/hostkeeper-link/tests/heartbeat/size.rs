@@ -25,6 +25,7 @@ fn required(name: &str, detail_len: usize) -> ServiceFacts {
         observed: None,
         record_try: None,
         installer: None,
+        drift: None,
     }
 }
 
@@ -263,5 +264,33 @@ fn installers_count_toward_the_bound() {
     crowded.installers = vec!["i".repeat(MAX_HEARTBEAT_BYTES)];
     let counted = crowded.encoded_len();
     assert_eq!(counted, plain.encoded_len() + MAX_HEARTBEAT_BYTES + 18);
+    assert_eq!(fit(crowded), Err(Oversize::Bytes { len: counted }));
+}
+
+/// Proves a service's drift counts toward the bound: a drift adds the bytes of its strings, none
+/// adds nothing, and a heartbeat whose only excess is a drift is refused with the length it has
+/// with it (the drift is not one of the facts dropped to fit).
+///
+/// Catches: a drift sent on the gRPC route that the bound never measured, so a heartbeat over
+/// the coordinator's limit leaves the host.
+#[test]
+fn a_drift_counts_toward_the_bound() {
+    use hostkeeper_link::Drift;
+    let plain = beat(vec![required("web", 0)]);
+    let mut drifting = plain.clone();
+    drifting.services[0].drift = Some(Drift {
+        found: Some("2.0".to_owned()),
+        recorded: None,
+    });
+    assert_eq!(
+        drifting.encoded_len(),
+        plain.encoded_len() + r#","drift":{"found":"2.0","recorded":null}"#.len()
+    );
+    let mut crowded = plain.clone();
+    crowded.services[0].drift = Some(Drift {
+        found: Some("f".repeat(MAX_HEARTBEAT_BYTES)),
+        recorded: None,
+    });
+    let counted = crowded.encoded_len();
     assert_eq!(fit(crowded), Err(Oversize::Bytes { len: counted }));
 }
