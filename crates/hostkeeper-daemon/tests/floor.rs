@@ -13,7 +13,7 @@ use std::sync::atomic::AtomicU64;
 use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_daemon::selfupdate::{
-    Judgement, LEGACY_FLOOR, REASON_PROTOCOL_UNSUPPORTED, RELEASE_BINARY, binary_dir,
+    APT_RELEASE_BINARY, Judgement, LEGACY_FLOOR, REASON_PROTOCOL_UNSUPPORTED, binary_dir,
     builtin_steps, judge,
 };
 use hostkeeper_daemon::testing::manifest;
@@ -60,7 +60,8 @@ impl Host {
         );
         assert!(text.contains(&format!("min_hostkeeper = \"{floor}\"")));
         let dir = self.s.rig.store.add(HK, version, &text);
-        let binary = dir.join(RELEASE_BINARY);
+        let binary = dir.join(APT_RELEASE_BINARY);
+        fs::create_dir_all(binary.parent().expect("a bin directory")).expect("the directory");
         fs::write(&binary, format!("#!hostkeeper {version}\n")).expect("the binary");
         fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).expect("its mode");
     }

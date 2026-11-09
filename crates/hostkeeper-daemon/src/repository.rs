@@ -39,12 +39,15 @@ use hostkeeper_install::repository::{
 use hostkeeper_placed::{Fs, InstalledEntry, Placer, Roots, UnitControl};
 use hostkeeper_proto::hostkeeper::release::v1::Target;
 use hostkeeper_release::Installer;
-use hostkeeper_steps::{Clock, StepExit, StepLauncher, SwitchError, UpdateOrder};
-use hostkeeper_unpack::{FillError, FillOrder, HostFs, Owner, stage_filled};
+use hostkeeper_steps::{Clock, Staged, StepExit, StepLauncher, SwitchError, UpdateOrder};
+use hostkeeper_unpack::{
+    FillError, FillOrder, HostFs, Owner, REASON_ARTIFACT_CHANGED, REASON_BAD_ARCHIVE,
+    REASON_DAEMON_TOO_OLD, REASON_DIGEST_MISMATCH, REASON_IO_ERROR, REASON_MANIFEST_MISMATCH,
+    REASON_NO_SPACE, REASON_RESERVED_VERSION, REASON_VERIFY_UNAVAILABLE, REASON_VERSION_TOO_LONG,
+    UnpackError, stage_filled,
+};
 
 use crate::executor::Reply;
-use crate::packages::VersionDir;
-use crate::real_packages::{self, refusal_of};
 use crate::refusal::Refusal;
 use crate::target::{self, TargetError};
 
@@ -309,6 +312,32 @@ pub fn exit_of(failure: &Failure) -> StepExit {
     }
 }
 
+/// The reason token of a failure of the stage's own unpack steps, and the refusal it is
+/// reported as.
+const UNPACK_TOKENS: &[(&str, Refusal)] = &[
+    (REASON_BAD_ARCHIVE, Refusal::BadArchive),
+    (REASON_DIGEST_MISMATCH, Refusal::DigestMismatch),
+    (REASON_MANIFEST_MISMATCH, Refusal::ManifestMismatch),
+    (REASON_DAEMON_TOO_OLD, Refusal::DaemonTooOld),
+    (REASON_NO_SPACE, Refusal::NoSpace),
+    (REASON_ARTIFACT_CHANGED, Refusal::ArtifactChanged),
+    (REASON_RESERVED_VERSION, Refusal::ReservedVersion),
+    (REASON_VERSION_TOO_LONG, Refusal::VersionTooLong),
+    (REASON_VERIFY_UNAVAILABLE, Refusal::VerifyUnavailable),
+    (REASON_IO_ERROR, Refusal::PackageIoError),
+];
+
+/// The refusal of a failure of the staging directory's own steps (the version's name, the seal
+/// of one already on the host, the disk): the unpack's reason token as the closed set spells it,
+/// `package_failed` for a token this table does not know.
+pub fn unpack_refusal(error: &UnpackError) -> Refusal {
+    let (_, _, token) = error.outcome();
+    UNPACK_TOKENS
+        .iter()
+        .find(|(known, _)| *known == token)
+        .map_or(Refusal::PackageFailed, |(_, refusal)| *refusal)
+}
+
 /// The switch's error for a step's failure: a failure of the host's files is tried again; any
 /// other ends the step with its exit ([`exit_of`]).
 pub fn switch_error(failure: Failure) -> SwitchError {
@@ -380,7 +409,7 @@ impl Repository {
         service: &ServiceName,
         version: &Version,
         entry: &Target,
-    ) -> Result<VersionDir, Reply> {
+    ) -> Result<Staged, Reply> {
         let order = self
             .order(backend, service, version, entry)
             .map_err(|failure| self.stage_failed(service, &failure))?;
@@ -408,10 +437,7 @@ impl Repository {
             .map_err(|error| Reply::refused(Refusal::PackageIoError, error))?;
         let filled = stage_filled(&fill_order, &packages, &mut same, &mut fill).map_err(
             |error| match error {
-                FillError::Unpack(error) => {
-                    let refused = refusal_of(real_packages::Failure::Unpack(&error));
-                    Reply::refused(refused.refusal, refused.detail)
-                }
+                FillError::Unpack(error) => Reply::refused(unpack_refusal(&error), error),
                 FillError::Fill(StageFailure::Installer(failure)) => {
                     self.stage_failed(service, &failure)
                 }
@@ -428,9 +454,7 @@ impl Repository {
                 }
             },
         )?;
-        hostkeeper_steps::Staged::seal(&filled.dir)
-            .map(VersionDir::new)
-            .map_err(|error| Reply::refused(Refusal::ReleaseUnreadable, error))
+        Staged::seal(&filled.dir).map_err(|error| Reply::refused(Refusal::ReleaseUnreadable, error))
     }
 
     /// The installer's `activate` of the version `dir` holds for `entry`, then `current`
@@ -532,12 +556,6 @@ impl Repository {
             }
             _ => Ok(false),
         }
-    }
-
-    /// The record of `service` dropped: it is installed by `hostkeeper-archive` again (the
-    /// move's rollback of hostkeeper itself, whose package stays installed).
-    pub fn forget(&self, service: &ServiceName) -> Result<(), RecordError> {
-        self.records().clear(service)
     }
 
     /// The `installed` entries of `placed.json` as the repository installer reads them.

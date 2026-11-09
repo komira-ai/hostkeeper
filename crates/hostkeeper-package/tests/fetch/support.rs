@@ -238,11 +238,7 @@ impl Host {
         )
         .expect("the stores file");
         fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).expect("its mode");
-        let channel = hostkeeper_config::daemon::DaemonConfig::parse(
-            "coordinator = \"https://c.example:8443\"\nca_sha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"\nrelease_channel = \"https://channel.example\"\n[trusted_signers]\norganisation = \"example-org\"\nworkflow = \".github/workflows/artifacts.yml\"\nrefs = [\"refs/heads/main\"]\nhosted_runner = true\n",
-        )
-        .expect("a config");
-        let stores = stores::load(&file, &channel.release_channel, me(dir.path())).expect("stores");
+        let stores = stores::load(&file, me(dir.path())).expect("stores");
         Host {
             dir,
             clock: Arc::new(FakeClock(Mutex::new(1))),

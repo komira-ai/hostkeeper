@@ -264,14 +264,11 @@ impl From<&ManifestRefusal> for Refusal {
 }
 
 impl From<&PlacedError> for Refusal {
-    /// `path_conflict` for a path held by another service or by something `placed.json` does not
-    /// list, `manifest_mismatch` for a package whose paths or units break a rule of linking,
-    /// `uninstalling` for a tombstoned service, and `link_failed` for every failure of the host.
+    /// `path_conflict` for a `current` or `previous` that is not a link to a version beside it,
+    /// and `link_failed` for every failure of the host.
     fn from(error: &PlacedError) -> Refusal {
         match error {
             PlacedError::PathConflict { .. } => Refusal::PathConflict,
-            PlacedError::Claim(_) | PlacedError::Lint(_) => Refusal::ManifestMismatch,
-            PlacedError::Tombstoned { .. } => Refusal::Uninstalling,
             _ => Refusal::LinkFailed,
         }
     }

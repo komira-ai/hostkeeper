@@ -1503,7 +1503,6 @@ dependencies = [
 name = "hostkeeper-daemon"
 version = "0.1.0"
 dependencies = [
- "base64 0.23.1",
  "bytes",
  "clap",
  "hello",
@@ -1538,7 +1537,6 @@ dependencies = [
  "prost-reflect",
  "rcgen",
  "rustix",
- "rustls-pki-types",
  "serde_json",
  "sha2 0.11.0",
  "thiserror",
@@ -1641,7 +1639,6 @@ dependencies = [
  "hostkeeper-release",
  "hostkeeper-steps",
  "hostkeeper-testkit",
- "hostkeeper-unpack",
  "libc",
  "plist",
  "rustix",

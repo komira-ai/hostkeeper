@@ -1,28 +1,20 @@
-//! The switch of a hooked order (design sections 4.7, "Placed paths", and 5.2, steps 5 and 6):
-//! the step runner calls it immediately before every run of `cutover` and of `rollback`, and
-//! after a `cleanup` that succeeded ([`hostkeeper_steps::StepRunner::with_switch`]). It acts for
-//! every hooked order: an `install`, which has no release to replace, and an `update`, a
-//! `force_rollback` and a `force` that has a hook, which have one.
+//! The switch of a hooked order (design section 5.2, steps 5 and 6): the step runner calls it
+//! immediately before every run of `cutover` and of `rollback`, and after a `cleanup` that
+//! succeeded ([`hostkeeper_steps::StepRunner::with_switch`]). It acts for every hooked order: an
+//! `install`, which has no release to replace, and an `update`, a `force_rollback` and a `force`
+//! that has a hook, which have one. Every version it switches was staged by a repository
+//! installer: its version directory holds `target.json` ([`crate::target`]), and the switch is
+//! the installer's ([`repository_switch`]).
 //!
-//! - [`Toward::Target`], before `cutover`: the `activate` of the service's installer
-//!   ([`crate::installers`]), whose switch is the target's manifest read from its version
-//!   directory, [`Placer::desired`], [`Placer::begin`] (its paths `pending`), [`Placer::link`],
-//!   [`Placer::switch_current`] to the target (`previous` becomes the release it replaces) and
-//!   [`Placer::reload`]. A first install also commits its paths here ([`Placer::commit`]: there
-//!   is nothing to undo but the install, which `rollback` takes off the host); an update leaves
-//!   them `pending` until it is confirmed.
-//! - [`Toward::Back`], before `rollback`: for an update, `current` is switched back to the
-//!   release it replaced, and [`Placer::relink_to`] that release's manifest links what it
-//!   places, removes what only the target placed and reloads. For a first install, the install
-//!   is taken off the host: [`Placer::remove_all`] (the `run` units stopped and disabled, every
-//!   placed link removed, `daemon-reload`) and then `current`, when it names the target; the
-//!   version directory stays, as a staged version a retry uses. A first install of the service
-//!   `hostkeeper` stops no unit ([`Placer::unlink_all`]): its `run` unit is the daemon's own,
-//!   which runs the order, and once its links are gone the unit the deb or the rpm installed is
-//!   the one systemd starts again.
-//! - [`Toward::Confirmed`], after `cleanup` and before the verdict is written: the target's
-//!   paths are committed (`placed`) and the paths of the service the target does not list are
-//!   removed ([`Placer::unlink_unlisted`]).
+//! - [`Toward::Target`], before `cutover`: the `activate` of the target ([`Repository::activate`]):
+//!   the package installed, its `run` units enabled and `current` switched to the target
+//!   (`previous` becomes the release it replaces).
+//! - [`Toward::Back`], before `rollback`: for an update, the release it replaced is activated
+//!   again from its sealed directory ([`Repository::back`]); for a first install, the package is
+//!   removed and `current` with it, when it names the target; the version directory stays, as a
+//!   staged version a retry uses.
+//! - [`Toward::Confirmed`], after `cleanup` and before the verdict is written: nothing, as
+//!   nothing was placed.
 //!
 //! Each is idempotent, so a resumed step switches again, and so a switch that failed is tried
 //! again ([`retried`]): up to [`SWITCH_ATTEMPTS`] times, [`SWITCH_RETRY_SECS`] apart on the
@@ -30,25 +22,22 @@
 //! service manager can refuse a call for a moment (launchd, asked to boot out or print a job it
 //! is spawning that instant), and the placed lock is taken without waiting; one such refusal must
 //! not end the update without its step. Every failure is tried again, one that cannot pass on a
-//! second try (an unreadable manifest) too: the tries cost seconds, and telling the two apart
-//! would need every error typed. The last failure is the switch's error, which the runner stops
-//! on.
+//! second try (an unreadable `target.json`) too: the tries cost seconds, and telling the two
+//! apart would need every error typed. The last failure is the switch's error, which the runner
+//! stops on.
 //!
-//! `current` and `previous` are written
-//! by [`Placer::switch_current`], not by the package layout's own switch, which reads a seal and
-//! writes through `std::fs`: this path goes through the [`Fs`] port the placed paths do.
+//! `current` and `previous` are written by [`Placer::switch_current`], not by the package
+//! layout's own switch, which reads a seal and writes through `std::fs`: this path goes through
+//! the [`Fs`] port the daemon's links do.
 
-use std::path::Path;
 use std::sync::Arc;
 
-use hostkeeper_config::manifest::{Expected, HostkeeperVersion, Manifest};
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_placed::{Fs, Placer, Roots, UnitControl};
 use hostkeeper_proto::hostkeeper::release::v1::Target;
 use hostkeeper_steps::{Clock, Switch, SwitchError, Toward, UpdateOrder};
 
 use crate::boot::{WARN_SWITCH_RETRIED, warn_line};
-use crate::installers::{self, PlacerHost, Steps};
 use crate::own_package;
 use crate::repository::Repository;
 use crate::target;
@@ -63,21 +52,20 @@ fn text(error: impl std::fmt::Display) -> String {
     error.to_string()
 }
 
-/// The switch of a hooked order on the host of `roots`, through `fs` and `units`; a manifest is
-/// read against the daemon's version `own`. A target staged by a repository installer (its
-/// version directory holds `target.json`) is switched by `repository` ([`repository_switch`]).
-/// One try: the daemon runs it [`retried`].
+/// The switch of a hooked order on the host of `roots`, through `fs` and `units`. The target's
+/// version directory holds `target.json`, which `repository` switches by ([`repository_switch`]);
+/// one that holds none is no version this daemon can switch. One try: the daemon runs it
+/// [`retried`].
 pub fn hooked_switch(
     roots: Roots,
     fs: Arc<dyn Fs + Send + Sync>,
     units: Arc<dyn UnitControl + Send + Sync>,
-    own: HostkeeperVersion,
     repository: Repository,
 ) -> Switch {
     Arc::new(move |toward: Toward, order: &UpdateOrder| {
         let staged = target::read(order.staged.dir()).map_err(|e| SwitchError::Failed(text(e)))?;
-        let placer = Placer::new(roots.clone(), &*fs, &*units);
         if order.service == SELF_SERVICE {
+            let placer = Placer::new(roots.clone(), &*fs, &*units);
             let record = placer
                 .store()
                 .load()
@@ -87,50 +75,15 @@ pub fn hooked_switch(
                 return Ok(());
             }
         }
-        if let Some(entry) = staged {
-            return repository_switch(&repository, &placer, toward, order, &entry, &own);
-        }
-        archive_switch(&placer, &*fs, &repository, toward, order, &own)
+        let Some(entry) = staged else {
+            return Err(SwitchError::Failed(format!(
+                "{} holds no {}: it was not staged by an installer of this daemon",
+                order.staged.dir().display(),
+                target::TARGET_FILE
+            )));
+        };
+        repository_switch(&repository, toward, order, &entry)
     })
-}
-
-/// The switch of an order whose target is a `hostkeeper-archive` version. When the service
-/// runs from a native package (`placed.json` records its installer), the order is the move's
-/// rollback (docs/design/packages-native.md, section 10.6): before `cutover` the package is
-/// purged first ([`remove_native`]); before `rollback`, back to the native version it replaced,
-/// the archive's paths go and that version is activated again from its sealed directory.
-fn archive_switch(
-    placer: &Placer<'_>,
-    fs: &dyn Fs,
-    repository: &Repository,
-    toward: Toward,
-    order: &UpdateOrder,
-    own: &HostkeeperVersion,
-) -> Result<(), SwitchError> {
-    let failed = |why: String| SwitchError::Failed(why);
-    match toward {
-        Toward::Target => {
-            let (service, _) = names(order).map_err(failed)?;
-            let record = placer.store().load().map_err(|e| failed(text(e)))?;
-            if record.installer_of(service.as_str()).is_some() {
-                remove_native(placer, repository, &service)?;
-            }
-            activate(placer, order, own).map_err(failed)
-        }
-        Toward::Back => {
-            if let (Some(previous), Some(version)) =
-                (&order.previous, order.previous_version.as_deref())
-                && let Some(sealed) = target::read(previous.dir()).map_err(|e| failed(text(e)))?
-            {
-                let (service, _) = names(order).map_err(failed)?;
-                let version = Version::new(version).map_err(|e| failed(text(e)))?;
-                placer.unlink_all(&service).map_err(|e| failed(text(e)))?;
-                return repository.activate_version(&service, &version, previous.dir(), &sealed);
-            }
-            back(placer, fs, order, own).map_err(failed)
-        }
-        Toward::Confirmed => confirmed(placer, order, own).map_err(failed),
-    }
 }
 
 /// `switch` tried up to [`SWITCH_ATTEMPTS`] times: a failed try but the last is logged through
@@ -167,31 +120,16 @@ pub fn retried(
 /// The switch of an order whose target the repository installer staged for `entry`: before
 /// `cutover` the installer's `activate` of the target; before `rollback` the previous version's
 /// `activate` from its own sealed `target.json`, or for a first install the package's removal;
-/// nothing to confirm, as nothing was placed.
-///
-/// The move of a service from `hostkeeper-archive` (docs/design/packages-native.md, section
-/// 10.6) is this switch too: before the target's `activate`, every path `placed.json` lists for
-/// the service is taken away ([`Placer::unlink_all`]: a placed unit in `/etc/systemd/system/`
-/// would hide the package's unit of the same name; `cutover` restarts the units, so none is
-/// stopped here). Its rollback, a previous version without `target.json`, purges the package
-/// ([`Repository::remove`]) and places the archive version again ([`relink_archive`]), taking
-/// it from its sealed directory and fetching nothing.
+/// nothing to confirm, as nothing was placed. A previous version with no `target.json` is none
+/// this daemon can activate again.
 fn repository_switch(
     repository: &Repository,
-    placer: &Placer<'_>,
     toward: Toward,
     order: &UpdateOrder,
     entry: &Target,
-    own: &HostkeeperVersion,
 ) -> Result<(), SwitchError> {
     match toward {
-        Toward::Target => {
-            let (service, _) = names(order).map_err(SwitchError::Failed)?;
-            placer
-                .unlink_all(&service)
-                .map_err(|e| SwitchError::Failed(text(e)))?;
-            repository.activate(order, entry)
-        }
+        Toward::Target => repository.activate(order, entry),
         Toward::Back => match (&order.previous, order.previous_version.as_deref()) {
             (Some(previous), Some(version)) => {
                 let version = Version::new(version)
@@ -199,71 +137,20 @@ fn repository_switch(
                     .map_err(SwitchError::Failed)?;
                 let sealed = target::read(previous.dir())
                     .map_err(text)
-                    .map_err(SwitchError::Failed)?;
-                match sealed {
-                    Some(sealed) => {
-                        repository.back(order, entry, Some((&version, previous.dir(), &sealed)))
-                    }
-                    None => {
-                        let (service, _) = names(order).map_err(SwitchError::Failed)?;
-                        repository
-                            .remove(&service, entry)
-                            .map_err(crate::repository::switch_error)?;
-                        relink_archive(placer, &service, &version, previous.dir(), own)
-                            .map_err(SwitchError::Failed)
-                    }
-                }
+                    .map_err(SwitchError::Failed)?
+                    .ok_or_else(|| {
+                        SwitchError::Failed(format!(
+                            "{} holds no {}: it cannot be activated again",
+                            previous.dir().display(),
+                            target::TARGET_FILE
+                        ))
+                    })?;
+                repository.back(order, entry, Some((&version, previous.dir(), &sealed)))
             }
             (None, None) => repository.back(order, entry, None),
             _ => Err(SwitchError::Failed(half(order))),
         },
         Toward::Confirmed => Ok(()),
-    }
-}
-
-/// The archive version `version` of `service`, in `dir`, placed again: `current` switched to it
-/// and its paths linked and committed ([`Placer::relink_to`]).
-fn relink_archive(
-    placer: &Placer<'_>,
-    service: &ServiceName,
-    version: &Version,
-    dir: &Path,
-    own: &HostkeeperVersion,
-) -> Result<(), String> {
-    let manifest = manifest_of(dir, service, version, own)?;
-    placer.switch_current(service, version).map_err(text)?;
-    placer.relink_to(&manifest).map_err(text).map(drop)
-}
-
-/// The native package of `service`, whose `current` version is a repository version, taken off
-/// the host before an archive version is placed: the move's rollback by an order of the archive
-/// version (docs/design/packages-native.md, section 10.6). Nothing when `current` is no
-/// repository version.
-fn remove_native(
-    placer: &Placer<'_>,
-    repository: &Repository,
-    service: &ServiceName,
-) -> Result<(), SwitchError> {
-    let current = placer
-        .current(service.as_str())
-        .map_err(|e| SwitchError::Failed(text(e)))?;
-    // The packages directory as this process reads it, as every `target.json` is read.
-    let dir = current.map(|current| {
-        repository
-            .ports
-            .packages_dir
-            .join(service.as_str())
-            .join(current)
-    });
-    let sealed = match dir {
-        Some(dir) => target::read(&dir).map_err(|e| SwitchError::Failed(text(e)))?,
-        None => None,
-    };
-    match sealed {
-        Some(entry) => repository
-            .remove(service, &entry)
-            .map_err(crate::repository::switch_error),
-        None => Ok(()),
     }
 }
 
@@ -280,121 +167,4 @@ pub(crate) fn names(order: &UpdateOrder) -> Result<(ServiceName, Version), Strin
     let service = ServiceName::new(&order.service).map_err(text)?;
     let version = Version::new(&order.target_version).map_err(text)?;
     Ok((service, version))
-}
-
-/// The manifest of the version directory `dir` as the release `version` of `service`.
-fn manifest_of(
-    dir: &Path,
-    service: &ServiceName,
-    version: &Version,
-    own: &HostkeeperVersion,
-) -> Result<Manifest, String> {
-    let expected = Expected {
-        name: service.clone(),
-        version: version.clone(),
-        platform: hostkeeper_config::platform::Platform::current(),
-    };
-    target::manifest(dir, &expected, own).map_err(text)
-}
-
-/// The `activate` of the installer `placed.json` records for the order's service, the host's
-/// switch being [`forward`].
-fn activate(
-    placer: &Placer<'_>,
-    order: &UpdateOrder,
-    own: &HostkeeperVersion,
-) -> Result<(), String> {
-    let (service, version) = names(order)?;
-    let record = placer.store().load().map_err(text)?;
-    let Steps::Artifact(steps) = installers::steps_for(&record, &service)? else {
-        return Err(format!(
-            "{service} is recorded with a repository installer, and {version} has no {}",
-            target::TARGET_FILE
-        ));
-    };
-    let switch = |_: &Version| forward(placer, order, own);
-    let host = PlacerHost {
-        placer,
-        service: &service,
-        switch: Some(&switch),
-    };
-    steps.activate(&host, &version).map_err(text)
-}
-
-/// Places the target: its paths `pending`, its links, `current`, `daemon-reload`; and, for a
-/// first install, its paths `placed`.
-fn forward(
-    placer: &Placer<'_>,
-    order: &UpdateOrder,
-    own: &HostkeeperVersion,
-) -> Result<(), String> {
-    let (service, version) = names(order)?;
-    let manifest = manifest_of(order.staged.dir(), &service, &version, own)?;
-    let claims = placer.desired(&manifest).map_err(text)?;
-    let linking = placer.begin(&claims).map_err(text)?;
-    placer.link(&linking).map_err(text)?;
-    placer.switch_current(&service, &version).map_err(text)?;
-    placer.reload().map_err(text)?;
-    if order.previous.is_none() {
-        placer.commit(linking).map_err(text)?;
-    }
-    Ok(())
-}
-
-/// Undoes the switch: an update goes back to the release it replaced, a first install is taken
-/// off the host.
-fn back(
-    placer: &Placer<'_>,
-    fs: &dyn Fs,
-    order: &UpdateOrder,
-    own: &HostkeeperVersion,
-) -> Result<(), String> {
-    match (&order.previous, order.previous_version.as_deref()) {
-        (Some(previous), Some(version)) => {
-            let (service, _) = names(order)?;
-            let version = Version::new(version).map_err(text)?;
-            let manifest = manifest_of(previous.dir(), &service, &version, own)?;
-            placer.switch_current(&service, &version).map_err(text)?;
-            placer.relink_to(&manifest).map_err(text)?;
-            Ok(())
-        }
-        (None, None) => uninstall_first(placer, fs, order),
-        _ => Err(half(order)),
-    }
-}
-
-/// Commits the target's paths and removes what it does not list.
-fn confirmed(
-    placer: &Placer<'_>,
-    order: &UpdateOrder,
-    own: &HostkeeperVersion,
-) -> Result<(), String> {
-    let (service, version) = names(order)?;
-    let manifest = manifest_of(order.staged.dir(), &service, &version, own)?;
-    let claims = placer.desired(&manifest).map_err(text)?;
-    let linking = placer.begin(&claims).map_err(text)?;
-    placer.commit(linking).map_err(text)?;
-    placer.unlink_unlisted(&manifest).map_err(text)?;
-    Ok(())
-}
-
-/// Takes the install back off the host: every placed path of the service (its units stopped
-/// first, but for the daemon's own service), then `current` when it names the target.
-fn uninstall_first(placer: &Placer<'_>, fs: &dyn Fs, order: &UpdateOrder) -> Result<(), String> {
-    let (service, version) = names(order)?;
-    match service.as_str() == SELF_SERVICE {
-        true => placer.unlink_all(&service),
-        false => placer.remove_all(&service),
-    }
-    .map_err(text)?;
-    let named = placer.current(service.as_str()).map_err(text)?;
-    match named.as_deref() == Some(version.as_str()) {
-        true => {
-            let current = placer.roots().packages().current(service.as_str());
-            fs.remove_file(&current).map_err(text)?;
-            fs.sync_dir(current.parent().unwrap_or(Path::new("/")))
-                .map_err(text)
-        }
-        false => Ok(()),
-    }
 }

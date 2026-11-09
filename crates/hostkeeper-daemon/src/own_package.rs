@@ -1,7 +1,6 @@
 //! hostkeeper's own native package (docs/design/packages-native.md, section 10.4): the update of
 //! the service `hostkeeper` through `apt`, its new binary installing its own package only after
-//! it confirmed itself; the move from `hostkeeper-archive` and its rollback (section 10.6); and
-//! the adoption of the package the host was set up with.
+//! it confirmed itself; and the adoption of the package the host was set up with.
 //!
 //! **The switch is left to the new binary.** An update of hostkeeper itself whose release is a
 //! native version, or on a host where hostkeeper already runs from its native package
@@ -17,18 +16,12 @@
 //! confirmation leaves the `activate` pending in the step record
 //! ([`hostkeeper_steps::record::Progress::activate`]), and [`activate_pending`] does it:
 //!
-//! - a native version: every path `placed.json` lists for hostkeeper is taken away
-//!   ([`hostkeeper_placed::Placer::unlink_all`], no unit stopped: the archive's package unit in
-//!   `/etc/systemd/system/` would hide the package's own), then the installer's `activate`
-//!   ([`crate::repository::Repository::activate_installed`]: `apt-get install hostkeeper=<V>`, the
-//!   hold, the `run` units' enablement links, `daemon-reload`, the record) and `current`. The
-//!   running daemon is not restarted: its next start runs `/usr/bin/hostkeeper`, which execs
-//!   `current` of the binary directory, this binary;
-//! - an archive version (the move's rollback, a `force_rollback` to the archive version kept as
-//!   `previous`): `current` switched to it, its placed paths linked again
-//!   ([`hostkeeper_placed::Placer::relink_to`]) and hostkeeper recorded as `hostkeeper-archive`
-//!   again. Its package stays installed, at the version the package manager has, since purging
-//!   it would remove the unit and the binary the host starts, and so does its hold.
+//! the installer's `activate` ([`crate::repository::Repository::activate_installed`]:
+//! `apt-get install hostkeeper=<V>`, the hold, the `run` units' enablement links,
+//! `daemon-reload`, the record) and `current`. The running daemon is not restarted: its next
+//! start runs `/usr/bin/hostkeeper`, which execs `current` of the binary directory, this binary.
+//! A version with no `target.json` is none this daemon can activate: it ends the update
+//! `Failed` ([`REASON_RELEASE_UNREADABLE`]).
 //!
 //! The `activate` ends the record: `Succeeded` (`drift_repaired` when the package was found at a
 //! version hostkeeper did not set), or `Failed` after the commit with the installer's class and
@@ -51,9 +44,7 @@
 use std::io;
 use std::path::Path;
 
-use hostkeeper_config::manifest::Expected;
 use hostkeeper_config::names::{ServiceName, Version};
-use hostkeeper_config::platform::Platform;
 use hostkeeper_hook::Class;
 use hostkeeper_install::repository::apt::Apt;
 use hostkeeper_install::repository::{DRIFT_REPAIRED, Failure, Outcome, Reason};
@@ -175,8 +166,7 @@ fn activate(ctx: &Ctx, service: &ServiceName, version: &str) -> OwnActivate {
         Ok(Some(entry)) if backend_of_entry(&entry).is_some() => {
             native(ctx, service, &version, &dir, &entry)
         }
-        Ok(None) => archive(ctx, service, &version, &dir),
-        Ok(Some(_)) | Err(_) => unreadable(),
+        Ok(Some(_) | None) | Err(_) => unreadable(),
     }
 }
 
@@ -191,15 +181,7 @@ fn unreadable() -> OwnActivate {
     })
 }
 
-/// An `activate` tried again: the host's files failed, `detail` says how.
-fn io(detail: String) -> OwnActivate {
-    OwnActivate::Deferred {
-        reason: Reason::IoError.token().to_owned(),
-        detail,
-    }
-}
-
-/// The `activate` of a native version: the archive's paths taken away, then the installer's.
+/// The `activate` of a native version: the installer's.
 fn native(
     ctx: &Ctx,
     service: &ServiceName,
@@ -207,9 +189,6 @@ fn native(
     dir: &Path,
     entry: &Target,
 ) -> OwnActivate {
-    if let Err(error) = ctx.placer().unlink_all(service) {
-        return io(error.to_string());
-    }
     let repository = ctx.repository();
     drop(repository.take_repaired(service));
     match repository.activate_installed(service, version, dir, entry) {
@@ -238,29 +217,6 @@ fn of_failure(failure: &Failure) -> OwnActivate {
             },
             reason: reason.token().to_owned(),
         }),
-    }
-}
-
-/// The `activate` of an archive version, the move's rollback: `current` switched to it, its
-/// paths linked again, hostkeeper recorded as `hostkeeper-archive`.
-fn archive(ctx: &Ctx, service: &ServiceName, version: &Version, dir: &Path) -> OwnActivate {
-    let expected = Expected {
-        name: service.clone(),
-        version: version.clone(),
-        platform: Platform::current(),
-    };
-    let Ok(manifest) = target::manifest(dir, &expected, &ctx.own_version) else {
-        return unreadable();
-    };
-    let placer = ctx.placer();
-    let placed = placer
-        .switch_current(service, version)
-        .and_then(|_| placer.relink_to(&manifest))
-        .map_err(|e| e.to_string())
-        .and_then(|_| ctx.repository().forget(service).map_err(|e| e.to_string()));
-    match placed {
-        Ok(()) => OwnActivate::Ended(Activated::Succeeded { reason: None }),
-        Err(detail) => io(detail),
     }
 }
 

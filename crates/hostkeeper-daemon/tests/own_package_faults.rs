@@ -28,7 +28,7 @@ use support::selfupdate::{HK, awaiting, put_record, record_of};
 use support::{alerting, crash_at, d, lines, name, update};
 use support_apt::seen::{held, web};
 use support_apt::{AptRig, SERVICE};
-use support_native::{NativeRig, V1, V2, install_hk, pv, update_hk};
+use support_native::{NativeRig, V1, V2, install_hk, pv};
 
 /// A host that runs [`V2`] after its hand-over from [`V1`], adopted, whose new binary confirmed
 /// itself and has its package still to activate.
@@ -321,8 +321,8 @@ fn a_service_recorded_with_apt_and_no_native_version_is_not_switched() {
     }
 }
 
-/// Proves where the new binary of each kind of version is: `bin/hostkeeper` of an archive,
-/// `tree/usr/bin/hostkeeper` of a `.deb`, `tree/usr/local/bin/hostkeeper` of a `.pkg`.
+/// Proves where the new binary of each kind of version is: `tree/usr/bin/hostkeeper` of a `.deb`,
+/// `tree/usr/local/bin/hostkeeper` of a `.pkg`.
 #[test]
 fn the_new_binary_is_the_package_s_own_path_in_the_version_s_tree() {
     use hostkeeper_daemon::selfupdate::release_binary;
@@ -331,10 +331,9 @@ fn the_new_binary_is_the_package_s_own_path_in_the_version_s_tree() {
         installer: installer.to_owned(),
         ..Target::default()
     };
-    assert_eq!(release_binary(None), "bin/hostkeeper");
-    assert_eq!(release_binary(Some(&of("apt"))), "tree/usr/bin/hostkeeper");
+    assert_eq!(release_binary(&of("apt")), "tree/usr/bin/hostkeeper");
     assert_eq!(
-        release_binary(Some(&of("macos-pkg"))),
+        release_binary(&of("macos-pkg")),
         "tree/usr/local/bin/hostkeeper"
     );
 }
@@ -359,38 +358,11 @@ fn failing_at(nr: &NativeRig, n: u64) -> Arc<FaultFs> {
 }
 
 /// Proves a failure of the host's files during the `activate` is tried again, not ended, with
-/// nothing recorded as done: the move's first unlink of hostkeeper's archive paths, and the
-/// switch of `current` after the package was installed (the 9th write of an `activate`: the
-/// record's two saves come first, four writes each), each defer `io_error`, the record still
-/// waiting; a try on a sound host then ends it `Succeeded`.
+/// nothing recorded as done: the switch of `current` after the package was installed (the 9th
+/// write of an `activate`: the record's two saves come first, four writes each) defers
+/// `io_error`, the record still waiting.
 #[test]
 fn a_failure_of_the_host_s_files_in_the_activate_is_tried_again() {
-    let nr = NativeRig::new("own-io-move");
-    nr.install_from_archives();
-    let pin = nr.publish(V2);
-    assert_eq!(
-        nr.daemon_at(V1).order(&update_hk(V2, &pin, 2)),
-        awaiting(false)
-    );
-    nr.daemon_at(V2).settle_self_update().unwrap();
-    let ended = nr
-        .daemon_with_fs(V2, failing_at(&nr, 1))
-        .activate_own_package();
-    assert!(
-        matches!(ended, Some(OwnActivate::Deferred { ref reason, .. }) if reason == "io_error"),
-        "{ended:?}"
-    );
-    assert!(nr.record().unwrap().progress.activate.is_some());
-    assert_eq!(
-        nr.host.installed(HK),
-        None,
-        "nothing installed before the unlink"
-    );
-    assert_eq!(
-        nr.daemon_at(V2).activate_own_package(),
-        Some(OwnActivate::Ended(Activated::Succeeded { reason: None }))
-    );
-
     let nr = confirmed("own-io-current");
     let ended = nr
         .daemon_with_fs(V2, failing_at(&nr, 9))
@@ -401,40 +373,6 @@ fn a_failure_of_the_host_s_files_in_the_activate_is_tried_again() {
     );
     assert!(nr.record().unwrap().progress.activate.is_some());
     assert_eq!(nr.linked("current"), None);
-}
-
-/// Proves the move's rollback of hostkeeper is tried again when the host's files fail: the
-/// archive version's `current` cannot be switched, the `activate` defers `io_error`, and
-/// hostkeeper stays recorded as `apt` until a try on a sound host places the archive again.
-#[test]
-fn a_move_rollback_the_host_s_files_refuse_is_tried_again() {
-    let nr = NativeRig::new("own-io-archive");
-    nr.install_from_archives();
-    let pin = nr.publish(V2);
-    assert_eq!(
-        nr.daemon_at(V1).order(&update_hk(V2, &pin, 2)),
-        awaiting(false)
-    );
-    drop(nr.start(V2));
-    assert_eq!(
-        nr.daemon_at(V2)
-            .order(&support::force_rollback(HK, V1, &d(), 3)),
-        awaiting(false)
-    );
-    nr.daemon_at(V1).settle_self_update().unwrap();
-    let ended = nr
-        .daemon_with_fs(V1, failing_at(&nr, 1))
-        .activate_own_package();
-    assert!(
-        matches!(ended, Some(OwnActivate::Deferred { ref reason, .. }) if reason == "io_error"),
-        "{ended:?}"
-    );
-    assert_eq!(nr.installed().map(|e| e.installer), Some("apt".to_owned()));
-    assert_eq!(
-        nr.daemon_at(V1).activate_own_package(),
-        Some(OwnActivate::Ended(Activated::Succeeded { reason: None }))
-    );
-    assert_eq!(nr.installed(), None);
 }
 
 /// Proves a failed `activate` whose record cannot be written whole again is still ended

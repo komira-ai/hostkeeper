@@ -71,9 +71,6 @@ pub struct Hooked {
     pub service: ServiceName,
     pub version: Version,
     pub digest: PackageDigest,
-    /// The SHA-256 the release index must have; `None` when the order carries none (a coordinator
-    /// that does not send it), and then the index is not checked.
-    pub index_digest: Option<PackageDigest>,
     /// The coordinator's try of the order, from 1.
     pub order_try: NonZeroU64,
     /// The coordinator's id of the order; `None` when it carries none. A force keeps it in its
@@ -82,7 +79,8 @@ pub struct Hooked {
     pub order_id: Option<String>,
     /// The entry the coordinator picked, as the order's wire `target` carries it, undecoded: its
     /// checks are the executor's ([`crate::entry::check`]), not the grammar of decoding. `None`
-    /// for an order without one, which takes the release channel.
+    /// for an order without one, which the executor refuses (`order_invalid`): the daemon stages
+    /// a version from the entry alone. The order's `index_digest` is not read.
     pub entry: Option<Target>,
 }
 
@@ -136,7 +134,7 @@ pub const NO_TRY: &str = "is 0 or missing: a try counts from 1";
 pub const SERVICE_RULE: &str = hostkeeper_config::names::SERVICE_NAME_RULE;
 /// What a version that breaks its rule breaks: the config crate's words.
 pub const VERSION_RULE: &str = hostkeeper_config::names::VERSION_RULE;
-/// What a malformed package digest or index digest breaks.
+/// What a malformed package digest breaks.
 pub const DIGEST_RULE: &str = "is not a SHA-256 of 64 lower-case hex digits";
 
 fn bad(verb: &str, field: &str, rule: &'static str) -> BadOrder {
@@ -152,21 +150,14 @@ fn service(verb: &str, text: &str) -> Result<ServiceName, BadOrder> {
 
 fn hooked(
     verb: &str,
-    (service_text, version, digest, index_digest): (&str, &str, &str, &str),
+    (service_text, version, digest): (&str, &str, &str),
     (order_try, order_id): (NonZeroU64, &str),
     entry: Option<&Target>,
 ) -> Result<Hooked, BadOrder> {
-    let index_digest = match index_digest.is_empty() {
-        true => None,
-        false => {
-            Some(checks::digest(index_digest).map_err(|_| bad(verb, "index_digest", DIGEST_RULE))?)
-        }
-    };
     Ok(Hooked {
         service: service(verb, service_text)?,
         version: checks::version(version).map_err(|_| bad(verb, "version", VERSION_RULE))?,
         digest: checks::digest(digest).map_err(|_| bad(verb, "package_digest", DIGEST_RULE))?,
-        index_digest,
         order_try,
         order_id: Some(order_id.to_owned()).filter(|id| !id.is_empty()),
         entry: entry.cloned(),
@@ -191,26 +182,26 @@ impl TryFrom<&Order> for Verb {
         Ok(match verb {
             order::Verb::Update(a) => Verb::Update(hooked(
                 "update",
-                (&a.service, &a.version, &a.package_digest, &a.index_digest),
+                (&a.service, &a.version, &a.package_digest),
                 of,
                 a.target.as_ref(),
             )?),
             order::Verb::ForceRollback(a) => Verb::ForceRollback(hooked(
                 "force_rollback",
-                (&a.service, &a.version, &a.package_digest, &a.index_digest),
+                (&a.service, &a.version, &a.package_digest),
                 of,
                 a.target.as_ref(),
             )?),
             order::Verb::Install(a) => Verb::Install(hooked(
                 "install",
-                (&a.service, &a.version, &a.package_digest, &a.index_digest),
+                (&a.service, &a.version, &a.package_digest),
                 of,
                 a.target.as_ref(),
             )?),
             order::Verb::Force(a) => Verb::Force(Forced {
                 package: hooked(
                     "force",
-                    (&a.service, &a.version, &a.package_digest, &a.index_digest),
+                    (&a.service, &a.version, &a.package_digest),
                     of,
                     a.target.as_ref(),
                 )?,

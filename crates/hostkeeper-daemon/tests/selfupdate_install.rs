@@ -170,7 +170,6 @@ fn a_failed_first_install_of_hostkeeper_stops_no_unit_and_keeps_the_debs_enable_
         Some(DEB_UNIT.into())
     );
     assert!(!s.rig.there("/units/hostkeeper.service"));
-    assert!(s.rig.placed_record().paths.is_empty());
     assert_eq!(installed(&s), None);
     assert_eq!(s.current().as_deref(), Some(OLD));
     assert!(!daemon.ctx().restart().requested());

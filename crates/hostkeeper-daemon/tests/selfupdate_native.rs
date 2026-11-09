@@ -21,7 +21,6 @@ use hostkeeper_steps::Settled;
 use hostkeeper_steps::record::{Activated, State};
 
 use support::selfupdate::{HK, awaiting, fell_back};
-use support::{d, force_rollback};
 use support_apt::seen::held;
 use support_native::{
     DEB_UNIT_NAME, NativeRig, V1, V2, V3, activate_failed, binary_text, install_hk, pv,
@@ -356,12 +355,6 @@ fn only_the_bootstrap_install_of_the_version_that_runs_is_adopted() {
         assert_eq!(nr.installed(), None, "{name}");
     }
 
-    let nr = NativeRig::new("adopt-archive-version");
-    nr.install_from_archives();
-    nr.host.set_installed(HK, &pv(V1), 'i', false);
-    assert_eq!(nr.start(V1).boot_report().adopted, Some(Ok(None)));
-    assert_eq!(nr.installed(), None);
-
     let nr = NativeRig::new("adopt-no-apt");
     nr.host.set_installed(HK, &pv(V1), 'i', false);
     fs::create_dir_all(&nr.rig.state).unwrap();
@@ -372,86 +365,6 @@ fn only_the_bootstrap_install_of_the_version_that_runs_is_adopted() {
     );
     assert!(matches!(started, Ok(ref s) if s.boot_report().adopted == Some(Ok(None))));
     assert_eq!(nr.host.installed(HK).map(|i| i.held), Some(false));
-}
-
-/// Proves hostkeeper's move from archives (10.6): an order of its `.deb` on a host that runs it
-/// from archives hands over with the archive's package unit in place; the new binary, once
-/// confirmed, takes the archive's paths away (its unit in the unit directory and its link),
-/// installs and holds the `.deb`, records `apt`, and the archive version is `previous`. Then the
-/// move's rollback, a `force_rollback` to that archive version: once its binary confirmed itself,
-/// the archive's paths are placed again, hostkeeper is recorded `hostkeeper-archive`, and the
-/// package stays installed and held (purging it would take the unit and the binary the host
-/// starts).
-#[test]
-fn hostkeepers_move_installs_its_deb_and_its_rollback_places_the_archive_again() {
-    let nr = NativeRig::new("native-move");
-    nr.install_from_archives();
-    let [unit, wants, conf] = nr.rig.placed_paths(HK);
-    assert!(nr.rig.there(&unit) & nr.rig.there(&wants) & nr.rig.there(&conf));
-    let pin = nr.publish(V2);
-    assert_eq!(
-        nr.daemon_at(V1).order(&update_hk(V2, &pin, 2)),
-        awaiting(false)
-    );
-    assert!(
-        nr.rig.there(&unit),
-        "nothing moves before the new binary ran"
-    );
-    assert_eq!(nr.host.installed(HK), None);
-
-    let started = nr.start(V2);
-    assert_eq!(
-        started.boot_report().own_activate,
-        Some(OwnActivate::Ended(Activated::Succeeded { reason: None }))
-    );
-    assert!(!nr.rig.there(&unit) & !nr.rig.there(&wants) & !nr.rig.there(&conf));
-    assert!(nr.rig.placed_record().paths.is_empty());
-    assert!(
-        nr.rig
-            .there("/etc/systemd/system/multi-user.target.wants/hostkeeper.service"),
-        "the .deb's unit is enabled"
-    );
-    assert_eq!(nr.host.installed(HK), held(&pv(V2)));
-    assert_eq!(nr.installed().map(|e| e.installer), Some("apt".to_owned()));
-    assert_eq!(nr.linked("current").as_deref(), Some(V2));
-    assert_eq!(nr.linked("previous").as_deref(), Some(V1));
-    let daemon = Arc::clone(started.daemon());
-    drop(started);
-
-    let reply = daemon.order(&force_rollback(HK, V1, &d(), 3));
-    assert_eq!(reply, awaiting(false));
-    let started = nr.start(V1);
-    assert_eq!(
-        started.boot_report().own_activate,
-        Some(OwnActivate::Ended(Activated::Succeeded { reason: None }))
-    );
-    assert!(nr.rig.there(&unit) & nr.rig.there(&wants) & nr.rig.there(&conf));
-    assert_eq!(nr.installed(), None);
-    assert_eq!(nr.linked("current").as_deref(), Some(V1));
-    assert_eq!(nr.host.installed(HK), held(&pv(V2)));
-}
-
-/// Proves a move whose new binary cannot start leaves hostkeeper on archives: the old binary
-/// falls back, the archive's unit and version stay in place, and nothing is installed.
-#[test]
-fn a_move_whose_new_binary_cannot_start_leaves_the_archive_in_place() {
-    let nr = NativeRig::new("native-move-fallback");
-    nr.install_from_archives();
-    let pin = nr.publish(V2);
-    assert_eq!(
-        nr.daemon_at(V1).order(&update_hk(V2, &pin, 2)),
-        awaiting(false)
-    );
-    let started = nr.start(V1);
-    assert_eq!(
-        started.boot_report().self_update,
-        Some(Ok(Settled::FellBack))
-    );
-    let [unit, wants, conf] = nr.rig.placed_paths(HK);
-    assert!(nr.rig.there(&unit) & nr.rig.there(&wants) & nr.rig.there(&conf));
-    assert_eq!(nr.linked("current").as_deref(), Some(V1));
-    assert_eq!(nr.installed(), None);
-    assert_eq!(nr.host.installed(HK), None);
 }
 
 /// Proves the compiled table guards a rollback of hostkeeper before anything is staged: on a

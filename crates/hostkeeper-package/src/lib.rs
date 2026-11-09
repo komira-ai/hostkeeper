@@ -20,8 +20,7 @@
 //!   its own deadline, credential and redirects), the first bytes with the expected size and
 //!   SHA-256 winning, then the same verifier. It returns a [`entry::Proven`]: the same
 //!   [`prove::VerifiedArchive`] and the stores that gave other bytes.
-//! - [`stores::load`] reads `/etc/hostkeeper/stores.toml` once, at start; [`stores::Stores::channel`]
-//!   is the one store of a host without the file.
+//! - [`stores::load`] reads `/etc/hostkeeper/stores.toml`; a host without the file has no store.
 //!
 //! The network and the verifier are ports ([`ports::Fetcher`], [`ports::Verifier`]); [`net`] and
 //! [`gh`] are their real adapters ([`net::NetFetcher`] also follows a store's redirects, sends

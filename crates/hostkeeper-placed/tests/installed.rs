@@ -35,7 +35,8 @@ fn save(world: &World, record: &PlacedRecord) -> Result<(), PlacedError> {
     Store::new(&world.fs, Path::new(STATE)).save(record, &lock)
 }
 
-/// A record with the key is read by the previous reader, which writes it back as it was; this
+/// A record with the key, and with no `paths` key, which this release no longer writes, is read
+/// by the previous reader, which writes it back with the key as it was and `paths` empty; this
 /// release reads it back as saved.
 #[test]
 fn the_previous_reader_keeps_installed() {
@@ -53,9 +54,13 @@ fn the_previous_reader_keeps_installed() {
     assert!(previous.uninstalling.is_empty());
     let rewritten = serde_json::to_vec_pretty(&previous).expect("it writes");
     let again: Value = serde_json::from_slice(&rewritten).expect("json");
-    assert_eq!(again, value);
+    // The previous reader owns a `paths` key this release no longer writes: it writes it empty.
+    assert_eq!(again["installed"], value["installed"]);
+    assert_eq!(again["paths"], json!({}));
     fs::write(world.host(PLACED), &rewritten).expect("the previous release's write");
-    assert_eq!(world.record(), record);
+    let read = world.record();
+    assert_eq!(read.installed, record.installed);
+    assert_eq!(read.uninstalling, record.uninstalling);
 }
 
 /// A record the previous release wrote has no key and reads as an empty map; a record with none
@@ -175,5 +180,5 @@ fn a_repository_entry_crosses_the_release_boundary_in_both_directions() {
     let previous: PreviousRecord = serde_json::from_slice(&written).expect("it reads");
     let rewritten = serde_json::to_vec_pretty(&previous).expect("it writes");
     fs::write(world.host(PLACED), &rewritten).expect("the previous release's write");
-    assert_eq!(world.record(), record);
+    assert_eq!(world.record().installed, record.installed);
 }

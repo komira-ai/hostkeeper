@@ -11,14 +11,13 @@ description = "The hostkeeper daemon: start-up, the order executor with its lock
 # The library of the one root process of a host (docs/design/hostkeeper-design.md, sections 4.1,
 # 5.1, 5.2, 6.2, 6.3, 8.1 and 8.3). Everything the daemon does is here, so that it is measured;
 # the `hostkeeper` binary only forwards to `cli::main`. Everything privileged comes in through
-# ports it is given: the step launcher (`hostkeeper_steps::StepLauncher`), the package store
-# (`packages::Packages`), the service manager (`hostkeeper_placed::UnitControl`), the
-# filesystem placed-path linking writes through (`hostkeeper_placed::Fs`) and the service
-# observer (`hostkeeper_observe::Observer`).
+# ports it is given: the step launcher (`hostkeeper_steps::StepLauncher`), the service manager
+# (`hostkeeper_placed::UnitControl`), the filesystem the daemon's links are made through
+# (`hostkeeper_placed::Fs`) and the service observer (`hostkeeper_observe::Observer`).
 
 [features]
 # The test doubles in `hostkeeper_daemon::testing` (a scripted launcher, a fake clock, fake
-# packages), for this crate's tests and the tests of crates built on it;
+# notifiers and prunes), for this crate's tests and the tests of crates built on it;
 # it turns on the fakes of the heartbeat loop's ports (`hostkeeper_link::testing`) too.
 testing = ["hostkeeper-link/testing"]
 
@@ -29,10 +28,9 @@ hostkeeper-config = { path = "../hostkeeper-config" }
 # claims.
 hostkeeper-enroll = { path = "../hostkeeper-enroll" }
 hostkeeper-hook = { path = "../hostkeeper-hook" }
-# The installers: their contract and registry, which the package store stages through and the
-# switch, the prune and the uninstall go through, and the installers the daemon announces
-# (docs/design/packages.md, section 5),
-# and the signers file of the macos-pkg installer, read and judged at the start
+# The installers: the repository installer's backends, which the stage, the switch and the
+# uninstall go through, and the installers the daemon announces (docs/design/packages.md,
+# section 5), and the signers file of the macos-pkg installer, read and judged at the start
 # (`cli::load_signers`).
 hostkeeper-install = { path = "../hostkeeper-install" }
 # The BMC's MAC address, claimed in a Linux host's enrollment request: `Get LAN Configuration
@@ -49,17 +47,17 @@ hostkeeper-observe = { path = "../hostkeeper-observe" }
 # The OpenRC adapters of an Alpine host: the step launcher, the unit control and the service
 # manager (docs/design/two-programs.md, section 4.6).
 hostkeeper-openrc = { path = "../hostkeeper-openrc" }
-# Steps 1 and 2 of design section 5.5 (download, prove), which the real package store composes.
+# The stores file a Mac's start renders from its managed preferences (`mac_files`).
 hostkeeper-package = { path = "../hostkeeper-package" }
-# The placed-path linker a `force` and a first install link, unlink and switch through, an
-# uninstall removes a service's paths through, and the service-manager port it stops, starts and
-# asks after units with.
+# The record of installed services (`placed.json`) and the switch of `current` and `previous`, and
+# the service-manager port the daemon stops, starts and asks after units with.
 hostkeeper-placed = { path = "../hostkeeper-placed" }
 hostkeeper-proto = { path = "../hostkeeper-proto" }
 # The receipt check of an order's entry and the grammars of its locations (packages.md section 4.4).
 hostkeeper-release = { path = "../hostkeeper-release" }
 hostkeeper-steps = { path = "../hostkeeper-steps" }
-# The package port of the real store's stage (`PackageFs`, `HostFs`) and its errors.
+# The repository installer's stage into the packages directory (`HostFs`, `stage_filled`), the
+# sweep of what a crashed stage left (`remove_orphans`) and its errors.
 hostkeeper-unpack = { path = "../hostkeeper-unpack" }
 # The SHA-256 of each keyring `check-repositories` prints, as hex (`repositories::report`); the
 # tests' fixture digests too.
@@ -76,9 +74,7 @@ prost-reflect = { workspace = true, features = ["serde"] }
 # `lgetxattr`: the quarantine attribute of a staged entry on a Mac, read without following a
 # link and without unsafe code (`mac`).
 rustix = { workspace = true, features = ["fs"] }
-# The host's CA bundle (PEM) read into the DER roots the package fetch's HTTPS client trusts.
-rustls-pki-types.workspace = true
-# `trusted_root`: whether the Sigstore trusted root file is a stream of JSON trusted roots.
+# `target.json` and the built-in steps' last lines, as JSON.
 serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
@@ -90,8 +86,6 @@ tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
 [dev-dependencies]
 # tests/hello.rs: the example service's real hook, run in process by a step launcher of the test.
 hello = { path = "../../examples/hello" }
-# The fixture package of the package pipeline's test: its attestation bundle and digest.
-base64.workspace = true
 # The real coordinator of the end-to-end test, driven in process: its desired-state and
 # convergence handlers over HTTP requests built in the test, its heartbeat with an explicit host
 # identity. Its CI tokens come from the fake issuer of `hostkeeper-oidc`'s `testkit`.

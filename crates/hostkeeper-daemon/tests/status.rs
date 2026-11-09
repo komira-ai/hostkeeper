@@ -1,5 +1,5 @@
 //! What `Daemon::status` holds: each service's running version, last result, held halt and
-//! record, how it is observed, the Sigstore trusted root the package store reports, and the
+//! record, how it is observed, and the
 //! error of a status that cannot list the services.
 
 mod support;
@@ -10,10 +10,7 @@ use std::sync::Arc;
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_daemon::executor::RecordState;
 use hostkeeper_daemon::halt::HaltStore;
-use hostkeeper_daemon::packages::{Entry, PackageError, Packages, VersionDir};
 use hostkeeper_daemon::testing::spawn;
-use hostkeeper_daemon::trusted_root::{RootProblem, RootReport};
-use hostkeeper_daemon::verb::PackageDigest;
 use hostkeeper_daemon::{Daemon, Dirs};
 use hostkeeper_hook::{Step, Verdict};
 use hostkeeper_observe::{HealthView, Observation, ServiceState as Observed, VersionView};
@@ -170,70 +167,5 @@ fn a_status_that_cannot_list_the_services_is_an_error_naming_the_directory() {
             file.display()
         )),
         "{error}"
-    );
-}
-
-/// A package store that reports `report` as its trusted root, and otherwise is `inner`.
-struct ReportingRoot {
-    inner: Arc<hostkeeper_daemon::testing::FakePackages>,
-    report: Option<RootReport>,
-}
-
-impl Packages for ReportingRoot {
-    fn version_dir(
-        &self,
-        service: &ServiceName,
-        version: &hostkeeper_config::names::Version,
-        digest: &PackageDigest,
-        index_digest: Option<&PackageDigest>,
-        entry: Option<&Entry>,
-    ) -> Result<VersionDir, PackageError> {
-        self.inner
-            .version_dir(service, version, digest, index_digest, entry)
-    }
-
-    fn trusted_root(&self) -> Option<RootReport> {
-        self.report.clone()
-    }
-}
-
-/// Catches the trusted root's age or reason dropped between the store and the status: the status
-/// holds the store's report as it is, age and problem, for a fine root, a stale one, a missing
-/// one and an unparseable one, and none for a store that reports none.
-#[test]
-fn status_holds_the_trusted_roots_age_and_reason() {
-    let rig = Rig::new("status-trusted-root");
-    let path = rig.scratch.path().join("trusted_root.json");
-    let cases = [
-        (None, None),
-        (Some(3600), None),
-        (Some(91 * 86_400), Some(RootProblem::Stale)),
-        (None, Some(RootProblem::Missing)),
-        (Some(60), Some(RootProblem::Unparseable)),
-    ];
-    for (age_secs, problem) in cases {
-        let report = RootReport {
-            path: path.clone(),
-            age_secs,
-            problem,
-        };
-        let packages = ReportingRoot {
-            inner: Arc::clone(&rig.store),
-            report: Some(report.clone()),
-        };
-        let ports = hostkeeper_daemon::Ports {
-            packages: Arc::new(packages),
-            ..rig.ports()
-        };
-        let daemon = Daemon::new(config(), rig.dirs(), ports, OWN);
-        assert_eq!(
-            daemon.status().expect("the status").trusted_root,
-            Some(report),
-            "{problem:?}"
-        );
-    }
-    assert_eq!(
-        rig.daemon().status().expect("the status").trusted_root,
-        None
     );
 }

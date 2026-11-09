@@ -22,7 +22,6 @@ fn settings(root: &Path) -> Settings {
         packages_dir: root.join("var/lib/hostkeeper/packages"),
         run_dir: root.join("run"),
         trusted_uid: 0,
-        trusted_root_max_age_days: hostkeeper_daemon::cli::DEFAULT_TRUSTED_ROOT_MAX_AGE_DAYS,
     }
 }
 

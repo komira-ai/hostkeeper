@@ -141,10 +141,6 @@ fn an_apt_package_installs_updates_rolls_back_and_is_removed_from_a_file_reposit
         succeeded()
     );
     assert_eq!(apt.host.installed(SERVICE), held("1.0.0-1"));
-    assert!(
-        apt.rig.store.asked().is_empty(),
-        "the package port fetched nothing"
-    );
     assert_eq!(apt.rig.launcher.steps(SERVICE), Vec::<Step>::new());
     let dir = apt.version_dir("1.0.0");
     let sealed = target::read(&dir)

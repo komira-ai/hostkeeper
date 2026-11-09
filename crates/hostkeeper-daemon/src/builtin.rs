@@ -10,8 +10,7 @@
 //! | `rollback` | Restarts the `run` units of the release `current` was switched back to; for a first install, whose package the switch removed, nothing |
 //!
 //! They apply to a repository version (one with `target.json`, [`crate::target`]) whose package
-//! carries no hook; the `rollback` of a move from `hostkeeper-archive` restarts the units of the
-//! archive version it went back to. The daemon's own service runs [`BUILTIN_EXIT`], every step
+//! carries no hook. The daemon's own service runs [`BUILTIN_EXIT`], every step
 //! exiting 0, whatever its version: its unit runs the daemon, and its new binary switches once it
 //! has started ([`crate::own_package`]); so does a version of another service without
 //! `target.json`.
@@ -109,17 +108,15 @@ fn has_target(dir: &Path) -> bool {
     std::fs::symlink_metadata(dir.join(TARGET_FILE)).is_ok()
 }
 
-/// The manifest of the version in `dir` at `version` of `service`: of a repository version, or,
-/// when `archive` is set, of an archive version too; `None` for a version without `target.json`
-/// otherwise, `Err` for one whose manifest does not read.
+/// The manifest of the version in `dir` at `version` of `service`: of a repository version;
+/// `None` for a version without `target.json`, `Err` for one whose manifest does not read.
 fn repository_manifest(
     ports: &BuiltinPorts,
     service: &str,
     version: &str,
     dir: &Path,
-    archive: bool,
 ) -> Option<Result<Manifest, String>> {
-    if !(archive | has_target(dir)) {
+    if !has_target(dir) {
         return None;
     }
     let expected = || -> Result<Expected, String> {
@@ -145,10 +142,7 @@ fn run(ports: &BuiltinPorts, step: Step, order: &UpdateOrder, bound: Bound) -> S
         (Step::Rollback, Some(previous), Some(version)) => (version, previous.dir()),
         _ => (order.target_version.as_str(), order.staged.dir()),
     };
-    // The rollback of a move (docs/design/packages-native.md, section 10.6) restarts the units of
-    // the archive version the switch placed again.
-    let moved_back = (step == Step::Rollback) & has_target(order.staged.dir());
-    let manifest = match repository_manifest(ports, &order.service, version, dir, moved_back) {
+    let manifest = match repository_manifest(ports, &order.service, version, dir) {
         None => return BUILTIN_EXIT,
         Some(Ok(manifest)) => manifest,
         Some(Err(why)) => return exit(1, "release", "manifest_invalid", &why, None),

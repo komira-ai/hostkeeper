@@ -541,7 +541,6 @@ fn the_start_runs_its_parts_in_order_with_before_records_first() {
         [
             Stage::UnlinkRegistrationSocket,
             Stage::BeforeRecords,
-            Stage::Reconcile,
             Stage::ReadRecords,
             Stage::WriteBootId,
             Stage::ResumeUninstalls,

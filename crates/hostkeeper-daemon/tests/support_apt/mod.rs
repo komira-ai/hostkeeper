@@ -118,7 +118,7 @@ impl AptRig {
         let keys = self.rig.scratch.path().join("keys");
         Ports {
             announcement: Announcement {
-                installers: vec![Installer::HostkeeperArchive, Installer::Apt],
+                installers: vec![Installer::Apt],
                 family: Some(Family::Deb),
             },
             repository: self.rig.repository_ports(repositories(&keys)),

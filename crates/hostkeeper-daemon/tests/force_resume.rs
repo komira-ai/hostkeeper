@@ -167,7 +167,6 @@ fn a_resend_of_a_finished_force_is_answered_from_the_record() {
     let hooked = daemon.order(&update(WEB, "2.0.0", &d(), 3));
     assert_eq!(hooked.refusal(), Some(Refusal::TryConflict), "{hooked:?}");
     assert!(rig.placed_log.events().is_empty());
-    assert!(rig.store.asked().is_empty());
     assert!(rig.launcher.runs().is_empty());
 }
 

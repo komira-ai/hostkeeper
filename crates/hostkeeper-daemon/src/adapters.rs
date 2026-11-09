@@ -4,18 +4,15 @@
 //!
 //! - Linux: steps as transient systemd units ([`SystemdLauncher::system`]), the unit control
 //!   over `systemctl` ([`Systemctl`], each command a child process through [`RunnerLauncher`]),
-//!   the observer over `systemctl` and `/proc`, the units under `/etc/systemd/system`, and no
-//!   package check beyond the archive rules;
+//!   the observer over `systemctl` and `/proc`, and the units under `/etc/systemd/system`;
 //! - OpenRC (an Alpine host): steps as child process groups of the daemon ([`OpenrcLauncher`]),
 //!   the unit control over `rc-service` ([`RcService`], each command a child process through
 //!   [`RunnerLauncher`]), the observer over `rc-service <service> status`, supervise-daemon's
-//!   child pid ([`OpenrcServiceManager`]) and `/proc`, the unit directory `/etc/init.d`, and no
-//!   package check beyond the archive rules;
+//!   child pid ([`OpenrcServiceManager`]) and `/proc`, and the unit directory `/etc/init.d`;
 //! - macOS: steps as launchd jobs ([`LaunchdLauncher`]), the service manager, the unit control
 //!   and the observer over `launchctl` ([`LaunchdServiceManager`], [`LaunchdUnitControl`]), the
 //!   process probe over `proc_pidpath` and the image's device and inode
-//!   ([`LaunchdProcessProbe`]), the plists under `/Library/LaunchDaemons`, and the quarantine and
-//!   code-signature checks of every unpacked package ([`HostMacVerify`]).
+//!   ([`LaunchdProcessProbe`]), and the plists under `/Library/LaunchDaemons`.
 //!
 //! Each set also names the unit the daemon itself runs as (`hostkeeper.service`, the OpenRC
 //! service `hostkeeper`, or the launchd job `dev.hostkeeper.hostkeeper`), which the observer
@@ -47,7 +44,6 @@ use hostkeeper_openrc::manager::OPENRC_RUN_DIR;
 use hostkeeper_openrc::{OpenrcLauncher, OpenrcServiceManager, RcService};
 use hostkeeper_placed::{CommandLauncher, Systemctl, UnitControl};
 use hostkeeper_steps::{BootIdSource, StepLauncher, SystemClock, SystemdLauncher};
-use hostkeeper_unpack::MacVerify;
 
 use crate::hook_log::log_hook_output;
 use crate::observer::{SHOW_DEADLINE, SHOW_OUTPUT_CAP, proc_probe, systemd_manager};
@@ -81,9 +77,6 @@ pub const RC_SERVICE_DEADLINE: Duration = Duration::from_secs(300);
 /// package.
 pub const OPENRC_SERVICE: &str = "hostkeeper";
 
-/// The package check of a platform: none on Linux, the quarantine and signature check on macOS.
-pub type PackageCheck = Option<Arc<dyn MacVerify + Send + Sync>>;
-
 /// What differs between the platforms, as ports.
 pub struct Adapters {
     /// The platform these are for.
@@ -102,8 +95,6 @@ pub struct Adapters {
     /// `hostkeeper` ([`crate::observer::OwnService`]): [`MAIN_UNIT`] on Linux, the launchd job
     /// [`Label::daemon`] on macOS.
     pub own_unit: String,
-    /// The check every unpacked package passes before it is sealed.
-    pub package_check: PackageCheck,
 }
 
 impl Adapters {
@@ -137,7 +128,6 @@ impl Adapters {
             manager: Box::new(systemd_manager()),
             process: Box::new(proc_probe()),
             own_unit: MAIN_UNIT.to_owned(),
-            package_check: None,
         }
     }
 
@@ -170,21 +160,19 @@ impl Adapters {
             )),
             process: Box::new(proc_probe()),
             own_unit: OPENRC_SERVICE.to_owned(),
-            package_check: None,
         }
     }
 
     /// The macOS set over the ports given: `launcher` runs the steps, `launchctl` is what the
     /// unit control (with [`LAUNCHCTL_DEADLINE`]) and the service manager ask, `print` what the
-    /// observer's service manager asks, `pids` what the process probe asks, and `check` judges
-    /// every unpacked package. `Err` when the unit directory of `platform` cannot be read.
+    /// observer's service manager asks, and `pids` what the process probe asks. `Err` when the
+    /// unit directory of `platform` cannot be read.
     pub fn macos<L, P>(
         platform: &Platform,
         launcher: Arc<dyn StepLauncher>,
         launchctl: L,
         print: L,
         pids: P,
-        check: Arc<dyn MacVerify + Send + Sync>,
     ) -> Result<Adapters, StartError>
     where
         L: Launchctl + 'static,
@@ -204,7 +192,6 @@ impl Adapters {
             manager: Box::new(LaunchdServiceManager::new(print)),
             process: Box::new(LaunchdProcessProbe::new(pids, StdFileIdentity)),
             own_unit: Label::daemon().to_string(),
-            package_check: Some(check),
         })
     }
 }
@@ -262,14 +249,11 @@ pub fn host_rc_service() -> RunnerLauncher<ProcessRunner> {
     )
 }
 
-/// The host's macOS set: `/bin/launchctl`, the host's step launcher, `proc_pidpath`, `codesign`
-/// and `getxattr`.
+/// The host's macOS set: `/bin/launchctl`, the host's step launcher and `proc_pidpath`.
 #[cfg(target_os = "macos")]
 fn host_macos(platform: &Platform) -> Result<Adapters, StartError> {
     use hostkeeper_launchd::procid::darwin::DarwinPidInfo;
     use hostkeeper_launchd::{LaunchctlProcess, LaunchdLauncher};
-
-    use crate::mac::HostMacVerify;
 
     Adapters::macos(
         platform,
@@ -277,7 +261,6 @@ fn host_macos(platform: &Platform) -> Result<Adapters, StartError> {
         LaunchctlProcess::system(LAUNCHCTL_DEADLINE),
         LaunchctlProcess::system(PRINT_DEADLINE),
         DarwinPidInfo,
-        Arc::new(HostMacVerify::system()),
     )
 }
 

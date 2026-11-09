@@ -24,7 +24,7 @@ use hostkeeper_coordinator::service::{Clock, Coordinator};
 use hostkeeper_coordinator::services::Services;
 use hostkeeper_coordinator::trusted_root::TrustedRootSaid;
 use hostkeeper_daemon::link_adapters::{
-    DaemonHalts, DaemonObserver, DaemonRecords, DaemonRenewal, DaemonTrustedRoot,
+    DaemonHalts, DaemonObserver, DaemonRecords, DaemonRenewal, NoTrustedRoot,
 };
 use hostkeeper_daemon::links::{Links, PLATFORM};
 use hostkeeper_daemon::start;
@@ -378,7 +378,7 @@ fn without_executor(daemon: &Arc<Daemon>, links: &Links) -> Heartbeater {
             clock: Arc::clone(&links.clock),
             log: Arc::clone(&links.log),
             renewal: Arc::new(DaemonRenewal::new(links.renewal.clone())),
-            trusted_root: Arc::new(DaemonTrustedRoot::new(Arc::clone(daemon))),
+            trusted_root: Arc::new(NoTrustedRoot),
         },
     )
 }

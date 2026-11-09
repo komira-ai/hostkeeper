@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_daemon::observer::{OwnService, observer_with};
-use hostkeeper_daemon::selfupdate::{REASON_AWAITING_RESTART, RELEASE_BINARY, binary_dir};
+use hostkeeper_daemon::selfupdate::{APT_RELEASE_BINARY, REASON_AWAITING_RESTART, binary_dir};
 use hostkeeper_daemon::{Daemon, Ports, Reply};
 use hostkeeper_hook::{Class, Phase, Step, Verdict};
 use hostkeeper_observe::proc::digest_open_file;
@@ -97,7 +97,8 @@ impl SelfRig {
         let dir = self.rig.store.add(HK, version, &manifest);
         fs::create_dir_all(dir.join("units")).expect("the units directory");
         fs::write(dir.join("units/hostkeeper.service"), SHIPPED_UNIT).expect("the unit");
-        let binary = dir.join(RELEASE_BINARY);
+        let binary = dir.join(APT_RELEASE_BINARY);
+        fs::create_dir_all(binary.parent().expect("the bin directory")).expect("the bin directory");
         fs::write(&binary, format!("#!hostkeeper {version}\n")).expect("the binary");
         fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).expect("its mode");
         dir
@@ -106,7 +107,8 @@ impl SelfRig {
     /// The release of hostkeeper at `version`, with its binary, in the package store.
     pub fn release(&self, version: &str) -> PathBuf {
         let dir = self.rig.stage(HK, version);
-        let binary = dir.join(RELEASE_BINARY);
+        let binary = dir.join(APT_RELEASE_BINARY);
+        fs::create_dir_all(binary.parent().expect("the bin directory")).expect("the bin directory");
         fs::write(&binary, format!("#!hostkeeper {version}\n")).expect("the binary");
         fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).expect("its mode");
         dir

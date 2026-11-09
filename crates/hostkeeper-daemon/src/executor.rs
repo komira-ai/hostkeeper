@@ -36,12 +36,10 @@ use crate::installed::{self, CURRENT, Lifecycle};
 use crate::locks::{Held, Package, ServiceGuard, ServiceLocks, StepLock};
 use crate::node::NodeState;
 use crate::observer;
-use crate::packages::Packages;
 use crate::prune::{ForceLockPoint, Prune};
 use crate::refusal::Refusal;
 use crate::repository::{Repository, RepositoryPorts};
 use crate::selfupdate::{self, Restart};
-use crate::trusted_root::RootReport;
 use crate::verb::{HookedVerb, Verb};
 use crate::verbs;
 use crate::verbs::abort::Aborted;
@@ -62,8 +60,6 @@ pub type AlertSink = Arc<dyn Fn(&str) + Send + Sync>;
 pub struct Ports {
     /// Runs one step of a hook.
     pub launcher: Arc<dyn StepLauncher>,
-    /// Fetches, verifies, unpacks and seals packages.
-    pub packages: Arc<dyn Packages>,
     /// Monotonic seconds and the boot id; nothing the daemon decides reads the wall clock.
     pub clock: Arc<dyn Clock>,
     /// How often each service's dead-man looks at its running step, in seconds; `None` starts
@@ -72,7 +68,7 @@ pub struct Ports {
     /// The service manager: the units a `force` stops, starts and asks after, and
     /// `daemon-reload`.
     pub units: Arc<dyn UnitControl + Send + Sync>,
-    /// Where placed-path linking works, and the filesystem it goes through.
+    /// Where the daemon's links and `placed.json` are, and the filesystem they go through.
     pub placement: Placement,
     /// The prune of the versions a confirmed switch leaves behind: at the end of an update that
     /// ends `Succeeded`, and at step 18 of a `force` that moved `current`.
@@ -91,7 +87,7 @@ pub struct Ports {
     pub repository: Arc<RepositoryPorts>,
 }
 
-/// Where placed-path linking works (design section 4.7, "Placed paths"): the directories as the
+/// Where the daemon's links and `placed.json` are (design section 4.7): the directories as the
 /// host names them, and the filesystem every path is read and written through. The packages
 /// directory of `roots`, as `fs` reaches it, is [`Dirs::packages`].
 pub struct Placement {
@@ -117,7 +113,6 @@ pub struct Ctx {
     /// The version of this daemon, which a manifest's `min_hostkeeper` is compared with.
     pub own_version: HostkeeperVersion,
     pub launcher: Arc<dyn StepLauncher>,
-    pub packages: Arc<dyn Packages>,
     pub clock: Arc<dyn Clock>,
     pub units: Arc<dyn UnitControl + Send + Sync>,
     pub placement: Placement,
@@ -253,7 +248,6 @@ impl Ctx {
         }
     }
 
-    /// The placed-path linker of this host.
     /// The repository installer with this daemon's ports ([`crate::repository`]).
     pub fn repository(&self) -> Repository {
         Repository {
@@ -282,6 +276,7 @@ impl Ctx {
         }
     }
 
+    /// The placer of this host: its `current` and `previous` links and `placed.json`.
     pub fn placer(&self) -> Placer<'_> {
         Placer::new(
             self.placement.roots.clone(),
@@ -322,7 +317,6 @@ impl Ctx {
                     self.placement.roots.clone(),
                     Arc::clone(&self.placement.fs),
                     Arc::clone(&self.units),
-                    self.own_version,
                     self.repository(),
                 ),
                 Arc::clone(&self.clock),
@@ -581,10 +575,6 @@ pub struct DaemonStatus {
     pub version: HostkeeperVersion,
     /// Every service with a package directory, a state directory or a tombstone, by name.
     pub services: Vec<ServiceStatus>,
-    /// The Sigstore trusted root the package store checks attestations with: its age and the
-    /// reason it needs attention ([`Packages::trusted_root`]); `None` from a store that reports
-    /// none.
-    pub trusted_root: Option<RootReport>,
 }
 
 /// Why [`Daemon::status`] could not list the services.
@@ -625,7 +615,6 @@ impl Daemon {
                 dirs,
                 own_version,
                 launcher: ports.launcher,
-                packages: ports.packages,
                 clock: ports.clock,
                 units: ports.units,
                 placement: ports.placement,
@@ -866,7 +855,6 @@ impl Daemon {
         Ok(DaemonStatus {
             version: ctx.own_version,
             services,
-            trusted_root: ctx.packages.trusted_root(),
         })
     }
 }

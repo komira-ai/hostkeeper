@@ -1,9 +1,8 @@
 //! Which installers the daemon announces (packages.md section 5.4), decided once at its start
 //! from its platform and the host's `os-release`.
 //!
-//! | Installer            | Announced when | Item |
-//! |----------------------|----------------|------|
-//! | `hostkeeper-archive` | Always         | A4   |
+//! No installer is announced by every host: [`announce`] gives none, and the daemon adds the
+//! native installer of the host's package database when the host may run it.
 //!
 //! A Linux host's **family** comes from `/etc/os-release`, or `/usr/lib/os-release` when that is
 //! missing or cannot be read, as `os-release(5)` orders them: its `ID`, then each token of `ID_LIKE` in order, and
@@ -13,19 +12,15 @@
 //! not closed) give no family. A macOS host has no family and never reads `os-release`.
 //!
 //! The family chooses the one native installer a host may announce, the one of its own package
-//! database. [`announce`] gives `hostkeeper-archive` alone; the daemon adds `apt` for the `deb`
-//! family when the host also has apt's tools, apt 2.2 or later and a repository entry
-//! ([`crate::repository::announce`]). `macos-pkg` (A9) on a Mac and a `dnf` backend (A8) for
-//! `rpm` are not announced yet. The daemon reports the family it found at its start.
+//! database: the daemon adds `apt` for the `deb` family when the host also has apt's tools, apt
+//! 2.2 or later and a repository entry ([`crate::repository::announce`]). `macos-pkg` (A9) on a
+//! Mac and a `dnf` backend (A8) for `rpm` are not announced yet. The daemon reports the family it found at its start.
 
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use hostkeeper_release::Installer;
-
-/// The installers every daemon announces, on every host.
-pub const ALWAYS: [Installer; 1] = [Installer::HostkeeperArchive];
 
 /// The most bytes of an `os-release` file read; a longer file is read as one that cannot be
 /// read, and the next file is tried.
@@ -73,11 +68,10 @@ pub struct Announcement {
 }
 
 impl Default for Announcement {
-    /// What a daemon announces whose host's files were not read: the installers every host
-    /// announces, and no family.
+    /// What a daemon announces whose host's files were not read: no installer and no family.
     fn default() -> Announcement {
         Announcement {
-            installers: ALWAYS.to_vec(),
+            installers: Vec::new(),
             family: None,
         }
     }
@@ -116,7 +110,7 @@ pub fn announce_with(host: OsHost<'_>, read: &dyn Fn(&Path) -> Option<String>) -
         false => os_release(host.root, read).as_deref().and_then(family),
     };
     Announcement {
-        installers: ALWAYS.to_vec(),
+        installers: Vec::new(),
         family,
     }
 }

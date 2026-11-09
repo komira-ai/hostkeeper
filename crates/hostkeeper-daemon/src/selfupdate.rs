@@ -48,8 +48,8 @@
 //!    command of the release runs, and the record is the one a hook that does nothing gives.
 //!    Below it the command runs;
 //! 9. the follow-on ([`hostkeeper_steps::follow_on`]), the hand-over (docs/design/two-programs.md,
-//!    4.3): the new binary ([`release_binary`]: `bin/hostkeeper` of an archive version,
-//!    `tree/usr/bin/hostkeeper` of a `.deb`, `tree/usr/local/bin/hostkeeper` of a `.pkg`)
+//!    4.3): the new binary ([`release_binary`]: `tree/usr/bin/hostkeeper` of a `.deb`,
+//!    `tree/usr/local/bin/hostkeeper` of a `.pkg`)
 //!    staged in the binary directory ([`binary_dir`]), the link `next`
 //!    pointed at it, the record written as waiting for the restart into it with a start count of
 //!    0. `current` is not moved. The reply is `Deferred` `awaiting_restart`, never `Succeeded`,
@@ -115,14 +115,10 @@ use crate::locks::{Holder, ServiceGuard};
 use crate::own_package::{self, DEFER_SECS, OwnActivate, REASON_ACTIVATE_PENDING};
 use crate::refusal::Refusal;
 use crate::rollback_floor::{self, REASON_ROLLBACK_BELOW_INSTALLER};
-use crate::target;
 use crate::verb::{Hooked, HookedVerb};
 use crate::verbs::force::SELF_SERVICE;
 use crate::verbs::update;
 
-/// The hostkeeper binary in a release of the service `hostkeeper` that is a
-/// `hostkeeper-archive` version.
-pub const RELEASE_BINARY: &str = "bin/hostkeeper";
 /// The hostkeeper binary in a version of the service `hostkeeper` staged from its `.deb`
 /// (`apt`): the package's `/usr/bin/hostkeeper` in the version's tree
 /// (docs/design/packages-native.md, section 10.4, step 1).
@@ -177,14 +173,12 @@ pub fn judge(running: HostkeeperVersion, version: &str) -> Judgement {
 }
 
 /// The hostkeeper binary of a version of the service `hostkeeper` staged as `staged` (its
-/// `target.json`, `None` for a `hostkeeper-archive` version), relative to the version's
-/// directory: [`RELEASE_BINARY`], [`PKG_RELEASE_BINARY`] for a `macos-pkg` version, and
-/// [`APT_RELEASE_BINARY`] for any other, which only `apt` stages.
-pub fn release_binary(staged: Option<&Target>) -> &'static str {
-    match staged.map(|entry| entry.installer.parse::<Installer>()) {
-        None => RELEASE_BINARY,
-        Some(Ok(Installer::MacosPkg)) => PKG_RELEASE_BINARY,
-        Some(_) => APT_RELEASE_BINARY,
+/// `target.json`), relative to the version's directory: [`PKG_RELEASE_BINARY`] for a
+/// `macos-pkg` version, and [`APT_RELEASE_BINARY`] for any other, which only `apt` stages.
+pub fn release_binary(staged: &Target) -> &'static str {
+    match staged.installer.parse::<Installer>() {
+        Ok(Installer::MacosPkg) => PKG_RELEASE_BINARY,
+        _ => APT_RELEASE_BINARY,
     }
 }
 
@@ -321,10 +315,9 @@ fn steps(
     let runner = ctx.runner(service);
     let _step = guard.step(&ctx.step_lock);
     others_idle(ctx, service)?;
-    let release = prepared.dir.staged();
-    let staged = target::read(prepared.dir.dir())
-        .map_err(|e| Reply::refused(Refusal::ReleaseUnreadable, e))?;
-    let binary = Path::new(release_binary(staged.as_ref()));
+    let release = &prepared.dir;
+    let staged = &prepared.entry;
+    let binary = Path::new(release_binary(staged));
     match release.check(binary) {
         Ok(_) => {}
         Err(ArtifactError::BadHookPath(_) | ArtifactError::HookMissing(_)) => {
@@ -347,7 +340,7 @@ fn steps(
     let order_id = order.order_id.as_deref();
     // `placed.json` as the rollback's check read it: only this order, under the service's lock,
     // changes hostkeeper's installer.
-    let left = own_package::deferred(staged.as_ref(), &placed);
+    let left = own_package::deferred(Some(staged), &placed);
     if let (true, true, Verdict::Succeeded { promotion_pending }) =
         (running == version, left, &finished.verdict)
     {

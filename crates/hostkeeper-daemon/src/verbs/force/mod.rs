@@ -12,16 +12,15 @@
 //!   ([`checks::try_rule_with`] held to [`Checks::for_force`]): a resend of a force that ended is
 //!   answered from its record, `try_conflict` and `stale_try` are as for any order, and neither
 //!   `busy` (for a hooked update of the service) nor `halted` applies. A version below the
-//!   running one is not refused: the host keeps no floor of its own. The order's entry, when it
-//!   carries one, is judged next by [`crate::entry::check`], as for any order that names a
-//!   package, and the port is given it.
-//! - Steps 1 to 3, before anything on the host changes ([`obtain`]): the version directory, as
-//!   the host holds it when its tree still has its seal's digest and the seal names the order's
-//!   package digest, else from the [`crate::packages::Packages`] port (fetched, verified,
-//!   unpacked and sealed); its manifest read for the order's service and version and this
-//!   daemon's version; and the path check of the placed-path linker against `placed.json`. A
-//!   failure is the verdict `Failed` before the commit with the reason the port, the loader or
-//!   the linker gives, and nothing is written.
+//!   running one is not refused: the host keeps no floor of its own. An order with no entry is
+//!   `order_invalid`: a version is staged from the entry alone. The order's entry is judged next
+//!   by [`crate::entry::check`], as for any order that names a package.
+//! - Steps 1 to 3, before anything on the host changes ([`obtain`]): the version directory,
+//!   staged by the entry's installer, or as the host holds it when its tree still has its seal's
+//!   digest and the seal names the order's package digest (the start pass's resume, which has no
+//!   entry); and its manifest read for the order's service and version and this daemon's
+//!   version. A failure is the verdict `Failed` before the commit with the reason the stage or
+//!   the loader gives, and nothing is written.
 //! - The standing halt: an order whose halt generation is greater than the held one raises the
 //!   held generation and clears a `Halt` record
 //!   ([`hostkeeper_steps::StepRunner::clear_halt`]); a lower or equal one leaves the hold as it
@@ -37,9 +36,9 @@
 //!
 //! A force record with no verdict is the journal of a force under way. A resend of the same
 //! order, and the start pass ([`resume`]), run steps 7 to 16 again from its top with the recorded
-//! target, fetching it again only when its directory is gone: a resend under the same checks as
-//! the order; the start pass, whose record keeps no index digest, against the package digest, the
-//! index entry and the attestation, with no check of the index's own SHA-256.
+//! target: a resend stages it again from the entry only when its directory is gone or no longer
+//! whole; the start pass, whose record keeps no entry, needs the directory and fails the force
+//! `Failed` before the commit when it is gone.
 
 mod switch;
 
@@ -60,7 +59,6 @@ use crate::executor::{Ctx, Reply};
 use crate::files;
 use crate::installed::{self, CURRENT};
 use crate::locks::{Holder, Package, ServiceGuard};
-use crate::packages::PackageError;
 use crate::refusal::Refusal;
 use crate::verb::{Forced, HookedVerb, PackageDigest};
 use crate::verbs::update::{last_record, while_held};
@@ -155,17 +153,21 @@ pub fn run(ctx: &Ctx, order: Forced) -> Reply {
             );
         }
     }
-    // The entry of the order, when it carries one, is judged before anything is fetched.
-    let judged = order.package.entry.as_ref().map_or(Ok(()), |entry| {
-        entry::check(
-            ctx.own_version,
-            &ctx.announcement.installers,
-            &service,
-            &order.package.digest,
-            entry,
-        )
-    });
-    if let Err(refused) = judged {
+    // The entry of the order is judged before anything is staged; an order with none names no
+    // package this daemon can stage.
+    let Some(entry) = order.package.entry.as_ref() else {
+        return Reply::refused(
+            Refusal::OrderInvalid,
+            format!("the force of {service} carries no entry to stage the version from"),
+        );
+    };
+    if let Err(refused) = entry::check(
+        ctx.own_version,
+        &ctx.announcement.installers,
+        &service,
+        &order.package.digest,
+        entry,
+    ) {
         return refused;
     }
     // The try rules let through a force record with no verdict only for this very order.
@@ -180,11 +182,7 @@ pub fn run(ctx: &Ctx, order: Forced) -> Reply {
                 &guard,
                 &service,
                 (rec, force),
-                (
-                    &package,
-                    order.package.index_digest.as_ref(),
-                    order.package.entry.as_ref(),
-                ),
+                (&package, order.package.entry.as_ref()),
             ),
             Err(reply) => reply,
         },
@@ -210,7 +208,7 @@ pub fn resume(ctx: &Ctx, service: &ServiceName, rec: Record, force: ForceRecord)
         digest,
     };
     match locked(ctx, service, &package, None) {
-        Ok(guard) => resume_with(ctx, &guard, service, (rec, force), (&package, None, None)),
+        Ok(guard) => resume_with(ctx, &guard, service, (rec, force), (&package, None)),
         Err(reply) => reply,
     }
 }
@@ -228,11 +226,7 @@ fn fresh<'c>(
         ctx,
         service,
         &order.package.version,
-        (
-            &order.package.digest,
-            order.package.index_digest.as_ref(),
-            order.package.entry.as_ref(),
-        ),
+        (&order.package.digest, order.package.entry.as_ref()),
     ) {
         Ok(target) => target,
         Err(failed) => return failed,
@@ -263,66 +257,46 @@ fn resume_with(
     guard: &ServiceGuard<'_>,
     service: &ServiceName,
     journal: (Record, ForceRecord),
-    (package, index_digest, entry): (&Package, Option<&PackageDigest>, Option<&Entry>),
+    (package, entry): (&Package, Option<&Entry>),
 ) -> Reply {
     let (rec, force) = journal;
-    match obtain(
-        ctx,
-        service,
-        &package.version,
-        (&package.digest, index_digest, entry),
-    ) {
+    match obtain(ctx, service, &package.version, (&package.digest, entry)) {
         Ok(target) => switch::run(ctx, guard, rec, force, &target.manifest),
         Err(reply) => reply,
     }
 }
 
-/// Steps 1 to 3: the package, its manifest and the check of its paths. A version already on the
-/// host whole, under a seal of the order's digest, is used as it is; any other is asked of the
-/// package port, which fetches, verifies, unpacks and seals it. Nothing on the host changes but
-/// what the fetch itself stages.
+/// Steps 1 to 3: the package and its manifest. A version the entry's installer stages, or finds
+/// sealed on the host for the same entry, is used; with no entry (the start pass's resume) the
+/// version already on the host whole, under a seal of the order's digest, is, and one that is
+/// gone fails the force before anything on the host changes. Nothing changes but what the stage
+/// itself writes.
 fn obtain(
     ctx: &Ctx,
     service: &ServiceName,
     version: &Version,
-    (digest, index_digest, entry): (&PackageDigest, Option<&PackageDigest>, Option<&Entry>),
+    (digest, entry): (&PackageDigest, Option<&Entry>),
 ) -> Result<Target, Reply> {
     let repository = entry.and_then(|entry| {
         crate::repository::backend_of_entry(entry).map(|backend| (backend, entry))
     });
-    let staged = match repository {
+    let (dir, tree_digest) = match repository {
         // A repository entry is staged, or found sealed for the same entry, by its installer.
         Some((backend, entry)) => {
             let dir = ctx
                 .repository()
                 .stage(backend, service, version, entry)
                 .map_err(force_reply)?;
-            Some((dir.dir().to_path_buf(), dir.staged().digest().to_owned()))
+            (dir.dir().to_path_buf(), dir.digest().to_owned())
         }
-        None => on_disk(ctx, service, version, digest),
-    };
-    let (dir, tree_digest) = match staged {
-        Some(found) => found,
-        None => {
-            let dir = ctx
-                .packages
-                .version_dir(service, version, digest, index_digest, entry)
-                .map_err(|error| {
-                    let refusal = checks::package_refusal(&error);
-                    failed_before(package_class(&error), refusal.token())
-                })?;
-            (dir.dir().to_path_buf(), dir.staged().digest().to_owned())
-        }
+        None => on_disk(ctx, service, version, digest).ok_or_else(|| {
+            failed_before(
+                ManifestClass::Environment,
+                Refusal::ReleaseUnreadable.token(),
+            )
+        })?,
     };
     let manifest = read_manifest(ctx, service, version, &dir)?;
-    // A repository package places nothing: the package manager installs its files.
-    if repository.is_none() {
-        let placer = ctx.placer();
-        placer
-            .desired(&manifest)
-            .and_then(|claims| placer.check(&claims))
-            .map_err(|error| failed_before(error.class(), error.reason()))?;
-    }
     Ok(Target {
         manifest,
         tree_digest,
@@ -390,14 +364,6 @@ fn failed_before(class: ManifestClass, reason: &str) -> Reply {
         },
         reason: Some(reason.to_owned()),
         resent: false,
-    }
-}
-
-/// Whom a package error is blamed on: the class it carries ([`PackageError::class`]).
-fn package_class(error: &PackageError) -> ManifestClass {
-    match error.class() {
-        Class::Release => ManifestClass::Release,
-        Class::Environment => ManifestClass::Environment,
     }
 }
 

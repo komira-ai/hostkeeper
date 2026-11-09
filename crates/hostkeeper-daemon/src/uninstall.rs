@@ -13,10 +13,10 @@
 //!    exit 0 is recorded in the tombstone (`hook_done`) and the uninstall goes on; exit 1, a
 //!    timeout or a signal is `Failed`; 75 is `Deferred`; 76 is a halt, recorded in the tombstone
 //!    (`halted`), and nothing more of the uninstall runs;
-//! 5. the `remove` of the service's installer ([`crate::installers`]): for `hostkeeper-archive`,
-//!    the units disabled, every placed link removed and `daemon-reload` run, and the paths
-//!    dropped from `placed.json` ([`hostkeeper_placed::Placer::remove_all`], which records the
-//!    drop in the write that owes the reload, so that a crash between the two leaves it owed);
+//! 5. the `remove` of the service's installer ([`crate::installers`]): for a repository
+//!    installer, the package unheld and purged, its enablement links removed and `daemon-reload`
+//!    run, and the record dropped ([`crate::repository::Repository::remove`]); a service with no installer
+//!    recorded has nothing to remove here;
 //! 6. last, in this order: `current`, `previous`, the seals, the version directories and what
 //!    else is in the package directory, then the step record and params file (the held halt
 //!    generation stays: it is never lowered); then the tombstone.
@@ -46,7 +46,7 @@ use crate::executor::{Ctx, Reply};
 use crate::files;
 use crate::halt::HELD_HALT_FILE;
 use crate::installed::{self, CURRENT, PREVIOUS};
-use crate::installers::{self, PlacerHost, Steps};
+use crate::installers;
 use crate::refusal::Refusal;
 use crate::verbs::update::last_record;
 
@@ -380,29 +380,21 @@ fn run_hook(
 
 /// Steps 5 and 6, then the tombstone goes: the service is gone.
 fn remove(ctx: &Ctx, service: &ServiceName) -> Reply {
-    let placer = ctx.placer();
-    let removed = placer
+    let backend = ctx
+        .placer()
         .store()
         .load()
         .map_err(|error| error.to_string())
-        .and_then(|record| installers::steps_for(&record, service));
-    let removed = match removed {
-        Ok(Steps::Artifact(steps)) => {
-            let host = PlacerHost {
-                placer: &placer,
-                service,
-                switch: None,
-            };
-            steps.remove(&host).map_err(|error| error.to_string())
+        .and_then(|record| installers::backend_for(&record, service));
+    match backend {
+        Ok(Some(_)) => {
+            if let Err(reply) = remove_repository(ctx, service) {
+                return reply;
+            }
         }
-        Ok(Steps::Repository(_)) => match remove_repository(ctx, service) {
-            Ok(()) => Ok(()),
-            Err(reply) => return reply,
-        },
-        Err(error) => Err(error),
-    };
-    if let Err(error) = removed {
-        return link_failed(error);
+        // No installer recorded: no package manager owns a file of the service.
+        Ok(None) => {}
+        Err(error) => return link_failed(error),
     }
     // The package directory as the placement's filesystem reaches it; the daemon's own state
     // directory, which is no placed path, as this process sees it.

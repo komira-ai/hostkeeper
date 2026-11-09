@@ -19,7 +19,6 @@ use hostkeeper_steps::Finished;
 use hostkeeper_steps::record::{Record, State};
 
 use crate::installed::Lifecycle;
-use crate::packages::PackageError;
 use crate::refusal::Refusal;
 use crate::verb::{HookedVerb, PackageDigest};
 
@@ -208,11 +207,6 @@ pub fn self_service(verb: HookedVerb, service: &ServiceName) -> Result<(), Refus
         true => Err(Refusal::SelfService),
         false => Ok(()),
     }
-}
-
-/// The token of a package error.
-pub fn package_refusal(error: &PackageError) -> Refusal {
-    error.refusal()
 }
 
 /// What a hooked order is, for the try rules: the verb, the package and the try.

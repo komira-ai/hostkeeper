@@ -13,7 +13,7 @@ use hostkeeper_daemon::testing::spawn;
 use hostkeeper_daemon::verb::HookedVerb;
 use hostkeeper_daemon::{Outcome, Refusal, Reply};
 use hostkeeper_hook::{Class, Phase, Step, Verdict};
-use hostkeeper_placed::error::{ClaimError, Owner};
+use hostkeeper_placed::error::Owner;
 use hostkeeper_placed::{PlacedError, Tombstone};
 use hostkeeper_proto::hostkeeper::agent::v1::{Force, Order, order};
 use support::{Rig, alerting, d, install, lines, name, snapshot, uninstall};
@@ -101,9 +101,8 @@ fn the_lifecycle_rules_refuse_by_where_the_service_is() {
     }
 }
 
-/// Catches a failure of linking reported with another token: a path held by another is
-/// `path_conflict`, a claim or unit that breaks a rule of linking `manifest_mismatch`, a
-/// tombstone `uninstalling`, and a failure of the host `link_failed`.
+/// Catches a failure of the links reported with another token: a `current` or `previous` that is
+/// no link to a version is `path_conflict`, and a failure of the host `link_failed`.
 #[test]
 fn each_failure_of_linking_has_its_token() {
     let rows = [
@@ -113,16 +112,6 @@ fn each_failure_of_linking_has_its_token() {
                 owner: Owner::File,
             },
             Refusal::PathConflict,
-        ),
-        (
-            PlacedError::Claim(ClaimError::EmptyPath),
-            Refusal::ManifestMismatch,
-        ),
-        (
-            PlacedError::Tombstoned {
-                service: "web".to_owned(),
-            },
-            Refusal::Uninstalling,
         ),
         (
             PlacedError::Io {

@@ -6,13 +6,13 @@ use std::fs::File;
 use std::io;
 use std::io::Write;
 
-use hostkeeper_config::daemon::DaemonConfig;
 use hostkeeper_proto::hostkeeper::release::v1::Blob;
 
 use super::*;
+use crate::stores;
 use crate::testing::{
     BundleSpec, CHANNEL, Failing, FakeClock, FakeFetcher, FakeVerifier, ReadOnlyDir, bundle_json,
-    config, full, listing, scratch, serve, service_dir, sha256_hex, signers,
+    full, listing, scratch, serve, service_dir, sha256_hex, signers,
 };
 
 const ARCHIVE: &[u8] = b"the bytes of svc 1.0.0";
@@ -122,8 +122,15 @@ fn run_with(
     target: &Target,
     writer: OpenWriter,
 ) -> Result<Proven, PackageFailure> {
-    let config: DaemonConfig = config(CHANNEL, &"0".repeat(64));
-    let stores = Stores::channel(&config.release_channel);
+    let stores = stores::parse(
+        format!(
+            "[[store]]\nname = \"channel\"\nkind = \"https\"\nbase = \"{}/\"\n",
+            CHANNEL.trim_end_matches('/')
+        )
+        .as_bytes(),
+        0,
+    )
+    .expect("the one store");
     let verifier = FakeVerifier::answering(Ok(()));
     let bounds = Bounds::default();
     let signers = signers(

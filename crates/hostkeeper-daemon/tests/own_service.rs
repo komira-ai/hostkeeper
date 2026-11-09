@@ -30,7 +30,6 @@ use hostkeeper_observe::{
 };
 use hostkeeper_proto::hostkeeper::agent::v1::Health;
 use hostkeeper_steps::Layout;
-use hostkeeper_unpack::{MacVerify, SignatureVerdict, VerifyIoError};
 use support::{OWN, Rig, d};
 
 /// The service of hostkeeper itself.
@@ -69,19 +68,6 @@ impl PidInfo for RunsFile {
             why: e.to_string(),
         })?;
         Ok((meta.dev(), meta.ino()))
-    }
-}
-
-/// A package check that passes everything: these tests unpack nothing.
-struct Passes;
-
-impl MacVerify for Passes {
-    fn quarantine(&self, _path: &Path) -> Result<bool, VerifyIoError> {
-        Ok(false)
-    }
-
-    fn signature(&self, _binary: &Path) -> Result<SignatureVerdict, VerifyIoError> {
-        Ok(SignatureVerdict::Valid)
     }
 }
 
@@ -129,7 +115,6 @@ fn mac_observer(rig: &Rig, print: LaunchctlOutput, exe: &Path) -> hostkeeper_obs
         launchctl,
         asked,
         RunsFile(exe.to_path_buf()),
-        Arc::new(Passes),
     )
     .expect("the macOS set");
     assert_eq!(adapters.own_unit, job());
@@ -304,7 +289,6 @@ fn only_hostkeeper_with_no_unit_of_its_own_is_observed_through_the_daemons_job()
         FakeLaunchctl::new(),
         asked.clone(),
         RunsFile(version_file(&rig, RUNS)),
-        Arc::new(Passes),
     )
     .expect("the macOS set");
     let observer = observer_with(
@@ -354,8 +338,7 @@ fn only_hostkeeper_with_no_unit_of_its_own_is_observed_through_the_daemons_job()
 #[test]
 fn the_sealed_executable_of_hostkeeper_is_its_file_in_the_binary_directory() {
     let rig = mac_host("own-linux-sealed", RUNS, &[RUNS]);
-    let exe =
-        SealedExe::new(&rig.packages, &rig.packages, OWN).with_binary_dir(&binary_dir(&rig.state));
+    let exe = SealedExe::new(&rig.packages, OWN).with_binary_dir(&binary_dir(&rig.state));
     let file = fs::File::open(version_file(&rig, RUNS)).expect("the binary");
     let digest = digest_open_file(&file).expect("its digest");
     assert_eq!(exe.digest(HK, RUNS), Some(digest));
@@ -376,7 +359,7 @@ fn the_sealed_executable_of_hostkeeper_is_its_file_in_the_binary_directory() {
     assert_eq!(exe.digest(HK, "../bin"), None);
     // Without the binary directory, hostkeeper's version is found through its unit as any
     // other's, and the macOS package has none.
-    let plain = SealedExe::new(&rig.packages, &rig.packages, OWN);
+    let plain = SealedExe::new(&rig.packages, OWN);
     assert_eq!(plain.digest(HK, RUNS), None);
 
     let observer = observer_with(
