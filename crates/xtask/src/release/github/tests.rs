@@ -926,3 +926,56 @@ fn download_asks_gh_for_the_one_asset_into_the_directory() {
 }
 
 mod signer;
+
+#[test]
+fn job_names_reads_the_jobs_of_every_page_in_order() {
+    // Catches: only the first page read, so a run of many releases is not found by its publish
+    // job past the hundredth, and the plan leaves a failed release as it is.
+    let path = format!("repos/{REPO_NAME}/actions/runs/42/jobs?per_page=100");
+    let reply = json!([
+        { "total_count": 3, "jobs": [{ "name": "plan" }, { "name": "publish (0.1.2, v0.1.2, c)" }] },
+        { "total_count": 3, "jobs": [{ "name": "image (0.1.2, v0.1.2, c)" }] }
+    ]);
+    let api = gh(&issues_line(&path), &reply.to_string());
+    assert_eq!(
+        api.job_names(&repo(), 42),
+        Ok(words(&[
+            "plan",
+            "publish (0.1.2, v0.1.2, c)",
+            "image (0.1.2, v0.1.2, c)"
+        ]))
+    );
+    assert_eq!(calls(&api), vec![words(&issues_line(&path))]);
+}
+
+#[test]
+fn job_names_refuses_a_page_without_jobs_and_a_job_without_a_name() {
+    // Catches: an error reply or a nameless job read as a run without the release's publish job,
+    // which would leave a failed release as it is instead of failing the plan.
+    let path = format!("repos/{REPO_NAME}/actions/runs/42/jobs?per_page=100");
+    let line = issues_line(&path);
+    let what = format!("gh api --paginate --slurp {path}");
+    let no_jobs = gh(&line, r#"[{"message":"Bad"}]"#);
+    assert_eq!(
+        no_jobs.job_names(&repo(), 42),
+        Err(failure(&what, "jobs is missing or not a list"))
+    );
+    let nameless = gh(&line, r#"[{"jobs":[{"id":1}]}]"#);
+    assert_eq!(
+        nameless.job_names(&repo(), 42),
+        Err(failure(&what, "name is missing or not a string"))
+    );
+    let object = gh(&line, r#"{"message":"Bad"}"#);
+    assert_eq!(
+        object.job_names(&repo(), 42),
+        Err(failure(&what, "the reply is missing or not a list"))
+    );
+    let down = failing(&line, "HTTP 502");
+    assert_eq!(
+        down.job_names(&repo(), 42),
+        Err(failure(
+            &format!("gh api --paginate --slurp {path}"),
+            "HTTP 502"
+        ))
+    );
+}

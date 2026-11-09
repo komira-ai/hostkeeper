@@ -34,7 +34,13 @@
 #          documentation only (it still has its number). A failed `privileged` run for any
 #          commit after the last release holds every later release, and the plan opens (or
 #          brings up to date) the one issue that tracks the hold: so `plan` holds
-#          `issues: write`, and nothing else that writes.
+#          `issues: write`, and nothing else that writes. When it releases no commit, it plans
+#          the newest published release again if the latest run of this workflow that released
+#          it (the run with its job `publish (<version>, <tag>, <commit>)`) completed other than
+#          successfully, so a release whose image push or set-desired failed is tried again by
+#          the next run, every job of it idempotent; it waits for such a run still going, and
+#          stops after three such runs of the release in a row (then a maintainer re-runs the
+#          failed jobs once the cause is fixed).
 # verify   read-only, per release: refuses a commit that is not on main or lacks a successful
 #          push run of each required workflow (cargo xtask release locate), downloads the files
 #          of its artifacts run, checks them against SHA256SUMS, verifies every attestation
@@ -54,12 +60,15 @@
 #          into the registry, ghcr.io/komira-ai/hostkeeper-coordinator, tagged <X.Y.Z>. Nothing is
 #          built: `cargo xtask release image-layout` lays out the blobs and manifests of the two
 #          checked image tarballs and the checked image index (`hostkeeper-coordinator-<X.Y.Z>.image.json`,
-#          which artifacts.yml made of them and attested), and `skopeo copy --all
-#          --preserve-digests` pushes that layout, refusing any change of a digest; the registry
-#          then serves the image index by its SHA-256, byte for byte, or the job fails. So the
-#          digest the release notes name is the attested one. The one job that holds
-#          `packages: write`, with the job's own token; pushing the same release again changes
-#          nothing.
+#          which artifacts.yml made of them and attested), and `cargo xtask release push-image`
+#          pushes that layout with `skopeo copy --all --preserve-digests`, refusing any change of
+#          a digest; the registry then serves the image index by its SHA-256, byte for byte, or
+#          the job fails. So the digest the release notes name is the attested one. A push or
+#          read back that fails (the registry has refused the job's valid token for single
+#          requests) is tried again whole after a wait, in up to five attempts over about a
+#          quarter of an hour. The one job that holds `packages: write`, with the job's own
+#          token; pushing the same release again changes nothing, so a re-run of the job, or the
+#          next run's plan, pushes it again.
 # targets, set-desired
 #          only while the repository variable RELEASE_SETS_DESIRED is `true`, after every
 #          publish of the run: write the targets of the newest release, then set it as
@@ -295,11 +304,11 @@ jobs:
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     env:
       RELEASE_VERSION: ${{ matrix.version }}
-      IMAGE_REPOSITORY: ghcr.io/komira-ai/hostkeeper-coordinator
     steps:
+      # The workflow's own commit: `release push-image` is newer than the oldest commit a run
+      # can release (see release_ref.rs of the workflow lint). The image is the release's files.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ matrix.commit }}
           persist-credentials: false
       - run: rustup toolchain install
       - name: Compile xtask
@@ -312,20 +321,16 @@ jobs:
       - name: Check the files against SHA256SUMS
         working-directory: dist
         run: sha256sum --check --strict SHA256SUMS
-      - name: The image's layout, of the two image tarballs and the image index they make, and its digest (the SHA-256 of the image index) as IMAGE_DIGEST
-        run: cargo xtask release image-layout dist --version "$RELEASE_VERSION" --out "$RUNNER_TEMP/layout" --env-file "$GITHUB_ENV"
+      - name: The image's layout, of the two image tarballs and the image index they make
+        run: cargo xtask release image-layout dist --version "$RELEASE_VERSION" --out "$RUNNER_TEMP/layout"
       # The token is the job's own, `packages: write` on this repository's packages only; it is
       # read from standard input and is on no command line.
       - name: Sign in to the registry
         env:
           GH_TOKEN: ${{ github.token }}
         run: skopeo login ghcr.io --username "$GITHUB_ACTOR" --password-stdin <<< "$GH_TOKEN"
-      - name: Push the image, refusing any change of a digest
-        run: skopeo copy --all --preserve-digests "oci:$RUNNER_TEMP/layout:$RELEASE_VERSION" "docker://$IMAGE_REPOSITORY:$RELEASE_VERSION"
-      - name: Read the image index back by its digest
-        run: skopeo inspect --raw "docker://$IMAGE_REPOSITORY@$IMAGE_DIGEST" > "$RUNNER_TEMP/served.json"
-      - name: The registry serves the released image index, byte for byte
-        run: cmp "$RUNNER_TEMP/served.json" "dist/hostkeeper-coordinator-$RELEASE_VERSION.image.json"
+      - name: Push the image, refusing any change of a digest, until the registry serves the released image index by its digest, byte for byte (up to five attempts)
+        run: cargo xtask release push-image dist --version "$RELEASE_VERSION" --layout "$RUNNER_TEMP/layout"
 
   # targets and set-desired: hostkeeper's own deploy (docs/deploy/github-actions.md). They run
   # only once every release of this run is published, and only while the repository variable

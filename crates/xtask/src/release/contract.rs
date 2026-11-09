@@ -53,6 +53,10 @@ pub(crate) const CI_WORKFLOW: &str = "ci.yml";
 /// The workflow file that runs the privileged tests (real systemd, root).
 pub(crate) const PRIVILEGED_WORKFLOW: &str = "privileged.yml";
 
+/// The workflow file that releases (`release.yml`), whose runs `release plan` reads to resume a
+/// release whose run did not succeed.
+pub(crate) const RELEASE_WORKFLOW: &str = "release.yml";
+
 /// The three workflows a commit needs a successful push run of on [`MAIN`] to be released.
 pub(crate) const REQUIRED_WORKFLOWS: [&str; 3] =
     [CI_WORKFLOW, PRIVILEGED_WORKFLOW, ARTIFACTS_WORKFLOW];

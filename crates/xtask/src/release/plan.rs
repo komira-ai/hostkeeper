@@ -16,10 +16,23 @@
 //! not held by a red privileged run, and every required workflow has a successful push run on
 //! `main` for it. Versions come from the first-parent history ([`version::version_in`]), never
 //! from tags, so a documentation-only commit has its number and later numbers count it.
+//!
+//! A release is published before its image is pushed and before it is set as the desired
+//! version, so a run can publish a release and then fail. When the plan releases no commit, it
+//! therefore looks for the latest run of `release.yml` on `main` that released the newest
+//! published release (the one with its job `publish (<version>, <tag>, <commit>)`): when that run
+//! completed other than successfully, the plan releases that release again, and every job after
+//! it runs again for it (publishing a release that holds the same files, and pushing the same
+//! image, change nothing). A run that has not completed is waited for; when no run is found the
+//! release is left as it is; after [`RELEASE_RUNS`] such runs in a row that did not succeed it
+//! is left too, and says so (a maintainer re-runs the failed jobs once the cause is fixed). A
+//! newer commit released supersedes it: the run sets the newer one.
 
 use std::path::PathBuf;
 
-use super::contract::{Commit, PRIVILEGED_WORKFLOW, REQUIRED_WORKFLOWS, Repo, Version};
+use super::contract::{
+    Commit, MAIN, PRIVILEGED_WORKFLOW, RELEASE_WORKFLOW, REQUIRED_WORKFLOWS, Repo, Version,
+};
 use super::ports::{Ports, Release, Run};
 use super::{Error, RunState, answer, state, version};
 
@@ -41,6 +54,11 @@ pub(crate) const DOCS_PATHS: [&str; 2] = ["docs/", "**/*.md"];
 
 /// The title of the one issue that tracks a hold on releases.
 pub(crate) const BLOCK_TITLE: &str = "Releases are held: the privileged tests failed on main";
+
+/// The release runs of one release that may end other than successfully in a row before the plan
+/// stops releasing it again: a failure that every attempt meets (a refusal that does not pass)
+/// then holds no more than three runs of the release group.
+const RELEASE_RUNS: usize = 3;
 
 /// Why a frozen repository releases nothing.
 const FROZEN: &str = "RELEASE_FREEZE is set";
@@ -131,8 +149,9 @@ pub(crate) fn plan(ports: &Ports<'_>, request: &Request) -> Result<Vec<String>, 
         .collect();
     // The window is chain[..end]: the commits newer than the last release, or, with no release,
     // those from the commit that last changed the version file.
-    let end = match last_release(&releases, &chain) {
-        Some(index) => index,
+    let last = last_release(&releases, &chain);
+    let end = match &last {
+        Some((index, _)) => *index,
         None => version::base_of(ports.git, &chain, &request.version_file)? + 1,
     };
     let hold = hold(ports, request, &chain, end)?;
@@ -155,17 +174,107 @@ pub(crate) fn plan(ports: &Ports<'_>, request: &Request) -> Result<Vec<String>, 
         }
         candidates.push(candidate);
     }
-    let printed = candidates.iter().map(describe).collect();
+    let mut printed: Vec<String> = candidates.iter().map(describe).collect();
+    if let (Some((index, version)), true) = (last, candidates.iter().all(|c| c.reason.is_some())) {
+        let (line, again) = resume(&context, index, version)?;
+        printed.extend(line);
+        candidates.extend(again);
+    }
     finish(request, printed, &candidates)
 }
 
-/// The index in `chain` of the published release nearest the tip whose tag is a version.
-fn last_release(releases: &[Release], chain: &[Commit]) -> Option<usize> {
+/// The newest published release, `version` at `index` of the chain, released again when the
+/// latest run of `release.yml` on `main` that released it completed other than successfully (see
+/// the module): the line that says why or why not (none when no run released it), and the
+/// candidate.
+fn resume(
+    context: &Context<'_>,
+    index: usize,
+    version: Version,
+) -> Result<(Option<String>, Option<Candidate>), Error> {
+    let commit = &context.chain[index];
+    let job = format!("publish ({version}, {}, {commit})", version.tag());
+    let mut runs = Vec::new();
+    for head in &context.chain[..=index] {
+        let found = context
+            .ports
+            .runs
+            .runs(&context.request.repo, RELEASE_WORKFLOW, head)?;
+        runs.extend(found.into_iter().filter(|r| r.branch == MAIN));
+    }
+    runs.sort_by_key(|r| std::cmp::Reverse(r.id));
+    runs.dedup_by_key(|r| r.id);
+    let tag = version.tag();
+    // The release's runs that completed other than successfully, newest first, back to its
+    // latest success.
+    let mut failed: Vec<(u64, String)> = Vec::new();
+    for run in runs {
+        let names = context
+            .ports
+            .runs
+            .job_names(&context.request.repo, run.id)?;
+        if !names.contains(&job) {
+            continue;
+        }
+        let ended = (run.status == "completed")
+            .then(|| run.conclusion.clone().unwrap_or_else(|| "none".to_owned()));
+        match (failed.is_empty(), ended.as_deref()) {
+            (true, Some("success")) => {
+                let line = format!("{tag} of {commit}: its release run {} succeeded", run.id);
+                return Ok((Some(line), None));
+            }
+            (true, None) => {
+                let line = format!(
+                    "{tag} of {commit}: waiting for its release run {}, which has not completed",
+                    run.id
+                );
+                return Ok((Some(line), None));
+            }
+            (_, Some(conclusion)) if conclusion != "success" => {
+                failed.push((run.id, conclusion.to_owned()));
+                if failed.len() == RELEASE_RUNS {
+                    break;
+                }
+            }
+            _ => break,
+        }
+    }
+    let Some((latest, conclusion)) = failed.first() else {
+        return Ok((None, None));
+    };
+    if failed.len() == RELEASE_RUNS {
+        let ended: Vec<&str> = failed.iter().map(|(_, c)| c.as_str()).collect();
+        let line = format!(
+            "{tag} of {commit} is not released again: its last {RELEASE_RUNS} release runs \
+             ended {} (the latest {latest}); re-run its failed jobs once the cause is fixed",
+            ended.join(", ")
+        );
+        return Ok((Some(line), None));
+    }
+    let line = format!(
+        "release {tag} of {commit} again: its release run {latest} ended {conclusion} ({} of \
+         {RELEASE_RUNS} runs in a row that did not succeed)",
+        failed.len()
+    );
+    let again = Candidate {
+        commit: commit.clone(),
+        version,
+        reason: None,
+        pending: false,
+    };
+    Ok((Some(line), Some(again)))
+}
+
+/// The index in `chain` of the published release nearest the tip whose tag is a version, and
+/// that version.
+fn last_release(releases: &[Release], chain: &[Commit]) -> Option<(usize, Version)> {
     releases
         .iter()
-        .filter(|r| Version::of_tag(&r.tag).is_some())
-        .filter_map(|r| chain.iter().position(|c| c.as_str() == r.commit))
-        .min()
+        .filter_map(|r| {
+            let version = Version::of_tag(&r.tag)?;
+            Some((chain.iter().position(|c| c.as_str() == r.commit)?, version))
+        })
+        .min_by_key(|(index, _)| *index)
 }
 
 /// The hold on releases, in one place so a different rule can replace it: the newest commit of
@@ -345,5 +454,7 @@ fn finish(
     Ok(printed)
 }
 
+#[cfg(test)]
+mod resume_tests;
 #[cfg(test)]
 mod tests;

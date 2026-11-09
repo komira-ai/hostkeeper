@@ -58,7 +58,7 @@ pub(crate) fn index_name(version: &Version) -> String {
 }
 
 /// The `sha256:<hex>` digest of `bytes`.
-fn digest_of(bytes: &[u8]) -> String {
+pub(crate) fn digest_of(bytes: &[u8]) -> String {
     format!("sha256:{}", hex::encode(Sha256::digest(bytes)))
 }
 
