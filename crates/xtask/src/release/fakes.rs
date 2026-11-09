@@ -222,6 +222,8 @@ pub(crate) struct FakeRuns {
     /// The commits `on_main` says are on `main`.
     pub(crate) on_main: RefCell<Vec<Commit>>,
     issues: RefCell<Vec<Issue>>,
+    /// The names of the jobs of each run, by its id; a run with none listed has no jobs.
+    pub(crate) jobs: RefCell<BTreeMap<u64, Vec<String>>>,
     /// The writes asked for, in order: `open #<n>`, `edit #<n>` and `close #<n>: <comment>`.
     pub(crate) writes: RefCell<Vec<String>>,
 }
@@ -279,6 +281,10 @@ impl GitHubRuns for FakeRuns {
             .filter(|(w, _)| w == workflow)
             .map(|(_, r)| r.clone())
             .collect())
+    }
+
+    fn job_names(&self, _repo: &Repo, run: u64) -> Result<Vec<String>, PortError> {
+        Ok(self.jobs.borrow().get(&run).cloned().unwrap_or_default())
     }
 
     fn on_main(&self, _repo: &Repo, commit: &Commit) -> Result<bool, PortError> {
@@ -807,6 +813,54 @@ impl Download for FakeDownload {
     }
 }
 
+/// A registry whose answers are scripted, one per call in order: each `copy` takes the next of
+/// `copies` and each `served` the next of `served` (none left: the call fails). Each call is
+/// recorded as `copy <layout> <tag> <repository>` or `served <repository>@<digest>`.
+#[derive(Default)]
+pub(crate) struct FakeRegistry {
+    pub(crate) copies: RefCell<Vec<Result<(), PortError>>>,
+    pub(crate) served: RefCell<Vec<Result<Vec<u8>, PortError>>>,
+    pub(crate) calls: RefCell<Vec<String>>,
+}
+
+impl FakeRegistry {
+    fn next<T>(answers: &RefCell<Vec<Result<T, PortError>>>, what: &str) -> Result<T, PortError> {
+        let mut answers = answers.borrow_mut();
+        if answers.is_empty() {
+            return Err(PortError::new(what, "not scripted"));
+        }
+        answers.remove(0)
+    }
+}
+
+impl super::ports::Registry for FakeRegistry {
+    fn copy(&self, layout: &Path, tag: &str, repository: &str) -> Result<(), PortError> {
+        self.calls
+            .borrow_mut()
+            .push(format!("copy {} {tag} {repository}", layout.display()));
+        Self::next(&self.copies, "copy")
+    }
+
+    fn served(&self, repository: &str, digest: &str) -> Result<Vec<u8>, PortError> {
+        self.calls
+            .borrow_mut()
+            .push(format!("served {repository}@{digest}"));
+        Self::next(&self.served, "served")
+    }
+}
+
+/// A wait that returns at once and records each `(secs, why)` it was asked for.
+#[derive(Default)]
+pub(crate) struct FakeWait {
+    pub(crate) waits: RefCell<Vec<(u64, String)>>,
+}
+
+impl super::ports::Wait for FakeWait {
+    fn wait(&self, secs: u64, why: &str) {
+        self.waits.borrow_mut().push((secs, why.to_owned()));
+    }
+}
+
 /// Every fake, as the adapters of a verb.
 pub(crate) struct Fakes {
     pub(crate) git: FakeHistory,
@@ -818,6 +872,8 @@ pub(crate) struct Fakes {
     pub(crate) pkgbuild: FakePkgbuild,
     pub(crate) advisories: FakeAdvisories,
     pub(crate) download: FakeDownload,
+    pub(crate) registry: FakeRegistry,
+    pub(crate) wait: FakeWait,
 }
 
 impl Fakes {
@@ -848,6 +904,8 @@ impl Fakes {
                 },
             },
             download: FakeDownload::default(),
+            registry: FakeRegistry::default(),
+            wait: FakeWait::default(),
         }
     }
 }
@@ -864,6 +922,8 @@ impl Adapters for Fakes {
             pkgbuild: &self.pkgbuild,
             advisories: &self.advisories,
             download: &self.download,
+            registry: &self.registry,
+            wait: &self.wait,
         }
     }
 }
