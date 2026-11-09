@@ -330,7 +330,8 @@ fn the_moves_rollback_before_it_settled_puts_the_archive_back_and_fetches_nothin
 /// Proves the move's rollback after it settled: a `force_rollback` to the archive version kept as
 /// `previous`, by an order with no entry and by one with the release's archive entry, ends
 /// `Succeeded`; the package is purged and its hold gone with it, the archive's paths are placed
-/// again, no installer is recorded, and apt fetched nothing.
+/// again, no installer is recorded, and nothing is fetched: apt runs no index update or download
+/// and the archive's package port is not asked for the version the host keeps.
 ///
 /// Catches: a settled move that cannot be undone, or one undone by fetching the archive again.
 #[test]
@@ -340,6 +341,7 @@ fn the_moves_rollback_after_it_settled_purges_the_package_and_places_the_archive
         let daemon = apt.daemon();
         moved(&apt, &daemon);
         let calls = apt.host.calls().len();
+        let asked = apt.rig.store.asked().len();
         let order = force_rollback(SERVICE, ARCHIVE, &d(), 3);
         let order = match with_archive_entry {
             true => with_entry(order, &archive_entry(ARCHIVE)),
@@ -356,6 +358,11 @@ fn the_moves_rollback_after_it_settled_purges_the_package_and_places_the_archive
         let labels = labels_since(&apt, calls);
         assert!(labels.contains(&"dpkg --purge".to_owned()), "{labels:?}");
         assert!(!labels.iter().any(|label| fetches(label)), "{labels:?}");
+        assert_eq!(
+            apt.rig.store.asked().len(),
+            asked,
+            "the archive port was not asked for the kept version (entry: {with_archive_entry})"
+        );
         assert!(
             apt.rig.launcher.steps(SERVICE).contains(&Step::Cutover),
             "the archive's own steps ran"
