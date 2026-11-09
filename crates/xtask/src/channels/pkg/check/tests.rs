@@ -121,7 +121,10 @@ fn the_installer_the_host_serves_is_the_one_the_release_lists() {
         )),
         "{said:?}"
     );
-    assert!(said[0].ends_with("the installer is unsigned"), "{said:?}");
+    assert!(
+        said[0].ends_with("these are the release's signed bytes"),
+        "{said:?}"
+    );
     // Three downloads, over HTTPS only, each to the work directory.
     let calls = curl.calls.borrow();
     assert_eq!(calls.len(), 3);
