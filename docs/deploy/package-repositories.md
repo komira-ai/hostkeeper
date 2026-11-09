@@ -1,0 +1,136 @@
+# Package repositories
+
+Every release of `komira-ai/hostkeeper` that is published (see [verify-a-release.md](verify-a-release.md))
+also goes into the package repositories of the organisation, at `https://packages.komira.ai`: the
+Debian packages and the RPM packages of `hostkeeper` and `hostkeeper-coordinator`, and the macOS
+installer of `hostkeeper`. A release goes to a `testing` channel first. It is installed or downloaded from
+there on clean machines, and only when all of that passed does the same release become `stable`. The
+jobs are in `.github/workflows/release.yml`; the tool they run, `cargo xtask channels`, is
+`crates/xtask/src/channels`.
+
+The tool is copied from komira-ai/tierstore (`crates/xtask/src/channels`, at commit
+`ff4777831c08fc13aa025b54e6e0531c2f350f4f`), with the package names, the pool directory and the checks
+made data (`crates/xtask/src/channels/spec.rs`). It is meant to be replaced by ucdk's package
+publishers; until then a change to the copy is made here.
+
+## Where the files are
+
+The host is shared by the organisation's products; each product writes only below its own pool
+directory, `pool/hostkeeper`.
+
+| Channel | `testing` | `stable` |
+|---|---|---|
+| apt, packages `hostkeeper` and `hostkeeper-coordinator`, architectures `amd64` and `arm64` | `https://packages.komira.ai/apt`, suite `testing`, component `main` | the same repository, suite `stable` |
+| rpm, the same packages, architectures `x86_64` and `aarch64` | `https://packages.komira.ai/rpm/testing/<arch>/` | `https://packages.komira.ai/rpm/stable/<arch>/` |
+| macOS installer, `macos-arm64` | the directory `https://packages.komira.ai/pkg/hostkeeper/<version>/` | the pointer `https://packages.komira.ai/pkg/hostkeeper/stable.json` |
+
+The packages themselves are in a pool both suites share: `apt/pool/hostkeeper/<name>_<version>_<arch>.deb`
+and `rpm/pool/hostkeeper/<name>-<version>-1.<arch>.rpm`. A suite is an index that lists packages of
+the pool, signed with the organisation's archive key. The key is published as
+`https://packages.komira.ai/apt/komira-archive-keyring.gpg` (binary, for apt) and
+`https://packages.komira.ai/apt/komira-archive-keyring.asc` (armored, for rpm).
+
+The directory of the installer holds `hostkeeper-<version>-macos-arm64.pkg`, its attestation bundle
+`hostkeeper-<version>-macos-arm64.pkg.sigstore.json`, and a `SHA256SUMS` that lists those two files.
+The pointer `stable.json` is `{"version", "tag", "commit", "files": {<name>: {"sha256", "size"}}}`
+for the newest promoted release.
+
+**The macOS installer is not signed or notarized** until the macOS signing milestone (M11). Nothing in
+the release machinery signs it; the pointer moves the same unsigned bytes that `testing` holds. Install
+it from a terminal with `installer`, after the checks below; a double click is refused by Gatekeeper.
+
+## Installing from a channel
+
+apt (`stable`; use `testing` to take releases before they are promoted):
+
+```sh
+sudo curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+  --output /usr/share/keyrings/komira-archive-keyring.gpg \
+  https://packages.komira.ai/apt/komira-archive-keyring.gpg
+sudo tee /etc/apt/sources.list.d/komira.sources <<'EOF'
+Types: deb
+URIs: https://packages.komira.ai/apt
+Suites: stable
+Components: main
+Signed-By: /usr/share/keyrings/komira-archive-keyring.gpg
+EOF
+sudo apt-get update
+sudo apt-get install hostkeeper
+```
+
+`hostkeeper-coordinator` is installed the same way. The `Signed-By` field names the keyring file,
+so apt trusts that key for this source alone.
+
+dnf (`stable`; `testing` in the URL for the other channel):
+
+```sh
+sudo tee /etc/yum.repos.d/komira.repo <<'EOF'
+[komira]
+name=komira-ai packages
+baseurl=https://packages.komira.ai/rpm/stable/$basearch
+enabled=1
+gpgcheck=1
+repo_gpgcheck=1
+gpgkey=https://packages.komira.ai/apt/komira-archive-keyring.asc
+EOF
+sudo dnf install hostkeeper
+```
+
+Both the metadata (`repo_gpgcheck`) and each package (`gpgcheck`) are signed by the archive key.
+
+macOS: read the pointer, download the installer and the `SHA256SUMS` of the version, compare the
+digest, then install.
+
+```sh
+curl --proto '=https' --tlsv1.2 --fail --silent --show-error https://packages.komira.ai/pkg/hostkeeper/stable.json
+```
+
+The `version` it names gives the directory; the `files` give the SHA-256 and the size the installer must have.
+The installer is also the attested release asset of the same name (see [verify-a-release.md](verify-a-release.md)),
+so its attestation can be verified as for any other asset.
+
+## What the release workflow does
+
+All of these run for the newest release of a run only: when one run releases several versions, the
+package channels take the last, since a repository serves the newest version and it carries the
+changes of the older ones. Each job is a green no-op until the settings below exist.
+
+1. **Testing.** For apt, then for rpm, three jobs: `testing-<kind>-read` reads the current index and the
+   ETag of each of its objects from the bucket, `testing-<kind>-index` merges the packages into it
+   (every other product's entries are kept) and signs it, and `testing-<kind>-write` uploads each
+   package once, then the index, with `If-Match` on the ETags that were read. The signing key and the
+   cloud role are never in one job. A write that finds the index changed in between (another product's
+   release) ends green with `conflict=true`, and attempts 2 and 3 (the jobs with the suffix `-2` and
+   `-3`) read, merge and sign again; the third attempt fails instead of asking for a fourth. The
+   installer goes into `pkg/hostkeeper/<version>/` (`testing-pkg-upload`), each file once: a second put
+   of the same bytes is accepted, other bytes at the same key fail.
+2. **Checks.** `check-apt` installs each package from the suite `testing` in a clean Ubuntu
+   container of each architecture, `check-rpm` installs it with dnf in a clean Fedora container, both
+   images pinned by digest, and each holds the installed system to what the package promises: the
+   version and commit its binary says, every file it ships, the user and the unit, and that the unit
+   is enabled or not as the package says. `check-pkg` downloads the installer, its bundle and the
+   directory's `SHA256SUMS` from the public host and compares them with the release's `SHA256SUMS`.
+3. **Decision.** `promote-check` (`cargo xtask channels decide`) promotes when every write succeeded
+   and every check succeeded or had nothing to check.
+4. **Stable.** `stable-apt-*` and `stable-rpm-*` list the entries of the release that `testing` holds
+   in the index of `stable` (held to the digests of the release's `SHA256SUMS`; nothing is uploaded, the
+   packages are in the pool already). `promote-pkg` reads the directory of the installer back
+   against `SHA256SUMS` and moves `stable.json` to the release, with `If-Match` on the ETag it read and
+   only to a higher version, then invalidates the path in the CDN. **Promotion copies no bytes:** the
+   same pool files and the same installer files that were installed and checked are the ones the
+   `stable` channel names.
+
+Re-running the failed jobs of a run resumes it: every write is write-once or idempotent, and
+`promote-check` reads the results again.
+
+## What the owner sets
+
+The jobs do nothing until the repository's environments hold their settings (a job with none of its
+settings ends green; a job with some of them fails and names the missing ones).
+
+| Where | Name | Holds |
+|---|---|---|
+| environment `apt-publish` | variable `APT_PUBLISH_ROLE_ARN` | the role the jobs assume through OIDC; its policy must let it write `apt/pool/hostkeeper/*` and `rpm/pool/hostkeeper/*` (only when the object is absent), the shared `apt/dists/*` and `rpm/<suite>/*` indexes (with `If-Match` or only when absent), and `pkg/hostkeeper/*`, and trust this workflow on `main` in this environment |
+| environment `apt-publish` | variables `APT_BUCKET`, `APT_DISTRIBUTION_ID`, `APT_HOSTNAME` | the bucket, the CDN distribution to invalidate, and the public host |
+| environment `apt-signing` | variable `APT_GPG_FINGERPRINT`, secrets `APT_GPG_PRIVATE_KEY` and `APT_GPG_PASSPHRASE` | the archive signing subkey |
+| the repository | variable `RPM_REPO_READY` | `true` once the rpm tree of the repository is deployed; until then the rpm jobs end green and write nothing |

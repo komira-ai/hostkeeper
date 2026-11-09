@@ -156,3 +156,34 @@ fn results_that_do_not_fit_are_usage_errors() {
     missing.pop();
     assert_eq!(usage(&missing), "--result check-pkg is not given");
 }
+
+/// The workflow that runs the verb.
+const RELEASE_YML: &str = include_str!("../../../../../.github/workflows/release.yml");
+
+#[test]
+fn the_release_workflow_gives_decide_each_stage_and_no_other() {
+    // The job `promote-check` of release.yml passes `--result NAME=$VAR` for each stage; a stage
+    // it leaves out is a usage error of the verb at release time, and one it adds is too.
+    let job = RELEASE_YML
+        .split("\n  promote-check:\n")
+        .nth(1)
+        .and_then(|rest| rest.split("\n\n").next())
+        .expect("release.yml has the job promote-check");
+    let given: Vec<&str> = job
+        .split("--result \"")
+        .skip(1)
+        .filter_map(|rest| rest.split_once('=').map(|(stage, _)| stage))
+        .collect();
+    let mut want: Vec<&str> = HOSTKEEPER.stages.to_vec();
+    let mut got = given.clone();
+    want.sort_unstable();
+    got.sort_unstable();
+    assert_eq!(got, want);
+    for stage in HOSTKEEPER.stages {
+        let var = stage.to_uppercase().replace('-', "_");
+        assert!(
+            job.contains(&format!("{var}: ${{{{ needs.{stage}.result }}}}")),
+            "{stage} is not the result of the job of its name"
+        );
+    }
+}

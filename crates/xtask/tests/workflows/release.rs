@@ -11,7 +11,10 @@
 //!   [`PLAN_RUN`], under no `if:`, on a checkout of the tip, for every trigger; publishes in the
 //!   job-level group of [`PUBLISH_GROUP`], never cancelled; checks every shipped binary
 //!   ([`SHIPPED_BINARIES`]) in `verify`, and
-//!   has no step that builds or signs ([`build_problems`]).
+//!   has no step that builds or signs ([`build_problems`]), but the jobs of the package channels
+//!   ([`super::packages`]), which run `cargo xtask channels` (signing the indexes of the apt and
+//!   rpm repositories, never a release file) and, in the two install checks, one `docker` command
+//!   each.
 //! - `artifacts.yml` ([`artifacts_problems`]) starts only by a push to main or by hand, has its
 //!   own group per commit ([`ARTIFACTS_GROUP`]), computes the version on a whole history, builds
 //!   the coordinator's image twice, compares the two, checks that the image holds the operator
@@ -31,7 +34,8 @@
 //! Which job may hold which write scope, under which `if:`, is [`super::lint::WRITE_ALLOWED`].
 
 use super::desired;
-use super::lint::{entries, entry, runs_on_pull_requests, triggers};
+use super::lint::{entries, entry, pinned_by_digest, runs_on_pull_requests, triggers};
+use super::packages;
 use super::yaml::{self, Node, Value};
 
 /// The `if:` of the attest job: a push to main. The only condition under which a token can sign.
@@ -69,8 +73,9 @@ pub const RELEASE_EXEMPT: &[(&str, &str)] = &[(
     "builds and attests one commit and never tags or publishes; its own per-commit group",
 )];
 
-/// The jobs of release.yml, sorted: the release (`plan`, `verify`, `publish`) and hostkeeper's
-/// own deploy ([`desired::CHANNEL_JOB`], [`desired::JOB`]).
+/// The jobs of release.yml, sorted, but the package channels ([`packages::job_names`]): the release
+/// (`plan`, `verify`, `publish`, `image`) and hostkeeper's own deploy ([`desired::CHANNEL_JOB`],
+/// [`desired::JOB`]).
 pub const RELEASE_JOBS: [&str; 6] = [
     "channel",
     "image",
@@ -238,7 +243,7 @@ fn trigger_names(doc: &Node) -> Vec<String> {
 }
 
 /// The scalars of a list (or one scalar) `node`, sorted.
-fn names(node: Option<&Node>) -> Vec<String> {
+pub fn names(node: Option<&Node>) -> Vec<String> {
     let mut found: Vec<String> = match node.map(|n| &n.value) {
         Some(Value::Seq(items)) => items
             .iter()
@@ -256,7 +261,7 @@ fn names(node: Option<&Node>) -> Vec<String> {
 }
 
 /// The steps of `job`.
-fn steps(job: Option<&Node>) -> &[Node] {
+pub fn steps(job: Option<&Node>) -> &[Node] {
     match job.and_then(|j| entry(j, "steps")).map(|s| &s.value) {
         Some(Value::Seq(items)) => items,
         _ => &[],
@@ -271,11 +276,11 @@ fn step_values<'a>(job: Option<&'a Node>, key: &str) -> Vec<&'a str> {
         .collect()
 }
 
-fn job<'a>(doc: &'a Node, name: &str) -> Option<&'a Node> {
+pub fn job<'a>(doc: &'a Node, name: &str) -> Option<&'a Node> {
     entry(doc, "jobs").and_then(|jobs| entry(jobs, name))
 }
 
-fn text_of<'a>(node: Option<&'a Node>, key: &str) -> Option<&'a str> {
+pub fn text_of<'a>(node: Option<&'a Node>, key: &str) -> Option<&'a str> {
     node.and_then(|n| entry(n, key)).and_then(Node::as_str)
 }
 
@@ -365,9 +370,12 @@ fn release_problems(doc: &Node) -> Vec<String> {
         .filter_map(|(k, _)| k.as_str())
         .collect();
     jobs.sort_unstable();
-    if jobs != RELEASE_JOBS {
+    let mut want: Vec<String> = RELEASE_JOBS.iter().map(|j| (*j).to_owned()).collect();
+    want.extend(packages::job_names());
+    want.sort();
+    if jobs != want {
         problems.push(format!(
-            "release.yml: jobs are {jobs:?}, not plan, verify, publish, image, channel and set-desired"
+            "release.yml: jobs are {jobs:?}, not plan, verify, publish, image, channel, set-desired and the jobs of the package channels ({want:?})"
         ));
     }
     for (name, condition, needs) in [
@@ -415,6 +423,15 @@ fn release_problems(doc: &Node) -> Vec<String> {
         problems.extend(build_problems(name, Some(j)));
     }
     problems.extend(desired::problems(doc));
+    problems.extend(packages::problems(doc));
+    problems.extend(packages::promote_check_problems(doc));
+    if let Some(check) = job(doc, "check-rpm") {
+        problems.extend(packages::matrix_image_problems(
+            "check-rpm",
+            check,
+            pinned_by_digest,
+        ));
+    }
     problems
 }
 
@@ -452,8 +469,10 @@ fn plan_problems(plan: Option<&Node>) -> Vec<String> {
 }
 
 /// One line per step of the release.yml job `name` that builds, packages or signs: a `cargo`
-/// that is not `cargo xtask --help` or `cargo xtask release <verb>` of [`RELEASE_VERBS`], a word
-/// of [`BUILD_WORDS`], or an action that attests or signs. Compiling xtask to run it is not a
+/// that is not `cargo xtask --help` or `cargo xtask release <verb>` of [`RELEASE_VERBS`] (nor, in
+/// a job of the package channels, `cargo xtask channels`), a word of [`BUILD_WORDS`] (but the one
+/// `docker` command of an install check, [`packages::docker_line_ok`]), or an action that attests
+/// or signs. Compiling xtask to run it is not a
 /// build of anything released.
 fn build_problems(name: &str, job: Option<&Node>) -> Vec<String> {
     let mut problems = Vec::new();
@@ -467,8 +486,12 @@ fn build_problems(name: &str, job: Option<&Node>) -> Vec<String> {
         let Some(run) = entry(step, "run").and_then(Node::as_str) else {
             continue;
         };
+        let channels_ok = packages::job_names().iter().any(|j| j == name);
         for line in run.lines() {
-            if builds(line) {
+            if packages::docker_line_ok(name, line.trim()) {
+                continue;
+            }
+            if builds(line, channels_ok) {
                 problems.push(format!(
                     "release.yml: job {name} builds (`{}`)",
                     line.trim()
@@ -479,8 +502,9 @@ fn build_problems(name: &str, job: Option<&Node>) -> Vec<String> {
     problems
 }
 
-/// Whether the shell line `line` builds, packages or signs (see [`build_problems`]).
-fn builds(line: &str) -> bool {
+/// Whether the shell line `line` builds, packages or signs (see [`build_problems`]). A job of the
+/// package channels (`channels_ok`) may run `cargo xtask channels`, which is held to its row.
+fn builds(line: &str, channels_ok: bool) -> bool {
     let words: Vec<&str> = line
         .split(|c: char| c.is_whitespace() || matches!(c, '|' | ';' | '&' | '(' | ')'))
         .filter(|w| !w.is_empty())
@@ -491,6 +515,7 @@ fn builds(line: &str) -> bool {
             "cargo" => match (after(1), after(2)) {
                 ("xtask", "--help") => false,
                 ("xtask", "release") => !RELEASE_VERBS.contains(&after(3)),
+                ("xtask", "channels") => !channels_ok,
                 _ => true,
             },
             other => BUILD_WORDS.contains(&other) && !(other == "tar" && after(1) == "-xzf"),

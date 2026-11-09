@@ -18,7 +18,9 @@ before it uses them.
 
 The workflow `artifacts.yml` builds the assets on a push to `refs/heads/main`, writes one
 `SHA256SUMS`, and signs build-provenance attestations (sigstore) for every summed asset, plus SBOM
-attestations. The workflow `release.yml` publishes those exact files; it never rebuilds or signs.
+attestations. The workflow `release.yml` publishes those exact files; it never rebuilds or attests a release file
+(its package-channel jobs sign only the indexes of the apt and rpm repositories and the signature header of the
+rpm packages they put there, [Package repositories](package-repositories.md)).
 The signer is therefore `artifacts.yml` on `refs/heads/main`, not the release workflow and not a
 tag. A `[trusted_signers]` entry in a daemon config must name `artifacts.yml` on `refs/heads/main`.
 
@@ -406,6 +408,13 @@ The CI client, `.github/workflows/set-desired.yml` ([The CI client](ci-client.md
 and 3 and hkctl's `--version` check of step 6 as written here, on `hkctl-<version>`. The workflow
 lint (`cargo test -p xtask --test workflows`) refuses a change to those commands, to the tag or to
 hkctl's asset name in this document that the workflow does not follow, and the reverse.
+
+After the release is published, the same job file puts the deb and rpm packages and the macOS
+installer into the package repositories of `packages.komira.ai`, `testing` first and `stable` after
+install checks ([Package repositories](package-repositories.md)). Those jobs run the same checks as
+`publish`, the sums and `cargo xtask release check`, on the files they download, before they sign an
+index or write anything; the files they upload are the verified ones, byte for byte, and the macOS
+installer in them is as unsigned as the asset.
 
 ## The trusted root on a host
 

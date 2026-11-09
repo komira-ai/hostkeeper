@@ -30,6 +30,8 @@ mod net_install;
 mod net_install_tests;
 mod openrc;
 mod openrc_tests;
+mod packages;
+mod packages_tests;
 mod pr_device;
 mod pr_device_gate_tests;
 mod pr_device_tests;

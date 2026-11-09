@@ -17,14 +17,18 @@ fn release_yml() -> String {
         .expect("release.yml exists")
 }
 
-/// The text of the repository's `release.yml` from its job `channel` to its end: the two deploy
-/// jobs, each of which a case below changes in one place.
+/// The text of the repository's `release.yml` from its job `channel` to the comment of the job
+/// `newest` that follows them: the two deploy jobs, each of which a case below changes in one
+/// place.
 fn deploy_jobs() -> String {
     let text = release_yml();
     let at = text
         .find("\n  channel:\n")
         .expect("release.yml has a job channel");
-    text[at..].to_owned()
+    let end = text
+        .find("\n  # newest ")
+        .expect("release.yml has the job newest after them");
+    text[at..end].to_owned()
 }
 
 /// Every problem the lint finds in release.yml with the one occurrence of `from` in its deploy
