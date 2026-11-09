@@ -80,6 +80,7 @@
 
 use super::advisories;
 use super::callers;
+use super::desired;
 use super::downloads;
 use super::net_install;
 use super::one_command;
@@ -151,9 +152,14 @@ pub const WRITE_ALLOWED: &[Allowed] = &[
 ];
 
 /// The jobs that may hold `id-token: write`, by workflow file and job. The scope writes nothing
-/// to the repository: it lets the job's steps ask GitHub for an OIDC token. The one job is the
-/// CI client's, whose order of steps [`set_desired`] holds.
-pub const ID_TOKEN_ALLOWED: &[(&str, &str)] = &[(set_desired::FILE, set_desired::JOB)];
+/// to the repository: it lets the job's steps ask GitHub for an OIDC token. The jobs are the CI
+/// client's, whose order of steps [`set_desired`] holds, and the channel job of hostkeeper's own
+/// deploy, whose tailnet join exchanges the token as the CI client's does and whose steps
+/// [`desired`] holds.
+pub const ID_TOKEN_ALLOWED: &[(&str, &str)] = &[
+    (set_desired::FILE, set_desired::JOB),
+    (desired::FILE, desired::CHANNEL_JOB),
+];
 
 /// The workflow of the privileged tests, after a merge to main and by hand: with
 /// [`net_install::FILE`], one of the two workflows that may run a job as root (`sudo`, a
