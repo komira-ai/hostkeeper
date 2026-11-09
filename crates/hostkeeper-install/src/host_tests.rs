@@ -210,6 +210,9 @@ fn walk_of_a_missing_directory_is_an_error() {
     assert!(walk(&dir.path().join("none"), &test_ids(&dir)).is_err());
 }
 
+/// Catches: a walk that takes an entry whose name is not UTF-8. Only a filesystem that stores
+/// such a name can show it; a Mac's APFS refuses it (see the test after this one).
+#[cfg(not(target_os = "macos"))]
 #[test]
 fn walk_refuses_an_entry_whose_name_is_not_utf8() {
     use std::ffi::OsStr;
@@ -218,6 +221,24 @@ fn walk_refuses_an_entry_whose_name_is_not_utf8() {
     write(&dir.path().join(OsStr::from_bytes(b"bad\xff")), "x");
     let err = walk(dir.path(), &test_ids(&dir)).unwrap_err();
     assert_eq!(err.to_string(), "an entry name that is not UTF-8");
+}
+
+/// On a Mac, the filesystem refuses to create a name that is not UTF-8 (`EILSEQ`, 92), so no
+/// walk there meets one; the walk's own refusal is the test before this one, where it can.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_macs_filesystem_refuses_an_entry_name_that_is_not_utf8() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+    const EILSEQ: i32 = 92;
+    let dir = scratch("walkname");
+    let err = fs::write(dir.path().join(OsStr::from_bytes(b"bad\xff")), "x").unwrap_err();
+    assert_eq!(err.raw_os_error(), Some(EILSEQ), "{err}");
+    assert_eq!(
+        fs::read_dir(dir.path()).unwrap().count(),
+        0,
+        "nothing was created"
+    );
 }
 
 #[test]

@@ -76,6 +76,9 @@ fn stage_reports_io_error_for_an_artifact_or_staging_path_that_is_not_utf8() {
 }
 
 /// Catches: an expanded payload that cannot be walked (a name that is not UTF-8) being staged.
+/// Not built on a Mac, whose filesystem refuses such a name: `host`'s unit test
+/// `a_macs_filesystem_refuses_an_entry_name_that_is_not_utf8` asserts that refusal there.
+#[cfg(not(target_os = "macos"))]
 #[test]
 fn stage_reports_io_error_for_a_payload_that_cannot_be_walked() {
     let rig = Rig::new("stage-walk");
