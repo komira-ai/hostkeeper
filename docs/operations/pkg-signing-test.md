@@ -124,18 +124,23 @@ For the identity whose root the Mac did not trust, `productsign` failed with:
 productsign: error: Could not find appropriate signing identity for "<identity>" in keychain at "<keychain>". An installer signing identity (not an application signing identity) is required
 ```
 
-What follows, observed and inferred:
+What the run showed, and what it did not:
 
-- **Observed: no untrusted root.** On macOS 15.8.2, `productsign` does not sign with an installer
-  identity whose root the Mac does not trust. The keychain was unlocked and its key partition list
-  set, so an access prompt was not the cause.
-- **Observed: pkg-4 cannot be built.** This build cannot make pkg 4 on such a Mac. It stops at this
-  paragraph, by design, since root B must stay trusted nowhere.
-- **Inferred: pkg-3 fails the same way.** pkg 3 is expected to fail too, because root A is not
-  trusted on the build Mac (the profile installs it on the Mac under test). Not observed: the run
-  failed before the trusted identity signed.
-- **Not shown: whether trusting the root is enough.** Whether trusting the root on the build Mac
-  would let `productsign` sign with its identity is still to verify.
+- **Observed: this identity was refused.** On macOS 15.8.2, `productsign` would not sign with an
+  identity made the way this build makes its identities, whose root the Mac did not trust. The
+  keychain was unlocked and its key partition list set. The run failed before the identity whose
+  root it had trusted signed, so there is no case to compare with.
+- **Not isolated: why.** Two causes fit the message, and the run cannot tell them apart. The first
+  is the untrusted root. The second is the identity itself: the message asks for "an installer
+  signing identity (not an application signing identity)", and the identity carried only the
+  `codeSigning` extended key usage, as this build's identities do.
+- **What it means for pkg 4.** In both cases this build cannot make pkg 4 on such a Mac. It stops
+  at the paragraph above, by design, because root B must stay trusted nowhere.
+- **What it means for pkg 3.** If the identity is the cause, pkg 3 fails the same way, whatever is
+  trusted. If the root is the cause, pkg 3 fails too, because root A is not trusted on the build
+  Mac (the profile installs it on the Mac under test). Either way this is inferred, not observed.
+  Which change makes `productsign` sign (trusting the root on the build Mac, or an identity of
+  another kind) is still to verify.
 - **Inferred: trust changes need an operator.** On a runner with nobody at the screen, the test's
   undo of its trust setting (`security remove-trusted-cert -d`) then made no progress until the
   job's timeout. That call most likely waited for an authorization only an operator at the Mac can

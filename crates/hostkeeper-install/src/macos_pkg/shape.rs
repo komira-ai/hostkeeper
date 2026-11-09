@@ -5,12 +5,15 @@
 //! identifier and version, installs at `/`, and names no `bundle` (so nothing is relocated, and
 //! `installer` writes exactly what its `Bom` lists).
 //!
-//! A script `installer` would run as root is `package_scripts` (packages-native.md section 10.2),
-//! checked before anything else of the component: a `Scripts` entry in the component or beside
-//! it, or a `preinstall`, `postinstall`, `preupgrade` or `postupgrade` in its `PackageInfo`. The
-//! empty `<scripts/>` and `<relocate/>` that `pkgbuild` writes into every `PackageInfo` name
-//! nothing and are accepted. A `Distribution`'s `script` stays `manifest_invalid`, as section 4.7
-//! refuses it.
+//! A script `installer` would run as root is `package_scripts` (packages-native.md section 10.2):
+//! a `Scripts` entry beside the component or in it, or a `preinstall`, `postinstall`,
+//! `preupgrade` or `postupgrade` in its `PackageInfo`. The checks run in one order, whatever the
+//! order of the directory's entries: a `Scripts` entry of the expansion first; then a product
+//! archive's `Distribution` (whose `script` stays `manifest_invalid`, as section 4.7 refuses it)
+//! and the entries beside its component; then a `Scripts` entry of the component, its
+//! `PackageInfo`'s script elements, and only then the component's other entries and the files
+//! it lacks. The empty `<scripts/>` and `<relocate/>` that `pkgbuild` writes into every
+//! `PackageInfo` name nothing and are accepted.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -98,37 +101,65 @@ impl ShapeError {
 /// Checks the expansion at `expanded` against the order's `identifier` and `version`, and finds
 /// its component.
 pub fn check(expanded: &Path, identifier: &str, version: &str) -> Result<Component, ShapeError> {
+    let top = names(expanded, "the expansion")?;
     let distribution = expanded.join("Distribution");
-    let component = match distribution.is_file() {
-        true => product(expanded, &read_xml(&distribution, "the Distribution")?)?,
-        false => Component {
-            dir: expanded.to_owned(),
-        },
+    let product_archive = distribution.is_file();
+    if top.iter().any(|name| name == SCRIPTS) {
+        let holder = match product_archive {
+            true => "the product archive",
+            false => "the component",
+        };
+        return Err(ShapeError::Scripts(format!("{holder} holds {SCRIPTS:?}")));
+    }
+    let (component, entries) = match product_archive {
+        true => {
+            let component = product(
+                expanded,
+                &read_xml(&distribution, "the Distribution")?,
+                &top,
+            )?;
+            let entries = names(&component.dir, "the component")?;
+            (component, entries)
+        }
+        false => (
+            Component {
+                dir: expanded.to_owned(),
+            },
+            top,
+        ),
     };
-    for found in names(&component.dir, "the component")? {
-        if found == SCRIPTS {
-            return Err(ShapeError::Scripts(format!(
-                "the component holds {SCRIPTS:?}"
-            )));
-        }
-        if !COMPONENT_ENTRIES.contains(&found.as_str()) {
-            return Err(ShapeError::ComponentExtra(found));
-        }
+    if entries.iter().any(|name| name == SCRIPTS) {
+        return Err(ShapeError::Scripts(format!(
+            "the component holds {SCRIPTS:?}"
+        )));
     }
-    for name in ["PackageInfo", "Bom"] {
-        if !component.dir.join(name).is_file() {
-            return Err(ShapeError::Missing(name));
-        }
-    }
-    let info = read_xml(&component.package_info(), "the PackageInfo")?;
+    let info = match component.package_info().is_file() {
+        true => Some(read_xml(&component.package_info(), "the PackageInfo")?),
+        false => None,
+    };
     if let Some(script) = info
         .iter()
+        .flatten()
         .find(|e| SCRIPT_ELEMENTS.contains(&e.name.as_str()))
     {
         return Err(ShapeError::Scripts(format!(
             "the PackageInfo has a <{}> element",
             script.name
         )));
+    }
+    let mut extras: Vec<&String> = entries
+        .iter()
+        .filter(|name| !COMPONENT_ENTRIES.contains(&name.as_str()))
+        .collect();
+    extras.sort_unstable();
+    if let Some(extra) = extras.first() {
+        return Err(ShapeError::ComponentExtra((*extra).clone()));
+    }
+    let Some(info) = info else {
+        return Err(ShapeError::Missing("PackageInfo"));
+    };
+    if !component.bom().is_file() {
+        return Err(ShapeError::Missing("Bom"));
     }
     if !component.payload().is_dir() {
         return Err(ShapeError::Missing("Payload"));
@@ -153,8 +184,8 @@ fn read_xml(path: &Path, what: &str) -> Result<Vec<Element>, ShapeError> {
     xml::elements(&text).map_err(|e| ShapeError::Xml(what.into(), e))
 }
 
-/// The one component a product archive's `Distribution` names.
-fn product(expanded: &Path, elements: &[Element]) -> Result<Component, ShapeError> {
+/// The one component a product archive's `Distribution` names; `top` is the expansion's entries.
+fn product(expanded: &Path, elements: &[Element], top: &[String]) -> Result<Component, ShapeError> {
     if let Some(refused) = elements
         .iter()
         .find(|e| REFUSED_DISTRIBUTION.contains(&e.name.as_str()))
@@ -197,15 +228,13 @@ fn product(expanded: &Path, elements: &[Element]) -> Result<Component, ShapeErro
     if !dir.is_dir() {
         return Err(ShapeError::BadPath(path.into()));
     }
-    for found in names(expanded, "the expansion")? {
-        if found == SCRIPTS {
-            return Err(ShapeError::Scripts(format!(
-                "the product archive holds {SCRIPTS:?}"
-            )));
-        }
-        if found != name && !PRODUCT_EXTRAS.contains(&found.as_str()) {
-            return Err(ShapeError::Extra(found));
-        }
+    let mut extras: Vec<&String> = top
+        .iter()
+        .filter(|found| **found != name && !PRODUCT_EXTRAS.contains(&found.as_str()))
+        .collect();
+    extras.sort_unstable();
+    if let Some(extra) = extras.first() {
+        return Err(ShapeError::Extra((*extra).clone()));
     }
     Ok(Component { dir })
 }

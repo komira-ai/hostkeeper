@@ -6,9 +6,9 @@
 //! staging directory per version, renamed to the version once `stage` has filled it).
 //!
 //! Nothing is signed on the runner, and no trust setting, keychain or keychain search list is
-//! changed: on a GitHub-hosted macos-15 runner `productsign` refuses an installer identity whose
-//! root the Mac does not trust, and a trust setting cannot be changed there without an
-//! authorization nobody gives (docs/operations/pkg-signing-test.md). The fixtures are M11's two
+//! changed: on a GitHub-hosted macos-15 runner `productsign` refused the installer identity the
+//! test made, whose root the Mac did not trust, and the undo of a trust setting there made no
+//! progress until the job's timeout (docs/operations/pkg-signing-test.md). The fixtures are M11's two
 //! unsigned forms, built at test time with M11's commands (`crates/xtask/src/mdm_signing_test`):
 //! a component package (`pkgbuild`, M11's pkg-1) and a distribution package around it
 //! (`productbuild --package`, M11's pkg-2). Every program the test runs is bounded by
@@ -353,7 +353,7 @@ struct Rig {
 impl Rig {
     fn new(dir: &Path) -> Rig {
         let packages = dir.join("packages");
-        fs::create_dir(&packages).expect("create the packages directory");
+        fs::create_dir_all(&packages).expect("create the packages directory");
         Rig {
             host: Host::mac(),
             tools: Signed::default(),

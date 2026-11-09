@@ -412,3 +412,63 @@ fn a_product_archives_component_is_checked_like_a_component_package() {
         ShapeError::Mismatch("version", "9".into(), VERSION.into())
     );
 }
+
+/// Catches: the reason of a package with a script depending on the order of its directory's
+/// entries: a `Scripts` entry beside a stray entry, in the component or beside it, and a
+/// `PackageInfo` script element with a stray entry or no `Bom`, are each `package_scripts`.
+#[test]
+fn a_script_is_package_scripts_whatever_else_the_expansion_holds() {
+    let inside = scratch("shscripts-and-extra");
+    component(inside.path(), &package_info(""));
+    for name in ["Scripts", "Aaa", "Zzz"] {
+        fs::create_dir(inside.path().join(name)).unwrap();
+    }
+    let beside = scratch("shscripts-beside-and-stray");
+    product(beside.path(), &distribution("", REF));
+    for name in ["Scripts", "Aaa", "Zzz"] {
+        fs::create_dir(beside.path().join(name)).unwrap();
+    }
+    let info = package_info("<scripts><postinstall file=\"./postinstall\"/></scripts>");
+    let no_bom = scratch("shscripts-no-bom");
+    component(no_bom.path(), &info);
+    fs::remove_file(no_bom.path().join("Bom")).unwrap();
+    let stray = scratch("shscripts-info-and-stray");
+    component(stray.path(), &info);
+    fs::create_dir(stray.path().join("Aaa")).unwrap();
+    for (dir, detail) in [
+        (inside.path(), "the component holds \"Scripts\""),
+        (beside.path(), "the product archive holds \"Scripts\""),
+        (no_bom.path(), "the PackageInfo has a <postinstall> element"),
+        (stray.path(), "the PackageInfo has a <postinstall> element"),
+    ] {
+        assert_eq!(refused(dir), ShapeError::Scripts(detail.into()), "{detail}");
+    }
+}
+
+/// Catches: which stray entry is reported depending on the directory's order.
+#[test]
+fn of_two_stray_entries_the_first_by_name_is_reported() {
+    let inside = scratch("shtwo-extras");
+    component(inside.path(), &package_info(""));
+    let beside = scratch("shtwo-extras-beside");
+    product(beside.path(), &distribution("", REF));
+    for dir in [inside.path(), beside.path()] {
+        for name in ["Zzz", "Aaa"] {
+            fs::write(dir.join(name), b"x").unwrap();
+        }
+    }
+    assert_eq!(
+        refused(inside.path()),
+        ShapeError::ComponentExtra("Aaa".into())
+    );
+    assert_eq!(refused(beside.path()), ShapeError::Extra("Aaa".into()));
+}
+
+/// Catches: a component with no `PackageInfo` passing, or reported as another defect.
+#[test]
+fn a_component_without_its_package_info_is_refused() {
+    let dir = scratch("shno-info");
+    component(dir.path(), &package_info(""));
+    fs::remove_file(dir.path().join("PackageInfo")).unwrap();
+    assert_eq!(refused(dir.path()), ShapeError::Missing("PackageInfo"));
+}
