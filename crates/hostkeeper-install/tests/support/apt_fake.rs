@@ -272,6 +272,9 @@ pub struct Faults {
     pub download: Download,
     /// Directories an update makes in the work directory, beside the lists.
     pub litter: Vec<String>,
+    /// An update leaves the index as a link to the repository's own file, outside the work
+    /// directory, as apt does for an uncompressed index of a `file:` repository.
+    pub index_as_link: bool,
 }
 
 /// A package as the host's database holds it.
@@ -368,6 +371,24 @@ fn target(run: &Run) -> (String, String) {
     let last = run.args.last().cloned().unwrap_or_default();
     let (p, v) = last.split_once('=').unwrap_or((&last, ""));
     (p.to_owned(), v.to_owned())
+}
+
+/// Where a repository serves the index `index` of `stem` from, beside the work directories:
+/// written there, and answered.
+fn served_index(work: &Path, stem: &str, index: &str) -> std::io::Result<PathBuf> {
+    let served = work
+        .parent()
+        .unwrap_or(work)
+        .with_file_name("served")
+        .join(format!("{stem}_Packages"));
+    fs::create_dir_all(served.parent().unwrap_or(work))?;
+    fs::write(&served, index)?;
+    Ok(served)
+}
+
+/// The served indexes of the repositories under `root`, `served/` beside the work directories.
+pub fn served_dir(work_root: &Path) -> PathBuf {
+    work_root.with_file_name("served")
 }
 
 /// The stanzas of every index in the work directory's lists.
@@ -579,7 +600,13 @@ fn update(s: &State, run: &Run) -> ToolOutput {
         .collect();
     let lists = work.join("lists");
     let index: String = repo.entries.iter().map(Entry::stanza).collect();
-    let written = fs::write(lists.join(format!("{stem}_Packages")), index)
+    let packages = lists.join(format!("{stem}_Packages"));
+    let written = match s.faults.index_as_link {
+        false => fs::write(&packages, index),
+        true => served_index(&work, &stem, &index)
+            .and_then(|served| std::os::unix::fs::symlink(served, &packages)),
+    };
+    let written = written
         .and_then(|()| fs::write(lists.join(format!("{stem}_InRelease")), "signed\n"))
         .and_then(|()| fs::write(lists.join("lock"), ""))
         .and_then(|()| fs::write(lists.join("partial").join("half"), "x"));
