@@ -93,8 +93,9 @@ fn rollout_page_says_what_the_plan_is_where_it_stands_and_why_it_waits() {
     // Catches: a plan row that leaves out a stage's size, percent or manual mark, or the eligible
     // count; a canary stage given a percent; a stage count that is wrong before a manual first
     // stage is entered or when every host has rolled; a wait that names no stage where it has
-    // one, or names one where it has none; a pause shown without who and why; a service with no
-    // plan shown with a table or a made-up row.
+    // one, or names one where it has none; a wait on other services' rollouts that does not name
+    // them, or names some where the coordinator named none; a pause shown without who and why; a
+    // service with no plan shown with a table or a made-up row.
     let mut ui = Ui::start();
     let mut halted_and_paused = plan(
         2,
@@ -112,6 +113,13 @@ fn rollout_page_says_what_the_plan_is_where_it_stands_and_why_it_waits() {
         &[(Some(50), 2, false), (Some(100), 3, false)],
     );
     finished["finished"] = json!(true);
+    let mut waiting_on = plan(
+        1,
+        4,
+        "PLAN_WAIT_ROLLOUT_ELSEWHERE",
+        &[(Some(100), 4, false)],
+    );
+    waiting_on["waitingOn"] = json!(["js-agent", "tierstore"]);
     ui.reply(
         &m("Releases/Status"),
         status_of(&[
@@ -142,6 +150,7 @@ fn rollout_page_says_what_the_plan_is_where_it_stands_and_why_it_waits() {
                 "PLAN_WAIT_ROLLOUT_ELSEWHERE",
                 &[(Some(100), 4, false)],
             ),
+            waiting_on,
             plan(1, 4, "PLAN_WAIT_QUIET", &[(Some(100), 4, false)]),
             halted_and_paused,
             finished,
@@ -193,6 +202,11 @@ return sections.map((s) => [cell(s, "Plan"), cell(s, "Stage"), cell(s, "Waiting"
                 "4 (100%) hosts of 4 eligible",
                 "1 of 1",
                 "rollout_elsewhere"
+            ],
+            [
+                "4 (100%) hosts of 4 eligible",
+                "1 of 1",
+                "rollout_elsewhere on js-agent, tierstore"
             ],
             ["4 (100%) hosts of 4 eligible", "1 of 1", "quiet"],
             [

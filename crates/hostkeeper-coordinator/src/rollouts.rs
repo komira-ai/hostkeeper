@@ -27,12 +27,13 @@ use serde::{Deserialize, Serialize};
 use crate::desired::Desired;
 use crate::fleet::Fleet;
 use crate::holds::marks_of;
+use crate::live::live_elsewhere;
 use crate::operator::{Caller, entry_proto, valid_reason};
 use crate::ops::{OpsError, OpsState, OpsStore, Write};
 use crate::reconcile::{COORDINATOR, entry};
 use crate::service::Coordinator;
 use crate::services::ServiceDef;
-use crate::stages::{Advance, HostState, PlanStage, View, Wait, elsewhere, first_entered, reach};
+use crate::stages::{Advance, HostState, PlanStage, View, Wait, first_entered, reach};
 
 /// Where the update plan of a service stands, as the ops store keeps it. Every field is left out
 /// when it holds nothing.
@@ -380,7 +381,8 @@ impl Coordinator {
 
 /// The plan of `def` for its desired state `want` at `now` as `hostkeeper.operator.v1` says it,
 /// with why it waits: a halt or a bad version (`halted`), the pause, the quiet start and the other
-/// services' rollouts first, then what the plan holds ([`View::wait`]).
+/// services' rollouts first (naming the services whose live rollouts hold it, `waiting_on`), then
+/// what the plan holds ([`View::wait`]).
 pub(crate) fn plan_proto(
     services: &crate::services::Services,
     all: &BTreeMap<String, Desired>,
@@ -391,6 +393,7 @@ pub(crate) fn plan_proto(
     now: Duration,
 ) -> proto::RolloutPlan {
     let view = crate::stages::current(def, want, fleet, now);
+    let mut waiting_on = Vec::new();
     let waiting = if view.finished() {
         None
     } else if halted {
@@ -399,7 +402,8 @@ pub(crate) fn plan_proto(
         Some(Wait::Paused)
     } else if fleet.is_quiet(now) {
         Some(Wait::Quiet)
-    } else if elsewhere(services, all, &def.name, fleet, now) {
+    } else if let Some(live) = live_elsewhere(services, all, &def.name, fleet, now) {
+        waiting_on = live;
         Some(Wait::RolloutElsewhere)
     } else {
         view.wait(def, want, fleet, now)
@@ -420,6 +424,7 @@ pub(crate) fn plan_proto(
         paused_by: view.paused.as_ref().map(|p| p.by.clone()),
         pause_reason: view.paused.as_ref().map(|p| p.reason.clone()),
         finished: view.finished(),
+        waiting_on,
     }
 }
 
