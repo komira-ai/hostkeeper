@@ -7,7 +7,8 @@
 //! announces the features, and lists every installed service, which is sent even when there is
 //! none. Of a service, the name, version, health, running update, verdict and deferral go out;
 //! the installer goes out as `installer` when there is one; the observer's detail and the health
-//! detail have no field and do not. Of a verdict, the
+//! detail have no field and do not. A drift goes out as `drift`; one whose string is outside a
+//! package version's grammar is left out, and the beat is sent without it. Of a verdict, the
 //! target, outcome, phase, class, reason, order id and try go out, and so do the forced flag and
 //! the detail, which this message has fields for. A deferred verdict has no outcome here: the
 //! service's `deferred` report says it, so its `last_update` is left out. A service name or a
@@ -32,12 +33,12 @@ use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_hook::{Class, Phase};
 use hostkeeper_proto::hostkeeper::agent::v1 as pb;
 use hostkeeper_wire::version::Version as WireVersion;
-use hostkeeper_wire::wire::is_service_name;
+use hostkeeper_wire::wire::{is_drift_version, is_service_name};
 
 use crate::beat::{AGENT_NAME, Feature, Health, Heartbeat, Platform, RootReason, ServiceFacts};
 use crate::names::{OrderId, PackageDigest};
 use crate::order::{DeferredReport, Entry, Order, OrderResult, Outcome, Reply, Target, Verb};
-use crate::ports::Unsendable;
+use crate::ports::{Drift, Unsendable};
 use crate::wire_map::acknowledged;
 
 /// Why an order whose verb the daemon does not run, or that has none, is not run.
@@ -110,7 +111,18 @@ fn service(facts: &ServiceFacts) -> Result<pb::ServiceBeat, Unsendable> {
         deferred,
         record_try: facts.record_try,
         installer: facts.installer.clone(),
+        drift: facts.drift.as_ref().and_then(drift),
         ..pb::ServiceBeat::default()
+    })
+}
+
+/// A drift as `drift`; none for one whose string is outside the grammar of a package version,
+/// which is dropped as the beat drops its other optional facts, never refusing the heartbeat.
+fn drift(drift: &Drift) -> Option<pb::DriftReport> {
+    let good = |text: &Option<String>| text.as_deref().is_none_or(is_drift_version);
+    (good(&drift.found) && good(&drift.recorded)).then(|| pb::DriftReport {
+        found: drift.found.clone(),
+        recorded: drift.recorded.clone(),
     })
 }
 

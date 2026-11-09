@@ -160,6 +160,7 @@ impl ServiceObserver for FakeObserver {
                 version: None,
                 health: Health::Healthy,
                 health_detail: None,
+                drift: None,
             })
     }
 }

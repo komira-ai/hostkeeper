@@ -110,6 +110,7 @@ pub mod place;
 pub mod prune;
 pub mod real_packages;
 pub mod refusal;
+pub mod repositories;
 pub mod seed;
 pub mod selfunits;
 pub mod selfupdate;

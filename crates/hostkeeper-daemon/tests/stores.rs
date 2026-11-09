@@ -601,6 +601,7 @@ fn no_stores_file_gives_the_channel_store() {
 /// The host files of a Linux host with `stores` as its stores file, under `root`.
 fn files(root: &Path, stores: PathBuf) -> HostFiles {
     HostFiles {
+        repositories: None,
         os_root: root.join("os"),
         ca_bundle: root.join("ca.pem"),
         gh: root.join("gh"),

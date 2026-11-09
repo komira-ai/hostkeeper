@@ -348,6 +348,7 @@ fn first_beat() -> Heartbeat {
             observed: None,
             record_try: None,
             installer: None,
+            drift: None,
         }],
         sent_unix: 0,
         renewal: Renewal::default(),

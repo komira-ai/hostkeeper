@@ -9,6 +9,10 @@
 //!   and `INSTALLER_DROPPED` (33), `HostCounts.picked`, `no_target`, `no_build_for_host` and
 //!   `installer_dropped` (6 to 9), and `Convergence.installer_dropped` (10).
 //!
+//! - `ServiceBeat.drift` (14), a `DriftReport` (build item A7 of
+//!   `docs/design/packages-repositories.md`): the version a native package was found at and the
+//!   version recorded for it.
+//!
 //! The numbers 8 and 19 the design first named were taken by the trusted root's fields before
 //! A3; these are the next free ones. A reader of the release before keeps each as a field it does
 //! not know and writes it back byte for byte; this build reads what that release wrote with each
@@ -128,6 +132,59 @@ fn an_older_reader_keeps_a_heartbeats_installers() {
     service.set_field_by_name("name", Value::String("web".to_owned()));
     let read = agent::ServiceBeat::decode(service.encode_to_vec().as_slice()).expect("decodes");
     assert_eq!(read.installer, None, "absent: an archive");
+}
+
+/// Catches: a service's drift that a coordinator of the release before refuses, drops, or writes
+/// back changed, and a beat of the release before read with a drift. Proves the tag: field 14
+/// (`0x72`).
+#[test]
+fn an_older_reader_keeps_a_services_drift() {
+    let older = baseline_pool();
+    let service_d = message(&older, "hostkeeper.agent.v1.ServiceBeat");
+    assert!(service_d.get_field_by_name("drift").is_none());
+    assert!(
+        older
+            .get_message_by_name("hostkeeper.agent.v1.DriftReport")
+            .is_none()
+    );
+    let service = agent::ServiceBeat {
+        name: "web".to_owned(),
+        version: "1.0".to_owned(),
+        health: agent::Health::Healthy.into(),
+        drift: Some(agent::DriftReport {
+            found: Some("2:1.0~rc1".to_owned()),
+            recorded: None,
+        }),
+        ..agent::ServiceBeat::default()
+    };
+    let bytes = service.encode_to_vec();
+    assert_eq!(
+        agent::ServiceBeat::decode(bytes.as_slice()).expect("decodes"),
+        service
+    );
+    assert_eq!(older_reads(&service_d, &bytes, &[14]), bytes);
+    assert!(bytes.contains(&0x72));
+
+    let mut written = DynamicMessage::new(service_d);
+    written.set_field_by_name("name", Value::String("web".to_owned()));
+    let read = agent::ServiceBeat::decode(written.encode_to_vec().as_slice()).expect("decodes");
+    assert_eq!(read.drift, None, "absent: no drift found");
+}
+
+/// Catches: `found` or `recorded` of a drift report given another number or no presence, so that
+/// a package that is not installed reads as an empty version.
+#[test]
+fn a_drift_report_tells_absent_from_empty() {
+    let now = current_pool();
+    let report = message(&now, "hostkeeper.agent.v1.DriftReport");
+    for (field, number) in [("found", 1), ("recorded", 2)] {
+        let found = report.get_field_by_name(field).expect("the field");
+        assert_eq!(
+            (found.number(), found.kind(), found.supports_presence()),
+            (number, Kind::String, true),
+            "{field}"
+        );
+    }
 }
 
 /// Catches: an order with a target that a daemon of the release before refuses or cannot read
@@ -332,7 +389,15 @@ fn an_older_reader_keeps_what_operators_are_shown() {
 fn the_new_fields_have_their_numbers_and_types() {
     let now = current_pool();
     let target = Kind::Message(message(&now, "hostkeeper.release.v1.Target"));
-    let fields: [(&str, &str, u32, Kind, bool); 12] = [
+    let report = Kind::Message(message(&now, "hostkeeper.agent.v1.DriftReport"));
+    let fields: [(&str, &str, u32, Kind, bool); 13] = [
+        (
+            "hostkeeper.agent.v1.ServiceBeat",
+            "drift",
+            14,
+            report,
+            false,
+        ),
         (
             "hostkeeper.agent.v1.HeartbeatRequest",
             "installers",

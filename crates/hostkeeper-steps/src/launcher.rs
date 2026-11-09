@@ -2,7 +2,8 @@
 //! runs next, with which executable, from which release and by when; the launcher runs it and
 //! reports how it ended. [`crate::systemd::SystemdLauncher`] is the launcher of the host: a
 //! transient systemd unit per step, as root, with `RuntimeMaxSec=` and nothing else; a tool run
-//! ([`ToolCall`]) is a unit that also has no network (`PrivateNetwork=yes`).
+//! ([`ToolCall`]) is a unit that is offline (`PrivateNetwork=yes`) unless it is a fetch
+//! ([`ToolNetwork`]), and that may be confined to the paths it lists.
 
 use std::ffi::OsString;
 use std::io;
@@ -66,8 +67,19 @@ pub struct AdditiveCall<'a> {
     pub timeout_secs: u64,
 }
 
-/// One run of a format's tool (an installer unpacking a package, docs/design/packages.md, 5.3):
-/// a program run by absolute path in a unit of its own, bounded, with no network.
+/// Whether a tool's unit has the network.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToolNetwork {
+    /// No network: the unit has `PrivateNetwork=yes`.
+    Offline,
+    /// The host's network: the unit has no `PrivateNetwork`. Only for a repository installer's
+    /// two fetch commands, and only with [`ToolCall::writable`] set: a fetch is always confined.
+    Fetch,
+}
+
+/// One run of a format's tool (an installer unpacking a package or driving the host's package
+/// manager, docs/design/packages.md, 5.3): a program run by absolute path in a unit of its own,
+/// bounded.
 #[derive(Clone, Debug)]
 pub struct ToolCall<'a> {
     /// The service the run is for.
@@ -81,6 +93,36 @@ pub struct ToolCall<'a> {
     pub args: &'a [OsString],
     /// The bound of the run, in seconds; 0 is no bound.
     pub timeout_secs: u64,
+    /// Whether the unit has the network: [`crate::systemd::SystemdLauncher`] adds
+    /// `PrivateNetwork=yes` for [`ToolNetwork::Offline`].
+    pub network: ToolNetwork,
+    /// The file-system confinement: `Some(paths)` makes the unit `ProtectSystem=strict` with
+    /// `ProtectHome=read-only`, each path (absolute, without whitespace) in `ReadWritePaths=`,
+    /// and a `/tmp` of its own (`PrivateTmp=yes`), so `Some(&[])` leaves nothing of the host
+    /// writable; `None` leaves the
+    /// unit unconfined, for a run that writes the host's system (an install, a purge). Refused
+    /// with [`ToolNetwork::Fetch`].
+    pub writable: Option<&'a [&'a Path]>,
+    /// The tool's working directory (absolute), `--working-directory=`; `None` leaves the unit's
+    /// default.
+    pub working_dir: Option<&'a Path>,
+    /// The environment the tool is given, one `--setenv=NAME=VALUE` each, in order. A name is
+    /// `[A-Z_][A-Z0-9_]*` and a value holds no NUL and no newline.
+    pub env: &'a [(&'a str, &'a str)],
+}
+
+/// How a tool ended, with what it wrote.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ToolExit {
+    /// The exit code; `None` when the tool was killed by a signal, by its bound where the
+    /// launcher reports that as no code, or ended by a [`StepLauncher::stop`] of its unit.
+    pub code: Option<i32>,
+    /// The kept bytes of standard output: the last [`crate::RING_BYTES`].
+    pub stdout: Vec<u8>,
+    /// The kept bytes of standard error: the last [`crate::RING_BYTES`].
+    pub stderr: Vec<u8>,
+    /// Whether either stream wrote more than was kept, so that its beginning was dropped.
+    pub cut: bool,
 }
 
 /// How a step ended, as the launcher saw it.
@@ -175,10 +217,11 @@ pub trait StepLauncher: Send + Sync {
         )))
     }
 
-    /// Runs a format's tool and waits for it to end, in a unit that has no network, bounded by
-    /// the call's timeout. A launcher that runs no tool keeps this default, which starts
+    /// Runs a format's tool and waits for it to end, in a unit as [`ToolCall`] says (offline
+    /// unless a fetch, confined if it lists writable paths), bounded by the call's timeout, and
+    /// answers its exit and output. A launcher that runs no tool keeps this default, which starts
     /// nothing and answers [`LaunchError::NoStart`] naming the program.
-    fn run_tool(&self, call: &ToolCall<'_>) -> Result<StepExit, LaunchError> {
+    fn run_tool(&self, call: &ToolCall<'_>) -> Result<ToolExit, LaunchError> {
         Err(LaunchError::NoStart(format!(
             "this launcher runs no tool, so {} for {} did not start",
             call.program.display(),
