@@ -8,21 +8,29 @@
 //! transfer with exit 22 or, on some builds and protocols, exit 56 (a receive error). Plain
 //! `--retry` retries exit 22 on a 504 and not exit 56: curl reads the HTTP status only after a
 //! result of 0 or 22. So `--retry-all-errors` is required too, bounded by `--retry` and
-//! `--retry-max-time`. A retry writes the `--output` file (or, with `--remote-name-all`, each
-//! file it names) again from the start, and a check of a digest or an attestation is a command
-//! after the curl, which runs whatever curl retried.
+//! `--retry-max-time`. Those 504s come in spells: six tries 5 seconds apart all met one and
+//! failed a run on main, and runs of the next ten minutes failed on other downloads. So the
+//! retries must span 600 seconds: `--retry` times `--retry-delay` (curl waits that delay between
+//! tries when it is given) and `--retry-max-time` each at least 600. A retry writes the
+//! `--output` file (or, with `--remote-name-all`, each file it names) again from the start, and
+//! a check of a digest or an attestation is a command after the curl, which runs whatever curl
+//! retried.
 //!
 //! A `curl` is a word `curl` in a `run:`, on its own or after `(` or a backquote (`$(curl`), on a
 //! line that is not a comment (lines ending in `\` are joined first). Its options are the words
 //! after it up to `|`, `||`, `&&`, `;` or `)`. Options are matched in their long spelling,
 //! exactly; every `--proto` and `--proto-redir` must have the value `=https` (curl takes the
-//! last), and each retry count or time is a whole number above 0. `downloads_tests.rs` shows each
-//! defect refused.
+//! last), and each retry count or time is a whole number above 0. `downloads_tests.rs` shows
+//! each defect refused.
 
 use super::yaml::{Node, Value};
 
 /// The retry options that take a value, a whole number above 0.
 const VALUED: [&str; 3] = ["--retry", "--retry-delay", "--retry-max-time"];
+
+/// The seconds a curl's retries must span, both as `--retry` times `--retry-delay` and as
+/// `--retry-max-time`: GitHub's release downloads answer 504 in spells of minutes.
+const WINDOW: u64 = 600;
 
 /// The words that end a command's options.
 const ENDS: [&str; 5] = ["|", "||", "&&", ";", ")"];
@@ -111,11 +119,25 @@ fn curl_problems(line: usize, options: &[&str]) -> Vec<String> {
             missing.push(format!("`{flag}`"));
         }
     }
+    let mut counts = Vec::new();
     for flag in VALUED {
-        match value(flag) {
+        match value(flag).map(|given| (given, given.parse::<u32>())) {
             None => missing.push(format!("`{flag} <n>`")),
-            Some(given) if given.parse::<u32>().is_ok_and(|n| n > 0) => {}
-            Some(given) => wrong.push(format!("`{flag}` is `{given}`, not a whole number above 0")),
+            Some((_, Ok(n))) if n > 0 => counts.push(u64::from(n)),
+            Some((given, _)) => {
+                wrong.push(format!("`{flag}` is `{given}`, not a whole number above 0"))
+            }
+        }
+    }
+    if let [retries, delay, max_time] = counts[..] {
+        if retries * delay < WINDOW {
+            wrong.push(format!(
+                "retries wait {retries} × {delay}s = {}s, under {WINDOW}s",
+                retries * delay
+            ));
+        }
+        if max_time < WINDOW {
+            wrong.push(format!("`--retry-max-time` is {max_time}, under {WINDOW}"));
         }
     }
     let mut problems = Vec::new();

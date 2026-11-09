@@ -52,7 +52,7 @@ jobs:
           persist-credentials: false
       - run: rustup toolchain install
       - name: Download cargo-deny (HTTPS only, redirects included)
-        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 5 --retry-delay 5 --retry-max-time 300 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/cargo-deny.tar.gz" "https://github.com/EmbarkStudios/cargo-deny/releases/download/$DENY_VERSION/cargo-deny-$DENY_VERSION-x86_64-unknown-linux-musl.tar.gz"
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/cargo-deny.tar.gz" "https://github.com/EmbarkStudios/cargo-deny/releases/download/$DENY_VERSION/cargo-deny-$DENY_VERSION-x86_64-unknown-linux-musl.tar.gz"
       - name: Install cargo-deny (pinned checksum)
         run: cargo xtask install-tool --download "$RUNNER_TEMP/cargo-deny.tar.gz" --sha256 "$DENY_SHA256" --out "$HOME/.cargo/bin/cargo-deny" --extract tar.gz --member "cargo-deny-$DENY_VERSION-x86_64-unknown-linux-musl/cargo-deny"
       - run: cargo deny --version
