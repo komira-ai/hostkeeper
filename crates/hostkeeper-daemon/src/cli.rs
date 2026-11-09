@@ -74,7 +74,7 @@ use crate::ipmi::DevIpmi;
 use crate::links::{DaemonLog, HostLink, Links};
 use crate::mac::HostIoreg;
 use crate::notify::{
-    NoNotifier, NoWatchdog, ReadyNotifier, SystemdNotifier, SystemdWatchdog, Watchdog,
+    NoNotifier, NoWatchdog, ReadyFile, ReadyNotifier, SystemdNotifier, SystemdWatchdog, Watchdog,
 };
 use crate::observer::{OwnService, observer_with};
 use crate::prune::{LayoutPrune, NoLockPoint};
@@ -239,8 +239,13 @@ pub struct DaemonFlags {
     pub admin_socket: Option<PathBuf>,
     /// Tell systemd the daemon is ready (`READY=1` on the notify socket systemd sets for a unit
     /// of `Type=notify`) once its boot work is over.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "ready_file")]
     pub notify_systemd: bool,
+    /// Write this file, with the daemon's pid, once the boot work is over ([`ReadyFile`]): the
+    /// readiness of a daemon under OpenRC, whose init script removes it before a start and waits
+    /// for it after.
+    #[arg(long)]
+    pub ready_file: Option<PathBuf>,
     /// Days after which the Sigstore trusted root is reported `trusted_root_stale`, at least 1.
     /// A signal only: package checks go on with the root there is.
     #[arg(long, default_value_t = DEFAULT_TRUSTED_ROOT_MAX_AGE_DAYS)]
@@ -381,11 +386,14 @@ pub fn exit_status(served: &Result<(), StartError>) -> u8 {
 }
 
 /// The readiness notifier the flags ask for: systemd's with `--notify-systemd`, refused when no
-/// notify socket was set; none without it.
+/// notify socket was set; the file of `--ready-file`; none without either.
 pub fn notifier(
     flags: &DaemonFlags,
     notify_socket: Option<OsString>,
 ) -> Result<Box<dyn ReadyNotifier>, StartError> {
+    if let Some(path) = &flags.ready_file {
+        return Ok(Box::new(ReadyFile::new(path)));
+    }
     match (flags.notify_systemd, notify_socket) {
         (false, _) => Ok(Box::new(NoNotifier)),
         (true, Some(socket)) => Ok(Box::new(SystemdNotifier::new(socket))),
@@ -642,7 +650,9 @@ impl HostFiles {
     /// - Linux: [`GH_BINARY`] and [`SIGSTORE_TRUSTED_ROOT`], and the first of [`CA_BUNDLE`]
     ///   (Debian family) and [`CA_BUNDLE_RHEL`] (RHEL family) that exists; [`CA_BUNDLE`] when
     ///   neither does, so the fetch reads a bundle that is not there and has no root to trust.
-    ///   The console's issue file is [`ENROLLMENT_ISSUE`], redrawn by [`AGETTY`].
+    ///   The console's issue file is [`ENROLLMENT_ISSUE`], redrawn by [`AGETTY`], under systemd;
+    ///   an OpenRC host (Alpine) has the same files and no console: its getty is busybox's, which
+    ///   reads no issue directory and has no `--reload`.
     pub fn for_platform(kind: PlatformKind, exists: impl Fn(&Path) -> bool) -> HostFiles {
         let console = (kind == PlatformKind::Linux).then(|| ConsoleFiles {
             issue: PathBuf::from(ENROLLMENT_ISSUE),
@@ -654,7 +664,7 @@ impl HostFiles {
                 GH_BINARY_MACOS,
                 SIGSTORE_TRUSTED_ROOT_MACOS,
             ),
-            PlatformKind::Linux => (
+            PlatformKind::Linux | PlatformKind::Openrc => (
                 [CA_BUNDLE, CA_BUNDLE_RHEL]
                     .into_iter()
                     .find(|bundle| exists(Path::new(bundle)))

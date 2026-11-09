@@ -1494,6 +1494,7 @@ dependencies = [
  "hostkeeper-link",
  "hostkeeper-observe",
  "hostkeeper-oidc",
+ "hostkeeper-openrc",
  "hostkeeper-package",
  "hostkeeper-placed",
  "hostkeeper-proto",
@@ -1763,6 +1764,19 @@ dependencies = [
  "tokio-rustls",
  "toml",
  "tracing",
+]
+
+[[package]]
+name = "hostkeeper-openrc"
+version = "0.1.0"
+dependencies = [
+ "hostkeeper-hook",
+ "hostkeeper-observe",
+ "hostkeeper-placed",
+ "hostkeeper-steps",
+ "hostkeeper-testkit",
+ "rustix",
+ "thiserror",
 ]
 
 [[package]]

@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "The tests that run as root against the real service manager of a host (systemd, and launchd on a Mac) and that run the coordinator and the daemon as programs, in .github/workflows/privileged.yml and in pr-device.yml's copies of its jobs, and the Linux packages installed on each release of linux-releases.toml, and network install end to end in .github/workflows/net-install.yml, and the workload fixture they drive."
+description = "The tests that run as root against the real service manager of a host (systemd, launchd on a Mac, and OpenRC in an Alpine container) and that run the coordinator and the daemon as programs, in .github/workflows/privileged.yml and in pr-device.yml's copies of its jobs, and the Linux packages installed on each release of linux-releases.toml, and network install end to end in .github/workflows/net-install.yml, and the workload fixture they drive."
 
 # The one place where the adapters behind the fakes of the pull-request set meet the real host:
 # the step launcher's transient units, the dead-man's stop by name, the observer's systemd and

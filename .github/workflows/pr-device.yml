@@ -17,6 +17,8 @@
 #   for step.
 # - privileged: the privileged tests against systemd as root, privileged.yml's job of that name,
 #   step for step. It runs on every pull request, whatever changes says.
+# - openrc-device: the daemon under OpenRC in an Alpine Linux container, as root, privileged.yml's
+#   job of that name, step for step. It runs on every pull request, whatever changes says.
 #
 # macos-test and macos-device run unless changes passed and answered `needed=false`; a changes
 # job that failed or gave no answer runs them. Their checks are named `macos-test on macos-15`
@@ -24,8 +26,8 @@
 # every pull request as before, are the jobs macos-test-check and macos-device-check: on Linux,
 # after the macOS job whatever it did, each passes when its macOS job passed, or states that the
 # path rule skipped it when it was skipped on `needed=false`, and fails otherwise. So each
-# required name is the check of exactly one job, which always runs. `privileged` is a check of
-# its own, as before.
+# required name is the check of exactly one job, which always runs. `privileged` and
+# `openrc-device` are checks of their own.
 #
 # A pull request's newer run cancels its older one. No job of it holds a write scope or names a
 # secret or the token, and no cache is saved from a pull request (each copied job's save step
@@ -170,9 +172,9 @@ jobs:
           key: cargo-${{ runner.os }}-${{ runner.arch }}-macos-device-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
           restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-macos-device-
       - name: Build the tests of the Mac's crates
-        run: cargo test --locked --no-run -p hello -p hostkeeper -p hostkeeper-config -p hostkeeper-daemon -p hostkeeper-enroll -p hostkeeper-hook -p hostkeeper-launchd -p hostkeeper-link -p hostkeeper-observe -p hostkeeper-package -p hostkeeper-placed -p hostkeeper-proto -p hostkeeper-release -p hostkeeper-steps -p hostkeeper-unpack -p hostkeeper-wire
+        run: cargo test --locked --no-run -p hello -p hostkeeper -p hostkeeper-config -p hostkeeper-daemon -p hostkeeper-enroll -p hostkeeper-hook -p hostkeeper-launchd -p hostkeeper-link -p hostkeeper-observe -p hostkeeper-openrc -p hostkeeper-package -p hostkeeper-placed -p hostkeeper-proto -p hostkeeper-release -p hostkeeper-steps -p hostkeeper-unpack -p hostkeeper-wire
       - name: Run the tests of the Mac's crates
-        run: cargo test --locked --no-fail-fast -p hello -p hostkeeper -p hostkeeper-config -p hostkeeper-daemon -p hostkeeper-enroll -p hostkeeper-hook -p hostkeeper-launchd -p hostkeeper-link -p hostkeeper-observe -p hostkeeper-package -p hostkeeper-placed -p hostkeeper-proto -p hostkeeper-release -p hostkeeper-steps -p hostkeeper-unpack -p hostkeeper-wire
+        run: cargo test --locked --no-fail-fast -p hello -p hostkeeper -p hostkeeper-config -p hostkeeper-daemon -p hostkeeper-enroll -p hostkeeper-hook -p hostkeeper-launchd -p hostkeeper-link -p hostkeeper-observe -p hostkeeper-openrc -p hostkeeper-package -p hostkeeper-placed -p hostkeeper-proto -p hostkeeper-release -p hostkeeper-steps -p hostkeeper-unpack -p hostkeeper-wire
 
   # The required check `macos-test`: it runs after macos-test whatever it did, cancelled included, and
   # passes when macos-test passed, or when changes passed and answered `needed=false` and macos-test was
@@ -404,6 +406,64 @@ jobs:
           name: privileged-end-to-end
           path: target/privileged-artifacts
           if-no-files-found: ignore
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ github.event_name == 'push' && steps.cargo-cache.outputs.cache-hit != 'true' }}
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
+
+  # privileged.yml's job openrc-device; the workflow lint holds it, key for key, to that job.
+  openrc-device:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    # A bound on the whole job, against a test that hangs; no test depends on it.
+    timeout-minutes: 45
+    env:
+      # The nfpm the tests find at target/privileged-tools/nfpm and build their package with, the
+      # same version and SHA-256 as artifacts.yml's Linux x86_64 build.
+      NFPM_VERSION: 2.48.0
+      NFPM_SHA256: 6d7f9a28b2f397934403950fcbba83f598b08d02edbe79a0815b3b4897341750
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The container engine the tests start the Alpine guest with, for the log (evidence, not a
+      # gate).
+      - name: docker version
+        run: docker --version
+      - run: rustup toolchain install
+      # The programs the container runs are built for musl, the libc of Alpine.
+      - name: Add the musl target
+        run: rustup target add x86_64-unknown-linux-musl
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: cargo-cache
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
+      - name: Download nfpm (HTTPS only, redirects included)
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 5 --retry-delay 5 --retry-max-time 300 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/nfpm.tar.gz" "https://github.com/goreleaser/nfpm/releases/download/v$NFPM_VERSION/nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz"
+      - name: Install nfpm (pinned checksum)
+        run: cargo xtask install-tool --download "$RUNNER_TEMP/nfpm.tar.gz" --sha256 "$NFPM_SHA256" --out target/privileged-tools/nfpm --extract tar.gz --member nfpm
+      - name: Build the Alpine image the tests run in
+        run: docker build --tag hostkeeper-openrc-device crates/hostkeeper-privileged/openrc
+      # The programs the container runs, built for musl, the libc of Alpine. ring's C code is
+      # compiled by the runner's gcc: the runner has no musl-gcc.
+      - name: Build the programs the container runs
+        env:
+          CC_x86_64_unknown_linux_musl: gcc
+        run: cargo build --locked --target x86_64-unknown-linux-musl -p hostkeeper --bin hostkeeper -p hostkeeper-privileged --features hostkeeper-privileged/privileged --bin hostkeeper-selfupdate-daemon --bin hostkeeper-fixture-hook
+      - name: Build the OpenRC device tests as the runner's user
+        run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test openrc_device
+      - name: Run the OpenRC device tests as root
+        run: cargo test -p hostkeeper-privileged --features privileged --locked --config "target.'cfg(unix)'.runner = 'sudo'" --test openrc_device -- --test-threads=1 --nocapture
       - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: ${{ github.event_name == 'push' && steps.cargo-cache.outputs.cache-hit != 'true' }}
         with:

@@ -10,6 +10,7 @@ hostkeeper-hook = { path = "../hostkeeper-hook" }
 hostkeeper-launchd = { path = "../hostkeeper-launchd" }
 hostkeeper-link = { path = "../hostkeeper-link" }
 hostkeeper-observe = { path = "../hostkeeper-observe" }
+hostkeeper-openrc = { path = "../hostkeeper-openrc" }
 hostkeeper-package = { path = "../hostkeeper-package" }
 hostkeeper-placed = { path = "../hostkeeper-placed" }
 hostkeeper-proto = { path = "../hostkeeper-proto" }
