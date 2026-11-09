@@ -58,7 +58,13 @@ fn index(version: &str) -> String {
 
 /// The targets the job must give for hostkeeper's release `version`.
 fn targets(version: &str) -> String {
-    release_files::targets("hostkeeper", version, version, &hostkeeper_files(version))
+    release_files::targets(
+        "hostkeeper",
+        version,
+        version,
+        &hostkeeper_files(version),
+        false,
+    )
 }
 
 /// One run of the job: the scratch files, and what the run is given.

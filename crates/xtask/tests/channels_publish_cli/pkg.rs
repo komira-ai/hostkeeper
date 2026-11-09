@@ -28,7 +28,7 @@ fn pkg(d: &Path, fake: &Fake, verb: &str, dir: &Path, tag: &str, extra: &[&str])
 }
 
 #[test]
-fn pkg_upload_puts_the_installer_its_bundle_and_the_sums_once_each_below_the_version() {
+fn pkg_upload_puts_each_installer_its_bundle_and_the_sums_once_each_below_the_version() {
     let d = dir("pkg-upload");
     let fake = Fake::new(&d);
     let release = pkg_release(&d, "release", "1.2.3");
@@ -40,6 +40,8 @@ fn pkg_upload_puts_the_installer_its_bundle_and_the_sums_once_each_below_the_ver
         format!("{prefix}{INSTALLER}"),
         format!("{prefix}{INSTALLER}.sigstore.json"),
         format!("{prefix}SHA256SUMS"),
+        format!("{prefix}{HELLO_INSTALLER}"),
+        format!("{prefix}{HELLO_INSTALLER}.sigstore.json"),
     ];
     for key in &keys {
         assert!(said.contains(&format!("{key}: written\n")), "{said}");
@@ -49,20 +51,28 @@ fn pkg_upload_puts_the_installer_its_bundle_and_the_sums_once_each_below_the_ver
         fake.object(&keys[0]),
         std::fs::read(release.join(INSTALLER)).expect("read")
     );
+    assert_eq!(
+        fake.object(&keys[3]),
+        std::fs::read(release.join(HELLO_INSTALLER)).expect("read")
+    );
     let none = ["--if-none-match".to_owned(), "*".to_owned()];
     let puts = fake.puts();
-    assert_eq!(puts.len(), 3);
+    assert_eq!(puts.len(), 5);
     assert!(
         puts.iter()
             .all(|(k, cond)| keys.contains(k) && cond == &none),
         "{puts:?}"
     );
+    // The directory's sums go last, after every file they list.
+    assert_eq!(puts[4].0, keys[2]);
     let sums = String::from_utf8(fake.object(&keys[2])).expect("utf8");
-    assert!(
-        sums.contains(&format!("  {INSTALLER}\n"))
-            && sums.contains(&format!("  {INSTALLER}.sigstore.json\n")),
-        "{sums}"
-    );
+    for name in [INSTALLER, HELLO_INSTALLER] {
+        assert!(
+            sums.contains(&format!("  {name}\n"))
+                && sums.contains(&format!("  {name}.sigstore.json\n")),
+            "{sums}"
+        );
+    }
     assert!(!fake.has("pkg/hostkeeper/stable.json"));
     // Again: the files are there with the same bytes, and kept.
     let o = pkg(&d, &fake, "upload", &release, "v1.2.3", &[]);
@@ -75,9 +85,14 @@ fn pkg_upload_puts_the_installer_its_bundle_and_the_sums_once_each_below_the_ver
     // Another installer under the same version is refused, and the first one stays.
     let changed = pkg_release(&d, "changed", "1.2.3");
     std::fs::write(changed.join(INSTALLER), b"other installer").expect("write");
+    let hello = std::fs::read(changed.join(HELLO_INSTALLER)).expect("read");
     std::fs::write(
         changed.join("SHA256SUMS"),
-        format!("{}  {INSTALLER}\n", sha256(b"other installer")),
+        format!(
+            "{}  {HELLO_INSTALLER}\n{}  {INSTALLER}\n",
+            sha256(&hello),
+            sha256(b"other installer")
+        ),
     )
     .expect("write");
     let o = pkg(&d, &fake, "upload", &changed, "v1.2.3", &[]);
@@ -106,7 +121,7 @@ fn pkg_promote_moves_stable_json_with_if_none_match_then_if_match_and_never_to_a
     assert_eq!(o.status.code(), Some(1));
     assert!(
         stderr(&o).contains(&format!(
-            "pkg/hostkeeper/1.2.3/{INSTALLER} could not be read back"
+            "pkg/hostkeeper/1.2.3/{HELLO_INSTALLER} could not be read back"
         )),
         "{}",
         stderr(&o)
@@ -143,6 +158,7 @@ fn pkg_promote_moves_stable_json_with_if_none_match_then_if_match_and_never_to_a
     assert_eq!(pointer["tag"], "v1.2.3");
     assert_eq!(pointer["commit"], COMMIT);
     assert!(pointer["files"][INSTALLER]["sha256"].is_string());
+    assert!(pointer["files"][HELLO_INSTALLER]["sha256"].is_string());
     let puts = fake.puts();
     assert_eq!(
         puts,
@@ -214,19 +230,19 @@ fn pkg_check_holds_the_files_the_public_host_serves_to_the_releases_sums() {
             ],
         )
     };
-    // Nothing served yet.
+    // Nothing served yet: the directory's sums are the first download.
     let o = check("1.2.3", &url);
     assert_eq!(o.status.code(), Some(1));
     assert!(
-        stderr(&o).contains(&format!(
-            "{url}/{prefix}{INSTALLER} could not be downloaded"
-        )),
+        stderr(&o).contains(&format!("{url}/{prefix}SHA256SUMS could not be downloaded")),
         "{}",
         stderr(&o)
     );
     for name in [
         INSTALLER.to_owned(),
         format!("{INSTALLER}.sigstore.json"),
+        HELLO_INSTALLER.to_owned(),
+        format!("{HELLO_INSTALLER}.sigstore.json"),
         "SHA256SUMS".to_owned(),
     ] {
         fake.serve(
@@ -237,14 +253,16 @@ fn pkg_check_holds_the_files_the_public_host_serves_to_the_releases_sums() {
     let o = check("1.2.3", &url);
     assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
     assert!(
-        stdout(&o).contains("as the release's SHA256SUMS lists; its bundle and the directory's SHA256SUMS agree; the installer is unsigned"),
+        stdout(&o).contains("as the release's SHA256SUMS lists; their bundles and the directory's SHA256SUMS agree; the installers are unsigned"),
         "{}",
         stdout(&o)
     );
-    assert_eq!(
-        std::fs::read(work.join(INSTALLER)).expect("read"),
-        std::fs::read(release.join(INSTALLER)).expect("read")
-    );
+    for name in [INSTALLER, HELLO_INSTALLER] {
+        assert_eq!(
+            std::fs::read(work.join(name)).expect("read"),
+            std::fs::read(release.join(name)).expect("read")
+        );
+    }
     // The host serves another installer.
     fake.serve(&format!("{prefix}{INSTALLER}"), b"another installer");
     let o = check("1.2.3", &url);
@@ -371,10 +389,12 @@ fn pkg_verbs_with_flags_that_do_not_fit_are_status_2_and_a_release_without_the_i
     .expect("write");
     let o = pkg(&d, &fake, "upload", &theirs, "v1.2.3", &[]);
     assert_eq!(o.status.code(), Some(1));
-    assert!(
-        stderr(&o).contains(&format!("{INSTALLER} is not a file")),
-        "{}",
-        stderr(&o)
-    );
+    for name in [INSTALLER, HELLO_INSTALLER] {
+        assert!(
+            stderr(&o).contains(&format!("{name} is not a file")),
+            "{}",
+            stderr(&o)
+        );
+    }
     assert!(fake.calls().is_empty());
 }

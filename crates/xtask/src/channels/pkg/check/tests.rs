@@ -9,6 +9,8 @@ const URL: &str = "https://packages.komira.ai";
 const BASE: &str = "https://packages.komira.ai/pkg/hostkeeper/1.2.3/";
 const INSTALLER: &str = "hostkeeper-1.2.3-macos-arm64.pkg";
 const BUNDLE: &str = "hostkeeper-1.2.3-macos-arm64.pkg.sigstore.json";
+const HELLO: &str = "hello-1.2.3-macos-arm64.pkg";
+const HELLO_BUNDLE: &str = "hello-1.2.3-macos-arm64.pkg.sigstore.json";
 
 /// A `curl` that serves files from memory, by URL, and records the command lines.
 #[derive(Default)]
@@ -24,27 +26,35 @@ impl FakeCurl {
             .insert(format!("{BASE}{name}"), bytes.to_vec());
     }
 
-    /// The host as the upload left it for the release whose installer is `installer`.
+    /// The host as the upload left it for the release whose installers are hostkeeper's and
+    /// hello's.
     fn published() -> FakeCurl {
         let curl = FakeCurl::default();
         curl.serve(INSTALLER, b"installer bytes");
         curl.serve(BUNDLE, b"bundle bytes");
-        curl.serve(
-            SUMS,
-            directory_sums(b"installer bytes", b"bundle bytes").as_bytes(),
-        );
+        curl.serve(HELLO, b"hello bytes");
+        curl.serve(HELLO_BUNDLE, b"hello bundle bytes");
+        curl.serve(SUMS, directory_sums().as_bytes());
         curl
     }
 }
 
-fn directory_sums(installer: &[u8], bundle: &[u8]) -> String {
+fn directory_sums() -> String {
     sums::render(&[
         sums::Line {
-            sha256: Sha256::of(bundle),
+            sha256: Sha256::of(b"hello bytes"),
+            name: HELLO.to_owned(),
+        },
+        sums::Line {
+            sha256: Sha256::of(b"hello bundle bytes"),
+            name: HELLO_BUNDLE.to_owned(),
+        },
+        sums::Line {
+            sha256: Sha256::of(b"bundle bytes"),
             name: BUNDLE.to_owned(),
         },
         sums::Line {
-            sha256: Sha256::of(installer),
+            sha256: Sha256::of(b"installer bytes"),
             name: INSTALLER.to_owned(),
         },
     ])
@@ -84,10 +94,16 @@ impl Fixture {
     fn new(name: &str) -> Fixture {
         let scratch = scratch(name);
         let sums_path = scratch.join(SUMS);
-        let release = sums::render(&[sums::Line {
-            sha256: Sha256::of(b"installer bytes"),
-            name: INSTALLER.to_owned(),
-        }]);
+        let release = sums::render(&[
+            sums::Line {
+                sha256: Sha256::of(b"hello bytes"),
+                name: HELLO.to_owned(),
+            },
+            sums::Line {
+                sha256: Sha256::of(b"installer bytes"),
+                name: INSTALLER.to_owned(),
+            },
+        ]);
         std::fs::write(&sums_path, release).expect("sums");
         let work = scratch.join("work");
         Fixture {
@@ -109,22 +125,24 @@ impl Fixture {
 }
 
 #[test]
-fn the_installer_the_host_serves_is_the_one_the_release_lists() {
+fn each_installer_the_host_serves_is_the_one_the_release_lists() {
+    // Catches: hello's installer left unchecked beside hostkeeper's, or a download that is not
+    // over HTTPS or not of the version's directory.
     let f = Fixture::new("ok");
     let curl = FakeCurl::published();
     let said = check(&curl, &f.request()).expect("checked");
-    assert_eq!(said.len(), 1);
-    assert!(
-        said[0].starts_with(&format!(
-            "check-pkg: {INSTALLER} from {BASE} is {}, as the release's SHA256SUMS lists;",
+    assert_eq!(
+        said,
+        [format!(
+            "check-pkg: {HELLO} from {BASE} is {}; {INSTALLER} from {BASE} is {}, as the release's SHA256SUMS lists; their bundles and the directory's SHA256SUMS agree; the installers are unsigned",
+            Sha256::of(b"hello bytes"),
             Sha256::of(b"installer bytes")
-        )),
-        "{said:?}"
+        )]
     );
-    assert!(said[0].ends_with("the installer is unsigned"), "{said:?}");
-    // Three downloads, over HTTPS only, each to the work directory.
+    // Five downloads, over HTTPS only, each to the work directory: the directory's sums, then
+    // each installer and its bundle.
     let calls = curl.calls.borrow();
-    assert_eq!(calls.len(), 3);
+    assert_eq!(calls.len(), 5);
     for call in calls.iter() {
         assert_eq!(
             call[..7],
@@ -139,9 +157,43 @@ fn the_installer_the_host_serves_is_the_one_the_release_lists() {
             ]
         );
     }
-    assert_eq!(calls[0][8], format!("{BASE}{INSTALLER}"));
-    assert_eq!(calls[1][8], format!("{BASE}{BUNDLE}"));
-    assert_eq!(calls[2][8], format!("{BASE}SHA256SUMS"));
+    let urls: Vec<&str> = calls.iter().map(|c| c[8].as_str()).collect();
+    assert_eq!(
+        urls,
+        [
+            format!("{BASE}SHA256SUMS"),
+            format!("{BASE}{HELLO}"),
+            format!("{BASE}{HELLO_BUNDLE}"),
+            format!("{BASE}{INSTALLER}"),
+            format!("{BASE}{BUNDLE}"),
+        ]
+    );
+}
+
+#[test]
+fn hellos_installer_served_with_other_bytes_is_named_while_hostkeepers_is_right() {
+    // Catches: a check that stops at the first installer, or reads hostkeeper's digest for
+    // hello's.
+    let f = Fixture::new("hello-changed");
+    let curl = FakeCurl::published();
+    curl.serve(HELLO, b"another hello");
+    let Error::Refused(problems) = check(&curl, &f.request()).unwrap_err() else {
+        panic!("refused")
+    };
+    let served = Sha256::of(b"another hello");
+    assert_eq!(
+        problems,
+        [
+            format!(
+                "{BASE}{HELLO} is {served}, but the release's SHA256SUMS lists {}",
+                Sha256::of(b"hello bytes")
+            ),
+            format!(
+                "{BASE}SHA256SUMS lists {HELLO} as {}, but it is {served}",
+                Sha256::of(b"hello bytes")
+            ),
+        ]
+    );
 }
 
 #[test]
@@ -195,6 +247,8 @@ fn a_bundle_the_directory_sums_do_not_vouch_for_is_named() {
     assert_eq!(
         problems,
         [
+            format!("{BASE}SHA256SUMS does not list {HELLO}"),
+            format!("{BASE}SHA256SUMS does not list {HELLO_BUNDLE}"),
             format!("{BASE}SHA256SUMS does not list {INSTALLER}"),
             format!("{BASE}SHA256SUMS does not list {BUNDLE}"),
         ]
@@ -218,7 +272,7 @@ fn a_directory_sums_file_that_is_malformed_is_refused() {
 
 #[test]
 fn a_file_the_host_does_not_serve_fails_with_what_curl_said() {
-    for missing in [INSTALLER, BUNDLE, SUMS] {
+    for missing in [INSTALLER, BUNDLE, HELLO, HELLO_BUNDLE, SUMS] {
         let f = Fixture::new("missing");
         let curl = FakeCurl::published();
         curl.served.borrow_mut().remove(&format!("{BASE}{missing}"));
@@ -233,14 +287,28 @@ fn a_file_the_host_does_not_serve_fails_with_what_curl_said() {
 }
 
 #[test]
-fn a_release_sums_file_without_the_installer_fails_before_anything_is_downloaded() {
+fn a_release_sums_file_without_an_installer_fails_before_anything_is_downloaded() {
+    // Catches: a check that downloads before it knows what the release built, or that takes a
+    // release listing hostkeeper's installer alone for one that ships hello's too.
     let f = Fixture::new("not-listed");
     std::fs::write(&f.sums, format!("{}  other\n", Sha256::of(b"x"))).expect("sums");
     let curl = FakeCurl::published();
     let e = check(&curl, &f.request()).unwrap_err().to_string();
     assert!(
-        e.ends_with(&format!("SHA256SUMS does not list {INSTALLER}")),
+        e.ends_with(&format!("SHA256SUMS does not list {HELLO}")),
         "{e}"
+    );
+    assert!(curl.calls.borrow().is_empty());
+    let g = Fixture::new("hello-not-listed");
+    std::fs::write(
+        &g.sums,
+        format!("{}  {INSTALLER}\n", Sha256::of(b"installer bytes")),
+    )
+    .expect("sums");
+    let curl = FakeCurl::published();
+    assert_eq!(
+        check(&curl, &g.request()).unwrap_err(),
+        Error::Failed(format!("{} does not list {HELLO}", g.sums.display()))
     );
     assert!(curl.calls.borrow().is_empty());
 }

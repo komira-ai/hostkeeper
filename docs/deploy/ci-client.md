@@ -464,9 +464,15 @@ This repository builds the targets of its own releases with `cargo xtask release
 --service <hostkeeper|hello|mdm> [--fail-ready] --version <X.Y.Z> --dir <assets> --repo
 komira-ai/hostkeeper`, from the release's assets: for each platform the package's index lists,
 one `hostkeeper-archive` entry with the archive's size and SHA-256, its `.sigstore.json` bundle,
-both locations, and the `min_hostkeeper` of the archive's own `manifest.toml`. It refuses a
-release whose index, archives, bundles or manifests do not check out, and entries the
-coordinator or the daemon would refuse, and prints `targets=<JSON>` (appended to `--output`).
+both locations, and the `min_hostkeeper` of the archive's own `manifest.toml`. For `hello` and
+`mdm` (not their failing build, and not `hostkeeper` yet) each list holds first the native entry
+of the platform's native package, an `apt` entry of the repository entry `komira-testing` or a
+`macos-pkg` entry of the store `komira-testing`, its manifest the archive's own with no hook
+command ([package-repositories.md](package-repositories.md), "The services' native packages and
+their entries"): a host whose daemon announces that installer moves to it, any other keeps its
+archive. It refuses a release whose index, archives, native packages, bundles or manifests do not
+check out, and entries the coordinator or the daemon would refuse, and prints `targets=<JSON>`
+(appended to `--output`).
 
 **Give the index too while daemons before targets run.** A daemon that does not announce
 `target-v1` is never sent a target: it is ordered the archive through the release channel, by

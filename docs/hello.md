@@ -95,11 +95,13 @@ makes that directory, owner only, on its first step.
    can run on hosts of any platform the index lists. A host of a platform the index does not list
    is ordered nothing and shows the hold `no_package_for_platform`. A fleet of one platform may
    name the one package digest instead (the `.sha256` file beside the package). CI
-   (`hello-desired.yml`, below) names the release by its targets as well, one
-   `hostkeeper-archive` entry per platform the index lists, written by
+   (`hello-desired.yml`, below) names the release by its targets as well, written by
    `cargo xtask release targets --service hello` from the release's assets
-   (`docs/design/packages.md`, section 3.7); a daemon that reads targets is ordered its entry,
-   one before them the package the index lists.
+   (`docs/design/packages.md`, section 3.7): per platform the index lists, hello's native entry
+   (its `.deb` from the repository's `testing` suite, its `.pkg` from the installers' `testing`
+   directory, docs/deploy/package-repositories.md) before one `hostkeeper-archive` entry. A
+   daemon that announces the native installer is ordered the native entry, any other daemon that
+   reads targets the archive entry, and one before them the package the index lists.
 3. **The rollout entry.** Append `examples/hello/rollout.toml` to the coordinator's rollout file
    (`--rollout-file`). Replace the role `farm` with the role of the hosts that run the proof,
    and restart the coordinator. `cargo test -p hostkeeper-coordinator --test hello_rollout`
@@ -217,10 +219,15 @@ real service depends on it. Dispatch it from main (Actions, `hello-desired`, `Ru
 
 Its first job, `release`, downloads the variant's release index (`hello-index.json`, or
 `hello-fail-ready-index.json` for `fail-ready`) with each platform's archive and the archive's
-attestation bundle from the release, and runs `cargo xtask release targets --service hello`
-(with `--fail-ready` for the failing build) on them. The verb refuses, naming every problem, an
-index that is not hello's at the version or does not list every platform, and an archive, bundle
-or manifest that does not check out against it; then nothing is set. Its second job calls
+attestation bundle from the release, for `hello` also hello's native packages (its `.deb` for
+each Linux architecture and its `.pkg`) and their bundles, and runs
+`cargo xtask release targets --service hello` (with `--fail-ready` for the failing build) on them.
+For `hello` each platform's list holds the native entry before the archive one, so a host set up
+for the repository moves to hello's native package (the canary of the move to native packages,
+docs/design/packages-native.md section 10.6, stage 7); the failing build has no native package,
+and its lists hold its archives alone. The verb refuses, naming every problem, an index that is
+not hello's at the version or does not list every platform, and an archive, native package,
+bundle or manifest that does not check out against it; then nothing is set. Its second job calls
 `set-desired.yml` with the targets, the index and the index's SHA-256, so each host, of any
 platform the index lists, is ordered its own platform's package. It is pinned to a hostkeeper
 release, as any service pins it (`docs/deploy/ci-client.md`, "Pinning hostkeeper"), with `wait`

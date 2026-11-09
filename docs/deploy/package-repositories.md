@@ -2,8 +2,9 @@
 
 Every release of `komira-ai/hostkeeper` that is published (see [verify-a-release.md](verify-a-release.md))
 also goes into the package repositories of the organisation, at `https://packages.komira.ai`: the
-Debian packages and the RPM packages of `hostkeeper` and `hostkeeper-coordinator`, and the macOS
-installer of `hostkeeper`. A release goes to a `testing` channel first. It is installed or downloaded from
+Debian packages and the RPM packages of `hostkeeper` and `hostkeeper-coordinator`, the native
+Debian packages of the services it releases (`hello`, and `mdm` for `amd64`), and the macOS
+installers of `hostkeeper` and of `hello`. A release goes to a `testing` channel first. It is installed or downloaded from
 there on clean machines, and only when all of that passed does the same release become `stable`. The
 jobs are in `.github/workflows/release.yml`; the tool they run, `cargo xtask channels`, is
 `crates/xtask/src/channels`.
@@ -26,9 +27,9 @@ neither makes `apt index`, `apt promote` and `apt write` fail, naming the entry,
 
 | Channel | `testing` | `stable` |
 |---|---|---|
-| apt, packages `hostkeeper` and `hostkeeper-coordinator`, architectures `amd64` and `arm64` | `https://packages.komira.ai/apt`, suite `testing`, component `main` | the same repository, suite `stable` |
-| rpm, the same packages, architectures `x86_64` and `aarch64` | `https://packages.komira.ai/rpm/testing/<arch>/` | `https://packages.komira.ai/rpm/stable/<arch>/` |
-| macOS installer, `macos-arm64` | the directory `https://packages.komira.ai/pkg/hostkeeper/<version>/` | the pointer `https://packages.komira.ai/pkg/hostkeeper/stable.json` |
+| apt, packages `hostkeeper`, `hostkeeper-coordinator` and `hello`, architectures `amd64` and `arm64`, and `mdm`, `amd64` | `https://packages.komira.ai/apt`, suite `testing`, component `main` | the same repository, suite `stable` |
+| rpm, packages `hostkeeper` and `hostkeeper-coordinator`, architectures `x86_64` and `aarch64` | `https://packages.komira.ai/rpm/testing/<arch>/` | `https://packages.komira.ai/rpm/stable/<arch>/` |
+| macOS installers, `hostkeeper` and `hello`, `macos-arm64` | the directory `https://packages.komira.ai/pkg/hostkeeper/<version>/` | the pointer `https://packages.komira.ai/pkg/hostkeeper/stable.json` |
 
 The packages themselves are in a pool both suites share: `apt/pool/hostkeeper/<name>_<version>_<arch>.deb`
 and `rpm/pool/hostkeeper/<name>-<version>-1.<arch>.rpm`. A suite is an index that lists packages of
@@ -36,13 +37,14 @@ the pool, signed with the organisation's archive key. The key is published as
 `https://packages.komira.ai/apt/komira-archive-keyring.gpg` (binary, for apt) and
 `https://packages.komira.ai/apt/komira-archive-keyring.asc` (armored, for rpm).
 
-The directory of the installer holds `hostkeeper-<version>-macos-arm64.pkg`, its attestation bundle
-`hostkeeper-<version>-macos-arm64.pkg.sigstore.json`, and a `SHA256SUMS` that lists those two files.
+The directory of the installers holds `hostkeeper-<version>-macos-arm64.pkg` and hello's
+`hello-<version>-macos-arm64.pkg`, the attestation bundle of each (`<installer>.sigstore.json`), and a
+`SHA256SUMS` that lists those four files.
 The pointer `stable.json` is `{"version", "tag", "commit", "files": {<name>: {"sha256", "size"}}}`
 for the newest promoted release.
 
-**The macOS installer is not signed or notarized** until the macOS signing milestone (M11). Nothing in
-the release machinery signs it; the pointer moves the same unsigned bytes that `testing` holds. Install
+**The macOS installers are not signed or notarized** until the macOS signing milestone (M11). Nothing in
+the release machinery signs them; the pointer moves the same unsigned bytes that `testing` holds. Install
 it from a terminal with `installer`, after the checks below; a double click is refused by Gatekeeper.
 
 ## Installing from a channel
@@ -95,6 +97,26 @@ The `version` it names gives the directory; the `files` give the SHA-256 and the
 The installer is also the attested release asset of the same name (see [verify-a-release.md](verify-a-release.md)),
 so its attestation can be verified as for any other asset.
 
+## The services' native packages and their entries
+
+`hello`'s and `mdm`'s native packages (docs/design/packages-native.md, item A21) are the release's
+assets `hello_<version>_<arch>.deb`, `hello-<version>-macos-arm64.pkg` and `mdm_<version>_amd64.deb`,
+published with hostkeeper's own in the same passes, so a release is listed whole. hello's failing build
+(`<version>-fail-ready`) is not published: its version is not `X.Y.Z`.
+
+`cargo xtask release targets --service hello` (and `--service mdm`) lists each platform's native entry
+before its archive one, both naming the channel `komira-testing`:
+
+- on Linux an `apt` entry of the host's repository entry `komira-testing`, the `testing` suite above
+  (`/etc/hostkeeper/repositories/komira-testing.sources`, placed by host setup), at the release's
+  version, pinned by the `.deb`'s SHA-256;
+- on a Mac a `macos-pkg` entry at `hostkeeper/<version>/hello-<version>-macos-arm64.pkg` in the store
+  `komira-testing` of the Mac's `/etc/hostkeeper/stores.toml`, an `https` store rooted at
+  `https://packages.komira.ai/pkg/`.
+
+A host whose daemon does not announce the native installer, or has no such entry or store, is picked
+the archive entry, as before.
+
 ## What the release workflow does
 
 All of these run for the newest release of a run only: when one run releases several versions, the
@@ -108,19 +130,21 @@ changes of the older ones. Each job is a green no-op until the settings below ex
    cloud role are never in one job. A write that finds the index changed in between (another product's
    release) ends green with `conflict=true`, and attempts 2 and 3 (the jobs with the suffix `-2` and
    `-3`) read, merge and sign again; the third attempt fails instead of asking for a fourth. The
-   installer goes into `pkg/hostkeeper/<version>/` (`testing-pkg-upload`), each file once: a second put
+   installers go into `pkg/hostkeeper/<version>/` (`testing-pkg-upload`), each file once: a second put
    of the same bytes is accepted, other bytes at the same key fail.
 2. **Checks.** `check-apt` installs each package from the suite `testing` in a clean Ubuntu
-   container of each architecture, `check-rpm` installs it with dnf in a clean Fedora container, both
-   images pinned by digest, and each holds the installed system to what the package promises: the
-   version and commit its binary says, every file it ships, the user and the unit, and that the unit
-   is enabled or not as the package says. `check-pkg` downloads the installer, its bundle and the
-   directory's `SHA256SUMS` from the public host and compares them with the release's `SHA256SUMS`.
+   container of each architecture it is built for, `check-rpm` installs each rpm with dnf in a clean
+   Fedora container, both images pinned by digest, and each holds the installed system to what the
+   package promises: the version its binary says (and the commit, but for `hello`, whose program
+   prints its version alone), the files it ships, the user and the units, and that the units are
+   enabled or not as the package says (a service's native package enables none: hostkeeper's
+   installer does). `check-pkg` downloads each installer, its bundle and the directory's
+   `SHA256SUMS` from the public host and compares them with the release's `SHA256SUMS`.
 3. **Decision.** `promote-check` (`cargo xtask channels decide`) promotes when every write succeeded
    and every check succeeded or had nothing to check.
 4. **Stable.** `stable-apt-*` and `stable-rpm-*` list the entries of the release that `testing` holds
    in the index of `stable` (held to the digests of the release's `SHA256SUMS`; nothing is uploaded, the
-   packages are in the pool already). `promote-pkg` reads the directory of the installer back
+   packages are in the pool already). `promote-pkg` reads the directory of the installers back
    against `SHA256SUMS` and moves `stable.json` to the release, with `If-Match` on the ETag it read and
    only to a higher version, then invalidates the path in the CDN. **Promotion copies no bytes:** the
    same pool files and the same installer files that were installed and checked are the ones the

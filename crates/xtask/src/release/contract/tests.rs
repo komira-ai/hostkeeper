@@ -86,7 +86,7 @@ fn asset_names_are_the_documented_contract() {
     let v = version("7.8.9");
     let names = asset_names(&v, &Platform::RELEASED);
     assert_eq!(names, baseline_for(&v));
-    assert_eq!(names.len(), 84);
+    assert_eq!(names.len(), 92);
     assert_eq!(documented_names(DOC, &v), Ok(names.clone()));
     // The document changed alone: a name dropped, or one renamed.
     let image = "hostkeeper-coordinator-<version>-<linux-platform>.image.tar\n";
@@ -282,8 +282,8 @@ fn the_attested_and_summed_names_partition_the_assets() {
     let v = version("0.1.3");
     let attested = attested_names(&v);
     let summed = summed_names(&v);
-    assert_eq!(attested.len(), 31);
-    assert_eq!(summed.len(), 52);
+    assert_eq!(attested.len(), 35);
+    assert_eq!(summed.len(), 56);
     for index in [INDEX, HELLO_INDEX, HELLO_FAIL_READY_INDEX, MDM_INDEX] {
         assert!(summed.contains(&index.to_owned()) & !attested.contains(&index.to_owned()));
     }
@@ -364,6 +364,8 @@ fn a_macos_platform_has_a_binary_a_package_an_installer_and_an_sbom_but_no_linux
             "hello-0.2.1-fail-ready-macos-arm64.tar.zst",
             "hello-0.2.1-fail-ready-macos-arm64.tar.zst.sha256",
             "hello-0.2.1-fail-ready-macos-arm64.tar.zst.sigstore.json",
+            "hello-0.2.1-macos-arm64.pkg",
+            "hello-0.2.1-macos-arm64.pkg.sigstore.json",
             "hello-0.2.1-macos-arm64.tar.zst",
             "hello-0.2.1-macos-arm64.tar.zst.sha256",
             "hello-0.2.1-macos-arm64.tar.zst.sigstore.json",
@@ -385,6 +387,51 @@ fn a_macos_platform_has_a_binary_a_package_an_installer_and_an_sbom_but_no_linux
             "netboot.json.sigstore.json",
         ]
     );
+}
+
+#[test]
+fn the_native_packages_are_hellos_on_every_platform_and_mdms_on_linux_x86_64_each_attested() {
+    // Catches: a native package named other than the one `release deb` and `release macos-pkg`
+    // write, one shipped for a platform its package is not built for (mdm on arm64 or macOS),
+    // hostkeeper's own `.deb` or hello's failing build given a native name of this kind (the
+    // failing build's version is not X.Y.Z, which the shared repository's index requires), and
+    // a native package without its bundle or with a `.sha256` it does not have.
+    let v = version("0.2.1");
+    let names = |package: Package| -> Vec<Option<String>> {
+        Platform::RELEASED
+            .iter()
+            .map(|p| package.native_name(&v, *p))
+            .collect()
+    };
+    assert_eq!(
+        names(Package::Hello),
+        [
+            Some("hello_0.2.1_amd64.deb".to_owned()),
+            Some("hello_0.2.1_arm64.deb".to_owned()),
+            Some("hello-0.2.1-macos-arm64.pkg".to_owned()),
+        ]
+    );
+    assert_eq!(
+        names(Package::Mdm),
+        [Some("mdm_0.2.1_amd64.deb".to_owned()), None, None]
+    );
+    assert_eq!(names(Package::Hostkeeper), [None, None, None]);
+    assert_eq!(names(Package::HelloFailReady), [None, None, None]);
+    let all = asset_names(&v, &Platform::RELEASED);
+    let attested = attested_names(&v);
+    for native in [
+        "hello_0.2.1_amd64.deb",
+        "hello_0.2.1_arm64.deb",
+        "hello-0.2.1-macos-arm64.pkg",
+        "mdm_0.2.1_amd64.deb",
+    ] {
+        assert!(attested.contains(&native.to_owned()), "{native}");
+        assert!(summed_names(&v).contains(&native.to_owned()), "{native}");
+        assert!(
+            !all.contains(&format!("{native}{DIGEST_SUFFIX}")),
+            "{native}"
+        );
+    }
 }
 
 #[test]

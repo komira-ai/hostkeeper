@@ -21,7 +21,7 @@ use std::process::Command;
 
 use super::callers::{HELLO_FILE, HELLO_JOB, HELLO_RELEASE_JOB};
 use super::lint::{entries, entry};
-use super::release_files::{REPO, package_files, sha256, sorted, targets};
+use super::release_files::{REPO, native_files, package_files, sha256, sorted, targets};
 use super::testdir::TestDir;
 use super::{workflows, yaml};
 
@@ -43,10 +43,14 @@ fn variant_of(release: &str, variant: &str) -> (String, &'static str) {
     }
 }
 
-/// The files of one variant of hello's release `release`.
+/// The files of one variant of hello's release `release`: for `hello` its native packages too.
 fn variant_files(release: &str, variant: &str) -> BTreeMap<String, Vec<u8>> {
     let (version, index) = variant_of(release, variant);
-    package_files("hello", &version, index)
+    let mut files = package_files("hello", &version, index);
+    if variant == "hello" {
+        files.extend(native_files("hello", release));
+    }
+    files
 }
 
 /// A scratch site: the fakes on `bin/`, the release assets the fake curl serves.
@@ -230,6 +234,17 @@ fn dispatch(site: &Site, version: &str, variant: &str) -> Ended {
             assert!(uses.starts_with("actions/checkout@"), "{uses}");
             continue;
         }
+        // A step's `if:`, `${{ <a> == '<text>' }}`, as GitHub evaluates it: a step whose
+        // condition is false is skipped.
+        if let Some(condition) = text_of("if") {
+            let inner = condition
+                .strip_prefix("${{ ")
+                .and_then(|c| c.strip_suffix(" }}"))
+                .expect("an `if:` of one expression");
+            if !scope.condition(inner) {
+                continue;
+            }
+        }
         let script = text_of("run").expect("a step runs or uses");
         let output_file = site.root.join("temp").join(format!("output-{at}"));
         let mut command = Command::new("bash");
@@ -294,18 +309,19 @@ fn set_with(variant: &str) -> Ended {
         ("release_index".to_owned(), index),
         (
             "targets".to_owned(),
-            targets("hello", &version, RELEASE, &files),
+            targets("hello", &version, RELEASE, &files, variant == "hello"),
         ),
         ("version".to_owned(), version),
     ]))
 }
 
 #[test]
-fn a_dispatch_of_hello_sets_its_version_index_digest_and_the_targets_of_its_archives() {
+fn a_dispatch_of_hello_sets_its_version_index_digest_and_targets_native_entry_first() {
     // Catches: the job reading the failing build's index or archives for `hello`, an index
     // passed on with other bytes than the release's or a digest not of those bytes, targets not
-    // one archive entry per platform of the variant's own files, and the job's outputs not the
-    // ones set-desired is given.
+    // the native entry of hello's own native package then one archive entry per platform of the
+    // variant's own files (the native packages not downloaded, or downloaded and not read), and
+    // the job's outputs not the ones set-desired is given.
     let site = Site::new("hello");
     assert_eq!(dispatch(&site, RELEASE, "hello"), set_with("hello"));
 }
@@ -359,6 +375,55 @@ fn a_release_without_a_variants_bundle_or_index_stops_at_the_download() {
             "{missing}"
         );
     }
+}
+
+#[test]
+fn a_dispatch_of_fail_ready_downloads_no_native_package() {
+    // Catches: the native download run for the failing build, which has no native package: on a
+    // release without hello's native packages the failing build is still set, from its archives
+    // alone.
+    let site = Site::new("fail-ready-no-native");
+    for name in native_files("hello", RELEASE).keys() {
+        std::fs::remove_file(site.asset(name)).expect("remove a native asset");
+    }
+    assert_eq!(
+        dispatch(&site, RELEASE, "fail-ready"),
+        set_with("fail-ready")
+    );
+}
+
+#[test]
+fn a_release_without_one_of_hellos_native_packages_or_bundles_stops_at_their_download() {
+    // Catches: a native download that goes on past a missing file, or skipped for `hello`, so a
+    // set made without that platform's native entry (its hosts would never move).
+    for (n, missing) in [
+        "hello_1.2.3_arm64.deb",
+        "hello_1.2.3_amd64.deb.sigstore.json",
+        "hello-1.2.3-macos-arm64.pkg",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let site = Site::new(&format!("native-missing-{n}"));
+        std::fs::remove_file(site.asset(missing)).expect("remove a native asset");
+        assert_eq!(
+            dispatch(&site, RELEASE, "hello"),
+            Ended::Failed("Download hello's native packages and bundles".to_owned()),
+            "{missing}"
+        );
+    }
+}
+
+#[test]
+fn a_native_package_its_bundle_does_not_list_stops_at_the_targets() {
+    // Catches: targets written for a native package whose bytes are not the attested ones (a
+    // release asset replaced after its attestation), which the host would install.
+    let site = Site::new("native-replaced");
+    std::fs::write(site.asset("hello_1.2.3_amd64.deb"), b"other bytes").expect("replace");
+    assert_eq!(
+        dispatch(&site, RELEASE, "hello"),
+        Ended::Failed("The targets of the variant's package".to_owned())
+    );
 }
 
 #[test]

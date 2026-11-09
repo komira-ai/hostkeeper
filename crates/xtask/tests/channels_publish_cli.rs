@@ -25,7 +25,12 @@ const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
 const BUCKET: &str = "packages-bucket";
 const HOST: &str = "packages.example.com";
 const INSTALLER: &str = "hostkeeper-1.2.3-macos-arm64.pkg";
+/// hello's installer, the other one a release ships.
+const HELLO_INSTALLER: &str = "hello-1.2.3-macos-arm64.pkg";
+/// The packages that are an rpm as well as a deb.
 const PACKAGES: [&str; 2] = ["hostkeeper", "hostkeeper-coordinator"];
+/// The services' native packages, debs alone, and the Debian architectures each is built for.
+const NATIVE: [(&str, &[&str]); 2] = [("hello", &["amd64", "arm64"]), ("mdm", &["amd64"])];
 /// The Debian and the RPM name of each architecture.
 const ARCHES: [(&str, &str); 2] = [("amd64", "x86_64"), ("arm64", "aarch64")];
 
@@ -232,8 +237,9 @@ fn rpm(package: &str, version: &str, arch: &str) -> Vec<u8> {
     bytes
 }
 
-/// A release directory of every package of `version`, as `kind` files them (`deb` or `rpm`),
-/// with the `SHA256SUMS` of them. The names of the files, sorted.
+/// A release directory of every package of `version`, as `kind` files them (`deb` or `rpm`; the
+/// debs with the services' native packages, which are no rpms), with the `SHA256SUMS` of them.
+/// The names of the files, sorted.
 fn release(root: &Path, name: &str, version: &str, kind: &str) -> Vec<String> {
     let dir = root.join(name);
     std::fs::create_dir_all(&dir).expect("create");
@@ -255,6 +261,17 @@ fn release(root: &Path, name: &str, version: &str, kind: &str) -> Vec<String> {
             std::fs::write(dir.join(&file), &bytes).expect("write");
             sums.push_str(&format!("{}  {file}\n", sha256(&bytes)));
             names.push(file);
+        }
+    }
+    if kind == "deb" {
+        for (package, arches) in NATIVE {
+            for deb_arch in arches {
+                let file = format!("{package}_{version}_{deb_arch}.deb");
+                let bytes = deb(package, version, deb_arch);
+                std::fs::write(dir.join(&file), &bytes).expect("write");
+                sums.push_str(&format!("{}  {file}\n", sha256(&bytes)));
+                names.push(file);
+            }
         }
     }
     std::fs::write(dir.join("SHA256SUMS"), sums).expect("write sums");
@@ -288,24 +305,24 @@ fn sign_rpm(next: &Path, suite: &str) {
     }
 }
 
-/// A release directory with the installer of `version`, its bundle and a `SHA256SUMS` that lists
-/// the installer.
+/// A release directory with the installers of `version` (hello's and hostkeeper's), the bundle of
+/// each and a `SHA256SUMS` that lists the installers.
 fn pkg_release(root: &Path, name: &str, version: &str) -> PathBuf {
     let dir = root.join(name);
     std::fs::create_dir_all(&dir).expect("create");
-    let installer = format!("hostkeeper-{version}-macos-arm64.pkg");
-    let bytes = format!("installer {version}").into_bytes();
-    std::fs::write(dir.join(&installer), &bytes).expect("write");
-    std::fs::write(
-        dir.join(format!("{installer}.sigstore.json")),
-        format!("bundle {version}"),
-    )
-    .expect("write");
-    std::fs::write(
-        dir.join("SHA256SUMS"),
-        format!("{}  {installer}\n", sha256(&bytes)),
-    )
-    .expect("write");
+    let mut sums = String::new();
+    for product in ["hello", "hostkeeper"] {
+        let installer = format!("{product}-{version}-macos-arm64.pkg");
+        let bytes = format!("{product} installer {version}").into_bytes();
+        std::fs::write(dir.join(&installer), &bytes).expect("write");
+        std::fs::write(
+            dir.join(format!("{installer}.sigstore.json")),
+            format!("{product} bundle {version}"),
+        )
+        .expect("write");
+        sums.push_str(&format!("{}  {installer}\n", sha256(&bytes)));
+    }
+    std::fs::write(dir.join("SHA256SUMS"), sums).expect("write");
     dir
 }
 

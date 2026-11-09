@@ -181,6 +181,17 @@ pub const TARBALLS: [(&str, &[&str]); 3] = [
 /// digests by.
 pub const ATTESTED_FILES: [(&str, &str); 1] = [("dist/netboot.json", "netboot.json")];
 
+/// The native packages of the services the release ships (docs/design/packages-native.md, item
+/// A21), each as its name with `<version>` for the version: hello's `.deb` for each Linux
+/// architecture and its `.pkg`, and mdm's `.deb` for amd64. Each has a bundle, which the
+/// installer channel publishes beside it.
+pub const NATIVE_FILES: [&str; 4] = [
+    "hello_<version>_amd64.deb",
+    "hello_<version>_arm64.deb",
+    "hello-<version>-macos-arm64.pkg",
+    "mdm_<version>_amd64.deb",
+];
+
 /// The release's other files that the attest job attests alone and whose name carries the
 /// version, each as the stem before `-<version>`: `hkctl-<version>`, the command line of the
 /// coordinator, one script for every platform.
@@ -664,7 +675,7 @@ fn mdm_problems(doc: &Node) -> Vec<String> {
 
 /// One line per package of [`PACKAGES`], on each of [`PLATFORMS`], per Linux package (the deb
 /// and the rpm) of each of [`LINUX_ARCHES`], per binary tarball of
-/// [`TARBALLS`], per file of [`ATTESTED_FILES`] and per file of [`VERSIONED_FILES`], that the
+/// [`TARBALLS`], per file of [`ATTESTED_FILES`], [`NATIVE_FILES`] and [`VERSIONED_FILES`], that the
 /// attest job does not attest (a
 /// provenance step whose `subject-path` is the file) or whose bundle it does not copy to
 /// `<file>.sigstore.json` from the outputs of that same step; and one per binary tarball whose
@@ -722,6 +733,11 @@ fn package_problems(attest: Option<&Node>) -> Vec<String> {
     }
     for (subject, file) in ATTESTED_FILES {
         problems.extend(attest_problem(attest, subject, file, file));
+    }
+    for file in NATIVE_FILES {
+        let subject = format!("dist/{}", file.replace("<version>", version));
+        let copied = file.replace("<version>", "${V}");
+        problems.extend(attest_problem(attest, &subject, file, &copied));
     }
     for stem in VERSIONED_FILES {
         let subject = format!("dist/{stem}-${{{{ needs.version.outputs.version }}}}");
