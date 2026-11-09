@@ -178,6 +178,21 @@ pub fn additive_command(call: &AdditiveCall<'_>) -> Result<Vec<OsString>, Launch
     ))
 }
 
+/// `arg` with each `$` doubled: systemd substitutes `$NAME` and `${NAME}` in a unit's command
+/// line from its environment when it runs it, and reads `$$` as one `$`, so a tool is given the
+/// text it was called with (`dpkg-query -f '${Version}'`).
+fn literal_dollars(arg: &OsString) -> OsString {
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+    let mut out = Vec::with_capacity(arg.len());
+    for &byte in arg.as_bytes() {
+        out.push(byte);
+        if byte == b'$' {
+            out.push(b'$');
+        }
+    }
+    OsString::from_vec(out)
+}
+
 /// The arguments of `systemd-run` that run a tool, bounded by `timeout_secs` (0 is no bound:
 /// `infinity`). After `RuntimeMaxSec=` come, in this order:
 ///
@@ -189,7 +204,8 @@ pub fn additive_command(call: &AdditiveCall<'_>) -> Result<Vec<OsString>, Launch
 /// - `--working-directory=<dir>` for [`ToolCall::working_dir`];
 /// - one `--setenv=NAME=VALUE` per pair of [`ToolCall::env`], in order;
 ///
-/// then `--`, the program and its arguments.
+/// then `--`, the program and its arguments, each `$` of an argument doubled (systemd reads `$$`
+/// as a `$` and substitutes `$NAME` from the unit's environment).
 ///
 /// Refused as [`LaunchError::Launcher`]: a relative program, working directory or writable path,
 /// a writable path with whitespace in it (`ReadWritePaths=` would read it as two paths), an
@@ -255,7 +271,7 @@ pub fn tool_command(call: &ToolCall<'_>) -> Result<Vec<OsString>, LaunchError> {
         &properties,
         &options,
         call.program,
-        call.args.iter().cloned(),
+        call.args.iter().map(literal_dollars),
     ))
 }
 

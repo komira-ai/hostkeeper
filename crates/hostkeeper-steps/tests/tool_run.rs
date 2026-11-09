@@ -390,6 +390,35 @@ fn an_unconfined_offline_install_has_only_its_environment() {
     );
 }
 
+/// Catches a tool argument that systemd would rewrite: systemd substitutes `$NAME` and `${NAME}`
+/// in a unit's command line from its environment, so each `$` of an argument is doubled and the
+/// tool is given the text it was called with (`dpkg-query -f '${Version}'`); an argument with no
+/// `$`, and the program, are as they were.
+#[test]
+fn a_dollar_in_a_tool_argument_reaches_the_tool_as_it_was_written() {
+    let (_scratch, tool) = tool_file("tool-dollar");
+    let args = vec![
+        OsString::from("-f=${Version}\\t${db:Status-Abbrev}"),
+        OsString::from("$HOME$$"),
+        OsString::from("plain"),
+    ];
+    let c = call(&tool, &args, 600);
+    assert_eq!(
+        strings(tool_command(&c).unwrap()),
+        with(
+            head("600"),
+            &[
+                "--property=PrivateNetwork=yes",
+                "--",
+                &as_strings(&tool),
+                "-f=$${Version}\\t$${db:Status-Abbrev}",
+                "$$HOME$$$$",
+                "plain",
+            ]
+        )
+    );
+}
+
 /// Catches a call with a path, name or value that would be misread by systemd being started:
 /// each is a launcher failure with its own text, and nothing is spawned.
 #[test]
