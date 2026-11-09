@@ -221,9 +221,10 @@ tells it from `<v2>` (`verify` stops at the 503 and never compares it).
 One failed host is enough for the rollback: the entry sets `rollback_after_failed` to
 `min_hosts = 1`.
 
-**Another service is not held.** While hello is halted by the failed build, a rollout of another
-service goes on: the live-rollout slot is released when hello's rollout halts
-(komira-ai/hostkeeper#259), so the other service's hosts are ordered as usual.
+**Another service is not held.** While the failing build is in flight on the canary, hello's
+update holds the farm's live rollout, and another service's new version waits. Once the canary
+reports the failure, the failing build's rollout stops there and hello is rolled back, and the
+live rollout is free (komira-ai/hostkeeper#259): the other service's hosts are ordered as usual.
 
 ## The proof from CI: hello-desired.yml
 

@@ -290,12 +290,13 @@ async fn a_host_that_fails_the_fail_ready_build_is_rolled_back_and_the_build_is_
     assert_eq!(picked(&grpc_beat(&rig, &running).await), None);
 }
 
-/// Proves another service rolls while hello is rolled back: after hello's failing build is rolled
-/// back (no hello update is in flight), a new version of `other`, on a host of another role, is
-/// ordered to that host with its own entry.
+/// Proves another service rolls once hello's failing build has failed: a new version of `other`,
+/// on a host of another role, waits while the failing build is in flight on hello's canary (that
+/// update holds the farm's one live rollout), and is ordered to its host with its own entry as
+/// soon as the canary reports the failure and hello is rolled back.
 ///
-/// Catches: a rolled-back service that still holds the one live rollout of the farm, so no other
-/// service ever rolls again.
+/// Catches: a failed and rolled-back service that still holds the one live rollout of the farm,
+/// so no other service ever rolls again.
 #[tokio::test]
 async fn another_service_rolls_once_hellos_failing_build_is_rolled_back() {
     let (rig, f1, e1) = converged_farm("fail-ready-other-service").await;
@@ -311,6 +312,12 @@ async fn another_service_rolls_once_hellos_failing_build_is_rolled_back() {
     )
     .await;
     assert_eq!(answered.code, 0, "{answered:?}");
+    rig.at(LATER + 11 * BEAT);
+    assert_eq!(
+        picked(&grpc_beat(&rig, &e1).await),
+        None,
+        "while hello's failing build is in flight on its canary, hello holds the farm's live rollout"
+    );
     rig.at(LATER + 12 * BEAT);
     let reported = beat_with_result(
         &rig,
