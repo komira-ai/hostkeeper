@@ -17,9 +17,10 @@ change.
 
 **Archive entries only.** The template gives each platform `hostkeeper-archive` entries and
 nothing else. Entries of the repository installer (an `apt` package from a signed repository,
-[packages-repositories.md](../design/packages-repositories.md)) are refused by the coordinator
-until build item A16 of the packages design ships, and installed by no daemon until A7
-([packages.md](../design/packages.md), section 13). This page gains them then.
+[packages-repositories.md](../design/packages-repositories.md)) are taken by the coordinator
+since build item A16 of the packages design, but no daemon installs one until A7
+([packages.md](../design/packages.md), section 13), so no host is picked for one yet. This page
+gains them then.
 
 ## The template
 

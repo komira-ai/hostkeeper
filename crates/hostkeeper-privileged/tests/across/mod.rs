@@ -249,6 +249,8 @@ impl Built {
                 min_hostkeeper: self.floor.clone(),
                 ..Manifest::default()
             }),
+            repository: None,
+            package_version: None,
         }
     }
 

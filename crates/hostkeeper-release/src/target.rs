@@ -2,6 +2,14 @@
 //! refusal `target_invalid`: the platforms, each list, and each entry with its manifest by the
 //! rules that need no host and no knowledge of the entry's installer ([`crate::manifest::check`]).
 //!
+//! An entry is a repository entry when its `repository` is set, and an artifact entry when it is
+//! not ([`is_repository_entry`]); its kind is told by that field alone, never by the installer's
+//! name, so a later repository backend needs no change here (packages-repositories.md section
+//! 2.1). An artifact entry is checked as packages.md section 3.4 has it, and must not carry a
+//! `package_version`; a repository entry by section 2.2 of packages-repositories.md: its
+//! repository, its package version, no artifact field, a required pin, and the package's name in
+//! its manifest.
+//!
 //! The coordinator does not check that it knows an installer: a name of the grammar no daemon
 //! lists is never picked. What the coordinator's state decides (a set with `package_digest` too,
 //! an index that disagrees, a version set before with other targets) is the coordinator's own.
@@ -16,7 +24,10 @@ use hostkeeper_config::platform::{Platform, UnknownPlatform};
 use hostkeeper_proto::hostkeeper::release::v1::{Blob, Location, Target, TargetList};
 use prost::Message as _;
 
-use crate::grammar::{LocatorError, check_locator, is_installer_name, is_sha256, is_store_name};
+use crate::grammar::{
+    LocatorError, check_locator, is_installer_name, is_package_name, is_package_version,
+    is_repository_name, is_sha256, is_store_name,
+};
 use crate::installer::Installer;
 use crate::manifest::{self, ManifestError};
 use crate::{
@@ -52,7 +63,8 @@ pub enum TargetError {
         /// The installer.
         installer: String,
     },
-    /// The service `hostkeeper` with a list but one `hostkeeper-archive` entry.
+    /// The service `hostkeeper` with a list but one `hostkeeper-archive` entry: a repository
+    /// entry, of any installer, is never one.
     #[error(
         "the list of {platform} for the service hostkeeper is not one hostkeeper-archive entry"
     )]
@@ -81,10 +93,11 @@ pub enum EntryError {
     /// The installer is not 1 to 32 bytes of `[a-z0-9-]`.
     #[error("the installer {0:?} is not 1 to 32 bytes of a-z, 0-9 and `-`")]
     Installer(String),
-    /// The artifact's or the attestation's digest is not 64 lower-case hex characters.
+    /// The artifact's, the attestation's or a repository entry's package's digest is not 64
+    /// lower-case hex characters (an absent one is empty).
     #[error("the {of} digest {digest:?} is not 64 lower-case hex characters")]
     Digest {
-        /// `artifact` or `attestation`.
+        /// `artifact`, `attestation` or `package`.
         of: &'static str,
         /// The digest.
         digest: String,
@@ -127,6 +140,44 @@ pub enum EntryError {
     /// The manifest breaks a rule.
     #[error("{0}")]
     Manifest(ManifestError),
+    /// An artifact entry (no `repository`) with a `package_version`.
+    #[error("the entry has a package_version and no repository")]
+    VersionWithoutRepository,
+    /// A repository entry whose `repository` is not 1 to 32 bytes of `[a-z0-9-]`.
+    #[error("the repository {0:?} is not 1 to 32 bytes of a-z, 0-9 and `-`")]
+    Repository(String),
+    /// A repository entry with no `package_version`.
+    #[error("the repository entry has no package_version")]
+    NoPackageVersion,
+    /// A repository entry whose `package_version` breaks its grammar.
+    #[error(
+        "the package_version {0:?} is not 1 to 128 bytes of A-Z, a-z, 0-9 and `.+~:_-` with a digit first"
+    )]
+    PackageVersion(String),
+    /// A repository entry with a field of an artifact: it names no artifact, and an attestation
+    /// nobody checks must not look checked.
+    #[error("the repository entry sets {0}, a field of an artifact; it names no artifact")]
+    ArtifactField(&'static str),
+    /// A repository entry whose installer is `hostkeeper-archive`, which installs only an
+    /// attested archive: the coordinator orders and indexes its entries as archives.
+    #[error(
+        "the repository entry has the installer hostkeeper-archive, which installs archives only"
+    )]
+    ArchiveFromRepository,
+    /// A repository entry whose manifest has no `package`.
+    #[error("the manifest of a repository entry needs package")]
+    NoPackage,
+    /// A repository entry whose `manifest.package` breaks its grammar.
+    #[error(
+        "the package {0:?} is not 1 to 128 bytes of A-Z, a-z, 0-9 and `+._@-` with a letter or digit first"
+    )]
+    Package(String),
+}
+
+/// Whether `entry` is a repository entry: its `repository` is set, whatever it holds and
+/// whatever its installer. Every other entry is an artifact entry.
+pub fn is_repository_entry(entry: &Target) -> bool {
+    entry.repository.is_some()
 }
 
 /// Checks the targets of a set for `service`: at least one platform, each key a platform, each
@@ -180,16 +231,18 @@ fn check_list(
         }
     }
     let archive = Installer::HostkeeperArchive.as_str();
-    let only_archive = matches!(entries, [one] if one.installer == archive);
+    let only_archive =
+        matches!(entries, [one] if (one.installer == archive) & !is_repository_entry(one));
     if (service.as_str() == SELF_SERVICE) & !only_archive {
         return Err(TargetError::SelfNotArchive { platform });
     }
     Ok(())
 }
 
-/// Checks one entry: at most 24 KiB encoded; its installer's name; the artifact's digest,
-/// size and 1 to 8 locations; an attestation of 1 byte to 1 MiB with its digest and 1 to 8
-/// locations; every location's store and locator; at most 2 KiB of locators in all; and its
+/// Checks one entry: at most 24 KiB encoded and its installer's name; then a repository entry
+/// by [`check_repository_entry`], and an artifact entry by no `package_version`, the artifact's
+/// digest, size and 1 to 8 locations, an attestation of 1 byte to 1 MiB with its digest and 1
+/// to 8 locations, every location's store and locator, at most 2 KiB of locators in all, and its
 /// manifest by [`manifest::check`] for the platform of its list.
 pub fn check_entry(
     service: &ServiceName,
@@ -202,6 +255,12 @@ pub fn check_entry(
     }
     if !is_installer_name(&entry.installer) {
         return Err(EntryError::Installer(entry.installer.clone()));
+    }
+    if is_repository_entry(entry) {
+        return check_repository_entry(service, platform, entry);
+    }
+    if entry.package_version.is_some() {
+        return Err(EntryError::VersionWithoutRepository);
     }
     digest("artifact", &entry.digest)?;
     if entry.bytes == 0 {
@@ -223,6 +282,47 @@ pub fn check_entry(
         return Err(EntryError::LocatorBytes(total));
     }
     let manifest = entry.manifest.as_ref().ok_or(EntryError::NoManifest)?;
+    manifest::check(service, platform, manifest).map_err(EntryError::Manifest)
+}
+
+/// Checks a repository entry (packages-repositories.md section 2.2), past its size and its
+/// installer's name, in this order: its `repository`; its `package_version`, present and of its
+/// grammar; no location, `bytes` 0 and no attestation; an installer other than
+/// `hostkeeper-archive`; the pin, the package file's SHA-256; a manifest whose `package` is
+/// present and of its grammar; and that manifest by [`manifest::check`].
+fn check_repository_entry(
+    service: &ServiceName,
+    platform: Platform,
+    entry: &Target,
+) -> Result<(), EntryError> {
+    let repository = entry.repository.as_deref().unwrap_or_default();
+    if !is_repository_name(repository) {
+        return Err(EntryError::Repository(repository.to_owned()));
+    }
+    let version = entry
+        .package_version
+        .as_deref()
+        .ok_or(EntryError::NoPackageVersion)?;
+    if !is_package_version(version) {
+        return Err(EntryError::PackageVersion(version.to_owned()));
+    }
+    let artifact = [
+        ("locations", !entry.locations.is_empty()),
+        ("bytes", entry.bytes != 0),
+        ("attestation", entry.attestation.is_some()),
+    ];
+    if let Some((field, _)) = artifact.into_iter().find(|(_, has)| *has) {
+        return Err(EntryError::ArtifactField(field));
+    }
+    if entry.installer == Installer::HostkeeperArchive.as_str() {
+        return Err(EntryError::ArchiveFromRepository);
+    }
+    digest("package", &entry.digest)?;
+    let manifest = entry.manifest.as_ref().ok_or(EntryError::NoManifest)?;
+    let package = manifest.package.as_deref().ok_or(EntryError::NoPackage)?;
+    if !is_package_name(package) {
+        return Err(EntryError::Package(package.to_owned()));
+    }
     manifest::check(service, platform, manifest).map_err(EntryError::Manifest)
 }
 

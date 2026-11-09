@@ -13,15 +13,23 @@ use hostkeeper_proto::hostkeeper::release::v1::{
     Blob, Hook, InstallerBounds, Location, Manifest, StepBounds, Target, TargetList,
 };
 use hostkeeper_wire::version::Version;
+use prost::Message as _;
+use prost_reflect::{DescriptorPool, MessageDescriptor};
+use prost_types::FileDescriptorSet;
 use serde_json::{Value, json};
 
 use crate::desired::DesiredError;
 use crate::registry::{Digest, MAX_REGISTRY};
 use crate::releases::{
-    Book, Books, Release, Targets, audit_reason, checked, encode_file, parse_file, record,
-    releases_path,
+    Book, Books, Release, Targets, audit_reason, checked, encode_file, parse_file, parse_file_by,
+    record, releases_path, target_list,
 };
 use crate::service::SetError;
+
+/// The release stored as `value`, read as the stores read it, by this build's `TargetList`.
+fn from_json(value: &Value) -> Result<Release, String> {
+    Release::read(value, target_list())
+}
 
 /// A digest of 64 lower-case hex characters, all `c`.
 pub(crate) fn hex(c: char) -> String {
@@ -92,6 +100,7 @@ pub(crate) fn entry(service: &str, installer: &str, c: char, bytes: u64) -> Targ
             ))],
         }),
         manifest: Some(manifest(service, installer)),
+        ..Target::default()
     }
 }
 
@@ -183,7 +192,7 @@ fn a_release_is_read_back_from_its_json_as_it_was() {
         stored["targets"]["linux-x86_64"]["entries"][0]["installer"],
         "deb"
     );
-    let read = Release::from_json(&stored).expect("reads");
+    let read = from_json(&stored).expect("reads");
     assert_eq!(read, with);
     assert_eq!(read.targets(), with.targets());
     assert_eq!(read.index_digest(), Some(&digest('9')));
@@ -192,10 +201,7 @@ fn a_release_is_read_back_from_its_json_as_it_was() {
     let without = Release::new(targets("web"), None);
     let stored = without.to_json();
     assert_eq!(stored.as_object().expect("an object").len(), 1);
-    assert_eq!(
-        Release::from_json(&stored).expect("reads").index_digest(),
-        None
-    );
+    assert_eq!(from_json(&stored).expect("reads").index_digest(), None);
 }
 
 /// Proves: two releases are one when their targets encode alike and they name one index digest;
@@ -224,7 +230,7 @@ fn releases_are_equal_by_encoded_targets_and_index_digest() {
 /// and an index digest that is no digest, whether text or not.
 #[test]
 fn a_stored_release_that_is_none_is_refused_by_reason() {
-    let refused = |value: Value| Release::from_json(&value).expect_err("refused");
+    let refused = |value: Value| from_json(&value).expect_err("refused");
     assert_eq!(refused(json!({})), "no targets");
     assert_eq!(refused(json!({"targets": []})), "no targets");
     assert_eq!(
@@ -241,7 +247,7 @@ fn a_stored_release_that_is_none_is_refused_by_reason() {
             "a release_index_digest that is no digest"
         );
     }
-    let empty = Release::from_json(&json!({"targets": {}})).expect("no platform reads");
+    let empty = from_json(&json!({"targets": {}})).expect("no platform reads");
     assert!(empty.targets().is_empty());
 }
 
@@ -253,7 +259,7 @@ fn a_field_this_build_does_not_know_is_kept_as_read() {
     let mut stored = Release::new(targets("web"), Some(digest('9'))).to_json();
     stored["targets"]["linux-x86_64"]["future_list_field"] = json!({"a": [1, 2]});
     stored["targets"]["linux-x86_64"]["entries"][0]["future"] = json!("later");
-    let read = Release::from_json(&stored).expect("reads");
+    let read = from_json(&stored).expect("reads");
     assert_eq!(read.targets(), &targets("web"));
     assert_eq!(read.to_json(), stored);
 
@@ -280,6 +286,7 @@ fn the_releases_file_is_written_as_this_text_and_read_back() {
                 bytes: 9,
                 attestation: None,
                 manifest: None,
+                ..Target::default()
             }]),
         )]),
         Some(digest('9')),
@@ -649,6 +656,182 @@ fn the_audit_reason_names_a_manifest_by_the_sha256_of_its_encoding() {
         format!(
             "2.0 with targets: linux-x86_64 hostkeeper-archive {} manifest {ARCHIVE_MANIFEST}",
             hex('a')
+        )
+    );
+}
+
+/// The descriptor of `TargetList` that a coordinator before packages-repositories.md's A16 reads
+/// a release's lists with: this build's, with fields 7 (`repository`) and 8 (`package_version`)
+/// of `Target` and their synthetic oneofs taken out.
+pub(crate) fn target_list_before() -> MessageDescriptor {
+    let mut set =
+        FileDescriptorSet::decode(hostkeeper_proto::FILE_DESCRIPTOR_SET).expect("the set decodes");
+    let mut stripped = 0;
+    for file in &mut set.file {
+        if file.name() != "hostkeeper/release/v1/release.proto" {
+            continue;
+        }
+        for message in &mut file.message_type {
+            if message.name() == "Target" {
+                let before = message.field.len();
+                message.field.retain(|field| field.number() < 7);
+                stripped += before - message.field.len();
+                message.oneof_decl.clear();
+            }
+        }
+    }
+    assert_eq!(
+        stripped, 2,
+        "this build's Target has fields 7 and 8 and no other past 6"
+    );
+    DescriptorPool::from_file_descriptor_set(set)
+        .expect("the release before's set builds")
+        .get_message_by_name(&format!("hostkeeper.release.v1.{}", "TargetList"))
+        .expect("TargetList")
+}
+
+/// A repository entry of `service` (packages-repositories.md section 2.1): `apt` from
+/// `komira-testing` at `1:1.6.0-1`, pinned by the digest all `c`; no artifact field.
+pub(crate) fn repository_entry(service: &str, c: char) -> Target {
+    Target {
+        installer: "apt".to_owned(),
+        digest: hex(c),
+        manifest: Some(Manifest {
+            package: Some(service.to_owned()),
+            ..manifest(service, "apt")
+        }),
+        repository: Some("komira-testing".to_owned()),
+        package_version: Some("1:1.6.0-1".to_owned()),
+        ..Target::default()
+    }
+}
+
+/// Targets of `service` with a repository entry then a tarball on `linux-x86_64`.
+pub(crate) fn repository_targets(service: &str) -> Targets {
+    Targets::from([(
+        "linux-x86_64".to_owned(),
+        list(vec![
+            repository_entry(service, 'a'),
+            entry(service, "tarball", 'c', 3_000),
+        ]),
+    )])
+}
+
+/// Proves: a release with a repository entry is stored with the entry's `repository` and
+/// `packageVersion` keys, as proto3 JSON spells them, beside its pin and manifest and no artifact
+/// key, and reads back equal.
+///
+/// Catches: either field left out of the stored JSON, written under another key, or lost on the
+/// way back.
+#[test]
+fn a_repository_entry_is_stored_with_its_repository_and_package_version() {
+    let release = Release::new(repository_targets("web"), None);
+    let stored = release.to_json();
+    let first = &stored["targets"]["linux-x86_64"]["entries"][0];
+    assert_eq!(
+        first,
+        &json!({
+            "installer": "apt",
+            "digest": hex('a'),
+            "manifest": first["manifest"].clone(),
+            "repository": "komira-testing",
+            "packageVersion": "1:1.6.0-1",
+        })
+    );
+    assert_eq!(first["manifest"]["package"], json!("web"));
+    let read = from_json(&stored).expect("reads");
+    assert_eq!(read, release);
+    assert_eq!(read.targets(), &repository_targets("web"));
+}
+
+/// Proves: the reader of a coordinator before A16 starts on a releases file this build wrote
+/// with a repository entry: it reads it, its own copy of the entry has no repository and no
+/// package version (section 2.3: an `apt` entry with neither), the rest of the release is as
+/// set, and the file it writes back is byte for byte the one this build wrote, which this build
+/// reads back with both fields.
+///
+/// Catches: a releases file with a repository entry that stops an older coordinator from
+/// starting, or that it rewrites without the two keys.
+#[test]
+fn the_previous_coordinators_reader_starts_on_a_releases_file_with_a_repository_entry() {
+    let books = Books::from([(
+        "web".to_owned(),
+        Book::from([(
+            "2.0".to_owned(),
+            Arc::new(Release::new(repository_targets("web"), Some(digest('9')))),
+        )]),
+    )]);
+    let written = encode_file(&books).expect("encodes");
+    let before = target_list_before();
+    let read = parse_file_by(&written, Some(&before)).expect("the release before reads the file");
+    let release = &read["web"]["2.0"];
+    let entries = &release.targets()["linux-x86_64"].entries;
+    let first = &entries[0];
+    assert_eq!(
+        (first.repository.clone(), first.package_version.clone()),
+        (None, None)
+    );
+    assert_eq!(
+        (
+            first.installer.as_str(),
+            first.digest.as_str(),
+            first.locations.len()
+        ),
+        ("apt", hex('a').as_str(), 0)
+    );
+    assert_eq!(
+        entries[1],
+        repository_targets("web")["linux-x86_64"].entries[1]
+    );
+    assert_eq!(release.index_digest(), Some(&digest('9')));
+    let rewritten = encode_file(&read).expect("encodes");
+    assert_eq!(rewritten, written);
+    let again = parse_file(&rewritten).expect("this build reads it back");
+    assert_eq!(again["web"]["2.0"].targets(), &repository_targets("web"));
+}
+
+/// Proves: the audit reason names a repository entry by its installer, `repository` and its
+/// name, `package` and the manifest's package, `package_version` and its version, the pin and
+/// the manifest's SHA-256; an artifact entry beside it as before.
+///
+/// Catches: a repository entry audited as an artifact, with no word of where it comes from.
+#[test]
+fn the_audit_reason_names_a_repository_entrys_repository_package_and_version() {
+    let targets = repository_targets("web");
+    let manifest = |at: usize| {
+        let entry = &targets["linux-x86_64"].entries[at];
+        crate::ops_file::digest(&entry.manifest.as_ref().expect("a manifest").encode_to_vec())
+    };
+    let release = Release::new(targets.clone(), None);
+    assert_eq!(
+        audit_reason(&v("2.0"), &release, None),
+        format!(
+            "2.0 with targets: linux-x86_64 apt repository komira-testing package web \
+             package_version 1:1.6.0-1 {} manifest {}, tarball {} manifest {}",
+            hex('a'),
+            manifest(0),
+            hex('c'),
+            manifest(1)
+        )
+    );
+    // A repository entry with no manifest (never one a set keeps) is named all the same.
+    let bare = Release::new(
+        Targets::from([(
+            "linux-x86_64".to_owned(),
+            list(vec![Target {
+                manifest: None,
+                package_version: None,
+                ..repository_entry("web", 'b')
+            }]),
+        )]),
+        None,
+    );
+    assert_eq!(
+        audit_reason(&v("2.0"), &bare, None),
+        format!(
+            "2.0 with targets: linux-x86_64 apt repository komira-testing package  \
+             package_version  {} manifest {EMPTY}",
+            hex('b')
         )
     );
 }

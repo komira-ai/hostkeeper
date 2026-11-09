@@ -154,7 +154,7 @@ pub fn manifest(installer: Installer) -> Manifest {
             manifest.run = vec!["web-api.service".to_owned()];
             manifest.containers = vec![container()];
         }
-        _ => {
+        Installer::Apt | Installer::HostkeeperArchive => {
             manifest.package = Some("web".to_owned());
             manifest.run = vec!["web.service".to_owned(), "web-cache.timer".to_owned()];
         }
@@ -169,8 +169,15 @@ pub fn location(store: &str, locator: &str) -> Location {
     }
 }
 
-/// An entry of `installer` with its manifest.
+/// An entry of `installer` with its manifest: a repository entry ([`repository_entry`]) for a
+/// backend of the repository installer, an artifact entry for any other.
 pub fn entry(installer: Installer) -> Target {
+    if installer.is_repository() {
+        return Target {
+            installer: installer.as_str().to_owned(),
+            ..repository_entry()
+        };
+    }
     Target {
         installer: installer.as_str().to_owned(),
         locations: vec![
@@ -188,6 +195,39 @@ pub fn entry(installer: Installer) -> Target {
             )],
         }),
         manifest: Some(manifest(installer)),
+        ..Target::default()
+    }
+}
+
+/// A repository entry as CI sends it (packages-repositories.md section 1): `apt`, the
+/// repository, the package version, the pin, and a manifest naming the package; no location, no
+/// size and no attestation.
+pub fn repository_entry() -> Target {
+    Target {
+        installer: Installer::Apt.as_str().to_owned(),
+        digest: digest('d'),
+        manifest: Some(manifest(Installer::Apt)),
+        repository: Some("komira-testing".to_owned()),
+        package_version: Some("1:1.6.0-1".to_owned()),
+        ..Target::default()
+    }
+}
+
+/// An artifact entry of the installer `name`, which may be one no daemon lists (a withdrawn
+/// `deb` or `rpm`, or any other of the grammar), with a manifest naming a package, as such an
+/// entry had before the installers were withdrawn.
+pub fn named(name: &str) -> Target {
+    Target {
+        installer: name.to_owned(),
+        manifest: Some(manifest(Installer::Apt)),
+        ..entry(Installer::Tarball)
+    }
+}
+
+/// A list of the artifact entries of the installers `names` ([`named`]), in that order.
+pub fn named_list(names: &[&str]) -> TargetList {
+    TargetList {
+        entries: names.iter().map(|name| named(name)).collect(),
     }
 }
 

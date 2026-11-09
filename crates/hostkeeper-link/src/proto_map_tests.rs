@@ -733,6 +733,8 @@ fn entry() -> hostkeeper_proto::hostkeeper::release::v1::Target {
             }],
         }),
         manifest: None,
+        repository: None,
+        package_version: None,
     }
 }
 

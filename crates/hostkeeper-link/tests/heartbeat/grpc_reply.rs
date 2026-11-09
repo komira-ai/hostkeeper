@@ -61,6 +61,8 @@ fn entry_with(padding: usize) -> release::Target {
         bytes: 4096,
         attestation: None,
         manifest: None,
+        repository: None,
+        package_version: None,
     }
 }
 

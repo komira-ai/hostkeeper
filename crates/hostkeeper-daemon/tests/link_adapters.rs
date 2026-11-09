@@ -795,6 +795,8 @@ fn picked() -> release::Target {
             }],
         }),
         manifest: None,
+        repository: None,
+        package_version: None,
     }
 }
 

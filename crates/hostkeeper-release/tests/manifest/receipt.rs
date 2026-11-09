@@ -13,7 +13,7 @@ use crate::support::{LINUX, entry, pad_manifest_to, text, version, web};
 const LISTED: [Installer; 3] = [
     Installer::HostkeeperArchive,
     Installer::Tarball,
-    Installer::Deb,
+    Installer::Apt,
 ];
 
 fn daemon(running: &str) -> Daemon<'static> {
@@ -45,8 +45,8 @@ fn an_entry_of_a_listed_installer_from_a_new_enough_daemon_is_taken() {
     }
     // The floor is inclusive: a daemon of exactly `min_hostkeeper` takes it.
     assert_eq!(
-        check(&with_min(entry(Installer::Deb), "1.2.3"), "1.2.3"),
-        Ok(Installer::Deb)
+        check(&with_min(entry(Installer::Apt), "1.2.3"), "1.2.3"),
+        Ok(Installer::Apt)
     );
 }
 
@@ -54,7 +54,7 @@ fn an_entry_of_a_listed_installer_from_a_new_enough_daemon_is_taken() {
 /// instead of `daemon_too_old`), or the installer judged before the version.
 #[test]
 fn a_manifest_above_the_daemon_is_daemon_too_old_whatever_else_it_holds() {
-    let mut wrong = with_min(entry(Installer::Deb), "0.5.0");
+    let mut wrong = with_min(entry(Installer::Apt), "0.5.0");
     let manifest = wrong.manifest.as_mut().expect("a manifest");
     manifest.package = None;
     manifest.run = vec!["api.service".to_owned()];
@@ -75,7 +75,7 @@ fn a_manifest_above_the_daemon_is_daemon_too_old_whatever_else_it_holds() {
     );
     // Compared as numbers, not text.
     assert!(matches!(
-        check(&with_min(entry(Installer::Deb), "0.10.0"), "0.9.0"),
+        check(&with_min(entry(Installer::Apt), "0.10.0"), "0.9.0"),
         Err(ReceiptError::DaemonTooOld { .. })
     ));
 }
@@ -84,10 +84,10 @@ fn a_manifest_above_the_daemon_is_daemon_too_old_whatever_else_it_holds() {
 /// (`manifest_invalid`), or failing the order instead of deferring it.
 #[test]
 fn an_installer_the_daemon_does_not_list_is_installer_not_listed() {
-    for name in ["rpm", "oci-image", "flatpak", "Deb", ""] {
-        let mut target = entry(Installer::Rpm);
+    for name in ["rpm", "deb", "oci-image", "flatpak", "Apt", ""] {
+        let mut target = entry(Installer::Apt);
         target.installer = name.to_owned();
-        // The manifest is wrong for rpm too; the installer is the answer.
+        // The manifest is wrong for any of them too; the installer is the answer.
         target.manifest.as_mut().expect("a manifest").package = None;
         let err = check(&target, "0.4.0").expect_err(name);
         assert_eq!(
@@ -108,21 +108,24 @@ fn an_installer_the_daemon_does_not_list_is_installer_not_listed() {
 /// deferred instead of failed.
 #[test]
 fn a_manifest_that_breaks_a_rule_or_has_no_version_is_manifest_invalid() {
-    let mut no_package = entry(Installer::Deb);
+    let mut no_package = entry(Installer::Apt);
     no_package.manifest.as_mut().expect("a manifest").package = None;
     let err = check(&no_package, "0.4.0").expect_err("refused");
     assert_eq!(
         err,
         ReceiptError::Invalid(ManifestError::Missing {
-            installer: Installer::Deb,
+            installer: Installer::Apt,
             field: "package"
         })
     );
     assert_eq!(err.reason(), "manifest_invalid");
     assert!(!err.is_deferred());
-    assert_eq!(err.to_string(), "the manifest of a deb entry needs package");
+    assert_eq!(
+        err.to_string(),
+        "the manifest of the apt entry needs package"
+    );
 
-    let bad_version = with_min(entry(Installer::Deb), "next");
+    let bad_version = with_min(entry(Installer::Apt), "next");
     let err = check(&bad_version, "0.4.0").expect_err("refused");
     assert!(matches!(
         err,
@@ -130,7 +133,7 @@ fn a_manifest_that_breaks_a_rule_or_has_no_version_is_manifest_invalid() {
     ));
     assert_eq!(err.reason(), "manifest_invalid");
 
-    let mut none = entry(Installer::Deb);
+    let mut none = entry(Installer::Apt);
     none.manifest = None;
     let err = check(&none, "0.4.0").expect_err("refused");
     assert_eq!(err, ReceiptError::NoManifest);
@@ -191,9 +194,9 @@ fn on_receipt_the_daemon_applies_every_rule_every_manifest_keeps_before_its_inst
         ),
     ];
     for (at, (broken, is)) in cases.into_iter().enumerate() {
-        let mut target = entry(Installer::Deb);
+        let mut target = entry(Installer::Apt);
         let manifest = target.manifest.as_mut().expect("a manifest");
-        // The installer's rule is broken too: a deb manifest names its package.
+        // The installer's rule is broken too: an apt manifest names its package.
         manifest.package = None;
         broken(manifest);
         let err = check(&target, "0.4.0").expect_err("refused");
@@ -226,14 +229,14 @@ fn on_receipt_the_unit_names_are_those_of_the_daemons_platform() {
     let mac = Daemon {
         platform: Platform::MacosArm64,
         running: version("0.4.0"),
-        installers: &[Installer::MacosPkg, Installer::Deb],
+        installers: &[Installer::MacosPkg, Installer::Apt],
     };
     assert_eq!(
         receipt::check(&web(), &entry(Installer::MacosPkg), mac),
         Ok(Installer::MacosPkg)
     );
     // A Linux entry's systemd units are not launchd labels of the service on a Mac.
-    let mut linux = entry(Installer::Deb);
+    let mut linux = entry(Installer::Apt);
     linux.manifest.as_mut().expect("a manifest").run = vec!["web-cache.timer".to_owned()];
     assert!(matches!(
         receipt::check(&web(), &linux, mac),
@@ -241,7 +244,7 @@ fn on_receipt_the_unit_names_are_those_of_the_daemons_platform() {
     ));
     // And a Mac's labels are not systemd units on Linux.
     let mut on_linux = entry(Installer::MacosPkg);
-    on_linux.installer = "deb".to_owned();
+    on_linux.installer = "apt".to_owned();
     assert!(matches!(
         check(&on_linux, "0.4.0"),
         Err(ReceiptError::Invalid(ManifestError::RunUnit { .. }))

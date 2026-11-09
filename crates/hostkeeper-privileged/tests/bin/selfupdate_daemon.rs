@@ -469,6 +469,8 @@ fn read_entry(json: &Value) -> Option<Entry> {
             min_hostkeeper: word(json, "min_hostkeeper")?,
             ..Manifest::default()
         }),
+        repository: None,
+        package_version: None,
     })
 }
 

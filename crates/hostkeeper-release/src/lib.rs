@@ -6,7 +6,9 @@
 //!
 //! - [`target`]: what the coordinator checks of a set with targets (section 3.4): the platforms,
 //!   each list's entries, digests, sizes, attestation, locations and size, and each manifest by
-//!   the rules that need no host and no knowledge of the entry's installer.
+//!   the rules that need no host and no knowledge of the entry's installer; and of a repository
+//!   entry (`Target.repository` set, packages-repositories.md section 2.2), its repository,
+//!   package version, pin and package name, and that it names no artifact.
 //! - [`manifest`]: the manifest's rules (section 4.4), those every manifest keeps
 //!   ([`manifest::check`]) and those the entry's installer adds ([`manifest::check_for`]).
 //! - [`receipt`]: what the daemon checks of an entry before it fetches anything: its version
@@ -14,8 +16,8 @@
 //!   manifest (`manifest_invalid`).
 //! - [`staged`]: what the daemon checks of a manifest against the tree its installer staged:
 //!   the hook program and every `place` source, reached through no link.
-//! - [`installer`] the installers a manifest's rules know, and [`grammar`] the digest, name and
-//!   locator grammars (section 7.1).
+//! - [`installer`] the installers a manifest's rules know and which are repository backends, and
+//!   [`grammar`] the digest, name and locator grammars (section 7.1) and a repository entry's.
 //!
 //! This is a pure crate: no I/O, no process, no clock, no randomness and no hashed collection. A
 //! check takes a message and answers the first rule it breaks, in a fixed order, so the same

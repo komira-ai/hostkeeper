@@ -305,6 +305,8 @@ fn entry(installer: &str, bytes: u64) -> Entry {
         bytes,
         attestation: None,
         manifest: None,
+        repository: None,
+        package_version: None,
     })
 }
 

@@ -62,6 +62,8 @@ fn entry_of(archive: &[u8]) -> Target {
             locations: vec![location("channel", BUNDLE)],
         }),
         manifest: Some(bare_manifest("0.1.0")),
+        repository: None,
+        package_version: None,
     }
 }
 
