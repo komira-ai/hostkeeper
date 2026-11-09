@@ -5,8 +5,7 @@
 //! (`Layout::Deb`'s `unit_text`). The `.deb` is built for linux-x86_64 only: the pinned tools
 //! are linux-amd64 builds.
 //!
-//! [`tools`] takes the tools out of their archives, for the `.deb` and for the archive package
-//! (`package::mdm`): each archive is read from the directory given with `--archives` under the
+//! [`tools`] takes the tools out of their archives for the `.deb`: each archive is read from the directory given with `--archives` under the
 //! file name of its pin's URL and refused, naming the file, unless its SHA-256 is the pin's (a
 //! missing file is refused too); its members are read by the kit's own reader,
 //! `hostkeeper_mdm::archive`, which refuses an archive that is damaged or lacks a member. The

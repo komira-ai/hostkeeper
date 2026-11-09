@@ -1,27 +1,20 @@
 //! The files of a package's release that `cargo xtask release targets` reads, made for the run
-//! tests of the workflows' jobs ([`super::targets_run_tests`], [`super::hello_run_tests`]): an
-//! archive per platform holding only its `manifest.toml`, each archive's bundle (unsigned, its
-//! statement listing the archive's SHA-256), and the canonical release index of the archives;
-//! for hostkeeper and hello, their native packages ([`native_files`]): a `.deb` per Linux
+//! tests of the workflows' jobs ([`super::targets_run_tests`], [`super::hello_run_tests`]): for
+//! hostkeeper and hello, their native packages ([`native_files`]): a `.deb` per Linux
 //! architecture holding only its `control`, and in place of the `.pkg` bytes of its own, each
-//! with its bundle. And
-//! the targets the verb must write for them, written here from the files themselves.
+//! with its bundle (unsigned, its statement listing the file's SHA-256). And the targets the
+//! verb must write for them, written here from the files themselves and the manifest each
+//! package has always carried.
 
 use std::collections::BTreeMap;
 
 use base64::Engine as _;
-use hostkeeper_config::daemon::Sha256Hex;
-use hostkeeper_config::index::{PackageEntry, ReleaseIndex};
-use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_config::platform::Platform;
 use serde_json::{Value, json};
 use sha2::Digest;
 
 /// The repository whose releases the run tests read.
 pub const REPO: &str = "komira-ai/hostkeeper";
-
-/// The `min_hostkeeper` each archive's manifest names.
-pub const FLOOR: &str = "0.1.7";
 
 /// The SHA-256 of `bytes`, lower-case hex.
 pub fn sha256(bytes: &[u8]) -> String {
@@ -40,38 +33,6 @@ pub fn sorted(value: Value) -> Value {
         Value::Array(items) => Value::Array(items.into_iter().map(sorted).collect()),
         other => other,
     }
-}
-
-/// The unit (on Linux) or job (on macOS) of the slot `a` of `service` on `platform`, which the
-/// archive's manifest runs.
-fn run_unit(service: &str, platform: Platform) -> String {
-    match platform {
-        Platform::MacosArm64 => format!("{service}.a"),
-        _ => format!("{service}@a.service"),
-    }
-}
-
-/// The archive of `service` at the package version `version` for `platform`: a zstd tar whose
-/// one entry is the `manifest.toml` that `release targets` reads, with the hook and the run unit
-/// a native entry's manifest is made of.
-fn archive(service: &str, version: &str, platform: Platform) -> Vec<u8> {
-    let run = run_unit(service, platform);
-    let manifest = format!(
-        "name = \"{service}\"\nversion = \"{version}\"\nplatform = \"{platform}\"\nmin_hostkeeper = \"{FLOOR}\"\n\n\
-         [hook]\ncommand = [\"bin/{service}\", \"update-hook\"]\nverify_deadline_secs = 120\n\n\
-         [hook.timeout_secs]\ncutover = 60\nverify = 30\nrollback = 60\ncleanup = 30\n\n\
-         [units]\nrun = [\"{run}\"]\n"
-    );
-    let mut header = tar::Header::new_ustar();
-    header.set_size(manifest.len() as u64);
-    header.set_mode(0o644);
-    header.set_entry_type(tar::EntryType::Regular);
-    let mut builder = tar::Builder::new(Vec::new());
-    builder
-        .append_data(&mut header, "manifest.toml", manifest.as_bytes())
-        .expect("append the manifest");
-    let tar = builder.into_inner().expect("finish the tar");
-    ruzstd::encoding::compress_to_vec(&tar[..], ruzstd::encoding::CompressionLevel::Fastest)
 }
 
 /// An unsigned bundle whose statement lists `bytes`' SHA-256 as its one subject's.
@@ -144,39 +105,10 @@ pub fn native_files(service: &str, version: &str) -> BTreeMap<String, Vec<u8>> {
     files
 }
 
-/// The archive name of `service` at the package version `version` for `platform`.
-pub fn archive_name(service: &str, version: &str, platform: Platform) -> String {
-    format!("{service}-{version}-{platform}.tar.zst")
-}
-
-/// The files of the package of `service` at the package version `version`, by name: an archive
-/// and its bundle per platform, and the canonical release index of the archives as
-/// `index_name`.
-pub fn package_files(service: &str, version: &str, index_name: &str) -> BTreeMap<String, Vec<u8>> {
-    let mut files = BTreeMap::new();
-    let mut entries = Vec::new();
-    for platform in Platform::ALL {
-        let name = archive_name(service, version, platform);
-        let bytes = archive(service, version, platform);
-        entries.push(PackageEntry {
-            platform,
-            sha256: Sha256Hex::parse(&sha256(&bytes)).expect("a SHA-256"),
-            bytes: bytes.len() as u64,
-        });
-        files.insert(format!("{name}.sigstore.json"), bundle(&bytes));
-        files.insert(name, bytes);
-    }
-    let name = ServiceName::new(service).expect("a service");
-    let index = ReleaseIndex::new(name, Version::new(version).expect("a version"), entries)
-        .expect("an index");
-    files.insert(index_name.to_owned(), index.to_json().into_bytes());
-    files
-}
-
-/// The targets `release targets` must write for `files` (from [`package_files`] of `service` and
-/// [`native_files`]) of the release `release`: per Linux platform, the native entry alone (an
-/// `apt` entry of the repository `komira-testing` pinned by the `.deb`'s SHA-256), its manifest
-/// the archive's; no list for macOS, while no daemon announces `macos-pkg`. As [`sorted`] JSON
+/// The targets `release targets` must write for `files` (from [`native_files`] of `service`) of
+/// the release `release`: per Linux platform, the native entry alone (an `apt` entry of the
+/// repository `komira-testing` pinned by the `.deb`'s SHA-256), its manifest the package's own;
+/// no list for macOS, while no daemon announces `macos-pkg`. As [`sorted`] JSON
 /// text.
 pub fn targets(service: &str, release: &str, files: &BTreeMap<String, Vec<u8>>) -> String {
     let mut lists = serde_json::Map::new();
@@ -199,17 +131,58 @@ fn native_entry(
     json!({
         "installer": "apt",
         "digest": sha256(bytes),
-        "manifest": {
-            "package": service,
-            "hook": {
-                "timeoutSecs": {"cutover": "60", "verify": "30", "rollback": "60", "cleanup": "30"},
-                "verifyDeadlineSecs": "120",
-            },
-            "run": [run_unit(service, platform)],
-            "minHostkeeper": FLOOR,
-            "installerBounds": {"stageSecs": "600", "activateSecs": "300", "removeSecs": "300"},
-        },
+        "manifest": manifest(service, release),
         "repository": "komira-testing",
         "packageVersion": release,
+    })
+}
+
+/// The manifest of the native entry of `service` at the release `release`, as the package has
+/// always carried it: hostkeeper's, with the unit file of its `.deb` and the floor of the oldest
+/// release that reads every file this one writes (or the release's own version when that is
+/// older), or hello's, with its two slots, its readiness URL and its params.
+fn manifest(service: &str, release: &str) -> Value {
+    let bounds = json!({"stageSecs": "600", "activateSecs": "300", "removeSecs": "300"});
+    if service == "hello" {
+        return json!({
+            "package": "hello",
+            "hook": {
+                "timeoutSecs": {
+                    "prepare": "30", "cutover": "60", "verify": "30", "rollback": "60",
+                    "cleanup": "30", "uninstall": "60",
+                },
+                "verifyDeadlineSecs": "120",
+            },
+            "run": ["hello@a.service", "hello@b.service"],
+            "healthUrl": "http://127.0.0.1:9310/readyz",
+            "params": {
+                "port": {"integer": "9310"},
+                "record_dir": {"text": "/var/lib/updater/hooks/hello"},
+                "units": {"text": "systemd"},
+            },
+            "minHostkeeper": "0.1.0",
+            "installerBounds": bounds,
+        });
+    }
+    let oldest = hostkeeper_steps::OLDEST_READER;
+    let oldest = (oldest.major, oldest.minor, oldest.patch);
+    let parts: Vec<u64> = release
+        .split('.')
+        .map(|part| part.parse().expect("a release is X.Y.Z"))
+        .collect();
+    let own = (parts[0], parts[1], parts[2]);
+    let floor = own.min(oldest);
+    json!({
+        "package": service,
+        "hook": {
+            "timeoutSecs": {
+                "prepare": "300", "cutover": "300", "verify": "300", "rollback": "300",
+                "cleanup": "300",
+            },
+            "verifyDeadlineSecs": "600",
+        },
+        "run": [format!("{service}.service")],
+        "minHostkeeper": format!("{}.{}.{}", floor.0, floor.1, floor.2),
+        "installerBounds": bounds,
     })
 }

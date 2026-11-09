@@ -51,8 +51,7 @@ pub(crate) fn image_name(version: &Version, platform: Platform) -> String {
     format!("{COORDINATOR}-{version}-{}.image.tar", platform.name())
 }
 
-/// The name of the image index of the release. It does not end in `-index.json`, which
-/// `release channel-sync` takes for a service's release index.
+/// The name of the image index of the release.
 pub(crate) fn index_name(version: &Version) -> String {
     format!("{COORDINATOR}-{version}.image.json")
 }

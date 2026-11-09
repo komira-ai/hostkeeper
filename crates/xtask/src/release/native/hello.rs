@@ -1,6 +1,5 @@
-//! What hello's native packages hold. The service is the one of the archive package
-//! (`package::hello`): two slots, `a` and `b`, one at a time on port 9310, each running only
-//! while the hook's marker `/var/lib/updater/hooks/hello/slots/<slot>` exists; the failing build
+//! What hello's native packages hold. The service has two slots, `a` and `b`, one at a time on
+//! port 9310, each running only while the hook's marker `/var/lib/updater/hooks/hello/slots/<slot>` exists; the failing build
 //! starts the program with `--fail-ready`. What differs is where the files are:
 //!
 //! - **The `.deb`** installs the program at `/usr/lib/hello/hello` (a program no one types), the
@@ -28,13 +27,13 @@ use crate::release::Error;
 pub(crate) const NAME: &str = "hello";
 
 /// The port the serving slot listens on.
-const PORT: u16 = 9310;
+pub(crate) const PORT: u16 = 9310;
 
 /// The two slots an update alternates between.
 pub(crate) const SLOTS: [&str; 2] = ["a", "b"];
 
 /// The hook's record directory; a slot runs while `<RECORD_DIR>/slots/<slot>` exists.
-const RECORD_DIR: &str = "/var/lib/updater/hooks/hello";
+pub(crate) const RECORD_DIR: &str = "/var/lib/updater/hooks/hello";
 
 /// Where a launchd job's output goes.
 const LOG_DIR: &str = "/var/log";

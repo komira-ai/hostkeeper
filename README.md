@@ -8,14 +8,14 @@ It is made of two programs:
 
 - **one daemon per host**, `hostkeeper daemon`, a single root process. Its config,
   `/etc/hostkeeper/hostkeeper.toml`, is the only trust root of the host: the coordinator, the
-  release channel, the signers it trusts and its bounds. A service ships as a package, an
-  attested archive holding `manifest.toml` (the hook command, its timeouts and its `[params]`),
-  `bin/`, `units/` and optional `files/`. The daemon unpacks each version read-only under
-  `/var/lib/hostkeeper/packages`, keeps `current` and `previous`, and links the units and files
-  itself ([package format](docs/package-format.md)). It runs the hook (`prepare`, `cutover`,
+  release channel, the signers it trusts and its bounds. A service ships as a native package, a `.deb` or a `.pkg`,
+  whose hook is the command its manifest names ([packages-native](docs/design/packages-native.md)).
+  The daemon places each version read-only under `/var/lib/hostkeeper/packages`, keeps `current`
+  and `previous`, and links the units and files itself ([tree digest and seal](docs/tree-digest.md)).
+  It runs the hook (`prepare`, `cutover`,
   `verify`, `cleanup`, `rollback`) as root, each step in a transient systemd unit bounded by
   `RuntimeMaxSec` only. That is safe because the hook came byte for byte from the package that a
-  trusted signer attested. The conformance suite runs in the service's own CI
+  trusted signer attested when it was published. The conformance suite runs in the service's own CI
   ([docs/conformance.md](docs/conformance.md)); nothing confines a hook at runtime;
 - **one coordinator**, `hostkeeper-coordinator serve`, which assigns services to hosts and holds
   the desired version of each, and moves hosts to it stage by stage, each service by its update

@@ -29,8 +29,9 @@
 //!   runs nothing);
 //! - it is the file of a proof run and its caller does not pass each of the run's inputs from
 //!   its release job ([`HELLO_FROM_RELEASE`] for hello: the version and the targets alone;
-//!   [`TEMPLATE_FROM_RELEASE`] for the template) from the output of that name, passes an input
-//!   of [`INDEX_INPUTS`] the run does not list (hello sets native entries alone, with no index),
+//!   [`TEMPLATE_FROM_RELEASE`] for the template: the same two) from the output of that name,
+//!   passes an input of [`INDEX_INPUTS`] (a release is set with native entries alone, with no
+//!   index),
 //!   or passes a `package_digest` (one platform's package for every host); or the `outputs` of
 //!   the release job are not exactly the run's ([`HELLO_RELEASE_OUTPUTS`],
 //!   [`TEMPLATE_RELEASE_OUTPUTS`]); or its step `targets` does not run the run's targets command.
@@ -116,27 +117,16 @@ pub const HELLO_RELEASE_OUTPUTS: [(&str, &str); 2] = [
     ("targets", "${{ steps.targets.outputs.targets }}"),
     ("version", "${{ steps.version.outputs.version }}"),
 ];
-/// The inputs of the CI client that carry a release index. hello's caller passes none of them:
-/// a release is set with native entries alone, and no index.
+/// The inputs of the CI client's earlier revisions that carry a release index. No caller passes
+/// them: a release is set with native entries alone, and no index.
 pub const INDEX_INPUTS: [&str; 2] = ["release_index", "release_index_digest"];
-/// The inputs the caller template passes from the outputs of its release job: a service of
-/// another repository still ships archives, and gives the index with its targets so that a
-/// daemon before targets is ordered its archive (docs/deploy/service-caller.md).
-pub const TEMPLATE_FROM_RELEASE: [&str; 4] = [
-    "version",
-    "targets",
-    "release_index",
-    "release_index_digest",
-];
+/// The inputs the caller template passes from the outputs of its release job: the version and
+/// the targets alone, as hello's does (docs/deploy/service-caller.md).
+pub const TEMPLATE_FROM_RELEASE: [&str; 2] = ["version", "targets"];
 /// The `outputs` of the template's release job, exactly, sorted by name.
-pub const TEMPLATE_RELEASE_OUTPUTS: [(&str, &str); 4] = [
-    ("release_index", "${{ steps.index.outputs.release_index }}"),
-    (
-        "release_index_digest",
-        "${{ steps.index.outputs.release_index_digest }}",
-    ),
+pub const TEMPLATE_RELEASE_OUTPUTS: [(&str, &str); 2] = [
     ("targets", "${{ steps.targets.outputs.targets }}"),
-    ("version", "${{ steps.index.outputs.version }}"),
+    ("version", "${{ steps.version.outputs.version }}"),
 ];
 /// The `run:` of the step `targets` of [`HELLO_RELEASE_JOB`], before its arguments: the targets
 /// are written by the verb that checks the release's files, for hello.
@@ -156,7 +146,7 @@ pub struct Proof {
     /// The `run:` of the step `targets` of the release job, before its arguments.
     pub targets_run: &'static str,
     /// The inputs its caller passes from the outputs of the release job, each from the output
-    /// of its own name; an input of [`INDEX_INPUTS`] not among them may not be passed at all.
+    /// of its own name. An input of [`INDEX_INPUTS`] may not be passed at all.
     pub from_release: &'static [&'static str],
     /// The `outputs` of its release job, exactly, sorted by name.
     pub release_outputs: &'static [(&'static str, &'static str)],
@@ -408,10 +398,7 @@ fn proof_problems(run: &Proof, doc: &Node) -> Vec<String> {
             ));
         }
     }
-    for input in INDEX_INPUTS
-        .into_iter()
-        .filter(|i| !run.from_release.contains(i))
-    {
+    for input in INDEX_INPUTS {
         if with.and_then(|w| entry(w, input)).is_some() {
             problems.push(format!(
                 "{file}: job {} passes {input}; a release is set with native entries alone, and no index",

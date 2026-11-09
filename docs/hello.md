@@ -2,7 +2,7 @@
 
 hello (`examples/hello`) is the smallest real service a hostkeeper package carries: one
 binary, `hello`, an HTTP server on loopback with an update hook. It goes the whole way a
-service goes: a package in the release channel, assigned to the hosts of a role, installed,
+service goes: a native package, assigned to the hosts of a role, installed,
 updated from one version to the next, and rolled back when a release fails. This page is the
 proof as an operator runs it, step by step, with what to watch in the UI at each step. Run it
 before a real service (tierstore) is deployed with hostkeeper.
@@ -14,7 +14,7 @@ marked **specified, not built**, with the pull request that builds it.
 
 | Needed for | Built | Specified, not built |
 |---|---|---|
-| the package, its hook, its units and its release assets | `examples/hello`, `cargo xtask release package --service hello`, `artifacts.yml`, for linux-x86_64, linux-arm64 and macos-arm64 | — |
+| the package, its hook, its units and its release assets | `examples/hello`, `cargo xtask release deb --service hello` and `release macos-pkg --service hello`, `artifacts.yml`, for linux-x86_64, linux-arm64 and macos-arm64 | — |
 | running a hook step on a Linux host | the daemon runs each step through `SystemdLauncher` | — |
 | running a hook step on a Mac | the daemon runs each step as a launchd job through `LaunchdLauncher` (`hostkeeper-launchd`), and links and loads the package's plists (`docs/macos.md`) | — |
 | the UI's pages and their calls | the pages, and the HTTP/JSON gateway they call (`docs/gateway.md`) | — |
@@ -24,20 +24,17 @@ marked **specified, not built**, with the pull request that builds it.
 
 ## The package
 
-| File | Content |
-|---|---|
-| `bin/hello` | the binary: `hello [--port <port>] [--fail-ready]` serves on `127.0.0.1:<port>` (default 9310); `hello update-hook <step>` is the hook |
-| `manifest.toml` | the hook `["bin/hello", "update-hook"]` with a timeout for every step, the health URL `http://127.0.0.1:9310/readyz`, the two slots as run units, and the hook's `[params]` |
-| `units/hello@.service` (Linux) | the template of the slots `hello@a.service` and `hello@b.service` |
-| `units/hello.a.plist`, `units/hello.b.plist` (macOS) | the launchd jobs `hello.a` and `hello.b`, rendered by `hostkeeper-launchd`'s `service_plist` |
+hello's package is a native one: a `.deb` for each Linux platform and a `.pkg` for macOS. The
+binary is `hello [--port <port>] [--fail-ready]`, which serves on `127.0.0.1:<port>` (default
+9310); `hello update-hook <step>` is the hook. The hook bounds (a timeout for every step), the
+health URL `http://127.0.0.1:9310/readyz`, the two slots as run units and the hook's `[params]`
+are the manifest of the release's entry, which `cargo xtask release targets` writes; the
+package carries none of them. The committed goldens in `examples/hello/package/linux` and `macos`
+list the units and jobs of the slots and their modes.
 
-The committed goldens in `examples/hello/package/linux` and `macos` are these files byte for
-byte, and list each entry and its mode.
-
-**The native packages.** hello and its failing build are also built as a `.deb` for each Linux
+**The native packages.** hello and its failing build are built as a `.deb` for each Linux
 platform (`cargo xtask release deb --service hello`) and a `.pkg` for macOS (`cargo xtask release
-macos-pkg --service hello`), which hostkeeper installs with `apt` and `installer` once the farm
-moves to native packages ([design: native packages only](design/packages-native.md), sections
+macos-pkg --service hello`), which hostkeeper installs with `apt` and `installer` ([design: native packages only](design/packages-native.md), sections
 10.2 and 10.6). Neither has a maintainer script; the manifest's hook bounds, run units, health URL
 and params are the manifest of the release's entry, not a file of the package.
 
@@ -80,28 +77,19 @@ makes that directory, owner only, on its first step.
 
 ## Before you start
 
-1. **Releases.** Each release of this repository carries, per platform,
-   `hello-<version>-<platform>.tar.zst` and its attestation, and `hello-index.json`. It also
-   carries the failing build, version `<version>-fail-ready`, with
-   `hello-fail-ready-index.json`. Stage each version into the channel's tree with
-   `cargo xtask release channel-stage --service hello --version <version> --from <assets>
-   --index <assets>/hello-index.json --out <tree>` (and `--version <version>-fail-ready
-   --index <assets>/hello-fail-ready-index.json` for the failing build), which lays out
-   `hello/<version>/index.json` beside its packages and their bundles
-   ([docs/deploy/release-channel.md](deploy/release-channel.md)). A host fetches nothing else.
-2. **The release index.** The desired state names the release by its index,
-   `hello-index.json`, and the SHA-256 of that file (`sha256sum hello-index.json`). The
-   coordinator orders each host the package its own platform has in the index, so the proof
-   can run on hosts of any platform the index lists. A host of a platform the index does not list
-   is ordered nothing and shows the hold `no_package_for_platform`. A fleet of one platform may
-   name the one package digest instead (the `.sha256` file beside the package). CI
-   (`hello-desired.yml`, below) names the release by its targets alone, with no index, written by
+1. **Releases.** Each release of this repository carries, per Linux platform,
+   `hello_<version>_<deb-arch>.deb` and its attestation, and for macOS
+   `hello-<version>-macos-arm64.pkg`. The release workflow puts the `.deb` into the `testing`
+   suite of the project's package repository ([package-repositories.md](deploy/package-repositories.md)),
+   where a host fetches it. The failing build, version `<version>-fail-ready`, is built the same
+   way and is not a release asset.
+2. **The targets.** The desired state names the release by its targets, written by
    `cargo xtask release targets --service hello` from the release's assets
    (`docs/design/packages.md`, section 3.7; `docs/design/packages-native.md`, section 10.5): per
    Linux platform, hello's native entry alone, its `.deb` from the repository's `testing` suite
    (docs/deploy/package-repositories.md), and no list for macOS while no daemon announces
    `macos-pkg`. A daemon that announces `apt` is ordered it; any other is ordered nothing
-   (`installer_dropped`).
+   (`installer_dropped`). CI (`hello-desired.yml`, below) writes and sets them.
 3. **The rollout entry.** Append `examples/hello/rollout.toml` to the coordinator's rollout file
    (`--rollout-file`). Replace the role `farm` with the role of the hosts that run the proof,
    and restart the coordinator. `cargo test -p hostkeeper-coordinator --test hello_rollout`
@@ -144,22 +132,18 @@ Host page's `Assigned services` lists hello for each host of the role, with `Des
 Set the desired version to the first release, `<v1>`:
 
 ```sh
-jq -n --arg version <v1> --arg digest "$(sha256sum hello-index.json | cut -d' ' -f1)" \
-  --rawfile index hello-index.json \
-  '{desired: {version: $version}, releaseIndex: $index, releaseIndexDigest: $digest}' > desired.json
+jq -n --arg version <v1> --slurpfile targets targets.json \
+  '{desired: {version: $version}, targets: $targets[0]}' > desired.json
 hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     releases set-desired --service hello --request desired.json
 ```
 
-`--rawfile` keeps the index byte for byte, which its digest covers. The coordinator refuses an
-index whose SHA-256 is not the digest (`index_digest_mismatch`) and one that is not hello's at
-`<v1>` (`index_invalid`).
+`targets.json` is the file `cargo xtask release targets --service hello --version <v1> --output targets.json` writes (with `--dir` naming the release's assets).
 
 Or let CI do it: dispatch `hello-desired.yml` with `version` `<v1>` (see "The proof from CI"
 below).
 
-Or use the Rollout page, section `hello`: type `<v1>` in `Version`, the SHA-256 of the index in `Release
-index digest` and the text of `hello-index.json` in `Release index`, press `Set desired` and
+Or use the Rollout page, section `hello`: type `<v1>` in `Version`, press `Set desired` and
 confirm. The page keeps the limits CI set earlier.
 
 **Watch:**
@@ -229,14 +213,12 @@ real service depends on it. Dispatch it from main (Actions, `hello-desired`, `Ru
 
 The failing build is not offered: its proof (step 4) is suspended.
 
-Its first job, `release`, downloads hello's release index (`hello-index.json`), its Linux
-archives (whose `manifest.toml` the native entry takes) and its `.deb` for each Linux
+Its first job, `release`, downloads hello's `.deb` for each Linux
 architecture with the `.deb`'s attestation bundle, and runs
 `cargo xtask release targets --service hello` on them: each Linux platform's list holds hello's
 native entry alone (docs/design/packages-native.md, section 10.5), and macOS has none. The verb
-refuses, naming every problem, an index that is not hello's at the version or does not list every
-platform, and an archive, manifest, `.deb` or bundle that does not check out; then nothing is
-set. Its second job calls `set-desired.yml` with the targets alone, so each host is ordered its
+refuses, naming every problem, a `.deb`, control file or bundle that does not check out; then
+nothing is set. Its second job calls `set-desired.yml` with the targets alone, so each host is ordered its
 own platform's `.deb`. It is pinned to a hostkeeper release, as any service pins it
 (`docs/deploy/ci-client.md`, "Pinning hostkeeper"), with `wait` left at `true`: the job waits
 for the fleet. Once it has set, `hkctl releases get-release --service hello --version <version>`

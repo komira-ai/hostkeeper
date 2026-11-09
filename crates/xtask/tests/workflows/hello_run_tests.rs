@@ -11,9 +11,8 @@
 //! `cargo` it runs this crate's real `xtask` binary, so the step that writes the targets runs the
 //! real `release targets --service hello`. `sha256sum` and `cut` are the runner's own.
 //!
-//! Each release published here carries hello's build and its failing build, so a job that read
-//! the failing build's index or archives would set the wrong one; the failing build is not
-//! offered (docs/hello.md, step 4, suspended).
+//! Each release published here carries hello's native packages and their bundles and nothing
+//! else: the failing build is not offered (docs/hello.md, step 4, suspended).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -21,7 +20,7 @@ use std::process::Command;
 
 use super::callers::{HELLO_FILE, HELLO_JOB, HELLO_RELEASE_JOB};
 use super::lint::{entries, entry};
-use super::release_files::{REPO, native_files, package_files, sorted, targets};
+use super::release_files::{REPO, native_files, sorted, targets};
 use super::testdir::TestDir;
 use super::{workflows, yaml};
 
@@ -31,17 +30,9 @@ const XTASK: &str = env!("CARGO_BIN_EXE_xtask");
 /// The release the dispatches name.
 const RELEASE: &str = "1.2.3";
 
-/// The files of hello's release `release` and of its failing build: their archives, bundles and
-/// indexes, and hello's native packages.
+/// The files of hello's release `release`: its native packages and their bundles.
 fn release_files(release: &str) -> BTreeMap<String, Vec<u8>> {
-    let mut files = package_files("hello", release, "hello-index.json");
-    files.extend(package_files(
-        "hello",
-        &format!("{release}-fail-ready"),
-        "hello-fail-ready-index.json",
-    ));
-    files.extend(native_files("hello", release));
-    files
+    native_files("hello", release)
 }
 
 /// A scratch site: the fakes on `bin/`, the release assets the fake curl serves.
@@ -263,10 +254,9 @@ fn set_with() -> Ended {
 
 #[test]
 fn a_dispatch_sets_hellos_version_with_its_native_targets_alone() {
-    // Catches: the job reading the failing build's index or archives, targets not hello's own
-    // `.deb` alone per Linux platform (an archive entry still in a list, a list for macOS, the
-    // `.deb`s not downloaded or not read), an index or its digest still given to `set-desired`,
-    // and the job's outputs not the ones set-desired is given.
+    // Catches: targets not hello's own `.deb` alone per Linux platform (a list for macOS, the
+    // `.deb`s not downloaded or not read), an index or its digest given to `set-desired`, and the
+    // job's outputs not the ones set-desired is given.
     let site = Site::new("hello");
     assert_eq!(dispatch(&site, RELEASE), set_with());
 }
@@ -290,14 +280,11 @@ fn a_version_that_is_not_a_release_stops_the_job_before_any_download() {
 }
 
 #[test]
-fn a_release_without_its_index_a_linux_archive_or_a_deb_stops_at_the_download() {
+fn a_release_without_a_deb_or_its_bundle_stops_at_the_download() {
     // Catches: a download that goes on past a missing file (curl without `--fail-early` ends
-    // with the last transfer's status), and so a set made without the index, a Linux archive
-    // whose manifest the entry takes, or a platform's `.deb` or its bundle (its hosts would
-    // never be ordered).
+    // with the last transfer's status), and so a set made without a platform's `.deb` or its
+    // bundle (its hosts would never be ordered).
     for (n, missing) in [
-        "hello-index.json",
-        "hello-1.2.3-linux-arm64.tar.zst",
         "hello_1.2.3_arm64.deb",
         "hello_1.2.3_amd64.deb.sigstore.json",
     ]
@@ -308,7 +295,7 @@ fn a_release_without_its_index_a_linux_archive_or_a_deb_stops_at_the_download() 
         std::fs::remove_file(site.asset(missing)).expect("remove an asset");
         assert_eq!(
             dispatch(&site, RELEASE),
-            Ended::Failed("Download hello's index, Linux archives and .debs".to_owned()),
+            Ended::Failed("Download hello's .debs and their bundles".to_owned()),
             "{missing}"
         );
     }
@@ -316,16 +303,12 @@ fn a_release_without_its_index_a_linux_archive_or_a_deb_stops_at_the_download() 
 
 #[test]
 fn a_release_without_what_no_list_carries_is_still_set() {
-    // Catches: the job downloading or reading files no entry is made of: macOS's archive and
-    // installer (macOS has no list), and the archives' bundles (no archive entry is written).
+    // Catches: the job downloading or reading files no entry is made of: macOS's installer and
+    // its bundle (macOS has no list).
     let site = Site::new("unread");
     for missing in [
-        "hello-1.2.3-macos-arm64.tar.zst",
-        "hello-1.2.3-macos-arm64.tar.zst.sigstore.json",
         "hello-1.2.3-macos-arm64.pkg",
         "hello-1.2.3-macos-arm64.pkg.sigstore.json",
-        "hello-1.2.3-linux-arm64.tar.zst.sigstore.json",
-        "hello-1.2.3-linux-x86_64.tar.zst.sigstore.json",
     ] {
         std::fs::remove_file(site.asset(missing)).expect("remove an asset");
     }
@@ -338,22 +321,6 @@ fn a_native_package_its_bundle_does_not_list_stops_at_the_targets() {
     // release asset replaced after its attestation), which the host would install.
     let site = Site::new("native-replaced");
     std::fs::write(site.asset("hello_1.2.3_amd64.deb"), b"other bytes").expect("replace");
-    assert_eq!(
-        dispatch(&site, RELEASE),
-        Ended::Failed("The targets of hello's package".to_owned())
-    );
-}
-
-#[test]
-fn an_archive_that_is_not_the_one_its_index_lists_stops_at_the_targets() {
-    // Catches: a native entry made from the manifest of an archive whose bytes the index does
-    // not list (a release asset replaced after its index was written).
-    let site = Site::new("replaced");
-    std::fs::write(
-        site.asset("hello-1.2.3-linux-x86_64.tar.zst"),
-        b"other bytes",
-    )
-    .expect("replace an archive");
     assert_eq!(
         dispatch(&site, RELEASE),
         Ended::Failed("The targets of hello's package".to_owned())

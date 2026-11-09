@@ -15,7 +15,7 @@
 //! - it declares no dependency.
 //!
 //! Every problem is one line. The static rule of hostkeeper's own packages is not applied: a
-//! service's programs are built as its archive package's are.
+//! service's programs are built on the release runner.
 
 use std::collections::BTreeMap;
 use std::path::Path;
