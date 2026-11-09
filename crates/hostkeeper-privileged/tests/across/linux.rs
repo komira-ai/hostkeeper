@@ -1,17 +1,29 @@
 //! The Linux host of the cross-release rig: the daemon's own unit `hostkeeper.service` under the
-//! host's systemd, as the deb leaves a host.
+//! host's systemd, as hostkeeper's `.deb` leaves a host.
+//!
+//! **The package.** hostkeeper is on this host as its `.deb` (`super::deb` builds it around the
+//! binary of each version and installs the released version's with `dpkg -i`, which runs the
+//! shipped `postinst`), so the unit, the tmpfiles rules, the pinned `gh` and the trusted root, the
+//! template of the config and the issue link are the package's files at the places it installs
+//! them, and the package is in the host's dpkg database ([`Host::package_version`],
+//! [`Host::package_held`]). The drop purges it (the shipped `prerm` runs) and puts back what was
+//! moved aside.
 //!
 //! **The unit.** The text is the package unit, `packaging/linux/units/hostkeeper.service`
 //! ([`REAL_UNIT`]; the unit that starts `current`, because the rig stages the released binary as
-//! `current` itself and does not run the deb's packaged start), with one change ([`unit_text`]):
-//! `ExecStart=` runs the same `current` of the binary directory with the same flags, at the
-//! test's directories (the end-to-end rig's tree, `super::super::e2e::host_root`) and with
-//! `--heartbeat-secs 1`. A change to the real `ExecStart=` that this does not know fails the
-//! test by name. The unit is installed where the deb installs it ([`DEB_UNIT`]) and enabled by
-//! the link `systemctl enable` makes ([`WANTS_LINK`]); each hostkeeper package of the rig
-//! carries the same text as `units/hostkeeper.service`, which the daemon links into
-//! `/etc/systemd/system` ([`LINKED_UNIT`])
-//! in its place, as a release's unit takes the deb's place on a host.
+//! `current` itself and does not run the `.deb`'s packaged start through `/usr/bin/hostkeeper`),
+//! with one change ([`unit_text`]): `ExecStart=` runs the same `current` of the binary directory
+//! with the same flags, at the test's directories (the end-to-end rig's tree,
+//! `super::super::e2e::host_root`) and with `--heartbeat-secs 1`. A change to the real
+//! `ExecStart=` that this does not know fails the test by name. Every `.deb` of the rig carries
+//! this text as `usr/lib/systemd/system/hostkeeper.service` ([`DEB_UNIT`]), which `postinst`
+//! enables ([`WANTS_LINK`]). hostkeeper's `.deb` is the only thing that installs a unit of
+//! hostkeeper: the archive's unit is never linked into `/etc/systemd/system` ([`LINKED_UNIT`]),
+//! so nothing is there.
+//!
+//! **The repository entries.** `/etc/hostkeeper/repositories/` is a fixed place of the daemon
+//! (no flag): [`Host::new`] moves `/etc/hostkeeper` aside and `super::deb` makes the directory
+//! with the rig's one entry and its keyring.
 //!
 //! **The fallback.** The hand-over has no fallback unit and no drop-in
 //! (docs/design/two-programs.md, section 4.3): when this build fails its start, the released
@@ -19,13 +31,13 @@
 //!
 //! These are fixed places of the host, which is why the rig runs only on a throwaway runner:
 //! [`Host::new`] moves aside whatever is at them (with the end-to-end rig's own, which
-//! [`HostRoot`] takes over) and the drop stops the units, removes what the test and the daemon
-//! put there and puts back what was moved aside, failed or not. A failing test first prints the
-//! journal of the daemon's unit and of hostkeeper's step units, and keeps them with the end-to-end
-//! rig's artifacts.
+//! [`HostRoot`] takes over) and the drop stops the units, lets go of the package's hold,
+//! purges the package, removes what the test, the package's scripts and the daemon put there and
+//! puts back what was moved aside, failed or not. A failing test first prints the journal of the
+//! daemon's unit and of hostkeeper's step units, and keeps them with the end-to-end rig's
+//! artifacts.
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -47,14 +59,62 @@ pub const DEB_UNIT: &str = "/usr/lib/systemd/system/hostkeeper.service";
 pub const LINKED_UNIT: &str = "/etc/systemd/system/hostkeeper.service";
 /// The link `systemctl enable` makes for [`DEB_UNIT`].
 pub const WANTS_LINK: &str = "/etc/systemd/system/multi-user.target.wants/hostkeeper.service";
+/// The package, as dpkg names it.
+pub const PACKAGE: &str = "hostkeeper";
+/// The directory the daemon reads its repository entries from, below the host's own
+/// `/etc/hostkeeper`.
+pub const REPOSITORIES_DIR: &str = hostkeeper_install::repository::config::REPOSITORIES_DIR;
 /// The glob of the transient units the daemon runs hostkeeper's hook steps in.
 const STEP_UNITS: &str = "updater-hostkeeper-*.service";
 /// Where `journalctl` is.
 const JOURNALCTL: &str = "/usr/bin/journalctl";
 
-/// The places of the host this host takes over beside [`HostRoot`]'s.
-fn taken_places() -> [PathBuf; 3] {
-    [DEB_UNIT, LINKED_UNIT, WANTS_LINK].map(PathBuf::from)
+/// The places of the host this host takes over beside [`HostRoot`]'s: the package's unit and
+/// its links, the daemon's configuration directory, and the directories `postinst`'s tmpfiles
+/// rules make that no test of the rig uses.
+fn taken_places() -> [PathBuf; 6] {
+    [
+        DEB_UNIT,
+        LINKED_UNIT,
+        WANTS_LINK,
+        "/etc/hostkeeper",
+        "/var/lib/updater",
+        "/run/hostkeeper",
+    ]
+    .map(PathBuf::from)
+}
+
+/// Removes the file, the link or the directory tree at `place`, if there is one.
+fn take_away(place: &Path) {
+    match fs::symlink_metadata(place) {
+        Ok(meta) if meta.is_dir() => {
+            let _ = fs::remove_dir_all(place);
+        }
+        Ok(_) => {
+            let _ = fs::remove_file(place);
+        }
+        Err(_) => {}
+    }
+}
+
+/// Runs `program` with `args` as dpkg and apt tools are run in a script: no questions asked, the
+/// locale the C one. Gives what it printed, and whether it ended 0.
+fn run_tool(program: &str, args: &[&str]) -> (bool, String) {
+    let out = Command::new(program)
+        .args(args)
+        .env("LC_ALL", "C")
+        .env("DEBIAN_FRONTEND", "noninteractive")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap_or_else(|e| panic!("run {program}: {e}"));
+    (
+        out.status.success(),
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        ),
+    )
 }
 
 /// `path` as text, for a unit file.
@@ -138,6 +198,12 @@ impl Host {
     /// The test is not root under systemd, or a place cannot be moved aside.
     pub fn new(tag: &str) -> Host {
         let _ = systemctl(&["stop", MAIN]);
+        let (known, _) = run_tool("dpkg-query", &["-W", PACKAGE]);
+        assert!(
+            !known,
+            "the host's dpkg database knows the package {PACKAGE}: the rig runs only on a host that \
+             has never had hostkeeper's .deb"
+        );
         let root = HostRoot::new(tag);
         let pid = std::process::id();
         let saved = taken_places()
@@ -159,14 +225,36 @@ impl Host {
         &self.root
     }
 
-    /// The unit hostkeeper's package carries: [`unit_text`].
-    pub fn package_unit(root: &HostRoot) -> Option<String> {
-        Some(unit_text(root))
+    /// Installs the `.deb` at `deb` with `dpkg -i`, which runs its `postinst`.
+    ///
+    /// # Panics
+    /// `dpkg` fails; the message has what it printed.
+    pub fn install_package(&self, deb: &Path) {
+        let (ok, text) = run_tool("dpkg", &["-i", &plain(deb)]);
+        assert!(ok, "dpkg -i {} failed:\n{text}", deb.display());
     }
 
-    /// Stages `first` as version `version` of the binary directory, `current` naming it, installs
-    /// and enables the unit where the deb does, and starts it: `systemctl start` returns once the
-    /// daemon is ready.
+    /// The version of the package when dpkg has it installed whole, `None` otherwise.
+    pub fn package_version(&self) -> Option<String> {
+        let (ok, text) = run_tool(
+            "dpkg-query",
+            &["-W", "-f=${Version}\\t${db:Status-Abbrev}\\n", PACKAGE],
+        );
+        let (version, status) = text.trim_end().split_once('\t').filter(|_| ok)?;
+        // The abbreviation is the wanted state, the state and the error: `hi ` is installed and
+        // held.
+        (status.as_bytes().get(1) == Some(&b'i')).then(|| version.to_owned())
+    }
+
+    /// Whether the package is on apt's list of held packages.
+    pub fn package_held(&self) -> bool {
+        let (_, text) = run_tool("apt-mark", &["showhold"]);
+        text.lines().any(|line| line == PACKAGE)
+    }
+
+    /// Stages `first` as version `version` of the binary directory, `current` naming it, and
+    /// starts the unit the installed `.deb` enabled: `systemctl start` returns once the daemon is
+    /// ready.
     ///
     /// # Panics
     /// The binary cannot be staged, or the unit does not start.
@@ -176,13 +264,6 @@ impl Host {
             .stage(version, first)
             .expect("stage the first binary");
         layout.switch(version).expect("switch to it");
-        fs::write(DEB_UNIT, unit_text(&self.root))
-            .unwrap_or_else(|e| panic!("write {DEB_UNIT}: {e}"));
-        fs::set_permissions(DEB_UNIT, fs::Permissions::from_mode(0o644)).expect("its mode");
-        let wants = Path::new(WANTS_LINK);
-        fs::create_dir_all(wants.parent().expect("the wants directory"))
-            .expect("the wants directory");
-        std::os::unix::fs::symlink(DEB_UNIT, wants).expect("the deb's enable link");
         let _ = systemctl(&["daemon-reload"]);
         let started = systemctl(&["start", MAIN]);
         assert!(
@@ -261,8 +342,13 @@ impl Drop for Host {
             }
         }
         let _ = systemctl(&["stop", MAIN, STEP_UNITS]);
+        // A package a stopped step left half configured is finished first, so that the purge
+        // can run.
+        let _ = run_tool("dpkg", &["--configure", "-a"]);
+        let _ = run_tool("apt-mark", &["unhold", PACKAGE]);
+        let _ = run_tool("dpkg", &["--purge", PACKAGE]);
         for place in taken_places() {
-            let _ = fs::remove_file(&place);
+            take_away(&place);
         }
         for (place, aside) in &self.saved {
             let _ = fs::rename(aside, place);

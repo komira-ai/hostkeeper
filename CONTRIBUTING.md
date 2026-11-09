@@ -293,14 +293,17 @@ the pin again and fails by name when it is missing or differs; it fetches nothin
 
 The released daemon runs as the host's own daemon (`hostkeeper.service` where the deb installs
 it, or the launchd job `dev.hostkeeper.hostkeeper` where the pkg puts it), on the end-to-end rig:
-the real coordinator ordering hostkeeper, the loopback release channel, the pinned `gh` against
-the test's trust root, which the released daemon reads from the host's fixed path as this build
-does. This build is the program `hostkeeper-named-daemon` (the shipped daemon, its hand-over
-acted on first, its version the name of the file it runs from, so it runs as versions newer than
-the release) and `hostkeeper-failing-daemon` (whose `daemon` exits 1). This build's packages carry the
-workload fixture as their hook (`bin/hook`), because a build's floor in a pull request is below the
-daemon's legacy floor and a daemon then runs the hook's command. The pin is release R2, v0.1.194,
-a release that updates itself by the hand-over and writes no fallback unit, drop-in or job.
+the real coordinator ordering hostkeeper, the pinned `gh` against the test's trust root, which the
+released daemon reads from the host's fixed path as this build does. On Linux the coordinator
+orders hostkeeper as a release from stage 9 on does (docs/design/packages-native.md, section
+10.5): by targets alone, each list one `apt` entry of hostkeeper's `.deb` from a signed apt
+repository the test serves on loopback (`tests/across/deb.rs`), and the host starts from the
+released version's `.deb` installed and adopted; on a Mac, where no daemon announces `macos-pkg`
+yet, it orders the `hostkeeper-archive` entry from a loopback release channel, as before. This
+build is the program `hostkeeper-named-daemon` (the shipped daemon, its hand-over acted on first,
+its version the name of the file it runs from, so it runs as versions newer than the release) and
+`hostkeeper-failing-daemon` (whose `daemon` exits 1). The pin is a release from A19 on (one that
+installs `apt` entries and updates itself through its `.deb`).
 The tests, each from the released daemon converged on its own version's package:
 
 - `the_released_daemon_updates_to_this_build_and_this_build_settles_it_succeeded`: the released

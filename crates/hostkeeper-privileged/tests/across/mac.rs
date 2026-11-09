@@ -1,6 +1,11 @@
 //! The Mac host of the cross-release rig: the daemon's own job `dev.hostkeeper.hostkeeper` under
 //! the host's launchd, as the pkg leaves a Mac.
 //!
+//! **Archive orders still.** No daemon announces `macos-pkg` yet, so a Mac can take no native
+//! entry: this host and the Mac half of the rig (`super::archive`) are as they were before the
+//! Linux half moved to native `.deb` orders (`super::deb`), and hostkeeper's package here is the
+//! archive, ordered by its entry and the release index.
+//!
 //! **The job.** Its plist is the daemon's own (`hostkeeper_launchd::daemon_plist` of
 //! `DaemonJob::standard`'s label: `RunAtLoad` and `KeepAlive` true, so that the clean exit of a
 //! self-update starts `current` again), at the place the pkg puts it ([`DAEMON_PLIST`]), its

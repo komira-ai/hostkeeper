@@ -11,56 +11,65 @@
 //!   real ports, its hand-over of its own update acted on first, its version the name of the file
 //!   it runs from) at versions newer than the pinned release ([`newer`]), and
 //!   `hostkeeper-failing-daemon` for a version made to fail its start.
-//! - **hostkeeper's package** of each version is built here as the release builder lays it out
-//!   (`crates/xtask/src/release/package.rs`): `bin/hostkeeper`, `files/trusted_root.json`,
-//!   `manifest.toml`, and on Linux `units/hostkeeper.service`; its manifest is the release's, the
-//!   floor the release builder of the build the binary comes from writes ([`floor`]) and its
-//!   hook. The released version's hook is the release's own, `bin/hostkeeper update-hook`, which
-//!   the released daemon does not run (it runs its built-in steps at that floor); this build's is
-//!   the workload fixture `bin/hook` (ending every step 0), because a dev build's floor is at or
-//!   below the daemon's legacy floor and a daemon then runs the hook's command, which this
-//!   build's binary has no verb for. Two things differ from a
-//!   release, both because the test is a host of its own: the packaged trusted root is the test
-//!   signer's, the root the host's copy holds too (the daemon uses whichever of the two was
-//!   written last, so a packaged production root would refuse every later package), and the
-//!   unit names the test's directories (`linux::unit_text`). The released version's package is
-//!   built the same way around the released binary.
+//! - **hostkeeper's package** of each version is a native package on Linux and an archive on a
+//!   Mac. Linux (`deb`): a `.deb` built around the binary of the version as
+//!   `packaging/linux/nfpm.yaml` lays it out, in a signed apt repository on loopback; the
+//!   coordinator in process orders it by targets alone, the one `apt` entry of
+//!   `release targets` for the host's platform and no release index, as CI's set of a release
+//!   does from A24 on, and the daemon installs it through its entry. macOS (`archive`): no daemon
+//!   announces `macos-pkg` yet, so a Mac keeps the archive orders it had, by the entry and the
+//!   release index through the release channel; the Mac half of the rig and its module are
+//!   unchanged by the move.
 //! - **The rest is the end-to-end rig** (`tests/e2e/`): the real coordinator in process,
-//!   managing the service `hostkeeper` for the test's host; the release channel on loopback; the
-//!   production attestation verifier (the pinned `gh`) against the test signer's trusted root,
-//!   which reaches the released daemon as it reaches this build's: a fixed path of the host, not
-//!   a key of the daemon config, so the published release is pinned and no release is built for
-//!   the test.
-//! - **The host** is the platform's ([`Host`]): on Linux the daemon's own unit
-//!   `hostkeeper.service` under systemd, installed where the deb installs it (`linux`); on a Mac
-//!   the daemon's own job `dev.hostkeeper.hostkeeper` under launchd, its plist where the pkg puts
-//!   it (`mac`). The released daemon updates by the hand-over, so it writes no fallback unit,
-//!   drop-in or job: when this build cannot start, the released binary is what runs again, after
-//!   its three tries.
+//!   managing the service `hostkeeper` for the test's host; the release channel on loopback (a
+//!   Linux daemon is asked for nothing of it: its config names it, as every config does, and the
+//!   tests hold the channel untouched); the production attestation verifier (the pinned `gh`)
+//!   against the test signer's trusted root, which reaches the released daemon as it reaches this
+//!   build's: a fixed path of the host, not a key of the daemon config, so the published release
+//!   is pinned and no release is built for the test.
+//! - **The host** is the platform's ([`Host`]): on Linux the package `hostkeeper` in the host's
+//!   dpkg database, its unit `hostkeeper.service` under systemd where the `.deb` installs it, the
+//!   rig's repository entry in `/etc/hostkeeper/repositories/` (`linux`); on a Mac the daemon's
+//!   own job `dev.hostkeeper.hostkeeper` under launchd, its plist where the pkg puts it (`mac`).
+//!   The released daemon updates by the hand-over, so it writes no fallback unit, drop-in or
+//!   job: when this build cannot start, the released binary is what runs again, after its three
+//!   tries.
 //!
-//! Each test starts from [`Rig::installed`]: the released daemon has installed its own version's
-//! package, as a host the coordinator converged on the release is. Every wait is a bounded count
+//! On Linux the rig relies on a released daemon that can install `apt` entries, adopt the `.deb`
+//! of a host set up from it and update itself through its `.deb` (A19): the release
+//! `previous-release.toml` pins is the first that can.
+//!
+//! Each test starts from [`Rig::installed`]: on Linux the released daemon runs on a host set up
+//! from the `.deb` of its own version (installed with `dpkg -i`, which runs the shipped
+//! `postinst`), and its start adopted the package: it holds it and records it as installed by
+//! `apt`; on a Mac it has installed its own version's package, as a host the coordinator
+//! converged on the release is. Every wait is a bounded count
 //! of tries of an explicit state ([`super::e2e::wait_for`]); nothing is asserted about time.
 
-use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_config::platform::Platform;
 use hostkeeper_privileged::across::{Pin, checked_binary, download_path};
-use hostkeeper_proto::hostkeeper::release::v1::{Blob, Location, Manifest, Target, TargetList};
 use hostkeeper_steps::record::{Loaded, Record, RecordStore, State};
 use hostkeeper_steps::{BadVersions, Layout};
 use serde_json::Value;
 
 use super::e2e::channel::ReleaseChannel;
 use super::e2e::coordinator::CoordinatorHandle;
-use super::e2e::package::{ArchiveEntry, compressed_archive};
 use super::e2e::scenario::{COORDINATED, LOCAL, pinned_gh};
 use super::e2e::signer::FixtureSigner;
 use super::e2e::{HOST_ID, ROLE, wait_for};
 
+#[cfg(target_os = "macos")]
+mod archive;
+#[cfg(target_os = "macos")]
+pub use archive::Built;
+#[cfg(target_os = "linux")]
+mod deb;
+#[cfg(target_os = "linux")]
+pub use deb::Built;
 #[cfg(target_os = "linux")]
 pub mod linux;
 #[cfg(target_os = "linux")]
@@ -69,11 +78,17 @@ pub use linux::Host;
 pub mod mac;
 #[cfg(target_os = "macos")]
 pub use mac::Host;
+/// The fixture repository's builder, which the Linux rig's `.deb` repository is made with.
+#[cfg(target_os = "linux")]
+#[allow(
+    dead_code,
+    reason = "the rig uses part of the apt device test's repository builder"
+)]
+#[path = "../install_apt/repo.rs"]
+mod repo;
 
 /// The service of hostkeeper itself.
 pub const HK: &str = "hostkeeper";
-/// The workload fixture, the hook of the packages of this build.
-pub const HOOK: &str = env!("CARGO_BIN_EXE_hostkeeper-fixture-hook");
 /// This build's `hostkeeper`, its version the name of the file it runs from.
 pub const NAMED: &str = env!("CARGO_BIN_EXE_hostkeeper-named-daemon");
 /// This build's `hostkeeper` made to fail its start.
@@ -145,7 +160,8 @@ pub fn newer(version: &str, step: u64) -> String {
 /// against (`hostkeeper_unpack::running_hostkeeper`), whatever name the program runs under; a
 /// higher floor is `daemon_too_old` to it. In a pull request the floor is therefore the
 /// workspace's `0.1.0`, at or below the legacy floor, so a daemon runs the hook's command of
-/// this build's package: the workload fixture ([`manifest`]).
+/// this build's package: the workload fixture (on a Mac, `archive::manifest`; a Linux entry has no
+/// hook command and runs the built-in steps whatever the floor).
 pub fn floor(build: Build, released: &str) -> String {
     let (oldest, built) = match build {
         Build::Released => (
@@ -160,128 +176,17 @@ pub fn floor(build: Build, released: &str) -> String {
     oldest.min(built).to_string()
 }
 
-/// The manifest of hostkeeper's package of `build` at `version` with the floor `floor`, as the
-/// release builder writes it; this build's hook is the workload fixture `bin/hook` in mode `ok`
-/// ([`HOOK`]) in place of `bin/hostkeeper update-hook`, which its binary has no verb for.
-pub fn manifest(version: &str, floor: &str, build: Build) -> String {
-    let platform = Platform::current();
-    let units = if cfg!(target_os = "linux") {
-        "\n[units]\nrun = [\"hostkeeper.service\"]\n"
-    } else {
-        ""
-    };
-    let (command, params) = match build {
-        Build::Released => ("\"bin/hostkeeper\", \"update-hook\"", ""),
-        Build::This | Build::Failing => ("\"bin/hook\"", "\n[params]\n\"fixture.mode\" = \"ok\"\n"),
-    };
-    format!(
-        "schema = 1\n\
-         name = \"{HK}\"\n\
-         version = \"{version}\"\n\
-         platform = \"{platform}\"\n\
-         min_hostkeeper = \"{floor}\"\n\
-         \n\
-         [hook]\n\
-         command = [{command}]\n\
-         verify_deadline_secs = 600\n\
-         \n\
-         [hook.timeout_secs]\n\
-         prepare = 300\n\
-         cutover = 300\n\
-         verify = 300\n\
-         rollback = 300\n\
-         cleanup = 300\n\
-         {params}{units}"
-    )
-}
-
-/// The store of the release channel, which the entries of the rig's sets name: the one a daemon
-/// without a `stores.toml` has.
-pub const CHANNEL_STORE: &str = "channel";
-
-/// A package of hostkeeper the rig built and published.
-#[derive(Clone, Debug)]
-pub struct Built {
-    pub version: String,
-    /// The archive's SHA-256.
-    pub sha256: String,
-    /// The archive's size.
-    pub bytes: u64,
-    /// The archive's name on the channel, `<service>-<version>-<platform>.tar.zst`.
-    pub file_name: String,
-    /// The SHA-256 of the attestation bundle beside the archive.
-    pub bundle_sha256: String,
-    /// The bundle's size.
-    pub bundle_bytes: u64,
-    /// The `min_hostkeeper` of the package's manifest, and of its entry's.
-    pub floor: String,
-    /// The text of the version's `index.json` on the channel, and its SHA-256.
-    pub index: String,
-    pub index_sha256: String,
-}
-
-impl Built {
-    /// The path of the version's release index on the channel, as a request for it is logged.
-    pub fn index_path(&self) -> String {
-        format!("/{HK}/{}/index.json", self.version)
-    }
-
-    /// The path of the archive in the channel's store, as a location names it: `S/V/S-V-platform.tar.zst`,
-    /// below the base of the release channel (the form of `release targets`).
-    pub fn archive_locator(&self) -> String {
-        format!("{HK}/{}/{}", self.version, self.file_name)
-    }
-
-    /// The path of the bundle in the channel's store: the archive's, with `.sigstore.json`.
-    pub fn bundle_locator(&self) -> String {
-        format!("{}.sigstore.json", self.archive_locator())
-    }
-
-    /// The one `hostkeeper-archive` entry of this package for the host's platform, as CI's set
-    /// writes it (`crates/xtask/src/release/targets.rs`) with the channel as the only store: the
-    /// archive and its bundle at their locators, their digests and sizes, and the manifest's
-    /// floor.
-    pub fn entry(&self) -> Target {
-        let at = |locator: String| Location {
-            store: CHANNEL_STORE.to_owned(),
-            locator,
-        };
-        Target {
-            installer: "hostkeeper-archive".to_owned(),
-            locations: vec![at(self.archive_locator())],
-            digest: self.sha256.clone(),
-            bytes: self.bytes,
-            attestation: Some(Blob {
-                digest: self.bundle_sha256.clone(),
-                bytes: self.bundle_bytes,
-                locations: vec![at(self.bundle_locator())],
-            }),
-            manifest: Some(Manifest {
-                min_hostkeeper: self.floor.clone(),
-                ..Manifest::default()
-            }),
-            repository: None,
-            package_version: None,
-        }
-    }
-
-    /// The `targets` of a set of this package: the entry for the host's platform.
-    pub fn targets(&self) -> BTreeMap<String, TargetList> {
-        BTreeMap::from([(
-            Platform::current().to_string(),
-            TargetList {
-                entries: vec![self.entry()],
-            },
-        )])
-    }
-}
-
 /// The rig of one test. The fields are dropped in this order: the coordinator and the channel,
 /// then the host (the daemon stopped, every place the test took over put back).
 pub struct Rig {
     pub coordinator: CoordinatorHandle,
     pub channel: ReleaseChannel,
+    /// The test signer, which signs the archives of a Mac's packages.
+    #[cfg(target_os = "macos")]
     pub signer: FixtureSigner,
+    /// The apt repository of hostkeeper's `.deb`s and the host's entry of it.
+    #[cfg(target_os = "linux")]
+    repository: deb::Repository,
     /// The pinned release's version.
     pub released: String,
     /// The pinned release's daemon binary.
@@ -297,11 +202,12 @@ impl Drop for Rig {
         }
         eprintln!(
             "the coordinator's view when the test failed:\nreleases status:\n{}\n\
-             releases converge:\n{}\nrelease channel requests:\n{:#?}\nstep record:\n{:#?}\n",
+             releases converge:\n{}\nrelease channel requests:\n{:#?}\nstep record:\n{:#?}\n{}",
             self.coordinator.status_text(HK),
             self.coordinator.converge_text(HK),
             self.channel.requests(),
             record_in(&self.host.root().state()),
+            self.native_view(),
         );
     }
 }
@@ -309,8 +215,9 @@ impl Drop for Rig {
 impl Rig {
     /// The whole rig up: the host, the pinned `gh`, the signer's trusted root, the release
     /// channel, the coordinator managing hostkeeper, the daemon config, and the released daemon
-    /// started as the host's daemon and approved as [`HOST_ID`]; nothing ordered yet. `tag`
-    /// (1 to 8 of `[a-z0-9]`) names the test's tree.
+    /// started as the host's daemon and approved as [`HOST_ID`]; nothing ordered yet. On Linux
+    /// the host also has the apt repository and its entry, and the daemon starts on the `.deb` of
+    /// its own version, installed beforehand. `tag` (1 to 8 of `[a-z0-9]`) names the test's tree.
     pub fn start(tag: &str) -> Rig {
         let pin = pin();
         let released_binary = released_binary(&pin);
@@ -334,31 +241,35 @@ impl Rig {
         let first = host.root().base().join(format!("released-{released}"));
         fs::write(&first, &released_binary)
             .unwrap_or_else(|e| panic!("write {}: {e}", first.display()));
-        host.start(&first, &released);
-        coordinator.approve_enrollment(HOST_ID, HK);
-        Rig {
+        #[cfg(target_os = "linux")]
+        let repository = deb::Repository::new(host.root().base());
+        let rig = Rig {
             coordinator,
             channel,
+            #[cfg(target_os = "macos")]
             signer,
+            #[cfg(target_os = "linux")]
+            repository,
             released,
             released_binary,
             host,
-        }
+        };
+        rig.start_released(&first);
+        rig.coordinator.approve_enrollment(HOST_ID, HK);
+        rig
     }
 
-    /// [`Rig::start`], then the released version's package installed by the coordinator's
-    /// order: the install of the version that runs, which the daemon takes without a restart.
-    /// It returns once the host has reported that order `OUTCOME_SUCCEEDED`, not only once the
-    /// coordinator counts the host converged: the host runs that version from its start, so it is
-    /// counted converged while the install order may still be running, and a test's next order
-    /// sent then would be answered `busy` with it.
+    /// [`Rig::start`], then the released version's package in place as the host the coordinator
+    /// converged on the release is. On Linux the released daemon adopted the `.deb` the host was
+    /// set up with at its start: it holds it and records it as installed by `apt`. On a Mac the
+    /// released version's package was installed by the coordinator's order; it returns once the
+    /// host has reported that order `OUTCOME_SUCCEEDED`, not only once the coordinator counts the
+    /// host converged (the host runs that version from its start, so it is counted converged
+    /// while the install order may still be running, and a test's next order sent then would be
+    /// answered `busy` with it).
     pub fn installed(tag: &str) -> Rig {
         let rig = Rig::start(tag);
-        let released = rig.released.clone();
-        let built = rig.publish(&released, Build::Released);
-        rig.order(&built);
-        rig.wait_converged(&released);
-        rig.wait_reported(&released, "OUTCOME_SUCCEEDED");
+        rig.converge_on_released();
         rig
     }
 
@@ -369,102 +280,6 @@ impl Rig {
             Build::This => fs::read(NAMED).unwrap_or_else(|e| panic!("read {NAMED}: {e}")),
             Build::Failing => fs::read(FAILING).unwrap_or_else(|e| panic!("read {FAILING}: {e}")),
         }
-    }
-
-    /// Builds hostkeeper's package at `version` carrying the `hostkeeper` of `build`, signs it
-    /// and publishes it on the release channel.
-    pub fn publish(&self, version: &str, build: Build) -> Built {
-        let binary = self.binary(build);
-        let floor = floor(build, &self.released);
-        let manifest = manifest(version, &floor, build);
-        let root = self.signer.trusted_root_jsonl();
-        let unit = Host::package_unit(self.host.root());
-        let hook = (build != Build::Released)
-            .then(|| fs::read(HOOK).unwrap_or_else(|e| panic!("read {HOOK}: {e}")));
-        let mut entries = vec![
-            ArchiveEntry {
-                name: "bin/",
-                mode: 0o555,
-                data: b"",
-            },
-            ArchiveEntry {
-                name: "bin/hostkeeper",
-                mode: 0o555,
-                data: &binary,
-            },
-            ArchiveEntry {
-                name: "files/",
-                mode: 0o555,
-                data: b"",
-            },
-            ArchiveEntry {
-                name: "files/trusted_root.json",
-                mode: 0o444,
-                data: root.as_bytes(),
-            },
-            ArchiveEntry {
-                name: "manifest.toml",
-                mode: 0o444,
-                data: manifest.as_bytes(),
-            },
-        ];
-        if let Some(hook) = &hook {
-            entries.push(ArchiveEntry {
-                name: "bin/hook",
-                mode: 0o555,
-                data: hook,
-            });
-        }
-        if let Some(unit) = &unit {
-            entries.push(ArchiveEntry {
-                name: "units/",
-                mode: 0o555,
-                data: b"",
-            });
-            entries.push(ArchiveEntry {
-                name: "units/hostkeeper.service",
-                mode: 0o444,
-                data: unit.as_bytes(),
-            });
-        }
-        let bytes = compressed_archive(&entries);
-        let sha256 = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&bytes));
-        let file_name = format!("{HK}-{version}-{}.tar.zst", Platform::current());
-        let bundle = self.signer.bundle(&file_name, &sha256);
-        let (archive_len, bundle_len) = (bytes.len() as u64, bundle.len() as u64);
-        let bundle_sha256 = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&bundle));
-        self.channel.publish(HK, version, &file_name, bytes, bundle);
-        let index = self
-            .channel
-            .object(&format!("/{HK}/{version}/index.json"))
-            .expect("the channel serves the index it just published");
-        Built {
-            version: version.to_owned(),
-            sha256,
-            bytes: archive_len,
-            file_name,
-            bundle_sha256,
-            bundle_bytes: bundle_len,
-            floor,
-            index_sha256: hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&index)),
-            index: String::from_utf8(index).expect("the index is text"),
-        }
-    }
-
-    /// Sets the desired version of hostkeeper to the published package `built` as CI's set does
-    /// (design stage 2 and 3): by targets, the one `hostkeeper-archive` entry for the host's
-    /// platform ([`Built::entry`]), and the version's release index with its digest, through the
-    /// operator API. A daemon that announces no `target-v1` is ordered the package and the index
-    /// digest of that platform and fetches the index from the channel; one that does is ordered
-    /// the entry and fetches through it.
-    pub fn order(&self, built: &Built) {
-        self.coordinator.set_desired_targets(
-            HK,
-            &built.version,
-            built.targets(),
-            &built.index,
-            &built.index_sha256,
-        );
     }
 
     /// The step record of hostkeeper, when there is one this build reads.

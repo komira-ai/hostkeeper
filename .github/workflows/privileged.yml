@@ -15,7 +15,8 @@
 # hook in step units, roll it back on a failed verify, and force it back to the previous version
 # with the channel down; in self_update_across_releases.rs, on Linux and on the Mac, hostkeeper's
 # update of itself from the published release crates/hostkeeper-privileged/previous-release.toml
-# pins to this build, with the same coordinator, channel and verifier: the released daemon as the
+# pins to this build, with the same coordinator (on Linux through its .deb from a loopback apt
+# repository, on the Mac through the channel and verifier): the released daemon as the
 # host's own unit hostkeeper.service (or its own launchd job dev.hostkeeper.hostkeeper) updating to
 # this build by the hand-over, and falling back to its own binary (three tries, then the update
 # settles Failed) from this build made to fail its start, and this build updating to itself under a newer version name; on the Mac the daemon started as a
