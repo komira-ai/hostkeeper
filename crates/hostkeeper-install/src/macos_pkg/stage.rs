@@ -8,6 +8,8 @@
 //! <staging>/macos-pkg/Bom
 //! ```
 //!
+//! The payload's hook, at its fixed path, is checked with the payload ([`hook`]).
+//!
 //! No package script runs and no tool fetches: `pkgutil` only reads the file, and `lsbom` the
 //! `Bom`. The signature is checked before anything is expanded.
 
@@ -16,7 +18,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use super::payload::{self, LSBOM_ARGS};
-use super::{ARTIFACT, META, MacosPkg, Order, TREE, arg, io, shape, signature};
+use super::{ARTIFACT, META, MacosPkg, Order, TREE, arg, hook, io, shape, signature};
 use crate::host::{self, remove_tree};
 use crate::outcome::{Failure, Reason};
 use crate::tools::{Tool, may_be_cut};
@@ -103,6 +105,7 @@ impl MacosPkg<'_> {
             .map_err(|e| io("the expanded payload", e))?;
         payload::check(&bom, &walked, order.service.as_str(), &order.run)
             .map_err(|e| invalid(&e))?;
+        hook::check(&walked, order.service.as_str(), order.boot).map_err(|e| invalid(&e))?;
         payload::check_jobs(&component.payload(), &bom, &order.run).map_err(|e| invalid(&e))?;
 
         let meta = staging.join(META);

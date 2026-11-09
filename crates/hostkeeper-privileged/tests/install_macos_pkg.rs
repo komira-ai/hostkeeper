@@ -564,6 +564,7 @@ impl Rig {
                 activate: wait,
                 remove: wait,
             },
+            boot: false,
         }
     }
 

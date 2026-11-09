@@ -276,6 +276,7 @@ impl Rig {
                 activate: Duration::from_secs(60),
                 remove: Duration::from_secs(60),
             },
+            boot: false,
         }
     }
 

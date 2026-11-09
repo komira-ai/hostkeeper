@@ -479,6 +479,59 @@ fn stage_refuses_a_package_with_a_script_as_package_scripts_before_its_bom_and_c
     }
 }
 
+/// Catches: a hook at the fixed path that is a directory or not executable, or a `hook.boot`
+/// with no hook in the package, being staged; or a package with an executable hook, with or
+/// without `hook.boot`, being refused. (A hook that is a link is `hook`'s unit test: on Linux a
+/// link's mode is 777, which the payload's mode rule refuses before the hook is looked at; on a
+/// Mac a link is 755 and reaches the hook check.)
+#[test]
+fn stage_checks_the_hook_at_its_fixed_path() {
+    let hook = home("hostkeeper-hook");
+    let program = || Content::File(b"#!/bin/sh\nexit 0\n".to_vec());
+    let refused: Vec<(&str, FakePkg, bool, String)> = vec![
+        (
+            "a directory",
+            with_entry(&hook, Content::Dir, 0o755, &[]),
+            false,
+            format!("the hook {hook} is a directory"),
+        ),
+        (
+            "not executable",
+            with_entry(&hook, program(), 0o644, &[]),
+            false,
+            format!("the hook {hook} is not executable (mode 644)"),
+        ),
+        (
+            "hook.boot with no hook",
+            v1(),
+            true,
+            format!("the entry's hook.boot is set, but the package has no hook at {hook}"),
+        ),
+    ];
+    for (what, pkg, boot, detail) in refused {
+        let rig = Rig::new("stage-hook");
+        rig.mac.add(pkg);
+        let mut order = rig.order_run("1.0", &BOTH);
+        order.boot = boot;
+        let (result, _) = rig.try_stage(&order, "svc-1.0");
+        let err = result.unwrap_err();
+        assert_eq!(err.reason(), Reason::ManifestInvalid, "{what}: {err}");
+        assert_eq!(err.detail(), detail, "{what}");
+        assert!(rig.snapshot().is_empty(), "{what}");
+        no_install_ran(&rig);
+    }
+    for boot in [false, true] {
+        let rig = Rig::new("stage-hook-ok");
+        rig.mac.add(with_entry(&hook, program(), 0o755, &[]));
+        let mut order = rig.order_run("1.0", &BOTH);
+        order.boot = boot;
+        let (result, staging) = rig.try_stage(&order, "svc-1.0");
+        result.unwrap();
+        let staged = staging.join("tree").join(hook.trim_start_matches('/'));
+        assert!(staged.is_file(), "boot {boot}: the hook is in the tree");
+    }
+}
+
 /// Catches: the `PackageInfo` `pkgbuild` writes (its empty `<relocate/>` and `<scripts/>`) being
 /// refused, so that no real package could be staged.
 #[test]

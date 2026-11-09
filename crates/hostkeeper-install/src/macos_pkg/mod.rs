@@ -17,6 +17,7 @@
 
 pub mod activate;
 pub mod drift;
+pub mod hook;
 pub mod payload;
 pub mod receipt;
 pub mod record;
@@ -61,6 +62,8 @@ pub struct Order {
     /// The entry's manifest's `run`: the launchd labels of the jobs the package installs.
     pub run: Vec<Label>,
     pub bounds: Bounds,
+    /// Whether the entry's manifest sets `hook.boot`, which needs the package's [`hook`].
+    pub boot: bool,
 }
 
 /// The bounds of the installer's steps (the manifest's `installer_bounds`); each tool run of a step
