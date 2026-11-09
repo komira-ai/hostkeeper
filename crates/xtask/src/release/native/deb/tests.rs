@@ -225,3 +225,13 @@ fn a_program_that_cannot_be_read_is_an_error_naming_it() {
         "{e:?}"
     );
 }
+
+#[test]
+fn a_commit_time_git_cannot_give_stops_the_build_and_writes_nothing() {
+    // Catches: a deb dated by anything but the commit when git fails.
+    let d = scratch("native-deb-no-time");
+    let r = request(&d, Service::Hello, Platform::LinuxX86_64);
+    let e = deb_with(&r, || Err(Error::Failed("no time".to_owned())), no_pins);
+    assert_eq!(e, Err(Error::Failed("no time".to_owned())));
+    assert!(!d.join("out").exists());
+}

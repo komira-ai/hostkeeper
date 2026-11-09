@@ -287,6 +287,7 @@ fn a_pkg_path_is_the_services_directory_its_jobs_plists_or_a_directory_above() {
         ("Library/LaunchDaemons/hello.a.plist", true),
         ("Library/LaunchDaemons/helloworld.plist", false),
         ("Library/LaunchDaemons/sub/hello.a.plist", false),
+        ("Library/LaunchDaemons/hello.a/b.plist", false),
         ("Library/LaunchAgents/hello.plist", false),
         ("usr/local/bin/hello", false),
         ("Library/Application Support/hellox/x", false),
@@ -408,6 +409,49 @@ fn a_package_info_without_its_element_or_an_attribute_or_with_a_preinstall_and_a
             "PackageInfo: identifier is \"dev.other\", not \"dev.hostkeeper.hello\"",
             "PackageInfo has no install-location",
             "PackageInfo names a preinstall script: a service's pkg has no script",
+        ]
+    );
+}
+
+#[test]
+fn an_expanded_product_without_its_parts_names_each_missing_one() {
+    // Catches: a check that passes a product with no Distribution, or a component with no
+    // PackageInfo or Payload, because it only reads the parts that are there.
+    let d = scratch("native-pkg-parts");
+    let bin = binary(&d);
+    let at = expanded(&d, "0.1.5", &entries(false, 0), &package_info("0.1.5", ""));
+    std::fs::remove_file(at.join("Distribution")).expect("remove");
+    std::fs::remove_file(at.join(COMPONENT).join("PackageInfo")).expect("remove");
+    std::fs::remove_file(at.join(COMPONENT).join("Payload")).expect("remove");
+    assert_eq!(
+        problems(check(&at, &version(), false, &bin)),
+        [
+            "missing Distribution",
+            "missing PackageInfo",
+            "missing Payload"
+        ]
+    );
+    std::fs::remove_dir_all(at.join(COMPONENT)).expect("remove");
+    assert_eq!(
+        problems(check(&at, &version(), false, &bin)),
+        ["missing Distribution", "missing hello.pkg"]
+    );
+}
+
+#[test]
+fn an_entry_of_root_with_a_group_other_than_wheel_or_admin_is_refused() {
+    // Catches: the group of an entry not checked when its owner is root.
+    let d = scratch("native-pkg-group");
+    let bin = binary(&d);
+    let mut list = entries(false, 0);
+    let program = "./Library/Application Support/hello/bin/hello";
+    let at = index_of(&list, program);
+    list[at] = odc_entry(program, 0o100_755, 0, 20, BINARY);
+    let at = expanded(&d, "0.1.5", &list, &package_info("0.1.5", ""));
+    assert_eq!(
+        problems(check(&at, &version(), false, &bin)),
+        [
+            "/Library/Application Support/hello/bin/hello: owned by uid 0 and gid 20, not root and wheel or admin"
         ]
     );
 }
