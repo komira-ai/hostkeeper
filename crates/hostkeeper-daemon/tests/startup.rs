@@ -153,6 +153,7 @@ fn daemon_flag_defaults_are_the_documented_ones() {
             packages_dir: DEFAULT_PACKAGES_DIR.into(),
             admin_socket: None,
             notify_systemd: false,
+            ready_file: None,
             trusted_root_max_age_days: DEFAULT_TRUSTED_ROOT_MAX_AGE_DAYS,
             link: LoopFlags {
                 heartbeat_secs: DEFAULT_HEARTBEAT_SECS,

@@ -577,19 +577,19 @@ Designed (B8); replaces kbf's registration socket (`/run/updater/register.sock`)
 
 The figure is the order of [hostkeeper-mdm.md](hostkeeper-mdm.md): the nonce is pushed after the daemon's request is pending, and bound to it.
 
-The flow is the same; these differ:
+The flow is the same; these differ (a Linux host under OpenRC, an Alpine host, in the last column; [two-programs.md](two-programs.md) section 4.6):
 
-| Aspect | Linux | macOS |
-|---|---|---|
-| Daemon | systemd unit | one launchd daemon, root |
-| Hook run | transient systemd unit | one launchd job per step, as root, for timeout, kill and log capture only; no sandbox profile, no rights |
-| Placed units | symlinks in `/etc/systemd/system` | symlinks to plists in `/Library/LaunchDaemons` |
-| Process identity | `/proc/<pid>/exe` | `proc_pidpath` plus device and inode check (to verify) |
-| Enrollment | operator approval | device enrollment through MDM, a package install, then auto-approval |
-| Hand-over of ports | nft redirect | none; tierstore on a Mac updates with a gap |
-| Live leases | the hook drains in `prepare` | a Mac with live leases defers, reason `leases_live` |
-| Package verification | attestation, archive shape | plus no quarantine attribute and a valid code signature |
-| Self-update | the hand-over: the old binary execs the new one, three tries (no unit) | the same, under launchd `KeepAlive` (no timer job) |
+| Aspect | Linux | macOS | Linux under OpenRC (Alpine; [two-programs.md](two-programs.md) 4.6) |
+|---|---|---|---|
+| Daemon | systemd unit | one launchd daemon, root | one supervise-daemon service, `/etc/init.d/hostkeeper`, root |
+| Hook run | transient systemd unit | one launchd job per step, as root, for timeout, kill and log capture only; no sandbox profile, no rights | a child process group of the daemon per step, bounded and killed by the daemon |
+| Placed units | symlinks in `/etc/systemd/system` | symlinks to plists in `/Library/LaunchDaemons` | `/etc/init.d`; no package ships an init script yet |
+| Process identity | `/proc/<pid>/exe` | `proc_pidpath` plus device and inode check (to verify) | `/proc/<pid>/exe` |
+| Enrollment | operator approval | device enrollment through MDM, a package install, then auto-approval | operator approval |
+| Hand-over of ports | nft redirect | none; tierstore on a Mac updates with a gap | as Linux |
+| Live leases | the hook drains in `prepare` | a Mac with live leases defers, reason `leases_live` | as Linux |
+| Package verification | attestation, archive shape | plus no quarantine attribute and a valid code signature | as Linux |
+| Self-update | the hand-over: the old binary execs the new one, three tries (no unit) | the same, under launchd `KeepAlive` (no timer job) | the same, under supervise-daemon's respawn of the packaged binary, which execs `current` |
 
 Mac enrollment auto-approval, designed: the gate installs a managed config profile (coordinator, CA hash, release channel and trusted signers; no secret), then the hostkeeper installer pkg by allowlisted digest; the pkg's postinstall loads the launchd job, whose daemon writes `hostkeeper.toml` from that profile at its start; once the daemon's request is pending the gate pushes a per-device one-time nonce, bound to that request, as a managed configuration profile; the daemon enrolls with the nonce; the coordinator auto-approves only if the nonce is valid, unexpired (one hour), unused, consumed in the same durable transaction as the approval, issued for the claimed serial and the request, the gate reports the device enrolled and supervised, and the serial is on the allowlist. **MDM is part of hostkeeper, decided:** the policy gate and installer kit are components of this repository with their own design document, [hostkeeper-mdm.md](hostkeeper-mdm.md); this document states only the interface the enrollment path needs. The MDM profile identifier is renamed to `com.komira.hostkeeper.mdm`, the farm's setting, before any Mac enrolls (a build gate on B18).
 

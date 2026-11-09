@@ -5,7 +5,9 @@
 //!   (`OnFailure=` [`FALLBACK_UNIT`], a start limit of three starts in 300 seconds), and the
 //!   fallback unit [`FALLBACK_UNIT`], in the host's unit directory;
 //! - macOS: the fallback timer job, whose plist is [`fallback_label`]`.plist` in the unit
-//!   directory, loaded under the label [`fallback_label`].
+//!   directory, loaded under the label [`fallback_label`];
+//! - OpenRC: none. No release before the hand-over ran on an OpenRC host, so there is nothing to
+//!   remove, and nothing is looked at or told: [`remove`] answers [`Removed::Unchanged`].
 //!
 //! A release before the hand-over armed them when it updated hostkeeper the old way, and they put
 //! the previous binary back when the new one could not start. The hand-over has no unit and no
@@ -98,6 +100,7 @@ pub fn remove(
     match kind {
         PlatformKind::Linux => remove_linux(unit_dir, fs, units),
         PlatformKind::Macos => remove_macos(unit_dir, fs, units),
+        PlatformKind::Openrc => Ok(Removed::Unchanged),
     }
 }
 

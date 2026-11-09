@@ -155,6 +155,10 @@ pub const PRIVILEGED_RUNNERS: &[&str] = &["ubuntu-24.04"];
 /// hostkeeper's update of itself under launchd (`device_mac_selfupdate.rs`).
 pub const MACOS_DEVICE_JOB: &str = "macos-device";
 
+/// The job of [`PRIVILEGED_WORKFLOW`] that runs the daemon under OpenRC in an Alpine container
+/// (`crates/hostkeeper-privileged/tests/openrc_device.rs`), on a [`PRIVILEGED_RUNNERS`] runner.
+pub const OPENRC_DEVICE_JOB: &str = "openrc-device";
+
 /// The runners [`MACOS_DEVICE_JOB`] may run on: GitHub's standard hosted arm64 macOS image of a
 /// named version (passwordless `sudo`, launchd), free for a public repository. No `-latest`
 /// label, and no larger or self-hosted runner.

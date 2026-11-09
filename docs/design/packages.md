@@ -568,7 +568,7 @@ for another architecture or with dependencies the host lacks.
 
 **Built in v1:** `hostkeeper-archive`, `tarball`, `apt`, `macos-pkg`, and `oci-image` (question 2). **Later:** a `dnf`
 backend (A8); until then an RPM-family host takes the tarball, as does a host of any other family. An Alpine host
-also waits on a daemon that runs without systemd (question 5).
+runs the daemon under OpenRC (question 5, answered) and takes the tarball too.
 
 **One build, every release.** Distributions differ in their releases' libraries, not in the formats' tools. A service
 ships one `.deb` for every Debian and Ubuntu release, and one `.rpm` for every RHEL-family and openSUSE release, when:
@@ -971,7 +971,8 @@ payload) by A10, and P10 and P12 (stages 5 and 6) by A11 and A12.
    itself (rule B8). Retiring it would raise the bootstrap floor, which needs a waiver of B8.
 4. **A registry whose token service is on another origin** (section 7.3). Out of v1; allowing one would need a
    `token_origin` key per store.
-5. **Alpine.** The daemon runs only under systemd, and Alpine runs OpenRC, so an Alpine host waits on a daemon with a
-   launcher for OpenRC or with no service manager. Until a design for that is asked for, an Alpine host runs no daemon.
+5. **Alpine.** Answered: the daemon runs under OpenRC beside systemd and launchd, chosen by what the host runs, with
+   its own Alpine package and init script ([two-programs.md](two-programs.md) section 4.6). Its services take the
+   tarball: `apk` is withdrawn with no successor ([packages-repositories.md](packages-repositories.md)).
 6. **Changing a service's installer on a host in place** (a host that runs a tarball moving to the `.deb`). Out of v1:
    it is an uninstall and an install, and a release that drops a format its hosts run shows them `installer_dropped`.

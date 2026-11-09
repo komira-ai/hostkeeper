@@ -24,6 +24,7 @@ const ENROLLMENT: &str = "hostkeeper-enrollment";
 const MDM_GATE: &str = "hostkeeper-mdm-gate";
 const OBSERVE: &str = "hostkeeper-observe";
 const LAUNCHD: &str = "hostkeeper-launchd";
+const OPENRC: &str = "hostkeeper-openrc";
 const MDM: &str = "hostkeeper-mdm";
 const MDM_STEP: &str = "hostkeeper-mdm-step";
 const MEASURE: &str = "hostkeeper-measure";
@@ -96,7 +97,8 @@ pub const LAYERS: [Layer; 31] = [
     (
         DAEMON,
         &[
-            CONFIG, ENROLL, HOOK, LAUNCHD, LINK, OBSERVE, PACKAGE, PLACED, PROTO, STEPS, UNPACK,
+            CONFIG, ENROLL, HOOK, LAUNCHD, LINK, OBSERVE, OPENRC, PACKAGE, PLACED, PROTO, STEPS,
+            UNPACK,
         ],
         &[COORDINATOR, HELLO, OIDC, TLS, WIRE],
     ),
@@ -118,6 +120,7 @@ pub const LAYERS: [Layer; 31] = [
     (MEASURE, &[], &[]),
     (OBSERVE, &[CONFIG, PROTO], &[HOOK, STEPS]),
     (OIDC, &[], &[]),
+    (OPENRC, &[OBSERVE, PLACED, STEPS], &[HOOK]),
     (PACKAGE, &[CONFIG, HOOK, STEPS], &[]),
     (PLACED, &[CONFIG], &[]),
     (

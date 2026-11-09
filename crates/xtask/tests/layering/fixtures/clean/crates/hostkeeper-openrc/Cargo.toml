@@ -1,0 +1,13 @@
+[package]
+name = "hostkeeper-openrc"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+hostkeeper-observe = { path = "../hostkeeper-observe" }
+hostkeeper-placed = { path = "../hostkeeper-placed" }
+hostkeeper-steps = { path = "../hostkeeper-steps" }
+
+[dev-dependencies]
+hostkeeper-hook = { path = "../hostkeeper-hook" }
+hostkeeper-testkit = { path = "../hostkeeper-testkit" }

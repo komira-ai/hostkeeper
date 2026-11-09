@@ -40,6 +40,9 @@ hostkeeper-launchd = { path = "../hostkeeper-launchd" }
 hostkeeper-link = { path = "../hostkeeper-link" }
 # The service observer whose `Observation` `Daemon::status` reports, and its real adapters.
 hostkeeper-observe = { path = "../hostkeeper-observe" }
+# The OpenRC adapters of an Alpine host: the step launcher, the unit control and the service
+# manager (docs/design/two-programs.md, section 4.6).
+hostkeeper-openrc = { path = "../hostkeeper-openrc" }
 # Steps 1 and 2 of design section 5.5 (download, prove), which the real package store composes.
 hostkeeper-package = { path = "../hostkeeper-package" }
 # The placed-path linker a `force` and a first install link, unlink and switch through, an

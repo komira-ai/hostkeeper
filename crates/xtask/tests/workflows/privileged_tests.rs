@@ -11,14 +11,15 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use super::lint::{
-    HOSTED_RUNNERS, ID_TOKEN_ALLOWED, MACOS_DEVICE_JOB, MACOS_DEVICE_RUNNERS, PRIVILEGED_ON,
-    PRIVILEGED_RUNNERS, PRIVILEGED_WORKFLOW, WRITE_ALLOWED, entries, entry, lint,
+    HOSTED_RUNNERS, ID_TOKEN_ALLOWED, MACOS_DEVICE_JOB, MACOS_DEVICE_RUNNERS, OPENRC_DEVICE_JOB,
+    PRIVILEGED_ON, PRIVILEGED_RUNNERS, PRIVILEGED_WORKFLOW, WRITE_ALLOWED, entries, entry, lint,
     privileged_runners, root_line, scalars,
 };
 use super::net_install::{
     self, NET_INSTALL_ARM64_FIRST_LINE, NET_INSTALL_ARM64_JOB, NET_INSTALL_FIRST_LINE,
     NET_INSTALL_JOB, NET_JOBS, apt_steps,
 };
+use super::openrc::OPENRC_FIRST_LINE;
 use super::pr_device;
 use super::release::{REQUIRED_WORKFLOWS, publish_problems};
 use super::yaml::{self, Node, Value};
@@ -483,7 +484,7 @@ const MACOS_FIRST_LINE: &str = "#![cfg(all(target_os = \"macos\", feature = \"pr
 /// The first line of a privileged test file of both the Linux job and [`MACOS_DEVICE_JOB`]: one
 /// target whose tests run against systemd on Linux and against launchd on a Mac (the
 /// cross-release rig, `self_update_across_releases`).
-const BOTH_FIRST_LINE: &str =
+pub const BOTH_FIRST_LINE: &str =
     "#![cfg(all(any(target_os = \"linux\", target_os = \"macos\"), feature = \"privileged\"))]";
 
 /// Whether `text` starts with the attribute `first`, as rustfmt may break it over lines: the same
@@ -495,7 +496,7 @@ pub fn starts_with_attribute(text: &str, first: &str) -> bool {
 
 /// The privileged test targets of crates/hostkeeper-privileged whose first line is `first`: the
 /// files of its `tests/` that start with it, by name without `.rs`.
-fn privileged_targets(first: &str) -> BTreeSet<String> {
+pub fn privileged_targets(first: &str) -> BTreeSet<String> {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../hostkeeper-privileged/tests");
     let mut found = BTreeSet::new();
     for entry in std::fs::read_dir(&dir).expect("list the privileged crate's tests") {
@@ -514,8 +515,9 @@ fn privileged_targets(first: &str) -> BTreeSet<String> {
     found
 }
 
-/// The jobs of privileged.yml and the targets of each: the Linux job's, the first-boot job's and
-/// the macOS job's. A target of both platforms is the Linux job's and the macOS job's.
+/// The jobs of privileged.yml and the targets of each: the Linux job's, the first-boot job's, the
+/// macOS job's and the OpenRC job's. A target of both platforms is the Linux job's and the macOS
+/// job's.
 pub fn committed_targets() -> BTreeMap<&'static str, BTreeSet<String>> {
     let both = privileged_targets(BOTH_FIRST_LINE);
     let with_both = |first: &str| {
@@ -527,6 +529,7 @@ pub fn committed_targets() -> BTreeMap<&'static str, BTreeSet<String>> {
         ("privileged", with_both(LINUX_FIRST_LINE)),
         (FIRST_BOOT_JOB, privileged_targets(FIRST_BOOT_FIRST_LINE)),
         (MACOS_DEVICE_JOB, with_both(MACOS_FIRST_LINE)),
+        (OPENRC_DEVICE_JOB, privileged_targets(OPENRC_FIRST_LINE)),
     ])
 }
 
@@ -596,19 +599,32 @@ fn the_committed_privileged_yml_passes_and_holds_the_one_sudo() {
     );
     assert_eq!(
         targets.keys().copied().collect::<Vec<_>>(),
-        [FIRST_BOOT_JOB, MACOS_DEVICE_JOB, "privileged"]
+        [
+            FIRST_BOOT_JOB,
+            MACOS_DEVICE_JOB,
+            OPENRC_DEVICE_JOB,
+            "privileged"
+        ]
     );
     assert_eq!(
         shape_problems(PRIVILEGED_WORKFLOW, text, &targets),
         Vec::<String>::new()
     );
-    // The jobs a release waits for are this file's three: no network-install job is among them.
+    // The jobs a release waits for are this file's four: no network-install job is among them.
     let jobs: Vec<&str> = entry(&doc, "jobs")
         .map_or(&[][..], entries)
         .iter()
         .filter_map(|(name, _)| name.as_str())
         .collect();
-    assert_eq!(jobs, ["privileged", FIRST_BOOT_JOB, MACOS_DEVICE_JOB]);
+    assert_eq!(
+        jobs,
+        [
+            "privileged",
+            FIRST_BOOT_JOB,
+            MACOS_DEVICE_JOB,
+            OPENRC_DEVICE_JOB
+        ]
+    );
     // Root in no other workflow, but in net-install.yml (net_install_tests.rs holds its jobs to
     // their shape) and in the jobs of pr-device.yml that are copies of this file's
     // (pr_device_tests.rs holds them to that).
@@ -923,74 +939,5 @@ fn the_shape_check_holds_each_job_to_its_own_targets() {
     assert_eq!(
         shape_problems(PRIVILEGED_WORKFLOW, &env, &targets),
         ["sudo is named 1 times outside the jobs"]
-    );
-}
-
-#[test]
-fn a_target_of_both_platforms_left_out_of_either_job_is_refused() {
-    // Catches: the cross-release rig, whose one target runs on Linux and on a Mac, dropped from
-    // the macOS job's steps or from the Linux job's while the other still runs it, or a first
-    // line of both platforms read as one job's only.
-    let text = std::fs::read_to_string(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.github/workflows/privileged.yml"),
-    )
-    .expect("read privileged.yml");
-    let targets = committed_targets();
-    assert!(targets["privileged"].contains("self_update_across_releases"));
-    assert!(targets[MACOS_DEVICE_JOB].contains("self_update_across_releases"));
-    assert!(
-        privileged_targets(BOTH_FIRST_LINE).contains("self_update_across_releases"),
-        "its file starts with the first line of both platforms"
-    );
-    let set = |names: &[&str]| -> BTreeSet<String> {
-        names.iter().map(|name| (*name).to_owned()).collect()
-    };
-    let mac = set(&[
-        "device_mac",
-        "device_mac_e2e",
-        "device_mac_selfupdate",
-        "self_update_across_releases",
-        "unpack_mac",
-    ]);
-    let mac_left = set(&[
-        "device_mac",
-        "device_mac_e2e",
-        "device_mac_selfupdate",
-        "unpack_mac",
-    ]);
-    let dropped_mac = text.replace(
-        "--test device_mac_selfupdate --test self_update_across_releases --test unpack_mac",
-        "--test device_mac_selfupdate --test unpack_mac",
-    );
-    assert_ne!(dropped_mac, text);
-    assert_eq!(
-        shape_problems(PRIVILEGED_WORKFLOW, &dropped_mac, &targets),
-        [
-            format!(
-                "job macos-device: the build step names the test targets {mac_left:?}, not {mac:?}"
-            ),
-            format!(
-                "job macos-device: the run as root step names the test targets {mac_left:?}, not {mac:?}"
-            ),
-        ]
-    );
-    let linux = &targets["privileged"];
-    let mut linux_left = linux.clone();
-    linux_left.remove("self_update_across_releases");
-    let dropped_linux = text.replace(
-        "--test tierstore_shaped --test self_update_across_releases",
-        "--test tierstore_shaped",
-    );
-    assert_ne!(dropped_linux, text);
-    assert_eq!(
-        shape_problems(PRIVILEGED_WORKFLOW, &dropped_linux, &targets),
-        [
-            format!(
-                "job privileged: the build step names the test targets {linux_left:?}, not {linux:?}"
-            ),
-            format!(
-                "job privileged: the run as root step names the test targets {linux_left:?}, not {linux:?}"
-            ),
-        ]
     );
 }

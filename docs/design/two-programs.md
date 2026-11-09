@@ -634,6 +634,82 @@ runs a released binary. The path needs that, so item X1 comes first:
   verb is a usage error, exit 2.
 - **Between stages**: the status check above, on the farm, before the floor pull request merges.
 
+### 4.6 OpenRC: the daemon on Alpine
+
+An Alpine host runs OpenRC, not systemd, and the daemon runs there as the same program with the same flow, config,
+package paths and state directory; what differs is behind the ports that already carry systemd and launchd
+(`crates/hostkeeper-openrc`, `crates/hostkeeper-daemon/src/adapters.rs`, **Built**). This closes question 5 of
+[packages.md](packages.md).
+
+**Which service manager.** The daemon reads it from the host when it starts, never from the distribution's name
+(`Platform::host`, `crates/hostkeeper-launchd/src/platform.rs`): `/run/systemd/system`, which systemd makes when it
+boots the system, is a systemd host whatever else is there; else `/run/openrc`, which OpenRC makes when it starts its
+first runlevel, is an OpenRC host; a host with neither is taken for systemd, as before. The kind `Openrc` picks:
+
+| Port | systemd | OpenRC |
+|---|---|---|
+| Unit control | `systemctl start`, `stop`, `is-active`, `daemon-reload` | `rc-service <service> start`, `stop`, `status` (exit 0 is started); a reload runs nothing, as OpenRC reads a script each time it runs it |
+| Observer | `systemctl show` | `rc-service <service> status`, its exit (0, 3, 4, 8, 16, 32, 64) the state; the main pid the `child_pid` supervise-daemon keeps in `/run/openrc/options/<service>/`; no init script in `/etc/init.d` is not found |
+| Process probe | `/proc` | `/proc` |
+| Step launcher | a transient unit per step | a child process group of the daemon per step (below) |
+| Own units | none (the fallback files of the releases before the hand-over are removed) | none (no release before the hand-over ran on OpenRC) |
+| Readiness | `READY=1` on `NOTIFY_SOCKET` | the file of `--ready-file`, which the init script waits for |
+| Watchdog | `WatchdogSec=60` | none: supervise-daemon restarts a daemon that exits, not one that hangs |
+| Console | the issue file and `agetty --reload` | none: busybox's getty reads no issue directory |
+
+**What OpenRC lacks for the steps, and how the launcher makes up for it** (`OpenrcLauncher`). OpenRC has no transient
+unit, no `RuntimeMaxSec=` and no control group of a unit to kill. Each step and additive step is a child of the
+daemon in a process group of its own, with an empty environment but systemd's default `PATH`, `/` its directory and no
+input. The launcher bounds it on the daemon's clock: at the bound it sends `SIGTERM` to the group and `SIGKILL` 90
+seconds later, as systemd's default stop timeout; when the step's first process ends, the rest of its group is
+killed, as systemd kills what is left in a unit's group. A stop by the dead-man does the same and reports no exit code,
+as `SystemdLauncher` does. Each running step has a file under `/run/hostkeeper/steps/` with its pid and start time, so
+a daemon started again after a crash stops by name a step an earlier one left (resume), with the start time guarding
+against a pid used again. Two gaps remain, stated: a descendant that leaves the process group (`setsid`) is not killed
+with it; and a step whose daemon was killed runs on until the daemon is back and resume stops it, as on a Mac, or
+until it next writes to its output, whose reader was the daemon (`SIGPIPE`).
+
+**The package and its init script.** hostkeeper's Alpine package (`packaging/alpine/`, built by nfpm as an `apk`)
+carries the static musl daemon of A15 at `/usr/bin/hostkeeper`, the init script `/etc/init.d/hostkeeper`, the config
+template, the pinned `gh` and the trusted root; its post-install enables the service in the default runlevel and
+starts nothing. The script runs the daemon under supervise-daemon: `command=/usr/bin/hostkeeper` with the systemd
+unit's flags, but `--ready-file /run/hostkeeper/ready` in place of `--notify-systemd`; `respawn_delay=1` and
+`respawn_max=0`, so any exit is followed by a start a second later, for good; `start_pre` makes the directories of
+`hostkeeper.tmpfiles.conf` and removes the ready file. supervise-daemon's own readiness notice (`notify=`) is not used:
+its start waits for it with no end, also while it respawns a daemon that exits before it is ready (a config that does
+not load), which would hold the runlevel, and the boot. The daemon writes the ready file, with its pid, after its boot
+pass (`ReadyFile`, `crates/hostkeeper-daemon/src/notify.rs`), and removes nothing; `start_post` waits for it, and stops
+waiting, with the error said, once supervise-daemon has started the daemon a second time: the daemon is still
+supervised and retried. So `rc-service hostkeeper start` returns when the daemon is ready, or at its first failed
+start, as `systemctl start` does for `Type=notify`; unlike it, the start exits 0 then, because a failed start would
+have OpenRC mark the service stopped while supervise-daemon goes on running it.
+
+**Self-update: the start and the fallback.** As on a Mac (4.1), the package is the only source of the script and the
+binary, and the script starts the packaged binary at every start, respawns included: it seeds the binary directory when
+`current` starts nothing (2.1) and execs `current` with its arguments, whose start runs the hand-over (4.3). A
+self-update stages the new binary as `next` and exits 0; supervise-daemon starts the packaged binary, which execs the
+old binary `current` names, which execs `next` while its count lasts; the new binary finishes the switch and confirms.
+A new binary that cannot start is tried three times, each a respawn, and the old binary then settles the update
+`Failed`, `self_update_fallback`, and runs. So the hand-over needs nothing of OpenRC: no unit, no job, no start log
+(`record_start` writes none on OpenRC) and no file of the daemon's own update to write or remove, since no release
+before the hand-over ran on an OpenRC host.
+
+**What this does not cover yet.** A service package's own OpenRC init script (how a package ships, links and enables
+one) has no design: `apk` is withdrawn with no successor ([packages-repositories.md](packages-repositories.md)), so
+an Alpine host's services take the tarball. The OpenRC unit control and observer act on any init script by name, and the placer links what a package's `units/` holds into
+`/etc/init.d` as on the other systems, which check no unit's kind against the host either. A downgrade on an OpenRC
+host to a release older than the first with this support would run that binary on systemd's adapters; the floor rule
+of 4.2 is where its refusal belongs, once that release's number is known.
+
+**Proof.** The adapters' unit tests (`crates/hostkeeper-openrc/tests/`: every `rc-service` line, every status, the
+child pid, every launcher bound, stop and kill), the daemon's (`crates/hostkeeper-daemon/tests/openrc_adapters.rs`,
+`selfupdate_openrc.rs`, `ready_file.rs`), the package tests (`crates/xtask/tests/packaging/alpine/`), and the device
+tests `crates/hostkeeper-privileged/tests/openrc_device.rs` in the job `openrc-device` of `privileged.yml` and of
+`pr-device.yml`: an Alpine 3.22 container whose init is OpenRC installs the package and runs the daemon, starts it
+again when it is killed and at boot, does not hold its start on a daemon that cannot become ready, updates the daemon
+of `1.0.0` to `1.0.1` by the hand-over under supervise-daemon, and falls back from a `1.0.1` that cannot
+start after its three starts.
+
 ## 5. CI without `hostkeeper ci`
 
 The reusable workflow `set-desired.yml` keeps its trigger (`workflow_call` only), its inputs, its outputs
