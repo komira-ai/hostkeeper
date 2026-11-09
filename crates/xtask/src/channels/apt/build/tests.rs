@@ -66,18 +66,22 @@ fn the_packages_join_a_shared_index_and_every_other_entry_and_architecture_stays
     let debs = scratch("build-shared-debs");
     release_files(&debs, "1.2.3");
     let said = build(&request(&dir, &debs)).expect("build");
-    assert_eq!(said, ["apt-index: added 4, dropped 0, listed 6"]);
+    assert_eq!(said, ["apt-index: added 7, dropped 0, listed 9"]);
     assert_eq!(
         packages(&dir, "amd64"),
         [
             ("example".to_owned(), "9.9.9".to_owned()),
+            ("hello".to_owned(), "1.2.3".to_owned()),
             ("hostkeeper".to_owned(), "1.2.3".to_owned()),
-            ("hostkeeper-coordinator".to_owned(), "1.2.3".to_owned())
+            ("hostkeeper-coordinator".to_owned(), "1.2.3".to_owned()),
+            ("mdm".to_owned(), "1.2.3".to_owned())
         ]
     );
+    // mdm's .deb is built for amd64 alone: arm64 lists no mdm.
     assert_eq!(
         packages(&dir, "arm64"),
         [
+            ("hello".to_owned(), "1.2.3".to_owned()),
             ("hostkeeper".to_owned(), "1.2.3".to_owned()),
             ("hostkeeper-coordinator".to_owned(), "1.2.3".to_owned())
         ]
@@ -145,8 +149,10 @@ fn a_first_release_takes_its_origin_label_and_description_from_the_flags() {
     assert_eq!(
         packages(&dir, "amd64"),
         [
+            ("hello".to_owned(), "1.2.3".to_owned()),
             ("hostkeeper".to_owned(), "1.2.3".to_owned()),
-            ("hostkeeper-coordinator".to_owned(), "1.2.3".to_owned())
+            ("hostkeeper-coordinator".to_owned(), "1.2.3".to_owned()),
+            ("mdm".to_owned(), "1.2.3".to_owned())
         ]
     );
 }
@@ -169,7 +175,7 @@ fn a_re_run_of_the_same_release_lists_it_once() {
         }
     }
     let said = build(&request(&dir, &debs)).expect("second");
-    assert_eq!(said, ["apt-index: added 0, dropped 0, listed 4"]);
+    assert_eq!(said, ["apt-index: added 0, dropped 0, listed 7"]);
 }
 
 #[test]
@@ -219,8 +225,8 @@ fn what_cannot_be_built_is_refused_with_the_reason() {
     }
     let e = build(&request(&dir, &other)).unwrap_err().to_string();
     assert!(e.contains("does not say the name it has"), "{e}");
-    // Not a package: the first file in name order is the coordinator's.
-    let first = "hostkeeper-coordinator_1.2.3_amd64.deb";
+    // Not a package: the first file in name order is hello's.
+    let first = "hello_1.2.3_amd64.deb";
     std::fs::write(other.join(first), "junk").expect("junk");
     let e = build(&request(&dir, &other)).unwrap_err().to_string();
     assert!(
