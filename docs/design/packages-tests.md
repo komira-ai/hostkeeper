@@ -237,7 +237,7 @@ only in the device jobs, against a signed fixture repository and signed fixture 
   service `hostkeeper` go on; the same package set for another service, and another package set for `hostkeeper`, are
   `package_scripts`. A `macos-pkg` order with an attestation is `order_invalid`, and one without is fetched and
   installed with no `gh` run (the command port's record is empty).
-- **The coordinator (A18; `crates/hostkeeper-coordinator/tests/target_orders.rs`, `crates/hostkeeper-release/tests/manifest/`).**
+- **The coordinator (A18; `crates/hostkeeper-coordinator/tests/target_move.rs`, `crates/hostkeeper-release/tests/manifest/native.rs`).**
   The pick over a fleet of every kind of host: a host running the service from archives that lists `apt` is picked the
   `apt` entry wherever it stands in the list; one that lists no native installer of the list, and a daemon before
   `target-v1`, are picked the archive entry; a host running `apt` is never picked the archive entry; a list with no
