@@ -27,11 +27,19 @@
 //!   `list-records`, `list` and `approve` of `enrollment`), and a token it writes after
 //!   "refused" is one of the protos' refusal tokens.
 //!
+//! - The runbook of the move to native packages, `docs/operations/move-to-native.md`, holds each
+//!   of its queries whole, each run with jaq on the coordinator's JSON, and a section for each
+//!   stage ([`move_runbook`]).
+//!
 //! The checks are pure functions of the text, each tested on edited texts as well as on the real
 //! files. The files are read from the repository; a missing runbook fails.
 
 #[path = "enrollment_doc/hkctl.rs"]
 mod hkctl;
+#[path = "jq/run.rs"]
+mod jq;
+#[path = "enrollment_doc/move_runbook.rs"]
+mod move_runbook;
 #[path = "../src/testdir.rs"]
 mod testdir;
 

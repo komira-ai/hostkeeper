@@ -314,8 +314,14 @@ only in the device jobs, against a signed fixture repository and signed fixture 
   every job that signs or puts the release's files checks them against `SHA256SUMS` and their attestations first, A23)
   and, from A24, refuses the channel wait and any index output while it keeps the `targets` job that `set-desired`
   needs; X1's pin is a release from A19 on.
-- **The runbook (A22; `crates/xtask/tests/enrollment_doc.rs`).** Every `hkctl` command of the runbook is one of
-  `hkctl`'s table, as for the enrollment runbook.
+- **The runbook (A22; `docs/operations/move-to-native.md`, `crates/xtask/tests/enrollment_doc.rs` and
+  `enrollment_doc/move_runbook.rs`).** Every `hkctl` command of the runbook is one of `hkctl`'s table, as for the
+  enrollment runbook. Each query is one block of one `hkctl` call and one `jq` program reading the file the call
+  wrote, and each program, as the runbook writes it, is run with jaq on `Hosts.List` and `Hosts.Get` answers
+  serialized as the gateway serializes them: stage 9's two counts each count a host once, compare versions as
+  numbers, count a host not known to be past them (no daemon known, an installer not known, nothing known of what it
+  runs), refuse a floor that is not a version, and stop on a second page; each stage of 10.6 has its section with
+  when it starts and its back-out.
 - **`apk` (A27; `crates/hostkeeper-install/tests/apk.rs`, and `openrc_device.rs` and `selfupdate_openrc.rs` on an
   `.apk` fixture repository).** The cases its design (A26) names, one per check and failure row, as A7's for `apt`; the
   OpenRC device tests keep every case they have today.
