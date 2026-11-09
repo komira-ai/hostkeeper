@@ -23,16 +23,16 @@ use crate::store::postgres::tests::TestDatabase;
 use crate::testutil::{Log, Rig, beat, version};
 
 /// The agent's own service, and a service it runs.
-const HK: &str = "hostkeeper";
-const WEB: &str = "web";
+pub(crate) const HK: &str = "hostkeeper";
+pub(crate) const WEB: &str = "web";
 
 /// When the operator approves `db-1`, by the enrollment's clock.
-const APPROVED: u64 = NOW + 1_000;
+pub(crate) const APPROVED: u64 = NOW + 1_000;
 /// When `db-1` heartbeats first.
-const FIRST: u64 = NOW + 1_090;
+pub(crate) const FIRST: u64 = NOW + 1_090;
 
 /// What a deployed daemon announces.
-const DEPLOYED: &[&str] = &[
+pub(crate) const DEPLOYED: &[&str] = &[
     "deferred-v1",
     "halt-v1",
     "heartbeat-v2",
@@ -53,21 +53,21 @@ fn services() -> Services {
 }
 
 /// A coordinator of hostkeeper and web, past its quiet start, over its own enrollment.
-struct Fixture {
-    enrollment: EnrollmentRig,
-    rig: Rig,
+pub(crate) struct Fixture {
+    pub(crate) enrollment: EnrollmentRig,
+    pub(crate) rig: Rig,
     /// The database the enrollment's records are kept in, for a fixture on Postgres; dropped
     /// after the store.
     _database: Option<(Postgres, TestDatabase)>,
 }
 
 impl Fixture {
-    fn new(name: &str) -> Fixture {
+    pub(crate) fn new(name: &str) -> Fixture {
         Fixture::over(EnrollmentRig::new(&format!("{name}-enrollment")), name)
     }
 
     /// [`Fixture::new`], the enrollment's records kept in a Postgres database of the test's own.
-    fn on_postgres(name: &str) -> Fixture {
+    pub(crate) fn on_postgres(name: &str) -> Fixture {
         let database = TestDatabase::new();
         let (store, _) = database.open("records").expect("the store opens");
         let records = Arc::new(PgRecords::over(&store).expect("the records open"));
@@ -78,7 +78,7 @@ impl Fixture {
         }
     }
 
-    fn over(enrollment: EnrollmentRig, name: &str) -> Fixture {
+    pub(crate) fn over(enrollment: EnrollmentRig, name: &str) -> Fixture {
         let mut rig = Rig::new(name);
         let list = format!(
             "{}services = [\"{HK}\", \"{WEB}\"]\n",
@@ -98,7 +98,7 @@ impl Fixture {
 
     /// A new key that posted from machine `machine`, approved by the operator as `host` at
     /// `at` by the enrollment's clock, taking the id over when `replace`.
-    fn approve(&self, machine: &str, host: &str, at: u64, replace: bool) {
+    pub(crate) fn approve(&self, machine: &str, host: &str, at: u64, replace: bool) {
         let key = HostKey::new();
         let posted = self
             .enrollment
@@ -126,9 +126,33 @@ impl Fixture {
 
     /// A heartbeat of `host` of `role` at `at` by the enrollment's clock, from a deployed
     /// daemon (the agent hostkeeper) listing `services`, which the coordinator accepts.
-    fn beat(&self, host: &str, role: &str, at: u64, services: Vec<ServiceBeat>) {
+    pub(crate) fn beat(&self, host: &str, role: &str, at: u64, services: Vec<ServiceBeat>) {
         self.enrollment.clock.set(at);
         ask(&self.rig, host, role, daemon(services));
+    }
+
+    /// The coordinator and its enrollment started again over the same records: the files for a
+    /// fixture on files, the database's tables (read anew) for one on Postgres. Nothing is
+    /// heard until a host heartbeats.
+    pub(crate) fn restart(&mut self) {
+        let list = format!(
+            "{}services = [\"{HK}\", \"{WEB}\"]\n",
+            hostkeeper_oidc::testkit::config_text(hostkeeper_oidc::testkit::STATIC_ISSUER)
+        );
+        let enrollment = match &self._database {
+            Some((store, _)) => {
+                let records = Arc::new(PgRecords::over(store).expect("the records open"));
+                let restarted = EnrollmentRig::over_records("restarted-enrollment", records);
+                let enrollment = Arc::clone(&restarted.enrollment);
+                self.enrollment = restarted;
+                enrollment
+            }
+            None => self.enrollment.restart(),
+        };
+        self.rig.coordinator = Rig::start_with_allow_list(&self.rig.dir, &self.rig.clock, &list)
+            .with_services(services())
+            .with_legacy_service(None)
+            .with_enrollment(enrollment);
     }
 
     /// `host`'s first heartbeat and first serving times, as `Hosts.Get` answers them.
@@ -150,7 +174,7 @@ impl Fixture {
 }
 
 /// The heartbeat of a deployed daemon, the agent hostkeeper at 0.1.100, that lists `services`.
-fn daemon(services: Vec<ServiceBeat>) -> Heartbeat {
+pub(crate) fn daemon(services: Vec<ServiceBeat>) -> Heartbeat {
     let mut b = beat("0.1.100");
     b.agent_features = DEPLOYED.iter().map(|f| (*f).to_owned()).collect();
     b.agent = Some(Agent {

@@ -365,6 +365,12 @@ impl Records for FileRecords {
         self.commit(&[Record::Host(host)])
     }
 
+    fn set_running(&self, host: &pb::Host, running: pb::Running) -> Result<(), StoreError> {
+        let mut host = host.clone();
+        host.running = Some(running);
+        self.commit(&[Record::Host(host)])
+    }
+
     fn set_duplicate(&self, host: &pb::Host) -> Result<(), StoreError> {
         let mut host = host.clone();
         host.duplicate = true;

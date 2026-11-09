@@ -134,6 +134,28 @@ message Host {
   // reported a service the coordinator manages for it installed and healthy; absent until then.
   // Written once; an approval writes the file anew without it.
   optional uint64 first_serving_unix = 9;
+  // What the host's daemon last said it runs, as far as the coordinator kept it; absent until
+  // the first heartbeat after the approval. Rewritten when the agent or a service changes,
+  // not when only the time does. An approval writes the file anew without it.
+  optional Running running = 10;
+}
+
+// What a host runs, as its daemon said in a heartbeat the coordinator accepted.
+message Running {
+  string agent_name = 1;
+  string agent_version = 2;
+  // Each service the daemon reported that is not absent, by service name.
+  repeated RunningService services = 3;
+  // When the coordinator accepted the heartbeat this was last written from, in unix seconds.
+  uint64 at_unix = 4;
+}
+
+// One service a host runs.
+message RunningService {
+  string service = 1;
+  string version = 2;
+  // The installer it runs with; empty when the coordinator did not know it.
+  string installer = 3;
 }
 
 enum DenyState {
