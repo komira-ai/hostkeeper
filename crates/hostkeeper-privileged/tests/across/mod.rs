@@ -94,10 +94,10 @@ pub const NAMED: &str = env!("CARGO_BIN_EXE_hostkeeper-named-daemon");
 /// This build's `hostkeeper` made to fail its start.
 pub const FAILING: &str = env!("CARGO_BIN_EXE_hostkeeper-failing-daemon");
 /// The floor of hostkeeper's package the pinned release's builder wrote: its `OLDEST_READER`,
-/// 0.1.163 (`min_hostkeeper` is the lower of that and the release's version, in
+/// 0.1.194, R2 (`min_hostkeeper` is the lower of that and the release's version, in
 /// `crates/xtask/src/release/package.rs`), above the daemon's `LEGACY_FLOOR`, so the released
 /// daemon runs its built-in steps for its own package.
-pub const FLOOR: &str = "0.1.163";
+pub const FLOOR: &str = "0.1.194";
 /// The reason of the verdict of a version whose new binary fell back.
 pub const FALLBACK_REASON: &str = "self_update_fallback";
 

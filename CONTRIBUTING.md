@@ -302,8 +302,8 @@ released version's `.deb` installed and adopted; on a Mac, where no daemon annou
 yet, it orders the `hostkeeper-archive` entry from a loopback release channel, as before. This
 build is the program `hostkeeper-named-daemon` (the shipped daemon, its hand-over acted on first,
 its version the name of the file it runs from, so it runs as versions newer than the release) and
-`hostkeeper-failing-daemon` (whose `daemon` exits 1). The pin is a release from A19 on (one that
-installs `apt` entries and updates itself through its `.deb`).
+`hostkeeper-failing-daemon` (whose `daemon` exits 1). The pin is v0.1.218, A19's own release (one
+that installs `apt` entries and updates itself through its `.deb`).
 The tests, each from the released daemon converged on its own version's package:
 
 - `the_released_daemon_updates_to_this_build_and_this_build_settles_it_succeeded`: the released
