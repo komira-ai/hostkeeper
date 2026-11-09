@@ -183,9 +183,9 @@ fn install_links_skip_a_target_that_is_not_a_unit_name() {
         ("RequiredBy", "../x.target"),
         ("WantedBy", long.as_str()),
     ] {
-        let text = format!("[Install]\n{key}={target}\nWantedBy=ok.target\n");
+        let text = format!("[Install]\n{key}={target}\nWantedBy=multi-user.target\n");
         let found = links("mdm.service", &text);
-        assert_eq!(found, ["ok.target.wants/mdm.service"], "{target}");
+        assert_eq!(found, ["multi-user.target.wants/mdm.service"], "{target}");
     }
     let at_bound = format!("{}.target", "a".repeat(248));
     assert_eq!(at_bound.len(), 255);
@@ -284,7 +284,7 @@ fn unlinked_lists_the_run_units_the_tree_gives_no_link() {
     tree.dir("usr/lib/systemd/system/dir.service");
     tree.file(
         "usr/lib/systemd/system/locked.service",
-        "[Install]\nWantedBy=x.target\n",
+        "[Install]\nWantedBy=multi-user.target\n",
         0o000,
     );
     let run = [

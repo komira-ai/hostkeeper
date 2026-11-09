@@ -225,15 +225,14 @@ fn a_hook_command_naming_a_program_the_package_lacks_fails_the_stage() {
     assert!(apt.rig.launcher.runs().is_empty());
 }
 
-/// Proves a version staged by an older daemon (a sealed `target.json` with an empty command and
-/// the package's program at `usr/lib/<package>/hostkeeper-hook`) is still run by that program,
-/// with no leading arguments, when its update is resumed by the next start.
+/// Proves a version this daemon stages with an empty command runs the built-in steps, resumed
+/// after a crash at every write of its record, even when its package ships a file at the old
+/// fixed path `usr/lib/<package>/hostkeeper-hook`: that file is read only for a version an older
+/// daemon staged (no `manifest-hook` beside `target.json`; `target_tests.rs` holds that reader).
 ///
-/// Catches: a reader that drops the old fixed-path hook and finishes such a version with the
-/// built-in steps.
+/// Catches: a package's content choosing a hook the manifest did not name.
 #[test]
-fn a_version_staged_with_the_old_fixed_path_hook_still_runs_it_when_resumed() {
-    let mut resumed = 0;
+fn a_package_file_at_the_old_fixed_path_is_never_its_hook_and_resumes_on_the_built_in_steps() {
     for n in 1.. {
         let apt = AptRig::new(&format!("apt-legacy-hook-{n}"));
         let carrying =
@@ -261,23 +260,15 @@ fn a_version_staged_with_the_old_fixed_path_hook_still_runs_it_when_resumed() {
             assert_eq!(reply, succeeded());
             break;
         }
-        let before = hook_runs(&apt, "2.0.0").len();
         apt.daemon().boot_pass().expect("the start pass");
-        let after = hook_runs(&apt, "2.0.0");
-        let legacy_program = apt.version_dir("2.0.0").join("tree").join(LEGACY_HOOK);
-        for ran in &after[before..] {
-            assert_eq!(
-                ran.executable,
-                legacy_program.canonicalize().expect("the program")
-            );
-            assert!(ran.hook_args.is_empty());
-        }
-        resumed += after.len() - before;
+        assert!(
+            apt.rig.launcher.runs().is_empty(),
+            "no hook ran, after write {n}"
+        );
         assert_eq!(
             apt.host.installed(SERVICE),
             held("2.0.0-1"),
             "after write {n}"
         );
     }
-    assert!(resumed > 0, "no start resumed a step by the old hook");
 }
