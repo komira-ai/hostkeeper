@@ -127,7 +127,7 @@ fn the_coordinator_enables_nothing_has_a_user_and_depends_on_systemd_itself() {
     // The kernel keeps 15 bytes of a process's name.
     assert_eq!(coordinator.comm(), "hostkeeper-coor");
     assert_eq!(coordinator.files.len(), 6);
-    assert_eq!(HOSTKEEPER.package("tierstore"), None);
+    assert_eq!(HOSTKEEPER.package("other-product"), None);
 }
 
 #[test]

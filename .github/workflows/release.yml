@@ -1785,8 +1785,8 @@ jobs:
           APT_BUCKET: ${{ vars.APT_BUCKET }}
         run: cargo xtask channels pkg upload --dir dist --tag "$TAG" --commit "$COMMIT" --bucket "$APT_BUCKET" --work "$RUNNER_TEMP/pkg-upload"
 
-  # INSTALL CHECKS (release time only; a failure stops the release before anything public
-  # changes). check-apt: a clean Ubuntu container, pinned by digest, on a hosted runner of each
+  # INSTALL CHECKS (release time only; a failure stops the promotion to `stable`, which
+  # promote-check refuses, while the packages stay in `testing`). check-apt: a clean Ubuntu container, pinned by digest, on a hosted runner of each
   # architecture, adds packages.komira.ai with the published keyring (deb822, Signed-By) and the
   # suite `testing`, installs the package at the version, and holds the installed system to what the
   # package promises (cargo xtask channels check-apt), for each of the two packages. The xtask

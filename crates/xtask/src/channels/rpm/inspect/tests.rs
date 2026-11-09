@@ -12,8 +12,7 @@ fn coordinator() -> &'static Package {
 
 #[test]
 fn an_nfpm_rpm_without_postun_is_read_when_the_spec_does_not_require_one() {
-    // Catches: a check that wants the %postun tierstore's packages have, which nfpm does not
-    // write, so that no signed release of this product could pass `check-signed`.
+    // Catches: a check that wants a %postun, which nfpm does not write, so that no signed release of this product could pass `check-signed`.
     for package in [daemon(), coordinator()] {
         let bytes = fixtures::rpm(package, "1.2.3", &ARCHES[0], false);
         let info = inspect(&bytes, package).expect("info");

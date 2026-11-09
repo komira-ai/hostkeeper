@@ -18,6 +18,12 @@ publishers; until then a change to the copy is made here.
 The host is shared by the organisation's products; each product writes only below its own pool
 directory, `pool/hostkeeper`.
 
+The apt index is one `Packages` file per architecture for every product, and the tool reads all of it
+before it writes: it keeps another product's entries as they are and trims only the versions of the
+packages it adds. It reads every entry strictly, so every product in the shared repository must list
+`X.Y.Z` versions (no Debian revision) and the architectures `amd64` and `arm64` only; an entry that is
+neither makes `apt index`, `apt promote` and `apt write` fail, naming the entry, and nothing is written.
+
 | Channel | `testing` | `stable` |
 |---|---|---|
 | apt, packages `hostkeeper` and `hostkeeper-coordinator`, architectures `amd64` and `arm64` | `https://packages.komira.ai/apt`, suite `testing`, component `main` | the same repository, suite `stable` |

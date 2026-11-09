@@ -126,3 +126,7 @@ fleetdm.com
 # the namespace of the rpm repository metadata (`repomd.xml`, `primary.xml`) the rpm channel writes.
 =sts.amazonaws.com
 =linux.duke.edu
+# The container registry the release pushes the coordinator's image to, and the OCI annotation key
+# an image index names a manifest's reference by (crates/xtask/src/release/image_index.rs).
+=ghcr.io
+=org.opencontainers.image.ref.name

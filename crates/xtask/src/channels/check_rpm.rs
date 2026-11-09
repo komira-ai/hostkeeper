@@ -1,5 +1,5 @@
 //! `channels check-rpm`: the release installed the way a user installs it with `dnf`, from what
-//! was published to the suite `testing`, before anything public changes.
+//! was published to the suite `testing`, before the release is promoted to `stable`.
 //! `.github/workflows/release.yml` runs this verb in the job `check-rpm`, on a hosted runner of
 //! each architecture and in a clean container of each distribution (pinned by digest).
 //!

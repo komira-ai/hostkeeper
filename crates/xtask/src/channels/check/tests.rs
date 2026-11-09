@@ -477,9 +477,9 @@ fn a_package_is_one_of_the_products() {
         "hostkeeper"
     );
     assert_eq!(
-        package_flag("tierstore").unwrap_err(),
+        package_flag("other-product").unwrap_err(),
         Error::Usage(
-            "--package \"tierstore\" is none of [\"hostkeeper\", \"hostkeeper-coordinator\"]"
+            "--package \"other-product\" is none of [\"hostkeeper\", \"hostkeeper-coordinator\"]"
                 .to_owned()
         )
     );

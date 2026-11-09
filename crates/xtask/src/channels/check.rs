@@ -1,5 +1,5 @@
 //! `channels check-apt`: the release installed the way a user installs it, from what was published
-//! to the suite `testing`, before anything public changes. `.github/workflows/release.yml` runs
+//! to the suite `testing`, before the release is promoted to `stable`. `.github/workflows/release.yml` runs
 //! this verb in its install-check jobs, on hosted runners and at release time only.
 //!
 //! The verb runs in a clean Ubuntu container (the image is pinned by digest by the job). It adds

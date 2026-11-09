@@ -19,9 +19,7 @@
 //! `cancelled` and `skipped`, is a refusal that names the stage; the job ends red.
 //!
 //! Copied from komira-ai/tierstore at ff4777831c08fc13aa025b54e6e0531c2f350f4f
-//! (`crates/xtask/src/channels/decide.rs`), with the stages made data ([`super::spec`]); the lab
-//! stages (`farm-check`, `farm`, `soak`) and the Homebrew and `install.sh` checks are not part of
-//! this product's release.
+//! (`crates/xtask/src/channels/decide.rs`), with the stages made data ([`super::spec`]).
 
 use std::path::Path;
 

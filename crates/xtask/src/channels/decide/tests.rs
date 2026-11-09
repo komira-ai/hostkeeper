@@ -141,10 +141,10 @@ fn results_that_do_not_fit_are_usage_errors() {
         "--result \"check-apt\" is not NAME=RESULT"
     );
     let mut with_unknown = base.clone();
-    with_unknown.push("farm=success".to_owned());
+    with_unknown.push("no-such-stage=success".to_owned());
     assert_eq!(
         usage(&with_unknown),
-        "--result names \"farm\", which is no stage"
+        "--result names \"no-such-stage\", which is no stage"
     );
     let mut odd = base.clone();
     odd[0] = "testing-apt-write=ok".to_owned();

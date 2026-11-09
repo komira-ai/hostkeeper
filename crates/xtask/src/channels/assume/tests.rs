@@ -618,7 +618,7 @@ fn a_session_name_must_start_with_the_products_prefix() {
     let dir = scratch("session-prefix");
     let aws = FakeAws::says(true, "", "");
     let oidc = || -> Result<Oidc, Error> { panic!("the token is not asked for") };
-    for name in ["tierstore-apt-42", "apt-42", "Hostkeeper-apt-42"] {
+    for name in ["other-product-apt-42", "apt-42", "Hostkeeper-apt-42"] {
         let request = Request {
             role_arn: ROLE,
             session_name: name,

@@ -21,6 +21,7 @@ mod downloads;
 mod downloads_tests;
 mod expr;
 mod hello_run_tests;
+mod image_push_tests;
 mod lint;
 mod linux_packages_tests;
 mod linux_releases;

@@ -243,6 +243,60 @@ fn only_the_newest_keep_versions_of_a_slot_stay_listed() {
 }
 
 #[test]
+fn a_slot_the_merge_does_not_add_to_is_not_trimmed_to_keep() {
+    // Catches: hostkeeper's publish dropping the older versions of another product's package
+    // because the shared index lists more of them than hostkeeper's own `--keep`.
+    let foreign = |v: u64| {
+        from_fields(&format!(
+            "Package: example\nVersion: 1.{v}.0\nArchitecture: amd64\nSHA256: e{v}\n"
+        ))
+        .expect("foreign stanza")
+    };
+    let mut existing: Vec<Stanza> = (0..5).map(foreign).collect();
+    existing.extend([stanza("1.0.0", "amd64", "a"), stanza("1.1.0", "amd64", "b")]);
+    let merged = merge(&existing, &[stanza("1.2.0", "amd64", "c")], 2).expect("merge");
+    let foreign_kept = merged
+        .stanzas
+        .iter()
+        .filter(|s| s.package == "example")
+        .count();
+    assert_eq!(foreign_kept, 5);
+    assert_eq!(
+        merged
+            .stanzas
+            .iter()
+            .filter(|s| s.package == "hostkeeper")
+            .map(|s| s.version)
+            .collect::<Vec<_>>(),
+        [(1, 2, 0), (1, 1, 0)]
+    );
+    assert_eq!((merged.added, merged.dropped), (1, 1));
+}
+
+#[test]
+fn an_entry_of_another_product_outside_the_shared_format_refuses_the_index() {
+    // Catches: an entry the index cannot list (a Debian revision, an architecture it has no file
+    // for) being dropped or rewritten instead of refused, which the repository document promises.
+    let revision = "Package: example\nVersion: 2.0.1-1\nArchitecture: amd64\nSHA256: z\n";
+    assert_eq!(
+        parse_packages(revision).unwrap_err().to_string(),
+        "version \"2.0.1-1\" is not X.Y.Z"
+    );
+    let all = parse_packages("Package: example\nVersion: 2.0.1\nArchitecture: all\nSHA256: z\n")
+        .expect("parses");
+    let info = ReleaseInfo {
+        origin: None,
+        label: None,
+        description: None,
+        date: 0,
+    };
+    let e = tree(Suite::Testing, &info, &all, &strings(&["amd64", "arm64"]))
+        .unwrap_err()
+        .to_string();
+    assert_eq!(e, "example is for all, which the index does not list");
+}
+
+#[test]
 fn another_products_entries_are_kept_untouched() {
     // Catches: the shared index losing a product when hostkeeper publishes.
     let other = from_fields(

@@ -194,7 +194,7 @@ fn every_value_that_is_no_flag_is_refused_naming_its_key() {
             "a: a float, not a string, an integer, a boolean or an array of strings or integers",
         ),
         (
-            "a = 1979-05-27",
+            "a = 2026-09-27",
             "a: a datetime, not a string, an integer, a boolean or an array of strings or integers",
         ),
         (

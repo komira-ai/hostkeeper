@@ -143,7 +143,7 @@ fn same_slot(a: &Stanza, b: &Stanza) -> bool {
 #[derive(Debug, PartialEq, Eq)]
 pub struct Merged {
     /// Sorted: package, architecture, newest version first. At most `keep` per package and
-    /// architecture.
+    /// architecture of the added stanzas.
     pub stanzas: Vec<Stanza>,
     /// How many of the added stanzas were new (the others were listed already, byte for byte).
     pub added: usize,
@@ -154,7 +154,7 @@ pub struct Merged {
 /// Adds `add` (at most one stanza per package and architecture) to `existing`. A version older
 /// than the newest listed for its package and architecture is refused; the same version again is
 /// a no-op when the file's sha256 is the same and refused when it is not. Only the newest `keep`
-/// versions per package and architecture stay listed.
+/// versions per package and architecture of `add` stay listed; every other slot is kept whole.
 ///
 /// # Errors
 /// `keep` is 0, a version moves down, or a version is listed with other bytes.
@@ -208,7 +208,8 @@ pub fn merge(existing: &[Stanza], add: &[Stanza], keep: usize) -> Result<Merged,
         } else {
             0
         };
-        if run < keep {
+        // Another product's slots are not this merge's to trim.
+        if run < keep || !add.iter().any(|new| same_slot(new, stanza)) {
             kept.push(stanza.clone());
         } else {
             dropped += 1;

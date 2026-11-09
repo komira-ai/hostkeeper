@@ -96,7 +96,7 @@ fn channels_install_checks_and_the_installer_verbs_with_flags_that_do_not_fit_ar
                 "channels",
                 "check-apt",
                 "--package",
-                "tierstore",
+                "other-product",
                 "--arch",
                 "amd64",
                 "--version",
@@ -104,14 +104,14 @@ fn channels_install_checks_and_the_installer_verbs_with_flags_that_do_not_fit_ar
                 "--commit",
                 "0123456789abcdef0123456789abcdef01234567",
             ],
-            "--package \"tierstore\" is none of",
+            "--package \"other-product\" is none of",
         ),
         (
             vec![
                 "channels",
                 "check-rpm",
                 "--package",
-                "tierstore",
+                "other-product",
                 "--container",
                 "c",
                 "--arch",
@@ -123,7 +123,7 @@ fn channels_install_checks_and_the_installer_verbs_with_flags_that_do_not_fit_ar
                 "--work",
                 "/work",
             ],
-            "--package \"tierstore\" is none of",
+            "--package \"other-product\" is none of",
         ),
         (
             vec![
@@ -144,8 +144,8 @@ fn channels_install_checks_and_the_installer_verbs_with_flags_that_do_not_fit_ar
             "--tag \"1.2.3\" is not v<major>.<minor>.<patch>",
         ),
         (
-            vec!["channels", "decide", "--result", "farm=success"],
-            "--result names \"farm\", which is no stage",
+            vec!["channels", "decide", "--result", "no-such-stage=success"],
+            "--result names \"no-such-stage\", which is no stage",
         ),
     ] {
         let o = run(&d, &args);
