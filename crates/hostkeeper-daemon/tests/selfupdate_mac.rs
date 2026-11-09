@@ -24,11 +24,13 @@ use hostkeeper_steps::{
 use support::selfupdate::{HK, NEW, OLD, SelfRig, awaiting, fell_back, own, put_record, record_of};
 use support::snapshot;
 
-/// A host that ran the swap to [`NEW`]: its record waits for the restart and `current` names the
-/// new binary.
+/// A host that a release before the hand-over updated to [`NEW`] the old way, whose fallback job
+/// runs this verb: its record waits for the restart with no `next` and `current` names the new
+/// binary.
 fn swapped(name: &str) -> SelfRig {
     let s = SelfRig::new(name);
     assert_eq!(s.daemon().order(&s.order(NEW, 1)), awaiting(false));
+    s.switch_the_old_way(NEW);
     s
 }
 

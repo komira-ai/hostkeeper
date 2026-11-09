@@ -2,16 +2,18 @@
 //! (`tests/self_update.rs`), a program of the tests, not shipped.
 //!
 //! Every verb but `daemon` is forwarded to the daemon's command line as the `hostkeeper` binary
-//! forwards it (`hostkeeper_daemon::cli::run_with`): `self-update-protocol`, which the daemon's
-//! probe asks of a new binary, and `self-update-fallback`, which the fallback unit runs with the
-//! previous binary, are the shipped code. Before `self-update-protocol` it writes one line to
-//! standard error ([`probed_line`]), which the step launcher hands the daemon's log under the
-//! probe's unit: the tests read from the daemon's log whether its probe ran.
+//! forwards it (`hostkeeper_daemon::cli::run_with`): `self-update-protocol` and
+//! `self-update-fallback`, which the releases before the hand-over ask of a new binary and run
+//! with the previous one, are the shipped code.
 //!
 //! `daemon` is the shipped daemon (`hostkeeper_daemon::start`: the settle of a waiting
-//! self-update, the boot pass, the readiness notice, the units of its own update, the heartbeat
-//! loop, the executor and its follow-on) on the host's Linux adapters (the step launcher's
-//! transient units, `systemctl`), with two ports that a test cannot have for real put in place:
+//! self-update, the boot pass, the readiness notice, the removal of the fallback units of the
+//! releases before the hand-over, the heartbeat loop, the executor and its follow-on) on the
+//! host's Linux adapters (the step launcher's transient units, `systemctl`), started as
+//! `hostkeeper daemon` starts: from the packaged binary, then the hand-over of its own update
+//! (`hostkeeper_daemon::handover`, run first, so a binary that waits for a hand-over into another
+//! version execs that binary while its start count lasts). It has two ports that a test cannot
+//! have for real put in place:
 //!
 //! - the package store serves the sealed version directories the test made under the packages
 //!   directory, as the real store leaves them once a package is fetched, proven and unpacked (no
@@ -33,8 +35,9 @@
 //! variable but the notify socket systemd sets for a `Type=notify` unit:
 //!
 //! - `--fixture-dir <dir>` (required by `daemon`): `link/` (above), `units/` (the unit directory
-//!   the daemon writes its own units into, `hostkeeper_daemon::selfunits`) and `placed/` (the
-//!   placed-path state directory). The host's own unit and state directories are never written.
+//!   the daemon places units in and removes the fallback units of the releases before the
+//!   hand-over from, `hostkeeper_daemon::selfunits`) and `placed/` (the placed-path state
+//!   directory). The host's own unit and state directories are never written.
 //! - `--fixture-fail-start <version>`: a `daemon` of that version writes one line to standard
 //!   error ([`refused_line`]) and exits 1 before it does anything else: a new binary that cannot
 //!   start. A `daemon` of any other version runs.
@@ -42,8 +45,12 @@
 //!   observer watches as the service `hostkeeper` in place of the platform's own
 //!   (`dev.hostkeeper.hostkeeper`): the test's job has a label of its own.
 //! - `--fixture-hold-exit <file>`: once the daemon has served and asks to exit with status 0 (its
-//!   own update switched `current`), it creates `<file>` with its pid and blocks, unless `<file>`
-//!   is already there: the moment between the follow-on's switch and the exit it asks for, held
+//!   own update handed over), it creates `<file>` with its pid and blocks, unless `<file>` is
+//!   already there: the moment between the follow-on's hand-over and the exit it asks for, held
+//!   so that a test can kill it there.
+//! - `--fixture-hold-start <version>=<file>`: a `daemon` of that version, once the hand-over has
+//!   exec'd it (and before it does anything else), creates `<file>` with its pid and blocks,
+//!   unless `<file>` is already there: the moment after the exec and before the settlement, held
 //!   so that a test can kill it there.
 //! - `--fixture-packaged <path>`: the file `<path>` (a copy of this program, named by its
 //!   version) stands for the packaged binary (`hostkeeper_daemon::packaged::PACKAGED_BINARIES`):
@@ -67,6 +74,7 @@ use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_daemon::adapters::Adapters;
 use hostkeeper_daemon::cli::{self, Cli, Command, DaemonFlags, HostFiles, SystemdVars};
+use hostkeeper_daemon::handover::{self, ProcessExec};
 use hostkeeper_daemon::links::{DaemonLog, Links};
 use hostkeeper_daemon::packaged;
 use hostkeeper_daemon::packages::{PackageError, Packages, VersionDir};
@@ -97,6 +105,8 @@ struct Fixture {
     dir: Option<PathBuf>,
     fail_start: Option<String>,
     hold_exit: Option<PathBuf>,
+    /// The version that holds its start, and the file it holds it at.
+    hold_start: Option<(String, PathBuf)>,
     own_unit: Option<String>,
     packaged: Option<PathBuf>,
 }
@@ -104,11 +114,6 @@ struct Fixture {
 /// The line a `daemon` of `version` writes before it exits at `--fixture-fail-start`.
 fn refused_line(version: &str) -> String {
     format!("{PROGRAM}: version {version} refuses to start (--fixture-fail-start)")
-}
-
-/// The line written to standard error before `self-update-protocol` is answered.
-fn probed_line() -> String {
-    format!("{PROGRAM}: asked self-update-protocol")
 }
 
 fn main() -> ExitCode {
@@ -122,12 +127,7 @@ fn main() -> ExitCode {
     };
     match cli.command {
         Command::Daemon(flags) => daemon_verb(&fixture, &flags),
-        command => {
-            if matches!(command, Command::SelfUpdateProtocol) {
-                eprintln!("{}", probed_line());
-            }
-            cli::run_with(Cli { command }, systemd_vars())
-        }
+        command => cli::run_with(Cli { command }, systemd_vars()),
     }
 }
 
@@ -152,6 +152,13 @@ fn take_fixture_flags(
                 fixture.fail_start = Some(value.to_string_lossy().into_owned());
             }
             "--fixture-hold-exit" => fixture.hold_exit = Some(PathBuf::from(value)),
+            "--fixture-hold-start" => {
+                let value = value.to_string_lossy().into_owned();
+                let (version, file) = value
+                    .split_once('=')
+                    .ok_or_else(|| format!("{flag} takes <version>=<file>"))?;
+                fixture.hold_start = Some((version.to_owned(), PathBuf::from(file)));
+            }
             "--fixture-own-unit" => fixture.own_unit = Some(value.to_string_lossy().into_owned()),
             "--fixture-packaged" => fixture.packaged = Some(PathBuf::from(value)),
             _ => return Err(format!("unknown flag {flag}")),
@@ -186,6 +193,18 @@ fn daemon_verb(fixture: &Fixture, flags: &DaemonFlags) -> ExitCode {
     };
     if let Some(code) = packaged_start(fixture, flags, &own) {
         return code;
+    }
+    // The hand-over, as `hostkeeper daemon` does it: first, with this process's arguments, so a
+    // binary that waits for a hand-over into another version execs that binary.
+    let args: Vec<OsString> = std::env::args_os().skip(1).collect();
+    handover::at_daemon_start(&flags.state_dir, &own.to_string(), &ProcessExec::new(args));
+    if let Some((version, file)) = &fixture.hold_start
+        && *version == own.to_string()
+        && hold(file)
+    {
+        loop {
+            std::thread::park();
+        }
     }
     if fixture.fail_start.as_deref() == Some(own.to_string().as_str()) {
         eprintln!("{}", refused_line(&own.to_string()));

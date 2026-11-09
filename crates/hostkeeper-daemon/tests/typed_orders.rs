@@ -400,7 +400,7 @@ fn install_update_restart_update_runs_every_order_one_try_past_the_last() {
 /// hostkeeper at [`NEW`]; the host's daemon runs [`OLD`] and names itself in the heartbeat's
 /// `agent`. The coordinator counts the host as one of hostkeeper's, behind, not missing; it
 /// orders the install of the release (try 1), which the executor runs as the self-update: the
-/// binary directory's `current` moves to [`NEW`] and the daemon asks to exit. The binary of
+/// binary directory's `next` links [`NEW`] (`current` stays) and the daemon asks to exit. The binary of
 /// [`NEW`] confirms the update at its start, and the coordinator reads hostkeeper converged and
 /// orders nothing more.
 #[test]
@@ -429,7 +429,8 @@ fn a_bootstrapped_daemon_is_installed_its_own_release_updates_itself_and_converg
         "{convergence}"
     );
     assert!(host.dispatch.run_next());
-    assert_eq!(s.current().as_deref(), Some(NEW));
+    assert_eq!(s.current().as_deref(), Some(OLD));
+    assert_eq!(s.layout().next().expect("next").as_deref(), Some(NEW));
     assert!(daemon.ctx().restart().requested());
     drop(host);
 
@@ -452,7 +453,7 @@ fn a_bootstrapped_daemon_is_installed_its_own_release_updates_itself_and_converg
 /// not list, and the install of hostkeeper's release (which carries that unit, run) was refused
 /// `path_conflict` before anything was written, and its verdict, of a service not listed, was
 /// never sent. The install of [`NEW`] the coordinator orders now places the release around the
-/// deb's link (left as it is), stages and switches the binary, and asks the daemon to exit; the
+/// deb's link (left as it is), stages the binary and links `next` at it, and asks the daemon to exit; the
 /// next heartbeat reports the wait for the restart; the binary of [`NEW`] confirms it at its
 /// start, and the coordinator reads hostkeeper converged, its slot free, and orders nothing more.
 #[test]
@@ -472,7 +473,8 @@ fn a_daemon_the_deb_enabled_installs_its_own_release_restarts_into_it_and_conver
         (Verb::Install(hostkeeper_at(NEW)), 1)
     );
     assert!(host.dispatch.run_next());
-    assert_eq!(s.current().as_deref(), Some(NEW));
+    assert_eq!(s.current().as_deref(), Some(OLD));
+    assert_eq!(s.layout().next().expect("next").as_deref(), Some(NEW));
     assert!(daemon.ctx().restart().requested());
     let link = |path: &str| std::fs::read_link(s.rig.host(path)).ok();
     assert_eq!(link(DEB_WANTS), Some(DEB_UNIT.into()));
@@ -512,19 +514,22 @@ fn a_daemon_the_deb_enabled_installs_its_own_release_restarts_into_it_and_conver
     );
 }
 
+/// A release older than the daemon's oldest reader (0.1.163).
+const BELOW: &str = "0.1.162";
+
 /// Catches the verdict of hostkeeper's own install kept unsent while hostkeeper is not listed (a
 /// daemon the deb installed lists no service `hostkeeper` until its package is placed), which
-/// left the order holding the fleet's one update slot: a release whose protocol this daemon
-/// cannot fall back from is refused before anything is written, and the next heartbeat carries
+/// left the order holding the fleet's one update slot: a release older than this daemon's oldest
+/// reader is refused before anything is written, and the next heartbeat carries
 /// that verdict, which the coordinator records as the host's last update of hostkeeper, the slot
 /// no longer held; once it is acknowledged, the coordinator does not order the same install
 /// again (the host still lists hostkeeper absent, reporting that refusal).
 #[test]
 fn a_refused_install_of_hostkeeper_is_reported_in_the_next_heartbeat() {
     let s = SelfRig::deb("typed-selfupdate-refused");
-    s.probe.set(|| Ok(9));
+    s.shipped_release(BELOW);
     let dir = Scratch::new("typed-selfupdate-refused-coordinator");
-    let coordinator = coordinator_of(dir.path(), HK, NEW);
+    let coordinator = coordinator_of(dir.path(), HK, BELOW);
     let (daemon, _) = hostkeeper_daemon(&s, OLD);
     let mut host = Host::of(daemon, &coordinator, None);
 
@@ -546,7 +551,7 @@ fn a_refused_install_of_hostkeeper_is_reported_in_the_next_heartbeat() {
             reported.order_try
         ),
         (
-            NEW,
+            BELOW,
             pb::Outcome::Failed as i32,
             "protocol_unsupported",
             Some(1)
@@ -591,7 +596,8 @@ fn a_daemon_with_its_own_package_updates_itself_and_converges() {
         (Verb::Update(hostkeeper_at(NEW)), 1)
     );
     assert!(host.dispatch.run_next());
-    assert_eq!(s.current().as_deref(), Some(NEW));
+    assert_eq!(s.current().as_deref(), Some(OLD));
+    assert_eq!(s.layout().next().expect("next").as_deref(), Some(NEW));
     assert!(daemon.ctx().restart().requested());
     drop(host);
 

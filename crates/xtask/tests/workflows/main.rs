@@ -3,13 +3,15 @@
 //! clean ([`CLEAN`]) and reading the exact problems it reports. The rules of `privileged.yml`, the
 //! workflow that runs the privileged tests as root after a merge, are tested in
 //! `privileged_tests.rs`; those of `net-install.yml`, the other workflow with jobs as root, the
-//! network-install jobs on main, in `net_install_tests.rs`; those of `pr-device.yml`, the one workflow with macOS jobs and jobs as root on a pull request, and of
+//! network-install jobs on main, in `net_install_tests.rs`; those of its job `openrc-device`, in
+//! `openrc_tests.rs`, and of its target that runs on both platforms, in `both_platforms_tests.rs`; those of `pr-device.yml`, the one workflow with macOS jobs and jobs as root on a pull request, and of
 //! no secret on a pull request, in `pr_device_tests.rs`, its path rule (the job `changes` and its
 //! skip list) in `pr_paths_tests.rs`, and the conditions of its macOS jobs and of their gates,
 //! evaluated against every outcome, in `pr_device_gate_tests.rs`; those of `advisories.yml`, the advisory
 //! monitor, in `advisories.rs`.
 
 mod advisories;
+mod both_platforms_tests;
 mod callers;
 mod callers_tests;
 mod channel_run_tests;
@@ -28,6 +30,8 @@ mod linux_releases_tests;
 mod mdm_package_tests;
 mod net_install;
 mod net_install_tests;
+mod openrc;
+mod openrc_tests;
 mod pr_device;
 mod pr_device_gate_tests;
 mod pr_device_tests;
@@ -55,6 +59,8 @@ mod template_doc_tests;
 mod testdir;
 mod verify_doc;
 mod verify_doc_tests;
+mod xtask_calls;
+mod xtask_calls_tests;
 mod yaml;
 
 use std::path::PathBuf;
@@ -381,8 +387,8 @@ fn a_privileged_job_on_pull_request_is_refused() {
             "job test: privileged on pull_request (`cargo test --config \"target.'cfg(unix)'.runner = 'sudo'\"`)",
         ),
         (
-            "      - run: cargo xtask sudo-test\n",
-            "job test: privileged on pull_request (`cargo xtask sudo-test`)",
+            "      - run: cargo run --bin sudo-test\n",
+            "job test: privileged on pull_request (`cargo run --bin sudo-test`)",
         ),
         (
             "      - run: |\n          cargo build\n          docker run --privileged image\n",

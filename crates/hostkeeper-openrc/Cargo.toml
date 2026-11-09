@@ -1,0 +1,35 @@
+[package]
+name = "hostkeeper-openrc"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "The OpenRC side of the host daemon: unit control over rc-service, the OpenRC service manager of the observer, and the step launcher that runs each step as a child process group of the daemon."
+
+# docs/design/two-programs.md, section 4.6: an Alpine host runs the same daemon under OpenRC;
+# what differs is behind ports that already exist, and this crate implements them. Everything
+# here is ports and pure logic over a command runner and the process calls of rustix; the
+# real adapters are thin.
+[dependencies]
+# `ServiceManager`, `CommandRunner` and their values, which the OpenRC service manager
+# implements and runs `rc-service` through.
+hostkeeper-observe = { path = "../hostkeeper-observe" }
+# `UnitControl` and `CommandLauncher`, the write side of the service manager that linking needs.
+hostkeeper-placed = { path = "../hostkeeper-placed" }
+# `StepLauncher` and its values, the capture `Ring`, `Captured`, `StepLog` and the `Clock` the
+# launcher bounds a step by. The step runner never depends on this crate.
+hostkeeper-steps = { path = "../hostkeeper-steps" }
+# The signal of a process group (`kill_process_group`), a safe call, so the workspace keeps
+# `unsafe` out.
+rustix = { workspace = true, features = ["process"] }
+thiserror.workspace = true
+
+[dev-dependencies]
+# The invocation a step call carries.
+hostkeeper-hook = { path = "../hostkeeper-hook" }
+hostkeeper-testkit = { path = "../hostkeeper-testkit" }
+
+[lints]
+workspace = true

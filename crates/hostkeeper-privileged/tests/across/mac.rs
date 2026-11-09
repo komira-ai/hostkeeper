@@ -9,10 +9,11 @@
 //! files of the test's tree. hostkeeper's package carries no unit on a Mac, as a release's does
 //! not.
 //!
-//! **The fallback.** The daemon writes its fallback job's plist into `/Library/LaunchDaemons` and
-//! loads it at its start, as on any Mac: the released binary's own job, which runs its
+//! **The fallback.** The released daemon writes its fallback job's plist into
+//! `/Library/LaunchDaemons` and loads it at its start, as on any Mac: its own job, which runs its
 //! `self-update-fallback` every minute and judges the start log, is what puts the released
-//! binary back when this build fails its start.
+//! binary back when this build fails its start. This build boots the job out and removes its
+//! plist at its own start ([`Host::fallback_files_present`]).
 //!
 //! These are fixed places of the Mac, which is why the rig runs only on a throwaway runner:
 //! [`Host::new`] boots out a daemon job another test left and moves aside its plist (with the
@@ -156,6 +157,18 @@ impl Host {
             Ok(JobStatus::Loaded(info)) => info.pid.and_then(|pid| DarwinPidInfo.path(pid).ok()),
             _ => None,
         }
+    }
+
+    /// Whether the fallback job of the releases before the hand-over is there: its plist in
+    /// `/Library/LaunchDaemons`, or the job loaded. The released daemon writes and loads it at its
+    /// start; this build boots it out and removes the plist at its own.
+    pub fn fallback_files_present(&self) -> bool {
+        let plist = Path::new(LAUNCHD_DIR).join(format!("{}.plist", fallback_label()));
+        let loaded = matches!(
+            print(&launchctl(), &fallback_label()),
+            Ok(JobStatus::Loaded(_))
+        );
+        fs::symlink_metadata(plist).is_ok() || loaded
     }
 
     /// The daemon's output so far.

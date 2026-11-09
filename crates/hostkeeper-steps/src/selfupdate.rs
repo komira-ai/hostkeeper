@@ -2,37 +2,38 @@
 //!
 //! The updater is updated like any service, but never inside the trial it guards. After the
 //! update of the release has run its steps and `verify` has succeeded, a follow-on step
-//! ([`follow_on`]) stages the new updater binary beside the old, writes in the step record that
-//! the update waits for the restart ([`AwaitingRestart`]), points `current` at it and tells the
-//! caller to reply and exit cleanly. The unit (hostkeeper's `packaging/linux/hostkeeper.service`)
-//! starts `current` of the binary directory and has `Restart=always`, so that clean exit starts
-//! the new binary. If the new binary cannot start, systemd gives up after `StartLimitBurst`
-//! starts, the unit fails, and the `OnFailure=` unit of its drop-in ([`main_dropin`], which
-//! the daemon writes with [`fallback_unit`] at its start) runs the *previous* binary's
-//! `self-update-fallback` verb, which calls [`Layout::flip_back`] while the update waits for the
-//! restart: `current` points at the previous binary again and the unit is started.
+//! ([`follow_on`]) hands over to the new updater binary (docs/design/two-programs.md, 4.3): it
+//! stages the binary beside the old, points the link `next` at it, writes in the step record
+//! that the update waits for the restart ([`AwaitingRestart`], with its `next` and a start count
+//! of 0), and tells the caller to reply and exit cleanly. `current` is not moved. The unit
+//! (hostkeeper's `packaging/linux/units/hostkeeper.service`) starts `current` of the binary
+//! directory and has `Restart=always`, so that clean exit starts the old binary again, which
+//! execs the new one while the start count lasts ([`crate::handover`]); three starts of the new
+//! binary that do not reach its settlement settle the update `Failed`, and the old binary runs.
+//! Nothing was switched, so nothing is switched back: [`Layout::flip_back`] and the fallback
+//! unit and job ([`main_dropin`], [`fallback_unit`], [`launchd_fallback_job`]) are what releases
+//! before the hand-over used, and what a daemon of this release removes when it finds them.
 //!
 //! The record says `Succeeded` only once the new binary has run (design section 6.6): the step
 //! runner of the update holds its success back ([`crate::StepRunner::with_held_success`]), the
 //! record waits for the restart (`done` at `cleanup`, with [`AwaitingRestart`]), and the binary
-//! that starts next settles it ([`settle`]): the new one confirms it `Succeeded`, and any other
-//! (the fallback, or a hand switch, put the previous binary back) closes it `Failed` after the
-//! commit, of class release, [`REASON_SELF_UPDATE_FALLBACK`], and adds the version to the local
-//! list of bad versions ([`crate::bad`]). A wait that names a hand-over ([`AwaitingRestart::next`],
-//! [`crate::handover`]), written by a later release that does not move `current` before the new
-//! binary has run, is settled by the same function: the new binary finishes the switch itself and
-//! confirms.
+//! that starts next settles it ([`settle`]): the new one finishes the switch (`previous` to the
+//! old `current`, then `current` to itself) and confirms it `Succeeded`, and any other closes it
+//! `Failed` after the commit, of class release, [`REASON_SELF_UPDATE_FALLBACK`], and adds the
+//! version to the local list of bad versions ([`crate::bad`]). A wait without
+//! [`AwaitingRestart::next`], written the old way by a release that switched `current` first and
+//! armed a fallback unit or job, is settled by the same function: the new binary confirms it
+//! when `current` names it, and any other binary closes it `Failed`.
 //!
 //! On macOS the daemon runs from its LaunchDaemons plist, which `hostkeeper-launchd` renders
 //! (`hostkeeper_launchd::plist::daemon_plist`: `KeepAlive` plain `true`, the counterpart of
-//! `Restart=always`, so the clean exit that [`follow_on`] asks for starts the new binary), and
-//! the fallback is a timer job ([`launchd_fallback_job`]) that runs the previous binary's
-//! `self-update-fallback` verb every interval, since launchd has neither a start limit nor
-//! `OnFailure=`. There the verb decides the burst itself: each start of the daemon is written to
-//! the start log ([`crate::starts`]), and the verb falls back only once the version the record
-//! waits for has started [`START_LIMIT_BURST`] times within [`START_LIMIT_WINDOW_SECS`]
+//! `Restart=always`, so the clean exit that [`follow_on`] asks for starts the binary again).
+//! The fallback timer job of the old way ([`launchd_fallback_job`]) ran the previous binary's
+//! `self-update-fallback` verb every interval, which fell back only once the version the record
+//! waited for had started [`START_LIMIT_BURST`] times within [`START_LIMIT_WINDOW_SECS`]
 //! ([`should_fall_back`], the rule `StartLimitBurst=` and `StartLimitIntervalSec=` give systemd
-//! in [`main_dropin`]).
+//! in [`main_dropin`]); the daemon still writes each start to the start log ([`crate::starts`]),
+//! which that job of an older release reads.
 //!
 //! Two kinds of [`Layout`] share the switch:
 //!
@@ -124,8 +125,8 @@ enum Kind {
 /// What the caller does after [`follow_on`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FollowOn {
-    /// The new binary is staged, the record waits for the restart and `current` points at the
-    /// new binary: reply, then exit with status 0.
+    /// The new binary is staged, `next` points at it and the record waits for the restart:
+    /// reply, then exit with status 0.
     Restart,
     /// This updater already is that version, or the update did not succeed: carry on.
     NotNeeded,
@@ -233,6 +234,15 @@ impl Layout {
     /// The version `next` points at, `None` when no hand-over put it there.
     pub fn next(&self) -> io::Result<Option<String>> {
         link_version(&self.next_path())
+    }
+
+    /// Points `next` at the staged `version`, the link a hand-over starts the binary of
+    /// ([`crate::handover`]). The version must be an executable file ([`Layout::check_binary`]).
+    /// Running it again changes nothing. For the binary directory only.
+    pub fn set_next(&self, version: &str) -> io::Result<()> {
+        self.expect_kind(Kind::Binary)?;
+        self.check(version)?;
+        self.set_link(crate::handover::NEXT, version)
     }
 
     /// Removes the link `next`; none there is fine. The directory is synced, so that a removal
@@ -550,34 +560,37 @@ fn check_version(version: &str) -> io::Result<()> {
 }
 
 /// The follow-on step of an update whose steps ended: when it succeeded and this updater
-/// (version `running`) is not `version`, stages the updater binary of the verified release
-/// `release` as `version`, writes in the record of `store` that the update waits for the restart
-/// ([`AwaitingRestart`]), and only then switches to it. When this updater already is `version`,
-/// the binary that runs is the new one, and an unfinished record of the update to it is finished
-/// `Succeeded` here.
+/// (version `running`) is not `version`, hands over to the updater binary of the verified release
+/// `release` (docs/design/two-programs.md, 4.3): stages it as `version`, points the link `next` at
+/// it, and only then writes in the record of `store` that the update waits for the restart
+/// ([`AwaitingRestart`], [`AwaitingRestart::next`] set, a start count of 0). `current` is not
+/// moved: the unit starts the binary it names, which execs `next` while the count lasts
+/// ([`crate::handover`]), and the new binary's start finishes the switch and confirms. When this
+/// updater already is `version`, the binary that runs is the new one, and an unfinished record of
+/// the update to it is finished `Succeeded` here.
 ///
 /// `binary` is the binary's path inside the release, relative and of plain names; it is taken
 /// only through [`Staged::check`], so a release that changed since it was sealed, or a path that
-/// leaves it, stages nothing, writes nothing and moves no link. There is no way to give this a
+/// leaves it, stages nothing, writes nothing and points no link. There is no way to give this a
 /// file of no verified release.
 ///
 /// `order_id` is the coordinator's id of the order the update runs for, kept in the wait
 /// ([`AwaitingRestart::order_id`]) so that the binary that settles it can report its verdict.
 ///
-/// A version `current` or `previous` already names (a repeat after a crash between the switch
-/// and the restart, or a return to the binary before) is not staged again: it is switched to
-/// when its file holds the bytes of the verified binary, and refused, with nothing changed,
-/// when it does not.
+/// A version `current` or `previous` already names (a return to the binary before) is not staged
+/// again: it is handed over to when its file holds the bytes of the verified binary, and
+/// refused, with nothing changed, when it does not.
 ///
 /// The record must hold the update to `version` unfinished: the step runner held its success
 /// back ([`crate::StepRunner::with_held_success`]), so the restart interrupts nothing and no
 /// binary reads the update as succeeded before the new one has run
-/// ([`SelfUpdateError::NoUpdate`] otherwise, with nothing switched). The record is written before
-/// the switch, so that a crash between the two leaves a record the next start settles
-/// ([`settle`]); a switch that fails takes the wait back. It is safe to call again after a crash.
+/// ([`SelfUpdateError::NoUpdate`] otherwise, with nothing handed over). The link is made before
+/// the record is written, so that a crash between the two leaves a link and no wait, which the
+/// next start removes ([`settle_with`]); a record that cannot be written takes the link back. It
+/// is safe to call again after a crash.
 #[expect(
     clippy::too_many_arguments,
-    reason = "each is a separate input of the one step that writes the wait and switches; the order id joins them so the wait is written once, and a struct for the eight would have this one caller"
+    reason = "each is a separate input of the one step that stages, links and writes the wait; the order id joins them so the wait is written once, and a struct for the eight would have this one caller"
 )]
 pub fn follow_on(
     finished: &Finished,
@@ -597,6 +610,7 @@ pub fn follow_on(
         return Ok(FollowOn::NotNeeded);
     }
     let new_binary = release.check(binary)?;
+    unfinished_update(store, version)?;
     if layout.in_place(version)? {
         let same = fs::read(layout.version_path(version))? == fs::read(&new_binary)?;
         if !same {
@@ -609,31 +623,21 @@ pub fn follow_on(
     } else {
         layout.stage(version, &new_binary)?;
     }
+    layout.set_next(version)?;
     let awaiting = AwaitingRestart {
         version: version.to_owned(),
         verdict_promotion_pending: promotion_pending,
         order_id: order_id.map(str::to_owned),
-        next: None,
-        starts: None,
+        next: Some(version.to_owned()),
+        starts: Some(0),
     };
-    await_restart(store, awaiting.clone())?;
-    if let Err(error) = layout.switch(version) {
-        // The switch did not happen: the record waits for nothing, so that a start of this
-        // binary does not read it as a fallback, and a resend runs the follow-on again. Should
-        // that write fail too, the record waits, and the next start settles it as a fallback.
-        drop(stop_waiting(store, &awaiting));
-        return Err(error.into());
+    if let Err(error) = await_restart(store, awaiting) {
+        // The record waits for nothing, so that a resend runs the follow-on again; the link
+        // goes, as the next start would remove it.
+        drop(layout.remove_next());
+        return Err(error);
     }
     Ok(FollowOn::Restart)
-}
-
-/// Under the record lock, takes back the wait for the restart [`await_restart`] wrote.
-fn stop_waiting(store: &RecordStore, awaiting: &AwaitingRestart) -> Result<(), SelfUpdateError> {
-    let _held = store.hold();
-    let mut rec = unfinished_update(store, &awaiting.version)?;
-    rec.progress.awaiting_restart = None;
-    store.save(&rec)?;
-    Ok(())
 }
 
 /// Under the record lock, marks the unfinished update to `awaiting.version` as waiting for the

@@ -90,7 +90,7 @@ fn problems(text: &str) -> Vec<String> {
     shape_problems(FILE, text, &net_install_targets())
 }
 
-/// The shape problems of privileged.yml's `text`, held to its own three jobs.
+/// The shape problems of privileged.yml's `text`, held to its own four jobs.
 fn privileged_problems(text: &str) -> Vec<String> {
     shape_problems(PRIVILEGED_WORKFLOW, text, &committed_targets())
 }
@@ -256,6 +256,7 @@ fn an_apt_step_outside_the_network_install_jobs_is_refused() {
         ("privileged", UPDATE),
         ("first-boot", UPDATE),
         ("macos-device", INSTALL_X86),
+        ("openrc-device", INSTALL_X86),
     ] {
         let found = privileged_problems(&with_first_step(&text, job, run));
         assert_eq!(

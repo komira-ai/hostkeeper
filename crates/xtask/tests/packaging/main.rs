@@ -1,12 +1,14 @@
 //! The packaging of hostkeeper: in `packaging/linux/`, the unit, the tmpfiles rules, the config
 //! template, `nfpm.yaml`, the package scripts and the boot-image overlay, with the two units of
 //! the daemon (the bootstrap unit the deb and the rpm install, and the package unit hostkeeper's
-//! own package carries); and the coordinator's container
+//! own package carries); in `packaging/alpine/`, the apk's `nfpm.yaml`, the OpenRC init script
+//! and the apk's scripts, each held to the Linux file it follows; and the coordinator's container
 //! build file, `packaging/container/Dockerfile`. Each is read from the committed file and held to
 //! docs/design/hostkeeper-design.md (sections 4.1, 4.6, 6.5, 6.6, 10 and 12.3). Each check is a
 //! function of the texts, and each is also shown to refuse its defect on an altered text.
-//! Nothing here runs systemd, nfpm, a package manager or a container build.
+//! Nothing here runs systemd, OpenRC, nfpm, a package manager or a container build.
 
+mod alpine;
 mod attestation_files;
 mod config_template;
 mod container;

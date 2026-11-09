@@ -1,31 +1,26 @@
 //! What stops or bounds an update of hostkeeper itself before anything is staged: other services'
-//! unfinished updates, the protocol of the new binary and its probe, the list of bad versions, the
-//! verbs that never update hostkeeper; and what a confirmed self-update clears.
+//! unfinished updates, a release older than the daemon's oldest reader, the fallback files the
+//! start could not remove, the list of bad versions, the verbs that never update hostkeeper; and
+//! what a confirmed self-update clears.
 
 mod support;
 
-use std::collections::VecDeque;
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_daemon::checks;
 use hostkeeper_daemon::executor::RecordState;
+use hostkeeper_daemon::selfunits::ALERT_SELF_UNITS;
 use hostkeeper_daemon::selfupdate::{
-    LauncherProbe, PROBE_OUTPUT_BYTES, PROBE_TIMEOUT_SECS, PROBE_UNIT, PROTOCOL_VERB, ProbeError,
-    ProtocolProbe, REASON_PROTOCOL_UNREADABLE, REASON_PROTOCOL_UNSUPPORTED,
-    REASON_SELF_BINARY_MISSING, RELEASE_BINARY, Restart, SELF_UPDATE_PROTOCOL, accepted,
-    binary_dir, read_protocol,
+    PROTOCOL_VERB, REASON_PROTOCOL_UNSUPPORTED, REASON_SELF_BINARY_MISSING, RELEASE_BINARY,
+    Restart, SELF_UPDATE_PROTOCOL, binary_dir,
 };
 use hostkeeper_daemon::verb::HookedVerb;
-use hostkeeper_daemon::{Daemon, Refusal, Reply};
+use hostkeeper_daemon::{Refusal, Reply};
 use hostkeeper_hook::{Class, Step, Verdict};
 use hostkeeper_steps::record::{AwaitingRestart, RECORD_FILE, State};
-use hostkeeper_steps::{
-    BAD_VERSIONS_FILE, BootId, LaunchError, ProbeCall, ProbeExit, RecordStore, Settled, StepCall,
-    StepExit, StepLauncher,
-};
+use hostkeeper_steps::{BAD_VERSIONS_FILE, BootId, RecordStore, Settled};
 use support::selfupdate::{
     HK, NEW, OLD, SelfRig, awaiting, put_record, record_of, refused_before_commit,
 };
@@ -38,9 +33,6 @@ fn with_a(name: &str, state: Option<State>) -> (SelfRig, Reply) {
         Some(state) => put_record(&s.rig, "a", &record_of("a", state)),
         None => fs::create_dir_all(s.rig.state.join("a")).expect("a's state dir"),
     }
-    // A protocol this daemon refuses: an order that passed every check before the probe ends
-    // there, without a swap.
-    s.probe.set(|| Ok(0));
     let reply = s.daemon().order(&s.order(NEW, 1));
     (s, reply)
 }
@@ -58,7 +50,7 @@ fn running() -> State {
 
 /// Catches the table of other services' records read wrong: a record `pending`, `running`,
 /// `done` at a middle step, or written by a newer daemon is an unfinished update, and the order
-/// is `busy` naming the service, with no record of hostkeeper written and nothing probed.
+/// is `busy` naming the service, with no record of hostkeeper written.
 #[test]
 fn a_pending_record_of_another_service_blocks_the_self_update() {
     let done = State::Done {
@@ -73,7 +65,7 @@ fn a_pending_record_of_another_service_blocks_the_self_update() {
         assert_eq!(*refusal, Refusal::Busy, "{state:?}");
         assert!(detail.contains("step record of a"), "{detail}");
         assert!(s.rig.record(HK).is_none(), "{state:?}");
-        assert!(s.probe.asked().is_empty(), "{state:?}");
+        assert!(s.hk_steps().is_empty(), "{state:?}");
     }
     let s = SelfRig::new("su-blocked-newer");
     fs::create_dir_all(s.rig.state.join("a")).expect("a's state dir");
@@ -83,7 +75,7 @@ fn a_pending_record_of_another_service_blocks_the_self_update() {
 }
 
 /// Catches finished updates of other services holding the self-update back: a record finished
-/// with any verdict, and a state directory with no record, let the order through to the probe.
+/// with any verdict, and a state directory with no record, let the order through to its hand-over.
 #[test]
 fn finished_records_of_other_services_do_not() {
     let finished = |verdict: Verdict| State::Finished {
@@ -106,12 +98,8 @@ fn finished_records_of_other_services_do_not() {
     ];
     for (n, state) in rows.into_iter().enumerate() {
         let (s, reply) = with_a(&format!("su-idle-{n}"), state.clone());
-        assert_eq!(
-            reply,
-            refused_before_commit(Class::Release, REASON_PROTOCOL_UNSUPPORTED),
-            "{state:?}"
-        );
-        assert_eq!(s.probe.asked().len(), 1, "{state:?}");
+        assert_eq!(reply, awaiting(false), "{state:?}");
+        assert_eq!(s.layout().next().expect("next").as_deref(), Some(NEW));
     }
 }
 
@@ -131,230 +119,59 @@ fn an_unreadable_step_record_of_another_service_blocks_the_self_update() {
     assert!(s.rig.record(HK).is_none());
 }
 
-/// Catches a protocol check made after staging, or a range off by one: with
-/// `SELF_UPDATE_PROTOCOL` = 1, a new binary of protocol 0 or 3 is `Failed` before the commit, of
-/// class release, `protocol_unsupported`, with the binary directory as it was and no record; 1 and
-/// 2 are accepted and swapped.
+/// Catches an update to a release the daemon cannot fall back to being staged, or the verb a
+/// daemon before stage 2 probes with being gone: a release older than the oldest reader (0.1.163)
+/// is `Failed` before the commit, of class release, `protocol_unsupported`, with the binary
+/// directory as it was, no record and no step run; one at the oldest reader is handed over to; the
+/// verb is still answered, and `SELF_UPDATE_PROTOCOL` stays 1.
 #[test]
-fn a_protocol_outside_the_accepted_range_is_refused_before_anything_is_staged() {
-    assert_eq!(SELF_UPDATE_PROTOCOL, 1);
-    for (protocol, ok) in [
-        (0, false),
-        (1, true),
-        (2, true),
-        (3, false),
-        (u32::MAX, false),
-    ] {
-        assert_eq!(accepted(protocol), ok, "{protocol}");
-    }
-    for protocol in [0, 1, 2, 3] {
-        let s = SelfRig::new(&format!("su-protocol-{protocol}"));
-        s.probe.set(move || Ok(protocol));
-        let bin = binary_dir(&s.rig.state);
-        let before = snapshot(&bin);
-        let reply = s.daemon().order(&s.order(NEW, 1));
-        match accepted(protocol) {
-            true => {
-                assert_eq!(reply, awaiting(false), "{protocol}");
-                assert_eq!(s.current().as_deref(), Some(NEW));
-            }
-            false => {
-                assert_eq!(
-                    reply,
-                    refused_before_commit(Class::Release, REASON_PROTOCOL_UNSUPPORTED),
-                    "{protocol}"
-                );
-                assert_eq!(snapshot(&bin), before, "{protocol}");
-                assert!(s.rig.record(HK).is_none(), "{protocol}");
-                assert!(s.hk_steps().is_empty(), "{protocol}");
-            }
-        }
-    }
+fn a_release_older_than_the_oldest_reader_is_refused_before_anything_is_staged() {
+    assert_eq!(
+        (SELF_UPDATE_PROTOCOL, PROTOCOL_VERB),
+        (1, "self-update-protocol")
+    );
+    let s = SelfRig::new("su-below-reader");
+    s.release("0.1.162");
+    let bin = binary_dir(&s.rig.state);
+    let before = snapshot(&bin);
+    assert_eq!(
+        s.daemon().order(&s.order("0.1.162", 1)),
+        refused_before_commit(Class::Release, REASON_PROTOCOL_UNSUPPORTED)
+    );
+    assert_eq!(snapshot(&bin), before);
+    assert!(s.rig.record(HK).is_none());
+    assert!(s.hk_steps().is_empty());
+
+    s.release("0.1.163");
+    assert_eq!(s.daemon().order(&s.order("0.1.163", 1)), awaiting(false));
+    assert_eq!(s.layout().next().expect("next").as_deref(), Some("0.1.163"));
 }
 
-/// A launcher whose hook steps exit 0 and whose probes answer from a script, keeping each probe
-/// call.
-#[derive(Default)]
-struct ProbeLauncher {
-    answers: Mutex<VecDeque<Result<ProbeExit, LaunchError>>>,
-    calls: Mutex<Vec<ProbeCalled>>,
-}
-
-/// One probe call, as the launcher was given it.
-#[derive(Clone, Debug, PartialEq)]
-struct ProbeCalled {
-    service: String,
-    executable: PathBuf,
-    args: Vec<String>,
-    unit: String,
-    timeout_secs: u64,
-    output_bytes: usize,
-}
-
-impl StepLauncher for ProbeLauncher {
-    fn run(&self, _call: &StepCall<'_>) -> Result<StepExit, LaunchError> {
-        Ok(StepExit {
-            code: Some(0),
-            last_line: None,
-        })
-    }
-
-    fn stop(&self, _unit: &str) -> Result<(), LaunchError> {
-        Ok(())
-    }
-
-    fn run_probe(&self, call: &ProbeCall<'_>) -> Result<ProbeExit, LaunchError> {
-        self.calls.lock().expect("calls").push(ProbeCalled {
-            service: call.service.to_owned(),
-            executable: call.executable.to_path_buf(),
-            args: call.args.iter().map(|arg| (*arg).to_owned()).collect(),
-            unit: call.unit.to_owned(),
-            timeout_secs: call.timeout_secs,
-            output_bytes: call.output_bytes,
-        });
-        self.answers
-            .lock()
-            .expect("answers")
-            .pop_front()
-            .unwrap_or_else(|| Err(LaunchError::Launcher("no answer".to_owned())))
-    }
-}
-
-fn printed(code: Option<i32>, output: &str, truncated: bool) -> Result<ProbeExit, LaunchError> {
-    Ok(ProbeExit {
-        code,
-        output: output.as_bytes().to_vec(),
-        truncated,
-    })
-}
-
-/// Catches a probe that is not bounded: the probe of the host asks the launcher to run
-/// `<binary> self-update-protocol` for the service `hostkeeper` in its own unit, bounded to 10
-/// seconds, keeping at most 64 bytes of what it prints, and reads `1`.
+/// Catches a start that could not remove the fallback files of the releases before the hand-over
+/// going on to hand over while they stand: an order for hostkeeper is `busy`, naming the alert,
+/// with nothing staged, linked or recorded, once the start called `hold_self_updates`.
 #[test]
-fn the_protocol_probe_command_is_bounded() {
-    let launcher = Arc::new(ProbeLauncher::default());
-    launcher
-        .answers
-        .lock()
-        .expect("answers")
-        .push_back(printed(Some(0), "1\n", false));
-    let probe = LauncherProbe::new(launcher.clone());
-    let binary = Path::new("/release/bin/hostkeeper");
-    assert_eq!(probe.protocol(binary).expect("read"), 1);
-    assert_eq!((PROBE_TIMEOUT_SECS, PROBE_OUTPUT_BYTES), (10, 64));
-    let calls = launcher.calls.lock().expect("calls").clone();
-    assert_eq!(
-        calls,
-        [ProbeCalled {
-            service: HK.to_owned(),
-            executable: binary.to_path_buf(),
-            args: vec![PROTOCOL_VERB.to_owned()],
-            unit: PROBE_UNIT.to_owned(),
-            timeout_secs: 10,
-            output_bytes: 64,
-        }]
-    );
-    assert_eq!(PROTOCOL_VERB, "self-update-protocol");
+fn a_self_update_is_busy_while_the_fallback_files_could_not_be_removed() {
+    let s = SelfRig::new("su-units-held");
+    let daemon = s.daemon();
+    assert!(!daemon.ctx().self_updates_held());
+    daemon.ctx().hold_self_updates();
+    assert!(daemon.ctx().self_updates_held());
+    let bin = binary_dir(&s.rig.state);
+    let before = snapshot(&bin);
+    let reply = daemon.order(&s.order(NEW, 1));
+    let Reply::Refused { refusal, detail } = &reply else {
+        panic!("{reply:?}");
+    };
+    assert_eq!(*refusal, Refusal::Busy);
+    assert!(detail.contains(ALERT_SELF_UNITS), "{detail}");
+    assert_eq!(snapshot(&bin), before);
+    assert!(s.rig.record(HK).is_none());
+    assert!(s.hk_steps().is_empty());
+    assert!(!daemon.ctx().restart().requested());
 }
 
-/// Catches a probe that cannot be read taken for an accepted protocol: a probe whose launcher
-/// fails, one killed by its bound, one that exits 1, one that prints two lines, a word, nothing,
-/// more than it may, or a number past `u32` gives no protocol; one line of digits, with or
-/// without its newline, gives it.
-#[test]
-fn a_probe_reads_one_line_of_digits_and_nothing_else() {
-    let rows = [
-        (printed(None, "", false), false),
-        (printed(Some(1), "1\n", false), false),
-        (printed(Some(0), "1\n2\n", false), false),
-        (printed(Some(0), "x\n", false), false),
-        (printed(Some(0), "", false), false),
-        (printed(Some(0), "\n", false), false),
-        (printed(Some(0), "1\n", true), false),
-        (printed(Some(0), "99999999999\n", false), false),
-        (printed(Some(0), " 1\n", false), false),
-        (printed(Some(0), "2", false), true),
-        (printed(Some(0), "1\n", false), true),
-    ];
-    for (exit, readable) in rows {
-        let exit = exit.expect("an exit");
-        assert_eq!(read_protocol(&exit).is_ok(), readable, "{exit:?}");
-    }
-    let killed = read_protocol(&ProbeExit {
-        code: None,
-        output: Vec::new(),
-        truncated: false,
-    });
-    assert!(matches!(killed, Err(ProbeError::Exit(None))), "{killed:?}");
-    let exited = read_protocol(&printed(Some(1), "1\n", false).expect("an exit"));
-    assert_eq!(
-        exited.expect_err("exit 1").to_string(),
-        "the probe ended with the status Some(1)"
-    );
-    let word = read_protocol(&printed(Some(0), "x\n", false).expect("an exit"));
-    assert_eq!(
-        word.expect_err("a word").to_string(),
-        "the probe printed \"x\\n\", which is not one line of a decimal number"
-    );
-    let launcher = Arc::new(ProbeLauncher::default());
-    let probe = LauncherProbe::new(launcher);
-    let failed = probe.protocol(Path::new("/x"));
-    assert!(matches!(failed, Err(ProbeError::Launch(_))), "{failed:?}");
-    assert!(
-        failed
-            .expect_err("failed")
-            .to_string()
-            .contains("no answer")
-    );
-}
-
-/// Catches a bad probe read as an accepted protocol through the daemon: the probe's launcher
-/// failing, the probe killed by its bound, printing two lines, and printing `x` each refuse the
-/// update `Failed` before the commit, of class environment, `protocol_unreadable`, and nothing is
-/// staged or recorded. The step launcher of a build without probes refuses the same way.
-#[test]
-fn an_unreadable_protocol_is_refused_as_environment() {
-    let rows = [
-        Err(LaunchError::Launcher("lost".to_owned())),
-        printed(None, "", false),
-        printed(Some(0), "1\n2\n", false),
-        printed(Some(0), "x\n", false),
-    ];
-    for (n, row) in rows.into_iter().enumerate() {
-        let s = SelfRig::new(&format!("su-unreadable-{n}"));
-        let launcher = Arc::new(ProbeLauncher::default());
-        launcher.answers.lock().expect("answers").push_back(row);
-        let daemon = s
-            .daemon()
-            .with_probe(Arc::new(LauncherProbe::new(launcher.clone())));
-        let bin = binary_dir(&s.rig.state);
-        let before = snapshot(&bin);
-        assert_eq!(
-            daemon.order(&s.order(NEW, 1)),
-            refused_before_commit(Class::Environment, REASON_PROTOCOL_UNREADABLE),
-            "row {n}"
-        );
-        assert_eq!(snapshot(&bin), before, "row {n}");
-        assert!(s.rig.record(HK).is_none(), "row {n}");
-        let calls = launcher.calls.lock().expect("calls").clone();
-        assert_eq!(calls.len(), 1, "row {n}");
-        assert!(calls[0].executable.ends_with(RELEASE_BINARY), "row {n}");
-    }
-    let s = SelfRig::new("su-unreadable-default");
-    let daemon = Daemon::new(
-        support::config(),
-        s.rig.dirs(),
-        s.rig.ports(),
-        support::selfupdate::own(OLD),
-    );
-    assert_eq!(
-        daemon.order(&s.order(NEW, 1)),
-        refused_before_commit(Class::Environment, REASON_PROTOCOL_UNREADABLE)
-    );
-}
-
-/// Catches a release with no hostkeeper binary being probed or staged: it is `Failed` before the
+/// Catches a release with no hostkeeper binary being staged: it is `Failed` before the
 /// commit, of class release, `self_binary_missing`, and nothing is written.
 #[test]
 fn a_release_without_the_binary_is_refused_before_anything_is_staged() {
@@ -364,7 +181,6 @@ fn a_release_without_the_binary_is_refused_before_anything_is_staged() {
         s.daemon().order(&s.order(NEW, 1)),
         refused_before_commit(Class::Release, REASON_SELF_BINARY_MISSING)
     );
-    assert!(s.probe.asked().is_empty());
     assert!(s.rig.record(HK).is_none());
 }
 
@@ -386,7 +202,6 @@ fn a_garbage_bad_versions_file_refuses_self_update_naming_the_file() {
     assert!(detail.contains(&path.display().to_string()), "{detail}");
     assert!(s.rig.record(HK).is_none());
     assert!(s.hk_steps().is_empty());
-    assert!(s.probe.asked().is_empty());
 }
 
 /// Catches a `force` or a `force_rollback` reaching hostkeeper's own update: both are refused
@@ -577,7 +392,7 @@ async fn a_restart_asked_while_the_server_waits_ends_the_wait() {
 
 /// Catches the self-update going on when its own state cannot be used: a held halt that cannot be
 /// read refuses it `halt_unreadable`, and a state directory of hostkeeper that cannot be made
-/// refuses it `store_failed`; neither probes, runs or records anything.
+/// refuses it `store_failed`; neither runs or records anything.
 #[test]
 fn a_self_update_whose_state_cannot_be_used_is_refused() {
     let s = SelfRig::new("su-halt-unreadable");
@@ -585,22 +400,20 @@ fn a_self_update_whose_state_cannot_be_used_is_refused() {
     let reply = s.daemon().order(&s.order(NEW, 1));
     assert_eq!(reply.refusal(), Some(Refusal::HaltUnreadable), "{reply:?}");
     assert!(s.rig.record(HK).is_none());
-    assert!(s.probe.asked().is_empty());
 
     let s = SelfRig::new("su-state-dangling");
     fs::remove_dir_all(s.hk_state()).expect("no state of hostkeeper");
     std::os::unix::fs::symlink("nowhere", s.hk_state()).expect("a dangling link");
     let reply = s.daemon().order(&s.order(NEW, 1));
     assert_eq!(reply.refusal(), Some(Refusal::StoreFailed), "{reply:?}");
-    assert!(s.probe.asked().is_empty());
     assert!(s.hk_steps().is_empty());
 }
 
-/// Catches a release that changed after it was verified being probed or answered as a release
+/// Catches a release that changed after it was verified being handed over to or answered as a release
 /// failure: when the release's binary changes while the swap waits for the step lock, the order
-/// is refused `release_unreadable`, nothing is probed, run or recorded, and a resend runs again.
+/// is refused `release_unreadable`, nothing is run or recorded, and a resend runs again.
 #[test]
-fn a_release_that_changed_before_the_probe_is_refused_unreadable() {
+fn a_release_that_changed_before_the_hand_over_is_refused_unreadable() {
     let s = SelfRig::new("su-changed-release");
     fs::create_dir_all(s.rig.state.join("a")).expect("a's state dir");
     let binary = s.rig.packages.join(HK).join(NEW).join(RELEASE_BINARY);
@@ -623,7 +436,6 @@ fn a_release_that_changed_before_the_probe_is_refused_unreadable() {
         Some(Refusal::ReleaseUnreadable),
         "{reply:?}"
     );
-    assert!(s.probe.asked().is_empty());
     assert!(s.hk_steps().is_empty());
     assert!(s.rig.record(HK).is_none());
     assert_eq!(s.daemon().order(&s.order(NEW, 1)), awaiting(false));

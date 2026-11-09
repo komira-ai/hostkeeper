@@ -62,8 +62,7 @@ pub use clock::{
 pub use deadman::{DeadMan, Watch};
 pub use force::{ForceFailure, ForcePhase, ForceRecord, ForceVerdict};
 pub use launcher::{
-    AdditiveCall, BUILTIN_EXIT, Bound, LaunchError, ProbeCall, ProbeExit, StepCall, StepExit,
-    StepLauncher,
+    AdditiveCall, BUILTIN_EXIT, Bound, LaunchError, StepCall, StepExit, StepLauncher,
 };
 pub use prune::{
     PRUNE_PREFIX, Protected, PruneInputs, PrunePlan, PruneReport, PruneStep, prune_plan,

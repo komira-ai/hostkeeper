@@ -206,7 +206,8 @@ pub fn fallback_after_burst(dir: &Path, clock: &dyn Clock) -> Result<Judged, Fal
 
 /// On macOS, adds this start of the daemon of version `own` to the start log of the service
 /// `hostkeeper` under `state_dir` (stamped on `clock`), when that service has a state directory:
-/// `Ok(true)` when it was written. Nothing on Linux, where systemd counts the starts.
+/// `Ok(true)` when it was written. Nothing on Linux, where systemd counts the starts, under
+/// systemd or OpenRC: no OpenRC host ever ran an update the old way, which the log judges.
 pub fn record_start(
     state_dir: &Path,
     kind: PlatformKind,
@@ -215,7 +216,7 @@ pub fn record_start(
 ) -> Result<bool, StartLogError> {
     let dir = state_dir.join(SELF_SERVICE);
     let counted = match kind {
-        PlatformKind::Linux => false,
+        PlatformKind::Linux | PlatformKind::Openrc => false,
         PlatformKind::Macos => dir.is_dir(),
     };
     if counted {
@@ -232,11 +233,11 @@ pub fn main(dir: &Path) -> ExitCode {
     main_for(dir, Platform::host().kind, &host_clock())
 }
 
-/// The verb on a host of `kind`: [`fallback`] on Linux, [`fallback_after_burst`] on `clock` on
-/// macOS, its error printed.
+/// The verb on a host of `kind`: [`fallback`] on Linux (under systemd or OpenRC),
+/// [`fallback_after_burst`] on `clock` on macOS, its error printed.
 pub fn main_for(dir: &Path, kind: PlatformKind, clock: &dyn Clock) -> ExitCode {
     let done = match kind {
-        PlatformKind::Linux => fallback(dir).map(|_| ()),
+        PlatformKind::Linux | PlatformKind::Openrc => fallback(dir).map(|_| ()),
         PlatformKind::Macos => fallback_after_burst(dir, clock).map(|_| ()),
     };
     match done {

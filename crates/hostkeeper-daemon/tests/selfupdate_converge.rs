@@ -18,7 +18,7 @@ use std::sync::Arc;
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_daemon::fallback::fallback_with;
 use hostkeeper_daemon::link_adapters::{DaemonRecords, recorded};
-use hostkeeper_daemon::selfupdate::ProbeError;
+use hostkeeper_daemon::selfupdate::RELEASE_BINARY;
 use hostkeeper_launchd::Label;
 use hostkeeper_link::{Order, OrderId, OrderRef, Outcome, ServiceRecords, Verb};
 use hostkeeper_proto::hostkeeper::agent::v1 as pb;
@@ -62,7 +62,7 @@ fn order_of(host: &Host, n: usize) -> Order {
 }
 
 /// Catches the farm's stalled Mac rollout: a Mac failed hostkeeper's update to [`NEW`]
-/// (`protocol_unreadable`), and the coordinator kept that verdict as the host's. Ordered
+/// (`self_binary_missing`), and the coordinator kept that verdict as the host's. Ordered
 /// [`LATER`], the daemon of [`OLD`] ran the self-update and exited before its `Deferred` reached
 /// a heartbeat, and the binary of [`LATER`] settled it `Succeeded` but reported no verdict, so
 /// the coordinator kept reading the failure as the host's last update; and the daemon observed
@@ -83,7 +83,8 @@ fn a_mac_self_update_reports_its_success_over_an_older_failure_bakes_and_converg
     }
     let dir = Scratch::new("converge-mac-coordinator");
     let coordinator = coordinator_with(dir.path(), HK, NEW, BAKE);
-    s.probe.set(|| Err(ProbeError::Exit(None)));
+    // A release that holds no hostkeeper binary: the update fails before the commit.
+    fs::remove_file(s.rig.packages.join(HK).join(NEW).join(RELEASE_BINARY)).expect("remove");
     s.runs(&mac_job(), OLD, 100);
     let daemon = Arc::new(s.daemon_running_as(OLD, &mac_job()));
     let mut host = Host::of(Arc::clone(&daemon), &coordinator, None);
@@ -101,7 +102,7 @@ fn a_mac_self_update_reports_its_success_over_an_older_failure_bakes_and_converg
         (
             NEW.to_owned(),
             pb::Outcome::Failed as i32,
-            "protocol_unreadable".to_owned(),
+            "self_binary_missing".to_owned(),
             failed.id.as_str().to_owned(),
             Some(1)
         )
@@ -109,12 +110,11 @@ fn a_mac_self_update_reports_its_success_over_an_older_failure_bakes_and_converg
     assert_eq!(hk_on_host(&coordinator).health, pb::Health::Healthy as i32);
 
     set_desired_of(&coordinator, HK, LATER);
-    s.probe.set(|| Ok(1));
     host.beat();
     let ordered = order_of(&host, 2);
     assert_eq!(ordered.verb, Verb::Update(hostkeeper_at(LATER)));
     assert!(host.dispatch.run_next());
-    assert_eq!(s.current().as_deref(), Some(LATER));
+    assert_eq!(s.layout().next().expect("next").as_deref(), Some(LATER));
     assert!(daemon.ctx().restart().requested());
     // The daemon exits before its `Deferred` reaches a heartbeat.
     drop(host);
@@ -219,15 +219,16 @@ fn a_mac_the_pkg_installed_reports_the_install_of_its_release_and_converges() {
 }
 
 /// Catches a fallback the coordinator never hears of, whichever binary settles it: the binary
-/// that starts after the switch is the previous one (the new one fell back), settled either by
-/// the fallback verb before the previous binary starts (the fallback unit on Linux, the fallback
-/// job on a Mac) or by the previous binary at its start; either way the record is `Failed` after
-/// the commit, of class release, `self_update_fallback`, and the first heartbeat of the previous
-/// binary carries that verdict under the update's id and try.
+/// that starts after the hand-over is the old one (the new one failed its tries), settled by the
+/// old binary at its start; or, for an update a release before the hand-over made the old way,
+/// settled either by the fallback verb before the previous binary starts (the fallback unit on
+/// Linux, the fallback job on a Mac) or by the previous binary at its start; either way the
+/// record is `Failed` after the commit, of class release, `self_update_fallback`, and the first
+/// heartbeat of the old binary carries that verdict under the update's id and try.
 #[test]
 fn a_self_update_that_fell_back_reports_the_fallback_under_its_order() {
-    for by_the_verb in [true, false] {
-        let tag = format!("converge-fallback-{by_the_verb}");
+    for (old_way, by_the_verb) in [(true, true), (true, false), (false, false)] {
+        let tag = format!("converge-fallback-{old_way}-{by_the_verb}");
         let s = SelfRig::new(&tag);
         for (step, line) in HOOK_LINES {
             s.rig.launcher.replies(HK, step, &[(0, line)]);
@@ -244,6 +245,9 @@ fn a_self_update_that_fell_back_reports_the_fallback_under_its_order() {
         assert!(host.dispatch.run_next());
         let update = order_of(&host, 0);
         drop(host);
+        if old_way {
+            s.switch_the_old_way(NEW);
+        }
 
         let daemon = Arc::new(s.daemon_running_as(OLD, &mac_job()));
         let settled = match by_the_verb {
@@ -260,7 +264,9 @@ fn a_self_update_that_fell_back_reports_the_fallback_under_its_order() {
                 Settled::FellBack
             }
             false => {
-                s.layout().flip_back().expect("the previous binary back");
+                if old_way {
+                    s.layout().flip_back().expect("the previous binary back");
+                }
                 daemon.settle_self_update().expect("settled")
             }
         };

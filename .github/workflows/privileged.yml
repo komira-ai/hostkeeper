@@ -5,9 +5,10 @@
 # meet the real thing: the step launcher's transient units and their bound, the dead-man's stop
 # by name, the observer's systemctl and /proc adapters, the unit control's systemctl
 # (daemon-reload, start, stop, is-active), hostkeeper's update of itself as a unit made of
-# packaging/linux/units/hostkeeper.service (and, for the bootstrap start, packaging/linux/hostkeeper.service) with its drop-in and fallback unit (the restart into the
-# new binary, the start limit, OnFailure=, the fallback's flip back, the settle at start, a
-# SIGKILL before and after the switch while the update waits for its restart), and, in
+# packaging/linux/units/hostkeeper.service (and, for the bootstrap start, packaging/linux/hostkeeper.service) by the hand-over (the
+# restart into the old binary, which execs the new one, the settle at the new binary's start,
+# three starts that do not settle falling back to the old one, a SIGKILL before and after the
+# exec while the update waits for its restart), and, in
 # tierstore_shaped.rs, the whole update path: the real daemon under a Type=notify unit and the
 # real coordinator in process update a tierstore-shaped package fetched from a loopback release
 # channel, checked by the pinned gh against a test trust root, unpacked, switched and run by its
@@ -20,31 +21,36 @@
 # start, and this build updating to itself under a newer version name; on the Mac the daemon started as a
 # launchd job and binding no socket, a hook step as a launchd job stopped at its
 # bound, the observer's launchd and proc_pidpath adapters, and the package check's codesign and
-# quarantine verdicts, the probe of a new binary's self-update protocol as a launchd job, and in
+# quarantine verdicts, and in
 # device_mac_e2e.rs hello's macOS package installed, updated, rolled back and uninstalled by the
 # real daemon and coordinator, its plists linked into /Library/LaunchDaemons and loaded by
-# launchd, in device_mac_selfupdate.rs hostkeeper's update of itself under launchd (the probe of
-# the new binary, the switch, the clean exit, launchd starting the new binary, the settle at its
-# start, and an install of the running version with no probe and no restart), and in
+# launchd, in device_mac_selfupdate.rs hostkeeper's update of itself under launchd (the
+# hand-over, the clean exit, launchd starting the old binary, which execs the new one, the settle
+# at its start, a new binary that cannot start fallen back from, and an install of the running
+# version with no restart), and in
 # unpack_mac.rs a package with read-only
 # directories unpacked by the production unpacker, once as the runner's own user and once as
 # root. In the job first-boot the programs themselves
 # meet: the coordinator and the
 # daemon, each started by the tests as a child process, through a host's first boot (enrollment,
 # approval, the host certificate, heartbeats over mutual TLS, a restart of each) and a package
-# assigned and installed. Network install end to end (docs/design/network-install.md section 11)
+# assigned and installed. In the job openrc-device the daemon meets the OpenRC of Alpine Linux:
+# the tests of openrc_device.rs run in a docker container built from
+# crates/hostkeeper-privileged/openrc, with the programs built for x86_64-unknown-linux-musl.
+# Network install end to end (docs/design/network-install.md section 11)
 # is no job of this file: it runs in net-install.yml, on its own triggers, and no release waits
 # for it.
 #
 # It runs after a merge to main and by hand (workflow_dispatch), never on a pull request. The
 # workflow lint (crates/xtask/tests/workflows) holds its triggers to exactly these two, its jobs
-# to exactly these three, each on its runner (ubuntu-24.04; macos-15 for macos-device), the
+# to exactly these four, each on its runner (ubuntu-24.04; macos-15 for macos-device), the
 # previous release the jobs privileged and macos-device download to
 # crates/hostkeeper-privileged/previous-release.toml, and gives it no write scope; it refuses root
 # in every other workflow but net-install.yml, and
 # macOS in every workflow that runs for a pull request, but in pr-device.yml,
-# whose jobs privileged and macos-device are copies of this file's, step for step, run on a pull
-# request (macos-device when the pull request changes a path the macOS jobs build or read). A release waits for a successful push run of
+# whose jobs privileged, macos-device and openrc-device are copies of this file's, step for step,
+# run on a pull request (macos-device when the pull request changes a path the macOS jobs build
+# or read). A release waits for a successful push run of
 # this workflow on its commit (release.yml); pr-device.yml is no part of a release.
 #
 # In the job privileged, linux_packages.rs also installs the deb, the rpm and the Arch package,
@@ -89,8 +95,9 @@
 # crate; the workflow lint holds each job's list to the files that are privileged for it (first
 # line `#![cfg(feature = "privileged")]` for the job privileged, `#![cfg(all(target_os = "linux",
 # feature = "privileged"))]` for first-boot, `#![cfg(all(target_os = "macos", feature =
-# "privileged"))]` for the Mac, and `#![cfg(all(any(target_os = "linux", target_os = "macos"),
-# feature = "privileged"))]` for a target of both the job privileged and the Mac).
+# "privileged"))]` for the Mac, `#![cfg(all(target_os = "linux", target_env = "gnu", feature =
+# "privileged"))]` for openrc-device, and `#![cfg(all(any(target_os = "linux", target_os =
+# "macos"), feature = "privileged"))]` for a target of both the job privileged and the Mac).
 #
 # These tests are not counted by the 99% coverage gate (ci.yml judges the pull-request set). A red
 # run on main is a defect, fixed forward in a new pull request.
@@ -126,8 +133,8 @@ jobs:
     env:
       GH_VERSION: 2.102.1
       GH_SHA256: 77b9e297e94c50336823d0f84de7ef1be60cba704601fa0d98f129f47a94987b
-      PREVIOUS_RELEASE_URL: https://github.com/komira-ai/hostkeeper/releases/download/v0.1.138/hostkeeper-0.1.138-linux-x86_64.tar.gz
-      PREVIOUS_RELEASE_SHA256: 423ec6f09f04030219014289b864403513d37298b13ec0548d39a600caad1948
+      PREVIOUS_RELEASE_URL: https://github.com/komira-ai/hostkeeper/releases/download/v0.1.163/hostkeeper-0.1.163-linux-x86_64.tar.gz
+      PREVIOUS_RELEASE_SHA256: 2fef129d7e136587c70df122efe767aa291de1ccecde15b6dd132f109980266d
       NFPM_VERSION: 2.48.0
       NFPM_SHA256: 6d7f9a28b2f397934403950fcbba83f598b08d02edbe79a0815b3b4897341750
     steps:
@@ -304,7 +311,8 @@ jobs:
   # and uninstalled by the real daemon under launchd, ordered by the real coordinator in process
   # and fetched from a loopback release channel checked by the pinned gh against a test trust
   # root, and, in device_mac_selfupdate.rs, hostkeeper updating itself from one version to the
-  # next as a launchd job, the new binary probed through the launcher. The tests print what they
+  # next as a launchd job by the hand-over, and falling back from a next binary that cannot
+  # start. The tests print what they
   # find (the proc_pidpath table, the verdicts of codesign, the daemon's Status) to the log, and a
   # failing end-to-end test what the Mac held.
   macos-device:
@@ -319,8 +327,8 @@ jobs:
       # and checks its packages' attestations with it, offline, against a test trust root.
       GH_VERSION: 2.103.3
       GH_SHA256: d700207eae9ae98fe2b89535c2c087c07823d4628c56364695a5a07ef311c062
-      PREVIOUS_RELEASE_URL: https://github.com/komira-ai/hostkeeper/releases/download/v0.1.138/hostkeeper-0.1.138-macos-arm64.tar.gz
-      PREVIOUS_RELEASE_SHA256: 128ca92f16e157ba4eb7e3776f05ea54a94e7a79d1dbe81e647150e12ba93457
+      PREVIOUS_RELEASE_URL: https://github.com/komira-ai/hostkeeper/releases/download/v0.1.163/hostkeeper-0.1.163-macos-arm64.tar.gz
+      PREVIOUS_RELEASE_SHA256: 6b20de414f41382bf993a192c62095a602660e60356899b55a9602492c6d1485
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -362,6 +370,68 @@ jobs:
         run: cargo test -p hostkeeper-privileged --features privileged --locked --test unpack_mac -- --nocapture
       - name: Run the macOS device tests as root
         run: cargo test -p hostkeeper-privileged --features privileged --locked --config "target.'cfg(unix)'.runner = 'sudo'" --test device_mac --test device_mac_e2e --test device_mac_selfupdate --test self_update_across_releases --test unpack_mac -- --test-threads=1 --nocapture
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ github.event_name == 'push' && steps.cargo-cache.outputs.cache-hit != 'true' }}
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
+
+  # The device run of the daemon under OpenRC (Alpine Linux): the tests start an Alpine container
+  # (docker, built from crates/hostkeeper-privileged/openrc) with OpenRC as its init and run the
+  # musl build of the daemon in it as the service of packaging/alpine/hostkeeper.initd, against
+  # the container's real rc-service and supervise-daemon. The programs the container runs are
+  # built here for x86_64-unknown-linux-musl, as the runner's user.
+  openrc-device:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    # A bound on the whole job, against a test that hangs; no test depends on it.
+    timeout-minutes: 45
+    env:
+      # The nfpm the tests find at target/privileged-tools/nfpm and build their package with, the
+      # same version and SHA-256 as artifacts.yml's Linux x86_64 build.
+      NFPM_VERSION: 2.48.0
+      NFPM_SHA256: 6d7f9a28b2f397934403950fcbba83f598b08d02edbe79a0815b3b4897341750
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The container engine the tests start the Alpine guest with, for the log (evidence, not a
+      # gate).
+      - name: docker version
+        run: docker --version
+      - run: rustup toolchain install
+      # The programs the container runs are built for musl, the libc of Alpine.
+      - name: Add the musl target
+        run: rustup target add x86_64-unknown-linux-musl
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: cargo-cache
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
+      - name: Download nfpm (HTTPS only, redirects included)
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 5 --retry-delay 5 --retry-max-time 300 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/nfpm.tar.gz" "https://github.com/goreleaser/nfpm/releases/download/v$NFPM_VERSION/nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz"
+      - name: Install nfpm (pinned checksum)
+        run: cargo xtask install-tool --download "$RUNNER_TEMP/nfpm.tar.gz" --sha256 "$NFPM_SHA256" --out target/privileged-tools/nfpm --extract tar.gz --member nfpm
+      - name: Build the Alpine image the tests run in
+        run: docker build --tag hostkeeper-openrc-device crates/hostkeeper-privileged/openrc
+      # The programs the container runs, built for musl, the libc of Alpine. ring's C code is
+      # compiled by the runner's gcc: the runner has no musl-gcc.
+      - name: Build the programs the container runs
+        env:
+          CC_x86_64_unknown_linux_musl: gcc
+        run: cargo build --locked --target x86_64-unknown-linux-musl -p hostkeeper --bin hostkeeper -p hostkeeper-privileged --features hostkeeper-privileged/privileged --bin hostkeeper-selfupdate-daemon --bin hostkeeper-fixture-hook
+      - name: Build the OpenRC device tests as the runner's user
+        run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test openrc_device
+      - name: Run the OpenRC device tests as root
+        run: cargo test -p hostkeeper-privileged --features privileged --locked --config "target.'cfg(unix)'.runner = 'sudo'" --test openrc_device -- --test-threads=1 --nocapture
       - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: ${{ github.event_name == 'push' && steps.cargo-cache.outputs.cache-hit != 'true' }}
         with:

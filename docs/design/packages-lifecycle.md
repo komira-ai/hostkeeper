@@ -3,15 +3,16 @@
 Status: design, for the maintainers' ruling. Nothing here is built. This is section 6 of [packages.md](packages.md), kept
 in a file of its own so that one stays under 1000 lines (rule R12). Section numbers here are those of packages.md.
 Amended by [packages-repositories.md](packages-repositories.md): a Linux distribution's package comes from a
-repository through the `apt` and `brew` backends of one repository installer, whose version directory, rollback,
-hold, purge and drift are that file's section 4; the `deb`, `rpm`, `arch`, `apk` and `macos-pkg` cases below are withdrawn with those
-installers.
+repository through the `apt` backend of one repository installer, whose version directory, rollback, hold, purge
+and drift are that file's section 4; a Mac's `.pkg` comes through the `macos-pkg` installer of that file's section
+4.7; the `deb`, `rpm`, `arch` and `apk` cases below are withdrawn with those installers.
 
 ## 6. An update, a rollback and an uninstall
 
 ### 6.1 The version directory
 
-For every installer but `hostkeeper-archive`:
+For every installer but `hostkeeper-archive` (a repository installer adds `apt/`, and `macos-pkg` adds `macos-pkg/`,
+packages-repositories.md sections 4.2 and 4.7):
 
 ```
 /var/lib/hostkeeper/packages/<service>/<version>/     0555, sealed
@@ -61,8 +62,8 @@ running `deb-systemd-invoke restart`) does the hand-over outside the hook. hostk
 that needs the hook's hand-over builds its packages so their scripts do not start or restart its units (debhelper's
 `--no-start --no-restart-after-upgrade`, an `.rpm` without `%systemd_postun_with_restart`), and its `cutover` restarts
 them. The service's conformance tests check it. The daemon enables the `run` units it places (`tarball`,
-`hostkeeper-archive`) and those of a repository package, which installs them disabled (packages-repositories.md
-section 5); a link a package's scripts made is left unclaimed. The placer's unit lint applies only to placed units.
+`hostkeeper-archive`) and those of a repository package or a `macos-pkg` package, which installs them disabled
+(packages-repositories.md sections 5 and 4.7); a link a package's scripts made is left unclaimed. The placer's unit lint applies only to placed units.
 
 ### 6.3 Built-in steps, for a service with no hand-over of its own
 
@@ -84,7 +85,7 @@ fetched), so a rollback never fetches, for every format:
 |---|---|
 | `hostkeeper-archive`, `tarball` | Switch `current` back and relink, as today |
 | `apt` (and each later repository backend) | A downgrade by one version from the previous version's kept index and package, with no fetch (`apt-get install --no-download --allow-downgrades`, packages-repositories.md section 4.4), running the older package's scripts. A service that ships these packages keeps its scripts able to go back one version, as its hook must read the record one version back today |
-| `brew` | Switch `current` back to the previous version's sealed tree, `brew unlink` the newer keg and `brew link --force` the kept previous one: nothing is fetched or installed (packages-repositories.md section 4.7) |
+| `macos-pkg` | `installer -pkg` of the previous version's kept `.pkg`, with no fetch and no second signature check, then delete the files of the newer version's `Bom` that the older one does not list (packages-repositories.md section 4.7) |
 | `oci-image` | The previous image is still loaded (`retire` keeps it while `previous` names it). Re-point the generated units at it and reload |
 
 A first install that fails has no previous version: `remove` takes it off the host, as `remove_all` does today.
@@ -101,7 +102,8 @@ deleting the version directories while the package stays installed.
 
 Each installer removes what the format's tool records for the package, plus what hostkeeper recorded at `activate`,
 and nothing else. hostkeeper records in `placed.json`, under a new additive key `installed`, each service's installer
-and, for a repository package, the package identity, the version it installed and the repository (and, for
+and, for a repository package, the package identity, the version it installed and the repository (for
+`macos-pkg`, the identifier, the version and `created_dirs`, the directories its installs created; and, for
 `oci-image`, whether it loaded the image).
 
 - `tarball` and `hostkeeper-archive`: the links `placed.json` lists, while each is still the recorded link, as today.
@@ -111,8 +113,11 @@ and, for a repository package, the package identity, the version it installed an
   (`package_conflict`). A package installed with no record, or moved by hand to another version, is drift: hostkeeper
   installs the desired version over it, holds and records it, and reports the drift (packages-repositories.md
   section 4.4).
-- `brew`: the placed plist links, then `brew unpin` and `brew uninstall` of every version of the service's formula
-  hostkeeper recorded, and of any other installed by hand (drift, reported) (packages-repositories.md section 4.7).
+- `macos-pkg`: every file and link the receipt or a kept version's `Bom` lists, whatever its content now, but one a
+  receipt of another identifier lists; the
+  directories hostkeeper's installs created, when empty; then `pkgutil --forget` of the identifier
+  (packages-repositories.md section 4.7). A package installed by hand, or at another version, is drift, corrected and
+  reported as for `apt`.
 - `oci-image`: the generated units, and the image only if its own `activate` loaded it.
 
 What stays, by each format's own rules: files a package's scripts made that the format does not list (a user, a cache,
@@ -127,7 +132,8 @@ The observer finds the first `run` unit's main program, as today, and hashes the
 the same path in the version's sealed tree. For `tarball` and `hostkeeper-archive` the unit file is the placed one, as
 today. For a repository package it reads the unit text from the tree extracted from the downloaded package, at the path the
 package installs it (`tree/lib/systemd/system/<unit>` or `tree/usr/lib/systemd/system/<unit>`),
-and maps its program onto the tree: for a `.deb` that installs `/usr/bin/tierstore`, `tree/usr/bin/tierstore`. A
-`brew` service's plist is placed from the tree and runs its program from it, so the observer hashes that file. The
+and maps its program onto the tree: for a `.deb` that installs `/usr/bin/tierstore`, `tree/usr/bin/tierstore`. For
+`macos-pkg` it reads the program from the plist in the tree (`tree/Library/LaunchDaemons/<label>.plist`) and maps it
+onto the tree the same way. The
 extracted tree is the attested (or, for a repository package, signed) package's files, so a process left from another version still shows `version_mismatch`.
 For an `oci-image` unit, the running version is the image digest the runtime reports.
