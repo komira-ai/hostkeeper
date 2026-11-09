@@ -4,7 +4,7 @@
 //! **Archive orders still.** No daemon announces `macos-pkg` yet, so a Mac can take no native
 //! entry: this host and the Mac half of the rig (`super::archive`) are as they were before the
 //! Linux half moved to native `.deb` orders (`super::deb`), and hostkeeper's package here is the
-//! archive, ordered by its entry and the release index.
+//! archive, set by its entry and the release index and taken through the entry.
 //!
 //! **The job.** Its plist is the daemon's own (`hostkeeper_launchd::daemon_plist` of
 //! `DaemonJob::standard`'s label: `RunAtLoad` and `KeepAlive` true, so that the clean exit of a

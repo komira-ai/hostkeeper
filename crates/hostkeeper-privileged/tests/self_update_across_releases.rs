@@ -24,9 +24,10 @@
 //!
 //! **On a Mac the orders are the archive's still**: no daemon announces `macos-pkg` yet, so the
 //! Mac half of the rig (`across::mac`, `across::archive`) orders the one `hostkeeper-archive`
-//! entry and the release index from the release channel, which is where this file's Mac
-//! assertions look (the index, the archive and the bundle fetched), and fixes its package files
-//! as before.
+//! entry, with the release index for a daemon before `target-v1`; the pinned release and this
+//! build both announce `target-v1`, so each takes the entry: this file's Mac assertions look at
+//! the release channel (no index of the version fetched, the archive and the bundle fetched at
+//! the entry's locations), and the package files are fixed as before.
 //!
 //! Each test starts from the released daemon converged on its own version's package
 //! (`across::Rig::installed`). The released daemon updates by the hand-over, so it leaves no
@@ -37,7 +38,7 @@
 //!   start finishes the switch, settles the update `Succeeded`, reports it, and the coordinator
 //!   reads the host converged on it; on Linux through the native path (`.deb` installed and held,
 //!   `/usr/bin/hostkeeper` replaced only after the new binary confirmed), on a Mac through the
-//!   index and the archive;
+//!   archive entry;
 //! - this build made to fail its start is fallen back from by the released binary's hand-over:
 //!   the released binary execs it three times, then settles the update `Failed`,
 //!   `self_update_fallback`, lists the version bad, removes `next` and keeps `current` and
@@ -47,7 +48,7 @@
 //! - this build, once the released daemon updated to it, updates to itself under a newer version
 //!   name by the hand-over: it stages the new binary and links `next`, `current` is moved only by
 //!   the new binary's own start; on Linux both updates take the native path, the second by this
-//!   build; on a Mac the first is by the index and the second by the entry;
+//!   build; on a Mac both are by the archive entry;
 //! - the released binary, put back by an operator on a host this build updated twice (stopped,
 //!   `current` pointed at the released binary, started), starts on the packages this build staged
 //!   through an entry, hostkeeper's own sealed version with its binary (`bin/hostkeeper`, or on
@@ -126,21 +127,15 @@ fn fetches(rig: &Rig, built: &Built) -> (u64, u64, u64) {
 /// Checks that the released daemon took the order for `built` the way it takes an order of its
 /// installer. On Linux that is the native path: the `.deb` of `built` is installed, held, staged
 /// and recorded through its `apt` entry, and the release channel was asked for nothing of
-/// hostkeeper ([`Rig::assert_native`]); on a Mac the released daemon, which announces no
-/// `target-v1`, read the index of the version from the channel and fetched its archive and
-/// bundle.
+/// hostkeeper ([`Rig::assert_native`]); on a Mac the released daemon, which announces
+/// `target-v1` (the pin is a release from A19 on), took the archive entry: it fetched no index of
+/// the version and fetched the archive and the bundle at the entry's locations, as this build
+/// does ([`assert_this_build_took`]).
 fn assert_released_took(rig: &Rig, built: &Built) {
     #[cfg(target_os = "linux")]
     rig.assert_native(built, Build::This);
     #[cfg(target_os = "macos")]
-    {
-        let (index, archive, bundle) = fetches(rig, built);
-        assert!(
-            index > 0 && archive > 0 && bundle > 0,
-            "the released daemon fetched the index, the archive and the bundle: {:#?}",
-            rig.channel.requests()
-        );
-    }
+    assert_this_build_took(rig, built);
 }
 
 /// Checks that this build took the order for `built` through its entry. On Linux that is the
@@ -203,8 +198,8 @@ fn update_to_this_build(rig: &Rig, from: &str, version: &str) -> Built {
 /// the released daemon stages the `.deb` from the repository, the host ends holding it at the new
 /// version with `/usr/bin/hostkeeper` this build's, and the release channel was asked for
 /// nothing of hostkeeper. On a Mac the set is by targets and the index, and the released daemon,
-/// which knows no entry, reads the index of the version and fetches its archive and bundle from
-/// the channel.
+/// which announces `target-v1`, takes the archive entry and fetches the archive and the bundle
+/// at its locations, and no index.
 #[test]
 fn the_released_daemon_updates_to_this_build_and_this_build_settles_it_succeeded() {
     let rig = Rig::installed("x1upd");
@@ -225,7 +220,7 @@ fn the_released_daemon_updates_to_this_build_and_this_build_settles_it_succeeded
 /// entry, staged from the repository; the failing binary never reaches `/usr/bin/hostkeeper`: dpkg
 /// still has the released `.deb`, held, `placed.json` still records it, and the failing version's
 /// `.deb` is not installed. On a Mac the set is by targets and the index, the released daemon
-/// fetching the failing version through the channel's index.
+/// fetching the failing version through its archive entry.
 #[test]
 fn this_build_made_to_fail_its_start_is_fallen_back_from_to_the_released_binary() {
     let rig = Rig::installed("x1fbk");

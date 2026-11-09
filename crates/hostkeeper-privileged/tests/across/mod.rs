@@ -17,9 +17,9 @@
 //!   coordinator in process orders it by targets alone, the one `apt` entry of
 //!   `release targets` for the host's platform and no release index, as CI's set of a release
 //!   does from A24 on, and the daemon installs it through its entry. macOS (`archive`): no daemon
-//!   announces `macos-pkg` yet, so a Mac keeps the archive orders it had, by the entry and the
-//!   release index through the release channel; the Mac half of the rig and its module are
-//!   unchanged by the move.
+//!   announces `macos-pkg` yet, so a Mac keeps the archive orders it had, set by the entry and the
+//!   release index; the released daemon and this build both announce `target-v1` and take the
+//!   entry through the release channel.
 //! - **The rest is the end-to-end rig** (`tests/e2e/`): the real coordinator in process,
 //!   managing the service `hostkeeper` for the test's host; the release channel on loopback (a
 //!   Linux daemon is asked for nothing of it: its config names it, as every config does, and the

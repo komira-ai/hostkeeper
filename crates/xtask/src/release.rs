@@ -594,13 +594,13 @@ pub(crate) enum Verb {
         #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
         every_secs: Option<u64>,
     },
-    /// Write the `targets` of the set that deploys a package of the release: for each platform
-    /// its release index lists, the package's native entry alone (its `.deb` from the
-    /// repository's testing suite, or its `.pkg` from the installers' testing directory), whose
-    /// manifest and `min_hostkeeper` are the archive's own manifest's. Refused, every problem
-    /// named, unless the index, every archive and its manifest, and every native package and
-    /// its bundle check out and the entries pass the coordinator's checks; refused by name for a
-    /// package with no native package (hello's failing build). Prints `targets=<JSON>`.
+    /// Write the `targets` of the set that deploys a package of the release: for each Linux
+    /// platform its release index lists, the package's `.deb` alone, an `apt` entry of the
+    /// repository's testing suite whose manifest and `min_hostkeeper` are the archive's own
+    /// manifest's; no list for macOS while no daemon announces `macos-pkg`. Refused, every
+    /// problem named, unless the index, every Linux archive and its manifest, and every `.deb`
+    /// and its bundle check out and the entries pass the coordinator's checks; refused by name
+    /// for a package with no native package (hello's failing build). Prints `targets=<JSON>`.
     Targets {
         /// The service: hostkeeper (the default), hello or mdm.
         #[arg(long, value_enum, default_value_t)]

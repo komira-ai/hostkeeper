@@ -8,9 +8,9 @@
 //! (`crates/xtask/src/release/package.rs`: `bin/hostkeeper`, `files/trusted_root.json`,
 //! `manifest.toml`; this build's also `bin/hook`), signed and put on the loopback release channel
 //! with its index, and a set carries the one `hostkeeper-archive` entry and the index with its
-//! digest ([`Rig::order`]). A daemon that announces no `target-v1` is ordered the package and the
-//! index digest and fetches the index from the channel; one that does is ordered the entry and
-//! fetches through it. The Linux half orders native entries alone (`super::deb`).
+//! digest ([`Rig::order`]). A daemon that announces no `target-v1` would be ordered the package
+//! and the index digest and fetch the index from the channel; the pinned release and this build
+//! announce it, so each is ordered the entry and fetches through it. The Linux half orders native entries alone (`super::deb`).
 //!
 //! The released version's package is built the same way around the released binary, whose hook
 //! is the release's own, `bin/hostkeeper update-hook`, which the released daemon does not run (it
@@ -230,9 +230,9 @@ impl Rig {
     /// Sets the desired version of hostkeeper to the published package `built` as CI's set does
     /// (design stage 2 and 3): by targets, the one `hostkeeper-archive` entry for the host's
     /// platform ([`Built::entry`]), and the version's release index with its digest, through the
-    /// operator API. A daemon that announces no `target-v1` is ordered the package and the index
-    /// digest of that platform and fetches the index from the channel; one that does is ordered
-    /// the entry and fetches through it.
+    /// operator API. A daemon that announces no `target-v1` would be ordered the package and the
+    /// index digest of that platform and fetch the index from the channel; the pinned release and
+    /// this build announce it, so each is ordered the entry and fetches through it.
     pub fn order(&self, built: &Built) {
         self.coordinator.set_desired_targets(
             HK,

@@ -341,8 +341,8 @@ jobs:
   #          checked and publish published, from the run's own artifact. Then `cargo xtask
   #          release targets`, compiled from the release's own commit (the workflow lint,
   #          `release_ref.rs`, holds its command line to that of a published release), writes
-  #          the targets from those files: per platform, hostkeeper's native entry alone (its
-  #          .deb in `testing`, or its installer pkg), pinned by its SHA-256. Last, it checks
+  #          the targets from those files: per Linux platform, hostkeeper's .deb in `testing`
+  #          alone, pinned by its SHA-256; no list for macOS. Last, it checks
   #          that no newer release is published already (a late run of an older commit): then
   #          set-desired is skipped, since setting this version would move the fleet back.
   targets:
@@ -375,8 +375,8 @@ jobs:
         with:
           name: release-${{ steps.newest.outputs.tag }}
           path: dist
-      # Per platform, from the checked files: hostkeeper's native entry alone (its .deb or
-      # installer pkg, pinned by its SHA-256), its manifest the archive's own.
+      # Per Linux platform, from the checked files: hostkeeper's .deb alone, pinned by its
+      # SHA-256, its manifest the archive's own; no list for macOS.
       - name: The targets of the release
         id: targets
         env:
