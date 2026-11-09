@@ -62,7 +62,9 @@
 //!   release channel by `channel-stage`, a new version renamed into place whole; never changes a
 //!   version already there.
 //! - `channel-host` ([`channel_host`]): the host of the release channel's base URL, which the
-//!   channel job of `release.yml` pings when it joins the tailnet.
+//!   channel job of `release.yml` pinged when it joined the tailnet; no workflow runs it since
+//!   releases are set with native entries alone (packages-native.md section 10.5), and it goes
+//!   with the channel's other verbs (A28).
 //! - `targets` ([`targets`]): the `targets` of the set that deploys a package of a release, one
 //!   native entry per platform its release index lists and nothing else, read from the
 //!   release's assets and checked as the coordinator and the daemon check them, written as one
@@ -624,7 +626,7 @@ pub(crate) enum Verb {
         output: Option<PathBuf>,
     },
     /// Write the host of the release channel's base URL, `hostname=<host>`: the name or IPv4
-    /// address the channel job pings when it joins the tailnet. Refused, the reason named,
+    /// address a job that joins the tailnet to read the channel pings. Refused, the reason named,
     /// unless the URL is `https://<host>[:<port>][/<path>]`.
     ChannelHost {
         /// The release channel's base URL (`HOSTKEEPER_RELEASE_CHANNEL`).

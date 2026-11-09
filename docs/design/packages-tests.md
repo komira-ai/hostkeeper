@@ -23,7 +23,7 @@ are those of packages.md, and A1 to A15 are its build items (section 13). A16, A
 are withdrawn with those installers, and that file's cases are the five items before A15's: A16's, A7's two, A9's
 (`macos-pkg`) and A17's. Revised by [packages-native.md](packages-native.md): its items A18 to A28, and what it changes
 in A6, A7 and A9, have the cases of the last section below; the `tarball` and `oci-image` cases are withdrawn with those
-installers, and the archive's cases go with the code A24 deletes.
+installers, and the archive's cases go with the code A25 and A28 delete.
 
 Each item's tests are behaviour tests in Rust, in the crate the item changes (rules T8, T11, T12). Each runs with no
 network and no system path, through the fakes the crates already have (`Fetcher`, `Verifier`, the coordinator's backend
@@ -310,10 +310,12 @@ only in the device jobs, against a signed fixture repository and signed fixture 
   text is held byte for byte (`crates/hostkeeper-launchd/tests/postinstall.rs`, A19).
 - **Release workflows (A21, A23, A24; the workflow lint, `crates/xtask/src/release/targets/tests.rs`).** `release
   targets` writes the native entry before the archive one for each platform (A21, A23) and the native entry alone
-  (A24); the lint holds the publish steps to the release machinery's call (`crates/xtask/tests/workflows/packages.rs`:
+  (A24: the Linux `.deb`'s, no list for macOS while no daemon announces `macos-pkg`, and hello's failing build refused
+  by name); the lint holds the publish steps to the release machinery's call (`crates/xtask/tests/workflows/packages.rs`:
   every job that signs or puts the release's files checks them against `SHA256SUMS` and their attestations first, A23)
   and, from A24, refuses the channel wait and any index output while it keeps the `targets` job that `set-desired`
-  needs; X1's pin is a release from A19 on.
+  needs (`desired.rs`, `desired_tests.rs`, `tailnet_join_tests.rs`; the job run with bash in `targets_run_tests.rs`,
+  hello's in `hello_run_tests.rs`, held to one input by `callers.rs`); X1's pin is a release from A19 on.
 - **The runbook (A22; `docs/operations/move-to-native.md`, `crates/xtask/tests/enrollment_doc.rs` and
   `enrollment_doc/move_runbook.rs`).** Every `hkctl` command of the runbook is one of `hkctl`'s table, as for the
   enrollment runbook. Each query is one block of one `hkctl` call and one `jq` program reading the file the call
