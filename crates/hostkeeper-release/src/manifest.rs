@@ -413,10 +413,8 @@ fn check_hook(hook: &Hook) -> Result<(), ManifestError> {
             why,
         })?;
     }
-    if let Some(name) = &hook.boot {
-        if !is_boot_step(name) {
-            return Err(ManifestError::Boot(name.clone()));
-        }
+    if let Some(name) = hook.boot.as_ref().filter(|name| !is_boot_step(name)) {
+        return Err(ManifestError::Boot(name.clone()));
     }
     let bounds = hook.timeout_secs.ok_or(ManifestError::NoStepBounds)?;
     let zero = [

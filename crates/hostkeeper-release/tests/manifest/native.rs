@@ -8,9 +8,9 @@
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_config::platform::Platform;
 use hostkeeper_proto::hostkeeper::release::v1::{Blob, Hook, Manifest, Target, TargetList};
+use hostkeeper_release::Installer;
 use hostkeeper_release::manifest::{self, ManifestError};
 use hostkeeper_release::target::{self, EntryError, TargetError, is_native_entry};
-use hostkeeper_release::{Installer, MAX_LOCATOR_BYTES_PER_ENTRY};
 
 use crate::support::{
     LINUX, digest, entry, hook, location, manifest, named, platform_of, repository_entry, targets,
