@@ -372,7 +372,7 @@ fn continue_on_error_in_a_shard_or_the_gate_is_refused() {
             &run,
             &format!("{run}        continue-on-error: true\n"),
         ),
-        &[&format!("{SHARD}: continue-on-error is set on step 10")],
+        &[&format!("{SHARD}: continue-on-error is set on step 16")],
     );
     let runner = format!("    runs-on: {RUNNER}\n");
     assert_problems(
@@ -398,7 +398,7 @@ fn continue_on_error_in_a_shard_or_the_gate_is_refused() {
             &gate,
             &format!("{gate}        continue-on-error: true\n"),
         ),
-        &[&format!("{COVERAGE}: continue-on-error is set on step 12")],
+        &[&format!("{COVERAGE}: continue-on-error is set on step 15")],
     );
 }
 
@@ -424,7 +424,7 @@ fn a_shell_working_directory_or_defaults_that_changes_a_pinned_run_is_refused() 
             &gate,
             &format!("{gate}        working-directory: crates\n"),
         ),
-        &[&format!("{COVERAGE}: working-directory is set on step 12")],
+        &[&format!("{COVERAGE}: working-directory is set on step 15")],
     );
     let run = format!("        run: {}\n", test_run());
     assert_problems(
@@ -433,7 +433,7 @@ fn a_shell_working_directory_or_defaults_that_changes_a_pinned_run_is_refused() 
             &run,
             &format!("{run}        shell: sh -c 'exit 0' {{0}}\n"),
         ),
-        &[&format!("{SHARD}: shell is set on step 10")],
+        &[&format!("{SHARD}: shell is set on step 16")],
     );
     let runner = format!("    runs-on: {RUNNER}\n");
     let defaults = "    defaults:\n      run:\n        shell: echo {0}\n";

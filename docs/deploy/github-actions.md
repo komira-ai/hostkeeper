@@ -30,7 +30,9 @@ issues to the job.
    same pinned action and Tailscale tarball, the same repository variables, an ephemeral node
    tagged `HOSTKEEPER_TAILNET_TAG` authenticated with an OIDC token), and waits until the
    channel's host, the host of `HOSTKEEPER_RELEASE_CHANNEL` without its port or path, answers a
-   `tailscale ping`: a channel served only on the tailnet is reachable from the runner. Empty, it
+   `tailscale ping` (the host is taken out of the URL by the xtask of the workflow's own commit,
+   since the release's commit may be older than the workflow and lack that verb): a channel
+   served only on the tailnet is reachable from the runner. Empty, it
    does not join, and the channel must be reachable from the runner as it is. It reads
    `<channel>/hostkeeper/<X.Y.Z>/index.json` every 40 seconds, a 404 included, until the
    channel serves it, for at most 30 minutes. The served index must then be the published one,
