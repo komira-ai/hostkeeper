@@ -1,6 +1,6 @@
 //! One rollout live at a time across services (`stages.rs`, `elsewhere`, the coordinator's
 //! `--live-rollouts`, default 1): a service whose rollout is not live is held with
-//! `rollout_elsewhere` while another service's holds an update slot, bakes or is under way,
+//! `rollout_elsewhere` while another service's runs an update, bakes or is under way,
 //! whatever the desired state's `max_updating` says. Inside a service the stages choose the
 //! hosts to order and the role's `max_updating` caps how many of them hold a slot at once
 //! (`no_slot`). A restart mid-update resumes under the same rule. Every time is explicit; the
@@ -147,31 +147,29 @@ fn two_services_with_pending_updates_order_one_host_and_the_second_waits_for_the
     );
 }
 
-/// Behaviour: `d1` failed `a` and is unhealthy. It holds the slot of `a`'s rollout, so `a` on
-/// another daemon waits for the failed host (`stage_failed`) and `b` on a storage host and on
-/// `d1` wait for `a`'s rollout (`rollout_elsewhere`). With `max_updating` of 1 for daemons, only
-/// `d1` may be told a new version of the service it failed (its own slot is not counted against
-/// it) and `a` on `d2` is held with `no_slot`. Once `d1` heartbeats healthy the failure stands,
-/// `a` still has `d2` to roll, and `b` still waits; when an operator acknowledges the failure
-/// every service orders again. Catches a failure of one service or role not holding the next
-/// order of the others, and a failed host that releases its stage by beating healthy.
+/// Behaviour: `d1` failed `a` and is unhealthy. It holds a slot of `a`, so `a` on another
+/// daemon waits for the failed host (`stage_failed`), but it does not make `a`'s rollout live:
+/// `b` on a storage host and on `d1` itself are ordered, not held with `rollout_elsewhere`. With
+/// `max_updating` of 1 for daemons, only `d1` may be told a new version of the service it failed
+/// (its own slot is not counted against it) and `a` on `d2` is held with `no_slot`. Once `d1`
+/// heartbeats healthy the failure stands and `a` still waits for it while `b` is still ordered;
+/// when an operator acknowledges the failure every service orders again. Catches a failed host
+/// of one service holding the other services' rollouts, a failure that stops counting against
+/// its own role's `max_updating`, and a failed host that releases its stage by beating healthy.
 #[test]
-fn a_failed_unhealthy_host_blocks_every_services_next_order() {
+fn a_failed_unhealthy_host_holds_its_own_service_and_not_the_others() {
     let failed = unhealthy(last(beat("1.0"), "2.0", Outcome::Failed));
     let mut f = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
     record(&mut f, "a", "d1", role("daemon"), failed.clone(), 100);
     record(&mut f, "b", "d1", role("daemon"), beat("1.0"), 100);
     record(&mut f, "a", "d2", role("daemon"), beat("1.0"), 100);
     record(&mut f, "b", "s1", role("storage"), beat("1.0"), 100);
-    let blocked = [
-        ("a", "d2", Gate::StageFailed),
-        ("b", "s1", Gate::RolloutElsewhere),
-        ("b", "d1", Gate::RolloutElsewhere),
-    ];
-    for (service, host, held) in blocked {
+    let others = [("b", "s1"), ("b", "d1")];
+    assert_eq!(why(&f, &all(), "a", "d2", 100), gate(Gate::StageFailed));
+    for (service, host) in others {
         assert_eq!(
             why(&f, &all(), service, host, 100),
-            gate(held),
+            go(),
             "{service} on {host}"
         );
     }
@@ -189,10 +187,15 @@ fn a_failed_unhealthy_host_blocks_every_services_next_order() {
     let mut healthy = failed;
     healthy.health = Health::Healthy;
     record(&mut f, "a", "d1", role("daemon"), healthy, 115);
-    for (service, host, held) in blocked {
+    assert_eq!(
+        why(&f, &all(), "a", "d2", 115),
+        gate(Gate::StageFailed),
+        "the failure standing"
+    );
+    for (service, host) in others {
         assert_eq!(
             why(&f, &all(), service, host, 115),
-            gate(held),
+            go(),
             "{service} on {host}, the failure standing"
         );
     }
@@ -202,7 +205,7 @@ fn a_failed_unhealthy_host_blocks_every_services_next_order() {
         acked: BTreeMap::from([("a".to_owned(), acked)]),
         ..Marks::default()
     });
-    for (service, host, _) in blocked {
+    for (service, host) in [("a", "d2"), ("b", "s1"), ("b", "d1")] {
         assert_eq!(
             why(&f, &all(), service, host, 115),
             go(),

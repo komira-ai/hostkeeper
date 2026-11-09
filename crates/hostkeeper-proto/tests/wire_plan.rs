@@ -76,6 +76,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 11] = [
             ("paused_by", 7),
             ("pause_reason", 8),
             ("finished", 9),
+            ("waiting_on", 10),
         ],
     ),
     (

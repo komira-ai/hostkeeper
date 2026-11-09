@@ -214,27 +214,17 @@ async fn an_update_of_a_halted_service_still_holds_the_slot() {
 
 /// Behaviour: after a restart, a holder that reports in the quiet start holds the slot as
 /// before, and frees it under its own rule only: a pending promotion when it is done and the
-/// two beats of `other`'s bake follow, a failed unhealthy host when it beats healthy, a host
-/// baking when it has beaten twice since the restart (the count starts again). Catches a
-/// restarted coordinator ordering past a holder it heard in the quiet start.
+/// two beats of `other`'s bake follow, a host baking when it has beaten twice since the restart
+/// (the count starts again). A failed unhealthy host of `other` holds nothing of `second`,
+/// before the restart or after the quiet start. Catches a restarted coordinator ordering past a
+/// holder it heard in the quiet start, and a failure that holds another service after one.
 #[tokio::test]
 async fn a_restart_resumes_the_rule_for_every_kind_of_holder() {
-    let failed =
-        json!({"health": "unhealthy", "last_update": {"target": "3.0", "outcome": "failed"}});
     let cases = [
         (
             "pending",
             entry("other", "3.0", &json!({"promotion_pending": true})),
             vec![other_at("3.0"), other_at("3.0")],
-        ),
-        (
-            "failed",
-            entry("other", "1.0", &failed),
-            vec![entry(
-                "other",
-                "1.0",
-                &json!({"last_update": {"target": "3.0", "outcome": "failed"}}),
-            )],
         ),
         ("baking", other_at("3.0"), vec![other_at("3.0")]),
     ];
@@ -270,6 +260,24 @@ async fn a_restart_resumes_the_rule_for_every_kind_of_holder() {
             "{case} released"
         );
     }
+
+    let failed =
+        json!({"health": "unhealthy", "last_update": {"target": "3.0", "outcome": "failed"}});
+    let mut rig = rig("one-live-restart-failed", PLAIN).await;
+    send(&rig, 2_000, "d1", &[entry("other", "1.0", &failed)]);
+    assert_eq!(
+        send(&rig, 2_000, "d2", &[second_behind()]),
+        order("second"),
+        "failed before"
+    );
+    rig.at(2_020);
+    rig.coordinator = start(&rig, PLAIN);
+    send(&rig, 2_035, "d1", &[entry("other", "1.0", &failed)]);
+    assert_eq!(
+        send(&rig, 2_050, "d2", &[second_behind()]),
+        order("second"),
+        "failed after the quiet start"
+    );
 }
 
 /// Behaviour, the limit of a restart: orders are not stored, so a host ordered before the
