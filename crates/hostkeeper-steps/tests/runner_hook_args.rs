@@ -53,8 +53,8 @@ fn an_order_without_hook_args_launches_steps_with_none() {
     assert!(seen.iter().all(|(_, args)| args.is_empty()), "{seen:?}");
 }
 
-/// The `rollback` that falls back to the previous release's hook (the new one cannot start) is
-/// given the same leading arguments.
+/// The `rollback` that falls back to the previous release's hook (the new one cannot start), for
+/// an order that names no `previous_hook`, is given the order's leading arguments.
 #[test]
 fn the_rollback_fallback_to_the_previous_release_keeps_the_hook_args() {
     let rig = Rig::new("hook-args-fallback");

@@ -33,7 +33,9 @@ pub struct StepCall<'a> {
     pub invocation: Invocation,
     /// The arguments of the manifest's hook command after its program, given before the step
     /// (`update-hook` in `["/usr/bin/tierstore", "update-hook"]`); empty for a hook that takes the
-    /// step first. The same for every step of an order, the `rollback` fallback included.
+    /// step first. The order's own for every step, except the `rollback` fallback to the previous
+    /// release when the order names that release's hook (`UpdateOrder::previous_hook`): its
+    /// arguments then.
     pub hook_args: &'a [String],
     /// The hook executable: a file of the verified release the runner checked with
     /// `Staged::check` just before (see its guarantees), the previous release's only for the

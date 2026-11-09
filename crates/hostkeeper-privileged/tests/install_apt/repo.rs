@@ -53,7 +53,7 @@ pub struct Spec {
 
 /// The versions a repository lists: `0.1-dropin` to `0.6-noinstall` are packages of other shapes
 /// (`0.9-dep` is the one `stage` refuses), `1.0-1` and `2.0-1` the two versions a host moves
-/// between, `3.0-1` the newer one an upgrade would take, and `4.0-hook` and `4.1-hook` two
+/// between, `3.0-1` the newer one an upgrade would take, and `0.7-hook` and `0.8-hook` two
 /// versions with an update hook.
 pub const DEFAULT: [Spec; 12] = [
     Spec {
@@ -81,11 +81,11 @@ pub const DEFAULT: [Spec; 12] = [
         flavour: Flavour::NoInstall,
     },
     Spec {
-        version: "4.0-hook",
+        version: "0.7-hook",
         flavour: Flavour::Hooked,
     },
     Spec {
-        version: "4.1-hook",
+        version: "0.8-hook",
         flavour: Flavour::Hooked,
     },
     Spec {

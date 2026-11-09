@@ -1,4 +1,10 @@
-//! The start of the run units of repository services, at every daemon start (boot or restart).
+//! What the daemon's start does around the package manager's host, at every start (boot or
+//! restart): it removes the `policy-rc.d` file a killed run left, and starts the run units of
+//! repository services.
+//!
+//! [`Daemon::clear_policy_rc_d`] runs first, before any package-manager call of the start: it
+//! removes the host root's `policy-rc.d` when it is byte-equal to the one hostkeeper writes
+//! ([`policy::clear_stale`]), and nothing else there. A failure is an alert, and the start goes on.
 //!
 //! An apt package enables its own units: the installer writes the `WantedBy=` links of a run unit
 //! whose unit file has an `[Install]` target, and systemd starts it at boot. A run unit the tree
@@ -16,7 +22,7 @@
 use std::path::Path;
 
 use hostkeeper_config::names::ServiceName;
-use hostkeeper_install::repository::{TREE, enable};
+use hostkeeper_install::repository::{TREE, enable, policy};
 
 use crate::boot::{ALERT_START, BootReport, Outcome, Stage, current_version};
 use crate::executor::Daemon;
@@ -28,6 +34,23 @@ use crate::verbs::force::SELF_SERVICE;
 const APT: &str = "apt";
 
 impl Daemon {
+    /// Removes the stale `policy-rc.d` of the host's root, and records the stage.
+    pub fn clear_policy_rc_d(&self, report: &mut BootReport) {
+        let ctx = self.ctx();
+        report.stages.push(Stage::ClearPolicyRcD);
+        match policy::clear_stale(&ctx.repository_ports.dirs.root) {
+            Ok(true) => ctx.log(&format!(
+                "level=info removed the stale {} that a killed run of the package manager left",
+                policy::POLICY_RC_D
+            )),
+            Ok(false) => {}
+            Err(error) => ctx.alert(
+                ALERT_START,
+                &format!("the stale policy-rc.d could not be removed: {error}"),
+            ),
+        }
+    }
+
     /// Starts the run units the tree of each apt service's `current` version gives no enablement
     /// link, and records the stage.
     pub fn start_run_units(&self, report: &mut BootReport) {

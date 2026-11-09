@@ -276,7 +276,7 @@ pub fn startup_notifying(
         packages: settings.packages_dir.clone(),
     };
     let daemon = Arc::new(Daemon::new(config, dirs, ports, own_version));
-    clear_policy_rc_d(&daemon, &mut report);
+    daemon.clear_policy_rc_d(&mut report);
     settle_self_update(&daemon, &mut report);
     activate_own_package(&daemon, &mut report);
     adopt_own_package(&daemon, &mut report);
@@ -288,26 +288,6 @@ pub fn startup_notifying(
         report,
         _lock: lock,
     })
-}
-
-/// Removes the `policy-rc.d` file of the host's root that hostkeeper wrote and a killed run left
-/// (and nothing else there), before any package-manager call of this start. A failure is an
-/// alert, and the start goes on.
-fn clear_policy_rc_d(daemon: &Daemon, report: &mut BootReport) {
-    let ctx = daemon.ctx();
-    report.stages.push(Stage::ClearPolicyRcD);
-    let root = &ctx.repository_ports.dirs.root;
-    match hostkeeper_install::repository::policy::clear_stale(root) {
-        Ok(true) => ctx.log(&format!(
-            "level=info removed the stale {} that a killed run of the package manager left",
-            hostkeeper_install::repository::policy::POLICY_RC_D
-        )),
-        Ok(false) => {}
-        Err(error) => ctx.alert(
-            ALERT_START,
-            &format!("the stale policy-rc.d could not be removed: {error}"),
-        ),
-    }
 }
 
 /// The update of hostkeeper itself that waits for the restart, settled by this binary

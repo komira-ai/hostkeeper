@@ -16,7 +16,9 @@ use hostkeeper_launchd::launchctl::{
 };
 use hostkeeper_launchd::launcher::{POLL, STDERR_FILE, STDOUT_FILE};
 use hostkeeper_launchd::{FakeLaunchctl, Label, LaunchdLauncher};
-use hostkeeper_steps::{AdditiveCall, Bound, Captured, LaunchError, StepExit, StepLauncher};
+use hostkeeper_steps::{
+    AdditiveCall, Bound, Captured, LaunchError, StepCall, StepExit, StepLauncher,
+};
 use plist::Value;
 use support::{FakePace, Hook, PARAMS, SimLaunchd, call, hook_file, scratch, secs};
 
@@ -618,6 +620,37 @@ fn uninstall<'a>(hook: &'a Path, hook_args: &'a [String], timeout: u64) -> Addit
         unit: UNINSTALL_UNIT,
         timeout_secs: timeout,
     }
+}
+
+/// Proves a step of an update runs as one job whose arguments are the hook command's leading
+/// arguments before the step and its own: `<hook> update-hook --fast cutover --params <params>`.
+///
+/// Catches: leading arguments dropped, or given after the step, by `run`.
+#[test]
+fn a_step_runs_with_the_hook_arguments_before_the_step() {
+    let root = scratch("launcher-step-args");
+    let hook = hook_file(root.path());
+    let jobs = root.path().join("jobs");
+    let (launcher, sim, _, _) = sim_launcher(&jobs);
+    sim.script(LABEL, Hook::exits(1, 0, "{}"));
+    let hook_args = ["update-hook".to_owned(), "--fast".to_owned()];
+    let step = StepCall {
+        hook_args: &hook_args,
+        ..call(&hook, UNIT, Step::Cutover, secs(60))
+    };
+    launcher.run(&step).expect("the step ran");
+    let text = |word: &str| Value::String(word.to_owned());
+    assert_eq!(
+        sim.plists()[0].get("ProgramArguments").cloned(),
+        Some(Value::Array(vec![
+            text(hook.to_str().expect("UTF-8")),
+            text("update-hook"),
+            text("--fast"),
+            text("cutover"),
+            text("--params"),
+            text(PARAMS),
+        ]))
+    );
 }
 
 /// Catches an uninstall the Mac launcher does not run (the trait's default starts nothing), runs

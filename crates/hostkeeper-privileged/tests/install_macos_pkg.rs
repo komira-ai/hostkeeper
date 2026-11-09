@@ -264,22 +264,39 @@ fn build_unsigned(dir: &Path, version: &str) -> Forms {
     fs::create_dir(&root).expect("create the payload root");
     payload(&root, version);
     let component = dir.join(format!("component-{version}.pkg"));
-    run(
-        "/usr/bin/pkgbuild",
-        &[
-            "--root",
-            text(&root),
-            "--identifier",
-            IDENTIFIER,
-            "--version",
-            version,
-            "--install-location",
-            "/",
-            "--ownership",
-            "recommended",
-            text(&component),
-        ],
-    );
+    let mut args = vec![
+        "--root".to_owned(),
+        text(&root).to_owned(),
+        "--identifier".to_owned(),
+        IDENTIFIER.to_owned(),
+        "--version".to_owned(),
+        version.to_owned(),
+        "--install-location".to_owned(),
+        "/".to_owned(),
+        "--ownership".to_owned(),
+        "recommended".to_owned(),
+    ];
+    // 1.1.0 carries a `postinstall`, which `installer` runs at `activate` and nothing runs at
+    // `stage`: it writes [`postinstall_evidence`].
+    if version == "1.1.0" {
+        let scripts = dir.join(format!("scripts-{version}"));
+        fs::create_dir(&scripts).expect("create the scripts directory");
+        let script = scripts.join("postinstall");
+        let evidence = postinstall_evidence(dir);
+        fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\nprintf '%s' {version} > '{}'\nexit 0\n",
+                text(&evidence)
+            ),
+        )
+        .expect("write the postinstall");
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).expect("its mode");
+        args.extend(["--scripts".to_owned(), text(&scripts).to_owned()]);
+    }
+    args.push(text(&component).to_owned());
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    run("/usr/bin/pkgbuild", &args);
     let product = dir.join(format!("product-{version}.pkg"));
     run(
         "/usr/bin/productbuild",
@@ -294,6 +311,11 @@ fn build_unsigned(dir: &Path, version: &str) -> Forms {
         ],
     );
     Forms { component, product }
+}
+
+/// The file the `postinstall` of the fixture's 1.1.0 writes, in the test's directory `dir`.
+fn postinstall_evidence(dir: &Path) -> std::path::PathBuf {
+    dir.join("postinstall-ran")
 }
 
 /// The records of the installer, in memory.
@@ -597,9 +619,20 @@ fn a_package_is_refused_unsigned_then_installed_updated_repaired_rolled_back_and
     let dir110 = rig
         .stage(&signers, &order110, &v110.product)
         .unwrap_or_else(|(f, _)| panic!("{f}"));
+    // 1.1.0 carries a `postinstall` (packages-native.md section 10.2: a `.pkg`'s scripts run as
+    // `installer` runs them): `stage` accepted it and ran nothing, `activate` runs it.
+    let evidence = postinstall_evidence(dir.path());
+    assert!(
+        fs::symlink_metadata(&evidence).is_err(),
+        "stage ran no script of the package"
+    );
     rig.installer(&signers)
         .activate(&order110, &dir110, Some(&dir100))
         .unwrap_or_else(|f| panic!("{f}"));
+    assert_eq!(
+        fs::read_to_string(&evidence).expect("the postinstall ran at activate"),
+        "1.1.0"
+    );
     assert_eq!(receipt_version().as_deref(), Some("1.1.0"));
     assert_absent(&format!("{SUPPORT}/legacy.txt"));
     assert_installed(&format!("{SUPPORT}/lib"), 0o755);

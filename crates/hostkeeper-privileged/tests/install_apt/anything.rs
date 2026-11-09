@@ -272,9 +272,9 @@ fn a_hook_command_missing_from_the_package_is_manifest_invalid_at_stage() {
 fn the_manifest_hook_runs_the_steps_and_its_rollback_runs_when_verify_fails() {
     let rig = Rig::new("apt-hook", Trust::Entry);
     let (daemon, _, _scratch) = daemon::daemon(&rig);
-    let (one, two) = (rig.pin("4.0-hook"), rig.pin("4.1-hook"));
+    let (one, two) = (rig.pin("0.7-hook"), rig.pin("0.8-hook"));
 
-    let install = daemon::install_of(hooked(&rig, "4.0-hook"), "4.0-hook", &one, 1);
+    let install = daemon::install_of(hooked(&rig, "0.7-hook"), "0.7-hook", &one, 1);
     assert_eq!(finished(daemon.order(&install)), succeeded());
     let log = fs::read_to_string(HOOK_LOG).expect("the hook's log");
     for step in ["prepare", "cutover", "verify"] {
@@ -287,7 +287,7 @@ fn the_manifest_hook_runs_the_steps_and_its_rollback_runs_when_verify_fails() {
 
     fs::write(FAIL_VERIFY, "").expect("make verify fail");
     fs::remove_file(HOOK_LOG).expect("start a new log");
-    let update = daemon::update_of(hooked(&rig, "4.1-hook"), "4.1-hook", &two, 2);
+    let update = daemon::update_of(hooked(&rig, "0.8-hook"), "0.8-hook", &two, 2);
     let (verdict, _) = finished(daemon.order(&update));
     assert!(
         matches!(verdict, hostkeeper_hook::Verdict::Failed { .. }),
@@ -304,7 +304,7 @@ fn the_manifest_hook_runs_the_steps_and_its_rollback_runs_when_verify_fails() {
     // The switch back reinstalled the previous package before `rollback` ran.
     assert_eq!(
         dpkg_version().as_deref(),
-        Some("4.0-hook"),
+        Some("0.7-hook"),
         "{PACKAGE} is back at the previous version"
     );
 }

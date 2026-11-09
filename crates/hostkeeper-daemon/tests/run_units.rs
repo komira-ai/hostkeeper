@@ -8,10 +8,11 @@ mod support_apt;
 use std::fs;
 use std::path::PathBuf;
 
-use hostkeeper_daemon::boot::Stage;
+use hostkeeper_daemon::boot::{BootReport, Stage};
 use hostkeeper_daemon::start;
 use hostkeeper_install::repository::policy;
 use hostkeeper_placed::testing::UnitCall;
+use hostkeeper_proto::hostkeeper::release::v1::{Manifest, Target};
 use support::OWN;
 use support_apt::seen::{install_of, succeeded, unit_calls};
 use support_apt::{AptRig, UNIT, package, unlinked_package};
@@ -101,5 +102,77 @@ fn the_start_removes_a_stale_policy_rc_d_of_ours_and_keeps_a_foreign_one() {
     assert_eq!(
         fs::read_to_string(&file).expect("kept"),
         "#!/bin/sh\nexit 0\n"
+    );
+}
+
+/// Proves a run unit that cannot be started is an alert naming the service and the unit, and
+/// that the start pass still records its stage and goes on.
+///
+/// Catches: a failed start that stops the daemon's start, or one that no alert reports.
+#[test]
+fn a_run_unit_that_cannot_be_started_is_an_alert_and_the_start_goes_on() {
+    let apt = AptRig::new("run-units-failing");
+    let one = apt.publish(unlinked_package("1.0.0-1"));
+    let (daemon, log) = support::alerting(apt.daemon());
+    assert_eq!(
+        daemon.order(&install_of("1.0.0", "1.0.0-1", &one, 1)),
+        succeeded()
+    );
+    apt.rig.units.fail_start(UNIT);
+    let mut report = BootReport::default();
+    daemon.start_run_units(&mut report);
+    assert_eq!(report.stages, [Stage::StartRunUnits]);
+    let said = support::lines(&log).join("\n");
+    assert!(
+        said.contains(&format!("service=web unit={UNIT}: it could not be started")),
+        "{said}"
+    );
+}
+
+/// Proves the start pass starts nothing of a `current` version staged by another installer than
+/// `apt`, even when its tree gives a run unit no link.
+///
+/// Catches: a start pass that starts the units of a `macos-pkg` version (launchd loads them) or
+/// of an archive version.
+#[test]
+fn a_current_version_of_another_installer_is_left_alone() {
+    let apt = AptRig::new("run-units-other-installer");
+    let dir = apt.rig.packages.join("web").join("1.0.0");
+    fs::create_dir_all(dir.join("tree")).expect("the version directory");
+    let entry = Target {
+        installer: "macos-pkg".to_owned(),
+        manifest: Some(Manifest {
+            run: vec![UNIT.to_owned()],
+            ..Manifest::default()
+        }),
+        ..Target::default()
+    };
+    hostkeeper_daemon::target::write(&dir, &entry).expect("target.json");
+    std::os::unix::fs::symlink("1.0.0", apt.rig.packages.join("web").join("current"))
+        .expect("current");
+    let mut report = BootReport::default();
+    apt.daemon().start_run_units(&mut report);
+    assert_eq!(unit_calls(&apt), []);
+}
+
+/// Proves a `policy-rc.d` that cannot be looked at (its directory is a file) is an alert, and
+/// that the stage is still recorded and the start goes on.
+///
+/// Catches: a start that stops at an unreadable policy file, or one whose failure no alert says.
+#[test]
+fn a_policy_file_that_cannot_be_looked_at_is_an_alert_and_the_start_goes_on() {
+    let apt = AptRig::new("run-units-policy-unreadable");
+    let file = policy_file(&apt);
+    let sbin = file.parent().expect("usr/sbin");
+    fs::create_dir_all(sbin.parent().expect("usr")).expect("usr");
+    fs::write(sbin, "not a directory").expect("usr/sbin as a file");
+    let (daemon, log) = support::alerting(apt.daemon());
+    let mut report = BootReport::default();
+    daemon.clear_policy_rc_d(&mut report);
+    assert_eq!(report.stages, [Stage::ClearPolicyRcD]);
+    let said = support::lines(&log).join("\n");
+    assert!(
+        said.contains("the stale policy-rc.d could not be removed"),
+        "{said}"
     );
 }
