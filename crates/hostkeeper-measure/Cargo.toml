@@ -1,0 +1,44 @@
+[package]
+name = "hostkeeper-measure"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+default-run = "hostkeeper-measure"
+description = "The measurements of the technical report: the measurement plans, a runner that carries a plan out against a coordinator with hkctl alone and records what it saw, and the pure analysis that turns a run's records into a section of the results page and a result file of docs/report/results."
+
+# An operator's tool, run from the operator's machine: no host runs it and nothing ships it. It
+# links no crate of the workspace: it speaks to the coordinator only through `hkctl`, the program
+# `--hkctl` names (crates/xtask/tests/layering keeps it so).
+[dependencies]
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# The digest of a release index a plan's request names (`{sha256:<param>}`).
+sha2.workspace = true
+hex.workspace = true
+thiserror.workspace = true
+# The plan files are TOML.
+toml.workspace = true
+
+# The program the tests put in place of hkctl (tests/bin/fake_hkctl.rs): it answers from files of
+# a directory of the test and records each call. A program of the tests, not shipped: it is built
+# only with `test-support`, which only the tests of this crate turn on.
+[[bin]]
+name = "hostkeeper-measure-fake-hkctl"
+path = "tests/bin/fake_hkctl.rs"
+required-features = ["test-support"]
+
+[features]
+# Builds the fake hkctl of the tests. Off for everything else.
+test-support = []
+
+[dev-dependencies]
+# Its own tests turn on `test-support`.
+hostkeeper-measure = { path = ".", features = ["test-support"] }
+hostkeeper-testkit = { path = "../hostkeeper-testkit" }
+
+[lints]
+workspace = true

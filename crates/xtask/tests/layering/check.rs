@@ -28,6 +28,7 @@ const INSTALL: &str = "hostkeeper-install";
 const OPENRC: &str = "hostkeeper-openrc";
 const MDM: &str = "hostkeeper-mdm";
 const MDM_STEP: &str = "hostkeeper-mdm-step";
+const MEASURE: &str = "hostkeeper-measure";
 const PXE: &str = "hostkeeper-pxe";
 const PXE_PACKETS: &str = "hostkeeper-pxe-packets";
 const PROTO: &str = "hostkeeper-proto";
@@ -86,7 +87,7 @@ pub type Layer = (
 /// the macOS pkg's postinstall (`hostkeeper-launchd`) against the binary. The daemon reads the
 /// macos-pkg installer's signers file at its start (`hostkeeper-install`), and the privileged
 /// tests run that installer's steps against the Mac's real tools.
-pub const LAYERS: [Layer; 32] = [
+pub const LAYERS: [Layer; 33] = [
     (BINARY, &[DAEMON], &[LAUNCHD]),
     (CONFIG, &[], &[]),
     (
@@ -120,6 +121,7 @@ pub const LAYERS: [Layer; 32] = [
     (MDM_CORE, &[], &[]),
     (MDM_GATE, &[CONFIG, ENROLLMENT, WIRE], &[]),
     (MDM_STEP, &[], &[]),
+    (MEASURE, &[], &[]),
     (OBSERVE, &[CONFIG, PROTO], &[HOOK, STEPS]),
     (OIDC, &[], &[]),
     (OPENRC, &[OBSERVE, PLACED, STEPS], &[HOOK]),
