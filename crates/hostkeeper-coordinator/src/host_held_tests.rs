@@ -2,7 +2,8 @@
 //! each record, what the enrollment store holds for its host id (no host, an approved host, a
 //! denied one or a retired one), read from the store by host id. It holds after a coordinator
 //! restart and for a host never heard from, which `Hosts.List` (the hosts heard from since the
-//! coordinator started) does not show; a coordinator without enrollment says nothing
+//! coordinator started, and the enrolled hosts not denied that it has not heard, not live) does
+//! not show for a denied or retired host; a coordinator without enrollment says nothing
 //! (`UNSPECIFIED`); and a store that cannot be read is refused, never answered as "no host".
 
 use std::sync::Arc;

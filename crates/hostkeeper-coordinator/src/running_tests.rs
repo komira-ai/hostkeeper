@@ -322,6 +322,10 @@ fn after_restart(f: &mut Fixture) {
     );
     let heard = listed(&f.rig, "db-1");
     assert!(heard.live);
+    assert_ne!(
+        heard.last_heartbeat_unix, 0,
+        "a host heard since the start has a heartbeat time"
+    );
     assert_eq!(
         heard.running,
         [service(DB, "2.0", ARCHIVE), service(WEB, "1.1", "deb")],
