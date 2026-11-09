@@ -14,7 +14,12 @@ const PATIENCE: std::time::Duration = std::time::Duration::from_secs(5);
 
 async fn body_of(response: hyper::Response<Full<Bytes>>) -> (StatusCode, Value) {
     let status = response.status();
-    let bytes = response.into_body().collect().await.expect("a body").to_bytes();
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("a body")
+        .to_bytes();
     (status, serde_json::from_slice(&bytes).expect("JSON"))
 }
 
@@ -42,7 +47,11 @@ async fn the_private_listener_says_its_version_and_commit_with_no_token() {
 async fn at_least_its_own_version_is_ok_and_a_newer_one_is_a_conflict_naming_it_older() {
     let rig = Rig::new("version-at-least");
     let own = env!("CARGO_PKG_VERSION");
-    for asked in [own.to_owned(), "0.0.1".to_owned(), format!("{own}+0123456789ab")] {
+    for asked in [
+        own.to_owned(),
+        "0.0.1".to_owned(),
+        format!("{own}+0123456789ab"),
+    ] {
         let (status, body) = ask(
             &rig,
             Surface::Control,

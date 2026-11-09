@@ -229,9 +229,7 @@ where
             Surface::Control,
             _,
             DESIRED_PATH | OPERATOR_PATH | STATUS_PATH | CONVERGENCE_PATH | VERSION_PATH,
-        ) => {
-            error(StatusCode::METHOD_NOT_ALLOWED, "method_not_allowed")
-        }
+        ) => error(StatusCode::METHOD_NOT_ALLOWED, "method_not_allowed"),
         _ => error(StatusCode::NOT_FOUND, "not_found"),
     }
 }
