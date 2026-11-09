@@ -10,7 +10,7 @@
 
 use std::path::Path;
 
-use super::contract::{Commit, Repo, Signer, Version};
+use super::contract::{Commit, Repo, Signer};
 
 /// Why a port could not answer: what was asked and why it failed.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -189,14 +189,14 @@ pub(crate) trait AdvisoryCheck {
 /// distribution package (`productbuild`).
 pub(crate) trait BuildPkg {
     /// Builds the component `pkg` from the tree `root`, installed at `/`, with the package identifier
-    /// `identifier` and version `version`, every entry owned by root and wheel, and the scripts
-    /// of the directory `scripts`.
+    /// `identifier` and the version text `version`, every entry owned by root and wheel, and the
+    /// scripts of the directory `scripts` (none when it is `None`).
     fn build_pkg(
         &self,
         root: &Path,
-        scripts: &Path,
+        scripts: Option<&Path>,
         identifier: &str,
-        version: &Version,
+        version: &str,
         pkg: &Path,
     ) -> Result<(), PortError>;
 
@@ -206,7 +206,7 @@ pub(crate) trait BuildPkg {
         &self,
         component: &Path,
         identifier: &str,
-        version: &Version,
+        version: &str,
         product: &Path,
     ) -> Result<(), PortError>;
 }

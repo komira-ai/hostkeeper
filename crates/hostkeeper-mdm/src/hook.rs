@@ -2,10 +2,14 @@
 //! (docs/design/two-programs.md section 6.2). The contract is the one of the `hostkeeper-hook`
 //! crate; this is what each step does for the MDM stack.
 //!
-//! The daemon has unpacked the package and links its units (`units/`, from the version
+//! The daemon has unpacked the archive package and links its units (`units/`, from the version
 //! `current` names) into `/etc/systemd/system` immediately before `cutover` and back before
-//! `rollback`; the hook does what `hostkeeper-mdm install` did besides placing binaries and
-//! units, which are now the package's:
+//! `rollback`; from the `.deb`, dpkg installs the binaries in `/usr/lib/mdm` and the units in
+//! `/usr/lib/systemd/system/` at the daemon's `activate`, before `cutover`, and the daemon runs
+//! the hook as the tree's `usr/lib/mdm/hostkeeper-hook`, which runs `mdm update-hook` beside it.
+//! The program's path says which of the two builds runs ([`package::Layout::of_program`]). The
+//! hook does what `hostkeeper-mdm install` did besides placing binaries and units, which are now
+//! the package's:
 //!
 //! - **`prepare <staged release>`** checks the host as `install` does before anything changes
 //!   (root; an x86-64 machine; no link at the state, settings or pkg directory, but not at the
@@ -13,7 +17,8 @@
 //!   runs, so the staged release's programs are checked by their staged paths instead; an
 //!   interface carrying `MDM_BIND`; the loopback ports and 443 free or held by the package's
 //!   own active unit; the SCEP depot empty or holding a whole CA), the staged release (its
-//!   `bin/scepserver` and `bin/lego` are files, and that lego takes every flag the certificate
+//!   `scepserver` and `lego` are files, in its `bin/` for the archive and its
+//!   `tree/usr/lib/mdm/` for the `.deb`, and that lego takes every flag the certificate
 //!   unit passes to `lego run` and the renewal unit to `lego renew`), and `/etc/mdm/dns.env`
 //!   when it is there (a 0600 file of root's holding every variable the DNS provider reads;
 //!   without it the certificate jobs wait). Then it makes, each
@@ -160,10 +165,17 @@ impl From<MdmError> for Failure {
     }
 }
 
-/// Runs the step `args` names (the words after `update-hook`). The report line is written to
-/// `out` last; the plan, the commands and the detail go to `err`. The exit code.
-pub fn run(args: &[OsString], system: &System<'_>, out: &mut dyn Write, err: &mut dyn Write) -> u8 {
-    let (code, report) = match execute(args, system, err) {
+/// Runs the step `args` names (the words after `update-hook`) for the package's build `build`
+/// (the layout of its settings and of a staged release). The report line is written to `out`
+/// last; the plan, the commands and the detail go to `err`. The exit code.
+pub fn run(
+    args: &[OsString],
+    build: package::Layout,
+    system: &System<'_>,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> u8 {
+    let (code, report) = match execute(args, build, system, err) {
         Ok(report) => (0, report),
         Err(failure) => (failure.code, failure.report),
     };
@@ -197,7 +209,12 @@ fn path_param(params: &Params, key: &str) -> Result<String, Failure> {
     }
 }
 
-fn execute(args: &[OsString], system: &System<'_>, err: &mut dyn Write) -> Result<Report, Failure> {
+fn execute(
+    args: &[OsString],
+    build: package::Layout,
+    system: &System<'_>,
+    err: &mut dyn Write,
+) -> Result<Report, Failure> {
     let call = Invocation::parse(args.iter().cloned()).map_err(|why| Failure {
         code: EXIT_USAGE,
         report: Report {
@@ -236,6 +253,7 @@ fn execute(args: &[OsString], system: &System<'_>, err: &mut dyn Write) -> Resul
     let record = record::Record::open(&at.record_dir)?;
     let mut steps = steps::Steps {
         system,
+        build,
         record: &record,
         params: &params,
         settings: &at.settings,

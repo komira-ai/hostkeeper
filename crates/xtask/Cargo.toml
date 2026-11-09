@@ -36,9 +36,11 @@ hostkeeper-release = { path = "../hostkeeper-release" }
 hostkeeper-steps = { path = "../hostkeeper-steps" }
 # The daemon's launchd label, plist and paths the macOS installer pkg installs
 # (`release macos-pkg`), and the launchd plists of a macOS service package
-# (`release package --service hello`), rendered with the renderer the daemon's own plists use.
+# (`release package --service hello`, and hello's `.pkg`), rendered with the renderer the daemon's
+# own plists use.
 hostkeeper-launchd = { path = "../hostkeeper-launchd" }
-# The mdm package (`release package --service mdm`, `release mdm-fetch`): its manifest, units and
+# The mdm package (`release package --service mdm`, `release deb --service mdm`, `release
+# mdm-fetch`): its manifest, units (and their `.deb` text) and
 # the pins of the tools it carries from hostkeeper-mdm-core, and the tools taken out of their
 # archives by the kit's own archive reader in hostkeeper-mdm.
 hostkeeper-mdm = { path = "../hostkeeper-mdm" }
@@ -118,7 +120,7 @@ hostkeeper-pxe-packets = { path = "../hostkeeper-pxe-packets" }
 hostkeeper-wire = { path = "../hostkeeper-wire" }
 # The example service hello, whose command-line parser and served version the hello package test
 # checks the package's units and manifest against: the version a package names is the one its
-# server answers `/version` with.
+# server answers `/version` with; and the paths its hook looks for in a native package's tree.
 hello = { path = "../../examples/hello" }
 # The operator docs' test (tests/enrollment_doc.rs) reads the refusal tokens from the protos'
 # descriptors.

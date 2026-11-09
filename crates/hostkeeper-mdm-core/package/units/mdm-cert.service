@@ -1,7 +1,6 @@
 # mdm-cert.service: the TLS certificate of the MDM's DNS name, from an ACME CA
-# over DNS-01 by lego. A unit of the mdm package, linked by hostkeeper from the
-# package's current version. It orders the first certificate: it runs only while
-# lego has none (the hook's cutover starts it, and so does mdm-cert-renew.service);
+# over DNS-01 by lego. A unit of the mdm package. It orders the first
+# certificate: it runs only while lego has none (the hook's cutover starts it, and so does mdm-cert-renew.service);
 # once one is there, mdm-cert-renew.service renews it.
 #
 # The DNS provider's credentials are read from the root-only /etc/mdm/dns.env
