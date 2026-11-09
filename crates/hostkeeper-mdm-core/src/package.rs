@@ -82,6 +82,77 @@ pub const FIXED: [(&str, &str); 10] = [
     ("MDM_DEP_PORT", "9001"),
 ];
 
+/// The binaries of the package's `.deb`, `/usr/lib/mdm` (docs/design/packages-native.md section
+/// 10.2: a program no one types goes under `/usr/lib/<package>/`): `MDM_BIN` of the `.deb`.
+pub const DEB_BIN: &str = "/usr/lib/mdm";
+
+/// Where the package's files are on the host: the two builds of the one package.
+///
+/// - [`Layout::Archive`], the `hostkeeper-archive` package: the daemon unpacks it and runs it
+///   through its link `current`, so the binaries are in [`BIN`] and a staged release's are in
+///   its `bin/`.
+/// - [`Layout::Deb`], the `.deb`: dpkg installs the binaries in [`DEB_BIN`] and the units in
+///   `/usr/lib/systemd/system/`, and a staged release (the daemon's version directory) holds the
+///   package's tree in its `tree/`, so its binaries are in `tree/usr/lib/mdm`.
+///
+/// The package's program learns which build it is from the path it runs as
+/// ([`Layout::of_program`]): the `.deb`'s hook runs `usr/lib/mdm/mdm` of the tree beside it, and
+/// the operator runs `/usr/lib/mdm/mdm`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Layout {
+    /// The `hostkeeper-archive` package.
+    Archive,
+    /// The `.deb`.
+    Deb,
+}
+
+impl Layout {
+    /// The build whose program `program` is (its `argv[0]`): the `.deb`'s when it is a path
+    /// that ends in `/usr/lib/mdm/mdm` (the installed program, or the program in a staged
+    /// release's `tree/`), the archive's otherwise.
+    pub fn of_program(program: &str) -> Layout {
+        let deb_program = format!("{DEB_BIN}/{SERVICE}");
+        if program.ends_with(&deb_program) {
+            Layout::Deb
+        } else {
+            Layout::Archive
+        }
+    }
+
+    /// `MDM_BIN` of the build: where its binaries run from.
+    pub fn bin(self) -> &'static str {
+        match self {
+            Layout::Archive => BIN,
+            Layout::Deb => DEB_BIN,
+        }
+    }
+
+    /// The directory of the binaries of the staged release `staged`, the release argument of
+    /// `prepare`: `<staged>/bin` of an unpacked archive, `<staged>/tree/usr/lib/mdm` of the
+    /// daemon's version directory of a `.deb`.
+    pub fn staged_bin(self, staged: &str) -> String {
+        match self {
+            Layout::Archive => format!("{staged}/bin"),
+            Layout::Deb => format!("{staged}/tree{DEB_BIN}"),
+        }
+    }
+
+    /// The settings the build fixes: [`FIXED`], with `MDM_BIN` the build's [`Layout::bin`].
+    pub fn fixed(self) -> [(&'static str, &'static str); 10] {
+        FIXED.map(|(key, value)| match key {
+            "MDM_BIN" => (key, self.bin()),
+            _ => (key, value),
+        })
+    }
+
+    /// The text of `unit` in the build: the committed unit, whose programs are in [`BIN`], with
+    /// each of them in the build's [`Layout::bin`] instead.
+    pub fn unit_text(self, unit: &PackageUnit) -> String {
+        unit.text
+            .replace(&format!("{BIN}/"), &format!("{}/", self.bin()))
+    }
+}
+
 /// The pinned tools whose binaries the package carries under `bin/`, beside `bin/mdm`: the
 /// servers and lego. MicroMDM's `mdmctl` is pinned for the old kit's `migrate` only.
 pub const TOOLS: [Tool; 5] = [
@@ -191,20 +262,29 @@ pub enum PackageError {
     },
 }
 
-/// The settings file `text` with the package's [`FIXED`] keys it leaves out added, refused when
-/// it gives one of them another value. The result is what [`MdmConfig::parse`] and
-/// [`Acme::parse`] read.
+/// The settings file `text` with the archive package's [`FIXED`] keys it leaves out added,
+/// refused when it gives one of them another value: [`settings_of`] for [`Layout::Archive`].
+///
+/// # Errors
+/// As [`settings_of`].
+pub fn settings(text: &str) -> Result<String, PackageError> {
+    settings_of(text, Layout::Archive)
+}
+
+/// The settings file `text` with the keys `layout` fixes ([`Layout::fixed`]) that it leaves out
+/// added, refused when it gives one of them another value. The result is what
+/// [`MdmConfig::parse`] and [`Acme::parse`] read.
 ///
 /// # Errors
 /// [`PackageError::Settings`] when `text` is not a settings file; [`PackageError::Fixed`] for
 /// the first fixed key it sets to another value.
-pub fn settings(text: &str) -> Result<String, PackageError> {
+pub fn settings_of(text: &str, layout: Layout) -> Result<String, PackageError> {
     let given = Settings::parse(text, KEYS)?;
     let mut out = text.to_owned();
     if !out.is_empty() && !out.ends_with('\n') {
         out.push('\n');
     }
-    for (key, fixed) in FIXED {
+    for (key, fixed) in layout.fixed() {
         match given.get(key) {
             None => out.push_str(&format!("{key}={fixed}\n")),
             Some(value) if value == fixed => {}

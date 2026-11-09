@@ -25,6 +25,7 @@ mod steps;
 
 pub use args::{Call, Step};
 pub use settings::{Settings, Units};
+pub use steps::{DEB_PROGRAM, PKG_PROGRAM, staged_program};
 
 /// Exit status of a command line the hook cannot read.
 pub const EXIT_USAGE: i32 = 2;

@@ -1,6 +1,9 @@
 //! `mdm`, the program of the `mdm` service package (`bin/mdm`, docs/design/two-programs.md
 //! section 6.2): the package's update hook and the operator's Apple-facing verbs, run by root on
-//! the MDM host as `/var/lib/hostkeeper/packages/mdm/current/bin/mdm`.
+//! the MDM host as `/var/lib/hostkeeper/packages/mdm/current/bin/mdm` from the archive package,
+//! or as `/usr/lib/mdm/mdm` from the `.deb`. Which build it is follows from the path it runs as
+//! (`argv[0]`, [`hostkeeper_mdm_core::package::Layout::of_program`]): it fixes `MDM_BIN` and
+//! where `prepare` finds the staged release's binaries.
 //!
 //! - `mdm update-hook <step> [<staged release>] --params <file>`: the hook hostkeeper's daemon
 //!   runs ([`crate::hook`]).
@@ -19,6 +22,7 @@ use std::io::{self, Write};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
+use hostkeeper_mdm_core::package;
 
 use crate::cli::{self, DepVerb, Layout, PushCertArgs};
 use crate::{System, hook};
@@ -61,10 +65,16 @@ pub fn run(args: &[OsString], system: &System<'_>, out: &mut dyn Write, err: &mu
             return u8::try_from(e.exit_code()).unwrap_or(2);
         }
     };
+    let build = package::Layout::of_program(
+        &args
+            .first()
+            .map(|p| p.to_string_lossy())
+            .unwrap_or_default(),
+    );
     match cli.verb {
-        Verb::UpdateHook { args } => hook::run(&args, system, out, err),
-        Verb::PushCert(a) => cli::exit(cli::push_cert(system, a, Layout::Package, out), err),
-        Verb::Dep { verb } => cli::exit(cli::dep(system, verb, Layout::Package, out), err),
+        Verb::UpdateHook { args } => hook::run(&args, build, system, out, err),
+        Verb::PushCert(a) => cli::exit(cli::push_cert(system, a, Layout::Package(build), out), err),
+        Verb::Dep { verb } => cli::exit(cli::dep(system, verb, Layout::Package(build), out), err),
     }
 }
 

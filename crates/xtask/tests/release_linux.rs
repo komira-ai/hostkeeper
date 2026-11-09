@@ -811,3 +811,26 @@ fn coordinator_staged_with_staged_is_a_usage_error() {
     assert!(stderr(&o).contains("cannot be used with"), "{}", stderr(&o));
     assert_eq!(stdout(&o), "");
 }
+
+#[test]
+fn coordinator_staged_with_service_is_a_usage_error() {
+    let d = dir("coordinator-service-usage");
+    let staged = stage_coordinator(&d);
+    let (name, bytes) = coordinator_packages(&coordinator_entries(static_pie())).remove(0);
+    let package = write(&d, name, &bytes);
+    let o = run(
+        &d,
+        &[
+            "release",
+            "check-linux-pkg",
+            path_str(&package),
+            "--service",
+            "hello",
+            "--coordinator-staged",
+            path_str(&staged),
+        ],
+    );
+    assert_eq!(o.status.code(), Some(2), "{}", stdout(&o));
+    assert!(stderr(&o).contains("cannot be used with"), "{}", stderr(&o));
+    assert_eq!(stdout(&o), "");
+}

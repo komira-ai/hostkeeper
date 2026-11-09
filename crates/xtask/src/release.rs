@@ -23,7 +23,11 @@
 //!   read back, holds no ELF program with an interpreter or a needed library and declares no
 //!   dependency; with `--staged` it also installs the staged `gh`, trusted root and programs at
 //!   the daemon's paths, with their modes, root's, and the console's issue link pointing at the
-//!   daemon's issue file.
+//!   daemon's issue file; with `--service hello` or `--service mdm` it reads a service's `.deb`
+//!   against the rules of docs/design/packages-native.md section 10.2 instead.
+//! - `deb` ([`native::deb`]): the `.deb` of hello, of its failing build or of mdm, with the hook
+//!   at `/usr/lib/<service>/hostkeeper-hook`, the units installed disabled and no maintainer
+//!   script.
 //! - `index` ([`index`]): the release index of a package, `index.json` for hostkeeper,
 //!   `hello-index.json` for hello, `hello-fail-ready-index.json` for its failing build and
 //!   `mdm-index.json` for mdm: which package serves each platform, refused unless it has the
@@ -35,7 +39,8 @@
 //! - `hkctl` ([`hkctl`]): `hkctl-<version>`, the command line of the coordinator, one bash
 //!   script for every platform, generated from the protos' command table.
 //! - `macos-pkg` and `check-macos-pkg` ([`macos_pkg`]): the installer pkg of a Mac's first
-//!   install, and the check of its payload read back from the built pkg.
+//!   install, and the check of its payload read back from the built pkg; with `--service hello`,
+//!   hello's `.pkg` ([`native::pkg`]), with no script and its jobs disabled.
 //! - `compare-images` ([`compare_images`]): two OCI image tarballs are byte for byte equal.
 //! - `image-index`, `image-layout` ([`image_index`]): the coordinator's multi-platform image
 //!   index, made of the two image tarballs, and the OCI layout a registry push copies from.
@@ -77,6 +82,7 @@ pub(crate) mod contract;
 mod doc_tests;
 #[cfg(test)]
 pub(crate) mod fakes;
+mod files;
 pub(crate) mod git;
 mod github;
 mod hkctl;
@@ -85,6 +91,7 @@ mod index;
 mod locate;
 mod macos_pkg;
 mod mdm_fetch;
+mod native;
 mod netboot;
 #[cfg(test)]
 mod no_network;
@@ -93,6 +100,7 @@ mod plan;
 pub(crate) mod ports;
 mod publish;
 pub(crate) mod real;
+mod run_state;
 mod set_version;
 mod sync;
 mod targets;
@@ -101,16 +109,17 @@ pub mod test_support;
 mod version;
 
 use std::fmt;
-use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::advisories::DenyCli;
 use check_binary::VersionOf;
 use contract::{Commit, Package, Platform, Repo, Service, Version};
+pub(crate) use files::{answer, file_sha256};
 use git::GitCli;
 use github::Gh;
 use macos_pkg::PkgbuildCli;
-use ports::{Adapters, Exec, PortError, Ports, Run};
+use ports::{Adapters, Exec, PortError, Ports};
+pub(crate) use run_state::{RunState, state};
 
 /// Why a release verb failed.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -272,6 +281,13 @@ pub(crate) enum Verb {
     /// `/usr/bin/hostkeeper` and `/usr/bin/hostkeeper-pxe` (regular files, 0755) and
     /// `/usr/lib/hostkeeper/trusted_root.json` (0644), all root:root, with the bytes of the files
     /// `nfpm-stage` wrote, and the console's issue link.
+    ///
+    /// With `--service hello` or `--service mdm` (not with `--staged`), read a service's `.deb`
+    /// (`release deb`) instead and refuse it unless its control archive holds no maintainer
+    /// script, its `Package` is the service, every file is at a path of the service's (its units
+    /// plain files named for it in `/usr/lib/systemd/system/`), every entry is root's and
+    /// writable by root alone, its hook is `/usr/lib/<service>/hostkeeper-hook` (a regular file,
+    /// 0755) and its units' programs are files of the package; it declares no dependency.
     CheckLinuxPkg {
         /// The `.deb`, `.rpm` or tarball.
         package: PathBuf,
@@ -280,8 +296,42 @@ pub(crate) enum Verb {
         staged: Option<PathBuf>,
         /// For the coordinator's deb or rpm instead: the directory its program and `ui/` were
         /// staged in.
-        #[arg(long, conflicts_with = "staged")]
+        #[arg(long, conflicts_with_all = ["staged", "service"])]
         coordinator_staged: Option<PathBuf>,
+        /// The service whose `.deb` this is: hello or mdm.
+        #[arg(long, value_enum)]
+        service: Option<Service>,
+    },
+    /// Build the `.deb` of hello (and of its failing build, `--fail-ready`) or of mdm for one
+    /// Linux platform: the program and its hook at `/usr/lib/<service>/`, the units in
+    /// `/usr/lib/systemd/system/`, installed disabled, and no maintainer script
+    /// (docs/design/packages-native.md section 10.2). mdm's is built for linux-x86_64 only, with
+    /// the pinned tools out of `--archives`. Writes `<service>_<version>_<arch>.deb`.
+    Deb {
+        /// The service: hello or mdm (hostkeeper's `.deb` is nfpm's).
+        #[arg(long, value_enum)]
+        service: Service,
+        #[arg(long, value_enum)]
+        platform: Platform,
+        #[arg(long)]
+        version: Version,
+        /// The commit built; every time in the package is its committer time.
+        #[arg(long)]
+        commit: Commit,
+        /// The service's program for that platform.
+        #[arg(long)]
+        binary: PathBuf,
+        /// Hello's failing build: version `<version>-fail-ready`, its units start the program
+        /// with `--fail-ready`. Refused for mdm.
+        #[arg(long)]
+        fail_ready: bool,
+        /// The directory of the pinned archives of mdm's tools, as `release mdm-fetch` leaves
+        /// it. Required for mdm; refused for hello.
+        #[arg(long)]
+        archives: Option<PathBuf>,
+        /// The directory the `.deb` is written to.
+        #[arg(long)]
+        out: PathBuf,
     },
     /// Write the release index of a service's packages of a version in a directory, one entry
     /// per platform the package is released for (linux-x86_64 alone for mdm), refused when the
@@ -334,19 +384,33 @@ pub(crate) enum Verb {
     /// and the Sigstore trusted root, nothing else, and one script, a postinstall that boots out
     /// any copy of the daemon's job loaded before and loads the job, whose program is the binary
     /// the pkg installs; `productbuild` wraps the component as the unsigned distribution pkg.
+    ///
+    /// With `--service hello`, hello's `.pkg` instead (`hello-<version>-macos-arm64.pkg`, or of
+    /// its failing build with `--fail-ready`): the program and its hook under
+    /// `/Library/Application Support/hello/`, the two slots' plists in `/Library/LaunchDaemons/`
+    /// with `Disabled` true, and no script; `--gh` and `--trusted-root` are refused.
     MacosPkg {
+        /// The service: hostkeeper (the default) or hello.
+        #[arg(long, value_enum, default_value_t)]
+        service: Service,
+        /// Hello's failing build. Refused for hostkeeper.
+        #[arg(long)]
+        fail_ready: bool,
         #[arg(long)]
         version: Version,
-        /// The macos-arm64 hostkeeper binary: `/usr/local/bin/hostkeeper` in the pkg.
+        /// The macos-arm64 binary: `/usr/local/bin/hostkeeper` in hostkeeper's pkg,
+        /// `/Library/Application Support/hello/bin/hello` in hello's.
         #[arg(long)]
         binary: PathBuf,
-        /// The pinned darwin-arm64 `gh`: `/usr/local/lib/hostkeeper/gh` in the pkg.
+        /// The pinned darwin-arm64 `gh`: `/usr/local/lib/hostkeeper/gh` in hostkeeper's pkg.
+        /// Required for hostkeeper; refused for hello.
         #[arg(long)]
-        gh: PathBuf,
+        gh: Option<PathBuf>,
         /// The Sigstore trusted root, as the pinned `gh attestation trusted-root` prints it:
-        /// `/usr/local/lib/hostkeeper/trusted_root.json` in the pkg.
+        /// `/usr/local/lib/hostkeeper/trusted_root.json` in hostkeeper's pkg. Required for
+        /// hostkeeper; refused for hello.
         #[arg(long)]
-        trusted_root: PathBuf,
+        trusted_root: Option<PathBuf>,
         /// A directory to lay the pkg's tree and its scripts out in, and to write the component
         /// pkg to; it must not exist.
         #[arg(long)]
@@ -361,20 +425,32 @@ pub(crate) enum Verb {
     /// `macos-pkg` writes (byte for byte) and whose payload is exactly the binary, the daemon's
     /// plist, its log directory and newsyslog file, `gh` and the trusted root with their modes,
     /// owners and bytes.
+    ///
+    /// With `--service hello` (and `--fail-ready` for its failing build), check hello's `.pkg`
+    /// instead: one component with no script, whose payload is exactly the program, the hook
+    /// and the two slots' disabled plists at hello's paths; `--gh` and `--trusted-root` are
+    /// refused.
     CheckMacosPkg {
         /// The directory `pkgutil --expand` wrote of the distribution pkg.
         expanded: PathBuf,
+        /// The service: hostkeeper (the default) or hello.
+        #[arg(long, value_enum, default_value_t)]
+        service: Service,
+        /// Hello's failing build. Refused for hostkeeper.
+        #[arg(long)]
+        fail_ready: bool,
         #[arg(long)]
         version: Version,
         /// The binary the pkg must hold.
         #[arg(long)]
         binary: PathBuf,
-        /// The `gh` the pkg must hold.
+        /// The `gh` hostkeeper's pkg must hold. Required for hostkeeper; refused for hello.
         #[arg(long)]
-        gh: PathBuf,
-        /// The trusted root the pkg must hold.
+        gh: Option<PathBuf>,
+        /// The trusted root hostkeeper's pkg must hold. Required for hostkeeper; refused for
+        /// hello.
         #[arg(long)]
-        trusted_root: PathBuf,
+        trusted_root: Option<PathBuf>,
     },
     /// Refuse two OCI image tarballs unless they are byte for byte equal.
     CompareImages { a: PathBuf, b: PathBuf },
@@ -597,30 +673,42 @@ pub(crate) fn run<A: Adapters>(
             package,
             staged,
             coordinator_staged,
-        } => {
-            use package::linux_check::Staged;
-            let staged = match (&staged, &coordinator_staged) {
-                (Some(dir), _) => Some(Staged::Daemon(dir)),
-                (None, Some(dir)) => Some(Staged::Coordinator(dir)),
-                (None, None) => None,
-            };
-            package::linux_check::check(&package, staged)
-        }
+            service,
+        } => match service {
+            None => {
+                use package::linux_check::Staged;
+                let staged = match (&staged, &coordinator_staged) {
+                    (Some(dir), _) => Some(Staged::Daemon(dir)),
+                    (None, Some(dir)) => Some(Staged::Coordinator(dir)),
+                    (None, None) => None,
+                };
+                package::linux_check::check(&package, staged)
+            }
+            Some(_) if staged.is_some() => Err(Error::Failed(
+                package::linux_check::SERVICE_AND_STAGED.to_owned(),
+            )),
+            Some(service) => package::linux_check::check_service(&package, service),
+        },
         Verb::CheckMacosPkg {
             expanded,
+            service,
+            fail_ready,
             version,
             binary,
             gh,
             trusted_root,
-        } => macos_pkg::check(
-            &expanded,
-            &version,
-            &macos_pkg::Sources {
-                binary,
-                gh,
-                trusted_root,
-            },
-        ),
+        } => match native::macos_inputs(service, fail_ready, gh, trusted_root)? {
+            None => native::pkg::check(&expanded, &version, fail_ready, &binary),
+            Some((gh, trusted_root)) => macos_pkg::check(
+                &expanded,
+                &version,
+                &macos_pkg::Sources {
+                    binary,
+                    gh,
+                    trusted_root,
+                },
+            ),
+        },
         Verb::ChannelStage {
             service,
             version,
@@ -701,22 +789,58 @@ fn run_with(verb: Verb, ports: &Ports<'_>) -> Result<Vec<String>, Error> {
         ),
         Verb::MdmFetch { dir } => mdm_fetch::fetch(ports.download, &dir),
         Verb::MacosPkg {
+            service,
+            fail_ready,
             version,
             binary,
             gh,
             trusted_root,
             stage,
             out,
-        } => macos_pkg::build(
-            ports.pkgbuild,
-            &macos_pkg::Request {
-                version,
-                sources: macos_pkg::Sources {
+        } => match native::macos_inputs(service, fail_ready, gh, trusted_root)? {
+            None => native::pkg::build(
+                ports.pkgbuild,
+                &native::pkg::Request {
+                    version,
+                    fail_ready,
                     binary,
-                    gh,
-                    trusted_root,
+                    stage,
+                    out,
                 },
-                stage,
+            ),
+            Some((gh, trusted_root)) => macos_pkg::build(
+                ports.pkgbuild,
+                &macos_pkg::Request {
+                    version,
+                    sources: macos_pkg::Sources {
+                        binary,
+                        gh,
+                        trusted_root,
+                    },
+                    stage,
+                    out,
+                },
+            ),
+        },
+        Verb::Deb {
+            service,
+            platform,
+            version,
+            commit,
+            binary,
+            fail_ready,
+            archives,
+            out,
+        } => native::deb::deb(
+            ports.git,
+            &native::deb::Request {
+                service,
+                platform,
+                version,
+                commit,
+                binary,
+                fail_ready,
+                archives,
                 out,
             },
         ),
@@ -842,78 +966,9 @@ impl<E: Exec> Adapters for Wired<E> {
     }
 }
 
-/// Appends `lines` (`key=value`) to `output`, when there is one, and returns them to print.
-pub(crate) fn answer(output: Option<&Path>, lines: Vec<String>) -> Result<Vec<String>, Error> {
-    if let Some(path) = output {
-        let mut text = lines.join("\n");
-        text.push('\n');
-        std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-            .and_then(|mut f| f.write_all(text.as_bytes()))
-            .map_err(Error::io(format!("append to {}", path.display())))?;
-    }
-    Ok(lines)
-}
-
-/// The SHA-256 of the file at `path`, 64 lowercase hex digits, read in one streaming pass.
-pub(crate) fn file_sha256(path: &Path) -> Result<String, Error> {
-    use sha2::Digest;
-    let what = format!("read {}", path.display());
-    let mut file = std::fs::File::open(path).map_err(Error::io(&what))?;
-    let mut hasher = sha2::Sha256::new();
-    let mut buf = vec![0_u8; 1 << 16];
-    loop {
-        let n = file.read(&mut buf).map_err(Error::io(&what))?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buf[..n]);
-    }
-    Ok(hex::encode(hasher.finalize()))
-}
-
-/// Where a workflow stands for one commit: its latest push run on `main` for that commit.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum RunState {
-    /// No push run on `main` for the commit.
-    Missing,
-    /// The latest such run has not completed.
-    Pending(u64),
-    /// The latest such run succeeded.
-    Succeeded(u64),
-    /// The latest such run failed (`failure`, `timed_out` or `startup_failure`).
-    Failed(u64),
-    /// The latest such run completed otherwise (`cancelled`, `skipped`, ...): not green, not
-    /// red.
-    Other(u64, String),
-}
-
-/// The state of a workflow for `commit` from its `runs`: only push runs on `main` whose head is
-/// exactly `commit` count, and of those the latest (highest id). A pull-request run, a run on
-/// another branch and a run for another commit never count.
-pub(crate) fn state(runs: &[Run], commit: &Commit) -> RunState {
-    let latest = runs
-        .iter()
-        .filter(|r| {
-            (r.event == "push") & (r.branch == contract::MAIN) & (r.head_sha == commit.as_str())
-        })
-        .max_by_key(|r| r.id);
-    let Some(run) = latest else {
-        return RunState::Missing;
-    };
-    match (run.status.as_str(), run.conclusion.as_deref()) {
-        ("completed", Some("success")) => RunState::Succeeded(run.id),
-        ("completed", Some("failure" | "timed_out" | "startup_failure")) => {
-            RunState::Failed(run.id)
-        }
-        ("completed", other) => RunState::Other(run.id, other.unwrap_or("none").to_owned()),
-        _ => RunState::Pending(run.id),
-    }
-}
-
 #[cfg(test)]
 mod macos_pkg_verb_tests;
+#[cfg(test)]
+mod native_verb_tests;
 #[cfg(test)]
 mod tests;

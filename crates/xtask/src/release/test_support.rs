@@ -108,3 +108,30 @@ pub fn linux_package(
     };
     package_dated(&request, || Ok(mtime)).map_err(|e| e.to_string())
 }
+
+/// The hook `release deb` and `release macos-pkg --service hello` put in hello's packages, by
+/// the absolute path each installs it at, with the program path it runs: the `.deb`'s and the
+/// `.pkg`'s.
+pub fn hello_hooks() -> Vec<(String, String, String)> {
+    use super::native::hello::{self, File};
+    let pick = |files: Vec<File>, program: &str| {
+        let hook = files
+            .iter()
+            .find(|f| f.path.ends_with(super::native::HOOK))
+            .map(|f| {
+                (
+                    f.path.clone(),
+                    String::from_utf8_lossy(&f.data).into_owned(),
+                )
+            });
+        hook.map(|(path, text)| (path, text, program.to_owned()))
+    };
+    let mut out = Vec::new();
+    out.extend(pick(
+        hello::deb_files(Vec::new(), false),
+        hello::DEB_PROGRAM,
+    ));
+    let pkg = hello::pkg_files(Vec::new(), false).unwrap_or_default();
+    out.extend(pick(pkg, hello::PKG_PROGRAM));
+    out
+}

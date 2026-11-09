@@ -195,5 +195,6 @@ pub(super) fn read(bytes: &[u8]) -> Result<Contents, Error> {
             .into_iter()
             .filter(|name| !name.starts_with("rpmlib("))
             .collect(),
+        control: None,
     })
 }

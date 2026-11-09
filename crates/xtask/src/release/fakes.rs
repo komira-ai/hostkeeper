@@ -622,9 +622,9 @@ impl AdvisoryCheck for FakeAdvisories {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PkgCall {
     pub(crate) root: PathBuf,
-    pub(crate) scripts: PathBuf,
+    pub(crate) scripts: Option<PathBuf>,
     pub(crate) identifier: String,
-    pub(crate) version: Version,
+    pub(crate) version: String,
     pub(crate) pkg: PathBuf,
 }
 
@@ -634,7 +634,7 @@ pub(crate) struct PkgCall {
 pub(crate) struct ProductCall {
     pub(crate) component: PathBuf,
     pub(crate) identifier: String,
-    pub(crate) version: Version,
+    pub(crate) version: String,
     pub(crate) product: PathBuf,
 }
 
@@ -688,16 +688,16 @@ impl BuildPkg for FakePkgbuild {
     fn build_pkg(
         &self,
         root: &Path,
-        scripts: &Path,
+        scripts: Option<&Path>,
         identifier: &str,
-        version: &Version,
+        version: &str,
         pkg: &Path,
     ) -> Result<(), PortError> {
         self.calls.borrow_mut().push(PkgCall {
             root: root.to_owned(),
-            scripts: scripts.to_owned(),
+            scripts: scripts.map(Path::to_owned),
             identifier: identifier.to_owned(),
-            version: *version,
+            version: version.to_owned(),
             pkg: pkg.to_owned(),
         });
         self.trees.borrow_mut().push(tree_of(root));
@@ -714,13 +714,13 @@ impl BuildPkg for FakePkgbuild {
         &self,
         component: &Path,
         identifier: &str,
-        version: &Version,
+        version: &str,
         product: &Path,
     ) -> Result<(), PortError> {
         self.product_calls.borrow_mut().push(ProductCall {
             component: component.to_owned(),
             identifier: identifier.to_owned(),
-            version: *version,
+            version: version.to_owned(),
             product: product.to_owned(),
         });
         match &self.fail_product {

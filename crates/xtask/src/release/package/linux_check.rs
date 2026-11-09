@@ -68,6 +68,7 @@ const CHECKED: [(&str, &str, u32); 4] = [
 const TYPE_BITS: u32 = 0o170_000;
 const REGULAR: u32 = 0o100_000;
 const SYMLINK: u32 = 0o120_000;
+const DIRECTORY: u32 = 0o040_000;
 
 /// What a package holds and declares.
 struct Contents {
@@ -76,6 +77,8 @@ struct Contents {
     files: BTreeMap<String, Installed>,
     /// The dependencies it declares, one per relation.
     depends: Vec<String>,
+    /// A deb's control archive; none for any other format.
+    control: Option<archive::Control>,
 }
 
 /// The format of a package.
@@ -306,5 +309,8 @@ pub(crate) fn check(package: &Path, staged: Option<Staged<'_>>) -> Result<Vec<St
 mod archive;
 mod coordinator;
 mod rpm;
+mod service;
+
+pub(crate) use service::{SERVICE_AND_STAGED, check_service};
 #[cfg(test)]
 mod tests;
