@@ -194,14 +194,16 @@ matches the record is approved then, as at `AddRecord`.
 
 ### `hosts`
 
-The service `Hosts` of the package `hostkeeper.operator.v1`. The hosts the coordinator has heard from, and what an operator decides about them.
+The service `Hosts` of the package `hostkeeper.operator.v1`. The hosts the coordinator has heard from or enrolled, and what an operator decides about them.
 
 #### `hkctl hosts list`
 
 `/hostkeeper.operator.v1.Hosts/List`
 
-Every host heard from since the coordinator started, by node id, a page at a time. Changes
-nothing.
+Every host heard from since the coordinator started and, when the coordinator has an
+enrollment, every host it enrolled that is not denied, by node id, a page at a time. A host
+enrolled and not heard since the coordinator started is listed as not live, with what its
+enrollment kept of what it runs (`Host.running`). Changes nothing.
 
 | flag | value | meaning |
 |---|---|---|
@@ -212,8 +214,8 @@ nothing.
 
 `/hostkeeper.operator.v1.Hosts/Get`
 
-One host heard from since the coordinator started; `unknown_host` for any other. Changes
-nothing.
+One host heard from since the coordinator started; `unknown_host` for any other, an enrolled
+host not heard since included. Changes nothing.
 
 | flag | value | meaning |
 |---|---|---|

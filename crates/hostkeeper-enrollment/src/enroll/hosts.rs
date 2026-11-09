@@ -13,7 +13,7 @@ use std::sync::PoisonError;
 use super::records::Record;
 use super::rows::{DenyState, claims_of_pb, corrupt};
 use super::store::{EnrollmentStore, LIVE_WINDOW_SECS};
-use super::{EnrolledHost, HostHeld, RequestState, StoreError};
+use super::{EnrolledHost, HostHeld, HostRunning, RequestState, StoreError};
 use crate::names::{HostId, KeyHash, Role};
 
 impl EnrollmentStore {
@@ -126,6 +126,8 @@ impl EnrollmentStore {
         if self.denied(host)? {
             return Ok(None);
         }
+        let role = Role::parse(&row.pb.role)
+            .map_err(|e| corrupt(&self.host_path(host), &e.to_string()))?;
         let missing = corrupt(&self.host_path(host), "the host's request is missing");
         let request = self.load_request(&row.key)?.ok_or(missing)?;
         Ok(Some(EnrolledHost {
@@ -134,7 +136,26 @@ impl EnrollmentStore {
             approved_unix: request.pb.approved.as_ref().map_or(0, |a| a.approved_unix),
             first_heartbeat_unix: row.pb.first_heartbeat_unix,
             first_serving_unix: row.pb.first_serving_unix,
+            role,
+            running: row.pb.running.as_ref().map(HostRunning::of_pb),
+            running_unix: row.pb.running.as_ref().map(|r| r.at_unix),
         }))
+    }
+
+    /// The host ids of every enrolled host ([`Self::enrolled_host`]): those with a host record
+    /// that are not denied (retiring or retired), by host id. Reads no request, so a page of
+    /// hosts can be chosen without reading them all.
+    ///
+    /// # Errors
+    /// [`StoreError`] when a host record or deny row cannot be read.
+    pub fn enrolled_host_ids(&self) -> Result<Vec<HostId>, StoreError> {
+        let mut ids = Vec::new();
+        for host in self.host_ids()? {
+            if !self.denied(&host)? {
+                ids.push(host);
+            }
+        }
+        Ok(ids)
     }
 
     /// Every enrolled host ([`Self::enrolled_host`]), by host id.

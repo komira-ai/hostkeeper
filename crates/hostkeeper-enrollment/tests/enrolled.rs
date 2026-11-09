@@ -11,7 +11,7 @@ use hostkeeper_enrollment::enroll::{
     ApprovalRecord, Claims, EnrolledHost, EnrollmentStore, StoreError,
 };
 use hostkeeper_enrollment::fs::RealFs;
-use hostkeeper_enrollment::names::KeyHash;
+use hostkeeper_enrollment::names::{KeyHash, Role};
 use support::{HostKey, decision, host_id, request, scratch};
 
 /// What the host of machine `machine` (`m-<n>`) claims: two data MACs and a BMC MAC, each its
@@ -62,6 +62,9 @@ fn enrolled(host: &str, machine: &str, at: u64) -> EnrolledHost {
         approved_unix: at,
         first_heartbeat_unix: None,
         first_serving_unix: None,
+        role: Role::parse("web").expect("a role"),
+        running: None,
+        running_unix: None,
     }
 }
 

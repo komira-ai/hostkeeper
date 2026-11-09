@@ -10,8 +10,14 @@
 //! repository, its package version, no artifact field, a required pin, and the package's name in
 //! its manifest.
 //!
+//! A native entry ([`is_native_entry`], packages-native.md section 10) is a repository entry, or
+//! an artifact entry whose installer is native (`macos-pkg`): its hook names no `hook.command` and may name a `hook.boot` without one, a
+//! `macos-pkg` entry carries no attestation, and the service `hostkeeper` is set with one native
+//! entry per list and at most one `hostkeeper-archive` entry after it, or with that archive entry
+//! alone until its own release lists the native one (section 10.4).
+//!
 //! The coordinator does not check that it knows an installer: a name of the grammar no daemon
-//! lists is never picked. What the coordinator's state decides (a set with `package_digest` too,
+//! lists is never picked, and its artifact entry is not native. What the coordinator's state decides (a set with `package_digest` too,
 //! an index that disagrees, a version set before with other targets) is the coordinator's own.
 //!
 //! Platforms are checked in the order of their spellings and entries in list order, so a set
@@ -34,8 +40,9 @@ use crate::{
     MAX_ATTESTATION_BYTES, MAX_ENTRIES, MAX_ENTRY_BYTES, MAX_LOCATIONS, MAX_LOCATOR_BYTES_PER_ENTRY,
 };
 
-/// The service hostkeeper updates itself as: its release is one `hostkeeper-archive` entry per
-/// platform, so every daemon, the oldest included, can fetch the next one.
+/// The service hostkeeper updates itself as: its release is, per platform, one native entry with
+/// at most one `hostkeeper-archive` entry after it, or that archive entry alone, so every daemon,
+/// the oldest included, can fetch the next one.
 pub const SELF_SERVICE: &str = "hostkeeper";
 
 /// Why a set's targets are refused (`target_invalid`).
@@ -63,12 +70,13 @@ pub enum TargetError {
         /// The installer.
         installer: String,
     },
-    /// The service `hostkeeper` with a list but one `hostkeeper-archive` entry: a repository
-    /// entry, of any installer, is never one.
+    /// The service `hostkeeper` with a list that is neither one native entry with at most one
+    /// `hostkeeper-archive` entry after it, nor one `hostkeeper-archive` entry: the archive entry
+    /// first, two native entries, or an installer of another format.
     #[error(
-        "the list of {platform} for the service hostkeeper is not one hostkeeper-archive entry"
+        "the list of {platform} for the service hostkeeper is not one native entry with at most one hostkeeper-archive entry after it, nor one hostkeeper-archive entry"
     )]
-    SelfNotArchive {
+    SelfList {
         /// The platform.
         platform: Platform,
     },
@@ -105,9 +113,16 @@ pub enum EntryError {
     /// The artifact's size is 0.
     #[error("the artifact's bytes is 0")]
     ZeroBytes,
-    /// No attestation.
+    /// No attestation, on an artifact entry that is not of `macos-pkg`.
     #[error("the entry has no attestation")]
     NoAttestation,
+    /// A `macos-pkg` entry with an attestation: the package's signature and the pin are its
+    /// trust (packages-native.md section 10.3), and an attestation nobody checks must not look
+    /// checked.
+    #[error(
+        "the macos-pkg entry has an attestation; a package's signature and the pin are its trust, and no daemon checks one"
+    )]
+    MacosPkgAttestation,
     /// The attestation's size is 0 or over [`MAX_ATTESTATION_BYTES`].
     #[error("the attestation's bytes is {0}, not 1 to 1048576")]
     AttestationBytes(u64),
@@ -180,9 +195,22 @@ pub fn is_repository_entry(entry: &Target) -> bool {
     entry.repository.is_some()
 }
 
+/// Whether `entry` is a native entry: a repository entry, whatever its installer (every backend
+/// of the repository installer installs the platform's own package, so a later one needs no
+/// change here), or an entry whose installer is one of [`Installer::is_native`]'s, by its exact
+/// spelling. An artifact entry of an installer this crate does not know is not native.
+pub fn is_native_entry(entry: &Target) -> bool {
+    is_repository_entry(entry) || installer_of(entry).is_some_and(Installer::is_native)
+}
+
+/// The installer `entry` names, when this crate knows it.
+fn installer_of(entry: &Target) -> Option<Installer> {
+    entry.installer.parse().ok()
+}
+
 /// Checks the targets of a set for `service`: at least one platform, each key a platform, each
 /// list 1 to 8 entries with no installer twice, every entry by [`check_entry`], and for the
-/// service `hostkeeper` one `hostkeeper-archive` entry per list.
+/// service `hostkeeper` each list by [`is_self_list`].
 pub fn check<'a>(
     service: &ServiceName,
     targets: impl IntoIterator<Item = (&'a String, &'a TargetList)>,
@@ -230,20 +258,32 @@ fn check_list(
             });
         }
     }
-    let archive = Installer::HostkeeperArchive.as_str();
-    let only_archive =
-        matches!(entries, [one] if (one.installer == archive) & !is_repository_entry(one));
-    if (service.as_str() == SELF_SERVICE) & !only_archive {
-        return Err(TargetError::SelfNotArchive { platform });
+    if (service.as_str() == SELF_SERVICE) & !is_self_list(entries) {
+        return Err(TargetError::SelfList { platform });
     }
     Ok(())
+}
+
+/// Whether `entries`, each passing [`check_entry`], are a list the service `hostkeeper` may be
+/// set with (packages-native.md section 10.4): one native entry, alone or with one
+/// `hostkeeper-archive` entry after it (the move), or one `hostkeeper-archive` entry alone (until
+/// hostkeeper's own release lists its native entry). An archive entry is never a repository entry
+/// ([`EntryError::ArchiveFromRepository`]).
+fn is_self_list(entries: &[Target]) -> bool {
+    let archive = |entry: &Target| entry.installer == Installer::HostkeeperArchive.as_str();
+    match entries {
+        [one] => is_native_entry(one) | archive(one),
+        [native, after] => is_native_entry(native) & archive(after),
+        _ => false,
+    }
 }
 
 /// Checks one entry: at most 24 KiB encoded and its installer's name; then a repository entry
 /// by [`check_repository_entry`], and an artifact entry by no `package_version`, the artifact's
 /// digest, size and 1 to 8 locations, an attestation of 1 byte to 1 MiB with its digest and 1
-/// to 8 locations, every location's store and locator, at most 2 KiB of locators in all, and its
-/// manifest by [`manifest::check`] for the platform of its list.
+/// to 8 locations (none on a `macos-pkg` entry), every location's store and locator, at most 2
+/// KiB of locators in all, and its manifest by [`manifest::check`] for the platform of its list
+/// and by [`manifest::check_hook_of`] for its installer.
 pub fn check_entry(
     service: &ServiceName,
     platform: Platform,
@@ -267,29 +307,49 @@ pub fn check_entry(
         return Err(EntryError::ZeroBytes);
     }
     locations("artifact", &entry.locations)?;
-    let attestation = entry
-        .attestation
-        .as_ref()
-        .ok_or(EntryError::NoAttestation)?;
-    check_attestation(attestation)?;
+    let attested: &[Location] = if installer_of(entry) == Some(Installer::MacosPkg) {
+        if entry.attestation.is_some() {
+            return Err(EntryError::MacosPkgAttestation);
+        }
+        &[]
+    } else {
+        let attestation = entry
+            .attestation
+            .as_ref()
+            .ok_or(EntryError::NoAttestation)?;
+        check_attestation(attestation)?;
+        &attestation.locations
+    };
     let total: usize = entry
         .locations
         .iter()
-        .chain(&attestation.locations)
+        .chain(attested)
         .map(|location| location.locator.len())
         .sum();
     if total > MAX_LOCATOR_BYTES_PER_ENTRY {
         return Err(EntryError::LocatorBytes(total));
     }
+    check_manifest(service, platform, entry)
+}
+
+/// Checks the manifest of `entry`, present, by [`manifest::check`] and then by
+/// [`manifest::check_hook_of`] for the entry's installer.
+fn check_manifest(
+    service: &ServiceName,
+    platform: Platform,
+    entry: &Target,
+) -> Result<(), EntryError> {
     let manifest = entry.manifest.as_ref().ok_or(EntryError::NoManifest)?;
-    manifest::check(service, platform, manifest).map_err(EntryError::Manifest)
+    manifest::check(service, platform, manifest).map_err(EntryError::Manifest)?;
+    manifest::check_hook_of(is_native_entry(entry), manifest).map_err(EntryError::Manifest)
 }
 
 /// Checks a repository entry (packages-repositories.md section 2.2), past its size and its
 /// installer's name, in this order: its `repository`; its `package_version`, present and of its
 /// grammar; no location, `bytes` 0 and no attestation; an installer other than
 /// `hostkeeper-archive`; the pin, the package file's SHA-256; a manifest whose `package` is
-/// present and of its grammar; and that manifest by [`manifest::check`].
+/// present and of its grammar; and that manifest by [`manifest::check`] and
+/// [`manifest::check_hook_of`].
 fn check_repository_entry(
     service: &ServiceName,
     platform: Platform,
@@ -323,7 +383,7 @@ fn check_repository_entry(
     if !is_package_name(package) {
         return Err(EntryError::Package(package.to_owned()));
     }
-    manifest::check(service, platform, manifest).map_err(EntryError::Manifest)
+    check_manifest(service, platform, entry)
 }
 
 fn check_attestation(attestation: &Blob) -> Result<(), EntryError> {

@@ -162,6 +162,7 @@ impl Coordinator {
         self.reply_to(who, beat, false, (Turn::Hold, unknown));
         let released = self.lock_fleet().release_if_final(&host, (self.clock)());
         if released {
+            self.running.forget(&host);
             tracing::info!(host_id = %host, "a retiring host reported its update final: slot freed");
             if let Some(enrollment) = &self.enrollment {
                 enrollment.retire(&host);
