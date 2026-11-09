@@ -12,7 +12,7 @@ use hostkeeper_launchd::Label;
 
 use super::payload::labels_of;
 use super::record::PkgRecord;
-use super::{ARTIFACT, MacosPkg, Order, TREE, arg, io, receipt};
+use super::{INSTALLER_PKG, META, MacosPkg, Order, TREE, arg, io, receipt};
 use crate::host::{self, GID_ADMIN, Kind, Meta, file_digest, link_target, parents};
 use crate::outcome::{Failure, Reason};
 use crate::tools::{Tool, last_line, may_be_cut};
@@ -239,13 +239,14 @@ impl MacosPkg<'_> {
         Ok(())
     }
 
-    /// `installer -allowUntrusted -pkg <dir>/artifact -target /`: hostkeeper made the trust
-    /// decision at `stage`, and the bytes are the sealed ones.
+    /// `installer -allowUntrusted -pkg <dir>/macos-pkg/artifact.pkg -target /`: the kept package
+    /// under the name `installer` takes; hostkeeper made the trust decision at `stage`, and the
+    /// bytes are the sealed ones.
     fn install(&self, dir: &Path, deadline: Duration) -> Result<(), Failure> {
         let args = [
             "-allowUntrusted".into(),
             "-pkg".into(),
-            arg(&dir.join(ARTIFACT))?,
+            arg(&dir.join(META).join(INSTALLER_PKG))?,
             "-target".into(),
             "/".into(),
         ];

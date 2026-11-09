@@ -165,6 +165,16 @@ fn stage_accepts(pkg: FakePkg, name: &str) {
     assert_eq!(mode("macos-pkg/PackageInfo"), 0o444);
     assert_eq!(mode("macos-pkg/Bom"), 0o444);
     assert_eq!(
+        names(&dir.join("macos-pkg")),
+        ["Bom", "PackageInfo", "artifact.pkg"]
+    );
+    let ino = |p: &str| std::os::unix::fs::MetadataExt::ino(&fs::metadata(dir.join(p)).unwrap());
+    assert_eq!(
+        ino("macos-pkg/artifact.pkg"),
+        ino("artifact"),
+        "the .pkg name is the kept artifact itself, not a copy"
+    );
+    assert_eq!(
         fs::read_to_string(dir.join("macos-pkg/PackageInfo")).unwrap(),
         expected_info
     );

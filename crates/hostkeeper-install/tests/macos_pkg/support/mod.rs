@@ -315,6 +315,8 @@ impl Rig {
         let dir = self.packages.join(SERVICE).join(version);
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("artifact"), format!("fake-pkg:{name}")).unwrap();
+        fs::create_dir_all(dir.join("macos-pkg")).unwrap();
+        fs::hard_link(dir.join("artifact"), dir.join("macos-pkg/artifact.pkg")).unwrap();
         let pkg = self.mac.pkg_named(name);
         let scratch = self.packages.join(format!(".expand-{name}"));
         self.mac.materialize(&pkg, &scratch);

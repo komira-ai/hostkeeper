@@ -6,6 +6,7 @@
 //! <staging>/tree/                  the component's payload, standing for /
 //! <staging>/macos-pkg/PackageInfo  the component's two files, as the expansion gave them
 //! <staging>/macos-pkg/Bom
+//! <staging>/macos-pkg/artifact.pkg the kept .pkg again (a hard link), the name installer takes
 //! ```
 //!
 //! The payload's hook, at its fixed path, is checked with the payload ([`hook`]).
@@ -18,7 +19,9 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use super::payload::{self, LSBOM_ARGS};
-use super::{ARTIFACT, META, MacosPkg, Order, TREE, arg, hook, io, shape, signature};
+use super::{
+    ARTIFACT, INSTALLER_PKG, META, MacosPkg, Order, TREE, arg, hook, io, shape, signature,
+};
 use crate::host::{self, remove_tree};
 use crate::outcome::{Failure, Reason};
 use crate::tools::{Tool, may_be_cut};
@@ -118,6 +121,8 @@ impl MacosPkg<'_> {
         let kept = staging.join(ARTIFACT);
         fs::copy(artifact, &kept).map_err(|e| io("the artifact", e))?;
         set_mode(&kept, 0o444)?;
+        fs::hard_link(&kept, meta.join(INSTALLER_PKG))
+            .map_err(|e| io("the artifact's .pkg name", e))?;
         remove_tree(&expanded).map_err(|e| io("the expansion", e))
     }
 }

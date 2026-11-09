@@ -627,7 +627,7 @@ fn a_package_is_refused_unsigned_then_installed_updated_repaired_rolled_back_and
         &[
             "-allowUntrusted",
             "-pkg",
-            text(&dir100.join("artifact")),
+            text(&dir100.join("macos-pkg/artifact.pkg")),
             "-target",
             "/",
         ],

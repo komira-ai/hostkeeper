@@ -661,6 +661,16 @@ impl FakeMac {
             held.is_none(),
             "installer ran without the installer lock held"
         );
+        if !pkg.ends_with(".pkg") {
+            return ToolOutput {
+                code: Some(1),
+                stdout: Vec::new(),
+                stderr: format!(
+                    "installer: Error - the package path specified was invalid: '{pkg}'.\n"
+                )
+                .into_bytes(),
+            };
+        }
         let pkg = Self::pkg_of(st, pkg);
         match &pkg.install {
             Install::Fails {

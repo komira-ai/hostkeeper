@@ -39,7 +39,11 @@ fn activate_of_a_first_install_installs_proves_enables_and_records() {
         tool,
         args: args.iter().map(|a| (*a).to_owned()).collect(),
     };
-    let artifact = dir.join("artifact").to_str().unwrap().to_owned();
+    let artifact = dir
+        .join("macos-pkg/artifact.pkg")
+        .to_str()
+        .unwrap()
+        .to_owned();
     assert_eq!(
         rig.mac.calls(),
         vec![
@@ -231,7 +235,12 @@ fn a_rollback_installs_the_kept_package_without_a_fetch_or_a_signature_check() {
     assert_eq!(rig.mac.runs_of(Tool::Pkgutil, "--check-signature"), 0);
     assert_eq!(rig.mac.runs_of(Tool::Pkgutil, "--expand-full"), 0);
     assert!(rig.mac.calls_of(Tool::Lsbom).is_empty());
-    let artifact = i.dir1.join("artifact").to_str().unwrap().to_owned();
+    let artifact = i
+        .dir1
+        .join("macos-pkg/artifact.pkg")
+        .to_str()
+        .unwrap()
+        .to_owned();
     assert_eq!(
         rig.mac.calls_of(Tool::Installer),
         [["-allowUntrusted", "-pkg", &artifact, "-target", "/"]]
