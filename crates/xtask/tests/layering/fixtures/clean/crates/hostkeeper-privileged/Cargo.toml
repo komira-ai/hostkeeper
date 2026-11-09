@@ -17,5 +17,6 @@ hostkeeper-pxe = { path = "../hostkeeper-pxe" }
 hostkeeper-steps = { path = "../hostkeeper-steps" }
 
 [dev-dependencies]
+hostkeeper-install = { path = "../hostkeeper-install" }
 hostkeeper-observe = { path = "../hostkeeper-observe" }
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }
