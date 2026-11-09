@@ -17,10 +17,11 @@ fn run(body: &str) -> String {
     )
 }
 
-/// A download with `options` in place of [`FLAGS`].
+/// A download with `options` in place of [`FLAGS`]. Its URL is not a release asset's, which
+/// [`super::pinned_cache`] would hold to the five steps of a pinned download.
 fn curl(options: &str) -> String {
     run(&format!(
-        "curl {options} --silent --location --output \"$RUNNER_TEMP/a.tar.gz\" \"https://github.com/o/r/releases/download/v1/a.tar.gz\""
+        "curl {options} --silent --location --output \"$RUNNER_TEMP/a.tar.gz\" \"https://example.com/a.tar.gz\""
     ))
 }
 

@@ -340,7 +340,10 @@ jobs:
   #          of the run (the last of the matrix,
   #          which is oldest first), the release index (`index.json`) verify checked and publish
   #          published. When HOSTKEEPER_TAILNET_CLIENT_ID is set it joins the tailnet as the CI
-  #          client does, pinging the channel's host, so a channel served only on the tailnet is
+  #          client does, pinging the channel's host (taken out of the channel's URL by the xtask
+  #          of this workflow's own commit, a checkout of github.sha; the job's other xtask calls
+  #          are the release commit's, which the workflow lint, `release_ref.rs`, holds to the
+  #          command line of a published release), so a channel served only on the tailnet is
   #          reachable; then it reads `<channel>/hostkeeper/<version>/index.json` until the channel
   #          serves it (the sync runs ten minutes after its last run ends), at most about half an
   #          hour; then the served index must be the published one, byte for byte. A version set
@@ -372,6 +375,24 @@ jobs:
         env:
           MATRIX: ${{ needs.plan.outputs.matrix }}
         run: jq --raw-output '.include[-1] | "version=\(.version)", "tag=\(.tag)", "commit=\(.commit)"' <<< "$MATRIX" >> "$GITHUB_OUTPUT"
+      # Only when HOSTKEEPER_TAILNET_CLIENT_ID is set: the channel's host, by the xtask of this
+      # workflow's own commit (the checkout of github.sha), since the release's commit may be
+      # older than this file and lack the verb (the workflow lint, `release_ref.rs`). The step
+      # takes the host out of HOSTKEEPER_RELEASE_CHANNEL (`cargo xtask release channel-host`,
+      # given the URL as its flag `--channel`), or fails naming the reason; its output outlives
+      # the next checkout.
+      - if: ${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID != '' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - if: ${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID != '' }}
+        run: rustup toolchain install
+      - name: The release channel's host
+        id: channel-host
+        if: ${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID != '' }}
+        env:
+          RELEASE_CHANNEL: ${{ vars.HOSTKEEPER_RELEASE_CHANNEL }}
+        run: cargo xtask release channel-host --channel "$RELEASE_CHANNEL" --output "$GITHUB_OUTPUT"
       # The xtask of the release's own commit, as verify and publish run it, compiled before the
       # files are downloaded (a checkout empties the workspace).
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -389,17 +410,9 @@ jobs:
       # can reach a release channel served only there, as the CI client's join does
       # (set-desired.yml): the same pinned action and Tailscale tarball, the same repository
       # variables, an ephemeral node tagged HOSTKEEPER_TAILNET_TAG, authenticated with a GitHub
-      # OIDC token (the job's `id-token: write`). The first step takes the channel's host out of
-      # HOSTKEEPER_RELEASE_CHANNEL (`cargo xtask release channel-host`, given the URL as its flag
-      # `--channel`), or fails naming the reason; the join pings that host until
-      # it answers, so the wait does not race the tailnet's spread of the new node. Empty: no
+      # OIDC token (the job's `id-token: write`). The join pings the channel's host until it
+      # answers, so the wait does not race the tailnet's spread of the new node. Empty: no
       # join, and the channel must be reachable from the runner as it is.
-      - name: The release channel's host
-        id: channel-host
-        if: ${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID != '' }}
-        env:
-          RELEASE_CHANNEL: ${{ vars.HOSTKEEPER_RELEASE_CHANNEL }}
-        run: cargo xtask release channel-host --channel "$RELEASE_CHANNEL" --output "$GITHUB_OUTPUT"
       - name: Join the tailnet
         id: tailnet
         if: ${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID != '' }}
