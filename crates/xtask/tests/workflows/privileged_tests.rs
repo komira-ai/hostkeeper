@@ -573,6 +573,7 @@ fn the_committed_privileged_yml_passes_and_holds_the_one_sudo() {
     assert_eq!(
         targets["privileged"],
         BTreeSet::from([
+            "install_apt".to_owned(),
             "linux_packages".to_owned(),
             "mdm_cert_units".to_owned(),
             "observer".to_owned(),
@@ -593,6 +594,7 @@ fn the_committed_privileged_yml_passes_and_holds_the_one_sudo() {
             "device_mac".to_owned(),
             "device_mac_e2e".to_owned(),
             "device_mac_selfupdate".to_owned(),
+            "install_macos_pkg".to_owned(),
             "self_update_across_releases".to_owned(),
             "unpack_mac".to_owned()
         ])

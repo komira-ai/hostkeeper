@@ -183,7 +183,6 @@ fn the_daemon_reaches_ready_only_after_the_boot_pass_and_reconcile() {
             Stage::RestartWatchers,
             Stage::BootSteps,
             Stage::Ready,
-            Stage::SelfUnits,
         ]
     );
     let reconciled = report
@@ -418,11 +417,13 @@ fn the_registration_socket_directory_is_updater_under_the_run_directory() {
 fn the_host_ports_are_built_from_flags_and_files_without_the_network() {
     let rig = Rig::new("assemble-host-ports");
     let files = HostFiles {
+        repositories: None,
         os_root: rig.scratch.path().join("os"),
         ca_bundle: rig.scratch.path().join("ca.pem"),
         gh: rig.scratch.path().join("gh"),
         trusted_root: rig.scratch.path().join("trusted_root.json"),
         stores: rig.scratch.path().join("stores.toml"),
+        macos_pkg_signers: None,
         pki: rig.scratch.path().join("pki"),
         console: None,
         managed_config: None,
@@ -574,11 +575,13 @@ fn the_host_ports_are_built_from_flags_and_files_without_the_network() {
 fn the_start_of_the_host_build_stops_at_the_ports_it_cannot_build() {
     let rig = Rig::new("assemble-start-with");
     let files = HostFiles {
+        repositories: None,
         os_root: rig.scratch.path().join("os"),
         ca_bundle: rig.scratch.path().join("ca.pem"),
         gh: rig.scratch.path().join("gh"),
         trusted_root: rig.scratch.path().join("trusted_root.json"),
         stores: rig.scratch.path().join("stores.toml"),
+        macos_pkg_signers: None,
         pki: rig.scratch.path().join("pki"),
         console: None,
         managed_config: None,
@@ -638,11 +641,13 @@ fn files_on(kind: PlatformKind, present: &[&str]) -> (HostFiles, Vec<PathBuf>) {
 /// The host files of Linux with the CA bundle `ca_bundle`.
 fn linux_files(ca_bundle: &str) -> HostFiles {
     HostFiles {
+        repositories: Some(PathBuf::from("/etc/hostkeeper/repositories")),
         os_root: PathBuf::from("/"),
         ca_bundle: PathBuf::from(ca_bundle),
         gh: PathBuf::from("/usr/lib/hostkeeper/gh"),
         trusted_root: PathBuf::from("/usr/lib/hostkeeper/trusted_root.json"),
         stores: PathBuf::from("/etc/hostkeeper/stores.toml"),
+        macos_pkg_signers: None,
         pki: PathBuf::from("/etc/updater/pki"),
         console: Some(ConsoleFiles {
             issue: PathBuf::from("/run/hostkeeper/enrollment.issue"),
@@ -658,16 +663,19 @@ const RHEL: &str = "/etc/pki/tls/certs/ca-bundle.crt";
 /// Catches a Mac given the Linux paths, under `/usr`, which is read-only on a Mac, and a CA
 /// bundle a Mac does not have: `gh` and the trusted root are where the installer pkg puts them,
 /// under `/usr/local/lib/hostkeeper`, the CA bundle is macOS's `/etc/ssl/cert.pem`, no Linux
-/// bundle is looked for, no console's issue file is written, and the start reads the managed
-/// preferences the pkg's postinstall reads.
+/// bundle is looked for, no console's issue file is written, the start reads the managed
+/// preferences the pkg's postinstall reads, and the signers of `macos-pkg` are read from
+/// `/etc/hostkeeper/macos-pkg.toml`.
 #[test]
 fn a_mac_keeps_gh_and_the_trusted_root_under_usr_local_and_reads_etc_ssl_cert_pem() {
     let mac = HostFiles {
+        repositories: None,
         os_root: PathBuf::from("/"),
         ca_bundle: PathBuf::from("/etc/ssl/cert.pem"),
         gh: PathBuf::from("/usr/local/lib/hostkeeper/gh"),
         trusted_root: PathBuf::from("/usr/local/lib/hostkeeper/trusted_root.json"),
         stores: PathBuf::from("/etc/hostkeeper/stores.toml"),
+        macos_pkg_signers: Some(PathBuf::from("/etc/hostkeeper/macos-pkg.toml")),
         pki: PathBuf::from("/etc/updater/pki"),
         console: None,
         managed_config: Some(PathBuf::from(

@@ -151,7 +151,7 @@ installs before the pkg** (first by the pkg's postinstall; since the units and p
    (`organisation`, `workflow`, `refs`, `hosted_runner`) and an optional `bounds` dictionary. Holds
    no secret.
 2. On that profile's `Acknowledged`, the gate sends the pkg (section 7).
-3. The config is written by the code of `mac-config` (**Built**: `crates/hostkeeper-daemon/src/mac_config.rs`),
+3. The config is written by the code of `mac_config` (**Built**: `crates/hostkeeper-daemon/src/mac_config.rs`),
    which the pkg's postinstall first ran as a command and which the daemon now runs at each start
    (`mac_config::at_start`), as its first step on a Mac. The postinstall is two commands:
    `launchctl bootout` and `launchctl bootstrap`, below. The code reads the managed preferences of the domain, which macOS
@@ -341,7 +341,7 @@ adapter always sent `mac_nonce` empty. Now:
 - The nonce is never logged. Its type's `Debug` shows no byte of it, as the coordinator's
   `MacNonce` does.
 
-The `mac-config` code and the daemon's nonce read use the same plist reader, the
+The `mac_config` code and the daemon's nonce read use the same plist reader, the
 `plist` crate. It is already declared in the root `Cargo.toml` (rule R5) and used by xtask's
 `check-macos-pkg` and by tests. M10 added the production use (**Built**:
 `crates/hostkeeper-daemon/src/mac_config.rs`), updated the root comment that called it
@@ -518,7 +518,7 @@ names). What the build decides beyond the text above:
   ([coordinator-storage.md](coordinator-storage.md) section 2); what the gate writes, the sends,
   is in the device record.
 - The pkg is sent once the device has acknowledged the config profile, because the daemon's start
-  (`mac-config`'s code) reads the managed config. Whether the managed preferences file exists by then is
+  (`mac_config`'s code) reads the managed config. Whether the managed preferences file exists by then is
   to verify (M16); if it does not, the daemon refuses its starts until it does, and launchd starts it again. Supervision is not required, as section 6.3 says.
 - The manifest's `bundle-identifier` is the pkg identifier `dev.hostkeeper.hostkeeper`, its
   `bundle-version` the entry's version and its `title` `hostkeeper <version>`.
@@ -651,6 +651,14 @@ names a format names that one, and `check-macos-pkg` reads both layers (**Built*
   pkg's. This changes release trust: whoever can push to `main` can then make an Apple-trusted pkg.
   It goes to the maintainers after one independent review. The workflow lint gains the job by
   name, with a negative case (rule T15).
+
+  **Built**: the Developer ID Installer identity exists (`Developer ID Installer: Komira AI, Inc.
+  (U7RTX4XD3X)`), so the release signs with it whatever M11 finds. `artifacts.yml`'s `sign-pkg`
+  (no repository code, the identity in a keychain of the job that is deleted at its end) and
+  `check-pkg` (`cargo xtask release check-pkg-signature`, then the pkg is a release file), held
+  by `crates/xtask/tests/workflows/pkg_signing.rs`; [docs/macos.md](../macos.md), "The
+  installer's signature", walks them. The farm identity's `pkg add` is then needed only if a Mac
+  refuses the Developer ID pkg.
 
 A service's `.pkg` (packages-repositories.md section 4.7) is signed by the same identity, but
 before its release is attested, so CI's pin names the signed bytes. With Developer ID that is
@@ -941,7 +949,9 @@ LAN.
 
 **Asked only if task M11 fails:**
 
-**Q4. Join the Apple Developer Program for a Developer ID Installer certificate?** This arises
+**Q4. Join the Apple Developer Program for a Developer ID Installer certificate?** Answered:
+the identity exists and the release signs with it (section 7.3). The question as it was asked:
+This arises
 only if the device test shows that a Mac refuses a pkg signed by a farm identity the MDM made
 trusted. Apple requires a signature "verifiable by the device" and does not say Developer ID.
 Joining costs a yearly fee and an organisation enrollment with a D-U-N-S number, which takes days

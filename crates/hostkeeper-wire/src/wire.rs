@@ -432,6 +432,19 @@ pub fn is_service_name(name: &str) -> bool {
 /// The most bytes of a service name.
 pub const MAX_SERVICE_NAME: usize = 64;
 
+/// Whether `text` may be a version in a drift report (`DriftReport` of `agent.proto`): 1 to
+/// [`MAX_DRIFT_VERSION`] bytes of `[A-Za-z0-9.+~:_-]`, the characters of a package version.
+#[must_use]
+pub fn is_drift_version(text: &str) -> bool {
+    (1..=MAX_DRIFT_VERSION).contains(&text.len())
+        && text
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b".+~:_-".contains(&b))
+}
+
+/// The most bytes of a version in a drift report.
+pub const MAX_DRIFT_VERSION: usize = 128;
+
 /// The most services a heartbeat lists, and a services file defines. A host runs its legacy service and a
 /// handful of daemons beside it; sixteen leaves room for all of them, and a list longer than
 /// that is a mistake or an attack, not a farm.

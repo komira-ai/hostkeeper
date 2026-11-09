@@ -715,7 +715,8 @@ time (rule T10), are Rust (rule T11), and use the repository's scratch helpers a
   `crates/hostkeeper-enrollment/tests/held.rs`, `crates/hostkeeper-proto/tests/additions_inventory.rs`): after a
   coordinator restart, `ListRecords` says `RETIRED` for a retired host's record, `DENIED` for a denied one whose
   retirement is not final, `APPROVED` for one approved and never heard from, and `NONE` only for an id no host holds,
-  while `Hosts.List` lists none of them; `AddRecord` answers the same; a coordinator without enrollment says
+  while `Hosts.List` lists neither the retired nor the denied host, and lists the approved one not live, with no
+  heartbeat time; `AddRecord` answers the same; a coordinator without enrollment says
   `UNSPECIFIED`; a deny or host file that does not decode is refused `store_failed` for the page that holds its
   record, not answered `NONE`; and a record written before the field reads `UNSPECIFIED`, not `NONE`.
 - Boot-set verification (N8, **Built**: `crates/hostkeeper-pxe/src/fetch_tests.rs` and the reader tests beside it):

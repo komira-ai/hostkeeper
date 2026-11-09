@@ -140,26 +140,11 @@ pub struct Ctx {
     deadman_poll_secs: Option<u64>,
     /// Ends the dead-men when the daemon is dropped.
     stop: Arc<AtomicBool>,
-    /// Whether the start could not remove the fallback files of the releases before the
-    /// hand-over: a self-update is `busy` while it is set ([`Ctx::hold_self_updates`]).
-    self_updates_held: AtomicBool,
     /// The daemon's request to exit so that its unit starts a new binary.
     restart: Restart,
 }
 
 impl Ctx {
-    /// Holds the daemon's own update off, answering it `busy`, until the next start: set when
-    /// the start could not remove the fallback unit, drop-in and job of the releases before the
-    /// hand-over ([`crate::selfunits::remove`]), which a hand-over must never meet armed.
-    pub fn hold_self_updates(&self) {
-        self.self_updates_held.store(true, Ordering::SeqCst);
-    }
-
-    /// Whether [`Ctx::hold_self_updates`] was called.
-    pub fn self_updates_held(&self) -> bool {
-        self.self_updates_held.load(Ordering::SeqCst)
-    }
-
     /// The daemon's request to exit with status 0 after the follow-on of its own update.
     pub fn restart(&self) -> &Restart {
         &self.restart
@@ -617,7 +602,6 @@ impl Daemon {
                 alerts: Arc::new(|line: &str| eprintln!("{line}")),
                 deadman_poll_secs: ports.deadman_poll_secs,
                 stop: Arc::new(AtomicBool::new(false)),
-                self_updates_held: AtomicBool::new(false),
                 restart: Restart::default(),
             },
             abort_tries: Mutex::default(),

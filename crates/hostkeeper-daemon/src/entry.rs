@@ -10,9 +10,12 @@
 //! |------------------------------------------------------------------------------|----------------------------------------------------------------------------|
 //! | the entry's digest is not the order's `package_digest`                       | refused `order_invalid`                                                    |
 //! | a location of the artifact or the attestation breaks the grammar of a store name or of a locator | refused `order_invalid`                                        |
+//! | a `macos-pkg` entry carries an attestation (it carries none: packages-native.md section 10.3) | refused `order_invalid`                                      |
 //! | the manifest needs a newer daemon (`min_hostkeeper`)                         | refused `daemon_too_old`                                                   |
 //! | the installer is not one the daemon announces                                | `Deferred` for [`NOT_LISTED_RETRY_SECS`], reason `installer_not_listed`    |
 //! | the manifest breaks a rule of its installer, or there is none                | refused `manifest_invalid`                                                 |
+//! | an artifact installer's entry names a repository or a package version, or a repository installer's names a location, bytes or an attestation | refused `order_invalid` |
+//! | a repository installer's entry names no repository                           | `Deferred` for [`COORDINATOR_TOO_OLD_RETRY_SECS`], reason `coordinator_too_old` |
 //!
 //! A refusal is reported `failed` with its token; `order_invalid` and `manifest_invalid` are
 //! reported of class `release`, before the commit point
@@ -23,6 +26,7 @@ use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_config::platform::Platform;
 use hostkeeper_hook::Verdict;
+use hostkeeper_install::repository::{Reason, judge_kind};
 use hostkeeper_proto::hostkeeper::release::v1::{Location, Target};
 use hostkeeper_release::grammar::{check_locator, is_store_name};
 use hostkeeper_release::installer::Installer;
@@ -32,10 +36,20 @@ use crate::executor::Reply;
 use crate::refusal::Refusal;
 use crate::verb::PackageDigest;
 
+/// The refusal of a `macos-pkg` entry that carries an attestation: its pin and the package's
+/// signature are the whole check, and an attestation nobody checks must not look checked.
+pub const MACOS_PKG_ATTESTED: &str = "a macos-pkg entry carries an attestation, which no host checks: its pin and its signature are the whole check";
+
 /// The seconds an order for an installer the daemon does not list is deferred for. One second keeps
 /// the daemon's own deferral book from declining the same version's next entry, which the
 /// coordinator picks again at the next beat.
 pub const NOT_LISTED_RETRY_SECS: u64 = 1;
+
+/// The seconds an order whose repository entry names no repository is deferred for. Only a
+/// coordinator that dropped the field sends such an entry and an operator upgrades it, so the
+/// same entry comes back until then: the coordinator waits at least this long (its own backoff
+/// grows from there) before it orders the host again.
+pub const COORDINATOR_TOO_OLD_RETRY_SECS: u64 = 300;
 
 /// Why a location breaks the grammar, or `None` when it keeps it.
 fn location_defect(location: &Location) -> Option<String> {
@@ -78,24 +92,35 @@ pub fn check(
             "the entry names a location where {defect}"
         )));
     }
+    if entry.installer == Installer::MacosPkg.as_str() && entry.attestation.is_some() {
+        return Err(invalid(MACOS_PKG_ATTESTED.to_owned()));
+    }
     let daemon = Daemon {
         platform: Platform::current(),
         running,
         installers,
     };
-    receipt::check(service, entry, daemon)
-        .map(drop)
-        .map_err(|error| match error {
-            ReceiptError::DaemonTooOld { .. } => Reply::refused(Refusal::DaemonTooOld, error),
-            ReceiptError::InstallerNotListed(_) => Reply::Finished {
-                verdict: Verdict::Deferred {
-                    retry_after_secs: Some(NOT_LISTED_RETRY_SECS),
-                },
-                reason: Some(Refusal::InstallerNotListed.token().to_owned()),
-                resent: false,
+    let installer = receipt::check(service, entry, daemon).map_err(|error| match error {
+        ReceiptError::DaemonTooOld { .. } => Reply::refused(Refusal::DaemonTooOld, error),
+        ReceiptError::InstallerNotListed(_) => Reply::Finished {
+            verdict: Verdict::Deferred {
+                retry_after_secs: Some(NOT_LISTED_RETRY_SECS),
             },
-            ReceiptError::NoManifest | ReceiptError::Invalid(_) => {
-                Reply::refused(Refusal::ManifestInvalid, error)
-            }
-        })
+            reason: Some(Refusal::InstallerNotListed.token().to_owned()),
+            resent: false,
+        },
+        ReceiptError::NoManifest | ReceiptError::Invalid(_) => {
+            Reply::refused(Refusal::ManifestInvalid, error)
+        }
+    })?;
+    judge_kind(installer, entry).map_err(|failure| match failure.reason() {
+        Reason::CoordinatorTooOld => Reply::Finished {
+            verdict: Verdict::Deferred {
+                retry_after_secs: Some(COORDINATOR_TOO_OLD_RETRY_SECS),
+            },
+            reason: Some(Refusal::CoordinatorTooOld.token().to_owned()),
+            resent: false,
+        },
+        _ => invalid(failure.detail().to_owned()),
+    })
 }

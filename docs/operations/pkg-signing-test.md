@@ -9,6 +9,24 @@ configuration profile installed? The answer decides task M15:
 - if it does not, the release workflow signs with Developer ID Installer, and question Q4 asks
   for that identity.
 
+**The Developer ID Installer identity exists**, `Developer ID Installer: Komira AI, Inc.
+(U7RTX4XD3X)`, and the release already signs its pkg with it, on a push to `main`
+([macos.md](../macos.md), "The installer's signature"). Q4 is answered, and the release pkg the
+MDM gate sends is a Developer ID pkg whatever this test finds. The test still decides whether the
+farm identity works too, which a service's pkg signed by the operator would need (design section
+7.3).
+
+`productsign` on GitHub's hosted `macos-15` runner signs with the Developer ID identity from a
+keychain of the job, as the release's job `sign-pkg` does on every push to `main`: the identity's
+chain ends in Apple Root CA, which every Mac trusts. The question of the build step below (does
+`productsign` sign with an identity whose root the Mac does not trust), and the refusal a macOS 15
+runner showed for such an identity ("What a macOS 15 runner showed", below), concern the farm
+identity of this kit only. A run of the test can add the
+Developer ID case without a new kit: put the release's pkg on the gate's allowlist
+([enrollment-coordinator.md](../enrollment-coordinator.md)) and read its install on the Mac as
+for pkg 3 below. If a Mac refuses it and install.log names notarization, record that in the
+design's section 7.2: notarization is not in the release, by design section 7.3.
+
 The test needs one Mac that is enrolled in the farm's MDM. A Mac enrolled by Path A or Path B will
 do. The run is held: the owner of the MDM host runs it. Nothing reaches a Mac until a `send` is
 given `--apply`.
@@ -50,7 +68,7 @@ config yet, which would leave a Mac that has the pkg's job loaded and failing, a
 would blur the signature's outcome.
 
 The pkgs and the release pkg are signed the same way: `productsign` over a `productbuild`
-distribution pkg.
+distribution pkg. The kit signs with no timestamp; the release signs with a trusted timestamp.
 
 The kit's directory holds three things:
 
@@ -106,6 +124,50 @@ this build Mac does not let `productsign` use an identity whose root it does not
 the design nor Apple's documentation says whether it does, so this is to verify. Do not trust
 root B anywhere to get past it, because pkg 4 needs root B trusted nowhere. Record the message in
 the design's section 7.2; the build is then changed to sign in another way.
+
+**What a macOS 15 runner showed.** The `macos-pkg` installer's device test once signed its
+fixtures as this build does, on a GitHub-hosted runner (image `macos-15-arm64`, macOS 15.8.2):
+
+- **Made the same way.** It made a root and an installer identity under it with `/usr/bin/openssl`.
+  The identity had `digitalSignature` and the `codeSigning` extended key usage, as this build's has.
+- **Imported for `productsign`.** It imported the identity into a keychain of its own with
+  `-T /usr/bin/productsign` and `set-key-partition-list -S apple-tool:,apple:`. That keychain was
+  first in the search list.
+- **Signed with `productsign`.** It ran `productsign --sign <identity> --keychain <keychain>
+  --timestamp=none` over a `productbuild --package` pkg.
+
+For the identity whose root the Mac did not trust, `productsign` failed with:
+
+```
+productsign: error: Could not find appropriate signing identity for "<identity>" in keychain at "<keychain>". An installer signing identity (not an application signing identity) is required
+```
+
+What the run showed, and what it did not:
+
+- **Observed: this identity was refused.** On macOS 15.8.2, `productsign` would not sign with an
+  identity made the way this build makes its identities, whose root the Mac did not trust. The
+  keychain was unlocked and its key partition list set. The run failed before the identity whose
+  root it had trusted signed, so there is no case to compare with.
+- **Not isolated: why.** Two causes fit the message, and the run cannot tell them apart. The first
+  is the untrusted root. The second is the identity itself: the message asks for "an installer
+  signing identity (not an application signing identity)", and the identity carried only the
+  `codeSigning` extended key usage, as this build's identities do.
+- **What it means for pkg 4.** In both cases this build cannot make pkg 4 on such a Mac. It stops
+  at the paragraph above, by design, because root B must stay trusted nowhere.
+- **What it means for pkg 3.** If the identity is the cause, pkg 3 fails the same way, whatever is
+  trusted. If the root is the cause, pkg 3 fails too, because root A is not trusted on the build
+  Mac (the profile installs it on the Mac under test). Either way this is inferred, not observed.
+  Which change makes `productsign` sign (trusting the root on the build Mac, or an identity of
+  another kind) is still to verify.
+- **Inferred: trust changes need an operator.** On a runner with nobody at the screen, the test's
+  undo of its trust setting (`security remove-trusted-cert -d`) then made no progress until the
+  job's timeout. That call most likely waited for an authorization only an operator at the Mac can
+  give. So a build that changes trust settings needs an operator at the Mac.
+
+The installer's device test (`crates/hostkeeper-privileged/tests/install_macos_pkg.rs`) now signs
+nothing and changes no trust setting or keychain. It builds pkg 1's and pkg 2's unsigned forms with
+this build's commands. The form `pkgutil --check-signature` prints for a trusted signature is left
+to this test's signed run.
 
 Build the kit's binary for the MDM host as well. Build it on any Linux host of the same
 architecture, from the same commit:

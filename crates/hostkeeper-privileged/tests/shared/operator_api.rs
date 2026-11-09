@@ -165,7 +165,8 @@ impl OperatorApi {
         )
     }
 
-    /// `Hosts.List`: the hosts the coordinator has heard from, as `hosts`.
+    /// `Hosts.List`: the hosts the coordinator has heard from since it started and the enrolled
+    /// hosts it has not, as `hosts`.
     pub fn list_hosts(&self) -> Result<Value, Status> {
         rpc!(
             self,

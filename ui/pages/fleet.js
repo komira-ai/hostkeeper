@@ -1,4 +1,5 @@
-// Fleet: every host the coordinator has heard from, and the conditions that need a person.
+// Fleet: every host the coordinator lists (heard from since it started, or enrolled and not heard,
+// not live), and the conditions that need a person.
 // Calls: Hosts.List, Releases.Status and Alerts.List, nothing else.
 
 import { h, allPages, describeError, enumLabel, errorView, fmtUnix, list, table } from "../view.js";

@@ -72,8 +72,8 @@ pub use order::{
 };
 pub use pki::PkiCertSource;
 pub use ports::{
-    CertSource, CertState, ClientIdentity, ClockSleeper, CoordinatorLink, Dispatch, HeldHalts, Job,
-    LinkError, Log, Observation, OrderSink, RecordedService, RenewalSource, ReplyFault,
-    ServiceObserver, ServiceRecords, Sleeper, StopFlag, ThreadDispatch, Tick, TrustFault,
-    TrustedRootSource, UnixClock, Unsendable,
+    CertSource, CertState, ClientIdentity, ClockSleeper, CoordinatorLink, Dispatch, Drift,
+    HeldHalts, Job, LinkError, Log, Observation, OrderSink, RecordedService, RenewalSource,
+    ReplyFault, ServiceObserver, ServiceRecords, Sleeper, StopFlag, ThreadDispatch, Tick,
+    TrustFault, TrustedRootSource, UnixClock, Unsendable,
 };

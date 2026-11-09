@@ -16,14 +16,13 @@ use std::fs;
 use std::sync::Arc;
 
 use hostkeeper_config::names::ServiceName;
-use hostkeeper_daemon::fallback::fallback_with;
 use hostkeeper_daemon::link_adapters::{DaemonRecords, recorded};
 use hostkeeper_daemon::selfupdate::RELEASE_BINARY;
 use hostkeeper_launchd::Label;
 use hostkeeper_link::{Order, OrderId, OrderRef, Outcome, ServiceRecords, Verb};
 use hostkeeper_proto::hostkeeper::agent::v1 as pb;
+use hostkeeper_steps::Settled;
 use hostkeeper_steps::record::RECORD_FILE;
-use hostkeeper_steps::{RecordStore, Settled};
 use support::Scratch;
 use support::coordinated::{
     HOOK_LINES, Host, convergence_of, coordinator_with, hk_on_host, hostkeeper_at, order_and_try,
@@ -218,17 +217,17 @@ fn a_mac_the_pkg_installed_reports_the_install_of_its_release_and_converges() {
     assert_eq!(convergence["state"], "converged", "{convergence}");
 }
 
-/// Catches a fallback the coordinator never hears of, whichever binary settles it: the binary
-/// that starts after the hand-over is the old one (the new one failed its tries), settled by the
-/// old binary at its start; or, for an update a release before the hand-over made the old way,
-/// settled either by the fallback verb before the previous binary starts (the fallback unit on
-/// Linux, the fallback job on a Mac) or by the previous binary at its start; either way the
-/// record is `Failed` after the commit, of class release, `self_update_fallback`, and the first
-/// heartbeat of the old binary carries that verdict under the update's id and try.
+/// Catches a fallback the coordinator never hears of, whichever way the wait was written: the
+/// binary that starts after the hand-over is the old one (the new one failed its tries), settled
+/// by the old binary at its start; or, for an update a release before the hand-over made the old
+/// way (`current` switched first, the previous binary put back), settled by the previous binary
+/// at its start; either way the record is `Failed` after the commit, of class release,
+/// `self_update_fallback`, and the first heartbeat of the old binary carries that verdict under
+/// the update's id and try.
 #[test]
 fn a_self_update_that_fell_back_reports_the_fallback_under_its_order() {
-    for (old_way, by_the_verb) in [(true, true), (true, false), (false, false)] {
-        let tag = format!("converge-fallback-{old_way}-{by_the_verb}");
+    for old_way in [true, false] {
+        let tag = format!("converge-fallback-{old_way}");
         let s = SelfRig::new(&tag);
         for (step, line) in HOOK_LINES {
             s.rig.launcher.replies(HK, step, &[(0, line)]);
@@ -250,26 +249,10 @@ fn a_self_update_that_fell_back_reports_the_fallback_under_its_order() {
         }
 
         let daemon = Arc::new(s.daemon_running_as(OLD, &mac_job()));
-        let settled = match by_the_verb {
-            true => {
-                let store = RecordStore::new(&s.hk_state());
-                assert_eq!(
-                    fallback_with(&s.layout(), &store).expect("the fallback"),
-                    Settled::FellBack
-                );
-                assert_eq!(
-                    daemon.settle_self_update().expect("settled"),
-                    Settled::NotPending
-                );
-                Settled::FellBack
-            }
-            false => {
-                if old_way {
-                    s.layout().flip_back().expect("the previous binary back");
-                }
-                daemon.settle_self_update().expect("settled")
-            }
-        };
+        if old_way {
+            s.layout().switch(OLD).expect("the previous binary back");
+        }
+        let settled = daemon.settle_self_update().expect("settled");
         assert_eq!(settled, Settled::FellBack, "{tag}");
         let mut host = Host::of(daemon, &coordinator, None);
         host.beat();

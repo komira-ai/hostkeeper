@@ -46,12 +46,6 @@ const PLACED_DIR: &str = "/var/lib/hostkeeper";
 const UNIT_DIR: &str = "/etc/systemd/system";
 /// The directory a placed unit's `WantedBy=multi-user.target` link goes in.
 const WANTS_DIR: &str = "/etc/systemd/system/multi-user.target.wants";
-/// The fallback unit the daemon of a release before the hand-over writes at every start (this
-/// build removes it).
-const FALLBACK_UNIT: &str = "hostkeeper-fallback.service";
-/// The drop-in directory of the daemon's own unit that the daemon of a release before the
-/// hand-over writes at every start (this build removes it).
-const SELF_UPDATE_DROPIN: &str = "hostkeeper.service.d";
 /// The glob of every run instance of the fixture service.
 const INSTANCES: &str = "hostkeeper-ci-tierstore@*.service";
 /// The glob of the transient units the daemon runs the hook steps in.
@@ -123,15 +117,12 @@ pub struct HostRoot {
 }
 
 /// The fixed places of the host the rig takes over: the daemon's programs, its pki and placed
-/// state, the fallback units a daemon of a release before the hand-over writes at every start, and
-/// the fixture's template link.
-fn taken_places() -> [PathBuf; 6] {
+/// state, and the fixture's template link.
+fn taken_places() -> [PathBuf; 4] {
     [
         PathBuf::from(LIBRARY_DIR),
         PathBuf::from(PKI_DIR),
         PathBuf::from(PLACED_DIR),
-        Path::new(UNIT_DIR).join(FALLBACK_UNIT),
-        Path::new(UNIT_DIR).join(SELF_UPDATE_DROPIN),
         Path::new(UNIT_DIR).join(format!("{SERVICE}@.service")),
     ]
 }
@@ -185,13 +176,11 @@ impl HostRoot {
             saved,
         };
         // The package check wants the packages directory and every ancestor root-owned and
-        // writable by nobody else; `run` is the directory of the `--admin-socket` path, which an
-        // older release's daemon binds in it (the daemon of this checkout binds nothing).
+        // writable by nobody else.
         make_dir(&host.base, 0o755);
         make_dir(&host.packages(), 0o755);
         make_dir(&host.state(), 0o755);
         make_dir(&host.records(), 0o755);
-        make_dir(&host.base.join("run"), 0o700);
         make_dir(Path::new(PLACED_DIR), 0o755);
         make_dir(Path::new(LIBRARY_DIR), 0o755);
         host
@@ -215,11 +204,6 @@ impl HostRoot {
     /// Where the fixture hook writes its records and the test writes the drain gate.
     pub fn records(&self) -> PathBuf {
         self.base.join("hooks")
-    }
-
-    /// The daemon's `--admin-socket` (short: a socket path is limited to about 100 bytes).
-    pub fn admin_socket(&self) -> PathBuf {
-        self.base.join("run").join("admin.sock")
     }
 
     /// The daemon's `--config`.
@@ -319,13 +303,12 @@ impl HostRoot {
              Type=notify\n\
              NotifyAccess=main\n\
              ExecStart={DAEMON} daemon --config {config} --state-dir {state} \
-             --packages-dir {packages} --admin-socket {socket} --notify-systemd \
+             --packages-dir {packages} --notify-systemd \
              --heartbeat-secs 1\n",
             tag = self.tag,
             config = self.config_path().display(),
             state = self.state().display(),
             packages = self.packages().display(),
-            socket = self.admin_socket().display(),
         );
         put(&file, text.as_bytes(), 0o644);
         self.units
@@ -436,10 +419,6 @@ impl Drop for HostRoot {
             let _ = fs::remove_file(Path::new(UNIT_DIR).join(unit));
         }
         remove_placed_links();
-        // Both were absent when the rig started; a daemon of a release before the hand-over wrote
-        // them at its start.
-        let _ = fs::remove_file(Path::new(UNIT_DIR).join(FALLBACK_UNIT));
-        let _ = fs::remove_dir_all(Path::new(UNIT_DIR).join(SELF_UPDATE_DROPIN));
         for dir in [LIBRARY_DIR, PKI_DIR, PLACED_DIR] {
             let _ = fs::remove_dir_all(dir);
         }

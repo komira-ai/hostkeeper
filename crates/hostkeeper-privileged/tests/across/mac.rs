@@ -9,11 +9,9 @@
 //! files of the test's tree. hostkeeper's package carries no unit on a Mac, as a release's does
 //! not.
 //!
-//! **The fallback.** The released daemon writes its fallback job's plist into
-//! `/Library/LaunchDaemons` and loads it at its start, as on any Mac: its own job, which runs its
-//! `self-update-fallback` every minute and judges the start log, is what puts the released
-//! binary back when this build fails its start. This build boots the job out and removes its
-//! plist at its own start ([`Host::fallback_files_present`]).
+//! **The fallback.** The hand-over has no fallback job (docs/design/two-programs.md, section
+//! 4.3): when this build fails its start, the released daemon execs it three times and then
+//! settles the update failed, under the same job.
 //!
 //! These are fixed places of the Mac, which is why the rig runs only on a throwaway runner:
 //! [`Host::new`] boots out a daemon job another test left and moves aside its plist (with the
@@ -43,11 +41,6 @@ fn daemon_label() -> Label {
 /// Where the pkg puts the daemon's plist.
 fn daemon_plist_path() -> PathBuf {
     Path::new(LAUNCHD_DIR).join(format!("{}.plist", daemon_label()))
-}
-
-/// The fallback job the daemon writes and loads.
-fn fallback_label() -> Label {
-    Label::parse(&hostkeeper_daemon::selfunits::fallback_label()).expect("a label")
 }
 
 /// Boots `label` out of the system domain; errors are ignored (a job that is not loaded is
@@ -129,8 +122,6 @@ impl Host {
             ("--config", path(self.root.config_path())),
             ("--state-dir", path(self.root.state())),
             ("--packages-dir", path(self.root.packages())),
-            // Accepted and ignored by this checkout's daemon; the older release binds it.
-            ("--admin-socket", path(self.root.admin_socket())),
             ("--heartbeat-secs", "1".to_owned()),
         ] {
             argv.push(arg(flag));
@@ -194,18 +185,6 @@ impl Host {
         }
     }
 
-    /// Whether the fallback job of the releases before the hand-over is there: its plist in
-    /// `/Library/LaunchDaemons`, or the job loaded. The released daemon writes and loads it at its
-    /// start; this build boots it out and removes the plist at its own.
-    pub fn fallback_files_present(&self) -> bool {
-        let plist = Path::new(LAUNCHD_DIR).join(format!("{}.plist", fallback_label()));
-        let loaded = matches!(
-            print(&launchctl(), &fallback_label()),
-            Ok(JobStatus::Loaded(_))
-        );
-        fs::symlink_metadata(plist).is_ok() || loaded
-    }
-
     /// The daemon's output so far.
     pub fn logs(&self) -> String {
         let read = |name: &str| {
@@ -221,11 +200,10 @@ impl Host {
 }
 
 impl Drop for Host {
-    /// Boots the daemon's job and its fallback out and puts the plist back; then [`MacHost`]'s
+    /// Boots the daemon's job out and puts the plist back; then [`MacHost`]'s
     /// drop does the same for its places. Every step goes on whatever the one before it did.
     fn drop(&mut self) {
         bootout_quiet(&daemon_label());
-        bootout_quiet(&fallback_label());
         let _ = fs::remove_file(daemon_plist_path());
         if let Some((place, aside)) = &self.saved {
             let _ = fs::rename(aside, place);

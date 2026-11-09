@@ -10,7 +10,7 @@
 //! ([`PRIVILEGED`]). They drive the production adapters
 //! (`hostkeeper_steps::SystemdLauncher`, `hostkeeper_steps::DeadMan`, the observer's
 //! `SystemdManager` and `ProcProbe`, the Linux unit control, and the daemon's own update under
-//! hostkeeper's unit file, drop-in and fallback unit), never a copy of them. The macOS device tests
+//! hostkeeper's unit file), never a copy of them. The macOS device tests
 //! (`tests/device_mac.rs`, first line `#![cfg(all(target_os = "macos", feature = "privileged"))]`)
 //! do the same on a Mac, in privileged.yml's job `macos-device`, against launchd: the daemon
 //! (the program `hostkeeper-device-daemon`, which forwards to `hostkeeper_daemon::cli::main`),
@@ -34,7 +34,12 @@
 //! `macos-device`) is the Mac twin of `tests/self_update.rs`: the program
 //! `hostkeeper-selfupdate-daemon` as a launchd job from `current` of its binary directory,
 //! updated and installed to the next version and restarted into it by launchd, with its rig in
-//! `tests/mac_self_update/`. The network-install tests (`tests/net_install.rs`, first line
+//! `tests/mac_self_update/`.
+//! `tests/install_macos_pkg.rs` (a macOS file, in the job `macos-device`) drives
+//! `hostkeeper_install`'s `MacosPkg` as root with the Mac's real `pkgutil`, `installer`, `lsbom`
+//! and `launchctl`, against M11's unsigned fixture forms built at test time: nothing is signed and
+//! no trust setting or keychain is changed, and only `pkgutil --check-signature` of a fixture the
+//! test names is answered by the test. The network-install tests (`tests/net_install.rs`, first line
 //! `#![cfg(all(target_os = "linux", target_arch = "x86_64", feature = "privileged"))]`, job
 //! `net-install`, and `tests/net_install_arm64.rs`, job `net-install-arm64`, both in
 //! `.github/workflows/net-install.yml`) install a QEMU guest
@@ -55,6 +60,13 @@
 //! `openrc/Dockerfile` whose init is OpenRC: hostkeeper's Alpine package installed and run under
 //! supervise-daemon, and the program `hostkeeper-selfupdate-daemon`, built for musl, updated to
 //! the next version and fallen back from; its rig is `tests/openrc/`.
+//! `tests/install_apt.rs` (first line `#![cfg(feature = "privileged")]`, the job `privileged`)
+//! runs the `apt` backend of the repository installer (`hostkeeper_install::repository`) as root
+//! against the runner's own apt, dpkg and systemd, with a signed fixture repository the test
+//! builds on disk with `dpkg-deb` and `gpg`: install, update, rollback with the repository
+//! removed, an upgrade that leaves the held version, drift put back, the refusals of `stage`,
+//! and uninstall; and the backend's `apt-get update` and simulation in a container of each deb
+//! release of `linux-releases.toml`. Its rig is `tests/install_apt/`.
 //!
 //! - [`across`]: the cross-release rig's pin of the previous release, the check of its
 //!   downloaded tarball against the pin, and the version a program of this build runs as.

@@ -49,7 +49,7 @@ update coordinator, `hostkeeper-coordinator serve`. The parts are being moved he
 | [`hostkeeper-daemon`](crates/hostkeeper-daemon) | the daemon: start-up and its lock, the order executor with its locks and try rules, the held halts, and the enrollment and heartbeat loops (no socket: `hostkeeper admin` and the admin socket are gone) |
 | [`hostkeeper-config`](crates/hostkeeper-config) | the strict loaders of `hostkeeper.toml` and of a package's `manifest.toml`, the owner and mode check of a trusted file, and the name and path grammars |
 | [`hostkeeper-hook`](crates/hostkeeper-hook) | the contract between the host and a service's update hook, and the conformance harness a service tests its hook with (feature `conformance`) |
-| [`hostkeeper-install`](crates/hostkeeper-install) | the installer contract (`stage`, `activate`, `retire`, `remove`), the registry of the installers the daemon is built with (`hostkeeper-archive`), and which installers a daemon announces from its platform and the host's `os-release` |
+| [`hostkeeper-install`](crates/hostkeeper-install) | the installer contract (`stage`, `activate`, `retire`, `remove`), the registry of the installers the daemon is built with (`hostkeeper-archive`), which installers a daemon announces from its platform and the host's `os-release`, and the repository installer with its `apt` backend (the host's repository entries under `/etc/hostkeeper/repositories/`, stage, activate, rollback, remove and drift), and the `macos-pkg` installer of a signed flat `.pkg` (signers file, signature, shape, stage, activate, remove, drift, receipts and record) over ports for the Mac's tools ([design](docs/design/packages-repositories.md) section 4.7) |
 | [`hostkeeper-steps`](crates/hostkeeper-steps) | the step runner: the step record and its resume, the dead-man, the layout of versions with `current` and `previous`, the seal of a version, and the transient systemd unit of one step |
 | [`hostkeeper-package`](crates/hostkeeper-package) | fetching a package from the release channel within bounds, its size and digest check, and the offline check that a trusted signer attested it |
 | [`hostkeeper-unpack`](crates/hostkeeper-unpack) | the unpack of a verified `.tar.zst` package into a sealed version directory, in one streaming pass under the archive bounds |
@@ -151,7 +151,6 @@ only, never from the environment:
 | `--config` | `/etc/hostkeeper/hostkeeper.toml` | the daemon config, owned by root and not writable by group or others |
 | `--state-dir` | `/var/lib/updater/state` | a directory per service with its step record, params file and held halt generation, and the daemon's lock file `lock`; the directory of the service `hostkeeper` also holds its binaries (`bin/`) and its list of bad versions (`bad-versions`), see [Updating hostkeeper itself](#updating-hostkeeper-itself) |
 | `--packages-dir` | `/var/lib/hostkeeper/packages` | a directory per service with its version directories and the links `current` and `previous` |
-| `--admin-socket` | none | accepted and ignored: the daemon binds no socket. Kept because units that pass it are live until stage 3 of [two-programs](docs/design/two-programs.md) |
 | `--notify-systemd` | off | once the boot work is over, send `READY=1` to the notify socket systemd sets for a `Type=notify` unit; without that socket the daemon exits 1 |
 | `--ready-file <file>` | none | once the boot work is over, write the file with the daemon's pid: the readiness notice the OpenRC init script removes before a start and waits for after; not with `--notify-systemd` |
 | `--heartbeat-secs` | `15` | seconds between two heartbeats, at least 1; the end of a running order is reported within a second, without waiting for the period |
@@ -302,7 +301,7 @@ five states, and the step record of the service `hostkeeper`
 | staged | the package's hook steps ran, and the new binary is in `<state-dir>/hostkeeper/bin/versions/<version>` | nothing yet: the old binary never reports the update succeeded |
 | awaiting_restart | the link `<state-dir>/hostkeeper/bin/next` names the new binary and the record is `done` at `cleanup` with `awaiting_restart`, `next` and a start count of 0, written after the link; `current` is not moved. The daemon then exits with status 0 and its unit starts `current`, the old binary, which execs `next` (the process id stays) and raises the count at each exec | `Deferred`, reason `awaiting_restart` |
 | confirmed | the new binary started, found the record waiting for itself, finished the switch (`previous` the old binary, `current` the new one), rewrote the record `Succeeded` and removed `next`; the `Deferred` records of other services whose reason is `updater_old` or `daemon_too_old` are removed, so their next order runs | `Succeeded`, from the record |
-| fell back | the new binary did not start: after three starts of it that did not settle the update, the old binary (nothing was switched, so nothing is switched back) adds the version to the local list of bad versions, rewrites the record `Failed` after the commit, of class release, reason `self_update_fallback`, removes `next` and runs as the daemon. A start of any binary that is not the one the record waits for, with the count spent, `next` missing or not executable, or its exec failed, settles it the same way. (A release before the hand-over switched `current` first and armed a fallback unit or job that ran the previous binary's `hostkeeper self-update-fallback --dir <state-dir>/hostkeeper/bin` after three failed starts in 300 seconds; the verb is still answered, and the daemon removes those units and that job at its start.) | `Failed` (`self_update_fallback`), from the list, for that version and every later order of it |
+| fell back | the new binary did not start: after three starts of it that did not settle the update, the old binary (nothing was switched, so nothing is switched back) adds the version to the local list of bad versions, rewrites the record `Failed` after the commit, of class release, reason `self_update_fallback`, removes `next` and runs as the daemon. A start of any binary that is not the one the record waits for, with the count spent, `next` missing or not executable, or its exec failed, settles it the same way. | `Failed` (`self_update_fallback`), from the list, for that version and every later order of it |
 
 The local list of bad versions is `<state-dir>/hostkeeper/bad-versions`, a JSON object
 `{"schema":1,"versions":["1.5.0"]}`, mode 0600, keeping the last 64 versions. hostkeeper never
@@ -314,24 +313,20 @@ Before anything is staged, the daemon judges the release by its floor alone ([tw
 programs](docs/design/two-programs.md), section 4.2), and asks nothing of the new binary. A daemon
 older than the floor the release's package declares (`min_hostkeeper`) defers it
 (`daemon_too_old`), and a daemon refuses a release older than its own oldest reader
-(`OLDEST_READER` in `hostkeeper-steps`, 0.1.163, release R1, the floor the release builder
+(`OLDEST_READER` in `hostkeeper-steps`, 0.1.194, release R2, the floor the release builder
 writes) `Failed` before the commit, of class release (`protocol_unsupported`), because that
 release could not read the daemon's files; the release that runs is not judged. **For release
 authors:** "can fall back from" means the binary that runs reads every file the new one writes. A
 release that changes what hostkeeper writes therefore sets `OLDEST_READER` to the release that
 first reads it, and the release builder writes that as the floor of hostkeeper's package. A
 release without `bin/hostkeeper` is refused `Failed` before the commit, of class release
-(`self_binary_missing`). In each case nothing on the host changes. The verb
-`hostkeeper self-update-protocol` is still answered, printing `1` (`SELF_UPDATE_PROTOCOL`),
-because a daemon older than 0.1.163 asks it of every release it takes and accepts only 1 or 2.
+(`self_binary_missing`). In each case nothing on the host changes. The binary has no verb
+`self-update-protocol`: a daemon older than the floor defers the release before it asks anything.
 
 A release whose package declares a floor above 0.1.53 (`LEGACY_FLOOR`,
 `crates/hostkeeper-daemon/src/selfupdate.rs`) has its hook steps built into the daemon: each
-succeeds at once, no command of the release runs, and the step record is the one
-`bin/hostkeeper update-hook` gives. At start, a daemon removes the fallback unit
-(`hostkeeper-fallback.service`), the drop-in (`hostkeeper.service.d/self-update.conf`) or the
-fallback job (`<label>.fallback.plist`) a release before the hand-over wrote, and answers a
-self-update `busy`, with the alert `self_update_units`, until they are gone.
+succeeds at once, no command of the release runs, and the step record is the one a hook whose
+steps do nothing would give.
 
 hostkeeper is licensed under [Apache-2.0](LICENSE). How to contribute is in
 [CONTRIBUTING.md](CONTRIBUTING.md), and how to report a vulnerability is in

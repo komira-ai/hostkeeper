@@ -446,11 +446,13 @@ fn the_host_links_write_the_issue_file_and_run_the_given_agetty() {
     let root = rig.scratch.path();
     let agetty = root.join("no-agetty");
     let files = HostFiles {
+        repositories: None,
         os_root: root.join("os"),
         ca_bundle: root.join("ca.pem"),
         gh: root.join("gh"),
         trusted_root: root.join("trusted_root.json"),
         stores: root.join("stores.toml"),
+        macos_pkg_signers: None,
         pki: root.join("pki"),
         console: Some(ConsoleFiles {
             issue: root.join("enrollment.issue"),

@@ -14,13 +14,12 @@
 # again, the old binary, which execs `next` while its start count lasts (the hand-over,
 # docs/design/two-programs.md section 4.3); the new binary's start finishes the switch. Three
 # starts of the new binary that do not settle the update settle it failed, and `current` keeps
-# running. Before each start, the binary the package installed gives the binary directory its
-# first binary when `current` starts none, the one repair of a `current` that starts nothing; the
-# `-` lets a start go on when that binary is older and lacks the verb, since `current` is then
-# already there.
+# running. The unit has no ExecStartPre=: `current` exists before this unit is linked, because
+# the binary directory's first binary comes from `hostkeeper daemon` run as /usr/bin/hostkeeper
+# (the bootstrap unit's start, `hostkeeper_daemon::packaged`), and a `current` that starts nothing
+# is repaired by running that command by hand (docs/operations/self-update-after-bootstrap.md).
 #
-# The daemon binds no path of its own under /run through this unit: it passes no
-# --admin-socket, which every daemon defaults to /run/hostkeeper/admin.sock, and has no
+# The daemon binds no socket and no path of its own under /run through this unit, which has no
 # RuntimeDirectory=; the tmpfiles rules make /run/hostkeeper.
 [Unit]
 Description=hostkeeper, the update daemon of this host
@@ -37,8 +36,7 @@ Conflicts=kbf-updater-agent.service kbf-host-local.service kbf-host-local-fronte
 # the stopping updater has exited before the starting one runs.
 After=kbf-updater-agent.service kbf-host-local.service kbf-host-local-frontend.service
 # No start limit: a daemon that cannot start is retried every RestartSec= rather than left
-# failed. The releases before the hand-over wrote a drop-in with a start limit and an OnFailure=
-# fallback unit beside this unit; the daemon removes them at its start, so none is in effect.
+# failed.
 StartLimitIntervalSec=0
 
 [Service]
@@ -47,7 +45,6 @@ Type=notify
 # The boot pass runs every unfinished update to its verdict, each step under its own timeout,
 # before the daemon is ready: no start timeout cuts it short.
 TimeoutStartSec=infinity
-ExecStartPre=-/usr/bin/hostkeeper self-update-seed --state-dir /var/lib/updater/state --binary /usr/bin/hostkeeper
 ExecStart=/var/lib/updater/state/hostkeeper/bin/current daemon --config /etc/hostkeeper/hostkeeper.toml --state-dir /var/lib/updater/state --packages-dir /var/lib/hostkeeper/packages --notify-systemd
 # The daemon exits 0 to be started again after its own update, so a clean exit restarts it too.
 # An automatic restart goes straight to the next start without the failed state

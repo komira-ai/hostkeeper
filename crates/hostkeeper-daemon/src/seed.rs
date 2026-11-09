@@ -1,16 +1,13 @@
-//! `hostkeeper self-update-seed --state-dir <dir> --binary <file>`: the first binary of the
-//! binary directory of hostkeeper's own update (design section 6.6), which the package unit
-//! (`packaging/linux/units/hostkeeper.service`) starts through `current`
-//! (`<state-dir>/hostkeeper/bin/current`, [`binary_dir`]). That unit runs it before every start
-//! (`ExecStartPre=-`) with the binary the package installed; a host that has never updated
-//! hostkeeper has no `current` yet, and its first start needs one. The bootstrap unit of the deb
-//! and the rpm and a Mac's launchd job start the packaged binary instead, whose `hostkeeper
-//! daemon` does the same seed itself before it execs `current` ([`crate::packaged`]).
+//! The first binary of the binary directory of hostkeeper's own update (design section 6.6),
+//! which the unit starts through `current` (`<state-dir>/hostkeeper/bin/current`,
+//! [`binary_dir`]): a host that has never updated hostkeeper has no `current` yet, and its first
+//! start needs one. The packaged start of `hostkeeper daemon` seeds it with the binary the
+//! package installed before it execs `current` ([`crate::packaged`]).
 //!
-//! When `current` starts an executable file, the seed writes nothing, takes no lock and exits 0:
+//! When `current` starts an executable file, the seed writes nothing and takes no lock:
 //! after the first start, and after every self-update, `current` is the update's, and the seed
 //! never moves it. Otherwise, under the state directory's lock (a running daemon holds it, and
-//! the seed then writes nothing and exits [`crate::start::EXIT_LOCKED`]):
+//! the seed then writes nothing and fails with [`crate::start::EXIT_LOCKED`]):
 //!
 //! 1. the state directory of the service `hostkeeper` and the binary directory are made, mode
 //!    0700 ([`Layout`]'s rule: root's and closed to group and others);
@@ -20,16 +17,15 @@
 //!    ([`Layout::stage`]), unless an executable file is there already;
 //! 4. `current` is pointed at it ([`Layout::switch`]).
 //!
-//! Each step can run again, so a seed a crash cut short is finished by the next start. It exits
-//! 0 when `current` starts a binary, and [`EXIT_FAILED`] with a message naming the cause when it
-//! could not make it so (the binary cannot be read, which is checked before anything is changed;
-//! the version is the one `previous` names but its file is gone).
+//! Each step can run again, so a seed a crash cut short is finished by the next start. It is an
+//! error, with the status [`SeedError::exit_code`] gives ([`EXIT_FAILED`] unless the lock is
+//! held), when it could not make `current` start a binary (the binary cannot be read, which is checked before anything is
+//! changed; the version is the one `previous` names but its file is gone).
 
 use std::fs;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
 
 use hostkeeper_steps::Layout;
 
@@ -63,7 +59,7 @@ pub enum SeedError {
 }
 
 impl SeedError {
-    /// The exit status of the verb for this error.
+    /// The exit status of the start for this error.
     pub fn exit_code(&self) -> u8 {
         match self {
             SeedError::Lock(error) => error.exit_code(),
@@ -104,15 +100,4 @@ pub fn seed(state_dir: &Path, binary: &Path, version: &str) -> Result<Seeded, Se
     }
     layout.switch(version).map_err(at(&current))?;
     Ok(Seeded::Seeded)
-}
-
-/// The verb: [`seed`] with this binary's version, its error printed.
-pub fn main(state_dir: &Path, binary: &Path) -> ExitCode {
-    match seed(state_dir, binary, env!("CARGO_PKG_VERSION")) {
-        Ok(_) => ExitCode::SUCCESS,
-        Err(error) => {
-            eprintln!("hostkeeper self-update-seed: {error}");
-            ExitCode::from(error.exit_code())
-        }
-    }
 }

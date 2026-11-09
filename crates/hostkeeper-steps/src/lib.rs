@@ -9,14 +9,12 @@
 //! - [`resume_action`] is the table of what becomes of an unfinished update at the daemon's
 //!   start, after a death of the daemon or a reboot, and [`resume`] rewrites the record for it.
 //! - [`DeadMan`] enforces the bound of the running step on a thread of its own.
-//! - [`selfupdate`] is the updater's own update with its fallback, and [`Layout`] the directory
-//!   of versions with `current` and `previous` that it and every package share. The update waits
-//!   in its step record for the restart until the new binary has run ([`settle`]), and a
-//!   version that fell back is kept in [`bad`], the local list of bad versions. On macOS the
-//!   fallback decides the burst of failed starts itself, from the daemon's [`starts`] log, with
-//!   [`should_fall_back`], the rule systemd's start limit keeps on Linux. [`handover`] is what a
-//!   binary's start reads of a hand-over, the way a later release updates the updater without
-//!   moving `current` first (docs/design/two-programs.md, 4.3), and the settlement confirms one.
+//! - [`selfupdate`] is the updater's own update, and [`Layout`] the directory of versions with
+//!   `current` and `previous` that it and every package share. The update waits in its step
+//!   record for the restart until the new binary has run ([`settle`]), and a version that did
+//!   not settle is kept in [`bad`], the local list of bad versions. [`handover`] is what a
+//!   binary's start reads of a hand-over, the way a release updates the updater without moving
+//!   `current` first (docs/design/two-programs.md, 4.3), and the settlement confirms one.
 //! - [`OLDEST_READER`] is the oldest release of hostkeeper that reads every file this one
 //!   writes: the floor of hostkeeper's own package, and what the daemon refuses an older release
 //!   of hostkeeper by ([`reader`]).
@@ -29,8 +27,8 @@
 //!   step record; a force that stops a running update flags its record `forced`, and the runner
 //!   then closes it `forced_over` and launches nothing more.
 //! - [`SystemdLauncher`] is the [`StepLauncher`] of the host: one transient systemd unit per
-//!   step, with `RuntimeMaxSec=` and nothing else (a tool run also has no network,
-//!   [`StepLauncher::run_tool`]); [`capture`] bounds what is kept of a hook's output.
+//!   step, with `RuntimeMaxSec=` and nothing else (a tool run is offline unless a fetch, and may
+//!   be confined to listed paths, [`StepLauncher::run_tool`]); [`capture`] bounds what is kept of a hook's output.
 //!
 //! The crate names no service and reads no manifest: the runner is given the order and its
 //! bounds, and runs each step through the [`StepLauncher`] it is given.
@@ -50,7 +48,6 @@ pub mod resume;
 pub mod runner;
 pub mod seal;
 pub mod selfupdate;
-pub mod starts;
 pub mod systemd;
 
 pub use artifact::{ArtifactError, EntryKind, Staged, Tree, TreeEntry, read_tree, tree_digest};
@@ -63,6 +60,7 @@ pub use deadman::{DeadMan, Watch};
 pub use force::{ForceFailure, ForcePhase, ForceRecord, ForceVerdict};
 pub use launcher::{
     AdditiveCall, BUILTIN_EXIT, Bound, LaunchError, StepCall, StepExit, StepLauncher, ToolCall,
+    ToolExit, ToolNetwork,
 };
 pub use prune::{
     PRUNE_PREFIX, Protected, PruneInputs, PrunePlan, PruneReport, PruneStep, prune_plan,
@@ -72,8 +70,5 @@ pub use record::{CrashGate, CrashPoint, Loaded, Record, RecordError, RecordStore
 pub use resume::{REASON_REBOOTED, ResumeAction, resume, resume_action};
 pub use runner::{Bounds, Finished, RunError, StepRunner, Switch, Toward, UpdateOrder};
 pub use seal::{MAX_SEAL_BYTES, SEAL_SCHEMA, Seal, SealError, read_seal};
-pub use selfupdate::{
-    FollowOn, Layout, SelfUpdateError, Settled, follow_on, settle, settle_with, should_fall_back,
-};
-pub use starts::{DaemonStart, StartLog, StartLogError};
+pub use selfupdate::{FollowOn, Layout, SelfUpdateError, Settled, follow_on, settle, settle_with};
 pub use systemd::{Captured, Program, Spawner, StepLog, SystemdLauncher, SystemdRunProcess};

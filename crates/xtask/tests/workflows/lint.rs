@@ -80,6 +80,7 @@
 
 use super::advisories;
 use super::callers;
+use super::desired;
 use super::downloads;
 use super::net_install;
 use super::one_command;
@@ -151,9 +152,14 @@ pub const WRITE_ALLOWED: &[Allowed] = &[
 ];
 
 /// The jobs that may hold `id-token: write`, by workflow file and job. The scope writes nothing
-/// to the repository: it lets the job's steps ask GitHub for an OIDC token. The one job is the
-/// CI client's, whose order of steps [`set_desired`] holds.
-pub const ID_TOKEN_ALLOWED: &[(&str, &str)] = &[(set_desired::FILE, set_desired::JOB)];
+/// to the repository: it lets the job's steps ask GitHub for an OIDC token. The jobs are the CI
+/// client's, whose order of steps [`set_desired`] holds, and the channel job of hostkeeper's own
+/// deploy, whose tailnet join exchanges the token as the CI client's does and whose steps
+/// [`desired`] holds.
+pub const ID_TOKEN_ALLOWED: &[(&str, &str)] = &[
+    (set_desired::FILE, set_desired::JOB),
+    (desired::FILE, desired::CHANNEL_JOB),
+];
 
 /// The workflow of the privileged tests, after a merge to main and by hand: with
 /// [`net_install::FILE`], one of the two workflows that may run a job as root (`sudo`, a
@@ -169,7 +175,8 @@ pub const PRIVILEGED_RUNNERS: &[&str] = &["ubuntu-24.04"];
 /// The one job of [`PRIVILEGED_WORKFLOW`] that runs on macOS: the device run of the launchd
 /// adapters, the process probe and the package check (`crates/hostkeeper-privileged/tests/
 /// device_mac.rs`), hello's update end to end under launchd (`device_mac_e2e.rs`), and
-/// hostkeeper's update of itself under launchd (`device_mac_selfupdate.rs`).
+/// hostkeeper's update of itself under launchd (`device_mac_selfupdate.rs`), and the macos-pkg
+/// installer with the Mac's real `installer` and `pkgutil` (`install_macos_pkg.rs`).
 pub const MACOS_DEVICE_JOB: &str = "macos-device";
 
 /// The job of [`PRIVILEGED_WORKFLOW`] that runs the daemon under OpenRC in an Alpine container

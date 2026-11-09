@@ -356,17 +356,17 @@ fn the_manifest_text_is_exact() {
         with_units
     );
     assert!(without.ends_with("cleanup = 300\n") & !without.contains("units"));
-    // A release from OLDEST_READER on asks for OLDEST_READER, not its own version; stage 2 of
-    // docs/design/two-programs.md sets it to R1, 0.1.163, and it is the daemon's own constant.
+    // A release from OLDEST_READER on asks for OLDEST_READER, not its own version; stage 3 of
+    // docs/design/two-programs.md sets it to R2, 0.1.194, and it is the daemon's own constant.
     assert_eq!(
         OLDEST_READER.to_string(),
         hostkeeper_steps::OLDEST_READER.to_string()
     );
-    assert_eq!(OLDEST_READER.to_string(), "0.1.163");
+    assert_eq!(OLDEST_READER.to_string(), "0.1.194");
     for (release, floor) in [
-        ("0.1.162", "0.1.162"),
-        ("0.1.163", "0.1.163"),
-        ("0.9.0", "0.1.163"),
+        ("0.1.193", "0.1.193"),
+        ("0.1.194", "0.1.194"),
+        ("0.9.0", "0.1.194"),
     ] {
         let text = manifest(
             &release.parse().expect("a version"),
@@ -918,44 +918,27 @@ fn a_macos_package_unpacks_with_the_daemons_macos_unpacker() {
 }
 
 #[test]
-fn the_hook_command_of_the_manifest_is_answered_by_the_shipped_binary() {
-    // Catches: a manifest whose hook a daemon runs, for every install and update of hostkeeper,
-    // on a binary that does not answer the command line the daemon's step launcher builds (the
-    // program, then the step and its arguments, without the manifest's `update-hook`), so that
-    // every order of hostkeeper fails at `prepare`; and a hook step that does not end in success.
+fn the_hook_command_of_the_manifest_is_a_placeholder_the_shipped_binary_does_not_answer() {
+    // Catches: a binary that answers `update-hook` or a bare step word again, which would make
+    // the manifest's hook command look runnable when no daemon runs it (a daemon that takes the
+    // release runs built-in steps); and a manifest whose hook table the loader would refuse.
     use clap::Parser;
-    use hostkeeper_daemon::cli::{self, Cli};
-    use hostkeeper_hook::{Invocation, Step};
-    use hostkeeper_steps::{Bound, StepCall};
+    use hostkeeper_daemon::cli::Cli;
+    use hostkeeper_hook::Step;
 
     let (_dir, version_dir) = unpacked("package-hook-verb");
     let manifest = Manifest::load(&version_dir, &expected(), &host(5)).expect("the manifest");
-    let program = version_dir.join(&manifest.hook.command[0]);
-    assert_eq!(manifest.hook.command[0], "bin/hostkeeper");
+    assert_eq!(manifest.hook.command, ["bin/hostkeeper", "update-hook"]);
     for step in Step::ALL {
-        let call = StepCall {
-            service: "hostkeeper",
-            invocation: Invocation {
-                step,
-                artifact: (step == Step::Prepare).then(|| version_dir.to_path_buf()),
-                params: Some("/state/hostkeeper/params.toml".into()),
-            },
-            executable: &program,
-            unit: "updater-hostkeeper-step-1",
-            bound: Bound::Secs(nonzero(300)),
-        };
-        let argv = hostkeeper_steps::systemd::command(&call).expect("the launcher's command");
-        let at = argv
-            .iter()
-            .position(|a| a == "--")
-            .expect("the program after --");
-        assert_eq!(argv[at + 1], program.as_os_str());
-        let line = std::iter::once("hostkeeper".into()).chain(argv[at + 2..].iter().cloned());
-        let parsed = Cli::try_parse_from(line).expect("the binary parses the launcher's line");
-        assert_eq!(
-            format!("{:?}", cli::run(parsed)),
-            format!("{:?}", std::process::ExitCode::SUCCESS),
-            "{step}"
-        );
+        let word = step.to_string();
+        for line in [
+            vec!["hostkeeper", word.as_str()],
+            vec!["hostkeeper", "update-hook", word.as_str()],
+        ] {
+            let refused = Cli::try_parse_from(&line).expect_err("the binary has no such verb");
+            assert_eq!(refused.exit_code(), 2, "{line:?}");
+        }
     }
+    let refused = Cli::try_parse_from(["hostkeeper", "update-hook"]).expect_err("no such verb");
+    assert_eq!(refused.exit_code(), 2);
 }

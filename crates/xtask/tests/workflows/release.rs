@@ -36,6 +36,7 @@
 use super::desired;
 use super::lint::{entries, entry, pinned_by_digest, runs_on_pull_requests, triggers};
 use super::packages;
+use super::pkg_signing;
 use super::yaml::{self, Node, Value};
 
 /// The `if:` of the attest job: a push to main. The only condition under which a token can sign.
@@ -212,7 +213,8 @@ const PUBLISH_MARKS: [&str; 6] = [
 ];
 
 /// The `cargo xtask release` verbs release.yml may run: none builds, packages or signs.
-const RELEASE_VERBS: [&str; 7] = [
+const RELEASE_VERBS: [&str; 8] = [
+    "channel-host",
     "check",
     "check-binary",
     "image-layout",
@@ -608,6 +610,7 @@ fn artifacts_problems(doc: &Node) -> Vec<String> {
     }
     problems.extend(package_problems(attest));
     problems.extend(mdm_problems(doc));
+    problems.extend(pkg_signing::problems(doc));
     problems
 }
 

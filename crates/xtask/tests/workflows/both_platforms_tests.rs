@@ -32,6 +32,7 @@ fn a_target_of_both_platforms_left_out_of_either_job_is_refused() {
         "device_mac",
         "device_mac_e2e",
         "device_mac_selfupdate",
+        "install_macos_pkg",
         "self_update_across_releases",
         "unpack_mac",
     ]);
@@ -39,11 +40,12 @@ fn a_target_of_both_platforms_left_out_of_either_job_is_refused() {
         "device_mac",
         "device_mac_e2e",
         "device_mac_selfupdate",
+        "install_macos_pkg",
         "unpack_mac",
     ]);
     let dropped_mac = text.replace(
-        "--test device_mac_selfupdate --test self_update_across_releases --test unpack_mac",
-        "--test device_mac_selfupdate --test unpack_mac",
+        "--test device_mac_selfupdate --test install_macos_pkg --test self_update_across_releases --test unpack_mac",
+        "--test device_mac_selfupdate --test install_macos_pkg --test unpack_mac",
     );
     assert_ne!(dropped_mac, text);
     assert_eq!(

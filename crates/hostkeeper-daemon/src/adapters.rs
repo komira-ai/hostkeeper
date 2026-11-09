@@ -51,8 +51,10 @@ use hostkeeper_unpack::MacVerify;
 
 use crate::hook_log::log_hook_output;
 use crate::observer::{SHOW_DEADLINE, SHOW_OUTPUT_CAP, proc_probe, systemd_manager};
-use crate::selfunits::MAIN_UNIT;
 use crate::start::StartError;
+
+/// The daemon's own unit on Linux.
+pub const MAIN_UNIT: &str = "hostkeeper.service";
 
 /// How long one `launchctl` command of the unit control may run: `bootout` waits for the job to
 /// end, up to launchd's exit timeout.
