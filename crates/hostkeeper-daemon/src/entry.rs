@@ -10,6 +10,7 @@
 //! |------------------------------------------------------------------------------|----------------------------------------------------------------------------|
 //! | the entry's digest is not the order's `package_digest`                       | refused `order_invalid`                                                    |
 //! | a location of the artifact or the attestation breaks the grammar of a store name or of a locator | refused `order_invalid`                                        |
+//! | a `macos-pkg` entry carries an attestation (it carries none: packages-native.md section 10.3) | refused `order_invalid`                                      |
 //! | the manifest needs a newer daemon (`min_hostkeeper`)                         | refused `daemon_too_old`                                                   |
 //! | the installer is not one the daemon announces                                | `Deferred` for [`NOT_LISTED_RETRY_SECS`], reason `installer_not_listed`    |
 //! | the manifest breaks a rule of its installer, or there is none                | refused `manifest_invalid`                                                 |
@@ -31,6 +32,10 @@ use hostkeeper_release::receipt::{self, Daemon, ReceiptError};
 use crate::executor::Reply;
 use crate::refusal::Refusal;
 use crate::verb::PackageDigest;
+
+/// The refusal of a `macos-pkg` entry that carries an attestation: its pin and the package's
+/// signature are the whole check, and an attestation nobody checks must not look checked.
+pub const MACOS_PKG_ATTESTED: &str = "a macos-pkg entry carries an attestation, which no host checks: its pin and its signature are the whole check";
 
 /// The seconds an order for an installer the daemon does not list is deferred for. One second keeps
 /// the daemon's own deferral book from declining the same version's next entry, which the
@@ -77,6 +82,9 @@ pub fn check(
         return Err(invalid(format!(
             "the entry names a location where {defect}"
         )));
+    }
+    if entry.installer == Installer::MacosPkg.as_str() && entry.attestation.is_some() {
+        return Err(invalid(MACOS_PKG_ATTESTED.to_owned()));
     }
     let daemon = Daemon {
         platform: Platform::current(),
