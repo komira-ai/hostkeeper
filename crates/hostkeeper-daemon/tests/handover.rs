@@ -1,8 +1,7 @@
 //! The hand-over at the start of `hostkeeper daemon` (docs/design/two-programs.md, section 4.3):
 //! before its config, the old binary execs the one the hand-over waits for, under the state
 //! directory's lock and with the count raised, and settles the update failed when it cannot; the
-//! new binary takes no lock here, and its start confirms the hand-over; the fallback verb of
-//! today leaves a hand-over alone. The exec is a fake that records what it was given; the real
+//! new binary takes no lock here, and its start confirms the hand-over. The exec is a fake that records what it was given; the real
 //! exec is run by `crates/hostkeeper/tests/binary.rs`.
 
 mod support;
@@ -11,25 +10,17 @@ use std::fs;
 use std::io;
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
 use std::sync::Mutex;
 
-use hostkeeper_daemon::cli::EXIT_FAILED;
-use hostkeeper_daemon::fallback::{
-    FallbackError, Judged, fallback, fallback_after_burst, main_for,
-};
+use hostkeeper_daemon::Reply;
 use hostkeeper_daemon::handover::{
     Exec, HandOverError, Handed, ProcessExec, at_daemon_start, hand_over,
 };
-use hostkeeper_daemon::selfupdate::binary_dir;
 use hostkeeper_daemon::start::{self, LOCK_FILE, StartError};
-use hostkeeper_daemon::testing::FakeClock;
-use hostkeeper_daemon::{Refusal, Reply};
 use hostkeeper_hook::Verdict;
-use hostkeeper_launchd::PlatformKind;
+use hostkeeper_steps::SelfUpdateError;
 use hostkeeper_steps::record::{RECORD_FILE, State};
-use hostkeeper_steps::{BAD_VERSIONS_FILE, BadVersions, BootId, DaemonStart, Settled, Stamp};
-use hostkeeper_steps::{SelfUpdateError, StartLog};
+use hostkeeper_steps::{BadVersions, Settled};
 use support::selfupdate::{HK, NEW, OLD, SelfRig, awaiting, fell_back, own};
 use support::snapshot;
 
@@ -132,10 +123,6 @@ fn assert_fell_back(s: &SelfRig) {
             .contains(NEW)
     );
     assert_eq!(links(s), [some(OLD), None, None]);
-}
-
-fn code(code: ExitCode) -> String {
-    format!("{code:?}")
 }
 
 /// Catches an old daemon that starts on with a hand-over waiting, execs before the count is
@@ -331,55 +318,4 @@ fn the_process_exec_returns_the_error_of_a_binary_it_cannot_run() {
     let exec = ProcessExec::new(vec!["daemon".into()]);
     let error = exec.exec(&scratch.path().join("missing"));
     assert_eq!(error.kind(), io::ErrorKind::NotFound, "{error}");
-}
-
-/// Catches today's fallback verb moving `current` under a hand-over, which moved no link: on
-/// Linux the verb refuses, names the binary directory and exits failed; on macOS a burst of
-/// starts of 0.2.0 is judged nothing to do; neither changes a file.
-#[test]
-fn the_fallback_verb_leaves_a_hand_over_alone() {
-    let s = handed_over("ho-fallback", 1);
-    // A host that was updated before: `previous` names an older binary, so the verb gets as far
-    // as the wait.
-    let older = s.rig.scratch.path().join("older-binary");
-    fs::write(&older, "#!hostkeeper 0.0.9\n").expect("the older binary");
-    s.layout().stage("0.0.9", &older).expect("stage it");
-    s.layout().switch("0.0.9").expect("switch to it");
-    s.layout().switch(OLD).expect("and back");
-    let dir = binary_dir(&s.rig.state);
-    let mut log = StartLog::load(&s.hk_state()).expect("the start log");
-    for mono in [100, 110, 120] {
-        log.record(DaemonStart {
-            version: NEW.to_owned(),
-            at: Stamp {
-                boot_id: BootId::new("a test", "boot").ok(),
-                mono_secs: mono,
-            },
-        })
-        .expect("a start");
-    }
-    let before = snapshot(&s.rig.state);
-    let error = fallback(&dir).expect_err("a hand-over waits");
-    assert!(matches!(error, FallbackError::HandOver(_)), "{error:?}");
-    assert_eq!(
-        error.to_string(),
-        format!(
-            "the update of hostkeeper waits for a hand-over, so {} is left as it is: the start of \
-             the binary `current` names settles it",
-            dir.display()
-        )
-    );
-    assert_eq!(
-        code(main_for(&dir, PlatformKind::Linux, &*FakeClock::new())),
-        code(ExitCode::from(EXIT_FAILED))
-    );
-    assert_eq!(
-        fallback_after_burst(&dir, &*FakeClock::new()).expect("judged"),
-        Judged::NotPending
-    );
-    assert_eq!(snapshot(&s.rig.state), before);
-    assert_eq!(links(&s), [some(OLD), some("0.0.9"), some(NEW)]);
-    assert!(!s.hk_state().join(BAD_VERSIONS_FILE).exists());
-    let busy = s.daemon().order(&s.order(support::selfupdate::LATER, 2));
-    assert_eq!(busy.refusal(), Some(Refusal::Busy), "{busy:?}");
 }

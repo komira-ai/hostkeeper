@@ -16,10 +16,7 @@
 //! - the capture keeps the last 1 MiB of each stream, and the report line from it;
 //! - a step run again under the same unit reports what the second run wrote;
 //! - an additive step (the hook's `uninstall`) keeps its own exit code and report line within
-//!   its bound, and past it is stopped at the bound and is a failed step;
-//! - a probe (the daemon asking a new hostkeeper binary for its self-update protocol) keeps its
-//!   own exit code and output within its bound, and past it, or past 1 second when its bound is
-//!   0, is stopped and did not exit 0.
+//!   its bound, and past it is stopped at the bound and is a failed step.
 
 mod support;
 

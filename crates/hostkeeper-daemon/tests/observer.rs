@@ -10,11 +10,11 @@ use std::sync::Arc;
 
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_daemon::Reply;
+use hostkeeper_daemon::adapters::MAIN_UNIT;
 use hostkeeper_daemon::observer::{
     OwnService, STATUS_DEADLINE, SealedExe, host_observer, observe, observer_with, service_health,
     service_input,
 };
-use hostkeeper_daemon::selfunits::MAIN_UNIT;
 use hostkeeper_daemon::selfupdate::binary_dir;
 use hostkeeper_daemon::testing::{manifest, spawn};
 use hostkeeper_hook::Step;

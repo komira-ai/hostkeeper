@@ -2019,7 +2019,6 @@ dependencies = [
  "hostkeeper-hook",
  "hostkeeper-steps",
  "hostkeeper-testkit",
- "plist",
  "rustix",
  "serde",
  "serde_json",

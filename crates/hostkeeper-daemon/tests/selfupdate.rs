@@ -1,32 +1,25 @@
 //! The update of hostkeeper itself through the daemon: the hand-over under the step lock, the
-//! record that waits for the restart, the start that settles it, the fallback verb that the
-//! fallback units of the releases before the hand-over still run, and the local list of bad
+//! record that waits for the restart, the start that settles it, and the local list of bad
 //! versions.
 
 mod support;
 
 use std::fs;
-use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use clap::Parser;
 use hostkeeper_config::names::ServiceName;
-use hostkeeper_daemon::cli::{self, Cli, EXIT_FAILED};
+use hostkeeper_daemon::cli::{self, EXIT_FAILED};
 use hostkeeper_daemon::executor::RecordState;
-use hostkeeper_daemon::fallback::{self, FallbackError};
-use hostkeeper_daemon::selfupdate::{RELEASE_BINARY, binary_dir, protocol_line};
+use hostkeeper_daemon::selfupdate::RELEASE_BINARY;
 use hostkeeper_daemon::start;
-use hostkeeper_daemon::testing::{FakeClock, Log, spawn};
+use hostkeeper_daemon::testing::{Log, spawn};
 use hostkeeper_daemon::{Daemon, Refusal, Reply, StoreSeam};
 use hostkeeper_hook::{Step, Verdict};
-use hostkeeper_launchd::PlatformKind;
 use hostkeeper_steps::record::{AwaitingRestart, State};
-use hostkeeper_steps::{
-    BAD_VERSIONS_FILE, BadVersions, CrashPoint, RecordStore, SelfUpdateError, Settled,
-};
+use hostkeeper_steps::{BAD_VERSIONS_FILE, BadVersions, CrashPoint, RecordStore, Settled};
 use support::selfupdate::{HK, LATER, NEW, OLD, SelfRig, awaiting, fell_back, own};
-use support::{crash_after_writing, crash_at, d, lines, snapshot, update};
+use support::{crash_after_writing, crash_at, d, lines, update};
 
 fn hk_record(s: &SelfRig) -> Option<hostkeeper_steps::Record> {
     s.rig.record(HK)
@@ -54,38 +47,6 @@ fn waiting_the_old_way(version: &str) -> Option<AwaitingRestart> {
     })
 }
 
-fn code(code: ExitCode) -> String {
-    format!("{code:?}")
-}
-
-/// The fallback verb as the systemd unit of a Linux host runs it, whatever host this test runs
-/// on: the verb on a Mac judges a burst of starts first (`tests/selfupdate_mac.rs`), the verb on
-/// Linux acts on what the record and `previous` say.
-fn linux_verb(dir: &std::path::Path) -> ExitCode {
-    fallback::main_for(dir, PlatformKind::Linux, &*FakeClock::new())
-}
-
-/// Makes the host's own verb act: on a Mac, three starts of [`NEW`] in the start log, a burst
-/// that is just made (a start of another boot has spent no time); on Linux systemd counts the
-/// starts and nothing is needed.
-#[cfg(target_os = "macos")]
-fn fail_the_start_limit(s: &SelfRig) {
-    let mut log = hostkeeper_steps::StartLog::load(&s.hk_state()).expect("the start log");
-    for mono in [100, 110, 120] {
-        log.record(hostkeeper_steps::DaemonStart {
-            version: NEW.to_owned(),
-            at: hostkeeper_steps::Stamp {
-                boot_id: hostkeeper_steps::BootId::new("a test", "boot").ok(),
-                mono_secs: mono,
-            },
-        })
-        .expect("a start");
-    }
-}
-
-#[cfg(not(target_os = "macos"))]
-fn fail_the_start_limit(_: &SelfRig) {}
-
 /// A host that ran the hand-over to [`NEW`]: its record waits for the restart with `next` naming
 /// the new binary, and `current` still names the old one; the daemon of [`OLD`] that ran it is
 /// returned.
@@ -93,16 +54,6 @@ fn swapped(name: &str) -> (SelfRig, Daemon) {
     let s = SelfRig::new(name);
     let daemon = s.daemon();
     assert_eq!(daemon.order(&s.order(NEW, 1)), awaiting(false));
-    (s, daemon)
-}
-
-/// A host that a release before the hand-over updated to [`NEW`] the old way, which the fallback
-/// verb of its units still answers: `current` names the new binary and `previous` the old one, no
-/// `next` is linked, and the record waits for the restart with no `next`. The hand-over of
-/// [`swapped`] moved on to what the old updater wrote.
-fn swapped_the_old_way(name: &str) -> (SelfRig, Daemon) {
-    let (s, daemon) = swapped(name);
-    s.switch_the_old_way(NEW);
     (s, daemon)
 }
 
@@ -267,65 +218,29 @@ async fn the_daemon_stops_serving_once_its_restart_is_asked() {
     assert_eq!(cli::exit_status(&failed), EXIT_FAILED);
 }
 
-/// Catches the fallback unit putting back a binary that no update switched in: systemd runs it
-/// whenever the daemon's unit fails its start limit, for any reason (a config that does not
-/// load, a burst of restarts). Once the new binary confirmed its update, the fallback leaves
-/// `current` as it is, writes nothing, and exits non-zero naming why, so the unit's
-/// `ExecStartPost=` lines do not start the daemon again.
-#[test]
-fn the_fallback_leaves_a_binary_no_update_waits_for() {
-    let (s, _old) = swapped("su-fallback-confirmed");
-    assert_eq!(
-        s.daemon_at(NEW).settle_self_update().expect("settled"),
-        Settled::Confirmed
-    );
-    let dir = binary_dir(&s.rig.state);
-    let before = snapshot(&s.rig.state);
-    let err = fallback::fallback(&dir).expect_err("nothing waits");
-    assert!(matches!(err, FallbackError::NothingWaits(_)), "{err:?}");
-    assert_eq!(
-        err.to_string(),
-        format!(
-            "no update of hostkeeper waits for its restart, so {} is left as it is: the binary \
-             that runs was not switched in by an update",
-            dir.display()
-        )
-    );
-    assert_eq!(code(linux_verb(&dir)), code(ExitCode::from(EXIT_FAILED)));
-    assert_eq!(snapshot(&s.rig.state), before);
-    assert_eq!(s.current().as_deref(), Some(NEW));
-}
-
-/// The design's named test, for a host a release before the hand-over updated the old way. Catches
-/// a fallback after which the host could be ordered the same
-/// broken version again: the fallback verb puts the previous binary back and records the update
-/// `Failed` after the commit, of class release, `self_update_fallback`, and the version bad; a
-/// resend of the order to the restarted old binary runs nothing and is answered with that failure.
+/// The design's named test. Catches a fallback after which the host could be ordered the same
+/// broken version again: the old binary that starts after a hand-over that did not settle
+/// records the update `Failed` after the commit, of class release, `self_update_fallback`, and
+/// the version bad, with `current` still the old binary; a resend of the order to it runs
+/// nothing and is answered with that failure.
 /// (The coordinator's half, that a host reporting it is not ordered the version again, is in the
 /// coordinator crate's test of the same name.)
 #[test]
 fn a_fallback_marks_the_version_bad_and_the_coordinator_stops_ordering_it() {
-    let (s, _old) = swapped_the_old_way("su-fallback");
-    let dir = binary_dir(&s.rig.state);
-    let args: Vec<std::ffi::OsString> = vec![
-        "hostkeeper".into(),
-        "self-update-fallback".into(),
-        "--dir".into(),
-        dir.clone().into(),
-    ];
-    fail_the_start_limit(&s);
+    let (s, _old) = swapped("su-fallback");
+    let old = s.daemon_at(OLD);
     assert_eq!(
-        code(cli::run(Cli::parse_from(args))),
-        code(ExitCode::SUCCESS)
+        old.settle_self_update().expect("settled"),
+        Settled::FellBack
     );
     assert_eq!(s.current().as_deref(), Some(OLD));
+    assert_eq!(s.layout().next().expect("next"), None);
     let rec = hk_record(&s).expect("the record");
     let (verdict, reason) = fell_back();
     assert_eq!(rec.state, State::Finished { verdict, reason });
     let bad = BadVersions::load(&s.hk_state()).expect("the list");
     assert_eq!(bad.versions(), [NEW]);
 
-    let old = s.daemon_at(OLD);
     assert_eq!(
         old.settle_self_update().expect("settled"),
         Settled::NotPending
@@ -346,13 +261,13 @@ fn a_fallback_marks_the_version_bad_and_the_coordinator_stops_ordering_it() {
 /// still answered with its failure and runs nothing.
 #[test]
 fn a_later_order_for_another_version_does_not_forget_a_bad_version() {
-    let (s, _old) = swapped_the_old_way("su-later");
-    assert!(matches!(
-        fallback::fallback(&binary_dir(&s.rig.state)),
-        Ok(Settled::FellBack)
-    ));
-    s.release(LATER);
+    let (s, _old) = swapped("su-later");
     let old = s.daemon_at(OLD);
+    assert_eq!(
+        old.settle_self_update().expect("settled"),
+        Settled::FellBack
+    );
+    s.release(LATER);
     assert_eq!(old.order(&s.order(LATER, 2)), awaiting(false));
     assert_eq!(s.current().as_deref(), Some(OLD));
     assert_eq!(s.layout().next().expect("next").as_deref(), Some(LATER));
@@ -376,83 +291,6 @@ fn a_later_order_for_another_version_does_not_forget_a_bad_version() {
     );
     assert_eq!(s.hk_steps().len(), ran);
     assert_eq!(hk_record(&s).expect("the record").target_version, LATER);
-}
-
-/// Catches a fallback that writes before it flips, or that does something the second time: with
-/// the record's write stopped, the previous binary is already back and the version already bad,
-/// and the start of the old binary settles the same failure; a second fallback changes nothing.
-/// A binary directory with no `previous`, or a `previous` that is no executable file, exits
-/// non-zero naming the cause and writes nothing.
-#[test]
-fn the_fallback_flips_before_it_writes_and_is_idempotent() {
-    let (s, _old) = swapped_the_old_way("su-fallback-order");
-    let layout = s.layout();
-    let stopped = RecordStore::new(&s.hk_state())
-        .with_crash_gate(Arc::new(|point| point == CrashPoint::BeforeWrite(1)));
-    let crashed = fallback::fallback_with(&layout, &stopped);
-    assert!(
-        matches!(
-            crashed,
-            Err(FallbackError::Settle(SelfUpdateError::Record(_)))
-        ),
-        "{crashed:?}"
-    );
-    assert!(
-        crashed
-            .expect_err("stopped")
-            .to_string()
-            .starts_with("the previous binary is back, but the update could not be recorded: "),
-    );
-    assert_eq!(s.current().as_deref(), Some(OLD), "flipped first");
-    assert_eq!(
-        hk_record(&s).expect("the record").progress.awaiting_restart,
-        waiting_the_old_way(NEW)
-    );
-    assert_eq!(
-        s.daemon_at(OLD).settle_self_update().expect("settled"),
-        Settled::FellBack
-    );
-    let (verdict, reason) = fell_back();
-    assert_eq!(
-        hk_record(&s).expect("the record").state,
-        State::Finished { verdict, reason }
-    );
-    let before = snapshot(&s.rig.state);
-    assert!(matches!(
-        fallback::fallback(&binary_dir(&s.rig.state)),
-        Ok(Settled::NotPending)
-    ));
-    assert_eq!(snapshot(&s.rig.state), before);
-
-    let s = SelfRig::new("su-fallback-none");
-    let dir = binary_dir(&s.rig.state);
-    let err = fallback::fallback(&dir).expect_err("no previous");
-    assert!(matches!(err, FallbackError::NoPrevious(_)), "{err:?}");
-    assert!(
-        err.to_string().contains(&dir.display().to_string()),
-        "{err}"
-    );
-    let before = snapshot(&s.rig.state);
-    assert_eq!(code(linux_verb(&dir)), code(ExitCode::from(EXIT_FAILED)));
-    assert_eq!(snapshot(&s.rig.state), before);
-    assert!(hk_record(&s).is_none());
-
-    let (s, _old) = swapped_the_old_way("su-fallback-odd");
-    let previous = s.layout().version_path(OLD);
-    fs::set_permissions(
-        previous,
-        <fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o644),
-    )
-    .expect("no execute bit");
-    let err = fallback::fallback(&binary_dir(&s.rig.state)).expect_err("not executable");
-    assert!(matches!(err, FallbackError::Flip(_)), "{err:?}");
-    assert!(
-        err.to_string()
-            .starts_with("the previous binary cannot be put back: "),
-        "{err}"
-    );
-    assert_eq!(s.current().as_deref(), Some(NEW));
-    assert!(!s.hk_state().join(BAD_VERSIONS_FILE).exists());
 }
 
 /// The design's named test. Catches a swap under a running step, or a step started in the
@@ -646,13 +484,4 @@ fn hostkeeper_steps_that_stop_are_resumed_by_the_resend() {
     assert_eq!(s.daemon().order(&s.order(NEW, 1)), awaiting(false));
     assert_eq!(s.current().as_deref(), Some(OLD));
     assert_eq!(s.layout().next().expect("next").as_deref(), Some(NEW));
-}
-
-/// Catches the verb the fallback unit runs, or the protocol verb, doing more than they say: the
-/// protocol verb's text is the constant and a newline, and the command line exits 0 for it.
-#[test]
-fn self_update_protocol_verb_prints_only_the_constant() {
-    assert_eq!(protocol_line(), "1\n");
-    let ran = cli::run(Cli::parse_from(["hostkeeper", "self-update-protocol"]));
-    assert_eq!(code(ran), code(ExitCode::SUCCESS));
 }

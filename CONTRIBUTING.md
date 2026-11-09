@@ -297,17 +297,23 @@ the real coordinator ordering hostkeeper, the loopback release channel, the pinn
 the test's trust root, which the released daemon reads from the host's fixed path as this build
 does. This build is the program `hostkeeper-named-daemon` (the shipped daemon, its hand-over
 acted on first, its version the name of the file it runs from, so it runs as versions newer than
-the release) and `hostkeeper-failing-daemon` (whose `daemon` exits 1). The pin is release R1,
-v0.1.163, the last release that updates itself the old way; the tests, each from the released daemon
-converged on its own version's package, with its fallback unit and drop-in (or job) armed:
+the release) and `hostkeeper-failing-daemon` (whose `daemon` exits 1). This build's packages carry the
+workload fixture as their hook (`bin/hook`), because a build's floor in a pull request is below the
+daemon's legacy floor and a daemon then runs the hook's command. The pin is release R2, v0.1.194,
+a release that updates itself by the hand-over and writes no fallback unit, drop-in or job.
+The tests, each from the released daemon converged on its own version's package:
 
 - `the_released_daemon_updates_to_this_build_and_this_build_settles_it_succeeded`: the released
-  daemon updates the old way, and this build removes the released daemon's fallback files at its
-  start;
-- `this_build_made_to_fail_its_start_is_fallen_back_from_to_the_released_binary`: by the released
-  binary's own fallback unit or job, the update `Failed`, `self_update_fallback`, reported to the
-  coordinator;
-- `this_build_updates_to_itself_under_a_newer_version_name`: by the hand-over.
+  daemon updates to this build by the hand-over, and this build's own start finishes the switch and
+  settles the update `Succeeded`, reported to the coordinator;
+- `this_build_made_to_fail_its_start_is_fallen_back_from_to_the_released_binary`: the released
+  binary execs the failing build three times, then settles the update `Failed`,
+  `self_update_fallback`, reported to the coordinator, with `current` unchanged and `next` removed;
+- `this_build_updates_to_itself_under_a_newer_version_name`: by the hand-over;
+- `the_released_binary_put_back_on_the_packages_this_build_staged_reports_them_and_updates_again`
+  and
+  `the_released_binary_started_on_versions_of_another_installer_runs_on_and_leaves_them_untouched`:
+  the released binary on the packages this build and other installers left.
 
 To move the pin, in the pull request that needs it: set `tag` and `version`, and each platform's
 `url` and `sha256` from the release's `SHA256SUMS`, in `previous-release.toml`, and the same URL

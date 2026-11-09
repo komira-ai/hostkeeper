@@ -11,7 +11,7 @@ description = "The tests that run as root against the real service manager of a 
 # The one place where the adapters behind the fakes of the pull-request set meet the real host:
 # the step launcher's transient units, the dead-man's stop by name, the observer's systemd and
 # /proc adapters, the Linux unit control's systemctl, and hostkeeper's update of itself under its
-# unit file, drop-in and fallback unit. The tests under tests/ that do so start with `#![cfg(feature = "privileged")]`:
+# unit file. The tests under tests/ that do so start with `#![cfg(feature = "privileged")]`:
 # the feature is off by default and nothing of the workspace turns it on, so CI's test shards
 # compile and run none of them; privileged.yml builds them as the runner's user and runs them
 # as root, after a merge to main, and pr-device.yml's copies of its jobs do the same on a pull
@@ -115,15 +115,14 @@ path = "tests/bin/hello_e2e.rs"
 # (`tests/self_update_across_releases.rs`): the daemon of `hostkeeper_daemon` on the host's real
 # ports (the release channel, the attestation check, the coordinator over mutual TLS), its version
 # the name of the file it runs from (`hostkeeper_privileged::across::program_version`), so that one
-# build staged under two names runs as two versions. Every other verb is forwarded to the daemon's
-# command line. A program of the tests, outside the measured set like every file under `tests/`.
+# build staged under two names runs as two versions. A program of the tests, outside the measured set like every file under `tests/`.
 [[bin]]
 name = "hostkeeper-named-daemon"
 path = "tests/bin/named_daemon.rs"
 
 # The `hostkeeper` binary of this build made to fail its start, in the cross-release rig: every
-# verb but `daemon` forwarded to the daemon's command line (so it answers the probe and runs the
-# no-op hook); `daemon` adds its start to the start log, as the daemon's does first, and exits 1.
+# verb but `daemon` is a usage error, as the daemon's command line has no other; `daemon` writes
+# one line to standard error and exits 1.
 [[bin]]
 name = "hostkeeper-failing-daemon"
 path = "tests/bin/failing_daemon.rs"

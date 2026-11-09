@@ -16,10 +16,8 @@ use support::{OWN, Rig};
 
 fn daemon_flags(args: &[&str]) -> Result<DaemonFlags, clap::Error> {
     let all = ["hostkeeper", "daemon"].iter().chain(args);
-    match Cli::try_parse_from(all)?.command {
-        Command::Daemon(flags) => Ok(flags),
-        _ => panic!("`hostkeeper daemon` parses as the daemon command"),
-    }
+    let Command::Daemon(flags) = Cli::try_parse_from(all)?.command;
+    Ok(flags)
 }
 
 /// Catches a ready file written half, or with what is not this process: the notice writes the

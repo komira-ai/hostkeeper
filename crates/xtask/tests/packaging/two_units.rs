@@ -3,7 +3,7 @@
 //! of (`overlay.rs` holds the copy to it byte for byte); it starts the installed binary. The
 //! package unit, `units/hostkeeper.service`, is what hostkeeper's own package carries, which the
 //! release workflow builds with `release package --unit`; its install links it in
-//! `/etc/systemd/system/` in place of the bootstrap unit, and it seeds, then starts `current`.
+//! `/etc/systemd/system/` in place of the bootstrap unit, and it starts `current`.
 //! Neither may stand in for the other: a package built from the bootstrap unit would start the
 //! installed binary after the first self-update rather than the one the update chose.
 

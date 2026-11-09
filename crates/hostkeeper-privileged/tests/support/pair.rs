@@ -178,6 +178,13 @@ pub fn rollout(more: &str) -> String {
     format!("[[service]]\nname = \"{BEACON}\"\nroles = [\"{ROLE}\"]\n{more}")
 }
 
+/// Whether `host`, as `hosts list` gives it, was heard since the coordinator started: it has a
+/// heartbeat time. A host listed from its enrollment alone has none (proto3 JSON leaves the 0
+/// out), and may still carry the daemon its enrollment kept in `heartbeat.agent`.
+fn heard_since_start(host: &Value) -> bool {
+    host["lastHeartbeatUnix"].is_string()
+}
+
 /// The coordinator: the files its flags name, under `<scratch>/coordinator`, and the running
 /// program. It keeps its ports across a restart, so that the daemon, which dials one address,
 /// finds it again.
@@ -451,7 +458,8 @@ impl Coordinator {
 
     /// The host `node_id` as `hosts list` gives it, or `None`: the coordinator lists the hosts it
     /// has heard from since it started, each with its role, its enrollment, its last heartbeat and
-    /// how each service sees it.
+    /// how each service sees it, and every enrolled host not denied that it has not heard since,
+    /// as its enrollment kept it (not live, no heartbeat time).
     pub fn host(&self, node_id: &str) -> Result<Option<Value>, String> {
         let list = self.api().list_hosts().map_err(|e| e.to_string())?;
         Ok(list["hosts"]
@@ -459,15 +467,38 @@ impl Coordinator {
             .and_then(|hosts| hosts.iter().find(|h| h["nodeId"] == node_id).cloned()))
     }
 
-    /// Waits until `hosts list` lists `node_id`: the coordinator has heard the host's heartbeat
-    /// since it started. Gives the host as listed.
+    /// Waits until `hosts list` lists `node_id` with a heartbeat time: the coordinator has heard
+    /// the host's heartbeat since it started. Gives the host as listed. A host listed from its
+    /// enrollment alone (right after its approval, or after the coordinator's restart) is waited
+    /// past.
     pub fn wait_heard(&mut self, node_id: &str, daemon: &mut Daemon) -> Value {
         poll(&format!("a heartbeat of {node_id}"), || {
             self.assert_running();
             daemon.assert_running();
-            self.host(node_id)?
-                .ok_or_else(|| format!("hosts list lists no {node_id}"))
+            let host = self
+                .host(node_id)?
+                .ok_or_else(|| format!("hosts list lists no {node_id}"))?;
+            if heard_since_start(&host) {
+                Ok(host)
+            } else {
+                Err(format!("hosts list has not heard {node_id}: {host}"))
+            }
         })
+    }
+
+    /// `hosts list` lists `node_id` as enrolled and not heard since the coordinator started: not
+    /// live and with no heartbeat time. Gives the host as listed.
+    pub fn assert_unheard(&self, node_id: &str) -> Value {
+        let host = self
+            .host(node_id)
+            .unwrap_or_else(|e| panic!("{e}"))
+            .unwrap_or_else(|| panic!("hosts list lists no {node_id}, an enrolled host"));
+        assert!(
+            !heard_since_start(&host),
+            "not heard since the start: {host}"
+        );
+        assert_eq!(host["live"], Value::Null, "not live: {host}");
+        host
     }
 
     /// Approves the one pending request as host `node_id` of [`ROLE`], once the daemon's request
@@ -503,7 +534,6 @@ impl Coordinator {
 /// the running program.
 pub struct Daemon {
     dir: PathBuf,
-    socket: PathBuf,
     run: Option<Running>,
 }
 
@@ -523,15 +553,7 @@ impl Daemon {
         // The packages directory is the host's (made by the package that installs the daemon);
         // the daemon makes its state directory.
         fs::create_dir_all(PACKAGES_DIR).expect("the packages directory");
-        // The `--admin-socket` path: the daemon of this checkout ignores the flag, an older
-        // release binds it, and a socket's path is at most 107 bytes, so it is right under the
-        // scratch directory.
-        let socket = scratch.join("run/a.sock");
-        let mut daemon = Daemon {
-            dir,
-            socket,
-            run: None,
-        };
+        let mut daemon = Daemon { dir, run: None };
         daemon.launch();
         daemon
     }
@@ -546,8 +568,6 @@ impl Daemon {
             &path("state"),
             "--packages-dir",
             PACKAGES_DIR,
-            "--admin-socket",
-            &self.socket.display().to_string(),
             "--heartbeat-secs",
             "1",
         ]

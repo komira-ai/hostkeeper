@@ -233,8 +233,8 @@ fn check_agreement(unit_text: &str, tmpfiles_text: &str) -> Result<(), String> {
         flag(&words, "--state-dir")?.to_owned(),
         flag(&words, "--packages-dir")?.to_owned(),
         parent(flag(&words, "--config")?),
-        // The daemon's run directory, which it makes 0700 at each start, and where a daemon
-        // before it binds its admin socket by default; the unit passes no path for it.
+        // The daemon's run directory, which it makes 0700 at each start; the unit passes no path
+        // for it.
         Platform::linux()
             .run_dir
             .join(RUN_SUBDIR)
@@ -250,8 +250,7 @@ fn check_agreement(unit_text: &str, tmpfiles_text: &str) -> Result<(), String> {
 }
 
 /// Catches the unit and the tmpfiles rules drifting apart: a directory the daemon is told to
-/// use, or its run directory (where an older daemon binds its admin socket), that no tmpfiles
-/// line makes, and a
+/// use, or its run directory, that no tmpfiles line makes, and a
 /// unit that makes `/run/hostkeeper` itself with a `RuntimeDirectory=`. Each of the two units is
 /// held to it.
 #[test]

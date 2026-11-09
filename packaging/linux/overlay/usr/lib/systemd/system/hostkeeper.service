@@ -15,9 +15,8 @@
 # as the daemon of this unit (two-programs.md section 2.1, `hostkeeper_daemon::packaged`). A
 # self-update stages the new binary in the binary directory, links `next` at it and exits 0, and
 # the restart policy, always, starts this binary again, which execs `current`, the old binary,
-# which execs `next` while its start count lasts (the hand-over, section 4.3). The daemon passes
-# no --admin-socket (every daemon defaults to /run/hostkeeper/admin.sock) and the unit has no
-# RuntimeDirectory=; the tmpfiles rules make /run/hostkeeper.
+# which execs `next` while its start count lasts (the hand-over, section 4.3). The daemon binds
+# no socket and the unit has no RuntimeDirectory=; the tmpfiles rules make /run/hostkeeper.
 [Unit]
 Description=hostkeeper, the update daemon of this host
 Documentation=https://github.com/komira-ai/hostkeeper/blob/main/packaging/linux/README.md
@@ -33,8 +32,7 @@ Conflicts=kbf-updater-agent.service kbf-host-local.service kbf-host-local-fronte
 # the stopping updater has exited before the starting one runs.
 After=kbf-updater-agent.service kbf-host-local.service kbf-host-local-frontend.service
 # No start limit: a daemon that cannot start is retried every RestartSec= rather than left
-# failed. The releases before the hand-over wrote a drop-in with a start limit and an OnFailure=
-# fallback unit beside this unit; the daemon removes them at its start, so none is in effect.
+# failed.
 StartLimitIntervalSec=0
 
 [Service]

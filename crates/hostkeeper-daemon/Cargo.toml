@@ -63,7 +63,7 @@ hostkeeper-steps = { path = "../hostkeeper-steps" }
 hostkeeper-unpack = { path = "../hostkeeper-unpack" }
 # `O_NOFOLLOW` for the lock file.
 libc.workspace = true
-# `mac-config` reads the managed preferences of the MDM, a property list, binary or XML
+# The Mac config written at start reads the managed preferences of the MDM, a property list, binary or XML
 # (`mac_config`).
 plist.workspace = true
 # `lgetxattr`: the quarantine attribute of a staged entry on a Mac, read without following a

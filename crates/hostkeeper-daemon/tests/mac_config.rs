@@ -1,29 +1,25 @@
-//! The daemon config of a Mac, written from the managed preferences the MDM installed: by the
+//! The daemon config of a Mac, written from the managed preferences the MDM installed by the
 //! start of a Mac's daemon when its config is not there, before it reads it
-//! ([`hostkeeper_daemon::mac_config::at_start`], docs/design/two-programs.md, section 2.1), and by
-//! the verb `hostkeeper mac-config` the pkg's `postinstall` still runs. Every path is in a scratch
-//! directory, and the trusted owner is the uid the tests run as (the verb and the host's start
-//! trust root).
+//! ([`hostkeeper_daemon::mac_config::at_start`], docs/design/two-programs.md, section 2.1). Every
+//! path is in a scratch directory, and the trusted owner is the uid the tests run as (the host's
+//! start trusts root).
 
 use std::cell::Cell;
-use std::ffi::OsString;
 use std::fs;
 use std::num::NonZeroU64;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
 
-use clap::Parser;
 use hostkeeper_config::daemon::{Bounds, DaemonConfig};
 use hostkeeper_config::manifest::HostkeeperVersion;
-use hostkeeper_daemon::cli::{self, Cli, DEFAULT_CONFIG, EXIT_CONFIG, EXIT_FAILED, HostFiles};
+use hostkeeper_daemon::cli::{self, DEFAULT_CONFIG, EXIT_CONFIG, HostFiles};
 use hostkeeper_daemon::mac_config::{
-    Configured, HEADER, MacConfigError, finish, kept_line, mac_config, mac_config_with,
+    Configured, HEADER, MacConfigError, mac_config, mac_config_with,
 };
 use hostkeeper_daemon::notify::NoNotifier;
 use hostkeeper_daemon::start::{Settings, StartError};
-use hostkeeper_launchd::Platform;
 use hostkeeper_launchd::postinstall::{DAEMON_CONFIG, MANAGED_CONFIG};
+use hostkeeper_launchd::{Platform, PlatformKind};
 use hostkeeper_testkit::Scratch;
 use plist::{Dictionary, Value};
 
@@ -228,21 +224,19 @@ fn with(mut top: Dictionary, path: &[&str], value: Value) -> Dictionary {
     top
 }
 
-fn code(result: Result<Configured, MacConfigError>) -> String {
-    format!("{:?}", finish(result, Path::new("/c")))
-}
-
-/// Catches a default config path that is not the one the pkg's `postinstall` passes and the
-/// daemon reads, and a managed default that is not the pkg's.
+/// Catches a default config path that is not the one the pkg installs and the daemon reads, and a
+/// managed default that is not the pkg's: a Mac's start reads the managed preferences at
+/// `MANAGED_CONFIG` and a Linux host has none.
 #[test]
 fn the_defaults_are_the_paths_the_pkg_names() {
     assert_eq!(DEFAULT_CONFIG, DAEMON_CONFIG);
-    let cli = Cli::try_parse_from(["hostkeeper", "mac-config"]).expect("parse");
-    let cli::Command::MacConfig(flags) = cli.command else {
-        panic!("not mac-config");
-    };
-    assert_eq!(flags.managed, Path::new(MANAGED_CONFIG));
-    assert_eq!(flags.config, Path::new(DAEMON_CONFIG));
+    let mac = HostFiles::for_platform(PlatformKind::Macos, |_| false);
+    assert_eq!(
+        mac.managed_config.as_deref(),
+        Some(Path::new(MANAGED_CONFIG))
+    );
+    let linux = HostFiles::for_platform(PlatformKind::Linux, |_| false);
+    assert_eq!(linux.managed_config, None);
 }
 
 /// Catches a rendering that loses a key, a bound or a signer, or that the daemon's own loader
@@ -405,12 +399,11 @@ fn the_start_writes_the_config_from_the_managed_preferences_and_reads_it() {
     assert_eq!(mac.names(), ["hostkeeper.toml"]);
 }
 
-/// Catches a start, or the verb, that reads the managed file, or changes the config, when a
-/// config is there: the file's bytes stay, the managed file is not even required, the start reads
-/// the config that is there (here one its loader refuses, naming it), and the verb's line names
-/// the file.
+/// Catches a start that reads the managed file, or changes the config, when a config is there:
+/// the file's bytes stay, the managed file is not even required, and the start reads the config
+/// that is there (here one its loader refuses, naming it).
 #[test]
-fn a_config_already_there_is_kept_by_the_start_and_the_verb() {
+fn a_config_already_there_is_kept_by_the_start() {
     let mac = Mac::new("mac-config-keeps");
     fs::create_dir(mac.parent()).expect("dir");
     fs::write(&mac.config, b"the operator's config").expect("config");
@@ -436,18 +429,11 @@ fn a_config_already_there_is_kept_by_the_start_and_the_verb() {
         "{error}"
     );
     assert_eq!(mac.run().expect("kept"), Configured::Kept);
-    assert_eq!(
-        kept_line(&mac.config),
-        format!(
-            "hostkeeper mac-config: {} exists and is kept; the managed config is not read",
-            mac.config.display()
-        )
-    );
 }
 
 /// Catches a link or a directory at the config path being kept as a config, which would load a
 /// daemon whose loader refuses it (it opens the config without following a link): each is refused
-/// by the start (exit 3) and by the verb, named, left as it is, and the managed file is not used
+/// by the start (exit 3) and by `mac_config`, named, left as it is, and the managed file is not used
 /// to replace it.
 #[test]
 fn a_link_or_a_directory_at_the_config_path_is_refused_and_left() {
@@ -496,11 +482,11 @@ fn a_link_or_a_directory_at_the_config_path_is_refused_and_left() {
     assert_eq!(mac.names(), ["hostkeeper.toml"]);
 }
 
-/// Catches a start, or a verb, that goes on with no config and no managed file, which would run
-/// a daemon that cannot start: the start stops with the config's exit status (3) naming both
-/// files, before it makes anything, and the verb fails the same way.
+/// Catches a start that goes on with no config and no managed file, which would run a daemon that
+/// cannot start: the start stops with the config's exit status (3) naming both files, before it
+/// makes anything, and `mac_config` fails the same way.
 #[test]
-fn with_no_managed_file_and_no_config_the_start_and_the_verb_fail() {
+fn with_no_managed_file_and_no_config_the_start_fails() {
     let mac = Mac::new("mac-config-neither");
     let neither = format!(
         "neither a managed config ({}) nor a config ({}) is there",
@@ -718,7 +704,7 @@ fn a_refusal_leaves_no_temporary_file() {
     assert_eq!(mac.names(), Vec::<String>::new());
 }
 
-/// Catches a config that appears between the check and the link being replaced, the verb failing
+/// Catches a config that appears between the check and the link being replaced, `mac_config` failing
 /// for it, or its temporary file staying: the file that appeared is kept untouched.
 #[test]
 fn a_config_that_appears_before_the_link_is_kept() {
@@ -802,49 +788,4 @@ fn a_link_that_fails_is_an_error_and_leaves_no_temporary_file() {
         "{result:?}"
     );
     assert_eq!(mac.names(), Vec::<String>::new());
-}
-
-/// Catches an exit status other than 0 for a config written or kept, or other than the failure
-/// status for none.
-#[test]
-fn the_verb_exits_0_when_a_config_exists_and_fails_otherwise() {
-    assert_eq!(
-        code(Ok(Configured::Written)),
-        format!("{:?}", ExitCode::SUCCESS)
-    );
-    assert_eq!(
-        code(Ok(Configured::Kept)),
-        format!("{:?}", ExitCode::SUCCESS)
-    );
-    let neither = MacConfigError::Neither {
-        managed: "/m".into(),
-        config: "/c".into(),
-    };
-    assert_eq!(
-        code(Err(neither)),
-        format!("{:?}", ExitCode::from(EXIT_FAILED))
-    );
-}
-
-/// Catches the flags not reaching the verb: `hostkeeper mac-config --config <file>` with a config
-/// there exits 0 and writes nothing.
-#[test]
-fn the_flags_reach_the_verb() {
-    let mac = Mac::new("mac-config-cli");
-    fs::create_dir(mac.parent()).expect("dir");
-    fs::write(&mac.config, b"mine").expect("config");
-    let args: Vec<OsString> = vec![
-        "hostkeeper".into(),
-        "mac-config".into(),
-        "--managed".into(),
-        mac.managed.clone().into(),
-        "--config".into(),
-        mac.config.clone().into(),
-    ];
-    let cli = Cli::try_parse_from(args).expect("parse");
-    assert_eq!(
-        format!("{:?}", cli::run(cli)),
-        format!("{:?}", ExitCode::SUCCESS)
-    );
-    assert_eq!(fs::read(&mac.config).expect("config"), b"mine");
 }

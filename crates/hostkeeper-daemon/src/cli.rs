@@ -1,22 +1,13 @@
-//! The command line of the `hostkeeper` binary: `hostkeeper daemon` and its flags,
-//! and the three plumbing verbs of hostkeeper's own update (design section 6.6), which no
-//! operator runs: `hostkeeper self-update-fallback --dir <dir>`, what the generated fallback
-//! unit runs, and on a Mac the fallback timer job ([`crate::fallback`]);
-//! `hostkeeper self-update-protocol`, which prints this binary's self-update protocol and does
-//! nothing else ([`crate::selfupdate::protocol_line`]); and `hostkeeper self-update-seed
-//! --state-dir <dir> --binary <file>`, which the package unit runs before each start to give the
-//! binary directory its first binary ([`crate::seed`]); and `hostkeeper mac-config [--managed
-//! <file>] [--config <file>]`, which writes the daemon config from the managed preferences the MDM
-//! installed ([`crate::mac_config`]). Configuration comes in as flags only, never from the
-//! environment (AGENTS.md S2); every default is a constant here.
+//! The command line of the `hostkeeper` binary: `hostkeeper daemon` and its flags, the one verb.
+//! Configuration comes in as flags only, never from the environment (AGENTS.md S2); every
+//! default is a constant here.
 //!
 //! `hostkeeper daemon` started from the packaged binary (`/usr/bin/hostkeeper`,
 //! `/usr/local/bin/hostkeeper`) gives the binary directory its first binary when `current` starts
-//! none, as `self-update-seed` does, and execs `current` with its own arguments
-//! ([`crate::packaged`], [`run_from`]); a Mac's daemon writes its config from the managed
-//! preferences when the config is not there, as `mac-config` does, before it reads it
-//! ([`start_with`], [`HostFiles::managed_config`]). The verbs stay for the units and the
-//! releases that call them.
+//! none ([`crate::seed::seed`]) and execs `current` with its own arguments ([`crate::packaged`],
+//! [`run_from`]); a Mac's daemon writes its config from the managed preferences when the config
+//! is not there ([`crate::mac_config::at_start`]), before it reads it ([`start_with`],
+//! [`HostFiles::managed_config`]).
 //!
 //! The two values read from the environment are platform-set markers of systemd, and only
 //! `--notify-systemd` makes the daemon use them ([`SystemdVars`]): the address of the notify
@@ -24,15 +15,14 @@
 //!
 //! Exit status of `hostkeeper daemon`: [`EXIT_FAILED`] when the daemon could not start or serve,
 //! `2` for a usage error (as clap reports it), [`EXIT_CONFIG`] when the daemon config did not
-//! load, [`EXIT_LOCKED`] when another daemon holds the state directory. A verb this binary does
-//! not have is a usage error, `2`, as clap reports it: `ctl` (the coordinator's command line is
-//! `hkctl` now, docs/cli.md), `ci` (CI runs `hkctl releases set-desired` and `hkctl releases
-//! wait-converged`, docs/deploy/ci-client.md) and `admin` (the daemon serves no admin socket; a
-//! host's status, abort and clear-record go through the coordinator, docs/admin.md).
-//!
-//! `--admin-socket` is accepted and ignored: the package unit of every release before stage 2
-//! of docs/design/two-programs.md passes it, and a daemon started by such a unit must start.
-//! The daemon binds no socket at that path or any other.
+//! load, [`EXIT_LOCKED`] when another daemon holds the state directory. A verb or a flag this
+//! binary does not have is a usage error, `2`, as clap reports it: `ctl` (the coordinator's
+//! command line is `hkctl` now, docs/cli.md), `ci` (CI runs `hkctl releases set-desired` and
+//! `hkctl releases wait-converged`, docs/deploy/ci-client.md), `admin` and `--admin-socket` (the
+//! daemon serves no admin socket; a host's status, abort and clear-record go through the
+//! coordinator, docs/admin.md), and the verbs of the update before the hand-over
+//! (`self-update-protocol`, `self-update-fallback`, `self-update-seed`, `mac-config`,
+//! `update-hook` and its step words).
 //!
 //! `--version` prints `hostkeeper X.Y.Z+<12 hex digits of the commit>` for a release build and
 //! `hostkeeper X.Y.Z` for a developer build ([`crate::stamp`]).
@@ -51,7 +41,6 @@ use hostkeeper_enroll::{
     Enroller, GrpcEnroll, LinuxClaims, ManagedFile, OsEntropy, PkiDir, RenewalState,
     Settings as EnrollSettings, SystemWallClock,
 };
-use hostkeeper_hook::Step;
 use hostkeeper_launchd::{Platform, PlatformKind};
 use hostkeeper_link::{ClockSleeper, LoopFlags, PkiCertSource, StopFlag, ThreadDispatch};
 use hostkeeper_observe::ProcessRunner;
@@ -150,79 +139,6 @@ pub struct Cli {
 pub enum Command {
     /// Run the daemon: the one root process of the host.
     Daemon(DaemonFlags),
-    /// Put the previous hostkeeper binary back after the new one failed to start, and record the
-    /// update failed and its version bad (run by the generated fallback unit).
-    SelfUpdateFallback(FallbackFlags),
-    /// Print this binary's self-update protocol and nothing else (run by the daemon before it
-    /// stages a new binary).
-    SelfUpdateProtocol,
-    /// Give the binary directory of hostkeeper's own update its first binary when its `current`
-    /// starts none (run by the daemon's unit before each start, and by the macOS pkg at install).
-    SelfUpdateSeed(SeedFlags),
-    /// Write the daemon config from the managed preferences of the MDM, unless a config is there
-    /// (run by the macOS pkg at install).
-    MacConfig(MacConfigFlags),
-    /// The hook of hostkeeper's own package: every step does nothing and exits 0, since
-    /// hostkeeper replaces itself by the daemon's self-update (run by a daemon that installs or
-    /// updates the service `hostkeeper`).
-    #[command(disable_help_flag = true)]
-    UpdateHook(HookArgs),
-    /// The hook's steps with the step first, as a daemon's step launcher runs the hook: it passes
-    /// the step's own arguments after the program, without the manifest's `update-hook`.
-    #[command(hide = true, disable_help_flag = true)]
-    Prepare(HookArgs),
-    /// `update-hook cutover`, as a step launcher runs it.
-    #[command(hide = true, disable_help_flag = true)]
-    Cutover(HookArgs),
-    /// `update-hook verify`, as a step launcher runs it.
-    #[command(hide = true, disable_help_flag = true)]
-    Verify(HookArgs),
-    /// `update-hook rollback`, as a step launcher runs it.
-    #[command(hide = true, disable_help_flag = true)]
-    Rollback(HookArgs),
-    /// `update-hook cleanup`, as a step launcher runs it.
-    #[command(hide = true, disable_help_flag = true)]
-    Cleanup(HookArgs),
-}
-
-/// The arguments of the hook of hostkeeper's own package (`hostkeeper_daemon::update_hook`).
-#[derive(Clone, Debug, PartialEq, Eq, Args)]
-pub struct HookArgs {
-    /// The step and its arguments, as the hook contract gives them; after a step's own verb, the
-    /// arguments that follow the step.
-    #[arg(trailing_var_arg = true, allow_hyphen_values = true, num_args = 0.., value_name = "ARGS")]
-    pub args: Vec<OsString>,
-}
-
-/// The flags of `hostkeeper self-update-seed`.
-#[derive(Clone, Debug, PartialEq, Eq, Args)]
-pub struct SeedFlags {
-    /// The daemon's state directory: the binary directory is `hostkeeper/bin` in it.
-    #[arg(long)]
-    pub state_dir: PathBuf,
-    /// The binary put in as this binary's version: the one the package installed.
-    #[arg(long)]
-    pub binary: PathBuf,
-}
-
-/// The flags of `hostkeeper mac-config`.
-#[derive(Clone, Debug, PartialEq, Eq, Args)]
-pub struct MacConfigFlags {
-    /// The managed preferences file, a property list (binary or XML) root owns.
-    #[arg(long, default_value = hostkeeper_launchd::postinstall::MANAGED_CONFIG)]
-    pub managed: PathBuf,
-    /// The daemon config to write; one that is there is kept.
-    #[arg(long, default_value = DEFAULT_CONFIG)]
-    pub config: PathBuf,
-}
-
-/// The flags of `hostkeeper self-update-fallback`.
-#[derive(Clone, Debug, PartialEq, Eq, Args)]
-pub struct FallbackFlags {
-    /// The binary directory: `versions/`, `current` and `previous`, in the state directory of
-    /// the service `hostkeeper`.
-    #[arg(long)]
-    pub dir: PathBuf,
 }
 
 /// The flags of `hostkeeper daemon`.
@@ -237,10 +153,6 @@ pub struct DaemonFlags {
     /// The packages, a directory per service with its versions and `current` and `previous`.
     #[arg(long, default_value = DEFAULT_PACKAGES_DIR)]
     pub packages_dir: PathBuf,
-    /// Accepted and ignored: the daemon binds no admin socket. The package unit of a release
-    /// before stage 2 of docs/design/two-programs.md passes it.
-    #[arg(long, hide = true, value_name = "PATH")]
-    pub admin_socket: Option<PathBuf>,
     /// Tell systemd the daemon is ready (`READY=1` on the notify socket systemd sets for a unit
     /// of `Type=notify`) once its boot work is over.
     #[arg(long, conflicts_with = "ready_file")]
@@ -261,7 +173,7 @@ pub struct DaemonFlags {
 
 impl DaemonFlags {
     /// The settings of these flags; the daemon config is trusted when root owns it, and the run
-    /// directory is the host platform's. `--admin-socket` is in none of them.
+    /// directory is the host platform's.
     pub fn settings(&self) -> Settings {
         Settings {
             config: self.config.clone(),
@@ -311,16 +223,15 @@ pub fn run_from(
     exec: crate::packaged::Exec<'_>,
 ) -> ExitCode {
     let cli = Cli::parse_from(&args);
-    if let Command::Daemon(flags) = &cli.command
-        && let Some(error) = crate::packaged::start(
-            exe,
-            packaged,
-            &flags.state_dir,
-            env!("CARGO_PKG_VERSION"),
-            args.get(1..).unwrap_or_default(),
-            exec,
-        )
-    {
+    let Command::Daemon(flags) = &cli.command;
+    if let Some(error) = crate::packaged::start(
+        exe,
+        packaged,
+        &flags.state_dir,
+        env!("CARGO_PKG_VERSION"),
+        args.get(1..).unwrap_or_default(),
+        exec,
+    ) {
         eprintln!("hostkeeper daemon: {error}");
         return ExitCode::from(error.exit_code());
     }
@@ -348,26 +259,7 @@ pub fn run(cli: Cli) -> ExitCode {
 /// Runs a parsed command line to its exit status; `systemd` is what systemd set for the process,
 /// used with `--notify-systemd` only.
 pub fn run_with(cli: Cli, systemd: SystemdVars) -> ExitCode {
-    let flags = match cli.command {
-        Command::Daemon(flags) => flags,
-        Command::SelfUpdateFallback(flags) => return crate::fallback::main(&flags.dir),
-        Command::SelfUpdateSeed(flags) => {
-            return crate::seed::main(&flags.state_dir, &flags.binary);
-        }
-        Command::MacConfig(flags) => {
-            return crate::mac_config::main(&flags.managed, &flags.config);
-        }
-        Command::SelfUpdateProtocol => {
-            print!("{}", crate::selfupdate::protocol_line());
-            return ExitCode::SUCCESS;
-        }
-        Command::UpdateHook(hook) => return crate::update_hook::main(hook.args),
-        Command::Prepare(hook) => return crate::update_hook::main_at(Step::Prepare, hook.args),
-        Command::Cutover(hook) => return crate::update_hook::main_at(Step::Cutover, hook.args),
-        Command::Verify(hook) => return crate::update_hook::main_at(Step::Verify, hook.args),
-        Command::Rollback(hook) => return crate::update_hook::main_at(Step::Rollback, hook.args),
-        Command::Cleanup(hook) => return crate::update_hook::main_at(Step::Cleanup, hook.args),
-    };
+    let Command::Daemon(flags) = cli.command;
     let period = flags.link.heartbeat_secs;
     let watchdog = watchdog(&flags, &systemd);
     let served = notifier(&flags, systemd.notify_socket)
@@ -431,7 +323,6 @@ fn daemon(
     let own_version = HostkeeperVersion::parse(env!("CARGO_PKG_VERSION"))?;
     let exec = ProcessExec::new(std::env::args_os().skip(1).collect());
     crate::handover::at_daemon_start(&settings.state_dir, &own_version.to_string(), &exec);
-    note_start(settings, Platform::host().kind, own_version, &host_clock());
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build();
@@ -443,21 +334,6 @@ fn daemon(
         notifier,
         watchdog,
     ))
-}
-
-/// Adds this start to the start log the fallback on macOS judges the burst by
-/// ([`crate::fallback::record_start`]), before anything that can fail; a log that cannot be
-/// written is said on standard error and does not stop the start.
-pub fn note_start(
-    settings: &Settings,
-    kind: PlatformKind,
-    own_version: HostkeeperVersion,
-    clock: &dyn Clock,
-) {
-    let own = own_version.to_string();
-    if let Err(error) = crate::fallback::record_start(&settings.state_dir, kind, &own, clock) {
-        eprintln!("hostkeeper daemon: this start is not in the start log: {error}");
-    }
 }
 
 async fn start_and_serve(

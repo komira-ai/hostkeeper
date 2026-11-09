@@ -38,9 +38,8 @@
 //! 8. the hook's steps through the step runner, which holds the success back
 //!    ([`hostkeeper_steps::StepRunner::with_held_success`]). For a release whose floor is above
 //!    [`LEGACY_FLOOR`] the steps are built in ([`builtin_steps`]): each succeeds at once and no
-//!    command of the release runs, and the record is the one the hook's no-op command
-//!    (`bin/hostkeeper update-hook`, [`crate::update_hook`]) gives. Below it the command runs,
-//!    as every release before stage 3 answers it;
+//!    command of the release runs, and the record is the one a hook that does nothing gives.
+//!    Below it the command runs;
 //! 9. the follow-on ([`hostkeeper_steps::follow_on`]), the hand-over (docs/design/two-programs.md,
 //!    4.3): the new binary staged in the binary directory ([`binary_dir`]), the link `next`
 //!    pointed at it, the record written as waiting for the restart into it with a start count of
@@ -53,11 +52,6 @@
 //!    released only after the hand-over, so a step of another service that waits for it starts
 //!    after it.
 //!
-//! Before any of this, while the fallback unit, the drop-in and the fallback job of the releases
-//! before the hand-over are not removed ([`crate::selfunits::remove`], which the daemon runs at
-//! each start), a self-update is answered `busy` ([`Ctx::hold_self_updates`]): the fallback
-//! files and a hand-over are never armed at once.
-//!
 //! At start, after the lock of the state directory and before the boot pass,
 //! [`Daemon::settle_self_update`] settles an update that waits for the restart
 //! ([`hostkeeper_steps::selfupdate::settle`]): the new binary confirms it `Succeeded` and clears
@@ -65,8 +59,7 @@
 //! `daemon_too_old`); any other binary records it `Failed` and its version bad. The binary that
 //! ran the order exited before its `Deferred` reached a heartbeat, and the coordinator ends the
 //! order once the host runs its target, so it never orders it again for a resend to be
-//! answered: the wait keeps the order's id, the settlement (by this start, or, for a wait of a
-//! release before the hand-over, by the fallback verb before the previous binary starts) keeps
+//! answered: the wait keeps the order's id, the settlement (by this start) keeps
 //! it in the finished record, and every start of a daemon lists the record's verdict under that
 //! id and the record's try for the heartbeat to send until the coordinator acknowledges it
 //! (`crate::link_adapters::recorded`). A wait written by a daemon from before the id was kept
@@ -75,9 +68,7 @@
 //! "Can fall back from" means that the binary that runs reads every file the new one writes. The
 //! floor carries that rule: a release that writes a new format sets [`OLDEST_READER`] to the
 //! release that first read it, and the release builder writes that as the floor of hostkeeper's
-//! package. [`SELF_UPDATE_PROTOCOL`] stays 1 and the verb `self-update-protocol` still prints
-//! it, because every daemon before stage 2 probes the releases it takes and accepts only 1 or 2;
-//! no daemon of this release probes anything.
+//! package.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -105,13 +96,6 @@ use crate::verb::{Hooked, HookedVerb};
 use crate::verbs::force::SELF_SERVICE;
 use crate::verbs::update;
 
-/// The self-update protocol of this binary: what the verb `self-update-protocol` prints, frozen
-/// at 1. It is apart from the step runner's `UPDATER_PROTOCOL`, which an order's
-/// `min_updater_protocol` is compared with.
-pub const SELF_UPDATE_PROTOCOL: u32 = 1;
-/// The verb that prints [`SELF_UPDATE_PROTOCOL`]: answered for the daemons before stage 2, which
-/// ask it of every release they take.
-pub const PROTOCOL_VERB: &str = "self-update-protocol";
 /// The hostkeeper binary in a release of the service `hostkeeper`.
 pub const RELEASE_BINARY: &str = "bin/hostkeeper";
 /// The binary directory's name in the state directory of the service `hostkeeper`.
@@ -166,11 +150,6 @@ pub fn judge(running: HostkeeperVersion, version: &str) -> Judgement {
 /// section 4.4).
 pub fn builtin_steps(service: &ServiceName, floor: HostkeeperVersion) -> bool {
     (service.as_str() == SELF_SERVICE) & (floor > LEGACY_FLOOR)
-}
-
-/// What the verb `self-update-protocol` prints: [`SELF_UPDATE_PROTOCOL`] and a newline.
-pub fn protocol_line() -> String {
-    format!("{SELF_UPDATE_PROTOCOL}\n")
 }
 
 /// The binary directory of hostkeeper's own update under the state directory `state_dir`:
@@ -286,7 +265,6 @@ fn steps(
     if let Some(answer) = update::answer(verb, order, last.as_deref())? {
         return Ok(answer);
     }
-    units_removed(ctx)?;
     others_idle(ctx, service)?;
     let prepared = update::prepare(ctx, verb, order, last.as_deref())?;
     files::make_private(&ctx.service_dir(service))
@@ -357,24 +335,6 @@ fn waiting_for(awaiting: &AwaitingRestart, version: &str) -> Result<Reply, Reply
     }
 }
 
-/// `Ok` unless the start could not remove the fallback files of the releases before the
-/// hand-over ([`Ctx::hold_self_updates`]): `busy` then, so that a fallback unit or job and a
-/// hand-over are never armed at once.
-fn units_removed(ctx: &Ctx) -> Result<(), Reply> {
-    match ctx.self_updates_held() {
-        false => Ok(()),
-        true => Err(Reply::refused(
-            Refusal::Busy,
-            format!(
-                "{SELF_SERVICE} updates itself only once the fallback files of the releases \
-                 before its hand-over are removed, which the start could not do: see the alert \
-                 {}",
-                crate::selfunits::ALERT_SELF_UNITS
-            ),
-        )),
-    }
-}
-
 /// `Ok` when no service but `own` has an unfinished update in its step record; `busy` naming the
 /// first that has, or whose record cannot be read, or when the records cannot be listed.
 fn others_idle(ctx: &Ctx, own: &ServiceName) -> Result<(), Reply> {
@@ -390,8 +350,8 @@ fn others_idle(ctx: &Ctx, own: &ServiceName) -> Result<(), Reply> {
 
 /// The first service of the state directory `state` but `own` whose step record, as `load`
 /// reads it, holds an unfinished update (or cannot be read), in the words of the refusal; `None`
-/// when there is none. `Err` when the records cannot be listed. The one rule of both the
-/// self-update order ([`run`]) and the fallback verb on macOS (`crate::fallback`).
+/// when there is none. `Err` when the records cannot be listed. The rule of the
+/// self-update order ([`run`]).
 pub(crate) fn unfinished_other(
     state: &Path,
     own: &str,

@@ -4,7 +4,8 @@
 //!
 //! - the config profile, `<identifier>.config`, the same for every Mac: the preference domain
 //!   `dev.hostkeeper.config`, whose keys are those of `hostkeeper.toml` (the daemon's config,
-//!   design 4.1). The postinstall's `mac-config` writes the file from it. It holds no secret.
+//!   design 4.1). The daemon's start (`hostkeeper_daemon::mac_config::at_start`) writes the file
+//!   from it. It holds no secret.
 //! - the nonce profile, `<identifier>.nonce`, one per device: the domain
 //!   `dev.hostkeeper.enrollment`, with `nonce` (the 32 bytes, as data) and `request_id` (the hex
 //!   key hash of the pending request it is bound to). A profile with the same identifier
@@ -109,7 +110,7 @@ impl DaemonProfile {
     /// The config in the TOML `text`, checked by the daemon's own loader
     /// ([`DaemonConfig::parse`]) and rendered as a dictionary: a table is a dictionary, and a
     /// string, an integer, a boolean and an array are their property-list forms, the
-    /// forms `mac-config` renders back as TOML.
+    /// forms the daemon's `mac_config` renders back as TOML.
     ///
     /// # Errors
     /// [`DaemonProfileError`]: the loader refuses the text.

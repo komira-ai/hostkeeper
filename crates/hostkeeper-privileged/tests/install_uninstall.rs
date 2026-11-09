@@ -308,11 +308,12 @@ fn an_assigned_package_installs_once_across_restarts_and_the_boot_pass_keeps_it(
     let mut host = Installed::new("install_once");
 
     // The daemon is killed while the service is installed. A coordinator started again while it
-    // is down hears nothing of it; the daemon, started again (its boot pass), keeps the service
-    // as it was, reports it, and runs none of its steps again.
+    // is down hears nothing of it (it lists the host from its enrollment alone, not live); the
+    // daemon, started again (its boot pass), keeps the service as it was, reports it, and runs
+    // none of its steps again.
     host.daemon.kill();
     host.coordinator.restart();
-    assert_eq!(host.coordinator.host(NODE), Ok(None));
+    host.coordinator.assert_unheard(NODE);
     host.daemon.start_again();
     host.wait_settled("1.0.0", 1);
     host.assert_on_host("1.0.0");

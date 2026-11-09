@@ -827,14 +827,14 @@ be able to fetch the next release. The deb, rpm and pkg that bootstrap a host ar
 they are what installs the daemon in the first place.
 
 Stages 1, 2 and 4 to 6 change nothing for hostkeeper's own update. At stage 3 an old daemon fetches the new release's
-archive through the channel, probes it with `self-update-protocol`, switches and restarts into it. If the new binary
-fails to start, the fallback runs the old one, which reads `hostkeeper.toml` (unchanged, since the stores are in
+archive through the channel, judges it by its floor, and hands over to it. If the new binary
+fails to start, the old one settles the update `Failed` and runs, and it reads `hostkeeper.toml` (unchanged, since the stores are in
 `stores.toml`), the step record (unchanged) and `placed.json` (whose unknown keys it keeps).
 
 The device tests of a pull request (`pr-device.yml`, jobs `privileged` and `macos-device`, the latter when the pull request changes a path the macOS jobs build or read) prove each stage:
 `a_daemon_the_deb_installed_is_installed_its_next_release_and_restarts_into_it` (`self_update.rs`),
 `a_daemon_the_pkg_installed_is_installed_its_next_release_and_restarts_into_it` (`device_mac_selfupdate.rs`), and
-`a_next_binary_that_cannot_start_spends_the_start_limit_and_the_fallback_puts_the_old_one_back` (`self_update.rs`), run
+`a_next_binary_that_cannot_start_three_times_is_fallen_back_from_by_the_old_one` (`self_update.rs`), run
 from stage 3 on with the next release set by targets. A4 adds the mixed cases: the previous binary updated by a
 stage-3 coordinator and back by the fallback; the previous binary started on, checking, rolling back to and
 uninstalling an archive version the new daemon installed, including a placed `current/units/...` link and hostkeeper's
