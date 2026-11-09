@@ -111,6 +111,20 @@ pub enum Refusal {
     /// On macOS, the check of the staged tree (quarantine attribute, code signature) cannot be
     /// made now: the package is not judged, and the order is tried again later.
     VerifyUnavailable,
+    /// The order's entry is not sound: its digest is not the order's `package_digest`, or a
+    /// location of its artifact or attestation breaks the grammar of a store name or of a
+    /// locator. Refused before anything is fetched.
+    OrderInvalid,
+    /// The entry's installer is not one this daemon lists. Reported as a deferral, not a
+    /// refusal: the coordinator's copy of the list can be one restart stale.
+    InstallerNotListed,
+    /// The entry's manifest breaks a rule of its installer. Refused before anything is fetched.
+    ManifestInvalid,
+    /// The host's `stores.toml` defines no store a location of the entry names, and no store is
+    /// a mirror.
+    NoStore,
+    /// Every source that answered gave other bytes than the entry names, and only mirrors did.
+    StoreDigestMismatch,
     /// `abort` of a service with no running step and none that could not be stopped: nothing is
     /// written.
     NothingRunning,
@@ -124,7 +138,7 @@ pub enum Refusal {
 
 impl Refusal {
     /// Every refusal, in the order of the enum.
-    pub const ALL: [Refusal; 44] = [
+    pub const ALL: [Refusal; 49] = [
         Refusal::InvalidOrder,
         Refusal::NotImplemented,
         Refusal::Busy,
@@ -166,6 +180,11 @@ impl Refusal {
         Refusal::VersionTooLong,
         Refusal::PackageIoError,
         Refusal::VerifyUnavailable,
+        Refusal::OrderInvalid,
+        Refusal::InstallerNotListed,
+        Refusal::ManifestInvalid,
+        Refusal::NoStore,
+        Refusal::StoreDigestMismatch,
         Refusal::NothingRunning,
         Refusal::RecordReads,
         Refusal::StaleHaltGeneration,
@@ -215,6 +234,11 @@ impl Refusal {
             Refusal::VersionTooLong => "version_too_long",
             Refusal::PackageIoError => "io_error",
             Refusal::VerifyUnavailable => "verify_unavailable",
+            Refusal::OrderInvalid => "order_invalid",
+            Refusal::InstallerNotListed => "installer_not_listed",
+            Refusal::ManifestInvalid => "manifest_invalid",
+            Refusal::NoStore => "no_store",
+            Refusal::StoreDigestMismatch => "store_digest_mismatch",
             Refusal::NothingRunning => "nothing_running",
             Refusal::RecordReads => "record_reads",
             Refusal::StaleHaltGeneration => "stale_halt_generation",

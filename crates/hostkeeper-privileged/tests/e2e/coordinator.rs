@@ -15,6 +15,7 @@
 //! the handle is dropped: the serving task is aborted, which releases the lock of its state
 //! files, and the thread is joined.
 
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs;
 use std::future::poll_fn;
@@ -33,6 +34,7 @@ use hostkeeper_coordinator::config::{
 use hostkeeper_coordinator::enrollment::pem;
 use hostkeeper_oidc::Roots;
 use hostkeeper_oidc::testkit::{STATIC_ISSUER, config_text};
+use hostkeeper_proto::hostkeeper::release::v1::TargetList;
 use rcgen::KeyUsagePurpose;
 use rcgen::{BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, KeyPair};
 use rustls::pki_types::CertificateDer;
@@ -306,12 +308,37 @@ impl CoordinatorHandle {
         );
     }
 
+    /// The host `node_id` as `Hosts.Get` gives it (`Null` when the coordinator knows none): among
+    /// the rest, its last heartbeat as it sent it, `heartbeat`.
+    pub fn host(&self, node_id: &str) -> Value {
+        self.api
+            .get_host(node_id)
+            .map_or(Value::Null, |got| got["host"].clone())
+    }
+
     /// Sets the desired version of `service` to `version`, whose package has the SHA-256
     /// `digest` (64 lower-case hex digits).
     pub fn set_desired(&self, service: &str, version: &str, digest: &str) {
         must(
             "releases set-desired",
             self.api.set_desired(service, version, digest),
+        );
+    }
+
+    /// Sets the desired version of `service` to `version` by targets, as CI's set does: `targets`
+    /// by platform, and the text of the version's release index with its SHA-256 `index_digest`.
+    pub fn set_desired_targets(
+        &self,
+        service: &str,
+        version: &str,
+        targets: BTreeMap<String, TargetList>,
+        index: &str,
+        index_digest: &str,
+    ) {
+        must(
+            "releases set-desired by targets",
+            self.api
+                .set_desired_targets(service, version, targets, index, index_digest),
         );
     }
 

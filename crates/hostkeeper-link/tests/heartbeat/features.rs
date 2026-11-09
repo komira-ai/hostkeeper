@@ -14,15 +14,15 @@ fn only_service(rig: &Rig, beat: usize) -> ServiceFacts {
     rig.world.link.beats()[beat].services[0].clone()
 }
 
-/// Catches an announced list that is not the ten names in their order (`install-v1`,
-/// `abort-v1` and `clear-record-v1` last, the features of the orders the loop now runs), a list the wire's reader
+/// Catches an announced list that is not the eleven names in their order (`install-v1`,
+/// `abort-v1`, `clear-record-v1` and `target-v1` last, the features of the orders the loop now runs), a list the wire's reader
 /// would drop for being too long, and a loop that uses a feature its last reply did not
 /// advertise: with none advertised a deferral is reported as a failure before the commit point
 /// with no deferral report, a halt generation is not kept and a forced order is not run; once
 /// `deferred-v1` is advertised the deferral is reported as one; once it is no longer advertised
 /// the old shape is back.
 #[test]
-fn features_announced_are_the_ten_names_and_a_behaviour_needs_the_reply_to_advertise_it() {
+fn features_announced_are_the_eleven_names_and_a_behaviour_needs_the_reply_to_advertise_it() {
     let names: Vec<&str> = ANNOUNCED.iter().map(|f| f.as_str()).collect();
     assert_eq!(
         names,
@@ -36,7 +36,8 @@ fn features_announced_are_the_ten_names_and_a_behaviour_needs_the_reply_to_adver
             "grpc-v1",
             "install-v1",
             "abort-v1",
-            "clear-record-v1"
+            "clear-record-v1",
+            "target-v1"
         ]
     );
     assert!(ANNOUNCED.len() <= hostkeeper_wire::wire::MAX_FEATURES);

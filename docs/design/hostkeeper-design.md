@@ -184,7 +184,7 @@ Linux: a network-installed Ubuntu 24.04 system ([network-install.md](network-ins
 
 ### 4.7 The package
 
-A hostkeeper package is one archive per service version and platform, e.g. `tierstore-1.5.0-linux-x86_64.tar.zst` (compression is Q10; the platforms are in section 5.5). It is attested rather than signed inside: CI builds one archive per platform, attests each, and lists each archive's size and SHA-256 in the version's release index; the daemon accepts the archive of its own platform only if its size and digest match the index entry and its own attestation names a trusted signer (section 5.5). It is **not a tarball unpacked into `/`**: the daemon extracts only inside the version directory and places units and files itself.
+A hostkeeper package is one archive per service version and platform, e.g. `tierstore-1.5.0-linux-x86_64.tar.zst` (compression is Q10; the platforms are in section 5.5). It is attested rather than signed inside: CI builds one archive per platform, attests each, and lists each archive's size and SHA-256 in the version's release index; the daemon accepts the archive of its own platform only if its size and digest match the index entry and its own attestation names a trusted signer (section 5.5); an order may instead carry the picked entry of a release set with targets, which names the bytes by digest and locations (docs/design/packages.md section 7). It is **not a tarball unpacked into `/`**: the daemon extracts only inside the version directory and places units and files itself.
 
 ```
 tierstore-1.5.0-linux-x86_64.tar.zst
@@ -413,9 +413,9 @@ Holds show on the Fleet and Holds pages and in `Hosts.Get` and `Services.List`.
 
 Designed; kbf has the logic inside its own installer, and the seal reader is built (`crates/hostkeeper-steps/src/artifact.rs`, `Staged::check`, test `a_release_that_cannot_be_read_is_tried_again_and_never_halts`). The release index, the platforms and the channel paths are built (`crates/hostkeeper-config/src/index.rs` and `platform.rs`, tests in `crates/hostkeeper-config/tests/index.rs`); the fetch step does not exist yet (B5).
 
-**One package per operating system and CPU family.** A version of a service is built once for each platform it supports, and each build is its own package. There are exactly three platforms: `linux-x86_64`, `linux-arm64` and `macos-arm64`. The set is closed in the code. The daemon knows its own platform from the target it was compiled for, never from a config file or from asking the machine at run time.
+**One package per operating system and CPU family.** (An order that carries the picked entry of a release set with targets names its package by that entry; the platform is still the daemon's own, and the entry is the one picked for it, docs/design/packages.md section 7.) A version of a service is built once for each platform it supports, and each build is its own package. There are exactly three platforms: `linux-x86_64`, `linux-arm64` and `macos-arm64`. The set is closed in the code. The daemon knows its own platform from the target it was compiled for, never from a config file or from asking the machine at run time.
 
-**The release channel.** For service S at version V the channel holds:
+**The release channel.** An order without an entry fetches through the channel as described here; an order with one makes the daemon fetch through its `/etc/hostkeeper/stores.toml` and the entry's locations (docs/design/packages.md section 7). For service S at version V the channel holds:
 
 ```
 {release_channel}/S/V/index.json
@@ -466,7 +466,7 @@ Before every later step the daemon recomputes the digest of the version director
 
 Nothing on the host refuses an older attested package: the downgrade bound is the coordinator's `min_version` (Q13). Residual trust: the trusted signers' repositories are the trust root (section 5.1).
 
-**The coordinator reads the index too.** `Releases.SetDesired` takes the index text and its SHA-256 (`release_index`, `release_index_digest`), checks the digest, parses the index for the service and version (`index_digest_mismatch`, `index_invalid`), and keeps the index digest and each platform's package digest. Before a rollout reaches a host, the coordinator skips a host whose platform has no entry, with the same reason, `no_package_for_platform`: it is shown as the host's hold, orders nothing for update, install, force or automatic rollback, and is never counted as failed. The daemon's own `no_package_for_platform` check stays, for an older coordinator.
+**The coordinator reads the index too.** `Releases.SetDesired` takes the index text and its SHA-256 (`release_index`, `release_index_digest`), checks the digest, parses the index for the service and version (`index_digest_mismatch`, `index_invalid`), and keeps the index digest and each platform's package digest. Before a rollout reaches a host, the coordinator skips a host whose platform has no entry, with the same reason, `no_package_for_platform`: it is shown as the host's hold, orders nothing for update, install, force or automatic rollback, and is never counted as failed. The daemon's own `no_package_for_platform` check stays, for an older coordinator. For a release set with targets the coordinator reads no index: it picks an entry (docs/design/packages.md section 3.3) and sends it in the order.
 
 ### 5.6 Force: the fleet-wide fix
 

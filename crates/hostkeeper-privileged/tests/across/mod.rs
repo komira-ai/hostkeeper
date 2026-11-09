@@ -39,12 +39,14 @@
 //! package, as a host the coordinator converged on the release is. Every wait is a bounded count
 //! of tries of an explicit state ([`super::e2e::wait_for`]); nothing is asserted about time.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_config::platform::Platform;
 use hostkeeper_privileged::across::{Pin, checked_binary, download_path};
+use hostkeeper_proto::hostkeeper::release::v1::{Blob, Location, Manifest, Target, TargetList};
 use hostkeeper_steps::record::{Loaded, Record, RecordStore, State};
 use hostkeeper_steps::{BadVersions, Layout};
 use serde_json::Value;
@@ -182,11 +184,85 @@ pub fn manifest(version: &str, floor: &str) -> String {
     )
 }
 
+/// The store of the release channel, which the entries of the rig's sets name: the one a daemon
+/// without a `stores.toml` has.
+pub const CHANNEL_STORE: &str = "channel";
+
 /// A package of hostkeeper the rig built and published.
 #[derive(Clone, Debug)]
 pub struct Built {
     pub version: String,
+    /// The archive's SHA-256.
     pub sha256: String,
+    /// The archive's size.
+    pub bytes: u64,
+    /// The archive's name on the channel, `<service>-<version>-<platform>.tar.zst`.
+    pub file_name: String,
+    /// The SHA-256 of the attestation bundle beside the archive.
+    pub bundle_sha256: String,
+    /// The bundle's size.
+    pub bundle_bytes: u64,
+    /// The `min_hostkeeper` of the package's manifest, and of its entry's.
+    pub floor: String,
+    /// The text of the version's `index.json` on the channel, and its SHA-256.
+    pub index: String,
+    pub index_sha256: String,
+}
+
+impl Built {
+    /// The path of the version's release index on the channel, as a request for it is logged.
+    pub fn index_path(&self) -> String {
+        format!("/{HK}/{}/index.json", self.version)
+    }
+
+    /// The path of the archive in the channel's store, as a location names it: `S/V/S-V-platform.tar.zst`,
+    /// below the base of the release channel (the form of `release targets`).
+    pub fn archive_locator(&self) -> String {
+        format!("{HK}/{}/{}", self.version, self.file_name)
+    }
+
+    /// The path of the bundle in the channel's store: the archive's, with `.sigstore.json`.
+    pub fn bundle_locator(&self) -> String {
+        format!("{}.sigstore.json", self.archive_locator())
+    }
+
+    /// The one `hostkeeper-archive` entry of this package for the host's platform, as CI's set
+    /// writes it (`crates/xtask/src/release/targets.rs`) with the channel as the only store: the
+    /// archive and its bundle at their locators, their digests and sizes, and the manifest's
+    /// floor.
+    pub fn entry(&self) -> Target {
+        let at = |locator: String| Location {
+            store: CHANNEL_STORE.to_owned(),
+            locator,
+        };
+        Target {
+            installer: "hostkeeper-archive".to_owned(),
+            locations: vec![at(self.archive_locator())],
+            digest: self.sha256.clone(),
+            bytes: self.bytes,
+            attestation: Some(Blob {
+                digest: self.bundle_sha256.clone(),
+                bytes: self.bundle_bytes,
+                locations: vec![at(self.bundle_locator())],
+            }),
+            manifest: Some(Manifest {
+                min_hostkeeper: self.floor.clone(),
+                ..Manifest::default()
+            }),
+            repository: None,
+            package_version: None,
+        }
+    }
+
+    /// The `targets` of a set of this package: the entry for the host's platform.
+    pub fn targets(&self) -> BTreeMap<String, TargetList> {
+        BTreeMap::from([(
+            Platform::current().to_string(),
+            TargetList {
+                entries: vec![self.entry()],
+            },
+        )])
+    }
 }
 
 /// The rig of one test. The fields are dropped in this order: the coordinator and the channel,
@@ -283,7 +359,8 @@ impl Rig {
     /// and publishes it on the release channel.
     pub fn publish(&self, version: &str, build: Build) -> Built {
         let binary = self.binary(build);
-        let manifest = manifest(version, &floor(build, &self.released));
+        let floor = floor(build, &self.released);
+        let manifest = manifest(version, &floor);
         let root = self.signer.trusted_root_jsonl();
         let unit = Host::package_unit(self.host.root());
         let mut entries = vec![
@@ -329,18 +406,40 @@ impl Rig {
         let sha256 = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&bytes));
         let file_name = format!("{HK}-{version}-{}.tar.zst", Platform::current());
         let bundle = self.signer.bundle(&file_name, &sha256);
+        let (archive_len, bundle_len) = (bytes.len() as u64, bundle.len() as u64);
+        let bundle_sha256 = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&bundle));
         self.channel.publish(HK, version, &file_name, bytes, bundle);
+        let index = self
+            .channel
+            .object(&format!("/{HK}/{version}/index.json"))
+            .expect("the channel serves the index it just published");
         Built {
             version: version.to_owned(),
             sha256,
+            bytes: archive_len,
+            file_name,
+            bundle_sha256,
+            bundle_bytes: bundle_len,
+            floor,
+            index_sha256: hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&index)),
+            index: String::from_utf8(index).expect("the index is text"),
         }
     }
 
-    /// Sets the desired version of hostkeeper to the published package `built`, through the
-    /// operator API.
+    /// Sets the desired version of hostkeeper to the published package `built` as CI's set does
+    /// (design stage 2 and 3): by targets, the one `hostkeeper-archive` entry for the host's
+    /// platform ([`Built::entry`]), and the version's release index with its digest, through the
+    /// operator API. A daemon that announces no `target-v1` is ordered the package and the index
+    /// digest of that platform and fetches the index from the channel; one that does is ordered
+    /// the entry and fetches through it.
     pub fn order(&self, built: &Built) {
-        self.coordinator
-            .set_desired(HK, &built.version, &built.sha256);
+        self.coordinator.set_desired_targets(
+            HK,
+            &built.version,
+            built.targets(),
+            &built.index,
+            &built.index_sha256,
+        );
     }
 
     /// The step record of hostkeeper, when there is one this build reads.
@@ -446,6 +545,54 @@ impl Rig {
         BadVersions::load(&self.host.root().state().join(HK))
             .expect("the list of bad versions")
             .contains(version)
+    }
+
+    /// Waits until the host's last heartbeat as the coordinator holds it is from the agent
+    /// `agent` and lists hostkeeper at `version`: the daemon that runs now has looked at the
+    /// packages on the host and reported what it read.
+    pub fn wait_host_reports(&self, agent: &str, version: &str) {
+        wait_for(
+            &format!("the host's heartbeat is of the agent {agent} and lists hostkeeper {version}"),
+            COORDINATED,
+            || {
+                let heartbeat = self.coordinator.host(HOST_ID)["heartbeat"].clone();
+                heartbeat["agent"]["version"] == agent
+                    && heartbeat["services"].as_array().is_some_and(|services| {
+                        services
+                            .iter()
+                            .any(|s| s["name"] == HK && s["version"] == version)
+                    })
+            },
+        );
+    }
+
+    /// The file the rig staged the released binary from.
+    pub fn released_file(&self) -> PathBuf {
+        self.host
+            .root()
+            .base()
+            .join(format!("released-{}", self.released))
+    }
+
+    /// Puts the host back on the released binary the way an operator does: the daemon stopped,
+    /// the released binary staged again when a later update pruned it (the binary directory keeps
+    /// `current` and `previous`), `current` pointed at it, and the daemon started again. The
+    /// packages on the host are left as the daemon that ran last left them.
+    ///
+    /// # Panics
+    /// The daemon does not stop or start, or the binary cannot be staged or switched to.
+    pub fn go_back_to_released(&self) {
+        self.host.stop();
+        let layout = self.layout();
+        if fs::symlink_metadata(layout.version_path(&self.released)).is_err() {
+            layout
+                .stage(&self.released, &self.released_file())
+                .expect("stage the released binary again");
+        }
+        layout
+            .switch(&self.released)
+            .expect("switch to the released binary");
+        self.host.start_again();
     }
 
     /// Waits until the daemon's process runs the binary directory's file of `version`.

@@ -23,7 +23,10 @@
 //!   coordinator's heartbeat route reads), and the reply carries the order of `link/order.json`
 //!   when that file is there, and the features and acknowledged verdicts of `link/answer.json`
 //!   when that one is (no enrollment; a test may answer as the real coordinator in its process
-//!   answers each heartbeat).
+//!   answers each heartbeat). An order may carry the `entry` of a set by targets
+//!   (`tests/shared/target_entry.rs`), which reaches the package store as the daemon's receipt
+//!   check judged it, and the store appends to `entries.jsonl` of the fixture's directory one line
+//!   for each package it is asked for ([`entry_record`]): the entry it was given, or `null`.
 //!
 //! Its own version is the name of the file it runs from, its links resolved (launchd starts
 //! `current`, and macOS gives a program the path it was started by): the binary directory keeps
@@ -77,18 +80,19 @@ use hostkeeper_daemon::cli::{self, Cli, Command, DaemonFlags, HostFiles, Systemd
 use hostkeeper_daemon::handover::{self, ProcessExec};
 use hostkeeper_daemon::links::{DaemonLog, Links};
 use hostkeeper_daemon::packaged;
-use hostkeeper_daemon::packages::{PackageError, Packages, VersionDir};
+use hostkeeper_daemon::packages::{Entry, PackageError, Packages, VersionDir};
 use hostkeeper_daemon::start::{self, StartError};
 use hostkeeper_daemon::unix_clock::SystemUnixClock;
 use hostkeeper_daemon::verb::PackageDigest as OrderDigest;
 use hostkeeper_daemon::{Daemon, Ports, Watchdog};
 use hostkeeper_launchd::Platform;
 use hostkeeper_link::{
-    Acknowledged, CertSource, CertState, ClientIdentity, ClockSleeper, CoordinatorLink, Feature,
-    Heartbeat, LinkError, Log, Order, OrderId, OrderRef, PackageDigest, Reply, ReplyFault,
-    StopFlag, Target, ThreadDispatch, Verb,
+    Acknowledged, CertSource, CertState, ClientIdentity, ClockSleeper, CoordinatorLink,
+    Entry as LinkEntry, Feature, Heartbeat, LinkError, Log, Order, OrderId, OrderRef,
+    PackageDigest, Reply, ReplyFault, StopFlag, Target, ThreadDispatch, Verb,
 };
 use hostkeeper_placed::Roots;
+use hostkeeper_proto::hostkeeper::release::v1::{Blob, Location, Manifest};
 use hostkeeper_steps::Staged;
 use serde_json::Value;
 
@@ -314,6 +318,7 @@ fn run_daemon(
             cli::host_ports(&config, &settings, &HostFiles::host(), own, adapters)?;
         ports.packages = Arc::new(MadePackages {
             root: settings.packages_dir.clone(),
+            record: dir.join(ENTRIES_FILE),
         });
         ports.placement.roots = Roots::new(
             &dir.join("placed"),
@@ -370,10 +375,15 @@ fn file_links(
     }
 }
 
+/// The file of the fixture's directory the package store records the entries it is given in.
+const ENTRIES_FILE: &str = "entries.jsonl";
+
 /// The package store of the fixture: `<packages>/<service>/<version>/`, which the test made,
-/// sealed when it is asked for.
+/// sealed when it is asked for. Each ask is recorded first, in `record`, with the entry it was
+/// given.
 struct MadePackages {
     root: PathBuf,
+    record: PathBuf,
 }
 
 impl Packages for MadePackages {
@@ -383,12 +393,85 @@ impl Packages for MadePackages {
         version: &Version,
         _digest: &OrderDigest,
         _index_digest: Option<&OrderDigest>,
+        entry: Option<&Entry>,
     ) -> Result<VersionDir, PackageError> {
+        let line = serde_json::json!({
+            "service": service.as_str(),
+            "version": version.as_str(),
+            "entry": entry.map(entry_record),
+        });
+        OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.record)
+            .and_then(|mut out| writeln!(out, "{line}"))
+            .map_err(|e| PackageError::Other(format!("{}: {e}", self.record.display())))?;
         let dir = self.root.join(service.as_str()).join(version.as_str());
         Staged::seal(&dir)
             .map(VersionDir::new)
             .map_err(|e| PackageError::Other(format!("{}: {e}", dir.display())))
     }
+}
+
+/// The JSON of the entry `entry`, in the shape of `tests/shared/target_entry.rs`: the key `entry`
+/// of an `order.json`, and of a line of `entries.jsonl`.
+fn entry_record(entry: &Entry) -> Value {
+    let places = |locations: &[Location]| -> Vec<Value> {
+        locations
+            .iter()
+            .map(|at| serde_json::json!({"store": at.store, "locator": at.locator}))
+            .collect()
+    };
+    let attestation = entry.attestation.as_ref().map(|blob| {
+        serde_json::json!({
+            "digest": blob.digest,
+            "bytes": blob.bytes,
+            "locations": places(&blob.locations),
+        })
+    });
+    serde_json::json!({
+        "installer": entry.installer,
+        "locations": places(&entry.locations),
+        "digest": entry.digest,
+        "bytes": entry.bytes,
+        "attestation": attestation,
+        "min_hostkeeper": entry.manifest.as_ref().map(|m| m.min_hostkeeper.clone()),
+    })
+}
+
+/// The entry of an `entry` key of an `order.json`: [`entry_record`] read back.
+fn read_entry(json: &Value) -> Option<Entry> {
+    let word = |json: &Value, key: &str| json.get(key).and_then(Value::as_str).map(str::to_owned);
+    let places = |json: &Value| -> Option<Vec<Location>> {
+        json.get("locations")?
+            .as_array()?
+            .iter()
+            .map(|at| {
+                Some(Location {
+                    store: word(at, "store")?,
+                    locator: word(at, "locator")?,
+                })
+            })
+            .collect()
+    };
+    let blob = json.get("attestation")?;
+    Some(Entry {
+        installer: word(json, "installer")?,
+        locations: places(json)?,
+        digest: word(json, "digest")?,
+        bytes: json.get("bytes")?.as_u64()?,
+        attestation: Some(Blob {
+            digest: word(blob, "digest")?,
+            bytes: blob.get("bytes")?.as_u64()?,
+            locations: places(blob)?,
+        }),
+        manifest: Some(Manifest {
+            min_hostkeeper: word(json, "min_hostkeeper")?,
+            ..Manifest::default()
+        }),
+        repository: None,
+        package_version: None,
+    })
 }
 
 /// A pair the heartbeat loop reads as enrolled; [`FileLink`] presents it to no one.
@@ -406,7 +489,8 @@ impl CertSource for NoCertificate {
 /// The coordinator as two files of a directory: `beats.jsonl`, to which each heartbeat is
 /// appended, and `order.json`, the order of every reply while it is there:
 /// `{"id": "...", "try": 1, "service": "...", "version": "...", "digest": "<64 hex>"}`, an
-/// `update`, or the same with `"verb": "install"`, an `install`. A test replaces `order.json` by
+/// `update`, or the same with `"verb": "install"`, an `install`; with an `"entry"` key
+/// ([`entry_record`]) the order carries that entry, as an order set by targets does. A test replaces `order.json` by
 /// a rename, so it is read whole or not at all.
 struct FileLink {
     dir: PathBuf,
@@ -489,6 +573,10 @@ fn read_order(text: &str) -> Option<Order> {
         version: Version::new(word("version")?).ok()?,
         digest: PackageDigest::new(word("digest")?).ok()?,
         index_digest: None,
+        entry: match json.get("entry") {
+            None => None,
+            Some(entry) => Some(LinkEntry::new(read_entry(entry)?)),
+        },
     };
     let verb = match word("verb") {
         None | Some("update") => Verb::Update(target),

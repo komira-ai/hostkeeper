@@ -15,6 +15,7 @@ mod dial;
 mod facts;
 mod features;
 mod grpc;
+mod grpc_reply;
 mod halts;
 mod kbf;
 mod link;
@@ -76,6 +77,7 @@ fn target(name: &str, to: &str) -> Target {
         version: version(to),
         digest: digest(),
         index_digest: None,
+        entry: None,
     }
 }
 

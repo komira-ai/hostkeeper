@@ -12,6 +12,7 @@ hostkeeper-hook = { path = "../hostkeeper-hook" }
 hostkeeper-launchd = { path = "../hostkeeper-launchd" }
 hostkeeper-link = { path = "../hostkeeper-link" }
 hostkeeper-placed = { path = "../hostkeeper-placed" }
+hostkeeper-proto = { path = "../hostkeeper-proto" }
 hostkeeper-pxe = { path = "../hostkeeper-pxe" }
 hostkeeper-steps = { path = "../hostkeeper-steps" }
 

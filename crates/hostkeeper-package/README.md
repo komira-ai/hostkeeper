@@ -23,7 +23,9 @@ own from the target it was compiled for (`Platform::current`).
 | `prove` | `prove`: downloads the attestation bundle, reads the commit and ref it names, asks the `Verifier`, and returns the `VerifiedArchive`, which has no other constructor |
 | `bundle` | the attestation bundle read for what the verifier is asked to confirm (the one commit of the provenance, the certificate's source ref, the subjects' SHA-256), before anything has verified it; `prove` and `hostkeeper-pxe fetch` read bundles with it |
 | `ports` | `Fetcher` (one GET into a `Sink`, bounded by a `Limit`) and `Verifier` (one attestation, offline), and the data that crosses them |
-| `net` | the real `Fetcher`: the adapter's rules over a `Transport`, and `UreqTransport` (rustls, HTTPS only, no redirect, no proxy, no cookies, no credentials, the roots the daemon gives it; `UreqTransport::following_redirects` follows a bounded number of `https://` redirects, for `hostkeeper-pxe fetch`'s release assets) |
+| `net` | the real `Fetcher`: the adapter's rules over a `Transport`, and `UreqTransport` (rustls, HTTPS only, no redirect, no proxy, no cookies, the credential only when a store's request gives it, the roots the daemon gives it; `UreqTransport::following_redirects` follows a bounded number of `https://` redirects, for `hostkeeper-pxe fetch`'s release assets); `NetFetcher::get_request` follows a store's redirects itself (`https://` only, the credential dropped at another origin) and answers an OCI `Bearer` challenge on the store's own origin |
+| `stores` | the stores of `/etc/hostkeeper/stores.toml` (`Stores`, `Store`, `load`): kind `https` or `oci`, base, redirects, mirror, repository, and a credential file read once and never shown by `Debug`; the URL of a blob in each kind; every defect of the file is a `StoresError` that names the store and the rule |
+| `entry` | `fetch_entry`: the fetch and the proof of an order's `Target`: the mirrors, then the entry's locations, each source with its own deadline and the credential and redirects of its store; the first bytes with the entry's size and SHA-256 win, then the bundle the same way, then the verifier. Returns a `VerifiedArchive` and the stores that gave other bytes |
 | `gh` | the real `Verifier`: the pinned `gh attestation verify`, offline, ported from kbf's `GhCheck`; `SystemRunner` runs it and kills it at the deadline, `OwnedBy` checks `gh` and the trusted root before each run |
 
 ## Failures
@@ -41,7 +43,9 @@ class `environment`, means nothing changed on the host and the coordinator retri
 | `fetch_failed` | `Deferred`, `environment` | the index or the package: no connection, a status other than 2xx (a 404 included: the channel may not have the version yet), a body cut short, `fetch_timeout_secs` passed, or a staging file that cannot be made, written or read for a reason other than a full disk |
 | `no_space` | `Deferred`, `environment` | the disk is full while the index, the package or the bundle is written. Nothing else is removed to make room |
 | `attestation_unavailable` | `Deferred`, `environment` | the bundle cannot be downloaded, or the verifier cannot run, is not trusted, gives no verdict or runs past `attestation_timeout_secs` |
-| `not_attested` | `Failure`, `release` | the bundle is over 1 MiB, is not a bundle, names no commit or no ref, or does not list the package's SHA-256 (the verifier is not run), or the verifier rejects it |
+| `not_attested` | `Failure`, `release` | the bundle is over 1 MiB, is not a bundle, names no commit or no ref, or does not list the package's SHA-256 (the verifier is not run), or the verifier rejects it; through an entry, also every location of the bundle gave other bytes |
+| `no_store` | `Failure`, `environment` | through an order's entry (`entry`): the host defines no mirror, and none of the locations names a store it defines |
+| `store_digest_mismatch` | `Deferred`, `environment` | through an entry: only mirrors answered, and every one gave bytes other than the entry's size and SHA-256 |
 
 The fourth refusal of the release layout, `package_manifest_mismatch` (the archive's manifest names
 another service, version or platform than asked for), belongs to the manifest step after unpacking;

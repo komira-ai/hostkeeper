@@ -144,6 +144,9 @@ pub struct LoopConfig {
     pub state_dir: PathBuf,
     /// Seconds between two heartbeats while no order runs; never 0, so the loop always waits.
     pub period_secs: NonZeroU64,
+    /// The installers the daemon can run, by name (`hostkeeper-archive`), given once at start
+    /// and sent in every gRPC heartbeat.
+    pub installers: Vec<String>,
 }
 
 /// Everything the loop talks to.
@@ -513,6 +516,7 @@ impl Heartbeater {
                     .filter(|text| !text.is_empty()),
             },
             trusted_root: self.ports.trusted_root.trusted_root(),
+            installers: self.config.installers.clone(),
         })
     }
 

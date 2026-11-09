@@ -93,6 +93,7 @@ impl Mac {
             ca_bundle: self.root().join("ca.pem"),
             gh: self.root().join("gh"),
             trusted_root: self.root().join("trusted_root.json"),
+            stores: self.root().join("stores.toml"),
             pki: self.root().join("pki"),
             console: None,
             managed_config: managed,

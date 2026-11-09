@@ -314,6 +314,7 @@ fn order(
         version: Version::new(version.as_str()).ok()?,
         digest: PackageDigest::new(digest.as_str()).ok()?,
         index_digest: None,
+        entry: None,
     };
     Some(Order {
         id: OrderId::new(id.as_str()).ok()?,

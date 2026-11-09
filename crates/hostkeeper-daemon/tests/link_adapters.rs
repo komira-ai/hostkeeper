@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use hostkeeper_config::names::Version;
 use hostkeeper_daemon::link_adapters::{
-    DaemonHalts, DaemonOrders, MAX_DETAIL, order_result, wire_order,
+    DaemonHalts, DaemonOrders, MAX_DETAIL, blamed, order_result, wire_order,
 };
 use hostkeeper_daemon::packages::PackageError;
 use hostkeeper_daemon::testing::spawn;
@@ -18,8 +18,11 @@ use hostkeeper_daemon::verb::{Forced, Hooked, NO_TRY, PackageDigest as WireDiges
 use hostkeeper_daemon::{Refusal, Reply, Verb as Decoded};
 use hostkeeper_hook::{Class, Phase, Step, Verdict};
 use hostkeeper_link::{
-    HeldHalts, Order, OrderId, OrderResult, OrderSink, Outcome, PackageDigest, Reason, Target, Verb,
+    Entry, HeldHalts, Order, OrderId, OrderResult, OrderSink, Outcome, PackageDigest, Reason,
+    Target, Verb,
 };
+use hostkeeper_proto::hostkeeper::agent::v1 as wire;
+use hostkeeper_proto::hostkeeper::release::v1 as release;
 use hostkeeper_steps::runner::DEFAULT_RETRY_SECS;
 use support::force::{WEB, link_of, succeeded, web};
 use support::{Rig, d, force, name};
@@ -30,6 +33,7 @@ fn target(service: &str, version: &str) -> Target {
         version: Version::new(version).expect("a version"),
         digest: PackageDigest::new(&d()).expect("a package digest"),
         index_digest: None,
+        entry: None,
     }
 }
 
@@ -95,6 +99,7 @@ fn a_link_order_is_decoded_by_the_daemon_as_the_verb_and_target_it_names() {
         index_digest: None,
         order_try: NonZeroU64::new(order_try).expect("a try from 1"),
         order_id: Some(id.to_owned()),
+        entry: None,
     };
     let update = wire_order(&update_order("web", "2.0.0", 3));
     assert_eq!(
@@ -127,6 +132,7 @@ fn the_index_digest_of_a_link_order_reaches_the_daemons_order() {
     let index = PackageDigest::new(&"cd".repeat(32)).expect("an index digest");
     let indexed = |service: &str| Target {
         index_digest: Some(index.clone()),
+        entry: None,
         ..target(service, "2.0.0")
     };
     let wanted = Some(WireDigest::new(&"cd".repeat(32)).expect("an index digest"));
@@ -173,6 +179,7 @@ fn an_install_uninstall_and_abort_are_decoded_as_the_verbs_they_name() {
             index_digest: None,
             order_try: NonZeroU64::new(2).expect("a try from 1"),
             order_id: Some("install-1".to_owned()),
+            entry: None,
         }))
     );
     let uninstall = wire_order(&order("uninstall-1", Verb::Uninstall(name("web"))));
@@ -452,7 +459,8 @@ fn a_forced_order_that_fails_before_the_switch_is_reported_failed_and_forced() {
 
 /// Catches a refusal reported under another token, or with another phase: every refusal of the
 /// daemon, refused or interrupted, is reported `failed` with its own token as the reason and its
-/// text as the detail, in no phase, whether the order is hooked or forced.
+/// text as the detail, whether the order is hooked or forced: in no phase and with no class, but
+/// for the refusals of an entry that carry their class before the commit point (`blamed`).
 #[test]
 fn every_refusal_is_reported_under_its_own_token() {
     for order in [
@@ -468,9 +476,12 @@ fn every_refusal_is_reported_under_its_own_token() {
                 },
             ];
             for reply in replies {
+                let class = blamed(refusal);
                 let expected = OrderResult {
                     reason: Some(token(refusal.token())),
                     detail: Some("why".to_owned()),
+                    phase: class.map(|_| Phase::BeforeCommit),
+                    class,
                     ..plain(&order, Outcome::Failed)
                 };
                 assert_eq!(
@@ -763,4 +774,135 @@ fn a_store_that_cannot_be_read_or_written_holds_every_generation_and_refuses_a_r
         "{error}"
     );
     assert_eq!(halts.held(&name("other")), 0);
+}
+
+/// An entry of the release message with every field of the artifact set.
+fn picked() -> release::Target {
+    release::Target {
+        installer: "hostkeeper-archive".to_owned(),
+        locations: vec![release::Location {
+            store: "lan".to_owned(),
+            locator: "releases/web/2.0.0/web.tar".to_owned(),
+        }],
+        digest: d(),
+        bytes: 4096,
+        attestation: Some(release::Blob {
+            digest: "cd".repeat(32),
+            bytes: 512,
+            locations: vec![release::Location {
+                store: "github".to_owned(),
+                locator: "web/web.tar.sigstore.json".to_owned(),
+            }],
+        }),
+        manifest: None,
+        repository: None,
+        package_version: None,
+    }
+}
+
+/// Proves the entry an order of the loop carries goes back on the wire `Order` unchanged, on
+/// the `target` of its own verb (`update`, `force` and `install`), and that an order with no
+/// entry leaves `target` unset.
+///
+/// Catches: an entry dropped on the way to the daemon, so that the daemon fetches from the
+/// channel instead of the store the coordinator picked, or put on the wrong verb.
+#[test]
+fn the_entry_of_a_link_order_is_put_back_on_the_wire_order_unchanged() {
+    let carrying = |verb: fn(Target) -> Verb| Order {
+        id: order_id("o-1"),
+        order_try: 1,
+        verb: verb(Target {
+            entry: Some(Entry::new(picked())),
+            ..target("web", "2.0.0")
+        }),
+    };
+    let bare = |verb: fn(Target) -> Verb| Order {
+        id: order_id("o-1"),
+        order_try: 1,
+        verb: verb(target("web", "2.0.0")),
+    };
+    let target_of = |order: &Order| match wire_order(order).verb {
+        Some(wire::order::Verb::Update(a)) => a.target,
+        Some(wire::order::Verb::Force(a)) => a.target,
+        Some(wire::order::Verb::Install(a)) => a.target,
+        other => panic!("not a verb with a target: {other:?}"),
+    };
+    for verb in [Verb::Update, Verb::Force, Verb::Install] {
+        assert_eq!(target_of(&carrying(verb)), Some(picked()));
+        assert_eq!(target_of(&bare(verb)), None);
+    }
+}
+
+/// Proves an order whose entry names an installer the daemon does not list reaches the heartbeat
+/// as a deferral with the reason `installer_not_listed` and a retry time of one second, not as a
+/// failure, and that the package port is not asked.
+///
+/// Catches: an unlisted installer reported `failed`, which the coordinator would not pick again,
+/// or with the runner's default retry time, which would keep the version's next entry declined.
+#[test]
+fn an_entry_of_an_installer_the_daemon_does_not_list_is_reported_deferred_with_its_reason() {
+    let rig = Rig::new("link-not-listed");
+    rig.add("web", "2.0.0");
+    let orders = DaemonOrders::new(Arc::new(rig.daemon()));
+    let unlisted = release::Target {
+        installer: "tarball".to_owned(),
+        manifest: Some(release::Manifest {
+            min_hostkeeper: "0.1.0".to_owned(),
+            ..release::Manifest::default()
+        }),
+        ..picked()
+    };
+    let order = Order {
+        id: order_id("o-1"),
+        order_try: 1,
+        verb: Verb::Update(Target {
+            entry: Some(Entry::new(unlisted)),
+            ..target("web", "2.0.0")
+        }),
+    };
+    assert_eq!(
+        orders.execute(&order, &version_of(&order)),
+        OrderResult {
+            reason: Some(token("installer_not_listed")),
+            ..plain(
+                &order,
+                Outcome::Deferred {
+                    retry_after_secs: 1
+                }
+            )
+        }
+    );
+    assert_eq!(rig.store.asked(), Vec::<(String, String)>::new());
+}
+
+/// Proves the refusals of an order's entry that the design names with a class reach the
+/// heartbeat with it, before the commit point and with the daemon's text: `order_invalid` and
+/// `manifest_invalid` are blamed on the release, `no_store` on the host's environment; every
+/// other refusal (here `busy`) still names no class and no phase.
+///
+/// Catches: an entry the daemon cannot accept reported with no class, which the coordinator
+/// and CI could not tell from a refusal about the host's moment.
+#[test]
+fn the_refusals_of_an_entry_carry_the_class_the_design_names() {
+    let order = update_order("web", "2.0.0", 1);
+    let cases = [
+        (Refusal::OrderInvalid, Some(Class::Release)),
+        (Refusal::ManifestInvalid, Some(Class::Release)),
+        (Refusal::NoStore, Some(Class::Environment)),
+        (Refusal::Busy, None),
+    ];
+    for (refusal, class) in cases {
+        let reply = Reply::refused(refusal, "why");
+        assert_eq!(
+            order_result(&order, &version_of(&order), &reply),
+            OrderResult {
+                reason: Some(token(refusal.token())),
+                detail: Some("why".to_owned()),
+                phase: class.map(|_| Phase::BeforeCommit),
+                class,
+                ..plain(&order, Outcome::Failed)
+            },
+            "{refusal:?}"
+        );
+    }
 }
