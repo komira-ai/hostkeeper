@@ -658,115 +658,26 @@ fn a_join_that_pings_another_host_than_the_channels_fails_before_the_wait() {
     );
 }
 
-/// What the committed step `channel-host` writes as `hostname` for the channel `channel`; `None`
-/// when it fails.
-fn host_of(name: &str, channel: &str) -> Option<String> {
-    let text = release_yml();
-    let doc = yaml::load(&text).expect("release.yml parses");
-    let steps = match entry(&doc, "jobs")
-        .and_then(|jobs| entry(jobs, CHANNEL_JOB))
-        .and_then(|job| entry(job, "steps"))
-        .map(|s| &s.value)
-    {
-        Some(yaml::Value::Seq(items)) => items,
-        _ => panic!("the job channel has no steps"),
-    };
-    let step = steps
-        .iter()
-        .find(|s| entry(s, "id").and_then(yaml::Node::as_str) == Some("channel-host"))
-        .expect("the step channel-host");
-    let script = entry(step, "run")
-        .and_then(yaml::Node::as_str)
-        .expect("the step runs");
-    let env = entry(step, "env").expect("the step has env");
-    assert_eq!(
-        entries(env)
-            .iter()
-            .map(|(k, v)| (
-                k.as_str().unwrap_or_default(),
-                v.as_str().unwrap_or_default()
-            ))
-            .collect::<Vec<_>>(),
-        [("RELEASE_CHANNEL", "${{ vars.HOSTKEEPER_RELEASE_CHANNEL }}")]
-    );
-    let base = Path::new(env!("CARGO_TARGET_TMPDIR")).join("channel-host");
-    let root = TestDir::under(&base, name);
-    let output = root.join("output");
-    let status = Command::new("bash")
-        .args(["--noprofile", "--norc", "-eo", "pipefail", "-c", script])
-        .env_clear()
-        .env("PATH", "/usr/bin:/bin")
-        .env("GITHUB_OUTPUT", &output)
-        .env("RELEASE_CHANNEL", channel)
-        .stdout(std::process::Stdio::null())
-        .status()
-        .expect("run bash");
-    status.success().then(|| {
-        read_outputs(&output)
-            .get("hostname")
-            .cloned()
-            .unwrap_or_default()
-    })
-}
-
-#[test]
-fn the_channels_host_is_its_url_without_scheme_port_or_path() {
-    // Catches: a ping of the URL, or of the host with its port or path, which `tailscale ping`
-    // does not answer.
-    for (n, (channel, host)) in [
-        ("https://channel.example:30443/releases", "channel.example"),
-        ("https://channel.example:30443", "channel.example"),
-        ("https://channel.example/releases/", "channel.example"),
-        ("https://channel.example", "channel.example"),
-        (
-            "https://channel.tailnet.example:30443",
-            "channel.tailnet.example",
-        ),
-        ("https://192.0.2.7:30443/r", "192.0.2.7"),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        assert_eq!(
-            host_of(&format!("host-{n}"), channel).as_deref(),
-            Some(host),
-            "{channel}"
-        );
-    }
-}
-
-#[test]
-fn a_channel_that_is_not_an_https_url_of_a_host_fails_the_host_step() {
-    // Catches: an empty or malformed HOSTKEEPER_RELEASE_CHANNEL that would join and ping
-    // nothing (or a wrong host) and leave the wait to fail half an hour later, or a user name or
-    // a second URL taken for the host.
-    for (n, channel) in [
-        "",
-        "channel.example",
-        "http://channel.example:30443",
-        "https://",
-        "https:///releases",
-        "https://user@channel.example",
-        "https://channel.example:port",
-        "https://[fd7a:115c:a1e0::1]:30443",
-        "https://channel.example?x=1",
-        " https://channel.example",
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        assert_eq!(host_of(&format!("bad-{n}"), channel), None, "{channel:?}");
-    }
-}
-
 #[test]
 fn a_bad_channel_with_a_client_id_stops_the_job_before_the_join() {
-    // Catches: a join (holding the OIDC token) that runs after the host step failed.
-    let site =
-        Site::new("bad-channel", &["1.2.10"], &["v1.2.10"]).on_tailnet("https://", CLIENT_ID);
-    assert_eq!(
-        run(&site),
-        Ended::Failed("The release channel's host".to_owned())
-    );
-    assert!(site.joins.borrow().is_empty());
+    // Catches: a join (holding the OIDC token) that runs after the host step failed, and a host
+    // step that accepts a channel that is not an https URL of a host. Every shape the step
+    // accepts and refuses is in the unit tests of `release channel-host`.
+    for (n, channel) in [
+        "https://",
+        "http://channel.example",
+        "https://user@channel.example",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let site = Site::new(&format!("bad-channel-{n}"), &["1.2.10"], &["v1.2.10"])
+            .on_tailnet(channel, CLIENT_ID);
+        assert_eq!(
+            run(&site),
+            Ended::Failed("The release channel's host".to_owned()),
+            "{channel}"
+        );
+        assert!(site.joins.borrow().is_empty(), "{channel}");
+    }
 }

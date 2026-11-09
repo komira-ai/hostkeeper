@@ -310,7 +310,8 @@ jobs:
       # (set-desired.yml): the same pinned action and Tailscale tarball, the same repository
       # variables, an ephemeral node tagged HOSTKEEPER_TAILNET_TAG, authenticated with a GitHub
       # OIDC token (the job's `id-token: write`). The first step takes the channel's host out of
-      # HOSTKEEPER_RELEASE_CHANNEL, or fails naming the variable; the join pings that host until
+      # HOSTKEEPER_RELEASE_CHANNEL (`cargo xtask release channel-host`, given the URL as its flag
+      # `--channel`), or fails naming the reason; the join pings that host until
       # it answers, so the wait does not race the tailnet's spread of the new node. Empty: no
       # join, and the channel must be reachable from the runner as it is.
       - name: The release channel's host
@@ -318,7 +319,7 @@ jobs:
         if: ${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID != '' }}
         env:
           RELEASE_CHANNEL: ${{ vars.HOSTKEEPER_RELEASE_CHANNEL }}
-        run: '[[ "$RELEASE_CHANNEL" =~ ^https://([A-Za-z0-9.-]+)(:[0-9]+)?(/.*)?$ ]] || { echo "::error::HOSTKEEPER_RELEASE_CHANNEL is not https://<host>[:<port>][/<path>]"; exit 1; }; echo "hostname=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"'
+        run: cargo xtask release channel-host --channel "$RELEASE_CHANNEL" --output "$GITHUB_OUTPUT"
       - name: Join the tailnet
         id: tailnet
         if: ${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID != '' }}

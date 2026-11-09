@@ -196,7 +196,8 @@ const PUBLISH_MARKS: [&str; 6] = [
 ];
 
 /// The `cargo xtask release` verbs release.yml may run: none builds, packages or signs.
-const RELEASE_VERBS: [&str; 6] = [
+const RELEASE_VERBS: [&str; 7] = [
+    "channel-host",
     "check",
     "check-binary",
     "locate",

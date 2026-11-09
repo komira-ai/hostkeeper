@@ -94,7 +94,7 @@ pub const CHANNEL_STEPS: [&str; 12] = [
     "run rustup toolchain install",
     "run cargo xtask --help",
     "uses actions/download-artifact with name=release-${{ steps.newest.outputs.tag }} with path=dist",
-    r#"if ${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID != '' }} run [[ "$RELEASE_CHANNEL" =~ ^https://([A-Za-z0-9.-]+)(:[0-9]+)?(/.*)?$ ]] || { echo "::error::HOSTKEEPER_RELEASE_CHANNEL is not https://<host>[:<port>][/<path>]"; exit 1; }; echo "hostname=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT" env RELEASE_CHANNEL=${{ vars.HOSTKEEPER_RELEASE_CHANNEL }}"#,
+    r#"if ${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID != '' }} run cargo xtask release channel-host --channel "$RELEASE_CHANNEL" --output "$GITHUB_OUTPUT" env RELEASE_CHANNEL=${{ vars.HOSTKEEPER_RELEASE_CHANNEL }}"#,
     "if ${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID != '' }} uses tailscale/github-action with audience=${{ vars.HOSTKEEPER_TAILNET_AUDIENCE }} with oauth-client-id=${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID }} with ping=${{ steps.channel-host.outputs.hostname }} with sha256sum=c6f99a5d774c7783b56902188d69e9756fc3dddfb08ac6be4cb2585f3fecdc32 with tags=${{ vars.HOSTKEEPER_TAILNET_TAG }} with use-cache=false with version=1.94.2",
     r#"run curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --max-time 30 --retry 45 --retry-delay 40 --retry-max-time 1800 --retry-all-errors --output "$RUNNER_TEMP/served-index.json" "$RELEASE_CHANNEL/hostkeeper/$VERSION/index.json" env RELEASE_CHANNEL=${{ vars.HOSTKEEPER_RELEASE_CHANNEL }} env VERSION=${{ steps.newest.outputs.version }}"#,
     r#"run cmp dist/index.json "$RUNNER_TEMP/served-index.json""#,
