@@ -284,8 +284,8 @@ fn info_with(pkg: &FakePkg, from: &str, to: &str) -> Option<String> {
 
 /// Catches: a package whose shape lets `installer` write something other than the `Bom` lists
 /// (a second component, a component not selected by default, a `Distribution` script or
-/// check, another identifier or version, another install location, a `relocate` or a
-/// `bundle`) being staged.
+/// check, an entry beside the component or in it, another identifier or version, another install
+/// location, a `relocate` of a bundle or a `bundle`) being staged.
 #[test]
 fn stage_refuses_each_shape_defect_as_manifest_invalid_and_changes_nothing() {
     let two = "<installer-gui-script><pkg-ref id=\"a\">#svc-1.0.pkg</pkg-ref><pkg-ref id=\"b\">#other.pkg</pkg-ref></installer-gui-script>";
@@ -375,8 +375,15 @@ fn stage_refuses_each_shape_defect_as_manifest_invalid_and_changes_nothing() {
             }),
         ),
         (
-            "a relocate",
-            tweak(|p| p.package_info = info_with(p, "</pkg-info>", "<relocate/></pkg-info>")),
+            "an entry in the component",
+            tweak(|p| p.component_extras = vec!["Resources".into()]),
+        ),
+        (
+            "a relocate of a bundle",
+            tweak(|p| {
+                p.package_info =
+                    info_with(p, "<relocate/>", "<relocate><bundle id=\"a\"/></relocate>")
+            }),
         ),
         (
             "a bundle",
@@ -405,6 +412,87 @@ fn stage_refuses_each_shape_defect_as_manifest_invalid_and_changes_nothing() {
         assert!(rig.records.all().is_empty());
         no_install_ran(&rig);
     }
+}
+
+/// Catches: a package carrying a script that `installer` would run as root (a `Scripts` archive
+/// in its component or beside it, a `preinstall` or `postinstall` in its `PackageInfo`, a
+/// payload-free package with scripts) being staged, or refused for its shape (`manifest_invalid`)
+/// rather than as `package_scripts`, or after its `Bom` is read.
+#[test]
+fn stage_refuses_a_package_with_a_script_as_package_scripts_before_its_bom_and_changes_nothing() {
+    let scripts = "<scripts><preinstall file=\"./preinstall\"/></scripts>";
+    let cases: Vec<(&str, FakePkg, &str)> = vec![
+        (
+            "a Scripts archive in the component",
+            tweak(|p| p.component_extras = vec!["Scripts".into()]),
+            "the package carries a script: the component holds \"Scripts\"",
+        ),
+        (
+            "a Scripts archive beside the component",
+            tweak(|p| {
+                p.product = true;
+                p.extras = vec!["Scripts".into()];
+            }),
+            "the package carries a script: the product archive holds \"Scripts\"",
+        ),
+        (
+            "a preinstall in the PackageInfo",
+            tweak(|p| p.package_info = info_with(p, "<scripts/>", scripts)),
+            "the package carries a script: the PackageInfo has a <preinstall> element",
+        ),
+        (
+            "a postinstall in the PackageInfo",
+            tweak(|p| {
+                p.package_info = info_with(
+                    p,
+                    "<scripts/>",
+                    "<scripts><postinstall file=\"./postinstall\"/></scripts>",
+                )
+            }),
+            "the package carries a script: the PackageInfo has a <postinstall> element",
+        ),
+        (
+            "a payload-free package with scripts",
+            tweak(|p| {
+                p.has_payload = false;
+                p.component_extras = vec!["Scripts".into()];
+            }),
+            "the package carries a script: the component holds \"Scripts\"",
+        ),
+    ];
+    for (what, pkg, detail) in cases {
+        let rig = Rig::new("stage-scripts");
+        rig.mac.add(pkg);
+        let (result, _) = rig.try_stage(&rig.order_run("1.0", &BOTH), "svc-1.0");
+        let err = result.unwrap_err();
+        assert_eq!(err.reason(), Reason::PackageScripts, "{what}: {err}");
+        assert_eq!(err.reason().class(), Class::Release);
+        assert_eq!(err.reason().outcome(), Outcome::Failed);
+        assert_eq!(err.detail(), detail, "{what}");
+        assert!(
+            rig.mac.calls_of(Tool::Lsbom).is_empty(),
+            "{what}: the Bom was not read"
+        );
+        assert!(rig.snapshot().is_empty(), "{what}");
+        assert!(rig.records.all().is_empty());
+        no_install_ran(&rig);
+    }
+}
+
+/// Catches: the `PackageInfo` `pkgbuild` writes (its empty `<relocate/>` and `<scripts/>`) being
+/// refused, so that no real package could be staged.
+#[test]
+fn stage_accepts_the_package_info_pkgbuild_writes() {
+    let rig = Rig::new("stage-pkgbuild-form");
+    let pkg = v1();
+    let info = pkg.package_info_text();
+    assert!(
+        info.contains("<relocate/>") && info.contains("<scripts/>"),
+        "{info}"
+    );
+    rig.mac.add(pkg);
+    let (result, _) = rig.try_stage(&rig.order_run("1.0", &BOTH), "svc-1.0");
+    result.unwrap();
 }
 
 fn with_entry(rel_path: &str, content: Content, mode: u32, dirs: &[&str]) -> FakePkg {

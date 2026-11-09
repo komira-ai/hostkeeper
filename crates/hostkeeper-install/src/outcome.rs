@@ -1,6 +1,7 @@
 //! How an installer step fails: an outcome, a class and a reason, as a hook step ends (packages
 //! design section 5.1). The reasons are those of `macos-pkg`'s failure table
-//! (packages-repositories.md section 4.7), and their tokens are only ever added.
+//! (packages-repositories.md section 4.7), with `package_scripts` of packages-native.md section
+//! 10.2, and their tokens are only ever added.
 
 use std::fmt;
 
@@ -33,6 +34,9 @@ pub enum Reason {
     ManifestInvalid,
     /// Another service records the identifier, or another package's receipt lists a payload file.
     PackageConflict,
+    /// The package carries a script that `installer` would run as root (packages-native.md
+    /// section 10.2: a service's package has none).
+    PackageScripts,
     /// A parent directory of a payload path is not root's, or another account can write it.
     UnsafeDirectory,
     /// macOS's installer is busy with another install.
@@ -45,13 +49,14 @@ pub enum Reason {
 
 impl Reason {
     /// Every reason, in token order.
-    pub const ALL: [Reason; 8] = [
+    pub const ALL: [Reason; 9] = [
         Reason::InstallerError,
         Reason::IoError,
         Reason::ManifestInvalid,
         Reason::OrderInvalid,
         Reason::PackageConflict,
         Reason::PackageManagerBusy,
+        Reason::PackageScripts,
         Reason::Signature,
         Reason::UnsafeDirectory,
     ];
@@ -63,6 +68,7 @@ impl Reason {
             Reason::Signature => "signature",
             Reason::ManifestInvalid => "manifest_invalid",
             Reason::PackageConflict => "package_conflict",
+            Reason::PackageScripts => "package_scripts",
             Reason::UnsafeDirectory => "unsafe_directory",
             Reason::PackageManagerBusy => "package_manager_busy",
             Reason::InstallerError => "installer_error",
@@ -76,6 +82,7 @@ impl Reason {
             Reason::OrderInvalid
             | Reason::ManifestInvalid
             | Reason::PackageConflict
+            | Reason::PackageScripts
             | Reason::InstallerError => Class::Release,
             Reason::Signature
             | Reason::UnsafeDirectory

@@ -199,8 +199,86 @@ fn a_distribution_with_a_script_or_a_check_is_refused() {
 fn an_extra_entry_in_the_expansion_is_refused() {
     let dir = scratch("shextra");
     product(dir.path(), &distribution("", REF));
-    fs::write(dir.path().join("Scripts"), b"x").unwrap();
-    assert_eq!(refused(dir.path()), ShapeError::Extra("Scripts".into()));
+    fs::write(dir.path().join("Stray"), b"x").unwrap();
+    let err = refused(dir.path());
+    assert_eq!(err, ShapeError::Extra("Stray".into()));
+    assert!(!err.is_scripts());
+}
+
+/// Catches: a script archive beside or in the component, or a script element of the
+/// `PackageInfo`, being accepted or refused as a shape defect (`manifest_invalid`) instead of a
+/// script (`package_scripts`).
+#[test]
+fn a_script_in_or_beside_the_component_or_its_package_info_is_a_script() {
+    let beside = scratch("shscripts-beside");
+    product(beside.path(), &distribution("", REF));
+    fs::create_dir(beside.path().join("Scripts")).unwrap();
+    let inside = scratch("shscripts-in");
+    component(inside.path(), &package_info(""));
+    fs::create_dir(inside.path().join("Scripts")).unwrap();
+    let mut cases = vec![
+        (
+            refused(beside.path()),
+            "the product archive holds \"Scripts\"".to_owned(),
+        ),
+        (
+            refused(inside.path()),
+            "the component holds \"Scripts\"".to_owned(),
+        ),
+    ];
+    for name in SCRIPT_ELEMENTS {
+        let dir = scratch("shscripts-info");
+        component(
+            dir.path(),
+            &package_info(&format!("<scripts><{name} file=\"./{name}\"/></scripts>")),
+        );
+        cases.push((
+            refused(dir.path()),
+            format!("the PackageInfo has a <{name}> element"),
+        ));
+    }
+    for (err, detail) in cases {
+        assert_eq!(err, ShapeError::Scripts(detail));
+        assert!(err.is_scripts());
+    }
+}
+
+/// Catches: a payload-free component with scripts reported for its missing `Payload`, not for its
+/// scripts.
+#[test]
+fn a_payload_free_component_with_scripts_is_a_script() {
+    let dir = scratch("shscripts-nopayload");
+    component(dir.path(), &package_info(""));
+    fs::remove_dir(dir.path().join("Payload")).unwrap();
+    fs::create_dir(dir.path().join("Scripts")).unwrap();
+    assert!(refused(dir.path()).is_scripts());
+}
+
+/// Catches: an entry of a component other than its `Bom`, `PackageInfo` and `Payload` passing.
+#[test]
+fn an_entry_in_the_component_beside_its_three_is_refused() {
+    let dir = scratch("shcompextra");
+    component(dir.path(), &package_info(""));
+    fs::write(dir.path().join("Resources"), b"x").unwrap();
+    assert_eq!(
+        refused(dir.path()),
+        ShapeError::ComponentExtra("Resources".into())
+    );
+}
+
+/// Catches: the empty elements `pkgbuild` writes into every `PackageInfo` (`<relocate/>`,
+/// `<scripts/>`, `<bundle-version/>`) being refused, which refused every real package.
+#[test]
+fn the_package_info_pkgbuild_writes_is_accepted() {
+    let dir = scratch("shpkgbuild");
+    component(
+        dir.path(),
+        &package_info(
+            "<bundle-version/><upgrade-bundle/><update-bundle/><atomic-update-bundle/>\
+             <strict-identifier/><relocate/><scripts/>",
+        ),
+    );
+    check(dir.path(), ID, VERSION).unwrap();
 }
 
 #[test]
@@ -302,18 +380,20 @@ fn an_identifier_version_or_location_other_than_the_orders_is_refused() {
     }
 }
 
-/// Catches: a `relocate` or `bundle` that lets `installer` write somewhere the `Bom` does not say.
+/// Catches: a `bundle`, alone or in a `relocate`, that lets `installer` write somewhere the
+/// `Bom` does not say.
 #[test]
-fn a_package_info_with_relocate_or_bundle_is_refused() {
-    for name in REFUSED_PACKAGE_INFO {
+fn a_package_info_naming_a_bundle_is_refused_alone_or_in_a_relocate() {
+    for extra in [
+        "<bundle id=\"x\"/>",
+        "<relocate><bundle id=\"x\"/></relocate>",
+    ] {
         let dir = scratch("shrelocate");
-        component(
-            dir.path(),
-            &package_info(&format!("<{name}><bundle id=\"x\"/></{name}>")),
-        );
+        component(dir.path(), &package_info(extra));
         assert_eq!(
             refused(dir.path()),
-            ShapeError::RefusedPackageInfo(name.into())
+            ShapeError::RefusedPackageInfo("bundle".into()),
+            "{extra}"
         );
     }
 }

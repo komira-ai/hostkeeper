@@ -2,8 +2,9 @@
 
 use super::*;
 
-/// Every reason with the token, class and outcome the failure table of section 4.7 gives it.
-const TABLE: [(Reason, &str, Class, Outcome); 8] = [
+/// Every reason with the token, class and outcome the failure table of section 4.7 gives it, and
+/// `package_scripts` as packages-native.md section 10.2 gives it.
+const TABLE: [(Reason, &str, Class, Outcome); 9] = [
     (
         Reason::InstallerError,
         "installer_error",
@@ -39,6 +40,12 @@ const TABLE: [(Reason, &str, Class, Outcome); 8] = [
         "package_manager_busy",
         Class::Environment,
         Outcome::Deferred,
+    ),
+    (
+        Reason::PackageScripts,
+        "package_scripts",
+        Class::Release,
+        Outcome::Failed,
     ),
     (
         Reason::Signature,

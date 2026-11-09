@@ -74,7 +74,10 @@ impl MacosPkg<'_> {
         let invalid =
             |e: &dyn std::fmt::Display| Failure::new(Reason::ManifestInvalid, e.to_string());
         let component = shape::check(&expanded, &order.identifier, order.version.as_str())
-            .map_err(|e| invalid(&e))?;
+            .map_err(|e| match e.is_scripts() {
+                true => Failure::new(Reason::PackageScripts, e.to_string()),
+                false => invalid(&e),
+            })?;
 
         let listed = self.run(
             Tool::Lsbom,

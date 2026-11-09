@@ -66,6 +66,11 @@ pub struct FakePkg {
     pub distribution: Option<String>,
     /// Entries a product archive's expansion holds beside its component.
     pub extras: Vec<String>,
+    /// Directories the component's expansion holds beside its `Bom`, `PackageInfo` and `Payload`
+    /// (`Scripts` for a package with scripts).
+    pub component_extras: Vec<String>,
+    /// Whether the component has a `Payload` (`pkgbuild --nopayload` makes one without).
+    pub has_payload: bool,
     pub package_info: Option<String>,
     pub payload: BTreeMap<String, Entry>,
     pub lsbom: Option<(i32, String)>,
@@ -86,6 +91,8 @@ impl FakePkg {
             product: false,
             distribution: None,
             extras: Vec::new(),
+            component_extras: Vec::new(),
+            has_payload: true,
             package_info: None,
             payload: BTreeMap::new(),
             lsbom: None,
@@ -188,11 +195,12 @@ impl FakePkg {
         self
     }
 
-    /// The `PackageInfo` the package carries: its own, or the default of its identity.
+    /// The `PackageInfo` the package carries: its own, or the default of its identity in the form
+    /// `pkgbuild` writes, with its empty `bundle-version`, `relocate` and `scripts`.
     pub fn package_info_text(&self) -> String {
         self.package_info.clone().unwrap_or_else(|| {
             format!(
-                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<pkg-info format-version=\"2\" identifier=\"{}\" version=\"{}\" install-location=\"/\" auth=\"root\"><payload numberOfFiles=\"{}\" installKBytes=\"1\"/></pkg-info>\n",
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<pkg-info overwrite-permissions=\"true\" relocatable=\"false\" identifier=\"{}\" postinstall-action=\"none\" version=\"{}\" format-version=\"2\" generator-version=\"InstallCmds-865 (24A335)\" install-location=\"/\" auth=\"root\">\n    <payload numberOfFiles=\"{}\" installKBytes=\"1\"/>\n    <bundle-version/>\n    <upgrade-bundle/>\n    <update-bundle/>\n    <atomic-update-bundle/>\n    <strict-identifier/>\n    <relocate/>\n    <scripts/>\n</pkg-info>\n",
                 self.identifier,
                 self.version,
                 self.payload.len()
@@ -474,6 +482,13 @@ impl FakeMac {
         fs::create_dir_all(&comp).unwrap();
         fs::write(comp.join("PackageInfo"), pkg.package_info_text()).unwrap();
         fs::write(comp.join("Bom"), format!("fake-bom:{}", pkg.name)).unwrap();
+        for extra in &pkg.component_extras {
+            fs::create_dir_all(comp.join(extra)).unwrap();
+            fs::write(comp.join(extra).join("postinstall"), b"#!/bin/sh\n").unwrap();
+        }
+        if !pkg.has_payload {
+            return;
+        }
         let payload = comp.join("Payload");
         fs::create_dir_all(&payload).unwrap();
         for (path, entry) in &pkg.payload {
