@@ -43,9 +43,12 @@ The directory of the installers holds `hostkeeper-<version>-macos-arm64.pkg` and
 The pointer `stable.json` is `{"version", "tag", "commit", "files": {<name>: {"sha256", "size"}}}`
 for the newest promoted release.
 
-**The macOS installers are not signed or notarized** until the macOS signing milestone (M11). Nothing in
-the release machinery signs them; the pointer moves the same unsigned bytes that `testing` holds. Install
-it from a terminal with `installer`, after the checks below; a double click is refused by Gatekeeper.
+**hostkeeper's macOS installer is signed but not notarized; hello's is neither.** The release signs
+hostkeeper's with the Developer ID Installer identity before it is attested
+([verify-a-release.md](verify-a-release.md)), and the pointer moves the same bytes that `testing` holds.
+An MDM installs hostkeeper's as it is; by hand, install either from a terminal with `installer`, after
+the checks below; a double click on a downloaded copy is refused by Gatekeeper, which asks for
+notarization.
 
 ## Installing from a channel
 

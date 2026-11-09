@@ -444,6 +444,8 @@ fn service_beat(service: &str, beat: &Heartbeat) -> agent::ServiceBeat {
         record_try: beat.record_try,
         // `Hosts.List` and `Hosts.Get` fill it in from the fleet ([`crate::picks::show`]).
         installer: None,
+        // `Hosts.List` and `Hosts.Get` fill it in from the fleet ([`crate::picks::show`]).
+        drift: None,
     }
 }
 

@@ -292,3 +292,28 @@ pub(crate) async fn target_v1_is_acted_on() {
         )
     );
 }
+
+/// Proves: the drift each service reported is kept with the list; a drift with a string outside a
+/// package version's grammar is left out while the list and the installers beside it are kept;
+/// a service with no drift keeps none.
+/// Catches: a bad drift that wipes the list read with it, or kept to be shown.
+#[test]
+fn a_drift_is_kept_beside_the_list_and_a_bad_one_is_left_out() {
+    let mut picks = crate::picks::Picks::default();
+    let mut request = said(&["deb"], Some("deb"));
+    let good = agent::DriftReport {
+        found: Some("1:2.0-1".to_owned()),
+        recorded: None,
+    };
+    request.services[0].drift = Some(good.clone());
+    picks.hear(id("d1"), Heard::of(&request).expect("a list"));
+    assert_eq!(picks.drift(&id("d1"), WEB), Some(&good));
+    request.services[0].drift = Some(agent::DriftReport {
+        found: Some("2 0".to_owned()),
+        recorded: None,
+    });
+    picks.hear(id("d1"), Heard::of(&request).expect("the list is kept"));
+    assert_eq!(picks.drift(&id("d1"), WEB), None);
+    assert_eq!(picks.listed(&id("d1")), Some(&["deb".to_owned()][..]));
+    assert_eq!(picks.running(&id("d1"), WEB), Some("deb"));
+}

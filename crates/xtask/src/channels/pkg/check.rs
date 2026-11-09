@@ -6,9 +6,9 @@
 //! `<url>/pkg/<product>/<version>/` over HTTPS (`curl`, behind [`Host`], so a test answers in
 //! place of it and no test reaches a network), and refuses unless each installer has the digest
 //! the release's `SHA256SUMS` lists, and the directory's `SHA256SUMS` lists each installer with
-//! that digest and each bundle with the digest of the bundle that was downloaded. The installers
-//! are unsigned (see [`super`]); this check is what says the bytes a user downloads are the ones
-//! the release built.
+//! that digest and each bundle with the digest of the bundle that was downloaded. It does not read
+//! an installer's signature (hostkeeper's is signed by the release, hello's is not; see
+//! [`super`]); this check is what says the bytes a user downloads are the ones the release built.
 //!
 //! New in this repository; the other `pkg` verbs are the copy of komira-ai/tierstore.
 
@@ -127,7 +127,7 @@ pub(crate) fn check(host: &dyn Host, r: &Request) -> Result<Vec<String>, Error> 
         return Err(Error::Refused(problems));
     }
     Ok(vec![format!(
-        "check-pkg: {}, as the release's {SUMS} lists; their bundles and the directory's {SUMS} agree; the installers are unsigned",
+        "check-pkg: {}, as the release's {SUMS} lists; their bundles and the directory's {SUMS} agree; these are the release's bytes, hostkeeper's installer signed and hello's unsigned",
         said.join("; ")
     )])
 }

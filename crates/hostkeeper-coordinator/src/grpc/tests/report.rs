@@ -873,6 +873,7 @@ fn full_heartbeat_maps_every_fact_into_the_service_beat() {
         out.beat,
         Some(agent::ServiceBeat {
             installer: None,
+            drift: None,
             name: "web".to_owned(),
             version: "2.0".to_owned(),
             health: agent::Health::Healthy as i32,

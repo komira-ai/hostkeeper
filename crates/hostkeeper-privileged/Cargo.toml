@@ -170,7 +170,10 @@ hostkeeper-unpack = { path = "../hostkeeper-unpack" }
 # real `ioreg`.
 hostkeeper-enroll = { path = "../hostkeeper-enroll" }
 # The macOS device test of the macos-pkg installer (`tests/install_macos_pkg.rs`): `MacosPkg` over
-# the real `HostTools`, and the signature and receipt forms it pins.
+# the real `HostTools`, and the signature and receipt forms it pins;
+# and the device test of the apt backend (`tests/install_apt.rs`): the repository installer's own
+# steps over the production launcher, and the backend's readers of apt's output, against the real
+# apt of the runner and of each deb release's container.
 hostkeeper-install = { path = "../hostkeeper-install" }
 # The macOS self-update test that the real coordinator in process drives: each heartbeat read as
 # the coordinator's JSON route reads it, from the host it names.

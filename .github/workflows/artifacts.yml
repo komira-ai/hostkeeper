@@ -9,7 +9,8 @@
 # for linux-x86_64 the package of `mdm`, the MDM server stack as a service package
 # (docs/design/two-programs.md section 6.2), whose pinned tools are fetched and checked against
 # crates/hostkeeper-mdm-core/pins.txt here (`cargo xtask release mdm-fetch`), with its `.sha256`;
-# for macos-arm64 the installer pkg of a Mac's first install; the release indexes `index.json`,
+# for macos-arm64 the installer pkg of a Mac's first install, signed on a push to main with the
+# Developer ID Installer identity (sign-pkg, then check-pkg); the release indexes `index.json`,
 # `hello-index.json` and `hello-fail-ready-index.json` over the three packages each, and
 # `mdm-index.json` over the one mdm package; the coordinator's image index over its two images
 # (`cargo xtask release image-index`), whose SHA-256 is the digest release.yml pushes the
@@ -444,8 +445,10 @@ jobs:
   # are the plists of its two slots), and the installer pkg of a Mac's first
   # install (a distribution pkg: productbuild around the component pkgbuild makes), read back from
   # the built pkg and checked here. No deb, rpm, coordinator or hostkeeper-mdm on macOS.
-  # The pkg is not signed (that needs an Apple Developer ID Installer identity); it is attested
-  # with every other file. The runner's `gtar` is GNU tar, so the tarball is made as on Linux.
+  # The pkg built here is unsigned and is not a release file: it goes to its own artifact,
+  # `pkg-unsigned-macos-arm64`, which sign-pkg signs and check-pkg checks and publishes, so the
+  # pkg SHA256SUMS lists and attest attests is the signed one. The runner's `gtar` is GNU tar, so
+  # the tarball is made as on Linux.
   build-macos:
     name: macos-arm64
     needs: [version]
@@ -536,8 +539,10 @@ jobs:
         run: '"$RUNNER_TEMP/gh-pinned/gh" attestation trusted-root > "$RUNNER_TEMP/trusted_root.download"'
       - name: Check the trusted root (pinned checksum)
         run: cargo xtask install-tool --download "$RUNNER_TEMP/trusted_root.download" --sha256 "$TRUSTED_ROOT_SHA256" --out "$RUNNER_TEMP/trusted_root.json"
+      # Into pkg/, not dist/: the unsigned pkg is never a release file.
+      - run: mkdir pkg
       - name: The installer pkg (component by pkgbuild, distribution by productbuild)
-        run: cargo xtask release macos-pkg --version "$RELEASE_VERSION" --binary target/release/hostkeeper --gh "$RUNNER_TEMP/gh-pinned/gh" --trusted-root "$RUNNER_TEMP/trusted_root.json" --stage "$RUNNER_TEMP/pkg-root" --out dist
+        run: cargo xtask release macos-pkg --version "$RELEASE_VERSION" --binary target/release/hostkeeper --gh "$RUNNER_TEMP/gh-pinned/gh" --trusted-root "$RUNNER_TEMP/trusted_root.json" --stage "$RUNNER_TEMP/pkg-root" --out pkg
       # Read back from the built pkg, expanded into its Distribution and its component: the
       # Distribution names the one component under the pkg's identifier and version and runs no
       # installer script, and the component's payload holds exactly the binary, the daemon's plist,
@@ -547,7 +552,7 @@ jobs:
       # exactly those files, and the pkg's one script is the postinstall that boots out and loads
       # the job, byte for byte.
       - name: Expand the distribution pkg
-        run: pkgutil --expand "dist/hostkeeper-$RELEASE_VERSION-$PLATFORM.pkg" "$RUNNER_TEMP/pkg-expanded"
+        run: pkgutil --expand "pkg/hostkeeper-$RELEASE_VERSION-$PLATFORM.pkg" "$RUNNER_TEMP/pkg-expanded"
       - name: The distribution pkg holds one component that installs exactly the binary, the plist, the log directory and its newsyslog file, gh and the trusted root
         run: cargo xtask release check-macos-pkg "$RUNNER_TEMP/pkg-expanded" --version "$RELEASE_VERSION" --binary target/release/hostkeeper --gh "$RUNNER_TEMP/gh-pinned/gh" --trusted-root "$RUNNER_TEMP/trusted_root.json"
       - run: mkdir "$RUNNER_TEMP/unpacked"
@@ -557,8 +562,8 @@ jobs:
       # hello's .pkg and its failing build's (docs/design/packages-native.md, items A20 and A21):
       # one component with no script, the program and its hook under
       # /Library/Application Support/hello/ and the two slots' plists, Disabled, in
-      # /Library/LaunchDaemons/, read back from the expanded product. Unsigned, as hostkeeper's
-      # installer is, until the project has a Developer ID. hello's goes to dist/, a release asset
+      # /Library/LaunchDaemons/, read back from the expanded product. Unsigned: sign-pkg below
+      # signs hostkeeper's installer alone. hello's goes to dist/, a release asset
       # the release puts in the testing directory of the installers; the failing build's to
       # native/, as on Linux.
       - name: hello's .pkg (component by pkgbuild with no scripts, distribution by productbuild)
@@ -583,6 +588,123 @@ jobs:
         with:
           name: native-${{ env.PLATFORM }}
           path: native/
+          retention-days: 90
+          if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pkg-unsigned-${{ env.PLATFORM }}
+          path: pkg/
+          retention-days: 90
+          if-no-files-found: error
+
+  # Push to main only: the installer pkg signed with the Developer ID Installer identity, for the
+  # MDM's InstallEnterpriseApplication, which installs only a signed pkg. Not notarized: a pkg
+  # an MDM installs needs no notarization. This job runs no repository code (no checkout, no
+  # cargo), so no build script or dependency runs on the machine that holds the key: the
+  # workflow lint holds it to the exact steps of SIGN_PKG_STEPS (crates/xtask/tests/workflows).
+  # The identity (the PKCS#12 with its key and Apple's Developer ID G2 intermediate) goes into
+  # a keychain of this job in $RUNNER_TEMP, never the login keychain, which is the user's only
+  # keychain while productsign runs; the keychain and the PKCS#12 file are deleted whether or
+  # not the signing worked. The keychain's password is the PKCS#12's, a secret the log masks.
+  # The signed pkg goes to `pkg-signed-macos-arm64`, which check-pkg checks.
+  sign-pkg:
+    needs: [version, build-macos]
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: macos-15
+    timeout-minutes: 15
+    environment: pkg-signing
+    permissions:
+      contents: read
+    env:
+      RELEASE_VERSION: ${{ needs.version.outputs.version }}
+      IDENTITY: "Developer ID Installer: Komira AI, Inc. (U7RTX4XD3X)"
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: pkg-unsigned-macos-arm64
+          path: unsigned
+      - name: The identity, from its secret into a file of the job
+        env:
+          P12: ${{ secrets.MACOS_INSTALLER_P12 }}
+        run: base64 --decode -o "$RUNNER_TEMP/installer.p12" <<< "$P12"
+      - name: A keychain of the job
+        env:
+          PASSWORD: ${{ secrets.MACOS_INSTALLER_P12_PASSWORD }}
+        run: security create-keychain -p "$PASSWORD" "$RUNNER_TEMP/pkg-signing.keychain-db"
+      - name: The keychain stays unlocked for the job
+        run: security set-keychain-settings -lut 21600 "$RUNNER_TEMP/pkg-signing.keychain-db"
+      - name: Unlock the keychain
+        env:
+          PASSWORD: ${{ secrets.MACOS_INSTALLER_P12_PASSWORD }}
+        run: security unlock-keychain -p "$PASSWORD" "$RUNNER_TEMP/pkg-signing.keychain-db"
+      - name: Import the identity, its key usable by productsign only
+        env:
+          PASSWORD: ${{ secrets.MACOS_INSTALLER_P12_PASSWORD }}
+        run: security import "$RUNNER_TEMP/installer.p12" -k "$RUNNER_TEMP/pkg-signing.keychain-db" -f pkcs12 -P "$PASSWORD" -T /usr/bin/productsign
+      - name: Let Apple's tools use the key without a prompt
+        env:
+          PASSWORD: ${{ secrets.MACOS_INSTALLER_P12_PASSWORD }}
+        run: security set-key-partition-list -S "apple-tool:,apple:" -s -k "$PASSWORD" "$RUNNER_TEMP/pkg-signing.keychain-db"
+      - name: The job's keychain is the user's only keychain
+        run: security list-keychains -d user -s "$RUNNER_TEMP/pkg-signing.keychain-db"
+      - run: mkdir dist
+      - name: Sign the pkg, with a trusted timestamp
+        run: productsign --sign "$IDENTITY" --keychain "$RUNNER_TEMP/pkg-signing.keychain-db" --timestamp "unsigned/hostkeeper-$RELEASE_VERSION-macos-arm64.pkg" "dist/hostkeeper-$RELEASE_VERSION-macos-arm64.pkg"
+      - name: Delete the keychain, whether the signing worked or not
+        if: ${{ always() }}
+        run: security delete-keychain "$RUNNER_TEMP/pkg-signing.keychain-db"
+      - name: Delete the identity's file, whether the signing worked or not
+        if: ${{ always() }}
+        run: rm -f "$RUNNER_TEMP/installer.p12"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pkg-signed-macos-arm64
+          path: dist/
+          retention-days: 90
+          if-no-files-found: error
+
+  # Push to main only, with no secret: the signed pkg is checked and only then becomes a release
+  # file. `release check-pkg-signature` refuses it unless pkgutil says the Mac trusts its
+  # signature, signed with a trusted timestamp by exactly the identity under Apple's Developer
+  # ID intermediate and root; the signed and the unsigned pkg must expand to the same files, so
+  # signing changed nothing that check-macos-pkg checked in build-macos. The pkg is uploaded as
+  # `assets-pkg-macos-arm64`, the one `assets-*` artifact that holds it, so SHA256SUMS, the
+  # attestation and the release name the signed bytes.
+  check-pkg:
+    needs: [version, sign-pkg]
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: macos-15
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      RELEASE_VERSION: ${{ needs.version.outputs.version }}
+      IDENTITY: "Developer ID Installer: Komira AI, Inc. (U7RTX4XD3X)"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: pkg-unsigned-macos-arm64
+          path: unsigned
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: pkg-signed-macos-arm64
+          path: dist
+      - name: The signature is the identity's, under Apple's chain, with a trusted timestamp
+        run: cargo xtask release check-pkg-signature "dist/hostkeeper-$RELEASE_VERSION-macos-arm64.pkg" --identity "$IDENTITY"
+      - name: Expand the unsigned pkg
+        run: pkgutil --expand "unsigned/hostkeeper-$RELEASE_VERSION-macos-arm64.pkg" "$RUNNER_TEMP/unsigned-expanded"
+      - name: Expand the signed pkg
+        run: pkgutil --expand "dist/hostkeeper-$RELEASE_VERSION-macos-arm64.pkg" "$RUNNER_TEMP/signed-expanded"
+      - name: Signing changed no file of the pkg
+        run: diff -r "$RUNNER_TEMP/unsigned-expanded" "$RUNNER_TEMP/signed-expanded"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: assets-pkg-macos-arm64
+          path: dist/
           retention-days: 90
           if-no-files-found: error
 
@@ -677,8 +799,11 @@ jobs:
   # boot sets of network install (it reads no network), then SHA256SUMS over every file but itself
   # (the bundles come later, from attest). The attest job signs these sums, so they are the one
   # list of what a release holds.
+  # On a push to main it waits for check-pkg, which publishes the signed pkg; on a run by hand,
+  # which signs nothing, check-pkg is skipped and the sums are made without the pkg.
   sums:
-    needs: [version, build, build-macos, image]
+    needs: [version, build, build-macos, image, check-pkg]
+    if: ${{ !cancelled() && !failure() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:

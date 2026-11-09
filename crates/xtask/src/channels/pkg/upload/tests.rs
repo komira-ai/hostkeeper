@@ -12,8 +12,8 @@ fn keys() -> Vec<String> {
 
 #[test]
 fn the_first_upload_puts_each_installer_its_bundle_and_the_sums_once_each_and_no_pointer() {
-    // The installers are unsigned: what an upload writes is the testing directory of a version
-    // and nothing that a user following the stable pointer would see.
+    // An upload signs nothing: what it writes is the testing directory of a version and nothing
+    // that a user following the stable pointer would see.
     let f = Fixture::new("first");
     let aws = FakeAws::new();
     let said = upload(&aws, &f.request("")).expect("uploaded");

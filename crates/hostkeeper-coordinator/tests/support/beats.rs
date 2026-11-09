@@ -44,6 +44,20 @@ pub struct Runs {
     pub health: agent::Health,
     pub installer: Option<String>,
     pub deferred: Option<agent::DeferredReport>,
+    /// The drift its installer found at this heartbeat, over gRPC only.
+    pub drift: Option<agent::DriftReport>,
+}
+
+impl Runs {
+    /// The same service with drift: `found` is what the package manager shows, `recorded` what
+    /// the record of what was placed names.
+    pub fn drifted(mut self, found: Option<&str>, recorded: Option<&str>) -> Self {
+        self.drift = Some(agent::DriftReport {
+            found: found.map(str::to_owned),
+            recorded: recorded.map(str::to_owned),
+        });
+        self
+    }
 }
 
 /// `name` at `version`, healthy, installed with `installer`.
@@ -54,6 +68,7 @@ pub fn runs(name: &str, version: &str, installer: Option<&str>) -> Runs {
         health: agent::Health::Healthy,
         installer: installer.map(str::to_owned),
         deferred: None,
+        drift: None,
     }
 }
 
@@ -118,6 +133,7 @@ impl Daemon {
                     health: one.health as i32,
                     installer: one.installer.clone(),
                     deferred: one.deferred.clone(),
+                    drift: one.drift.clone(),
                     ..agent::ServiceBeat::default()
                 })
                 .collect(),

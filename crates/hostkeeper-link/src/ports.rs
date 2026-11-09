@@ -208,6 +208,19 @@ pub struct Observation {
     pub health: Health,
     /// Why the health is what it is.
     pub health_detail: Option<String>,
+    /// The drift the service's installer found at this observation, if it found any.
+    pub drift: Option<Drift>,
+}
+
+/// A native package found at a version the daemon did not set, as the installer reports it. Each
+/// string is a package version (1 to 128 bytes of `[A-Za-z0-9.+~:_-]`); the heartbeat sends a
+/// drift with a string outside that grammar as no drift.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Drift {
+    /// The version the package manager shows; none when the package is not installed.
+    pub found: Option<String>,
+    /// The version the record of what was placed names; none when no record names the package.
+    pub recorded: Option<String>,
 }
 
 /// The service observer: liveness, version and health, observed and not reported by the

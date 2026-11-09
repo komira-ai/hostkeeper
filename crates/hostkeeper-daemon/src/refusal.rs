@@ -118,6 +118,10 @@ pub enum Refusal {
     /// The entry's installer is not one this daemon lists. Reported as a deferral, not a
     /// refusal: the coordinator's copy of the list can be one restart stale.
     InstallerNotListed,
+    /// The entry is of a repository installer and names no repository: only a coordinator that
+    /// dropped the field sends it. Reported as a deferral, not a refusal: the coordinator is
+    /// upgraded by its operator and the next order is judged again.
+    CoordinatorTooOld,
     /// The entry's manifest breaks a rule of its installer. Refused before anything is fetched.
     ManifestInvalid,
     /// The host's `stores.toml` defines no store a location of the entry names, and no store is
@@ -138,7 +142,7 @@ pub enum Refusal {
 
 impl Refusal {
     /// Every refusal, in the order of the enum.
-    pub const ALL: [Refusal; 49] = [
+    pub const ALL: [Refusal; 50] = [
         Refusal::InvalidOrder,
         Refusal::NotImplemented,
         Refusal::Busy,
@@ -182,6 +186,7 @@ impl Refusal {
         Refusal::VerifyUnavailable,
         Refusal::OrderInvalid,
         Refusal::InstallerNotListed,
+        Refusal::CoordinatorTooOld,
         Refusal::ManifestInvalid,
         Refusal::NoStore,
         Refusal::StoreDigestMismatch,
@@ -236,6 +241,7 @@ impl Refusal {
             Refusal::VerifyUnavailable => "verify_unavailable",
             Refusal::OrderInvalid => "order_invalid",
             Refusal::InstallerNotListed => "installer_not_listed",
+            Refusal::CoordinatorTooOld => "coordinator_too_old",
             Refusal::ManifestInvalid => "manifest_invalid",
             Refusal::NoStore => "no_store",
             Refusal::StoreDigestMismatch => "store_digest_mismatch",

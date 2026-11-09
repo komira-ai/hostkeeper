@@ -68,6 +68,7 @@ use crate::notify::{
 use crate::observer::{OwnService, observer_with};
 use crate::prune::{LayoutPrune, NoLockPoint};
 use crate::real_packages::RealPackages;
+use crate::repositories;
 use crate::selfupdate::binary_dir;
 use crate::start::{self, Settings, StartError};
 use crate::trusted_root::{PACKAGED_TRUSTED_ROOT, TrustedRoot};
@@ -507,6 +508,10 @@ pub struct HostFiles {
     /// The managed preferences a Mac's MDM installs, which the start writes the daemon config
     /// from when that is not there ([`crate::mac_config::at_start`]); none on Linux.
     pub managed_config: Option<PathBuf>,
+    /// The directory of repository entries ([`hostkeeper_install::repository::config`]), which a
+    /// start refuses when it is not sound; none on a Mac, which has no repository entries and
+    /// never reads the directory.
+    pub repositories: Option<PathBuf>,
     /// The directory the host's `os-release` is read under, which the installers the daemon
     /// announces are decided by ([`hostkeeper_install::announce`]): `/`.
     pub os_root: PathBuf,
@@ -571,6 +576,8 @@ impl HostFiles {
             console,
             managed_config: (kind == PlatformKind::Macos)
                 .then(|| PathBuf::from(hostkeeper_launchd::postinstall::MANAGED_CONFIG)),
+            repositories: (kind != PlatformKind::Macos)
+                .then(|| PathBuf::from(hostkeeper_install::repository::config::REPOSITORIES_DIR)),
             os_root: PathBuf::from("/"),
         }
     }
@@ -681,6 +688,8 @@ pub fn host_ports(
     // (item A6 dispatches them), so `macos-pkg` is not in `entry::INSTALLERS` and the daemon does
     // not announce an installer it cannot run. A6 takes the loaded signers from this call.
     let _signers = load_signers(files, 0)?;
+    let repositories = repositories::load(files)?;
+    let announcement = repositories::announced(announcement, &files.os_root, &repositories);
     let clock: Arc<dyn Clock> = Arc::new(host_clock());
     let fetcher = NetFetcher::new(
         UreqTransport::new(&tls_roots(&files.ca_bundle)),
