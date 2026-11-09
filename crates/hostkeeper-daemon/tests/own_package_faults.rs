@@ -14,7 +14,9 @@ use std::sync::atomic::AtomicU64;
 
 use hostkeeper_daemon::Reply;
 use hostkeeper_daemon::locks::Holder;
-use hostkeeper_daemon::own_package::{OwnActivate, REASON_ACTIVATE_PENDING};
+use hostkeeper_daemon::own_package::{
+    OwnActivate, REASON_ACTIVATE_PENDING, REASON_RELEASE_UNREADABLE,
+};
 use hostkeeper_daemon::refusal::Refusal;
 use hostkeeper_hook::{Class, Phase, Step, Verdict};
 use hostkeeper_placed::InstalledEntry;
@@ -116,30 +118,57 @@ fn an_activate_that_fails_in_the_environment_is_failed_of_that_class() {
     );
 }
 
-/// Proves a pending `activate` that cannot be done for the host's files is tried again, not
-/// ended: a version that is not a version, a version directory gone (its archive manifest cannot
-/// be read), and a `target.json` that does not read are each `Deferred` `io_error`, with the
-/// record still waiting and an alert naming the version.
+/// Proves a pending `activate` whose version cannot be read ends instead of being tried for
+/// ever: a version that is not a version, a version directory gone (its archive manifest cannot
+/// be read), a `target.json` that does not read, and one of an installer this daemon has no
+/// steps of each end the update `Failed` after the commit, of class release,
+/// `release_unreadable`, with an alert naming the version, no tool run, and the record no longer
+/// waiting, so that the next order of hostkeeper runs.
 #[test]
-fn a_pending_activate_the_host_cannot_read_is_tried_again() {
-    for (case, version) in [
+fn a_pending_activate_whose_version_cannot_be_read_ends_failed() {
+    let cases = [
         ("not-a-version", "1.1.0 x"),
         ("gone", V2),
         ("bad-target", V2),
-    ] {
+        ("no-steps", V2),
+    ];
+    for (case, version) in cases {
         let nr = NativeRig::new(&format!("own-unreadable-{case}"));
         pending_record(&nr, version);
-        if case == "bad-target" {
-            fs::create_dir_all(nr.version_dir(V2)).unwrap();
-            fs::write(nr.version_dir(V2).join("target.json"), "{").unwrap();
+        let target = nr.version_dir(V2).join("target.json");
+        match case {
+            "bad-target" => {
+                fs::create_dir_all(nr.version_dir(V2)).unwrap();
+                fs::write(&target, "{").unwrap();
+            }
+            "no-steps" => {
+                fs::create_dir_all(nr.version_dir(V2)).unwrap();
+                fs::write(&target, r#"{"installer":"macos-pkg"}"#).unwrap();
+            }
+            _ => {}
         }
         let (daemon, log) = alerting(nr.daemon_at(V2));
-        let ended = daemon.activate_own_package();
-        assert!(
-            matches!(ended, Some(OwnActivate::Deferred { ref reason, .. }) if reason == "io_error"),
-            "{case}: {ended:?}"
+        assert_eq!(
+            daemon.activate_own_package(),
+            Some(OwnActivate::Ended(Activated::Failed {
+                class: Class::Release,
+                reason: REASON_RELEASE_UNREADABLE.to_owned()
+            })),
+            "{case}"
         );
-        assert!(nr.record().unwrap().progress.activate.is_some(), "{case}");
+        let rec = nr.record().unwrap();
+        assert_eq!(rec.progress.activate, None, "{case}");
+        assert_eq!(
+            rec.state,
+            State::Finished {
+                verdict: Verdict::Failed {
+                    phase: Phase::AfterCommit,
+                    class: Class::Release,
+                },
+                reason: Some(REASON_RELEASE_UNREADABLE.to_owned()),
+            },
+            "{case}"
+        );
         assert!(
             lines(&log)
                 .iter()

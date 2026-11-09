@@ -387,7 +387,7 @@ downgrades are allowed by the rule of 4.2.
 
 ### 4.1 Unit, plist and pkg texts
 
-**Revised by [packages-native.md](packages-native.md) section 10.4** once its A19 is built: hostkeeper updates
+**Revised by [packages-native.md](packages-native.md) section 10.4**, whose A19 is built: hostkeeper updates
 itself from its `.deb` and `.pkg`, installed by the new binary after it confirms, so the `.deb`'s unit, starting
 `/usr/bin/hostkeeper`, is the only unit; the package unit below goes with the archive, and the `.pkg`'s postinstall
 bootstraps the job only when it is not loaded.

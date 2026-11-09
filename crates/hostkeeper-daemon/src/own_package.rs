@@ -35,8 +35,11 @@
 //! reason (`dpkg_error`), the record of the package then written whole again so that the
 //! heartbeat reports the drift; the binary keeps running either way, and is not rolled back. An
 //! `activate` that defers (`package_manager_busy`), or whose host files failed, stays pending and
-//! is tried again every [`DEFER_SECS`]; meanwhile an order for that version is answered
-//! `Deferred` [`REASON_ACTIVATE_PENDING`], and any other `busy`.
+//! is tried again: by the start's retry every [`DEFER_SECS`] (`crate::start`), and by every order
+//! for that version, which runs it again at once and is answered with how it went (`Deferred`
+//! [`REASON_ACTIVATE_PENDING`] while it still defers; for an install of the version that runs,
+//! which needs no restart, the coordinator's next order is the retry). Any other order is `busy`
+//! meanwhile. A version that cannot be read ends it `Failed` ([`REASON_RELEASE_UNREADABLE`]).
 //!
 //! **The adoption** ([`adopt`]). A host set up from the `.deb` holds `hostkeeper` in its package
 //! database with no record. A daemon that announces `apt` and finds, at its start, its own
@@ -62,6 +65,7 @@ use hostkeeper_steps::record::{Activated, Loaded};
 use crate::executor::Ctx;
 use crate::installed::{self, CURRENT};
 pub use crate::repository::DEFER_SECS;
+use crate::repository::backend_of_entry;
 use crate::target;
 use crate::verbs::force::SELF_SERVICE;
 
@@ -153,15 +157,14 @@ pub(crate) fn activate_pending(ctx: &Ctx, service: &ServiceName) -> Option<OwnAc
     Some(ended)
 }
 
-/// One try of the `activate` of `version` of hostkeeper's own package.
+/// One try of the `activate` of `version` of hostkeeper's own package. A version that cannot be
+/// read as one, whose `target.json` or manifest does not read, or staged for an installer this
+/// daemon has no steps of, will not read on any try: it ends the update `Failed`, of class
+/// release, [`REASON_RELEASE_UNREADABLE`], and orders of hostkeeper run again.
 fn activate(ctx: &Ctx, service: &ServiceName, version: &str) -> OwnActivate {
-    let io = |detail: String| OwnActivate::Deferred {
-        reason: Reason::IoError.token().to_owned(),
-        detail,
-    };
     let version = match Version::new(version) {
         Ok(version) => version,
-        Err(error) => return io(error.to_string()),
+        Err(_) => return unreadable(),
     };
     let dir = ctx
         .dirs
@@ -169,9 +172,30 @@ fn activate(ctx: &Ctx, service: &ServiceName, version: &str) -> OwnActivate {
         .join(service.as_str())
         .join(version.as_str());
     match target::read(&dir) {
-        Ok(Some(entry)) => native(ctx, service, &version, &dir, &entry),
-        Ok(None) => archive(ctx, service, &version, &dir).map_or_else(io, OwnActivate::Ended),
-        Err(error) => io(error.to_string()),
+        Ok(Some(entry)) if backend_of_entry(&entry).is_some() => {
+            native(ctx, service, &version, &dir, &entry)
+        }
+        Ok(None) => archive(ctx, service, &version, &dir),
+        Ok(Some(_)) | Err(_) => unreadable(),
+    }
+}
+
+/// The reason of an `activate` of hostkeeper's own package whose version cannot be read.
+pub const REASON_RELEASE_UNREADABLE: &str = "release_unreadable";
+
+/// The end of an `activate` whose version cannot be read.
+fn unreadable() -> OwnActivate {
+    OwnActivate::Ended(Activated::Failed {
+        class: Class::Release,
+        reason: REASON_RELEASE_UNREADABLE.to_owned(),
+    })
+}
+
+/// An `activate` tried again: the host's files failed, `detail` says how.
+fn io(detail: String) -> OwnActivate {
+    OwnActivate::Deferred {
+        reason: Reason::IoError.token().to_owned(),
+        detail,
     }
 }
 
@@ -184,10 +208,7 @@ fn native(
     entry: &Target,
 ) -> OwnActivate {
     if let Err(error) = ctx.placer().unlink_all(service) {
-        return OwnActivate::Deferred {
-            reason: Reason::IoError.token().to_owned(),
-            detail: error.to_string(),
-        };
+        return io(error.to_string());
     }
     let repository = ctx.repository();
     drop(repository.take_repaired(service));
@@ -222,27 +243,25 @@ fn of_failure(failure: &Failure) -> OwnActivate {
 
 /// The `activate` of an archive version, the move's rollback: `current` switched to it, its
 /// paths linked again, hostkeeper recorded as `hostkeeper-archive`.
-fn archive(
-    ctx: &Ctx,
-    service: &ServiceName,
-    version: &Version,
-    dir: &Path,
-) -> Result<Activated, String> {
+fn archive(ctx: &Ctx, service: &ServiceName, version: &Version, dir: &Path) -> OwnActivate {
     let expected = Expected {
         name: service.clone(),
         version: version.clone(),
         platform: Platform::current(),
     };
-    let manifest = target::manifest(dir, &expected, &ctx.own_version).map_err(|e| e.to_string())?;
+    let Ok(manifest) = target::manifest(dir, &expected, &ctx.own_version) else {
+        return unreadable();
+    };
     let placer = ctx.placer();
-    placer
+    let placed = placer
         .switch_current(service, version)
-        .map_err(|e| e.to_string())?;
-    placer.relink_to(&manifest).map_err(|e| e.to_string())?;
-    ctx.repository()
-        .forget(service)
-        .map_err(|e| e.to_string())?;
-    Ok(Activated::Succeeded { reason: None })
+        .and_then(|_| placer.relink_to(&manifest))
+        .map_err(|e| e.to_string())
+        .and_then(|_| ctx.repository().forget(service).map_err(|e| e.to_string()));
+    match placed {
+        Ok(()) => OwnActivate::Ended(Activated::Succeeded { reason: None }),
+        Err(detail) => io(detail),
+    }
 }
 
 /// The adoption of hostkeeper's own package at the start: the version adopted, `None` when there

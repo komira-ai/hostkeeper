@@ -5,7 +5,10 @@
 //! file); take the exclusive lock on `<state-dir>/lock`, held for the daemon's life (a second
 //! daemon on the same state directory gets [`StartError::Locked`]); remove the registration
 //! socket kbf's agent may have left ([`Settings::kbf_run_dir`]), before any unit is touched;
-//! [`settle_self_update`]; [`before_records`] and [`boot_pass`]; and [`after_boot`]. [`serve`]
+//! [`settle_self_update`]; the `activate` of hostkeeper's own package that its new binary owes,
+//! retried every minute by a thread of its own while it defers, and the adoption of the package
+//! the host was set up with ([`crate::own_package`]); [`before_records`] and [`boot_pass`]; and
+//! [`after_boot`]. [`serve`]
 //! then starts the enrollment and heartbeat loops ([`crate::links`]) and runs them until the
 //! daemon is asked to exit for its own update ([`crate::selfupdate::Restart`]).
 //!
