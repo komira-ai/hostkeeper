@@ -62,6 +62,8 @@ fn entry() -> release::Target {
             min_hostkeeper: "0.5.0".to_owned(),
             ..release::Manifest::default()
         }),
+
+        ..release::Target::default()
     }
 }
 

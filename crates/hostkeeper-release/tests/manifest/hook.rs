@@ -257,7 +257,7 @@ fn a_promotion_ceiling_is_absent_or_above_0() {
 fn each_installer_bound_is_1_to_3600() {
     let with = |b: InstallerBounds| Manifest {
         installer_bounds: Some(b),
-        ..manifest(Installer::Deb)
+        ..manifest(Installer::Apt)
     };
     let cases: [(&str, SetBound); 3] = [
         ("stage_secs", |b, s| b.stage_secs = s),

@@ -984,6 +984,8 @@ export namespace hostkeeper_release_v1 {
     bytes?: string;
     attestation?: hostkeeper_release_v1.Blob;
     manifest?: hostkeeper_release_v1.Manifest;
+    repository?: string;
+    packageVersion?: string;
   }
   export interface TargetList {
     entries?: hostkeeper_release_v1.Target[];
