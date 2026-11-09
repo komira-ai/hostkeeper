@@ -34,7 +34,7 @@ fn a_unit_is_named_for_the_service_by_its_name_a_dash_or_an_at_and_a_kind() {
         "mdm-.service",
         "mdm@.service",
         "mdm.path",
-        "mdm.target",
+        "mdm.mount",
         "mdm.slice",
         "mdm-proxy.service.d",
         "mdm",

@@ -136,10 +136,7 @@ pub(crate) fn plist(slot: &str, fail_ready: bool) -> Result<String, Error> {
     };
     let text = service_plist(&job).map_err(|e| failed(e.to_string()))?;
     let open = "<dict>\n";
-    match text.split_once(open) {
-        Some((head, rest)) => Ok(format!("{head}{open}{DISABLED}{rest}")),
-        None => Err(failed("the plist has no dictionary".to_owned())),
-    }
+    Ok(text.replacen(open, &format!("{open}{DISABLED}"), 1))
 }
 
 /// The files of hello's `.pkg` with the program `binary`, in path order.

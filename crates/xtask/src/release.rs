@@ -23,7 +23,11 @@
 //!   read back, holds no ELF program with an interpreter or a needed library and declares no
 //!   dependency; with `--staged` it also installs the staged `gh`, trusted root and programs at
 //!   the daemon's paths, with their modes, root's, and the console's issue link pointing at the
-//!   daemon's issue file.
+//!   daemon's issue file; with `--service hello` or `--service mdm` it reads a service's `.deb`
+//!   against the rules of docs/design/packages-native.md section 10.2 instead.
+//! - `deb` ([`native::deb`]): the `.deb` of hello, of its failing build or of mdm, with the hook
+//!   at `/usr/lib/<service>/hostkeeper-hook`, the units installed disabled and no maintainer
+//!   script.
 //! - `index` ([`index`]): the release index of a package, `index.json` for hostkeeper,
 //!   `hello-index.json` for hello, `hello-fail-ready-index.json` for its failing build and
 //!   `mdm-index.json` for mdm: which package serves each platform, refused unless it has the
@@ -35,7 +39,8 @@
 //! - `hkctl` ([`hkctl`]): `hkctl-<version>`, the command line of the coordinator, one bash
 //!   script for every platform, generated from the protos' command table.
 //! - `macos-pkg` and `check-macos-pkg` ([`macos_pkg`]): the installer pkg of a Mac's first
-//!   install, and the check of its payload read back from the built pkg.
+//!   install, and the check of its payload read back from the built pkg; with `--service hello`,
+//!   hello's `.pkg` ([`native::pkg`]), with no script and its jobs disabled.
 //! - `compare-images` ([`compare_images`]): two OCI image tarballs are byte for byte equal.
 //! - `check-image-ui` ([`check_image_ui`]): the coordinator's image holds the operator web app
 //!   (`ui/`) at the path the coordinator serves by default, file for file, owned by root.

@@ -112,13 +112,14 @@ pub(crate) fn deb_with(
     let package = match (request.service, request.archives.as_deref()) {
         (Service::Hostkeeper, _) => return refuse(HOSTKEEPER_REFUSED),
         (Service::Hello, Some(_)) => return refuse(HELLO_ARCHIVES),
+        (Service::Hello, None) if request.fail_ready => Package::HelloFailReady,
+        (Service::Hello, None) => Package::Hello,
         (Service::Mdm, _) if request.fail_ready => return refuse(MDM_FAIL_READY),
         (Service::Mdm, None) => return refuse(MDM_ARCHIVES),
         (Service::Mdm, Some(_)) if request.platform != Platform::LinuxX86_64 => {
             return refuse(MDM_PLATFORM);
         }
-        (service, _) => Package::of(service, request.fail_ready)
-            .ok_or_else(|| Error::Failed(MDM_FAIL_READY.to_owned()))?,
+        (Service::Mdm, Some(_)) => Package::Mdm,
     };
     let binary = std::fs::read(&request.binary)
         .map_err(Error::io(format!("read {}", request.binary.display())))?;
