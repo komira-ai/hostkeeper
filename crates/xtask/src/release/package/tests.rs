@@ -341,8 +341,9 @@ fn the_manifest_text_is_exact() {
     assert_eq!(
         manifest(&version(), Platform::LinuxX86_64, true),
         "schema = 1\nname = \"hostkeeper\"\nversion = \"0.1.5\"\nplatform = \"linux-x86_64\"\nmin_hostkeeper = \"0.1.5\"\n\n\
-         # Every step of this hook does nothing: hostkeeper's self-update is compiled into the\n\
-         # daemon. The table is here because every manifest has a bounded hook.\n\
+         # No daemon runs this hook's command: a daemon that takes this release runs built-in steps\n\
+         # that do nothing, and an older one defers it. The table is here because every manifest has a\n\
+         # bounded hook, and the floor is read after it.\n\
          [hook]\ncommand = [\"bin/hostkeeper\", \"update-hook\"]\nverify_deadline_secs = 600\n\n\
          [hook.timeout_secs]\nprepare = 300\ncutover = 300\nverify = 300\nrollback = 300\n\
          cleanup = 300\n\n[units]\nrun = [\"hostkeeper.service\"]\n"
@@ -355,18 +356,17 @@ fn the_manifest_text_is_exact() {
         with_units
     );
     assert!(without.ends_with("cleanup = 300\n") & !without.contains("units"));
-    // A release from OLDEST_READER on asks for OLDEST_READER, not its own version; stage 1 of
-    // docs/design/two-programs.md keeps it at 0.1.53, the floor of every release before it, and
-    // it is the daemon's own constant.
+    // A release from OLDEST_READER on asks for OLDEST_READER, not its own version; stage 2 of
+    // docs/design/two-programs.md sets it to R1, 0.1.163, and it is the daemon's own constant.
     assert_eq!(
         OLDEST_READER.to_string(),
         hostkeeper_steps::OLDEST_READER.to_string()
     );
-    assert_eq!(OLDEST_READER.to_string(), "0.1.53");
+    assert_eq!(OLDEST_READER.to_string(), "0.1.163");
     for (release, floor) in [
-        ("0.1.52", "0.1.52"),
-        ("0.1.53", "0.1.53"),
-        ("0.9.0", "0.1.53"),
+        ("0.1.162", "0.1.162"),
+        ("0.1.163", "0.1.163"),
+        ("0.9.0", "0.1.163"),
     ] {
         let text = manifest(
             &release.parse().expect("a version"),

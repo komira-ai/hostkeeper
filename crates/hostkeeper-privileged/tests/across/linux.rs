@@ -16,9 +16,10 @@
 //! `units/hostkeeper.service`, which the daemon links into `/etc/systemd/system` ([`LINKED_UNIT`])
 //! in its place, as a release's unit takes the deb's place on a host.
 //!
-//! **The fallback.** The daemon writes its fallback unit (`hostkeeper-fallback.service`) and the
-//! drop-in that names it into `/etc/systemd/system` at its start, as on any host; the released
-//! binary's own texts are what systemd runs when this build fails its start.
+//! **The fallback.** The released daemon writes its fallback unit (`hostkeeper-fallback.service`)
+//! and the drop-in that names it into `/etc/systemd/system` at its start, as on any host; its
+//! own texts are what systemd runs when this build fails its start. This build removes both at
+//! its own start ([`Host::fallback_files_present`]).
 //!
 //! These are fixed places of the host, which is why the rig runs only on a throwaway runner:
 //! [`Host::new`] moves aside whatever is at them (with the end-to-end rig's own, which
@@ -32,6 +33,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use hostkeeper_daemon::selfunits::{DROPIN_DIR, DROPIN_FILE};
 use hostkeeper_daemon::selfupdate::binary_dir;
 use hostkeeper_steps::Layout;
 
@@ -56,6 +58,8 @@ pub const WANTS_LINK: &str = "/etc/systemd/system/multi-user.target.wants/hostke
 const STEP_UNITS: &str = "updater-hostkeeper-*.service";
 /// The transient unit the released daemon probes a new binary's protocol in.
 const PROBE: &str = "hostkeeper-self-update-protocol.service";
+/// Where systemd looks for the units the daemon places and writes.
+const UNIT_DIR: &str = "/etc/systemd/system";
 /// Where `journalctl` is.
 const JOURNALCTL: &str = "/usr/bin/journalctl";
 
@@ -217,6 +221,15 @@ impl Host {
     /// Whether systemd ran the daemon's fallback unit, to its end with success.
     pub fn fallback_ran(&self) -> bool {
         !property(FALLBACK, "InvocationID").is_empty() && property(FALLBACK, "Result") == "success"
+    }
+
+    /// Whether the fallback unit or the drop-in of the releases before the hand-over is in the unit
+    /// directory: what the released daemon writes at its start and this build removes at its.
+    pub fn fallback_files_present(&self) -> bool {
+        let dir = Path::new(UNIT_DIR);
+        [dir.join(FALLBACK), dir.join(DROPIN_DIR).join(DROPIN_FILE)]
+            .iter()
+            .any(|file| fs::symlink_metadata(file).is_ok())
     }
 
     /// The journal of the daemon's unit, of its fallback, of the probe and of hostkeeper's step

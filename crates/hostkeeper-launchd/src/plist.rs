@@ -112,8 +112,8 @@ pub enum PlistError {
 /// the two output paths. It is the one plist of the daemon, the one its own update relies on
 /// too: `KeepAlive` is plain `true`, launchd's counterpart of the Linux units' `Restart=always`
 /// with no start limit (`packaging/linux/hostkeeper.service`), so that the clean exit the updater
-/// makes after it switched to a new binary (`hostkeeper_steps::selfupdate::follow_on`) starts the
-/// job's program again, which execs that binary; a `SuccessfulExit` condition would leave the
+/// makes after it handed over to a new binary (`hostkeeper_steps::selfupdate::follow_on`) starts
+/// the job's program again, which execs that binary; a `SuccessfulExit` condition would leave the
 /// daemon stopped after that exit. The Linux units also restart a daemon whose heartbeat loop
 /// hangs (`WatchdogSec=`); this job has no watchdog.
 pub fn daemon_plist(job: &DaemonJob) -> Result<String, PlistError> {

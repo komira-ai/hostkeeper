@@ -46,9 +46,11 @@ const PLACED_DIR: &str = "/var/lib/hostkeeper";
 const UNIT_DIR: &str = "/etc/systemd/system";
 /// The directory a placed unit's `WantedBy=multi-user.target` link goes in.
 const WANTS_DIR: &str = "/etc/systemd/system/multi-user.target.wants";
-/// The self-update unit the daemon writes at every start.
+/// The fallback unit the daemon of a release before the hand-over writes at every start (this
+/// build removes it).
 const FALLBACK_UNIT: &str = "hostkeeper-fallback.service";
-/// The drop-in directory of the daemon's own unit the daemon writes at every start.
+/// The drop-in directory of the daemon's own unit that the daemon of a release before the
+/// hand-over writes at every start (this build removes it).
 const SELF_UPDATE_DROPIN: &str = "hostkeeper.service.d";
 /// The glob of every run instance of the fixture service.
 const INSTANCES: &str = "hostkeeper-ci-tierstore@*.service";
@@ -121,7 +123,8 @@ pub struct HostRoot {
 }
 
 /// The fixed places of the host the rig takes over: the daemon's programs, its pki and placed
-/// state, the self-update units it writes at every start, and the fixture's template link.
+/// state, the fallback units a daemon of a release before the hand-over writes at every start, and
+/// the fixture's template link.
 fn taken_places() -> [PathBuf; 6] {
     [
         PathBuf::from(LIBRARY_DIR),
@@ -433,7 +436,8 @@ impl Drop for HostRoot {
             let _ = fs::remove_file(Path::new(UNIT_DIR).join(unit));
         }
         remove_placed_links();
-        // Both were absent when the rig started; the daemon wrote them at its start.
+        // Both were absent when the rig started; a daemon of a release before the hand-over wrote
+        // them at its start.
         let _ = fs::remove_file(Path::new(UNIT_DIR).join(FALLBACK_UNIT));
         let _ = fs::remove_dir_all(Path::new(UNIT_DIR).join(SELF_UPDATE_DROPIN));
         for dir in [LIBRARY_DIR, PKI_DIR, PLACED_DIR] {

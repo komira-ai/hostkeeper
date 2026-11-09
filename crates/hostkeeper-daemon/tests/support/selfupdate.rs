@@ -1,23 +1,21 @@
 //! What the tests of hostkeeper's own update share: a rig whose host runs hostkeeper at [`OLD`]
-//! with the release of [`NEW`] in the package store, a probe that answers as told, and the
-//! replies and records of a self-update.
+//! with the release of [`NEW`] in the package store, and the replies and records of a
+//! self-update.
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_daemon::observer::{OwnService, observer_with};
-use hostkeeper_daemon::selfupdate::{
-    ProbeError, ProtocolProbe, REASON_AWAITING_RESTART, RELEASE_BINARY, binary_dir,
-};
+use hostkeeper_daemon::selfupdate::{REASON_AWAITING_RESTART, RELEASE_BINARY, binary_dir};
 use hostkeeper_daemon::{Daemon, Ports, Reply};
 use hostkeeper_hook::{Class, Phase, Step, Verdict};
 use hostkeeper_observe::proc::digest_open_file;
 use hostkeeper_observe::{ActiveState, ExeStat};
 use hostkeeper_proto::hostkeeper::agent::v1::Order;
-use hostkeeper_steps::record::{HookSel, Progress, SCHEMA, State};
+use hostkeeper_steps::record::{HookSel, Loaded, Progress, SCHEMA, State};
 use hostkeeper_steps::{Layout, Record, RecordStore};
 
 use super::{Rig, config, d, update};
@@ -43,51 +41,12 @@ pub fn own(text: &str) -> HostkeeperVersion {
     HostkeeperVersion::parse(text).expect("a hostkeeper version")
 }
 
-type Answer = Box<dyn Fn() -> Result<u32, ProbeError> + Send + Sync>;
-
-/// A probe that answers as the test says, and keeps the binaries it was asked about.
-pub struct FakeProbe {
-    answer: Mutex<Answer>,
-    asked: Mutex<Vec<PathBuf>>,
-}
-
-impl FakeProbe {
-    /// A probe that answers `protocol`.
-    pub fn answering(protocol: u32) -> Arc<FakeProbe> {
-        Arc::new(FakeProbe {
-            answer: Mutex::new(Box::new(move || Ok(protocol))),
-            asked: Mutex::default(),
-        })
-    }
-
-    /// From now on, the probe answers with `answer`.
-    pub fn set(&self, answer: impl Fn() -> Result<u32, ProbeError> + Send + Sync + 'static) {
-        *self.answer.lock().expect("the answer") = Box::new(answer);
-    }
-
-    /// Every binary the probe was asked about, in order.
-    pub fn asked(&self) -> Vec<PathBuf> {
-        self.asked.lock().expect("the asked").clone()
-    }
-}
-
-impl ProtocolProbe for FakeProbe {
-    fn protocol(&self, binary: &Path) -> Result<u32, ProbeError> {
-        self.asked
-            .lock()
-            .expect("the asked")
-            .push(binary.to_path_buf());
-        (self.answer.lock().expect("the answer"))()
-    }
-}
-
 /// A rig whose host runs hostkeeper at [`OLD`]: its package installed (`current` names it), its
 /// binary directory with [`OLD`] staged and `current`, and the release of [`NEW`], with its
 /// binary, in the package store ([`SelfRig::new`]); or the same with no package of hostkeeper
 /// installed ([`SelfRig::bootstrapped`]).
 pub struct SelfRig {
     pub rig: Rig,
-    pub probe: Arc<FakeProbe>,
 }
 
 impl SelfRig {
@@ -108,10 +67,7 @@ impl SelfRig {
         fs::write(&old, format!("#!hostkeeper {OLD}\n")).expect("the old binary");
         layout.stage(OLD, &old).expect("stage the old binary");
         layout.switch(OLD).expect("switch to it");
-        let s = SelfRig {
-            rig,
-            probe: FakeProbe::answering(1),
-        };
+        let s = SelfRig { rig };
         s.release(NEW);
         s
     }
@@ -156,13 +112,12 @@ impl SelfRig {
         dir
     }
 
-    /// A daemon of version `version` on the rig, its probe the rig's.
+    /// A daemon of version `version` on the rig.
     pub fn daemon_at(&self, version: &str) -> Daemon {
         Daemon::new(config(), self.rig.dirs(), self.rig.ports(), own(version))
-            .with_probe(self.probe.clone())
     }
 
-    /// A daemon of version `version` on the rig, its probe the rig's, observed as the host
+    /// A daemon of version `version` on the rig, observed as the host
     /// observes it: the daemon's own observer ([`observer_with`]) over the rig's service manager
     /// and processes, the daemon running as `unit` from the rig's binary directory.
     pub fn daemon_running_as(&self, version: &str, unit: &str) -> Daemon {
@@ -181,7 +136,7 @@ impl SelfRig {
             observer: Arc::new(observer),
             ..self.rig.ports()
         };
-        Daemon::new(config(), self.rig.dirs(), ports, own(version)).with_probe(self.probe.clone())
+        Daemon::new(config(), self.rig.dirs(), ports, own(version))
     }
 
     /// The service manager runs `unit` as the process `pid`, whose executable is the binary
@@ -201,6 +156,27 @@ impl SelfRig {
     /// The daemon of [`OLD`].
     pub fn daemon(&self) -> Daemon {
         self.daemon_at(OLD)
+    }
+
+    /// Turns the hand-over an order of hostkeeper to `version` left (`next` linked, the wait naming
+    /// it with a start count) into what a release before the hand-over wrote, which the fallback
+    /// verb of its units still answers: `current` switched to `version`, `previous` the old
+    /// binary, no `next`, and a wait with no `next` and no count.
+    pub fn switch_the_old_way(&self, version: &str) {
+        let layout = self.layout();
+        layout
+            .switch(version)
+            .expect("the old updater switched first");
+        layout.remove_next().expect("it linked no next");
+        let store = RecordStore::new(&self.hk_state());
+        let Loaded::Current(mut rec) = store.load().expect("the record") else {
+            panic!("no record");
+        };
+        let wait = rec.progress.awaiting_restart.as_mut().expect("a wait");
+        (wait.next, wait.starts) = (None, None);
+        store
+            .save(&rec)
+            .expect("the record as the old updater wrote it");
     }
 
     /// The binary directory.

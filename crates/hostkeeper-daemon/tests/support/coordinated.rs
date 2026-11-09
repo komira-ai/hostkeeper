@@ -414,7 +414,7 @@ pub fn order_and_try(host: &Host, n: usize) -> (Verb, u64) {
     (order.verb, order.order_try)
 }
 
-/// A daemon of `version` on the self-update rig `s`, its probe the rig's, its update of
+/// A daemon of `version` on the self-update rig `s`, its update of
 /// hostkeeper settled as a start of that binary settles it.
 pub fn hostkeeper_daemon(s: &SelfRig, version: &str) -> (Arc<Daemon>, Settled) {
     let daemon = s.daemon_at(version);

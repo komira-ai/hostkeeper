@@ -91,20 +91,16 @@ impl Exec for FakeExec {
     }
 }
 
-/// A host of [`OLD`] that an update to [`NEW`] handed over to, as a release that hands over
-/// leaves it: [`NEW`] staged as `versions/0.2.0`, `next` naming it, `current` and `previous`
-/// still [`OLD`], and the record waiting for [`NEW`] with `next` and a start count of `starts`.
+/// A host of [`OLD`] that an update to [`NEW`] handed over to, as the daemon's own update leaves
+/// it: [`NEW`] staged as `versions/0.2.0`, `next` naming it, `current` still [`OLD`] with no
+/// `previous`, and the record waiting for [`NEW`] with `next` and a start count of `starts`.
 fn handed_over(name: &str, starts: u32) -> SelfRig {
     let s = SelfRig::new(name);
     assert_eq!(s.daemon().order(&s.order(NEW, 1)), awaiting(false));
-    let layout = s.layout();
-    fs::remove_file(layout.current_path()).expect("current");
-    symlink(Path::new("versions").join(OLD), layout.current_path()).expect("current is old");
-    symlink(Path::new("versions").join(NEW), layout.next_path()).expect("next");
     let store = hostkeeper_steps::RecordStore::new(&s.hk_state());
     let mut rec = s.rig.record(HK).expect("the record");
     let wait = rec.progress.awaiting_restart.as_mut().expect("the wait");
-    wait.next = Some(NEW.to_owned());
+    assert_eq!((wait.next.as_deref(), wait.starts), (Some(NEW), Some(0)));
     wait.starts = Some(starts);
     store.save(&rec).expect("the hand-over record");
     s
@@ -135,7 +131,7 @@ fn assert_fell_back(s: &SelfRig) {
             .expect("the list")
             .contains(NEW)
     );
-    assert_eq!(links(s), [some(OLD), some(OLD), None]);
+    assert_eq!(links(s), [some(OLD), None, None]);
 }
 
 fn code(code: ExitCode) -> String {
@@ -247,8 +243,15 @@ fn with_no_hand_over_the_start_writes_nothing_and_takes_no_lock() {
     );
     assert!(!missing.exists());
 
+    // The old updater switched `current` first and wrote a wait with no `next`; a link `next`
+    // stands beside it.
     assert_eq!(s.daemon().order(&s.order(NEW, 1)), awaiting(false));
-    symlink(Path::new("versions").join(NEW), s.layout().next_path()).expect("a next");
+    s.layout().switch(NEW).expect("the old updater switched");
+    let store = hostkeeper_steps::RecordStore::new(&s.hk_state());
+    let mut rec = s.rig.record(HK).expect("the record");
+    let wait = rec.progress.awaiting_restart.as_mut().expect("the wait");
+    (wait.next, wait.starts) = (None, None);
+    store.save(&rec).expect("the old-way record");
     let before = snapshot(&s.rig.state);
     assert_eq!(
         at_daemon_start(&s.rig.state, OLD, &exec),
@@ -336,6 +339,13 @@ fn the_process_exec_returns_the_error_of_a_binary_it_cannot_run() {
 #[test]
 fn the_fallback_verb_leaves_a_hand_over_alone() {
     let s = handed_over("ho-fallback", 1);
+    // A host that was updated before: `previous` names an older binary, so the verb gets as far
+    // as the wait.
+    let older = s.rig.scratch.path().join("older-binary");
+    fs::write(&older, "#!hostkeeper 0.0.9\n").expect("the older binary");
+    s.layout().stage("0.0.9", &older).expect("stage it");
+    s.layout().switch("0.0.9").expect("switch to it");
+    s.layout().switch(OLD).expect("and back");
     let dir = binary_dir(&s.rig.state);
     let mut log = StartLog::load(&s.hk_state()).expect("the start log");
     for mono in [100, 110, 120] {
@@ -368,7 +378,7 @@ fn the_fallback_verb_leaves_a_hand_over_alone() {
         Judged::NotPending
     );
     assert_eq!(snapshot(&s.rig.state), before);
-    assert_eq!(links(&s), [some(OLD), some(OLD), some(NEW)]);
+    assert_eq!(links(&s), [some(OLD), some("0.0.9"), some(NEW)]);
     assert!(!s.hk_state().join(BAD_VERSIONS_FILE).exists());
     let busy = s.daemon().order(&s.order(support::selfupdate::LATER, 2));
     assert_eq!(busy.refusal(), Some(Refusal::Busy), "{busy:?}");

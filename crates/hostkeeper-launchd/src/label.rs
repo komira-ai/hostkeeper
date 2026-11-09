@@ -1,5 +1,4 @@
-//! The reverse-DNS prefix and the launchd labels of the daemon, of each step job and of each
-//! probe job.
+//! The reverse-DNS prefix and the launchd labels of the daemon and of each step job.
 
 use std::fmt;
 use std::str::FromStr;
@@ -55,14 +54,6 @@ impl Label {
             "{REVERSE_DNS_PREFIX}.hostkeeper.step.{service}.{}.{generation}",
             step.name()
         ))
-    }
-
-    /// The label of the job a probe runs in (`hostkeeper_steps::ProbeCall`, the daemon asking a
-    /// new hostkeeper binary for its self-update protocol), named after the probe's unit:
-    /// `<prefix>.hostkeeper.probe.<unit>`. Apart from every step label (`.step.`), so that a
-    /// probe never boots out a step's job, nor a step a probe's.
-    pub fn probe(unit: &str) -> Result<Label, LabelError> {
-        Label::parse(&format!("{REVERSE_DNS_PREFIX}.hostkeeper.probe.{unit}"))
     }
 
     /// The step label of a unit name `updater-<service>-<step>-<generation>`, read from the

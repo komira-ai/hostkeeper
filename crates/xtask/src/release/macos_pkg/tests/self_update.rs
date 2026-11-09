@@ -2,8 +2,9 @@
 //! the daemon's own code: its plist starts the binary the pkg installs with `daemon`, one of the
 //! paths the daemon's start knows as packaged (`hostkeeper_daemon::packaged`), which seeds the
 //! binary directory the daemon derives from its state directory
-//! (`hostkeeper_daemon::selfupdate::binary_dir`) and execs `current` of it; the fallback job the
-//! daemon writes names that same directory; and the postinstall runs no seed.
+//! (`hostkeeper_daemon::selfupdate::binary_dir`) and execs `current` of it; the fallback job of
+//! the releases before the hand-over, which the daemon removes at its start, is not the pkg's job;
+//! and the postinstall runs no seed.
 
 use std::cell::RefCell;
 use std::ffi::OsString;
@@ -12,9 +13,8 @@ use std::os::unix::fs::PermissionsExt;
 use clap::Parser;
 use hostkeeper_daemon::cli::{Cli, Command, DEFAULT_STATE_DIR};
 use hostkeeper_daemon::packaged::{PACKAGED_BINARIES, PackagedError, start};
-use hostkeeper_daemon::selfunits::unit_files;
+use hostkeeper_daemon::selfunits::fallback_label;
 use hostkeeper_daemon::selfupdate::binary_dir;
-use hostkeeper_launchd::PlatformKind;
 use hostkeeper_launchd::plist::{DAEMON_STATE_DIR, INSTALLED_BINARY};
 
 use super::*;
@@ -102,8 +102,7 @@ fn the_job_programs_start_seeds_and_runs_current_of_the_directory_the_fallback_n
         std::fs::read(&current).expect("current"),
         b"the binary the pkg installed"
     );
-    // The same state directory as the job's, derived the way the job's plist and the fallback
-    // job derive it.
+    // The same state directory as the job's, derived the way the job's plist derives it.
     assert_eq!(binary_dir(Path::new(DEFAULT_STATE_DIR)), started_dir());
     // Run from `current`, the binary is none of the packaged paths: nothing is exec'd.
     called.borrow_mut().clear();
@@ -112,33 +111,18 @@ fn the_job_programs_start_seeds_and_runs_current_of_the_directory_the_fallback_n
 }
 
 #[test]
-fn the_fallback_job_runs_previous_of_the_directory_the_daemon_job_starts_current_of() {
-    // Catches: the daemon's fallback job and the pkg's job disagreeing on the binary directory, so
-    // the fallback flips back a `current` the daemon's job does not start, or runs a `previous`
-    // of a directory no self-update ever wrote.
-    let dir = started_dir();
+fn the_fallback_job_the_daemon_removes_is_not_the_job_the_pkg_installs() {
+    // Catches: a daemon that removes the plist of the job the pkg installs (its start would
+    // leave the Mac with no daemon job at the next boot), or one that boots out another job than
+    // the fallback of a release before the hand-over, `<daemon label>.fallback`, which the pkg
+    // does not ship, so a Mac that updated the old way keeps a timer job beside a hand-over.
     let mac = Launchd::macos();
-    let files = unit_files(
-        PlatformKind::Macos,
-        &mac.unit_dir,
-        Path::new(DEFAULT_STATE_DIR),
-    );
-    assert_eq!(files.len(), 1);
-    assert_eq!(files[0].dir, mac.unit_dir);
-    let shown = dir.display().to_string();
-    assert_eq!(
-        program_arguments(&files[0].text),
-        [
-            format!("{shown}/previous"),
-            "self-update-fallback".to_owned(),
-            "--dir".to_owned(),
-            shown,
-        ]
-    );
-    let Command::SelfUpdateFallback(flags) = parsed(&program_arguments(&files[0].text)) else {
-        panic!("the fallback job does not run self-update-fallback");
-    };
-    assert_eq!(flags.dir, dir);
+    let label = fallback_label();
+    assert_eq!(label, format!("{}.fallback", Label::daemon()));
+    let removed = mac.unit_dir.join(format!("{label}{}", mac.unit_suffix));
+    let installed = Path::new("/").join(plist_path());
+    assert_ne!(removed, installed);
+    assert_eq!(removed.parent(), installed.parent());
 }
 
 #[test]
