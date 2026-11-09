@@ -258,15 +258,35 @@ jobs:
       # roots of the Sigstore public-good instance and of GitHub's instance through their TUF
       # repositories, verified from the TUF root gh embeds; it needs no token. The packages
       # carry the root of their build, so each release carries a fresh one.
-      - name: Download gh (HTTPS only, redirects included)
+      # The pinned gh archive comes from the actions cache when a run before this one cached
+      # this version and SHA-256, and from GitHub only when none did; the check below holds
+      # it to the pin whichever way it came, and only a checked archive is cached.
+      - name: Restore the pinned gh archive from the cache
+        id: gh-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/gh.tar.gz
+          key: gh-${{ env.GH_VERSION }}-${{ matrix.gh-sha256 }}
+      - name: Download gh on a cache miss (HTTPS only, redirects included)
+        id: gh-download
+        if: ${{ steps.gh-cache.outputs.cache-hit != 'true' }}
         env:
           ARCH: ${{ matrix.deb-arch }}
         run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 5 --retry-delay 5 --retry-max-time 300 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/gh.tar.gz" "https://github.com/cli/cli/releases/download/v$GH_VERSION/gh_${GH_VERSION}_linux_$ARCH.tar.gz"
+      - name: Say why the job stops when gh is neither cached nor downloadable
+        if: ${{ !cancelled() && steps.gh-download.outcome == 'failure' }}
+        run: echo "::error::gh $GH_VERSION is not in the actions cache and its download from GitHub failed, so this job cannot go on until GitHub serves the release again"
       - name: Install gh (pinned checksum)
         env:
           ARCH: ${{ matrix.deb-arch }}
           SHA256: ${{ matrix.gh-sha256 }}
         run: cargo xtask install-tool --download "$RUNNER_TEMP/gh.tar.gz" --sha256 "$SHA256" --out "$RUNNER_TEMP/gh/gh" --extract tar.gz --member "gh_${GH_VERSION}_linux_$ARCH/bin/gh"
+      - name: Save the checked gh archive to the cache
+        if: ${{ steps.gh-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/gh.tar.gz
+          key: ${{ steps.gh-cache.outputs.cache-primary-key }}
       - run: '"$RUNNER_TEMP/gh/gh" --version'
       - name: The Sigstore trusted root
         run: '"$RUNNER_TEMP/gh/gh" attestation trusted-root > "$RUNNER_TEMP/trusted_root.json"'
@@ -458,10 +478,30 @@ jobs:
       # The same binary and plists, started with --fail-ready (see the Linux build job).
       - name: hello's failing build and its SHA-256
         run: cargo xtask release package --service hello --fail-ready --platform "$PLATFORM" --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --binary target/release/hello --out dist
-      - name: Download gh (HTTPS only, redirects included)
+      # The pinned gh archive comes from the actions cache when a run before this one cached
+      # this version and SHA-256, and from GitHub only when none did; the check below holds
+      # it to the pin whichever way it came, and only a checked archive is cached.
+      - name: Restore the pinned gh archive from the cache
+        id: gh-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/gh.zip
+          key: gh-${{ env.GH_VERSION }}-${{ env.GH_SHA256 }}
+      - name: Download gh on a cache miss (HTTPS only, redirects included)
+        id: gh-download
+        if: ${{ steps.gh-cache.outputs.cache-hit != 'true' }}
         run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 5 --retry-delay 5 --retry-max-time 300 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/gh.zip" "https://github.com/cli/cli/releases/download/v$GH_VERSION/gh_${GH_VERSION}_macOS_arm64.zip"
+      - name: Say why the job stops when gh is neither cached nor downloadable
+        if: ${{ !cancelled() && steps.gh-download.outcome == 'failure' }}
+        run: echo "::error::gh $GH_VERSION is not in the actions cache and its download from GitHub failed, so this job cannot go on until GitHub serves the release again"
       - name: Check gh (pinned checksum)
         run: cargo xtask install-tool --download "$RUNNER_TEMP/gh.zip" --sha256 "$GH_SHA256" --out "$RUNNER_TEMP/gh-checked.zip"
+      - name: Save the checked gh archive to the cache
+        if: ${{ steps.gh-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/gh.zip
+          key: ${{ steps.gh-cache.outputs.cache-primary-key }}
       - name: Unpack gh
         run: unzip -j -q "$RUNNER_TEMP/gh-checked.zip" "gh_${GH_VERSION}_macOS_arm64/bin/gh" -d "$RUNNER_TEMP/gh-pinned"
       # gh fetches both roots through TUF and checks their signatures; no token is needed.

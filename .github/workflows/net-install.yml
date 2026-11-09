@@ -131,11 +131,31 @@ jobs:
         run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 5 --retry-delay 5 --retry-max-time 300 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/nfpm.tar.gz" "https://github.com/goreleaser/nfpm/releases/download/v$NFPM_VERSION/nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz"
       - name: Install nfpm (pinned checksum)
         run: cargo xtask install-tool --download "$RUNNER_TEMP/nfpm.tar.gz" --sha256 "$NFPM_SHA256" --out "$HOME/.cargo/bin/nfpm" --extract tar.gz --member nfpm
-      - name: Download gh (HTTPS only, redirects included)
-        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 5 --retry-delay 5 --retry-max-time 300 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/gh.tar.gz" "https://github.com/cli/cli/releases/download/v$GH_VERSION/gh_${GH_VERSION}_linux_amd64.tar.gz"
       # The gh the test checks the boot set's attestations with (hostkeeper-pxe fetch --gh).
+      # The pinned gh archive comes from the actions cache when a run before this one cached
+      # this version and SHA-256, and from GitHub only when none did; the check below holds
+      # it to the pin whichever way it came, and only a checked archive is cached.
+      - name: Restore the pinned gh archive from the cache
+        id: gh-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/gh.tar.gz
+          key: gh-${{ env.GH_VERSION }}-${{ env.GH_SHA256 }}
+      - name: Download gh on a cache miss (HTTPS only, redirects included)
+        id: gh-download
+        if: ${{ steps.gh-cache.outputs.cache-hit != 'true' }}
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 5 --retry-delay 5 --retry-max-time 300 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/gh.tar.gz" "https://github.com/cli/cli/releases/download/v$GH_VERSION/gh_${GH_VERSION}_linux_amd64.tar.gz"
+      - name: Say why the job stops when gh is neither cached nor downloadable
+        if: ${{ !cancelled() && steps.gh-download.outcome == 'failure' }}
+        run: echo "::error::gh $GH_VERSION is not in the actions cache and its download from GitHub failed, so this job cannot go on until GitHub serves the release again"
       - name: Install gh (pinned checksum)
         run: cargo xtask install-tool --download "$RUNNER_TEMP/gh.tar.gz" --sha256 "$GH_SHA256" --out target/privileged-tools/gh --extract tar.gz --member "gh_${GH_VERSION}_linux_amd64/bin/gh"
+      - name: Save the checked gh archive to the cache
+        if: ${{ steps.gh-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/gh.tar.gz
+          key: ${{ steps.gh-cache.outputs.cache-primary-key }}
       - name: The Sigstore trusted root
         run: target/privileged-tools/gh attestation trusted-root > "$RUNNER_TEMP/trusted_root.json"
       - name: Add the static target
@@ -228,10 +248,30 @@ jobs:
             target
           key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
           restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
-      - name: Download gh (HTTPS only, redirects included)
+      # The pinned gh archive comes from the actions cache when a run before this one cached
+      # this version and SHA-256, and from GitHub only when none did; the check below holds
+      # it to the pin whichever way it came, and only a checked archive is cached.
+      - name: Restore the pinned gh archive from the cache
+        id: gh-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/gh.tar.gz
+          key: gh-${{ env.GH_VERSION }}-${{ env.GH_SHA256 }}
+      - name: Download gh on a cache miss (HTTPS only, redirects included)
+        id: gh-download
+        if: ${{ steps.gh-cache.outputs.cache-hit != 'true' }}
         run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 5 --retry-delay 5 --retry-max-time 300 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/gh.tar.gz" "https://github.com/cli/cli/releases/download/v$GH_VERSION/gh_${GH_VERSION}_linux_amd64.tar.gz"
+      - name: Say why the job stops when gh is neither cached nor downloadable
+        if: ${{ !cancelled() && steps.gh-download.outcome == 'failure' }}
+        run: echo "::error::gh $GH_VERSION is not in the actions cache and its download from GitHub failed, so this job cannot go on until GitHub serves the release again"
       - name: Install gh (pinned checksum)
         run: cargo xtask install-tool --download "$RUNNER_TEMP/gh.tar.gz" --sha256 "$GH_SHA256" --out target/privileged-tools/gh --extract tar.gz --member "gh_${GH_VERSION}_linux_amd64/bin/gh"
+      - name: Save the checked gh archive to the cache
+        if: ${{ steps.gh-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/gh.tar.gz
+          key: ${{ steps.gh-cache.outputs.cache-primary-key }}
       - run: mkdir -p target/net-install
       - name: The boot sets of network install (netboot.json)
         run: cargo xtask release netboot --pins packaging/netboot/pins.toml --version "$NET_INSTALL_VERSION" --dir target/net-install

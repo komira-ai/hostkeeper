@@ -22,6 +22,8 @@ mod desired_tests;
 mod downloads;
 mod downloads_tests;
 mod expr;
+mod gh_cache;
+mod gh_cache_tests;
 mod hello_run_tests;
 mod lint;
 mod linux_packages_tests;
