@@ -1,11 +1,11 @@
 # The Linux releases the packages are installed on (tests/linux_packages.rs, docs/design/packages.md
-# section 5.4, "One build, every release"): the one deb, the one rpm and the one Arch package that
+# section 5.4, "One build, every release"): the one deb and the one rpm that
 # `privileged.yml`'s job `privileged` builds (and pr-device.yml's copy of it) are installed and run in a
 # container of each image below, the oldest and the newest release of each family. A release that is
 # not here is not proved.
 #
-# Each entry has three keys: `name` (the release as people name it), `format` (`deb`, `rpm` or `arch`:
-# the package the release installs, with dpkg, rpm and pacman) and `image` (the container image, pinned
+# Each entry has three keys: `name` (the release as people name it), `format` (`deb` or `rpm`:
+# the package the release installs, with dpkg or rpm) and `image` (the container image, pinned
 # by the digest of its index, so a moved tag changes nothing). The job pulls each `image` in a step of
 # its own (the workflow lint holds the steps to this list, one `docker pull <image>` per entry and no
 # other), and the test runs the container with `--pull=never` and `--network=none`.
@@ -58,8 +58,3 @@ image = "opensuse/leap@sha256:a4115e2f5aea9712a7c73974fd94000a034fc3051ef29b5f77
 name = "opensuse/tumbleweed"
 format = "rpm"
 image = "opensuse/tumbleweed@sha256:871173bf717af0926bd92324ee6f73ba285e0721f0c8ac00ef2c77f1c88d979e"
-
-[[release]]
-name = "archlinux:base"
-format = "arch"
-image = "archlinux@sha256:b1c2fe6e717bfd5673af8fc217e1e1c3ce0dcbb1d53c3414c8425e7ce79fc6d9"

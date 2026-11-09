@@ -1,8 +1,8 @@
 #![cfg(feature = "privileged")]
-//! The same deb, rpm and Arch package installed and run on the oldest and newest release of each
+//! The same deb and rpm installed and run on the oldest and newest release of each
 //! family (docs/design/packages.md section 5.4, "One build, every release").
 //!
-//! The job builds the three packages into `target/linux-packages` from the programs staged in
+//! The job builds the two packages into `target/linux-packages` from the programs staged in
 //! `target/nfpm` (`hostkeeper`, `hostkeeper-pxe`, `gh`), and pulls each image of
 //! `linux-releases.toml` in a step of its own. For each release the test runs a container of its
 //! image, with no pull and no network and the packages directory mounted read only, which

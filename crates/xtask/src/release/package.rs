@@ -46,8 +46,8 @@
 //!
 //! The child [`nfpm_stage`] is `release nfpm-stage`: the pinned `gh`, the Sigstore trusted root
 //! and the two static programs of the daemon (`hostkeeper`, `hostkeeper-pxe`), checked and laid
-//! out for the deb, the rpm and the Arch package that `packaging/linux/nfpm.yaml` builds;
-//! [`linux_check`] is `release check-linux-pkg`, which reads a built deb, rpm, Arch package or
+//! out for the deb and the rpm that `packaging/linux/nfpm.yaml` builds;
+//! [`linux_check`] is `release check-linux-pkg`, which reads a built deb, rpm or
 //! tarball back and refuses an ELF program that is not static and any declared dependency, and
 //! with a staged directory checks that the package installs the staged files; [`elf`] is the
 //! ELF reader they share.

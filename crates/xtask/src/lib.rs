@@ -18,6 +18,10 @@
 //!   intervals between them, from the times `hostkeeper-pxe` and the coordinator recorded
 //!   (`netinstall_report`). The end-to-end job `net-install` runs it; an operator
 //!   runs it once on the first real machine (`docs/operations/network-install.md`).
+//! - `channels <verb>`: a release's Linux packages (deb and rpm, the daemon's and the
+//!   coordinator's) and its macOS installer (unsigned) reaching the repositories at
+//!   `packages.komira.ai`: testing first, the install checks, then the decision to promote and
+//!   the promotion. Copied from komira-ai/tierstore (`channels`).
 //! - `db-backup`: one dump of the coordinator's database into a directory of dumps, keeping the
 //!   newest of them (`db_backup`). Not a CI step: the backup timer of the compose deployment runs
 //!   it (`docs/deploy/coordinator/`).
@@ -28,6 +32,7 @@
 //! also exports `test_support`, what its integration tests need of its internals.
 
 mod advisories;
+mod channels;
 mod db_backup;
 mod install;
 mod mdm_signing_test;
@@ -63,6 +68,8 @@ enum Error {
     NetinstallReport(#[from] netinstall_report::Error),
     #[error(transparent)]
     DbBackup(#[from] db_backup::Error),
+    #[error(transparent)]
+    Channels(#[from] channels::Error),
 }
 
 #[derive(Parser)]
@@ -119,6 +126,14 @@ enum Verb {
     /// output into a new numbered file of `--into` (mode 0600), and keep the newest `--keep`
     /// dumps. A dump that fails or writes nothing is not kept, and removes no older one.
     DbBackup(db_backup::Flags),
+    /// A release's Linux packages and macOS installer reaching `packages.komira.ai`: the settings
+    /// gate of those jobs, the job's AWS role, the read, merge, sign and write of each
+    /// repository, the installer's upload and promotion, the install checks, and the decision to
+    /// promote.
+    Channels {
+        #[command(subcommand)]
+        verb: channels::Verb,
+    },
 }
 
 fn run(cli: Cli) -> Result<Vec<String>, Error> {
@@ -148,6 +163,7 @@ fn run(cli: Cli) -> Result<Vec<String>, Error> {
         )?),
         Verb::NetinstallReport(flags) => Ok(netinstall_report::run(&flags)?),
         Verb::DbBackup(flags) => Ok(db_backup::run(&flags)?),
+        Verb::Channels { verb } => Ok(channels::run(verb, &release::real::exec())?),
     }
 }
 
@@ -163,13 +179,14 @@ pub fn main() -> ExitCode {
         Err(e) => {
             eprintln!("xtask: {e}");
             match e {
-                Error::Usage(_) => ExitCode::from(2),
+                Error::Usage(_) | Error::Channels(channels::Error::Usage(_)) => ExitCode::from(2),
                 Error::Install(_)
                 | Error::Release(_)
                 | Error::Advisories(_)
                 | Error::SigningTest(_)
                 | Error::NetinstallReport(_)
-                | Error::DbBackup(_) => ExitCode::FAILURE,
+                | Error::DbBackup(_)
+                | Error::Channels(_) => ExitCode::FAILURE,
             }
         }
     }
