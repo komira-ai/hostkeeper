@@ -11,7 +11,7 @@ use std::io;
 use std::os::unix::fs::{DirBuilderExt, symlink};
 use std::path::{Path, PathBuf};
 
-use super::tree::{TreeError, install_links, unit_file};
+use super::tree::{TreeError, UNIT_DIRS, install_links, unit_file};
 
 /// The service manager's directory of enablement links, relative to the host's root.
 pub const SYSTEMD_DIR: &str = "etc/systemd/system";
@@ -83,12 +83,30 @@ pub fn apply(
     Ok(owned)
 }
 
-/// Takes away the recorded link `link` when it is still a link; anything else at its path is
-/// not hostkeeper's and stays.
+/// Whether `target`, a link's target, is the unit file `unit` where a package installs it: what
+/// hostkeeper writes, so a link pointing anywhere else is not its own.
+fn is_unit_target(target: &Path, unit: &str) -> bool {
+    UNIT_DIRS
+        .iter()
+        .any(|dir| target == Path::new(&format!("/{dir}/{unit}")))
+}
+
+/// Takes away the recorded link `link` while it is still the link hostkeeper writes, to the
+/// unit file it is named for; anything else at its path (a file, a link an operator pointed
+/// elsewhere) is not hostkeeper's and stays.
 pub fn remove_link(root: &Path, link: &str) -> io::Result<()> {
     let path = real(root, link);
+    let unit = Path::new(link)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
     match fs::symlink_metadata(&path) {
-        Ok(meta) if meta.file_type().is_symlink() => fs::remove_file(&path),
+        Ok(meta)
+            if meta.file_type().is_symlink()
+                && fs::read_link(&path).is_ok_and(|target| is_unit_target(&target, unit)) =>
+        {
+            fs::remove_file(&path)
+        }
         Ok(_) => Ok(()),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(e),

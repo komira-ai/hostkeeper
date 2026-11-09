@@ -526,8 +526,13 @@ fn install_maps_each_failure_to_its_reason() {
         Reason::DependencyMissing
     );
     assert_eq!(
-        failed(parse::install(&ToolOutput::default())).0,
+        failed(parse::install(&run(100, "", ""))).0,
         Reason::DpkgError
+    );
+    assert_eq!(
+        failed(parse::install(&ToolOutput::default())).0,
+        Reason::IoError,
+        "a run with no exit code was stopped at its bound"
     );
 }
 
@@ -922,5 +927,35 @@ fn a_failure_displays_its_token_and_detail() {
     assert_eq!(
         Failure::new(Reason::Signature, String::from("x")).to_string(),
         "signature: x"
+    );
+}
+
+/// Proves a tool stopped at its bound (no exit code) is the host's failure, `io_error`, failed,
+/// environment, saying it was stopped, for the install and the purge, whatever its output says.
+///
+/// Catches: a timeout blamed on the release as `dpkg_error`, with an empty report.
+#[test]
+fn a_tool_stopped_at_its_bound_is_the_hosts_failure() {
+    let stopped = ToolOutput {
+        code: None,
+        stdout: b"Unpacking hello (1.0.0-1) ...\n".to_vec(),
+        stderr: Vec::new(),
+        cut: false,
+    };
+    let install = parse::install(&stopped).expect_err("stopped");
+    assert_eq!(install.reason(), Reason::IoError);
+    assert_eq!(
+        install.detail(),
+        "apt-get install was stopped at its bound: Unpacking hello (1.0.0-1) ..."
+    );
+    let purge = parse::purge(&stopped).expect_err("stopped");
+    assert_eq!(purge.reason(), Reason::IoError);
+    assert_eq!(
+        purge.detail(),
+        "dpkg --purge was stopped at its bound: Unpacking hello (1.0.0-1) ..."
+    );
+    assert_eq!(
+        Reason::IoError.class(),
+        hostkeeper_install::repository::Class::Environment
     );
 }

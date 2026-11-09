@@ -31,6 +31,38 @@ impl RepositoryInstaller<'_> {
         if installed.is_some() {
             backend.hold(tools, package, false, remove_secs)?;
         }
+        self.purge_or_hold(package, remove_secs, installed.is_some())?;
+        for link in &links_of(Some(&record)) {
+            enable::remove_link(&self.dirs.root, link)
+                .map_err(|e| io_failure("the units' enablement links", e))?;
+        }
+        self.reload(remove_secs)?;
+        self.records.clear(service).map_err(record_failure)?;
+        Ok(Removed { drift })
+    }
+
+    /// Purges `package`, tried again while the lock is held, within `remove_secs`. A purge that
+    /// fails leaves the package installed, so a package that was held is held again: nothing
+    /// but hostkeeper may move it while its removal waits.
+    fn purge_or_hold(&self, package: &str, remove_secs: u64, held: bool) -> Result<(), Failure> {
+        let failure = match self.purge(package, remove_secs) {
+            Ok(()) => return Ok(()),
+            Err(failure) => failure,
+        };
+        // A database that cannot be read may still hold the package: held again all the same.
+        let still = !matches!(
+            self.backend.installed(self.tools, package, remove_secs),
+            Ok(None)
+        );
+        if held & still {
+            self.backend.hold(self.tools, package, true, remove_secs)?;
+        }
+        Err(failure)
+    }
+
+    /// The purge and its tries.
+    fn purge(&self, package: &str, remove_secs: u64) -> Result<(), Failure> {
+        let (backend, tools) = (self.backend, self.tools);
         let tries = (remove_secs / PURGE_RETRY_SECS).max(1);
         let mut last = String::new();
         let mut done = false;
@@ -46,19 +78,13 @@ impl RepositoryInstaller<'_> {
                 Purged::Busy(line) => last = line,
             }
         }
-        if !done {
-            return Err(Failure::new(
+        match done {
+            true => Ok(()),
+            false => Err(Failure::new(
                 Reason::PackageManagerBusy,
                 format!("the package manager's lock was held for {remove_secs}s: {last}"),
-            ));
+            )),
         }
-        for link in &links_of(Some(&record)) {
-            enable::remove_link(&self.dirs.root, link)
-                .map_err(|e| io_failure("the units' enablement links", e))?;
-        }
-        self.reload(remove_secs)?;
-        self.records.clear(service).map_err(record_failure)?;
-        Ok(Removed { drift })
     }
 
     /// The drift of `service`, whose manifest names `package`, at this heartbeat: what the

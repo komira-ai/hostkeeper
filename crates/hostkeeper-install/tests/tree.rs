@@ -803,7 +803,11 @@ fn apply_removes_a_recorded_link_no_longer_wanted() {
         .expect("a parent")
         .to_path_buf();
     fs::create_dir_all(&dir).expect("the directory");
-    symlink(UNIT, real(root.path(), old)).expect("the link");
+    symlink(
+        "/usr/lib/systemd/system/old.service",
+        real(root.path(), old),
+    )
+    .expect("the link");
     fs::write(real(root.path(), file), "x").expect("a file");
     let want = want_of(&[(LINK, UNIT)]);
     let owned = apply(root.path(), &want, &recorded(&[old, file, gone])).expect("the links");
@@ -832,23 +836,49 @@ fn apply_and_remove_link_report_a_path_that_cannot_be_read() {
     assert!(remove_link(root.path(), LINK).is_err());
 }
 
-/// Proves `remove_link` removes a link, and leaves a regular file, a directory and a missing path
-/// alone without error.
+/// Proves `remove_link` removes a link to the unit file it is named for, in either unit
+/// directory, and leaves a regular file, a directory, a missing path, a link an operator pointed
+/// elsewhere and a link to another unit alone without error.
+///
+/// Catches: a remove that deletes a link at a recorded path that is no longer hostkeeper's.
 #[test]
 fn remove_link_takes_away_a_link_and_nothing_else() {
     let root = scratch("remove-link");
     let dir = real(root.path(), "/etc/systemd/system");
     fs::create_dir_all(&dir).expect("the directory");
-    symlink(UNIT, dir.join("a.service")).expect("the link");
+    symlink("/usr/lib/systemd/system/a.service", dir.join("a.service")).expect("the link");
+    symlink("/lib/systemd/system/f.service", dir.join("f.service")).expect("the link");
     fs::write(dir.join("b.service"), "x").expect("a file");
     fs::create_dir(dir.join("c.service")).expect("a directory");
-    remove_link(root.path(), "/etc/systemd/system/a.service").expect("the link goes");
-    assert!(fs::symlink_metadata(dir.join("a.service")).is_err());
-    for name in ["b.service", "c.service", "d.service"] {
+    symlink("/etc/elsewhere/e.service", dir.join("e.service")).expect("a repointed link");
+    symlink(
+        "/usr/lib/systemd/system/other.service",
+        dir.join("g.service"),
+    )
+    .expect("another unit");
+    for name in ["a.service", "f.service"] {
+        remove_link(root.path(), &format!("/etc/systemd/system/{name}")).expect("the link goes");
+        assert!(fs::symlink_metadata(dir.join(name)).is_err(), "{name}");
+    }
+    for name in [
+        "b.service",
+        "c.service",
+        "d.service",
+        "e.service",
+        "g.service",
+    ] {
         remove_link(root.path(), &format!("/etc/systemd/system/{name}")).expect("left alone");
     }
     assert!(dir.join("b.service").is_file());
     assert!(dir.join("c.service").is_dir());
+    assert!(
+        dir.join("e.service").is_symlink(),
+        "a link pointed elsewhere stays"
+    );
+    assert!(
+        dir.join("g.service").is_symlink(),
+        "a link to another unit stays"
+    );
 }
 
 /// Proves `apply` reports a link that cannot be written (a directory it cannot write into, or one
