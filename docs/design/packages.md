@@ -14,7 +14,13 @@ proof run `hello-desired.yml`, which set each release with its targets, its rele
 pinned to a CI client that takes targets (release v0.1.173 or later). Build item A4 is **Built**: the host's `stores.toml` and the fetch and proof through the entry
 (`crates/hostkeeper-package/src/stores.rs` and `entry.rs`), the order checks, the installers list and the refusals
 `order_invalid`, `installer_not_listed`, `manifest_invalid`, `no_store` and `store_digest_mismatch` (`crates/hostkeeper-daemon`),
-`target-v1` and the 32 KiB gRPC reply (`crates/hostkeeper-link`), and the `agent.proto` header. Nothing else here is built. This is a revision of the design merged as
+`target-v1` and the 32 KiB gRPC reply (`crates/hostkeeper-link`), and the `agent.proto` header. Build item A6 is
+**Built** in part: the installer contract and the registry of the installers the daemon is built with
+(`crates/hostkeeper-install`, `hostkeeper-archive` its one installer, through which the daemon stages, activates,
+retires and removes), the installers a daemon announces (section 5.4: `hostkeeper-archive` on every host, the
+`os-release` family read for A7 and A8), `ServiceBeat.installer` from the key `installed` of `placed.json`, and a
+tool run in a unit with `PrivateNetwork=yes` (`StepLauncher::run_tool`); the `tarball` installer and the rest of
+A6's row are not built. Nothing else here is built. This is a revision of the design merged as
 komira-ai/hostkeeper#179. It keeps that design's stores, its digest and attestation checks before any byte is used, and its
 staged path for the daemons on hosts now. It replaces its package model: host facts, "most specific wins", artifact kinds
 and `Releases.Register` (section 0 says what replaces what). It changes three things in

@@ -197,6 +197,7 @@ fn the_heartbeat_json_has_the_wire_names() {
                 version: None,
             }),
             record_try: Some(3),
+            installer: None,
         }],
         sent_unix: 0,
         renewal: hostkeeper_link::Renewal::default(),
@@ -228,6 +229,7 @@ fn the_heartbeat_json_has_the_wire_names() {
             "health_detail": "refused",
             "observed": { "liveness": "transitioning", "version": null },
             "record_try": 3,
+            "installer": null,
         }],
         "sent_unix": 0,
     });

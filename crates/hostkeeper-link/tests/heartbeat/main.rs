@@ -143,6 +143,7 @@ pub fn recorded(name: &str, at: &str) -> RecordedService {
         updating: None,
         last_result: None,
         record_try: None,
+        installer: None,
     }
 }
 

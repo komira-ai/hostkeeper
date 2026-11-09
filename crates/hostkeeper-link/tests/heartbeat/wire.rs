@@ -50,6 +50,7 @@ fn facts(name: &str, at: &str) -> ServiceFacts {
             version: Some(version(at)),
         }),
         record_try: None,
+        installer: None,
     }
 }
 
@@ -346,6 +347,7 @@ fn largest(ids: &[usize; 16], reasons: &[usize; 16]) -> Heartbeat {
                 health_detail: None,
                 observed: None,
                 record_try: None,
+                installer: None,
             }
         })
         .collect();

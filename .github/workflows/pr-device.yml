@@ -172,9 +172,9 @@ jobs:
           key: cargo-${{ runner.os }}-${{ runner.arch }}-macos-device-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
           restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-macos-device-
       - name: Build the tests of the Mac's crates
-        run: cargo test --locked --no-run -p hello -p hostkeeper -p hostkeeper-config -p hostkeeper-daemon -p hostkeeper-enroll -p hostkeeper-hook -p hostkeeper-launchd -p hostkeeper-link -p hostkeeper-observe -p hostkeeper-openrc -p hostkeeper-package -p hostkeeper-placed -p hostkeeper-proto -p hostkeeper-release -p hostkeeper-steps -p hostkeeper-unpack -p hostkeeper-wire
+        run: cargo test --locked --no-run -p hello -p hostkeeper -p hostkeeper-config -p hostkeeper-daemon -p hostkeeper-enroll -p hostkeeper-hook -p hostkeeper-install -p hostkeeper-launchd -p hostkeeper-link -p hostkeeper-observe -p hostkeeper-openrc -p hostkeeper-package -p hostkeeper-placed -p hostkeeper-proto -p hostkeeper-release -p hostkeeper-steps -p hostkeeper-unpack -p hostkeeper-wire
       - name: Run the tests of the Mac's crates
-        run: cargo test --locked --no-fail-fast -p hello -p hostkeeper -p hostkeeper-config -p hostkeeper-daemon -p hostkeeper-enroll -p hostkeeper-hook -p hostkeeper-launchd -p hostkeeper-link -p hostkeeper-observe -p hostkeeper-openrc -p hostkeeper-package -p hostkeeper-placed -p hostkeeper-proto -p hostkeeper-release -p hostkeeper-steps -p hostkeeper-unpack -p hostkeeper-wire
+        run: cargo test --locked --no-fail-fast -p hello -p hostkeeper -p hostkeeper-config -p hostkeeper-daemon -p hostkeeper-enroll -p hostkeeper-hook -p hostkeeper-install -p hostkeeper-launchd -p hostkeeper-link -p hostkeeper-observe -p hostkeeper-openrc -p hostkeeper-package -p hostkeeper-placed -p hostkeeper-proto -p hostkeeper-release -p hostkeeper-steps -p hostkeeper-unpack -p hostkeeper-wire
 
   # The required check `macos-test`: it runs after macos-test whatever it did, cancelled included, and
   # passes when macos-test passed, or when changes passed and answered `needed=false` and macos-test was
