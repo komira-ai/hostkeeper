@@ -266,6 +266,20 @@ message ServiceBeat {
   // release, wherever it stands in the list. Absent for `hostkeeper-archive`, and from an agent
   // that predates it. 1 to 32 bytes of `[a-z0-9-]`; read only over gRPC.
   optional string installer = 13;
+  // Present only when the installer found drift at this heartbeat: the native package of the
+  // service is at a version hostkeeper did not set. The coordinator orders the desired version
+  // again, whose install repairs it (`drift_repaired`). Read only over gRPC; a coordinator that
+  // predates it skips it.
+  DriftReport drift = 14;
+}
+
+// A native package found at a version hostkeeper did not set. Each string is 1 to 128 bytes of
+// `[A-Za-z0-9.+~:_-]`, a package version.
+message DriftReport {
+  // The version the package manager shows. Absent when the package is not installed.
+  optional string found = 1;
+  // The version `placed.json` records. Absent when no record names the package.
+  optional string recorded = 2;
 }
 
 // Whether a service serves what it should.

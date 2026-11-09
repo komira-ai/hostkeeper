@@ -198,6 +198,7 @@ fn the_heartbeat_json_has_the_wire_names() {
             }),
             record_try: Some(3),
             installer: None,
+            drift: None,
         }],
         sent_unix: 0,
         renewal: hostkeeper_link::Renewal::default(),

@@ -42,7 +42,7 @@ use hostkeeper_release::grammar::is_installer_name;
 use hostkeeper_release::target::is_native_entry;
 use hostkeeper_wire::HostId;
 use hostkeeper_wire::version::Version;
-use hostkeeper_wire::wire::Health;
+use hostkeeper_wire::wire::{Health, is_drift_version};
 
 use crate::converge::PickCounts;
 use crate::decide::Skip;
@@ -76,6 +76,8 @@ pub(crate) struct Heard {
     /// The installer of each service it named one for; a service it names none for runs from
     /// archives.
     running: BTreeMap<String, String>,
+    /// The drift each service reported, for the services that reported one in a good grammar.
+    drift: BTreeMap<String, agent::DriftReport>,
 }
 
 impl Heard {
@@ -98,7 +100,22 @@ impl Heard {
                 .iter()
                 .chain(running.values())
                 .all(|n| is_installer_name(n));
-        good.then_some(Self { listed, running })
+        // A drift whose string is not a package version is left out and the rest is kept: no
+        // pick reads a drift, so it must not cost the list.
+        let drift = request
+            .services
+            .iter()
+            .filter_map(|one| Some((one.name.clone(), one.drift.clone()?)))
+            .filter(|(_, report)| {
+                let fits = |text: &Option<String>| text.as_deref().is_none_or(is_drift_version);
+                fits(&report.found) && fits(&report.recorded)
+            })
+            .collect();
+        good.then_some(Self {
+            listed,
+            running,
+            drift,
+        })
     }
 }
 
@@ -135,6 +152,12 @@ impl Picks {
     /// The installers the daemon of `id` listed in its last heartbeat over gRPC, if one was read.
     pub(crate) fn listed(&self, id: &HostId) -> Option<&[String]> {
         self.heard.get(id).map(|heard| heard.listed.as_slice())
+    }
+
+    /// The drift the daemon of `id` last reported for `service` over gRPC, if its last heartbeat
+    /// that was read reported one.
+    pub(crate) fn drift(&self, id: &HostId, service: &str) -> Option<&agent::DriftReport> {
+        self.heard.get(id)?.drift.get(service)
     }
 
     /// The installer the daemon of `id` said it runs `service` with, over gRPC.
@@ -409,7 +432,7 @@ impl Coordinator {
 
 /// Fills in `host`, as `Hosts.List` and `Hosts.Get` made it for the host `id`, with what the
 /// fleet keeps of its installers: the list its daemon last said over gRPC, in `installers` and
-/// in the heartbeat put back together, and the installer of each service it named one for. A
+/// in the heartbeat put back together, and the installer and the drift of each service it named one for. A
 /// service of `services` the host does not list, whose desired version (of `desired`) was set
 /// with targets that pick the host no entry, is added with that gate reason (`no_target`,
 /// `no_build_for_host`), so the host shows why it is not ordered beside the installers it lists.
@@ -429,6 +452,7 @@ pub(crate) fn show(
     beat.installers.clone_from(&listed);
     for one in &mut beat.services {
         one.installer = fleet.picks.running(id, &one.name).map(str::to_owned);
+        one.drift = fleet.picks.drift(id, &one.name).cloned();
     }
     host.heartbeat = Some(beat);
     host.installers = listed;
