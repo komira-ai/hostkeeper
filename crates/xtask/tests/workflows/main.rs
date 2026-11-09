@@ -16,6 +16,8 @@ mod callers;
 mod callers_tests;
 mod channel_join_tests;
 mod channel_run_tests;
+mod ci;
+mod ci_tests;
 mod desired;
 mod desired_tests;
 mod downloads;
@@ -148,7 +150,7 @@ fn every_workflow_of_the_repository_passes_the_lint() {
     // macOS job on pull_request outside pr-device.yml's jobs that may be, a copy in pr-device.yml
     // that drifted from privileged.yml's job, a release workflow out of its shape, or a workflow
     // that tags or publishes on pull_request or outside the release group, in any workflow file
-    // of this repository.
+    // of this repository; and ci.yml's test shards or coverage gate out of their shape.
     let all = workflows();
     let text_of = |required: &str| {
         all.iter()
@@ -156,9 +158,13 @@ fn every_workflow_of_the_repository_passes_the_lint() {
             .map(|(_, text)| text.clone())
             .unwrap_or_else(|| panic!("{required} is missing"))
     };
-    text_of("ci.yml");
     let mut found =
         pr_device::mirror_problems(&text_of(pr_device::FILE), &text_of(PRIVILEGED_WORKFLOW));
+    found.extend(
+        ci::problems(&text_of(ci::FILE))
+            .into_iter()
+            .map(|p| format!("{}: {p}", ci::FILE)),
+    );
     for (file, text) in all {
         let publish = release::publish_problems(&file, &text);
         for p in lint(&file, &text).into_iter().chain(publish) {

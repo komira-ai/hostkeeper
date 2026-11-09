@@ -43,6 +43,7 @@ fn tried(
         updating: updating.map(version),
         last_result: None,
         record_try,
+        installer: None,
     }
 }
 
@@ -61,6 +62,36 @@ fn the_installed_services_are_those_whose_current_names_a_version() {
     let records = DaemonRecords::new(Arc::new(rig.daemon()));
     assert_eq!(
         records.installed().expect("the packages directory is read"),
+        [listed("api", "3.1.0", None), listed("web", "1.0.0", None)]
+    );
+}
+
+/// Catches a heartbeat that names the wrong installer of a service (`ServiceBeat.installer`,
+/// packages.md section 5.1): a service `placed.json` records with an installer is listed with
+/// it, a `hostkeeper-archive` service, which has no entry, with none, and every service with
+/// none while `placed.json` cannot be read.
+#[test]
+fn each_service_is_listed_with_the_installer_placed_json_records() {
+    let rig = Rig::new("records-installer");
+    rig.running("web", "1.0.0");
+    rig.running("api", "3.1.0");
+    let mut record = rig.placed_record();
+    record.installed.insert(
+        "web".to_owned(),
+        hostkeeper_placed::InstalledEntry::new("apt"),
+    );
+    rig.save_placed(&record);
+    let records = DaemonRecords::new(Arc::new(rig.daemon()));
+    let mut web = listed("web", "1.0.0", None);
+    web.installer = Some("apt".to_owned());
+    assert_eq!(
+        records.installed().expect("read"),
+        [listed("api", "3.1.0", None), web]
+    );
+    let placed = rig.scratch.path().join("placed/placed.json");
+    fs::write(&placed, "not JSON").expect("placed.json");
+    assert_eq!(
+        records.installed().expect("read"),
         [listed("api", "3.1.0", None), listed("web", "1.0.0", None)]
     );
 }

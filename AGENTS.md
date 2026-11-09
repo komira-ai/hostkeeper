@@ -91,8 +91,9 @@ hostkeeper is a Cargo workspace of Rust crates; these are the rules of its code.
 Where the rules above are checked in this repository: format, licences, bans and sources, and clippy (R1, R6) by CI's `lint` job,
 which also enforces R2 (`unsafe_code` in `[workspace.lints]`) and the environment reads of S2 (`disallowed-methods` in `clippy.toml`;
 each allowed read carries an `#[expect(..., reason = "...")]`); the formatting options are in `rustfmt.toml`;
-coverage (T1, T3) by `coverage-gate` in CI's `test` job, which judges every crate of the workspace at 99.00% of its lines and of its
-branches, with no way to exclude one; workflow runners, triggers, permissions, action pins, pull-request jobs and jobs as root (B9,
+coverage (T1, T3) by `coverage-gate` in CI's check `test` (the job `coverage`, over the merged coverage of the two test shards, whose
+shape the workflow lint holds in `ci.rs`), which judges every crate of the workspace at 99.00% of its lines and of its branches, with
+no way to exclude one; workflow runners, triggers, permissions, action pins, pull-request jobs and jobs as root (B9,
 B10) by the workflow lint, `cargo test -p xtask --test workflows`, and by actionlint in CI's `lint` job; this file and `CLAUDE.md` by
 `cargo test -p xtask --test agents_md`. The tests of `crates/hostkeeper-privileged` behind its feature `privileged` run as root in
 `privileged.yml`, after a merge to `main`, and in `pr-device.yml` on a pull request (the macOS ones when it changes a path the macOS
