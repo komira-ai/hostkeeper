@@ -1,7 +1,6 @@
-//! The self-update tests' daemon program and main unit, with no systemd and no root: the verbs
-//! it forwards, the start its `--fixture-fail-start` refuses and the ones it does not, the
-//! command lines it refuses, and the main units made from the real unit files. Part of the
-//! pull-request set, so that a change to either is caught before the privileged run.
+//! The self-update tests' daemon program and main unit, with no systemd and no root: the start its
+//! `--fixture-fail-start` refuses and the ones it does not, the command lines it refuses, and the
+//! main units made from the real unit files. Part of the pull-request set, so that a change to either is caught before the privileged run.
 
 mod support;
 
@@ -39,15 +38,6 @@ fn staged(dir: &Path, version: &str) -> PathBuf {
 
 fn text(bytes: &[u8]) -> &str {
     std::str::from_utf8(bytes).expect("UTF-8")
-}
-
-/// Catches a program that does not forward the probe's verb to the shipped command line: a new
-/// binary whose protocol the daemon cannot read is refused before anything is staged.
-#[test]
-fn the_protocol_probe_is_answered_by_the_shipped_verb() {
-    let out = run(Path::new(DAEMON), &["self-update-protocol"]);
-    assert_eq!(out.status.code(), Some(0), "{out:?}");
-    assert_eq!(text(&out.stdout), "1\n");
 }
 
 /// Catches `--fixture-fail-start` refusing the wrong start: the version it names exits 1 with
@@ -115,13 +105,13 @@ fn exec_line(program: &str) -> String {
     format!(
         "ExecStart={program} --fixture-dir /f daemon --config /run/hostkeeper-ci/t/hostkeeper.toml \
          --state-dir /run/hostkeeper-ci/t/state --packages-dir /run/hostkeeper-ci/t/packages \
-         --notify-systemd --admin-socket /run/hostkeeper-ci/t/admin.sock --heartbeat-secs 1"
+         --notify-systemd --heartbeat-secs 1"
     )
 }
 
 /// The main unit made from `real`, checked for what holds of both real units: its `ExecStart=`
-/// is `expected` (and the only one), every other line of `real` is kept in order but the seed
-/// and the description, and the keys of the restart policy are there.
+/// is `expected` (and the only one), every other line of `real` is kept in order but the
+/// description, and the keys of the restart policy are there.
 fn assert_test_unit_of(real: &str, expected: &str) {
     let unit = test_unit(real, &paths(), &["--fixture-dir".into(), "/f".into()]);
     let exec: Vec<&str> = unit
@@ -158,9 +148,9 @@ fn assert_test_unit_of(real: &str, expected: &str) {
 }
 
 /// Catches a main unit that is not the package unit: every line of
-/// `units/hostkeeper.service` is kept, in order, but the seed and `ExecStart=`, which starts the
-/// same `current` and flags with the test's directories, the fixture's flags before the verb, the
-/// test's admin socket (the real unit passes none) and a heartbeat a second.
+/// `units/hostkeeper.service` is kept, in order, but `ExecStart=`, which starts the same `current`
+/// and flags with the test's directories, the fixture's flags before the verb and a heartbeat a
+/// second.
 #[test]
 fn the_main_unit_is_the_package_unit_with_the_tests_directories() {
     assert_test_unit_of(
@@ -191,23 +181,6 @@ fn the_main_unit_of_a_deb_is_the_bootstrap_unit_over_the_packaged_binary() {
 fn a_real_unit_program_the_test_does_not_know_stops_it() {
     let real = BOOTSTRAP_UNIT.replace("ExecStart=/usr/bin/hostkeeper", "ExecStart=/usr/bin/other");
     test_unit(&real, &paths(), &[]);
-}
-
-/// Catches a real unit that still passes `--admin-socket` being made into a unit with two (the
-/// test's own placed once, wherever the real line has it).
-#[test]
-fn a_real_unit_that_passes_the_admin_socket_gets_the_tests_once() {
-    let real = REAL_UNIT.replace(
-        "--notify-systemd",
-        "--admin-socket /run/hostkeeper/admin.sock --notify-systemd",
-    );
-    let unit = test_unit(&real, &paths(), &[]);
-    let exec = unit
-        .lines()
-        .find(|line| line.starts_with("ExecStart="))
-        .expect("ExecStart=");
-    assert_eq!(exec.matches("--admin-socket").count(), 1, "{exec}");
-    assert!(exec.contains("--admin-socket /run/hostkeeper-ci/t/admin.sock "));
 }
 
 /// Catches a `daemon` run from the file `--fixture-packaged` names that does not start as the

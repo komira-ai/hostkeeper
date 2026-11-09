@@ -6,10 +6,9 @@
 //! The daemon reads some paths from no flag: the CA bundle its package fetch trusts
 //! (`/etc/ssl/cert.pem`), `gh` and the Sigstore trusted root (`/usr/local/lib/hostkeeper`), the
 //! pki directory (`/etc/updater`), the placed-path state (`/var/lib/hostkeeper`) and launchd's
-//! directory (`/Library/LaunchDaemons`), where it links a package's plists, and where a release
-//! before the hand-over writes its own fallback job, which a release of this build removes. A test that drives it for real puts files at those places, which is only safe on
-//! a throwaway machine, which the hosted runner of `privileged.yml` is. [`MacHost::new`] moves
-//! aside whatever is at the places it takes over (another test of the crate may have left it),
+//! directory (`/Library/LaunchDaemons`), where it links a package's plists. A test that drives it
+//! for real puts files at those places, which is only safe on a throwaway machine, which the
+//! hosted runner of `privileged.yml` is. [`MacHost::new`] moves aside whatever is at the places it takes over (another test of the crate may have left it),
 //! and the drop boots out every job the test made or the daemon loaded, removes what the test
 //! and the daemon wrote there, puts back what was moved aside and writes the CA bundle back as
 //! it was, whether the test passed or failed. When the test is failing, the drop first prints
@@ -195,26 +194,15 @@ fn slot_labels() -> [Label; 2] {
 }
 
 /// The places of the host this rig takes over: the daemon's programs, its pki and placed
-/// state, its fallback job's plist, and the plists of hello's two slots.
+/// state, and the plists of hello's two slots.
 fn taken_places() -> Vec<PathBuf> {
     let mut places = vec![
         PathBuf::from(LIBRARY_DIR),
         PathBuf::from(PKI_DIR),
         PathBuf::from(PLACED_DIR),
-        fallback_plist(),
     ];
     places.extend(slot_labels().map(|label| plist_link(&label)));
     places
-}
-
-/// The fallback job of the releases before the hand-over, which such a daemon writes and loads at
-/// every start on a Mac, and which this build's daemon removes.
-fn fallback_label() -> Label {
-    Label::parse(&hostkeeper_daemon::selfunits::fallback_label()).expect("a label")
-}
-
-fn fallback_plist() -> PathBuf {
-    Path::new(LAUNCHD_DIR).join(format!("{}.plist", fallback_label()))
 }
 
 /// Where the daemon links the plist of `label`.
@@ -259,7 +247,6 @@ impl MacHost {
             "the device tests run as root (privileged.yml's cargo runner `sudo`)"
         );
         // A job left loaded by another test would run beside this one's.
-        bootout_quiet(&fallback_label());
         for label in slot_labels() {
             bootout_quiet(&label);
         }
@@ -292,7 +279,6 @@ impl MacHost {
         make_dir(&host.state(), 0o755);
         make_dir(&host.records(), 0o755);
         make_dir(&host.base.join("logs"), 0o755);
-        make_dir(&host.base.join("run"), 0o700);
         make_dir(Path::new(PLACED_DIR), 0o755);
         make_dir(Path::new(LIBRARY_DIR), 0o755);
         host
@@ -323,13 +309,6 @@ impl MacHost {
         let dir = self.base.join("logs").join(version);
         make_dir(&dir, 0o755);
         dir
-    }
-
-    /// The `--admin-socket` the test passes (short: a socket path is limited to about 100 bytes).
-    /// The daemon of this checkout ignores it and binds nothing there; the older release that the
-    /// cross-release rig runs still binds it.
-    pub fn admin_socket(&self) -> PathBuf {
-        self.base.join("run").join("admin.sock")
     }
 
     /// The daemon's `--config`.
@@ -424,8 +403,6 @@ impl MacHost {
             text(self.state()),
             "--packages-dir".to_owned(),
             text(self.packages()),
-            "--admin-socket".to_owned(),
-            text(self.admin_socket()),
             "--heartbeat-secs".to_owned(),
             "1".to_owned(),
         ];
@@ -665,7 +642,6 @@ impl Drop for MacHost {
         if let Some(label) = daemon {
             bootout_quiet(&label);
         }
-        bootout_quiet(&fallback_label());
         for label in slot_labels() {
             bootout_quiet(&label);
         }

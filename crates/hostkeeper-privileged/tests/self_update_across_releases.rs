@@ -9,24 +9,24 @@
 //! packages from a release channel on loopback, checked by the production attestation verifier.
 //!
 //! Each test starts from the released daemon converged on its own version's package
-//! (`across::Rig::installed`: the coordinator's install of the version that runs), with its
-//! fallback unit and drop-in (or fallback job) armed, as the released daemon arms them at its
-//! start. The coordinator is set as CI's set does it, by targets and the release index
+//! (`across::Rig::installed`: the coordinator's install of the version that runs). The released
+//! daemon updates by the hand-over, so it leaves no fallback unit, drop-in or job and no start
+//! log. The coordinator is set as CI's set does it, by targets and the release index
 //! (`across::Rig::order`): the released daemon, which announces no `target-v1`, is ordered the
 //! package and the digest of the index and fetches the index and the archive from the channel;
 //! this build, which does, is ordered the one `hostkeeper-archive` entry and fetches through it.
 //! What each proves:
-//! - the released daemon updates to this build the old way (probe, hook, switch, clean exit), the
-//!   unit or job starts this build, which settles the update `Succeeded`, reports it, removes the
-//!   released daemon's fallback files before it can update again, and the coordinator reads the
-//!   host converged on it;
-//! - this build made to fail its start is fallen back from by the released binary's own
-//!   fallback (its fallback unit under systemd, its fallback job under launchd): the released
-//!   binary runs again, settles the update `Failed`, `self_update_fallback`, and lists the version
-//!   bad, and its heartbeat reports that verdict;
+//! - the released daemon updates to this build by the hand-over (it stages the new binary, links
+//!   `next` and exits; the unit or job starts it again, and it execs `next`); this build's own
+//!   start finishes the switch, settles the update `Succeeded`, reports it, and the coordinator
+//!   reads the host converged on it;
+//! - this build made to fail its start is fallen back from by the released binary's hand-over:
+//!   the released binary execs it three times, then settles the update `Failed`,
+//!   `self_update_fallback`, lists the version bad, removes `next` and keeps `current` and
+//!   `previous` as they were, and its heartbeat reports that verdict;
 //! - this build, once the released daemon updated to it, updates to itself under a newer version
 //!   name by the hand-over: it stages the new binary and links `next`, `current` is moved only by
-//!   the new binary's own start, and no fallback file is armed;
+//!   the new binary's own start;
 //! - the released binary, put back by an operator on a host this build updated twice (stopped,
 //!   `current` pointed at the released binary, started), starts on the packages this build staged
 //!   through an entry, hostkeeper's own sealed version with its `bin/hostkeeper` and the unit
@@ -94,9 +94,8 @@ fn fetches(rig: &Rig, built: &Built) -> (u64, u64, u64) {
 /// Updates the rig's host to this build at `version` and checks that the update went through as
 /// a self-update does: the coordinator reads the host converged on it, the daemon's process runs
 /// the binary directory's file of `version`, `current` names it, `previous` names `from` and
-/// `next` is gone, the step record says `Succeeded`, the fallback files of the releases before
-/// the hand-over are gone, and the host reported the update `Succeeded` with its order. Gives the
-/// package it published.
+/// `next` is gone, the step record says `Succeeded`, and the host reported the update `Succeeded`
+/// with its order. Gives the package it published.
 fn update_to_this_build(rig: &Rig, from: &str, version: &str) -> Built {
     let built = rig.publish(version, Build::This);
     rig.order(&built);
@@ -109,11 +108,6 @@ fn update_to_this_build(rig: &Rig, from: &str, version: &str) -> Built {
         rig.host.logs()
     );
     assert_eq!(rig.layout().next().expect("next"), None);
-    assert!(
-        !rig.host.fallback_files_present(),
-        "the daemon of {version} removed the fallback files at its start\n{}",
-        rig.host.logs()
-    );
     let rec = rig.settled(version);
     assert_finished(&rec, version, succeeded(), None);
     let update = rig.wait_reported(version, "OUTCOME_SUCCEEDED");
@@ -121,15 +115,12 @@ fn update_to_this_build(rig: &Rig, from: &str, version: &str) -> Built {
     built
 }
 
-/// Catches a release of this build that a daemon of the pinned release cannot update to: a probe
-/// answer it does not accept (the verb `self-update-protocol` must still print 1), a hook it
-/// cannot run, a package or attestation it refuses, a new binary that does not start under the
-/// old daemon's unit or job, or a settlement or report the coordinator does not read as
-/// converged; and a release that leaves the released daemon's fallback unit or job armed beside
-/// its own hand-overs. The released daemon, converged on its own version with its fallback files
-/// armed, is ordered this build's next version the old way; the host converges on it, the unit or
-/// job runs it, the binary directory names it `current` and the release `previous`, this build
-/// removes the released daemon's fallback files at its start, and the update is `Succeeded`.
+/// Catches a release of this build that a daemon of the pinned release cannot update to: a hook
+/// it cannot run, a package or attestation it refuses, a new binary that does not start under
+/// the old daemon's hand-over, or a settlement or report the coordinator does not read as
+/// converged. The released daemon, converged on its own version, is ordered this build's next
+/// version; the host converges on it, the unit or job runs it, the binary directory names it
+/// `current` and the release `previous`, and the update is `Succeeded`.
 /// The set is by targets and the index, and the released daemon, which knows no entry, reads the
 /// index of the version and fetches its archive and bundle from the channel: the previous binary
 /// updated by a coordinator that sets by targets.
@@ -139,11 +130,6 @@ fn the_released_daemon_updates_to_this_build_and_this_build_settles_it_succeeded
     let released = rig.released.clone();
     rig.wait_running(&released);
     assert_eq!(rig.links(), (Some(released.clone()), None));
-    assert!(
-        rig.host.fallback_files_present(),
-        "the released daemon armed its fallback at its start\n{}",
-        rig.host.logs()
-    );
     let built = update_to_this_build(&rig, &released, &newer(&released, 1));
     let (index, archive, bundle) = fetches(&rig, &built);
     assert!(
@@ -154,16 +140,13 @@ fn the_released_daemon_updates_to_this_build_and_this_build_settles_it_succeeded
 }
 
 /// Catches a release of this build that cannot start leaving the host without a daemon, or
-/// fallen back from by anything but the released binary's own fallback (the released daemon
-/// updated the old way, so its fallback unit or job is what falls back from a stage-2 build that
-/// cannot start): the released daemon is ordered a version of this build that exits 1 at its
-/// start; the released binary runs again,
-/// `current` and `previous` both name it (the fallback moves `current` back and leaves
-/// `previous`), the step record says `Failed` after the commit, of class release,
-/// `self_update_fallback`, the version is on the local bad list, and the host's heartbeat reports
-/// that verdict to the coordinator; on Linux systemd ran the fallback unit to success. The set is
-/// by targets and the index, the released daemon fetching the failing version through the
-/// channel's index.
+/// fallen back from by anything but the released binary's hand-over: the released daemon is
+/// ordered a version of this build that exits 1 at its start; the released binary execs it as many
+/// times as the hand-over tries and runs again, `current` still names it and `previous` is as it
+/// was (nothing was switched), `next` is gone, the step record says `Failed` after the commit, of
+/// class release, `self_update_fallback`, the version is on the local bad list, and the host's
+/// heartbeat reports that verdict to the coordinator. The set is by targets and the index, the
+/// released daemon fetching the failing version through the channel's index.
 #[test]
 fn this_build_made_to_fail_its_start_is_fallen_back_from_to_the_released_binary() {
     let rig = Rig::installed("x1fbk");
@@ -178,10 +161,11 @@ fn this_build_made_to_fail_its_start_is_fallen_back_from_to_the_released_binary(
     rig.wait_running(&released);
     assert_eq!(
         rig.links(),
-        (Some(released.clone()), Some(released.clone())),
+        (Some(released.clone()), None),
         "{}",
         rig.host.logs()
     );
+    assert_eq!(rig.layout().next().expect("next"), None);
     let rec = rig.settled(&failing);
     assert_finished(
         &rec,
@@ -193,12 +177,6 @@ fn this_build_made_to_fail_its_start_is_fallen_back_from_to_the_released_binary(
         Some(FALLBACK_REASON),
     );
     assert!(rig.is_bad(&failing), "{failing} is on the bad list");
-    #[cfg(target_os = "linux")]
-    assert!(
-        rig.host.fallback_ran(),
-        "systemd ran the released binary's fallback unit\n{}",
-        rig.host.logs()
-    );
 
     rig.wait_running(&released);
 }
@@ -207,8 +185,7 @@ fn this_build_made_to_fail_its_start_is_fallen_back_from_to_the_released_binary(
 /// again: the released daemon updates to this build's next version, and that version, ordered
 /// the version after it, hands over to it (this build staged under a newer name, `next` linked,
 /// execed by the unit's start of `current`); the host converges on each, `previous` names the
-/// version it came from, `next` is gone, no fallback file is armed, and each update is
-/// `Succeeded`.
+/// version it came from, `next` is gone, and each update is `Succeeded`.
 /// The set is by targets and the index, and the two updates take different ways: the released
 /// daemon reads the index of its version from the channel, while this build, ordered the entry,
 /// fetches the archive and the bundle at the entry's locations and asks the channel for no index

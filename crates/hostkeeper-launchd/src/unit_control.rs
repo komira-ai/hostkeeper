@@ -3,16 +3,15 @@
 //! The plists hostkeeper placed are the entries of the unit directory named `<label>.plist` that
 //! are symbolic links (placed paths are links into `current`); `daemon_reload` never reads or
 //! touches a regular file there. `stop_unit` and `start_unit` act on the label they are given,
-//! whatever its plist is: the daemon's own fallback job, a regular file it writes itself, is
-//! loaded again that way. `daemon_reload` has no launchd counterpart, so
-//! the control keeps a snapshot of those links, each with the device and inode of the file it
-//! resolves to, and acts on what differs from the snapshot of the last successful reload: a job
-//! whose link is new or re-pointed is booted out when it is loaded and then bootstrapped from its
-//! link, and a loaded job whose link is gone is booted out. After a reload launchd holds the job
-//! of every link that changed, as it holds every plist of the directory after a boot; loading a
-//! job is not starting it (a plist's `RunAtLoad` and `KeepAlive` say whether launchd runs it), so
-//! the hook that `kickstart`s a job finds it loaded, as a systemd hook finds a unit file known
-//! after `daemon-reload`.
+//! whatever its plist is: a job whose plist is a regular file is loaded again that way.
+//! `daemon_reload` has no launchd counterpart, so the control keeps a snapshot of those links, each
+//! with the device and inode of the file it resolves to, and acts on what differs from the snapshot
+//! of the last successful reload: a job whose link is new or re-pointed is booted out when it is
+//! loaded and then bootstrapped from its link, and a loaded job whose link is gone is booted out.
+//! After a reload launchd holds the job of every link that changed, as it holds every plist of the
+//! directory after a boot; loading a job is not starting it (a plist's `RunAtLoad` and `KeepAlive`
+//! say whether launchd runs it), so the hook that `kickstart`s a job finds it loaded, as a systemd
+//! hook finds a unit file known after `daemon-reload`.
 //!
 //! The first snapshot is taken at construction: a link that was there before the daemon started
 //! is taken to have been loaded by launchd at boot.

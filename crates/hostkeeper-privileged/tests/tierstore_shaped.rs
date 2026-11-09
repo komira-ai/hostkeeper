@@ -363,8 +363,8 @@ fn sockets_under(dir: &Path) -> Vec<PathBuf> {
 /// installed, the daemon stopped and one of the wants links it placed removed, `systemctl start`
 /// returns (which, for `Type=notify`, is after the daemon sent `READY=1`) with the link back in
 /// place (the boot pass's reconcile of the placed paths ran before the notice), the unit active
-/// and of type notify, the boot id recorded, no socket bound (nothing at the `--admin-socket` path it was given, none
-/// anywhere in the test's tree), and the fixture's instances still serving.
+/// and of type notify, the boot id recorded, no socket bound
+/// (none anywhere in the test's tree), and the fixture's instances still serving.
 #[test]
 fn the_daemon_is_ready_under_a_notify_unit_only_after_its_boot_pass() {
     let s = Scenario::installed("boot");
@@ -393,10 +393,6 @@ fn the_daemon_is_ready_under_a_notify_unit_only_after_its_boot_pass() {
     let boot_id = fs::read_to_string("/proc/sys/kernel/random/boot_id").expect("the boot id");
     let recorded = fs::read_to_string(s.host.state().join(".boot-id")).expect("the recorded id");
     assert_eq!(recorded.trim(), boot_id.trim());
-    assert!(
-        fs::symlink_metadata(s.host.admin_socket()).is_err(),
-        "nothing is at the --admin-socket path the daemon was given"
-    );
     assert_eq!(sockets_under(s.host.base()), Vec::<PathBuf>::new());
     for port in installed.ports {
         assert_eq!(served_version(port).as_deref(), Some(V1), "instance {port}");

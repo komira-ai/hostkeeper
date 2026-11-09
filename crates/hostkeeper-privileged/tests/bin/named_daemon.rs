@@ -1,17 +1,13 @@
 //! `hostkeeper-named-daemon`: the `hostkeeper` binary of this build in the cross-release rig
 //! (`tests/self_update_across_releases.rs`), a program of the tests, not shipped.
 //!
-//! Every verb but `daemon` is forwarded to the daemon's command line as the `hostkeeper` binary
-//! forwards it (`hostkeeper_daemon::cli::run_with`): `self-update-protocol`, which an older
-//! daemon's probe asks of it, `update-hook` and its step words, which an older daemon runs as the
-//! hook of hostkeeper's package, and `self-update-fallback` are the shipped code.
-//!
-//! `daemon` is the shipped daemon as `hostkeeper daemon` runs it (`hostkeeper_daemon::cli`): the
+//! `daemon` is the only verb, as the `hostkeeper` binary's (`hostkeeper_daemon::cli::Cli`), and
+//! it is the shipped daemon as `hostkeeper daemon` runs it (`hostkeeper_daemon::cli`): the
 //! hand-over of its own update first (`hostkeeper_daemon::handover`: a binary that waits for a
-//! hand-over into another version execs that binary), the start log, the host's files, ports and
-//! adapters (the release channel, the attestation check
-//! with the host's `gh` and trusted root, the coordinator over mutual TLS, systemd or launchd),
-//! the start and the heartbeat and enrollment loops, served until it asks to exit for its own
+//! hand-over into another version execs that binary), the host's files, ports and adapters (the
+//! release channel, the attestation check with the host's `gh` and trusted root, the coordinator
+//! over mutual TLS, systemd or launchd), the start and the heartbeat and enrollment loops, served
+//! until it asks to exit for its own
 //! update. One thing differs: its version is the name of the file it runs from, its links
 //! resolved (`hostkeeper_privileged::across::program_version`), where the shipped binary's is the
 //! one it was built with. The binary directory keeps version `<v>` at `versions/<v>`, so this
@@ -23,7 +19,6 @@
 use std::process::ExitCode;
 
 use clap::Parser;
-use hostkeeper_daemon::adapters::host_clock;
 use hostkeeper_daemon::cli::{self, Cli, Command, DaemonFlags, HostFiles, SystemdVars};
 use hostkeeper_daemon::handover::{self, ProcessExec};
 use hostkeeper_daemon::start::{self, StartError};
@@ -36,11 +31,10 @@ const PROGRAM: &str = "hostkeeper-named-daemon";
 const EXIT_USAGE: u8 = 2;
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
-    match cli.command {
-        Command::Daemon(flags) => daemon(&flags),
-        command => cli::run_with(Cli { command }, systemd_vars()),
-    }
+    let Cli {
+        command: Command::Daemon(flags),
+    } = Cli::parse();
+    daemon(&flags)
 }
 
 /// What systemd set for the process, the notify socket's address and the watchdog's timeout:
@@ -80,7 +74,6 @@ fn daemon(flags: &DaemonFlags) -> ExitCode {
             &own.to_string(),
             &ProcessExec::new(args),
         );
-        cli::note_start(&settings, platform.kind, own, &host_clock());
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()

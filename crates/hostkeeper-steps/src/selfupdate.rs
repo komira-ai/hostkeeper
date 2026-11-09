@@ -10,9 +10,7 @@
 //! directory and has `Restart=always`, so that clean exit starts the old binary again, which
 //! execs the new one while the start count lasts ([`crate::handover`]); three starts of the new
 //! binary that do not reach its settlement settle the update `Failed`, and the old binary runs.
-//! Nothing was switched, so nothing is switched back: [`Layout::flip_back`] and the fallback
-//! unit and job ([`main_dropin`], [`fallback_unit`], [`launchd_fallback_job`]) are what releases
-//! before the hand-over used, and what a daemon of this release removes when it finds them.
+//! Nothing is switched before the new binary has run, so nothing is switched back.
 //!
 //! The record says `Succeeded` only once the new binary has run (design section 6.6): the step
 //! runner of the update holds its success back ([`crate::StepRunner::with_held_success`]), the
@@ -21,19 +19,13 @@
 //! old `current`, then `current` to itself) and confirms it `Succeeded`, and any other closes it
 //! `Failed` after the commit, of class release, [`REASON_SELF_UPDATE_FALLBACK`], and adds the
 //! version to the local list of bad versions ([`crate::bad`]). A wait without
-//! [`AwaitingRestart::next`], written the old way by a release that switched `current` first and
-//! armed a fallback unit or job, is settled by the same function: the new binary confirms it
-//! when `current` names it, and any other binary closes it `Failed`.
+//! [`AwaitingRestart::next`], the record shape of the releases before the hand-over, is settled
+//! by the same function: the new binary confirms it when `current` names it, and any other
+//! binary closes it `Failed`.
 //!
 //! On macOS the daemon runs from its LaunchDaemons plist, which `hostkeeper-launchd` renders
 //! (`hostkeeper_launchd::plist::daemon_plist`: `KeepAlive` plain `true`, the counterpart of
 //! `Restart=always`, so the clean exit that [`follow_on`] asks for starts the binary again).
-//! The fallback timer job of the old way ([`launchd_fallback_job`]) ran the previous binary's
-//! `self-update-fallback` verb every interval, which fell back only once the version the record
-//! waited for had started [`START_LIMIT_BURST`] times within [`START_LIMIT_WINDOW_SECS`]
-//! ([`should_fall_back`], the rule `StartLimitBurst=` and `StartLimitIntervalSec=` give systemd
-//! in [`main_dropin`]); the daemon still writes each start to the start log ([`crate::starts`]),
-//! which that job of an older release reads.
 //!
 //! Two kinds of [`Layout`] share the switch:
 //!
@@ -70,43 +62,16 @@ use hostkeeper_hook::Verdict;
 
 use crate::artifact::{ArtifactError, Staged, host_owner, trusted_owners, walk};
 use crate::bad::{BadVersions, BadVersionsError};
-use crate::clock::Stamp;
 pub use crate::record::{AwaitingRestart, REASON_SELF_UPDATE_FALLBACK};
 use crate::record::{Loaded, Record, RecordError, RecordStore, Settlement, State};
 use crate::runner::Finished;
 use crate::seal::{Seal, read_seal};
 
-/// The failed starts after which the fallback runs.
-pub const START_LIMIT_BURST: u32 = 3;
-
-/// The window, in seconds, within which [`START_LIMIT_BURST`] starts make the fallback run
-/// (systemd's `StartLimitIntervalSec=`).
-pub const START_LIMIT_WINDOW_SECS: u64 = 300;
-
-/// Whether `starts`, the starts of one binary in the order they were made, are `burst` starts
-/// within `window_secs`: the one decision of the burst, systemd's start limit
-/// (`StartLimitBurst=`, `StartLimitIntervalSec=`) as a function. A start counts when it was made
-/// in the boot of the latest start, not after it, and less than `window_secs` before it; a
-/// `burst` of 0 never falls back.
-pub fn should_fall_back(starts: &[Stamp], burst: u32, window_secs: u64) -> bool {
-    let Some(latest) = starts.last() else {
-        return false;
-    };
-    let within = starts
-        .iter()
-        .filter(|start| start.same_boot(latest))
-        .filter(|start| start.mono_secs <= latest.mono_secs)
-        .filter(|start| latest.mono_secs - start.mono_secs < window_secs)
-        .count();
-    (burst > 0) & (within >= burst as usize)
-}
-
 /// A directory of versions with a `current` and a `previous` link: the updater's own binaries
 /// ([`Layout::new`]) or the unpacked versions of one package ([`Layout::package`]).
 ///
 /// **The caller gives a directory that is root-owned and closed to group and others, in
-/// root-owned parents**: this type does not check it, and the fallback unit runs what `previous`
-/// points at as root.
+/// root-owned parents**: this type does not check it.
 #[derive(Clone, Debug)]
 pub struct Layout {
     dir: PathBuf,
@@ -261,9 +226,10 @@ impl Layout {
     ///
     /// The version `current` or `previous` points at is refused
     /// ([`io::ErrorKind::AlreadyExists`]) and left as it is: a crash between staging over it and
-    /// the switch would leave the unit, or its fallback, running a binary that was never the one
-    /// it switched to. The copy is made under a name no version can have (`.<version>.stage`),
-    /// created afresh, so that staging one version never writes over the file of another.
+    /// the switch would leave the unit, or the binary it falls back to, running a binary that was
+    /// never the one it switched to. The copy is made under a name no version can have
+    /// (`.<version>.stage`), created afresh, so that staging one version never writes over the
+    /// file of another.
     pub fn stage(&self, version: &str, binary: &Path) -> io::Result<()> {
         self.expect_kind(Kind::Binary)?;
         self.check_stageable(version)?;
@@ -396,22 +362,6 @@ impl Layout {
             self.set_link("previous", &before)?;
         }
         self.set_link("current", version)
-    }
-
-    /// Points `current` at `previous` again. `false` when there is no `previous` or `current`
-    /// already points at it; an error, with `current` unchanged, when what `previous` names is
-    /// not an executable file or a sealed tree with its seal's digest, whichever `current`
-    /// points at: the fallback reports a fallback it cannot run.
-    pub fn flip_back(&self) -> io::Result<bool> {
-        let Some(previous) = self.previous()? else {
-            return Ok(false);
-        };
-        self.check(&previous)?;
-        if self.current()?.as_deref() == Some(previous.as_str()) {
-            return Ok(false);
-        }
-        self.set_link("current", &previous)?;
-        Ok(true)
     }
 
     /// What a switch to `version` requires, by the kind of layout.
@@ -772,77 +722,4 @@ fn settle_hand_over(
     store.settle_awaiting_restart(Settlement::Confirmed)?;
     layout.remove_next()?;
     Ok(Settled::Confirmed)
-}
-
-/// The drop-in for the updater's own unit: restart when it exits, and run the fallback unit
-/// once it has failed `burst` starts within [`START_LIMIT_WINDOW_SECS`]. `RestartMode=direct`
-/// (systemd 254 and later) makes an automatic restart skip the failed state, so `OnFailure=` runs
-/// once the restarts end at the start limit, not at every failed start.
-pub fn main_dropin(fallback_unit: &str, burst: u32) -> String {
-    format!(
-        "[Unit]\nOnFailure={fallback_unit}\nStartLimitIntervalSec={START_LIMIT_WINDOW_SECS}\nStartLimitBurst={burst}\n\n[Service]\nRestart=always\nRestartSec=1\nRestartMode=direct\n"
-    )
-}
-
-/// The fallback unit: the previous binary flips `current` back and the main unit is started.
-/// The verb's failure is ignored (`ExecStart=-`): when it puts nothing back (no update waits
-/// for its restart, as when a config does not load), the main unit's failed state is still reset
-/// and the unit started again, so a daemon that fails its start limit is never left failed. It
-/// has no start limit of its own (`StartLimitIntervalSec=0`): it runs once per start limit the
-/// main unit spends, for as long as the main unit cannot start.
-pub fn fallback_unit(layout: &Layout, main_unit: &str) -> String {
-    let dir = layout.dir().display();
-    format!(
-        "[Unit]\nDescription=Put the previous updater binary back after the new one failed to start\nStartLimitIntervalSec=0\n\n[Service]\nType=oneshot\nExecStart=-{dir}/previous self-update-fallback --dir {dir}\nExecStartPost=/usr/bin/systemctl reset-failed {main_unit}\nExecStartPost=/usr/bin/systemctl start --no-block {main_unit}\n"
-    )
-}
-
-/// The plist of the fallback timer job on macOS, labelled `<label>.fallback`: every
-/// `interval_secs` it runs the previous binary's `self-update-fallback` verb, the command
-/// [`fallback_unit`] runs, so the verb is the same code on both systems.
-///
-/// launchd has no start limit and no `OnFailure=` to run the job when the daemon fails its
-/// burst, so the job runs on a timer, and on macOS the verb falls back only after the burst
-/// ([`should_fall_back`] over the start log); otherwise it changes nothing. What the verb does
-/// when it runs, such as flipping `current` back ([`Layout::flip_back`]), is the verb's; this
-/// function only produces the text. The job does not run at load.
-pub fn launchd_fallback_job(layout: &Layout, label: &str, interval_secs: u32) -> String {
-    let dir = xml_escape(&layout.dir().display().to_string());
-    let label = xml_escape(label);
-    format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
-         <plist version=\"1.0\">\n\
-         <dict>\n\
-         \x20 <key>Label</key>\n\
-         \x20 <string>{label}.fallback</string>\n\
-         \x20 <key>ProgramArguments</key>\n\
-         \x20 <array>\n\
-         \x20   <string>{dir}/previous</string>\n\
-         \x20   <string>self-update-fallback</string>\n\
-         \x20   <string>--dir</string>\n\
-         \x20   <string>{dir}</string>\n\
-         \x20 </array>\n\
-         \x20 <key>RunAtLoad</key>\n\
-         \x20 <false/>\n\
-         \x20 <key>StartInterval</key>\n\
-         \x20 <integer>{interval_secs}</integer>\n\
-         </dict>\n\
-         </plist>\n"
-    )
-}
-
-/// `text` for the inside of an XML element: `&`, `<`, `>`, `"` and `'` become entities.
-fn xml_escape(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for c in text.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&apos;"),
-            other => out.push(other),
-        }
-    }
-    out
 }
