@@ -12,7 +12,7 @@
 //!   `DeviceState`.
 //!
 //! - [`enroll`]: the enrollment side, linked in with [`Gate::with_enrollment`]: the config
-//!   profile ([`DaemonProfile`]), and the one-time nonce issued through the coordinator's
+//!   profile ([`ConfigProfile`]), sent again when its settings change, and the one-time nonce issued through the coordinator's
 //!   [`Enrollments`] and pushed in the nonce profile once the Mac's daemon has posted its
 //!   request; re-issue, re-push and removal.
 //! - [`install`]: the pkg, linked in with [`Gate::with_install`]: the allowlist of pkg digests
@@ -52,8 +52,10 @@ pub use pkg::{
     PkgAllowlistError, PkgDigest, PkgEntry, PkgFileError,
 };
 pub use profile::{
-    CONFIG_DOMAIN, CONFIG_FLAG, DaemonProfile, DaemonProfileError, ENROLLMENT_DOMAIN,
-    IDENTIFIER_FLAG, IdentifierError, PREFERENCES_PAYLOAD, ProfileIdentifier, nonce_profile,
+    CONFIG_DOMAIN, CONFIG_FLAG, ConfigProfile, DaemonProfile, DaemonProfileError,
+    ENROLLMENT_DOMAIN, IDENTIFIER_FLAG, IdentifierError, MACOS_PKG_DOMAIN, MACOS_PKG_FLAG,
+    MacosPkgProfile, MacosPkgProfileError, PREFERENCES_PAYLOAD, ProfileIdentifier, STORES_DOMAIN,
+    STORES_FLAG, StoresProfile, StoresProfileError, nonce_profile,
 };
 pub use record::{
     DeviceRecord, InstallRecord, NonceRecord, Phase, ProfileAnswer, ProfileCommand, Sent,

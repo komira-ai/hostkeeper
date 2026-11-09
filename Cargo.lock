@@ -1748,6 +1748,8 @@ dependencies = [
  "bytes",
  "hostkeeper-config",
  "hostkeeper-enrollment",
+ "hostkeeper-install",
+ "hostkeeper-package",
  "hostkeeper-testkit",
  "hostkeeper-wire",
  "http-body-util",
