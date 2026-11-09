@@ -12,7 +12,7 @@ fn a_package_version_is_the_release_with_or_without_a_revision() {
     assert!(at_version("1.2.3", "1.2.3"));
     assert!(at_version("1.2.3-1", "1.2.3"));
     assert!(at_version("1.2.3-0ubuntu2", "1.2.3"));
-    for other in ["1.2.30", "1.2.3+b1", "1.2", "0.1.2.3", ""] {
+    for other in ["1.2.30", "1.2.3+b1", "1.2", "11.2.3", ""] {
         assert!(!at_version(other, "1.2.3"), "{other}");
     }
 }
