@@ -134,7 +134,9 @@ Components: main
 Signed-By: /etc/hostkeeper/repositories/komira-archive-keyring.gpg
 ```
 
-(`Suites: stable` for `komira-stable.sources`), and the keyring `komira-archive-keyring.gpg` is
+(`Suites: stable` for `komira-stable.sources`, and `Suites: testing-fail` for
+`komira-testing-fail.sources`, the entry of hello's failing build on the hosts that run its proof,
+[hello.md](../hello.md) step 4), and the keyring `komira-archive-keyring.gpg` is
 fetched from `https://packages.komira.ai/apt/komira-archive-keyring.gpg` (see
 [package-repositories.md](../deploy/package-repositories.md)). Make the directory and its files
 root's, with no write for group or others (`chown -R root:root`, `chmod 0755` the directory,
