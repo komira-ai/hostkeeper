@@ -766,3 +766,44 @@ fn a_record_that_cannot_be_read_prunes_nothing() {
             .all(|line| line.contains("alert=prune_failed"))
     );
 }
+
+/// Catches a prune that deletes the versions of a service whose installer it cannot run the
+/// `retire` of: a service `placed.json` records with an installer this daemon has no steps of
+/// (one a newer binary installed, before a fallback) has nothing pruned, and the confirmed
+/// switch is the alert naming the installer. Recorded as `hostkeeper-archive`, or not recorded,
+/// its versions go, each given to that installer's `retire`.
+#[test]
+fn a_service_of_an_installer_without_steps_prunes_nothing() {
+    let rig = Rig::new("prune-installer");
+    recorded(&rig);
+    let (daemon, alerts) = alerting(daemon_on(
+        &rig,
+        rig.placed_fs.clone(),
+        Arc::new(LayoutPrune),
+    ));
+    let placed = rig.scratch.path().join("placed/placed.json");
+    fs::write(
+        &placed,
+        r#"{"schema":1,"paths":{},"installed":{"web":{"installer":"apt"}}}"#,
+    )
+    .expect("placed.json");
+    let before = snapshot(&rig.packages);
+    assert_eq!(confirm(&daemon), None);
+    assert_eq!(snapshot(&rig.packages), before);
+    assert_eq!(
+        lines(&alerts),
+        [
+            "hostkeeper daemon: level=error alert=prune_failed service=web: the old versions of web could not be pruned: web is installed by the installer \"apt\", which this daemon has no steps of"
+        ]
+    );
+
+    fs::write(
+        &placed,
+        r#"{"schema":1,"paths":{},"installed":{"web":{"installer":"hostkeeper-archive"}}}"#,
+    )
+    .expect("placed.json");
+    let report = confirm(&daemon).expect("a report");
+    assert_eq!(report.deleted, ["1.0.0", "4.0.0"].map(String::from).into());
+    assert_eq!(versions(&rig), ["2.0.0", "3.0.0"]);
+    assert_eq!(lines(&alerts).len(), 1, "no retire failed");
+}

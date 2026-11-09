@@ -418,6 +418,7 @@ fn the_registration_socket_directory_is_updater_under_the_run_directory() {
 fn the_host_ports_are_built_from_flags_and_files_without_the_network() {
     let rig = Rig::new("assemble-host-ports");
     let files = HostFiles {
+        os_root: rig.scratch.path().join("os"),
         ca_bundle: rig.scratch.path().join("ca.pem"),
         gh: rig.scratch.path().join("gh"),
         trusted_root: rig.scratch.path().join("trusted_root.json"),
@@ -573,6 +574,7 @@ fn the_host_ports_are_built_from_flags_and_files_without_the_network() {
 fn the_start_of_the_host_build_stops_at_the_ports_it_cannot_build() {
     let rig = Rig::new("assemble-start-with");
     let files = HostFiles {
+        os_root: rig.scratch.path().join("os"),
         ca_bundle: rig.scratch.path().join("ca.pem"),
         gh: rig.scratch.path().join("gh"),
         trusted_root: rig.scratch.path().join("trusted_root.json"),
@@ -636,6 +638,7 @@ fn files_on(kind: PlatformKind, present: &[&str]) -> (HostFiles, Vec<PathBuf>) {
 /// The host files of Linux with the CA bundle `ca_bundle`.
 fn linux_files(ca_bundle: &str) -> HostFiles {
     HostFiles {
+        os_root: PathBuf::from("/"),
         ca_bundle: PathBuf::from(ca_bundle),
         gh: PathBuf::from("/usr/lib/hostkeeper/gh"),
         trusted_root: PathBuf::from("/usr/lib/hostkeeper/trusted_root.json"),
@@ -660,6 +663,7 @@ const RHEL: &str = "/etc/pki/tls/certs/ca-bundle.crt";
 #[test]
 fn a_mac_keeps_gh_and_the_trusted_root_under_usr_local_and_reads_etc_ssl_cert_pem() {
     let mac = HostFiles {
+        os_root: PathBuf::from("/"),
         ca_bundle: PathBuf::from("/etc/ssl/cert.pem"),
         gh: PathBuf::from("/usr/local/lib/hostkeeper/gh"),
         trusted_root: PathBuf::from("/usr/local/lib/hostkeeper/trusted_root.json"),

@@ -13,9 +13,18 @@
 //!       "link_target": "/var/lib/hostkeeper/packages/tierstore/current/files/tierstore.conf"
 //!     }
 //!   },
-//!   "uninstalling": { "other": {}, "old": { "hook_done": true } }
+//!   "uninstalling": { "other": {}, "old": { "hook_done": true } },
+//!   "installed": { "web": { "installer": "apt" } }
 //! }
 //! ```
+//!
+//! `installed` maps a service to its installer, for a service of an installer other than
+//! `hostkeeper-archive` (packages-lifecycle.md section 6.5; a service with no entry is a
+//! `hostkeeper-archive` one, as every service installed before the key existed is). The
+//! installer's name is kept as written: the daemon refuses to act for a service of one it has
+//! no steps of, and the record is read whatever it names. It is written only when not empty,
+//! so a record without it is written as it was before it existed, and a release that does not
+//! know the key keeps it on rewrite.
 //!
 //! Schema 1, changed additively only: a key this daemon does not know, at the top level, in an
 //! entry or in a tombstone, is kept as it is when the record is written again. A record with a
@@ -133,6 +142,26 @@ pub struct Tombstone {
     extra: Map<String, Value>,
 }
 
+/// How a service was installed, when not by `hostkeeper-archive`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct InstalledEntry {
+    /// The installer's name, as the entry spells it.
+    pub installer: String,
+    /// The keys of a newer writer, kept on rewrite.
+    #[serde(flatten)]
+    extra: Map<String, Value>,
+}
+
+impl InstalledEntry {
+    /// An entry for `installer`.
+    pub fn new(installer: &str) -> InstalledEntry {
+        InstalledEntry {
+            installer: installer.to_owned(),
+            extra: Map::new(),
+        }
+    }
+}
+
 /// The contents of `placed.json`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PlacedRecord {
@@ -143,6 +172,10 @@ pub struct PlacedRecord {
     /// The tombstones, by service.
     #[serde(default)]
     pub uninstalling: BTreeMap<String, Tombstone>,
+    /// The installer of each service installed by one other than `hostkeeper-archive`; a service
+    /// without an entry is a `hostkeeper-archive` one. Written only when not empty.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub installed: BTreeMap<String, InstalledEntry>,
     /// A `daemon-reload` is owed: set in the same write that records a change to placed links,
     /// cleared only after a reload succeeded, so a crash or a failed reload leaves it due.
     /// Written only when set.
@@ -159,6 +192,7 @@ impl Default for PlacedRecord {
             schema: SCHEMA,
             paths: BTreeMap::new(),
             uninstalling: BTreeMap::new(),
+            installed: BTreeMap::new(),
             reload_pending: false,
             extra: Map::new(),
         }
@@ -174,6 +208,13 @@ impl PlacedRecord {
         self.paths
             .iter()
             .filter(move |(_, entry)| entry.service == service)
+    }
+
+    /// The installer recorded for `service`; `None` for a `hostkeeper-archive` service.
+    pub fn installer_of(&self, service: &str) -> Option<&str> {
+        self.installed
+            .get(service)
+            .map(|entry| entry.installer.as_str())
     }
 }
 
@@ -214,6 +255,11 @@ fn validate(record: &PlacedRecord) -> Result<(), String> {
     record.uninstalling.keys().try_for_each(|service| {
         require(is_service_name(service), || {
             format!("the tombstone {service:?} is not a service name")
+        })
+    })?;
+    record.installed.keys().try_for_each(|service| {
+        require(is_service_name(service), || {
+            format!("the installed service {service:?} is not a service name")
         })
     })
 }

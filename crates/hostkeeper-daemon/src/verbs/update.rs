@@ -235,7 +235,13 @@ pub(crate) fn prepare(
         Reply::refused(refusal, format!("{} is below {running}", order.version))
     })?;
     if let Some(entry) = &order.entry {
-        entry::check(ctx.own_version, service, &order.digest, entry)?;
+        entry::check(
+            ctx.own_version,
+            &ctx.announcement.installers,
+            service,
+            &order.digest,
+            entry,
+        )?;
     }
     let dir = ctx
         .packages
