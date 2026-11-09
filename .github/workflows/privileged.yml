@@ -28,8 +28,9 @@
 # hand-over, the clean exit, launchd starting the old binary, which execs the new one, the settle
 # at its start, a new binary that cannot start fallen back from, and an install of the running
 # version with no restart), and in
-# install_macos_pkg.rs the macos-pkg installer driven as root with the real pkgutil, installer and
-# security, against fixture packages signed by an identity the test makes and trusts for the run, and in
+# install_macos_pkg.rs the macos-pkg installer driven as root with the real pkgutil, installer, lsbom
+# and launchctl, against M11's unsigned fixture forms built at test time, with nothing signed and no
+# trust setting or keychain changed, and in
 # unpack_mac.rs a package with read-only
 # directories unpacked by the production unpacker, once as the runner's own user and once as
 # root. In the job first-boot the programs themselves

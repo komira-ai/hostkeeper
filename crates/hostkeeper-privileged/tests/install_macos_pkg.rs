@@ -1,35 +1,45 @@
 #![cfg(all(target_os = "macos", feature = "privileged"))]
 //! The `macos-pkg` installer (`hostkeeper_install::macos_pkg::MacosPkg`) against the Mac's real
 //! `pkgutil`, `installer`, `lsbom` and `launchctl`, as root, in privileged.yml's job
-//! `macos-device` (and pr-device.yml's copy of it). The daemon's fetch and proof are not part of
-//! it; the test drives the installer's steps directly, with the version directories a core would
-//! keep (a staging directory per version, renamed to the version once `stage` has filled it).
+//! `macos-device` (and pr-device.yml's copy of it). The daemon's fetch is not part of it; the test
+//! drives the installer's steps directly, with the version directories a core would keep (a
+//! staging directory per version, renamed to the version once `stage` has filled it).
 //!
-//! The test makes its own signing identity with `/usr/bin/openssl`: a root and an installer leaf
-//! (`digitalSignature`, `codeSigning`), imported into a keychain of its own, with the root trusted
-//! for the run in the System keychain (`security add-trusted-cert -d -r trustRoot`) and taken out
-//! after; a second root that is never trusted signs the untrusted fixture. Fixture packages are
-//! built at test time with `pkgbuild` and `productbuild` and signed with `productsign`. A guard
-//! takes the trust, the keychain, the receipt and the installed files away when the test ends,
-//! failed or not.
+//! Nothing is signed on the runner, and no trust setting, keychain or keychain search list is
+//! changed: on a GitHub-hosted macos-15 runner `productsign` refuses an installer identity whose
+//! root the Mac does not trust, and a trust setting cannot be changed there without an
+//! authorization nobody gives (docs/operations/pkg-signing-test.md). The fixtures are M11's two
+//! unsigned forms, built at test time with M11's commands (`crates/xtask/src/mdm_signing_test`):
+//! a component package (`pkgbuild`, M11's pkg-1) and a distribution package around it
+//! (`productbuild --package`, M11's pkg-2). Every program the test runs is bounded by
+//! [`TOOL_BOUND`], so one that hangs fails the test naming it.
 //!
-//! - `the_forms_of_pkgutils_answers_are_the_ones_the_parsers_read`: `pkgutil --check-signature`,
-//!   `--pkg-info-plist` of an unknown identifier and `--file-info-plist` of a file no receipt
-//!   lists, in the forms `hostkeeper_install` parses.
-//! - `a_signed_package_is_installed_updated_rolled_back_and_removed`: `stage` refuses an unsigned
-//!   package, one signed by a root the Mac does not trust and one whose leaf no signer names, then
-//!   install, update (the job enabled by launchd's own override), a hand install of the older
-//!   version found as drift and put back by the next install, rollback (after the test's root is
-//!   taken out of the trust settings) and removal of a two-version fixture.
+//! The real `pkgutil --check-signature` refuses both unsigned forms at `stage`. To drive the
+//! rest of the lifecycle with real tools, the installer's [`Tools`] port is the Mac's own but for
+//! one call: `pkgutil --check-signature` of a package the test names is answered as a package
+//! signed by the leaf [`LEAF`] with a chain the Mac trusts ([`Signed`]). Every other call
+//! (`--expand-full`, `lsbom`, `installer`, the receipts, `launchctl`) is the Mac's. What this
+//! does not show on real tools is the form `pkgutil` prints of a trusted signature and of its
+//! leaf's fingerprint; that waits for M11's signed run on an enrolled Mac.
 //!
-//! It runs as root and says so when it does not: it never skips. Like the other device tests it is
+//! - `the_forms_of_pkgutils_answers_are_the_ones_the_parsers_read`: `pkgutil --check-signature`
+//!   of each unsigned form, `--pkg-info-plist` of an unknown identifier and `--file-info-plist` of
+//!   a file no receipt lists, in the forms `hostkeeper_install` parses.
+//! - `a_package_is_refused_unsigned_then_installed_updated_repaired_rolled_back_and_removed`:
+//!   `stage` refuses both unsigned forms (real) and a leaf no signer names (the answered call);
+//!   the real expansion of each form passes `stage`'s checks; then install, update (with a hook at
+//!   its fixed path, the job enabled by launchd's own override), a hand install of the older
+//!   version found as drift and put back by the next install, rollback with no signature check,
+//!   and removal of a two-version fixture.
+//!
+//! The two tests run one after the other (`--test-threads=1`, which the workflow lint holds). It
+//! runs as root and says so when it does not: it never skips. Like the other device tests it is
 //! not counted by the coverage gate.
 
 use std::collections::BTreeMap;
 use std::fs;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -39,40 +49,55 @@ use hostkeeper_install::lock::InstallerLock;
 use hostkeeper_install::macos_pkg::record::{PkgRecord, RecordError, Records};
 use hostkeeper_install::macos_pkg::signers::{Fingerprint, Signers};
 use hostkeeper_install::macos_pkg::{Bounds, MacosPkg, Order, Seen, drift, receipt, signature};
-use hostkeeper_install::{Failure, HostTools, Reason};
-use hostkeeper_launchd::Label;
+use hostkeeper_install::tools::{ToolError, ToolOutput};
+use hostkeeper_install::{Failure, HostTools, Reason, Tool, Tools};
+use hostkeeper_launchd::{Label, Launchctl, LaunchctlProcess};
 use hostkeeper_testkit::Scratch;
 
 const SERVICE: &str = "hk-a9-fixture";
 const IDENTIFIER: &str = "dev.hostkeeper.a9-fixture";
 const SUPPORT: &str = "/Library/Application Support/hk-a9-fixture";
 const PLIST: &str = "/Library/LaunchDaemons/hk-a9-fixture.plist";
-const SYSTEM_KEYCHAIN: &str = "/Library/Keychains/System.keychain";
-const PRODUCTSIGN: &str = "/usr/bin/productsign";
+/// The hook of 1.1.0, at its fixed path.
+const HOOK: &str = "/Library/Application Support/hk-a9-fixture/hostkeeper-hook";
+/// The most any program the test runs is waited for before it is killed and the test fails
+/// naming it: a bound on a hang, not a measure of time.
+const TOOL_BOUND: Duration = Duration::from_secs(300);
+/// The leaf certificate's SHA-256 the answered `--check-signature` names, and the host's signer.
+const LEAF: &str = "a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9";
 
 fn scratch(name: &str) -> Scratch {
     Scratch::under(Path::new(env!("CARGO_TARGET_TMPDIR")), name).expect("scratch directory")
 }
 
-/// Runs `program` with `args`; the output, whatever its status.
-fn run_any(program: &str, args: &[&str]) -> Output {
-    Command::new(program)
-        .args(args)
-        .output()
-        .unwrap_or_else(|e| panic!("cannot run {program}: {e}"))
+/// Runs `program` with `args` through the bounded runner (an empty environment, no standard
+/// input, at most [`TOOL_BOUND`]); how it ended, whatever its status.
+fn run_any(program: &str, args: &[&str]) -> ToolOutput {
+    let args: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
+    LaunchctlProcess::new(Path::new(program), TOOL_BOUND)
+        .run(&args)
+        .unwrap_or_else(|e| panic!("{program} did not run to its end: {e}"))
 }
 
-/// Runs `program` with `args`, which must succeed; its standard output. A failure names the
-/// program and what it said, never its arguments (some of them are passwords).
+/// Runs `program` with `args`, which must exit 0; its standard output.
 fn run(program: &str, args: &[&str]) -> String {
     let out = run_any(program, args);
-    assert!(
-        out.status.success(),
-        "{program} failed ({}): {}",
-        out.status,
+    assert_eq!(
+        out.code,
+        Some(0),
+        "{program} {args:?}: {}",
         String::from_utf8_lossy(&out.stderr)
     );
     String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// What `out` printed, standard error then standard output.
+fn said(out: &ToolOutput) -> String {
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stderr),
+        String::from_utf8_lossy(&out.stdout)
+    )
 }
 
 fn text(path: &Path) -> &str {
@@ -86,294 +111,89 @@ fn require_root() {
     );
 }
 
-/// The config `openssl req -x509` makes a root with (as the mdm signing kit's).
-fn root_config(cn: &str) -> String {
-    format!(
-        "[ req ]\ndistinguished_name = dn\nprompt = no\n\n[ dn ]\nCN = {cn}\n\n[ root_ext ]\n\
-         basicConstraints = critical, CA:TRUE\nkeyUsage = critical, keyCertSign, cRLSign\n\
-         subjectKeyIdentifier = hash\n"
-    )
-}
-
-/// The config an installer identity's request and certificate extensions are made with.
-fn leaf_config(cn: &str) -> String {
-    format!(
-        "[ req ]\ndistinguished_name = dn\nprompt = no\n\n[ dn ]\nCN = {cn}\n\n[ leaf_ext ]\n\
-         basicConstraints = critical, CA:FALSE\nkeyUsage = critical, digitalSignature\n\
-         extendedKeyUsage = codeSigning\nsubjectKeyIdentifier = hash\n\
-         authorityKeyIdentifier = keyid\n"
-    )
-}
-
-/// A root and the installer leaf it signed.
-struct Ca {
-    root_pem: PathBuf,
-    leaf_pem: PathBuf,
-    p12: PathBuf,
-    leaf_cn: String,
-}
-
-impl Ca {
-    /// Makes the root and the leaf in `dir`, with `openssl`, and the leaf's PKCS#12 file.
-    fn make(dir: &Path, tag: &str, password: &str) -> Ca {
-        let at = |name: &str| dir.join(format!("{tag}-{name}"));
-        let (root_cn, leaf_cn) = (
-            format!("hostkeeper a9 fixture root {tag}"),
-            format!("hostkeeper a9 fixture installer {tag}"),
-        );
-        let (root_cnf, leaf_cnf) = (at("root.cnf"), at("leaf.cnf"));
-        fs::write(&root_cnf, root_config(&root_cn)).expect("write the root config");
-        fs::write(&leaf_cnf, leaf_config(&leaf_cn)).expect("write the leaf config");
-        let (root_key, root_pem, leaf_key) = (at("root.key"), at("root.pem"), at("leaf.key"));
-        let (leaf_csr, leaf_pem, p12) = (at("leaf.csr"), at("leaf.pem"), at("leaf.p12"));
-        let openssl = "/usr/bin/openssl";
-        run(
-            openssl,
-            &[
-                "req",
-                "-x509",
-                "-new",
-                "-newkey",
-                "rsa:2048",
-                "-nodes",
-                "-sha256",
-                "-days",
-                "2",
-                "-config",
-                text(&root_cnf),
-                "-extensions",
-                "root_ext",
-                "-keyout",
-                text(&root_key),
-                "-out",
-                text(&root_pem),
-            ],
-        );
-        run(
-            openssl,
-            &[
-                "req",
-                "-new",
-                "-newkey",
-                "rsa:2048",
-                "-nodes",
-                "-sha256",
-                "-config",
-                text(&leaf_cnf),
-                "-keyout",
-                text(&leaf_key),
-                "-out",
-                text(&leaf_csr),
-            ],
-        );
-        run(
-            openssl,
-            &[
-                "x509",
-                "-req",
-                "-sha256",
-                "-days",
-                "2",
-                "-in",
-                text(&leaf_csr),
-                "-CA",
-                text(&root_pem),
-                "-CAkey",
-                text(&root_key),
-                "-set_serial",
-                "2",
-                "-extfile",
-                text(&leaf_cnf),
-                "-extensions",
-                "leaf_ext",
-                "-out",
-                text(&leaf_pem),
-            ],
-        );
-        run(
-            openssl,
-            &[
-                "pkcs12",
-                "-export",
-                "-inkey",
-                text(&leaf_key),
-                "-in",
-                text(&leaf_pem),
-                "-certfile",
-                text(&root_pem),
-                "-name",
-                &leaf_cn,
-                "-passout",
-                &format!("pass:{password}"),
-                "-out",
-                text(&p12),
-            ],
-        );
-        Ca {
-            root_pem,
-            leaf_pem,
-            p12,
-            leaf_cn,
-        }
-    }
-
-    /// The leaf's SHA-256 fingerprint as `openssl x509 -fingerprint -sha256` computes it,
-    /// normalised.
-    fn fingerprint(&self) -> Fingerprint {
-        let said = run(
-            "/usr/bin/openssl",
-            &[
-                "x509",
-                "-in",
-                text(&self.leaf_pem),
-                "-noout",
-                "-fingerprint",
-                "-sha256",
-            ],
-        );
-        let hex: String = said
-            .trim()
-            .split_once('=')
-            .expect("openssl prints Name=hex")
-            .1
-            .chars()
-            .filter(|c| *c != ':')
-            .collect();
-        Fingerprint::parse(&hex).expect("a SHA-256 fingerprint")
-    }
-}
-
-/// Everything the test changes on the host outside its scratch directory, undone on drop (a
-/// failed test too): the trust of the test's root, the keychain and the search list, the
-/// fixture's receipt and installed files.
-struct Undo {
-    keychain: Option<PathBuf>,
-    search_list: Vec<String>,
-    trusted_root: Option<PathBuf>,
-}
-
-impl Undo {
-    fn new() -> Undo {
-        Undo {
-            keychain: None,
-            search_list: Vec::new(),
-            trusted_root: None,
-        }
-    }
-
-    /// Trusts `root` for package signing in the System keychain, for the run.
-    fn trust(&mut self, root: &Path) {
-        run(
-            "/usr/bin/security",
-            &[
-                "add-trusted-cert",
-                "-d",
-                "-r",
-                "trustRoot",
-                "-k",
-                SYSTEM_KEYCHAIN,
-                text(root),
-            ],
-        );
-        self.trusted_root = Some(root.to_owned());
-    }
-
-    /// Takes the test's root out of the trust settings.
-    fn untrust(&mut self) {
-        if let Some(root) = self.trusted_root.take() {
-            run(
-                "/usr/bin/security",
-                &["remove-trusted-cert", "-d", text(&root)],
-            );
-        }
-    }
-
-    /// A keychain of its own holding the identities of `cas`, first in the search list.
-    fn keychain(&mut self, dir: &Path, password: &str, cas: &[&Ca]) -> PathBuf {
-        let keychain = dir.join("fixture.keychain-db");
-        let kc = text(&keychain);
-        let listed = run("/usr/bin/security", &["list-keychains", "-d", "user"]);
-        self.search_list = listed
-            .lines()
-            .map(|line| line.trim().trim_matches('"').to_owned())
-            .filter(|line| !line.is_empty())
-            .collect();
-        run(
-            "/usr/bin/security",
-            &["create-keychain", "-p", password, kc],
-        );
-        self.keychain = Some(keychain.clone());
-        let mut list = vec!["list-keychains", "-d", "user", "-s", kc];
-        list.extend(self.search_list.iter().map(String::as_str));
-        run("/usr/bin/security", &list);
-        run(
-            "/usr/bin/security",
-            &["unlock-keychain", "-p", password, kc],
-        );
-        run("/usr/bin/security", &["set-keychain-settings", kc]);
-        for ca in cas {
-            run(
-                "/usr/bin/security",
-                &[
-                    "import",
-                    text(&ca.p12),
-                    "-k",
-                    kc,
-                    "-P",
-                    password,
-                    "-T",
-                    PRODUCTSIGN,
-                ],
-            );
-        }
-        run(
-            "/usr/bin/security",
-            &[
-                "set-key-partition-list",
-                "-S",
-                "apple-tool:,apple:",
-                "-s",
-                "-k",
-                password,
-                kc,
-            ],
-        );
-        keychain
-    }
-}
+/// What the test changes on the host outside its scratch directory, undone on drop (a failed
+/// test too): the fixture's receipt and installed files. Nothing here may panic.
+struct Undo;
 
 impl Drop for Undo {
     fn drop(&mut self) {
-        // Each undo is tried whatever the others did: a panicking test must still leave the host
-        // as it found it.
-        if let Some(root) = self.trusted_root.take() {
-            let _ = run_any(
-                "/usr/bin/security",
-                &["remove-trusted-cert", "-d", text(&root)],
-            );
-        }
-        if self.keychain.is_some() {
-            let mut restore = vec!["list-keychains", "-d", "user", "-s"];
-            restore.extend(self.search_list.iter().map(String::as_str));
-            let _ = run_any("/usr/bin/security", &restore);
-        }
-        if let Some(keychain) = self.keychain.take() {
-            let _ = run_any("/usr/bin/security", &["delete-keychain", text(&keychain)]);
-        }
-        let _ = run_any("/usr/sbin/pkgutil", &["--forget", IDENTIFIER]);
+        let forget = ["--forget".to_owned(), IDENTIFIER.to_owned()];
+        let _ = LaunchctlProcess::new(Path::new(Tool::Pkgutil.path()), TOOL_BOUND).run(&forget);
         let _ = fs::remove_dir_all(SUPPORT);
         let _ = fs::remove_file(PLIST);
     }
 }
 
-fn random_password() -> String {
-    run("/usr/bin/openssl", &["rand", "-hex", "16"])
-        .trim()
-        .to_owned()
+/// `pkgutil --check-signature`'s answer for a package signed by [`LEAF`] whose chain the Mac
+/// trusts, in the form `hostkeeper_install::macos_pkg::signature` documents.
+fn signed_answer(package: &str) -> String {
+    let hex_line = |hex: &str| {
+        hex.as_bytes()
+            .chunks(2)
+            .map(|pair| String::from_utf8_lossy(pair).to_uppercase())
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    [
+        format!("Package \"{package}\":"),
+        "   Status: signed by a certificate trusted by macOS".to_owned(),
+        "   Certificate Chain:".to_owned(),
+        "    1. hostkeeper a9 fixture installer".to_owned(),
+        "       SHA256 Fingerprint:".to_owned(),
+        format!("           {}", hex_line(&LEAF[..32])),
+        format!("           {}", hex_line(&LEAF[32..])),
+        format!("       {}", "-".repeat(72)),
+        String::new(),
+    ]
+    .join("\n")
+}
+
+/// The Mac's tools, but for `pkgutil --check-signature` of a package in `packages`, answered as
+/// signed by [`LEAF`] with a chain the Mac trusts. Every `--check-signature` asked is recorded.
+#[derive(Default)]
+struct Signed {
+    packages: Mutex<Vec<PathBuf>>,
+    asked: Mutex<Vec<String>>,
+}
+
+impl Signed {
+    fn answer_for(&self, package: &Path) {
+        self.packages
+            .lock()
+            .expect("packages")
+            .push(package.to_owned());
+    }
+
+    fn asked(&self) -> usize {
+        self.asked.lock().expect("asked").len()
+    }
+}
+
+impl Tools for Signed {
+    fn run(
+        &self,
+        tool: Tool,
+        args: &[String],
+        deadline: Duration,
+    ) -> Result<ToolOutput, ToolError> {
+        if tool == Tool::Pkgutil && args.first().map(String::as_str) == Some("--check-signature") {
+            let package = args.get(1).cloned().unwrap_or_default();
+            self.asked.lock().expect("asked").push(package.clone());
+            let answered = self.packages.lock().expect("packages");
+            if answered.iter().any(|path| text(path) == package) {
+                return Ok(ToolOutput {
+                    code: Some(0),
+                    stdout: signed_answer(&package).into_bytes(),
+                    stderr: Vec::new(),
+                });
+            }
+        }
+        HostTools.run(tool, args, deadline)
+    }
 }
 
 /// The fixture's content at `version`: 1.0.0 has `legacy.txt` and 1.1.0 drops it; 1.1.0 adds
-/// `lib/new.txt` in a directory 1.0.0 lacks.
+/// `lib/new.txt` in a directory 1.0.0 lacks, and its hook at the fixed path.
 fn payload(root: &Path, version: &str) {
     let service = root.join("Library/Application Support/hk-a9-fixture");
     let mut dirs = vec![
@@ -414,6 +234,11 @@ fn payload(root: &Path, version: &str) {
             "added in 1.1.0\n".into(),
             0o644,
         ));
+        files.push((
+            service.join("hostkeeper-hook"),
+            "#!/bin/sh\nexit 0\n".into(),
+            0o755,
+        ));
     }
     for dir in &dirs {
         fs::create_dir_all(dir).expect("create a payload directory");
@@ -426,9 +251,15 @@ fn payload(root: &Path, version: &str) {
     run("/usr/sbin/chown", &["-R", "0:0", text(root)]);
 }
 
-/// Builds the fixture at `version` into `dir`: the product archive as `productbuild` makes it,
-/// unsigned.
-fn build_unsigned(dir: &Path, version: &str) -> PathBuf {
+/// The fixture at `version`, unsigned, in M11's two forms, built into `dir` with M11's
+/// commands: the component package (`pkgbuild`, pkg-1's form) and the distribution package
+/// around it (`productbuild --package`, pkg-2's form).
+struct Forms {
+    component: PathBuf,
+    product: PathBuf,
+}
+
+fn build_unsigned(dir: &Path, version: &str) -> Forms {
     let root = dir.join(format!("root-{version}"));
     fs::create_dir(&root).expect("create the payload root");
     payload(&root, version);
@@ -449,30 +280,20 @@ fn build_unsigned(dir: &Path, version: &str) -> PathBuf {
             text(&component),
         ],
     );
-    let product = dir.join(format!("unsigned-{version}.pkg"));
+    let product = dir.join(format!("product-{version}.pkg"));
     run(
         "/usr/bin/productbuild",
-        &["--package", text(&component), text(&product)],
-    );
-    product
-}
-
-/// `unsigned` signed by the identity `cn` of `keychain`, as `<name>.pkg` beside it.
-fn sign(unsigned: &Path, keychain: &Path, cn: &str, name: &str) -> PathBuf {
-    let signed = unsigned.with_file_name(format!("{name}.pkg"));
-    run(
-        PRODUCTSIGN,
         &[
-            "--sign",
-            cn,
-            "--keychain",
-            text(keychain),
-            "--timestamp=none",
-            text(unsigned),
-            text(&signed),
+            "--package",
+            text(&component),
+            "--identifier",
+            IDENTIFIER,
+            "--version",
+            version,
+            text(&product),
         ],
     );
-    signed
+    Forms { component, product }
 }
 
 /// The records of the installer, in memory.
@@ -523,7 +344,7 @@ impl Records for Memory {
 /// are in.
 struct Rig {
     host: Host,
-    tools: HostTools,
+    tools: Signed,
     records: Memory,
     lock: InstallerLock,
     packages: PathBuf,
@@ -535,7 +356,7 @@ impl Rig {
         fs::create_dir(&packages).expect("create the packages directory");
         Rig {
             host: Host::mac(),
-            tools: HostTools,
+            tools: Signed::default(),
             records: Memory::default(),
             lock: InstallerLock::new(&dir.join("installer.lock")),
             packages,
@@ -553,7 +374,7 @@ impl Rig {
     }
 
     fn order(&self, version: &str) -> Order {
-        let wait = Duration::from_secs(300);
+        let wait = TOOL_BOUND;
         Order {
             service: ServiceName::new(SERVICE).expect("service name"),
             version: Version::new(version).expect("version"),
@@ -573,17 +394,15 @@ impl Rig {
     fn stage(
         &self,
         signers: &Signers,
-        version: &str,
+        order: &Order,
         artifact: &Path,
     ) -> Result<PathBuf, (Failure, PathBuf)> {
+        let version = order.version.as_str();
         let staging = self
             .packages
             .join(format!("{version}.staging-{}", self.count()));
         fs::create_dir(&staging).expect("create the staging directory");
-        match self
-            .installer(signers)
-            .stage(&self.order(version), artifact, &staging)
-        {
+        match self.installer(signers).stage(order, artifact, &staging) {
             Ok(()) => {
                 let dir = self.packages.join(version);
                 fs::rename(&staging, &dir).expect("name the version directory");
@@ -615,12 +434,8 @@ fn enabled_by_launchd(label: &str) -> bool {
 /// The version of the receipt of the fixture's identifier; `None` when there is none.
 fn receipt_version() -> Option<String> {
     let out = run_any("/usr/sbin/pkgutil", &["--pkg-info-plist", IDENTIFIER]);
-    if !out.status.success() {
-        let said = format!(
-            "{}{}",
-            String::from_utf8_lossy(&out.stderr),
-            String::from_utf8_lossy(&out.stdout)
-        );
+    if out.code != Some(0) {
+        let said = said(&out);
         assert!(
             said.contains(receipt::NO_RECEIPT),
             "an unexpected pkgutil failure: {said}"
@@ -649,71 +464,61 @@ fn assert_absent(path: &str) {
     assert!(fs::symlink_metadata(path).is_err(), "{path} is gone");
 }
 
-/// Stages `artifact` and expects `reason`, with nothing expanded.
-fn assert_refused(rig: &Rig, signers: &Signers, artifact: &Path, reason: Reason) {
+/// Stages `artifact` as 1.0.0 and expects `reason`, with nothing expanded; the failure.
+fn assert_refused(rig: &Rig, signers: &Signers, artifact: &Path, reason: Reason) -> Failure {
     let (failure, staging) = rig
-        .stage(signers, "1.0.0", artifact)
+        .stage(signers, &rig.order("1.0.0"), artifact)
         .expect_err("stage refuses it");
     assert_eq!(failure.reason(), reason, "{failure}");
     assert!(!staging.join("expanded").exists(), "nothing was expanded");
     assert!(!staging.join("tree").exists(), "no payload was kept");
+    failure
 }
 
 #[test]
 fn the_forms_of_pkgutils_answers_are_the_ones_the_parsers_read() {
     require_root();
     let dir = scratch("install-macos-pkg-forms");
-    let mut guard = Undo::new();
-    let password = random_password();
-    let ca = Ca::make(dir.path(), "forms", &password);
-    let keychain = guard.keychain(dir.path(), &password, &[&ca]);
-    guard.trust(&ca.root_pem);
-    let signed = sign(
-        &build_unsigned(dir.path(), "1.0.0"),
-        &keychain,
-        &ca.leaf_cn,
-        "signed",
-    );
-
-    let checked = run_any("/usr/sbin/pkgutil", &["--check-signature", text(&signed)]);
-    let printed = String::from_utf8_lossy(&checked.stdout).into_owned();
-    assert!(
-        checked.status.success(),
-        "pkgutil --check-signature: {printed}"
-    );
-    assert_eq!(
-        signature::leaf_fingerprint(&printed),
-        Some(ca.fingerprint()),
-        "{printed}"
-    );
-    let status = signature::status(&printed).expect("a status line");
-    assert!(
-        signature::TRUSTED_STATUS
-            .iter()
-            .any(|ok| status.starts_with(ok)),
-        "the status {status:?} is one TRUSTED_STATUS accepts"
-    );
+    let forms = build_unsigned(dir.path(), "1.0.0");
+    let signers = Signers::new(vec![Fingerprint::parse(LEAF).expect("64 hex")]).expect("one");
+    for package in [&forms.component, &forms.product] {
+        let checked = run_any("/usr/sbin/pkgutil", &["--check-signature", text(package)]);
+        let printed = String::from_utf8_lossy(&checked.stdout).into_owned();
+        eprintln!(
+            "pkgutil --check-signature of {} exited {:?}:\n{}",
+            text(package),
+            checked.code,
+            said(&checked)
+        );
+        let status = signature::status(&printed).expect("a status line");
+        assert!(
+            !signature::TRUSTED_STATUS
+                .iter()
+                .any(|ok| status.starts_with(ok)),
+            "the unsigned package's status {status:?} is not one TRUSTED_STATUS accepts"
+        );
+        assert_eq!(signature::leaf_fingerprint(&printed), None, "{printed}");
+        assert!(
+            signature::check(checked.code, &printed, &signers).is_err(),
+            "{printed}"
+        );
+    }
 
     let unknown = run_any(
         "/usr/sbin/pkgutil",
         &["--pkg-info-plist", "dev.hostkeeper.a9-unknown"],
     );
-    assert!(!unknown.status.success(), "no receipt is a non-zero exit");
-    let said = format!(
-        "{}{}",
-        String::from_utf8_lossy(&unknown.stderr),
-        String::from_utf8_lossy(&unknown.stdout)
+    assert_ne!(unknown.code, Some(0), "no receipt is a non-zero exit");
+    assert!(
+        said(&unknown).contains(receipt::NO_RECEIPT),
+        "{}",
+        said(&unknown)
     );
-    assert!(said.contains(receipt::NO_RECEIPT), "{said}");
 
     let file = dir.path().join("listed-by-no-receipt");
     fs::write(&file, "x").expect("write the file");
     let info = run_any("/usr/sbin/pkgutil", &["--file-info-plist", text(&file)]);
-    assert!(
-        info.status.success(),
-        "{}",
-        String::from_utf8_lossy(&info.stderr)
-    );
+    assert_eq!(info.code, Some(0), "{}", said(&info));
     assert_eq!(
         receipt::parse_file_info(&info.stdout).expect("pkgutil's file info"),
         Vec::<String>::new(),
@@ -722,15 +527,10 @@ fn the_forms_of_pkgutils_answers_are_the_ones_the_parsers_read() {
 }
 
 #[test]
-fn a_signed_package_is_installed_updated_rolled_back_and_removed() {
+fn a_package_is_refused_unsigned_then_installed_updated_repaired_rolled_back_and_removed() {
     require_root();
+    let _undo = Undo;
     let dir = scratch("install-macos-pkg-lifecycle");
-    let mut guard = Undo::new();
-    let password = random_password();
-    let trusted = Ca::make(dir.path(), "trusted", &password);
-    let other = Ca::make(dir.path(), "other", &password);
-    let keychain = guard.keychain(dir.path(), &password, &[&trusted, &other]);
-    guard.trust(&trusted.root_pem);
     assert!(
         fs::symlink_metadata(SUPPORT).is_err(),
         "the fixture is not on the host to begin with"
@@ -738,23 +538,32 @@ fn a_signed_package_is_installed_updated_rolled_back_and_removed() {
     let launch_daemons_before = fs::symlink_metadata("/Library/LaunchDaemons").is_ok();
 
     let rig = Rig::new(dir.path());
-    let signers = Signers::new(vec![trusted.fingerprint()]).expect("one signer");
+    let signers = Signers::new(vec![Fingerprint::parse(LEAF).expect("64 hex")]).expect("one");
     let v100 = build_unsigned(dir.path(), "1.0.0");
     let v110 = build_unsigned(dir.path(), "1.1.0");
 
-    // (b) The signature is checked before anything is expanded.
-    assert_refused(&rig, &signers, &v100, Reason::Signature);
-    let untrusted = sign(&v100, &keychain, &other.leaf_cn, "untrusted-root");
-    assert_refused(&rig, &signers, &untrusted, Reason::Signature);
-    let signed100 = sign(&v100, &keychain, &trusted.leaf_cn, "signed-1.0.0");
+    // (b) The real `pkgutil` refuses both unsigned forms before anything is expanded; a leaf no
+    // signer names is refused too (the answered call).
+    for unsigned in [&v100.component, &v100.product] {
+        let failure = assert_refused(&rig, &signers, unsigned, Reason::Signature);
+        eprintln!("{}: {failure}", text(unsigned));
+    }
+    rig.tools.answer_for(&v100.product);
     let elsewhere =
         Signers::new(vec![Fingerprint::parse(&"ab".repeat(32)).expect("64 hex")]).expect("one");
-    assert_refused(&rig, &elsewhere, &signed100, Reason::Signature);
+    assert_refused(&rig, &elsewhere, &v100.product, Reason::Signature);
     assert_eq!(receipt_version(), None, "nothing was installed");
+
+    // The real expansion of the component form passes the shape, Bom, payload and hook checks.
+    let component_rig = Rig::new(&dir.path().join("component"));
+    component_rig.tools.answer_for(&v100.component);
+    component_rig
+        .stage(&signers, &component_rig.order("1.0.0"), &v100.component)
+        .unwrap_or_else(|(f, _)| panic!("the component form: {f}"));
 
     // (c) Install 1.0.0.
     let dir100 = rig
-        .stage(&signers, "1.0.0", &signed100)
+        .stage(&signers, &rig.order("1.0.0"), &v100.product)
         .unwrap_or_else(|(f, _)| panic!("{f}"));
     let activated = rig
         .installer(&signers)
@@ -767,6 +576,7 @@ fn a_signed_package_is_installed_updated_rolled_back_and_removed() {
     assert_installed(&format!("{SUPPORT}/legacy.txt"), 0o644);
     assert_installed(PLIST, 0o644);
     assert_absent(&format!("{SUPPORT}/lib"));
+    assert_absent(HOOK);
     let record = rig
         .records
         .get()
@@ -778,19 +588,23 @@ fn a_signed_package_is_installed_updated_rolled_back_and_removed() {
         record.created_dirs
     );
 
-    // (d) Update to 1.1.0: the dropped file goes, the new file and directory come.
-    let signed110 = sign(&v110, &keychain, &trusted.leaf_cn, "signed-1.1.0");
+    // (d) Update to 1.1.0, whose hook (at its fixed path) lets the order set `hook.boot`: the
+    // dropped file goes, the new file, directory and hook come.
+    rig.tools.answer_for(&v110.product);
+    let mut order110 = rig.order("1.1.0");
+    order110.boot = true;
     let dir110 = rig
-        .stage(&signers, "1.1.0", &signed110)
+        .stage(&signers, &order110, &v110.product)
         .unwrap_or_else(|(f, _)| panic!("{f}"));
     rig.installer(&signers)
-        .activate(&rig.order("1.1.0"), &dir110, Some(&dir100))
+        .activate(&order110, &dir110, Some(&dir100))
         .unwrap_or_else(|f| panic!("{f}"));
     assert_eq!(receipt_version().as_deref(), Some("1.1.0"));
     assert_absent(&format!("{SUPPORT}/legacy.txt"));
     assert_installed(&format!("{SUPPORT}/lib"), 0o755);
     assert_installed(&format!("{SUPPORT}/lib/new.txt"), 0o644);
     assert_installed(&format!("{SUPPORT}/bin/fixture"), 0o755);
+    assert_installed(HOOK, 0o755);
     let record = rig
         .records
         .get()
@@ -801,7 +615,6 @@ fn a_signed_package_is_installed_updated_rolled_back_and_removed() {
         "{:?}",
         record.created_dirs
     );
-
     assert!(
         enabled_by_launchd(SERVICE),
         "activate enabled the job of the run label"
@@ -833,25 +646,27 @@ fn a_signed_package_is_installed_updated_rolled_back_and_removed() {
         (found.found.as_deref(), found.recorded.as_deref()),
         (Some("1.0.0"), Some("1.1.0"))
     );
+    let asked = rig.tools.asked();
     let repaired = rig
         .installer(&signers)
-        .activate(&rig.order("1.1.0"), &dir110, None)
+        .activate(&order110, &dir110, None)
         .unwrap_or_else(|f| panic!("{f}"));
     assert_eq!(repaired.drift, Some(Some("1.0.0".to_owned())));
     assert_eq!(receipt_version().as_deref(), Some("1.1.0"));
     assert_absent(&format!("{SUPPORT}/legacy.txt"));
     assert_installed(&format!("{SUPPORT}/lib/new.txt"), 0o644);
 
-    // (e) Roll back to 1.0.0 with the test's root out of the trust settings: the kept package is
-    // installed with `-allowUntrusted`, its signature not checked again.
-    guard.untrust();
+    // (e) Roll back to 1.0.0: the kept package is installed with `-allowUntrusted`, and no
+    // signature is checked (no `--check-signature` is asked by any `activate`).
     rig.installer(&signers)
         .activate(&rig.order("1.0.0"), &dir100, Some(&dir110))
         .unwrap_or_else(|f| panic!("{f}"));
+    assert_eq!(rig.tools.asked(), asked, "activate checks no signature");
     assert_eq!(receipt_version().as_deref(), Some("1.0.0"));
     assert_installed(&format!("{SUPPORT}/legacy.txt"), 0o644);
     assert_absent(&format!("{SUPPORT}/lib/new.txt"));
     assert_absent(&format!("{SUPPORT}/lib"));
+    assert_absent(HOOK);
     let record = rig
         .records
         .get()
@@ -872,6 +687,7 @@ fn a_signed_package_is_installed_updated_rolled_back_and_removed() {
         format!("{SUPPORT}/bin/fixture"),
         format!("{SUPPORT}/legacy.txt"),
         format!("{SUPPORT}/lib/new.txt"),
+        HOOK.to_owned(),
         PLIST.to_owned(),
         format!("{SUPPORT}/bin"),
         format!("{SUPPORT}/lib"),
@@ -880,12 +696,18 @@ fn a_signed_package_is_installed_updated_rolled_back_and_removed() {
         assert_absent(&path);
     }
     assert_eq!(receipt_version(), None, "pkgutil forgot the receipt");
-    let pkgs = run("/usr/sbin/pkgutil", &["--pkgs"]);
+    let pkgs = run_any("/usr/sbin/pkgutil", &["--pkgs"]);
+    assert_eq!(pkgs.code, Some(0), "{}", said(&pkgs));
     assert!(
-        !pkgs.lines().any(|line| line.trim() == IDENTIFIER),
+        !hostkeeper_install::tools::may_be_cut(&pkgs.stdout),
+        "pkgutil --pkgs printed all it had"
+    );
+    assert!(
+        !String::from_utf8_lossy(&pkgs.stdout)
+            .lines()
+            .any(|line| line.trim() == IDENTIFIER),
         "pkgutil --pkgs lists no {IDENTIFIER}"
     );
-
     assert!(
         fs::metadata("/Library/LaunchDaemons").is_ok(),
         "the directory that was there stays"

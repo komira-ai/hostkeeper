@@ -107,6 +107,45 @@ the design nor Apple's documentation says whether it does, so this is to verify.
 root B anywhere to get past it, because pkg 4 needs root B trusted nowhere. Record the message in
 the design's section 7.2; the build is then changed to sign in another way.
 
+**What a macOS 15 runner showed.** The `macos-pkg` installer's device test once signed its
+fixtures as this build does, on a GitHub-hosted runner (image `macos-15-arm64`, macOS 15.8.2):
+
+- **Made the same way.** It made a root and an installer identity under it with `/usr/bin/openssl`.
+  The identity had `digitalSignature` and the `codeSigning` extended key usage, as this build's has.
+- **Imported for `productsign`.** It imported the identity into a keychain of its own with
+  `-T /usr/bin/productsign` and `set-key-partition-list -S apple-tool:,apple:`. That keychain was
+  first in the search list.
+- **Signed with `productsign`.** It ran `productsign --sign <identity> --keychain <keychain>
+  --timestamp=none` over a `productbuild --package` pkg.
+
+For the identity whose root the Mac did not trust, `productsign` failed with:
+
+```
+productsign: error: Could not find appropriate signing identity for "<identity>" in keychain at "<keychain>". An installer signing identity (not an application signing identity) is required
+```
+
+What follows, observed and inferred:
+
+- **Observed: no untrusted root.** On macOS 15.8.2, `productsign` does not sign with an installer
+  identity whose root the Mac does not trust. The keychain was unlocked and its key partition list
+  set, so an access prompt was not the cause.
+- **Observed: pkg-4 cannot be built.** This build cannot make pkg 4 on such a Mac. It stops at this
+  paragraph, by design, since root B must stay trusted nowhere.
+- **Inferred: pkg-3 fails the same way.** pkg 3 is expected to fail too, because root A is not
+  trusted on the build Mac (the profile installs it on the Mac under test). Not observed: the run
+  failed before the trusted identity signed.
+- **Not shown: whether trusting the root is enough.** Whether trusting the root on the build Mac
+  would let `productsign` sign with its identity is still to verify.
+- **Inferred: trust changes need an operator.** On a runner with nobody at the screen, the test's
+  undo of its trust setting (`security remove-trusted-cert -d`) then made no progress until the
+  job's timeout. That call most likely waited for an authorization only an operator at the Mac can
+  give. So a build that changes trust settings needs an operator at the Mac.
+
+The installer's device test (`crates/hostkeeper-privileged/tests/install_macos_pkg.rs`) now signs
+nothing and changes no trust setting or keychain. It builds pkg 1's and pkg 2's unsigned forms with
+this build's commands. The form `pkgutil --check-signature` prints for a trusted signature is left
+to this test's signed run.
+
 Build the kit's binary for the MDM host as well. Build it on any Linux host of the same
 architecture, from the same commit:
 

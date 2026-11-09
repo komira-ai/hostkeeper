@@ -24,7 +24,7 @@
 use super::signers::{Fingerprint, Signers};
 
 /// The status prefixes of a signature the Mac trusts: a Developer ID Installer identity, one
-/// whose root a trust setting (the MDM's profile, or the test's) admits, and Apple's own.
+/// whose root a trust setting (the MDM's profile) admits, and Apple's own.
 pub const TRUSTED_STATUS: [&str; 3] = [
     "signed by a developer certificate issued by Apple",
     "signed by a certificate trusted by",
