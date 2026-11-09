@@ -73,6 +73,17 @@ fn failed(reason: Reason, what: &str, output: &ToolOutput) -> Failure {
     Failure::new(reason, format!("{what}: {}", output.last_line()))
 }
 
+/// A run stopped at its bound (no exit code): the host's, not the release's (packages-tests.md:
+/// "a tool past its bound is stopped and the step fails `environment`").
+fn stopped(what: &str, output: &ToolOutput) -> Option<Failure> {
+    output.code.is_none().then(|| {
+        Failure::new(
+            Reason::IoError,
+            format!("{what} was stopped at its bound: {}", output.last_line()),
+        )
+    })
+}
+
 /// The reason a run that ended badly gives in any step: the lock and an interrupted dpkg
 /// first, which no step's own check would explain.
 fn host_state(text: &str) -> Option<Reason> {
@@ -260,6 +271,9 @@ pub fn install(output: &ToolOutput) -> Result<(), Failure> {
     if output.succeeded() {
         return Ok(());
     }
+    if let Some(failure) = stopped("apt-get install", output) {
+        return Err(failure);
+    }
     if let Some(reason) = host_state(&text) {
         return Err(failed(reason, "apt-get install", output));
     }
@@ -284,6 +298,9 @@ pub fn purge(output: &ToolOutput) -> Result<bool, Failure> {
     let text = output.text();
     if output.succeeded() {
         return Ok(true);
+    }
+    if let Some(failure) = stopped("dpkg --purge", output) {
+        return Err(failure);
     }
     if holds(&text, &INTERRUPTED) {
         return Err(failed(Reason::DpkgInterrupted, "dpkg --purge", output));

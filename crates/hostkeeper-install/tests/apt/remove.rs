@@ -274,3 +274,57 @@ fn a_link_that_cannot_be_inspected_fails_the_remove() {
     assert!(failure.detail().starts_with("the units' enablement links"));
     assert!(env.records.get(SERVICE).is_some());
 }
+
+/// Proves a purge that fails leaves the package held again, so nothing but hostkeeper moves it
+/// while its removal waits: a purge refused by a dependent and one stopped by an interrupted
+/// dpkg each end with the package installed and held.
+///
+/// Catches: a remove that releases the hold, fails to purge, and leaves the package to
+/// unattended upgrades.
+#[test]
+fn a_purge_that_fails_holds_the_package_again() {
+    for (name, fault, reason) in [
+        ("refused", "refused", Reason::DependencyChanges),
+        ("interrupted", "interrupted", Reason::DpkgInterrupted),
+    ] {
+        let env = installed_env(&format!("apt-remove-rehold-{name}"));
+        assert!(env.host.installed(PACKAGE).expect("installed").held);
+        env.host.edit(|s| match fault {
+            "refused" => s.faults.purge_refused = true,
+            _ => s.faults.interrupted = true,
+        });
+        let failure = env
+            .installer()
+            .remove(&service(SERVICE), REMOVE_SECS)
+            .expect_err(name);
+        assert_eq!(failure.reason(), reason, "{name}");
+        let left = env.host.installed(PACKAGE).expect("still installed");
+        assert!(left.held, "{name}: held again");
+    }
+}
+
+/// Proves a failed purge of a package that is no longer installed holds nothing: the package
+/// was removed by hand, the purge is stopped by an interrupted dpkg, and no `apt-mark` runs.
+///
+/// Catches: a remove that marks a package hold that the database does not hold.
+#[test]
+fn a_failed_purge_of_a_package_gone_holds_nothing() {
+    let env = installed_env("apt-remove-gone-fails");
+    env.host.edit(|s| {
+        s.installed.remove(PACKAGE);
+        s.faults.interrupted = true;
+    });
+    let before = env.host.calls().len();
+    let failure = env
+        .installer()
+        .remove(&service(SERVICE), REMOVE_SECS)
+        .expect_err("interrupted");
+    assert_eq!(failure.reason(), Reason::DpkgInterrupted);
+    assert!(env.host.installed(PACKAGE).is_none());
+    assert!(
+        !env.host.calls()[before..]
+            .iter()
+            .any(|c| c.run.tool == hostkeeper_install::repository::Tool::AptMark),
+        "no hold or unhold ran"
+    );
+}
