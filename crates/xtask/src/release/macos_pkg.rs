@@ -432,7 +432,7 @@ pub(crate) fn build(pkgbuild: &dyn BuildPkg, request: &Request) -> Result<Vec<St
     Ok(vec![format!("{name}: sha256 {hex}")])
 }
 
-/// Runs `pkgbuild` and `productbuild` through an [`Exec`].
+/// Runs `pkgbuild`, `productbuild` and `pkgutil --check-signature` through an [`Exec`].
 pub(crate) struct PkgbuildCli<E> {
     exec: E,
 }
@@ -519,6 +519,27 @@ impl<E: Exec> BuildPkg for PkgbuildCli<E> {
             utf8("productbuild", product)?,
         ];
         self.run("productbuild", &args)
+    }
+
+    fn check_signature(&self, pkg: &Path) -> Result<String, PortError> {
+        let args = vec!["--check-signature".to_owned(), utf8("pkgutil", pkg)?];
+        let what = format!("pkgutil {}", args.join(" "));
+        let ran = self
+            .exec
+            .spawn("pkgutil", &args)
+            .map_err(|e| PortError::new(&what, e.to_string()))?;
+        let stdout = String::from_utf8_lossy(&ran.stdout).into_owned();
+        if ran.success {
+            Ok(stdout)
+        } else {
+            let stderr = String::from_utf8_lossy(&ran.stderr);
+            Err(PortError::new(
+                what,
+                format!("{}\n{}", stdout.trim(), stderr.trim())
+                    .trim()
+                    .to_owned(),
+            ))
+        }
     }
 }
 

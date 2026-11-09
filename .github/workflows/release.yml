@@ -1758,8 +1758,8 @@ jobs:
   # TESTING, the macOS installer: hostkeeper-<version>-macos-arm64.pkg, its bundle and a SHA256SUMS
   # of the two, once each, into pkg/hostkeeper/<version>/ of the same bucket (cargo xtask channels
   # pkg upload; a second put of the same bytes is accepted, other bytes at the same key fail). The
-  # installer is not signed or notarized until the macOS signing milestone (M11): the pointer
-  # below moves the same unsigned bytes.
+  # installer is signed by artifacts.yml (Developer ID Installer) and not notarized; nothing here
+  # signs it: the pointer below moves the same signed bytes.
 
   testing-pkg-upload:
     needs: [plan, newest]
