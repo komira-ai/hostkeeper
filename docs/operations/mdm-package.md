@@ -28,6 +28,27 @@ another unit holds.
 
 The package is built for `linux-x86_64` only: the pinned tools are linux-amd64 builds.
 
+## The `.deb`
+
+The same package is also built as a `.deb`, `mdm_<version>_amd64.deb` (`cargo xtask release deb --service mdm`),
+which hostkeeper installs with `apt` once the farm moves to native packages
+([design: native packages only](../design/packages-native.md), sections 10.2 and 10.6). It holds the same programs and
+units at the `.deb`'s paths, and no maintainer script: dpkg runs nothing of the package's own, and nothing but
+hostkeeper and the hook enables or starts a unit.
+
+| Path the `.deb` installs | What it is |
+|---|---|
+| `/usr/lib/mdm/nanohub`, `depserver`, `depsyncer`, `scepserver`, `caddy`, `lego` | The pinned upstream binaries. |
+| `/usr/lib/mdm/mdm` | The package's program. |
+| `/usr/lib/mdm/hostkeeper-hook` | The hook: two lines that run `mdm update-hook` beside it with the arguments the daemon gives. |
+| `/usr/lib/systemd/system/mdm-*.service`, `mdm-cert.timer` | The eight units above, each starting its program from `/usr/lib/mdm/`, installed disabled. |
+
+The hook's bounds, the run units, the health URL and the params are not in the `.deb`: they are the manifest of the
+release's entry, as for every native package. The daemon runs the hook from the version it staged, as
+`<version dir>/tree/usr/lib/mdm/hostkeeper-hook`, so `prepare` checks the staged `scepserver` and `lego` in
+`<version dir>/tree/usr/lib/mdm/`. The program knows which build it is from the path it runs as: run as
+`/usr/lib/mdm/mdm` (or the staged tree's), it is the `.deb`'s.
+
 ## Before the first install
 
 Write two root-owned files on the MDM host.
@@ -41,7 +62,7 @@ Write two root-owned files on the MDM host.
    | `MDM_USER` | `mdm` |
    | `MDM_STATE` | `/var/lib/mdm` |
    | `MDM_ETC` | `/etc/mdm` |
-   | `MDM_BIN` | `/var/lib/hostkeeper/packages/mdm/current/bin` |
+   | `MDM_BIN` | `/var/lib/hostkeeper/packages/mdm/current/bin`; `/usr/lib/mdm` for the `.deb` |
    | `MDM_PKG_DIR` | `/var/lib/mdm-pkg` |
    | `MDM_UNIT_PREFIX` | `mdm` |
    | `MDM_SLICE` | `mdm.slice` |
@@ -59,7 +80,8 @@ Then assign `mdm` to the host (`hkctl services assign --service mdm --node-id <i
 
 ## What each step of the hook does
 
-The daemon runs `bin/mdm update-hook <step>` as root, as for every hooked service
+The daemon runs `bin/mdm update-hook <step>` as root (from the `.deb`, its `hostkeeper-hook`, which runs
+`mdm update-hook <step>`), as for every hooked service
 ([docs/conformance.md](../conformance.md) states the contract). Every step refuses a params
 file the contract's reader refuses, or one whose `settings` is not `/etc/mdm/settings`, and
 `prepare` refuses a release argument that is not the params' `updater.staged_release`.
@@ -98,7 +120,7 @@ Run as root on the MDM host, with the package's program and the same settings fi
 its plan and changes nothing without `--apply`, as the kit's verbs of the same names do.
 
 ```sh
-mdm=/var/lib/hostkeeper/packages/mdm/current/bin/mdm
+mdm=/var/lib/hostkeeper/packages/mdm/current/bin/mdm   # from the .deb: mdm=/usr/lib/mdm/mdm
 $mdm push-cert --settings /etc/mdm/settings --cert /srv/apple/push.pem --key /srv/apple/push.key --apply
 $mdm push-cert --settings /etc/mdm/settings --profile-only --apply
 $mdm dep get-cert --settings /etc/mdm/settings --out /srv/apple/nanodep.crt --apply

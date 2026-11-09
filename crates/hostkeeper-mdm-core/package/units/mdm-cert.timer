@@ -1,5 +1,4 @@
-# mdm-cert.timer: runs mdm-cert-renew.service once a day. A unit of the mdm package,
-# linked by hostkeeper from the package's current version.
+# mdm-cert.timer: runs mdm-cert-renew.service once a day. A unit of the mdm package.
 [Unit]
 Description=mdm TLS certificate renewal, once a day
 

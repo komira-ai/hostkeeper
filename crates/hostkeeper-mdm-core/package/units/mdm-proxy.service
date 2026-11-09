@@ -1,5 +1,5 @@
 # mdm-proxy.service: Caddy as the TLS front of the MDM. A unit of the mdm
-# package, linked by hostkeeper from the package's current version.
+# package.
 #
 # Binds the LAN address only (the Caddyfile's default_bind), port 443 through
 # CAP_NET_BIND_SERVICE and no other capability, and its sockets talk only to

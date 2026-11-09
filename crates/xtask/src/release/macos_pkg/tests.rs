@@ -99,7 +99,7 @@ pub(super) fn distribution_text() -> String {
 }
 
 /// One portable (`odc`) cpio entry: a header, the name and its NUL, the data.
-pub(super) fn odc_entry(name: &str, mode: u32, uid: u32, gid: u32, data: &[u8]) -> Vec<u8> {
+pub(crate) fn odc_entry(name: &str, mode: u32, uid: u32, gid: u32, data: &[u8]) -> Vec<u8> {
     let header = format!(
         "070707{:06o}{:06o}{mode:06o}{uid:06o}{gid:06o}{:06o}{:06o}{:011o}{:06o}{:011o}",
         1,
@@ -115,20 +115,20 @@ pub(super) fn odc_entry(name: &str, mode: u32, uid: u32, gid: u32, data: &[u8]) 
 }
 
 /// A cpio archive of `entries`, then the trailer, then a block's padding.
-pub(super) fn odc(entries: &[Vec<u8>]) -> Vec<u8> {
+pub(crate) fn odc(entries: &[Vec<u8>]) -> Vec<u8> {
     let mut bytes = entries.concat();
     bytes.extend(odc_entry(TRAILER, 0, 0, 0, b""));
     bytes.extend([0_u8; 120]);
     bytes
 }
 
-pub(super) fn gzip(bytes: &[u8]) -> Vec<u8> {
+pub(crate) fn gzip(bytes: &[u8]) -> Vec<u8> {
     let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
     gz.write_all(bytes).expect("compress");
     gz.finish().expect("compress")
 }
 
-pub(super) fn dir_entry(name: &str) -> Vec<u8> {
+pub(crate) fn dir_entry(name: &str) -> Vec<u8> {
     odc_entry(name, 0o040_755, 0, 0, b"")
 }
 
@@ -483,9 +483,9 @@ fn build_lays_out_exactly_the_payload_and_the_postinstall_with_their_modes_and_w
         *fake.calls.borrow(),
         [PkgCall {
             root: root.clone(),
-            scripts: scripts.clone(),
+            scripts: Some(scripts.clone()),
             identifier: "dev.hostkeeper.hostkeeper".to_owned(),
-            version: version(),
+            version: version().to_string(),
             pkg: component.clone(),
         }]
     );
@@ -494,7 +494,7 @@ fn build_lays_out_exactly_the_payload_and_the_postinstall_with_their_modes_and_w
         [ProductCall {
             component: component.clone(),
             identifier: "dev.hostkeeper.hostkeeper".to_owned(),
-            version: version(),
+            version: version().to_string(),
             product: pkg.clone(),
         }]
     );
@@ -735,9 +735,9 @@ fn pkgbuild_runs_once_with_a_fixed_argument_list_and_the_scripts_directory() {
     assert_eq!(
         cli.build_pkg(
             Path::new("/stage/root"),
-            Path::new("/stage/scripts"),
+            Some(Path::new("/stage/scripts")),
             "dev.hostkeeper.hostkeeper",
-            &version(),
+            &version().to_string(),
             Path::new("/out/x.pkg")
         ),
         Ok(())
@@ -757,7 +757,7 @@ fn productbuild_runs_once_over_the_component_with_a_fixed_argument_list_and_no_s
         cli.build_product(
             Path::new("/stage/hostkeeper.pkg"),
             "dev.hostkeeper.hostkeeper",
-            &version(),
+            &version().to_string(),
             Path::new("/out/x.pkg")
         ),
         Ok(())
@@ -776,7 +776,7 @@ fn a_productbuild_that_fails_or_cannot_start_is_a_port_error_with_its_words() {
         cli.build_product(
             Path::new(component),
             "dev.hostkeeper.hostkeeper",
-            &version(),
+            &version().to_string(),
             Path::new("/p.pkg"),
         )
     };
@@ -809,9 +809,9 @@ fn a_pkgbuild_that_fails_or_cannot_start_is_a_port_error_with_its_words() {
     let build = |cli: &PkgbuildCli<FakeExec>, root: &str| {
         cli.build_pkg(
             Path::new(root),
-            Path::new("/s"),
+            Some(Path::new("/s")),
             "dev.hostkeeper.hostkeeper",
-            &version(),
+            &version().to_string(),
             Path::new("/p.pkg"),
         )
     };
@@ -838,7 +838,13 @@ fn a_path_that_is_not_utf8_is_a_port_error_and_runs_nothing() {
     let (good, scripts, pkg) = (Path::new("/r"), Path::new("/s"), Path::new("/p.pkg"));
     for (root, scripts, pkg) in [(bad, scripts, pkg), (good, bad, pkg), (good, scripts, bad)] {
         let e = cli
-            .build_pkg(root, scripts, "dev.hostkeeper.hostkeeper", &version(), pkg)
+            .build_pkg(
+                root,
+                Some(scripts),
+                "dev.hostkeeper.hostkeeper",
+                &version().to_string(),
+                pkg,
+            )
             .expect_err("not UTF-8");
         assert_eq!(
             e,
@@ -849,7 +855,12 @@ fn a_path_that_is_not_utf8_is_a_port_error_and_runs_nothing() {
         );
     }
     let e = cli
-        .build_product(bad, "dev.hostkeeper.hostkeeper", &version(), pkg)
+        .build_product(
+            bad,
+            "dev.hostkeeper.hostkeeper",
+            &version().to_string(),
+            pkg,
+        )
         .expect_err("not UTF-8");
     assert_eq!(
         e,
@@ -859,7 +870,12 @@ fn a_path_that_is_not_utf8_is_a_port_error_and_runs_nothing() {
         )
     );
     let e = cli
-        .build_product(good, "dev.hostkeeper.hostkeeper", &version(), bad)
+        .build_product(
+            good,
+            "dev.hostkeeper.hostkeeper",
+            &version().to_string(),
+            bad,
+        )
         .expect_err("not UTF-8");
     assert_eq!(e.why, "the path is not UTF-8");
     assert!(cli.exec.calls.borrow().is_empty());

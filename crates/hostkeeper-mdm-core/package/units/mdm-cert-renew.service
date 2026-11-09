@@ -1,9 +1,8 @@
 # mdm-cert-renew.service: renews the TLS certificate of the MDM's DNS name by
 # lego, when it ends within 30 days (`lego renew --days 30` orders nothing
-# before). A unit of the mdm package, linked by hostkeeper from the package's
-# current version; mdm-cert.timer runs it once a day. It runs only once lego has
-# a certificate; it wants mdm-cert.service first, which orders the first one
-# while there is none.
+# before). A unit of the mdm package; mdm-cert.timer runs it once a day. It
+# runs only once lego has a certificate; it wants mdm-cert.service first, which
+# orders the first one while there is none.
 #
 # The DNS provider's credentials are read from the root-only /etc/mdm/dns.env
 # (never argv); until the operator has written that file the job does not run.
