@@ -129,28 +129,34 @@ fn repository_switch(
     order: &UpdateOrder,
     entry: &Target,
 ) -> Result<(), SwitchError> {
-    let failed = |e: String| SwitchError::Failed(e);
     match toward {
         Toward::Target => repository.activate(order, entry),
         Toward::Back => match (&order.previous, order.previous_version.as_deref()) {
             (Some(previous), Some(version)) => {
-                let version = Version::new(version).map_err(|e| failed(text(e)))?;
+                let version = Version::new(version)
+                    .map_err(text)
+                    .map_err(SwitchError::Failed)?;
                 let sealed = target::read(previous.dir())
-                    .map_err(|e| failed(text(e)))?
-                    .ok_or_else(|| {
-                        failed(format!(
-                            "the release {version} that {} replaces has no {}",
-                            order.service,
-                            target::TARGET_FILE
-                        ))
-                    })?;
+                    .map_err(text)
+                    .and_then(|sealed| sealed.ok_or_else(|| no_target(order, &version)))
+                    .map_err(SwitchError::Failed)?;
                 repository.back(order, entry, Some((&version, previous.dir(), &sealed)))
             }
             (None, None) => repository.back(order, entry, None),
-            _ => Err(failed(half(order))),
+            _ => Err(SwitchError::Failed(half(order))),
         },
         Toward::Confirmed => Ok(()),
     }
+}
+
+/// Why the release `version` that `order` replaces cannot be switched back to as a repository
+/// version: it has no `target.json` (an order never moves a service between installers).
+fn no_target(order: &UpdateOrder, version: &Version) -> String {
+    format!(
+        "the release {version} that {} replaces has no {}",
+        order.service,
+        target::TARGET_FILE
+    )
 }
 
 /// Why an order that names only half of the release it replaces cannot be switched back.
@@ -162,7 +168,7 @@ fn half(order: &UpdateOrder) -> String {
 }
 
 /// The service and the target of `order`, in their grammars.
-fn names(order: &UpdateOrder) -> Result<(ServiceName, Version), String> {
+pub(crate) fn names(order: &UpdateOrder) -> Result<(ServiceName, Version), String> {
     let service = ServiceName::new(&order.service).map_err(text)?;
     let version = Version::new(&order.target_version).map_err(text)?;
     Ok((service, version))

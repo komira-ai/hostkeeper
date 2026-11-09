@@ -301,12 +301,9 @@ pub fn switch_error(failure: Failure) -> SwitchError {
     }
 }
 
-/// The names of `order`.
+/// The names of `order` ([`crate::place::names`]).
 fn names(order: &UpdateOrder) -> Result<(ServiceName, Version), SwitchError> {
-    let failed = |e: String| SwitchError::Failed(e);
-    let service = ServiceName::new(&order.service).map_err(|e| failed(e.to_string()))?;
-    let version = Version::new(&order.target_version).map_err(|e| failed(e.to_string()))?;
-    Ok((service, version))
+    crate::place::names(order).map_err(SwitchError::Failed)
 }
 
 impl Repository {
@@ -542,3 +539,7 @@ impl Repository {
         repaired.remove(service.as_str())
     }
 }
+
+#[cfg(test)]
+#[path = "repository_tests.rs"]
+mod tests;

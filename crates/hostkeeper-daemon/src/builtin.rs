@@ -141,7 +141,7 @@ fn run(ports: &BuiltinPorts, step: Step, order: &UpdateOrder, bound: Bound) -> S
         // A first install has nothing to start again: the switch back removed its package.
         Step::Rollback if order.previous.is_none() => BUILTIN_EXIT,
         Step::Cutover | Step::Rollback => restart(ports, &manifest.run, bound_secs, step),
-        Step::Verify => verify(ports, &order.service, &manifest.run),
+        Step::Verify => verify(ports, &manifest.name, &manifest.run),
     }
 }
 
@@ -168,8 +168,8 @@ fn restart(ports: &BuiltinPorts, run: &[String], bound_secs: u64, step: Step) ->
     }
 }
 
-/// Whether every unit of `run` is active and the service's health URL answers 2xx.
-fn verify(ports: &BuiltinPorts, service: &str, run: &[String]) -> StepExit {
+/// Whether every unit of `run` is active and the health URL of `service` answers 2xx.
+fn verify(ports: &BuiltinPorts, service: &ServiceName, run: &[String]) -> StepExit {
     let inactive: Vec<&str> = run
         .iter()
         .filter(|unit| !ports.units.is_active(unit).unwrap_or(false))
@@ -187,15 +187,13 @@ fn verify(ports: &BuiltinPorts, service: &str, run: &[String]) -> StepExit {
     if !inactive.is_empty() {
         return defer(&format!("not active: {}", inactive.join(", ")));
     }
-    let health = ServiceName::new(service).ok().and_then(|service| {
-        crate::observer::observe(
-            &ports.observer,
-            &ports.packages,
-            &ports.binaries,
-            &ports.own,
-            &service,
-        )
-    });
+    let health = crate::observer::observe(
+        &ports.observer,
+        &ports.packages,
+        &ports.binaries,
+        &ports.own,
+        service,
+    );
     match health.map(|seen| seen.health) {
         Some(HealthView::Unhealthy { reason }) => {
             defer(&format!("the health URL is {}", reason.token()))
@@ -203,3 +201,7 @@ fn verify(ports: &BuiltinPorts, service: &str, run: &[String]) -> StepExit {
         _ => BUILTIN_EXIT,
     }
 }
+
+#[cfg(test)]
+#[path = "builtin_tests.rs"]
+mod tests;

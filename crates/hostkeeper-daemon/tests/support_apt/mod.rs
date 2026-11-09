@@ -6,6 +6,7 @@
 
 #![allow(
     dead_code,
+    unused_imports,
     reason = "each part of the support is used by some of the test files"
 )]
 
@@ -219,5 +220,127 @@ pub fn open_up(dir: &std::path::Path) {
     fs::set_permissions(dir, fs::Permissions::from_mode(0o755)).expect("its mode");
     for entry in fs::read_dir(dir).expect("a directory").flatten() {
         open_up(&entry.path());
+    }
+}
+
+/// What the apt tests read of the daemon and of the host after an order.
+pub mod seen {
+    use std::fs;
+    use std::sync::Arc;
+
+    use hostkeeper_config::names::ServiceName;
+    use hostkeeper_daemon::{Daemon, Reply};
+    use hostkeeper_hook::{Class, Phase, Verdict};
+    use hostkeeper_placed::testing::{Event, UnitCall};
+    use hostkeeper_proto::hostkeeper::agent::v1::Order;
+
+    use super::{AptRig, Inst, SERVICE, entry, with_entry};
+    use crate::support::{install, update};
+
+    /// A reply that ran to `Succeeded` now, with no reason.
+    pub fn succeeded() -> Reply {
+        Reply::Finished {
+            verdict: Verdict::Succeeded {
+                promotion_pending: false,
+            },
+            reason: None,
+            resent: false,
+        }
+    }
+
+    /// A reply that ran to `Failed` before the commit point, blamed on `class`, with `reason`.
+    pub fn failed(class: Class, reason: &str) -> Reply {
+        Reply::Finished {
+            verdict: Verdict::Failed {
+                phase: Phase::BeforeCommit,
+                class,
+            },
+            reason: Some(reason.to_owned()),
+            resent: false,
+        }
+    }
+
+    /// A reply that ran to `Deferred` for the stage's 60 seconds, with `reason`.
+    pub fn deferred(reason: &str) -> Reply {
+        Reply::Finished {
+            verdict: Verdict::Deferred {
+                retry_after_secs: Some(60),
+            },
+            reason: Some(reason.to_owned()),
+            resent: false,
+        }
+    }
+
+    /// The package as installed and held at `version`.
+    pub fn held(version: &str) -> Option<Inst> {
+        Some(Inst {
+            version: version.to_owned(),
+            state: 'i',
+            held: true,
+        })
+    }
+
+    pub fn web() -> ServiceName {
+        ServiceName::new(SERVICE).expect("a name")
+    }
+
+    /// The version `link` (`current` or `previous`) of the service names.
+    pub fn linked(apt: &AptRig, link: &str) -> Option<String> {
+        fs::read_link(apt.rig.packages.join(SERVICE).join(link))
+            .ok()
+            .map(|target| target.to_string_lossy().into_owned())
+    }
+
+    /// The `installed` entry of the service in `placed.json`.
+    pub fn recorded(daemon: &Daemon) -> Option<hostkeeper_placed::InstalledEntry> {
+        let record = daemon
+            .ctx()
+            .placer()
+            .store()
+            .load()
+            .expect("placed.json reads");
+        record.installed.get(SERVICE).cloned()
+    }
+
+    /// The units the daemon asked the service manager to stop and start, in order.
+    pub fn unit_calls(apt: &AptRig) -> Vec<UnitCall> {
+        apt.rig
+            .placed_log
+            .events()
+            .into_iter()
+            .filter_map(|event| match event {
+                Event::Unit(call @ (UnitCall::Stop(_) | UnitCall::Start(_))) => Some(call),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The order to install `version` from `package_version`, pinned to `pin`.
+    pub fn install_of(version: &str, package_version: &str, pin: &str, order_try: u64) -> Order {
+        with_entry(
+            install(SERVICE, version, pin, order_try),
+            &entry(package_version, pin),
+        )
+    }
+
+    /// The order to update to `version` from `package_version`, pinned to `pin`.
+    pub fn update_of(version: &str, package_version: &str, pin: &str, order_try: u64) -> Order {
+        with_entry(
+            update(SERVICE, version, pin, order_try),
+            &entry(package_version, pin),
+        )
+    }
+
+    /// The labels of the fake's tool runs from call number `from` on.
+    pub fn labels_since(apt: &AptRig, from: usize) -> Vec<String> {
+        apt.host.calls()[from..]
+            .iter()
+            .map(|call| call.label.clone())
+            .collect()
+    }
+
+    /// The same daemon behind an `Arc`, for the observer.
+    pub fn shared(daemon: Daemon) -> Arc<Daemon> {
+        Arc::new(daemon)
     }
 }

@@ -226,3 +226,7 @@ fn scalar(param: &Param) -> Option<toml::Value> {
         param::Value::Flag(flag) => toml::Value::Boolean(*flag),
     })
 }
+
+#[cfg(test)]
+#[path = "target_tests.rs"]
+mod tests;
