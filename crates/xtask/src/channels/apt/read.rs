@@ -1,4 +1,4 @@
-//! `channels apt read --bucket <b> --out <dir> [--suite stable|testing] [--aws <program>]`: the current index, read from S3.
+//! `channels apt read --bucket <b> --out <dir> [--suite stable|testing|testing-fail] [--aws <program>]`: the current index, read from S3.
 //!
 //! `Release` first, then the `Packages` and `Packages.gz` of the architectures it lists and of the
 //! defaults, then `Release.gpg` and `InRelease`. The copy is written under

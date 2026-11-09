@@ -86,7 +86,7 @@ fn the_rows_hold_the_key_and_the_role_in_no_job_and_the_role_in_exactly_the_writ
     // Catches: a table that lets one job hold the signing key and assume the cloud role, or a
     // job that assumes the role without an exact `if:` for its `id-token: write`.
     let all = rows();
-    assert_eq!(all.len(), 43);
+    assert_eq!(all.len(), 46);
     let mut names = job_names();
     names.dedup();
     assert_eq!(names.len(), all.len(), "a job has two rows");
@@ -692,6 +692,8 @@ fn the_release_files_are_checked_in_every_job_that_signs_or_publishes_them() {
     for job in ["stable-apt-index", "stable-rpm-index"] {
         want.extend(["", "-2", "-3"].map(|n| format!("{job}{n}")));
     }
+    // Hello's failing build is signed and written by one attempt, from the same checked files.
+    want.extend(["testing-fail-apt-index", "testing-fail-apt-write"].map(str::to_owned));
     want.extend(["testing-pkg-upload".to_owned(), "promote-pkg".to_owned()]);
     let mut got = taking.clone();
     got.sort();
@@ -793,5 +795,154 @@ fn a_job_that_uses_the_release_files_before_it_checked_them_is_refused() {
             .all(|p| !p.contains("before it checked the release's files")),
         "{:?}",
         problems(&text)
+    );
+}
+
+#[test]
+fn hellos_failing_build_has_its_three_jobs_in_one_attempt_in_the_suite_testing_fail() {
+    // Catches: the failing build's publish deleted, or its jobs reading and writing the suite
+    // `testing` (where apt would take the failing build for the release's hello), and the
+    // artifacts of the two apt trees of a run sharing a name.
+    let text = release_yml();
+    let all = rows();
+    for step in ["read", "index", "write"] {
+        let name = format!("testing-fail-apt-{step}");
+        let row = all.iter().find(|r| r.name == name).expect("a row");
+        assert_eq!(row.suites, ["testing-fail"], "{name}");
+        assert_eq!(row.write.is_some(), step == "write", "{name}");
+    }
+    assert!(all.iter().all(|r| !r.name.starts_with("testing-fail-rpm")));
+    let without = {
+        let (start, end) = job_range(&text, "testing-fail-apt-index");
+        format!("{}{}", &text[..start], &text[end..])
+    };
+    assert_refused(
+        &without,
+        "release.yml: job testing-fail-apt-index is missing",
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "testing-fail-apt-read",
+            "--suite testing-fail",
+            "--suite testing",
+        ),
+        "release.yml: job testing-fail-apt-read passes --suite [\"testing\"], not [\"testing-fail\"]",
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "testing-fail-apt-write",
+            "--suite testing-fail",
+            "--suite testing",
+        ),
+        "release.yml: job testing-fail-apt-write passes --suite [\"testing\"], not [\"testing-fail\"]",
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "testing-fail-apt-index",
+            "name: apt-fail-next\n",
+            "name: apt-next\n",
+        ),
+        "release.yml: job testing-fail-apt-index hands on the artifact \"apt-next\": the jobs of testing-fail-* and only they name artifacts apt-fail-*, so the two apt trees of a run never share one",
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "testing-apt-read",
+            "name: apt-current\n",
+            "name: apt-fail-current\n",
+        ),
+        "release.yml: job testing-apt-read hands on the artifact \"apt-fail-current\": the jobs of testing-fail-* and only they name artifacts apt-fail-*, so the two apt trees of a run never share one",
+    );
+}
+
+#[test]
+fn the_failing_builds_write_passes_last_as_its_only_attempt() {
+    // Catches: a write of the failing build that retries on a lost race (it has no second
+    // attempt to retry in), and a family whose last attempt is read as the third.
+    let text = release_yml();
+    assert_refused(
+        &in_job(&text, "testing-fail-apt-write", " --last", ""),
+        "release.yml: job testing-fail-apt-write passes --last exactly in the only attempt, which fails on a lost race instead of asking for another",
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "testing-apt-write",
+            "--version \"${TAG#v}\" --output",
+            "--version \"${TAG#v}\" --last --output",
+        ),
+        "release.yml: job testing-apt-write passes --last exactly in the third attempt",
+    );
+}
+
+#[test]
+fn the_failing_builds_jobs_are_not_stages_of_the_promotion() {
+    // Catches: a failing build whose publish holds, or decides, the promotion of the release.
+    let text = release_yml();
+    assert!(STAGES.iter().all(|s| !s.contains("testing-fail")));
+    assert_refused(
+        &in_job(
+            &text,
+            "promote-check",
+            "testing-apt-write,",
+            "testing-apt-write, testing-fail-apt-write,",
+        ),
+        "release.yml: job promote-check needs [",
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "check-apt",
+            "testing-apt-write-3]",
+            "testing-apt-write-3, testing-fail-apt-write]",
+        ),
+        "release.yml: job check-apt needs [",
+    );
+}
+
+#[test]
+fn the_failing_builds_jobs_keep_the_signing_key_and_the_cloud_role_apart_and_check_the_files() {
+    // Catches: a testing-fail job that holds both the archive key and the publish role, signs
+    // outside the signing environment, or signs and publishes files it has not checked against
+    // SHA256SUMS and their attestations.
+    let text = release_yml();
+    assert_refused(
+        &in_job(
+            &text,
+            "testing-fail-apt-index",
+            "      attestations: read\n",
+            "      attestations: read\n      id-token: write\n",
+        ),
+        "release.yml: job testing-fail-apt-index needs exactly the permissions",
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "testing-fail-apt-index",
+            "environment: apt-signing",
+            "environment: apt-publish",
+        ),
+        "release.yml: job testing-fail-apt-index is in the environment Some(\"apt-publish\"), not Some(\"apt-signing\")",
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "testing-fail-apt-write",
+            "          APT_BUCKET: ${{ vars.APT_BUCKET }}\n",
+            "          APT_BUCKET: ${{ vars.APT_BUCKET }}\n          KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}\n",
+        ),
+        "release.yml: job testing-fail-apt-write names the secret Some(\"APT_GPG_PRIVATE_KEY\"), which only the signing jobs may name, and only the key's",
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "testing-fail-apt-write",
+            "run: sha256sum --check --strict SHA256SUMS",
+            "run: ls",
+        ),
+        "release.yml: job testing-fail-apt-write needs the step `sha256sum --check --strict SHA256SUMS` in `dist` right after the download of the release's files",
     );
 }

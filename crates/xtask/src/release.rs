@@ -309,8 +309,9 @@ pub(crate) enum Verb {
     },
     /// Build the `.deb` of hello (and of its failing build, `--fail-ready`) or of mdm for one
     /// Linux platform: the program at `/usr/lib/<service>/` and the units in
-    /// `/usr/lib/systemd/system/` (docs/design/packages-native.md section 10.2). mdm's is built for linux-x86_64 only, with
-    /// the pinned tools out of `--archives`. Writes `<service>_<version>_<arch>.deb`.
+    /// `/usr/lib/systemd/system/` (docs/design/packages-native.md section 10.2). mdm's is built
+    /// for linux-x86_64 only, with the pinned tools out of `--archives`. Writes
+    /// `<service>_<version>_<arch>.deb` (the failing build's control: `X.Y.Z~fail.ready`).
     Deb {
         /// The service: hello or mdm (hostkeeper's `.deb` is nfpm's).
         #[arg(long, value_enum)]
@@ -593,18 +594,17 @@ pub(crate) enum Verb {
         every_secs: Option<u64>,
     },
     /// Write the `targets` of the set that deploys a package of the release: for each Linux
-    /// platform its release index lists, the package's `.deb` alone, an `apt` entry of the
-    /// repository's testing suite whose manifest and `min_hostkeeper` are the archive's own
-    /// manifest's; no list for macOS while no daemon announces `macos-pkg`. Refused, every
-    /// problem named, unless the index, every Linux archive and its manifest, and every `.deb`
-    /// and its bundle check out and the entries pass the coordinator's checks; refused by name
-    /// for a package with no native package (hello's failing build). Prints `targets=<JSON>`.
+    /// platform its release index lists, the package's `.deb` alone, an `apt` entry whose manifest
+    /// and `min_hostkeeper` are the archive's own manifest's, of the testing suite; with
+    /// `--fail-ready`, of hello's failing build, of the `testing-fail` suite at `X.Y.Z~fail.ready`.
+    /// No list for macOS while no daemon announces `macos-pkg`. Refused, every problem named,
+    /// unless the index, every Linux archive and manifest, and every `.deb` and bundle check out
+    /// and the entries pass the coordinator's checks. Prints `targets=<JSON>`.
     Targets {
         /// The service: hostkeeper (the default), hello or mdm.
         #[arg(long, value_enum, default_value_t)]
         service: Service,
-        /// The entries of hello's failing build (`hello-fail-ready-index.json`). Refused for
-        /// hostkeeper and mdm.
+        /// The entries of hello's failing build, asked for only here. Refused for hostkeeper and mdm.
         #[arg(long)]
         fail_ready: bool,
         /// The release, `X.Y.Z`: the tag `v<X.Y.Z>` holds the assets.

@@ -40,6 +40,7 @@
 #   mdm-<version>-linux-x86_64.tar.zst              mdm-<version>-linux-x86_64.tar.zst.sha256
 #   hostkeeper-<version>-macos-arm64.pkg
 #   hello_<version>_<deb-arch>.deb   hello-<version>-macos-arm64.pkg   mdm_<version>_amd64.deb
+#   hello_<version>-fail-ready_<deb-arch>.deb       (the failing build's deb; its pkg is no asset)
 #   index.json   hello-index.json   hello-fail-ready-index.json   mdm-index.json   netboot.json
 #   SHA256SUMS
 #   hkctl-<version>
@@ -460,14 +461,14 @@ jobs:
       # hello's .deb and its failing build's, and on linux-x86_64 mdm's, read back by
       # check-linux-pkg --service: the package named for the service, every entry root's and not
       # writable by others, each unit starting a file of the package, no dependency. The release
-      # manifest names each one's hook command. hello's and mdm's go to dist/:
-      # release assets, summed and attested, that the release publishes to the repository's
-      # testing suite. The failing build's goes to native/, an artifact of its own and no asset:
-      # its version, <version>-fail-ready, is not the X.Y.Z the shared repository's index takes.
+      # manifest names each one's hook command. All go to dist/: release assets, summed and
+      # attested. The release publishes hello's and mdm's to the repository's testing suite, and
+      # the failing build's, whose Debian version is <version>~fail.ready (the file keeps the
+      # service version, <version>-fail-ready, in its name), to its testing-fail suite.
       - name: hello's .deb
         run: cargo xtask release deb --service hello --platform "$PLATFORM" --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --binary target/release/hello --out dist
       - name: hello's failing build's .deb
-        run: cargo xtask release deb --service hello --fail-ready --platform "$PLATFORM" --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --binary target/release/hello --out native
+        run: cargo xtask release deb --service hello --fail-ready --platform "$PLATFORM" --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --binary target/release/hello --out dist
       - name: hello's .deb is named for hello, root's, and its units start its own files
         env:
           ARCH: ${{ matrix.deb-arch }}
@@ -475,7 +476,7 @@ jobs:
       - name: hello's failing build's .deb is named for hello, root's, and its units start its own files
         env:
           ARCH: ${{ matrix.deb-arch }}
-        run: cargo xtask release check-linux-pkg "native/hello_${RELEASE_VERSION}-fail-ready_$ARCH.deb" --service hello
+        run: cargo xtask release check-linux-pkg "dist/hello_${RELEASE_VERSION}-fail-ready_$ARCH.deb" --service hello
       - name: mdm's .deb
         if: matrix.platform == 'linux-x86_64'
         run: cargo xtask release deb --service mdm --platform "$PLATFORM" --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --binary target/release/mdm --archives "$RUNNER_TEMP/mdm-archives" --out dist
@@ -486,12 +487,6 @@ jobs:
         with:
           name: assets-${{ matrix.platform }}
           path: dist/
-          retention-days: 90
-          if-no-files-found: error
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: native-${{ matrix.platform }}
-          path: native/
           retention-days: 90
           if-no-files-found: error
 
@@ -657,7 +652,7 @@ jobs:
       # product: what hello's builder writes, not a rule of the daemon's. hello's goes to pkg/, unsigned,
       # beside the installer: sign-pkg signs it and check-pkg publishes it, a release asset the
       # release puts in the testing directory of the installers. The failing build's goes to
-      # native/, as on Linux, and is never signed or released.
+      # native/, an artifact of its own, and is never signed or released.
       - name: hello's .pkg (component by pkgbuild with no scripts, distribution by productbuild)
         run: cargo xtask release macos-pkg --service hello --version "$RELEASE_VERSION" --binary target/release/hello --stage "$RUNNER_TEMP/hello-pkg-root" --out pkg
       - name: hello's failing build's .pkg
@@ -1097,6 +1092,14 @@ jobs:
         env:
           BUNDLE: ${{ steps.hello-deb-linux-x86_64.outputs.bundle-path }}
         run: cp "$BUNDLE" "dist/hello_${V}_amd64.deb.sigstore.json"
+      - id: hello-fail-ready-deb-linux-x86_64
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/hello_${{ needs.version.outputs.version }}-fail-ready_amd64.deb
+      - name: Name the bundle of the failing build of hello's .deb for linux-x86_64
+        env:
+          BUNDLE: ${{ steps.hello-fail-ready-deb-linux-x86_64.outputs.bundle-path }}
+        run: cp "$BUNDLE" "dist/hello_${V}-fail-ready_amd64.deb.sigstore.json"
       - id: mdm-deb-linux-x86_64
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
@@ -1201,6 +1204,14 @@ jobs:
         env:
           BUNDLE: ${{ steps.hello-deb-linux-arm64.outputs.bundle-path }}
         run: cp "$BUNDLE" "dist/hello_${V}_arm64.deb.sigstore.json"
+      - id: hello-fail-ready-deb-linux-arm64
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/hello_${{ needs.version.outputs.version }}-fail-ready_arm64.deb
+      - name: Name the bundle of the failing build of hello's .deb for linux-arm64
+        env:
+          BUNDLE: ${{ steps.hello-fail-ready-deb-linux-arm64.outputs.bundle-path }}
+        run: cp "$BUNDLE" "dist/hello_${V}-fail-ready_arm64.deb.sigstore.json"
       - id: deb-linux-arm64
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:

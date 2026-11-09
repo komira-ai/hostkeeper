@@ -223,3 +223,57 @@ fn architectures_are_found_by_either_name() {
     assert_eq!(arch_of_rpm("amd64"), None);
     assert_eq!(arch_of_deb("x86_64"), None);
 }
+
+#[test]
+fn the_failing_build_is_hellos_two_debs_named_by_its_debian_version_and_by_its_asset() {
+    // Catches: a pool name that carries the service version's `-fail-ready` (which apt orders
+    // above the release), and an asset name that carries the `~` the release's file names lack.
+    assert_eq!(
+        HOSTKEEPER.fail_ready_debs("1.2.3"),
+        [
+            (
+                "hello_1.2.3~fail.ready_amd64.deb".to_owned(),
+                "hello_1.2.3-fail-ready_amd64.deb".to_owned()
+            ),
+            (
+                "hello_1.2.3~fail.ready_arm64.deb".to_owned(),
+                "hello_1.2.3-fail-ready_arm64.deb".to_owned()
+            ),
+        ]
+    );
+}
+
+#[test]
+fn the_failing_builds_files_are_the_ones_the_release_contract_names() {
+    // Catches: the suite's files drifting from the assets the release lists and the Debian
+    // version its package declares.
+    use crate::release::contract::{Package, Platform, Version};
+    let version: Version = "1.2.3".parse().expect("version");
+    let assets: Vec<String> = [Platform::LinuxX86_64, Platform::LinuxArm64]
+        .into_iter()
+        .map(|p| {
+            Package::HelloFailReady
+                .native_name(&version, p)
+                .expect("a deb")
+        })
+        .collect();
+    let listed = HOSTKEEPER.fail_ready_debs("1.2.3");
+    assert_eq!(
+        listed
+            .iter()
+            .map(|(_, asset)| asset.clone())
+            .collect::<Vec<_>>(),
+        assets
+    );
+    let deb_version = Package::HelloFailReady.deb_version(&version);
+    assert_eq!(
+        listed
+            .iter()
+            .map(|(pool, _)| pool.as_str())
+            .collect::<Vec<_>>(),
+        [
+            format!("hello_{deb_version}_amd64.deb"),
+            format!("hello_{deb_version}_arm64.deb")
+        ]
+    );
+}

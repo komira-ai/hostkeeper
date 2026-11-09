@@ -18,7 +18,10 @@
 //! hello's `.deb` for both architectures and mdm's for amd64 alone (neither has an rpm), and
 //! beside hostkeeper's own installer hello's `.pkg`. The index, write and promote verbs take every
 //! package of the product in one pass ([`Product::deb_files`], [`Product::rpm_files`]), so a
-//! release is listed in the repository whole or not at all.
+//! release is listed in the repository whole or not at all. Hello's failing build is not one of
+//! them: its `.deb`s are listed in the suite `testing-fail` alone ([`Product::fail_ready_debs`]).
+
+use crate::release::contract::{FAIL_READY_DEB_SUFFIX, FAIL_READY_SUFFIX};
 
 /// A Linux architecture, in the two names the package formats give it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -129,6 +132,9 @@ pub(crate) struct Product {
     /// The names of the macOS installers a release ships, each `<name>-<version>-macos-arm64.pkg`
     /// in the version's directory: the product's own and the native packages of its services.
     pub(crate) installers: &'static [&'static str],
+    /// The name of the package whose failing build (the same program started with `--fail-ready`)
+    /// the suite `testing-fail` lists alone.
+    pub(crate) fail_ready: &'static str,
     /// The jobs `channels decide` reads, in the order it names them.
     pub(crate) stages: &'static [&'static str],
     /// The stages that may be `skipped`; every other stage must be `success`.
@@ -174,6 +180,23 @@ impl Product {
             .collect()
     }
 
+    /// The debs of the failing build of `version`, for each architecture of its package, as the
+    /// file name the pool and the index give it (`<name>_<version>~fail.ready_<arch>.deb`) and the
+    /// file name of the release asset (`<name>_<version>-fail-ready_<arch>.deb`: an asset name
+    /// has no `~`), sorted.
+    pub(crate) fn fail_ready_debs(&self, version: &str) -> Vec<(String, String)> {
+        let pool = format!("{version}{FAIL_READY_DEB_SUFFIX}");
+        let asset = format!("{version}{FAIL_READY_SUFFIX}");
+        let mut files: Vec<(String, String)> = self
+            .package(self.fail_ready)
+            .into_iter()
+            .flat_map(|p| p.arches.iter().map(move |a| (p, a)))
+            .map(|(p, a)| (p.deb_file(&pool, a), p.deb_file(&asset, a)))
+            .collect();
+        files.sort();
+        files
+    }
+
     /// The file names of the rpms of `version`, every package that is an rpm for each of its
     /// architectures, sorted.
     pub(crate) fn rpm_files(&self, version: &str) -> Vec<String> {
@@ -214,6 +237,7 @@ pub(crate) const HOSTKEEPER: Product = Product {
     pool_dir: "pool/hostkeeper",
     session_prefix: "hostkeeper-",
     pkg_dir: "pkg/hostkeeper",
+    fail_ready: "hello",
     packages: &[
         Package {
             name: "hostkeeper",

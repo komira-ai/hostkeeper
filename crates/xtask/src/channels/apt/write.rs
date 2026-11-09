@@ -1,11 +1,13 @@
 //! `channels apt write --bucket <b> --distribution-id <id> --hostname <h> --next <dir> (--debs <dir>
-//! --version <V> | --no-pool) [--suite stable|testing] [--last] [--output <file>] [--aws
+//! --version <V> | --no-pool) [--suite stable|testing|testing-fail] [--last] [--output <file>] [--aws
 //! <program>]`: the signed index and the packages into the apt repository.
 //!
 //! The order is what keeps a reader consistent when the write stops anywhere:
 //!
-//! 1. the packages (none with `--no-pool`: the promotion of a release from `testing` to `stable`
-//!    writes the index only, the pool holds the packages already), each with `If-None-Match: *` (a `412` means it exists; it is kept only when
+//! 1. the packages the suite lists (none with `--no-pool`: the promotion of a release from `testing` to `stable`
+//!    writes the index only, the pool holds the packages already), each under its pool name (the
+//!    failing build's `hello_<v>~fail.ready_<arch>.deb`, whose file in `--debs` is named by the
+//!    service version) with `If-None-Match: *` (a `412` means it exists; it is kept only when
 //!    its bytes are ours, and a different file under the name is a failure: a package is never
 //!    overwritten, and the index must not list a file that is not this one);
 //! 2. the by-hash copy of every `Packages` and `Packages.gz`
@@ -146,7 +148,10 @@ fn check_next(
     }
     let mut listed = Vec::new();
     for rel in files.iter().filter(|rel| rel.ends_with("/Packages")) {
-        listed.extend(index::parse_packages(&read_text(&root.join(rel))?)?);
+        listed.extend(index::parse_packages(
+            &read_text(&root.join(rel))?,
+            r.suite,
+        )?);
     }
     for (name, path) in packages {
         let filename = format!("{POOL_DIR}/{name}");
@@ -241,7 +246,7 @@ pub fn write(aws: &dyn Aws, r: &Request, output: Option<&Path>) -> Result<Vec<St
         )));
     }
     let packages = match r.pool {
-        Some(pool) => package_files(pool.debs, pool.version)?,
+        Some(pool) => package_files(pool.debs, pool.version, r.suite)?,
         None => Vec::new(),
     };
     let files = check_next(r, &packages)?;
