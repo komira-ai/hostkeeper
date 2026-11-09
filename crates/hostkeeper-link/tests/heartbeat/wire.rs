@@ -51,6 +51,7 @@ fn facts(name: &str, at: &str) -> ServiceFacts {
         }),
         record_try: None,
         installer: None,
+        drift: None,
     }
 }
 
@@ -348,6 +349,7 @@ fn largest(ids: &[usize; 16], reasons: &[usize; 16]) -> Heartbeat {
                 observed: None,
                 record_try: None,
                 installer: None,
+                drift: None,
             }
         })
         .collect();
@@ -523,4 +525,28 @@ fn the_json_body_carries_no_installers() {
         sent("wire-installers", &listed).body,
         sent("wire-no-installers", &plain).body
     );
+}
+
+/// Proves a service's drift is not in the body of the JSON route: the body of a heartbeat whose
+/// service has drift is the body of the same heartbeat without it.
+///
+/// Catches: the frozen JSON route given a field `drift`, which a coordinator of the release
+/// before would refuse or read as another fact.
+#[test]
+fn the_json_route_never_carries_a_drift() {
+    let mut drifting = facts("web", "1.0");
+    drifting.drift = Some(hostkeeper_link::Drift {
+        found: Some("2.0-1".to_owned()),
+        recorded: Some("1.0-1".to_owned()),
+    });
+    let with = sent(
+        "wire-drift",
+        &beat(Platform::LinuxX86_64, "0.9.0", vec![drifting]),
+    );
+    let without = sent(
+        "wire-no-drift",
+        &beat(Platform::LinuxX86_64, "0.9.0", vec![facts("web", "1.0")]),
+    );
+    assert_eq!(with.body, without.body);
+    assert!(!String::from_utf8_lossy(&with.body).contains("drift"));
 }

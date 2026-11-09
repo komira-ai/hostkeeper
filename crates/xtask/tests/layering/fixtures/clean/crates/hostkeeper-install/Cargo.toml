@@ -8,6 +8,7 @@ hostkeeper-config = { path = "../hostkeeper-config" }
 hostkeeper-launchd = { path = "../hostkeeper-launchd" }
 hostkeeper-proto = { path = "../hostkeeper-proto" }
 hostkeeper-release = { path = "../hostkeeper-release" }
+hostkeeper-steps = { path = "../hostkeeper-steps" }
 hostkeeper-unpack = { path = "../hostkeeper-unpack" }
 
 [dev-dependencies]

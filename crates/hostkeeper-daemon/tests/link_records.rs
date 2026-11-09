@@ -189,6 +189,7 @@ fn a_service_is_observed_through_the_daemons_observer() {
         version: None,
         health: Health::Unhealthy,
         health_detail: Some(NOT_OBSERVED.to_owned()),
+        drift: None,
     };
     assert_eq!(observer.observe(&name("db")), unobserved);
     assert_eq!(observer.observe(&name("api")), unobserved);
@@ -199,6 +200,7 @@ fn a_service_is_observed_through_the_daemons_observer() {
             version: None,
             health: Health::Unhealthy,
             health_detail: Some("unmonitored".to_owned()),
+            drift: None,
         }
     );
 }
@@ -228,6 +230,7 @@ fn reported(
         version: version.map(self::version),
         health,
         health_detail: detail.map(str::to_owned),
+        drift: None,
     }
 }
 
