@@ -1,0 +1,86 @@
+# The coordinator restarted on its Postgres store. docs/report/results/README.md describes the
+# plans and how a run becomes a result; `hostkeeper-measure check --plan` checks this file.
+id = "coordinator-restart"
+title = "The coordinator restarted on its Postgres store"
+measures = """
+What a restart of the coordinator on its Postgres store costs the fleet: the operator's \
+requests that fail while it restarts, how long it does not answer, the longest gap between two \
+heartbeats of a host it records, and the time until every host is back in `hkctl hosts list`, \
+live with a heartbeat newer than its last before the restart. A daemon that cannot reach the \
+coordinator tries again at its next heartbeat and resends the verdicts the coordinator has not \
+acknowledged, so a heartbeat is delayed rather than lost; the gap shows by how much."""
+records = """
+Every poll of `hkctl hosts list` that fails, and the first that answers after failures; the \
+moment the runner first sees the coordinator gone (a failed poll, or a host no longer listed \
+live); each host's heartbeat stamp each time it changes; and each host's return. The runner \
+polls every second, from just before the restart until every host is back."""
+repetitions = 3
+states = [
+    "While the coordinator restarted, the runner's requests failed for {unavailable.median} s (median of {unavailable.n} repetitions, from {unavailable.min} s to {unavailable.max} s), at most {failed-requests.max} polls in one repetition.",
+    "Every host was back in hkctl hosts list {all-back.median} s after the runner saw the coordinator gone (from {all-back.min} s to {all-back.max} s).",
+    "The longest gap between two heartbeats of one host was {heartbeat-gap.max} s (median {heartbeat-gap.median} s over {heartbeat-gap.n} hosts and repetitions).",
+]
+
+[hosts]
+says = "Every host the coordinator lists as live when the repetition starts: host-1 to host-N in the records."
+pick = "live"
+
+[[step]]
+id = "steady"
+do = "watch"
+until = { what = "live" }
+poll_secs = 5
+timeout_secs = 120
+
+[[step]]
+id = "restart"
+do = "operator"
+says = "Press Enter, then restart the coordinator on its Postgres store within two minutes (docker compose --profile postgres restart coordinator, as docs/deploy/coordinator/README.md says)."
+
+[[step]]
+id = "back"
+do = "watch"
+until = { what = "back" }
+poll_secs = 1
+timeout_secs = 900
+
+[[measure]]
+id = "unavailable"
+kind = "span"
+says = "the first failed request to the first answer after it"
+unit = "s"
+from = "back/call-failed"
+to = "back/answered"
+pick = "first"
+
+[[measure]]
+id = "failed-requests"
+kind = "count"
+says = "the runner's polls that failed"
+unit = "requests"
+of = "back/call-failed"
+
+[[measure]]
+id = "all-back"
+kind = "span"
+says = "the coordinator seen gone to the last host back"
+unit = "s"
+from = "back/restart-seen"
+to = "back/back"
+pick = "last"
+
+[[measure]]
+id = "host-back"
+kind = "span"
+says = "the coordinator seen gone to the host back"
+unit = "s"
+from = "back/restart-seen"
+to = "back/back"
+pick = "each"
+
+[[measure]]
+id = "heartbeat-gap"
+kind = "gap"
+says = "the longest time between two heartbeats of a host"
+unit = "s"
+of = "back/heartbeat"

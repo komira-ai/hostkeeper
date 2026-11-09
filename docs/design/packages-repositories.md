@@ -23,6 +23,19 @@ this one about a service's package from a repository, or a Mac's `.pkg`, this on
 replaces. Section numbers like "packages.md
 section 5.2" are that file's; a bare "section 3" is this file's.
 
+**Revised by section 10 ([packages-native.md](packages-native.md)).** hostkeeper's own package format ends:
+`hostkeeper-archive` goes after the farm has moved, `tarball` and `oci-image` are withdrawn, an `apk` backend serves
+the Alpine daemon, and hostkeeper itself is installed and updated from its `.deb` and `.pkg` through `apt` and
+`macos-pkg`. Wherever this file sends a host or a service to the tarball (an RPM-family host before `dnf`, a service
+whose hand-over needs the old files), sections 10.1 and 10.6 say what holds instead. Four more things below change. A
+`macos-pkg` entry carries no attestation, and the host checks none: wherever this file names the attestation of a
+`.pkg` (sections 1, 3.3, 4.7, 9), the pin and the signature are the whole check, and the publish job checks the
+attestation before it signs (10.3); `[trusted_signers]` then guards no install, only `hostkeeper-pxe`'s check. A service's package has no maintainer scripts, refused at `stage` (10.2), so what this
+file says of a package's scripts holds for hostkeeper's own package alone (10.4). A package's hook is a program at a
+fixed path, with `hook.command` empty (10.2), so the caller of `SetDesired` no longer chooses among the package's
+programs (section 3.3). And hostkeeper's own release is a native entry per platform (10.4),
+so where this file says it stays `hostkeeper-archive`, that holds only until the move of 10.6.
+
 The release machinery that every repository of the project shares is moving to this flow: publish each release to
 the **testing** channel of the project's package repository, check that it installs on clean machines, then promote
 the same bytes to the **stable** channel. Those two channels are the repositories this design names. GitHub (each
@@ -51,7 +64,8 @@ design (section 6). dnf is the next one and gets its full design when the first 
 
 Everything else in packages.md stays: the platform map, the pick by installer name (packages.md section 3.3), the
 manifest outside the package, built-in steps, `hostkeeper-archive`, `tarball` and `oci-image`, stores, the staged
-path, and hostkeeper's own release, which stays `hostkeeper-archive` on every platform.
+path, and hostkeeper's own release, which stays `hostkeeper-archive` on every platform until section 10 retires
+the archive and the `tarball` and `oci-image` installers.
 
 ## 1. What changes for the operator and for a service's CI
 
@@ -496,8 +510,8 @@ delivers by its own allowlisted digest, and does not serve a service's package; 
 the farm's installer key, which section 7.3 rules out today. So A9 waits on M11's outcome, and a farm-identity outcome
 reopens section 7.3 for services' packages before A9 is built.
 
-The package's `preinstall` and `postinstall` run as root, with the Mac's network, and are covered only by the digest,
-the attestation and the signature. Whoever holds a configured signer's key, with CI's pin, can run code as root on
+A service's package has no `preinstall` or `postinstall` (10.2); hostkeeper's own package keeps its bootstrap
+scripts (10.4), which run as root, with the Mac's network, and are covered only by the pin and the signature. Whoever holds a configured signer's key, with CI's pin, can run code as root on
 every Mac that names it, so the signer set stays small: hostkeeper's own identity, and a second only during a
 rotation.
 
@@ -720,18 +734,19 @@ and their order are unchanged.
 The channel's removal still holds for a service that comes from a repository: such a service never used the channel,
 so it adds nothing to A11's or A12's conditions, and its hosts count toward A11's condition through `target-v1`
 alone. A11 still follows stage 4, as packages.md section 9.2 orders it. hostkeeper's
-own release stays `hostkeeper-archive` with its index, and the channel keeps hostkeeper's archives, unchanged.
+own release stays `hostkeeper-archive` with its index, and the channel keeps hostkeeper's archives, until section 10:
+its build items (10.8) re-scope A6, A7 and A9 again, add A18 to A28, and withdraw A10, A11 and A12.
 
 | # | New scope, one line |
 |---|---|
 | A4 | Unchanged, and the `agent.proto` header sentence (packages.md section 7.1) also says an order may name a package, its version and a repository the host's configuration defines; A4 reads no repository configuration |
-| A6 | Unchanged; what a repository installer needs of A6's trait and loader, A7 adds |
+| A6 | Unchanged here; what a repository installer needs of A6's trait and loader, A7 adds. Re-scoped again by 10.8 (no `tarball`) |
 | A7 | The repository installer kind with its backend interface, and the `apt` backend: the installer trait's `stage` from a repository entry, `VersionDir::read` of a directory with `apt/` and no `artifact`, the two fetch commands as the only runs without `PrivateNetwork=yes`; the repository configuration and its checks at start, the announce rule, `stage` (update, index read, pin, download, control fields, extract, walk, units, simulation), `activate` with the hold and enablement, rollback by downgrade from the kept index and package, `retire`, `remove` by purge, drift and `ServiceBeat.drift` shown by the coordinator, the failure reasons of section 4.5, `coordinator_too_old` for an entry with no repository; replaces `deb` |
 | A8 | `dnf` backend (later): its own design pull request once an RPM host exists (section 6), then the backend; replaces `rpm`. Until then an RPM-family host takes the tarball |
 | A9 | The `macos-pkg` installer (section 4.7): the signers file, `stage` with the signature check, `activate` with `installer`, rollback from the kept `.pkg`, removal by the receipt, drift; after A6, A7 and M11 (hostkeeper-mdm.md) |
-| A10 | Unchanged (`oci-image`) |
-| A11 | Unchanged; repository services never used the channel and add nothing to its conditions |
-| A12 | Unchanged |
+| A10 | Unchanged here; withdrawn by 10.8 |
+| A11 | Unchanged here; repository services never used the channel and add nothing to its conditions. Withdrawn by 10.8 |
+| A12 | Unchanged here; withdrawn by 10.8 |
 | A13 | Withdrawn, with `apk` |
 | A14 | Withdrawn, with `arch` |
 | A16 (new) | `Target.repository` and `Target.package_version` in `release.proto`; `hostkeeper-release`'s checks of section 2.2 and its installer set (`apt` beside `hostkeeper-archive`, `tarball`, `macos-pkg`, `oci-image`; `deb`, `rpm`, `arch`, `apk` dropped; a later backend adds its name); the coordinator's audit of a repository entry; after A2, before A7 |
@@ -779,3 +794,10 @@ an item of this repository.
 | Rollback on a Mac | `installer -allowUntrusted` of the previous version's kept `.pkg`, with no fetch and no second signature check | A rollback must work with the stores down, and after a certificate expired or was rotated out; hostkeeper proved those bytes at their stage and re-hashes them |
 | Removal on a Mac | Every file the receipt or a kept `Bom` lists, changed or not; the directories hostkeeper's installs created, when empty; then `pkgutil --forget`. Files the receipt does not list stay | Closed-world removal, as `dpkg --purge`; a directory that was on the host before is not the package's, and a `.pkg` has no removal script to say more |
 | Drift on a Mac | The receipt's version and the payload's files, against the record and the sealed tree; corrected by installing the desired `.pkg` over it, `drift_repaired` | hostkeeper is the reconciler, as on Linux; nothing installs a managed package by hand |
+
+## 10. The end state: native packages only
+
+hostkeeper's own package format retired, hostkeeper included: what we run and the end state, where each piece of
+today's archive goes, trust, hostkeeper's own update, the release channel's end, the move of the farm, what is
+deleted, the build items A18 to A28 and the decisions are in [packages-native.md](packages-native.md), kept in a file
+of its own so this one stays under 1000 lines (rule R12).
