@@ -9,12 +9,14 @@
 //! - [`CHANNEL_JOB`] does not need exactly `plan` and `publish` (it runs once every release of the
 //!   run is published, and not before), holds other token rights than exactly
 //!   [`CHANNEL_PERMISSIONS`], has a step with a key outside [`STEP_KEYS`] (a `continue-on-error`,
-//!   or an `if:` on any step but the two of the tailnet join, whose `if:` is in their
+//!   or an `if:` on any step but those of the tailnet join, whose `if:` is in their
 //!   [`CHANNEL_STEPS`] entry), or its steps are not exactly [`CHANNEL_STEPS`], in that order,
-//!   with their `if`, `with` and `env`: the newest version of the run and its commit, xtask
-//!   compiled from a checkout of that commit, the published index from the run's own
-//!   `release-<tag>` artifact, only when [`JOIN_IF`] holds the channel's host (the step
-//!   [`HOST_STEP`]) and the tailnet join that pings it, the wait for the channel, the
+//!   with their `if`, `with` and `env`: the newest version of the run and its commit, only
+//!   when [`JOIN_IF`] holds the channel's host (the step [`HOST_STEP`]) by the xtask of a
+//!   checkout of the workflow's own commit (the release's commit may lack the verb), xtask
+//!   compiled from a checkout of the release's commit, the published index from the run's own
+//!   `release-<tag>` artifact, only when [`JOIN_IF`] holds the tailnet join that pings the
+//!   host, the wait for the channel, the
 //!   byte comparison of the served index with the published one, the index's text and SHA-256 as
 //!   outputs, the release's targets written by `cargo xtask release targets` from the same files,
 //!   and whether no newer release is published; or its `outputs` are not exactly
@@ -57,7 +59,7 @@ pub const DESIRED_IF: &str = "${{ needs.plan.outputs.release == 'true' && github
 pub const SET_IF: &str = "${{ needs.plan.outputs.release == 'true' && github.ref == 'refs/heads/main' && vars.RELEASE_SETS_DESIRED == 'true' && needs.channel.outputs.newest == 'true' }}";
 
 /// The keys a step of [`CHANNEL_JOB`] may have: no `if:` that could skip it (but the `if:`
-/// [`JOIN_IF`] of the two steps of the join, which [`CHANNEL_STEPS`] writes), no
+/// [`JOIN_IF`] of the steps of the join, which [`CHANNEL_STEPS`] writes), no
 /// `continue-on-error` that could let it fail, no `shell` or `working-directory` that could
 /// change what its command does.
 pub const STEP_KEYS: [&str; 6] = ["env", "id", "name", "run", "uses", "with"];
@@ -66,7 +68,7 @@ pub const STEP_KEYS: [&str; 6] = ["env", "id", "name", "run", "uses", "with"];
 /// asks GitHub for an OIDC token, as the CI client's join does.
 pub const CHANNEL_PERMISSIONS: [(&str, &str); 2] = [("contents", "read"), ("id-token", "write")];
 
-/// The `if:` of the two steps of the tailnet join in [`CHANNEL_JOB`], and the value every caller
+/// The `if:` of the steps of the tailnet join in [`CHANNEL_JOB`], and the value every caller
 /// of the CI client passes as `join_tailnet`: the repository variable of the federated identity's
 /// client ID is set. Empty, the runner does not join, and reaches the channel as it is.
 pub const JOIN_IF: &str = "${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID != '' }}";
@@ -78,25 +80,32 @@ pub const HOST_STEP: &str = "channel-host";
 /// join action at the same commit (`set-desired.yml`, step `tailnet`).
 pub const JOIN_USES: &str = "tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be390056cd";
 
-/// The index in [`CHANNEL_STEPS`] of the step [`HOST_STEP`], of the join right after it, and of
-/// the wait right after the join.
-pub const HOST_AT: usize = 5;
-/// See [`HOST_AT`].
-pub const JOIN_AT: usize = 6;
-/// See [`HOST_AT`].
-pub const WAIT_AT: usize = 7;
+/// The index in [`CHANNEL_STEPS`] of the checkout of the workflow's own commit, of the step
+/// [`HOST_STEP`] that runs its xtask, of the checkout of the release's commit, of the join, and
+/// of the wait right after the join.
+pub const OWN_CHECKOUT_AT: usize = 1;
+/// See [`OWN_CHECKOUT_AT`].
+pub const HOST_AT: usize = 3;
+/// See [`OWN_CHECKOUT_AT`].
+pub const RELEASE_CHECKOUT_AT: usize = 4;
+/// See [`OWN_CHECKOUT_AT`].
+pub const JOIN_AT: usize = 8;
+/// See [`OWN_CHECKOUT_AT`].
+pub const WAIT_AT: usize = 9;
 
 /// The steps of [`CHANNEL_JOB`], in order, as [`step_shape`] writes them: `if <condition> ` first
 /// when the step has an `if:`, then a `run:` step as its command, an action as `uses <action>`,
 /// each followed by its `with` and its `env`, every entry as ` with <key>=<value>` or
 /// ` env <key>=<value>`, sorted by key.
-pub const CHANNEL_STEPS: [&str; 12] = [
+pub const CHANNEL_STEPS: [&str; 14] = [
     r#"run jq --raw-output '.include[-1] | "version=\(.version)", "tag=\(.tag)", "commit=\(.commit)"' <<< "$MATRIX" >> "$GITHUB_OUTPUT" env MATRIX=${{ needs.plan.outputs.matrix }}"#,
+    "if ${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID != '' }} uses actions/checkout with persist-credentials=false",
+    "if ${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID != '' }} run rustup toolchain install",
+    r#"if ${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID != '' }} run cargo xtask release channel-host --channel "$RELEASE_CHANNEL" --output "$GITHUB_OUTPUT" env RELEASE_CHANNEL=${{ vars.HOSTKEEPER_RELEASE_CHANNEL }}"#,
     "uses actions/checkout with persist-credentials=false with ref=${{ steps.newest.outputs.commit }}",
     "run rustup toolchain install",
     "run cargo xtask --help",
     "uses actions/download-artifact with name=release-${{ steps.newest.outputs.tag }} with path=dist",
-    r#"if ${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID != '' }} run cargo xtask release channel-host --channel "$RELEASE_CHANNEL" --output "$GITHUB_OUTPUT" env RELEASE_CHANNEL=${{ vars.HOSTKEEPER_RELEASE_CHANNEL }}"#,
     "if ${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID != '' }} uses tailscale/github-action with audience=${{ vars.HOSTKEEPER_TAILNET_AUDIENCE }} with oauth-client-id=${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID }} with ping=${{ steps.channel-host.outputs.hostname }} with sha256sum=c6f99a5d774c7783b56902188d69e9756fc3dddfb08ac6be4cb2585f3fecdc32 with tags=${{ vars.HOSTKEEPER_TAILNET_TAG }} with use-cache=false with version=1.94.2",
     r#"run curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --max-time 30 --retry 45 --retry-delay 40 --retry-max-time 1800 --retry-all-errors --output "$RUNNER_TEMP/served-index.json" "$RELEASE_CHANNEL/hostkeeper/$VERSION/index.json" env RELEASE_CHANNEL=${{ vars.HOSTKEEPER_RELEASE_CHANNEL }} env VERSION=${{ steps.newest.outputs.version }}"#,
     r#"run cmp dist/index.json "$RUNNER_TEMP/served-index.json""#,
