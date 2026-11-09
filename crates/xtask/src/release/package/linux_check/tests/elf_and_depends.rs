@@ -1,5 +1,5 @@
-//! The check of ELF programs and declared dependencies, on a deb, an rpm, an Arch package and a
-//! tarball, and the staged check of the programs and of an Arch package's owners.
+//! The check of ELF programs and declared dependencies, on a deb, an rpm and a tarball, and the
+//! staged check of the programs and of owners without names.
 
 use std::io::Cursor;
 
@@ -28,7 +28,7 @@ fn programs(hostkeeper: Vec<u8>, pxe: Vec<u8>) -> Vec<File> {
     with_data(with_data(files(), HOSTKEEPER, hostkeeper), PXE, pxe)
 }
 
-/// The files as nfpm's Arch package holds them: owners without names.
+/// The files with owners without names (uid 0 and an empty name is root's).
 fn nameless(files: Vec<File>) -> Vec<File> {
     files
         .into_iter()
@@ -49,25 +49,6 @@ fn xz(bytes: &[u8]) -> Vec<u8> {
     lzma_rs::xz_compress(&mut Cursor::new(bytes), &mut out).expect("xz");
     out
 }
-
-/// An Arch package of `files`: a zstd tar with `.PKGINFO` first.
-fn arch_with(files: &[File], pkginfo: &str) -> Vec<u8> {
-    let info = File {
-        path: "./.PKGINFO",
-        mode: 0o644,
-        owner: "",
-        uid: 0,
-        group: "",
-        directory: false,
-        data: pkginfo.as_bytes().to_vec(),
-        link: None,
-    };
-    let mut all = vec![info];
-    all.extend(files.iter().cloned());
-    zstd(&tar(&all))
-}
-
-const PKGINFO: &str = "pkgname = hostkeeper\npkgver = 1.0.0-1\narch = x86_64\n";
 
 /// The lines of a package that passes, without its name in front.
 fn passes(package: &[u8]) -> Vec<String> {
@@ -106,11 +87,7 @@ fn static_programs_pass_in_each_format_with_no_dependency() {
         "/usr/bin/hostkeeper is a static ELF program",
         "/usr/bin/hostkeeper-pxe is a static ELF program",
     ];
-    for package in [
-        deb_of(&all),
-        rpm_of(&all),
-        arch_with(&nameless(all.clone()), PKGINFO),
-    ] {
+    for package in [deb_of(&all), rpm_of(&all), deb_of(&nameless(all.clone()))] {
         assert_eq!(
             passes(&package),
             [static_lines[0], static_lines[1], "declares no dependency"]
@@ -160,14 +137,7 @@ fn a_program_linked_to_a_library_or_asking_for_an_interpreter_is_refused_in_each
         "/usr/bin/hostkeeper-pxe: ELF program linked to libc.so.6",
     ];
     let [gz, xz, zst] = tarballs(&all);
-    for package in [
-        deb_of(&all),
-        rpm_of(&all),
-        arch_with(&all, PKGINFO),
-        gz,
-        xz,
-        zst,
-    ] {
+    for package in [deb_of(&all), rpm_of(&all), gz, xz, zst] {
         assert_eq!(refusals(&package), want);
     }
 }
@@ -360,16 +330,23 @@ fn an_rpm_whose_requires_are_not_strings_is_refused_by_name() {
 }
 
 #[test]
-fn an_arch_package_that_declares_a_dependency_is_refused_one_line_per_depend_line() {
-    let info = format!(
-        "{PKGINFO}# depend = commented\ndepend = glibc\ndepend=openssl>=3\noptdepend = gh: attestations\nmakedepend = cargo\n"
+fn a_zstd_tar_with_a_pkginfo_is_a_tarball_now_the_arch_package_is_withdrawn() {
+    // Catches: an Arch package still read as a package of its own (its `depend` lines taken as
+    // dependencies, or `--staged` checked against it) after the format was withdrawn.
+    let mut all = files();
+    all.insert(
+        0,
+        File {
+            path: "./.PKGINFO",
+            data: b"pkgname = hostkeeper\ndepend = glibc\n".to_vec(),
+            ..files()[0].clone()
+        },
     );
-    assert_eq!(
-        refusals(&arch_with(&files(), &info)),
-        [
-            "declares the dependency glibc",
-            "declares the dependency openssl>=3"
-        ]
+    let [.., zst] = tarballs(&all);
+    assert_eq!(passes(&zst), ["holds no ELF program"]);
+    let case = Case::new(&zst);
+    assert!(
+        matches!(case.check(), Err(Error::Failed(why)) if why.contains("--staged does not apply to a tarball")),
     );
 }
 
@@ -386,8 +363,8 @@ fn a_tarball_declares_nothing_even_with_a_depend_line_in_a_file() {
 }
 
 #[test]
-fn an_arch_package_with_nameless_root_owners_passes_the_staged_check() {
-    let package = arch_with(&nameless(files()), PKGINFO);
+fn a_package_with_nameless_root_owners_passes_the_staged_check() {
+    let package = deb_of(&nameless(files()));
     let case = Case::new(&package);
     let name = case.package().display().to_string();
     let lines = case.check().expect("accepted");
@@ -407,7 +384,7 @@ fn a_nameless_owner_with_an_id_other_than_0_is_not_roots() {
         .expect("gh")
         .uid = 7;
     assert_eq!(
-        Case::new(&arch_with(&all, PKGINFO)).problems(),
+        Case::new(&deb_of(&all)).problems(),
         ["/usr/lib/hostkeeper/gh: owned by id 7:root, not root:root"]
     );
 }

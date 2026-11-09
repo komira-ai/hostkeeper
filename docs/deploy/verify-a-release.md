@@ -26,7 +26,7 @@ tag. A `[trusted_signers]` entry in a daemon config must name `artifacts.yml` on
 
 `<version>` is X.Y.Z. `<platform>` is `linux-x86_64`, `linux-arm64` or `macos-arm64`;
 `<linux-platform>` is `linux-x86_64` or `linux-arm64`; `<deb-arch>` is `amd64` or `arm64`;
-`<rpm-arch>` is `x86_64` or `aarch64`. The deb, the rpm, the Arch package, the coordinator and the MDM kit's
+`<rpm-arch>` is `x86_64` or `aarch64`. The deb, the rpm, the coordinator and the MDM kit's
 binary are for the two Linux platforms; the installer pkg is for `macos-arm64`.
 
 | Asset | Content |
@@ -43,7 +43,6 @@ binary are for the two Linux platforms; the installer pkg is for `macos-arm64`.
 | `mdm-<version>-linux-x86_64.tar.zst.sha256` | the SHA-256 of that package |
 | `hostkeeper_<version>_<deb-arch>.deb` | the deb package: the daemon, its unit, its tmpfiles rules, its config template, the pinned `gh` and Sigstore trusted root it checks packages with, `/usr/bin/hostkeeper-pxe` (the boot server of network install, docs/design/network-install.md section 3, with no unit: it runs only when an operator starts it), and the link `/etc/issue.d/hostkeeper.issue` to the console's issue file the daemon writes while it waits for its enrollment |
 | `hostkeeper-<version>-1.<rpm-arch>.rpm` | the rpm package, with the same files and link |
-| `hostkeeper-<version>-1-<rpm-arch>.pkg.tar.zst` | the Arch Linux package, with the same files and link |
 | `hostkeeper-coordinator-<version>-<linux-platform>.tar.gz` | the coordinator binary |
 | `hostkeeper-coordinator-<version>-<linux-platform>.cdx.json` | its CycloneDX SBOM |
 | `hostkeeper-coordinator-<version>-<linux-platform>.image.tar` | the coordinator's container image `hostkeeper-coordinator:<version>`: a tarball that is an OCI image layout and that `docker load` also reads |
@@ -57,7 +56,7 @@ binary are for the two Linux platforms; the installer pkg is for `macos-arm64`.
 | `hkctl-<version>` | the command line of the coordinator ([docs/cli.md](../cli.md)): one bash script for every platform, generated from the protobuf services, that calls the coordinator's JSON gateway with `curl`; it needs bash 3.2 or later and curl 7.55 or later. No host package carries it |
 | `netboot.json` | the boot sets of network install (docs/design/network-install.md, section 5): for each Linux platform the Ubuntu live-server ISO, the shim, the signed network GRUB, the kernel and the initrd a bare machine boots, each with the name it is served as, its size, its SHA-256 and where it comes from, rendered from `packaging/netboot/pins.toml` (`cargo xtask release netboot`) |
 | `SHA256SUMS` | the SHA-256 of every asset except itself and the bundles |
-| `<asset>.sigstore.json` | the attestation bundle of each `.tar.gz`, `.tar.zst`, `.deb`, `.rpm`, `.pkg.tar.zst`, `.image.tar` and `.pkg`, of `netboot.json` and of `hkctl-<version>` |
+| `<asset>.sigstore.json` | the attestation bundle of each `.tar.gz`, `.tar.zst`, `.deb`, `.rpm`, `.image.tar` and `.pkg`, of `netboot.json` and of `hkctl-<version>` |
 
 Each index has the same schema. An index is a lookup, not a trust anchor: it has no bundle of its
 own, and a host trusts a package for its own attestation and manifest, never for its entry in the
@@ -112,8 +111,6 @@ hostkeeper_<version>_<deb-arch>.deb
 hostkeeper_<version>_<deb-arch>.deb.sigstore.json
 hostkeeper-<version>-1.<rpm-arch>.rpm
 hostkeeper-<version>-1.<rpm-arch>.rpm.sigstore.json
-hostkeeper-<version>-1-<rpm-arch>.pkg.tar.zst
-hostkeeper-<version>-1-<rpm-arch>.pkg.tar.zst.sigstore.json
 hostkeeper-coordinator-<version>-<linux-platform>.tar.gz
 hostkeeper-coordinator-<version>-<linux-platform>.tar.gz.sigstore.json
 hostkeeper-coordinator-<version>-<linux-platform>.cdx.json
@@ -138,8 +135,8 @@ mdm-<version>-linux-x86_64.tar.zst.sha256
 ## What the Linux packages check packages with
 
 A host checks the attestation of every package before it installs it, its first deploy of a
-service included, with `gh attestation verify` run offline (the commands of step 4). The deb, the
-rpm and the Arch package carry the two files that check runs on, at the paths the daemon reads
+service included, with `gh attestation verify` run offline (the commands of step 4). The deb and the
+rpm carry the two files that check runs on, at the paths the daemon reads
 (`crates/hostkeeper-daemon/src/cli.rs`, `GH_BINARY` and `SIGSTORE_TRUSTED_ROOT`):
 
 | path | mode | what |
@@ -159,10 +156,9 @@ repositories and verifies them from the TUF root built into `gh`. `cargo xtask r
 nfpm-stage` takes `gh` out of the same archive, checks the archive against the pin again, refuses a
 `gh` that is not a program of the package's architecture and a trusted root with a line that is
 not one, and writes both into `target/nfpm/`, where `packaging/linux/nfpm.yaml` takes them from.
-A missing file or a digest that differs from the pin fails the build, and no deb, rpm or Arch
-package is made. After nfpm has built them, `cargo xtask release check-linux-pkg` reads the deb,
-the rpm and the Arch package back (the deb's `data.tar.gz`; the rpm's header and payload; the Arch
-package's zstd tar) and fails the build unless each installs
+A missing file or a digest that differs from the pin fails the build, and no deb or rpm is
+made. After nfpm has built them, `cargo xtask release check-linux-pkg` reads the deb
+and the rpm back (the deb's `data.tar.gz`; the rpm's header and payload) and fails the build unless each installs
 both files at these paths, a regular file of exactly this mode, owned by root and group root,
 with the bytes staged, and installs `/etc/issue.d/hostkeeper.issue` as a link to
 `/run/hostkeeper/enrollment.issue`, the console's issue file the daemon writes. It also checks that
@@ -174,7 +170,7 @@ The packages' programs, `hostkeeper` and `hostkeeper-pxe`, are the static build:
 host and run on any Linux distribution. `check-linux-pkg` refuses a package that holds an ELF
 file with an interpreter (`PT_INTERP`) or a needed library (`DT_NEEDED`), and a package that
 declares a dependency (a deb's `Depends` or `Pre-Depends`, an rpm's requirement other than
-`rpmlib(...)`, an Arch `.PKGINFO` `depend` line). The build job also runs it, without `--staged`, on
+`rpmlib(...)`). The build job also runs it, without `--staged`, on
 the binary tarball `hostkeeper-<version>-<platform>.tar.gz` and on hostkeeper's package
 `hostkeeper-<version>-<platform>.tar.zst`, so none of them holds a dynamically linked program.
 
@@ -182,14 +178,14 @@ Bumping the pin: set the workflow-level `GH_VERSION` in `artifacts.yml` to the n
 values of the build job's matrix to the SHA-256s of `gh_<version>_linux_amd64.tar.gz` and
 `gh_<version>_linux_arm64.tar.gz` from that release's `gh_<version>_checksums.txt`, in one commit.
 
-The trusted root is captured anew at each build, so each deb, rpm and Arch package carries the trusted root of
+The trusted root is captured anew at each build, so each deb and rpm carries the trusted root of
 the day it was built. hostkeeper's self-update does not replace these files, but hostkeeper's own
 package carries the committed root too, and the daemon uses whichever copy was written last (see
 [The trusted root on a host](#the-trusted-root-on-a-host)). A stale trusted root keeps verifying
 bundles signed under the keys it holds. When Sigstore starts signing with a certificate authority
 or a log key the host's trusted root does not hold, every bundle signed after that is refused on
 that host, as not attested by the trusted signer, until a newer root reaches it: an update of
-hostkeeper made while the old root still verifies it, a newer deb, rpm or Arch package, or a copy by hand.
+hostkeeper made while the old root still verifies it, a newer deb or rpm, or a copy by hand.
 
 ## Steps
 

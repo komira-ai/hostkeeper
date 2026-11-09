@@ -4,7 +4,7 @@
 //! [`PULL`]` <image>` for each listed image, every image is pinned by digest, no other step pulls
 //! an image, and every pull comes before the step that runs the tests as root (the test runs its
 //! containers with `--pull=never`). The list itself must be a list of `[[release]]` tables with
-//! the text keys `name`, `format` (`deb`, `rpm` or `arch`) and `image`. pr-device.yml's copy of the
+//! the text keys `name`, `format` (`deb` or `rpm`) and `image`. pr-device.yml's copy of the
 //! job is held to this one by the mirror rule (`pr_device.rs`). `linux_releases_tests.rs` shows
 //! each defect refused.
 
@@ -45,10 +45,10 @@ fn listed_images(list: &str) -> Result<Vec<String>, Vec<String>> {
             }
         }
         if let Some(format) = release.get("format").and_then(toml::Value::as_str)
-            && !["deb", "rpm", "arch"].contains(&format)
+            && !["deb", "rpm"].contains(&format)
         {
             problems.push(format!(
-                "linux-releases.toml: release {at} has the format `{format}`, not deb, rpm or arch"
+                "linux-releases.toml: release {at} has the format `{format}`, not deb or rpm"
             ));
         }
         if let Some(image) = release.get("image").and_then(toml::Value::as_str) {

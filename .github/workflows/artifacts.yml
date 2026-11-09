@@ -2,7 +2,7 @@
 # binary as a tarball with its CycloneDX SBOM and hostkeeper's own package (`.tar.zst` with its
 # `.sha256`), and the package of `hello`, the example service of examples/hello, and of its failing
 # build (the same package started with `--fail-ready`, which a host can be rolled back from), each
-# with its `.sha256`; for each Linux platform the deb, the rpm and the Arch package, the `hostkeeper-coordinator`
+# with its `.sha256`; for each Linux platform the deb and the rpm, the `hostkeeper-coordinator`
 # binary as a tarball with its SBOM and its container image (`.image.tar`, an OCI image layout),
 # and the `hostkeeper-mdm` binary (the MDM kit's, Linux-only) as a tarball with its SBOM;
 # for linux-x86_64 the package of `mdm`, the MDM server stack as a service package
@@ -25,7 +25,6 @@
 #   hello-<version>-<platform>.tar.zst              hello-<version>-<platform>.tar.zst.sha256
 #   hello-<version>-fail-ready-<platform>.tar.zst   hello-<version>-fail-ready-<platform>.tar.zst.sha256
 #   hostkeeper_<version>_<deb-arch>.deb             hostkeeper-<version>-1.<rpm-arch>.rpm
-#   hostkeeper-<version>-1-<rpm-arch>.pkg.tar.zst
 #   hostkeeper-coordinator-<version>-<linux-platform>.tar.gz
 #   hostkeeper-coordinator-<version>-<linux-platform>.cdx.json
 #   hostkeeper-coordinator-<version>-<linux-platform>.image.tar
@@ -93,12 +92,12 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
-  # cargo-cyclonedx makes the SBOMs, nfpm the deb, the rpm and the Arch package: release
+  # cargo-cyclonedx makes the SBOMs, nfpm the deb and the rpm: release
   # binaries, checked against their published SHA-256 by `cargo xtask install-tool` before use
   # (the digest of each platform's archive is in the build job's matrix).
   CYCLONEDX_VERSION: 0.5.9
   NFPM_VERSION: 2.48.0
-  # The gh the deb, the rpm and the Arch package install as /usr/lib/hostkeeper/gh, the one a
+  # The gh the deb and the rpm install as /usr/lib/hostkeeper/gh, the one a
   # host checks every package's attestation with (Ubuntu 24.04's own gh has no `gh attestation`). The SHA-256 of
   # each architecture's release archive is in the build job's matrix (`gh-sha256`), the one
   # cli/cli publishes in gh_<version>_checksums.txt; to bump it, change the version here and
@@ -281,8 +280,7 @@ jobs:
           SHA256: ${{ matrix.gh-sha256 }}
         run: cargo xtask release nfpm-stage --arch "$ARCH" --gh-version "$GH_VERSION" --gh-archive "$RUNNER_TEMP/gh.tar.gz" --gh-sha256 "$SHA256" --trusted-root "$RUNNER_TEMP/trusted_root.json" --binaries "target/$MUSL_TARGET/release" --out target/nfpm
       # nfpm reads VERSION and ARCH into packaging/linux/nfpm.yaml and names the files
-      # hostkeeper_<version>_<deb-arch>.deb, hostkeeper-<version>-1.<rpm-arch>.rpm and
-      # hostkeeper-<version>-1-<rpm-arch>.pkg.tar.zst.
+      # hostkeeper_<version>_<deb-arch>.deb and hostkeeper-<version>-1.<rpm-arch>.rpm.
       - name: The deb
         env:
           VERSION: ${{ needs.version.outputs.version }}
@@ -293,11 +291,6 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
           ARCH: ${{ matrix.deb-arch }}
         run: nfpm package --config packaging/linux/nfpm.yaml --packager rpm --target dist
-      - name: The Arch package
-        env:
-          VERSION: ${{ needs.version.outputs.version }}
-          ARCH: ${{ matrix.deb-arch }}
-        run: nfpm package --config packaging/linux/nfpm.yaml --packager archlinux --target dist
       # Each package read back: it installs the staged gh and trusted root at the daemon's paths,
       # 0755 and 0644, root's, with the staged bytes, hostkeeper and hostkeeper-pxe in
       # /usr/bin, 0755, root's, with the staged bytes, and the console's issue link
@@ -311,10 +304,6 @@ jobs:
         env:
           RPM_ARCH: ${{ matrix.rpm-arch }}
         run: cargo xtask release check-linux-pkg "dist/hostkeeper-$RELEASE_VERSION-1.$RPM_ARCH.rpm" --staged target/nfpm
-      - name: The Arch package installs the staged files
-        env:
-          RPM_ARCH: ${{ matrix.rpm-arch }}
-        run: cargo xtask release check-linux-pkg "dist/hostkeeper-$RELEASE_VERSION-1-$RPM_ARCH.pkg.tar.zst" --staged target/nfpm
       - name: The binary tarball holds no dynamically linked program
         run: cargo xtask release check-linux-pkg "dist/hostkeeper-$RELEASE_VERSION-$PLATFORM.tar.gz"
       # The package carries its own unit (packaging/linux/units/hostkeeper.service), not the
@@ -779,14 +768,6 @@ jobs:
         env:
           BUNDLE: ${{ steps.rpm-linux-x86_64.outputs.bundle-path }}
         run: cp "$BUNDLE" "dist/hostkeeper-${V}-1.x86_64.rpm.sigstore.json"
-      - id: arch-linux-x86_64
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-path: dist/hostkeeper-${{ needs.version.outputs.version }}-1-x86_64.pkg.tar.zst
-      - name: Name the bundle of the Arch package for linux-x86_64
-        env:
-          BUNDLE: ${{ steps.arch-linux-x86_64.outputs.bundle-path }}
-        run: cp "$BUNDLE" "dist/hostkeeper-${V}-1-x86_64.pkg.tar.zst.sigstore.json"
       - id: image-linux-x86_64
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
@@ -859,14 +840,6 @@ jobs:
         env:
           BUNDLE: ${{ steps.rpm-linux-arm64.outputs.bundle-path }}
         run: cp "$BUNDLE" "dist/hostkeeper-${V}-1.aarch64.rpm.sigstore.json"
-      - id: arch-linux-arm64
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-path: dist/hostkeeper-${{ needs.version.outputs.version }}-1-aarch64.pkg.tar.zst
-      - name: Name the bundle of the Arch package for linux-arm64
-        env:
-          BUNDLE: ${{ steps.arch-linux-arm64.outputs.bundle-path }}
-        run: cp "$BUNDLE" "dist/hostkeeper-${V}-1-aarch64.pkg.tar.zst.sigstore.json"
       - id: image-linux-arm64
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:

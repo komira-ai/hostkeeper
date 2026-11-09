@@ -1,4 +1,4 @@
-//! `release check-linux-pkg`: a built deb, rpm, Arch package or tarball, read back, holds no ELF
+//! `release check-linux-pkg`: a built deb, rpm or tarball, read back, holds no ELF
 //! program that is not static and declares no dependency; with `--staged` it also carries the
 //! files of [`nfpm_stage`](super::nfpm_stage) at the daemon's paths: `/usr/lib/hostkeeper/gh`,
 //! `/usr/bin/hostkeeper` and `/usr/bin/hostkeeper-pxe`, regular files of mode 0755, and
@@ -18,9 +18,7 @@
 //!   the owner and the group rpm installs a file with are the header's, the bytes are the
 //!   payload's, a link's target is the header's `FILELINKTOS`, and the dependencies are the
 //!   `REQUIRENAME` entries other than `rpmlib(...)` ([`rpm`]);
-//! - an Arch package is a zstd tar with a top-level `.PKGINFO`, whose `depend` lines are its
-//!   dependencies; a tarball is a gzip, xz or zstd tar with none, and declares nothing
-//!   ([`archive`]).
+//! - a tarball is a gzip, xz or zstd tar, and declares nothing ([`archive`]).
 //!
 //! nfpm 2.48.0 compresses a deb's and an rpm's parts with gzip, its default, which `nfpm.yaml`
 //! does not change; any other compression of them is refused by name rather than read.
@@ -50,7 +48,7 @@ pub(crate) const INSTALLED_ISSUE_LINK: &str = "/etc/issue.d/hostkeeper.issue";
 /// What that link points at: `hostkeeper_daemon::console::ENROLLMENT_ISSUE`.
 pub(crate) const ISSUE_TARGET: &str = "/run/hostkeeper/enrollment.issue";
 
-/// Where the deb, the rpm and the Arch package install the daemon.
+/// Where the deb and the rpm install the daemon.
 pub(crate) const INSTALLED_HOSTKEEPER: &str = "/usr/bin/hostkeeper";
 
 /// Where they install the boot server of network install.
@@ -83,7 +81,6 @@ struct Contents {
 enum Kind {
     Deb,
     Rpm,
-    Arch,
     Tarball,
 }
 
@@ -217,7 +214,7 @@ fn read(package: &Path, bytes: &[u8]) -> Result<Contents, Error> {
         tarred(bytes)
     } else {
         Err(bad(format!(
-            "{} is neither a deb, an rpm, an Arch package nor a tarball",
+            "{} is neither a deb, an rpm nor a tarball",
             package.display()
         )))
     }

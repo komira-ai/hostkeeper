@@ -472,7 +472,7 @@ fn a_file_that_is_neither_a_deb_nor_an_rpm_is_refused() {
     assert_eq!(
         case.unreadable(),
         format!(
-            "not a package this check reads: {} is neither a deb, an rpm, an Arch package nor a tarball",
+            "not a package this check reads: {} is neither a deb, an rpm nor a tarball",
             case.package().display()
         )
     );

@@ -1,5 +1,5 @@
 //! The rule that the attest job of `artifacts.yml` attests, and copies the bundle of, every Linux
-//! package (the deb, the rpm and the Arch package of each Linux platform): the file passes as it
+//! package (the deb and the rpm of each Linux platform): the file passes as it
 //! is, and each package's missing attestation or missing bundle copy is refused with its message.
 
 use super::lint::lint;
@@ -24,7 +24,7 @@ struct LinuxPackage {
     copied: String,
 }
 
-/// The deb, the rpm and the Arch package of both Linux platforms.
+/// The deb and the rpm of both Linux platforms.
 fn linux_packages() -> Vec<LinuxPackage> {
     let version = "${{ needs.version.outputs.version }}";
     let mut all = Vec::new();
@@ -45,12 +45,6 @@ fn linux_packages() -> Vec<LinuxPackage> {
                 format!("hostkeeper-<version>-1.{rpm}.rpm"),
                 format!("hostkeeper-${{V}}-1.{rpm}.rpm"),
             ),
-            (
-                "arch",
-                format!("hostkeeper-{version}-1-{rpm}.pkg.tar.zst"),
-                format!("hostkeeper-<version>-1-{rpm}.pkg.tar.zst"),
-                format!("hostkeeper-${{V}}-1-{rpm}.pkg.tar.zst"),
-            ),
         ];
         for (kind, spelled, name, copied) in kinds {
             all.push(LinuxPackage {
@@ -70,7 +64,7 @@ fn artifacts_yml_attests_every_linux_package_and_copies_its_bundle() {
     let text = artifacts_yml();
     assert_eq!(lint("artifacts.yml", &text), Vec::<String>::new());
     let packages = linux_packages();
-    assert_eq!(packages.len(), 6);
+    assert_eq!(packages.len(), 4);
     for p in packages {
         let subject = format!("          subject-path: dist/{}\n", p.spelled);
         assert_eq!(text.matches(&subject).count(), 1, "{}", p.id);
@@ -84,7 +78,7 @@ fn artifacts_yml_attests_every_linux_package_and_copies_its_bundle() {
 
 #[test]
 fn a_linux_package_without_its_attestation_is_refused() {
-    // Catches: a release whose deb, rpm or Arch package is published without a provenance
+    // Catches: a release whose deb or rpm is published without a provenance
     // attestation (a host trusts only attested packages).
     let text = artifacts_yml();
     for p in linux_packages() {
@@ -101,7 +95,7 @@ fn a_linux_package_without_its_attestation_is_refused() {
 
 #[test]
 fn a_linux_package_without_its_bundle_copy_is_refused() {
-    // Catches: a release whose deb, rpm or Arch package is attested but whose bundle is not put
+    // Catches: a release whose deb or rpm is attested but whose bundle is not put
     // beside it under its name, so the release lacks the `.sigstore.json` asset.
     let text = artifacts_yml();
     for p in linux_packages() {

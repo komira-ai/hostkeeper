@@ -582,9 +582,8 @@ pub(crate) fn is_bundle(name: &str) -> bool {
 /// and on Linux, with the deb and rpm architecture `<deb>` and `<rpm>`:
 ///
 /// - `hostkeeper-coordinator-<v>-<p>.tar.gz`, the coordinator's binary;
-/// - `hostkeeper_<v>_<deb>.deb`, `hostkeeper-<v>-1.<rpm>.rpm` and `hostkeeper-<v>-1-<rpm>.pkg.tar.zst`,
-///   the Linux packages (the last is the Arch Linux package; it is attested, and is no service
-///   package: it has no `.sha256` and no release index);
+/// - `hostkeeper_<v>_<deb>.deb` and `hostkeeper-<v>-1.<rpm>.rpm`, the Linux packages (attested,
+///   and no service package: no `.sha256` and no release index);
 /// - `hostkeeper-coordinator-<v>-<p>.image.tar`, the coordinator's OCI image;
 /// - `hostkeeper-coordinator-<v>-<p>.cdx.json`, its SBOM;
 /// - `hostkeeper-mdm-<v>-<p>.tar.gz`, the MDM kit's binary, and `hostkeeper-mdm-<v>-<p>.cdx.json`,
@@ -624,7 +623,6 @@ pub(crate) fn asset_names(version: &Version, platforms: &[Platform]) -> Vec<Stri
                 format!("{COORDINATOR}-{version}-{p}.tar.gz"),
                 format!("{PROGRAM}_{version}_{deb}.deb"),
                 format!("{PROGRAM}-{version}-1.{rpm}.rpm"),
-                format!("{PROGRAM}-{version}-1-{rpm}.pkg{PACKAGE_SUFFIX}"),
                 format!("{COORDINATOR}-{version}-{p}.image.tar"),
                 format!("{MDM}-{version}-{p}.tar.gz"),
             ]);

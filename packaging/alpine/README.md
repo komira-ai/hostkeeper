@@ -29,9 +29,9 @@ neither the systemd unit nor `hostkeeper-pxe`, the boot server of network instal
 a systemd host.
 
 The release pipeline does not publish the apk yet. It is built from the same static musl daemon
-the release stages for the deb, the rpm and the Arch package (A15 of `docs/design/packages.md`,
+the release stages for the deb and the rpm (A15 of `docs/design/packages.md`,
 `target/nfpm/hostkeeper`); publishing it (its asset name, attestation and verify document) is a
-change of its own. It is hostkeeper's own package, as the deb, the rpm and the Arch package are;
+change of its own. It is hostkeeper's own package, as the deb and the rpm are;
 there is no `apk` installer of service packages (`docs/design/packages-repositories.md`), so an
 Alpine host's services take the tarball. Until then the apk is built by hand, as the header of
 `nfpm.yaml` says.

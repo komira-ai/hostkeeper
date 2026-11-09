@@ -47,7 +47,7 @@ hostkeeper-mdm-core = { path = "../hostkeeper-mdm-core" }
 # Rust.
 lzma-rs.workspace = true
 # The zstd compression of the hostkeeper package (`release package`), and the zstd decoder of
-# `release check-linux-pkg` (an Arch package, a tarball).
+# `release check-linux-pkg` (a tarball).
 ruzstd.workspace = true
 # Reads back the launchd plist of the installer pkg (`release check-macos-pkg`); writes the
 # commands and the root's profile of `mdm-signing-test`.

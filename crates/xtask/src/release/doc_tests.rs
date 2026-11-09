@@ -444,7 +444,7 @@ fn a_document_without_the_list_or_the_platforms_has_no_names() {
 #[test]
 fn the_platform_sentence_lists_the_released_platforms() {
     // Catches: a document that names a platform the release does not ship, or misses one, pairs
-    // a platform with another's deb or rpm architecture, misses the Arch package, or lists the coordinator or the MDM kit
+    // a platform with another's deb or rpm architecture, still lists the withdrawn Arch package, or lists the coordinator or the MDM kit
     // for macOS.
     fn values(list: &[&str]) -> Vec<String> {
         list.iter().map(|v| (*v).to_owned()).collect()
@@ -468,8 +468,6 @@ fn the_platform_sentence_lists_the_released_platforms() {
     for name in [
         "hostkeeper_0.1.5_amd64.deb",
         "hostkeeper-0.1.5-1.aarch64.rpm",
-        "hostkeeper-0.1.5-1-aarch64.pkg.tar.zst",
-        "hostkeeper-0.1.5-1-x86_64.pkg.tar.zst.sigstore.json",
         "hostkeeper-coordinator-0.1.5-linux-arm64.image.tar",
         "hostkeeper-mdm-0.1.5-linux-x86_64.tar.gz",
         "hostkeeper-mdm-0.1.5-linux-arm64.cdx.json",
@@ -477,6 +475,10 @@ fn the_platform_sentence_lists_the_released_platforms() {
     ] {
         assert!(names.iter().any(|n| n == name), "{name} in {names:?}");
     }
+    assert!(
+        !names.iter().any(|n| n.ends_with(".pkg.tar.zst")),
+        "{names:?}"
+    );
     assert!(
         !names
             .iter()

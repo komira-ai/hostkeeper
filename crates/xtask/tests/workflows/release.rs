@@ -125,7 +125,7 @@ pub const PACKAGES: [(&str, &str, &[&str]); 4] = [
 ];
 
 /// The architectures of the two Linux platforms as the packages name them: the deb's, then the
-/// rpm's (which the Arch package uses too).
+/// rpm's.
 pub const LINUX_ARCHES: [(&str, &str); 2] = [("amd64", "x86_64"), ("arm64", "aarch64")];
 
 /// The `if:` of each step of the build job that makes the mdm package: the linux-x86_64 leg of
@@ -625,8 +625,8 @@ fn mdm_problems(doc: &Node) -> Vec<String> {
     problems
 }
 
-/// One line per package of [`PACKAGES`], on each of [`PLATFORMS`], per Linux package (the deb,
-/// the rpm and the Arch package) of each of [`LINUX_ARCHES`], per binary tarball of
+/// One line per package of [`PACKAGES`], on each of [`PLATFORMS`], per Linux package (the deb
+/// and the rpm) of each of [`LINUX_ARCHES`], per binary tarball of
 /// [`TARBALLS`], per file of [`ATTESTED_FILES`] and per file of [`VERSIONED_FILES`], that the
 /// attest job does not attest (a
 /// provenance step whose `subject-path` is the file) or whose bundle it does not copy to
@@ -656,11 +656,6 @@ fn package_problems(attest: Option<&Node>) -> Vec<String> {
                 format!("hostkeeper-{version}-1.{rpm}.rpm"),
                 format!("hostkeeper-<version>-1.{rpm}.rpm"),
                 format!("hostkeeper-${{V}}-1.{rpm}.rpm"),
-            ),
-            (
-                format!("hostkeeper-{version}-1-{rpm}.pkg.tar.zst"),
-                format!("hostkeeper-<version>-1-{rpm}.pkg.tar.zst"),
-                format!("hostkeeper-${{V}}-1-{rpm}.pkg.tar.zst"),
             ),
         ];
         for (subject, file, copied) in linux_packages {

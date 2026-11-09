@@ -1,6 +1,5 @@
 //! `cargo xtask release check-linux-pkg` and `release nfpm-stage --binaries`, run as the built
-//! program on packages and programs crafted byte by byte: a deb, an rpm, an Arch package and a
-//! tarball, holding a static-pie program (accepted), a program linked to `libssl.so.3` or built
+//! program on packages and programs crafted byte by byte: a deb, an rpm and a tarball, holding a static-pie program (accepted), a program linked to `libssl.so.3` or built
 //! for glibc (refused), or declaring a dependency (refused). The exit status is 0 for an
 //! accepted package, 1 for a refused one and 2 for a usage error. No toolchain, no network.
 
@@ -136,10 +135,6 @@ fn gzip(bytes: &[u8]) -> Vec<u8> {
     e.finish().expect("gzip")
 }
 
-fn zstd(bytes: &[u8]) -> Vec<u8> {
-    ruzstd::encoding::compress_to_vec(bytes, ruzstd::encoding::CompressionLevel::Fastest)
-}
-
 /// A tar of `entries` owned by uid and gid 0 with the names `owner` and `group`, and `link`
 /// as the console's issue link.
 fn tar(entries: &[Entry], owner: &str, link: bool) -> Vec<u8> {
@@ -198,17 +193,6 @@ fn deb(entries: &[Entry], control: &str, link: bool) -> Vec<u8> {
         }
     }
     out
-}
-
-/// An Arch package of `entries`: a zstd tar with a `.PKGINFO` and owners without names.
-fn arch(entries: &[Entry], pkginfo: &str, link: bool) -> Vec<u8> {
-    let mut all = vec![entry(".PKGINFO", 0o644, pkginfo.as_bytes().to_vec())];
-    all.extend(entries.iter().map(|e| Entry {
-        path: e.path,
-        mode: e.mode,
-        data: e.data.clone(),
-    }));
-    zstd(&tar(&all, "", link))
 }
 
 /// A gzip tarball of `entries`.
@@ -347,7 +331,7 @@ fn write(dir: &TestDir, name: &str, bytes: &[u8]) -> PathBuf {
     path
 }
 
-/// The four formats of a package holding `entries`, declaring nothing, as `(name, bytes)`.
+/// The three formats of a package holding `entries`, declaring nothing, as `(name, bytes)`.
 fn formats(entries: &[Entry]) -> Vec<(&'static str, Vec<u8>)> {
     vec![
         (
@@ -355,16 +339,12 @@ fn formats(entries: &[Entry]) -> Vec<(&'static str, Vec<u8>)> {
             deb(entries, "Package: hostkeeper\n", false),
         ),
         ("hostkeeper.rpm", rpm(entries, &[], false)),
-        (
-            "hostkeeper.pkg.tar.zst",
-            arch(entries, "pkgname = hostkeeper\n", false),
-        ),
         ("hostkeeper.tar.gz", tarball(entries)),
     ]
 }
 
 #[test]
-fn a_static_build_is_accepted_in_a_deb_an_rpm_an_arch_package_and_a_tarball() {
+fn a_static_build_is_accepted_in_a_deb_an_rpm_and_a_tarball() {
     let d = dir("accept");
     for (name, bytes) in formats(&programs(static_pie(), static_pie())) {
         let package = write(&d, name, &bytes);
@@ -451,11 +431,6 @@ fn a_package_that_declares_a_dependency_is_refused() {
                 false,
             ),
             "declares the dependency glibc >= 2.34",
-        ),
-        (
-            "hostkeeper.pkg.tar.zst",
-            arch(&entries, "pkgname = hostkeeper\ndepend = glibc\n", false),
-            "declares the dependency glibc",
         ),
     ];
     for (name, bytes, line) in cases {
@@ -604,10 +579,6 @@ fn nfpm_stage_takes_the_static_programs_of_binaries_and_a_checked_package_carrie
             deb(&entries, "Package: hostkeeper\n", true),
         ),
         ("hostkeeper.rpm", rpm(&entries, &[], true)),
-        (
-            "hostkeeper.pkg.tar.zst",
-            arch(&entries, "pkgname = hostkeeper\n", true),
-        ),
     ];
     for (name, bytes) in packages {
         let package = write(&stage.dir, name, &bytes);

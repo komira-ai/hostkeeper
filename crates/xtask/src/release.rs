@@ -18,8 +18,8 @@
 //! - `nfpm-stage` ([`package::nfpm_stage`]): the pinned `gh` of one architecture, out of its
 //!   release archive checked against its pinned SHA-256, the Sigstore trusted root, and the
 //!   static `hostkeeper` and `hostkeeper-pxe` of `--binaries`, each checked and staged for the
-//!   deb, the rpm and the Arch package.
-//! - `check-linux-pkg` ([`package::linux_check`]): a built deb, rpm, Arch package or tarball,
+//!   deb and the rpm.
+//! - `check-linux-pkg` ([`package::linux_check`]): a built deb, rpm or tarball,
 //!   read back, holds no ELF program with an interpreter or a needed library and declares no
 //!   dependency; with `--staged` it also installs the staged `gh`, trusted root and programs at
 //!   the daemon's paths, with their modes, root's, and the console's issue link pointing at the
@@ -232,8 +232,8 @@ pub(crate) enum Verb {
         #[arg(long)]
         dir: PathBuf,
     },
-    /// Stage the pinned `gh`, the Sigstore trusted root and the two static programs for the deb,
-    /// the rpm and the Arch package: `gh` out of its release archive, refused unless the archive
+    /// Stage the pinned `gh`, the Sigstore trusted root and the two static programs for the deb
+    /// and the rpm: `gh` out of its release archive, refused unless the archive
     /// has the pinned SHA-256 and `gh` is a program of the architecture; the trusted root
     /// refused unless each line is one; `hostkeeper` and `hostkeeper-pxe` of `--binaries`,
     /// refused unless each is a 64-bit little-endian ELF of the architecture with no
@@ -263,14 +263,14 @@ pub(crate) enum Verb {
         #[arg(long)]
         out: PathBuf,
     },
-    /// Read a built deb, rpm, Arch package or tarball and refuse it if it holds an ELF program
+    /// Read a built deb, rpm or tarball and refuse it if it holds an ELF program
     /// with an interpreter or a needed library, or (not a tarball) declares a dependency. With
     /// `--staged` (not for a tarball) also refuse it unless it installs `/usr/lib/hostkeeper/gh`,
     /// `/usr/bin/hostkeeper` and `/usr/bin/hostkeeper-pxe` (regular files, 0755) and
     /// `/usr/lib/hostkeeper/trusted_root.json` (0644), all root:root, with the bytes of the files
     /// `nfpm-stage` wrote, and the console's issue link.
     CheckLinuxPkg {
-        /// The `.deb`, `.rpm`, Arch package (`.pkg.tar.zst`) or tarball.
+        /// The `.deb`, `.rpm` or tarball.
         package: PathBuf,
         /// The directory `nfpm-stage` wrote (its `--out`).
         #[arg(long)]

@@ -1,9 +1,8 @@
 //! The readers of the packages that are tars: a deb (an `ar` of `control.tar.gz` and
-//! `data.tar.gz`), an Arch package (a zstd tar with a top-level `.PKGINFO`) and a tarball (a
-//! gzip, xz or zstd tar with none).
+//! `data.tar.gz`) and a tarball (a gzip, xz or zstd tar).
 //!
-//! An entry's owner is its tar header's: the name when the uid is 0 (an empty name, which nfpm's
-//! Arch package writes, is root's), and `id N` for any other id.
+//! An entry's owner is its tar header's: the name when the uid is 0 (an empty name is root's),
+//! and `id N` for any other id.
 
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -11,9 +10,6 @@ use std::io::Read;
 use super::{
     Contents, Error, Installed, Kind, REGULAR, SYMLINK, bad, gunzip, installed_path, take,
 };
-
-/// The path of the Arch package's metadata in a tar, as [`installed_path`] spells it.
-const PKGINFO: &str = "/.PKGINFO";
 
 /// The gzip, xz and zstd magic numbers.
 const GZIP: &[u8] = &[0x1f, 0x8b];
@@ -156,29 +152,12 @@ fn control_depends(control: &str) -> Vec<String> {
         .collect()
 }
 
-/// The files of a tar-based package: an Arch package when it holds `.PKGINFO`, whose `depend`
-/// lines are its dependencies, else a tarball, which declares none.
+/// The files of a tarball, which declares no dependency.
 pub(super) fn tarred(bytes: &[u8]) -> Result<Contents, Error> {
     let files = tar_files(&decompress(bytes)?, "the archive")?;
-    Ok(match files.get(PKGINFO) {
-        Some(info) => Contents {
-            kind: Kind::Arch,
-            depends: pkginfo_depends(&String::from_utf8_lossy(&info.data)),
-            files,
-        },
-        None => Contents {
-            kind: Kind::Tarball,
-            depends: Vec::new(),
-            files,
-        },
+    Ok(Contents {
+        kind: Kind::Tarball,
+        depends: Vec::new(),
+        files,
     })
-}
-
-/// The `depend = <x>` lines of a `.PKGINFO`.
-fn pkginfo_depends(info: &str) -> Vec<String> {
-    info.lines()
-        .filter_map(|line| line.split_once('='))
-        .filter(|(key, _)| key.trim() == "depend")
-        .map(|(_, value)| value.trim().to_owned())
-        .collect()
 }
