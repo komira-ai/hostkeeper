@@ -11,9 +11,11 @@ kept index and package, `retire`, `remove` by purge, drift and the failure reaso
 fixed path, the refusal of scripts and the path rule of packages-native.md section 10.2); the tool runs that fetch,
 confined (`StepLauncher::run_tool`); the daemon's check of the configuration at start and its answers
 `order_invalid` and `coordinator_too_old` to an entry of the wrong kind; and `ServiceBeat.drift`, sent over gRPC and
-shown by `Hosts.List` and `Hosts.Get`. The daemon's order path does not run `apt` yet, so no daemon announces it: that
-needs the version directory's `target.json`, `VersionDir::read` and built-in steps of A6's row. Nothing else here is
-built. This amends [packages.md](packages.md),
+shown by `Hosts.List` and `Hosts.Get`. The daemon runs it (`crates/hostkeeper-daemon/src/repository.rs`): a host
+announces `apt` as section 4.1 says, an order of an `apt` entry is staged into a sealed version directory with its
+`target.json` (section 4.2; `target.rs`), activated before `cutover`, rolled back from the kept previous version,
+purged at uninstall and read for drift at each heartbeat, each failure the order's verdict with the class and reason
+of section 4.5; a package without a hook runs the built-in steps (`builtin.rs`). Nothing else here is built. This amends [packages.md](packages.md),
 [packages-lifecycle.md](packages-lifecycle.md) and [packages-tests.md](packages-tests.md), as the maintainers ruled:
 hostkeeper installs a Linux service's package from a package repository with the host's package manager
 (`apt-get install tierstore=<V>` from the suite the host is configured with). It does not fetch a `.deb` and install

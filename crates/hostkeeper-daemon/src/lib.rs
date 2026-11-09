@@ -50,6 +50,11 @@
 //! - [`installers`]: the installer each installed service is recorded with, whose steps
 //!   (`hostkeeper_install`) the switch, the prune and the uninstall run, the placer doing what
 //!   they ask of the host.
+//! - [`repository`]: the repository installer (`apt`) with the daemon's ports: the stage of an
+//!   order's repository entry, `activate` in the switch, the rollback, the purge at uninstall and
+//!   the drift of each heartbeat; [`target`] the sealed `target.json` of such a version and the
+//!   one reader of a version directory's manifest; [`builtin`] the built-in steps of a version
+//!   with no hook program.
 //! - [`observer`]: what [`Daemon::status`] reports of a running service.
 //! - [`trusted_root`]: the Sigstore trusted root package checks use, and the age and reason
 //!   [`Daemon::status`] reports of it.
