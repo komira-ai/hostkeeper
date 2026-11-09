@@ -85,7 +85,8 @@ pub type Layer = (
 /// packet with its packet crate; `hostkeeper-pxe` loads the repository directory `--repositories`
 /// names with the daemon's own loader (`hostkeeper-install`) before any seed is made; the `mdm` package's certificate-unit test loads that package's
 /// units and drop-ins (`hostkeeper-mdm-core`) into the host's systemd. The binary's tests run
-/// the macOS pkg's postinstall (`hostkeeper-launchd`) against the binary. The daemon reads the
+/// the macOS pkg's postinstall (`hostkeeper-launchd`) against the binary. The daemon's tests render
+/// the MDM gate's config profile (`hostkeeper-mdm-gate`) to the files the macos-pkg installer reads. The daemon reads the
 /// macos-pkg installer's signers file at its start (`hostkeeper-install`), and the privileged
 /// tests run that installer's steps against the Mac's real tools. The MDM gate checks the files
 /// of the config profile's `dev.hostkeeper.stores` and `dev.hostkeeper.macos-pkg` domains with
@@ -108,7 +109,7 @@ pub const LAYERS: [Layer; 33] = [
             CONFIG, ENROLL, HOOK, INSTALL, LAUNCHD, LINK, OBSERVE, OPENRC, PACKAGE, PLACED, PROTO,
             RELEASE, STEPS, UNPACK,
         ],
-        &[COORDINATOR, HELLO, OIDC, TLS, WIRE],
+        &[COORDINATOR, HELLO, MDM_GATE, OIDC, TLS, WIRE],
     ),
     (ENROLL, &[CONFIG, PROTO, STEPS], &[COORDINATOR, ENROLLMENT]),
     (ENROLLMENT, &[], &[]),
