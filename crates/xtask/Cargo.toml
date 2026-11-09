@@ -110,6 +110,14 @@ name = "xtask-aws-fixture"
 path = "tests/bin/aws_fixture.rs"
 required-features = ["test-support"]
 
+# The `env` the install-check tests (tests/channels_check_apt_cli.rs) put on the `PATH` of
+# `channels check-apt`: it answers for the programs of the checked system from files beside it,
+# and records its calls. A program of the tests, not shipped.
+[[bin]]
+name = "xtask-apt-fixture"
+path = "tests/bin/apt_fixture.rs"
+required-features = ["test-support"]
+
 [features]
 # Builds the launch test's fixture program and `xtask::test_support`. Off for everything else.
 test-support = []

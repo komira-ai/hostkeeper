@@ -108,10 +108,13 @@ fn the_packages_go_first_then_the_by_hash_copies_then_the_index_with_in_release_
     let read_next =
         |rel: &str| std::fs::read(repo.dir.join("next/dists/stable").join(rel)).expect("file");
     let expected = [
+        "apt/pool/hostkeeper/hello_1.2.3_amd64.deb".to_owned(),
+        "apt/pool/hostkeeper/hello_1.2.3_arm64.deb".to_owned(),
         "apt/pool/hostkeeper/hostkeeper-coordinator_1.2.3_amd64.deb".to_owned(),
         "apt/pool/hostkeeper/hostkeeper-coordinator_1.2.3_arm64.deb".to_owned(),
         "apt/pool/hostkeeper/hostkeeper_1.2.3_amd64.deb".to_owned(),
         "apt/pool/hostkeeper/hostkeeper_1.2.3_arm64.deb".to_owned(),
+        "apt/pool/hostkeeper/mdm_1.2.3_amd64.deb".to_owned(),
         by_hash("main/binary-amd64/Packages", &packages),
         by_hash(
             "main/binary-amd64/Packages.gz",
@@ -137,7 +140,8 @@ fn the_packages_go_first_then_the_by_hash_copies_then_the_index_with_in_release_
     // Packages and by-hash copies are never overwritten; an index object that was read is replaced
     // only if it is still the version that was read, one that did not exist only if still absent.
     let puts = repo.aws.calls_of("put-object");
-    for call in &puts[..8] {
+    // Seven packages and four by-hash copies.
+    for call in &puts[..11] {
         assert_eq!(cond(call), ("--if-none-match".to_owned(), "*".to_owned()));
     }
     let etags = std::fs::read_to_string(repo.dir.join("next/etags.txt")).expect("etags");
@@ -149,18 +153,18 @@ fn the_packages_go_first_then_the_by_hash_copies_then_the_index_with_in_release_
             .to_owned()
     };
     assert_eq!(
-        cond(&puts[8]),
+        cond(&puts[11]),
         (
             "--if-match".to_owned(),
             read_etag("main/binary-amd64/Packages")
         )
     );
     assert_eq!(
-        cond(&puts[9]),
+        cond(&puts[12]),
         ("--if-none-match".to_owned(), "*".to_owned())
     );
     assert_eq!(
-        cond(&puts[14]),
+        cond(&puts[17]),
         ("--if-match".to_owned(), read_etag("InRelease"))
     );
     assert_eq!(read_etag("Release.gpg"), "-");
@@ -314,7 +318,7 @@ fn a_package_that_exists_but_cannot_be_read_or_a_put_that_fails_stops_the_write(
     let e = write(&repo.aws, &repo.request(false), None)
         .unwrap_err()
         .to_string();
-    assert!(e.starts_with("put-object apt/pool/hostkeeper/hostkeeper-coordinator_1.2.3_amd64.deb failed: An error occurred (AccessDenied)"), "{e}");
+    assert!(e.starts_with("put-object apt/pool/hostkeeper/hello_1.2.3_amd64.deb failed: An error occurred (AccessDenied)"), "{e}");
 }
 
 #[test]
@@ -422,10 +426,7 @@ fn an_index_that_does_not_match_the_packages_or_is_incomplete_is_refused_before_
         version: "1.2.4",
     });
     let e = write(&repo.aws, &r, None).unwrap_err().to_string();
-    assert!(
-        e.contains("does not list hostkeeper-coordinator_1.2.4_amd64.deb"),
-        "{e}"
-    );
+    assert!(e.contains("does not list hello_1.2.4_amd64.deb"), "{e}");
 }
 
 #[test]
