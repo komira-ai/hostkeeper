@@ -492,7 +492,7 @@ impl Coordinator {
         let host = self
             .host(node_id)
             .unwrap_or_else(|e| panic!("{e}"))
-            .unwrap_or_else(|| panic!("hosts list lists the enrolled {node_id}"));
+            .unwrap_or_else(|| panic!("hosts list lists no {node_id}, an enrolled host"));
         assert!(
             !heard_since_start(&host),
             "not heard since the start: {host}"
