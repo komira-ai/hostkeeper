@@ -16,8 +16,9 @@
 //!   repository without the settings gets a green job that did nothing;
 //! - every job runs the xtask of the newest release's commit, the files of that release's own
 //!   artifact, and a `--session-name` that starts with the product's prefix;
-//! - the last attempt of a write passes `--last`, the writes of `stable` pass `--no-pool`, and a job
-//!   names only the suite its row says;
+//! - the last attempt of a write passes `--last` (the third of `testing` and `stable`; the only one
+//!   of `testing-fail`, hello's failing build, which no stage of `promote-check` waits for), the
+//!   writes of `stable` pass `--no-pool`, and a job names only the suite its row says;
 //! - `docker` is run only by the two install checks, with an image pinned by digest, in the
 //!   one command each is allowed ([`docker_line_ok`]);
 //! - `promote-check` gives `channels decide` every stage of [`STAGES`], each the result of its own
@@ -101,6 +102,12 @@ pub const STAGES: [&str; 10] = [
     "check-pkg",
 ];
 
+/// The prefix of the jobs of the suite `testing-fail` (hello's failing build alone).
+pub const FAIL_JOB_PREFIX: &str = "testing-fail-";
+
+/// The prefix of the artifacts those jobs hand each other, and no other job.
+pub const FAIL_ARTIFACT_PREFIX: &str = "apt-fail-";
+
 /// The environment that holds the cloud role and no key.
 pub const PUBLISH_ENV: &str = "apt-publish";
 
@@ -127,8 +134,9 @@ pub struct Row {
     pub verbs: Vec<String>,
     /// Whether it starts with its gate.
     pub gated: bool,
-    /// For a write: the attempt (1 to 3) and whether it writes the pool.
-    pub write: Option<(usize, bool)>,
+    /// For a write: its attempt, the last attempt of its family (3, or 1 for `testing-fail`),
+    /// and whether it writes the pool.
+    pub write: Option<(usize, usize, bool)>,
     /// The `--suite` values it passes, sorted and without duplicates.
     pub suites: Vec<&'static str>,
 }
@@ -152,7 +160,7 @@ fn if_of(parts: &[String]) -> String {
 }
 
 /// The row of attempt `attempt` of `step` (`read`, `index`, `write`) of `kind` (`apt`, `rpm`) for
-/// `suite` (`testing`, `stable`).
+/// `suite` (`testing`, `stable`, or `testing-fail`, which is apt alone and has the one attempt).
 fn attempt_row(suite: &'static str, kind: &str, step: &str, attempt: usize) -> Row {
     let stable = suite == "stable";
     let job = |s: &str, n: usize| format!("{suite}-{kind}-{s}{}", suffix(n));
@@ -258,7 +266,7 @@ fn attempt_row(suite: &'static str, kind: &str, step: &str, attempt: usize) -> R
     verbs.sort();
     let suites = match (step, stable) {
         ("read", true) => vec!["stable", "testing"],
-        ("read" | "index" | "write", false) => vec!["testing"],
+        ("read" | "index" | "write", false) => vec![suite],
         ("write", true) => vec!["stable"],
         // The promotion of the index takes no suite: it reads the two directories it is given.
         _ => vec![],
@@ -275,7 +283,11 @@ fn attempt_row(suite: &'static str, kind: &str, step: &str, attempt: usize) -> R
         permissions,
         verbs,
         gated: true,
-        write: (step == "write").then_some((attempt, !stable)),
+        write: (step == "write").then_some((
+            attempt,
+            if suite == "testing-fail" { 1 } else { 3 },
+            !stable,
+        )),
         suites,
     }
 }
@@ -308,6 +320,10 @@ pub fn rows() -> Vec<Row> {
                 rows.push(attempt_row("testing", kind, step, attempt));
             }
         }
+    }
+    // Hello's failing build: the three jobs of one attempt, which no stage waits for.
+    for step in ["read", "index", "write"] {
+        rows.push(attempt_row("testing-fail", "apt", step, 1));
     }
     let mut upload = plain(
         "testing-pkg-upload",
@@ -571,14 +587,17 @@ fn row_problems(row: &Row, job: &Node) -> Vec<String> {
     if suites != row.suites {
         say(format!("passes --suite {suites:?}, not {:?}", row.suites));
     }
-    if let Some((attempt, pool)) = row.write {
+    if let Some((attempt, last, pool)) = row.write {
         let verb = if name.contains("-apt-") {
             "apt write"
         } else {
             "rpm repo write"
         };
-        if has_flag(&calls, verb, "--last") != (attempt == 3) {
-            say("passes --last exactly in the third attempt, which fails on a lost race instead of asking for a fourth".to_owned());
+        if has_flag(&calls, verb, "--last") != (attempt == last) {
+            say(format!(
+                "passes --last exactly in the {} attempt, which fails on a lost race instead of asking for another",
+                if last == 1 { "only" } else { "third" }
+            ));
         }
         if has_flag(&calls, verb, "--no-pool") == pool {
             say("passes --no-pool exactly when it writes the index of stable, whose packages are in the pool already".to_owned());
@@ -647,6 +666,17 @@ fn step_problems(row: &Row, job: &Node) -> Vec<String> {
                     "downloads the artifact {artifact:?}, which is neither the release's ({RELEASE_ARTIFACT}) nor one of the channel jobs"
                 ));
             }
+        }
+        let handed = uses.starts_with("actions/download-artifact@")
+            || uses.starts_with("actions/upload-artifact@");
+        let artifact = text_of(entry(step, "with"), "name").unwrap_or_default();
+        if handed
+            && artifact != RELEASE_ARTIFACT
+            && artifact.starts_with(FAIL_ARTIFACT_PREFIX) != name.starts_with(FAIL_JOB_PREFIX)
+        {
+            say(format!(
+                "hands on the artifact {artifact:?}: the jobs of {FAIL_JOB_PREFIX}* and only they name artifacts {FAIL_ARTIFACT_PREFIX}*, so the two apt trees of a run never share one"
+            ));
         }
     }
     if !row.gated {
@@ -744,13 +774,16 @@ pub fn release_files_problems(name: &str, list: &[Node]) -> Vec<String> {
     problems
 }
 
-/// The artifacts the jobs hand each other: the repository read, the index built, the signed rpms.
+/// The artifacts the jobs hand each other: the repository read, the index built (`apt-fail-` for
+/// the suite `testing-fail`), the signed rpms.
 fn is_job_artifact(name: Option<&str>) -> bool {
     name.is_some_and(|n| {
         let stem = n.trim_end_matches(|c: char| c.is_ascii_digit() || c == '-');
         [
             "apt-current",
             "apt-next",
+            "apt-fail-current",
+            "apt-fail-next",
             "apt-read",
             "apt-promoted",
             "rpm-current",

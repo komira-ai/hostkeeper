@@ -3,16 +3,22 @@
 # with the OIDC token GitHub issues to this workflow. It is the same path a service's release job
 # takes, run by hand, so that path is proven on hello before a real service depends on it.
 #
-# Run by hand only (`workflow_dispatch`), from main, with one input, `version`: a release of this
-# repository, X.Y.Z, whose assets carry the hello packages; it sets hello at that version. The
-# failing build (`<version>-fail-ready`, whose `/readyz` answers 503) is not offered: it has no
-# native package the repository holds (its version is not an X.Y.Z), and a release is set with
-# native entries alone, so its proof is suspended (docs/hello.md, step 4).
+# Run by hand only (`workflow_dispatch`), from main. Two inputs:
 #
-# `release` reads hello's .deb for each Linux architecture with its bundle, from the release, and
-# `cargo xtask release targets` writes the targets: per Linux platform, hello's native entry alone
-# (docs/design/packages-native.md section 10.5, A24), its manifest the one compiled into xtask, so
-# a host installs the package of the repository's testing suite. macOS has no list (no daemon announces
+# - `version`: a release of this repository, X.Y.Z, whose assets carry the hello packages;
+# - `variant`: `hello` sets `<version>`; `fail-ready` sets `<version>-fail-ready`, the build whose
+#   `/readyz` answers 503, which the hosts fail and the coordinator rolls back.
+#
+# The failing build's entries name the repository entry `komira-testing-fail` (its suite,
+# `testing-fail`) with the Debian version `<version>~fail.ready`, which sorts below the release's
+# (`~`): a host takes it only with that entry placed (docs/hello.md, "Before you start"), and
+# apt never takes it for the release.
+#
+# `release` reads the variant's .deb for each Linux architecture with its bundle, from the
+# release, and `cargo xtask release targets` writes the targets: per Linux platform, the variant's
+# native entry alone (docs/design/packages-native.md section 10.5, A24), its manifest the one
+# compiled into xtask, so a host installs the package of the repository's testing suite (`hello`)
+# or of its testing-fail suite (`fail-ready`). macOS has no list (no daemon announces
 # `macos-pkg` yet). It holds no token right but `contents: read`, and runs nothing of the
 # release. `set-desired` calls the CI client with the targets alone, so each host is ordered its
 # own platform's native package. It is pinned
@@ -37,6 +43,14 @@ on:
         description: The hostkeeper release whose hello package is set, X.Y.Z.
         type: string
         required: true
+      variant:
+        description: "`hello` sets the version; `fail-ready` sets its failing build, <version>-fail-ready."
+        type: choice
+        required: true
+        default: hello
+        options:
+          - hello
+          - fail-ready
 
 permissions: {}
 
@@ -56,6 +70,8 @@ jobs:
       targets: ${{ steps.targets.outputs.targets }}
     env:
       RELEASE: ${{ inputs.version }}
+      VERSION: ${{ inputs.variant == 'fail-ready' && format('{0}-fail-ready', inputs.version) || inputs.version }}
+      FAIL_READY: ${{ inputs.variant == 'fail-ready' && 'true' || '' }}
     steps:
       # A release is X.Y.Z: nothing else reaches the download or the job's outputs.
       - name: Refuse a version that is not X.Y.Z
@@ -66,21 +82,21 @@ jobs:
       - run: rustup toolchain install
       - name: Compile xtask
         run: cargo xtask --help
-      # For each Linux architecture hello's .deb with the .deb's bundle, from the release's
+      # For each Linux architecture the variant's .deb with the .deb's bundle, from the release's
       # assets. One curl, its URL globs expanded by curl itself (the text is quoted). A transient
-      # failure of a transfer is
-      # retried, as every download of a workflow is (`downloads.rs` of the workflow lint); one
-      # that still fails ends it at once (`--fail-early`), so nothing is set.
-      - name: Download hello's .debs and their bundles
-        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --fail-early --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --create-dirs --output-dir "$RUNNER_TEMP/release" --remote-name-all "https://github.com/$GITHUB_REPOSITORY/releases/download/v$RELEASE/hello_${RELEASE}_{amd64,arm64}.deb{,.sigstore.json}"
+      # failure of a transfer is retried, as every download of a workflow is (`downloads.rs` of
+      # the workflow lint); one that still fails ends it at once (`--fail-early`), so nothing is
+      # set.
+      - name: Download the variant's .debs and their bundles
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --fail-early --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --create-dirs --output-dir "$RUNNER_TEMP/release" --remote-name-all "https://github.com/$GITHUB_REPOSITORY/releases/download/v$RELEASE/hello_${VERSION}_{amd64,arm64}.deb{,.sigstore.json}"
       # Refused, every problem named, unless each .deb is there, its bundle lists it and its
-      # control is hello's at the version for its architecture.
-      - name: The targets of hello's package
+      # control is hello's at the Debian version for its architecture.
+      - name: The targets of the variant's package
         id: targets
-        run: cargo xtask release targets --service hello --version "$RELEASE" --dir "$RUNNER_TEMP/release" --repo "$GITHUB_REPOSITORY" --output "$GITHUB_OUTPUT"
+        run: cargo xtask release targets --service hello ${FAIL_READY:+--fail-ready} --version "$RELEASE" --dir "$RUNNER_TEMP/release" --repo "$GITHUB_REPOSITORY" --output "$GITHUB_OUTPUT"
       - name: The version
         id: version
-        run: printf 'version=%s\n' "$RELEASE" >> "$GITHUB_OUTPUT"
+        run: printf 'version=%s\n' "$VERSION" >> "$GITHUB_OUTPUT"
 
   set-desired:
     needs: [release]

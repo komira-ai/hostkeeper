@@ -43,27 +43,17 @@ fn bundle_listing(digest: &str) -> Vec<u8> {
         .into_bytes()
 }
 
-/// The release of `package`: for hostkeeper, hello and mdm their native packages ([`natives`]);
-/// hello's failing build has none.
-fn built(dist: &Path, package: Package) {
-    if package
-        .native_name(&release(), Platform::LinuxX86_64)
-        .is_some()
-    {
-        natives(dist, package);
-    }
-}
-
 /// Writes each native package of `package` into `dist` with a bundle listing its SHA-256: a
 /// `.deb` as `release deb` builds it (hello's files; hostkeeper's and mdm's with their program
 /// alone, as nfpm's staged files and mdm's pinned servers are not at hand), and in place of the
 /// `.pkg`, which only a Mac builds, bytes of its own.
-fn natives(dist: &Path, package: Package) {
+fn built(dist: &Path, package: Package) {
     let service = package.service().name();
     for platform in package.platforms() {
-        let name = package
-            .native_name(&release(), *platform)
-            .expect("a native package");
+        // The failing build has no `.pkg`.
+        let Some(name) = package.native_name(&release(), *platform) else {
+            continue;
+        };
         let bytes = match native_deb::arch(*platform) {
             Some(arch) => {
                 let program = |path: &str| {
@@ -75,10 +65,12 @@ fn natives(dist: &Path, package: Package) {
                 };
                 let files = match package {
                     Package::Hello => native_hello::deb_files(b"a program".to_vec(), false),
+                    Package::HelloFailReady => native_hello::deb_files(b"a program".to_vec(), true),
                     Package::Hostkeeper => program("/usr/bin/hostkeeper"),
                     _ => program("/usr/lib/mdm/mdm"),
                 };
-                native_deb::build(service, "0.1.5", arch, "a service", &files, 1_800_000_000)
+                let version = package.deb_version(&release());
+                native_deb::build(service, &version, arch, "a service", &files, 1_800_000_000)
                     .expect("build the .deb")
             }
             None => format!("the .pkg of {service}").into_bytes(),
@@ -274,36 +266,6 @@ fn hello_lists_its_deb_alone_on_linux_and_nothing_for_macos() {
 }
 
 #[test]
-fn hellos_failing_build_has_no_native_package_and_is_refused_by_name() {
-    // Catches: the failing build given a list of its archives alone, which a host that runs
-    // hello natively is never ordered (the coordinator drops it, `installer_dropped`), so a set
-    // of it would order nobody and say nothing; or a list with no entry at all, refused by the
-    // coordinator only once CI has called. Its whole release is there: the refusal is by name.
-    let (_root, dist) = dist("targets-hello-fail-ready");
-    built(&dist, Package::HelloFailReady);
-    assert_eq!(
-        targets(&request(&dist, Package::HelloFailReady, None)),
-        Err(Error::Failed(
-            "hello 0.1.5-fail-ready: no native package: a release lists native entries alone, \
-             and only a package the project's repository takes has one"
-                .to_owned()
-        ))
-    );
-}
-
-/// The `targets=` line the verb answers for `package` at the release 0.1.5, in a new `dist`
-/// whose packages are built as the release builds them.
-fn line_of(name: &str, package: Package) -> String {
-    let (_root, dist) = dist(name);
-    built(&dist, package);
-    let lines = targets(&request(&dist, package, None)).expect("the targets");
-    let [line] = lines.as_slice() else {
-        panic!("not one line: {lines:?}");
-    };
-    line.clone()
-}
-
-#[test]
 fn the_line_of_each_package_is_the_bytes_the_release_has_always_written() {
     // Catches: any change of the JSON `release targets` writes for hostkeeper, hello or mdm at
     // one version: a field, a bound, a unit, the floor, a key's order or the spelling of a
@@ -319,6 +281,18 @@ fn the_line_of_each_package_is_the_bytes_the_release_has_always_written() {
 const HOSTKEEPER_LINE: &str = r#"targets={"linux-arm64":{"entries":[{"digest":"c920ce476ae57d152131e881c4a0af050a3ee25ff0ae85ee20697be9c6fd38af","installer":"apt","manifest":{"hook":{"timeoutSecs":{"cleanup":"300","cutover":"300","prepare":"300","rollback":"300","verify":"300"},"verifyDeadlineSecs":"600"},"installerBounds":{"activateSecs":"300","removeSecs":"300","stageSecs":"600"},"minHostkeeper":"0.1.5","package":"hostkeeper","run":["hostkeeper.service"]},"packageVersion":"0.1.5","repository":"komira-testing"}]},"linux-x86_64":{"entries":[{"digest":"109ccc2b56ef785db77ac86d6cff2a0e7e57d1a9444228ef39af7b8bd08d1551","installer":"apt","manifest":{"hook":{"timeoutSecs":{"cleanup":"300","cutover":"300","prepare":"300","rollback":"300","verify":"300"},"verifyDeadlineSecs":"600"},"installerBounds":{"activateSecs":"300","removeSecs":"300","stageSecs":"600"},"minHostkeeper":"0.1.5","package":"hostkeeper","run":["hostkeeper.service"]},"packageVersion":"0.1.5","repository":"komira-testing"}]}}"#;
 const HELLO_LINE: &str = r#"targets={"linux-arm64":{"entries":[{"digest":"54f1dc38b02b05adba31ec92ed9d69aa93c9bb1d2e76623e35ff23fa92a65cee","installer":"apt","manifest":{"healthUrl":"http://127.0.0.1:9310/readyz","hook":{"timeoutSecs":{"cleanup":"30","cutover":"60","prepare":"30","rollback":"60","uninstall":"60","verify":"30"},"verifyDeadlineSecs":"120"},"installerBounds":{"activateSecs":"300","removeSecs":"300","stageSecs":"600"},"minHostkeeper":"0.1.0","package":"hello","params":{"port":{"integer":"9310"},"record_dir":{"text":"/var/lib/updater/hooks/hello"},"units":{"text":"systemd"}},"run":["hello@a.service","hello@b.service"]},"packageVersion":"0.1.5","repository":"komira-testing"}]},"linux-x86_64":{"entries":[{"digest":"7be376ea65ba0035dfe4316891ce29602c29a71f55993fc4bfc78ffab35a8624","installer":"apt","manifest":{"healthUrl":"http://127.0.0.1:9310/readyz","hook":{"timeoutSecs":{"cleanup":"30","cutover":"60","prepare":"30","rollback":"60","uninstall":"60","verify":"30"},"verifyDeadlineSecs":"120"},"installerBounds":{"activateSecs":"300","removeSecs":"300","stageSecs":"600"},"minHostkeeper":"0.1.0","package":"hello","params":{"port":{"integer":"9310"},"record_dir":{"text":"/var/lib/updater/hooks/hello"},"units":{"text":"systemd"}},"run":["hello@a.service","hello@b.service"]},"packageVersion":"0.1.5","repository":"komira-testing"}]}}"#;
 const MDM_LINE: &str = r#"targets={"linux-x86_64":{"entries":[{"digest":"0c3015630430a4856eecca558013c9d74bd58e4234e67d7e834b21a759b1ae4d","installer":"apt","manifest":{"healthUrl":"http://127.0.0.1:9004/version","hook":{"timeoutSecs":{"cleanup":"30","cutover":"120","prepare":"300","rollback":"120","uninstall":"120","verify":"60"},"verifyDeadlineSecs":"600"},"installerBounds":{"activateSecs":"300","removeSecs":"300","stageSecs":"600"},"minHostkeeper":"0.1.5","package":"mdm","params":{"record_dir":{"text":"/var/lib/updater/hooks/mdm"},"settings":{"text":"/etc/mdm/settings"}},"run":["mdm-scep.service","mdm-nanohub.service","mdm-depserver.service"]},"packageVersion":"0.1.5","repository":"komira-testing"}]}}"#;
+
+/// The `targets=` line the verb answers for `package` at the release 0.1.5, in a new `dist`
+/// whose packages are built as the release builds them.
+fn line_of(name: &str, package: Package) -> String {
+    let (_root, dist) = dist(name);
+    built(&dist, package);
+    let lines = targets(&request(&dist, package, None)).expect("the targets");
+    let [line] = lines.as_slice() else {
+        panic!("not one line: {lines:?}");
+    };
+    line.clone()
+}
 
 #[test]
 fn the_line_is_appended_to_the_output_file() {
@@ -432,7 +406,7 @@ fn an_entry() -> Target {
             installer_bounds: Some(INSTALLER_BOUNDS),
             ..Manifest::default()
         }),
-        repository: Some(TESTING.to_owned()),
+        repository: Some(crate::release::contract::TESTING_ENTRY.to_owned()),
         package_version: Some("0.1.5".to_owned()),
         ..Target::default()
     }
@@ -529,4 +503,5 @@ fn the_verb_runs_without_adapters_and_refuses_a_failing_build_of_hostkeeper() {
     assert_eq!(Service::default(), Service::Hostkeeper);
 }
 
+mod fail_ready;
 mod native;

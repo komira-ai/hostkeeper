@@ -159,9 +159,10 @@ installed afresh ([network-install.md](network-install.md)).
    keyring and the two entries `komira-testing.sources` and `komira-stable.sources`, root's and
    closed to writes by others: the steps under "Place the repository entries" in
    [enrollment.md](enrollment.md#bootstrap-a-linux-node). The directory holds those three files
-   and nothing else. Then, as root, `hostkeeper check-repositories` checks it with the daemon's
-   own loader: it prints the two entries and exits 0, or prints the file it refuses and why and
-   exits 1. Fix what it names before the restart.
+   and nothing else, but on a host that runs hello's failing-build proof, which also holds
+   `komira-testing-fail.sources` ([hello.md](../hello.md), step 4). Then, as root,
+   `hostkeeper check-repositories` checks it with the daemon's own loader: it prints each entry
+   and exits 0, or prints the file it refuses and why and exits 1. Fix what it names before the restart.
 3. **Restart the daemon**, as root: `systemctl restart hostkeeper.service`. The daemon reads the
    entries and decides its installers only at its start. Then `systemctl is-active
    hostkeeper.service` prints `active`. If it prints anything else, the daemon refused the

@@ -13,21 +13,23 @@
 //! publishes to the project's repository, suite `testing` ([`crate::channels::spec`]).
 //! hostkeeper's is the daemon's `.deb`, the package that bootstraps a host (section 10.4).
 //!
+//! **Hello's failing build is listed only when asked for** (`--fail-ready`): its `.deb`
+//! `hello_<v>-fail-ready_<arch>.deb` is in the suite `testing-fail`, which lists it alone, under
+//! the Debian version `<v>~fail.ready` ([`Package::deb_version`]), so a normal set never takes
+//! it, and a call without `--fail-ready` reads none of its files.
+//!
 //! ```text
-//! entry    installer apt, repository komira-testing (the host's entry of the testing suite),
-//!          package_version the release's, digest the .deb's SHA-256 (the pin); no location,
-//!          no size, no attestation
+//! entry    installer apt, repository komira-testing (the host's entry of the testing suite;
+//!          the failing build's: komira-testing-fail, [`Package::repository_entry`]),
+//!          package_version the .deb's Debian version ([`Package::deb_version`]: the release's,
+//!          the failing build's `<v>~fail.ready`), digest the .deb's SHA-256 (the pin); no
+//!          location, no size, no attestation
 //! manifest compiled in ([`manifest`]): the package's hook bounds without a command (the
 //!          package's hook is its program at the fixed path; hostkeeper's package has none, and
 //!          its daemon runs built-in steps), its run units, health URL, params and
-//!          min_hostkeeper; `package` the package's name (`hostkeeper`, `hello`, `mdm`); the
-//!          installer's bounds ([`INSTALLER_BOUNDS`])
+//!          min_hostkeeper; `package` the package's name (`hostkeeper`, `hello`, `mdm`; the
+//!          failing build's is hello's); the installer's bounds ([`INSTALLER_BOUNDS`])
 //! ```
-//!
-//! **A package with no native package is refused by name**, before any package is read: hello's
-//! failing build, whose version `<v>-fail-ready` is not the `X.Y.Z` the shared repository takes,
-//! so it is not published there and a host that installs hello natively could take no entry of
-//! it.
 //!
 //! Each native package must be a regular file whose bundle lists its SHA-256, and a `.deb`'s
 //! `control` must name the service, the version and the architecture.
@@ -57,11 +59,6 @@ use crate::channels::apt::{control, deb};
 
 mod files;
 mod manifest;
-
-/// The repository entry a native entry names: the host's entry of the suite `testing`
-/// (packages-repositories.md section 3.1). A release is set from `testing`; its promotion to
-/// `stable` copies the same bytes, so the pin is the same from either.
-pub(crate) const TESTING: &str = "komira-testing";
 
 /// The bounds of a native installer's own steps, in seconds: the fetch and the checks of
 /// `stage` (mdm's `.deb` carries its pinned servers), the package manager's install of
@@ -98,8 +95,9 @@ pub(crate) fn targets(request: &Request) -> Result<Vec<String>, Error> {
     let service = ServiceName::new(package.service().name())
         .map_err(|e| Error::Failed(format!("the service: {e}")))?;
     // macOS is left out of every list: no daemon announces `macos-pkg` yet, so a Mac could take
-    // no entry of it (with no list, its hosts show `no_target`; none is enrolled).
-    let natives = package
+    // no entry of it (with no list, its hosts show `no_target`; none is enrolled), and the failing
+    // build has no `.pkg`.
+    let mut natives: Vec<_> = package
         .platforms()
         .iter()
         .filter_map(|&platform| {
@@ -108,25 +106,12 @@ pub(crate) fn targets(request: &Request) -> Result<Vec<String>, Error> {
                 Platform::LinuxArm64 => ("arm64", IndexPlatform::LinuxArm64),
                 Platform::MacosArm64 => return None,
             };
-            Some(
-                package
-                    .native_name(&request.version, platform)
-                    .map(|name| (index, arch, name)),
-            )
+            let name = package.native_name(&request.version, platform)?;
+            Some((index, arch, name))
         })
-        .collect::<Option<Vec<_>>>()
-        .map(|mut natives| {
-            // The platforms in the order of their spellings.
-            natives.sort_by_key(|(platform, _, _)| platform.as_str());
-            natives
-        })
-        .ok_or_else(|| {
-            Error::Failed(format!(
-                "{service} {}: no native package: a release lists native entries alone, \
-                 and only a package the project's repository takes has one",
-                package.version_text(&request.version)
-            ))
-        })?;
+        .collect();
+    // The platforms in the order of their spellings.
+    natives.sort_by_key(|(platform, _, _)| platform.as_str());
     let mut problems = Vec::new();
     let mut lists = Vec::new();
     for (platform, arch, name) in natives {
@@ -168,7 +153,7 @@ fn native_of(
             problems.push(format!("{bundle_name}: {why}"));
         }
     }
-    let version = package.version_text(&request.version);
+    let version = package.deb_version(&request.version);
     if measured.is_some() {
         let bytes = std::fs::read(dir.join(name))
             .map_err(Error::io(format!("read {}", dir.join(name).display())))?;
@@ -193,15 +178,16 @@ fn native_of(
             attestation: None,
             // A `.deb` is installed by its control's `Package`, the service.
             manifest: Some(manifest::of(package, &request.version)),
-            repository: Some(TESTING.to_owned()),
+            repository: Some(package.repository_entry().to_owned()),
             package_version: Some(version),
         },
     )))
 }
 
-/// What is wrong with the `.deb` `bytes` as the package of `service` at `version` for `arch`:
-/// its `control` read back out of it must name each, since the host's package manager installs
-/// it by those fields and the daemon holds `package_version` to its `Version`.
+/// What is wrong with the `.deb` `bytes` as the package of `service` at the Debian version
+/// `version` for `arch`: its `control` read back out of it must name each, since the host's
+/// package manager installs it by those fields and the daemon holds `package_version` to its
+/// `Version`.
 fn control_problems(bytes: &[u8], service: &str, version: &str, arch: &str) -> Vec<String> {
     let fields = match deb::control_of(bytes).and_then(|text| control::parse(&text)) {
         Ok(fields) => fields,

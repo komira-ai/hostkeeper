@@ -2,9 +2,9 @@
 //! tests of the workflows' jobs ([`super::targets_run_tests`], [`super::hello_run_tests`]): for
 //! hostkeeper and hello, their native packages ([`native_files`]): a `.deb` per Linux
 //! architecture holding only its `control`, and in place of the `.pkg` bytes of its own, each
-//! with its bundle (unsigned, its statement listing the file's SHA-256). And the targets the
-//! verb must write for them, written here from the files themselves and the manifest each
-//! package has always carried.
+//! with its bundle (unsigned, its statement listing the file's SHA-256); for hello's failing
+//! build, its `.deb`s ([`fail_ready_files`]). And the targets the verb must write for them,
+//! written here from the files themselves and the manifest each package has always carried.
 
 use std::collections::BTreeMap;
 
@@ -105,35 +105,78 @@ pub fn native_files(service: &str, version: &str) -> BTreeMap<String, Vec<u8>> {
     files
 }
 
+/// The failing build of hello at the release `release`, by name: its `.deb` per Linux
+/// architecture, named for the service version (`hello_<release>-fail-ready_<arch>.deb`) and
+/// holding the Debian version `<release>~fail.ready`, each with its bundle. Its `.pkg` is not
+/// released.
+pub fn fail_ready_files(release: &str) -> BTreeMap<String, Vec<u8>> {
+    let mut files = BTreeMap::new();
+    for platform in [Platform::LinuxX86_64, Platform::LinuxArm64] {
+        let name = fail_ready_name(release, platform);
+        let arch = if platform == Platform::LinuxX86_64 {
+            "amd64"
+        } else {
+            "arm64"
+        };
+        let bytes = deb("hello", &format!("{release}~fail.ready"), arch);
+        files.insert(format!("{name}.sigstore.json"), bundle(&bytes));
+        files.insert(name, bytes);
+    }
+    files
+}
+
+/// The release asset name of hello's failing build at `release` on the Linux `platform`.
+fn fail_ready_name(release: &str, platform: Platform) -> String {
+    native_name("hello", &format!("{release}-fail-ready"), platform)
+}
+
 /// The targets `release targets` must write for `files` (from [`native_files`] of `service`) of
 /// the release `release`: per Linux platform, the native entry alone (an `apt` entry of the
 /// repository `komira-testing` pinned by the `.deb`'s SHA-256), its manifest the package's own;
-/// no list for macOS, while no daemon announces `macos-pkg`. As [`sorted`] JSON
-/// text.
+/// no list for macOS, while no daemon announces `macos-pkg`. As [`sorted`] JSON text.
 pub fn targets(service: &str, release: &str, files: &BTreeMap<String, Vec<u8>>) -> String {
+    lists(|platform| {
+        let bytes = &files[&native_name(service, release, platform)];
+        native_entry(service, release, bytes, "komira-testing", release)
+    })
+}
+
+/// The targets `release targets --fail-ready` must write for hello's failing build at the
+/// release `release`, from `files` ([`fail_ready_files`]): per Linux platform, an `apt` entry of
+/// the repository `komira-testing-fail` at the Debian version `<release>~fail.ready`, pinned by
+/// the failing build's `.deb`, its manifest hello's. As [`sorted`] JSON text.
+pub fn fail_ready_targets(release: &str, files: &BTreeMap<String, Vec<u8>>) -> String {
+    lists(|platform| {
+        let bytes = &files[&fail_ready_name(release, platform)];
+        let version = format!("{release}~fail.ready");
+        native_entry("hello", release, bytes, "komira-testing-fail", &version)
+    })
+}
+
+/// The lists of the Linux platforms, each the one entry `entry` makes, as [`sorted`] JSON text.
+fn lists(entry: impl Fn(Platform) -> Value) -> String {
     let mut lists = serde_json::Map::new();
     for platform in [Platform::LinuxArm64, Platform::LinuxX86_64] {
-        let entries = [native_entry(service, release, platform, files)];
-        lists.insert(platform.to_string(), json!({"entries": entries}));
+        lists.insert(platform.to_string(), json!({"entries": [entry(platform)]}));
     }
     sorted(Value::Object(lists)).to_string()
 }
 
-/// The native entry `release targets` must write for `service`'s `.deb` of `files` at the release
-/// `release` on the Linux `platform`.
+/// The native entry `release targets` must write for `service`'s `.deb` `bytes` of the release
+/// `release`: the repository entry `repository` at the Debian version `package_version`.
 fn native_entry(
     service: &str,
     release: &str,
-    platform: Platform,
-    files: &BTreeMap<String, Vec<u8>>,
+    bytes: &[u8],
+    repository: &str,
+    package_version: &str,
 ) -> Value {
-    let bytes = &files[&native_name(service, release, platform)];
     json!({
         "installer": "apt",
         "digest": sha256(bytes),
         "manifest": manifest(service, release),
-        "repository": "komira-testing",
-        "packageVersion": release,
+        "repository": repository,
+        "packageVersion": package_version,
     })
 }
 

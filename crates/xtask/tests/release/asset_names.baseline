@@ -5,7 +5,8 @@
 # `withdrawn: <name>` is a name a release once held and no longer does, each listed with its reason
 # in crates/xtask/src/release/contract/tests.rs (WITHDRAWN). Lines starting with `#` are comments.
 # `hello_<version>_<arch>.deb`, `hello-<version>-macos-arm64.pkg` and `mdm_<version>_amd64.deb` are
-# the services' native packages (docs/design/packages-native.md, item A21). The archive packages
+# the services' native packages (docs/design/packages-native.md, item A21); hello's failing build
+# has its `.deb`s alone, `hello_<version>-fail-ready_<arch>.deb` (section 10.10). The archive packages
 # (`*.tar.zst`, their `.sha256` and bundles) and the release indexes (`index.json`,
 # `hello-index.json`, `hello-fail-ready-index.json`, `mdm-index.json`) are withdrawn
 # (docs/design/packages-native.md, item A28).
@@ -61,6 +62,10 @@ hostkeeper-coordinator_<version>_arm64.deb
 hostkeeper-coordinator_<version>_arm64.deb.sigstore.json
 hello-<version>-macos-arm64.pkg
 hello-<version>-macos-arm64.pkg.sigstore.json
+hello_<version>-fail-ready_amd64.deb
+hello_<version>-fail-ready_amd64.deb.sigstore.json
+hello_<version>-fail-ready_arm64.deb
+hello_<version>-fail-ready_arm64.deb.sigstore.json
 hello_<version>_amd64.deb
 hello_<version>_amd64.deb.sigstore.json
 hello_<version>_arm64.deb

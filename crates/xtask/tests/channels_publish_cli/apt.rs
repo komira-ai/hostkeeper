@@ -734,3 +734,91 @@ fn apt_index_of_a_package_that_is_not_the_product_s_is_a_failure_naming_it() {
     );
     assert!(!d.join("out").exists());
 }
+
+/// Proves the suite `testing-fail` end to end through the command line: `apt read`, `apt index`
+/// and `apt write --suite testing-fail` of a release directory that holds every package of the
+/// release and hello's failing build (its assets `hello_1.2.3-fail-ready_<arch>.deb`, Debian
+/// version `1.2.3~fail.ready`) each exit 0; the index lists the failing build alone, one stanza
+/// per architecture under its Debian version; the pool receives exactly the failing build's two
+/// files, under the names their control gives and with the assets' bytes; every index object is
+/// below `apt/dists/testing-fail/`.
+///
+/// Catches: a suite the verbs parse but cannot publish, one that lists the release's packages
+/// beside the failing build, and pool files named by the asset instead of the Debian version.
+#[test]
+fn apt_read_index_and_write_put_the_failing_build_alone_into_testing_fail() {
+    let d = dir("apt-publish-testing-fail");
+    let fake = Fake::new(&d);
+    release(&d, "debs", "1.2.3", "deb");
+    let mut failing = Vec::new();
+    for arch in ["amd64", "arm64"] {
+        let bytes = deb("hello", "1.2.3~fail.ready", arch);
+        std::fs::write(
+            d.join("debs")
+                .join(format!("hello_1.2.3-fail-ready_{arch}.deb")),
+            &bytes,
+        )
+        .expect("write");
+        failing.push((
+            format!("apt/pool/hostkeeper/hello_1.2.3~fail.ready_{arch}.deb"),
+            bytes,
+        ));
+    }
+
+    let o = apt_publish(&d, &fake, "testing-fail", "debs", "1.2.3");
+
+    assert_eq!(
+        fake.calls()[0][..5],
+        ["s3api", "get-object", "--bucket", BUCKET, "--key"]
+    );
+    assert_eq!(fake.calls()[0][5], "apt/dists/testing-fail/Release");
+    let next = d.join("apt-next-testing-fail/dists/testing-fail");
+    let release_file = std::fs::read_to_string(next.join("Release")).expect("Release");
+    assert!(
+        release_file.contains("Suite: testing-fail\n"),
+        "{release_file}"
+    );
+    for arch in ["amd64", "arm64"] {
+        let packages = std::fs::read_to_string(next.join(format!("main/binary-{arch}/Packages")))
+            .expect("Packages");
+        assert_eq!(packages.matches("Package: ").count(), 1, "{packages}");
+        assert!(packages.starts_with("Package: hello\n"), "{packages}");
+        assert!(
+            packages.contains("Version: 1.2.3~fail.ready\n"),
+            "{packages}"
+        );
+        assert!(
+            packages.contains(&format!(
+                "Filename: pool/hostkeeper/hello_1.2.3~fail.ready_{arch}.deb\n"
+            )),
+            "{packages}"
+        );
+    }
+    let pool: Vec<String> = fake
+        .puts()
+        .into_iter()
+        .map(|(key, _)| key)
+        .filter(|key| key.starts_with("apt/pool/"))
+        .collect();
+    assert_eq!(
+        pool,
+        failing
+            .iter()
+            .map(|(key, _)| key.clone())
+            .collect::<Vec<_>>()
+    );
+    for (key, bytes) in &failing {
+        assert!(o.contains(&format!("uploaded {key}\n")), "{o}");
+        assert_eq!(&fake.object(key), bytes, "{key}");
+    }
+    for (key, _) in fake.puts() {
+        assert!(
+            key.starts_with("apt/pool/hostkeeper/hello_1.2.3~fail.ready_")
+                || key.starts_with("apt/dists/testing-fail/"),
+            "{key}"
+        );
+    }
+    assert!(o.contains(&format!(
+        "invalidated /apt/dists/*; the index is at https://{HOST}/apt/dists/testing-fail/InRelease\n"
+    )));
+}

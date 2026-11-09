@@ -4,12 +4,16 @@
 //! that no job holds both the signing key and the cloud role. The text the verbs write is the form
 //! the other products' tools write into the same repository.
 //!
-//! Every verb but `sign` takes `--suite stable|testing` (default `stable`): a release is published
-//! into `testing` first, and `promote` lists the same packages in `stable` once the checks passed.
+//! Every verb but `sign` takes `--suite stable|testing|testing-fail` (default `stable`): a release
+//! is published into `testing` first, and `promote` lists the same packages in `stable` once the
+//! checks passed. `testing-fail` lists hello's failing build alone, under the Debian version
+//! `X.Y.Z~fail.ready`, and is never promoted; its pool files are named by that version
+//! (`hello_X.Y.Z~fail.ready_<arch>.deb`) and read from the release's assets named by the service
+//! version (`hello_X.Y.Z-fail-ready_<arch>.deb`, [`package_files`]).
 //!
 //! - `channels apt read --bucket <b> --out <dir>` ([`read`]): the current index and the ETag of
 //!   each of its objects, from S3 (never through the CDN, which caches the index and would hand
-//!   back a stale ETag). Jobs `testing-apt-read` and
+//!   back a stale ETag). Jobs `testing-apt-read`, `testing-fail-apt-read` and
 //!   `stable-apt-read`: the cloud role, no key.
 //! - `channels apt index --current <dir> --out <dir> --debs <dir> --version <V> ...`
 //!   ([`build`]): the packages merged into that index, every other product's entries kept as they
@@ -20,17 +24,20 @@
 //!   --no-pool`.
 //! - `channels apt sign --dir <dir> --work <dir> --fingerprint <fpr>` ([`sign`]):
 //!   `InRelease` and `Release.gpg`, verified; the key and passphrase come from `APT_GPG_PRIVATE_KEY`
-//!   and `APT_GPG_PASSPHRASE`. Jobs `testing-apt-index` and `stable-apt-index`: the key, no cloud role.
+//!   and `APT_GPG_PASSPHRASE`. Jobs `testing-apt-index`, `testing-fail-apt-index` and `stable-apt-index`: the key,
+//!   no cloud role.
 //! - `channels apt write --bucket <b> --distribution-id <id> --hostname <h> --next <dir> --debs
 //!   <dir> --version <V>` ([`write`]): the packages into the pool with `If-None-Match`, the index
 //!   with `If-Match` on the ETags that were read (`--no-pool` instead of `--debs` and `--version`:
-//!   the index only). Jobs `testing-apt-write` and `stable-apt-write`: the cloud role, no key.
+//!   the index only). Jobs `testing-apt-write`, `testing-fail-apt-write` and `stable-apt-write`: the cloud
+//!   role, no key.
 //!
 //! The programs that talk to the outside (`aws`, `gpg`) are flags, so a test hands a stand-in
 //! ([`super::aws::Aws`], [`sign::Gpg`]).
 //!
 //! Copied from komira-ai/tierstore at ff4777831c08fc13aa025b54e6e0531c2f350f4f
 //! (`crates/xtask/src/channels/apt.rs`), adapted to this repository (see [`crate::channels`]).
+//! This repository added the suite `testing-fail` and the package files it takes.
 
 pub mod build;
 pub mod control;
@@ -60,8 +67,9 @@ use crate::release::ports::Exec;
 pub enum Verb {
     /// The current index and the ETag of each of its objects, from S3.
     Read {
-        /// The suite of the repository: `stable`, or `testing`, where a release is published
-        /// before its install checks and promoted from.
+        /// The suite of the repository: `stable`, `testing`, where a release is published
+        /// before its install checks and promoted from, or `testing-fail`, which lists hello's
+        /// failing build alone.
         #[arg(long, value_enum, default_value_t = Suite::Stable)]
         suite: Suite,
         /// The apt repository's bucket.
@@ -76,8 +84,9 @@ pub enum Verb {
     },
     /// The packages merged into the index that was read.
     Index {
-        /// The suite of the repository: `stable`, or `testing`, where a release is published
-        /// before its install checks and promoted from.
+        /// The suite of the repository: `stable`, `testing`, where a release is published
+        /// before its install checks and promoted from, or `testing-fail`, which lists hello's
+        /// failing build alone.
         #[arg(long, value_enum, default_value_t = Suite::Stable)]
         suite: Suite,
         /// The directory `apt read` wrote.
@@ -161,8 +170,9 @@ pub enum Verb {
     },
     /// The packages and the signed index into the repository.
     Write {
-        /// The suite of the repository: `stable`, or `testing`, where a release is published
-        /// before its install checks and promoted from.
+        /// The suite of the repository: `stable`, `testing`, where a release is published
+        /// before its install checks and promoted from, or `testing-fail`, which lists hello's
+        /// failing build alone.
         #[arg(long, value_enum, default_value_t = Suite::Stable)]
         suite: Suite,
         /// The apt repository's bucket.
@@ -365,38 +375,66 @@ pub(crate) fn why(answer: &Answer) -> String {
     answer.stderr.trim().to_owned()
 }
 
-/// The file names of the packages of `version`: every package of the product, for every Debian
-/// architecture, sorted.
+/// The packages of `version` that `suite` lists, `(pool file name, release asset name)`, sorted:
+/// every package of the product for every Debian architecture in `stable` and `testing`, where
+/// both names are `<package>_<version>_<arch>.deb`; hello's failing build alone in `testing-fail`
+/// ([`spec::Product::fail_ready_debs`]).
 ///
 /// # Errors
 /// A version that is not `<major>.<minor>.<patch>`.
-pub fn package_names(version: &str) -> Result<Vec<String>, Error> {
+fn files_of(version: &str, suite: Suite) -> Result<Vec<(String, String)>, Error> {
     if !is_plain_version(version) {
         return Err(Error::Usage(format!(
             "--version {version:?} is not <major>.<minor>.<patch>"
         )));
     }
-    Ok(spec::HOSTKEEPER.deb_files(version))
+    Ok(match suite {
+        Suite::Stable | Suite::Testing => spec::HOSTKEEPER
+            .deb_files(version)
+            .into_iter()
+            .map(|name| (name.clone(), name))
+            .collect(),
+        Suite::TestingFail => spec::HOSTKEEPER.fail_ready_debs(version),
+    })
 }
 
-/// The package files of `version` in `dir`, `(name, path)`, every package of the product for
-/// every Debian architecture, sorted by name.
+/// The pool file names of the packages of release `version` in `suite`, sorted.
+///
+/// # Errors
+/// A version that is not `<major>.<minor>.<patch>`.
+pub fn package_names(version: &str, suite: Suite) -> Result<Vec<String>, Error> {
+    Ok(files_of(version, suite)?
+        .into_iter()
+        .map(|(pool, _)| pool)
+        .collect())
+}
+
+/// The package files of release `version` in `dir` that `suite` lists, `(pool file name, path)`,
+/// sorted by pool name. The path is the release asset: its name is the pool name, but for the
+/// failing build, whose asset is named by the service version.
 ///
 /// # Errors
 /// A version that is not `<major>.<minor>.<patch>`, or a package that is not there.
-pub fn package_files(dir: &Path, version: &str) -> Result<Vec<(String, PathBuf)>, Error> {
-    let files: Vec<(String, PathBuf)> = package_names(version)?
-        .into_iter()
-        .map(|name| {
-            let path = dir.join(&name);
-            (name, path)
-        })
-        .collect();
-    match files.iter().find(|(_, path)| !path.is_file()) {
-        Some((name, _)) => Err(Error::Failed(format!("{name} is not in {}", dir.display()))),
-        None => Ok(files),
+pub fn package_files(
+    dir: &Path,
+    version: &str,
+    suite: Suite,
+) -> Result<Vec<(String, PathBuf)>, Error> {
+    let mut files = Vec::new();
+    for (pool, asset) in files_of(version, suite)? {
+        let path = dir.join(&asset);
+        if !path.is_file() {
+            return Err(Error::Failed(format!(
+                "{asset} is not in {}",
+                dir.display()
+            )));
+        }
+        files.push((pool, path));
     }
+    Ok(files)
 }
 
+#[cfg(test)]
+mod fail_tests;
 #[cfg(test)]
 mod tests;

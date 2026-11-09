@@ -227,7 +227,10 @@ root:
    ```
 
    The stable one is the same with `Suites: stable`. The entry's name is the file's stem, the
-   name a release's entry gives as its `repository`.
+   name a release's entry gives as its `repository`. A host that runs hello's failing-build
+   proof ([hello.md](../hello.md), step 4) also gets `komira-testing-fail.sources`, the same with
+   `Suites: testing-fail`: the suite that lists that build alone
+   ([package-repositories.md](../deploy/package-repositories.md)).
 4. Make every file root's and closed to writes by others:
    `chown root:root /etc/hostkeeper/repositories/*` and
    `chmod 0644 /etc/hostkeeper/repositories/*`.
