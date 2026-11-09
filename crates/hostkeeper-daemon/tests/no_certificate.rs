@@ -143,6 +143,7 @@ fn without_a_certificate_the_daemon_waits_and_names_the_missing_file() {
     fs::set_permissions(&rig.config, fs::Permissions::from_mode(0o600)).expect("its mode");
     let root = rig.scratch.path();
     let files = HostFiles {
+        repositories: None,
         os_root: root.join("os"),
         ca_bundle: root.join("ca.pem"),
         gh: root.join("gh"),
