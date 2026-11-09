@@ -257,3 +257,268 @@ fn each_family_has_its_name() {
     assert_eq!(Family::Deb.as_str(), "deb");
     assert_eq!(Family::Rpm.as_str(), "rpm");
 }
+
+/// The native repository installer of A7 (packages-repositories.md section 4.1): `apt` on a
+/// Debian host with its tools, an installed apt of 2.2 or later and a repository entry.
+mod native {
+    use super::{ALWAYS, Family, Installer, Path, announce, fs, linux, put, scratch};
+    use hostkeeper_install::announce::Announcement;
+    use hostkeeper_install::repository::announce::{
+        APT_FLOOR, APT_TOOLS, DPKG_STATUS, announced, installed_apt, native,
+    };
+    use hostkeeper_install::repository::config::{Repositories, Repository};
+
+    fn one_repository() -> Repositories {
+        Repositories::new(vec![Repository {
+            name: "vendor".to_owned(),
+            uri: "https://repo.example.com/debian".to_owned(),
+            suite: "stable".to_owned(),
+            components: vec!["main".to_owned()],
+            keyring: "/etc/hostkeeper/repositories/k.gpg".into(),
+            text: String::new(),
+        }])
+    }
+
+    /// The dpkg status stanza of an installed apt at `version`.
+    fn apt_status(version: &str) -> String {
+        format!(
+            "Package: dpkg\nStatus: install ok installed\nVersion: 1.21.22\n\n\
+             Package: apt\nStatus: install ok installed\nPriority: required\nVersion: {version}\n\n\
+             Package: zlib1g\nStatus: install ok installed\nVersion: 1:1.2.13\n"
+        )
+    }
+
+    /// A host root with every apt tool and a status file holding `status`.
+    fn host(name: &str, status: &str) -> hostkeeper_testkit::Scratch {
+        let root = scratch(name);
+        for tool in APT_TOOLS {
+            put(root.path(), tool, b"");
+        }
+        put(root.path(), DPKG_STATUS, status.as_bytes());
+        root
+    }
+
+    fn native_of(family: Option<Family>, root: &Path) -> Option<Installer> {
+        native(family, root, &one_repository())
+    }
+
+    /// Proves a Debian host with every apt tool, an installed apt of 2.6 and one repository
+    /// gets `apt`, and that the tools are the six of apt and dpkg.
+    #[test]
+    fn a_debian_host_with_the_tools_a_recent_apt_and_a_repository_gets_apt() {
+        let root = host("native-ok", &apt_status("2.6.1"));
+        assert_eq!(
+            native_of(Some(Family::Deb), root.path()),
+            Some(Installer::Apt)
+        );
+        assert_eq!(APT_TOOLS.len(), 6);
+    }
+
+    /// Proves any one missing apt tool, taken away alone, leaves the host with no native installer.
+    #[test]
+    fn a_host_missing_any_one_tool_gets_none() {
+        for tool in APT_TOOLS {
+            let root = host("native-tool", &apt_status("2.6.1"));
+            fs::remove_file(root.path().join(tool)).expect("the tool");
+            assert_eq!(native_of(Some(Family::Deb), root.path()), None, "{tool}");
+        }
+        // A directory is not a tool.
+        let root = host("native-dir", &apt_status("2.6.1"));
+        fs::remove_file(root.path().join(APT_TOOLS[0])).expect("the tool");
+        fs::create_dir(root.path().join(APT_TOOLS[0])).expect("a directory");
+        assert_eq!(native_of(Some(Family::Deb), root.path()), None);
+    }
+
+    /// Proves the floor is apt 2.2 itself: 2.2 and later are announced, 2.1.18 and an
+    /// unparseable version are not, and an epoch counts.
+    #[test]
+    fn the_apt_floor_is_2_2_given() {
+        assert_eq!(APT_FLOOR, "2.2");
+        for (version, want) in [
+            ("2.2", Some(Installer::Apt)),
+            ("2.2.4", Some(Installer::Apt)),
+            ("2.10.0", Some(Installer::Apt)),
+            ("3.0.3", Some(Installer::Apt)),
+            ("1:1.0", Some(Installer::Apt)),
+            ("2.1.18", None),
+            ("1.8.2-3", None),
+            ("2.2~rc1", None),
+            ("not a version", None),
+        ] {
+            let root = host("native-version", &apt_status(version));
+            assert_eq!(native_of(Some(Family::Deb), root.path()), want, "{version}");
+        }
+    }
+
+    /// Proves a missing apt stanza, an apt that is not `install ok installed`, an apt stanza with
+    /// no Version, and a missing status file all give none.
+    #[test]
+    fn an_apt_not_installed_or_not_found_gives_none() {
+        for (name, status) in [
+            (
+                "none",
+                "Package: dpkg\nStatus: install ok installed\nVersion: 1.21\n",
+            ),
+            (
+                "removed",
+                "Package: apt\nStatus: deinstall ok config-files\nVersion: 2.6.1\n",
+            ),
+            (
+                "half",
+                "Package: apt\nStatus: install ok half-configured\nVersion: 2.6.1\n",
+            ),
+            ("noversion", "Package: apt\nStatus: install ok installed\n"),
+            (
+                "utils",
+                "Package: apt-utils\nStatus: install ok installed\nVersion: 2.6.1\n",
+            ),
+            ("empty", ""),
+        ] {
+            let root = host(name, status);
+            assert_eq!(native_of(Some(Family::Deb), root.path()), None, "{name}");
+            assert_eq!(
+                installed_apt(&root.path().join(DPKG_STATUS)),
+                None,
+                "{name}"
+            );
+        }
+        let root = host("native-nostatus", "");
+        fs::remove_file(root.path().join(DPKG_STATUS)).expect("the file");
+        assert_eq!(native_of(Some(Family::Deb), root.path()), None);
+        assert_eq!(installed_apt(&root.path().join(DPKG_STATUS)), None);
+    }
+
+    /// Proves another package's installed state or version never leaks into apt's: the
+    /// version of the stanza that names apt, and only that, is the answer.
+    #[test]
+    fn the_status_of_another_package_is_not_apts() {
+        let status = "Package: dpkg\nStatus: install ok installed\nVersion: 9.9\n\n\
+                      Package: apt\nStatus: deinstall ok config-files\nVersion: 8.8\n\n\
+                      Package: apt\nStatus: install ok installed\nVersion: 2.6.1\n\n\
+                      Package: other\nStatus: install ok installed\nVersion: 7.7\n";
+        let root = host("native-leak", status);
+        assert_eq!(
+            installed_apt(&root.path().join(DPKG_STATUS)),
+            Some("2.6.1".to_owned())
+        );
+    }
+
+    /// Proves the status file is read whatever the order of apt's fields and with the last stanza
+    /// unterminated: Version before Status, Status before Package, and no trailing blank line.
+    #[test]
+    fn the_status_file_is_read_in_any_field_order_and_unterminated() {
+        for (name, status) in [
+            (
+                "vfirst",
+                "Version: 2.6.1\nPackage: apt\nStatus: install ok installed\n",
+            ),
+            (
+                "sfirst",
+                "Status: install ok installed\nVersion: 2.6.1\nPackage: apt\n",
+            ),
+            (
+                "blank-end",
+                "Package: apt\nVersion: 2.6.1\nStatus: install ok installed\n\n",
+            ),
+            (
+                "no-newline",
+                "Package: apt\nVersion: 2.6.1\nStatus: install ok installed",
+            ),
+        ] {
+            let root = host(name, status);
+            assert_eq!(
+                installed_apt(&root.path().join(DPKG_STATUS)),
+                Some("2.6.1".to_owned()),
+                "{name}"
+            );
+            assert_eq!(
+                native_of(Some(Family::Deb), root.path()),
+                Some(Installer::Apt),
+                "{name}"
+            );
+        }
+    }
+
+    /// Proves a status file that is not UTF-8 is read as no installed apt, not a panic.
+    #[test]
+    fn a_status_file_that_is_not_utf8_gives_none() {
+        let root = host("native-binary", "");
+        put(
+            root.path(),
+            DPKG_STATUS,
+            b"Package: apt\nStatus: install ok installed\nVersion: \xff\n",
+        );
+        assert_eq!(installed_apt(&root.path().join(DPKG_STATUS)), None);
+    }
+
+    /// Proves a host with no repository entry gets none, whatever else it has.
+    #[test]
+    fn a_host_with_no_repository_gets_none() {
+        let root = host("native-norepo", &apt_status("2.6.1"));
+        assert_eq!(
+            native(Some(Family::Deb), root.path(), &Repositories::default()),
+            None
+        );
+    }
+
+    /// Proves the rpm family and a host with no family get none, even with apt's tools and status.
+    #[test]
+    fn the_rpm_family_and_no_family_get_none() {
+        let root = host("native-rpm", &apt_status("2.6.1"));
+        assert_eq!(native_of(Some(Family::Rpm), root.path()), None);
+        assert_eq!(native_of(None, root.path()), None);
+    }
+
+    /// Proves a Debian host with `/usr/bin/rpm` on disk still gets `apt` alone: the family
+    /// decides, not what is installed.
+    #[test]
+    fn a_debian_host_with_rpm_present_still_gets_apt_alone() {
+        let root = host("native-rpm-on-disk", &apt_status("2.6.1"));
+        put(root.path(), "etc/os-release", b"ID=debian\n");
+        put(root.path(), "usr/bin/rpm", b"");
+        let found = announce(linux(root.path()));
+        assert_eq!(found.family, Some(Family::Deb));
+        let native = native(found.family, root.path(), &one_repository());
+        assert_eq!(native, Some(Installer::Apt));
+        let all = announced(
+            found,
+            native,
+            &[Installer::HostkeeperArchive, Installer::Apt],
+        );
+        assert_eq!(
+            all.installers,
+            vec![Installer::HostkeeperArchive, Installer::Apt]
+        );
+    }
+
+    /// Proves the native installer is added only when the build registered it: with `apt`
+    /// registered it follows the archive; without, nothing is added; `None` adds nothing.
+    #[test]
+    fn announced_adds_a_native_installer_only_when_registered() {
+        let base = Announcement::default();
+        let with = announced(
+            base.clone(),
+            Some(Installer::Apt),
+            &[Installer::HostkeeperArchive, Installer::Apt],
+        );
+        assert_eq!(
+            with.installers,
+            vec![Installer::HostkeeperArchive, Installer::Apt]
+        );
+        assert_eq!(with.family, None);
+        assert_eq!(with.names(), vec!["hostkeeper-archive", "apt"]);
+        let without = announced(
+            base.clone(),
+            Some(Installer::Apt),
+            &[Installer::HostkeeperArchive],
+        );
+        assert_eq!(without, base);
+        assert_eq!(without.installers, ALWAYS.to_vec());
+        let none = announced(
+            base.clone(),
+            None,
+            &[Installer::HostkeeperArchive, Installer::Apt],
+        );
+        assert_eq!(none, base);
+    }
+}

@@ -47,10 +47,9 @@ const WIDTH: usize = 100;
 
 /// What the header of both files says about where they come from.
 const HEADER: &str = "\
-// Generated from the protobuf descriptors of hostkeeper-proto by hostkeeper-ui-tests
-// (`client_gen`). Do not edit: `cargo test -p hostkeeper-ui-tests --test client` fails when
-// this file differs from what the descriptors make, and writes the current text beside its test
-// binary.
+// Generated from hostkeeper-proto's descriptors by hostkeeper-ui-tests (`client_gen`). Do not
+// edit: `cargo test -p hostkeeper-ui-tests --test client` fails when this file differs from what
+// the descriptors make, and writes the current text beside its test binary.
 ";
 
 /// One function of the client: `<service>.<name>(request)` calls `method`.
@@ -424,10 +423,7 @@ fn js(commands: &[Command]) -> String {
 fn dts(commands: &[Command], types: &BTreeMap<String, Type>) -> String {
     let mut out = String::from(HEADER);
     out.push_str(
-        "//\n\
-         // The types of `client.js`: each request and reply as proto3 JSON writes it. What each\n\
-         // method does, and what each field holds, is said beside it in its `.proto` file under\n\
-         // `crates/hostkeeper-proto/proto`.\n\n\
+        "// The types of `client.js`, in proto3 JSON; each is described in `crates/hostkeeper-proto/proto`.\n\n\
          /** Sends `request` to `method` (`<package>.<Service>/<Method>`) and resolves to the reply. */\n\
          export type Call = (method: string, request: object) => Promise<object>;\n\n\
          /** The operator API: one object per service, one function per method. */\n\

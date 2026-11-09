@@ -63,6 +63,12 @@
 # runs the programs the packages install; the containers have no network and are removed when
 # they end, and the test writes nothing on the host.
 #
+# In the job privileged, install_apt.rs also runs the apt backend of the repository installer as
+# root against the runner's own apt, dpkg and systemd: a signed fixture repository the test builds
+# on disk with dpkg-deb and gpg is installed from, updated, rolled back with the repository
+# removed, drifted and uninstalled, and the backend's `apt-get update` and simulation run in a
+# container of each deb release of linux-releases.toml (no network, no pull).
+#
 # In each job the test binaries are built as the runner's own user; only their run is as root,
 # through the cargo runner `sudo`, the one use of it in the job (on the Mac, unpack_mac also runs
 # once as the runner's user, before the run as root). So no file of the Cargo registry
@@ -279,9 +285,9 @@ jobs:
       - name: Pull opensuse/tumbleweed
         run: docker pull opensuse/tumbleweed@sha256:871173bf717af0926bd92324ee6f73ba285e0721f0c8ac00ef2c77f1c88d979e
       - name: Build the privileged tests as the runner's user
-        run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test transient_unit --test observer --test unit_control --test self_update --test tierstore_shaped --test self_update_across_releases --test linux_packages --test mdm_cert_units
+        run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test transient_unit --test observer --test unit_control --test self_update --test tierstore_shaped --test self_update_across_releases --test linux_packages --test mdm_cert_units --test install_apt
       - name: Run the privileged tests as root
-        run: cargo test -p hostkeeper-privileged --features privileged --locked --config "target.'cfg(unix)'.runner = 'sudo'" --test transient_unit --test observer --test unit_control --test self_update --test tierstore_shaped --test self_update_across_releases --test linux_packages --test mdm_cert_units -- --test-threads=1
+        run: cargo test -p hostkeeper-privileged --features privileged --locked --config "target.'cfg(unix)'.runner = 'sudo'" --test transient_unit --test observer --test unit_control --test self_update --test tierstore_shaped --test self_update_across_releases --test linux_packages --test mdm_cert_units --test install_apt -- --test-threads=1
       - name: The journal of the test units
         if: failure()
         run: journalctl --unit 'hostkeeper-ci-*' --no-pager

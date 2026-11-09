@@ -195,6 +195,7 @@ fn a_service_entry_is_the_json_entry_of_its_facts() {
     );
     let full = proto::ServiceBeat {
         installer: None,
+        drift: None,
         name: "svc".to_owned(),
         version: "3.1".to_owned(),
         health: proto::Health::Absent as i32,

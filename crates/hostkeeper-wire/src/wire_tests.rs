@@ -375,3 +375,23 @@ fn a_heartbeat_that_is_wrong_beyond_its_services_is_still_refused() {
         );
     }
 }
+
+/// Proves: a drift version is 1 to 128 bytes of letters, digits and `.+~:_-` (an epoch, a
+/// revision and a tilde included); an empty text, one of 129 bytes, and one with a space, a slash
+/// or a non-ASCII letter are refused.
+/// Catches: a limit off by one, or a character outside the package version's set let through.
+#[test]
+fn a_drift_version_is_a_package_version() {
+    use crate::wire::{MAX_DRIFT_VERSION, is_drift_version};
+    for good in [
+        "1.2.3-4",
+        "2:1.0~rc1+b2_x",
+        "a",
+        &"9".repeat(MAX_DRIFT_VERSION),
+    ] {
+        assert!(is_drift_version(good), "{good}");
+    }
+    for bad in ["", "1 2", "1/2", "1.0é", &"9".repeat(MAX_DRIFT_VERSION + 1)] {
+        assert!(!is_drift_version(bad), "{bad}");
+    }
+}
