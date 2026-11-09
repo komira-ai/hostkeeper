@@ -108,7 +108,7 @@ pub const LAYERS: [Layer; 33] = [
     (HELLO, &[], &[CONFIG, HOOK]),
     (HKCTL, &[PROTO], &[COORDINATOR, OIDC]),
     (HOOK, &[], &[]),
-    (INSTALL, &[CONFIG, PROTO, RELEASE, UNPACK], &[]),
+    (INSTALL, &[CONFIG, PROTO, RELEASE, STEPS, UNPACK], &[]),
     (LAUNCHD, &[HOOK, OBSERVE, PLACED, STEPS], &[]),
     (
         LINK,
