@@ -413,8 +413,9 @@ fn a_tool_runs_in_a_real_transient_unit_with_no_network() {
 /// counts more than the two header lines and `lo`, so it keeps the network; `touch` in the
 /// writable directory, in its working directory, with the call's environment, exits 0; `touch`
 /// in `/tmp`, the unit's own (`PrivateTmp=yes`: apt runs `gpgv` with its files there), exits 0
-/// and leaves nothing in the host's `/tmp`; and `touch` of a file beside the writable directory,
-/// which `ProtectSystem=strict` leaves read-only, fails.
+/// and leaves nothing in the host's `/tmp`; and `touch` of a file beside the writable directory
+/// fails: the job's scratch is under `/home`, which `ProtectSystem=strict` alone leaves writable
+/// and `ProtectHome=read-only` makes read-only.
 #[test]
 fn a_fetch_tool_keeps_the_network_and_writes_only_its_paths() {
     let bench = Bench::new("tool_fetch");

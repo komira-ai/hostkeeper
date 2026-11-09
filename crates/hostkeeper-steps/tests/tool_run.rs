@@ -1,9 +1,9 @@
 //! A tool run on the launcher of the host (docs/design/packages.md, 5.3): the `systemd-run` line
 //! of the tool's unit carries `PrivateNetwork=yes` besides `RuntimeMaxSec=` unless it is a fetch,
-//! `ProtectSystem=strict`, `PrivateTmp=yes` and `ReadWritePaths=` when it lists writable paths,
-//! a working directory and an environment when it names them; the lines of a hook step and an
-//! additive step carry none of it; the exit is read as for a step and both streams are answered.
-//! A launcher with no tool runs keeps the default, `NoStart`.
+//! `ProtectSystem=strict`, `ProtectHome=read-only`, `PrivateTmp=yes` and `ReadWritePaths=` when it
+//! lists writable paths, a working directory and an environment when it names them; the lines of
+//! a hook step and an additive step carry none of it; the exit is read as for a step and both
+//! streams are answered. A launcher with no tool runs keeps the default, `NoStart`.
 
 mod support;
 
@@ -280,9 +280,10 @@ fn with(mut line: Vec<String>, rest: &[&str]) -> Vec<String> {
 }
 
 /// Catches an extract that can write outside its target or reach the network: an offline,
-/// confined tool has `PrivateNetwork=yes`, then `ProtectSystem=strict` and `PrivateTmp=yes`, then
-/// one `ReadWritePaths=` per path in order, then `--` and the program; `Some(&[])` is
-/// `ProtectSystem=strict` and `PrivateTmp=yes` alone.
+/// confined tool has `PrivateNetwork=yes`, then `ProtectSystem=strict`, `ProtectHome=read-only`
+/// and `PrivateTmp=yes`, then one `ReadWritePaths=` per path in order, then `--` and the program;
+/// `Some(&[])` is
+/// `ProtectSystem=strict`, `ProtectHome=read-only` and `PrivateTmp=yes` alone.
 #[test]
 fn a_confined_offline_tool_lists_its_writable_paths() {
     let (_scratch, tool) = tool_file("tool-confined");
@@ -298,6 +299,7 @@ fn a_confined_offline_tool_lists_its_writable_paths() {
             &[
                 "--property=PrivateNetwork=yes",
                 "--property=ProtectSystem=strict",
+                "--property=ProtectHome=read-only",
                 "--property=PrivateTmp=yes",
                 "--property=ReadWritePaths=/srv/one",
                 "--property=ReadWritePaths=/srv/two",
@@ -315,6 +317,7 @@ fn a_confined_offline_tool_lists_its_writable_paths() {
             &[
                 "--property=PrivateNetwork=yes",
                 "--property=ProtectSystem=strict",
+                "--property=ProtectHome=read-only",
                 "--property=PrivateTmp=yes",
                 "--",
                 &as_strings(&tool),
@@ -325,7 +328,8 @@ fn a_confined_offline_tool_lists_its_writable_paths() {
 }
 
 /// Catches a fetch that is not confined or is cut off from the network: a fetch has no
-/// `PrivateNetwork`, has `ProtectSystem=strict`, `PrivateTmp=yes` and its `ReadWritePaths=`,
+/// `PrivateNetwork`, has `ProtectSystem=strict`, `ProtectHome=read-only`, `PrivateTmp=yes` and
+/// its `ReadWritePaths=`,
 /// then the working directory and each `--setenv=` in order, all before `--`; the launcher runs
 /// that same line.
 #[test]
@@ -344,6 +348,7 @@ fn a_fetch_has_the_network_a_confinement_a_working_directory_and_an_environment(
         head("infinity"),
         &[
             "--property=ProtectSystem=strict",
+            "--property=ProtectHome=read-only",
             "--property=PrivateTmp=yes",
             "--property=ReadWritePaths=/var/cache/hk/dl",
             "--property=ReadWritePaths=/var/lib/apt",

@@ -97,8 +97,9 @@ pub struct ToolCall<'a> {
     /// `PrivateNetwork=yes` for [`ToolNetwork::Offline`].
     pub network: ToolNetwork,
     /// The file-system confinement: `Some(paths)` makes the unit `ProtectSystem=strict` with
-    /// each path (absolute, without whitespace) in `ReadWritePaths=` and a `/tmp` of its own
-    /// (`PrivateTmp=yes`), so `Some(&[])` leaves nothing of the host writable; `None` leaves the
+    /// `ProtectHome=read-only`, each path (absolute, without whitespace) in `ReadWritePaths=`,
+    /// and a `/tmp` of its own (`PrivateTmp=yes`), so `Some(&[])` leaves nothing of the host
+    /// writable; `None` leaves the
     /// unit unconfined, for a run that writes the host's system (an install, a purge). Refused
     /// with [`ToolNetwork::Fetch`].
     pub writable: Option<&'a [&'a Path]>,
