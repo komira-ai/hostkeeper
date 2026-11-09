@@ -422,3 +422,82 @@ fn the_scripts_never_enable_or_start_the_unit_and_stop_it_only_on_removal() {
         ],
     );
 }
+
+const COORDINATOR_NFPM: &str = "nfpm.yaml";
+const ARTIFACTS_WORKFLOW: &str = "../../.github/workflows/artifacts.yml";
+
+/// The flag and directory of the `check-linux-pkg` command that the header comment of
+/// `nfpm.yaml` names: the words after `<package>` up to the closing backtick.
+fn header_check_args(nfpm: &str) -> Result<String, String> {
+    let comment: String = nfpm
+        .lines()
+        .take_while(|l| l.starts_with('#'))
+        .map(|l| l.trim_start_matches('#').trim())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let (_, after) = comment
+        .split_once("release check-linux-pkg <package> ")
+        .ok_or("the header names no `release check-linux-pkg <package>` command")?;
+    let (args, _) = after
+        .split_once('`')
+        .ok_or("the header's command has no closing backtick")?;
+    Ok(args.to_owned())
+}
+
+/// The flag and directory of each coordinator `check-linux-pkg` step of the workflow: the words
+/// after its quoted package path.
+fn workflow_check_args(workflow: &str) -> Vec<String> {
+    workflow
+        .lines()
+        .filter(|l| l.contains("release check-linux-pkg \"dist/hostkeeper-coordinator"))
+        .filter_map(|l| l.rsplit_once("\" ").map(|(_, args)| args.trim().to_owned()))
+        .collect()
+}
+
+fn check_header_matches_workflow(nfpm: &str, workflow: &str) -> Result<(), String> {
+    let header = header_check_args(nfpm)?;
+    let steps = workflow_check_args(workflow);
+    if steps.len() != 2 {
+        return Err(format!(
+            "the workflow has {} coordinator check-linux-pkg steps, not two (deb and rpm)",
+            steps.len()
+        ));
+    }
+    match steps.iter().find(|args| **args != header) {
+        Some(args) => Err(format!(
+            "the header names `{header}` but the workflow's step runs `{args}`"
+        )),
+        None => Ok(()),
+    }
+}
+
+#[test]
+fn the_header_names_the_check_the_workflow_runs_on_the_coordinators_packages() {
+    let nfpm = read(COORDINATOR_NFPM);
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packaging/coordinator");
+    let workflow = fs::read_to_string(path.join(ARTIFACTS_WORKFLOW)).expect("read artifacts.yml");
+    assert_eq!(
+        header_check_args(&nfpm),
+        Ok("--coordinator-staged target/nfpm-coordinator".to_owned())
+    );
+    assert_eq!(check_header_matches_workflow(&nfpm, &workflow), Ok(()));
+    // The daemon's flag, which the coordinator's check does not take as its staging.
+    let old = altered(
+        &nfpm,
+        "--coordinator-staged target/nfpm-coordinator`",
+        "--staged target/nfpm-coordinator`",
+    );
+    let message = check_header_matches_workflow(&old, &workflow).expect_err("the daemon's flag");
+    assert!(
+        message.contains("the header names `--staged target/nfpm-coordinator`")
+            && message.contains("runs `--coordinator-staged target/nfpm-coordinator`"),
+        "{message}"
+    );
+    // A workflow step with another directory.
+    let other = altered(
+        &workflow,
+        "$RPM_ARCH.rpm\" --coordinator-staged target/nfpm-coordinator",
+        "$RPM_ARCH.rpm\" --coordinator-staged target/other",
+    );
+    assert!(check_header_matches_workflow(&nfpm, &other).is_err());
+}

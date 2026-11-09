@@ -100,6 +100,14 @@ name = "xtask-dump-fixture"
 path = "tests/bin/dump_fixture.rs"
 required-features = ["test-support"]
 
+# The `aws` and `curl` the publisher tests (tests/channels_publish_cli.rs) hand `channels
+# apt|rpm|pkg` through `--aws` and `--curl`: a bucket and a public host in directories beside it,
+# and a record of its calls. A program of the tests, not shipped.
+[[bin]]
+name = "xtask-aws-fixture"
+path = "tests/bin/aws_fixture.rs"
+required-features = ["test-support"]
+
 [features]
 # Builds the launch test's fixture program and `xtask::test_support`. Off for everything else.
 test-support = []

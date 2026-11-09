@@ -19,7 +19,7 @@
 # target/nfpm-coordinator/, which the build job of .github/workflows/artifacts.yml fills: the
 # program, checked as a static ELF of the architecture that says the release's version, and ui/
 # with every directory 0755 and every file 0644, as the container image holds it. `cargo xtask
-# release check-linux-pkg <package> --staged target/nfpm-coordinator` reads each built package
+# release check-linux-pkg <package> --coordinator-staged target/nfpm-coordinator` reads each built package
 # back and refuses it when a program has an interpreter or a NEEDED entry, when it declares a
 # dependency other than systemd, or unless it installs the staged files as staged.
 name: hostkeeper-coordinator
