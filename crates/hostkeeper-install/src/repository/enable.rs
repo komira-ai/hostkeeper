@@ -30,6 +30,15 @@ pub fn wanted(tree: &Path, run: &[String]) -> Result<BTreeMap<String, String>, T
     Ok(out)
 }
 
+/// The links of `wanted` not on the host yet: the ones an `apply` would write.
+pub fn missing(root: &Path, wanted: &BTreeMap<String, String>) -> BTreeSet<String> {
+    wanted
+        .keys()
+        .filter(|link| fs::symlink_metadata(real(root, link)).is_err())
+        .cloned()
+        .collect()
+}
+
 /// `path`, an absolute path of the host, under `root`.
 fn real(root: &Path, path: &str) -> PathBuf {
     root.join(path.trim_start_matches('/'))
@@ -61,12 +70,10 @@ pub fn apply(
                 }
             }
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                if let Some(parent) = path.parent() {
-                    fs::DirBuilder::new()
-                        .recursive(true)
-                        .mode(0o755)
-                        .create(parent)?;
-                }
+                fs::DirBuilder::new()
+                    .recursive(true)
+                    .mode(0o755)
+                    .create(path.parent().unwrap_or(root))?;
                 symlink(target, &path)?;
                 owned.insert(link.clone());
             }

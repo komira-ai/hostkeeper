@@ -12,7 +12,7 @@
 //! - **The units.** Every `run` unit is a regular file of the tree in one of the two unit
 //!   directories.
 //! - **The hook** is the program `usr/lib/<package>/hostkeeper-hook`, when the package has one:
-//!   a regular executable file reached through no link. Without one the service gets the
+//!   a regular executable file, below directories the path rule found to be directories. Without one the service gets the
 //!   built-in steps, and a manifest that names a `boot` step or `params` (which only a hook
 //!   reads) is refused.
 
@@ -113,7 +113,12 @@ fn allowed(path: &str, kind: Kind, rules: &Rules<'_>) -> bool {
         format!("usr/share/doc/{}", rules.package),
         format!("etc/{}", rules.service),
     ];
-    if own.iter().any(|dir| within(path, dir)) {
+    // An own directory itself must be a directory: a link there would put the package's files
+    // wherever it points.
+    if own
+        .iter()
+        .any(|dir| within(path, dir) & ((path != dir) | (kind == Kind::Dir)))
+    {
         return true;
     }
     let unit = UNIT_DIRS.iter().find_map(|dir| {
@@ -186,22 +191,12 @@ pub fn unit_file(tree: &Path, unit: &str) -> Option<String> {
         })
 }
 
-/// Whether the package has a hook, refusing one that is not a regular executable file reached
-/// through no link.
+/// Whether the package has a hook, refusing one that is not a regular executable file. The
+/// path rule ran first, so every directory above it is a directory and none a link.
 fn hook(tree: &Path, package: &str) -> Result<bool, TreeError> {
     let rel = hook_path(package);
     let refused = |why| Err(TreeError::Hook(rel.clone(), why));
-    let mut dir = tree.to_path_buf();
-    for part in ["usr", "lib", package] {
-        dir.push(part);
-        match fs::symlink_metadata(&dir) {
-            Err(_) => return Ok(false),
-            Ok(meta) if meta.file_type().is_symlink() => return refused("reached through a link"),
-            Ok(meta) if !meta.is_dir() => return Ok(false),
-            Ok(_) => {}
-        }
-    }
-    match fs::symlink_metadata(dir.join(HOOK)) {
+    match fs::symlink_metadata(tree.join(&rel)) {
         Err(_) => Ok(false),
         Ok(meta) if meta.file_type().is_symlink() => refused("a link"),
         Ok(meta) if !meta.is_file() => refused("not a regular file"),

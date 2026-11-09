@@ -29,7 +29,13 @@ impl RepositoryInstaller<'_> {
         backend
             .restore(&dir.join(backend.meta_dir()), &work)
             .map_err(|e| io_failure("the version's copy of the index", e))?;
-        let links = record.as_ref().map(|r| r.links.clone()).unwrap_or_default();
+        let wanted = enable::wanted(&dir.join(TREE), &order.run)
+            .map_err(|e| Failure::new(Reason::ManifestInvalid, e.to_string()))?;
+        // The pending record claims the links this run is about to write, so a run found
+        // pending after a crash owns the links the crashed run wrote; a link already there is
+        // not claimed.
+        let mut links = links_of(record.as_ref());
+        links.extend(enable::missing(&self.dirs.root, &wanted));
         let mut next = PackageRecord {
             installer: backend.installer().as_str().to_owned(),
             package: package.to_owned(),
@@ -65,8 +71,6 @@ impl RepositoryInstaller<'_> {
             }
         }
         backend.hold(tools, package, true, bound)?;
-        let wanted = enable::wanted(&dir.join(TREE), &order.run)
-            .map_err(|e| Failure::new(Reason::ManifestInvalid, e.to_string()))?;
         next.links = enable::apply(&self.dirs.root, &wanted, &next.links)
             .map_err(|e| io_failure("the units' enablement links", e))?;
         self.reload(bound)?;
