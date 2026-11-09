@@ -9,7 +9,9 @@ use std::cell::RefCell;
 
 use hostkeeper_config::daemon::Sha256Hex;
 use hostkeeper_config::names::{ServiceName, Version};
-use hostkeeper_install::{Host, HostError, REGISTERED, StageEnv, StageError, StageOrder, steps_of};
+use hostkeeper_install::{
+    Host, HostError, REGISTERED, StageEnv, StageError, StageOrder, backend_of, steps_of,
+};
 use hostkeeper_release::Installer;
 use hostkeeper_unpack::{HostFs, Limits, Platform, REASON_DIGEST_MISMATCH};
 
@@ -46,18 +48,26 @@ fn version(text: &str) -> Version {
     Version::new(text).expect("a version")
 }
 
+/// The registry holds the archive's steps and apt's backend: an installer is registered exactly
+/// when it has artifact steps or a repository backend, never both, each naming itself.
 #[test]
-fn the_registry_holds_the_archive_alone() {
-    assert_eq!(REGISTERED, [Installer::HostkeeperArchive]);
+fn the_registry_holds_the_archive_and_apt() {
+    assert_eq!(REGISTERED, [Installer::HostkeeperArchive, Installer::Apt]);
     for installer in Installer::ALL {
-        let steps = steps_of(installer);
+        let (steps, backend) = (steps_of(installer), backend_of(installer));
         assert_eq!(
-            steps.is_some(),
+            steps.is_some() | backend.is_some(),
             REGISTERED.contains(&installer),
             "{installer}"
         );
+        assert!(!(steps.is_some() & backend.is_some()), "{installer}");
+        let repository = installer.is_repository() & REGISTERED.contains(&installer);
+        assert_eq!(backend.is_some(), repository, "{installer}");
         if let Some(steps) = steps {
             assert_eq!(steps.installer(), installer);
+        }
+        if let Some(backend) = backend {
+            assert_eq!(backend.installer(), installer);
         }
     }
 }
