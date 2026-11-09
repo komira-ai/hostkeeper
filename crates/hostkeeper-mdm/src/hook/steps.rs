@@ -135,6 +135,8 @@ struct Settings {
 /// Everything a step works with.
 pub(crate) struct Steps<'a> {
     pub(crate) system: &'a System<'a>,
+    /// The package's build: the layout of the settings and of a staged release.
+    pub(crate) build: package::Layout,
     pub(crate) record: &'a Record,
     pub(crate) params: &'a Params,
     /// The settings file the params name.
@@ -158,7 +160,7 @@ impl Steps<'_> {
     /// The settings, read through a host that trusts nobody but root and the effective user.
     fn read_settings(&self) -> Result<Settings, Failure> {
         let base = self.system.machine.host(&[]);
-        let text = settings_text(base.as_ref(), self.settings, Layout::Package)?;
+        let text = settings_text(base.as_ref(), self.settings, Layout::Package(self.build))?;
         Ok(Settings {
             config: MdmConfig::parse(&text).map_err(MdmError::from)?,
             acme: Acme::parse(&text).map_err(MdmError::from)?,
@@ -184,7 +186,7 @@ impl Steps<'_> {
         let host = host.as_ref();
         self.root(host)?;
         for program in STAGED_PROGRAMS {
-            let path = format!("{staged}/bin/{program}");
+            let path = format!("{}/{program}", self.build.staged_bin(&staged));
             if host.stat(&path).map_err(MdmError::from)?.map(|m| m.kind) != Some(Kind::File) {
                 return Err(Failure::release(
                     "bad_artifact",
@@ -194,7 +196,7 @@ impl Steps<'_> {
         }
         let Settings { config: c, acme } = self.read_settings()?;
         preflight(host, &c, &package_dirs(&c), None, self.log).map_err(Failure::from)?;
-        let lego = format!("{staged}/bin/lego");
+        let lego = format!("{}/lego", self.build.staged_bin(&staged));
         tls::check_lego(host, &lego, "run", &tls::LEGO_FLAGS)?;
         tls::check_lego(host, &lego, "renew", &tls::LEGO_RENEW_FLAGS)?;
         let dns = dns_env();
@@ -235,7 +237,8 @@ impl Steps<'_> {
         if host.stat(&ca).map_err(MdmError::from)?.is_some() {
             log(self.log, &format!("SCEP CA: kept ({ca})"));
         } else {
-            let init = Cmd::new(&format!("{staged}/bin/scepserver")).args(&scep_ca_init_args(&c));
+            let scepserver = format!("{}/scepserver", self.build.staged_bin(&staged));
+            let init = Cmd::new(&scepserver).args(&scep_ca_init_args(&c));
             p.run(init.as_user(USER));
         }
         // A record of another version's update (one whose cleanup did not finish) keeps what

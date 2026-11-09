@@ -9,7 +9,8 @@ use std::collections::BTreeMap;
 use std::io::Read;
 
 use super::{
-    Contents, Error, Installed, Kind, REGULAR, SYMLINK, bad, gunzip, installed_path, take,
+    Contents, DIRECTORY, Error, Installed, Kind, REGULAR, SYMLINK, bad, gunzip, installed_path,
+    take,
 };
 
 /// The path of the Arch package's metadata in a tar, as [`installed_path`] spells it.
@@ -63,6 +64,8 @@ fn tar_files(data: &[u8], what: &str) -> Result<BTreeMap<String, Installed>, Err
             REGULAR
         } else if header.entry_type().is_symlink() {
             SYMLINK
+        } else if header.entry_type().is_dir() {
+            DIRECTORY
         } else {
             0
         };
@@ -121,20 +124,49 @@ pub(super) fn deb(bytes: &[u8]) -> Result<Contents, Error> {
     let data = data.ok_or_else(|| bad("the deb has no data.tar.gz"))?;
     let files = tar_files(&data, "data.tar")?;
     let control = control.ok_or_else(|| bad("the deb has no control.tar.gz"))?;
-    let control = tar_files(&control, "control.tar")?
+    let mut members = tar_files(&control, "control.tar")?;
+    let control = members
         .remove("/control")
         .ok_or_else(|| bad("control.tar.gz has no ./control"))?;
+    let text = String::from_utf8_lossy(&control.data).into_owned();
+    let mut others: Vec<String> = members
+        .into_iter()
+        .filter(|(path, file)| !(path == "/" && file.mode & TYPE_MASK == DIRECTORY))
+        .map(|(path, _)| path.trim_start_matches('/').to_owned())
+        .collect();
+    others.insert(0, "control".to_owned());
     Ok(Contents {
         kind: Kind::Deb,
         files,
-        depends: control_depends(&String::from_utf8_lossy(&control.data)),
+        depends: control_depends(&text),
+        control: Some(Control {
+            members: others,
+            package: control_field(&text, "package"),
+        }),
     })
 }
 
-/// The relations of the `Depends` and `Pre-Depends` fields of a deb's `control`. Field names are
-/// case-insensitive, a line that starts with a space or a tab continues the field above it, and
-/// relations are comma separated (`a | b` is one).
-fn control_depends(control: &str) -> Vec<String> {
+/// The type bits of a mode.
+const TYPE_MASK: u32 = 0o170_000;
+
+/// What a deb's control archive holds: the names of its members (`control` first, then the
+/// others by name, without the `./` directory) and the value of its `Package` field.
+pub(super) struct Control {
+    pub(super) members: Vec<String>,
+    pub(super) package: Option<String>,
+}
+
+/// The value of the field `name` (lowercase) of `control`, if it has one.
+fn control_field(control: &str, name: &str) -> Option<String> {
+    control_fields(control)
+        .into_iter()
+        .find(|(field, _)| field == name)
+        .map(|(_, value)| value)
+}
+
+/// The fields of a deb's `control`: names lowercased, a line that starts with a space or a tab
+/// continuing the field above it.
+fn control_fields(control: &str) -> Vec<(String, String)> {
     let mut fields: Vec<(String, String)> = Vec::new();
     for line in control.lines() {
         if line.starts_with([' ', '\t']) {
@@ -147,6 +179,13 @@ fn control_depends(control: &str) -> Vec<String> {
         }
     }
     fields
+}
+
+/// The relations of the `Depends` and `Pre-Depends` fields of a deb's `control`. Field names are
+/// case-insensitive, a line that starts with a space or a tab continues the field above it, and
+/// relations are comma separated (`a | b` is one).
+fn control_depends(control: &str) -> Vec<String> {
+    control_fields(control)
         .iter()
         .filter(|(name, _)| name == "depends" || name == "pre-depends")
         .flat_map(|(_, value)| value.split(','))
@@ -165,11 +204,13 @@ pub(super) fn tarred(bytes: &[u8]) -> Result<Contents, Error> {
             kind: Kind::Arch,
             depends: pkginfo_depends(&String::from_utf8_lossy(&info.data)),
             files,
+            control: None,
         },
         None => Contents {
             kind: Kind::Tarball,
             depends: Vec::new(),
             files,
+            control: None,
         },
     })
 }

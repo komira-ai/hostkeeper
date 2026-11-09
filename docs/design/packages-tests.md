@@ -236,7 +236,8 @@ only in the device jobs, against a signed fixture repository and signed fixture 
   case each, a `.pkg` with a `Scripts` archive, and an `.apk` with a script, are `package_scripts` before anything is
   installed; a `.deb` with only `control`, `md5sums` and `conffiles` goes on. A file at each allowed path goes on, and
   one at each refused kind of path (an enablement link under `/etc/systemd/system/`, `/etc/cron.d/`,
-  `/etc/sudoers.d/`, a unit not in `run`) is `manifest_invalid`. Scripts in a package named `hostkeeper` for the
+  `/etc/sudoers.d/`, a drop-in directory, a link or a unit not named for the service in `/usr/lib/systemd/system/`) is
+  `manifest_invalid`; a unit named for the service that is not in `run` goes on (packages-native.md section 10.2). Scripts in a package named `hostkeeper` for the
   service `hostkeeper` go on; the same package set for another service, and another package set for `hostkeeper`, are
   `package_scripts`. A `macos-pkg` order with an attestation is `order_invalid`, and one without is fetched and
   installed with no `gh` run (the command port's record is empty).
