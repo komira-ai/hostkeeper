@@ -71,10 +71,12 @@
 #          the package channels, docs/deploy/package-repositories.md: after every publish and
 #          image of the run, only for the newest release of the run (job `newest`; the older ones
 #          are passed over, the newer carries their changes). The release's deb and rpm packages
-#          of hostkeeper and hostkeeper-coordinator go into the apt and rpm repositories at
+#          of hostkeeper and hostkeeper-coordinator, and the native .debs of the services it
+#          releases (hello's, and mdm's for amd64), go into the apt and rpm repositories at
 #          packages.komira.ai, the suite `testing` first (testing-apt-*, testing-rpm-*: read the
 #          index, merge and sign it, write it, each in up to three attempts), and the macOS
-#          installer into pkg/hostkeeper/<version>/ (testing-pkg-upload). check-apt, check-rpm and
+#          installers, hostkeeper's and hello's, into pkg/hostkeeper/<version>/
+#          (testing-pkg-upload). check-apt, check-rpm and
 #          check-pkg install or download the release from there on clean machines.
 #          promote-check decides (cargo xtask channels decide); only then do stable-apt-*,
 #          stable-rpm-* and promote-pkg make the same bytes the stable suite and the stable
@@ -1755,11 +1757,12 @@ jobs:
           APT_HOSTNAME: ${{ vars.APT_HOSTNAME }}
         run: cargo xtask channels rpm repo write --suite testing --bucket "$APT_BUCKET" --distribution-id "$APT_DISTRIBUTION_ID" --hostname "$APT_HOSTNAME" --next "$RUNNER_TEMP/rpm-next" --rpms "$RUNNER_TEMP/rpm-signed" --version "${TAG#v}" --last --output "$GITHUB_OUTPUT"
 
-  # TESTING, the macOS installer: hostkeeper-<version>-macos-arm64.pkg, its bundle and a SHA256SUMS
-  # of the two, once each, into pkg/hostkeeper/<version>/ of the same bucket (cargo xtask channels
-  # pkg upload; a second put of the same bytes is accepted, other bytes at the same key fail). The
-  # installer is not signed or notarized until the macOS signing milestone (M11): the pointer
-  # below moves the same unsigned bytes.
+  # TESTING, the macOS installers: hostkeeper-<version>-macos-arm64.pkg and hello's
+  # hello-<version>-macos-arm64.pkg, their bundles and a SHA256SUMS of the four, once each, into
+  # pkg/hostkeeper/<version>/ of the same bucket (cargo xtask channels pkg upload; a second put of
+  # the same bytes is accepted, other bytes at the same key fail). Both installers are signed by
+  # artifacts.yml (Developer ID Installer) and not notarized; nothing here signs them: the pointer
+  # below moves the same signed bytes.
 
   testing-pkg-upload:
     needs: [plan, newest]
@@ -1811,7 +1814,7 @@ jobs:
         env:
           ROLE_ARN: ${{ vars.APT_PUBLISH_ROLE_ARN }}
         run: cargo xtask channels assume --role-arn "$ROLE_ARN" --session-name "hostkeeper-testing-pkg-upload-$GITHUB_RUN_ID" --region us-east-1 --token-url "$ACTIONS_ID_TOKEN_REQUEST_URL" --env-file "$GITHUB_ENV"
-      - name: Put the installer, its bundle and their SHA256SUMS once each (the pointer is not touched)
+      - name: Put the installers, their bundles and their SHA256SUMS once each (the pointer is not touched)
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:
           APT_BUCKET: ${{ vars.APT_BUCKET }}
@@ -1821,17 +1824,21 @@ jobs:
   # promote-check refuses, while the packages stay in `testing`). check-apt: a clean Ubuntu container, pinned by digest, on a hosted runner of each
   # architecture, adds packages.komira.ai with the published keyring (deb822, Signed-By) and the
   # suite `testing`, installs the package at the version, and holds the installed system to what the
-  # package promises (cargo xtask channels check-apt), for each of the two packages. The xtask
-  # binary built on the runner is mounted into the container, which has nothing else of this
-  # repository.
+  # package promises (cargo xtask channels check-apt), for each package on each architecture it is
+  # built for: the daemon's and the coordinator's, and the services' native packages, hello's and
+  # mdm's (amd64 alone). The xtask binary built on the runner is mounted into the container, which
+  # has nothing else of this repository.
   check-apt:
     needs: [plan, newest, testing-apt-write, testing-apt-write-2, testing-apt-write-3]
     if: ${{ !cancelled() && !failure() && needs.plan.outputs.release == 'true' && github.ref == 'refs/heads/main' && (needs.testing-apt-write.outputs.conflict == 'false' || needs.testing-apt-write-2.outputs.conflict == 'false' || needs.testing-apt-write-3.outputs.conflict == 'false') }}
     strategy:
       fail-fast: false
       matrix:
-        package: [hostkeeper, hostkeeper-coordinator]
+        package: [hostkeeper, hostkeeper-coordinator, hello, mdm]
         arch: [amd64, arm64]
+        exclude:
+          - package: mdm
+            arch: arm64
         include:
           - arch: amd64
             runner: ubuntu-24.04
@@ -1903,7 +1910,7 @@ jobs:
           ARCH: ${{ matrix.arch }}
         run: cargo xtask channels check-rpm --package "$PACKAGE" --container check-rpm --arch "$ARCH" --version "${TAG#v}" --commit "$COMMIT" --work /root --scratch "$RUNNER_TEMP"
 
-  # check-pkg: the installer, its bundle and the directory's SHA256SUMS as packages.komira.ai
+  # check-pkg: the installers, their bundles and the directory's SHA256SUMS as packages.komira.ai
   # serves them (HTTPS), against the release's SHA256SUMS.
   check-pkg:
     needs: [plan, newest, testing-pkg-upload]
@@ -1930,7 +1937,7 @@ jobs:
       - name: The files match SHA256SUMS
         working-directory: dist
         run: sha256sum --check --strict SHA256SUMS
-      - name: The installer, its bundle and their SHA256SUMS as the public host serves them, against the release's SHA256SUMS
+      - name: The installers, their bundles and their SHA256SUMS as the public host serves them, against the release's SHA256SUMS
         run: cargo xtask channels pkg check --sums dist/SHA256SUMS --version "${TAG#v}" --url https://packages.komira.ai --work "$RUNNER_TEMP/pkg-check"
 
   # PROMOTION. promote-check re-reads the results of everything before it (cargo xtask channels
@@ -3076,10 +3083,10 @@ jobs:
           APT_HOSTNAME: ${{ vars.APT_HOSTNAME }}
         run: cargo xtask channels rpm repo write --suite stable --bucket "$APT_BUCKET" --distribution-id "$APT_DISTRIBUTION_ID" --hostname "$APT_HOSTNAME" --next "$RUNNER_TEMP/rpm-next" --no-pool --last --output "$GITHUB_OUTPUT"
 
-  # promote-pkg: pkg/hostkeeper/stable.json, the pointer the installer's users follow, moved to this
+  # promote-pkg: pkg/hostkeeper/stable.json, the pointer the installers' users follow, moved to this
   # release after the testing directory is read back and held to SHA256SUMS (cargo xtask channels
   # pkg promote): nothing is uploaded again, the bytes that were downloaded and checked are the
-  # bytes that become the stable installer. Same environment and role as testing-pkg-upload.
+  # bytes that become the stable installers. Same environment and role as testing-pkg-upload.
   promote-pkg:
     needs: [plan, newest, promote-check, testing-pkg-upload]
     if: ${{ !cancelled() && !failure() && needs.plan.outputs.release == 'true' && github.ref == 'refs/heads/main' && needs.promote-check.outputs.promote == 'true' }}

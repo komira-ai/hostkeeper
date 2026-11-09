@@ -416,15 +416,12 @@ done out of order.
 The manual path, for a Mac without an MDM: place `/etc/hostkeeper/hostkeeper.toml` first, then
 install the pkg. The daemon's start keeps that file, and the postinstall loads the job.
 
-The pkg carries no installer signature yet. Which identity will sign it, a farm installer
-identity whose root the MDM installs or an Apple Developer ID Installer identity, is decided by
-the device test of the MDM design (section 7.2, task M11), whose kit and runbook are
-[operations/pkg-signing-test.md](operations/pkg-signing-test.md). It is attested like every other asset, and the binary in it
-keeps the ad-hoc code signature the linker gives it, which the package verification above accepts.
 `cargo xtask release macos-pkg` builds the component with `pkgbuild` from the binary, `gh` and the
 trusted root (`--binary`, `--gh`, `--trusted-root`), then runs `productbuild --package` over it
 with the pkg identifier and the version and no signature; only the product goes to `--out`, and
-the digest line is its digest. `cargo xtask release check-macos-pkg` reads back the product
+the digest line is its digest. The binary in it keeps the ad-hoc code signature the linker gives
+it, which the package verification above accepts.
+`cargo xtask release check-macos-pkg` reads back the product
 archive that `pkgutil --expand` expanded, layer by layer.
 
 - The outer layer holds exactly the file `Distribution` and the directory `hostkeeper.pkg`, no
@@ -452,6 +449,48 @@ signs and publishes nothing.
 hostkeeper's own package has no unit on a Mac: the manifest's launchd labels are the service name
 or the service name, `.` and more, and the daemon's label is not, so the daemon's job is the
 pkg's plist.
+
+### The installer's signature
+
+The released pkg is signed with the Developer ID Installer identity
+`Developer ID Installer: Komira AI, Inc. (U7RTX4XD3X)`, because the MDM's
+`InstallEnterpriseApplication` installs only a signed pkg. hello's `.pkg`
+(`hello-<version>-macos-arm64.pkg`) is signed the same way, in the same jobs, because a host's
+`macos-pkg` installer stages only a signed pkg; each step below is done for both. It is not notarized: nothing Apple
+states asks an MDM-installed pkg for notarization (design section 7.3), and the release adds it
+only if a Mac refuses the signed pkg without it. The signing is in `.github/workflows/artifacts.yml`,
+on a push to `main` only, in three jobs:
+
+1. `build-macos` builds the unsigned pkgs into `pkg/` and checks them (above); they are never
+   release files, only the artifact `pkg-unsigned-macos-arm64`.
+2. `sign-pkg`, in the environment `pkg-signing`, runs no repository code (no checkout, no cargo),
+   so no build script or dependency runs where the key is. It decodes the PKCS#12 of the secret
+   `MACOS_INSTALLER_P12` (the identity's key and certificate and Apple's Developer ID G2
+   intermediate) into a file of the job, imports it into a new keychain in `$RUNNER_TEMP` (never
+   the login keychain) whose key only `productsign` may use, makes that keychain the user's only
+   one, and runs `productsign --sign <identity> --keychain <it> --timestamp`; the trusted
+   timestamp keeps the signature valid after the certificate expires. Then, whether the signing
+   worked or not, it deletes the keychain and the PKCS#12 file.
+3. `check-pkg`, with no secret, runs `cargo xtask release check-pkg-signature <pkg> --identity
+   <identity>`, which refuses the pkg unless `pkgutil --check-signature` exits 0 and prints a
+   trusted status, a trusted timestamp and the chain of exactly the identity, `Developer ID
+   Certification Authority` and `Apple Root CA`, naming every difference; it then expands the
+   signed and the unsigned pkg and refuses any file that differs, so the signing changed nothing
+   `check-macos-pkg` checked. Only then is each signed pkg the release file
+   `hostkeeper-<version>-macos-arm64.pkg` or `hello-<version>-macos-arm64.pkg`: `SHA256SUMS`,
+   the attestation and the release are of its bytes.
+
+A run by hand signs nothing: it builds and checks the unsigned pkgs and makes the sums without
+them.
+The workflow lint (`crates/xtask/tests/workflows/pkg_signing.rs`) holds these jobs to their
+steps: the signing job's exact steps, with the cleanup under `always()` after the signing; the
+secrets named in that job alone; the checks of both pkgs before the one upload of them; and
+`sums` after it.
+
+On a Mac, `pkgutil --check-signature hostkeeper-<version>-macos-arm64.pkg` (or
+`hello-<version>-macos-arm64.pkg`) shows the signature.
+The MDM gate takes the release's pkg as it is: its digest on the allowlist is the line of
+`SHA256SUMS`, the signed file's ([enrollment-coordinator.md](enrollment-coordinator.md)).
 
 ### Boot id
 

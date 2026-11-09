@@ -1,15 +1,21 @@
-//! The macOS installer channel: `hostkeeper-<version>-macos-arm64.pkg` and its attestation
-//! bundle on `packages.komira.ai`, in the bucket of the apt and rpm repositories.
+//! The macOS installer channel: the installers of a release, `hostkeeper-<version>-macos-arm64.pkg`
+//! and hello's `hello-<version>-macos-arm64.pkg` ([`spec::Product::pkg_files`]), each with its
+//! attestation bundle, on `packages.komira.ai`, in the bucket of the apt and rpm repositories.
 //!
-//! The installer is **not signed** (no Developer ID signature, no notarization) until the owner
-//! has the certificate; nothing in these verbs signs it, and a user who installs it gets
-//! Gatekeeper's warning. What vouches for it is the release's `SHA256SUMS` and the build
-//! provenance bundle published beside it.
+//! Each installer, hostkeeper's and hello's, is signed by the release that built it
+//! (hostkeeper's `artifacts.yml` signs it with the Developer ID Installer identity before it is
+//! summed and attested) and is not notarized, so a downloaded copy opened in the Finder gets
+//! Gatekeeper's warning. Nothing in these verbs signs them: they move the release's bytes. What
+//! vouches for those bytes is the release's `SHA256SUMS` and the build provenance bundle
+//! published beside each.
 //!
 //! Two channels, as for the Linux packages:
 //!
 //! - **testing** is the directory `pkg/hostkeeper/<version>/` ([`spec::Product::pkg_prefix`]):
-//!   the installer, its `.sigstore.json` bundle, and a `SHA256SUMS` of exactly these two files.
+//!   the installers, the `.sigstore.json` bundle of each, and a `SHA256SUMS` of exactly these
+//!   files. A Mac's store of this channel is rooted at `pkg/` and fetches an installer by
+//!   `hostkeeper/<version>/<file>` ([`spec::Product::pkg_locator`]), the location of hello's
+//!   `macos-pkg` entry (`release targets`).
 //!   `channels pkg upload` puts each file once, with `If-None-Match: *`, so a version's file is
 //!   never replaced. It never touches the pointer.
 //! - **stable** is the pointer `pkg/hostkeeper/stable.json` ([`spec::Product::pkg_stable_key`]),
@@ -18,7 +24,7 @@
 //!   `SHA256SUMS`, and only then moves the pointer, with `If-Match` on the ETag it read, and only
 //!   to a higher version. Then the CDN is told that one path changed.
 //!
-//! `channels pkg check` is the install check of the installer: it downloads the installer, its
+//! `channels pkg check` is the install check of the installers: it downloads each installer, its
 //! bundle and the directory's `SHA256SUMS` from the public host over HTTPS and holds them to the
 //! release's `SHA256SUMS`.
 //!
@@ -259,12 +265,15 @@ pub(crate) fn check_request(r: &Request) -> Result<(String, (u64, u64, u64)), Er
     Ok((version.to_owned(), ours))
 }
 
-/// The installer and its bundle in `dir`, sorted by name, each held to the digest the release's
-/// `SHA256SUMS` lists (the bundle is not listed there: it is made after the sums).
+/// The installers and their bundles in `dir`, sorted by name, each held to the digest the
+/// release's `SHA256SUMS` lists (a bundle is not listed there: it is made after the sums).
 pub(crate) fn collect(dir: &Path, version: &str) -> Result<Vec<Entry>, Error> {
     let listed = sums::read_sums(&dir.join(SUMS))?;
-    let installer = spec::HOSTKEEPER.pkg_file(version);
-    let mut names = vec![format!("{installer}{BUNDLE_SUFFIX}"), installer];
+    let mut names: Vec<String> = spec::HOSTKEEPER
+        .pkg_files(version)
+        .into_iter()
+        .flat_map(|installer| [format!("{installer}{BUNDLE_SUFFIX}"), installer])
+        .collect();
     names.sort();
     let mut problems = Vec::new();
     let mut entries = Vec::new();

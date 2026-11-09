@@ -34,7 +34,10 @@ The same package is also built as a `.deb`, `mdm_<version>_amd64.deb` (`cargo xt
 which hostkeeper installs with `apt` once the farm moves to native packages
 ([design: native packages only](../design/packages-native.md), sections 10.2 and 10.6). It holds the same programs and
 units at the `.deb`'s paths, and no maintainer script: dpkg runs nothing of the package's own, and nothing but
-hostkeeper and the hook enables or starts a unit.
+hostkeeper and the hook enables or starts a unit. Each release ships it as an attested asset and publishes it
+to the `testing` suite of the project's apt repository ([package-repositories.md](../deploy/package-repositories.md));
+`cargo xtask release targets --service mdm` lists its `apt` entry (repository `komira-testing`) before the
+archive's, so a host whose daemon announces `apt` takes the `.deb` and any other host the archive (stage 8).
 
 | Path the `.deb` installs | What it is |
 |---|---|

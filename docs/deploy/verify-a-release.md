@@ -43,6 +43,9 @@ binary are for the two Linux platforms; the installer pkg is for `macos-arm64`.
 | `hello-<version>-fail-ready-<platform>.tar.zst.sha256` | the SHA-256 of that package |
 | `mdm-<version>-linux-x86_64.tar.zst` | the package of `mdm`, the MDM server stack as a service hostkeeper installs (docs/design/two-programs.md section 6.2), for linux-x86_64 only: `manifest.toml`, `bin/mdm` (its hook and its operator verbs, built from `crates/hostkeeper-mdm`, which prints `mdm X.Y.Z+<first 12 hex digits of the commit>` for `--version`), the pinned servers and lego under `bin/` (`caddy`, `depserver`, `depsyncer`, `lego`, `nanohub`, `scepserver`, each taken out of its upstream archive after the archive matched its pin in `crates/hostkeeper-mdm-core/pins.txt`), and its units under `units/` |
 | `mdm-<version>-linux-x86_64.tar.zst.sha256` | the SHA-256 of that package |
+| `hello_<version>_<deb-arch>.deb` | hello's native package (docs/design/packages-native.md section 10.2): the program at `/usr/lib/hello/hello`, its hook at `/usr/lib/hello/hostkeeper-hook`, and the two slots' units `hello@a.service` and `hello@b.service` in `/usr/lib/systemd/system/`, installed disabled; no maintainer script and no dependency. The release publishes it to the `testing` suite of the project's apt repository ([package-repositories.md](package-repositories.md)) |
+| `hello-<version>-macos-arm64.pkg` | hello's native package for macOS: one component with no script, the program and its hook under `/Library/Application Support/hello/`, and the two slots' jobs `hello.a` and `hello.b` in `/Library/LaunchDaemons/`, `Disabled`; signed by the Developer ID Installer identity `Developer ID Installer: Komira AI, Inc. (U7RTX4XD3X)` with a trusted timestamp, as the installer is, not notarized, attested. The release puts it in the `testing` directory of the installers, `pkg/hostkeeper/<version>/` |
+| `mdm_<version>_amd64.deb` | mdm's native package, for linux-x86_64 only: its program, the pinned servers and its hook in `/usr/lib/mdm/`, and its units in `/usr/lib/systemd/system/` ([docs/operations/mdm-package.md](../operations/mdm-package.md)), installed disabled; no maintainer script. Published to the `testing` suite like hello's |
 | `hostkeeper_<version>_<deb-arch>.deb` | the deb package: the daemon, its unit, its tmpfiles rules, its config template, the pinned `gh` and Sigstore trusted root it checks packages with, `/usr/bin/hostkeeper-pxe` (the boot server of network install, docs/design/network-install.md section 3, with no unit: it runs only when an operator starts it), and the link `/etc/issue.d/hostkeeper.issue` to the console's issue file the daemon writes while it waits for its enrollment |
 | `hostkeeper-<version>-1.<rpm-arch>.rpm` | the rpm package, with the same files and link |
 | `hostkeeper-coordinator-<version>-<linux-platform>.tar.gz` | the coordinator binary |
@@ -53,7 +56,7 @@ binary are for the two Linux platforms; the installer pkg is for `macos-arm64`.
 | `hostkeeper-coordinator-<version>-1.<rpm-arch>.rpm` | the coordinator's rpm package, with the same files |
 | `hostkeeper-mdm-<version>-<linux-platform>.tar.gz` | the MDM kit's binary, `hostkeeper-mdm` (`crates/hostkeeper-mdm`), which sets up and migrates the MDM server stack on its Linux host |
 | `hostkeeper-mdm-<version>-<linux-platform>.cdx.json` | its CycloneDX SBOM |
-| `hostkeeper-<version>-macos-arm64.pkg` | the installer of a Mac's first install: `/usr/local/bin/hostkeeper` (0755), `/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist` (0644), the log directory `/var/log/hostkeeper` (0755) and its rotation `/etc/newsyslog.d/hostkeeper.conf` (0644), the pinned `gh` at `/usr/local/lib/hostkeeper/gh` (0755) and the Sigstore trusted root at `/usr/local/lib/hostkeeper/trusted_root.json` (0644), owned by root and wheel; a distribution pkg (`productbuild` around the component pkg); the component's one script, a `postinstall`, boots out any loaded copy of the daemon's job and loads it (the plist's program is `/usr/local/bin/hostkeeper daemon`, which at each start points `/var/lib/updater/state/hostkeeper/bin/current` at itself when that starts nothing, writes `/etc/hostkeeper/hostkeeper.toml` from the MDM's managed preferences unless that file exists, and runs `current`); not signed, attested |
+| `hostkeeper-<version>-macos-arm64.pkg` | the installer of a Mac's first install: `/usr/local/bin/hostkeeper` (0755), `/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist` (0644), the log directory `/var/log/hostkeeper` (0755) and its rotation `/etc/newsyslog.d/hostkeeper.conf` (0644), the pinned `gh` at `/usr/local/lib/hostkeeper/gh` (0755) and the Sigstore trusted root at `/usr/local/lib/hostkeeper/trusted_root.json` (0644), owned by root and wheel; a distribution pkg (`productbuild` around the component pkg); the component's one script, a `postinstall`, boots out any loaded copy of the daemon's job and loads it (the plist's program is `/usr/local/bin/hostkeeper daemon`, which at each start points `/var/lib/updater/state/hostkeeper/bin/current` at itself when that starts nothing, writes `/etc/hostkeeper/hostkeeper.toml` from the MDM's managed preferences unless that file exists, and runs `current`); signed by the Developer ID Installer identity `Developer ID Installer: Komira AI, Inc. (U7RTX4XD3X)` with a trusted timestamp, not notarized, attested |
 | `index.json` | the release index of the hostkeeper packages: for each of the three platforms the package file, its SHA-256 and size |
 | `hello-index.json` | the release index of the hello packages (`service` `hello`, `version` `<version>`) |
 | `hello-fail-ready-index.json` | the release index of hello's failing build (`service` `hello`, `version` `<version>-fail-ready`) |
@@ -61,7 +64,7 @@ binary are for the two Linux platforms; the installer pkg is for `macos-arm64`.
 | `hkctl-<version>` | the command line of the coordinator ([docs/cli.md](../cli.md)): one bash script for every platform, generated from the protobuf services, that calls the coordinator's JSON gateway with `curl`; it needs bash 3.2 or later and curl 7.55 or later. No host package carries it |
 | `netboot.json` | the boot sets of network install (docs/design/network-install.md, section 5): for each Linux platform the Ubuntu live-server ISO, the shim, the signed network GRUB, the kernel and the initrd a bare machine boots, each with the name it is served as, its size, its SHA-256 and where it comes from, rendered from `packaging/netboot/pins.toml` (`cargo xtask release netboot`) |
 | `SHA256SUMS` | the SHA-256 of every asset except itself and the bundles |
-| `<asset>.sigstore.json` | the attestation bundle of each `.tar.gz`, `.tar.zst`, `.deb`, `.rpm`, `.image.tar` and `.pkg`, of `netboot.json`, of the image index `hostkeeper-coordinator-<version>.image.json` and of `hkctl-<version>` |
+| `<asset>.sigstore.json` | the attestation bundle of each `.tar.gz`, `.tar.zst`, `.deb` (the services' native ones included), `.rpm`, `.image.tar` and `.pkg` (hello's included), of `netboot.json`, of the image index `hostkeeper-coordinator-<version>.image.json` and of `hkctl-<version>` |
 
 Each index has the same schema. An index is a lookup, not a trust anchor: it has no bundle of its
 own, and a host trusts a package for its own attestation and manifest, never for its entry in the
@@ -98,10 +101,19 @@ digest. A tag can be moved; a digest cannot, so a deployment pins the digest.
 
 A release holds the assets of all three platforms; `cargo xtask release check` refuses one that
 lacks any of them, and each index lists the package of each, but for `mdm-index.json`, which
-lists the one platform the mdm package is built for. The pkg carries no installer
-signature (that needs an Apple Developer ID Installer identity, which this project does not hold):
-verify it by its attestation, steps 3 and 4, like any other asset. Names are added, never
-renamed, so a consumer ignores assets it does not know. A name is removed only when its asset is
+lists the one platform the mdm package is built for. Each pkg, the installer and hello's, carries an installer signature
+by the Developer ID Installer identity `Developer ID Installer: Komira AI, Inc. (U7RTX4XD3X)`,
+under Apple's Developer ID Certification Authority and Apple Root CA, with a trusted timestamp;
+the release signs it before it sums and attests it, so `SHA256SUMS` and the attestation name the
+signed bytes. Verify it by its attestation, steps 3 and 4, like any other asset, and on a Mac
+also by its signature: `pkgutil --check-signature hostkeeper-<version>-macos-arm64.pkg` (or
+`hello-<version>-macos-arm64.pkg`) prints
+`Status: signed by a developer certificate issued by Apple for distribution`, a `Signed with a
+trusted timestamp on:` line and that chain of three. Neither pkg is notarized: an MDM installs
+the installer with `InstallEnterpriseApplication`, and a host's `macos-pkg` installer stages
+hello's, and neither asks for notarization; a double click on a downloaded copy is refused by
+Gatekeeper, so install the installer by MDM or with `sudo installer -pkg`.
+Names are added, never renamed, so a consumer ignores assets it does not know. A name is removed only when its asset is
 withdrawn: the Arch Linux package (`hostkeeper-<version>-1-<rpm-arch>.pkg.tar.zst`) is no longer
 built, by the maintainers' ruling that the Linux packages are deb and rpm.
 
@@ -158,6 +170,12 @@ hello-<version>-fail-ready-<platform>.tar.zst.sha256
 mdm-<version>-linux-x86_64.tar.zst
 mdm-<version>-linux-x86_64.tar.zst.sigstore.json
 mdm-<version>-linux-x86_64.tar.zst.sha256
+hello_<version>_<deb-arch>.deb
+hello_<version>_<deb-arch>.deb.sigstore.json
+hello-<version>-macos-arm64.pkg
+hello-<version>-macos-arm64.pkg.sigstore.json
+mdm_<version>_amd64.deb
+mdm_<version>_amd64.deb.sigstore.json
 ```
 
 ## What the Linux packages check packages with
@@ -414,7 +432,7 @@ installer into the package repositories of `packages.komira.ai`, `testing` first
 install checks ([Package repositories](package-repositories.md)). Those jobs run the same checks as
 `publish`, the sums and `cargo xtask release check`, on the files they download, before they sign an
 index or write anything; the files they upload are the verified ones, byte for byte, and the macOS
-installer in them is as unsigned as the asset.
+installer in them is the signed asset.
 
 ## The trusted root on a host
 

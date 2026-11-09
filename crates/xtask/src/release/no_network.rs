@@ -35,7 +35,7 @@ const COMMAND: &str = concat!("Command::", "new");
 const CFG_TEST: &str = concat!("#[cfg(", "test)]");
 
 /// The test files that start a process on purpose, and why.
-const PROCESS_TESTS: [(&str, &str); 16] = [
+const PROCESS_TESTS: [(&str, &str); 17] = [
     ("tests/cli.rs", "runs the xtask binary as a process"),
     (
         "tests/channels_cli.rs",
@@ -44,6 +44,10 @@ const PROCESS_TESTS: [(&str, &str); 16] = [
     (
         "tests/channels_publish_cli.rs",
         "runs the xtask binary as a process on the apt, rpm and installer channel verbs",
+    ),
+    (
+        "tests/channels_check_apt_cli.rs",
+        "runs the xtask binary as a process on the apt install check, with a fake env",
     ),
     (
         "tests/release_image_cli.rs",

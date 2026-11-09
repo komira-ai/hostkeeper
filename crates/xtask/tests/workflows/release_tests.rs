@@ -11,7 +11,7 @@ use super::release::{
 use super::{CLEAN, push_only, with, with_in, workflows};
 
 /// The text of the repository's workflow `name`.
-fn workflow(name: &str) -> String {
+pub(super) fn workflow(name: &str) -> String {
     workflows()
         .into_iter()
         .find(|(file, _)| file == name)
@@ -28,7 +28,7 @@ fn all_problems(file: &str, text: &str) -> Vec<String> {
 
 /// Fails unless the problems of `text` as `file` include a line holding `want`.
 #[track_caller]
-fn assert_refused(file: &str, text: &str, want: &str) {
+pub(super) fn assert_refused(file: &str, text: &str, want: &str) {
     let found = all_problems(file, text);
     assert!(
         found.iter().any(|p| p.contains(want)),
@@ -680,7 +680,7 @@ fn attest_job_runs_no_repository_code() {
 
 /// The two steps that attest the package `file` (a name with `${V}` for the version) and copy its
 /// bundle: `id` is the id of the first, `name` the name of the second.
-fn attest_steps(id: &str, name: &str, file: &str, subject: &str) -> String {
+pub(super) fn attest_steps(id: &str, name: &str, file: &str, subject: &str) -> String {
     format!(
         "      - id: {id}\n        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2\n        with:\n          subject-path: dist/{subject}\n      - name: {name}\n        env:\n          BUNDLE: ${{{{ steps.{id}.outputs.bundle-path }}}}\n        run: cp \"$BUNDLE\" \"dist/{file}.sigstore.json\"\n"
     )

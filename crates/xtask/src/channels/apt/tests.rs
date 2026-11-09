@@ -26,9 +26,10 @@ fn a_failed_aws_call_is_told_by_what_it_says() {
 }
 
 #[test]
-fn the_package_files_of_a_version_are_every_package_for_every_architecture_and_must_all_be_there() {
+fn the_package_files_of_a_version_are_every_package_for_each_of_its_architectures_and_must_all_be_there()
+ {
     // Catches: an index or upload for one architecture or one package only, or for another
-    // version's files.
+    // version's files; an mdm asked for arm64, which it is not built for.
     let dir = scratch("package-files");
     release_files(&dir, "1.2.3");
     let files = package_files(&dir, "1.2.3").expect("files");
@@ -36,16 +37,16 @@ fn the_package_files_of_a_version_are_every_package_for_every_architecture_and_m
     assert_eq!(
         names,
         [
+            "hello_1.2.3_amd64.deb",
+            "hello_1.2.3_arm64.deb",
             "hostkeeper-coordinator_1.2.3_amd64.deb",
             "hostkeeper-coordinator_1.2.3_arm64.deb",
             "hostkeeper_1.2.3_amd64.deb",
-            "hostkeeper_1.2.3_arm64.deb"
+            "hostkeeper_1.2.3_arm64.deb",
+            "mdm_1.2.3_amd64.deb"
         ]
     );
-    assert_eq!(
-        files[0].1,
-        dir.join("hostkeeper-coordinator_1.2.3_amd64.deb")
-    );
+    assert_eq!(files[0].1, dir.join("hello_1.2.3_amd64.deb"));
     std::fs::remove_file(dir.join("hostkeeper_1.2.3_arm64.deb")).expect("remove");
     let e = package_files(&dir, "1.2.3").unwrap_err().to_string();
     assert!(e.contains("hostkeeper_1.2.3_arm64.deb is not in"), "{e}");
@@ -57,6 +58,13 @@ fn the_package_files_of_a_version_are_every_package_for_every_architecture_and_m
         e.contains("hostkeeper-coordinator_1.2.3_amd64.deb is not in"),
         "{e}"
     );
+    // A service's native package is as much part of the release as hostkeeper's own.
+    for missing in ["hello_1.2.3_arm64.deb", "mdm_1.2.3_amd64.deb"] {
+        release_files(&dir, "1.2.3");
+        std::fs::remove_file(dir.join(missing)).expect("remove");
+        let e = package_files(&dir, "1.2.3").unwrap_err().to_string();
+        assert!(e.contains(&format!("{missing} is not in")), "{e}");
+    }
     assert!(package_files(&dir, "1.2.4").is_err());
     assert!(matches!(
         package_files(&dir, "v1.2.3"),

@@ -359,6 +359,10 @@ is started with `-webhook-url http://<--mdm-webhook-listen>/webhook`.
   path    = "/var/lib/hostkeeper-mdm-pkg/<sha256>.pkg"   # in the MDM kit's pkg directory
   ```
 
+  The pkg is the release's `hostkeeper-<version>-macos-arm64.pkg` as it is: the release signs
+  it with the Developer ID Installer identity before it sums and attests it, so its `sha256` is
+  its line of the release's `SHA256SUMS`, and the file goes into the pkg directory unchanged,
+  named by that digest ([macos.md](macos.md), "The installer's signature").
   A path is absolute and named `<sha256>.pkg`, a digest is listed once and so are a version's
   release numbers, and a list with no entry is refused. The gate sends the newest entry: an
   `InstallEnterpriseApplication` with an inline manifest, one `software-package` asset whose
