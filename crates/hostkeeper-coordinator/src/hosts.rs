@@ -1,7 +1,11 @@
 //! `Hosts.List`, `Hosts.Get` and `Hosts.Retire`, as plain functions over the messages of
 //! `hostkeeper.operator.v1`.
 //!
-//! `List` and `Get` answer the hosts the coordinator has heard from since it started. Both read
+//! `Get` answers a host the coordinator has heard from since it started; `List` answers those and
+//! every host the enrollment store holds as enrolled and not denied, by node id, a host not heard
+//! since the start as its enrollment kept it ([`crate::running::unheard`]: not live, its daemon and
+//! what it ran). The enrolled ids are read before the fleet's lock is taken, and the enrollment
+//! of each host of the page after it. For the hosts heard, both read
 //! what `Releases.Status` reads, in one snapshot under the fleet's lock
 //! ([`Coordinator::status_in`]): every node a heartbeat noted, and for each how every service
 //! that heard it, or does not count it, sees it ([`crate::grpc::report::host`]). They change
@@ -60,7 +64,8 @@ impl Coordinator {
         self
     }
 
-    /// `Hosts.List`: the hosts heard from since the coordinator started, by node id, after the
+    /// `Hosts.List`: the hosts heard from since the coordinator started and the hosts enrolled and
+    /// not denied that were not, by node id, after the
     /// node id `page_token` names, at most `limit` ([`MAX_HOSTS_PAGE`] for 0 or above it), and
     /// the token of the next page (the last node id of this one; empty on the last page).
     /// Changes nothing.
