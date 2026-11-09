@@ -10,15 +10,12 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use hostkeeper_daemon::cli::{self, Cli};
-use hostkeeper_daemon::selfupdate::{ProbeError, REASON_PROTOCOL_UNREADABLE};
-use hostkeeper_daemon::{Daemon, Refusal, Reply, update_hook};
-use hostkeeper_hook::{ArgsError, Class, Outcome, Step, Verdict};
+use hostkeeper_daemon::{Refusal, Reply, update_hook};
+use hostkeeper_hook::{ArgsError, Outcome, Step, Verdict};
 use hostkeeper_placed::testing::{Event, UnitCall};
 use hostkeeper_steps::Settled;
 use hostkeeper_steps::record::State;
-use support::selfupdate::{
-    DEB_UNIT, DEB_WANTS, HK, NEW, OLD, SelfRig, awaiting, own, refused_before_commit,
-};
+use support::selfupdate::{DEB_UNIT, DEB_WANTS, HK, NEW, OLD, SelfRig, awaiting};
 use support::{d, install};
 
 /// The version the packages directory's `current` of hostkeeper names, if any.
@@ -42,10 +39,10 @@ fn succeeded(resent: bool) -> Reply {
 /// binary running (the coordinator would then read the host at the new version while the old
 /// one runs), and an install whose success the old binary writes: the install of [`NEW`] runs the
 /// release's steps, places the package (`current` of the packages directory names [`NEW`]),
-/// stages the new binary and switches the binary directory to it, and is answered `Deferred`
-/// `awaiting_restart` with the daemon asked to exit and the record waiting; a resend is answered
-/// the same and runs nothing. The binary of [`NEW`] confirms it at its start, and a resend is then
-/// answered `Succeeded` from the record.
+/// stages the new binary and links `next` at it, leaving `current` on the old binary, and is
+/// answered `Deferred` `awaiting_restart` with the daemon asked to exit and the record waiting; a
+/// resend is answered the same and runs nothing. The binary of [`NEW`] finishes the switch and
+/// confirms it at its start, and a resend is then answered `Succeeded` from the record.
 #[test]
 fn an_install_of_hostkeeper_on_a_bootstrapped_host_runs_the_self_update() {
     let s = SelfRig::bootstrapped("su-install-bootstrapped");
@@ -60,7 +57,8 @@ fn an_install_of_hostkeeper_on_a_bootstrapped_host_runs_the_self_update() {
         [Step::Prepare, Step::Cutover, Step::Verify, Step::Cleanup]
     );
     assert_eq!(installed(&s).as_deref(), Some(NEW));
-    assert_eq!(s.current().as_deref(), Some(NEW));
+    assert_eq!(s.current().as_deref(), Some(OLD));
+    assert_eq!(s.layout().next().expect("next").as_deref(), Some(NEW));
     let rec = s.rig.record(HK).expect("the record");
     assert!(matches!(rec.state, State::Done { .. }), "{rec:?}");
     assert_eq!(
@@ -76,12 +74,15 @@ fn an_install_of_hostkeeper_on_a_bootstrapped_host_runs_the_self_update() {
         Settled::Confirmed
     );
     assert_eq!(new.order(&order), succeeded(true));
+    assert_eq!(s.current().as_deref(), Some(NEW));
+    assert_eq!(s.layout().next().expect("next"), None);
 }
 
 /// Catches an install of the release that already runs that restarts the daemon or is never
 /// recorded (its success held back for a binary that already runs): the daemon of [`OLD`] with no
 /// package of hostkeeper is ordered the install of [`OLD`]; the steps run, the package is placed,
-/// the binary directory is left as it is, and the install is `Succeeded` at once, with no restart.
+/// the binary directory is left as it is (nothing staged, no `next` linked), and the install is
+/// `Succeeded` at once, with no restart.
 #[test]
 fn an_install_of_the_running_version_succeeds_without_a_restart() {
     let s = SelfRig::bootstrapped("su-install-running");
@@ -92,6 +93,7 @@ fn an_install_of_the_running_version_succeeds_without_a_restart() {
     assert!(!daemon.ctx().restart().requested());
     assert_eq!(installed(&s).as_deref(), Some(OLD));
     assert_eq!(s.current().as_deref(), Some(OLD));
+    assert_eq!(s.layout().next().expect("next"), None);
     let rec = s.rig.record(HK).expect("the record");
     assert!(
         matches!(
@@ -103,43 +105,6 @@ fn an_install_of_the_running_version_succeeds_without_a_restart() {
         ),
         "{rec:?}"
     );
-}
-
-/// Catches the probe run for a release that is the binary that runs (a host a pkg or a hand
-/// upgrade put on a version, then ordered the install of that version): nothing of that release
-/// is staged, so its binary is not asked its protocol, and a probe that cannot run (a launcher
-/// with no probe, as the Mac's had) does not refuse the install `protocol_unreadable`. The
-/// install of [`OLD`] by the daemon of [`OLD`] is `Succeeded` with the probe never asked, both
-/// with a probe that fails and with the probe of a step launcher that runs none; an install of
-/// [`NEW`] on the same kind of host still asks it, and is refused `protocol_unreadable` when it
-/// fails.
-#[test]
-fn an_install_of_the_running_version_asks_no_probe() {
-    let s = SelfRig::bootstrapped("su-install-running-unprobed");
-    s.release(OLD);
-    s.probe.set(|| Err(ProbeError::Exit(None)));
-    assert_eq!(
-        s.daemon().order(&install(HK, OLD, &d(), 1)),
-        succeeded(false)
-    );
-    assert!(s.probe.asked().is_empty());
-    assert_eq!(installed(&s).as_deref(), Some(OLD));
-    assert_eq!(s.current().as_deref(), Some(OLD));
-
-    let s = SelfRig::bootstrapped("su-install-running-no-launcher-probe");
-    s.release(OLD);
-    let daemon = Daemon::new(support::config(), s.rig.dirs(), s.rig.ports(), own(OLD));
-    assert_eq!(daemon.order(&install(HK, OLD, &d(), 1)), succeeded(false));
-    assert_eq!(installed(&s).as_deref(), Some(OLD));
-
-    let s = SelfRig::bootstrapped("su-install-next-probed");
-    s.probe.set(|| Err(ProbeError::Exit(None)));
-    assert_eq!(
-        s.daemon().order(&install(HK, NEW, &d(), 1)),
-        refused_before_commit(Class::Environment, REASON_PROTOCOL_UNREADABLE)
-    );
-    assert_eq!(s.probe.asked().len(), 1);
-    assert_eq!(installed(&s), None);
 }
 
 /// Catches the order the coordinator must give each kind of host going wrong: a bootstrapped

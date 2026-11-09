@@ -3,7 +3,7 @@
 //! is there for the timeout, for the kill of its whole control group, and for the capture of the
 //! exit code, the last line of standard output and the log; it confines nothing.
 //!
-//! The command lines are pure functions ([`command`], [`additive_command`], [`probe_command`],
+//! The command lines are pure functions ([`command`], [`additive_command`],
 //! [`stop_command`]). Starting a program sits
 //! behind [`Spawner`], so [`SystemdLauncher`] runs against a fake in a test.
 //! [`SystemdRunProcess`] is the real spawner, and the only code of the crate that starts a
@@ -35,18 +35,6 @@
 //! Its exit, its last line, its log and a [`StepLauncher::stop`] of its unit while it runs are
 //! read as for a step.
 //!
-//! A probe ([`StepLauncher::run_probe`], the daemon asking a new hostkeeper binary for its
-//! self-update protocol) is run the same way, with its own arguments instead of a step's
-//! ([`probe_command`]):
-//!
-//! ```text
-//! systemd-run --system --quiet --wait --collect --pipe --unit=<unit>
-//!     --property=RuntimeMaxSec=<secs> -- <executable> <args...>
-//! ```
-//!
-//! A probe ended by `RuntimeMaxSec=` exits `1` through `systemd-run`, as a step does: a probe
-//! that did not exit `0` printed no protocol.
-//!
 //! A step (or an additive step) that [`StepLauncher::stop`] stopped is reported with no exit
 //! code, whatever `systemd-run` exited with. systemd counts the end of a service's main process
 //! by the `SIGTERM` of a stop as a clean end (result `success`), so `systemd-run --wait` exits `0`
@@ -67,9 +55,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use hostkeeper_hook::Step;
 
 use crate::capture::Ring;
-use crate::launcher::{
-    AdditiveCall, Bound, LaunchError, ProbeCall, ProbeExit, StepCall, StepExit, StepLauncher,
-};
+use crate::launcher::{AdditiveCall, Bound, LaunchError, StepCall, StepExit, StepLauncher};
 
 /// Where `systemd-run` is.
 pub const SYSTEMD_RUN: &str = "/usr/bin/systemd-run";
@@ -158,41 +144,6 @@ pub fn additive_command(call: &AdditiveCall<'_>) -> Result<Vec<OsString>, Launch
         call.executable,
         rest,
     ))
-}
-
-/// The arguments of `systemd-run` that run a probe, bounded by its `timeout_secs` (`0` is read
-/// as `1`: a probe is never unbounded). A relative executable is refused: the unit does not run
-/// in the updater's directory.
-pub fn probe_command(call: &ProbeCall<'_>) -> Result<Vec<OsString>, LaunchError> {
-    if !call.executable.is_absolute() {
-        return Err(LaunchError::Launcher(format!(
-            "the probed binary {:?} is not an absolute path",
-            call.executable
-        )));
-    }
-    Ok(unit_line(
-        call.unit,
-        &call.timeout_secs.max(1).to_string(),
-        call.executable,
-        call.args.iter().map(OsString::from),
-    ))
-}
-
-impl ProbeExit {
-    /// How a probe ended, read from what its launcher captured: its exit code, and at most
-    /// `limit` bytes of what it printed, the rest dropped and reported (also when the capture
-    /// itself had to drop some). The one reading of every launcher, `SystemdLauncher` and the
-    /// launchd launcher of a Mac alike.
-    pub fn from_captured(captured: &Captured, limit: usize) -> ProbeExit {
-        let mut output = captured.stdout.bytes();
-        let truncated = captured.stdout.cut() | (output.len() > limit);
-        output.truncate(limit);
-        ProbeExit {
-            code: captured.code,
-            output,
-            truncated,
-        }
-    }
 }
 
 /// The arguments of `systemctl` that stop a unit and wait for it to end.
@@ -411,16 +362,6 @@ impl<S: Spawner> StepLauncher for SystemdLauncher<S> {
         let args = additive_command(call)?;
         executable(call.executable)?;
         self.run_unit(call.unit, &args)
-    }
-
-    fn run_probe(&self, call: &ProbeCall<'_>) -> Result<ProbeExit, LaunchError> {
-        let args = probe_command(call)?;
-        executable(call.executable)?;
-        let captured = self.spawn(Program::SystemdRun, &args)?;
-        if let Some(log) = self.log.as_ref() {
-            log(call.unit, &captured);
-        }
-        Ok(ProbeExit::from_captured(&captured, call.output_bytes))
     }
 
     fn stop(&self, unit: &str) -> Result<(), LaunchError> {

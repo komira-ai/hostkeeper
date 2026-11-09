@@ -1,13 +1,13 @@
-//! The host of one self-update test: hostkeeper's real unit file, drop-in and fallback unit under
-//! the host's systemd, running the binary directory's `current` of a state directory the test
-//! owns, with the release of the next version in its package store and a coordinator the test
-//! writes (the program `hostkeeper-selfupdate-daemon` says what it replaces and why).
+//! The host of one self-update test: hostkeeper's real unit file under the host's systemd,
+//! running the binary directory's `current` of a state directory the test owns, with the release
+//! of the next version in its package store and a coordinator the test writes (the program
+//! `hostkeeper-selfupdate-daemon` says what it replaces and why).
 //!
 //! **Where.** The release a self-update stages from must be a tree whose every directory, up to
-//! `/`, is root's and closed to group and others (`hostkeeper_steps::Staged::check`), and the
-//! fallback unit runs `previous` of the binary directory as root. The target directory is the
-//! runner's user's, so the host lives in a scratch directory under [`BASE`] (`/run`, root's
-//! tmpfs), removed when the test ends, with the units under unit names of the test's rig.
+//! `/`, is root's and closed to group and others (`hostkeeper_steps::Staged::check`). The target
+//! directory is the runner's user's, so the host lives in a scratch directory under [`BASE`]
+//! (`/run`, root's tmpfs), removed when the test ends, with the unit under a unit name of the
+//! test's rig.
 //!
 //! **The units.**
 //! - The main unit is hostkeeper's package unit, `packaging/linux/units/hostkeeper.service`
@@ -23,31 +23,26 @@
 //!   packaged binary seeds the empty binary directory and execs `current`); the seed
 //!   (`ExecStartPre=`: the test stages the first binary itself) of the package unit is left out.
 //!   A change to the unit's `ExecStart=` that this does not know fails the test by name.
-//! - The fallback unit is `hostkeeper_steps::selfupdate::fallback_unit` of the test's binary
-//!   directory, naming the main unit.
-//! - The drop-in is `hostkeeper_steps::selfupdate::main_dropin` naming the fallback unit, with
-//!   `START_LIMIT_BURST`, in the main unit's drop-in directory under `/run/systemd/system`
-//!   (`hostkeeper_daemon::selfunits::DROPIN_FILE`), so systemd reads it as it reads the one the
-//!   daemon writes for `hostkeeper.service`. Its `RestartSec=1` is the production value.
+//! - There is no fallback unit and no drop-in: the hand-over has neither
+//!   (docs/design/two-programs.md, section 4.3), and the unit has no start limit, so a daemon that
+//!   cannot start is retried every `RestartSec=1`, never left failed.
 //!
-//! The two unit files are linked from the scratch directory (`systemctl link`); dropping the
-//! [`Host`] stops, unlinks and resets both, removes the drop-in, reloads systemd and removes the
-//! scratch directory, failed or not.
+//! The unit file is linked from the scratch directory (`systemctl link`); dropping the [`Host`]
+//! stops, unlinks and resets it, reloads systemd and removes the scratch directory, failed or
+//! not.
 //!
 //! Every wait polls systemd or the files for a state ([`support::wait_until`]) and fails at once
-//! when the state can no longer come: an order refused, the main unit failed with no fallback
-//! to run, or the fallback failed ([`Host::check_not_stuck`]).
+//! when the state can no longer come: an order refused, or the main unit failed
+//! ([`Host::check_not_stuck`]).
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use hostkeeper_config::platform::Platform;
-use hostkeeper_daemon::selfunits::DROPIN_FILE;
 use hostkeeper_privileged::Rig;
 use hostkeeper_privileged::rig::service_unit;
 use hostkeeper_steps::record::{Loaded, RECORD_FILE, Record, State};
-use hostkeeper_steps::selfupdate::{START_LIMIT_BURST, fallback_unit, main_dropin};
 use hostkeeper_steps::systemd::SYSTEMCTL;
 use hostkeeper_steps::{BadVersions, Layout, RecordStore, Seal, tree_digest};
 use hostkeeper_testkit::Scratch;
@@ -69,8 +64,6 @@ pub const BOOTSTRAP_UNIT: &str = include_str!("../../../../packaging/linux/hostk
 const PACKAGED_BINARY: &str = "/usr/bin/hostkeeper";
 /// The root-owned directory the test hosts are made in.
 pub const BASE: &str = "/run/hostkeeper-ci";
-/// Where systemd reads the drop-ins of a unit from at run time.
-const RUNTIME_UNIT_DIR: &str = "/run/systemd/system";
 /// The service of hostkeeper itself.
 pub const HK: &str = "hostkeeper";
 /// The version the host runs first.
@@ -94,8 +87,11 @@ const REAL_STATE_DIR: &str = "/var/lib/updater/state";
 pub struct Plan {
     /// A daemon of [`NEXT`] exits 1 at its start (`--fixture-fail-start`).
     pub next_fails: bool,
-    /// The daemon holds its exit after the follow-on switched (`--fixture-hold-exit`).
+    /// The daemon holds its exit after the follow-on handed over (`--fixture-hold-exit`).
     pub hold_exit: bool,
+    /// The daemon of [`NEXT`] holds its start after the hand-over exec'd it, before it settles
+    /// the update (`--fixture-hold-start`).
+    pub hold_start: bool,
     /// The host is as the deb leaves it: no package of hostkeeper installed (only the binary
     /// directory, as `self-update-seed` makes it), the unit enabled by a `WantedBy=` link to the
     /// unit the deb installs ([`DEB_UNIT`]) that `placed.json` does not list, and the release of
@@ -115,19 +111,14 @@ pub struct Host {
     pub rig: Rig,
     /// The main unit's name, without `.service`.
     pub main: String,
-    /// The fallback unit's name, without `.service`.
-    pub fallback: String,
-    dropin_dir: PathBuf,
     scratch: Scratch,
 }
 
 impl Drop for Host {
     fn drop(&mut self) {
-        // The fallback first: its `ExecStartPost=` starts the main unit.
         for args in self.rig.teardown() {
             let _ = run(SYSTEMCTL, &args);
         }
-        let _ = fs::remove_dir_all(&self.dropin_dir);
         let _ = run(SYSTEMCTL, &["daemon-reload"]);
     }
 }
@@ -208,6 +199,8 @@ pub struct Paths {
     pub fixture: PathBuf,
     /// The file the daemon holds its exit at.
     pub held: PathBuf,
+    /// The file the daemon of [`NEXT`] holds its start at.
+    pub held_start: PathBuf,
 }
 
 impl Paths {
@@ -220,6 +213,7 @@ impl Paths {
             packaged_dir: root.join("packaged"),
             fixture: root.join("fixture"),
             held: root.join("held"),
+            held_start: root.join("held-start"),
         }
     }
 
@@ -333,9 +327,9 @@ pub fn test_unit(real: &str, paths: &Paths, fixture_flags: &[String]) -> String 
 impl Host {
     /// The host of the test `test` (lowercase letters, digits, `_`): hostkeeper [`N`] installed
     /// (its package `current`, its binary staged and `current` of the binary directory; with
-    /// [`Plan::deb`], its binary alone), the release of [`NEXT`] in the package store, the units linked and the drop-in in place, the
-    /// main unit started under `plan` and ready (its start returns once the daemon notified
-    /// systemd).
+    /// [`Plan::deb`], its binary alone), the release of [`NEXT`] in the package store, the unit
+    /// linked, the main unit started under `plan` and ready (its start returns once the daemon
+    /// notified systemd).
     pub fn start(test: &str, plan: Plan) -> Host {
         let root = rustix::process::geteuid().is_root();
         if let Err(e) = hostkeeper_privileged::check_host(
@@ -349,17 +343,8 @@ impl Host {
         dir(scratch.path(), 0o755);
         let rig = Rig::new(scratch.path(), Path::new(FIXTURE), test, std::process::id())
             .expect("make the rig");
-        // Named in this order, torn down in this order.
-        let fallback = rig.unit();
         let main = rig.unit();
-        let dropin_dir = Path::new(RUNTIME_UNIT_DIR).join(format!("{}.d", service_unit(&main)));
-        let host = Host {
-            rig,
-            main,
-            fallback,
-            dropin_dir,
-            scratch,
-        };
+        let host = Host { rig, main, scratch };
         host.make(plan);
         run_ok(SYSTEMCTL, &["start", "--system", &service_unit(&host.main)]);
         host
@@ -418,26 +403,19 @@ impl Host {
         if plan.hold_exit {
             flags.extend(["--fixture-hold-exit".to_owned(), plain(&paths.held)]);
         }
+        if plan.hold_start {
+            flags.extend([
+                "--fixture-hold-start".to_owned(),
+                format!("{NEXT}={}", plain(&paths.held_start)),
+            ]);
+        }
         if plan.deb {
             flags.extend(["--fixture-packaged".to_owned(), plain(&paths.packaged())]);
         }
         let real = if plan.deb { BOOTSTRAP_UNIT } else { REAL_UNIT };
-        let fallback = service_unit(&self.fallback);
-        let units = [
-            (&fallback, fallback_unit(&layout, &main)),
-            (&main, test_unit(real, &paths, &flags)),
-        ];
-        for (name, text) in units {
-            let path = self.scratch.path().join(name);
-            file(&path, text.as_bytes(), 0o644);
-            run_ok(SYSTEMCTL, &["link", "--system", &plain(&path)]);
-        }
-        dir(&self.dropin_dir, 0o755);
-        file(
-            &self.dropin_dir.join(DROPIN_FILE),
-            main_dropin(&fallback, START_LIMIT_BURST).as_bytes(),
-            0o644,
-        );
+        let path = self.scratch.path().join(&main);
+        file(&path, test_unit(real, &paths, &flags).as_bytes(), 0o644);
+        run_ok(SYSTEMCTL, &["link", "--system", &plain(&path)]);
         run_ok(SYSTEMCTL, &["daemon-reload"]);
     }
 
@@ -583,10 +561,10 @@ impl Host {
         })
     }
 
-    /// Fails at once, with the journal of both units, when what a wait waits for can no longer
+    /// Fails at once, with the journal of the unit, when what a wait waits for can no longer
     /// come: an order of hostkeeper answered with a refusal (any failure but the wait for the
-    /// restart and the fallback's); the main unit failed and the fallback neither queued nor ever
-    /// started (no `OnFailure=` reached it); or the fallback failed.
+    /// restart and the fallback's), or the main unit failed (it has no start limit, so it is
+    /// retried for good: a failed unit is a daemon that systemd gave up on).
     pub fn check_not_stuck(&self) {
         for order_try in [1, 2] {
             if let Some(result) = self.verdict_of(order_try) {
@@ -600,45 +578,17 @@ impl Host {
                 );
             }
         }
-        // Read in this order. Once the main unit is failed, its `OnFailure=` job is already
-        // queued; a job no longer queued has started the fallback, which then has an invocation
-        // id. So a failed main unit, then no job, then no invocation id: no job was ever queued.
-        let main_failed = property(&self.main, "ActiveState") == "failed";
-        let queued = !run_ok(
-            SYSTEMCTL,
-            &[
-                "list-jobs",
-                "--no-legend",
-                "--plain",
-                &service_unit(&self.fallback),
-            ],
-        )
-        .trim()
-        .is_empty();
-        let fallback = super::show(&self.fallback, &["ActiveState", "InvocationID"]);
-        let never_ran = fallback.get("InvocationID").is_none_or(String::is_empty);
-        assert!(
-            !(main_failed && never_ran && !queued),
-            "the main unit failed and no OnFailure= fallback was started\n{}",
-            self.journals()
-        );
         assert_ne!(
-            fallback.get("ActiveState").map(String::as_str),
-            Some("failed"),
-            "the fallback unit failed\n{}",
+            property(&self.main, "ActiveState"),
+            "failed",
+            "the main unit failed\n{}",
             self.journals()
         );
     }
 
-    /// The journal of the main unit and of the fallback, for a failure's message.
+    /// The journal of the main unit, for a failure's message.
     pub fn journals(&self) -> String {
-        format!(
-            "--- {}:\n{}\n--- {}:\n{}",
-            self.main,
-            journal(&self.main),
-            self.fallback,
-            journal(&self.fallback)
-        )
+        format!("--- {}:\n{}", self.main, journal(&self.main))
     }
 
     /// Waits until the step record of hostkeeper is finished, and gives it.
@@ -696,7 +646,8 @@ impl Host {
     }
 
     /// Runs the self-update to the failing [`NEXT`] (a host started with `next_fails`) until
-    /// the fallback has put [`N`] back and the main unit runs it again.
+    /// the old binary has settled the update failed after [`NEXT`] failed its tries, and the main
+    /// unit runs [`N`] again.
     pub fn fall_back(&self) -> Record {
         self.offer(1);
         let rec = self.settled();
