@@ -682,6 +682,26 @@ pub fn settle_with(
     running: &str,
     before_confirm: &mut dyn FnMut() -> Result<(), SelfUpdateError>,
 ) -> Result<Settled, SelfUpdateError> {
+    settle_activating(layout, store, running, before_confirm, false)
+}
+
+/// [`settle_with`], where a confirmation of the new binary, when `activate` is set, leaves the
+/// `activate` of its own native package still to be done (docs/design/packages-native.md, section
+/// 10.4, step 5): the wait is replaced in one write by [`crate::record::Progress::activate`]
+/// ([`Settlement::Activate`]) instead of `Succeeded`, and the record stays unfinished until the
+/// caller's `activate` ends it ([`RecordStore::settle_activate`]). The result is
+/// [`Settled::Confirmed`] either way; a fallback is settled as [`settle_with`] does.
+pub fn settle_activating(
+    layout: &Layout,
+    store: &RecordStore,
+    running: &str,
+    before_confirm: &mut dyn FnMut() -> Result<(), SelfUpdateError>,
+    activate: bool,
+) -> Result<Settled, SelfUpdateError> {
+    let confirm = match activate {
+        true => Settlement::Activate,
+        false => Settlement::Confirmed,
+    };
     let awaiting = match store.load()? {
         Loaded::Current(rec) => rec.progress.awaiting_restart,
         Loaded::Absent => None,
@@ -692,13 +712,13 @@ pub fn settle_with(
         return Ok(Settled::NotPending);
     };
     if awaiting.next.is_some() {
-        return settle_hand_over(layout, store, running, &awaiting, before_confirm);
+        return settle_hand_over(layout, store, running, &awaiting, before_confirm, confirm);
     }
     let current = layout.current()?;
     let confirmed = (awaiting.version == running) & (current.as_deref() == Some(running));
     if confirmed {
         before_confirm()?;
-        store.settle_awaiting_restart(Settlement::Confirmed)?;
+        store.settle_awaiting_restart(confirm)?;
         return Ok(Settled::Confirmed);
     }
     BadVersions::load(store.dir())?.add(&awaiting.version)?;
@@ -713,13 +733,14 @@ fn settle_hand_over(
     running: &str,
     awaiting: &AwaitingRestart,
     before_confirm: &mut dyn FnMut() -> Result<(), SelfUpdateError>,
+    confirm: Settlement,
 ) -> Result<Settled, SelfUpdateError> {
     if awaiting.version != running {
         return crate::handover::hand_over_failed(layout, store);
     }
     layout.switch(running)?;
     before_confirm()?;
-    store.settle_awaiting_restart(Settlement::Confirmed)?;
+    store.settle_awaiting_restart(confirm)?;
     layout.remove_next()?;
     Ok(Settled::Confirmed)
 }

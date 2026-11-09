@@ -8,7 +8,8 @@
 //! release installed, `update` and `force_rollback` only with one); an `update` below the
 //! running version is refused; the order's entry, when it carries one, judged by
 //! [`crate::entry::check`] (nothing is fetched for an entry that fails); the package from the
-//! [`crate::packages::Packages`] port, outside the step lock; its manifest, read by the manifest's
+//! [`crate::packages::Packages`] port, outside the step lock (the move's rollback from the sealed
+//! copy the host keeps, asking the port for nothing); its manifest, read by the manifest's
 //! loader for the order's service and version and this daemon's version; the release it
 //! replaces, none for an `install`; the paths it places checked against `placed.json` and the
 //! disk (`path_conflict`); then the step lock and [`hostkeeper_steps::StepRunner::run`], whose
@@ -276,13 +277,21 @@ pub(crate) fn prepare(
         .entry
         .as_ref()
         .and_then(|entry| repository::backend_of_entry(entry).map(|backend| (backend, entry)));
-    same_installer(ctx, service, running.as_ref(), order.entry.as_ref())?;
-    let dir = match backend {
-        Some((backend, entry)) => {
+    let moved_back = same_installer(
+        ctx,
+        service,
+        running.as_ref(),
+        &order.version,
+        order.entry.as_ref(),
+    )?;
+    let dir = match (moved_back, backend) {
+        // The move's rollback: the archive version the host keeps, from its sealed copy.
+        (true, _) => VersionDir::new(sealed(ctx, service, &order.version)?),
+        (false, Some((backend, entry))) => {
             ctx.repository()
                 .stage(backend, service, &order.version, entry)?
         }
-        None => ctx
+        (false, None) => ctx
             .packages
             .version_dir(
                 service,
@@ -323,14 +332,23 @@ pub(crate) fn prepare(
 /// was installed with until it is uninstalled (packages.md section 5.1), so another is
 /// `Failed`, `release`, `installer_changed`, with nothing fetched. A version whose `target.json`
 /// does not read is `release_unreadable`.
+///
+/// Two changes are the move of docs/design/packages-native.md, section 10.6, and are accepted:
+/// from `hostkeeper-archive` to a native installer (the move), and from a native installer back
+/// to `hostkeeper-archive` when the order's version `target` is the archive version `previous`
+/// names, still on the host (the move's rollback; once the next update retired it, the move
+/// cannot be undone). Back to another native installer, or between two, stays
+/// `installer_changed`. `true` for the move's rollback, which [`prepare`] takes from the sealed
+/// copy the host keeps, asking the package port for nothing.
 fn same_installer(
     ctx: &Ctx,
     service: &ServiceName,
     running: Option<&Version>,
+    target: &Version,
     entry: Option<&Entry>,
-) -> Result<(), Reply> {
+) -> Result<bool, Reply> {
     let Some(running) = running else {
-        return Ok(());
+        return Ok(false);
     };
     let dir = ctx
         .dirs
@@ -342,8 +360,20 @@ fn same_installer(
         .map_err(|e| Reply::refused(Refusal::ReleaseUnreadable, e))?
         .map_or_else(|| archive.to_owned(), |sealed| sealed.installer);
     let ordered = entry.map_or(archive, |entry| entry.installer.as_str());
-    match installed == ordered {
-        true => Ok(()),
+    let native = |name: &str| name.parse::<Installer>().is_ok_and(Installer::is_native);
+    let kept = || {
+        let dir = ctx
+            .dirs
+            .packages
+            .join(service.as_str())
+            .join(target.as_str());
+        let previous = installed::linked_version(&ctx.dirs.packages, service, PREVIOUS);
+        (previous.as_ref() == Some(target)) & dir.is_dir() & matches!(target::read(&dir), Ok(None))
+    };
+    let moved = (installed == archive) & native(ordered);
+    let moved_back = native(&installed) & (ordered == archive) && kept();
+    match (installed == ordered) | moved | moved_back {
+        true => Ok(moved_back),
         false => Err(Reply::Finished {
             verdict: Verdict::Failed {
                 phase: Phase::BeforeCommit,
@@ -391,17 +421,19 @@ fn previous(
         true => installed::linked_version(&ctx.dirs.packages, service, PREVIOUS),
         false => running,
     };
-    let seal = |version: Version| {
-        let dir = ctx
-            .dirs
-            .packages
-            .join(service.as_str())
-            .join(version.as_str());
-        Staged::seal(&dir)
-            .map(|staged| (version, staged))
-            .map_err(|e| Reply::refused(Refusal::ReleaseUnreadable, e))
-    };
+    let seal = |version: Version| sealed(ctx, service, &version).map(|staged| (version, staged));
     replaced.map(seal).transpose()
+}
+
+/// The version directory of `service` at `version` the host keeps, sealed; one that does not
+/// seal is `release_unreadable`.
+fn sealed(ctx: &Ctx, service: &ServiceName, version: &Version) -> Result<Staged, Reply> {
+    let dir = ctx
+        .dirs
+        .packages
+        .join(service.as_str())
+        .join(version.as_str());
+    Staged::seal(&dir).map_err(|e| Reply::refused(Refusal::ReleaseUnreadable, e))
 }
 
 /// The order for the step runner: the package's version directory and hook, the bounds and

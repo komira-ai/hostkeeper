@@ -385,9 +385,9 @@ pub(crate) enum Verb {
     },
     /// Build the installer pkg of a Mac's first install: `pkgbuild` builds a component pkg of the
     /// daemon binary, its launchd plist, its log directory and newsyslog file, the pinned `gh`
-    /// and the Sigstore trusted root, nothing else, and one script, a postinstall that boots out
-    /// any copy of the daemon's job loaded before and loads the job, whose program is the binary
-    /// the pkg installs; `productbuild` wraps the component as the unsigned distribution pkg.
+    /// and the Sigstore trusted root, nothing else, and one script, a postinstall that loads the
+    /// daemon's job when launchd does not have it loaded (it never boots a loaded one out), whose
+    /// program is the binary the pkg installs; `productbuild` wraps the component as the unsigned distribution pkg.
     ///
     /// With `--service hello`, hello's `.pkg` instead (`hello-<version>-macos-arm64.pkg`, or of
     /// its failing build with `--fail-ready`): the program and its hook under

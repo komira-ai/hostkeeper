@@ -30,6 +30,20 @@ fn stage_with(
     (env, result, dir)
 }
 
+/// [`stage_with`] for the other modules of this suite.
+pub fn tree_stage(
+    name: &str,
+    service: &str,
+    package: &Deb,
+    edit: impl FnOnce(&mut Order),
+) -> (
+    Env,
+    Result<hostkeeper_install::repository::Staged, Failure>,
+    std::path::PathBuf,
+) {
+    stage_with(name, service, package, edit)
+}
+
 fn stage_package(
     name: &str,
     package: &Deb,

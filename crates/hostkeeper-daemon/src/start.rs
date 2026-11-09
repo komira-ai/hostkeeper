@@ -5,7 +5,10 @@
 //! file); take the exclusive lock on `<state-dir>/lock`, held for the daemon's life (a second
 //! daemon on the same state directory gets [`StartError::Locked`]); remove the registration
 //! socket kbf's agent may have left ([`Settings::kbf_run_dir`]), before any unit is touched;
-//! [`settle_self_update`]; [`before_records`] and [`boot_pass`]; and [`after_boot`]. [`serve`]
+//! [`settle_self_update`]; the `activate` of hostkeeper's own package that its new binary owes,
+//! retried every minute by a thread of its own while it defers, and the adoption of the package
+//! the host was set up with ([`crate::own_package`]); [`before_records`] and [`boot_pass`]; and
+//! [`after_boot`]. [`serve`]
 //! then starts the enrollment and heartbeat loops ([`crate::links`]) and runs them until the
 //! daemon is asked to exit for its own update ([`crate::selfupdate::Restart`]).
 //!
@@ -34,7 +37,7 @@ use std::io;
 use std::num::NonZeroU64;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use hostkeeper_config::daemon::{ConfigError, DaemonConfig};
 use hostkeeper_config::manifest::{BadHostkeeperVersion, HostkeeperVersion};
@@ -52,6 +55,7 @@ use crate::links::Links;
 use crate::mac_config::MacConfigError;
 use crate::mac_files::MacFilesError;
 use crate::notify::{NoNotifier, ReadyNotifier};
+use crate::own_package::{self, OwnActivate};
 
 /// The lock file in the state directory.
 pub const LOCK_FILE: &str = "lock";
@@ -273,6 +277,8 @@ pub fn startup_notifying(
     };
     let daemon = Arc::new(Daemon::new(config, dirs, ports, own_version));
     settle_self_update(&daemon, &mut report);
+    activate_own_package(&daemon, &mut report);
+    adopt_own_package(&daemon, &mut report);
     before_records(&daemon, &mut report);
     boot_pass(&daemon, &mut report)?;
     after_boot(&daemon, &mut report, notifier);
@@ -296,6 +302,54 @@ fn settle_self_update(daemon: &Daemon, report: &mut BootReport) {
             .alert(crate::selfupdate::ALERT_SELF_UPDATE, error);
     }
     report.self_update = Some(settled);
+}
+
+/// After the settlement: the `activate` of hostkeeper's own package that its new binary owes
+/// ([`Daemon::activate_own_package`]); one that defers is tried again every
+/// [`own_package::DEFER_SECS`] of the daemon's clock, by a thread of its own, until it ends or
+/// the daemon is gone. The start goes on either way.
+fn activate_own_package(daemon: &Arc<Daemon>, report: &mut BootReport) {
+    report.own_activate = daemon.activate_own_package();
+    if let Some(OwnActivate::Deferred { .. }) = report.own_activate {
+        let weak = Arc::downgrade(daemon);
+        let clock = Arc::clone(&daemon.ctx().clock);
+        // Detached: it ends once the `activate` ended, or at its next try after the daemon is
+        // gone.
+        drop(std::thread::spawn(move || {
+            retry_own_activate(&weak, &*clock)
+        }));
+    }
+}
+
+/// Tries the `activate` of hostkeeper's own package again every [`own_package::DEFER_SECS`] of
+/// `clock` while it defers; ends once it ended, nothing waits for it, or the daemon is gone.
+pub fn retry_own_activate(daemon: &Weak<Daemon>, clock: &dyn hostkeeper_steps::Clock) {
+    loop {
+        clock.sleep_secs(own_package::DEFER_SECS);
+        let Some(daemon) = daemon.upgrade() else {
+            return;
+        };
+        if !matches!(
+            daemon.activate_own_package(),
+            Some(OwnActivate::Deferred { .. })
+        ) {
+            return;
+        }
+    }
+}
+
+/// The adoption of the package of hostkeeper the host was set up with (docs/design/
+/// packages-native.md, section 10.4); one that cannot be done is an alert, and the start goes
+/// on.
+fn adopt_own_package(daemon: &Daemon, report: &mut BootReport) {
+    let adopted = own_package::adopt(daemon.ctx());
+    if let Err(error) = &adopted {
+        daemon.ctx().alert(
+            own_package::ALERT_OWN_PACKAGE,
+            &format!("the package of hostkeeper was not adopted: {error}"),
+        );
+    }
+    report.adopted = Some(adopted);
 }
 
 /// Before the step records are read: remove what a crashed package fetch or unpack left under

@@ -172,20 +172,25 @@ fn a_garbage_bad_versions_file_refuses_self_update_naming_the_file() {
     assert!(s.hk_steps().is_empty());
 }
 
-/// Catches a `force` or a `force_rollback` reaching hostkeeper's own update: both are refused
-/// `self_service` and write nothing; `update` and `install` of hostkeeper, and every verb of
-/// another service, pass the rule.
+/// Catches a `force` reaching hostkeeper's own update, and a `force_rollback` of it that does
+/// not take hostkeeper's own path: a `force` is refused `self_service` and writes nothing; a
+/// `force_rollback` is handed over to the version it names, as an `update` is
+/// (docs/design/packages-native.md, sections 10.4 and 10.6); `update` and `install` of
+/// hostkeeper, and every verb of another service, pass the rule.
 #[test]
-fn force_and_force_rollback_of_the_service_hostkeeper_stay_refused() {
+fn a_force_of_the_service_hostkeeper_is_refused_and_a_force_rollback_takes_its_own_path() {
     let s = SelfRig::new("su-forced");
     let daemon = s.daemon();
     let before = snapshot(s.rig.scratch.path());
-    for order in [force(HK, NEW, &d(), 1, 0), force_rollback(HK, NEW, &d(), 1)] {
-        let reply = daemon.order(&order);
-        assert_eq!(reply.refusal(), Some(Refusal::SelfService), "{reply:?}");
-    }
+    let reply = daemon.order(&force(HK, NEW, &d(), 1, 0));
+    assert_eq!(reply.refusal(), Some(Refusal::SelfService), "{reply:?}");
     assert_eq!(snapshot(s.rig.scratch.path()), before);
     assert!(s.hk_steps().is_empty());
+    assert_eq!(
+        daemon.order(&force_rollback(HK, NEW, &d(), 1)),
+        awaiting(false)
+    );
+    assert_eq!(s.layout().next().unwrap().as_deref(), Some(NEW));
     let verbs = [
         HookedVerb::Update,
         HookedVerb::ForceRollback,
@@ -193,7 +198,7 @@ fn force_and_force_rollback_of_the_service_hostkeeper_stay_refused() {
         HookedVerb::Force,
     ];
     for verb in verbs {
-        let forced = matches!(verb, HookedVerb::Force | HookedVerb::ForceRollback);
+        let forced = matches!(verb, HookedVerb::Force);
         let refused = checks::self_service(verb, &name(HK));
         assert_eq!(refused.is_err(), forced, "{verb:?}");
         assert_eq!(checks::self_service(verb, &name("web")), Ok(()));

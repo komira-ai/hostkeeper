@@ -12,12 +12,16 @@
 //! archive's `Distribution` (whose `script` stays `manifest_invalid`, as section 4.7 refuses it)
 //! and the entries beside its component; then a `Scripts` entry of the component, its
 //! `PackageInfo`'s script elements, and only then the component's other entries and the files
-//! it lacks. The empty `<scripts/>` and `<relocate/>` that `pkgbuild` writes into every
+//! it lacks. hostkeeper's own `.pkg` ([`super::own`]) is the exception: its component may hold a
+//! `Scripts` directory with the one regular file `postinstall`, and its `PackageInfo` the
+//! `<postinstall>` element and no other script element; a `Scripts` beside the component, any
+//! other script and every `Distribution` script element are refused as for every package. The empty `<scripts/>` and `<relocate/>` that `pkgbuild` writes into every
 //! `PackageInfo` name nothing and are accepted.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use super::own::POSTINSTALL;
 use super::xml::{self, Element};
 
 /// The elements of a `Distribution` that run or decide anything at install time.
@@ -99,12 +103,19 @@ impl ShapeError {
 }
 
 /// Checks the expansion at `expanded` against the order's `identifier` and `version`, and finds
-/// its component.
-pub fn check(expanded: &Path, identifier: &str, version: &str) -> Result<Component, ShapeError> {
+/// its component. `own` is whether the package is hostkeeper's own ([`super::own::is_own`]),
+/// which may carry the script `postinstall` in its component.
+pub fn check(
+    expanded: &Path,
+    identifier: &str,
+    version: &str,
+    own: bool,
+) -> Result<Component, ShapeError> {
     let top = names(expanded, "the expansion")?;
     let distribution = expanded.join("Distribution");
     let product_archive = distribution.is_file();
-    if top.iter().any(|name| name == SCRIPTS) {
+    // Without a `Distribution` the expansion is the component, whose `Scripts` is checked below.
+    if top.iter().any(|name| name == SCRIPTS) && (product_archive || !own) {
         let holder = match product_archive {
             true => "the product archive",
             false => "the component",
@@ -128,11 +139,19 @@ pub fn check(expanded: &Path, identifier: &str, version: &str) -> Result<Compone
             top,
         ),
     };
-    if entries.iter().any(|name| name == SCRIPTS) {
+    let scripts = entries.iter().any(|name| name == SCRIPTS);
+    if scripts && !own {
         return Err(ShapeError::Scripts(format!(
             "the component holds {SCRIPTS:?}"
         )));
     }
+    if scripts {
+        own_scripts(&component.dir.join(SCRIPTS))?;
+    }
+    let allowed: &[&str] = match own {
+        true => &[POSTINSTALL],
+        false => &[],
+    };
     let info = match component.package_info().is_file() {
         true => Some(read_xml(&component.package_info(), "the PackageInfo")?),
         false => None,
@@ -140,7 +159,7 @@ pub fn check(expanded: &Path, identifier: &str, version: &str) -> Result<Compone
     if let Some(script) = info
         .iter()
         .flatten()
-        .find(|e| SCRIPT_ELEMENTS.contains(&e.name.as_str()))
+        .find(|e| SCRIPT_ELEMENTS.contains(&e.name.as_str()) && !allowed.contains(&e.name.as_str()))
     {
         return Err(ShapeError::Scripts(format!(
             "the PackageInfo has a <{}> element",
@@ -149,7 +168,8 @@ pub fn check(expanded: &Path, identifier: &str, version: &str) -> Result<Compone
     }
     let mut extras: Vec<&String> = entries
         .iter()
-        .filter(|name| !COMPONENT_ENTRIES.contains(&name.as_str()))
+        // A `Scripts` entry got here only for hostkeeper's own component, and was checked above.
+        .filter(|name| !COMPONENT_ENTRIES.contains(&name.as_str()) && *name != SCRIPTS)
         .collect();
     extras.sort_unstable();
     if let Some(extra) = extras.first() {
@@ -166,6 +186,29 @@ pub fn check(expanded: &Path, identifier: &str, version: &str) -> Result<Compone
     }
     package_info(&info, identifier, version)?;
     Ok(component)
+}
+
+/// Checks the `Scripts` directory of hostkeeper's own component: the regular file `postinstall`
+/// and nothing else.
+fn own_scripts(dir: &Path) -> Result<(), ShapeError> {
+    let mut found = names(dir, "the component's Scripts")?;
+    found.sort_unstable();
+    if found != [POSTINSTALL] {
+        return Err(ShapeError::Scripts(format!(
+            "the component's {SCRIPTS:?} holds {}, not {POSTINSTALL:?} alone",
+            found
+                .iter()
+                .map(|name| format!("{name:?}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )));
+    }
+    match fs::symlink_metadata(dir.join(POSTINSTALL)) {
+        Ok(meta) if meta.file_type().is_file() => Ok(()),
+        _ => Err(ShapeError::Scripts(format!(
+            "the component's {POSTINSTALL:?} is not a regular file"
+        ))),
+    }
 }
 
 /// The names of the entries of `dir`.

@@ -96,25 +96,37 @@ type Lay<'a> = Box<dyn Fn(&Expanded, &Path) + 'a>;
 #[test]
 fn a_scripts_directory_that_is_not_the_one_postinstall_is_refused() {
     // Catches: a pkg that runs another script at install, runs a postinstall with other words
-    // than the two commands (another launchctl, the old three commands that seed the binary
-    // directory and write the config before the load, a text one byte off, or one that does not
-    // load the job),
+    // than the question and the load (another launchctl, the old three commands that seed the
+    // binary directory and write the config before the load, the old boot-out before the load, a
+    // text one byte off, one that does not load the job, or one that loads it even when it is
+    // loaded),
     // holds no postinstall, holds one the installer cannot run or that others may write or that
     // is setuid, or holds a link, a directory or anything else in place of it or beside it.
     let text = postinstall_text();
     let other = text.replace("'/bin/launchctl'", "'/usr/bin/launchctl'");
-    let one_byte = text.replacen("bootout", "bootouT", 1);
+    let one_byte = text.replacen("print", "prinT", 1);
     let old_three = text.replacen(
-        "'/bin/launchctl' bootout",
+        "'/bin/launchctl' print",
         "'/usr/local/bin/hostkeeper' self-update-seed --state-dir '/var/lib/updater/state' \
          --binary '/usr/local/bin/hostkeeper' || exit\n\
          '/usr/local/bin/hostkeeper' mac-config --managed \
          '/Library/Managed Preferences/dev.hostkeeper.config.plist' --config \
          '/etc/hostkeeper/hostkeeper.toml' || exit\n\
-         '/bin/launchctl' bootout",
+         '/bin/launchctl' print",
         1,
     );
     assert_ne!(old_three, text);
+    let old_bootout = text.replacen(
+        "'/bin/launchctl' print",
+        "'/bin/launchctl' bootout 'system/dev.hostkeeper.hostkeeper' 2>/dev/null\n\
+         '/bin/launchctl' print",
+        1,
+    );
+    assert_ne!(old_bootout, text);
+    let loud = text.replacen(" >/dev/null 2>&1", "", 1);
+    assert_ne!(loud, text);
+    let loads_always = text.replacen(" && exit 0", "", 1);
+    assert_ne!(loads_always, text);
     let without_load = text.replace("exec ", "");
     let not_ours = "Scripts: postinstall is not the postinstall release macos-pkg writes";
     let mode = |m: &str| format!("Scripts: postinstall has mode {m}, not 755");
@@ -125,6 +137,18 @@ fn a_scripts_directory_that_is_not_the_one_postinstall_is_refused() {
         ),
         (
             Box::new(|e, _| e.write_script(POSTINSTALL, old_three.as_bytes(), 0o755)),
+            vec![not_ours.to_owned()],
+        ),
+        (
+            Box::new(|e, _| e.write_script(POSTINSTALL, old_bootout.as_bytes(), 0o755)),
+            vec![not_ours.to_owned()],
+        ),
+        (
+            Box::new(|e, _| e.write_script(POSTINSTALL, loud.as_bytes(), 0o755)),
+            vec![not_ours.to_owned()],
+        ),
+        (
+            Box::new(|e, _| e.write_script(POSTINSTALL, loads_always.as_bytes(), 0o755)),
             vec![not_ours.to_owned()],
         ),
         (
@@ -212,16 +236,17 @@ fn a_scripts_directory_that_is_not_the_one_postinstall_is_refused() {
 }
 
 #[test]
-fn the_postinstall_boots_out_then_loads_the_job_and_runs_nothing_else() {
-    // Catches: a postinstall that is not the two commands in order (boot-out, load), that runs the
-    // installed binary (the old seed and mac-config, which the daemon's start does now), that
-    // names other paths than launchctl's and the installed plist's, or that goes on after the
-    // load.
+fn the_postinstall_loads_the_job_only_when_it_is_not_loaded_and_runs_nothing_else() {
+    // Catches: a postinstall that is not the two lines in order (the quiet print that ends the
+    // script with 0 for a loaded job, the load), that boots the job out, that runs the installed
+    // binary (the old seed and mac-config, which the daemon's start does now), that names other
+    // paths than launchctl's and the installed plist's, or that goes on after the load.
     let text = postinstall_text();
     assert_eq!(text, Postinstall::pkg().script());
     assert!(text.starts_with("#!/bin/sh\n"));
     assert!(!text.contains("self-update-seed"));
     assert!(!text.contains("mac-config"));
+    assert!(!text.contains("bootout"));
     let code: Vec<&str> = text
         .lines()
         .skip(1)
@@ -230,7 +255,7 @@ fn the_postinstall_boots_out_then_loads_the_job_and_runs_nothing_else() {
     assert_eq!(
         code,
         [
-            "'/bin/launchctl' bootout 'system/dev.hostkeeper.hostkeeper' 2>/dev/null",
+            "'/bin/launchctl' print 'system/dev.hostkeeper.hostkeeper' >/dev/null 2>&1 && exit 0",
             "exec '/bin/launchctl' bootstrap system \
              '/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist'",
         ]

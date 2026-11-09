@@ -33,6 +33,9 @@ pub enum Holder {
     Uninstall,
     ClearHalt,
     ClearRecord,
+    /// The `activate` of hostkeeper's own package after its new binary confirmed itself, tried
+    /// again by the daemon while it defers ([`crate::own_package`]).
+    OwnActivate,
 }
 
 impl fmt::Display for Holder {
@@ -48,6 +51,7 @@ impl fmt::Display for Holder {
             Holder::Uninstall => f.write_str("an order to uninstall it"),
             Holder::ClearHalt => f.write_str("a `clear_halt`"),
             Holder::ClearRecord => f.write_str("a `clear_record`"),
+            Holder::OwnActivate => f.write_str("the activate of its own package"),
         }
     }
 }

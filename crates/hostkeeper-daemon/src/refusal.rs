@@ -56,8 +56,8 @@ pub enum Refusal {
     /// The dead-man could not stop a step at its bound: the service stays locked. A `force` that
     /// could not stop the running step of its service ends with it too.
     Unstopped,
-    /// A `force` or a `force_rollback` of the service `hostkeeper`, which updates itself by its
-    /// own path.
+    /// A `force` of the service `hostkeeper`, which updates itself by its own path (a
+    /// `force_rollback` of it is a hand-over to the version it names).
     SelfService,
     /// An `install` of a service that has a release installed (`current` names one).
     AlreadyInstalled,

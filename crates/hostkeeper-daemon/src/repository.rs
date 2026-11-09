@@ -336,11 +336,7 @@ impl Repository {
         step: impl FnOnce(&RepositoryInstaller<'_>) -> R,
     ) -> R {
         let tools = LauncherTools::sharing(&*self.launcher, service.as_str(), &self.tool_runs);
-        let records = PlacedRecords {
-            roots: self.roots.clone(),
-            fs: Arc::clone(&self.fs),
-            units: Arc::clone(&self.units),
-        };
+        let records = self.records();
         let lock = InstallerLock::new(&self.ports.lock);
         let pause = ClockPause(Arc::clone(&self.clock));
         step(&RepositoryInstaller {
@@ -446,20 +442,34 @@ impl Repository {
         dir: &Path,
         entry: &Target,
     ) -> Result<(), SwitchError> {
+        self.activate_installed(service, version, dir, entry)
+            .map_err(switch_error)
+    }
+
+    /// [`Repository::activate_version`] with the installer's failure as it is: what the new
+    /// binary of hostkeeper's own update runs after it confirmed itself
+    /// ([`crate::own_package`]). A version staged for an installer with no backend here, and a
+    /// `current` that cannot be switched, are `io_error`: nothing of the package said so.
+    pub fn activate_installed(
+        &self,
+        service: &ServiceName,
+        version: &Version,
+        dir: &Path,
+        entry: &Target,
+    ) -> Result<(), Failure> {
         let backend = backend_of_entry(entry).ok_or_else(|| {
-            SwitchError::Failed(format!(
-                "{version} of {service} was staged for the installer {:?}, which has no backend here",
-                entry.installer
-            ))
+            Failure::new(
+                Reason::IoError,
+                format!(
+                    "{version} of {service} was staged for the installer {:?}, which has no backend here",
+                    entry.installer
+                ),
+            )
         })?;
-        let order = self
-            .order(backend, service, version, entry)
-            .map_err(switch_error)?;
-        let activated = self
-            .with(backend, service, |installer| {
-                installer.activate(&order, dir)
-            })
-            .map_err(switch_error)?;
+        let order = self.order(backend, service, version, entry)?;
+        let activated = self.with(backend, service, |installer| {
+            installer.activate(&order, dir)
+        })?;
         if let Some(drift) = activated.drift {
             let mut repaired = self.repaired.lock().unwrap_or_else(PoisonError::into_inner);
             repaired.insert(service.to_string(), drift);
@@ -467,7 +477,76 @@ impl Repository {
         self.placer()
             .switch_current(service, version)
             .map(drop)
-            .map_err(|e| SwitchError::Failed(e.to_string()))
+            .map_err(|e| Failure::new(Reason::IoError, e.to_string()))
+    }
+
+    /// The adoption of a package the host's setup installed with no record
+    /// (docs/design/packages-native.md, section 10.4, "The bootstrap install is adopted"): under
+    /// the installer lock, the version of `package` the package manager shows; when it is
+    /// installed whole and `accept` takes its version, the package is held, then recorded as
+    /// installed by `backend` for `service`, from no repository of the host (an empty
+    /// `repository`), with no link. The version adopted; `None`, and nothing done, when the
+    /// package is not installed, not whole, or at a version `accept` refuses.
+    pub fn adopt(
+        &self,
+        backend: &dyn Backend,
+        service: &ServiceName,
+        package: &str,
+        accept: &dyn Fn(&str) -> bool,
+    ) -> Result<Option<String>, Failure> {
+        let held = InstallerLock::new(&self.ports.lock)
+            .hold()
+            .map_err(|e| Failure::new(Reason::IoError, format!("the installer lock: {e}")))?;
+        let tools = LauncherTools::sharing(&*self.launcher, service.as_str(), &self.tool_runs);
+        let installed = backend.installed(&tools, package, DRIFT_QUERY_SECS)?;
+        let Some(installed) = installed.filter(|found| found.complete & accept(&found.version))
+        else {
+            return Ok(None);
+        };
+        backend.hold(&tools, package, true, DRIFT_QUERY_SECS)?;
+        let record = PackageRecord {
+            installer: backend.installer().as_str().to_owned(),
+            package: package.to_owned(),
+            version: installed.version.clone(),
+            repository: String::new(),
+            links: Default::default(),
+            pending: false,
+        };
+        self.records()
+            .save(service, &record)
+            .map_err(|e| Failure::new(Reason::IoError, e.to_string()))?;
+        drop(held);
+        Ok(Some(installed.version))
+    }
+
+    /// The record of `service` written whole again when an `activate` left it `pending`: the
+    /// `activate` of hostkeeper's own package failed, and the version it was to install, against
+    /// the one the package manager still shows, is the drift the heartbeat reports
+    /// (docs/design/packages-native.md, section 10.4, step 5). `false` when there was none.
+    pub fn unpend(&self, service: &ServiceName) -> Result<bool, RecordError> {
+        let records = self.records();
+        match records.load(service)? {
+            Some(mut record) if record.pending => {
+                record.pending = false;
+                records.save(service, &record).map(|()| true)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    /// The record of `service` dropped: it is installed by `hostkeeper-archive` again (the
+    /// move's rollback of hostkeeper itself, whose package stays installed).
+    pub fn forget(&self, service: &ServiceName) -> Result<(), RecordError> {
+        self.records().clear(service)
+    }
+
+    /// The `installed` entries of `placed.json` as the repository installer reads them.
+    fn records(&self) -> PlacedRecords {
+        PlacedRecords {
+            roots: self.roots.clone(),
+            fs: Arc::clone(&self.fs),
+            units: Arc::clone(&self.units),
+        }
     }
 
     /// The switch before `cutover` of `order`, whose version directory holds `entry`.

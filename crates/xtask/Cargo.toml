@@ -131,6 +131,10 @@ hostkeeper-daemon = { path = "../hostkeeper-daemon" }
 # The package test holds the binary's own parser to refuse each step word and the manifest's
 # `update-hook` command (the shipped binary has neither).
 hostkeeper-hook = { path = "../hostkeeper-hook" }
+# The installers' lists for hostkeeper's own packages (`repository::tree::OWN_FILES`,
+# `macos_pkg::own::list`), which the packaging test (tests/packaging/own_list.rs) holds to
+# `packaging/linux/nfpm.yaml` and the pkg test (`release macos-pkg`) to the payload it builds.
+hostkeeper-install = { path = "../hostkeeper-install" }
 # The packaging test (tests/packaging/unit_file.rs) holds the unit's watchdog to the heartbeat
 # loop's longest call.
 hostkeeper-link = { path = "../hostkeeper-link" }

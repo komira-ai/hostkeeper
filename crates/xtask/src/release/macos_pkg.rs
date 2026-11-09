@@ -39,9 +39,10 @@
 //! changes no system directory; `/usr/local/lib` and `/usr/local/lib/hostkeeper` are made with
 //! that mode when they are not there.
 //!
-//! The pkg has one script, `postinstall` ([`scripts`]), which runs two commands at install:
-//! `launchctl bootout` of any copy of the daemon's job loaded before, and `launchctl bootstrap`,
-//! which loads the job the pkg installed. It runs the installed binary at no point: the daemon's
+//! The pkg has one script, `postinstall` ([`scripts`]), which asks launchd at install
+//! whether the daemon's job is loaded (`launchctl print`) and, only when it is not, runs
+//! `launchctl bootstrap`, which loads the job the pkg installed; a loaded job is never booted
+//! out, so an installer the daemon itself runs does not stop the daemon. It runs the installed binary at no point: the daemon's
 //! start does what the script once did (`hostkeeper_daemon::packaged` seeds the binary directory
 //! of hostkeeper's own update and execs `current`, `hostkeeper_daemon::mac_config::at_start`
 //! writes `/etc/hostkeeper/hostkeeper.toml` from the managed preferences the MDM installed). The
@@ -961,5 +962,7 @@ pub(crate) fn check(
 
 #[cfg(test)]
 mod check_tests;
+#[cfg(test)]
+mod own_tests;
 #[cfg(test)]
 pub(crate) mod tests;

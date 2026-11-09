@@ -83,6 +83,12 @@ pub const BASE: &str = "/run/hostkeeper-ci";
 /// The daemon on the rig's host, the installers the host announces, and the root-owned
 /// directory its state, packages and placed record are in, kept until the test ends.
 pub fn daemon(rig: &Rig) -> (Daemon, Vec<String>, Scratch) {
+    daemon_with(rig, Arc::new(NoStore))
+}
+
+/// [`daemon`] with `store` as its package store: the archive versions of a service that moves to
+/// apt are served by it.
+pub fn daemon_with(rig: &Rig, store: Arc<dyn Packages>) -> (Daemon, Vec<String>, Scratch) {
     fs::create_dir_all(BASE).expect("the root-owned base");
     fs::set_permissions(BASE, fs::Permissions::from_mode(0o755)).expect("its mode");
     let scratch = Scratch::under(Path::new(BASE), "apt-daemon").expect("the daemon's directory");
@@ -117,7 +123,7 @@ pub fn daemon(rig: &Rig) -> (Daemon, Vec<String>, Scratch) {
     );
     let ports = Ports {
         launcher: Arc::new(SystemdLauncher::system()),
-        packages: Arc::new(NoStore),
+        packages: store,
         clock: Arc::new(SystemClock::new(Box::new(ProcBootId::host()))),
         deadman_poll_secs: None,
         units: Arc::new(Systemctl::new(host_systemctl())),
