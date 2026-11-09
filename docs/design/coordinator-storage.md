@@ -6,12 +6,12 @@ section 10, the halts-file storage of the plan position in [rollout-update-plans
 and the device-record file of [hostkeeper-mdm.md](hostkeeper-mdm.md) section 6.1. Where they disagree with this document
 on where the coordinator keeps its state, this document wins. C1 to C4 and C6 are built: the storage trait and its
 fake (section 4.1), the enrollment crate's `Records` port, the Postgres store
-(`crates/hostkeeper-coordinator/src/store/postgres/`, with its migrations `0001` to `0005`, sections 3 to 8),
+(`crates/hostkeeper-coordinator/src/store/postgres/`, with its migrations `0001` to `0006`, sections 3 to 8),
 `import` and `export` (section 11: `crates/hostkeeper-coordinator/src/transfer.rs` and
 `crates/hostkeeper-coordinator/src/store/postgres/transfer.rs`), the generations and write ids (migration
 `0003`, section 3.2), the releases of a set with targets (migration `0004`, section 3.2, from
 [packages.md](packages.md) section 3.6), the MDM gate's device records (migration `0005`, the table `mdm_devices`,
-sections 2 and 3.6: `crates/hostkeeper-coordinator/src/store/postgres/devices.rs`), and C5, the compose deployment with its backups, restore and drill (sections 9 and
+sections 2 and 3.6: `crates/hostkeeper-coordinator/src/store/postgres/devices.rs`), what each host's daemon last said it runs (migration `0006`, the table `enrollment_host_running`, section 3.6), and C5, the compose deployment with its backups, restore and drill (sections 9 and
 10: `docs/deploy/coordinator/`, and the `xtask db-backup` verb in `crates/xtask/src/db_backup.rs`). Every other
 statement about new code is **Designed**, and section 13 lists the build items, C1 to C11, one pull request each. The tags are those of hostkeeper-design.md: **Built** names code on `main` with a path, **Designed** means
 nothing implements it yet.
@@ -355,6 +355,19 @@ that could disagree with the gate's. A record of another enrollment id than its 
 another name is. A save is one transaction on the writing session, fenced as every commit is
 (`crates/hostkeeper-coordinator/src/store/postgres/devices.rs`); a save that fails, or whose outcome is not known,
 is an error, and the gate does not take the record.
+
+What a host's daemon last said it runs (packages-native.md section 10.6) is the field `running` of the host's file
+(`hosts/<host id>.pb`, field 10 of the enrollment store's `Host`). On the database it is not a column of
+`enrollment_hosts`, which would make the migration `refuse` and stop a rollback of the coordinator:
+
+```sql
+enrollment_host_running(host_id text PRIMARY KEY,  -- the host's row in enrollment_hosts
+  running bytea NOT NULL)                          -- the encoded message hostkeeper.enrollment.store.v1.Running
+```
+
+**Built** (migration `0006`, `may-run`: an older release never reads the table nor touches it). A read of a host
+joins the two tables; a write of a host upserts the row, or deletes it for a host with no record (an approval), in one
+transaction. A row that does not decode is `Corrupt` at the start and for an export; `export` writes it into the file.
 
 ### 3.7 Bookkeeping
 

@@ -261,6 +261,8 @@ pub struct Coordinator {
     pub(crate) channel: Option<ReleaseChannel>,
     /// The held `Releases.WaitConverged` calls ([`crate::wait`]).
     pub(crate) waits: crate::wait::Waits,
+    /// What each host heard runs ([`crate::running`]).
+    pub(crate) running: crate::running::Kept,
     /// Told when CI's set of a desired state finds the fleet's lock held and waits for it: a
     /// test's progress event, so a race is made to happen rather than waited for.
     #[cfg(test)]
@@ -315,6 +317,7 @@ impl Coordinator {
             alerts: crate::alerts::Book::default(),
             channel: None,
             waits: crate::wait::Waits::default(),
+            running: crate::running::Kept::default(),
             #[cfg(test)]
             set_waits: Mutex::new(None),
         }
@@ -659,6 +662,7 @@ impl Coordinator {
         let held = halt::note(&self.ops, &self.services, legacy, &who, &beat, &node, now);
         let (platform, ops) = (beat.platform, self.ops.state());
         self.note_serving(&who.host_id, &node, &beat, &ops, now);
+        self.note_running(&fleet, &who, &beat, &announced, legacy, turn == Turn::Order);
         let counted =
             |def: &ServiceDef| standing(def, &who.host_id, &node, &ops, now) == Standing::Counted;
         for def in self.services.defs() {

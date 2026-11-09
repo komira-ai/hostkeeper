@@ -14,7 +14,7 @@ use prost::Message as _;
 use prost_reflect::{DescriptorPool, DynamicMessage};
 use prost_types::FileDescriptorSet;
 
-use crate::support::{LINUX, digest, entry, location, repository_entry, targets, web};
+use crate::support::{LINUX, digest, entry, location, manifest, repository_entry, targets, web};
 
 fn check_entry(entry: &Target) -> Result<(), EntryError> {
     target::check_entry(&web(), LINUX, entry)
@@ -441,21 +441,24 @@ fn hostkeeper_archive_and_the_service_hostkeeper_take_no_repository_entry() {
     manifest.health_url = None;
     manifest.package = Some("hostkeeper".to_owned());
     assert_eq!(target::check_entry(&hostkeeper, LINUX, &own), Ok(()));
-    for list in [
-        TargetList {
-            entries: vec![own.clone()],
-        },
-        TargetList {
-            entries: vec![entry(Installer::HostkeeperArchive), own],
-        },
-    ] {
-        assert_eq!(
-            target::check(&hostkeeper, &targets(&[("linux-arm64", list)])),
-            Err(TargetError::SelfNotArchive {
-                platform: Platform::LinuxArm64
-            })
-        );
-    }
+    // Its repository entry is its native one: alone, or with the archive entry after it, and
+    // never after the archive entry (`native.rs` holds every shape).
+    let alone = TargetList {
+        entries: vec![own.clone()],
+    };
+    assert_eq!(
+        target::check(&hostkeeper, &targets(&[("linux-arm64", alone)])),
+        Ok(())
+    );
+    let after = TargetList {
+        entries: vec![entry(Installer::HostkeeperArchive), own],
+    };
+    assert_eq!(
+        target::check(&hostkeeper, &targets(&[("linux-arm64", after)])),
+        Err(TargetError::SelfList {
+            platform: Platform::LinuxArm64
+        })
+    );
     let archive_list = TargetList {
         entries: vec![entry(Installer::HostkeeperArchive)],
     };
@@ -478,6 +481,7 @@ fn a_list_of_a_repository_entry_and_a_tarball_passes_and_no_installer_is_named_t
     );
     let artifact_apt = Target {
         installer: "apt".to_owned(),
+        manifest: Some(manifest(Installer::Apt)),
         ..entry(Installer::Tarball)
     };
     let twice = TargetList {

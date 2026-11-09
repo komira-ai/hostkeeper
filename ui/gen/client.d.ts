@@ -70,10 +70,7 @@ export interface Client {
 export declare function createClient(call: Call): Client;
 
 export namespace hostkeeper_agent_v1 {
-  export interface AgentInfo {
-    name?: string;
-    version?: string;
-  }
+  export interface AgentInfo { name?: string; version?: string; }
   export interface Claims {
     machineId?: string;
     dmiSerial?: string;
@@ -87,11 +84,7 @@ export namespace hostkeeper_agent_v1 {
     | "COMMIT_STATE_UNSPECIFIED"
     | "COMMIT_STATE_UNCOMMITTED"
     | "COMMIT_STATE_COMMITTED";
-  export interface DeferredReport {
-    target?: string;
-    reason?: string;
-    retryAfterSecs?: string;
-  }
+  export interface DeferredReport { target?: string; reason?: string; retryAfterSecs?: string; }
   export type FailureClass =
     | "FAILURE_CLASS_UNSPECIFIED"
     | "FAILURE_CLASS_RELEASE"
@@ -121,9 +114,7 @@ export namespace hostkeeper_agent_v1 {
     installers?: string[];
   }
   export type Outcome = "OUTCOME_UNSPECIFIED" | "OUTCOME_SUCCEEDED" | "OUTCOME_FAILED";
-  export interface PinReport {
-    commit?: string;
-  }
+  export interface PinReport { commit?: string; }
   export type Platform =
     | "PLATFORM_UNSPECIFIED"
     | "PLATFORM_LINUX_X86_64"
@@ -144,10 +135,7 @@ export namespace hostkeeper_agent_v1 {
     recordTry?: string;
     installer?: string;
   }
-  export interface StepRun {
-    name?: string;
-    attempt?: number;
-  }
+  export interface StepRun { name?: string; attempt?: number; }
   export type TrustedRootReason =
     | "TRUSTED_ROOT_REASON_UNSPECIFIED"
     | "TRUSTED_ROOT_REASON_NONE"
@@ -170,15 +158,8 @@ export namespace hostkeeper_agent_v1 {
 }
 
 export namespace hostkeeper_operator_v1 {
-  export interface AbortRequest {
-    nodeId?: string;
-    service?: string;
-    reason?: string;
-  }
-  export interface AbortResponse {
-    queued?: boolean;
-    entry?: hostkeeper_operator_v1.AuditEntry;
-  }
+  export interface AbortRequest { nodeId?: string; service?: string; reason?: string; }
+  export interface AbortResponse { queued?: boolean; entry?: hostkeeper_operator_v1.AuditEntry; }
   export type Actor = "ACTOR_UNSPECIFIED" | "ACTOR_OPERATOR" | "ACTOR_CI" | "ACTOR_COORDINATOR";
   export interface AddRecordRequest {
     hostId?: string;
@@ -195,10 +176,7 @@ export namespace hostkeeper_operator_v1 {
     record?: hostkeeper_operator_v1.InventoryRecord;
     entry?: hostkeeper_operator_v1.AuditEntry;
   }
-  export interface AdvanceRequest {
-    service?: string;
-    reason?: string;
-  }
+  export interface AdvanceRequest { service?: string; reason?: string; }
   export interface AdvanceResponse {
     entry?: hostkeeper_operator_v1.AuditEntry;
     plan?: hostkeeper_operator_v1.RolloutPlan;
@@ -245,14 +223,8 @@ export namespace hostkeeper_operator_v1 {
     certificateIssuedAtPoll?: boolean;
     entry?: hostkeeper_operator_v1.AuditEntry;
   }
-  export interface AssignRequest {
-    nodeId?: string;
-    service?: string;
-    role?: string;
-  }
-  export interface AssignResponse {
-    entry?: hostkeeper_operator_v1.AuditEntry;
-  }
+  export interface AssignRequest { nodeId?: string; service?: string; role?: string; }
+  export interface AssignResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface AssignedHost {
     nodeId?: string;
     role?: string;
@@ -260,11 +232,7 @@ export namespace hostkeeper_operator_v1 {
     minVersion?: string;
     holds?: hostkeeper_operator_v1.HoldMark[];
   }
-  export interface Assignment {
-    role?: string;
-    host?: string;
-    removed?: boolean;
-  }
+  export interface Assignment { role?: string; host?: string; removed?: boolean; }
   export interface AuditEntry {
     seq?: string;
     by?: hostkeeper_operator_v1.Actor;
@@ -275,26 +243,12 @@ export namespace hostkeeper_operator_v1 {
     atUnix?: string;
     byName?: string;
   }
-  export interface ClearHaltRequest {
-    service?: string;
-    reason?: string;
-  }
-  export interface ClearHaltResponse {
-    entry?: hostkeeper_operator_v1.AuditEntry;
-  }
-  export interface ClearRecordRequest {
-    nodeId?: string;
-    service?: string;
-  }
-  export interface ClearRecordResponse {
-    orderId?: string;
-  }
-  export interface ConvergeRequest {
-    service?: string;
-  }
-  export interface ConvergeResponse {
-    convergence?: hostkeeper_operator_v1.Convergence;
-  }
+  export interface ClearHaltRequest { service?: string; reason?: string; }
+  export interface ClearHaltResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
+  export interface ClearRecordRequest { nodeId?: string; service?: string; }
+  export interface ClearRecordResponse { orderId?: string; }
+  export interface ConvergeRequest { service?: string; }
+  export interface ConvergeResponse { convergence?: hostkeeper_operator_v1.Convergence; }
   export interface Convergence {
     desired?: string;
     quiet?: boolean;
@@ -330,25 +284,11 @@ export namespace hostkeeper_operator_v1 {
     reason?: string;
     abandon?: boolean;
   }
-  export interface ExcludeResponse {
-    entry?: hostkeeper_operator_v1.AuditEntry;
-  }
-  export interface Exclusion {
-    service?: string;
-    reason?: string;
-  }
-  export interface FailureAck {
-    nodeId?: string;
-    report?: hostkeeper_agent_v1.UpdateResult;
-  }
-  export interface FleetTarget {
-    confirmService?: string;
-  }
-  export interface ForceRecord {
-    version?: string;
-    generation?: string;
-    reason?: string;
-  }
+  export interface ExcludeResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
+  export interface Exclusion { service?: string; reason?: string; }
+  export interface FailureAck { nodeId?: string; report?: hostkeeper_agent_v1.UpdateResult; }
+  export interface FleetTarget { confirmService?: string; }
+  export interface ForceRecord { version?: string; generation?: string; reason?: string; }
   export interface ForceRequest {
     service?: string;
     version?: string;
@@ -399,16 +339,9 @@ export namespace hostkeeper_operator_v1 {
     | "GATE_REASON_NO_TARGET"
     | "GATE_REASON_NO_BUILD_FOR_HOST"
     | "GATE_REASON_INSTALLER_DROPPED";
-  export interface GetHostRequest {
-    nodeId?: string;
-  }
-  export interface GetHostResponse {
-    host?: hostkeeper_operator_v1.Host;
-  }
-  export interface GetReleaseRequest {
-    service?: string;
-    version?: string;
-  }
+  export interface GetHostRequest { nodeId?: string; }
+  export interface GetHostResponse { host?: hostkeeper_operator_v1.Host; }
+  export interface GetReleaseRequest { service?: string; version?: string; }
   export interface GetReleaseResponse {
     targets?: { [key: string]: hostkeeper_release_v1.TargetList };
     releaseIndexDigest?: string;
@@ -419,13 +352,8 @@ export namespace hostkeeper_operator_v1 {
     target?: string;
     report?: hostkeeper_agent_v1.UpdateResult;
   }
-  export interface HaltRequest {
-    service?: string;
-    reason?: string;
-  }
-  export interface HaltResponse {
-    entry?: hostkeeper_operator_v1.AuditEntry;
-  }
+  export interface HaltRequest { service?: string; reason?: string; }
+  export interface HaltResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface HoldMark {
     scope?: hostkeeper_operator_v1.HoldScope;
     service?: string;
@@ -469,6 +397,8 @@ export namespace hostkeeper_operator_v1 {
     trustedRootAgeSecs?: string;
     trustedRootReason?: hostkeeper_agent_v1.TrustedRootReason;
     installers?: string[];
+    running?: hostkeeper_operator_v1.RunningService[];
+    runningUnix?: string;
   }
   export interface HostCounts {
     missing?: number;
@@ -487,9 +417,7 @@ export namespace hostkeeper_operator_v1 {
     | "HOST_HELD_APPROVED"
     | "HOST_HELD_DENIED"
     | "HOST_HELD_RETIRED";
-  export interface HostList {
-    nodeIds?: string[];
-  }
+  export interface HostList { nodeIds?: string[]; }
   export interface HostService {
     service?: string;
     up?: boolean;
@@ -503,13 +431,8 @@ export namespace hostkeeper_operator_v1 {
     excludedReason?: string;
     stage?: number;
   }
-  export interface IncludeRequest {
-    service?: string;
-    nodeId?: string;
-  }
-  export interface IncludeResponse {
-    entry?: hostkeeper_operator_v1.AuditEntry;
-  }
+  export interface IncludeRequest { service?: string; nodeId?: string; }
+  export interface IncludeResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
   export type InventoryMatch =
     | "INVENTORY_MATCH_UNSPECIFIED"
     | "INVENTORY_MATCH_MATCHED"
@@ -534,9 +457,7 @@ export namespace hostkeeper_operator_v1 {
   }
   export interface ListAlertsRequest {
   }
-  export interface ListAlertsResponse {
-    alerts?: hostkeeper_operator_v1.Alert[];
-  }
+  export interface ListAlertsResponse { alerts?: hostkeeper_operator_v1.Alert[]; }
   export interface ListAuditRequest {
     sinceSeq?: string;
     limit?: number;
@@ -551,37 +472,23 @@ export namespace hostkeeper_operator_v1 {
     entries?: hostkeeper_operator_v1.AuditEntry[];
     nextSeq?: string;
   }
-  export interface ListDevicesRequest {
-    limit?: number;
-    pageToken?: string;
-  }
+  export interface ListDevicesRequest { limit?: number; pageToken?: string; }
   export interface ListDevicesResponse {
     devices?: hostkeeper_operator_v1.MdmDevice[];
     nextPageToken?: string;
     gate?: boolean;
   }
-  export interface ListHostsRequest {
-    limit?: number;
-    pageToken?: string;
-  }
+  export interface ListHostsRequest { limit?: number; pageToken?: string; }
   export interface ListHostsResponse {
     hosts?: hostkeeper_operator_v1.Host[];
     nextPageToken?: string;
   }
-  export interface ListPendingRequest {
-    limit?: number;
-    pageToken?: string;
-    unenrolled?: boolean;
-  }
+  export interface ListPendingRequest { limit?: number; pageToken?: string; unenrolled?: boolean; }
   export interface ListPendingResponse {
     requests?: hostkeeper_operator_v1.PendingEnrollment[];
     nextPageToken?: string;
   }
-  export interface ListRecordsRequest {
-    limit?: number;
-    pageToken?: string;
-    enrolled?: boolean;
-  }
+  export interface ListRecordsRequest { limit?: number; pageToken?: string; enrolled?: boolean; }
   export interface ListRecordsResponse {
     records?: hostkeeper_operator_v1.InventoryRecord[];
     nextPageToken?: string;
@@ -592,19 +499,9 @@ export namespace hostkeeper_operator_v1 {
     services?: hostkeeper_operator_v1.ServiceEntry[];
     holds?: hostkeeper_operator_v1.HoldMark[];
   }
-  export interface MarkBadRequest {
-    service?: string;
-    version?: string;
-    reason?: string;
-  }
-  export interface MarkBadResponse {
-    entry?: hostkeeper_operator_v1.AuditEntry;
-  }
-  export interface MdmCommand {
-    requestType?: string;
-    commandUuid?: string;
-    sentUnix?: string;
-  }
+  export interface MarkBadRequest { service?: string; version?: string; reason?: string; }
+  export interface MarkBadResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
+  export interface MdmCommand { requestType?: string; commandUuid?: string; sentUnix?: string; }
   export interface MdmDevice {
     enrollmentId?: string;
     udid?: string;
@@ -640,11 +537,7 @@ export namespace hostkeeper_operator_v1 {
     | "MEMBERSHIP_ABSENT"
     | "MEMBERSHIP_MISSING"
     | "MEMBERSHIP_UNMANAGED";
-  export interface MinVersion {
-    role?: string;
-    host?: string;
-    version?: string;
-  }
+  export interface MinVersion { role?: string; host?: string; version?: string; }
   export interface OpenRecordRequest {
     hostId?: string;
     approveUntilUnix?: string;
@@ -655,10 +548,7 @@ export namespace hostkeeper_operator_v1 {
     record?: hostkeeper_operator_v1.InventoryRecord;
     entry?: hostkeeper_operator_v1.AuditEntry;
   }
-  export interface PauseRequest {
-    service?: string;
-    reason?: string;
-  }
+  export interface PauseRequest { service?: string; reason?: string; }
   export interface PauseResponse {
     entry?: hostkeeper_operator_v1.AuditEntry;
     plan?: hostkeeper_operator_v1.RolloutPlan;
@@ -724,36 +614,17 @@ export namespace hostkeeper_operator_v1 {
     | "RECORD_STATE_OPEN"
     | "RECORD_STATE_CLOSED"
     | "RECORD_STATE_USED";
-  export interface RejectRequest {
-    requestId?: string;
-    reason?: string;
-  }
-  export interface RejectResponse {
-    entry?: hostkeeper_operator_v1.AuditEntry;
-  }
-  export interface RemoveRecordRequest {
-    hostId?: string;
-    reason?: string;
-  }
-  export interface RemoveRecordResponse {
-    entry?: hostkeeper_operator_v1.AuditEntry;
-  }
-  export interface Replaced {
-    version?: string;
-    minUp?: { [key: string]: number };
-  }
-  export interface ResumeRequest {
-    service?: string;
-    reason?: string;
-  }
+  export interface RejectRequest { requestId?: string; reason?: string; }
+  export interface RejectResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
+  export interface RemoveRecordRequest { hostId?: string; reason?: string; }
+  export interface RemoveRecordResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
+  export interface Replaced { version?: string; minUp?: { [key: string]: number }; }
+  export interface ResumeRequest { service?: string; reason?: string; }
   export interface ResumeResponse {
     entry?: hostkeeper_operator_v1.AuditEntry;
     plan?: hostkeeper_operator_v1.RolloutPlan;
   }
-  export interface RetireRequest {
-    nodeId?: string;
-    reason?: string;
-  }
+  export interface RetireRequest { nodeId?: string; reason?: string; }
   export interface RetireResponse {
     entry?: hostkeeper_operator_v1.AuditEntry;
     updateInFlight?: boolean;
@@ -777,6 +648,7 @@ export namespace hostkeeper_operator_v1 {
     pauseReason?: string;
     finished?: boolean;
   }
+  export interface RunningService { service?: string; version?: string; installer?: string; }
   export interface ServiceEntry {
     service?: string;
     hosts?: string[];
@@ -832,31 +704,19 @@ export namespace hostkeeper_operator_v1 {
     record?: hostkeeper_operator_v1.WriteRecord;
     droppedRoles?: string[];
   }
-  export interface SetLabelsRequest {
-    nodeId?: string;
-    labels?: { [key: string]: string };
-  }
-  export interface SetLabelsResponse {
-    entry?: hostkeeper_operator_v1.AuditEntry;
-  }
+  export interface SetLabelsRequest { nodeId?: string; labels?: { [key: string]: string }; }
+  export interface SetLabelsResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface SetMinVersionRequest {
     service?: string;
     minVersion?: hostkeeper_operator_v1.MinVersion;
   }
-  export interface SetMinVersionResponse {
-    entry?: hostkeeper_operator_v1.AuditEntry;
-  }
-  export interface SkippedHost {
-    nodeId?: string;
-    reason?: string;
-  }
+  export interface SetMinVersionResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
+  export interface SkippedHost { nodeId?: string; reason?: string; }
   export type StageAdvance =
     | "STAGE_ADVANCE_UNSPECIFIED"
     | "STAGE_ADVANCE_AUTO"
     | "STAGE_ADVANCE_MANUAL";
-  export interface StatusRequest {
-    service?: string;
-  }
+  export interface StatusRequest { service?: string; }
   export interface StatusResponse {
     services?: hostkeeper_operator_v1.ServiceStatus[];
     quiet?: boolean;
@@ -870,30 +730,16 @@ export namespace hostkeeper_operator_v1 {
     uninstall?: boolean;
     role?: string;
   }
-  export interface UnassignResponse {
-    entry?: hostkeeper_operator_v1.AuditEntry;
-  }
+  export interface UnassignResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface UnholdRequest {
     scope?: hostkeeper_operator_v1.HoldScope;
     service?: string;
     reason?: string;
   }
-  export interface UnholdResponse {
-    entry?: hostkeeper_operator_v1.AuditEntry;
-  }
-  export interface UnmarkBadRequest {
-    service?: string;
-    version?: string;
-    reason?: string;
-  }
-  export interface UnmarkBadResponse {
-    entry?: hostkeeper_operator_v1.AuditEntry;
-  }
-  export interface WaitConvergedRequest {
-    service?: string;
-    version?: string;
-    waitSecs?: number;
-  }
+  export interface UnholdResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
+  export interface UnmarkBadRequest { service?: string; version?: string; reason?: string; }
+  export interface UnmarkBadResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
+  export interface WaitConvergedRequest { service?: string; version?: string; waitSecs?: number; }
   export interface WaitConvergedResponse {
     outcome?: hostkeeper_operator_v1.WaitOutcome;
     convergence?: hostkeeper_operator_v1.Convergence;
@@ -938,10 +784,7 @@ export namespace hostkeeper_release_v1 {
     activateSecs?: string;
     removeSecs?: string;
   }
-  export interface Location {
-    store?: string;
-    locator?: string;
-  }
+  export interface Location { store?: string; locator?: string; }
   export interface Manifest {
     package?: string;
     hook?: hostkeeper_release_v1.Hook;
@@ -959,16 +802,8 @@ export namespace hostkeeper_release_v1 {
     float?: number | "NaN" | "Infinity" | "-Infinity";
     flag?: boolean;
   }
-  export interface Place {
-    kind?: string;
-    source?: string;
-    path?: string;
-  }
-  export interface Port {
-    host?: number;
-    container?: number;
-    loopbackOnly?: boolean;
-  }
+  export interface Place { kind?: string; source?: string; path?: string; }
+  export interface Port { host?: number; container?: number; loopbackOnly?: boolean; }
   export interface StepBounds {
     prepare?: string;
     cutover?: string;
@@ -987,12 +822,6 @@ export namespace hostkeeper_release_v1 {
     repository?: string;
     packageVersion?: string;
   }
-  export interface TargetList {
-    entries?: hostkeeper_release_v1.Target[];
-  }
-  export interface Volume {
-    hostPath?: string;
-    containerPath?: string;
-    readOnly?: boolean;
-  }
+  export interface TargetList { entries?: hostkeeper_release_v1.Target[]; }
+  export interface Volume { hostPath?: string; containerPath?: string; readOnly?: boolean; }
 }

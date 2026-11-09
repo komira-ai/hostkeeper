@@ -182,7 +182,8 @@ fn header() -> String {
 /// declared outside its package's or its message's namespace, a nested type whose holder is
 /// declared though nothing needs it, a holder's namespace declared twice for two of its types,
 /// a map entry declared as a type, a repeated union without
-/// its parentheses, a long enum on one line, and a type reached twice declared twice.
+/// its parentheses, a long enum on one line, a message declared on several lines though it fits
+/// one, or on one though it does not, and a type reached twice declared twice.
 #[test]
 fn every_kind_of_field_is_declared_as_proto3_json_writes_it() {
     let client = emit(&things(), &fixture()).expect("the fixture generates");
@@ -245,36 +246,26 @@ export namespace hostkeeper_operator_v1 {
     also?: hostkeeper_operator_v1.Holder.Also;
   }
   export namespace GetThingRequest {
-    export interface Inner {
-      deep?: hostkeeper_operator_v1.GetThingRequest.Inner.Deep;
-    }
+    export interface Inner { deep?: hostkeeper_operator_v1.GetThingRequest.Inner.Deep; }
     export namespace Inner {
       export type Deep = "DEEP_UNSPECIFIED" | "DEEP_ONE";
     }
   }
-  export interface GetThingResponse {
-    state?: hostkeeper_operator_v1.LongEnumNameForWrapping;
-  }
+  export interface GetThingResponse { state?: hostkeeper_operator_v1.LongEnumNameForWrapping; }
   export namespace Holder {
     export interface Also {
     }
-    export interface Nested {
-      x?: string;
-    }
+    export interface Nested { x?: string; }
   }
   export type Kind = "KIND_UNSPECIFIED" | "KIND_A";
   export type LongEnumNameForWrapping =
     | "LONG_ENUM_NAME_FOR_WRAPPING_UNSPECIFIED"
     | "LONG_ENUM_NAME_FOR_WRAPPING_FIRST";
-  export interface Tree {
-    children?: hostkeeper_operator_v1.Tree[];
-  }
+  export interface Tree { children?: hostkeeper_operator_v1.Tree[]; }
 }
 
 export namespace hostkeeper_other_v1 {
-  export interface Far {
-    x?: string;
-  }
+  export interface Far { x?: string; }
 }
 "#
     );

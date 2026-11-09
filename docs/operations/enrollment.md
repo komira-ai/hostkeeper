@@ -484,7 +484,9 @@ as First heartbeat ("not yet" for an enrolled host not heard since). `first_serv
 same clock and kept and cleared the same way, is the first heartbeat since that approval that
 reported a service the coordinator manages for the host (not hostkeeper itself) healthy, with no
 update of it under way: when the host began serving (absent until then). `hosts list` answers every
-host the same way, a page at a time. [Renewal](#renewal) says what they answer of its certificate.
+host the same way, a page at a time, and lists with them the enrolled hosts that are not denied
+and have not been heard since the coordinator started: not live, with no heartbeat time, and with
+`running` and `running_unix` as the enrollment kept them (below). [Renewal](#renewal) says what they answer of its certificate.
 
 ## Renewal
 

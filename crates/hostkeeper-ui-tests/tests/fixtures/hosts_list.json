@@ -29,6 +29,14 @@
       "live": true,
       "nodeId": "s1",
       "role": "storage",
+      "running": [
+        {
+          "installer": "hostkeeper-archive",
+          "service": "kbf",
+          "version": "1.0"
+        }
+      ],
+      "runningUnix": "1800000000",
       "services": [
         {
           "gateReason": "GATE_REASON_NO_DESIRED",
