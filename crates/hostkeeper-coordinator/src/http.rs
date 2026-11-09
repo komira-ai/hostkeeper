@@ -21,7 +21,9 @@
 //!   change. With a UI directory (`--ui-dir`, or the binary's default,
 //!   [`crate::config::DEFAULT_UI_DIR`]) it also answers `GET` and `HEAD` for `/ui/` and every
 //!   path below from that directory ([`crate::ui`]), with no token read; without one those paths
-//!   are not found. The heartbeat surface never serves them.
+//!   are not found. The heartbeat surface never serves them. `GET /v1/version[?at_least=<X.Y.Z>]`
+//!   answers which release this coordinator is, with no token read ([`crate::version_route`]):
+//!   CI waits on it before it sets a release a coordinator older than the release would refuse.
 //!
 //! No answer, on either surface, carries an `Access-Control-*` header: the operator web app is
 //! served from the private listener itself, so its calls are same-origin, and a cross-origin
@@ -79,6 +81,9 @@ pub const CONVERGENCE_PATH: &str = "/v1/convergence";
 /// The path an operator posts an action to.
 pub const OPERATOR_PATH: &str = "/v1/operator";
 
+/// The path anyone that reaches the private listener reads the coordinator's own version from.
+pub const VERSION_PATH: &str = "/v1/version";
+
 /// The most bytes of a desired state read.
 pub const MAX_DESIRED_BYTES: usize = 4096;
 
@@ -112,7 +117,7 @@ type Answer = Response<Full<Bytes>>;
 /// The error of a request body.
 pub(crate) type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
-fn json<T: Serialize>(status: StatusCode, value: &T) -> Answer {
+pub(crate) fn json<T: Serialize>(status: StatusCode, value: &T) -> Answer {
     let body = serde_json::to_vec(value).unwrap_or_default();
     Response::builder()
         .status(status)
@@ -200,6 +205,9 @@ where
                 Err(_) => error(StatusCode::UNAUTHORIZED, "unauthorized"),
             }
         }
+        (Surface::Control, Method::GET, VERSION_PATH) => {
+            crate::version_route::answer(request.uri().query())
+        }
         (Surface::Control, Method::GET, CONVERGENCE_PATH) => {
             let Some(service) = service_of(request.uri().query(), coordinator.legacy_service())
             else {
@@ -217,7 +225,11 @@ where
             }
         }
         (Surface::Heartbeat, _, HEARTBEAT_PATH)
-        | (Surface::Control, _, DESIRED_PATH | OPERATOR_PATH | STATUS_PATH | CONVERGENCE_PATH) => {
+        | (
+            Surface::Control,
+            _,
+            DESIRED_PATH | OPERATOR_PATH | STATUS_PATH | CONVERGENCE_PATH | VERSION_PATH,
+        ) => {
             error(StatusCode::METHOD_NOT_ALLOWED, "method_not_allowed")
         }
         _ => error(StatusCode::NOT_FOUND, "not_found"),
