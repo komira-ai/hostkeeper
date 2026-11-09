@@ -148,6 +148,7 @@ fn without_a_certificate_the_daemon_waits_and_names_the_missing_file() {
         gh: root.join("gh"),
         trusted_root: root.join("trusted_root.json"),
         stores: root.join("stores.toml"),
+        macos_pkg_signers: None,
         pki: root.join("pki"),
         console: None,
         managed_config: None,

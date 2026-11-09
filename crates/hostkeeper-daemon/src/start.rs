@@ -38,6 +38,7 @@ use std::sync::Arc;
 
 use hostkeeper_config::daemon::{ConfigError, DaemonConfig};
 use hostkeeper_config::manifest::{BadHostkeeperVersion, HostkeeperVersion};
+use hostkeeper_install::macos_pkg::signers::SignersError;
 use hostkeeper_observe::unlink_stale_registration_socket;
 use hostkeeper_package::stores::StoresError;
 use hostkeeper_placed::BootView;
@@ -111,6 +112,13 @@ pub enum StartError {
         #[source]
         source: StoresError,
     },
+    /// The Mac's `macos-pkg.toml` is not sound; the error names the file and the rule it breaks.
+    #[error("{}: {source}", path.display())]
+    MacosPkg {
+        path: PathBuf,
+        #[source]
+        source: SignersError,
+    },
     /// Another daemon holds the state directory, or its lock cannot be taken.
     #[error("another daemon holds {}, or its lock cannot be taken: {source}", path.display())]
     Locked {
@@ -145,9 +153,10 @@ impl StartError {
     /// The exit status of the daemon for this error.
     pub fn exit_code(&self) -> u8 {
         match self {
-            StartError::Config { .. } | StartError::MacConfig(_) | StartError::Stores { .. } => {
-                EXIT_CONFIG
-            }
+            StartError::Config { .. }
+            | StartError::MacConfig(_)
+            | StartError::Stores { .. }
+            | StartError::MacosPkg { .. } => EXIT_CONFIG,
             StartError::Locked { .. } => EXIT_LOCKED,
             StartError::Io { .. }
             | StartError::Runtime(_)

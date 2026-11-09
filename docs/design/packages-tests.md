@@ -8,7 +8,9 @@ Postgres store's in `crates/hostkeeper-coordinator/src/store/postgres/tests/rele
 the pick's own bounds in `crates/hostkeeper-coordinator/src/picks_tests.rs`), and so are those of A4
 (`crates/hostkeeper-daemon/tests/stores.rs`, `crates/hostkeeper-package/tests/fetch.rs`) and of A16 (below), and
 of A6 the announce cases of `hostkeeper-archive` (`crates/hostkeeper-install/tests/announce.rs`) and the contract
-and registry (`crates/hostkeeper-install/tests/installer.rs`); nothing else here is built. This is section 12 of
+and registry (`crates/hostkeeper-install/tests/installer.rs`), and of A9 the steps and signers file of `macos-pkg`
+(`crates/hostkeeper-install/tests/macos_pkg.rs` and the crate's unit tests, the device tests in
+`crates/hostkeeper-privileged/tests/install_macos_pkg.rs`); nothing else here is built. This is section 12 of
 [packages.md](packages.md), kept in a file of its own so that one stays under 1000 lines (rule R12). Section numbers here
 are those of packages.md, and A1 to A15 are its build items (section 13). A16, A17 and the re-scoped A7 and A9 are
 [packages-repositories.md](packages-repositories.md)'s (its section 8); the `deb`, `rpm`, `arch` and `apk` cases
