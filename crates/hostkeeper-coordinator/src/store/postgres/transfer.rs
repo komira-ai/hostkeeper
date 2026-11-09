@@ -37,7 +37,7 @@ const MOVE_TIMEOUTS: Timeouts = Timeouts {
 
 /// Every table that holds state, in the order an export counts them; `imports` is the import's
 /// own record, and the bookkeeping (`schema_version`, `lease`, `enrollment_serial`) is not here.
-pub(crate) const STATE_TABLES: [&str; 27] = [
+pub(crate) const STATE_TABLES: [&str; 28] = [
     "desired",
     "desired_digests",
     "releases",
@@ -62,6 +62,7 @@ pub(crate) const STATE_TABLES: [&str; 27] = [
     "enrollment_requests",
     "enrollment_issued",
     "enrollment_hosts",
+    "enrollment_host_running",
     "enrollment_deny",
     "mac_nonces",
     "mdm_devices",
@@ -243,6 +244,7 @@ pub(crate) fn counts_of(moved: &Moved) -> Result<Counts, MoveError> {
                 "enrollment_requests" => r.requests.len(),
                 "enrollment_issued" => r.issued.len(),
                 "enrollment_hosts" => r.hosts.len(),
+                "enrollment_host_running" => r.hosts.iter().filter(|h| h.running.is_some()).count(),
                 "enrollment_deny" => r.deny.len(),
                 "mac_nonces" => r.mac_nonces.len(),
                 "mdm_devices" => moved.devices.len(),
@@ -276,7 +278,9 @@ fn read_moved(session: &mut Session, now: u64) -> Result<Moved, MoveError> {
     let loaded = load_all(session, now)
         .map_err(|e| MoveError::Database(DatabaseError::Load(e.to_string())))?;
     let audit = audit_all(session)?;
-    let records = records::read_all(session).map_err(|e| refused(&e))?;
+    let records = records::read_all(session)
+        .map_err(|e| refused(&e))?
+        .map_err(|e| DatabaseError::Refused(e.to_string()))?;
     let devices = devices::read_all(session)
         .map_err(|e| MoveError::Database(DatabaseError::Load(e.to_string())))?;
     let pruned: Option<i64> = session

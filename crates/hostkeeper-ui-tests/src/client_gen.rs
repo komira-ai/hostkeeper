@@ -41,7 +41,8 @@ use prost_reflect::{DescriptorPool, EnumDescriptor, FieldDescriptor, Kind, Messa
 /// The package whose services the client calls: the operator API.
 pub const PACKAGE: &str = "hostkeeper.operator.v1";
 
-/// The longest line of an enum's declaration on one line; a longer one has a line per value.
+/// The longest line of an enum's or a message's declaration on one line; a longer one has a line per
+/// value or field.
 const WIDTH: usize = 100;
 
 /// What the header of both files says about where they come from.
@@ -274,27 +275,32 @@ fn field_type(field: &FieldDescriptor) -> String {
 }
 
 /// Appends the declaration of `ty` at `indent`: an interface of its fields, as the message
-/// declares them, or a union of its values' names.
+/// declares them, or a union of its values' names. A declaration that fits in [`WIDTH`] is one
+/// line, else one line per field or value.
 fn declare(out: &mut String, indent: &str, ty: &Type) {
     match ty {
         Type::Message(m) => {
-            let _ = writeln!(out, "{indent}export interface {} {{", m.name());
-            let declared: Vec<FieldDescriptor> = m
+            let declared: Vec<String> = m
                 .descriptor_proto()
                 .field
                 .iter()
                 .filter_map(|proto| m.get_field_by_name(proto.name()))
+                .map(|field| format!("{}?: {};", field.json_name(), field_type(&field)))
                 .collect();
-            let inner = format!("{indent}  ");
-            for field in declared {
-                let _ = writeln!(
-                    out,
-                    "{inner}{}?: {};",
-                    field.json_name(),
-                    field_type(&field)
-                );
+            let line = format!(
+                "{indent}export interface {} {{ {} }}",
+                m.name(),
+                declared.join(" ")
+            );
+            if !declared.is_empty() && line.len() <= WIDTH {
+                let _ = writeln!(out, "{line}");
+            } else {
+                let _ = writeln!(out, "{indent}export interface {} {{", m.name());
+                for field in &declared {
+                    let _ = writeln!(out, "{indent}  {field}");
+                }
+                let _ = writeln!(out, "{indent}}}");
             }
-            let _ = writeln!(out, "{indent}}}");
         }
         Type::Enum(e) => {
             let names: Vec<String> = e.values().map(|v| format!("\"{}\"", v.name())).collect();

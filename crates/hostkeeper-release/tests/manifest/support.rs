@@ -98,6 +98,15 @@ pub fn container() -> Container {
     }
 }
 
+/// The hook of a native entry: the package's program at its fixed path, so no command, and a
+/// boot step.
+pub fn native_hook() -> Hook {
+    Hook {
+        command: Vec::new(),
+        ..hook()
+    }
+}
+
 /// A manifest `installer` takes, with every field it allows set.
 pub fn manifest(installer: Installer) -> Manifest {
     let mut manifest = Manifest {
@@ -133,6 +142,7 @@ pub fn manifest(installer: Installer) -> Manifest {
     ]);
     match installer {
         Installer::MacosPkg => {
+            manifest.hook = Some(native_hook());
             manifest.package = Some("dev.web.server".to_owned());
             manifest.run = vec!["web".to_owned(), "web.worker".to_owned()];
         }
@@ -155,6 +165,7 @@ pub fn manifest(installer: Installer) -> Manifest {
             manifest.containers = vec![container()];
         }
         Installer::Apt | Installer::HostkeeperArchive => {
+            manifest.hook = Some(native_hook());
             manifest.package = Some("web".to_owned());
             manifest.run = vec!["web.service".to_owned(), "web-cache.timer".to_owned()];
         }
@@ -170,7 +181,8 @@ pub fn location(store: &str, locator: &str) -> Location {
 }
 
 /// An entry of `installer` with its manifest: a repository entry ([`repository_entry`]) for a
-/// backend of the repository installer, an artifact entry for any other.
+/// backend of the repository installer, an artifact entry for any other, with an attestation
+/// but for `macos-pkg`, whose entry carries none.
 pub fn entry(installer: Installer) -> Target {
     if installer.is_repository() {
         return Target {
@@ -178,7 +190,7 @@ pub fn entry(installer: Installer) -> Target {
             ..repository_entry()
         };
     }
-    Target {
+    let attested = Target {
         installer: installer.as_str().to_owned(),
         locations: vec![
             location("lan", "releases/web/1.6.0/web.bin"),
@@ -196,7 +208,14 @@ pub fn entry(installer: Installer) -> Target {
         }),
         manifest: Some(manifest(installer)),
         ..Target::default()
+    };
+    if installer == Installer::MacosPkg {
+        return Target {
+            attestation: None,
+            ..attested
+        };
     }
+    attested
 }
 
 /// A repository entry as CI sends it (packages-repositories.md section 1): `apt`, the
@@ -214,12 +233,15 @@ pub fn repository_entry() -> Target {
 }
 
 /// An artifact entry of the installer `name`, which may be one no daemon lists (a withdrawn
-/// `deb` or `rpm`, or any other of the grammar), with a manifest naming a package, as such an
-/// entry had before the installers were withdrawn.
+/// `deb` or `rpm`, or any other of the grammar), with a manifest naming a package and a hook
+/// program, as such an entry had before the installers were withdrawn.
 pub fn named(name: &str) -> Target {
     Target {
         installer: name.to_owned(),
-        manifest: Some(manifest(Installer::Apt)),
+        manifest: Some(Manifest {
+            hook: Some(hook()),
+            ..manifest(Installer::Apt)
+        }),
         ..entry(Installer::Tarball)
     }
 }

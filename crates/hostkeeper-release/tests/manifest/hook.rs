@@ -75,10 +75,12 @@ fn a_hook_program_is_a_relative_path_of_plain_names() {
     assert_eq!(check_hook(args), Ok(()));
 }
 
-/// Catches: an empty command (the built-in steps) refused, or a boot step passing that the
-/// built-in steps cannot run or whose name is not an additive step's.
+/// Catches: an empty command (the built-in steps, or a native package's program at its fixed
+/// path) refused, or a boot step passing whose name is not an additive step's. Whether a boot
+/// step needs a command is the installer's rule (`native.rs`): the rules every manifest keeps
+/// take one without.
 #[test]
-fn an_empty_command_asks_for_the_built_in_steps_which_have_no_boot_step() {
+fn an_empty_command_passes_and_a_boot_step_is_named_as_an_additive_step() {
     let builtin = Hook {
         command: Vec::new(),
         boot: None,
@@ -90,11 +92,7 @@ fn an_empty_command_asks_for_the_built_in_steps_which_have_no_boot_step() {
             boot: Some("restore".to_owned()),
             ..builtin
         }),
-        Err(ManifestError::BootWithoutCommand("restore".to_owned()))
-    );
-    assert_eq!(
-        ManifestError::BootWithoutCommand("restore".to_owned()).to_string(),
-        "hook.boot \"restore\" needs a hook.command; the built-in steps have no boot step"
+        Ok(())
     );
     let long = "a".repeat(65);
     for bad in [

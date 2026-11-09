@@ -13,7 +13,7 @@ use crate::enrollment::tests::support::{HostKey, NOW};
 use crate::store::postgres::PgRecords;
 
 /// A new key of `id` approved in `enrollment`, taking the host id over.
-fn approve_again(enrollment: &EnrollmentStore, id: &HostId) {
+pub(super) fn approve_again(enrollment: &EnrollmentStore, id: &HostId) {
     let key = HostKey::new();
     let posted = enrollment
         .post(

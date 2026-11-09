@@ -218,6 +218,12 @@ pub trait Records: Send + Sync + fmt::Debug {
     /// [`StoreError`] when it cannot be written.
     fn set_first_serving(&self, host: &pb::Host, at_unix: u64) -> Result<(), StoreError>;
 
+    /// Writes `host`, as the store loaded it, with `running` as what its daemon said it runs.
+    ///
+    /// # Errors
+    /// [`StoreError`] when it cannot be written.
+    fn set_running(&self, host: &pb::Host, running: pb::Running) -> Result<(), StoreError>;
+
     /// Writes `host`, as the store loaded it, marked duplicate.
     ///
     /// # Errors

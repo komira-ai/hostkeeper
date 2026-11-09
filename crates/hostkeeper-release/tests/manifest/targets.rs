@@ -130,10 +130,11 @@ fn a_list_names_no_installer_twice() {
     assert_eq!(check(&across), Ok(()));
 }
 
-/// Catches: the service `hostkeeper` set with anything but one archive entry per list, which
-/// would break self-update for every daemon on a host now; or another service held to it.
+/// Catches: the service `hostkeeper` set with an archive entry and an installer of another
+/// format, or with that format alone, which would break self-update for every daemon on a host
+/// now; or another service held to it. Its native entries are `native.rs`'s.
 #[test]
-fn hostkeeper_is_set_with_one_hostkeeper_archive_entry_per_list_only() {
+fn hostkeeper_is_set_with_no_installer_but_its_native_one_and_the_archive() {
     let hostkeeper = ServiceName::new("hostkeeper").expect("a name");
     let archive = list(&[Installer::HostkeeperArchive]);
     let ok = targets(&[
@@ -160,18 +161,11 @@ fn hostkeeper_is_set_with_one_hostkeeper_archive_entry_per_list_only() {
         let set = targets(&[("linux-x86_64", archive.clone()), ("linux-arm64", bad)]);
         assert_eq!(
             target::check(&hostkeeper, &set),
-            Err(TargetError::SelfNotArchive {
+            Err(TargetError::SelfList {
                 platform: Platform::LinuxArm64
             })
         );
     }
-    assert_eq!(
-        TargetError::SelfNotArchive {
-            platform: Platform::MacosArm64
-        }
-        .to_string(),
-        "the list of macos-arm64 for the service hostkeeper is not one hostkeeper-archive entry"
-    );
     let other = targets(&[("linux-arm64", named_list(&["tarball", "deb"]))]);
     assert_eq!(check(&other), Ok(()));
 }
