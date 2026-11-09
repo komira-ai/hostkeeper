@@ -36,6 +36,7 @@
 
 mod archive;
 mod error;
+mod fill;
 mod fs;
 mod publish;
 mod seal;
@@ -48,6 +49,7 @@ pub use error::{
     REASON_IO_ERROR, REASON_MANIFEST_MISMATCH, REASON_NO_SPACE, REASON_RESERVED_VERSION,
     REASON_VERIFY_UNAVAILABLE, REASON_VERSION_TOO_LONG, Rule, UnpackError,
 };
+pub use fill::{FillError, FillOrder, Filled, stage_filled};
 pub use fs::{HostFs, Owner, PackageFs, ServiceLock, StagedFile};
 pub use seal::{SEAL_SCHEMA, Seal, SealError};
 pub use unpack::{Limits, UnpackOrder, Unpacked, remove_orphans, running_hostkeeper, unpack};
