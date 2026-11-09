@@ -18,16 +18,25 @@ hostkeeper-config = { path = "../hostkeeper-config" }
 hostkeeper-proto = { path = "../hostkeeper-proto" }
 # The installers' names.
 hostkeeper-release = { path = "../hostkeeper-release" }
+# The step launcher, which runs the repository installer's tools as transient units.
+hostkeeper-steps = { path = "../hostkeeper-steps" }
 # The bounded reader: today's unpack, the stage of hostkeeper-archive.
 hostkeeper-unpack = { path = "../hostkeeper-unpack" }
+# The SHA-256 of a downloaded package, against the order's pin.
+hex.workspace = true
+# `O_NOFOLLOW` for the repository configuration's open.
+libc.workspace = true
+# The repository installer's record, the service's `installed` entry of placed.json.
+serde.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }
-# The archive digests and the running user of the stage's tests.
-hex.workspace = true
+# The record's JSON form, asserted by the tests.
+serde_json.workspace = true
+# The running user of the stage's tests.
 rustix = { workspace = true, features = ["process"] }
-sha2.workspace = true
 
 [lints]
 workspace = true

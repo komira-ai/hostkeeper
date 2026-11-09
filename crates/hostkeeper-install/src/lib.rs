@@ -14,6 +14,7 @@
 
 pub mod announce;
 pub mod installer;
+pub mod repository;
 
 pub use announce::{Announcement, Family, announce};
 pub use installer::{

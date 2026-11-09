@@ -1,0 +1,89 @@
+//! The enablement of a repository package's `run` units (packages-repositories.md section 5):
+//! the package installs them disabled, and each `activate` writes the `WantedBy=` and
+//! `RequiredBy=` links of every unit not yet enabled, records them, and takes away the recorded
+//! links of a unit the version no longer runs, so the units start at host boot. `remove` takes
+//! every recorded link away. A link already there that hostkeeper did not write (the package's
+//! own scripts, an operator) is left as it is and never recorded, so it is never removed.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
+use std::io;
+use std::os::unix::fs::{DirBuilderExt, symlink};
+use std::path::{Path, PathBuf};
+
+use super::tree::{TreeError, install_links, unit_file};
+
+/// The service manager's directory of enablement links, relative to the host's root.
+pub const SYSTEMD_DIR: &str = "etc/systemd/system";
+
+/// The links the `run` units of `tree` ask for: each link's absolute path on the host, and the
+/// unit file it points at, absolute, where the package installs it.
+pub fn wanted(tree: &Path, run: &[String]) -> Result<BTreeMap<String, String>, TreeError> {
+    let mut out = BTreeMap::new();
+    for unit in run {
+        let rel = unit_file(tree, unit).ok_or_else(|| TreeError::NoUnit(unit.clone()))?;
+        let text = fs::read(tree.join(&rel)).map_err(|e| TreeError::Io(e.to_string()))?;
+        for link in install_links(unit, &String::from_utf8_lossy(&text))? {
+            out.insert(format!("/{SYSTEMD_DIR}/{link}"), format!("/{rel}"));
+        }
+    }
+    Ok(out)
+}
+
+/// `path`, an absolute path of the host, under `root`.
+fn real(root: &Path, path: &str) -> PathBuf {
+    root.join(path.trim_start_matches('/'))
+}
+
+/// Whether the link at `real` points at `target`.
+fn points_at(real: &Path, target: &str) -> bool {
+    fs::read_link(real).is_ok_and(|found| found == Path::new(target))
+}
+
+/// Writes the links of `wanted` that are missing, takes away the links of `recorded` that are
+/// not wanted any more, and answers the links hostkeeper owns now: each wanted link it wrote
+/// now or had recorded and still finds.
+pub fn apply(
+    root: &Path,
+    wanted: &BTreeMap<String, String>,
+    recorded: &BTreeSet<String>,
+) -> io::Result<BTreeSet<String>> {
+    for gone in recorded.iter().filter(|link| !wanted.contains_key(*link)) {
+        remove_link(root, gone)?;
+    }
+    let mut owned = BTreeSet::new();
+    for (link, target) in wanted {
+        let path = real(root, link);
+        match fs::symlink_metadata(&path) {
+            Ok(_) => {
+                if recorded.contains(link) && points_at(&path, target) {
+                    owned.insert(link.clone());
+                }
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                if let Some(parent) = path.parent() {
+                    fs::DirBuilder::new()
+                        .recursive(true)
+                        .mode(0o755)
+                        .create(parent)?;
+                }
+                symlink(target, &path)?;
+                owned.insert(link.clone());
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(owned)
+}
+
+/// Takes away the recorded link `link` when it is still a link; anything else at its path is
+/// not hostkeeper's and stays.
+pub fn remove_link(root: &Path, link: &str) -> io::Result<()> {
+    let path = real(root, link);
+    match fs::symlink_metadata(&path) {
+        Ok(meta) if meta.file_type().is_symlink() => fs::remove_file(&path),
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
+}
