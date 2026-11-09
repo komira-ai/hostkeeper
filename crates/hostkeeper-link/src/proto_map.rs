@@ -6,7 +6,8 @@
 //! **Out.** The request names the platform and the agent (`hostkeeper` and its version),
 //! announces the features, and lists every installed service, which is sent even when there is
 //! none. Of a service, the name, version, health, running update, verdict and deferral go out;
-//! the installer goes out as `installer` when there is one; the observer's detail and the health detail have no field and do not. Of a verdict, the
+//! the installer goes out as `installer` when there is one; the observer's detail and the health
+//! detail have no field and do not. Of a verdict, the
 //! target, outcome, phase, class, reason, order id and try go out, and so do the forced flag and
 //! the detail, which this message has fields for. A deferred verdict has no outcome here: the
 //! service's `deferred` report says it, so its `last_update` is left out. A service name or a

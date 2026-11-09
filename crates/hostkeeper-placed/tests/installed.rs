@@ -61,7 +61,7 @@ fn the_previous_reader_keeps_installed() {
 /// A record the previous release wrote has no key and reads as an empty map; a record with none
 /// is written without it, as before.
 #[test]
-fn a_record_without_the_keys_reads_and_writes_as_before() {
+fn a_record_without_the_key_reads_and_writes_as_before() {
     let world = World::new("installed-absent");
     let fixture = json!({"schema": 1, "paths": {}, "uninstalling": {"x": {}}});
     fs::write(world.host(PLACED), fixture.to_string()).expect("the fixture");
@@ -93,9 +93,11 @@ fn an_installed_entry_keeps_the_keys_of_a_newer_writer() {
     );
 }
 
-/// A bad service key or installer name is refused on save and on load.
+/// A service key that is no service name is refused on save and on load; an installer name a
+/// newer writer used, whatever its spelling, is kept as written: the record is read, and the
+/// daemon refuses to act for the service instead.
 #[test]
-fn bad_names_in_the_new_maps_are_refused() {
+fn a_bad_service_key_is_refused_and_any_installer_name_is_kept() {
     let world = World::new("installed-invalid");
     let long = "a".repeat(33);
     for installer in ["", "Apt", "a_pt", "a pt", long.as_str()] {
@@ -103,24 +105,9 @@ fn bad_names_in_the_new_maps_are_refused() {
         record
             .installed
             .insert("web".to_owned(), InstalledEntry::new(installer));
-        assert!(
-            matches!(save(&world, &record), Err(PlacedError::Corrupt { .. })),
-            "{installer:?}"
-        );
-        let text = json!({"schema": 1, "installed": {"web": {"installer": installer}}});
-        fs::write(world.host(PLACED), text.to_string()).expect("fixture");
-        assert!(matches!(
-            world.placer().store().load(),
-            Err(PlacedError::Corrupt { .. })
-        ));
+        save(&world, &record).expect("saves");
+        assert_eq!(world.record().installer_of("web"), Some(installer));
     }
-    let longest = "a".repeat(32);
-    let mut ok = PlacedRecord::default();
-    ok.installed
-        .insert("web".to_owned(), InstalledEntry::new(&longest));
-    ok.installed
-        .insert("api".to_owned(), InstalledEntry::new("t-1"));
-    save(&world, &ok).expect("grammar accepts");
 
     let mut bad_installed = PlacedRecord::default();
     bad_installed

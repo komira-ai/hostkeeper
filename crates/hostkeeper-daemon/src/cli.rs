@@ -83,7 +83,7 @@ use crate::selfupdate::binary_dir;
 use crate::start::{self, Settings, StartError};
 use crate::trusted_root::{PACKAGED_TRUSTED_ROOT, TrustedRoot};
 use crate::unix_clock::SystemUnixClock;
-use hostkeeper_install::announce::Host as AnnounceHost;
+use hostkeeper_install::announce::OsHost;
 use hostkeeper_install::{Announcement, Family};
 
 pub use crate::start::{EXIT_CONFIG, EXIT_FAILED, EXIT_LOCKED};
@@ -847,7 +847,7 @@ pub fn host_ports(
 /// The installers the daemon announces, decided from the host's `os-release` under `os_root`
 /// ([`hostkeeper_install::announce`]), said once on standard error.
 fn announced(os_root: &Path) -> Announcement {
-    let announcement = hostkeeper_install::announce(AnnounceHost {
+    let announcement = hostkeeper_install::announce(OsHost {
         macos: cfg!(target_os = "macos"),
         root: os_root,
     });

@@ -1,12 +1,12 @@
 //! Which installers the daemon announces (packages.md section 5.4), decided once at its start
-//! from its platform, the host's `os-release` and the tools present.
+//! from its platform and the host's `os-release`.
 //!
 //! | Installer            | Announced when | Item |
 //! |----------------------|----------------|------|
 //! | `hostkeeper-archive` | Always         | A4   |
 //!
 //! A Linux host's **family** comes from `/etc/os-release`, or `/usr/lib/os-release` when that is
-//! missing, as `os-release(5)` orders them: its `ID`, then each token of `ID_LIKE` in order, and
+//! missing or cannot be read, as `os-release(5)` orders them: its `ID`, then each token of `ID_LIKE` in order, and
 //! the first that names a family wins (`debian`, `ubuntu`: [`Family::Deb`]; `fedora`, `rhel`,
 //! `centos`, `amzn`, `suse`, `opensuse`: [`Family::Rpm`]). An unknown `ID`, an empty file, both
 //! files missing, and a file with a malformed line (one with no `=`, or a value whose quote is
@@ -27,7 +27,8 @@ use hostkeeper_release::Installer;
 /// The installers every daemon announces, on every host.
 pub const ALWAYS: [Installer; 1] = [Installer::HostkeeperArchive];
 
-/// The most bytes of an `os-release` file read; a longer file is read as having no family.
+/// The most bytes of an `os-release` file read; a longer file is read as one that cannot be
+/// read, and the next file is tried.
 pub const MAX_OS_RELEASE_BYTES: u64 = 64 * 1024;
 
 /// The files `os-release(5)` names, in the order they are read, relative to the host's root.
@@ -95,7 +96,7 @@ impl Announcement {
 /// The host the daemon decides for: whether it is a Mac, and the directory its files are read
 /// under (`/` on a host, a scratch directory in a test).
 #[derive(Clone, Copy, Debug)]
-pub struct Host<'a> {
+pub struct OsHost<'a> {
     /// Whether the host is macOS.
     pub macos: bool,
     /// The root the host's files are read under.
@@ -103,13 +104,13 @@ pub struct Host<'a> {
 }
 
 /// The announcement of `host`, reading its files with [`read_bounded`].
-pub fn announce(host: Host<'_>) -> Announcement {
+pub fn announce(host: OsHost<'_>) -> Announcement {
     announce_with(host, &read_bounded)
 }
 
 /// The announcement of `host`, reading each file it needs through `read`, which answers the
 /// file's text or `None` when it cannot be read.
-pub fn announce_with(host: Host<'_>, read: &dyn Fn(&Path) -> Option<String>) -> Announcement {
+pub fn announce_with(host: OsHost<'_>, read: &dyn Fn(&Path) -> Option<String>) -> Announcement {
     let family = match host.macos {
         true => None,
         false => os_release(host.root, read).as_deref().and_then(family),

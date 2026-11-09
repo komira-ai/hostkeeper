@@ -8,7 +8,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use hostkeeper_install::announce::{
-    ALWAYS, Family, Host, MAX_OS_RELEASE_BYTES, announce, announce_with, family, read_bounded,
+    ALWAYS, Family, MAX_OS_RELEASE_BYTES, OsHost, announce, announce_with, family, read_bounded,
 };
 use hostkeeper_release::Installer;
 use hostkeeper_testkit::Scratch;
@@ -24,8 +24,8 @@ fn put(root: &Path, file: &str, text: &[u8]) {
     fs::write(path, text).expect("the file");
 }
 
-fn linux(root: &Path) -> Host<'_> {
-    Host { macos: false, root }
+fn linux(root: &Path) -> OsHost<'_> {
+    OsHost { macos: false, root }
 }
 
 /// The announcement of a Linux host whose `/etc/os-release` is `text`.
@@ -210,6 +210,19 @@ fn a_file_too_long_or_not_utf8_is_read_as_none() {
 }
 
 #[test]
+fn an_etc_os_release_that_cannot_be_read_falls_back_to_usr_lib() {
+    let dir = scratch("etc-unreadable");
+    put(dir.path(), "usr/lib/os-release", b"ID=fedora\n");
+    let mut long = b"ID=debian\n".to_vec();
+    long.resize(
+        usize::try_from(MAX_OS_RELEASE_BYTES).expect("fits") + 1,
+        b'\n',
+    );
+    put(dir.path(), "etc/os-release", &long);
+    assert_eq!(announce(linux(dir.path())).family, Some(Family::Rpm));
+}
+
+#[test]
 fn a_mac_announces_the_archive_and_never_reads_os_release() {
     let dir = scratch("mac");
     put(dir.path(), "etc/os-release", b"ID=debian\n");
@@ -219,7 +232,7 @@ fn a_mac_announces_the_archive_and_never_reads_os_release() {
         None
     };
     let announced = announce_with(
-        Host {
+        OsHost {
             macos: true,
             root: dir.path(),
         },

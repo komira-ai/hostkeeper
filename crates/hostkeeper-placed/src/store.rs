@@ -20,8 +20,9 @@
 //!
 //! `installed` maps a service to its installer, for a service of an installer other than
 //! `hostkeeper-archive` (packages-lifecycle.md section 6.5; a service with no entry is a
-//! `hostkeeper-archive` one, as every service installed before the key existed is); an
-//! installer name is 1 to 32 bytes of `a-z`, `0-9` and `-`. It is written only when not empty,
+//! `hostkeeper-archive` one, as every service installed before the key existed is). The
+//! installer's name is kept as written: the daemon refuses to act for a service of one it has
+//! no steps of, and the record is read whatever it names. It is written only when not empty,
 //! so a record without it is written as it was before it existed, and a release that does not
 //! know the key keeps it on rewrite.
 //!
@@ -144,7 +145,7 @@ pub struct Tombstone {
 /// How a service was installed, when not by `hostkeeper-archive`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct InstalledEntry {
-    /// The installer's name: 1 to 32 bytes of `a-z`, `0-9` and `-`.
+    /// The installer's name, as the entry spells it.
     pub installer: String,
     /// The keys of a newer writer, kept on rewrite.
     #[serde(flatten)]
@@ -256,25 +257,11 @@ fn validate(record: &PlacedRecord) -> Result<(), String> {
             format!("the tombstone {service:?} is not a service name")
         })
     })?;
-    record.installed.iter().try_for_each(|(service, entry)| {
+    record.installed.keys().try_for_each(|service| {
         require(is_service_name(service), || {
             format!("the installed service {service:?} is not a service name")
-        })?;
-        require(is_installer_name(&entry.installer), || {
-            format!(
-                "the installer {:?} is not an installer name",
-                entry.installer
-            )
         })
     })
-}
-
-/// Whether `name` is an installer name: 1 to 32 bytes of `a-z`, `0-9` and `-`.
-fn is_installer_name(name: &str) -> bool {
-    (1..=32).contains(&name.len())
-        && name
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
 /// The error of a record that is not valid JSON of the schema at `path`.
