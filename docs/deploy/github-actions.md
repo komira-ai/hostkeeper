@@ -9,6 +9,12 @@ token. The coordinator's
 rollout gate does the rest: the service's update plan rolls the release out stage by stage, the
 canary or first stage of hosts first, then more hosts once each stage has baked.
 
+The release also waits for the coordinator. CI never changes the coordinator: its own machine
+updates it from each published release
+([coordinator-update.md](coordinator-update.md)), and the deploy sets the hosts' desired version
+only once the coordinator runs that release, because a coordinator older than the release refuses
+the fields the release sends (`invalid_request`).
+
 CI holds no secret for the deploy, and the deploy waits for no release channel: a release is set
 with native entries alone ([packages-native.md](../design/packages-native.md), section 10.5), which
 a host installs from the project's package repository, where the release's own package-channel
@@ -43,7 +49,20 @@ one credential is the OIDC token GitHub issues to the job.
    (a late run of an older commit, released after a newer one), the next step is skipped, so
    that the fleet is never moved back. The job reads the repository (`contents: read`) and holds
    no other token right; it joins no tailnet.
-5. **Set the desired version** (job `set-desired` of `release.yml`). The job calls the CI client
+5. **Wait for the coordinator** (job `coordinator` of `release.yml`, after `targets`, under
+   the condition `set-desired` has). The coordinator is updated by its own machine
+   (`cargo xtask coordinator-update` on a timer there, [coordinator-update.md](coordinator-update.md)),
+   not by CI. The job joins the tailnet as `set-desired` does (the same pinned action and the
+   same repository variables, after a check of `HOSTKEEPER_TAILNET_TAG`), writes the CA from
+   `HOSTKEEPER_COORDINATOR_CA`, and asks the private listener, with one `curl` that retries for
+   30 minutes, `GET /v1/version?at_least=<X.Y.Z>`. The route takes no token: it answers 200 when
+   the coordinator is at least that version, 409 (`coordinator_older`) while it is older, and
+   a coordinator from before the route answers 404; curl retries until 200. The job holds
+   `id-token: write` for the tailnet join alone, reads no repository and runs none of our code
+   (curl, jq and the pinned tailscale action). When the 30 minutes pass, the job fails with an
+   error annotation that says the coordinator is older than the release or not reachable, and
+   `set-desired` does not run: the hosts' desired version is not set.
+6. **Set the desired version** (job `set-desired` of `release.yml`, which needs `coordinator`). The job calls the CI client
    ([set-desired.yml](ci-client.md)) once: it verifies the pinned hostkeeper release's `hkctl`,
    joins the tailnet when `HOSTKEEPER_TAILNET_CLIENT_ID` is set, and runs `hkctl releases set-desired` for the
    service `hostkeeper` at `<X.Y.Z>`; hkctl requests the OIDC token itself and hands it to the
@@ -55,11 +74,11 @@ one credential is the OIDC token GitHub issues to the job.
    coordinator stored, one list per platform.
    The job does not wait for the fleet (`wait: false`); it ends when the coordinator has stored
    the version, with `reason` `not_waited`.
-6. **The coordinator checks the call.** The allow-list entry must admit the token and name the
+7. **The coordinator checks the call.** The allow-list entry must admit the token and name the
    service `hostkeeper` ([below](#the-allow-list-entry)). A set of targets with no index is not
    checked against the release channel, even with `--release-channel`. A version below the
    service's `min_version`, or marked bad, is refused. Nothing changes on a refusal.
-7. **The update plan orders the hosts.** The `[[service]]` table of hostkeeper in the rollout file
+8. **The update plan orders the hosts.** The `[[service]]` table of hostkeeper in the rollout file
    may set `stages` (by default `[1, 10, 50, 100]`: the cumulative percent of the eligible hosts
    that run the version once each stage is done) and `canary = { count = n }` (a first stage of
    `n` hosts). The coordinator orders only the hosts of the first stage; the next stage starts
@@ -70,7 +89,7 @@ one credential is the OIDC token GitHub issues to the job.
    update slot until it is healthy, and its stage is not done until an operator resolves it, so
    the next stage is not ordered the version meanwhile
    ([rollout-plans.md](../operations/rollout-plans.md); design, section 5.4).
-8. **Each host updates itself.** At its next heartbeat an ordered host stages the `.deb` from its
+9. **Each host updates itself.** At its next heartbeat an ordered host stages the `.deb` from its
    repository entry, checks it against the pinned SHA-256, and updates hostkeeper by the
    hand-over, installing the package once the new binary has confirmed itself
    ([packages-native.md](../design/packages-native.md), section 10.4).
@@ -86,7 +105,7 @@ gh variable set RELEASE_SETS_DESIRED --repo komira-ai/hostkeeper --body true    
 gh variable delete RELEASE_SETS_DESIRED --repo komira-ai/hostkeeper             # off
 ```
 
-Unset, or any other value (`false` included), the jobs `targets` and `set-desired` are skipped
+Unset, or any other value (`false` included), the jobs `targets`, `coordinator` and `set-desired` are skipped
 and `release.yml` releases as before. Turning it off stops new desired versions from CI only: a
 roll already in progress goes on, and an operator holds or halts it on the coordinator
 ([Holds and force](../operations/holds-and-force.md)). `RELEASE_FREEZE` is the other switch: it
@@ -103,7 +122,7 @@ federation's client ID are all public values, so they are variables, not secrets
 | `HOSTKEEPER_COORDINATOR_URL` | The coordinator's private listener, `https://<host>[:<port>]` (shared with `hello-desired.yml`). |
 | `HOSTKEEPER_COORDINATOR_CA` | The PEM certificates of the CA the coordinator's certificate chains to (shared). |
 | `HOSTKEEPER_CI_AUDIENCE` | The audience of the OIDC token, as the allow-list entry names it (shared). |
-| `HOSTKEEPER_TAILNET_CLIENT_ID` | The client ID of the tailnet's federated identity (shared). Set: both calls of the CI client join the tailnet. Empty: neither joins, and the coordinator must be reachable from the runner some other way. |
+| `HOSTKEEPER_TAILNET_CLIENT_ID` | The client ID of the tailnet's federated identity (shared). Set: both calls of the CI client and the job `coordinator` join the tailnet. Empty: none joins, and the coordinator must be reachable from the runner some other way. |
 | `HOSTKEEPER_TAILNET_AUDIENCE` | The audience of that federated identity (shared). |
 | `HOSTKEEPER_TAILNET_COORDINATOR` | The coordinator's name on the tailnet, which the CI client's join pings until it answers (shared). |
 | `HOSTKEEPER_TAILNET_TAG` | The tag the join gives the runner's node, the one the federation's trust credential issues: `tag:ci` (shared). Both callers pass it as `tailnet_tag`. It must be set, even with `HOSTKEEPER_TAILNET_CLIENT_ID` empty: the CI client checks the tag at its first step, with or without the join, and an empty one ends the job there, before anything is downloaded or set. |
@@ -116,7 +135,9 @@ repository, the federation's subject is
 `repo:komira-ai/hostkeeper:ref:refs/heads/main`, its trust credential issues `tag:ci`, and the
 ACL's stanza names `tag:ci` in place of `tag:hk-ci`. `tag:ci` is shared with other CI jobs, so
 the join keeps the grants they need; the stanza adds the coordinator's private listener to them
-and takes nothing away. No job of this deploy reads the release channel, so the ACL needs no
+and takes nothing away. The job `coordinator` reaches that same private listener over the tailnet
+with no token, as `tag:ci`, so the stanza that lets `tag:ci` reach the listener for `set-desired`
+is the one it needs: no further grant. No job of this deploy reads the release channel, so the ACL needs no
 grant of the channel's host for it. The callers name no fallback tag: the CI client's default, `tag:hk-ci`,
 is not a tag this repository's credential issues, so an unset variable fails at the client's
 first step rather than at the join.
@@ -184,7 +205,8 @@ Both callers of this repository, `release.yml` and `hello-desired.yml`, pin one 
 `2c767d1842a88edb7120073d2dff3b4bfccc834c`, release `v0.1.184`, the first whose
 `set-desired.yml` takes the tailnet tag (`tailnet_tag`), on top of a release's targets and hkctl
 (one set, and for `hello-desired.yml` one held wait). A coordinator that does not take `SetDesired` with targets refuses their sets; the
-coordinator is updated to one that does before the pin moves. The workflow
+coordinator is updated to one that does before the pin moves. For a release, the job `coordinator`
+holds `set-desired` until the coordinator runs that release. The workflow
 lint (`cargo test -p xtask --test workflows`, `callers.rs`) names that revision, as
 `CLIENT_COMMIT` and `CLIENT_RELEASE`, and refuses a caller whose `uses:` commit, version comment,
 `hostkeeper_version` or `hostkeeper_commit` is not it. The pin moves in a reviewed pull request
@@ -193,13 +215,15 @@ new commit (above).
 
 ## When it fails
 
-A failure of either job leaves the release published; only the deploy did not happen. Once the
-cause is fixed, use **Re-run failed jobs** on the release run: it runs `targets` and
-`set-desired` again, and the call gets a new token.
+A failure of any of the three jobs leaves the release published; only the deploy did not happen.
+Once the cause is fixed, use **Re-run failed jobs** on the release run: it runs `targets`,
+`coordinator` and `set-desired` again (those that failed, and those that depend on them), and the
+call gets a new token.
 
 | job and step | what it means | what to do |
 |---|---|---|
 | `targets`: The targets of the release | A file of the release does not check out: its index, a Linux archive or its manifest, or one of hostkeeper's `.deb`s or its bundle. Its log names every problem. Nothing is set. | Fix the release (a new commit releases again), then the next run sets it. |
+| `coordinator`: Wait until the coordinator runs this release | After 30 minutes the coordinator was still older than the release (409 `coordinator_older`, or 404 from one before the route), or not reachable (the tailnet join, the CA or the URL variables). The job's error annotation says so, and `set-desired` did not run: the hosts' desired version is not set. | On the coordinator's machine, check the timer of `coordinator-update` and its journal ([coordinator-update.md](coordinator-update.md)); once the coordinator runs the release, **Re-run failed jobs**. |
 | `set-desired`: any verification step | The pinned hostkeeper release is not the one that was built ([When it fails](ci-client.md#when-it-fails)). Nothing is set. | Check the pin. |
 | `set-desired`: Set the desired version | The coordinator refused the call, and `reason` is its token: `unauthorized` or `forbidden` (the allow-list entry, above), `target_invalid` (a list the coordinator's checks refuse), `held_bad`, `below_min_version`, `no_answer` (the coordinator is not reachable: the tailnet variables) ([the full table](ci-client.md#when-it-fails)). | Fix what the token names, then re-run. |
 
@@ -210,10 +234,13 @@ is older than one already published sets nothing: `set-desired` is skipped, not 
 
 ## What it does not do
 
-- The deploy jobs upload nothing, and read no release channel.
+- The deploy jobs upload nothing, and read no release channel. The job `coordinator` sends the
+  coordinator one read-only request and no token.
 - It does not wait for the fleet to converge: a roll by stages, each baked before the next, takes
   longer than a release run should hold the release group, and a slow roll is not a failed
   release.
-- It does not change the coordinator's allow-list, rollout file, holds or marks.
+- It never changes the coordinator, not its version, allow-list, rollout file, holds or marks:
+  the coordinator's own machine updates it ([coordinator-update.md](coordinator-update.md)), and
+  CI only waits until it runs the release.
 - It sets only `hostkeeper`. The hello proof run stays a dispatch by hand
   ([docs/hello.md](../hello.md)).

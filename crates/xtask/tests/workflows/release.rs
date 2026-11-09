@@ -6,7 +6,7 @@
 //!   the repository).
 //! - `release.yml` ([`release_problems`]) starts only by [`RELEASE_TRIGGERS`] (a `workflow_run`
 //!   of exactly `ci`, `privileged` and `artifacts`, completed, on main), has exactly the jobs
-//!   of [`RELEASE_JOBS`]: `plan`, `verify` and `publish` under their exact `if:`, and the two jobs
+//!   of [`RELEASE_JOBS`]: `plan`, `verify` and `publish` under their exact `if:`, and the three jobs
 //!   of hostkeeper's own deploy, held to [`desired::problems`]; plans with the one step of
 //!   [`PLAN_RUN`], under no `if:`, on a checkout of the tip, for every trigger; publishes in the
 //!   job-level group of [`PUBLISH_GROUP`], never cancelled; checks every shipped binary
@@ -76,8 +76,9 @@ pub const RELEASE_EXEMPT: &[(&str, &str)] = &[(
 
 /// The jobs of release.yml, sorted, but the package channels ([`packages::job_names`]): the release
 /// (`plan`, `verify`, `publish`, `image`) and hostkeeper's own deploy ([`desired::TARGETS_JOB`],
-/// [`desired::JOB`]).
-pub const RELEASE_JOBS: [&str; 6] = [
+/// [`desired::COORDINATOR_JOB`], [`desired::JOB`]).
+pub const RELEASE_JOBS: [&str; 7] = [
+    "coordinator",
     "image",
     "plan",
     "publish",
@@ -387,7 +388,7 @@ fn release_problems(doc: &Node) -> Vec<String> {
     want.sort();
     if jobs != want {
         problems.push(format!(
-            "release.yml: jobs are {jobs:?}, not plan, verify, publish, image, targets, set-desired and the jobs of the package channels ({want:?})"
+            "release.yml: jobs are {jobs:?}, not plan, verify, publish, image, targets, coordinator, set-desired and the jobs of the package channels ({want:?})"
         ));
     }
     for (name, condition, needs) in [

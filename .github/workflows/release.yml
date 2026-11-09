@@ -60,11 +60,13 @@
 #          digest the release notes name is the attested one. The one job that holds
 #          `packages: write`, with the job's own token; pushing the same release again changes
 #          nothing.
-# targets, set-desired
+# targets, coordinator, set-desired
 #          only while the repository variable RELEASE_SETS_DESIRED is `true`, after every
-#          publish of the run: write the targets of the newest release, then set it as
-#          hostkeeper's desired version on the coordinator, by one call of the CI client
-#          (set-desired.yml) with an OIDC token. See the comment above the two jobs.
+#          publish of the run: write the targets of the newest release, wait until the
+#          coordinator runs at least that release (its own machine updates it; this workflow
+#          never changes it), then set the release as hostkeeper's desired version on the
+#          coordinator, by one call of the CI client (set-desired.yml) with an OIDC token. See
+#          the comment above the three jobs.
 #
 # newest, testing-apt-*, testing-rpm-*, testing-pkg-upload, check-apt, check-rpm, check-pkg,
 # promote-check, stable-apt-*, stable-rpm-*, promote-pkg
@@ -327,14 +329,14 @@ jobs:
       - name: The registry serves the released image index, byte for byte
         run: cmp "$RUNNER_TEMP/served.json" "dist/hostkeeper-coordinator-$RELEASE_VERSION.image.json"
 
-  # targets and set-desired: hostkeeper's own deploy (docs/deploy/github-actions.md). They run
+  # targets, coordinator and set-desired: hostkeeper's own deploy (docs/deploy/github-actions.md). They run
   # only once every release of this run is published, and only while the repository variable
   # RELEASE_SETS_DESIRED is `true`: unset, or anything else, they are skipped and the release
   # is all this workflow does. Nothing here uploads, and nothing waits for the release channel:
   # a release is set with native entries alone (docs/design/packages-native.md section 10.5,
   # A24), which a host installs from the project's package repository, so no host fetches it
-  # from the channel. The workflow lint (crates/xtask/tests/workflows, `desired.rs`) holds both
-  # jobs to this shape.
+  # from the channel. The workflow lint (crates/xtask/tests/workflows, `desired.rs` and
+  # `coordinator_wait.rs`) holds the three jobs to this shape.
   #
   # targets  reads the repository (`contents: read`) and nothing else. Takes the newest release
   #          of the run (the last of the matrix, which is oldest first) and the files verify
@@ -390,6 +392,60 @@ jobs:
           VERSION: ${{ steps.newest.outputs.version }}
         run: gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --limit 100 --json tagName --jq '[.[].tagName | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")) | ltrimstr("v") | split(".") | map(tonumber)] | max | "newest=\(map(tostring) | join(".") == env.VERSION)"' >> "$GITHUB_OUTPUT"
 
+  # coordinator  waits until the coordinator runs at least this release, so that set-desired
+  #          never sends the fields of a newer release to an older coordinator (it would
+  #          answer `invalid_request`). This workflow never changes the coordinator: the coordinator's
+  #          own machine updates it from each published release (`cargo xtask coordinator-update`,
+  #          docs/deploy/coordinator-update.md). The job joins the tailnet as set-desired does,
+  #          and asks the private listener `GET /v1/version?at_least=<version>`, which takes no
+  #          token: 200 once the coordinator is at least that version, 409 while it is older, 404
+  #          from a coordinator before the route; curl retries for 30 minutes, then the job
+  #          fails and the hosts' desired version is not set. It holds `id-token: write` for the
+  #          tailnet join alone, and no repository: no checkout, no artifact, no code of ours;
+  #          curl, jq and the pinned tailscale action only.
+  coordinator:
+    needs: [plan, targets]
+    if: ${{ needs.plan.outputs.release == 'true' && github.ref == 'refs/heads/main' && vars.RELEASE_SETS_DESIRED == 'true' && needs.targets.outputs.newest == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      id-token: write
+    steps:
+      - name: Check the tailnet tag
+        id: tailnet-tag
+        env:
+          TAILNET_TAG: ${{ vars.HOSTKEEPER_TAILNET_TAG }}
+        run: |
+          jq --null-input --arg tag "$TAILNET_TAG" 'if $tag | test("^tag:[a-z][a-z0-9-]*\\z") then empty else error("tailnet_tag is not tag: followed by a Tailscale tag name (a lower-case letter, then lower-case letters, digits and -)") end'
+      - name: Join the tailnet
+        id: tailnet
+        if: ${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID != '' }}
+        uses: tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be390056cd # v4.2.0
+        with:
+          oauth-client-id: ${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID }}
+          audience: ${{ vars.HOSTKEEPER_TAILNET_AUDIENCE }}
+          tags: ${{ vars.HOSTKEEPER_TAILNET_TAG }}
+          version: 1.94.2
+          sha256sum: c6f99a5d774c7783b56902188d69e9756fc3dddfb08ac6be4cb2585f3fecdc32
+          use-cache: false
+          ping: ${{ vars.HOSTKEEPER_TAILNET_COORDINATOR }}
+      - name: Write the coordinator's CA
+        id: ca
+        env:
+          COORDINATOR_CA: ${{ vars.HOSTKEEPER_COORDINATOR_CA }}
+        run: printf '%s\n' "$COORDINATOR_CA" > "$RUNNER_TEMP/coordinator-ca.pem"
+      - name: Wait until the coordinator runs this release
+        id: wait
+        env:
+          COORDINATOR_URL: ${{ vars.HOSTKEEPER_COORDINATOR_URL }}
+          VERSION: ${{ needs.targets.outputs.version }}
+        run: curl --proto =https --tlsv1.2 --cacert "$RUNNER_TEMP/coordinator-ca.pem" --fail-with-body --silent --show-error --max-time 20 --retry 180 --retry-delay 10 --retry-max-time 1800 --retry-all-errors --url "$COORDINATOR_URL/v1/version?at_least=$VERSION"
+      - name: Say why the wait failed
+        if: ${{ failure() && steps.wait.outcome == 'failure' }}
+        env:
+          VERSION: ${{ needs.targets.outputs.version }}
+        run: echo "::error::The coordinator is older than this release ($VERSION), or not reachable, because the coordinator-update of its machine did not bring it to this release within 30 minutes. The hosts' desired version is not set. See docs/deploy/coordinator-update.md."
+
   # set-desired  the CI client (set-desired.yml, docs/deploy/ci-client.md), pinned like any
   #          caller's, at the CI client's revision the workflow lint names (`callers.rs`,
   #          `CLIENT_COMMIT`), the one hello-desired.yml pins too. It runs that release's hkctl:
@@ -404,7 +460,7 @@ jobs:
   #          credential issues; the client checks it at its first step, with or without the join,
   #          so the variable must be set.
   set-desired:
-    needs: [plan, targets]
+    needs: [plan, targets, coordinator]
     if: ${{ needs.plan.outputs.release == 'true' && github.ref == 'refs/heads/main' && vars.RELEASE_SETS_DESIRED == 'true' && needs.targets.outputs.newest == 'true' }}
     permissions:
       contents: read

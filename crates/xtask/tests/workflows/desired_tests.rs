@@ -77,7 +77,8 @@ fn the_deploy_jobs_of_the_repository_pass() {
     let text = release_yml();
     assert_eq!(lint("release.yml", &text), Vec::<String>::new());
     assert_eq!(deploy_jobs().matches(&targets_if()).count(), 1);
-    assert_eq!(deploy_jobs().matches(&set_if()).count(), 1);
+    // The coordinator wait and set-desired run under the one `if:`.
+    assert_eq!(deploy_jobs().matches(&set_if()).count(), 2);
 }
 
 #[test]
@@ -90,13 +91,15 @@ fn the_deploy_is_turned_on_only_by_the_repository_variable_being_true() {
     assert_eq!(
         lint("release.yml", &text),
         [
+            format!("job coordinator: `id-token: write` needs the exact `if: {SET_IF}`"),
             format!("release.yml: job targets needs the exact `if: {DESIRED_IF}`"),
+            format!("release.yml: job coordinator needs the exact `if: {SET_IF}`"),
             format!("release.yml: job set-desired needs the exact `if: {SET_IF}`"),
             format!("job set-desired needs the exact `if: {SET_IF}`"),
         ]
     );
     let text = release_yml().replace(&gate, &format!(" && vars.{GATE} != ''"));
-    assert_eq!(lint("release.yml", &text).len(), 3);
+    assert_eq!(lint("release.yml", &text).len(), 5);
 }
 
 #[test]
@@ -147,7 +150,8 @@ fn a_deploy_job_that_goes_on_after_a_failure_is_refused() {
     // Catches: a failed targets step that no longer stops the call.
     for (job, after) in [
         ("targets", "    timeout-minutes: 20\n"),
-        ("set-desired", "    needs: [plan, targets]\n"),
+        ("coordinator", "    timeout-minutes: 40\n"),
+        ("set-desired", "    needs: [plan, targets, coordinator]\n"),
     ] {
         assert_problems(
             after,
@@ -276,10 +280,18 @@ fn a_set_desired_job_that_does_not_wait_for_the_targets_is_refused() {
     // Catches: the call made straight after the publish, with no targets written yet and no
     // check that this run's release is the newest.
     assert_problems(
-        "    needs: [plan, targets]\n",
-        "    needs: [plan, publish]\n",
+        "    needs: [plan, targets, coordinator]\n",
+        "    needs: [plan, publish, coordinator]\n",
         &[
-            "release.yml: job set-desired needs [\"plan\", \"publish\"], not [\"plan\", \"targets\"]",
+            "release.yml: job set-desired needs [\"coordinator\", \"plan\", \"publish\"], not [\"coordinator\", \"plan\", \"targets\"]",
+        ],
+    );
+    // Without the wait for the coordinator: set-desired no longer needs it.
+    assert_problems(
+        "    needs: [plan, targets, coordinator]\n",
+        "    needs: [plan, targets]\n",
+        &[
+            "release.yml: job set-desired needs [\"plan\", \"targets\"], not [\"coordinator\", \"plan\", \"targets\"]",
         ],
     );
 }
