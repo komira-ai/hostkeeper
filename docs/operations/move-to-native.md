@@ -47,7 +47,7 @@ error instead of counting part of the fleet.
 # query: older-daemons
 hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     hosts list --limit 256 --response-file hosts.json
-jq -r --arg floor <version> 'def triple: split(".") | if length == 3 and all(.[]; length > 0 and (explode | all(.[]; . >= 48 and . <= 57))) then map(tonumber) else null end; ($floor | triple) as $f | if $f == null then error("--arg floor is not major.minor.patch: \($floor)") elif (.nextPageToken // "") != "" then error("more hosts than one page: this query reads one page") else [.hosts[]? | (.heartbeat.agent // {}) as $a | (($a.version // "") | triple) as $v | if ($a.name // "") != "hostkeeper" then "\(.nodeId): no hostkeeper daemon known" elif $v == null then "\(.nodeId): daemon \($a.version // "") is not major.minor.patch" elif $v < $f then "\(.nodeId): daemon \($a.version)" else empty end] | length, .[] end' hosts.json
+jq -r --arg floor <version> 'def triple: split(".") | if length == 3 and all(.[]; length > 0 and (explode | all(.[]; . >= 48 and . <= 57))) then map(tonumber) else null end; ($floor | triple) as $f | if $f == null then error("--arg floor is not major.minor.patch: \($floor)") elif (.nextPageToken // "") != "" then error("more hosts than one page: this query reads one page") else [.hosts[]? | (.heartbeat.agent // {}) as $a | (($a.version // "") | triple) as $v | if ($a | .name // "") != "hostkeeper" then "\(.nodeId): no hostkeeper daemon known" elif $v == null then "\(.nodeId): daemon \($a.version // "") is not major.minor.patch" elif $v < $f then "\(.nodeId): daemon \($a.version)" else empty end] | length, .[] end' hosts.json
 ```
 
 `<version>` is the release, as `major.minor.patch`. A host is counted when:

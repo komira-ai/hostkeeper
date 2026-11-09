@@ -443,7 +443,7 @@ fn older_daemons_counts_a_host_whose_daemon_is_not_known_new_enough() {
 /// nobody.
 #[test]
 fn older_daemons_refuses_a_floor_that_is_not_a_version() {
-    for floor in ["<version>", "0.1", "v0.1.200", "0.1.200.1", ""] {
+    for floor in ["<version>", "0.1", "v0.1.200", "0.1.200.1.0", ""] {
         let hosts = vec![daemon(host("h1"), "hostkeeper", "0.0.1")];
         assert_eq!(
             fleet("# query: older-daemons", &[("floor", floor)], hosts, ""),
