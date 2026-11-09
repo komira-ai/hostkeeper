@@ -43,6 +43,9 @@ binary are for the two Linux platforms; the installer pkg is for `macos-arm64`.
 | `hello-<version>-fail-ready-<platform>.tar.zst.sha256` | the SHA-256 of that package |
 | `mdm-<version>-linux-x86_64.tar.zst` | the package of `mdm`, the MDM server stack as a service hostkeeper installs (docs/design/two-programs.md section 6.2), for linux-x86_64 only: `manifest.toml`, `bin/mdm` (its hook and its operator verbs, built from `crates/hostkeeper-mdm`, which prints `mdm X.Y.Z+<first 12 hex digits of the commit>` for `--version`), the pinned servers and lego under `bin/` (`caddy`, `depserver`, `depsyncer`, `lego`, `nanohub`, `scepserver`, each taken out of its upstream archive after the archive matched its pin in `crates/hostkeeper-mdm-core/pins.txt`), and its units under `units/` |
 | `mdm-<version>-linux-x86_64.tar.zst.sha256` | the SHA-256 of that package |
+| `hello_<version>_<deb-arch>.deb` | hello's native package (docs/design/packages-native.md section 10.2): the program at `/usr/lib/hello/hello`, its hook at `/usr/lib/hello/hostkeeper-hook`, and the two slots' units `hello@a.service` and `hello@b.service` in `/usr/lib/systemd/system/`, installed disabled; no maintainer script and no dependency. The release publishes it to the `testing` suite of the project's apt repository ([package-repositories.md](package-repositories.md)) |
+| `hello-<version>-macos-arm64.pkg` | hello's native package for macOS: one component with no script, the program and its hook under `/Library/Application Support/hello/`, and the two slots' jobs `hello.a` and `hello.b` in `/Library/LaunchDaemons/`, `Disabled`; not signed, attested. The release puts it in the `testing` directory of the installers, `pkg/hostkeeper/<version>/` |
+| `mdm_<version>_amd64.deb` | mdm's native package, for linux-x86_64 only: its program, the pinned servers and its hook in `/usr/lib/mdm/`, and its units in `/usr/lib/systemd/system/` ([docs/operations/mdm-package.md](../operations/mdm-package.md)), installed disabled; no maintainer script. Published to the `testing` suite like hello's |
 | `hostkeeper_<version>_<deb-arch>.deb` | the deb package: the daemon, its unit, its tmpfiles rules, its config template, the pinned `gh` and Sigstore trusted root it checks packages with, `/usr/bin/hostkeeper-pxe` (the boot server of network install, docs/design/network-install.md section 3, with no unit: it runs only when an operator starts it), and the link `/etc/issue.d/hostkeeper.issue` to the console's issue file the daemon writes while it waits for its enrollment |
 | `hostkeeper-<version>-1.<rpm-arch>.rpm` | the rpm package, with the same files and link |
 | `hostkeeper-coordinator-<version>-<linux-platform>.tar.gz` | the coordinator binary |
@@ -61,7 +64,7 @@ binary are for the two Linux platforms; the installer pkg is for `macos-arm64`.
 | `hkctl-<version>` | the command line of the coordinator ([docs/cli.md](../cli.md)): one bash script for every platform, generated from the protobuf services, that calls the coordinator's JSON gateway with `curl`; it needs bash 3.2 or later and curl 7.55 or later. No host package carries it |
 | `netboot.json` | the boot sets of network install (docs/design/network-install.md, section 5): for each Linux platform the Ubuntu live-server ISO, the shim, the signed network GRUB, the kernel and the initrd a bare machine boots, each with the name it is served as, its size, its SHA-256 and where it comes from, rendered from `packaging/netboot/pins.toml` (`cargo xtask release netboot`) |
 | `SHA256SUMS` | the SHA-256 of every asset except itself and the bundles |
-| `<asset>.sigstore.json` | the attestation bundle of each `.tar.gz`, `.tar.zst`, `.deb`, `.rpm`, `.image.tar` and `.pkg`, of `netboot.json`, of the image index `hostkeeper-coordinator-<version>.image.json` and of `hkctl-<version>` |
+| `<asset>.sigstore.json` | the attestation bundle of each `.tar.gz`, `.tar.zst`, `.deb` (the services' native ones included), `.rpm`, `.image.tar` and `.pkg` (hello's included), of `netboot.json`, of the image index `hostkeeper-coordinator-<version>.image.json` and of `hkctl-<version>` |
 
 Each index has the same schema. An index is a lookup, not a trust anchor: it has no bundle of its
 own, and a host trusts a package for its own attestation and manifest, never for its entry in the
@@ -158,6 +161,12 @@ hello-<version>-fail-ready-<platform>.tar.zst.sha256
 mdm-<version>-linux-x86_64.tar.zst
 mdm-<version>-linux-x86_64.tar.zst.sigstore.json
 mdm-<version>-linux-x86_64.tar.zst.sha256
+hello_<version>_<deb-arch>.deb
+hello_<version>_<deb-arch>.deb.sigstore.json
+hello-<version>-macos-arm64.pkg
+hello-<version>-macos-arm64.pkg.sigstore.json
+mdm_<version>_amd64.deb
+mdm_<version>_amd64.deb.sigstore.json
 ```
 
 ## What the Linux packages check packages with
