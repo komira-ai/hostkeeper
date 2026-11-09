@@ -167,14 +167,15 @@ pub fn load(dir: &Path, owner_uid: u32) -> Result<Repositories, RepositoriesErro
     };
     let meta = match fs::symlink_metadata(dir) {
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Repositories::default()),
-        Err(e) => return Err(file(dir, FileFault::Unreadable(e.to_string()))),
+        Err(e) => return Err(file(dir, unreadable(e))),
         Ok(meta) => meta,
     };
     judge(&meta, owner_uid, true).map_err(|fault| file(dir, fault))?;
-    let listing = fs::read_dir(dir).map_err(|e| file(dir, FileFault::Unreadable(e.to_string())))?;
+    let unread = |e: io::Error| file(dir, unreadable(e));
+    let listing = fs::read_dir(dir).map_err(unread)?;
     let mut names = BTreeSet::new();
     for entry in listing {
-        let entry = entry.map_err(|e| file(dir, FileFault::Unreadable(e.to_string())))?;
+        let entry = entry.map_err(unread)?;
         names.insert(entry.file_name());
     }
     let mut entries = Vec::new();
@@ -251,9 +252,14 @@ fn judge(meta: &fs::Metadata, owner_uid: u32, dir: bool) -> Result<(), FileFault
     }
 }
 
+/// A file that cannot be read, with the system's words.
+fn unreadable(error: io::Error) -> FileFault {
+    FileFault::Unreadable(error.to_string())
+}
+
 /// The keyring at `path`, judged without reading it: apt reads it at every update.
 fn keyring_fault(path: &Path, owner_uid: u32) -> Result<(), FileFault> {
-    let meta = fs::symlink_metadata(path).map_err(|e| FileFault::Unreadable(e.to_string()))?;
+    let meta = fs::symlink_metadata(path).map_err(unreadable)?;
     judge(&meta, owner_uid, false)
 }
 
@@ -265,16 +271,14 @@ fn read_checked(path: &Path, owner_uid: u32) -> Result<String, FileFault> {
         .open(path)
         .map_err(|e| match e.raw_os_error() {
             Some(libc::ELOOP) => FileFault::Link,
-            _ => FileFault::Unreadable(e.to_string()),
+            _ => unreadable(e),
         })?;
-    let meta = file
-        .metadata()
-        .map_err(|e| FileFault::Unreadable(e.to_string()))?;
+    let meta = file.metadata().map_err(unreadable)?;
     judge(&meta, owner_uid, false)?;
     let mut bytes = Vec::new();
     file.take(MAX_SOURCES_BYTES + 1)
         .read_to_end(&mut bytes)
-        .map_err(|e| FileFault::Unreadable(e.to_string()))?;
+        .map_err(unreadable)?;
     if bytes.len() as u64 > MAX_SOURCES_BYTES {
         return Err(FileFault::TooLarge);
     }
@@ -308,12 +312,13 @@ fn stanzas(text: &str) -> Result<Vec<Vec<(String, String)>>, Rule> {
         if key.is_empty() || key.contains(char::is_whitespace) {
             return Err(Rule::Syntax(index + 1));
         }
-        if !open {
-            all.push(Vec::new());
-            open = true;
-        }
-        if let Some(stanza) = all.last_mut() {
-            stanza.push((key.to_ascii_lowercase(), value.trim().to_owned()));
+        let field = (key.to_ascii_lowercase(), value.trim().to_owned());
+        match all.last_mut().filter(|_| open) {
+            Some(stanza) => stanza.push(field),
+            None => {
+                all.push(vec![field]);
+                open = true;
+            }
         }
     }
     Ok(all)

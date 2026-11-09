@@ -104,9 +104,9 @@ fn make_dirs(dirs: &[PathBuf]) -> io::Result<()> {
 
 /// Copies every regular file of `from` that is not in [`NOT_KEPT`] into `to`.
 fn copy_files(from: &Path, to: &Path) -> io::Result<()> {
+    // An entry that cannot be read is not copied, and the install that needs it then fails.
     let mut names: Vec<_> = fs::read_dir(from)?
-        .collect::<io::Result<Vec<_>>>()?
-        .into_iter()
+        .flatten()
         .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
         .map(|e| e.file_name())
         .filter(|n| !NOT_KEPT.iter().any(|k| n == *k))
