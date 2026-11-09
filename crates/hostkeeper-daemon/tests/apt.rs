@@ -348,3 +348,44 @@ fn a_stage_that_fails_is_the_orders_verdict_and_leaves_nothing() {
     assert!(left.is_empty(), "nothing is left: {left:?}");
     assert!(!apt.version_dir("1.0.0").join(TARGET_FILE).exists());
 }
+
+/// Proves a stage that fails or defers says why in the daemon's log, which the verdict does
+/// not carry: one line per order, at warn level for a deferral and at error level for a
+/// failure, naming the service, the reason and the installer's detail.
+///
+/// Catches: a stage failure whose apt message is lost, leaving an operator only the reason.
+#[test]
+fn a_stage_that_fails_says_why_in_the_log() {
+    let apt = AptRig::new("apt-stage-log");
+    let lines = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let sink = Arc::clone(&lines);
+    let daemon = apt.daemon().with_alerts(Arc::new(move |line: &str| {
+        sink.lock().expect("the lines").push(line.to_owned())
+    }));
+    let one = apt.publish(package("1.0.0-1"));
+    let unlisted = with_entry(install(SERVICE, "1.1.0", &one, 1), &entry("1.1.0-1", &one));
+    assert_eq!(daemon.order(&unlisted), deferred("not_in_repository"));
+    let other = "0".repeat(64);
+    let mismatch = with_entry(
+        install(SERVICE, "1.0.0", &other, 2),
+        &entry("1.0.0-1", &other),
+    );
+    assert_eq!(
+        daemon.order(&mismatch),
+        failed(Class::Release, "package_digest_mismatch")
+    );
+    let lines = lines.lock().expect("the lines").clone();
+    assert_eq!(
+        lines,
+        [
+            "hostkeeper daemon: level=warn alert=stage_failed service=web: not_in_repository: \
+             the repository main lists no web 1.1.0-1 for amd64"
+                .to_owned(),
+            format!(
+                "hostkeeper daemon: level=error alert=stage_failed service=web: \
+                 package_digest_mismatch: the index's SHA-256 of web 1.0.0-1 is {one}, not the \
+                 order's {other}"
+            ),
+        ]
+    );
+}

@@ -266,6 +266,7 @@ impl Ctx {
             max_package_bytes: self.config.bounds.max_package_bytes,
             repaired: Arc::clone(&self.repaired),
             tool_runs: Arc::clone(&self.tool_runs),
+            log: Arc::clone(&self.alerts),
         }
     }
 

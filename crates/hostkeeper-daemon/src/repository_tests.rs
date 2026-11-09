@@ -480,6 +480,7 @@ fn repository_with_units(scratch: &Scratch) -> (Repository, Arc<FakeUnitControl>
         max_package_bytes: 1 << 20,
         repaired: Arc::default(),
         tool_runs: Arc::default(),
+        log: Arc::new(|_: &str| {}),
     };
     (repository, units, log)
 }
