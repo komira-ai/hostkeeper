@@ -33,6 +33,8 @@ the farm LAN serves the same, to network-installed hosts, which have no tailnet
 | `--mdm-webhook-listen <addr>` | Where the gate serves NanoHUB's webhook: a loopback address and port, as `127.0.0.1:9100`; another address stops the start. Requires `--mdm-api-url`. |
 | `--mdm-profile-identifier <id>` | The farm's MDM profile identifier, as the kit's settings say it (`com.komira.hostkeeper.mdm`): two to sixteen labels of letters, digits and `-`, at most 200 characters; anything else stops the start. With it and `--mdm-daemon-config` the gate runs its enrollment side (below): it installs the config profile `<id>.config` and pushes the nonce profile `<id>.nonce`. Requires `--mdm-api-url` and `--mdm-daemon-config`. |
 | `--mdm-daemon-config <file>` | The daemon config the config profile carries: a `hostkeeper.toml` of the farm (`coordinator`, `ca_sha256`, `release_channel`, `trusted_signers`, optional `bounds`). It is read at start and judged by the daemon's own loader; a file that does not read, or that the loader refuses, stops the start with the loader's reason. It holds no secret. Requires `--mdm-profile-identifier`. |
+| `--mdm-stores <file>` | Optional: the `stores.toml` of the farm's Macs, carried in the config profile as the domain `dev.hostkeeper.stores`, which a Mac's daemon writes to `/etc/hostkeeper/stores.toml`, replacing a file that differs. It is read at start and judged by the daemon's own stores loader; a file the loader refuses, or a store that names a credential file (a profile carries no secret), stops the start. Requires `--mdm-profile-identifier`. |
+| `--mdm-macos-pkg <file>` | Optional: the `macos-pkg.toml` of the farm's Macs, the signers of the `macos-pkg` installer, carried as the domain `dev.hostkeeper.macos-pkg` and written to `/etc/hostkeeper/macos-pkg.toml` the same way. Judged at start by the installer's own signers loader. Requires `--mdm-profile-identifier`. Rotation: [repository-keys.md](operations/repository-keys.md). |
 
 The CA is made once. Every daemon config pins the SHA-256 of its certificate (`ca_sha256`); the
 start logs it at info as `ca_sha256`. The server certificate names the DNS names of
@@ -321,12 +323,17 @@ is started with `-webhook-url http://<--mdm-webhook-listen>/webhook`.
   sections 4 and 5). It looks at each webhook event of a device, at each request posted to the
   coordinator, and at every device once a minute; one profile command a look.
   - Once a request claiming the serial was approved in this enrollment (at or after its first
-    `TokenUpdate`), it sends nothing more to the Mac in this enrollment, and removes the nonce
-    profile it pushed in it (`RemoveProfile`, once).
-  - It installs the config profile, `<id>.config`, once per enrollment, supervised or not: one
+    `TokenUpdate`), it sends no nonce and no pkg to the Mac in this enrollment, and removes the
+    nonce profile it pushed in it (`RemoveProfile`, once). Only a changed config profile (below)
+    still reaches it.
+  - It installs the config profile, `<id>.config`, supervised or not: one
     `com.apple.ManagedClient.preferences` payload forcing the keys of `--mdm-daemon-config` in
-    the domain `dev.hostkeeper.config`. One the Mac answered with an error is sent again an hour
-    after the answer.
+    the domain `dev.hostkeeper.config`, and, when given, those of `--mdm-stores` in
+    `dev.hostkeeper.stores` and of `--mdm-macos-pkg` in `dev.hostkeeper.macos-pkg`. It records
+    the SHA-256 of the settings with the command, and counts them delivered once the Mac
+    acknowledges it. It sends the profile again, approved Mac or not, once whenever the settings
+    it would send now differ from those delivered (a record with no digest counts as different).
+    One the Mac answered with an error is sent again an hour after the answer, never sooner.
   - It issues a nonce (`Enrollment::issue_mac_nonce`) only when the device is supervised, no
     nonce issued for the serial is still good (3600 seconds from its issue, and no approval of
     the serial recorded since, which consumed it), and exactly one

@@ -228,7 +228,8 @@ load moved into the pkg. The Mac is then approved by an operator, as a Linux hos
 ([packages-repositories.md](packages-repositories.md) section 4.7) also needs `stores.toml` and
 `macos-pkg.toml`. The same config profile carries them as two more domains, `dev.hostkeeper.stores` and
 `dev.hostkeeper.macos-pkg`, and the daemon's start renders each with these steps, except that a file which differs
-from its managed preferences is replaced. The gate's side is **Built**: the flags `--mdm-stores` and
+from its managed preferences is replaced. **Built**: the daemon's step (`crates/hostkeeper-daemon/src/mac_files.rs`),
+and the gate's side: the flags `--mdm-stores` and
 `--mdm-macos-pkg` (`crates/hostkeeper-coordinator/src/mdm.rs`), the domains and the loader checks
 (`crates/hostkeeper-mdm-gate/src/profile.rs`: `StoresProfile`, `MacosPkgProfile`, `ConfigProfile`), and the profile sent
 again when its settings change, above. So a signer rotation, and the new domains on a Mac enrolled before them, reach an
