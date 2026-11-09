@@ -102,3 +102,62 @@ fn both_trees_keep_the_pool_directory_of_the_spec() {
         "rpm/pool/hostkeeper/hostkeeper-coordinator-1.2.3-1.x86_64.rpm"
     );
 }
+
+#[test]
+fn the_daemon_enables_its_unit_installs_systemd_first_and_has_no_user() {
+    let daemon = HOSTKEEPER.package("hostkeeper").expect("daemon");
+    assert!(daemon.enabled_after_install);
+    assert_eq!(daemon.prerequisites, ["systemd"]);
+    assert_eq!(daemon.user, None);
+    assert_eq!(daemon.program(), "hostkeeper");
+    assert_eq!(daemon.comm(), "hostkeeper");
+    assert_eq!(daemon.unit, "hostkeeper.service");
+    assert_eq!(daemon.files.len(), 7);
+}
+
+#[test]
+fn the_coordinator_enables_nothing_has_a_user_and_depends_on_systemd_itself() {
+    let coordinator = HOSTKEEPER
+        .package("hostkeeper-coordinator")
+        .expect("coordinator");
+    assert!(!coordinator.enabled_after_install);
+    assert!(coordinator.prerequisites.is_empty());
+    assert_eq!(coordinator.user, Some("hostkeeper-coordinator"));
+    assert_eq!(coordinator.program(), "hostkeeper-coordinator");
+    // The kernel keeps 15 bytes of a process's name.
+    assert_eq!(coordinator.comm(), "hostkeeper-coor");
+    assert_eq!(coordinator.files.len(), 6);
+    assert_eq!(HOSTKEEPER.package("tierstore"), None);
+}
+
+#[test]
+fn every_file_a_package_ships_is_absolute_and_the_binary_and_unit_are_among_them() {
+    for package in &HOSTKEEPER.packages {
+        assert!(package.files.iter().all(|f| f.starts_with('/')));
+        assert!(package.files.contains(&package.binary));
+        assert!(
+            package
+                .files
+                .contains(&format!("/usr/lib/systemd/system/{}", package.unit).as_str())
+        );
+    }
+}
+
+#[test]
+fn the_installer_and_its_two_channels_are_named_from_the_product() {
+    assert_eq!(
+        HOSTKEEPER.pkg_file("1.2.3"),
+        "hostkeeper-1.2.3-macos-arm64.pkg"
+    );
+    assert_eq!(HOSTKEEPER.pkg_prefix("1.2.3"), "pkg/hostkeeper/1.2.3/");
+    assert_eq!(HOSTKEEPER.pkg_stable_key(), "pkg/hostkeeper/stable.json");
+    assert_eq!(HOSTKEEPER.pkg_dir, format!("pkg/{}", HOSTKEEPER.name));
+}
+
+#[test]
+fn architectures_are_found_by_either_name() {
+    assert_eq!(arch_of_rpm("aarch64").map(|a| a.deb), Some("arm64"));
+    assert_eq!(arch_of_deb("amd64").map(|a| a.rpm), Some("x86_64"));
+    assert_eq!(arch_of_rpm("amd64"), None);
+    assert_eq!(arch_of_deb("x86_64"), None);
+}

@@ -31,7 +31,7 @@
 //!   read (`--no-pool` instead of `--rpms` and `--version`: the `repodata` only). The cloud role.
 //!
 //! The programs that talk to the outside (`aws`, `gpg`, `curl`) are flags, so a test hands a
-//! stand-in ([`super::aws::Aws`], [`super::apt::sign::Gpg`], [`super::check::Host`]).
+//! stand-in ([`super::aws::Aws`], [`super::apt::sign::Gpg`], [`super::host::Host`]).
 //!
 //! Copied from komira-ai/tierstore at ff4777831c08fc13aa025b54e6e0531c2f350f4f
 //! (`crates/xtask/src/channels/rpm.rs`), adapted to this repository (see [`crate::channels`]).

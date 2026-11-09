@@ -20,6 +20,14 @@
 //!   organisation's products share.
 //! - `channels rpm sign|check-signed|promote|repo ...` ([`rpm`]): the same packages as RPMs,
 //!   signed, into the rpm tree of the same repository.
+//! - `channels pkg upload|promote|check ...` ([`pkg`]): the macOS installer (unsigned until the
+//!   owner has a Developer ID) into `pkg/hostkeeper/<version>/` of the same bucket, and the
+//!   pointer `pkg/hostkeeper/stable.json` to the promoted one.
+//! - `channels check-apt --package <p> ...` ([`check`]) and `channels check-rpm --package <p>
+//!   ...` ([`check_rpm`]): a package installed from the suite `testing` on a clean machine and
+//!   held to what [`spec::Package`] says it installs.
+//! - `channels decide --result <stage>=<result>... [--output <file>]` ([`decide`]): whether the
+//!   release goes on from `testing`.
 //!
 //! The programs that talk to the outside (`aws`, `gpg`, `curl`) run through the crate's
 //! [`Exec`](crate::release::ports::Exec) port, which `lib.rs` hands the verbs, so a test hands a
@@ -28,8 +36,12 @@
 pub(crate) mod apt;
 pub(crate) mod assume;
 pub(crate) mod aws;
+pub(crate) mod check;
+pub(crate) mod check_rpm;
+pub(crate) mod decide;
 pub(crate) mod gate;
 pub(crate) mod host;
+pub(crate) mod pkg;
 pub(crate) mod rpm;
 pub(crate) mod spec;
 pub(crate) mod sums;
@@ -165,6 +177,70 @@ pub(crate) enum Verb {
         #[command(subcommand)]
         verb: rpm::Verb,
     },
+    /// The macOS installer: upload it to `testing`, check it, promote it to `stable`.
+    Pkg {
+        #[command(subcommand)]
+        verb: pkg::Verb,
+    },
+    /// A package installed from the apt suite `testing`, on this machine (a clean container),
+    /// held to what the package promises.
+    CheckApt {
+        /// The package: `hostkeeper` or `hostkeeper-coordinator`.
+        #[arg(long)]
+        package: String,
+        /// The Debian architecture of the machine, `amd64` or `arm64`.
+        #[arg(long)]
+        arch: String,
+        /// `<major>.<minor>.<patch>`.
+        #[arg(long)]
+        version: String,
+        /// The release's commit, 40 hex digits.
+        #[arg(long)]
+        commit: String,
+        /// The apt repository.
+        #[arg(long, default_value = "https://packages.komira.ai/apt")]
+        apt_url: String,
+        /// Where the checked system is.
+        #[arg(long, default_value = "/")]
+        root: PathBuf,
+    },
+    /// A package installed from the rpm tree `testing` in a container, held to what the package
+    /// promises; the programs run with `docker exec`.
+    CheckRpm {
+        /// The package: `hostkeeper` or `hostkeeper-coordinator`.
+        #[arg(long)]
+        package: String,
+        /// The container, started and left running by the job.
+        #[arg(long)]
+        container: String,
+        /// The RPM architecture of the machine, `x86_64` or `aarch64`.
+        #[arg(long)]
+        arch: String,
+        /// `<major>.<minor>.<patch>`.
+        #[arg(long)]
+        version: String,
+        /// The release's commit, 40 hex digits.
+        #[arg(long)]
+        commit: String,
+        /// The repository host.
+        #[arg(long, default_value = "https://packages.komira.ai")]
+        url: String,
+        /// A directory of the container to download the package to.
+        #[arg(long)]
+        work: String,
+        /// The `docker` program.
+        #[arg(long, default_value = "docker")]
+        docker: PathBuf,
+    },
+    /// Whether the release, which is in `testing`, goes on to the public channels.
+    Decide {
+        /// The result of one stage, `NAME=RESULT` (`needs.<job>.result`); every stage is given.
+        #[arg(long = "result")]
+        results: Vec<String>,
+        /// Append `promote=true` to this file (`GITHUB_OUTPUT`).
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
 }
 
 /// Runs a verb: the lines to print.
@@ -199,6 +275,52 @@ pub(crate) fn run(verb: Verb, exec: &dyn Exec) -> Result<Vec<String>, Error> {
         ),
         Verb::Apt { verb } => apt::run(verb, exec),
         Verb::Rpm { verb } => rpm::run(verb, exec),
+        Verb::Pkg { verb } => pkg::run(verb, exec),
+        Verb::CheckApt {
+            package,
+            arch,
+            version,
+            commit,
+            apt_url,
+            root,
+        } => check::check_apt(
+            &check::Noninteractive(exec),
+            &check::Apt {
+                root: &root,
+                package: check::package_flag(&package)?,
+                arch: &arch,
+                version: &version,
+                commit: &commit,
+                apt_url: &apt_url,
+            },
+        ),
+        Verb::CheckRpm {
+            package,
+            container,
+            arch,
+            version,
+            commit,
+            url,
+            work,
+            docker,
+        } => check_rpm::check_rpm(
+            &check_rpm::Container {
+                exec,
+                docker,
+                name: container,
+            },
+            &check_rpm::Rpm {
+                package: check::package_flag(&package)?,
+                arch: &arch,
+                version: &version,
+                commit: &commit,
+                url: &url,
+                work: &work,
+            },
+        ),
+        Verb::Decide { results, output } => {
+            decide::decide(&spec::HOSTKEEPER, &results, output.as_deref())
+        }
     }
 }
 

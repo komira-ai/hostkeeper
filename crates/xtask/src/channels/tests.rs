@@ -152,3 +152,85 @@ fn the_apt_and_rpm_verbs_are_dispatched_to_their_channels() {
     assert!(e.starts_with("read "), "{e}");
     assert!(exec.calls.borrow().is_empty());
 }
+
+#[test]
+fn check_apt_is_dispatched_to_the_machine_it_runs_on_through_env() {
+    // The first thing the check asks the machine is its architecture; the stand-in refuses, and
+    // the failure names the program and the frontend it ran with.
+    let exec = FakeExec::fails("boom");
+    let e = run(
+        Verb::CheckApt {
+            package: "hostkeeper-coordinator".to_owned(),
+            arch: "amd64".to_owned(),
+            version: "1.2.3".to_owned(),
+            commit: "0123456789abcdef0123456789abcdef01234567".to_owned(),
+            apt_url: "https://packages.komira.ai/apt".to_owned(),
+            root: PathBuf::from("/nowhere"),
+        },
+        &exec,
+    )
+    .unwrap_err();
+    assert_eq!(
+        e,
+        Error::Failed("dpkg --print-architecture failed: boom".to_owned())
+    );
+    assert_eq!(
+        *exec.calls.borrow(),
+        [(
+            "env".to_owned(),
+            vec![
+                "DEBIAN_FRONTEND=noninteractive".to_owned(),
+                "dpkg".to_owned(),
+                "--print-architecture".to_owned()
+            ]
+        )]
+    );
+}
+
+#[test]
+fn check_rpm_is_dispatched_to_the_container_through_docker_exec() {
+    let exec = FakeExec::fails("boom");
+    let e = run(
+        Verb::CheckRpm {
+            package: "hostkeeper".to_owned(),
+            container: "check-rpm".to_owned(),
+            arch: "x86_64".to_owned(),
+            version: "1.2.3".to_owned(),
+            commit: "0123456789abcdef0123456789abcdef01234567".to_owned(),
+            url: "https://packages.komira.ai".to_owned(),
+            work: "/work".to_owned(),
+            docker: PathBuf::from("docker"),
+        },
+        &exec,
+    )
+    .unwrap_err();
+    assert_eq!(e, Error::Failed("uname -m failed: boom".to_owned()));
+    assert_eq!(
+        *exec.calls.borrow(),
+        [(
+            "docker".to_owned(),
+            vec![
+                "exec".to_owned(),
+                "check-rpm".to_owned(),
+                "uname".to_owned(),
+                "-m".to_owned()
+            ]
+        )]
+    );
+}
+
+#[test]
+fn decide_is_dispatched_with_the_products_stages() {
+    let e = run(
+        Verb::Decide {
+            results: vec!["check-apt=success".to_owned()],
+            output: None,
+        },
+        &FakeExec::says(""),
+    )
+    .unwrap_err();
+    assert_eq!(
+        e,
+        Error::Usage("--result testing-apt-write is not given".to_owned())
+    );
+}

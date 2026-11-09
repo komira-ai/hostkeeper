@@ -19,8 +19,9 @@
 //!   (`netinstall_report`). The end-to-end job `net-install` runs it; an operator
 //!   runs it once on the first real machine (`docs/operations/network-install.md`).
 //! - `channels <verb>`: a release's Linux packages (deb and rpm, the daemon's and the
-//!   coordinator's) reaching the apt and rpm repositories at `packages.komira.ai`, copied from
-//!   komira-ai/tierstore (`channels`).
+//!   coordinator's) and its macOS installer (unsigned) reaching the repositories at
+//!   `packages.komira.ai`: testing first, the install checks, then the decision to promote and
+//!   the promotion. Copied from komira-ai/tierstore (`channels`).
 //! - `db-backup`: one dump of the coordinator's database into a directory of dumps, keeping the
 //!   newest of them (`db_backup`). Not a CI step: the backup timer of the compose deployment runs
 //!   it (`docs/deploy/coordinator/`).
@@ -125,9 +126,10 @@ enum Verb {
     /// output into a new numbered file of `--into` (mode 0600), and keep the newest `--keep`
     /// dumps. A dump that fails or writes nothing is not kept, and removes no older one.
     DbBackup(db_backup::Flags),
-    /// A release's Linux packages reaching the apt and rpm repositories at `packages.komira.ai`:
-    /// the settings gate of those jobs, the job's AWS role, and the read, merge, sign and write of
-    /// each repository.
+    /// A release's Linux packages and macOS installer reaching `packages.komira.ai`: the settings
+    /// gate of those jobs, the job's AWS role, the read, merge, sign and write of each
+    /// repository, the installer's upload and promotion, the install checks, and the decision to
+    /// promote.
     Channels {
         #[command(subcommand)]
         verb: channels::Verb,
