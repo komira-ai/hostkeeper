@@ -42,3 +42,7 @@ crates/hostkeeper-daemon/src/unix_clock.rs
 # directory it moves the unit files to by the unix second (`MDM_STATE/removed/<seconds>`); no
 # decision reads it, and a name already taken is never reused.
 crates/hostkeeper-mdm/src/system.rs
+# A stamp of a record that nothing reads back to decide: SystemClock stamps each event the
+# measurement runner records (`runner_ms`) for the analysis to subtract; its polls and deadlines
+# read the monotonic clock.
+crates/hostkeeper-measure/src/clock.rs
