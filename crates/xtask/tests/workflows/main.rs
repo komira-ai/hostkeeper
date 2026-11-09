@@ -38,6 +38,8 @@ mod openrc;
 mod openrc_tests;
 mod packages;
 mod packages_tests;
+mod pinned_cache;
+mod pinned_cache_tests;
 mod pkg_signing;
 mod pkg_signing_tests;
 mod pr_device;

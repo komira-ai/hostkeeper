@@ -52,9 +52,11 @@ env:
 jobs:
   # Format, cargo-deny, clippy, actionlint and the workflow lint, one after another on one Cargo
   # cache. Each step runs after a failed one, so a run reports every failure at once. cargo-deny
-  # and actionlint are release binaries: `curl --proto =https --proto-redir =https` downloads
-  # each one, and `cargo xtask install-tool` checks its SHA-256 before anything is unpacked or
-  # installed. cargo-deny checks licences, bans and sources, as deny.toml configures them.
+  # and actionlint are release binaries: each is restored from the actions cache under its
+  # version and SHA-256, or else `curl --proto =https --proto-redir =https` downloads it, and
+  # `cargo xtask install-tool` checks its SHA-256 before anything is unpacked or installed; only
+  # a checked archive is saved to the cache. cargo-deny checks licences, bans and sources, as
+  # deny.toml configures them.
   # Advisories are not checked here: a new advisory against a crate we already use would fail
   # every open pull request for something none of them did. advisories.yml checks them daily
   # and on every push to main, and keeps what it finds in one issue.
@@ -82,12 +84,30 @@ jobs:
           key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
           restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
       - run: cargo fmt --all --check
-      - name: Download cargo-deny (HTTPS only, redirects included)
+      - name: Restore the pinned cargo-deny.tar.gz from the cache
+        id: cargo-deny-cache
         if: ${{ !cancelled() }}
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/cargo-deny.tar.gz
+          key: pinned-cargo-deny-${{ env.DENY_VERSION }}-${{ env.DENY_SHA256 }}
+      - name: Download cargo-deny on a cache miss (HTTPS only, redirects included)
+        id: cargo-deny-download
+        if: ${{ !cancelled() && steps.cargo-deny-cache.outputs.cache-hit != 'true' }}
         run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/cargo-deny.tar.gz" "https://github.com/EmbarkStudios/cargo-deny/releases/download/$DENY_VERSION/cargo-deny-$DENY_VERSION-x86_64-unknown-linux-musl.tar.gz"
+      - name: Say why the job stops when cargo-deny.tar.gz is neither cached nor downloadable
+        if: ${{ !cancelled() && steps.cargo-deny-download.outcome == 'failure' }}
+        run: echo "::error::cargo-deny.tar.gz is not in the actions cache and its download from GitHub failed, so this job cannot go on until GitHub serves it again"
       - name: Install cargo-deny (pinned checksum)
+        id: cargo-deny-check
         if: ${{ !cancelled() }}
         run: cargo xtask install-tool --download "$RUNNER_TEMP/cargo-deny.tar.gz" --sha256 "$DENY_SHA256" --out "$HOME/.cargo/bin/cargo-deny" --extract tar.gz --member "cargo-deny-$DENY_VERSION-x86_64-unknown-linux-musl/cargo-deny"
+      - name: Save the checked cargo-deny.tar.gz to the cache
+        if: ${{ !cancelled() && steps.cargo-deny-check.outcome == 'success' && steps.cargo-deny-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/cargo-deny.tar.gz
+          key: ${{ steps.cargo-deny-cache.outputs.cache-primary-key }}
       - run: cargo deny --version
         if: ${{ !cancelled() }}
       # The arguments cargo-deny-action passes by default, without the advisories check.
@@ -100,12 +120,30 @@ jobs:
       # behind the feature fails here.
       - run: cargo check -p hostkeeper-hook --lib --locked
         if: ${{ !cancelled() }}
-      - name: Download actionlint (HTTPS only, redirects included)
+      - name: Restore the pinned actionlint.tar.gz from the cache
+        id: actionlint-cache
         if: ${{ !cancelled() }}
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/actionlint.tar.gz
+          key: pinned-actionlint-${{ env.ACTIONLINT_VERSION }}-${{ env.ACTIONLINT_SHA256 }}
+      - name: Download actionlint on a cache miss (HTTPS only, redirects included)
+        id: actionlint-download
+        if: ${{ !cancelled() && steps.actionlint-cache.outputs.cache-hit != 'true' }}
         run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/actionlint.tar.gz" "https://github.com/rhysd/actionlint/releases/download/v$ACTIONLINT_VERSION/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+      - name: Say why the job stops when actionlint.tar.gz is neither cached nor downloadable
+        if: ${{ !cancelled() && steps.actionlint-download.outcome == 'failure' }}
+        run: echo "::error::actionlint.tar.gz is not in the actions cache and its download from GitHub failed, so this job cannot go on until GitHub serves it again"
       - name: Install actionlint (pinned checksum)
+        id: actionlint-check
         if: ${{ !cancelled() }}
         run: cargo xtask install-tool --download "$RUNNER_TEMP/actionlint.tar.gz" --sha256 "$ACTIONLINT_SHA256" --out "$HOME/.cargo/bin/actionlint" --extract tar.gz --member actionlint
+      - name: Save the checked actionlint.tar.gz to the cache
+        if: ${{ !cancelled() && steps.actionlint-check.outcome == 'success' && steps.actionlint-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/actionlint.tar.gz
+          key: ${{ steps.actionlint-cache.outputs.cache-primary-key }}
       - run: actionlint -version
         if: ${{ !cancelled() }}
       - run: actionlint
@@ -128,8 +166,8 @@ jobs:
   # and `coverage` build with a pinned nightly; every other job stays on the toolchain in
   # rust-toolchain.toml. The nightly may warn where stable does not, so `-D warnings` is off
   # there (clippy, in the lint job, enforces it). cargo-llvm-cov and cargo-nextest are release
-  # binaries, downloaded over HTTPS and checked against their SHA-256 before use, as in the lint
-  # job. xtask builds with the coverage nightly, the one toolchain these jobs install.
+  # binaries, restored from the actions cache or else downloaded over HTTPS, and checked against
+  # their SHA-256 before use, as in the lint job. xtask builds with the coverage nightly, the one toolchain these jobs install.
   #
   # Each shard builds the whole workspace instrumented and runs one of the two halves
   # `--partition hash:<shard>/2` makes of the tests: nextest puts each test in exactly one half,
@@ -186,15 +224,51 @@ jobs:
         with:
           persist-credentials: false
       - run: rustup toolchain install "$COVERAGE_TOOLCHAIN" --profile minimal --component llvm-tools-preview
-      - name: Download cargo-llvm-cov (HTTPS only, redirects included)
+      - name: Restore the pinned cargo-llvm-cov.tar.gz from the cache
+        id: cargo-llvm-cov-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/cargo-llvm-cov.tar.gz
+          key: pinned-cargo-llvm-cov-${{ env.LLVM_COV_VERSION }}-${{ env.LLVM_COV_SHA256 }}
+      - name: Download cargo-llvm-cov on a cache miss (HTTPS only, redirects included)
+        id: cargo-llvm-cov-download
+        if: ${{ steps.cargo-llvm-cov-cache.outputs.cache-hit != 'true' }}
         run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/cargo-llvm-cov.tar.gz" "https://github.com/taiki-e/cargo-llvm-cov/releases/download/v$LLVM_COV_VERSION/cargo-llvm-cov-x86_64-unknown-linux-gnu.tar.gz"
+      - name: Say why the job stops when cargo-llvm-cov.tar.gz is neither cached nor downloadable
+        if: ${{ !cancelled() && steps.cargo-llvm-cov-download.outcome == 'failure' }}
+        run: echo "::error::cargo-llvm-cov.tar.gz is not in the actions cache and its download from GitHub failed, so this job cannot go on until GitHub serves it again"
       - name: Install cargo-llvm-cov (pinned checksum)
+        id: cargo-llvm-cov-check
         run: cargo "+$COVERAGE_TOOLCHAIN" xtask install-tool --download "$RUNNER_TEMP/cargo-llvm-cov.tar.gz" --sha256 "$LLVM_COV_SHA256" --out "$HOME/.cargo/bin/cargo-llvm-cov" --extract tar.gz --member cargo-llvm-cov
+      - name: Save the checked cargo-llvm-cov.tar.gz to the cache
+        if: ${{ !cancelled() && steps.cargo-llvm-cov-check.outcome == 'success' && steps.cargo-llvm-cov-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/cargo-llvm-cov.tar.gz
+          key: ${{ steps.cargo-llvm-cov-cache.outputs.cache-primary-key }}
       - run: cargo "+$COVERAGE_TOOLCHAIN" llvm-cov --version
-      - name: Download cargo-nextest (HTTPS only, redirects included)
+      - name: Restore the pinned cargo-nextest.tar.gz from the cache
+        id: cargo-nextest-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/cargo-nextest.tar.gz
+          key: pinned-cargo-nextest-${{ env.NEXTEST_VERSION }}-${{ env.NEXTEST_SHA256 }}
+      - name: Download cargo-nextest on a cache miss (HTTPS only, redirects included)
+        id: cargo-nextest-download
+        if: ${{ steps.cargo-nextest-cache.outputs.cache-hit != 'true' }}
         run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/cargo-nextest.tar.gz" "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-$NEXTEST_VERSION/cargo-nextest-$NEXTEST_VERSION-x86_64-unknown-linux-gnu.tar.gz"
+      - name: Say why the job stops when cargo-nextest.tar.gz is neither cached nor downloadable
+        if: ${{ !cancelled() && steps.cargo-nextest-download.outcome == 'failure' }}
+        run: echo "::error::cargo-nextest.tar.gz is not in the actions cache and its download from GitHub failed, so this job cannot go on until GitHub serves it again"
       - name: Install cargo-nextest (pinned checksum)
+        id: cargo-nextest-check
         run: cargo "+$COVERAGE_TOOLCHAIN" xtask install-tool --download "$RUNNER_TEMP/cargo-nextest.tar.gz" --sha256 "$NEXTEST_SHA256" --out "$HOME/.cargo/bin/cargo-nextest" --extract tar.gz --member cargo-nextest
+      - name: Save the checked cargo-nextest.tar.gz to the cache
+        if: ${{ !cancelled() && steps.cargo-nextest-check.outcome == 'success' && steps.cargo-nextest-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/cargo-nextest.tar.gz
+          key: ${{ steps.cargo-nextest-cache.outputs.cache-primary-key }}
       # The shards' own cache key: no other job's cache is restored here (the lint job's holds a
       # build without coverage instrumentation, and the key before the shards a build with debug
       # info).
@@ -282,10 +356,28 @@ jobs:
         with:
           persist-credentials: false
       - run: rustup toolchain install "$COVERAGE_TOOLCHAIN" --profile minimal --component llvm-tools-preview
-      - name: Download cargo-llvm-cov (HTTPS only, redirects included)
+      - name: Restore the pinned cargo-llvm-cov.tar.gz from the cache
+        id: cargo-llvm-cov-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/cargo-llvm-cov.tar.gz
+          key: pinned-cargo-llvm-cov-${{ env.LLVM_COV_VERSION }}-${{ env.LLVM_COV_SHA256 }}
+      - name: Download cargo-llvm-cov on a cache miss (HTTPS only, redirects included)
+        id: cargo-llvm-cov-download
+        if: ${{ steps.cargo-llvm-cov-cache.outputs.cache-hit != 'true' }}
         run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/cargo-llvm-cov.tar.gz" "https://github.com/taiki-e/cargo-llvm-cov/releases/download/v$LLVM_COV_VERSION/cargo-llvm-cov-x86_64-unknown-linux-gnu.tar.gz"
+      - name: Say why the job stops when cargo-llvm-cov.tar.gz is neither cached nor downloadable
+        if: ${{ !cancelled() && steps.cargo-llvm-cov-download.outcome == 'failure' }}
+        run: echo "::error::cargo-llvm-cov.tar.gz is not in the actions cache and its download from GitHub failed, so this job cannot go on until GitHub serves it again"
       - name: Install cargo-llvm-cov (pinned checksum)
+        id: cargo-llvm-cov-check
         run: cargo "+$COVERAGE_TOOLCHAIN" xtask install-tool --download "$RUNNER_TEMP/cargo-llvm-cov.tar.gz" --sha256 "$LLVM_COV_SHA256" --out "$HOME/.cargo/bin/cargo-llvm-cov" --extract tar.gz --member cargo-llvm-cov
+      - name: Save the checked cargo-llvm-cov.tar.gz to the cache
+        if: ${{ !cancelled() && steps.cargo-llvm-cov-check.outcome == 'success' && steps.cargo-llvm-cov-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/cargo-llvm-cov.tar.gz
+          key: ${{ steps.cargo-llvm-cov-cache.outputs.cache-primary-key }}
       - run: cargo "+$COVERAGE_TOOLCHAIN" llvm-cov --version
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
