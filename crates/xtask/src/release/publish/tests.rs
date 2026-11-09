@@ -339,6 +339,8 @@ fn misread(tamper: fn(&mut Release), detail: &str) {
         pkgbuild: &fakes.pkgbuild,
         advisories: &fakes.advisories,
         download: &fakes.download,
+        registry: &fakes.registry,
+        wait: &fakes.wait,
     };
     let detail = detail.replace("SUMS_DIGEST", &digest(&dir, "SHA256SUMS"));
     assert_eq!(

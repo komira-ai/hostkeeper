@@ -57,7 +57,7 @@ pub(crate) fn index_name(version: &Version) -> String {
 }
 
 /// The `sha256:<hex>` digest of `bytes`.
-fn digest_of(bytes: &[u8]) -> String {
+pub(crate) fn digest_of(bytes: &[u8]) -> String {
     format!("sha256:{}", hex::encode(Sha256::digest(bytes)))
 }
 
@@ -245,8 +245,8 @@ pub(crate) fn write_layout(
     )])
 }
 
-/// Appends `IMAGE_DIGEST=<digest>` to the env file (`GITHUB_ENV`), for the steps that push and
-/// read back the image by its digest.
+/// Appends `IMAGE_DIGEST=<digest>` to the env file (`GITHUB_ENV`) a caller names. (release.yml
+/// no longer reads it: `release push-image` takes the digest from the image index.)
 fn append_digest(env_file: &Path, digest: &str) -> Result<(), Error> {
     use std::io::Write;
     std::fs::OpenOptions::new()

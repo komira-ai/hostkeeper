@@ -178,6 +178,8 @@ A release job in a service's repository downloads the hostkeeper release, verifi
 
 hostkeeper's own release planner holds releases from a commit whose privileged run on `main` failed: that commit is never released, a later commit whose ci, privileged and artifacts runs all succeeded is released and lifts the hold, and a ci success alone never lifts it.
 
+A release is published before its image is pushed and before it is set as the desired version, so a release run can publish a release and then fail. When the planner releases no newer commit, it plans the newest published release again if the latest release run that published it did not succeed; every job after the plan is idempotent for a release already published, and after three such runs in a row that did not succeed the planner leaves the release and says so.
+
 ### 4.6 The boot image and installers
 
 Linux: a network-installed Ubuntu 24.04 system ([network-install.md](network-install.md)) carries the daemon, its unit and `/etc/hostkeeper/hostkeeper.toml`; a host built from it needs nothing else to enroll. A deb and an rpm carry the daemon and unit for hosts not built from the image, and `hostkeeper-pxe` with no unit of its own, both the static build of [packages.md](packages.md) section 5.4 (`packaging/linux/nfpm.yaml`, built and checked by `.github/workflows/artifacts.yml`); whoever installs them places the config. macOS: a signed pkg whose daemon writes `hostkeeper.toml` at its start from the config profile the MDM installed first (section 5.9, [hostkeeper-mdm.md](hostkeeper-mdm.md) section 4). Both publish into the operator's shared package repositories. Network boot is served by the optional `hostkeeper-pxe` (network-install.md section 3). Designed.
