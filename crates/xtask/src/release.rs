@@ -61,6 +61,8 @@
 //!   package's attestation verified by its service's signer in the list, and staged into a
 //!   release channel by `channel-stage`, a new version renamed into place whole; never changes a
 //!   version already there.
+//! - `channel-host` ([`channel_host`]): the host of the release channel's base URL, which the
+//!   channel job of `release.yml` pings when it joins the tailnet.
 //! - `targets` ([`targets`]): the `targets` of the set that deploys a package of a release, one
 //!   `hostkeeper-archive` entry per platform its release index lists, read from the release's
 //!   assets and checked as the coordinator and the daemon check them, written as one line of
@@ -72,6 +74,7 @@
 //! port; the only code that starts
 //! a process is `real::SystemExec`, built in [`real`] alone.
 
+mod channel_host;
 mod channel_stage;
 mod check;
 mod check_binary;
@@ -607,6 +610,17 @@ pub(crate) enum Verb {
         #[arg(long)]
         output: Option<PathBuf>,
     },
+    /// Write the host of the release channel's base URL, `hostname=<host>`: the name or IPv4
+    /// address the channel job pings when it joins the tailnet. Refused, the reason named,
+    /// unless the URL is `https://<host>[:<port>][/<path>]`.
+    ChannelHost {
+        /// The release channel's base URL (`HOSTKEEPER_RELEASE_CHANNEL`).
+        #[arg(long)]
+        channel: String,
+        /// A file the `hostname=` line is appended to (on Actions, `GITHUB_OUTPUT`).
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
     /// Publish a checked directory as the release of the version, at the commit.
     Publish {
         dir: PathBuf,
@@ -724,6 +738,9 @@ pub(crate) fn run<A: Adapters>(
             require: require_platforms,
             out,
         }),
+        Verb::ChannelHost { channel, output } => {
+            channel_host::channel_host(&channel, output.as_deref())
+        }
         Verb::Targets {
             service,
             fail_ready,
@@ -910,6 +927,7 @@ fn run_with(verb: Verb, ports: &Ports<'_>) -> Result<Vec<String>, Error> {
         | Verb::CheckLinuxPkg { .. }
         | Verb::CheckMacosPkg { .. }
         | Verb::ChannelStage { .. }
+        | Verb::ChannelHost { .. }
         | Verb::Targets { .. } => run(verb, || Lent(*ports)),
     }
 }
