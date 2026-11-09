@@ -1,9 +1,10 @@
 //! The rule that the attest job of `artifacts.yml` attests, and copies the bundle of, every Linux
-//! package (the deb, the rpm and the Arch package of each Linux platform): the file passes as it
-//! is, and each package's missing attestation or missing bundle copy is refused with its message.
+//! package (the daemon's and the coordinator's deb and rpm of each Linux platform) and the
+//! coordinator's image index: the file passes as it is, and each one's missing attestation or
+//! missing bundle copy is refused with its message.
 
 use super::lint::lint;
-use super::release::LINUX_ARCHES;
+use super::release::{LINUX_ARCHES, LINUX_PACKAGE_PROGRAMS};
 use super::{with_in, workflows};
 
 /// The repository's artifacts.yml.
@@ -24,7 +25,8 @@ struct LinuxPackage {
     copied: String,
 }
 
-/// The deb, the rpm and the Arch package of both Linux platforms.
+/// The daemon's and the coordinator's deb and rpm of both Linux platforms, and the coordinator's
+/// image index.
 fn linux_packages() -> Vec<LinuxPackage> {
     let version = "${{ needs.version.outputs.version }}";
     let mut all = Vec::new();
@@ -32,35 +34,42 @@ fn linux_packages() -> Vec<LinuxPackage> {
         .into_iter()
         .zip(LINUX_ARCHES)
     {
-        let kinds = [
-            (
-                "deb",
-                format!("hostkeeper_{version}_{deb}.deb"),
-                format!("hostkeeper_<version>_{deb}.deb"),
-                format!("hostkeeper_${{V}}_{deb}.deb"),
-            ),
-            (
-                "rpm",
-                format!("hostkeeper-{version}-1.{rpm}.rpm"),
-                format!("hostkeeper-<version>-1.{rpm}.rpm"),
-                format!("hostkeeper-${{V}}-1.{rpm}.rpm"),
-            ),
-            (
-                "arch",
-                format!("hostkeeper-{version}-1-{rpm}.pkg.tar.zst"),
-                format!("hostkeeper-<version>-1-{rpm}.pkg.tar.zst"),
-                format!("hostkeeper-${{V}}-1-{rpm}.pkg.tar.zst"),
-            ),
-        ];
-        for (kind, spelled, name, copied) in kinds {
-            all.push(LinuxPackage {
-                id: format!("{kind}-{platform}"),
-                spelled,
-                name,
-                copied,
-            });
+        for program in LINUX_PACKAGE_PROGRAMS {
+            let kinds = [
+                (
+                    "deb",
+                    format!("{program}_{version}_{deb}.deb"),
+                    format!("{program}_<version>_{deb}.deb"),
+                    format!("{program}_${{V}}_{deb}.deb"),
+                ),
+                (
+                    "rpm",
+                    format!("{program}-{version}-1.{rpm}.rpm"),
+                    format!("{program}-<version>-1.{rpm}.rpm"),
+                    format!("{program}-${{V}}-1.{rpm}.rpm"),
+                ),
+            ];
+            let id_prefix = if program == "hostkeeper" {
+                ""
+            } else {
+                "coordinator-"
+            };
+            for (kind, spelled, name, copied) in kinds {
+                all.push(LinuxPackage {
+                    id: format!("{id_prefix}{kind}-{platform}"),
+                    spelled,
+                    name,
+                    copied,
+                });
+            }
         }
     }
+    all.push(LinuxPackage {
+        id: "image-index".to_owned(),
+        spelled: format!("hostkeeper-coordinator-{version}.image.json"),
+        name: "hostkeeper-coordinator-<version>.image.json".to_owned(),
+        copied: "hostkeeper-coordinator-${V}.image.json".to_owned(),
+    });
     all
 }
 
@@ -70,7 +79,7 @@ fn artifacts_yml_attests_every_linux_package_and_copies_its_bundle() {
     let text = artifacts_yml();
     assert_eq!(lint("artifacts.yml", &text), Vec::<String>::new());
     let packages = linux_packages();
-    assert_eq!(packages.len(), 6);
+    assert_eq!(packages.len(), 9);
     for p in packages {
         let subject = format!("          subject-path: dist/{}\n", p.spelled);
         assert_eq!(text.matches(&subject).count(), 1, "{}", p.id);
@@ -84,7 +93,7 @@ fn artifacts_yml_attests_every_linux_package_and_copies_its_bundle() {
 
 #[test]
 fn a_linux_package_without_its_attestation_is_refused() {
-    // Catches: a release whose deb, rpm or Arch package is published without a provenance
+    // Catches: a release whose deb or rpm is published without a provenance
     // attestation (a host trusts only attested packages).
     let text = artifacts_yml();
     for p in linux_packages() {
@@ -101,7 +110,7 @@ fn a_linux_package_without_its_attestation_is_refused() {
 
 #[test]
 fn a_linux_package_without_its_bundle_copy_is_refused() {
-    // Catches: a release whose deb, rpm or Arch package is attested but whose bundle is not put
+    // Catches: a release whose deb or rpm is attested but whose bundle is not put
     // beside it under its name, so the release lacks the `.sigstore.json` asset.
     let text = artifacts_yml();
     for p in linux_packages() {

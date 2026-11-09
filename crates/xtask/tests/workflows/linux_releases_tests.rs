@@ -56,7 +56,7 @@ fn the_committed_workflows_pull_exactly_the_listed_images() {
             "{file}"
         );
     }
-    assert_eq!(images().len(), 9);
+    assert_eq!(images().len(), 8);
 }
 
 #[test]
@@ -115,8 +115,8 @@ fn a_pull_after_the_run_as_root_is_refused() {
     // Catches: an image pulled after the test that needs it has run (`--pull=never` would fail it).
     let text = committed(PRIVILEGED_WORKFLOW);
     let images = images();
-    let image = &images[8];
-    let step = format!("      - name: Pull archlinux:base\n        run: {PULL} {image}\n");
+    let image = &images[7];
+    let step = format!("      - name: Pull opensuse/tumbleweed\n        run: {PULL} {image}\n");
     assert!(text.contains(&step));
     let moved = text.replacen(&step, "", 1).replacen(
         "      - name: The journal of the test units\n",
@@ -162,7 +162,12 @@ fn a_list_that_is_not_a_list_of_pinned_releases_is_refused() {
     );
     assert_eq!(
         problems(&list.replacen("format = \"deb\"", "format = \"apk\"", 1)),
-        ["linux-releases.toml: release 1 has the format `apk`, not deb, rpm or arch"]
+        ["linux-releases.toml: release 1 has the format `apk`, not deb or rpm"]
+    );
+    // The Arch package is withdrawn: a release of that format is refused.
+    assert_eq!(
+        problems(&list.replacen("format = \"deb\"", "format = \"arch\"", 1)),
+        ["linux-releases.toml: release 1 has the format `arch`, not deb or rpm"]
     );
     assert_eq!(
         problems(&list.replacen(image, "debian:12", 1)),

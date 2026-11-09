@@ -461,7 +461,10 @@ file the receipt lists, changed or not.
 ```
 
 - **The channel is a store.** The release machinery signs each release's `.pkg`, attests it, publishes it to the
-  testing location of the project's package site, and promotes the same file to the stable location. A Mac's
+  testing location of the project's package site, and promotes the same file to the stable location
+  (in hostkeeper's release workflow the promotion copies nothing: `pkg/hostkeeper/<version>/` is the testing
+  location, `pkg/hostkeeper/stable.json` names the version that is stable, and the file is the same one at the
+  same path; docs/deploy/package-repositories.md; the signature waits for M11). A Mac's
   `stores.toml` (packages.md section 7.2) defines each location as an `https` store, under the same names as the apt
   entries, `komira-testing` and `komira-stable`, and the entry's location names the channel CI sets the release for.
   A Mac whose `stores.toml` lacks that store answers `Failed`, `environment`, `no_store` (packages.md section 7.4), as

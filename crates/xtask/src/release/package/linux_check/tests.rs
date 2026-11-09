@@ -9,6 +9,7 @@ use super::rpm::*;
 use super::*;
 use crate::testdir::TestDir;
 
+mod coordinator;
 mod elf_and_depends;
 
 const GH: &[u8] = b"a staged gh";
@@ -310,7 +311,10 @@ impl Case {
     }
 
     fn check(&self) -> Result<Vec<String>, Error> {
-        check(&self.package(), Some(&self.dir.join("staged")))
+        check(
+            &self.package(),
+            Some(Staged::Daemon(&self.dir.join("staged"))),
+        )
     }
 
     /// The problems a refusal lists, without the package's name in front.
@@ -472,7 +476,7 @@ fn a_file_that_is_neither_a_deb_nor_an_rpm_is_refused() {
     assert_eq!(
         case.unreadable(),
         format!(
-            "not a package this check reads: {} is neither a deb, an rpm, an Arch package nor a tarball",
+            "not a package this check reads: {} is neither a deb, an rpm nor a tarball",
             case.package().display()
         )
     );
@@ -637,7 +641,7 @@ fn an_rpm_whose_payload_lacks_a_file_is_refused() {
 fn a_missing_package_or_staged_file_is_an_error() {
     let case = Case::new(&deb_of(&files()));
     let absent = case.dir.join("absent.deb");
-    let message = check(&absent, Some(&case.dir.join("staged")))
+    let message = check(&absent, Some(Staged::Daemon(&case.dir.join("staged"))))
         .expect_err("absent")
         .to_string();
     assert!(

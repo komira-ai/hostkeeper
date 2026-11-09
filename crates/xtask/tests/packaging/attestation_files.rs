@@ -1,5 +1,5 @@
 //! The two files the daemon's attestation check runs on, and the two programs it ships, in the
-//! deb, the rpm and the Arch package: `nfpm.yaml`
+//! deb and the rpm: `nfpm.yaml`
 //! installs them at the daemon's own paths (`hostkeeper_daemon::cli::GH_BINARY` and
 //! `SIGSTORE_TRUSTED_ROOT`, imported, not repeated), with their modes, from the directory
 //! `release nfpm-stage` writes, and that step refuses a `gh` archive that is not the pinned one

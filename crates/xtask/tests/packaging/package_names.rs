@@ -1,4 +1,4 @@
-//! The file names of the deb, the rpm and the Arch package `nfpm.yaml` makes for each Linux platform.
+//! The file names of the deb and the rpm `nfpm.yaml` makes for each Linux platform.
 
 use crate::nfpm::Config;
 use crate::{NFPM, altered, read};
@@ -30,12 +30,12 @@ impl Platform {
     }
 }
 
-/// The file names of the deb, then the rpm and then the Arch package of every Linux platform,
+/// The file names of the deb and then the rpm of every Linux platform,
 /// for version 1.2.3.
 fn file_names(text: &str) -> Result<Vec<String>, String> {
     let config = Config::parse(text)?;
     let mut out = Vec::new();
-    for packager in ["deb", "rpm", "archlinux"] {
+    for packager in ["deb", "rpm"] {
         for arch in Platform::ALL.iter().filter_map(|p| p.nfpm_arch()) {
             out.push(config.file_name(packager, "1.2.3", arch)?);
         }
@@ -44,8 +44,8 @@ fn file_names(text: &str) -> Result<Vec<String>, String> {
 }
 
 /// Catches a package name, version or architecture that does not come out as
-/// `hostkeeper_<version>_<arch>.deb`, `hostkeeper-<version>-1.<arch>.rpm` and
-/// `hostkeeper-<version>-1-<arch>.pkg.tar.zst` for both architectures, or a value read from any other variable of the environment.
+/// `hostkeeper_<version>_<arch>.deb` and `hostkeeper-<version>-1.<arch>.rpm` for both
+/// architectures, or an Arch package still named after its withdrawal, or a value read from any other variable of the environment.
 #[test]
 fn package_file_names_follow_the_pattern() {
     let text = read(NFPM);
@@ -54,16 +54,18 @@ fn package_file_names_follow_the_pattern() {
         "hostkeeper_1.2.3_arm64.deb",
         "hostkeeper-1.2.3-1.x86_64.rpm",
         "hostkeeper-1.2.3-1.aarch64.rpm",
-        "hostkeeper-1.2.3-1-x86_64.pkg.tar.zst",
-        "hostkeeper-1.2.3-1-aarch64.pkg.tar.zst",
     ];
     assert_eq!(file_names(&text), Ok(wanted.map(str::to_owned).to_vec()));
+    assert_eq!(
+        Config::parse(&text).and_then(|c| c.file_name("archlinux", "1.2.3", "amd64")),
+        Err("no packager \"archlinux\"".to_owned())
+    );
     let names = |t: &str| file_names(t).map(|names| names.join(" "));
     // A fixed architecture names the arm64 packages amd64.
     let fixed = names(&altered(&text, "arch: \"${ARCH}\"", "arch: amd64"));
     assert_eq!(
         fixed,
-        Ok("hostkeeper_1.2.3_amd64.deb hostkeeper_1.2.3_amd64.deb hostkeeper-1.2.3-1.x86_64.rpm hostkeeper-1.2.3-1.x86_64.rpm hostkeeper-1.2.3-1-x86_64.pkg.tar.zst hostkeeper-1.2.3-1-x86_64.pkg.tar.zst".to_owned())
+        Ok("hostkeeper_1.2.3_amd64.deb hostkeeper_1.2.3_amd64.deb hostkeeper-1.2.3-1.x86_64.rpm hostkeeper-1.2.3-1.x86_64.rpm".to_owned())
     );
     let typo = names(&altered(&text, "name: hostkeeper\n", "name: hostkeper\n"));
     assert!(
@@ -118,7 +120,7 @@ fn package_file_names_follow_the_pattern() {
         ("1.2.3", "", "ARCH \"\" is not amd64 or arm64"),
         ("1.2.3", "x86_64", "ARCH \"x86_64\" is not amd64 or arm64"),
     ] {
-        for packager in ["deb", "rpm", "archlinux"] {
+        for packager in ["deb", "rpm"] {
             assert_eq!(
                 config.file_name(packager, version, arch),
                 Err(refusal.to_owned()),
