@@ -276,8 +276,9 @@ nor an automatic release moves a service before its stage.
 run any service from `hostkeeper-archive`, and hosts whose daemon is older than A19's release (a daemon before
 `target-v1` among them). `Converge` cannot give them: it counts one service's version, and a host picked nothing does
 not hold its convergence. A18 adds the read: each host's services with their installer, an additive field of `Host` in
-`Hosts.List` beside the daemon's version it shows today. The runbook (A22) gives the two `hkctl` queries, and A24's
-pull request shows both at zero. A host that keeps either count above zero is named by them; the operator brings it
+`Hosts.List` beside the daemon's version it shows today. The runbook (A22,
+[docs/operations/move-to-native.md](../operations/move-to-native.md)) gives the two `hkctl` queries, and A24's pull
+request shows both at zero. A host that keeps either count above zero is named by them; the operator brings it
 up, or removes it from the fleet and installs it afresh (network-install.md). So no host is left on a daemon that
 nothing can update.
 

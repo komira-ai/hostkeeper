@@ -25,6 +25,8 @@ mod downloads_tests;
 mod expr;
 mod hello_run_tests;
 mod image_push_tests;
+#[path = "../jq/run.rs"]
+mod jq;
 mod lint;
 mod linux_packages_tests;
 mod linux_releases;
