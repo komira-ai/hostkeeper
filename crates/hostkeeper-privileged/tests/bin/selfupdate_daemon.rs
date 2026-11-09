@@ -1,7 +1,8 @@
 //! `hostkeeper-selfupdate-daemon`: the hostkeeper binary of the privileged self-update tests
 //! (`tests/self_update.rs`), a program of the tests, not shipped.
 //!
-//! `daemon` is the only verb, as the `hostkeeper` binary's (`hostkeeper_daemon::cli::Cli`).
+//! It parses the `hostkeeper` binary's command line (`hostkeeper_daemon::cli::Cli`) and runs its
+//! `daemon` verb, the only one it takes; any other is a usage error.
 //!
 //! It is the shipped daemon (`hostkeeper_daemon::start`: the settle of a waiting
 //! self-update, the boot pass, the readiness notice, the heartbeat loop, the executor and its
@@ -121,11 +122,12 @@ fn main() -> ExitCode {
         Ok(taken) => taken,
         Err(why) => return usage(&why),
     };
-    let Cli {
-        command: Command::Daemon(flags),
-    } = match Cli::try_parse_from(std::iter::once(OsString::from("hostkeeper")).chain(rest)) {
+    let cli = match Cli::try_parse_from(std::iter::once(OsString::from("hostkeeper")).chain(rest)) {
         Ok(cli) => cli,
         Err(error) => error.exit(),
+    };
+    let Command::Daemon(flags) = cli.command else {
+        return usage("`daemon` is the only verb of this program");
     };
     daemon_verb(&fixture, &flags)
 }

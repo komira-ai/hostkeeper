@@ -328,3 +328,63 @@ fn a_hand_over_execs_next_with_the_same_arguments_until_its_count_is_spent() {
         "nothing is switched"
     );
 }
+
+/// Proves the real binary has the check host setup runs before it places the repository
+/// entries: `check-repositories --help` exits 0 and prints the verb's usage; `--dir` of a missing
+/// directory exits 0 saying there is no entry; `--dir` of a directory group and others may write
+/// exits 1 with the loader's refusal naming it, and nothing on stdout.
+///
+/// Catches: a binary without the verb (host setup then finds no check on the node), or one whose
+/// status does not follow the loader's verdict.
+#[test]
+fn check_repositories_answers_with_the_loaders_verdict() {
+    use std::os::unix::fs::PermissionsExt;
+    let run = |args: &[&std::ffi::OsStr]| {
+        Command::new(env!("CARGO_BIN_EXE_hostkeeper"))
+            .arg("check-repositories")
+            .args(args)
+            .output()
+            .expect("run hostkeeper")
+    };
+    let help = run(&["--help".as_ref()]);
+    assert_eq!(help.status.code(), Some(0), "{help:?}");
+    let usage = String::from_utf8_lossy(&help.stdout);
+    assert!(
+        usage.contains("Usage: hostkeeper check-repositories [OPTIONS]"),
+        "{usage}"
+    );
+
+    let scratch =
+        hostkeeper_testkit::Scratch::under(Path::new(env!("CARGO_TARGET_TMPDIR")), "check")
+            .expect("a scratch dir");
+    let missing = scratch.path().join("missing");
+    let out = run(&["--dir".as_ref(), missing.as_os_str()]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        format!(
+            "{}: no repository entry; the daemon would announce no repository installer\n",
+            missing.display()
+        )
+    );
+
+    let open = scratch.path().join("open");
+    std::fs::create_dir(&open).expect("the directory");
+    std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o777)).expect("its mode");
+    let out = run(&["--dir".as_ref(), open.as_os_str()]);
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    assert!(out.stdout.is_empty(), "{out:?}");
+    let owner = rustix::process::geteuid().as_raw();
+    let fault = if owner == 0 {
+        "has mode 0777: group or others can write it".to_owned()
+    } else {
+        format!("is owned by uid {owner}, not 0")
+    };
+    assert_eq!(
+        String::from_utf8_lossy(&out.stderr),
+        format!(
+            "hostkeeper check-repositories: {}: {fault}\n",
+            open.display()
+        )
+    );
+}

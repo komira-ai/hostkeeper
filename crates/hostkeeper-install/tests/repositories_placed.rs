@@ -11,6 +11,10 @@ use hostkeeper_testkit::Scratch;
 
 const PLACED: &str = "/etc/hostkeeper/repositories";
 
+/// A keyring's bytes as the loader takes them: binary, its first byte an OpenPGP packet header
+/// (bit 7 set). The loader judges no more of it than that byte.
+const KEYRING: [u8; 7] = [0x99, 0x01, 0x0d, 0x04, 0x00, 0xff, 0x0a];
+
 fn me() -> u32 {
     rustix::process::geteuid().as_raw()
 }
@@ -29,7 +33,7 @@ fn source(name: &str) -> (Scratch, PathBuf) {
     let dir = scratch.path().join("src");
     fs::create_dir(&dir).expect("the directory");
     fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).expect("the mode");
-    put(&dir, "k.gpg", b"keyring", 0o644);
+    put(&dir, "k.gpg", &KEYRING, 0o644);
     (scratch, dir)
 }
 
@@ -139,7 +143,7 @@ fn read_file_returns_the_bytes_or_the_fault() {
     use hostkeeper_install::repository::config::read_file;
     let (_scratch, dir) = source("read-file");
     let path = dir.join("k.gpg");
-    assert_eq!(read_file(&path, me(), 7).expect("read"), b"keyring");
+    assert_eq!(read_file(&path, me(), 7).expect("read"), KEYRING);
     assert_eq!(read_file(&path, me(), 6), Err(FileFault::Over(6)));
     assert_eq!(
         read_file(&path, me() + 1, 7),

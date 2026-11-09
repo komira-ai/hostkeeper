@@ -6,7 +6,10 @@
 //!
 //! A stanza is exactly `Types: deb`, one `URIs:` of `https://` or `file:/`, one `Suites:`, at
 //! least one `Components:`, and `Signed-By:` the absolute path of a keyring in the same
-//! directory. Every key that would turn off apt's checks (`Trusted`, `Allow-Insecure`,
+//! directory. The keyring is read too, once, without following a link: it is at most
+//! [`MAX_KEYRING_BYTES`], and it is what apt reads at that name: a keyring named `.asc` is an
+//! armored one (it begins [`ARMOR_HEADER`]), any other a binary OpenPGP keyring (its first byte
+//! an OpenPGP packet header); an empty one, or one of the other kind, is refused. Every key that would turn off apt's checks (`Trusted`, `Allow-Insecure`,
 //! `Allow-Weak`, `Allow-Downgrade-To-Insecure`, `Check-Valid-Until: no`) is refused, and so is any
 //! key not named here: an entry is the trust root of every package installed from it.
 
@@ -26,6 +29,16 @@ pub const SOURCES_SUFFIX: &str = ".sources";
 
 /// The most bytes of a `.sources` file read; a longer file is refused.
 pub const MAX_SOURCES_BYTES: u64 = 16 * 1024;
+
+/// The most bytes of a keyring read: 1 MiB. A repository's keyring is some KiB; a larger file is a
+/// mistake, refused rather than read.
+pub const MAX_KEYRING_BYTES: u64 = 1024 * 1024;
+
+/// The first line of an armored OpenPGP public key, as a keyring named `.asc` begins.
+pub const ARMOR_HEADER: &str = "-----BEGIN PGP PUBLIC KEY BLOCK-----";
+
+/// The suffix of a keyring apt reads as armor; apt reads any other keyring as binary.
+pub const ARMORED_SUFFIX: &str = ".asc";
 
 /// The keys a stanza may hold, lower-cased (deb822 keys are read without regard to case).
 pub const KEYS: [&str; 6] = [
@@ -109,6 +122,12 @@ pub enum FileFault {
     NotUtf8,
     #[error("cannot be read: {0}")]
     Unreadable(String),
+    #[error(
+        "is not a binary OpenPGP keyring (it is empty or armored text); apt reads armor only from a keyring named .asc"
+    )]
+    NotBinaryKeyring,
+    #[error("is named .asc but does not begin {ARMOR_HEADER:?}; apt reads a .asc keyring as armor")]
+    NotArmoredKeyring,
 }
 
 /// What is wrong with a stanza.
@@ -161,6 +180,16 @@ pub enum RepositoriesError {
     Stanza { path: PathBuf, rule: Rule },
 }
 
+/// The entries of a directory and what was read of the keyrings they name ([`load_with_keyrings`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Loaded {
+    /// The entries.
+    pub repositories: Repositories,
+    /// The bytes of each keyring the entries name, as they were read and judged, by the path the
+    /// entries name it by (under `placed`).
+    pub keyrings: BTreeMap<PathBuf, Vec<u8>>,
+}
+
 /// The entries of `dir`, every file owned by `owner_uid`. A missing directory is no entry.
 pub fn load(dir: &Path, owner_uid: u32) -> Result<Repositories, RepositoriesError> {
     load_as(dir, dir, owner_uid)
@@ -176,12 +205,23 @@ pub fn load_as(
     placed: &Path,
     owner_uid: u32,
 ) -> Result<Repositories, RepositoriesError> {
+    load_with_keyrings(dir, placed, owner_uid).map(|loaded| loaded.repositories)
+}
+
+/// [`load_as`], with the bytes of each keyring the entries name, from the one read that judged
+/// it: `hostkeeper-pxe serve` carries them in its seeds, and `hostkeeper check-repositories`
+/// prints their SHA-256.
+pub fn load_with_keyrings(
+    dir: &Path,
+    placed: &Path,
+    owner_uid: u32,
+) -> Result<Loaded, RepositoriesError> {
     let file = |path: &Path, fault| RepositoriesError::File {
         path: path.to_path_buf(),
         fault,
     };
     let meta = match fs::symlink_metadata(dir) {
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Repositories::default()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Loaded::default()),
         Err(e) => return Err(file(dir, unreadable(e))),
         Ok(meta) => meta,
     };
@@ -211,13 +251,20 @@ pub fn load_as(
             path: stray.clone(),
         });
     }
+    let mut keyrings = BTreeMap::new();
     for entry in &entries {
-        keyring_fault(&in_dir(entry), owner_uid).map_err(|fault| RepositoriesError::Keyring {
-            path: dir.join(format!("{}{SOURCES_SUFFIX}", entry.name)),
-            fault,
+        let bytes = read_keyring(&in_dir(entry), owner_uid).map_err(|fault| {
+            RepositoriesError::Keyring {
+                path: dir.join(format!("{}{SOURCES_SUFFIX}", entry.name)),
+                fault,
+            }
         })?;
+        keyrings.insert(entry.keyring.clone(), bytes);
     }
-    Ok(Repositories::new(entries))
+    Ok(Loaded {
+        repositories: Repositories::new(entries),
+        keyrings,
+    })
 }
 
 /// The entry of the file `path`, named `stem`, its keyring in `placed`.
@@ -273,10 +320,21 @@ fn unreadable(error: io::Error) -> FileFault {
     FileFault::Unreadable(error.to_string())
 }
 
-/// The keyring at `path`, judged without reading it: apt reads it at every update.
-fn keyring_fault(path: &Path, owner_uid: u32) -> Result<(), FileFault> {
-    let meta = fs::symlink_metadata(path).map_err(unreadable)?;
-    judge(&meta, owner_uid, false)
+/// The bytes of the keyring at `path`, read by [`read_file`]'s rule up to [`MAX_KEYRING_BYTES`]
+/// and judged as apt reads it: a keyring named [`ARMORED_SUFFIX`] must begin [`ARMOR_HEADER`];
+/// any other must begin with an OpenPGP packet header (bit 7 set), so an empty file or armored
+/// text there is refused.
+fn read_keyring(path: &Path, owner_uid: u32) -> Result<Vec<u8>, FileFault> {
+    let bytes = read_file(path, owner_uid, MAX_KEYRING_BYTES)?;
+    let fault = if path.to_string_lossy().ends_with(ARMORED_SUFFIX) {
+        (!bytes.starts_with(ARMOR_HEADER.as_bytes())).then_some(FileFault::NotArmoredKeyring)
+    } else {
+        bytes
+            .first()
+            .is_none_or(|b| b & 0x80 == 0)
+            .then_some(FileFault::NotBinaryKeyring)
+    };
+    fault.map_or(Ok(bytes), Err)
 }
 
 /// The text of `path`, opened without following a link and judged on the open file.

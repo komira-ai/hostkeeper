@@ -16,7 +16,9 @@ use support::{OWN, Rig};
 
 fn daemon_flags(args: &[&str]) -> Result<DaemonFlags, clap::Error> {
     let all = ["hostkeeper", "daemon"].iter().chain(args);
-    let Command::Daemon(flags) = Cli::try_parse_from(all)?.command;
+    let Command::Daemon(flags) = Cli::try_parse_from(all)?.command else {
+        panic!("`daemon` parses as the daemon verb");
+    };
     Ok(flags)
 }
 

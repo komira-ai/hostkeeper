@@ -11,6 +11,10 @@ use hostkeeper_install::repository::config::{
 };
 use hostkeeper_testkit::Scratch;
 
+/// A keyring's bytes as the loader takes them: binary, its first byte an OpenPGP packet header
+/// (bit 7 set). The loader judges no more of it than that byte.
+const KEYRING: [u8; 7] = [0x99, 0x01, 0x0d, 0x04, 0x00, 0xff, 0x0a];
+
 fn scratch(name: &str) -> Scratch {
     Scratch::under(Path::new(env!("CARGO_TARGET_TMPDIR")), name).expect("a scratch directory")
 }
@@ -34,7 +38,7 @@ fn repo_dir(name: &str) -> (Scratch, PathBuf) {
     let dir = scratch.path().join("repositories");
     fs::create_dir(&dir).expect("the directory");
     fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).expect("the mode");
-    put(&dir, "k.gpg", b"keyring", 0o644);
+    put(&dir, "k.gpg", &KEYRING, 0o644);
     (scratch, dir)
 }
 
@@ -325,7 +329,7 @@ fn a_keyring_writable_by_group_or_others_is_refused_naming_the_entry() {
     for (mode, name) in [(0o664, "kgroup"), (0o646, "kothers")] {
         let (_scratch, dir) = repo_dir(name);
         let path = put(&dir, "a.sources", good(&dir).as_bytes(), 0o644);
-        put(&dir, "k.gpg", b"keyring", mode);
+        put(&dir, "k.gpg", &KEYRING, mode);
         let error = load(&dir, me()).expect_err("the start is refused");
         assert_eq!(
             error,
@@ -351,7 +355,7 @@ fn a_keyring_that_is_a_link_or_missing_or_not_a_file_is_refused() {
     let path = put(&dir, "a.sources", good(&dir).as_bytes(), 0o644);
     fs::remove_file(dir.join("k.gpg")).expect("the keyring");
     let outside = dir.parent().expect("a parent").join("outside");
-    fs::write(&outside, b"keyring").expect("the target");
+    fs::write(&outside, KEYRING).expect("the target");
     symlink(&outside, dir.join("k.gpg")).expect("the link");
     let error = load(&dir, me()).expect_err("the link is refused");
     assert_eq!(

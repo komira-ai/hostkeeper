@@ -1,6 +1,7 @@
-//! The command line of the `hostkeeper` binary: `hostkeeper daemon` and its flags, the one verb.
-//! Configuration comes in as flags only, never from the environment (AGENTS.md S2); every
-//! default is a constant here.
+//! The command line of the `hostkeeper` binary: `hostkeeper daemon` and its flags, and
+//! `hostkeeper check-repositories`, host setup's check of a repositories directory with the
+//! daemon's own loader ([`crate::repositories::run_check`]). Configuration comes in as flags
+//! only, never from the environment (AGENTS.md S2); every default is a constant here.
 //!
 //! `hostkeeper daemon` started from the packaged binary (`/usr/bin/hostkeeper`,
 //! `/usr/local/bin/hostkeeper`) gives the binary directory its first binary when `current` starts
@@ -24,6 +25,11 @@
 //! coordinator, docs/admin.md), and the verbs of the update before the hand-over
 //! (`self-update-protocol`, `self-update-fallback`, `self-update-seed`, `mac-config`,
 //! `update-hook` and its step words).
+//!
+//! Exit status of `hostkeeper check-repositories [--dir DIR]`: 0 when the daemon's loader takes
+//! the directory (each entry printed on standard output), [`crate::repositories::EXIT_REFUSED`]
+//! with the loader's refusal on standard error when it does not, `2` for a usage error. It runs
+//! in the process started, from whichever binary: it neither seeds nor execs `current`.
 //!
 //! `--version` prints `hostkeeper X.Y.Z+<12 hex digits of the commit>` for a release build and
 //! `hostkeeper X.Y.Z` for a developer build ([`crate::stamp`]).
@@ -143,6 +149,10 @@ pub struct Cli {
 pub enum Command {
     /// Run the daemon: the one root process of the host.
     Daemon(DaemonFlags),
+    /// Check a repositories directory with the daemon's own loader, as the daemon would take it
+    /// at /etc/hostkeeper/repositories: print each entry and exit 0, or print the loader's
+    /// refusal and exit 1.
+    CheckRepositories(crate::repositories::CheckFlags),
 }
 
 /// The flags of `hostkeeper daemon`.
@@ -227,7 +237,9 @@ pub fn run_from(
     exec: crate::packaged::Exec<'_>,
 ) -> ExitCode {
     let cli = Cli::parse_from(&args);
-    let Command::Daemon(flags) = &cli.command;
+    let Command::Daemon(flags) = &cli.command else {
+        return run_with(cli, systemd);
+    };
     if let Some(error) = crate::packaged::start(
         exe,
         packaged,
@@ -261,9 +273,20 @@ pub fn run(cli: Cli) -> ExitCode {
 }
 
 /// Runs a parsed command line to its exit status; `systemd` is what systemd set for the process,
-/// used with `--notify-systemd` only.
+/// used with `--notify-systemd` only. `check-repositories` judges the files as root's, as the
+/// daemon's start does ([`crate::repositories::ROOT_UID`]).
 pub fn run_with(cli: Cli, systemd: SystemdVars) -> ExitCode {
-    let Command::Daemon(flags) = cli.command;
+    let flags = match cli.command {
+        Command::Daemon(flags) => flags,
+        Command::CheckRepositories(flags) => {
+            return ExitCode::from(crate::repositories::run_check(
+                &flags,
+                crate::repositories::ROOT_UID,
+                &mut std::io::stdout(),
+                &mut std::io::stderr(),
+            ));
+        }
+    };
     let period = flags.link.heartbeat_secs;
     let watchdog = watchdog(&flags, &systemd);
     let served = notifier(&flags, systemd.notify_socket)
@@ -713,7 +736,7 @@ pub fn host_ports(
     // (item A6 dispatches them), so `macos-pkg` is not in `entry::INSTALLERS` and the daemon does
     // not announce an installer it cannot run. A6 takes the loaded signers from this call.
     let _signers = load_signers(files, 0)?;
-    let repositories = repositories::load(files)?;
+    let repositories = repositories::load(files, repositories::ROOT_UID)?;
     let announcement = repositories::announced(announcement, &files.os_root, &repositories);
     let repository = RepositoryPorts::new(
         &settings.packages_dir,

@@ -61,6 +61,9 @@ hostkeeper-release = { path = "../hostkeeper-release" }
 hostkeeper-steps = { path = "../hostkeeper-steps" }
 # The package port of the real store's stage (`PackageFs`, `HostFs`) and its errors.
 hostkeeper-unpack = { path = "../hostkeeper-unpack" }
+# The SHA-256 of each keyring `check-repositories` prints, as hex (`repositories::report`); the
+# tests' fixture digests too.
+hex.workspace = true
 # `O_NOFOLLOW` for the lock file.
 libc.workspace = true
 # The Mac config written at start reads the managed preferences of the MDM, a property list, binary or XML
@@ -77,6 +80,7 @@ rustix = { workspace = true, features = ["fs"] }
 rustls-pki-types.workspace = true
 # `trusted_root`: whether the Sigstore trusted root file is a stream of JSON trusted roots.
 serde_json.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
 # A manifest's `[params]` table is handed to the hook's params file as TOML text.
 toml.workspace = true
@@ -88,8 +92,6 @@ tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
 hello = { path = "../../examples/hello" }
 # The fixture package of the package pipeline's test: its attestation bundle and digest.
 base64.workspace = true
-hex.workspace = true
-sha2.workspace = true
 # The real coordinator of the end-to-end test, driven in process: its desired-state and
 # convergence handlers over HTTP requests built in the test, its heartbeat with an explicit host
 # identity. Its CI tokens come from the fake issuer of `hostkeeper-oidc`'s `testkit`.

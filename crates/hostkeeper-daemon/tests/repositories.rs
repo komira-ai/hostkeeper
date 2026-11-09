@@ -151,7 +151,11 @@ fn only_a_linux_host_has_a_repositories_path() {
     assert_eq!(path(PlatformKind::Macos), None);
     let rig = Rig::new("repositories-mac");
     let mac = files(rig.scratch.path(), None);
-    assert!(repositories::load(&mac).expect("no directory").is_empty());
+    assert!(
+        repositories::load(&mac, repositories::ROOT_UID)
+            .expect("no directory")
+            .is_empty()
+    );
 }
 
 /// Proves a Debian host announces `apt` exactly when packages-repositories.md section 4.1 says:

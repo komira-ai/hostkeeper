@@ -45,7 +45,7 @@ update coordinator, `hostkeeper-coordinator serve`. The parts are being moved he
 
 | crate | what it holds |
 |---|---|
-| [`hostkeeper`](crates/hostkeeper) | the binary: `hostkeeper daemon` and the plumbing verbs of its own update; it only forwards to `hostkeeper-daemon` |
+| [`hostkeeper`](crates/hostkeeper) | the binary: `hostkeeper daemon`, and `hostkeeper check-repositories`, host setup's check of a repositories directory; it only forwards to `hostkeeper-daemon` |
 | [`hostkeeper-daemon`](crates/hostkeeper-daemon) | the daemon: start-up and its lock, the order executor with its locks and try rules, the held halts, and the enrollment and heartbeat loops (no socket: `hostkeeper admin` and the admin socket are gone) |
 | [`hostkeeper-config`](crates/hostkeeper-config) | the strict loaders of `hostkeeper.toml` and of a package's `manifest.toml`, the owner and mode check of a trusted file, and the name and path grammars |
 | [`hostkeeper-hook`](crates/hostkeeper-hook) | the contract between the host and a service's update hook, and the conformance harness a service tests its hook with (feature `conformance`) |
@@ -188,6 +188,38 @@ advertises it), and the coordinator's orders come back in the replies.
 | 2 | a usage error: an unknown flag or subcommand |
 | 3 | the daemon config did not load |
 | 4 | another daemon holds the state directory's lock |
+
+### Checking a repositories directory
+
+`hostkeeper check-repositories [--dir DIR]` checks a directory of repository entries with the
+daemon's own loader, the code the daemon's start runs on `/etc/hostkeeper/repositories/`
+([packages-repositories.md](docs/design/packages-repositories.md) section 3.1). Host setup runs it,
+as root, before it puts a directory in place and after, since a daemon that refuses its repository
+entries does not start. Without `--dir` it checks `/etc/hostkeeper/repositories`.
+
+`DIR` is judged as the daemon would take it at `/etc/hostkeeper/repositories`: a `Signed-By:
+/etc/hostkeeper/repositories/<file>` names the file `<file>` of `DIR`, so a directory staged
+beside the real one checks as it will read once renamed into place, and a `Signed-By` naming `DIR`
+itself is refused. Every file must be root's and not writable by group or others, as at the start.
+The check runs in the process started, from whichever binary it is run as (`/usr/bin/hostkeeper` or
+`/var/lib/updater/state/hostkeeper/bin/current`): it neither seeds nor execs `current`.
+
+On success it prints one line per entry, in name order, and exits 0:
+
+```
+komira-stable suites=stable keyring=/etc/hostkeeper/repositories/komira.gpg sha256=<hex>
+komira-testing suites=testing keyring=/etc/hostkeeper/repositories/komira.gpg sha256=<hex>
+```
+
+`sha256` is the SHA-256 of the keyring's bytes as the loader read them. A directory that is
+missing or holds no entry passes, as the daemon starts on it, with the one line
+`DIR: no repository entry; the daemon would announce no repository installer`.
+
+| exit status | meaning |
+|---|---|
+| 0 | the loader takes the directory |
+| 1 | the loader refuses it: standard error has `hostkeeper check-repositories: <path>: <why>`, the line the daemon's start would log after the directory's path |
+| 2 | a usage error: an unknown flag, or `--dir` without a value |
 
 ### Operator verbs on the host
 

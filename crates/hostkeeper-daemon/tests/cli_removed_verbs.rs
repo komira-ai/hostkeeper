@@ -1,6 +1,7 @@
 //! The verbs and the flag of the update before the hand-over are gone from the `hostkeeper`
-//! command line (docs/design/two-programs.md, section 4, stage 3): `hostkeeper daemon` is the one
-//! verb, and what the units, the pkg and the releases before it used to call is a usage error.
+//! command line (docs/design/two-programs.md, section 4, stage 3): `hostkeeper daemon` is the
+//! verb that runs the daemon, and what the units, the pkg and the releases before it used to call
+//! is a usage error.
 
 use clap::Parser;
 use clap::error::ErrorKind;
