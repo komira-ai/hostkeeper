@@ -237,7 +237,7 @@ fn pkg_check_holds_the_files_the_public_host_serves_to_the_releases_sums() {
     let o = check("1.2.3", &url);
     assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
     assert!(
-        stdout(&o).contains("as the release's SHA256SUMS lists; its bundle and the directory's SHA256SUMS agree; the installer is unsigned"),
+        stdout(&o).contains("as the release's SHA256SUMS lists; its bundle and the directory's SHA256SUMS agree; these are the release's signed bytes"),
         "{}",
         stdout(&o)
     );

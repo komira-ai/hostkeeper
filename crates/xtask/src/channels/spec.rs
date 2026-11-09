@@ -119,7 +119,7 @@ impl Product {
     }
 
     /// The file name of the macOS installer of `version`: `<name>-<version>-macos-arm64.pkg`. It
-    /// is unsigned and unnotarized until the owner has a Developer ID; nothing here signs it.
+    /// is signed by the release that built it and not notarized; nothing here signs it.
     pub(crate) fn pkg_file(&self, version: &str) -> String {
         format!("{}-{version}-macos-arm64.pkg", self.name)
     }

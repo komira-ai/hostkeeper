@@ -682,6 +682,14 @@ names a format names that one, and `check-macos-pkg` reads both layers (**Built*
   It goes to the maintainers after one independent review. The workflow lint gains the job by
   name, with a negative case (rule T15).
 
+  **Built**: the Developer ID Installer identity exists (`Developer ID Installer: Komira AI, Inc.
+  (U7RTX4XD3X)`), so the release signs with it whatever M11 finds. `artifacts.yml`'s `sign-pkg`
+  (no repository code, the identity in a keychain of the job that is deleted at its end) and
+  `check-pkg` (`cargo xtask release check-pkg-signature`, then the pkg is a release file), held
+  by `crates/xtask/tests/workflows/pkg_signing.rs`; [docs/macos.md](../macos.md), "The
+  installer's signature", walks them. The farm identity's `pkg add` is then needed only if a Mac
+  refuses the Developer ID pkg.
+
 A service's `.pkg` (packages-repositories.md section 4.7) is signed by the same identity, but
 before its release is attested, so CI's pin names the signed bytes. With Developer ID that is
 the release machinery's signing above. With the farm identity, re-signing on the MDM host does not
@@ -971,7 +979,9 @@ LAN.
 
 **Asked only if task M11 fails:**
 
-**Q4. Join the Apple Developer Program for a Developer ID Installer certificate?** This arises
+**Q4. Join the Apple Developer Program for a Developer ID Installer certificate?** Answered:
+the identity exists and the release signs with it (section 7.3). The question as it was asked:
+This arises
 only if the device test shows that a Mac refuses a pkg signed by a farm identity the MDM made
 trusted. Apple requires a signature "verifiable by the device" and does not say Developer ID.
 Joining costs a yearly fee and an organisation enrollment with a D-U-N-S number, which takes days
