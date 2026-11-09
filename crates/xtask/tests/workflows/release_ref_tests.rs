@@ -58,18 +58,20 @@ fn release_yml() -> String {
 /// ran from a checkout of the workflow's own commit: no such checkout, and the host step after
 /// the release's checkout and download, right before the join.
 pub fn before_the_fix(text: &str) -> String {
+    // The steps are found by their keys, not their comments: the own checkout (the one under
+    // the client ID's `if:`), the host step, and the comment-free end of the host step's `run:`.
     let own = text
-        .find("      # Only when HOSTKEEPER_TAILNET_CLIENT_ID is set: the channel's host, by the xtask")
+        .find("      - if: ${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID != '' }}\n        uses: actions/checkout@")
         .expect("the own checkout");
-    let release = text
-        .find("      # The xtask of the release's own commit")
-        .expect("the release checkout");
-    let host = &text[own..release];
-    let step = &host[host
-        .find("      - name: The release channel's host\n")
-        .expect("the host step")..];
+    let host = own
+        + text[own..]
+            .find("      - name: The release channel's host\n")
+            .expect("the host step");
+    let run = "--output \"$GITHUB_OUTPUT\"\n";
+    let end = host + text[host..].find(run).expect("the host step's run") + run.len();
+    let step = &text[host..end];
     let join = "      - name: Join the tailnet\n";
-    let without = format!("{}{}", &text[..own], &text[release..]);
+    let without = format!("{}{}", &text[..own], &text[end..]);
     let moved = without.replacen(join, &format!("{step}{join}"), 1);
     assert_ne!(moved, without, "the join follows");
     moved
@@ -186,6 +188,7 @@ fn a_call_the_floors_command_line_would_refuse_is_refused() {
             "release no-such --flag",
             "`cargo xtask release no-such` is not a verb of release 0.1.208",
         ),
+        ("--flag", "`cargo xtask` names no verb of release 0.1.208"),
     ];
     for (call, why) in cases {
         assert_eq!(floor(call).as_deref(), Some(why), "{call}");
@@ -310,6 +313,10 @@ fn surface_writes_each_verb_with_its_flags_and_arguments() {
         .subcommand(Cli::new("g").subcommand(Cli::new("b")));
     assert_eq!(surface(&cmd), "a --opt --req=! -s= <p>! <rest>...\ng b\n");
     assert_eq!(surface(&Cli::new("x")), "");
+    // A required flag with a short form is required once: the short one is its alias.
+    let cmd = Cli::new("x")
+        .subcommand(Cli::new("a").arg(Arg::new("k").long("k").short('k').required(true)));
+    assert_eq!(surface(&cmd), "a --k=! -k=\n");
     // A short flag of a surface is read as the verb takes it.
     assert_eq!(
         floor_problem(

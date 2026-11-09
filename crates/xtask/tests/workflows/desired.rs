@@ -9,7 +9,7 @@
 //! - [`CHANNEL_JOB`] does not need exactly `plan` and `publish` (it runs once every release of the
 //!   run is published, and not before), holds other token rights than exactly
 //!   [`CHANNEL_PERMISSIONS`], has a step with a key outside [`STEP_KEYS`] (a `continue-on-error`,
-//!   or an `if:` on any step but those of the tailnet join, whose `if:` is in their
+//!   or an `if:` on any step but those that run only with a client ID, whose `if:` is in their
 //!   [`CHANNEL_STEPS`] entry), or its steps are not exactly [`CHANNEL_STEPS`], in that order,
 //!   with their `if`, `with` and `env`: the newest version of the run and its commit, only
 //!   when [`JOIN_IF`] holds the channel's host (the step [`HOST_STEP`]) by the xtask of a
@@ -59,7 +59,7 @@ pub const DESIRED_IF: &str = "${{ needs.plan.outputs.release == 'true' && github
 pub const SET_IF: &str = "${{ needs.plan.outputs.release == 'true' && github.ref == 'refs/heads/main' && vars.RELEASE_SETS_DESIRED == 'true' && needs.channel.outputs.newest == 'true' }}";
 
 /// The keys a step of [`CHANNEL_JOB`] may have: no `if:` that could skip it (but the `if:`
-/// [`JOIN_IF`] of the steps of the join, which [`CHANNEL_STEPS`] writes), no
+/// [`JOIN_IF`] of the steps that run only with a client ID, which [`CHANNEL_STEPS`] writes), no
 /// `continue-on-error` that could let it fail, no `shell` or `working-directory` that could
 /// change what its command does.
 pub const STEP_KEYS: [&str; 6] = ["env", "id", "name", "run", "uses", "with"];
@@ -68,7 +68,8 @@ pub const STEP_KEYS: [&str; 6] = ["env", "id", "name", "run", "uses", "with"];
 /// asks GitHub for an OIDC token, as the CI client's join does.
 pub const CHANNEL_PERMISSIONS: [(&str, &str); 2] = [("contents", "read"), ("id-token", "write")];
 
-/// The `if:` of the steps of the tailnet join in [`CHANNEL_JOB`], and the value every caller
+/// The `if:` of the steps of [`CHANNEL_JOB`] that run only with a client ID (the checkout of the
+/// workflow's own commit, its toolchain, the host step and the tailnet join), and the value every caller
 /// of the CI client passes as `join_tailnet`: the repository variable of the federated identity's
 /// client ID is set. Empty, the runner does not join, and reaches the channel as it is.
 pub const JOIN_IF: &str = "${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID != '' }}";

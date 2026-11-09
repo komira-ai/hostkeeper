@@ -581,3 +581,42 @@ fn a_set_desired_job_without_the_channel_jobs_targets_is_refused() {
         &[want],
     );
 }
+
+#[test]
+fn a_host_step_run_by_the_xtask_of_the_releases_commit_is_refused() {
+    // Catches: the checkout before the host step given the release's `ref` (the verb then runs
+    // from a commit that may predate it), and that checkout made to run without a client ID.
+    let own = "      - if: ${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID != '' }}\n        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          persist-credentials: false\n";
+    let line = release_yml()
+        .lines()
+        .position(|l| l.contains("run: cargo xtask release channel-host"))
+        .map(|at| at + 2)
+        .expect("the host step");
+    assert_problems(
+        own,
+        &own.replace(
+            "          persist-credentials: false\n",
+            "          ref: ${{ steps.newest.outputs.commit }}\n          persist-credentials: false\n",
+        ),
+        &[
+            &step_problem(
+                2,
+                "if ${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID != '' }} uses actions/checkout with persist-credentials=false with ref=${{ steps.newest.outputs.commit }}",
+            ),
+            &format!(
+                "release.yml: job channel step 4 (line {line}) runs the xtask of `${{{{ steps.newest.outputs.commit }}}}`, which may be as old as release 0.1.208: `cargo xtask release channel-host` is not a verb of release 0.1.208"
+            ),
+        ],
+    );
+    assert_problems(
+        own,
+        &own.replace(
+            "      - if: ${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID != '' }}\n        uses",
+            "      - uses",
+        ),
+        &[&step_problem(
+            2,
+            "uses actions/checkout with persist-credentials=false",
+        )],
+    );
+}

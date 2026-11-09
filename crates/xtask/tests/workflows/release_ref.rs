@@ -21,12 +21,19 @@
 //! It also refuses, in a job that calls xtask, a checkout of another repository or into a
 //! `path`: a later call would not run the checkout this rule reads.
 //!
+//! What the floor's command line records, and so what is checked, is each verb's flags (a short
+//! form as an alias of its long one), whether each takes a value or is always required, and its
+//! positional arguments. Not recorded, so not checked: a requirement that depends on another
+//! flag (`required_unless_present`, `conflicts_with`), a global flag, a flag of several values,
+//! and a short flag with its value attached (`-sVALUE`); xtask's own command line uses none of
+//! the last three. A checkout under an `if:` is taken as run, and a `working-directory` is not
+//! read.
+//!
 //! A job that needs a verb newer than [`FLOOR`] runs it from a checkout of the workflow's own
 //! commit (as the job `channel` of `release.yml` does for `release channel-host`), or waits
 //! until a release that has the verb is published and [`FLOOR`] and [`SURFACE_FILE`] move to it:
-//! [`surface`] of that release's [`xtask::test_support::cli`], written by a checkout of its tag
-//! (the test `the_surface_of_the_floor_is_written_as_surface_writes_it` shows the format is the
-//! one [`surface`] writes).
+//! [`surface`] of that release's `xtask::test_support::cli()`, run from a checkout of its tag,
+//! with the header line the test of the file names.
 
 use clap::{ArgAction, Command};
 
@@ -105,7 +112,9 @@ fn leaves(cmd: &Command, path: &mut Vec<String>, out: &mut Vec<String>) {
             if let Some(long) = a.get_long() {
                 flags.push(format!("--{long}{value}{required}"));
             }
+            // A short form is an alias: the long one, when there is one, carries the requirement.
             if let Some(short) = a.get_short() {
+                let required = if a.get_long().is_some() { "" } else { required };
                 flags.push(format!("-{short}{value}{required}"));
             }
         }
@@ -170,10 +179,20 @@ pub fn floor_problem(verbs: &str, args: &[String]) -> Option<String> {
             .filter(|(verb, _)| args.starts_with(verb))
             .max_by_key(|(verb, _)| verb.len())
         else {
-            let shown = args.iter().take_while(|w| !w.starts_with('-')).cloned();
+            let shown: Vec<String> = args
+                .iter()
+                .take_while(|w| !w.starts_with('-'))
+                .cloned()
+                .collect();
+            if shown.is_empty() {
+                return Some(format!(
+                    "`cargo xtask` names no verb of release {}",
+                    FLOOR.0
+                ));
+            }
             return Some(format!(
                 "`cargo xtask {}` is not a verb of release {}",
-                shown.collect::<Vec<_>>().join(" "),
+                shown.join(" "),
                 FLOOR.0
             ));
         };
