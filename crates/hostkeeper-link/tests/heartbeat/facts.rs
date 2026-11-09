@@ -41,6 +41,7 @@ fn heartbeat_lists_installed_services_from_records_and_observer() {
             version: Some(version("1.0")),
             health: Health::Unhealthy,
             health_detail: Some("probe refused".to_owned()),
+            drift: None,
         },
     );
     let mut heartbeater = rig.heartbeater();
@@ -64,6 +65,7 @@ fn heartbeat_lists_installed_services_from_records_and_observer() {
                 }),
                 record_try: None,
                 installer: None,
+                drift: None,
             },
             ServiceFacts {
                 name: service("y"),
@@ -79,6 +81,7 @@ fn heartbeat_lists_installed_services_from_records_and_observer() {
                 }),
                 record_try: Some(1),
                 installer: Some("tarball".to_owned()),
+                drift: None,
             },
         ],
         sent_unix: hostkeeper_link::testing::START_UNIX,
@@ -374,4 +377,40 @@ fn every_heartbeat_lists_the_installers_the_loop_was_given() {
     plain.install(Vec::new());
     assert_eq!(plain.heartbeater().beat_once(), BeatOutcome::Sent);
     assert_eq!(plain.world.link.beats()[0].installers, Vec::<String>::new());
+}
+
+/// Proves the drift the observer answered for a service is in that service's facts, and a
+/// service whose observation has none has none.
+///
+/// Catches: a drift lost between the observation and the heartbeat, or carried to another
+/// service.
+#[test]
+fn the_drift_the_observer_found_is_in_the_services_facts() {
+    use hostkeeper_link::Drift;
+
+    let rig = Rig::new("facts-drift");
+    rig.install(vec![recorded("x", "1.0"), recorded("y", "1.0")]);
+    let found = Drift {
+        found: Some("2.0-1".to_owned()),
+        recorded: None,
+    };
+    rig.world.observer.set(
+        &service("x"),
+        Observation {
+            liveness: Liveness::Running,
+            version: Some(version("1.0")),
+            health: Health::Healthy,
+            health_detail: None,
+            drift: Some(found.clone()),
+        },
+    );
+    let mut heartbeater = rig.heartbeater();
+    assert_eq!(heartbeater.beat_once(), BeatOutcome::Sent);
+    let beat = rig.world.link.beats().remove(0);
+    let drifts: Vec<(&str, Option<Drift>)> = beat
+        .services
+        .iter()
+        .map(|facts| (facts.name.as_str(), facts.drift.clone()))
+        .collect();
+    assert_eq!(drifts, [("x", Some(found)), ("y", None)]);
 }

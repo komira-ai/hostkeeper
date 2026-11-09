@@ -10,6 +10,8 @@
 //! - [`macos_pkg`]: `macos-pkg`, a service from a signed flat `.pkg` installed by `installer`
 //!   (packages-repositories.md section 4.7), with its signers file, its receipts, its record and
 //!   the observer's drift check, over the ports below.
+//! - [`repository`]: the repository installer kind and its `apt` backend (packages-repositories.md):
+//!   the host's repository entries, stage, activate, rollback, remove and drift.
 //! - [`tools`]: the tools an installer runs by absolute path, behind the [`Tools`] port.
 //! - [`host`]: the host's file system under a root, and the accounts its checks trust.
 //! - [`lock`]: the host-wide installer lock.
@@ -27,6 +29,7 @@ pub mod installer;
 pub mod lock;
 pub mod macos_pkg;
 pub mod outcome;
+pub mod repository;
 pub mod tools;
 
 pub use announce::{Announcement, Family, announce};

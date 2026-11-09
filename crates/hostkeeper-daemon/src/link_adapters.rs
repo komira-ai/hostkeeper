@@ -413,6 +413,7 @@ impl ServiceObserver for DaemonObserver {
                 version: None,
                 health: Health::Unhealthy,
                 health_detail: Some(NOT_OBSERVED.to_owned()),
+                drift: None,
             },
             |seen| observation(&seen),
         )
@@ -449,6 +450,9 @@ pub fn observation(seen: &hostkeeper_observe::Observation) -> Observation {
         version,
         health,
         health_detail: seen.reason_token().map(str::to_owned),
+        // No installer of this build reports drift yet: the apt installer's drift is read by
+        // `hostkeeper-install`'s repository installer once the daemon runs it.
+        drift: None,
     }
 }
 

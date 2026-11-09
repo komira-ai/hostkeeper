@@ -39,6 +39,7 @@ use std::sync::Arc;
 use hostkeeper_config::daemon::{ConfigError, DaemonConfig};
 use hostkeeper_config::manifest::{BadHostkeeperVersion, HostkeeperVersion};
 use hostkeeper_install::macos_pkg::signers::SignersError;
+use hostkeeper_install::repository::config::RepositoriesError;
 use hostkeeper_observe::unlink_stale_registration_socket;
 use hostkeeper_package::stores::StoresError;
 use hostkeeper_placed::BootView;
@@ -119,6 +120,14 @@ pub enum StartError {
         #[source]
         source: SignersError,
     },
+    /// The host's repository configuration directory is not sound; the error names the file and
+    /// the rule it breaks.
+    #[error("{}: {source}", path.display())]
+    Repositories {
+        path: PathBuf,
+        #[source]
+        source: RepositoriesError,
+    },
     /// Another daemon holds the state directory, or its lock cannot be taken.
     #[error("another daemon holds {}, or its lock cannot be taken: {source}", path.display())]
     Locked {
@@ -156,7 +165,8 @@ impl StartError {
             StartError::Config { .. }
             | StartError::MacConfig(_)
             | StartError::Stores { .. }
-            | StartError::MacosPkg { .. } => EXIT_CONFIG,
+            | StartError::MacosPkg { .. }
+            | StartError::Repositories { .. } => EXIT_CONFIG,
             StartError::Locked { .. } => EXIT_LOCKED,
             StartError::Io { .. }
             | StartError::Runtime(_)

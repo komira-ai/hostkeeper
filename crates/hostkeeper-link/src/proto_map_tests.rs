@@ -37,6 +37,7 @@ fn facts(service: &str, at: &str) -> ServiceFacts {
         observed: None,
         record_try: None,
         installer: None,
+        drift: None,
     }
 }
 
@@ -848,4 +849,59 @@ fn the_size_measure_counts_a_services_installer() {
         named.encoded_len() - plain.encoded_len(),
         "tarball".len() + 2 - "null".len()
     );
+}
+
+/// Proves a service's drift goes out as `drift` with its strings as they are, a drift with one
+/// string absent keeps it absent (`found` absent: the package is not installed), a service with
+/// no drift sends none, and a drift with a string outside the grammar of a package version (empty,
+/// 129 bytes, a space) is sent as none while the heartbeat still goes out.
+///
+/// Catches: a drift left out of the beat, an absent string sent as an empty one, a bad version
+/// sent to a coordinator that shows it, or a bad drift that refuses the beat.
+#[test]
+fn a_services_drift_goes_out_when_its_strings_are_package_versions() {
+    use crate::Drift;
+    let drifting = |found: Option<&str>, recorded: Option<&str>| {
+        let mut one = facts("web", "1.0");
+        one.drift = Some(Drift {
+            found: found.map(str::to_owned),
+            recorded: recorded.map(str::to_owned),
+        });
+        sent(&beat(Platform::LinuxX86_64, vec![one])).services[0]
+            .drift
+            .clone()
+    };
+    assert_eq!(
+        drifting(Some("2:1.0~rc1-1"), Some("1.0-1")),
+        Some(pb::DriftReport {
+            found: Some("2:1.0~rc1-1".to_owned()),
+            recorded: Some("1.0-1".to_owned()),
+        })
+    );
+    assert_eq!(
+        drifting(None, Some("1.0-1")),
+        Some(pb::DriftReport {
+            found: None,
+            recorded: Some("1.0-1".to_owned()),
+        })
+    );
+    let longest = "9".repeat(128);
+    assert_eq!(
+        drifting(Some(&longest), None),
+        Some(pb::DriftReport {
+            found: Some(longest.clone()),
+            recorded: None,
+        })
+    );
+    let too_long = "9".repeat(129);
+    for (found, recorded) in [
+        (Some(""), None),
+        (Some(too_long.as_str()), None),
+        (None, Some("1 0")),
+        (Some("2.0"), Some("1/0")),
+    ] {
+        assert_eq!(drifting(found, recorded), None, "{found:?} {recorded:?}");
+    }
+    let plain = sent(&beat(Platform::LinuxX86_64, vec![facts("web", "1.0")]));
+    assert_eq!(plain.services[0].drift, None);
 }

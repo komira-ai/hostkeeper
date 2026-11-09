@@ -483,6 +483,7 @@ impl Heartbeater {
                 }),
                 record_try,
                 installer,
+                drift: observation.drift,
                 name,
             });
         }
@@ -567,6 +568,7 @@ impl Heartbeater {
             }),
             record_try: None,
             installer: None,
+            drift: None,
             name,
         }
     }

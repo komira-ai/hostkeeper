@@ -1636,6 +1636,7 @@ dependencies = [
  "hostkeeper-launchd",
  "hostkeeper-proto",
  "hostkeeper-release",
+ "hostkeeper-steps",
  "hostkeeper-testkit",
  "hostkeeper-unpack",
  "libc",
