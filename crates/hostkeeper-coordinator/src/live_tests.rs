@@ -14,6 +14,7 @@ use hostkeeper_wire::wire::{Heartbeat, Outcome};
 use crate::decide::{Decision, Gate, decide_why};
 use crate::desired::Desired;
 use crate::fleet::{Fleet, Marks};
+use crate::holds::{HoldMark, HoldScope};
 use crate::rollouts::plan_proto;
 use crate::services::Services;
 use crate::stages::{HostState, View, is_live};
@@ -195,10 +196,9 @@ fn while_a_genuinely_updates_or_bakes_a_host_b_waits_and_its_plan_names_a() {
 
 /// Behaviour: the host of the incident, which failed its first install of `a` at 2.0 and
 /// reports it unhealthy at 2.0, is `failed` in `a`'s plan (not `updating`), so `a`'s plan, with a
-/// host left to roll, is held by it (`stage_failed`) and is not live: `b` is ordered. Excluding
-/// the host from `a` frees nothing that was held, as before; it never bakes. Catches a halted
-/// install read as an update still running or a bake, which holds every other service until an
-/// operator abandons the host.
+/// host left to roll, is held by it (`stage_failed`) and is not live: `b` is ordered. Once it
+/// beats healthy it is no longer `failed`. Catches a halted install read as an update still
+/// running or a bake, which holds every other service until an operator abandons the host.
 #[test]
 fn a_host_left_unhealthy_at_the_version_it_failed_is_failed_and_bakes_nothing() {
     let mut f = farm(failed("2.0"));
@@ -215,13 +215,6 @@ fn a_host_left_unhealthy_at_the_version_it_failed_is_failed_and_bakes_nothing() 
         plan(&f, "a", false).waiting,
         i32::from(proto::PlanWait::FailedHost)
     );
-
-    f.set_marks(Marks {
-        excluded: BTreeSet::from([("a".to_owned(), "a1".to_owned())]),
-        ..Marks::default()
-    });
-    assert!(!a_live(&f));
-    assert_eq!(why(&f, "b", "b1"), go_b(), "a1 excluded");
 
     let mut healthy = failed("2.0");
     healthy.health = hostkeeper_wire::wire::Health::Healthy;
@@ -260,4 +253,51 @@ fn a_plan_that_waits_elsewhere_names_every_live_service_and_no_other_does() {
     let b = plan(&f, "b", false);
     assert_eq!(b.waiting, i32::from(proto::PlanWait::None));
     assert_eq!(b.waiting_on, Vec::<String>::new());
+}
+
+/// Behaviour: `a1` is healthy at 2.0 with its bake not finished, so `a` is live and `b` waits;
+/// the bake no longer holds `b` once an operator excludes `a1` from `a`, holds `a` on it, or
+/// marks 2.0 of `a` bad. Catches a bake an operator took out of the plan, or of a version marked
+/// bad, keeping the farm's one live rollout.
+#[test]
+fn a_bake_an_operator_took_out_of_the_plan_or_marked_bad_holds_no_other_service() {
+    let baking = farm(beat("2.0"));
+    assert!(a_live(&baking));
+    assert_eq!(why(&baking, "b", "b1"), elsewhere());
+    let hold = HoldMark {
+        service: "a".to_owned(),
+        scope: HoldScope::Host("a1".to_owned()),
+        reason: "investigating".to_owned(),
+        by: "operator".to_owned(),
+        at_unix: 1_800_000_000,
+    };
+    let marks = [
+        (
+            "excluded",
+            Marks {
+                excluded: BTreeSet::from([("a".to_owned(), "a1".to_owned())]),
+                ..Marks::default()
+            },
+        ),
+        (
+            "held",
+            Marks {
+                holds: vec![hold],
+                ..Marks::default()
+            },
+        ),
+        (
+            "marked bad",
+            Marks {
+                bad: BTreeMap::from([("a".to_owned(), vec![version("2.0")])]),
+                ..Marks::default()
+            },
+        ),
+    ];
+    for (case, marks) in marks {
+        let mut f = baking.clone();
+        f.set_marks(marks);
+        assert!(!a_live(&f), "{case}");
+        assert_eq!(why(&f, "b", "b1"), go_b(), "{case}");
+    }
 }
