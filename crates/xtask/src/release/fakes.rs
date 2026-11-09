@@ -650,6 +650,9 @@ pub(crate) struct FakePkgbuild {
     pub(crate) calls: RefCell<Vec<PkgCall>>,
     pub(crate) product_calls: RefCell<Vec<ProductCall>>,
     pub(crate) trees: RefCell<Vec<Vec<String>>>,
+    /// What `check_signature` answers: the report `pkgutil` prints, or its failure.
+    pub(crate) signature: Option<Result<String, PortError>>,
+    pub(crate) signature_calls: RefCell<Vec<PathBuf>>,
 }
 
 impl FakePkgbuild {
@@ -730,6 +733,13 @@ impl BuildPkg for FakePkgbuild {
                 Ok(())
             }
         }
+    }
+
+    fn check_signature(&self, pkg: &Path) -> Result<String, PortError> {
+        self.signature_calls.borrow_mut().push(pkg.to_owned());
+        self.signature
+            .clone()
+            .unwrap_or_else(|| Err(PortError::new("pkgutil", "not scripted")))
     }
 }
 
