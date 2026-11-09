@@ -16,7 +16,8 @@ pub const KEYRING: &str = "komira-archive-keyring.gpg";
 /// Where the installed host keeps them.
 const HOST_DIR: &str = "/etc/hostkeeper/repositories";
 
-/// The keyring's bytes: not text, with a zero byte and a high one. The loader does not read it.
+/// The keyring's bytes: binary, as the loader requires (its first byte an OpenPGP packet header),
+/// with a zero byte and a high one. The loader judges no more of it than that byte.
 const KEYRING_BYTES: [u8; 8] = [0x99, 0x01, 0x0d, 0x00, 0xff, 0x0a, 0x7f, 0x80];
 
 /// The files of the directory, `(name, bytes)`, in name order.

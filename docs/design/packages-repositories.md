@@ -227,10 +227,13 @@ files) on any other file, a `.sources` file whose stem is not of the grammar of 
 root-owned or writable by group or others, or a stanza that is not exactly one
 stanza with `Types: deb`, one URI of `https://` or `file:/` (a repository on the host's own disk, as the device tests
 and an install image use), one suite, at least one component, and `Signed-By:` an absolute path to a keyring in that
-directory. `Trusted:`, `Allow-Insecure:`, `Allow-Weak:`, `Allow-Downgrade-To-Insecure:` and `Check-Valid-Until: no`
+directory; the keyring is read, at most 1 MiB, and must be what apt reads at its name: armored when it is named `.asc`,
+a binary OpenPGP keyring otherwise (an empty file, or armor in a `.gpg`, is refused). `Trusted:`, `Allow-Insecure:`, `Allow-Weak:`, `Allow-Downgrade-To-Insecure:` and `Check-Valid-Until: no`
 are refused: an entry that turns off apt's signature checks is never used. A daemon that refuses to start runs no
 self-update either, which is why host setup checks the directory with the daemon's own loader before it writes it
-(section 3.2), as it does `hostkeeper.toml`.
+(section 3.2), as it does `hostkeeper.toml`: `hostkeeper check-repositories --dir DIR` judges a staged directory as
+the daemon would take it here (a `Signed-By` of this directory names the file of `DIR`), exits 0 listing each entry,
+and 1 with the loader's refusal (README, "Checking a repositories directory").
 
 These files are hostkeeper's and not the system's: they are not in `/etc/apt/sources.list.d/`, so the host's own
 `apt-get upgrade` and unattended upgrades never see the repository through them. An operator may list the same

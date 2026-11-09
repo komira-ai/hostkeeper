@@ -137,7 +137,9 @@ run only in the device jobs (`privileged`, `macos-device`), whose tests count to
   3.1: a name outside the grammar, a file or keyring not root-owned or group- or other-writable, two stanzas, a type
   other than `deb`, two URIs, an `http://` URI, two suites, no component, a `Signed-By` that is relative, outside the
   directory or an inline key, and each of `Trusted`, `Allow-Insecure`, `Allow-Weak`, `Allow-Downgrade-To-Insecure` and
-  `Check-Valid-Until: no`. An empty directory and a missing one load as no repository.
+  `Check-Valid-Until: no`. An empty directory and a missing one load as no repository. A keyring that is armored,
+  empty or text, or over 1 MiB, is refused naming the entry, one of exactly 1 MiB loads, a `.asc` keyring loads only
+  when armored, and the loader gives the bytes it judged (`crates/hostkeeper-install/tests/repositories_keyring.rs`).
 - **The `apt` installer (A7; `crates/hostkeeper-install/tests/apt.rs` with the command port's fake, device tests in
   `crates/hostkeeper-privileged/tests/install_apt.rs`).** Every apt run's command line carries every option of
   packages-repositories.md section 4.2, its work directory and no host path for lists or caches (the fake records each
@@ -210,7 +212,13 @@ run only in the device jobs (`privileged`, `macos-device`), whose tests count to
   (`crates/hostkeeper-pxe/src/serve/tests/repositories.rs`, the golden `user-data-repositories.yaml` of
   `crates/hostkeeper-pxe-seed/tests/seed.rs`); a directory the loader refuses, a missing or empty one, and a keyring
   over the cap are refused at the start with the loader's reason, before any socket; the loader judges a source
-  directory as it will be placed (`crates/hostkeeper-install/tests/repositories_placed.rs`). The network-install guest
+  directory as it will be placed (`crates/hostkeeper-install/tests/repositories_placed.rs`). On a host set up by hand,
+  `hostkeeper check-repositories --dir DIR` passes the staged two channels and their keyring, listing each entry with
+  its keyring's SHA-256, refuses a missing keyring, an `http://` URI, a `.sources` that is a directory, a stray link
+  and an armored keyring with the loader's message, resolves a `Signed-By` of `/etc/hostkeeper/repositories/` to
+  `DIR`, and accepts and refuses exactly what the daemon's start does on the same files
+  (`crates/hostkeeper-daemon/tests/check_repositories.rs`; the real binary in `crates/hostkeeper/tests/binary.rs`).
+  The network-install guest
   test serves with `--repositories` and checks the installed host's `/etc/hostkeeper/repositories/`
   (`crates/hostkeeper-privileged/tests/net_install.rs`, in `net-install.yml`). A Mac's daemon renders `stores.toml`
   and `macos-pkg.toml` from `dev.hostkeeper.stores` and `dev.hostkeeper.macos-pkg`, replacing a file that differs,

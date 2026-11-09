@@ -35,7 +35,9 @@ the rpm, and `hostkeeper-mdm` ships as its own tarball.
 
 **After.**
 
-- `hostkeeper daemon` is the only verb of `hostkeeper`. `hostkeeper --version` stays.
+- `hostkeeper daemon` is the only verb of `hostkeeper` that runs the daemon. `hostkeeper --version` stays.
+  `hostkeeper check-repositories` was added after this design: host setup's check of a repositories directory with
+  the daemon's own loader (packages-repositories.md section 3.1), which only the binary the daemon runs can give.
 - `hostkeeper-coordinator serve` is the only verb of the coordinator once the storage move is done (section 7).
 - `hkctl` is the command line. It is one bash script, generated from the protobuf, released as an attested asset. It
   calls the private listener's JSON gateway with `curl`. Its command tree is the one `hostkeeper ctl` has today
@@ -179,7 +181,8 @@ by the existing scanner (`call_sites`, **Built**) and checked against the real r
 
 | Program | Verb | Fate |
 |---|---|---|
-| `hostkeeper` | `daemon` | Kept, the only verb. Gains the seed, the Mac config and the hand-over (2.1). |
+| `hostkeeper` | `daemon` | Kept, the only verb that runs the daemon. Gains the seed, the Mac config and the hand-over (2.1). |
+| | `check-repositories` | Added later: checks a repositories directory with the daemon's loader, for host setup (packages-repositories.md section 3.1). |
 | | `--version` | Kept (a flag). |
 | | `admin status` | Deleted (**Built**, K3). `hkctl hosts get --node-id <id>`; on a host the coordinator cannot reach, the journal or `daemon.err.log`. |
 | | `admin abort <service>` | Deleted (**Built**, K3). `hkctl hosts abort` (**Built**: `Hosts.Abort`, for daemons that announce `abort-v1`). Off-line: stop the daemon. |
@@ -933,7 +936,7 @@ floor); S2a waits for the farm.
 
 | Question | Decision | Why |
 |---|---|---|
-| Bare `hostkeeper` or `hostkeeper daemon` | `daemon`, the only verb | Every live unit, plist and fallback text names it; a bare form would be a second way. |
+| Bare `hostkeeper` or `hostkeeper daemon` | `daemon`, the only verb that runs the daemon | Every live unit, plist and fallback text names it; a bare form would be a second way. |
 | The coordinator's file name | `hostkeeper-coordinator`, verb `serve` | The image, the assets and deployments name both; a rename buys nothing. |
 | The CLI's name | `hkctl` | Short, distinct from both programs, and not a verb of either. |
 | The CLI's transport | The JSON gateway only, bearer tokens only | The ruling's bash client; mutual TLS is the daemon's link alone. |

@@ -113,7 +113,8 @@ packages (item A23) are the daemon's `hostkeeper_<version>_<arch>.deb` and the i
 `cargo xtask release targets` (`--service hostkeeper`, the default, and `--service hello` and
 `--service mdm`) lists, for each Linux platform, the native entry alone (docs/design/packages-native.md,
 section 10.5, A24): an `apt` entry of the host's repository entry `komira-testing`, the `testing` suite
-above (`/etc/hostkeeper/repositories/komira-testing.sources`, placed by host setup), at the release's
+above (`/etc/hostkeeper/repositories/komira-testing.sources`, placed by host setup, which checks the
+directory with `hostkeeper check-repositories` before and after it places it), at the release's
 version, pinned by the `.deb`'s SHA-256. It writes no `hostkeeper-archive` entry, and no list for macOS
 while no daemon announces `macos-pkg`: the release's `.pkg`s are still published to the store, and a
 Mac (none is enrolled) would show `no_target`. hello's failing build is refused by name: it has no

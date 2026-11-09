@@ -226,21 +226,42 @@ fn a_missing_or_empty_directory_refuses_the_start() {
     );
 }
 
-/// A keyring over 1 MiB is refused naming it, and a keyring whose name a seed cannot carry is
-/// refused naming the directory.
+/// A keyring over 1 MiB or armored is refused by the loader naming the entry, and a keyring whose
+/// name a seed cannot carry is refused naming the directory.
 ///
-/// Catches a multi-megabyte file copied into the seed of every machine, and a `write_files` path
-/// built from a name with a space in it.
+/// Catches a multi-megabyte file copied into the seed of every machine, an armored keyring sent
+/// to every machine whose apt cannot read it, and a `write_files` path built from a name with a
+/// space in it.
 #[test]
-fn a_keyring_too_large_or_with_an_unusable_name_is_refused() {
+fn a_keyring_too_large_armored_or_with_an_unusable_name_is_refused() {
     let kit = Kit::new("repositories-keyring");
     let dir = directory(&kit);
-    put(&dir, "k.gpg", &vec![0; 1024 * 1024 + 1], 0o644);
+    let mut full = KEYRING.to_vec();
+    full.resize(1024 * 1024 + 1, 0);
+    put(&dir, "k.gpg", &full, 0o644);
     assert_eq!(
         refusal(&kit, &dir),
-        format!("{}: is over 1048576 bytes", dir.join("k.gpg").display())
+        format!(
+            "{}: the keyring it names is over 1048576 bytes",
+            dir.join("a.sources").display()
+        )
     );
-    put(&dir, "k.gpg", &vec![0; 1024 * 1024], 0o644);
+    put(
+        &dir,
+        "k.gpg",
+        b"-----BEGIN PGP PUBLIC KEY BLOCK-----\n",
+        0o644,
+    );
+    assert_eq!(
+        refusal(&kit, &dir),
+        format!(
+            "{}: the keyring it names is not a binary OpenPGP keyring (it is empty or armored \
+             text); apt reads armor only from a keyring named .asc",
+            dir.join("a.sources").display()
+        )
+    );
+    full.pop();
+    put(&dir, "k.gpg", &full, 0o644);
     let run = kit.start(args(&kit, &dir));
     assert_eq!(
         run.stop().0,
