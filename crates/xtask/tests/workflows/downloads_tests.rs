@@ -5,7 +5,7 @@
 use super::{CLEAN, assert_problems, lint, with_in, workflows_dir};
 
 /// The options every download carries, as the workflows write them.
-const FLAGS: &str = "--proto =https --proto-redir =https --tlsv1.2 --fail --retry 5 --retry-delay 5 --retry-max-time 300 --retry-all-errors";
+const FLAGS: &str = "--proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors";
 
 /// [`CLEAN`] whose one `run:` is the block scalar `body` (each line indented under `run: |`).
 fn run(body: &str) -> String {
@@ -33,7 +33,7 @@ fn a_download_with_every_guard_and_retry_option_passes_in_every_shape() {
     assert_problems(&curl(FLAGS), &[]);
     assert_problems(
         &run(
-            "curl --proto =https --proto-redir =https \\\n  --tlsv1.2 --fail \\\n  --retry 5 --retry-delay 5 --retry-max-time 300 --retry-all-errors \\\n  --output a https://example.com/a",
+            "curl --proto =https --proto-redir =https \\\n  --tlsv1.2 --fail \\\n  --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors \\\n  --output a https://example.com/a",
         ),
         &[],
     );
@@ -66,9 +66,9 @@ fn a_download_without_a_guard_or_a_retry_option_is_refused() {
         ("--proto-redir =https ", "`--proto-redir =https`"),
         ("--tlsv1.2 ", "`--tlsv1.2`"),
         ("--fail ", "`--fail`"),
-        ("--retry 5 ", "`--retry <n>`"),
-        ("--retry-delay 5 ", "`--retry-delay <n>`"),
-        ("--retry-max-time 300 ", "`--retry-max-time <n>`"),
+        ("--retry 60 ", "`--retry <n>`"),
+        ("--retry-delay 10 ", "`--retry-delay <n>`"),
+        ("--retry-max-time 600 ", "`--retry-max-time <n>`"),
         (" --retry-all-errors", "`--retry-all-errors`"),
     ] {
         let options = FLAGS.replacen(drop, "", 1);
@@ -102,17 +102,17 @@ fn a_guard_or_a_retry_option_with_another_value_is_refused() {
         &["line 17: a curl's `--proto-redir` is `=http`, not `=https`"],
     );
     assert_problems(
-        &swap("--retry 5", "--retry 0"),
+        &swap("--retry 60", "--retry 0"),
         &["line 17: a curl's `--retry` is `0`, not a whole number above 0"],
     );
     assert_problems(
-        &swap("--retry-delay 5", "--retry-delay 5s"),
-        &["line 17: a curl's `--retry-delay` is `5s`, not a whole number above 0"],
+        &swap("--retry-delay 10", "--retry-delay 10s"),
+        &["line 17: a curl's `--retry-delay` is `10s`, not a whole number above 0"],
     );
     assert_problems(
         &run(&format!(
             "curl {} --retry-max-time",
-            FLAGS.replacen(" --retry-max-time 300", "", 1)
+            FLAGS.replacen(" --retry-max-time 600", "", 1)
         )),
         &["line 17: a curl's `--retry-max-time` is ``, not a whole number above 0"],
     );
@@ -204,7 +204,7 @@ fn a_download_with_wget_or_gh_release_download_is_refused() {
 fn the_cyclonedx_download_of_artifacts_yml_without_its_retries_is_refused() {
     let text = std::fs::read_to_string(workflows_dir().join("artifacts.yml")).expect("read");
     assert_eq!(lint("artifacts.yml", &text), Vec::<String>::new());
-    let download = "--fail --retry 5 --retry-delay 5 --retry-max-time 300 --retry-all-errors --silent --show-error --location --output \"$RUNNER_TEMP/cyclonedx.tar.xz\"";
+    let download = "--fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --output \"$RUNNER_TEMP/cyclonedx.tar.xz\"";
     let at = text.find(download).expect("the cyclonedx download");
     let line = text[..at].lines().count();
     let changed = text.replacen(
@@ -217,5 +217,74 @@ fn the_cyclonedx_download_of_artifacts_yml_without_its_retries_is_refused() {
         vec![format!(
             "line {line}: a curl lacks `--retry-all-errors`, `--retry <n>`, `--retry-delay <n>`, `--retry-max-time <n>`"
         )]
+    );
+}
+
+/// Proves: a download whose retries span less than 600 seconds is refused, as `--retry` times
+/// `--retry-delay` and as `--retry-max-time`, each with its own message: the five tries 5
+/// seconds apart within 300 seconds every workflow had, one second under the floor on either
+/// side, and both at once. Exactly 600 passes, and so do the largest counts curl's values allow,
+/// whose product is still held.
+/// Catches: a download whose retries end inside one of GitHub's spells of 504s, as cargo-deny's
+/// did on main.
+#[test]
+fn a_download_whose_retries_span_less_than_600_seconds_is_refused() {
+    let retries = |options: &str| {
+        curl(&format!(
+            "--proto =https --proto-redir =https --tlsv1.2 --fail {options} --retry-all-errors"
+        ))
+    };
+    assert_problems(
+        &retries("--retry 5 --retry-delay 5 --retry-max-time 300"),
+        &[
+            "line 17: a curl's retries wait 5 × 5s = 25s, under 600s",
+            "line 17: a curl's `--retry-max-time` is 300, under 600",
+        ],
+    );
+    assert_problems(
+        &retries("--retry 599 --retry-delay 1 --retry-max-time 600"),
+        &["line 17: a curl's retries wait 599 × 1s = 599s, under 600s"],
+    );
+    assert_problems(
+        &retries("--retry 60 --retry-delay 10 --retry-max-time 599"),
+        &["line 17: a curl's `--retry-max-time` is 599, under 600"],
+    );
+    assert_problems(
+        &retries("--retry 600 --retry-delay 1 --retry-max-time 600"),
+        &[],
+    );
+    assert_problems(
+        &retries("--retry 1 --retry-delay 600 --retry-max-time 600"),
+        &[],
+    );
+    assert_problems(
+        &retries("--retry 4294967295 --retry-delay 4294967295 --retry-max-time 4294967295"),
+        &[],
+    );
+}
+
+/// Proves: `ci.yml` with the cargo-deny download back on five tries 5 seconds apart within 300
+/// seconds (the step a spell of GitHub 504s failed on main) fails the lint on that step's line,
+/// and passes as it is.
+/// Catches: a rule that does not read the repository's own workflows, or a workflow left on the
+/// short retries.
+#[test]
+fn the_cargo_deny_download_of_ci_yml_on_short_retries_is_refused() {
+    let text = std::fs::read_to_string(workflows_dir().join("ci.yml")).expect("read");
+    assert_eq!(lint("ci.yml", &text), Vec::<String>::new());
+    let download = "--retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --output \"$RUNNER_TEMP/cargo-deny.tar.gz\"";
+    let at = text.find(download).expect("the cargo-deny download");
+    let line = text[..at].lines().count();
+    let changed = text.replacen(
+        download,
+        "--retry 5 --retry-delay 5 --retry-max-time 300 --retry-all-errors --silent --show-error --location --output \"$RUNNER_TEMP/cargo-deny.tar.gz\"",
+        1,
+    );
+    assert_eq!(
+        lint("ci.yml", &changed),
+        vec![
+            format!("line {line}: a curl's retries wait 5 × 5s = 25s, under 600s"),
+            format!("line {line}: a curl's `--retry-max-time` is 300, under 600"),
+        ]
     );
 }

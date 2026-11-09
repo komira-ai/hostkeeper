@@ -75,7 +75,7 @@ jobs:
       # One curl, its URL globs expanded by curl itself; a transient failure is retried, and one
       # that still fails ends the job at once, so nothing is set.
       - name: Download the release index, archives and bundles
-        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --fail-early --retry 5 --retry-delay 5 --retry-max-time 300 --retry-all-errors --silent --show-error --location --create-dirs --output-dir "$RUNNER_TEMP/release" --remote-name-all "https://github.com/$GITHUB_REPOSITORY/releases/download/v$VERSION/index.json" "https://github.com/$GITHUB_REPOSITORY/releases/download/v$VERSION/my-service-$VERSION-{linux-arm64,linux-x86_64,macos-arm64}.tar.zst{,.sigstore.json}"
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --fail-early --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --create-dirs --output-dir "$RUNNER_TEMP/release" --remote-name-all "https://github.com/$GITHUB_REPOSITORY/releases/download/v$VERSION/index.json" "https://github.com/$GITHUB_REPOSITORY/releases/download/v$VERSION/my-service-$VERSION-{linux-arm64,linux-x86_64,macos-arm64}.tar.zst{,.sigstore.json}"
       # The service's own command: checks the index, each archive, bundle and manifest, and
       # appends targets=<JSON> to the output (checklist, item 2).
       - name: The targets of the release
