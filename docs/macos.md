@@ -454,13 +454,15 @@ pkg's plist.
 
 The released pkg is signed with the Developer ID Installer identity
 `Developer ID Installer: Komira AI, Inc. (U7RTX4XD3X)`, because the MDM's
-`InstallEnterpriseApplication` installs only a signed pkg. It is not notarized: nothing Apple
+`InstallEnterpriseApplication` installs only a signed pkg. hello's `.pkg`
+(`hello-<version>-macos-arm64.pkg`) is signed the same way, in the same jobs, because a host's
+`macos-pkg` installer stages only a signed pkg; each step below is done for both. It is not notarized: nothing Apple
 states asks an MDM-installed pkg for notarization (design section 7.3), and the release adds it
 only if a Mac refuses the signed pkg without it. The signing is in `.github/workflows/artifacts.yml`,
 on a push to `main` only, in three jobs:
 
-1. `build-macos` builds the unsigned pkg into `pkg/` and checks it (above); it is never a release
-   file, only the artifact `pkg-unsigned-macos-arm64`.
+1. `build-macos` builds the unsigned pkgs into `pkg/` and checks them (above); they are never
+   release files, only the artifact `pkg-unsigned-macos-arm64`.
 2. `sign-pkg`, in the environment `pkg-signing`, runs no repository code (no checkout, no cargo),
    so no build script or dependency runs where the key is. It decodes the PKCS#12 of the secret
    `MACOS_INSTALLER_P12` (the identity's key and certificate and Apple's Developer ID G2
@@ -474,11 +476,12 @@ on a push to `main` only, in three jobs:
    trusted status, a trusted timestamp and the chain of exactly the identity, `Developer ID
    Certification Authority` and `Apple Root CA`, naming every difference; it then expands the
    signed and the unsigned pkg and refuses any file that differs, so the signing changed nothing
-   `check-macos-pkg` checked. Only then is the signed pkg the release file
-   `hostkeeper-<version>-macos-arm64.pkg`: `SHA256SUMS`, the attestation and the release are of
-   its bytes.
+   `check-macos-pkg` checked. Only then is each signed pkg the release file
+   `hostkeeper-<version>-macos-arm64.pkg` or `hello-<version>-macos-arm64.pkg`: `SHA256SUMS`,
+   the attestation and the release are of its bytes.
 
-A run by hand signs nothing: it builds and checks the unsigned pkg and makes the sums without it.
+A run by hand signs nothing: it builds and checks the unsigned pkgs and makes the sums without
+them.
 The workflow lint (`crates/xtask/tests/workflows/pkg_signing.rs`) holds these jobs to their
 steps: the signing job's exact steps, with the cleanup under `always()` after the signing; the
 secrets named in that job alone; the check before the one upload of the pkg; and `sums` after it.

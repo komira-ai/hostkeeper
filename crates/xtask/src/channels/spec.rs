@@ -146,8 +146,8 @@ impl Product {
     }
 
     /// The file names of the macOS installers of `version`, `<installer>-<version>-macos-arm64.pkg`
-    /// for each of [`Product::installers`], sorted. hostkeeper's is signed by the release that
-    /// built it and hello's is not; neither is notarized, and nothing here signs them.
+    /// for each of [`Product::installers`], sorted. Each is signed by the release that built it
+    /// and not notarized; nothing here signs them.
     pub(crate) fn pkg_files(&self, version: &str) -> Vec<String> {
         let mut files: Vec<String> = self
             .installers

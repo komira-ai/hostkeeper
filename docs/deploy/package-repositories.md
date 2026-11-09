@@ -43,10 +43,11 @@ The directory of the installers holds `hostkeeper-<version>-macos-arm64.pkg` and
 The pointer `stable.json` is `{"version", "tag", "commit", "files": {<name>: {"sha256", "size"}}}`
 for the newest promoted release.
 
-**hostkeeper's macOS installer is signed but not notarized; hello's is neither.** The release signs
-hostkeeper's with the Developer ID Installer identity before it is attested
-([verify-a-release.md](verify-a-release.md)), and the pointer moves the same bytes that `testing` holds.
-An MDM installs hostkeeper's as it is; by hand, install either from a terminal with `installer`, after
+**Every macOS installer the release publishes, hostkeeper's and hello's, is signed but not
+notarized.** The release signs each with the Developer ID Installer identity before it is attested
+([verify-a-release.md](verify-a-release.md)), and the pointer moves the same signed bytes that
+`testing` holds. An MDM installs hostkeeper's as it is, and a host's `macos-pkg` installer stages
+hello's only because it is signed; by hand, install either from a terminal with `installer`, after
 the checks below; a double click on a downloaded copy is refused by Gatekeeper, which asks for
 notarization.
 

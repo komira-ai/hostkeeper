@@ -2,9 +2,9 @@
 //! and hello's `hello-<version>-macos-arm64.pkg` ([`spec::Product::pkg_files`]), each with its
 //! attestation bundle, on `packages.komira.ai`, in the bucket of the apt and rpm repositories.
 //!
-//! hostkeeper's installer is signed by the release that built it (hostkeeper's `artifacts.yml`
-//! signs it with the Developer ID Installer identity before it is summed and attested); hello's
-//! is not signed. Neither is notarized, so a downloaded copy opened in the Finder gets
+//! Each installer, hostkeeper's and hello's, is signed by the release that built it
+//! (hostkeeper's `artifacts.yml` signs it with the Developer ID Installer identity before it is
+//! summed and attested) and is not notarized, so a downloaded copy opened in the Finder gets
 //! Gatekeeper's warning. Nothing in these verbs signs them: they move the release's bytes. What
 //! vouches for those bytes is the release's `SHA256SUMS` and the build provenance bundle
 //! published beside each.

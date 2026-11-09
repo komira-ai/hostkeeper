@@ -1,24 +1,25 @@
-//! The rules of the signing of the installer pkg in `artifacts.yml` (docs/macos.md, "The
-//! installer's signature"), on top of [`super::release`]'s:
+//! The rules of the signing of the release's pkgs in `artifacts.yml` (docs/macos.md, "The
+//! installer's signature"), the installer and hello's `.pkg`, on top of [`super::release`]'s:
 //!
-//! - **The unsigned pkg is never a release file.** The build job `build-macos` writes it with
-//!   [`BUILD_PKG`] into `pkg/` (not `dist/`, which its `assets-*` artifact uploads) and uploads it
-//!   as [`UNSIGNED_ARTIFACT`].
+//! - **An unsigned pkg is never a release file.** The build job `build-macos` writes the
+//!   installer with [`BUILD_PKG`] and hello's with [`BUILD_HELLO_PKG`] into `pkg/` (not `dist/`,
+//!   which its `assets-*` artifact uploads) and uploads them as [`UNSIGNED_ARTIFACT`].
 //! - **The key is held by one job that runs no repository code.** [`SIGN_JOB`] runs under
 //!   [`SIGN_IF`] (a push to main) in the environment [`SIGN_ENV`], on `macos-15`, needs exactly
 //!   `version` and `build-macos`, holds `contents: read` alone, and its steps are exactly
 //!   [`SIGN_STEPS`], in order: no checkout, no cargo. It imports the identity into a keychain of
-//!   the job (never the login keychain), signs with a trusted timestamp, and then, under
-//!   [`ALWAYS`], deletes the keychain and the PKCS#12 file before it uploads the signed pkg as
-//!   [`SIGNED_ARTIFACT`].
+//!   the job (never the login keychain), signs each pkg with a trusted timestamp ([`SIGN`],
+//!   [`SIGN_HELLO`]), and then, under [`ALWAYS`], deletes the keychain and the PKCS#12 file
+//!   before it uploads the signed pkgs as [`SIGNED_ARTIFACT`].
 //! - **The secrets are named there alone.** No other job of the file, and nothing beside the
 //!   jobs, names a secret; that job names exactly [`SECRETS`], each only in the `env:` of a step.
-//! - **The signed pkg is checked before it is published.** [`CHECK_JOB`] runs under [`SIGN_IF`]
+//! - **Each signed pkg is checked before it is published.** [`CHECK_JOB`] runs under [`SIGN_IF`]
 //!   after [`SIGN_JOB`], with `contents: read` alone, and runs [`CHECK_SIGNATURE`] and the
-//!   comparison [`SAME_FILES`] of the expanded signed and unsigned pkgs before the one upload of
-//!   the file as [`PUBLISHED_ARTIFACT`], which no other job uploads.
+//!   comparison [`SAME_FILES`] of the expanded signed and unsigned installer, then
+//!   [`CHECK_HELLO_SIGNATURE`] and [`SAME_HELLO_FILES`] for hello's, before the one upload of the
+//!   files as [`PUBLISHED_ARTIFACT`], which no other job uploads.
 //! - **The sums wait for it.** `sums` needs [`CHECK_JOB`] under [`SUMS_IF`], so on a push to main
-//!   SHA256SUMS, the attestation and the release take the signed pkg, and a run by hand, which
+//!   SHA256SUMS, the attestation and the release take the signed pkgs, and a run by hand, which
 //!   signs nothing, still makes the sums.
 //!
 //! Both jobs name the identity [`IDENTITY`] in their `env:`.
@@ -52,13 +53,16 @@ pub const SUMS_IF: &str = "${{ !cancelled() && !failure() }}";
 /// How `build-macos` builds hostkeeper's pkg: into `pkg/`.
 pub const BUILD_PKG: &str = "cargo xtask release macos-pkg --version \"$RELEASE_VERSION\" --binary target/release/hostkeeper --gh \"$RUNNER_TEMP/gh-pinned/gh\" --trusted-root \"$RUNNER_TEMP/trusted_root.json\" --stage \"$RUNNER_TEMP/pkg-root\" --out pkg";
 
-/// The artifact of the unsigned pkg, from `build-macos`.
+/// How `build-macos` builds hello's `.pkg`: into `pkg/`, beside the installer.
+pub const BUILD_HELLO_PKG: &str = "cargo xtask release macos-pkg --service hello --version \"$RELEASE_VERSION\" --binary target/release/hello --stage \"$RUNNER_TEMP/hello-pkg-root\" --out pkg";
+
+/// The artifact of the unsigned pkgs, from `build-macos`.
 pub const UNSIGNED_ARTIFACT: &str = "pkg-unsigned-macos-arm64";
 
-/// The artifact of the signed pkg, from [`SIGN_JOB`].
+/// The artifact of the signed pkgs, from [`SIGN_JOB`].
 pub const SIGNED_ARTIFACT: &str = "pkg-signed-macos-arm64";
 
-/// The release files' artifact of the checked pkg, from [`CHECK_JOB`].
+/// The release files' artifact of the checked pkgs, from [`CHECK_JOB`].
 pub const PUBLISHED_ARTIFACT: &str = "assets-pkg-macos-arm64";
 
 /// One step of [`SIGN_STEPS`] or [`CHECK_STEPS`]. Each holds every key of its step: a step
@@ -108,7 +112,7 @@ const fn always(run: &'static str) -> Step {
 }
 
 /// The steps of [`SIGN_JOB`], exactly and in this order.
-pub const SIGN_STEPS: [Step; 13] = [
+pub const SIGN_STEPS: [Step; 14] = [
     Step::Download(UNSIGNED_ARTIFACT, "unsigned"),
     Step::Run {
         run: "base64 --decode -o \"$RUNNER_TEMP/installer.p12\" <<< \"$P12\"",
@@ -131,6 +135,7 @@ pub const SIGN_STEPS: [Step; 13] = [
     run("security list-keychains -d user -s \"$RUNNER_TEMP/pkg-signing.keychain-db\""),
     run("mkdir dist"),
     run(SIGN),
+    run(SIGN_HELLO),
     always(DELETE_KEYCHAIN),
     always(DELETE_P12),
     Step::Upload(SIGNED_ARTIFACT, "dist/"),
@@ -139,6 +144,9 @@ pub const SIGN_STEPS: [Step; 13] = [
 /// The signing: the identity, from the job's keychain, with a trusted timestamp, from
 /// `unsigned/` into `dist/`.
 pub const SIGN: &str = "productsign --sign \"$IDENTITY\" --keychain \"$RUNNER_TEMP/pkg-signing.keychain-db\" --timestamp \"unsigned/hostkeeper-$RELEASE_VERSION-macos-arm64.pkg\" \"dist/hostkeeper-$RELEASE_VERSION-macos-arm64.pkg\"";
+
+/// The signing of hello's `.pkg`, as [`SIGN`] signs the installer.
+pub const SIGN_HELLO: &str = "productsign --sign \"$IDENTITY\" --keychain \"$RUNNER_TEMP/pkg-signing.keychain-db\" --timestamp \"unsigned/hello-$RELEASE_VERSION-macos-arm64.pkg\" \"dist/hello-$RELEASE_VERSION-macos-arm64.pkg\"";
 
 /// The deletion of the job's keychain.
 pub const DELETE_KEYCHAIN: &str =
@@ -150,7 +158,7 @@ pub const DELETE_P12: &str = "rm -f \"$RUNNER_TEMP/installer.p12\"";
 /// The steps of [`CHECK_JOB`], exactly and in this order: the signature checked and the files
 /// compared before the one upload, and nothing between them that could put other bytes in
 /// `dist/`.
-pub const CHECK_STEPS: [Step; 9] = [
+pub const CHECK_STEPS: [Step; 13] = [
     Step::Checkout,
     run("rustup toolchain install"),
     Step::Download(UNSIGNED_ARTIFACT, "unsigned"),
@@ -159,6 +167,10 @@ pub const CHECK_STEPS: [Step; 9] = [
     run(EXPAND_UNSIGNED),
     run(EXPAND_SIGNED),
     run(SAME_FILES),
+    run(CHECK_HELLO_SIGNATURE),
+    run(EXPAND_HELLO_UNSIGNED),
+    run(EXPAND_HELLO_SIGNED),
+    run(SAME_HELLO_FILES),
     Step::Upload(PUBLISHED_ARTIFACT, "dist/"),
 ];
 
@@ -174,6 +186,19 @@ pub const CHECK_SIGNATURE: &str = "cargo xtask release check-pkg-signature \"dis
 /// The comparison of the expanded unsigned and signed pkgs, in [`CHECK_JOB`].
 pub const SAME_FILES: &str =
     "diff -r \"$RUNNER_TEMP/unsigned-expanded\" \"$RUNNER_TEMP/signed-expanded\"";
+
+/// The check of the signature of hello's `.pkg`, in [`CHECK_JOB`].
+pub const CHECK_HELLO_SIGNATURE: &str = "cargo xtask release check-pkg-signature \"dist/hello-$RELEASE_VERSION-macos-arm64.pkg\" --identity \"$IDENTITY\"";
+
+/// The expansion of hello's unsigned `.pkg`, in [`CHECK_JOB`].
+pub const EXPAND_HELLO_UNSIGNED: &str = "pkgutil --expand \"unsigned/hello-$RELEASE_VERSION-macos-arm64.pkg\" \"$RUNNER_TEMP/hello-unsigned-expanded\"";
+
+/// The expansion of hello's signed `.pkg`, in [`CHECK_JOB`].
+pub const EXPAND_HELLO_SIGNED: &str = "pkgutil --expand \"dist/hello-$RELEASE_VERSION-macos-arm64.pkg\" \"$RUNNER_TEMP/hello-signed-expanded\"";
+
+/// The comparison of hello's expanded unsigned and signed `.pkg`, in [`CHECK_JOB`].
+pub const SAME_HELLO_FILES: &str =
+    "diff -r \"$RUNNER_TEMP/hello-unsigned-expanded\" \"$RUNNER_TEMP/hello-signed-expanded\"";
 
 /// One line per rule of this module that `doc`, artifacts.yml, breaks.
 pub fn problems(doc: &Node) -> Vec<String> {
@@ -207,18 +232,23 @@ fn is_upload(step: &Node) -> bool {
     uses_of(step).starts_with("actions/upload-artifact@")
 }
 
-/// What is wrong with the build job's pkg: built into another directory than `pkg/`, or not
-/// uploaded as [`UNSIGNED_ARTIFACT`].
+/// What is wrong with the build job's pkgs: the installer or hello's built into another
+/// directory than `pkg/`, or `pkg/` not uploaded as [`UNSIGNED_ARTIFACT`].
 fn build_problems(doc: &Node) -> Vec<String> {
     let build = steps(job(doc, "build-macos"));
     let mut problems = Vec::new();
-    if !build
-        .iter()
-        .any(|s| text_of(Some(s), "run") == Some(BUILD_PKG))
-    {
-        problems.push(format!(
-            "artifacts.yml: job build-macos does not build the unsigned pkg into pkg/ (`{BUILD_PKG}`)"
-        ));
+    for (what, command) in [
+        ("the unsigned pkg", BUILD_PKG),
+        ("hello's unsigned pkg", BUILD_HELLO_PKG),
+    ] {
+        if !build
+            .iter()
+            .any(|s| text_of(Some(s), "run") == Some(command))
+        {
+            problems.push(format!(
+                "artifacts.yml: job build-macos does not build {what} into pkg/ (`{command}`)"
+            ));
+        }
     }
     let uploads = build
         .iter()

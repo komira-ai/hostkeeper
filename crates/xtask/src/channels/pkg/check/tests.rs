@@ -134,7 +134,7 @@ fn each_installer_the_host_serves_is_the_one_the_release_lists() {
     assert_eq!(
         said,
         [format!(
-            "check-pkg: {HELLO} from {BASE} is {}; {INSTALLER} from {BASE} is {}, as the release's SHA256SUMS lists; their bundles and the directory's SHA256SUMS agree; these are the release's bytes, hostkeeper's installer signed and hello's unsigned",
+            "check-pkg: {HELLO} from {BASE} is {}; {INSTALLER} from {BASE} is {}, as the release's SHA256SUMS lists; their bundles and the directory's SHA256SUMS agree; these are the release's signed bytes",
             Sha256::of(b"hello bytes"),
             Sha256::of(b"installer bytes")
         )]

@@ -9,9 +9,10 @@
 # for linux-x86_64 the package of `mdm`, the MDM server stack as a service package
 # (docs/design/two-programs.md section 6.2), whose pinned tools are fetched and checked against
 # crates/hostkeeper-mdm-core/pins.txt here (`cargo xtask release mdm-fetch`), with its `.sha256`;
-# for macos-arm64 the installer pkg of a Mac's first install, signed on a push to main with the
-# Developer ID Installer identity (sign-pkg, then check-pkg); the release indexes `index.json`,
-# `hello-index.json` and `hello-fail-ready-index.json` over the three packages each, and
+# for macos-arm64 the installer pkg of a Mac's first install and hello's .pkg, each signed on a
+# push to main with the Developer ID Installer identity (sign-pkg, then check-pkg); the release
+# indexes `index.json`, `hello-index.json` and `hello-fail-ready-index.json` over the three
+# packages each, and
 # `mdm-index.json` over the one mdm package; the coordinator's image index over its two images
 # (`cargo xtask release image-index`), whose SHA-256 is the digest release.yml pushes the
 # multi-platform image under;
@@ -445,9 +446,9 @@ jobs:
   # are the plists of its two slots), and the installer pkg of a Mac's first
   # install (a distribution pkg: productbuild around the component pkgbuild makes), read back from
   # the built pkg and checked here. No deb, rpm, coordinator or hostkeeper-mdm on macOS.
-  # The pkg built here is unsigned and is not a release file: it goes to its own artifact,
-  # `pkg-unsigned-macos-arm64`, which sign-pkg signs and check-pkg checks and publishes, so the
-  # pkg SHA256SUMS lists and attest attests is the signed one. The runner's `gtar` is GNU tar, so
+  # The pkgs built here, the installer and hello's .pkg, are unsigned and are not release files:
+  # they go to their own artifact, `pkg-unsigned-macos-arm64`, which sign-pkg signs and check-pkg
+  # checks and publishes, so each pkg SHA256SUMS lists and attest attests is the signed one. The runner's `gtar` is GNU tar, so
   # the tarball is made as on Linux.
   build-macos:
     name: macos-arm64
@@ -562,16 +563,16 @@ jobs:
       # hello's .pkg and its failing build's (docs/design/packages-native.md, items A20 and A21):
       # one component with no script, the program and its hook under
       # /Library/Application Support/hello/ and the two slots' plists, Disabled, in
-      # /Library/LaunchDaemons/, read back from the expanded product. Unsigned: sign-pkg below
-      # signs hostkeeper's installer alone. hello's goes to dist/, a release asset
-      # the release puts in the testing directory of the installers; the failing build's to
-      # native/, as on Linux.
+      # /Library/LaunchDaemons/, read back from the expanded product. hello's goes to pkg/, unsigned,
+      # beside the installer: sign-pkg signs it and check-pkg publishes it, a release asset the
+      # release puts in the testing directory of the installers. The failing build's goes to
+      # native/, as on Linux, and is never signed or released.
       - name: hello's .pkg (component by pkgbuild with no scripts, distribution by productbuild)
-        run: cargo xtask release macos-pkg --service hello --version "$RELEASE_VERSION" --binary target/release/hello --stage "$RUNNER_TEMP/hello-pkg-root" --out dist
+        run: cargo xtask release macos-pkg --service hello --version "$RELEASE_VERSION" --binary target/release/hello --stage "$RUNNER_TEMP/hello-pkg-root" --out pkg
       - name: hello's failing build's .pkg
         run: cargo xtask release macos-pkg --service hello --fail-ready --version "$RELEASE_VERSION" --binary target/release/hello --stage "$RUNNER_TEMP/hello-fail-ready-pkg-root" --out native
       - name: Expand hello's .pkg
-        run: pkgutil --expand "dist/hello-$RELEASE_VERSION-$PLATFORM.pkg" "$RUNNER_TEMP/hello-pkg-expanded"
+        run: pkgutil --expand "pkg/hello-$RELEASE_VERSION-$PLATFORM.pkg" "$RUNNER_TEMP/hello-pkg-expanded"
       - name: Expand hello's failing build's .pkg
         run: pkgutil --expand "native/hello-$RELEASE_VERSION-fail-ready-$PLATFORM.pkg" "$RUNNER_TEMP/hello-fail-ready-pkg-expanded"
       - name: hello's .pkg has its hook, no script, files only at its paths and its jobs disabled
@@ -598,15 +599,16 @@ jobs:
           if-no-files-found: error
 
   # Push to main only: the installer pkg signed with the Developer ID Installer identity, for the
-  # MDM's InstallEnterpriseApplication, which installs only a signed pkg. Not notarized: a pkg
-  # an MDM installs needs no notarization. This job runs no repository code (no checkout, no
+  # MDM's InstallEnterpriseApplication, which installs only a signed pkg, and hello's .pkg with
+  # the same identity, for a host's macos-pkg installer, which stages only a signed pkg. Not
+  # notarized: a pkg an MDM or a host's installer installs needs no notarization. This job runs no repository code (no checkout, no
   # cargo), so no build script or dependency runs on the machine that holds the key: the
   # workflow lint holds it to the exact steps of SIGN_PKG_STEPS (crates/xtask/tests/workflows).
   # The identity (the PKCS#12 with its key and Apple's Developer ID G2 intermediate) goes into
   # a keychain of this job in $RUNNER_TEMP, never the login keychain, which is the user's only
   # keychain while productsign runs; the keychain and the PKCS#12 file are deleted whether or
   # not the signing worked. The keychain's password is the PKCS#12's, a secret the log masks.
-  # The signed pkg goes to `pkg-signed-macos-arm64`, which check-pkg checks.
+  # The signed pkgs go to `pkg-signed-macos-arm64`, which check-pkg checks.
   sign-pkg:
     needs: [version, build-macos]
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
@@ -650,6 +652,8 @@ jobs:
       - run: mkdir dist
       - name: Sign the pkg, with a trusted timestamp
         run: productsign --sign "$IDENTITY" --keychain "$RUNNER_TEMP/pkg-signing.keychain-db" --timestamp "unsigned/hostkeeper-$RELEASE_VERSION-macos-arm64.pkg" "dist/hostkeeper-$RELEASE_VERSION-macos-arm64.pkg"
+      - name: Sign hello's pkg, with a trusted timestamp
+        run: productsign --sign "$IDENTITY" --keychain "$RUNNER_TEMP/pkg-signing.keychain-db" --timestamp "unsigned/hello-$RELEASE_VERSION-macos-arm64.pkg" "dist/hello-$RELEASE_VERSION-macos-arm64.pkg"
       - name: Delete the keychain, whether the signing worked or not
         if: ${{ always() }}
         run: security delete-keychain "$RUNNER_TEMP/pkg-signing.keychain-db"
@@ -663,13 +667,13 @@ jobs:
           retention-days: 90
           if-no-files-found: error
 
-  # Push to main only, with no secret: the signed pkg is checked and only then becomes a release
-  # file. `release check-pkg-signature` refuses it unless pkgutil says the Mac trusts its
-  # signature, signed with a trusted timestamp by exactly the identity under Apple's Developer
-  # ID intermediate and root; the signed and the unsigned pkg must expand to the same files, so
-  # signing changed nothing that check-macos-pkg checked in build-macos. The pkg is uploaded as
-  # `assets-pkg-macos-arm64`, the one `assets-*` artifact that holds it, so SHA256SUMS, the
-  # attestation and the release name the signed bytes.
+  # Push to main only, with no secret: each signed pkg, the installer and hello's, is checked and
+  # only then becomes a release file. `release check-pkg-signature` refuses it unless pkgutil
+  # says the Mac trusts its signature, signed with a trusted timestamp by exactly the identity
+  # under Apple's Developer ID intermediate and root; each signed and unsigned pkg must expand to
+  # the same files, so signing changed nothing that check-macos-pkg checked in build-macos. The
+  # pkgs are uploaded as `assets-pkg-macos-arm64`, the one `assets-*` artifact that holds them,
+  # so SHA256SUMS, the attestation and the release name the signed bytes.
   check-pkg:
     needs: [version, sign-pkg]
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
@@ -701,6 +705,14 @@ jobs:
         run: pkgutil --expand "dist/hostkeeper-$RELEASE_VERSION-macos-arm64.pkg" "$RUNNER_TEMP/signed-expanded"
       - name: Signing changed no file of the pkg
         run: diff -r "$RUNNER_TEMP/unsigned-expanded" "$RUNNER_TEMP/signed-expanded"
+      - name: hello's signature is the identity's, under Apple's chain, with a trusted timestamp
+        run: cargo xtask release check-pkg-signature "dist/hello-$RELEASE_VERSION-macos-arm64.pkg" --identity "$IDENTITY"
+      - name: Expand hello's unsigned pkg
+        run: pkgutil --expand "unsigned/hello-$RELEASE_VERSION-macos-arm64.pkg" "$RUNNER_TEMP/hello-unsigned-expanded"
+      - name: Expand hello's signed pkg
+        run: pkgutil --expand "dist/hello-$RELEASE_VERSION-macos-arm64.pkg" "$RUNNER_TEMP/hello-signed-expanded"
+      - name: Signing changed no file of hello's pkg
+        run: diff -r "$RUNNER_TEMP/hello-unsigned-expanded" "$RUNNER_TEMP/hello-signed-expanded"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: assets-pkg-macos-arm64
