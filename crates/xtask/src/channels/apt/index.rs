@@ -3,7 +3,7 @@
 //! checks. The text it writes is pinned by the golden test, so the products that feed one apt
 //! repository feed it one format.
 //!
-//! Layout (suite `stable` or `testing`, component `main`):
+//! Layout (suite `stable`, `testing` or `testing-fail`, component `main`):
 //!
 //! ```text
 //! dists/stable/Release
@@ -17,6 +17,8 @@
 //!
 //! Copied from komira-ai/tierstore at ff4777831c08fc13aa025b54e6e0531c2f350f4f
 //! (`crates/xtask/src/channels/apt/index.rs`), adapted to this repository (see [`crate::channels`]).
+//! This repository added the suite: a stanza is read in the version form of its suite and a suite
+//! that lists one package refuses every other ([`Suite::numbers`], [`Suite::only_package`]).
 
 use std::cmp::Ordering;
 use std::io::Write;
@@ -29,7 +31,6 @@ use super::control::{self, Field};
 use super::deb::control_of;
 use super::state::{POOL_DIR, Suite, valid_arch};
 use crate::channels::Error;
-use crate::channels::numbers;
 
 /// Fields the index writes itself, from the file: a control file that carries one would forge the
 /// file's name, size or checksums. Field names are not case sensitive in Debian control files.
@@ -55,18 +56,28 @@ fn refused(why: String) -> Error {
     Error::Failed(why)
 }
 
-/// A stanza from its fields: the package, version, architecture and checksum must be there.
-fn from_fields(text: &str) -> Result<Stanza, Error> {
+/// A stanza of the index of `suite` from its fields: the package, version, architecture and
+/// checksum must be there, the version in the form of the suite, and the package the suite's.
+fn from_fields(text: &str, suite: Suite) -> Result<Stanza, Error> {
     let fields = control::parse(text)?;
     let get = |name: &str| {
         control::get(&fields, name)
             .ok_or_else(|| refused(format!("a stanza without {name}: {text:?}")))
     };
     let version = get("Version")?;
+    let package = get("Package")?;
+    if let Some(only) = suite.only_package().filter(|only| *only != package) {
+        return Err(refused(format!(
+            "{package} is not listed in {}: the suite lists {only} alone",
+            suite.name()
+        )));
+    }
     Ok(Stanza {
-        package: get("Package")?.to_owned(),
-        version: numbers(version)
-            .ok_or_else(|| refused(format!("version {version:?} is not X.Y.Z")))?,
+        package: package.to_owned(),
+        version: suite
+            .numbers(version)
+            .ok_or_else(|| refused(format!("version {version:?} is not {}", suite.form())))?,
+
         architecture: get("Architecture")?.to_owned(),
         sha256: get("SHA256")?.to_owned(),
         text: text.to_owned(),
@@ -83,22 +94,25 @@ fn valid_name(name: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"+-.".contains(&b))
 }
 
-/// The index stanza of a package: its control fields, then `Filename` (below the product's pool
+/// The index stanza of a package for `suite`: its control fields, then `Filename` (below the product's pool
 /// directory), `Size` and `SHA256` of the file, `Description` last.
 ///
 /// # Errors
 /// Bytes that are not a package, a name, version or architecture that cannot be a path in the
-/// pool, or a control file that already carries a field the index writes itself.
-pub fn stanza_of(deb: &[u8]) -> Result<Stanza, Error> {
+/// pool or that is not in the form of `suite`, or a control file that already carries a field the
+/// index writes itself.
+pub fn stanza_of(deb: &[u8], suite: Suite) -> Result<Stanza, Error> {
     let fields = control::parse(&control_of(deb)?)?;
     let get = |name: &str| {
         control::get(&fields, name)
             .ok_or_else(|| refused(format!("the package's control file has no {name}")))
     };
     let (package, version, architecture) = (get("Package")?, get("Version")?, get("Architecture")?);
-    if !valid_name(package) || numbers(version).is_none() || !valid_arch(architecture) {
+    if !valid_name(package) || suite.numbers(version).is_none() || !valid_arch(architecture) {
         return Err(refused(format!(
-            "{package}_{version}_{architecture} cannot be a file of the pool"
+            "{package}_{version}_{architecture} cannot be a file of the pool of {}: its version must be {}",
+            suite.name(),
+            suite.form()
         )));
     }
     if let Some(f) = fields
@@ -121,17 +135,17 @@ pub fn stanza_of(deb: &[u8]) -> Result<Stanza, Error> {
     out.push(Field::new("Size", &deb.len().to_string()));
     out.push(Field::new("SHA256", &sha256_hex(deb)));
     out.extend(description);
-    from_fields(&control::render(&out)?)
+    from_fields(&control::render(&out)?, suite)
 }
 
-/// The stanzas of a `Packages` file. An empty text is an empty index.
+/// The stanzas of a `Packages` file of `suite`. An empty text is an empty index.
 ///
 /// # Errors
-/// A stanza that is not one.
-pub fn parse_packages(text: &str) -> Result<Vec<Stanza>, Error> {
+/// A stanza that is not one, or one that is not in the form of the suite.
+pub fn parse_packages(text: &str, suite: Suite) -> Result<Vec<Stanza>, Error> {
     control::split_stanzas(text)
         .into_iter()
-        .map(from_fields)
+        .map(|stanza| from_fields(stanza, suite))
         .collect()
 }
 

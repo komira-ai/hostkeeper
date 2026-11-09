@@ -1,7 +1,7 @@
 //! What the shared index consists of, and what was read of it. Pure functions over text.
 //!
 //! The repository is one tree of object keys under `apt/`. The index of a suite (`stable`,
-//! `testing`) is a handful of objects under `apt/dists/<suite>/`: for each architecture a `Packages` and a
+//! `testing`, `testing-fail`) is a handful of objects under `apt/dists/<suite>/`: for each architecture a `Packages` and a
 //! `Packages.gz`, and `Release`, `InRelease` and `Release.gpg`. Every write to one of them is
 //! conditional on the version that was read (its ETag), so the ETag of each object is kept beside
 //! the copy of it in a text file, `etags.txt`, one `<path><TAB><etag>` line per object, `-` for an
@@ -9,19 +9,27 @@
 //!
 //! Copied from komira-ai/tierstore at ff4777831c08fc13aa025b54e6e0531c2f350f4f
 //! (`crates/xtask/src/channels/apt/state.rs`), adapted to this repository (see [`crate::channels`]).
+//! This repository added the suite `testing-fail`, the version form and the package each suite
+//! lists ([`Suite::numbers`], [`Suite::only_package`]).
 
-use crate::channels::{Error, spec};
+use crate::channels::{Error, numbers, spec};
+use crate::release::contract::FAIL_READY_DEB_SUFFIX;
 
 /// The key prefix of everything the repository serves.
 pub const KEY_ROOT: &str = "apt/";
 
-/// The suites of the repository this product publishes into. Both list the same pool: `testing`
-/// holds a release from the moment it is published, `stable` gets the same entries only after the
-/// release's install checks (and the lab) passed, so a package is never copied, only listed.
+/// The suites of the repository this product publishes into. `stable` and `testing` list the same
+/// pool: `testing` holds a release from the moment it is published, `stable` gets the same
+/// entries only after the release's install checks (and the lab) passed, so a package is never
+/// copied, only listed. Both list `X.Y.Z` versions alone. `testing-fail` lists hello's failing
+/// build alone, under the version `X.Y.Z~fail.ready`: it is never promoted, and a `~` sorts it
+/// below the `X.Y.Z` of the release it is built from, so a host that reads `testing` or `stable`
+/// never takes it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum Suite {
     Stable,
     Testing,
+    TestingFail,
 }
 
 impl Suite {
@@ -30,12 +38,38 @@ impl Suite {
         match self {
             Suite::Stable => "stable",
             Suite::Testing => "testing",
+            Suite::TestingFail => "testing-fail",
         }
     }
 
     /// The index of the suite, relative to the repository root: `dists/<suite>/`.
     pub fn dir(self) -> String {
         format!("dists/{}/", self.name())
+    }
+
+    /// The form of the version every entry of the suite has, for a message.
+    pub fn form(self) -> String {
+        match self {
+            Suite::Stable | Suite::Testing => "X.Y.Z".to_owned(),
+            Suite::TestingFail => format!("X.Y.Z{FAIL_READY_DEB_SUFFIX}"),
+        }
+    }
+
+    /// `X.Y.Z` as numbers, the key entries are ordered by, of a version in the suite's form
+    /// ([`Suite::form`]) exactly; none for any other.
+    pub fn numbers(self, version: &str) -> Option<(u64, u64, u64)> {
+        match self {
+            Suite::Stable | Suite::Testing => numbers(version),
+            Suite::TestingFail => numbers(version.strip_suffix(FAIL_READY_DEB_SUFFIX)?),
+        }
+    }
+
+    /// The one package the suite lists, when it lists one alone.
+    pub fn only_package(self) -> Option<&'static str> {
+        match self {
+            Suite::Stable | Suite::Testing => None,
+            Suite::TestingFail => Some(spec::HOSTKEEPER.fail_ready),
+        }
     }
 }
 

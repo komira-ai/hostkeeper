@@ -44,7 +44,7 @@ fn packages(dir: &Path, arch: &str) -> Vec<(String, String)> {
     let text =
         std::fs::read_to_string(dir.join(format!("next/dists/stable/main/binary-{arch}/Packages")))
             .expect("packages");
-    parse_packages(&text)
+    parse_packages(&text, Suite::Stable)
         .expect("parse")
         .into_iter()
         .map(|s| {
@@ -107,7 +107,7 @@ fn the_packages_join_a_shared_index_and_every_other_entry_and_architecture_stays
     let amd = std::fs::read(debs.join("hostkeeper_1.2.3_amd64.deb")).expect("deb");
     let text = std::fs::read_to_string(dir.join("next/dists/stable/main/binary-amd64/Packages"))
         .expect("packages");
-    let ours = parse_packages(&text)
+    let ours = parse_packages(&text, Suite::Stable)
         .expect("parse")
         .into_iter()
         .find(|s| s.package == "hostkeeper")
@@ -121,7 +121,7 @@ fn the_packages_join_a_shared_index_and_every_other_entry_and_architecture_stays
     // The coordinator's package is listed beside it, in the same pool directory.
     let coordinator = std::fs::read(debs.join("hostkeeper-coordinator_1.2.3_amd64.deb"))
         .expect("coordinator deb");
-    let theirs = parse_packages(&text)
+    let theirs = parse_packages(&text, Suite::Stable)
         .expect("parse")
         .into_iter()
         .find(|s| s.package == "hostkeeper-coordinator")

@@ -86,7 +86,7 @@ fn the_rows_hold_the_key_and_the_role_in_no_job_and_the_role_in_exactly_the_writ
     // Catches: a table that lets one job hold the signing key and assume the cloud role, or a
     // job that assumes the role without an exact `if:` for its `id-token: write`.
     let all = rows();
-    assert_eq!(all.len(), 43);
+    assert_eq!(all.len(), 46);
     let mut names = job_names();
     names.dedup();
     assert_eq!(names.len(), all.len(), "a job has two rows");
@@ -692,6 +692,8 @@ fn the_release_files_are_checked_in_every_job_that_signs_or_publishes_them() {
     for job in ["stable-apt-index", "stable-rpm-index"] {
         want.extend(["", "-2", "-3"].map(|n| format!("{job}{n}")));
     }
+    // Hello's failing build is signed and written by one attempt, from the same checked files.
+    want.extend(["testing-fail-apt-index", "testing-fail-apt-write"].map(str::to_owned));
     want.extend(["testing-pkg-upload".to_owned(), "promote-pkg".to_owned()]);
     let mut got = taking.clone();
     got.sort();
@@ -793,5 +795,95 @@ fn a_job_that_uses_the_release_files_before_it_checked_them_is_refused() {
             .all(|p| !p.contains("before it checked the release's files")),
         "{:?}",
         problems(&text)
+    );
+}
+
+#[test]
+fn hellos_failing_build_has_its_three_jobs_in_one_attempt_in_the_suite_testing_fail() {
+    // Catches: the failing build's publish deleted, or its jobs reading and writing the suite
+    // `testing` (where apt would take the failing build for the release's hello), and the
+    // artifacts of the two apt trees of a run sharing a name.
+    let text = release_yml();
+    let all = rows();
+    for step in ["read", "index", "write"] {
+        let name = format!("testing-fail-apt-{step}");
+        let row = all.iter().find(|r| r.name == name).expect("a row");
+        assert_eq!(row.suites, ["testing-fail"], "{name}");
+        assert_eq!(row.write.is_some(), step == "write", "{name}");
+    }
+    assert!(all.iter().all(|r| !r.name.starts_with("testing-fail-rpm")));
+    let without = {
+        let (start, end) = job_range(&text, "testing-fail-apt-index");
+        format!("{}{}", &text[..start], &text[end..])
+    };
+    assert_refused(
+        &without,
+        "release.yml: job testing-fail-apt-index is missing",
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "testing-fail-apt-read",
+            "--suite testing-fail",
+            "--suite testing",
+        ),
+        "release.yml: job testing-fail-apt-read passes --suite [\"testing\"], not [\"testing-fail\"]",
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "testing-fail-apt-write",
+            "--suite testing-fail",
+            "--suite testing",
+        ),
+        "release.yml: job testing-fail-apt-write passes --suite [\"testing\"], not [\"testing-fail\"]",
+    );
+    for artifact in ["apt-fail-current", "apt-fail-next"] {
+        assert!(text.contains(&format!("name: {artifact}\n")), "{artifact}");
+    }
+}
+
+#[test]
+fn the_failing_builds_write_passes_last_as_its_only_attempt() {
+    // Catches: a write of the failing build that retries on a lost race (it has no second
+    // attempt to retry in), and a family whose last attempt is read as the third.
+    let text = release_yml();
+    assert_refused(
+        &in_job(&text, "testing-fail-apt-write", " --last", ""),
+        "release.yml: job testing-fail-apt-write passes --last exactly in the only attempt, which fails on a lost race instead of asking for another",
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "testing-apt-write",
+            "--version \"${TAG#v}\" --output",
+            "--version \"${TAG#v}\" --last --output",
+        ),
+        "release.yml: job testing-apt-write passes --last exactly in the third attempt",
+    );
+}
+
+#[test]
+fn the_failing_builds_jobs_are_not_stages_of_the_promotion() {
+    // Catches: a failing build whose publish holds, or decides, the promotion of the release.
+    let text = release_yml();
+    assert!(STAGES.iter().all(|s| !s.contains("testing-fail")));
+    assert_refused(
+        &in_job(
+            &text,
+            "promote-check",
+            "testing-apt-write,",
+            "testing-apt-write, testing-fail-apt-write,",
+        ),
+        "release.yml: job promote-check needs [",
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "check-apt",
+            "testing-apt-write-3]",
+            "testing-apt-write-3, testing-fail-apt-write]",
+        ),
+        "release.yml: job check-apt needs [",
     );
 }
