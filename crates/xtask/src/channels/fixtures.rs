@@ -1,5 +1,6 @@
 //! Test stand-ins shared by the tests of the channel verbs: an [`Exec`] that starts no process,
-//! and the packages of a release as `nfpm` writes them for the two packages of the product.
+//! and the packages of a release as `nfpm` writes them for the daemon's and the coordinator's
+//! packages and as `release deb` writes them for hello's and mdm's (no maintainer script).
 
 use std::cell::RefCell;
 
@@ -7,7 +8,7 @@ use flate2::Compression;
 use rpm::Scriptlet;
 use rpm::{BuildConfig, CompressionWithLevel, Dependency, FileMode, FileOptions, PackageBuilder};
 
-use crate::channels::spec::{ARCHES, Arch, HOSTKEEPER, Package, Product, RPM_RELEASE};
+use crate::channels::spec::{Arch, HOSTKEEPER, Package, Product, RPM_RELEASE};
 use crate::release::ports::{Exec, Ran};
 
 /// The time of every member and entry of a fixture package: 2026-09-01T00:00:00Z.
@@ -69,9 +70,24 @@ impl Exec for FakeExec {
 }
 
 /// The files `nfpm` puts in the package, with the bytes of the fixture: the paths from the
-/// package's `nfpm.yaml`.
+/// package's `nfpm.yaml`; for a service's native package, the files its spec lists.
 fn files(package: &Package, arch: &str) -> Vec<(&'static str, u32, Vec<u8>)> {
     let binary = format!("{} {arch}", package.name).into_bytes();
+    if !package.rpm {
+        return package
+            .files
+            .iter()
+            .map(|&path| {
+                if path == package.binary {
+                    (path, 0o755, binary.clone())
+                } else if path.ends_with(".service") || path.ends_with(".timer") {
+                    (path, 0o644, b"[Service]\n".to_vec())
+                } else {
+                    (path, 0o755, format!("{path} {arch}").into_bytes())
+                }
+            })
+            .collect();
+    }
     if package.name == HOSTKEEPER.packages[0].name {
         vec![
             ("/usr/bin/hostkeeper", 0o755, binary),
@@ -190,16 +206,18 @@ pub(crate) fn ar(members: &[(&str, &[u8])]) -> Vec<u8> {
     out
 }
 
-/// A deb with this `control` file and the files of `package`.
+/// A deb with this `control` file and the files of `package`: with the `postinst` nfpm writes
+/// for the daemon's and the coordinator's packages, and no script for a service's.
 pub(crate) fn deb_with_control(package: &Package, arch: &str, control: &str) -> Vec<u8> {
-    let control_tar = tar_gz(&[
-        ("./control".to_owned(), 0o644, control.as_bytes().to_vec()),
-        (
+    let mut control_entries = vec![("./control".to_owned(), 0o644, control.as_bytes().to_vec())];
+    if package.rpm {
+        control_entries.push((
             "./postinst".to_owned(),
             0o755,
             b"#!/bin/sh\nexit 0\n".to_vec(),
-        ),
-    ]);
+        ));
+    }
+    let control_tar = tar_gz(&control_entries);
     let data: Vec<(String, u32, Vec<u8>)> = files(package, arch)
         .into_iter()
         .map(|(path, mode, content)| (format!(".{path}"), mode, content))
@@ -280,11 +298,16 @@ pub(crate) fn rpm(package: &Package, version: &str, arch: &Arch, postun: bool) -
     bytes
 }
 
-/// Every arch of the product's packages, for a test that walks them.
+/// Every arch of each of the product's packages, for a test that walks them.
 pub(crate) fn every() -> impl Iterator<Item = (&'static Package, &'static Arch)> {
     let product: &'static Product = &HOSTKEEPER;
     product
         .packages
         .iter()
-        .flat_map(|p| ARCHES.iter().map(move |a| (p, a)))
+        .flat_map(|p| p.arches.iter().map(move |a| (p, a)))
+}
+
+/// Every arch of each of the product's packages that is an rpm.
+pub(crate) fn every_rpm() -> impl Iterator<Item = (&'static Package, &'static Arch)> {
+    every().filter(|(p, _)| p.rpm)
 }

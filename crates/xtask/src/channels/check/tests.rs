@@ -17,6 +17,14 @@ fn coordinator() -> &'static Package {
     &HOSTKEEPER.packages[1]
 }
 
+fn hello() -> &'static Package {
+    HOSTKEEPER.package("hello").expect("hello")
+}
+
+fn mdm() -> &'static Package {
+    HOSTKEEPER.package("mdm").expect("mdm")
+}
+
 fn scratch(name: &str) -> TestDir {
     let beside = std::env::current_exe().expect("test binary");
     TestDir::under(
@@ -85,14 +93,13 @@ impl<'a> Machine<'a> {
             }
         }
         if self.enable {
-            put(
-                &self.root,
-                &format!(
-                    "etc/systemd/system/multi-user.target.wants/{}",
-                    self.package.unit
-                ),
-                b"link",
-            );
+            for unit in self.package.units {
+                put(
+                    &self.root,
+                    &format!("etc/systemd/system/multi-user.target.wants/{unit}"),
+                    b"link",
+                );
+            }
         }
         for link in &self.extra_links {
             put(&self.root, link, b"link");
@@ -479,7 +486,7 @@ fn a_package_is_one_of_the_products() {
     assert_eq!(
         package_flag("other-product").unwrap_err(),
         Error::Usage(
-            "--package \"other-product\" is none of [\"hostkeeper\", \"hostkeeper-coordinator\"]"
+            "--package \"other-product\" is none of [\"hostkeeper\", \"hostkeeper-coordinator\", \"hello\", \"mdm\"]"
                 .to_owned()
         )
     );
@@ -507,4 +514,141 @@ fn the_programs_of_the_checked_system_run_through_the_port_with_a_noninteractive
             ]
         )]
     );
+}
+
+#[test]
+fn hellos_clean_install_says_its_version_without_a_commit_and_enables_neither_slot() {
+    // Catches: hello held to a `--version` with the commit (hello prints `hello <version>`), a
+    // prerequisite installed first for a package that declares none, and hello's files counted
+    // from another package.
+    let dir = scratch("hello");
+    let mut machine = Machine::new(&dir, hello());
+    machine.says = Some("hello 1.2.3\n".to_owned());
+    let said = check_apt(&machine, &apt(&dir, hello())).expect("checked");
+    assert_eq!(
+        program_names(&machine),
+        [
+            "dpkg",
+            "apt-get",
+            "apt-get",
+            "curl",
+            "apt-get",
+            "apt-get",
+            "dpkg-query",
+            "hello",
+        ]
+    );
+    assert!(
+        machine
+            .calls()
+            .contains(&"apt-get install -y --no-install-recommends hello=1.2.3".to_owned())
+    );
+    assert_eq!(
+        said,
+        [
+            "check-apt: hello 1.2.3 installed from the suite testing on amd64; it says \"hello 1.2.3\"; its 4 files are there; the service is not enabled and not running"
+        ]
+    );
+    // The stamp of the shipped binaries, with a commit, is not what hello says.
+    let dir = scratch("hello-commit");
+    let mut machine = Machine::new(&dir, hello());
+    machine.says = Some("hello 1.2.3+0123456789ab\n".to_owned());
+    assert_eq!(
+        check_apt(&machine, &apt(&dir, hello())).unwrap_err(),
+        Error::Failed(
+            "the binary says \"hello 1.2.3+0123456789ab\\n\", not \"hello 1.2.3\"".to_owned()
+        )
+    );
+}
+
+#[test]
+fn each_unit_of_hello_is_checked_and_an_enabled_second_slot_is_named() {
+    // Catches: only the first of a package's units held to the spec, so the install enabling
+    // `hello@b.service` would pass.
+    let dir = scratch("hello-b-enabled");
+    let mut machine = Machine::new(&dir, hello());
+    machine.says = Some("hello 1.2.3\n".to_owned());
+    machine.extra_links = vec!["etc/systemd/system/multi-user.target.wants/hello@b.service"];
+    let Err(Error::Refused(problems)) = check_apt(&machine, &apt(&dir, hello())) else {
+        panic!("not refused");
+    };
+    assert_eq!(
+        problems,
+        [format!(
+            "the service is enabled: {}/etc/systemd/system/multi-user.target.wants/hello@b.service exists, and the package enables nothing",
+            dir.display()
+        )]
+    );
+}
+
+#[test]
+fn an_architecture_the_package_is_not_built_for_is_a_usage_error_before_anything_runs() {
+    // Catches: an arm64 check of mdm, whose .deb is built for amd64 alone, installing nothing and
+    // failing as if the repository were wrong.
+    let dir = scratch("mdm-arm64");
+    let mut machine = Machine::new(&dir, mdm());
+    machine.arch = "arm64";
+    let mut r = apt(&dir, mdm());
+    r.arch = "arm64";
+    assert_eq!(
+        check_apt(&machine, &r).unwrap_err(),
+        Error::Usage("--arch \"arm64\": mdm is not built for it".to_owned())
+    );
+    assert!(machine.calls().is_empty());
+    // On amd64 mdm is checked, with the commit in its stamp.
+    let dir = scratch("mdm-amd64");
+    let machine = Machine::new(&dir, mdm());
+    let said = check_apt(&machine, &apt(&dir, mdm())).expect("checked");
+    assert_eq!(
+        said,
+        [
+            "check-apt: mdm 1.2.3 installed from the suite testing on amd64; it says \"mdm 1.2.3+0123456789ab\"; its 10 files are there; the service is not enabled and not running"
+        ]
+    );
+}
+
+#[test]
+fn the_install_check_matrix_is_every_package_on_each_of_its_architectures() {
+    // Catches: a package the release publishes to `testing` that no install check installs
+    // (hello's or mdm's would be promoted to `stable` unchecked), or a check asked for an
+    // architecture its package is not built for (mdm on arm64, which the verb refuses).
+    const RELEASE_YML: &str = include_str!("../../../../../.github/workflows/release.yml");
+    let job = RELEASE_YML
+        .split("\n  check-apt:\n")
+        .nth(1)
+        .and_then(|rest| rest.split("\n\n").next())
+        .expect("release.yml has the job check-apt");
+    let list = |key: &str| -> Vec<&str> {
+        job.lines()
+            .find_map(|l| l.trim().strip_prefix(&format!("{key}: [")))
+            .and_then(|l| l.strip_suffix(']'))
+            .expect("a flow list")
+            .split(", ")
+            .collect()
+    };
+    let excluded: Vec<(&str, &str)> = job
+        .split("exclude:\n")
+        .nth(1)
+        .and_then(|rest| rest.split("include:").next())
+        .unwrap_or_default()
+        .split("- package: ")
+        .skip(1)
+        .filter_map(|e| {
+            let (package, rest) = e.split_once('\n')?;
+            Some((package.trim(), rest.trim().strip_prefix("arch: ")?.trim()))
+        })
+        .collect();
+    let mut checked: Vec<(&str, &str)> = list("package")
+        .into_iter()
+        .flat_map(|p| list("arch").into_iter().map(move |a| (p, a)))
+        .filter(|pair| !excluded.contains(pair))
+        .collect();
+    checked.sort_unstable();
+    let mut want: Vec<(&str, &str)> = spec::HOSTKEEPER
+        .packages
+        .iter()
+        .flat_map(|p| p.arches.iter().map(move |a| (p.name, a.deb)))
+        .collect();
+    want.sort_unstable();
+    assert_eq!(checked, want);
 }

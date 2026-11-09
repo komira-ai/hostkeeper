@@ -91,7 +91,7 @@ mod index;
 mod locate;
 mod macos_pkg;
 mod mdm_fetch;
-mod native;
+pub(crate) mod native;
 mod netboot;
 #[cfg(test)]
 mod no_network;
@@ -299,7 +299,7 @@ pub(crate) enum Verb {
         #[arg(long, conflicts_with_all = ["staged", "service"])]
         coordinator_staged: Option<PathBuf>,
         /// The service whose `.deb` this is: hello or mdm.
-        #[arg(long, value_enum)]
+        #[arg(long, value_enum, conflicts_with = "coordinator_staged")]
         service: Option<Service>,
     },
     /// Build the `.deb` of hello (and of its failing build, `--fail-ready`) or of mdm for one

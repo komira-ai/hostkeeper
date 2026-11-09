@@ -32,6 +32,11 @@ fn the_first_promotion_reads_the_directory_back_and_then_writes_the_pointer_once
     assert_eq!(
         order,
         [
+            ("get-object", format!("{PREFIX}hello-1.2.3-macos-arm64.pkg")),
+            (
+                "get-object",
+                format!("{PREFIX}hello-1.2.3-macos-arm64.pkg.sigstore.json")
+            ),
             (
                 "get-object",
                 format!("{PREFIX}hostkeeper-1.2.3-macos-arm64.pkg")
@@ -70,16 +75,17 @@ fn the_first_promotion_reads_the_directory_back_and_then_writes_the_pointer_once
             "/pkg/hostkeeper/stable.json"
         ]]
     );
-    assert_eq!(said.len(), 5);
-    assert_eq!(said[3], format!("{STABLE}: now 1.2.3"));
-    assert_eq!(said[4], "/pkg/hostkeeper/stable.json: invalidated");
-    assert!(said[0].starts_with(&format!(
+    assert_eq!(said.len(), 7);
+    assert_eq!(said[5], format!("{STABLE}: now 1.2.3"));
+    assert_eq!(said[6], "/pkg/hostkeeper/stable.json: invalidated");
+    assert!(said[0].starts_with(&format!("{PREFIX}hello-1.2.3-macos-arm64.pkg: sha256 ")));
+    assert!(said[2].starts_with(&format!(
         "{PREFIX}hostkeeper-1.2.3-macos-arm64.pkg: sha256 "
     )));
 }
 
 #[test]
-fn the_pointer_names_the_release_and_lists_the_installer_and_its_bundle_with_size_and_digest() {
+fn the_pointer_names_the_release_and_lists_each_installer_and_its_bundle_with_size_and_digest() {
     let f = Fixture::new("contents");
     let aws = uploaded(&f);
     promote(&aws, &f.request("")).expect("promoted");
@@ -97,6 +103,12 @@ fn the_pointer_names_the_release_and_lists_the_installer_and_its_bundle_with_siz
     assert_eq!(
         installer["sha256"],
         Sha256::of(b"bytes of hostkeeper-1.2.3-macos-arm64.pkg").to_string()
+    );
+    let hello = &files["hello-1.2.3-macos-arm64.pkg"];
+    assert_eq!(hello["size"], "bytes of hello-1.2.3-macos-arm64.pkg".len());
+    assert_eq!(
+        hello["sha256"],
+        Sha256::of(b"bytes of hello-1.2.3-macos-arm64.pkg").to_string()
     );
     // No distribution given: nothing is invalidated.
     assert!(aws.calls_of("create-invalidation").is_empty());
@@ -122,7 +134,7 @@ fn a_directory_that_is_not_what_the_release_built_leaves_the_pointer_alone() {
     assert_eq!(
         e,
         Error::Failed(format!(
-            "{PREFIX}hostkeeper-1.2.3-macos-arm64.pkg could not be read back: {NO_SUCH_KEY}"
+            "{PREFIX}hello-1.2.3-macos-arm64.pkg could not be read back: {NO_SUCH_KEY}"
         ))
     );
 
