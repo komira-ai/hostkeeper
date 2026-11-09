@@ -352,9 +352,15 @@ jobs:
   #          no newer release is published already (a late run of an older commit): then
   #          set-desired is skipped, since setting this version would move the fleet back.
   #          Once the served index compared equal, `cargo xtask release targets`, compiled from the
-  #          release's own commit, writes the release's targets from the same checked files: one
-  #          hostkeeper-archive entry per platform the index lists (docs/design/packages.md,
-  #          section 3.7), the index's own bytes, so the two agree.
+  #          release's own commit, writes the release's targets from the same checked files: per
+  #          platform the index lists, hostkeeper's native entry first (the daemon's .deb from the
+  #          repository's `testing` suite, or the installer pkg from the `testing` store;
+  #          docs/design/packages-native.md, item A23), then one hostkeeper-archive entry
+  #          (docs/design/packages.md, section 3.7), the index's own bytes, so the two agree. A
+  #          host whose daemon announces the native installer moves to the package; any other
+  #          keeps its archive. The set does not wait for the package channels below: a host
+  #          picked the native entry before they published it defers the order and takes it once
+  #          it is there.
   channel:
     needs: [plan, publish]
     if: ${{ needs.plan.outputs.release == 'true' && github.ref == 'refs/heads/main' && vars.RELEASE_SETS_DESIRED == 'true' }}
@@ -439,9 +445,10 @@ jobs:
       - name: The release index and its SHA-256
         id: index
         run: printf 'release_index=%s\nrelease_index_digest=%s\n' "$(< dist/index.json)" "$(sha256sum dist/index.json | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
-      # One hostkeeper-archive entry per platform the index lists, from the same checked files:
+      # Per platform the index lists, from the same checked files: hostkeeper's native entry (its
+      # .deb or its installer pkg, pinned by its SHA-256), then one hostkeeper-archive entry,
       # the archive's two locations, its size and SHA-256, its bundle and its manifest's
-      # min_hostkeeper. The entries are the index's, so the index and the targets agree.
+      # min_hostkeeper. The archive entries are the index's, so the index and the targets agree.
       - name: The targets of the release
         id: targets
         env:
@@ -524,7 +531,10 @@ jobs:
   # scope here. Every job is a green no-op until the repository's environments hold their settings
   # (`cargo xtask channels gate`), so this file is safe before the owner has set them up. The
   # workflow lint (crates/xtask/tests/workflows/packages.rs) holds each job to its row: needs, `if:`,
-  # environment, permissions and the verbs it runs.
+  # environment, permissions and the verbs it runs; and every job that signs or puts the release's
+  # files to check them first, right after their download: against SHA256SUMS, then each asset's
+  # attestation by this repository's workflow at the release's commit (`cargo xtask release
+  # check`), so the repository's key signs, and the store serves, only attested bytes.
   #
   # TESTING, the apt repository packages.komira.ai, which the organisation's products share, in
   # three jobs and up to three attempts: the release's Debian packages (hostkeeper and

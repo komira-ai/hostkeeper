@@ -652,3 +652,146 @@ fn promote_check_gives_decide_every_stage_from_its_own_job() {
         "release.yml: job promote-check gives `channels decide` 11 results, not the 10 stages",
     );
 }
+
+/// The step of every gated job that downloads the release's files.
+const DOWNLOAD: &str = "        with:\n          name: release-${{ needs.newest.outputs.tag }}\n          path: dist\n";
+
+/// The check of the files against SHA256SUMS, as each of those jobs has it.
+const SUMS_STEP: &str = "      - name: The files match SHA256SUMS\n        if: ${{ steps.gate.outputs.enabled == 'true' }}\n        working-directory: dist\n        run: sha256sum --check --strict SHA256SUMS\n";
+
+/// The check of the files' attestations, as each of those jobs has it.
+const ATTESTED_STEP: &str = "      - name: The files are the attested assets of this commit\n        if: ${{ steps.gate.outputs.enabled == 'true' }}\n        env:\n          GH_TOKEN: ${{ github.token }}\n        run: cargo xtask release check dist --version \"${TAG#v}\" --commit \"$COMMIT\"\n";
+
+#[test]
+fn the_release_files_are_checked_in_every_job_that_signs_or_publishes_them() {
+    // Catches: the rule held to fewer jobs than take the release's files (a job that signs the
+    // apt or rpm index, puts the packages or the installers into the pool, or promotes them),
+    // so that one of them could sign or publish bytes the release never attested; and a job
+    // that takes the files without both checks.
+    let text = release_yml();
+    // The gated jobs: those that sign or write. `check-pkg` takes the files too, to compare what
+    // the store serves with them, and neither signs nor writes.
+    let taking: Vec<String> = rows()
+        .into_iter()
+        .filter(|row| row.gated)
+        .map(|row| row.name)
+        .filter(|name| {
+            let (start, end) = job_range(&text, name);
+            text[start..end].contains(DOWNLOAD)
+        })
+        .collect();
+    let mut want: Vec<String> = Vec::new();
+    for job in [
+        "testing-apt-index",
+        "testing-apt-write",
+        "testing-rpm-index",
+        "testing-rpm-write",
+    ] {
+        want.extend(["", "-2", "-3"].map(|n| format!("{job}{n}")));
+    }
+    for job in ["stable-apt-index", "stable-rpm-index"] {
+        want.extend(["", "-2", "-3"].map(|n| format!("{job}{n}")));
+    }
+    want.extend(["testing-pkg-upload".to_owned(), "promote-pkg".to_owned()]);
+    let mut got = taking.clone();
+    got.sort();
+    want.sort();
+    assert_eq!(got, want);
+    for name in &taking {
+        let (start, end) = job_range(&text, name);
+        let job = &text[start..end];
+        assert!(
+            job.contains(&format!("{SUMS_STEP}{ATTESTED_STEP}")),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn a_job_that_uses_the_release_files_before_it_checked_them_is_refused() {
+    // Catches: a job that signs or publishes the release's files without checking them against
+    // SHA256SUMS or against their attestations (a `.deb` or an installer the release never
+    // attested signed into the repository or put into the store, which every host then
+    // trusts), a check of another directory or without the job's token (the online check of
+    // `release check` cannot run), a download elsewhere than the directory the checks read, and
+    // a verb run before the checks.
+    let text = release_yml();
+    let pkg = "testing-pkg-upload";
+    let attested_want = "needs the step `cargo xtask release check dist --version \"${TAG#v}\" --commit \"$COMMIT\"` with `GH_TOKEN: ${{ github.token }}` right after the check of SHA256SUMS";
+    let sums_want = "needs the step `sha256sum --check --strict SHA256SUMS` in `dist` right after the download of the release's files";
+    assert_refused(
+        &in_job(&text, pkg, ATTESTED_STEP, ""),
+        &format!("release.yml: job {pkg} {attested_want}"),
+    );
+    assert_refused(
+        &in_job(&text, "testing-apt-index", SUMS_STEP, ""),
+        &format!("release.yml: job testing-apt-index {sums_want}"),
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "stable-apt-index",
+            SUMS_STEP,
+            &SUMS_STEP.replace("        working-directory: dist\n", ""),
+        ),
+        &format!("release.yml: job stable-apt-index {sums_want}"),
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "testing-apt-write",
+            ATTESTED_STEP,
+            &ATTESTED_STEP.replace(
+                "        env:\n          GH_TOKEN: ${{ github.token }}\n",
+                "",
+            ),
+        ),
+        &format!("release.yml: job testing-apt-write {attested_want}"),
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "testing-rpm-index-2",
+            ATTESTED_STEP,
+            &ATTESTED_STEP.replace("release check dist ", "release check pool "),
+        ),
+        &format!("release.yml: job testing-rpm-index-2 {attested_want}"),
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "promote-pkg",
+            DOWNLOAD,
+            &DOWNLOAD.replace("path: dist", "path: files"),
+        ),
+        "release.yml: job promote-pkg downloads the release's files elsewhere than `dist`, which its checks read",
+    );
+    let assume = "      - name: Assume the apt publish role through OIDC\n";
+    let (start, end) = job_range(&text, pkg);
+    let job = &text[start..end];
+    let at = job.find(assume).expect("the upload assumes the role");
+    let step_end = at + job[at..].find("\n      - ").expect("a step after it") + 1;
+    let step = &job[at..step_end];
+    let moved = in_job(&text, pkg, step, "");
+    let first_download = "      - uses: actions/download-artifact@";
+    let moved = in_job(
+        &moved,
+        pkg,
+        first_download,
+        &format!("{step}{first_download}"),
+    );
+    assert_refused(
+        &moved,
+        &format!(
+            "release.yml: job {pkg} runs `channels assume` before it checked the release's files"
+        ),
+    );
+    // The same job, its steps in their order, passes: the refusal above is the move's.
+    assert!(
+        problems(&text)
+            .iter()
+            .all(|p| !p.contains("before it checked the release's files")),
+        "{:?}",
+        problems(&text)
+    );
+}
