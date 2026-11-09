@@ -89,8 +89,9 @@ before its first run. The workflow lint of this repository holds that template t
   its release as the comment, and passes that release and commit as `hostkeeper_version` and
   `hostkeeper_commit` ([Pinning hostkeeper](#pinning-hostkeeper));
 - passes `service`, `version`, `targets`, `release_index` and `release_index_digest`, the
-  coordinator's address, CA and audience, and `tailnet_tag`, from the job that read the release
-  and from repository variables.
+  coordinator's address, CA and audience, `tailnet_tag`, and the join inputs `join_tailnet`
+  (true when `HOSTKEEPER_TAILNET_CLIENT_ID` is set), `tailnet_client_id`, `tailnet_audience` and
+  `tailnet_coordinator`, from the job that read the release and from repository variables.
 
 `release_index` is the text of the `index.json` the publish job wrote (design, section 5.5), and
 `release_index_digest` its SHA-256, taken from the file the publish job uploaded: the two must be
@@ -348,11 +349,12 @@ grants those jobs need, and the join runs with all of them: the stanza, with `ta
 `tag:hk-ci`, adds the coordinator's listener to them and takes nothing away.
 
 `release.yml`'s `channel` job, which reads the release channel before this repository's own call
-of the workflow ([Deploying hostkeeper from GitHub Actions](github-actions.md)), does not join the
-tailnet: it reads `HOSTKEEPER_RELEASE_CHANNEL` from the runner as it is, so the channel must be
-reachable from a GitHub-hosted runner, and no grant to the channel's port is needed for it. Were
-the channel served only on the tailnet, a grant from the tag to the channel's port would not be
-enough: that job would have to join first, which it does not.
+of the workflow ([Deploying hostkeeper from GitHub Actions](github-actions.md)), joins the tailnet
+too when `HOSTKEEPER_TAILNET_CLIENT_ID` is set, with the same action, tarball, federated identity
+and tag, and pings the channel's host in place of the coordinator; so a channel served only on the
+tailnet is reachable, once the ACL grants the tag the channel's host and port beside the
+coordinator's listener. With the variable empty it does not join, and reads the channel from the
+runner as it is.
 
 ### The federation, set up once by a tailnet admin
 
