@@ -6,22 +6,20 @@
 # Run by hand only (`workflow_dispatch`), from main. Two inputs:
 #
 # - `version`: a release of this repository, X.Y.Z, whose assets carry the hello packages;
-# - `variant`: `hello` sets `<version>`; `fail-ready` sets `<version>-fail-ready`, the build whose
-#   `/readyz` answers 503, which the hosts fail and the coordinator rolls back.
+# - `variant`: `hello` sets `<version>`; `fail-ready` would set `<version>-fail-ready`, the build
+#   whose `/readyz` answers 503, but it has no native package (its version is not the X.Y.Z the
+#   repository takes), and a release is set with native entries alone, so its run fails at the
+#   targets step, the reason named, and sets nothing.
 #
 # `release` reads the variant's release index (`hello-index.json` or
-# `hello-fail-ready-index.json`), its archives and their bundles from the release, and
-# `cargo xtask release targets` writes the targets: one hostkeeper-archive entry per platform the
-# index lists (docs/design/packages.md, section 3.7). For `hello` it also reads hello's native
-# packages, its .deb for each Linux architecture and its .pkg with their bundles, and each
-# platform's list holds the native entry before the archive one (docs/design/packages-native.md,
-# item A21, the canary of stage 7): a host whose daemon announces `apt` (or `macos-pkg`) is moved
-# to the package of the repository's testing suite (or the installers' testing directory), and
-# any other host keeps its archive. The failing build has no native package (its version is not
-# the X.Y.Z the repository takes), so its lists hold its archives alone. It holds no token right but
-# `contents: read`, and runs nothing of the release. `set-desired` calls the CI client with the
-# targets, the index and the index's SHA-256, so each host, of any platform, is ordered its own
-# platform's package (a daemon before targets through the index). It is pinned
+# `hello-fail-ready-index.json`), its archives and hello's native packages, its .deb for each
+# Linux architecture and its .pkg with their bundles, from the release, and
+# `cargo xtask release targets` writes the targets: per platform the index lists, hello's native
+# entry alone (docs/design/packages-native.md section 10.5, A24), its manifest the archive's own,
+# so a host installs the package of the repository's testing suite (or the installers' testing
+# directory). It holds no token right but `contents: read`, and runs nothing of the release.
+# `set-desired` calls the CI client with the targets alone, so each host, of any platform, is
+# ordered its own platform's native package. It is pinned
 # like any caller's: the `uses:` commit with its release as the comment, and `hostkeeper_version`
 # and `hostkeeper_commit` of that same release. The pin is the CI client's revision the workflow
 # lint names (`callers.rs`, `CLIENT_COMMIT`), the one release.yml pins too: the client that takes
@@ -66,9 +64,7 @@ jobs:
     permissions:
       contents: read
     outputs:
-      version: ${{ steps.index.outputs.version }}
-      release_index: ${{ steps.index.outputs.release_index }}
-      release_index_digest: ${{ steps.index.outputs.release_index_digest }}
+      version: ${{ steps.version.outputs.version }}
       targets: ${{ steps.targets.outputs.targets }}
     env:
       RELEASE: ${{ inputs.version }}
@@ -85,7 +81,8 @@ jobs:
       - run: rustup toolchain install
       - name: Compile xtask
         run: cargo xtask --help
-      # The variant's index, and for each platform its archive and the archive's bundle, from
+      # The variant's index, and for each platform its archive (whose manifest the native entry
+      # takes) and the archive's bundle, from
       # the release's assets. One curl, its URL globs expanded by curl itself (the text is
       # quoted). A transient failure of a transfer is retried, as every download of a workflow is
       # (`downloads.rs` of the workflow lint); one that still fails ends it at once
@@ -97,17 +94,15 @@ jobs:
         if: ${{ inputs.variant == 'hello' }}
         run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --fail-early --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --create-dirs --output-dir "$RUNNER_TEMP/release" --remote-name-all "https://github.com/$GITHUB_REPOSITORY/releases/download/v$RELEASE/hello_${RELEASE}_{amd64,arm64}.deb{,.sigstore.json}" "https://github.com/$GITHUB_REPOSITORY/releases/download/v$RELEASE/hello-$RELEASE-macos-arm64.pkg{,.sigstore.json}"
       # Refused, every problem named, unless the index is hello's at the version, lists every
-      # platform, and each archive, bundle and manifest checks out against it, and for `hello`
-      # each native package is there, its bundle lists it and a .deb's control is hello's at
-      # the version for its architecture.
+      # platform, and each archive and its manifest check out against it, and each native
+      # package is there, its bundle lists it and a .deb's control is hello's at the version
+      # for its architecture; refused by name for `fail-ready`, which has no native package.
       - name: The targets of the variant's package
         id: targets
         run: cargo xtask release targets --service hello ${FAIL_READY:+--fail-ready} --version "$RELEASE" --dir "$RUNNER_TEMP/release" --repo "$GITHUB_REPOSITORY" --output "$GITHUB_OUTPUT"
-      # The index is canonical (one line, no final line break: `release targets` refused
-      # anything else), so the output carries its exact bytes.
-      - name: The version, the release index and its SHA-256
-        id: index
-        run: printf 'version=%s\nrelease_index=%s\nrelease_index_digest=%s\n' "$VERSION" "$(< "$RUNNER_TEMP/release/$INDEX")" "$(sha256sum "$RUNNER_TEMP/release/$INDEX" | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+      - name: The version
+        id: version
+        run: printf 'version=%s\n' "$VERSION" >> "$GITHUB_OUTPUT"
 
   set-desired:
     needs: [release]
@@ -120,8 +115,6 @@ jobs:
       service: hello
       version: ${{ needs.release.outputs.version }}
       targets: ${{ needs.release.outputs.targets }}
-      release_index: ${{ needs.release.outputs.release_index }}
-      release_index_digest: ${{ needs.release.outputs.release_index_digest }}
       hostkeeper_version: 0.1.184
       hostkeeper_commit: 2c767d1842a88edb7120073d2dff3b4bfccc834c
       coordinator_url: ${{ vars.HOSTKEEPER_COORDINATOR_URL }}

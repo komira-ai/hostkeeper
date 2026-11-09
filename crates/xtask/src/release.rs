@@ -64,9 +64,9 @@
 //! - `channel-host` ([`channel_host`]): the host of the release channel's base URL, which the
 //!   channel job of `release.yml` pings when it joins the tailnet.
 //! - `targets` ([`targets`]): the `targets` of the set that deploys a package of a release, one
-//!   `hostkeeper-archive` entry per platform its release index lists, read from the release's
-//!   assets and checked as the coordinator and the daemon check them, written as one line of
-//!   JSON for the CI client (`set-desired.yml`, input `targets`).
+//!   native entry per platform its release index lists and nothing else, read from the
+//!   release's assets and checked as the coordinator and the daemon check them, written as one
+//!   line of JSON for the CI client (`set-desired.yml`, input `targets`).
 //!
 //! The names and formats a consumer relies on are in [`contract`]. The adapters that run `git`,
 //! `gh`, `pkgbuild`, `productbuild` and `curl` are in [`git`], [`github`], [`macos_pkg`] and
@@ -593,11 +593,12 @@ pub(crate) enum Verb {
         every_secs: Option<u64>,
     },
     /// Write the `targets` of the set that deploys a package of the release: for each platform
-    /// its release index lists, one `hostkeeper-archive` entry with the archive's two locations
-    /// (the release channel's path, then the release asset), its size and SHA-256, its
-    /// `.sigstore.json` bundle, and the `min_hostkeeper` of the archive's own manifest. Refused,
-    /// every problem named, unless the index, every archive, bundle and manifest check out and
-    /// the entries pass the coordinator's checks. Prints `targets=<JSON>`.
+    /// its release index lists, the package's native entry alone (its `.deb` from the
+    /// repository's testing suite, or its `.pkg` from the installers' testing directory), whose
+    /// manifest and `min_hostkeeper` are the archive's own manifest's. Refused, every problem
+    /// named, unless the index, every archive and its manifest, and every native package and
+    /// its bundle check out and the entries pass the coordinator's checks; refused by name for a
+    /// package with no native package (hello's failing build). Prints `targets=<JSON>`.
     Targets {
         /// The service: hostkeeper (the default), hello or mdm.
         #[arg(long, value_enum, default_value_t)]
@@ -613,7 +614,9 @@ pub(crate) enum Verb {
         /// bundles.
         #[arg(long)]
         dir: PathBuf,
-        /// The repository of the release, `owner/name`.
+        /// The repository of the release, `owner/name`. Read and not used: a native entry names
+        /// no release asset. Kept so that the one command line `release.yml` runs is taken by
+        /// the xtask of every release commit it may release, older ones included.
         #[arg(long)]
         repo: Repo,
         /// A file the `targets=` line is appended to (on Actions, `GITHUB_OUTPUT`).
@@ -756,14 +759,13 @@ pub(crate) fn run<A: Adapters>(
             fail_ready,
             version,
             dir,
-            repo,
+            repo: _,
             output,
         } => match Package::of(service, fail_ready) {
             Some(package) => targets::targets(&targets::Request {
                 package,
                 version,
                 dir,
-                repo,
                 output,
             }),
             None => Err(Error::Failed(package::FAIL_READY_ONLY_HELLO.to_owned())),

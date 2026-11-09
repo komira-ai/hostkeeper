@@ -357,11 +357,8 @@ fn id_token_write_is_granted_to_the_job_only() {
     let doc = yaml::load(&real()).expect("parses");
     let top = entry(&doc, "permissions").expect("top-level permissions");
     assert!(top.is_empty_map(), "top-level permissions is not {{}}");
-    // The one other job is release.yml's channel job, whose join the channel rules hold.
-    assert_eq!(
-        ID_TOKEN_ALLOWED,
-        [(FILE, JOB), (desired::FILE, desired::CHANNEL_JOB)]
-    );
+    // No other job: release.yml's deploy waits for no release channel and joins no tailnet.
+    assert_eq!(ID_TOKEN_ALLOWED, [(FILE, JOB)]);
     let exactly =
         "job set-desired: `permissions` is not exactly `contents: read` and `id-token: write`";
     assert_client(
