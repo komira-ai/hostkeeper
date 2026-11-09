@@ -31,7 +31,9 @@ hostkeeper-enroll = { path = "../hostkeeper-enroll" }
 hostkeeper-hook = { path = "../hostkeeper-hook" }
 # The installers: their contract and registry, which the package store stages through and the
 # switch, the prune and the uninstall go through, and the installers the daemon announces
-# (docs/design/packages.md, section 5).
+# (docs/design/packages.md, section 5),
+# and the signers file of the macos-pkg installer, read and judged at the start
+# (`cli::load_signers`).
 hostkeeper-install = { path = "../hostkeeper-install" }
 # The BMC's MAC address, claimed in a Linux host's enrollment request: `Get LAN Configuration
 # Parameters` sent to `/dev/ipmi0` (`ipmi`).

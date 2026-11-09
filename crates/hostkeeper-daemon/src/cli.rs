@@ -73,6 +73,7 @@ use crate::start::{self, Settings, StartError};
 use crate::trusted_root::{PACKAGED_TRUSTED_ROOT, TrustedRoot};
 use crate::unix_clock::SystemUnixClock;
 use hostkeeper_install::announce::OsHost;
+use hostkeeper_install::macos_pkg::signers::Signers;
 use hostkeeper_install::{Announcement, Family};
 
 pub use crate::start::{EXIT_CONFIG, EXIT_FAILED, EXIT_LOCKED};
@@ -82,6 +83,7 @@ pub const DEFAULT_CONFIG: &str = "/etc/hostkeeper/hostkeeper.toml";
 /// The host's stores, beside the daemon config ([`DEFAULT_CONFIG`]) on both platforms; a host
 /// without the file has the one store `channel`, the release channel.
 pub const STORES_FILE: &str = "/etc/hostkeeper/stores.toml";
+pub use hostkeeper_install::macos_pkg::signers::SIGNERS_FILE;
 /// The default of `--state-dir`.
 pub const DEFAULT_STATE_DIR: &str = "/var/lib/updater/state";
 /// The default of `--packages-dir`.
@@ -494,6 +496,10 @@ pub struct HostFiles {
     /// The stores file ([`hostkeeper_package::stores`]); a start refuses a file that is not sound,
     /// and takes the one store `channel` when it is not there.
     pub stores: PathBuf,
+    /// The signers file of the macos-pkg installer
+    /// ([`hostkeeper_install::macos_pkg::signers`]); a start refuses a file that is not sound and
+    /// starts without one. None on Linux, which never reads it.
+    pub macos_pkg_signers: Option<PathBuf>,
     /// The pki directory, which the enrollment loop writes and the heartbeat loop reads.
     pub pki: PathBuf,
     /// The console's issue file and the agetty that redraws it; none on a Mac.
@@ -526,8 +532,9 @@ impl HostFiles {
     /// directory is [`PKI_DIR`] on both.
     ///
     /// - A Mac: [`CA_BUNDLE_MACOS`], [`GH_BINARY_MACOS`] and [`SIGSTORE_TRUSTED_ROOT_MACOS`],
-    ///   whatever `exists` says, no console, and the managed preferences of
-    ///   `hostkeeper_launchd::postinstall::MANAGED_CONFIG`.
+    ///   whatever `exists` says, no console, the managed preferences of
+    ///   `hostkeeper_launchd::postinstall::MANAGED_CONFIG`, and the signers file [`SIGNERS_FILE`]
+    ///   beside `stores.toml`.
     /// - Linux: [`GH_BINARY`] and [`SIGSTORE_TRUSTED_ROOT`], and the first of [`CA_BUNDLE`]
     ///   (Debian family) and [`CA_BUNDLE_RHEL`] (RHEL family) that exists; [`CA_BUNDLE`] when
     ///   neither does, so the fetch reads a bundle that is not there and has no root to trust.
@@ -559,6 +566,7 @@ impl HostFiles {
             gh: PathBuf::from(gh),
             trusted_root: PathBuf::from(trusted_root),
             stores: PathBuf::from(STORES_FILE),
+            macos_pkg_signers: (kind == PlatformKind::Macos).then(|| PathBuf::from(SIGNERS_FILE)),
             pki: PathBuf::from(PKI_DIR),
             console,
             managed_config: (kind == PlatformKind::Macos)
@@ -624,6 +632,21 @@ impl Verifier for HostVerifier {
     }
 }
 
+/// The signers file of `files`, which `owner_uid` must own: `Ok(None)` on a host with no such
+/// file configured (Linux) or none there; `Err` ([`StartError::MacosPkg`]) on every refusal of
+/// [`hostkeeper_install::macos_pkg::signers::load`].
+pub fn load_signers(files: &HostFiles, owner_uid: u32) -> Result<Option<Signers>, StartError> {
+    let Some(path) = &files.macos_pkg_signers else {
+        return Ok(None);
+    };
+    hostkeeper_install::macos_pkg::signers::load(path, owner_uid).map_err(|source| {
+        StartError::MacosPkg {
+            path: path.clone(),
+            source,
+        }
+    })
+}
+
 /// The ports of this build over the platform's `adapters` ([`Adapters`]: the step launcher, the
 /// service manager, the unit directory, the observer's service manager and process probe, and
 /// the package check). The package store is the real one ([`RealPackages`]: HTTPS over the CA
@@ -638,7 +661,8 @@ impl Verifier for HostVerifier {
 /// announces are decided here, once, from the host's `os-release` under the `os_root` of
 /// `files` ([`hostkeeper_install::announce`]). The directory `gh` runs in
 /// (`<state-dir>/.gh`) is made mode 0700 here. `Err` when the stores file of `files` is not sound
-/// ([`StartError::Stores`]; one that is not there gives the store `channel`), when that directory
+/// ([`StartError::Stores`]; one that is not there gives the store `channel`) or the signers file is
+/// not ([`StartError::MacosPkg`]), when that directory
 /// cannot be made or the packages directory cannot be opened.
 pub fn host_ports(
     config: &DaemonConfig,
@@ -653,6 +677,10 @@ pub fn host_ports(
             path: files.stores.clone(),
             source,
         })?;
+    // The signers are checked here and not kept: the daemon's order path runs no installer yet
+    // (item A6 dispatches them), so `macos-pkg` is not in `entry::INSTALLERS` and the daemon does
+    // not announce an installer it cannot run. A6 takes the loaded signers from this call.
+    let _signers = load_signers(files, 0)?;
     let clock: Arc<dyn Clock> = Arc::new(host_clock());
     let fetcher = NetFetcher::new(
         UreqTransport::new(&tls_roots(&files.ca_bundle)),

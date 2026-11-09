@@ -4,6 +4,7 @@
 
 use std::path::Path;
 
+use super::desired;
 use super::lint::{ID_TOKEN_ALLOWED, entries, entry, lint};
 use super::set_desired::{CLIENT_STEP, FILE, JOB, JOIN_INPUT, JOIN_STEP, VERIFY_STEPS};
 use super::yaml::{self, Node, Value};
@@ -356,7 +357,11 @@ fn id_token_write_is_granted_to_the_job_only() {
     let doc = yaml::load(&real()).expect("parses");
     let top = entry(&doc, "permissions").expect("top-level permissions");
     assert!(top.is_empty_map(), "top-level permissions is not {{}}");
-    assert_eq!(ID_TOKEN_ALLOWED, [(FILE, JOB)]);
+    // The one other job is release.yml's channel job, whose join the channel rules hold.
+    assert_eq!(
+        ID_TOKEN_ALLOWED,
+        [(FILE, JOB), (desired::FILE, desired::CHANNEL_JOB)]
+    );
     let exactly =
         "job set-desired: `permissions` is not exactly `contents: read` and `id-token: write`";
     assert_client(

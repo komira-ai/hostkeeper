@@ -6,28 +6,45 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "The host daemon's installers: the installer contract, the registry of the installers it is built with, and the installers a daemon announces."
+description = "The host daemon's installers: the installer contract, the registry of the installers it is built with, the installers a daemon announces, and the macos-pkg installer of a signed flat .pkg with its signers file."
 
 # docs/design/packages.md, section 5: an installer is built into the daemon, behind one trait,
 # and this crate holds them. It writes only the version directory it stages; the switch, the
-# placement and the step launcher are the daemon's, behind ports.
+# placement and the step launcher are the daemon's, behind ports. macos-pkg's parsing and steps
+# are ports and pure logic measured on Linux against fakes; its real tools run only on a Mac, in
+# the macos-device job of `crates/hostkeeper-privileged`.
 [dependencies]
 # The platform, names and digests of an order.
 hostkeeper-config = { path = "../hostkeeper-config" }
+# `Label`, a launchd label of a `run` entry, and `LaunchctlProcess`, the bounded child-process
+# runner every macos-pkg tool (`pkgutil`, `installer`, `lsbom`, `launchctl`) runs through.
+hostkeeper-launchd = { path = "../hostkeeper-launchd" }
 # The entry an order carries (`Target`).
 hostkeeper-proto = { path = "../hostkeeper-proto" }
 # The installers' names.
 hostkeeper-release = { path = "../hostkeeper-release" }
 # The bounded reader: today's unpack, the stage of hostkeeper-archive.
 hostkeeper-unpack = { path = "../hostkeeper-unpack" }
+# Fingerprints of signers, as hex.
+hex.workspace = true
+# `O_NOFOLLOW` for the signers file's open.
+libc.workspace = true
+# The receipts and launchd plists, and `pkgutil`'s `-plist` answers.
+plist.workspace = true
+# The record macos-pkg keeps.
+serde.workspace = true
+# Hashes of installed files against their sealed copies in `tree/`.
+sha2.workspace = true
 thiserror.workspace = true
+# The signers file, `/etc/hostkeeper/macos-pkg.toml`.
+toml.workspace = true
 
 [dev-dependencies]
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }
-# The archive digests and the running user of the stage's tests.
-hex.workspace = true
+# The running user of the stage's tests.
 rustix = { workspace = true, features = ["process"] }
-sha2.workspace = true
+# The record's JSON form, asserted by the tests.
+serde_json.workspace = true
 
 [lints]
 workspace = true

@@ -27,9 +27,11 @@
 # lint names (`callers.rs`, `CLIENT_COMMIT`), the one release.yml pins too: the client that takes
 # targets and the tailnet tag, one set and one held wait. The coordinator, its CA, the audience
 # and the tailnet tag (`HOSTKEEPER_TAILNET_TAG`, `tag:ci`, which the client checks at its first
-# step even though this job does not join the tailnet) are repository variables; the
-# coordinator's allow-list entry for this workflow names `hello` (docs/deploy/ci-client.md, "The
-# allow-list entry").
+# step, with or without the join) are repository variables; the coordinator's allow-list entry
+# for this workflow names `hello` (docs/deploy/ci-client.md, "The allow-list entry"). As
+# release.yml's call does, the client joins the tailnet when `HOSTKEEPER_TAILNET_CLIENT_ID` is
+# set (with `HOSTKEEPER_TAILNET_AUDIENCE` and `HOSTKEEPER_TAILNET_COORDINATOR`), so a coordinator
+# served only on the tailnet is reachable; empty, no join.
 #
 # The workflow lint (crates/xtask/tests/workflows, `callers.rs`) holds this file to that shape.
 name: hello-desired
@@ -125,4 +127,8 @@ jobs:
       coordinator_url: ${{ vars.HOSTKEEPER_COORDINATOR_URL }}
       coordinator_ca: ${{ vars.HOSTKEEPER_COORDINATOR_CA }}
       audience: ${{ vars.HOSTKEEPER_CI_AUDIENCE }}
+      join_tailnet: ${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID != '' }}
+      tailnet_client_id: ${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID }}
+      tailnet_audience: ${{ vars.HOSTKEEPER_TAILNET_AUDIENCE }}
+      tailnet_coordinator: ${{ vars.HOSTKEEPER_TAILNET_COORDINATOR }}
       tailnet_tag: ${{ vars.HOSTKEEPER_TAILNET_TAG }}
