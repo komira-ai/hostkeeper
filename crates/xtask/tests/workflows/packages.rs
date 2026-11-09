@@ -102,6 +102,12 @@ pub const STAGES: [&str; 10] = [
     "check-pkg",
 ];
 
+/// The prefix of the jobs of the suite `testing-fail` (hello's failing build alone).
+pub const FAIL_JOB_PREFIX: &str = "testing-fail-";
+
+/// The prefix of the artifacts those jobs hand each other, and no other job.
+pub const FAIL_ARTIFACT_PREFIX: &str = "apt-fail-";
+
 /// The environment that holds the cloud role and no key.
 pub const PUBLISH_ENV: &str = "apt-publish";
 
@@ -660,6 +666,17 @@ fn step_problems(row: &Row, job: &Node) -> Vec<String> {
                     "downloads the artifact {artifact:?}, which is neither the release's ({RELEASE_ARTIFACT}) nor one of the channel jobs"
                 ));
             }
+        }
+        let handed = uses.starts_with("actions/download-artifact@")
+            || uses.starts_with("actions/upload-artifact@");
+        let artifact = text_of(entry(step, "with"), "name").unwrap_or_default();
+        if handed
+            && artifact != RELEASE_ARTIFACT
+            && artifact.starts_with(FAIL_ARTIFACT_PREFIX) != name.starts_with(FAIL_JOB_PREFIX)
+        {
+            say(format!(
+                "hands on the artifact {artifact:?}: the jobs of {FAIL_JOB_PREFIX}* and only they name artifacts {FAIL_ARTIFACT_PREFIX}*, so the two apt trees of a run never share one"
+            ));
         }
     }
     if !row.gated {

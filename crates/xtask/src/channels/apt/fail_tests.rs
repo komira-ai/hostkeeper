@@ -350,6 +350,34 @@ fn a_package_file_of_the_wrong_form_or_package_for_the_suite_gets_no_entry() {
 }
 
 #[test]
+fn a_name_or_architecture_that_cannot_be_a_pool_path_is_named_without_blaming_the_version() {
+    // Catches: a refusal that tells the operator to fix a version that is in its suite's form.
+    let named = spec::Package {
+        name: "../x",
+        ..*hello()
+    };
+    let slashed = spec::Arch {
+        deb: "a/b",
+        rpm: "a/b",
+    };
+    for (deb, said) in [
+        (
+            fixtures::deb(&named, "1.2.3~fail.ready", &spec::ARCHES[0]),
+            "../x_1.2.3~fail.ready_amd64 cannot be a file of the pool of testing-fail",
+        ),
+        (
+            fixtures::deb(hello(), "1.2.3~fail.ready", &slashed),
+            "hello_1.2.3~fail.ready_a/b cannot be a file of the pool of testing-fail",
+        ),
+    ] {
+        assert_eq!(
+            stanza_of(&deb, Suite::TestingFail).unwrap_err().to_string(),
+            said
+        );
+    }
+}
+
+#[test]
 fn an_existing_testing_fail_index_with_a_release_entry_refuses_the_build() {
     // Catches: an index that was written wrongly being merged into, and so republished.
     let lab = Lab::new("fail-existing");

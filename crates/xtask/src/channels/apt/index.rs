@@ -108,7 +108,13 @@ pub fn stanza_of(deb: &[u8], suite: Suite) -> Result<Stanza, Error> {
             .ok_or_else(|| refused(format!("the package's control file has no {name}")))
     };
     let (package, version, architecture) = (get("Package")?, get("Version")?, get("Architecture")?);
-    if !valid_name(package) || suite.numbers(version).is_none() || !valid_arch(architecture) {
+    if !valid_name(package) || !valid_arch(architecture) {
+        return Err(refused(format!(
+            "{package}_{version}_{architecture} cannot be a file of the pool of {}",
+            suite.name()
+        )));
+    }
+    if suite.numbers(version).is_none() {
         return Err(refused(format!(
             "{package}_{version}_{architecture} cannot be a file of the pool of {}: its version must be {}",
             suite.name(),

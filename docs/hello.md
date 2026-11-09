@@ -127,8 +127,9 @@ makes that directory, owner only, on its first step.
    `/etc/hostkeeper/repositories/komira-testing-fail.sources`, with `Suites: testing-fail` and
    the same keyring as `komira-testing`. Place it, check the directory with
    `hostkeeper check-repositories --dir /etc/hostkeeper/repositories`, and restart the daemon,
-   which reads the entries at start. A host without the entry shows the hold for an entry it
-   does not have, and the failing build is never installed on it.
+   which reads the entries at start. A host without the entry fails the order at stage with the
+   class `environment` and the reason `repository_unknown`, which is not the `not_ready` rollback
+   the proof waits for, and the failing build is never installed on it.
 
 ## 1. Assign hello to a role
 

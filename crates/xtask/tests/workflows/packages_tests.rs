@@ -838,9 +838,24 @@ fn hellos_failing_build_has_its_three_jobs_in_one_attempt_in_the_suite_testing_f
         ),
         "release.yml: job testing-fail-apt-write passes --suite [\"testing\"], not [\"testing-fail\"]",
     );
-    for artifact in ["apt-fail-current", "apt-fail-next"] {
-        assert!(text.contains(&format!("name: {artifact}\n")), "{artifact}");
-    }
+    assert_refused(
+        &in_job(
+            &text,
+            "testing-fail-apt-index",
+            "name: apt-fail-next\n",
+            "name: apt-next\n",
+        ),
+        "release.yml: job testing-fail-apt-index hands on the artifact \"apt-next\": the jobs of testing-fail-* and only they name artifacts apt-fail-*, so the two apt trees of a run never share one",
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "testing-apt-read",
+            "name: apt-current\n",
+            "name: apt-fail-current\n",
+        ),
+        "release.yml: job testing-apt-read hands on the artifact \"apt-fail-current\": the jobs of testing-fail-* and only they name artifacts apt-fail-*, so the two apt trees of a run never share one",
+    );
 }
 
 #[test]
