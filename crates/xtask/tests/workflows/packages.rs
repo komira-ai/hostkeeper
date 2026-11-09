@@ -21,7 +21,15 @@
 //! - `docker` is run only by the two install checks, with an image pinned by digest, in the
 //!   one command each is allowed ([`docker_line_ok`]);
 //! - `promote-check` gives `channels decide` every stage of [`STAGES`], each the result of its own
-//!   job.
+//!   job;
+//! - a job that signs or publishes takes the release's files only to check them first: in every
+//!   gated job that downloads the release's artifact, the two steps right after the download
+//!   check the files against `SHA256SUMS` ([`SUMS_CHECK`]) and against their attestations by this
+//!   repository's workflow at the release's commit ([`ATTESTATION_CHECK`], with the job's token),
+//!   and no `channels` verb but the gate runs before them ([`release_files_problems`]). So the
+//!   bytes the repository's key signs and the store serves, hostkeeper's own `.deb` and
+//!   installer among them, are the ones the release attested (docs/design/packages-native.md
+//!   section 10.3).
 
 use super::lint::{entries, entry, scalars};
 use super::release::{names, steps, text_of};
@@ -49,6 +57,22 @@ pub const NEWEST_TAG: &str = "${{ needs.newest.outputs.tag }}";
 
 /// The artifact that holds the release's files (`verify` uploaded it).
 pub const RELEASE_ARTIFACT: &str = "release-${{ needs.newest.outputs.tag }}";
+
+/// The directory a job downloads the release's files into.
+pub const RELEASE_DIR: &str = "dist";
+
+/// The step right after the download of the release's files, run in [`RELEASE_DIR`]: every file
+/// is the one `SHA256SUMS` lists.
+pub const SUMS_CHECK: &str = "sha256sum --check --strict SHA256SUMS";
+
+/// The step after [`SUMS_CHECK`]: every asset is attested by this repository's workflow at the
+/// release's commit, online and by its bundle (`cargo xtask release check`), with the job's
+/// token as [`ATTESTATION_TOKEN`].
+pub const ATTESTATION_CHECK: &str =
+    "cargo xtask release check dist --version \"${TAG#v}\" --commit \"$COMMIT\"";
+
+/// The `GH_TOKEN` of the [`ATTESTATION_CHECK`] step.
+pub const ATTESTATION_TOKEN: &str = "${{ github.token }}";
 
 /// The value of `--token-url` of every `channels assume` step: the token request the runner
 /// offers a job with `id-token: write`, passed as a flag and not read from the environment.
@@ -659,6 +683,62 @@ fn step_problems(row: &Row, job: &Node) -> Vec<String> {
             say(
                 "must be off while the repository variable RPM_REPO_READY is not `true`".to_owned(),
             );
+        }
+    }
+    problems.extend(release_files_problems(name, list));
+    problems
+}
+
+/// Whether `step` downloads the release's files.
+fn takes_release_files(step: &Node) -> bool {
+    text_of(Some(step), "uses").is_some_and(|u| u.starts_with("actions/download-artifact@"))
+        && text_of(entry(step, "with"), "name") == Some(RELEASE_ARTIFACT)
+}
+
+/// One line per way the gated job `name`, with the steps `list`, uses the release's files before
+/// it checked them: the download is into [`RELEASE_DIR`], the step right after it is
+/// [`SUMS_CHECK`] in that directory, the next [`ATTESTATION_CHECK`] with [`ATTESTATION_TOKEN`],
+/// and no step before those two runs a `channels` verb but the gate. Nothing for a job that does
+/// not download the files.
+pub fn release_files_problems(name: &str, list: &[Node]) -> Vec<String> {
+    let Some(at) = list.iter().position(takes_release_files) else {
+        return Vec::new();
+    };
+    let mut problems = Vec::new();
+    let mut say = |text: String| problems.push(format!("release.yml: job {name} {text}"));
+    if text_of(entry(&list[at], "with"), "path") != Some(RELEASE_DIR) {
+        say(format!(
+            "downloads the release's files elsewhere than `{RELEASE_DIR}`, which its checks read"
+        ));
+    }
+    let sums = list.get(at + 1);
+    if text_of(sums, "run") != Some(SUMS_CHECK)
+        || text_of(sums, "working-directory") != Some(RELEASE_DIR)
+    {
+        say(format!(
+            "needs the step `{SUMS_CHECK}` in `{RELEASE_DIR}` right after the download of the release's files"
+        ));
+    }
+    let attested = list.get(at + 2);
+    if text_of(attested, "run") != Some(ATTESTATION_CHECK)
+        || !pairs(attested.and_then(|s| entry(s, "env")))
+            .contains(&("GH_TOKEN".to_owned(), ATTESTATION_TOKEN.to_owned()))
+    {
+        say(format!(
+            "needs the step `{ATTESTATION_CHECK}` with `GH_TOKEN: {ATTESTATION_TOKEN}` right after the check of SHA256SUMS: it signs or publishes only attested bytes"
+        ));
+    }
+    for step in &list[..(at + 3).min(list.len())] {
+        let run = text_of(Some(step), "run").unwrap_or_default();
+        let early = commands(run)
+            .iter()
+            .filter_map(|c| xtask_args(c))
+            .filter_map(channel_verb)
+            .find(|verb| verb != "gate");
+        if let Some(verb) = early {
+            say(format!(
+                "runs `channels {verb}` before it checked the release's files"
+            ));
         }
     }
     problems

@@ -168,8 +168,9 @@ const ODC_MAGIC: &[u8; 6] = b"070707";
 const ODC_HEADER: usize = 76;
 const TRAILER: &str = "TRAILER!!!";
 
-/// The pkg's identifier: the daemon's launchd label, a reverse-DNS name.
-fn identifier() -> String {
+/// The pkg's identifier: the daemon's launchd label, a reverse-DNS name. hostkeeper's native
+/// `macos-pkg` entry names it as its package (`release targets`).
+pub(crate) fn identifier() -> String {
     Label::daemon().as_str().to_owned()
 }
 

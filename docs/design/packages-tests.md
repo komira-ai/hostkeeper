@@ -310,8 +310,10 @@ only in the device jobs, against a signed fixture repository and signed fixture 
   text is held byte for byte (`crates/hostkeeper-launchd/tests/postinstall.rs`, A19).
 - **Release workflows (A21, A23, A24; the workflow lint, `crates/xtask/src/release/targets/tests.rs`).** `release
   targets` writes the native entry before the archive one for each platform (A21, A23) and the native entry alone
-  (A24); the lint holds the publish steps to the release machinery's call and, from A24, refuses the channel wait and
-  any index output while it keeps the `targets` job that `set-desired` needs; X1's pin is a release from A19 on.
+  (A24); the lint holds the publish steps to the release machinery's call (`crates/xtask/tests/workflows/packages.rs`:
+  every job that signs or puts the release's files checks them against `SHA256SUMS` and their attestations first, A23)
+  and, from A24, refuses the channel wait and any index output while it keeps the `targets` job that `set-desired`
+  needs; X1's pin is a release from A19 on.
 - **The runbook (A22; `docs/operations/move-to-native.md`, `crates/xtask/tests/enrollment_doc.rs` and
   `enrollment_doc/move_runbook.rs`).** Every `hkctl` command of the runbook is one of `hkctl`'s table, as for the
   enrollment runbook. Each query is one block of one `hkctl` call and one `jq` program reading the file the call

@@ -74,8 +74,8 @@ fn attest_and_index(dist: &Path, package: Package) {
     index::write_index(dist, package, &release()).expect("write the index");
 }
 
-/// The release of `package`, every archive built as the release builds it, and for hello and
-/// mdm their native packages ([`natives`]).
+/// The release of `package`, every archive built as the release builds it, and for hostkeeper,
+/// hello and mdm their native packages ([`natives`]).
 fn built(dist: &Path, package: Package) {
     for platform in package.platforms() {
         build(dist, package, *platform);
@@ -90,9 +90,9 @@ fn built(dist: &Path, package: Package) {
 }
 
 /// Writes each native package of `package` into `dist` with a bundle listing its SHA-256: a
-/// `.deb` as `release deb` builds it (hello's files; mdm's with a program and its hook, as its
-/// pinned servers are not at hand), and in place of the `.pkg`, which only a Mac builds, bytes
-/// of its own.
+/// `.deb` as `release deb` builds it (hello's files; hostkeeper's and mdm's with their program
+/// alone, as nfpm's staged files and mdm's pinned servers are not at hand), and in place of the
+/// `.pkg`, which only a Mac builds, bytes of its own.
 fn natives(dist: &Path, package: Package) {
     let service = package.service().name();
     for platform in package.platforms() {
@@ -101,13 +101,17 @@ fn natives(dist: &Path, package: Package) {
             .expect("a native package");
         let bytes = match native_deb::arch(*platform) {
             Some(arch) => {
-                let files = match package {
-                    Package::Hello => native_hello::deb_files(b"a program".to_vec(), false),
-                    _ => vec![native_hello::File {
-                        path: "/usr/lib/mdm/mdm".to_owned(),
+                let program = |path: &str| {
+                    vec![native_hello::File {
+                        path: path.to_owned(),
                         mode: 0o755,
                         data: b"a program".to_vec(),
-                    }],
+                    }]
+                };
+                let files = match package {
+                    Package::Hello => native_hello::deb_files(b"a program".to_vec(), false),
+                    Package::Hostkeeper => program("/usr/bin/hostkeeper"),
+                    _ => program("/usr/lib/mdm/mdm"),
                 };
                 native_deb::build(service, "0.1.5", arch, "a service", &files, 1_800_000_000)
                     .expect("build the .deb")
@@ -270,31 +274,119 @@ fn read_back_as_the_coordinator(dist: &Path, service: &str, version: &str, targe
     assert_eq!(from_targets, from_index);
 }
 
+/// The native entry the verb must write for hostkeeper's own package on `platform` of `dist`:
+/// the daemon's `.deb` from the testing suite, or the installer from the installers' testing
+/// directory, with the archive's hook bounds, its run unit on Linux, and its floor `floor`.
+fn expected_hostkeeper_native(dist: &Path, platform: Platform, floor: &str) -> Value {
+    let name = Package::Hostkeeper
+        .native_name(&release(), platform)
+        .expect("a native package");
+    let digest = file_sha256(&dist.join(&name)).expect("hash");
+    let mut manifest = json!({
+        "hook": {
+            "timeoutSecs": {
+                "prepare": "300", "cutover": "300", "verify": "300", "rollback": "300",
+                "cleanup": "300",
+            },
+            "verifyDeadlineSecs": "600",
+        },
+        "minHostkeeper": floor,
+        "installerBounds": {"stageSecs": "600", "activateSecs": "300", "removeSecs": "300"},
+    });
+    if platform == Platform::MacosArm64 {
+        manifest["package"] = json!("dev.hostkeeper.hostkeeper");
+        let bytes = std::fs::metadata(dist.join(&name)).expect("the .pkg").len();
+        return json!({
+            "installer": "macos-pkg",
+            "locations": [{"store": "komira-testing", "locator": format!("hostkeeper/0.1.5/{name}")}],
+            "digest": digest,
+            "bytes": bytes.to_string(),
+            "manifest": manifest,
+        });
+    }
+    manifest["package"] = json!("hostkeeper");
+    manifest["run"] = json!(["hostkeeper.service"]);
+    json!({
+        "installer": "apt",
+        "digest": digest,
+        "manifest": manifest,
+        "repository": "komira-testing",
+        "packageVersion": "0.1.5",
+    })
+}
+
 #[test]
-fn hostkeeper_gets_one_archive_entry_per_platform_the_index_lists() {
-    // Catches: an entry of other bytes than the index lists (the coordinator refuses the set
-    // `index_invalid`), a platform left out, the bundle's size or digest not the bundle's own, a
-    // location the daemon cannot fetch from (the channel path or the release asset misspelt),
-    // the channel not first, or a manifest that carries more than `min_hostkeeper` (the daemon
-    // refuses it `manifest_invalid`) or another floor than the archive's own.
+fn hostkeeper_lists_its_deb_and_its_installer_before_its_archive_on_every_platform() {
+    // Catches: hostkeeper's list without its native entry (no host moves at stage 8), the native
+    // entry after the archive one (the coordinator refuses hostkeeper's list `target_invalid`,
+    // and a host that lists both installers would be picked the archive), a `.deb` entry that is
+    // not a repository entry of the testing suite pinned by the daemon's `.deb`'s own SHA-256 at
+    // the release's version, an installer entry whose location is not where the installers'
+    // testing directory holds it, that carries an attestation or names hello's identifier, a
+    // native manifest with another floor than the archive's (`OLDEST_READER`), the archive's
+    // placeholder hook command, or no run unit on Linux; and the archive entry after it changed:
+    // other bytes than the index lists, a platform left out, the bundle's size or digest not the
+    // bundle's own, a location misspelt, the channel not first, or a manifest that carries more
+    // than `min_hostkeeper`.
     let (_root, dist) = dist("targets-hostkeeper");
     built(&dist, Package::Hostkeeper);
     let floor = release().min(OLDEST_READER).to_string();
     let lines = targets(&request(&dist, Package::Hostkeeper, None)).expect("the targets");
     let got = answered(&lines);
-    let entry = |platform: &str| {
-        let name = format!("hostkeeper-0.1.5-{platform}.tar.zst");
-        expected_entry(&dist, &name, "hostkeeper/0.1.5", &floor)
+    let entry = |platform: Platform| {
+        let name = format!("hostkeeper-0.1.5-{}.tar.zst", platform.name());
+        native_first(
+            expected_hostkeeper_native(&dist, platform, &floor),
+            expected_entry(&dist, &name, "hostkeeper/0.1.5", &floor),
+        )
     };
     assert_eq!(
         got,
         json!({
-            "linux-arm64": entry("linux-arm64"),
-            "linux-x86_64": entry("linux-x86_64"),
-            "macos-arm64": entry("macos-arm64"),
+            "linux-arm64": entry(Platform::LinuxArm64),
+            "linux-x86_64": entry(Platform::LinuxX86_64),
+            "macos-arm64": entry(Platform::MacosArm64),
         })
     );
     read_back_as_the_coordinator(&dist, "hostkeeper", "0.1.5", &got);
+}
+
+#[test]
+fn hostkeepers_native_entries_name_the_package_its_daemon_takes_as_its_own() {
+    // Catches: a native entry of hostkeeper whose package its daemon does not take as its own
+    // package (a `.pkg` identifier other than the daemon's launchd label, which the installer
+    // builder and the daemon share, or a `.deb` package other than `hostkeeper`), so the daemon
+    // would refuse the bootstrap package's scripts and paths at stage; or a run unit that is not
+    // a unit file of the daemon's own `.deb`, which stage refuses.
+    let (_root, dist) = dist("targets-hostkeeper-own");
+    built(&dist, Package::Hostkeeper);
+    let got = answered(&targets(&request(&dist, Package::Hostkeeper, None)).expect("the targets"));
+    for (platform, list) in got.as_object().expect("an object") {
+        let native = &list["entries"][0]["manifest"];
+        let package = native["package"].as_str().expect("a package");
+        if platform == "macos-arm64" {
+            assert!(
+                hostkeeper_install::macos_pkg::own::is_own("hostkeeper", package),
+                "{package}"
+            );
+            assert_eq!(
+                native.get("run"),
+                None,
+                "a Mac's daemon is the installer's job"
+            );
+            continue;
+        }
+        assert_eq!(package, "hostkeeper", "{platform}");
+        let run = native["run"].as_array().expect("run units");
+        assert!(!run.is_empty(), "{platform}");
+        for unit in run {
+            let file = format!("usr/lib/systemd/system/{}", unit.as_str().expect("a unit"));
+            assert!(
+                hostkeeper_install::repository::tree::OWN_FILES.contains(&file.as_str()),
+                "{file}"
+            );
+        }
+    }
 }
 
 #[test]

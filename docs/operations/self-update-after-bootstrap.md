@@ -83,6 +83,18 @@ floor is above `LEGACY_FLOOR` (0.1.53), so every daemon that can take the releas
 daemon's built-in steps, each of which succeeds at once; a daemon older than the floor reads the
 table and defers the release `daemon_too_old`.
 
+## Through the host's own package
+
+From the release that lists hostkeeper's native entry (docs/design/packages-native.md, item A23),
+each platform's list of the service `hostkeeper` holds first the package the host was set up from,
+then the archive: on Linux the daemon's `.deb`, an `apt` entry of the repository's `testing` suite;
+on a Mac the installer pkg, a `macos-pkg` entry of the `testing` store. A host whose daemon
+announces that installer (host setup placed its repository entry or store) is picked the package:
+the daemon stages the new version, restarts into its binary, and only once that binary has
+confirmed itself installs the package (`apt-get install` and the hold, or `installer`), so the unit
+always starts a binary that ran (section 10.4 of that design). Any other host is picked the archive
+and updates as above.
+
 ## Daemons before this change
 
 They take an `install` of hostkeeper by the path every service is installed by: the package is
