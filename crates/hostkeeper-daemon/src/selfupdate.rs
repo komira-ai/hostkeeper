@@ -1,9 +1,11 @@
-//! The update of hostkeeper itself (design section 6.6): an `update` or an `install` of the
-//! service `hostkeeper` followed by the self-update follow-on, recorded `Succeeded` only once the
-//! new binary has run.
+//! The update of hostkeeper itself (design section 6.6): an `update`, an `install` or a
+//! `force_rollback` of the service `hostkeeper` followed by the self-update follow-on, recorded
+//! `Succeeded` only once the new binary has run.
 //!
-//! [`run`] is the executor's path for an `update` and an `install` of the service `hostkeeper`;
-//! every other service's orders are untouched. An `install` is what a daemon the deb or the pkg
+//! [`run`] is the executor's path for an `update`, an `install` and a `force_rollback` of the
+//! service `hostkeeper` (a `force_rollback` is a hand-over to the version it names, lower ones
+//! included: docs/design/packages-native.md, sections 10.4 and 10.6); every other service's
+//! orders are untouched. An `install` is what a daemon the deb or the pkg
 //! installed is ordered first: it runs, but no package of it is installed, so an `update` of it
 //! would be refused `not_installed`. The install places the package and, when the release is not
 //! the binary that runs, swaps the binary as an update does; when it is, the install is
@@ -17,9 +19,14 @@
 //! 2. an update that waits for the restart answers a resend of its own order `Deferred`
 //!    `awaiting_restart`, and any other order `busy`;
 //! 3. the try rules, as for every `update` and `install`;
+//!    While the record waits for the `activate` of hostkeeper's own package (below), an order for
+//!    that version runs the `activate` again and is answered with how it went, and any other is
+//!    `busy`;
 //! 4. the step record of every other service: while any holds an unfinished update (`pending`,
 //!    `running`, or `done` between two steps), or cannot be read, the order is `busy`, and
-//!    nothing is written;
+//!    nothing is written; then a release older than this daemon below an installer of what the
+//!    host holds is `Failed` before the commit, of class release (`rollback_below_installer`,
+//!    [`crate::rollback_floor`]), with nothing staged;
 //! 5. the checks of every `update` (or `install`: none of hostkeeper is installed yet), and the
 //!    package;
 //! 6. the step lock, waited for (a running step of another service is never interrupted), and
@@ -41,7 +48,9 @@
 //!    command of the release runs, and the record is the one a hook that does nothing gives.
 //!    Below it the command runs;
 //! 9. the follow-on ([`hostkeeper_steps::follow_on`]), the hand-over (docs/design/two-programs.md,
-//!    4.3): the new binary staged in the binary directory ([`binary_dir`]), the link `next`
+//!    4.3): the new binary ([`release_binary`]: `bin/hostkeeper` of an archive version,
+//!    `tree/usr/bin/hostkeeper` of a `.deb`, `tree/usr/local/bin/hostkeeper` of a `.pkg`)
+//!    staged in the binary directory ([`binary_dir`]), the link `next`
 //!    pointed at it, the record written as waiting for the restart into it with a start count of
 //!    0. `current` is not moved. The reply is `Deferred` `awaiting_restart`, never `Succeeded`,
 //!    and the daemon is asked to exit with status 0 ([`Restart`]). Its unit
@@ -51,6 +60,15 @@
 //!    not settle the update make the old one settle it `Failed` and run. The step lock is
 //!    released only after the hand-over, so a step of another service that waits for it starts
 //!    after it.
+//!
+//! **Through a native installer** (docs/design/packages-native.md, section 10.4): an update to a
+//! native version, or on a host where hostkeeper runs from its native package, switches nothing
+//! before the new binary has run ([`crate::own_package`]): the step runner's switch and the
+//! built-in steps do nothing for it. The new binary, once it confirmed itself at its start,
+//! installs its own package ([`Daemon::activate_own_package`]): its confirmation leaves the
+//! `activate` pending in the record ([`hostkeeper_steps::settle_activating`]), and the verdict is
+//! written, and reported, only after the `activate`. An update or an install of the version that
+//! runs, which needs no restart, runs the `activate` at once, under the order.
 //!
 //! At start, after the lock of the state directory and before the boot pass,
 //! [`Daemon::settle_self_update`] settles an update that waits for the restart
@@ -77,10 +95,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_hook::{Class, Phase, Verdict};
+use hostkeeper_proto::hostkeeper::release::v1::Target;
+use hostkeeper_release::Installer;
 use hostkeeper_steps::record::{
-    AwaitingRestart, Loaded, REASON_SELF_UPDATE_FALLBACK, RecordError, State,
+    AwaitingRestart, Loaded, PendingActivate, REASON_SELF_UPDATE_FALLBACK, RecordError, State,
 };
-use hostkeeper_steps::selfupdate::settle_with;
+use hostkeeper_steps::selfupdate::settle_activating;
 use hostkeeper_steps::{
     ArtifactError, BadVersions, FollowOn, Layout, OLDEST_READER, SelfUpdateError, Settled,
     StepRunner, follow_on,
@@ -90,14 +110,25 @@ use tokio::sync::Notify;
 use crate::executor::{Ctx, Daemon, Reply};
 use crate::files;
 use crate::installed;
-use crate::locks::ServiceGuard;
+use crate::locks::{Holder, ServiceGuard};
+use crate::own_package::{self, DEFER_SECS, OwnActivate, REASON_ACTIVATE_PENDING};
 use crate::refusal::Refusal;
+use crate::rollback_floor::{self, REASON_ROLLBACK_BELOW_INSTALLER};
+use crate::target;
 use crate::verb::{Hooked, HookedVerb};
 use crate::verbs::force::SELF_SERVICE;
 use crate::verbs::update;
 
-/// The hostkeeper binary in a release of the service `hostkeeper`.
+/// The hostkeeper binary in a release of the service `hostkeeper` that is a
+/// `hostkeeper-archive` version.
 pub const RELEASE_BINARY: &str = "bin/hostkeeper";
+/// The hostkeeper binary in a version of the service `hostkeeper` staged from its `.deb`
+/// (`apt`): the package's `/usr/bin/hostkeeper` in the version's tree
+/// (docs/design/packages-native.md, section 10.4, step 1).
+pub const APT_RELEASE_BINARY: &str = "tree/usr/bin/hostkeeper";
+/// The hostkeeper binary in a version of the service `hostkeeper` staged from its `.pkg`
+/// (`macos-pkg`): the package's `/usr/local/bin/hostkeeper` in the version's tree.
+pub const PKG_RELEASE_BINARY: &str = "tree/usr/local/bin/hostkeeper";
 /// The binary directory's name in the state directory of the service `hostkeeper`.
 pub const BINARY_DIR: &str = "bin";
 /// The reason of the `Deferred` of an update whose new binary has not run yet.
@@ -141,6 +172,18 @@ pub fn judge(running: HostkeeperVersion, version: &str) -> Judgement {
     match HostkeeperVersion::parse(version) {
         Ok(target) if (target == running) | (target >= OLDEST_READER) => Judgement::Accepted,
         _ => Judgement::Unsupported,
+    }
+}
+
+/// The hostkeeper binary of a version of the service `hostkeeper` staged as `staged` (its
+/// `target.json`, `None` for a `hostkeeper-archive` version), relative to the version's
+/// directory: [`RELEASE_BINARY`], [`PKG_RELEASE_BINARY`] for a `macos-pkg` version, and
+/// [`APT_RELEASE_BINARY`] for any other, which only `apt` stages.
+pub fn release_binary(staged: Option<&Target>) -> &'static str {
+    match staged.map(|entry| entry.installer.parse::<Installer>()) {
+        None => RELEASE_BINARY,
+        Some(Ok(Installer::MacosPkg)) => PKG_RELEASE_BINARY,
+        Some(_) => APT_RELEASE_BINARY,
     }
 }
 
@@ -262,10 +305,15 @@ fn steps(
     if let Some(awaiting) = awaiting {
         return waiting_for(awaiting, version);
     }
+    let activating = last.as_ref().and_then(|rec| rec.progress.activate.as_ref());
+    if let Some(pending) = activating {
+        return activate_waiting(ctx, guard, service, pending, version);
+    }
     if let Some(answer) = update::answer(verb, order, last.as_deref())? {
         return Ok(answer);
     }
     others_idle(ctx, service)?;
+    below_installer(ctx, version)?;
     let prepared = update::prepare(ctx, verb, order, last.as_deref())?;
     files::make_private(&ctx.service_dir(service))
         .map_err(|e| Reply::refused(Refusal::StoreFailed, e))?;
@@ -273,7 +321,10 @@ fn steps(
     let _step = guard.step(&ctx.step_lock);
     others_idle(ctx, service)?;
     let release = prepared.dir.staged();
-    match release.check(Path::new(RELEASE_BINARY)) {
+    let staged = target::read(prepared.dir.dir())
+        .map_err(|e| Reply::refused(Refusal::ReleaseUnreadable, e))?;
+    let binary = Path::new(release_binary(staged.as_ref()));
+    match release.check(binary) {
         Ok(_) => {}
         Err(ArtifactError::BadHookPath(_) | ArtifactError::HookMissing(_)) => {
             return Ok(failed(Class::Release, REASON_SELF_BINARY_MISSING));
@@ -292,8 +343,20 @@ fn steps(
     let layout = Layout::new(&binary_dir(&ctx.dirs.state));
     files::make_private(layout.dir()).map_err(|e| Reply::refused(Refusal::StoreFailed, e))?;
     let store = ctx.store(service);
-    let binary = Path::new(RELEASE_BINARY);
     let order_id = order.order_id.as_deref();
+    let left = own_package::deferred_at(ctx, prepared.dir.dir())
+        .map_err(|e| Reply::refused(Refusal::ReleaseUnreadable, e))?;
+    if let (true, true, Verdict::Succeeded { promotion_pending }) =
+        (running == version, left, &finished.verdict)
+    {
+        // The version that runs needs no restart: its package is activated now, the record
+        // waiting for it first so that a crash in between is resumed by the next start.
+        return match store.pend_activate(version, *promotion_pending, order_id) {
+            Ok(true) => Ok(activated(ctx, service)),
+            Ok(false) => Ok(update::ran(Ok(finished))),
+            Err(error) => Err(Reply::refused(Refusal::StoreFailed, error)),
+        };
+    }
     match follow_on(
         &finished, &store, &layout, &running, version, release, binary, order_id,
     ) {
@@ -306,6 +369,76 @@ fn steps(
             refusal: follow_refusal(&error),
             detail: error.to_string(),
         }),
+    }
+}
+
+/// A rollback of hostkeeper below an installer of what the host holds
+/// ([`rollback_floor::below`]): `Failed` before the commit, of class release,
+/// [`REASON_ROLLBACK_BELOW_INSTALLER`], with nothing staged; `placed.json` that cannot be read
+/// refuses the order (`store_failed`).
+fn below_installer(ctx: &Ctx, version: &str) -> Result<(), Reply> {
+    let record = ctx
+        .placer()
+        .store()
+        .load()
+        .map_err(|e| Reply::refused(Refusal::StoreFailed, e))?;
+    match rollback_floor::below(&record, ctx.own_version, version) {
+        None => Ok(()),
+        Some(why) => {
+            ctx.alert(ALERT_SELF_UPDATE, &format!("service={SELF_SERVICE}: {why}"));
+            Err(failed(Class::Release, REASON_ROLLBACK_BELOW_INSTALLER))
+        }
+    }
+}
+
+/// The answer while the `activate` of hostkeeper's own package at `pending.version` waits: an
+/// order for that version tries it again now, under the step lock, and is answered with how it
+/// went; any other is `busy`.
+fn activate_waiting(
+    ctx: &Ctx,
+    guard: &ServiceGuard<'_>,
+    service: &ServiceName,
+    pending: &PendingActivate,
+    version: &str,
+) -> Result<Reply, Reply> {
+    if pending.version != version {
+        return Err(Reply::refused(
+            Refusal::Busy,
+            format!(
+                "{SELF_SERVICE} waits for the activate of its package {}",
+                pending.version
+            ),
+        ));
+    }
+    let _step = guard.step(&ctx.step_lock);
+    Ok(activated(ctx, service))
+}
+
+/// The `activate` of hostkeeper's own package the record waits for, run now, as the reply of
+/// the order: its verdict, or `Deferred` [`REASON_ACTIVATE_PENDING`] while it is to be tried
+/// again.
+fn activated(ctx: &Ctx, service: &ServiceName) -> Reply {
+    let deferred = Reply::Finished {
+        verdict: Verdict::Deferred {
+            retry_after_secs: Some(DEFER_SECS),
+        },
+        reason: Some(REASON_ACTIVATE_PENDING.to_owned()),
+        resent: false,
+    };
+    let Some(OwnActivate::Ended(_)) = own_package::activate_pending(ctx, service) else {
+        return deferred;
+    };
+    // The verdict as the record now holds it, the promotion it kept included.
+    match ctx.store(service).load() {
+        Ok(Loaded::Current(rec)) => match rec.state {
+            State::Finished { verdict, reason } => Reply::Finished {
+                verdict,
+                reason,
+                resent: false,
+            },
+            _ => deferred,
+        },
+        _ => deferred,
     }
 }
 
@@ -406,6 +539,29 @@ impl Daemon {
             }
             Ok(())
         };
-        settle_with(&layout, &ctx.store(service), &running, &mut clear)
+        let activate = own_package::needs_activate(ctx, &running)?;
+        settle_activating(&layout, &ctx.store(service), &running, &mut clear, activate)
+    }
+
+    /// The `activate` of hostkeeper's own package the step record waits for, run under the
+    /// service's lock and the step lock ([`own_package::activate_pending`]): at start, after the
+    /// settlement, and again every [`DEFER_SECS`] while it defers ([`crate::start`]). `None`
+    /// when nothing waits; `Deferred` `busy`, with nothing run, while an order holds the
+    /// service's lock (it runs the `activate` itself when it is for that version).
+    pub fn activate_own_package(&self) -> Option<OwnActivate> {
+        let ctx = self.ctx();
+        let services = installed::service_dirs(&ctx.dirs.state).ok()?;
+        let service = services.get(SELF_SERVICE)?;
+        let guard = match ctx.locks.take_for(service, Holder::OwnActivate) {
+            Ok(guard) => guard,
+            Err(held) => {
+                return Some(OwnActivate::Deferred {
+                    reason: Refusal::Busy.token().to_owned(),
+                    detail: format!("{service} is locked by {}", held.holder),
+                });
+            }
+        };
+        let _step = guard.step(&ctx.step_lock);
+        own_package::activate_pending(ctx, service)
     }
 }

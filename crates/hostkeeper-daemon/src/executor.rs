@@ -790,6 +790,9 @@ impl Daemon {
             Verb::Install(order) if order.service.as_str() == SELF_SERVICE => {
                 selfupdate::run(ctx, HookedVerb::Install, order)
             }
+            Verb::ForceRollback(order) if order.service.as_str() == SELF_SERVICE => {
+                selfupdate::run(ctx, HookedVerb::ForceRollback, order)
+            }
             Verb::Update(order) => verbs::update::run(ctx, order),
             Verb::ForceRollback(order) => verbs::force_rollback::run(ctx, order),
             Verb::Install(order) => verbs::install::run(ctx, order),

@@ -10,8 +10,11 @@
 //! | `rollback` | Restarts the `run` units of the release `current` was switched back to; for a first install, whose package the switch removed, nothing |
 //!
 //! They apply to a repository version (one with `target.json`, [`crate::target`]) whose package
-//! carries no hook. The daemon's own service keeps the steps it had: a version without
-//! `target.json` runs [`BUILTIN_EXIT`], every step exiting 0.
+//! carries no hook; the `rollback` of a move from `hostkeeper-archive` restarts the units of the
+//! archive version it went back to. The daemon's own service runs [`BUILTIN_EXIT`], every step
+//! exiting 0, whatever its version: its unit runs the daemon, and its new binary switches once it
+//! has started ([`crate::own_package`]); so does a version of another service without
+//! `target.json`.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -24,6 +27,7 @@ use hostkeeper_placed::UnitControl;
 use hostkeeper_steps::{BUILTIN_EXIT, Bound, Builtin, Clock, StepExit, UpdateOrder};
 
 use crate::target::{self, TARGET_FILE};
+use crate::verbs::force::SELF_SERVICE;
 
 /// The reason of a `cutover` whose `run` unit did not become active within the step's bound.
 pub const REASON_UNIT_INACTIVE: &str = "unit_inactive";
@@ -100,15 +104,24 @@ fn exit(code: i32, class: &str, reason: &str, detail: &str, retry: Option<u64>) 
     }
 }
 
-/// The manifest of the repository version in `dir` at `version` of `service`; `None` for a
-/// version without `target.json`, `Err` for one whose `target.json` does not read.
+/// Whether the version directory `dir` holds `target.json`: a repository version.
+fn has_target(dir: &Path) -> bool {
+    std::fs::symlink_metadata(dir.join(TARGET_FILE)).is_ok()
+}
+
+/// The manifest of the version in `dir` at `version` of `service`: of a repository version, or,
+/// when `archive` is set, of an archive version too; `None` for a version without `target.json`
+/// otherwise, `Err` for one whose manifest does not read.
 fn repository_manifest(
     ports: &BuiltinPorts,
     service: &str,
     version: &str,
     dir: &Path,
+    archive: bool,
 ) -> Option<Result<Manifest, String>> {
-    std::fs::symlink_metadata(dir.join(TARGET_FILE)).ok()?;
+    if !(archive | has_target(dir)) {
+        return None;
+    }
     let expected = || -> Result<Expected, String> {
         Ok(Expected {
             name: ServiceName::new(service).map_err(|e| e.to_string())?,
@@ -123,11 +136,19 @@ fn repository_manifest(
 
 /// One built-in step of `order`.
 fn run(ports: &BuiltinPorts, step: Step, order: &UpdateOrder, bound: Bound) -> StepExit {
+    if order.service == SELF_SERVICE {
+        // hostkeeper's own steps restart nothing: its unit runs this daemon, and its new binary
+        // switches once it has started ([`crate::own_package`]).
+        return BUILTIN_EXIT;
+    }
     let (version, dir) = match (step, &order.previous, order.previous_version.as_deref()) {
         (Step::Rollback, Some(previous), Some(version)) => (version, previous.dir()),
         _ => (order.target_version.as_str(), order.staged.dir()),
     };
-    let manifest = match repository_manifest(ports, &order.service, version, dir) {
+    // The rollback of a move (docs/design/packages-native.md, section 10.6) restarts the units of
+    // the archive version the switch placed again.
+    let moved_back = (step == Step::Rollback) & has_target(order.staged.dir());
+    let manifest = match repository_manifest(ports, &order.service, version, dir, moved_back) {
         None => return BUILTIN_EXIT,
         Some(Ok(manifest)) => manifest,
         Some(Err(why)) => return exit(1, "release", "manifest_invalid", &why, None),

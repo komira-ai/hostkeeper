@@ -276,7 +276,13 @@ pub(crate) fn prepare(
         .entry
         .as_ref()
         .and_then(|entry| repository::backend_of_entry(entry).map(|backend| (backend, entry)));
-    same_installer(ctx, service, running.as_ref(), order.entry.as_ref())?;
+    same_installer(
+        ctx,
+        service,
+        running.as_ref(),
+        &order.version,
+        order.entry.as_ref(),
+    )?;
     let dir = match backend {
         Some((backend, entry)) => {
             ctx.repository()
@@ -323,10 +329,18 @@ pub(crate) fn prepare(
 /// was installed with until it is uninstalled (packages.md section 5.1), so another is
 /// `Failed`, `release`, `installer_changed`, with nothing fetched. A version whose `target.json`
 /// does not read is `release_unreadable`.
+///
+/// Two changes are the move of docs/design/packages-native.md, section 10.6, and are accepted:
+/// from `hostkeeper-archive` to a native installer (the move), and from a native installer back
+/// to `hostkeeper-archive` when the order's version `target` is the archive version `previous`
+/// names, still on the host (the move's rollback, taken from its sealed copy with nothing
+/// fetched; once the next update retired it, the move cannot be undone). Back to another native installer, or between
+/// two, stays `installer_changed`.
 fn same_installer(
     ctx: &Ctx,
     service: &ServiceName,
     running: Option<&Version>,
+    target: &Version,
     entry: Option<&Entry>,
 ) -> Result<(), Reply> {
     let Some(running) = running else {
@@ -342,7 +356,19 @@ fn same_installer(
         .map_err(|e| Reply::refused(Refusal::ReleaseUnreadable, e))?
         .map_or_else(|| archive.to_owned(), |sealed| sealed.installer);
     let ordered = entry.map_or(archive, |entry| entry.installer.as_str());
-    match installed == ordered {
+    let native = |name: &str| name.parse::<Installer>().is_ok_and(Installer::is_native);
+    let kept = || {
+        let dir = ctx
+            .dirs
+            .packages
+            .join(service.as_str())
+            .join(target.as_str());
+        let previous = installed::linked_version(&ctx.dirs.packages, service, PREVIOUS);
+        (previous.as_ref() == Some(target)) & dir.is_dir() & matches!(target::read(&dir), Ok(None))
+    };
+    let moved = (installed == archive) & native(ordered);
+    let moved_back = native(&installed) & (ordered == archive) && kept();
+    match (installed == ordered) | moved | moved_back {
         true => Ok(()),
         false => Err(Reply::Finished {
             verdict: Verdict::Failed {

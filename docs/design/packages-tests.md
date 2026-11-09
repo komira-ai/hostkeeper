@@ -284,6 +284,15 @@ only in the device jobs, against a signed fixture repository and signed fixture 
   release before A19 on a host where it moved is `rollback_below_installer`, and one to A19's release goes on. X1 runs
   the previous release's binary on a host holding a native version and the move's records: it reports the service as
   unreadable and leaves it (the B8 test of the old reader on new data).
+  hostkeeper's own update through its `.deb`, the activate after the confirmation (its failure, its deferral and its
+  retry, a crash between the two), the adoption of the bootstrap install, hostkeeper's own move and its rollback, and
+  the refusal of a rollback below the compiled table before anything is staged are
+  `crates/hostkeeper-daemon/tests/selfupdate_native.rs`; the table's rows are `src/rollback_floor_tests.rs`; the step
+  record's pending activate and its B8 test against the previous release's reader are
+  `crates/hostkeeper-steps/tests/selfupdate_activate.rs`; hostkeeper's own `.deb` and `.pkg` held to their own lists,
+  with their scripts, are `crates/hostkeeper-install/tests/apt/own.rs` and `tests/macos_pkg/own.rs`, tied to
+  `packaging/linux/nfpm.yaml` and the `.pkg` builder by `crates/xtask/tests/packaging/own_list.rs` and
+  `src/release/macos_pkg/own_tests.rs`.
 - **Packaging (A20; `crates/xtask/tests/packaging/`, `check-linux-pkg`, `check-macos-pkg`).** `hello`'s `.deb` and
   `.pkg`, its fail-ready build's, and `mdm`'s `.deb` carry the hook at its path, no script, files only at allowed paths
   and units installed disabled; `check-linux-pkg` refuses a fixture `.deb` with a `postinst`; the `.pkg`'s postinstall
