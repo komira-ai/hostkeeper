@@ -6,7 +6,8 @@
 //! **Out.** The request names the platform and the agent (`hostkeeper` and its version),
 //! announces the features, and lists every installed service, which is sent even when there is
 //! none. Of a service, the name, version, health, running update, verdict and deferral go out;
-//! the observer's detail and the health detail have no field and do not. Of a verdict, the
+//! the installer goes out as `installer` when there is one; the observer's detail and the health
+//! detail have no field and do not. Of a verdict, the
 //! target, outcome, phase, class, reason, order id and try go out, and so do the forced flag and
 //! the detail, which this message has fields for. A deferred verdict has no outcome here: the
 //! service's `deferred` report says it, so its `last_update` is left out. A service name or a
@@ -15,7 +16,7 @@
 //! reason (`TRUSTED_ROOT_REASON_NONE` for a root that needs no attention); a heartbeat with no
 //! report of the root leaves the age out and the reason unspecified, which the coordinator reads
 //! as unknown. The JSON route has no field for it. The installers go out as `installers`, and the
-//! JSON route has no field for them either.
+//! JSON route has no field for them either, nor for a service's installer.
 //!
 //! **In.** The advertised features the daemon knows, and the halt clear generations of the
 //! services the daemon could run (a name outside its grammar names none), in the order of the
@@ -108,6 +109,7 @@ fn service(facts: &ServiceFacts) -> Result<pb::ServiceBeat, Unsendable> {
         updating: facts.updating.as_ref().map(version).transpose()?,
         deferred,
         record_try: facts.record_try,
+        installer: facts.installer.clone(),
         ..pb::ServiceBeat::default()
     })
 }

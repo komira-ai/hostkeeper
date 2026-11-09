@@ -1,10 +1,12 @@
 //! The launcher of the host: each step of a hook is a transient systemd unit, run as root, with
 //! `RuntimeMaxSec=` and nothing else (docs/design/hostkeeper-design.md, section 5.3). The unit
 //! is there for the timeout, for the kill of its whole control group, and for the capture of the
-//! exit code, the last line of standard output and the log; it confines nothing.
+//! exit code, the last line of standard output and the log; a hook's unit confines nothing. A
+//! tool run ([`StepLauncher::run_tool`], docs/design/packages.md, 5.3) is the same unit with
+//! `PrivateNetwork=yes`: the tool has no network.
 //!
 //! The command lines are pure functions ([`command`], [`additive_command`],
-//! [`stop_command`]). Starting a program sits
+//! [`tool_command`], [`stop_command`]). Starting a program sits
 //! behind [`Spawner`], so [`SystemdLauncher`] runs against a fake in a test.
 //! [`SystemdRunProcess`] is the real spawner, and the only code of the crate that starts a
 //! process: `systemd-run` or `systemctl`, with an empty environment and no input, both of its
@@ -35,6 +37,15 @@
 //! Its exit, its last line, its log and a [`StepLauncher::stop`] of its unit while it runs are
 //! read as for a step.
 //!
+//! A tool run ([`tool_command`]) has the line
+//!
+//! ```text
+//! systemd-run --system --quiet --wait --collect --pipe --unit=<unit>
+//!     --property=RuntimeMaxSec=<secs|infinity> --property=PrivateNetwork=yes -- <program> <args...>
+//! ```
+//!
+//! and its exit, last line, log and bound are read as for a step.
+//!
 //! A step (or an additive step) that [`StepLauncher::stop`] stopped is reported with no exit
 //! code, whatever `systemd-run` exited with. systemd counts the end of a service's main process
 //! by the `SIGTERM` of a stop as a clean end (result `success`), so `systemd-run --wait` exits `0`
@@ -55,7 +66,9 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use hostkeeper_hook::Step;
 
 use crate::capture::Ring;
-use crate::launcher::{AdditiveCall, Bound, LaunchError, StepCall, StepExit, StepLauncher};
+use crate::launcher::{
+    AdditiveCall, Bound, LaunchError, StepCall, StepExit, StepLauncher, ToolCall,
+};
 
 /// Where `systemd-run` is.
 pub const SYSTEMD_RUN: &str = "/usr/bin/systemd-run";
@@ -80,10 +93,11 @@ fn runtime_max_sec(bound: Bound) -> String {
 }
 
 /// The arguments of `systemd-run` that run `executable` with `rest` in the transient unit `unit`,
-/// with `RuntimeMaxSec=` set to `max_sec`.
+/// with `RuntimeMaxSec=` set to `max_sec` and then each of `properties` (`NAME=value`).
 fn unit_line(
     unit: &str,
     max_sec: &str,
+    properties: &[&str],
     executable: &Path,
     rest: impl IntoIterator<Item = OsString>,
 ) -> Vec<OsString> {
@@ -93,6 +107,11 @@ fn unit_line(
         .collect();
     args.push(format!("--unit={unit}").into());
     args.push(format!("--property=RuntimeMaxSec={max_sec}").into());
+    args.extend(
+        properties
+            .iter()
+            .map(|p| OsString::from(format!("--property={p}"))),
+    );
     args.push("--".into());
     args.push(executable.into());
     args.extend(rest);
@@ -122,6 +141,7 @@ pub fn command(call: &StepCall<'_>) -> Result<Vec<OsString>, LaunchError> {
     Ok(unit_line(
         call.unit,
         &runtime_max_sec(call.bound),
+        &[],
         call.executable,
         call.invocation.to_args(),
     ))
@@ -141,8 +161,29 @@ pub fn additive_command(call: &AdditiveCall<'_>) -> Result<Vec<OsString>, Launch
     Ok(unit_line(
         call.unit,
         &runtime_max_sec(bound),
+        &[],
         call.executable,
         rest,
+    ))
+}
+
+/// The arguments of `systemd-run` that run a tool: the line of a step with
+/// `--property=PrivateNetwork=yes` after `RuntimeMaxSec=`, then `<program> <args...>`, bounded by
+/// `timeout_secs` (0 is no bound: `infinity`). A relative program is refused, as for [`command`].
+pub fn tool_command(call: &ToolCall<'_>) -> Result<Vec<OsString>, LaunchError> {
+    if !call.program.is_absolute() {
+        return Err(LaunchError::Launcher(format!(
+            "the tool {:?} is not an absolute path",
+            call.program
+        )));
+    }
+    let bound = NonZeroU64::new(call.timeout_secs).map_or(Bound::Unbounded, Bound::Secs);
+    Ok(unit_line(
+        call.unit,
+        &runtime_max_sec(bound),
+        &["PrivateNetwork=yes"],
+        call.program,
+        call.args.iter().cloned(),
     ))
 }
 
@@ -361,6 +402,14 @@ impl<S: Spawner> StepLauncher for SystemdLauncher<S> {
     fn run_additive(&self, call: &AdditiveCall<'_>) -> Result<StepExit, LaunchError> {
         let args = additive_command(call)?;
         executable(call.executable)?;
+        self.run_unit(call.unit, &args)
+    }
+
+    /// Runs the tool as [`StepLauncher::run`] runs a step, in a unit with `PrivateNetwork=yes`
+    /// ([`tool_command`]).
+    fn run_tool(&self, call: &ToolCall<'_>) -> Result<StepExit, LaunchError> {
+        let args = tool_command(call)?;
+        executable(call.program)?;
         self.run_unit(call.unit, &args)
     }
 

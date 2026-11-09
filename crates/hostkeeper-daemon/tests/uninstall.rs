@@ -620,3 +620,34 @@ fn an_uninstall_of_a_service_with_nothing_installed_removes_what_is_left() {
     assert!(!rig.packages.join("api").exists());
     assert!(!rig.state.exists());
 }
+
+/// Catches an uninstall that removes a service by the steps of another installer: a service
+/// `placed.json` records with an installer this daemon has no steps of (one a newer binary
+/// installed, before a fallback) is stopped and its hook run, and then nothing of it is
+/// removed: the uninstall is interrupted naming the installer, and its links, its package and
+/// its tombstone stay for a daemon that has those steps.
+#[test]
+fn an_uninstall_of_a_service_of_an_installer_without_steps_removes_nothing() {
+    let rig = Rig::new("uninstall-installer");
+    let daemon = rig.daemon();
+    installed(&rig, &daemon, "web", "1.0.0");
+    let mut record = rig.placed_record();
+    record.installed.insert(
+        "web".to_owned(),
+        hostkeeper_placed::InstalledEntry::new("apt"),
+    );
+    rig.save_placed(&record);
+    let reply = daemon.order(&uninstall("web", 1));
+    assert_eq!(
+        reply,
+        Reply::Interrupted {
+            refusal: Refusal::LinkFailed,
+            detail: "web is installed by the installer \"apt\", which this daemon has no steps of"
+                .to_owned(),
+        }
+    );
+    let after = rig.placed_record();
+    assert!(after.uninstalling["web"].hook_done);
+    assert!(rig.placed_paths("web").iter().all(|path| rig.there(path)));
+    assert!(rig.packages.join("web").join("1.0.0").exists());
+}

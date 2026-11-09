@@ -1490,6 +1490,7 @@ dependencies = [
  "hostkeeper-daemon",
  "hostkeeper-enroll",
  "hostkeeper-hook",
+ "hostkeeper-install",
  "hostkeeper-launchd",
  "hostkeeper-link",
  "hostkeeper-observe",
@@ -1601,6 +1602,21 @@ dependencies = [
  "serde_json",
  "thiserror",
  "toml",
+]
+
+[[package]]
+name = "hostkeeper-install"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "hostkeeper-config",
+ "hostkeeper-proto",
+ "hostkeeper-release",
+ "hostkeeper-testkit",
+ "hostkeeper-unpack",
+ "rustix",
+ "sha2",
+ "thiserror",
 ]
 
 [[package]]
