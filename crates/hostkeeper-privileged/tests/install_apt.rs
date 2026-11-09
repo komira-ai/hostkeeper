@@ -157,7 +157,7 @@ fn a_two_version_package_installs_updates_rolls_back_offline_and_uninstalls() {
 #[test]
 fn the_daemon_installs_updates_rolls_back_and_uninstalls_an_apt_service() {
     let rig = Rig::new("apt-daemon", Trust::Entry);
-    let (daemon, announced) = daemon::daemon(&rig);
+    let (daemon, announced, scratch) = daemon::daemon(&rig);
     assert_eq!(announced, ["hostkeeper-archive", "apt"]);
     let finished = |reply: hostkeeper_daemon::Reply| match reply {
         hostkeeper_daemon::Reply::Finished {
@@ -213,7 +213,7 @@ fn the_daemon_installs_updates_rolls_back_and_uninstalls_an_apt_service() {
     assert_installed("1.0-1");
     assert_eq!(active(), "active");
 
-    let packages = rig.scratch().join("packages").join(PACKAGE);
+    let packages = scratch.path().join("packages").join(PACKAGE);
     let reply = finished(daemon.order(&daemon::uninstall(4)));
     assert_eq!(reply, succeeded);
     assert_eq!(dpkg_version(), None);

@@ -276,11 +276,6 @@ impl Rig {
         &self.repositories
     }
 
-    /// The rig's own directory.
-    pub fn scratch(&self) -> &Path {
-        &self.scratch_path
-    }
-
     /// The pin of the package at `package_version`, as the repository was built.
     pub fn pin(&self, package_version: &str) -> String {
         self.order(package_version).pin
