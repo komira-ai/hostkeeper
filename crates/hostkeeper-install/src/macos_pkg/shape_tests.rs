@@ -472,3 +472,16 @@ fn a_component_without_its_package_info_is_refused() {
     fs::remove_file(dir.path().join("PackageInfo")).unwrap();
     assert_eq!(refused(dir.path()), ShapeError::Missing("PackageInfo"));
 }
+
+/// Catches: a `Scripts` archive inside a product archive's component (where `productbuild
+/// --package` puts a component's scripts) passing.
+#[test]
+fn a_script_archive_in_a_product_archives_component_is_a_script() {
+    let dir = scratch("shscripts-product-component");
+    product(dir.path(), &distribution("", REF));
+    fs::create_dir(dir.path().join("hello.pkg/Scripts")).unwrap();
+    assert_eq!(
+        refused(dir.path()),
+        ShapeError::Scripts("the component holds \"Scripts\"".into())
+    );
+}

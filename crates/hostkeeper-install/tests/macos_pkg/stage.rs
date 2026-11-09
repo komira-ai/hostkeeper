@@ -541,6 +541,14 @@ fn stage_refuses_a_package_with_a_script_as_package_scripts_before_its_bom_and_c
             "the package carries a script: the component holds \"Scripts\"",
         ),
         (
+            "a Scripts archive in a product archive's component",
+            tweak(|p| {
+                p.product = true;
+                p.component_extras = vec!["Scripts".into()];
+            }),
+            "the package carries a script: the component holds \"Scripts\"",
+        ),
+        (
             "a Scripts archive beside the component",
             tweak(|p| {
                 p.product = true;
