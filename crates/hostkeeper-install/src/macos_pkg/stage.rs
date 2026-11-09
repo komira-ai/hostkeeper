@@ -36,11 +36,18 @@ impl MacosPkg<'_> {
         if let Some(other) = holder {
             return Err(Failure::new(
                 Reason::PackageConflict,
-                format!("the service {other} records the package {}", order.identifier),
+                format!(
+                    "the service {other} records the package {}",
+                    order.identifier
+                ),
             ));
         }
         let pkg = arg(artifact)?;
-        let checked = self.run(Tool::Pkgutil, &["--check-signature".into(), pkg.clone()], deadline)?;
+        let checked = self.run(
+            Tool::Pkgutil,
+            &["--check-signature".into(), pkg.clone()],
+            deadline,
+        )?;
         signature::check(
             checked.code,
             &String::from_utf8_lossy(&checked.stdout),
@@ -57,22 +64,34 @@ impl MacosPkg<'_> {
         if out.code != Some(0) {
             return Err(Failure::new(
                 Reason::ManifestInvalid,
-                format!("pkgutil --expand-full exited {:?}: {}", out.code, out.stderr_text().trim()),
+                format!(
+                    "pkgutil --expand-full exited {:?}: {}",
+                    out.code,
+                    out.stderr_text().trim()
+                ),
             ));
         }
-        let invalid = |e: &dyn std::fmt::Display| Failure::new(Reason::ManifestInvalid, e.to_string());
+        let invalid =
+            |e: &dyn std::fmt::Display| Failure::new(Reason::ManifestInvalid, e.to_string());
         let component = shape::check(&expanded, &order.identifier, order.version.as_str())
             .map_err(|e| invalid(&e))?;
 
         let listed = self.run(
             Tool::Lsbom,
-            &[LSBOM_ARGS[0].into(), LSBOM_ARGS[1].into(), arg(&component.bom())?],
+            &[
+                LSBOM_ARGS[0].into(),
+                LSBOM_ARGS[1].into(),
+                arg(&component.bom())?,
+            ],
             deadline,
         )?;
         if listed.code != Some(0) || may_be_cut(&listed.stdout) {
             return Err(Failure::new(
                 Reason::ManifestInvalid,
-                format!("lsbom of the Bom exited {:?} or printed more than it may", listed.code),
+                format!(
+                    "lsbom of the Bom exited {:?} or printed more than it may",
+                    listed.code
+                ),
             ));
         }
         let bom = payload::parse_bom(&String::from_utf8_lossy(&listed.stdout))

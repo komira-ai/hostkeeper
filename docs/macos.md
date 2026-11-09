@@ -156,6 +156,7 @@ maintainers must confirm the prefix before any Mac enrolls, since a label is the
 |---|---|
 | config | `/etc/hostkeeper/hostkeeper.toml` |
 | stores config | `/etc/hostkeeper/stores.toml`, optional; without it the one store is `release_channel` (docs/design/packages.md section 7) |
+| macos-pkg signers | `/etc/hostkeeper/macos-pkg.toml`, optional, read at the start of a Mac only; a file that is not sound (a link, not root's, writable by others, not TOML of the signers) stops the start with the config exit status |
 | state directory, packages directory | as on Linux (`/var/lib/updater/state`, `/var/lib/hostkeeper/packages`); both exist on macOS |
 | run directory | `/var/run` (macOS has a read-only root and no `/run`); the daemon binds no socket there |
 | units linked from a package | `/Library/LaunchDaemons/<label>.plist`, a link to `<packages>/<service>/current/units/<label>.plist` |

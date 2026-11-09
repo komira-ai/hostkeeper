@@ -56,14 +56,14 @@ pub struct Order {
     pub service: ServiceName,
     /// The order's `desired.version`, which the package's `PackageInfo` must carry.
     pub version: Version,
-    /// The entry's `manifest.package`: the component's identifier.
+    /// The entry's manifest's `package`: the component's identifier.
     pub identifier: String,
-    /// The entry's `manifest.run`: the launchd labels of the jobs the package installs.
+    /// The entry's manifest's `run`: the launchd labels of the jobs the package installs.
     pub run: Vec<Label>,
     pub bounds: Bounds,
 }
 
-/// The bounds of the installer's steps (`manifest.installer_bounds`); each tool run of a step
+/// The bounds of the installer's steps (the manifest's `installer_bounds`); each tool run of a step
 /// is waited for at most the step's bound.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Bounds {
@@ -113,21 +113,37 @@ impl MacosPkg<'_> {
     }
 
     /// The receipt of the order's identifier, `None` when macOS has none.
-    fn receipt(&self, order: &Order, deadline: Duration) -> Result<Option<receipt::Receipt>, Failure> {
-        let out = self.run(Tool::Pkgutil, &receipt::pkg_info_args(&order.identifier), deadline)?;
+    fn receipt(
+        &self,
+        order: &Order,
+        deadline: Duration,
+    ) -> Result<Option<receipt::Receipt>, Failure> {
+        let out = self.run(
+            Tool::Pkgutil,
+            &receipt::pkg_info_args(&order.identifier),
+            deadline,
+        )?;
         if out.code != Some(0) {
-            let said = format!("{}{}", out.stderr_text(), String::from_utf8_lossy(&out.stdout));
+            let said = format!(
+                "{}{}",
+                out.stderr_text(),
+                String::from_utf8_lossy(&out.stdout)
+            );
             return match said.contains(receipt::NO_RECEIPT) {
                 true => Ok(None),
                 false => Err(Failure::new(
                     Reason::IoError,
-                    format!("pkgutil --pkg-info-plist exited {:?}: {}", out.code, said.trim()),
+                    format!(
+                        "pkgutil --pkg-info-plist exited {:?}: {}",
+                        out.code,
+                        said.trim()
+                    ),
                 )),
             };
         }
-        receipt::parse_pkg_info(&out.stdout).map(Some).map_err(|e| {
-            Failure::new(Reason::IoError, format!("pkgutil --pkg-info-plist {e}"))
-        })
+        receipt::parse_pkg_info(&out.stdout)
+            .map(Some)
+            .map_err(|e| Failure::new(Reason::IoError, format!("pkgutil --pkg-info-plist {e}")))
     }
 
     /// The identifiers of the receipts that list the file at the logical `path`.

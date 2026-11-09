@@ -30,7 +30,11 @@ impl MacosPkg<'_> {
         let _held = self.lock.hold().map_err(|e| io("the installer lock", e))?;
         let found = self.receipt(order, deadline)?;
         if let Some(found) = &found {
-            let out = self.run(Tool::Pkgutil, &receipt::files_args(&order.identifier), deadline)?;
+            let out = self.run(
+                Tool::Pkgutil,
+                &receipt::files_args(&order.identifier),
+                deadline,
+            )?;
             let files = match out.code {
                 Some(0) => receipt::parse_files(&out.stdout, may_be_cut(&out.stdout))
                     .map_err(|e| Failure::new(Reason::IoError, format!("pkgutil --files {e}")))?,
@@ -68,11 +72,19 @@ impl MacosPkg<'_> {
             }
         }
         if found.is_some() {
-            let out = self.run(Tool::Pkgutil, &receipt::forget_args(&order.identifier), deadline)?;
+            let out = self.run(
+                Tool::Pkgutil,
+                &receipt::forget_args(&order.identifier),
+                deadline,
+            )?;
             if out.code != Some(0) {
                 return Err(Failure::new(
                     Reason::IoError,
-                    format!("pkgutil --forget exited {:?}: {}", out.code, out.stderr_text().trim()),
+                    format!(
+                        "pkgutil --forget exited {:?}: {}",
+                        out.code,
+                        out.stderr_text().trim()
+                    ),
                 ));
             }
         }

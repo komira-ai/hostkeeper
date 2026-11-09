@@ -66,10 +66,7 @@ pub fn parse_pkg_info(stdout: &[u8]) -> Result<Receipt, ReceiptError> {
             .and_then(Value::as_string)
             .ok_or(ReceiptError::Missing(key))
     };
-    let volume = dict
-        .get("volume")
-        .and_then(Value::as_string)
-        .unwrap_or("/");
+    let volume = dict.get("volume").and_then(Value::as_string).unwrap_or("/");
     Ok(Receipt {
         identifier: text("pkgid")?.to_owned(),
         version: text("pkg-version")?.to_owned(),
@@ -89,7 +86,12 @@ pub fn parse_receipt_file(bytes: &[u8]) -> Result<Receipt, ReceiptError> {
     Ok(Receipt {
         identifier: text("PackageIdentifier")?.to_owned(),
         version: text("PackageVersion")?.to_owned(),
-        prefix: join("/", dict.get("InstallPrefixPath").and_then(Value::as_string).unwrap_or("")),
+        prefix: join(
+            "/",
+            dict.get("InstallPrefixPath")
+                .and_then(Value::as_string)
+                .unwrap_or(""),
+        ),
     })
 }
 

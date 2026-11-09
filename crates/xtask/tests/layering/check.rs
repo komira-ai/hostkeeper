@@ -24,6 +24,7 @@ const ENROLLMENT: &str = "hostkeeper-enrollment";
 const MDM_GATE: &str = "hostkeeper-mdm-gate";
 const OBSERVE: &str = "hostkeeper-observe";
 const LAUNCHD: &str = "hostkeeper-launchd";
+const INSTALL: &str = "hostkeeper-install";
 const OPENRC: &str = "hostkeeper-openrc";
 const MDM: &str = "hostkeeper-mdm";
 const MDM_STEP: &str = "hostkeeper-mdm-step";
@@ -82,8 +83,10 @@ pub type Layer = (
 /// `hostkeeper-privileged-pxe`, which needs it as a normal dependency) and read a DHCP client's
 /// packet with its packet crate; the `mdm` package's certificate-unit test loads that package's
 /// units and drop-ins (`hostkeeper-mdm-core`) into the host's systemd. The binary's tests run
-/// the macOS pkg's postinstall (`hostkeeper-launchd`) against the binary.
-pub const LAYERS: [Layer; 31] = [
+/// the macOS pkg's postinstall (`hostkeeper-launchd`) against the binary. The daemon reads the
+/// macos-pkg installer's signers file at its start (`hostkeeper-install`), and the privileged
+/// tests run that installer's steps against the Mac's real tools.
+pub const LAYERS: [Layer; 32] = [
     (BINARY, &[DAEMON], &[LAUNCHD]),
     (CONFIG, &[], &[]),
     (
@@ -96,8 +99,8 @@ pub const LAYERS: [Layer; 31] = [
     (
         DAEMON,
         &[
-            CONFIG, ENROLL, HOOK, LAUNCHD, LINK, OBSERVE, OPENRC, PACKAGE, PLACED, PROTO, RELEASE,
-            STEPS, UNPACK,
+            CONFIG, ENROLL, HOOK, INSTALL, LAUNCHD, LINK, OBSERVE, OPENRC, PACKAGE, PLACED, PROTO,
+            RELEASE, STEPS, UNPACK,
         ],
         &[COORDINATOR, HELLO, OIDC, TLS, WIRE],
     ),
@@ -106,6 +109,7 @@ pub const LAYERS: [Layer; 31] = [
     (HELLO, &[], &[CONFIG, HOOK]),
     (HKCTL, &[PROTO], &[COORDINATOR, OIDC]),
     (HOOK, &[], &[]),
+    (INSTALL, &[CONFIG, LAUNCHD], &[]),
     (LAUNCHD, &[HOOK, OBSERVE, PLACED, STEPS], &[]),
     (
         LINK,
@@ -138,6 +142,7 @@ pub const LAYERS: [Layer; 31] = [
         ],
         &[
             ENROLL,
+            INSTALL,
             MDM_CORE,
             OBSERVE,
             OIDC,

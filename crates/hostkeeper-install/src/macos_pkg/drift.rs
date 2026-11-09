@@ -12,10 +12,10 @@ use std::io;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
+use super::TREE;
 use super::activate::same;
 use super::receipt::{self, Receipt};
 use super::record::PkgRecord;
-use super::TREE;
 use crate::host::{self, Host, Kind};
 
 /// What the observer found: the receipt's version and the record's, and the payload files that
@@ -86,7 +86,13 @@ pub fn observe(
 
 /// Whether the installed `path` is its sealed copy, hashing it only when its size, mode or time
 /// changed since it was last seen.
-fn intact(host: &Host, seen: &mut Seen, tree_dir: &Path, path: &str, kind: Kind) -> io::Result<bool> {
+fn intact(
+    host: &Host,
+    seen: &mut Seen,
+    tree_dir: &Path,
+    path: &str,
+    kind: Kind,
+) -> io::Result<bool> {
     let real = host.real(path);
     let stat = match fs::symlink_metadata(&real) {
         Ok(meta) => Stat {

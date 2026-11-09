@@ -125,7 +125,12 @@ pub fn check(
     Ok(())
 }
 
-fn entry(path: &str, meta: &Meta, home: &str, plists: &BTreeSet<String>) -> Result<(), PayloadError> {
+fn entry(
+    path: &str,
+    meta: &Meta,
+    home: &str,
+    plists: &BTreeSet<String>,
+) -> Result<(), PayloadError> {
     if meta.uid != 0 {
         return Err(PayloadError::NotRoot(path.into(), meta.uid));
     }
@@ -165,13 +170,21 @@ pub fn check_jobs(
             return Err(PayloadError::NoPlist(label.as_str().into(), path));
         }
         let real = payload.join(path.trim_start_matches('/'));
-        let job = Value::from_file(&real).map_err(|e| PayloadError::BadPlist(path.clone(), e.to_string()))?;
+        let job = Value::from_file(&real)
+            .map_err(|e| PayloadError::BadPlist(path.clone(), e.to_string()))?;
         let job = job
             .as_dictionary()
             .ok_or_else(|| PayloadError::BadPlist(path.clone(), "not a dictionary".into()))?;
-        let found = job.get("Label").and_then(Value::as_string).unwrap_or_default();
+        let found = job
+            .get("Label")
+            .and_then(Value::as_string)
+            .unwrap_or_default();
         if found != label.as_str() {
-            return Err(PayloadError::Label(path, found.into(), label.as_str().into()));
+            return Err(PayloadError::Label(
+                path,
+                found.into(),
+                label.as_str().into(),
+            ));
         }
         if job.get("Disabled").and_then(Value::as_boolean) != Some(true) {
             return Err(PayloadError::NotDisabled(path));

@@ -46,9 +46,10 @@ impl InstallerLock {
             .write(true)
             .open(&self.path)?;
         match file.try_lock() {
-            Ok(()) => Ok(Some(Held { _file: file })),
             Err(std::fs::TryLockError::WouldBlock) => Ok(None),
-            Err(std::fs::TryLockError::Error(e)) => Err(e),
+            taken => taken
+                .map(|()| Some(Held { _file: file }))
+                .map_err(io::Error::from),
         }
     }
 }

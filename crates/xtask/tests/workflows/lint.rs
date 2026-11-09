@@ -152,7 +152,8 @@ pub const PRIVILEGED_RUNNERS: &[&str] = &["ubuntu-24.04"];
 /// The one job of [`PRIVILEGED_WORKFLOW`] that runs on macOS: the device run of the launchd
 /// adapters, the process probe and the package check (`crates/hostkeeper-privileged/tests/
 /// device_mac.rs`), hello's update end to end under launchd (`device_mac_e2e.rs`), and
-/// hostkeeper's update of itself under launchd (`device_mac_selfupdate.rs`).
+/// hostkeeper's update of itself under launchd (`device_mac_selfupdate.rs`), and the macos-pkg
+/// installer with the Mac's real `installer` and `pkgutil` (`install_macos_pkg.rs`).
 pub const MACOS_DEVICE_JOB: &str = "macos-device";
 
 /// The job of [`PRIVILEGED_WORKFLOW`] that runs the daemon under OpenRC in an Alpine container

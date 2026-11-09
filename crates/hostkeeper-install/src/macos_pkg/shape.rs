@@ -94,7 +94,8 @@ pub fn check(expanded: &Path, identifier: &str, version: &str) -> Result<Compone
 }
 
 fn read_xml(path: &Path, what: &str) -> Result<Vec<Element>, ShapeError> {
-    let text = fs::read_to_string(path).map_err(|e| ShapeError::Read(what.into(), e.to_string()))?;
+    let text =
+        fs::read_to_string(path).map_err(|e| ShapeError::Read(what.into(), e.to_string()))?;
     xml::elements(&text).map_err(|e| ShapeError::Xml(what.into(), e))
 }
 
@@ -142,10 +143,8 @@ fn product(expanded: &Path, elements: &[Element]) -> Result<Component, ShapeErro
     if !dir.is_dir() {
         return Err(ShapeError::BadPath(path.into()));
     }
-    let entries = fs::read_dir(expanded)
-        .map_err(|e| ShapeError::Read("the expansion".into(), e.to_string()))?;
-    for entry in entries {
-        let entry = entry.map_err(|e| ShapeError::Read("the expansion".into(), e.to_string()))?;
+    let entries = fs::read_dir(expanded).and_then(Iterator::collect::<std::io::Result<Vec<_>>>);
+    for entry in entries.map_err(|e| ShapeError::Read("the expansion".into(), e.to_string()))? {
         let found = entry.file_name().to_string_lossy().into_owned();
         if found != name && !PRODUCT_EXTRAS.contains(&found.as_str()) {
             return Err(ShapeError::Extra(found));

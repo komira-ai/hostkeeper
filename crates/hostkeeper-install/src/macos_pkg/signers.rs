@@ -92,6 +92,12 @@ pub enum SignersError {
     BadSigner(String),
 }
 
+impl From<io::Error> for SignersError {
+    fn from(e: io::Error) -> SignersError {
+        SignersError::Unreadable(e.to_string())
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct FileText {
@@ -111,9 +117,7 @@ pub fn load(path: &Path, owner_uid: u32) -> Result<Option<Signers>, SignersError
         Err(e) if e.raw_os_error() == Some(libc::ELOOP) => return Err(SignersError::Link),
         Err(e) => return Err(SignersError::Unreadable(e.to_string())),
     };
-    let meta = file
-        .metadata()
-        .map_err(|e| SignersError::Unreadable(e.to_string()))?;
+    let meta = file.metadata()?;
     if !meta.is_file() {
         return Err(SignersError::NotRegular);
     }
@@ -128,9 +132,7 @@ pub fn load(path: &Path, owner_uid: u32) -> Result<Option<Signers>, SignersError
         return Err(SignersError::WritableByOthers { found: mode });
     }
     let mut bytes = Vec::new();
-    file.take(MAX_SIGNERS_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|e| SignersError::Unreadable(e.to_string()))?;
+    file.take(MAX_SIGNERS_BYTES + 1).read_to_end(&mut bytes)?;
     if bytes.len() as u64 > MAX_SIGNERS_BYTES {
         return Err(SignersError::TooLarge);
     }

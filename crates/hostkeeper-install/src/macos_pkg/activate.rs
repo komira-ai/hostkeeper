@@ -30,9 +30,10 @@ pub struct Activated {
 }
 
 impl MacosPkg<'_> {
-    /// Activates the version staged at `dir`. `from` is the version directory of the version
-    /// the record names, when it is on the host and is not `dir`: the version this one replaces,
-    /// or rolls back from.
+    /// Activates the version staged at `dir`. `from` is the version directory `current` names
+    /// when it is not `dir`: the version this one replaces, or rolls back from. `current` is
+    /// switched only after `activate` returns, so an `activate` run again after a crash gets the
+    /// same `from`.
     pub fn activate(
         &self,
         order: &Order,
@@ -140,8 +141,12 @@ impl MacosPkg<'_> {
     /// Whether an installed file or link differs from its copy in `tree_dir`.
     fn differs(&self, tree_dir: &Path, tree: &BTreeMap<String, Meta>) -> Result<bool, Failure> {
         for (path, meta) in tree.iter().filter(|(_, m)| m.kind != Kind::Dir) {
-            if !same(&tree_dir.join(path.trim_start_matches('/')), &self.host.real(path), meta.kind)
-                .map_err(|e| io(path, e))?
+            if !same(
+                &tree_dir.join(path.trim_start_matches('/')),
+                &self.host.real(path),
+                meta.kind,
+            )
+            .map_err(|e| io(path, e))?
             {
                 return Ok(true);
             }
@@ -156,7 +161,11 @@ impl MacosPkg<'_> {
         found: &receipt::Receipt,
         deadline: Duration,
     ) -> Result<BTreeSet<String>, Failure> {
-        let out = self.run(Tool::Pkgutil, &receipt::files_args(&order.identifier), deadline)?;
+        let out = self.run(
+            Tool::Pkgutil,
+            &receipt::files_args(&order.identifier),
+            deadline,
+        )?;
         if out.code != Some(0) {
             return Err(Failure::new(
                 Reason::IoError,
@@ -223,9 +232,15 @@ impl MacosPkg<'_> {
             "-target".into(),
             "/".into(),
         ];
-        let out = self.tools.run(Tool::Installer, &args, deadline).map_err(|e| {
-            Failure::new(Reason::InstallerError, format!("{}: {e}", Tool::Installer.path()))
-        })?;
+        let out = self
+            .tools
+            .run(Tool::Installer, &args, deadline)
+            .map_err(|e| {
+                Failure::new(
+                    Reason::InstallerError,
+                    format!("{}: {e}", Tool::Installer.path()),
+                )
+            })?;
         if out.code == Some(0) {
             return Ok(());
         }
@@ -258,7 +273,10 @@ impl MacosPkg<'_> {
         if shown.as_deref() != Some(order.version.as_str()) {
             return Err(Failure::new(
                 Reason::InstallerError,
-                format!("pkgutil shows {shown:?} after installer, not {}", order.version),
+                format!(
+                    "pkgutil shows {shown:?} after installer, not {}",
+                    order.version
+                ),
             ));
         }
         if self.differs(&dir.join(TREE), tree)? {
@@ -277,7 +295,10 @@ impl MacosPkg<'_> {
             Some(0) => Ok(()),
             code => Err(Failure::new(
                 Reason::InstallerError,
-                format!("launchctl {verb} system/{label} exited {code:?}: {}", out.stderr_text().trim()),
+                format!(
+                    "launchctl {verb} system/{label} exited {code:?}: {}",
+                    out.stderr_text().trim()
+                ),
             )),
         }
     }

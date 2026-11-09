@@ -170,6 +170,9 @@ hostkeeper-unpack = { path = "../hostkeeper-unpack" }
 # The macOS device test of the enrollment claims: `MacClaims` over the daemon's `HostIoreg`, the
 # real `ioreg`.
 hostkeeper-enroll = { path = "../hostkeeper-enroll" }
+# The macOS device test of the macos-pkg installer (`tests/install_macos_pkg.rs`): `MacosPkg` over
+# the real `HostTools`, and the signature and receipt forms it pins.
+hostkeeper-install = { path = "../hostkeeper-install" }
 # The macOS self-update test that the real coordinator in process drives: each heartbeat read as
 # the coordinator's JSON route reads it, from the host it names.
 hostkeeper-wire = { path = "../hostkeeper-wire" }
