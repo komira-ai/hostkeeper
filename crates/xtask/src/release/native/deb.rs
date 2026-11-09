@@ -7,13 +7,16 @@
 //! members in this order, each dated the commit's committer time, owned by 0 and 0, mode 0644:
 //!
 //! - `debian-binary`, `2.0` and a line break;
-//! - `control.tar.gz`, a gzip ustar of `./` and `./control` alone: no maintainer script, so
+//! - `control.tar.gz`, a gzip ustar of the directory `./` and the file `control` alone (the tar
+//!   writer drops a leading `./` from every other name, which dpkg reads the same): no maintainer
+//!   script, so
 //!   dpkg runs nothing of the package's own at install, upgrade or removal. `control` names the
 //!   package, its version and architecture, the maintainer, the installed size and the
 //!   description, and declares no dependency (the programs are those the archive package
 //!   carries, built for the release runner's glibc);
-//! - `data.tar.gz`, a gzip ustar of the files of [`super::hello`] or [`super::mdm`] under `./`,
-//!   each directory above them listed first (mode 0755), every entry owned by root and group root
+//! - `data.tar.gz`, a gzip ustar of `./` and the files of [`super::hello`] or [`super::mdm`] by
+//!   their paths from `/` (`usr/lib/hello/hello`), each directory above them listed first (mode
+//!   0755), every entry owned by root and group root
 //!   (uid and gid 0), dated the commit.
 //!
 //! Hostkeeper's own `.deb` is not this verb's: nfpm builds it from `packaging/linux/nfpm.yaml`,

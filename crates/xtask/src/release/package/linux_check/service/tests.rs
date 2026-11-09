@@ -256,6 +256,7 @@ fn an_enablement_link_a_drop_in_or_a_unit_of_another_name_is_refused() {
         let (control, mut data) = hello_entries();
         data.push(entry);
         let lines = refused(&format!("link-{n}"), &deb_of(&control, &data));
+        assert_eq!(lines.len(), 1, "{words}: {lines:?}");
         assert!(
             lines.iter().any(|l| l.starts_with(words)),
             "{words}: {lines:?}"

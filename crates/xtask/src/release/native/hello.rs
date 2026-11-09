@@ -123,10 +123,11 @@ const DISABLED: &str = "\t<key>Disabled</key>\n\t<true/>\n";
 /// The plist of the job of `slot` in the `.pkg`: `service_plist`'s text with [`DISABLED`] as the
 /// first entry of its dictionary.
 pub(crate) fn plist(slot: &str, fail_ready: bool) -> Result<String, Error> {
-    let file = format!("{NAME}.{slot}.plist");
-    let failed = |why: String| Error::Failed(format!("{LAUNCH_DAEMONS}/{file}: {why}"));
-    let label = Label::parse(&format!("{NAME}.{slot}")).map_err(|e| failed(e.to_string()))?;
-    let job = ServiceJob {
+    let unwritable = Error::Failed(format!(
+        "{LAUNCH_DAEMONS}/{NAME}.{slot}.plist: {NAME}.{slot} is not a launchd label, or its job \
+         is not plist text"
+    ));
+    let job = |label| ServiceJob {
         label,
         program: PathBuf::from(PKG_PROGRAM),
         args: args(fail_ready).into_iter().map(OsString::from).collect(),
@@ -134,7 +135,10 @@ pub(crate) fn plist(slot: &str, fail_ready: bool) -> Result<String, Error> {
         stdout: PathBuf::from(format!("{LOG_DIR}/{NAME}.{slot}.out.log")),
         stderr: PathBuf::from(format!("{LOG_DIR}/{NAME}.{slot}.err.log")),
     };
-    let text = service_plist(&job).map_err(|e| failed(e.to_string()))?;
+    let text = Label::parse(&format!("{NAME}.{slot}"))
+        .ok()
+        .and_then(|label| service_plist(&job(label)).ok())
+        .ok_or(unwritable)?;
     let open = "<dict>\n";
     Ok(text.replacen(open, &format!("{open}{DISABLED}"), 1))
 }

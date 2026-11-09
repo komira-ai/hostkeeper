@@ -254,19 +254,17 @@ fn another_version_identifier_or_a_missing_entry_is_refused() {
     list.pop();
     let at = expanded(&d, "0.1.5", &list, &package_info("0.1.5", ""));
     let found = problems(check(&at, &version(), true, &bin));
-    assert!(
-        found.iter().any(|l| l.contains("not \"0.1.5-fail-ready\"")),
-        "{found:?}"
-    );
-    assert!(
-        found
-            .iter()
-            .any(|l| l.starts_with("PackageInfo: version is \"0.1.5\"")),
-        "{found:?}"
-    );
-    assert!(
-        found.iter().any(|l| l.starts_with("missing /")),
-        "{found:?}"
+    let fail_ready = pkg_files(BINARY.to_vec(), true).expect("files");
+    let plist_b = &fail_ready.last().expect("a file").path;
+    assert_eq!(
+        found,
+        [
+            "Distribution: the <pkg-ref> of #hello.pkg has the version Some(\"0.1.5\"), not \"0.1.5-fail-ready\"".to_owned(),
+            "Distribution: the <product> version is Some(\"0.1.5\"), not \"0.1.5-fail-ready\"".to_owned(),
+            "PackageInfo: version is \"0.1.5\", not \"0.1.5-fail-ready\"".to_owned(),
+            "/Library/LaunchDaemons/hello.a.plist: not the bytes release macos-pkg writes".to_owned(),
+            format!("missing {plist_b} in the payload"),
+        ]
     );
 }
 
@@ -295,4 +293,121 @@ fn a_pkg_path_is_the_services_directory_its_jobs_plists_or_a_directory_above() {
     ] {
         assert!(pkg_path_problem("hello", path, dir).is_some(), "{path}");
     }
+}
+
+/// The index of the entry named `name` in `list`.
+fn index_of(list: &[Vec<u8>], name: &str) -> usize {
+    list.iter()
+        .position(|e| e[76..].starts_with(format!("{name}\0").as_bytes()))
+        .unwrap_or_else(|| panic!("{name}"))
+}
+
+#[test]
+fn a_wanted_entry_of_another_owner_type_or_mode_is_refused_naming_each() {
+    // Catches: a file of the package another account owns, a directory where a file goes, and a
+    // hook that is not executable.
+    let d = scratch("native-pkg-attributes");
+    let bin = binary(&d);
+    let mut list = entries(false, 0);
+    let program = "./Library/Application Support/hello/bin/hello";
+    let at = index_of(&list, program);
+    list[at] = odc_entry(program, 0o100_755, 501, 20, BINARY);
+    let hook = "./Library/Application Support/hello/hostkeeper-hook";
+    let at = index_of(&list, hook);
+    let text = crate::release::native::hook_wrapper("bin/hello");
+    list[at] = odc_entry(hook, 0o100_644, 0, 0, text.as_bytes());
+    let plist = "./Library/LaunchDaemons/hello.b.plist";
+    let at = index_of(&list, plist);
+    list[at] = dir_entry(plist);
+    let at = expanded(&d, "0.1.5", &list, &package_info("0.1.5", ""));
+    assert_eq!(
+        problems(check(&at, &version(), false, &bin)),
+        [
+            "/Library/Application Support/hello/bin/hello: owned by uid 501 and gid 20, not root and wheel or admin",
+            "/Library/Application Support/hello/hostkeeper-hook: mode 644, not 755",
+            "/Library/LaunchDaemons/hello.b.plist: of type 40000, not 100000",
+        ]
+    );
+}
+
+#[test]
+fn a_plist_that_does_not_parse_is_no_dictionary_has_another_label_or_runs_a_program_elsewhere_is_refused()
+ {
+    // Catches: each read-back of a job's plist taken out.
+    let name = "./Library/LaunchDaemons/hello.a.plist";
+    let good = crate::release::native::hello::plist("a", false).expect("plist");
+    let cases: [(String, &str); 4] = [
+        ("not a plist".to_owned(), " does not parse as a plist: "),
+        (
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\">\n<array/>\n</plist>\n"
+                .to_owned(),
+            " is not a plist dictionary",
+        ),
+        (
+            good.replace("<string>hello.a</string>", "<string>hello.x</string>"),
+            ": the label is Some(\"hello.x\"), not \"hello.a\"",
+        ),
+        (
+            good.replace(
+                "/Library/Application Support/hello/bin/hello",
+                "/usr/local/bin/hello",
+            ),
+            ": the job runs Some(\"/usr/local/bin/hello\"), which is not a file of the payload",
+        ),
+    ];
+    for (n, (text, words)) in cases.into_iter().enumerate() {
+        let d = scratch(&format!("native-pkg-plist-{n}"));
+        let bin = binary(&d);
+        let mut list = entries(false, 0);
+        let at = index_of(&list, name);
+        list[at] = odc_entry(name, 0o100_644, 0, 0, text.as_bytes());
+        let at = expanded(&d, "0.1.5", &list, &package_info("0.1.5", ""));
+        let found = problems(check(&at, &version(), false, &bin));
+        assert_eq!(
+            found[0],
+            "/Library/LaunchDaemons/hello.a.plist: not the bytes release macos-pkg writes"
+        );
+        assert_eq!(found.len(), 2, "{words}: {found:?}");
+        assert!(
+            found[1].starts_with(&format!("/Library/LaunchDaemons/hello.a.plist{words}")),
+            "{words}: {found:?}"
+        );
+    }
+}
+
+#[test]
+fn a_package_info_without_its_element_or_an_attribute_or_with_a_preinstall_and_a_bad_payload_are_refused()
+ {
+    // Catches: each read of PackageInfo and of the payload taken out.
+    let d = scratch("native-pkg-info");
+    let bin = binary(&d);
+    let at = expanded(&d, "0.1.5", &entries(false, 0), "<nothing/>");
+    std::fs::write(at.join(COMPONENT).join("Payload"), b"not gzip").expect("write");
+    let found = problems(check(&at, &version(), false, &bin));
+    assert_eq!(found.len(), 2, "{found:?}");
+    assert_eq!(found[0], "PackageInfo has no readable <pkg-info> element");
+    assert!(
+        found[1].starts_with("Payload is not gzip data: "),
+        "{found:?}"
+    );
+
+    let d = scratch("native-pkg-info-attr");
+    let info = package_info(
+        "0.1.5",
+        "    <scripts>\n        <preinstall file=\"./preinstall\"/>\n    </scripts>\n",
+    )
+    .replace(" install-location=\"/\"", "")
+    .replace(
+        &format!("identifier=\"{IDENTIFIER}\""),
+        "identifier=\"dev.other\"",
+    );
+    let at = expanded(&d, "0.1.5", &entries(false, 0), &info);
+    assert_eq!(
+        problems(check(&at, &version(), false, &binary(&d))),
+        [
+            "PackageInfo: identifier is \"dev.other\", not \"dev.hostkeeper.hello\"",
+            "PackageInfo has no install-location",
+            "PackageInfo names a preinstall script: a service's pkg has no script",
+        ]
+    );
 }

@@ -131,8 +131,7 @@ pub fn hello_hooks() -> Vec<(String, String, String)> {
         hello::deb_files(Vec::new(), false),
         hello::DEB_PROGRAM,
     ));
-    if let Ok(files) = hello::pkg_files(Vec::new(), false) {
-        out.extend(pick(files, hello::PKG_PROGRAM));
-    }
+    let pkg = hello::pkg_files(Vec::new(), false).unwrap_or_default();
+    out.extend(pick(pkg, hello::PKG_PROGRAM));
     out
 }

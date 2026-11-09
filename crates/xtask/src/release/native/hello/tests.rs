@@ -120,3 +120,14 @@ fn the_programs_are_where_hellos_hook_looks_in_a_staged_tree() {
     );
     assert_eq!(hello::cli::DEFAULT_PORT, 9310);
 }
+
+#[test]
+fn a_slot_that_is_not_part_of_a_launchd_label_is_refused_naming_its_plist() {
+    // Catches: a plist written for a label launchd would refuse.
+    assert_eq!(
+        plist("a b", false),
+        Err(crate::release::Error::Failed(
+            "/Library/LaunchDaemons/hello.a b.plist: hello.a b is not a launchd label, or its job is not plist text".to_owned()
+        ))
+    );
+}
