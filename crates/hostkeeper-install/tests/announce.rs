@@ -341,7 +341,7 @@ mod native {
             ("3.0.3", Some(Installer::Apt)),
             ("1:1.0", Some(Installer::Apt)),
             ("2.1.18", None),
-            ("1.8.2.3", None),
+            ("1.8.2-3", None),
             ("2.2~rc1", None),
             ("not a version", None),
         ] {

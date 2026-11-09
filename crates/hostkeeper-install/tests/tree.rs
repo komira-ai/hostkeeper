@@ -297,7 +297,7 @@ fn is_service_unit_follows_the_naming_rule() {
         "mdmx.service",
         "mdm.mount",
         "mdm.path",
-        "mdm.target",
+        "mdm.swap",
         "mdm.service.d",
         "mdm",
         "mdm.",
@@ -514,27 +514,27 @@ fn install_links_follow_wanted_by_and_required_by() {
         ["multi-user.target.wants/mdm.service"]
     );
     assert_eq!(
-        links(unit, "[Install]\nRequiredBy=a.target\n"),
-        ["a.target.requires/mdm.service"]
+        links(unit, "[Install]\nRequiredBy=multi-user.target\n"),
+        ["multi-user.target.requires/mdm.service"]
     );
     assert_eq!(
         links(
             unit,
-            "[Install]\nWantedBy=a.target b.target\nWantedBy=c.target\nRequiredBy=d.target\n"
+            "[Install]\nWantedBy=multi-user.target timers.target\nWantedBy=default.target\nRequiredBy=network-online.target\n"
         ),
         [
-            "a.target.wants/mdm.service",
-            "b.target.wants/mdm.service",
-            "c.target.wants/mdm.service",
-            "d.target.requires/mdm.service",
+            "default.target.wants/mdm.service",
+            "multi-user.target.wants/mdm.service",
+            "network-online.target.requires/mdm.service",
+            "timers.target.wants/mdm.service",
         ]
     );
     assert_eq!(
         links(
             unit,
-            "[Install]\n  WantedBy = a.target  \nAlias=x.service\nAlso=y.service\nnot an assignment\n"
+            "[Install]\n  WantedBy = multi-user.target  \nAlias=x.service\nAlso=y.service\nnot an assignment\n"
         ),
-        ["a.target.wants/mdm.service"]
+        ["multi-user.target.wants/mdm.service"]
     );
     assert!(links(unit, "[Service]\nExecStart=/x\n").is_empty());
     assert!(links(unit, "").is_empty());
@@ -545,43 +545,43 @@ fn install_links_follow_wanted_by_and_required_by() {
 #[test]
 fn install_links_follow_an_empty_assignment_and_ignore_other_sections() {
     let unit = "mdm.service";
-    assert!(links(unit, "[Install]\nWantedBy=a.target\nWantedBy=\n").is_empty());
+    assert!(links(unit, "[Install]\nWantedBy=multi-user.target\nWantedBy=\n").is_empty());
     assert_eq!(
         links(
             unit,
-            "[Install]\nWantedBy=a.target\nWantedBy=\nWantedBy=b.target\n"
+            "[Install]\nWantedBy=multi-user.target\nWantedBy=\nWantedBy=timers.target\n"
         ),
-        ["b.target.wants/mdm.service"]
+        ["timers.target.wants/mdm.service"]
     );
     assert_eq!(
         links(
             unit,
-            "[Install]\nWantedBy=a.target\nRequiredBy=b.target\nRequiredBy=\n"
+            "[Install]\nWantedBy=multi-user.target\nRequiredBy=timers.target\nRequiredBy=\n"
         ),
-        ["a.target.wants/mdm.service"]
+        ["multi-user.target.wants/mdm.service"]
     );
     assert!(
         links(
             unit,
-            "[Unit]\nWantedBy=a.target\n[Service]\nRequiredBy=b.target\n"
+            "[Unit]\nWantedBy=multi-user.target\n[Service]\nRequiredBy=timers.target\n"
         )
         .is_empty()
     );
     assert_eq!(
         links(
             unit,
-            "[Install]\nWantedBy=a.target\n[Other]\nWantedBy=b.target\n"
+            "[Install]\nWantedBy=multi-user.target\n[Other]\nWantedBy=timers.target\n"
         ),
-        ["a.target.wants/mdm.service"]
+        ["multi-user.target.wants/mdm.service"]
     );
     assert_eq!(
         links(
             unit,
-            "[Install]\nWantedBy=a.target\n[Unit]\n[Install]\nRequiredBy=b.target\n"
+            "[Install]\nWantedBy=multi-user.target\n[Unit]\n[Install]\nRequiredBy=timers.target\n"
         ),
         [
-            "a.target.wants/mdm.service",
-            "b.target.requires/mdm.service"
+            "multi-user.target.wants/mdm.service",
+            "timers.target.requires/mdm.service"
         ]
     );
 }
@@ -593,8 +593,8 @@ fn install_links_refuse_a_target_that_is_not_a_unit_name() {
     let long = format!("{}.target", "a".repeat(249));
     for (key, target) in [
         ("WantedBy", "nodot"),
-        ("WantedBy", "a/b.target"),
-        ("RequiredBy", "bad name.target,x"),
+        ("WantedBy", "a/timers.target"),
+        ("RequiredBy", "bad name.timer,x"),
         ("WantedBy", "é.target"),
         ("RequiredBy", "../x.target"),
         ("WantedBy", long.as_str()),
