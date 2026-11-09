@@ -1,0 +1,35 @@
+# Plan enrollment, run fake-run: A new Linux host enrolled and running its first service. Written by `hostkeeper-measure analyze` from the run's records.
+# A raw row is one value of a measure; a derived row is computed from the raw rows of its measure,
+# as its how column says. A time is the difference of two stamps of the one clock its how column
+# names: the coordinator's (whole seconds) or the runner's (up to one poll interval late).
+# kind	id	value	unit	how	cells
+raw	operator-rep-1	37	s	plan enrollment, run fake-run, repetition 1: the request to its approval: the operator's time; coordinator clock	
+derived	operator-n	1		plan enrollment, run fake-run: the number of raw rows of operator	
+derived	operator-missing	0		plan enrollment, run fake-run: the values of operator the repetitions did not record	
+derived	operator-min	37	s	plan enrollment, run fake-run: the least raw value of operator	
+derived	operator-median	37	s	plan enrollment, run fake-run: the median raw value of operator	
+derived	operator-max	37	s	plan enrollment, run fake-run: the greatest raw value of operator	
+raw	issue-rep-1	2	s	plan enrollment, run fake-run, repetition 1: the approval to the certificate issued; coordinator clock	
+derived	issue-n	1		plan enrollment, run fake-run: the number of raw rows of issue	
+derived	issue-missing	0		plan enrollment, run fake-run: the values of issue the repetitions did not record	
+derived	issue-min	2	s	plan enrollment, run fake-run: the least raw value of issue	
+derived	issue-median	2	s	plan enrollment, run fake-run: the median raw value of issue	
+derived	issue-max	2	s	plan enrollment, run fake-run: the greatest raw value of issue	
+raw	first-heartbeat-rep-1	2	s	plan enrollment, run fake-run, repetition 1: the certificate issued to the first heartbeat; coordinator clock	
+derived	first-heartbeat-n	1		plan enrollment, run fake-run: the number of raw rows of first-heartbeat	
+derived	first-heartbeat-missing	0		plan enrollment, run fake-run: the values of first-heartbeat the repetitions did not record	
+derived	first-heartbeat-min	2	s	plan enrollment, run fake-run: the least raw value of first-heartbeat	
+derived	first-heartbeat-median	2	s	plan enrollment, run fake-run: the median raw value of first-heartbeat	
+derived	first-heartbeat-max	2	s	plan enrollment, run fake-run: the greatest raw value of first-heartbeat	
+raw	first-serving-rep-1	30	s	plan enrollment, run fake-run, repetition 1: the first heartbeat to the first service serving; coordinator clock	
+derived	first-serving-n	1		plan enrollment, run fake-run: the number of raw rows of first-serving	
+derived	first-serving-missing	0		plan enrollment, run fake-run: the values of first-serving the repetitions did not record	
+derived	first-serving-min	30	s	plan enrollment, run fake-run: the least raw value of first-serving	
+derived	first-serving-median	30	s	plan enrollment, run fake-run: the median raw value of first-serving	
+derived	first-serving-max	30	s	plan enrollment, run fake-run: the greatest raw value of first-serving	
+raw	total-rep-1	71	s	plan enrollment, run fake-run, repetition 1: the request to the first service serving; coordinator clock	
+derived	total-n	1		plan enrollment, run fake-run: the number of raw rows of total	
+derived	total-missing	0		plan enrollment, run fake-run: the values of total the repetitions did not record	
+derived	total-min	71	s	plan enrollment, run fake-run: the least raw value of total	
+derived	total-median	71	s	plan enrollment, run fake-run: the median raw value of total	
+derived	total-max	71	s	plan enrollment, run fake-run: the greatest raw value of total	

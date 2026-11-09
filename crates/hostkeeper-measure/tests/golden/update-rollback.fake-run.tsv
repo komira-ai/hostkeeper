@@ -1,0 +1,35 @@
+# Plan update-rollback, run fake-run: An update and a rollback on one host. Written by `hostkeeper-measure analyze` from the run's records.
+# A raw row is one value of a measure; a derived row is computed from the raw rows of its measure,
+# as its how column says. A time is the difference of two stamps of the one clock its how column
+# names: the coordinator's (whole seconds) or the runner's (up to one poll interval late).
+# kind	id	value	unit	how	cells
+raw	update-rep-1-host-1	12	s	plan update-rollback, run fake-run, repetition 1, host-1: SetDesired to the host's succeeded update; coordinator clock	
+raw	update-rep-2-host-1	16	s	plan update-rollback, run fake-run, repetition 2, host-1: SetDesired to the host's succeeded update; coordinator clock	
+raw	update-rep-3-host-1	14	s	plan update-rollback, run fake-run, repetition 3, host-1: SetDesired to the host's succeeded update; coordinator clock	
+raw	update-rep-4-host-1	12	s	plan update-rollback, run fake-run, repetition 4, host-1: SetDesired to the host's succeeded update; coordinator clock	
+raw	update-rep-5-host-1	16	s	plan update-rollback, run fake-run, repetition 5, host-1: SetDesired to the host's succeeded update; coordinator clock	
+derived	update-n	5		plan update-rollback, run fake-run: the number of raw rows of update	
+derived	update-missing	0		plan update-rollback, run fake-run: the values of update the repetitions did not record	
+derived	update-min	12	s	plan update-rollback, run fake-run: the least raw value of update	
+derived	update-median	14	s	plan update-rollback, run fake-run: the median raw value of update	
+derived	update-max	16	s	plan update-rollback, run fake-run: the greatest raw value of update	
+raw	update-order-rep-1-host-1	9	s	plan update-rollback, run fake-run, repetition 1, host-1: the host ordered to its succeeded update; coordinator clock	
+raw	update-order-rep-2-host-1	13	s	plan update-rollback, run fake-run, repetition 2, host-1: the host ordered to its succeeded update; coordinator clock	
+raw	update-order-rep-3-host-1	11	s	plan update-rollback, run fake-run, repetition 3, host-1: the host ordered to its succeeded update; coordinator clock	
+raw	update-order-rep-4-host-1	9	s	plan update-rollback, run fake-run, repetition 4, host-1: the host ordered to its succeeded update; coordinator clock	
+raw	update-order-rep-5-host-1	13	s	plan update-rollback, run fake-run, repetition 5, host-1: the host ordered to its succeeded update; coordinator clock	
+derived	update-order-n	5		plan update-rollback, run fake-run: the number of raw rows of update-order	
+derived	update-order-missing	0		plan update-rollback, run fake-run: the values of update-order the repetitions did not record	
+derived	update-order-min	9	s	plan update-rollback, run fake-run: the least raw value of update-order	
+derived	update-order-median	11	s	plan update-rollback, run fake-run: the median raw value of update-order	
+derived	update-order-max	13	s	plan update-rollback, run fake-run: the greatest raw value of update-order	
+raw	rollback-rep-1-host-1	9	s	plan update-rollback, run fake-run, repetition 1, host-1: the force to the host's succeeded rollback; coordinator clock	
+raw	rollback-rep-2-host-1	11	s	plan update-rollback, run fake-run, repetition 2, host-1: the force to the host's succeeded rollback; coordinator clock	
+raw	rollback-rep-3-host-1	9	s	plan update-rollback, run fake-run, repetition 3, host-1: the force to the host's succeeded rollback; coordinator clock	
+raw	rollback-rep-4-host-1	11	s	plan update-rollback, run fake-run, repetition 4, host-1: the force to the host's succeeded rollback; coordinator clock	
+raw	rollback-rep-5-host-1	9	s	plan update-rollback, run fake-run, repetition 5, host-1: the force to the host's succeeded rollback; coordinator clock	
+derived	rollback-n	5		plan update-rollback, run fake-run: the number of raw rows of rollback	
+derived	rollback-missing	0		plan update-rollback, run fake-run: the values of rollback the repetitions did not record	
+derived	rollback-min	9	s	plan update-rollback, run fake-run: the least raw value of rollback	
+derived	rollback-median	9	s	plan update-rollback, run fake-run: the median raw value of rollback	
+derived	rollback-max	11	s	plan update-rollback, run fake-run: the greatest raw value of rollback	

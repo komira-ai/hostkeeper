@@ -1,0 +1,57 @@
+# Plan coordinator-restart, run fake-run: The coordinator restarted on its Postgres store. Written by `hostkeeper-measure analyze` from the run's records.
+# A raw row is one value of a measure; a derived row is computed from the raw rows of its measure,
+# as its how column says. A time is the difference of two stamps of the one clock its how column
+# names: the coordinator's (whole seconds) or the runner's (up to one poll interval late).
+# kind	id	value	unit	how	cells
+raw	unavailable-rep-1	8	s	plan coordinator-restart, run fake-run, repetition 1: the first failed request to the first answer after it; runner clock	
+raw	unavailable-rep-2	4	s	plan coordinator-restart, run fake-run, repetition 2: the first failed request to the first answer after it; runner clock	
+raw	unavailable-rep-3	17	s	plan coordinator-restart, run fake-run, repetition 3: the first failed request to the first answer after it; runner clock	
+derived	unavailable-n	3		plan coordinator-restart, run fake-run: the number of raw rows of unavailable	
+derived	unavailable-missing	0		plan coordinator-restart, run fake-run: the values of unavailable the repetitions did not record	
+derived	unavailable-min	4	s	plan coordinator-restart, run fake-run: the least raw value of unavailable	
+derived	unavailable-median	8	s	plan coordinator-restart, run fake-run: the median raw value of unavailable	
+derived	unavailable-max	17	s	plan coordinator-restart, run fake-run: the greatest raw value of unavailable	
+raw	failed-requests-rep-1	8	requests	plan coordinator-restart, run fake-run, repetition 1: the runner's polls that failed	
+raw	failed-requests-rep-2	4	requests	plan coordinator-restart, run fake-run, repetition 2: the runner's polls that failed	
+raw	failed-requests-rep-3	17	requests	plan coordinator-restart, run fake-run, repetition 3: the runner's polls that failed	
+derived	failed-requests-n	3		plan coordinator-restart, run fake-run: the number of raw rows of failed-requests	
+derived	failed-requests-missing	0		plan coordinator-restart, run fake-run: the values of failed-requests the repetitions did not record	
+derived	failed-requests-min	4	requests	plan coordinator-restart, run fake-run: the least raw value of failed-requests	
+derived	failed-requests-median	8	requests	plan coordinator-restart, run fake-run: the median raw value of failed-requests	
+derived	failed-requests-max	17	requests	plan coordinator-restart, run fake-run: the greatest raw value of failed-requests	
+raw	all-back-rep-1	22	s	plan coordinator-restart, run fake-run, repetition 1: the coordinator seen gone to the last host back; runner clock	
+raw	all-back-rep-2	18	s	plan coordinator-restart, run fake-run, repetition 2: the coordinator seen gone to the last host back; runner clock	
+raw	all-back-rep-3	31	s	plan coordinator-restart, run fake-run, repetition 3: the coordinator seen gone to the last host back; runner clock	
+derived	all-back-n	3		plan coordinator-restart, run fake-run: the number of raw rows of all-back	
+derived	all-back-missing	0		plan coordinator-restart, run fake-run: the values of all-back the repetitions did not record	
+derived	all-back-min	18	s	plan coordinator-restart, run fake-run: the least raw value of all-back	
+derived	all-back-median	22	s	plan coordinator-restart, run fake-run: the median raw value of all-back	
+derived	all-back-max	31	s	plan coordinator-restart, run fake-run: the greatest raw value of all-back	
+raw	host-back-rep-1-host-1	12	s	plan coordinator-restart, run fake-run, repetition 1, host-1: the coordinator seen gone to the host back; runner clock	
+raw	host-back-rep-1-host-2	17	s	plan coordinator-restart, run fake-run, repetition 1, host-2: the coordinator seen gone to the host back; runner clock	
+raw	host-back-rep-1-host-3	22	s	plan coordinator-restart, run fake-run, repetition 1, host-3: the coordinator seen gone to the host back; runner clock	
+raw	host-back-rep-2-host-2	8	s	plan coordinator-restart, run fake-run, repetition 2, host-2: the coordinator seen gone to the host back; runner clock	
+raw	host-back-rep-2-host-3	13	s	plan coordinator-restart, run fake-run, repetition 2, host-3: the coordinator seen gone to the host back; runner clock	
+raw	host-back-rep-2-host-1	18	s	plan coordinator-restart, run fake-run, repetition 2, host-1: the coordinator seen gone to the host back; runner clock	
+raw	host-back-rep-3-host-3	21	s	plan coordinator-restart, run fake-run, repetition 3, host-3: the coordinator seen gone to the host back; runner clock	
+raw	host-back-rep-3-host-1	26	s	plan coordinator-restart, run fake-run, repetition 3, host-1: the coordinator seen gone to the host back; runner clock	
+raw	host-back-rep-3-host-2	31	s	plan coordinator-restart, run fake-run, repetition 3, host-2: the coordinator seen gone to the host back; runner clock	
+derived	host-back-n	9		plan coordinator-restart, run fake-run: the number of raw rows of host-back	
+derived	host-back-missing	0		plan coordinator-restart, run fake-run: the values of host-back the repetitions did not record	
+derived	host-back-min	8	s	plan coordinator-restart, run fake-run: the least raw value of host-back	
+derived	host-back-median	18	s	plan coordinator-restart, run fake-run: the median raw value of host-back	
+derived	host-back-max	31	s	plan coordinator-restart, run fake-run: the greatest raw value of host-back	
+raw	heartbeat-gap-rep-1-host-1	15	s	plan coordinator-restart, run fake-run, repetition 1, host-1: the longest time between two heartbeats of a host; coordinator clock	
+raw	heartbeat-gap-rep-1-host-2	30	s	plan coordinator-restart, run fake-run, repetition 1, host-2: the longest time between two heartbeats of a host; coordinator clock	
+raw	heartbeat-gap-rep-1-host-3	30	s	plan coordinator-restart, run fake-run, repetition 1, host-3: the longest time between two heartbeats of a host; coordinator clock	
+raw	heartbeat-gap-rep-2-host-1	30	s	plan coordinator-restart, run fake-run, repetition 2, host-1: the longest time between two heartbeats of a host; coordinator clock	
+raw	heartbeat-gap-rep-2-host-2	15	s	plan coordinator-restart, run fake-run, repetition 2, host-2: the longest time between two heartbeats of a host; coordinator clock	
+raw	heartbeat-gap-rep-2-host-3	15	s	plan coordinator-restart, run fake-run, repetition 2, host-3: the longest time between two heartbeats of a host; coordinator clock	
+raw	heartbeat-gap-rep-3-host-1	30	s	plan coordinator-restart, run fake-run, repetition 3, host-1: the longest time between two heartbeats of a host; coordinator clock	
+raw	heartbeat-gap-rep-3-host-2	45	s	plan coordinator-restart, run fake-run, repetition 3, host-2: the longest time between two heartbeats of a host; coordinator clock	
+raw	heartbeat-gap-rep-3-host-3	30	s	plan coordinator-restart, run fake-run, repetition 3, host-3: the longest time between two heartbeats of a host; coordinator clock	
+derived	heartbeat-gap-n	9		plan coordinator-restart, run fake-run: the number of raw rows of heartbeat-gap	
+derived	heartbeat-gap-missing	0		plan coordinator-restart, run fake-run: the values of heartbeat-gap the repetitions did not record	
+derived	heartbeat-gap-min	15	s	plan coordinator-restart, run fake-run: the least raw value of heartbeat-gap	
+derived	heartbeat-gap-median	30	s	plan coordinator-restart, run fake-run: the median raw value of heartbeat-gap	
+derived	heartbeat-gap-max	45	s	plan coordinator-restart, run fake-run: the greatest raw value of heartbeat-gap	
