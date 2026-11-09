@@ -1,7 +1,7 @@
 //! The `macos-pkg` and `check-macos-pkg` verbs from their command lines: each flag reaches the
 //! pkg builder or the check, and neither verb asks for adapters it does not read.
 
-use super::tests::{connects, empty, parse, text, verb};
+use super::tests::{connects, empty, text, verb};
 use super::*;
 use crate::release::fakes::scratch;
 
@@ -32,8 +32,8 @@ fn check_macos_pkg_reads_the_expanded_pkg_without_asking_for_adapters() {
 
 #[test]
 fn check_macos_pkg_takes_the_gh_and_the_trusted_root_it_checks_against() {
-    // Catches: `--gh` or `--trusted-root` not reaching the check, or either left optional, so that
-    // the pkg is checked without them.
+    // Catches: `--gh` or `--trusted-root` not reaching the check, or hostkeeper's pkg checked
+    // without either: the verb refuses it before it reads anything.
     let base = [
         "check-macos-pkg",
         "expanded",
@@ -49,12 +49,18 @@ fn check_macos_pkg_takes_the_gh_and_the_trusted_root_it_checks_against() {
     assert!(matches!(
         verb(&full),
         Verb::CheckMacosPkg { gh, trusted_root, .. }
-            if gh == Path::new("g") && trusted_root == Path::new("r")
+            if gh.as_deref() == Some(Path::new("g"))
+                && trusted_root.as_deref() == Some(Path::new("r"))
     ));
     for without in [["--gh", "g"], ["--trusted-root", "r"]] {
         let args: Vec<&str> = base.into_iter().chain(without).collect();
-        let parsed = parse(&args);
-        assert!(parsed.is_err(), "{args:?} parsed without a required flag");
+        assert_eq!(
+            run_with(verb(&args), &empty().ports()),
+            Err(Error::Failed(
+                crate::release::native::HOSTKEEPER_PKG_INPUTS.to_owned()
+            )),
+            "{args:?}"
+        );
     }
 }
 
@@ -93,13 +99,13 @@ fn macos_pkg_builds_through_the_pkgbuild_and_productbuild_port_with_its_flags() 
     assert_eq!(
         (
             calls[0].root.as_path(),
-            calls[0].scripts.as_path(),
+            calls[0].scripts.as_deref(),
             calls[0].pkg.as_path(),
             calls[0].version.to_string()
         ),
         (
             stage.join("root").as_path(),
-            stage.join("scripts").as_path(),
+            Some(stage.join("scripts").as_path()),
             stage.join("hostkeeper.pkg").as_path(),
             "0.1.9".to_owned()
         )

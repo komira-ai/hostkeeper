@@ -31,8 +31,24 @@ marked **specified, not built**, with the pull request that builds it.
 | `units/hello@.service` (Linux) | the template of the slots `hello@a.service` and `hello@b.service` |
 | `units/hello.a.plist`, `units/hello.b.plist` (macOS) | the launchd jobs `hello.a` and `hello.b`, rendered by `hostkeeper-launchd`'s `service_plist` |
 
-The committed goldens in `examples/hello/package/` are these files byte for byte, and list each
-entry and its mode. `/readyz` answers 200, or 503 when the server runs with `--fail-ready`.
+The committed goldens in `examples/hello/package/linux` and `macos` are these files byte for
+byte, and list each entry and its mode.
+
+**The native packages.** hello and its failing build are also built as a `.deb` for each Linux
+platform (`cargo xtask release deb --service hello`) and a `.pkg` for macOS (`cargo xtask release
+macos-pkg --service hello`), which hostkeeper installs with `apt` and `installer` once the farm
+moves to native packages ([design: native packages only](design/packages-native.md), sections
+10.2 and 10.6). Neither has a maintainer script; the manifest's hook bounds, run units, health URL
+and params are the manifest of the release's entry, not a file of the package.
+
+| `.deb` | `.pkg` | What it is |
+|---|---|---|
+| `/usr/lib/hello/hello` | `/Library/Application Support/hello/bin/hello` | the program |
+| `/usr/lib/hello/hostkeeper-hook` | `/Library/Application Support/hello/hostkeeper-hook` | the hook: two lines that run the program beside it with `update-hook` and the daemon's arguments |
+| `/usr/lib/systemd/system/hello@a.service`, `hello@b.service` | `/Library/LaunchDaemons/hello.a.plist`, `hello.b.plist` | one unit or job per slot, installed disabled (the plists carry `Disabled` true) |
+
+Their goldens are `examples/hello/package/deb` and `pkg`. The daemon runs the hook from the
+version it staged, so `prepare` finds the program in that version's `tree/`. `/readyz` answers 200, or 503 when the server runs with `--fail-ready`.
 `/version` answers the version of the package: `<version>`, or `<version>-fail-ready` when the
 server runs with `--fail-ready`, as the failing build's units start it. So `/version` alone tells
 the failing build from the good one.
@@ -48,7 +64,7 @@ restart, and clients see a short gap.
 
 | Step | What hello does |
 |---|---|
-| `prepare <artifact>` | checks the staged release has `bin/hello`; picks the slot that is not serving |
+| `prepare <artifact>` | checks the staged release has its program (`bin/hello`, or in a native package's `tree/` the program's path above); picks the slot that is not serving |
 | `cutover` | stops the serving slot, starts the other one |
 | `verify` | `GET /readyz`, then `GET /version` on 127.0.0.1:9310. Not listening yet: exit 75, run again. 503: exit 1, reason `not_ready`. Another version: exit 1, reason `wrong_version` |
 | `rollback` | stops the new slot, starts the old one again |

@@ -9,6 +9,7 @@ use clap::{Parser, Subcommand};
 use hostkeeper_mdm_core::acme::Acme;
 use hostkeeper_mdm_core::config::MdmConfig;
 use hostkeeper_mdm_core::migrate::{NEW_STATE, NEW_USER, Old, Target};
+use hostkeeper_mdm_core::package;
 use hostkeeper_mdm_core::pins::{BUILT_IN, Pins, Tool};
 use hostkeeper_mdm_core::profile::Topic;
 use hostkeeper_mdm_step::{Host, Mode, Trustee};
@@ -337,13 +338,13 @@ pub(crate) fn env<'a>(system: &System<'a>, host: &'a dyn Host) -> Env<'a> {
 }
 
 /// Whose settings a verb reads: the kit's file as it is, or the `mdm` package's, with the keys
-/// the package fixes added ([`hostkeeper_mdm_core::package::settings`]).
+/// the package's build fixes added ([`hostkeeper_mdm_core::package::settings_of`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Layout {
     /// `hostkeeper-mdm`: the file names every directory and port.
     Kit,
-    /// `mdm`, the package's program: the package fixes the layout.
-    Package,
+    /// `mdm`, the package's program: the package's build fixes the layout.
+    Package(package::Layout),
 }
 
 /// The text the settings parsers read from the file `path`, for `layout`.
@@ -355,7 +356,7 @@ pub(crate) fn settings_text(
     let text = read_settings(host, path)?;
     match layout {
         Layout::Kit => Ok(text),
-        Layout::Package => Ok(hostkeeper_mdm_core::package::settings(&text)?),
+        Layout::Package(build) => Ok(package::settings_of(&text, build)?),
     }
 }
 
