@@ -56,9 +56,13 @@
 //!   runner outside [`PRIVILEGED_RUNNERS`]. [`WRITE_ALLOWED`] has no entry for it either.
 //!
 //! - it is `release.yml` or `artifacts.yml` and breaks a rule of its own
-//!   ([`release::release_rules`]; for the deploy jobs of `release.yml`, [`super::desired`]).
+//!   ([`release::release_rules`]; for the deploy jobs of `release.yml`, [`super::desired`]; for its
+//!   package-channel jobs, which hold `id-token: write` to assume the cloud role, each under its
+//!   exact `if:`, [`super::packages`]).
 //!
 //! A workflow that tags or publishes is also held to [`release::publish_problems`].
+//!
+//! In `release.yml` every `run:` is one command on one line ([`one_command`]).
 //!
 //! Every `curl` of a `run:` carries the HTTPS and failure guards and the retry options, and no
 //! `run:` downloads with `wget` or `gh release download` ([`downloads`]). Every `cargo xtask`
@@ -77,6 +81,8 @@ use super::callers;
 use super::desired;
 use super::downloads;
 use super::net_install;
+use super::one_command;
+use super::packages;
 use super::pr_device;
 use super::release::{self, PLAN_IF, RELEASE_IF, SIGN_IF};
 use super::set_desired;
@@ -99,6 +105,8 @@ pub struct Allowed {
 /// - `release.yml` / `publish`: `contents`, to create the release and its tag.
 /// - `release.yml` / `plan`: `issues`, to open or update the one issue that tracks a release
 ///   held by a failed privileged run.
+/// - `release.yml` / `image`: `packages`, to push the coordinator's image, the checked bytes of
+///   the release, to this repository's package in the registry.
 /// - `advisories.yml` / `advisories`: `issues`, to open, rewrite or close the one issue that
 ///   lists the security advisories against the dependencies, on a run of main.
 pub const WRITE_ALLOWED: &[Allowed] = &[
@@ -125,6 +133,12 @@ pub const WRITE_ALLOWED: &[Allowed] = &[
         job: "plan",
         scope: "issues",
         condition: PLAN_IF,
+    },
+    Allowed {
+        file: "release.yml",
+        job: "image",
+        scope: "packages",
+        condition: RELEASE_IF,
     },
     Allowed {
         file: advisories::FILE,
@@ -399,6 +413,9 @@ pub fn lint(file: &str, text: &str) -> Vec<String> {
     }
     problems.extend(callers::problems(file, text, &doc));
     problems.extend(downloads::problems(&doc));
+    if file == one_command::FILE {
+        problems.extend(one_command::problems(&doc));
+    }
     problems.extend(xtask_calls::problems(&doc));
     problems
 }
@@ -423,7 +440,7 @@ fn inherited_secrets(node: &Node) -> Vec<String> {
 }
 
 /// True for `<name>[:<tag>]@sha256:<64 lowercase hex>`.
-fn pinned_by_digest(image: &str) -> bool {
+pub fn pinned_by_digest(image: &str) -> bool {
     let Some((name, digest)) = image.split_once('@') else {
         return false;
     };
@@ -481,6 +498,18 @@ fn permission_problems(file: &str, name: &str, job: &Node) -> Vec<String> {
             && level == Some("write")
             && (ID_TOKEN_ALLOWED.contains(&(file, name)) || callers::caller(file, name).is_some());
         if id_token {
+            continue;
+        }
+        // The jobs of the package channels that assume the cloud role, each under its exact `if:`.
+        if let (true, Some(want)) = (
+            scope == "id-token" && level == Some("write"),
+            packages::id_token_condition(file, name),
+        ) {
+            if condition != Some(want.as_str()) {
+                problems.push(format!(
+                    "job {name}: `id-token: write` needs the exact `if: {want}`"
+                ));
+            }
             continue;
         }
         let allowed = WRITE_ALLOWED

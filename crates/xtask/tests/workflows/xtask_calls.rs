@@ -179,8 +179,9 @@ pub fn commands(script: &str) -> Vec<Vec<String>> {
 }
 
 /// The words after `cargo xtask` in `command`, if it calls xtask that way anywhere in it (after
-/// `time`, say; with cargo's options between, `cargo "+$TOOLCHAIN" xtask`), or after a path to the binary (`target/debug/xtask`) that starts the command,
-/// after any `NAME=value` words.
+/// `time`, say; with cargo's options between, `cargo "+$TOOLCHAIN" xtask`), or after a path to the
+/// binary (`target/debug/xtask`) that starts the command, after any `NAME=value` words, or after
+/// the image of a `docker run` (`docker run ... name@sha256:<digest> xtask`).
 pub fn xtask_args(command: &[String]) -> Option<&[String]> {
     for (i, word) in command.iter().enumerate() {
         if word != "cargo" {
@@ -194,6 +195,14 @@ pub fn xtask_args(command: &[String]) -> Option<&[String]> {
         if let Some(at) = after.filter(|at| command[*at] == "xtask") {
             return Some(&command[at + 1..]);
         }
+    }
+    // `docker run ... <image>@sha256:<digest> xtask <args>`: the binary run in a container, the
+    // word `xtask` after the image.
+    if command.first().map(String::as_str) == Some("docker")
+        && let Some(at) = command.iter().position(|w| w.contains("@sha256:"))
+        && command.get(at + 1).map(String::as_str) == Some("xtask")
+    {
+        return Some(&command[at + 2..]);
     }
     let first = command.iter().position(|w| !is_assignment(w))?;
     let word = &command[first];

@@ -1,0 +1,27 @@
+# The flags of `hostkeeper-coordinator serve` for the packaged unit, read with
+# `serve --config /etc/hostkeeper-coordinator/serve.toml`. Copy this file there (root:hostkeeper-coordinator,
+# mode 0640), fill in the addresses and names, and place the files it names. Each key is a flag of
+# `serve` without its `--` (`hostkeeper-coordinator serve --help` lists them all): a string or an
+# integer is the flag's value, `true` a flag that takes none, an array the flag once per element.
+# A flag given here cannot be given again on the command line. docs/deploy/coordinator/package.md
+# says what each file is and who owns it.
+
+# Where updaters dial (mutual TLS), and the private listener of CI and the operator: the address
+# of one interface each.
+heartbeat-listen = "192.0.2.10:8443"
+private-listen = "192.0.2.10:8444"
+
+# The coordinator's certificate and key, and the CA its clients' certificates are checked against.
+tls-cert = "/etc/hostkeeper-coordinator/tls.pem"
+tls-key = "/etc/hostkeeper-coordinator/tls.key"
+client-ca = "/etc/hostkeeper-coordinator/client-ca.pem"
+
+# CI's OIDC issuer and audiences, the operator's tokens (owned by hostkeeper-coordinator, mode
+# 0600) and the services the coordinator manages.
+oidc-config = "/etc/hostkeeper-coordinator/oidc.toml"
+tokens-file = "/etc/hostkeeper-coordinator/tokens.toml"
+rollout-file = "/etc/hostkeeper-coordinator/rollout.toml"
+
+# The state: files in the coordinator's directory. For Postgres, replace this line with
+# database-dsn-file and halt-marker-file.
+state-file = "/var/lib/hostkeeper-coordinator/state.json"

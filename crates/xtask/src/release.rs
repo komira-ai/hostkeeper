@@ -18,8 +18,8 @@
 //! - `nfpm-stage` ([`package::nfpm_stage`]): the pinned `gh` of one architecture, out of its
 //!   release archive checked against its pinned SHA-256, the Sigstore trusted root, and the
 //!   static `hostkeeper` and `hostkeeper-pxe` of `--binaries`, each checked and staged for the
-//!   deb, the rpm and the Arch package.
-//! - `check-linux-pkg` ([`package::linux_check`]): a built deb, rpm, Arch package or tarball,
+//!   deb and the rpm.
+//! - `check-linux-pkg` ([`package::linux_check`]): a built deb, rpm or tarball,
 //!   read back, holds no ELF program with an interpreter or a needed library and declares no
 //!   dependency; with `--staged` it also installs the staged `gh`, trusted root and programs at
 //!   the daemon's paths, with their modes, root's, and the console's issue link pointing at the
@@ -42,6 +42,8 @@
 //!   install, and the check of its payload read back from the built pkg; with `--service hello`,
 //!   hello's `.pkg` ([`native::pkg`]), with no script and its jobs disabled.
 //! - `compare-images` ([`compare_images`]): two OCI image tarballs are byte for byte equal.
+//! - `image-index`, `image-layout` ([`image_index`]): the coordinator's multi-platform image
+//!   index, made of the two image tarballs, and the OCI layout a registry push copies from.
 //! - `check-image-ui` ([`check_image_ui`]): the coordinator's image holds the operator web app
 //!   (`ui/`) at the path the coordinator serves by default, file for file, owned by root.
 //! - `plan` ([`plan`]): which commits since the last release are released, oldest first, and
@@ -83,9 +85,11 @@ pub(crate) mod contract;
 mod doc_tests;
 #[cfg(test)]
 pub(crate) mod fakes;
+mod files;
 pub(crate) mod git;
 mod github;
 mod hkctl;
+pub(crate) mod image_index;
 mod index;
 mod locate;
 mod macos_pkg;
@@ -99,6 +103,7 @@ mod plan;
 pub(crate) mod ports;
 mod publish;
 pub(crate) mod real;
+mod run_state;
 mod set_version;
 mod sync;
 mod targets;
@@ -107,16 +112,17 @@ pub mod test_support;
 mod version;
 
 use std::fmt;
-use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::advisories::DenyCli;
 use check_binary::VersionOf;
 use contract::{Commit, Package, Platform, Repo, Service, Version};
+pub(crate) use files::{answer, file_sha256};
 use git::GitCli;
 use github::Gh;
 use macos_pkg::PkgbuildCli;
-use ports::{Adapters, Exec, PortError, Ports, Run};
+use ports::{Adapters, Exec, PortError, Ports};
+pub(crate) use run_state::{RunState, state};
 
 /// Why a release verb failed.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -241,8 +247,8 @@ pub(crate) enum Verb {
         #[arg(long)]
         dir: PathBuf,
     },
-    /// Stage the pinned `gh`, the Sigstore trusted root and the two static programs for the deb,
-    /// the rpm and the Arch package: `gh` out of its release archive, refused unless the archive
+    /// Stage the pinned `gh`, the Sigstore trusted root and the two static programs for the deb
+    /// and the rpm: `gh` out of its release archive, refused unless the archive
     /// has the pinned SHA-256 and `gh` is a program of the architecture; the trusted root
     /// refused unless each line is one; `hostkeeper` and `hostkeeper-pxe` of `--binaries`,
     /// refused unless each is a 64-bit little-endian ELF of the architecture with no
@@ -272,7 +278,7 @@ pub(crate) enum Verb {
         #[arg(long)]
         out: PathBuf,
     },
-    /// Read a built deb, rpm, Arch package or tarball and refuse it if it holds an ELF program
+    /// Read a built deb, rpm or tarball and refuse it if it holds an ELF program
     /// with an interpreter or a needed library, or (not a tarball) declares a dependency. With
     /// `--staged` (not for a tarball) also refuse it unless it installs `/usr/lib/hostkeeper/gh`,
     /// `/usr/bin/hostkeeper` and `/usr/bin/hostkeeper-pxe` (regular files, 0755) and
@@ -286,11 +292,15 @@ pub(crate) enum Verb {
     /// writable by root alone, its hook is `/usr/lib/<service>/hostkeeper-hook` (a regular file,
     /// 0755) and its units' programs are files of the package; it declares no dependency.
     CheckLinuxPkg {
-        /// The `.deb`, `.rpm`, Arch package (`.pkg.tar.zst`) or tarball.
+        /// The `.deb`, `.rpm` or tarball.
         package: PathBuf,
         /// The directory `nfpm-stage` wrote (its `--out`).
         #[arg(long)]
         staged: Option<PathBuf>,
+        /// For the coordinator's deb or rpm instead: the directory its program and `ui/` were
+        /// staged in.
+        #[arg(long, conflicts_with_all = ["staged", "service"])]
+        coordinator_staged: Option<PathBuf>,
         /// The service whose `.deb` this is: hello or mdm.
         #[arg(long, value_enum)]
         service: Option<Service>,
@@ -447,6 +457,31 @@ pub(crate) enum Verb {
     },
     /// Refuse two OCI image tarballs unless they are byte for byte equal.
     CompareImages { a: PathBuf, b: PathBuf },
+    /// Write hostkeeper-coordinator-<version>.image.json into `dir`: the OCI image index
+    /// of the two image tarballs of the version there, linux/amd64 then linux/arm64.
+    ImageIndex {
+        /// The release's files.
+        dir: PathBuf,
+        /// The release's version.
+        #[arg(long)]
+        version: Version,
+    },
+    /// Write the OCI image layout of the coordinator's multi-platform image into the new
+    /// directory `out`: the blobs of the two image tarballs in `dir` and the image index there,
+    /// which must be theirs, named under the version.
+    ImageLayout {
+        /// The release's files.
+        dir: PathBuf,
+        /// The release's version.
+        #[arg(long)]
+        version: Version,
+        /// The layout's directory, which must not exist.
+        #[arg(long)]
+        out: PathBuf,
+        /// An env file (`GITHUB_ENV`) to append `IMAGE_DIGEST=<the index's digest>` to.
+        #[arg(long)]
+        env_file: Option<PathBuf>,
+    },
     /// Refuse the coordinator's OCI image tarball unless it holds the operator web app at
     /// /usr/share/hostkeeper-coordinator/ui: exactly the directories and files of `ui`, with
     /// their bytes, owned by root, files 0644 and directories 0755.
@@ -608,6 +643,13 @@ pub(crate) fn run<A: Adapters>(
         Verb::SetVersion { version, root } => set_version::set_version(&root, &version),
         Verb::Stamp { version, commit } => Ok(vec![contract::stamp_string(&version, &commit)]),
         Verb::CompareImages { a, b } => compare_images::compare_images(&a, &b),
+        Verb::ImageIndex { dir, version } => image_index::write_index(&dir, &version),
+        Verb::ImageLayout {
+            dir,
+            version,
+            out,
+            env_file,
+        } => image_index::write_layout(&dir, &version, &out, env_file.as_deref()),
         Verb::CheckImageUi { image, ui } => check_image_ui::check_image_ui(&image, &ui),
         Verb::Index {
             service,
@@ -644,9 +686,18 @@ pub(crate) fn run<A: Adapters>(
         Verb::CheckLinuxPkg {
             package,
             staged,
+            coordinator_staged,
             service,
         } => match service {
-            None => package::linux_check::check(&package, staged.as_deref()),
+            None => {
+                use package::linux_check::Staged;
+                let staged = match (&staged, &coordinator_staged) {
+                    (Some(dir), _) => Some(Staged::Daemon(dir)),
+                    (None, Some(dir)) => Some(Staged::Coordinator(dir)),
+                    (None, None) => None,
+                };
+                package::linux_check::check(&package, staged)
+            }
             Some(_) if staged.is_some() => Err(Error::Failed(
                 package::linux_check::SERVICE_AND_STAGED.to_owned(),
             )),
@@ -866,6 +917,8 @@ fn run_with(verb: Verb, ports: &Ports<'_>) -> Result<Vec<String>, Error> {
         Verb::SetVersion { .. }
         | Verb::Stamp { .. }
         | Verb::CompareImages { .. }
+        | Verb::ImageIndex { .. }
+        | Verb::ImageLayout { .. }
         | Verb::CheckImageUi { .. }
         | Verb::Index { .. }
         | Verb::Netboot { .. }
@@ -928,77 +981,6 @@ impl<E: Exec> Adapters for Wired<E> {
             advisories: &self.deny,
             download: &self.curl,
         }
-    }
-}
-
-/// Appends `lines` (`key=value`) to `output`, when there is one, and returns them to print.
-pub(crate) fn answer(output: Option<&Path>, lines: Vec<String>) -> Result<Vec<String>, Error> {
-    if let Some(path) = output {
-        let mut text = lines.join("\n");
-        text.push('\n');
-        std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-            .and_then(|mut f| f.write_all(text.as_bytes()))
-            .map_err(Error::io(format!("append to {}", path.display())))?;
-    }
-    Ok(lines)
-}
-
-/// The SHA-256 of the file at `path`, 64 lowercase hex digits, read in one streaming pass.
-pub(crate) fn file_sha256(path: &Path) -> Result<String, Error> {
-    use sha2::Digest;
-    let what = format!("read {}", path.display());
-    let mut file = std::fs::File::open(path).map_err(Error::io(&what))?;
-    let mut hasher = sha2::Sha256::new();
-    let mut buf = vec![0_u8; 1 << 16];
-    loop {
-        let n = file.read(&mut buf).map_err(Error::io(&what))?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buf[..n]);
-    }
-    Ok(hex::encode(hasher.finalize()))
-}
-
-/// Where a workflow stands for one commit: its latest push run on `main` for that commit.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum RunState {
-    /// No push run on `main` for the commit.
-    Missing,
-    /// The latest such run has not completed.
-    Pending(u64),
-    /// The latest such run succeeded.
-    Succeeded(u64),
-    /// The latest such run failed (`failure`, `timed_out` or `startup_failure`).
-    Failed(u64),
-    /// The latest such run completed otherwise (`cancelled`, `skipped`, ...): not green, not
-    /// red.
-    Other(u64, String),
-}
-
-/// The state of a workflow for `commit` from its `runs`: only push runs on `main` whose head is
-/// exactly `commit` count, and of those the latest (highest id). A pull-request run, a run on
-/// another branch and a run for another commit never count.
-pub(crate) fn state(runs: &[Run], commit: &Commit) -> RunState {
-    let latest = runs
-        .iter()
-        .filter(|r| {
-            (r.event == "push") & (r.branch == contract::MAIN) & (r.head_sha == commit.as_str())
-        })
-        .max_by_key(|r| r.id);
-    let Some(run) = latest else {
-        return RunState::Missing;
-    };
-    match (run.status.as_str(), run.conclusion.as_deref()) {
-        ("completed", Some("success")) => RunState::Succeeded(run.id),
-        ("completed", Some("failure" | "timed_out" | "startup_failure")) => {
-            RunState::Failed(run.id)
-        }
-        ("completed", other) => RunState::Other(run.id, other.unwrap_or("none").to_owned()),
-        _ => RunState::Pending(run.id),
     }
 }
 

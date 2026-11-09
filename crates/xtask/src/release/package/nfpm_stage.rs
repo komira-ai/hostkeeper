@@ -1,4 +1,4 @@
-//! `release nfpm-stage`: the four files of the deb, the rpm and the Arch package, laid out where
+//! `release nfpm-stage`: the four files of the deb and the rpm, laid out where
 //! `packaging/linux/nfpm.yaml` takes them from: the two the daemon's attestation check runs on,
 //! and the two programs it ships. The daemon starts `gh` at `/usr/lib/hostkeeper/gh` and passes
 //! it `/usr/lib/hostkeeper/trusted_root.json` as `--custom-trusted-root`

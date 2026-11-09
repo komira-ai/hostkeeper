@@ -32,7 +32,7 @@ pub const LINUX_PKG_INSTALLED: [&str; 2] = [
     linux_check::INSTALLED_TRUSTED_ROOT,
 ];
 
-/// The programs `release check-linux-pkg --staged` requires a deb, an rpm and an Arch package to
+/// The programs `release check-linux-pkg --staged` requires a deb and an rpm to
 /// install, each where it is installed and the file name `release nfpm-stage` stages it as.
 pub const LINUX_PKG_PROGRAMS: [(&str, &str); 2] = [
     (
