@@ -50,8 +50,9 @@ fn wait_certificate(coordinator: &mut Coordinator, daemon: &mut Daemon) -> HostC
     })
 }
 
-/// `hosts list` lists `heard` as the approved host: of [`ROLE`], live, enrolled at `enrolled`
-/// (the unix second of its approval), its heartbeat the daemon's.
+/// `hosts list` lists `heard` as the approved host heard since the coordinator started: of
+/// [`ROLE`], live, enrolled at `enrolled` (the unix second of its approval), its heartbeat the
+/// daemon's.
 fn assert_heard(heard: &Value, enrolled: &Value) {
     assert_eq!(heard["role"], ROLE, "{heard}");
     assert_eq!(heard["live"], true, "{heard}");
@@ -70,8 +71,9 @@ fn assert_none_pending(coordinator: &Coordinator) {
 
 /// Catches a daemon whose request the CA refuses (a CSR subject other than `CN=host:pending`), a
 /// daemon that sends no heartbeat over its certificate, and a coordinator that does not know an
-/// approved host after a restart (each never lists the host), and a daemon that enrolls again
-/// after its own restart or the coordinator's.
+/// approved host after a restart (each never lists the host as heard), a restarted coordinator
+/// that does not list an enrolled host it has not heard yet, or lists it as live, and a daemon
+/// that enrolls again after its own restart or the coordinator's.
 #[test]
 fn a_daemon_enrolls_beats_and_keeps_its_identity_across_both_restarts() {
     let bench = Bench::new("first_boot");
@@ -120,7 +122,8 @@ fn a_daemon_enrolls_beats_and_keeps_its_identity_across_both_restarts() {
     assert_heard(&heard, &enrolled);
 
     // 5. The coordinator is killed and started again on the same files and ports. It knows
-    // nothing of the fleet at a start, so the host listed again is a heartbeat it heard since.
+    // nothing of the fleet at a start: it lists the host from its enrollment, not live, until it
+    // hears the host's next heartbeat.
     coordinator.restart();
     assert_heard(&coordinator.wait_heard(node, &mut daemon), &enrolled);
     assert_eq!(
@@ -131,13 +134,17 @@ fn a_daemon_enrolls_beats_and_keeps_its_identity_across_both_restarts() {
     assert_none_pending(&coordinator);
 
     // 7. The daemon is killed. A coordinator started again while it is down has heard nothing
-    // of it; the daemon, started again (its boot pass), comes back with the same identity.
+    // of it and lists it from its enrollment alone: not live, no heartbeat time, the daemon its
+    // enrollment kept from the last heartbeat. The daemon, started again (its boot pass), comes
+    // back with the same identity.
     daemon.kill();
     coordinator.restart();
+    let unheard = coordinator.assert_unheard(node);
+    assert_eq!(unheard["role"], ROLE, "{unheard}");
+    assert_eq!(&unheard["enrolledUnix"], &enrolled, "{unheard}");
     assert_eq!(
-        coordinator.host(node),
-        Ok(None),
-        "no heartbeat while the daemon is down"
+        unheard["heartbeat"]["agent"]["name"], "hostkeeper",
+        "the daemon its enrollment kept: {unheard}"
     );
     daemon.start_again();
     assert_heard(&coordinator.wait_heard(node, &mut daemon), &enrolled);
