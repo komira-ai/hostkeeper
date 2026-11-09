@@ -12,9 +12,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use hostkeeper_hook::{Invocation, Step};
 use hostkeeper_openrc::OpenrcLauncher;
-use hostkeeper_steps::{
-    AdditiveCall, BootId, BootIdError, Bound, Captured, Clock, ProbeCall, StepCall,
-};
+use hostkeeper_steps::{AdditiveCall, BootId, BootIdError, Bound, Captured, Clock, StepCall};
 use hostkeeper_testkit::Scratch;
 
 /// The unit of the steps the tests run.
@@ -198,23 +196,6 @@ pub fn additive_call<'a>(
         executable,
         unit: UNIT,
         timeout_secs,
-    }
-}
-
-/// A probe of `executable` with `args` in [`UNIT`].
-pub fn probe_call<'a>(
-    executable: &'a Path,
-    args: &'a [&'a str],
-    timeout_secs: u64,
-    output_bytes: usize,
-) -> ProbeCall<'a> {
-    ProbeCall {
-        service: "web",
-        executable,
-        args,
-        unit: UNIT,
-        timeout_secs,
-        output_bytes,
     }
 }
 

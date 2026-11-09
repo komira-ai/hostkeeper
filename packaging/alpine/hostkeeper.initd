@@ -7,16 +7,16 @@
 # the host.
 #
 # supervise-daemon starts the binary the package installed. That binary gives the binary
-# directory of hostkeeper's own update its first binary when `current` starts none, judges from
-# the start log whether the update that waits for its restart has spent its starts (three within
-# 300 seconds) and, if so, puts the previous binary back, and then execs `current` with these
-# arguments (crates/hostkeeper-daemon/src/packaged.rs). So every start, a respawn included,
-# goes through the binary of the package before it becomes the binary the update chose; the
-# process id stays, and supervise-daemon supervises the daemon itself.
+# directory of hostkeeper's own update its first binary when `current` starts none, and execs
+# `current` with these arguments (crates/hostkeeper-daemon/src/packaged.rs), whose start hands
+# over to the binary an update staged as `next` while its three tries last
+# (docs/design/two-programs.md, section 4.3). So every start, a respawn included, goes through
+# the binary of the package before it becomes the binary the update chose; the process id stays,
+# and supervise-daemon supervises the daemon itself.
 #
 # The daemon exits 0 to be started again after its own update: supervise-daemon respawns it
-# whatever its exit, a second after it ends, for good (respawn_max=0); the burst is the start
-# log's, judged at each start as above, not the supervisor's.
+# whatever its exit, a second after it ends, for good (respawn_max=0); the tries are the
+# hand-over's count, not the supervisor's.
 #
 # The readiness notice: start_pre removes /run/hostkeeper/ready, the daemon writes it, with its
 # pid, once its boot pass is over (--ready-file; docs/design/hostkeeper-design.md, section 6.5),

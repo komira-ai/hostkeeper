@@ -133,13 +133,16 @@ pub(crate) struct Request {
 }
 
 /// The `[hook]` tables of the manifest: the one place the hook values are set. The manifest
-/// loader requires a hook with bounded steps, so hostkeeper's own package carries one: the
-/// package's own binary, `hostkeeper update-hook` (`hostkeeper_daemon::update_hook`), whose every
-/// step does nothing, because hostkeeper's self-update is compiled into the daemon (design section
-/// 6.6). A daemon runs it for every install and update of hostkeeper. The manifest says so in a
-/// comment.
-const HOOK: &str = r#"# Every step of this hook does nothing: hostkeeper's self-update is compiled into the
-# daemon. The table is here because every manifest has a bounded hook.
+/// loader requires a hook with bounded steps, and a manifest without one is refused before its
+/// floor is read, which would count the release failed on a daemon too old to take it; so
+/// hostkeeper's own package carries one: the package's own binary, `hostkeeper update-hook`
+/// (`hostkeeper_daemon::update_hook`), whose every step does nothing, because hostkeeper's
+/// self-update is compiled into the daemon (design sections 4.4 and 6.6). No daemon runs it: the
+/// floor is above the legacy floor, so a daemon that takes the release runs built-in steps, and an
+/// older one defers it. The manifest says so in a comment.
+const HOOK: &str = r#"# No daemon runs this hook's command: a daemon that takes this release runs built-in steps
+# that do nothing, and an older one defers it. The table is here because every manifest has a
+# bounded hook, and the floor is read after it.
 [hook]
 command = ["bin/hostkeeper", "update-hook"]
 verify_deadline_secs = 600

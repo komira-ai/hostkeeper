@@ -1,5 +1,5 @@
 //! The step launcher of an OpenRC host against real child processes (small `/bin/sh` scripts):
-//! how a step, an additive step and a probe are started and read, how the bound and the end of
+//! how a step and an additive step are started and read, how the bound and the end of
 //! the leader take the process group down, the file kept for each running step, and every
 //! refusal. Time is a clock that moves when it is read, so no test waits for a bound or asserts
 //! a time.
@@ -15,12 +15,10 @@ use std::time::Duration;
 use hostkeeper_hook::{Invocation, Step};
 use hostkeeper_openrc::OpenrcLauncher;
 use hostkeeper_openrc::launcher::{POLL, READER_GRACE, STEPS_DIR, STOP_TIMEOUT_SECS};
-use hostkeeper_steps::{
-    Bound, LAST_LINE_MAX, LaunchError, ProbeExit, RING_BYTES, StepExit, StepLauncher,
-};
+use hostkeeper_steps::{Bound, LAST_LINE_MAX, LaunchError, RING_BYTES, StepExit, StepLauncher};
 use launcher_support::{
-    PARAMS, Rig, UNIT, additive_call, gone, parse_stat, pid_in, probe_call, secs, step_call, text,
-    wait_for, wait_gone,
+    PARAMS, Rig, UNIT, additive_call, gone, parse_stat, pid_in, secs, step_call, text, wait_for,
+    wait_gone,
 };
 
 /// The exit of a step that ended with `code` after printing `last_line`.
@@ -239,15 +237,6 @@ fn a_relative_path_or_a_bad_unit_name_is_the_launchers_refusal() {
         );
     }
 
-    let args: [&str; 0] = [];
-    let err = rig
-        .launcher
-        .run_probe(&probe_call(relative, &args, 5, 10))
-        .expect_err("a relative probed binary");
-    assert!(
-        matches!(&err, LaunchError::Launcher(m) if m == "the probed binary \"hook\" is not an absolute path"),
-        "{err}"
-    );
     assert!(rig.log().is_empty());
 }
 
@@ -574,70 +563,4 @@ fn an_additive_step_with_a_timeout_of_zero_is_not_ended_by_the_launcher() {
     })
     .expect("the step ran");
     assert_eq!(got, exit(Some(0), Some("done")));
-}
-
-#[test]
-fn a_probe_keeps_the_start_of_its_output_up_to_the_limit() {
-    let rig = Rig::new("probe-output", 1);
-    let hook = rig.script("hook", "printf 'arg:%s\\n' \"$@\"\nprintf 0123456789abcdef");
-    let args = ["--version", "now"];
-    let got = rig
-        .launcher
-        .run_probe(&probe_call(&hook, &args, 100, 24))
-        .expect("the probe ran");
-    assert_eq!(
-        got,
-        ProbeExit {
-            code: Some(0),
-            output: b"arg:--version\narg:now\n01".to_vec(),
-            truncated: true,
-        }
-    );
-    // Within the limit nothing is dropped.
-    let got = rig
-        .launcher
-        .run_probe(&probe_call(&hook, &args, 100, 1000))
-        .expect("the probe ran");
-    assert!(!got.truncated);
-    assert!(got.output.ends_with(b"0123456789abcdef"));
-    let log = rig.log();
-    assert_eq!(log.len(), 2);
-    assert_eq!(log[0].0, UNIT);
-}
-
-#[test]
-fn a_probe_exit_code_and_a_probe_past_its_bound() {
-    let rig = Rig::new("probe-bound", 1);
-    let failing = rig.script("failing", "exit 3");
-    let args: [&str; 0] = [];
-    let got = rig
-        .launcher
-        .run_probe(&probe_call(&failing, &args, 100, 10))
-        .expect("the probe ran");
-    assert_eq!(got.code, Some(3));
-
-    // A timeout of 0 is read as 1 second, never as no bound.
-    let forever = rig.script("forever", "echo started\nwhile :; do :; done");
-    let got = rig
-        .launcher
-        .run_probe(&probe_call(&forever, &args, 0, 100))
-        .expect("the probe ran");
-    assert_eq!(got.code, None);
-
-    // A probe that handles the bound's SIGTERM and exits 0 has no code either.
-    let armed = rig.path("armed");
-    rig.clock.gate_on(&armed);
-    let polite = rig.script(
-        "polite",
-        &format!(
-            "trap 'echo polite; exit 0' TERM\n: > {}\nwhile :; do :; done",
-            armed.display()
-        ),
-    );
-    let got = rig
-        .launcher
-        .run_probe(&probe_call(&polite, &args, 5, 100))
-        .expect("the probe ran");
-    assert_eq!(got.code, None);
-    assert_eq!(got.output, b"polite\n");
 }

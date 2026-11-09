@@ -6,7 +6,7 @@
 //! daemon on the same state directory gets [`StartError::Locked`]); remove the registration
 //! socket kbf's agent may have left ([`Settings::kbf_run_dir`]), before any unit is touched;
 //! [`settle_self_update`]; [`before_records`] and [`boot_pass`]; [`after_boot`]; and, once the
-//! daemon is ready, [`install_self_units`] for the host's platform. [`serve`] then starts the
+//! daemon is ready, [`remove_self_units`] for the host's platform. [`serve`] then starts the
 //! enrollment and heartbeat loops ([`crate::links`]) and runs them until the daemon is asked to
 //! exit for its own update ([`crate::selfupdate::Restart`]).
 //!
@@ -243,7 +243,7 @@ pub fn startup_notifying(
     before_records(&daemon, &mut report);
     boot_pass(&daemon, &mut report)?;
     after_boot(&daemon, &mut report, notifier);
-    install_self_units(&daemon, Platform::host().kind, &mut report);
+    remove_self_units(&daemon, Platform::host().kind, &mut report);
     Ok(Started {
         daemon,
         report,
@@ -320,19 +320,21 @@ fn after_boot(daemon: &Daemon, report: &mut BootReport, notifier: &dyn ReadyNoti
     daemon.after_boot(report, notifier);
 }
 
-/// Once the daemon is ready: the units of hostkeeper's own update for a host of `kind`, written
-/// where they differ ([`Daemon::install_self_units`]). One that could not be installed is an
-/// alert, and the start goes on. A file that could not be written is written by the next start;
-/// files written whose reload failed stay, and the next start, finding them in place, does not
-/// reload again: systemd reads them at its next reload or boot.
-fn install_self_units(daemon: &Daemon, kind: PlatformKind, report: &mut BootReport) {
-    let installed = daemon
-        .install_self_units(kind)
+/// Once the daemon is ready: the fallback units and job of the releases before the hand-over
+/// that a host of `kind` still has, removed ([`Daemon::remove_self_units`]). One that could not be
+/// removed is an alert, and the start goes on, with the daemon's own update answered `busy` until
+/// the next start tries again ([`crate::executor::Ctx::hold_self_updates`]): a fallback unit or
+/// job and a hand-over are never armed at once. Files removed whose reload failed stay removed:
+/// systemd forgets the drop-in at its next reload or boot.
+fn remove_self_units(daemon: &Daemon, kind: PlatformKind, report: &mut BootReport) {
+    let removed = daemon
+        .remove_self_units(kind)
         .map_err(|error| error.to_string());
-    if let Err(error) = &installed {
+    if let Err(error) = &removed {
         daemon.ctx().alert(ALERT_SELF_UNITS, error);
+        daemon.ctx().hold_self_updates();
     }
-    report.self_units = Some(installed);
+    report.self_units = Some(removed);
     report.stages.push(Stage::SelfUnits);
 }
 

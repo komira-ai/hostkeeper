@@ -17,13 +17,13 @@
 //!   error said, rather than wait for good, and once the config is fixed the daemon supervise-daemon
 //!   keeps starting becomes ready with no command;
 //! - the daemon of version `1.0.0`, under the shipped init script, ordered the update to `1.0.1`
-//!   probes the new binary and runs the hook's steps as child processes (the OpenRC step
-//!   launcher), switches `current` and exits; supervise-daemon starts the packaged binary again,
-//!   which execs the new one; the update settles `Succeeded`, the heartbeats report it;
-//! - a new binary that cannot start is started three times by supervise-daemon, each start
-//!   through the packaged binary, which at the fourth puts the previous binary back before it
-//!   execs `current`: the update is `Failed` after the commit, `self_update_fallback`, the version
-//!   is on the list of bad ones, and the old binary runs.
+//!   stages it as `next` and exits; supervise-daemon starts the packaged binary again, which
+//!   execs `current`, the old binary, which hands over to the new one (two-programs.md, 4.3);
+//!   the new one finishes the switch, the update settles `Succeeded`, the heartbeats report it;
+//! - a new binary that cannot start is handed over to three times, each start of supervise-daemon
+//!   through the packaged binary and the old one; then the old binary settles the update
+//!   `Failed` after the commit, `self_update_fallback`, the version is on the list of bad ones,
+//!   `next` is gone, `current` never moved, and the old binary runs.
 
 mod openrc;
 
@@ -31,7 +31,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use hostkeeper_config::platform::Platform;
-use hostkeeper_daemon::selfupdate::PROBE_UNIT;
 use hostkeeper_hook::Verdict;
 use hostkeeper_steps::record::{Loaded, Record, State};
 use hostkeeper_steps::{BadVersions, RecordStore, Seal, tree_digest};
@@ -588,12 +587,11 @@ fn release(service: &Path, version: &str) {
     );
 }
 
-/// Catches an OpenRC self-update that never gets past its probe or its steps (a launcher that
-/// runs nothing), or whose new binary never runs (the clean exit not respawned, the packaged
-/// binary execing another file than `current`): the daemon of [`N`] ordered the update to
-/// [`NEXT`] restarts into it under supervise-daemon, the update settles `Succeeded`, `previous`
-/// names [`N`], the probe and the hook's steps ran as the daemon's children, and the new daemon
-/// reports the order succeeded.
+/// Catches an OpenRC self-update whose new binary never runs (the clean exit not respawned, the
+/// packaged binary execing another file than `current`, no hand-over at the old binary's start):
+/// the daemon of [`N`] ordered the update to [`NEXT`] restarts into it under supervise-daemon,
+/// the update settles `Succeeded`, `current` names [`NEXT`] and `previous` [`N`], and the new
+/// daemon reports the order succeeded and is ready.
 #[test]
 fn a_daemon_under_openrc_updates_itself_and_supervise_daemon_restarts_it_into_the_next_binary() {
     let su = SelfUpdateHost::start("update", false);
@@ -616,26 +614,19 @@ fn a_daemon_under_openrc_updates_itself_and_supervise_daemon_restarts_it_into_th
     assert_ne!(new, old);
     assert_eq!(su.current().as_deref(), Some(NEXT));
     assert_eq!(su.previous().as_deref(), Some(N));
-    let log = su.host.log();
-    assert!(
-        log.contains(&format!(
-            "hostkeeper daemon: {PROBE_UNIT}: hostkeeper-selfupdate-daemon: asked self-update-protocol"
-        )),
-        "the new binary was probed through the OpenRC launcher\n{log}"
-    );
     su.reports(NEXT, "succeeded");
     wait("the new daemon is ready", || {
         su.host.ready() == Some(format!("{new}\n"))
     });
 }
 
-/// Catches an OpenRC host that crash-loops on a new binary for good (nothing puts the previous
-/// one back), or puts it back before the burst: [`NEXT`] refuses to start; after its three
-/// starts within the window, the packaged binary's next start puts [`N`] back and execs it; the
-/// update is `Failed` after the commit (`self_update_fallback`), [`NEXT`] is on the list of bad
-/// versions, and the daemon of [`N`] runs.
+/// Catches an OpenRC host that crash-loops on a new binary for good (nothing ends the hand-over),
+/// or gives up before its three tries: [`NEXT`] refuses to start; after it was handed over to
+/// three times, the old binary settles the update `Failed` after the commit
+/// (`self_update_fallback`), [`NEXT`] is on the list of bad versions, `next` is removed,
+/// `current` still names [`N`], and the daemon of [`N`] runs.
 #[test]
-fn a_next_binary_that_cannot_start_is_fallen_back_from_by_the_packaged_binary() {
+fn a_next_binary_that_cannot_start_is_fallen_back_from_by_the_old_binary() {
     let su = SelfUpdateHost::start("fallback", true);
     let old = su.runs(N, None);
     su.offer(NEXT);
@@ -664,7 +655,7 @@ fn a_next_binary_that_cannot_start_is_fallen_back_from_by_the_packaged_binary() 
         "three starts of the new binary\n{log}"
     );
     assert!(
-        log.contains("the update of hostkeeper spent its starts: the previous binary is back"),
-        "{log}"
+        fs::symlink_metadata(su.hk_state().join("bin/next")).is_err(),
+        "next is removed"
     );
 }

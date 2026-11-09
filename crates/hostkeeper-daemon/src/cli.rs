@@ -278,26 +278,22 @@ pub struct SystemdVars {
 }
 
 /// The entry point of the `hostkeeper` binary: [`run_from`] with the process's own arguments
-/// and image, the paths a package installs the binary at, what systemd (or supervise-daemon) set,
-/// the host's clock for the burst on an OpenRC host, and the process's own exec.
+/// and image, the paths a package installs the binary at, what systemd set and the process's
+/// own exec.
 pub fn main() -> ExitCode {
     let exe = std::env::current_exe().unwrap_or_default();
-    let clock = host_clock();
-    let burst = (Platform::host().kind == PlatformKind::Openrc).then_some(&clock as &dyn Clock);
     run_from(
         std::env::args_os().collect(),
         &exe,
         &crate::packaged::host_binaries(),
         systemd_vars(),
-        burst,
         &crate::packaged::exec,
     )
 }
 
 /// Runs the command line `args` (the program's name first) of the binary whose image is `exe`:
-/// `hostkeeper daemon` from one of the `packaged` paths seeds, judges the burst on `burst` when
-/// it is given (an OpenRC host), and execs `current` with the arguments after the program's name
-/// ([`crate::packaged::start`], through `exec`), its error
+/// `hostkeeper daemon` from one of the `packaged` paths seeds and execs `current` with the
+/// arguments after the program's name ([`crate::packaged::start`], through `exec`), its error
 /// said on standard error as the daemon's and its status the exit status; anything else is
 /// [`run_with`] with `systemd`.
 pub fn run_from(
@@ -305,7 +301,6 @@ pub fn run_from(
     exe: &Path,
     packaged: &[&Path],
     systemd: SystemdVars,
-    burst: Option<&dyn Clock>,
     exec: crate::packaged::Exec<'_>,
 ) -> ExitCode {
     let cli = Cli::parse_from(&args);
@@ -316,7 +311,6 @@ pub fn run_from(
             &flags.state_dir,
             env!("CARGO_PKG_VERSION"),
             args.get(1..).unwrap_or_default(),
-            burst,
             exec,
         )
     {

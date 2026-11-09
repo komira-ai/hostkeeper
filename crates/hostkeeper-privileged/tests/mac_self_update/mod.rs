@@ -23,16 +23,18 @@
 //! binary seeds it and execs `current`, in the process launchd started, so the job's process
 //! runs the binary directory's file of [`N`] after the start.
 //!
-//! **What this rig does not have.** The daemon writes its fallback job's plist into the unit
-//! directory of its placement (the fixture's `units/`, not `/Library/LaunchDaemons`) and loads it
-//! from `/Library/LaunchDaemons`, where it is not: that load fails and is an alert of the daemon,
-//! which goes on (`hostkeeper_daemon::selfunits`). So the fallback of a next binary that cannot
-//! start is not run here. A fallback plist the Mac already has (an earlier daemon writes it at its
-//! start) is booted out and moved aside by [`MacSelfHost::new`] and put back when the host is
-//! dropped, so a fallback job of another tree is never loaded.
+//! **The fallback.** The hand-over has no fallback job (docs/design/two-programs.md, section
+//! 4.3): a next binary that cannot start is execed three times by the old binary, which then
+//! settles the update failed ([`Plan::InstalledFailingNext`], [`MacSelfHost::refused_starts`]),
+//! under the same launchd the job runs in. The daemon removes the fallback job of the releases
+//! before the hand-over from the unit directory of its placement (the fixture's `units/`, where
+//! there is none: nothing is booted out). A fallback plist the Mac already has (an earlier
+//! daemon writes it at its start) is booted out and moved aside by [`MacSelfHost::new`] and put
+//! back when the host is dropped, so a fallback job of another tree never runs `previous` of
+//! this one.
 //!
-//! Dropping the host boots out the daemon's job, the probe's job and the fallback label, prints
-//! the daemon's output when the test is failing, and removes the tree.
+//! Dropping the host boots out the daemon's job and the fallback label, prints the daemon's
+//! output when the test is failing, and removes the tree.
 //!
 //! **The coordinator.** By default the test writes it ([`MacSelfHost::offer`]); a test may answer
 //! each heartbeat with the real coordinator in its process instead ([`coordinator::Relay`]). The
@@ -50,12 +52,11 @@ use std::time::Duration;
 
 use hostkeeper_config::platform::Platform;
 use hostkeeper_daemon::selfunits::fallback_label;
-use hostkeeper_daemon::selfupdate::PROBE_UNIT;
 use hostkeeper_launchd::launchctl::{JobStatus, bootout_args, bootstrap_args, print};
 use hostkeeper_launchd::procid::darwin::DarwinPidInfo;
 use hostkeeper_launchd::{DaemonJob, Label, Launchctl, LaunchctlProcess, PidInfo, daemon_plist};
 use hostkeeper_steps::record::{Loaded, Record, State};
-use hostkeeper_steps::{Layout, RecordStore, Seal, tree_digest};
+use hostkeeper_steps::{BadVersions, Layout, RecordStore, Seal, tree_digest};
 use serde_json::Value;
 
 pub mod coordinator;
@@ -76,6 +77,8 @@ pub const DIGEST: &str = "ababababababababababababababababababababababababababab
 pub const ORDER: &str = "self-update-1";
 /// The reason of the verdict of an update whose new binary has not run yet.
 const AWAITING_REASON: &str = "awaiting_restart";
+/// The reason of the verdict of a version whose new binary failed its tries.
+pub const FALLBACK_REASON: &str = "self_update_fallback";
 /// Where launchd reads the plists of the system domain.
 const LAUNCHD_DIR: &str = "/Library/LaunchDaemons";
 /// How many times a wait reads its state, and the pause between two reads.
@@ -98,11 +101,11 @@ pub fn wait(what: &str, mut done: impl FnMut() -> bool) {
     panic!("{what}: not reached after {READS} reads");
 }
 
-/// The line the daemon's log holds once its probe ran the program's `self-update-protocol`: the
-/// program's line (its `probed_line`) under the probe's unit, as the launcher logs a run.
-pub fn probed_log_line() -> String {
+/// The line the daemon program writes to standard error when `--fixture-fail-start` refuses its
+/// start at `version` (the program's `refused_line`).
+pub fn refused_line(version: &str) -> String {
     format!(
-        "hostkeeper daemon: {PROBE_UNIT}: hostkeeper-selfupdate-daemon: asked self-update-protocol"
+        "hostkeeper-selfupdate-daemon: version {version} refuses to start (--fixture-fail-start)"
     )
 }
 
@@ -171,6 +174,9 @@ pub enum Plan {
     /// hostkeeper's package at [`N`] installed (`current` of its package directory), the
     /// releases of [`N`] and [`NEXT`] in the store: the coordinator orders an `update`.
     Installed,
+    /// [`Plan::Installed`], with the daemon of [`NEXT`] refusing to start
+    /// (`--fixture-fail-start`): a next binary that cannot start.
+    InstalledFailingNext,
     /// As the pkg leaves a Mac: the job's program the packaged binary (a copy of the fixture
     /// daemon named [`N`]) and the binary directory empty, no package of hostkeeper installed,
     /// the release of the version given in the store: the coordinator orders an `install`.
@@ -207,7 +213,6 @@ impl Drop for MacSelfHost {
         }
         for label in [
             Some(self.label.clone()),
-            Label::probe(PROBE_UNIT).ok(),
             Label::parse(&fallback_label()).ok(),
         ]
         .into_iter()
@@ -294,7 +299,7 @@ impl MacSelfHost {
         file(&self.path("hostkeeper.toml"), CONFIG.as_bytes(), 0o644);
         dir(&self.service(), 0o755);
         match plan {
-            Plan::Installed => {
+            Plan::Installed | Plan::InstalledFailingNext => {
                 let daemon = self.path("hostkeeper-selfupdate-daemon");
                 program(DAEMON, &daemon);
                 for version in [N, NEXT] {
@@ -371,6 +376,10 @@ impl MacSelfHost {
             argv.push(arg("--fixture-packaged".to_owned()));
             argv.push(arg(self.packaged().display().to_string()));
         }
+        if matches!(plan, Plan::InstalledFailingNext) {
+            argv.push(arg("--fixture-fail-start".to_owned()));
+            argv.push(arg(NEXT.to_owned()));
+        }
         argv.push(arg("daemon".to_owned()));
         for (flag, value) in [
             ("--config", text("hostkeeper.toml")),
@@ -426,6 +435,19 @@ impl MacSelfHost {
     /// The daemon's standard error so far.
     pub fn daemon_log(&self) -> String {
         fs::read_to_string(self.path("daemon.err.log")).unwrap_or_default()
+    }
+
+    /// How many times the daemon of [`NEXT`] refused to start so far (`--fixture-fail-start`):
+    /// the tries of the hand-over.
+    pub fn refused_starts(&self) -> usize {
+        self.daemon_log().matches(&refused_line(NEXT)).count()
+    }
+
+    /// Whether [`NEXT`] is on the daemon's local list of bad versions of hostkeeper.
+    pub fn next_is_bad(&self) -> bool {
+        BadVersions::load(&self.state().join(HK))
+            .expect("the list of bad versions")
+            .contains(NEXT)
     }
 
     /// The coordinator orders `verb` of hostkeeper at `version`, order [`ORDER`] try 1, in every
@@ -492,10 +514,13 @@ impl MacSelfHost {
     }
 
     /// Fails at once, with the daemon's output, when the order was answered with a refusal (any
-    /// failure but the wait for the restart): what a wait waits for can no longer come.
+    /// failure but the wait for the restart and the fallback's): what a wait waits for can no
+    /// longer come.
     pub fn check_not_stuck(&self) {
         if let Some(result) = self.verdict() {
-            let refused = (result["outcome"] == "failed") && (result["reason"] != AWAITING_REASON);
+            let refused = (result["outcome"] == "failed")
+                && ![AWAITING_REASON, FALLBACK_REASON]
+                    .contains(&result["reason"].as_str().unwrap_or_default());
             assert!(!refused, "the order was refused: {result}\n{}", self.logs());
         }
     }

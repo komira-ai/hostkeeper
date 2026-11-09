@@ -34,9 +34,7 @@
 //!
 //! [`StepLauncher::run_additive`] (the hook's `uninstall`, or a `[hook] boot` step) runs
 //! `<executable> <hook_args...> <step> --params <params>` as a step is run, bounded by its
-//! `timeout_secs` (0 is no bound). [`StepLauncher::run_probe`] runs `<executable> <args...>` as
-//! one process too, bounded by `timeout_secs` (0 is read as 1: a probe is never unbounded) and
-//! read as [`ProbeExit::from_captured`] reads it. The call of each is checked as
+//! `timeout_secs` (0 is no bound). The call of each is checked as
 //! `SystemdLauncher` checks it: an absolute executable and params file ([`LaunchError::Launcher`]
 //! otherwise), then an executable that is a file with an execute bit ([`LaunchError::NoStart`]
 //! otherwise); a process that cannot be started is [`LaunchError::NoStart`] too. The log, if any,
@@ -83,8 +81,8 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use hostkeeper_steps::{
-    AdditiveCall, Bound, Captured, Clock, LaunchError, ProbeCall, ProbeExit, ProcBootId, Ring,
-    StepCall, StepExit, StepLauncher, StepLog, SystemClock,
+    AdditiveCall, Bound, Captured, Clock, LaunchError, ProcBootId, Ring, StepCall, StepExit,
+    StepLauncher, StepLog, SystemClock,
 };
 use rustix::process::{Pid, Signal, kill_process_group};
 
@@ -257,12 +255,10 @@ fn executable(path: &Path) -> Result<(), LaunchError> {
 /// What the executable of a step or an additive step is, as a refusal names it.
 const HOOK: &str = "the hook executable";
 
-/// One run of a program: what [`StepCall`], [`AdditiveCall`] and [`ProbeCall`] have in common.
+/// One run of a program: what [`StepCall`] and [`AdditiveCall`] have in common.
 struct Program<'a> {
     /// The unit the run is named after.
     unit: &'a str,
-    /// What the executable is, as a refusal names it.
-    what: &'static str,
     executable: &'a Path,
     /// The arguments after it.
     args: Vec<OsString>,
@@ -275,7 +271,6 @@ impl<'a> Program<'a> {
     fn step(call: &'a StepCall<'a>) -> Program<'a> {
         Program {
             unit: call.unit,
-            what: HOOK,
             executable: call.executable,
             args: call.invocation.to_args(),
             params: call.invocation.params.as_deref(),
@@ -291,23 +286,10 @@ impl<'a> Program<'a> {
         args.push(call.params.as_os_str().to_owned());
         Program {
             unit: call.unit,
-            what: HOOK,
             executable: call.executable,
             args,
             params: Some(call.params),
             bound: NonZeroU64::new(call.timeout_secs).map_or(Bound::Unbounded, Bound::Secs),
-        }
-    }
-
-    /// `<args...>`, bounded by `timeout_secs`, `0` read as `1` (a probe is never unbounded).
-    fn probe(call: &'a ProbeCall<'a>) -> Program<'a> {
-        Program {
-            unit: call.unit,
-            what: "the probed binary",
-            executable: call.executable,
-            args: call.args.iter().map(OsString::from).collect(),
-            params: None,
-            bound: Bound::Secs(NonZeroU64::MIN.saturating_add(call.timeout_secs.saturating_sub(1))),
         }
     }
 
@@ -318,7 +300,7 @@ impl<'a> Program<'a> {
         if !self.executable.is_absolute() {
             return Err(LaunchError::Launcher(format!(
                 "{} {:?} is not an absolute path",
-                self.what, self.executable
+                HOOK, self.executable
             )));
         }
         if let Some(params) = self.params.filter(|p| !p.is_absolute()) {
@@ -629,14 +611,6 @@ impl StepLauncher for OpenrcLauncher {
     /// runs a step, bounded by `timeout_secs`.
     fn run_additive(&self, call: &AdditiveCall<'_>) -> Result<StepExit, LaunchError> {
         self.run_step(&Program::additive(call))
-    }
-
-    /// Runs `<executable> <args...>` as [`StepLauncher::run`] runs a step, bounded by
-    /// `timeout_secs` (`0` is 1 second), and reads its exit as `SystemdLauncher` does
-    /// ([`ProbeExit::from_captured`]).
-    fn run_probe(&self, call: &ProbeCall<'_>) -> Result<ProbeExit, LaunchError> {
-        let (captured, _) = self.launch(&Program::probe(call))?;
-        Ok(ProbeExit::from_captured(&captured, call.output_bytes))
     }
 
     fn stop(&self, unit: &str) -> Result<(), LaunchError> {

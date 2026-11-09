@@ -461,6 +461,11 @@ release that first read it.
   later judge it by its floor. The probe call, `ProtocolProbe`, `LauncherProbe`, `ProbeCall`, `ProbeExit`,
   `run_probe`, `probe_command`, `Label::probe` and `PROBE_UNIT` go. A downgrade below R1 is refused by the backward
   rule, so nothing is left to probe. The verb is still answered, printing `1`.
+  **Built** (S2a): `OLDEST_READER` is 0.1.163 (`crates/hostkeeper-steps/src/reader.rs`) and `judge` takes the running
+  version and the target's version alone (`crates/hostkeeper-daemon/src/selfupdate.rs`): the running version and any
+  release from `OLDEST_READER` on are `Accepted`, whatever floor they declare, and any older is `Unsupported`. The
+  probe machinery is gone from the daemon, the step launchers, `hostkeeper-launchd` and the tests; `LEGACY_FLOOR`
+  stays, for the one other question it answers, whether a release's hook steps are built in (4.4).
 - **Stage 3** sets `OLDEST_READER = R2` and deletes the verb and `SELF_UPDATE_PROTOCOL`. A daemon older than R2 defers
   the release before any probe.
 
@@ -521,6 +526,12 @@ is confirmed after the switch is finished. A record without `next`, written the 
   binary still writes its start to the start log at the top of `daemon` (`record_start`,
   `crates/hostkeeper-daemon/src/fallback.rs`, **Built**), as today: R1's Mac job, armed when R1 updates to a stage-2
   release the old way, falls back only on three starts of the new version recorded there.
+  **Built** (S2a): `follow_on` stages, links `next`, then writes the wait with `next` and a count of 0, and moves no
+  `current` (`crates/hostkeeper-steps/src/selfupdate.rs`); the start removes the fallback unit, the drop-in and the job
+  (`remove` in `crates/hostkeeper-daemon/src/selfunits.rs`, drop-in first, one `daemon-reload` on Linux; on a Mac the
+  job is booted out before its plist goes) and, when it cannot, raises `self_update_units`, holds the daemon's own
+  update (`Ctx::hold_self_updates`) and answers it `busy` until the next start, which tries again. A reload that
+  fails after the files are gone is the same error; the files stay gone.
 - **Stage 3** deletes `self-update-fallback`, `fallback.rs` (the start log with it), `selfunits.rs`, `fallback_unit`,
   `main_dropin` and `launchd_fallback_job`. No release of stage 3 is ever run by a fallback unit or judged by a fallback
   job: stage 1 is the last that writes them, a stage-2 daemon removes them before it updates, and stage 3's floor of R2
@@ -606,6 +617,19 @@ runs a released binary. The path needs that, so item X1 comes first:
   fallback files before its own update. A stage-2 binary started from the bootstrap unit seeds and hands over
   (`a_daemon_the_deb_installed_is_installed_its_next_release_and_restarts_into_it`, re-pointed at the bootstrap
   unit), and from the plist on a Mac (`a_daemon_the_pkg_installed_is_installed_its_next_release_and_restarts_into_it`).
+  **Built** (S2a): the Linux tests are those of `tests/self_update.rs`, on a host with neither a fallback unit nor a
+  drop-in; `a_daemon_killed_after_the_exec_is_settled_succeeded_by_the_new_binarys_start` holds the new binary at its
+  start (the fixture flag `--fixture-hold-start`) and kills it there, and
+  `a_daemon_killed_before_the_exec_falls_back_after_three_starts` kills the old daemon holding its exit, with a new
+  binary that cannot start. `a_unit_that_spends_its_start_limit_with_no_update_waiting_is_started_again` is
+  `a_unit_that_cannot_start_with_no_update_waiting_is_retried_until_it_can`: the unit has no start limit, so systemd
+  never leaves a daemon failed. On a Mac, `an_install_of_the_running_version_is_succeeded_without_a_probe_or_a_restart`
+  is `an_install_of_the_running_version_is_succeeded_without_a_restart`, and
+  `the_self_update_protocol_of_a_binary_is_probed_as_a_launchd_job` and its bound test are deleted with the probe. X1 is
+  pinned to R1 (`previous-release.toml`, v0.1.163, with the URLs and digests of `privileged.yml` and `pr-device.yml`);
+  it holds that R1 updates to this build the old way, that this build removes R1's fallback files at its start
+  (`fallback_files_present` of the rig's hosts), that R1's fallback unit and job fall back from a build that cannot
+  start, and that this build hands over to itself.
 - **Stage 3**: X1 pinned to R2; the binary's own tests (`crates/hostkeeper/tests/binary.rs`) assert that each deleted
   verb is a usage error, exit 2.
 - **Between stages**: the status check above, on the farm, before the floor pull request merges.
@@ -628,13 +652,13 @@ first runlevel, is an OpenRC host; a host with neither is taken for systemd, as 
 | Observer | `systemctl show` | `rc-service <service> status`, its exit (0, 3, 4, 8, 16, 32, 64) the state; the main pid the `child_pid` supervise-daemon keeps in `/run/openrc/options/<service>/`; no init script in `/etc/init.d` is not found |
 | Process probe | `/proc` | `/proc` |
 | Step launcher | a transient unit per step | a child process group of the daemon per step (below) |
-| Own units | the fallback unit and the drop-in | none (the fallback is the packaged binary's, below) |
+| Own units | none (the fallback files of the releases before the hand-over are removed) | none (no release before the hand-over ran on OpenRC) |
 | Readiness | `READY=1` on `NOTIFY_SOCKET` | the file of `--ready-file`, which the init script waits for |
 | Watchdog | `WatchdogSec=60` | none: supervise-daemon restarts a daemon that exits, not one that hangs |
 | Console | the issue file and `agetty --reload` | none: busybox's getty reads no issue directory |
 
 **What OpenRC lacks for the steps, and how the launcher makes up for it** (`OpenrcLauncher`). OpenRC has no transient
-unit, no `RuntimeMaxSec=` and no control group of a unit to kill. Each step, additive step and probe is a child of the
+unit, no `RuntimeMaxSec=` and no control group of a unit to kill. Each step and additive step is a child of the
 daemon in a process group of its own, with an empty environment but systemd's default `PATH`, `/` its directory and no
 input. The launcher bounds it on the daemon's clock: at the bound it sends `SIGTERM` to the group and `SIGKILL` 90
 seconds later, as systemd's default stop timeout; when the step's first process ends, the rest of its group is
@@ -660,19 +684,15 @@ supervised and retried. So `rc-service hostkeeper start` returns when the daemon
 start, as `systemctl start` does for `Type=notify`; unlike it, the start exits 0 then, because a failed start would
 have OpenRC mark the service stopped while supervise-daemon goes on running it.
 
-**Self-update: the start and the fallback.** As on a Mac from stage 2 (4.1), the package is the only source of the
-script and the binary, and the script starts the packaged binary at every start, respawns included: it seeds the binary
-directory when `current` starts nothing (2.1) and execs `current` with its arguments, so the process supervise-daemon
-watches is the binary the update chose. A self-update switches `current` and exits 0; supervise-daemon starts the
-packaged binary, which execs the new one. There is no `OnFailure=` and no timer job, so the fallback is the old binary's
-own, before its exec: each daemon start writes the start log, as on a Mac (`record_start`), and the packaged binary,
-on OpenRC only, judges the burst as the Mac's job does (`fallback_after_burst`: three starts of the awaited version
-within 300 seconds, the latest of them recent, no daemon holding the lock, no other update unfinished) and, if it is
-spent, puts `previous` back and settles the update `Failed`, `self_update_fallback`, before it execs `current`
-(`crates/hostkeeper-daemon/src/packaged.rs`). A judge that cannot run is said and does not stop the start. The daemon
-writes no units of its own update on OpenRC. From stage 2 the hand-over (4.3) needs nothing of OpenRC: the packaged
-binary execs `current`, the old binary, which execs `next` while its count lasts; a record that carries `next` is not
-judged by the burst.
+**Self-update: the start and the fallback.** As on a Mac (4.1), the package is the only source of the script and the
+binary, and the script starts the packaged binary at every start, respawns included: it seeds the binary directory when
+`current` starts nothing (2.1) and execs `current` with its arguments, whose start runs the hand-over (4.3). A
+self-update stages the new binary as `next` and exits 0; supervise-daemon starts the packaged binary, which execs the
+old binary `current` names, which execs `next` while its count lasts; the new binary finishes the switch and confirms.
+A new binary that cannot start is tried three times, each a respawn, and the old binary then settles the update
+`Failed`, `self_update_fallback`, and runs. So the hand-over needs nothing of OpenRC: no unit, no job, no start log
+(`record_start` writes none on OpenRC) and no file of the daemon's own update to write or remove, since no release
+before the hand-over ran on an OpenRC host.
 
 **What this does not cover yet.** A service package's own OpenRC init script (how a package ships, links and enables
 one) has no design: `apk` is withdrawn with no successor ([packages-repositories.md](packages-repositories.md)), so
@@ -687,7 +707,7 @@ child pid, every launcher bound, stop and kill), the daemon's (`crates/hostkeepe
 tests `crates/hostkeeper-privileged/tests/openrc_device.rs` in the job `openrc-device` of `privileged.yml` and of
 `pr-device.yml`: an Alpine 3.22 container whose init is OpenRC installs the package and runs the daemon, starts it
 again when it is killed and at boot, does not hold its start on a daemon that cannot become ready, updates the daemon
-of `1.0.0` to `1.0.1` with its probe and steps run by the OpenRC launcher, and falls back from a `1.0.1` that cannot
+of `1.0.0` to `1.0.1` by the hand-over under supervise-daemon, and falls back from a `1.0.1` that cannot
 start after its three starts.
 
 ## 5. CI without `hostkeeper ci`
