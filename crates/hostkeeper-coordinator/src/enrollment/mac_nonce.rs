@@ -89,6 +89,7 @@ pub enum MacDecline {
     NonceWrongRequest,
     DeviceNotEnrolled,
     DeviceNotSupervised,
+    DeviceNotViaDep,
     SerialNotAllowed,
     DeviceStateUnavailable,
 }
@@ -105,6 +106,7 @@ impl MacDecline {
             MacDecline::NonceWrongRequest => "nonce_wrong_request",
             MacDecline::DeviceNotEnrolled => "device_not_enrolled",
             MacDecline::DeviceNotSupervised => "device_not_supervised",
+            MacDecline::DeviceNotViaDep => "device_not_via_dep",
             MacDecline::SerialNotAllowed => "serial_not_allowed",
             MacDecline::DeviceStateUnavailable => "device_state_unavailable",
         }
@@ -423,6 +425,9 @@ impl Enrollment {
             }
             Ok(status) if !status.supervised => {
                 return self.decline(request_id, serial, MacDecline::DeviceNotSupervised);
+            }
+            Ok(status) if self.mac_require_dep && status.enrolled_via_dep != Some(true) => {
+                return self.decline(request_id, serial, MacDecline::DeviceNotViaDep);
             }
             Ok(status) => status,
         };
