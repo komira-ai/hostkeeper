@@ -417,8 +417,17 @@ fn failed_verify_rolls_back(rig: &Rig) {
     rig.wait_converged(V2);
 }
 
+/// `placed.json`, `Null` when there is none (an empty record is removed with its last path).
+fn placed() -> Value {
+    fs::read(Path::new(PLACED_DIR).join("placed.json"))
+        .map(|bytes| serde_json::from_slice(&bytes).expect("placed.json is JSON"))
+        .unwrap_or(Value::Null)
+}
+
 /// The uninstall the operator orders (`Services.Unassign` with `uninstall`): once the
-/// coordinator lists hello uninstalling on no host, both plists are gone from
+/// coordinator lists hello uninstalling on no host and the daemon dropped hello's tombstone from
+/// `placed.json` (the last write of the uninstall, after the package directory and the records
+/// are removed and after the heartbeat stopped listing hello), both plists are gone from
 /// `/Library/LaunchDaemons`, launchd holds neither job, hello's package directory is gone with
 /// every version, link and seal in it, `placed.json` (if any is left) holds no path and no
 /// tombstone of hello, the hook's slot
@@ -436,7 +445,9 @@ fn uninstall(rig: &Rig) {
                         .is_none_or(|hosts| hosts.is_empty())
                 })
         });
-        uninstalling_none && !rig.host.service_dir().exists()
+        uninstalling_none
+            && !rig.host.service_dir().exists()
+            && placed()["uninstalling"][SERVICE].is_null()
     });
 
     for slot in SLOTS {
@@ -452,9 +463,7 @@ fn uninstall(rig: &Rig) {
         "hello's package directory is gone"
     );
     // An empty record is removed with its last path; one that is left holds nothing of hello.
-    let placed: Value = fs::read(Path::new(PLACED_DIR).join("placed.json"))
-        .map(|bytes| serde_json::from_slice(&bytes).expect("placed.json is JSON"))
-        .unwrap_or(Value::Null);
+    let placed = placed();
     let of_hello: Vec<&String> = placed["paths"]
         .as_object()
         .map(|paths| {
