@@ -2,6 +2,8 @@
 
 Status: design, for the maintainers' comments. It replaces the slot rule of `hostkeeper-design.md` section 5.4 ("One update is live in the whole farm at a time") and the canary section of `host-updates.md` 5.3. Where they disagree, this document wins.
 
+*Superseded in part by [hostgroups.md](hostgroups.md):* the plan runs per (host group, package) over that group's hosts, and its policy (the `stages`, `canary`, `bake_beats`, rollback and backoff keys of section 1.1, the per-role `max_updating` and `min_up` of section 1.3, and `--live-rollouts` of section 1.6) is the HostGroup's, counted within the group. The rollout file and its `roles` are retired. The plan engine itself is unchanged.
+
 ## What changes for the operator
 
 **Before.** The coordinator ordered one ordinary update at a time across every service and every host. A roll of one service over N hosts took N update-and-bake rounds, one after the other. `max_updating` and `min_up` were kept in the desired state and printed, and no decision read them.
