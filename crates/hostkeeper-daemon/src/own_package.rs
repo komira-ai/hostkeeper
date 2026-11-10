@@ -70,8 +70,8 @@ pub const ALERT_OWN_PACKAGE: &str = "own_package";
 pub const OWN_PACKAGE: &str = "hostkeeper";
 
 /// Whether an update of hostkeeper itself to a version staged as `staged` (its `target.json`,
-/// `None` for an archive version) leaves its switch to the new binary: a native version, or a
-/// host where `record` names an installer of hostkeeper (it runs from its native package).
+/// `None` for a tree this daemon did not stage) leaves its switch to the new binary: a native
+/// version, or a host where `record` names an installer of hostkeeper (it runs from its native package).
 pub fn deferred(staged: Option<&Target>, record: &PlacedRecord) -> bool {
     staged.is_some() | record.installer_of(SELF_SERVICE).is_some()
 }

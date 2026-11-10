@@ -133,9 +133,21 @@ pub fn manifest(
     expected: &Expected,
     own: &HostkeeperVersion,
 ) -> Result<Manifest, ManifestRefusal> {
+    entry_and_manifest(dir, expected, own).map(|(_, manifest)| manifest)
+}
+
+/// [`manifest`], with the entry the manifest was read from.
+pub fn entry_and_manifest(
+    dir: &Path,
+    expected: &Expected,
+    own: &HostkeeperVersion,
+) -> Result<(Target, Manifest), ManifestRefusal> {
     let unreadable = |e: TargetError| ManifestRefusal::Unreadable { why: e.to_string() };
     match read(dir).map_err(unreadable)? {
-        Some(entry) => of_entry(dir, &entry, expected, own),
+        Some(entry) => {
+            let manifest = of_entry(dir, &entry, expected, own)?;
+            Ok((entry, manifest))
+        }
         None => Err(unreadable(TargetError::Invalid(format!(
             "{} holds no {TARGET_FILE}",
             dir.display()

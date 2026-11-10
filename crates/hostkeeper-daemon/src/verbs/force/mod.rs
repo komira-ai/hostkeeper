@@ -76,6 +76,8 @@ pub const FORCE_POLL_SECS: u64 = 1;
 /// The package a force switches to, read and checked.
 struct Target {
     manifest: Manifest,
+    /// The entry its version directory was staged for, as its `target.json` holds it.
+    entry: Entry,
     /// The digest of its version directory, as its seal holds it.
     tree_digest: String,
 }
@@ -246,7 +248,7 @@ fn fresh<'c>(
         Ok(begun) => begun,
         Err(refused) => return refused,
     };
-    switch::run(ctx, &guard, rec, force, &target.manifest)
+    switch::run(ctx, &guard, rec, force, &target)
 }
 
 /// The force under way that `journal` holds, to the version and digest of `package`, which the
@@ -261,7 +263,7 @@ fn resume_with(
 ) -> Reply {
     let (rec, force) = journal;
     match obtain(ctx, service, &package.version, (&package.digest, entry)) {
-        Ok(target) => switch::run(ctx, guard, rec, force, &target.manifest),
+        Ok(target) => switch::run(ctx, guard, rec, force, &target),
         Err(reply) => reply,
     }
 }
@@ -296,9 +298,10 @@ fn obtain(
             )
         })?,
     };
-    let manifest = read_manifest(ctx, service, version, &dir)?;
+    let (entry, manifest) = read_manifest(ctx, service, version, &dir)?;
     Ok(Target {
         manifest,
+        entry,
         tree_digest,
     })
 }
@@ -324,20 +327,20 @@ fn on_disk(
     })
 }
 
-/// The manifest of the version directory `dir`, read for `service` at `version` and this
-/// daemon's version.
+/// The entry and the manifest of the version directory `dir`, read for `service` at `version`
+/// and this daemon's version.
 fn read_manifest(
     ctx: &Ctx,
     service: &ServiceName,
     version: &Version,
     dir: &Path,
-) -> Result<Manifest, Reply> {
+) -> Result<(Entry, Manifest), Reply> {
     let expected = Expected {
         name: service.clone(),
         version: version.clone(),
         platform: hostkeeper_config::platform::Platform::current(),
     };
-    crate::target::manifest(dir, &expected, &ctx.own_version)
+    crate::target::entry_and_manifest(dir, &expected, &ctx.own_version)
         .map_err(|error| failed_before(error.class(), Refusal::from(&error).token()))
 }
 

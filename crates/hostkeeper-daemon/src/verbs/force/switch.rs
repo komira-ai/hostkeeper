@@ -26,12 +26,13 @@
 
 use std::collections::BTreeSet;
 
-use hostkeeper_config::manifest::{Expected, Manifest};
+use hostkeeper_config::manifest::Expected;
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_hook::{Class, Phase, Verdict};
 use hostkeeper_steps::record::{Record, State};
 use hostkeeper_steps::{ForceFailure, ForcePhase, ForceRecord, ForceVerdict, Layout, RecordStore};
 
+use super::Target;
 use crate::executor::{Ctx, Reply};
 use crate::locks::ServiceGuard;
 use crate::prune;
@@ -61,9 +62,9 @@ pub(super) fn run(
     held: &ServiceGuard<'_>,
     mut rec: Record,
     mut force: ForceRecord,
-    target: &Manifest,
+    target: &Target,
 ) -> Reply {
-    let service = &target.name;
+    let service = &target.manifest.name;
     let store = ctx.store(service);
     let failure = match parts(ctx, &store, &mut rec, &mut force, target) {
         Ok(()) => None,
@@ -99,7 +100,7 @@ pub(super) fn run(
     // an alert, and the verdict stands.
     if moved {
         ctx.force_lock_point.after_switch_before_prune();
-        prune::confirmed_switch(ctx, held, service, &target.version);
+        prune::confirmed_switch(ctx, held, service, &target.manifest.version);
     }
     Reply::Finished {
         verdict,
@@ -161,33 +162,25 @@ fn parts(
     store: &RecordStore,
     rec: &mut Record,
     force: &mut ForceRecord,
-    target: &Manifest,
+    target: &Target,
 ) -> Result<(), Stop> {
-    let service = &target.name;
+    let manifest = &target.manifest;
+    let service = &manifest.name;
     let placer = ctx.placer();
     journal(store, rec, force, ForcePhase::Started)?;
     stop_left(ctx, service, force.from_version.as_deref()).map_err(link_failed)?;
     journal(store, rec, force, ForcePhase::UnitsStopped)?;
     let layout = Layout::package(&ctx.dirs.packages.join(service.as_str()));
-    let dir = layout.version_path(target.version.as_str());
-    let entry = crate::target::read(&dir)
-        .map_err(link_failed)?
-        .ok_or_else(|| {
-            link_failed(format!(
-                "{} holds no {}: it was not staged by an installer of this daemon",
-                dir.display(),
-                crate::target::TARGET_FILE
-            ))
-        })?;
+    let dir = layout.version_path(manifest.version.as_str());
     journal(store, rec, force, ForcePhase::Unlinked)?;
     layout
-        .check_tree(target.version.as_str())
+        .check_tree(manifest.version.as_str())
         .map_err(link_failed)?;
     // A force reports no `drift_repaired`: what its `activate` repaired is dropped. The
     // installer's `activate` installs the package, enables its units and switches `current`
     // once the package manager shows it.
     let repository = ctx.repository();
-    let activated = repository.activate_version(service, &target.version, &dir, &entry);
+    let activated = repository.activate_version(service, &manifest.version, &dir, &target.entry);
     drop(repository.take_repaired(service));
     activated.map_err(link_failed)?;
     journal(store, rec, force, ForcePhase::Switched)?;
@@ -196,7 +189,7 @@ fn parts(
         .reload()
         .map_err(|error| Stop::Failed(ForceFailure::DaemonReloadFailed, error.to_string()))?;
     journal(store, rec, force, ForcePhase::Reloaded)?;
-    start(ctx, &target.run).map_err(|why| Stop::Failed(ForceFailure::StartFailed, why))?;
+    start(ctx, &manifest.run).map_err(|why| Stop::Failed(ForceFailure::StartFailed, why))?;
     journal(store, rec, force, ForcePhase::UnitsStarted)
 }
 
