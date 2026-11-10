@@ -644,6 +644,9 @@ async fn store_unreachable_is_listed_when_the_enrollment_store_cannot_be_read() 
 
 fn host_record(host: &str, role: &str) -> pb::Host {
     pb::Host {
+        facts_generation: None,
+        host_group: String::new(),
+        moving_from: None,
         schema: 1,
         host_id: host.to_owned(),
         key_hash: vec![7; 32],

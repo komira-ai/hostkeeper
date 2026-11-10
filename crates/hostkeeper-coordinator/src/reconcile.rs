@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use hostkeeper_wire::version::Version;
 use hostkeeper_wire::wire::{Class, Heartbeat, Outcome, Phase};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::acks::{drop_ack, stale_acks};
 use crate::converge::State;
@@ -29,7 +29,7 @@ pub const COORDINATOR: &str = "coordinator";
 pub const CI: &str = "ci";
 
 /// Whether the coordinator may roll a service back by itself.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Rollback {
     /// Only an operator or CI sets an older desired version.
@@ -41,7 +41,7 @@ pub enum Rollback {
 
 /// How many hosts must fail an update to the desired version before an `automatic` service
 /// rolls back: the larger of `min_hosts` and `percent` of the live hosts, rounded up.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct FailThreshold {
     /// The share of live hosts, 1 to 100.

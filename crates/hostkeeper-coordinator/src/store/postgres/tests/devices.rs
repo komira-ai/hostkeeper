@@ -114,10 +114,10 @@ pub(super) fn with_session<R: Send + 'static>(
     })
 }
 
-/// Proves: the release before this one (migrations `0001` to `0004`, whose start never reads
-/// `mdm_devices`) starts on a database this release migrated and whose gate keeps a device: its
-/// runner refuses nothing and runs nothing, because `0005` says `may-run`, and its load reads the
-/// state this release loads. And the other way: this release starts on a database the release
+/// Proves: `0005` does not stop the release before it (migrations `0001` to `0004`, whose start
+/// never reads `mdm_devices`) on a database this release migrated and whose gate keeps a device:
+/// its runner is refused naming `0008`, the first migration after its own that says `refuse`, not
+/// `0005`, which says `may-run`; and the state reads as this release loads it. And the other way: this release starts on a database the release
 /// before migrated, runs `0005` and `0006`, and its gate holds no device.
 ///
 /// Catches: a device table that makes the previous coordinator refuse to start (the back-out of a
@@ -133,14 +133,16 @@ fn the_release_before_starts_on_a_database_with_0005_and_this_one_on_its() {
     store.stop();
     let (ran, before_loaded) = with_session(&db, |session| {
         let before = migrate::checked(&migrate::SHIPPED[..4]).expect("the release before's set");
-        migrate::refuse_newer(session, &before).expect("0005 does not stop the release before");
-        let ran = migrate::apply(session, &before).expect("its runner takes the database");
+        let refused = migrate::refuse_newer(session, &before).expect_err("0008 stops it");
+        let ran = migrate::apply(session, &before).expect_err("its runner is refused");
         (
-            ran,
-            load_all(session, SPENT_NOW).expect("its load reads the state"),
+            [refused.to_string(), ran.to_string()],
+            load_all(session, SPENT_NOW).expect("the state reads"),
         )
     });
-    assert_eq!(ran, Vec::<i32>::new());
+    let refused = "the database's schema is newer than this coordinator (migration 8, host_groups)"
+        .to_owned();
+    assert_eq!(ran, [refused.clone(), refused]);
     assert_eq!(before_loaded, loaded);
     assert_eq!(db.rows("SELECT enrollment_id FROM mdm_devices").len(), 1);
 
@@ -159,7 +161,7 @@ fn the_release_before_starts_on_a_database_with_0005_and_this_one_on_its() {
     store.stop();
     assert_eq!(
         older.rows("SELECT version FROM schema_version ORDER BY version"),
-        (1..=7)
+        (1..=8)
             .map(|n| vec![Some(n.to_string())])
             .collect::<Vec<_>>()
     );

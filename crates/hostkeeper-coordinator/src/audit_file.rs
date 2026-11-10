@@ -6,8 +6,8 @@
 //! this order, `{"seq":1,"at_unix":1800000000,"by":"alice","action":"exclude","detail":{"service":
 //! "demo","node_id":"s2","reason":"bad disk"}}`, then a newline. `by` is who made the change (the
 //! name of the operator's token, `coordinator` or `ci`), `at_unix` the seconds since the epoch,
-//! and `detail` the change's `service`, `node_id` and `reason`, those it has, in that order (`{}`
-//! when it has none).
+//! and `detail` the change's `service`, `node_id`, `host_group` and `reason`, those it has, in
+//! that order (`{}` when it has none). A reader that does not know `host_group` passes it over.
 //!
 //! The file is opened for appending (`O_APPEND`, created with mode `0600`), each line is written
 //! in one call and fsynced, and a file that was just created has its directory fsynced; nothing
@@ -88,6 +88,8 @@ pub(crate) struct Detail {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) node_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) host_group: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) reason: Option<String>,
 }
 
@@ -112,6 +114,7 @@ impl AuditLine {
             detail: Detail {
                 service: entry.service.clone(),
                 node_id: entry.node_id.clone(),
+                host_group: entry.host_group.clone(),
                 reason: entry.reason.clone(),
             },
         }
@@ -127,6 +130,7 @@ impl AuditLine {
                 action: self.action,
                 service: self.detail.service,
                 node_id: self.detail.node_id,
+                host_group: self.detail.host_group,
                 reason: self.detail.reason,
             },
         }

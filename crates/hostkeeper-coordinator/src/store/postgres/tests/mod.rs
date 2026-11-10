@@ -230,6 +230,7 @@ mod connect;
 mod coordinator;
 mod devices;
 mod generations;
+mod host_groups;
 mod lost;
 mod reads;
 mod records;

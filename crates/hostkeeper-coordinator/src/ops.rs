@@ -7,7 +7,8 @@
 //! it), the host inventory ([`crate::inventory`]), the per-service marks later changes fill (a
 //! halt, the last good version, the bad versions, the force that stands: [`crate::force`]), where
 //! each service's update plan stands (the stages entered, the hosts done, an operator's pause:
-//! [`crate::rollouts`]; kept in the halts file beside this one, not in this file), and a ring of
+//! [`crate::rollouts`]; kept in the halts file beside this one, not in this file), the marks of
+//! each (host group, package) (`crate::host_groups`, all of them in this file), and a ring of
 //! the last changes made. A key this build added is written only when it holds
 //! something, so a file that never held one keeps the shape the release before reads; once it
 //! does, the release before refuses the file, as it should: it would ignore a hold, a force or an
@@ -98,6 +99,7 @@ use crate::audit_file::{
 use crate::desired::{Staged, StoreError};
 use crate::force::ForceRecord;
 use crate::holds::HoldMark;
+use crate::host_groups::GroupsMarks;
 use crate::inventory::{InventoryRecord, RecordWindow};
 use crate::ops_file;
 use crate::rollouts::Rollout;
@@ -315,6 +317,9 @@ pub struct AuditEntry {
     /// The node it concerned, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub node_id: Option<String>,
+    /// The host group it concerned, if any ([`crate::host_groups`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_group: Option<String>,
     /// The operator's reason, if one was given.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
@@ -330,6 +335,7 @@ impl AuditEntry {
             action: action.to_owned(),
             service: None,
             node_id: None,
+            host_group: None,
             reason: None,
         }
     }
@@ -369,6 +375,10 @@ pub struct OpsState {
     /// the halts file beside this one ([`crate::ops_file`]), never in this file.
     #[serde(skip)]
     pub rollouts: BTreeMap<String, Rollout>,
+    /// The marks of each (host group, package) (`crate::host_groups`): its halt, plan position
+    /// and every other mark in this file, written only when there are any.
+    #[serde(default, skip_serializing_if = "GroupsMarks::is_empty")]
+    pub(crate) host_groups: GroupsMarks,
 }
 
 impl Default for OpsState {
@@ -383,6 +393,7 @@ impl Default for OpsState {
             assignments: BTreeMap::new(),
             inventory: Vec::new(),
             rollouts: BTreeMap::new(),
+            host_groups: GroupsMarks::default(),
         }
     }
 }
@@ -407,6 +418,7 @@ impl OpsState {
             .retain(|_, entries| *entries != ServiceAssignments::default());
         self.rollouts
             .retain(|_, rollout| *rollout != Rollout::default());
+        self.host_groups = self.host_groups.without_defaults();
         self
     }
 }
@@ -547,6 +559,7 @@ pub(crate) fn parse(path: &Path, bytes: &[u8]) -> Result<OpsState, OpsError> {
             state.schema
         )));
     }
+    state.host_groups.check().map_err(invalid)?;
     Ok(state)
 }
 
