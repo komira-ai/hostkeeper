@@ -389,17 +389,20 @@ packages:
 
 - The release commits the root, as `gh attestation trusted-root` prints it, at
   `packaging/sigstore/trusted_root.json`.
-- hostkeeper's own package carries that file as `files/trusted_root.json`. The daemon reads it from
-  `/var/lib/hostkeeper/packages/hostkeeper/current/files/trusted_root.json`, so each update of
-  hostkeeper brings the root of its release.
-- The host's own copy is at `/usr/lib/hostkeeper/trusted_root.json` on Linux, where the Linux
-  packages put it ([What the Linux packages check packages with](#what-the-linux-packages-check-packages-with)),
-  and at `/usr/local/lib/hostkeeper/trusted_root.json` on a Mac, where the installer pkg puts it. It is
-  the root of a host before its first update of hostkeeper, and the place to copy a root by hand.
+- hostkeeper's native packages install it: at `/usr/lib/hostkeeper/trusted_root.json` on Linux,
+  where the `.deb` and the `.rpm` put it ([What the Linux packages check packages with](#what-the-linux-packages-check-packages-with)),
+  and at `/usr/local/lib/hostkeeper/trusted_root.json` on a Mac, where the installer pkg puts it.
+  Each update of hostkeeper's package brings the root of its release, and this is also the place
+  to copy a root by hand.
+- Legacy: a host that ran hostkeeper from its own archive package, before the move to native
+  packages, may still hold that archive's copy, `files/trusted_root.json`, at
+  `/var/lib/hostkeeper/packages/hostkeeper/current/files/trusted_root.json`, and the daemon still
+  reads it there. No release builds that package any more (docs/design/packages-native.md,
+  section 10.7).
 
 When both files are present, the daemon uses the one written last; a tie in the same second goes
-to the packaged one. A root an operator copies after a rotation therefore takes over from the
-one an older package carried. The choice goes by when each file reached the host, not by what
+to the archive's copy. A root an operator copies after a rotation therefore takes over from the
+one an older archive carried. The choice goes by when each file reached the host, not by what
 it holds. A later update or rollback of hostkeeper to a version that carries an older root
 brings that root back into use, and so does a copy that keeps its source's time (`cp -p`,
 `rsync -t`). Copy with plain `cp` or `install`, and copy again after such a rollback. When

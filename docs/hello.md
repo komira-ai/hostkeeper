@@ -150,7 +150,15 @@ hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <tok
     releases set-desired --service hello --request desired.json
 ```
 
-`targets.json` is the file `cargo xtask release targets --service hello --version <v1> --output targets.json` writes (with `--dir` naming the release's assets).
+`targets.json` holds the JSON of the `targets=` line that `cargo xtask release targets` prints,
+without the prefix:
+
+```sh
+cargo xtask release targets --service hello --version <v1> --dir <assets> \
+  | sed -n 's/^targets=//p' > targets.json
+```
+
+`<assets>` is a directory of the release's `.deb`s and their bundles.
 
 Or let CI do it: dispatch `hello-desired.yml` with `version` `<v1>` and `variant` `hello`
 (see "The proof from CI" below).
