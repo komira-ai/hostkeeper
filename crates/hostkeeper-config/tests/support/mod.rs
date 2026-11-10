@@ -5,8 +5,6 @@ use std::fs;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
-pub mod package;
-
 /// A directory under the target directory, unique to the test, removed when it is dropped.
 pub struct Scratch(hostkeeper_testkit::Scratch);
 

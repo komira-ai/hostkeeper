@@ -474,53 +474,6 @@ fn steps_with_an_extra_workspace_dependency_is_refused() {
     );
 }
 
-/// Catches: the unpack crate gaining a normal dependency on a workspace crate beside its three
-/// (here the placed-path crate), or losing one (here the step runner, whose layout and seal it
-/// uses); either is refused with the set it has and the set it must have.
-#[test]
-fn unpack_with_another_set_of_workspace_dependencies_is_refused() {
-    let extra = fixture(
-        "clean",
-        vec![manifest_of(
-            "hostkeeper-unpack",
-            layered(
-                "hostkeeper-unpack",
-                &format!("{CONFIG_DEP}{HOOK_DEP}{STEPS_DEP}{PLACED_DEP}"),
-                "",
-                TESTKIT_DEP,
-            ),
-        )],
-    );
-    assert_eq!(
-        check(&extra),
-        refused(
-            "hostkeeper-unpack depends (normal or build) on the workspace crates \
-             {hostkeeper-config, hostkeeper-hook, hostkeeper-placed, hostkeeper-steps}, \
-             but must depend on exactly {hostkeeper-config, hostkeeper-hook, hostkeeper-steps}"
-        )
-    );
-    let missing = fixture(
-        "clean",
-        vec![manifest_of(
-            "hostkeeper-unpack",
-            layered(
-                "hostkeeper-unpack",
-                &format!("{CONFIG_DEP}{HOOK_DEP}"),
-                "",
-                TESTKIT_DEP,
-            ),
-        )],
-    );
-    assert_eq!(
-        check(&missing),
-        refused(
-            "hostkeeper-unpack depends (normal or build) on the workspace crates \
-             {hostkeeper-config, hostkeeper-hook}, \
-             but must depend on exactly {hostkeeper-config, hostkeeper-hook, hostkeeper-steps}"
-        )
-    );
-}
-
 /// Catches: the config crate depending on a workspace crate. It holds the loaders and the
 /// grammars the other crates build on, so a dependency on one of them would turn the layers
 /// around, and one on the hook contract would tie the file formats to the hook's.

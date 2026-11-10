@@ -31,6 +31,9 @@ hex.workspace = true
 libc.workspace = true
 # The receipts and launchd plists, and `pkgutil`'s `-plist` answers.
 plist.workspace = true
+# Directory handles and `openat`, `mkdirat`, `renameat`, `unlinkat`, `fchown`, `fchmod`, `fsync`,
+# for the version directory's publish (`version::HostFs`), and the errno of a full disk.
+rustix = { workspace = true, features = ["fs"] }
 # The record macos-pkg keeps, and the repository installer's record, the service's `installed`
 # entry of placed.json.
 serde.workspace = true

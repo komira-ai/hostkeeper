@@ -19,7 +19,7 @@ use hostkeeper_steps::record::{RECORD_FILE, State};
 use hostkeeper_steps::{CrashPoint, Finished, ForceFailure, ForcePhase, ForceVerdict};
 use support::force::{HostState, UNIT, WEB, failed, host_state};
 use support::{crash_at, lines};
-use support_host::{NativeHost, runs, succeeded};
+use support_host::{NativeHost, runs, succeeded, unit};
 
 /// `version` of `web`, with the manifest every rule accepts, published in the host's repository.
 fn web(rig: &NativeHost, version: &str) {
@@ -33,12 +33,12 @@ fn installed(name: &str) -> NativeHost {
     rig.manifest(
         WEB,
         "1.0.0",
-        &runs(WEB, "1.0.0", &[UNIT, "web-gone.service"]),
+        &runs(WEB, "1.0.0", &[UNIT, &unit(WEB, "gone")]),
     );
     rig.manifest(
         WEB,
         "2.0.0",
-        &runs(WEB, "2.0.0", &[UNIT, "web-new.service"]),
+        &runs(WEB, "2.0.0", &[UNIT, &unit(WEB, "new")]),
     );
     rig.forced(&rig.daemon(), "1.0.0", 1);
     rig
@@ -160,8 +160,9 @@ fn force_reports_its_verdict_in_the_next_heartbeat_read() {
     let rig = NativeHost::new("force-report");
     rig.add(WEB, "0.9.0");
     web(&rig, "1.0.0");
-    rig.manifest(WEB, "2.0.0", &runs(WEB, "2.0.0", &["web-two.service"]));
-    rig.units.fail_start("web-two.service");
+    let two = unit(WEB, "two");
+    rig.manifest(WEB, "2.0.0", &runs(WEB, "2.0.0", &[&two]));
+    rig.units.fail_start(&two);
     let (daemon, _) = rig.booted();
     assert_eq!(forced_of(&daemon), None);
     assert_eq!(daemon.order(&rig.update(WEB, "0.9.0", 1)), succeeded());

@@ -896,19 +896,11 @@ without them ends every package check <code>attestation_unavailable</code>. Host
 carries the trusted root, so each update of hostkeeper brings the root of its release; the daemon uses
 the copy written last and reports its age in the admin <code>Status</code>
 (<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/deploy/verify-a-release.md#the-trusted-root-on-a-host">docs/deploy/verify-a-release.md</a>).</p>
-<p><strong>Unpack.</strong> One streaming pass (zstd, tar, a SHA-256 per file) writes into a private staging
-directory, under hard bounds: a zstd window of at most
-<span data-cell="c-window" data-source="crates/hostkeeper-unpack/src/archive.rs" data-item="MAX_WINDOW_BYTES">8 MiB</span>,
-names at most
-<span data-cell="c-depth" data-source="crates/hostkeeper-unpack/src/archive.rs" data-item="MAX_DEPTH">16</span>
-components deep, a manifest of at most
-<span data-cell="c-manifest" data-source="crates/hostkeeper-config/src/manifest.rs" data-item="MAX_MANIFEST_BYTES">65,536</span>
-bytes, and the config&rsquo;s bounds on unpacked bytes and entries. Only regular files and directories
-are accepted, with no setuid bits and no names that collide when case is folded. The tree is made
-root-owned and read-only, then sealed: a seal file records its tree digest and package digest, and
-the version directory appears by rename
-(<a href="https://github.com/komira-ai/hostkeeper/tree/main/crates/hostkeeper-unpack">crates/hostkeeper-unpack</a>). Before every step the runner
-re-hashes the staged tree and compares it with the digest taken when the order began.</p>
+<p><strong>Staging.</strong> A version is made in a private staging directory under the service&rsquo;s package
+directory. The tree is made root-owned and read-only, then sealed: a seal file records its tree digest and
+package digest, and the version directory appears by rename; a staging directory a crash left is removed
+(<a href="https://github.com/komira-ai/hostkeeper/tree/main/crates/hostkeeper-install/src/version">crates/hostkeeper-install/src/version</a>).
+Before every step the runner re-hashes the staged tree and compares it with the digest taken when the order began.</p>
 <p><strong>Versions and links.</strong> Each service keeps <code>current</code> and <code>previous</code> links under
 <code>/var/lib/hostkeeper/packages/&lt;service&gt;/</code>. After a confirmed switch the daemon prunes every other
 version that nothing still needs. Units are linked from <code>current</code> into the unit directory
@@ -1112,8 +1104,8 @@ further order until the halt is cleared), unless its report says <code>reversibl
 <code>Failed</code> after the commit; a first install whose <code>rollback</code> declines with <code>no_previous_release</code>
 ends <code>Failed</code>. A failed <code>cleanup</code> that says <code>reversible: true</code> before any commit sends the update to
 <code>rollback</code>; any other failed <code>cleanup</code> is retried
-<span data-cell="c-cleanup-retries" data-source="crates/hostkeeper-config/src/manifest.rs" data-item="DEFAULT_CLEANUP_RETRIES">3</span>
-times by default (the manifest&rsquo;s <code>cleanup_retries</code>), then ends <code>Failed</code> after the commit. A hook
+<span data-cell="c-cleanup-retries" data-source="crates/hostkeeper-daemon/src/target.rs" data-item="DEFAULT_CLEANUP_RETRIES">3</span>
+times by default (the hook&rsquo;s <code>cleanup_retries</code>), then ends <code>Failed</code> after the commit. A hook
 that reports <code>promotion_pending</code> is watched after success: <code>verify</code> runs again after its
 <code>retry_after_secs</code>, or every
 <span data-cell="c-watch" data-source="crates/hostkeeper-steps/src/runner.rs" data-item="WATCH_POLL_SECS">30 s</span>

@@ -8,7 +8,7 @@
 //!
 //! | Where | What the daemon does for a repository version |
 //! |---|---|
-//! | the update's `prepare` ([`Repository::stage`]) | The order of the entry ([`Order::from_entry`]); the version staged into an empty staging directory by the installer's `stage`, the entry written beside it as `target.json` ([`crate::target`]), sealed and published as any version is ([`hostkeeper_unpack::stage_filled`]). A version already on the host is the sealed one, and an order whose entry is not the sealed `target.json` field for field is `target_changed` |
+//! | the update's `prepare` ([`Repository::stage`]) | The order of the entry ([`Order::from_entry`]); the version staged into an empty staging directory by the installer's `stage`, the entry written beside it as `target.json` ([`crate::target`]), sealed and published as any version is ([`hostkeeper_install::version::stage_filled`]). A version already on the host is the sealed one, and an order whose entry is not the sealed `target.json` field for field is `target_changed` |
 //! | the switch before `cutover` ([`Repository::activate`]) | The installer's `activate` of the version, from its own copy of the index and the package, then `current` switched to it |
 //! | the switch before `rollback` ([`Repository::back`]) | The installer's `activate` of the previous version from its sealed directory, no fetch, then `current` switched back; for a first install, the `run` units stopped and the package removed, then `current` |
 //! | the uninstall's step 5 ([`Repository::remove`]) | The installer's `remove`, within the `remove_secs` of the version `current` names |
@@ -39,16 +39,15 @@ use hostkeeper_install::repository::{
     Backend, Class, Drift, Failure, HostDirs, InstallerLock, Order, Outcome, PackageRecord, Pause,
     Reason, RecordError, Records, Repositories, RepositoryInstaller,
 };
+use hostkeeper_install::version::{
+    FillError, FillOrder, HostFs, Owner, REASON_ARTIFACT_CHANGED, REASON_DAEMON_TOO_OLD,
+    REASON_IO_ERROR, REASON_NO_SPACE, REASON_RESERVED_VERSION, REASON_VERSION_TOO_LONG,
+    UnpackError, stage_filled,
+};
 use hostkeeper_placed::{Fs, InstalledEntry, Placer, Roots, UnitControl};
 use hostkeeper_proto::hostkeeper::release::v1::Target;
 use hostkeeper_release::Installer;
 use hostkeeper_steps::{Clock, Staged, StepExit, StepLauncher, SwitchError, UpdateOrder};
-use hostkeeper_unpack::{
-    FillError, FillOrder, HostFs, Owner, REASON_ARTIFACT_CHANGED, REASON_BAD_ARCHIVE,
-    REASON_DAEMON_TOO_OLD, REASON_DIGEST_MISMATCH, REASON_IO_ERROR, REASON_MANIFEST_MISMATCH,
-    REASON_NO_SPACE, REASON_RESERVED_VERSION, REASON_VERIFY_UNAVAILABLE, REASON_VERSION_TOO_LONG,
-    UnpackError, stage_filled,
-};
 
 use crate::executor::Reply;
 use crate::macos_pkg::MacosPkgPorts;
@@ -362,15 +361,11 @@ pub fn exit_of(failure: &Failure) -> StepExit {
 /// The reason token of a failure of the stage's own unpack steps, and the refusal it is
 /// reported as.
 const UNPACK_TOKENS: &[(&str, Refusal)] = &[
-    (REASON_BAD_ARCHIVE, Refusal::BadArchive),
-    (REASON_DIGEST_MISMATCH, Refusal::DigestMismatch),
-    (REASON_MANIFEST_MISMATCH, Refusal::ManifestMismatch),
     (REASON_DAEMON_TOO_OLD, Refusal::DaemonTooOld),
     (REASON_NO_SPACE, Refusal::NoSpace),
     (REASON_ARTIFACT_CHANGED, Refusal::ArtifactChanged),
     (REASON_RESERVED_VERSION, Refusal::ReservedVersion),
     (REASON_VERSION_TOO_LONG, Refusal::VersionTooLong),
-    (REASON_VERIFY_UNAVAILABLE, Refusal::VerifyUnavailable),
     (REASON_IO_ERROR, Refusal::PackageIoError),
 ];
 
@@ -378,7 +373,7 @@ const UNPACK_TOKENS: &[(&str, Refusal)] = &[
 /// of one already on the host, the disk): the unpack's reason token as the closed set spells it,
 /// `package_failed` for a token this table does not know.
 pub fn unpack_refusal(error: &UnpackError) -> Refusal {
-    let (_, _, token) = error.outcome();
+    let token = error.reason();
     UNPACK_TOKENS
         .iter()
         .find(|(known, _)| *known == token)

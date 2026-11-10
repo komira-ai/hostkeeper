@@ -7,6 +7,11 @@
 //! unit template are the goldens of the package), writes the params file of each step and decides
 //! from the exit status and the last line of the report `hello::hook::run` printed. The host is a fake world: which
 //! slot serves which version, as `systemctl` would leave it.
+//!
+//! Linux only: this is hello's Linux package, whose run entries are systemd units
+//! (`hello@a.service`) and whose hook drives `systemctl`; a Mac's daemon refuses a run entry
+//! that is no launchd label before any step runs.
+#![cfg(target_os = "linux")]
 
 mod support;
 mod support_apt;

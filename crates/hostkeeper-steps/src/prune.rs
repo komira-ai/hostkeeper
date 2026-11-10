@@ -26,7 +26,7 @@
 //!
 //! A crash leaves only a `.stage-*` directory, a seal with no tree beside it, or (a crash between
 //! the opening and the rename) a surplus version still whole, its top directory 0700. The unpack's
-//! own orphan pass removes the first two (`hostkeeper_unpack::remove_orphans`), and so does the
+//! own orphan pass removes the first two (`hostkeeper_install::version::remove_orphans`), and so does the
 //! next prune, which deletes all three.
 //! Every step is idempotent.
 

@@ -4,7 +4,7 @@
 //!
 //! The sweep of leftovers is not part of [`Daemon::boot_pass`]: before it
 //! ([`crate::start::startup`]) the daemon removes what crashed stages left in each service's
-//! package directory ([`hostkeeper_unpack::remove_orphans`]). It reads the records without
+//! package directory ([`hostkeeper_install::version::remove_orphans`]). It reads the records without
 //! writing any, and does not write the boot id.
 //!
 //! [`Daemon::boot_pass`] does, in this order:

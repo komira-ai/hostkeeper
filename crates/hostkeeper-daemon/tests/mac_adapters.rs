@@ -20,6 +20,7 @@ use hostkeeper_daemon::mac::{
 };
 use hostkeeper_daemon::start::StartError;
 use hostkeeper_enroll::{Claims, Ioreg, LinuxClaims, ManagedFile};
+use hostkeeper_install::mac_verify::{MacVerify, SignatureVerdict, VerifyIoError};
 use hostkeeper_launchd::launchctl::print_args;
 use hostkeeper_launchd::{
     FakeLaunchctl, Label, LaunchctlError, LaunchctlOutput, PidInfo, PidInfoError, Platform,
@@ -27,7 +28,6 @@ use hostkeeper_launchd::{
 };
 use hostkeeper_observe::{ActiveState, ObserveError, ProcessIdentity};
 use hostkeeper_testkit::Scratch;
-use hostkeeper_unpack::{MacVerify, SignatureVerdict, VerifyIoError};
 use rustix::fs::XattrFlags;
 
 /// An attribute a test may set on Linux, where `com.apple.quarantine` is not a name a file can

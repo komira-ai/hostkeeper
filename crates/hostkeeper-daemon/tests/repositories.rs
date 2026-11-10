@@ -201,7 +201,7 @@ fn the_start_gives_the_repository_installer_its_entries_and_directories() {
     let repository = &ports.repository;
     assert!(repository.repositories.is_empty());
     assert_eq!(repository.packages_dir, rig.packages);
-    assert_eq!(repository.owner, hostkeeper_unpack::Owner::ROOT);
+    assert_eq!(repository.owner, hostkeeper_install::version::Owner::ROOT);
     let state = rig.packages.parent().expect("a parent");
     assert_eq!(repository.dirs.work, state.join("apt"));
     assert_eq!(repository.dirs.root, Path::new("/"));

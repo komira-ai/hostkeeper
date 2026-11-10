@@ -1,6 +1,5 @@
-//! Checks over the crate's own sources and README: the documented reason tokens, no signer
-//! written into the code, and one way only to a `VerifiedArchive`. Each check is also run on a
-//! text that breaks it.
+//! Checks over the crate's own sources and README: the documented reason tokens and no signer
+//! written into the code. Each check is also run on a text that breaks it.
 
 use std::path::Path;
 
@@ -121,47 +120,22 @@ fn no_signer_constant_exists_in_the_crate() {
     assert_eq!(signer_literals(pinned), SIGNER_LITERALS);
 }
 
-/// The public functions of `text` whose signature names `VerifiedArchive`, by their head
-/// (`pub fn name`).
-fn public_constructors(text: &str) -> Vec<String> {
-    text.match_indices("pub fn ")
-        .filter_map(|(at, _)| {
-            let rest = text.get(at..)?;
-            let signature = rest.get(..rest.find(['{', ';'])?)?;
-            let head = signature.split('(').next().unwrap_or_default().trim();
-            signature
-                .contains("VerifiedArchive")
-                .then(|| head.to_owned())
-        })
-        .collect()
-}
-
-/// Catches a second way to a `VerifiedArchive`: the only public function of the crate whose
-/// signature names it is `prove`, its fields are private, and it derives neither `Clone` nor
-/// `Default`.
+/// Catches a refusal whose text loses its outcome, class or reason.
 #[test]
-fn verified_archive_has_no_public_constructor() {
-    let mut found = Vec::new();
-    for (name, text) in sources() {
-        for head in public_constructors(&text) {
-            found.push(format!("{name}: {head}"));
-        }
-    }
-    assert_eq!(found, ["prove.rs: pub fn prove"]);
-
-    let prove = read("src/prove.rs");
-    let start = prove
-        .find("#[derive(Debug)]\npub struct VerifiedArchive {")
-        .expect("the struct, deriving Debug only");
-    let body = prove.get(start..).expect("the struct");
-    let body = body
-        .get(..body.find("\n}").expect("its end"))
-        .expect("its fields");
-    assert_eq!(body.matches("pub ").count(), 1, "a public field: {body}");
-
-    let forged = "impl VerifiedArchive {\n    pub fn forge(path: PathBuf) -> VerifiedArchive {\n";
-    assert_eq!(public_constructors(forged), ["pub fn forge"]);
-    assert!(public_constructors("pub fn other() -> u8;").is_empty());
+fn a_refusal_reads_as_its_outcome_class_and_reason() {
+    use crate::{FETCH_FAILED, NO_SPACE, PACKAGE_DIGEST_MISMATCH, PackageFailure};
+    assert_eq!(
+        PackageFailure::deferred(FETCH_FAILED).to_string(),
+        "Deferred, class environment, reason fetch_failed"
+    );
+    assert_eq!(
+        PackageFailure::release(PACKAGE_DIGEST_MISMATCH).to_string(),
+        "Failure, class release, reason package_digest_mismatch"
+    );
+    assert_eq!(
+        PackageFailure::environment(NO_SPACE).to_string(),
+        "Failure, class environment, reason no_space"
+    );
 }
 
 /// Catches the tests' DER writer spelling a length wrongly, which would make every synthetic

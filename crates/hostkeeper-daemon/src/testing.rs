@@ -817,8 +817,8 @@ pub fn repository_ports(
     repositories: hostkeeper_install::repository::Repositories,
 ) -> Arc<crate::repository::RepositoryPorts> {
     use std::os::unix::fs::MetadataExt;
-    let owner = fs::metadata(root).map_or(hostkeeper_unpack::Owner::ROOT, |made| {
-        hostkeeper_unpack::Owner {
+    let owner = fs::metadata(root).map_or(hostkeeper_install::version::Owner::ROOT, |made| {
+        hostkeeper_install::version::Owner {
             uid: made.uid(),
             gid: made.gid(),
         }

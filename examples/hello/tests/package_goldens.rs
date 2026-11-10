@@ -1,6 +1,6 @@
-//! The committed package goldens against the program they carry: the manifest loads with the
-//! daemon's own loader, its params are what the hook reads, and the unit files, the plists and
-//! the health URL name the port, the record directory and the units the hook and the server use.
+//! The committed package goldens against the program they carry: the manifest names the hook and
+//! the units, its params are what the hook reads, and the unit files, the plists and the health
+//! URL name the port, the record directory and the units the hook and the server use.
 
 use std::fs;
 use std::path::PathBuf;
@@ -8,15 +8,7 @@ use std::path::PathBuf;
 use hello::cli::{Command, parse};
 use hello::hook::{Settings, Units};
 use hello::record::Slot;
-use hostkeeper_config::manifest::{Expected, HostkeeperVersion, Manifest};
-use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_hook::{Params, Scalar};
-
-const DAEMON: HostkeeperVersion = HostkeeperVersion {
-    major: 0,
-    minor: 1,
-    patch: 0,
-};
 
 fn dir(platform: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -24,18 +16,64 @@ fn dir(platform: &str) -> PathBuf {
         .join(platform)
 }
 
+/// What the tests read of a golden `manifest.toml`.
+struct Manifest {
+    hook: Hook,
+    run: Vec<String>,
+    health_url: Option<String>,
+    params: toml::Table,
+}
+
+struct Hook {
+    command: Vec<String>,
+    timeout_secs: Timeouts,
+}
+
+/// The bounds of the steps the tests look at, `None` when the golden has none or says 0 (the
+/// unbounded form of `prepare`).
+struct Timeouts {
+    prepare: Option<i64>,
+    uninstall: Option<i64>,
+}
+
+fn strings(value: Option<&toml::Value>) -> Vec<String> {
+    value
+        .and_then(toml::Value::as_array)
+        .expect("a list")
+        .iter()
+        .map(|item| item.as_str().expect("a string").to_owned())
+        .collect()
+}
+
 fn load(platform: &str) -> Manifest {
-    let expected = Expected {
-        name: ServiceName::new("hello").expect("a service name"),
-        version: Version::new("1.2.3").expect("a version"),
-        // The golden of each directory is the package built for this platform.
-        platform: match platform {
-            "macos" => hostkeeper_config::platform::Platform::MacosArm64,
-            _ => hostkeeper_config::platform::Platform::LinuxX86_64,
-        },
+    let text = read(platform, "manifest.toml");
+    let top: toml::Table = text
+        .parse()
+        .unwrap_or_else(|why| panic!("the {platform} manifest is not TOML: {why}"));
+    let table = |name: &str| top.get(name).and_then(toml::Value::as_table);
+    let hook = table("hook").expect("a hook table");
+    let bound = |step: &str| {
+        hook.get("timeout_secs")
+            .and_then(toml::Value::as_table)
+            .and_then(|bounds| bounds.get(step))
+            .and_then(toml::Value::as_integer)
+            .filter(|secs| *secs != 0)
     };
-    Manifest::load(&dir(platform), &expected, &DAEMON)
-        .unwrap_or_else(|why| panic!("the {platform} manifest is refused: {why}"))
+    Manifest {
+        hook: Hook {
+            command: strings(hook.get("command")),
+            timeout_secs: Timeouts {
+                prepare: bound("prepare"),
+                uninstall: bound("uninstall"),
+            },
+        },
+        run: strings(table("units").and_then(|units| units.get("run"))),
+        health_url: table("health")
+            .and_then(|health| health.get("url"))
+            .and_then(toml::Value::as_str)
+            .map(str::to_owned),
+        params: table("params").expect("a params table").clone(),
+    }
 }
 
 fn read(platform: &str, file: &str) -> String {
@@ -59,7 +97,7 @@ fn settings(manifest: &Manifest) -> Settings {
     Settings::from_table(&table).unwrap_or_else(|why| panic!("{}", why.report.line()))
 }
 
-/// Catches a manifest the daemon would refuse, or one whose hook command is not the program with
+/// Catches a manifest whose hook command is not the program with
 /// the `update-hook` word, or whose run units are not the two slots the hook starts.
 #[test]
 fn the_manifests_load_and_name_the_hook_and_the_two_slots() {

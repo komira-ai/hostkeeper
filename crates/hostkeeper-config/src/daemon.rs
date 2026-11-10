@@ -315,8 +315,7 @@ fn signers(top: &Fields<'_>) -> Result<TrustedSigners, Problem> {
 }
 
 /// The signer of `organisation` that the keys `workflow`, `refs` and `hosted_runner` of `fields`
-/// name: the keys of `[trusted_signers]` but its organisation, which the channel-sync trust list
-/// (`channel_trust`) reads too, so that the two read them alike.
+/// name: the keys of `[trusted_signers]` but its organisation.
 pub(crate) fn signer_keys(
     fields: &Fields<'_>,
     organisation: String,

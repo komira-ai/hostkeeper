@@ -4,10 +4,12 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+hello = { path = "../hello" }
 hostkeeper-config = { path = "../hostkeeper-config" }
 hostkeeper-coordinator = { path = "../hostkeeper-coordinator" }
 hostkeeper-daemon = { path = "../hostkeeper-daemon" }
 hostkeeper-hook = { path = "../hostkeeper-hook" }
+hostkeeper-install = { path = "../hostkeeper-install" }
 hostkeeper-launchd = { path = "../hostkeeper-launchd" }
 hostkeeper-link = { path = "../hostkeeper-link" }
 hostkeeper-placed = { path = "../hostkeeper-placed" }
@@ -16,6 +18,5 @@ hostkeeper-pxe = { path = "../hostkeeper-pxe" }
 hostkeeper-steps = { path = "../hostkeeper-steps" }
 
 [dev-dependencies]
-hostkeeper-install = { path = "../hostkeeper-install" }
 hostkeeper-observe = { path = "../hostkeeper-observe" }
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }

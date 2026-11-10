@@ -10,10 +10,10 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use hostkeeper_install::repository::{Reason, Repositories};
+use hostkeeper_install::version::Owner;
 use hostkeeper_placed::testing::{FakeUnitControl, FaultFs, Log};
 use hostkeeper_release::Installer;
 use hostkeeper_testkit::Scratch;
-use hostkeeper_unpack::Owner;
 
 use super::*;
 use crate::testing::{FakeClock, ScriptedLauncher};

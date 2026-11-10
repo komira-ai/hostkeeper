@@ -40,9 +40,9 @@ use hostkeeper_config::daemon::{ConfigError, DaemonConfig};
 use hostkeeper_config::manifest::{BadHostkeeperVersion, HostkeeperVersion};
 use hostkeeper_install::macos_pkg::signers::SignersError;
 use hostkeeper_install::repository::config::RepositoriesError;
+use hostkeeper_install::version::HostFs;
 use hostkeeper_observe::unlink_stale_registration_socket;
 use hostkeeper_package::stores::StoresError;
-use hostkeeper_unpack::HostFs;
 
 use crate::boot::{ALERT_START, BootError, BootReport, Stage};
 use crate::executor::{Daemon, Dirs, Ports};
@@ -380,7 +380,7 @@ pub fn before_records(daemon: &Daemon, report: &mut BootReport) {
     for service in services.into_values() {
         // The staging directories a stage left, then the `.fetch-*` files a fetch of a `.pkg`
         // (or an earlier release's fetch) left.
-        let swept = hostkeeper_unpack::remove_orphans(&service, &packages)
+        let swept = hostkeeper_install::version::remove_orphans(&service, &packages)
             .map_err(|error| error.to_string())
             .and_then(|()| {
                 hostkeeper_package::remove_orphan_fetches(&ports.packages_dir, &service)

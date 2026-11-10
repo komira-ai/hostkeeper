@@ -36,6 +36,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::support::versions::hook_path;
 use hostkeeper_config::names::{ServiceName, Version};
+use hostkeeper_config::platform::Platform;
 use hostkeeper_daemon::boot::BootReport;
 use hostkeeper_daemon::prune::Prune;
 use hostkeeper_daemon::repository::{Native, backend_of_entry};
@@ -65,6 +66,21 @@ pub fn succeeded() -> Reply {
         reason: None,
         resent: false,
     }
+}
+
+/// The run unit `part` of `service`, spelled for `platform`: `<service>-<part>.service` for a
+/// systemd host, the launchd label `<service>.<part>` for a Mac, whose daemon refuses a `run`
+/// entry that is not a label of the service. (`<service>.service` is both.)
+pub fn unit_for(platform: Platform, service: &str, part: &str) -> String {
+    match platform {
+        Platform::MacosArm64 => format!("{service}.{part}"),
+        Platform::LinuxX86_64 | Platform::LinuxArm64 => format!("{service}-{part}.service"),
+    }
+}
+
+/// [`unit_for`] the platform this test is built for, the one the daemon checks the manifest for.
+pub fn unit(service: &str, part: &str) -> String {
+    unit_for(Platform::current(), service, part)
 }
 
 /// The manifest text of `service` at `version` (the daemon's test double of it) that runs the

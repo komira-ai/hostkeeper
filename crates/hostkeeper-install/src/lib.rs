@@ -14,6 +14,10 @@
 //! - [`host`]: the host's file system under a root, and the accounts its checks trust.
 //! - [`lock`]: the host-wide installer lock.
 //! - [`outcome`]: a step's failure, its class and its reason.
+//! - [`version`]: the sealed version directory of a package on the host, published from a staging
+//!   directory an installer filled, and the orphans a crashed publish left.
+//! - [`mac_verify`]: the port of the macOS checks of a package's files (the quarantine attribute,
+//!   the code signature).
 //!
 //! An installer reads no byte of a package before the core has checked its size and its
 //! digest, runs no script of the package while it stages, and writes, while it stages, only into
@@ -25,11 +29,13 @@ pub mod announce;
 pub mod host;
 pub mod installer;
 pub mod lock;
+pub mod mac_verify;
 pub mod macos_pkg;
 pub mod outcome;
 pub mod program;
 pub mod repository;
 pub mod tools;
+pub mod version;
 
 pub use announce::{Announcement, Family, announce};
 pub use installer::{REGISTERED, StageOrder, backend_of};

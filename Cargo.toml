@@ -95,9 +95,9 @@ ring = "0.17.14"
 # repository's `primary.xml` and the signature header it signs) and the tests build; the reader
 # and builder only (no signing, no zstd, xz or bzip2), pure Rust (MIT).
 rpm = { version = "0.30.2", default-features = false, features = ["payload", "gzip-compression"] }
-# The zstd of hostkeeper packages, pure Rust (MIT): the decoder of hostkeeper-unpack (used by the
-# tests of `cargo xtask release package`), and the compression of that command. `hash` (twox-hash, MIT) checks a frame's content
-# checksum; no dictionary builder.
+# The zstd of the packages hostkeeper-pxe reads (the decoder of a .deb's `data.tar.zst`) and of
+# `cargo xtask release package`'s checks (the decoder, and the encoder their tests use), pure Rust
+# (MIT). `hash` (twox-hash, MIT) checks a frame's content checksum; no dictionary builder.
 ruzstd = { version = "0.9.1", default-features = false, features = ["hash", "std"] }
 # hostkeeper-package's tests: the signer identity it passes to `gh` is compiled and matched as
 # the regular expression `gh` reads it as.

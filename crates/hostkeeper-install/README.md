@@ -13,6 +13,8 @@ repairs it. This page states what the code holds. It is tested against fakes on 
 | `host` | the host seam the installer runs on: the files, directories and owners it reads and writes |
 | `lock` | the lock one installer run holds on a package's directory |
 | `outcome` | what a step ends in, and the errors an installer reports |
+| `version` | the sealed version directory of a package, `packages/<service>/<version>/`: `stage_filled` publishes a staging directory an installer filled (durable, sealed, renamed in, 0555) through the `PackageFs` port (`HostFs` on a host), `remove_orphans` removes what a crashed publish left, and `UnpackError::reason` is the token a step record reports a failure with |
+| `mac_verify` | the port of the macOS checks of a package's files: the quarantine attribute and the code signature (`MacVerify`, `SignatureVerdict`, `VerifyIoError`); the daemon's `HostMacVerify` implements it |
 | `tools` | the ports of the Mac's tools (`pkgutil`, `installer`, `lsbom`, `launchctl`), run through the bounded child-process runner of `hostkeeper-launchd` |
 | `macos_pkg` | the installer, one module per concern, below |
 | `macos_pkg::signers` | `/etc/hostkeeper/macos-pkg.toml`: the leaf-certificate fingerprints a package may be signed by, read at the daemon's start; a file that is not sound is refused, a missing one is no signers |

@@ -22,7 +22,7 @@ use hostkeeper_steps::{Clock, Finished, ForceFailure, ForceVerdict};
 use support::force::{UNIT, WEB, asked_active, calls, failed, link_of, set, started, token_of};
 use support::{OWN, config, d, digest, force, lines, name, roots, snapshot};
 use support_apt::with_entry;
-use support_host::{NativeHost, runs, succeeded};
+use support_host::{NativeHost, runs, succeeded, unit};
 
 /// `version` of `web`, with the manifest every rule accepts, published in the host's repository.
 fn web(rig: &NativeHost, version: &str) {
@@ -448,27 +448,20 @@ fn force_takes_the_service_lock_only_and_a_second_order_for_the_service_is_busy_
 fn force_runs_the_steps_in_the_documented_order() {
     let rig = NativeHost::new("force-order");
     let daemon = rig.daemon();
-    rig.manifest(
-        WEB,
-        "1.0.0",
-        &runs(WEB, "1.0.0", &["web.service", "web-gone.service"]),
-    );
-    rig.manifest(
-        WEB,
-        "2.0.0",
-        &runs(WEB, "2.0.0", &["web.service", "web-new.service"]),
-    );
+    let (gone, new) = (unit(WEB, "gone"), unit(WEB, "new"));
+    rig.manifest(WEB, "1.0.0", &runs(WEB, "1.0.0", &[UNIT, &gone]));
+    rig.manifest(WEB, "2.0.0", &runs(WEB, "2.0.0", &[UNIT, &new]));
     rig.forced(&daemon, "1.0.0", 1);
     assert_eq!(daemon.order(&rig.force(WEB, "2.0.0", 2, 0)), succeeded());
     assert_eq!(
         calls(&rig),
         [
-            "stop web-gone.service",
-            "stop web.service",
-            "switch",
-            "reload",
-            "start web.service",
-            "start web-new.service",
+            format!("stop {gone}"),
+            format!("stop {UNIT}"),
+            "switch".to_owned(),
+            "reload".to_owned(),
+            format!("start {UNIT}"),
+            format!("start {new}"),
         ]
     );
 }
@@ -480,20 +473,22 @@ fn force_runs_the_steps_in_the_documented_order() {
 fn force_starts_exactly_the_units_the_target_lists() {
     let rig = NativeHost::new("force-starts");
     let daemon = rig.daemon();
-    rig.manifest(WEB, "1.0.0", &runs(WEB, "1.0.0", &["web-old.service"]));
-    rig.ship(WEB, "2.0.0", "web-extra.service");
+    let (old, extra) = (unit(WEB, "old"), unit(WEB, "extra"));
+    rig.manifest(WEB, "1.0.0", &runs(WEB, "1.0.0", &[&old]));
+    rig.ship(WEB, "2.0.0", &extra);
     rig.forced(&daemon, "1.0.0", 1);
     assert_eq!(daemon.order(&rig.force(WEB, "2.0.0", 2, 0)), succeeded());
     assert_eq!(started(&rig), [UNIT]);
     assert_eq!(rig.units.active(), set(&[UNIT]));
-    let extra = rig
+    let shipped = rig
         .version_dir(WEB, "2.0.0")
-        .join("tree/usr/lib/systemd/system/web-extra.service");
+        .join("tree/usr/lib/systemd/system")
+        .join(&extra);
     assert!(
-        extra.is_file(),
+        shipped.is_file(),
         "the package ships the unit it does not run"
     );
-    assert_eq!(asked_active(&rig, "web-extra.service"), 0);
+    assert_eq!(asked_active(&rig, &extra), 0);
 }
 
 /// Catches a wait that ends on the first active unit, ends early, or reads another clock: with
@@ -503,7 +498,8 @@ fn force_starts_exactly_the_units_the_target_lists() {
 /// the wait is of this process and ends at its bound, never waits forever nor ends at once.
 #[test]
 fn force_waits_for_every_unit_to_be_active_within_force_start_secs() {
-    let two = "web-two.service";
+    let two = unit(WEB, "two");
+    let two = two.as_str();
     let failed_start = failed(Phase::AfterCommit, Class::Release, "start_failed");
     let cases = [(60, succeeded()), (61, failed_start)];
     for (lost, (asks, expected)) in [false, true]
@@ -538,7 +534,8 @@ fn force_waits_for_every_unit_to_be_active_within_force_start_secs() {
 fn force_with_unit_that_fails_to_start_reports_failed_and_a_second_force_recovers() {
     let rig = NativeHost::new("force-recovers");
     let daemon = rig.daemon();
-    let two = "web-two.service";
+    let two = unit(WEB, "two");
+    let two = two.as_str();
     web(&rig, "1.0.0");
     rig.manifest(WEB, "2.0.0", &runs(WEB, "2.0.0", &[two]));
     rig.units.fail_start(two);

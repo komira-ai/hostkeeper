@@ -48,6 +48,7 @@ use hostkeeper_enroll::{
     Enroller, GrpcEnroll, LinuxClaims, ManagedFile, OsEntropy, PkiDir, RenewalState,
     Settings as EnrollSettings, SystemWallClock,
 };
+use hostkeeper_install::version::Owner;
 use hostkeeper_launchd::{Platform, PlatformKind};
 use hostkeeper_link::{ClockSleeper, LoopFlags, PkiCertSource, StopFlag, ThreadDispatch};
 use hostkeeper_observe::ProcessRunner;
@@ -55,7 +56,6 @@ use hostkeeper_package::net::{NetFetcher, UreqTransport};
 use hostkeeper_placed::roots::STATE_DIR;
 use hostkeeper_placed::{RealFs, Roots, UnitControl, UnitControlError};
 use hostkeeper_steps::{Clock, LaunchError, StepCall, StepExit, StepLauncher};
-use hostkeeper_unpack::Owner;
 
 use crate::repository::RepositoryPorts;
 use rustls_pki_types::CertificateDer;

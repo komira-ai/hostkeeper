@@ -1395,10 +1395,10 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 name = "hello"
 version = "0.1.0"
 dependencies = [
- "hostkeeper-config",
  "hostkeeper-hook",
  "hostkeeper-testkit",
  "rustix",
+ "toml",
 ]
 
 [[package]]
@@ -1448,8 +1448,6 @@ version = "0.1.0"
 dependencies = [
  "hostkeeper-testkit",
  "libc",
- "serde",
- "serde_json",
  "thiserror",
  "toml",
 ]
@@ -1525,7 +1523,6 @@ dependencies = [
  "hostkeeper-steps",
  "hostkeeper-testkit",
  "hostkeeper-tls",
- "hostkeeper-unpack",
  "hostkeeper-wire",
  "http-body-util",
  "hyper",
@@ -1887,6 +1884,7 @@ dependencies = [
  "clap",
  "flate2",
  "getrandom 0.4.3",
+ "hello",
  "hex",
  "hostkeeper-config",
  "hostkeeper-coordinator",
@@ -1905,7 +1903,6 @@ dependencies = [
  "hostkeeper-pxe-packets",
  "hostkeeper-steps",
  "hostkeeper-testkit",
- "hostkeeper-unpack",
  "p256",
  "rcgen",
  "rustix",
@@ -2085,21 +2082,6 @@ dependencies = [
  "thiserror",
  "tokio",
  "tonic",
-]
-
-[[package]]
-name = "hostkeeper-unpack"
-version = "0.1.0"
-dependencies = [
- "hex",
- "hostkeeper-config",
- "hostkeeper-hook",
- "hostkeeper-steps",
- "hostkeeper-testkit",
- "rustix",
- "ruzstd",
- "sha2 0.11.0",
- "thiserror",
 ]
 
 [[package]]
