@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1279" width="1200" height="1279" role="img" aria-label="From a purchase on the org Apple account to a hostkeeper daemon approved by the coordinator, with the MDM server inside the coordinator.">
 <title>ADE enrollment end to end: power on to an approved Mac</title>
-<desc>The Mac is bought on the org account and ABM assigns it to the coordinator. The coordinator syncs, defines the ADE profile and assigns it. At Activate the Mac gets the profile, fetches the enrollment profile from the coordinator, gets a per-serial identity by SCEP, authenticates, and the gate asks for DeviceInformation and SecurityInfo and sends the baseline: config profile, hostkeeper pkg, Tailscale. The daemon requests enrollment and the coordinator auto-approves it from the ABM record, the inventory and the one-time nonce.</desc>
+<desc>The Mac is bought on the org account and ABM assigns it to the coordinator. The coordinator syncs, defines the ADE profile and assigns it. At Activate the Mac gets the profile, fetches the enrollment profile from the coordinator, gets a per-serial identity by SCEP, authenticates, and the gate asks for DeviceInformation and SecurityInfo and sends the baseline: config profile, device name, remote desktop, hostkeeper pkg. The daemon requests enrollment and the coordinator auto-approves it from the ABM record, the inventory and the one-time nonce.</desc>
 <defs><marker id="coordinator-mdm-ade-enrollment-ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0B0B0A"/></marker><marker id="coordinator-mdm-ade-enrollment-ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FD4F1D"/></marker></defs>
 <style>
 .box{fill:#FFFFFF;stroke:#0B0B0A;stroke-width:1.4}
@@ -24,7 +24,7 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <text x="20" y="28" class="b" font-size="16" text-anchor="start">ADE enrollment end to end: power on to an approved Mac</text>
 <rect x="30" y="44" width="212" height="46" rx="5" class="box-b"/>
 <text x="136" y="64" class="b" text-anchor="middle">Apple</text>
-<text x="136" y="80" class="t-m" text-anchor="middle">ABM, ADE, APNs, Tailscale</text>
+<text x="136" y="80" class="t-m" text-anchor="middle">ABM, ADE, APNs</text>
 <path d="M136,92 L136,1265" class="life"/>
 <rect x="262" y="44" width="212" height="46" rx="5" class="box-b"/>
 <text x="368" y="64" class="b" text-anchor="middle">Mac</text>
@@ -85,7 +85,7 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <path d="M832,916 L1064,916" class="ln" marker-end="url(#coordinator-mdm-ade-enrollment-ak)"/>
 <text x="948" y="910" class="t-m lbl" text-anchor="middle">16. status: enrolled, supervised, via DEP</text>
 <path d="M832,956 L600,956" class="ln" marker-end="url(#coordinator-mdm-ade-enrollment-ak)"/>
-<text x="716" y="950" class="t-m lbl" text-anchor="middle">17. enqueue: config profile, Settings name, EnableRemoteDesktop, Tailscale pkg + profiles, hostkeeper pkg</text>
+<text x="716" y="950" class="t-m lbl" text-anchor="middle">17. enqueue: config profile, Settings name, EnableRemoteDesktop, hostkeeper pkg</text>
 <path d="M368,996 L600,996" class="ln" marker-end="url(#coordinator-mdm-ade-enrollment-ak)"/>
 <text x="484" y="990" class="t-m lbl" text-anchor="middle">18. GET /pkg/&lt;sha256&gt;.pkg (streamed, digest checked)</text>
 <rect x="20" y="1012" width="1160" height="24" rx="4" class="box-p"/>

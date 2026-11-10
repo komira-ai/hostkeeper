@@ -16,7 +16,8 @@ A second direction (2026-11-10), which shapes sections 1.4, 4.9, 4.10 and 11: "e
 then we can just run the coordinator that has mdm built in. When setting up the coordinator, it could be a thing in the UI to upload all
 the necessary info for mdm registration, and then once it's configured, then we can onboard devices." So MDM is **set up in the
 coordinator's web UI**, through the operator API behind it, not by flags, files, a held script or `hkctl` verbs, and the page that onboards
-Macs appears only once the setup says "configured".
+Macs appears only once the setup says "configured". The people who set it up sign in with a user name and a password (section 4.11), and
+the Macs and wiped hosts take their packages from the coordinator on the lab LAN ([package-proxy.md](package-proxy.md)).
 
 
 This document supersedes [hostkeeper-mdm.md](hostkeeper-mdm.md) in part. Section 1.4 says which parts. Section 4 of that document (the
@@ -38,6 +39,8 @@ between the stack and the gate.
 | Screen Sharing, device name, extra profiles | by hand, or by a hand-made NanoHUB API call | the group baseline, applied at enrollment and re-applied (section 5.3) |
 | Setting MDM up | unit files, tool storage and a held script on the MDM host | one page of the coordinator's web UI, "MDM setup" (4.9); Macs are onboarded on a second page that shows once setup says "configured" |
 | Push certificate, ABM token, the MDM name's TLS certificate | uploaded into NanoHUB and NanoDEP storage; `lego` settings on the host | uploaded or obtained in the UI, held encrypted in the coordinator's store, never shown again; the operator renews them there |
+| Signing in to the UI | pasting an operator token | a user name and password, a browser session; the first user, `admin`, gets a one-hour initial password from the deploy (4.11); tokens remain for automation |
+| Packages for Macs and wiped hosts | a tailnet-only download server filled by a sync job | the coordinator's caching package proxy on the lab LAN, reading the public origins ([package-proxy.md](package-proxy.md)) |
 
 What does not change: the Mac sees the same two things it sees today, an ADE profile that points at `https://mdm.example.com/enroll`
 and an MDM server on that name. The daemon's enrollment, its nonce, its approval record and its host certificate are unchanged. The
@@ -54,19 +57,22 @@ reused here, and the baseline pull request (hostkeeper#290).
 
 ### 1.3 Setting up MDM, as the operator sees it
 
-One page of the operator UI, **MDM setup**, with four steps and a status panel (section 4.9 has the mechanism, the storage and the rules).
+The operator first signs in (section 4.11): a user name and password, and on the first login of `admin` a forced change of the initial
+password. Then one page of the operator UI, **MDM setup**, with four steps and a status panel (section 4.9 has the mechanism, the storage
+and the rules). Any signed-in user may do the setup; every step is audited under the user's name.
 
 1. **Push certificate.** *Create the request*: the coordinator makes a key and the request the signing route takes. The route is the
-   mdmcert.download service the org used for the current certificate (the owner's answer to Q1): the page produces what that service needs,
+   mdmcert.download service the org used for the current certificate: the page produces what that service needs,
    the operator *uploads the signed reply* it returns, the coordinator decrypts it with its own key, and the operator takes the result to
    Apple's push portal and *uploads the certificate* Apple returns. An Apple MDM vendor certificate is the alternative route (4.4). For
    the migration, *upload an existing certificate and key* instead.
-2. **Apple Business Manager.** *Download the coordinator's public key*, add it in ABM as the MDM server's key, then *upload the server
-   token* (`.p7m`) ABM gives back.
+2. **Apple Business Manager.** For the org's existing server entry (`js-mdm`), *upload the existing key pair* (the one NanoDEP holds) and
+   the *server token* (`.p7m`, which is encrypted to that key): ABM needs no change. Only if the key pair cannot be had, *download the
+   coordinator's new public key*, add it in ABM as the MDM server's key, and upload the token ABM gives back.
 3. **Name.** Set the MDM name (for example `mdm.example.com`). The page shows the enrollment URL the ADE profile will carry, and the DNS
    record the name needs.
-4. **TLS certificate for the name.** The coordinator obtains it itself (ACME, DNS-01, section 4.10) from a DNS credential the operator
-   uploads, or the operator uploads a certificate and key for the first cut.
+4. **TLS certificate for the name.** The coordinator obtains it itself (ACME, DNS-01, section 4.10) from the GoDaddy API key and secret the
+   operator uploads, or the operator uploads a certificate and key for the first cut.
 5. **Status panel**, always shown: push topic and expiry, ABM token expiry and last sync, TLS expiry, and one word, *configured* or
    *not configured, because ...*, with the days left coloured at the alert thresholds.
 
@@ -116,7 +122,9 @@ The diagram boxes exactly what hostkeeper runs: one process. Everything that mov
 
 | Piece | Replaces | Why it is not a process |
 |---|---|---|
-| MDM listener: `/enroll`, `/scep`, `/checkin`, `/mdm`, `/pkg/<sha256>.pkg` | Caddy's routes, NanoHUB's endpoints, `scepserver`, the pkg route | five request handlers over `hyper`, which the coordinator already runs |
+| MDM listener: `/enroll`, `/scep`, `/checkin`, `/mdm`, `/pkg/<sha256>.pkg`, and the package proxy's `/apt/<repo>/...` | Caddy's routes, NanoHUB's endpoints, `scepserver`, the pkg route, the tailnet download server | request handlers over `hyper`, which the coordinator already runs |
+| Package proxy and its cache directory | the tailnet download server and its sync job | a route table, a directory with atomic rename, one origin fetch per key (package-proxy.md) |
+| Operator login: users, sessions, API tokens | pasting a token from the tokens file | three tables, a password hash and a cookie, behind a few routes of the private listener (4.11) |
 | Check-in and queue | NanoMDM | a table of enrollments and a table of commands |
 | SCEP server and the MDM identity CA | `scepserver` | three request types (`GetCACaps`, `GetCACert`, `PKIOperation`) with a signed and enveloped reply, written here because no Rust SCEP server exists (4.2) |
 | APNs sender | NanoMDM's push | one HTTP/2 POST per wake, on `hyper` and `rustls`, which the workspace already has |
@@ -140,7 +148,10 @@ Each has the reason and what it costs. "Verify" marks a claim that rests on the 
 `http::Surface::Mdm`, TLS from the certificate of the MDM name (public CA) that the setup holds in the store (4.9, 4.10); the
 listener is bound at start, answers nothing until that certificate exists, and serves it, and each renewal, with no restart (a
 certificate resolver reading the current one). The address is a flag because where to listen is bootstrap; everything else about MDM is
-setup data (4.9). Routes:
+setup data (4.9). The coordinator takes **port 443 on the LAN address**, which Caddy held before. The container has no capability
+below 1024 today (`coordinator_docker.sh`), so the held script lowers the container's own `net.ipv4.ip_unprivileged_port_start`
+(a per-container sysctl, which needs the container's own network namespace; with host networking it is the host's sysctl, or a
+capability instead). The script is the owner's (S3) and the choice is confirmed on the farm (section 12, item 17). Routes:
 
 | Route | Who calls it | Authentication |
 |---|---|---|
@@ -148,12 +159,14 @@ setup data (4.9). Routes:
 | `/scep` | the Mac's SCEP client, from the enrollment profile | a one-time challenge bound to the serial |
 | `PUT /checkin` | the MDM client | a client certificate of the MDM CA, or the `Mdm-Signature` header; either way the certificate's hash must be the one stored for the enrollment |
 | `PUT /mdm` | the MDM client | the same |
-| `GET /pkg/<sha256>.pkg` | the MDM client, following `InstallEnterpriseApplication` | the digest is the capability: only files named in the installs file |
+| `GET /pkg/<sha256>.pkg` | the MDM client, following `InstallEnterpriseApplication` | the digest is the capability: only files named in the installs setting |
+| `GET /apt/<repo>/dists/...` and `/apt/<repo>/pool/...` | a host's apt, including a wiped host before it enrolls | none: public bytes, read-only, by the route shape; the client checks the signatures (package-proxy.md) |
 
 **Why a listener of its own and not routes on the heartbeat or LAN listener.** The heartbeat surface admits any client certificate of the
 host CA and is pinned by every daemon's `ca_sha256`. A Mac at Setup Assistant holds no certificate and trusts only public roots, so its
 listener needs a public-CA server certificate and a different client-trust rule. Separating the listeners keeps the host CA's meaning
-unchanged (B8) and keeps the Mac-facing surface to five routes. `--lan-listen` stays for the daemons. Lesson 4 is this decision.
+unchanged (B8) and keeps the Mac-facing surface to the routes above. `--lan-listen` stays for the daemons. Lesson 4 is this decision. The
+public-CA certificate is also what lets apt on a host reach the package proxy, since apt trusts the system roots and not the host CA.
 
 **Why public-CA TLS.** A freshly erased Mac trusts the system roots only. The ADE profile's `anchor_certs` is empty today and stays so;
 putting a private CA in it is a second trust path to maintain, and the name `mdm.example.com` already has a public-CA certificate
@@ -271,7 +284,7 @@ has the topic `com.apple.mgmt.External.d1801ae1-3ef7-483e-9f6d-4979e2ebfc09`; th
    (**Built**: `Alerts.List`) raises an alert at `push_alert_days` (default 60) before expiry and again at 14, and the status panel shows
    the days left.
 3. **Signing the CSR is outside the coordinator**, by a service or a certificate it does not hold. The org's current certificate came from
-   **mdmcert.download** (owner's answer to Q1: they went to the site and did it), so renewal follows that route and the page supports it:
+   **mdmcert.download** (the org went to the site and did it), so renewal follows that route and the page supports it:
    the coordinator generates, besides the push key and CSR, an encryption key pair, and offers the request the service takes (the CSR
    and the encryption certificate, public parts only). The service signs the CSR and returns it encrypted to that certificate; the operator
    uploads the reply, the coordinator decrypts it with the encryption key (held sealed, 4.9) and offers the signed request as a download
@@ -291,23 +304,26 @@ has the topic `com.apple.mgmt.External.d1801ae1-3ef7-483e-9f6d-4979e2ebfc09`; th
 caches and refreshes. Every call carries `X-Server-Protocol-Version`; a `429` is retried after its `Retry-After`, and an auth-session
 error refreshes the session once. These protocol details rest on NanoDEP's source and are unverified (section 12, item 1). HMAC-SHA1 is about sixty lines on `ring`; no OAuth crate is needed.
 
-- **Token.** ABM hands over an encrypted `.p7m`. The coordinator generates the RSA key and self-signed certificate for the ABM server
-  (the setup page's *Download the public key* returns the certificate to add in ABM), decrypts the `.p7m` the operator uploads with `cms`
-  and `rsa`, and keeps the four parts encrypted in the store (4.9); `GET /account` proves them before the upload is accepted. The
-  carried-over token is the same upload (section 7): the operator downloads the token from ABM again, which needs no NanoDEP storage. Expiry
-  is read from the token and alerted at `abm_alert_days` (default 60). The live token expires 2027-10-31.
+- **Token and key.** ABM hands over a `.p7m` encrypted to the server entry's public key. **The coordinator takes over NanoDEP's existing key
+  pair and token** (section 7): the operator uploads the private key and certificate and the token, the coordinator decrypts the `.p7m`
+  with `cms` and `rsa`, and keeps the key and the four token parts encrypted in the store (4.9); `GET /account` proves them before the
+  upload is accepted. Because the token is encrypted to that key, ABM's entry (`js-mdm`) needs no change at all. Only as a fallback, when
+  the key pair cannot be read out of NanoDEP, the coordinator generates a new RSA key and self-signed certificate (the page's *Download the
+  public key* returns the certificate to add in ABM) and the operator uploads the token ABM then returns. Expiry is read from the token and
+  alerted at `abm_alert_days` (default 60). The live token expires 2027-10-31.
 - **Sync.** `POST /devices/sync` with the stored cursor, new serials upserted into `abm_devices`, devices that ABM reports as removed marked
   so, then the assignment call for every serial that has no profile assigned: `POST /profile/devices` as Apple's current text has it, falling
   back to `PUT` on a `4xx` (NanoDEP uses `PUT`, for the depsim simulator, and says so in its source). A first run, an invalid cursor or one older than seven
   days does a full fetch (`POST /server/devices`), which also returns Macs already assigned. NanoDEP's assigner is the pattern.
-- **The ADE profile's UUID** is the column `abm_state.profile_uuid`. A fresh token plus the owner's re-download means the old NanoDEP storage is not read, so the
-  coordinator defines its own profile and stores the new UUID, and the sync reassigns the devices (4.5 below); the devices already assigned to the old profile keep it, and it names the same `url`, so they still enroll.
+- **The ADE profile's UUID** is the column `abm_state.profile_uuid`. NanoDEP's stored profile is not read, so the coordinator defines
+  its own profile, stores the new UUID, and the sync reassigns the devices; the devices already assigned to the old profile keep it, and
+  it names the same `url`, so they still enroll.
 - **The ADE profile** is defined at start if its stored digest differs from the rendered one, from the existing `AdeProfile` renderer
   (**Built**, `crates/hostkeeper-mdm-core/src/profile.rs`, moved into the new crate), `url` being `https://<mdm name>/enroll`, the name set in step 3 of the setup (4.9).
 - **ABM's own default device assignment** (Mac devices of a purchase go to an MDM server without a click) is set on the org's tenant
-  (owner's answer: it points at `js-mdm`, the MDM server entry of the current stack). So a purchase reaches that server's device list
-  with no operator action, and the sync then assigns the ADE profile (lesson 1). Which ABM server entry the coordinator's token comes from
-  is Q7: if `js-mdm` is edited in ABM to hold the coordinator's public key, the default assignment needs no change.
+  (it points at `js-mdm`, the MDM server entry of the current stack). So a purchase reaches that server's device list with no operator
+  action, and the sync then assigns the ADE profile (lesson 1). The coordinator holds `js-mdm`'s own key pair and token, so ABM's default
+  assignment needs no change.
 
 **Cost.** One external request every five minutes when nothing changed, one more per page of changes, one per profile assignment batch.
 That is 288 requests a day idle. The interval is a tunable so the cost and the window below can be traded.
@@ -352,31 +368,29 @@ unlisted Mac, one click instead of a redeploy.
 `--mdm-pkg-dir` (a directory of files the host provides, so a flag), streamed with a `Content-Length` and the digest checked, never
 buffered whole (the pattern of `repository_serve.rs`). The manifest stays inline: the command schema offers `ManifestURL` too, but an
 inline manifest needs no second fetch and no second route. The pkg allowlist becomes the setting `installs`, a list of named installs
-(`name, bundle_id, sha256, version, path`), edited on the setup page and kept in the store; the old file is read once as the starting
+(`name, bundle_id, sha256, version, path`, and an optional `url` the package proxy pulls the file from), edited on the setup page and kept in the store; the old file is read once as the starting
 value, additively. `pkg.rs` hard-codes `dev.hostkeeper.hostkeeper`; CM8 makes it a list, so a second pkg needs no code. Additive: the old
 single-pkg file is read as one install named `hostkeeper`. The pkg files stay a directory because they are files the host provides,
 not configuration.
 
-**The Mac is on the lab LAN only** (owner answer, 2026-11-10: the coordinator is on the tailnet, the Macs will not be). There is no
-Tailscale install, no tagged key and no VPN or system-extension profile in this design; those were removed, and a Mac holds no secret
-beyond its own identity. Everything a Mac talks to is on the LAN: the MDM listener (enrollment, check-in, commands, the pkg), the LAN
-listener (the daemon's enrollment and heartbeats, **Built**), and, new, **the release channel**.
+**The Mac is on the lab LAN only** (the coordinator is on the tailnet, the Macs will not be). There is no Tailscale install, no tagged key
+and no VPN or system-extension profile in this design, and a Mac holds no secret beyond its own identity. Everything a Mac talks to is on
+the LAN: the MDM listener (enrollment, check-in, commands, the pkg, the package proxy) and the LAN listener (the daemon's enrollment and
+heartbeats, **Built**).
 
-**The release channel on the LAN.** Today the channel the daemon fetches from (`release_channel` of the daemon config) is reachable over
-the tailnet only, so a LAN-only Mac cannot update. Decision: the coordinator serves it on its LAN listener at `/releases/...`, read-only,
-as a **streaming caching proxy of the real channel**: a request for a path is answered from a cache directory when the file is there, and
-otherwise fetched from the upstream channel over the coordinator's own tailnet access, streamed to the Mac while it is written to the
-cache by temporary name and renamed (hash and store in one pass, no size cap and no whole-file buffering, B16's pattern, though this is
-not a tierstore data path). The proxy adds no trust: the daemon verifies the digest and the attestation of every package against its
-own trusted signers (hostkeeper-design.md, "A compromised release channel can only serve bytes"), so a poisoned cache is refused by the
-daemon. Only paths the daemon asks for are fetched (a fixed route shape, no open proxy), the upstream URL is setup data (4.9) and the cache directory a flag, `--release-cache-dir`, like `--mdm-pkg-dir`, and the daemon config's `release_channel` for a Mac names the coordinator's LAN address. What the daemon
-does with the channel's TLS names (public roots or the host CA) is not read yet (section 12, item 15). The alternative, publishing the
-channel on an address the LAN can reach, keeps the coordinator out of the data path but is another service and another certificate; it
-is Q8. Task CM24.
+**Packages on the LAN: the coordinator is a caching proxy, and the download server is gone.** The tailnet-only download server, which a
+sync job filled from each release, is retired (the repository side was deleted already; the farm side is in package-proxy.md section 6).
+Hosts and Macs pull packages from the public origins (apt from the public repository, the signed macOS pkg from its release host), and so
+that a Mac, a wiped host or a bulk update uses the lab network and not the site's uplink (5G against 25 to 100 Gbit inside), the coordinator
+answers those requests on the MDM listener from a cache directory and fetches from the origin once per file. It adds no trust: apt checks
+the signed `Release` file, the daemon checks every package's digest and attestation against its own trusted signers (hostkeeper-design.md,
+"A compromised release channel can only serve bytes", which holds for the proxy as it did for the channel), and the Mac checks the pkg's
+signature, so a poisoned cache is refused by the client. The pkg route of 4.1 is the first user: with an origin `url` on an `installs`
+entry it pulls the file through and commits it only if its SHA-256 equals the digest in the path. There is no object-store cache for now.
+The design, the routes, the cache rules and the tasks are in [package-proxy.md](package-proxy.md) (tasks PP1 to PP6).
 
 **The ordering that makes lesson 5 harmless.** The hostkeeper pkg carries the daemon binary (**Built**, `packaged.rs` seeds it), so the
-first daemon runs and enrolls over the LAN listener with no release channel at all; it fetches updates from the channel on the LAN
-afterwards.
+first daemon runs and enrolls over the LAN listener with no package source at all; it fetches updates through the package proxy afterwards.
 
 **Extra profiles** are baseline items (the baseline pull request's `Item::Profile`): a profile file per group, installed by
 `InstallProfile`, checked by `ProfileList`, re-sent on drift.
@@ -417,10 +431,11 @@ pages; `ui/calls.json` is generated from the API, **Built**).
 | 1a' | uploads the signed reply of mdmcert.download | decrypts it with the encryption key, offers the signed request to download for Apple's portal | the reply decrypts and holds a signed request for the pending CSR |
 | 1b | uploads the certificate Apple returned | stores it with the pending key | the certificate matches the pending key; not expired; its topic starts `com.apple.mgmt.External.`; on a renewal the topic equals the current one |
 | 1b' (migration) | uploads an existing certificate and key | stores both | the pair matches; the topic is the one in section 4.4; the key is never returned |
-| 2a | *Download the public key* | generates the ABM server key and a self-signed certificate once, returns the certificate to register in ABM | none |
-| 2b | uploads the `.p7m` ABM returned | decrypts it with the ABM key, stores the four parts, runs `GET /account` | the file decrypts; Apple accepts the session; expiry read |
+| 2a | uploads the existing ABM key pair (the migration, section 7) | stores the key and certificate sealed; the key is never returned | the key and certificate match |
+| 2a' (fallback) | *Download the public key* | generates the ABM server key and a self-signed certificate once, returns the certificate to register in ABM | none |
+| 2b | uploads the `.p7m` (the existing token, or the one ABM returned for a new key) | decrypts it with the ABM key, stores the four parts, runs `GET /account` | the file decrypts; Apple accepts the session; expiry read |
 | 3 | sets the MDM name | stores it, shows the enrollment URL `https://<name>/enroll` and the DNS record the name needs | a DNS-safe name; refused once any Mac has enrolled (the enrollment profile carries the name; a change is a re-enrollment of every Mac, so it is an explicit later task, not a field) |
-| 4 | uploads a DNS credential, or a certificate and key | 4.10 | the certificate chains to a public root, names the MDM name, matches the key, is not expired |
+| 4 | uploads the GoDaddy API key and secret, or a certificate and key | 4.10 | the certificate chains to a public root, names the MDM name, matches the key, is not expired |
 
 **Configured.** The coordinator computes one state from the records, and nothing else sets it: the push certificate is present and not
 expired; the ABM token is present, accepted by Apple, not expired, with a first sync done; the name is set; a TLS certificate for the name
@@ -437,7 +452,7 @@ and 14, `abm_alert_days` 60, `tls_renew_days` 30, `identity` as in 4.2); crossin
 colours the panel, so a renewal is a reminder in the UI and not a calendar entry. These are what the coordinator can know; it cannot know
 that Apple revoked a certificate until APNs answers `403` (4.3), and says so.
 
-**Storage of the secrets.** One new table, `mdm_secrets` (migration 0009, with its file-store family): one row per record kind (push key
+**Storage of the secrets.** One new table, `mdm_secrets` (its own migration, with its file-store family): one row per record kind (push key
 and certificate, mdmcert encryption key, ABM key and token, MDM CA key, ACME account key, DNS credential, TLS key), holding the ciphertext, the fingerprint, the
 expiry and a version. Each value is sealed with AES-256-GCM (`ring`, already in the workspace) under a master key read from one file named
 by `--mdm-secrets-key-file`; the associated data is the record kind and version, so a row cannot be replayed into another kind. The flag
@@ -454,17 +469,15 @@ names a file of secret material, an exception S2 allows, and it is the only secr
 - Replacing a record keeps the previous version sealed for one `tls_renew_days`-style grace (default 7 days) so a wrong upload is undone
   by the operator uploading again, not by a database restore; after that it is deleted.
 
-**Audit.** Every setup rpc, success or refusal, is one row in the audit log (**Built**, `Audit`) naming the operator token, the action
+**Audit.** Every setup rpc, success or refusal, is one row in the audit log (**Built**, `Audit`) naming the signed-in user (or the API token, for a read), the action
 (`mdm_push_csr`, `mdm_push_reply_put`, `mdm_push_cert_put`, `mdm_abm_cert_get`, `mdm_abm_token_put`, `mdm_name_set`, `mdm_tls_put`, `mdm_acme_credential_put`,
 `mdm_setting_set`), the record kind, the fingerprint and the expiry, and never the material. A refused upload (a mismatched key, an expired
 certificate) is audited with the reason.
 
-**Who may.** Today a token "either operates or does not; there are no per-token grants" (hostkeeper-design.md section 4.3). The setup
-handles the credentials with which the coordinator can erase every Mac, so it should not be every operator's. Proposal, additive (B8):
-an optional field of a token entry, `can = ["mdm_admin"]`, absent on every existing entry; the setup rpcs that write a secret or a name need
-it, and the reads (`Mdm.Status`, the Devices page) need only the operator token. A deployment that lists no token with the field cannot
-set MDM up, which the status says. The tokens file and its reload are **Built**; the field is a new optional key and a refusal path in
-the operator API's authorization (CM20). Q5 asks the owner to confirm this one exception to "no per-token grants".
+**Who may.** Any signed-in user (4.11). There are no per-user grants and no `mdm_admin` token key: the setup handles the credentials with
+which the coordinator can erase every Mac, and the answer to that is that users are named people, each action is audited under the user's
+name, and the first user is created by whoever can run the deploy as root. An API token (the automation credential) is refused for every
+setup write; it may read `Mdm.Status` and the devices list. Roles are future work (section 13).
 
 **How this fits hostkeeper's configuration rules.** S2 says configuration is passed as flags, not environment variables, with three
 exceptions of which secret material is one. It forbids the environment; it does not make the store forbidden, and the coordinator already
@@ -496,23 +509,124 @@ DNS-01 authorization, a CSR, finalize and download, one HTTPS exchange each.
 - **Why DNS-01.** HTTP-01 and TLS-ALPN-01 need the CA's validator to reach the name on port 80 or 443, and the name resolves to a **LAN
   address**, which the validator cannot reach. DNS-01 proves control by a TXT record `_acme-challenge.<name>`, so it works for a
   name that has no public address.
-- **What the operator provides in the UI (step 4).** The DNS provider of the zone and a credential that can edit TXT records in it (an API
-  token or an access key), the ACME directory (default Let's Encrypt production; staging is a choice for the first try, because the
-  production CA rate-limits failures), and a contact address. The credential is a sealed record (4.9), never returned. The coordinator
-  creates the TXT record, waits for the provider to report it published, answers the challenge, deletes the record, and finalizes.
+- **The DNS provider is GoDaddy.** The org's zone for the MDM name is hosted there, and the name's current certificate is already renewed
+  by `lego` with provider `godaddy` (set in the MDM host's `lego` configuration), using a GoDaddy API key and secret that sit in a root-only
+  environment file of that host. That credential is known to be able to edit the zone's TXT records, and it is the one the coordinator
+  uses: the operator uploads the key and secret in the UI, and the coordinator's ACME client calls the GoDaddy API (the record-replace
+  call for a TXT name; the exact request and the provider's minimum TTL are read from its documentation before CM17, section 12, item 14).
+  The coordinator never reads the host's file.
+- **What the operator provides in the UI (step 4).** The GoDaddy API key and secret (a sealed record, 4.9, never returned), the ACME
+  directory (default Let's Encrypt production; staging is a choice for the first try, because the production CA rate-limits failures), and a
+  contact address. The coordinator creates the TXT record, waits for the provider to report it published, answers the challenge, deletes
+  the record, and finalizes.
 - **Renewal** starts `tls_renew_days` (default 30) before expiry on the coordinator's own timer, single-flight under the store lease, with
   a backoff of `tls_retry_s` (default 3600) after a failure and an alert while the certificate is within the alert window. A new
   certificate is stored and the listener resolver serves it on the next handshake.
-- **What remains, plainly.** (1) A DNS provider with an API is required, and **the coordinator ships one provider implementation first**,
-  the owner's (Q6 asks which; each further provider is a small port with a fake). If the zone has none, the fallback is uploading a
-  certificate and key in the UI (4.9, step 4) and renewing by hand every cycle, which the status shows as a reminder; that is workable
-  and is not "no operator work", so it is a fallback and not the plan. (2) The coordinator needs outbound HTTPS to the ACME directory and
-  to the DNS provider's API from the MDM host. (3) A zone whose provider has no API could instead delegate `_acme-challenge.<name>` by CNAME
-  to a zone the coordinator answers itself; that makes the coordinator a DNS server, so it is not chosen. (4) It adds an ACME and a
-  DNS provider client to the coordinator, with fakes behind ports for tests (T12): no network is touched by a test.
+- **What remains, plainly.** (1) **The coordinator ships one DNS provider, GoDaddy**; another provider is a small port with a fake, added
+  when one is needed. Uploading a certificate and key in the UI (4.9, step 4) and renewing by hand stays as the fallback, which the status
+  shows as a reminder; it is workable and is not "no operator work", so it is a fallback and not the plan. (2) The coordinator needs
+  outbound HTTPS to the ACME directory and to the GoDaddy API from the MDM host. (3) A zone whose provider has no API could instead delegate
+  `_acme-challenge.<name>` by CNAME to a zone the coordinator answers itself; that makes the coordinator a DNS server, so it is not chosen.
+  (4) It adds an ACME and a GoDaddy client to the coordinator, with fakes behind ports for tests (T12): no network is touched by a test.
 
 With this, the `lego` unit is not in the plan: the table of 1.1 lists the coordinator alone. The task is CM17, now before the cutover
 (section 11).
+
+### 4.11 Operator login: user names, passwords, sessions, API tokens
+
+![First login of the admin user](diagrams/coordinator-mdm-first-login.svg)
+
+**Problem.** Today the one way into the UI is to paste an operator token from the tokens file (**Built**, `ui/app.js`, `ui/session.js`).
+MDM setup puts credentials in the coordinator that can erase every Mac, so the people who use it need names, a password they can change,
+and an audit row that says who. **Decision** (the owner's: "really simple login with username and password to get started; bells and
+whistles later"): a user name and a password, a browser session, and API tokens kept only for automation. No SSO, no passkeys and no roles
+now (section 13): every user is an administrator, and `admin` is a name and not a role.
+
+**The first user, GitLab style.** The deploy (`coordinator_docker.sh`, a held script of the komira repository, so the owner's under S3)
+creates the user `admin` with a random password:
+
+1. When the state volume holds neither an `initial-admin` file nor an `admin-initialised` marker, the script generates a random password,
+   **prints it once**, and writes the file `initial-admin` next to the coordinator state (the `files/` directory of the volume, mode 0400,
+   owned by the coordinator's user, the secret-file rule of `hostkeeper_wire::secret`): the password and the time it was issued. A
+   break-glass mode of the script (`--reset-admin`) does the same when the marker exists, for a lost password.
+2. The coordinator reads the file at start and on the existing `--tls-reload-secs` tick (the tokens file's reload path). It hashes the
+   password with Argon2id and stores it as the `admin` row with `must_change` set and `initial_expires_at` = issued time + `initial_password_s`
+   (default **3600**: **one hour**). It records the file's SHA-256 so a file already consumed is not read again, and a new file (a re-run
+   or break-glass) resets the row. An issue time in the future beyond a small skew is refused.
+3. **The initial password is valid for one hour only.** After `initial_expires_at` the coordinator refuses it, with the same answer as a
+   wrong password, and audits `login_failed` with reason `initial_expired`. The operator re-runs the script (or its break-glass mode) to mint
+   a new one. The clock is the coordinator's, injected in tests (T10).
+4. The first login with the initial password gives a session in which every rpc except `Session.ChangePassword`, `Session.Whoami` and
+   logout answers `FAILED_PRECONDITION` (`password_change_required`). The change takes the current password, checks the new one, revokes
+   every other session of the user, and gives a fresh session.
+5. Once the admin has set their own password the coordinator deletes `initial-admin` and writes `admin-initialised`. The file is also inert
+   by state, not only by deletion: a human-set row ignores a file it has already consumed. If the deletion fails the coordinator raises an
+   alert. The plaintext password therefore exists on disk for at most one hour of validity, and never in the store, a log line or an audit row.
+
+**Login, and what it checks.**
+
+- The routes are HTTP-level because a cookie is: `POST /v1/session` (log in) and `DELETE /v1/session` (log out), on the private
+  listener only (`C/http.rs`). Everything else the UI does is the existing operator API. User and token management are new rpcs
+  (`Session.ChangePassword`, `Session.Whoami`, `Users.Create`, `Users.List`, `Users.Disable`, `Users.ResetPassword`, `ApiTokens.Create`,
+  `ApiTokens.List`, `ApiTokens.Revoke`), additive (B8). User names use the token-name grammar (1 to 32 bytes of a-z, 0-9, `-`, the reserved
+  names refused, `admin` allowed), because the audit's `by` is a `TokenName`; a name may not collide with an API token's name, so one
+  audit name is one actor.
+- **Passwords.** Argon2id (a RustCrypto crate; its licence and `cargo deny` result are checked before LG1, section 12, item 18), the
+  parameters inside the stored PHC string so they can change later, minimum length `password_min_len` (default 12), maximum 256 bytes (so a
+  login cannot be made to hash an enormous body), no composition rules, not equal to the user name or the initial password. The tokens
+  file's plain SHA-256 stays as it is: it is right for a 256-bit random token and wrong for a password, which is why users have their own
+  table and not the tokens file.
+- **Sessions.** A random 256-bit id from `getrandom`, stored only as its SHA-256 with the user, the creation and last-seen times and a
+  per-session CSRF secret. The cookie is `__Host-hk_session` with `Secure`, `HttpOnly`, `SameSite=Strict`, `Path=/` and no `Domain`. A
+  session ends after `session_idle_s` (default 3600) without use or `session_max_s` (default 43200) in all, on logout, on a password
+  change, or when the user is disabled.
+- **CSRF.** Every state-changing call with a cookie must carry the `X-CSRF-Token` header equal to the session's secret (the login
+  answer and `Session.Whoami` return it; the UI keeps it in memory only), compared in constant time, and an `Origin` that equals the
+  listener's own origin; a mismatch is refused before any handler runs. Every operator call is a `POST`, so this covers all of them. A
+  request that carries an `Authorization: Bearer` header is authenticated by the token alone and the cookie is ignored, so an API client
+  needs no CSRF token and a browser's ambient cookie never rides on a token call. The CSP stays `default-src 'self'; frame-ancestors 'none'`.
+- **Brute force.** After `login_attempts` (default 5) failures for a user name within `login_window_s` (default 900) the user is locked for
+  `lockout_s` (default 900), counted in the store so a restart does not clear it. An unknown name runs the same hash, so timing does not
+  say whether a user exists, and at most `login_hashes` (default 4) hashes run at once, the next login getting `503`. A lock can be used to
+  keep an admin out for a quarter of an hour; the break-glass mode is the recovery that needs no login, and a per-address limit is future work
+  (the access path does not carry the peer address today).
+- **API tokens.** The two named tokens of today's `--tokens-file` (`ceo`, `engineering`) keep working unchanged and are listed in the UI as
+  read-only "from the tokens file". Tokens made in the UI are 256-bit random, shown **once**, stored as SHA-256 with their name, creator and
+  creation time, revocable, and they authenticate with `Authorization: Bearer` exactly as today; the identity in the audit is the token's
+  name. A token is refused for the setup writes (4.9) and for user management. The flag rule "exactly one of `--tokens-file` and
+  `--operator-token-file`" is relaxed additively: neither is needed when a user exists or `--initial-admin-file` is given.
+- **Audit.** New actions, each naming the user: `login`, `login_failed` (reason; the name only if it is a valid existing user, else the
+  actor `coordinator`), `logout`, `password_changed`, `user_created`, `user_disabled`, `user_password_reset`, `api_token_created`,
+  `api_token_revoked`, `initial_password_read`, `initial_password_expired`. `Audit.List`'s actor filter needs no change.
+
+**Storage.** Three tables (their own migration, ahead of the MDM one, with a file-store family each, both backends as for every record
+here, and `older-releases: may-run`): `users` (name, PHC hash, `must_change`, `initial_expires_at`, `initial_file_sha256`, disabled, failure
+count, window start, locked until, creator, creation time), `sessions` (id hash, user, CSRF secret, times) and `api_tokens` (name, SHA-256,
+creator, times, revoked). The `initial-admin` and `admin-initialised` files are the only new files, and `--initial-admin-file` the only
+new flag.
+
+**What the UI changes.** The sign-in page becomes a user name and password form and, when the answer says `must_change`, the change form;
+`ui/session.js` holds the CSRF secret in a module variable and a "signed in as" name and no token; `ui/api.js` sends the header instead of
+`Authorization`; Users and API tokens pages call the new rpcs. The static server `C/ui.rs` stays stateless (it parses no cookie); the
+session lives in the HTTP layer. A previous UI against the new coordinator still works with a pasted token, and the new UI against an old
+coordinator finds no login route and says the coordinator must be updated.
+
+**Edge cases.**
+
+| Case | Mechanism |
+|---|---|
+| The initial password is not used within the hour | refused as a wrong password (`initial_expired`); re-run the script or its break-glass mode, which writes a new file the coordinator picks up on its next tick |
+| The admin changed the password and the script is re-run | it sees the `admin-initialised` marker and mints nothing; only `--reset-admin` does, and that is a root action on the host |
+| Someone reads the file after the change | it is deleted; if not, it is a consumed file and inert (its SHA-256 is recorded) |
+| A stolen cookie | `HttpOnly` and `Secure` keep it from scripts and plain HTTP; `SameSite=Strict` and the CSRF header keep another site from using it; idle and absolute limits and a password change end it |
+| A user is disabled or reset | every session of the user is deleted in the same transaction |
+| Two coordinators, one store | sessions and counters are in the store, so a login on one is valid on the other |
+| The store is unreachable | login fails closed with `503`; the token path of a file-listed token is unaffected |
+| A password or token appears in a message | a test asserts by exact equality that neither the password, its hash, a session id nor a token appears in any log line, error, audit row or rpc answer (T13) |
+
+Task order is in section 11 (LG1 to LG5). The tests that encode "no cookie, no session" today
+(`C/http_tests/ui.rs`, `tests/ui_default.rs`, the `hostkeeper-ui-tests` crate) are rewritten in LG2 and LG3 to pin exactly the two session
+routes and that every other path is still refused.
 
 ## 5. How each operation works
 
@@ -593,8 +707,9 @@ operator action are involved.
    unverified, and if it does not, only re-enrollment recovers the Mac, which is why section 7 wipes and enrolls the one Mac.
 4. **The coordinator listened only on the tailnet, so a wiped Mac needed a new LAN listener.** Mechanism: `--mdm-listen` on the LAN
    address (4.1), a start-time error if it is a wildcard or not an interface's address.
-5. **The release channel is tailnet-only, and the Macs are not on the tailnet.** Mechanism: the first daemon needs no channel (the pkg
-   carries it), the pkg is served by the MDM listener, and the channel is served on the LAN listener (4.7, CM24); nothing installs a VPN.
+5. **The download server was tailnet-only, and the Macs are not on the tailnet.** Mechanism: the first daemon needs no package source
+   (the pkg carries it), the pkg is served by the MDM listener, later packages come through the coordinator's package proxy on the same
+   listener (4.7, package-proxy.md), and nothing installs a VPN.
 6. **Supervised enrollment, `DeviceInformation`, `EnableRemoteDesktop` and `Settings` proven by hand.** Mechanism: each becomes a typed
    command the gate can enqueue and the fake MDM in the tests can answer; the pinned list of command types is the audit of what the
    gate may send.
@@ -617,7 +732,7 @@ operator action are involved.
 | The ABM cursor is invalid or older than seven days | a full fetch |
 | The coordinator is down while a Mac is at Setup Assistant | the Mac retries; no state is lost; nothing is queued |
 | Time on the Mac is wrong at first boot | the certificate checks use the Mac's clock; Setup Assistant sets it from the network first |
-| An older coordinator release reads the new tables | migration 0009 declares `older-releases: may-run` (new tables only, no column of an old table changes) |
+| An older coordinator release reads the new tables | the new migrations declare `older-releases: may-run` (new tables only, no column of an old table changes) |
 
 ## 7. Migrating from the running stack
 
@@ -634,22 +749,22 @@ topic, and everything else is a fresh upload on the setup page (4.9):
 | Item | Where it is today | How |
 |---|---|---|
 | Push certificate and key | NanoHUB's storage (the audit: "inside NanoHUB storage") | the operator takes the PEM pair from there once and uploads it in step 1b'; the page checks the pair matches and that the topic is the one the Mac was enrolled under, and the key is never shown again |
-| ABM server token | NanoDEP's storage | not copied. The operator downloads the coordinator's public key (step 2a) and registers it in ABM, preferably by editing the existing `js-mdm` server entry (which the default device assignment already names, section 4.5) so no device moves, then downloads the new token and uploads it (step 2b). Whether ABM allows replacing a server entry's key, and whether the old stack's token still works afterwards (the rollback of step 5 below), are not read (section 12, item 16; Q7) |
+| ABM key pair and server token | NanoDEP's storage | **taken over.** The operator reads NanoDEP's key pair and the token (encrypted to that key) out of its storage once and uploads both (steps 2a and 2b); `js-mdm` in ABM needs no change, so no device moves and the default assignment stays. A new key (step 2a', and the token ABM returns for it) is the fallback if the pair cannot be read out; whether ABM then accepts a replaced key for the entry is not read (section 12, item 16). The old stack keeps working with the same token until it is stopped, which is what the rollback of step 5 below relies on |
 | ADE profile | NanoDEP's storage under the DEP name | not copied: the coordinator defines its own (4.5) and assigns it to the devices it lists |
 
-The one thing outside the UI is that the operator reads the push pair out of NanoHUB's storage, once, on the host; no script is part of
-any task here, and the coordinator never reads the old stack's storage. If ABM will not replace the key of `js-mdm`, the coordinator gets a new server entry and the owner moves the default assignment and the devices to it in ABM, which
-is an ABM action and is not done in this design; Q7 asks which the owner prefers.
+The one thing outside the UI is that the operator reads the push pair out of NanoHUB's storage and the key pair and token out of NanoDEP's,
+once each, on the host; no script is part of any task here, and the coordinator never reads the old stack's storage itself. If the ABM key
+pair cannot be read out, the fallback is a new key on the existing `js-mdm` entry if ABM allows replacing it, and otherwise a new server
+entry, to which the default assignment and the devices would then move in ABM, which is an ABM action and is not done in this design.
 
 **Order.**
 
 1. Ship the coordinator with the MDM listener off (no `--mdm-listen`). Nothing changes; the setup page already works and says *not configured*.
-2. In the UI: upload the push pair, the ABM token and the DNS credential (or a certificate), and set the name, with the coordinator started
+2. In the UI, signed in as `admin` (4.11): upload the push pair, the ABM key pair and token and the GoDaddy credential (or a certificate), and set the name, with the coordinator started
    with `--mdm-listen` on a spare port; the status reaches *configured*, and `mdm verify` (CM11b) proves the push certificate by a push to
    the farm Mac, which still talks to the old stack.
-3. Cut over: stop Caddy and NanoHUB (leave their units installed), start `--mdm-listen` on the name's address and port 443. How a process
-   gets port 443 on the LAN address inside the coordinator's container (the held script grants `CAP_NET_BIND_SERVICE`, runs host
-   networking, or the listener moves to a high port with a Caddy-free redirect) is Q4.
+3. Cut over: stop Caddy and NanoHUB (leave their units installed), start `--mdm-listen` on the name's address and port 443, which Caddy
+   held before (4.1 says how the container gets the port).
 4. Erase `m3ultra-1` in ABM-assigned state; it enrolls through 5.1. Confirm `Mdm.ListDevices` shows it and a `DeviceInformation` round
    trip returns through APNs.
 5. **Rollback holds only until the Mac's first `TokenUpdate` reaches the coordinator.** Before it, stop `--mdm-listen` and start Caddy
@@ -673,6 +788,8 @@ gains the key-file mount and the two flags of 4.9; it is a held script by rule S
 | `--mac-serial-allowlist` | a release after CM9, with a deprecation note in the release text; B8 forbids removing it in one step |
 | `--mdm-pkg-allowlist` | after CM8, replaced by the setup's `installs` setting (4.7), which reads the old file once |
 | The `/pkg` route in Caddy, the Caddy and `lego` units | not in this repository; they are the host's, removed by the owner's script after step 6 of section 7. Nothing in the coordinator depends on `lego` (4.10) |
+| The tailnet download server (its container, the sync timer and the tree) | not in this repository (the repository side was deleted by #262 and #267); removed on the farm by the owner's script, task PP6 (package-proxy.md section 6) |
+| The pasted-token sign-in page of the UI (`ui/app.js` `signInView`, `ui/session.js`) | LG3: replaced by the user name and password form; the token path of the API is unchanged |
 
 **Supersession check (B22).** What each deleted piece did and where the duty goes.
 
@@ -689,13 +806,14 @@ gains the key-file mount and the two flags of 4.9; it is a held script by rule S
 
 ### 9.1 Compatibility (B8) and formats
 
-- Migration 0009 adds tables only: `mdm_enrollments`, `mdm_commands`, `mdm_identities`, `abm_devices`, `abm_state`, `mdm_secrets`, `mdm_settings`, each with a file-store
-  family, because both backends exist today. Its header is `older-releases: may-run`. The device record of the gate, `mdm_devices`,
+- Two migrations add tables only. The login one (4.11): `users`, `sessions`, `api_tokens`. The MDM one, after it: `mdm_enrollments`, `mdm_commands`,
+  `mdm_identities`, `abm_devices`, `abm_state`, `mdm_secrets`, `mdm_settings`. Each table has a file-store family, because both backends exist
+  today, and each header is `older-releases: may-run`. The device record of the gate, `mdm_devices`,
   gains no required field.
-- Two new flags (`--mdm-listen`, `--mdm-secrets-key-file`) plus `--mdm-pkg-dir`; the rest of MDM is setup data (4.9). Every existing flag keeps its meaning until the one that is retired, and that retirement is a release later.
+- New flags: `--mdm-listen`, `--mdm-secrets-key-file`, `--mdm-pkg-dir`, `--proxy-cache-dir` and `--initial-admin-file`; the rest of MDM and of the
+  proxy is setup data (4.9). Every existing flag keeps its meaning until the one that is retired, and that retirement is a release later.
 - New proto messages and rpcs on `Mdm` (push CSR and certificate, ABM certificate and token, name and settings, TLS certificate and DNS
-  credential, status, ABM device list, queued-command list); `ListDevices` gains optional fields and is otherwise unchanged. The tokens file gains one optional key, `can` (4.9); an old coordinator ignores it
-  only if it ignores unknown keys, which is checked in CM20 before the field is documented. The previous release's `hkctl` and UI run against a new coordinator, and a new `hkctl` or UI against an old
+  credential, status, ABM device list, queued-command list); `ListDevices` gains optional fields and is otherwise unchanged. The tokens file and its format are unchanged (4.11 reads it as before). The previous release's `hkctl` and UI run against a new coordinator, and a new `hkctl` or UI against an old
   coordinator gets `UNIMPLEMENTED` for the new verbs (the UI shows the page as unavailable). Each task names the test that runs the previous release on new data and the
   reverse (to build, in each PR).
 - The host CA, `ca_sha256` and every daemon config are untouched.
@@ -705,9 +823,9 @@ gains the key-file mount and the two flags of 4.9; it is a held script by rule S
 hostkeeper-mdm.md already says whoever holds the NanoHUB key holds root on the Macs. Built in, the coordinator's own process holds that
 capability: it can install any pkg a Mac accepts and erase a Mac. It now also holds secrets: the APNs push key, the ABM token and key,
 the MDM CA key, the ACME account key and the DNS credential. All are sealed rows in the store under one master key file (4.9; S1, S2: no
-environment variable reads configuration), reachable only through the setup rpcs of a token with `mdm_admin`, and the gate's pinned list of command types is the bound on what the code can
-send. A stolen operator token with `mdm_admin` can replace the push certificate, the ABM token or the name, so the audit rows and the status panel are
-where it shows; it cannot read a secret back. A copy of the database without the key file holds only ciphertext, and with both it holds every
+environment variable reads configuration), reachable only through the setup rpcs of a signed-in user (an API token is refused for them), and the gate's pinned list of command types is the bound on what the code can
+send. A stolen session or a guessed password can replace the push certificate, the ABM token or the name, so the audit rows (under the user's name) and the status panel are
+where it shows; it cannot read a secret back. Passwords are Argon2id hashes in the store, sessions are stored as hashes, and the one plaintext password, the initial one, is on disk for one hour at most (4.11). A copy of the database without the key file holds only ciphertext, and with both it holds every
 secret, so the two are backed up in different places (4.9). A stolen MDM CA key lets its holder sign identities the coordinator would accept, so `/enroll` (the Apple-signed blob and the ABM
 table) and the nonce are the gates that do not depend on that key. If the blob cannot be verified (4.2), `/enroll` issues nothing
 without an operator, so the weak case is closed by an operator click and not by the ABM table alone. Even with the blob verified it carries
@@ -737,8 +855,8 @@ does not block a PR under R6; this note is the reason to keep CM12c's limits.
   enrollment keeps the fake Mac's state. **Push tests**: a command after an answered push is pushed at once; `apns-priority` and
   `apns-expiration` are set.
 - **Setup tests** (CM20 to CM22): a secret uploaded is not in any rpc answer, log line, error or audit row (exact equality on the full
-  message, T13); a row sealed for one kind does not open as another; a missing key file with sealed rows refuses to start; a token without
-  `mdm_admin` is refused for every setup write and allowed every read; the *configured* state follows from the records (each missing
+  message, T13); a row sealed for one kind does not open as another; a missing key file with sealed rows refuses to start; an API token
+  is refused for every setup write and allowed every read; the *configured* state follows from the records (each missing
   condition, one case each); a mismatched push key, an expired certificate, a wrong topic on renewal and an undecryptable `.p7m` are refused
   at entry and audited; the name cannot change once a Mac has enrolled; the Devices page rpc answers *not configured* before. ACME
   (CM17): a fake CA and a fake DNS provider run the order, the TXT record is deleted after success and after failure, a failure backs off
@@ -756,16 +874,21 @@ prerequisites are done. Each task updates the docs its change makes stale. Statu
 | # | Task | After | Size |
 |---|---|---|---|
 | CM1 | This design, linked from hostkeeper-mdm.md and the design index | none | S |
+| LG1 | **Users and the first admin.** The login tables (4.11) for both stores, Argon2id hashing with the settings and their defaults, reading `--initial-admin-file` (start and reload tick), the one-hour expiry on an injected clock, the `admin-initialised` marker, the alert if the file cannot be deleted. Tests: an initial password logs in before its expiry and not after, a re-run file resets the row, a consumed file is inert, no plaintext in any output | none | M |
+| LG2 | **Sessions and the API.** `POST` and `DELETE /v1/session`, the cookie, the CSRF header and `Origin` check, the session variant of `Caller`, the forced password change, lockout and the hash cap, the `Session`, `Users` and `ApiTokens` rpcs, the audit actions; the tests that say "no cookie, no session" are rewritten to pin exactly the two routes | LG1 | L |
+| LG3 | **UI sign-in.** The user name and password form and the change form, the CSRF header in `ui/api.js`, `ui/session.js` without a token; the `hostkeeper-ui-tests` crate and `ui_default.rs` follow | LG2 | M |
+| LG4 | **UI Users and API tokens pages**, with the tokens-file tokens listed read-only | LG3 | M |
+| LG5 | **The held script** (komira repository, `tools/held/hostkeeper/coordinator_docker.sh`, the owner's): create `admin` with a random password printed once and the `initial-admin` file, the marker check, the `--reset-admin` break-glass mode, the port 443 sysctl of 4.1, the new flags; dry-run default, `bash -n` clean | LG1 | S |
 | CM2 | Seam: `Gate::handle(Event)`; the webhook becomes a thin adapter over it (a refactor only, P7) | none | S |
 | CM3 | `DeviceStatus` carries `enrolled_via_dep`; decline token `device_not_via_dep`; docs | none | S |
 | CM4 | Model checks of the command queue and of enrollment (section 10), with the invariants as the tests' names | CM1 | S |
 | CM12a | Spike on the farm Mac: capture the `/enroll` POST and prove the Apple chain verifies; read whether the `/enroll` response must be signed; run a SCEP exchange against a library fixture; read which client-auth mode the live profile uses. Output: a note and fixtures, decides 4.2 | CM1 | S |
 | CM5 | `hostkeeper-mdm-server`: plist wire types for check-in and results, with Apple-schema fixtures and negative cases | CM1 | M |
-| CM6 | Migration 0009, the file-store families, conformance tests for both stores, `abm_devices` (with `abm_state.profile_uuid`) and `mdm_enrollments` first | CM4 | M |
-| CM20 | **Secrets and settings, no UI yet.** Tables `mdm_secrets` and `mdm_settings`, the AES-256-GCM seal under `--mdm-secrets-key-file` with its start rules, redacting types, the optional token key `can = ["mdm_admin"]` and its refusal path, the audit actions of 4.9. Tests: nothing returned after upload, a row does not open as another kind, a missing key refuses to start | CM6 | M |
+| CM6 | The MDM migration (after the login one), the file-store families, conformance tests for both stores, `abm_devices` (with `abm_state.profile_uuid`) and `mdm_enrollments` first | CM4 | M |
+| CM20 | **Secrets and settings, no UI yet.** Tables `mdm_secrets` and `mdm_settings`, the AES-256-GCM seal under `--mdm-secrets-key-file` with its start rules, redacting types, the audit actions of 4.9. Setup writes need a signed-in user, and an API token is refused. Tests: nothing returned after upload, a row does not open as another kind, a missing key refuses to start, a token is refused | CM6, LG2 | M |
 | CM7 | APNs sender (priority, expiry, event-based outstanding) and the push certificate lifecycle as `Mdm` rpcs: create the request (key, CSR, encryption key), the mdmcert.download reply decrypt, certificate and key upload (the migration), expiry alerts. Begins by reading mdmcert.download's formats. No `hkctl`-only verbs: the generated CLI gets the rpcs for free | CM5, CM20 | M |
 | CM21 | `Mdm.Status`, the name and settings rpcs, the *configured* computation, the extended `ListDevices` (enrollment state, host id, group, baseline status) | CM20 | S |
-| CM22a | **UI MDM setup page, first slice** (smallest usable): the status panel with expiry reminders, and the push step (create, mdmcert reply, certificate upload, migration upload). With CM2, CM5 and CM11a this is enough for the interim milestone below | CM7, CM21 | M |
+| CM22a | **UI MDM setup page, first slice** (smallest usable): the status panel with expiry reminders, and the push step (create, mdmcert reply, certificate upload, migration upload). With CM2, CM5 and CM11a this is enough for the interim milestone below | CM7, CM21, LG3 | M |
 | CM8 | Named installs (the `installs` setting, with the old file read once), `Settings` and the device name in the baseline, the pinned command list of eight | CM2, CM20 | M |
 | CM11a | MDM listener: `/checkin`, `/mdm`, the optional-client-certificate verifier with per-route checks and the hint list, TLS from the store with a resolver that serves a renewal at once, the in-process queue replacing `NanoHub`, signature or certificate checks, the unknown-enrollment answer | CM2, CM5, CM6, CM7, CM20 | L |
 | CM11b | `mdm verify` (reads back the state, sends a push), as a button on the setup page | CM11a, CM22a | S |
@@ -778,8 +901,8 @@ prerequisites are done. Each task updates the docs its change makes stale. Statu
 | CM22c | UI: the TLS step, first upload of a certificate and key, then the DNS credential, ACME directory and renewal status | CM11a, CM21, CM22a (CM17 for the second half) | S |
 | CM9 | Approval from the ABM table, inventory name and group, the `default_group` setting, the three new tokens (family pinned), the allowlist as override | CM3, CM6, CM13 | M |
 | CM23 | **UI Devices page, shown only when the setup says *configured***: ABM-synced Macs with enrollment state, host id, group and baseline status; before that, the page names what is missing | CM21, CM9 | M |
-| CM24 | **Release channel on the LAN**: the coordinator's LAN listener serves `/releases/...` as a streaming caching proxy of the upstream channel (4.7); daemon config for Macs names it; tests with a fake upstream (a poisoned cache is refused by the daemon's digest check) | CM1 | M |
-| CM10 | The cutover runbook: the UI steps of section 7, the 443 question, the wipe, the rollback limit; the held script is the owner's | CM7, CM11a, CM12c, CM13, CM17, CM22c, CM24 | S |
+| PP1 to PP6 | **Package proxy on the LAN and the end of the download server**: the cache, the apt and pkg routes on the MDM listener, the docs, the loader, the farm step. Tasks, sizes and order are in [package-proxy.md](package-proxy.md) section 9 | CM20 and CM11a, then each as listed there | S to M |
+| CM10 | The cutover runbook: the UI steps of section 7, the port 443 change of the held script, the wipe, the rollback limit; the held script is the owner's | CM7, CM11a, CM12c, CM13, CM17, CM22c, PP3 | S |
 | CM14a | Accept and ignore the NanoHUB client flags with a deprecation; delete the NanoHUB client and webhook | CM11a and a week of green on the farm | S |
 | CM14b | Delete the kit crates, the pins, the `mdm` deb and kit tarball and their workflow lines, with the supersession table of section 8 | CM14a, CM17 | M |
 | CM14c | Remove the three NanoHUB flags and the allowlist flag | one release after CM14a and CM9 | S |
@@ -787,36 +910,22 @@ prerequisites are done. Each task updates the docs its change makes stale. Statu
 | CM16 | ACME identity with attestation, behind the identity port, after a farm-Mac test of `IdentityCertificateUUID` | CM12c | M |
 | CM19 | Second node for MDM: lift the single-node refusal (the secrets are already in the store under the shared key file, 4.9) and run the push sender and sync under the lease | CM12c, CM20 | S |
 
-Removed with this revision: **CM18** (the Tailscale join), because the Macs are not on the tailnet.
-
-**Smallest usable slice.** CM20, CM7, CM21, CM22a: an operator sets the push certificate up in the UI and sees its status, which is all
+**Smallest usable slice.** LG1 to LG3 and LG5 (an operator signs in as `admin`), then CM20, CM7, CM21, CM22a: an operator sets the push certificate up in the UI and sees its status, which is all
 the interim milestone needs. Then CM13 and CM22b (ABM and the name), CM11a and CM22c's upload (TLS), after which the status reads
-*configured* and CM23 shows the devices. CM17 and CM24 follow before the cutover; CM17 is large but it is the only thing between
+*configured* and CM23 shows the devices. CM17 and the package proxy (PP1 to PP3) follow before the cutover; CM17 is large but it is the only thing between
 "upload a certificate by hand every cycle" and "no other software".
 
-CM2, CM3, CM4, CM12a and CM24 can start at once. **Interim milestone**: CM2, CM5, CM6, CM7 and CM11a move only the commands path, with Caddy
+CM2, CM3, CM4, CM12a, LG1 and PP4 can start at once. **Interim milestone**: CM2, CM5, CM6, CM7 and CM11a move only the commands path, with Caddy
 still routing `/enroll` and `/scep` to the old stack: the gate then runs on the in-process queue and the webhook is not needed, long before
-the identity work lands. The critical path is CM4, CM6, CM20, CM11a, CM12b, CM12c, CM13, CM9, CM17, CM10, CM14a, CM14b. CM13 can run beside CM11a
+the identity work lands. The critical path is LG1, LG2, CM4, CM6, CM20, CM11a, CM12b, CM12c, CM13, CM9, CM17, CM10, CM14a, CM14b. CM13 can run beside CM11a
 and CM12b. Build while measuring: the farm-Mac checks in section 12 run alongside CM5 to CM7, not before them.
 
 ## 12. Open questions and what is not verified
 
-Questions for the owner.
+Questions for the owner. One is open, and it belongs to the package proxy:
 
-Answered by the owner on 2026-11-10 and folded in: **Q1** the current push certificate came from mdmcert.download, so renewal follows that
-route (4.4); **Q2** ABM's default device assignment for Macs points at `js-mdm` (4.5); **Q3** Macs will not be on the tailnet, so the
-Tailscale design and CM18 are gone (4.7).
-
-- **Q4** How does the coordinator's process get port 443 on the LAN address inside its container (a capability, host networking, or a
-  higher port) (7)?
-- **Q5** Do you accept the one exception to "no per-token grants": an optional `can = ["mdm_admin"]` key on operator tokens, required for the
-  MDM setup writes, so not every operator can replace the push certificate or the ABM token (4.9)?
-- **Q6** Which DNS provider hosts the zone of the MDM name, and may the coordinator hold a credential that can edit TXT records in it
-  (4.10)? The first provider implemented is that one. If the zone has no API, is renewing an uploaded certificate by hand acceptable?
-- **Q7** In ABM, may the existing `js-mdm` server entry be edited to hold the coordinator's public key (so the default assignment and the
-  devices stay), or should the coordinator get a new server entry (7)?
-- **Q8** For the release channel on the LAN (4.7): is the coordinator proxying and caching it on its LAN listener acceptable (recommended: no
-  second service), or should the channel be published on a LAN-reachable address instead?
+- **Q9** Which origin holds the signed macOS pkg: GitHub releases or the public package host? The proxy takes either (an `installs`
+  entry's `url`); the answer decides which one the release workflow must publish the pkg to ([package-proxy.md](package-proxy.md) section 10).
 
 Not verified. A claim in this document that depends on one of these is marked, and none is stated as fact elsewhere.
 
@@ -836,15 +945,21 @@ Not verified. A claim in this document that depends on one of these is marked, a
 11. Whether the ADE `/enroll` response must be CMS-signed (4.1; CM12a).
 12. What the MDM client does on `401`, `403` and `410` from `/mdm` (4.1; before CM11a).
 13. Whether a Mac polls on any schedule of its own (4.3); the design does not depend on it.
-14. `instant-acme`'s TLS backend and licence under the workspace's `ring` provider, and the DNS provider's API for TXT records (4.10).
-15. What TLS names the daemon accepts for `release_channel` (public roots or the host CA), which decides the certificate the LAN proxy
-    serves (4.7).
-16. Whether ABM lets an MDM server entry's public key be replaced, and whether the old stack's token still works afterwards (7).
+14. `instant-acme`'s TLS backend and licence under the workspace's `ring` provider, and GoDaddy's API for TXT records (the call, its minimum
+    TTL and how long a record takes to be visible), which `lego` already uses with the org's credential (4.10).
+15. That NanoDEP's key pair and token can be read out of its storage and uploaded as they are, so that `js-mdm` needs no change in ABM (7).
+16. If they cannot: whether ABM lets a server entry's public key be replaced, and whether the old stack's token still works afterwards (7).
+17. Which of the per-container sysctl, the host sysctl or a capability gives the coordinator port 443 on the farm's networking (4.1).
+18. The licence and `cargo deny` result of the Argon2 and password-hash crates (R6), and that the `__Host-` cookie prefix is accepted by the
+    farm's browsers on the private listener's name (4.11).
 
 ## 13. Future work
 
 - DDM as the baseline's status channel (CM15), then retire the `ProfileList` poll.
 - ACME with hardware attestation as the identity (CM16): a certificate bound to a real Apple-silicon Mac and its serial.
+- Login beyond the simple one: single sign-on, passkeys, roles (a user who may read and not set up), a per-address attempt limit once the
+  access path carries the peer address, and a second factor.
+- An object-store cache behind the package proxy, if the coordinator's disk stops being enough.
 
 - Account-driven enrollment for non-ADE Macs, once there is a Mac that is not in ABM (the old route B2 of the go-live).
 - `EraseDevice` and `DeviceLock` as audited operator verbs behind a confirmation the console design defines; not built here because

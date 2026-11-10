@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 798" width="1200" height="798" role="img" aria-label="First-time MDM setup: the operator creates the push request, uploads Apple's certificate, registers the ABM key and uploads the token, sets the name, supplies the DNS credential; the coordinator obtains the TLS certificate and reports configured.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 798" width="1200" height="798" role="img" aria-label="First-time MDM setup: the operator creates the push request, uploads Apple's certificate, uploads the ABM key pair and token, sets the name, supplies the DNS credential; the coordinator obtains the TLS certificate and reports configured.">
 <title>First-time MDM setup, in the web UI</title>
 <desc>The operator works in the coordinator web UI. Each secret is uploaded once, sealed in the store and never returned. Apple, the signing service and the ACME CA are outside. When every record is present and valid the status becomes configured and the Devices page shows.</desc>
 <defs><marker id="coordinator-mdm-first-setup-ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0B0B0A"/></marker></defs>
@@ -29,10 +29,10 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <path d="M745,92 L745,778" class="life"/>
 <rect x="900" y="44" width="270" height="46" rx="5" class="box-b"/>
 <text x="1035" y="64" class="b" text-anchor="middle">ACME CA + DNS</text>
-<text x="1035" y="80" class="t-m" text-anchor="middle">provider API</text>
+<text x="1035" y="80" class="t-m" text-anchor="middle">GoDaddy DNS API</text>
 <path d="M1035,92 L1035,778" class="life"/>
 <path d="M165,136 L455,136" class="ln" marker-end="url(#coordinator-mdm-first-setup-ak)"/>
-<text x="310" y="130" class="t-m lbl" text-anchor="middle">1. open MDM setup: Mdm.Status (everything unset)</text>
+<text x="310" y="130" class="t-m lbl" text-anchor="middle">1. signed in; open MDM setup: Mdm.Status</text>
 <path d="M165,178 L455,178" class="ln" marker-end="url(#coordinator-mdm-first-setup-ak)"/>
 <text x="310" y="172" class="t-m lbl" text-anchor="middle">2. create push request (key + encryption key sealed)</text>
 <path d="M455,220 L165,220" class="ln-d" marker-end="url(#coordinator-mdm-first-setup-ak)"/>
@@ -42,19 +42,19 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <path d="M165,304 L455,304" class="ln" marker-end="url(#coordinator-mdm-first-setup-ak)"/>
 <text x="310" y="298" class="t-m lbl" text-anchor="middle">5. upload push certificate (checks: key, topic, expiry)</text>
 <path d="M165,346 L455,346" class="ln" marker-end="url(#coordinator-mdm-first-setup-ak)"/>
-<text x="310" y="340" class="t-m lbl" text-anchor="middle">6. download the ABM public key</text>
+<text x="310" y="340" class="t-m lbl" text-anchor="middle">6. upload NanoDEP key pair (fallback: new public key)</text>
 <path d="M165,388 L745,388" class="ln" marker-end="url(#coordinator-mdm-first-setup-ak)"/>
-<text x="455" y="382" class="t-m lbl" text-anchor="middle">7. ABM: register the key, download the token (.p7m)</text>
+<text x="455" y="382" class="t-m lbl" text-anchor="middle">7. ABM: no change for js-mdm (new key only as fallback)</text>
 <path d="M165,430 L455,430" class="ln" marker-end="url(#coordinator-mdm-first-setup-ak)"/>
-<text x="310" y="424" class="t-m lbl" text-anchor="middle">8. upload token; GET /account proves it</text>
+<text x="310" y="424" class="t-m lbl" text-anchor="middle">8. upload the ABM token (.p7m); GET /account proves it</text>
 <path d="M455,472 L745,472" class="ln" marker-end="url(#coordinator-mdm-first-setup-ak)"/>
 <text x="600" y="466" class="t-m lbl" text-anchor="middle">9. GET /account (session)</text>
 <path d="M165,514 L455,514" class="ln" marker-end="url(#coordinator-mdm-first-setup-ak)"/>
 <text x="310" y="508" class="t-m lbl" text-anchor="middle">10. set the MDM name: enrollment URL shown</text>
 <path d="M165,556 L455,556" class="ln" marker-end="url(#coordinator-mdm-first-setup-ak)"/>
-<text x="310" y="550" class="t-m lbl" text-anchor="middle">11. TLS: upload DNS credential (or certificate + key)</text>
+<text x="310" y="550" class="t-m lbl" text-anchor="middle">11. TLS: upload GoDaddy key + secret (or cert + key)</text>
 <path d="M455,598 L1035,598" class="ln" marker-end="url(#coordinator-mdm-first-setup-ak)"/>
-<text x="745" y="592" class="t-m lbl" text-anchor="middle">12. ACME order, DNS-01 TXT record, finalize</text>
+<text x="745" y="592" class="t-m lbl" text-anchor="middle">12. ACME order, DNS-01 TXT record (GoDaddy API), finalize</text>
 <path d="M1035,640 L455,640" class="ln-d" marker-end="url(#coordinator-mdm-first-setup-ak)"/>
 <text x="745" y="634" class="t-m lbl" text-anchor="middle">13. certificate for the name</text>
 <path d="M455,682 L165,682" class="ln-d" marker-end="url(#coordinator-mdm-first-setup-ak)"/>
@@ -62,5 +62,5 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <rect x="190" y="724" width="530" height="25" rx="4" class="box-o"/>
 <text x="455" y="740" class="t-m" text-anchor="middle">every upload: validated, sealed (AES-256-GCM), one audit row, never returned</text>
 <rect x="190" y="760" width="530" height="25" rx="4" class="box-o"/>
-<text x="455" y="776" class="t-m" text-anchor="middle">needs a token with mdm_admin; reads need only the operator token</text>
+<text x="455" y="776" class="t-m" text-anchor="middle">needs a signed-in user (4.11); the audit row names that user</text>
 </svg>

@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 650" width="1200" height="650" role="img" aria-label="First login: the deploy script writes a one-hour initial password for the user admin to a root-only file; the coordinator reads it and stores a hash; the admin logs in, must change the password, and the file is retired.">
+<title>First login of the admin user</title>
+<desc>The deploy script mints a random initial password for admin and writes it to a root-only file next to the coordinator state. The coordinator reads the file, stores an Argon2id hash with an expiry of one hour after issue, and accepts a login only before that. The first login must change the password; the file is then deleted and a marker records that the admin is set.</desc>
+<defs><marker id="coordinator-mdm-first-login-ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0B0B0A"/></marker></defs>
+<style>
+.box-b{fill:#E8EEF4;stroke:#0B0B0A;stroke-width:1.4}
+.box-o{fill:#FFFAF5;stroke:#FD4F1D;stroke-width:1.4}
+.ln{stroke:#0B0B0A;fill:none;stroke-width:1.4}
+.ln-d{stroke:#0B0B0A;fill:none;stroke-width:1.4;stroke-dasharray:6 4}
+.life{stroke:#5A5A57;stroke-width:1;stroke-dasharray:2 4}
+text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font-size:13px}
+.b{font-weight:600}
+.t-m{fill:#5A5A57;font-size:12px}
+.lbl{paint-order:stroke;stroke:#FFFFFF;stroke-width:4px;stroke-linejoin:round}
+</style>
+<rect x="0" y="0" width="1200" height="650" fill="#FFFFFF"/>
+<text x="20" y="28" class="b" font-size="16" text-anchor="start">First login of the admin user</text>
+<rect x="30" y="44" width="270" height="46" rx="5" class="box-b"/>
+<text x="165" y="64" class="b" text-anchor="middle">Deploy script (held, root)</text>
+<text x="165" y="80" class="t-m" text-anchor="middle">coordinator_docker.sh</text>
+<path d="M165,92 L165,630" class="life"/>
+<rect x="320" y="44" width="270" height="46" rx="5" class="box-b"/>
+<text x="455" y="64" class="b" text-anchor="middle">Coordinator</text>
+<text x="455" y="80" class="t-m" text-anchor="middle">login, sessions, audit</text>
+<path d="M455,92 L455,630" class="life"/>
+<rect x="610" y="44" width="270" height="46" rx="5" class="box-b"/>
+<text x="745" y="64" class="b" text-anchor="middle">Admin's browser</text>
+<text x="745" y="80" class="t-m" text-anchor="middle">the UI sign-in page</text>
+<path d="M745,92 L745,630" class="life"/>
+<rect x="900" y="44" width="270" height="46" rx="5" class="box-b"/>
+<text x="1035" y="64" class="b" text-anchor="middle">Store</text>
+<text x="1035" y="80" class="t-m" text-anchor="middle">users, sessions, api_tokens</text>
+<path d="M1035,92 L1035,630" class="life"/>
+<path d="M165,136 L455,136" class="ln" marker-end="url(#coordinator-mdm-first-login-ak)"/>
+<text x="310" y="130" class="t-m lbl" text-anchor="middle">1. write initial-admin (0400); print once</text>
+<path d="M455,178 L1035,178" class="ln" marker-end="url(#coordinator-mdm-first-login-ak)"/>
+<text x="745" y="172" class="t-m lbl" text-anchor="middle">2. read file at start or reload; hash; admin row, expires = issued + 1 h</text>
+<path d="M745,220 L455,220" class="ln" marker-end="url(#coordinator-mdm-first-login-ak)"/>
+<text x="600" y="214" class="t-m lbl" text-anchor="middle">3. POST /v1/session: admin + password</text>
+<path d="M455,262 L1035,262" class="ln" marker-end="url(#coordinator-mdm-first-login-ak)"/>
+<text x="745" y="256" class="t-m lbl" text-anchor="middle">4. row, expiry against the clock, attempt count; verify</text>
+<path d="M455,304 L745,304" class="ln-d" marker-end="url(#coordinator-mdm-first-login-ak)"/>
+<text x="600" y="298" class="t-m lbl" text-anchor="middle">5. Set-Cookie + CSRF token; must_change</text>
+<path d="M745,346 L455,346" class="ln" marker-end="url(#coordinator-mdm-first-login-ak)"/>
+<text x="600" y="340" class="t-m lbl" text-anchor="middle">6. ChangePassword (cookie + CSRF header)</text>
+<path d="M455,388 L1035,388" class="ln" marker-end="url(#coordinator-mdm-first-login-ak)"/>
+<text x="745" y="382" class="t-m lbl" text-anchor="middle">7. new hash, must_change off, other sessions revoked</text>
+<path d="M455,430 L165,430" class="ln-d" marker-end="url(#coordinator-mdm-first-login-ak)"/>
+<text x="310" y="424" class="t-m lbl" text-anchor="middle">8. delete file; write admin-initialised</text>
+<path d="M455,472 L745,472" class="ln-d" marker-end="url(#coordinator-mdm-first-login-ak)"/>
+<text x="600" y="466" class="t-m lbl" text-anchor="middle">9. fresh session; every call allowed</text>
+<rect x="190" y="516" width="720" height="25" rx="4" class="box-o"/>
+<text x="550" y="532" class="t-m" text-anchor="middle">after one hour with no change, step 3 is refused; re-run the script (or break-glass): new file, step 2 again</text>
+<rect x="190" y="552" width="720" height="25" rx="4" class="box-o"/>
+<text x="550" y="568" class="t-m" text-anchor="middle">a wrong password, a lockout, a change and a reset are each one audit row under the user name</text>
+<rect x="190" y="588" width="720" height="25" rx="4" class="box-o"/>
+<text x="550" y="604" class="t-m" text-anchor="middle">the password is never in the store, a log line or an audit row; the file is the only plaintext, for at most one hour</text>
+</svg>
