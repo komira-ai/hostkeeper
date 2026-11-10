@@ -62,8 +62,11 @@
 // Host groups: every enrolled host is in one host group, which lists the packages it runs and
 // holds the rollout policy and the desired versions of its packages (`HostGroups`, in
 // hostgroups.proto, in this package). A field named `host_group` names one by its name, which is
-// a role name. A coordinator that does not hold host groups answers each such field empty, reads
-// each such field of a request as absent, and never gives a refusal that names a host group.
+// a role name. The field docs say what a coordinator that holds host groups does with each. A
+// coordinator that does not hold them answers each such field empty; refuses a request that names
+// a group, since no group has the name (`not_in_host_group` of `Releases` and `Rollouts`,
+// `unknown_host_group` of `Enrollment`), rather than read it as naming none; lists no audit entry
+// for a `host_group` filter; and gives no other refusal that names a host group.
 //
 // Extending: add fields, messages, enum values, RPCs and services; never renumber, rename,
 // retype or remove one, and never reuse a number (the compatibility test in this crate refuses
@@ -406,7 +409,7 @@ message Host {
   // From the host's certificate.
   string node_id = 1;
   // From the host's certificate; from a coordinator that holds host groups, the name of the
-  // host's group, as `host_group`, for readers that predate it.
+  // host's group (the same name as `host_group`), for readers that predate it.
   string role = 2;
   // It heartbeated within the last 45 seconds; false for a host not heard since the coordinator
   // started.
@@ -481,7 +484,8 @@ message Host {
   // a host not heard since the coordinator started, the time of the heartbeat that last changed
   // what its enrollment kept (a heartbeat that says the same writes nothing).
   optional uint64 running_unix = 23;
-  // The host group the host is in, kept with its enrollment.
+  // The host group the host is in, kept with its enrollment; empty from a coordinator that does
+  // not hold host groups.
   string host_group = 24;
 }
 
@@ -767,8 +771,8 @@ message SetDesiredRequest {
   // targets and index (`release_exists`); the desired state is stored with neither a package
   // digest nor an index digest. Every set with targets is audited, CI's as `ci`.
   map<string, hostkeeper.release.v1.TargetList> targets = 8;
-  // The host group to set the version in; the group must list the service
-  // (`not_in_host_group`). Empty: in each group that lists the service (each group a token
+  // The host group to set the version in. From a coordinator that holds host groups: the group
+  // must list the service (`not_in_host_group`); empty: in each group that lists the service (each group a token
   // limited to groups may deploy to), one deployment and one audit entry per group, in one
   // change; `if_generation` is then taken only when one group lists it (`ambiguous_host_group`).
   string host_group = 9;
@@ -802,8 +806,8 @@ message Replaced {
 
 message ConvergeRequest {
   string service = 1;
-  // The host group; empty for every group that lists the service and has a desired version of
-  // it, converged when all are.
+  // The host group. From a coordinator that holds host groups: empty for every group that lists
+  // the service and has a desired version of it, converged when all are.
   string host_group = 2;
 }
 
@@ -812,8 +816,8 @@ message GetReleaseRequest {
   string service = 1;
   // The version, as it was set.
   string version = 2;
-  // The host group, which must list the service (`not_in_host_group`); empty for none. A release
-  // is the same in every group.
+  // The host group. From a coordinator that holds host groups: a named group must list the
+  // service (`not_in_host_group`); empty for none.
   string host_group = 3;
 }
 
@@ -835,8 +839,9 @@ message WaitConvergedRequest {
   string version = 2;
   // How long to hold the call, 1 to 1800 seconds.
   uint32 wait_secs = 3;
-  // The host group; empty for every group that lists the service and has a desired version of
-  // it, converged when all are (a group with no hosts is converged).
+  // The host group. From a coordinator that holds host groups: empty for every group that lists
+  // the service and has a desired version of it, converged when all are (a group with no hosts
+  // is converged).
   string host_group = 4;
 }
 
@@ -857,7 +862,8 @@ enum WaitOutcome {
   WAIT_OUTCOME_SUPERSEDED = 3;
   // `wait_secs` passed first.
   WAIT_OUTCOME_DEADLINE = 4;
-  // No host group the call reaches has a desired version of the service: answered at once.
+  // From a coordinator that holds host groups: no group the call reaches has a desired version
+  // of the service, answered at once.
   WAIT_OUTCOME_NO_DESIRED = 5;
 }
 
@@ -972,9 +978,10 @@ message ForceRequest {
   }
   // Order the held pairs among the targets too, for this call only.
   bool include_held = 7;
-  // The host group whose desired version the force sets: `hosts` must be in it (`unknown_target`),
-  // `fleet` is the whole group, and a `role` must name it. Empty: one force per group, in one
-  // change (the groups of the `hosts`, or each group that lists the service, or the `role`'s).
+  // The host group whose desired version the force sets. From a coordinator that holds host
+  // groups: `hosts` must be in it (`unknown_target`), `fleet` is the whole group, and a `role`
+  // must name it; empty: one force per group, in one change (the groups of the `hosts`, or each
+  // group that lists the service, or the `role`'s).
   string host_group = 8;
 }
 
@@ -1078,7 +1085,8 @@ message ServiceStatus {
   ServiceMarks marks = 7;
   // The update plan for the desired version; absent when none was ever set.
   RolloutPlan plan = 8;
-  // The host group: one entry per (group, service) from a coordinator that holds host groups.
+  // The host group: one entry per (group, service) from a coordinator that holds host groups;
+  // empty from one that does not.
   string host_group = 9;
 }
 
@@ -1199,7 +1207,7 @@ message ServiceEntry {
   // The desired version; absent when CI has set none.
   optional string desired_version = 5;
   // The roles it is assigned to: the rollout file's, with the operator's role assignments on top.
-  // Deprecated: empty from a coordinator that holds host groups (`host_groups`).
+  // Deprecated: empty from a coordinator that holds host groups (see `host_groups`).
   repeated string roles = 6;
   // The operator's assignments of the service, by role and by host. Deprecated: empty from a
   // coordinator that holds host groups.
@@ -1209,7 +1217,8 @@ message ServiceEntry {
   repeated AssignedHost assigned = 8;
   // The hosts ordered to uninstall the service, until each reports it gone.
   repeated string uninstalling = 9;
-  // The host groups that list the service, by name.
+  // The host groups that list the service, by name; empty from a coordinator that does not hold
+  // host groups.
   repeated string host_groups = 10;
 }
 
@@ -1323,7 +1332,8 @@ message ListAuditRequest {
   // The newest `limit` matching entries after `since_seq`, oldest first, in place of the
   // oldest; `next_seq` goes on from the newest of them.
   bool newest = 8;
-  // Only entries about this host group (`AuditEntry.host_group`).
+  // Only entries about this host group (`AuditEntry.host_group`); a coordinator that does not
+  // hold host groups lists none.
   optional string host_group = 9;
 }
 

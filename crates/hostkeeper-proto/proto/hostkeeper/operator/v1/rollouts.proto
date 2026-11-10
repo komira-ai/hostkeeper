@@ -79,8 +79,8 @@ message AdvanceRequest {
   string service = 1;
   // Why; 1 to 256 bytes.
   string reason = 2;
-  // The host group of the plan; empty for the one group that lists the service
-  // (`ambiguous_host_group` when more do).
+  // The host group of the plan. From a coordinator that holds host groups: empty for the one
+  // group that lists the service (`ambiguous_host_group` when more do).
   string host_group = 3;
 }
 
@@ -95,8 +95,8 @@ message PauseRequest {
   string service = 1;
   // Why; 1 to 256 bytes.
   string reason = 2;
-  // The host group of the plan; empty for the plan of every group that lists the service, in one
-  // change.
+  // The host group of the plan. From a coordinator that holds host groups: empty for the plan of
+  // every group that lists the service, in one change.
   string host_group = 3;
 }
 
@@ -111,8 +111,8 @@ message ResumeRequest {
   string service = 1;
   // Why; 1 to 256 bytes.
   string reason = 2;
-  // The host group of the plan; empty for the one group that lists the service
-  // (`ambiguous_host_group` when more do).
+  // The host group of the plan. From a coordinator that holds host groups: empty for the one
+  // group that lists the service (`ambiguous_host_group` when more do).
   string host_group = 3;
 }
 
@@ -149,7 +149,7 @@ message RolloutPlan {
   // otherwise. A failed host or a halt never makes a service's rollout live.
   repeated string waiting_on = 10;
   // The host group whose plan this is: a plan is per (group, service) from a coordinator that
-  // holds host groups.
+  // holds host groups; empty from one that does not.
   string host_group = 11;
 }
 

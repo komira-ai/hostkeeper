@@ -110,7 +110,7 @@ fn host_groups_is_a_service_the_release_before_does_not_have() {
             "{name}"
         );
     }
-    for name in ["HostGroupsRefusal", "Rollback"] {
+    for name in ["HostGroupsRefusal", "RollbackMode"] {
         let name = format!("hostkeeper.operator.v1.{name}");
         assert!(older.get_enum_by_name(&name).is_none(), "{name} is new");
     }
@@ -718,7 +718,7 @@ fn put_body() -> serde_json::Value {
                 ],
                 "canary": { "count": 2 },
                 "bakeBeats": 3,
-                "rollback": "ROLLBACK_AUTOMATIC",
+                "rollback": "ROLLBACK_MODE_AUTOMATIC",
                 "maxUpdating": 0,
             },
         },
@@ -763,7 +763,7 @@ fn the_json_of_a_put_reads_into_the_request_and_an_unknown_key_is_refused() {
                 ],
                 canary: Some(op::Canary { count: 2 }),
                 bake_beats: 3,
-                rollback: op::Rollback::Automatic.into(),
+                rollback: op::RollbackMode::Automatic.into(),
                 rollback_after_failed: None,
                 defer_backoff: None,
                 max_updating: Some(0),

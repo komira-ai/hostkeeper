@@ -132,7 +132,8 @@ enum EnrollmentRefusal {
   // FAILED_PRECONDITION: `Approve` with `replace` that names another host group than the one the
   // replaced host is in; `HostGroups.Move` moves a host.
   ENROLLMENT_REFUSAL_HOST_GROUP_DIFFERS = 25;
-  // NOT_FOUND: `Approve` or `AddRecord` that names a host group the coordinator does not hold.
+  // NOT_FOUND: `Approve` or `AddRecord` that names a host group the coordinator does not hold
+  // (any, for a coordinator that holds none).
   ENROLLMENT_REFUSAL_UNKNOWN_HOST_GROUP = 26;
 }
 
@@ -180,7 +181,8 @@ message PendingEnrollment {
   // The host id of the one matching record (MATCHED only).
   string record_host_id = 10;
   // The role of the one matching record; empty when it names none (MATCHED only). From a
-  // coordinator that holds host groups, the record's group, as `record_host_group`.
+  // coordinator that holds host groups, the record's group (the same name as
+  // `record_host_group`).
   string record_role = 11;
   // The host ids of every matching record, sorted (AMBIGUOUS only); none is chosen.
   repeated string candidate_host_ids = 12;
@@ -211,7 +213,8 @@ message PendingEnrollment {
   // The end of the one matching record's window, unix seconds; 0 when it has none (MATCHED
   // only).
   uint64 record_approve_until_unix = 21;
-  // The host group of the one matching record; empty when it names none (MATCHED only).
+  // The host group of the one matching record; empty when it names none (MATCHED only), and from
+  // a coordinator that does not hold host groups.
   string record_host_group = 22;
 }
 
@@ -243,7 +246,8 @@ enum InventoryMatch {
 message InventoryRecord {
   string host_id = 1;
   // The role the host is meant for; empty when the record names none. From a coordinator that
-  // holds host groups, the record's group, as `host_group`, for readers that predate it.
+  // holds host groups, the record's group (the same name as `host_group`), for readers that
+  // predate it.
   string role = 2;
   // The MACs of the host's data interfaces, lower-case, colon-separated, sorted; one to 16, or
   // none for a record that holds a serial.
@@ -281,7 +285,8 @@ message InventoryRecord {
   // `PLATFORM_LINUX_ARM64`, or `PLATFORM_UNSPECIFIED` when the record states none (a Mac's
   // record, a record added without one, or a coordinator of a release before this field).
   hostkeeper.agent.v1.Platform platform = 15;
-  // The host group the host is to be in; empty when the record names none.
+  // The host group the host is to be in; empty when the record names none, and from a coordinator
+  // that does not hold host groups.
   string host_group = 16;
 }
 
@@ -326,7 +331,8 @@ message ApproveRequest {
   // inventory record, empty means that record's host id, and another host id needs `replace`;
   // otherwise it is required.
   string host_id = 3;
-  // The host's role; read as the group's name when `host_group` is empty.
+  // The host's role; from a coordinator that holds host groups, read as the group's name when
+  // `host_group` is empty.
   string role = 4;
   // Services to assign to the host; may be empty. Deprecated: a coordinator that holds host
   // groups refuses any (`services_retired`).
@@ -336,8 +342,9 @@ message ApproveRequest {
   // request (`record_contested`).
   bool replace = 6;
   string reason = 7;
-  // The host group the host is in, which must exist (`unknown_host_group`). With `replace`, the
-  // group of the replaced host (`host_group_differs`).
+  // The host group the host is in, which must exist (`unknown_host_group`; a coordinator that
+  // does not hold host groups refuses any). With `replace`, the group of the replaced host
+  // (`host_group_differs`).
   string host_group = 8;
 }
 
@@ -364,7 +371,8 @@ message RejectResponse {
 
 message AddRecordRequest {
   string host_id = 1;
-  // Empty for none; read as the group's name when `host_group` is empty.
+  // Empty for none; from a coordinator that holds host groups, read as the group's name when
+  // `host_group` is empty.
   string role = 2;
   // At least one, or a `serial`.
   repeated string data_macs = 3;
@@ -387,8 +395,9 @@ message AddRecordRequest {
   // `PLATFORM_UNSPECIFIED` (the flag left out) for none. Any other value is refused
   // `invalid_request`.
   hostkeeper.agent.v1.Platform platform = 9;
-  // The host group the host is to be in, which must exist (`unknown_host_group`); empty for
-  // none. A record that names a group has a window as one that names a role does.
+  // The host group the host is to be in, which must exist (`unknown_host_group`; a coordinator
+  // that does not hold host groups refuses any); empty for none. A record that names a group has
+  // a window as one that names a role does.
   string host_group = 10;
 }
 

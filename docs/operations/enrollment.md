@@ -663,7 +663,7 @@ FAILED_PRECONDITION, 3 on UNAUTHENTICATED and PERMISSION_DENIED, and 1 on the ot
 | `record_contested` | FAILED_PRECONDITION | `approve` of a request that another pending request contests: they match one record (`contested_by` names the others) | compare each `key_sha256` with the machine's console, and `reject` all but the one that is it; `--replace true` does not set it aside |
 | `services_retired` | INVALID_ARGUMENT | only a coordinator that holds host groups gives it; this release's coordinator does not hold host groups and never gives it | none in this release |
 | `host_group_differs` | FAILED_PRECONDITION | only a coordinator that holds host groups gives it; this release's coordinator does not hold host groups and never gives it | none in this release |
-| `unknown_host_group` | NOT_FOUND | only a coordinator that holds host groups gives it; this release's coordinator does not hold host groups and never gives it | none in this release |
+| `unknown_host_group` | NOT_FOUND | `approve` or `add-record` with `--host-group` naming a group the coordinator does not hold; this release's coordinator holds no host group, so it refuses every `--host-group` | leave out `--host-group`; name the role with `--role` |
 
 ## Refusals of the host's calls
 

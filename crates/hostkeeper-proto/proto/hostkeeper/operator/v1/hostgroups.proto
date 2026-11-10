@@ -1,10 +1,10 @@
 // hostkeeper.operator.v1: the `HostGroups` service of the operator API, its refusals
 // (`HostGroupsRefusal`) and its messages: the host groups the coordinator holds, each a name, the
 // ordered list of the packages its hosts run and one rollout policy, and the move of a host from
-// one group to another (docs/design/hostgroups.md). The rest of the package, `Enrollment` and
-// `EnrollmentRefusal` (enrollment.proto) and `Audit` and `AuditRefusal` among it, is
-// operator.proto; this file is the same package and API, kept apart so that each file stays
-// short.
+// one group to another (docs/design/hostgroups.md). The rest of the package is in other files:
+// `Enrollment` and `EnrollmentRefusal` in enrollment.proto, and `Audit`, `AuditRefusal` and the
+// other services in operator.proto. This file is the same package and API, kept apart so that
+// each file stays short.
 //
 // Served by: the coordinator, on its control listener, as operator.proto says, once it holds
 // host groups. A coordinator that does not answers every call of `HostGroups` `UNIMPLEMENTED`
@@ -20,7 +20,7 @@
 //
 // Units: as operator.proto says. A host group's name is a role name: 1 to 32 bytes of
 // `[a-z0-9-]`, a letter first, no `--`, not ending in `-`. A package is a service name. A request
-// is at most 4 KiB, but `Put`'s at most 64 KiB. A percent is 1 to 100.
+// is at most 4 KiB, but `Put`'s is at most 64 KiB. A percent is 1 to 100.
 //
 // Extending: as operator.proto says: add fields, messages, enum values and RPCs; never renumber,
 // rename, retype or remove one, and never reuse a number.
@@ -81,9 +81,10 @@ enum HostGroupsRefusal {
   // INVALID_ARGUMENT: `Put` of a policy with a key out of its range; the audit and the log name
   // the key.
   HOST_GROUPS_REFUSAL_INVALID_POLICY = 9;
-  // FAILED_PRECONDITION: `Put` of a group whose list does not include `hostkeeper`.
+  // FAILED_PRECONDITION: `Put` of a group whose list does not include `hostkeeper` (an empty list
+  // included).
   HOST_GROUPS_REFUSAL_HOSTKEEPER_NOT_LISTED = 10;
-  // INVALID_ARGUMENT: `Put` of a group that lists no package, or more than 64.
+  // INVALID_ARGUMENT: `Put` of a group that lists more than 64 packages.
   HOST_GROUPS_REFUSAL_TOO_MANY_PACKAGES = 11;
   // FAILED_PRECONDITION: `Put` that replaces a group and names no `if_generation`, or one that is
   // not the group's generation now; or `Put` that names an `if_generation` for a group that does
@@ -122,7 +123,7 @@ message RolloutPolicy {
   // default) to 100.
   uint32 bake_beats = 3;
   // Whether the coordinator rolls a package back by itself when a release fails on enough hosts.
-  Rollback rollback = 4;
+  RollbackMode rollback = 4;
   // How many hosts must fail before it does; absent: 25 percent and 2 hosts.
   FailThreshold rollback_after_failed = 5;
   // How long a host that deferred an update is left alone; absent: 300, 2 and 3600.
@@ -153,13 +154,13 @@ message Canary {
 }
 
 // Whether a group's packages roll back by themselves.
-enum Rollback {
+enum RollbackMode {
   // MANUAL, the default.
-  ROLLBACK_UNSPECIFIED = 0;
+  ROLLBACK_MODE_UNSPECIFIED = 0;
   // An operator sets the version back.
-  ROLLBACK_MANUAL = 1;
+  ROLLBACK_MODE_MANUAL = 1;
   // The coordinator sets the group's last good version when a release fails on enough hosts.
-  ROLLBACK_AUTOMATIC = 2;
+  ROLLBACK_MODE_AUTOMATIC = 2;
 }
 
 // How many hosts must fail a release before an automatic rollback: the larger of `min_hosts` and

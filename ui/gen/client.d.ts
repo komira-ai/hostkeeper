@@ -699,7 +699,10 @@ export namespace hostkeeper_operator_v1 {
     down?: number;
     pinned?: number;
   }
-  export type Rollback = "ROLLBACK_UNSPECIFIED" | "ROLLBACK_MANUAL" | "ROLLBACK_AUTOMATIC";
+  export type RollbackMode =
+    | "ROLLBACK_MODE_UNSPECIFIED"
+    | "ROLLBACK_MODE_MANUAL"
+    | "ROLLBACK_MODE_AUTOMATIC";
   export interface RolloutPlan {
     version?: string;
     stages?: hostkeeper_operator_v1.PlanStage[];
@@ -717,7 +720,7 @@ export namespace hostkeeper_operator_v1 {
     stages?: hostkeeper_operator_v1.PolicyStage[];
     canary?: hostkeeper_operator_v1.Canary;
     bakeBeats?: number;
-    rollback?: hostkeeper_operator_v1.Rollback;
+    rollback?: hostkeeper_operator_v1.RollbackMode;
     rollbackAfterFailed?: hostkeeper_operator_v1.FailThreshold;
     deferBackoff?: hostkeeper_operator_v1.DeferBackoff;
     maxUpdating?: number;

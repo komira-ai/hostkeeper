@@ -72,7 +72,7 @@ The entries after `since_seq` that match every filter set, newest last. Changes 
 | `--node-id` | STRING |  |
 | `--by-name` | STRING | Only entries made under this name (`AuditEntry.by_name`), as a token is named: 1 to 32 bytes of `[a-z0-9-]`. A name no entry has lists none. |
 | `--newest` | true\|false | The newest `limit` matching entries after `since_seq`, oldest first, in place of the oldest; `next_seq` goes on from the newest of them. |
-| `--host-group` | STRING | Only entries about this host group (`AuditEntry.host_group`). |
+| `--host-group` | STRING | Only entries about this host group (`AuditEntry.host_group`); a coordinator that does not hold host groups lists none. |
 
 ### `enrollment`
 
@@ -103,11 +103,11 @@ id, role and services the approval names.
 | `--request-id` | STRING |  |
 | `--key-sha256` | STRING | The SHA-256 of the pending request's key, as `PendingEnrollment.key_sha256` lists it. |
 | `--host-id` | STRING | The host id the certificate names. For a request (not a renewal) that matches exactly one inventory record, empty means that record's host id, and another host id needs `replace`; otherwise it is required. |
-| `--role` | STRING | The host's role; read as the group's name when `host_group` is empty. |
+| `--role` | STRING | The host's role; from a coordinator that holds host groups, read as the group's name when `host_group` is empty. |
 | `--services` | STRING | Services to assign to the host; may be empty. Deprecated: a coordinator that holds host groups refuses any (`services_retired`). Repeat the flag for more. |
 | `--replace` | true\|false | Take the host id from the host that holds it, revoking that host's certificate; also needed to approve a `duplicate_claim` request or a denied host id. It never approves a contested request (`record_contested`). |
 | `--reason` | STRING |  |
-| `--host-group` | STRING | The host group the host is in, which must exist (`unknown_host_group`). With `replace`, the group of the replaced host (`host_group_differs`). |
+| `--host-group` | STRING | The host group the host is in, which must exist (`unknown_host_group`; a coordinator that does not hold host groups refuses any). With `replace`, the group of the replaced host (`host_group_differs`). |
 
 #### `hkctl enrollment reject`
 
@@ -145,7 +145,7 @@ other request waits for `Approve` as before. A record with no role has no window
 | flag | value | meaning |
 |---|---|---|
 | `--host-id` | STRING |  |
-| `--role` | STRING | Empty for none; read as the group's name when `host_group` is empty. |
+| `--role` | STRING | Empty for none; from a coordinator that holds host groups, read as the group's name when `host_group` is empty. |
 | `--data-macs` | STRING | At least one, or a `serial`. Repeat the flag for more. |
 | `--bmc-mac` | STRING | Empty for none. |
 | `--serial` | STRING | Empty for none. |
@@ -153,7 +153,7 @@ other request waits for `Approve` as before. A record with no role has no window
 | `--approve-until-unix` | UINT64 | The end of the record's window, unix seconds: after now, and within the coordinator's `--record-approve-max` of it. 0 for none given. |
 | `--approve-for-secs` | UINT64 | The length of the record's window from now, in seconds: at most the coordinator's `--record-approve-max`. 0 for none given. With neither, the window is the coordinator's `--record-approve-for`; with both, the call is refused `invalid_window`. A record that names no role takes neither, and has no window. |
 | `--platform` | VALUE | The platform to install the server as by network boot: `PLATFORM_LINUX_X86_64` or `PLATFORM_LINUX_ARM64` (`linux_x86_64` or `linux_arm64` as a command-line flag); `PLATFORM_UNSPECIFIED` (the flag left out) for none. Any other value is refused `invalid_request`. One of: linux_x86_64, linux_arm64, darwin_arm64. |
-| `--host-group` | STRING | The host group the host is to be in, which must exist (`unknown_host_group`); empty for none. A record that names a group has a window as one that names a role does. |
+| `--host-group` | STRING | The host group the host is to be in, which must exist (`unknown_host_group`; a coordinator that does not hold host groups refuses any); empty for none. A record that names a group has a window as one that names a role does. |
 
 #### `hkctl enrollment list-records`
 
@@ -415,7 +415,7 @@ the coordinator manages, audited as `set_desired` under the token's name; a set 
 | `--package-digest` | STRING | The digest of the package CI registers for `desired.version` (64 lower-case hex characters), the one package every host is ordered whatever its platform: for a fleet of one platform. Refused with `release_index` or with `targets` (`index_invalid`). |
 | `--release-index` | STRING | The release index of `desired.version` (`index.json`, design section 5.5), byte for byte: per platform, the package file, its size and its SHA-256. The coordinator checks that its SHA-256 is `release_index_digest` (else `index_digest_mismatch`) and that it is the index of `service` at `desired.version` (else `index_invalid`), keeps the digest of each platform's package, and orders each host the package of its own platform. Comes with `release_index_digest`. |
 | `--release-index-digest` | STRING | The SHA-256 of `release_index` (64 lower-case hex characters), as CI's release job wrote it down when it published the index: the release this desired state names. |
-| `--host-group` | STRING | The host group to set the version in; the group must list the service (`not_in_host_group`). Empty: in each group that lists the service (each group a token limited to groups may deploy to), one deployment and one audit entry per group, in one change; `if_generation` is then taken only when one group lists it (`ambiguous_host_group`). |
+| `--host-group` | STRING | The host group to set the version in. From a coordinator that holds host groups: the group must list the service (`not_in_host_group`); empty: in each group that lists the service (each group a token limited to groups may deploy to), one deployment and one audit entry per group, in one change; `if_generation` is then taken only when one group lists it (`ambiguous_host_group`). |
 
 Through `--request` only: `desired` (hostkeeper.operator.v1.DesiredState), `targets` (map).
 
@@ -429,7 +429,7 @@ token or the operator token.
 | flag | value | meaning |
 |---|---|---|
 | `--service` | STRING |  |
-| `--host-group` | STRING | The host group; empty for every group that lists the service and has a desired version of it, converged when all are. |
+| `--host-group` | STRING | The host group. From a coordinator that holds host groups: empty for every group that lists the service and has a desired version of it, converged when all are. |
 
 #### `hkctl releases force`
 
@@ -444,7 +444,7 @@ Switch a service to a version on the targeted hosts at once, with no hook (see
 | `--version` | STRING |  |
 | `--reason` | STRING |  |
 | `--include-held` | true\|false | Order the held pairs among the targets too, for this call only. |
-| `--host-group` | STRING | The host group whose desired version the force sets: `hosts` must be in it (`unknown_target`), `fleet` is the whole group, and a `role` must name it. Empty: one force per group, in one change (the groups of the `hosts`, or each group that lists the service, or the `role`'s). |
+| `--host-group` | STRING | The host group whose desired version the force sets. From a coordinator that holds host groups: `hosts` must be in it (`unknown_target`), `fleet` is the whole group, and a `role` must name it; empty: one force per group, in one change (the groups of the `hosts`, or each group that lists the service, or the `role`'s). |
 
 Through `--request` only: `fleet` (hostkeeper.operator.v1.FleetTarget, in a oneof), `role` (string, in a oneof), `hosts` (hostkeeper.operator.v1.HostList, in a oneof).
 
@@ -520,7 +520,7 @@ CI's OIDC token or the operator token, checked once, when the call is admitted.
 | `--service` | STRING | The service; empty names the legacy service, as for `Converge`. |
 | `--version` | STRING | The version the caller set; any other desired version ends the wait as SUPERSEDED. |
 | `--wait-secs` | UINT32 | How long to hold the call, 1 to 1800 seconds. |
-| `--host-group` | STRING | The host group; empty for every group that lists the service and has a desired version of it, converged when all are (a group with no hosts is converged). |
+| `--host-group` | STRING | The host group. From a coordinator that holds host groups: empty for every group that lists the service and has a desired version of it, converged when all are (a group with no hosts is converged). |
 
 #### `hkctl releases get-release`
 
@@ -534,7 +534,7 @@ token, and answers either for any service.
 |---|---|---|
 | `--service` | STRING | The service; empty names the legacy service, as for `Converge`. |
 | `--version` | STRING | The version, as it was set. |
-| `--host-group` | STRING | The host group, which must list the service (`not_in_host_group`); empty for none. A release is the same in every group. |
+| `--host-group` | STRING | The host group. From a coordinator that holds host groups: a named group must list the service (`not_in_host_group`); empty for none. |
 
 ### `rollouts`
 
@@ -551,7 +551,7 @@ stage, or none yet for a manual first stage.
 |---|---|---|
 | `--service` | STRING | The service. |
 | `--reason` | STRING | Why; 1 to 256 bytes. |
-| `--host-group` | STRING | The host group of the plan; empty for the one group that lists the service (`ambiguous_host_group` when more do). |
+| `--host-group` | STRING | The host group of the plan. From a coordinator that holds host groups: empty for the one group that lists the service (`ambiguous_host_group` when more do). |
 
 #### `hkctl rollouts pause`
 
@@ -564,7 +564,7 @@ running finish and bake. The pause stands across a new desired version, until `R
 |---|---|---|
 | `--service` | STRING | The service. |
 | `--reason` | STRING | Why; 1 to 256 bytes. |
-| `--host-group` | STRING | The host group of the plan; empty for the plan of every group that lists the service, in one change. |
+| `--host-group` | STRING | The host group of the plan. From a coordinator that holds host groups: empty for the plan of every group that lists the service, in one change. |
 
 #### `hkctl rollouts resume`
 
@@ -576,7 +576,7 @@ Resume a paused plan from where it stands.
 |---|---|---|
 | `--service` | STRING | The service. |
 | `--reason` | STRING | Why; 1 to 256 bytes. |
-| `--host-group` | STRING | The host group of the plan; empty for the one group that lists the service (`ambiguous_host_group` when more do). |
+| `--host-group` | STRING | The host group of the plan. From a coordinator that holds host groups: empty for the one group that lists the service (`ambiguous_host_group` when more do). |
 
 ### `services`
 

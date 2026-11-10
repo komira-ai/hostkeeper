@@ -157,7 +157,8 @@ message HeartbeatRequest {
   // which announces that it takes the `Abort` verb, `clear-record-v1`, which announces that it
   // takes the `ClearRecord` verb, `verdict-acks-v1`, which asks for `HeartbeatResponse.acks`,
   // `target-v1`, which announces that it takes `target` in orders and lists `installers`, and
-  // `facts-v1`, which asks for `HeartbeatResponse.facts` and reports `facts_generation`):
+  // `facts-v1`, which asks for `HeartbeatResponse.facts` and reports `facts_generation`, and
+  // which no daemon of this release announces):
   // at most 16, each 1 to 32 bytes of `[a-z0-9-]`, none twice. An agent
   // that lists every service it runs in `services` announces `heartbeat-v2`; without it the
   // coordinator counts the host as unmanaged for every service but the legacy one, rather than
@@ -422,9 +423,11 @@ message HeartbeatResponse {
   // not resends each verdict until it reports another, as before. At most one per service
   // listed.
   repeated VerdictAck acks = 4;
-  // The host's facts, for its facts file: sent in every answer until a heartbeat reports their
-  // generation (`HeartbeatRequest.facts_generation`). The daemon writes them before it acts on
-  // this answer's order. Only for an agent that announced `facts-v1`; absent otherwise.
+  // The host's facts, for its facts file. A coordinator that holds host groups sends them, to an
+  // agent that announced `facts-v1`, in every answer until a heartbeat reports their generation
+  // (`HeartbeatRequest.facts_generation`), and the agent writes them before it acts on this
+  // answer's order. Absent otherwise; no coordinator or daemon of this release sends or announces
+  // them.
   HostFacts facts = 5;
 }
 
