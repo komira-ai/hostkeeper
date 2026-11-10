@@ -25,7 +25,16 @@
 //! the run at once with exit 22; without it the run goes on, and exits as its last transfer did,
 //! as curl does. It never waits, whatever retry flags it is given.
 //!
-//! A `curl` with `--write-out` is the Docker Engine API and the coordinator's version route of
+//! A `curl` with both `--output <file>` and `--write-out <format>` is the coordinator's version
+//! route as release.yml's job `coordinator` asks it (tests/workflows/coordinator_wait_run_tests.rs):
+//! it appends `<METHOD> <path>` to `answers/calls` as below and reads the same answer file. With
+//! one, it writes the body to `<file>`, prints `<format>` with `%{http_code}` made the status and
+//! `\n` a line break, and exits 22 for a status of 400 or more when given `--fail-with-body`
+//! (curl's exit for an HTTP error), else 0. With no answer file the coordinator gave no answer:
+//! it prints `<format>` with the status `000` and exits 7, curl's exit when it cannot connect. It
+//! never waits, whatever retry flags it is given.
+//!
+//! Any other `curl` with `--write-out` is the Docker Engine API and the coordinator's version route of
 //! the coordinator-update unit's test (tests/coordinator_update_unit.rs): it takes the request's
 //! method (`-X`, else `GET`) and the path and query of its URL, appends `<METHOD> <path>` to
 //! `answers/calls` beside its own file, and prints the answer file `answers/<key>`, where the key
@@ -173,6 +182,9 @@ fn curl(dir: &Path, args: &[String]) -> ExitCode {
     if args.iter().any(|a| a == "--remote-name-all") {
         return curl_remote_names(dir, args);
     }
+    if let (Some(file), Some(format)) = (value(args, "--output"), value(args, "--write-out")) {
+        return curl_status(dir, args, file, format);
+    }
     if args.iter().any(|a| a == "--write-out") {
         return curl_answer(dir, args);
     }
@@ -210,27 +222,60 @@ fn answer_key(method: &str, path: &str) -> String {
         .collect()
 }
 
-/// The fake answer of one `--write-out` request (see the module).
-fn curl_answer(dir: &Path, args: &[String]) -> ExitCode {
+/// The request's method and the path (with its query) of its URL, appended to `answers/calls`;
+/// none when it names no URL or the log cannot be written.
+fn logged_request<'a>(dir: &Path, args: &'a [String]) -> Option<(&'a str, &'a str)> {
     let method = value(args, "-X").unwrap_or("GET");
-    let Some(url) = args
+    let url = args
         .iter()
-        .find(|a| a.starts_with("http://") || a.starts_with("https://"))
-    else {
-        return ExitCode::from(2);
-    };
+        .find(|a| a.starts_with("http://") || a.starts_with("https://"))?;
     let after_scheme = url.split_once("://").map_or("", |(_, rest)| rest);
     let path = after_scheme.find('/').map_or("/", |at| &after_scheme[at..]);
-    let answers = dir.join("answers");
-    let logged = std::fs::OpenOptions::new()
+    std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(answers.join("calls"))
-        .and_then(|mut log| writeln!(log, "{method} {path}"));
-    if logged.is_err() {
-        return fail("cannot write answers/calls");
+        .open(dir.join("answers/calls"))
+        .and_then(|mut log| writeln!(log, "{method} {path}"))
+        .ok()?;
+    Some((method, path))
+}
+
+/// The fake answer of one `--output <file> --write-out <format>` request (see the module).
+fn curl_status(dir: &Path, args: &[String], file: &str, format: &str) -> ExitCode {
+    let Some((method, path)) = logged_request(dir, args) else {
+        return ExitCode::from(2);
+    };
+    let print = |status: &str| {
+        print!(
+            "{}",
+            format.replace("%{http_code}", status).replace("\\n", "\n")
+        );
+    };
+    let Ok(text) = std::fs::read_to_string(dir.join("answers").join(answer_key(method, path)))
+    else {
+        print("000");
+        eprintln!("curl: (7) Failed to connect");
+        return ExitCode::from(7);
+    };
+    let (status, body) = text.split_once('\n').unwrap_or((text.as_str(), ""));
+    if std::fs::write(file, body).is_err() {
+        return fail("cannot write --output");
     }
-    let text = std::fs::read_to_string(answers.join(answer_key(method, path)))
+    print(status);
+    let error = status.parse::<u16>().map_or(true, |s| s >= 400);
+    if error && args.iter().any(|a| a == "--fail-with-body") {
+        eprintln!("curl: (22) The requested URL returned error: {status}");
+        return ExitCode::from(22);
+    }
+    ExitCode::SUCCESS
+}
+
+/// The fake answer of one `--write-out` request (see the module).
+fn curl_answer(dir: &Path, args: &[String]) -> ExitCode {
+    let Some((method, path)) = logged_request(dir, args) else {
+        return ExitCode::from(2);
+    };
+    let text = std::fs::read_to_string(dir.join("answers").join(answer_key(method, path)))
         .unwrap_or_else(|_| "404\n{\"message\":\"not found\"}".to_owned());
     let (status, body) = text.split_once('\n').unwrap_or((text.as_str(), ""));
     print!("{body}\n{status}");

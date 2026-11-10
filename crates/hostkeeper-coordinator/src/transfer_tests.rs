@@ -179,6 +179,7 @@ pub(super) fn line(seq: u64, at_unix: u64) -> AuditLine {
         by: "alice".to_owned(),
         action: "exclude".to_owned(),
         detail: Detail {
+            host_group: None,
             service: Some("kbf".to_owned()),
             node_id: Some(format!("s{seq}")),
             reason: Some("a reason".to_owned()),

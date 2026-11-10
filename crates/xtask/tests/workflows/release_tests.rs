@@ -574,7 +574,7 @@ fn release_workflow_keeps_its_jobs_and_checks_the_binary() {
         &text,
         "release.yml: jobs are [\"check-apt\", \"check-pkg\", \"check-rpm\", \"coordinator\", \"image\", \"newest\", \"notify\", \"plan\"",
     );
-    for program in ["hostkeeper", "hostkeeper-coordinator", "hostkeeper-mdm"] {
+    for program in super::release::SHIPPED_BINARIES {
         let check = format!(
             "      - name: {program} says the version and the commit it is released under\n        run: cargo xtask release check-binary \"$RUNNER_TEMP/binary/{program}\" \"$RELEASE_VERSION\" \"$COMMIT\"\n"
         );
