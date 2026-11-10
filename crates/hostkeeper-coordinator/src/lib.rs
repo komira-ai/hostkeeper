@@ -125,6 +125,8 @@ pub mod decide;
 pub mod defer;
 pub mod desired;
 pub mod enrollment;
+pub(crate) mod facts;
+mod features;
 pub mod fleet;
 pub mod force;
 pub mod grpc;
@@ -242,6 +244,8 @@ mod desired_sync_tests;
 mod desired_tests;
 #[cfg(test)]
 mod extras_dropped_tests;
+#[cfg(test)]
+mod facts_tests;
 #[cfg(test)]
 mod first_heartbeat_tests;
 #[cfg(test)]

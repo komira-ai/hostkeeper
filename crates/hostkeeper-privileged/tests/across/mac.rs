@@ -126,6 +126,9 @@ impl Host {
         for (flag, value) in [
             ("--config", path(self.root.config_path())),
             ("--state-dir", path(self.root.state())),
+            // No `--facts-file`: the released binary this plist starts first does not know it,
+            // and the plist stays the same across the update. The default file the updated
+            // daemon writes is one of the places `MacHost` takes over and puts back.
             ("--packages-dir", path(self.root.packages())),
             ("--heartbeat-secs", "1".to_owned()),
         ] {

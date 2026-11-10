@@ -74,8 +74,9 @@ plist.workspace = true
 prost.workspace = true
 prost-reflect = { workspace = true, features = ["serde"] }
 # `lgetxattr`: the quarantine attribute of a staged entry on a Mac, read without following a
-# link and without unsafe code (`mac`).
-rustix = { workspace = true, features = ["fs"] }
+# link and without unsafe code (`mac`); the effective uid, the owner of the facts file
+# (`facts_file`).
+rustix = { workspace = true, features = ["fs", "process"] }
 # The host's CA bundle (PEM) read into the DER roots the package fetch's HTTPS client trusts.
 rustls-pki-types.workspace = true
 # `trusted_root`: whether the Sigstore trusted root file is a stream of JSON trusted roots.

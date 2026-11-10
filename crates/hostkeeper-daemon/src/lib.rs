@@ -56,6 +56,7 @@
 //!   one reader of a version directory's manifest; [`builtin`] the built-in steps of a version
 //!   with no hook program; [`mirror`] the files of a private repository, read from the coordinator into a local copy apt reads; [`repository_push`] the repository sets the coordinator pushes, written
 //!   as the host's repository configuration and taken into use without a restart.
+//! - [`facts_file`]: the host's facts file, written from the facts the coordinator sends.
 //! - [`observer`]: what [`Daemon::status`] reports of a running service.
 //! - [`trusted_root`]: the Sigstore trusted root package checks use, and the age and reason
 //!   [`Daemon::status`] reports of it.
@@ -88,6 +89,7 @@ pub mod console;
 pub mod coordinator_store;
 pub mod entry;
 pub mod executor;
+pub mod facts_file;
 mod files;
 pub mod halt;
 pub mod handover;

@@ -18,6 +18,7 @@ mod fetch;
 mod grpc;
 mod grpc_reply;
 mod halts;
+mod host_facts;
 mod kbf;
 mod link;
 mod orders;

@@ -8,6 +8,7 @@ mod alerts;
 mod channel;
 mod credentials;
 mod enrollment;
+mod facts;
 mod force;
 mod gateway;
 mod heartbeat;

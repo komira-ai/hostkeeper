@@ -145,6 +145,7 @@ fn a_status_that_cannot_list_the_services_is_an_error_naming_the_directory() {
     let dirs = Dirs {
         state: rig.state.clone(),
         packages: file.clone(),
+        facts: file.with_file_name("facts.json"),
     };
     let error = Daemon::new(config(), dirs, rig.ports(), OWN)
         .status()
@@ -160,6 +161,7 @@ fn a_status_that_cannot_list_the_services_is_an_error_naming_the_directory() {
     let dirs = Dirs {
         state: file.clone(),
         packages: rig.packages.clone(),
+        facts: rig.facts_file(),
     };
     let error = Daemon::new(config(), dirs, rig.ports(), OWN)
         .status()
