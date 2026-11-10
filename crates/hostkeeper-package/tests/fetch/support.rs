@@ -216,6 +216,7 @@ impl Host {
     pub fn run(&self, fetcher: &dyn Fetcher, entry: &Target) -> Result<Pinned, PackageFailure> {
         let env = PinnedEnv {
             fetcher,
+            coordinator: None,
             clock: &*self.clock,
             bounds: &self.bounds,
             stores: &self.stores,

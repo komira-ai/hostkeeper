@@ -263,6 +263,7 @@ impl Rig {
             dirs: HostDirs {
                 root: PathBuf::from("/"),
                 work: work.clone(),
+                mirror: base.join("mirror"),
             },
             world: world.clone(),
             scratch_path: base,
@@ -311,6 +312,7 @@ impl Rig {
             repositories: &self.repositories,
             dirs: &self.dirs,
             pause: &Sleep,
+            mirror: None,
         }
     }
 

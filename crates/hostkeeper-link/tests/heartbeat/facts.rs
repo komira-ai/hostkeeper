@@ -361,6 +361,7 @@ fn every_heartbeat_lists_the_installers_the_loop_was_given() {
             state_dir: rig.state().to_path_buf(),
             period_secs: DEFAULT_HEARTBEAT_SECS,
             installers: vec!["hostkeeper-archive".to_owned()],
+            private_repository: false,
         },
         rig.world.ports(),
     );

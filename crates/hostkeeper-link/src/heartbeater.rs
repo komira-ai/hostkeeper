@@ -108,8 +108,8 @@ use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_wire::wire::clip_renew_error;
 
 use crate::beat::{
-    ANNOUNCED, FACTS, Feature, Features, Health, Heartbeat, Liveness, Observed, Platform,
-    REPOSITORIES, Renewal, ServiceFacts, fit,
+    ANNOUNCED, FACTS, Feature, Features, Health, Heartbeat, Liveness, Observed, PRIVATE_REPOSITORY,
+    Platform, REPOSITORIES, Renewal, ServiceFacts, fit,
 };
 use crate::deferral::{Book, Deferral};
 use crate::host_facts::PushedFacts;
@@ -156,6 +156,10 @@ pub struct LoopConfig {
     /// The installers the daemon can run, by name (`hostkeeper-archive`), given once at start
     /// and sent in every gRPC heartbeat.
     pub installers: Vec<String>,
+    /// Whether the daemon reads private repositories without a repository sink (a Mac, through
+    /// its `coordinator` store): it then announces `private-repository-v1` all the same. A
+    /// daemon with a sink announces it whatever this says.
+    pub private_repository: bool,
 }
 
 /// Everything the loop talks to.
@@ -545,7 +549,9 @@ impl Heartbeater {
     }
 
     /// The features every heartbeat announces: [`ANNOUNCED`], `repositories-v1` when the host
-    /// has a repository configuration to manage, and `facts-v1` when it has a facts file.
+    /// has a repository configuration to manage, `facts-v1` when it has a facts file, and
+    /// `private-repository-v1` when it has a repository configuration or is told it reads
+    /// private repositories.
     fn announced(&self) -> Vec<Feature> {
         let mut features = ANNOUNCED.to_vec();
         if self.ports.repositories.is_some() {
@@ -553,6 +559,9 @@ impl Heartbeater {
         }
         if self.ports.facts.is_some() {
             features.push(FACTS);
+        }
+        if self.ports.repositories.is_some() || self.config.private_repository {
+            features.push(PRIVATE_REPOSITORY);
         }
         features
     }

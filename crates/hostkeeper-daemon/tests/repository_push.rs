@@ -45,6 +45,7 @@ fn komira(seed: u8) -> Repository {
         components: vec!["main".to_owned()],
         fingerprints: vec![fingerprint],
         keyring,
+        ..Default::default()
     }
 }
 
@@ -124,7 +125,11 @@ fn a_host_takes_the_pushed_set_reports_it_and_announces_apt_without_a_restart() 
     }
     let beats = link.beats();
     let mut features = ANNOUNCED.to_vec();
-    features.extend([Feature::RepositoriesV1, Feature::FactsV1]);
+    features.extend([
+        Feature::RepositoriesV1,
+        Feature::FactsV1,
+        Feature::PrivateRepositoryV1,
+    ]);
     assert_eq!(beats[0].features, features);
     assert_eq!(beats[0].repositories, Some(RepositoriesReport::default()));
     assert!(beats[0].installers.is_empty());
@@ -184,8 +189,8 @@ fn a_set_without_the_advertised_feature_is_not_written() {
 }
 
 /// Proves a host with no repository directory (a Mac) announces the features every daemon does
-/// and `facts-v1`, not `repositories-v1`, sends no report, and writes nothing for a set that
-/// arrives.
+/// and `facts-v1`, not `repositories-v1`, and `private-repository-v1` only on a Mac (its
+/// `coordinator` store), sends no report, and writes nothing for a set that arrives.
 #[test]
 fn a_host_with_no_repository_directory_announces_and_writes_nothing() {
     let rig = Rig::new("push-mac");
@@ -196,6 +201,9 @@ fn a_host_with_no_repository_directory_announces_and_writes_nothing() {
     let beats = link.beats();
     let mut features = ANNOUNCED.to_vec();
     features.push(Feature::FactsV1);
+    if hostkeeper_daemon::links::reads_private_repositories(hostkeeper_daemon::links::PLATFORM) {
+        features.push(Feature::PrivateRepositoryV1);
+    }
     assert_eq!(beats[0].features, features);
     assert_eq!(beats[1].repositories, None);
     assert!(

@@ -179,6 +179,7 @@ impl Links {
                 state_dir: ctx.dirs.state.clone(),
                 period_secs: self.period,
                 installers: ctx.announcement.names(),
+                private_repository: reads_private_repositories(PLATFORM),
             },
             Ports {
                 link: Arc::clone(&self.link),
@@ -272,6 +273,14 @@ impl EnrollLoop<'_> {
             }
         }
     }
+}
+
+/// Whether a daemon of `platform` announces `private-repository-v1` whatever its other ports:
+/// every Mac daemon does, since its `coordinator` store reads a config package from the
+/// coordinator ([`crate::coordinator_store`]). A Linux daemon announces it when it has a
+/// repository sink (the link's rule), which is when its mirror reads private repositories.
+pub const fn reads_private_repositories(platform: Platform) -> bool {
+    matches!(platform, Platform::DarwinArm64)
 }
 
 /// The platform this daemon was built for.

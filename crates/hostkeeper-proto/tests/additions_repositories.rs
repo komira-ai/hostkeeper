@@ -58,6 +58,8 @@ fn repository() -> release::Repository {
         components: vec!["main".to_owned()],
         fingerprints: vec!["A".repeat(40)],
         keyring: vec![0x99, 0x01, 0x02, 0xff],
+        access: "hosts".to_owned(),
+        credential_file: "/etc/hostkeeper-coordinator/lab.credential".to_owned(),
     }
 }
 

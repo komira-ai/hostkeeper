@@ -232,6 +232,7 @@ impl Repository {
             components: vec!["main".to_owned()],
             fingerprints: vec![fingerprint],
             keyring: keyring.clone(),
+            ..Default::default()
         };
         // The host's entry as the registry renders the entry (`<name>-<suite>.sources` and
         // `<name>.gpg`, hostkeeper-release's `registry::render`), so that this build, pushed the

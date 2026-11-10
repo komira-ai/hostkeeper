@@ -460,7 +460,10 @@ message HeartbeatResponse {
   // this set's digest, in force or refused, and only when the coordinator's registry holds every
   // repository the host's services name, and they name at least one. The daemon replaces its
   // repository configuration with these entries, and only these, once each passes its checks;
-  // absent: keep what it has.
+  // absent: keep what it has. A private repository (`Repository.access` `hosts`) is among them
+  // only for an agent that also announced `private-repository-v1`, with the host's own group as
+  // its one suite and no `credential_file`; the agent reads it from the coordinator into its
+  // local mirror (docs/design/hostgroups.md section 6.6).
   optional RepositorySet repositories = 5;
   // The host's facts, for its facts file. The coordinator sends them, to an agent that announced
   // `facts-v1`, in every answer until a heartbeat reports their generation

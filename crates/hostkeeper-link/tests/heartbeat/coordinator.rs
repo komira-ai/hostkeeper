@@ -135,6 +135,7 @@ fn komira() -> Repository {
         components: vec!["main".to_owned()],
         fingerprints: vec!["D282F759B44189DAE07134C869E048AEDB2EEC39".to_owned()],
         keyring,
+        ..Default::default()
     }
 }
 
@@ -377,6 +378,7 @@ fn a_reply_from_the_real_coordinator_maps_to_the_loops_reply() {
             state_dir: rig.state().to_path_buf(),
             period_secs: DEFAULT_HEARTBEAT_SECS,
             installers: Vec::new(),
+            private_repository: false,
         },
         ports,
     );
@@ -417,6 +419,7 @@ fn a_reply_from_the_real_coordinator_maps_to_the_loops_reply() {
             state_dir: rig.state().to_path_buf(),
             period_secs: DEFAULT_HEARTBEAT_SECS,
             installers: vec!["apt".to_owned()],
+            private_repository: false,
         },
         Ports {
             link: Arc::new(grpc_link(&farm, &pki, &dial, &rig.world.log)),

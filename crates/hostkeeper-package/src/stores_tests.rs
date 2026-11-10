@@ -178,6 +178,12 @@ fn every_store_that_breaks_a_rule_is_refused_naming_the_store_and_the_rule() {
             refused("a", Rule::DuplicateName),
         ),
         (
+            "the kind of the coordinator",
+            "[[store]]\nname = \"a\"\nkind = \"coordinator\"\nbase = \"https://a.example/\"\n"
+                .into(),
+            refused("a", Rule::Kind("coordinator".to_owned())),
+        ),
+        (
             "an unknown kind",
             "[[store]]\nname = \"a\"\nkind = \"ftp\"\nbase = \"https://a.example/\"\n".into(),
             refused("a", Rule::Kind("ftp".to_owned())),
@@ -505,4 +511,55 @@ fn error_messages_name_the_store_the_rule_and_the_file() {
         file.to_string(),
         "/etc/hostkeeper/stores.toml: the file has mode 0666, which group or others can write"
     );
+}
+
+/// Every host has the `coordinator` store, with or without a stores file, and a file does not list
+/// it among the stores it defines: its blob URL is `/` and the locator, it has no credential, no
+/// redirect and no mirror.
+///
+/// Catches a host without the store, a file that has to define it, and a URL with a base.
+#[test]
+fn the_coordinator_store_is_there_with_and_without_a_stores_file() {
+    let scratch = scratch("stores-coordinator");
+    let none = load(&scratch.path().join("stores.toml"), 0).expect("no file");
+    let file = load_text(scratch.path(), &https("")).expect("a file");
+    for stores in [&none, &file] {
+        let store = stores
+            .get(COORDINATOR_STORE)
+            .expect("the coordinator store");
+        assert_eq!(store.name(), "coordinator");
+        assert_eq!(store.kind(), Kind::Coordinator);
+        assert_eq!(store.redirects(), 0);
+        assert!(!store.is_mirror());
+        assert_eq!(store.authorization(), None);
+        assert_eq!(store.repository(), None);
+        assert_eq!(store.mirror_url(DIGEST), None);
+        assert_eq!(
+            store
+                .blob_url("repositories/acme/pool/g/a.pkg", DIGEST)
+                .as_str(),
+            "/repositories/acme/pool/g/a.pkg"
+        );
+        assert!(stores.all().iter().all(|s| s.name() != COORDINATOR_STORE));
+    }
+    assert_eq!(file.all().len(), 1);
+}
+
+/// A stores file of the release before may name a store `coordinator`: it still loads, and that
+/// store, not the implicit one, is the one its name finds, so the host fetches from it as before.
+///
+/// Catches a file the previous release read being refused, and a file's store shadowed.
+#[test]
+fn a_files_own_store_named_coordinator_is_kept_and_found_first() {
+    let scratch = scratch("stores-coordinator-named");
+    let text =
+        "[[store]]\nname = \"coordinator\"\nkind = \"https\"\nbase = \"https://a.example/\"\n";
+    let stores = load_text(scratch.path(), text).expect("the file loads as before");
+    let store = stores.get(COORDINATOR_STORE).expect("the file's store");
+    assert_eq!(store.kind(), Kind::Https);
+    assert_eq!(
+        store.blob_url("a/b.pkg", DIGEST).as_str(),
+        "https://a.example/a/b.pkg"
+    );
+    assert_eq!(stores.all().len(), 1);
 }

@@ -5,7 +5,9 @@
 use std::collections::BTreeMap;
 
 use hostkeeper_link::testing::World;
-use hostkeeper_link::{ANNOUNCED, FACTS, Feature, PushedFacts, REPOSITORIES, Reply};
+use hostkeeper_link::{
+    ANNOUNCED, FACTS, Feature, PRIVATE_REPOSITORY, PushedFacts, REPOSITORIES, Reply,
+};
 
 use crate::{Rig, abort, recorded, reply, update};
 
@@ -47,7 +49,8 @@ fn a_host_with_no_facts_file_announces_none_and_reports_no_generation() {
 }
 
 /// Proves a daemon with a facts file announces `facts-v1` after the others (after
-/// `repositories-v1` when it announces that too), reports no generation before its file holds
+/// `repositories-v1` when it announces that too, and before `private-repository-v1`, which a
+/// daemon with a repository configuration announces after it), reports no generation before its file holds
 /// any, and from the heartbeat after a write reports the generation it wrote.
 #[test]
 fn a_host_with_a_facts_file_announces_the_feature_and_reports_what_it_wrote() {
@@ -70,7 +73,7 @@ fn a_host_with_a_facts_file_announces_the_feature_and_reports_what_it_wrote() {
     let mut heartbeater = both.heartbeater();
     heartbeater.beat_once();
     let mut features = ANNOUNCED.to_vec();
-    features.extend([REPOSITORIES, FACTS]);
+    features.extend([REPOSITORIES, FACTS, PRIVATE_REPOSITORY]);
     assert_eq!(both.world.link.beats()[0].features, features);
 }
 

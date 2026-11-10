@@ -296,6 +296,7 @@ pub fn komira() -> proto_release::Repository {
         components: vec!["main".to_owned()],
         fingerprints: vec![fingerprint],
         keyring,
+        ..Default::default()
     }
 }
 

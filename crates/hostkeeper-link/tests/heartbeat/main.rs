@@ -14,6 +14,7 @@ mod deferral;
 mod dial;
 mod facts;
 mod features;
+mod fetch;
 mod grpc;
 mod grpc_reply;
 mod halts;

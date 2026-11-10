@@ -128,6 +128,7 @@ fn heartbeater_over(rig: &Rig, certs: Arc<PkiCertSource>) -> Heartbeater {
             state_dir: rig.state().to_path_buf(),
             period_secs: DEFAULT_HEARTBEAT_SECS,
             installers: Vec::new(),
+            private_repository: false,
         },
         ports,
     )

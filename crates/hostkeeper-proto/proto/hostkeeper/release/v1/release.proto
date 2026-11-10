@@ -224,6 +224,13 @@ message Volume {
 // (`HeartbeatResponse.repositories`), and the host's daemon writes it as one entry of its
 // repository configuration per suite, `<name>-<suite>.sources`, all signed by the keyring
 // `<name>.gpg`. A repository entry of a release names one of those entries (`Target.repository`).
+//
+// A private repository (`access` `hosts`, docs/design/hostgroups.md section 6.6) is read by the
+// coordinator alone, from `uri` with the credential of `credential_file`; a host reads it only
+// through the coordinator's agent listener, into a local mirror its apt reads as `file:`. Each of
+// its suites is the suite of one host group. The coordinator sends a host the entry with the
+// host's own group as its one suite, and only when `suites` lists that group, and never sends
+// `credential_file`.
 message Repository {
   // 1 to 32 bytes of `[a-z0-9-]`; each `<name>-<suite>` is one too.
   string name = 1;
@@ -242,4 +249,16 @@ message Repository {
   // The binary OpenPGP keyring the suites are signed with (what `gpg --export` writes), 1 byte
   // to 64 KiB: public keys only.
   bytes keyring = 7;
+  // Who reads the repository: `public` (empty is read as `public`: every entry written before
+  // the field), which hosts read from `uri` themselves, or `hosts`, a private repository, which
+  // only the coordinator reads from `uri`, and hosts through it. Any other is refused.
+  string access = 8;
+  // `hosts` only, and required for it in `Repositories.Put`: the absolute path, on the
+  // coordinator's machine, of the file that holds the value of the `Authorization` header the
+  // coordinator sends `uri` (one line of printable ASCII, at most 4 KiB, in a regular file of the
+  // coordinator's user with mode 0600 or 0400). Refused with `public`. Never sent to a host: an entry
+  // a host is sent names none, and a host refuses a set whose entry names one. Not a secret
+  // itself: the file holds the secret, and neither its bytes nor the header are ever logged,
+  // answered or stored.
+  string credential_file = 9;
 }

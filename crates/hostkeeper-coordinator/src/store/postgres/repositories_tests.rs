@@ -96,3 +96,43 @@ fn rows_that_cannot_be_a_registry_are_refused_by_reason() {
     let empty = of(&Rows::new(), &Rows::new()).expect("an empty registry");
     assert_eq!(empty, Registry::default());
 }
+
+/// Proves: the row of a private entry holds `access` and `credential_file` in its record and reads
+/// back as the registry it came from, and the row of the release before (a record with neither
+/// key) reads as a public entry.
+///
+/// Catches: a private entry stored as a public one, or a row the release before wrote that this
+/// release refuses.
+#[test]
+fn a_private_entry_is_its_row_and_a_row_without_the_fields_reads_public() {
+    use crate::repositories_support::private;
+
+    let held = Registry::default()
+        .put(private(
+            "priv",
+            "https://priv.example.com/apt",
+            &["web"],
+            1,
+            "/etc/hostkeeper/credentials/priv",
+        ))
+        .expect("put");
+    let (repositories, generation) = rows(&held).expect("rows");
+    let Some(row) = repositories.get(&vec![KeyVal::Text("priv".to_owned())]) else {
+        panic!("a row per repository");
+    };
+    let Val::Json(record) = &row[0] else {
+        panic!("a record");
+    };
+    assert_eq!(record["repository"]["access"], "hosts");
+    assert_eq!(
+        record["repository"]["credential_file"],
+        "/etc/hostkeeper/credentials/priv"
+    );
+    assert_eq!(of(&repositories, &generation).expect("read"), held);
+
+    let previous = Registry::default().put(komira(1)).expect("put");
+    let (repositories, generation) = rows(&previous).expect("rows");
+    let read = of(&repositories, &generation).expect("read");
+    assert_eq!(read, previous);
+    assert_eq!(read.get("komira").expect("kept").repository.access, "");
+}

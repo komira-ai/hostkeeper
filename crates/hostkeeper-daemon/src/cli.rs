@@ -63,6 +63,7 @@ use rustls_pki_types::pem::PemObject;
 
 use crate::adapters::{Adapters, RunnerLauncher, host_claims, host_clock, host_managed};
 use crate::console::{AGETTY, ConsoleIssue, ENROLLMENT_ISSUE};
+use crate::coordinator_store::CoordinatorFetcher;
 use crate::executor::{Daemon, Placement, Ports};
 use crate::handover::ProcessExec;
 use crate::ipmi::DevIpmi;
@@ -676,6 +677,12 @@ pub fn host_ports(
         });
     }
     let clock: Arc<dyn Clock> = Arc::new(host_clock());
+    let coordinator = crate::mirror::over_coordinator(config, &files.pki, Arc::clone(&clock));
+    if files.repositories.is_some()
+        && let Some(fetch) = &coordinator
+    {
+        repository = repository.with_mirror(Arc::clone(fetch));
+    }
     // Only a Mac fetches a `.pkg`: no other host reads a CA bundle.
     let roots = match adapters.kind {
         PlatformKind::Macos => tls_roots(Path::new(CA_BUNDLE_MACOS)),
@@ -689,6 +696,14 @@ pub fn host_ports(
         stores,
         &settings.packages_dir,
     );
+    let packages = match coordinator {
+        Some(fetch) => packages.with_coordinator(Box::new(CoordinatorFetcher::new(
+            fetch,
+            Arc::clone(&clock),
+            config.bounds.max_package_bytes,
+        ))),
+        None => packages,
+    };
     Ok(Ports {
         launcher: adapters.launcher,
         packages: Arc::new(packages),

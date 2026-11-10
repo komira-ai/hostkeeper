@@ -161,6 +161,77 @@ such entry, is ordered nothing (`installer_dropped`); stage 9's counts are zero 
 is set (docs/operations/move-to-native.md). A host picked an entry before the publish below has put its
 package into `testing` defers it (`not_in_repository`) and takes it once it is there.
 
+## Private repositories: a host group's configuration
+
+The repository above is public: every host reads it from `https://packages.komira.ai` itself. A
+site's configuration packages (`tierstore-config-web`, say: docs/design/hostgroups.md section 6)
+go to a **private repository** instead, which only the coordinator reads, and each host through
+the coordinator. A private repository is an entry of the coordinator's registry with
+`access = "hosts"` (every entry without `access` is `public`):
+
+```json
+{ "repository": { "name": "lab", "kind": "apt", "access": "hosts",
+    "uri": "https://config.example.org/apt",
+    "credential_file": "/etc/hostkeeper-coordinator/lab.credential",
+    "suites": ["web", "db"], "components": ["main"],
+    "fingerprints": ["<40 hex>"], "keyring": "<base64>" },
+  "reason": "the lab's configuration packages" }
+```
+
+- **The origin.** The operator's CI publishes the repository to `uri`, an `https` origin that the
+  coordinator can read and hosts cannot, signed with a key of its own (never the public
+  repository's), whose fingerprint the entry pins as any entry does. The coordinator sends the
+  origin the whole `Authorization` header value that `credential_file` holds (`Bearer <token>` or
+  `Basic <base64>`): one line of printable ASCII, at most 4 KiB, a regular file (not a link) of the
+  coordinator's user, mode 0600 or 0400. `Repositories.Put` refuses the entry `credential_unusable` when the file is
+  not so, and the coordinator reads it again at every read from the origin, so a new credential
+  takes effect without a restart. A public entry names no credential file. The credential is never
+  sent to a host, logged or answered; `hkctl repositories get` shows the file's path.
+- **One suite and one pool per host group**: the suite `dists/<group>/` lists that group's packages
+  alone, from the pool `pool/<group>/`, so a host learns nothing of another group's configuration.
+  The entry's `suites` are the groups it serves; a release's repository entry names the channel
+  `<name>-<group>` (`lab-web`), and `<name>-<group>` is at most 32 bytes. Until the coordinator
+  holds host groups (docs/design/hostgroups.md, HG3), a host's group is the role its certificate
+  names.
+- **What a host reads.** Only through the coordinator, over its mutual-TLS connection with its
+  enrolled certificate, on the agent listener (and the LAN listener, which serves the same):
+  `GET /repositories/<name>/dists/<group>/...` and `GET /repositories/<name>/pool/<group>/...`,
+  for its own group, when the entry's suites list it. Any other path, another group's included, is
+  answered 404 `not_found`, as a path that does not exist, and the coordinator logs the refused read
+  with the host and the path. The coordinator reads each answer from the origin and passes its bytes
+  through unchanged, with the origin's `Content-Length` (an origin that sends none is answered
+  502); it parses and signs nothing. An origin that is down, refuses the credential or answers
+  anything but 200 or 404 is answered 502 `origin_failed`, and the coordinator logs the
+  repository, the path and the origin's status, never the credential.
+- **On a Linux host.** The coordinator sends a private entry only to a daemon that announces
+  `private-repository-v1`, with the host's group as its one suite. The daemon writes it as
+  `/etc/hostkeeper/repositories/<name>-<group>.sources` whose `URIs` is its local mirror,
+  `file:/var/lib/hostkeeper/mirror/<name>`. At the `stage` of an order from it, the daemon fetches
+  the suite's `InRelease` from the coordinator, then each index file it lists for the host's
+  architecture (`binary-<arch>`, `binary-all`, `i18n`), each checked against the size and SHA-256
+  that `InRelease` lists, into a new directory that it renames over the mirror whole (directories
+  0755, files 0644, which apt's fetch user reads). apt then reads the mirror and checks it as it
+  checks any repository: `InRelease` signed by the pinned key, the index's digest, the `.deb`'s
+  digest, and the order's pin. The daemon fetches the pinned package's pool file into the mirror
+  and checks it against the pin before apt copies it. apt is given no client certificate. A fetch
+  whose files do not match the `InRelease` it read (the origin published in between) is fetched
+  again once, and then the order defers `fetch_failed`, as it does while the coordinator or the
+  origin is down. A group whose suite is not published yet defers `not_in_repository`. When a set
+  the host is sent no longer holds the entry, or holds it with another suite (the host moved to
+  another group), the daemon deletes the old mirror; a host that is sent no set at all (none of
+  its services names a repository it may read) keeps its mirror until it is next sent one.
+- **On a Mac.** A configuration `.pkg` is an artifact entry located in the store `coordinator`,
+  which every Mac daemon of this release has and no `stores.toml` defines, at the locator
+  `repositories/<name>/pool/<group>/<file>.pkg`. The daemon fetches `/` and the locator from the
+  coordinator over its connection, under the same rule of its own group's pool, and checks the
+  entry's size and SHA-256 before it uses a byte, and the `.pkg`'s signer as for any `.pkg`.
+- **Older daemons.** A daemon that does not announce `private-repository-v1` is sent no private
+  entry, and an entry of a private repository (or of the store `coordinator`) is `no_target` for
+  it; it runs every other package as before.
+
+No package carries a secret, private or not: a private repository is a place for configuration
+that is not public, never for credentials (docs/design/hostgroups.md section 6.5).
+
 ## Packaging a service
 
 Ship the `.deb` or `.pkg` as you would anyway: the binary where you want it, your maintainer scripts, your unit or

@@ -63,6 +63,7 @@ pub type Log = Arc<dyn Fn(&str) + Send + Sync>;
 /// Fetches an entry's artifact by its pin with the real library.
 pub struct RealPackages {
     fetcher: Box<dyn Fetcher + Send + Sync>,
+    coordinator: Option<Box<dyn Fetcher + Send + Sync>>,
     clock: Arc<dyn Clock>,
     bounds: Bounds,
     stores: Stores,
@@ -82,11 +83,22 @@ impl RealPackages {
     ) -> RealPackages {
         RealPackages {
             fetcher,
+            coordinator: None,
             clock,
             bounds,
             stores,
             log: Arc::new(|line| eprintln!("hostkeeper daemon: {line}")),
             root: root.to_path_buf(),
+        }
+    }
+
+    /// The same store, asking the locations of the `coordinator` store through `fetcher`
+    /// ([`crate::coordinator_store::CoordinatorFetcher`]); without it such a location is
+    /// `no_store`.
+    pub fn with_coordinator(self, fetcher: Box<dyn Fetcher + Send + Sync>) -> RealPackages {
+        RealPackages {
+            coordinator: Some(fetcher),
+            ..self
         }
     }
 
@@ -103,6 +115,10 @@ impl Packages for RealPackages {
             fetcher: &*self.fetcher,
             clock: &*self.clock,
             bounds: &self.bounds,
+            coordinator: self
+                .coordinator
+                .as_deref()
+                .map(|fetcher| fetcher as &dyn Fetcher),
             stores: &self.stores,
             packages_root: &self.root,
         };

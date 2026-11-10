@@ -131,6 +131,7 @@ fn komira() -> hostkeeper_proto::hostkeeper::release::v1::Repository {
         components: vec!["main".to_owned()],
         fingerprints: vec![fingerprint],
         keyring,
+        ..Default::default()
     }
 }
 

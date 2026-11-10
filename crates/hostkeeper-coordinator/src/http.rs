@@ -25,6 +25,10 @@
 //!   answers which release this coordinator is, with no token read ([`crate::version_route`]):
 //!   CI waits on it before it sets a release a coordinator older than the release would refuse.
 //!
+//! The heartbeat surface also serves `GET /repositories/<name>/{dists,pool}/<group>/<rest>` to the
+//! hosts of a group, the files of a private repository, which [`crate::grpc::route`] answers
+//! before a request comes here ([`crate::repository_serve`]).
+//!
 //! No answer, on either surface, carries an `Access-Control-*` header: the operator web app is
 //! served from the private listener itself, so its calls are same-origin, and a cross-origin
 //! `OPTIONS` is answered as any other method a path does not take.

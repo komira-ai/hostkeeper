@@ -152,6 +152,8 @@ const SHAPE: &[(&str, &[&str])] = &[
             "components 5 string repeated",
             "fingerprints 6 string repeated",
             "keyring 7 bytes -",
+            "access 8 string -",
+            "credential_file 9 string -",
         ],
     ),
 ];
@@ -393,6 +395,7 @@ fn release_messages() -> Vec<(String, Vec<u8>)> {
                 components: vec!["main".to_owned()],
                 fingerprints: vec!["A".repeat(40)],
                 keyring: vec![0x99, 0x01],
+                ..release::Repository::default()
             }),
         ),
     ]

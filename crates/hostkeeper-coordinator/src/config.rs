@@ -507,7 +507,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
             }
         }
     }
-    let keys = HttpsKeys::new(&oidc.entries()[0].issuer, roots, KEY_FETCH_TIMEOUT)
+    let keys = HttpsKeys::new(&oidc.entries()[0].issuer, roots.clone(), KEY_FETCH_TIMEOUT)
         .map_err(StartError::Keys)?;
     // The wall clock is read for the validity of CI's tokens and the expiry of their spent
     // ids, and for nothing the coordinator decides.
@@ -551,7 +551,8 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         .with_ops(ops)
         .with_verdicts(verdicts)
         .with_ui(ui)
-        .with_alert_thresholds(alert_thresholds(flags));
+        .with_alert_thresholds(alert_thresholds(flags))
+        .with_repository_origin(crate::repository_origin::RepositoryOrigin::new(roots)?);
     let store = match (&flags.enrollment_dir, records) {
         (Some(dir), _) => Some(StoreAt::Dir(dir)),
         (None, Some(records)) => Some(StoreAt::Records(records)),

@@ -46,6 +46,7 @@ pub(crate) fn repository(name: &str, uri: &str, suites: &[&str], seed: u8) -> Re
         components: vec!["main".to_owned()],
         fingerprints: vec![fingerprint(&keyring)],
         keyring,
+        ..Repository::default()
     }
 }
 
@@ -98,4 +99,29 @@ pub(crate) fn repository_entry(service: &str, repository: &str) -> Target {
 /// The targets of `service` with the one list `linux-x86_64`, holding `entries`.
 pub(crate) fn targets_of(entries: Vec<Target>) -> BTreeMap<String, TargetList> {
     BTreeMap::from([("linux-x86_64".to_owned(), TargetList { entries })])
+}
+
+/// A private repository `name` at `uri` with `suites` (the groups it serves), the key of `seed`,
+/// and the credential file at `credential_file`.
+pub(crate) fn private(
+    name: &str,
+    uri: &str,
+    suites: &[&str],
+    seed: u8,
+    credential_file: &str,
+) -> Repository {
+    Repository {
+        access: registry::ACCESS_HOSTS.to_owned(),
+        credential_file: credential_file.to_owned(),
+        ..repository(name, uri, suites, seed)
+    }
+}
+
+/// Writes `text` to the file `name` in `dir` with mode 0600 and answers its path.
+pub(crate) fn credential_in(dir: &std::path::Path, name: &str, text: &str) -> String {
+    use std::os::unix::fs::PermissionsExt as _;
+    let path = dir.join(name);
+    std::fs::write(&path, text).expect("a credential file");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("mode");
+    path.to_str().expect("a path").to_owned()
 }

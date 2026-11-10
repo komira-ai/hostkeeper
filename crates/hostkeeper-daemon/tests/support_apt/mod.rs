@@ -13,6 +13,7 @@
 
 // The fake is loaded once, by `support::apt`, which the self-update rig of `support` shares.
 pub use crate::support::apt::apt_fake;
+pub mod repository_host;
 pub mod services;
 
 use std::fs;

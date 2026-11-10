@@ -14,6 +14,7 @@ use crate::inventory::WindowAboveMax;
 use crate::jti_file::JtiError;
 use crate::mdm::MdmError;
 use crate::ops::OpsError;
+use crate::origin_https::OriginTlsError;
 use crate::services::ServicesError;
 use crate::store::postgres::DatabaseError;
 use crate::tokens::TokensError;
@@ -168,6 +169,9 @@ pub enum StartError {
     /// The file of verdicts is refused.
     #[error(transparent)]
     Verdicts(#[from] VerdictsError),
+    /// The TLS client for the repository origins could not be made.
+    #[error("repository origins: {0}")]
+    OriginTls(#[from] OriginTlsError),
     /// The MDM policy gate did not start.
     #[error(transparent)]
     Mdm(#[from] MdmError),

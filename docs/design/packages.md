@@ -682,14 +682,14 @@ files, not environment).
 |---|---|---|
 | `https` | `<base><locator>`, following up to `redirects` redirects, each to `https://` | GitHub release assets (which redirect to the asset host), today's channel tree, any static origin |
 | `oci` | `<base>v2/<locator>/blobs/sha256:<hex>`; the locator is a repository name; a mirror uses its `repository` | tierstore's OCI front, any OCI registry |
+| `coordinator` | `/<locator>` on the coordinator's agent listener, over the host's mutual TLS; the one implicit store `coordinator`, which no `stores.toml` defines | a host group's private `.pkg` (hostgroups.md section 6.6) |
 
-- **To a store:** with that store's credential file, or anonymously. The credential is the host's own, read-only. The
-  coordinator never holds or sends one. A credential is sent only to its store's base origin and dropped on a redirect
-  to another origin.
+- **To a store:** with that store's credential file, or anonymously. The credential is the host's own, read-only, sent
+  only to its store's base origin and dropped on a redirect to another origin; the coordinator never sends one.
 - **An OCI registry's token challenge** is answered only when the realm's origin is the store's base origin.
 - **To the coordinator:** mutual TLS with the host's enrolled certificate, unchanged.
-- **Of the store, to the daemon:** TLS with the host's CA bundle. That authenticates nothing that matters: the bytes are
-  trusted only once the digest and the attestation check out.
+- **Of the store, to the daemon:** TLS with the host's CA bundle (the store `coordinator`: the pinned CA). That
+  authenticates nothing that matters: the bytes are trusted only once the digest and the attestation check out.
 
 S3 with SigV4 is not in v1: a presigned URL would put a credential in an order. A LAN mirror fills by pulling
 (`GetRelease`), and its sync job is the mirror operator's, outside this design's build items.

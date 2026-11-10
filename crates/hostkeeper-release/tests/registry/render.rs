@@ -1,7 +1,7 @@
 //! `registry::render`, `digest` and `keyring_sha256`: the files a host holds and the digest of them.
 
 use hostkeeper_release::registry::{
-    HostFile, KEYRING_SUFFIX, REPOSITORIES_DIR, SOURCES_SUFFIX, digest, keyring_file,
+    HostFile, KEYRING_SUFFIX, MIRROR_DIR, REPOSITORIES_DIR, SOURCES_SUFFIX, digest, keyring_file,
     keyring_sha256, render,
 };
 use sha2::{Digest, Sha256};
@@ -39,7 +39,7 @@ fn komira_renders_the_files_the_held_script_writes() {
     let entry = entry("komira");
     let key = "/etc/hostkeeper/repositories/komira.gpg";
     assert_eq!(
-        render(std::slice::from_ref(&entry), REPOSITORIES_DIR),
+        render(std::slice::from_ref(&entry), REPOSITORIES_DIR, MIRROR_DIR),
         vec![
             file(
                 "komira-stable.sources",
@@ -65,7 +65,7 @@ fn components_are_joined_by_a_space_and_the_directory_is_the_one_given() {
     let mut entry = entry("a");
     entry.suites = vec!["only".into()];
     entry.components = vec!["main".into(), "contrib".into(), "non-free".into()];
-    let files = render(&[entry], "/scratch/dir");
+    let files = render(&[entry], "/scratch/dir", "/scratch/mirror");
     assert_eq!(
         files[0].bytes,
         sources(
@@ -90,9 +90,9 @@ fn entries_render_sorted_by_file_name_whatever_their_order() {
         "b-testing.sources",
         "b.gpg",
     ];
-    assert_eq!(names(render(&[a.clone(), b.clone()], "/d")), want);
-    assert_eq!(names(render(&[b, a], "/d")), want);
-    assert!(render(&[], "/d").is_empty());
+    assert_eq!(names(render(&[a.clone(), b.clone()], "/d", "/m")), want);
+    assert_eq!(names(render(&[b, a], "/d", "/m")), want);
+    assert!(render(&[], "/d", "/m").is_empty());
 }
 
 /// Proves the digest is the SHA-256 of each file as its name, a zero byte, its length in eight

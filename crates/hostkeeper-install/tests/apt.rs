@@ -18,6 +18,8 @@ mod drift;
 mod harness;
 #[path = "apt/io.rs"]
 mod io;
+#[path = "apt/mirror.rs"]
+mod mirror;
 #[path = "apt/order.rs"]
 mod order;
 #[path = "apt/policy.rs"]

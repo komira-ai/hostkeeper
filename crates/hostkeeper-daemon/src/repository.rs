@@ -36,8 +36,8 @@ use hostkeeper_hook::{Class as HookClass, Phase, Verdict};
 use hostkeeper_install::backend_of;
 use hostkeeper_install::repository::launcher::LauncherTools;
 use hostkeeper_install::repository::{
-    Backend, Class, Drift, Failure, HostDirs, InstallerLock, Order, Outcome, PackageRecord, Pause,
-    Reason, RecordError, Records, Repositories, RepositoryInstaller,
+    Backend, Class, Drift, Failure, HostDirs, InstallerLock, Mirror, Order, Outcome, PackageRecord,
+    Pause, Reason, RecordError, Records, Repositories, RepositoryInstaller,
 };
 use hostkeeper_install::version::{
     FillError, FillOrder, HostFs, Owner, REASON_ARTIFACT_CHANGED, REASON_DAEMON_TOO_OLD,
@@ -51,6 +51,7 @@ use hostkeeper_steps::{Clock, Staged, StepExit, StepLauncher, SwitchError, Updat
 
 use crate::executor::Reply;
 use crate::macos_pkg::MacosPkgPorts;
+use crate::mirror::{CoordinatorMirror, Fetch};
 use crate::packages::{PackageError, Packages};
 use crate::refusal::Refusal;
 use crate::repository_push::{Managed, SharedRepositories};
@@ -77,6 +78,8 @@ pub const REASON_TARGET_CHANGED: &str = "target_changed";
 pub const WORK_DIR: &str = "apt";
 /// The installer lock's file name, beside the packages directory.
 pub const LOCK_FILE: &str = "installer.lock";
+/// The mirrors' parent, beside the packages directory (`/var/lib/hostkeeper/mirror`).
+pub const MIRROR_ROOT: &str = "mirror";
 
 /// What the repository installer works with on the host, besides the step launcher and the
 /// clock: the host's repository entries, read at the start and replaced by each set the
@@ -102,12 +105,16 @@ pub struct RepositoryPorts {
     /// The `macos-pkg` installer's ports, on a Mac that announces it ([`crate::macos_pkg`]);
     /// `None` on every other host.
     pub macos_pkg: Option<Arc<MacosPkgPorts>>,
+    /// The mirror of the private repositories ([`crate::mirror`]); none on a host that reads
+    /// none (a Mac), where a private repository's stage defers.
+    pub mirror: Option<Arc<CoordinatorMirror>>,
 }
 
 impl RepositoryPorts {
     /// The ports of the host whose root is `root` and whose packages directory is
     /// `packages_dir`, everything staged given to `owner`: the work directories in
-    /// `<packages_dir>/../apt`, the lock `<packages_dir>/../installer.lock`.
+    /// `<packages_dir>/../apt`, the lock `<packages_dir>/../installer.lock`, the mirrors
+    /// `<packages_dir>/../mirror`.
     pub fn new(
         packages_dir: &Path,
         root: &Path,
@@ -123,9 +130,21 @@ impl RepositoryPorts {
             dirs: HostDirs {
                 root: root.to_path_buf(),
                 work: state.join(WORK_DIR),
+                mirror: state.join(MIRROR_ROOT),
             },
             lock: state.join(LOCK_FILE),
             macos_pkg: None,
+            mirror: None,
+        }
+    }
+
+    /// These ports with the mirror of the private repositories, filled through `fetch`, under
+    /// [`HostDirs::mirror`].
+    pub fn with_mirror(self, fetch: Arc<dyn Fetch>) -> RepositoryPorts {
+        let mirror = CoordinatorMirror::new(self.dirs.mirror.clone(), fetch);
+        RepositoryPorts {
+            mirror: Some(Arc::new(mirror)),
+            ..self
         }
     }
 
@@ -433,6 +452,11 @@ impl Repository {
             repositories: &repositories,
             dirs: &self.ports.dirs,
             pause: &pause,
+            mirror: self
+                .ports
+                .mirror
+                .as_deref()
+                .map(|mirror| mirror as &dyn Mirror),
         })
     }
 

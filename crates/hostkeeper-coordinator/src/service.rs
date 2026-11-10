@@ -237,6 +237,8 @@ pub struct Coordinator {
     pub(crate) repository_reports: crate::repository_push::Reports,
     /// What each host heard runs ([`crate::running`]).
     pub(crate) running: crate::running::Kept,
+    /// Reads private repositories' origins ([`crate::repository_serve`]); none: those reads are 502.
+    pub(crate) repository_origin: Option<crate::repository_origin::RepositoryOrigin>,
     /// Told when CI's set of a desired state finds the fleet's lock held and waits for it: a
     /// test's progress event, so a race is made to happen rather than waited for.
     #[cfg(test)]
@@ -270,9 +272,8 @@ impl Coordinator {
         operator: impl Into<OperatorTokens>,
         clock: Clock,
     ) -> Self {
-        let started = clock();
         Self {
-            fleet: Mutex::new(Fleet::new(started, QUIET_START)),
+            fleet: Mutex::new(Fleet::new(clock(), QUIET_START)),
             desired,
             services: Services::default(),
             legacy: None,
@@ -292,6 +293,7 @@ impl Coordinator {
             waits: crate::wait::Waits::default(),
             repository_reports: crate::repository_push::Reports::default(),
             running: crate::running::Kept::default(),
+            repository_origin: None,
             #[cfg(test)]
             set_waits: Mutex::new(None),
         }
@@ -385,10 +387,8 @@ impl Coordinator {
     /// Whether the fleet's lock, which every decision and order is made under, is held now.
     #[cfg(test)]
     pub(crate) fn fleet_held(&self) -> bool {
-        matches!(
-            self.fleet.try_lock(),
-            Err(std::sync::TryLockError::WouldBlock)
-        )
+        use std::sync::TryLockError;
+        matches!(self.fleet.try_lock(), Err(TryLockError::WouldBlock))
     }
 
     /// Tells `waits` [`SetProgress::Waits`] each time CI's set of a desired state finds the

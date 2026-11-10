@@ -308,6 +308,7 @@ impl AptRepo {
             components: vec!["main".to_owned()],
             fingerprints: vec![self.key.fingerprint().to_owned()],
             keyring,
+            ..Default::default()
         }
     }
 

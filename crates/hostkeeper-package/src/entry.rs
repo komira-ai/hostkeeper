@@ -6,7 +6,8 @@
 //!
 //! The sources are the host's `mirror` stores in file order (asked for the digest, listed in the
 //! order or not), then the artifact's own locations in order. A location of a store the host does
-//! not define, or whose locator breaks the locator grammar, is skipped. Each source is asked with
+//! not define, whose locator breaks the locator grammar, or in the `coordinator` store when
+//! [`PinnedEnv::coordinator`] is none, is skipped. Each source is asked with
 //! its store's credential and redirects ([`crate::stores`]) and has its own deadline,
 //! `fetch_timeout_secs`, from the start of that source's request. The first source whose bytes have
 //! the entry's size and SHA-256 wins; a source that sends more than the size is stopped and counts
@@ -50,6 +51,10 @@ use crate::stores::{Kind, Store, Stores};
 #[derive(Clone, Copy)]
 pub struct PinnedEnv<'a> {
     pub fetcher: &'a dyn Fetcher,
+    /// The fetcher of the `coordinator` store ([`crate::stores::COORDINATOR_STORE`]): it is
+    /// given the path of the blob (`/` and the locator). Without one, a location in that store is
+    /// no source.
+    pub coordinator: Option<&'a dyn Fetcher>,
     pub clock: &'a dyn Clock,
     pub bounds: &'a Bounds,
     pub stores: &'a Stores,
@@ -144,7 +149,12 @@ struct Source<'a> {
 }
 
 /// The sources of a blob whose SHA-256 is `digest`, in the order they are asked.
-fn sources<'a>(stores: &'a Stores, digest: &Sha256Hex, locations: &[Location]) -> Vec<Source<'a>> {
+fn sources<'a>(
+    stores: &'a Stores,
+    coordinator: bool,
+    digest: &Sha256Hex,
+    locations: &[Location],
+) -> Vec<Source<'a>> {
     let mirrors = stores.mirrors().filter_map(|store| {
         let url = store.mirror_url(digest.as_str())?;
         Some(Source {
@@ -155,6 +165,9 @@ fn sources<'a>(stores: &'a Stores, digest: &Sha256Hex, locations: &[Location]) -
     });
     let named = locations.iter().filter_map(|location| {
         let store = stores.get(&location.store)?;
+        if (store.kind() == Kind::Coordinator) & !coordinator {
+            return None;
+        }
         check_locator(&location.locator).ok()?;
         let url = store.blob_url(&location.locator, digest.as_str());
         Some(Source {
@@ -177,7 +190,12 @@ fn fetch_artifact(
     writer: OpenWriter,
     other_bytes: &mut Vec<String>,
 ) -> Result<Download, PackageFailure> {
-    let sources = sources(env.stores, digest, &entry.locations);
+    let sources = sources(
+        env.stores,
+        env.coordinator.is_some(),
+        digest,
+        &entry.locations,
+    );
     if sources.is_empty() {
         return Err(PackageFailure::environment(NO_STORE));
     }
@@ -185,8 +203,12 @@ fn fetch_artifact(
     let mut any_wrong = false;
     for source in &sources {
         let start = Stamp::now(env.clock);
+        let fetcher = match (source.store.kind(), env.coordinator) {
+            (Kind::Coordinator, Some(coordinator)) => coordinator,
+            _ => env.fetcher,
+        };
         let job = Job {
-            fetcher: env.fetcher,
+            fetcher,
             clock: env.clock,
             dir,
             request: Request {
