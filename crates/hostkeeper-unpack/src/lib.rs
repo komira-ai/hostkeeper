@@ -14,6 +14,12 @@
 //! - [`remove_orphans`] removes what a crashed unpack left.
 //! - [`UnpackError::outcome`] says how a step record reports each failure.
 //!
+//! The daemon no longer unpacks an archive: it stages a package from its package manager's
+//! repository into a directory its installer fills ([`stage_filled`], which seals and publishes
+//! it as an unpacked archive is, through [`HostFs`]), and calls [`remove_orphans`] at start.
+//! [`unpack`] and the archive reader behind it are used by the tests of `xtask`'s release
+//! packages, which unpack the `.tar.zst` they build.
+//!
 //! This crate does no network and runs no service manager. The decoder is `ruzstd`, in pure
 //! Rust, built without its default features.
 //!

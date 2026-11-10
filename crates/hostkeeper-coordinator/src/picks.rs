@@ -33,7 +33,7 @@ use std::sync::Arc;
 use hostkeeper_proto::hostkeeper::agent::v1 as agent;
 use hostkeeper_proto::hostkeeper::operator::v1 as operator;
 use hostkeeper_proto::hostkeeper::release::v1::Target;
-use hostkeeper_release::Installer;
+use hostkeeper_release::ARCHIVE_INSTALLER;
 use hostkeeper_release::grammar::is_installer_name;
 use hostkeeper_wire::HostId;
 use hostkeeper_wire::version::Version;
@@ -58,17 +58,13 @@ pub const TARGET_FEATURE: &str = "target-v1";
 /// How many installers a daemon may list.
 pub const MAX_INSTALLERS: usize = 16;
 
-/// The installer of the archives, which no pick returns an entry of: a daemon from before the
-/// archives were taken out may still list it, and a release kept may still name it.
-const ARCHIVE: &str = Installer::HostkeeperArchive.as_str();
-
 /// What a daemon said of its installers in a heartbeat over gRPC.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Heard {
     /// The installers it lists, in its order.
     listed: Vec<String>,
     /// The installer of each service it named one for; a service it names none for runs from
-    /// archives ([`ARCHIVE`]).
+    /// archives ([`ARCHIVE_INSTALLER`]).
     running: BTreeMap<String, String>,
     /// The drift each service reported, for the services that reported one in a good grammar.
     drift: BTreeMap<String, agent::DriftReport>,
@@ -219,11 +215,16 @@ pub(crate) fn pick<'a>(
     let Some(listed) = fleet.picks.listed(id) else {
         return Pick::Unheard;
     };
+    // No pick returns an entry of the archive installer: a daemon from before the archives were
+    // taken out may still list it, and a release kept may still name it.
     let installable =
-        |entry: &&Target| entry.installer != ARCHIVE && listed.contains(&entry.installer);
+        |entry: &&Target| entry.installer != ARCHIVE_INSTALLER && listed.contains(&entry.installer);
     if runs(fleet, service, id) {
         // A service that runs from archives (no installer said) names no installer a list has.
-        let running = fleet.picks.running(id, service).unwrap_or(ARCHIVE);
+        let running = fleet
+            .picks
+            .running(id, service)
+            .unwrap_or(ARCHIVE_INSTALLER);
         list.entries
             .iter()
             .filter(installable)

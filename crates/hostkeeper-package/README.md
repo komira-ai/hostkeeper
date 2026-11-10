@@ -7,6 +7,12 @@ release index; the order names only the service and the version, and the daemon 
 of its own platform. The result is a `VerifiedArchive`, a staging file whose size and SHA-256 are
 the index's and which is attested; nothing in this crate opens, decompresses or unpacks it.
 
+The daemon fetches no package through this crate any more: it stages a package its installer names
+from the host's package manager (`hostkeeper-install`), and uses this crate for `stores` alone (a
+Mac's start renders `stores.toml` from managed preferences). `hostkeeper-pxe` uses `bundle`, `net`,
+`gh` and `ports`, `hostkeeper-mdm-gate` uses `stores`, and `xtask`'s release channel staging tests use
+`fetch`, `index` and `prove`; nothing outside this crate uses `entry`.
+
 ```
 {release_channel}/{S}/{V}/index.json
 {release_channel}/{S}/{V}/{S}-{V}-{platform}.tar.zst
@@ -19,7 +25,7 @@ own from the target it was compiled for (`Platform::current`).
 | module | what it holds |
 |---|---|
 | `index` | `Platform`, `ReleaseIndex` (read strictly: exactly its fields, schema 1, the service and version asked for, each platform once and in order, at least one), `index_url` and `package_url` (the one place each is built). Held here under the names the shared `hostkeeper-config` types take, until those land |
-| `fetch` | `fetch_package`: reads the index, takes the entry for the host's platform, downloads that package into the staging file `packages/<service>/.fetch-<pid>-<n>` (created exclusively, never through a link, mode 0600), byte counting and SHA-256 in the pass that writes it, checked against the entry's size and SHA-256, the size cap and the deadline. `remove_orphan_fetches`, which the daemon calls at start and the fetch calls first |
+| `fetch` | `fetch_package`: reads the index, takes the entry for the host's platform, downloads that package into the staging file `packages/<service>/.fetch-<pid>-<n>` (created exclusively, never through a link, mode 0600), byte counting and SHA-256 in the pass that writes it, checked against the entry's size and SHA-256, the size cap and the deadline. `remove_orphan_fetches`, which the fetch calls first |
 | `prove` | `prove`: downloads the attestation bundle, reads the commit and ref it names, asks the `Verifier`, and returns the `VerifiedArchive`, which has no other constructor |
 | `bundle` | the attestation bundle read for what the verifier is asked to confirm (the one commit of the provenance, the certificate's source ref, the subjects' SHA-256), before anything has verified it; `prove` and `hostkeeper-pxe fetch` read bundles with it |
 | `ports` | `Fetcher` (one GET into a `Sink`, bounded by a `Limit`) and `Verifier` (one attestation, offline), and the data that crosses them |

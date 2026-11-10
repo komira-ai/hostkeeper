@@ -107,15 +107,12 @@ pub fn native_hook() -> Hook {
     }
 }
 
-/// A manifest `installer` takes, with every field it allows set.
-pub fn manifest(installer: Installer) -> Manifest {
+/// The fields every fixture manifest shares: the hook's bounds, the health URL and the params.
+fn base_manifest() -> Manifest {
     let mut manifest = Manifest {
         min_hostkeeper: "0.4.0".to_owned(),
         ..Manifest::default()
     };
-    if installer == Installer::HostkeeperArchive {
-        return manifest;
-    }
     manifest.hook = Some(hook());
     manifest.installer_bounds = Some(bounds());
     manifest.health_url = Some("http://127.0.0.1:8080/healthz".to_owned());
@@ -140,37 +137,65 @@ pub fn manifest(installer: Installer) -> Manifest {
             },
         ),
     ]);
+    manifest
+}
+
+/// A manifest `installer` takes, with every field it allows set.
+pub fn manifest(installer: Installer) -> Manifest {
+    let mut manifest = base_manifest();
     match installer {
         Installer::MacosPkg => {
             manifest.hook = Some(native_hook());
             manifest.package = Some("dev.web.server".to_owned());
             manifest.run = vec!["web".to_owned(), "web.worker".to_owned()];
         }
-        Installer::Tarball => {
-            manifest.run = vec!["web.service".to_owned()];
-            manifest.place = vec![
-                place("unit", "units/web.service", "web.service"),
-                place("unit", "units/web@.service", "web@.service"),
-                place("file", "files/web.conf", "/etc/web/web.conf"),
-                place("file", "files/share", "/opt/web/share"),
-            ];
-        }
-        Installer::OciImage => {
-            manifest.hook = Some(Hook {
-                command: Vec::new(),
-                boot: None,
-                ..hook()
-            });
-            manifest.run = vec!["web-api.service".to_owned()];
-            manifest.containers = vec![container()];
-        }
-        Installer::Apt | Installer::HostkeeperArchive => {
+        Installer::Apt => {
             manifest.hook = Some(native_hook());
             manifest.package = Some("web".to_owned());
             manifest.run = vec!["web.service".to_owned(), "web-cache.timer".to_owned()];
         }
     }
     manifest
+}
+
+/// A manifest of the shared rules alone ([`hostkeeper_release::manifest::check`]), with the
+/// fields only a withdrawn installer used set: a hook with a program, `place` entries and no
+/// package. No installer of this crate takes it, and an entry of an unlisted installer carries
+/// it.
+pub fn placed_manifest() -> Manifest {
+    Manifest {
+        run: vec!["web.service".to_owned()],
+        place: vec![
+            place("unit", "units/web.service", "web.service"),
+            place("unit", "units/web@.service", "web@.service"),
+            place("file", "files/web.conf", "/etc/web/web.conf"),
+            place("file", "files/share", "/opt/web/share"),
+        ],
+        ..base_manifest()
+    }
+}
+
+/// A manifest of the shared rules alone with a container and no hook program, as a withdrawn
+/// image installer's was.
+pub fn container_manifest() -> Manifest {
+    Manifest {
+        hook: Some(Hook {
+            command: Vec::new(),
+            boot: None,
+            ..hook()
+        }),
+        run: vec!["web-api.service".to_owned()],
+        containers: vec![container()],
+        ..base_manifest()
+    }
+}
+
+/// A manifest holding `min_hostkeeper` alone, as an archive entry's was.
+pub fn bare_manifest() -> Manifest {
+    Manifest {
+        min_hostkeeper: "0.4.0".to_owned(),
+        ..Manifest::default()
+    }
 }
 
 pub fn location(store: &str, locator: &str) -> Location {
@@ -180,18 +205,11 @@ pub fn location(store: &str, locator: &str) -> Location {
     }
 }
 
-/// An entry of `installer` with its manifest: a repository entry ([`repository_entry`]) for a
-/// backend of the repository installer, an artifact entry for any other, with an attestation
-/// but for `macos-pkg`, whose entry carries none.
-pub fn entry(installer: Installer) -> Target {
-    if installer.is_repository() {
-        return Target {
-            installer: installer.as_str().to_owned(),
-            ..repository_entry()
-        };
-    }
-    let attested = Target {
-        installer: installer.as_str().to_owned(),
+/// An artifact entry named `installer`, which may be none of this crate's, with `manifest`, its
+/// artifact's locations and digest, and an attestation.
+pub fn attested_artifact(installer: &str, manifest: Manifest) -> Target {
+    Target {
+        installer: installer.to_owned(),
         locations: vec![
             location("lan", "releases/web/1.6.0/web.bin"),
             location("github", "example-org/web/releases/download/v1.6.0/web.bin"),
@@ -206,9 +224,22 @@ pub fn entry(installer: Installer) -> Target {
                 "example-org/web/releases/download/v1.6.0/web.bin.sigstore.json",
             )],
         }),
-        manifest: Some(manifest(installer)),
+        manifest: Some(manifest),
         ..Target::default()
-    };
+    }
+}
+
+/// An entry of `installer` with its manifest: a repository entry ([`repository_entry`]) for a
+/// backend of the repository installer, an artifact entry for any other, with an attestation
+/// but for `macos-pkg`, whose entry carries none.
+pub fn entry(installer: Installer) -> Target {
+    if installer.is_repository() {
+        return Target {
+            installer: installer.as_str().to_owned(),
+            ..repository_entry()
+        };
+    }
+    let attested = attested_artifact(installer.as_str(), manifest(installer));
     if installer == Installer::MacosPkg {
         return Target {
             attestation: None,
@@ -216,6 +247,12 @@ pub fn entry(installer: Installer) -> Target {
         };
     }
     attested
+}
+
+/// An artifact entry of a withdrawn installer's name (`tarball`, `hostkeeper-archive`, `deb`),
+/// with a manifest of the shared rules alone ([`placed_manifest`]).
+pub fn unlisted(name: &str) -> Target {
+    attested_artifact(name, placed_manifest())
 }
 
 /// A repository entry as CI sends it (packages-repositories.md section 1): `apt`, the
@@ -236,14 +273,13 @@ pub fn repository_entry() -> Target {
 /// `deb` or `rpm`, or any other of the grammar), with a manifest naming a package and a hook
 /// program, as such an entry had before the installers were withdrawn.
 pub fn named(name: &str) -> Target {
-    Target {
-        installer: name.to_owned(),
-        manifest: Some(Manifest {
+    attested_artifact(
+        name,
+        Manifest {
             hook: Some(hook()),
             ..manifest(Installer::Apt)
-        }),
-        ..entry(Installer::Tarball)
-    }
+        },
+    )
 }
 
 /// A list of the artifact entries of the installers `names` ([`named`]), in that order.

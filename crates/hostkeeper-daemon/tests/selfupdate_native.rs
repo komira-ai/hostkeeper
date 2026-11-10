@@ -2,7 +2,8 @@
 //! the new binary is staged from the version's tree and handed over to, and only once it has
 //! started and confirmed itself does it install its own package, hold it and record it; the
 //! verdict is reported after that `activate`. Its failure and its deferral, the bootstrap install
-//! adopted at the start, and hostkeeper's own move from archives and its rollback (section 10.6).
+//! adopted at the start, and the refusal of a rollback below an installer the host holds
+//! (section 10.6).
 
 mod support;
 mod support_apt;

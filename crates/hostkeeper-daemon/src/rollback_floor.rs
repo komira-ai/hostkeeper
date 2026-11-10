@@ -7,7 +7,7 @@
 //! itself moved to one.
 //!
 //! The daemon knows what its disk holds: every service `placed.json` records with an installer
-//! other than `hostkeeper-archive` (its `installed` entries), hostkeeper's own among them. The
+//! other than [`ARCHIVE_INSTALLER`] (its `installed` entries), hostkeeper's own among them. The
 //! release each installer arrived in is compiled in ([`INSTALLER_FLOORS`]); an installer with no
 //! row is one a newer binary installed (a fallback put this one back), and every rollback is
 //! below it. An operator who must go back further uninstalls those services first; hostkeeper
@@ -15,7 +15,7 @@
 
 use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_placed::PlacedRecord;
-use hostkeeper_release::Installer;
+use hostkeeper_release::{ARCHIVE_INSTALLER, Installer};
 
 use crate::verbs::force::SELF_SERVICE;
 
@@ -24,8 +24,9 @@ use crate::verbs::force::SELF_SERVICE;
 pub const REASON_ROLLBACK_BELOW_INSTALLER: &str = "rollback_below_installer";
 
 /// The first release of hostkeeper whose daemon runs the steps of each installer: a binary
-/// before it cannot stage, activate, roll back or remove a version of it. `hostkeeper-archive`
-/// has none: every release reads it.
+/// before it cannot stage, activate, roll back or remove a version of it. [`ARCHIVE_INSTALLER`]
+/// has none: an old record that names it holds no version this binary runs, and no rollback is
+/// below it.
 pub const INSTALLER_FLOORS: [(Installer, HostkeeperVersion); 1] = [(
     Installer::Apt,
     HostkeeperVersion {
@@ -36,8 +37,9 @@ pub const INSTALLER_FLOORS: [(Installer, HostkeeperVersion); 1] = [(
 )];
 
 /// The first release of hostkeeper that updates itself through a native installer: its new
-/// binary installs its own package after it confirmed itself, and it runs the move and its
-/// rollback (docs/design/packages-native.md, sections 10.4 and 10.6). A host where hostkeeper
+/// binary installs its own package after it confirmed itself (docs/design/packages-native.md,
+/// sections 10.4 and 10.6; that release also ran the move from archives and its rollback, which
+/// a later daemon does not). A host where hostkeeper
 /// itself runs from its native package is never handed back to a binary before it.
 pub const SELF_NATIVE_FLOOR: HostkeeperVersion = HostkeeperVersion {
     major: 0,
@@ -47,17 +49,10 @@ pub const SELF_NATIVE_FLOOR: HostkeeperVersion = HostkeeperVersion {
 
 /// The first release that has `installer`; `None` for an installer this binary has no row of.
 pub fn floor_of(installer: Installer) -> Option<HostkeeperVersion> {
-    match installer {
-        Installer::HostkeeperArchive => Some(HostkeeperVersion {
-            major: 0,
-            minor: 0,
-            patch: 0,
-        }),
-        other => INSTALLER_FLOORS
-            .iter()
-            .find(|(row, _)| *row == other)
-            .map(|(_, floor)| *floor),
-    }
+    INSTALLER_FLOORS
+        .iter()
+        .find(|(row, _)| *row == installer)
+        .map(|(_, floor)| *floor)
 }
 
 /// Why a release of hostkeeper is below what the host holds, in the words of the log; `None`
@@ -80,6 +75,9 @@ pub fn below(record: &PlacedRecord, running: HostkeeperVersion, target: &str) ->
         ));
     }
     record.installed.iter().find_map(|(service, entry)| {
+        if entry.installer == ARCHIVE_INSTALLER {
+            return None;
+        }
         let floor = entry.installer.parse::<Installer>().ok().and_then(floor_of);
         match floor {
             Some(floor) if target >= floor => None,

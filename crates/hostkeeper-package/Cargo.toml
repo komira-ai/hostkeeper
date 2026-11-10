@@ -14,7 +14,8 @@ description = "Fetch a package from the release channel within bounds, check its
 # deadlines on the injected clock, and refused when its size or SHA-256 is not the index entry's;
 # then it is checked offline against the daemon config's trusted signer. The network and the
 # verifier sit behind the ports `Fetcher` and `Verifier`; `net` and `gh` are their one real adapter
-# each. Nothing here opens, decompresses or unpacks the archive.
+# each. Nothing here opens, decompresses or unpacks the archive. The daemon uses only `stores` of
+# it now; its other modules serve `hostkeeper-pxe` and `xtask`'s release channel staging tests.
 [dependencies]
 base64.workspace = true
 # The daemon config's `TrustedSigners`, `Bounds`, `HttpsUrl` and `Sha256Hex`, the trust error, and

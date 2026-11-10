@@ -883,8 +883,7 @@ uploads a channel. The operator stages it and serves it over HTTPS.</p>
 <span data-cell="c-connect" data-source="crates/hostkeeper-package/src/stage.rs" data-item="CONNECT_TIMEOUT">30 s</span>
 and a whole-fetch deadline from the config&rsquo;s <code>[bounds]</code>. The archive is hashed as it arrives and the
 transfer stops once it passes the indexed size. Its size and SHA-256 must equal the index entry,
-and its SHA-256 must also equal the order&rsquo;s <code>package_digest</code>, which the coordinator took from the same index
-(<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-daemon/src/real_packages.rs">crates/hostkeeper-daemon/src/real_packages.rs</a>).
+and its SHA-256 must also equal the order&rsquo;s <code>package_digest</code>, which the coordinator took from the same index.
 The config is refused when its largest package could not arrive in its fetch deadline at
 <span data-cell="c-min-rate" data-source="crates/hostkeeper-config/src/daemon.rs" data-item="MIN_FETCH_BYTES_PER_SEC">262,144</span>
 bytes per second.</p>

@@ -311,35 +311,20 @@ pub fn check_for(
     check(service, platform, manifest)?;
     let missing = |field| ManifestError::Missing { installer, field };
     let refused = |field| ManifestError::Refused { installer, field };
-    if installer == Installer::HostkeeperArchive {
-        // Its hook, units, files and params are in the attested `manifest.toml` inside.
-        return match present(manifest).into_iter().next() {
-            Some(field) => Err(refused(field)),
-            None => Ok(()),
-        };
+    if manifest.hook.is_none() {
+        return Err(missing("hook"));
     }
-    let hook = manifest.hook.as_ref().ok_or_else(|| missing("hook"))?;
     if manifest.installer_bounds.is_none() {
         return Err(missing("installer_bounds"));
     }
-    match (installer.names_a_package(), manifest.package.is_some()) {
-        (true, false) => return Err(missing("package")),
-        (false, true) => return Err(refused("package")),
-        _ => {}
+    if manifest.package.is_none() {
+        return Err(missing("package"));
     }
-    if (installer != Installer::Tarball) & !manifest.place.is_empty() {
+    if !manifest.place.is_empty() {
         return Err(refused("place"));
     }
-    match (
-        installer == Installer::OciImage,
-        manifest.containers.is_empty(),
-    ) {
-        (true, true) => return Err(missing("containers")),
-        (false, false) => return Err(refused("containers")),
-        _ => {}
-    }
-    if (installer == Installer::OciImage) & !hook.command.is_empty() {
-        return Err(refused("hook.command"));
+    if !manifest.containers.is_empty() {
+        return Err(refused("containers"));
     }
     check_hook_of(installer.is_native(), manifest)
 }
@@ -360,23 +345,6 @@ pub fn check_hook_of(native: bool, manifest: &Manifest) -> Result<(), ManifestEr
         (false, true, Some(name)) => Err(ManifestError::BootWithoutCommand(name.clone())),
         _ => Ok(()),
     }
-}
-
-/// The fields of `manifest` other than `min_hostkeeper` that are present, in field order.
-fn present(manifest: &Manifest) -> Vec<&'static str> {
-    [
-        ("package", manifest.package.is_some()),
-        ("hook", manifest.hook.is_some()),
-        ("run", !manifest.run.is_empty()),
-        ("health_url", manifest.health_url.is_some()),
-        ("place", !manifest.place.is_empty()),
-        ("params", !manifest.params.is_empty()),
-        ("containers", !manifest.containers.is_empty()),
-        ("installer_bounds", manifest.installer_bounds.is_some()),
-    ]
-    .into_iter()
-    .filter_map(|(field, is)| is.then_some(field))
-    .collect()
 }
 
 /// Parses `min_hostkeeper`, which every manifest gives.

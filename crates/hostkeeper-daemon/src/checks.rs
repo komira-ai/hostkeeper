@@ -5,8 +5,7 @@
 //! digest is the form the protobuf files fix. The manifest's `name`, `version` and
 //! `min_hostkeeper` are checked by the manifest's loader, `hostkeeper_config::manifest`, which
 //! [`crate::verbs::update`] and [`crate::verbs::force`] call with the order's service and
-//! version. Which paths a package places and whether they conflict are checked by the placed-path
-//! linker, `hostkeeper_placed::check`, which `force` calls before it changes anything.
+//! version.
 //!
 //! [`Checks`] says which of these an order is held to: every one for a hooked order, every one
 //! but `busy` and the standing halt for a `force` ([`Checks::for_force`]).
@@ -87,10 +86,10 @@ pub enum Check {
     ManifestVersion,
     /// The manifest's `min_hostkeeper` is not above this daemon.
     MinHostkeeper,
-    /// The package's shape: its archive bounds and entries, and its manifest's rules.
+    /// The package's shape and its manifest's rules, which the installer's stage judges.
     Shape,
-    /// No path the package places is another service's, or occupied by what `placed.json` does
-    /// not list (`path_conflict`).
+    /// No path the package places is another service's (`path_conflict`): no installer places a
+    /// path now, so no order is refused by it.
     PathClaim,
     /// No unfinished order of another package of the service (`busy`).
     Busy,

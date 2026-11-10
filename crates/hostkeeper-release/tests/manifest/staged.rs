@@ -4,10 +4,9 @@
 use std::collections::BTreeMap;
 
 use hostkeeper_proto::hostkeeper::release::v1::{Hook, Manifest};
-use hostkeeper_release::Installer;
 use hostkeeper_release::staged::{self, StagedError, TreeEntry, TreeProblem};
 
-use crate::support::{hook, manifest, place};
+use crate::support::{bare_manifest, container_manifest, hook, place, placed_manifest};
 
 /// A tree of the given entries; every other path is missing.
 struct Tree {
@@ -34,8 +33,8 @@ impl Tree {
     }
 }
 
-/// A tree holding the tarball fixture's program and sources.
-fn tarball_tree() -> Tree {
+/// A tree holding the placed fixture's program and sources.
+fn placed_tree() -> Tree {
     Tree::new(&[
         ("bin", TreeEntry::Directory),
         ("bin/web", TreeEntry::File),
@@ -55,15 +54,15 @@ fn with_program(program: &str) -> Manifest {
             ..hook()
         }),
         place: Vec::new(),
-        ..manifest(Installer::Tarball)
+        ..placed_manifest()
     }
 }
 
 /// Catches: a well-staged tree refused, or a path asked before its leading parts.
 #[test]
 fn a_tree_holding_the_program_and_every_source_passes_each_part_asked_in_order() {
-    let mut tree = tarball_tree();
-    assert_eq!(tree.check(&manifest(Installer::Tarball)), Ok(()));
+    let mut tree = placed_tree();
+    assert_eq!(tree.check(&placed_manifest()), Ok(()));
     assert_eq!(
         tree.asked,
         [
@@ -197,7 +196,7 @@ fn a_place_source_is_a_file_or_for_a_file_entry_a_directory_reached_through_no_l
                 "/opt/web/x"
             },
         )],
-        ..manifest(Installer::Tarball)
+        ..placed_manifest()
     };
     let mut tree = Tree::new(&[("share", TreeEntry::Directory), ("link", TreeEntry::Link)]);
     assert_eq!(tree.check(&places("file", "share")), Ok(()));
@@ -234,7 +233,7 @@ fn a_place_source_is_a_file_or_for_a_file_entry_a_directory_reached_through_no_l
 #[test]
 fn a_manifest_with_no_hook_program_asks_the_tree_nothing_for_it() {
     let mut tree = Tree::new(&[]);
-    assert_eq!(tree.check(&manifest(Installer::HostkeeperArchive)), Ok(()));
-    assert_eq!(tree.check(&manifest(Installer::OciImage)), Ok(()));
+    assert_eq!(tree.check(&bare_manifest()), Ok(()));
+    assert_eq!(tree.check(&container_manifest()), Ok(()));
     assert!(tree.asked.is_empty());
 }

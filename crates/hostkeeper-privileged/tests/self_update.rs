@@ -131,7 +131,7 @@ fn a_next_binary_that_starts_settles_the_update_succeeded_and_is_what_the_unit_r
 /// seeding the empty binary directory, not running `current`, or its unit restarted into the
 /// packaged binary alone) and the self-update of a daemon the deb installed stopping after it
 /// placed the package
-/// (the deb's enable link refused as a placed path that `placed.json` does not list, or a verdict
+/// (the deb's enable link refused, or a verdict
 /// never reported for a service that is not listed): ordered the install of [`NEXT`], the host
 /// runs it as its self-update; the record
 /// settles `Succeeded` once the new binary started; the unit's main process runs the new binary,

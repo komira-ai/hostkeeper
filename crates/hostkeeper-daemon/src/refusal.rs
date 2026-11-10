@@ -34,6 +34,8 @@ pub enum Refusal {
     /// The package needs a newer hostkeeper than this daemon (`min_hostkeeper`).
     DaemonTooOld,
     /// The release channel has no such package.
+    /// The daemon produces it no more (it stages from the host's package manager); the token
+    /// stays in the closed set.
     PackageNotFound,
     /// The package's bytes are not the digest the order names.
     DigestMismatch,
@@ -72,10 +74,9 @@ pub enum Refusal {
     /// `[hook.timeout_secs] uninstall`, or the service is `hostkeeper` itself, which the package
     /// manager removes. Refused before anything changes.
     UninstallUnsupported,
-    /// The package claims a path another service owns, or one occupied by something
-    /// `placed.json` does not list. Refused before anything changes.
+    /// A `current` or `previous` of the service is not a link to a version beside it.
     PathConflict,
-    /// `placed.json` could not be read or written, or a placed link, `current` or a directory of
+    /// `placed.json` could not be read or written, or `current`, `previous` or a directory of
     /// the service could not be made or removed.
     LinkFailed,
     /// An `update` of the service `hostkeeper` while its local list of bad versions
@@ -83,11 +84,17 @@ pub enum Refusal {
     BadVersionsUnreadable,
     /// The release index or the package could not be downloaded, or the host could not write it
     /// down for a reason other than a full disk.
+    /// The daemon produces it no more (it stages from the host's package manager); the token
+    /// stays in the closed set.
     FetchFailed,
     /// The attestation bundle could not be downloaded, or the verifier could not run or ran out
     /// of time.
+    /// The daemon produces it no more (it stages from the host's package manager); the token
+    /// stays in the closed set.
     AttestationUnavailable,
     /// The package is not attested by the trusted signer.
+    /// The daemon produces it no more (it stages from the host's package manager); the token
+    /// stays in the closed set.
     NotAttested,
     /// The archive breaks a bound or a shape rule of design section 5.5.
     BadArchive,
@@ -95,11 +102,17 @@ pub enum Refusal {
     /// another archive.
     ArtifactChanged,
     /// The release index is not the index of the version asked for.
+    /// The daemon produces it no more (it stages from the host's package manager); the token
+    /// stays in the closed set.
     IndexInvalid,
     /// The release index received does not have the SHA-256 the order names for it; it is
     /// refused before it is read.
+    /// The daemon produces it no more (it stages from the host's package manager); the token
+    /// stays in the closed set.
     IndexDigestMismatch,
     /// The release index lists no package for this host's platform.
+    /// The daemon produces it no more (it stages from the host's package manager); the token
+    /// stays in the closed set.
     NoPackageForPlatform,
     /// The order's version is a name the package directory holds for itself.
     ReservedVersion,
@@ -126,8 +139,12 @@ pub enum Refusal {
     ManifestInvalid,
     /// The host's `stores.toml` defines no store a location of the entry names, and no store is
     /// a mirror.
+    /// The daemon produces it no more (it stages from the host's package manager); the token
+    /// stays in the closed set.
     NoStore,
     /// Every source that answered gave other bytes than the entry names, and only mirrors did.
+    /// The daemon produces it no more (it stages from the host's package manager); the token
+    /// stays in the closed set.
     StoreDigestMismatch,
     /// `abort` of a service with no running step and none that could not be stopped: nothing is
     /// written.

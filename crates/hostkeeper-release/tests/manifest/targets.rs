@@ -10,12 +10,13 @@ use hostkeeper_release::grammar::LocatorError;
 use hostkeeper_release::manifest::ManifestError;
 use hostkeeper_release::target::{self, EntryError, TargetError};
 use hostkeeper_release::{
-    Installer, MAX_ATTESTATION_BYTES, MAX_ENTRY_BYTES, MAX_LOCATOR_BYTES_PER_ENTRY,
+    ARCHIVE_INSTALLER, Installer, MAX_ATTESTATION_BYTES, MAX_ENTRY_BYTES,
+    MAX_LOCATOR_BYTES_PER_ENTRY,
 };
 use prost::Message as _;
 
 use crate::support::{
-    LINUX, entry, list, location, named, named_list, pad_manifest_to, targets, web,
+    LINUX, list, location, named, named_list, pad_manifest_to, targets, unlisted, web,
 };
 
 fn check(targets: &BTreeMap<String, TargetList>) -> Result<(), TargetError> {
@@ -36,7 +37,7 @@ const NATIVE: [&str; 3] = ["deb", "rpm", "tarball"];
 fn a_release_of_lists_for_some_platforms_passes() {
     let all = targets(&[
         ("linux-x86_64", named_list(&NATIVE)),
-        ("linux-arm64", list(&[Installer::Tarball])),
+        ("linux-arm64", named_list(&["tarball"])),
         ("macos-arm64", list(&[Installer::MacosPkg])),
     ]);
     assert_eq!(check(&all), Ok(()));
@@ -77,7 +78,7 @@ fn entries(count: usize) -> TargetList {
         entries: (0..count)
             .map(|i| Target {
                 installer: format!("format-{i}"),
-                ..entry(Installer::Tarball)
+                ..unlisted("tarball")
             })
             .collect(),
     }
@@ -124,25 +125,18 @@ fn a_list_names_no_installer_twice() {
         "the list of linux-x86_64 has two entries of the installer \"deb\""
     );
     let across = targets(&[
-        ("linux-x86_64", list(&[Installer::Tarball])),
-        ("linux-arm64", list(&[Installer::Tarball])),
+        ("linux-x86_64", named_list(&["tarball"])),
+        ("linux-arm64", named_list(&["tarball"])),
     ]);
     assert_eq!(check(&across), Ok(()));
 }
 
-/// Catches: the service `hostkeeper` set with an archive entry and an installer of another
-/// format, or with that format alone, which would break self-update for every daemon on a host
-/// now; or another service held to it. Its native entries are `native.rs`'s.
+/// Catches: the service `hostkeeper` set with an archive entry alone, or with one of any other
+/// format, which no daemon could install; or another service held to it. Its native entries are
+/// `native.rs`'s.
 #[test]
-fn hostkeeper_is_set_with_no_installer_but_its_native_one_and_the_archive() {
+fn hostkeeper_is_set_with_no_installer_but_its_native_one() {
     let hostkeeper = ServiceName::new("hostkeeper").expect("a name");
-    let archive = list(&[Installer::HostkeeperArchive]);
-    let ok = targets(&[
-        ("linux-x86_64", archive.clone()),
-        ("linux-arm64", archive.clone()),
-        ("macos-arm64", archive.clone()),
-    ]);
-    assert_eq!(target::check(&hostkeeper, &ok), Ok(()));
     // Manifests of hostkeeper's own: no unit or placed file of the service `web`.
     let own = |names: &[&str]| {
         let mut list = named_list(names);
@@ -154,11 +148,12 @@ fn hostkeeper_is_set_with_no_installer_but_its_native_one_and_the_archive() {
         list
     };
     for bad in [
+        own(&[ARCHIVE_INSTALLER]),
         own(&["tarball"]),
-        own(&["hostkeeper-archive", "tarball"]),
-        own(&["deb", "hostkeeper-archive"]),
+        own(&[ARCHIVE_INSTALLER, "tarball"]),
+        own(&["deb", ARCHIVE_INSTALLER]),
     ] {
-        let set = targets(&[("linux-x86_64", archive.clone()), ("linux-arm64", bad)]);
+        let set = targets(&[("linux-arm64", bad)]);
         assert_eq!(
             target::check(&hostkeeper, &set),
             Err(TargetError::SelfList {
@@ -166,8 +161,21 @@ fn hostkeeper_is_set_with_no_installer_but_its_native_one_and_the_archive() {
             })
         );
     }
-    let other = targets(&[("linux-arm64", named_list(&["tarball", "deb"]))]);
+    let other = targets(&[("linux-arm64", named_list(&["tarball", ARCHIVE_INSTALLER]))]);
     assert_eq!(check(&other), Ok(()));
+}
+
+/// Catches: an entry naming one of the withdrawn installers (`hostkeeper-archive`, `tarball`,
+/// `oci-image`) refused, though a set that names one is accepted as one that names any unknown
+/// installer is, whatever manifest it carries.
+#[test]
+fn an_entry_naming_a_withdrawn_installer_is_accepted_as_any_unknown_name_is() {
+    for name in [ARCHIVE_INSTALLER, "tarball", "oci-image"] {
+        assert_eq!(check_entry(&named(name)), Ok(()), "{name}");
+        assert_eq!(check_entry(&unlisted(name)), Ok(()), "{name}");
+        let set = targets(&[("linux-x86_64", named_list(&[name, "deb"]))]);
+        assert_eq!(check(&set), Ok(()), "{name}");
+    }
 }
 
 /// Catches: two broken platforms refused for a different one from run to run.
@@ -273,7 +281,7 @@ fn an_entry_that_breaks_a_rule_is_named_by_platform_and_place() {
 fn an_installer_is_1_to_32_bytes_of_lower_case_letters_digits_and_hyphens() {
     let named = |name: &str| Target {
         installer: name.to_owned(),
-        ..entry(Installer::Tarball)
+        ..unlisted("tarball")
     };
     let longest = "a".repeat(32);
     for good in ["deb", "flatpak", "snap-2", longest.as_str(), "-"] {
@@ -510,7 +518,7 @@ fn an_entry_holds_at_most_2_kib_of_locators_in_all() {
 
 /// An entry that encodes to exactly `bytes`, by padding its manifest.
 fn entry_of(bytes: usize) -> Target {
-    let mut e = entry(Installer::Tarball);
+    let mut e = unlisted("tarball");
     let rest = e.encoded_len() - e.manifest.as_ref().expect("a manifest").encoded_len();
     // The manifest's length prefix grows with it; aim a little short, then settle.
     let mut manifest = e.manifest.take().expect("a manifest");

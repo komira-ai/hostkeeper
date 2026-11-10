@@ -207,9 +207,8 @@ jobs:
     # A bound on the whole job, against a test that hangs; no test depends on it.
     timeout-minutes: 45
     env:
-      # The gh the installer pkg installs at /usr/local/lib/hostkeeper/gh, the same version and
-      # SHA-256 as artifacts.yml's macOS build: device_mac_e2e.rs installs this file at that path
-      # and checks its packages' attestations with it, offline, against a test trust root.
+      # The gh of artifacts.yml's macOS build, the same version and SHA-256. No test of this job
+      # reads it; the workflow lint (pinned_cache_tests.rs) still lists its download here.
       GH_VERSION: 2.103.3
       GH_SHA256: d700207eae9ae98fe2b89535c2c087c07823d4628c56364695a5a07ef311c062
       PREVIOUS_RELEASE_URL: https://github.com/komira-ai/hostkeeper/releases/download/v0.1.218/hostkeeper-0.1.218-macos-arm64.tar.gz
@@ -253,12 +252,10 @@ jobs:
         with:
           path: ${{ runner.temp }}/gh.zip
           key: ${{ steps.gh-cache.outputs.cache-primary-key }}
-      - name: Unpack gh where the tests find it
-        run: unzip -o -j -q "$RUNNER_TEMP/gh-checked.zip" "gh_${GH_VERSION}_macOS_arm64/bin/gh" -d target/privileged-tools
-      # The released daemon self_update_across_releases.rs updates from: the binary tarball of the
-      # release crates/hostkeeper-privileged/previous-release.toml pins for this platform (the
-      # workflow lint holds PREVIOUS_RELEASE_URL and PREVIOUS_RELEASE_SHA256 equal to it). The test
-      # checks the file against the pin again and fetches nothing itself.
+      # The binary tarball of the release crates/hostkeeper-privileged/previous-release.toml pins
+      # for this platform (the workflow lint holds PREVIOUS_RELEASE_URL and PREVIOUS_RELEASE_SHA256
+      # equal to it). No test of this job reads it: self_update_across_releases.rs runs on Linux
+      # only.
       - name: Restore the pinned previous-release.tar.gz from the cache
         id: previous-release-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -350,10 +347,10 @@ jobs:
             target
           key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
           restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
-      # The gh a host checks every package's attestation with, the one the Linux packages install
-      # as /usr/lib/hostkeeper/gh (artifacts.yml pins the same version and SHA-256): Ubuntu 24.04's
-      # own gh has no `gh attestation`. tierstore_shaped.rs installs this file at that path and
-      # checks its fixture's attestation with it, offline, against a test trust root.
+      # The gh the Linux packages install as /usr/lib/hostkeeper/gh (artifacts.yml pins the same
+      # version and SHA-256): Ubuntu 24.04's own gh has no `gh attestation`. The step that stages
+      # the packages puts this file into them, and self_update_across_releases.rs installs it at
+      # that path for the released daemon.
       - name: Restore the pinned gh.tar.gz from the cache
         id: gh-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

@@ -6,13 +6,15 @@ proves a hook keeps it. Why it is shaped this way: [docs/design/hostkeeper-desig
 
 **The hook is any executable**: a binary or a script, in any language. The updater runs
 `<executable> <hook_args> <step> [args]`. The executable and `hook_args` are the `command` of the
-manifest's `[hook]` table (`manifest.toml` in the package): its first element is the executable, a
-path relative to the version directory, and the rest are `hook_args`. Our own services use
+manifest's `[hook]` table: its first element is the executable, a path relative to the version
+directory, and the rest are `hook_args`. For a package the daemon stages from a repository the
+manifest is the one of the order's entry, and its hook is the package's program at the fixed path
+`tree/usr/lib/<package>/hostkeeper-hook`, with no `hook_args`. Our own services use
 `["update-hook"]` (`tierstore update-hook cutover`); it is `[]` for an executable that takes the
 step first. The harness's `HookCommand::new` takes the same convention as its default. The hook
 runs as root, as a transient unit with `RuntimeMaxSec` (the step's `timeout_secs` from the
-manifest) and nothing else; it is safe to run because it came, byte for byte, from the package a
-trusted signer attested, not because anything confines it. This crate is our convention made
+manifest) and nothing else; it is safe to run because it came, byte for byte, from the package
+the host's package manager verified, not because anything confines it. This crate is our convention made
 code, not a requirement on a hook's language. It depends on no other crate of this workspace, so
 a service outside this repository can depend on it; `crates/xtask/tests/layering` keeps it so. The
 harness is behind the feature `conformance`, which a service turns on in its dev-dependencies.

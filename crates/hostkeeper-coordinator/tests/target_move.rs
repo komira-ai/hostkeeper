@@ -4,7 +4,7 @@
 //! from is no installer a list is picked by, so such a host is picked nothing
 //! (`installer_dropped`) and no pick ever returns an entry of `hostkeeper-archive`, whatever the
 //! release lists and whatever the daemon lists; and the releases of the move, which a stored
-//! release with archive entries still is, accepted over gRPC.
+//! release with archive entries still loads, and hostkeeper's own list with one is refused.
 //!
 //! `apt` is the native installer here (a repository entry); `deb` and `tarball` are installers
 //! of other formats, which are picked a host that runs them and no other.
@@ -331,13 +331,14 @@ async fn a_force_back_to_a_version_with_no_native_entry_skips_the_host() {
     assert_eq!(said(&grpc_beat(&rig, &moved).await), None);
 }
 
-/// Proves: over gRPC, CI sets `hostkeeper` with its native entry alone and with the archive entry
-/// after it, and `web` with an `apt` entry whose hook has a boot step and no command; the set
-/// with hostkeeper's archive entry first is refused `target_invalid`.
-/// Catches: a release of the move refused by the coordinator, or hostkeeper's list taken in an
-/// order no daemon updates itself from.
+/// Proves: over gRPC, CI sets `hostkeeper` with its native entry alone, and `web` with an `apt`
+/// entry whose hook has a boot step and no command beside an archive entry; a set of `hostkeeper`
+/// with the archive entry after its native one, before it or alone is refused `target_invalid`
+/// (A25 drops the archive half of its list).
+/// Catches: hostkeeper's list taken with an archive entry, which no daemon installs, or its
+/// native entry refused.
 #[tokio::test]
-async fn the_releases_of_the_move_are_accepted() {
+async fn hostkeeper_is_set_with_its_native_entry_alone() {
     let services = format!(
         "{SERVICES}\n[[service]]\nname = \"hostkeeper\"\nroles = [\"daemon\"]\nstages = [100]\n"
     );
@@ -362,24 +363,28 @@ async fn the_releases_of_the_move_are_accepted() {
             BTreeMap::from([("linux-x86_64".to_owned(), list(entries))]),
         )
     };
-    for (version, entries) in [("2.0", vec![own()]), ("2.1", vec![own(), archive()])] {
-        let answered = grpc(
+    let answered = grpc(
+        &rig,
+        SET_DESIRED,
+        Some(OPERATOR),
+        &operator("2.0", vec![own()]),
+    )
+    .await;
+    assert_eq!(answered.code, 0, "{answered:?}");
+    for (version, entries) in [
+        ("2.1", vec![own(), archive()]),
+        ("2.2", vec![archive(), own()]),
+        ("2.3", vec![archive()]),
+    ] {
+        let refused = grpc(
             &rig,
             SET_DESIRED,
             Some(OPERATOR),
             &operator(version, entries),
         )
         .await;
-        assert_eq!(answered.code, 0, "{version}: {answered:?}");
+        assert_eq!(refused.refusal(), (3, "target_invalid"), "{version}");
     }
-    let refused = grpc(
-        &rig,
-        SET_DESIRED,
-        Some(OPERATOR),
-        &operator("2.2", vec![archive(), own()]),
-    )
-    .await;
-    assert_eq!(refused.refusal(), (3, "target_invalid"));
 
     let mut booted = apt("2.0-1", 'a');
     let hook = booted.manifest.as_mut().and_then(|m| m.hook.as_mut());
@@ -387,4 +392,87 @@ async fn the_releases_of_the_move_are_accepted() {
     assert!(hook.command.is_empty());
     hook.boot = Some("restore".to_owned());
     set(&rig, "2.0", x86(vec![booted, web(ARCHIVE, 'f')])).await;
+}
+
+/// Proves: a release of `hostkeeper` stored with an archive entry after its native one, as a
+/// coordinator before A25 accepted it, is read back whole after a restart and by `GetRelease`:
+/// the read path does not judge the list again; and the same list set anew is refused
+/// `target_invalid`.
+/// Catches: a stored release of the move refused or dropped at start, which would lose a
+/// version an operator can still roll back to, or the list rule applied to what is read.
+#[tokio::test]
+async fn a_stored_release_of_hostkeeper_with_an_archive_entry_still_loads() {
+    let services = format!(
+        "{SERVICES}\n[[service]]\nname = \"hostkeeper\"\nroles = [\"daemon\"]\nstages = [100]\n"
+    );
+    let mut rig = Rig::new(
+        "move-stored",
+        Spec::recorded()
+            .with_services(&services)
+            .with_oidc_services(&["web"])
+            .without_legacy(),
+    )
+    .routed();
+    let mut own = repository_entry("hostkeeper", "2.0-1", 'a');
+    own.manifest.as_mut().expect("a manifest").run = vec!["hostkeeper.service".to_owned()];
+    let archive = entry("hostkeeper", ARCHIVE, 'f', 1_000);
+    let release = support::targets::set(
+        "hostkeeper",
+        "2.0",
+        BTreeMap::from([("linux-x86_64".to_owned(), list(vec![own.clone()]))]),
+    );
+    let answered = grpc(&rig, SET_DESIRED, Some(OPERATOR), &release).await;
+    assert_eq!(answered.code, 0, "{answered:?}");
+
+    // The releases file as a coordinator before A25 wrote it: the archive entry after the native.
+    let path = rig.dir.path().join("desired.json.releases");
+    let mut book: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("the releases file"))
+            .expect("JSON");
+    let entries = book["services"]["hostkeeper"]["2.0"]["targets"]["linux-x86_64"]["entries"]
+        .as_array_mut()
+        .expect("entries");
+    let stored_archive = serde_json::json!({
+        "installer": ARCHIVE,
+        "digest": archive.digest,
+        "bytes": archive.bytes,
+        "locations": [{"store": "github", "locator": archive.locations[0].locator}],
+        "attestation": {
+            "digest": archive.attestation.as_ref().expect("an attestation").digest,
+            "bytes": archive.attestation.as_ref().expect("an attestation").bytes,
+            "locations": [{"store": "github", "locator": archive.attestation.as_ref()
+                .expect("an attestation").locations[0].locator}],
+        },
+        "manifest": {"minHostkeeper": "0.4.0"},
+    });
+    entries.push(stored_archive);
+    std::fs::write(&path, serde_json::to_string(&book).expect("JSON")).expect("written");
+
+    rig.restart();
+    let read = grpc(
+        &rig,
+        support::targets::GET_RELEASE,
+        Some(OPERATOR),
+        &proto::GetReleaseRequest {
+            service: "hostkeeper".to_owned(),
+            version: "2.0".to_owned(),
+        },
+    )
+    .await;
+    assert_eq!(read.code, 0, "{read:?}");
+    let read: proto::GetReleaseResponse = read.decoded();
+    let installers: Vec<&str> = read.targets["linux-x86_64"]
+        .entries
+        .iter()
+        .map(|e| e.installer.as_str())
+        .collect();
+    assert_eq!(installers, ["apt", ARCHIVE]);
+
+    let again = support::targets::set(
+        "hostkeeper",
+        "2.1",
+        BTreeMap::from([("linux-x86_64".to_owned(), list(vec![own, archive]))]),
+    );
+    let refused = grpc(&rig, SET_DESIRED, Some(OPERATOR), &again).await;
+    assert_eq!(refused.refusal(), (3, "target_invalid"));
 }

@@ -10,35 +10,26 @@
 # three starts that do not settle falling back to the old one, a SIGKILL before and after the
 # exec while the update waits for its restart), and, in
 # tierstore_shaped.rs, the whole update path: the real daemon under a Type=notify unit and the
-# real coordinator in process update a tierstore-shaped package fetched from a loopback release
-# channel, checked by the pinned gh against a test trust root, unpacked, switched and run by its
-# hook in step units, roll it back on a failed verify, and force it back to the previous version
-# with the channel down; in self_update_across_releases.rs, on Linux and on the Mac, hostkeeper's
-# update of itself from the published release crates/hostkeeper-privileged/previous-release.toml
-# pins to this build, with the same coordinator (on Linux through its .deb from a loopback apt
-# repository, on the Mac through the channel and verifier): the released daemon as the
-# host's own unit hostkeeper.service (or its own launchd job dev.hostkeeper.hostkeeper) updating to
-# this build by the hand-over, and falling back to its own binary (three tries, then the update
-# settles Failed) from this build made to fail its start, and this build updating to itself under a newer version name; on the Mac the daemon started as a
-# launchd job and binding no socket, a hook step as a launchd job stopped at its
-# bound, the observer's launchd and proc_pidpath adapters, and the package check's codesign and
-# quarantine verdicts, and in
-# device_mac_e2e.rs hello's macOS package installed, updated, rolled back and uninstalled by the
-# real daemon and coordinator, its plists linked into /Library/LaunchDaemons and loaded by
-# launchd, in device_mac_selfupdate.rs hostkeeper's update of itself under launchd (the
-# hand-over, the clean exit, launchd starting the old binary, which execs the new one, the settle
-# at its start, a new binary that cannot start fallen back from, and an install of the running
-# version with no restart), and in
+# real coordinator in process update a tierstore-shaped package, a .deb the daemon stages from a
+# signed apt repository the test builds on disk (the entry's pin and the repository's signature
+# checked, the tree extracted and sealed), installs with apt, switches and runs by its hook in
+# step units, roll it back on a failed verify, and force it back to the previous version with the
+# repository removed; in self_update_across_releases.rs, hostkeeper's update of itself from the
+# published release crates/hostkeeper-privileged/previous-release.toml pins to this build, with
+# the same coordinator, through its .deb from a loopback apt repository: the released daemon as
+# the host's own unit hostkeeper.service updating to this build by the hand-over, and falling
+# back to its own binary (three tries, then the update settles Failed) from this build made to
+# fail its start, and this build updating to itself under a newer version name; on the Mac the
+# daemon started as a launchd job and binding no socket, a hook step as a launchd job stopped at
+# its bound, the observer's launchd and proc_pidpath adapters, and the package check's codesign
+# and quarantine verdicts, and in
 # install_macos_pkg.rs the macos-pkg installer driven as root with the real pkgutil, installer, lsbom
 # and launchctl, against M11's unsigned fixture forms built at test time, with nothing signed and no
-# trust setting or keychain changed, and in
-# unpack_mac.rs a package with read-only
-# directories unpacked by the production unpacker, once as the runner's own user and once as
-# root. In the job first-boot the programs themselves
+# trust setting or keychain changed. In the job first-boot the programs themselves
 # meet: the coordinator and the
 # daemon, each started by the tests as a child process, through a host's first boot (enrollment,
 # approval, the host certificate, heartbeats over mutual TLS, a restart of each) and a package
-# assigned and installed. In the job openrc-device the daemon meets the OpenRC of Alpine Linux:
+# assigned, installed with apt from a signed repository the test builds, updated and uninstalled. In the job openrc-device the daemon meets the OpenRC of Alpine Linux:
 # the tests of openrc_device.rs run in a docker container built from
 # crates/hostkeeper-privileged/openrc, with the programs built for x86_64-unknown-linux-musl.
 # Network install end to end (docs/design/network-install.md section 11)
@@ -73,35 +64,30 @@
 # (no network, no pull).
 #
 # In each job the test binaries are built as the runner's own user; only their run is as root,
-# through the cargo runner `sudo`, the one use of it in the job (on the Mac, unpack_mac also runs
-# once as the runner's user, before the run as root). So no file of the Cargo registry
+# through the cargo runner `sudo`, the one use of it in the job. So no file of the Cargo registry
 # or of target/ is owned by root, and a test writes only its scratch directory under target/ (and,
 # for the failed end-to-end tests, what it keeps for the job's
 # artifact under target/privileged-artifacts/; but
 # the self-update tests, whose scratch directory is under /run/hostkeeper-ci, because the release
 # trees the daemon checks must have root's directories all the way up, and whose drop-in is in
 # /run/systemd/system; on the Mac, what the daemon's fixed paths name: the step jobs' directory
-# under /var/run, and the pki directory its enrollment loop opens, and for device_mac_e2e a tree
-# under /private/var, gh and the trusted root in /usr/local/lib/hostkeeper, the placed state in
-# /var/lib/hostkeeper, hello's plists in /Library/LaunchDaemons
-# (each moved aside if the host already has it and put back when the test ends) and the release
-# channel's CA appended to /etc/ssl/cert.pem, which is written back as it was, and for
-# device_mac_selfupdate a tree under /private/var; for self_update_across_releases the daemon's own
+# under /var/run, and the pki directory its enrollment loop opens, and for the package check's
+# test a tree under /private/var; for self_update_across_releases the daemon's own
 # bootstrap unit where the deb installs it (/usr/lib/systemd/system/hostkeeper.service, with its wants link)
-# and the package unit where a package links it (/etc/systemd/system/hostkeeper.service), or on the Mac its plist
-# where the pkg puts it (/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist), beside the fixed
+# and the package unit where a package links it (/etc/systemd/system/hostkeeper.service), the
+# repository entry the daemon reads in /etc/hostkeeper/repositories with its keyring, and the
+# deb in dpkg's database (purged when the test ends), beside the fixed
 # paths of the end-to-end tests; and in first-boot
 # the daemon's fixed paths too: the pki directory /etc/updater, the self-update units under
 # /etc/systemd/system, /var/lib/hostkeeper (with the packages directory the tests give the
-# daemon), and for install_uninstall the fixture service's unit and its wants link and the
-# package check's verifier directory /usr/lib/hostkeeper, each refused if the host already has it
-# and removed when the test ends, and the release channel's CA appended to the host's CA bundle,
-# which is written back as it was; each on a runner that is thrown away after the job). Each test
+# daemon), and for install_uninstall the fixture service's unit and its wants link, the
+# repository entry in /etc/hostkeeper and the fixture package in dpkg's database, each refused
+# if the host already has it and removed (the package purged) when the test ends; each on a
+# runner that is thrown away after the job). Each test
 # names its units hostkeeper-ci-<test>-<pid>-<n> (the fixture service's unit is
 # hostkeeper-ci-fixture, its steps updater-hostkeeper-ci-fixture-<step>-<n>), or its launchd jobs
-# dev.hostkeeper.ci-<test>-<pid> (a step job by its unit, as the launcher names it; hello's slots
-# hello.a and hello.b as its package names them), and stops them
-# when it ends, failed or not; every coordinator and release channel is on the loopback address,
+# dev.hostkeeper.ci-<test>-<pid> (a step job by its unit, as the launcher names it), and stops them
+# when it ends, failed or not; every coordinator and apt repository is on the loopback address,
 # so no test leaves the host (the jobs' downloads are steps of their own, before the test). The test targets are
 # named, in both steps of each job, so that the run is the privileged tests and nothing else of the
 # crate; the workflow lint holds each job's list to the files that are privileged for it (first
@@ -173,10 +159,10 @@ jobs:
             target
           key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
           restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
-      # The gh a host checks every package's attestation with, the one the Linux packages install
-      # as /usr/lib/hostkeeper/gh (artifacts.yml pins the same version and SHA-256): Ubuntu 24.04's
-      # own gh has no `gh attestation`. tierstore_shaped.rs installs this file at that path and
-      # checks its fixture's attestation with it, offline, against a test trust root.
+      # The gh the Linux packages install as /usr/lib/hostkeeper/gh (artifacts.yml pins the same
+      # version and SHA-256): Ubuntu 24.04's own gh has no `gh attestation`. The step that stages
+      # the packages puts this file into them, and self_update_across_releases.rs installs it at
+      # that path for the released daemon.
       - name: Restore the pinned gh.tar.gz from the cache
         id: gh-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -318,10 +304,10 @@ jobs:
   # The first boot of a host with the real programs: the coordinator and the daemon started by
   # the tests as child processes on loopback (first_boot: enrollment, approval, the host
   # certificate, heartbeats, restarts of each; install_uninstall: an assigned package installed
-  # from a release channel the test serves, kept across restarts, updated and uninstalled).
-  # The daemon fixes its pki directory, its self-update units and its package check's CA bundle
-  # and verifier on the host, with no flag. These tests claim the paths they make there (each refused if the host already
-  # has it) and remove them when they end, and write the CA bundle back as it was, so they run in
+  # with apt from a signed repository the test builds, kept across restarts, updated and
+  # uninstalled). The daemon fixes its pki directory and its self-update units on the host, with
+  # no flag, and reads its repository entries from /etc/hostkeeper/repositories. These tests claim the paths they make there (each refused if the host already
+  # has it) and remove them when they end, so they run in
   # a job of their own, on a runner thrown away after it.
   first-boot:
     runs-on: ubuntu-24.04
@@ -364,16 +350,12 @@ jobs:
             target
           key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
 
-  # The device run on a Mac (design section 5.9): the launchd adapters, the process probe and the
-  # package check against a GitHub-hosted arm64 macOS runner (passwordless sudo, launchd), and, in
-  # device_mac_e2e.rs, hello's macOS package installed, updated, rolled back on a failed verify
-  # and uninstalled by the real daemon under launchd, ordered by the real coordinator in process
-  # and fetched from a loopback release channel checked by the pinned gh against a test trust
-  # root, and, in device_mac_selfupdate.rs, hostkeeper updating itself from one version to the
-  # next as a launchd job by the hand-over, and falling back from a next binary that cannot
-  # start. The tests print what they
-  # find (the proc_pidpath table, the verdicts of codesign, the daemon's Status) to the log, and a
-  # failing end-to-end test what the Mac held.
+  # The device run on a Mac (design section 5.9): the launchd adapters, the process probe, the
+  # boot id, the enrollment claims and the package check against a GitHub-hosted arm64 macOS
+  # runner (passwordless sudo, launchd), in device_mac.rs (the real daemon under launchd binding no
+  # socket, a hook step as a launchd job stopped at its bound), and, in install_macos_pkg.rs, the
+  # macos-pkg installer against the real pkgutil, installer, lsbom and launchctl. The tests print
+  # what they find (the proc_pidpath table, the verdicts of codesign) to the log.
   macos-device:
     runs-on: macos-15
     permissions:
@@ -381,9 +363,8 @@ jobs:
     # A bound on the whole job, against a test that hangs; no test depends on it.
     timeout-minutes: 45
     env:
-      # The gh the installer pkg installs at /usr/local/lib/hostkeeper/gh, the same version and
-      # SHA-256 as artifacts.yml's macOS build: device_mac_e2e.rs installs this file at that path
-      # and checks its packages' attestations with it, offline, against a test trust root.
+      # The gh of artifacts.yml's macOS build, the same version and SHA-256. No test of this job
+      # reads it; the workflow lint (pinned_cache_tests.rs) still lists its download here.
       GH_VERSION: 2.103.3
       GH_SHA256: d700207eae9ae98fe2b89535c2c087c07823d4628c56364695a5a07ef311c062
       PREVIOUS_RELEASE_URL: https://github.com/komira-ai/hostkeeper/releases/download/v0.1.218/hostkeeper-0.1.218-macos-arm64.tar.gz
@@ -427,12 +408,10 @@ jobs:
         with:
           path: ${{ runner.temp }}/gh.zip
           key: ${{ steps.gh-cache.outputs.cache-primary-key }}
-      - name: Unpack gh where the tests find it
-        run: unzip -o -j -q "$RUNNER_TEMP/gh-checked.zip" "gh_${GH_VERSION}_macOS_arm64/bin/gh" -d target/privileged-tools
-      # The released daemon self_update_across_releases.rs updates from: the binary tarball of the
-      # release crates/hostkeeper-privileged/previous-release.toml pins for this platform (the
-      # workflow lint holds PREVIOUS_RELEASE_URL and PREVIOUS_RELEASE_SHA256 equal to it). The test
-      # checks the file against the pin again and fetches nothing itself.
+      # The binary tarball of the release crates/hostkeeper-privileged/previous-release.toml pins
+      # for this platform (the workflow lint holds PREVIOUS_RELEASE_URL and PREVIOUS_RELEASE_SHA256
+      # equal to it). No test of this job reads it: self_update_across_releases.rs runs on Linux
+      # only.
       - name: Restore the pinned previous-release.tar.gz from the cache
         id: previous-release-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

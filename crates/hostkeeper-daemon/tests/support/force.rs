@@ -79,7 +79,7 @@ pub fn link_of(rig: &Rig, service: &str, link: &str) -> Option<String> {
 }
 
 /// The calls and writes of a force in the rig's log, coarsely: `stop`, `start` and `reload` of
-/// the service manager, `unlink` and `link` of a placed path, and `switch` for the rename of
+/// the service manager, `unlink` and `link` of a link, and `switch` for the rename of
 /// `current`. Writes of `placed.json`, syncs, temporary links and unit queries are left out.
 pub fn calls(rig: &Rig) -> Vec<String> {
     rig.placed_log

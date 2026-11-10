@@ -1,5 +1,5 @@
 //! The stores of a host: `/etc/hostkeeper/stores.toml` (docs/design/packages.md, sections 7.2 and
-//! 7.3), read and checked once, at the daemon's start.
+//! 7.3), read and checked by [`load`] (and by [`parse`], for the text of a Mac's managed preferences).
 //!
 //! ```toml
 //! [[store]]

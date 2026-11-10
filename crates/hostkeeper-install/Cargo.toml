@@ -8,9 +8,9 @@ repository.workspace = true
 publish.workspace = true
 description = "The host daemon's installers: the registry of the installers it is built with, the installers a daemon announces, and the macos-pkg installer of a signed flat .pkg with its signers file."
 
-# docs/design/packages.md, section 5: an installer is built into the daemon, behind one trait,
-# and this crate holds them. It writes only the version directory it stages; the switch, the
-# placement and the step launcher are the daemon's, behind ports. macos-pkg's parsing and steps
+# docs/design/packages.md, section 5: an installer is built into the daemon, and
+# this crate holds them. It writes only the version directory it stages; the switch and
+# the step launcher are the daemon's, behind ports. macos-pkg's parsing and steps
 # are ports and pure logic measured on Linux against fakes; its real tools run only on a Mac, in
 # the macos-device job of `crates/hostkeeper-privileged`.
 [dependencies]

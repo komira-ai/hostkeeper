@@ -53,9 +53,6 @@ pub const REGISTERED: [Installer; 1] = [Installer::Apt];
 pub fn backend_of(installer: Installer) -> Option<&'static dyn Backend> {
     match installer {
         Installer::Apt => Some(&Apt),
-        Installer::HostkeeperArchive
-        | Installer::MacosPkg
-        | Installer::OciImage
-        | Installer::Tarball => None,
+        Installer::MacosPkg => None,
     }
 }

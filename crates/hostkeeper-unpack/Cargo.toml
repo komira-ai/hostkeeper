@@ -10,6 +10,8 @@ description = "Unpacks a verified .tar.zst package into a sealed version directo
 
 # Steps 3 and 4 of docs/design/hostkeeper-design.md section 5.5: the archive reader (zstd and
 # tar), the rules every entry is checked against before it is written, the seal and the publish.
+# The daemon uses its staging of a filled directory (`stage_filled`), `HostFs` and
+# `remove_orphans`; the archive reader is used by the tests of `xtask`'s release packages.
 # It depends on `hostkeeper-config` (the manifest loader, the bounds and the names),
 # `hostkeeper-hook` (the outcome and class of an error) and `hostkeeper-steps` (the package
 # layout, the tree digest and the seal), and on no other crate of this workspace

@@ -279,7 +279,7 @@ fn an_artifact_entry_names_no_repository() {
         package_version: None,
         ..entry()
     };
-    judge_kind(Installer::Tarball, &artifact).expect("an artifact entry");
+    judge_kind(Installer::MacosPkg, &artifact).expect("an artifact entry");
     for target in [
         Target {
             repository: Some("main".to_owned()),
@@ -290,7 +290,7 @@ fn an_artifact_entry_names_no_repository() {
             ..artifact.clone()
         },
     ] {
-        let failure = judge_kind(Installer::Tarball, &target).expect_err("refused");
+        let failure = judge_kind(Installer::MacosPkg, &target).expect_err("refused");
         assert_failure(
             &failure,
             Reason::OrderInvalid,

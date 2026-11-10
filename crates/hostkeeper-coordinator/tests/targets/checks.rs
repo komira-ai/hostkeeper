@@ -122,14 +122,20 @@ fn request(service: &str, all: Targets) -> proto::SetDesiredRequest {
     set(service, "2.0", all)
 }
 
-/// The targets of `hostkeeper`: one `hostkeeper-archive` entry on each of `packages`' platforms,
-/// of the digest made of the character and the size.
+/// The targets of `hostkeeper`: its native entry on each of `packages`' platforms, `apt` from a
+/// repository on Linux and `macos-pkg` on macOS, of the pin made of the character.
 fn self_targets(packages: &[(&str, char, u64)]) -> Targets {
     packages
         .iter()
         .map(|(platform, c, bytes)| {
-            let archive = entry("hostkeeper", "hostkeeper-archive", *c, *bytes);
-            ((*platform).to_owned(), list(vec![archive]))
+            let own = if platform.starts_with("macos") {
+                let mut pkg = entry("hostkeeper", "macos-pkg", *c, *bytes);
+                pkg.manifest.as_mut().expect("a manifest").run = vec!["hostkeeper".to_owned()];
+                pkg
+            } else {
+                repository_entry("hostkeeper", "2.0-1", *c)
+            };
+            ((*platform).to_owned(), list(vec![own]))
         })
         .collect()
 }
@@ -321,7 +327,7 @@ async fn each_rule_of_section_3_4_refuses_the_set_target_invalid() {
                 "linux-x86_64".to_owned(),
                 list(vec![entry("hostkeeper", "tarball", 'a', 1000)]),
             )]),
-            "the list of linux-x86_64 for the service hostkeeper is not one native entry with at most one hostkeeper-archive entry after it, nor one hostkeeper-archive entry"
+            "the list of linux-x86_64 for the service hostkeeper is not one native entry"
                 .to_owned(),
         ),
         (
@@ -334,7 +340,7 @@ async fn each_rule_of_section_3_4_refuses_the_set_target_invalid() {
                     entry("hostkeeper", "tarball", 'b', 1000),
                 ]),
             )]),
-            "the list of linux-x86_64 for the service hostkeeper is not one native entry with at most one hostkeeper-archive entry after it, nor one hostkeeper-archive entry"
+            "the list of linux-x86_64 for the service hostkeeper is not one native entry"
                 .to_owned(),
         ),
     ];
@@ -385,6 +391,29 @@ async fn each_rule_of_section_3_4_refuses_the_set_target_invalid() {
             "entry 0 of linux-x86_64: hook.boot \"restore\" needs a hook.command; the built-in steps have no boot step".to_owned(),
         ),
         (
+            "hostkeeper with its archive entry after its native one",
+            "hostkeeper",
+            BTreeMap::from([(
+                "linux-x86_64".to_owned(),
+                list(vec![
+                    repository_entry("hostkeeper", "2.0-1", 'b'),
+                    entry("hostkeeper", "hostkeeper-archive", 'a', 1000),
+                ]),
+            )]),
+            "the list of linux-x86_64 for the service hostkeeper is not one native entry"
+                .to_owned(),
+        ),
+        (
+            "hostkeeper with its archive entry alone",
+            "hostkeeper",
+            BTreeMap::from([(
+                "linux-x86_64".to_owned(),
+                list(vec![entry("hostkeeper", "hostkeeper-archive", 'a', 1000)]),
+            )]),
+            "the list of linux-x86_64 for the service hostkeeper is not one native entry"
+                .to_owned(),
+        ),
+        (
             "hostkeeper with its archive entry before its native one",
             "hostkeeper",
             BTreeMap::from([(
@@ -394,7 +423,7 @@ async fn each_rule_of_section_3_4_refuses_the_set_target_invalid() {
                     repository_entry("hostkeeper", "2.0-1", 'b'),
                 ]),
             )]),
-            "the list of linux-x86_64 for the service hostkeeper is not one native entry with at most one hostkeeper-archive entry after it, nor one hostkeeper-archive entry"
+            "the list of linux-x86_64 for the service hostkeeper is not one native entry"
                 .to_owned(),
         ),
     ];

@@ -6,12 +6,12 @@ use hostkeeper_proto::hostkeeper::release::v1::{Hook, InstallerBounds, Manifest,
 use hostkeeper_release::manifest::{self, ManifestError};
 use hostkeeper_release::{Installer, MAX_INSTALLER_SECS};
 
-use crate::support::{LINUX, bounds, hook, manifest, web};
+use crate::support::{LINUX, bounds, hook, manifest, placed_manifest, web};
 
 fn with_hook(hook: Hook) -> Manifest {
     Manifest {
         hook: Some(hook),
-        ..manifest(Installer::Tarball)
+        ..placed_manifest()
     }
 }
 

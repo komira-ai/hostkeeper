@@ -1,6 +1,13 @@
 //! Steps 1 and 2 of fetching a package (docs/design/hostkeeper-design.md, section 5.5): download
 //! the archive from the release channel and prove that it is ours.
 //!
+//! The daemon fetches no package through `fetch`, `prove` or `entry` any more: it stages a
+//! package its installer names from the host's package manager (`hostkeeper-install`), and uses
+//! this crate for `stores` alone (a Mac's start renders `stores.toml` from managed preferences).
+//! `hostkeeper-pxe` uses `bundle`, `net`, `gh` and `ports`, `hostkeeper-mdm-gate` uses
+//! `stores`, and `xtask`'s release channel staging tests use `fetch`, `index` and `prove`;
+//! nothing outside this crate uses `entry`.
+//!
 //! - [`fetch::fetch_package`] reads the release index
 //!   `<release_channel>/<service>/<version>/index.json` ([`index`]), takes the entry for the host's [`index::Platform`], and downloads that package
 //!   into a root-only staging file under `packages/<service>/`, counting and hashing the bytes as

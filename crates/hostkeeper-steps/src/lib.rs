@@ -21,7 +21,7 @@
 //! - [`prune`] deletes the versions of a package directory that a confirmed switch leaves
 //!   behind: all but the ones `current` and `previous` name and the ones the caller protects
 //!   ([`prune_plan`], [`Layout::prune`]).
-//! - [`seal`] is the seal file of an unpacked package version, and [`tree_digest`] the digest
+//! - [`seal`] is the seal file of a staged package version, and [`tree_digest`] the digest
 //!   it holds (both public formats, docs/package-format.md).
 //! - [`force`] is the journal of a hookless `force` ([`ForceRecord`]), an optional field of the
 //!   step record; a force that stops a running update flags its record `forced`, and the runner

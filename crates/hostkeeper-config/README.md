@@ -25,7 +25,9 @@ Format exactly as design 4.1: `coordinator` and `release_channel` (`https://` UR
 `hosted_runner`; `TrustedSigners::allows_ref` matches a ref against its globs, `*` within one
 `/`-separated part) and `[bounds]`. Every key is required except those of `[bounds]`, which default
 to the design's example (`Bounds::default`). A missing `[trusted_signers]` is refused: there is
-no unsigned mode. There is no list of services and no per-service key.
+no unsigned mode. There is no list of services and no per-service key. The daemon reads neither
+`release_channel` nor `[trusted_signers]` any more; the loader still requires both, so a config
+written for an earlier release keeps loading.
 
 Refused, each as a `ConfigError`: a key no table knows (`UnknownKey`, naming the key and its
 table; `""` is the top level), a missing or ill-typed value (`Invalid`, naming the dotted key), a

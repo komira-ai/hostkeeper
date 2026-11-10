@@ -1,7 +1,7 @@
 //! The host's repository configuration (packages-repositories.md section 3.1):
 //! `/etc/hostkeeper/repositories/`, one `<name>.sources` file per repository entry, a deb822
 //! stanza, and the keyrings those stanzas name. The daemon reads it at start and refuses to
-//! start on any defect (rule S2: configuration is files), as for a bad `stores.toml`; a missing
+//! start on any defect (rule S2: configuration is files); a missing
 //! or empty directory is no repository, and such a host never announces a repository installer.
 //!
 //! A stanza is exactly `Types: deb`, one `URIs:` of `https://` or `file:/`, one `Suites:`, at

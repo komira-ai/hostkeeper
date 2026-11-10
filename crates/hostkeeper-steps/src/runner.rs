@@ -7,7 +7,7 @@
 //! updater verified, and a crash at any point leaves a record that [`StepRunner::run`] picks up: a step found `running` has its unit
 //! stopped by name and is run again, a step found `done` is not.
 //!
-//! The daemon's own moves around the hook's steps, `current` and the placed links switched to
+//! The daemon's own moves around the hook's steps, `current` and `previous` switched to
 //! the target immediately before `cutover` and back immediately before `rollback` (design
 //! section 5.2, steps 5 and 6), come in through [`StepRunner::with_switch`]: the runner calls the
 //! [`Switch`] before every run of those two steps, resumed ones included, so the switch must be
@@ -121,16 +121,16 @@ pub struct UpdateOrder {
     pub service: String,
     pub target_version: String,
     pub previous_version: Option<String>,
-    /// The sha256 of the release artifact the updater verified (its attested tarball): 64
-    /// lower-case hex digits, the value in the order and in the release's SHA256SUMS. It is
-    /// written to every step's params file as `updater.artifact_digest` = `sha256:<hex>`, and an
-    /// order with another artifact digest is another update even for the same tree.
+    /// The sha256 of the package the updater staged (the digest the order names): 64
+    /// lower-case hex digits. It is written to every step's params file as
+    /// `updater.artifact_digest` = `sha256:<hex>`, and an order with another artifact digest is
+    /// another update even for the same tree.
     ///
-    /// **This crate does not bind the digest to the unpacked bytes.** The step that unpacks the
-    /// tarball must hash the bytes as it reads them and unpack from that same stream, so that the
-    /// digest is of what was unpacked, then seal the tree with [`Staged::seal`].
+    /// **This crate does not bind the digest to the staged bytes.** The step that stages the
+    /// package must see that the digest is of what it staged, then seal the tree with
+    /// [`Staged::seal`].
     pub artifact_digest: String,
-    /// The verified staged release (the unpacked tree of that artifact).
+    /// The verified staged release (the tree staged from that package).
     pub staged: Staged,
     /// The release being replaced, kept staged until `cleanup` has succeeded; `None` on the first
     /// install.
