@@ -3,8 +3,18 @@
 use super::*;
 
 #[test]
-fn the_real_pause_waits_the_seconds_it_is_given() {
-    Sleep.pause(0);
+fn the_real_pause_sleeps_the_seconds_it_is_given() {
+    // Proves: the pause the run uses hands its sleeper exactly the seconds asked, each time, and
+    // nothing else (a sleeper that records instead of waiting: no time is measured).
+    let asked = std::cell::RefCell::new(Vec::new());
+    let pause = Sleep(|d: std::time::Duration| asked.borrow_mut().push(d));
+    pause.pause(5);
+    pause.pause(0);
+    pause.pause(17);
+    assert_eq!(
+        *asked.borrow(),
+        [5, 0, 17].map(std::time::Duration::from_secs)
+    );
 }
 
 #[derive(clap::Parser)]

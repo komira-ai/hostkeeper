@@ -192,12 +192,12 @@ pub(crate) trait Pause {
     fn pause(&self, secs: u64);
 }
 
-/// The real pause.
-pub(crate) struct Sleep;
+/// The real pause: `sleep` for the seconds asked (the run passes [`std::thread::sleep`]).
+pub(crate) struct Sleep<F: Fn(std::time::Duration)>(pub(crate) F);
 
-impl Pause for Sleep {
+impl<F: Fn(std::time::Duration)> Pause for Sleep<F> {
     fn pause(&self, secs: u64) {
-        std::thread::sleep(std::time::Duration::from_secs(secs));
+        (self.0)(std::time::Duration::from_secs(secs));
     }
 }
 
@@ -231,7 +231,7 @@ pub(crate) fn run(
         verifier,
         engine: &engine,
         probe: &probe,
-        pause: &Sleep,
+        pause: &Sleep(std::thread::sleep),
     };
     update(&ports, flags)
 }

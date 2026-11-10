@@ -27,7 +27,16 @@
 //! `channel/<rest>` beside its own file to `<dir>/<its last path segment>`, in order. A missing
 //! one is a failed transfer, as curl's for an HTTP 404 with `--fail`: with `--fail-early` it ends
 //! the run at once with exit 22; without it the run goes on, and exits as its last transfer did,
-//! as curl does. It never waits, whatever retry flags it is given. Any other `curl` exits 2.
+//! as curl does. It never waits, whatever retry flags it is given.
+//!
+//! A `curl` with `--write-out` is the Docker Engine API and the coordinator's version route of
+//! the coordinator-update unit's test (tests/coordinator_update_unit.rs): it takes the request's
+//! method (`-X`, else `GET`) and the path and query of its URL, appends `<METHOD> <path>` to
+//! `answers/calls` beside its own file, and prints the answer file `answers/<key>`, where the key
+//! is `<METHOD> <path>` with every character but a letter or a digit made `_`: its first line is
+//! the HTTP status, the rest the body, then a line break and the status, as `--write-out
+//! '\n%{http_code}'` prints them. With no such file the answer is a 404. Any other `curl` exits
+//! 2.
 //!
 //! Started as `cargo`, for that test and the run test of release.yml's job `targets`
 //! (tests/workflows/targets_run_tests.rs): `cargo xtask <args>` runs the program `xtask` beside
@@ -181,7 +190,46 @@ fn curl(dir: &Path, args: &[String]) -> ExitCode {
     if args.iter().any(|a| a == "--remote-name-all") {
         return curl_remote_names(dir, args);
     }
+    if args.iter().any(|a| a == "--write-out") {
+        return curl_answer(dir, args);
+    }
     ExitCode::from(2)
+}
+
+/// The key of a request's answer file: `<METHOD> <path>` with every character but a letter or a
+/// digit made `_`.
+fn answer_key(method: &str, path: &str) -> String {
+    format!("{method} {path}")
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect()
+}
+
+/// The fake answer of one `--write-out` request (see the module).
+fn curl_answer(dir: &Path, args: &[String]) -> ExitCode {
+    let method = value(args, "-X").unwrap_or("GET");
+    let Some(url) = args
+        .iter()
+        .find(|a| a.starts_with("http://") || a.starts_with("https://"))
+    else {
+        return ExitCode::from(2);
+    };
+    let after_scheme = url.split_once("://").map_or("", |(_, rest)| rest);
+    let path = after_scheme.find('/').map_or("/", |at| &after_scheme[at..]);
+    let answers = dir.join("answers");
+    let logged = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(answers.join("calls"))
+        .and_then(|mut log| writeln!(log, "{method} {path}"));
+    if logged.is_err() {
+        return fail("cannot write answers/calls");
+    }
+    let text = std::fs::read_to_string(answers.join(answer_key(method, path)))
+        .unwrap_or_else(|_| "404\n{\"message\":\"not found\"}".to_owned());
+    let (status, body) = text.split_once('\n').unwrap_or((text.as_str(), ""));
+    print!("{body}\n{status}");
+    ExitCode::SUCCESS
 }
 
 /// The fake `cargo`: see the module's documentation.
