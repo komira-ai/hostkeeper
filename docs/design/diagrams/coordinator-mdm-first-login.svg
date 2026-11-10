@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 650" width="1200" height="650" role="img" aria-label="First login: the deploy script writes a one-hour initial password for the user admin to a root-only file; the coordinator reads it and stores a hash; the admin logs in, must change the password, and the file is retired.">
 <title>First login of the admin user</title>
-<desc>The deploy script mints a random initial password for admin and writes it to a root-only file next to the coordinator state. The coordinator reads the file, stores an Argon2id hash with an expiry of one hour after issue, and accepts a login only before that. The first login must change the password; the file is then deleted and a marker records that the admin is set.</desc>
+<desc>The deploy script mints a random initial password for admin and writes it to a root-only file next to the coordinator state. The coordinator reads the file, stores an Argon2id hash with the file's valid_until (one hour at most), and accepts a login only before that. The first login must change the password; the file is then deleted.</desc>
 <defs><marker id="coordinator-mdm-first-login-ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0B0B0A"/></marker></defs>
 <style>
 .box-b{fill:#E8EEF4;stroke:#0B0B0A;stroke-width:1.4}
