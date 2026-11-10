@@ -201,11 +201,15 @@ fn a_short_lived_certificate_is_renewed_and_the_heartbeat_goes_on() {
     );
     assert_none_pending(&coordinator);
 
-    // A coordinator started again hears the host over its renewed certificate.
+    // A coordinator started again hears the host over a renewed certificate: this one, or a
+    // later renewal of it, since the daemon renews again every half minute whatever the
+    // restart takes.
     coordinator.restart();
     coordinator.wait_heard(node, &mut daemon);
+    let now = HostCertificate::current().unwrap_or_else(|e| panic!("{e}"));
+    assert_ne!(now.serial, first.serial, "a renewed certificate");
     assert_eq!(
-        HostCertificate::current().map(|c| c.serial),
-        Ok(renewed.serial)
+        (&now.subject, &now.key_sha256),
+        (&renewed.subject, &renewed.key_sha256)
     );
 }
