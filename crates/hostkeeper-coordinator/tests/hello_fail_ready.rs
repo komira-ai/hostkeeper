@@ -4,6 +4,7 @@
 //! (`1.2.3-fail-ready`) with the entry of the repository `komira-testing-fail`, package version
 //! `1.2.3~fail.ready`. A host that fails the failing build is rolled back by the coordinator
 //! under hello's rollout (`examples/hello/rollout.toml`), and another service keeps rolling.
+//! The registry's repository `komira` lists the suites `testing`, `stable` and `testing-fail`.
 
 mod support;
 
@@ -20,7 +21,9 @@ use hyper::{Request, Version};
 use prost::Message;
 use support::beats::{Daemon, HEARTBEAT, STATUS, grpc_beat, runs, said};
 use support::rig::{PATIENCE, Rig, Spec};
-use support::targets::{Answered, SET_DESIRED, framed, grpc, list, repository_entry};
+use support::targets::{
+    Answered, SET_DESIRED, framed, grpc, komira, list, put_repository, repository_entry,
+};
 use support::{OPERATOR, ci_token};
 
 /// hello's rollout entry as the example file has it (role `farm`), and a second service on
@@ -196,6 +199,10 @@ fn order(
 /// the last good version. The edge host `e1` runs `other` 1.0, which is the desired one.
 async fn converged_farm(name: &str) -> (Rig, Daemon, Daemon) {
     let rig = rig(name);
+    // The registry's `komira` lists the suite of the failing build while its proof runs.
+    let mut repository = komira();
+    repository.suites.push("testing-fail".to_owned());
+    put_repository(&rig, repository).await;
     let answered = set(&rig, &request("hello", RELEASE, release_entry())).await;
     assert_eq!(answered.code, 0, "{answered:?}");
     let answered = set(

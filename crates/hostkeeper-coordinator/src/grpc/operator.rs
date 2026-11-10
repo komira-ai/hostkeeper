@@ -7,9 +7,15 @@
 //! the caller the router admitted. A method the frozen JSON routes have (`Hosts.Include`,
 //! `Hosts.SetLabels`, `Releases.ClearHalt`, `Releases.SetDesired`, `Releases.Converge`,
 //! `Releases.Status`) builds the request that route reads and calls what that route calls. Every
-//! method has a handler ([`super::PENDING`] is empty). The caller was settled before the request
+//! method has a handler but the five of `HostGroups`, which [`super::PENDING`] lists and the
+//! router answers `UNIMPLEMENTED` before any adapter runs. The caller was settled before the request
 //! was read ([`super::admit`]) and arrives in the request's extensions; a request without one is
 //! an anonymous caller, and is refused as such.
+//!
+//! This coordinator holds no host group, so no group has any name: a request that names one in
+//! `host_group` is refused by its call's refusal that says so (`not_in_host_group` of `Releases`
+//! and `Rollouts`, `unknown_host_group` of `Enrollment`), never read as naming none, which would
+//! act on every host. `Audit.List` with a `host_group` filter lists no entry.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -116,6 +122,7 @@ pub(crate) fn set_refusal(why: SetError) -> proto::ReleasesRefusal {
         }
         SetError::TargetInvalid(_) => proto::ReleasesRefusal::TargetInvalid,
         SetError::ReleaseExists => proto::ReleasesRefusal::ReleaseExists,
+        SetError::RepositoryUnknown => proto::ReleasesRefusal::RepositoryUnknown,
         SetError::BelowMinVersion => proto::ReleasesRefusal::BelowMinVersion,
         SetError::BadVersion => proto::ReleasesRefusal::HeldBad,
         SetError::Channel(ChannelRefusal::NotInChannel) => proto::ReleasesRefusal::NotInChannel,
@@ -382,6 +389,9 @@ impl ReleasesApi for ReleasesService {
             }
         };
         let mut message = request.into_inner();
+        if !message.host_group.is_empty() {
+            return Err(refusal::releases(proto::ReleasesRefusal::NotInHostGroup));
+        }
         // A map left empty is a set without targets: proto3 sends no empty map.
         let targets = std::mem::take(&mut message.targets);
         let targets = (!targets.is_empty()).then_some(targets);
@@ -415,6 +425,9 @@ impl ReleasesApi for ReleasesService {
             return Err(refusal::releases(proto::ReleasesRefusal::Unauthorized));
         }
         let message = request.into_inner();
+        if !message.host_group.is_empty() {
+            return Err(refusal::releases(proto::ReleasesRefusal::NotInHostGroup));
+        }
         let service = match message.service.as_str() {
             "" => self.coordinator.legacy_service(),
             name => Some(name),
@@ -450,6 +463,9 @@ impl ReleasesApi for ReleasesService {
         }
         // No service names the legacy service, as the JSON route's query does.
         let message = request.into_inner();
+        if !message.host_group.is_empty() {
+            return Err(refusal::releases(proto::ReleasesRefusal::NotInHostGroup));
+        }
         let service = match message.service.as_str() {
             "" => self.coordinator.legacy_service(),
             name => Some(name),
@@ -488,6 +504,9 @@ impl ReleasesApi for ReleasesService {
         let limit = request.extensions().get::<CallLimit>().cloned();
         let connection = request.extensions().get::<ConnectionWaits>().cloned();
         let message = request.into_inner();
+        if !message.host_group.is_empty() {
+            return Err(refusal::releases(proto::ReleasesRefusal::NotInHostGroup));
+        }
         if message.wait_secs == 0 || message.wait_secs > MAX_WAIT_SECS {
             return Err(refusal::releases(proto::ReleasesRefusal::InvalidWait));
         }
@@ -528,6 +547,9 @@ impl ReleasesApi for ReleasesService {
         request: Request<proto::ForceRequest>,
     ) -> Result<Response<proto::ForceResponse>, Status> {
         let caller = caller_of(&request);
+        if names_group(&caller, &request.get_ref().host_group) {
+            return Err(refusal::releases(proto::ReleasesRefusal::NotInHostGroup));
+        }
         self.coordinator
             .force(&caller, request.into_inner())
             .map(Response::new)
@@ -707,6 +729,11 @@ impl EnrollmentApi for EnrollmentService {
         request: Request<proto::ApproveRequest>,
     ) -> Result<Response<proto::ApproveResponse>, Status> {
         let caller = caller_of(&request);
+        if names_group(&caller, &request.get_ref().host_group) {
+            return Err(refusal::enrollment(
+                proto::EnrollmentRefusal::UnknownHostGroup,
+            ));
+        }
         self.coordinator
             .enrollment_approve(&caller, request.into_inner())
             .map(Response::new)
@@ -729,6 +756,11 @@ impl EnrollmentApi for EnrollmentService {
         request: Request<proto::AddRecordRequest>,
     ) -> Result<Response<proto::AddRecordResponse>, Status> {
         let caller = caller_of(&request);
+        if names_group(&caller, &request.get_ref().host_group) {
+            return Err(refusal::enrollment(
+                proto::EnrollmentRefusal::UnknownHostGroup,
+            ));
+        }
         self.coordinator
             .add_record(&caller, request.into_inner())
             .map(Response::new)
@@ -788,8 +820,21 @@ impl AuditApi for AuditService {
         request: Request<proto::ListAuditRequest>,
     ) -> Result<Response<proto::ListAuditResponse>, Status> {
         let caller = caller_of(&request);
+        let message = request.into_inner();
+        let since_seq = message.since_seq;
+        let grouped = message.host_group.is_some();
         self.coordinator
-            .audit_list(&caller, request.into_inner())
+            .audit_list(&caller, message)
+            .map(|listed| {
+                if grouped {
+                    proto::ListAuditResponse {
+                        entries: Vec::new(),
+                        next_seq: since_seq,
+                    }
+                } else {
+                    listed
+                }
+            })
             .map(Response::new)
             .map_err(refusal::audit)
     }
@@ -866,6 +911,9 @@ impl RolloutsApi for RolloutsService {
         request: Request<proto::AdvanceRequest>,
     ) -> Result<Response<proto::AdvanceResponse>, Status> {
         let caller = caller_of(&request);
+        if names_group(&caller, &request.get_ref().host_group) {
+            return Err(refusal::rollouts(proto::RolloutsRefusal::NotInHostGroup));
+        }
         self.coordinator
             .rollout_advance(&caller, request.into_inner())
             .map(Response::new)
@@ -877,6 +925,9 @@ impl RolloutsApi for RolloutsService {
         request: Request<proto::PauseRequest>,
     ) -> Result<Response<proto::PauseResponse>, Status> {
         let caller = caller_of(&request);
+        if names_group(&caller, &request.get_ref().host_group) {
+            return Err(refusal::rollouts(proto::RolloutsRefusal::NotInHostGroup));
+        }
         self.coordinator
             .rollout_pause(&caller, request.into_inner())
             .map(Response::new)
@@ -888,9 +939,18 @@ impl RolloutsApi for RolloutsService {
         request: Request<proto::ResumeRequest>,
     ) -> Result<Response<proto::ResumeResponse>, Status> {
         let caller = caller_of(&request);
+        if names_group(&caller, &request.get_ref().host_group) {
+            return Err(refusal::rollouts(proto::RolloutsRefusal::NotInHostGroup));
+        }
         self.coordinator
             .rollout_resume(&caller, request.into_inner())
             .map(Response::new)
             .map_err(refusal::rollouts)
     }
+}
+
+/// Whether an operator's request names a host group, which this coordinator, holding none, has
+/// no group of. A caller who is no operator is left to the handler, which refuses it first.
+fn names_group(caller: &Caller, host_group: &str) -> bool {
+    caller.operator().is_ok() && !host_group.is_empty()
 }

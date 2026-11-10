@@ -65,6 +65,7 @@ fn approval(key: &HostKey, host: &str, replace: bool) -> proto::ApproveRequest {
         services: Vec::new(),
         replace,
         reason: "built today".to_owned(),
+        host_group: String::new(),
     }
 }
 

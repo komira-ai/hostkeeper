@@ -129,6 +129,7 @@ fn an_added_record_keeps_one_spelling_of_each_mac_and_is_listed_and_audited() {
         used_by_request_id: String::new(),
         used_unix: 0,
         platform: 0,
+        host_group: String::new(),
     };
     assert_eq!(added.record.as_ref(), Some(&want));
     let entry = added.entry.expect("an audit entry");

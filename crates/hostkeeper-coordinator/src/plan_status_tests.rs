@@ -134,6 +134,7 @@ fn pause(rig: &Rig) -> Result<proto::PauseResponse, proto::RolloutsRefusal> {
         proto::PauseRequest {
             service: WEB.to_owned(),
             reason: "watching the farm".to_owned(),
+            host_group: String::new(),
         },
     )
 }
@@ -144,6 +145,7 @@ fn resume(rig: &Rig) -> Result<proto::ResumeResponse, proto::RolloutsRefusal> {
         proto::ResumeRequest {
             service: WEB.to_owned(),
             reason: "looks fine".to_owned(),
+            host_group: String::new(),
         },
     )
 }
@@ -177,6 +179,7 @@ async fn the_default_plan_over_eight_hosts_is_three_stages_of_one_four_and_eight
             pause_reason: None,
             finished: false,
             waiting_on: vec![],
+            host_group: String::new(),
         }
     );
     let stages: Vec<(String, Option<u32>)> = [1, 2, 2, 2, 3, 3, 3, 3]

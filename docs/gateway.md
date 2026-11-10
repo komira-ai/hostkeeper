@@ -9,7 +9,7 @@ the same checks; the gateway adds no rule of its own. Every command and request 
 ## Route
 
 One route per unary method of the `hostkeeper.operator.v1` services (`Hosts`, `Releases`,
-`Services`, `Enrollment`, `Audit`, `Alerts`, `Rollouts`, `Mdm`):
+`Services`, `Enrollment`, `Audit`, `Alerts`, `Rollouts`, `Mdm`, `Repositories`, `HostGroups`; the last has no handler yet, see [What is never served](#what-is-never-served)):
 
 ```
 POST /<package>.<Service>/<Method>
@@ -34,7 +34,13 @@ set with `targets` is one audit entry `set_desired` whoever made it, CI's under 
 is the version, `with targets`, CI's workflow (`by workflow <job_workflow_ref>`) and the release
 index (`and release index <digest>`) when there are, then for each platform its entries in
 order, each as its installer, its artifact's digest and `manifest <SHA-256 of the manifest's
-encoding>` (docs/design/packages.md, section 3.4).
+encoding>` (docs/design/packages.md, section 3.4). A `SetDesired` whose targets hold a repository
+entry is refused `repository_unknown` (`FAILED_PRECONDITION`, HTTP 400) when the registry
+(`Repositories`) does not hold the repository the service names, or the entry's `repository` is not
+`<name>-<suite>` of that repository's name and one of its suites. `Repositories` takes an operator
+token only; `Put` and `Remove` are audited as `repository_put` and `repository_remove`, with the
+operator's reason and then the repository's name, URI, suites and fingerprints (for `Remove`, its
+name).
 The JSON routes `POST /v1/desired` and `GET /v1/convergence` stay CI's only. The body of
 `POST /v1/desired` takes a release index as `release_index` (its text) and
 `release_index_digest`, and a refused index is a 400 with the reason `index_digest_mismatch` or
@@ -52,7 +58,8 @@ Both are the method's message in the canonical proto3 JSON mapping:
 - a field with its default value may be left out of a response, and a request.
 
 A request body is one JSON document with nothing after it, of at most 256 KiB for
-`Releases.SetDesired` and 4 KiB for every other method. In the `targets` object of a
+`Releases.SetDesired` and `Repositories.Put` (a repository's keyring is up to 64 KiB, 87,382
+characters of base64) and 4 KiB for every other method. In the `targets` object of a
 `SetDesired`, a platform whose value is `null` is dropped before the body is read, so
 `"linux-arm64": null` means the same as the key left out; a `targets` object that then names no
 platform is refused as `INVALID_ARGUMENT` with the reason `target_invalid`. A field the message
@@ -133,6 +140,9 @@ Only the HTTP status 200 is a success.
   call the gateway.
 - No gRPC-web, no streaming and no reflection. A gRPC call is HTTP/2 with `Content-Type:
   application/grpc` and does not go through the gateway.
-- A method the coordinator has no handler for yet would answer `UNIMPLEMENTED` (501) with an
-  empty reason after its caller is checked. Every method of `hostkeeper.operator.v1` has one
-  today.
+- A method the coordinator has no handler for. The five methods of `HostGroups`
+  (`hostgroups.proto`: `List`, `Get`, `Put`, `Remove`, `Move`) have no handler in this release.
+  The gateway does not serve their service: it answers each `UNIMPLEMENTED` (501) with an empty
+  reason before it checks the token and before it reads the body, so the answer is the same
+  with any token, or none, and with any body. Every method of the other services of
+  `hostkeeper.operator.v1` has a handler.

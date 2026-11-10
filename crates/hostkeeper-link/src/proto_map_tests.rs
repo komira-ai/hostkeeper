@@ -51,6 +51,7 @@ fn beat(platform: Platform, services: Vec<ServiceFacts>) -> Heartbeat {
         renewal: crate::Renewal::default(),
         trusted_root: None,
         installers: Vec::new(),
+        repositories: None,
     }
 }
 
@@ -210,6 +211,7 @@ fn a_heartbeat_with_every_fact_maps_to_the_request_field_for_field() {
         request,
         pb::HeartbeatRequest {
             installers: Vec::new(),
+            repositories: None,
             platform: pb::Platform::LinuxArm64 as i32,
             agent: Some(pb::AgentInfo {
                 name: AGENT_NAME.to_owned(),
@@ -268,6 +270,7 @@ fn a_heartbeat_with_every_fact_maps_to_the_request_field_for_field() {
             last_renew_error: None,
             trusted_root_age_secs: None,
             trusted_root_reason: pb::TrustedRootReason::Unspecified as i32,
+            facts_generation: None,
         }
     );
 }
@@ -904,4 +907,78 @@ fn a_services_drift_goes_out_when_its_strings_are_package_versions() {
     }
     let plain = sent(&beat(Platform::LinuxX86_64, vec![facts("web", "1.0")]));
     assert_eq!(plain.services[0].drift, None);
+}
+
+/// Proves the repositories report goes out as `repositories` field for field, with its refusal
+/// when it has one and without when it has none, and that a heartbeat with no report leaves the
+/// field absent (not an empty report).
+#[test]
+fn the_repositories_report_goes_out_as_its_field() {
+    use crate::repositories::{RepositoriesReport, RepositoryRefusal};
+    let mut with = beat(Platform::LinuxX86_64, Vec::new());
+    with.repositories = Some(RepositoriesReport {
+        generation: 4,
+        digest: "ab".repeat(32),
+        refused: Some(RepositoryRefusal {
+            generation: 5,
+            digest: "cd".repeat(32),
+            reason: "the keyring lacks the fingerprint".to_owned(),
+        }),
+    });
+    assert_eq!(
+        sent(&with).repositories,
+        Some(pb::RepositoriesReport {
+            generation: 4,
+            digest: "ab".repeat(32),
+            refused: Some(pb::RepositoryRefusal {
+                generation: 5,
+                digest: "cd".repeat(32),
+                reason: "the keyring lacks the fingerprint".to_owned(),
+            }),
+        })
+    );
+    with.repositories = Some(RepositoriesReport::default());
+    assert_eq!(
+        sent(&with).repositories,
+        Some(pb::RepositoriesReport::default())
+    );
+    with.repositories = None;
+    assert_eq!(sent(&with).repositories, None);
+}
+
+/// Proves the set of a response comes in whole, as decoded, and a response with none has none.
+#[test]
+fn a_response_keeps_its_repository_set_as_decoded() {
+    use crate::repositories::PushedSet;
+    use hostkeeper_proto::hostkeeper::release::v1::Repository;
+    let entries = vec![Repository {
+        name: "komira".to_owned(),
+        kind: "apt".to_owned(),
+        uri: "https://repo.example.com/debian".to_owned(),
+        suites: vec!["stable".to_owned(), "testing".to_owned()],
+        components: vec!["main".to_owned()],
+        fingerprints: vec!["AB".repeat(20)],
+        keyring: vec![0x99, 0, 1, 4],
+    }];
+    let mapped = reply(pb::HeartbeatResponse {
+        repositories: Some(pb::RepositorySet {
+            generation: 9,
+            digest: "ef".repeat(32),
+            entries: entries.clone(),
+        }),
+        ..pb::HeartbeatResponse::default()
+    });
+    assert_eq!(
+        mapped.reply.repositories,
+        Some(PushedSet {
+            generation: 9,
+            digest: "ef".repeat(32),
+            entries,
+        })
+    );
+    assert_eq!(mapped.dropped, None);
+    assert_eq!(
+        reply(pb::HeartbeatResponse::default()).reply.repositories,
+        None
+    );
 }

@@ -6,7 +6,7 @@
 //! **Out.** The request names the platform and the agent (`hostkeeper` and its version),
 //! announces the features, and lists every installed service, which is sent even when there is
 //! none. Of a service, the name, version, health, running update, verdict and deferral go out;
-//! the installer goes out as `installer` when there is one; the observer's detail and the health
+//! the installer goes out as `installer` when there is one; the repositories report goes out as `repositories`; the observer's detail and the health
 //! detail have no field and do not. A drift goes out as `drift`; one whose string is outside a
 //! package version's grammar is left out, and the beat is sent without it. Of a verdict, the
 //! target, outcome, phase, class, reason, order id and try go out, and so do the forced flag and
@@ -17,17 +17,19 @@
 //! reason (`TRUSTED_ROOT_REASON_NONE` for a root that needs no attention); a heartbeat with no
 //! report of the root leaves the age out and the reason unspecified, which the coordinator reads
 //! as unknown. The JSON route has no field for it. The installers go out as `installers`, and the
-//! JSON route has no field for them either, nor for a service's installer.
+//! JSON route has no field for them either, nor for a service's installer. No facts generation
+//! goes out: the daemon does not announce `facts-v1`.
 //!
 //! **In.** The advertised features the daemon knows, and the halt clear generations of the
 //! services the daemon could run (a name outside its grammar names none), in the order of the
 //! service names. The `acks` are the verdicts the coordinator stored, each kept when the
 //! daemon's grammars read its service name and order id and dropped otherwise. An order is the loop's
 //! when its verb is `update`, `force`, `install`, `uninstall`, `abort` or `clear_record` and the
-//! daemon's grammars read every word of it. An `update`, `force` or `install` carries the `target`
+//! daemon's grammars read every word of it. The `repositories` set is kept as decoded, with no check of it: the daemon judges it. An `update`, `force` or `install` carries the `target`
 //! entry as decoded (see [`Entry`]), with no check of it: the daemon judges it. Any other order (a verb the daemon does not run, no verb, or a word the
 //! daemon cannot read) is not run: it is returned beside the reply ([`Mapped::dropped`]), with
-//! why, for the link to log.
+//! why, for the link to log. The `facts` of a reply are not read: a coordinator sends them only
+//! to a daemon that announced `facts-v1`, which this one does not.
 
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_hook::{Class, Phase};
@@ -39,6 +41,7 @@ use crate::beat::{AGENT_NAME, Feature, Health, Heartbeat, Platform, RootReason, 
 use crate::names::{OrderId, PackageDigest};
 use crate::order::{DeferredReport, Entry, Order, OrderResult, Outcome, Reply, Target, Verb};
 use crate::ports::{Drift, Unsendable};
+use crate::repositories::{PushedSet, RepositoriesReport};
 use crate::wire_map::acknowledged;
 
 /// Why an order whose verb the daemon does not run, or that has none, is not run.
@@ -72,6 +75,7 @@ pub(crate) fn heartbeat(beat: &Heartbeat) -> Result<pb::HeartbeatRequest, Unsend
         sent_unix: Some(beat.sent_unix),
         cert_not_after_unix: beat.renewal.cert_not_after_unix,
         last_renew_error: beat.renewal.last_renew_error.clone(),
+        repositories: beat.repositories.as_ref().map(repositories_report),
         trusted_root_age_secs: beat.trusted_root.and_then(|root| root.age_secs),
         trusted_root_reason: beat
             .trusted_root
@@ -79,7 +83,24 @@ pub(crate) fn heartbeat(beat: &Heartbeat) -> Result<pb::HeartbeatRequest, Unsend
                 root.reason.map_or(pb::TrustedRootReason::None, root_reason)
             })
             .into(),
+        facts_generation: None,
     })
+}
+
+/// The repositories report as `repositories`.
+fn repositories_report(report: &RepositoriesReport) -> pb::RepositoriesReport {
+    pb::RepositoriesReport {
+        generation: report.generation,
+        digest: report.digest.clone(),
+        refused: report
+            .refused
+            .as_ref()
+            .map(|refusal| pb::RepositoryRefusal {
+                generation: refusal.generation,
+                digest: refusal.digest.clone(),
+                reason: refusal.reason.clone(),
+            }),
+    }
 }
 
 /// A trusted root's reason.
@@ -227,6 +248,8 @@ pub(crate) fn reply(response: pb::HeartbeatResponse) -> Mapped {
         features,
         halt_generations,
         acks,
+        repositories,
+        facts: _,
     } = response;
     let features = features
         .iter()
@@ -256,6 +279,11 @@ pub(crate) fn reply(response: pb::HeartbeatResponse) -> Mapped {
             features,
             halt_generations,
             acknowledged,
+            repositories: repositories.map(|set| PushedSet {
+                generation: set.generation,
+                digest: set.digest,
+                entries: set.entries,
+            }),
         },
         dropped,
     }

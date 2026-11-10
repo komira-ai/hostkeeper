@@ -90,6 +90,7 @@ fn audit_list_returns_time_and_token_name() {
             reason: Some("1.0: crashes".to_owned()),
             at_unix: Some(AT),
             by_name: Some("alice".to_owned()),
+            host_group: None,
         }]
     );
 }

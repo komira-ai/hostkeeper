@@ -18,6 +18,7 @@ use serde_json::{Value, json};
 
 use crate::beat::{Feature, Features};
 use crate::names::{OrderId, PackageDigest, Reason};
+use crate::repositories::PushedSet;
 
 /// The coordinator's identity for one try of an order: what a verdict names, and what an
 /// acknowledgement echoes.
@@ -271,7 +272,7 @@ impl DeferredReport {
 }
 
 /// The coordinator's answer to a heartbeat.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Reply {
     /// What to do now; none: nothing.
     pub order: Option<Order>,
@@ -284,4 +285,8 @@ pub struct Reply {
     /// sent again. An acknowledgement drops only the verdict of the service it names (and,
     /// from a coordinator that advertises `verdict-acks-v1`, the older ones of that service).
     pub acknowledged: Vec<Acknowledged>,
+    /// The repositories the host's services need, whole, over gRPC only; none: keep what the
+    /// host has. The loop gives it to the daemon's [`crate::RepositorySink`] only while the
+    /// coordinator advertises `repositories-v1`.
+    pub repositories: Option<PushedSet>,
 }

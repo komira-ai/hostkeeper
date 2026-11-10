@@ -465,6 +465,7 @@ fn wait_request(gateway: bool) -> Request<Full<Bytes>> {
         service: "kbf".to_owned(),
         version: "2.0".to_owned(),
         wait_secs: 30,
+        host_group: String::new(),
     };
     let (call, body) = if gateway {
         let json = r#"{"service":"kbf","version":"2.0","waitSecs":30}"#;

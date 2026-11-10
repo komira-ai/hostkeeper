@@ -30,6 +30,7 @@ fn audit_entry(action: &str) -> op::AuditEntry {
         reason: Some("disk swap".to_owned()),
         at_unix: Some(1_800_000_000),
         by_name: Some("alice".to_owned()),
+        host_group: None,
     }
 }
 
@@ -71,6 +72,7 @@ fn plan() -> op::RolloutPlan {
         pause_reason: Some("watching the first host".to_owned()),
         finished: false,
         waiting_on: vec!["js-agent".to_owned()],
+        host_group: String::new(),
     }
 }
 
@@ -91,6 +93,7 @@ fn plan_messages() -> Vec<(&'static str, Vec<u8>)> {
             round_trip(&op::AdvanceRequest {
                 service: "db".to_owned(),
                 reason: "first host looks fine".to_owned(),
+                host_group: String::new(),
             }),
         ),
         (
@@ -105,6 +108,7 @@ fn plan_messages() -> Vec<(&'static str, Vec<u8>)> {
             round_trip(&op::PauseRequest {
                 service: "db".to_owned(),
                 reason: "watching the first host".to_owned(),
+                host_group: String::new(),
             }),
         ),
         (
@@ -119,6 +123,7 @@ fn plan_messages() -> Vec<(&'static str, Vec<u8>)> {
             round_trip(&op::ResumeRequest {
                 service: "db".to_owned(),
                 reason: "the first host is fine".to_owned(),
+                host_group: String::new(),
             }),
         ),
         (

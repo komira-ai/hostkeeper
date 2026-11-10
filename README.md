@@ -45,7 +45,7 @@ update coordinator, `hostkeeper-coordinator serve`. The parts are being moved he
 
 | crate | what it holds |
 |---|---|
-| [`hostkeeper`](crates/hostkeeper) | the binary: `hostkeeper daemon`, and `hostkeeper check-repositories`, host setup's check of a repositories directory; it only forwards to `hostkeeper-daemon` |
+| [`hostkeeper`](crates/hostkeeper) | the binary: `hostkeeper daemon`, and `hostkeeper check-repositories`, the check of a repositories directory by the daemon's own loader; it only forwards to `hostkeeper-daemon` |
 | [`hostkeeper-daemon`](crates/hostkeeper-daemon) | the daemon: start-up and its lock, the order executor with its locks and try rules, the held halts, and the enrollment and heartbeat loops (no socket: `hostkeeper admin` and the admin socket are gone) |
 | [`hostkeeper-config`](crates/hostkeeper-config) | the strict loaders of `hostkeeper.toml` and of a package's `manifest.toml`, the owner and mode check of a trusted file, and the name and path grammars |
 | [`hostkeeper-hook`](crates/hostkeeper-hook) | the contract between the host and a service's update hook, and the conformance harness a service tests its hook with (feature `conformance`) |
@@ -127,8 +127,10 @@ The items B1 to B28 of section 12.2 of the design, by theme. "Built" means the c
   [coordinator-storage.md](docs/design/coordinator-storage.md); the lab's coordinator runs on it).
 - **Enrollment.** Built: B16 (certificate authority, enrollment and renewal), B17 (approval).
   Planned: B21 (adopting hosts that run kbf's agent).
-- **Operator surfaces.** Built: B1 (the protobuf services, every method of which has a handler:
-  none answers `UNIMPLEMENTED`), B10 (the generated command line: `hkctl`, over the gateway),
+- **Operator surfaces.** Built: B1 (the protobuf services, every method of which has a handler
+  but the five of `HostGroups` (`HostGroups.List`, `HostGroups.Get`, `HostGroups.Put`,
+  `HostGroups.Remove`, `HostGroups.Move`), declared ahead of the coordinator's host groups, which
+  answer `UNIMPLEMENTED`), B10 (the generated command line: `hkctl`, over the gateway),
   B24 (the CI client), B25 (the UI).
 - **Platforms and packaging.** Built: B11 (deb, rpm, unit, boot-image overlay). Partly built:
   B18 (macOS: `hostkeeper-launchd`, the daemon's Mac adapters, package check and claims, and a
@@ -193,9 +195,11 @@ advertises it), and the coordinator's orders come back in the replies.
 
 `hostkeeper check-repositories [--dir DIR]` checks a directory of repository entries with the
 daemon's own loader, the code the daemon's start runs on `/etc/hostkeeper/repositories/`
-([packages-repositories.md](docs/design/packages-repositories.md) section 3.1). Host setup runs it,
-as root, before it puts a directory in place and after, since a daemon that refuses its repository
-entries does not start. Without `--dir` it checks `/etc/hostkeeper/repositories`.
+([packages-repositories.md](docs/design/packages-repositories.md) section 3.1), and the code the
+daemon judges a set the coordinator sends with before it switches to it (section 3.2). Host setup
+runs it, as root, before it puts a directory in place by hand and after, since a daemon that
+refuses its repository entries does not start; on a host the coordinator sends its repositories to,
+it shows what the daemon wrote. Without `--dir` it checks `/etc/hostkeeper/repositories`.
 
 `DIR` is judged as the daemon would take it at `/etc/hostkeeper/repositories`: a `Signed-By:
 /etc/hostkeeper/repositories/<file>` names the file `<file>` of `DIR`, so a directory staged

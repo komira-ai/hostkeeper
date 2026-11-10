@@ -372,6 +372,26 @@ async fn gateway_sends_no_cors_headers_and_refuses_options() {
     }
 }
 
+/// Proves: a gateway POST of each method of `HostGroups`, which no handler serves yet, is HTTP
+/// 501 with exactly `{"code":"UNIMPLEMENTED","reason":""}`, with the operator token and with no
+/// token at all: `admit` refuses a path of a service the surface does not serve before it looks
+/// at the caller's token, so the answer does not tell a caller from a stranger.
+#[tokio::test]
+async fn gateway_answers_host_groups_unimplemented_before_any_token_check() {
+    let gateway = Gateway::new("gw-host-groups");
+    let before = gateway.files();
+    let body = refused("UNIMPLEMENTED", "");
+    for path in crate::grpc::PENDING {
+        let with_token = gateway.operator(path, "{}").await;
+        assert_eq!(with_token.status, StatusCode::NOT_IMPLEMENTED, "{path}");
+        assert_eq!(with_token.text(), body, "{path}");
+        let without = gateway.send(http("POST", path, None, "{}")).await;
+        assert_eq!(without.status, StatusCode::NOT_IMPLEMENTED, "{path}");
+        assert_eq!(without.text(), body, "{path}");
+    }
+    assert_eq!(gateway.files(), before);
+}
+
 /// Proves: the caller is checked before the body is read and by the rule of the method: no
 /// bearer, a wrong one, a bearer of another scheme and one longer than the most the coordinator
 /// reads are 401 `unauthorized`; CI's token on an operator method is 403 `forbidden`; the

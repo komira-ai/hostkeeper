@@ -101,14 +101,16 @@ refusals!(
     EnrollmentRefusal,
     AuditRefusal,
     AlertsRefusal,
-    MdmRefusal
+    MdmRefusal,
+    RepositoriesRefusal
 );
 
 changing!(
     HostsRefusal,
     ReleasesRefusal,
     ServicesRefusal,
-    EnrollmentRefusal
+    EnrollmentRefusal,
+    RepositoriesRefusal
 );
 
 /// `Audit` only reads: a log that cannot be read is `store_failed`.
@@ -169,6 +171,7 @@ pub(crate) fn entry_proto(entry: &AuditEntry) -> proto::AuditEntry {
         reason: entry.reason.clone(),
         at_unix: None,
         by_name: Some(entry.by.clone()),
+        host_group: None,
     }
 }
 

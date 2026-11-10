@@ -39,7 +39,7 @@ fn set_request(version: &str, with: &[&str]) -> proto::SetDesiredRequest {
 }
 
 /// `message` followed by one field it does not define, as long as it takes to be `total` bytes.
-fn padded(mut message: Vec<u8>, total: usize) -> Vec<u8> {
+pub(super) fn padded(mut message: Vec<u8>, total: usize) -> Vec<u8> {
     fn varint(mut value: usize) -> Vec<u8> {
         let mut bytes = Vec::new();
         loop {
@@ -64,7 +64,7 @@ fn padded(mut message: Vec<u8>, total: usize) -> Vec<u8> {
 }
 
 /// A gRPC call of `path` with `bytes` as the one message.
-async fn grpc_bytes(
+pub(super) async fn grpc_bytes(
     world: &World,
     path: &str,
     bearer: Option<&str>,
@@ -74,7 +74,7 @@ async fn grpc_bytes(
     call(&world.coordinator, Surface::Control, &None, request).await
 }
 
-async fn grpc(
+pub(super) async fn grpc(
     world: &World,
     path: &str,
     bearer: Option<&str>,
@@ -90,7 +90,12 @@ async fn grpc(
 }
 
 /// A gateway call of `path` with `body`; the status, the body text.
-async fn gateway(world: &World, path: &str, bearer: &str, body: &str) -> (StatusCode, String) {
+pub(super) async fn gateway(
+    world: &World,
+    path: &str,
+    bearer: &str,
+    body: &str,
+) -> (StatusCode, String) {
     let request = Request::builder()
         .method("POST")
         .uri(path)
@@ -102,7 +107,7 @@ async fn gateway(world: &World, path: &str, bearer: &str, body: &str) -> (Status
     (status, String::from_utf8(bytes.to_vec()).expect("text"))
 }
 
-fn refused(code: &str, reason: &str) -> String {
+pub(super) fn refused(code: &str, reason: &str) -> String {
     format!(r#"{{"code":"{code}","reason":"{reason}"}}"#)
 }
 
@@ -121,19 +126,28 @@ fn get(service: &str, version: &str) -> proto::GetReleaseRequest {
     proto::GetReleaseRequest {
         service: service.to_owned(),
         version: version.to_owned(),
+        host_group: String::new(),
     }
 }
 
-/// Proves: the operator limit of a path is 256 KiB for `SetDesired` and 4 KiB for every other
-/// method, `GetRelease` and an unknown path included.
+/// Proves: the operator limit of a path is 256 KiB for `SetDesired` and `Repositories.Put` and
+/// 4 KiB for every other method, `GetRelease`, the other methods of `Repositories` and an unknown
+/// path included.
 #[test]
-fn only_set_desired_reads_256_kib() {
+fn only_set_desired_and_repositories_put_read_256_kib() {
     assert_eq!(MAX_SET_DESIRED_BYTES, 256 * 1024);
     assert_eq!(MAX_OPERATOR_BYTES, 4096);
     assert_eq!(operator_limit(SET_DESIRED), 262_144);
+    assert_eq!(
+        operator_limit("/hostkeeper.operator.v1.Repositories/Put"),
+        262_144
+    );
     for path in [
         CONVERGE,
         GET_RELEASE,
+        "/hostkeeper.operator.v1.Repositories/Get",
+        "/hostkeeper.operator.v1.Repositories/List",
+        "/hostkeeper.operator.v1.Repositories/Remove",
         "/hostkeeper.operator.v1.Audit/List",
         "",
     ] {

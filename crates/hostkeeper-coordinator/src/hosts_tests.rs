@@ -219,6 +219,7 @@ fn a_host_is_what_the_status_holds_of_it() {
         last_heartbeat_unix: UNIX + 2_000,
         heartbeat: Some(agent::HeartbeatRequest {
             installers: Vec::new(),
+            repositories: None,
             platform: agent::Platform::LinuxX8664.into(),
             agent: Some(agent::AgentInfo {
                 name: "hostkeeper-daemon".to_owned(),
@@ -236,6 +237,7 @@ fn a_host_is_what_the_status_holds_of_it() {
             last_renew_error: None,
             trusted_root_age_secs: None,
             trusted_root_reason: 0,
+            facts_generation: None,
         }),
         labels: HashMap::from([("rack".to_owned(), "r1".to_owned())]),
         exclusions: vec![proto::Exclusion {
@@ -275,6 +277,8 @@ fn a_host_is_what_the_status_holds_of_it() {
             })
             .collect(),
         running_unix: Some(UNIX + 2_000),
+        repositories: None,
+        host_group: String::new(),
     };
     assert_eq!(host, expected);
     let listed = list(&rig, 0, "").expect("a page");

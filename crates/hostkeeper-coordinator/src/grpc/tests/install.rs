@@ -17,6 +17,7 @@ const INSTALLER: [&str; 2] = ["heartbeat-v2", "install-v1"];
 fn installer_beat(services: &[(&str, &str)]) -> proto::HeartbeatRequest {
     proto::HeartbeatRequest {
         installers: Vec::new(),
+        repositories: None,
         platform: proto::Platform::LinuxArm64 as i32,
         agent: Some(proto::AgentInfo {
             name: "hostkeeper-daemon".to_owned(),
@@ -37,6 +38,7 @@ fn installer_beat(services: &[(&str, &str)]) -> proto::HeartbeatRequest {
         last_renew_error: None,
         trusted_root_age_secs: None,
         trusted_root_reason: 0,
+        facts_generation: None,
     }
 }
 

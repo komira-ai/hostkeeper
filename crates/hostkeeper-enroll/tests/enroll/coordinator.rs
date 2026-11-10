@@ -324,6 +324,7 @@ fn a_daemon_enrolls_and_renews_with_the_coordinators_own_enrollment_and_ca() {
                 services: Vec::new(),
                 replace: false,
                 reason: "new rack".to_owned(),
+                host_group: String::new(),
             },
             &|_| false,
             // No host inventory: the request is approved as the host id named.

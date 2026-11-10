@@ -19,7 +19,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use support::beats::{Daemon, FORCE, converge, grpc_beat, host, json_beat, reason, runs, said};
 use support::rig::{Rig, Spec};
-use support::targets::{SET_DESIRED, digest, entry, grpc, list, repository_entry};
+use support::targets::{SET_DESIRED, digest, entry, grpc, list, put_komira, repository_entry};
 use support::{OPERATOR, ci_token};
 
 const SERVICES: &str = r#"
@@ -238,6 +238,7 @@ async fn a_host_no_entry_fits_is_no_build_for_host_and_holds_no_convergence() {
 #[tokio::test]
 async fn an_apt_entry_is_ordered_only_to_a_host_whose_daemon_lists_apt() {
     let rig = rig("pick-repository");
+    put_komira(&rig).await;
     let apt = repository_entry("web", "1:2.0-1", 'a');
     set(&rig, "2.0", x86(vec![apt.clone(), web("tarball", 'c')])).await;
     rig.at(LATER);
@@ -687,6 +688,7 @@ async fn a_force_to_a_version_set_with_targets_follows_the_pick() {
                 confirm_service: "web".to_owned(),
             })),
             include_held: false,
+            host_group: String::new(),
         },
     )
     .await;
@@ -810,6 +812,7 @@ async fn a_force_of_a_release_with_no_archive_orders_the_hosts_picked_an_entry()
                 confirm_service: "web".to_owned(),
             })),
             include_held: false,
+            host_group: String::new(),
         },
     )
     .await;

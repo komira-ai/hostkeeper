@@ -3,8 +3,8 @@
 This runbook moves the farm from hostkeeper's own archives (`hostkeeper-archive`) to native
 packages: `.deb` from an apt repository on Linux, a signed `.pkg` on a Mac. It runs stages 5 to 10
 of [packages-native.md](../design/packages-native.md) section 10.6. For each stage it gives when
-the stage may start, the query that shows it, the work, and how to back it out. The work on each
-host is stage 6: the repository entries, the restart, and the check that the daemon announces
+the stage may start, the query that shows it, the work, and how to back it out. Stage 6 puts the
+repository in the coordinator's registry once, and checks that each host's daemon announces
 `apt`. The other stages are releases, set by their own pull requests, and the queries that say
 when the next may start.
 
@@ -151,25 +151,23 @@ installed afresh ([network-install.md](network-install.md)).
 
 **Starts when** stage 5 holds on every host.
 
-**The work.** On each of the farm's hosts, one at a time:
+**The work.** Once, on the coordinator, then a check per host:
 
-1. **The host is idle.** `busy` with its node id prints `0`. Wait for a running update to end
-   before the restart in step 3.
-2. **Place the entries.** As root, make `/etc/hostkeeper/repositories/` with the repository's
-   keyring and the two entries `komira-testing.sources` and `komira-stable.sources`, root's and
-   closed to writes by others: the steps under "Place the repository entries" in
-   [enrollment.md](enrollment.md#bootstrap-a-linux-node). The directory holds those three files
-   and nothing else, but on a host that runs hello's failing-build proof, which also holds
-   `komira-testing-fail.sources` ([hello.md](../hello.md), step 4). Then, as root,
-   `hostkeeper check-repositories` checks it with the daemon's own loader: it prints each entry
-   and exits 0, or prints the file it refuses and why and exits 1. Fix what it names before the restart.
-3. **Restart the daemon**, as root: `systemctl restart hostkeeper.service`. The daemon reads the
-   entries and decides its installers only at its start. Then `systemctl is-active
-   hostkeeper.service` prints `active`. If it prints anything else, the daemon refused the
-   directory: `journalctl -u hostkeeper.service` has a line
-   `/etc/hostkeeper/repositories: /etc/hostkeeper/repositories/<file>: <why>`. Fix or remove the
-   file it names; systemd starts the daemon again, and the next start reads the directory again.
-4. **Check that `apt` is announced.** After the host's next heartbeat, `announces` with its node
+1. **Put the repository** `komira` in the coordinator's registry, with the suites `testing` and
+   `stable`, the component `main`, the keyring and its fingerprints: `hkctl repositories put
+   --request komira.json`, as [repository-keys.md](repository-keys.md#put-the-repository-in-the-registry)
+   says. Every service of the rollout file names `komira` unless it names another repository;
+   `hkctl repositories list` prints `unregistered` empty when the registry holds every one.
+2. **Each host writes its entries.** At its next heartbeat, the daemon of each Linux host whose
+   services name `komira` (from the release with `repositories-v1`) writes
+   `/etc/hostkeeper/repositories/` from the registry: `komira-testing.sources`,
+   `komira-stable.sources` and `komira.gpg` (and `komira-testing-fail.sources` while `komira` lists
+   the suite `testing-fail` for hello's failing-build proof, [hello.md](../hello.md) step 4), checked with its own loader before it switches. A host
+   that already holds those files byte for byte, as the held setup wrote them, keeps them. No
+   restart: the daemon takes the entries and announces `apt` from the next heartbeat. `hkctl hosts
+   get` with the node id shows `repositories` with `current` true; `refused` names the reason of a
+   daemon that refused the set, which then keeps its directory as it was.
+3. **Check that `apt` is announced.** After the host's next heartbeat, `announces` with its node
    id and `--arg installer apt` prints `true`. A host that prints `false` with its daemon
    running is one of:
    - not a `deb` host, or one whose apt tools are missing, or whose installed `apt` is older than
@@ -177,11 +175,14 @@ installed afresh ([network-install.md](network-install.md)).
      tools, `apt` 2.2 or later), or remove it from the fleet and install it afresh
      ([network-install.md](network-install.md));
    - a host whose daemon is older than A19's release: stage 5 does not hold on it;
+   - a host whose daemon predates `repositories-v1`: its repositories show no `generation`. It
+     takes the set once it runs the release that has it;
    - a host whose last heartbeat came over the JSON route: wait for the next one.
 
-For the hosts installed from the network from now on, give `hostkeeper-pxe serve` the same
-directory with `--repositories` ([network-install.md](network-install.md), step 3a), so that each
-seed carries the entries and the new host announces `apt` from its first start.
+For the hosts installed from the network from now on, `hostkeeper-pxe serve --repositories` is
+needed only by a host that must install from the repository before it reaches the coordinator
+([network-install.md](network-install.md), step 3a); every other host gets the entries at its
+first heartbeat.
 
 A Mac takes the stores and the signers in place of the entries: through the coordinator's MDM
 files, or by hand ([repository-keys.md](repository-keys.md)). Its daemon reads them at its start
@@ -191,10 +192,12 @@ files, or by hand ([repository-keys.md](repository-keys.md)). Its daemon reads t
 **Holds when** `not-announcing` with `--arg installer apt` prints `0`. A host it still names
 keeps stages 7 to 9 from holding, since it runs its services from archives.
 
-**Back out**, on one host, while it runs no service from `apt`: as root, remove the directory's
-files and the directory, and restart the daemon. It stops announcing `apt`, and the next release
-of each service picks it the archive entry. A host that runs a service from `apt` backs out
-stage 7 or 8 first.
+**Back out**, while no host runs a service from `apt`: name another repository in each service of
+the rollout file, or remove the services' entries that need `komira`, then `hkctl repositories
+remove --name komira`. A host keeps the files it holds; to stop one announcing `apt`, as root,
+remove the directory's files and the directory and restart the daemon, and the next release of
+each service picks it the archive entry. A host that runs a service from `apt` backs out stage 7
+or 8 first.
 
 ## Stage 7: `hello`, the canary
 

@@ -437,6 +437,7 @@ fn proto_service(service: &Svc) -> proto::ServiceBeat {
 pub(super) fn proto_message(services: &[Svc]) -> proto::HeartbeatRequest {
     proto::HeartbeatRequest {
         installers: Vec::new(),
+        repositories: None,
         platform: proto::Platform::LinuxX8664 as i32,
         agent: Some(proto::AgentInfo {
             name: AGENT_NAME.to_owned(),
@@ -449,6 +450,7 @@ pub(super) fn proto_message(services: &[Svc]) -> proto::HeartbeatRequest {
         last_renew_error: None,
         trusted_root_age_secs: None,
         trusted_root_reason: 0,
+        facts_generation: None,
     }
 }
 

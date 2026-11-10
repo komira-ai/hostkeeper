@@ -78,7 +78,7 @@ impl World {
     }
 
     /// Every file of the ops store, by name: the ops file, its audit file and its halts file.
-    fn ops_files(&self) -> BTreeMap<String, Vec<u8>> {
+    pub(super) fn ops_files(&self) -> BTreeMap<String, Vec<u8>> {
         let mut files = BTreeMap::new();
         for entry in std::fs::read_dir(self.rig.dir.path()).expect("the state directory") {
             let name = entry
@@ -202,6 +202,7 @@ fn audit(
         reason: reason.map(str::to_owned),
         at_unix: None,
         by_name: Some("operator".to_owned()),
+        host_group: None,
     })
 }
 

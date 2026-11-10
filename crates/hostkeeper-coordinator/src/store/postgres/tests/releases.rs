@@ -562,6 +562,7 @@ async fn a_release_set_through_the_coordinator_is_served_again_after_a_restart()
     let ask = |version: &str| proto::GetReleaseRequest {
         service: "web".to_owned(),
         version: version.to_owned(),
+        host_group: String::new(),
     };
     let answer = second
         .releases()

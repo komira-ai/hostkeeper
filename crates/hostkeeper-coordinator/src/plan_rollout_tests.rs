@@ -269,6 +269,7 @@ async fn a_manual_stage_waits_for_advance_and_a_pause_stops_new_orders() {
     let advance = proto::AdvanceRequest {
         service: "web".to_owned(),
         reason: "canaries look fine".to_owned(),
+        host_group: String::new(),
     };
     let done = farm
         .rig
@@ -289,6 +290,7 @@ async fn a_manual_stage_waits_for_advance_and_a_pause_stops_new_orders() {
     let pause = proto::PauseRequest {
         service: "web".to_owned(),
         reason: "night".to_owned(),
+        host_group: String::new(),
     };
     farm.rig
         .coordinator
@@ -303,6 +305,7 @@ async fn a_manual_stage_waits_for_advance_and_a_pause_stops_new_orders() {
     let resume = proto::ResumeRequest {
         service: "web".to_owned(),
         reason: "morning".to_owned(),
+        host_group: String::new(),
     };
     farm.rig
         .coordinator
