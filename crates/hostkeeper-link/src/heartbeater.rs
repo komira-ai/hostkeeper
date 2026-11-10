@@ -39,7 +39,9 @@
 //!    ([`ServiceRecords::acknowledged`]), so a record that keeps it to report stops; with
 //!    `halt-v1`, a halt
 //!    generation newer than the held one is raised in [`HeldHalts`]; and the order goes to the
-//!    executor.
+//!    executor. A repository set of the reply goes to the [`RepositorySink`] first of all, when
+//!    the reply advertises `repositories-v1` and the host has a sink (the sink's own checks are
+//!    its to make); a set from a coordinator that did not advertise the feature is dropped.
 //!
 //! **Verdicts.** A service may have several verdicts not yet acknowledged (an order's, then a
 //! `busy` answer, then another order's). A heartbeat carries one per service: the newest. Once
@@ -100,15 +102,15 @@ use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_wire::wire::clip_renew_error;
 
 use crate::beat::{
-    ANNOUNCED, Feature, Features, Health, Heartbeat, Liveness, Observed, Platform, Renewal,
-    ServiceFacts, fit,
+    ANNOUNCED, Feature, Features, Health, Heartbeat, Liveness, Observed, Platform, REPOSITORIES,
+    Renewal, ServiceFacts, fit,
 };
 use crate::deferral::{Book, Deferral};
 use crate::names::Reason;
 use crate::order::{Acknowledged, Order, OrderRef, OrderResult, Outcome, Reply, Verb};
 use crate::ports::{
     CertSource, CertState, CoordinatorLink, Dispatch, HeldHalts, LinkError, Log, OrderSink,
-    RecordedService, RenewalSource, ServiceObserver, ServiceRecords, Sleeper, Tick,
+    RecordedService, RenewalSource, RepositorySink, ServiceObserver, ServiceRecords, Sleeper, Tick,
     TrustedRootSource, UnixClock,
 };
 
@@ -162,6 +164,9 @@ pub struct Ports {
     pub trusted_root: Arc<dyn TrustedRootSource>,
     pub clock: Arc<dyn UnixClock>,
     pub log: Arc<dyn Log>,
+    /// The host's repository configuration; none on a host that has none to manage (a Mac),
+    /// which then announces no `repositories-v1`, sends no report and applies no set.
+    pub repositories: Option<Arc<dyn RepositorySink>>,
 }
 
 /// What one heartbeat came to.
@@ -509,7 +514,7 @@ impl Heartbeater {
         Ok(Heartbeat {
             platform: self.config.platform,
             agent_version: self.config.agent_version.clone(),
-            features: ANNOUNCED.to_vec(),
+            features: self.announced(),
             services,
             sent_unix: now,
             renewal: Renewal {
@@ -519,8 +524,23 @@ impl Heartbeater {
                     .filter(|text| !text.is_empty()),
             },
             trusted_root: self.ports.trusted_root.trusted_root(),
-            installers: self.config.installers.clone(),
+            installers: self
+                .ports
+                .repositories
+                .as_ref()
+                .map_or_else(|| self.config.installers.clone(), |sink| sink.installers()),
+            repositories: self.ports.repositories.as_ref().map(|sink| sink.report()),
         })
+    }
+
+    /// The features every heartbeat announces: [`ANNOUNCED`], and `repositories-v1` when the
+    /// host has a repository configuration to manage.
+    fn announced(&self) -> Vec<Feature> {
+        let mut features = ANNOUNCED.to_vec();
+        if self.ports.repositories.is_some() {
+            features.push(REPOSITORIES);
+        }
+        features
     }
 
     /// The verdict of `name` the heartbeat carries: of those not yet acknowledged, the oldest to
@@ -580,8 +600,15 @@ impl Heartbeater {
             features,
             halt_generations,
             acknowledged,
+            repositories,
         } = reply;
         self.advertised = Features::of(&features);
+        if let Some(set) = repositories
+            && self.advertised.has(Feature::RepositoriesV1)
+            && let Some(sink) = &self.ports.repositories
+        {
+            sink.apply(&set);
+        }
         let in_order = self.advertised.has(Feature::VerdictAcksV1);
         let mut counted_now = Vec::new();
         for (service, queue) in &mut self.pending {

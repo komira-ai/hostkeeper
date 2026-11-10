@@ -235,6 +235,7 @@ mod reads;
 mod records;
 mod records_errors;
 mod releases;
+mod repositories;
 mod running;
 mod schema;
 mod serve;

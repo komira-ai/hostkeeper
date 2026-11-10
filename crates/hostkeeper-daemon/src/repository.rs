@@ -51,6 +51,7 @@ use crate::macos_pkg::MacosPkgPorts;
 use crate::packages::{PackageError, Packages, VersionDir};
 use crate::real_packages::{self, refusal_of};
 use crate::refusal::Refusal;
+use crate::repository_push::{Managed, SharedRepositories};
 use crate::target::{self, TargetError};
 
 /// The seconds a repository step that deferred asks to be ordered again after: a suite seen
@@ -76,13 +77,18 @@ pub const WORK_DIR: &str = "apt";
 pub const LOCK_FILE: &str = "installer.lock";
 
 /// What the repository installer works with on the host, besides the step launcher and the
-/// clock: the host's repository entries, read once at the start, the packages directory a version
+/// clock: the host's repository entries, read at the start and replaced by each set the
+/// coordinator pushes ([`crate::repository_push`]), the packages directory a version
 /// is staged in and the owner of what is staged, the host's root and work directories, and the
 /// installer lock. Nothing is opened or made until a step needs it.
 #[derive(Clone, Debug)]
 pub struct RepositoryPorts {
-    /// The entries of `/etc/hostkeeper/repositories/`; none on a Mac or a host without one.
-    pub repositories: Repositories,
+    /// The entries of `/etc/hostkeeper/repositories/`; none on a Mac or a host without one. A
+    /// step takes a snapshot of them at its start.
+    pub repositories: SharedRepositories,
+    /// The directory the coordinator's sets are written to; none on a Mac, whose daemon takes no
+    /// set.
+    pub managed: Option<Managed>,
     /// The packages directory, where a version is staged, sealed and published.
     pub packages_dir: PathBuf,
     /// The owner of everything staged: [`Owner::ROOT`] in the daemon.
@@ -108,7 +114,8 @@ impl RepositoryPorts {
     ) -> RepositoryPorts {
         let state = packages_dir.parent().unwrap_or(packages_dir);
         RepositoryPorts {
-            repositories,
+            repositories: SharedRepositories::new(repositories),
+            managed: None,
             packages_dir: packages_dir.to_path_buf(),
             owner,
             dirs: HostDirs {
@@ -126,6 +133,13 @@ impl RepositoryPorts {
             macos_pkg: macos_pkg.map(Arc::new),
             ..self
         }
+    }
+
+    /// These ports with the directory `managed` names as the one the coordinator's sets are
+    /// written to.
+    pub fn with_managed(mut self, managed: Managed) -> RepositoryPorts {
+        self.managed = Some(managed);
+        self
     }
 }
 
@@ -386,12 +400,13 @@ impl Repository {
         let records = self.records();
         let lock = InstallerLock::new(&self.ports.lock);
         let pause = ClockPause(Arc::clone(&self.clock));
+        let repositories = self.ports.repositories.snapshot();
         step(&RepositoryInstaller {
             backend,
             tools: &tools,
             records: &records,
             lock: &lock,
-            repositories: &self.ports.repositories,
+            repositories: &repositories,
             dirs: &self.ports.dirs,
             pause: &pause,
         })

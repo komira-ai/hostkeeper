@@ -17,7 +17,7 @@ use super::checks::{INVALID_ARGUMENT, judged, refused, rig_with_web};
 use super::{
     GET_RELEASE, OPERATOR, SET_DESIRED, ci_token, gateway, grpc, proto, rig, set, set_json,
 };
-use crate::support::targets::{digest, entry, list, location, repository_entry};
+use crate::support::targets::{digest, entry, list, location, put_komira, repository_entry};
 
 type Targets = BTreeMap<String, TargetList>;
 
@@ -283,6 +283,7 @@ async fn each_row_of_section_2_2_refuses_the_set_target_invalid() {
 #[tokio::test]
 async fn a_repository_entry_and_a_tarball_are_kept_as_set_on_both_routes_and_through_a_restart() {
     let mut rig = rig("targets-repository-kept");
+    put_komira(&rig).await;
     let answered = grpc(
         &rig,
         SET_DESIRED,
@@ -344,6 +345,7 @@ async fn a_repository_entry_and_a_tarball_are_kept_as_set_on_both_routes_and_thr
 #[tokio::test]
 async fn a_repository_release_is_immutable_by_package_version_pin_and_repository() {
     let rig = rig("targets-repository-exists");
+    put_komira(&rig).await;
     let ci = |targets: Targets| set("web", "2.0", targets);
     let first = grpc(&rig, SET_DESIRED, Some(&ci_token()), &ci(sent())).await;
     assert_eq!(first.code, 0, "{first:?}");
@@ -380,6 +382,7 @@ async fn a_repository_release_is_immutable_by_package_version_pin_and_repository
 #[tokio::test]
 async fn the_audit_entry_names_the_repository_the_package_its_version_and_the_pin() {
     let rig = rig("targets-repository-audit");
+    put_komira(&rig).await;
     let answered = grpc(
         &rig,
         SET_DESIRED,

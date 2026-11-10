@@ -38,7 +38,7 @@ pub(crate) mod postgres;
 
 pub(crate) use fake::Fake;
 #[cfg(test)]
-pub(crate) use fake::store_failure;
+pub(crate) use fake::{audit_failure, store_failure};
 pub(crate) use files::Files;
 #[cfg(test)]
 pub(crate) use files::OpsWriter;
@@ -309,6 +309,10 @@ pub(crate) mod conformance_tests;
 #[cfg(test)]
 #[path = "files_releases_tests.rs"]
 mod files_releases_tests;
+
+#[cfg(test)]
+#[path = "files_repositories_tests.rs"]
+mod files_repositories_tests;
 
 #[cfg(test)]
 #[path = "store_tests.rs"]

@@ -213,6 +213,11 @@ fn the_release_refusals_are_new_values_unknown_to_the_release_before() {
             27,
             "RELEASES_REFUSAL_RELEASE_UNKNOWN",
         ),
+        (
+            op::ReleasesRefusal::RepositoryUnknown,
+            28,
+            "RELEASES_REFUSAL_REPOSITORY_UNKNOWN",
+        ),
     ] {
         assert_eq!(added as i32, number, "{added:?}");
         assert_eq!(added.as_str_name(), token);
@@ -230,15 +235,16 @@ fn the_release_refusals_are_new_values_unknown_to_the_release_before() {
     let now = current_pool()
         .get_enum_by_name("hostkeeper.operator.v1.ReleasesRefusal")
         .expect("enum");
-    // Values 25..=27 are the ones above; 28..=30 are the host-group refusals, proven against the
-    // baseline in additions_host_groups.rs. Nothing else was added after 27 but those three.
+    // Values 25..=27 are the ones above; 28 is `repository_unknown` (the registry of package
+    // repositories) and 29..=31 are the host-group refusals, proven against the baseline in
+    // additions_host_groups.rs. Nothing else was added after 27.
     let numbers: Vec<i32> = now
         .values()
         .map(|v| v.number())
         .filter(|n| *n > 27)
         .collect();
-    assert_eq!(numbers, vec![28, 29, 30]);
-    assert_eq!(now.values().map(|v| v.number()).max(), Some(30));
+    assert_eq!(numbers, vec![28, 29, 30, 31]);
+    assert_eq!(now.values().map(|v| v.number()).max(), Some(31));
 }
 
 /// Proves: a set with targets reads back as written with the generated types, and a

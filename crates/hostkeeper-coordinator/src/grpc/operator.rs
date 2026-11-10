@@ -122,6 +122,7 @@ pub(crate) fn set_refusal(why: SetError) -> proto::ReleasesRefusal {
         }
         SetError::TargetInvalid(_) => proto::ReleasesRefusal::TargetInvalid,
         SetError::ReleaseExists => proto::ReleasesRefusal::ReleaseExists,
+        SetError::RepositoryUnknown => proto::ReleasesRefusal::RepositoryUnknown,
         SetError::BelowMinVersion => proto::ReleasesRefusal::BelowMinVersion,
         SetError::BadVersion => proto::ReleasesRefusal::HeldBad,
         SetError::Channel(ChannelRefusal::NotInChannel) => proto::ReleasesRefusal::NotInChannel,

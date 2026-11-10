@@ -78,6 +78,7 @@ use crate::observer::{OwnService, observer_with};
 use crate::prune::{LayoutPrune, NoLockPoint};
 use crate::real_packages::RealPackages;
 use crate::repositories;
+use crate::repository_push::Managed;
 use crate::selfupdate::binary_dir;
 use crate::start::{self, Settings, StartError};
 use crate::trusted_root::{PACKAGED_TRUSTED_ROOT, TrustedRoot};
@@ -554,8 +555,9 @@ pub struct HostFiles {
     /// none on Linux.
     pub managed_macos_pkg: Option<PathBuf>,
     /// The directory of repository entries ([`hostkeeper_install::repository::config`]), which a
-    /// start refuses when it is not sound; none on a Mac, which has no repository entries and
-    /// never reads the directory.
+    /// start refuses when it is not sound, and which the repository sets the coordinator pushes
+    /// replace ([`crate::repository_push`]); none on a Mac, which has no repository entries,
+    /// never reads the directory and takes no set.
     pub repositories: Option<PathBuf>,
     /// The directory the host's `os-release` is read under, which the installers the daemon
     /// announces are decided by ([`hostkeeper_install::announce`]): `/`.
@@ -746,13 +748,20 @@ pub fn host_ports(
     let announcement = repositories::announced(announcement, &files.os_root, &repositories);
     let announcement = crate::macos_pkg::announced(announcement, macos_pkg.as_ref());
     say_announced(&announcement);
-    let repository = RepositoryPorts::new(
+    let mut repository = RepositoryPorts::new(
         &settings.packages_dir,
         Path::new("/"),
         repositories,
         Owner::ROOT,
     )
     .with_macos_pkg(macos_pkg);
+    if let Some(dir) = &files.repositories {
+        repository = repository.with_managed(Managed {
+            dir: dir.clone(),
+            owner_uid: repositories::ROOT_UID,
+            native: repositories::capable(&announcement, &files.os_root),
+        });
+    }
     let clock: Arc<dyn Clock> = Arc::new(host_clock());
     let fetcher = NetFetcher::new(
         UreqTransport::new(&tls_roots(&files.ca_bundle)),

@@ -13,10 +13,12 @@
 //!   `hostkeeper-failing-daemon` for a version made to fail its start.
 //! - **hostkeeper's package** of each version is a native package on Linux and an archive on a
 //!   Mac. Linux (`deb`): a `.deb` built around the binary of the version as
-//!   `packaging/linux/nfpm.yaml` lays it out, in a signed apt repository on loopback; the
-//!   coordinator in process orders it by targets alone, the one `apt` entry of
-//!   `release targets` for the host's platform and no release index, as CI's set of a release
-//!   does from A24 on, and the daemon installs it through its entry. macOS (`archive`): the rig's
+//!   `packaging/linux/nfpm.yaml` lays it out, in a signed apt repository served over
+//!   https on loopback (`https`); the rig puts the repository in the coordinator's registry
+//!   (`Repositories.Put`, which refuses a set of `apt` entries for a repository it does not
+//!   hold), and the coordinator in process orders the package by targets alone, the one `apt`
+//!   entry of `release targets` for the host's platform and no release index, as CI's set of a
+//!   release does from A24 on, and the daemon installs it through its entry. macOS (`archive`): the rig's
 //!   Mac has no signers file, so neither daemon announces `macos-pkg` there, and it keeps the
 //!   archive orders it had, set by the entry and the
 //!   release index; the released daemon and this build both announce `target-v1` and take the
@@ -30,7 +32,8 @@
 //!   is pinned and no release is built for the test.
 //! - **The host** is the platform's ([`Host`]): on Linux the package `hostkeeper` in the host's
 //!   dpkg database, its unit `hostkeeper.service` under systemd where the `.deb` installs it, the
-//!   rig's repository entry in `/etc/hostkeeper/repositories/` (`linux`); on a Mac the daemon's
+//!   rig's repository entry in `/etc/hostkeeper/repositories/`, the files the registry's entry
+//!   renders to (`linux`); on a Mac the daemon's
 //!   own job `dev.hostkeeper.hostkeeper` under launchd, its plist where the pkg puts it (`mac`).
 //!   The released daemon updates by the hand-over, so it writes no fallback unit, drop-in or
 //!   job: when this build cannot start, the released binary is what runs again, after its three
@@ -69,6 +72,8 @@ mod archive;
 pub use archive::Built;
 #[cfg(target_os = "linux")]
 mod deb;
+#[cfg(target_os = "linux")]
+mod https;
 #[cfg(target_os = "linux")]
 pub use deb::Built;
 #[cfg(target_os = "linux")]
@@ -255,6 +260,8 @@ impl Rig {
             released_binary,
             host,
         };
+        #[cfg(target_os = "linux")]
+        rig.coordinator.put_repository(rig.repository.entry());
         rig.start_released(&first);
         rig.coordinator.approve_enrollment(HOST_ID, HK);
         rig

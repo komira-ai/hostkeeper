@@ -129,13 +129,16 @@ suite **`testing-fail`** of the same apt repository, which lists that build alon
 the name its control file gives. `testing` and `stable` never list it, and it is never promoted. Its
 `.pkg` is not released, so no Mac is ordered the failing build. A host that is to be ordered it needs
 the repository entry `/etc/hostkeeper/repositories/komira-testing-fail.sources` with `Suites: testing-fail`
-and the same keyring as `komira-testing`.
+and the same keyring as `komira-testing`, which its daemon writes once the coordinator's registry entry
+`komira` lists the suite `testing-fail`.
 
 `cargo xtask release targets` (`--service hostkeeper`, the default, and `--service hello` and
 `--service mdm`) lists, for each platform, the native entry alone (docs/design/packages-native.md,
 section 10.5, A24): for each Linux platform an `apt` entry of the host's repository entry `komira-testing`, the `testing` suite
-above (`/etc/hostkeeper/repositories/komira-testing.sources`, placed by host setup, which checks the
-directory with `hostkeeper check-repositories` before and after it places it), at the release's
+above (`/etc/hostkeeper/repositories/komira-testing.sources`, which each Linux host's daemon writes
+from the coordinator's registry entry `komira`, suites `testing` and `stable`:
+[repository-keys.md](../operations/repository-keys.md#put-the-repository-in-the-registry); the
+coordinator refuses the set (`repository_unknown`) while its registry lacks `komira`), at the release's
 version, pinned by the `.deb`'s SHA-256; for `macos-arm64` (hostkeeper and hello; mdm has no
 macOS platform) a `macos-pkg` entry of the signed `.pkg`, located in the store `komira-testing` at
 `hostkeeper/<version>/<file>` (the installers' `testing` directory, rooted at `pkg/`) and pinned by

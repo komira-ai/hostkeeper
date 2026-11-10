@@ -8,7 +8,7 @@
 
 use hostkeeper_proto::hostkeeper::operator::v1::{
     AlertsRefusal, AuditRefusal, EnrollmentRefusal, HostsRefusal, MdmRefusal, ReleasesRefusal,
-    RolloutsRefusal, ServicesRefusal,
+    RepositoriesRefusal, RolloutsRefusal, ServicesRefusal,
 };
 use tonic::{Code, Status};
 
@@ -68,6 +68,7 @@ pub(crate) fn releases(refusal: ReleasesRefusal) -> Status {
         | ReleasesRefusal::ChannelDigestMismatch
         | ReleasesRefusal::TooManyWaits
         | ReleasesRefusal::ReleaseExists
+        | ReleasesRefusal::RepositoryUnknown
         | ReleasesRefusal::NotInHostGroup
         | ReleasesRefusal::AmbiguousHostGroup => Code::FailedPrecondition,
     };
@@ -176,4 +177,21 @@ pub(crate) fn mdm(refusal: MdmRefusal) -> Status {
         MdmRefusal::InvalidRequest => Code::InvalidArgument,
     };
     refused(code, refusal.as_str_name(), "MDM_REFUSAL_")
+}
+
+/// The status of a refusal by `Repositories`.
+pub(crate) fn repositories(refusal: RepositoriesRefusal) -> Status {
+    let code = match refusal {
+        RepositoriesRefusal::Unspecified | RepositoriesRefusal::StoreFailed => Code::Internal,
+        RepositoriesRefusal::Unauthorized => Code::Unauthenticated,
+        RepositoriesRefusal::Forbidden => Code::PermissionDenied,
+        RepositoriesRefusal::InvalidRequest | RepositoriesRefusal::KeyringInvalid => {
+            Code::InvalidArgument
+        }
+        RepositoriesRefusal::UnknownRepository => Code::NotFound,
+        RepositoriesRefusal::InUse | RepositoriesRefusal::Conflict => Code::FailedPrecondition,
+        RepositoriesRefusal::Capacity => Code::ResourceExhausted,
+        RepositoriesRefusal::AuditUnavailable => Code::Unavailable,
+    };
+    refused(code, refusal.as_str_name(), "REPOSITORIES_REFUSAL_")
 }

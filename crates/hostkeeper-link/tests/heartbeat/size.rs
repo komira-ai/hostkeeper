@@ -54,6 +54,7 @@ fn beat(services: Vec<ServiceFacts>) -> Heartbeat {
         renewal: hostkeeper_link::Renewal::default(),
         trusted_root: None,
         installers: Vec::new(),
+        repositories: None,
     }
 }
 

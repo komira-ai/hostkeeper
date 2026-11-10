@@ -22,6 +22,7 @@ mod link;
 mod orders;
 mod pki;
 mod ports;
+mod repositories;
 mod resend;
 mod size;
 mod tls;

@@ -201,17 +201,20 @@ Place the config:
 4. Make it root's and closed to writes by others: `chown root:root /etc/hostkeeper/hostkeeper.toml`
    and `chmod 0600 /etc/hostkeeper/hostkeeper.toml`.
 
-Place the repository entries, on a host that installs services from the project's package
-repository with `apt` ([packages-repositories.md](../design/packages-repositories.md) section 3.1).
-A host without them never announces `apt` and keeps taking the other entries of a release. As
-root:
+The repository entries need no step here: once enrolled, the host's daemon writes
+`/etc/hostkeeper/repositories/` from the coordinator's registry at its first heartbeat, for the
+repositories its services name ([packages-repositories.md](../design/packages-repositories.md)
+section 3.2, [repository-keys.md](repository-keys.md#put-the-repository-in-the-registry)), and
+announces `apt` from the heartbeat after. Place them by hand only on a host that must install
+from the project's package repository before it reaches the coordinator; the registry's set then
+adopts the files when they are the same bytes, and replaces them otherwise. As root:
 
 1. Make the directory: `install -d -o root -g root -m 0755 /etc/hostkeeper/repositories`.
 2. Fetch the repository's keyring into it:
 
    ```
    curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
-     --output /etc/hostkeeper/repositories/komira-archive-keyring.gpg \
+     --output /etc/hostkeeper/repositories/komira.gpg \
      https://packages.komira.ai/apt/komira-archive-keyring.gpg
    ```
 
@@ -223,14 +226,16 @@ root:
    URIs: https://packages.komira.ai/apt
    Suites: testing
    Components: main
-   Signed-By: /etc/hostkeeper/repositories/komira-archive-keyring.gpg
+   Signed-By: /etc/hostkeeper/repositories/komira.gpg
    ```
 
    The stable one is the same with `Suites: stable`. The entry's name is the file's stem, the
    name a release's entry gives as its `repository`. A host that runs hello's failing-build
    proof ([hello.md](../hello.md), step 4) also gets `komira-testing-fail.sources`, the same with
    `Suites: testing-fail`: the suite that lists that build alone
-   ([package-repositories.md](../deploy/package-repositories.md)).
+   ([package-repositories.md](../deploy/package-repositories.md)). These are the bytes the
+   registry's repository `komira` is written as (with the suite `testing-fail` listed when the
+   proof runs), so the first set the coordinator sends keeps them.
 4. Make every file root's and closed to writes by others:
    `chown root:root /etc/hostkeeper/repositories/*` and
    `chmod 0644 /etc/hostkeeper/repositories/*`.

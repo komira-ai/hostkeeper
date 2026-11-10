@@ -173,21 +173,21 @@ fn the_new_values_of_shipped_enums_are_unknown_to_the_release_before() {
     let cases: [(&str, i32, &str, i32, &str); 12] = [
         (
             "ReleasesRefusal",
-            28,
+            29,
             "RELEASES_REFUSAL_NOT_IN_HOST_GROUP",
             op::ReleasesRefusal::NotInHostGroup as i32,
             op::ReleasesRefusal::NotInHostGroup.as_str_name(),
         ),
         (
             "ReleasesRefusal",
-            29,
+            30,
             "RELEASES_REFUSAL_AMBIGUOUS_HOST_GROUP",
             op::ReleasesRefusal::AmbiguousHostGroup as i32,
             op::ReleasesRefusal::AmbiguousHostGroup.as_str_name(),
         ),
         (
             "ReleasesRefusal",
-            30,
+            31,
             "RELEASES_REFUSAL_LIMITS_IN_HOST_GROUP",
             op::ReleasesRefusal::LimitsInHostGroup as i32,
             op::ReleasesRefusal::LimitsInHostGroup.as_str_name(),
@@ -363,7 +363,7 @@ fn an_older_reader_keeps_every_new_host_group_field_and_this_build_reads_it_empt
     check(
         &format!("{ns}.Host"),
         "host_group",
-        24,
+        25,
         op::Host {
             node_id: "web-1".into(),
             role: "frontend".into(),
@@ -442,7 +442,7 @@ fn an_older_reader_keeps_every_new_host_group_field_and_this_build_reads_it_empt
     check(
         &format!("{ns}.ServiceEntry"),
         "host_groups",
-        10,
+        11,
         op::ServiceEntry {
             service: "web".into(),
             hosts: vec!["web-1".into()],
@@ -576,7 +576,7 @@ fn an_older_reader_keeps_every_new_host_group_field_and_this_build_reads_it_empt
     check(
         "hostkeeper.agent.v1.HeartbeatRequest",
         "facts_generation",
-        11,
+        12,
         agent::HeartbeatRequest {
             features: vec!["heartbeat-v2".into()],
             ..Default::default()
@@ -586,7 +586,7 @@ fn an_older_reader_keeps_every_new_host_group_field_and_this_build_reads_it_empt
     check(
         "hostkeeper.agent.v1.HeartbeatResponse",
         "facts",
-        5,
+        6,
         agent::HeartbeatResponse {
             features: vec!["facts-v1".into()],
             ..Default::default()
@@ -838,6 +838,7 @@ fn an_older_reader_keeps_the_assignments_of_services() {
             holds: Vec::new(),
         }],
         uninstalling: vec!["db-2".to_owned()],
+        repository: String::new(),
         host_groups: vec!["web".to_owned()],
     };
     let cases: [(&str, &str, Vec<u8>); 3] = [

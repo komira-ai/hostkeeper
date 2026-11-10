@@ -34,6 +34,8 @@ use crate::desired::{self, Desired, StoreError};
 use crate::jti_file::jti_path;
 use crate::ops::{AuditEntry, OpsError, OpsState};
 use crate::registry::{Digest, Release};
+use crate::repositories::Registry;
+use crate::repositories_support::komira;
 use crate::testutil::{scratch, version};
 use crate::verdict_file::{self, verdicts_path};
 
@@ -298,11 +300,15 @@ fn all_or_nothing(subject: &dyn Subject) -> Outcome {
 
 fn load_gives_back(subject: &dyn Subject) -> Outcome {
     let live = subject.live();
-    let (desired, mut ops, verdicts) = (
+    let (mut desired, mut ops, verdicts) = (
         desired_with_release("2.0", 'c'),
         rich_ops(),
         rich_verdicts(),
     );
+    desired.repositories = Registry::default()
+        .put(komira(1))
+        .and_then(|registry| registry.put(komira(2)))
+        .map_err(|why| format!("the registry could not be made: {why}"))?;
     let audit = lines(1, 3);
     ops.audit = ring(&audit);
     live.commit(&Commit {
@@ -323,6 +329,12 @@ fn load_gives_back(subject: &dyn Subject) -> Outcome {
     })?;
     check(back.desired.releases == desired.releases, || {
         format!("the releases came back as {:?}", back.desired.releases)
+    })?;
+    check(back.desired.repositories == desired.repositories, || {
+        format!(
+            "the repositories came back as {:?}",
+            back.desired.repositories
+        )
     })?;
     check(normal(back.ops.clone()) == normal(ops), || {
         format!("the operations state came back as {:?}", back.ops)

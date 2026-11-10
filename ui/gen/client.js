@@ -57,6 +57,12 @@ export function createClient(call) {
       waitConverged: (request) => call("hostkeeper.operator.v1.Releases/WaitConverged", request),
       getRelease: (request) => call("hostkeeper.operator.v1.Releases/GetRelease", request),
     }),
+    repositories: Object.freeze({
+      list: (request) => call("hostkeeper.operator.v1.Repositories/List", request),
+      get: (request) => call("hostkeeper.operator.v1.Repositories/Get", request),
+      put: (request) => call("hostkeeper.operator.v1.Repositories/Put", request),
+      remove: (request) => call("hostkeeper.operator.v1.Repositories/Remove", request),
+    }),
     rollouts: Object.freeze({
       advance: (request) => call("hostkeeper.operator.v1.Rollouts/Advance", request),
       pause: (request) => call("hostkeeper.operator.v1.Rollouts/Pause", request),

@@ -34,7 +34,7 @@ use hostkeeper_coordinator::config::{
 use hostkeeper_coordinator::enrollment::pem;
 use hostkeeper_oidc::Roots;
 use hostkeeper_oidc::testkit::{STATIC_ISSUER, config_text};
-use hostkeeper_proto::hostkeeper::release::v1::TargetList;
+use hostkeeper_proto::hostkeeper::release::v1::{Repository, TargetList};
 use rcgen::KeyUsagePurpose;
 use rcgen::{BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, KeyPair};
 use rustls::pki_types::CertificateDer;
@@ -192,7 +192,9 @@ impl CoordinatorHandle {
     /// files in `dir` (made here, mode 0700), and waits until both listeners are bound.
     ///
     /// The service rolls back by itself when its release fails on the one host
-    /// (`rollback = "automatic"`, threshold 100% and at least one host).
+    /// (`rollback = "automatic"`, threshold 100% and at least one host). It names the repository
+    /// `hostkeeper` for the service, which a test that orders `apt` entries registers
+    /// ([`CoordinatorHandle::put_repository`]); a test that orders none leaves it unregistered.
     ///
     /// # Panics
     /// A file cannot be written or the coordinator does not start.
@@ -209,6 +211,7 @@ impl CoordinatorHandle {
                 "[[service]]\n\
                  name = \"{service}\"\n\
                  roles = [\"{host_role}\"]\n\
+                 repository = \"hostkeeper\"\n\
                  rollback = \"automatic\"\n\
                  rollback_after_failed = {{ percent = 100, min_hosts = 1 }}\n"
             ),
@@ -356,6 +359,13 @@ impl CoordinatorHandle {
             self.api
                 .set_desired_targets_alone(service, version, targets),
         );
+    }
+
+    /// Registers `repository` in the coordinator's registry of package repositories (the rollout
+    /// file names `hostkeeper` for the service, so a set of apt entries needs that one, with the
+    /// entries' repository one of its channels).
+    pub fn put_repository(&self, repository: Repository) {
+        must("repositories put", self.api.put_repository(repository));
     }
 
     /// Forces `service` to `version` on the host `host_id` at once, with no hook.

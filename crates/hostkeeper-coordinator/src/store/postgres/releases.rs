@@ -3,7 +3,7 @@
 //! row per service and version, its targets as the `jsonb` the releases file holds and the
 //! digest of its release index, `NULL` for none.
 //!
-//! The table is the last of the desired state's ([`super::state::DESIRED`]), written in the same
+//! The table is one of the desired state's ([`super::state::DESIRED`]), written in the same
 //! commit as the state it is set with. A release written once is never changed, so a commit
 //! writes only the row of a new release, and deletes only one dropped at the cap. An older
 //! release never reads the table (`0004` is `may-run`): it reads the version as set with neither

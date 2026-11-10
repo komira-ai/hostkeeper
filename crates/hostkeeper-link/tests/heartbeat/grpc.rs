@@ -183,6 +183,7 @@ fn beat(services: Vec<ServiceFacts>) -> Heartbeat {
         renewal: hostkeeper_link::Renewal::default(),
         trusted_root: None,
         installers: Vec::new(),
+        repositories: None,
     }
 }
 
@@ -222,6 +223,7 @@ fn expected_reply() -> Reply {
         ],
         halt_generations: vec![(service("web"), 1)],
         acknowledged: Vec::new(),
+        repositories: None,
     }
 }
 

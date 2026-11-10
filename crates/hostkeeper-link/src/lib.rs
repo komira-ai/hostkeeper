@@ -30,6 +30,9 @@
 //! coordinator through a [`Transport`]; [`TcpTransport`] ([`dial`]) is the production one and
 //! the only code of the crate that opens a socket, with [`TcpDial`], its async counterpart.
 //!
+//! The coordinator's repository sets ([`PushedSet`]) go to the daemon's [`RepositorySink`], which
+//! the loop calls only while the coordinator advertises [`Feature::RepositoriesV1`].
+//!
 //! [`GrpcMtlsLink`] ([`grpc`]) is the same call over gRPC (`Coordinator.Heartbeat` of
 //! `hostkeeper.agent.v1`) and HTTP/2 on the same mutual TLS, reaching the coordinator through a
 //! [`GrpcDial`], with its conversions in the private module `proto_map`. [`NegotiatedLink`]
@@ -48,13 +51,14 @@ pub mod order;
 pub mod pki;
 pub mod ports;
 mod proto_map;
+pub mod repositories;
 #[cfg(feature = "testing")]
 pub mod testing;
 mod wire_map;
 
 pub use beat::{
     ANNOUNCED, Feature, Features, Fitted, Health, Heartbeat, Liveness, MAX_HEARTBEAT_BYTES,
-    Observed, OptionalFact, Oversize, Platform, Renewal, RootReason, ServiceFacts,
+    Observed, OptionalFact, Oversize, Platform, REPOSITORIES, Renewal, RootReason, ServiceFacts,
     TrustedRootFacts, fit,
 };
 pub use deferral::{Deferral, DeferralError, Deferrals};
@@ -74,6 +78,7 @@ pub use pki::PkiCertSource;
 pub use ports::{
     CertSource, CertState, ClientIdentity, ClockSleeper, CoordinatorLink, Dispatch, Drift,
     HeldHalts, Job, LinkError, Log, Observation, OrderSink, RecordedService, RenewalSource,
-    ReplyFault, ServiceObserver, ServiceRecords, Sleeper, StopFlag, ThreadDispatch, Tick,
-    TrustFault, TrustedRootSource, UnixClock, Unsendable,
+    ReplyFault, RepositorySink, ServiceObserver, ServiceRecords, Sleeper, StopFlag, ThreadDispatch,
+    Tick, TrustFault, TrustedRootSource, UnixClock, Unsendable,
 };
+pub use repositories::{MAX_REFUSAL_REASON, PushedSet, RepositoriesReport, RepositoryRefusal};

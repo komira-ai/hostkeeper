@@ -55,6 +55,12 @@ export interface Client {
     waitConverged(request: hostkeeper_operator_v1.WaitConvergedRequest): Promise<hostkeeper_operator_v1.WaitConvergedResponse>;
     getRelease(request: hostkeeper_operator_v1.GetReleaseRequest): Promise<hostkeeper_operator_v1.GetReleaseResponse>;
   };
+  readonly repositories: {
+    list(request: hostkeeper_operator_v1.ListRepositoriesRequest): Promise<hostkeeper_operator_v1.ListRepositoriesResponse>;
+    get(request: hostkeeper_operator_v1.GetRepositoryRequest): Promise<hostkeeper_operator_v1.GetRepositoryResponse>;
+    put(request: hostkeeper_operator_v1.PutRepositoryRequest): Promise<hostkeeper_operator_v1.PutRepositoryResponse>;
+    remove(request: hostkeeper_operator_v1.RemoveRepositoryRequest): Promise<hostkeeper_operator_v1.RemoveRepositoryResponse>;
+  };
   readonly rollouts: {
     advance(request: hostkeeper_operator_v1.AdvanceRequest): Promise<hostkeeper_operator_v1.AdvanceResponse>;
     pause(request: hostkeeper_operator_v1.PauseRequest): Promise<hostkeeper_operator_v1.PauseResponse>;
@@ -116,6 +122,7 @@ export namespace hostkeeper_agent_v1 {
     trustedRootAgeSecs?: string;
     trustedRootReason?: hostkeeper_agent_v1.TrustedRootReason;
     installers?: string[];
+    repositories?: hostkeeper_agent_v1.RepositoriesReport;
     factsGeneration?: string;
   }
   export type Outcome = "OUTCOME_UNSPECIFIED" | "OUTCOME_SUCCEEDED" | "OUTCOME_FAILED";
@@ -125,6 +132,12 @@ export namespace hostkeeper_agent_v1 {
     | "PLATFORM_LINUX_X86_64"
     | "PLATFORM_LINUX_ARM64"
     | "PLATFORM_DARWIN_ARM64";
+  export interface RepositoriesReport {
+    generation?: string;
+    digest?: string;
+    refused?: hostkeeper_agent_v1.RepositoryRefusal;
+  }
+  export interface RepositoryRefusal { generation?: string; digest?: string; reason?: string; }
   export interface ServiceBeat {
     name?: string;
     version?: string;
@@ -365,6 +378,10 @@ export namespace hostkeeper_operator_v1 {
     targets?: { [key: string]: hostkeeper_release_v1.TargetList };
     releaseIndexDigest?: string;
   }
+  export interface GetRepositoryRequest { name?: string; }
+  export interface GetRepositoryResponse {
+    repository?: hostkeeper_operator_v1.RegisteredRepository;
+  }
   export interface GroupPackage {
     package?: string;
     desiredVersion?: string;
@@ -424,6 +441,7 @@ export namespace hostkeeper_operator_v1 {
     installers?: string[];
     running?: hostkeeper_operator_v1.RunningService[];
     runningUnix?: string;
+    repositories?: hostkeeper_operator_v1.HostRepositories;
     hostGroup?: string;
   }
   export interface HostCounts {
@@ -455,6 +473,14 @@ export namespace hostkeeper_operator_v1 {
     | "HOST_HELD_DENIED"
     | "HOST_HELD_RETIRED";
   export interface HostList { nodeIds?: string[]; }
+  export interface HostRepositories {
+    named?: string[];
+    unregistered?: string[];
+    digest?: string;
+    generation?: string;
+    current?: boolean;
+    refused?: string;
+  }
   export interface HostService {
     service?: string;
     up?: boolean;
@@ -536,6 +562,13 @@ export namespace hostkeeper_operator_v1 {
   export interface ListRecordsResponse {
     records?: hostkeeper_operator_v1.InventoryRecord[];
     nextPageToken?: string;
+  }
+  export interface ListRepositoriesRequest {
+  }
+  export interface ListRepositoriesResponse {
+    repositories?: hostkeeper_operator_v1.RegisteredRepository[];
+    generation?: string;
+    unregistered?: string[];
   }
   export interface ListServicesRequest {
   }
@@ -669,17 +702,36 @@ export namespace hostkeeper_operator_v1 {
     entry?: hostkeeper_operator_v1.AuditEntry;
     generation?: string;
   }
+  export interface PutRepositoryRequest {
+    repository?: hostkeeper_release_v1.Repository;
+    reason?: string;
+  }
+  export interface PutRepositoryResponse {
+    repository?: hostkeeper_operator_v1.RegisteredRepository;
+    entry?: hostkeeper_operator_v1.AuditEntry;
+  }
   export type RecordState =
     | "RECORD_STATE_UNSPECIFIED"
     | "RECORD_STATE_OPEN"
     | "RECORD_STATE_CLOSED"
     | "RECORD_STATE_USED";
+  export interface RegisteredRepository {
+    repository?: hostkeeper_release_v1.Repository;
+    keyringSha256?: string;
+    generation?: string;
+    services?: string[];
+  }
   export interface RejectRequest { requestId?: string; reason?: string; }
   export interface RejectResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface RemoveHostGroupRequest { hostGroup?: string; reason?: string; }
   export interface RemoveHostGroupResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface RemoveRecordRequest { hostId?: string; reason?: string; }
   export interface RemoveRecordResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
+  export interface RemoveRepositoryRequest { name?: string; reason?: string; }
+  export interface RemoveRepositoryResponse {
+    generation?: string;
+    entry?: hostkeeper_operator_v1.AuditEntry;
+  }
   export interface Replaced { version?: string; minUp?: { [key: string]: number }; }
   export interface ResumeRequest { service?: string; reason?: string; hostGroup?: string; }
   export interface ResumeResponse {
@@ -738,6 +790,7 @@ export namespace hostkeeper_operator_v1 {
     assignments?: hostkeeper_operator_v1.Assignment[];
     assigned?: hostkeeper_operator_v1.AssignedHost[];
     uninstalling?: string[];
+    repository?: string;
     hostGroups?: string[];
   }
   export interface ServiceHost {
@@ -892,6 +945,15 @@ export namespace hostkeeper_release_v1 {
   }
   export interface Place { kind?: string; source?: string; path?: string; }
   export interface Port { host?: number; container?: number; loopbackOnly?: boolean; }
+  export interface Repository {
+    name?: string;
+    kind?: string;
+    uri?: string;
+    suites?: string[];
+    components?: string[];
+    fingerprints?: string[];
+    keyring?: string;
+  }
   export interface StepBounds {
     prepare?: string;
     cutover?: string;

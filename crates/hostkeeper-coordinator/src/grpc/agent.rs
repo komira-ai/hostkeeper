@@ -41,6 +41,7 @@ fn response_of(answer: Answer, order: Option<Order>) -> proto::HeartbeatResponse
         features: answer.features.unwrap_or_default(),
         halt_generations: answer.halts.into_iter().collect(),
         acks: crate::verdict_file::to_proto(&answer.acks),
+        repositories: None,
         facts: None,
     }
 }
@@ -83,10 +84,17 @@ impl Api for AgentService {
         if !retiring {
             self.coordinator
                 .hear_installers(&identity, request.get_ref());
+            self.coordinator
+                .hear_repositories(&identity, request.get_ref());
         }
+        let host_id = identity.host_id.clone();
         let caller = BeatCaller { identity, retiring };
         let (answer, order) = beat(&self.coordinator, caller, &bytes, root).map_err(beat_status)?;
-        Ok(Response::new(response_of(answer, order)))
+        // The set is made once the heartbeat is taken: the host's announced features are the
+        // ones this heartbeat said.
+        let mut response = response_of(answer, order);
+        response.repositories = self.coordinator.repository_set(&host_id);
+        Ok(Response::new(response))
     }
 
     async fn enroll(

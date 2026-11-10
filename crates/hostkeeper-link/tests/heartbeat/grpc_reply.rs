@@ -1,5 +1,5 @@
-//! The size of the reply the gRPC link reads: 32 KiB, so that an order carrying the largest
-//! entry fits. The coordinator's side here is a server that answers every call with one fixed
+//! The size of the reply the gRPC link reads: 1 MiB, so that an order carrying the largest
+//! entry fits, and so does a repository set of the most repositories with the largest keyrings. The coordinator's side here is a server that answers every call with one fixed
 //! message (the real coordinator never builds a reply of an exact size), over the same
 //! in-memory streams and TLS as the other gRPC tests.
 
@@ -131,16 +131,17 @@ fn answered(
     link.heartbeat(&farm.host.identity(), &web_beat())
 }
 
-/// Proves the gRPC route's reply bound is 32 KiB and the JSON route's stays 16 KiB: a reply of
+/// Proves the gRPC route's reply bound is 1 MiB and the JSON route's stays 16 KiB: a reply of
 /// exactly [`GRPC_REPLY_MAX`] bytes is read whole, one byte more is refused as over the bound,
 /// and an order carrying the largest valid entry (`MAX_ENTRY_BYTES`) is read with that entry
 /// unchanged.
 ///
-/// Catches: a reply limit left at 16 KiB, so that an order with a large entry is refused, and
-/// a limit raised past 32 KiB.
+/// Catches: a reply limit left at 16 KiB, so that an order with a large entry or a repository set
+/// is refused, and
+/// a limit raised past 1 MiB.
 #[test]
-fn a_grpc_reply_of_32_kib_is_read_and_one_byte_over_is_refused() {
-    assert_eq!(GRPC_REPLY_MAX, 32 * 1024);
+fn a_grpc_reply_of_1_mib_is_read_and_one_byte_over_is_refused() {
+    assert_eq!(GRPC_REPLY_MAX, 1024 * 1024);
     assert_eq!(REPLY_MAX, 16 * 1024);
 
     let at = padded_to(GRPC_REPLY_MAX, |n| response_with(n).encoded_len());
@@ -187,4 +188,43 @@ fn an_order_carrying_the_largest_valid_entry_is_read_whole() {
             .map(hostkeeper_link::Entry::into_target),
         Some(entry)
     );
+}
+
+/// Proves a repository set of the most repositories a host takes (8), each with a keyring of the
+/// most bytes (64 KiB), is read whole and mapped with every field and keyring byte unchanged.
+///
+/// Catches: a reply bound too small for the biggest set the coordinator may send.
+#[test]
+fn a_repository_set_of_eight_largest_keyrings_is_read_whole() {
+    let entries: Vec<release::Repository> = (0..8u8)
+        .map(|n| release::Repository {
+            name: format!("repo{n}"),
+            kind: "apt".to_owned(),
+            uri: "https://repo.example.com/debian".to_owned(),
+            suites: vec!["stable".to_owned()],
+            components: vec!["main".to_owned()],
+            fingerprints: vec!["AB".repeat(20)],
+            keyring: vec![n; 64 * 1024],
+        })
+        .collect();
+    let response = pb::HeartbeatResponse {
+        repositories: Some(pb::RepositorySet {
+            generation: 7,
+            digest: "cd".repeat(32),
+            entries: entries.clone(),
+        }),
+        ..pb::HeartbeatResponse::default()
+    };
+    assert!(response.encoded_len() > 512 * 1024);
+    assert!(response.encoded_len() <= GRPC_REPLY_MAX);
+    let reply = answered("grpc-reply-set", &response).expect("a reply");
+    assert_eq!(
+        reply.repositories,
+        Some(hostkeeper_link::PushedSet {
+            generation: 7,
+            digest: "cd".repeat(32),
+            entries,
+        })
+    );
+    assert_eq!(reply.order, None);
 }

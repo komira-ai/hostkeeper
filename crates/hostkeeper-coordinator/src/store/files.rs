@@ -1,6 +1,7 @@
 //! The files of today behind the [`Backend`]: each part of a commit replaces its file whole, as
 //! its store always did (`desired.json` by [`crate::desired`], and before it, when a release
-//! changed, the releases file beside it, `<desired.json>.releases`, by [`crate::releases`]; the
+//! changed, the releases file beside it, `<desired.json>.releases`, by [`crate::releases`], and
+//! the repositories file `<desired.json>.repositories`, by [`crate::repositories`]; the
 //! ops file and its halts file by
 //! [`crate::ops_file`], the verdicts by [`crate::verdict_file`]), and the audit lines of a commit
 //! are appended to the audit file ([`crate::audit_file`]) before the ops file is written, so a
@@ -26,6 +27,7 @@ use crate::desired::{self, StoreError, SyncDir, io_at};
 use crate::jti_file::{JtiError, JtiFile};
 use crate::ops::{OpsError, OpsState};
 use crate::releases;
+use crate::repositories;
 use crate::verdict_file::{self, VerdictsError};
 
 /// What puts an operations state into the ops file and its halts file.
@@ -37,6 +39,9 @@ struct DesiredFile {
     /// The releases file ([`releases::releases_path`]): written whole, before the state file,
     /// when a commit changes a release. An earlier build never reads it.
     releases: PathBuf,
+    /// The repositories file ([`repositories::repositories_path`]): written whole, before the
+    /// state file, when a commit changes the registry. An earlier build never reads it.
+    repositories: PathBuf,
     /// The legacy service: the one whose state alone is written as the single state.
     legacy: Option<String>,
     /// Syncs the directory of the file after a rename.
@@ -77,6 +82,7 @@ impl Files {
         self.desired = Some(DesiredFile {
             path: path.to_owned(),
             releases: releases::releases_path(path),
+            repositories: repositories::repositories_path(path),
             legacy: legacy.map(str::to_owned),
             sync_dir: desired::sync_dir,
         });
@@ -170,6 +176,10 @@ impl Files {
         if let Some(bytes) = read_if_any(&file.releases).map_err(io_at(&file.releases))? {
             held.releases = releases::parse_file(&bytes).map_err(invalid(&file.releases))?;
         }
+        if let Some(bytes) = read_if_any(&file.repositories).map_err(io_at(&file.repositories))? {
+            held.repositories =
+                repositories::parse_file(&bytes).map_err(invalid(&file.repositories))?;
+        }
         Ok(held)
     }
 
@@ -220,15 +230,25 @@ impl Files {
         let Some(file) = &self.desired else {
             return Ok(());
         };
-        // A releases file in place whose directory was not synced is followed by the state
-        // file all the same, and the commit answers it unsynced: both files are in place.
-        let mut releases_synced = Ok(());
+        // A releases or repositories file in place whose directory was not synced is followed
+        // by the state file all the same, and the commit answers it unsynced: every file is in
+        // place.
+        let mut beside_synced = Ok(());
         if held.releases != before.releases {
             let text = releases::encode_file(&held.releases)
                 .map_err(io::Error::from)
                 .map_err(io_at(&file.releases))?;
             match desired::write_whole_syncing(&file.releases, &text, file.sync_dir) {
-                Err(unsynced @ StoreError::NotSynced { .. }) => releases_synced = Err(unsynced),
+                Err(unsynced @ StoreError::NotSynced { .. }) => beside_synced = Err(unsynced),
+                written => written?,
+            }
+        }
+        if held.repositories != before.repositories {
+            let text = repositories::encode_file(&held.repositories)
+                .map_err(io::Error::from)
+                .map_err(io_at(&file.repositories))?;
+            match desired::write_whole_syncing(&file.repositories, &text, file.sync_dir) {
+                Err(unsynced @ StoreError::NotSynced { .. }) => beside_synced = Err(unsynced),
                 written => written?,
             }
         }
@@ -236,7 +256,7 @@ impl Files {
             .map_err(io::Error::from)
             .map_err(io_at(&file.path))?;
         desired::write_whole_syncing(&file.path, &text, file.sync_dir)?;
-        Ok(releases_synced?)
+        Ok(beside_synced?)
     }
 
     fn write_ops(&self, state: &OpsState, lines: &[AuditLine]) -> Result<(), BackendError> {

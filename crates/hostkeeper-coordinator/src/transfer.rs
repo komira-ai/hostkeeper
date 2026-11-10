@@ -48,6 +48,7 @@ use crate::ops::{self, Marker, OpsState};
 use crate::ops_file;
 use crate::reconcile::COORDINATOR;
 use crate::releases::{self, releases_path};
+use crate::repositories::{self, Registry, repositories_path};
 use crate::store::postgres::transfer::{self, ACTION_IMPORTED, MoveError, Moved};
 use crate::store::postgres::{DatabaseError, Dsn};
 use crate::store::{Files, Loaded};
@@ -351,6 +352,14 @@ fn render(
             .map_err(io_at(&path))?;
         files.push((path, text));
     }
+    // A registry emptied by its last removal is written too: its generation is not 0.
+    if loaded.desired.repositories != Registry::default() {
+        let path = repositories_path(state);
+        let text = repositories::encode_file(&loaded.desired.repositories)
+            .map_err(io::Error::from)
+            .map_err(io_at(&path))?;
+        files.push((path, text));
+    }
     if !loaded.spent.is_empty() {
         let text = jti_file::text_of_spent(&loaded.spent);
         files.push((jti_path(state), text.into_bytes()));
@@ -431,6 +440,10 @@ mod export_tests;
 #[cfg(test)]
 #[path = "transfer_releases_tests.rs"]
 mod releases_tests;
+
+#[cfg(test)]
+#[path = "transfer_repositories_tests.rs"]
+mod repositories_tests;
 
 #[cfg(test)]
 #[path = "transfer_mdm_tests.rs"]
