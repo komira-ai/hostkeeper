@@ -158,9 +158,24 @@ impl Rig {
         std::fs::write(self.bin().join("reply"), format!("{status}\n{body}")).expect("reply");
     }
 
+    /// The `nth` (from 1) run of `curl` is answered `status` and `body`, whatever `reply` or the
+    /// forwarding would answer; the other runs are answered as before.
+    pub fn reply_nth(&self, nth: usize, status: u16, body: &str) {
+        std::fs::write(
+            self.bin().join(format!("reply-{nth}")),
+            format!("{status}\n{body}"),
+        )
+        .expect("reply-n");
+    }
+
     /// The fake curl fails as when nothing listens.
     pub fn fail(&self) {
         std::fs::write(self.bin().join("fail"), b"").expect("fail");
+    }
+
+    /// The `nth` (from 1) run of `curl` fails as when nothing listens; the others do not.
+    pub fn fail_nth(&self, nth: usize) {
+        std::fs::write(self.bin().join(format!("fail-{nth}")), b"").expect("fail-n");
     }
 
     /// The global flags of a call with the token file: `--endpoint`, `--ca-file`,
@@ -260,6 +275,14 @@ impl Rig {
         let _ = std::fs::remove_dir_all(self.bin().join("calls"));
         let _ = std::fs::remove_file(self.bin().join("reply"));
         let _ = std::fs::remove_file(self.bin().join("fail"));
+        if let Ok(entries) = std::fs::read_dir(self.bin()) {
+            for entry in entries.filter_map(Result::ok) {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if name.starts_with("reply-") || name.starts_with("fail-") {
+                    let _ = std::fs::remove_file(entry.path());
+                }
+            }
+        }
     }
 }
 

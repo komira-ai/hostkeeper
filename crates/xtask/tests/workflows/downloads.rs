@@ -1,5 +1,7 @@
 //! The rule every download of a workflow is held to: each `curl` a `run:` runs carries the HTTPS
-//! and failure guards (`--proto =https --proto-redir =https --tlsv1.2 --fail`) and retries a
+//! and failure guards (`--proto =https --proto-redir =https --tlsv1.2 --fail`, where
+//! `--fail-with-body` does for `--fail`, and `--proto-redir` is for a curl that follows a
+//! redirect, `--location`) and retries a
 //! transient failure (`--retry <n> --retry-delay <n> --retry-max-time <n> --retry-all-errors`),
 //! and no `run:` downloads another way (`wget`, `gh release download`), which these flags
 //! cannot reach.
@@ -31,6 +33,9 @@ const VALUED: [&str; 3] = ["--retry", "--retry-delay", "--retry-max-time"];
 /// The seconds a curl's retries must span, both as `--retry` times `--retry-delay` and as
 /// `--retry-max-time`: GitHub's release downloads answer 504 in spells of minutes.
 const WINDOW: u64 = 600;
+
+/// The options that make curl follow a redirect.
+const FOLLOWS: [&str; 3] = ["--location", "-L", "--location-trusted"];
 
 /// The words that end a command's options.
 const ENDS: [&str; 5] = ["|", "||", "&&", ";", ")"];
@@ -104,7 +109,10 @@ fn curl_problems(line: usize, options: &[&str]) -> Vec<String> {
             .map(|at| options.get(at + 1).copied().unwrap_or_default())
     };
     for flag in ["--proto", "--proto-redir"] {
-        if value(flag).is_none() {
+        // curl follows no redirect unless told to, so `--proto-redir` is required of a curl that
+        // does.
+        let needed = flag == "--proto" || options.iter().any(|w| FOLLOWS.contains(w));
+        if needed && value(flag).is_none() {
             missing.push(format!("`{flag} =https`"));
         }
         for (at, _) in options.iter().enumerate().filter(|(_, w)| **w == flag) {
@@ -114,10 +122,15 @@ fn curl_problems(line: usize, options: &[&str]) -> Vec<String> {
             }
         }
     }
-    for flag in ["--tlsv1.2", "--fail", "--retry-all-errors"] {
-        if !options.contains(&flag) {
-            missing.push(format!("`{flag}`"));
-        }
+    if !options.contains(&"--tlsv1.2") {
+        missing.push("`--tlsv1.2`".to_owned());
+    }
+    // `--fail-with-body` fails the same way and also prints the answer's body, which says why.
+    if !options.contains(&"--fail") && !options.contains(&"--fail-with-body") {
+        missing.push("`--fail`".to_owned());
+    }
+    if !options.contains(&"--retry-all-errors") {
+        missing.push("`--retry-all-errors`".to_owned());
     }
     let mut counts = Vec::new();
     for flag in VALUED {

@@ -401,7 +401,8 @@ impl Packages for MadePackages {
             .create(true)
             .append(true)
             .open(&self.record)
-            .and_then(|mut out| writeln!(out, "{line}"))
+            // One write of the whole line, as the heartbeats are written: never half a line.
+            .and_then(|mut out| out.write_all(format!("{line}\n").as_bytes()))
             .map_err(|e| PackageError::Other(format!("{}: {e}", self.record.display())))?;
         let dir = self.root.join(service.as_str()).join(version.as_str());
         Staged::seal(&dir)
@@ -501,7 +502,11 @@ impl CoordinatorLink for FileLink {
             .append(true)
             .open(self.dir.join("beats.jsonl"))
             .map_err(transport)?;
-        writeln!(beats, "{}", beat.to_json()).map_err(transport)?;
+        // One write of the whole line: `writeln!` writes a line in pieces, and a daemon stopped
+        // between two of them (the old one at its hand-over) leaves half a line that the next
+        // daemon's line is appended to. One append of a regular file is one piece.
+        let line = format!("{}\n", beat.to_json());
+        beats.write_all(line.as_bytes()).map_err(transport)?;
         let malformed = || LinkError::BadReply(ReplyFault::Malformed);
         let (features, acknowledged) = match read_if_there(&self.dir.join("answer.json")) {
             Ok(Some(text)) => read_answer(&text).ok_or_else(malformed)?,
