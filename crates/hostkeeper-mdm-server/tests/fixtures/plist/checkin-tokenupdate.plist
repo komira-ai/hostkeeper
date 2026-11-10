@@ -6,7 +6,7 @@
 	<key>Topic</key><string>com.apple.mgmt.External.00000000-0000-4000-8000-000000000000</string>
 	<key>UDID</key><string>00000000-0000-4000-8000-0000000000AA</string>
 	<key>Token</key><data>AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=</data>
-	<key>PushMagic</key><string>11111111-2222-4333-8444-555555555555</string>
+	<key>PushMagic</key><string>aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee</string>
 	<key>UnlockToken</key><data>dW5sb2Nr</data>
 	<key>AwaitingConfiguration</key><false/>
 	<key>NotOnConsole</key><false/>

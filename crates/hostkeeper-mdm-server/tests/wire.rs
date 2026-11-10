@@ -224,7 +224,7 @@ fn token_update_reads_the_raw_token_and_the_push_magic() {
     };
     assert_eq!(t.id.key(), UDID);
     assert_eq!(t.token, (0u8..32).collect::<Vec<u8>>());
-    assert_eq!(t.push_magic, "11111111-2222-4333-8444-555555555555");
+    assert_eq!(t.push_magic, "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee");
     assert_eq!(t.unlock_token.as_deref(), Some(b"unlock".as_slice()));
     assert_eq!(t.awaiting_configuration, Some(false));
     assert_eq!(t.not_on_console, Some(false));
@@ -696,7 +696,7 @@ fn debug_of_a_token_update_prints_no_secret_byte() {
     let shown = format!("{msg:?}");
     assert!(shown.contains("token_len: 32"), "{shown}");
     assert!(shown.contains("unlock_token_len: Some(6)"), "{shown}");
-    assert!(!shown.contains("11111111-2222-4333-8444-555555555555"));
+    assert!(!shown.contains("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"));
     assert!(!shown.contains("117, 110"), "{shown}");
     assert!(!shown.contains("[0, 1, 2"));
 }
