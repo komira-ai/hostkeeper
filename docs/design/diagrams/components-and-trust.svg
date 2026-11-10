@@ -40,7 +40,7 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <text x="470" y="287" class="b" text-anchor="middle">CA module (key owner-only)</text>
 <text x="470" y="372" class="t-m" text-anchor="middle">assigns services per host or role</text>
 <rect x="340" y="412" width="260" height="62" rx="5" class="box"/>
-<text x="470.0" y="431" class="b" text-anchor="middle">Release channel</text>
+<text x="470.0" y="431" class="b" text-anchor="middle">Package repository</text>
 <text x="470.0" y="449" class="t-m" text-anchor="middle">serves package bytes; cannot sign</text>
 <rect x="340" y="540" width="260" height="74" rx="5" class="box"/>
 <text x="470.0" y="559" class="b" text-anchor="middle">Trusted signer</text>

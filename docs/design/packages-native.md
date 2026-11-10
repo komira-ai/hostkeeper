@@ -260,6 +260,12 @@ this against making the coordinator a hostkeeper service).
 
 ### 10.5 The release channel's end
 
+What replaces the channel for the lab LAN is the coordinator's package proxy, designed in [package-proxy.md](package-proxy.md) (**Designed**, nothing
+built): a caching pass-through at `https://<mdm name>/apt/<repo>/` and `/pkg/<sha256>.pkg`, which reads the public repository (or the pkg's
+origin) once and keeps it. It serves bytes only; apt, the daemon and the Mac verify them as before (10.3), so no trust moves to it. The
+steps below end the channel; package-proxy.md section 6 gives the order in which the tailnet-only download server is retired and hosts are
+pointed at the proxy, and it owns the repointing of `release_channel` and of repository entries.
+
 The channel and its sync are interim, as ruled. The channel serves archives and nothing else, and it is needed until
 the last archive is ordered: a daemon before `target-v1` fetches through nothing else, and a `target-v1` daemon with no
 `stores.toml` defines only the `channel` store. So, exactly:
