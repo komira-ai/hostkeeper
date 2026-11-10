@@ -6,7 +6,9 @@ mod support;
 
 use std::sync::Arc;
 
-use hostkeeper_enrollment::ca::{CaBundle, HostCertificate, ServerNames, Signer};
+use hostkeeper_enrollment::ca::{
+    CaBundle, HOST_VALIDITY_SECS, HostCertificate, ServerNames, Signer,
+};
 use hostkeeper_enrollment::enroll::{EnrollmentStore, StoreError};
 use hostkeeper_enrollment::fs::RealFs;
 use hostkeeper_enrollment::names::Role;
@@ -22,7 +24,7 @@ fn a_host_certificate_is_read_back_only_when_this_ca_signed_it() {
     let key = HostKey::new();
     let host = ca
         .ca
-        .issue_host(&host_id("web-1"), &key.p256(), 7)
+        .issue_host(&host_id("web-1"), &key.p256(), HOST_VALIDITY_SECS, 7)
         .expect("a host certificate");
     let bundle = ca.ca.bundle();
     assert_eq!(
@@ -35,7 +37,7 @@ fn a_host_certificate_is_read_back_only_when_this_ca_signed_it() {
 
     let foreign = other
         .ca
-        .issue_host(&host_id("web-1"), &key.p256(), 7)
+        .issue_host(&host_id("web-1"), &key.p256(), HOST_VALIDITY_SECS, 7)
         .expect("another CA's host certificate");
     assert_eq!(bundle.host_certificate(&foreign.der), None);
 

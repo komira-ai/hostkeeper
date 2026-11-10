@@ -28,7 +28,8 @@ use crate::ca::profile::P256Key;
 use crate::names::HostId;
 use crate::validity::{UnixClock, Window};
 
-/// The validity of a host's client certificate, and its cap: 7 days.
+/// The validity of a host's client certificate unless the store is given another
+/// ([`crate::enroll::EnrollmentStore::with_host_validity_secs`]), and its cap: 7 days.
 pub const HOST_VALIDITY_SECS: u64 = 7 * 24 * 60 * 60;
 
 /// The longest validity of the coordinator's server certificate: 90 days. The coordinator asks
@@ -162,7 +163,8 @@ impl Ca {
         }
     }
 
-    /// A host's client certificate for `host_id`, valid [`HOST_VALIDITY_SECS`] from now.
+    /// A host's client certificate for `host_id`, valid `validity_secs` from now (at most
+    /// [`HOST_VALIDITY_SECS`]).
     ///
     /// # Errors
     /// [`SignError`], as [`Signer::sign`].
@@ -170,12 +172,13 @@ impl Ca {
         &self,
         host_id: &HostId,
         key: &P256Key,
+        validity_secs: u64,
         serial: u64,
     ) -> Result<Certificate, SignError> {
         self.sign(&SignRequest {
             subject: Subject::Host(host_id),
             key,
-            validity_secs: HOST_VALIDITY_SECS,
+            validity_secs,
             serial,
         })
     }

@@ -319,6 +319,58 @@ fn the_request_ttl_needs_enrollment_and_a_whole_time() {
     assert!(!help.contains("[env:"), "{help}");
 }
 
+/// Catches `--host-cert-validity-secs` accepted without enrollment, below its floor of 60, above
+/// the CA's 7-day cap, or not a whole number of seconds; a default other than 7 days; a value
+/// not reaching the enrollment the coordinator starts; and the flag missing from the usage or
+/// read from the environment.
+#[test]
+fn the_host_cert_validity_needs_enrollment_and_fits_between_a_minute_and_the_cap() {
+    let with = |extra: &[&'static str]| {
+        let mut flags = enrollment_flags(true);
+        flags.extend_from_slice(extra);
+        flags
+    };
+    let files = Files::new("host-validity-refused");
+    let mut refused = vec![vec!["--host-cert-validity-secs", "60"]];
+    for value in ["", "0", "59", "604801", "60s", "1m", "6e1", " 60"] {
+        refused.push(with(&["--host-cert-validity-secs", value]));
+    }
+    refused.push(with(&["--host-cert-validity-secs=-60"]));
+    for args in refused {
+        assert_eq!(
+            hostkeeper_coordinator::config::main(files.args(&args)),
+            ExitCode::from(2),
+            "{args:?}"
+        );
+    }
+    for (n, (value, secs)) in [
+        (None, 604_800),
+        (Some("60"), 60),
+        (Some("61"), 61),
+        (Some("604799"), 604_799),
+        (Some("604800"), 604_800),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let files = Files::new(&format!("host-validity-{n}"));
+        let extra: Vec<&str> =
+            value.map_or_else(Vec::new, |v| vec!["--host-cert-validity-secs", v]);
+        let parts = start(&files, &with(&extra)).expect("started");
+        let enrollment = parts.coordinator.enrollment().expect("enrollment");
+        assert_eq!(enrollment.store().host_validity_secs(), secs, "{value:?}");
+    }
+    let help = Cli::try_parse_from(["hostkeeper-coordinator", "serve", "--help"])
+        .expect_err("help")
+        .to_string();
+    assert!(
+        help.contains("--host-cert-validity-secs <HOST_CERT_VALIDITY_SECS>"),
+        "{help}"
+    );
+    assert!(help.contains("[default: 604800]"), "{help}");
+    assert!(!help.contains("[env:"), "{help}");
+}
+
 /// A host's P-256 key, enrolled as `s1`, a storage host: its certificate, DER, and its key,
 /// PKCS#8.
 fn enroll_host(enrollment: &Enrollment) -> (Vec<u8>, Vec<u8>) {
