@@ -403,6 +403,8 @@ impl MacHost {
             text(self.state()),
             "--packages-dir".to_owned(),
             text(self.packages()),
+            "--facts-file".to_owned(),
+            text(self.base.join("facts.json")),
             "--heartbeat-secs".to_owned(),
             "1".to_owned(),
         ];

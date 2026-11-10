@@ -568,6 +568,8 @@ impl Daemon {
             &path("state"),
             "--packages-dir",
             PACKAGES_DIR,
+            "--facts-file",
+            &path("facts.json"),
             "--heartbeat-secs",
             "1",
         ]

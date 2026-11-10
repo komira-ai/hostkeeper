@@ -127,6 +127,10 @@ impl Host {
             ("--config", path(self.root.config_path())),
             ("--state-dir", path(self.root.state())),
             ("--packages-dir", path(self.root.packages())),
+            (
+                "--facts-file",
+                path(self.root.state().with_file_name("facts.json")),
+            ),
             ("--heartbeat-secs", "1".to_owned()),
         ] {
             argv.push(arg(flag));

@@ -124,6 +124,7 @@ pub mod defer;
 pub mod desired;
 pub mod enrollment;
 pub(crate) mod facts;
+mod features;
 pub mod fleet;
 pub mod force;
 pub mod grpc;
