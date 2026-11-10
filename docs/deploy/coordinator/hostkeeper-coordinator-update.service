@@ -1,0 +1,44 @@
+# The coordinator's self-update on the machine that runs its container
+# (docs/deploy/coordinator-update.md): one run of `xtask coordinator-update`, which installs the
+# newest published release's attested image and replaces the container, keeping the old one until
+# the new one is ready. hostkeeper-coordinator-update.timer starts it.
+#
+# Install:
+#   - the xtask binary of a hostkeeper checkout (`cargo build --release -p xtask`) as
+#     /usr/local/libexec/hostkeeper/xtask, `gh` and `curl` on the PATH;
+#   - a system user `hostkeeper-coordinator-update` in the group `docker`, with
+#     /var/lib/hostkeeper-coordinator-update as its home (the download directory; gh and the
+#     attestation verifier keep their caches there). Membership of `docker` is root on this
+#     machine: the user is a dedicated one, and the verb loads only an image the release signer
+#     attested;
+#   - the CA the coordinator's private listener's certificate chains to, as
+#     /etc/hostkeeper/coordinator-ca.pem, mode 0644, owned by root;
+#   - /etc/hostkeeper/coordinator-update.env, mode 0600, owned by root, holding one line
+#     `GH_TOKEN=<token>`: a GitHub token that can read public repositories and nothing else. It
+#     is gh's credential; the verb reads no environment variable;
+#   - the URL of --coordinator-url below set to the coordinator's private listener, and the
+#     container's name (--container, default hostkeeper-coordinator) if it is another.
+# Then `systemctl enable --now hostkeeper-coordinator-update.timer`.
+#
+# A run that refuses something (no container, a stopped one, a leftover hostkeeper-coordinator-next,
+# a release that fails its check, a version marked failed) changes nothing and fails: `systemctl
+# status` and the journal show the reason. A new version that did not become ready is rolled back
+# to the old container and marked by failed-v<version> in the download directory.
+[Unit]
+Description=Update the coordinator's container to the newest attested release
+Wants=network-online.target
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+User=hostkeeper-coordinator-update
+Group=hostkeeper-coordinator-update
+SupplementaryGroups=docker
+StateDirectory=hostkeeper-coordinator-update
+EnvironmentFile=/etc/hostkeeper/coordinator-update.env
+ExecStart=/usr/local/libexec/hostkeeper/xtask coordinator-update --download-dir /var/lib/hostkeeper-coordinator-update --coordinator-url https://coordinator.example.com:8444 --ca-file /etc/hostkeeper/coordinator-ca.pem
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/hostkeeper-coordinator-update

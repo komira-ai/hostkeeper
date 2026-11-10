@@ -8,7 +8,9 @@
 #   diagnostic: a secret lives in an unexported shell variable and reaches curl through a pipe of
 #   a process substitution, filled by the printf builtin in a subshell that execs nothing; no
 #   here-document or here-string (bash may write one to a temporary file), no export;
-# - the only programs it starts are curl and find.
+# - the only programs it starts are curl and find;
+# - the one more call a refusal `invalid_request` makes, to the coordinator's
+#   `GET /v1/version?at_least=<this release>`, carries no token and no credential pipe.
 
 set -f
 LC_ALL=C
@@ -22,7 +24,7 @@ unset _hk_token _hk_oidc_url _hk_oidc_request _hk_body _hk_vals _hk_value _hk_re
 	_hk_timeout_set _hk_stdin_by _hk_took _hk_arg_value _hk_request _hk_request_set _hk_path \
 	_hk_command _hk_helpfn _hk_hold _hk_key_escaped _hk_f_flag _hk_f_name _hk_f_json \
 	_hk_f_input _hk_f_kind _hk_f_label _hk_f_enum _hk_b64 _hk_ws _hk_re_float _hk_re_refusal \
-	_hk_re_reason _hk_re_endpoint _hk_re_secs _hk_hold_text
+	_hk_re_reason _hk_re_endpoint _hk_re_secs _hk_hold_text _hk_re_version
 # The runner's two variables of CI's token (rule S2: secret material), kept unexported and
 # unset before any child starts.
 _hk_oidc_url=${ACTIONS_ID_TOKEN_REQUEST_URL-}
@@ -35,6 +37,7 @@ _hk_re_refusal='^\{"code":"([A-Z_]+)","reason":"(.*)"\}$'
 _hk_re_reason='^[a-z0-9_]{1,64}$'
 _hk_re_endpoint='^https://([A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])(:[0-9]{1,5})?/?$'
 _hk_re_secs='^[1-9][0-9]{0,5}$'
+_hk_re_version='"version":"([^"]*)"'
 
 # A usage error: exit 2.
 _hk_usage() {
@@ -723,6 +726,49 @@ _hk_credential() {
 	fi
 }
 
+# _hk_older: after a call refused `invalid_request`: whether the coordinator is older than this
+# hkctl, said on stderr when it is. One more call, to the coordinator's `GET /v1/version` with
+# this hkctl's release as `at_least`, with no token: `409` says it is older and which version it
+# runs, `404` is a coordinator before that route. Anything else (the coordinator is not older, no
+# answer, an answer not read, a stamp with no version) leaves the refusal as it was; returns 1.
+_hk_older() {
+	local want=${_hk_version#hkctl } probe http now
+	want=${want%%+*}
+	if [[ -z $want ]]; then
+		return 1
+	fi
+	probe=$(curl -q --silent --show-error --proto =https --tlsv1.2 --max-redirs 0 --globoff \
+		--cacert "$_hk_ca" --connect-timeout "$_hk_timeout" --max-time "$_hk_timeout" \
+		--write-out '\n%{http_code}' --url "$_hk_endpoint/v1/version?at_least=$want" 2>/dev/null)
+	if (($? != 0)); then
+		return 1
+	fi
+	http=${probe##*$'\n'}
+	probe=${probe%$'\n'*}
+	now=''
+	if [[ $probe =~ $_hk_re_version ]] && _hk_visible "${BASH_REMATCH[1]}"; then
+		now=${BASH_REMATCH[1]}
+	fi
+	case $http in
+	409)
+		if [[ -n $now ]]; then
+			printf 'hkctl: the coordinator is older than this hkctl (%s): it runs %s; update the coordinator, then call again\n' "$want" "$now" >&2
+			return 0
+		fi
+		;;
+	404)
+		printf 'hkctl: the coordinator is older than this hkctl (%s): it does not say its version; update the coordinator, then call again\n' "$want" >&2
+		return 0
+		;;
+	200)
+		if [[ -n $now ]]; then
+			printf 'hkctl: the coordinator runs %s, not older than this hkctl (%s)\n' "$now" "$want" >&2
+		fi
+		;;
+	esac
+	return 1
+}
+
 # _hk_call: the one call of the method _hk_path with the body _hk_body; prints the answer, or
 # exits with the code of the refusal.
 _hk_call() {
@@ -784,6 +830,9 @@ _hk_call() {
 		_hk_fail "the answer (HTTP $http) is not the gateway's"
 	fi
 	printf 'hkctl: the coordinator answered %s\n' "$code" >&2
+	if [[ $reason == invalid_request ]] && _hk_older; then
+		reason=coordinator_older
+	fi
 	if [[ $reason =~ $_hk_re_reason ]]; then
 		printf 'refused: %s\n' "$reason" >&2
 	fi

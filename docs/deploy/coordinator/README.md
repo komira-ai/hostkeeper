@@ -11,6 +11,7 @@ this page:
 | `sql/after-restore.sql` | The one statement a restore runs before the coordinator starts. |
 | `sql/counts.sql` | The rows of each table, printed as `hostkeeper-coordinator export` prints them, for the drill. |
 | `hostkeeper-db-backup.service`, `.timer` | A dump every six hours, the newest 28 kept. |
+| `hostkeeper-coordinator-update.service`, `.timer` | The coordinator's container rolled forward to each published release, every five minutes. |
 
 The coordinator's own flags, refusals and the database store's behaviour are in
 [coordinator-state.md](../../operations/coordinator-state.md). Every command below runs as root in
@@ -185,6 +186,15 @@ docker compose --profile postgres restart coordinator
 `>` writes into the file that is there, which keeps its owner and mode (root writes it whatever
 its mode). Do not remove a secret file and make a new one: a running container keeps seeing the
 file it was started with, so `password.sql` would read the old password.
+
+## Updating the coordinator
+
+The machine that runs the container updates it from every published release by itself:
+`hostkeeper-coordinator-update.timer` runs `xtask coordinator-update`, which loads the release's
+attested image and replaces the container with the old one's command line, mounts and volumes,
+rolling back to the old container when the new one is not ready. The runbook (install, turn on,
+refusals, a failed version, the compose deployment's `image:` line) is
+[../coordinator-update.md](../coordinator-update.md).
 
 ## Backups
 

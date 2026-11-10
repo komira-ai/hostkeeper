@@ -58,10 +58,10 @@
 //! port; the only code that starts
 //! a process is `real::SystemExec`, built in [`real`] alone.
 
-mod check;
+pub(crate) mod check;
 mod check_binary;
 mod check_image_ui;
-mod compare_images;
+pub(crate) mod compare_images;
 pub(crate) mod contract;
 #[cfg(test)]
 mod doc_tests;

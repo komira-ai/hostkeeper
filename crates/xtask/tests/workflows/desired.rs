@@ -21,8 +21,12 @@
 //!   expression (`${{`): a value reaches a command through the step's `env:` and, for a command
 //!   of ours, a flag, never as text written into the script, which a value holding shell syntax
 //!   would run;
-//! - [`JOB`] does not need exactly `plan` and [`TARGETS_JOB`] (it calls the coordinator only
-//!   with the release's targets), or its `with` does not set `service: hostkeeper`, the version
+//! - [`COORDINATOR_JOB`] lacks the exact `if:` [`SET_IF`] or has `continue-on-error`, or breaks
+//!   the rules of [`super::coordinator_wait`] (it waits until the coordinator runs the release,
+//!   and holds `id-token: write` for the tailnet join alone);
+//! - [`JOB`] does not need exactly `plan`, [`TARGETS_JOB`] and [`COORDINATOR_JOB`] (it calls the
+//!   coordinator only with the release's targets, and only once the coordinator runs the
+//!   release), or its `with` does not set `service: hostkeeper`, the version
 //!   and the targets from [`TARGETS_JOB`] ([`WITH_FROM_TARGETS`]), and `wait: false`; or passes
 //!   one of [`NOT_PASSED`]: a `package_digest` (one package for every host, whatever its
 //!   platform), a `release_index` or a `release_index_digest` (a release is set with no index).
@@ -40,6 +44,9 @@ pub const FILE: &str = "release.yml";
 
 /// The job that writes the targets of the release.
 pub const TARGETS_JOB: &str = "targets";
+
+/// The job that waits until the coordinator runs the release ([`super::coordinator_wait`]).
+pub const COORDINATOR_JOB: &str = "coordinator";
 
 /// The job that calls the CI client.
 pub const JOB: &str = "set-desired";
@@ -97,16 +104,16 @@ pub const WITH_FROM_TARGETS: [&str; 2] = ["version", "targets"];
 /// index, of which a set of native entries alone has none.
 pub const NOT_PASSED: [&str; 3] = ["package_digest", "release_index", "release_index_digest"];
 
-fn job<'a>(doc: &'a Node, name: &str) -> Option<&'a Node> {
+pub fn job<'a>(doc: &'a Node, name: &str) -> Option<&'a Node> {
     entry(doc, "jobs").and_then(|jobs| entry(jobs, name))
 }
 
-fn text<'a>(map: Option<&'a Node>, key: &str) -> Option<&'a str> {
+pub fn text<'a>(map: Option<&'a Node>, key: &str) -> Option<&'a str> {
     map.and_then(|m| entry(m, key)).and_then(Node::as_str)
 }
 
 /// The names `needs` lists (one name or a list), sorted.
-fn needs(job: Option<&Node>) -> Vec<&str> {
+pub fn needs(job: Option<&Node>) -> Vec<&str> {
     let mut found: Vec<&str> = match job.and_then(|j| entry(j, "needs")) {
         Some(Node {
             value: Value::Seq(items),
@@ -120,7 +127,7 @@ fn needs(job: Option<&Node>) -> Vec<&str> {
 }
 
 /// The `(key, value)` pairs of the mapping `key` of `node`, sorted by key.
-fn pairs<'a>(node: &'a Node, key: &str) -> Vec<(&'a str, &'a str)> {
+pub fn pairs<'a>(node: &'a Node, key: &str) -> Vec<(&'a str, &'a str)> {
     let mut found: Vec<(&str, &str)> = entry(node, key)
         .map_or(&[][..], entries)
         .iter()
@@ -136,10 +143,10 @@ fn pairs<'a>(node: &'a Node, key: &str) -> Vec<(&'a str, &'a str)> {
 }
 
 /// The step as [`TARGETS_STEPS`] writes it.
-fn step_shape(step: &Node) -> String {
+pub fn step_shape(step: &Node) -> String {
     let mut shape = text(Some(step), "if").map_or_else(String::new, |c| format!("if {c} "));
     shape.push_str(&match text(Some(step), "run") {
-        Some(run) => format!("run {run}"),
+        Some(run) => format!("run {}", run.trim_end()),
         None => {
             let action = text(Some(step), "uses")
                 .map(|u| u.split_once('@').map_or(u, |(path, _)| path))
@@ -158,7 +165,11 @@ fn step_shape(step: &Node) -> String {
 /// One line per rule of this module that the workflow `doc` of `release.yml` breaks.
 pub fn problems(doc: &Node) -> Vec<String> {
     let mut problems = Vec::new();
-    for (name, condition) in [(TARGETS_JOB, DESIRED_IF), (JOB, SET_IF)] {
+    for (name, condition) in [
+        (TARGETS_JOB, DESIRED_IF),
+        (COORDINATOR_JOB, SET_IF),
+        (JOB, SET_IF),
+    ] {
         let j = job(doc, name);
         if text(j, "if") != Some(condition) {
             problems.push(format!(
@@ -172,6 +183,7 @@ pub fn problems(doc: &Node) -> Vec<String> {
         }
     }
     problems.extend(targets_problems(job(doc, TARGETS_JOB)));
+    problems.extend(super::coordinator_wait::problems(job(doc, COORDINATOR_JOB)));
     problems.extend(caller_problems(job(doc, JOB)));
     problems
 }
@@ -240,9 +252,9 @@ fn targets_problems(targets: Option<&Node>) -> Vec<String> {
 fn caller_problems(caller: Option<&Node>) -> Vec<String> {
     let mut problems = Vec::new();
     let got = needs(caller);
-    if got != ["plan", TARGETS_JOB] {
+    if got != ["coordinator", "plan", TARGETS_JOB] {
         problems.push(format!(
-            "{FILE}: job {JOB} needs {got:?}, not [\"plan\", \"{TARGETS_JOB}\"]"
+            "{FILE}: job {JOB} needs {got:?}, not [\"coordinator\", \"plan\", \"{TARGETS_JOB}\"]"
         ));
     }
     let with = caller.and_then(|j| entry(j, "with"));

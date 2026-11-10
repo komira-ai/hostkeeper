@@ -72,8 +72,23 @@ const REFUSED_SET: &str =
 
 /// The outputs program of the real workflow, run on `left`.
 fn outputs(left: &Left) -> Ran {
+    outputs_of(left, false)
+}
+
+/// The same, with the message of a failed job (`::error::<why>` and the log) printed as a last
+/// value, where the job halts with it on stderr, so a test can hold it exactly.
+fn said(left: &Left) -> Ran {
+    outputs_of(left, true)
+}
+
+fn outputs_of(left: &Left, print_the_halt: bool) -> Ran {
     let doc = yaml::load(&real()).expect("the workflow parses");
     let program = outputs_program(&doc).expect("the outputs step has its program");
+    let program = if print_the_halt {
+        program.replace("halt_error(1)", ".")
+    } else {
+        program.to_owned()
+    };
     let vars: Vec<(&str, String)> = OUTPUTS_ARGS
         .iter()
         .map(|&(_, name, _)| {
@@ -92,7 +107,7 @@ fn outputs(left: &Left) -> Ran {
             (name, value.to_owned())
         })
         .collect();
-    run(program, &vars)
+    run(&program, &vars)
 }
 
 /// The three output lines, and whether the step ends with exit 1.
@@ -122,6 +137,36 @@ fn a_refused_set_writes_its_token_and_no_version() {
             "hkctl: the coordinator answered UNAUTHENTICATED\nrefused: unauthorized\n"
         )),
         want("", false, "unauthorized", true)
+    );
+}
+
+#[test]
+fn a_set_refused_by_an_older_coordinator_writes_coordinator_older() {
+    // hkctl's stderr when the coordinator refused a field it does not know with invalid_request
+    // and then said it is older than hkctl: the `refused:` line carries coordinator_older. Catches
+    // the reason read from the line before it, and the job's message naming another reason.
+    let err = "hkctl: the coordinator answered INVALID_ARGUMENT
+hkctl: the coordinator is older than this hkctl (1.2.3): it runs 1.0.0; update the coordinator, then call again
+refused: coordinator_older
+";
+    assert_eq!(
+        outputs(&set_failed(err)),
+        want("", false, "coordinator_older", true)
+    );
+    assert_eq!(
+        said(&set_failed(err)),
+        (
+            vec![
+                "desired_version=".to_owned(),
+                "converged=false".to_owned(),
+                "reason=coordinator_older".to_owned(),
+                format!(
+                    "::error::the coordinator refused the set of hello 1.2.3: coordinator_older; it is not set
+{err}"
+                ),
+            ],
+            Ended::Done
+        )
     );
 }
 
