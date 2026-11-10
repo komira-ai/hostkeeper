@@ -156,7 +156,7 @@ fn an_apt_package_installs_updates_rolls_back_and_is_removed_from_a_file_reposit
     assert_eq!(record.installer, "apt");
     assert_eq!(record.package.as_deref(), Some(SERVICE));
     assert_eq!(record.version.as_deref(), Some("1.0.0-1"));
-    assert_eq!(record.repository.as_deref(), Some("main"));
+    assert_eq!(record.repository.as_deref(), Some("komira-stable"));
     assert!(!record.pending);
     let link = "/etc/systemd/system/multi-user.target.wants/web.service";
     assert!(record.links.contains(link));
@@ -375,7 +375,7 @@ fn a_stage_that_fails_says_why_in_the_log() {
         lines,
         [
             "hostkeeper daemon: level=warn alert=stage_failed service=web: not_in_repository: \
-             the repository main lists no web 1.1.0-1 for amd64"
+             the repository komira-stable lists no web 1.1.0-1 for amd64"
                 .to_owned(),
             format!(
                 "hostkeeper daemon: level=error alert=stage_failed service=web: \

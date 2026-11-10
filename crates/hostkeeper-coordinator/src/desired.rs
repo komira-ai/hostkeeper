@@ -501,6 +501,9 @@ pub(crate) struct Held {
     /// The releases each service's versions were set with ([`crate::releases`]), kept beside the
     /// state and its registry, never in their file; a service with none is not listed.
     pub(crate) releases: crate::releases::Books,
+    /// The registry of package repositories ([`crate::repositories`]), kept beside the state
+    /// and never in its file; the default registry (generation 0, none) when none was put.
+    pub(crate) repositories: crate::repositories::Registry,
 }
 
 impl Held {
@@ -883,6 +886,38 @@ impl DesiredStore {
             before,
             after,
         }
+    }
+
+    /// `read` over the registry of package repositories now, without copying its keyrings.
+    pub(crate) fn with_repositories<T>(
+        &self,
+        read: impl FnOnce(&crate::repositories::Registry) -> T,
+    ) -> T {
+        read(&self.lock().repositories)
+    }
+
+    /// The desired state with the registry `edit` makes of the registry now, staged under the
+    /// writers' lock and not committed: for `Repositories.Put` and `Repositories.Remove`, which
+    /// commit it with their audit entries ([`crate::ops::OpsStore::decide_changes_with`]). The
+    /// edit runs under the lock, on the registry it replaces, so a limit it checks holds however
+    /// many callers there are.
+    ///
+    /// # Errors
+    /// The edit's own error: nothing was staged.
+    pub(crate) fn stage_repositories<E>(
+        &self,
+        edit: impl FnOnce(&crate::repositories::Registry) -> Result<crate::repositories::Registry, E>,
+    ) -> Result<Staged<'_>, E> {
+        let writer = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
+        let before = self.lock().clone();
+        let mut after = before.clone();
+        after.repositories = edit(&before.repositories)?;
+        Ok(Staged {
+            store: self,
+            _writer: writer,
+            before,
+            after,
+        })
     }
 
     /// The release `version` of `service` was set with, if any.

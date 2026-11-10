@@ -2,15 +2,20 @@
 //! from it (packages-repositories.md sections 3.1 and 4.1), and `hostkeeper check-repositories`,
 //! host setup's check of a directory with the same loader before it places the directory.
 //!
-//! The directory of repository entries is read once, at the start, by
+//! The directory of repository entries is read at the start by
 //! [`hostkeeper_install::repository::config::load_with_keyrings`] as [`ROOT_UID`]'s: a defect in
 //! it refuses the start ([`StartError::Repositories`]) and a missing or empty directory is no
-//! repository. A Mac has no repository entries and never reads the directory.
+//! repository. After the start, the repository sets the coordinator pushes replace the directory
+//! and the entries in use ([`crate::repository_push`]). A Mac has no repository entries and never
+//! reads the directory.
 //!
 //! [`check`] is that same call over another directory, judged as the host will see it at
 //! [`REPOSITORIES_DIR`]: a `Signed-By` of `/etc/hostkeeper/repositories/<file>` names the file
 //! `<file>` of the directory checked, so host setup can check the files it staged in a sibling
 //! directory before it renames them into place. The verb accepts exactly what the start accepts.
+//!
+//! [`capable`] is the installer a host would announce were it given an entry, which a set of
+//! repositories the coordinator pushes ([`crate::repository_push`]) may give it after the start.
 //!
 //! [`announced`] adds `apt` to the list when the host may run it (section 4.1: a `deb` host with
 //! apt's tools, apt 2.2 or later, and at least one entry), since this build registers its
@@ -24,8 +29,11 @@ use clap::Args;
 use hostkeeper_install::Announcement;
 use hostkeeper_install::REGISTERED;
 use hostkeeper_install::repository::Repositories;
-use hostkeeper_install::repository::announce::{announced as with_native, native};
+use hostkeeper_install::repository::announce::{
+    announced as with_native, capable as capable_native, native,
+};
 use hostkeeper_install::repository::config::{self, Loaded, RepositoriesError};
+use hostkeeper_release::Installer;
 use sha2::{Digest, Sha256};
 
 pub use hostkeeper_install::repository::config::REPOSITORIES_DIR;
@@ -122,6 +130,13 @@ pub fn run_check(
     // Nothing is left to tell when standard error cannot be written either: the status says it.
     let _ = writeln!(err, "hostkeeper check-repositories: {failed}");
     EXIT_REFUSED
+}
+
+/// The native repository installer the host could run once it has an entry, when the build
+/// registers it: what [`crate::repository_push`] announces after the first set the coordinator
+/// pushes ([`hostkeeper_install::repository::announce::capable`]).
+pub fn capable(announcement: &Announcement, os_root: &Path) -> Option<Installer> {
+    capable_native(announcement.family, os_root).filter(|installer| REGISTERED.contains(installer))
 }
 
 /// `announcement` with the host's native repository installer added when the host may run it

@@ -151,7 +151,7 @@ pub fn entry_of(service: &str, version: &str, manifest: &str) -> (Target, bool) 
         installer: INSTALLER.to_owned(),
         digest: crate::support::d(),
         manifest: Some(manifest),
-        repository: Some("main".to_owned()),
+        repository: Some("komira-stable".to_owned()),
         package_version: Some(format!("{version}-1")),
         ..Target::default()
     };

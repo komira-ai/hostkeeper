@@ -52,6 +52,7 @@ fn request(
 ) -> proto::HeartbeatRequest {
     proto::HeartbeatRequest {
         installers: Vec::new(),
+        repositories: None,
         platform: proto::Platform::LinuxArm64 as i32,
         agent,
         features: features.iter().map(|name| (*name).to_owned()).collect(),

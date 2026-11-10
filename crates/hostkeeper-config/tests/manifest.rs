@@ -51,7 +51,7 @@ fn a_malformed_hostkeeper_version_is_refused_naming_the_text() {
         "9.0.0-rc.1",
         "9.0.0+build",
         "9.0",
-        "1.2.3.4",
+        "192.0.2.4",
         "192.0.2.1.5",
         "09.0.0",
         "v9.0.0",

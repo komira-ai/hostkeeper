@@ -36,6 +36,7 @@ use rcgen::{CertificateParams, ExtendedKeyUsagePurpose, KeyPair, SanType};
 const HEARTBEAT: &str = "/hostkeeper.agent.v1.Coordinator/Heartbeat";
 /// The path of `Releases.SetDesired`.
 const SET_DESIRED: &str = "/hostkeeper.operator.v1.Releases/SetDesired";
+const PUT_REPOSITORY: &str = "/hostkeeper.operator.v1.Repositories/Put";
 
 /// How long the coordinator's router waits for a body: the whole body is there.
 const PATIENCE: Duration = Duration::from_secs(30);
@@ -113,8 +114,47 @@ fn call(
     })
 }
 
-/// CI sets `service` to `version` with the release that lists `entry` for every platform. The
-/// set is refused (the call panics) when the coordinator refuses it.
+/// The repository `komira` of the coordinator's registry, which every service names by default:
+/// the host's entry of the tests is its channel `komira-stable`. Its keyring is one hand-built
+/// public key packet.
+fn komira() -> hostkeeper_proto::hostkeeper::release::v1::Repository {
+    let mut keyring = vec![0xc0 | 6, 14, 4, 0, 0, 0, 1, 22];
+    keyring.extend([1_u8; 8]);
+    let fingerprint = hostkeeper_release::registry::keys(&keyring).expect("a keyring")[0]
+        .fingerprint
+        .clone();
+    hostkeeper_proto::hostkeeper::release::v1::Repository {
+        name: "komira".to_owned(),
+        kind: "apt".to_owned(),
+        uri: "https://packages.example.com/apt".to_owned(),
+        suites: vec!["stable".to_owned()],
+        components: vec!["main".to_owned()],
+        fingerprints: vec![fingerprint],
+        keyring,
+    }
+}
+
+/// The operator puts [`komira`] in the registry: a set with a repository entry is refused until
+/// the registry holds the repository its service names.
+fn put_komira(coordinator: &Arc<Coordinator>) {
+    let request = operator::PutRepositoryRequest {
+        repository: Some(komira()),
+        reason: "a test".to_owned(),
+    };
+    let (code, message, _) = call(
+        coordinator,
+        Surface::Control,
+        &None,
+        PUT_REPOSITORY,
+        Some(crate::support::coordinated::OPERATOR),
+        &request.encode_to_vec(),
+    );
+    assert_eq!(code, 0, "the put of komira: {message}");
+}
+
+/// CI sets `service` to `version` with the release that lists `entry` for every platform, after
+/// the operator has put `komira` in the registry. The set is refused (the call panics) when the
+/// coordinator refuses it.
 pub fn set_release(coordinator: &Arc<Coordinator>, service: &str, version: &str, entry: &Release) {
     let list = TargetList {
         entries: vec![entry.clone()],
@@ -131,6 +171,7 @@ pub fn set_release(coordinator: &Arc<Coordinator>, service: &str, version: &str,
             .collect(),
         ..operator::SetDesiredRequest::default()
     };
+    put_komira(coordinator);
     let token = mint(&keys()[0], &good_claims(STATIC_ISSUER));
     let (code, message, _) = call(
         coordinator,
@@ -371,6 +412,7 @@ impl CoordinatorLink for GrpcInProcess {
                     },
                 })
                 .collect(),
+            repositories: None,
         })
     }
 }

@@ -174,6 +174,7 @@ fn first_beat() -> Heartbeat {
         renewal: Renewal::default(),
         trusted_root: None,
         installers: vec!["apt".to_owned()],
+        repositories: None,
     }
 }
 
@@ -199,6 +200,7 @@ fn without_executor(daemon: &Arc<Daemon>, links: &Links) -> Heartbeater {
             log: Arc::clone(&links.log),
             renewal: Arc::new(DaemonRenewal::new(links.renewal.clone())),
             trusted_root: Arc::new(NoTrustedRoot),
+            repositories: None,
         },
     )
 }

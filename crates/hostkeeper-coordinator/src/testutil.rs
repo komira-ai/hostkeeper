@@ -504,6 +504,7 @@ pub async fn set_native(coordinator: &Coordinator, body: &str) {
         .and_then(|digest| u8::from_str_radix(digest.as_str()?.get(..2)?, 16).ok())
         .unwrap_or(1);
     let verified = coordinator.ci(Some(&ci_token())).await.expect("a token");
+    coordinator.keep_komira();
     coordinator
         .set_desired_with(
             &crate::service::ci_calls::Setter::Ci(&verified),
@@ -516,6 +517,25 @@ pub async fn set_native(coordinator: &Coordinator, body: &str) {
 }
 
 impl Coordinator {
+    /// Puts the repository `komira` (the one the rollout file's services name by default) in the
+    /// registry when it is not there, without an audit entry: a set with the `apt` entries of
+    /// [`crate::marks_support::native_targets`] is refused until the registry holds it.
+    pub(crate) fn keep_komira(&self) {
+        let komira = crate::repositories_support::komira(1);
+        let missing = self
+            .desired
+            .with_repositories(|registry| registry.get(&komira.name).is_none());
+        if missing {
+            let staged = self
+                .desired
+                .stage_repositories(|held| held.put(komira))
+                .expect("the registry takes komira");
+            self.ops
+                .decide_changes_with(staged, |_| Vec::new())
+                .expect("the registry is stored");
+        }
+    }
+
     /// Notes that the daemon of `who` announces `target-v1`, lists `apt` and runs each service the
     /// coordinator manages with it, as its heartbeat over gRPC says it.
     pub(crate) fn hear_apt(&self, who: &crate::identity::Identity) {

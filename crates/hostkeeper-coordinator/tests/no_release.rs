@@ -19,7 +19,7 @@ use sha2::{Digest as _, Sha256};
 use support::beats::{Daemon, FORCE, converge, grpc_beat, json_beat, reason, runs, said};
 use support::rig::{Rig, Spec};
 use support::targets::{
-    GET_RELEASE, SET_DESIRED, digest, entry, grpc, list, repository_entry, set,
+    GET_RELEASE, SET_DESIRED, digest, entry, grpc, list, put_komira, repository_entry, set,
 };
 use support::{OPERATOR, ci_token};
 
@@ -213,6 +213,7 @@ fn x86(entries: Vec<Target>) -> BTreeMap<String, TargetList> {
 #[tokio::test]
 async fn a_stored_release_with_archive_entries_and_an_index_loads_and_picks_no_archive_entry() {
     let mut rig = rig("no-release-stored");
+    put_komira(&rig).await;
     rig.at(1_100);
     let index = r#"{"packages":[],"schema":1,"service":"web","version":"2.0"}"#;
     let mut asked = set(

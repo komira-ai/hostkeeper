@@ -5,7 +5,9 @@
 // artifact and not attested (docs/design/packages.md sections 3 and 4). A repository entry
 // (`repository` set) names instead a package, its version and the entry of the host's own
 // repository configuration to install it from, pinned by the package file's SHA-256, with the
-// same manifest (docs/design/packages-repositories.md section 2).
+// same manifest (docs/design/packages-repositories.md section 2). A `Repository` is one package
+// repository of the coordinator's registry, which the coordinator sends the hosts that need it
+// and from which their daemons write their repository configuration (section 3 there).
 //
 // Served by: nobody. This file declares messages and no service. `operator.proto` and
 // `agent.proto` import it, so the coordinator forwards to a host, field for field, the entry CI
@@ -30,6 +32,7 @@
 // (`StepBounds`), `verify_deadline_secs`, `promotion_ceiling_secs` and each of
 // `installer_bounds`, which is 1 to 3600. A manifest holds at most 64 `run` entries, 256 `place`
 // entries, 64 params and 32 containers.
+// A `Repository`'s bounds are its fields' comments.
 //
 // Extending: add fields and messages; never renumber, rename, retype or remove one, and never
 // reuse a number (the compatibility test in this crate refuses each). A field beside a list's
@@ -213,4 +216,30 @@ message Volume {
   // Absolute, in the container.
   string container_path = 2;
   bool read_only = 3;
+}
+
+// A package repository of the coordinator's registry (packages-repositories.md section 3): where
+// hosts install repository entries from, and the keys that sign it. The operator sets it with
+// `Repositories.Put`; the coordinator sends it to each Linux host whose services name it
+// (`HeartbeatResponse.repositories`), and the host's daemon writes it as one entry of its
+// repository configuration per suite, `<name>-<suite>.sources`, all signed by the keyring
+// `<name>.gpg`. A repository entry of a release names one of those entries (`Target.repository`).
+message Repository {
+  // 1 to 32 bytes of `[a-z0-9-]`; each `<name>-<suite>` is one too.
+  string name = 1;
+  // The package manager the repository serves: `apt`. Any other is refused.
+  string kind = 2;
+  // The repository's root, `https://` and a host, at most 512 bytes of `[A-Za-z0-9._~:/-]`.
+  string uri = 3;
+  // Its channels, 1 to 8, each 1 to 31 bytes of `[a-z0-9-]`, none twice (`testing`, `stable`).
+  repeated string suites = 4;
+  // The components of every suite, 1 to 16, each 1 to 64 bytes of `[A-Za-z0-9._-]`, none twice.
+  repeated string components = 5;
+  // The fingerprints of the keys that may sign the repository, primary keys or subkeys, 1 to 8,
+  // none twice: 40 (a version 4 key) or 64 (version 6) upper-case hex characters. Each is a key
+  // of `keyring`, and each primary key of `keyring` has its own or one of its subkeys' here.
+  repeated string fingerprints = 6;
+  // The binary OpenPGP keyring the suites are signed with (what `gpg --export` writes), 1 byte
+  // to 64 KiB: public keys only.
+  bytes keyring = 7;
 }

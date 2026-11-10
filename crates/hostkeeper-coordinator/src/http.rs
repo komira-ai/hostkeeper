@@ -89,9 +89,10 @@ pub const MAX_DESIRED_BYTES: usize = 4096;
 /// The most bytes of an operator action read.
 pub const MAX_OPERATOR_BYTES: usize = 4096;
 
-/// The most bytes of a `Releases.SetDesired` request read, on the gRPC route and the JSON
-/// gateway: a set with targets carries up to eight entries of 24 KiB on each platform
-/// (docs/design/packages.md, section 3.5). Every other operator method reads
+/// The most bytes of a `Releases.SetDesired` or a `Repositories.Put` request read, on the gRPC
+/// route and the JSON gateway: a set with targets carries up to eight entries of 24 KiB on each
+/// platform (docs/design/packages.md, section 3.5), and a repository a keyring of up to 64 KiB,
+/// which the JSON gateway reads as base64. Every other operator method reads
 /// [`MAX_OPERATOR_BYTES`].
 pub const MAX_SET_DESIRED_BYTES: usize = 256 * 1024;
 
@@ -403,7 +404,8 @@ where
             why @ (SetError::BelowMinVersion
             | SetError::BadVersion
             | SetError::DigestConflict
-            | SetError::ReleaseExists),
+            | SetError::ReleaseExists
+            | SetError::RepositoryUnknown),
         ) => {
             tracing::warn!(%why, "refused a desired state");
             error(StatusCode::CONFLICT, why.reason().unwrap_or("conflict"))

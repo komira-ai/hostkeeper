@@ -21,6 +21,7 @@ mod pending;
 mod readme_status;
 mod refusal;
 mod report;
+mod repositories;
 mod rollouts;
 mod support;
 mod targets;

@@ -457,6 +457,53 @@ token, and answers either for any service.
 | `--service` | STRING | The service; empty names the legacy service, as for `Converge`. |
 | `--version` | STRING | The version, as it was set. |
 
+### `repositories`
+
+The service `Repositories` of the package `hostkeeper.operator.v1`. The coordinator's registry of package repositories.
+
+#### `hkctl repositories list`
+
+`/hostkeeper.operator.v1.Repositories/List`
+
+Every repository of the registry, by name, without its keyring (`keyring_sha256` names it),
+and the registry's generation. Changes nothing.
+
+#### `hkctl repositories get`
+
+`/hostkeeper.operator.v1.Repositories/Get`
+
+One repository, with its keyring. Changes nothing.
+
+| flag | value | meaning |
+|---|---|---|
+| `--name` | STRING | The repository's name. |
+
+#### `hkctl repositories put`
+
+`/hostkeeper.operator.v1.Repositories/Put`
+
+Adds a repository, or replaces the one of its name: a new keyring or new fingerprints are a
+key rotation, which reaches each host whose services name it at its next heartbeat. The
+registry's generation grows by one. Writes the audit entry `repository_put`.
+
+| flag | value | meaning |
+|---|---|---|
+| `--reason` | STRING | Why, for the audit entry. |
+
+Through `--request` only: `repository` (hostkeeper.release.v1.Repository).
+
+#### `hkctl repositories remove`
+
+`/hostkeeper.operator.v1.Repositories/Remove`
+
+Removes a repository no service of the rollout file names. The registry's generation grows
+by one. Writes the audit entry `repository_remove`.
+
+| flag | value | meaning |
+|---|---|---|
+| `--name` | STRING | The repository's name. |
+| `--reason` | STRING | Why, for the audit entry. |
+
 ### `rollouts`
 
 The service `Rollouts` of the package `hostkeeper.operator.v1`. The update plans of the services: an operator moves a plan on, pauses it and resumes it. Each call is an audit entry under the operator token's name.

@@ -13,7 +13,7 @@ use hostkeeper_wire::wire::{Answer, Heartbeat};
 use support::beats::{Daemon, grpc_beat, runs};
 use support::ci_token;
 use support::rig::{Rig, Spec};
-use support::targets::{SET_DESIRED, grpc, list, repository_entry, set};
+use support::targets::{SET_DESIRED, grpc, list, put_komira, repository_entry, set};
 
 /// The rollout file of these tests: `web` on the role `daemon`.
 const ROLLOUT: &str = "[[service]]\nname = \"web\"\nroles = [\"daemon\"]\n";
@@ -56,6 +56,7 @@ async fn rig(name: &str) -> Rig {
         .with_oidc_services(&["web"]);
     let rig = Rig::new(name, spec);
     rig.at(1_100);
+    put_komira(&rig).await;
     let targets = BTreeMap::from([(
         "linux-x86_64".to_owned(),
         list(vec![repository_entry("web", "1.6.0", 'c')]),

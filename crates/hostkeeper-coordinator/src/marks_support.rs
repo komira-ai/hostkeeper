@@ -171,6 +171,7 @@ pub(crate) async fn try_set_targets(
         .await
         .expect("a token");
     let body = format!(r#"{{"service":"{service}","version":"{version}"}}"#);
+    rig.coordinator.keep_komira();
     rig.coordinator
         .set_desired_with(
             &Setter::Ci(&verified),

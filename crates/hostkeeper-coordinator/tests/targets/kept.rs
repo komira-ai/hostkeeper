@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use support::readers::Readers;
 use support::rig::PATIENCE;
-use support::targets::{Answered, entry, framed, list, repository_entry};
+use support::targets::{Answered, entry, framed, list, put_komira, repository_entry};
 
 use super::*;
 
@@ -350,6 +350,7 @@ async fn other_targets_under_one_version_are_release_exists_and_change_nothing()
 #[tokio::test]
 async fn another_release_index_digest_under_one_version_is_release_exists() {
     let rig = rig("kept-other-index");
+    put_komira(&rig).await;
     let targets = own_targets('a');
     let canonical = index_of("3.0", &targets, false);
     let pretty = index_of("3.0", &targets, true);
@@ -446,6 +447,7 @@ async fn targets_for_a_version_set_before_with_a_package_digest_or_index_are_rel
 #[tokio::test]
 async fn a_package_digest_or_index_for_a_version_with_a_release_is_release_exists() {
     let rig = rig("kept-no-targets");
+    put_komira(&rig).await;
     assert_eq!(
         ci_set(&rig, &set("web", "2.0", targets("web"))).await.code,
         0
@@ -571,6 +573,7 @@ async fn a_set_with_targets_by_ci_is_audited_once_with_the_release_in_the_reason
 #[tokio::test]
 async fn a_set_with_targets_by_an_operator_is_audited_once_under_the_token_name() {
     let rig = rig("kept-audit-operator");
+    put_komira(&rig).await;
     let answered = operator_set(&rig, &set("web", "2.0", targets("web"))).await;
     assert_eq!(answered.code, 0, "{answered:?}");
     let entries = audited(&rig).await;
@@ -654,6 +657,7 @@ async fn get_release_refuses_the_unknown_and_the_unauthorized() {
 #[tokio::test]
 async fn get_release_answers_the_lists_in_the_order_set_and_the_index_digest() {
     let rig = rig("kept-get-answers");
+    put_komira(&rig).await;
     let mut in_order = targets("web");
     in_order
         .get_mut("linux-x86_64")
@@ -711,6 +715,7 @@ async fn get_release_answers_the_lists_in_the_order_set_and_the_index_digest() {
 #[tokio::test]
 async fn a_restart_keeps_the_release_and_the_releases_file_holds_it() {
     let mut rig = rig("kept-restart");
+    put_komira(&rig).await;
     let mut in_order = targets("web");
     in_order
         .get_mut("linux-x86_64")
@@ -821,6 +826,7 @@ struct FrozenIndex {
 #[tokio::test]
 async fn the_state_file_of_a_set_with_targets_is_read_by_the_previous_coordinators_reader() {
     let rig = rig("kept-frozen");
+    put_komira(&rig).await;
     assert_eq!(
         ci_set(&rig, &set("web", "2.0", targets("web"))).await.code,
         0

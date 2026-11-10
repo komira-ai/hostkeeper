@@ -88,6 +88,8 @@ tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
 [dev-dependencies]
 # tests/hello.rs: the example service's real hook, run in process by a step launcher of the test.
 hello = { path = "../../examples/hello" }
+# tests/repository_e2e.rs: the keyring of a repository the operator API takes, as base64.
+base64.workspace = true
 # The real coordinator of the end-to-end test, driven in process: its desired-state and
 # convergence handlers over HTTP requests built in the test, its heartbeat with an explicit host
 # identity. Its CI tokens come from the fake issuer of `hostkeeper-oidc`'s `testkit`.

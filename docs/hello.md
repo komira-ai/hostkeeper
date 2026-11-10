@@ -113,13 +113,13 @@ makes that directory, owner only, on its first step.
    before its call, as `release.yml`'s does, so a coordinator served only on the tailnet is
    reachable; empty, it does not join.
 5. **The failing build's repository entry** (step 4 only). A host that is to take the failing
-   build needs the repository entry `komira-testing-fail` besides `komira-testing`: the file
-   `/etc/hostkeeper/repositories/komira-testing-fail.sources`, with `Suites: testing-fail` and
-   the same keyring as `komira-testing`. Place it, check the directory with
-   `hostkeeper check-repositories --dir /etc/hostkeeper/repositories`, and restart the daemon,
-   which reads the entries at start. A host without the entry fails the order at stage with the
-   class `environment` and the reason `repository_unknown`, which is not the `not_ready` rollback
-   the proof waits for, and the failing build is never installed on it.
+   build needs the repository entry `komira-testing-fail` besides `komira-testing`. Put the
+   registry's repository `komira` with the suite `testing-fail` added to `testing` and `stable`
+   ([repository-keys.md](operations/repository-keys.md#put-the-repository-in-the-registry)); each
+   Linux host whose services name `komira` writes
+   `/etc/hostkeeper/repositories/komira-testing-fail.sources` at its next heartbeat, with no
+   restart. Until then the coordinator refuses the set (`repository_unknown`), since the entry
+   names a channel `komira` does not list.
 
 ## 1. Assign hello to a role
 

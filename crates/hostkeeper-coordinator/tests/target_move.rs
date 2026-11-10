@@ -22,7 +22,7 @@ use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_proto::hostkeeper::release::v1::{Location, Target, TargetList};
 use support::beats::{Daemon, FORCE, converge, grpc_beat, json_beat, reason, runs, said};
 use support::rig::{Rig, Spec};
-use support::targets::{SET_DESIRED, digest, entry, grpc, list, repository_entry};
+use support::targets::{SET_DESIRED, digest, entry, grpc, list, put_komira, repository_entry};
 use support::{OPERATOR, ci_token};
 
 const SERVICES: &str = r#"
@@ -121,6 +121,7 @@ async fn a_host_running_from_archives_is_picked_nothing_and_one_running_apt_is_p
         ("native-after", vec![web(ARCHIVE, 'f'), apt("2.0-1", 'a')]),
     ] {
         let rig = rig(name);
+        put_komira(&rig).await;
         set(&rig, "2.0", x86(entries)).await;
         rig.at(LATER);
         let archived = Daemon::new("m1", X86, &[ARCHIVE, "apt"]).running(runs("web", "1.0", None));
@@ -165,6 +166,7 @@ async fn a_host_running_from_archives_is_picked_nothing_and_one_running_apt_is_p
 #[tokio::test]
 async fn an_archive_entry_is_never_picked_whatever_the_daemon_lists() {
     let rig = rig("never-archive");
+    put_komira(&rig).await;
     set(&rig, "2.0", x86(vec![apt("2.0-1", 'a'), web(ARCHIVE, 'f')])).await;
     rig.at(LATER);
     for (host, installers) in [
@@ -211,6 +213,7 @@ async fn an_archive_entry_is_never_picked_whatever_the_daemon_lists() {
 async fn a_list_with_no_native_entry_its_daemon_lists_picks_an_archive_host_nothing() {
     for (name, other) in [("other-deb", "deb"), ("other-tarball", "tarball")] {
         let rig = rig(name);
+        put_komira(&rig).await;
         set(&rig, "2.0", x86(vec![web(other, 'a'), web(ARCHIVE, 'f')])).await;
         rig.at(LATER);
         let daemon = Daemon::new("k1", X86, &[ARCHIVE, other]).running(runs("web", "1.0", None));
@@ -231,6 +234,7 @@ async fn a_list_with_no_native_entry_its_daemon_lists_picks_an_archive_host_noth
 #[tokio::test]
 async fn a_host_running_apt_is_never_picked_the_archive_entry_of_a_newer_version() {
     let rig = rig("move-no-way-back");
+    put_komira(&rig).await;
     set(&rig, "2.0", x86(vec![web(ARCHIVE, 'f'), apt("2.0-1", 'a')])).await;
     rig.at(LATER);
     let moved = Daemon::new("v1", X86, &[ARCHIVE, "apt"]).running(runs("web", "1.0", Some("apt")));
@@ -259,6 +263,7 @@ async fn a_host_running_apt_is_never_picked_the_archive_entry_of_a_newer_version
 #[tokio::test]
 async fn a_rollback_to_a_version_with_no_native_entry_picks_the_host_nothing() {
     let rig = rig("move-rollback");
+    put_komira(&rig).await;
     let one = x86(vec![web(ARCHIVE, 'f')]);
     let one_five = x86(vec![apt("1.5-1", 'b'), web(ARCHIVE, 'e')]);
     let two = x86(vec![apt("2.0-1", 'a'), web(ARCHIVE, 'd')]);
@@ -303,6 +308,7 @@ async fn a_rollback_to_a_version_with_no_native_entry_picks_the_host_nothing() {
 #[tokio::test]
 async fn a_force_back_to_a_version_with_no_native_entry_skips_the_host() {
     let rig = rig("move-force-back");
+    put_komira(&rig).await;
     let one = x86(vec![web(ARCHIVE, 'f')]);
     set(&rig, "1.0", one).await;
     set(&rig, "2.0", x86(vec![apt("2.0-1", 'a'), web(ARCHIVE, 'd')])).await;
@@ -355,6 +361,7 @@ async fn hostkeeper_is_set_with_its_native_entry_alone() {
             .without_legacy(),
     )
     .routed();
+    put_komira(&rig).await;
     let own = || {
         let mut own = repository_entry("hostkeeper", "2.0-1", 'a');
         own.manifest.as_mut().expect("a manifest").run = vec!["hostkeeper.service".to_owned()];
@@ -418,6 +425,7 @@ async fn a_stored_release_of_hostkeeper_with_an_archive_entry_still_loads() {
             .without_legacy(),
     )
     .routed();
+    put_komira(&rig).await;
     let mut own = repository_entry("hostkeeper", "2.0-1", 'a');
     own.manifest.as_mut().expect("a manifest").run = vec!["hostkeeper.service".to_owned()];
     let archive = entry("hostkeeper", ARCHIVE, 'f', 1_000);
@@ -520,6 +528,7 @@ async fn a_mac_that_announces_macos_pkg_is_picked_the_pkg_entry_and_a_linux_host
         ("hostkeeper", &[][..]),
     ] {
         let rig = mac_rig(&format!("mac-pkg-{service}"));
+        put_komira(&rig).await;
         let (targets, pkg, deb) = mac_release(service, run);
         set_mac(&rig, service, "2.0", targets).await;
         rig.at(LATER);
@@ -569,6 +578,7 @@ async fn a_mac_that_announces_no_macos_pkg_is_picked_nothing_with_the_reason_the
         ("hostkeeper", &[][..]),
     ] {
         let rig = mac_rig(&format!("mac-no-pkg-{service}"));
+        put_komira(&rig).await;
         let (targets, _, _) = mac_release(service, run);
         set_mac(&rig, service, "2.0", targets).await;
         rig.at(LATER);

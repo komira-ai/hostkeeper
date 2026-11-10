@@ -117,9 +117,13 @@ daemon's own loader and refuse what the daemon would refuse, before a seed is ma
 
 ### 3a. Write the repository entries of the installed hosts
 
-Optional. With `--repositories <dir>`, every seed also writes the files of `<dir>` to
-`/etc/hostkeeper/repositories/` on the installed host, before its `hostkeeper.toml`, so the daemon
-starts with its repository entries (packages-repositories.md, sections 3.1 and 3.2). `<dir>` holds
+Optional, and needed only when an installed host must install from the package repository before
+it reaches the coordinator: every other host gets its entries from the coordinator's registry at
+its first heartbeat (packages-repositories.md section 3.2). With `--repositories <dir>`, every seed
+also writes the files of `<dir>` to `/etc/hostkeeper/repositories/` on the installed host, before
+its `hostkeeper.toml`, so the daemon starts with its repository entries (section 3.1); the
+registry's set adopts them at the first heartbeat when they are the same bytes, and replaces them
+otherwise. `<dir>` holds
 one `<name>.sources` file per entry and the keyrings they name, and nothing else. Each stanza is
 exactly `Types: deb`, one `URIs:` of `https://` or `file:/`, one `Suites:`, `Components:`, and
 `Signed-By: /etc/hostkeeper/repositories/<keyring>`: the path the file will have on the host, not
@@ -131,13 +135,14 @@ Types: deb
 URIs: https://packages.komira.ai/apt
 Suites: testing
 Components: main
-Signed-By: /etc/hostkeeper/repositories/komira-archive-keyring.gpg
+Signed-By: /etc/hostkeeper/repositories/komira.gpg
 ```
 
 (`Suites: stable` for `komira-stable.sources`, and `Suites: testing-fail` for
 `komira-testing-fail.sources`, the entry of hello's failing build on the hosts that run its proof,
-[hello.md](../hello.md) step 4), and the keyring `komira-archive-keyring.gpg` is
-fetched from `https://packages.komira.ai/apt/komira-archive-keyring.gpg` (see
+[hello.md](../hello.md) step 4), the bytes the registry's repository `komira` is written as, and
+the keyring `komira.gpg` is fetched from
+`https://packages.komira.ai/apt/komira-archive-keyring.gpg` (see
 [package-repositories.md](../deploy/package-repositories.md)). Make the directory and its files
 root's, with no write for group or others (`chown -R root:root`, `chmod 0755` the directory,
 `chmod 0644` the files); each keyring is at most 1 MiB. `serve` checks the directory at its start

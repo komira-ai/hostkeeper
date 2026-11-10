@@ -18,7 +18,7 @@ use super::{
     targets,
 };
 use crate::support::targets::{
-    Answered, digest, entry, grpc_bytes, list, location, repository_entry,
+    Answered, digest, entry, grpc_bytes, list, location, put_komira, repository_entry,
 };
 
 /// `INVALID_ARGUMENT`.
@@ -490,6 +490,7 @@ async fn a_package_digest_beside_targets_is_refused_index_invalid() {
 #[tokio::test]
 async fn an_index_beside_the_targets_is_kept_as_its_digest_whatever_its_text() {
     let rig = rig_with_web("targets-index-kept").await;
+    put_komira(&rig).await;
     let all = self_targets(&SELF_THREE);
     let index = |packages: &[(&str, char, u64)]| index_text("hostkeeper", packages);
     let two = [SELF_THREE[0], SELF_THREE[1]];
@@ -547,6 +548,7 @@ async fn an_index_beside_the_targets_is_kept_as_its_digest_whatever_its_text() {
 #[tokio::test]
 async fn an_index_that_agrees_with_the_archive_entries_is_accepted() {
     let rig = rig("targets-index-accepted");
+    put_komira(&rig).await;
 
     let all = self_targets(&SELF_THREE);
     let text = index_text("hostkeeper", &SELF_THREE);

@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use hostkeeper_release::grammar::is_repository_name;
 
 /// Where a host keeps its repository entries.
-pub const REPOSITORIES_DIR: &str = "/etc/hostkeeper/repositories";
+pub const REPOSITORIES_DIR: &str = hostkeeper_release::registry::REPOSITORIES_DIR;
 
 /// The suffix of an entry's file; the stem is the entry's name.
 pub const SOURCES_SUFFIX: &str = ".sources";

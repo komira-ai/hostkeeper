@@ -262,7 +262,7 @@ fn each_family_has_its_name() {
 mod native {
     use super::{Announcement, Family, Installer, Path, announce, fs, linux, put, scratch};
     use hostkeeper_install::repository::announce::{
-        APT_FLOOR, APT_TOOLS, DPKG_STATUS, announced, installed_apt, native,
+        APT_FLOOR, APT_TOOLS, DPKG_STATUS, announced, capable, installed_apt, native,
     };
     use hostkeeper_install::repository::config::{Repositories, Repository};
 
@@ -457,6 +457,20 @@ mod native {
             native(Some(Family::Deb), root.path(), &Repositories::default()),
             None
         );
+    }
+
+    /// Proves `capable` names `apt` for a Debian host with the tools and a recent apt whatever its
+    /// repositories, and none for a host `native` refuses for its family or its tools.
+    #[test]
+    fn a_host_is_capable_of_apt_without_looking_at_its_repositories() {
+        let root = host("capable", &apt_status("2.6.1"));
+        assert_eq!(
+            capable(Some(Family::Deb), root.path()),
+            Some(Installer::Apt)
+        );
+        assert_eq!(capable(Some(Family::Rpm), root.path()), None);
+        let old = host("capable-old", &apt_status("2.1"));
+        assert_eq!(capable(Some(Family::Deb), old.path()), None);
     }
 
     /// Proves the rpm family and a host with no family get none, even with apt's tools and status.

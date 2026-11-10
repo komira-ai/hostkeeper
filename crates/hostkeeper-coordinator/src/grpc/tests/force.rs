@@ -16,6 +16,7 @@ use crate::testutil::OPERATOR;
 fn daemon_beat(features: &[&str]) -> proto::HeartbeatRequest {
     proto::HeartbeatRequest {
         installers: vec!["apt".to_owned()],
+        repositories: None,
         platform: proto::Platform::LinuxArm64 as i32,
         agent: Some(proto::AgentInfo {
             name: "hostkeeper-daemon".to_owned(),

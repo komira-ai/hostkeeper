@@ -21,7 +21,7 @@ use hostkeeper_steps::{LaunchError, ToolCall, ToolExit, ToolNetwork};
 pub use apt_fake::{Deb, Events, FakeHost};
 
 /// The repository the host's entry names.
-pub const REPO: &str = "main";
+pub const REPO: &str = "komira-stable";
 /// Its URI: a directory of the host.
 pub const URI: &str = "file:/srv/hostkeeper-apt";
 

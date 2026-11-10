@@ -5,7 +5,7 @@ use std::fmt::Debug;
 
 use hostkeeper_proto::hostkeeper::operator::v1::{
     AlertsRefusal, AuditRefusal, EnrollmentRefusal, HostsRefusal, MdmRefusal, ReleasesRefusal,
-    RolloutsRefusal, ServicesRefusal,
+    RepositoriesRefusal, RolloutsRefusal, ServicesRefusal,
 };
 use tonic::{Code, Status};
 
@@ -35,7 +35,7 @@ where
 }
 
 /// Proves that each value of `HostsRefusal`, `ReleasesRefusal`, `ServicesRefusal`,
-/// `EnrollmentRefusal`, `AuditRefusal`, `AlertsRefusal`, `RolloutsRefusal` and `MdmRefusal` becomes the status
+/// `EnrollmentRefusal`, `AuditRefusal`, `AlertsRefusal`, `RolloutsRefusal`, `MdmRefusal` and `RepositoriesRefusal` becomes the status
 /// its proto comment names: the code of the comment and the
 /// value's name, without its prefix and in lower case, as the whole message; and that
 /// `UNSPECIFIED`, which no caller is refused with, is `INTERNAL`. A value the enum gains that
@@ -185,6 +185,11 @@ fn every_refusal_value_has_the_code_and_token_its_proto_comment_names() {
                 "release_exists",
             ),
             (ReleasesRefusal::ReleaseUnknown, NotFound, "release_unknown"),
+            (
+                ReleasesRefusal::RepositoryUnknown,
+                FailedPrecondition,
+                "repository_unknown",
+            ),
         ],
         refusal::releases,
     );
@@ -403,6 +408,51 @@ fn every_refusal_value_has_the_code_and_token_its_proto_comment_names() {
             ),
         ],
         refusal::mdm,
+    );
+
+    assert_table(
+        &[
+            (RepositoriesRefusal::Unspecified, Internal, "unspecified"),
+            (
+                RepositoriesRefusal::Unauthorized,
+                Unauthenticated,
+                "unauthorized",
+            ),
+            (
+                RepositoriesRefusal::Forbidden,
+                PermissionDenied,
+                "forbidden",
+            ),
+            (
+                RepositoriesRefusal::InvalidRequest,
+                InvalidArgument,
+                "invalid_request",
+            ),
+            (
+                RepositoriesRefusal::KeyringInvalid,
+                InvalidArgument,
+                "keyring_invalid",
+            ),
+            (
+                RepositoriesRefusal::UnknownRepository,
+                NotFound,
+                "unknown_repository",
+            ),
+            (RepositoriesRefusal::InUse, FailedPrecondition, "in_use"),
+            (
+                RepositoriesRefusal::Conflict,
+                FailedPrecondition,
+                "conflict",
+            ),
+            (RepositoriesRefusal::Capacity, ResourceExhausted, "capacity"),
+            (RepositoriesRefusal::StoreFailed, Internal, "store_failed"),
+            (
+                RepositoriesRefusal::AuditUnavailable,
+                Unavailable,
+                "audit_unavailable",
+            ),
+        ],
+        refusal::repositories,
     );
 }
 

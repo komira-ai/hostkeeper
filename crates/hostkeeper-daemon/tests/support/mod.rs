@@ -6,6 +6,7 @@
 pub mod apt;
 pub mod coordinated;
 pub mod force;
+pub mod pki;
 pub mod selfupdate;
 pub mod typed;
 pub mod versions;

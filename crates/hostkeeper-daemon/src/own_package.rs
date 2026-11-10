@@ -227,7 +227,7 @@ fn of_failure(failure: &Failure) -> OwnActivate {
 /// a version of hostkeeper is in the packages directory, or the package is not installed whole
 /// at the version that runs).
 pub(crate) fn adopt(ctx: &Ctx) -> Result<Option<String>, String> {
-    if !ctx.announcement.installers.contains(&Installer::Apt) {
+    if !ctx.installers().contains(&Installer::Apt) {
         return Ok(None);
     }
     let record = ctx.placer().store().load().map_err(|e| e.to_string())?;

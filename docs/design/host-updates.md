@@ -4,7 +4,7 @@ Moved from kbf at v0.0.64 (commit 8f90d0604794f3fee057e71647c7e1c1e034fa2e), `do
 
 Status: DRAFT. **The shape in this document is decided** (rev 4): a generic updater on every host that knows no service, and an update hook that each service ships in its release. The hook is **any executable**, a binary or a script; our services use a subcommand of their own binary by convention. What remains open are the Questions in section 10. No code. Facts were read at `origin/main` 80436afe7 unless a section says otherwise; a `path:line` is a line of that file at that commit. Where a statement is an inference or a claim about software we do not own, it says so.
 
-Superseded in part by [`rollout-update-plans.md`](rollout-update-plans.md): the one live update at a time across the farm (5.2, Question 1), the canary proposal (5.3, Question 7) and the tests that pin them (section 9) are replaced by update plans, stages of a growing share of a service's hosts. This document is kept as the history of those decisions; where they disagree, the plans document wins.
+Superseded in part by [`rollout-update-plans.md`](rollout-update-plans.md): the one live update at a time across the farm (5.2, Question 1), the canary proposal (5.3, Question 7) and the tests that pin them (section 9) are replaced by update plans, stages of a growing share of a service's hosts. This document is kept as the history of those decisions; where they disagree, the plans document wins. The roles, the per-(service, role) slots and the rollout file it describes are superseded by [hostgroups.md](hostgroups.md).
 
 Labels: **[F]** read in the code at the commit above, **[I]** inference, **[D]** a design choice made here, **[V]** to verify before building on it.
 

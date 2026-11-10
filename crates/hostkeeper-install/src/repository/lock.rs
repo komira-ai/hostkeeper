@@ -36,4 +36,19 @@ impl InstallerLock {
         file.lock()?;
         Ok(Held { _file: file })
     }
+
+    /// Holds the lock when no other holder has it, else `None`: it never waits.
+    pub fn try_hold(&self) -> io::Result<Option<Held>> {
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&self.path)?;
+        match file.try_lock() {
+            Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+            taken => taken
+                .map(|()| Some(Held { _file: file }))
+                .map_err(io::Error::from),
+        }
+    }
 }

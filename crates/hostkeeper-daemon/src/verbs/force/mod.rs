@@ -166,7 +166,7 @@ pub fn run(ctx: &Ctx, order: Forced) -> Reply {
     };
     if let Err(refused) = entry::check(
         ctx.own_version,
-        &ctx.announcement.installers,
+        &ctx.installers(),
         &service,
         &order.package.digest,
         entry,

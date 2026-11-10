@@ -23,7 +23,7 @@ use hostkeeper_link::{
 use hostkeeper_proto::hostkeeper::agent::v1 as agent;
 use hostkeeper_proto::hostkeeper::operator::v1 as operator;
 use hostkeeper_proto::hostkeeper::release::v1::{
-    Hook, InstallerBounds, Manifest, StepBounds, Target as Release, TargetList,
+    Hook, InstallerBounds, Manifest, Repository, StepBounds, Target as Release, TargetList,
 };
 use hostkeeper_testkit::Scratch;
 use hostkeeper_wire::wire;
@@ -84,6 +84,7 @@ pub(crate) fn coordinator(dir: &Path) -> Arc<Coordinator> {
 
 /// The path of `Releases.SetDesired`.
 const SET_DESIRED: &str = "/hostkeeper.operator.v1.Releases/SetDesired";
+const PUT_REPOSITORY: &str = "/hostkeeper.operator.v1.Repositories/Put";
 
 /// The entry of `web` a release lists for the installer `apt`: the repository entry (no
 /// location, no size, no attestation), pinned by the package digest [`digest`].
@@ -120,36 +121,37 @@ pub(crate) fn apt_entry() -> Release {
     }
 }
 
-/// CI sets `web` to 2.0 with the release that lists [`apt_entry`] for every platform, through
-/// the coordinator's gRPC router (`Releases.SetDesired`); the call panics if it is refused. A
-/// version set by digest alone is ordered to no host: only a kept release is.
-pub(crate) fn set_web_release(coordinator: &Arc<Coordinator>) {
-    let list = TargetList {
-        entries: vec![apt_entry()],
-    };
-    let request = operator::SetDesiredRequest {
-        service: "web".to_owned(),
-        desired: Some(operator::DesiredState {
-            version: "2.0".to_owned(),
-            ..operator::DesiredState::default()
-        }),
-        targets: ["linux-x86_64", "linux-arm64", "macos-arm64"]
-            .into_iter()
-            .map(|platform| (platform.to_owned(), list.clone()))
-            .collect(),
-        ..operator::SetDesiredRequest::default()
-    };
-    let message = request.encode_to_vec();
+/// `komira`, the repository every service names by default, with the suite `testing` the entry of
+/// [`apt_entry`] names the channel of; its keyring is one hand-built public key packet,
+/// and the fingerprint is the SHA-1 of that key's body, which the registry checks.
+fn komira() -> Repository {
+    let mut keyring = vec![0xc0 | 6, 14, 4, 0, 0, 0, 1, 22];
+    keyring.extend([1_u8; 8]);
+    Repository {
+        name: "komira".to_owned(),
+        kind: "apt".to_owned(),
+        uri: "https://packages.example.com/apt".to_owned(),
+        suites: vec!["testing".to_owned()],
+        components: vec!["main".to_owned()],
+        fingerprints: vec!["D282F759B44189DAE07134C869E048AEDB2EEC39".to_owned()],
+        keyring,
+    }
+}
+
+/// One gRPC call through the coordinator's router on its private listener, as `token`: the
+/// status and its message.
+fn grpc_call(
+    coordinator: &Arc<Coordinator>,
+    path: &str,
+    token: &str,
+    message: &[u8],
+) -> (String, String) {
     let mut framed = vec![0u8];
     framed.extend(u32::try_from(message.len()).expect("fits").to_be_bytes());
     framed.extend(message);
-    let token = hostkeeper_oidc::testkit::mint(
-        &hostkeeper_oidc::testkit::keys()[0],
-        &hostkeeper_oidc::testkit::good_claims(hostkeeper_oidc::testkit::STATIC_ISSUER),
-    );
     let posted = hyper::Request::builder()
         .method("POST")
-        .uri(SET_DESIRED)
+        .uri(path)
         .version(Http::HTTP_2)
         .header("content-type", "application/grpc")
         .header("te", "trailers")
@@ -160,7 +162,7 @@ pub(crate) fn set_web_release(coordinator: &Arc<Coordinator>) {
         .enable_all()
         .build()
         .expect("a runtime");
-    let (code, text) = runtime.block_on(async {
+    runtime.block_on(async {
         let response = hostkeeper_coordinator::grpc::route(
             coordinator,
             Surface::Control,
@@ -182,7 +184,44 @@ pub(crate) fn set_web_release(coordinator: &Arc<Coordinator>) {
             field("grpc-status").unwrap_or_default(),
             field("grpc-message").unwrap_or_default(),
         )
-    });
+    })
+}
+
+/// The operator puts [`komira`] in the registry (`Repositories.Put`), then CI sets `web` to 2.0
+/// with the release that lists [`apt_entry`] for every platform, through the coordinator's gRPC
+/// router (`Releases.SetDesired`: a set with a repository entry is refused until the registry
+/// holds the repository); the calls panic if one is refused. A version set by digest alone is
+/// ordered to no host: only a kept release is.
+pub(crate) fn set_web_release(coordinator: &Arc<Coordinator>) {
+    let put = operator::PutRepositoryRequest {
+        repository: Some(komira()),
+        reason: "a test".to_owned(),
+    };
+    assert_eq!(
+        grpc_call(coordinator, PUT_REPOSITORY, OPERATOR, &put.encode_to_vec()),
+        ("0".to_owned(), String::new()),
+        "the put of komira"
+    );
+    let list = TargetList {
+        entries: vec![apt_entry()],
+    };
+    let request = operator::SetDesiredRequest {
+        service: "web".to_owned(),
+        desired: Some(operator::DesiredState {
+            version: "2.0".to_owned(),
+            ..operator::DesiredState::default()
+        }),
+        targets: ["linux-x86_64", "linux-arm64", "macos-arm64"]
+            .into_iter()
+            .map(|platform| (platform.to_owned(), list.clone()))
+            .collect(),
+        ..operator::SetDesiredRequest::default()
+    };
+    let token = hostkeeper_oidc::testkit::mint(
+        &hostkeeper_oidc::testkit::keys()[0],
+        &hostkeeper_oidc::testkit::good_claims(hostkeeper_oidc::testkit::STATIC_ISSUER),
+    );
+    let (code, text) = grpc_call(coordinator, SET_DESIRED, &token, &request.encode_to_vec());
     assert_eq!(
         (code.as_str(), text.as_str()),
         ("0", ""),
@@ -295,6 +334,7 @@ fn a_reply_from_the_real_coordinator_maps_to_the_loops_reply() {
         renewal: hostkeeper_link::Renewal::default(),
         trusted_root: None,
         installers: Vec::new(),
+        repositories: None,
     };
     assert_eq!(
         json.heartbeat(&farm.host.identity(), &beat),
@@ -312,6 +352,7 @@ fn a_reply_from_the_real_coordinator_maps_to_the_loops_reply() {
             ],
             halt_generations: vec![(service("web"), 1)],
             acknowledged: Vec::new(),
+            repositories: None,
         })
     );
     server.join().expect("the server").expect("a request");

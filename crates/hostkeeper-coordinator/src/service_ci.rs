@@ -9,6 +9,8 @@
 use std::sync::Arc;
 
 use hostkeeper_oidc::Verified;
+use hostkeeper_release::registry;
+use hostkeeper_release::target::is_repository_entry;
 use hostkeeper_wire::version::Version;
 
 use super::{ConvergenceError, Coordinator, Set, SetError, kept};
@@ -174,6 +176,7 @@ impl Coordinator {
                 release.as_deref(),
                 named.release().is_some(),
             )?;
+            self.refuse_repository(def, release.as_deref())?;
             // The precondition before the audit entry: a set refused for it writes nothing.
             self.desired.admits(&service, ask)?;
             let marks = self.ops.marks(&service);
@@ -292,6 +295,37 @@ impl Coordinator {
             return Err(SetError::ReleaseExists);
         }
         Ok(())
+    }
+
+    /// Refuses a set whose `release` holds a repository entry (`repository_unknown`) when the
+    /// registry does not hold the repository `def` names, or when an entry's `repository` is not
+    /// `<name>-<suite>` of that repository's name and one of its suites
+    /// ([`registry::channels`]). A set without targets, or with artifact entries alone, is not
+    /// checked.
+    fn refuse_repository(
+        &self,
+        def: &ServiceDef,
+        release: Option<&Release>,
+    ) -> Result<(), SetError> {
+        let named: Vec<&str> = release
+            .into_iter()
+            .flat_map(|release| release.targets().values())
+            .flat_map(|list| &list.entries)
+            .filter(|entry| is_repository_entry(entry))
+            .map(|entry| entry.repository.as_deref().unwrap_or_default())
+            .collect();
+        if named.is_empty() {
+            return Ok(());
+        }
+        let channels = self.desired.with_repositories(|registry| {
+            registry
+                .get(&def.repository)
+                .map(|kept| registry::channels(&kept.repository))
+        });
+        match channels {
+            Some(channels) if named.iter().all(|name| channels.iter().any(|c| c == name)) => Ok(()),
+            _ => Err(SetError::RepositoryUnknown),
+        }
     }
 
     /// The release `version` of `service` was set with ([`crate::releases`]).

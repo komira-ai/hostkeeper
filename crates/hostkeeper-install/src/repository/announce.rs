@@ -67,7 +67,17 @@ pub fn native(
     root: &Path,
     repositories: &Repositories,
 ) -> Option<Installer> {
-    if family != Some(Family::Deb) || repositories.is_empty() {
+    if repositories.is_empty() {
+        return None;
+    }
+    capable(family, root)
+}
+
+/// The native repository installer the host under `root` could run were it given an entry: the
+/// one [`native`] names for a host that has one. The daemon decides it once at its start, and
+/// announces it once a set of repositories it was sent leaves it an entry.
+pub fn capable(family: Option<Family>, root: &Path) -> Option<Installer> {
+    if family != Some(Family::Deb) {
         return None;
     }
     let tools = APT_TOOLS.iter().all(|tool| root.join(tool).is_file());

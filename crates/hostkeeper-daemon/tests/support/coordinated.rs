@@ -340,6 +340,7 @@ impl CoordinatorLink for InProcess {
                     },
                 })
                 .collect(),
+            repositories: None,
         })
     }
 }

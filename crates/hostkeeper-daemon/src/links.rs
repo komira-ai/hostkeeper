@@ -10,7 +10,8 @@
 //! the enrollment loop first, each on a worker of its [`Dispatch`]; [`crate::start::serve`] calls
 //! it once the boot work is over and the readiness notice was sent, so neither loop runs while
 //! the boot pass does. The heartbeat loop works on the daemon through the four adapters of
-//! [`crate::link_adapters`] ([`Links::heartbeater`]).
+//! [`crate::link_adapters`] ([`Links::heartbeater`]). On a Linux host it also gives the repository
+//! sets the coordinator pushes to [`crate::repository_push::RepositoryPush`].
 //!
 //! The watchdog: after each heartbeat, whatever it came to, the heartbeat loop tells the service
 //! manager it is alive ([`Links::watchdog`], `WATCHDOG=1` under systemd), and nothing else sends
@@ -50,7 +51,7 @@ use hostkeeper_enroll::{Enroller, RETRY_SECS};
 use hostkeeper_link::{
     CertSource, ClientIdentity, CoordinatorLink, Dispatch, GrpcLinkError, GrpcMtlsLink, Heartbeat,
     Heartbeater, JsonMtlsLink, LinkError, LoopConfig, NegotiatedLink, Platform, Ports, Reply,
-    Sleeper, StopFlag, TcpDial, TcpTransport, Tick, UnixClock,
+    RepositorySink, Sleeper, StopFlag, TcpDial, TcpTransport, Tick, UnixClock,
 };
 use hostkeeper_steps::Clock;
 
@@ -61,6 +62,7 @@ use crate::link_adapters::{
 };
 use crate::node::NodeState;
 use crate::notify::Watchdog;
+use crate::repository_push::RepositoryPush;
 
 pub use hostkeeper_enroll::RenewalState;
 pub use hostkeeper_link::Log;
@@ -188,6 +190,12 @@ impl Links {
                 trusted_root: Arc::new(NoTrustedRoot),
                 clock: Arc::clone(&self.clock),
                 log: Arc::clone(&self.log),
+                repositories: RepositoryPush::new(
+                    Arc::clone(&ctx.repository_ports),
+                    ctx.announcement.clone(),
+                    Arc::clone(&self.log),
+                )
+                .map(|push| Arc::new(push) as Arc<dyn RepositorySink>),
             },
         )
     }

@@ -81,8 +81,9 @@ pub struct Ports {
     /// Looks at how each installed service runs: what `Status` reports of it.
     pub observer: Arc<Observer>,
     /// The installers the daemon announces, decided once at its start
-    /// ([`hostkeeper_install::announce`]): what the heartbeat lists and what the receipt check
-    /// of an entry judges its installer against.
+    /// ([`hostkeeper_install::announce`]); the heartbeat lists them, and the receipt check of an
+    /// entry judges its installer against them, with the host's native installer once a set the
+    /// coordinator pushed gave it an entry ([`Ctx::installers`]).
     pub announcement: Announcement,
     /// What the repository installer works with: the host's repository entries, the packages
     /// directory a repository version is staged in, the work directories and the installer
@@ -124,8 +125,8 @@ pub struct Ctx {
     pub force_lock_point: Arc<dyn ForceLockPoint>,
     /// Observes the installed services; it takes none of the daemon's locks.
     pub observer: Arc<Observer>,
-    /// The installers the daemon announces ([`Ports::announcement`]), the same at every
-    /// heartbeat of one start.
+    /// The installers the daemon announced at its start ([`Ports::announcement`]);
+    /// [`Ctx::installers`] adds the native one a pushed set may have made possible since.
     pub announcement: Announcement,
     /// What the repository installer works with ([`Ports::repository`]).
     pub repository_ports: Arc<RepositoryPorts>,
@@ -279,6 +280,12 @@ impl Ctx {
             binaries: crate::selfupdate::binary_dir(&self.dirs.state),
             own: self.own_version,
         }
+    }
+
+    /// The installers the daemon announces now: those decided at its start, and the host's
+    /// native one once it has an entry in use ([`crate::repository_push::installers`]).
+    pub fn installers(&self) -> Vec<hostkeeper_release::Installer> {
+        crate::repository_push::installers(&self.announcement, &self.repository_ports)
     }
 
     /// The placer of this host: its `current` and `previous` links and `placed.json`.

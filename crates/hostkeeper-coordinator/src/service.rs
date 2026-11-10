@@ -92,14 +92,16 @@ pub enum SetError {
     /// The version was set before as another release ([`crate::releases`]).
     #[error("release_exists: the version was set before as another release")]
     ReleaseExists,
+    /// A repository entry names a repository the registry does not hold ([`crate::repositories`]).
+    #[error("repository_unknown: a repository entry names a repository the registry lacks")]
+    RepositoryUnknown,
 }
 
 impl SetError {
     /// The closed reason token of a refusal of the version itself (`below_min_version`,
-    /// `unparseable_version`, `bad_version`, `digest_conflict`, `release_exists`), of its release
-    /// index (`index_invalid`,
-    /// `index_digest_mismatch`) or of its targets (`target_invalid`), which the answer says;
-    /// `None` for every other error.
+    /// `unparseable_version`, `bad_version`, `digest_conflict`, `release_exists`,
+    /// `repository_unknown`), of its release index (`index_invalid`, `index_digest_mismatch`) or
+    /// of its targets (`target_invalid`), which the answer says; `None` for every other error.
     #[must_use]
     pub const fn reason(&self) -> Option<&'static str> {
         match self {
@@ -110,6 +112,7 @@ impl SetError {
             Self::DigestConflict => Some("digest_conflict"),
             Self::TargetInvalid(_) => Some("target_invalid"),
             Self::ReleaseExists => Some("release_exists"),
+            Self::RepositoryUnknown => Some("repository_unknown"),
             Self::Unauthorized(_)
             | Self::Unavailable
             | Self::Store(_)
@@ -180,7 +183,8 @@ pub struct Set {
 /// acks of the verdicts stored ([`crate::verdict_file`]). `grpc-v1`: the agent API is served on
 /// the heartbeat listener ([`crate::grpc`]), so an agent may send its next heartbeat there.
 /// `target-v1`: the installers of a heartbeat over gRPC are read, and the entry of a release
-/// picked for the host goes in its orders over gRPC ([`crate::picks`]).
+/// picked for the host goes in its orders over gRPC ([`crate::picks`]). `repositories-v1`: the
+/// report of a gRPC heartbeat is read and the host is sent its set ([`crate::repository_push`]).
 pub const FEATURES: &[&str] = &[
     "deferred-v1",
     halt::FEATURE,
@@ -190,6 +194,7 @@ pub const FEATURES: &[&str] = &[
     verdict_file::FEATURE,
     crate::grpc::GRPC_FEATURE,
     crate::picks::TARGET_FEATURE,
+    crate::repository_push::FEATURE,
 ];
 
 /// The fields of the answer to a heartbeat that go only to an agent that announced a feature,
@@ -252,6 +257,8 @@ pub struct Coordinator {
     pub(crate) alerts: crate::alerts::Book,
     /// The held `Releases.WaitConverged` calls ([`crate::wait`]).
     pub(crate) waits: crate::wait::Waits,
+    /// What each host's daemon last reported of its repositories ([`crate::repository_push`]).
+    pub(crate) repository_reports: crate::repository_push::Reports,
     /// What each host heard runs ([`crate::running`]).
     pub(crate) running: crate::running::Kept,
     /// Told when CI's set of a desired state finds the fleet's lock held and waits for it: a
@@ -307,6 +314,7 @@ impl Coordinator {
             ui: None,
             alerts: crate::alerts::Book::default(),
             waits: crate::wait::Waits::default(),
+            repository_reports: crate::repository_push::Reports::default(),
             running: crate::running::Kept::default(),
             #[cfg(test)]
             set_waits: Mutex::new(None),

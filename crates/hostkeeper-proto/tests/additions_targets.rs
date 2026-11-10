@@ -142,6 +142,18 @@ const SHAPE: &[(&str, &[&str])] = &[
             "read_only 3 bool -",
         ],
     ),
+    (
+        "Repository",
+        &[
+            "name 1 string -",
+            "kind 2 string -",
+            "uri 3 string -",
+            "suites 4 string repeated",
+            "components 5 string repeated",
+            "fingerprints 6 string repeated",
+            "keyring 7 bytes -",
+        ],
+    ),
 ];
 
 fn kind_name(kind: &Kind) -> String {
@@ -371,6 +383,18 @@ fn release_messages() -> Vec<(String, Vec<u8>)> {
         (full("Container"), round_trip(&container)),
         (full("Port"), round_trip(&container.ports[0])),
         (full("Volume"), round_trip(&container.volumes[0])),
+        (
+            full("Repository"),
+            round_trip(&release::Repository {
+                name: "komira".to_owned(),
+                kind: "apt".to_owned(),
+                uri: "https://packages.example.com/apt".to_owned(),
+                suites: vec!["stable".to_owned()],
+                components: vec!["main".to_owned()],
+                fingerprints: vec!["A".repeat(40)],
+                keyring: vec![0x99, 0x01],
+            }),
+        ),
     ]
 }
 

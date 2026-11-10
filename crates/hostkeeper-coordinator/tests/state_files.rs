@@ -22,7 +22,7 @@ use sha2::{Digest as _, Sha256};
 use support::beats::{Daemon, grpc_beat, runs};
 use support::readers::{Readers, parse};
 use support::rig::{Rig, Spec};
-use support::targets::{SET_DESIRED, grpc, list, repository_entry, set};
+use support::targets::{SET_DESIRED, grpc, list, put_komira, repository_entry, set};
 use support::{Flags, ci_token, recorded, recorded_bytes, scratch};
 
 /// The desired-state file the rig's coordinator has written, checked against kbf's reader of
@@ -313,6 +313,7 @@ async fn round(rig: &Rig, at: u64, failed: &[(&str, &Value)]) {
 async fn rolled_back(name: &str) -> Rig {
     let rig = Rig::new(name, Spec::recorded().with_services(AUTOMATIC));
     hear_the_daemons(&rig).await;
+    put_komira(&rig).await;
     set_release(&rig, "1.0").await;
     round(&rig, 2_000, &[]).await;
     set_release(&rig, "2.0").await;
@@ -334,10 +335,12 @@ async fn an_automatic_rollback_writes_its_marks_within_kbfs_readers(readers: &Re
     let marks = &ops["services"]["kbf"];
     assert_eq!(marks["last_good"], "1.0");
     assert_eq!(marks["bad"], json!(["2.0"]));
-    // CI's sets, with their releases, are audited as they are made.
+    // The operator's put of the repository the releases name, then CI's sets, with their
+    // releases, audited as they are made.
     assert_eq!(
         audited(&ops),
         [
+            ("operator", "repository_put"),
             ("ci", "set_desired"),
             ("coordinator", "last_good"),
             ("ci", "set_desired"),
@@ -544,6 +547,7 @@ async fn an_update_plan_position_is_written_within_kbfs_readers(readers: &Reader
         Spec::recorded().with_services(AUTOMATIC),
     );
     hear_the_daemons(&rig).await;
+    put_komira(&rig).await;
     set_release(&rig, "1.0").await;
     round(&rig, 2_000, &[]).await;
     set_release(&rig, "2.0").await;

@@ -1,27 +1,29 @@
 # Repository entries and keys: placing and rotating them
 
-A host's trust in the packages it installs is part of its host configuration, placed by host setup
+A host's trust in the packages it installs is set in one place per kind of host
 ([packages-repositories.md](../design/packages-repositories.md) sections 3.2 and 4.7). No order
-names a key; on a Mac with MDM the coordinator's gate carries the files in the config profile,
-from files its operator gives it:
+names a key:
 
 - **A Linux host** installs a service's `.deb` with `apt` from a channel of the project's package
-  repository. It trusts the keyring that its entries in `/etc/hostkeeper/repositories/` name.
+  repository. It trusts the keyring that its entries in `/etc/hostkeeper/repositories/` name, and
+  its daemon writes those entries and that keyring from the coordinator's registry of repositories
+  (`Repositories`): each heartbeat reply carries the repositories the host's services name when the
+  host does not hold them yet.
 - **A Mac** installs a service's signed `.pkg` with `macos-pkg`. It fetches the `.pkg` from a store
   of `/etc/hostkeeper/stores.toml`, and trusts a `.pkg` only when its leaf certificate is one of the
-  signers in `/etc/hostkeeper/macos-pkg.toml`.
+  signers in `/etc/hostkeeper/macos-pkg.toml`. On a Mac with MDM the coordinator's gate carries
+  those files in the config profile, from files its operator gives it. A Mac never reads the
+  registry.
 
-hostkeeper never changes a Linux host's repository entries or keyrings. A Mac's daemon writes its
-two files only from the managed preferences the operator's MDM files define. So a key rotation is
-host setup's work, on every host, ahead of the repository's own change: by hand or `hostkeeper-pxe`
-on Linux, and through the coordinator's MDM files on a managed Mac.
+So a key rotation is one change on the coordinator for every Linux host, ahead of the
+repository's own change, and a change of the coordinator's MDM files for managed Macs.
 
 ## Where each host gets them
 
 | Host | Files | Placed by |
 |---|---|---|
-| Linux, installed by network | `/etc/hostkeeper/repositories/` | `hostkeeper-pxe serve --repositories <dir>`, which checks the directory with the daemon's own loader and writes it through the seed ([network-install.md](network-install.md)) |
-| Linux, set up by hand | `/etc/hostkeeper/repositories/` | the enrollment runbook's step ([enrollment.md](enrollment.md#bootstrap-a-linux-node)) |
+| Linux | `/etc/hostkeeper/repositories/` | the daemon, from the coordinator's registry (`hkctl repositories put`), at the first heartbeat after the registry holds every repository the host's services name; it adopts files already there when they are byte for byte the set, and replaces them otherwise |
+| Linux, before it reaches the coordinator | `/etc/hostkeeper/repositories/` | only for a host that must install from the repository first: `hostkeeper-pxe serve --repositories <dir>` ([network-install.md](network-install.md)) or the enrollment runbook's step ([enrollment.md](enrollment.md#bootstrap-a-linux-node)); the registry's set adopts or replaces them |
 | Mac with MDM | `stores.toml`, `macos-pkg.toml` | the coordinator's `--mdm-stores` and `--mdm-macos-pkg` files. The gate carries them in the config profile as `dev.hostkeeper.stores` and `dev.hostkeeper.macos-pkg`, and the daemon's start writes each file from them |
 | Mac without MDM | `stores.toml`, `macos-pkg.toml` | the operator, by hand, root:wheel 0644 |
 
@@ -37,40 +39,53 @@ acknowledges the profile. A send that the Mac answers with an error is tried aga
 resend delay. `hostkeeper.toml` is still written only when it is absent, so a profile sent again
 never changes it.
 
+## Put the repository in the registry
+
+The registry entry `komira` gives every Linux host its two entries, `komira-testing.sources` and
+`komira-stable.sources`, and the keyring `komira.gpg` they name. Write the request as JSON, the
+keyring as base64 of the binary keyring (`base64 -w0 komira-archive-keyring.gpg`), and every
+fingerprint the keyring holds that may sign the suites, primary key or subkey, as `gpg
+--with-colons --show-keys --with-subkey-fingerprints` prints them on its `fpr` lines:
+
+```json
+{ "repository": { "name": "komira", "kind": "apt", "uri": "https://packages.komira.ai/apt",
+    "suites": ["testing", "stable"], "components": ["main"],
+    "fingerprints": ["<40 hex, primary key>", "<40 hex, signing subkey>"],
+    "keyring": "<base64>" },
+  "reason": "the project's package repository" }
+```
+
+Then `hkctl repositories put --request komira.json`. The coordinator refuses a keyring that lacks
+a listed fingerprint, holds a key none of whose fingerprints is listed, or holds a secret key
+(`keyring_invalid`), and changes nothing. `hkctl repositories list` shows each repository, the
+services that name it, and `unregistered`: the repositories services name that the registry lacks.
+A host one of whose services names one of those is sent nothing. `hkctl hosts get` shows each
+host's `repositories`: `current` once the host holds the set, and `refused` with the daemon's
+reason when it refused it (the host keeps its set in force).
+
+A host whose directory holds what the held setup or `hostkeeper-pxe` wrote for the same URI and
+keyring adopts it as it is; a host whose files differ gets the registry's set in their place, and
+any other entry in the directory goes. No step restarts a daemon.
+
 ## Rotate the repository's signing key (Linux)
 
 The repository's owner publishes the next key ahead of time and signs the suites with both keys
-during an overlap ([package-repositories.md](../deploy/package-repositories.md)). No step below
-restarts a daemon: apt reads the keyring at every `apt-get update`.
+during an overlap ([package-repositories.md](../deploy/package-repositories.md)).
 
 1. **Before the overlap ends**, make a keyring that holds both keys. A binary OpenPGP keyring is
    the keys concatenated:
    `cat komira-archive-keyring.gpg komira-archive-keyring-next.gpg > komira-archive-keyring.both.gpg`.
    Check that it lists both: `gpg --show-keys komira-archive-keyring.both.gpg`.
-2. **Hosts installed by network.** Replace the keyring in the directory `--repositories` names, under
-   the same file name, so the `.sources` files keep naming it. Restart `hostkeeper-pxe serve`: it
-   checks the directory again at its start, and every seed it serves from then on carries both keys.
-3. **Every host already set up**, by network or by hand: as root, write the new keyring beside the
-   old one, then rename it over the old one, so apt never reads a half-written file:
+2. **Put the repository** with that keyring and the fingerprints of both keys, as above. Each Linux
+   host whose services name it writes the new keyring at its next heartbeat.
+3. **Check** every host before the owner stops signing with the old key: `hkctl hosts list` shows
+   each host's `repositories` with `current` true. A host still on the old keyring alone fails each
+   `stage` from then on with `signature`, and the rollout gate stops on it.
+4. **After the overlap**, once the suites are signed with the new key alone, put the repository
+   with a keyring that holds the new key alone and its fingerprints, and check again.
 
-   ```
-   install -o root -g root -m 0644 komira-archive-keyring.both.gpg \
-     /etc/hostkeeper/repositories/.komira-archive-keyring.gpg.new
-   mv /etc/hostkeeper/repositories/.komira-archive-keyring.gpg.new \
-     /etc/hostkeeper/repositories/komira-archive-keyring.gpg
-   ```
-
-   Rename the file right away. The daemon refuses to start on any file in the directory that is
-   not an entry or a keyring an entry names, the temporary name included.
-4. **Check** every host before the owner stops signing with the old key: on each host,
-   `gpg --show-keys /etc/hostkeeper/repositories/komira-archive-keyring.gpg` lists both keys. A host
-   still on the old keyring alone fails each `stage` from then on with `signature`, and the
-   rollout gate stops on it.
-5. **After the overlap**, once the suites are signed with the new key alone, repeat steps 2 to 4 with
-   a keyring that holds the new key alone.
-
-A changed or new `.sources` file is read at the daemon's next start
-(`systemctl restart hostkeeper.service`). A keyring needs no restart.
+`hostkeeper-pxe serve --repositories <dir>` still seeds the keyring it was given; replace it there
+too (and restart `hostkeeper-pxe serve`) so a host installed from then on starts with the new key.
 
 ## Rotate the `.pkg` signing identity (Mac)
 

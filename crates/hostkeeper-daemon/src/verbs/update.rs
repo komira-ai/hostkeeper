@@ -274,7 +274,7 @@ pub(crate) fn prepare(
     };
     entry::check(
         ctx.own_version,
-        &ctx.announcement.installers,
+        &ctx.installers(),
         service,
         &order.digest,
         entry,

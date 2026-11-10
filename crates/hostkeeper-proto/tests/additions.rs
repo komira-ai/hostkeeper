@@ -524,7 +524,6 @@ fn an_older_reader_keeps_the_assignments_of_services() {
             scope: Some(op::min_version::Scope::Role("storage".to_owned())),
             version: "1.5".to_owned(),
         }],
-        holds: Vec::new(),
         desired_version: Some("2.0".to_owned()),
         roles: vec!["storage".to_owned()],
         assignments: vec![op::Assignment {
@@ -539,6 +538,7 @@ fn an_older_reader_keeps_the_assignments_of_services() {
             holds: Vec::new(),
         }],
         uninstalling: vec!["db-2".to_owned()],
+        ..Default::default()
     };
     let cases: [(&str, &str, Vec<u8>); 3] = [
         (
