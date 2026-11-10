@@ -626,6 +626,31 @@ fn the_verb_runs_without_adapters_and_refuses_a_failing_build_of_hostkeeper() {
     let lent = crate::release::run_with(verb(&dist, &["--service", "hello"]), &fakes.ports());
     assert_eq!(lent, hello);
 
+    // `--service pxe` from the command line lists pxe's two Linux entries, as the builder does.
+    built(&dist, Package::Pxe);
+    let pxe = crate::release::run(verb(&dist, &["--service", "pxe"]), || {
+        Fakes::over(FakeHistory::default())
+    });
+    assert_eq!(pxe, targets(&request(&dist, Package::Pxe, None)));
+    let lines = pxe.expect("pxe's targets");
+    let [line] = lines.as_slice() else {
+        panic!("one line: {lines:?}")
+    };
+    let json: serde_json::Value =
+        serde_json::from_str(line.strip_prefix("targets=").expect("a targets= line"))
+            .expect("JSON");
+    let platforms: Vec<&String> = json.as_object().expect("an object").keys().collect();
+    assert_eq!(platforms, ["linux-arm64", "linux-x86_64"]);
+    for platform in platforms {
+        let manifest = &json[platform]["entries"][0]["manifest"];
+        assert_eq!(manifest["package"], "pxe", "{platform}");
+        assert_eq!(
+            manifest["hook"]["command"],
+            json!(["/usr/lib/pxe/pxe", "update-hook"]),
+            "{platform}"
+        );
+    }
+
     let fail_ready = crate::release::run(verb(&dist, &["--fail-ready"]), || {
         Fakes::over(FakeHistory::default())
     });

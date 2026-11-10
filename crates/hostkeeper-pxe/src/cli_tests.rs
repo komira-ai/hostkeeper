@@ -142,17 +142,20 @@ fn help_and_version_go_to_standard_output() {
 /// The program itself runs a step with root as the owner it trusts and `/usr/bin/systemctl`:
 /// a params file that is not there is refused before anything is touched. (Its exit status and
 /// line are asserted on the binary, in `tests/binary.rs`.)
+///
+/// Catches a `main` that returns success without running the step.
 #[test]
 fn the_program_runs_the_verb() {
     let setup = Setup::new("main");
     let missing = setup.path("missing.toml");
-    let _ = main(vec![
+    let code = main(vec![
         "pxe".into(),
         "update-hook".into(),
         "uninstall".into(),
         "--params".into(),
         missing.into(),
     ]);
+    assert_eq!(code, ExitCode::FAILURE);
     assert!(!setup.boot.exists());
 }
 
