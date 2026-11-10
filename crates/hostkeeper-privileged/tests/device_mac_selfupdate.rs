@@ -247,11 +247,12 @@ fn wait_converged(host: &MacSelfHost, coordinator: &CoordinatorHandle, version: 
 /// update, so the coordinator kept the host's older verdict. The real coordinator in the test's
 /// process, whose rollout asks two healthy heartbeats of a host at its version, is set to [`N`]
 /// by the `macos-pkg` entry of its `.pkg` and reads it converged with no order, since the daemon
-/// runs that version (its package not yet installed); then it is set to [`NEXT`] and orders the
-/// install of [`NEXT`] (the daemon lists hostkeeper as not installed, since no package of it is
-/// yet), and the daemon updates itself through it and restarts into [`NEXT`] under launchd; the
-/// coordinator reads hostkeeper converged at [`NEXT`], the host up and healthy, its last update
-/// that order's `Succeeded`, while the package is installed at [`NEXT`] and the job runs it.
+/// runs that version (its package not yet installed); then it is set to [`NEXT`] and orders
+/// [`NEXT`]: an install or an update, as the last heartbeat it read listed hostkeeper (no package
+/// of it is installed yet, so either may come first), and the daemon updates itself through it
+/// and restarts into [`NEXT`] under launchd; the coordinator reads hostkeeper converged at
+/// [`NEXT`], the host up and healthy, its last update that order's `Succeeded`, while the package
+/// is installed at [`NEXT`] and the job runs it.
 #[test]
 fn the_coordinator_bakes_and_converges_a_mac_that_updated_itself_under_launchd() {
     let scratch = Scratch::under(Path::new(env!("CARGO_TARGET_TMPDIR")), "su-bake")
@@ -321,7 +322,7 @@ fn the_coordinator_bakes_and_converges_a_mac_that_updated_itself_under_launchd()
                     && row["lastUpdate"]["outcome"] == "OUTCOME_SUCCEEDED"
                     && row["lastUpdate"]["orderId"]
                         .as_str()
-                        .is_some_and(|id| id.starts_with("install-"))
+                        .is_some_and(|id| id.starts_with("install-") || id.starts_with("update-"))
             })
         },
     );
