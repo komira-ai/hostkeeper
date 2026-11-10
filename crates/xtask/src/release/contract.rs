@@ -490,7 +490,7 @@ impl Package {
     ];
 
     /// The platforms a release ships the package for, in [`Platform::RELEASED`] order: every one,
-    /// but linux-x86_64 alone for mdm.
+    /// but linux-x86_64 alone for mdm, and the two Linux platforms for pxe.
     pub(crate) fn platforms(self) -> &'static [Platform] {
         match self {
             Package::Hostkeeper | Package::Hello | Package::HelloFailReady => &Platform::RELEASED,

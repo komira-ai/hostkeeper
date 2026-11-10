@@ -3,7 +3,7 @@
 
 use std::fs;
 
-use super::boot::{CURRENT, is_dir, point_current, remove_file, remove_tree};
+use super::boot::{CURRENT, current_version, is_dir, point_current, remove_file, remove_tree};
 use super::lock::Lock;
 use super::params::HookParams;
 use super::{Failure, Host};
@@ -70,7 +70,8 @@ pub(super) fn verify(host: &Host<'_>, params: &HookParams) -> Result<(), Failure
     }
 }
 
-/// Puts the previous boot set back, or stops the unit when there is none; removes the target's.
+/// Puts the previous boot set back (pointing `current` at it and restarting the unit only when
+/// it does not already serve it), or stops the unit when there is none; removes the target's.
 pub(super) fn rollback(host: &Host<'_>, params: &HookParams) -> Result<(), Failure> {
     let _lock = Lock::create(&params.boot_dir)?;
     let previous = params
@@ -79,8 +80,11 @@ pub(super) fn rollback(host: &Host<'_>, params: &HookParams) -> Result<(), Failu
         .filter(|version| is_dir(&params.boot_dir.join(version)));
     match previous {
         Some(version) => {
-            point(params, version)?;
-            systemctl(host, &["restart", &params.unit], &[0], "not_restarted")?;
+            // A failed `prepare` never moved `current`: the live server stays as it is.
+            if current_version(&params.boot_dir).as_deref() != Some(version) {
+                point(params, version)?;
+                systemctl(host, &["restart", &params.unit], &[0], "not_restarted")?;
+            }
         }
         None => {
             systemctl(

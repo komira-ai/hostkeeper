@@ -5,7 +5,7 @@
 //! declared dependency, and with a staged directory checks that the package installs the staged
 //! files; [`elf`] is the ELF reader they share.
 
-mod elf;
+pub(super) mod elf;
 pub(super) mod linux_check;
 pub(super) mod nfpm_stage;
 

@@ -15,8 +15,8 @@ The parts:
   hostkeeper deb and rpm carry no boot server). The daemon installs it with `apt` on the boot host
   when you assign the service there, and removes it when you unassign it with an uninstall. `pxe serve`
   (called `serve` below) serves a release's boot files. `pxe update-hook prepare` is run by the daemon when it
-  installs or updates the package: it downloads and verifies the release's boot files into a new
-  directory of `/var/lib/pxe` and seals it. You type neither: the daemon and the unit run them,
+  updates the package, from the staged copy and before `apt` installs anything: it downloads and
+  verifies the release's boot files into a new directory of `/var/lib/pxe` and seals it. You type neither: the daemon and the unit run them,
   with the settings you write in `/etc/pxe/pxe.toml`.
 - The farm's router. Its DHCP gives every address. In router mode it also names the boot server.
 - The coordinator, which `serve` reads before every answer to learn which machines may be
@@ -167,8 +167,8 @@ coordinator's private listener. It can be the coordinator's own host, given a NI
 that host already holds every operator secret, so no credential moves. It may be another
 farm-LAN host that reaches the private listener, at the cost of a copy of an operator token there.
 The host needs the pinned `gh` and the Sigstore trusted root that `prepare` checks attestations
-with; the hostkeeper deb brings both, so install it on a host that was not built from the network
-image. The daemon installs `pxe` from the package repository, so the host needs hostkeeper's
+with; hostkeeper's deb on any daemon host provides both (`/usr/lib/hostkeeper/gh` and
+`trusted_root.json`). The daemon installs `pxe` from the package repository, so the host needs hostkeeper's
 repository entry for the suite that holds the release (`/etc/hostkeeper/repositories/komira-testing.sources`,
 which the daemon writes from the coordinator's registry entry `komira`:
 [repository-keys.md](repository-keys.md#put-the-repository-in-the-registry)). The release's `pxe`
@@ -371,6 +371,7 @@ directory of the release's assets, writes the targets, as for hello
 
 ```sh
 cargo xtask release targets --service pxe --version <version> --dir <assets> \
+  --repo komira-ai/hostkeeper \
   | sed -n 's/^targets=//p' > targets.json
 jq -n --arg version <version> --slurpfile targets targets.json \
   '{desired: {version: $version}, targets: $targets[0]}' > desired.json
@@ -392,9 +393,11 @@ hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <tok
     services assign --node-id <boot-host> --service pxe
 ```
 
-The daemon installs the `.deb` with `apt` (it carries `/usr/lib/pxe/pxe` and the unit, no maintainer
-script) and enables the unit; then it runs the hook of the package, `/usr/lib/pxe/pxe update-hook
-<step>` from the copy it sealed, as root:
+The daemon stages the `.deb` and seals its copy of the files, then runs the hook of the package,
+`/usr/lib/pxe/pxe update-hook <step>` from that sealed copy, as root. The order is: stage; the
+hook's **prepare** (from the staged tree, before `apt` installs anything); the installer's
+activate (`apt install` of the `.deb`, which carries `/usr/lib/pxe/pxe` and the unit and no
+maintainer script, and the unit enabled); **cutover**; **verify**; then **cleanup**:
 
 - **prepare** reads `/etc/pxe/pxe.toml` and the daemon config, and downloads the release's boot
   files, checking the attestation of `netboot.json` and of each deb against the `[trusted_signers]`
@@ -407,6 +410,7 @@ script) and enables the unit; then it runs the hook of the package, `/usr/lib/px
   reports itself started only after `serve` has bound its sockets, dropped to the user, checked
   the seal and read the coordinator once.
 - **verify** asks systemd whether `pxe.service` is active, and asks the daemon to try again until it is.
+- **cleanup** removes every other version directory of `/var/lib/pxe`.
 
 When a step refuses, the update fails and the version that was serving
 keeps serving; on the first install nothing is left running and `/var/lib/pxe` holds no new

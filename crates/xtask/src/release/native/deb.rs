@@ -25,7 +25,8 @@
 //! Hostkeeper's own `.deb` is not this verb's: nfpm builds it from `packaging/linux/nfpm.yaml`,
 //! with the scripts a bootstrap package needs (packages-native.md section 10.4). mdm's is built
 //! for linux-x86_64 only, from `--archives`, the pinned archives `release mdm-fetch` downloaded.
-//! pxe's holds its program and its unit, for both Linux platforms.
+//! pxe's holds its program and its unit, for both Linux platforms; the program must be a static
+//! ELF for the platform, the rule `release nfpm-stage` holds hostkeeper's own program to.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -36,6 +37,7 @@ use super::hello::{self, File};
 use super::{DIR_MODE, mdm, pxe};
 use crate::release::Error;
 use crate::release::contract::{Commit, Package, Platform, Service, Version};
+use crate::release::package::nfpm_stage::{Arch, check_static};
 use crate::release::ports::GitHistory;
 
 /// What `release deb` builds the package from.
@@ -133,6 +135,13 @@ pub(crate) fn deb_with(
     };
     let binary = std::fs::read(&request.binary)
         .map_err(Error::io(format!("read {}", request.binary.display())))?;
+    if package == Package::Pxe {
+        let wanted = match request.platform {
+            Platform::LinuxArm64 => Arch::Arm64,
+            _ => Arch::Amd64,
+        };
+        check_static(&request.binary.display().to_string(), &binary, wanted)?;
+    }
     let files = match (package, request.archives.as_deref()) {
         (Package::Pxe, _) => pxe::deb_files(binary),
         (_, None) => hello::deb_files(binary, request.fail_ready),

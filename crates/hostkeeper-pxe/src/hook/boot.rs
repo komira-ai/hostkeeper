@@ -19,6 +19,12 @@ pub(super) fn point_current(boot_dir: &Path, version: &str) -> io::Result<()> {
     fs::rename(&next, boot_dir.join(CURRENT))
 }
 
+/// The version `<boot_dir>/current` points at; `None` when it is not a link.
+pub(super) fn current_version(boot_dir: &Path) -> Option<String> {
+    let target = fs::read_link(boot_dir.join(CURRENT)).ok()?;
+    target.to_str().map(str::to_owned)
+}
+
 /// Whether `path` is a directory (not a link to one).
 pub(super) fn is_dir(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok_and(|meta| meta.is_dir())

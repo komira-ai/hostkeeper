@@ -55,7 +55,7 @@ pub fn gh_member(gh_version: &str, arch: &str) -> Result<String, String> {
     Ok(nfpm_stage::gh_member(&version, arch).display().to_string())
 }
 
-/// Stages `gh`, the trusted root and the two programs of `binaries` as `cargo xtask release
+/// Stages `gh`, the trusted root and the daemon of `binaries` as `cargo xtask release
 /// nfpm-stage` does, with its flags' values. Returns the verb's lines, or why it refused.
 pub fn nfpm_stage(
     arch: &str,

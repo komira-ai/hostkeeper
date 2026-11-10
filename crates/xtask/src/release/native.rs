@@ -46,7 +46,7 @@ pub(crate) const SYSTEMD_UNITS: &str = "/usr/lib/systemd/system";
 
 /// What `macos-pkg` and `check-macos-pkg` build or check for `service`: `Some` with `gh` and the
 /// trusted root for hostkeeper's pkg (both required, `--fail-ready` refused), `None` for hello's
-/// (both refused); mdm has no pkg.
+/// (both refused); mdm and pxe have no pkg.
 pub(crate) fn macos_inputs(
     service: Service,
     fail_ready: bool,

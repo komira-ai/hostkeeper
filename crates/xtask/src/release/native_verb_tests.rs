@@ -4,7 +4,9 @@
 use super::tests::{connects, empty, parse, text, verb};
 use super::*;
 use crate::release::fakes::scratch;
-use crate::release::native::{HELLO_PKG_INPUTS, HOSTKEEPER_PKG_INPUTS, MDM_NO_PKG, macos_inputs};
+use crate::release::native::{
+    HELLO_PKG_INPUTS, HOSTKEEPER_PKG_INPUTS, MDM_NO_PKG, PXE_NO_PKG, macos_inputs,
+};
 
 #[test]
 fn deb_takes_its_flags_and_dates_the_package_by_the_commit_in_git() {
@@ -126,6 +128,10 @@ fn macos_pkg_and_its_check_take_hello_without_gh_and_refuse_every_other_mix() {
     assert_eq!(
         macos_inputs(Service::Mdm, false, None, None),
         refused(MDM_NO_PKG)
+    );
+    assert_eq!(
+        macos_inputs(Service::Pxe, false, None, None),
+        refused(PXE_NO_PKG)
     );
     assert_eq!(
         macos_inputs(Service::Hostkeeper, true, gh.clone(), root.clone()),

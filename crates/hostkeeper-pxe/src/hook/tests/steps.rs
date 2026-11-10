@@ -123,10 +123,36 @@ fn rollback_restores_the_previous_boot_set() {
         assert_eq!(setup.current().as_deref(), Some("1.0.0"));
         assert_eq!(setup.listing(), ["1.0.0", "current"]);
     }
-    assert_eq!(
-        systemctl.called(),
-        ["restart pxe.service", "restart pxe.service"]
-    );
+    // The second run finds `current` already back and leaves the unit alone.
+    assert_eq!(systemctl.called(), ["restart pxe.service"]);
+}
+
+/// A rollback after a `prepare` that failed (`current` still at the previous version) removes
+/// the target's directory and makes no `systemctl` call; one whose `current` points at the
+/// target repoints it and restarts the unit.
+///
+/// Catches a rollback that restarts the live server for a version it never served, and one
+/// that leaves a cut-over target serving.
+#[test]
+fn rollback_restarts_only_when_current_is_not_the_previous() {
+    let setup = Setup::new("rollback-live");
+    setup.versions(&["1.0.0", "1.2.3"]);
+    std::os::unix::fs::symlink("1.0.0", setup.boot.join("current")).expect("a link");
+    let params = setup.params(Some("1.2.3"), Some("1.0.0"), "");
+    let quiet = FakeSystemctl::default();
+    plain(&setup, Step::Rollback, &params, &quiet).succeeded();
+    assert!(quiet.called().is_empty());
+    assert_eq!(setup.current().as_deref(), Some("1.0.0"));
+    assert_eq!(setup.listing(), ["1.0.0", "current"]);
+
+    setup.versions(&["1.2.3"]);
+    fs::remove_file(setup.boot.join("current")).expect("unlink");
+    std::os::unix::fs::symlink("1.2.3", setup.boot.join("current")).expect("a link");
+    let restarting = FakeSystemctl::default();
+    plain(&setup, Step::Rollback, &params, &restarting).succeeded();
+    assert_eq!(restarting.called(), ["restart pxe.service"]);
+    assert_eq!(setup.current().as_deref(), Some("1.0.0"));
+    assert_eq!(setup.listing(), ["1.0.0", "current"]);
 }
 
 /// A rollback to the version that is also the target keeps its directory.

@@ -13,8 +13,8 @@
 //!
 //! - `prepare` ([`prepare`]): checks the settings file, the daemon config and the whole `serve`
 //!   command line they make, then fetches and seals `<boot_dir>/<version>`. A sealed directory
-//!   of that version with a boot set for every platform asked for is left as it is. Nothing a
-//!   client sees changes.
+//!   of that version with a boot set for every platform asked for is left as it is. It never
+//!   changes `current` or the unit, so the server a client reaches is untouched.
 //! - `cutover`: points `current` at the version (a new symlink renamed over the old) and
 //!   restarts the unit, which is how the unit is first started: dpkg installed it and
 //!   hostkeeper's apt activate enabled it through `[Install]`, and nothing starts it before. The
@@ -22,7 +22,8 @@
 //!   whole start, so the restart returns once `serve` is serving or has refused.
 //! - `verify`: the unit is active, or the step is deferred (exit 75, `retry_after_secs` 2).
 //! - `rollback`: with a previous version whose directory is there, points `current` back at it
-//!   and restarts the unit; otherwise (a first install) stops the unit (`systemctl stop` exits 5
+//!   and restarts the unit (neither when `current` already points at it, as after a failed
+//!   `prepare`); otherwise (a first install) stops the unit (`systemctl stop` exits 5
 //!   for a unit that is not loaded, which a first install's rollback meets, and 5 is accepted)
 //!   and removes `current`. The target's directory is then removed unless it is the previous.
 //! - `cleanup`: removes every entry of `boot_dir` but `current` and the target.

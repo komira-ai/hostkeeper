@@ -132,7 +132,7 @@ fn check_elf(program: &[u8], arch: Arch) -> Result<(), Error> {
 
 /// Refuses the program `file` unless it is a static 64-bit little-endian ELF program for `arch`:
 /// no interpreter and no needed library.
-fn check_static(file: &str, program: &[u8], arch: Arch) -> Result<(), Error> {
+pub(crate) fn check_static(file: &str, program: &[u8], arch: Arch) -> Result<(), Error> {
     let refuse = |why: String| {
         Err(Error::Failed(format!(
             "{file} is not a static linux {arch} program: {why}"

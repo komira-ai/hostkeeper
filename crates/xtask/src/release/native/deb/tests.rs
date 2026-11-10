@@ -11,6 +11,7 @@ use super::{
 use crate::release::Error;
 use crate::release::contract::{Platform, Service};
 use crate::release::fakes::scratch;
+use crate::release::package::elf::fixture::{AARCH64, Spec, X86_64};
 use crate::release::package::linux_check::check_service;
 
 const MTIME: u64 = 1_800_000_000;
@@ -45,7 +46,11 @@ fn pins_in(dir: &Path) -> Pins {
 }
 
 fn request(dir: &Path, service: Service, platform: Platform) -> Request {
-    std::fs::write(dir.join("program"), b"the program").expect("write the program");
+    let program = match platform {
+        Platform::LinuxArm64 => Spec::static_pie(AARCH64).build(),
+        _ => Spec::static_pie(X86_64).build(),
+    };
+    std::fs::write(dir.join("program"), program).expect("write the program");
     Request {
         service,
         platform,
@@ -159,6 +164,53 @@ fn pxes_deb_is_built_for_both_linux_platforms_and_holds_the_program_and_the_unit
             "{text}"
         );
     }
+}
+
+#[test]
+fn pxes_deb_is_not_built_from_a_dynamic_or_foreign_program() {
+    // Proves: a pxe program linked to glibc, one for the other architecture, and bytes that are
+    // not an ELF file are each refused with the reason, and nothing is written.
+    // Catches: a pxe deb packing a binary that cannot run on a host without its libraries.
+    let d = scratch("native-deb-pxe-not-static");
+    for (platform, program, why) in [
+        (
+            Platform::LinuxX86_64,
+            Spec::glibc().build(),
+            "it asks for the interpreter /lib64/ld-linux-x86-64.so.2",
+        ),
+        (
+            Platform::LinuxX86_64,
+            Spec::static_pie(AARCH64).build(),
+            "ELF machine 0xb7, not 0x3e",
+        ),
+        (
+            Platform::LinuxArm64,
+            Spec::static_pie(X86_64).build(),
+            "ELF machine 0x3e, not 0xb7",
+        ),
+    ] {
+        let r = request(&d, Service::Pxe, platform);
+        std::fs::write(&r.binary, program).expect("write the program");
+        let arch = if platform == Platform::LinuxArm64 {
+            "arm64"
+        } else {
+            "amd64"
+        };
+        let want = format!(
+            "{} is not a static linux {arch} program: {why}",
+            r.binary.display()
+        );
+        assert_eq!(build(&r, no_pins), Err(Error::Failed(want)));
+    }
+    let r = request(&d, Service::Pxe, Platform::LinuxX86_64);
+    std::fs::write(&r.binary, b"the program").expect("write the program");
+    let e = build(&r, no_pins).expect_err("refused");
+    assert!(
+        e.to_string()
+            .contains("is not a static linux amd64 program"),
+        "{e}"
+    );
+    assert!(!d.join("out").exists());
 }
 
 #[test]

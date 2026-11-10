@@ -1,9 +1,9 @@
-//! The two files the daemon's attestation check runs on, and the two programs it ships, in the
+//! The two files the daemon's attestation check runs on, and the program it ships, in the
 //! deb and the rpm: `nfpm.yaml`
 //! installs them at the daemon's own paths (`hostkeeper_daemon::cli::GH_BINARY` and
 //! `SIGSTORE_TRUSTED_ROOT`, imported, not repeated), with their modes, from the directory
 //! `release nfpm-stage` writes, and that step refuses a `gh` archive that is not the pinned one
-//! a missing trusted root and programs that are not static. Fixture files only: no network, no nfpm, no `gh`.
+//! a missing trusted root and a program that is not static. Fixture files only: no network, no nfpm, no `gh`.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};

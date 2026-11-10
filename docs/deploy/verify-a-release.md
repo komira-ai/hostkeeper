@@ -196,7 +196,7 @@ staged.
 The packages' program, `hostkeeper`, is the static build: it is built for
 `x86_64-unknown-linux-musl` or `aarch64-unknown-linux-musl`, so it uses no shared library of the
 host and runs on any Linux distribution (`pxe`, the program of the pxe `.deb`, is built the same
-way, though `check-linux-pkg --service` does not apply this rule to a service's `.deb`). `check-linux-pkg` refuses a package that holds an ELF
+way, and `release deb --service pxe` refuses a program that is not a static ELF file for the platform; `check-linux-pkg --service` does not apply this rule to a service's `.deb`). `check-linux-pkg` refuses a package that holds an ELF
 file with an interpreter (`PT_INTERP`) or a needed library (`DT_NEEDED`), and a package that
 declares a dependency (a deb's `Depends` or `Pre-Depends`, an rpm's requirement other than
 `rpmlib(...)`). The build job also runs it, without `--staged`, on
