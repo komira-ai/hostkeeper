@@ -263,6 +263,8 @@ mod force_tests;
 #[cfg(test)]
 mod group_calls_tests;
 #[cfg(test)]
+mod group_ci_tests;
+#[cfg(test)]
 mod group_converge_tests;
 #[cfg(test)]
 mod group_decision_support;

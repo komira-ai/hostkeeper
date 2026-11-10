@@ -1,5 +1,5 @@
 //! The allow-list with several entries: each token is admitted by the entry it matches and
-//! gets that entry's services, and a file that could be read two ways is refused.
+//! gets that entry's services and host groups, and a file that could be read two ways is refused.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -351,4 +351,113 @@ fn scratch(name: &str) -> Scratch {
         .expect("its directory")
         .join("hostkeeper-oidc-unit");
     Scratch::under(&base, name).expect("a scratch directory")
+}
+
+/// An entry's `host_groups` is carried to the verified token: absent is `None` (any group
+/// that lists its services), `[]` is `Some` of no group, and a list is carried in order.
+#[tokio::test]
+async fn an_entry_may_name_its_host_groups() {
+    let absent = entry("[remote_operator]", "4242", WORKFLOW, "");
+    let list = AllowList::parse(&absent).expect("list");
+    assert_eq!(list.entries()[0].host_groups, None);
+    let who = verifier(&absent).verify(&token(|_| {})).await.expect("ok");
+    assert_eq!(who.host_groups, None);
+    let none = entry("[remote_operator]", "4242", WORKFLOW, "host_groups = []");
+    let who = verifier(&none).verify(&token(|_| {})).await.expect("ok");
+    assert_eq!(who.host_groups, Some(Vec::new()));
+    let some = entry(
+        "[remote_operator]",
+        "4242",
+        WORKFLOW,
+        "host_groups = [\"canary\", \"fleet-2\"]",
+    );
+    let who = verifier(&some).verify(&token(|_| {})).await.expect("ok");
+    assert_eq!(
+        who.host_groups,
+        Some(vec!["canary".to_owned(), "fleet-2".to_owned()])
+    );
+}
+
+/// A `host_groups` name that is not a host group name is refused at load with the key and the
+/// value: uppercase, a leading digit, 33 bytes, a trailing or doubled `-`.
+#[test]
+fn a_host_group_name_outside_the_grammar_is_refused() {
+    let long = "a".repeat(33);
+    for bad in ["Canary", "1st", "a_b", "a-", "a--b", long.as_str()] {
+        let text = entry(
+            "[remote_operator]",
+            "4242",
+            WORKFLOW,
+            &format!("host_groups = [\"canary\", \"{bad}\"]"),
+        );
+        let why = AllowList::parse(&text).expect_err(bad).to_string();
+        assert_eq!(
+            why,
+            format!(
+                "remote_operator: host_groups holds {bad:?}, which is not a host group name \
+                 (1 to 32 bytes of a-z, 0-9 and -, starting with a letter, not ending with - \
+                 or holding --)"
+            )
+        );
+    }
+    let longest = "a".repeat(32);
+    let ok = entry(
+        "[remote_operator]",
+        "4242",
+        WORKFLOW,
+        &format!("host_groups = [\"{longest}\"]"),
+    );
+    assert!(AllowList::parse(&ok).is_ok());
+}
+
+/// An empty or padded `host_groups` entry is refused as an empty or padded `services` entry
+/// is, and a duplicate is not refused.
+#[test]
+fn a_blank_or_padded_host_group_is_refused_and_a_duplicate_is_not() {
+    for bad in [
+        "host_groups = [\"\"]",
+        "host_groups = [\" a\"]",
+        "host_groups = [\"a \"]",
+    ] {
+        let text = entry("[remote_operator]", "4242", WORKFLOW, bad);
+        let why = AllowList::parse(&text).expect_err(bad).to_string();
+        assert_eq!(
+            why,
+            "remote_operator: host_groups holds an empty entry or one with surrounding whitespace"
+        );
+    }
+    let twice = entry(
+        "[remote_operator]",
+        "4242",
+        WORKFLOW,
+        "host_groups = [\"a\", \"a\"]",
+    );
+    assert!(AllowList::parse(&twice).is_ok());
+}
+
+/// Two entries: each token gets the `host_groups` of its own entry; one entry's list does not
+/// leak to the other.
+#[tokio::test]
+async fn each_token_gets_the_host_groups_of_its_own_entry() {
+    let text = format!(
+        "{}{}",
+        entry(
+            "[[remote_operator]]",
+            "4242",
+            WORKFLOW,
+            "host_groups = [\"canary\"]"
+        ),
+        entry("[[remote_operator]]", "777", OTHER_WORKFLOW, ""),
+    );
+    let verifier = verifier(&text);
+    let a = verifier.verify(&token(|_| {})).await.expect("a");
+    assert_eq!(
+        (a.entry, a.host_groups),
+        (0, Some(vec!["canary".to_owned()]))
+    );
+    let b = verifier
+        .verify(&token(second_entry_claims))
+        .await
+        .expect("b");
+    assert_eq!((b.entry, b.host_groups), (1, None));
 }

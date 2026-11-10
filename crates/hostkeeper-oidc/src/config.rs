@@ -3,10 +3,12 @@
 //! (`--remote-operator-config`, which may be `coordinator.toml` itself), or from several
 //! `[[remote_operator]]` tables, one entry each; a file never has both forms. Every value
 //! that decides who is let in is required: there is no default issuer, audience,
-//! repository or workflow.
+//! repository or workflow. An entry may also name the `services` its token may set and the
+//! `host_groups` it may deploy to; both are optional, and an absent key limits nothing.
 
 use std::path::Path;
 
+use hostkeeper_wire::RoleName;
 use serde::Deserialize;
 
 /// The most a token's `exp - iat` may be, unless the file lowers or raises it.
@@ -59,6 +61,7 @@ struct Raw {
     runner_environment: Option<String>,
     max_token_lifetime_secs: Option<u64>,
     services: Option<Vec<String>>,
+    host_groups: Option<Vec<String>>,
 }
 
 /// What a token's claims must equal. Built only by [`OidcConfig::parse`], so a value of
@@ -91,6 +94,11 @@ pub struct OidcConfig {
     /// `hostkeeper-coordinator`) reads as its legacy service. `Some([])` (`services = []`)
     /// names no service: a token of the entry may set none.
     pub services: Option<Vec<String>>,
+    /// The host groups a token of this entry may deploy to; `None` when the entry has no
+    /// `host_groups` key, so the token may deploy its services to any group that lists them.
+    /// `Some([])` (`host_groups = []`) names no group: a token of the entry may deploy to
+    /// none. Each name is a host group name (the grammar of `hostkeeper_wire::RoleName`).
+    pub host_groups: Option<Vec<String>>,
 }
 
 fn need(value: Option<String>, name: &str) -> Result<String, ConfigError> {
@@ -107,6 +115,19 @@ fn clean_list(list: Vec<String>, name: &str) -> Result<Vec<String>, ConfigError>
     if list.iter().any(|v| v.is_empty() || v.trim() != v) {
         return Err(ConfigError::Invalid(format!(
             "{name} holds an empty entry or one with surrounding whitespace"
+        )));
+    }
+    Ok(list)
+}
+
+/// The names of `list` as host group names: no blank or padded entry, and each name in the
+/// grammar of `hostkeeper_wire::RoleName`.
+fn host_group_names(list: Vec<String>) -> Result<Vec<String>, ConfigError> {
+    let list = clean_list(list, "host_groups")?;
+    if let Some(bad) = list.iter().find(|n| n.parse::<RoleName>().is_err()) {
+        return Err(ConfigError::Invalid(format!(
+            "host_groups holds {bad:?}, which is not a host group name (1 to 32 bytes of a-z, 0-9 \
+             and -, starting with a letter, not ending with - or holding --)"
         )));
     }
     Ok(list)
@@ -192,6 +213,7 @@ impl OidcConfig {
             .services
             .map(|list| clean_list(list, "services"))
             .transpose()?;
+        let host_groups = raw.host_groups.map(host_group_names).transpose()?;
         Ok(Self {
             issuer,
             audience,
@@ -210,6 +232,7 @@ impl OidcConfig {
             )?,
             max_lifetime_secs,
             services,
+            host_groups,
         })
     }
 }

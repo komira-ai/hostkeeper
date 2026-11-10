@@ -44,8 +44,19 @@ pub(crate) fn coordinator_on(
     clock: &Arc<AtomicU64>,
     enrollment: Option<Arc<Enrollment>>,
 ) -> Coordinator {
+    coordinator_listed(fake, clock, enrollment, "")
+}
+
+/// [`coordinator_on`] whose allow-list entry also holds the lines `entry_extra` (such as
+/// `host_groups = ["alpha"]`, each ending in a newline).
+pub(crate) fn coordinator_listed(
+    fake: &Fake,
+    clock: &Arc<AtomicU64>,
+    enrollment: Option<Arc<Enrollment>>,
+    entry_extra: &str,
+) -> Coordinator {
     let list = format!(
-        "{}services = [\"web\", \"db\"]\n",
+        "{}services = [\"web\", \"db\"]\n{entry_extra}",
         hostkeeper_oidc::testkit::config_text(hostkeeper_oidc::testkit::STATIC_ISSUER)
     );
     let loaded = fake.load().expect("the fake loads");
@@ -92,12 +103,22 @@ impl World {
 
     /// A world named `name` over the committed state `fake` holds.
     pub(crate) fn over(name: &str, fake: Fake) -> Self {
+        Self::over_listed(name, fake, "")
+    }
+
+    /// A world named `name` over `fake` whose allow-list entry also holds the lines `entry_extra`
+    /// ([`coordinator_listed`]).
+    pub(crate) fn over_listed(name: &str, fake: Fake, entry_extra: &str) -> Self {
         let records = Arc::new(MemoryRecords::new());
         let enrollment =
             EnrollmentRig::over_records(&format!("{name}-enrollment"), records.clone());
         let mut rig = Rig::new(name);
-        rig.coordinator =
-            coordinator_on(&fake, &rig.clock, Some(Arc::clone(&enrollment.enrollment)));
+        rig.coordinator = coordinator_listed(
+            &fake,
+            &rig.clock,
+            Some(Arc::clone(&enrollment.enrollment)),
+            entry_extra,
+        );
         rig.at(2_000);
         Self {
             rig,

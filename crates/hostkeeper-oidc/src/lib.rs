@@ -173,6 +173,9 @@ pub struct Verified {
     /// key, which the caller (the coordinator, `hostkeeper-coordinator`) reads as its legacy
     /// service; `Some([])` when it names none, so the token may set none.
     pub services: Option<Vec<String>>,
+    /// The host groups that entry lets the token deploy to; `None` when the entry has no
+    /// `host_groups` key (any group that lists the services); `Some([])` when it names none.
+    pub host_groups: Option<Vec<String>>,
 }
 
 /// The current time in seconds since the epoch.
@@ -297,6 +300,7 @@ impl Verifier {
             sha: text(claims, "sha").ok().map(str::to_owned),
             entry,
             services: c.services.clone(),
+            host_groups: c.host_groups.clone(),
         })
     }
 
