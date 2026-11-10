@@ -72,6 +72,7 @@ fn hosts(rig: &Rig) -> Vec<String> {
 /// A record as the ops file keeps it.
 fn record(host: &str, data: &[&str], bmc: &str, serial: &str) -> InventoryRecord {
     InventoryRecord {
+        host_group: String::new(),
         host_id: host.to_owned(),
         role: String::new(),
         data_macs: data.iter().map(|m| (*m).to_owned()).collect(),

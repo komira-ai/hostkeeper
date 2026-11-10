@@ -37,12 +37,15 @@ const MOVE_TIMEOUTS: Timeouts = Timeouts {
 
 /// Every table that holds state, in the order an export counts them; `imports` is the import's
 /// own record, and the bookkeeping (`schema_version`, `lease`, `enrollment_serial`) is not here.
-pub(crate) const STATE_TABLES: [&str; 30] = [
+pub(crate) const STATE_TABLES: [&str; 37] = [
     "desired",
     "desired_digests",
     "releases",
     "repositories",
     "repository_generation",
+    "host_groups",
+    "host_group_packages",
+    "group_desired",
     "services",
     "bad_versions",
     "failure_acks",
@@ -57,6 +60,10 @@ pub(crate) const STATE_TABLES: [&str; 30] = [
     "halt_reports",
     "rollouts",
     "rollout_done",
+    "group_min_versions",
+    "group_services",
+    "group_rollouts",
+    "group_rollout_done",
     "audit",
     "spent_tokens",
     "verdict_standing",
@@ -261,7 +268,7 @@ pub(crate) fn counts_of(moved: &Moved) -> Result<Counts, MoveError> {
 fn audit_all(session: &mut Session) -> Result<Vec<AuditLine>, DatabaseError> {
     Ok(session
         .query(
-            "SELECT seq, at_unix, by_name, action, service, node_id, reason FROM audit \
+            "SELECT seq, at_unix, by_name, action, service, node_id, reason, host_group FROM audit \
              ORDER BY seq",
             &[],
         )

@@ -33,6 +33,9 @@
 //! start rather than run without the digests. A request never writes the record: the keys
 //! `release_index` and `release_index_digest` of a set are the index's text and its SHA-256,
 //! which are checked and turned into the record ([`Desired::parse_request_noting`]).
+//! The host groups and their desired versions are the map form's top-level key `host_groups`,
+//! written only while a group is held ([`crate::host_groups`]); earlier builds refuse it as they
+//! refuse any key they do not know.
 
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
@@ -471,6 +474,9 @@ pub(crate) struct Held {
     /// The registry of package repositories ([`crate::repositories`]), kept beside the state
     /// and never in its file; the default registry (generation 0, none) when none was put.
     pub(crate) repositories: crate::repositories::Registry,
+    /// The host groups and their desired versions ([`crate::host_groups`]), in the state file
+    /// under `host_groups` only while one is held.
+    pub(crate) host_groups: crate::host_groups::HostGroups,
 }
 
 impl Held {

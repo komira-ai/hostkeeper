@@ -73,6 +73,7 @@ pub(crate) fn normal(mut state: OpsState) -> OpsState {
     state
         .rollouts
         .retain(|_, rollout| *rollout != Default::default());
+    state.host_groups = state.host_groups.without_defaults();
     state
 }
 
@@ -298,6 +299,36 @@ fn all_or_nothing(subject: &dyn Subject) -> Outcome {
     })
 }
 
+/// Puts two host groups and their desired versions into `desired`, and into `ops` the marks of
+/// two of their packages, one at its default, and an inventory record's group.
+fn with_host_groups(desired: &mut desired::Held, ops: &mut OpsState) {
+    use crate::host_groups::{GroupMarks, HostGroup, HostGroups};
+    let web = crate::host_groups::tests::web();
+    let canary = HostGroup {
+        packages: vec!["hostkeeper".to_owned()],
+        generation: 1,
+        desired: std::collections::BTreeMap::new(),
+        ..web.clone()
+    };
+    desired.host_groups = HostGroups(
+        [("web", web), ("web-canary", canary)]
+            .into_iter()
+            .filter_map(|(name, group)| Some((name.parse().ok()?, group)))
+            .collect(),
+    );
+    let marks = std::collections::BTreeMap::from([
+        (
+            "tierstore".to_owned(),
+            crate::host_groups::tests::every_mark(),
+        ),
+        ("hostkeeper".to_owned(), GroupMarks::default()),
+    ]);
+    if let Ok(name) = "web".parse() {
+        ops.host_groups.0.insert(name, marks);
+    }
+    ops.inventory[1].host_group = "web".to_owned();
+}
+
 fn load_gives_back(subject: &dyn Subject) -> Outcome {
     let live = subject.live();
     let (mut desired, mut ops, verdicts) = (
@@ -309,7 +340,9 @@ fn load_gives_back(subject: &dyn Subject) -> Outcome {
         .put(komira(1))
         .and_then(|registry| registry.put(komira(2)))
         .map_err(|why| format!("the registry could not be made: {why}"))?;
-    let audit = lines(1, 3);
+    with_host_groups(&mut desired, &mut ops);
+    let mut audit = lines(1, 3);
+    audit[1].detail.host_group = Some("web".to_owned());
     ops.audit = ring(&audit);
     live.commit(&Commit {
         desired: Some((&desired::Held::default(), &desired)),
@@ -330,6 +363,17 @@ fn load_gives_back(subject: &dyn Subject) -> Outcome {
     check(back.desired.releases == desired.releases, || {
         format!("the releases came back as {:?}", back.desired.releases)
     })?;
+    check(back.desired.host_groups == desired.host_groups, || {
+        format!(
+            "the host groups came back as {:?}",
+            back.desired.host_groups
+        )
+    })?;
+    check(
+        back.ops.host_groups.clone().without_defaults()
+            == ops.host_groups.clone().without_defaults(),
+        || format!("the groups' marks came back as {:?}", back.ops.host_groups),
+    )?;
     check(back.desired.repositories == desired.repositories, || {
         format!(
             "the repositories came back as {:?}",

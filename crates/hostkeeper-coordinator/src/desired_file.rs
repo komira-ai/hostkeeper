@@ -1,12 +1,14 @@
 //! The desired-state file's text: the single state of earlier builds, or the map of services,
-//! each entry its state's keys and its registry (`digests`), and back. A key the state does not
-//! have is refused, so an earlier build refuses what it cannot read rather than lose it.
+//! each entry its state's keys and its registry (`digests`), with the host groups beside it
+//! (`host_groups`, only while one is held), and back. A key the state does not have is refused,
+//! so an earlier build refuses what it cannot read rather than lose it.
 
 use std::collections::BTreeMap;
 
 use serde::Serialize;
 
 use super::{Desired, DesiredError, Held};
+use crate::host_groups::HostGroups;
 use crate::registry::Registry;
 
 /// One service's state as the file writes it: the desired state, then its registry when it holds
@@ -23,6 +25,8 @@ struct EntryOut<'a> {
 #[derive(Serialize)]
 struct MapFileOut<'a> {
     services: BTreeMap<&'a str, EntryOut<'a>>,
+    #[serde(skip_serializing_if = "HostGroups::is_empty")]
+    host_groups: &'a HostGroups,
 }
 
 /// The desired state and the registry of one service's entry in the file: the state's own keys,
@@ -52,11 +56,14 @@ pub(crate) fn parse_file(bytes: &[u8], legacy: Option<&str>) -> Result<Held, Des
         held.insert(name, desired, digests);
         return Ok(held);
     };
-    if let Some(other) = value
-        .as_object()
-        .and_then(|map| map.keys().find(|key| *key != "services"))
-    {
+    if let Some(other) = value.as_object().and_then(|map| {
+        map.keys()
+            .find(|key| !matches!(key.as_str(), "services" | "host_groups"))
+    }) {
         return Err(DesiredError::Malformed(format!("unknown field `{other}`")));
+    }
+    if let Some(groups) = value.get("host_groups").cloned() {
+        held.host_groups = HostGroups::read(groups).map_err(DesiredError::Malformed)?;
     }
     let services: BTreeMap<String, serde_json::Value> =
         serde_json::from_value(services).map_err(malformed)?;
@@ -68,14 +75,14 @@ pub(crate) fn parse_file(bytes: &[u8], legacy: Option<&str>) -> Result<Held, Des
 }
 
 /// The text of the file holding `held`: the single state of earlier builds while `legacy` is the
-/// only service, which earlier builds read and whose reader refuses the map form; the map
-/// otherwise.
+/// only service and no host group is held, which earlier builds read and whose reader refuses the
+/// map form; the map otherwise.
 ///
 /// # Errors
 /// The state could not be serialised.
 pub(crate) fn encode(held: &Held, legacy: Option<&str>) -> serde_json::Result<Vec<u8>> {
     let encoded = match held.desired.iter().collect::<Vec<_>>().as_slice() {
-        [(name, only)] if Some(name.as_str()) == legacy => {
+        [(name, only)] if Some(name.as_str()) == legacy && held.host_groups.is_empty() => {
             serde_json::to_vec_pretty(&held.entry(name, only))
         }
         _ => serde_json::to_vec_pretty(&MapFileOut {
@@ -84,6 +91,7 @@ pub(crate) fn encode(held: &Held, legacy: Option<&str>) -> serde_json::Result<Ve
                 .iter()
                 .map(|(name, desired)| (name.as_str(), held.entry(name, desired)))
                 .collect(),
+            host_groups: &held.host_groups,
         }),
     };
     let mut text = encoded?;

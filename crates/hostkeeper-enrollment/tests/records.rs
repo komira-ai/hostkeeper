@@ -846,6 +846,9 @@ fn a_deny_whose_request_cannot_be_read_still_denies_the_host() {
     for (call, held) in [("deny", HostHeld::Denied), ("retire", HostHeld::Retired)] {
         let missing = KeyHash::of_spki(b"a key whose request is gone");
         let orphan = pb::Host {
+            facts_generation: None,
+            host_group: String::new(),
+            moving_from: None,
             schema: 1,
             host_id: "web-1".to_owned(),
             key_hash: missing.as_bytes().to_vec(),
