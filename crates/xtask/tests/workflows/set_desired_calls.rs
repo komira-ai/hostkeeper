@@ -9,7 +9,9 @@
 //! `--github-oidc-audience`, and no token is ever a file or stdin of the job); it does not call
 //! `releases <method>`, or that is not a command of hkctl's table (`hostkeeper_proto::ctl`); a flag
 //! after the method is not one of that command; or it does not end by sending its diagnostics to
-//! its own file (`2> <file>`), the one the outputs step reads; or it does not pass each flag of
+//! its own file (`2> <file>`), the one the outputs step reads, followed by exactly its
+//! `on_failure` (the set: [`SET_ON_FAILURE`], which prints that file when hkctl fails and ends
+//! with hkctl's exit code; the wait: nothing); or it does not pass each flag of
 //! its `fields` after the method exactly once with exactly its value (the set: the service and
 //! [`REQUEST_FILE`], which the request step writes; the wait: the service, the version and
 //! [`WAIT_SECS`]); or a variable of [`CALL_ENV`] its command names is not given in its `env` as
@@ -28,14 +30,23 @@ use super::set_desired::{CLIENT_STEP, PROGRAM, WAIT_STEP, logical_lines, text, v
 use super::yaml::Node;
 
 /// One call step: its `id`, the method of `releases` it calls, the files of its answer and of
-/// its diagnostics, and the flags of the method it passes with their values.
+/// its diagnostics, the flags of the method it passes with their values, and what its command
+/// line holds after `2> <err>` (empty: nothing).
 pub struct Call {
     pub step: &'static str,
     pub method: &'static str,
     pub response: &'static str,
     pub err: &'static str,
     pub fields: &'static [(&'static str, &'static str)],
+    pub on_failure: &'static str,
 }
+
+/// What ends the set's command line after `2> "$RUNNER_TEMP/hkctl-set.err"`: when hkctl fails,
+/// the step prints the diagnostics it saved (the coordinator's code and its `refused: <token>`
+/// line) to its own log and ends with hkctl's exit code, so a red set step names its cause. The
+/// file stays for the outputs step.
+pub const SET_ON_FAILURE: &str =
+    r#"|| { status=$?; cat "$RUNNER_TEMP/hkctl-set.err" >&2; exit "$status"; }"#;
 
 /// The two calls, in the order they run.
 pub const CALLS: [Call; 2] = [
@@ -45,6 +56,7 @@ pub const CALLS: [Call; 2] = [
         response: "$RUNNER_TEMP/hkctl-set.json",
         err: "$RUNNER_TEMP/hkctl-set.err",
         fields: &[("--service", "$SERVICE"), ("--request", REQUEST_FILE)],
+        on_failure: SET_ON_FAILURE,
     },
     Call {
         step: WAIT_STEP,
@@ -56,6 +68,7 @@ pub const CALLS: [Call; 2] = [
             ("--version", "$VERSION"),
             WAIT_SECS,
         ],
+        on_failure: "",
     },
 ];
 /// What a call step's `env` gives each variable its command names, exactly: the caller's inputs.
@@ -238,9 +251,16 @@ pub fn step_call_problems(who: &str, step: &Node, call: &Call) -> Vec<String> {
             ));
         }
     }
-    if rest.get(2 + field_took..) != Some(&["2>", call.err][..]) {
+    let mut end = vec!["2>", call.err];
+    end.extend(words(call.on_failure));
+    if rest.get(2 + field_took..) != Some(&end[..]) {
+        let then = if call.on_failure.is_empty() {
+            String::new()
+        } else {
+            format!(" {}", call.on_failure)
+        };
         problems.push(format!(
-            "{who} does not end with `2> \"{}\"`, the file the outputs step reads",
+            "{who} does not end with `2> \"{}\"{then}`, the file the outputs step reads",
             call.err
         ));
     }

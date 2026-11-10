@@ -723,7 +723,8 @@ command:
    `${{ inputs.* }}` is written into a script, as today.
 6. `set-desired`, `continue-on-error: true`: `hkctl --endpoint ... --ca-file ... --github-oidc-audience "$AUDIENCE"
    --response-file "$RUNNER_TEMP/hkctl-set.json" releases set-desired --service "$SERVICE" [--package-digest ...]
-   --request <file> 2> "$RUNNER_TEMP/hkctl-set.err"`.
+   --request <file> 2> "$RUNNER_TEMP/hkctl-set.err"`; when hkctl fails, the step prints that file and ends with
+   hkctl's exit code, so its own log names the cause.
 7. `wait`, only when `wait` is true and step 6 succeeded, `continue-on-error: true`: `hkctl ... --response-file
    "$RUNNER_TEMP/hkctl-wait.json" releases wait-converged --service ... --version ... --wait-secs <max_polls times 10>
    2> "$RUNNER_TEMP/hkctl-wait.err"`.
