@@ -10,9 +10,16 @@
 //! desired version bakes again. So does a host that was silent for [`DOWN_AFTER`] or more
 //! between two beats: the count only grows on beats, and a host that vanished is not
 //! proven by the beats from before it went.
+//!
+//! A bake after a restart proves the host again, but it is no update: a host the coordinator
+//! first heard, since it started, already settled at a version ([`Found`]) did not update under
+//! it, so its bake at that version makes no rollout live ([`crate::live`]) until the coordinator
+//! sees it move (another version, an update, a promotion, an order).
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
+use hostkeeper_wire::HostId;
 use hostkeeper_wire::version::Version;
 use hostkeeper_wire::wire::{Health, Heartbeat};
 
@@ -49,5 +56,44 @@ impl Bake {
                 .map_or(1, |b| b.beats.saturating_add(1)),
             at: now,
         })
+    }
+}
+
+/// The version each host ran, per service, when the coordinator first heard it since it started,
+/// for the hosts it has not seen move since: settled there (not updating, no promotion pending,
+/// not absent), at the same version in every beat after, and given no order. Kept in memory only,
+/// beside the bakes: what a restart cannot tell is whether such a host updated just before it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Found(BTreeMap<(String, HostId), Version>);
+
+impl Found {
+    /// Notes `beat`, the host's word of the service in `key`; `first` when the fleet kept no word
+    /// of it before (the first since the coordinator started, or since it forgot the host).
+    pub(crate) fn observe(&mut self, key: (String, HostId), beat: &Heartbeat, first: bool) {
+        let settled =
+            beat.updating.is_none() && !beat.promotion_pending && beat.health != Health::Absent;
+        if first && settled {
+            self.0.insert(key, beat.version.clone());
+        } else if !settled || self.0.get(&key).is_some_and(|v| *v != beat.version) {
+            self.0.remove(&key);
+        }
+    }
+
+    /// Forgets the host and service of `key`: it was ordered, or the fleet forgot it.
+    pub(crate) fn forget(&mut self, key: &(String, HostId)) {
+        self.0.remove(key);
+    }
+
+    /// Forgets the host `id` for every service.
+    pub(crate) fn forget_host(&mut self, id: &HostId) {
+        self.0.retain(|(_, host), _| host != id);
+    }
+
+    /// Whether the host `id` was found settled at `version` of `service` and has not moved since.
+    #[must_use]
+    pub(crate) fn at(&self, service: &str, id: &HostId, version: &Version) -> bool {
+        self.0
+            .get(&(service.to_owned(), id.clone()))
+            .is_some_and(|v| v == version)
     }
 }

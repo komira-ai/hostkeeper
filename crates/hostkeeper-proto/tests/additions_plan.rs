@@ -73,6 +73,11 @@ fn plan() -> op::RolloutPlan {
         finished: false,
         waiting_on: vec!["js-agent".to_owned()],
         host_group: String::new(),
+        waiting_on_why: vec![op::LiveRollout {
+            service: "js-agent".to_owned(),
+            reason: op::LiveReason::Baking.into(),
+            node_id: "node-05".to_owned(),
+        }],
     }
 }
 
@@ -320,6 +325,56 @@ fn waiting_on_is_read_as_empty_from_an_older_plan_and_kept_by_an_older_reader() 
     assert_eq!(
         read.get_field_by_name("version").as_deref(),
         Some(&Value::String("2.0".to_owned()))
+    );
+    let back = op::RolloutPlan::decode(read.encode_to_vec().as_slice()).expect("decodes");
+    assert_eq!(back, plan());
+}
+
+/// Catches: `RolloutPlan.waiting_on_why` (field 12, with `LiveRollout` and `LiveReason`, added
+/// after `waiting_on`) that a reader built before it drops or cannot read past, and a plan
+/// written before it read as giving a reason. A plan of the release before, which carries fields
+/// 1 to 11 only, reads with every field it set and no reason; a reader that knows fields 1 to 11
+/// only keeps the reasons as an unknown field and writes them back unchanged.
+#[test]
+fn waiting_on_why_is_read_as_empty_from_an_older_plan_and_kept_by_an_older_reader() {
+    let older = op::RolloutPlan {
+        waiting_on_why: Vec::new(),
+        ..plan()
+    };
+    let read = op::RolloutPlan::decode(round_trip(&older).as_slice()).expect("decodes");
+    assert_eq!((read.waiting_on_why.len(), read), (0, older));
+
+    let current = DescriptorPool::decode(hostkeeper_proto::FILE_DESCRIPTOR_SET).expect("decodes");
+    let mut file = current
+        .get_file_by_name("hostkeeper/operator/v1/rollouts.proto")
+        .expect("the file")
+        .file_descriptor_proto()
+        .clone();
+    let message = file
+        .message_type
+        .iter_mut()
+        .find(|m| m.name() == "RolloutPlan")
+        .expect("the plan");
+    message.field.retain(|f| f.number() != 12);
+    let set = prost_reflect::prost_types::FileDescriptorSet {
+        file: current
+            .file_descriptor_protos()
+            .map(|f| match f.name() == file.name() {
+                true => file.clone(),
+                false => f.clone(),
+            })
+            .collect(),
+    };
+    let before = DescriptorPool::from_file_descriptor_set(set).expect("the plan before");
+    let before = before
+        .get_message_by_name("hostkeeper.operator.v1.RolloutPlan")
+        .expect("the plan");
+    assert!(before.get_field_by_name("waiting_on_why").is_none());
+    let bytes = round_trip(&plan());
+    let read = DynamicMessage::decode(before, bytes.as_slice()).expect("decodes");
+    assert_eq!(
+        read.get_field_by_name("waiting_on").as_deref(),
+        Some(&Value::List(vec![Value::String("js-agent".to_owned())]))
     );
     let back = op::RolloutPlan::decode(read.encode_to_vec().as_slice()).expect("decodes");
     assert_eq!(back, plan());

@@ -31,7 +31,7 @@ use hostkeeper_wire::wire::{Agent, Health, Heartbeat, Outcome, UpdateResult};
 use hostkeeper_wire::{HostId, Platform, RoleName};
 
 use crate::assignment::{Placement, assigned, effective_min_version};
-use crate::bake::Bake;
+use crate::bake::{Bake, Found};
 use crate::defer::{DeferBackoff, Defers};
 use crate::holds::holding;
 use crate::rollouts::Rollout;
@@ -184,6 +184,8 @@ pub struct Fleet {
     orders: BTreeMap<(HostId, String), Order>,
     /// Healthy beats in a row at one version, per service and host ([`Bake`]).
     bake: BTreeMap<(String, HostId), Bake>,
+    /// The hosts first heard settled at a version and not seen to move since ([`Found`]).
+    found: Found,
     defers: Defers,
     /// The release failures heard, each counted once ([`crate::verdicts`]).
     verdicts: Verdicts,
@@ -234,6 +236,7 @@ impl Fleet {
             outside: BTreeMap::new(),
             orders: BTreeMap::new(),
             bake: BTreeMap::new(),
+            found: Found::default(),
             defers: Defers::default(),
             verdicts: Verdicts::default(),
             marks: Marks::default(),
@@ -473,6 +476,7 @@ impl Fleet {
         }
         self.orders.retain(|(o, _), _| o != id);
         self.bake.retain(|(_, o), _| o != id);
+        self.found.forget_host(id);
         self.nodes.remove(id);
         self.picks.forget(id);
         true
@@ -587,6 +591,8 @@ impl Fleet {
             }
         }
         let baking = (key.1.clone(), key.0.clone());
+        let first = self.occupant(&key.1, &key.0).is_none();
+        self.found.observe(baking.clone(), &beat, first);
         match Bake::after(self.bake.get(&baking), &beat, now) {
             Some(bake) => {
                 self.bake.insert(baking, bake);
@@ -659,6 +665,7 @@ impl Fleet {
         now: Duration,
     ) {
         let key = (id, service.to_owned());
+        self.found.forget(&(service.to_owned(), key.0.clone()));
         if self.is_ordered(service, &key.0, now)
             && self
                 .orders
@@ -781,6 +788,13 @@ impl Fleet {
         host.is_live(now)
             && host.beat.version == *version
             && self.bake_beats(service, id, version) < need
+    }
+
+    /// Whether the host `id` was first heard settled at `version` of `service` and has not
+    /// moved since ([`Found`]): a bake of it there proves no update.
+    #[must_use]
+    pub(crate) fn found_at(&self, service: &str, id: &HostId, version: &Version) -> bool {
+        self.found.at(service, id, version)
     }
 
     /// Whether the host `id` counts as up for `service`: [`Host::is_up`] and no order
@@ -913,6 +927,7 @@ impl Fleet {
         }
         self.orders.remove(&(id.clone(), service.to_owned()));
         self.bake.remove(&(service.to_owned(), id.clone()));
+        self.found.forget(&(service.to_owned(), id.clone()));
     }
 
     /// Whether the standing force of `service` orders the host `id`.
