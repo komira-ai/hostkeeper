@@ -276,6 +276,7 @@ pub(crate) fn reply(answer: Answer) -> Mapped {
             halt_generations,
             acknowledged,
             repositories: None,
+            facts: None,
         },
         update,
     }

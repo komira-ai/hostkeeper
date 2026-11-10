@@ -281,6 +281,7 @@ pub fn daemon(signers_file: &Path) -> MacDaemon {
     let dirs = Dirs {
         state,
         packages: packages.clone(),
+        facts: packages.with_file_name("facts.json"),
     };
     MacDaemon {
         daemon: Daemon::new(config, dirs, ports, OWN),

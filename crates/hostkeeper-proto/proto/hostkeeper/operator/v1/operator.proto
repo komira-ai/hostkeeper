@@ -103,7 +103,8 @@ service Hosts {
   // Put an excluded host back. Including a host that is not excluded changes nothing and is not
   // an error.
   rpc Include(IncludeRequest) returns (IncludeResponse);
-  // Replace a host's labels, which service selectors match. An empty set removes them.
+  // Replace a host's labels, which service selectors match and which the host's facts file
+  // carries (its daemon is sent them at its next heartbeat). An empty set removes them.
   rpc SetLabels(SetLabelsRequest) returns (SetLabelsResponse);
   // Queue an `abort` order of a service for the host's next heartbeat; it takes no slot. An
   // abort of a host that runs nothing of the service is accepted and changes nothing.

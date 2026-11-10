@@ -77,7 +77,7 @@ distribution with no entry it can install shows `no_build_for_host`, as today; n
 | `manifest.toml`'s name, version, platform | Control fields `Package`, `Version`, `Architecture` | `PackageInfo`'s `identifier` and `version` | Checked against the order at `stage` (sections 4.3, 4.7) |
 | `manifest.toml`'s `min_hostkeeper`, `[units] run`, `[health] url`, `[hook]` bounds and `boot`, `[params]` | The entry's manifest in the call (packages.md section 4.2), as for every entry since A1 | The same | Checked by the coordinator and the daemon (packages.md section 4.4) |
 | The archive's Sigstore bundle | The repository's signature and the pin (section 3.3) | The package's signature and the pin (section 4.7) | 10.3 |
-| Per-host settings | Not in any package: host setup's, as `hostkeeper.toml` is | The same | The operator |
+| Per-host settings | Not in any package: host setup's, as `hostkeeper.toml` is; the host's own values (its id, its host group, its platform, its labels) are in the facts file the daemon writes from what the coordinator sends (`--facts-file`, by default `/var/lib/hostkeeper/facts.json`, [hostgroups.md](hostgroups.md) section 6.4) | The same | The operator; the coordinator for the facts file, which a service reads |
 
 **The hook is the manifest's command.** The entry's `hook.command` names the hook. Its first element is the absolute
 path (the grammar of `hostkeeper_config::names::check_path`) of a file the package installs; the elements after it are

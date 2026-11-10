@@ -268,6 +268,7 @@ fn reply_of(answer: &Answer) -> Reply {
             })
             .collect(),
         repositories: None,
+        facts: None,
     }
 }
 
@@ -356,6 +357,7 @@ fn first_beat() -> Heartbeat {
         trusted_root: None,
         installers: Vec::new(),
         repositories: None,
+        facts_generation: None,
     }
 }
 
@@ -382,6 +384,7 @@ fn without_executor(daemon: &Arc<Daemon>, links: &Links) -> Heartbeater {
             renewal: Arc::new(DaemonRenewal::new(links.renewal.clone())),
             trusted_root: Arc::new(DaemonTrustedRoot::new(Arc::clone(daemon))),
             repositories: None,
+            facts: None,
         },
     )
 }

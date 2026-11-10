@@ -464,6 +464,7 @@ impl MacHost {
             config: self.config_path(),
             state_dir: self.base.join("check-state"),
             packages_dir: self.base.join("check-packages"),
+            facts_file: self.base.join("facts.json"),
             run_dir: self.base.join("check-run"),
             trusted_uid: 0,
             trusted_root_max_age_days: NonZeroU64::new(3650).expect("not zero"),
