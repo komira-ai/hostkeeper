@@ -1,4 +1,4 @@
-//! `coordinator-update`: the machine that runs the coordinator's container rolls it forward to the
+//! `hostkeeper-coordinator-update`: the machine that runs the coordinator's container rolls it forward to the
 //! newest published release by itself (`docs/deploy/coordinator-update.md`). A systemd timer runs
 //! it (`docs/deploy/coordinator/hostkeeper-coordinator-update.{timer,service}`); CI never
 //! reaches the machine, and a release only reads the coordinator's `GET /v1/version` and waits.
@@ -8,7 +8,7 @@
 //! one is ready, volumes are kept, and the new container has the old one's command line and
 //! mounts. In this order, one report line each:
 //!
-//! 1. The target version: `--version`, else the newest published release of hostkeeper's
+//! 1. The target version: `--target-version`, else the newest published release of hostkeeper's
 //!    repository tagged `vX.Y.Z`.
 //! 2. The container `--container` must exist and run (a stopped one is never started), and no
 //!    container `<name>-next` may exist (an earlier run was cut short).
@@ -76,7 +76,7 @@ const PREFIX: &str = "coordinator-update";
 /// into place whole, so a run that was killed never leaves a half file that later runs trust.
 const PART: &str = ".part";
 
-/// The flags of `coordinator-update`.
+/// The flags of `hostkeeper-coordinator-update`.
 #[derive(Debug, clap::Args)]
 pub(crate) struct Flags {
     /// The coordinator's container.
@@ -99,9 +99,10 @@ pub(crate) struct Flags {
     /// The image to load: `linux-x86_64` or `linux-arm64` (default: this build's).
     #[arg(long, default_value = DEFAULT_PLATFORM, value_parser = linux_platform)]
     pub(crate) platform: Platform,
-    /// The version to run, `X.Y.Z` (default: the newest published release).
+    /// The version to run, `X.Y.Z` (default: the newest published release). Not `--version`,
+    /// which prints the program's own stamp.
     #[arg(long, value_parser = parse_version)]
-    pub(crate) version: Option<Version>,
+    pub(crate) target_version: Option<Version>,
     /// How many times to check that the new container is ready, at most.
     #[arg(long, default_value_t = 60, value_parser = clap::value_parser!(u32).range(1..))]
     pub(crate) ready_checks: u32,
@@ -240,7 +241,7 @@ pub(crate) struct Ports<'a> {
     pub(crate) pause: &'a dyn Pause,
 }
 
-/// The verb: `flags` over the real `curl`, through `exec`, and the release adapters.
+/// The program: `flags` over the real `curl`, through `exec`, and the release adapters.
 pub(crate) fn run(
     flags: &Flags,
     source: &dyn Releases,
@@ -282,7 +283,7 @@ fn field<'v>(value: &'v Value, path: &[&str], what: &str) -> Result<&'v str, Err
 pub(crate) fn update(ports: &Ports<'_>, flags: &Flags) -> Result<Vec<String>, Error> {
     let mut lines = Vec::new();
     let name = flags.container.as_str();
-    let (target, release) = choose(ports.source, flags.version)?;
+    let (target, release) = choose(ports.source, flags.target_version)?;
     lines.push(said(format!("target v{target}")));
 
     let old = inspect_old(ports.engine, name)?;
@@ -366,7 +367,7 @@ fn inspect_old(engine: &dyn Engine, name: &str) -> Result<Value, Error> {
     };
     if old["State"]["Running"] != true {
         return Err(Error::Refused(format!(
-            "container {name} is not running: this verb rolls a running coordinator forward and never starts a stopped one"
+            "container {name} is not running: this program rolls a running coordinator forward and never starts a stopped one"
         )));
     }
     let next = format!("{name}-next");
@@ -651,7 +652,7 @@ fn roll_back(
 }
 
 /// Removes the `v<version>` directories of `dir` but the newest two and that of `installed`
-/// (the version just installed, which an older `--version` may have been); the lines it reports.
+/// (the version just installed, which an older `--target-version` may have been); the lines it reports.
 fn prune(dir: &Path, installed: Version) -> Result<Vec<String>, Error> {
     let what = format!("read {}", dir.display());
     let mut kept: Vec<(Version, PathBuf)> = Vec::new();

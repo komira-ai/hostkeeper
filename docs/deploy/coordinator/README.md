@@ -190,7 +190,7 @@ file it was started with, so `password.sql` would read the old password.
 ## Updating the coordinator
 
 The machine that runs the container updates it from every published release by itself:
-`hostkeeper-coordinator-update.timer` runs `xtask coordinator-update`, which loads the release's
+`hostkeeper-coordinator-update.timer` runs `hostkeeper-coordinator-update` (a release asset of its own), which loads the release's
 attested image and replaces the container with the old one's command line, mounts and volumes,
 rolling back to the old container when the new one is not ready. The runbook (install, turn on,
 refusals, a failed version, the compose deployment's `image:` line) is

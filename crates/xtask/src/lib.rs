@@ -24,15 +24,19 @@
 //! - `db-backup`: one dump of the coordinator's database into a directory of dumps, keeping the
 //!   newest of them (`db_backup`). Not a CI step: the backup timer of the compose deployment runs
 //!   it (`docs/deploy/coordinator/`).
-//! - `coordinator-update`: the machine that runs the coordinator's container installs the newest
-//!   attested release by itself and replaces the container, with a rollback to the old one when
-//!   the new one is not ready (`coordinator_update`). Not a CI step: the update timer of that
-//!   machine runs it (`docs/deploy/coordinator-update.md`).
+//!
+//! The crate also builds one shipped program, `hostkeeper-coordinator-update`
+//! ([`coordinator_update_main`]): the machine that runs the coordinator's container installs the
+//! newest attested release by itself and replaces the container, with a rollback to the old one
+//! when the new one is not ready (`coordinator_update`). It is no CI step: the update timer of
+//! that machine runs it (`docs/deploy/coordinator-update.md`), and each release ships it as an
+//! attested tarball for the two Linux platforms, so nothing is built on that machine.
 //!
 //! The workflows that call them are in `.github/workflows`; `tests/workflows` holds each of
-//! them to the rules of this repository. The crate's one export is [`main`], the entry point of
-//! the binary; with the feature `test-support`, which only this crate's own tests turn on, it
-//! also exports `test_support`, what its integration tests need of its internals.
+//! them to the rules of this repository. The crate's exports are [`main`], the entry point of
+//! `xtask`, and [`coordinator_update_main`], the entry point of `hostkeeper-coordinator-update`;
+//! with the feature `test-support`, which only this crate's own tests turn on, it also exports
+//! `test_support`, what its integration tests need of its internals.
 
 mod advisories;
 mod channels;
@@ -42,6 +46,7 @@ mod install;
 mod mdm_signing_test;
 mod netinstall_report;
 mod release;
+mod stamp;
 
 #[cfg(feature = "test-support")]
 pub use release::test_support;
@@ -74,8 +79,6 @@ enum Error {
     DbBackup(#[from] db_backup::Error),
     #[error(transparent)]
     Channels(#[from] channels::Error),
-    #[error(transparent)]
-    CoordinatorUpdate(#[from] coordinator_update::Error),
 }
 
 #[derive(Parser)]
@@ -133,13 +136,6 @@ enum Verb {
     /// output into a new numbered file of `--into` (mode 0600), and keep the newest `--keep`
     /// dumps. A dump that fails or writes nothing is not kept, and removes no older one.
     DbBackup(db_backup::Flags),
-    /// Roll the coordinator's container forward to the newest published release, on the machine
-    /// that runs it: download the release's image tarball and check its sum and attestation, load
-    /// it, check what docker loaded, create the new container with the old one's command line,
-    /// mounts and volumes, and replace the old one once the new one is ready; when it is not, the
-    /// old one is started again and the version is marked failed. Changes nothing when the
-    /// running version is at least the target.
-    CoordinatorUpdate(coordinator_update::Flags),
     /// A release's Linux packages and macOS installer reaching `packages.komira.ai`: the settings
     /// gate of those jobs, the job's AWS role, the read, merge, sign and write of each
     /// repository, the installer's upload and promotion, the install checks, and the decision to
@@ -177,20 +173,6 @@ fn run(cli: Cli) -> Result<Vec<String>, Error> {
         )?),
         Verb::NetinstallReport(flags) => Ok(netinstall_report::run(&flags)?),
         Verb::DbBackup(flags) => Ok(db_backup::run(&flags)?),
-        Verb::CoordinatorUpdate(flags) => {
-            let adapters = release::real::connect();
-            let ports = release::ports::Adapters::ports(&adapters);
-            let releases = coordinator_update::GitHubReleases {
-                store: ports.store,
-                fetch: ports.download,
-            };
-            Ok(coordinator_update::run(
-                &flags,
-                &releases,
-                ports.verifier,
-                &release::real::exec(),
-            )?)
-        }
         Verb::Channels { verb } => Ok(channels::run(verb, &release::real::exec())?),
     }
 }
@@ -214,9 +196,59 @@ pub fn main() -> ExitCode {
                 | Error::SigningTest(_)
                 | Error::NetinstallReport(_)
                 | Error::DbBackup(_)
-                | Error::CoordinatorUpdate(_)
                 | Error::Channels(_) => ExitCode::FAILURE,
             }
+        }
+    }
+}
+
+/// The command line of `hostkeeper-coordinator-update`: the flags of one run, and `--version`.
+#[derive(Parser)]
+#[command(
+    name = "hostkeeper-coordinator-update",
+    version = stamp::version(),
+    about = "Roll the coordinator's container forward to the newest published release, on the \
+             machine that runs it: download the release's image tarball and check its sum and \
+             attestation, load it, check what docker loaded, create the new container with the \
+             old one's command line, mounts and volumes, and replace the old one once the new \
+             one is ready; when it is not, the old one is started again and the version is \
+             marked failed. Changes nothing when the running version is at least the target."
+)]
+struct UpdateCli {
+    #[command(flatten)]
+    flags: coordinator_update::Flags,
+}
+
+/// One run of `hostkeeper-coordinator-update` with its flags, against GitHub, `gh`, `curl` and
+/// docker.
+fn run_update(cli: &UpdateCli) -> Result<Vec<String>, coordinator_update::Error> {
+    let adapters = release::real::connect();
+    let ports = release::ports::Adapters::ports(&adapters);
+    let releases = coordinator_update::GitHubReleases {
+        store: ports.store,
+        fetch: ports.download,
+    };
+    coordinator_update::run(
+        &cli.flags,
+        &releases,
+        ports.verifier,
+        &release::real::exec(),
+    )
+}
+
+/// The entry point of the `hostkeeper-coordinator-update` binary: the report lines on stdout and
+/// exit 0, or the reason on stderr and exit 1 (2 for flags clap refuses).
+pub fn coordinator_update_main() -> ExitCode {
+    match run_update(&UpdateCli::parse()) {
+        Ok(lines) => {
+            for line in lines {
+                println!("{line}");
+            }
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("hostkeeper-coordinator-update: {e}");
+            ExitCode::FAILURE
         }
     }
 }

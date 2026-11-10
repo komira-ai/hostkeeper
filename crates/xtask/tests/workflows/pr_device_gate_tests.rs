@@ -135,6 +135,7 @@ fn run(c: &Conditions, gated: &str, o: Outcome) -> Run {
         &Context {
             names: names.clone(),
             cancelled: o.cancelled,
+            failed: false,
         },
     )
     .expect("the job's if");
@@ -143,6 +144,7 @@ fn run(c: &Conditions, gated: &str, o: Outcome) -> Run {
     let context = Context {
         names,
         cancelled: o.cancelled,
+        failed: false,
     };
     assert!(
         holds(&c.gate, &context).expect("the gate's if"),
@@ -254,6 +256,7 @@ fn needed_output(event: &str, outcome: &str) -> String {
             ("steps.diff.outcome".to_owned(), outcome.to_owned()),
         ]),
         cancelled: false,
+        failed: false,
     };
     holds(NEEDED, &context).expect("the output").to_string()
 }
@@ -423,6 +426,7 @@ fn the_expressions_are_read_with_githubs_precedence_and_refused_when_not_underst
     let context = Context {
         names: BTreeMap::from([("a.b".to_owned(), "X".to_owned())]),
         cancelled: true,
+        failed: false,
     };
     for (text, want) in [
         ("${{ a.b == 'x' }}", true),

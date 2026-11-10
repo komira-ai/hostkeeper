@@ -655,6 +655,7 @@ fn runs(cond: Option<&str>, failed: bool, names: &BTreeMap<String, String>) -> b
         &Context {
             names: names.clone(),
             cancelled: false,
+            failed: false,
         },
     )
     .expect("a condition");
