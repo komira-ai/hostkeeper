@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>MessageType</key><string>Authenticate</string>
+	<key>Topic</key><string>com.apple.mgmt.External.00000000-0000-4000-8000-000000000000</string>
+	<key>UDID</key><string>00000000-0000-4000-8000-0000000000AA</string>
+	<key>DeviceName</key><string>test-mac</string>
+	<key>Model</key><string>Mac00,0</string>
+	<key>ModelName</key><string>Mac Studio</string>
+	<key>OSVersion</key><string>27.0.1</string>
+	<key>BuildVersion</key><string>00A000</string>
+	<key>ProductName</key><string>Mac00,0</string>
+	<key>SerialNumber</key><string>TESTSERIAL01</string>
+	<key>SomeKeyAppleAddsLater</key><true/>
+</dict>
+</plist>
