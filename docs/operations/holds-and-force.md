@@ -64,9 +64,10 @@ version, keeps what it runs, and is never counted as failed or missing:
 - `installer_dropped` (`GATE_REASON_INSTALLER_DROPPED`): the host runs the service with an
   installer the list has no entry of, or that its daemon no longer lists. A host changes a
   service's installer only by an uninstall and an install, or by the move to native packages
-  (docs/design/packages-native.md section 10.6): a host running it from `hostkeeper-archive` is
-  picked a native entry its daemon lists, and a host running it natively, going back to a lower
-  version whose list has no native entry, is picked that list's `hostkeeper-archive` entry.
+  (docs/design/packages-native.md section 10.6): a host running it from `hostkeeper-archive`,
+  whose daemon still lists `hostkeeper-archive`, is picked the first native entry of the list its
+  daemon lists. No pick returns a `hostkeeper-archive` entry: a host running it natively, going
+  back to a version whose list has no native entry it lists, is `installer_dropped`.
 
 None of them holds the convergence, but `Converge` counts the hosts picked an entry and those
 picked none by why (`HostCounts.picked`, `no_target`, `no_build_for_host`,

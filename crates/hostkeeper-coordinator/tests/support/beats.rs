@@ -174,15 +174,28 @@ impl Daemon {
 
 /// The daemon's heartbeat over gRPC, answered.
 pub async fn grpc_beat(rig: &Rig, daemon: &Daemon) -> agent::HeartbeatResponse {
+    let data = grpc_beat_bytes(
+        rig,
+        &daemon.host,
+        &daemon.role,
+        &daemon.request().encode_to_vec(),
+    )
+    .await;
+    agent::HeartbeatResponse::decode(&data[..]).expect("a heartbeat response")
+}
+
+/// The heartbeat `request`, already encoded (as a daemon of another release encodes it), of the
+/// host `host` of `role` over gRPC: the bytes of the answer's message, unframed.
+pub async fn grpc_beat_bytes(rig: &Rig, host: &str, role: &str, request: &[u8]) -> Bytes {
     let request = Request::builder()
         .method("POST")
         .uri(HEARTBEAT)
         .version(Version::HTTP_2)
         .header("content-type", "application/grpc")
         .header("te", "trailers")
-        .body(Full::new(framed(&daemon.request().encode_to_vec())))
+        .body(Full::new(framed(request)))
         .expect("a request");
-    let peer = rig.updater(&daemon.host, &daemon.role);
+    let peer = rig.updater(host, role);
     let response = route(
         &rig.coordinator,
         Surface::Heartbeat,
@@ -196,8 +209,7 @@ pub async fn grpc_beat(rig: &Rig, daemon: &Daemon) -> agent::HeartbeatResponse {
     let trailers = collected.trailers().cloned().unwrap_or(headers);
     let status = trailers.get("grpc-status").and_then(|v| v.to_str().ok());
     assert_eq!(status, Some("0"), "{trailers:?}");
-    let data: Bytes = collected.to_bytes();
-    agent::HeartbeatResponse::decode(&data[5..]).expect("a heartbeat response")
+    collected.to_bytes().slice(5..)
 }
 
 /// The daemon's heartbeat over the JSON route, answered.

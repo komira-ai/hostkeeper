@@ -6,9 +6,15 @@
 //!
 //! 1. a host that runs the service takes the entry of the installer it runs it with
 //!    (`ServiceBeat.installer`), wherever it stands in the list, while its daemon still lists that
-//!    installer; else it is picked nothing, [`Pick::InstallerDropped`]. A service that runs from
-//!    archives (`ServiceBeat.installer` absent) runs with no installer a list can name, so it is
-//!    picked nothing too. No change of installer is ever picked;
+//!    installer; else it is picked nothing, [`Pick::InstallerDropped`]. The one change of
+//!    installer ever picked is the move (packages-native.md section 10.6): a host that runs the
+//!    service from archives (`ServiceBeat.installer` absent, or `hostkeeper-archive`), whose
+//!    daemon still lists `hostkeeper-archive` (a daemon from before the archives were deleted,
+//!    which makes the move) and the installer of a native entry of the list
+//!    ([`is_native_entry`]), takes the first such entry in list order. A host that runs it from
+//!    archives and lists no native installer of the list, or whose daemon no longer lists
+//!    `hostkeeper-archive` (it can no longer move a service off archives), is picked nothing.
+//!    No change between native installers, and none back to archives, is ever picked;
 //! 2. any other host takes the first entry whose installer its daemon lists
 //!    (`HeartbeatRequest.installers`); else it is picked nothing, [`Pick::NoBuildForHost`];
 //! 3. a host of a platform the release has no list for is picked nothing, [`Pick::NoTarget`].
@@ -21,7 +27,8 @@
 //!
 //! No pick ever returns an entry of the installer `hostkeeper-archive`, which no daemon from this
 //! coordinator's release installs with; a daemon that still lists it is picked another entry or
-//! none. A daemon that did not announce [`TARGET_FEATURE`] is picked nothing,
+//! none. The move is kept until no host runs a service from archives (the two counts of
+//! docs/operations/move-to-native.md, stage 9), and is deleted after. A daemon that did not announce [`TARGET_FEATURE`] is picked nothing,
 //! [`Pick::NoBuildForHost`]. One that did is picked from the installers it said
 //! in its last heartbeat over gRPC ([`Heard`]), which the fleet keeps in memory, as it keeps
 //! features: a heartbeat over the JSON route, which carries none, leaves the list as it was, and
@@ -41,6 +48,7 @@ use hostkeeper_proto::hostkeeper::operator::v1 as operator;
 use hostkeeper_proto::hostkeeper::release::v1::Target;
 use hostkeeper_release::ARCHIVE_INSTALLER;
 use hostkeeper_release::grammar::is_installer_name;
+use hostkeeper_release::target::is_native_entry;
 use hostkeeper_wire::HostId;
 use hostkeeper_wire::version::Version;
 use hostkeeper_wire::wire::{Health, is_drift_version};
@@ -248,16 +256,21 @@ pub(crate) fn pick<'a>(
     let installable =
         |entry: &&Target| entry.installer != ARCHIVE_INSTALLER && listed.contains(&entry.installer);
     let picked = if runs(fleet, service, id) {
-        // A service that runs from archives (no installer said) names no installer a list has.
+        // A service that runs from archives names no installer, or names the archive's.
         let running = fleet
             .picks
             .running(id, service)
             .unwrap_or(ARCHIVE_INSTALLER);
-        list.entries
-            .iter()
-            .filter(installable)
-            .find(|entry| entry.installer == running)
-            .map_or(Pick::InstallerDropped, Pick::Entry)
+        let mut entries = list.entries.iter().filter(installable);
+        let found = if running == ARCHIVE_INSTALLER {
+            // The move: only a daemon that still lists the archive installer runs a service from
+            // archives and moves it; one that no longer does refuses the order.
+            let moves = listed.iter().any(|name| name == ARCHIVE_INSTALLER);
+            entries.find(|entry| moves && is_native_entry(entry))
+        } else {
+            entries.find(|entry| entry.installer == running)
+        };
+        found.map_or(Pick::InstallerDropped, Pick::Entry)
     } else {
         list.entries
             .iter()

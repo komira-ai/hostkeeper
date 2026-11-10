@@ -1,10 +1,13 @@
-//! The native installers and the end of the move (docs/design/packages-native.md sections 10.6
-//! and 10.7, build items A18 and A25): the pick of a host that runs a service from a native
-//! installer, never an entry of another installer; the archive a host may still run a service
-//! from is no installer a list is picked by, so such a host is picked nothing
-//! (`installer_dropped`) and no pick ever returns an entry of `hostkeeper-archive`, whatever the
-//! release lists and whatever the daemon lists; and the releases of the move, which a stored
-//! release with archive entries still loads, and hostkeeper's own list with one is refused.
+//! The native installers and the move (docs/design/packages-native.md sections 10.6 and 10.7,
+//! build items A18 and A25): the pick of a host that runs a service from a native installer,
+//! never an entry of another installer; the move of a host that runs a service from archives
+//! (its daemon names no installer, or `hostkeeper-archive`) and whose daemon still lists
+//! `hostkeeper-archive` and a native installer of the list, to the first such native entry;
+//! nothing for one that lists no native installer of the list, or whose daemon no longer lists
+//! `hostkeeper-archive` (`installer_dropped`); no pick ever returns an entry of
+//! `hostkeeper-archive`, whatever the release lists and whatever the daemon lists; and the
+//! releases of the move, which a stored release with archive entries still loads, and
+//! hostkeeper's own list with one is refused.
 //!
 //! The same pick for a Mac, whose list is the signed `.pkg` alone (`macos-pkg`, build item of
 //! `release targets` for macOS): ordered to a Mac whose daemon announces `macos-pkg`, nothing to
@@ -106,46 +109,97 @@ async fn ordered(rig: &Rig, daemon: &Daemon) -> Option<(&'static str, String, St
     })
 }
 
-/// Proves: a host running `web` from `hostkeeper-archive` (its daemon names no installer for it)
-/// is picked nothing though its daemon lists `apt`, whether the list names `apt` before or after
-/// the archive entry: it is held `installer_dropped` and named by `Converge`; a host that runs
-/// `web` from `apt` is ordered the `apt` entry of the next version, and a host that does not run
-/// `web` and lists `apt` is ordered it as its install, none of them the archive entry.
-/// Catches: a host picked the archive entry it runs, or picked another installer's entry than the
-/// one it runs, which only an uninstall changes.
+/// Proves: a host running `web` from `hostkeeper-archive` whose daemon lists the archive
+/// installer and `apt` is ordered the `apt` entry, whole, with its pin as the package digest,
+/// whether the list names it before or after the archive entry and whether the daemon names no
+/// installer for `web` or names `hostkeeper-archive`; the host is no longer held
+/// `installer_dropped` and `Converge` names no such host; once it runs `web` from `apt` it is
+/// ordered the `apt` entry of the next version; a host that does not run `web` and lists `apt`
+/// is ordered it as its install.
+/// Catches: the move not made (the host held `installer_dropped` while its daemon can move it),
+/// made only when the native entry stands first, made only for one spelling of a service running
+/// from archives, or the native entry sent without its repository fields.
 #[tokio::test]
-async fn a_host_running_from_archives_is_picked_nothing_and_one_running_apt_is_picked_the_apt_entry()
- {
+async fn a_host_running_from_archives_that_lists_apt_is_picked_the_apt_entry_wherever_it_stands() {
     for (name, entries) in [
         ("native-first", vec![apt("2.0-1", 'a'), web(ARCHIVE, 'f')]),
         ("native-after", vec![web(ARCHIVE, 'f'), apt("2.0-1", 'a')]),
+    ] {
+        for (host, said_installer) in [("m1", None), ("m2", Some(ARCHIVE))] {
+            let rig = rig(&format!("{name}-{host}"));
+            put_komira(&rig).await;
+            set(&rig, "2.0", x86(entries.clone())).await;
+            rig.at(LATER);
+            let archived = Daemon::new(host, X86, &[ARCHIVE, "apt"]).running(runs(
+                "web",
+                "1.0",
+                said_installer,
+            ));
+            let order = said(&grpc_beat(&rig, &archived).await).expect("an update");
+            assert_eq!(
+                (order.0, order.2.as_str(), order.3.as_str(), order.5),
+                (
+                    "update",
+                    "2.0",
+                    digest('a').as_str(),
+                    Some(apt("2.0-1", 'a'))
+                ),
+                "{name} {host}"
+            );
+            assert_eq!(
+                converge(&rig, "web").await.installer_dropped,
+                Vec::<String>::new(),
+                "{name} {host}"
+            );
+
+            set(&rig, "3.0", x86(vec![web(ARCHIVE, 'e'), apt("3.0-1", 'b')])).await;
+            let moved =
+                Daemon::new(host, X86, &[ARCHIVE, "apt"]).running(runs("web", "2.0", Some("apt")));
+            assert_eq!(
+                ordered(&rig, &moved).await,
+                Some(("update", "3.0".to_owned(), "apt".to_owned(), digest('b'))),
+                "{name} {host}"
+            );
+            let new = Daemon::new("i1", X86, &[ARCHIVE, "apt"]);
+            assert_eq!(
+                ordered(&rig, &new).await,
+                Some(("install", "3.0".to_owned(), "apt".to_owned(), digest('b'))),
+                "{name} {host}"
+            );
+        }
+    }
+}
+
+/// Proves: a host running `web` from archives whose daemon lists `apt` but not
+/// `hostkeeper-archive` (a daemon from after the archives were deleted, which cannot move a
+/// service off them) is ordered nothing and held `installer_dropped`, named by `Converge`, with
+/// the list `[apt]` and with `[apt, hostkeeper-archive]`; the same daemon's host that does not
+/// run `web` is ordered the `apt` entry as its install.
+/// Catches: the move ordered to a daemon that no longer makes it, which answers every such order
+/// `release_unreadable` and fails the service's update on that host at each try.
+#[tokio::test]
+async fn a_daemon_that_no_longer_lists_the_archive_installer_is_not_moved() {
+    for (name, entries) in [
+        ("after-a25-apt", vec![apt("2.0-1", 'a')]),
+        ("after-a25-both", vec![apt("2.0-1", 'a'), web(ARCHIVE, 'f')]),
     ] {
         let rig = rig(name);
         put_komira(&rig).await;
         set(&rig, "2.0", x86(entries)).await;
         rig.at(LATER);
-        let archived = Daemon::new("m1", X86, &[ARCHIVE, "apt"]).running(runs("web", "1.0", None));
-        assert_eq!(said(&grpc_beat(&rig, &archived).await), None, "{name}");
+        let stranded = Daemon::new("s1", X86, &["apt"]).running(runs("web", "1.0", None));
+        assert_eq!(said(&grpc_beat(&rig, &stranded).await), None, "{name}");
         assert_eq!(
-            reason(&rig, "web", "m1").await,
+            reason(&rig, "web", "s1").await,
             proto::GateReason::InstallerDropped,
             "{name}"
         );
-        let convergence = converge(&rig, "web").await;
         assert_eq!(
-            convergence.installer_dropped,
-            vec!["m1".to_owned()],
+            converge(&rig, "web").await.installer_dropped,
+            vec!["s1".to_owned()],
             "{name}"
         );
-
-        let running_apt =
-            Daemon::new("m2", X86, &[ARCHIVE, "apt"]).running(runs("web", "1.0", Some("apt")));
-        assert_eq!(
-            ordered(&rig, &running_apt).await,
-            Some(("update", "2.0".to_owned(), "apt".to_owned(), digest('a'))),
-            "{name}"
-        );
-        let new = Daemon::new("i1", X86, &[ARCHIVE, "apt"]);
+        let new = Daemon::new("s2", X86, &["apt"]);
         assert_eq!(
             ordered(&rig, &new).await,
             Some(("install", "2.0".to_owned(), "apt".to_owned(), digest('a'))),
@@ -154,13 +208,115 @@ async fn a_host_running_from_archives_is_picked_nothing_and_one_running_apt_is_p
     }
 }
 
+/// `web`'s repository entry like [`apt`]'s, of the installer `dnf`: native as every repository
+/// entry is, whatever its installer.
+fn dnf(package_version: &str, c: char) -> Target {
+    let mut entry = apt(package_version, c);
+    entry.installer = "dnf".to_owned();
+    entry
+}
+
+/// Proves: with the list `[dnf, apt]` (two native entries), a host running `web` from archives
+/// whose daemon lists `[apt, hostkeeper-archive, dnf]` is moved to the first native entry of the
+/// list's order, `dnf`, not of its daemon's; one whose daemon lists `apt` and the archive only is
+/// moved to `apt`; a host running `web` from `apt` whose daemon lists both is ordered `apt`, and
+/// with the list `[dnf]` alone it is ordered nothing and held `installer_dropped`.
+/// Catches: the move's native entry chosen by the daemon's order rather than the release's, or a
+/// change between two native installers picked.
+#[tokio::test]
+async fn the_move_takes_the_first_native_entry_of_the_list_and_never_changes_a_native_installer() {
+    let rig = rig("move-list-order");
+    put_komira(&rig).await;
+    set(&rig, "2.0", x86(vec![dnf("2.0-1", 'b'), apt("2.0-1", 'a')])).await;
+    rig.at(LATER);
+    let both = Daemon::new("o1", X86, &["apt", ARCHIVE, "dnf"]).running(runs("web", "1.0", None));
+    assert_eq!(
+        ordered(&rig, &both).await,
+        Some(("update", "2.0".to_owned(), "dnf".to_owned(), digest('b')))
+    );
+    let apt_only = Daemon::new("o2", X86, &[ARCHIVE, "apt"]).running(runs("web", "1.0", None));
+    assert_eq!(
+        ordered(&rig, &apt_only).await,
+        Some(("update", "2.0".to_owned(), "apt".to_owned(), digest('a')))
+    );
+    let native =
+        Daemon::new("o3", X86, &[ARCHIVE, "dnf", "apt"]).running(runs("web", "1.0", Some("apt")));
+    assert_eq!(
+        ordered(&rig, &native).await,
+        Some(("update", "2.0".to_owned(), "apt".to_owned(), digest('a')))
+    );
+    set(&rig, "3.0", x86(vec![dnf("3.0-1", 'c')])).await;
+    assert_eq!(said(&grpc_beat(&rig, &native).await), None);
+    assert_eq!(
+        reason(&rig, "web", "o3").await,
+        proto::GateReason::InstallerDropped
+    );
+}
+
+/// Proves: `hostkeeper` itself, set as its release is (its `.deb`'s `apt` entry alone, run unit
+/// `hostkeeper.service`), on a host whose daemon runs it from archives and lists
+/// `[hostkeeper-archive, apt]`, is ordered the update to that entry; on a host whose daemon lists
+/// `hostkeeper-archive` alone it is ordered nothing and held `installer_dropped`.
+/// Catches: the daemon's own move, the one that lets hostkeeper update itself off archives, left
+/// out of the pick, or its `.deb` sent to a daemon that cannot install it.
+#[tokio::test]
+async fn hostkeeper_on_a_host_running_it_from_archives_is_picked_its_deb() {
+    let services = format!(
+        "{SERVICES}\n[[service]]\nname = \"hostkeeper\"\nroles = [\"daemon\"]\nstages = [100]\n"
+    );
+    let rig = Rig::new(
+        "move-hostkeeper",
+        Spec::recorded()
+            .with_services(&services)
+            .with_oidc_services(&["web"])
+            .without_legacy(),
+    )
+    .routed();
+    put_komira(&rig).await;
+    let mut own = repository_entry("hostkeeper", "2.0-1", 'a');
+    own.manifest.as_mut().expect("a manifest").run = vec!["hostkeeper.service".to_owned()];
+    set_mac(
+        &rig,
+        "hostkeeper",
+        "2.0",
+        BTreeMap::from([("linux-x86_64".to_owned(), list(vec![own.clone()]))]),
+    )
+    .await;
+    rig.at(LATER);
+    let archived =
+        Daemon::new("h1", X86, &[ARCHIVE, "apt"]).running(runs("hostkeeper", "1.0", None));
+    let order = said(&grpc_beat(&rig, &archived).await).expect("an update");
+    assert_eq!(
+        (
+            order.0,
+            order.1.as_str(),
+            order.2.as_str(),
+            order.3.as_str(),
+            order.5
+        ),
+        (
+            "update",
+            "hostkeeper",
+            "2.0",
+            digest('a').as_str(),
+            Some(own)
+        ),
+    );
+    let no_apt = Daemon::new("h2", X86, &[ARCHIVE]).running(runs("hostkeeper", "1.0", None));
+    assert_eq!(said(&grpc_beat(&rig, &no_apt).await), None);
+    assert_eq!(
+        reason(&rig, "hostkeeper", "h2").await,
+        proto::GateReason::InstallerDropped
+    );
+}
+
 /// Proves: no pick returns the archive entry of a stored release, whatever the daemon lists and
 /// the host runs: with the list `[apt, hostkeeper-archive]`, a host whose daemon lists only
 /// `hostkeeper-archive`, one that lists `deb` and `tarball`, one that lists `macos-pkg`, and a
 /// daemon before `target-v1` (which counts as listing the archive alone) are each picked nothing
 /// (`no_build_for_host` for the hosts that do not run `web`, `installer_dropped` for those that
-/// run it from archives), and a host that does not run `web` and lists the archive and `apt` is
-/// ordered the `apt` entry.
+/// run it from archives, none of whose daemons lists a native installer of the list), and a host
+/// that does not run `web` and lists the archive and `apt` is ordered the `apt` entry.
 /// Catches: the archive entry of a release set before the archives ended picked for a daemon
 /// that still lists the installer, which no daemon installs with now.
 #[tokio::test]
@@ -518,11 +674,10 @@ fn mac_release(service: &str, run: &[&str]) -> (BTreeMap<String, TargetList>, Ta
 /// (two run labels) and for `hostkeeper` (none): a Mac whose daemon announces
 /// `[hostkeeper-archive, macos-pkg]` and runs no `service` is ordered `install` of the `.pkg`
 /// entry, whole, with the `.pkg`'s digest as the package digest; one that runs it from
-/// `hostkeeper-archive` is ordered nothing and held `installer_dropped`, the archive being no
-/// installer a pick moves a host off (the move is over); a Linux host that runs the service from
-/// `apt` is still ordered `update` of its `apt` entry.
-/// Catches: a Mac held back though its daemon announces the installer, a host running from
-/// archives moved to the `.pkg` entry, or the Linux list disturbed by the Mac's.
+/// `hostkeeper-archive` is ordered `update` of the same entry (the move); a Linux host that runs
+/// the service from `apt` is still ordered `update` of its `apt` entry.
+/// Catches: a Mac held back though its daemon announces the installer, a Mac running from
+/// archives left there though its daemon can move it, or the Linux list disturbed by the Mac's.
 #[tokio::test]
 async fn a_mac_that_announces_macos_pkg_is_picked_the_pkg_entry_and_a_linux_host_its_apt_entry() {
     for (service, run) in [
@@ -545,15 +700,11 @@ async fn a_mac_that_announces_macos_pkg_is_picked_the_pkg_entry_and_a_linux_host
 
         let archived =
             Daemon::new("mac2", MAC, &[ARCHIVE, "macos-pkg"]).running(runs(service, "1.0", None));
+        let order = said(&grpc_beat(&rig, &archived).await).expect("an update");
         assert_eq!(
-            said(&grpc_beat(&rig, &archived).await),
-            None,
+            (order.0, order.2.as_str(), order.3.as_str(), order.5),
+            ("update", "2.0", digest('d').as_str(), Some(pkg.clone())),
             "{service}: a Mac running from archives"
-        );
-        assert_eq!(
-            reason(&rig, service, "mac2").await,
-            proto::GateReason::InstallerDropped,
-            "{service}"
         );
 
         let linux =

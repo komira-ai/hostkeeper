@@ -254,6 +254,13 @@ does not hold its convergence. A host either query names is brought up, or remov
 and installed afresh ([network-install.md](network-install.md)), so that no host is left with a
 daemon that nothing can update. The pull request of stage 9 (A24) shows both queries' output.
 
+**If stage 9 shipped before both counts were `0`** (it did: packages-native.md section 10.6), the
+coordinator still makes the move's pick: a host that runs a service from archives, whose daemon
+lists `hostkeeper-archive` and announces `apt` (a daemon of A19 to A24), is ordered the release's
+`apt` entry; `hostkeeper` moves by its self-update. A Mac of such a daemon announces no
+`macos-pkg` and is set up again from the current `.pkg`. Both queries printing `0` is the exit
+condition for deleting that pick from the coordinator, in a pull request of its own.
+
 **The work.** Every release is set with native entries alone (A24): per Linux platform the
 `.deb`'s `apt` entry, and for macOS the signed `.pkg`'s `macos-pkg` entry alone, which a Mac whose
 daemon announces `macos-pkg` takes (a Mac that does not is ordered nothing: `installer_dropped` or

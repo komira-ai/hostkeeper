@@ -273,13 +273,15 @@ only in the device jobs, against a signed fixture repository and signed fixture 
   owner in the `.deb` are stripped and changed in `tree/`). A `macos-pkg` order with an attestation is `order_invalid`,
   and one without is fetched and installed with no `gh` run (the command port's record is empty).
 - **The coordinator (A18; `crates/hostkeeper-coordinator/tests/target_move.rs`, `crates/hostkeeper-release/tests/manifest/native.rs`).**
-  The pick over a fleet of every kind of host: a host running the service from archives that lists `apt` is picked the
-  `apt` entry wherever it stands in the list; one that lists no native installer of the list, and a daemon before
-  `target-v1`, are picked the archive entry; a host running `apt` is never picked the archive entry; a list with no
-  native entry its daemon lists leaves an archive host on the archive entry. A rollback of a host whose installer is
-  native to a release with no native entry carries the archive entry, and one to a release with a native entry
-  carries that. `hostkeeper`'s list: one native entry accepted, a native entry and one archive entry after it
-  accepted, the archive entry first, two archive entries and two native entries each `target_invalid`. A `macos-pkg`
+  The pick over a fleet of every kind of host: a host running the service from archives whose daemon lists
+  `hostkeeper-archive` and `apt` is picked the `apt` entry wherever it stands in the list, and the first native entry
+  of the list's order when it lists two; one whose daemon no longer lists `hostkeeper-archive` (A25 and later), one
+  that lists no native installer of the list, and a daemon before `target-v1` are picked nothing; a host running `apt`
+  is never picked the archive entry, nor another native installer's; `hostkeeper` itself is picked its `.deb`, and
+  `tests/move_v0_1_221.rs` speaks the heartbeat and reads the order with v0.1.221's `.proto` files. A rollback of a
+  host whose installer is native to a release with no native entry is picked nothing (`installer_dropped`), and one to
+  a release with a native entry carries that. `hostkeeper`'s list: its native entry alone accepted, any archive entry
+  beside it `target_invalid`. A `macos-pkg`
   entry with an attestation, and a native entry whose hook command is not an absolute path, are `target_invalid`; a native entry with an
   absolute hook command is accepted, and `boot` with an empty command is `target_invalid` for every installer. `Hosts.List` gives each host's services with their installer, for a host that
   heartbeats and for one that has not since the coordinator's start; `additions_hosts.rs` is the B8 test of the new
