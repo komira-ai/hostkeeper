@@ -309,47 +309,6 @@ fn the_removed_release_verbs_are_usage_errors_with_status_2() {
 }
 
 #[test]
-fn coordinator_update_without_its_download_directory_fails_with_status_1_and_a_bad_url_status_2() {
-    // Catches: a missing download directory made or run against (the request is refused before
-    // docker or GitHub is asked anything), or a URL that is not https read as a failure, not a
-    // usage error.
-    let d = dir("coordinator-update");
-    let url = ["--coordinator-url", "https://coordinator.example.com:8444"];
-    let o = run(
-        &d,
-        &[
-            "coordinator-update",
-            "--download-dir",
-            "missing",
-            url[0],
-            url[1],
-            "--ca-file",
-            "ca.pem",
-        ],
-    );
-    assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
-    assert_eq!(
-        stderr(&o),
-        "xtask: --download-dir missing: not a directory\n"
-    );
-    assert!(!d.join("missing").exists());
-    let o = run(
-        &d,
-        &[
-            "coordinator-update",
-            "--download-dir",
-            ".",
-            "--coordinator-url",
-            "http://coordinator.example.com:8444",
-            "--ca-file",
-            "ca.pem",
-        ],
-    );
-    assert_eq!(o.status.code(), Some(2), "{}", stderr(&o));
-    assert_eq!(stdout(&o), "");
-}
-
-#[test]
 fn advisories_reaches_cargo_deny_first_and_fails_with_status_1_when_it_cannot_start() {
     // Catches: `advisories` not dispatched to the verb, a GitHub call made before the check
     // ran, a cargo that cannot start reported as "no advisories" (status 0, which would close

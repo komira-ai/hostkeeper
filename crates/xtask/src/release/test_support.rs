@@ -15,6 +15,12 @@ pub fn cli() -> clap::Command {
     <crate::Cli as clap::CommandFactory>::command()
 }
 
+/// The command line of `hostkeeper-coordinator-update`, as the binary parses it: the committed
+/// unit's command is held to it.
+pub fn coordinator_update_cli() -> clap::Command {
+    <crate::UpdateCli as clap::CommandFactory>::command()
+}
+
 /// The file names `release nfpm-stage` writes into its `--out`: `gh`, the trusted root, then
 /// the daemon and the boot server.
 pub const NFPM_STAGED: [&str; 4] = [

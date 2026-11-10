@@ -1,4 +1,4 @@
-//! What `coordinator-update` asks of Docker and of the coordinator, and the adapters that ask it
+//! What `hostkeeper-coordinator-update` asks of Docker and of the coordinator, and the adapters that ask it
 //! through `curl`: the Docker Engine API over its unix socket, and the coordinator's
 //! `GET /v1/version` over HTTPS. Each runs `curl` through an [`Exec`], so a test checks the exact
 //! command line against a fake one and nothing reaches Docker or the network.
@@ -18,7 +18,7 @@ const API: &str = "v1.43";
 /// The file in the download directory a request body is written to (mode 0600) and removed from.
 const BODY: &str = "engine-request.json";
 
-/// What the verb asks of Docker. Every method answers what it did or the error of the call; a
+/// What the program asks of Docker. Every method answers what it did or the error of the call; a
 /// container or image that is not there is `None`, not an error.
 pub(crate) trait Engine {
     /// The inspect JSON of the container `name_or_id`.
