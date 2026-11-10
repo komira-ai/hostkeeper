@@ -1,15 +1,15 @@
 # Updating the coordinator's container by itself
 
 The machine that runs the coordinator's container installs every published release of hostkeeper
-on its own. A systemd timer on that machine runs `xtask coordinator-update` every five minutes; the
-verb downloads the release's image, checks it as [verify-a-release.md](verify-a-release.md) says,
+on its own. A systemd timer on that machine runs `hostkeeper-coordinator-update` every five minutes;
+the program, a release asset of its own, downloads the release's image, checks it as [verify-a-release.md](verify-a-release.md) says,
 loads it, and replaces the container, keeping the old one until the new one is ready. A release
 that sets the hosts waits until the coordinator answers `GET /v1/version` with that release's
 version, so the hosts are set only by a coordinator that knows the release's requests.
 
 | File | What it is |
 |---|---|
-| `coordinator/hostkeeper-coordinator-update.service` | One run of the verb, as a oneshot, by a dedicated user. |
+| `coordinator/hostkeeper-coordinator-update.service` | One run of the program, as a oneshot, by a dedicated user. |
 | `coordinator/hostkeeper-coordinator-update.timer` | Two minutes after boot, then five minutes after each run ends. |
 
 ## What a run does
@@ -17,7 +17,7 @@ version, so the hosts are set only by a coordinator that knows the release's req
 Each step is one line of the report (the journal); a refusal fails the unit with its reason and
 changes nothing.
 
-1. The target version: `--version`, else the newest published (not draft) release `vX.Y.Z` of
+1. The target version: `--target-version`, else the newest published (not draft) release `vX.Y.Z` of
    `komira-ai/hostkeeper`.
 2. The container (`--container`, default `hostkeeper-coordinator`) must exist and run. A container
    named `<name>-next` must not exist.
@@ -25,7 +25,7 @@ changes nothing.
    have that route (it answers 404), the version in its image's `hostkeeper-coordinator:<version>`
    tag. A running version at least the target ends the run: "up to date", nothing changed. A tag
    that names no version is an unknown version, and the update goes on. A `/v1/version` that
-   gives no answer the verb can read (a wrong `--ca-file`, the listener down) refuses the run with
+   gives no answer the program can read (a wrong `--ca-file`, the listener down) refuses the run with
    nothing changed: the same request judges the new container, so going on would stop a
    coordinator that may be up to date and then roll it back.
 4. A file `failed-v<target>` in the download directory refuses the version (see "A failed
@@ -62,8 +62,30 @@ one it just installed.
 
 On the machine that runs the coordinator's container:
 
-1. Build `xtask` of a hostkeeper checkout (`cargo build --release -p xtask`) and install it as
-   `/usr/local/libexec/hostkeeper/xtask`. `gh` and `curl` must be on the `PATH`.
+1. Install the program from a release, never from a build on this machine. `gh` (2.102 or newer)
+   and `curl` must be on the `PATH`. `<V>` is the release, `X.Y.Z`; `<P>` is `linux-x86_64` or
+   `linux-arm64`, the machine's platform; `<commit>` is the full commit you pin the release to
+   (`$PIN` in [verify-a-release.md](verify-a-release.md)). `gh` needs the token of step 4 for
+   these commands (`export GH_TOKEN=<token>` in this shell). In an empty directory:
+
+   ```sh
+   gh release download v<V> --repo komira-ai/hostkeeper \
+     --pattern hostkeeper-coordinator-update-<V>-<P>.tar.gz --pattern SHA256SUMS
+   grep ' hostkeeper-coordinator-update-<V>-<P>.tar.gz$' SHA256SUMS | sha256sum --check
+   gh attestation verify hostkeeper-coordinator-update-<V>-<P>.tar.gz \
+     --repo komira-ai/hostkeeper \
+     --signer-workflow komira-ai/hostkeeper/.github/workflows/artifacts.yml \
+     --source-ref refs/heads/main --source-digest <commit> --deny-self-hosted-runners
+   tar -xzf hostkeeper-coordinator-update-<V>-<P>.tar.gz hostkeeper-coordinator-update
+   install -d -o root -g root -m 0755 /usr/local/libexec/hostkeeper
+   install -o root -g root -m 0755 hostkeeper-coordinator-update /usr/local/libexec/hostkeeper/
+   /usr/local/libexec/hostkeeper/hostkeeper-coordinator-update --version
+   ```
+
+   The attestation is checked as the program checks the image: made by `komira-ai/hostkeeper`'s
+   `artifacts.yml` on `refs/heads/main`, on a GitHub-hosted runner, for the release's commit. The
+   last line must print `hostkeeper-coordinator-update <V>+<first 12 hex digits of the commit>`.
+   Stop at the first command that fails.
 2. Create the user and join the group `docker`:
 
    ```sh
@@ -75,7 +97,7 @@ On the machine that runs the coordinator's container:
    `/etc/hostkeeper/coordinator-ca.pem` (mode 0644, owned by root).
 4. Write `/etc/hostkeeper/coordinator-update.env` (mode 0600, owned by root) with one line,
    `GH_TOKEN=<token>`: a GitHub token that reads public repositories and nothing else. It is `gh`'s
-   credential; the verb reads no environment variable.
+   credential; the program reads no environment variable.
 5. Copy the two files of `coordinator/` to `/etc/systemd/system/`, set `--coordinator-url` in the
    service to the coordinator's private listener, and `--container` if the container has another
    name.
@@ -94,12 +116,28 @@ Watch: `systemctl list-timers hostkeeper-coordinator-update.timer`, then
 Turn off: `systemctl disable --now hostkeeper-coordinator-update.timer`. Nothing else changes; the
 container keeps running the version it has.
 
+A machine set up before the program was a release asset (it ran `xtask coordinator-update`, built
+on that machine): do step 1, copy `coordinator/hostkeeper-coordinator-update.service` again (its
+`ExecStart` now starts `/usr/local/libexec/hostkeeper/hostkeeper-coordinator-update`, whose flag
+for a target release is `--target-version`), set `--coordinator-url` as in step 5, run
+`systemctl daemon-reload`, and remove `/usr/local/libexec/hostkeeper/xtask` unless the database
+backup timer of [coordinator/README.md](coordinator/README.md) still runs it.
+
+The program does not update itself: it keeps the version installed in step 1 while it rolls the
+container forward. To take a newer one, run step 1 again with that release; the timer's next run
+uses it.
+
+A release whose job `coordinator` fails with `no coordinator updater reported this release (is
+the timer installed?)` waited 30 minutes and the coordinator never answered that it runs the
+release: the timer is not installed or not enabled, or its runs fail (`systemctl status` and the
+journal of the service say why), or the version is marked failed (see "A failed version").
+
 ## The docker group
 
 Membership of `docker` is root on the machine: whoever can talk to the Docker socket can start a
 container with the host's root mounted. So the unit's user is a dedicated one that owns nothing
 else and logs in nowhere, the sandbox of the unit (`ProtectSystem=strict`, one writable directory,
-`NoNewPrivileges`) limits what the verb itself can touch, and the verb only ever loads an image that
+`NoNewPrivileges`) limits what the program itself can touch, and the program only ever loads an image that
 the release signer, which every daemon of the farm trusts, attested for the release's commit and
 whose SHA-256 is the one in `SHA256SUMS`. A compromised GitHub token of the kind in the env file
 can read public data only.
@@ -108,7 +146,7 @@ can read public data only.
 
 | Refusal | What to do |
 |---|---|
-| `no container <name> on this machine: deploy the coordinator first` | The verb rolls a running coordinator forward; it never deploys one. Deploy it as [coordinator/README.md](coordinator/README.md) says, or fix `--container`. |
+| `no container <name> on this machine: deploy the coordinator first` | The program rolls a running coordinator forward; it never deploys one. Deploy it as [coordinator/README.md](coordinator/README.md) says, or fix `--container`. |
 | `container <name> is not running` | It never starts a stopped container. Start it (`docker start <name>`) or find out why it stopped. |
 | `container <name>-next exists` | An earlier run was cut short, between creating the new container and the end of the swap. Read its logs (`docker logs <name>-next`) and `docker ps -a` to see which container serves; remove `<name>-next` (`docker rm -f <name>-next`) only when `<name>` runs. If `<name>` is gone and `<name>-next` ran the new version, `docker rename <name>-next <name>`. |
 | `the image of <name> is not in docker` | The old container's image was deleted, so what the image supplied cannot be told from what the container sets. Deploy by hand. |
@@ -122,7 +160,7 @@ can read public data only.
 
 ## A failed version
 
-When the new container does not become ready within the checks, the verb stops and deletes it,
+When the new container does not become ready within the checks, the program stops and deletes it,
 starts the old container again, writes `failed-v<V>` in the download directory with the reason,
 and fails. The failure has the new container's last 50 log lines. Later runs refuse `v<V>` and
 change nothing; a newer release is tried normally. To try `v<V>` again (after the cause is fixed,
@@ -136,7 +174,7 @@ systemctl start hostkeeper-coordinator-update.service
 ## A compose deployment
 
 A coordinator deployed with the compose file of [coordinator/README.md](coordinator/README.md) is
-a container like any other, and the verb replaces it. The new container keeps the compose labels
+a container like any other, and the program replaces it. The new container keeps the compose labels
 of the old one, so `docker compose` still sees it as the service. The compose file's `image:` line
 still names the old version: update it (version and digest) before the next `docker compose up`,
 or compose will recreate the container from the old image.
