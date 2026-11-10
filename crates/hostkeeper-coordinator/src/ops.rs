@@ -96,6 +96,7 @@ use crate::audit_file::{
     AuditLine, DEFAULT_ROTATION, Logged, Query, Rotation, UnixClock, wall_clock,
 };
 use crate::desired::{Staged, StoreError};
+use crate::facts::Generations;
 use crate::force::ForceRecord;
 use crate::holds::HoldMark;
 use crate::inventory::{InventoryRecord, RecordWindow};
@@ -493,6 +494,8 @@ pub struct OpsStore {
     /// `current` is only locked to read or to swap, never across the backend's commit.
     writing: Mutex<()>,
     backend: Shared,
+    /// The generation of each host's facts ([`crate::facts`]).
+    generations: Generations,
     /// Seconds since the epoch, for the lines of the audit.
     unix: UnixClock,
     /// How long the approval window of a new inventory record is, and the longest it may be.
@@ -587,6 +590,7 @@ impl OpsStore {
         Self {
             current: Mutex::new(state),
             writing: Mutex::new(()),
+            generations: Generations::from(backend.last_seq()),
             backend,
             unix: wall_clock(),
             record_window: RecordWindow::default(),
@@ -599,6 +603,11 @@ impl OpsStore {
             #[cfg(test)]
             interleave: Mutex::new(None),
         }
+    }
+
+    /// The generation of the facts of the host `node_id` ([`crate::facts`]).
+    pub(crate) fn facts_generation(&self, node_id: &str) -> u64 {
+        self.generations.of(node_id)
     }
 
     /// The store with `marker` as the file it lists its pending changes in.
@@ -793,6 +802,7 @@ impl OpsStore {
         }
         .map_err(OpsError::from)?;
         *self.lock() = next;
+        self.generations.raise(&entries);
         if let Some(staged) = staged {
             staged.finish();
         }

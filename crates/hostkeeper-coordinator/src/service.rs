@@ -180,18 +180,17 @@ pub struct Set {
 
 /// The features this coordinator advertises to an agent that announces `agent_features`.
 ///
-/// Each name is added in the change that implements what it names, so a name is never
-/// advertised for behaviour that is not there. `deferred-v1`: a `deferred` report ends the
+/// A name is added in the change that implements it. `deferred-v1`: a `deferred` report ends the
 /// order, holds no slot and backs the host off ([`crate::defer`]). `halt-v1`: the clear
 /// generations of [`crate::halt`]. `heartbeat-v2`: selector membership ([`crate::membership`]).
 /// `forced-v1`: the `force` order of a standing force ([`crate::force`]), which a daemon runs
 /// only while this is advertised. `order-v1`: the order terms of [`crate::order_terms`], and the
 /// agent itself, never the legacy service, as the heartbeat's top level. `verdict-acks-v1`: the
 /// acks of the verdicts stored ([`crate::verdict_file`]). `grpc-v1`: the agent API is served on
-/// the heartbeat listener ([`crate::grpc`]), so an agent may send its next heartbeat there.
-/// `target-v1`: the installers of a heartbeat over gRPC are read, and the entry of a release
-/// picked for the host goes in its orders over gRPC ([`crate::picks`]). `repositories-v1`: the
-/// report of a gRPC heartbeat is read and the host is sent its set ([`crate::repository_push`]).
+/// the heartbeat listener ([`crate::grpc`]); an agent may send its next heartbeat there.
+/// `target-v1`: the installers of a heartbeat over gRPC are read, and the entry of a release picked
+/// for the host goes in its orders over gRPC ([`crate::picks`]). `repositories-v1`: the report of
+/// a gRPC heartbeat is read and the host is sent its set ([`crate::repository_push`]). `facts-v1`: [`crate::facts`].
 pub const FEATURES: &[&str] = &[
     "deferred-v1",
     halt::FEATURE,
@@ -202,6 +201,7 @@ pub const FEATURES: &[&str] = &[
     crate::grpc::GRPC_FEATURE,
     crate::picks::TARGET_FEATURE,
     crate::repository_push::FEATURE,
+    crate::facts::FEATURE,
 ];
 
 /// The fields of the answer to a heartbeat that go only to an agent that announced a feature,
@@ -254,7 +254,7 @@ pub struct Coordinator {
     pub(crate) clock: Clock,
     services_dropped: AtomicU64,
     extras: Mutex<ExtrasDropped>,
-    features: Vec<String>,
+    pub(crate) features: Vec<String>,
     /// Enrollment: the store, the CA and the poll nonces; `None` without `--enrollment-dir`.
     enrollment: Option<Arc<Enrollment>>,
     /// The MDM policy gate; `None` without `--mdm-api-url`.
