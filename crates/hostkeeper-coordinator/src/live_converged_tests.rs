@@ -471,3 +471,88 @@ fn status_names_why_a_service_is_live_and_on_which_host() {
         );
     }
 }
+
+/// Behaviour: the coordinator orders `hello` installed on `linux-8`, which has no word of it, and
+/// the host's first beat of `hello` already runs 0.1.92, healthy: that beat ends the order and is
+/// the host's move, so `hello` is live, baking on `linux-8`, until it has beaten healthy twice.
+/// Catches an install that completes between two beats read as a host found at the version,
+/// whose bake then holds nothing.
+#[test]
+fn an_install_the_coordinator_ordered_bakes_even_when_its_first_beat_runs_the_version() {
+    let mut f = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
+    keep_release(&mut f, "hello");
+    keep_release(&mut f, "hostkeeper");
+    hear(
+        &mut f,
+        ("linux-8", "daemon", Platform::LinuxX86_64),
+        &["hostkeeper"],
+        &["apt"],
+        100,
+    );
+    f.record_in(
+        "hostkeeper",
+        id("linux-8"),
+        role("daemon"),
+        beat("0.1.244"),
+        secs(100),
+    );
+    f.order("hello", id("linux-8"), version("0.1.92"), secs(100));
+    linux(&mut f, "linux-8", beat("0.1.92"), 115);
+    assert!(
+        !f.is_ordered("hello", &id("linux-8"), secs(115)),
+        "the order ended"
+    );
+    assert_eq!(why(&f, "hello", 115), baking("linux-8"));
+    linux(&mut f, "linux-8", beat("0.1.92"), 130);
+    assert_eq!(why(&f, "hello", 130), None, "baked");
+}
+
+/// Behaviour: `linux-2` was seen updating `hello` to 0.1.92 and runs it, one healthy beat of two,
+/// so `hello` is live; its next heartbeat no longer lists `hello` (the fleet keeps the old word
+/// of it), and `hello` is no longer live: a word of a service the host's last heartbeat does not
+/// list is no word of it, and a host of the plan with no word of the service bakes nothing.
+/// Catches a bake read from a record of a service the host dropped.
+#[test]
+fn a_host_whose_last_heartbeat_no_longer_lists_the_service_bakes_nothing() {
+    let mut f = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
+    keep_release(&mut f, "hello");
+    keep_release(&mut f, "hostkeeper");
+    linux(&mut f, "linux-2", updating(beat("0.1.91"), "0.1.92"), 100);
+    linux(&mut f, "linux-2", beat("0.1.92"), 115);
+    assert_eq!(why(&f, "hello", 115), baking("linux-2"));
+    hear(
+        &mut f,
+        ("linux-2", "daemon", Platform::LinuxX86_64),
+        &["hostkeeper"],
+        &["apt"],
+        130,
+    );
+    f.record_in(
+        "hostkeeper",
+        id("linux-2"),
+        role("daemon"),
+        beat("0.1.244"),
+        secs(130),
+    );
+    assert!(
+        f.get_in("hello", &id("linux-2")).is_some(),
+        "the old word is kept"
+    );
+    assert_eq!(why(&f, "hello", 130), None);
+}
+
+/// Behaviour: a host found at 0.1.92 (first heard there) is found no longer once the fleet forgets
+/// it: when it reports `hello` gone after an uninstall (`drop_in`), and when it is released as
+/// final (`release_if_final`). Catches a record of a forgotten host kept for ever.
+#[test]
+fn a_forgotten_host_is_found_no_longer() {
+    let mut f = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
+    for host in ["linux-1", "linux-2"] {
+        linux(&mut f, host, beat("0.1.92"), 100);
+        assert!(f.found.at("hello", &id(host), &version("0.1.92")), "{host}");
+    }
+    f.drop_in("hello", &id("linux-1"));
+    assert!(!f.found.at("hello", &id("linux-1"), &version("0.1.92")));
+    assert!(f.release_if_final(&id("linux-2"), secs(100)));
+    assert!(!f.found.at("hello", &id("linux-2"), &version("0.1.92")));
+}

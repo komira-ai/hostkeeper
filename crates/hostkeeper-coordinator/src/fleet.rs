@@ -185,7 +185,7 @@ pub struct Fleet {
     /// Healthy beats in a row at one version, per service and host ([`Bake`]).
     bake: BTreeMap<(String, HostId), Bake>,
     /// The hosts first heard settled at a version and not seen to move since ([`Found`]).
-    found: Found,
+    pub(crate) found: Found,
     defers: Defers,
     /// The release failures heard, each counted once ([`crate::verdicts`]).
     verdicts: Verdicts,
@@ -548,6 +548,7 @@ impl Fleet {
         // `failed_here`, the plan's failed host, a force's verdict), and it only moves the try.
         let mut beat = beat;
         let refusal = beat.last_update.take_if(|r| r.is_try_refusal());
+        let had_order = self.orders.contains_key(&key);
         let mut deferred_order = false;
         if let Some(order) = self.orders.get(&key) {
             deferred_order = beat
@@ -591,7 +592,8 @@ impl Fleet {
             }
         }
         let baking = (key.1.clone(), key.0.clone());
-        let first = self.occupant(&key.1, &key.0).is_none();
+        // A beat that ends an order is the host's move, even its first: it is never found.
+        let first = self.occupant(&key.1, &key.0).is_none() && !had_order;
         self.found.observe(baking.clone(), &beat, first);
         match Bake::after(self.bake.get(&baking), &beat, now) {
             Some(bake) => {
@@ -788,13 +790,6 @@ impl Fleet {
         host.is_live(now)
             && host.beat.version == *version
             && self.bake_beats(service, id, version) < need
-    }
-
-    /// Whether the host `id` was first heard settled at `version` of `service` and has not
-    /// moved since ([`Found`]): a bake of it there proves no update.
-    #[must_use]
-    pub(crate) fn found_at(&self, service: &str, id: &HostId, version: &Version) -> bool {
-        self.found.at(service, id, version)
     }
 
     /// Whether the host `id` counts as up for `service`: [`Host::is_up`] and no order

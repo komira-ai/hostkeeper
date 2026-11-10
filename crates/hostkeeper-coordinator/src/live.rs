@@ -125,17 +125,18 @@ pub(crate) fn why_live(
 }
 
 /// Whether the host `id`, a host of the plan of `def` (eligible: live, assigned, neither excluded
-/// nor held, picked a package of the version), bakes the desired version `want` for [`why_live`]:
+/// nor held, picked a package of the version) with a word of the service its last heartbeat still
+/// lists, bakes the desired version `want` for [`why_live`]:
 /// it runs `want`'s version and has not yet beaten healthy as often as the bake needs (an
 /// unhealthy beat starts the count again), its update to that version did not fail, and the
 /// coordinator saw it move there. A host that failed its update or install to the version and
 /// reports it all the same (unhealthy, or never started) bakes nothing: it waits for an operator.
 /// One the coordinator first heard, after it started, already settled at the version
-/// ([`Fleet::found_at`]) proves no update by its bake: a restart does not make a converged
+/// ([`crate::bake::Found`]) proves no update by its bake: a restart does not make a converged
 /// service live.
 fn is_baking(def: &ServiceDef, want: &Desired, fleet: &Fleet, id: &HostId, now: Duration) -> bool {
     let service = def.name.as_str();
-    let Some(host) = fleet.get_in(service, id) else {
+    let Some(host) = crate::decide::heard(fleet, service, id) else {
         return false;
     };
     let failed = host
@@ -144,7 +145,7 @@ fn is_baking(def: &ServiceDef, want: &Desired, fleet: &Fleet, id: &HostId, now: 
         .as_ref()
         .is_some_and(|r| r.outcome == Outcome::Failed && r.target == want.version);
     !failed
-        && !fleet.found_at(service, id, &want.version)
+        && !fleet.found.at(service, id, &want.version)
         && fleet.is_baking(service, id, host, &want.version, def.bake_beats, now)
 }
 

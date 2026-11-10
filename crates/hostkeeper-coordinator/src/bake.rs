@@ -3,8 +3,8 @@
 //! A host that has just updated bakes until it has beaten healthy
 //! [`crate::services::ServiceDef::bake_beats`] times (`docs/design/host-updates.md`, section
 //! 5.3). The stage of the service's update plan the host is in is not done until every host of it
-//! has baked, so the next stage does not start before, and the service's rollout stays live for
-//! the others ([`crate::stages`]); a baking host holds no update slot of the role's
+//! has baked, so the next stage does not start before, and, for a host of the plan the
+//! coordinator saw update, the service's rollout stays live for the others ([`crate::live`]); a baking host holds no update slot of the role's
 //! `max_updating`. The count is kept in memory, per service and host, beside the heartbeats
 //! ([`crate::fleet::Fleet`]): a restart of the coordinator forgets it, and a host at the
 //! desired version bakes again. So does a host that was silent for [`DOWN_AFTER`] or more
