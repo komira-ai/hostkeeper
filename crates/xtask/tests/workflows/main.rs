@@ -59,6 +59,7 @@ mod release_assets;
 mod release_assets_tests;
 mod release_files;
 mod release_native_tests;
+mod release_pxe_tests;
 mod release_ref;
 mod release_ref_tests;
 mod release_tests;

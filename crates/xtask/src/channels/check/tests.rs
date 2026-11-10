@@ -225,7 +225,7 @@ fn a_clean_install_of_the_daemon_from_testing_adds_the_repository_and_installs_s
     assert_eq!(
         said,
         [
-            "check-apt: hostkeeper 1.2.3 installed from the suite testing on amd64; it says \"hostkeeper 1.2.3+0123456789ab\"; its 7 files are there; the service is enabled and not running"
+            "check-apt: hostkeeper 1.2.3 installed from the suite testing on amd64; it says \"hostkeeper 1.2.3+0123456789ab\"; its 6 files are there; the service is enabled and not running"
         ]
     );
 }
@@ -486,7 +486,7 @@ fn a_package_is_one_of_the_products() {
     assert_eq!(
         package_flag("other-product").unwrap_err(),
         Error::Usage(
-            "--package \"other-product\" is none of [\"hostkeeper\", \"hostkeeper-coordinator\", \"hello\", \"mdm\"]"
+            "--package \"other-product\" is none of [\"hostkeeper\", \"hostkeeper-coordinator\", \"hello\", \"mdm\", \"pxe\"]"
                 .to_owned()
         )
     );

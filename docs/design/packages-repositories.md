@@ -16,7 +16,7 @@ announces `apt` as section 4.1 says, an order of an `apt` entry is staged into a
 `target.json` (section 4.2; `target.rs`), activated before `cutover`, rolled back from the kept previous version,
 purged at uninstall and read for drift at each heartbeat, each failure the order's verdict with the class and reason
 of section 4.5; a package without a hook runs the built-in steps (`builtin.rs`). Build item A17 is
-**Built**: `hostkeeper-pxe serve --repositories` checked by the loader's `load_as` (`crates/hostkeeper-pxe/src/serve.rs`,
+**Built**: `pxe serve --repositories` checked by the loader's `load_as` (`crates/hostkeeper-pxe/src/serve.rs`,
 `crates/hostkeeper-pxe-seed/src/seed.rs`), the enrollment runbook's step, the MDM profile's two domains and their
 re-send (`crates/hostkeeper-mdm-gate/src/profile.rs`, `enroll.rs`), the daemon's rendering of them
 (`crates/hostkeeper-daemon/src/mac_config.rs`), and the rotation runbook
@@ -39,7 +39,7 @@ the Alpine daemon, and hostkeeper itself is installed and updated from its `.deb
 whose hand-over needs the old files), sections 10.1 and 10.6 say what holds instead. Four more things below change. A
 `macos-pkg` entry carries no attestation, and the host checks none: wherever this file names the attestation of a
 `.pkg` (sections 1, 3.3, 4.7, 9), the pin and the signature are the whole check, and the publish job checks the
-attestation before it signs (10.3); `[trusted_signers]` then guards no install, only `hostkeeper-pxe`'s check. Any package may have maintainer scripts (10.2): on `apt` a `policy-rc.d` that exits 101
+attestation before it signs (10.3); `[trusted_signers]` then guards no install, only `pxe`'s check. Any package may have maintainer scripts (10.2): on `apt` a `policy-rc.d` that exits 101
 is written around the dpkg runs, so a script that starts through `invoke-rc.d` or `deb-systemd-invoke` starts nothing before the hand-over. A package's hook is the manifest's
 `hook.command`, an absolute path of a file of the package and leading arguments (10.2), so the caller of `SetDesired`
 chooses the program among the package's files and its arguments (section 3.3). And hostkeeper's own release is a native entry per platform (10.4),
@@ -301,7 +301,7 @@ its configuration stays as it is. A Mac never announces `repositories-v1`: its `
 of its `stores.toml`, and the MDM kit that places `hostkeeper.toml` (hostkeeper-mdm.md) places the channel stores
 and the signers of `macos-pkg.toml` (section 4.7); nothing of a Mac reads the registry. That is A17's, as before.
 
-**Host setup.** On a host installed by network (network-install.md), `hostkeeper-pxe` takes a directory of entries and
+**Host setup.** On a host installed by network (network-install.md), `pxe` takes a directory of entries and
 keyrings with `--repositories <dir>`, checks it with the daemon's own loader before it writes a single seed, and writes
 it to `/etc/hostkeeper/repositories/`; on a host set up by hand, the enrollment runbook (docs/operations/enrollment.md)
 has the step that copies them. Both are now for a host that must install from the repository before it reaches the
@@ -838,7 +838,7 @@ its build items (10.8) re-scope A6, A7 and A9 again, add A18 to A28, and withdra
 | A14 | Withdrawn, with `arch` |
 | A16 (new) | `Target.repository` and `Target.package_version` in `release.proto`; `hostkeeper-release`'s checks of section 2.2 and its installer set (`apt` beside `hostkeeper-archive`, `tarball`, `macos-pkg`, `oci-image`; `deb`, `rpm`, `arch`, `apk` dropped; a later backend adds its name); the coordinator's audit of a repository entry; after A2, before A7 |
 | A29 (new) | The coordinator's registry of repositories (section 3.2): `Repositories` List, Get, Put and Remove with their audit, the store's file and tables, each service's `repository`, the `repository_unknown` refusal of `SetDesired`, the push in the heartbeat reply, the daemon's check, adoption, staged switch and reload, and the host's report and its view in `Hosts`; after A7 and A17 |
-| A17 (new) | Host setup places repository entries and keyrings: `hostkeeper-pxe --repositories <dir>` checked by the daemon's loader, the enrollment runbook's step, and a rotation runbook (section 3.2); on a Mac, the MDM kit's profile carries the channel stores and the signers as the domains `dev.hostkeeper.stores` and `dev.hostkeeper.macos-pkg`, which the daemon's start renders to `stores.toml` and `macos-pkg.toml` with its own loader (section 4.7), and the signer rotation runbook; after A7 and A9 |
+| A17 (new) | Host setup places repository entries and keyrings: `pxe serve --repositories <dir>` checked by the daemon's loader, the enrollment runbook's step, and a rotation runbook (section 3.2); on a Mac, the MDM kit's profile carries the channel stores and the signers as the domains `dev.hostkeeper.stores` and `dev.hostkeeper.macos-pkg`, which the daemon's start renders to `stores.toml` and `macos-pkg.toml` with its own loader (section 4.7), and the signer rotation runbook; after A7 and A9 |
 
 A5 (CI's archive entries for hostkeeper and `hello`) and A15 (the static build) are unaffected. A service's release
 workflow sends repository entries once A16 and A7 are released, and `macos-pkg` entries once A9 is; that is the shared release machinery's change, not

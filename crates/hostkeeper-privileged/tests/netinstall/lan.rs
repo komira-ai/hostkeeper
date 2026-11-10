@@ -3,7 +3,7 @@
 //! the bridge by a veth pair with its own address (so each binds UDP 67 in its own namespace):
 //!
 //! - the router (its DHCP is [`super::router`]), at `.2`;
-//! - the boot server, `hostkeeper-pxe`, at `.3`;
+//! - the boot server, `pxe`, at `.3`;
 //! - the guest, by a tap device of the bridge's namespace, which QEMU opens there;
 //! - the test's own host namespace, at `.1`: the coordinator's private and LAN listeners and the
 //!   release channel are bound there, and the operator's calls and SSH dial the LAN from there.

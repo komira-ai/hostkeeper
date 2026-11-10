@@ -5,16 +5,17 @@ use serde_json::Value;
 
 use super::{Error, Mac, Mode};
 
-/// What `hostkeeper-pxe serve` writes before each line of its log on standard error.
-pub(crate) const PXE_PREFIX: &str = "hostkeeper-pxe serve: ";
+/// What `pxe serve` writes before each line of its log on standard error, and what its
+/// predecessor, `hostkeeper-pxe serve`, wrote: a log of a run of either is read.
+pub(crate) const PXE_PREFIXES: [&str; 2] = ["pxe serve: ", "hostkeeper-pxe serve: "];
 
 /// The six events of an install, each in unix seconds; `None` for one the files do not show.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Events {
-    /// `hostkeeper-pxe`'s first DHCPDISCOVER (proxy mode) or DHCPREQUEST (router mode) from the
+    /// `pxe`'s first DHCPDISCOVER (proxy mode) or DHCPREQUEST (router mode) from the
     /// MAC.
     pub(crate) power_on: Option<u64>,
-    /// `hostkeeper-pxe`'s seed fetch of the MAC as the record's host.
+    /// `pxe`'s seed fetch of the MAC as the record's host.
     pub(crate) install_started: Option<u64>,
     /// The coordinator's `first_seen_unix` of the request matched to the record.
     pub(crate) pending: Option<u64>,
@@ -43,10 +44,13 @@ fn digits(text: &str) -> Option<u64> {
     text.parse().ok()
 }
 
-/// A line of `serve`'s log as its unix seconds and its text, with or without [`PXE_PREFIX`];
-/// `None` for a line that is not one.
+/// A line of `serve`'s log as its unix seconds and its text, with either of [`PXE_PREFIXES`] or
+/// none; `None` for a line that is not one (a line of another program included).
 fn stamped(line: &str) -> Option<(u64, &str)> {
-    let line = line.strip_prefix(PXE_PREFIX).unwrap_or(line);
+    let line = PXE_PREFIXES
+        .iter()
+        .find_map(|prefix| line.strip_prefix(prefix))
+        .unwrap_or(line);
     let (secs, text) = line.split_once(' ')?;
     Some((digits(secs)?, text))
 }

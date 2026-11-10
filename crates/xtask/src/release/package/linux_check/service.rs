@@ -1,4 +1,4 @@
-//! `release check-linux-pkg --service <hello|mdm>`: a service's `.deb` (`release deb`), read back
+//! `release check-linux-pkg --service <hello|mdm|pxe>`: a service's `.deb` (`release deb`), read back
 //! against what this repository's own builder writes ([`crate::release::native`]). These are
 //! checks of xtask's build, not rules hostkeeper holds a package to: hostkeeper installs any
 //! package its order pins, and the manifest names the package's hook. The check holds:
@@ -27,8 +27,7 @@ pub(crate) const SERVICE_AND_STAGED: &str =
     "--service checks a service's .deb and --staged hostkeeper's packages: give one of them";
 
 /// Why hostkeeper's packages are not checked with `--service`.
-const HOSTKEEPER: &str =
-    "--service checks the .deb of hello or mdm; hostkeeper's packages are checked with --staged";
+const HOSTKEEPER: &str = "--service checks the .deb of hello, mdm or pxe; hostkeeper's packages are checked with --staged";
 
 /// Whether an entry is a regular file.
 fn is_file(file: &Installed) -> bool {

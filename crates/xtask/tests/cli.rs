@@ -679,8 +679,8 @@ fn netinstall_report_prints_the_report_with_status_0() {
             "",
             "| Event | Unix seconds | Recorded by |",
             "|---|---|---|",
-            "| power-on | 1000 | hostkeeper-pxe: the first DHCPREQUEST from the MAC |",
-            "| install started | not reached | hostkeeper-pxe: the seed fetch |",
+            "| power-on | 1000 | pxe: the first DHCPREQUEST from the MAC |",
+            "| install started | not reached | pxe: the seed fetch |",
         ],
         "{out}"
     );

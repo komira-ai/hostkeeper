@@ -6,12 +6,11 @@ proves a hook keeps it. Why it is shaped this way: [docs/design/hostkeeper-desig
 
 **The hook is any executable**: a binary or a script, in any language. The updater runs
 `<executable> <hook_args> <step> [args]`. The executable and `hook_args` are the `command` of the
-manifest's `[hook]` table: its first element is the executable, a path relative to the version
-directory, and the rest are `hook_args`. For a package the daemon stages from a repository the
-manifest is the one of the order's entry, and its hook is the package's program at the fixed path
-`tree/usr/lib/<package>/hostkeeper-hook`, with no `hook_args`. Our own services use
-`["update-hook"]` (`tierstore update-hook cutover`); it is `[]` for an executable that takes the
-step first. The harness's `HookCommand::new` takes the same convention as its default. The hook
+entry's manifest: its first element is the absolute path of a file the package installs
+(`/usr/lib/pxe/pxe`), and the rest are `hook_args`. The daemon runs that file's sealed copy in the
+version's extracted tree (`<version dir>/tree/usr/lib/pxe/pxe`), as docs/design/packages-native.md
+section 10.2 says; a service ships no wrapper. Our own services use `["update-hook"]` as the
+rest (`pxe update-hook cutover`); it is `[]` for an executable that takes the step first. The harness's `HookCommand::new` takes the same convention as its default. The hook
 runs as root, as a transient unit with `RuntimeMaxSec` (the step's `timeout_secs` from the
 manifest) and nothing else; it is safe to run because it came, byte for byte, from the package
 the host's package manager verified, not because anything confines it. This crate is our convention made

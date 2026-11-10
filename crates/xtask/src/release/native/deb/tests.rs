@@ -5,12 +5,13 @@ use hostkeeper_mdm_core::pins::{Pins, Tool};
 use sha2::{Digest, Sha256};
 
 use super::{
-    HELLO_ARCHIVES, HOSTKEEPER_REFUSED, MACOS_REFUSED, MDM_ARCHIVES, MDM_FAIL_READY, MDM_PLATFORM,
+    HOSTKEEPER_REFUSED, MACOS_REFUSED, MDM_ARCHIVES, MDM_PLATFORM, NO_ARCHIVES, NO_FAIL_READY,
     Request, control, deb_with,
 };
 use crate::release::Error;
 use crate::release::contract::{Platform, Service};
 use crate::release::fakes::scratch;
+use crate::release::package::elf::fixture::{AARCH64, Spec, X86_64};
 use crate::release::package::linux_check::check_service;
 
 const MTIME: u64 = 1_800_000_000;
@@ -45,7 +46,11 @@ fn pins_in(dir: &Path) -> Pins {
 }
 
 fn request(dir: &Path, service: Service, platform: Platform) -> Request {
-    std::fs::write(dir.join("program"), b"the program").expect("write the program");
+    let program = match platform {
+        Platform::LinuxArm64 => Spec::static_pie(AARCH64).build(),
+        _ => Spec::static_pie(X86_64).build(),
+    };
+    std::fs::write(dir.join("program"), program).expect("write the program");
     Request {
         service,
         platform,
@@ -123,6 +128,92 @@ fn the_failing_builds_deb_is_named_by_its_service_version_and_carries_the_tilde_
 }
 
 #[test]
+fn pxes_deb_is_built_for_both_linux_platforms_and_holds_the_program_and_the_unit() {
+    // Proves: pxe's deb is named pxe_<version>_<arch>.deb, passes the service check, installs the
+    // given program at /usr/lib/pxe/pxe and one unit that starts it, and carries the pxe
+    // description in its control.
+    // Catches: a file other than the program and the unit, a unit whose program is not packaged,
+    // an arch left unbuilt, or the hello description on pxe's package.
+    for (platform, arch) in [
+        (Platform::LinuxX86_64, "amd64"),
+        (Platform::LinuxArm64, "arm64"),
+    ] {
+        let d = scratch(&format!("native-deb-pxe-{arch}"));
+        let r = request(&d, Service::Pxe, platform);
+        let lines = build(&r, no_pins).expect("built");
+        let path = d.join(format!("out/pxe_0.1.5_{arch}.deb"));
+        let hex = crate::release::file_sha256(&path).expect("the deb");
+        assert_eq!(lines, [format!("pxe_0.1.5_{arch}.deb: sha256 {hex}")]);
+        let checked = check_service(&path, Service::Pxe).expect("passes");
+        assert!(
+            checked.iter().any(|l| l.ends_with(
+                "1 units in /usr/lib/systemd/system/, each starting a file of the package"
+            )),
+            "{checked:?}"
+        );
+        let bytes = std::fs::read(&path).expect("read");
+        let text = crate::channels::apt::deb::control_of(&bytes).expect("control");
+        assert!(
+            text.starts_with(&format!(
+                "Package: pxe\nVersion: 0.1.5\nArchitecture: {arch}\n"
+            )),
+            "{text}"
+        );
+        assert!(
+            text.contains("Description: pxe, the boot server of network install\n"),
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn pxes_deb_is_not_built_from_a_dynamic_or_foreign_program() {
+    // Proves: a pxe program linked to glibc, one for the other architecture, and bytes that are
+    // not an ELF file are each refused with the reason, and nothing is written.
+    // Catches: a pxe deb packing a binary that cannot run on a host without its libraries.
+    let d = scratch("native-deb-pxe-not-static");
+    for (platform, program, why) in [
+        (
+            Platform::LinuxX86_64,
+            Spec::glibc().build(),
+            "it asks for the interpreter /lib64/ld-linux-x86-64.so.2",
+        ),
+        (
+            Platform::LinuxX86_64,
+            Spec::static_pie(AARCH64).build(),
+            "ELF machine 0xb7, not 0x3e",
+        ),
+        (
+            Platform::LinuxArm64,
+            Spec::static_pie(X86_64).build(),
+            "ELF machine 0x3e, not 0xb7",
+        ),
+    ] {
+        let r = request(&d, Service::Pxe, platform);
+        std::fs::write(&r.binary, program).expect("write the program");
+        let arch = if platform == Platform::LinuxArm64 {
+            "arm64"
+        } else {
+            "amd64"
+        };
+        let want = format!(
+            "{} is not a static linux {arch} program: {why}",
+            r.binary.display()
+        );
+        assert_eq!(build(&r, no_pins), Err(Error::Failed(want)));
+    }
+    let r = request(&d, Service::Pxe, Platform::LinuxX86_64);
+    std::fs::write(&r.binary, b"the program").expect("write the program");
+    let e = build(&r, no_pins).expect_err("refused");
+    assert!(
+        e.to_string()
+            .contains("is not a static linux amd64 program"),
+        "{e}"
+    );
+    assert!(!d.join("out").exists());
+}
+
+#[test]
 fn the_control_names_the_package_version_architecture_and_size_and_no_dependency() {
     // Catches: a control file dpkg refuses (no Package, Version or Architecture), a size that is
     // not rounded up to KiB, or a dependency declared.
@@ -185,7 +276,7 @@ fn each_request_a_deb_does_not_take_is_refused_by_name_before_anything_is_read()
                 archives: Some(d.join("a")),
                 ..request(&d, Service::Hello, Platform::LinuxX86_64)
             },
-            HELLO_ARCHIVES,
+            NO_ARCHIVES,
         ),
         (
             Request {
@@ -193,7 +284,25 @@ fn each_request_a_deb_does_not_take_is_refused_by_name_before_anything_is_read()
                 archives: Some(d.join("a")),
                 ..request(&d, Service::Mdm, Platform::LinuxX86_64)
             },
-            MDM_FAIL_READY,
+            NO_FAIL_READY,
+        ),
+        (
+            Request {
+                archives: Some(d.join("a")),
+                ..request(&d, Service::Pxe, Platform::LinuxX86_64)
+            },
+            NO_ARCHIVES,
+        ),
+        (
+            Request {
+                fail_ready: true,
+                ..request(&d, Service::Pxe, Platform::LinuxArm64)
+            },
+            NO_FAIL_READY,
+        ),
+        (
+            request(&d, Service::Pxe, Platform::MacosArm64),
+            MACOS_REFUSED,
         ),
         (
             request(&d, Service::Mdm, Platform::LinuxX86_64),

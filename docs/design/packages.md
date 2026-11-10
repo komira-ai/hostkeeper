@@ -278,8 +278,10 @@ the tarball; with the tarball first, every new Linux host takes the tarball.
 - **The host runs the service with an installer the list has no entry for, or that its daemon no longer lists:** it
   is ordered nothing and shows `GATE_REASON_INSTALLER_DROPPED`. It is listed apart, not failed, but `Converge` names
   it, because the release meant it to update and a host may change a service's installer only by uninstalling it
-  (section 5.1). This holds for an old daemon too: one that runs the service from archives, given a list with no
-  archive entry, is `installer_dropped`, and one that does not run it is `no_build_for_host`.
+  (section 5.1), or by the move off archives (packages-native.md section 10.6): a host that runs it from
+  `hostkeeper-archive`, whose daemon still lists `hostkeeper-archive` and the installer of a native entry of the list,
+  is picked the first such entry; one that lists no native installer of the list is `installer_dropped`. A daemon
+  before `target-v1` is `no_build_for_host`, whether or not it runs the service.
 
 The daemon announces its installers once per start, so the pick is the same for a host at every beat until the daemon
 restarts. A daemon given an entry of an installer it does not list (its list changed at a restart the coordinator has
@@ -613,7 +615,7 @@ order is `Failed`, `environment`, `dependency_missing`: nothing is installed, th
 the version it runs. A glibc build on a release older than its baseline is refused there, by its declared baseline,
 instead of installing a program that cannot start. A static build declares nothing and passes on every release.
 
-**Built** (A15): hostkeeper's own Linux build qualifies. `hostkeeper` and `hostkeeper-pxe` are built for
+**Built** (A15): hostkeeper's own Linux build qualifies. `hostkeeper` and `pxe` are built for
 `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl`, static, each on a runner of its architecture
 (`.github/workflows/artifacts.yml`; the C compiler of those targets in `.cargo/config.toml`), and that one build is the
 binary tarball, `bin/hostkeeper` of hostkeeper's own `hostkeeper-archive` package, and the programs of the `.deb` and the
@@ -924,7 +926,7 @@ The tests of every build item, the cases each covers and why that list is comple
 | A14 | Withdrawn, with `arch` | | |
 | A15 | hostkeeper's own Linux build for musl, static; `check-linux-pkg` refuses a `NEEDED` entry and a declared dependency; the `.deb` and `.rpm`, attested, which `docs/deploy/verify-a-release.md` names (the `archlinux` package A15 also built is withdrawn, section 5.4) | none | `release_linux.rs`; the same `.deb` and `.rpm` installed and started on the oldest and newest release of each family in `privileged` |
 | A16 | `Target.repository` and `Target.package_version`; the checks of repository entries; the installer set; the audit of a repository entry (packages-repositories.md section 8) | A2 | `repository.rs`, `additions_repository.rs`; the previous coordinator on a stored repository entry |
-| A17 | Host setup places repository entries and keyrings (`hostkeeper-pxe --repositories`, the runbooks, the MDM kit's channel stores and signers on a Mac, rendered at the daemon's start) | A7, A9 | `hostkeeper-pxe`'s tests of `--repositories` |
+| A17 | Host setup places repository entries and keyrings (`pxe serve --repositories`, the runbooks, the MDM kit's channel stores and signers on a Mac, rendered at the daemon's start) | A7, A9 | `pxe`'s tests of `--repositories` |
 
 A7 and A10 can run beside each other, and A9 after A7, and A15 beside any item. A16 and A17 come from packages-repositories.md
 (section 8): A16 after A2 and before A7, A17 after A7. The docs a behaviour change makes stale move with its item (rule T19):

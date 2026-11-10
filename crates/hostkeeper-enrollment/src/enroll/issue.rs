@@ -19,7 +19,7 @@ use super::records::{Record, pb};
 use super::rows::corrupt;
 use super::store::EnrollmentStore;
 use super::{IssueError, RequestState};
-use crate::ca::{HOST_VALIDITY_SECS, SignRequest, Signer, Subject};
+use crate::ca::{SignRequest, Signer, Subject};
 use crate::names::{HostId, KeyHash};
 
 /// A host certificate the store issued.
@@ -41,7 +41,8 @@ pub struct IssuedCertificate {
 
 impl EnrollmentStore {
     /// The certificate of the approved request `request_id`, made by `signer` at the first
-    /// call of its round and read back at every later one (a poll issues lazily).
+    /// call of its round, valid [`EnrollmentStore::host_validity_secs`] from then, and read back
+    /// at every later one (a poll issues lazily).
     ///
     /// # Errors
     /// [`IssueError::NotApproved`] while the request waits for an operator, or after it expired
@@ -94,7 +95,7 @@ impl EnrollmentStore {
         let certificate = signer.sign(&SignRequest {
             subject: Subject::Host(&host_id),
             key: &row.key,
-            validity_secs: HOST_VALIDITY_SECS,
+            validity_secs: self.host_validity_secs(),
             serial: row.pb.serial,
         })?;
         let issued = pb::Issued {

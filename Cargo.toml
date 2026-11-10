@@ -47,7 +47,7 @@ ipmi-rs = { version = "0.6.0", default-features = false, features = ["unix-file"
 # `O_NOFOLLOW` and `O_NONBLOCK` for the daemon config and the manifest (hostkeeper-config) and
 # the secret files (hostkeeper-wire).
 libc = "0.2.190"
-# The xz decoder of `hostkeeper-pxe fetch`, which takes the shim out of Ubuntu's `shim-signed` deb
+# The xz decoder of `pxe update-hook prepare`, which takes the shim out of Ubuntu's `shim-signed` deb
 # (its `data.tar.xz`); pure Rust (MIT). Its tests compress with it too.
 lzma-rs = "0.3.0"
 # A named pipe in the tests of the crates that refuse a file that is not regular
@@ -127,7 +127,7 @@ rustix = "1.1.5"
 saphyr-parser = "0.1.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
-# The sockets of `hostkeeper-pxe serve`, set up before they are bound: SO_REUSEADDR, SO_BROADCAST
+# The sockets of `pxe serve`, set up before they are bound: SO_REUSEADDR, SO_BROADCAST
 # and SO_BINDTODEVICE (`--interface`), which neither std nor rustix sets. Already in the tree
 # through tokio and hyper-util.
 socket2 = { version = "0.6.5", features = ["all"] }

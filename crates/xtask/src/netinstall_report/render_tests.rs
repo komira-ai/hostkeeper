@@ -34,8 +34,8 @@ Network install of 52:54:00:4e:10:01 as host net-1, proxy mode.
 
 | Event | Unix seconds | Recorded by |
 |---|---|---|
-| power-on | 1000 | hostkeeper-pxe: the first DHCPDISCOVER from the MAC |
-| install started | 1040 | hostkeeper-pxe: the seed fetch |
+| power-on | 1000 | pxe: the first DHCPDISCOVER from the MAC |
+| install started | 1040 | pxe: the seed fetch |
 | pending | 1900 | the coordinator: the request's `first_seen_unix` |
 | approved | 1960 | the coordinator: the host's `enrolled_unix` |
 | first heartbeat | 1975 | the coordinator: the host's `first_heartbeat_unix` |
@@ -52,7 +52,7 @@ Network install of 52:54:00:4e:10:01 as host net-1, proxy mode.
 The machine's time: 950 s (15 min 50 s): power-on to pending, and approved to serving.
 The person's wait: 60 s (1 min 0 s): pending to approved.
 Power-on to serving: 1010 s (16 min 50 s).
-Power-on and the install's start are stamped by the clock of hostkeeper-pxe's host; pending, approved, the first heartbeat and serving by the coordinator's."
+Power-on and the install's start are stamped by the clock of pxe's host; pending, approved, the first heartbeat and serving by the coordinator's."
         )
     );
 }
@@ -69,8 +69,8 @@ Network install of 52:54:00:4e:10:01 as host net-1, router mode.
 
 | Event | Unix seconds | Recorded by |
 |---|---|---|
-| power-on | not reached | hostkeeper-pxe: the first DHCPREQUEST from the MAC |
-| install started | not reached | hostkeeper-pxe: the seed fetch |
+| power-on | not reached | pxe: the first DHCPREQUEST from the MAC |
+| install started | not reached | pxe: the seed fetch |
 | pending | not reached | the coordinator: the request's `first_seen_unix` |
 | approved | not reached | the coordinator: the host's `enrolled_unix` |
 | first heartbeat | not reached | the coordinator: the host's `first_heartbeat_unix` |
@@ -87,12 +87,12 @@ Network install of 52:54:00:4e:10:01 as host net-1, router mode.
 The machine's time: not reached: power-on to pending, and approved to serving.
 The person's wait: not reached: pending to approved.
 Power-on to serving: not reached.
-Power-on and the install's start are stamped by the clock of hostkeeper-pxe's host; pending, approved, the first heartbeat and serving by the coordinator's."
+Power-on and the install's start are stamped by the clock of pxe's host; pending, approved, the first heartbeat and serving by the coordinator's."
         )
     );
 }
 
-/// Catches a coordinator whose clock is behind hostkeeper-pxe's host printed as a huge or a
+/// Catches a coordinator whose clock is behind pxe's host printed as a huge or a
 /// negative interval: pending stamped before the install's start is out of order, and when it is
 /// before power-on so is the machine's time; the intervals that do not use it are unchanged.
 #[test]

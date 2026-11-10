@@ -192,6 +192,14 @@ impl Enrollment {
         self
     }
 
+    /// The same enrollment, issuing and renewing host certificates valid `secs` from their
+    /// signing (`--host-cert-validity-secs`); the daemon renews at half that.
+    #[must_use]
+    pub fn with_host_validity_secs(mut self, secs: u64) -> Self {
+        self.store = self.store.with_host_validity_secs(secs);
+        self
+    }
+
     /// The same enrollment, approving a Mac by its nonce as `mac` says. Without it no Mac is
     /// ([`MacPolicy::default`]).
     #[must_use]

@@ -7,11 +7,11 @@
 //!   ([`unit_text`]: the rig's, which starts `current` of the test's binary directory), the
 //!   tmpfiles rules and the config template of `packaging/linux/`, and its one issue link
 //!   ([`ISSUE_LINK`]), with the shipped `postinst` and `prerm` (`packaging/linux/scripts/`) as its
-//!   maintainer scripts. Three files of nfpm.yaml's list are left out because the host is a
+//!   maintainer scripts. Two files of nfpm.yaml's list are left out because the host is a
 //!   test's: the pinned `gh` and the Sigstore
 //!   trusted root, which the end-to-end rig installed at their fixed paths with the test signer's
 //!   root (a package that replaced it with the production root would refuse every later
-//!   package), and `hostkeeper-pxe`. It is built with `dpkg-deb`, gzip at level 1 (the binaries
+//!   package). It is built with `dpkg-deb`, gzip at level 1 (the binaries
 //!   are debug builds).
 //! - **The repository** is a signed apt repository (`../install_apt/repo.rs`: the suite `hk`, its
 //!   one component `main`, `InRelease` clear-signed by a key made for the test) in the test's

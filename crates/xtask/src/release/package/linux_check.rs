@@ -1,7 +1,7 @@
 //! `release check-linux-pkg`: a built deb, rpm or tarball, read back, holds no ELF
 //! program that is not static and declares no dependency; with `--staged` it also carries the
 //! files of [`nfpm_stage`](super::nfpm_stage) at the daemon's paths: `/usr/lib/hostkeeper/gh`,
-//! `/usr/bin/hostkeeper` and `/usr/bin/hostkeeper-pxe`, regular files of mode 0755, and
+//! `/usr/bin/hostkeeper`, a regular file of mode 0755, and
 //! `/usr/lib/hostkeeper/trusted_root.json`, 0644, each owned by root and group root, each with
 //! the bytes of the file staged for it; and the console's issue link,
 //! `/etc/issue.d/hostkeeper.issue`, a link that points at `/run/hostkeeper/enrollment.issue`
@@ -34,7 +34,7 @@ use std::path::Path;
 
 use self::archive::{compressed, deb, tarred};
 use super::elf;
-use super::nfpm_stage::{GH_FILE, HOSTKEEPER_FILE, PXE_FILE, TRUSTED_ROOT_FILE};
+use super::nfpm_stage::{GH_FILE, HOSTKEEPER_FILE, TRUSTED_ROOT_FILE};
 use crate::release::Error;
 
 /// Where the deb and the rpm install `gh`: `hostkeeper_daemon::cli::GH_BINARY`.
@@ -53,15 +53,11 @@ pub(crate) const ISSUE_TARGET: &str = "/run/hostkeeper/enrollment.issue";
 /// Where the deb and the rpm install the daemon.
 pub(crate) const INSTALLED_HOSTKEEPER: &str = "/usr/bin/hostkeeper";
 
-/// Where they install the boot server of network install.
-pub(crate) const INSTALLED_PXE: &str = "/usr/bin/hostkeeper-pxe";
-
 /// Each checked file: where it is installed, the staged file it must equal, its mode.
-const CHECKED: [(&str, &str, u32); 4] = [
+const CHECKED: [(&str, &str, u32); 3] = [
     (INSTALLED_GH, GH_FILE, 0o755),
     (INSTALLED_TRUSTED_ROOT, TRUSTED_ROOT_FILE, 0o644),
     (INSTALLED_HOSTKEEPER, HOSTKEEPER_FILE, 0o755),
-    (INSTALLED_PXE, PXE_FILE, 0o755),
 ];
 
 /// The file-type bits of a mode, and those of a regular file.

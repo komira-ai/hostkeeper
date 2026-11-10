@@ -90,7 +90,7 @@
 #          image of the run, only for the newest release of the run (job `newest`; the older ones
 #          are passed over, the newer carries their changes). The release's deb and rpm packages
 #          of hostkeeper and hostkeeper-coordinator, and the native .debs of the services it
-#          releases (hello's, and mdm's for amd64), go into the apt and rpm repositories at
+#          releases (hello's and pxe's, and mdm's for amd64), go into the apt and rpm repositories at
 #          packages.komira.ai, the suite `testing` first (testing-apt-*, testing-rpm-*: read the
 #          index, merge and sign it, write it, each in up to three attempts), and the macOS
 #          installers, hostkeeper's and hello's, into pkg/hostkeeper/<version>/
@@ -2051,8 +2051,8 @@ jobs:
   # architecture, adds packages.komira.ai with the published keyring (deb822, Signed-By) and the
   # suite `testing`, installs the package at the version, and holds the installed system to what the
   # package promises (cargo xtask channels check-apt), for each package on each architecture it is
-  # built for: the daemon's and the coordinator's, and the services' native packages, hello's and
-  # mdm's (amd64 alone). The xtask binary built on the runner is mounted into the container, which
+  # built for: the daemon's and the coordinator's, and the services' native packages, hello's,
+  # pxe's and mdm's (amd64 alone). The xtask binary built on the runner is mounted into the container, which
   # has nothing else of this repository.
   check-apt:
     needs: [plan, newest, testing-apt-write, testing-apt-write-2, testing-apt-write-3]
@@ -2060,7 +2060,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        package: [hostkeeper, hostkeeper-coordinator, hello, mdm]
+        package: [hostkeeper, hostkeeper-coordinator, hello, mdm, pxe]
         arch: [amd64, arm64]
         exclude:
           - package: mdm

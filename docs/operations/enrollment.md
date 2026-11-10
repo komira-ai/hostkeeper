@@ -38,7 +38,7 @@ hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <tok
 ```
 
 `--platform linux_x86_64` or `--platform linux_arm64` names the platform the server is installed as
-by network boot ([network-install.md](network-install.md)); `hostkeeper-pxe` in router mode needs it, and
+by network boot ([network-install.md](network-install.md)); `pxe` in router mode needs it, and
 in proxy mode refuses a record whose platform disagrees with the firmware's architecture. It is
 optional and for a Linux server only: `darwin_arm64` is refused `invalid_request`, and a Mac's record
 has none. `list-records` and the Inventory page show it.
@@ -72,7 +72,7 @@ the store, so the same after a coordinator restart and whether or not the host h
 heartbeat: `HOST_HELD_NONE` (no host by that id), `HOST_HELD_APPROVED` (approved and not denied),
 `HOST_HELD_DENIED` (retired with `hosts retire`, an update still in flight) or
 `HOST_HELD_RETIRED` (retired, final). A coordinator without enrollment answers
-`HOST_HELD_UNSPECIFIED`. `hostkeeper-pxe` offers a network install only for a record whose
+`HOST_HELD_UNSPECIFIED`. `pxe` offers a network install only for a record whose
 `hostHeld` is `HOST_HELD_NONE` ([network install](../design/network-install.md), section 3), so a
 retired host's record keeps its machine from being reinstalled by accident. There is no call that
 reads one record by host id: list the records and find it. The coordinator keeps at most 10000 records (`capacity` past them).
@@ -158,8 +158,8 @@ enrolled its server.
 **See the state.** `list-records` says for each record `state`: `RECORD_STATE_OPEN` (the
 window is open and the record unused), `RECORD_STATE_CLOSED` (unused, with its window over or
 none) or `RECORD_STATE_USED` (with `used_by_request_id` and `used_unix`), and `approve_until_unix`.
-`hostkeeper-pxe` serves a record's data MAC a network install only while its state is open, unless
-`--reinstall` names its host id ([network-install.md](network-install.md)): a server whose window
+`pxe` serves a record's data MAC a network install only while its state is open, unless
+`reinstall` of its settings names its host id ([network-install.md](network-install.md)): a server whose window
 is over, or whose record is used, is not installed from the network.
 
 ## Bootstrap a Linux node
@@ -255,7 +255,7 @@ component and `Signed-By` a keyring of the directory, a key that turns off apt's
 no`), a keyring over 1 MiB, empty, or not of its name's kind (armor is read only from a file
 named `.asc`, so fetch the `.gpg` for a `.gpg` name), or a file not root's or writable by group or others. `hostkeeper check-repositories`
 refuses exactly what the start refuses. A host installed by network gets the
-same files from `hostkeeper-pxe serve --repositories` ([network-install.md](network-install.md)).
+same files from the boot server's `repositories` setting ([network-install.md](network-install.md)).
 Rotating the key is [repository-keys.md](repository-keys.md).
 
 Start the unit by hand, since the package does not: `systemctl start hostkeeper.service`. The unit
@@ -553,7 +553,8 @@ and have not been heard since the coordinator started: not live, with no heartbe
 
 ## Renewal
 
-A host certificate lasts 7 days. From half its life the daemon renews it with `Renew`, over
+A host certificate lasts 7 days, or what the coordinator's `--host-cert-validity-secs` says (60
+seconds to 7 days). From half its life the daemon renews it with `Renew`, over
 mutual TLS with the certificate it holds, for the same key; no operator is involved. The node
 logs `renewed the certificate of host:<id> (generation <n>)` and the coordinator `renewed a host
 certificate`. A refused renewal is logged on the node as `renewal refused: <token>`.

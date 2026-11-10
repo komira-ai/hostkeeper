@@ -198,7 +198,7 @@ pub fn load(dir: &Path, owner_uid: u32) -> Result<Repositories, RepositoriesErro
 /// The entries of `dir` as a host will see them at `placed`: [`load`]'s rules over the files in
 /// `dir`, with each stanza's `Signed-By` judged against `placed` (so a keyring is
 /// `placed/<file>`) and the keyring itself judged at `dir/<file>`. Every error names a file in
-/// `dir`; an entry's `keyring` is the path under `placed`. `hostkeeper-pxe serve` checks the
+/// `dir`; an entry's `keyring` is the path under `placed`. `pxe serve` checks the
 /// operator's directory this way before it writes the files to `placed` on an installed host.
 pub fn load_as(
     dir: &Path,
@@ -209,7 +209,7 @@ pub fn load_as(
 }
 
 /// [`load_as`], with the bytes of each keyring the entries name, from the one read that judged
-/// it: `hostkeeper-pxe serve` carries them in its seeds, and `hostkeeper check-repositories`
+/// it: `pxe serve` carries them in its seeds, and `hostkeeper check-repositories`
 /// prints their SHA-256.
 pub fn load_with_keyrings(
     dir: &Path,

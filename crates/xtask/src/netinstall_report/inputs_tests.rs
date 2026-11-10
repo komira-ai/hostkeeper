@@ -71,6 +71,52 @@ x2005 dhcp: DHCPDISCOVER from 52:54:00:4e:10:01, architecture 11, HTTPClient, on
     assert_eq!(pxe_log(bare, &mac(), Mode::Proxy, HOST), (None, None));
 }
 
+/// Catches a log of the current name (`pxe serve: `) not read, a log of the earlier name
+/// (`hostkeeper-pxe serve: `) no longer read, the two not read when mixed in one file (a log
+/// kept across the rename), and a line with another program's prefix read as a stamped line.
+#[test]
+fn the_log_is_read_under_either_prefix_and_not_under_another() {
+    let discover = |prefix: &str, secs: u64| {
+        format!(
+            "{prefix}{secs} dhcp: DHCPDISCOVER from 52:54:00:4e:10:01, architecture 7, PXEClient, on the DHCP port: proxy offer sent\n"
+        )
+    };
+    let seed = |prefix: &str, secs: u64| {
+        format!(
+            "{prefix}{secs} seed seed/52:54:00:4e:10:01/meta-data: fetched by 52:54:00:4e:10:01, host net-1: its install started\n"
+        )
+    };
+    let current = format!(
+        "{}{}",
+        discover("pxe serve: ", 1100),
+        seed("pxe serve: ", 1140)
+    );
+    assert_eq!(
+        pxe_log(&current, &mac(), Mode::Proxy, HOST),
+        (Some(1100), Some(1140))
+    );
+    let earlier = format!(
+        "{}{}",
+        discover("hostkeeper-pxe serve: ", 900),
+        seed("hostkeeper-pxe serve: ", 940)
+    );
+    assert_eq!(
+        pxe_log(&earlier, &mac(), Mode::Proxy, HOST),
+        (Some(900), Some(940))
+    );
+    let mixed = format!("{earlier}{current}");
+    assert_eq!(
+        pxe_log(&mixed, &mac(), Mode::Proxy, HOST),
+        (Some(900), Some(940))
+    );
+    let neither = format!(
+        "{}{}",
+        discover("other serve: ", 700),
+        seed("pxe-serve: ", 740)
+    );
+    assert_eq!(pxe_log(&neither, &mac(), Mode::Proxy, HOST), (None, None));
+}
+
 /// Catches a MAC flag in upper case not matched to the log's lower case, and each malformed
 /// MAC accepted.
 #[test]

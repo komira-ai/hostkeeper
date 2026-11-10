@@ -191,13 +191,13 @@ without the network.
 In the jobs `net-install` and `net-install-arm64` of `net-install.yml`, network install of a new machine end to end
 (docs/design/network-install.md section 11): a QEMU guest with UEFI firmware, an empty disk and
 its NIC first in the boot order, on a Linux bridge with no route out, each box of the LAN (the
-router, whose DHCP the test fakes, and the real `hostkeeper-pxe`) in a network namespace of its
+router, whose DHCP the test fakes, and the real `pxe`) in a network namespace of its
 own, with the real coordinator's LAN listener (`tests/netinstall/`). The job installs QEMU and the
 firmware from Ubuntu's archive (its only other use of `sudo`, which the workflow lint allows in
 these two jobs for the packages it lists), downloads the ISO by its pinned URL, and, for x86-64,
-builds this commit's deb; `hostkeeper-pxe fetch` checks and seals the boot set from a release the
+builds this commit's deb; `pxe update-hook prepare` checks and seals the boot set from a release the
 test serves and signs. Every wait is on a line of the guest's serial console, of
-`hostkeeper-pxe`'s log or of the router's DHCP, or on an answer of the coordinator to the test's own call; the job's
+`pxe`'s log or of the router's DHCP, or on an answer of the coordinator to the test's own call; the job's
 `timeout-minutes` is the only bound. What each run kept, passed or not, is the job's artifact:
 
 - `net_install.rs` (under KVM):

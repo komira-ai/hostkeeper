@@ -2,10 +2,8 @@
 
 What a Linux host needs before hostkeeper can deliver anything to it: the daemon, its unit
 and its config (`docs/design/hostkeeper-design.md`, sections 4.1 and 4.6). The files here are
-the sources of a deb, an rpm and a boot-image overlay. The two packages also carry
-`/usr/bin/hostkeeper-pxe`, the boot server of network install
-(`docs/design/network-install.md`, section 3), with no unit: it runs only when an operator
-starts it, in the foreground. Building the binaries, building a boot image, signing and
+the sources of a deb, an rpm and a boot-image overlay. The boot server of network
+install is not in them: it is the separate `pxe` package (`docs/design/network-install.md`). Building the binaries, building a boot image, signing and
 publishing the packages are not here.
 
 | file | what |
@@ -27,8 +25,8 @@ among them) or sets `RuntimeDirectory=`; that each restarts the
 daemon's exit after its own update and sets no start limit; that the
 package unit is the file hostkeeper's package is built with; that the directories are the
 design's with the design's modes, that the template is refused until each placeholder is filled
-and loads once they are, that the packages carry exactly the seven files (the daemon and `hostkeeper-pxe` among them) and the console's issue
-link and no key, certificate, token or config, that the two programs, `gh` and the trusted root are installed at their paths from
+and loads once they are, that the packages carry exactly the six files and the console's issue
+link and no key, certificate, token or config, that the daemon, `gh` and the trusted root are installed at their paths from
 where `cargo xtask release nfpm-stage` writes them, that the scripts never start the unit, and
 that the overlay equals these sources.
 
@@ -81,15 +79,13 @@ mode 0700 itself; `hostkeeper.tmpfiles.conf` makes it at boot.
 ## The packages
 
 `nfpm.yaml` says how to build them: one deb and one rpm for each Linux platform
-of hostkeeper's packages, `linux-x86_64` (`amd64` for the deb, `x86_64` for the rpm) and `linux-arm64` (`arm64`, `aarch64`). The two programs in them, `hostkeeper` and
-`hostkeeper-pxe`, are the static (musl) build, so a package runs on every release of its family
+of hostkeeper's packages, `linux-x86_64` (`amd64` for the deb, `x86_64` for the rpm) and `linux-arm64` (`arm64`, `aarch64`). The daemon in them, `hostkeeper`, is the static (musl) build, so a package runs on every release of its family
 and needs no library of the host. `hostkeeper_<version>_<arch>.deb` and
 `hostkeeper-<version>-1.<arch>.rpm` install:
 
 | path | mode |
 |---|---|
 | `/usr/bin/hostkeeper` | 0755 |
-| `/usr/bin/hostkeeper-pxe` | 0755 |
 | `/usr/lib/systemd/system/hostkeeper.service` (the bootstrap unit) | 0644 |
 | `/usr/lib/tmpfiles.d/hostkeeper.conf` | 0644 |
 | `/usr/share/hostkeeper/hostkeeper.toml.template` | 0644 |
@@ -100,7 +96,7 @@ all owned by root. The last two are what the daemon checks every package's attes
 pinned `gh` (the distribution's own may have no `gh attestation`) and the Sigstore trusted root
 captured when the package was built. Before nfpm runs, `cargo xtask release nfpm-stage` checks
 that each program of `--binaries` is a static ELF of the architecture, checks the `gh` archive
-against its pin, and writes the two programs, `gh` and the trusted root into `target/nfpm/`;
+against its pin, and writes the daemon, `gh` and the trusted root into `target/nfpm/`;
 `cargo xtask release check-linux-pkg <package> --staged target/nfpm` then reads each built
 package back and refuses a program that has an interpreter or a NEEDED entry (a dynamic
 program) and any declared dependency, besides the files and the link below. Where they come from, how

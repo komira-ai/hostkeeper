@@ -416,13 +416,13 @@ impl Coordinator {
     }
 
     /// The CA of the private listener's certificate, PEM: what the operator's calls and
-    /// `hostkeeper-pxe serve` take as the CA.
+    /// `pxe serve` take as the CA.
     pub fn private_ca_path(&self) -> PathBuf {
         self.dir.join("private-ca.pem")
     }
 
     /// The operator's token file (root's, mode 0600): what the operator's calls and
-    /// `hostkeeper-pxe serve` take as `--token-file`.
+    /// `pxe serve` take as `--token-file`.
     pub fn token_path(&self) -> PathBuf {
         self.dir.join("operator.token")
     }

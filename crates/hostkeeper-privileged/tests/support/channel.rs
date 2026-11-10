@@ -1,7 +1,7 @@
 //! An HTTPS server of the test's on loopback or on the address of the test's farm LAN: it answers
 //! `GET` of the files it was given, as bytes or as a file read at each request, over a certificate
 //! of the test's CA. The network-install test (`tests/net_install.rs`) serves from it, bound to the
-//! address of its farm LAN ([`Channel::start_at`]), the release `hostkeeper-pxe fetch` downloads
+//! address of its farm LAN ([`Channel::start_at`]), the release `pxe update-hook prepare` downloads
 //! (its ISO streamed from the file the job downloaded, [`Channel::serve_file`]) and the files of the
 //! signed apt repository the installed guest installs the fixture service from
 //! ([`Channel::serve_tree`]).

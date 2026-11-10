@@ -24,7 +24,7 @@ repository's own change, and a change of the coordinator's MDM files for managed
 | Host | Files | Placed by |
 |---|---|---|
 | Linux | `/etc/hostkeeper/repositories/` | the daemon, from the coordinator's registry (`hkctl repositories put`), at the first heartbeat after the registry holds every repository the host's services name; it adopts files already there when they are byte for byte the set, and replaces them otherwise |
-| Linux, before it reaches the coordinator | `/etc/hostkeeper/repositories/` | only for a host that must install from the repository first: `hostkeeper-pxe serve --repositories <dir>` ([network-install.md](network-install.md)) or the enrollment runbook's step ([enrollment.md](enrollment.md#bootstrap-a-linux-node)); the registry's set adopts or replaces them |
+| Linux, before it reaches the coordinator | `/etc/hostkeeper/repositories/` | only for a host that must install from the repository first: `repositories = "<dir>"` in the boot server's `/etc/pxe/pxe.toml` ([network-install.md](network-install.md)) or the enrollment runbook's step ([enrollment.md](enrollment.md#bootstrap-a-linux-node)); the registry's set adopts or replaces them |
 | Mac with MDM | `stores.toml`, `macos-pkg.toml` | the coordinator's `--mdm-stores` and `--mdm-macos-pkg` files. The gate carries them in the config profile as `dev.hostkeeper.stores` and `dev.hostkeeper.macos-pkg`, and the daemon's start writes each file from them |
 | Mac without MDM | `stores.toml`, `macos-pkg.toml` | the operator, by hand, root:wheel 0644 |
 
@@ -64,7 +64,7 @@ A host one of whose services names one of those is sent nothing. `hkctl hosts ge
 host's `repositories`: `current` once the host holds the set, and `refused` with the daemon's
 reason when it refused it (the host keeps its set in force).
 
-A host whose directory holds what the held setup or `hostkeeper-pxe` wrote for the same URI and
+A host whose directory holds what the held setup or the boot server's seed wrote for the same URI and
 keyring adopts it as it is; a host whose files differ gets the registry's set in their place, and
 any other entry in the directory goes. No step restarts a daemon.
 
@@ -109,8 +109,8 @@ during an overlap ([package-repositories.md](../deploy/package-repositories.md))
 4. **After the overlap**, once the suites are signed with the new key alone, put the repository
    with a keyring that holds the new key alone and its fingerprints, and check again.
 
-`hostkeeper-pxe serve --repositories <dir>` still seeds the keyring it was given; replace it there
-too (and restart `hostkeeper-pxe serve`) so a host installed from then on starts with the new key.
+The `repositories` directory of the boot server's `/etc/pxe/pxe.toml` still seeds the keyring it was given; replace it there
+too (and restart `pxe.service`) so a host installed from then on starts with the new key.
 
 ## Rotate the `.pkg` signing identity (Mac)
 

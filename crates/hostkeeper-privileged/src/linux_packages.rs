@@ -33,9 +33,8 @@ pub const STAGED_DIR: &str = "nfpm";
 pub const MOUNT: &str = "/packages";
 /// Each program the packages install and the file it is staged as: run with `--version` in a
 /// container and, as the staged file, on the runner, the two outputs are equal.
-pub const PROGRAMS: [(&str, &str); 3] = [
+pub const PROGRAMS: [(&str, &str); 2] = [
     ("/usr/bin/hostkeeper", "hostkeeper"),
-    ("/usr/bin/hostkeeper-pxe", "hostkeeper-pxe"),
     ("/usr/lib/hostkeeper/gh", "gh"),
 ];
 

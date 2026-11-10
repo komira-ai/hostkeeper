@@ -21,8 +21,10 @@ channel and attested:
 - `hostkeeper` itself, on every host of the farm;
 - `hello`, the demo service, on every host of the farm;
 - `mdm`, the MDM host's service, is built as one (docs/operations/mdm-package.md), whether or not the MDM host runs
-  it under hostkeeper yet; the `pxe` package of two-programs.md section 6.1 (N1) is designed as one too, and until it
-  ships `hostkeeper-pxe` stays in hostkeeper's `.deb`.
+  it under hostkeeper yet;
+- `pxe`, the boot server of network install, ships as its own `.deb` for `linux-x86_64` and `linux-arm64`
+  (two-programs.md section 6.1, N1, **Built**): hostkeeper's `.deb` and `.rpm` no longer carry `hostkeeper-pxe`, and a
+  boot host gets `pxe` when the operator assigns the service there (docs/operations/network-install.md).
 
 tierstore is next. It runs on the lab's hosts outside hostkeeper today. No host of the farm is a Mac (none is enrolled,
 hostkeeper-mdm.md section 2), and none runs Alpine or an RPM-family distribution. The daemon itself is shipped for
@@ -175,11 +177,11 @@ packages are published.**
 - What leaves the daemon (A25): `prove.rs`, its `gh attestation verify` call and the trusted root's report
   (`crates/hostkeeper-daemon/src/trusted_root.rs`; `trusted_root_age_secs` and `trusted_root_reason` stay in the
   proto, unsent). The daemon stops reading `release_channel` and `[trusted_signers]`; the loader keeps accepting both,
-  since an older binary requires them after a fallback, `hostkeeper-pxe` reads `[trusted_signers]` from the same file,
+  since an older binary requires them after a fallback, `pxe` reads `[trusted_signers]` from the same file,
   and the file is never rewritten. Host setup keeps writing both while a release that requires them may run.
-- What stays elsewhere: `hostkeeper-pxe` checks the attestation of `netboot.json` and of the `.deb` it seeds
+- What stays elsewhere: `pxe` (`pxe update-hook prepare`) checks the attestation of `netboot.json` and of the `.deb` it seeds
   (network-install.md), on the hop before any key is on the new host, against `[trusted_signers]`. So the pinned `gh`,
-  `packaging/sigstore/trusted_root.json` and its refresh workflow `trusted-root.yml` stay, for it.
+  `packaging/sigstore/trusted_root.json` and its refresh workflow `trusted-root.yml` stay, for it (hostkeeper's `.deb` keeps carrying them; `pxe` uses them from `/usr/lib/hostkeeper/`).
 - A `macos-pkg` entry carries no attestation, and A18 makes the coordinator refuse one, as it refuses one on a
   repository entry (section 2.2): an attestation nobody checks must not look checked. No daemon listed `macos-pkg`
   when A18 shipped, so nothing that shipped changed; a Mac's daemon lists it from the release that runs its steps
@@ -302,6 +304,14 @@ request shows both at zero. A host that keeps either count above zero is named b
 up, or removes it from the fleet and installs it afresh (network-install.md). So no host is left on a daemon that
 nothing can update.
 
+**Stage 9 shipped early.** A24 and A25 landed while both counts were above zero: every host of the farm still ran
+`hostkeeper` from `hostkeeper-archive` on a daemon of A19 to A24 (it announces `apt` on Linux), and A25 had taken the
+move's pick out of the coordinator, so every such host was picked nothing (`installer_dropped`) and none could move.
+The coordinator keeps the move's pick (below) until both counts are zero; the two queries of the runbook
+([docs/operations/move-to-native.md](../operations/move-to-native.md), stage 9) are the exit condition for deleting it,
+in a pull request of its own. Only the pick is kept: no release lists an archive entry again, and the move's rollback
+is not ordered (below).
+
 After stage 9 a host set up from a `.deb` or `.pkg` older than A19's release has a daemon that can install
 nothing a release lists: it shows `no_build_for_host` for `hostkeeper`, and is set up again from the current package.
 The runbooks (enrollment, network install, the MDM kit) install the newest release's.
@@ -315,10 +325,16 @@ does is not one we run.
 
 **The move of one service on one host** (A18, A19):
 
-- **The pick.** A host that runs the service from `hostkeeper-archive`, and whose daemon lists the installer of a
-  native entry of its platform's list, is picked that native entry. This is the one exception to packages.md section
-  3.3's first rule ("a host takes the entry of the installer it runs"). A host that lists no native installer of the
-  list is picked the archive entry, and an old daemon is too.
+- **The pick.** A host that runs the service from `hostkeeper-archive` (its daemon names no installer for it, or names
+  `hostkeeper-archive`), and whose daemon lists the installer of a native entry of its platform's list, is picked the
+  first such native entry in the list's order. This is the one exception to packages.md section 3.3's first rule ("a
+  host takes the entry of the installer it runs"). Since A25 no host is picked an archive entry: a host that lists no
+  native installer of the list is picked nothing (`installer_dropped`), and a daemon before `target-v1` is picked
+  nothing too (`no_build_for_host`). The pick is made
+  only for a daemon that still lists `hostkeeper-archive` (A19 to A24): a daemon from A25 lists no archive installer,
+  cannot move a service off archives and would refuse the order (`release_unreadable`), so a service it still runs
+  from archives is picked nothing; it is installed afresh. A Mac daemon of v0.1.221 announces `hostkeeper-archive`
+  alone, no `macos-pkg`, so such a Mac is not moved by the pick: it is set up again from the current `.pkg`.
 - **The daemon.** The one installer change it accepts is from `hostkeeper-archive` to a native installer. Back, or
   between native installers, is `installer_changed`, as today. The move is an update: `stage` the native version, the
   hook's `prepare` from its tree, then `activate`, which first takes away the archive version's placed units and files
@@ -328,9 +344,13 @@ does is not one we run.
 - **The move's rollback**, automatic or a `ForceRollback`, before or after the move settled: `activate` the archive
   version again. It purges the native package (for a service; for `hostkeeper`, the package stays at the version apt
   installed, since purging it would remove the unit and the binary the host starts), places the archive's paths
-  again, and records `hostkeeper-archive`. The coordinator orders it with the release's archive entry, which A18 sends
-  for a rollback of a host whose installer is native to a release with no native entry. The daemon takes it from its
-  sealed copy and fetches nothing. Once the next update has retired the archive version, the move cannot be undone.
+  again, and records `hostkeeper-archive`. The daemon takes it from its sealed copy and fetches nothing. Once the
+  next update has retired the archive version, the move cannot be undone. Since A25 the coordinator never orders it:
+  no pick returns an archive entry, so a moved host going back to a version whose list has no native entry it lists
+  is picked nothing (`installer_dropped`), and one going back to a version with such an entry is ordered that entry,
+  which a daemon refuses `rollback_below_installer` below its floor (*A rollback of the daemon below the change*,
+  below). The automatic rollback of a daemon's own failed move needs no order: before the confirm the old binary goes
+  on from archives.
 - **hostkeeper's move** is 10.4's self-update with the move's `activate`. After `N` confirms, it installs its `.deb`
   (an upgrade of the bootstrap package dpkg still lists at the host's first version), enables the `.deb`'s unit, takes
   away the archive's package unit from `/etc/systemd/system/` and reloads systemd. The running daemon is not
@@ -340,14 +360,14 @@ does is not one we run.
   that holds an `apt` version, and to one before A19 on a host where `hostkeeper` itself moved, both
   `rollback_below_installer` (packages.md section 9.1; A19 adds its row to the compiled table). A hand-over that fails
   runs the old binary, which is the one that ran the move, so it reads everything on the host.
-- **Old daemons.** A daemon before `target-v1` is ordered the archive entry through the channel, as today, until it
-  updates. Stage 9's second count waits for it.
+- **Old daemons.** A daemon before `target-v1` was ordered the archive entry through the channel until it updated;
+  since A25 it is ordered nothing (`no_build_for_host`). Stage 9's second count waits for it.
 
 ### 10.7 What is deleted at the end (A25, A28)
 
 - **Crates.** `hostkeeper-unpack` (its `MacVerify` moves to `hostkeeper-install`, for `macos-pkg`'s `stage`).
   `hostkeeper-package` shrinks to what is still used: its `net`, `ports`, `bundle`, `der` and `gh` modules, which
-  `hostkeeper-pxe` uses to check what it seeds, and its fetch by digest (`stores.rs`, `entry.rs`, `stage.rs`), which
+  `pxe` uses to check what it seeds, and its fetch by digest (`stores.rs`, `entry.rs`, `stage.rs`), which
   `macos-pkg` uses, without the proof; `index.rs`, `fetch.rs` and `prove.rs` go, and its `Platform` copy gives way to
   `hostkeeper-config`'s `platform.rs`. Every release index parser goes: `hostkeeper-config`'s `index.rs`,
   `hostkeeper-package`'s and xtask's writer (`release/index.rs`), after their users move (the coordinator's
@@ -359,7 +379,8 @@ does is not one we run.
   switch and relink of `place.rs`, the attestation proof and the trusted root's report (10.3). At its start a daemon
   from A25 deletes the archive version directory of a service it runs natively (the move's `previous`), and nothing
   else. The coordinator's `channel.rs`, `channel_https.rs`, `release_index.rs`, the `--release-channel` flag, the
-  archive rules of `picks.rs` and the orders by index for old daemons; the JSON route stays frozen and carries no order.
+  archive rules of `picks.rs` but the move's pick, kept until stage 9's counts are zero (10.6), and the orders by index
+  for old daemons; the JSON route stays frozen and carries no order.
   A stored release with archive entries or an index still loads, its archive entries never picked.
   `hostkeeper-release`'s installer set loses `hostkeeper-archive`, `tarball` and `oci-image` (10.1).
 - **Proto: nothing removed.** `package_digest`, `release_index`, `release_index_digest`, `index_digest`,
@@ -429,7 +450,7 @@ these items: whichever of S3 and A19 lands second carries the other's change to 
 | Maintainer scripts and paths | Allowed, with any paths; on `apt` a `policy-rc.d` that exits 101 is written around every dpkg run that can run a script; `package_scripts` is no longer produced | Hostkeeper installs any package; what it holds is integrity (pin, signature, hold, `package_not_ours`), and the hand-over stays hostkeeper's because no script starts a unit through `invoke-rc.d` or `deb-systemd-invoke` meanwhile |
 | Units a service's package installs | Any; hostkeeper never refuses a `run` unit, writes the `[Install]` links of one whose file is in the tree, and starts at `cutover` and at every daemon start each `run` unit with no such link | A unit with no `[Install]` is a valid way to ship a unit hostkeeper alone starts |
 | The attestation | Leaves the host; the publish job that alone holds the signing keys checks it before it signs; a `macos-pkg` entry carries none | The key and the pin bind the bytes on every platform; one trust model; the loss is stated in 10.3 |
-| `release_channel` and `[trusted_signers]` | Still accepted by the loader; the daemon stops reading them | An older binary requires them after a fallback, `hostkeeper-pxe` reads the signers, and `hostkeeper.toml` is never rewritten |
+| `release_channel` and `[trusted_signers]` | Still accepted by the loader; the daemon stops reading them | An older binary requires them after a fallback, `pxe` reads the signers, and `hostkeeper.toml` is never rewritten |
 | `hostkeeper-package` | Shrunk, not deleted: pxe's attestation check and `macos-pkg`'s fetch by digest stay | Both still have users; moving them would only rename them |
 | hostkeeper's own release | One native entry per platform, through the same installers | One way to install anything |
 | When hostkeeper's package is installed | After the new binary confirms, by that binary; a failure there leaves it running and reports drift | The unit starts `/usr/bin/hostkeeper`; it must always be a binary that started |

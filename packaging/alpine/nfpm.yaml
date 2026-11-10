@@ -17,9 +17,8 @@
 # It is not the package of packaging/linux/nfpm.yaml with another packager. It leaves out the
 # systemd unit and the tmpfiles rules (the init script makes the directories itself), the
 # console's issue link (/etc/issue.d is a systemd host's directory; the console of an Alpine host
-# reads /etc/issue), and `hostkeeper-pxe`, the boot server of network install
-# (docs/design/network-install.md, section 3), which runs on a systemd host and is carried by
-# the deb and the rpm.
+# reads /etc/issue). The boot server of network install is the `pxe` package, a deb for systemd
+# hosts, and is in no package of hostkeeper's own.
 #
 # The package depends on OpenRC 0.62 or later: OpenRC 0.62 (Alpine 3.22) is the oldest the
 # device tests run the package on. Its scripts are packaging/alpine/scripts/postinstall.sh, which apk runs as

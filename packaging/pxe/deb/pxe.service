@@ -1,0 +1,18 @@
+# The unit of the pxe .deb (cargo xtask release deb --service pxe): dpkg installs it as
+# /usr/lib/systemd/system/pxe.service beside /usr/lib/pxe/pxe, hostkeeper's apt activate enables it
+# through [Install], and the hook's cutover step starts it once prepare has sealed the boot sets
+# in /var/lib/pxe/<version> and pointed /var/lib/pxe/current at them. It is Type=notify: pxe
+# says READY=1 once its sockets are bound and the seal is checked.
+[Unit]
+Description=pxe, the boot server of network install
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=notify
+ExecStart=/usr/lib/pxe/pxe serve --notify-systemd --settings /etc/pxe/pxe.toml --dir /var/lib/pxe/current
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

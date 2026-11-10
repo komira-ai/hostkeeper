@@ -1356,12 +1356,13 @@ bytes, and the observer reading a real unit&rsquo;s state and its main process&r
 The workload is <code>hostkeeper-fixture-hook</code>. Its job <code>first-boot</code> runs the programs themselves:
 the coordinator and the daemon started as child processes on loopback and driven through
 the generated gRPC clients. <code>first_boot.rs</code> covers an enrollment, its approval, the host certificate,
-heartbeats over mutual TLS and a restart of each program. <code>install_uninstall.rs</code> covers a package
+heartbeats over mutual TLS, a restart of each program, and a renewal: with the coordinator started with
+<code>--host-cert-validity-secs 60</code>, the daemon renews its certificate for the same subject and key and
+is heard over the renewed one. <code>install_uninstall.rs</code> covers a package
 assigned and installed once across coordinator restarts, and kept by the daemon&rsquo;s boot pass, from a
 release channel the test serves over HTTPS, then updated to a new desired version, then uninstalled
 by the operator: the package, its placed file and its unit are taken off the host. Its one stand-in is the attestation
-verifier, <code>true</code> in place of <code>gh</code>. A renewal is not covered: no flag shortens the host
-certificate&rsquo;s validity (<a href="https://github.com/komira-ai/hostkeeper/issues/100"><code>komira-ai/hostkeeper#100</code></a>). On macOS, the
+verifier, <code>true</code> in place of <code>gh</code>. On macOS, the
 <code>macos-device</code> job above is the only test that runs the daemon binary under launchd.</li>
 <li><strong>End to end, in process.</strong> <a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-daemon/tests/end_to_end.rs">crates/hostkeeper-daemon/tests/end_to_end.rs</a>
 runs the real coordinator, heartbeat loop, executor, step runner and boot pass together, with

@@ -145,7 +145,7 @@ fn a_missing_unreadable_newer_or_empty_seal_is_refused() {
     let none = refusal(Sealed::open(&dir));
     assert!(
         none.starts_with("seal.json cannot be read (")
-            && none.ends_with("): the directory was not sealed by hostkeeper-pxe fetch"),
+            && none.ends_with("): the directory was not sealed by pxe prepare"),
         "{none}"
     );
     std::fs::write(dir.join("seal.json"), "{\"seal\":").expect("write");

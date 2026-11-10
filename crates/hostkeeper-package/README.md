@@ -10,16 +10,16 @@ The daemon stages a package its installer names from the host's package manager
 (`hostkeeper-install`), and uses this crate for `stores` (a Mac's start renders `stores.toml` from
 managed preferences), `entry::fetch_pinned` (the artifact of a `macos-pkg` entry, whose package the
 installer checks the signature of) and, at its start, for `remove_orphan_fetches`, which removes
-the staging files a fetch left. `hostkeeper-pxe` uses `bundle`, `net`, `gh` and `ports`, and
+the staging files a fetch left. `hostkeeper-pxe` (the `pxe` program) uses `bundle`, `net`, `gh` and `ports`, and
 `hostkeeper-mdm-gate` uses `stores`.
 
 | module | what it holds |
 |---|---|
 | `entry` | `fetch_pinned`: the fetch of an order's `Target` by its pin: the mirrors, then the entry's locations, each source with its own deadline and the credential and redirects of its store (a location in the `coordinator` store is asked of the fetcher `PinnedEnv::coordinator` gives, and is no source without one); the first bytes with the entry's size and SHA-256 win, counted and hashed in the pass that writes them into the staging file `packages/<service>/.fetch-<pid>-<n>` (created exclusively, never through a link, mode 0600). Returns a `Pinned` and the stores that gave other bytes |
 | `stage` | the staging file and the one download loop that fills it; `remove_orphan_fetches`, which `fetch_pinned` calls first and the daemon's start calls for each service |
-| `bundle` | the attestation bundle read for what the verifier is asked to confirm (the one commit of the provenance, the certificate's source ref, the subjects' SHA-256), before anything has verified it; `hostkeeper-pxe fetch` reads bundles with it |
+| `bundle` | the attestation bundle read for what the verifier is asked to confirm (the one commit of the provenance, the certificate's source ref, the subjects' SHA-256), before anything has verified it; `pxe update-hook prepare` reads bundles with it |
 | `ports` | `Fetcher` (one GET into a `Sink`, bounded by a `Limit`) and `Verifier` (one attestation, offline), and the data that crosses them |
-| `net` | the real `Fetcher`: the adapter's rules over a `Transport`, and `UreqTransport` (rustls, HTTPS only, no redirect, no proxy, no cookies, the credential only when a store's request gives it, the roots the daemon gives it; `UreqTransport::following_redirects` follows a bounded number of `https://` redirects, for `hostkeeper-pxe fetch`'s release assets); `NetFetcher::get_request` follows a store's redirects itself (`https://` only, the credential dropped at another origin) and answers an OCI `Bearer` challenge on the store's own origin |
+| `net` | the real `Fetcher`: the adapter's rules over a `Transport`, and `UreqTransport` (rustls, HTTPS only, no redirect, no proxy, no cookies, the credential only when a store's request gives it, the roots the daemon gives it; `UreqTransport::following_redirects` follows a bounded number of `https://` redirects, for `pxe update-hook prepare`'s release assets); `NetFetcher::get_request` follows a store's redirects itself (`https://` only, the credential dropped at another origin) and answers an OCI `Bearer` challenge on the store's own origin |
 | `stores` | the stores of `/etc/hostkeeper/stores.toml` (`Stores`, `Store`, `load`): kind `https` or `oci`, base, redirects, mirror, repository, and a credential file read once and never shown by `Debug`; the URL of a blob in each kind; the implicit store `coordinator` (kind `coordinator`, always present, never read from the file, which may not give a store that kind; a store the file itself names `coordinator` is kept and found first), whose blob URL is `/` and the locator; every defect of the file is a `StoresError` that names the store and the rule |
 | `gh` | the real `Verifier`: the pinned `gh attestation verify`, offline, ported from kbf's `GhCheck`; `SystemRunner` runs it and kills it at the deadline, `OwnedBy` checks `gh` and the trusted root before each run |
 
@@ -48,7 +48,7 @@ same set, and that no token that shipped is gone.
 
 ## What is checked of an attestation
 
-`hostkeeper-pxe fetch` checks the bundle of a release asset with `bundle` and `gh`; the daemon's
+`pxe update-hook prepare` checks the bundle of a release asset with `bundle` and `gh`; the daemon's
 fetch of a pinned artifact checks no attestation.
 
 The packages directory (`/var/lib/hostkeeper/packages`) is root's: the daemon creates it root-owned

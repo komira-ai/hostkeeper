@@ -1,12 +1,11 @@
 //! The Linux package tools of the release: [`nfpm_stage`] is `release nfpm-stage`: the pinned
-//! `gh`, the Sigstore trusted root and the two static programs of the daemon (`hostkeeper`,
-//! `hostkeeper-pxe`), checked and laid out for the deb and the rpm that
-//! `packaging/linux/nfpm.yaml` builds; [`linux_check`] is `release check-linux-pkg`, which reads
+//! `gh`, the Sigstore trusted root and the static daemon `hostkeeper`, checked and laid out for
+//! the deb and the rpm that `packaging/linux/nfpm.yaml` builds; [`linux_check`] is `release check-linux-pkg`, which reads
 //! a built deb, rpm or tarball back and refuses an ELF program that is not static and any
 //! declared dependency, and with a staged directory checks that the package installs the staged
 //! files; [`elf`] is the ELF reader they share.
 
-mod elf;
+pub(super) mod elf;
 pub(super) mod linux_check;
 pub(super) mod nfpm_stage;
 

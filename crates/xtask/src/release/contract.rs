@@ -17,10 +17,11 @@
 //! and a release missing one is refused. macos-arm64 also ships the
 //! installer pkg of a Mac's first install ([`installer_name`]); the two Linux platforms also ship
 //! the coordinator ([`COORDINATOR`]), the MDM kit's binary ([`MDM`]) and the coordinator
-//! updater's ([`COORDINATOR_UPDATE`]). A release carries four
+//! updater's ([`COORDINATOR_UPDATE`]). A release carries five
 //! kinds of package ([`Package`]): hostkeeper's own, `hello`, the example service of
-//! `examples/hello`, hello's failing build, and `mdm`, the MDM server stack, for linux-x86_64
-//! only ([`Package::platforms`]); each is a native package ([`Package::native_name`]) and the
+//! `examples/hello`, hello's failing build, `mdm`, the MDM server stack, for linux-x86_64
+//! only ([`Package::platforms`]), and `pxe`, the boot server of network install, a `.deb` for the
+//! two Linux platforms; each is a native package ([`Package::native_name`]) and the
 //! failing build has none. It also carries `netboot.json` ([`NETBOOT`]), the boot sets of network install for the two Linux
 //! platforms, and `hkctl-<version>` ([`hkctl_name`]), the command line, one script for every
 //! platform.
@@ -88,6 +89,11 @@ pub(crate) const COORDINATOR_UPDATE: &str = "hostkeeper-coordinator-update";
 /// `mdm X.Y.Z+<12 hex>` for `--version`. Built for linux-x86_64 only: the pinned tools it carries
 /// are linux-amd64 builds.
 pub(crate) const MDM_SERVICE: &str = "mdm";
+
+/// The name of the boot server's service package (docs/design/two-programs.md section 6.1): its
+/// package name and its program `pxe`, which prints `pxe X.Y.Z` for `--version` (no commit
+/// stamp). Built for both Linux platforms, as a `.deb` alone.
+pub(crate) const PXE_SERVICE: &str = "pxe";
 
 /// Where the coordinator's container image holds the operator web app (`ui/` of the commit):
 /// the destination of the Dockerfile's `COPY ui`, and the default UI directory of the
@@ -418,6 +424,9 @@ pub(crate) enum Service {
     /// The MDM server stack's service package.
     #[value(name = "mdm")]
     Mdm,
+    /// The boot server of network install (`crates/hostkeeper-pxe`).
+    #[value(name = "pxe")]
+    Pxe,
 }
 
 impl Service {
@@ -427,6 +436,7 @@ impl Service {
             Service::Hostkeeper => PROGRAM,
             Service::Hello => HELLO,
             Service::Mdm => MDM_SERVICE,
+            Service::Pxe => PXE_SERVICE,
         }
     }
 }
@@ -452,32 +462,39 @@ pub(crate) const TESTING_FAIL_ENTRY: &str = "komira-testing-fail";
 
 /// One kind of package a release carries: each has a native package per platform it is built for
 /// ([`Package::platforms`]). The release carries hostkeeper's package, hello's and hello's failing
-/// build, the same package started with `--fail-ready`, whose `.deb` alone is released, and mdm's.
+/// build, the same package started with `--fail-ready`, whose `.deb` alone is released, mdm's and
+/// pxe's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Package {
     Hostkeeper,
     Hello,
     HelloFailReady,
     Mdm,
+    Pxe,
 }
 
 /// The platforms of the mdm package.
 const MDM_PLATFORMS: [Platform; 1] = [Platform::LinuxX86_64];
 
+/// The platforms of the pxe package: both Linux platforms, no Mac.
+const PXE_PLATFORMS: [Platform; 2] = [Platform::LinuxX86_64, Platform::LinuxArm64];
+
 impl Package {
     /// Every package, hostkeeper's first.
-    pub(crate) const ALL: [Package; 4] = [
+    pub(crate) const ALL: [Package; 5] = [
         Package::Hostkeeper,
         Package::Hello,
         Package::HelloFailReady,
         Package::Mdm,
+        Package::Pxe,
     ];
 
     /// The platforms a release ships the package for, in [`Platform::RELEASED`] order: every one,
-    /// but linux-x86_64 alone for mdm.
+    /// but linux-x86_64 alone for mdm, and the two Linux platforms for pxe.
     pub(crate) fn platforms(self) -> &'static [Platform] {
         match self {
             Package::Hostkeeper | Package::Hello | Package::HelloFailReady => &Platform::RELEASED,
+            Package::Pxe => &PXE_PLATFORMS,
             Package::Mdm => &MDM_PLATFORMS,
         }
     }
@@ -490,7 +507,8 @@ impl Package {
             (Service::Hello, false) => Some(Package::Hello),
             (Service::Hello, true) => Some(Package::HelloFailReady),
             (Service::Mdm, false) => Some(Package::Mdm),
-            (Service::Hostkeeper | Service::Mdm, true) => None,
+            (Service::Pxe, false) => Some(Package::Pxe),
+            (Service::Hostkeeper | Service::Mdm | Service::Pxe, true) => None,
         }
     }
 
@@ -500,6 +518,7 @@ impl Package {
             Package::Hostkeeper => Service::Hostkeeper,
             Package::Hello | Package::HelloFailReady => Service::Hello,
             Package::Mdm => Service::Mdm,
+            Package::Pxe => Service::Pxe,
         }
     }
 
@@ -507,7 +526,9 @@ impl Package {
     /// release's own, or for the failing build the release's followed by [`FAIL_READY_SUFFIX`].
     pub(crate) fn version_text(self, version: &Version) -> String {
         match self {
-            Package::Hostkeeper | Package::Hello | Package::Mdm => version.to_string(),
+            Package::Hostkeeper | Package::Hello | Package::Mdm | Package::Pxe => {
+                version.to_string()
+            }
             Package::HelloFailReady => format!("{version}{FAIL_READY_SUFFIX}"),
         }
     }
@@ -517,7 +538,9 @@ impl Package {
     /// service version cannot carry, so its `.deb` is never taken for the release's.
     pub(crate) fn deb_version(self, version: &Version) -> String {
         match self {
-            Package::Hostkeeper | Package::Hello | Package::Mdm => version.to_string(),
+            Package::Hostkeeper | Package::Hello | Package::Mdm | Package::Pxe => {
+                version.to_string()
+            }
             Package::HelloFailReady => format!("{version}{FAIL_READY_DEB_SUFFIX}"),
         }
     }
@@ -526,7 +549,7 @@ impl Package {
     /// build, [`TESTING_ENTRY`] for every other.
     pub(crate) fn repository_entry(self) -> &'static str {
         match self {
-            Package::Hostkeeper | Package::Hello | Package::Mdm => TESTING_ENTRY,
+            Package::Hostkeeper | Package::Hello | Package::Mdm | Package::Pxe => TESTING_ENTRY,
             Package::HelloFailReady => TESTING_FAIL_ENTRY,
         }
     }
@@ -606,7 +629,8 @@ pub(crate) fn is_bundle(name: &str) -> bool {
 ///
 /// and the native packages of the services ([`Package::native_name`]): `hello_<v>_<deb>.deb` and
 /// the failing build's `hello_<v>-fail-ready_<deb>.deb` on each Linux platform,
-/// `hello-<v>-macos-arm64.pkg` on macOS, and `mdm_<v>_amd64.deb` on linux-x86_64 (attested);
+/// `hello-<v>-macos-arm64.pkg` on macOS, `mdm_<v>_amd64.deb` on linux-x86_64 and
+/// `pxe_<v>_<deb>.deb` on each Linux platform (attested);
 /// hostkeeper's own are its `.deb` and its installer above, each listed once;
 ///
 /// the bundle of each binary tarball (the four programs'), Linux package, installer, native
