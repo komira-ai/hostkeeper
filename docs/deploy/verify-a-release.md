@@ -49,7 +49,7 @@ binary and the coordinator updater's are for the two Linux platforms; the instal
 | `hostkeeper-coordinator-<version>-1.<rpm-arch>.rpm` | the coordinator's rpm package, with the same files |
 | `hostkeeper-mdm-<version>-<linux-platform>.tar.gz` | the MDM kit's binary, `hostkeeper-mdm` (`crates/hostkeeper-mdm`), which sets up and migrates the MDM server stack on its Linux host |
 | `hostkeeper-mdm-<version>-<linux-platform>.cdx.json` | its CycloneDX SBOM |
-| `hostkeeper-coordinator-update-<version>-<linux-platform>.tar.gz` | the coordinator updater's binary, `hostkeeper-coordinator-update`, which the machine that runs the coordinator's container runs from a timer to roll the container forward to each attested release ([coordinator-update.md](coordinator-update.md)) |
+| `hostkeeper-coordinator-update-<version>-<linux-platform>.tar.gz` | the coordinator updater's binary, `hostkeeper-coordinator-update`, which the machine that runs the coordinator's container runs from a timer to roll the container forward to each attested release ([coordinator-update.md](coordinator-update.md)); in every release from v0.1.234 on, none before |
 | `hostkeeper-coordinator-update-<version>-<linux-platform>.cdx.json` | its CycloneDX SBOM |
 | `hostkeeper-<version>-macos-arm64.pkg` | the installer of a Mac's first install: `/usr/local/bin/hostkeeper` (0755), `/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist` (0644), the log directory `/var/log/hostkeeper` (0755) and its rotation `/etc/newsyslog.d/hostkeeper.conf` (0644), the pinned `gh` at `/usr/local/lib/hostkeeper/gh` (0755) and the Sigstore trusted root at `/usr/local/lib/hostkeeper/trusted_root.json` (0644), owned by root and wheel; a distribution pkg (`productbuild` around the component pkg); the component's one script, a `postinstall`, loads the daemon's job when launchd does not have it loaded and leaves a loaded one alone, so that an install the daemon itself runs never stops it (the plist's program is `/usr/local/bin/hostkeeper daemon`, which at each start points `/var/lib/updater/state/hostkeeper/bin/current` at itself when that starts nothing, writes `/etc/hostkeeper/hostkeeper.toml` from the MDM's managed preferences unless that file exists, and runs `current`); signed by the Developer ID Installer identity `Developer ID Installer: Komira AI, Inc. (U7RTX4XD3X)` with a trusted timestamp, not notarized, attested. Also hostkeeper's native package on macOS: the release puts it in the `testing` directory of the installers |
 | `hkctl-<version>` | the command line of the coordinator ([docs/cli.md](../cli.md)): one bash script for every platform, generated from the protobuf services, that calls the coordinator's JSON gateway with `curl`; it needs bash 3.2 or later and curl 7.55 or later. No host package carries it |
@@ -343,6 +343,9 @@ For the MDM kit, unpack `hostkeeper-mdm-<version>-<linux-platform>.tar.gz` and r
 For the coordinator updater, unpack `hostkeeper-coordinator-update-<version>-<linux-platform>.tar.gz`
 and run `./hostkeeper-coordinator-update --version`; its output is, exactly,
 `hostkeeper-coordinator-update <X.Y.Z>+<first 12 hex digits of $PIN>`.
+
+A release of a commit from before the updater was a release asset (v0.1.233 and older) has none of
+its files, and the release workflow runs the updater only in a release whose build made its tarball.
 
 For the command line, `hkctl-<version>` is one bash script for every platform, with nothing to
 unpack. Make it executable under its own name and run it:
