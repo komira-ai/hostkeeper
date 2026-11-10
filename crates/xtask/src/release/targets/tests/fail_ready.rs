@@ -53,6 +53,7 @@ fn the_failing_builds_entry_is_never_picked_for_a_normal_set() {
         json!({
             "linux-arm64": entry(Platform::LinuxArm64),
             "linux-x86_64": entry(Platform::LinuxX86_64),
+            "macos-arm64": entry(Platform::MacosArm64),
         })
     );
     let text = got.to_string();

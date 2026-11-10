@@ -17,6 +17,13 @@
 //! are the same, and so is the version directory they leave (no record of the entry in it). An
 //! order without an entry takes the release channel as before.
 //!
+//! A `macos-pkg` entry carries no attestation, and its `.pkg` is not unpacked here:
+//! [`RealPackages::pinned`] fetches it the same way by its pin alone
+//! ([`hostkeeper_package::entry::fetch_pinned`]) into a staging file of the service's package
+//! directory, removed when the file is dropped, and the `macos-pkg` installer's `stage` checks
+//! its signature ([`crate::macos_pkg`]). It sweeps nothing: it runs inside a stage, whose staging
+//! directory the sweep would take.
+//!
 //! Every failure of those libraries reaches the daemon as one [`PackageError::Refused`] built by
 //! [`refusal_of`], the one table that maps a library's reason token onto a [`Refusal`]. The
 //! outcome and the class are the library's own.
@@ -33,7 +40,7 @@ use hostkeeper_config::daemon::{Bounds, DaemonConfig, HttpsUrl, Sha256Hex, Trust
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_hook::{Class, Outcome};
 use hostkeeper_install::{InstallerSteps, StageEnv, StageError, StageOrder, steps_of};
-use hostkeeper_package::entry::{EntryEnv, fetch_entry};
+use hostkeeper_package::entry::{EntryEnv, fetch_entry, fetch_pinned};
 use hostkeeper_package::fetch::FetchEnv;
 use hostkeeper_package::ports::{Fetcher, Verifier};
 use hostkeeper_package::prove::ProveEnv;
@@ -55,7 +62,7 @@ use hostkeeper_unpack::{
 };
 
 use crate::adapters::PackageCheck;
-use crate::packages::{PackageError, PackageRefusal, Packages, VersionDir};
+use crate::packages::{PackageError, PackageRefusal, Packages, Pinned, VersionDir};
 use crate::refusal::Refusal;
 use crate::trusted_root::{RootReport, TrustedRoot};
 use crate::verb::PackageDigest;
@@ -296,7 +303,15 @@ impl RealPackages {
         service: &ServiceName,
         entry: &Target,
     ) -> Result<VerifiedArchive, PackageError> {
-        let env = EntryEnv {
+        let proven = fetch_entry(&self.entry_env(), service, entry)
+            .map_err(|failed| refused(refusal_of(Failure::Package(failed))))?;
+        self.other_bytes(service, &proven.other_bytes);
+        Ok(proven.archive)
+    }
+
+    /// What a fetch through an entry needs, from this store.
+    fn entry_env(&self) -> EntryEnv<'_> {
+        EntryEnv {
             fetcher: &*self.fetcher,
             verifier: &*self.verifier,
             clock: &*self.clock,
@@ -305,15 +320,17 @@ impl RealPackages {
             packages_root: &self.root,
             signers: &self.signers,
             platform: self.platform,
-        };
-        let proven = fetch_entry(&env, service, entry)
-            .map_err(|failed| refused(refusal_of(Failure::Package(failed))))?;
-        for store in &proven.other_bytes {
+        }
+    }
+
+    /// Logs a `store_digest_mismatch` for each store of `stores`, which gave other bytes than
+    /// an entry of `service` names.
+    fn other_bytes(&self, service: &ServiceName, stores: &[String]) {
+        for store in stores {
             (self.log)(&format!(
                 "{STORE_DIGEST_MISMATCH}: the store {store} gave other bytes than the entry names for {service}"
             ));
         }
-        Ok(proven.archive)
     }
 }
 
@@ -358,6 +375,14 @@ impl Packages for RealPackages {
         let staged =
             Staged::seal(&unpacked.dir).map_err(|error| refused(io_refusal(error.to_string())))?;
         Ok(VersionDir::staged_with(staged, unpacked.manifest))
+    }
+
+    fn pinned(&self, service: &ServiceName, entry: &Target) -> Result<Pinned, PackageError> {
+        let pinned = fetch_pinned(&self.entry_env(), service, entry)
+            .map_err(|failed| refused(refusal_of(Failure::Package(failed))))?;
+        self.other_bytes(service, &pinned.other_bytes);
+        let path = pinned.path().to_path_buf();
+        Ok(Pinned::new(&path, Box::new(pinned)))
     }
 
     fn remove_orphans(&self, service: &ServiceName) -> Result<(), PackageError> {

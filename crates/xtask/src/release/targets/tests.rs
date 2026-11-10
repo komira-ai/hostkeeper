@@ -82,13 +82,18 @@ fn built(dist: &Path, package: Package) {
     }
 }
 
-/// The hook bounds, units, health URL and params of hello's archive manifest for `units`
-/// (`systemd` or `launchd`), as a native entry's manifest names them in JSON.
+/// The hook bounds, units, health URL and params of hello's manifest for `units` (`systemd` or
+/// `launchd`), as a native entry's manifest names them in JSON; its hook command the program its
+/// `.deb` (or, for `launchd`, its `.pkg`) installs.
 fn hello_manifest(package: &str, run: [&str; 2], units: &str) -> Value {
+    let program = match units {
+        "launchd" => "/Library/Application Support/hello/bin/hello",
+        _ => "/usr/lib/hello/hello",
+    };
     json!({
         "package": package,
         "hook": {
-            "command": ["/usr/lib/hello/hello", "update-hook"],
+            "command": [program, "update-hook"],
             "timeoutSecs": {
                 "prepare": "30", "cutover": "60", "verify": "30", "rollback": "60",
                 "cleanup": "30", "uninstall": "60",
@@ -107,11 +112,30 @@ fn hello_manifest(package: &str, run: [&str; 2], units: &str) -> Value {
     })
 }
 
-/// The native entry the verb must write for hello's `.deb` of `dist` on the Linux `platform`.
+/// The `macos-pkg` entry the verb must write for the `.pkg` `name` of `dist` with `manifest`: in
+/// the store `komira-testing` at the installers' testing path, its digest and size, no
+/// attestation.
+fn expected_pkg(dist: &Path, name: &str, manifest: Value) -> Value {
+    let bytes = std::fs::metadata(dist.join(name)).expect("the .pkg").len();
+    json!({
+        "installer": "macos-pkg",
+        "locations": [{"store": "komira-testing", "locator": format!("hostkeeper/0.1.5/{name}")}],
+        "digest": file_sha256(&dist.join(name)).expect("hash"),
+        "bytes": bytes.to_string(),
+        "manifest": manifest,
+    })
+}
+
+/// The native entry the verb must write for hello's package of `dist` on `platform`: its `.deb`,
+/// or on a Mac its `.pkg`.
 fn expected_native(dist: &Path, platform: Platform) -> Value {
     let name = Package::Hello
         .native_name(&release(), platform)
         .expect("a native package");
+    if platform == Platform::MacosArm64 {
+        let manifest = hello_manifest("dev.hostkeeper.hello", ["hello.a", "hello.b"], "launchd");
+        return expected_pkg(dist, &name, manifest);
+    }
     let digest = file_sha256(&dist.join(&name)).expect("hash");
     json!({
         "installer": "apt",
@@ -146,14 +170,13 @@ fn answered(lines: &[String]) -> Value {
 }
 
 /// Reads `targets` back as the coordinator does (proto3 JSON, no unknown field), checks them by
-/// its rules for `service`, and holds every platform's list to one `apt` entry: no
-/// archive entry, which a release no longer lists, and no list for macOS.
+/// its rules for `service`, and holds every platform's list to one native entry: `apt` on Linux,
+/// `macos-pkg` on macOS, and no archive entry, which a release no longer lists.
 fn read_back_as_the_coordinator(service: &str, targets: &Value) {
     let descriptor = TARGET_LIST.clone().expect("the descriptor");
     let options = DeserializeOptions::new().deny_unknown_fields(true);
     let mut lists = BTreeMap::new();
     let object = targets.as_object().expect("an object");
-    assert!(!object.contains_key("macos-arm64"), "{targets}");
     for (platform, list) in object {
         let read: TargetList =
             DynamicMessage::deserialize_with_options(descriptor.clone(), list.clone(), &options)
@@ -161,7 +184,11 @@ fn read_back_as_the_coordinator(service: &str, targets: &Value) {
                 .transcode_to()
                 .expect("a TargetList");
         let installers: Vec<&str> = read.entries.iter().map(|e| e.installer.as_str()).collect();
-        assert_eq!(installers, ["apt"], "{platform}");
+        let native = match platform.as_str() {
+            "macos-arm64" => "macos-pkg",
+            _ => "apt",
+        };
+        assert_eq!(installers, [native], "{platform}");
         lists.insert(platform.clone(), read);
     }
     let service = ServiceName::new(service).expect("a service");
@@ -175,6 +202,21 @@ fn expected_hostkeeper_native(dist: &Path, platform: Platform, floor: &str) -> V
     let name = Package::Hostkeeper
         .native_name(&release(), platform)
         .expect("a native package");
+    if platform == Platform::MacosArm64 {
+        let manifest = json!({
+            "package": "dev.hostkeeper.hostkeeper",
+            "hook": {
+                "timeoutSecs": {
+                    "prepare": "300", "cutover": "300", "verify": "300", "rollback": "300",
+                    "cleanup": "300",
+                },
+                "verifyDeadlineSecs": "600",
+            },
+            "minHostkeeper": floor,
+            "installerBounds": {"stageSecs": "600", "activateSecs": "300", "removeSecs": "300"},
+        });
+        return expected_pkg(dist, &name, manifest);
+    }
     json!({
         "installer": "apt",
         "digest": file_sha256(&dist.join(&name)).expect("hash"),
@@ -197,13 +239,15 @@ fn expected_hostkeeper_native(dist: &Path, platform: Platform, floor: &str) -> V
 }
 
 #[test]
-fn hostkeeper_lists_its_deb_alone_on_linux_and_nothing_for_macos() {
+fn hostkeeper_lists_its_deb_on_linux_and_its_installer_on_macos_alone() {
     // Catches: hostkeeper's list with its archive entry still in it (stage 9 sets native entries
-    // alone, and the channel that serves the archive ends) or without its native entry, a list
-    // for macOS (no daemon announces `macos-pkg`), a `.deb` entry that is not a repository entry
-    // of the testing suite pinned by the daemon's `.deb`'s own SHA-256 at the release's version,
-    // a native manifest with another floor than `OLDEST_READER`, a hook command
-    // (its daemon runs built-in steps), or no run unit.
+    // alone, and the channel that serves the archive ends) or without its native entry, no list
+    // for macOS (a Mac whose daemon announces `macos-pkg` is then ordered nothing), a `.deb`
+    // entry that is not a repository entry of the testing suite pinned by the daemon's `.deb`'s
+    // own SHA-256 at the release's version, an installer entry whose location is not where the
+    // installers' testing directory holds it, that carries an attestation, a repository or a
+    // package version, or names hello's identifier, a native manifest with another floor than
+    // `OLDEST_READER`, a hook command (its daemon runs built-in steps), or no run unit on Linux.
     let (_root, dist) = dist("targets-hostkeeper");
     built(&dist, Package::Hostkeeper);
     let floor = release().min(OLDEST_READER).to_string();
@@ -215,6 +259,7 @@ fn hostkeeper_lists_its_deb_alone_on_linux_and_nothing_for_macos() {
         json!({
             "linux-arm64": entry(Platform::LinuxArm64),
             "linux-x86_64": entry(Platform::LinuxX86_64),
+            "macos-arm64": entry(Platform::MacosArm64),
         })
     );
     read_back_as_the_coordinator("hostkeeper", &got);
@@ -223,21 +268,36 @@ fn hostkeeper_lists_its_deb_alone_on_linux_and_nothing_for_macos() {
 #[test]
 fn hostkeepers_native_entries_name_the_package_its_daemon_takes_as_its_own() {
     // Catches: a native entry of hostkeeper whose package its daemon does not take as its own
-    // package (a `.deb` package other than `hostkeeper`), so the daemon would take the bootstrap
-    // install for another service's; a run unit that nfpm.yaml does not install in the daemon's
-    // own `.deb`; or a hook command on it (its daemon runs built-in steps).
+    // package (a `.pkg` identifier other than the daemon's launchd label, which the installer
+    // builder and the daemon share, or a `.deb` package other than `hostkeeper`), so the daemon
+    // would take the bootstrap install for another service's; a run unit that nfpm.yaml does not
+    // install in the daemon's own `.deb`, or any on a Mac (its daemon job is no run unit); or a
+    // hook command on it (its daemon runs built-in steps).
     let (_root, dist) = dist("targets-hostkeeper-own");
     built(&dist, Package::Hostkeeper);
     let got = answered(&targets(&request(&dist, Package::Hostkeeper, None)).expect("the targets"));
     for (platform, list) in got.as_object().expect("an object") {
         let native = &list["entries"][0]["manifest"];
         let package = native["package"].as_str().expect("a package");
-        assert_eq!(package, "hostkeeper", "{platform}");
         assert_eq!(
             native["hook"].get("command"),
             None,
             "{platform}: hostkeeper's daemon runs built-in steps"
         );
+        if platform == "macos-arm64" {
+            assert_eq!(
+                package,
+                crate::release::macos_pkg::identifier(),
+                "{platform}"
+            );
+            assert!(
+                hostkeeper_install::macos_pkg::own::is_own("hostkeeper", package),
+                "the daemon takes {package} as its own package"
+            );
+            assert_eq!(native.get("run"), None, "{platform}: no run unit");
+            continue;
+        }
+        assert_eq!(package, "hostkeeper", "{platform}");
         let run = native["run"].as_array().expect("run units");
         assert!(!run.is_empty(), "{platform}");
         let nfpm = std::fs::read_to_string(
@@ -255,9 +315,11 @@ fn hostkeepers_native_entries_name_the_package_its_daemon_takes_as_its_own() {
 }
 
 #[test]
-fn hello_lists_its_deb_alone_on_linux_and_nothing_for_macos() {
-    // Catches: hello's list with its archive entry still in it or without its native entry, a
-    // list for macOS, a `.deb` entry that is not a repository entry of the testing suite pinned
+fn hello_lists_its_deb_on_linux_and_its_pkg_on_macos_alone() {
+    // Catches: hello's list with its archive entry still in it or without its native entry, no
+    // list for macOS, a `.pkg` entry that is not a `macos-pkg` entry of the installers' testing
+    // directory pinned by the `.pkg`'s digest and size with hello's identifier, its launchd
+    // labels and the program its `.pkg` installs, a `.deb` entry that is not a repository entry of the testing suite pinned
     // by the `.deb`'s own SHA-256 at the release's version, and a native manifest that is not
     // hello's (its hook bounds, run units, health URL, params and floor) with the hook command
     // naming the program the `.deb` installs, the package's name and the installer's bounds.
@@ -270,6 +332,7 @@ fn hello_lists_its_deb_alone_on_linux_and_nothing_for_macos() {
         json!({
             "linux-arm64": entry(Platform::LinuxArm64),
             "linux-x86_64": entry(Platform::LinuxX86_64),
+            "macos-arm64": entry(Platform::MacosArm64),
         })
     );
     read_back_as_the_coordinator("hello", &got);
@@ -290,8 +353,8 @@ fn the_line_of_each_package_is_the_bytes_the_release_writes() {
     assert_eq!(line_of("targets-bytes-mdm", Package::Mdm), MDM_LINE);
 }
 
-const HOSTKEEPER_LINE: &str = r#"targets={"linux-arm64":{"entries":[{"digest":"c920ce476ae57d152131e881c4a0af050a3ee25ff0ae85ee20697be9c6fd38af","installer":"apt","manifest":{"hook":{"timeoutSecs":{"cleanup":"300","cutover":"300","prepare":"300","rollback":"300","verify":"300"},"verifyDeadlineSecs":"600"},"installerBounds":{"activateSecs":"300","removeSecs":"300","stageSecs":"600"},"minHostkeeper":"0.1.5","package":"hostkeeper","run":["hostkeeper.service"]},"packageVersion":"0.1.5","repository":"komira-testing"}]},"linux-x86_64":{"entries":[{"digest":"109ccc2b56ef785db77ac86d6cff2a0e7e57d1a9444228ef39af7b8bd08d1551","installer":"apt","manifest":{"hook":{"timeoutSecs":{"cleanup":"300","cutover":"300","prepare":"300","rollback":"300","verify":"300"},"verifyDeadlineSecs":"600"},"installerBounds":{"activateSecs":"300","removeSecs":"300","stageSecs":"600"},"minHostkeeper":"0.1.5","package":"hostkeeper","run":["hostkeeper.service"]},"packageVersion":"0.1.5","repository":"komira-testing"}]}}"#;
-const HELLO_LINE: &str = r#"targets={"linux-arm64":{"entries":[{"digest":"3b1e27a59adf3654ac42e0a1ca31ba49f1691ac532e935c410fab31f01625cbc","installer":"apt","manifest":{"healthUrl":"http://127.0.0.1:9310/readyz","hook":{"command":["/usr/lib/hello/hello","update-hook"],"timeoutSecs":{"cleanup":"30","cutover":"60","prepare":"30","rollback":"60","uninstall":"60","verify":"30"},"verifyDeadlineSecs":"120"},"installerBounds":{"activateSecs":"300","removeSecs":"300","stageSecs":"600"},"minHostkeeper":"0.1.0","package":"hello","params":{"port":{"integer":"9310"},"record_dir":{"text":"/var/lib/updater/hooks/hello"},"units":{"text":"systemd"}},"run":["hello@a.service","hello@b.service"]},"packageVersion":"0.1.5","repository":"komira-testing"}]},"linux-x86_64":{"entries":[{"digest":"6ddf6fc1307c13d242c03a62b129a0bdf0e2338ecbb46ff3ce4905fcb513416d","installer":"apt","manifest":{"healthUrl":"http://127.0.0.1:9310/readyz","hook":{"command":["/usr/lib/hello/hello","update-hook"],"timeoutSecs":{"cleanup":"30","cutover":"60","prepare":"30","rollback":"60","uninstall":"60","verify":"30"},"verifyDeadlineSecs":"120"},"installerBounds":{"activateSecs":"300","removeSecs":"300","stageSecs":"600"},"minHostkeeper":"0.1.0","package":"hello","params":{"port":{"integer":"9310"},"record_dir":{"text":"/var/lib/updater/hooks/hello"},"units":{"text":"systemd"}},"run":["hello@a.service","hello@b.service"]},"packageVersion":"0.1.5","repository":"komira-testing"}]}}"#;
+const HOSTKEEPER_LINE: &str = r#"targets={"linux-arm64":{"entries":[{"digest":"c920ce476ae57d152131e881c4a0af050a3ee25ff0ae85ee20697be9c6fd38af","installer":"apt","manifest":{"hook":{"timeoutSecs":{"cleanup":"300","cutover":"300","prepare":"300","rollback":"300","verify":"300"},"verifyDeadlineSecs":"600"},"installerBounds":{"activateSecs":"300","removeSecs":"300","stageSecs":"600"},"minHostkeeper":"0.1.5","package":"hostkeeper","run":["hostkeeper.service"]},"packageVersion":"0.1.5","repository":"komira-testing"}]},"linux-x86_64":{"entries":[{"digest":"109ccc2b56ef785db77ac86d6cff2a0e7e57d1a9444228ef39af7b8bd08d1551","installer":"apt","manifest":{"hook":{"timeoutSecs":{"cleanup":"300","cutover":"300","prepare":"300","rollback":"300","verify":"300"},"verifyDeadlineSecs":"600"},"installerBounds":{"activateSecs":"300","removeSecs":"300","stageSecs":"600"},"minHostkeeper":"0.1.5","package":"hostkeeper","run":["hostkeeper.service"]},"packageVersion":"0.1.5","repository":"komira-testing"}]},"macos-arm64":{"entries":[{"bytes":"22","digest":"40c982ccbdfd22b12c63216ad9e09c2cf53d28bda2ac471c45efae3950331e31","installer":"macos-pkg","locations":[{"locator":"hostkeeper/0.1.5/hostkeeper-0.1.5-macos-arm64.pkg","store":"komira-testing"}],"manifest":{"hook":{"timeoutSecs":{"cleanup":"300","cutover":"300","prepare":"300","rollback":"300","verify":"300"},"verifyDeadlineSecs":"600"},"installerBounds":{"activateSecs":"300","removeSecs":"300","stageSecs":"600"},"minHostkeeper":"0.1.5","package":"dev.hostkeeper.hostkeeper"}}]}}"#;
+const HELLO_LINE: &str = r#"targets={"linux-arm64":{"entries":[{"digest":"3b1e27a59adf3654ac42e0a1ca31ba49f1691ac532e935c410fab31f01625cbc","installer":"apt","manifest":{"healthUrl":"http://127.0.0.1:9310/readyz","hook":{"command":["/usr/lib/hello/hello","update-hook"],"timeoutSecs":{"cleanup":"30","cutover":"60","prepare":"30","rollback":"60","uninstall":"60","verify":"30"},"verifyDeadlineSecs":"120"},"installerBounds":{"activateSecs":"300","removeSecs":"300","stageSecs":"600"},"minHostkeeper":"0.1.0","package":"hello","params":{"port":{"integer":"9310"},"record_dir":{"text":"/var/lib/updater/hooks/hello"},"units":{"text":"systemd"}},"run":["hello@a.service","hello@b.service"]},"packageVersion":"0.1.5","repository":"komira-testing"}]},"linux-x86_64":{"entries":[{"digest":"6ddf6fc1307c13d242c03a62b129a0bdf0e2338ecbb46ff3ce4905fcb513416d","installer":"apt","manifest":{"healthUrl":"http://127.0.0.1:9310/readyz","hook":{"command":["/usr/lib/hello/hello","update-hook"],"timeoutSecs":{"cleanup":"30","cutover":"60","prepare":"30","rollback":"60","uninstall":"60","verify":"30"},"verifyDeadlineSecs":"120"},"installerBounds":{"activateSecs":"300","removeSecs":"300","stageSecs":"600"},"minHostkeeper":"0.1.0","package":"hello","params":{"port":{"integer":"9310"},"record_dir":{"text":"/var/lib/updater/hooks/hello"},"units":{"text":"systemd"}},"run":["hello@a.service","hello@b.service"]},"packageVersion":"0.1.5","repository":"komira-testing"}]},"macos-arm64":{"entries":[{"bytes":"17","digest":"00315b0fd629b9b44612483c354b4c4175ecc94ca2237afd7ed01e5a3b4df761","installer":"macos-pkg","locations":[{"locator":"hostkeeper/0.1.5/hello-0.1.5-macos-arm64.pkg","store":"komira-testing"}],"manifest":{"healthUrl":"http://127.0.0.1:9310/readyz","hook":{"command":["/Library/Application Support/hello/bin/hello","update-hook"],"timeoutSecs":{"cleanup":"30","cutover":"60","prepare":"30","rollback":"60","uninstall":"60","verify":"30"},"verifyDeadlineSecs":"120"},"installerBounds":{"activateSecs":"300","removeSecs":"300","stageSecs":"600"},"minHostkeeper":"0.1.0","package":"dev.hostkeeper.hello","params":{"port":{"integer":"9310"},"record_dir":{"text":"/var/lib/updater/hooks/hello"},"units":{"text":"launchd"}},"run":["hello.a","hello.b"]}}]}}"#;
 const MDM_LINE: &str = r#"targets={"linux-x86_64":{"entries":[{"digest":"0c3015630430a4856eecca558013c9d74bd58e4234e67d7e834b21a759b1ae4d","installer":"apt","manifest":{"healthUrl":"http://127.0.0.1:9004/version","hook":{"command":["/usr/lib/mdm/mdm","update-hook"],"timeoutSecs":{"cleanup":"30","cutover":"120","prepare":"300","rollback":"120","uninstall":"120","verify":"60"},"verifyDeadlineSecs":"600"},"installerBounds":{"activateSecs":"300","removeSecs":"300","stageSecs":"600"},"minHostkeeper":"0.1.5","package":"mdm","params":{"record_dir":{"text":"/var/lib/updater/hooks/mdm"},"settings":{"text":"/etc/mdm/settings"}},"run":["mdm-scep.service","mdm-nanohub.service","mdm-depserver.service"]},"packageVersion":"0.1.5","repository":"komira-testing"}]}}"#;
 
 /// The `targets=` line the verb answers for `package` at the release 0.1.5, in a new `dist`
@@ -363,8 +426,7 @@ fn mdm_gets_its_one_platform_its_native_entry_alone_and_the_floor_of_hostkeepers
 fn every_problem_of_the_release_is_named_at_once() {
     // Catches: a native package missing, or a native package's bundle over the daemon's cap,
     // given an entry; or the verb stopping at the first problem, so a release with several is
-    // fixed one run at a time. macos-arm64's `.pkg` and bundle are gone and not read, since
-    // macOS has no list.
+    // fixed one run at a time; macos-arm64's `.pkg` and its bundle gone.
     let (_root, dist) = dist("targets-every-problem");
     built(&dist, Package::Hello);
     // linux-arm64: its .deb's bundle over 1 MiB.
@@ -391,6 +453,13 @@ fn every_problem_of_the_release_is_named_at_once() {
             ),
             format!(
                 "{x86}: missing: the release ships the native package of every platform it lists"
+            ),
+            format!(
+                "{pkg}: missing: the release ships the native package of every platform it lists"
+            ),
+            format!(
+                "{}: missing: every native package carries its attestation bundle",
+                bundle_of(&pkg)
             ),
         ]))
     );

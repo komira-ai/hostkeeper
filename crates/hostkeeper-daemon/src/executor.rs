@@ -259,6 +259,7 @@ impl Ctx {
         Repository {
             launcher: Arc::clone(&self.launcher),
             ports: Arc::clone(&self.repository_ports),
+            packages: Arc::clone(&self.packages),
             clock: Arc::clone(&self.clock),
             roots: self.placement.roots.clone(),
             fs: Arc::clone(&self.placement.fs),

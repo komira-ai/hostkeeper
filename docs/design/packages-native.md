@@ -181,8 +181,9 @@ packages are published.**
   (network-install.md), on the hop before any key is on the new host, against `[trusted_signers]`. So the pinned `gh`,
   `packaging/sigstore/trusted_root.json` and its refresh workflow `trusted-root.yml` stay, for it.
 - A `macos-pkg` entry carries no attestation, and A18 makes the coordinator refuse one, as it refuses one on a
-  repository entry (section 2.2): an attestation nobody checks must not look checked. No daemon lists `macos-pkg` yet
-  (A9 is not built), so nothing that shipped changes.
+  repository entry (section 2.2): an attestation nobody checks must not look checked. No daemon listed `macos-pkg`
+  when A18 shipped, so nothing that shipped changed; a Mac's daemon lists it from the release that runs its steps
+  (`crates/hostkeeper-daemon/src/macos_pkg.rs`), with the signers file loaded and `installer` and `pkgutil` present.
 
 ### 10.4 hostkeeper's own update
 
@@ -454,7 +455,8 @@ it near a release:
   `X.Y.Z-fail-ready` would read as Debian revision `ready` of an upstream `X.Y.Z-fail`, ordered above the release. A
   service version allows no `~`, so the two cannot be taken for each other. The release asset keeps the name
   `hello_X.Y.Z-fail-ready_<arch>.deb`: a release host may rename an asset whose name has a `~`. It is attested like
-  every native package. The failing build's `.pkg` is not released: no daemon announces `macos-pkg` yet.
+  every native package. The failing build's `.pkg` is not released, so no Mac is ordered it (a release's macOS list
+  is the release's own signed `.pkg`).
 - **Suite.** `testing-fail` is a suite of the same repository with the same archive key and the same pool. It lists
   hello's failing build alone, at `X.Y.Z~fail.ready`, under the pool name `hello_X.Y.Z~fail.ready_<arch>.deb` its
   control gives. `testing` and `stable` still list `X.Y.Z` alone, and each suite refuses the other's form. It is never

@@ -201,7 +201,10 @@ impl SealedExe {
 /// 6.6): the first `run` unit's file in the extracted tree (`tree/usr/lib/systemd/system/<unit>`
 /// or `tree/lib/systemd/system/<unit>`, the template's for an instance), its `ExecStart=` program
 /// an absolute path of plain names that the package installs, and the file at that path under
-/// `tree/`: for a `.deb` that installs `/usr/bin/x`, `tree/usr/bin/x`.
+/// `tree/`: for a `.deb` that installs `/usr/bin/x`, `tree/usr/bin/x`. A `.pkg`'s `run` entry is
+/// a launchd label, whose job is `tree/Library/LaunchDaemons/<label>.plist` (no systemd unit of
+/// that name is in its tree): its program is the plist's (`Program`, else the first of
+/// `ProgramArguments`), read the same way.
 fn repository_exe(dir: &Path, expected: &Expected, own: &HostkeeperVersion) -> Option<PathBuf> {
     let manifest = crate::target::manifest(dir, expected, own).ok()?;
     let unit = manifest.run.first()?;
@@ -209,17 +212,28 @@ fn repository_exe(dir: &Path, expected: &Expected, own: &HostkeeperVersion) -> O
         .ok()
         .and_then(|name| name.template());
     let tree = dir.join(TREE);
-    let text = std::iter::once(unit.clone())
+    let unit_text = std::iter::once(unit.clone())
         .chain(template)
         .find_map(|file| unit_file(&tree, &file))
-        .and_then(|rel| fs::read_to_string(tree.join(rel)).ok())?;
-    let program = exec_start(&text)?;
-    let rest = Path::new(program)
+        .and_then(|rel| fs::read_to_string(tree.join(rel)).ok());
+    let program = match unit_text {
+        Some(text) => exec_start(&text)?.to_owned(),
+        None => {
+            let plist = tree
+                .join(LAUNCH_DAEMONS)
+                .join(format!("{unit}{PLIST_SUFFIX}"));
+            plist_program(&fs::read_to_string(plist).ok()?)?
+        }
+    };
+    let rest = Path::new(&program)
         .strip_prefix("/")
         .ok()
         .filter(|rest| is_plain(rest))?;
     Some(tree.join(rest))
 }
+
+/// Where a `.pkg` puts its jobs' plists, relative to its tree.
+const LAUNCH_DAEMONS: &str = "Library/LaunchDaemons";
 
 /// The program of the first `ExecStart=` line of a systemd unit: its first word, without the
 /// prefixes systemd reads before it.

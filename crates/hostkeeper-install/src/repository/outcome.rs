@@ -1,7 +1,9 @@
 //! How a step of the repository installer fails: an outcome, a class and a reason, as a hook
 //! step ends (packages.md section 5.1). The reasons are those of packages-repositories.md
-//! section 4.5, the entry's own (section 2.3) and those of packages-native.md section 10.2; their
-//! tokens are only ever added.
+//! section 4.5, the entry's own (section 2.3), those of packages-native.md section 10.2 and the
+//! two of `macos-pkg` the others lack (section 4.7: `unsafe_directory`, `installer_error`), so
+//! that the daemon reports a `macos-pkg` step's failure as it reports this installer's (the
+//! `From` of [`crate::Failure`]); their tokens are only ever added.
 
 use std::fmt;
 
@@ -76,17 +78,24 @@ pub enum Reason {
     DpkgError,
     /// The host's files could not be read or written, or a tool could not be run.
     IoError,
+    /// `macos-pkg`: a parent directory of a payload path is not root's, or another account can
+    /// write it.
+    UnsafeDirectory,
+    /// `macos-pkg`: `installer` failed, the receipt does not show the version, or an installed
+    /// file differs.
+    InstallerError,
 }
 
 impl Reason {
     /// Every reason, in token order.
-    pub const ALL: [Reason; 18] = [
+    pub const ALL: [Reason; 20] = [
         Reason::CoordinatorTooOld,
         Reason::DependencyChanges,
         Reason::DependencyMissing,
         Reason::DpkgError,
         Reason::DpkgInterrupted,
         Reason::FetchFailed,
+        Reason::InstallerError,
         Reason::IoError,
         Reason::ManifestInvalid,
         Reason::NotInRepository,
@@ -99,6 +108,7 @@ impl Reason {
         Reason::RepositoryUnknown,
         Reason::Signature,
         Reason::StoreDigestMismatch,
+        Reason::UnsafeDirectory,
     ];
 
     /// The reason as the verdict carries it.
@@ -122,6 +132,8 @@ impl Reason {
             Reason::DpkgInterrupted => "dpkg_interrupted",
             Reason::DpkgError => "dpkg_error",
             Reason::IoError => "io_error",
+            Reason::UnsafeDirectory => "unsafe_directory",
+            Reason::InstallerError => "installer_error",
         }
     }
 
@@ -134,7 +146,8 @@ impl Reason {
             | Reason::ManifestInvalid
             | Reason::PackageScripts
             | Reason::PackageConflict
-            | Reason::DpkgError => Class::Release,
+            | Reason::DpkgError
+            | Reason::InstallerError => Class::Release,
             Reason::CoordinatorTooOld
             | Reason::RepositoryUnknown
             | Reason::FetchFailed
@@ -145,7 +158,8 @@ impl Reason {
             | Reason::DependencyChanges
             | Reason::PackageManagerBusy
             | Reason::DpkgInterrupted
-            | Reason::IoError => Class::Environment,
+            | Reason::IoError
+            | Reason::UnsafeDirectory => Class::Environment,
         }
     }
 
@@ -187,6 +201,26 @@ impl Failure {
     /// What the report says beside the reason.
     pub fn detail(&self) -> &str {
         &self.detail
+    }
+}
+
+/// A `macos-pkg` step's failure as this installer's: the same reason, by its token, so the
+/// same class and outcome, and the same detail.
+impl From<crate::outcome::Failure> for Failure {
+    fn from(failure: crate::outcome::Failure) -> Failure {
+        use crate::outcome::Reason as Pkg;
+        let reason = match failure.reason() {
+            Pkg::OrderInvalid => Reason::OrderInvalid,
+            Pkg::Signature => Reason::Signature,
+            Pkg::ManifestInvalid => Reason::ManifestInvalid,
+            Pkg::PackageConflict => Reason::PackageConflict,
+            Pkg::PackageScripts => Reason::PackageScripts,
+            Pkg::UnsafeDirectory => Reason::UnsafeDirectory,
+            Pkg::PackageManagerBusy => Reason::PackageManagerBusy,
+            Pkg::InstallerError => Reason::InstallerError,
+            Pkg::IoError => Reason::IoError,
+        };
+        Failure::new(reason, failure.detail())
     }
 }
 

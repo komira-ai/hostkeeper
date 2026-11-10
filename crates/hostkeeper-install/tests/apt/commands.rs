@@ -169,6 +169,8 @@ fn each_reason_has_the_class_and_outcome_of_section_4_5() {
         (Reason::OrderInvalid, R, F),
         (Reason::CoordinatorTooOld, E, D),
         (Reason::IoError, E, F),
+        (Reason::UnsafeDirectory, E, F),
+        (Reason::InstallerError, R, F),
     ];
     assert_eq!(table.len(), Reason::ALL.len());
     for (reason, class, outcome) in table {

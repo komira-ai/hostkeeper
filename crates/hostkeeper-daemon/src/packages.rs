@@ -8,8 +8,9 @@
 //! for the order's service and version, so that a store cannot hand it a package of another name
 //! or version.
 
+use std::any::Any;
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use hostkeeper_config::manifest::Manifest;
 use hostkeeper_config::names::{ServiceName, Version};
@@ -134,6 +135,32 @@ impl PackageError {
     }
 }
 
+/// The file of an entry's artifact fetched by its pin alone ([`Packages::pinned`]), whose size
+/// and SHA-256 are the entry's: what it holds (a staging file the store removes when it is
+/// dropped) lives as long as it does.
+pub struct Pinned {
+    path: PathBuf,
+    _held: Box<dyn Any + Send>,
+}
+
+impl Pinned {
+    /// The file at `path`, kept as long as `held` lives.
+    pub fn new(path: &Path, held: Box<dyn Any + Send>) -> Pinned {
+        Pinned {
+            path: path.to_path_buf(),
+            _held: held,
+        }
+    }
+
+    /// The file.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+/// What [`Packages::pinned`] answers on a store that fetches no file by its pin alone.
+pub const NO_PINNED_FETCH: &str = "this package store fetches no artifact by its pin alone";
+
 /// Fetches, verifies, unpacks and seals packages.
 pub trait Packages: Send + Sync {
     /// The sealed version directory of `service` at `version`, whose package has `digest`. When
@@ -150,6 +177,14 @@ pub trait Packages: Send + Sync {
         index_digest: Option<&PackageDigest>,
         entry: Option<&Entry>,
     ) -> Result<VersionDir, PackageError>;
+
+    /// The artifact of `entry` for `service` fetched by its pin alone, with no attestation and
+    /// nothing unpacked: the `.pkg` of a `macos-pkg` entry, which carries none (its pin and the
+    /// package's signature, checked by the installer's `stage`, are the whole check). The default
+    /// fetches nothing ([`NO_PINNED_FETCH`]).
+    fn pinned(&self, _service: &ServiceName, _entry: &Entry) -> Result<Pinned, PackageError> {
+        Err(PackageError::Other(NO_PINNED_FETCH.to_owned()))
+    }
 
     /// Removes what a crashed fetch or unpack of `service` left in its package directory. The
     /// default removes nothing.
