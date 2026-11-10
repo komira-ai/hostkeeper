@@ -40,10 +40,6 @@ pub const PARTIAL: &str = "partial";
 /// What apt keeps in its lists directory beside the indexes, which is not copied.
 pub const NOT_KEPT: [&str; 3] = ["lock", "partial", "auxfiles"];
 
-/// The control members a service's `.deb` may carry: no maintainer script
-/// (packages-native.md section 10.2).
-pub const ALLOWED_MEMBERS: [&str; 3] = ["conffiles", "control", "md5sums"];
-
 /// The `apt` backend.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Apt;
@@ -258,43 +254,6 @@ impl Backend for Apt {
         ];
         let call = Run::offline(Tool::DpkgDeb, args, bound).writing(Vec::new());
         parse::fields(&run(tools, &call)?)
-    }
-
-    fn control_members(
-        &self,
-        tools: &dyn Tools,
-        file: &Path,
-        into: &Path,
-        bound: u64,
-    ) -> Result<Vec<String>, Failure> {
-        let args = vec![
-            "--control".to_owned(),
-            file.display().to_string(),
-            into.display().to_string(),
-        ];
-        let call = Run::offline(Tool::DpkgDeb, args, bound).writing(vec![into.to_path_buf()]);
-        let output = run(tools, &call)?;
-        if !output.succeeded() {
-            return Err(Failure::new(
-                Reason::ManifestInvalid,
-                format!(
-                    "the package's control members cannot be read: {}",
-                    output.last_line()
-                ),
-            ));
-        }
-        let mut names: Vec<String> = fs::read_dir(into)
-            .and_then(|listing| listing.collect::<io::Result<Vec<_>>>())
-            .map_err(|e| Failure::new(Reason::IoError, format!("the control members: {e}")))?
-            .into_iter()
-            .map(|e| e.file_name().to_string_lossy().into_owned())
-            .collect();
-        names.sort();
-        Ok(names)
-    }
-
-    fn allowed_members(&self) -> &'static [&'static str] {
-        &ALLOWED_MEMBERS
     }
 
     fn extract(

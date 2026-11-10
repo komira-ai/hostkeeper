@@ -2,12 +2,12 @@
 //! port 9310, each running only while the hook's marker `/var/lib/updater/hooks/hello/slots/<slot>` exists; the failing build
 //! starts the program with `--fail-ready`. What differs is where the files are:
 //!
-//! - **The `.deb`** installs the program at `/usr/lib/hello/hello` (a program no one types), the
-//!   hook beside it, and one unit per slot, `hello@a.service` and `hello@b.service`, each a plain
+//! - **The `.deb`** installs the program at `/usr/lib/hello/hello` (a program no one types) and
+//!   one unit per slot, `hello@a.service` and `hello@b.service`, each a plain
 //!   file in `/usr/lib/systemd/system/` (the run units are files of the package, not instances
 //!   of a template the package would install without running it).
-//! - **The `.pkg`** installs the program at `/Library/Application Support/hello/bin/hello`, the
-//!   hook at `/Library/Application Support/hello/hostkeeper-hook`, and one launchd job per slot,
+//! - **The `.pkg`** installs the program at `/Library/Application Support/hello/bin/hello` and
+//!   one launchd job per slot,
 //!   `/Library/LaunchDaemons/hello.a.plist` and `hello.b.plist`, rendered by
 //!   `hostkeeper_launchd::service_plist` with `Disabled` true added, so launchd loads neither at
 //!   boot until hostkeeper enables it.
@@ -20,7 +20,7 @@ use std::path::PathBuf;
 
 use hostkeeper_launchd::{Label, ServiceJob, service_plist};
 
-use super::{FILE_MODE, HOOK, PROGRAM_MODE, SYSTEMD_UNITS, hook_wrapper};
+use super::{FILE_MODE, PROGRAM_MODE, SYSTEMD_UNITS};
 use crate::release::Error;
 
 /// The service's name: its package, its program, its units and its jobs.
@@ -41,7 +41,7 @@ const LOG_DIR: &str = "/var/log";
 /// Where the `.deb` installs the program.
 pub(crate) const DEB_PROGRAM: &str = "/usr/lib/hello/hello";
 
-/// Where the `.pkg` installs the service's directory, the program and the hook.
+/// Where the `.pkg` installs the service's directory and the program.
 pub(crate) const PKG_DIR: &str = "/Library/Application Support/hello";
 pub(crate) const PKG_PROGRAM: &str = "/Library/Application Support/hello/bin/hello";
 
@@ -96,14 +96,7 @@ pub(crate) fn unit(slot: &str, fail_ready: bool) -> String {
 
 /// The files of hello's `.deb` with the program `binary`, in path order.
 pub(crate) fn deb_files(binary: Vec<u8>, fail_ready: bool) -> Vec<File> {
-    let mut files = vec![
-        File::new(DEB_PROGRAM, PROGRAM_MODE, binary),
-        File::new(
-            &format!("/usr/lib/{NAME}/{HOOK}"),
-            PROGRAM_MODE,
-            hook_wrapper(NAME),
-        ),
-    ];
+    let mut files = vec![File::new(DEB_PROGRAM, PROGRAM_MODE, binary)];
     files.extend(SLOTS.map(|slot| {
         File::new(
             &format!("{SYSTEMD_UNITS}/{NAME}@{slot}.service"),
@@ -144,14 +137,7 @@ pub(crate) fn plist(slot: &str, fail_ready: bool) -> Result<String, Error> {
 
 /// The files of hello's `.pkg` with the program `binary`, in path order.
 pub(crate) fn pkg_files(binary: Vec<u8>, fail_ready: bool) -> Result<Vec<File>, Error> {
-    let mut files = vec![
-        File::new(PKG_PROGRAM, PROGRAM_MODE, binary),
-        File::new(
-            &format!("{PKG_DIR}/{HOOK}"),
-            PROGRAM_MODE,
-            hook_wrapper(&format!("bin/{NAME}")),
-        ),
-    ];
+    let mut files = vec![File::new(PKG_PROGRAM, PROGRAM_MODE, binary)];
     for slot in SLOTS {
         files.push(File::new(
             &format!("{LAUNCH_DAEMONS}/{NAME}.{slot}.plist"),

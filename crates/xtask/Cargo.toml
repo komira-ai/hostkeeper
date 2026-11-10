@@ -125,9 +125,8 @@ xtask = { path = ".", features = ["test-support"] }
 # The packaging test (tests/packaging/daemon_flags.rs) parses the unit's command lines with the
 # binary's own flag parser and reads its default paths.
 hostkeeper-daemon = { path = "../hostkeeper-daemon" }
-# The installers' lists for hostkeeper's own packages (`repository::tree::OWN_FILES`,
-# `macos_pkg::own::list`), which the packaging test (tests/packaging/own_list.rs) holds to
-# `packaging/linux/nfpm.yaml` and the pkg test (`release macos-pkg`) to the payload it builds.
+# The installer's list for hostkeeper's own macOS package (`macos_pkg::own::list`), which the pkg
+# test (`release macos-pkg`) holds to the payload it builds.
 hostkeeper-install = { path = "../hostkeeper-install" }
 # The packaging test (tests/packaging/unit_file.rs) holds the unit's watchdog to the heartbeat
 # loop's longest call.

@@ -1,5 +1,5 @@
-//! The manifest of each package's native entry, compiled in: the hook bounds, the units a host
-//! runs, the health URL and the params the package's hook reads, and the oldest daemon that takes
+//! The manifest of each package's native entry, compiled in: the hook's command and bounds, the
+//! units a host runs, the health URL and the params the package's hook reads, and the oldest daemon that takes
 //! the release. The values are the ones the package has always carried; the test that holds the
 //! verb's whole answer for a release holds them too.
 
@@ -28,6 +28,9 @@ const HELLO_MIN_HOSTKEEPER: &str = "0.1.0";
 /// The unit file of the daemon's `.deb` that a host runs.
 const HOSTKEEPER_UNIT: &str = "hostkeeper.service";
 
+/// The argument after a service's program in its hook command: the program's update-hook verb.
+const UPDATE_HOOK: &str = "update-hook";
+
 /// A text param.
 fn text(value: &str) -> Param {
     Param {
@@ -35,15 +38,32 @@ fn text(value: &str) -> Param {
     }
 }
 
-/// The manifest of the native entry of `package`'s release `version` on a Linux platform. The
-/// hook names no command: a native package's hook is its program at the fixed path, and
-/// hostkeeper's daemon runs built-in steps.
+/// The manifest of the native entry of `package`'s release `version` on a Linux platform. A
+/// service's hook command is the program its `.deb` installs ([`program`]) with `update-hook`;
+/// hostkeeper's names none, since its daemon runs built-in steps.
 pub(super) fn of(package: Package, version: &Version) -> Manifest {
     match package {
         Package::Hostkeeper => hostkeeper(version),
         Package::Hello | Package::HelloFailReady => hello_manifest(),
         Package::Mdm => mdm_manifest(version),
     }
+}
+
+/// The absolute path the `.deb` of `package` installs its program at, from the constants the
+/// package builders write the files by; none for hostkeeper, whose daemon runs built-in steps.
+pub(super) fn program(package: Package) -> Option<String> {
+    match package {
+        Package::Hostkeeper => None,
+        Package::Hello | Package::HelloFailReady => Some(hello::DEB_PROGRAM.to_owned()),
+        Package::Mdm => Some(format!("{}/{}", mdm::DEB_BIN, mdm::SERVICE)),
+    }
+}
+
+/// The hook command of `package`'s entry: its [`program`] and `update-hook`, or none.
+fn command(package: Package) -> Vec<String> {
+    program(package)
+        .map(|program| vec![program, UPDATE_HOOK.to_owned()])
+        .unwrap_or_default()
 }
 
 /// Hostkeeper's: every step bounded at 300 seconds and the verify deadline at 600 (the table is
@@ -63,6 +83,7 @@ fn hostkeeper(version: &Version) -> Manifest {
                 uninstall: None,
             }),
             verify_deadline_secs: 600,
+            command: command(Package::Hostkeeper),
             ..Hook::default()
         }),
         run: vec![HOSTKEEPER_UNIT.to_owned()],
@@ -77,6 +98,7 @@ fn hello_manifest() -> Manifest {
     Manifest {
         package: Some(hello::NAME.to_owned()),
         hook: Some(Hook {
+            command: command(Package::Hello),
             timeout_secs: Some(StepBounds {
                 prepare: 30,
                 cutover: 60,
@@ -124,6 +146,7 @@ fn mdm_manifest(version: &Version) -> Manifest {
     Manifest {
         package: Some(mdm::SERVICE.to_owned()),
         hook: Some(Hook {
+            command: command(Package::Mdm),
             timeout_secs: Some(StepBounds {
                 prepare: secs("prepare"),
                 cutover: secs("cutover"),

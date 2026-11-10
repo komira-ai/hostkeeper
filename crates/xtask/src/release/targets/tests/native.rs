@@ -4,6 +4,27 @@
 use super::*;
 
 #[test]
+fn the_program_a_package_installs_is_where_its_builder_writes_it() {
+    // Catches: a hook command naming a path the `.deb` does not install: hello's and mdm's each
+    // hold an executable file at the program path, and hostkeeper names none.
+    let installed = |files: Vec<native_hello::File>, program: &str| {
+        files.iter().any(|f| f.path == program && f.mode == 0o755)
+    };
+    let hello = manifest::program(Package::Hello).expect("a program");
+    assert!(installed(
+        native_hello::deb_files(b"p".to_vec(), false),
+        &hello
+    ));
+    assert_eq!(manifest::program(Package::HelloFailReady), Some(hello));
+    let mdm = manifest::program(Package::Mdm).expect("a program");
+    assert!(installed(
+        crate::release::native::mdm::deb_files(b"p".to_vec(), Vec::new()),
+        &mdm
+    ));
+    assert_eq!(manifest::program(Package::Hostkeeper), None);
+}
+
+#[test]
 fn a_deb_whose_control_is_not_the_releases_is_named_field_by_field() {
     // Catches: a `.deb` of another package, version or architecture under the release's name
     // given an entry: the host's package manager installs it by its control fields and the

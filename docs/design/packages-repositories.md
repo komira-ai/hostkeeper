@@ -7,8 +7,8 @@ coordinator's audit of a repository entry and its release before's reader on wha
 (`crates/hostkeeper-coordinator/src/releases.rs`). Build item A7 is **Built**: the repository installer
 kind, its backend interface and the `apt` backend (`crates/hostkeeper-install/src/repository/`: the configuration of
 section 3.1, the announce rule of section 4.1, `stage`, `activate` with the hold and the enablement, rollback from the
-kept index and package, `retire`, `remove` by purge, drift and the failure reasons of section 4.5, with the hook at its
-fixed path, the refusal of scripts and the path rule of packages-native.md section 10.2); the tool runs that fetch,
+kept index and package, `retire`, `remove` by purge, drift and the failure reasons of section 4.5, with the manifest's hook
+program checked at `stage` and the `policy-rc.d` guard around dpkg of packages-native.md section 10.2); the tool runs that fetch,
 confined (`StepLauncher::run_tool`); the daemon's check of the configuration at start and its answers
 `order_invalid` and `coordinator_too_old` to an entry of the wrong kind; and `ServiceBeat.drift`, sent over gRPC and
 shown by `Hosts.List` and `Hosts.Get`. The daemon runs it (`crates/hostkeeper-daemon/src/repository.rs`): a host
@@ -37,10 +37,10 @@ the Alpine daemon, and hostkeeper itself is installed and updated from its `.deb
 whose hand-over needs the old files), sections 10.1 and 10.6 say what holds instead. Four more things below change. A
 `macos-pkg` entry carries no attestation, and the host checks none: wherever this file names the attestation of a
 `.pkg` (sections 1, 3.3, 4.7, 9), the pin and the signature are the whole check, and the publish job checks the
-attestation before it signs (10.3); `[trusted_signers]` then guards no install, only `hostkeeper-pxe`'s check. A service's package has no maintainer scripts, refused at `stage` (10.2), so what this
-file says of a package's scripts holds for hostkeeper's own package alone (10.4). A package's hook is a program at a
-fixed path, with `hook.command` empty (10.2), so the caller of `SetDesired` no longer chooses among the package's
-programs (section 3.3). And hostkeeper's own release is a native entry per platform (10.4),
+attestation before it signs (10.3); `[trusted_signers]` then guards no install, only `hostkeeper-pxe`'s check. Any package may have maintainer scripts (10.2): on `apt` a `policy-rc.d` that exits 101
+is written around the dpkg runs, so a script that starts through `invoke-rc.d` or `deb-systemd-invoke` starts nothing before the hand-over. A package's hook is the manifest's
+`hook.command`, an absolute path of a file of the package and leading arguments (10.2), so the caller of `SetDesired`
+chooses the program among the package's files and its arguments (section 3.3). And hostkeeper's own release is a native entry per platform (10.4),
 so where this file says it stays `hostkeeper-archive`, that holds only until the move of 10.6.
 
 The release machinery that every repository of the project shares is moving to this flow: publish each release to
@@ -286,21 +286,21 @@ hostkeeper checks nothing about who built the bytes beyond that.
 | An order names exact bytes | The pin, checked against the signed index and the downloaded file | The entry's `digest`, checked against the fetched file, as for every artifact |
 | Integrity before any byte is used | apt verifies the suite's signature and every hash before it hands a file over; the daemon extracts nothing before that, and checks the pin | The core checks size, digest and attestation, then `pkgutil` the signature, before anything is expanded |
 | Who decides the bytes | The holder of the repository's key and CI's pin, both; not `[trusted_signers]` | CI's pin, `[trusted_signers]` for the attestation, and the holder of a configured signing identity, all three |
-| What runs as root | The package's maintainer scripts, from the signed package, in `activate` and `remove`; the hook, a program of the signed package's tree | The package's scripts and payload, from the pinned, attested and signed `.pkg`, in `activate`; the hook, a program of its sealed tree |
+| What runs as root | The package's maintainer scripts, from the signed package, in `activate` and `remove`, with a `policy-rc.d` that exits 101 in place so that none starts a service through `invoke-rc.d` or `deb-systemd-invoke`; the hook, the sealed copy in the tree of a file of the signed package | The package's scripts and payload, from the pinned and signed `.pkg`, in `activate`, as `installer` runs them; the hook, the sealed copy in the tree of a file of the payload |
 | Removal | The package, purged, whatever version is installed (section 4.4) | Every file the receipt lists, then the receipt (`pkgutil --forget`) |
 
 ### 3.4 The manifest of a repository entry
 
 The package carries its own units and maintainer scripts. The manifest keeps only what hostkeeper needs to own the
-service. A `macos-pkg` entry's manifest follows the same rules, with these differences: `package` is the component's
-package identifier, `run` holds launchd labels whose plists the payload installs, and the hook is a program of the
-payload's tree (section 4.7):
+service, the hook included. A `macos-pkg` entry's manifest follows the same rules, with these differences: `package` is the component's
+package identifier, `run` holds launchd labels whose plists the payload installs, and the hook is a file of the
+payload (section 4.7):
 
 | Field | Repository entry |
 |---|---|
 | `package` | Required: the package's name, checked by the daemon against the package manager's grammar and against the package's own control field |
-| `hook` | Required. `command` empty: built-in steps. Otherwise a program of the package's extracted tree (`tree/usr/lib/<package>/…`), under today's rules. The bounds as today |
-| `run` | Required, 1 to 64: the units the package installs that hostkeeper starts, stops, enables and observes. Each must be a unit file of the package, under `lib/systemd/system/` or `usr/lib/systemd/system/` of its tree |
+| `hook` | Required. `command` empty: built-in steps. Otherwise `command[0]` is the absolute path of a file the package installs (an executable regular file of the extracted tree, links followed inside the tree), and `command[1..]` are leading arguments. The daemon runs the sealed copy `tree/<path>`. `boot` needs a command. The bounds as today |
+| `run` | Required, 1 to 64: the units that hostkeeper starts, stops and observes. No rule on a unit's name or place: a unit whose file is in the tree and has `[Install]` targets gets those links, and any other is started by hostkeeper at `cutover` and at every daemon start |
 | `health_url` | Optional, as today |
 | `installer_bounds` | Required: `stage_secs` bounds the index fetch, the download and the checks; `activate_secs` the install; `remove_secs` the purge |
 | `place` | Refused for `apt`, whose package places its own files |
@@ -365,10 +365,10 @@ The system's dpkg database (`/var/lib/dpkg`) is the one apt installs into, as it
 
 | Step | Does | Network |
 |---|---|---|
-| `stage` | 1. `apt-get update --error-on=any` in the work directory. 2. Read the stanza of `package` at `V` for architecture `A` or `all` (`apt-cache show`); none: `not_in_repository`. Check its `Size` against `max_package_bytes` and its `SHA256` against the pin. 3. The dependency check, before anything is downloaded: `apt-get install --simulate -y --allow-downgrades --allow-change-held-packages package=V` must show that package and no other installed, upgraded, downgraded or removed. 4. `apt-get download package=V`, which fetches that one file, checks it against the index and takes no dpkg lock, into the work directory's archive directory under the name apt gives it; the daemon hashes it against the pin. 5. `dpkg-deb --field` of the file: `Package` and `Version` must equal `package` and `V`, `Architecture` `A` or `all`. 6. `dpkg-deb --extract` into `tree/` (no maintainer script runs), then the core's bounded walk (packages.md section 5.2). 7. Every `run` unit is a unit file of the tree. 8. Seal | Steps 1 and 4 only, which run no package script |
-| `activate` | Under the host-wide installer lock (packages.md section 5.2): `apt-get install -y --no-download --allow-downgrades --allow-change-held-packages -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold package=V`, with `DEBIAN_FRONTEND=noninteractive`; then `dpkg-query` must show `package` at `V`, status `install ok installed`; `apt-mark hold package`; enable each `run` unit not yet enabled and take away the links of a unit this version no longer runs (section 5); `systemctl daemon-reload`; switch `current` | None (`PrivateNetwork=yes`) |
+| `stage` | 1. `apt-get update --error-on=any` in the work directory. 2. Read the stanza of `package` at `V` for architecture `A` or `all` (`apt-cache show`); none: `not_in_repository`. Check its `Size` against `max_package_bytes` and its `SHA256` against the pin. 3. The dependency check, before anything is downloaded: `apt-get install --simulate -y --allow-downgrades --allow-change-held-packages package=V` must show that package and no other installed, upgraded, downgraded or removed. 4. `apt-get download package=V`, which fetches that one file, checks it against the index and takes no dpkg lock, into the work directory's archive directory under the name apt gives it; the daemon hashes it against the pin. 5. `dpkg-deb --field` of the file: `Package` and `Version` must equal `package` and `V`, `Architecture` `A` or `all`. 6. `dpkg-deb --extract` into `tree/` (no maintainer script runs), then the core's bounded walk (packages.md section 5.2) and the normalization of the copy's modes (setuid, setgid and group or other write bits stripped, a foreign owner changed to the tree directory's owner; dpkg installs from the kept `.deb`, not from this copy). 7. When the manifest names a hook program, it is an executable regular file of the tree, links followed inside the tree (else `manifest_invalid`). 8. Seal | Steps 1 and 4 only, which run no package script |
+| `activate` | Under the host-wide installer lock (packages.md section 5.2): `apt-get install -y --no-download --allow-downgrades --allow-change-held-packages -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold package=V`, with `DEBIAN_FRONTEND=noninteractive`, between the writing and the removal of `/usr/sbin/policy-rc.d` (`exit 101`; section 5); then `dpkg-query` must show `package` at `V`, status `install ok installed`; `apt-mark hold package`; write the `[Install]` links of each `run` unit whose file is in the tree and take away the links of a unit this version no longer runs (section 5); `systemctl daemon-reload`; switch `current` | None (`PrivateNetwork=yes`) |
 | `retire` | Delete a version directory that is neither `current` nor `previous`. Never runs apt or dpkg | None |
-| `remove` | `apt-mark unhold package`; `dpkg --purge package`, whatever version is installed (a version hostkeeper did not set is drift, reported, section 4.4), tried again within `remove_secs` while dpkg reports its lock held (dpkg has no lock timeout of its own); remove the enablement links hostkeeper recorded; `systemctl daemon-reload` | None |
+| `remove` | `apt-mark unhold package`; `dpkg --purge package` (each try between the writing and the removal of `policy-rc.d`), whatever version is installed (a version hostkeeper did not set is drift, reported, section 4.4), tried again within `remove_secs` while dpkg reports its lock held (dpkg has no lock timeout of its own); remove the enablement links hostkeeper recorded; `systemctl daemon-reload` | None |
 
 Before `activate` changes anything, the daemon writes `installed` in `placed.json` with the service's installer
 (`apt`), the package, the version it is installing and the repository, marked pending, as packages-lifecycle.md
@@ -431,7 +431,7 @@ the state it checks, and reads apt's messages only where apt has no other signal
 | The index's `SHA256` is not the pin | `stage` 2 | `Failed`, `release`, `package_digest_mismatch`. Nothing is downloaded |
 | The index's `Size` is over `max_package_bytes` | `stage` 2 | `Failed`, `release`, `package_too_large` |
 | The index's `SHA256` is the pin, but the downloaded file is not (apt's hash check, or the daemon's) | `stage` 4 | `Deferred`, `environment`, `store_digest_mismatch`, as for a mirror that gave other bytes: the repository or a cache in front of it served a stale file |
-| The package's control fields are not `package`, `V`, and `A` or `all`; a `run` unit is not a unit file of the package | `stage` 5, 7 | `Failed`, `release`, `manifest_invalid` |
+| The package's control fields are not `package`, `V`, and `A` or `all`; the manifest's hook program is not an executable regular file of the package | `stage` 5, 7 | `Failed`, `release`, `manifest_invalid` |
 | A dependency is unmet | `stage` 3 | `Failed`, `environment`, `dependency_missing` (the reason of packages.md section 5.4) |
 | The install would install, upgrade, downgrade or remove another package; a purge would leave a dependent package | `stage` 3, `remove` | `Failed`, `environment`, `dependency_changes` |
 | The dpkg lock is held past `DPkg::Lock::Timeout`, or past `remove_secs` for the purge (an unattended upgrade is running) | `stage` 3, `activate`, `remove` | `Deferred`, `environment`, `package_manager_busy` |
@@ -523,10 +523,9 @@ delivers by its own allowlisted digest, and does not serve a service's package; 
 the farm's installer key, which section 7.3 rules out today. So A9 waits on M11's outcome, and a farm-identity outcome
 reopens section 7.3 for services' packages before A9 is built.
 
-A service's package has no `preinstall` or `postinstall` (10.2); hostkeeper's own package keeps its bootstrap
-scripts (10.4), which run as root, with the Mac's network, and are covered only by the pin and the signature. Whoever holds a configured signer's key, with CI's pin, can run code as root on
-every Mac that names it, so the signer set stays small: hostkeeper's own identity, and a second only during a
-rotation.
+A `.pkg`'s `preinstall` and `postinstall` run as root, with the Mac's network, and are covered only by the pin and the
+signature, as hostkeeper's own package's scripts are (10.4). Whoever holds a configured signer's key, with CI's pin, can
+run code as root on every Mac that names it, so keep the signer set small.
 
 The signers are host configuration, in `/etc/hostkeeper/macos-pkg.toml`, root:wheel 0644:
 
@@ -578,17 +577,17 @@ not end in `.pkg`). The
 seal and `Staged::check` cover all of it.
 
 **The service runs from the receipt's install location**, as an apt package runs from where dpkg put it, and not from
-`current/tree/`. A sealed copy guards a service whose installed files an account other than root could change, and
-here none can: `installer` runs as root, `stage` admits only root-owned entries that group and others cannot write, and
-`activate` refuses a parent directory another account could write. The package's own scripts and launchd plist name
-the install paths too. The installed files are what runs; `tree/` is their sealed reference, which the hook runs from
+`current/tree/`. `installer` runs as root and installs the package's files as the package gives them, `stage`
+admits only root-owned entries (the sealed copy's setuid, setgid and group or other write bits are stripped; the copy is
+the reference, not what `installer` writes), and `activate` refuses a parent directory another account could write. The
+package's own scripts and launchd plist name the install paths too. The installed files are what runs; `tree/` is their sealed reference, which the hook runs from
 and the observer hashes against. The observer reads the first `run` label's program from the plist in `tree/` and
 hashes the running process's executable against the same path in `tree/` (packages-lifecycle.md section 6.6), and
 drift (below) hashes every installed file against it.
 
 | Step | Does | Network |
 |---|---|---|
-| `stage` | 1. The core's fetch and proof: the `.pkg` and its bundle from the entry's stores, size, digest, attestation (packages.md section 7.4). 2. `pkgutil --check-signature` of the verified file: a trusted chain whose leaf is a configured signer (else `signature`). 3. `pkgutil --expand-full` into the staging directory, then the core's bounded walk and `MacVerify` (packages.md section 5.2). 4. The shape: a component package, or a product archive whose `Distribution` names one component (one distinct `pkg-ref` id, with one path), selected by default, and has no `script`, `installation-check` or `volume-check` element; the component's `PackageInfo` has `identifier` equal to `package`, `version` equal to the order's version, `install-location` `/`, and no `relocate` or `bundle` element, so `installer` writes exactly what the `Bom` lists. 5. The `Bom` (`lsbom`) and the expanded payload list the same paths with the same types, modes and owners; every entry is owned by root, of group wheel or admin, has no setuid, setgid or sticky bit, is not writable by group or others, is no device or fifo, and is at a path of the payload rule above. 6. Every `run` label is the plist `Library/LaunchDaemons/<label>.plist` of the payload, whose `Label` is that label, whose `Disabled` is true, and whose program is a file of the payload. 7. The payload becomes `tree/`; seal | Step 1 only: the daemon's own fetch. No tool run fetches |
+| `stage` | 1. The core's fetch and proof: the `.pkg` and its bundle from the entry's stores, size, digest, attestation (packages.md section 7.4). 2. `pkgutil --check-signature` of the verified file: a trusted chain whose leaf is a configured signer (else `signature`). 3. `pkgutil --expand-full` into the staging directory, then the core's bounded walk and `MacVerify` (packages.md section 5.2). 4. The shape: a component package, or a product archive whose `Distribution` names one component (one distinct `pkg-ref` id, with one path), selected by default, and has no `script`, `installation-check` or `volume-check` element; the component's `PackageInfo` has `identifier` equal to `package`, `version` equal to the order's version, `install-location` `/`, and no `relocate` or `bundle` element, so `installer` writes exactly what the `Bom` lists. 5. The `Bom` (`lsbom`) and the expanded payload list the same paths with the same types, modes and owners; every entry is owned by root, of group wheel or admin, and is no device or fifo. 6. When the manifest names a hook program, it is an executable regular file of the payload, links followed inside the payload (else `manifest_invalid`). 7. The payload becomes `tree/`, its modes normalized as for `apt`; seal | Step 1 only: the daemon's own fetch. No tool run fetches |
 | `activate` | Under the host-wide installer lock (packages.md section 5.2): each payload path's parent directories already on the host are root-owned and not writable by others, nor by a group but admin (else `unsafe_directory`); each payload file already on the host that a receipt of another identifier lists (`pkgutil --file-info-plist`) is `package_conflict`, and nothing is installed; a file there that no receipt lists is replaced and is the package's from then. Write `installed` in `placed.json`, marked pending: the installer, the identifier, the version, and `created_dirs`, the payload's directories not yet on the host, added to those already recorded. `installer -allowUntrusted -pkg <version dir>/macos-pkg/artifact.pkg -target /`; `pkgutil --pkg-info-plist <identifier>` must show the version, and every payload file at its install path must hash to its copy in `tree/`. Delete each file and link of the previous version's `Bom` that this version's does not list, then each recorded directory left empty, which leaves `created_dirs`. `launchctl enable system/<label>` for each `run` label, `launchctl disable` for a label the previous version ran and this one does not. Mark `installed` done; switch `current` | None needed. The package's scripts keep the Mac's network, which no launcher on macOS takes away |
 | `retire` | Delete a version directory that is neither `current` nor `previous`. Never runs `installer` or `pkgutil` | None |
 | `remove` | Under the installer lock: delete every file and link (no directory) that the receipt (`pkgutil --only-files --files <identifier>`, joined to the receipt's install prefix) or the `Bom` of `current` or `previous` lists, whatever its content now, but a path a receipt of another identifier also lists, and never through a link in a parent; then each directory of `created_dirs` left empty, deepest first, never one that was on the host before hostkeeper's first install; `pkgutil --forget <identifier>` | None |
@@ -608,15 +607,12 @@ since the install, as `dpkg --purge` deletes a changed configuration file, so an
 installed (closed-world removal, packages.md section 2).
 
 **The launchd job is the package's plist, started by hostkeeper.** The package installs its plist in
-`/Library/LaunchDaemons/`, as a `.deb` installs its unit file, so the job's text is part of the pinned, attested and
-signed bytes; `place` is refused for `macos-pkg`. launchd loads every plist there at boot, so the plist carries
-`Disabled` true, which launchd honours until an override says otherwise, and stage refuses one without it. hostkeeper
-owns the job's start as it owns a unit's: `launchctl enable` at `activate` writes the override that lets launchd load
-the job at boot, and hostkeeper bootstraps, starts and stops it in built-in steps, in `force` and at its own start, and
-boots it out before `remove`. A label a version no longer runs is disabled. launchd keeps an override after the plist
-is gone; one that names no plist loads nothing, so `remove` leaves it. The package's scripts must not load or start the
-job; the release machinery's install check on a clean Mac asserts it, as the Linux one asserts units installed
-disabled (section 5).
+`/Library/LaunchDaemons/`, as a `.deb` installs its unit file, so the job's text is part of the pinned and
+signed bytes; `place` is refused for `macos-pkg`, and no rule applies to the plist's keys. `launchctl enable` at
+`activate` writes the override that lets launchd load a `run` label, and hostkeeper bootstraps, starts and stops it in
+built-in steps, in `force` and at its own start, and boots it out before `remove`. A label a version no longer runs is
+disabled. launchd keeps an override after the plist is gone; one that names no plist loads nothing, so `remove` leaves
+it. The package's scripts run during `activate`, before `cutover`, and nothing holds back a job they load (section 5).
 
 **Update, rollback, the hold, removal.**
 
@@ -653,7 +649,7 @@ version, and its verdict is `Succeeded`, `drift_repaired`, with the version foun
 | The entry has `repository` or `package_version` set | before `stage` | `Failed`, `release`, `order_invalid` |
 | The package is unsigned; `pkgutil` does not accept its chain; its leaf is not a configured signer | `stage` 2 | `Failed`, `environment`, `signature`. Nothing is expanded |
 | The tree fails the walk or `MacVerify` | `stage` 3 | As packages.md section 5.2 |
-| More than one component, or one not selected by default; a `Distribution` script or check; an `identifier` other than `package`; a `version` other than the order's; an `install-location` other than `/`, a `relocate` or a `bundle`; a `Bom` that differs from the payload, or an entry not owned by root, of another group than wheel or admin, setuid, setgid, sticky, writable by group or others, a device or a fifo, or outside the payload rule; a `run` label with no plist of that `Label` at its path, one not `Disabled`, or one whose program is not a file of the payload | `stage` 4 to 6 | `Failed`, `release`, `manifest_invalid` |
+| More than one component, or one not selected by default; a `Distribution` script or check; an `identifier` other than `package`; a `version` other than the order's; an `install-location` other than `/`, a `relocate` or a `bundle`; a `Bom` that differs from the payload, or an entry not owned by root, of another group than wheel or admin, a device or a fifo; a hook program that is not an executable regular file of the payload | `stage` 4 to 6 | `Failed`, `release`, `manifest_invalid` |
 | Another service records the same identifier (packages-lifecycle.md section 6.5) | `stage` | `Failed`, `release`, `package_conflict` |
 | A payload file on the host belongs to a receipt of another identifier | `activate` | `Failed`, `release`, `package_conflict`. Nothing is installed |
 | A parent directory of a payload path is not root's, or another account can write it | `activate` | `Failed`, `environment`, `unsafe_directory`. Nothing is installed |
@@ -671,18 +667,22 @@ the form each gives.
 
 ## 5. Health and hand-over
 
-**The units are hostkeeper's to run.** On Linux, the release machinery's install check on clean machines asserts that the
-package installs its units disabled and not started (tierstore's does today). hostkeeper then owns them as it owns a
-tarball's: each `activate` enables every `run` unit not yet enabled by writing its `WantedBy` links and recording
-them in `placed.json`, and takes away the links of a unit the version no longer runs, as hostkeeper-design.md section
-4.7 does for placed units, so the units start at host boot; the daemon starts, stops and restarts them in built-in
-steps, in `force` and at its own start; `remove` takes the links away. A package whose own scripts enable or start its units is not stopped from doing so (packages-lifecycle.md
-section 6.2): its enablement link is left unclaimed, as today's rule says, and a start in `postinst` is a hand-over
-outside the hook. The install check is where such a package is refused, before any host sees it.
+**The units are hostkeeper's to run.** On Linux a package installs its units as it likes, enabled or not. Around
+`apt-get install` and `dpkg --purge` the installer holds a `policy-rc.d` that exits 101 (written to
+`/usr/sbin/policy-rc.d`, mode 0755, removed afterwards on success and on failure; a stale one is removed at daemon
+start before any package-manager call; an operator's own is left untouched and then rules), which `invoke-rc.d` and
+`deb-systemd-invoke` honour, so through them no script of the package, nor of a dependency apt installs in the same
+run, starts or restarts a service (one that calls `systemctl` itself is not held back): the start is the hand-over's. A `postinst` may enable the units, and they stay enabled. hostkeeper
+never refuses a `run` unit. Each `activate` writes the `WantedBy=` and `RequiredBy=` links of every `run` unit whose
+file is in the tree and takes away the links of a unit the version no longer runs (recorded in `placed.json`, as
+hostkeeper-design.md section 4.7 does for placed units), leaving any link already there, so those units start at host
+boot. A `run` unit with no such link (no `[Install]` targets, or no unit file in the package) is started by hostkeeper
+at `cutover` and at every daemon start, which starts such units of each `apt` service's `current` version. The daemon
+starts, stops and restarts all of them in built-in steps, in `force` and at its own start; `remove` takes its links away.
 
-**On a Mac** the same holds for the launchd job: the package installs its plist with `Disabled` true and must not
-load or start it, as
-the release machinery's install check on a clean Mac asserts; hostkeeper enables the job at each `activate`
+**On a Mac** the package's scripts run when `installer` runs them, during `activate`, before `cutover`, and there is
+no equivalent of `policy-rc.d`: a service whose `.pkg` scripts bootstrap its job starts it before `cutover`, so such a
+service needs the built-in steps or a hook that tolerates it. hostkeeper enables the job at each `activate`
 (`launchctl enable`), loads and starts it in built-in steps, in `force` and at its own start, and boots it out before
 `remove` (section 4.7). macOS has no hand-over of ports (hostkeeper-design.md), so an update of a Mac service is a
 restart. The observer hashes the running program against the same path in the sealed tree.
@@ -802,8 +802,8 @@ an item of this repository.
 | A package at a version hostkeeper did not set, or installed outside it | Drift: the desired version is installed over it, held and recorded; reported (`ServiceBeat.drift`, `drift_repaired`), never refused | hostkeeper is the reconciler and nothing installs by hand; only a `Force` moves a version off the plan |
 | One installer per manager, or one kind | One `repository` installer kind with a backend per manager; the announced name is the backend's | The steps, checks and classes are the same for every manager; the pick by name stays unchanged |
 | The repositories | Two channels, testing and stable, of one repository and key, as host configuration | CI decides the version per host; hostkeeper installs exactly that from the channel named |
-| Who enables the units | hostkeeper, by `WantedBy` links it records, at each `activate` for the units not yet enabled | The package installs them disabled, as the install check asserts; the owner of the start is the owner of the enablement |
-| The hook of a repository package | A program of the extracted tree of the downloaded package, or built-in steps | The program is part of the signed package, and the hook contract stays the same for every installer |
+| Who starts the units | hostkeeper: at host boot by the `WantedBy` links it writes for a unit whose file is in the tree, else directly at `cutover` and at daemon start; no script starts one meanwhile through `invoke-rc.d` or `deb-systemd-invoke` (`policy-rc.d`) | The package may enable its units however it likes; the hand-over needs the start to be hostkeeper's |
+| The hook of a repository package | The manifest's `hook.command`: a file of the downloaded package, run as its sealed copy in the tree, or built-in steps | The program is part of the signed package, and the hook contract stays the same for every installer |
 | Key placement and rotation | Host setup (`hostkeeper-pxe --repositories`, the runbook), with an overlap of two keys | The coordinator never holds the trust root; a self-renewing keyring package cannot be revoked after a leak |
 | `deb`, `rpm`, `arch`, `apk` | Withdrawn | The ruling: no Linux package file is installed; no daemon ever listed them |
 | The Mac installer | `macos-pkg`: a signed `.pkg` installed by `installer` as root. No Homebrew backend; a Homebrew tap stays a route for people installing a service on their own Mac, and hostkeeper never uses it | `installer` runs as root, which fits hostkeeper's one root daemon, where Homebrew refuses root; no package manager to install and keep current on each Mac; MDM already needs a signed `.pkg` for hostkeeper's own first install, so one Mac format and one signing setup |
@@ -812,7 +812,7 @@ an item of this repository.
 | Who signs a service's `.pkg` | The release machinery, before the attestation and the publish to testing; A9 waits on M11's identity | CI's pin, the attestation and both channels must name the same signed bytes; a per-farm signature after release would not |
 | A Mac's channel stores and signers | Files the daemon renders from two managed-preference domains of the MDM kit's profile, replaced when the profile changes | The MDM is a managed Mac's source of configuration, and a signer rotation must reach every Mac without a reinstall |
 | Where a Mac service runs | From the receipt's install location, under `/Library/Application Support/<service>/`; `tree/` is the sealed reference the hook runs from and drift hashes against | `installer` installs root-owned files no other account can change, `activate` refuses a parent another account could write, and the package's scripts and plist name those paths |
-| Who writes the launchd job | The package installs its plist, `Disabled` true; hostkeeper enables, loads, starts and stops the job; `place` is refused | The job's text is part of the pinned, signed bytes, and launchd loads a plist there at boot unless it is disabled, so hostkeeper alone decides when it starts |
+| Who writes the launchd job | The package installs its plist; hostkeeper enables, loads, starts and stops the job; `place` is refused | The job's text is part of the pinned, signed bytes, and hostkeeper starts and stops the job at the hand-over |
 | Rollback on a Mac | `installer -allowUntrusted` of the previous version's kept `.pkg`, with no fetch and no second signature check | A rollback must work with the stores down, and after a certificate expired or was rotated out; hostkeeper proved those bytes at their stage and re-hashes them |
 | Removal on a Mac | Every file the receipt or a kept `Bom` lists, changed or not; the directories hostkeeper's installs created, when empty; then `pkgutil --forget`. Files the receipt does not list stay | Closed-world removal, as `dpkg --purge`; a directory that was on the host before is not the package's, and a `.pkg` has no removal script to say more |
 | Drift on a Mac | The receipt's version and the payload's files, against the record and the sealed tree; corrected by installing the desired `.pkg` over it, `drift_repaired` | hostkeeper is the reconciler, as on Linux; nothing installs a managed package by hand |

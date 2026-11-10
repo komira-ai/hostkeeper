@@ -35,17 +35,18 @@ list the units and jobs of the slots and their modes.
 **The native packages.** hello and its failing build are built as a `.deb` for each Linux
 platform (`cargo xtask release deb --service hello`) and a `.pkg` for macOS (`cargo xtask release
 macos-pkg --service hello`), which hostkeeper installs with `apt` and `installer` ([design: native packages only](design/packages-native.md), sections
-10.2 and 10.6). Neither has a maintainer script; the manifest's hook bounds, run units, health URL
-and params are the manifest of the release's entry, not a file of the package.
+10.2 and 10.6). Neither has a maintainer script, which is hello's choice and not a rule. The manifest's hook
+command and bounds, run units, health URL and params are the manifest of the release's entry, not a file of the package:
+the hook command is the absolute path of the program the package installs with `update-hook`, `["/usr/lib/hello/hello",
+"update-hook"]` for the `.deb` and `["/Library/Application Support/hello/bin/hello", "update-hook"]` for the `.pkg`.
 
 | `.deb` | `.pkg` | What it is |
 |---|---|---|
 | `/usr/lib/hello/hello` | `/Library/Application Support/hello/bin/hello` | the program |
-| `/usr/lib/hello/hostkeeper-hook` | `/Library/Application Support/hello/hostkeeper-hook` | the hook: two lines that run the program beside it with `update-hook` and the daemon's arguments |
-| `/usr/lib/systemd/system/hello@a.service`, `hello@b.service` | `/Library/LaunchDaemons/hello.a.plist`, `hello.b.plist` | one unit or job per slot, installed disabled (the plists carry `Disabled` true) |
+| `/usr/lib/systemd/system/hello@a.service`, `hello@b.service` | `/Library/LaunchDaemons/hello.a.plist`, `hello.b.plist` | one unit or job per slot |
 
-Their goldens are `examples/hello/package/deb` and `pkg`. The daemon runs the hook from the
-version it staged, so `prepare` finds the program in that version's `tree/`. `/readyz` answers 200, or 503 when the server runs with `--fail-ready`.
+Their goldens are `examples/hello/package/deb` and `pkg`. The daemon runs the hook program's
+sealed copy in the version it staged, so `prepare` runs the new version's program before it is installed. `/readyz` answers 200, or 503 when the server runs with `--fail-ready`.
 `/version` answers the version of the package: `<version>`, or `<version>-fail-ready` when the
 server runs with `--fail-ready`, as the failing build's units start it. So `/version` alone tells
 the failing build from the good one.

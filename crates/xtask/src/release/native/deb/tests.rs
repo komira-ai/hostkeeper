@@ -68,8 +68,8 @@ fn no_pins() -> Result<Pins, Error> {
 
 #[test]
 fn hellos_deb_is_named_for_its_version_and_architecture_and_passes_the_service_check() {
-    // Catches: a deb named otherwise, one the service check refuses (a script, a path, a
-    // missing hook, a unit's program not packaged), or one the reader cannot read.
+    // Catches: a deb named otherwise, one the service check refuses (a wrong owner or
+    // mode, a unit's program not packaged), or one the reader cannot read.
     let d = scratch("native-deb-hello");
     let r = request(&d, Service::Hello, Platform::LinuxX86_64);
     let lines = build(&r, no_pins).expect("built");
@@ -78,9 +78,8 @@ fn hellos_deb_is_named_for_its_version_and_architecture_and_passes_the_service_c
     assert_eq!(lines, [format!("hello_0.1.5_amd64.deb: sha256 {hex}")]);
     let checked = check_service(&path, Service::Hello).expect("passes");
     assert!(
-        checked.iter().any(|l| l.ends_with(
-            "2 units in /usr/lib/systemd/system/, none enabled, each starting a file of the package"
-        )),
+        checked.iter().any(|l| l
+            .ends_with("2 units in /usr/lib/systemd/system/, each starting a file of the package")),
         "{checked:?}"
     );
 }

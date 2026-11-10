@@ -64,6 +64,7 @@ pub use launcher::{
     AdditiveCall, BUILTIN_EXIT, Bound, LaunchError, StepCall, StepExit, StepLauncher, ToolCall,
     ToolExit, ToolNetwork,
 };
+pub use order_util::PreviousHook;
 pub use prune::{
     PRUNE_PREFIX, Protected, PruneInputs, PrunePlan, PruneReport, PruneStep, prune_plan,
 };

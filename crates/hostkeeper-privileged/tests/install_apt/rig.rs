@@ -45,6 +45,14 @@ pub const FILES: [&str; 8] = [
     "/etc/hkaptfix",
 ];
 
+/// The files the fixture packages write to show what their scripts met, which no test leaves.
+pub const EVIDENCE: [&str; 4] = [
+    "/run/hkaptfix-policy-seen",
+    "/run/hkaptfix-policy-exit",
+    "/run/hkaptfix-hook.log",
+    "/run/hkaptfix-hook.fail-verify",
+];
+
 /// The tests share the host's one dpkg database and the one package in it, so they take turns.
 static HOST: Mutex<()> = Mutex::new(());
 
@@ -153,6 +161,12 @@ fn clean_host() {
     print("apt-mark", &["unhold", PACKAGE]);
     print("dpkg", &["--purge", PACKAGE]);
     let _ = fs::remove_file(LINK);
+    for file in EVIDENCE {
+        let _ = fs::remove_file(file);
+    }
+    // A killed run of the installer leaves its policy file, which would hold the next test's
+    // maintainer scripts back.
+    let _ = hostkeeper_install::repository::policy::clear_stale(Path::new("/"));
     print("systemctl", &["daemon-reload"]);
 }
 
@@ -324,8 +338,7 @@ impl Rig {
             repository: REPOSITORY.to_owned(),
             pin: pin.to_owned(),
             run: vec!["hkaptfix.service".to_owned()],
-            boot: None,
-            params: false,
+            hook: None,
             bounds: Bounds {
                 stage: 120,
                 activate: 120,

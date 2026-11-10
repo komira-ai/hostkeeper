@@ -24,11 +24,12 @@
 //!          package_version the .deb's Debian version ([`Package::deb_version`]: the release's,
 //!          the failing build's `<v>~fail.ready`), digest the .deb's SHA-256 (the pin); no
 //!          location, no size, no attestation
-//! manifest compiled in ([`manifest`]): the package's hook bounds without a command (the
-//!          package's hook is its program at the fixed path; hostkeeper's package has none, and
-//!          its daemon runs built-in steps), its run units, health URL, params and
-//!          min_hostkeeper; `package` the package's name (`hostkeeper`, `hello`, `mdm`; the
-//!          failing build's is hello's); the installer's bounds ([`INSTALLER_BOUNDS`])
+//! manifest compiled in ([`manifest`]): the package's hook with the command
+//!          `<path the .deb installs its program at> update-hook` (hello's /usr/lib/hello/hello,
+//!          its failing build's too; mdm's /usr/lib/mdm/mdm; hostkeeper's package has no
+//!          command, and its daemon runs built-in steps) and its bounds, its run units, health
+//!          URL, params and min_hostkeeper; `package` the package's name (`hostkeeper`, `hello`,
+//!          `mdm`; the failing build's is hello's); the installer's bounds ([`INSTALLER_BOUNDS`])
 //! ```
 //!
 //! Each native package must be a regular file whose bundle lists its SHA-256, and a `.deb`'s

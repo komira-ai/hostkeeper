@@ -183,7 +183,7 @@ fn hellos_package_is_the_files_of_its_deb_says_its_version_alone_and_enables_not
 #[test]
 fn mdms_package_is_amd64_alone_with_the_units_of_its_deb_and_enables_nothing() {
     // Catches: mdm's units out of step with the ones its .deb installs, an arm64 mdm asked of
-    // the repository, and the program or hook at another path than the .deb's.
+    // the repository, and the program at another path than the .deb's.
     use hostkeeper_mdm_core::package::{DEB_BIN, SERVICE, UNITS};
     let package = HOSTKEEPER.package("mdm").expect("mdm");
     let mut built: Vec<&str> = UNITS.iter().map(|u| u.name).collect();
@@ -197,9 +197,9 @@ fn mdms_package_is_amd64_alone_with_the_units_of_its_deb_and_enables_nothing() {
     assert!(
         package
             .files
-            .contains(&format!("{DEB_BIN}/hostkeeper-hook").as_str())
+            .contains(&format!("{DEB_BIN}/{SERVICE}").as_str())
     );
-    assert_eq!(package.files.len(), 2 + UNITS.len());
+    assert_eq!(package.files.len(), 1 + UNITS.len());
 }
 
 #[test]

@@ -6,10 +6,10 @@
 //!
 //! | Step       | Does | Network |
 //! |------------|------|---------|
-//! | `stage`    | Refuses a package another service records; finds the order's repository in the host's configuration; makes the work directory see it alone; fetches and verifies the index; reads the version's stanza and checks its digest against the pin and its size against `max_package_bytes`; the dependency check (under the installer lock); downloads the package and hashes it against the pin; checks its control fields, refuses a maintainer script, extracts it with no script run, and checks the tree; keeps the index and the package in the version directory | The update and the download only |
-//! | `activate` | Under the installer lock: fills the work directory from the version directory, reads what is installed (a version hostkeeper did not set is drift), records the version pending, installs it with no download (a downgrade for a rollback), checks the database shows it, holds it, enables the `run` units, reloads the service manager, records it done | None |
+//! | `stage`    | Refuses a package another service records; finds the order's repository in the host's configuration; makes the work directory see it alone; fetches and verifies the index; reads the version's stanza and checks its digest against the pin and its size against `max_package_bytes`; the dependency check (under the installer lock); downloads the package and hashes it against the pin; checks its control fields, extracts it with no script run, and checks that the manifest's hook program, if any, is an executable file of the tree; keeps the index and the package in the version directory | The update and the download only |
+//! | `activate` | Under the installer lock: fills the work directory from the version directory, reads what is installed (a version hostkeeper did not set is drift), records the version pending, installs it with no download (a downgrade for a rollback) while the policy file [`policy`] keeps its scripts from starting units, checks the database shows it, holds it, enables the `run` units that ask for it, reloads the service manager, records it done | None |
 //! | `retire`   | Deletes a version directory that is neither `current` nor `previous`; runs no tool | None |
-//! | `remove`   | Under the installer lock: releases the hold, purges the package whatever version is installed (tried again while the lock is held, within `remove_secs`), takes away the recorded links, reloads, drops the record | None |
+//! | `remove`   | Under the installer lock: releases the hold, purges the package whatever version is installed (tried again while the lock is held, within `remove_secs`, under the policy file), takes away the recorded links, reloads, drops the record | None |
 //!
 //! The version directory is the core's (packages-lifecycle.md section 6.1): `stage` writes
 //! `tree/` and the backend's directory (`apt/`) into the empty staging directory it is given,
@@ -22,7 +22,8 @@
 //! - [`tools`]: the tools behind the [`Tools`] port, and how each run is confined.
 //! - [`record`]: the service's `installed` entry, behind the [`Records`] port.
 //! - [`lock`]: the host-wide installer lock.
-//! - [`tree`] and [`enable`]: the checks of the extracted tree, and the units' enablement.
+//! - [`tree`] and [`enable`]: the package's unit files, and the units' enablement.
+//! - [`policy`]: the `policy-rc.d` file held while the package manager runs.
 //! - [`announce`]: when a daemon announces a repository installer (section 4.1).
 //! - [`launcher`]: the [`Tools`] port over the step launcher's transient units.
 
@@ -34,6 +35,7 @@ pub mod enable;
 pub mod launcher;
 pub mod lock;
 pub mod outcome;
+pub mod policy;
 pub mod record;
 pub mod tools;
 pub mod tree;
@@ -83,10 +85,9 @@ pub struct Order {
     pub pin: String,
     /// The units hostkeeper starts, stops, enables and observes.
     pub run: Vec<String>,
-    /// The hook's boot step, which needs a hook in the package.
-    pub boot: Option<String>,
-    /// Whether the manifest has params, which need a hook in the package.
-    pub params: bool,
+    /// The manifest's hook program, `hook.command[0]`: the absolute path the package installs
+    /// it at; `None` for the built-in steps.
+    pub hook: Option<String>,
     pub bounds: Bounds,
     /// The daemon's `max_package_bytes`.
     pub max_package_bytes: u64,
@@ -121,7 +122,7 @@ impl Order {
     /// The order of `entry` for `service` at `version`, checked against `backend`'s rules:
     /// the entry's kind ([`judge_kind`]), the pin, the backend's grammars, and the manifest rules
     /// of a repository entry (packages-repositories.md section 3.4, packages-native.md section
-    /// 10.2: `hook.command` empty, no `place`, no `containers`, 1 to 64 `run` units, the
+    /// 10.2: `hook.command` empty or led by an absolute path, no `place`, no `containers`, 1 to 64 `run` units, the
     /// installer's bounds).
     pub fn from_entry(
         backend: &dyn Backend,
@@ -164,11 +165,11 @@ impl Order {
             .check_names(&package, &package_version)
             .map_err(invalid)?;
         let hook = manifest.hook.clone().unwrap_or_default();
-        if !hook.command.is_empty() {
-            return Err(invalid(
-                "the manifest's hook.command is not empty: a package's hook is its program at a fixed path"
-                    .to_owned(),
-            ));
+        let program = hook.command.first().cloned();
+        if let Some(program) = program.as_ref().filter(|p| !p.starts_with('/')) {
+            return Err(invalid(format!(
+                "the manifest's hook.command names {program:?}, not an absolute path"
+            )));
         }
         if !manifest.place.is_empty() {
             return Err(invalid(
@@ -198,8 +199,7 @@ impl Order {
             repository: entry.repository.clone().unwrap_or_default(),
             pin: pin.clone(),
             run: manifest.run.clone(),
-            boot: hook.boot.clone(),
-            params: !manifest.params.is_empty(),
+            hook: program,
             bounds: Bounds {
                 stage: bounds.stage_secs,
                 activate: bounds.activate_secs,
@@ -214,7 +214,7 @@ impl Order {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HostDirs {
     /// The host's root: `/` on a host, a scratch directory in a test. The units' enablement
-    /// links are written under it.
+    /// links and the `policy-rc.d` file are written under it.
     pub root: PathBuf,
     /// The work directories' parent, `/var/lib/hostkeeper/<backend>/` on a host: one directory
     /// per service, where every run of the package manager works.
@@ -224,8 +224,8 @@ pub struct HostDirs {
 /// A version `stage` made in its staging directory.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Staged {
-    /// Whether the package has a hook, `tree/usr/lib/<package>/hostkeeper-hook`; without one
-    /// the service gets the built-in steps.
+    /// Whether the manifest names a hook program, and the package installs it as an executable
+    /// regular file; without one the service gets the built-in steps.
     pub hook: bool,
 }
 

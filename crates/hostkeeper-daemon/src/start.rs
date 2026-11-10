@@ -276,6 +276,7 @@ pub fn startup_notifying(
         packages: settings.packages_dir.clone(),
     };
     let daemon = Arc::new(Daemon::new(config, dirs, ports, own_version));
+    daemon.clear_policy_rc_d(&mut report);
     settle_self_update(&daemon, &mut report);
     activate_own_package(&daemon, &mut report);
     adopt_own_package(&daemon, &mut report);

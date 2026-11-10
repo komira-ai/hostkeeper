@@ -32,13 +32,15 @@ fn steps(change: impl FnOnce(&mut StepBounds)) -> Hook {
 }
 
 /// Catches: a hook program that leaves the tree, names an absolute path or a dot segment,
-/// passing; a plain relative program refused.
+/// passing for an entry that is not native; a plain relative program refused; or the rule
+/// applied by the rules every manifest keeps, which do not know the installer.
 #[test]
 fn a_hook_program_is_a_relative_path_of_plain_names() {
     let program = |program: &str| Hook {
         command: vec![program.to_owned(), "update-hook".to_owned()],
         ..hook()
     };
+    let check_program = |hook: Hook| manifest::check_hook_of(false, &with_hook(hook));
     for (bad, why) in [
         ("..", PathError::DotComponent),
         ("bin/../../etc/shadow", PathError::DotComponent),
@@ -50,7 +52,7 @@ fn a_hook_program_is_a_relative_path_of_plain_names() {
         ("bin/web hook", PathError::BadChar(' ')),
     ] {
         assert_eq!(
-            check_hook(program(bad)),
+            check_program(program(bad)),
             Err(ManifestError::HookProgram {
                 program: bad.to_owned(),
                 why
@@ -59,10 +61,13 @@ fn a_hook_program_is_a_relative_path_of_plain_names() {
         );
     }
     assert_eq!(
-        check_hook(program("..")).expect_err("refused").to_string(),
+        check_program(program(".."))
+            .expect_err("refused")
+            .to_string(),
         "hook.command names the program \"..\", which has a `.` or `..` component; it is a path relative to the tree"
     );
-    assert_eq!(check_hook(program("usr/bin/web")), Ok(()));
+    assert_eq!(check_program(program("usr/bin/web")), Ok(()));
+    assert_eq!(check_hook(program("/bin/sh")), Ok(()));
     // The arguments are the hook's own; only the program is a path.
     let args = Hook {
         command: vec![
@@ -72,11 +77,10 @@ fn a_hook_program_is_a_relative_path_of_plain_names() {
         ],
         ..hook()
     };
-    assert_eq!(check_hook(args), Ok(()));
+    assert_eq!(check_program(args), Ok(()));
 }
 
-/// Catches: an empty command (the built-in steps, or a native package's program at its fixed
-/// path) refused, or a boot step passing whose name is not an additive step's. Whether a boot
+/// Catches: an empty command (the built-in steps) refused, or a boot step passing whose name is not an additive step's. Whether a boot
 /// step needs a command is the installer's rule (`native.rs`): the rules every manifest keeps
 /// take one without.
 #[test]

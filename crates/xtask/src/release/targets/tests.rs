@@ -88,6 +88,7 @@ fn hello_manifest(package: &str, run: [&str; 2], units: &str) -> Value {
     json!({
         "package": package,
         "hook": {
+            "command": ["/usr/lib/hello/hello", "update-hook"],
             "timeoutSecs": {
                 "prepare": "30", "cutover": "60", "verify": "30", "rollback": "60",
                 "cleanup": "30", "uninstall": "60",
@@ -201,8 +202,8 @@ fn hostkeeper_lists_its_deb_alone_on_linux_and_nothing_for_macos() {
     // alone, and the channel that serves the archive ends) or without its native entry, a list
     // for macOS (no daemon announces `macos-pkg`), a `.deb` entry that is not a repository entry
     // of the testing suite pinned by the daemon's `.deb`'s own SHA-256 at the release's version,
-    // a native manifest with another floor than the archive's (`OLDEST_READER`), the archive's
-    // placeholder hook command, or no run unit.
+    // a native manifest with another floor than `OLDEST_READER`, a hook command
+    // (its daemon runs built-in steps), or no run unit.
     let (_root, dist) = dist("targets-hostkeeper");
     built(&dist, Package::Hostkeeper);
     let floor = release().min(OLDEST_READER).to_string();
@@ -222,9 +223,9 @@ fn hostkeeper_lists_its_deb_alone_on_linux_and_nothing_for_macos() {
 #[test]
 fn hostkeepers_native_entries_name_the_package_its_daemon_takes_as_its_own() {
     // Catches: a native entry of hostkeeper whose package its daemon does not take as its own
-    // package (a `.deb` package other than `hostkeeper`), so the daemon would refuse the
-    // bootstrap package's scripts and paths at stage; or a run unit that is not a unit file of
-    // the daemon's own `.deb`, which stage refuses.
+    // package (a `.deb` package other than `hostkeeper`), so the daemon would take the bootstrap
+    // install for another service's; a run unit that nfpm.yaml does not install in the daemon's
+    // own `.deb`; or a hook command on it (its daemon runs built-in steps).
     let (_root, dist) = dist("targets-hostkeeper-own");
     built(&dist, Package::Hostkeeper);
     let got = answered(&targets(&request(&dist, Package::Hostkeeper, None)).expect("the targets"));
@@ -232,14 +233,23 @@ fn hostkeepers_native_entries_name_the_package_its_daemon_takes_as_its_own() {
         let native = &list["entries"][0]["manifest"];
         let package = native["package"].as_str().expect("a package");
         assert_eq!(package, "hostkeeper", "{platform}");
+        assert_eq!(
+            native["hook"].get("command"),
+            None,
+            "{platform}: hostkeeper's daemon runs built-in steps"
+        );
         let run = native["run"].as_array().expect("run units");
         assert!(!run.is_empty(), "{platform}");
+        let nfpm = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packaging/linux/nfpm.yaml"),
+        )
+        .expect("read nfpm.yaml");
         for unit in run {
-            let file = format!("usr/lib/systemd/system/{}", unit.as_str().expect("a unit"));
-            assert!(
-                hostkeeper_install::repository::tree::OWN_FILES.contains(&file.as_str()),
-                "{file}"
+            let file = format!(
+                "dst: /usr/lib/systemd/system/{}\n",
+                unit.as_str().expect("a unit")
             );
+            assert!(nfpm.contains(&file), "nfpm.yaml installs no {file}");
         }
     }
 }
@@ -249,8 +259,8 @@ fn hello_lists_its_deb_alone_on_linux_and_nothing_for_macos() {
     // Catches: hello's list with its archive entry still in it or without its native entry, a
     // list for macOS, a `.deb` entry that is not a repository entry of the testing suite pinned
     // by the `.deb`'s own SHA-256 at the release's version, and a native manifest that is not
-    // the archive's own (its hook bounds, run units, health URL, params and floor) with no hook
-    // command, the package's name and the installer's bounds.
+    // hello's (its hook bounds, run units, health URL, params and floor) with the hook command
+    // naming the program the `.deb` installs, the package's name and the installer's bounds.
     let (_root, dist) = dist("targets-hello");
     built(&dist, Package::Hello);
     let got = answered(&targets(&request(&dist, Package::Hello, None)).expect("the targets"));
@@ -266,10 +276,12 @@ fn hello_lists_its_deb_alone_on_linux_and_nothing_for_macos() {
 }
 
 #[test]
-fn the_line_of_each_package_is_the_bytes_the_release_has_always_written() {
+fn the_line_of_each_package_is_the_bytes_the_release_writes() {
     // Catches: any change of the JSON `release targets` writes for hostkeeper, hello or mdm at
-    // one version: a field, a bound, a unit, the floor, a key's order or the spelling of a
-    // number, whatever the manifest is built from.
+    // one version: a field, a bound, a unit, the floor, the hook command, a key's order or the
+    // spelling of a number, whatever the manifest is built from. The lines are the ones the
+    // archive's manifest gave, with the hook command naming the program each service's `.deb`
+    // installs.
     assert_eq!(
         line_of("targets-bytes-hostkeeper", Package::Hostkeeper),
         HOSTKEEPER_LINE
@@ -279,8 +291,8 @@ fn the_line_of_each_package_is_the_bytes_the_release_has_always_written() {
 }
 
 const HOSTKEEPER_LINE: &str = r#"targets={"linux-arm64":{"entries":[{"digest":"c920ce476ae57d152131e881c4a0af050a3ee25ff0ae85ee20697be9c6fd38af","installer":"apt","manifest":{"hook":{"timeoutSecs":{"cleanup":"300","cutover":"300","prepare":"300","rollback":"300","verify":"300"},"verifyDeadlineSecs":"600"},"installerBounds":{"activateSecs":"300","removeSecs":"300","stageSecs":"600"},"minHostkeeper":"0.1.5","package":"hostkeeper","run":["hostkeeper.service"]},"packageVersion":"0.1.5","repository":"komira-testing"}]},"linux-x86_64":{"entries":[{"digest":"109ccc2b56ef785db77ac86d6cff2a0e7e57d1a9444228ef39af7b8bd08d1551","installer":"apt","manifest":{"hook":{"timeoutSecs":{"cleanup":"300","cutover":"300","prepare":"300","rollback":"300","verify":"300"},"verifyDeadlineSecs":"600"},"installerBounds":{"activateSecs":"300","removeSecs":"300","stageSecs":"600"},"minHostkeeper":"0.1.5","package":"hostkeeper","run":["hostkeeper.service"]},"packageVersion":"0.1.5","repository":"komira-testing"}]}}"#;
-const HELLO_LINE: &str = r#"targets={"linux-arm64":{"entries":[{"digest":"54f1dc38b02b05adba31ec92ed9d69aa93c9bb1d2e76623e35ff23fa92a65cee","installer":"apt","manifest":{"healthUrl":"http://127.0.0.1:9310/readyz","hook":{"timeoutSecs":{"cleanup":"30","cutover":"60","prepare":"30","rollback":"60","uninstall":"60","verify":"30"},"verifyDeadlineSecs":"120"},"installerBounds":{"activateSecs":"300","removeSecs":"300","stageSecs":"600"},"minHostkeeper":"0.1.0","package":"hello","params":{"port":{"integer":"9310"},"record_dir":{"text":"/var/lib/updater/hooks/hello"},"units":{"text":"systemd"}},"run":["hello@a.service","hello@b.service"]},"packageVersion":"0.1.5","repository":"komira-testing"}]},"linux-x86_64":{"entries":[{"digest":"7be376ea65ba0035dfe4316891ce29602c29a71f55993fc4bfc78ffab35a8624","installer":"apt","manifest":{"healthUrl":"http://127.0.0.1:9310/readyz","hook":{"timeoutSecs":{"cleanup":"30","cutover":"60","prepare":"30","rollback":"60","uninstall":"60","verify":"30"},"verifyDeadlineSecs":"120"},"installerBounds":{"activateSecs":"300","removeSecs":"300","stageSecs":"600"},"minHostkeeper":"0.1.0","package":"hello","params":{"port":{"integer":"9310"},"record_dir":{"text":"/var/lib/updater/hooks/hello"},"units":{"text":"systemd"}},"run":["hello@a.service","hello@b.service"]},"packageVersion":"0.1.5","repository":"komira-testing"}]}}"#;
-const MDM_LINE: &str = r#"targets={"linux-x86_64":{"entries":[{"digest":"0c3015630430a4856eecca558013c9d74bd58e4234e67d7e834b21a759b1ae4d","installer":"apt","manifest":{"healthUrl":"http://127.0.0.1:9004/version","hook":{"timeoutSecs":{"cleanup":"30","cutover":"120","prepare":"300","rollback":"120","uninstall":"120","verify":"60"},"verifyDeadlineSecs":"600"},"installerBounds":{"activateSecs":"300","removeSecs":"300","stageSecs":"600"},"minHostkeeper":"0.1.5","package":"mdm","params":{"record_dir":{"text":"/var/lib/updater/hooks/mdm"},"settings":{"text":"/etc/mdm/settings"}},"run":["mdm-scep.service","mdm-nanohub.service","mdm-depserver.service"]},"packageVersion":"0.1.5","repository":"komira-testing"}]}}"#;
+const HELLO_LINE: &str = r#"targets={"linux-arm64":{"entries":[{"digest":"3b1e27a59adf3654ac42e0a1ca31ba49f1691ac532e935c410fab31f01625cbc","installer":"apt","manifest":{"healthUrl":"http://127.0.0.1:9310/readyz","hook":{"command":["/usr/lib/hello/hello","update-hook"],"timeoutSecs":{"cleanup":"30","cutover":"60","prepare":"30","rollback":"60","uninstall":"60","verify":"30"},"verifyDeadlineSecs":"120"},"installerBounds":{"activateSecs":"300","removeSecs":"300","stageSecs":"600"},"minHostkeeper":"0.1.0","package":"hello","params":{"port":{"integer":"9310"},"record_dir":{"text":"/var/lib/updater/hooks/hello"},"units":{"text":"systemd"}},"run":["hello@a.service","hello@b.service"]},"packageVersion":"0.1.5","repository":"komira-testing"}]},"linux-x86_64":{"entries":[{"digest":"6ddf6fc1307c13d242c03a62b129a0bdf0e2338ecbb46ff3ce4905fcb513416d","installer":"apt","manifest":{"healthUrl":"http://127.0.0.1:9310/readyz","hook":{"command":["/usr/lib/hello/hello","update-hook"],"timeoutSecs":{"cleanup":"30","cutover":"60","prepare":"30","rollback":"60","uninstall":"60","verify":"30"},"verifyDeadlineSecs":"120"},"installerBounds":{"activateSecs":"300","removeSecs":"300","stageSecs":"600"},"minHostkeeper":"0.1.0","package":"hello","params":{"port":{"integer":"9310"},"record_dir":{"text":"/var/lib/updater/hooks/hello"},"units":{"text":"systemd"}},"run":["hello@a.service","hello@b.service"]},"packageVersion":"0.1.5","repository":"komira-testing"}]}}"#;
+const MDM_LINE: &str = r#"targets={"linux-x86_64":{"entries":[{"digest":"0c3015630430a4856eecca558013c9d74bd58e4234e67d7e834b21a759b1ae4d","installer":"apt","manifest":{"healthUrl":"http://127.0.0.1:9004/version","hook":{"command":["/usr/lib/mdm/mdm","update-hook"],"timeoutSecs":{"cleanup":"30","cutover":"120","prepare":"300","rollback":"120","uninstall":"120","verify":"60"},"verifyDeadlineSecs":"600"},"installerBounds":{"activateSecs":"300","removeSecs":"300","stageSecs":"600"},"minHostkeeper":"0.1.5","package":"mdm","params":{"record_dir":{"text":"/var/lib/updater/hooks/mdm"},"settings":{"text":"/etc/mdm/settings"}},"run":["mdm-scep.service","mdm-nanohub.service","mdm-depserver.service"]},"packageVersion":"0.1.5","repository":"komira-testing"}]}}"#;
 
 /// The `targets=` line the verb answers for `package` at the release 0.1.5, in a new `dist`
 /// whose packages are built as the release builds them.
@@ -324,6 +336,7 @@ fn mdm_gets_its_one_platform_its_native_entry_alone_and_the_floor_of_hostkeepers
         "manifest": {
             "package": "mdm",
             "hook": {
+                "command": ["/usr/lib/mdm/mdm", "update-hook"],
                 "timeoutSecs": {
                     "prepare": "300", "cutover": "120", "verify": "60", "rollback": "120",
                     "cleanup": "30", "uninstall": "120",

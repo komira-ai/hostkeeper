@@ -183,13 +183,16 @@ fn native_entry(
 /// The manifest of the native entry of `service` at the release `release`, as the package has
 /// always carried it: hostkeeper's, with the unit file of its `.deb` and the floor of the oldest
 /// release that reads every file this one writes (or the release's own version when that is
-/// older), or hello's, with its two slots, its readiness URL and its params.
+/// older), or hello's, with its hook command, its two slots, its readiness URL and its params.
 fn manifest(service: &str, release: &str) -> Value {
     let bounds = json!({"stageSecs": "600", "activateSecs": "300", "removeSecs": "300"});
     if service == "hello" {
         return json!({
             "package": "hello",
             "hook": {
+                // The program hello's `.deb` installs, with its `update-hook` verb; hostkeeper's
+                // daemon runs built-in steps and names none.
+                "command": ["/usr/lib/hello/hello", "update-hook"],
                 "timeoutSecs": {
                     "prepare": "30", "cutover": "60", "verify": "30", "rollback": "60",
                     "cleanup": "30", "uninstall": "60",

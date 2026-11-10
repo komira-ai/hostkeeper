@@ -141,6 +141,7 @@ fn the_hook_and_additive_lines_have_no_private_network() {
     let params = hook.with_file_name("params.toml");
     let step = command(&StepCall {
         service: "svc",
+        hook_args: &[],
         invocation: Invocation {
             step: Step::Cutover,
             artifact: None,

@@ -1,6 +1,6 @@
 //! What mdm's `.deb` holds (docs/operations/mdm-package.md): its program and the binaries of the
 //! pinned tools of `hostkeeper_mdm_core::package::TOOLS` in `/usr/lib/mdm/`
-//! (`hostkeeper_mdm_core::package::DEB_BIN`), the hook beside them, and its eight units in
+//! (`hostkeeper_mdm_core::package::DEB_BIN`), and its eight units in
 //! `/usr/lib/systemd/system/`, each the committed unit with its programs in `/usr/lib/mdm/`
 //! (`Layout::Deb`'s `unit_text`). The `.deb` is built for linux-x86_64 only: the pinned tools
 //! are linux-amd64 builds.
@@ -20,7 +20,7 @@ use hostkeeper_mdm_core::pins::Pins;
 use sha2::{Digest, Sha256};
 
 use super::hello::File;
-use super::{FILE_MODE, HOOK, PROGRAM_MODE, SYSTEMD_UNITS, hook_wrapper};
+use super::{FILE_MODE, PROGRAM_MODE, SYSTEMD_UNITS};
 use crate::release::Error;
 
 /// The binaries of the tools of `pins` out of the archives in `dir`, each archive checked
@@ -51,18 +51,11 @@ pub(crate) fn tools(pins: &Pins, dir: &Path) -> Result<Vec<(String, Vec<u8>)>, E
     Ok(binaries)
 }
 
-/// The files of mdm's `.deb`: the program `binary`, the tools `tools` ([`tools`]), the hook and
-/// the units, in path order.
+/// The files of mdm's `.deb`: the program `binary`, the tools `tools` ([`tools`]) and the
+/// units, in path order.
 pub(crate) fn deb_files(binary: Vec<u8>, tools: Vec<(String, Vec<u8>)>) -> Vec<File> {
     let file = |path: String, mode: u32, data: Vec<u8>| File { path, mode, data };
-    let mut files = vec![
-        file(format!("{DEB_BIN}/{SERVICE}"), PROGRAM_MODE, binary),
-        file(
-            format!("{DEB_BIN}/{HOOK}"),
-            PROGRAM_MODE,
-            hook_wrapper(SERVICE).into_bytes(),
-        ),
-    ];
+    let mut files = vec![file(format!("{DEB_BIN}/{SERVICE}"), PROGRAM_MODE, binary)];
     files.extend(
         tools
             .into_iter()

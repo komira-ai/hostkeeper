@@ -45,14 +45,14 @@ fn product(dir: &Path, text: &str) {
 }
 
 fn refused(dir: &Path) -> ShapeError {
-    check(dir, ID, VERSION, false).unwrap_err()
+    check(dir, ID, VERSION).unwrap_err()
 }
 
 #[test]
 fn a_component_package_is_its_own_component() {
     let dir = scratch("shcomp");
     component(dir.path(), &package_info(""));
-    let found = check(dir.path(), ID, VERSION, false).unwrap();
+    let found = check(dir.path(), ID, VERSION).unwrap();
     assert_eq!(found.dir, dir.path());
     assert_eq!(found.package_info(), dir.path().join("PackageInfo"));
     assert_eq!(found.bom(), dir.path().join("Bom"));
@@ -64,7 +64,7 @@ fn a_product_archive_with_one_component_finds_it() {
     let dir = scratch("shprod");
     product(dir.path(), &distribution("start_selected=\"true\"", REF));
     fs::create_dir(dir.path().join("Resources")).unwrap();
-    let found = check(dir.path(), ID, VERSION, false).unwrap();
+    let found = check(dir.path(), ID, VERSION).unwrap();
     assert_eq!(found.dir, dir.path().join("hello.pkg"));
 }
 
@@ -108,7 +108,7 @@ fn the_same_path_named_twice_is_one_path() {
     let dir = scratch("shsame");
     let refs = format!("{REF}{REF}");
     product(dir.path(), &distribution("", &refs));
-    assert!(check(dir.path(), ID, VERSION, false).is_ok());
+    assert!(check(dir.path(), ID, VERSION).is_ok());
 }
 
 #[test]
@@ -117,7 +117,7 @@ fn a_percent_escaped_path_names_the_decoded_directory() {
     component(&dir.path().join("my hello.pkg"), &package_info(""));
     let refs = format!("<pkg-ref id=\"{ID}\">#my%20hello.pkg</pkg-ref>");
     fs::write(dir.path().join("Distribution"), distribution("", &refs)).unwrap();
-    let found = check(dir.path(), ID, VERSION, false).unwrap();
+    let found = check(dir.path(), ID, VERSION).unwrap();
     assert_eq!(found.dir, dir.path().join("my hello.pkg"));
 }
 
@@ -178,7 +178,7 @@ fn a_choice_with_every_switch_true_is_accepted() {
     let dir = scratch("shchoiceok");
     let attrs = "start_selected=\"true\" selected=\"true\" start_enabled=\"true\" enabled=\"true\"";
     product(dir.path(), &distribution(attrs, REF));
-    assert!(check(dir.path(), ID, VERSION, false).is_ok());
+    assert!(check(dir.path(), ID, VERSION).is_ok());
 }
 
 /// Catches: an install-time script of a `Distribution` going unnoticed.
@@ -202,56 +202,39 @@ fn an_extra_entry_in_the_expansion_is_refused() {
     fs::write(dir.path().join("Stray"), b"x").unwrap();
     let err = refused(dir.path());
     assert_eq!(err, ShapeError::Extra("Stray".into()));
-    assert!(!err.is_scripts());
 }
 
-/// Catches: a script archive beside or in the component, or a script element of the
-/// `PackageInfo`, being accepted or refused as a shape defect (`manifest_invalid`) instead of a
-/// script (`package_scripts`).
+/// A script archive beside the component or in it, and the script elements of the `PackageInfo`,
+/// are the package's own business: `installer` runs them at `activate`.
 #[test]
-fn a_script_in_or_beside_the_component_or_its_package_info_is_a_script() {
+fn a_script_in_or_beside_the_component_or_its_package_info_is_accepted() {
     let beside = scratch("shscripts-beside");
     product(beside.path(), &distribution("", REF));
     fs::create_dir(beside.path().join("Scripts")).unwrap();
     let inside = scratch("shscripts-in");
     component(inside.path(), &package_info(""));
     fs::create_dir(inside.path().join("Scripts")).unwrap();
-    let mut cases = vec![
-        (
-            refused(beside.path()),
-            "the product archive holds \"Scripts\"".to_owned(),
-        ),
-        (
-            refused(inside.path()),
-            "the component holds \"Scripts\"".to_owned(),
-        ),
-    ];
-    for name in SCRIPT_ELEMENTS {
+    assert!(check(beside.path(), ID, VERSION).is_ok());
+    assert!(check(inside.path(), ID, VERSION).is_ok());
+    for name in ["preinstall", "postinstall", "preupgrade", "postupgrade"] {
         let dir = scratch("shscripts-info");
         component(
             dir.path(),
             &package_info(&format!("<scripts><{name} file=\"./{name}\"/></scripts>")),
         );
-        cases.push((
-            refused(dir.path()),
-            format!("the PackageInfo has a <{name}> element"),
-        ));
-    }
-    for (err, detail) in cases {
-        assert_eq!(err, ShapeError::Scripts(detail));
-        assert!(err.is_scripts());
+        assert!(check(dir.path(), ID, VERSION).is_ok(), "{name}");
     }
 }
 
-/// Catches: a payload-free component with scripts reported for its missing `Payload`, not for its
+/// A payload-free component with scripts is reported for its missing `Payload`, not for its
 /// scripts.
 #[test]
-fn a_payload_free_component_with_scripts_is_a_script() {
+fn a_payload_free_component_with_scripts_lacks_its_payload() {
     let dir = scratch("shscripts-nopayload");
     component(dir.path(), &package_info(""));
     fs::remove_dir(dir.path().join("Payload")).unwrap();
     fs::create_dir(dir.path().join("Scripts")).unwrap();
-    assert!(refused(dir.path()).is_scripts());
+    assert_eq!(refused(dir.path()), ShapeError::Missing("Payload"));
 }
 
 /// Catches: an entry of a component other than its `Bom`, `PackageInfo` and `Payload` passing.
@@ -278,7 +261,7 @@ fn the_package_info_pkgbuild_writes_is_accepted() {
              <strict-identifier/><relocate/><scripts/>",
         ),
     );
-    check(dir.path(), ID, VERSION, false).unwrap();
+    check(dir.path(), ID, VERSION).unwrap();
 }
 
 #[test]
@@ -413,11 +396,10 @@ fn a_product_archives_component_is_checked_like_a_component_package() {
     );
 }
 
-/// Catches: the reason of a package with a script depending on the order of its directory's
-/// entries: a `Scripts` entry beside a stray entry, in the component or beside it, and a
-/// `PackageInfo` script element with a stray entry or no `Bom`, are each `package_scripts`.
+/// A `Scripts` entry changes nothing about which other defect is reported: beside a stray entry,
+/// in the component or beside it, the stray entry is the one refused.
 #[test]
-fn a_script_is_package_scripts_whatever_else_the_expansion_holds() {
+fn a_scripts_entry_does_not_hide_a_stray_entry() {
     let inside = scratch("shscripts-and-extra");
     component(inside.path(), &package_info(""));
     for name in ["Scripts", "Aaa", "Zzz"] {
@@ -428,21 +410,11 @@ fn a_script_is_package_scripts_whatever_else_the_expansion_holds() {
     for name in ["Scripts", "Aaa", "Zzz"] {
         fs::create_dir(beside.path().join(name)).unwrap();
     }
-    let info = package_info("<scripts><postinstall file=\"./postinstall\"/></scripts>");
-    let no_bom = scratch("shscripts-no-bom");
-    component(no_bom.path(), &info);
-    fs::remove_file(no_bom.path().join("Bom")).unwrap();
-    let stray = scratch("shscripts-info-and-stray");
-    component(stray.path(), &info);
-    fs::create_dir(stray.path().join("Aaa")).unwrap();
-    for (dir, detail) in [
-        (inside.path(), "the component holds \"Scripts\""),
-        (beside.path(), "the product archive holds \"Scripts\""),
-        (no_bom.path(), "the PackageInfo has a <postinstall> element"),
-        (stray.path(), "the PackageInfo has a <postinstall> element"),
-    ] {
-        assert_eq!(refused(dir), ShapeError::Scripts(detail.into()), "{detail}");
-    }
+    assert_eq!(
+        refused(inside.path()),
+        ShapeError::ComponentExtra("Aaa".into())
+    );
+    assert_eq!(refused(beside.path()), ShapeError::Extra("Aaa".into()));
 }
 
 /// Catches: which stray entry is reported depending on the directory's order.
@@ -473,66 +445,44 @@ fn a_component_without_its_package_info_is_refused() {
     assert_eq!(refused(dir.path()), ShapeError::Missing("PackageInfo"));
 }
 
-/// Catches: a `Scripts` archive inside a product archive's component (where `productbuild
-/// --package` puts a component's scripts) passing.
+/// A `Scripts` archive inside a product archive's component (where `productbuild --package`
+/// puts a component's scripts) is accepted, whatever it holds or is.
 #[test]
-fn a_script_archive_in_a_product_archives_component_is_a_script() {
+fn a_script_archive_in_a_product_archives_component_is_accepted() {
     let dir = scratch("shscripts-product-component");
     product(dir.path(), &distribution("", REF));
     fs::create_dir(dir.path().join("hello.pkg/Scripts")).unwrap();
-    assert_eq!(
-        refused(dir.path()),
-        ShapeError::Scripts("the component holds \"Scripts\"".into())
-    );
+    fs::write(
+        dir.path().join("hello.pkg/Scripts/postinstall"),
+        b"#!/bin/sh\n",
+    )
+    .unwrap();
+    assert!(check(dir.path(), ID, VERSION).is_ok());
 }
 
-/// Hostkeeper's own component, with a `Scripts` directory holding `postinstall` alone as a
-/// regular file, is accepted; a `postinstall` that is a link, or a `Scripts` with nothing in it,
-/// is not, and a package that is not hostkeeper's own refuses the directory.
+/// The component of any package may hold a `Scripts` directory with any files: a `postinstall`
+/// that is a link, or a directory with nothing in it, stages as well as a regular file.
 #[test]
-fn an_own_component_may_hold_a_postinstall_alone_as_a_regular_file() {
-    let own = |dir: &Path| check(dir, ID, VERSION, true);
-    let dir = scratch("shown-ok");
+fn a_components_scripts_directory_is_not_examined() {
+    let dir = scratch("shscripts-ok");
     component(dir.path(), &package_info(""));
     fs::create_dir(dir.path().join("Scripts")).unwrap();
     fs::write(dir.path().join("Scripts/postinstall"), b"#!/bin/sh\n").unwrap();
-    assert_eq!(own(dir.path()).unwrap().dir, dir.path());
-    assert_eq!(
-        refused(dir.path()),
-        ShapeError::Scripts("the component holds \"Scripts\"".into())
-    );
+    assert_eq!(check(dir.path(), ID, VERSION).unwrap().dir, dir.path());
 
-    let linked = scratch("shown-link");
+    let linked = scratch("shscripts-link");
     component(linked.path(), &package_info(""));
     fs::create_dir(linked.path().join("Scripts")).unwrap();
-    fs::write(linked.path().join("target"), b"x").unwrap();
-    std::os::unix::fs::symlink(
-        linked.path().join("target"),
-        linked.path().join("Scripts/postinstall"),
-    )
-    .unwrap();
-    assert_eq!(
-        own(linked.path()).unwrap_err(),
-        ShapeError::Scripts("the component's \"postinstall\" is not a regular file".into())
-    );
+    std::os::unix::fs::symlink("elsewhere", linked.path().join("Scripts/postinstall")).unwrap();
+    assert!(check(linked.path(), ID, VERSION).is_ok());
 
-    let empty = scratch("shown-empty");
+    let empty = scratch("shscripts-empty");
     component(empty.path(), &package_info(""));
     fs::create_dir(empty.path().join("Scripts")).unwrap();
-    assert_eq!(
-        own(empty.path()).unwrap_err(),
-        ShapeError::Scripts("the component's \"Scripts\" holds , not \"postinstall\" alone".into())
-    );
-}
+    assert!(check(empty.path(), ID, VERSION).is_ok());
 
-/// A `Scripts` entry of hostkeeper's own component that is no directory cannot be read.
-#[test]
-fn an_own_scripts_entry_that_is_no_directory_is_unreadable() {
-    let dir = scratch("shown-file");
-    component(dir.path(), &package_info(""));
-    fs::write(dir.path().join("Scripts"), b"x").unwrap();
-    assert!(matches!(
-        check(dir.path(), ID, VERSION, true),
-        Err(ShapeError::Read(what, _)) if what == "the component's Scripts"
-    ));
+    let file = scratch("shscripts-file");
+    component(file.path(), &package_info(""));
+    fs::write(file.path().join("Scripts"), b"x").unwrap();
+    assert!(check(file.path(), ID, VERSION).is_ok());
 }

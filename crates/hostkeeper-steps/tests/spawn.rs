@@ -41,6 +41,7 @@ fn run_mode(
     let unit = unit_name("svc", Step::Cutover, 3);
     let call = StepCall {
         service: "svc",
+        hook_args: &[],
         invocation: Invocation {
             step: Step::Cutover,
             artifact: None,
@@ -208,6 +209,7 @@ fn a_systemd_run_that_cannot_start_is_a_launcher_error() {
     let unit = unit_name("svc", Step::Verify, 1);
     let call = StepCall {
         service: "svc",
+        hook_args: &[],
         invocation: Invocation {
             step: Step::Verify,
             artifact: None,
