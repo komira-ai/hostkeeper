@@ -86,6 +86,7 @@ mod previous {
 /// A record of `host` stating `platform`.
 fn record(host: &str, mac: &str, platform: Option<Platform>) -> InventoryRecord {
     InventoryRecord {
+        host_group: String::new(),
         host_id: host.to_owned(),
         role: "storage".to_owned(),
         data_macs: vec![mac.to_owned()],

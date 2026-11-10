@@ -34,11 +34,12 @@ const REQUEST_COLUMNS: &str = "request_id, state, expired_unix, expired_after_se
     round, serial, renewal_of, image, csr_der, spki_der, mac_nonce_presented, machine_id, \
     dmi_serial, dmi_product_uuid, addresses, mac_serial, mac_platform_uuid, bmc_mac, \
     approved_host_id, approved_role, approved_services, approved_replace, approver, \
-    approved_unix, approved_reason, approved_mac_nonce";
+    approved_unix, approved_reason, approved_mac_nonce, approved_host_group";
 
-/// The columns of `enrollment_hosts`.
+/// The columns of `enrollment_hosts`, in the order of the table: every one of them, as a write
+/// sets them all (`ROW(EXCLUDED.*)`); migration `0008` added the last three.
 const HOST_COLUMNS: &str = "host_id, key_hash, machine_id, role, services, duplicate, first_heartbeat_unix, \
-    first_serving_unix";
+    first_serving_unix, host_group, moving_from, facts_generation";
 
 /// What a read of a host takes: the columns of `enrollment_hosts` and the running record
 /// (`enrollment_host_running`, migration `0006`) of the same host, which a host without one has
@@ -47,7 +48,7 @@ const HOST_FROM: &str = "enrollment_hosts LEFT JOIN enrollment_host_running USIN
 
 /// The columns [`HOST_FROM`] gives, in the order [`host_of`] reads them.
 const HOST_READ: &str = "host_id, key_hash, machine_id, role, services, duplicate, \
-    first_heartbeat_unix, first_serving_unix, running";
+    first_heartbeat_unix, first_serving_unix, running, host_group, moving_from, facts_generation";
 
 /// The columns of `enrollment_issued`.
 const ISSUED_COLUMNS: &str = "request_id, round, serial, host_id, not_after, certificate_der";
@@ -123,6 +124,16 @@ fn state_of(state: i32, table: &str) -> Result<i16, StoreError> {
     })
 }
 
+/// An empty text as `NULL`, the way a column of a name added later keeps "none": a row written
+/// before it has `NULL` there too.
+fn empty_or_null(text: &str) -> Val {
+    if text.is_empty() {
+        Val::Null
+    } else {
+        Val::Text(text.to_owned())
+    }
+}
+
 /// The statement that writes `record` over the record of its key.
 fn upsert(record: &Record) -> Result<Stmt, StoreError> {
     let text = |s: &str| Val::Text(s.to_owned());
@@ -135,7 +146,7 @@ fn upsert(record: &Record) -> Result<Stmt, StoreError> {
                 format!(
                     "INSERT INTO enrollment_requests ({REQUEST_COLUMNS}) VALUES ($1, $2, $3, $4, \
                      $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, \
-                     $21, $22, $23, $24, $25, $26, $27) ON CONFLICT (request_id) DO UPDATE SET \
+                     $21, $22, $23, $24, $25, $26, $27, $28) ON CONFLICT (request_id) DO UPDATE SET \
                      ({REQUEST_COLUMNS}) = ROW(EXCLUDED.*)"
                 ),
                 vec![
@@ -169,6 +180,7 @@ fn upsert(record: &Record) -> Result<Stmt, StoreError> {
                     },
                     approved(&|a| text(&a.reason)),
                     approved(&|a| Val::Bytes(a.mac_nonce_sha256.clone())),
+                    approved(&|a| empty_or_null(&a.host_group)),
                 ],
             )
         }
@@ -190,7 +202,7 @@ fn upsert(record: &Record) -> Result<Stmt, StoreError> {
         Record::Host(h) => (
             format!(
                 "INSERT INTO enrollment_hosts ({HOST_COLUMNS}) VALUES ($1, $2, $3, $4, $5, $6, $7, \
-                 $8) ON CONFLICT (host_id) DO UPDATE SET ({HOST_COLUMNS}) = ROW(EXCLUDED.*)"
+                 $8, $9, $10, $11) ON CONFLICT (host_id) DO UPDATE SET ({HOST_COLUMNS}) = ROW(EXCLUDED.*)"
             ),
             vec![
                 text(&h.host_id),
@@ -205,6 +217,12 @@ fn upsert(record: &Record) -> Result<Stmt, StoreError> {
                 },
                 match h.first_serving_unix {
                     Some(at) => Val::Int(int(at, "enrollment_hosts")?),
+                    None => Val::Null,
+                },
+                empty_or_null(&h.host_group),
+                Val::text_or_null(h.moving_from.as_deref()),
+                match h.facts_generation {
+                    Some(n) => Val::Int(int(n, "enrollment_hosts")?),
                     None => Val::Null,
                 },
             ],
@@ -243,6 +261,7 @@ fn request_of(row: &Row) -> pb::Request {
     let approved = row
         .get::<_, Option<String>>(19)
         .map(|host_id| pb::Approval {
+            host_group: row.get::<_, Option<String>>(27).unwrap_or_default(),
             host_id,
             role: row.get::<_, Option<String>>(20).unwrap_or_default(),
             services: row.get::<_, Option<Vec<String>>>(21).unwrap_or_default(),
@@ -308,6 +327,9 @@ fn host_of(row: &Row) -> Result<pb::Host, StoreError> {
         first_heartbeat_unix: row.get::<_, Option<i64>>(6).map(unsigned),
         first_serving_unix: row.get::<_, Option<i64>>(7).map(unsigned),
         running,
+        host_group: row.get::<_, Option<String>>(9).unwrap_or_default(),
+        moving_from: row.get(10),
+        facts_generation: row.get::<_, Option<i64>>(11).map(unsigned),
     })
 }
 
