@@ -1,0 +1,101 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 700" width="1200" height="700" role="img" aria-label="The coordinator process holds the MDM listener, queue, SCEP CA, APNs sender and ABM client; Apple and the Macs are outside; nothing else runs on the MDM host.">
+<title>Components: what hostkeeper runs, with the MDM server inside the coordinator</title>
+<desc>One process, hostkeeper-coordinator, holds all MDM functions. Boxed outside it are Apple services, the public CA certificate files, the pkg directory and the Macs. No NanoHUB, NanoDEP, scepserver, Caddy or lego unit remains.</desc>
+<defs><marker id="coordinator-mdm-components-ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0B0B0A"/></marker><marker id="coordinator-mdm-components-ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FD4F1D"/></marker></defs>
+<style>
+.box{fill:#FFFFFF;stroke:#0B0B0A;stroke-width:1.4}
+.box-b{fill:#E8EEF4;stroke:#0B0B0A;stroke-width:1.4}
+.box-o{fill:#FFFAF5;stroke:#FD4F1D;stroke-width:1.4}
+.box-t{fill:none;stroke:#FD4F1D;stroke-width:2}
+.box-p{fill:none;stroke:#5A5A57;stroke-width:1.4;stroke-dasharray:6 4}
+.dash{stroke-dasharray:6 4}
+.tb{stroke:#FD4F1D;fill:none;stroke-width:2.2;stroke-dasharray:8 5}
+.ln{stroke:#0B0B0A;fill:none;stroke-width:1.4}
+.ln-d{stroke:#0B0B0A;fill:none;stroke-width:1.4;stroke-dasharray:6 4}
+.ln-o{stroke:#FD4F1D;fill:none;stroke-width:1.6}
+.ln-od{stroke:#FD4F1D;fill:none;stroke-width:1.6;stroke-dasharray:6 4}
+.life{stroke:#5A5A57;stroke-width:1;stroke-dasharray:2 4}
+text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font-size:13px}
+.b{font-weight:600}
+.t-m{fill:#5A5A57;font-size:12px}
+.lbl{paint-order:stroke;stroke:#FFFFFF;stroke-width:4px;stroke-linejoin:round}
+</style>
+<rect x="0" y="0" width="1200" height="700" fill="#FFFFFF"/>
+<text x="20" y="28" class="b" font-size="16" text-anchor="start">Components: what hostkeeper runs, with the MDM server inside the coordinator</text>
+<rect x="20" y="48" width="800" height="620" rx="6" class="tb"/>
+<text x="32" y="70" class="b" text-anchor="start">hostkeeper-coordinator (one process; the only hostkeeper program on the MDM host)</text>
+<rect x="40" y="90" width="360" height="96" rx="5" class="box"/>
+<text x="220" y="110" class="b" text-anchor="middle">Existing listeners (unchanged)</text>
+<text x="220" y="127" class="t-m" text-anchor="middle">heartbeat + LAN (host mTLS), private (operators, UI)</text>
+<text x="220" y="142" class="t-m" text-anchor="middle">the daemon enrollment and the gRPC API</text>
+<text x="220" y="157" class="t-m" text-anchor="middle">health</text>
+<rect x="430" y="90" width="370" height="96" rx="5" class="box-o"/>
+<text x="615" y="110" class="b" text-anchor="middle">MDM listener (--mdm-listen, LAN, :443)</text>
+<text x="615" y="127" class="t-m" text-anchor="middle">public-CA TLS name; no client certificate</text>
+<text x="615" y="142" class="t-m" text-anchor="middle">/enroll  /checkin  /mdm  /scep  /pkg/&lt;sha256&gt;.pkg</text>
+<text x="615" y="157" class="t-m" text-anchor="middle">Mdm-Signature checked against the stored hash</text>
+<rect x="40" y="220" width="170" height="110" rx="5" class="box-b"/>
+<text x="125" y="240" class="b" text-anchor="middle">SCEP server</text>
+<text x="125" y="257" class="t-m" text-anchor="middle">MDM identity CA</text>
+<text x="125" y="272" class="t-m" text-anchor="middle">(its own RSA key,</text>
+<text x="125" y="287" class="t-m" text-anchor="middle">not the host CA)</text>
+<rect x="230" y="220" width="170" height="110" rx="5" class="box-b"/>
+<text x="315" y="240" class="b" text-anchor="middle">Check-in + queue</text>
+<text x="315" y="257" class="t-m" text-anchor="middle">Authenticate,</text>
+<text x="315" y="272" class="t-m" text-anchor="middle">TokenUpdate, CheckOut,</text>
+<text x="315" y="287" class="t-m" text-anchor="middle">command queue</text>
+<rect x="430" y="220" width="170" height="110" rx="5" class="box-b"/>
+<text x="515" y="240" class="b" text-anchor="middle">ABM client</text>
+<text x="515" y="257" class="t-m" text-anchor="middle">OAuth 1.0a session,</text>
+<text x="515" y="272" class="t-m" text-anchor="middle">sync, assign,</text>
+<text x="515" y="287" class="t-m" text-anchor="middle">ADE profile</text>
+<rect x="630" y="220" width="170" height="110" rx="5" class="box-b"/>
+<text x="715" y="240" class="b" text-anchor="middle">APNs sender</text>
+<text x="715" y="257" class="t-m" text-anchor="middle">HTTP/2, push</text>
+<text x="715" y="272" class="t-m" text-anchor="middle">certificate as TLS</text>
+<text x="715" y="287" class="t-m" text-anchor="middle">client certificate</text>
+<rect x="40" y="365" width="360" height="110" rx="5" class="box-o"/>
+<text x="220" y="385" class="b" text-anchor="middle">Gate (hostkeeper-mdm-gate, linked in)</text>
+<text x="220" y="402" class="t-m" text-anchor="middle">device record, baseline reconciler, nonce, pkg install</text>
+<text x="220" y="417" class="t-m" text-anchor="middle">Gate::handle(Event) called by the queue:</text>
+<text x="220" y="432" class="t-m" text-anchor="middle">no NanoHUB client, no webhook</text>
+<rect x="430" y="365" width="370" height="110" rx="5" class="box-o"/>
+<text x="615" y="385" class="b" text-anchor="middle">Enrollment (existing)</text>
+<text x="615" y="402" class="t-m" text-anchor="middle">inventory by serial, host groups, host CA,</text>
+<text x="615" y="417" class="t-m" text-anchor="middle">mac_auto_approve: ABM table replaces the allowlist</text>
+<text x="615" y="432" class="t-m" text-anchor="middle">nonce store</text>
+<rect x="40" y="510" width="760" height="130" rx="5" class="box"/>
+<text x="420" y="530" class="b" text-anchor="middle">Store (Postgres, or files)</text>
+<text x="420" y="547" class="t-m" text-anchor="middle">existing: mdm_devices, inventory, enrollments   new, additive (migration 0009):</text>
+<text x="420" y="562" class="t-m" text-anchor="middle">mdm_enrollments, mdm_commands, mdm_identities (issued certificates), abm_devices, abm_state (cursor)</text>
+<text x="420" y="577" class="t-m" text-anchor="middle">files in --mdm-dir (0700, coordinator user): push cert + key, ABM token + key, MDM CA key</text>
+<rect x="860" y="48" width="320" height="620" rx="6" class="box-p"/>
+<text x="872" y="70" class="b" text-anchor="start">Outside hostkeeper</text>
+<rect x="880" y="100" width="280" height="80" rx="5" class="box-b"/>
+<text x="1020" y="120" class="b" text-anchor="middle">Macs</text>
+<text x="1020" y="137" class="t-m" text-anchor="middle">Setup Assistant on the LAN</text>
+<text x="1020" y="152" class="t-m" text-anchor="middle">MDM client, hostkeeper daemon</text>
+<text x="1020" y="167" class="t-m" text-anchor="middle">later: tailnet</text>
+<rect x="880" y="220" width="280" height="80" rx="5" class="box"/>
+<text x="1020" y="240" class="b" text-anchor="middle">Apple</text>
+<text x="1020" y="257" class="t-m" text-anchor="middle">ABM, ADE (mdmenrollment.apple.com)</text>
+<text x="1020" y="272" class="t-m" text-anchor="middle">APNs (api.push.apple.com)</text>
+<rect x="880" y="365" width="280" height="80" rx="5" class="box"/>
+<text x="1020" y="385" class="b" text-anchor="middle">Operator</text>
+<text x="1020" y="402" class="t-m" text-anchor="middle">hkctl mdm ... over the private listener:</text>
+<text x="1020" y="417" class="t-m" text-anchor="middle">push CSR, certs, ABM token, status</text>
+<rect x="880" y="480" width="280" height="70" rx="5" class="box"/>
+<text x="1020" y="500" class="b" text-anchor="middle">Public CA cert + key for the MDM name</text>
+<text x="1020" y="517" class="t-m" text-anchor="middle">files read by the MDM listener,</text>
+<text x="1020" y="532" class="t-m" text-anchor="middle">reloaded on the tick</text>
+<rect x="880" y="570" width="280" height="70" rx="5" class="box"/>
+<text x="1020" y="590" class="b" text-anchor="middle">pkg directory (read-only)</text>
+<text x="1020" y="607" class="t-m" text-anchor="middle">hostkeeper pkg, Tailscale pkg, named by</text>
+<text x="1020" y="622" class="t-m" text-anchor="middle">digest in --mdm-installs-file</text>
+<path d="M880,140 L800,140" class="ln" marker-end="url(#coordinator-mdm-components-ak)"/>
+<text x="840" y="132" class="t-m lbl" text-anchor="middle">LAN</text>
+<path d="M800,275 L880,275" class="ln-o" marker-end="url(#coordinator-mdm-components-ao)"/>
+<text x="840" y="267" class="t-m lbl" text-anchor="middle">out</text>
+<path d="M880,405 L800,405" class="ln" marker-end="url(#coordinator-mdm-components-ak)"/>
+<text x="840" y="397" class="t-m lbl" text-anchor="middle">mTLS</text>
+</svg>
