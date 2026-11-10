@@ -24,7 +24,7 @@
 //!   `hostkeeper`, the suite `hk`, so that its one channel is [`REPOSITORY`]; the rig puts it in
 //!   the coordinator's registry before it orders anything (`Repositories.Put`), as a set of `apt`
 //!   entries is refused for a repository the registry does not hold. The host's entry of it is the
-//!   files `hostkeeper_release::registry::render` gives for that entry, in
+//!   files the registry renders that entry to (hostkeeper-release's `registry::render`), in
 //!   `/etc/hostkeeper/repositories/` (`<REPOSITORY>.sources` and the keyring `hostkeeper.gpg`),
 //!   the fixed place the daemon reads without a flag; the released daemon reads the directory at
 //!   its start and takes no pushed set, and this build, pushed the same entry, finds the
@@ -55,7 +55,6 @@ use hostkeeper_placed::{RealFs, Store};
 use hostkeeper_proto::hostkeeper::release::v1::{
     Hook, InstallerBounds, Manifest, Repository as RegistryEntry, StepBounds, Target, TargetList,
 };
-use hostkeeper_release::registry;
 use hostkeeper_steps::Layout;
 use hostkeeper_testkit::Scratch;
 use sha2::{Digest, Sha256};
@@ -213,29 +212,43 @@ impl Repository {
         let exported = base.join("apt-keyring.gpg");
         key.export(&exported);
         let keyring = fs::read(&exported).expect("read the exported keyring");
-        let fingerprints: Vec<String> = registry::keys(&keyring)
-            .expect("the exported keyring parses")
-            .into_iter()
-            .flat_map(|key| std::iter::once(key.fingerprint).chain(key.subkeys))
-            .collect();
+        // The primary key's fingerprint, as gpg lists it: the registry needs one listed
+        // fingerprint per primary key of the keyring.
+        let listing = run(Command::new("gpg")
+            .args(["--batch", "--no-tty", "--homedir"])
+            .arg(base.join("apt-gpg"))
+            .args(["--with-colons", "--list-keys"]));
+        let fingerprint = String::from_utf8_lossy(&listing)
+            .lines()
+            .find_map(|line| line.strip_prefix("fpr:"))
+            .and_then(|rest| rest.split(':').nth(8))
+            .expect("the key's fingerprint")
+            .to_owned();
+        let uri = format!("https://127.0.0.1:{}", server.port());
         let entry = RegistryEntry {
             name: REGISTRY_NAME.to_owned(),
-            kind: registry::KIND_APT.to_owned(),
-            uri: format!("https://127.0.0.1:{}", server.port()),
+            kind: "apt".to_owned(),
+            uri: uri.clone(),
             suites: vec![SUITE.to_owned()],
             components: vec!["main".to_owned()],
-            fingerprints,
-            keyring,
+            fingerprints: vec![fingerprint],
+            keyring: keyring.clone(),
         };
-        registry::check(&entry).expect("the rig's repository is a valid registry entry");
-        assert_eq!(
-            registry::channels(&entry),
-            [REPOSITORY],
-            "the entry's channel is the repository the entries name"
+        // The host's entry as the registry renders the entry (`<name>-<suite>.sources` and
+        // `<name>.gpg`, hostkeeper-release's `registry::render`), so that this build, pushed the
+        // entry, finds the directory as it would write it and adopts it.
+        let keyring_file = format!("{REGISTRY_NAME}.gpg");
+        put(config, &keyring_file, &keyring, 0o644);
+        put(
+            config,
+            &format!("{REPOSITORY}.sources"),
+            format!(
+                "Types: deb\nURIs: {uri}\nSuites: {SUITE}\nComponents: main\nSigned-By: \
+                 {REPOSITORIES_DIR}/{keyring_file}\n"
+            )
+            .as_bytes(),
+            0o644,
         );
-        for file in registry::render(std::slice::from_ref(&entry), REPOSITORIES_DIR) {
-            put(config, &file.name, &file.bytes, 0o644);
-        }
         let ca = base.join("apt-ca.pem");
         put(base, "apt-ca.pem", server.ca_pem().as_bytes(), 0o644);
         put(

@@ -160,7 +160,6 @@ pub const LAYERS: [Layer; 33] = [
             OIDC,
             PACKAGE,
             PXE_PACKETS,
-            RELEASE,
             UNPACK,
             WIRE,
         ],

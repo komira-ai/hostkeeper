@@ -1908,7 +1908,6 @@ dependencies = [
  "hostkeeper-proto",
  "hostkeeper-pxe",
  "hostkeeper-pxe-packets",
- "hostkeeper-release",
  "hostkeeper-steps",
  "hostkeeper-testkit",
  "hostkeeper-unpack",

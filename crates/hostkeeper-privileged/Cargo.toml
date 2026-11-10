@@ -164,9 +164,6 @@ ureq.workspace = true
 # above), the process probe over `proc_pidpath`, the package check
 # (`hostkeeper_unpack::MacVerify`) over `codesign` and `getxattr`, and the enrollment claims over
 # `ioreg`.
-# The across-release rig's registry entry of its https apt repository: the entry's rules and the
-# files a host holds for it (`hostkeeper_release::registry`).
-hostkeeper-release = { path = "../hostkeeper-release" }
 hostkeeper-observe = { path = "../hostkeeper-observe" }
 hostkeeper-unpack = { path = "../hostkeeper-unpack" }
 # The macOS device test of the enrollment claims: `MacClaims` over the daemon's `HostIoreg`, the
