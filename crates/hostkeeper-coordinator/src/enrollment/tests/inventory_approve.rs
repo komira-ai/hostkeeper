@@ -256,6 +256,7 @@ fn a_record_whose_host_id_breaks_its_rule_names_no_host() {
     let key = HostKey::new();
     post(&enrollment, &key, "m-1", &[DB1_DATA]);
     let inventory = [InventoryRecord {
+        host_group: String::new(),
         host_id: "Not_A_Host".to_owned(),
         role: String::new(),
         data_macs: vec![DB1_DATA.to_owned()],

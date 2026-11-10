@@ -446,5 +446,9 @@ mod releases_tests;
 mod repositories_tests;
 
 #[cfg(test)]
+#[path = "transfer_host_groups_tests.rs"]
+mod host_groups_tests;
+
+#[cfg(test)]
 #[path = "transfer_mdm_tests.rs"]
 mod mdm_tests;

@@ -124,6 +124,13 @@ pub(crate) struct RawStageTable {
     advance: Advance,
 }
 
+impl RawStage {
+    /// The table form of a stage: `percent`, entered by `advance`.
+    pub(crate) fn table(percent: u32, advance: Advance) -> Self {
+        Self::Table(RawStageTable { percent, advance })
+    }
+}
+
 impl Plan {
     /// The plan of a service from its `stages` key (the default plan when it has none) and its
     /// canary, which goes first.

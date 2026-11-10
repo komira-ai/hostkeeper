@@ -377,11 +377,12 @@ fn with_session<R: Send + 'static>(
     })
 }
 
-/// Proves: the release before this one (the first three migrations, the desired tables
-/// `desired` and `desired_digests` only) starts on a database this release migrated and holding a
-/// release, because `0004` says `may-run`: its runner refuses nothing and runs nothing, and its
-/// load of the desired state reads the version set with targets with neither a package digest nor
-/// an index and no digest in the registry, so a host without the service is shown `no_digest`.
+/// Proves: `0004` does not stop the release before it (the first three migrations, the desired
+/// tables `desired` and `desired_digests` only) on a database this release migrated and holding a
+/// release: its runner is refused naming `0008`, the first migration after its own that says
+/// `refuse`, not `0004`, which says `may-run`; and its load of the desired state reads the version
+/// set with targets with neither a package digest nor an index and no digest in the registry, so a
+/// host without the service is shown `no_digest`.
 ///
 /// Catches: a release that makes the previous coordinator refuse to start, or a release stored
 /// where the previous coordinator would read it as a package digest or an index.
@@ -396,8 +397,9 @@ fn the_release_before_runs_on_a_database_with_a_release_and_reads_the_third_form
 
     let (ran, held) = with_session(&db, |session| {
         let before = migrate::checked(&migrate::SHIPPED[..3]).expect("the release before's set");
-        migrate::refuse_newer(session, &before).expect("0004 does not stop the release before");
-        let ran = migrate::apply(session, &before).expect("its runner takes the database");
+        let refused = migrate::refuse_newer(session, &before).expect_err("0008 stops it");
+        let ran = migrate::apply(session, &before).expect_err("its runner is refused");
+        let ran = [refused.to_string(), ran.to_string()];
         let mut tables = Tables::new();
         for table in &state::DESIRED[..2] {
             let rows = session
@@ -411,7 +413,9 @@ fn the_release_before_runs_on_a_database_with_a_release_and_reads_the_third_form
             state::desired_of(&tables).expect("its load reads the state"),
         )
     });
-    assert_eq!(ran, Vec::<i32>::new());
+    let refused = "the database's schema is newer than this coordinator (migration 8, host_groups)"
+        .to_owned();
+    assert_eq!(ran, [refused.clone(), refused]);
     assert_eq!(
         db.rows("SELECT version FROM schema_version ORDER BY version")
             .len(),
