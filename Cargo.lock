@@ -1769,6 +1769,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "hostkeeper-mdm-model"
+version = "0.1.0"
+
+[[package]]
 name = "hostkeeper-mdm-step"
 version = "0.1.0"
 dependencies = [
