@@ -7,6 +7,9 @@ use hostkeeper_wire::wire::{
     Health, Heartbeat, OrderId, Outcome, ServiceReply, Token, UpdateResult, VerdictAck,
 };
 
+use hostkeeper_proto::hostkeeper::operator::v1 as proto;
+
+use crate::marks_support::operator;
 use crate::rollback_tests::{failure, release, rig, who};
 use crate::testutil::{LEGACY, Rig, beat, id, version};
 use crate::verdict_file::FEATURE;
@@ -37,7 +40,7 @@ fn ask(rig: &Rig, host: &str, b: Heartbeat, at: u64) -> (ServiceReply, Vec<Verdi
     rig.at(at);
     let answer = rig
         .coordinator
-        .heartbeat(who(host), b)
+        .heartbeat_native(who(host), b)
         .expect("a heartbeat");
     (answer.reply, answer.acks)
 }
@@ -110,6 +113,25 @@ async fn a_clear_record_verdict_leaves_the_failure_the_gate_reads() {
             .shown(&d1, LEGACY),
         Some(&verdict)
     );
+    let page = rig
+        .coordinator
+        .get_host(
+            &operator(),
+            &proto::GetHostRequest {
+                node_id: "d1".to_owned(),
+            },
+        )
+        .expect("the host page")
+        .host
+        .expect("a host");
+    let shown = page
+        .services
+        .iter()
+        .find(|one| one.service == LEGACY)
+        .and_then(|one| one.last_update.as_ref())
+        .expect("the verdict of the service");
+    assert_eq!(shown.order_id.as_deref(), Some("clear-record-7"));
+    assert_eq!(shown.reason, "record_cleared");
 
     let (reply, acks) = ask(&rig, "d1", acking(beat("1.0")), 2_030);
     assert_eq!((reply, acks), (ServiceReply::Nothing, vec![]));

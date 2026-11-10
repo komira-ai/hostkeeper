@@ -2,7 +2,8 @@
 //! (`hostkeeper-install`'s, one copy for both crates' tests) answers every tool run of the
 //! daemon's step launcher, through the launcher's own call ([`bridge`]), so the daemon's tools
 //! port ([`hostkeeper_install::repository::launcher::LauncherTools`]) is the one a host runs.
-//! The host's one repository entry, `main`, is a `file:` repository.
+//! The host's one repository entry, `komira-stable` (the channel of the coordinator's `komira`
+//! with the suite `stable`), is a `file:` repository.
 
 #![allow(
     dead_code,
@@ -10,9 +11,10 @@
     reason = "each part of the support is used by some of the test files"
 )]
 
-#[path = "../../../hostkeeper-install/tests/support/apt_fake.rs"]
-pub mod apt_fake;
+// The fake is loaded once, by `support::apt`, which the self-update rig of `support` shares.
+pub use crate::support::apt::apt_fake;
 pub mod repository_host;
+pub mod services;
 
 use std::fs;
 use std::path::PathBuf;
@@ -34,7 +36,7 @@ use crate::support::{OWN, Rig, config};
 pub use apt_fake::{Deb, Events, FakeHost, Health, Inst};
 
 /// The repository the host's entry names.
-pub const REPO: &str = "main";
+pub const REPO: &str = "komira-stable";
 /// Its URI: a directory of the host.
 pub const URI: &str = "file:/srv/hostkeeper-apt";
 /// The service and its package.
@@ -85,7 +87,7 @@ pub fn bridge(host: Arc<FakeHost>) -> ToolAnswer {
     })
 }
 
-/// The host's repository entries: `main`, at [`URI`], its key in `keys`.
+/// The host's repository entries: `komira-stable`, at [`URI`], its key in `keys`.
 pub fn repositories(keys: &std::path::Path) -> Repositories {
     fs::create_dir_all(keys).expect("the keys directory");
     let text = format!(
@@ -119,7 +121,7 @@ impl AptRig {
         let keys = self.rig.scratch.path().join("keys");
         Ports {
             announcement: Announcement {
-                installers: vec![Installer::HostkeeperArchive, Installer::Apt],
+                installers: vec![Installer::Apt],
                 family: Some(Family::Deb),
             },
             repository: self.rig.repository_ports(repositories(&keys)),

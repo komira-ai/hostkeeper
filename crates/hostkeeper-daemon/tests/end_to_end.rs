@@ -1,30 +1,27 @@
 //! The first update end to end, in process: the real coordinator (`hostkeeper-coordinator`), the
 //! real heartbeat loop over the daemon (`hostkeeper_daemon::links`), and the real executor with
 //! its step runner and boot pass. The fakes are the network transport (a link that calls the
-//! coordinator's heartbeat with an explicit host identity), the service manager and the package
-//! source (`FakePackages`, the scripted launcher).
+//! coordinator's gRPC heartbeat as an explicit host), the service manager and the package source
+//! (the fake of apt and dpkg, which the package of the desired version is published in, and the
+//! scripted launcher).
 //!
-//! The daemon announces `order-v1`, so the coordinator's update carries its order terms: the
-//! order id, the try and the package digest CI registered with the desired version. The
-//! in-process link reads the order from those terms, as the daemon's JSON link does.
+//! CI sets the desired version with the release that lists the entry of that package: the daemon
+//! lists `apt`, so the coordinator picks the entry for it and orders the update as a typed order
+//! that carries it. A version set with no release orders nothing.
 
 mod support;
+mod support_apt;
 
-use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bytes::Bytes;
 use hostkeeper_config::names::{ServiceName, Version};
-use hostkeeper_coordinator::desired::DesiredStore;
-use hostkeeper_coordinator::http::{CONVERGENCE_PATH, DESIRED_PATH, Surface, handle};
-use hostkeeper_coordinator::ops::OpsStore;
-use hostkeeper_coordinator::service::{Clock, Coordinator};
-use hostkeeper_coordinator::services::Services;
-use hostkeeper_coordinator::trusted_root::TrustedRootSaid;
+use hostkeeper_coordinator::http::{CONVERGENCE_PATH, Surface, handle};
+use hostkeeper_coordinator::service::Coordinator;
 use hostkeeper_daemon::link_adapters::{
-    DaemonHalts, DaemonObserver, DaemonRecords, DaemonRenewal, DaemonTrustedRoot,
+    DaemonHalts, DaemonObserver, DaemonRecords, DaemonRenewal, NoTrustedRoot,
 };
 use hostkeeper_daemon::links::{Links, PLATFORM};
 use hostkeeper_daemon::start;
@@ -34,33 +31,27 @@ use hostkeeper_link::testing::{
     FakeCerts, FakeLink, FakeSink, ManualDispatch, RecordingLog, ScriptedSleeper, identity,
 };
 use hostkeeper_link::{
-    ANNOUNCED, Acknowledged, BeatOutcome, CertState, ClientIdentity, CoordinatorLink,
-    DEFAULT_HEARTBEAT_SECS, Feature, Health, Heartbeat, Heartbeater, LinkError, LoopConfig, Order,
-    OrderId, OrderRef, OrderResult, Outcome, PackageDigest, Ports, Reason, Renewal, Reply,
-    ServiceFacts, StopFlag, Target, Verb,
+    ANNOUNCED, BeatOutcome, CertState, CoordinatorLink, DEFAULT_HEARTBEAT_SECS, Health, Heartbeat,
+    Heartbeater, LoopConfig, Ports, Renewal, ServiceFacts, StopFlag, Verb,
 };
-use hostkeeper_oidc::testkit::{
-    STATIC_ISSUER, StaticKeys, clock as oidc_clock, config_text, good_claims, jwks_of, keys, mint,
-    spent,
-};
-use hostkeeper_oidc::{OidcConfig, Verifier};
-use hostkeeper_proto::hostkeeper::agent::v1 as agent;
+use hostkeeper_oidc::testkit::{STATIC_ISSUER, good_claims, keys, mint};
 use hostkeeper_proto::hostkeeper::operator::v1 as operator;
 use hostkeeper_proto::hostkeeper::operator::v1::force_request::Targets;
 use hostkeeper_steps::ForceVerdict;
-use hostkeeper_wire::identity::Identity;
-use hostkeeper_wire::wire::{self, Answer, ServiceBeat, ServiceReply, UpdateResult};
 use http_body_util::{BodyExt, Full};
 use serde_json::Value;
-use support::{OWN, Rig, Scratch, d};
+use support::coordinated::coordinator_over;
+use support::typed::{GrpcInProcess, set_release};
+use support::{OWN, Scratch};
+use support_apt::{AptRig, services};
 
 /// The service of the scenario, its version before and the version CI sets.
 const SERVICE: &str = "web";
 const BEFORE: &str = "0.0.0";
 const TARGET: &str = "2.0.0";
 
-/// The operator token of the coordinator; nothing here uses it.
-const OPERATOR: &str = "operator-token-0123456789abcdef0123456789";
+/// The operator token of the coordinator; the force uses it.
+const OPERATOR: &str = support::coordinated::OPERATOR;
 
 /// How long the coordinator's handler waits for a body: the whole body is there.
 const PATIENCE: Duration = Duration::from_secs(30);
@@ -78,33 +69,23 @@ const HOOK_LINES: [(Step, &str); 4] = [
     (Step::Cleanup, "{}"),
 ];
 
-/// The real coordinator: `web` runs on the role `daemon`, CI's allow-list admits it, and it
-/// orders from its start (no quiet period), on a clock that stays at second 1000.
+/// The real coordinator: `web` runs on the role `daemon`, CI's allow-list admits it, nothing is
+/// desired until CI sets a version ([`publish_and_set`]), and it orders from its start (no quiet
+/// period), on a clock that stays at second 1000.
 fn coordinator(dir: &Path) -> Arc<Coordinator> {
-    let desired = DesiredStore::open(&dir.join("desired.json"), None).expect("the desired state");
-    let ops = OpsStore::open(&dir.join("desired.json.ops")).expect("the ops store");
-    let allow = format!("{}services = [\"{SERVICE}\"]\n", config_text(STATIC_ISSUER));
-    let (oidc_now, _) = oidc_clock();
-    let verifier = Verifier::new(
-        OidcConfig::parse(&allow).expect("the allow-list"),
-        Arc::new(StaticKeys(jwks_of(&[&keys()[0]]))),
-        Duration::from_secs(30),
-        oidc_now,
-        spent(),
-    );
-    let clock: Clock = Arc::new(|| Duration::from_secs(1_000));
-    let rollout = format!("[[service]]\nname = \"{SERVICE}\"\nroles = [\"daemon\"]\n");
-    Arc::new(
-        Coordinator::new(desired, Arc::new(verifier), OPERATOR.to_owned(), clock)
-            .with_services(Services::parse(&rollout).expect("the rollout file"))
-            .with_quiet(Duration::ZERO)
-            .with_ops(ops),
-    )
+    coordinator_over(dir, SERVICE, "")
+}
+
+/// `web` at [`TARGET`] published in the repository of `apt`, and CI sets `web` to it with the
+/// release that lists the entry of that package.
+fn publish_and_set(apt: &AptRig, coordinator: &Arc<Coordinator>) {
+    let entry = services::publish(apt, SERVICE, TARGET);
+    set_release(coordinator, SERVICE, TARGET, &entry);
 }
 
 /// The coordinator's answer to one request of CI on its private listener, with a token of its
 /// own: the status and the body.
-fn ci_call(coordinator: &Coordinator, method: &str, path: &str, body: &str) -> (u16, String) {
+fn ci_call(coordinator: &Arc<Coordinator>, method: &str, path: &str, body: &str) -> (u16, String) {
     let token = mint(&keys()[0], &good_claims(STATIC_ISSUER));
     let request = hyper::Request::builder()
         .method(method)
@@ -131,153 +112,12 @@ fn ci_call(coordinator: &Coordinator, method: &str, path: &str, body: &str) -> (
 }
 
 /// Where the coordinator says `web` stands: `converged`, `in_progress`, `blocked` or `halted`.
-fn convergence(coordinator: &Coordinator) -> String {
+fn convergence(coordinator: &Arc<Coordinator>) -> String {
     let path = format!("{CONVERGENCE_PATH}?service={SERVICE}");
     let (status, body) = ci_call(coordinator, "GET", &path, "");
     assert_eq!(status, 200, "{body}");
     let read: Value = serde_json::from_str(&body).expect("JSON");
     read["state"].as_str().expect("a state").to_owned()
-}
-
-fn wire_version(text: &str) -> hostkeeper_wire::version::Version {
-    hostkeeper_wire::version::Version::parse(text).expect("a version the wire carries")
-}
-
-fn wire_health(health: Health) -> wire::Health {
-    match health {
-        Health::Healthy => wire::Health::Healthy,
-        Health::Unhealthy => wire::Health::Unhealthy,
-        Health::Absent => wire::Health::Absent,
-    }
-}
-
-fn update_result(result: &OrderResult) -> UpdateResult {
-    let outcome = match result.outcome {
-        Outcome::Succeeded => wire::Outcome::Succeeded,
-        Outcome::Failed | Outcome::Deferred { .. } => wire::Outcome::Failed,
-    };
-    UpdateResult {
-        order_id: wire::OrderId::parse(result.order.id.as_str()),
-        order_try: Some(result.order.order_try),
-        ..UpdateResult::new(wire_version(result.target.as_str()), outcome)
-    }
-}
-
-fn service_beat(facts: &ServiceFacts) -> ServiceBeat {
-    ServiceBeat {
-        name: facts.name.as_str().to_owned(),
-        version: wire_version(facts.version.as_str()),
-        health: wire_health(facts.health),
-        last_update: facts.last_update.as_ref().map(update_result),
-        updating: facts
-            .updating
-            .as_ref()
-            .map(|version| wire_version(version.as_str())),
-        step: None,
-        commit: None,
-        step_secs: BTreeMap::new(),
-        promotion_pending: false,
-        deferred: None,
-        record_try: facts.record_try,
-    }
-}
-
-/// The loop's heartbeat as the coordinator reads it: every service in `services`, and the
-/// features it announces.
-fn wire_beat(beat: &Heartbeat) -> wire::Heartbeat {
-    wire::Heartbeat {
-        platform: hostkeeper_wire::Platform::parse(beat.platform.as_str()).expect("a platform"),
-        version: wire_version(beat.agent_version.as_str()),
-        health: wire::Health::Healthy,
-        last_update: None,
-        updating: None,
-        services: Some(beat.services.iter().map(service_beat).collect()),
-        agent_features: beat
-            .features
-            .iter()
-            .map(|feature| feature.as_str().to_owned())
-            .collect(),
-        step: None,
-        commit: None,
-        step_secs: BTreeMap::new(),
-        promotion_pending: false,
-        deferred: None,
-        agent: None,
-        sent_unix: None,
-        cert_not_after_unix: None,
-        last_renew_error: None,
-        record_try: None,
-    }
-}
-
-/// The coordinator's answer as the loop reads it: its update an order of the version under the
-/// answer's order terms (an update without them is no order), its features, its halt
-/// generations and its acknowledgements.
-fn reply_of(answer: &Answer) -> Reply {
-    let order = match (
-        &answer.reply,
-        &answer.order_id,
-        answer.order_try,
-        &answer.package_digest,
-    ) {
-        (
-            ServiceReply::Update {
-                service: Some(service),
-                version,
-            },
-            Some(id),
-            Some(order_try),
-            Some(digest),
-        ) => Some(Order {
-            id: OrderId::new(id.as_str()).expect("an id"),
-            order_try,
-            verb: Verb::Update(Target {
-                service: ServiceName::new(service).expect("a service"),
-                version: Version::new(version.as_str()).expect("a version"),
-                digest: PackageDigest::new(digest.as_str()).expect("a digest"),
-                index_digest: None,
-                entry: None,
-            }),
-        }),
-        _ => None,
-    };
-    Reply {
-        order,
-        features: answer
-            .features
-            .iter()
-            .flatten()
-            .filter_map(|name| Feature::parse(name))
-            .collect(),
-        halt_generations: answer
-            .halts
-            .iter()
-            .map(|(service, generation)| {
-                (ServiceName::new(service).expect("a service"), *generation)
-            })
-            .collect(),
-        acknowledged: answer
-            .acks
-            .iter()
-            .map(|ack| Acknowledged {
-                service: ServiceName::new(&ack.service).expect("a service"),
-                order: OrderRef {
-                    id: OrderId::new(ack.order_id.as_str()).expect("an id"),
-                    order_try: ack.order_try,
-                },
-            })
-            .collect(),
-        repositories: None,
-        facts: None,
-    }
-}
-
-/// The network transport, in process: each heartbeat goes to the coordinator's heartbeat as
-/// the host `host-1` of the role `daemon`, whatever certificate the loop presents.
-struct InProcess {
-    coordinator: Arc<Coordinator>,
-    /// What each heartbeat said of the service and what its answer ordered, in order.
-    seen: Arc<Mutex<Vec<Seen>>>,
 }
 
 /// One heartbeat of the scenario: whether it carried a verdict for the service, and whether the
@@ -286,28 +126,6 @@ struct InProcess {
 struct Seen {
     verdict: bool,
     ordered: bool,
-}
-
-impl CoordinatorLink for InProcess {
-    fn heartbeat(&self, _identity: &ClientIdentity, beat: &Heartbeat) -> Result<Reply, LinkError> {
-        let who = Identity {
-            host_id: "host-1".parse().expect("a host id"),
-            role: "daemon".parse().expect("a role"),
-        };
-        let reply = self
-            .coordinator
-            .heartbeat(who, wire_beat(beat))
-            .map(|answer| reply_of(&answer))
-            .map_err(|_| LinkError::Refused(Reason::new("forbidden").expect("a token")))?;
-        self.seen
-            .lock()
-            .expect("the log is not poisoned")
-            .push(Seen {
-                verdict: beat.services.iter().any(|s| s.last_update.is_some()),
-                ordered: reply.order.is_some(),
-            });
-        Ok(reply)
-    }
 }
 
 /// Which part of the scenario is replaced by a no-op.
@@ -333,7 +151,7 @@ struct Ran {
     seen: Vec<Seen>,
 }
 
-/// The host as it starts: `web` at 0.0.0, healthy, nothing running.
+/// The host as it starts: `web` at 0.0.0, healthy, installed with `apt`, nothing running.
 fn first_beat() -> Heartbeat {
     Heartbeat {
         platform: PLATFORM,
@@ -349,13 +167,13 @@ fn first_beat() -> Heartbeat {
             health_detail: None,
             observed: None,
             record_try: None,
-            installer: None,
+            installer: Some("apt".to_owned()),
             drift: None,
         }],
         sent_unix: 0,
         renewal: Renewal::default(),
         trusted_root: None,
-        installers: Vec::new(),
+        installers: vec!["apt".to_owned()],
         repositories: None,
         facts_generation: None,
     }
@@ -369,7 +187,7 @@ fn without_executor(daemon: &Arc<Daemon>, links: &Links) -> Heartbeater {
             agent_version: Version::from(OWN),
             state_dir: daemon.ctx().dirs.state.clone(),
             period_secs: links.period,
-            installers: Vec::new(),
+            installers: vec!["apt".to_owned()],
             private_repository: false,
         },
         Ports {
@@ -383,49 +201,16 @@ fn without_executor(daemon: &Arc<Daemon>, links: &Links) -> Heartbeater {
             clock: Arc::clone(&links.clock),
             log: Arc::clone(&links.log),
             renewal: Arc::new(DaemonRenewal::new(links.renewal.clone())),
-            trusted_root: Arc::new(DaemonTrustedRoot::new(Arc::clone(daemon))),
+            trusted_root: Arc::new(NoTrustedRoot),
             repositories: None,
             facts: None,
         },
     )
 }
 
-/// CI sets `web` to 2.0.0 on the coordinator, and the host, which runs 0.0.0 of it, beats
-/// [`BEATS`] times, running each order of a reply before the next heartbeat; with `stub`
-/// replaced by a no-op.
-fn scenario(name: &str, stub: Stub) -> Ran {
-    let rig = Rig::new(name);
-    rig.add(SERVICE, TARGET);
-    for (step, line) in HOOK_LINES {
-        rig.launcher.replies(SERVICE, step, &[(0, line)]);
-    }
-    let started = start::startup(&rig.settings(), rig.ports(), OWN).expect("the daemon starts");
-    assert_eq!(
-        started.boot_report().ready,
-        Some(Ok(())),
-        "the boot pass ran"
-    );
-    let daemon = Arc::clone(started.daemon());
-
-    let dir = Scratch::new(&format!("{name}-coordinator"));
-    let coordinator = coordinator(dir.path());
-    let desired = format!(
-        r#"{{"service":"{SERVICE}","version":"{TARGET}","release_digest":"{}"}}"#,
-        d()
-    );
-    let (status, body) = ci_call(&coordinator, "POST", DESIRED_PATH, &desired);
-    assert_eq!(status, 200, "{body}");
-
-    let seen = Arc::new(Mutex::new(Vec::new()));
-    let link: Arc<dyn CoordinatorLink> = match stub {
-        Stub::Coordinator => Arc::new(FakeLink::default()),
-        _ => Arc::new(InProcess {
-            coordinator: Arc::clone(&coordinator),
-            seen: Arc::clone(&seen),
-        }),
-    };
-    let dispatch = Arc::new(ManualDispatch::default());
-    let links = Links {
+/// The loop's links over `link`, the jobs of its orders kept until the test runs them.
+fn links_over(link: Arc<dyn CoordinatorLink>, dispatch: &Arc<ManualDispatch>) -> Links {
+    Links {
         enroller: Box::new(|| Err("the scenario has no enrollment".to_owned())),
         link,
         certs: Arc::new(FakeCerts::new(CertState::Enrolled(identity("host-1")))),
@@ -439,7 +224,51 @@ fn scenario(name: &str, stub: Stub) -> Ran {
         renewal: hostkeeper_enroll::RenewalState::default(),
         watchdog: Box::new(hostkeeper_daemon::NoWatchdog),
         console: None,
+    }
+}
+
+/// `web` runs [`BEFORE`] on `apt`, installed by an earlier order, and the service manager runs
+/// its unit; the daemon of the host started.
+fn started_host(apt: &AptRig) -> start::Started {
+    services::installed(apt, SERVICE, BEFORE);
+    apt.rig.manager.set(
+        "web.service",
+        hostkeeper_observe::ActiveState::Active,
+        Some(4242),
+    );
+    let started = start::startup(&apt.rig.settings(), apt.ports(), OWN).expect("the daemon starts");
+    assert_eq!(
+        started.boot_report().ready,
+        Some(Ok(())),
+        "the boot pass ran"
+    );
+    started
+}
+
+/// CI sets `web` to 2.0.0 on the coordinator, and the host, which runs 0.0.0 of it, beats
+/// [`BEATS`] times, running each order of a reply before the next heartbeat; with `stub`
+/// replaced by a no-op.
+fn scenario(name: &str, stub: Stub) -> Ran {
+    let apt = AptRig::new(name);
+    let rig = &apt.rig;
+    for (step, line) in HOOK_LINES {
+        rig.launcher.replies(SERVICE, step, &[(0, line)]);
+    }
+    let started = started_host(&apt);
+    let daemon = Arc::clone(started.daemon());
+
+    let dir = Scratch::new(&format!("{name}-coordinator"));
+    let coordinator = coordinator(dir.path());
+    publish_and_set(&apt, &coordinator);
+
+    let ordered = Arc::new(Mutex::new(Vec::new()));
+    let grpc = Arc::new(GrpcInProcess::new(&coordinator, Arc::clone(&ordered)));
+    let link: Arc<dyn CoordinatorLink> = match stub {
+        Stub::Coordinator => Arc::new(FakeLink::default()),
+        _ => grpc.clone(),
     };
+    let dispatch = Arc::new(ManualDispatch::default());
+    let links = links_over(link, &dispatch);
     match stub {
         Stub::Loop => {
             for _ in 0..BEATS {
@@ -450,10 +279,22 @@ fn scenario(name: &str, stub: Stub) -> Ran {
         Stub::Executor => beat(&mut without_executor(&daemon, &links), &dispatch),
         Stub::Nothing | Stub::Coordinator => beat(&mut links.heartbeater(&daemon), &dispatch),
     }
+    let sent = grpc.sent.lock().expect("the log is not poisoned").clone();
+    let answers = ordered.lock().expect("the log is not poisoned").clone();
     let ran = Ran {
         state: convergence(&coordinator),
         steps: rig.launcher.steps(SERVICE),
-        seen: seen.lock().expect("the log is not poisoned").clone(),
+        seen: sent
+            .iter()
+            .zip(&answers)
+            .map(|(request, order)| Seen {
+                verdict: request
+                    .services
+                    .iter()
+                    .any(|service| service.last_update.is_some()),
+                ordered: order.is_some(),
+            })
+            .collect(),
     };
     drop(started);
     ran
@@ -469,11 +310,12 @@ fn beat(heartbeater: &mut Heartbeater, dispatch: &ManualDispatch) {
 }
 
 /// Catches a link of the daemon to its coordinator that does not carry an update to its end:
-/// CI sets the desired version on the real coordinator through `/v1/desired`; the real loop's
-/// heartbeat is answered with the update; the real executor runs the hook's four steps in their
-/// order, `prepare`, `cutover`, `verify`, `cleanup`, through the step runner; the next heartbeat
-/// reports the host at the new version; and the coordinator's convergence of the service reads
-/// converged.
+/// CI sets the desired version, with the release that lists the entry of its package, on the real
+/// coordinator; the real loop's heartbeat is answered with the update, which carries that entry;
+/// the real executor stages the package from the repository and runs the hook's four steps in
+/// their order, `prepare`, `cutover`, `verify`, `cleanup`, through the step runner; the next
+/// heartbeat reports the host at the new version; and the coordinator's convergence of the
+/// service reads converged.
 #[test]
 fn a_desired_version_set_on_the_coordinator_reaches_a_fixture_hook_and_reads_converged() {
     let ran = scenario("e2e-real", Stub::Nothing);
@@ -499,6 +341,11 @@ fn the_end_to_end_fails_when_the_coordinator_is_stubbed() {
 #[test]
 fn the_end_to_end_fails_when_the_loop_is_stubbed() {
     let ran = scenario("e2e-no-loop", Stub::Loop);
+    assert!(
+        ran.seen.len() == BEATS && ran.seen.iter().all(|seen| seen.ordered),
+        "{:?}",
+        ran.seen
+    );
     assert!(ran.steps.is_empty(), "{:?}", ran.steps);
     assert_ne!(ran.state, "converged");
 }
@@ -541,66 +388,11 @@ fn the_daemons_verdict_is_acknowledged_and_not_sent_or_reordered_again() {
     assert_eq!(ran.state, "converged");
 }
 
-/// The typed transport in process, as the daemon's gRPC link carries it: each heartbeat goes to
-/// the coordinator's `heartbeat_with_orders` as the host `host-1` of the role `daemon`, and the
-/// typed order of the answer, when there is one, is the reply's order. With `unadvertise`, the
-/// reply's features leave `forced-v1` out, as a coordinator that does not advertise it answers.
-struct TypedInProcess {
-    coordinator: Arc<Coordinator>,
-    unadvertise: bool,
-}
-
-/// The loop's order of the coordinator's typed order, as the gRPC link reads its protobuf: an
-/// update or a force of a target, with the order's id and try.
-fn typed_order(order: &hostkeeper_coordinator::orders::Order) -> Order {
-    let proto = order.to_proto();
-    let target = |service: &str, version: &str, digest: &str| Target {
-        service: ServiceName::new(service).expect("a service"),
-        version: Version::new(version).expect("a version"),
-        digest: PackageDigest::new(digest).expect("a digest"),
-        index_digest: None,
-        entry: None,
-    };
-    let verb = match proto.verb.expect("a verb") {
-        agent::order::Verb::Update(a) => {
-            Verb::Update(target(&a.service, &a.version, &a.package_digest))
-        }
-        agent::order::Verb::Force(a) => {
-            Verb::Force(target(&a.service, &a.version, &a.package_digest))
-        }
-        other => panic!("the scenario orders no {other:?}"),
-    };
-    Order {
-        id: OrderId::new(&proto.order_id).expect("an id"),
-        order_try: proto.r#try,
-        verb,
-    }
-}
-
-impl CoordinatorLink for TypedInProcess {
-    fn heartbeat(&self, _identity: &ClientIdentity, beat: &Heartbeat) -> Result<Reply, LinkError> {
-        let who = Identity {
-            host_id: "host-1".parse().expect("a host id"),
-            role: "daemon".parse().expect("a role"),
-        };
-        let (answer, order) = self
-            .coordinator
-            .heartbeat_with_orders(who, wire_beat(beat), TrustedRootSaid::default())
-            .map_err(|_| LinkError::Refused(Reason::new("forbidden").expect("a token")))?;
-        let mut reply = reply_of(&answer);
-        reply.order = order.as_ref().map(typed_order);
-        if self.unadvertise {
-            reply
-                .features
-                .retain(|feature| *feature != Feature::ForcedV1);
-        }
-        Ok(reply)
-    }
-}
-
 /// What the force came to: the steps the launcher ran, the daemon's forced verdict of `web`,
 /// and where the coordinator says `web` stands.
 struct Forced {
+    /// The verbs of the orders the coordinator's answers carried, in order.
+    ordered: Vec<Option<&'static str>>,
     steps: Vec<Step>,
     forced: Option<ForcedResult>,
     state: String,
@@ -611,34 +403,18 @@ struct Forced {
 /// (whose replies leave `forced-v1` out with `unadvertise`), running each order of a reply
 /// before the next heartbeat.
 fn forced_scenario(name: &str, unadvertise: bool) -> Forced {
-    let rig = Rig::new(name);
-    rig.add(SERVICE, TARGET);
-    // Sealed as the package port leaves a version it fetched: a force links only a sealed tree.
-    rig.store.seal(SERVICE, TARGET, &d());
-    let started = start::startup(&rig.settings(), rig.ports(), OWN).expect("the daemon starts");
+    let apt = AptRig::new(name);
+    let rig = &apt.rig;
+    let started = started_host(&apt);
     let daemon = Arc::clone(started.daemon());
 
     let dir = Scratch::new(&format!("{name}-coordinator"));
     let coordinator = coordinator(dir.path());
     let dispatch = Arc::new(ManualDispatch::default());
-    let links = Links {
-        enroller: Box::new(|| Err("the scenario has no enrollment".to_owned())),
-        link: Arc::new(TypedInProcess {
-            coordinator: Arc::clone(&coordinator),
-            unadvertise,
-        }),
-        certs: Arc::new(FakeCerts::new(CertState::Enrolled(identity("host-1")))),
-        clock: Arc::new(hostkeeper_link::testing::FakeClock::new(2_000_000_000, 7)),
-        log: Arc::new(RecordingLog::default()),
-        sleeper: Box::new(ScriptedSleeper::new(0)),
-        period: DEFAULT_HEARTBEAT_SECS,
-        dispatch: dispatch.clone(),
-        stop: StopFlag::default(),
-        enroll_sleeper: Box::new(ScriptedSleeper::new(0)),
-        renewal: hostkeeper_enroll::RenewalState::default(),
-        watchdog: Box::new(hostkeeper_daemon::NoWatchdog),
-        console: None,
-    };
+    let answers = Arc::new(Mutex::new(Vec::new()));
+    let mut grpc = GrpcInProcess::new(&coordinator, Arc::clone(&answers));
+    grpc.unadvertise = unadvertise;
+    let links = links_over(Arc::new(grpc), &dispatch);
     let mut heartbeater = links.heartbeater(&daemon);
     // Heard before anything is desired: told nothing, and now a host a force may target.
     assert_eq!(heartbeater.beat_once(), BeatOutcome::Sent);
@@ -647,12 +423,7 @@ fn forced_scenario(name: &str, unadvertise: bool) -> Forced {
         "nothing is ordered before CI sets a version"
     );
 
-    let desired = format!(
-        r#"{{"service":"{SERVICE}","version":"{TARGET}","release_digest":"{}"}}"#,
-        d()
-    );
-    let (status, body) = ci_call(&coordinator, "POST", DESIRED_PATH, &desired);
-    assert_eq!(status, 200, "{body}");
+    publish_and_set(&apt, &coordinator);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .build()
         .expect("a runtime");
@@ -684,7 +455,20 @@ fn forced_scenario(name: &str, unadvertise: bool) -> Forced {
         .iter()
         .find(|service| service.service.as_str() == SERVICE)
         .and_then(|service| service.forced());
+    let ordered = answers
+        .lock()
+        .expect("the log is not poisoned")
+        .iter()
+        .map(|order| {
+            order.as_ref().map(|order| match order.verb {
+                Verb::Force(_) => "force",
+                Verb::Update(_) => "update",
+                _ => "another verb",
+            })
+        })
+        .collect();
     let ran = Forced {
+        ordered,
         steps: rig.launcher.steps(SERVICE),
         forced,
         state: convergence(&coordinator),
@@ -702,6 +486,7 @@ fn forced_scenario(name: &str, unadvertise: bool) -> Forced {
 #[test]
 fn a_force_made_on_the_coordinator_is_run_by_the_daemon() {
     let ran = forced_scenario("e2e-force", false);
+    assert_eq!(ran.ordered, [None, Some("force"), None]);
     assert_eq!(ran.steps, Vec::<Step>::new(), "a force runs no hook");
     assert_eq!(
         ran.forced,
@@ -721,6 +506,7 @@ fn a_force_made_on_the_coordinator_is_run_by_the_daemon() {
 #[test]
 fn a_force_is_not_run_while_the_reply_does_not_advertise_forced_v1() {
     let ran = forced_scenario("e2e-force-unadvertised", true);
+    assert_eq!(ran.ordered[..2], [None, Some("force")]);
     assert_eq!(ran.steps, Vec::<Step>::new());
     assert_eq!(ran.forced, None);
     assert_eq!(

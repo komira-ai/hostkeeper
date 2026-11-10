@@ -11,7 +11,6 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
-use hostkeeper_config::daemon::DaemonConfig;
 use hostkeeper_daemon::mac_files::{self, Rendered};
 use hostkeeper_install::macos_pkg::signers;
 use hostkeeper_mdm_gate::{
@@ -142,10 +141,8 @@ fn the_profile_for_a_mac_renders_to_the_signers_and_stores_the_installer_reads()
         read,
         signers::parse(SIGNERS.as_bytes()).expect("the coordinator's file")
     );
-    let config = DaemonConfig::parse(CONFIG).expect("the daemon config");
     assert_eq!(
-        stores::load(&stores_file, &config.release_channel, me())
-            .expect("the stores loader accepts the file"),
+        stores::load(&stores_file, me()).expect("the stores loader accepts the file"),
         stores::parse(STORES.as_bytes(), me()).expect("the coordinator's file")
     );
 

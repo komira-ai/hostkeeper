@@ -13,7 +13,7 @@ use hostkeeper_wire::wire::{Health, Heartbeat, ServiceBeat};
 use crate::enrollment::os_random;
 use crate::enrollment::tests::support::Rig as EnrollmentRig;
 use crate::first_serving_tests::{APPROVED, FIRST, Fixture, HK, WEB, daemon};
-use crate::marks_support::{ask, operator, runs, who};
+use crate::marks_support::{ask_json as ask, operator, runs, who};
 use crate::picks::TARGET_FEATURE;
 use crate::testutil::{Log, Rig, beat, id};
 

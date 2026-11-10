@@ -28,7 +28,7 @@ use hostkeeper_enrollment::enroll::{EnrolledHost, HostRunning, RunningService};
 use hostkeeper_enrollment::names::HostId as StoreHostId;
 use hostkeeper_proto::hostkeeper::agent::v1 as agent;
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
-use hostkeeper_release::Installer;
+use hostkeeper_release::ARCHIVE_INSTALLER;
 use hostkeeper_wire::HostId;
 use hostkeeper_wire::wire::{Health, Heartbeat, ServiceBeat};
 
@@ -36,9 +36,6 @@ use crate::fleet::Fleet;
 use crate::identity::Identity;
 use crate::picks::TARGET_FEATURE;
 use crate::service::Coordinator;
-
-/// The installer of the archives every daemon runs.
-const ARCHIVE: &str = Installer::HostkeeperArchive.as_str();
 
 /// The last record of what each host heard runs, and when it was taken (unix seconds).
 #[derive(Debug, Default)]
@@ -86,11 +83,16 @@ fn said(
 ) -> HostRunning {
     let target = beat.agent_features.iter().any(|f| f == TARGET_FEATURE);
     let read = fleet.picks.listed(id).is_some();
+    // A daemon that names no installer for a service runs it from archives.
     let installer = |name: &str| -> String {
         if !target {
-            ARCHIVE.to_owned()
+            ARCHIVE_INSTALLER.to_owned()
         } else if read {
-            fleet.picks.running(id, name).unwrap_or(ARCHIVE).to_owned()
+            fleet
+                .picks
+                .running(id, name)
+                .unwrap_or(ARCHIVE_INSTALLER)
+                .to_owned()
         } else {
             before
                 .into_iter()

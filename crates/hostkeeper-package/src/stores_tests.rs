@@ -5,13 +5,9 @@ use std::fs;
 use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
 
 use super::*;
-use crate::testing::{CHANNEL, config, scratch};
+use crate::testing::scratch;
 
 const DIGEST: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-
-fn channel(url: &str) -> HttpsUrl {
-    config(url, &"0".repeat(64)).release_channel
-}
 
 /// The user that owns the scratch directories the tests make.
 fn me(dir: &Path) -> u32 {
@@ -29,7 +25,7 @@ fn put(dir: &Path, name: &str, bytes: &[u8], mode: u32) -> PathBuf {
 /// Loads `text` as the stores file of a fresh directory, as its owner.
 fn load_text(dir: &Path, text: &str) -> Result<Stores, StoresError> {
     let path = put(dir, "stores.toml", text.as_bytes(), 0o644);
-    load(&path, &channel(CHANNEL), me(dir))
+    load(&path, me(dir))
 }
 
 fn refused(store: &str, rule: Rule) -> StoresError {
@@ -39,40 +35,15 @@ fn refused(store: &str, rule: Rule) -> StoresError {
     }
 }
 
-/// Catches a host without a file getting no store, or a store other than the release channel:
-/// the one store is `channel`, `https`, based at the config's channel with a closing `/`.
+/// Catches a host without a file getting a store: it has none, and no store of any name.
 #[test]
-fn no_file_gives_the_channel_store() {
+fn no_file_gives_no_store() {
     let scratch = scratch("stores-none");
-    let stores = load(
-        &scratch.path().join("stores.toml"),
-        &channel("https://releases.example/tree"),
-        0,
-    )
-    .expect("the channel store");
-    assert_eq!(
-        stores,
-        Stores::channel(&channel("https://releases.example/tree"))
-    );
-    let [store] = stores.all() else {
-        panic!("one store, got {stores:?}");
-    };
-    assert_eq!(store.name(), CHANNEL_STORE);
-    assert_eq!(store.kind(), Kind::Https);
-    assert_eq!(store.base(), "https://releases.example/tree/");
-    assert_eq!(store.origin(), "https://releases.example:443");
-    assert_eq!(store.redirects(), 0);
-    assert!(!store.is_mirror());
-    assert_eq!(store.repository(), None);
-    assert_eq!(store.authorization(), None);
+    let stores = load(&scratch.path().join("stores.toml"), 0).expect("no stores");
+    assert_eq!(stores, Stores::default());
+    assert!(stores.all().is_empty());
+    assert!(stores.get("channel").is_none());
     assert_eq!(stores.mirrors().count(), 0);
-    assert_eq!(
-        store.blob_url("svc/1/svc.tar.zst", DIGEST).as_str(),
-        "https://releases.example/tree/svc/1/svc.tar.zst"
-    );
-    let kept = Stores::channel(&channel("https://releases.example:8443/"));
-    assert_eq!(kept.all()[0].base(), "https://releases.example:8443/");
-    assert_eq!(kept.all()[0].origin(), "https://releases.example:8443");
 }
 
 /// Catches a stores file read wrongly: two stores keep file order, the https one defaults to no
@@ -324,7 +295,7 @@ fn text_that_is_not_a_stores_file_is_a_syntax_error() {
     }
     let scratch = scratch("stores-binary");
     let path = put(scratch.path(), "stores.toml", &[0xff, 0xfe, b'\n'], 0o644);
-    let refusal = load(&path, &channel(CHANNEL), me(scratch.path())).expect_err("binary");
+    let refusal = load(&path, me(scratch.path())).expect_err("binary");
     assert_eq!(refusal, StoresError::Syntax("not UTF-8 text".to_owned()));
 }
 
@@ -464,7 +435,7 @@ fn a_stores_file_that_is_unsafe_or_unreadable_is_refused() {
         path: at(name),
         fault,
     };
-    let check = |name: &str, uid: u32| load(&at(name), &channel(CHANNEL), uid);
+    let check = |name: &str, uid: u32| load(&at(name), uid);
     assert_eq!(
         check("link.toml", owner),
         Err(refuse("link.toml", FileFault::Link))
@@ -550,7 +521,7 @@ fn error_messages_name_the_store_the_rule_and_the_file() {
 #[test]
 fn the_coordinator_store_is_there_with_and_without_a_stores_file() {
     let scratch = scratch("stores-coordinator");
-    let none = load(&scratch.path().join("stores.toml"), &channel(CHANNEL), 0).expect("no file");
+    let none = load(&scratch.path().join("stores.toml"), 0).expect("no file");
     let file = load_text(scratch.path(), &https("")).expect("a file");
     for stores in [&none, &file] {
         let store = stores

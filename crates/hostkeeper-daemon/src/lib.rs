@@ -2,20 +2,20 @@
 //! sections 4.1, 5.1, 5.2, 6.2, 6.3, 8.1 and 8.3).
 //!
 //! - [`start`]: start-up, in order: the daemon config, the lock on the state directory, the
-//!   registration socket of kbf's agent unlinked, the sweep of package leftovers and the
-//!   reconciliation of the placed paths, the boot work; then serving: the enrollment and
-//!   heartbeat loops started ([`links`]). The daemon serves nothing on the host.
-//! - [`boot`]: the boot work: the switch each step record says was begun
-//!   ([`boot::switch_intent`]), the step records read against the boot id, each unfinished
-//!   update run to its verdict, the post-success watchers restarted ([`watchers`]), the
-//!   manifest's `boot` steps, and the readiness notice ([`notify`]).
+//!   registration socket of kbf's agent unlinked, the sweep of package leftovers, the boot work,
+//!   the deletion of the archive version a native service left as `previous`
+//!   ([`archive_versions`]); then serving: the enrollment and heartbeat loops started
+//!   ([`links`]). The daemon serves nothing on the host.
+//! - [`boot`]: the boot work: the step records read against the boot id, each unfinished update
+//!   run to its verdict, the post-success watchers restarted ([`watchers`]), the manifest's
+//!   `boot` steps, and the readiness notice ([`notify`]).
 //! - [`executor`]: [`Daemon::order`], one order of the coordinator, decoded into a [`Verb`]
 //!   ([`verb`]) and handed to its module under [`verbs`]. `update`, `force_rollback` and
 //!   `install` are checked by the daemon itself ([`checks`]) and run through the step runner of
 //!   `hostkeeper-steps` under the service's lock and the host's step lock ([`locks`]); each is
-//!   placed, switched and confirmed by the runner's switch ([`place`]). `force` is checked the
-//!   same way but for `busy` and the standing halt, runs no hook, and switches the service under
-//!   its lock alone, through the placed-path linker of `hostkeeper-placed` ([`verbs::force`]).
+//!   switched by the runner's switch ([`place`]). `force` is checked the same way but for `busy`
+//!   and the standing halt, runs no hook, and switches the service under its lock alone, through
+//!   the installer of its version ([`verbs::force`]).
 //!   `uninstall` runs the sequence of design section 4.7 ([`uninstall`]), resumed from its
 //!   tombstone in `placed.json`.
 //! - [`selfupdate`]: the update of hostkeeper itself (design section 6.6): an `update` of the
@@ -44,12 +44,11 @@
 //! - [`halt`]: the held halt generation of each service, persisted, never lowered.
 //! - [`hook_log`]: what the host's step launcher kept of a hook's standard error, as lines of the
 //!   daemon's log under the step's unit.
-//! - [`packages`]: the port of the package store, [`real_packages`] its real implementation
-//!   (fetch, prove, the stage of the entry's installer and seal, with the one table that maps
-//!   their failures onto [`refusal`]), and [`installed`] what the host runs.
-//! - [`installers`]: the installer each installed service is recorded with, whose steps
-//!   (`hostkeeper_install`) the switch, the prune and the uninstall run, the placer doing what
-//!   they ask of the host.
+//! - [`packages`]: the port that fetches a `macos-pkg` entry's `.pkg` by its pin,
+//!   [`real_packages`] its real implementation (the host's stores, the one table that maps the
+//!   fetch's failures onto [`refusal`]), and [`installed`] what the host runs.
+//! - [`installers`]: the installer each installed service is recorded with, whose backend
+//!   (`hostkeeper_install`) the uninstall and the prune read.
 //! - [`repository`]: the repository installer (`apt`) with the daemon's ports: the stage of an
 //!   order's repository entry, `activate` in the switch, the rollback, the purge at uninstall and
 //!   the drift of each heartbeat; [`target`] the sealed `target.json` of such a version and the
@@ -58,8 +57,6 @@
 //!   as the host's repository configuration and taken into use without a restart.
 //! - [`facts_file`]: the host's facts file, written from the facts the coordinator sends.
 //! - [`observer`]: what [`Daemon::status`] reports of a running service.
-//! - [`trusted_root`]: the Sigstore trusted root package checks use, and the age and reason
-//!   [`Daemon::status`] reports of it.
 //! - [`node`]: the host's enrollment and the heartbeat loop's link, as the loops last wrote them,
 //!   which [`Daemon::status`] reports besides the services.
 //! - [`cli`]: `hostkeeper daemon` and its flags, and `hostkeeper check-repositories`
@@ -76,11 +73,13 @@
 //!
 //! Everything privileged is behind a port the daemon is given: the step launcher
 //! (`hostkeeper_steps::StepLauncher`), the package store ([`packages::Packages`]), the service
-//! manager (`hostkeeper_placed::UnitControl`), the filesystem placed paths are linked through
-//! (`hostkeeper_placed::Fs`) and the service observer (`hostkeeper_observe::Observer`). Time is the
+//! manager (`hostkeeper_placed::UnitControl`), the filesystem the daemon's links are made through
+//! (`hostkeeper_placed::Fs`), the repository installer's tools ([`repository::RepositoryPorts`])
+//! and the service observer (`hostkeeper_observe::Observer`). Time is the
 //! `hostkeeper_steps::Clock`; nothing here reads the wall clock.
 
 pub mod adapters;
+pub mod archive_versions;
 pub mod boot;
 pub mod builtin;
 pub mod checks;
@@ -97,6 +96,7 @@ pub mod hook_log;
 pub mod installed;
 pub mod installers;
 pub mod ipmi;
+mod launchd_plist;
 pub mod layout;
 pub mod link_adapters;
 pub mod links;
@@ -128,7 +128,6 @@ pub mod start;
 pub mod target;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
-pub mod trusted_root;
 pub mod uninstall;
 pub mod unix_clock;
 pub mod verb;

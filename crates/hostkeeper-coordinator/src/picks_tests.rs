@@ -1,29 +1,27 @@
 //! The pick's own rules ([`crate::picks`]) where the wire does not reach them: the bounds of the
-//! installers a heartbeat over gRPC may list, a list from a daemon without `target-v1`, the
-//! release a force of a version set with targets records, how two picked entries compare, and
-//! the proof that `target-v1` is acted on. The rest of the pick is proved over the wire in
+//! installers a heartbeat over gRPC may list, a list from a daemon without `target-v1`, how two
+//! picked entries compare, and the proof that `target-v1` is acted on. The rest of the pick is proved over the wire in
 //! `tests/target_orders.rs`.
 
 use hostkeeper_proto::hostkeeper::agent::v1 as agent;
-use hostkeeper_wire::Platform;
-
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
+use hostkeeper_wire::Platform;
 use hostkeeper_wire::wire::{ServiceBeat, ServiceReply};
 
 use crate::marks_support::{
-    INSTALLER, WEB, ask, ask_typed, beat_of, force_request, operator, rig, runs, update, who,
+    AGENT, WEB, ask, ask_heard, beat_of, beat_on, force_request, operator, rig, runs, set_targets,
+    who,
 };
 use crate::orders::{Order, PickedTarget};
-use crate::picks::{Heard, MAX_INSTALLERS, TARGET_FEATURE, recorded};
-use crate::registry::{IndexKey, IndexRecord, Release as Registered, index_platform};
-use crate::release_index_support::{AGENT, beat_on, sha};
-use crate::releases::{Release, Targets};
-use crate::releases_tests::{digest, entry, hex, list};
-use crate::service::ci_calls::Setter;
-use crate::testutil::{Rig, ci_token, id};
-use crate::write_record::WriteAsk;
+use crate::picks::{Heard, MAX_INSTALLERS, TARGET_FEATURE};
+use crate::releases::Targets;
+use crate::releases_tests::{entry, hex, list};
+use crate::testutil::{Rig, id};
 
 const ARCHIVE: &str = "hostkeeper-archive";
+
+/// The features of a daemon before `target-v1`.
+const OLD_FEATURES: &[&str] = &["heartbeat-v2", "install-v1", "order-v1", "forced-v1"];
 
 /// A heartbeat over gRPC of a daemon announcing `target-v1` that lists `installers` and runs
 /// `web` from `installer`.
@@ -102,52 +100,6 @@ fn only_a_good_list_of_a_target_v1_daemon_is_kept() {
     assert!(fleet.release_if_final(&id("d1"), std::time::Duration::from_secs(2_000)));
     assert_eq!(fleet.picks.listed(&id("d1")), None);
 }
-
-/// Targets whose `linux-x86_64` list holds a `deb` and an archive entry, and whose `macos-arm64`
-/// list holds no archive.
-fn mixed() -> Targets {
-    Targets::from([
-        (
-            "linux-x86_64".to_owned(),
-            list(vec![
-                entry(WEB, "deb", 'a', 10),
-                entry(WEB, ARCHIVE, 'f', 20),
-            ]),
-        ),
-        (
-            "macos-arm64".to_owned(),
-            list(vec![entry(WEB, "tarball", 'd', 30)]),
-        ),
-    ])
-}
-
-/// Proves: the release a force of a version set with targets records names the digest of the
-/// index set with them, else the SHA-256 of the release's stored form, and as the index's
-/// packages the archive entry of each platform that has one, the others left out.
-/// Catches: a record whose digest or packages would order an older coordinator's hosts bytes the
-/// release does not hold.
-#[test]
-fn a_force_records_the_release_as_its_index_or_its_digest() {
-    let packages = std::collections::BTreeMap::from([(
-        IndexKey::of(index_platform(Platform::LinuxX86_64)),
-        digest('f'),
-    )]);
-    let indexed = Release::new(mixed(), Some(digest('9')));
-    assert_eq!(
-        recorded(&indexed),
-        Some(Registered::Index(IndexRecord {
-            digest: digest('9'),
-            packages: packages.clone(),
-        }))
-    );
-    let plain = Release::new(mixed(), None);
-    let named = crate::registry::Digest::parse(&sha(&plain.to_json().to_string())).ok();
-    assert_eq!(
-        recorded(&plain),
-        named.map(|digest| Registered::Index(IndexRecord { digest, packages }))
-    );
-}
-
 /// Proves: two picked entries are equal when they encode alike, and differ by any field.
 /// Catches: an order compared equal to one of another entry.
 #[test]
@@ -156,27 +108,6 @@ fn picked_entries_compare_by_their_encoding() {
     assert_eq!(deb, PickedTarget::new(entry(WEB, "deb", 'a', 10)));
     assert_ne!(deb, PickedTarget::new(entry(WEB, "deb", 'b', 10)));
     assert_eq!(deb.target().digest, hex('a'));
-}
-
-/// Sets `web` at `version` with `targets`, as CI does.
-async fn set_targets(rig: &Rig, version: &str, targets: Targets) {
-    let verified = rig
-        .coordinator
-        .ci(Some(&ci_token()))
-        .await
-        .expect("a token");
-    let body = format!(
-        r#"{{"service":"web","version":"{version}","min_up":{{"storage":0,"frontend":0}}}}"#
-    );
-    rig.coordinator
-        .set_desired_with(
-            &Setter::Ci(&verified),
-            body.as_bytes(),
-            &WriteAsk::default(),
-            Some(targets),
-        )
-        .await
-        .expect("set");
 }
 
 /// Targets whose one list, `linux-x86_64`'s, holds a `deb` and then an archive.
@@ -208,35 +139,40 @@ fn declined(why: &str) -> ServiceBeat {
     .expect("a service beat")
 }
 
-/// Proves, through the coordinator's own calls: a daemon that reads no order terms and runs
-/// `web` from archives is told the version alone, as today; a `target-v1` daemon picked its
-/// `deb` is told nothing on the JSON route, and is ordered the `deb` on the typed one at once
-/// after it declined it `installer_not_listed` (a deferral that opens no wait); a Mac, whose
-/// platform has no list, is out of the plan; and `Releases.Force` orders the two hosts picked an
-/// entry and skips the Mac as `no_target`.
+/// Proves, through the coordinator's own calls: a daemon without `target-v1` is told nothing,
+/// whatever its release lists; a `target-v1` daemon picked its `deb` is told nothing on the JSON
+/// route, and is ordered the `deb` on the typed one at once after it declined it
+/// `installer_not_listed` (a deferral that opens no wait); a Mac, whose platform has no list, is
+/// out of the plan; and `Releases.Force` orders the host picked an entry and skips the Mac as
+/// `no_target` and the old daemon as `no_build_for_host`.
 /// Catches: a native entry sent where no typed order can carry it, an `installer_not_listed`
 /// deferral that holds the host, a host picked nothing that takes a place in the plan, or a force
 /// of a version set with targets that misses the pick.
 #[tokio::test]
 async fn the_gate_the_plan_and_a_force_follow_the_pick() {
     let rig = rig("picks-gate-plan-force", "stages = [100]");
-    set_targets(&rig, "2.0", mixed_x86()).await;
+    set_targets(&rig, WEB, "2.0", mixed_x86()).await;
     let mac = beat_on(Platform::DarwinArm64, vec![runs(WEB, "1.0")]);
     assert_eq!(ask(&rig, "m1", "daemon", mac), ServiceReply::Nothing);
-    let plain = beat_of(INSTALLER, vec![runs(WEB, "1.0")]);
-    assert_eq!(ask(&rig, "d1", "daemon", plain), update(WEB, "2.0"));
+    let old = beat_of(OLD_FEATURES, vec![runs(WEB, "1.0")]);
+    assert_eq!(ask(&rig, "d1", "daemon", old), ServiceReply::Nothing);
 
+    let d2 = who("d2", "daemon");
     rig.coordinator
-        .hear_installers(&who("d2", "daemon"), &said(&[ARCHIVE, "deb"], Some("deb")));
+        .hear_installers(&d2, &said(&[ARCHIVE, "deb"], Some("deb")));
     let mut json = beat_on(Platform::LinuxX86_64, vec![runs(WEB, "1.0")]);
     json.agent_features = target_v1();
-    assert_eq!(ask(&rig, "d2", "daemon", json), ServiceReply::Nothing);
+    let answered = rig
+        .coordinator
+        .heartbeat(d2.clone(), json)
+        .expect("answered");
+    assert_eq!(answered.reply, ServiceReply::Nothing);
     let mut deferred = beat_on(
         Platform::LinuxX86_64,
         vec![declined("installer_not_listed")],
     );
     deferred.agent_features = target_v1();
-    let (_, order) = ask_typed(&rig, "d2", "daemon", deferred);
+    let (_, order) = ask_heard(&rig, d2, deferred);
     assert!(
         matches!(
             order,
@@ -255,35 +191,35 @@ async fn the_gate_the_plan_and_a_force_follow_the_pick() {
         .coordinator
         .force(&operator(), force_request(WEB, "2.0", fleet, false))
         .expect("forced");
-    assert_eq!(forced.targeted, 2);
+    assert_eq!(forced.targeted, 1);
     let skipped: Vec<(&str, &str)> = forced
         .skipped
         .iter()
         .map(|s| (s.node_id.as_str(), s.reason.as_str()))
         .collect();
-    assert_eq!(skipped, [("m1", "no_target")]);
+    assert_eq!(skipped, [("d1", "no_build_for_host"), ("m1", "no_target")]);
 }
 
 /// Catches: `target-v1` advertised and not acted on: the same daemon, running `web` from its
-/// `deb`, is ordered the release's archive entry as an old daemon (no target) without the
-/// feature, and the `deb` entry with the target once it announces it and lists `deb` over gRPC.
+/// `deb`, is ordered nothing without the feature, and the `deb` entry with the target once it
+/// announces it and lists `deb` over gRPC.
 pub(crate) async fn target_v1_is_acted_on() {
     let rig = rig("picks-target-v1", "stages = [100]");
-    set_targets(&rig, "2.0", mixed_x86()).await;
+    set_targets(&rig, WEB, "2.0", mixed_x86()).await;
     let target = |order: Option<Order>| match order {
         Some(Order::Update { digest, target, .. }) => (digest.as_str().to_owned(), target),
         other => panic!("not an update: {other:?}"),
     };
     let without = beat_on(Platform::LinuxX86_64, vec![runs(WEB, "1.0")]);
-    let (_, order) = ask_typed(&rig, "d1", "daemon", without);
-    assert_eq!(target(order), (hex('f'), None));
+    let (reply, order) = ask_heard(&rig, who("d1", "daemon"), without);
+    assert_eq!((reply, order), (ServiceReply::Nothing, None));
 
     let d2 = who("d2", "daemon");
     rig.coordinator
         .hear_installers(&d2, &said(&[ARCHIVE, "deb"], Some("deb")));
     let mut with = beat_on(Platform::LinuxX86_64, vec![runs(WEB, "1.0")]);
     with.agent_features = target_v1();
-    let (_, order) = ask_typed(&rig, "d2", "daemon", with);
+    let (_, order) = ask_heard(&rig, d2, with);
     assert_eq!(
         target(order),
         (

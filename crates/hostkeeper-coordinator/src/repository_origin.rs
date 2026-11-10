@@ -28,7 +28,7 @@ use tokio::task::JoinHandle;
 use tokio::time::{Instant, Sleep};
 use tokio_rustls::TlsConnector;
 
-use crate::channel_https::{ChannelTlsError, ChannelUrl, connector, tcp_dial};
+use crate::origin_https::{OriginTlsError, OriginUrl, connector, tcp_dial};
 use crate::service::Coordinator;
 
 /// The deadline over the connection, the TLS handshake and the origin's headers.
@@ -156,9 +156,9 @@ impl RepositoryOrigin {
     /// An origin client trusting `roots`, dialling TCP.
     ///
     /// # Errors
-    /// [`ChannelTlsError::NoRoots`]: `roots` holds no usable certificate;
-    /// [`ChannelTlsError::Tls`]: the TLS client configuration is refused.
-    pub fn new(roots: Roots) -> Result<Self, ChannelTlsError> {
+    /// [`OriginTlsError::NoRoots`]: `roots` holds no usable certificate;
+    /// [`OriginTlsError::Tls`]: the TLS client configuration is refused.
+    pub fn new(roots: Roots) -> Result<Self, OriginTlsError> {
         Ok(Self {
             connector: connector(roots)?,
             dial: tcp_dial(),
@@ -183,7 +183,7 @@ impl RepositoryOrigin {
         path: &str,
         authorization: &str,
     ) -> Result<Origin, OriginError> {
-        let url = ChannelUrl::parse(uri).map_err(|_| OriginError::Uri)?;
+        let url = OriginUrl::parse(uri).map_err(|_| OriginError::Uri)?;
         let (response, driver) =
             tokio::time::timeout(CONNECT, self.answer(&url, path, authorization))
                 .await
@@ -212,7 +212,7 @@ impl RepositoryOrigin {
     /// The connection, the handshake, the request and the answer's headers.
     async fn answer(
         &self,
-        url: &ChannelUrl,
+        url: &OriginUrl,
         path: &str,
         authorization: &str,
     ) -> Result<(hyper::Response<Incoming>, Driver), OriginError> {

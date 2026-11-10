@@ -1,5 +1,5 @@
 {
- "from": "kbf-coordinator/src/decide.rs (v0.0.64), first_hold: a service waited for the services in its after until their live hosts ran their desired versions (the file this was run with in kbf said after = [first] for second). This coordinator cut the rule, so the order is given; kbf's answer is in kbf_body (derived from the rules at the tag, not a kbf test)",
+ "from": "kbf-coordinator/src/decide.rs (v0.0.64), first_hold: a service waited for the services in its after until their live hosts ran their desired versions (the file this was run with in kbf said after = [first] for second). This coordinator cut the rule; the answer is `nothing` here as it was in kbf, since the JSON route carries no order and the rule is held by the tests of the decision (derived from the rules at the tag, not a kbf test)",
  "services_fixture": "kbf.services.toml",
  "services_text": "[[service]]\nname = \"first\"\nroles = [\"daemon\"]\n\n[[service]]\nname = \"second\"\nroles = [\"daemon\"]\n",
  "oidc_services": [
@@ -37,8 +37,7 @@
    "role": "daemon",
    "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\",\"services\":[{\"name\":\"second\",\"version\":\"1.0\",\"health\":\"healthy\"}]}",
    "expect_status": 200,
-   "expect_body": "{\"reply\":\"update\",\"service\":\"second\",\"version\":\"3.0\"}",
-   "kbf_body": "{\"reply\":\"nothing\"}"
+   "expect_body": "{\"reply\":\"nothing\"}"
   }
  ]
 }

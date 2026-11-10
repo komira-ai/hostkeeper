@@ -19,9 +19,11 @@ use hostkeeper_coordinator::desired::DesiredStore;
 use hostkeeper_coordinator::ops::{AuditEntry, FailureAck, OpsError, OpsStore, Write};
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
+use support::beats::{Daemon, grpc_beat, runs};
 use support::readers::{Readers, parse};
 use support::rig::{Rig, Spec};
-use support::{BEAT, Flags, recorded, recorded_bytes, scratch};
+use support::targets::{SET_DESIRED, grpc, list, put_komira, repository_entry, set};
+use support::{Flags, ci_token, recorded, recorded_bytes, scratch};
 
 /// The desired-state file the rig's coordinator has written, checked against kbf's reader of
 /// `file`: `desired-single` for the single state, `desired-map` for the map.
@@ -60,8 +62,7 @@ const DAEMONS: [&str; 6] = ["d1", "d2", "d3", "d4", "d5", "d6"];
 const AUTOMATIC: &str =
     "[[service]]\nname = \"kbf\"\nrollback = \"automatic\"\nroles = [\"daemon\"]\n";
 
-/// The desired states of those scenarios.
-const ONE: &str = r#"{"version":"1.0","min_up":{"storage":0,"frontend":0}}"#;
+/// The desired state of those scenarios a set refuses.
 const TWO: &str = r#"{"version":"2.0","min_up":{"storage":0,"frontend":0}}"#;
 
 /// A service that runs on hosts of a role, `gpu`, which the desired-state file format does not
@@ -245,15 +246,50 @@ fn audited(ops: &Value) -> Vec<(&str, &str)> {
         .collect()
 }
 
+/// The heartbeat of a daemon that announces `target-v1`, on 1.0.
+const NATIVE_BEAT: &str = r#"{"platform":"linux-x86_64","version":"1.0","health":"healthy","agent_features":["target-v1"]}"#;
+
 /// The heartbeat of a daemon on 1.0 whose last update, to 2.0, failed as `report` says.
 fn failed_beat(report: &Value) -> String {
     json!({
         "platform": "linux-x86_64",
         "version": "1.0",
         "health": "healthy",
+        "agent_features": ["target-v1"],
         "last_update": report
     })
     .to_string()
+}
+
+/// CI sets kbf at `version` as a release that lists one `apt` entry for `linux-x86_64`, over gRPC:
+/// the hosts that list `apt` ([`hear_the_daemons`]) are picked it, and ordered it.
+async fn set_release(rig: &Rig, version: &str) {
+    let targets = std::collections::BTreeMap::from([(
+        "linux-x86_64".to_owned(),
+        list(vec![repository_entry("kbf", "1.6.0", 'c')]),
+    )]);
+    let answered = grpc(
+        rig,
+        SET_DESIRED,
+        Some(&ci_token()),
+        &set("kbf", version, targets),
+    )
+    .await;
+    assert_eq!(answered.code, 0, "{answered:?}");
+}
+
+/// Each of the six daemons says over gRPC that it lists `apt` and runs kbf from it, as a daemon
+/// that announces `target-v1` does; the heartbeats over JSON that follow leave that as it was.
+async fn hear_the_daemons(rig: &Rig) {
+    for host in DAEMONS {
+        let daemon = Daemon::new(
+            host,
+            hostkeeper_proto::hostkeeper::agent::v1::Platform::LinuxX8664,
+            &["apt"],
+        )
+        .running(runs("kbf", "1.0", Some("apt")));
+        grpc_beat(rig, &daemon).await;
+    }
 }
 
 /// One heartbeat of each of the six daemons at `at`: those named in `failed` report the failure
@@ -263,7 +299,7 @@ async fn round(rig: &Rig, at: u64, failed: &[(&str, &Value)]) {
     for host in DAEMONS {
         let body = match failed.iter().find(|(name, _)| *name == host) {
             Some((_, report)) => failed_beat(report),
-            None => BEAT.to_owned(),
+            None => NATIVE_BEAT.to_owned(),
         };
         let (code, answer) = rig.heartbeat(host, "daemon", &body).await;
         assert_eq!(code, 200, "{host}: {answer}");
@@ -276,11 +312,11 @@ async fn round(rig: &Rig, at: u64, failed: &[(&str, &Value)]) {
 /// enough hosts to mark 2.0 bad and set 1.0 again.
 async fn rolled_back(name: &str) -> Rig {
     let rig = Rig::new(name, Spec::recorded().with_services(AUTOMATIC));
-    let (code, body) = rig.desired(ONE).await;
-    assert_eq!(code, 200, "{body}");
+    hear_the_daemons(&rig).await;
+    put_komira(&rig).await;
+    set_release(&rig, "1.0").await;
     round(&rig, 2_000, &[]).await;
-    let (code, body) = rig.desired(TWO).await;
-    assert_eq!(code, 200, "{body}");
+    set_release(&rig, "2.0").await;
     let after_commit =
         json!({"target": "2.0", "outcome": "failed", "phase": "after_commit", "class": "release"});
     let at_the_gate = json!({"target": "2.0", "outcome": "failed", "phase": "gate_release"});
@@ -299,9 +335,17 @@ async fn an_automatic_rollback_writes_its_marks_within_kbfs_readers(readers: &Re
     let marks = &ops["services"]["kbf"];
     assert_eq!(marks["last_good"], "1.0");
     assert_eq!(marks["bad"], json!(["2.0"]));
+    // The operator's put of the repository the releases name, then CI's sets, with their
+    // releases, audited as they are made.
     assert_eq!(
         audited(&ops),
-        [("coordinator", "last_good"), ("coordinator", "mark_bad")]
+        [
+            ("operator", "repository_put"),
+            ("ci", "set_desired"),
+            ("coordinator", "last_good"),
+            ("ci", "set_desired"),
+            ("coordinator", "mark_bad")
+        ]
     );
     assert_eq!(
         parse(&rig.dir.path().join("desired.json"))["version"],
@@ -503,17 +547,17 @@ async fn an_update_plan_position_is_written_within_kbfs_readers(readers: &Reader
         "state-plan-stage",
         Spec::recorded().with_services(AUTOMATIC),
     );
-    let (code, body) = rig.desired(ONE).await;
-    assert_eq!(code, 200, "{body}");
+    hear_the_daemons(&rig).await;
+    put_komira(&rig).await;
+    set_release(&rig, "1.0").await;
     round(&rig, 2_000, &[]).await;
-    let (code, body) = rig.desired(TWO).await;
-    assert_eq!(code, 200, "{body}");
+    set_release(&rig, "2.0").await;
     round(&rig, 2_015, &[]).await;
-    let on_two = BEAT.replace("\"version\":\"1.0\"", "\"version\":\"2.0\"");
+    let on_two = NATIVE_BEAT.replace("\"version\":\"1.0\"", "\"version\":\"2.0\"");
     for at in (2_030..2_090).step_by(15) {
         rig.at(at);
         for host in DAEMONS {
-            let body = if host == "d1" { &on_two } else { BEAT };
+            let body = if host == "d1" { &on_two } else { NATIVE_BEAT };
             let (code, answer) = rig.heartbeat(host, "daemon", body).await;
             assert_eq!(code, 200, "{host}: {answer}");
         }
@@ -715,10 +759,8 @@ async fn the_new_keys_are_refused_only_by_the_readers_that_were_strict() {
     let state = parse(&rig.dir.path().join("desired.json"));
     let kept = &state["services"]["tierstore"];
     assert_eq!(kept["release_index"]["digest"], index_digest.as_str());
-    assert_eq!(
-        kept["release_index"]["packages"],
-        json!({"linux-x86_64": digest})
-    );
+    // The text of the index is not read: its digest is kept, and no package.
+    assert_eq!(kept["release_index"]["packages"], json!({}));
     assert_eq!(kept["digests"]["3.0"]["digest"], index_digest.as_str());
     let mut entry = kept.clone();
     entry.as_object_mut().expect("a state").remove("digests");

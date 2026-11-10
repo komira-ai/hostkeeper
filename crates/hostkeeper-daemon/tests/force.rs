@@ -3,42 +3,41 @@
 //! waits for, and how it fails.
 
 mod support;
+mod support_apt;
+mod support_host;
 
 use std::fs;
 use std::sync::Arc;
 
 use hostkeeper_daemon::checks::{Check, Checks};
 use hostkeeper_daemon::locks::Package;
-use hostkeeper_daemon::packages::PackageError;
-use hostkeeper_daemon::testing::{Log, NoPrune, manifest, spawn};
+use hostkeeper_daemon::testing::{Log, manifest, spawn};
 use hostkeeper_daemon::verb::{DIGEST_RULE, HookedVerb, PackageDigest};
 use hostkeeper_daemon::{Daemon, Placement, Ports, Refusal, Reply};
 use hostkeeper_hook::{Class, Phase, Step, Verdict};
-use hostkeeper_placed::testing::{FakeUnitControl, FaultFs, Log as PlacedLog};
+use hostkeeper_placed::testing::{FakeUnitControl, Log as PlacedLog};
+use hostkeeper_proto::hostkeeper::release::v1::Target;
 use hostkeeper_steps::record::{PARAMS_FILE, RECORD_FILE};
 use hostkeeper_steps::{Clock, Finished, ForceFailure, ForceVerdict};
-use support::force::{
-    UNIT, WEB, asked_active, calls, daemon_on, failed, forced, link_of, set, started, succeeded,
-    token_of, web, writes_of_step_12,
-};
-use support::{OWN, Rig, TARGET, config, d, digest, force, lines, name, roots, snapshot, update};
+use support::force::{UNIT, WEB, asked_active, calls, failed, link_of, set, started, token_of};
+use support::{OWN, config, d, digest, force, lines, name, roots, snapshot};
+use support_apt::with_entry;
+use support_host::{NativeHost, runs, succeeded, unit};
 
-/// A regular file at `path` below the rig's root, which no package placed.
-fn occupy(rig: &Rig, path: &str) {
-    let file = rig.scratch.path().join(path.trim_start_matches('/'));
-    fs::create_dir_all(file.parent().expect("a parent")).expect("its directory");
-    fs::write(file, "mine\n").expect("the file");
+/// `version` of `web`, with the manifest every rule accepts, published in the host's repository.
+fn web(rig: &NativeHost, version: &str) {
+    rig.pin(WEB, version);
 }
 
 /// Catches a force of `hostkeeper` itself, one without a digest, or one whose service's halt
-/// generation or step record cannot be read reaching the package port, a lock or the disk: each
-/// is refused with its token, and nothing is asked, placed or written.
+/// generation or step record cannot be read reaching the package manager, a lock or the disk:
+/// each is refused with its token, and nothing is asked, placed or written.
 #[test]
 fn force_is_refused_for_hostkeeper_and_without_a_registered_digest() {
-    let rig = Rig::new("force-refused");
+    let rig = NativeHost::new("force-refused");
     let daemon = rig.daemon();
     assert_eq!(
-        daemon.order(&force("hostkeeper", "2.0.0", &d(), 1, 1)),
+        daemon.order(&rig.force("hostkeeper", "2.0.0", 1, 1)),
         Reply::Refused {
             refusal: Refusal::SelfService,
             detail: "hostkeeper updates itself by its own path, never by a force".to_owned(),
@@ -59,10 +58,10 @@ fn force_is_refused_for_hostkeeper_and_without_a_registered_digest() {
         let dir = rig.state.join(service);
         fs::create_dir_all(&dir).expect("the service's directory");
         fs::write(dir.join(file), text).expect("the file");
-        let reply = daemon.order(&force(service, "2.0.0", &d(), 1, 1));
+        let reply = daemon.order(&rig.force(service, "2.0.0", 1, 1));
         assert_eq!(reply.refusal(), Some(refusal), "{reply:?}");
     }
-    assert!(rig.store.asked().is_empty());
+    assert!(rig.tools().is_empty());
     assert!(rig.placed_log.events().is_empty());
     for service in ["hostkeeper", WEB, "api", "db"] {
         assert_eq!(daemon.ctx().locks.holder(&name(service)), None, "{service}");
@@ -83,34 +82,23 @@ fn force_skips_only_busy_and_the_standing_halt() {
     assert_eq!(Checks::for_force().skipped(), [Check::Busy, Check::Halt]);
     assert!(Checks::hooked().skipped().is_empty());
 
-    let rig = Rig::new("force-checks");
+    let rig = NativeHost::new("force-checks");
     let daemon = rig.daemon();
     let too_new =
         manifest(WEB, "2.4.0").replace("min_hostkeeper = \"0.1.0\"", "min_hostkeeper = \"0.2.0\"");
-    rig.add_with(WEB, "2.1.0", &manifest("api", "2.1.0"));
-    rig.add_with(WEB, "2.2.0", &manifest(WEB, "2.9.0"));
-    rig.add_with(WEB, "2.4.0", &too_new);
-    rig.store.fail(
-        WEB,
-        "2.5.0",
-        PackageError::Other("an entry of the archive is a device".to_owned()),
-    );
-    rig.add_units(
-        WEB,
-        "2.6.0",
-        &[UNIT],
-        &[UNIT],
-        &[("web.conf", "/etc/web/web.conf")],
-    );
-    occupy(&rig, "/etc/web/web.conf");
+    rig.manifest(WEB, "2.4.0", &too_new);
+    let elsewhere = Target {
+        repository: Some("elsewhere".to_owned()),
+        ..rig.entry(WEB, "2.5.0")
+    };
     let rows = [
         (force("we b", "2.0.0", &d(), 1, 0), "invalid_order"),
         (force(WEB, "2.0.0", &digest("AB"), 1, 0), "invalid_order"),
-        (force(WEB, "2.1.0", &d(), 1, 0), "manifest_mismatch"),
-        (force(WEB, "2.2.0", &d(), 1, 0), "manifest_mismatch"),
-        (force(WEB, "2.4.0", &d(), 1, 0), "daemon_too_old"),
-        (force(WEB, "2.5.0", &d(), 1, 0), "package_failed"),
-        (force(WEB, "2.6.0", &d(), 1, 0), "path_conflict"),
+        (rig.force(WEB, "2.4.0", 1, 0), "daemon_too_old"),
+        (
+            with_entry(force(WEB, "2.5.0", &elsewhere.digest, 1, 0), &elsewhere),
+            "repository_unknown",
+        ),
     ];
     for (order, token) in rows {
         let reply = daemon.order(&order);
@@ -124,25 +112,25 @@ fn force_skips_only_busy_and_the_standing_halt() {
     assert!(!rig.state.join(WEB).join(RECORD_FILE).exists());
 
     // Busy: the unfinished update holds every other update off, and the force stops it.
-    let rig = Rig::new("force-busy");
+    let rig = NativeHost::new("force-busy");
     rig.add(WEB, "1.0.0");
     web(&rig, "3.0.0");
     let (daemon, _) = rig.booted();
     rig.launcher.lose(WEB, Step::Prepare);
-    let lost = daemon.order(&update(WEB, "1.0.0", &d(), 1));
+    let lost = daemon.order(&rig.update(WEB, "1.0.0", 1));
     assert_eq!(lost.refusal(), Some(Refusal::LauncherFailed), "{lost:?}");
-    let busy = daemon.order(&update(WEB, "3.0.0", &d(), 2));
+    let busy = daemon.order(&rig.update(WEB, "3.0.0", 2));
     assert_eq!(busy.refusal(), Some(Refusal::Busy), "{busy:?}");
-    assert_eq!(daemon.order(&force(WEB, "3.0.0", &d(), 3, 0)), succeeded());
+    assert_eq!(daemon.order(&rig.force(WEB, "3.0.0", 3, 0)), succeeded());
     assert_eq!(rig.launcher.stops(), ["updater-web-prepare-1"]);
 
     // The halt: a halted service refuses every update, and the force of the held generation runs.
-    let rig = Rig::new("force-halted");
+    let rig = NativeHost::new("force-halted");
     rig.add(WEB, "1.0.0");
     web(&rig, "3.0.0");
     let (daemon, _) = rig.booted();
     rig.launcher.exits(WEB, Step::Prepare, &[76]);
-    let halted = daemon.order(&update(WEB, "1.0.0", &d(), 1));
+    let halted = daemon.order(&rig.update(WEB, "1.0.0", 1));
     assert!(
         matches!(
             halted,
@@ -153,9 +141,9 @@ fn force_skips_only_busy_and_the_standing_halt() {
         ),
         "{halted:?}"
     );
-    let refused = daemon.order(&update(WEB, "3.0.0", &d(), 2));
+    let refused = daemon.order(&rig.update(WEB, "3.0.0", 2));
     assert_eq!(refused.refusal(), Some(Refusal::Halted), "{refused:?}");
-    assert_eq!(daemon.order(&force(WEB, "3.0.0", &d(), 3, 0)), succeeded());
+    assert_eq!(daemon.order(&rig.force(WEB, "3.0.0", 3, 0)), succeeded());
 }
 
 /// Catches a floor of the host's own: with 3.0.0 running, a force to 2.0.0 runs to `Succeeded`,
@@ -163,12 +151,12 @@ fn force_skips_only_busy_and_the_standing_halt() {
 /// `placed.json`.
 #[test]
 fn force_to_an_older_version_is_accepted_with_no_local_floor() {
-    let rig = Rig::new("force-older");
+    let rig = NativeHost::new("force-older");
     let daemon = rig.daemon();
     web(&rig, "3.0.0");
     web(&rig, "2.0.0");
-    forced(&rig, &daemon, "3.0.0", 1);
-    let paths = |rig: &Rig| -> Vec<std::path::PathBuf> {
+    rig.forced(&daemon, "3.0.0", 1);
+    let paths = |rig: &NativeHost| -> Vec<std::path::PathBuf> {
         let mut paths: Vec<_> = snapshot(&rig.state)
             .into_iter()
             .map(|(path, _)| path)
@@ -181,81 +169,77 @@ fn force_to_an_older_version_is_accepted_with_no_local_floor() {
         paths
     };
     let before = paths(&rig);
-    assert_eq!(daemon.order(&force(WEB, "2.0.0", &d(), 2, 0)), succeeded());
+    assert_eq!(daemon.order(&rig.force(WEB, "2.0.0", 2, 0)), succeeded());
     assert_eq!(link_of(&rig, WEB, "current").as_deref(), Some("2.0.0"));
     assert_eq!(link_of(&rig, WEB, "previous").as_deref(), Some("3.0.0"));
     assert_eq!(paths(&rig), before);
 }
 
 /// Catches a change to the host before the target is had and checked (design section 8.10,
-/// "Force of a version not on the host"): a package the port refuses (`digest_mismatch`,
-/// `no_space`) and one whose file is occupied (`path_conflict`) each fail before the commit with
-/// nothing stopped, unlinked, switched or linked, `current` and the record as they were.
+/// "Force of a version not on the host"): a package whose index entry is not the order's pin
+/// (`package_digest_mismatch`) and one from a repository the host does not configure
+/// (`repository_unknown`) each fail before the commit with nothing stopped, switched or linked,
+/// `current` and the record as they were.
 #[test]
 fn force_fetches_and_verifies_before_it_stops_anything() {
-    let rig = Rig::new("force-fetch");
+    let rig = NativeHost::new("force-fetch");
     let daemon = rig.daemon();
     web(&rig, "1.0.0");
-    forced(&rig, &daemon, "1.0.0", 1);
+    rig.forced(&daemon, "1.0.0", 1);
     let record = fs::read(rig.state.join(WEB).join(RECORD_FILE)).expect("the record");
-    rig.store.fail(
-        WEB,
-        "2.0.0",
-        PackageError::DigestMismatch("the bytes are another digest".to_owned()),
-    );
-    rig.store.fail(
-        WEB,
-        "2.1.0",
-        PackageError::NoSpace("the disk is full".to_owned()),
-    );
-    rig.add_units(
-        WEB,
-        "2.2.0",
-        &[UNIT],
-        &[UNIT],
-        &[("web.conf", "/etc/web/web.conf")],
-    );
-    occupy(&rig, "/etc/web/web.conf");
-    let release = |reason| failed(Phase::BeforeCommit, Class::Release, reason);
+    let ran = rig.tools().len();
+    let other_bytes = Target {
+        digest: d(),
+        ..rig.entry(WEB, "2.0.0")
+    };
+    let other_bytes = with_entry(force(WEB, "2.0.0", &d(), 2, 0), &other_bytes);
+    let elsewhere = Target {
+        repository: Some("elsewhere".to_owned()),
+        ..rig.entry(WEB, "2.1.0")
+    };
+    let elsewhere = with_entry(force(WEB, "2.1.0", &elsewhere.digest, 3, 0), &elsewhere);
     assert_eq!(
-        daemon.order(&force(WEB, "2.0.0", &d(), 2, 0)),
-        release("digest_mismatch")
+        daemon.order(&other_bytes),
+        failed(
+            Phase::BeforeCommit,
+            Class::Release,
+            "package_digest_mismatch"
+        )
     );
     assert_eq!(
-        daemon.order(&force(WEB, "2.1.0", &d(), 3, 0)),
-        failed(Phase::BeforeCommit, Class::Environment, "no_space")
-    );
-    assert_eq!(
-        daemon.order(&force(WEB, "2.2.0", &d(), 4, 0)),
-        release("path_conflict")
+        daemon.order(&elsewhere),
+        failed(
+            Phase::BeforeCommit,
+            Class::Environment,
+            "repository_unknown"
+        )
     );
     assert!(rig.placed_log.events().is_empty());
+    assert!(!rig.tools()[ran..].contains(&"apt-get install".to_owned()));
     assert_eq!(link_of(&rig, WEB, "current").as_deref(), Some("1.0.0"));
     assert_eq!(rig.units.active(), set(&[UNIT]));
     assert_eq!(
         fs::read(rig.state.join(WEB).join(RECORD_FILE)).expect("the record"),
         record
     );
-    let asked = [("web", "2.0.0"), ("web", "2.1.0")].map(|(s, v)| (s.to_owned(), v.to_owned()));
-    assert_eq!(rig.store.asked(), asked);
 }
 
 /// Catches a halt lifted before the pre-checks, or ignored (design section 5.4): with `web` and
-/// `api` halted and held at generation 2, a force with generation 3 that fails its fetch leaves
+/// `api` halted and held at generation 2, a force with generation 3 that fails its stage leaves
 /// the hold at 2 and the halt in place; one that passes raises the hold to 3, clears the halt
 /// and runs; and a force of `api` with generation 2 runs and leaves its hold at 2.
 #[test]
 fn force_over_a_standing_halt_lifts_the_halt() {
-    let rig = Rig::new("force-lift");
+    let rig = NativeHost::new("force-lift");
     for service in [WEB, "api"] {
         rig.add(service, "1.0.0");
-        rig.add_units(service, "3.0.0", &[], &[], &[]);
+        rig.pin(service, "3.0.0");
         rig.launcher.exits(service, Step::Prepare, &[76]);
     }
     let (daemon, _) = rig.booted();
     let halts = &daemon.ctx().halts;
     for service in [WEB, "api"] {
-        let halted = daemon.order(&update(service, "1.0.0", &d(), 1));
+        let halted = daemon.order(&rig.update(service, "1.0.0", 1));
         assert!(
             matches!(
                 halted,
@@ -270,14 +254,18 @@ fn force_over_a_standing_halt_lifts_the_halt() {
             .raise(&name(service), 2)
             .expect("hold the service at 2");
     }
-    rig.store.fail(
-        WEB,
-        "2.0.0",
-        PackageError::DigestMismatch("other bytes".to_owned()),
-    );
+    let other_bytes = Target {
+        digest: d(),
+        ..rig.entry(WEB, "2.0.0")
+    };
+    let other_bytes = with_entry(force(WEB, "2.0.0", &d(), 2, 3), &other_bytes);
     assert_eq!(
-        daemon.order(&force(WEB, "2.0.0", &d(), 2, 3)),
-        failed(Phase::BeforeCommit, Class::Release, "digest_mismatch")
+        daemon.order(&other_bytes),
+        failed(
+            Phase::BeforeCommit,
+            Class::Release,
+            "package_digest_mismatch"
+        )
     );
     assert_eq!(halts.get(&name(WEB)).ok(), Some(2));
     assert!(matches!(
@@ -287,12 +275,9 @@ fn force_over_a_standing_halt_lifts_the_halt() {
             ..
         })
     ));
-    assert_eq!(daemon.order(&force(WEB, "3.0.0", &d(), 3, 3)), succeeded());
+    assert_eq!(daemon.order(&rig.force(WEB, "3.0.0", 3, 3)), succeeded());
     assert_eq!(halts.get(&name(WEB)).ok(), Some(3));
-    assert_eq!(
-        daemon.order(&force("api", "3.0.0", &d(), 2, 2)),
-        succeeded()
-    );
+    assert_eq!(daemon.order(&rig.force("api", "3.0.0", 2, 2)), succeeded());
     assert_eq!(halts.get(&name("api")).ok(), Some(2));
 }
 
@@ -300,11 +285,11 @@ fn force_over_a_standing_halt_lifts_the_halt() {
 /// nothing is placed or switched.
 #[test]
 fn a_halt_lift_that_cannot_be_written_stops_the_force() {
-    let rig = Rig::new("force-lift-fails");
+    let rig = NativeHost::new("force-lift-fails");
     let daemon = rig.daemon();
     web(&rig, "2.0.0");
     fs::create_dir_all(rig.state.join(WEB).join("held-halt.tmp")).expect("a directory in the way");
-    let reply = daemon.order(&force(WEB, "2.0.0", &d(), 1, 1));
+    let reply = daemon.order(&rig.force(WEB, "2.0.0", 1, 1));
     assert_eq!(reply.refusal(), Some(Refusal::StoreFailed), "{reply:?}");
     assert!(rig.placed_log.events().is_empty());
     assert_eq!(link_of(&rig, WEB, "current"), None);
@@ -316,7 +301,7 @@ fn a_halt_lift_that_cannot_be_written_stops_the_force() {
 /// `forced_over`, with no `rollback` launched and its params file gone, and the force then runs.
 #[test]
 fn force_stops_a_running_step_and_closes_its_record_forced_over() {
-    let rig = Rig::new("force-over");
+    let rig = NativeHost::new("force-over");
     rig.add(WEB, "1.0.0");
     web(&rig, "2.0.0");
     let (daemon, _) = rig.booted();
@@ -324,20 +309,16 @@ fn force_stops_a_running_step_and_closes_its_record_forced_over() {
     let gate = rig.launcher.hold(WEB, Step::Cutover);
     let stops = rig.launcher.stops_seen();
     let updating = {
-        let daemon = Arc::clone(&daemon);
-        spawn("the update", move || {
-            daemon.order(&update(WEB, "1.0.0", &d(), 1))
-        })
+        let (daemon, order) = (Arc::clone(&daemon), rig.update(WEB, "1.0.0", 1));
+        spawn("the update", move || daemon.order(&order))
     };
     gate.entered(&updating).expect("the cutover runs");
     // The force's first wait for the lock is held until the update has ended, so that it stops
     // the step once.
     let waiting = rig.clock.park_next_sleep();
     let forcing = {
-        let daemon = Arc::clone(&daemon);
-        spawn("the force", move || {
-            daemon.order(&force(WEB, "2.0.0", &d(), 2, 0))
-        })
+        let (daemon, order) = (Arc::clone(&daemon), rig.force(WEB, "2.0.0", 2, 0));
+        spawn("the force", move || daemon.order(&order))
     };
     assert_eq!(
         stops.wait(&forcing).expect("the force stops the step"),
@@ -364,7 +345,7 @@ fn force_stops_a_running_step_and_closes_its_record_forced_over() {
 /// log holds that one run and that one stop.
 #[test]
 fn force_interrupts_a_running_prepare_and_the_runner_launches_no_rollback() {
-    let rig = Rig::new("force-prepare");
+    let rig = NativeHost::new("force-prepare");
     rig.add(WEB, "1.0.0");
     web(&rig, "2.0.0");
     let (daemon, _) = rig.booted();
@@ -374,18 +355,14 @@ fn force_interrupts_a_running_prepare_and_the_runner_launches_no_rollback() {
     let gate = rig.launcher.hold(WEB, Step::Prepare);
     let stops = rig.launcher.stops_seen();
     let updating = {
-        let daemon = Arc::clone(&daemon);
-        spawn("the update", move || {
-            daemon.order(&update(WEB, "1.0.0", &d(), 1))
-        })
+        let (daemon, order) = (Arc::clone(&daemon), rig.update(WEB, "1.0.0", 1));
+        spawn("the update", move || daemon.order(&order))
     };
     gate.entered(&updating).expect("the prepare runs");
     let waiting = rig.clock.park_next_sleep();
     let forcing = {
-        let daemon = Arc::clone(&daemon);
-        spawn("the force", move || {
-            daemon.order(&force(WEB, "2.0.0", &d(), 2, 0))
-        })
+        let (daemon, order) = (Arc::clone(&daemon), rig.force(WEB, "2.0.0", 2, 0));
+        spawn("the force", move || daemon.order(&order))
     };
     assert_eq!(
         stops.wait(&forcing).expect("the force stops the step"),
@@ -412,22 +389,20 @@ fn force_interrupts_a_running_prepare_and_the_runner_launches_no_rollback() {
 /// its bytes and no unit of `api` is stopped; `api`'s update then ends as it would have.
 #[test]
 fn force_does_not_wait_for_another_services_step() {
-    let rig = Rig::new("force-other");
+    let rig = NativeHost::new("force-other");
     rig.add("api", "1.0.0");
     web(&rig, "2.0.0");
     let (daemon, _) = rig.booted();
     let daemon = Arc::new(daemon);
     let gate = rig.launcher.hold("api", Step::Prepare);
     let updating = {
-        let daemon = Arc::clone(&daemon);
-        spawn("the update", move || {
-            daemon.order(&update("api", "1.0.0", &d(), 1))
-        })
+        let (daemon, order) = (Arc::clone(&daemon), rig.update("api", "1.0.0", 1));
+        spawn("the update", move || daemon.order(&order))
     };
     gate.entered(&updating).expect("api's prepare runs");
     let record = rig.state.join("api").join(RECORD_FILE);
     let before = fs::read(&record).expect("api's record");
-    assert_eq!(daemon.order(&force(WEB, "2.0.0", &d(), 1, 0)), succeeded());
+    assert_eq!(daemon.order(&rig.force(WEB, "2.0.0", 1, 0)), succeeded());
     assert_eq!(fs::read(&record).expect("api's record"), before);
     assert!(rig.launcher.stops().is_empty());
     gate.release();
@@ -439,7 +414,7 @@ fn force_does_not_wait_for_another_services_step() {
 /// the same force again is `running`, and an update of `api` runs to its end.
 #[test]
 fn force_takes_the_service_lock_only_and_a_second_order_for_the_service_is_busy_not_queued() {
-    let rig = Rig::new("force-busy-not-queued");
+    let rig = NativeHost::new("force-busy-not-queued");
     web(&rig, "2.0.0");
     rig.add("api", "1.0.0");
     let (daemon, _) = rig.booted();
@@ -447,101 +422,73 @@ fn force_takes_the_service_lock_only_and_a_second_order_for_the_service_is_busy_
     rig.units.active_after(UNIT, 1);
     let parked = rig.clock.park_next_sleep();
     let forcing = {
-        let daemon = Arc::clone(&daemon);
-        spawn("the force", move || {
-            daemon.order(&force(WEB, "2.0.0", &d(), 1, 0))
-        })
+        let (daemon, order) = (Arc::clone(&daemon), rig.force(WEB, "2.0.0", 1, 0));
+        spawn("the force", move || daemon.order(&order))
     };
     parked
         .entered(&forcing)
         .expect("the force waits for its unit");
     assert_eq!(
-        daemon.order(&update(WEB, "2.0.0", &d(), 2)),
+        daemon.order(&rig.update(WEB, "2.0.0", 2)),
         Reply::Refused {
             refusal: Refusal::Busy,
             detail: "web is locked by an order to force it to 2.0.0".to_owned(),
         }
     );
-    assert_eq!(
-        daemon.order(&force(WEB, "2.0.0", &d(), 1, 0)),
-        Reply::Running
-    );
-    assert_eq!(daemon.order(&update("api", "1.0.0", &d(), 1)), succeeded());
+    assert_eq!(daemon.order(&rig.force(WEB, "2.0.0", 1, 0)), Reply::Running);
+    assert_eq!(daemon.order(&rig.update("api", "1.0.0", 1)), succeeded());
     parked.release();
     assert_eq!(forcing.join().expect("the force"), succeeded());
 }
 
-/// Catches a part of a force run out of its order (a start before `daemon-reload`, a link before
-/// the switch, an unlink after it): for a target that drops a unit and a file and adds one of
-/// each, the calls are the stop of the old `run` units, the stop, disable and unlink of the
-/// dropped unit and the unlink of the dropped file with their reload, the switch, the links of
-/// the new file, `WantedBy=` link and unit, `daemon-reload`, and the starts.
+/// Catches a part of a force run out of its order (a start before `daemon-reload`, a stop after
+/// the switch): for a target that drops a `run` unit and adds one, the calls are the stop of the
+/// old `run` units, the switch of `current`, `daemon-reload`, and the starts of the target's.
 #[test]
 fn force_runs_the_steps_in_the_documented_order() {
-    let rig = Rig::new("force-order");
+    let rig = NativeHost::new("force-order");
     let daemon = rig.daemon();
-    let old = ["web.service", "web-gone.service"];
-    let new = ["web.service", "web-new.service"];
-    rig.add_units(
-        WEB,
-        "1.0.0",
-        &old,
-        &old,
-        &[("gone.conf", "/etc/web/gone.conf")],
-    );
-    rig.add_units(
-        WEB,
-        "2.0.0",
-        &new,
-        &new,
-        &[("new.conf", "/etc/web/new.conf")],
-    );
-    forced(&rig, &daemon, "1.0.0", 1);
-    assert_eq!(daemon.order(&force(WEB, "2.0.0", &d(), 2, 0)), succeeded());
-    let wants = format!("/units/{TARGET}.wants");
+    let (gone, new) = (unit(WEB, "gone"), unit(WEB, "new"));
+    rig.manifest(WEB, "1.0.0", &runs(WEB, "1.0.0", &[UNIT, &gone]));
+    rig.manifest(WEB, "2.0.0", &runs(WEB, "2.0.0", &[UNIT, &new]));
+    rig.forced(&daemon, "1.0.0", 1);
+    assert_eq!(daemon.order(&rig.force(WEB, "2.0.0", 2, 0)), succeeded());
     assert_eq!(
         calls(&rig),
         [
-            "stop web-gone.service".to_owned(),
-            "stop web.service".to_owned(),
-            "stop web-gone.service".to_owned(),
-            format!("unlink {wants}/web-gone.service"),
-            "unlink /etc/web/gone.conf".to_owned(),
-            "unlink /units/web-gone.service".to_owned(),
-            "reload".to_owned(),
+            format!("stop {gone}"),
+            format!("stop {UNIT}"),
             "switch".to_owned(),
-            "link /etc/web/new.conf".to_owned(),
-            format!("link {wants}/web-new.service"),
-            "link /units/web-new.service".to_owned(),
             "reload".to_owned(),
-            "start web.service".to_owned(),
-            "start web-new.service".to_owned(),
+            format!("start {UNIT}"),
+            format!("start {new}"),
         ]
     );
 }
 
 /// Catches the old manifest's `run` list used for the starts, or every unit of the target
-/// started: only the target's `run` unit is started and active; its other unit is linked and not
-/// started.
+/// started: only the target's `run` unit is started and active; the other unit its package
+/// ships is not started.
 #[test]
 fn force_starts_exactly_the_units_the_target_lists() {
-    let rig = Rig::new("force-starts");
+    let rig = NativeHost::new("force-starts");
     let daemon = rig.daemon();
-    rig.add_units(
-        WEB,
-        "1.0.0",
-        &["web-old.service"],
-        &["web-old.service"],
-        &[],
-    );
-    rig.add_units(WEB, "2.0.0", &[UNIT, "web-extra.service"], &[UNIT], &[]);
-    forced(&rig, &daemon, "1.0.0", 1);
-    assert_eq!(daemon.order(&force(WEB, "2.0.0", &d(), 2, 0)), succeeded());
+    let (old, extra) = (unit(WEB, "old"), unit(WEB, "extra"));
+    rig.manifest(WEB, "1.0.0", &runs(WEB, "1.0.0", &[&old]));
+    rig.ship(WEB, "2.0.0", &extra);
+    rig.forced(&daemon, "1.0.0", 1);
+    assert_eq!(daemon.order(&rig.force(WEB, "2.0.0", 2, 0)), succeeded());
     assert_eq!(started(&rig), [UNIT]);
     assert_eq!(rig.units.active(), set(&[UNIT]));
-    let extra = rig.scratch.path().join("units").join("web-extra.service");
-    let meta = fs::symlink_metadata(extra).expect("the unit is linked");
-    assert!(meta.file_type().is_symlink());
+    let shipped = rig
+        .version_dir(WEB, "2.0.0")
+        .join("tree/usr/lib/systemd/system")
+        .join(&extra);
+    assert!(
+        shipped.is_file(),
+        "the package ships the unit it does not run"
+    );
+    assert_eq!(asked_active(&rig, &extra), 0);
 }
 
 /// Catches a wait that ends on the first active unit, ends early, or reads another clock: with
@@ -551,23 +498,25 @@ fn force_starts_exactly_the_units_the_target_lists() {
 /// the wait is of this process and ends at its bound, never waits forever nor ends at once.
 #[test]
 fn force_waits_for_every_unit_to_be_active_within_force_start_secs() {
-    let two = "web-two.service";
+    let two = unit(WEB, "two");
+    let two = two.as_str();
     let failed_start = failed(Phase::AfterCommit, Class::Release, "start_failed");
     let cases = [(60, succeeded()), (61, failed_start)];
     for (lost, (asks, expected)) in [false, true]
         .into_iter()
         .flat_map(|lost| cases.clone().into_iter().map(move |case| (lost, case)))
     {
-        let rig = Rig::new("force-wait");
+        let rig = NativeHost::new("force-wait");
         if lost {
             rig.clock.lose_boot_id();
         }
         let daemon = rig.daemon();
-        rig.add_units(WEB, "2.0.0", &[UNIT, two], &[UNIT, two], &[]);
+        rig.manifest(WEB, "2.0.0", &runs(WEB, "2.0.0", &[UNIT, two]));
+        rig.pin(WEB, "2.0.0");
         rig.units.active_after(two, asks);
         let began = rig.clock.mono_secs();
         assert_eq!(
-            daemon.order(&force(WEB, "2.0.0", &d(), 1, 0)),
+            daemon.order(&rig.force(WEB, "2.0.0", 1, 0)),
             expected,
             "{asks} {lost}"
         );
@@ -579,19 +528,20 @@ fn force_waits_for_every_unit_to_be_active_within_force_start_secs() {
 
 /// Catches a force that rolls back after a failed start, or fetches the version it left again
 /// (design section 8.7): the first force ends `Failed`, `start_failed`, on the target with
-/// `previous` the version left and nothing started; a second force to that version asks the
-/// package port for nothing and runs to `Succeeded`.
+/// `previous` the version left and nothing started; a second force to that version downloads
+/// nothing and runs to `Succeeded`.
 #[test]
 fn force_with_unit_that_fails_to_start_reports_failed_and_a_second_force_recovers() {
-    let rig = Rig::new("force-recovers");
+    let rig = NativeHost::new("force-recovers");
     let daemon = rig.daemon();
-    let two = "web-two.service";
+    let two = unit(WEB, "two");
+    let two = two.as_str();
     web(&rig, "1.0.0");
-    rig.add_units(WEB, "2.0.0", &[two], &[two], &[]);
+    rig.manifest(WEB, "2.0.0", &runs(WEB, "2.0.0", &[two]));
     rig.units.fail_start(two);
-    forced(&rig, &daemon, "1.0.0", 1);
+    rig.forced(&daemon, "1.0.0", 1);
     assert_eq!(
-        daemon.order(&force(WEB, "2.0.0", &d(), 2, 0)),
+        daemon.order(&rig.force(WEB, "2.0.0", 2, 0)),
         failed(Phase::AfterCommit, Class::Release, "start_failed")
     );
     assert_eq!(link_of(&rig, WEB, "current").as_deref(), Some("2.0.0"));
@@ -606,65 +556,27 @@ fn force_with_unit_that_fails_to_start_reports_failed_and_a_second_force_recover
         })
     );
     assert_eq!(started(&rig), [two]);
-    assert_eq!(daemon.order(&force(WEB, "1.0.0", &d(), 3, 0)), succeeded());
-    assert!(rig.store.asked().is_empty());
+    let downloads = rig.downloads();
+    assert_eq!(daemon.order(&rig.force(WEB, "1.0.0", 3, 0)), succeeded());
+    assert_eq!(rig.downloads(), downloads);
     assert_eq!(link_of(&rig, WEB, "current").as_deref(), Some("1.0.0"));
     assert_eq!(link_of(&rig, WEB, "previous").as_deref(), Some("2.0.0"));
     assert_eq!(rig.units.active(), set(&[UNIT]));
 }
 
-/// `web` at 1.0.0, forced there, with 2.0.0 beside it, which places a file besides its unit.
-fn with_a_file(name: &str) -> Rig {
-    let rig = Rig::new(name);
-    web(&rig, "1.0.0");
-    rig.add_units(
-        WEB,
-        "2.0.0",
-        &[UNIT],
-        &[UNIT],
-        &[("web.conf", "/etc/web/web.conf")],
-    );
-    forced(&rig, &rig.daemon(), "1.0.0", 1);
-    rig
-}
-
-/// Catches a failure to link or to reload reported as another reason, rolled back, or followed
-/// by a start: an injected write error of step 12 ends `Failed`, `link_failed`, and a failing
-/// `daemon-reload` `Failed`, `daemon_reload_failed`, each after the commit with `current` on the
-/// target and no unit started.
+/// Catches a failure to reload reported as another reason, rolled back, or followed by a start: a
+/// failing `daemon-reload` ends `Failed`, `daemon_reload_failed`, after the commit with `current`
+/// on the target and no unit started.
 #[test]
-fn force_records_link_failed_and_daemon_reload_failed_with_the_host_on_the_target() {
-    let (first, _) = writes_of_step_12(with_a_file, "web.conf");
-    let rig = with_a_file("force-link-fails");
-    let fs = Arc::new(FaultFs::failing_at(
-        rig.scratch.path(),
-        first,
-        PlacedLog::new(),
-    ));
-    let daemon = daemon_on(&rig, fs, Arc::new(NoPrune));
-    let (daemon, alerts) = support::alerting(daemon);
-    assert_eq!(
-        daemon.order(&force(WEB, "2.0.0", &d(), 2, 0)),
-        failed(Phase::AfterCommit, Class::Environment, "link_failed")
-    );
-    assert_eq!(link_of(&rig, WEB, "current").as_deref(), Some("2.0.0"));
-    assert!(started(&rig).is_empty());
-    let alerted = lines(&alerts);
-    assert!(
-        alerted
-            .iter()
-            .any(|line| line.contains("alert=force_failed service=web: link_failed")),
-        "{alerted:?}"
-    );
-
-    let rig = Rig::new("force-reload-fails");
+fn force_records_daemon_reload_failed_with_the_host_on_the_target() {
+    let rig = NativeHost::new("force-reload-fails");
     let daemon = rig.daemon();
     web(&rig, "1.0.0");
     web(&rig, "2.0.0");
-    forced(&rig, &daemon, "1.0.0", 1);
+    rig.forced(&daemon, "1.0.0", 1);
     rig.units.fail_reload();
     assert_eq!(
-        daemon.order(&force(WEB, "2.0.0", &d(), 2, 0)),
+        daemon.order(&rig.force(WEB, "2.0.0", 2, 0)),
         failed(
             Phase::AfterCommit,
             Class::Environment,
@@ -688,39 +600,20 @@ fn force_records_link_failed_and_daemon_reload_failed_with_the_host_on_the_targe
 /// before the commit, with `current` where it was.
 #[test]
 fn a_force_whose_units_cannot_be_stopped_fails_before_the_switch() {
-    let rig = Rig::new("force-stop-fails");
+    let rig = NativeHost::new("force-stop-fails");
     web(&rig, "1.0.0");
     web(&rig, "2.0.0");
-    forced(&rig, &rig.daemon(), "1.0.0", 1);
+    rig.forced(&rig.daemon(), "1.0.0", 1);
     let ports = Ports {
         units: Arc::new(FakeUnitControl::failing(PlacedLog::new())),
         ..rig.ports()
     };
     let daemon = Daemon::new(config(), rig.dirs(), ports, OWN);
     assert_eq!(
-        daemon.order(&force(WEB, "2.0.0", &d(), 2, 0)),
+        daemon.order(&rig.force(WEB, "2.0.0", 2, 0)),
         failed(Phase::BeforeCommit, Class::Environment, "link_failed")
     );
     assert_eq!(link_of(&rig, WEB, "current").as_deref(), Some("1.0.0"));
-}
-
-/// Catches a version left whose manifest no longer reads keeping its units running across the
-/// switch: the unit `placed.json` holds enabled for it is stopped before the switch all the
-/// same, and started again from the target.
-#[test]
-fn a_force_stops_the_enabled_units_of_a_version_whose_manifest_no_longer_reads() {
-    let rig = Rig::new("force-broken-left");
-    let daemon = rig.daemon();
-    let left = rig.add_units(WEB, "1.0.0", &[UNIT], &[UNIT], &[]);
-    web(&rig, "2.0.0");
-    forced(&rig, &daemon, "1.0.0", 1);
-    fs::write(left.join("manifest.toml"), "not a manifest").expect("break the manifest");
-    assert_eq!(daemon.order(&force(WEB, "2.0.0", &d(), 2, 0)), succeeded());
-    let calls = calls(&rig);
-    let stop = calls.iter().position(|call| *call == "stop web.service");
-    let switch = calls.iter().position(|call| call == "switch");
-    assert!(stop.is_some() & (stop < switch), "{calls:?}");
-    assert_eq!(rig.units.active(), set(&[UNIT]));
 }
 
 /// Catches a force that cannot stop the running step and goes on, or gives up after one try:
@@ -728,17 +621,17 @@ fn a_force_stops_the_enabled_units_of_a_version_whose_manifest_no_longer_reads()
 /// nothing is switched; the step stays flagged.
 #[test]
 fn a_force_that_cannot_stop_the_running_step_changes_nothing_else() {
-    let rig = Rig::new("force-unstopped");
+    let rig = NativeHost::new("force-unstopped");
     rig.add(WEB, "1.0.0");
     web(&rig, "2.0.0");
     let (daemon, _) = rig.booted();
     let (daemon, alerts) = support::alerting(daemon);
     rig.launcher.lose(WEB, Step::Prepare);
-    let lost = daemon.order(&update(WEB, "1.0.0", &d(), 1));
+    let lost = daemon.order(&rig.update(WEB, "1.0.0", 1));
     assert_eq!(lost.refusal(), Some(Refusal::LauncherFailed), "{lost:?}");
     rig.launcher.fail_stops(WEB);
     assert_eq!(
-        daemon.order(&force(WEB, "2.0.0", &d(), 2, 0)),
+        daemon.order(&rig.force(WEB, "2.0.0", 2, 0)),
         failed(Phase::BeforeCommit, Class::Environment, "unstopped")
     );
     assert_eq!(
@@ -763,12 +656,12 @@ fn a_force_that_cannot_stop_the_running_step_changes_nothing_else() {
 /// has stopped that step's unit, the force takes the lock over and runs.
 #[test]
 fn a_force_takes_over_the_lock_of_a_step_that_could_not_be_stopped() {
-    let rig = Rig::new("force-take-over");
+    let rig = NativeHost::new("force-take-over");
     rig.add(WEB, "1.0.0");
     web(&rig, "2.0.0");
     let (daemon, _) = rig.booted();
     rig.launcher.lose(WEB, Step::Prepare);
-    let lost = daemon.order(&update(WEB, "1.0.0", &d(), 1));
+    let lost = daemon.order(&rig.update(WEB, "1.0.0", 1));
     assert_eq!(lost.refusal(), Some(Refusal::LauncherFailed), "{lost:?}");
     let held = Package {
         verb: HookedVerb::Update,
@@ -781,7 +674,7 @@ fn a_force_takes_over_the_lock_of_a_step_that_could_not_be_stopped() {
         .take(&name(WEB), held)
         .expect("the lock")
         .keep();
-    assert_eq!(daemon.order(&force(WEB, "2.0.0", &d(), 2, 0)), succeeded());
+    assert_eq!(daemon.order(&rig.force(WEB, "2.0.0", 2, 0)), succeeded());
     assert_eq!(rig.launcher.stops(), ["updater-web-prepare-1"]);
     assert_eq!(daemon.ctx().locks.holder(&name(WEB)), None);
 }
@@ -792,15 +685,15 @@ fn a_force_takes_over_the_lock_of_a_step_that_could_not_be_stopped() {
 /// unfinished record keeps its bytes and its unit is not stopped.
 #[test]
 fn a_force_while_no_hooked_step_runs_sets_no_forced_flag() {
-    let rig = Rig::new("force-no-flag");
+    let rig = NativeHost::new("force-no-flag");
     rig.add(WEB, "1.0.0");
     rig.add("api", "1.0.0");
     web(&rig, "2.0.0");
-    rig.add_with(WEB, "3.0.0", &manifest(WEB, "3.0.0"));
+    web(&rig, "3.0.0");
     let (daemon, _) = rig.booted();
-    assert_eq!(daemon.order(&update(WEB, "1.0.0", &d(), 1)), succeeded());
+    assert_eq!(daemon.order(&rig.update(WEB, "1.0.0", 1)), succeeded());
     rig.launcher.lose("api", Step::Prepare);
-    let lost = daemon.order(&update("api", "1.0.0", &d(), 1));
+    let lost = daemon.order(&rig.update("api", "1.0.0", 1));
     assert_eq!(lost.refusal(), Some(Refusal::LauncherFailed), "{lost:?}");
     let api = rig.state.join("api").join(RECORD_FILE);
     let before = fs::read(&api).expect("api's record");
@@ -808,13 +701,13 @@ fn a_force_while_no_hooked_step_runs_sets_no_forced_flag() {
     let counted = rig
         .daemon()
         .with_stores(support::crash_at(None, Arc::clone(&writes)));
-    assert_eq!(counted.order(&force(WEB, "2.0.0", &d(), 2, 0)), succeeded());
+    assert_eq!(counted.order(&rig.force(WEB, "2.0.0", 2, 0)), succeeded());
     assert_eq!(writes.load(std::sync::atomic::Ordering::SeqCst), 8);
     assert!(!rig.record(WEB).expect("web's record").forced);
     assert_eq!(fs::read(&api).expect("api's record"), before);
     assert_eq!(rig.launcher.stops(), Vec::<String>::new());
     let steps = rig.launcher.steps(WEB).len();
-    assert_eq!(daemon.order(&update(WEB, "3.0.0", &d(), 3)), succeeded());
+    assert_eq!(daemon.order(&rig.update(WEB, "3.0.0", 3)), succeeded());
     assert!(rig.launcher.steps(WEB).len() > steps);
 }
 
@@ -822,7 +715,7 @@ fn a_force_while_no_hooked_step_runs_sets_no_forced_flag() {
 /// directory the linker reaches is the daemon's own.
 #[test]
 fn the_rig_links_into_the_daemons_packages_directory() {
-    let rig = Rig::new("force-rig");
+    let rig = NativeHost::new("force-rig");
     let placement = Placement {
         roots: roots(),
         fs: rig.placed_fs.clone(),

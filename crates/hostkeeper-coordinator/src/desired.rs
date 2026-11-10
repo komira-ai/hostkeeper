@@ -22,17 +22,19 @@
 //!
 //! A desired state may name the digest of its version's package (`release_digest`), or the
 //! record of the version's release index (`release_index`: the index's digest and the package
-//! digest of each platform it lists, [`crate::release_index`]), never both; and each service's
-//! state in the file carries the registry of every version CI has set with a release
+//! digest of each platform it lists, [`crate::registry::IndexRecord`]), never both; and each
+//! service's state in the file carries the registry of every version CI has set with a release
 //! (`digests`, [`crate::registry`]: a package digest, or the record of an index), written in the
 //! same replacement of the file as the state, so a crash leaves both or neither. The keys are
 //! written only when they hold something: a farm whose CI sends no digest keeps the bytes it
 //! had, which earlier builds read, and a farm that sets no index never has `release_index`.
 //! Earlier builds refuse a file that has the key `release_index` or `digests` (their reader
 //! refuses a key it does not know), so a coordinator rolled back below this one refuses to
-//! start rather than run without the digests. A request never writes the record: the keys
-//! `release_index` and `release_index_digest` of a set are the index's text and its SHA-256,
-//! which are checked and turned into the record ([`Desired::parse_request_noting`]).
+//! start rather than run without the digests. None of it orders a host anything: only a release
+//! set with targets does ([`crate::picks`]), and a version kept as a digest or an index picks
+//! every host nothing. A request never writes the record: the keys `release_index` and
+//! `release_index_digest` of a set are the index's text and its SHA-256, which are checked
+//! ([`index_checked`]) and turned into a record of the digest alone; the text is not read.
 //! The host groups and their desired versions are the map form's top-level key `host_groups`,
 //! written only while a group is held ([`crate::host_groups`]); earlier builds refuse it as they
 //! refuse any key they do not know.
@@ -44,13 +46,13 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
+use hostkeeper_wire::RoleName;
 use hostkeeper_wire::version::Version;
-use hostkeeper_wire::{Platform, RoleName};
 
 use serde::{Deserialize, Serialize};
 
-use crate::registry::{Digest, IndexRecord, Package, Registry, RegistryError, Release};
-use crate::release_index;
+use crate::ops_file;
+use crate::registry::{Digest, IndexRecord, Registry, RegistryError, Release};
 use crate::releases::Release as Kept;
 use crate::services::Services;
 use crate::store::{BackendError, Commit, Files, Shared};
@@ -222,12 +224,14 @@ pub struct Desired {
     #[serde(serialize_with = "write_min_up")]
     pub min_up: RoleLimits,
     /// The digest of the package of `version`, as CI set it ([`crate::registry`]); none when CI
-    /// sent none. Written only when there is one.
+    /// sent none. Written only when there is one. It orders nothing: only a release set with
+    /// targets does ([`crate::picks`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub release_digest: Option<Digest>,
-    /// The record of the release index of `version`, as CI set it: each host is ordered the
-    /// package the index lists for its platform. None when CI sent no index; never with a
-    /// `release_digest`. Written only when there is one.
+    /// The record of the release index of `version`, as CI set it: the digest of the index, whose
+    /// text is not read. None when CI sent no index; never with a `release_digest`. Written only
+    /// when there is one. It orders nothing: only a release set with targets does
+    /// ([`crate::picks`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub release_index: Option<IndexRecord>,
 }
@@ -250,7 +254,7 @@ pub enum DesiredError {
     /// The registry of digests of a service is refused.
     #[error(transparent)]
     Registry(#[from] RegistryError),
-    /// A release index that cannot be taken as the version's: see [`crate::release_index`].
+    /// A release index that cannot be taken as the version's: see [`index_checked`].
     #[error("index_invalid: {0}")]
     IndexInvalid(&'static str),
     /// The text of a release index does not have the SHA-256 the set named.
@@ -355,12 +359,10 @@ impl Desired {
         let mut desired: Self = serde_json::from_value(fields.into()).map_err(malformed)?;
         desired.checked()?;
         desired.refuse_unnamed(services)?;
-        desired.release_index = release_index::checked(
+        desired.release_index = index_checked(
             index_text.as_ref(),
             index_digest.as_ref(),
             desired.release_digest.is_some(),
-            &service,
-            &desired.version,
         )?;
         let has = |role: &str| def.roles.contains(role);
         let mut dropped = desired.max_updating.retain(&FORMAT_ROLES, has);
@@ -414,23 +416,6 @@ impl Desired {
         }
     }
 
-    /// The package a host of `platform` is ordered of the version; none when CI set no release
-    /// or the release index lists no package for the platform.
-    #[must_use]
-    pub fn package_for(&self, platform: Platform) -> Option<Package> {
-        self.release()
-            .and_then(|release| release.package_for(platform))
-    }
-
-    /// Whether the version has a release index that lists no package for `platform`: a host of
-    /// that platform is not ordered the version.
-    #[must_use]
-    pub fn lacks_package_for(&self, platform: Platform) -> bool {
-        self.release_index
-            .as_ref()
-            .is_some_and(|record| record.package_for(platform).is_none())
-    }
-
     /// Whether the state is acceptable: every limit key a role name, every count within
     /// [`MAX_COUNT`], and no package digest beside a release index.
     pub(crate) fn checked(&self) -> Result<(), DesiredError> {
@@ -456,6 +441,54 @@ impl Desired {
         }
         Ok(())
     }
+}
+
+/// The refusal `index_invalid`, saying `why`.
+const fn invalid(why: &'static str) -> DesiredError {
+    DesiredError::IndexInvalid(why)
+}
+
+/// The record of the release index a set named by `text` and `digest`, if it named one: none when
+/// it named neither. `has_package_digest` says that the same set names a package digest. The text
+/// is not read, only its SHA-256 is held to the digest the set named, in this order, and the first
+/// check that fails refuses the set:
+///
+/// 1. one of the two keys without the other, either not text, or the package digest as well
+///    (`index_invalid`);
+/// 2. a digest that is not 64 lowercase hex characters (`index_invalid`);
+/// 3. a text whose SHA-256 is not the digest (`index_digest_mismatch`): the index was changed or
+///    cut on its way.
+///
+/// What is kept of an index that passed is its digest alone, with no package.
+fn index_checked(
+    text: Option<&serde_json::Value>,
+    digest: Option<&serde_json::Value>,
+    has_package_digest: bool,
+) -> Result<Option<IndexRecord>, DesiredError> {
+    let (text, digest) = match (text, digest) {
+        (None, None) => return Ok(None),
+        (Some(text), Some(digest)) => (text, digest),
+        _ => {
+            return Err(invalid(
+                "release_index and release_index_digest come together",
+            ));
+        }
+    };
+    if has_package_digest {
+        return Err(invalid("release_index is not set with a package digest"));
+    }
+    let (Some(text), Some(digest)) = (text.as_str(), digest.as_str()) else {
+        return Err(invalid("release_index and its digest are text"));
+    };
+    let digest = Digest::parse(digest)
+        .map_err(|_| invalid("release_index_digest is not 64 lowercase hex characters"))?;
+    if ops_file::digest(text.as_bytes()) != digest.as_str() {
+        return Err(DesiredError::IndexDigestMismatch);
+    }
+    Ok(Some(IndexRecord {
+        digest,
+        packages: BTreeMap::new(),
+    }))
 }
 
 /// What the store holds: the desired state of each service, and the registry of digests of each.

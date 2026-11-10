@@ -20,9 +20,9 @@
 //! [`DaemonRenewal`] is its [`RenewalSource`]: the [`RenewalState`] the enrollment loop writes
 //! after each step ([`crate::links::Links::renewal`]), as it is when the heartbeat is made.
 //!
-//! [`DaemonTrustedRoot`] is its [`TrustedRootSource`]: the report of the trusted root the package
-//! store checks attestations with ([`crate::packages::Packages::trusted_root`], the one
-//! [`Daemon::status`] reports), read when the heartbeat is made; none from a store that keeps no root.
+//! [`NoTrustedRoot`] is its [`TrustedRootSource`]: the daemon checks no attestation, so it
+//! reports no trusted root; the heartbeat's `trusted_root_age_secs` and `trusted_root_reason`
+//! stay in the protocol, unsent.
 
 use std::io;
 use std::sync::Arc;
@@ -32,8 +32,8 @@ use hostkeeper_enroll::RenewalState;
 use hostkeeper_hook::{Class, Phase, Verdict};
 use hostkeeper_link::{
     Drift, Health, HeldHalts, Liveness, Observation, Order, OrderId, OrderRef, OrderResult,
-    OrderSink, Outcome, Reason, RecordedService, Renewal, RenewalSource, RootReason,
-    ServiceObserver, ServiceRecords, Target, TrustedRootFacts, TrustedRootSource, Verb,
+    OrderSink, Outcome, Reason, RecordedService, Renewal, RenewalSource, ServiceObserver,
+    ServiceRecords, Target, TrustedRootFacts, TrustedRootSource, Verb,
 };
 use hostkeeper_observe::{ServiceState, VersionView, beat_health};
 use hostkeeper_proto::hostkeeper::agent::v1 as wire;
@@ -44,7 +44,6 @@ use crate::executor::{Ctx, Daemon, Reply};
 use crate::installed::{self, CURRENT};
 use crate::observer;
 use crate::refusal::Refusal;
-use crate::trusted_root::{RootProblem, RootReport};
 use crate::verbs::force::SELF_SERVICE;
 
 /// The most bytes of a verdict's `detail` (`UpdateResult.detail` of `hostkeeper.agent.v1`).
@@ -349,8 +348,8 @@ pub fn recorded(ctx: &Ctx, service: ServiceName) -> Option<RecordedService> {
 }
 
 /// The installer `placed.json` records for `service`, as the heartbeat names it
-/// (`ServiceBeat.installer`): none for a `hostkeeper-archive` service, which has no entry, and
-/// none when the record cannot be read.
+/// (`ServiceBeat.installer`): none for a service with no entry, and none when the record cannot
+/// be read.
 fn recorded_installer(ctx: &Ctx, service: &ServiceName) -> Option<String> {
     let record = ctx.placer().store().load().ok()?;
     record.installer_of(service.as_str()).map(str::to_owned)
@@ -508,36 +507,12 @@ impl RenewalSource for DaemonRenewal {
     }
 }
 
-/// The heartbeat loop's [`TrustedRootSource`] over the daemon's package store.
-pub struct DaemonTrustedRoot {
-    daemon: Arc<Daemon>,
-}
+/// The heartbeat loop's [`TrustedRootSource`]: none, since the daemon keeps no trusted root.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NoTrustedRoot;
 
-impl DaemonTrustedRoot {
-    pub fn new(daemon: Arc<Daemon>) -> DaemonTrustedRoot {
-        DaemonTrustedRoot { daemon }
-    }
-}
-
-impl TrustedRootSource for DaemonTrustedRoot {
+impl TrustedRootSource for NoTrustedRoot {
     fn trusted_root(&self) -> Option<TrustedRootFacts> {
-        self.daemon
-            .ctx()
-            .packages
-            .trusted_root()
-            .as_ref()
-            .map(root_facts)
-    }
-}
-
-/// The report of the trusted root in the loop's words: its age, and its problem as the reason.
-pub fn root_facts(report: &RootReport) -> TrustedRootFacts {
-    TrustedRootFacts {
-        age_secs: report.age_secs,
-        reason: report.problem.map(|problem| match problem {
-            RootProblem::Stale => RootReason::Stale,
-            RootProblem::Missing => RootReason::Missing,
-            RootProblem::Unparseable => RootReason::Unparseable,
-        }),
+        None
     }
 }

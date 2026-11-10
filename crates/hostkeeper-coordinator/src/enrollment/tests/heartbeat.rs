@@ -110,7 +110,7 @@ async fn two_live_daemons_on_one_id_are_duplicate() {
     let s2 = identity(&rig.coordinator, &second);
     let heard = |coordinator: &Coordinator, who: &Identity, machine: Option<&str>| {
         coordinator
-            .heartbeat_from(who.clone(), beat("1.0"), machine)
+            .heartbeat_from_native(who.clone(), beat("1.0"), machine)
             .expect("a heartbeat")
             .reply
     };
@@ -154,12 +154,12 @@ async fn a_retired_host_mid_update_frees_its_slot_when_final() {
     let c = &rig.coordinator;
     let (s1, s2) = (identity(c, &first), identity(c, &second));
     assert_eq!(
-        c.heartbeat(s1.clone(), beat("1.0"))
+        c.heartbeat_native(s1.clone(), beat("1.0"))
             .expect("a heartbeat")
             .reply,
         order()
     );
-    c.heartbeat(s1.clone(), updating(beat("1.0"), "2.0"))
+    c.heartbeat_native(s1.clone(), updating(beat("1.0"), "2.0"))
         .expect("a heartbeat");
 
     enrollment
@@ -168,7 +168,7 @@ async fn a_retired_host_mid_update_frees_its_slot_when_final() {
         .deny(&host_id("s1"))
         .expect("denied");
     let s2_told = || {
-        c.heartbeat(s2.clone(), beat("1.0"))
+        c.heartbeat_native(s2.clone(), beat("1.0"))
             .expect("a heartbeat")
             .reply
     };
@@ -323,7 +323,7 @@ async fn a_farm_host_is_not_tracked_and_a_final_report_releases_only_a_final_hos
     };
     let told = rig
         .coordinator
-        .heartbeat_from(farm_host.clone(), beat("1.0"), Some("machine-1"))
+        .heartbeat_from_native(farm_host.clone(), beat("1.0"), Some("machine-1"))
         .expect("a heartbeat")
         .reply;
     assert_eq!(told, order());

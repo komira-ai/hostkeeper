@@ -132,7 +132,7 @@ fn a_host_takes_the_pushed_set_reports_it_and_announces_apt_without_a_restart() 
     ]);
     assert_eq!(beats[0].features, features);
     assert_eq!(beats[0].repositories, Some(RepositoriesReport::default()));
-    assert_eq!(beats[0].installers, ["hostkeeper-archive"]);
+    assert!(beats[0].installers.is_empty());
 
     let first = set(3, 1);
     assert_eq!(
@@ -143,7 +143,7 @@ fn a_host_takes_the_pushed_set_reports_it_and_announces_apt_without_a_restart() 
             refused: None
         })
     );
-    assert_eq!(beats[2].installers, ["hostkeeper-archive", "apt"]);
+    assert_eq!(beats[2].installers, ["apt"]);
     let second = set(4, 2);
     assert_eq!(
         beats[3].repositories.as_ref().map(|r| r.generation),

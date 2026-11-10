@@ -11,7 +11,6 @@ use hostkeeper_launchd::plist::{
     DAEMON_LOG_DIR, DaemonJob, INSTALLED_BINARY, PlistError, ServiceJob, StepJob, daemon_plist,
     service_plist, step_plist,
 };
-use hostkeeper_placed::lint::check_unit_text;
 
 const HEADER: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
 <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \
@@ -592,24 +591,4 @@ fn service_plist_refuses_text_that_is_not_utf8() {
     for job in service_jobs_with(&|| OsString::from_vec(vec![0xff])) {
         assert_eq!(service_plist(&job), expected);
     }
-}
-
-/// Catches a service plist whose first `ProgramArguments` string the placed-unit lint does not
-/// read as the program: a plist through `current` passes, and one that names a version directory, or
-/// another service's `current`, is refused.
-#[test]
-fn the_placed_unit_lint_reads_the_service_programs_first_argument() {
-    let packages = std::path::Path::new("/var/lib/hostkeeper/packages");
-    let xml = service_plist(&standard_service_job()).expect("renders");
-    assert_eq!(
-        check_unit_text(packages, "hello", "hello.a.plist", &xml),
-        Ok(())
-    );
-    let elsewhere = service_plist(&ServiceJob {
-        program: PathBuf::from("/var/lib/hostkeeper/packages/hello/1.2.3/bin/hello"),
-        ..standard_service_job()
-    })
-    .expect("renders");
-    assert!(check_unit_text(packages, "hello", "hello.a.plist", &elsewhere).is_err());
-    assert!(check_unit_text(packages, "other", "hello.a.plist", &xml).is_err());
 }

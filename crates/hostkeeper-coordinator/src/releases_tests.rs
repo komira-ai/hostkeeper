@@ -1,13 +1,10 @@
 //! The releases a version was set with ([`crate::releases`]): the JSON a release is stored as, the
-//! releases file, the cap on the releases kept, the checks of a set's targets against its release
-//! index, and the reason of the audit entry. The builders at the top are the other tests of
+//! releases file, the cap on the releases kept, the checks of a set's targets, and the reason of
+//! the audit entry. The builders at the top are the other tests of
 //! releases' too.
 
 use std::sync::Arc;
 
-use hostkeeper_config::daemon::Sha256Hex;
-use hostkeeper_config::index::{PackageEntry, ReleaseIndex};
-use hostkeeper_config::names::{ServiceName, Version as IndexVersion};
 use hostkeeper_config::platform::Platform;
 use hostkeeper_proto::hostkeeper::release::v1::{
     Blob, Hook, InstallerBounds, Location, Manifest, StepBounds, Target, TargetList,
@@ -104,6 +101,43 @@ pub(crate) fn entry(service: &str, installer: &str, c: char, bytes: u64) -> Targ
     }
 }
 
+/// An `apt` entry of `service` from the repository `komira-testing`, pinned by the digest
+/// [`crate::marks_support::digest`] `n`, as a release lists it: no location, no size and no
+/// attestation, and its hook the package's own program.
+pub(crate) fn apt_entry(service: &str, n: u8) -> Target {
+    Target {
+        installer: "apt".to_owned(),
+        digest: crate::marks_support::digest(n),
+        manifest: Some(Manifest {
+            package: Some(service.to_owned()),
+            hook: Some(Hook {
+                command: Vec::new(),
+                timeout_secs: Some(StepBounds {
+                    prepare: 0,
+                    cutover: 10,
+                    verify: 20,
+                    rollback: 30,
+                    cleanup: 40,
+                    uninstall: None,
+                }),
+                verify_deadline_secs: 50,
+                ..Hook::default()
+            }),
+            run: vec![format!("{service}.service")],
+            min_hostkeeper: "0.4.0".to_owned(),
+            installer_bounds: Some(InstallerBounds {
+                stage_secs: 60,
+                activate_secs: 120,
+                remove_secs: 300,
+            }),
+            ..Manifest::default()
+        }),
+        repository: Some("komira-testing".to_owned()),
+        package_version: Some(format!("1:{n}.0-1")),
+        ..Target::default()
+    }
+}
+
 /// The list of `entries`.
 pub(crate) fn list(entries: Vec<Target>) -> TargetList {
     TargetList { entries }
@@ -144,27 +178,18 @@ pub(crate) fn archive_targets(service: &str) -> Targets {
     ])
 }
 
-/// The text of the release index of `service` at `version` listing `packages`: platform, digest
-/// character and size.
+/// The text of a release index of `service` at `version` listing `packages`: platform, digest
+/// character and size. The coordinator does not read an index's text, so it is any text that
+/// differs with its arguments.
 pub(crate) fn index_of(service: &str, version: &str, packages: &[(Platform, char, u64)]) -> String {
-    let entries = packages
+    let entries: Vec<Value> = packages
         .iter()
-        .map(|(platform, c, bytes)| PackageEntry {
-            platform: *platform,
-            sha256: Sha256Hex::parse(&hex(*c)).expect("a SHA-256"),
-            bytes: *bytes,
-        })
+        .map(|(platform, c, bytes)| json!({"platform": platform.as_str(), "sha256": hex(*c), "bytes": bytes}))
         .collect();
-    ReleaseIndex::new(
-        ServiceName::new(service).expect("a service name"),
-        IndexVersion::new(version).expect("a version"),
-        entries,
-    )
-    .expect("an index")
-    .to_json()
+    json!({"service": service, "version": version, "packages": entries}).to_string()
 }
 
-/// The index that agrees with [`archive_targets`].
+/// The text of the index of [`archive_targets`].
 pub(crate) fn agreeing_index(service: &str, version: &str) -> String {
     index_of(
         service,
@@ -462,114 +487,31 @@ fn refusal(why: Result<Release, SetError>) -> String {
 /// is no service, by the rules of the release (`target_invalid`, here no platform), in that order.
 #[test]
 fn targets_are_refused_for_a_package_digest_a_service_and_the_rules() {
-    let version = v("2.0");
     assert_eq!(
-        refusal(checked("web", &version, targets("web"), true, None)),
+        refusal(checked("web", targets("web"), true, None)),
         "index_invalid: targets are not set with a package digest"
     );
     assert_eq!(
-        refusal(checked(
-            "Not A Service",
-            &version,
-            targets("web"),
-            false,
-            None
-        )),
+        refusal(checked("Not A Service", targets("web"), false, None)),
         DesiredError::UnknownService.to_string()
     );
     assert_eq!(
-        refusal(checked("web", &version, Targets::new(), false, None)),
+        refusal(checked("web", Targets::new(), false, None)),
         "target_invalid: the targets name no platform"
     );
-    let ok = checked("web", &version, targets("web"), false, None).expect("a release");
+    let ok = checked("web", targets("web"), false, None).expect("a release");
     assert_eq!(ok, Release::new(targets("web"), None));
 }
 
-/// Proves: an index must be the index of the service at the version and list exactly the
-/// `hostkeeper-archive` entries of the targets: each platform with one, its digest and its bytes,
-/// no platform more and none fewer; a platform whose list holds another installer only is not
-/// listed.
+/// Proves: a release index set beside the targets is kept as its digest alone: the release holds
+/// the targets as set and the digest, whatever the targets and whatever text the index had.
 #[test]
-fn an_index_must_list_exactly_the_archive_entries() {
-    let version = v("2.0");
-    let wrong_index = "release_index is not the release index of the service at the version";
-    let disagrees = "release_index does not list exactly the archive entries of the targets";
-    let try_index = |targets: Targets, text: &str| {
-        checked("web", &version, targets, false, Some((text, &digest('9'))))
-    };
-    let archive = |text: &str| try_index(archive_targets("web"), text);
-
-    let ok = archive(&agreeing_index("web", "2.0")).expect("agrees");
+fn an_index_set_beside_targets_is_kept_as_its_digest() {
+    let ok = checked("web", archive_targets("web"), false, Some(&digest('9'))).expect("kept");
     assert_eq!(ok.index_digest(), Some(&digest('9')));
     assert_eq!(ok.targets(), &archive_targets("web"));
-
-    let index_invalid = |text: &str, why: &str| {
-        assert_eq!(
-            refusal(archive(text)),
-            format!("index_invalid: {why}"),
-            "{text}"
-        );
-    };
-    index_invalid(&agreeing_index("web", "2.1"), wrong_index);
-    index_invalid(&agreeing_index("db", "2.0"), wrong_index);
-    index_invalid("not an index", wrong_index);
-    // A platform fewer, a platform more, another digest, other bytes.
-    index_invalid(
-        &index_of("web", "2.0", &[(Platform::LinuxX86_64, '1', 1_111)]),
-        disagrees,
-    );
-    index_invalid(
-        &index_of(
-            "web",
-            "2.0",
-            &[
-                (Platform::LinuxArm64, '3', 5),
-                (Platform::LinuxX86_64, '1', 1_111),
-                (Platform::MacosArm64, '2', 2_222),
-            ],
-        ),
-        disagrees,
-    );
-    index_invalid(
-        &index_of(
-            "web",
-            "2.0",
-            &[
-                (Platform::LinuxX86_64, '5', 1_111),
-                (Platform::MacosArm64, '2', 2_222),
-            ],
-        ),
-        disagrees,
-    );
-    index_invalid(
-        &index_of(
-            "web",
-            "2.0",
-            &[
-                (Platform::LinuxX86_64, '1', 1_112),
-                (Platform::MacosArm64, '2', 2_222),
-            ],
-        ),
-        disagrees,
-    );
-
-    // Targets with no archive entry on macOS: the index lists the Linux archive alone.
-    let mut mixed = archive_targets("web");
-    mixed.insert(
-        "macos-arm64".to_owned(),
-        list(vec![entry("web", "tarball", 'd', 9)]),
-    );
-    let linux_only = index_of("web", "2.0", &[(Platform::LinuxX86_64, '1', 1_111)]);
-    try_index(mixed.clone(), &linux_only).expect("a tarball is not listed");
-    assert_eq!(
-        refusal(try_index(mixed, &agreeing_index("web", "2.0"))),
-        format!("index_invalid: {disagrees}")
-    );
-    // Targets with no archive entry at all agree with no index that lists a package.
-    assert_eq!(
-        refusal(try_index(targets("web"), &agreeing_index("web", "2.0"))),
-        format!("index_invalid: {disagrees}")
-    );
+    let none = checked("web", targets("web"), false, None).expect("kept");
+    assert_eq!(none.index_digest(), None);
 }
 
 /// The SHA-256 of the encoding of the manifest `min_hostkeeper = "0.4.0"` alone.

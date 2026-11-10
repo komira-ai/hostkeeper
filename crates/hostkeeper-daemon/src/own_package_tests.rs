@@ -18,11 +18,11 @@ fn a_package_version_is_the_release_with_or_without_a_revision() {
 }
 
 /// The switch of an update of hostkeeper is left to its new binary for a native version, and on
-/// a host where hostkeeper runs from its native package whatever the version; an archive version
-/// on a host that runs hostkeeper from archives keeps the step runner's switch.
+/// a host where hostkeeper runs from its native package whatever the version; a version with no
+/// `target.json` on a host that records no installer of hostkeeper is not left to it.
 #[test]
 fn the_switch_is_left_to_the_new_binary_for_a_native_version_or_host() {
-    let archive = PlacedRecord::default();
+    let unrecorded = PlacedRecord::default();
     let mut moved = PlacedRecord::default();
     moved
         .installed
@@ -31,8 +31,8 @@ fn the_switch_is_left_to_the_new_binary_for_a_native_version_or_host() {
         installer: "apt".to_owned(),
         ..Target::default()
     };
-    assert!(!deferred(None, &archive));
-    assert!(deferred(Some(&native), &archive));
+    assert!(!deferred(None, &unrecorded));
+    assert!(deferred(Some(&native), &unrecorded));
     assert!(deferred(None, &moved));
     assert!(deferred(Some(&native), &moved));
 }

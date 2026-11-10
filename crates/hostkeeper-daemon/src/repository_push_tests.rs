@@ -5,9 +5,9 @@ use std::fs;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
+use hostkeeper_install::version::Owner;
 use hostkeeper_link::testing::RecordingLog;
 use hostkeeper_testkit::Scratch;
-use hostkeeper_unpack::Owner;
 use sha2::{Digest, Sha256};
 
 use super::*;
@@ -650,10 +650,10 @@ fn an_installer_lock_that_cannot_be_opened_is_a_failure() {
 #[test]
 fn the_installers_and_the_installer_follow_the_set_applied() {
     let rig = Rig::new("push-installers");
-    assert_eq!(rig.push.installers(), ["hostkeeper-archive"]);
+    assert!(rig.push.installers().is_empty());
     let snapshot = rig.ports.repositories.snapshot();
     rig.push.apply(&komira(1, 1));
-    assert_eq!(rig.push.installers(), ["hostkeeper-archive", "apt"]);
+    assert_eq!(rig.push.installers(), ["apt"]);
     assert!(
         snapshot.is_empty(),
         "a snapshot taken before is not changed"
@@ -663,7 +663,7 @@ fn the_installers_and_the_installer_follow_the_set_applied() {
     assert_eq!(stable.suite, "stable");
     assert_eq!(stable.keyring, rig.live.join("komira.gpg"));
     rig.push.apply(&komira(2, 2));
-    assert_eq!(rig.push.installers(), ["hostkeeper-archive", "apt"]);
+    assert_eq!(rig.push.installers(), ["apt"]);
 }
 
 /// Proves apt is listed once when the daemon announced it at its start, and not added for a host
@@ -672,14 +672,11 @@ fn the_installers_and_the_installer_follow_the_set_applied() {
 fn the_native_installer_is_added_only_once_and_only_when_the_host_can_run_it() {
     let rig = Rig::new("push-native");
     let started = Announcement {
-        installers: vec![Installer::HostkeeperArchive, Installer::Apt],
+        installers: vec![Installer::Apt],
         family: None,
     };
     rig.push.apply(&komira(1, 1));
-    assert_eq!(
-        installers(&started, &rig.ports),
-        [Installer::HostkeeperArchive, Installer::Apt]
-    );
+    assert_eq!(installers(&started, &rig.ports), [Installer::Apt]);
     let mut ports = (*rig.ports).clone();
     ports.managed = Some(Managed {
         native: None,
@@ -687,12 +684,12 @@ fn the_native_installer_is_added_only_once_and_only_when_the_host_can_run_it() {
     });
     assert_eq!(
         installers(&Announcement::default(), &ports),
-        [Installer::HostkeeperArchive]
+        Vec::<Installer>::new()
     );
     ports.managed = None;
     assert_eq!(
         installers(&Announcement::default(), &ports),
-        [Installer::HostkeeperArchive]
+        Vec::<Installer>::new()
     );
     assert!(
         RepositoryPush::new(

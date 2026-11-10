@@ -69,7 +69,7 @@ fn beat_of(entries: &[Value]) -> Heartbeat {
 fn send(rig: &Rig, at: u64, host: &str, entries: &[Value]) -> ServiceReply {
     rig.at(at);
     rig.coordinator
-        .heartbeat(who(host), beat_of(entries))
+        .heartbeat_native(who(host), beat_of(entries))
         .expect("a heartbeat")
         .reply
 }
@@ -312,14 +312,14 @@ async fn racing_heartbeats_for_two_services_get_one_order() {
             let a = s.spawn(|| {
                 barrier.wait();
                 rig.coordinator
-                    .heartbeat(who("d1"), beat_of(&[other_at("1.0")]))
+                    .heartbeat_native(who("d1"), beat_of(&[other_at("1.0")]))
                     .expect("a heartbeat")
                     .reply
             });
             let b = s.spawn(|| {
                 barrier.wait();
                 rig.coordinator
-                    .heartbeat(who("d2"), beat_of(&[second_behind()]))
+                    .heartbeat_native(who("d2"), beat_of(&[second_behind()]))
                     .expect("a heartbeat")
                     .reply
             });

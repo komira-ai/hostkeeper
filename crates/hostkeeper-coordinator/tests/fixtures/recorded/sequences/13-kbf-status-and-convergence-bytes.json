@@ -22,20 +22,23 @@
    "at_secs": 2000,
    "call": "convergence",
    "expect_status": 200,
-   "expect_body": "{\"desired\":\"2.0\",\"quiet\":false,\"state\":\"converged\",\"roles\":[{\"role\":\"storage\",\"at_desired\":1,\"updating\":0,\"failed\":0,\"down\":0}],\"commit\":\"{COMMIT}\"}"
+   "expect_body": "{\"desired\":\"2.0\",\"quiet\":false,\"state\":\"in_progress\",\"roles\":[],\"commit\":\"{COMMIT}\"}",
+   "kbf_body": "{\"desired\":\"2.0\",\"quiet\":false,\"state\":\"converged\",\"roles\":[{\"role\":\"storage\",\"at_desired\":1,\"updating\":0,\"failed\":0,\"down\":0}],\"commit\":\"{COMMIT}\"}"
   },
   {
    "at_secs": 2000,
    "call": "convergence",
    "expect_status": 200,
    "query": "service=kbf",
-   "expect_body": "{\"desired\":\"2.0\",\"quiet\":false,\"state\":\"converged\",\"roles\":[{\"role\":\"storage\",\"at_desired\":1,\"updating\":0,\"failed\":0,\"down\":0}],\"commit\":\"{COMMIT}\"}"
+   "expect_body": "{\"desired\":\"2.0\",\"quiet\":false,\"state\":\"in_progress\",\"roles\":[],\"commit\":\"{COMMIT}\"}",
+   "kbf_body": "{\"desired\":\"2.0\",\"quiet\":false,\"state\":\"converged\",\"roles\":[{\"role\":\"storage\",\"at_desired\":1,\"updating\":0,\"failed\":0,\"down\":0}],\"commit\":\"{COMMIT}\"}"
   },
   {
    "at_secs": 2000,
    "call": "status",
    "expect_status": 200,
-   "expect_body": "{\"desired\":{\"version\":\"2.0\",\"max_updating\":{\"frontend\":1,\"storage\":1,\"daemon\":2,\"mac-daemon\":2},\"min_up\":{\"storage\":1,\"frontend\":0}},\"services\":{\"kbf\":{\"version\":\"2.0\",\"max_updating\":{\"frontend\":1,\"storage\":1,\"daemon\":2,\"mac-daemon\":2},\"min_up\":{\"storage\":1,\"frontend\":0}}},\"quiet\":false,\"services_dropped\":0,\"hosts\":[{\"node_id\":\"st1\",\"role\":\"storage\",\"live\":true,\"up\":true,\"holds_slot\":false,\"silent_secs\":0,\"platform\":\"linux-x86_64\",\"version\":\"2.0\",\"health\":\"healthy\",\"last_update\":null,\"updating\":null}],\"per_service\":{\"kbf\":{\"desired\":{\"version\":\"2.0\",\"max_updating\":{\"frontend\":1,\"storage\":1,\"daemon\":2,\"mac-daemon\":2},\"min_up\":{\"storage\":1,\"frontend\":0}},\"roles\":[{\"role\":\"storage\",\"at_desired\":1,\"updating\":0,\"failed\":0,\"down\":0}],\"hosts\":[{\"node_id\":\"st1\",\"role\":\"storage\",\"live\":true,\"up\":true,\"holds_slot\":false,\"silent_secs\":0,\"platform\":\"linux-x86_64\",\"version\":\"2.0\",\"health\":\"healthy\",\"last_update\":null,\"updating\":null,\"hold\":\"up_to_date\"}],\"up\":1,\"slots_held\":0,\"convergence\":{\"desired\":\"2.0\",\"quiet\":false,\"state\":\"converged\",\"roles\":[{\"role\":\"storage\",\"at_desired\":1,\"updating\":0,\"failed\":0,\"down\":0}],\"commit\":\"{COMMIT}\"}}},\"commit\":\"{COMMIT}\"}"
+   "expect_body": "{\"desired\":{\"version\":\"2.0\",\"max_updating\":{\"frontend\":1,\"storage\":1,\"daemon\":2,\"mac-daemon\":2},\"min_up\":{\"storage\":1,\"frontend\":0}},\"services\":{\"kbf\":{\"version\":\"2.0\",\"max_updating\":{\"frontend\":1,\"storage\":1,\"daemon\":2,\"mac-daemon\":2},\"min_up\":{\"storage\":1,\"frontend\":0}}},\"quiet\":false,\"services_dropped\":0,\"hosts\":[{\"node_id\":\"st1\",\"role\":\"storage\",\"live\":true,\"up\":true,\"holds_slot\":false,\"silent_secs\":0,\"platform\":\"linux-x86_64\",\"version\":\"2.0\",\"health\":\"healthy\",\"last_update\":null,\"updating\":null}],\"per_service\":{\"kbf\":{\"desired\":{\"version\":\"2.0\",\"max_updating\":{\"frontend\":1,\"storage\":1,\"daemon\":2,\"mac-daemon\":2},\"min_up\":{\"storage\":1,\"frontend\":0}},\"roles\":[],\"hosts\":[{\"node_id\":\"st1\",\"role\":\"storage\",\"live\":true,\"up\":true,\"holds_slot\":false,\"silent_secs\":0,\"platform\":\"linux-x86_64\",\"version\":\"2.0\",\"health\":\"healthy\",\"last_update\":null,\"updating\":null,\"hold\":\"up_to_date\"}],\"up\":1,\"slots_held\":0,\"convergence\":{\"desired\":\"2.0\",\"quiet\":false,\"state\":\"in_progress\",\"roles\":[],\"commit\":\"{COMMIT}\"}}},\"commit\":\"{COMMIT}\"}",
+   "kbf_body": "{\"desired\":{\"version\":\"2.0\",\"max_updating\":{\"frontend\":1,\"storage\":1,\"daemon\":2,\"mac-daemon\":2},\"min_up\":{\"storage\":1,\"frontend\":0}},\"services\":{\"kbf\":{\"version\":\"2.0\",\"max_updating\":{\"frontend\":1,\"storage\":1,\"daemon\":2,\"mac-daemon\":2},\"min_up\":{\"storage\":1,\"frontend\":0}}},\"quiet\":false,\"services_dropped\":0,\"hosts\":[{\"node_id\":\"st1\",\"role\":\"storage\",\"live\":true,\"up\":true,\"holds_slot\":false,\"silent_secs\":0,\"platform\":\"linux-x86_64\",\"version\":\"2.0\",\"health\":\"healthy\",\"last_update\":null,\"updating\":null}],\"per_service\":{\"kbf\":{\"desired\":{\"version\":\"2.0\",\"max_updating\":{\"frontend\":1,\"storage\":1,\"daemon\":2,\"mac-daemon\":2},\"min_up\":{\"storage\":1,\"frontend\":0}},\"roles\":[{\"role\":\"storage\",\"at_desired\":1,\"updating\":0,\"failed\":0,\"down\":0}],\"hosts\":[{\"node_id\":\"st1\",\"role\":\"storage\",\"live\":true,\"up\":true,\"holds_slot\":false,\"silent_secs\":0,\"platform\":\"linux-x86_64\",\"version\":\"2.0\",\"health\":\"healthy\",\"last_update\":null,\"updating\":null,\"hold\":\"up_to_date\"}],\"up\":1,\"slots_held\":0,\"convergence\":{\"desired\":\"2.0\",\"quiet\":false,\"state\":\"converged\",\"roles\":[{\"role\":\"storage\",\"at_desired\":1,\"updating\":0,\"failed\":0,\"down\":0}],\"commit\":\"{COMMIT}\"}}},\"commit\":\"{COMMIT}\"}"
   }
  ]
 }

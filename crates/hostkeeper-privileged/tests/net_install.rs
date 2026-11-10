@@ -134,15 +134,18 @@ fn an_x86_64_machine_installs_by_network_enrolls_gets_its_service_is_reinstalled
     let mac = rig.mac();
     let guest_ip = rig.guest_address().to_string();
 
-    // The fixture service: its package on the channel, its desired version set; the rollout
-    // file runs it on the record's role, so the host is assigned it at its approval.
-    let package = fixture(&rig.signer);
-    rig.channel.serve(&package);
+    // The fixture service: its package in the apt repository the channel serves, its desired
+    // version set by its `apt` entry; the rollout file runs it on the record's role, so the host
+    // is assigned it at its approval.
+    let entry = fixture(&rig.repo);
+    rig.channel.serve_tree(rig.repo.dir());
     must(
         "releases set-desired",
-        rig.coordinator
-            .api()
-            .set_desired(SERVICE, VERSION, &package.digest),
+        rig.coordinator.api().set_desired_targets_alone(
+            SERVICE,
+            VERSION,
+            e2e::aptrepo::targets(entry),
+        ),
     );
 
     // 1. Proxy mode: the install, and the reboot after it.
@@ -224,7 +227,7 @@ fn an_x86_64_machine_installs_by_network_enrolls_gets_its_service_is_reinstalled
     rig.keep("host.json", got.to_string().as_bytes());
     // The seed wrote the repository entries the operator gave `serve`, and the daemon, whose
     // loader refuses to start on a defect, started on them.
-    netinstall::repositories::assert_installed(&rig.ssh);
+    netinstall::repositories::assert_installed(&rig.ssh, &rig.repository_files);
 
     // 3. Router mode: the enrolled guest boots its disk.
     rig.serve(Mode::Router, &[]);

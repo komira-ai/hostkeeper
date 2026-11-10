@@ -148,7 +148,7 @@ fn round_without(
             .map_or(("1.0", None, None), |(_, r, u, l)| (*r, *u, l.clone()));
         let reply = rig
             .coordinator
-            .heartbeat(who(host, role("storage")), beat_of(running, updating, last))
+            .heartbeat_native(who(host, role("storage")), beat_of(running, updating, last))
             .expect("answered")
             .reply;
         if let ServiceReply::Update { service, version } = reply {
@@ -159,7 +159,7 @@ fn round_without(
     }
     let daemon = rig
         .coordinator
-        .heartbeat(who("d1", role("daemon")), beat_of("1.0", None, None))
+        .heartbeat_native(who("d1", role("daemon")), beat_of("1.0", None, None))
         .expect("answered")
         .reply;
     (ordered, daemon)

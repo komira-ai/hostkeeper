@@ -128,12 +128,10 @@ jobs:
           ':(exclude,glob).github/workflows/trusted-root.yml'
           ':(exclude,glob)crates/hostkeeper-privileged/tests/first_boot.rs'
           ':(exclude,glob)crates/hostkeeper-privileged/tests/fixture_hook.rs'
-          ':(exclude,glob)crates/hostkeeper-privileged/tests/hello_rig.rs'
           ':(exclude,glob)crates/hostkeeper-privileged/tests/install_apt.rs'
           ':(exclude,glob)crates/hostkeeper-privileged/tests/install_uninstall.rs'
           ':(exclude,glob)crates/hostkeeper-privileged/tests/linux_packages.rs'
           ':(exclude,glob)crates/hostkeeper-privileged/tests/mdm_cert_units.rs'
-          ':(exclude,glob)crates/hostkeeper-privileged/tests/move_native.rs'
           ':(exclude,glob)crates/hostkeeper-privileged/tests/net_install.rs'
           ':(exclude,glob)crates/hostkeeper-privileged/tests/net_install_arm64.rs'
           ':(exclude,glob)crates/hostkeeper-privileged/tests/net_install_rig.rs'
@@ -174,9 +172,9 @@ jobs:
           key: cargo-${{ runner.os }}-${{ runner.arch }}-macos-device-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
           restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-macos-device-
       - name: Build the tests of the Mac's crates
-        run: cargo test --locked --no-run -p hello -p hostkeeper -p hostkeeper-config -p hostkeeper-daemon -p hostkeeper-enroll -p hostkeeper-hook -p hostkeeper-install -p hostkeeper-launchd -p hostkeeper-link -p hostkeeper-observe -p hostkeeper-openrc -p hostkeeper-package -p hostkeeper-placed -p hostkeeper-proto -p hostkeeper-release -p hostkeeper-steps -p hostkeeper-unpack -p hostkeeper-wire
+        run: cargo test --locked --no-run -p hello -p hostkeeper -p hostkeeper-config -p hostkeeper-daemon -p hostkeeper-enroll -p hostkeeper-hook -p hostkeeper-install -p hostkeeper-launchd -p hostkeeper-link -p hostkeeper-observe -p hostkeeper-openrc -p hostkeeper-package -p hostkeeper-placed -p hostkeeper-proto -p hostkeeper-release -p hostkeeper-steps -p hostkeeper-wire
       - name: Run the tests of the Mac's crates
-        run: cargo test --locked --no-fail-fast -p hello -p hostkeeper -p hostkeeper-config -p hostkeeper-daemon -p hostkeeper-enroll -p hostkeeper-hook -p hostkeeper-install -p hostkeeper-launchd -p hostkeeper-link -p hostkeeper-observe -p hostkeeper-openrc -p hostkeeper-package -p hostkeeper-placed -p hostkeeper-proto -p hostkeeper-release -p hostkeeper-steps -p hostkeeper-unpack -p hostkeeper-wire
+        run: cargo test --locked --no-fail-fast -p hello -p hostkeeper -p hostkeeper-config -p hostkeeper-daemon -p hostkeeper-enroll -p hostkeeper-hook -p hostkeeper-install -p hostkeeper-launchd -p hostkeeper-link -p hostkeeper-observe -p hostkeeper-openrc -p hostkeeper-package -p hostkeeper-placed -p hostkeeper-proto -p hostkeeper-release -p hostkeeper-steps -p hostkeeper-wire
 
   # The required check `macos-test`: it runs after macos-test whatever it did, cancelled included, and
   # passes when macos-test passed, or when changes passed and answered `needed=false` and macos-test was
@@ -209,9 +207,8 @@ jobs:
     # A bound on the whole job, against a test that hangs; no test depends on it.
     timeout-minutes: 45
     env:
-      # The gh the installer pkg installs at /usr/local/lib/hostkeeper/gh, the same version and
-      # SHA-256 as artifacts.yml's macOS build: device_mac_e2e.rs installs this file at that path
-      # and checks its packages' attestations with it, offline, against a test trust root.
+      # The gh of artifacts.yml's macOS build, the same version and SHA-256. No test of this job
+      # reads it; the workflow lint (pinned_cache_tests.rs) still lists its download here.
       GH_VERSION: 2.103.3
       GH_SHA256: d700207eae9ae98fe2b89535c2c087c07823d4628c56364695a5a07ef311c062
       PREVIOUS_RELEASE_URL: https://github.com/komira-ai/hostkeeper/releases/download/v0.1.218/hostkeeper-0.1.218-macos-arm64.tar.gz
@@ -255,12 +252,10 @@ jobs:
         with:
           path: ${{ runner.temp }}/gh.zip
           key: ${{ steps.gh-cache.outputs.cache-primary-key }}
-      - name: Unpack gh where the tests find it
-        run: unzip -o -j -q "$RUNNER_TEMP/gh-checked.zip" "gh_${GH_VERSION}_macOS_arm64/bin/gh" -d target/privileged-tools
-      # The released daemon self_update_across_releases.rs updates from: the binary tarball of the
-      # release crates/hostkeeper-privileged/previous-release.toml pins for this platform (the
-      # workflow lint holds PREVIOUS_RELEASE_URL and PREVIOUS_RELEASE_SHA256 equal to it). The test
-      # checks the file against the pin again and fetches nothing itself.
+      # The binary tarball of the release crates/hostkeeper-privileged/previous-release.toml pins
+      # for this platform (the workflow lint holds PREVIOUS_RELEASE_URL and PREVIOUS_RELEASE_SHA256
+      # equal to it). No test of this job reads it: self_update_across_releases.rs runs on Linux
+      # only.
       - name: Restore the pinned previous-release.tar.gz from the cache
         id: previous-release-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -283,16 +278,10 @@ jobs:
         with:
           path: ${{ runner.temp }}/previous-release.tar.gz
           key: ${{ steps.previous-release-cache.outputs.cache-primary-key }}
-      # device_mac_e2e and device_mac_selfupdate run after device_mac, in the one step that runs
-      # as root.
       - name: Build the macOS device tests as the runner's user
-        run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test device_mac --test device_mac_e2e --test device_mac_selfupdate --test install_macos_pkg --test self_update_across_releases --test unpack_mac
-      # unpack_mac runs twice: here as the runner's user, as the release check of a package
-      # unpacks it on a hosted runner, and below as root, as the daemon unpacks it on a host.
-      - name: Run the macOS unpack tests as the runner's user
-        run: cargo test -p hostkeeper-privileged --features privileged --locked --test unpack_mac -- --nocapture
+        run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test device_mac --test device_mac_e2e --test device_mac_selfupdate --test install_macos_pkg
       - name: Run the macOS device tests as root
-        run: cargo test -p hostkeeper-privileged --features privileged --locked --config "target.'cfg(unix)'.runner = 'sudo'" --test device_mac --test device_mac_e2e --test device_mac_selfupdate --test install_macos_pkg --test self_update_across_releases --test unpack_mac -- --test-threads=1 --nocapture
+        run: cargo test -p hostkeeper-privileged --features privileged --locked --config "target.'cfg(unix)'.runner = 'sudo'" --test device_mac --test device_mac_e2e --test device_mac_selfupdate --test install_macos_pkg -- --test-threads=1 --nocapture
       - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: ${{ github.event_name == 'push' && steps.cargo-cache.outputs.cache-hit != 'true' }}
         with:
@@ -358,10 +347,10 @@ jobs:
             target
           key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
           restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
-      # The gh a host checks every package's attestation with, the one the Linux packages install
-      # as /usr/lib/hostkeeper/gh (artifacts.yml pins the same version and SHA-256): Ubuntu 24.04's
-      # own gh has no `gh attestation`. tierstore_shaped.rs installs this file at that path and
-      # checks its fixture's attestation with it, offline, against a test trust root.
+      # The gh the Linux packages install as /usr/lib/hostkeeper/gh (artifacts.yml pins the same
+      # version and SHA-256): Ubuntu 24.04's own gh has no `gh attestation`. The step that stages
+      # the packages puts this file into them, and self_update_across_releases.rs installs it at
+      # that path for the released daemon.
       - name: Restore the pinned gh.tar.gz from the cache
         id: gh-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -473,9 +462,9 @@ jobs:
       - name: Pull opensuse/tumbleweed
         run: docker pull opensuse/tumbleweed@sha256:871173bf717af0926bd92324ee6f73ba285e0721f0c8ac00ef2c77f1c88d979e
       - name: Build the privileged tests as the runner's user
-        run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test transient_unit --test observer --test unit_control --test self_update --test tierstore_shaped --test self_update_across_releases --test linux_packages --test mdm_cert_units --test install_apt --test move_native
+        run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test transient_unit --test observer --test unit_control --test self_update --test tierstore_shaped --test self_update_across_releases --test linux_packages --test mdm_cert_units --test install_apt
       - name: Run the privileged tests as root
-        run: cargo test -p hostkeeper-privileged --features privileged --locked --config "target.'cfg(unix)'.runner = 'sudo'" --test transient_unit --test observer --test unit_control --test self_update --test tierstore_shaped --test self_update_across_releases --test linux_packages --test mdm_cert_units --test install_apt --test move_native -- --test-threads=1
+        run: cargo test -p hostkeeper-privileged --features privileged --locked --config "target.'cfg(unix)'.runner = 'sudo'" --test transient_unit --test observer --test unit_control --test self_update --test tierstore_shaped --test self_update_across_releases --test linux_packages --test mdm_cert_units --test install_apt -- --test-threads=1
       - name: The journal of the test units
         if: failure()
         run: journalctl --unit 'hostkeeper-ci-*' --no-pager
@@ -562,7 +551,7 @@ jobs:
       - name: Build the programs the container runs
         env:
           CC_x86_64_unknown_linux_musl: gcc
-        run: cargo build --locked --target x86_64-unknown-linux-musl -p hostkeeper --bin hostkeeper -p hostkeeper-privileged --features hostkeeper-privileged/privileged --bin hostkeeper-selfupdate-daemon --bin hostkeeper-fixture-hook
+        run: cargo build --locked --target x86_64-unknown-linux-musl -p hostkeeper --bin hostkeeper
       - name: Build the OpenRC device tests as the runner's user
         run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test openrc_device
       - name: Run the OpenRC device tests as root

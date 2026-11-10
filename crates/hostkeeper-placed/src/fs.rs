@@ -23,8 +23,8 @@ pub enum FileKind {
 /// directories. Reads: [`Fs::read`], [`Fs::kind`], [`Fs::read_link`], [`Fs::list`]. Every other
 /// method writes.
 pub trait Fs {
-    /// Where `path` is on the disk this process sees: the path a loader that opens files itself
-    /// (`Manifest::load`) is given.
+    /// Where `path` is on the disk this process sees: the path a reader that opens files itself
+    /// is given.
     fn host_path(&self, path: &Path) -> PathBuf;
     fn read(&self, path: &Path) -> io::Result<Vec<u8>>;
     /// What is at `path`, not following a link; `None` when nothing is.

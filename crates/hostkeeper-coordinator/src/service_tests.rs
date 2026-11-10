@@ -61,7 +61,7 @@ async fn with_no_desired_state_every_host_is_told_nothing_and_is_noted() {
     rig.at(2_000);
     let reply = rig
         .coordinator
-        .heartbeat(who("d1", role("daemon")), beat("1.0"))
+        .heartbeat_native(who("d1", role("daemon")), beat("1.0"))
         .expect("a heartbeat");
     assert_eq!(reply, Reply::Nothing);
     let status = rig.coordinator.status(Some(OPERATOR)).expect("status");
@@ -77,15 +77,12 @@ async fn with_no_desired_state_every_host_is_told_nothing_and_is_noted() {
 async fn a_valid_ci_token_sets_the_state_hosts_are_told_about() {
     let rig = Rig::new("svc-set");
     rig.at(2_000);
-    let token = ci_token();
-    let set = rig
-        .coordinator
-        .set_desired(Some(&token), STATE.as_bytes())
-        .await;
-    assert_eq!(set.expect("set").version.as_str(), "2.0");
+    rig.set(STATE).await;
+    let status = rig.coordinator.status(Some(OPERATOR)).expect("status");
+    assert_eq!(status.desired.expect("desired").version.as_str(), "2.0");
     let reply = rig
         .coordinator
-        .heartbeat(who("d1", role("daemon")), beat("1.0"))
+        .heartbeat_native(who("d1", role("daemon")), beat("1.0"))
         .expect("a heartbeat");
     assert_eq!(reply, update("2.0"));
 }
@@ -229,7 +226,7 @@ fn the_status_is_for_the_operator_token_only() {
     }
     rig.at(1_010);
     rig.coordinator
-        .heartbeat(who("d1", role("daemon")), updating(beat("1.0"), "2.0"))
+        .heartbeat_native(who("d1", role("daemon")), updating(beat("1.0"), "2.0"))
         .expect("a heartbeat");
     rig.at(1_020);
     let status = rig.coordinator.status(Some(OPERATOR)).expect("status");
@@ -264,7 +261,7 @@ async fn after_a_restart_a_host_that_was_updating_is_still_counted() {
     rig.set(STATE).await;
     assert_eq!(
         rig.coordinator
-            .heartbeat(who("d1", role("daemon")), beat("1.0"))
+            .heartbeat_native(who("d1", role("daemon")), beat("1.0"))
             .expect("a heartbeat"),
         update("2.0")
     );
@@ -273,35 +270,35 @@ async fn after_a_restart_a_host_that_was_updating_is_still_counted() {
     let busy = updating(beat("1.0"), "2.0");
     let early = rig
         .coordinator
-        .heartbeat(who("d1", role("daemon")), busy.clone())
+        .heartbeat_native(who("d1", role("daemon")), busy.clone())
         .expect("a heartbeat");
     assert_eq!(early, Reply::Nothing);
     rig.at(3_029);
     let d2 = || who("d2", role("daemon"));
     assert_eq!(
         rig.coordinator
-            .heartbeat(d2(), beat("1.0"))
+            .heartbeat_native(d2(), beat("1.0"))
             .expect("a heartbeat"),
         Reply::Nothing,
         "quiet"
     );
     rig.at(3_030);
     rig.coordinator
-        .heartbeat(who("d1", role("daemon")), busy)
+        .heartbeat_native(who("d1", role("daemon")), busy)
         .expect("a heartbeat");
     assert_eq!(
         rig.coordinator
-            .heartbeat(d2(), beat("1.0"))
+            .heartbeat_native(d2(), beat("1.0"))
             .expect("a heartbeat"),
         Reply::Nothing,
         "d1 holds the only daemon slot"
     );
     rig.coordinator
-        .heartbeat(who("d1", role("daemon")), beat("2.0"))
+        .heartbeat_native(who("d1", role("daemon")), beat("2.0"))
         .expect("a heartbeat");
     assert_eq!(
         rig.coordinator
-            .heartbeat(d2(), beat("1.0"))
+            .heartbeat_native(d2(), beat("1.0"))
             .expect("a heartbeat"),
         update("2.0")
     );
@@ -378,12 +375,12 @@ async fn the_convergence_follows_the_heartbeats() {
     rig.set(STATE).await;
     let d1 = || who("d1", role("daemon"));
     rig.coordinator
-        .heartbeat(d1(), beat("1.0"))
+        .heartbeat_native(d1(), beat("1.0"))
         .expect("a heartbeat");
     let behind = rig.coordinator.convergence(Some(&ci_token()), LEGACY).await;
     assert_eq!(behind.expect("read").state, State::InProgress);
     rig.coordinator
-        .heartbeat(d1(), beat("2.0"))
+        .heartbeat_native(d1(), beat("2.0"))
         .expect("a heartbeat");
     let one = rig.coordinator.convergence(Some(&ci_token()), LEGACY).await;
     assert_eq!(
@@ -392,7 +389,7 @@ async fn the_convergence_follows_the_heartbeats() {
         "STATE names a storage and a frontend minimum, which nothing reads"
     );
     rig.coordinator
-        .heartbeat(who("st1", role("storage")), beat("1.0"))
+        .heartbeat_native(who("st1", role("storage")), beat("1.0"))
         .expect("a heartbeat");
     let again = rig.coordinator.convergence(Some(&ci_token()), LEGACY).await;
     assert_eq!(
@@ -402,7 +399,7 @@ async fn the_convergence_follows_the_heartbeats() {
     );
     for (name, role) in [("st1", role("storage")), ("fe1", role("frontend"))] {
         rig.coordinator
-            .heartbeat(who(name, role), beat("2.0"))
+            .heartbeat_native(who(name, role), beat("2.0"))
             .expect("a heartbeat");
     }
     let done = rig.coordinator.convergence(Some(&ci_token()), LEGACY).await;
@@ -449,7 +446,7 @@ async fn hosts_that_beat_before_the_ordered_one_reports_are_not_ordered() {
     let replies: Vec<hostkeeper_wire::wire::ServiceReply> = ["s1", "s2", "s3"]
         .iter()
         .map(|h| {
-            c.heartbeat(storage(h), beat("1.0"))
+            c.heartbeat_native(storage(h), beat("1.0"))
                 .expect("a heartbeat")
                 .reply
         })
@@ -460,13 +457,13 @@ async fn hosts_that_beat_before_the_ordered_one_reports_are_not_ordered() {
             .map(Into::<hostkeeper_wire::wire::ServiceReply>::into)
     );
     assert_eq!(
-        c.heartbeat(storage("s1"), beat("1.0"))
+        c.heartbeat_native(storage("s1"), beat("1.0"))
             .expect("a heartbeat"),
         update("2.0"),
         "its own order does not hold it"
     );
     assert_eq!(
-        c.heartbeat(storage("s3"), beat("1.0"))
+        c.heartbeat_native(storage("s3"), beat("1.0"))
             .expect("a heartbeat"),
         Reply::Nothing
     );
@@ -479,21 +476,22 @@ async fn the_slot_frees_when_the_ordered_host_is_done() {
     let rig = started("svc-order-done", ONE_STORAGE).await;
     let c = &rig.coordinator;
     assert_eq!(
-        c.heartbeat(storage("s1"), beat("1.0"))
+        c.heartbeat_native(storage("s1"), beat("1.0"))
             .expect("a heartbeat"),
         update("2.0")
     );
-    c.heartbeat(storage("s1"), updating(beat("1.0"), "2.0"))
+    c.heartbeat_native(storage("s1"), updating(beat("1.0"), "2.0"))
         .expect("a heartbeat");
     assert_eq!(
-        c.heartbeat(storage("s2"), beat("1.0"))
+        c.heartbeat_native(storage("s2"), beat("1.0"))
             .expect("a heartbeat"),
         Reply::Nothing
     );
     let done = last(beat("2.0"), "2.0", Outcome::Succeeded);
-    c.heartbeat(storage("s1"), done).expect("a heartbeat");
+    c.heartbeat_native(storage("s1"), done)
+        .expect("a heartbeat");
     assert_eq!(
-        c.heartbeat(storage("s2"), beat("1.0"))
+        c.heartbeat_native(storage("s2"), beat("1.0"))
             .expect("a heartbeat"),
         update("2.0")
     );
@@ -506,14 +504,14 @@ async fn a_failed_report_ends_the_order() {
     let rig = started("svc-order-failed", ONE_STORAGE).await;
     let c = &rig.coordinator;
     assert_eq!(
-        c.heartbeat(storage("s1"), beat("1.0"))
+        c.heartbeat_native(storage("s1"), beat("1.0"))
             .expect("a heartbeat"),
         update("2.0")
     );
-    c.heartbeat(storage("s1"), last(beat("1.0"), "2.0", Outcome::Failed))
+    c.heartbeat_native(storage("s1"), last(beat("1.0"), "2.0", Outcome::Failed))
         .expect("a heartbeat");
     assert_eq!(
-        c.heartbeat(storage("s2"), beat("1.0"))
+        c.heartbeat_native(storage("s2"), beat("1.0"))
             .expect("a heartbeat"),
         update("2.0"),
         "s1 is healthy and failed: it holds no slot, and its order is over"
@@ -528,7 +526,7 @@ async fn a_report_of_another_update_keeps_the_order() {
     let rig = started("svc-order-other-failed", ONE_STORAGE).await;
     let c = &rig.coordinator;
     assert_eq!(
-        c.heartbeat(storage("s1"), beat("1.0"))
+        c.heartbeat_native(storage("s1"), beat("1.0"))
             .expect("a heartbeat"),
         update("2.0")
     );
@@ -536,9 +534,10 @@ async fn a_report_of_another_update_keeps_the_order() {
         last(beat("1.0"), "0.9", Outcome::Succeeded),
         last(beat("1.0"), "1.5", Outcome::Failed),
     ] {
-        c.heartbeat(storage("s1"), report).expect("a heartbeat");
+        c.heartbeat_native(storage("s1"), report)
+            .expect("a heartbeat");
         assert_eq!(
-            c.heartbeat(storage("s2"), beat("1.0"))
+            c.heartbeat_native(storage("s2"), beat("1.0"))
                 .expect("a heartbeat"),
             Reply::Nothing,
             "s1 still holds the slot it was ordered"
@@ -553,25 +552,25 @@ async fn an_order_nobody_reports_ages_out() {
     let c = &rig.coordinator;
     let age = ORDER_AGE.as_secs();
     assert_eq!(
-        c.heartbeat(storage("s1"), beat("1.0"))
+        c.heartbeat_native(storage("s1"), beat("1.0"))
             .expect("a heartbeat"),
         update("2.0")
     );
     rig.at(2_100 + age - 1);
     // No beat of s1: only its order holds the slot.
     assert_eq!(
-        c.heartbeat(storage("s2"), beat("1.0"))
+        c.heartbeat_native(storage("s2"), beat("1.0"))
             .expect("a heartbeat"),
         Reply::Nothing
     );
     assert_eq!(
-        c.heartbeat(storage("s3"), beat("1.0"))
+        c.heartbeat_native(storage("s3"), beat("1.0"))
             .expect("a heartbeat"),
         Reply::Nothing
     );
     rig.at(2_100 + age);
     assert_eq!(
-        c.heartbeat(storage("s2"), beat("1.0"))
+        c.heartbeat_native(storage("s2"), beat("1.0"))
             .expect("a heartbeat"),
         update("2.0")
     );
@@ -585,24 +584,24 @@ async fn a_host_that_asks_again_is_told_the_same_order() {
     let rig = started("svc-order-again", ONE_STORAGE).await;
     let c = &rig.coordinator;
     assert_eq!(
-        c.heartbeat(storage("s1"), beat("1.0"))
+        c.heartbeat_native(storage("s1"), beat("1.0"))
             .expect("a heartbeat"),
         update("2.0")
     );
     assert_eq!(
-        c.heartbeat(storage("s1"), beat("1.0"))
+        c.heartbeat_native(storage("s1"), beat("1.0"))
             .expect("a heartbeat"),
         update("2.0")
     );
     assert_eq!(
-        c.heartbeat(storage("s2"), beat("1.0"))
+        c.heartbeat_native(storage("s2"), beat("1.0"))
             .expect("a heartbeat"),
         Reply::Nothing
     );
-    c.heartbeat(storage("s1"), updating(beat("1.0"), "2.0"))
+    c.heartbeat_native(storage("s1"), updating(beat("1.0"), "2.0"))
         .expect("a heartbeat");
     assert_eq!(
-        c.heartbeat(storage("s1"), updating(beat("1.0"), "2.0"))
+        c.heartbeat_native(storage("s1"), updating(beat("1.0"), "2.0"))
             .expect("a heartbeat"),
         Reply::Nothing
     );
@@ -616,23 +615,23 @@ async fn a_repeat_does_not_extend_the_hold() {
     let c = &rig.coordinator;
     let age = ORDER_AGE.as_secs();
     assert_eq!(
-        c.heartbeat(storage("s1"), beat("1.0"))
+        c.heartbeat_native(storage("s1"), beat("1.0"))
             .expect("a heartbeat"),
         update("2.0")
     );
     rig.at(2_100 + age - 1);
-    c.heartbeat(storage("s2"), beat("1.0"))
+    c.heartbeat_native(storage("s2"), beat("1.0"))
         .expect("a heartbeat");
-    c.heartbeat(storage("s3"), beat("1.0"))
+    c.heartbeat_native(storage("s3"), beat("1.0"))
         .expect("a heartbeat");
     assert_eq!(
-        c.heartbeat(storage("s1"), beat("1.0"))
+        c.heartbeat_native(storage("s1"), beat("1.0"))
             .expect("a heartbeat"),
         update("2.0")
     );
     rig.at(2_100 + age);
     assert_eq!(
-        c.heartbeat(storage("s2"), beat("1.0"))
+        c.heartbeat_native(storage("s2"), beat("1.0"))
             .expect("a heartbeat"),
         update("2.0"),
         "the order was given at the first ask; the repeat did not move it"
@@ -646,12 +645,12 @@ async fn the_status_shows_an_ordered_host_as_holding_a_slot() {
     let rig = started("svc-order-status", ONE_STORAGE).await;
     let c = &rig.coordinator;
     assert_eq!(
-        c.heartbeat(storage("s1"), beat("1.0"))
+        c.heartbeat_native(storage("s1"), beat("1.0"))
             .expect("a heartbeat"),
         update("2.0")
     );
     assert_eq!(
-        c.heartbeat(storage("s2"), beat("1.0"))
+        c.heartbeat_native(storage("s2"), beat("1.0"))
             .expect("a heartbeat"),
         Reply::Nothing
     );
@@ -669,14 +668,14 @@ async fn a_failure_for_another_target_does_not_end_the_order() {
     let rig = started("svc-order-other-failure", ONE_STORAGE).await;
     let c = &rig.coordinator;
     assert_eq!(
-        c.heartbeat(storage("s1"), beat("1.0"))
+        c.heartbeat_native(storage("s1"), beat("1.0"))
             .expect("a heartbeat"),
         update("2.0")
     );
-    c.heartbeat(storage("s1"), last(beat("1.0"), "1.5", Outcome::Failed))
+    c.heartbeat_native(storage("s1"), last(beat("1.0"), "1.5", Outcome::Failed))
         .expect("a heartbeat");
     assert_eq!(
-        c.heartbeat(storage("s2"), beat("1.0"))
+        c.heartbeat_native(storage("s2"), beat("1.0"))
             .expect("a heartbeat"),
         Reply::Nothing,
         "s1's report is about 1.5; its order for 2.0 still holds the slot"
@@ -691,14 +690,14 @@ async fn a_success_for_another_target_does_not_end_the_order() {
     let rig = started("svc-order-other-success", ONE_STORAGE).await;
     let c = &rig.coordinator;
     assert_eq!(
-        c.heartbeat(storage("s1"), beat("1.0"))
+        c.heartbeat_native(storage("s1"), beat("1.0"))
             .expect("a heartbeat"),
         update("2.0")
     );
-    c.heartbeat(storage("s1"), last(beat("1.0"), "1.5", Outcome::Succeeded))
+    c.heartbeat_native(storage("s1"), last(beat("1.0"), "1.5", Outcome::Succeeded))
         .expect("a heartbeat");
     assert_eq!(
-        c.heartbeat(storage("s2"), beat("1.0"))
+        c.heartbeat_native(storage("s2"), beat("1.0"))
             .expect("a heartbeat"),
         Reply::Nothing,
         "s1's report is about 1.5; its order for 2.0 still holds the slot"
@@ -714,22 +713,22 @@ async fn an_order_for_a_new_version_replaces_the_old_one() {
     let c = &rig.coordinator;
     let age = ORDER_AGE.as_secs();
     assert_eq!(
-        c.heartbeat(storage("s1"), beat("1.0"))
+        c.heartbeat_native(storage("s1"), beat("1.0"))
             .expect("a heartbeat"),
         update("2.0")
     );
     rig.at(2_100 + age - 20);
     rig.set(&ONE_STORAGE.replace("2.0", "3.0")).await;
-    c.heartbeat(storage("s2"), beat("1.0"))
+    c.heartbeat_native(storage("s2"), beat("1.0"))
         .expect("a heartbeat");
     assert_eq!(
-        c.heartbeat(storage("s1"), beat("1.0"))
+        c.heartbeat_native(storage("s1"), beat("1.0"))
             .expect("a heartbeat"),
         update("3.0")
     );
     rig.at(2_100 + age);
     assert_eq!(
-        c.heartbeat(storage("s2"), beat("1.0"))
+        c.heartbeat_native(storage("s2"), beat("1.0"))
             .expect("a heartbeat"),
         Reply::Nothing,
         "the first order would have aged out by now; the one for 3.0 has not"

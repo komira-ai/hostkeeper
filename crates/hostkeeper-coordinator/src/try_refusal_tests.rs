@@ -19,9 +19,10 @@ use serde_json::{Value, json};
 
 use crate::fleet::Fleet;
 use crate::grpc::report;
-use crate::marks_support::{WEB, beat_of, digest, restart, rig, set, who};
+use crate::marks_support::{WEB, beat_of, digest, native_target, restart, rig, set, who};
 use crate::order_terms::order_id_text;
 use crate::orders::Order;
+use crate::picks::TARGET_FEATURE;
 use crate::testutil::{OPERATOR, Rig, id, version};
 use crate::verdict_file::FEATURE as VERDICT_ACKS;
 
@@ -35,6 +36,7 @@ const DAEMON: &[&str] = &[
     "install-v1",
     ORDER_FEATURE,
     VERDICT_ACKS,
+    TARGET_FEATURE,
 ];
 
 /// `web` as a host reports it: it runs `running`, healthy, with the fields of `extra`
@@ -62,7 +64,7 @@ fn refusal(target: &str, order_try: u64, reason: &str) -> UpdateResult {
 /// The update of `web` to `to`, whose package is [`digest`] 1, at try `order_try`.
 fn update_order(to: &str, order_try: u64) -> Order {
     Order::Update {
-        target: None,
+        target: Some(native_target(WEB, 1)),
         service: WEB.to_owned(),
         version: version(to),
         digest: hostkeeper_wire::wire::PackageDigest::parse(&digest(1)).expect("a digest"),
@@ -89,7 +91,7 @@ fn told(
 ) -> (ServiceReply, Option<Order>, Vec<VerdictAck>) {
     let (answer, order) = rig
         .coordinator
-        .heartbeat_with_orders(
+        .heartbeat_with_orders_native(
             who(host, "daemon"),
             beat_of(DAEMON, services),
             crate::trusted_root::TrustedRootSaid::default(),

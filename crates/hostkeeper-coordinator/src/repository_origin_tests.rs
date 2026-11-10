@@ -6,7 +6,7 @@
 use http_body_util::BodyExt as _;
 use hyper::body::Body as _;
 
-use crate::channel_https::ChannelTlsError;
+use crate::origin_https::OriginTlsError;
 use crate::repository_origin::{BodyError, Origin, OriginError, RepositoryOrigin};
 use crate::repository_origin_support::{FakeOrigin, Then, hanging_dial, refusing_dial, response};
 
@@ -202,7 +202,7 @@ async fn a_body_that_stalls_or_breaks_ends_with_an_error() {
 fn a_client_needs_a_root() {
     let error =
         RepositoryOrigin::new(hostkeeper_oidc::Roots::Given(Vec::new())).expect_err("no roots");
-    assert!(matches!(error, ChannelTlsError::NoRoots));
+    assert!(matches!(error, OriginTlsError::NoRoots));
     assert_eq!(
         format!(
             "{:?}",

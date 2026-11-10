@@ -12,7 +12,7 @@
 //!    list whose top level is a dictionary, and rendered as TOML by the rendering of
 //!    [`crate::mac_config`]. A file that is not trusted, not a property list or not renderable is
 //!    refused.
-//! 3. The text is judged by the daemon's own loader before anything is written: the stores by
+//! 3. The text is judged by the loader of its file before anything is written: the stores by
 //!    [`hostkeeper_package::stores::parse`] (which reads their credential files as the load does)
 //!    and the signers by [`hostkeeper_install::macos_pkg::signers::parse`], and the file with its
 //!    header must be no larger than the loader reads ([`stores::MAX_STORES_BYTES`],

@@ -1,5 +1,5 @@
 //! The stores of a host: `/etc/hostkeeper/stores.toml` (docs/design/packages.md, sections 7.2 and
-//! 7.3), read and checked once, at the daemon's start.
+//! 7.3), read and checked by [`load`] (and by [`parse`], for the text of a Mac's managed preferences).
 //!
 //! ```toml
 //! [[store]]
@@ -18,10 +18,8 @@
 //! # or bearer_file = "/etc/hostkeeper/stores/lan.token"  # one line, the token
 //! ```
 //!
-//! A host with no file has the one store [`CHANNEL_STORE`]: kind `https`, the daemon config's
-//! release channel as its base, no redirect, anonymous ([`Stores::channel`]). A file that is
-//! there defines every store of the host, and any defect refuses it ([`StoresError`] names the
-//! store and the rule): the daemon does not start on a half-read file.
+//! A host with no file has no store. A file that is there defines every store of the host, and
+//! any defect refuses it ([`StoresError`] names the store and the rule).
 //!
 //! Every host also has the implicit store [`COORDINATOR_STORE`], of kind `coordinator`: it is
 //! never read from the file, is found by [`Stores::get`] with or without one, and is not among
@@ -62,14 +60,11 @@ use std::path::{Path, PathBuf};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use hostkeeper_config::daemon::HttpsUrl;
 use hostkeeper_release::grammar::{check_locator, is_store_name};
 use serde::Deserialize;
 
 use crate::ports::{Url, origin_of};
 
-/// The name of the store a host without a `stores.toml` has.
-pub const CHANNEL_STORE: &str = "channel";
 /// The name of the implicit store of the coordinator, which no file defines.
 pub const COORDINATOR_STORE: &str = "coordinator";
 /// The most bytes of `stores.toml`.
@@ -178,7 +173,7 @@ impl Store {
     }
 }
 
-/// The stores of a host, in file order.
+/// The stores of a host, in file order; a host with no `stores.toml` has none.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Stores {
     stores: Vec<Store>,
@@ -199,31 +194,16 @@ fn coordinator_store() -> Store {
     }
 }
 
-impl Stores {
-    /// The stores of a host with no `stores.toml`: [`CHANNEL_STORE`], of kind `https`, whose
-    /// base is `release_channel` (with a `/` added if it has none), with no redirect, no mirror
-    /// and no credential.
-    pub fn channel(release_channel: &HttpsUrl) -> Stores {
-        let mut base = release_channel.as_str().to_owned();
-        if !base.ends_with('/') {
-            base.push('/');
-        }
-        let origin = origin_of(&base).unwrap_or_default();
+impl Default for Stores {
+    fn default() -> Self {
         Stores {
-            stores: vec![Store {
-                name: CHANNEL_STORE.to_owned(),
-                kind: Kind::Https,
-                base,
-                origin,
-                redirects: 0,
-                mirror: false,
-                repository: None,
-                authorization: None,
-            }],
+            stores: Vec::new(),
             coordinator: coordinator_store(),
         }
     }
+}
 
+impl Stores {
     /// Every store the file defines, in file order; the implicit [`COORDINATOR_STORE`] is not
     /// among them.
     pub fn all(&self) -> &[Store] {
@@ -512,19 +492,15 @@ pub fn parse(text: &[u8], owner: u32) -> Result<Stores, StoresError> {
     })
 }
 
-/// The stores of the host from the file at `path`: [`Stores::channel`] when there is no file,
-/// and otherwise the stores the file defines, or the first defect in it. The file must be a
+/// The stores of the host from the file at `path`: none when there is no file, and otherwise
+/// the stores the file defines, or the first defect in it. The file must be a
 /// regular file (not a link) owned by `owner_uid`, not writable by group or others, and at most
 /// [`MAX_STORES_BYTES`]; each credential file must be a regular file (not a link) owned by
 /// `owner_uid` with mode 0600. The daemon passes `0`.
-pub fn load(
-    path: &Path,
-    release_channel: &HttpsUrl,
-    owner_uid: u32,
-) -> Result<Stores, StoresError> {
+pub fn load(path: &Path, owner_uid: u32) -> Result<Stores, StoresError> {
     match read_checked(path, owner_uid, Mode::Guarded, MAX_STORES_BYTES) {
         Ok(bytes) => parse(&bytes, owner_uid),
-        Err(FileFault::Missing) => Ok(Stores::channel(release_channel)),
+        Err(FileFault::Missing) => Ok(Stores::default()),
         Err(fault) => Err(StoresError::File {
             path: path.to_owned(),
             fault,

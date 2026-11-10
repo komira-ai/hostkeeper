@@ -1,6 +1,6 @@
 //! What the tests of this crate share: a clock that moves only when told, a scripted
-//! [`Fetcher`], a recording [`Verifier`], a scratch directory, daemon config values, and the
-//! generator of the synthetic attestation bundles under `tests/fixtures/`.
+//! [`Fetcher`], a scratch directory, a trusted signer, and the generator of the synthetic
+//! attestation bundles under `tests/fixtures/`.
 
 use std::cell::RefCell;
 use std::fs::{File, Permissions};
@@ -12,19 +12,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use hostkeeper_config::daemon::{DaemonConfig, Sha256Hex, TrustedSigners};
-use hostkeeper_config::names::{ServiceName, Version};
+use hostkeeper_config::daemon::{Sha256Hex, TrustedSigners};
 use hostkeeper_steps::{BootId, BootIdError, Clock, Stamp};
 use hostkeeper_testkit::Scratch;
 use sha2::{Digest, Sha256};
 
 use crate::der;
-use crate::fetch::PackageOrder;
-use crate::index::Platform;
-use crate::ports::{
-    Attest, Attested, CommitId, Fetcher, Got, Limit, NetError, Sink, SourceRef, Url, Verifier,
-    VerifyError,
-};
+use crate::ports::{CommitId, Fetcher, Got, Limit, NetError, Sink, SourceRef, Url};
 
 /// The boot id of every [`FakeClock`] until a test changes it.
 pub(crate) const BOOT: &str = "boot-1";
@@ -119,85 +113,13 @@ pub(crate) fn signers(organisation: &str, workflow: &str, refs: &[&str]) -> Trus
     }
 }
 
-/// A daemon config with `channel` as its release channel and `ca` as its CA digest, read by the
-/// real loader: the only way to make its `HttpsUrl` and `Sha256Hex` values.
-pub(crate) fn config(channel: &str, ca: &str) -> DaemonConfig {
-    let text = format!(
-        "coordinator = \"https://coordinator.example:8443\"\n\
-         ca_sha256 = \"{ca}\"\n\
-         release_channel = \"{channel}\"\n\
-         [trusted_signers]\n\
-         organisation = \"example-org\"\n\
-         workflow = \".github/workflows/artifacts.yml\"\n\
-         refs = [\"refs/heads/main\"]\n\
-         hosted_runner = true\n"
-    );
-    DaemonConfig::parse(&text).expect("a test config")
-}
-
 /// `hex` as a [`Sha256Hex`].
 pub(crate) fn digest(hex: &str) -> Sha256Hex {
     Sha256Hex::parse(hex).expect("a SHA-256")
 }
 
-/// The order of `service` at `version`.
-pub(crate) fn order(service: &str, version: &str) -> PackageOrder {
-    PackageOrder {
-        service: ServiceName::new(service).expect("a service name"),
-        version: Version::new(version).expect("a version"),
-        index_digest: None,
-    }
-}
-
-/// The platform the tests' hosts run on.
-pub(crate) const HOST: Platform = Platform::LinuxX86_64;
 /// The release channel of the tests.
 pub(crate) const CHANNEL: &str = "https://releases.example";
-
-/// The canonical release index of `service` at `version` with one package per `(platform,
-/// bytes)`, given in platform order: keys sorted, no white space.
-pub(crate) fn index_json(service: &str, version: &str, packages: &[(Platform, &[u8])]) -> String {
-    let entries: Vec<String> = packages
-        .iter()
-        .map(|(platform, bytes)| {
-            format!(
-                "{{\"bytes\":{},\"file\":\"{service}-{version}-{}.tar.zst\",\"platform\":\"{}\",\"sha256\":\"{}\"}}",
-                bytes.len(),
-                platform.name(),
-                platform.name(),
-                sha256_hex(bytes)
-            )
-        })
-        .collect();
-    format!(
-        "{{\"packages\":[{}],\"schema\":1,\"service\":\"{service}\",\"version\":\"{version}\"}}",
-        entries.join(",")
-    )
-}
-
-/// The URL of the release index of `service` at `version` on [`CHANNEL`].
-pub(crate) fn index_at(service: &str, version: &str) -> String {
-    format!("{CHANNEL}/{service}/{version}/index.json")
-}
-
-/// The URL of the package of `service` at `version` for [`HOST`] on [`CHANNEL`].
-pub(crate) fn package_at(service: &str, version: &str) -> String {
-    format!(
-        "{CHANNEL}/{service}/{version}/{service}-{version}-{}.tar.zst",
-        HOST.name()
-    )
-}
-
-/// A fake channel that serves `service` at `version`: an index naming `archive` for [`HOST`],
-/// and the archive.
-pub(crate) fn published(service: &str, version: &str, archive: &[u8]) -> FakeFetcher {
-    FakeFetcher::new()
-        .route(
-            &index_at(service, version),
-            serve(index_json(service, version, &[(HOST, archive)]).as_bytes()),
-        )
-        .route(&package_at(service, version), serve(archive))
-}
 
 /// How the fake fetcher answers one URL.
 pub(crate) type Serve = Box<dyn Fn(&mut dyn Sink, &Limit) -> Result<Got, NetError>>;
@@ -278,57 +200,6 @@ pub(crate) fn deliver(
 pub(crate) fn serve(body: &[u8]) -> Serve {
     let body = body.to_vec();
     Box::new(move |sink: &mut dyn Sink, _: &Limit| Ok(deliver(sink, &body, true, 4).0))
-}
-
-/// What the fake verifier saw of one request, and whether both files existed during it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Seen {
-    pub archive: PathBuf,
-    pub bundle: PathBuf,
-    pub sha256: String,
-    pub commit: String,
-    pub source_ref: String,
-    pub signers: TrustedSigners,
-    pub deadline: Stamp,
-    pub files_existed: bool,
-}
-
-/// A [`Verifier`] that records each request and gives one answer.
-pub(crate) struct FakeVerifier {
-    answer: Result<(), VerifyError>,
-    seen: RefCell<Vec<Seen>>,
-}
-
-impl FakeVerifier {
-    pub(crate) fn answering(answer: Result<(), VerifyError>) -> FakeVerifier {
-        FakeVerifier {
-            answer,
-            seen: RefCell::new(Vec::new()),
-        }
-    }
-
-    pub(crate) fn seen(&self) -> Vec<Seen> {
-        self.seen.borrow().clone()
-    }
-}
-
-impl Verifier for FakeVerifier {
-    fn verify(&self, request: &Attest<'_>) -> Result<Attested, VerifyError> {
-        self.seen.borrow_mut().push(Seen {
-            archive: request.archive.to_owned(),
-            bundle: request.bundle.to_owned(),
-            sha256: request.sha256.as_str().to_owned(),
-            commit: request.commit.as_str().to_owned(),
-            source_ref: request.source_ref.as_str().to_owned(),
-            signers: request.signers.clone(),
-            deadline: request.deadline.clone(),
-            files_existed: request.archive.is_file() & request.bundle.is_file(),
-        });
-        self.answer.clone().map(|()| Attested {
-            commit: request.commit.clone(),
-            source_ref: request.source_ref.clone(),
-        })
-    }
 }
 
 /// What a synthetic attestation bundle says.

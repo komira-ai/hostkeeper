@@ -21,7 +21,7 @@
    "at_secs": 2000,
    "call": "convergence",
    "expect_status": 200,
-   "expect_body": "{\"desired\":\"2.0\",\"quiet\":false,\"state\":\"converged\",\"roles\":[{\"role\":\"daemon\",\"at_desired\":1,\"updating\":0,\"failed\":0,\"down\":0}],\"commit\":\"{COMMIT}\"}",
+   "expect_body": "{\"desired\":\"2.0\",\"quiet\":false,\"state\":\"in_progress\",\"roles\":[],\"commit\":\"{COMMIT}\"}",
    "kbf_body": "{\"desired\":\"2.0\",\"quiet\":false,\"state\":\"in_progress\",\"roles\":[{\"role\":\"daemon\",\"at_desired\":1,\"updating\":0,\"failed\":0,\"down\":0}],\"commit\":\"{COMMIT}\"}"
   }
  ]

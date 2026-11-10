@@ -98,20 +98,17 @@ fn drift(daemon: Arc<Daemon>) -> Option<Drift> {
 fn a_mac_that_announces_macos_pkg_installs_the_pkg_it_is_ordered() {
     let mac = MacRig::new("pkg-install");
     let daemon = mac.daemon();
-    assert_eq!(
-        daemon.ctx().announcement.names(),
-        ["hostkeeper-archive", "macos-pkg"]
-    );
+    assert_eq!(daemon.ctx().announcement.names(), ["macos-pkg"]);
     let one = mac.publish("1.0.0", package("1.0.0"));
 
     assert_eq!(daemon.order(&install_of("1.0.0", &one, 1)), succeeded());
 
     assert_eq!(
-        mac.rig.store.asked(),
+        mac.rig.pins.asked(),
         [(SERVICE.to_owned(), one.digest.clone())],
         "the .pkg was fetched once, by its pin"
     );
-    assert_eq!(mac.rig.store.entries(), [Some(one.clone())]);
+    assert_eq!(mac.rig.pins.entries(), [Some(one.clone())]);
     assert_eq!(mac.rig.launcher.steps(SERVICE), Vec::<Step>::new());
     let dir = mac.version_dir("1.0.0");
     assert_eq!(target::read(&dir).expect("it reads"), Some(one.clone()));
@@ -254,7 +251,7 @@ fn a_mac_without_the_signers_file_or_its_tools_announces_no_macos_pkg() {
     assert!(mac.pkg_ports().is_some());
 
     let announcement = hostkeeper_daemon::macos_pkg::announced(Default::default(), None);
-    assert_eq!(announcement.installers, [Installer::HostkeeperArchive]);
+    assert_eq!(announcement.installers, Vec::<Installer>::new());
     let daemon = Daemon::new(
         support::config(),
         mac.rig.dirs(),
@@ -275,7 +272,7 @@ fn a_mac_without_the_signers_file_or_its_tools_announces_no_macos_pkg() {
             resent: false,
         }
     );
-    assert!(mac.rig.store.asked().is_empty(), "nothing fetched");
+    assert!(mac.rig.pins.asked().is_empty(), "nothing fetched");
     assert!(mac.mac.calls().is_empty(), "no tool ran");
 }
 
@@ -325,7 +322,7 @@ fn a_pkg_updates_and_a_failed_install_rolls_back_to_the_kept_version() {
         Some("1.1.0".to_owned())
     );
 
-    let fetched = mac.rig.store.asked().len();
+    let fetched = mac.rig.pins.asked().len();
     let ended = daemon.order(&update_of("1.2.0", &three, 3));
     assert!(
         matches!(
@@ -354,7 +351,7 @@ fn a_pkg_updates_and_a_failed_install_rolls_back_to_the_kept_version() {
         Some("1.1.0".to_owned())
     );
     assert_eq!(
-        mac.rig.store.asked().len(),
+        mac.rig.pins.asked().len(),
         fetched + 1,
         "only 1.2.0 was fetched; the rollback took the kept .pkg"
     );
@@ -522,7 +519,7 @@ fn a_pkg_the_store_cannot_fetch_is_its_refusal() {
     let mac = MacRig::new("pkg-fetch-fails");
     let daemon = mac.daemon();
     let one = mac.publish("1.0.0", package("1.0.0"));
-    mac.rig.store.fail(
+    mac.rig.pins.fail(
         SERVICE,
         &one.digest,
         hostkeeper_daemon::packages::PackageError::NoSpace("the disk is full".to_owned()),
@@ -555,11 +552,7 @@ fn the_sealed_digest_of_a_pkg_version_is_that_of_its_jobs_program_in_the_tree() 
     )
     .expect("it reads");
     let want: [u8; 32] = Sha256::digest(&program).into();
-    let exe = SealedExe::new(
-        &mac.rig.packages,
-        std::path::Path::new("/packages"),
-        support::OWN,
-    );
+    let exe = SealedExe::new(&mac.rig.packages, support::OWN);
     assert_eq!(exe.digest(SERVICE, "1.0.0"), Some(want));
     assert_eq!(exe.digest(SERVICE, "9.9.9"), None);
 }
@@ -573,7 +566,7 @@ fn a_force_of_a_pkg_the_store_refuses_keeps_the_refusals_class() {
     let one = mac.publish("1.0.0", package("1.0.0"));
     assert_eq!(daemon.order(&install_of("1.0.0", &one, 1)), succeeded());
     let two = mac.publish("1.1.0", package("1.1.0"));
-    mac.rig.store.fail(
+    mac.rig.pins.fail(
         SERVICE,
         &two.digest,
         hostkeeper_daemon::packages::PackageError::DigestMismatch("other bytes".to_owned()),

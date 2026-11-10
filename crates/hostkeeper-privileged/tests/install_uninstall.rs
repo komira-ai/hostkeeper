@@ -1,11 +1,12 @@
 #![cfg(all(target_os = "linux", feature = "privileged"))]
 //! A package assigned to an enrolled host, updated and taken off it, with the real programs: the
-//! coordinator and the daemon as child processes on loopback (`support::pair`), and a release
-//! channel the test serves over HTTPS (`support::channel`), as root against the host's systemd.
-//! The operator acts through the operator API only; what the tests read is the coordinator's
-//! `hosts list` (and `services list` for the hosts uninstalling a service), the daemon's log (each
-//! line a hook step wrote, under its step's unit), and the host: the file the package places, its
-//! unit file and the link that enables it.
+//! coordinator and the daemon as child processes on loopback (`support::pair`), and a signed apt
+//! repository on disk the daemon installs the package from through its `apt` entry
+//! (`support::aptrepo`), as root against the host's systemd, apt and dpkg. The operator acts
+//! through the operator API only; what the tests read is the coordinator's `hosts list` (and
+//! `services list` for the hosts uninstalling a service), the daemon's log (each line a hook step
+//! wrote, under its step's unit), and the host: the file the package installs, its unit file and
+//! the link that enables it.
 //!
 //! What they assert: a host assigned the fixture service is ordered to install it and does, once,
 //! when the coordinator is killed after the assignment, again while the install runs and again
@@ -17,34 +18,47 @@
 //! running the service nor as uninstalling it; and the three orders in one sequence (install
 //! 1.0.0, update to 1.1.0, uninstall) each run once, with no order refused for its try.
 //!
-//! The daemon keeps its packages in `/var/lib/hostkeeper/packages`, links and enables the fixture
-//! service's unit (`hostkeeper-ci-fixture.service`) in `/etc/systemd/system`, and runs the
-//! verifier in `/usr/lib/hostkeeper`; a test refuses to run on a host that has any of these or the
-//! daemon's other fixed paths, and removes them when it ends ([`support::pair::HostPaths`]), with
-//! the CA bundle written back ([`support::channel::HostTrust`]). The tests of this file run one at a
-//! time (`--test-threads=1` in privileged.yml's job first-boot). Waits look at a state a bounded
-//! number of times; nothing reads a clock.
+//! The daemon keeps its packages in `/var/lib/hostkeeper/packages` and reads its repository
+//! entries at `/etc/hostkeeper/repositories`; the package it installs is the host's own in dpkg's
+//! database, with its unit in `/usr/lib/systemd/system` and the link that enables it in
+//! `/etc/systemd/system`. A test refuses to run on a host that has any of these or the daemon's
+//! other fixed paths, and removes them when it ends, the package purged
+//! ([`support::pair::HostPaths`]). The tests of this file run one at a time (`--test-threads=1` in
+//! privileged.yml's job first-boot). Waits look at a state a bounded number of times; nothing reads
+//! a clock.
 
 mod support;
 
 use std::path::{Path, PathBuf};
 
+use hostkeeper_proto::hostkeeper::release::v1::{StepBounds, Target};
 use serde_json::Value;
-use support::channel::{Channel, Fixture, HostTrust, Package, VERIFIER_DIR};
+use support::aptrepo::{self, AptRepo, Deb, File, Service};
 use support::operator_api::must;
-use support::pair::{Coordinator, Daemon, HostPaths, PACKAGES_DIR, TestCa, rollout};
+use support::pair::{Coordinator, Daemon, HostPaths, PACKAGES_DIR, rollout};
 use support::spawn::poll;
 use support::{Bench, FIXTURE};
 
-/// The fixture service, which the rollout file runs on a role no test host has ([`NO_HOST_ROLE`]):
-/// only the operator's assignment brings it to a host.
+/// The fixture service, which is also its package; the rollout file runs it on a role no test host
+/// has ([`NO_HOST_ROLE`]): only the operator's assignment brings it to a host.
 const SERVICE: &str = "hostkeeper-ci-fixture";
 /// Its one unit.
 const UNIT: &str = "hostkeeper-ci-fixture.service";
-/// Where the daemon links the unit's file.
-const UNIT_LINK: &str = "/etc/systemd/system/hostkeeper-ci-fixture.service";
-/// The link that enables it (its `WantedBy=`).
+/// Where the package installs the unit's file.
+const UNIT_FILE: &str = "/usr/lib/systemd/system/hostkeeper-ci-fixture.service";
+/// The link that enables it (its `WantedBy=`), which the installer writes.
 const WANTS: &str = "/etc/systemd/system/multi-user.target.wants/hostkeeper-ci-fixture.service";
+/// The file the package installs, which says its version.
+const PLACED: &str = "/etc/hostkeeper-ci-fixture/fixture.conf";
+/// The channel of the fixture packages' repository: the name of the host's repository entry, which
+/// an order's entry names as its `repository`.
+const REPOSITORY: &str = aptrepo::REPOSITORY;
+/// The channel the daemon's config names: the loader requires one and nothing is fetched from it.
+const NO_CHANNEL: &str = "https://releases.example";
+/// The unit the package runs: the fixture's `serve`, as its main process.
+const SERVICE_UNIT: &str = "[Unit]\nDescription=the first-boot tests' fixture service\n\n[Service]\n\
+     Type=exec\nExecStart=/usr/bin/hostkeeper-ci-fixture serve\n\n[Install]\n\
+     WantedBy=multi-user.target\n";
 /// The role of the fixture service in the rollout file (a service runs on at least one).
 const NO_HOST_ROLE: &str = "unused";
 /// The host.
@@ -52,14 +66,70 @@ const NODE: &str = "ci-host-3";
 /// The steps of an install and of an update, in the order the daemon runs them.
 const STEPS: [&str; 4] = ["prepare", "cutover", "verify", "cleanup"];
 
-/// A host with the fixture service installed, and what it took: the programs, the channel, the
+/// One version of the fixture package, published in the repository, and the entry that orders it.
+struct Package {
+    version: &'static str,
+    entry: Target,
+}
+
+/// The package of `version`: the fixture program as the service's program and as its hook (at the
+/// fixed path of a package's hook), the unit that runs it, and a file that says the version.
+fn package(repo: &AptRepo, version: &'static str) -> Package {
+    let program = std::fs::read(FIXTURE).expect("the fixture program");
+    let deb = Deb {
+        package: SERVICE.to_owned(),
+        version: version.to_owned(),
+        files: vec![
+            File::new("usr/bin/hostkeeper-ci-fixture", program.clone(), 0o755),
+            File::new(
+                &format!("usr/lib/{SERVICE}/hostkeeper-hook"),
+                program,
+                0o755,
+            ),
+            File::new(
+                "usr/lib/systemd/system/hostkeeper-ci-fixture.service",
+                SERVICE_UNIT,
+                0o644,
+            ),
+            File::new(
+                "etc/hostkeeper-ci-fixture/fixture.conf",
+                format!("fixture {version}\n"),
+                0o644,
+            ),
+        ],
+    };
+    let published = repo.publish(&deb);
+    let service = Service {
+        repository: REPOSITORY.to_owned(),
+        run: vec![UNIT.to_owned()],
+        health_url: None,
+        params: [("fixture.mode".to_owned(), aptrepo::text("ok"))]
+            .into_iter()
+            .collect(),
+        hook_command: vec![format!("/usr/lib/{SERVICE}/hostkeeper-hook")],
+        steps: StepBounds {
+            prepare: 60,
+            cutover: 60,
+            verify: 60,
+            rollback: 60,
+            cleanup: 60,
+            uninstall: Some(60),
+        },
+        verify_deadline_secs: 300,
+    };
+    Package {
+        version,
+        entry: aptrepo::entry(&service, &published),
+    }
+}
+
+/// A host with the fixture service installed, and what it took: the programs, the repository, the
 /// claims on the host. The fields are dropped in their order: the programs first, the host's
-/// paths and the scratch directory last.
+/// paths (the package purged) and the scratch directory last.
 struct Installed {
     daemon: Daemon,
     coordinator: Coordinator,
-    _channel: Channel,
-    _trust: HostTrust,
+    _repo: AptRepo,
     _host: HostPaths,
     _bench: Bench,
     placed: PathBuf,
@@ -74,32 +144,44 @@ impl Installed {
     /// the install.
     fn new(test: &str) -> Installed {
         let bench = Bench::new(test);
-        let host = HostPaths::claim(&[VERIFIER_DIR, UNIT_LINK, WANTS], &[UNIT]);
+        let host = HostPaths::claim(
+            &[
+                UNIT_FILE,
+                WANTS,
+                "/etc/hostkeeper",
+                "/etc/hostkeeper-ci-fixture",
+                "/usr/bin/hostkeeper-ci-fixture",
+                "/usr/lib/hostkeeper-ci-fixture",
+            ],
+            &[UNIT],
+        )
+        .purging(&[SERVICE]);
         let scratch = bench.scratch().to_path_buf();
-        let ca = TestCa::new("release channel CA");
-        let trust = HostTrust::install(&ca.pem());
-        let channel = Channel::start(&ca);
-        let placed = scratch.join("placed/fixture.conf");
-        std::fs::create_dir_all(placed.parent().expect("a parent")).expect("the placed directory");
-        let build = |version| {
-            Fixture {
-                service: SERVICE,
-                version,
-                program: Path::new(FIXTURE),
-                placed: &placed,
-                packages: Path::new(PACKAGES_DIR),
-            }
-            .build()
-        };
-        let (v1, v1_1, v2) = (build("1.0.0"), build("1.1.0"), build("2.0.0"));
-        channel.serve(&v1);
-        channel.serve(&v1_1);
-        channel.serve(&v2);
+        let repo = AptRepo::new(&scratch, "fixture-ci");
+        // The host's entry as the coordinator's registry renders it, and the registry's entry
+        // (put once the coordinator runs, before any set).
+        repo.install_registered(aptrepo::REGISTRY_NAME);
+        let placed = PathBuf::from(PLACED);
+        let (v1, v1_1, v2) = (
+            package(&repo, "1.0.0"),
+            package(&repo, "1.1.0"),
+            package(&repo, "2.0.0"),
+        );
 
         // 1. An enrolled host that heartbeats.
-        let services = format!("[[service]]\nname = \"{SERVICE}\"\nroles = [\"{NO_HOST_ROLE}\"]\n");
+        let services = format!(
+            "[[service]]\nname = \"{SERVICE}\"\nroles = [\"{NO_HOST_ROLE}\"]\n\
+             repository = \"{}\"\n",
+            aptrepo::REGISTRY_NAME
+        );
         let mut coordinator = Coordinator::start(&scratch, &rollout(&services), &[]);
-        let mut daemon = Daemon::start(&scratch, &coordinator, &channel.url());
+        must(
+            "repositories put",
+            coordinator
+                .api()
+                .put_repository(repo.registry_entry(aptrepo::REGISTRY_NAME)),
+        );
+        let mut daemon = Daemon::start(&scratch, &coordinator, NO_CHANNEL);
         coordinator.approve_first(NODE, &mut daemon);
         coordinator.wait_heard(NODE, &mut daemon);
 
@@ -117,8 +199,7 @@ impl Installed {
         let mut installed = Installed {
             daemon,
             coordinator,
-            _channel: channel,
-            _trust: trust,
+            _repo: repo,
             _host: host,
             _bench: bench,
             placed,
@@ -158,15 +239,15 @@ impl Installed {
         });
     }
 
-    /// The host runs `version` of the fixture: its file is placed with that version's content,
-    /// its unit file is linked and enabled.
+    /// The host runs `version` of the fixture: its file is installed with that version's content,
+    /// its unit file is installed and enabled.
     fn assert_on_host(&self, version: &str) {
         assert_eq!(
             std::fs::read_to_string(&self.placed).ok().as_deref(),
             Some(format!("fixture {version}\n").as_str()),
-            "the placed file is {version}'s"
+            "the installed file is {version}'s"
         );
-        assert!(Path::new(UNIT_LINK).exists(), "the unit file is linked");
+        assert!(Path::new(UNIT_FILE).exists(), "the unit file is installed");
         assert!(Path::new(WANTS).exists(), "the unit is enabled");
     }
 
@@ -224,9 +305,9 @@ impl Installed {
             Value::Null,
             "the host is listed as running no {SERVICE}: {listed}"
         );
-        assert!(!self.placed.exists(), "the placed file is removed");
+        assert!(!self.placed.exists(), "the installed file is removed");
         assert!(
-            std::fs::symlink_metadata(UNIT_LINK).is_err(),
+            std::fs::symlink_metadata(UNIT_FILE).is_err(),
             "the unit file is removed"
         );
         assert!(
@@ -290,13 +371,16 @@ fn named(list: &Value, key: &str) -> Value {
         .unwrap_or(Value::Null)
 }
 
-/// Sets the desired version of the fixture service to `package`'s, with its digest.
+/// Sets the desired version of the fixture service to `package`'s, by targets alone: the one
+/// `apt` entry of the package, for the host's platform.
 fn set_desired(coordinator: &Coordinator, package: &Package) {
     must(
         "releases set-desired",
-        coordinator
-            .api()
-            .set_desired(SERVICE, &package.version, &package.digest),
+        coordinator.api().set_desired_targets_alone(
+            SERVICE,
+            package.version,
+            aptrepo::targets(package.entry.clone()),
+        ),
     );
 }
 

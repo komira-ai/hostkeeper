@@ -294,9 +294,6 @@ fn files_under(root: &Path) -> HostFiles {
     HostFiles {
         repositories: None,
         os_root: root.join("os"),
-        ca_bundle: root.join("ca.pem"),
-        gh: root.join("gh"),
-        trusted_root: root.join("trusted_root.json"),
         stores: root.join("stores.toml"),
         macos_pkg_signers: None,
         pki: root.join("pki"),

@@ -43,6 +43,7 @@ use hostkeeper_wire::identity::Identity;
 use hostkeeper_wire::wire::{self, ServiceBeat, UpdateResult};
 
 use super::selfupdate::{HK, SelfRig};
+use super::typed::GrpcInProcess;
 use super::{OWN, Rig, d};
 
 /// The operator token of the coordinator.
@@ -86,6 +87,13 @@ pub fn coordinator_with(
         )
         .expect("the desired state");
     }
+    coordinator_over(dir, service, rollout)
+}
+
+/// [`coordinator_with`] on whatever state `dir` holds: none is written, so nothing is desired
+/// until CI sets a version ([`super::typed::set_release`]).
+pub fn coordinator_over(dir: &Path, service: &str, rollout: &str) -> Arc<Coordinator> {
+    let state = dir.join("desired.json");
     let verdicts = VerdictFile::open(&verdicts_path(&state)).expect("the verdicts file");
     let desired = DesiredStore::open(&dir.join("desired.json"), None).expect("the desired state");
     let ops = OpsStore::open(&dir.join("desired.json.ops")).expect("the ops store");
@@ -345,6 +353,8 @@ pub struct Host {
     pub dispatch: Arc<ManualDispatch>,
     pub log: Arc<RecordingLog>,
     pub ordered: Arc<Mutex<Vec<Option<Order>>>>,
+    /// The request of each heartbeat the host sent, in order.
+    pub sent: Arc<Mutex<Vec<pb::HeartbeatRequest>>>,
     _started: Option<start::Started>,
 }
 
@@ -370,12 +380,11 @@ impl Host {
         let ordered = Arc::new(Mutex::new(Vec::new()));
         let dispatch = Arc::new(ManualDispatch::default());
         let log = Arc::new(RecordingLog::default());
+        let link = Arc::new(GrpcInProcess::new(coordinator, Arc::clone(&ordered)));
+        let sent = Arc::clone(&link.sent);
         let links = Links {
             enroller: Box::new(|| Err("the scenario has no enrollment".to_owned())),
-            link: Arc::new(InProcess {
-                coordinator: Arc::clone(coordinator),
-                ordered: Arc::clone(&ordered),
-            }),
+            link,
             certs: Arc::new(FakeCerts::new(CertState::Enrolled(identity("host-1")))),
             clock: Arc::new(FakeClock::new(2_000_000_000, 7)),
             log: log.clone(),
@@ -393,6 +402,7 @@ impl Host {
             dispatch,
             log,
             ordered,
+            sent,
             _started: started,
         }
     }

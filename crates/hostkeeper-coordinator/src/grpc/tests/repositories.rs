@@ -354,7 +354,9 @@ async fn a_grpc_heartbeat_is_answered_the_set_until_the_daemon_reports_it() {
         .await
         .decode();
     let set = answer.repositories.expect("the set");
-    assert_eq!(set.generation, 1);
+    // The farm's own sets put `komira` at generation 1 (they name its channels); the operator's
+    // put replaces it at generation 2.
+    assert_eq!(set.generation, 2);
     assert_eq!(set.entries, [komira(1)]);
     assert_eq!(set.digest, registry::digest(&[komira(1)]));
 

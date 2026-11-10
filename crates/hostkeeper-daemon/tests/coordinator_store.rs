@@ -7,7 +7,6 @@
 
 mod support;
 mod support_apt;
-mod support_archive;
 mod support_macos_pkg;
 
 use std::collections::BTreeMap;
@@ -17,6 +16,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use hostkeeper_config::daemon::Bounds;
 use hostkeeper_coordinator::repository_origin::RepositoryOrigin;
 use hostkeeper_daemon::coordinator_store::CoordinatorFetcher;
 use hostkeeper_daemon::mirror::over_coordinator;
@@ -26,13 +26,14 @@ use hostkeeper_daemon::{Daemon, Ports, Refusal, Reply};
 use hostkeeper_hook::Verdict;
 use hostkeeper_link::testing::FakeClock;
 use hostkeeper_oidc::{Dial, Roots, Stream};
+use hostkeeper_package::ports::{Fetcher, Got, Limit, NetError, Sink, Url};
+use hostkeeper_package::stores::Stores;
 use hostkeeper_proto::hostkeeper::release::v1::{Location, Repository, Target};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use support::pki::{Ca, enroll, files_under};
 use support::{OWN, config};
 use support_apt::repository_host::Listening;
-use support_archive::{Answer, Rig as ArchiveRig, sha256_hex};
-use support_macos_pkg::{MacRig, SERVICE, entry, install_of, package};
+use support_macos_pkg::{MacRig, SERVICE, entry, install_of, package, sha256_hex};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio_rustls::TlsAcceptor;
 
@@ -178,6 +179,15 @@ async fn serve(origin: Arc<Origin>, stream: tokio::io::DuplexStream) {
     let _ = tls.shutdown().await;
 }
 
+/// The web: a fetcher that reaches nothing, so a location asked of it fails to connect.
+struct NoWeb;
+
+impl Fetcher for NoWeb {
+    fn get(&self, _url: &Url, _sink: &mut dyn Sink, _limit: Limit) -> Result<Got, NetError> {
+        Err(NetError::Connect)
+    }
+}
+
 /// The private repository `acme`, served to the group of the host, whose credential is in
 /// `credential`.
 fn acme(credential: &Path) -> Repository {
@@ -239,10 +249,13 @@ impl Bench {
         for dir in [mac.rig.scratch.path(), &mac.rig.packages] {
             fs::set_permissions(dir, fs::Permissions::from_mode(0o755)).expect("its mode");
         }
-        let archive = ArchiveRig::new(&format!("{name}-fakes"));
-        let mut packages: RealPackages = archive
-            .open_at(&mac.rig.packages, Vec::new(), Answer::Confirms)
-            .expect("the package store");
+        let mut packages = RealPackages::new(
+            Box::new(NoWeb),
+            DaemonClock::new(),
+            Bounds::default(),
+            Stores::default(),
+            &mac.rig.packages,
+        );
         if with_store {
             packages = packages.with_coordinator(Box::new(CoordinatorFetcher::new(
                 fetch,

@@ -96,7 +96,7 @@ fn round(rig: &Rig, at: u64, s1_last: Option<&UpdateResult>) -> Vec<String> {
         };
         let reply = rig
             .coordinator
-            .heartbeat(who(host, role("storage")), beat_of(last))
+            .heartbeat_native(who(host, role("storage")), beat_of(last))
             .expect("answered")
             .reply;
         if let ServiceReply::Update { service, version } = reply {

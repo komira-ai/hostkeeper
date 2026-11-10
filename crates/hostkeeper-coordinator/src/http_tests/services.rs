@@ -13,9 +13,10 @@ const NEW_GOLDEN_BEAT: &str = concat!(
 );
 
 /// Pins the wire of a service over HTTP. With `other` set to 3.0 and kbf current, an updater
-/// that sends `services` is answered with the exact bytes of a named order, while a v0.0.18
-/// updater of the same role (its golden beat, no `services`) is answered `{"reply":"nothing"}`
-/// and never the new shape; a beat that lists kbf among its services is a 400.
+/// that sends `services` is answered `{"reply":"nothing"}`, as a v0.0.18 updater of the same
+/// role (its golden beat, no `services`) is, the JSON route carrying no order; the named order a
+/// transport that carries typed orders answers keeps its bytes; a beat that lists kbf among its
+/// services is a 400.
 #[tokio::test]
 async fn a_service_order_goes_only_to_an_updater_that_sent_services() {
     let mut rig = Rig::new("http-services");
@@ -29,14 +30,7 @@ async fn a_service_order_goes_only_to_an_updater_that_sent_services() {
         r#"{"version":"0.0.19+g123456abcdef-1","min_up":{"storage":1,"frontend":1}}"#,
         r#"{"service":"other","version":"3.0","min_up":{"storage":0,"frontend":0}}"#,
     ] {
-        let (code, _) = raw(
-            &rig,
-            Surface::Control,
-            &None,
-            request("POST", DESIRED_PATH, Some(&ci_token()), body),
-        )
-        .await;
-        assert_eq!(code, 200);
+        rig.set(body).await;
     }
     rig.at(2_000);
     let (code, old) = raw(
@@ -65,6 +59,14 @@ async fn a_service_order_goes_only_to_an_updater_that_sent_services() {
     assert_eq!(code, 200);
     assert_eq!(
         String::from_utf8(new).expect("text"),
+        r#"{"reply":"nothing"}"#
+    );
+    assert_eq!(
+        serde_json::to_string(&hostkeeper_wire::wire::ServiceReply::Update {
+            service: Some("other".to_owned()),
+            version: crate::testutil::version("3.0"),
+        })
+        .expect("JSON"),
         r#"{"reply":"update","service":"other","version":"3.0"}"#
     );
     let kbf_inside = NEW_GOLDEN_BEAT.replace(r#""name":"other""#, r#""name":"kbf""#);
@@ -83,9 +85,9 @@ async fn a_service_order_goes_only_to_an_updater_that_sent_services() {
     );
 }
 
-/// Catches: a host losing its kbf updates over a bad services list, or a bad list going
+/// Catches: a host losing its heartbeat over a bad services list, or a bad list going
 /// unseen: a heartbeat that lists kbf, or a name twice, is answered 200 as a kbf-only host
-/// (it is told the kbf update, in the old reply shape, and its services are not noted),
+/// (it is answered in the old reply shape, and its services are not noted),
 /// `services_dropped` in the status goes up by one each time, and a heartbeat that is wrong
 /// otherwise (no version) is still 400 and not counted. The count is 0 before any.
 #[tokio::test]
@@ -112,7 +114,7 @@ async fn a_bad_services_list_is_dropped_counted_and_the_host_still_updates() {
         )
         .await;
         assert_eq!(code, StatusCode::OK);
-        assert_eq!(reply, json!({"reply": "update", "version": "2.0"}));
+        assert_eq!(reply, json!({"reply": "nothing"}));
         assert_eq!(status(&rig).await["services_dropped"], json!(i + 1));
     }
     let status = status(&rig).await;
@@ -149,7 +151,15 @@ async fn get_raw(rig: &Rig, path: &str, bearer: &str) -> (u16, String) {
     (code, String::from_utf8(bytes).expect("text"))
 }
 
+/// A heartbeat of the daemon `name` of `role` with the JSON `body`, which announces `target-v1`
+/// and lists `apt`, as the daemons the releases of the tests pick do.
 async fn beat_from(rig: &Rig, name: &str, role: &str, body: &str) {
+    let mut fields: Value = serde_json::from_str(body).expect("a heartbeat");
+    fields["agent_features"] = json!([crate::picks::TARGET_FEATURE]);
+    let body = fields.to_string();
+    let body = body.as_str();
+    rig.coordinator
+        .hear_apt(&crate::marks_support::who(name, role));
     let (code, _) = call(
         rig,
         Surface::Heartbeat,
@@ -168,36 +178,26 @@ const GOLDEN_CONVERGENCE: &str = concat!(
 );
 
 /// What `GET /v1/status` answered for the same farm before a per-service section was added
-/// (with `services_dropped`, a count added since): the new section comes after these keys,
-/// and none of them moved.
+/// (with `services_dropped`, a count added since, and the `agent_features` the host announces:
+/// `target-v1`): the new section comes after these keys, and none of them moved.
 const GOLDEN_STATUS: &str = concat!(
     r#"{"desired":{"version":"2.0","max_updating":{"frontend":1,"storage":1,"daemon":2,"mac-daemon":2},"min_up":{"storage":1,"frontend":0}},"#,
     r#""services":{"kbf":{"version":"2.0","max_updating":{"frontend":1,"storage":1,"daemon":2,"mac-daemon":2},"min_up":{"storage":1,"frontend":0}}},"#,
     r#""quiet":false,"services_dropped":0,"hosts":[{"node_id":"st1","agent":{"name":"kbf-updater"},"role":"storage","live":true,"up":true,"holds_slot":false,"silent_secs":0,"#,
-    r#""platform":"linux-x86_64","version":"2.0","health":"healthy","last_update":null,"updating":null}]"#
+    r#""platform":"linux-x86_64","version":"2.0","health":"healthy","last_update":null,"updating":null,"agent_features":["target-v1"]}]"#
 );
 
 /// Pins: the bytes of kbf's status and convergence stay what they were. With only kbf
-/// managed, the convergence is byte for byte the old answer followed by the build `commit`,
+/// managed, the convergence is byte for byte the old answer followed by the `picks` of a version
+/// set with a release and the build `commit`,
 /// whether or not `?service=kbf` is given, and the status is the old answer followed by the
 /// new `per_service` key (kbf's `desired` and `roles` as they were, then `hosts`, `up`,
 /// `slots_held` and `convergence`) and then `commit`.
 #[tokio::test]
 async fn the_kbf_status_and_convergence_bytes_are_unchanged() {
     let rig = Rig::new("http-golden-status");
-    let (code, _) = raw(
-        &rig,
-        Surface::Control,
-        &None,
-        request(
-            "POST",
-            DESIRED_PATH,
-            Some(&ci_token()),
-            r#"{"version":"2.0","min_up":{"storage":1,"frontend":0}}"#,
-        ),
-    )
-    .await;
-    assert_eq!(code, 200);
+    rig.set(r#"{"version":"2.0","min_up":{"storage":1,"frontend":0}}"#)
+        .await;
     rig.at(2_000);
     beat_from(
         &rig,
@@ -208,10 +208,13 @@ async fn the_kbf_status_and_convergence_bytes_are_unchanged() {
     .await;
     // Each answer has kept its bytes, and ends with the build commit since that was added.
     let commit = format!(r#","commit":"{}"}}"#, crate::BUILD_COMMIT);
+    // The release of the version is picked by the host: the answer says how many hosts it is.
+    let picks = r#","picks":{"picked":1,"no_target":0,"no_build_for_host":0,"installer_dropped":0,"dropped":[]}"#;
     let converged = GOLDEN_CONVERGENCE
         .strip_suffix('}')
         .expect("an object")
         .to_owned()
+        + picks
         + &commit;
     for path in [CONVERGENCE_PATH, "/v1/convergence?service=kbf"] {
         assert_eq!(
@@ -225,14 +228,15 @@ async fn the_kbf_status_and_convergence_bytes_are_unchanged() {
         r#","per_service":{"kbf":{"desired":{"version":"2.0","max_updating":{"frontend":1,"storage":1,"daemon":2,"mac-daemon":2},"min_up":{"storage":1,"frontend":0}},"#,
         r#""roles":[{"role":"storage","at_desired":1,"updating":0,"failed":0,"down":0}],"#,
         r#""hosts":[{"node_id":"st1","agent":{"name":"kbf-updater"},"role":"storage","live":true,"up":true,"holds_slot":false,"silent_secs":0,"#,
-        r#""platform":"linux-x86_64","version":"2.0","health":"healthy","last_update":null,"updating":null,"hold":"up_to_date"}],"#,
+        r#""platform":"linux-x86_64","version":"2.0","health":"healthy","last_update":null,"updating":null,"agent_features":["target-v1"],"hold":"up_to_date"}],"#,
         r#""up":1,"slots_held":0,"convergence":"#,
     );
-    // The convergence in the status is the answer of `GET /v1/convergence`, with its commit.
-    assert_eq!(
-        status,
-        format!("{GOLDEN_STATUS}{tail}{converged}}}}}{commit}")
-    );
+    // The convergence in the status is the answer of `GET /v1/convergence`, with its commit. The
+    // audit of CI's set of the release, which the status holds under `ops`, comes between them.
+    let before = format!("{GOLDEN_STATUS}{tail}{converged}}}}},\"ops\":");
+    assert!(status.starts_with(&before), "{status}");
+    assert!(status.ends_with(&commit), "{status}");
+    assert!(status.contains(r#""action":"set_desired""#), "{status}");
 }
 
 /// Behaviour: `?service=` picks the service a convergence read is about, over HTTP. With
@@ -252,14 +256,7 @@ async fn the_convergence_is_read_per_service_with_a_query() {
         r#"{"version":"0.0.19+g123456abcdef-1","min_up":{"storage":0,"frontend":0}}"#,
         r#"{"service":"other","version":"3.0","min_up":{"storage":0,"frontend":0}}"#,
     ] {
-        let (code, _) = raw(
-            &rig,
-            Surface::Control,
-            &None,
-            request("POST", DESIRED_PATH, Some(&ci_token()), body),
-        )
-        .await;
-        assert_eq!(code, 200);
+        rig.set(body).await;
     }
     rig.at(2_000);
     let rolling = NEW_GOLDEN_BEAT.replace(

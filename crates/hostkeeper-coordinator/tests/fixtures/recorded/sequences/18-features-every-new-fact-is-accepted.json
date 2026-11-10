@@ -28,7 +28,8 @@
    "role": "daemon",
    "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\",\"step\":{\"name\":\"verify\",\"attempt\":2},\"commit\":\"committed\",\"step_secs\":{\"cutover\":41},\"promotion_pending\":false,\"deferred\":{\"target\":\"1.2\",\"reason\":\"drain_bound\",\"retry_after_secs\":300}}",
    "expect_status": 200,
-   "expect_body": "{\"reply\":\"update\",\"version\":\"2.0\"}"
+   "expect_body": "{\"reply\":\"nothing\"}",
+   "kbf_body": "{\"reply\":\"update\",\"version\":\"2.0\"}"
   }
  ]
 }

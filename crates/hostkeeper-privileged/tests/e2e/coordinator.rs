@@ -199,6 +199,21 @@ impl CoordinatorHandle {
     /// # Panics
     /// A file cannot be written or the coordinator does not start.
     pub fn start(dir: &Path, service: &str, host_role: &str) -> CoordinatorHandle {
+        CoordinatorHandle::start_with_rollout(dir, service, host_role, "")
+    }
+
+    /// [`CoordinatorHandle::start`], with `rollout` (lines of keys, each ending in a newline)
+    /// added to the service's table of the rollout file: the keys of a rollout that the
+    /// defaults above do not set (`bake_beats = 2`, a host baked for two healthy heartbeats).
+    ///
+    /// # Panics
+    /// A file cannot be written or the coordinator does not start.
+    pub fn start_with_rollout(
+        dir: &Path,
+        service: &str,
+        host_role: &str,
+        rollout: &str,
+    ) -> CoordinatorHandle {
         fs::create_dir_all(dir).unwrap_or_else(|e| panic!("create {}: {e}", dir.display()));
         fs::set_permissions(dir, fs::Permissions::from_mode(0o700)).expect("chmod the directory");
         // 64 hex digits: the token must be at least 32 visible ASCII characters.
@@ -213,7 +228,8 @@ impl CoordinatorHandle {
                  roles = [\"{host_role}\"]\n\
                  repository = \"hostkeeper\"\n\
                  rollback = \"automatic\"\n\
-                 rollback_after_failed = {{ percent = 100, min_hosts = 1 }}\n"
+                 rollback_after_failed = {{ percent = 100, min_hosts = 1 }}\n\
+                 {rollout}"
             ),
             0o600,
         );
@@ -317,32 +333,6 @@ impl CoordinatorHandle {
         self.api
             .get_host(node_id)
             .map_or(Value::Null, |got| got["host"].clone())
-    }
-
-    /// Sets the desired version of `service` to `version`, whose package has the SHA-256
-    /// `digest` (64 lower-case hex digits).
-    pub fn set_desired(&self, service: &str, version: &str, digest: &str) {
-        must(
-            "releases set-desired",
-            self.api.set_desired(service, version, digest),
-        );
-    }
-
-    /// Sets the desired version of `service` to `version` by targets, as CI's set does: `targets`
-    /// by platform, and the text of the version's release index with its SHA-256 `index_digest`.
-    pub fn set_desired_targets(
-        &self,
-        service: &str,
-        version: &str,
-        targets: BTreeMap<String, TargetList>,
-        index: &str,
-        index_digest: &str,
-    ) {
-        must(
-            "releases set-desired by targets",
-            self.api
-                .set_desired_targets(service, version, targets, index, index_digest),
-        );
     }
 
     /// Sets the desired version of `service` to `version` by targets alone, as CI's set of a

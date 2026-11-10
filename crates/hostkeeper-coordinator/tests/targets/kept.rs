@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use support::readers::Readers;
 use support::rig::PATIENCE;
-use support::targets::{Answered, entry, framed, list};
+use support::targets::{Answered, entry, framed, list, put_komira, repository_entry};
 
 use super::*;
 
@@ -147,34 +147,33 @@ fn assert_release_exists(answered: &Answered) {
     );
 }
 
-/// The targets of `hostkeeper`: one `hostkeeper-archive` entry on each of two platforms, the
-/// artifacts' digests `c` and the next letter.
-fn archive(c: char) -> Targets {
+/// The targets of `hostkeeper`: its native entry (`apt` from a repository) on each of two Linux
+/// platforms, the packages' digests `c` and the next letter.
+fn own_targets(c: char) -> Targets {
     let next = char::from(u8::try_from(c).expect("ascii") + 1);
     BTreeMap::from([
         (
             "linux-x86_64".to_owned(),
-            list(vec![entry("hostkeeper", "hostkeeper-archive", c, 4_096)]),
+            list(vec![repository_entry("hostkeeper", "2.0-1", c)]),
         ),
         (
-            "macos-arm64".to_owned(),
-            list(vec![entry("hostkeeper", "hostkeeper-archive", next, 8_192)]),
+            "linux-arm64".to_owned(),
+            list(vec![repository_entry("hostkeeper", "2.0-1", next)]),
         ),
     ])
 }
 
-/// The release index of `hostkeeper` at `version` that lists the archive entries of `targets`,
-/// in the canonical form, or pretty-printed.
+/// A release index of `hostkeeper` at `version` as an earlier CI wrote it, listing the digest of
+/// each platform's first entry, in the canonical form, or pretty-printed. The coordinator keeps
+/// its digest and never reads its text.
 fn index_of(version: &str, targets: &Targets, pretty: bool) -> String {
     let packages: Vec<Value> = targets
         .iter()
         .map(|(platform, list)| {
-            let archive = &list.entries[0];
             json!({
-                "bytes": archive.bytes,
                 "file": format!("hostkeeper-{version}-{platform}.tar.zst"),
                 "platform": platform,
-                "sha256": archive.digest,
+                "sha256": list.entries[0].digest,
             })
         })
         .collect();
@@ -192,7 +191,7 @@ fn index_of(version: &str, targets: &Targets, pretty: bool) -> String {
 }
 
 /// A set of `hostkeeper` at `version` with `targets` and the release index `text`, if any.
-fn set_archive(version: &str, targets: Targets, text: Option<&str>) -> proto::SetDesiredRequest {
+fn set_own(version: &str, targets: Targets, text: Option<&str>) -> proto::SetDesiredRequest {
     let mut request = set("hostkeeper", version, targets);
     request.release_index = text.map(str::to_owned);
     request.release_index_digest = text.map(|t| sha(t.as_bytes()));
@@ -201,7 +200,8 @@ fn set_archive(version: &str, targets: Targets, text: Option<&str>) -> proto::Se
 
 /// The reason of the audit entry of a set, as the design words it: `version with targets`, the
 /// workflow when CI set it, the release index digest when there is one, then each platform's
-/// entries as installer, digest and the SHA-256 of the manifest's encoding.
+/// entries as installer, digest and the SHA-256 of the manifest's encoding; a repository entry
+/// names its repository, its package and its package version before its pin.
 fn reason(version: &str, workflow: Option<&str>, index: Option<&str>, targets: &Targets) -> String {
     let mut text = format!("{version} with targets");
     if let Some(workflow) = workflow {
@@ -218,7 +218,22 @@ fn reason(version: &str, workflow: Option<&str>, index: Option<&str>, targets: &
                 .iter()
                 .map(|e| {
                     let manifest = e.manifest.as_ref().expect("a manifest").encode_to_vec();
-                    format!("{} {} manifest {}", e.installer, e.digest, sha(&manifest))
+                    let package = |m: &hostkeeper_proto::hostkeeper::release::v1::Manifest| {
+                        m.package.clone().expect("a package")
+                    };
+                    let from = match (&e.repository, &e.package_version) {
+                        (Some(repository), Some(version)) => format!(
+                            " repository {repository} package {} package_version {version}",
+                            package(e.manifest.as_ref().expect("a manifest"))
+                        ),
+                        _ => String::new(),
+                    };
+                    format!(
+                        "{}{from} {} manifest {}",
+                        e.installer,
+                        e.digest,
+                        sha(&manifest)
+                    )
                 })
                 .collect();
             format!("{platform} {}", entries.join(", "))
@@ -336,12 +351,13 @@ async fn other_targets_under_one_version_are_release_exists_and_change_nothing()
 #[tokio::test]
 async fn another_release_index_digest_under_one_version_is_release_exists() {
     let rig = rig("kept-other-index");
-    let targets = archive('a');
+    put_komira(&rig).await;
+    let targets = own_targets('a');
     let canonical = index_of("3.0", &targets, false);
     let pretty = index_of("3.0", &targets, true);
     assert_ne!(sha(canonical.as_bytes()), sha(pretty.as_bytes()));
 
-    let first = ci_set(&rig, &set_archive("3.0", targets.clone(), Some(&canonical))).await;
+    let first = ci_set(&rig, &set_own("3.0", targets.clone(), Some(&canonical))).await;
     assert_eq!(first.code, 0, "{first:?}");
     let before = kept(&rig, "hostkeeper", "3.0").await;
     assert_eq!(
@@ -354,9 +370,9 @@ async fn another_release_index_digest_under_one_version_is_release_exists() {
     for (what, other) in [
         (
             "another index text",
-            set_archive("3.0", targets.clone(), Some(&pretty)),
+            set_own("3.0", targets.clone(), Some(&pretty)),
         ),
-        ("no index", set_archive("3.0", targets.clone(), None)),
+        ("no index", set_own("3.0", targets.clone(), None)),
     ] {
         let answered = ci_set(&rig, &other).await;
         assert_eq!(
@@ -366,15 +382,19 @@ async fn another_release_index_digest_under_one_version_is_release_exists() {
         );
         assert_eq!(kept(&rig, "hostkeeper", "3.0").await, before, "{what}");
     }
-    let same = ci_set(&rig, &set_archive("3.0", targets.clone(), Some(&canonical))).await;
+    let same = ci_set(&rig, &set_own("3.0", targets.clone(), Some(&canonical))).await;
     assert_eq!(
         same.decoded::<proto::SetDesiredResponse>(),
         first.decoded::<proto::SetDesiredResponse>()
     );
 
-    let bare = set_archive("3.1", targets.clone(), None);
+    let bare = set_own("3.1", targets.clone(), None);
     assert_eq!(ci_set(&rig, &bare).await.code, 0);
-    let indexed = set_archive("3.1", targets, Some(&index_of("3.1", &archive('a'), false)));
+    let indexed = set_own(
+        "3.1",
+        targets,
+        Some(&index_of("3.1", &own_targets('a'), false)),
+    );
     assert_release_exists(&ci_set(&rig, &indexed).await);
     assert_eq!(
         release(&rig, "hostkeeper", "3.1")
@@ -394,7 +414,7 @@ async fn targets_for_a_version_set_before_with_a_package_digest_or_index_are_rel
     let mut digest = set("web", "2.0", BTreeMap::new());
     digest.package_digest = Some(support::targets::digest('1'));
     assert_eq!(ci_set(&rig, &digest).await.code, 0);
-    let text = index_of("2.0", &archive('a'), false);
+    let text = index_of("2.0", &own_targets('a'), false);
     let mut indexed = set("hostkeeper", "2.0", BTreeMap::new());
     indexed.release_index = Some(text.clone());
     indexed.release_index_digest = Some(sha(text.as_bytes()));
@@ -408,7 +428,7 @@ async fn targets_for_a_version_set_before_with_a_package_digest_or_index_are_rel
     assert_eq!(before_web.releases, None);
 
     let before_host = kept(&rig, "hostkeeper", "2.0").await;
-    let with_index = set_archive("2.0", archive('a'), Some(&text));
+    let with_index = set_own("2.0", own_targets('a'), Some(&text));
     assert_release_exists(&ci_set(&rig, &with_index).await);
     assert_release_exists(&operator_set(&rig, &with_index).await);
     assert_eq!(kept(&rig, "hostkeeper", "2.0").await, before_host);
@@ -428,13 +448,14 @@ async fn targets_for_a_version_set_before_with_a_package_digest_or_index_are_rel
 #[tokio::test]
 async fn a_package_digest_or_index_for_a_version_with_a_release_is_release_exists() {
     let rig = rig("kept-no-targets");
+    put_komira(&rig).await;
     assert_eq!(
         ci_set(&rig, &set("web", "2.0", targets("web"))).await.code,
         0
     );
-    let host_targets = archive('a');
+    let host_targets = own_targets('a');
     let text = index_of("2.0", &host_targets, false);
-    let first = ci_set(&rig, &set_archive("2.0", host_targets.clone(), Some(&text))).await;
+    let first = ci_set(&rig, &set_own("2.0", host_targets.clone(), Some(&text))).await;
     assert_eq!(first.code, 0, "{first:?}");
     let before_web = kept(&rig, "web", "2.0").await;
     let before_host = kept(&rig, "hostkeeper", "2.0").await;
@@ -553,6 +574,7 @@ async fn a_set_with_targets_by_ci_is_audited_once_with_the_release_in_the_reason
 #[tokio::test]
 async fn a_set_with_targets_by_an_operator_is_audited_once_under_the_token_name() {
     let rig = rig("kept-audit-operator");
+    put_komira(&rig).await;
     let answered = operator_set(&rig, &set("web", "2.0", targets("web"))).await;
     assert_eq!(answered.code, 0, "{answered:?}");
     let entries = audited(&rig).await;
@@ -565,25 +587,25 @@ async fn a_set_with_targets_by_an_operator_is_audited_once_under_the_token_name(
         Some(reason("2.0", None, None, &targets("web")).as_str())
     );
 
-    let archive = archive('a');
-    let text = index_of("3.0", &archive, false);
+    let own = own_targets('a');
+    let text = index_of("3.0", &own, false);
     let digest = sha(text.as_bytes());
-    let answered = operator_set(&rig, &set_archive("3.0", archive.clone(), Some(&text))).await;
+    let answered = operator_set(&rig, &set_own("3.0", own.clone(), Some(&text))).await;
     assert_eq!(answered.code, 0, "{answered:?}");
     let entries = audited(&rig).await;
     assert_eq!(entries.len(), 2, "{entries:?}");
     assert_eq!(entries[1].service.as_deref(), Some("hostkeeper"));
-    let want = reason("3.0", None, Some(&digest), &archive);
+    let want = reason("3.0", None, Some(&digest), &own);
     assert_eq!(entries[1].reason.as_deref(), Some(want.as_str()));
     assert!(want.starts_with(&format!(
-        "3.0 with targets and release index {digest}: linux-x86_64 "
+        "3.0 with targets and release index {digest}: linux-arm64 "
     )));
 
-    let by_ci = ci_set(&rig, &set_archive("3.0", archive.clone(), Some(&text))).await;
+    let by_ci = ci_set(&rig, &set_own("3.0", own.clone(), Some(&text))).await;
     assert_eq!(by_ci.code, 0);
     let entries = audited(&rig).await;
     assert_eq!(entries.len(), 3);
-    let want = reason("3.0", Some(WORKFLOW), Some(&digest), &archive);
+    let want = reason("3.0", Some(WORKFLOW), Some(&digest), &own);
     assert_eq!(entries[2].reason.as_deref(), Some(want.as_str()));
 }
 
@@ -636,6 +658,7 @@ async fn get_release_refuses_the_unknown_and_the_unauthorized() {
 #[tokio::test]
 async fn get_release_answers_the_lists_in_the_order_set_and_the_index_digest() {
     let rig = rig("kept-get-answers");
+    put_komira(&rig).await;
     let mut in_order = targets("web");
     in_order
         .get_mut("linux-x86_64")
@@ -661,16 +684,16 @@ async fn get_release_answers_the_lists_in_the_order_set_and_the_index_digest() {
         assert_eq!(read.release_index_digest, None);
     }
 
-    let archive = archive('a');
-    let text = index_of("3.0", &archive, false);
+    let own = own_targets('a');
+    let text = index_of("3.0", &own, false);
     assert_eq!(
-        ci_set(&rig, &set_archive("3.0", archive.clone(), Some(&text)))
+        ci_set(&rig, &set_own("3.0", own.clone(), Some(&text)))
             .await
             .code,
         0
     );
     let read = release(&rig, "hostkeeper", "3.0").await;
-    assert_eq!(read.targets, archive);
+    assert_eq!(read.targets, own);
     assert_eq!(read.release_index_digest, Some(sha(text.as_bytes())));
 
     let legacy = Rig::new("kept-get-legacy", Spec::recorded().with_legacy("kbf")).routed();
@@ -693,6 +716,7 @@ async fn get_release_answers_the_lists_in_the_order_set_and_the_index_digest() {
 #[tokio::test]
 async fn a_restart_keeps_the_release_and_the_releases_file_holds_it() {
     let mut rig = rig("kept-restart");
+    put_komira(&rig).await;
     let mut in_order = targets("web");
     in_order
         .get_mut("linux-x86_64")
@@ -705,11 +729,11 @@ async fn a_restart_keeps_the_release_and_the_releases_file_holds_it() {
             .code,
         0
     );
-    let archive = archive('a');
-    let text = index_of("3.0", &archive, false);
+    let own = own_targets('a');
+    let text = index_of("3.0", &own, false);
     let digest = sha(text.as_bytes());
     assert_eq!(
-        ci_set(&rig, &set_archive("3.0", archive.clone(), Some(&text)))
+        ci_set(&rig, &set_own("3.0", own.clone(), Some(&text)))
             .await
             .code,
         0
@@ -803,16 +827,15 @@ struct FrozenIndex {
 #[tokio::test]
 async fn the_state_file_of_a_set_with_targets_is_read_by_the_previous_coordinators_reader() {
     let rig = rig("kept-frozen");
+    put_komira(&rig).await;
     assert_eq!(
         ci_set(&rig, &set("web", "2.0", targets("web"))).await.code,
         0
     );
-    let archive = archive('a');
-    let text = index_of("3.0", &archive, false);
+    let own = own_targets('a');
+    let text = index_of("3.0", &own, false);
     assert_eq!(
-        ci_set(&rig, &set_archive("3.0", archive, Some(&text)))
-            .await
-            .code,
+        ci_set(&rig, &set_own("3.0", own, Some(&text))).await.code,
         0
     );
     let state = file(&rig, "desired.json").expect("the state file");
@@ -844,7 +867,7 @@ async fn the_state_file_of_a_set_with_targets_is_read_by_the_previous_coordinato
     }
     assert!(state.ends_with("}\n"));
     let stored = file(&rig, "desired.json.releases").expect("the releases file");
-    assert!(stored.contains("hostkeeper-archive"), "{stored}");
+    assert!(stored.contains("komira-testing"), "{stored}");
 
     Readers::recorded().check_desired_in(rig.dir.path(), "desired-map");
 }
@@ -878,14 +901,14 @@ async fn hold_of_d1(rig: &Rig) -> Value {
 
 /// Proves: a coordinator that reads only `desired.json` (the previous one, which has no releases
 /// file: here the same state file with `desired.json.releases` left behind) sees a version set
-/// with targets as a version with neither package digest nor index: a host that does not run the
-/// service is held `no_digest` and told nothing. The coordinator with the releases picks the host
-/// from them (section 3.3): its daemon, before `target-v1`, can install only an archive, which
-/// these targets lack, so it is held `no_build_for_host` and told nothing either. Only the
-/// coordinator that reads the releases file answers `GetRelease`. A version set with a
-/// package digest on the previous coordinator's state is ordered to the same host.
-/// Catches: a version set with targets that an older coordinator would order some package, or
-/// that the new one holds differently.
+/// with targets as a version with neither package digest nor index, which has no release kept:
+/// a host that does not run the service is held `no_build_for_host` and told nothing. The
+/// coordinator with the releases picks the host from them (section 3.3): its daemon, before
+/// `target-v1`, lists nothing a pick can name, so it is held `no_build_for_host` and told nothing
+/// either. Only the coordinator that reads the releases file answers `GetRelease`. A version
+/// set with a package digest on the previous coordinator's state orders the same host nothing.
+/// Catches: a version set with targets that a coordinator without its release would order some
+/// package, or that the new one holds differently.
 #[tokio::test]
 async fn the_previous_coordinator_holds_a_version_set_with_targets_as_no_digest() {
     let rig = rig("kept-previous-new");
@@ -900,7 +923,7 @@ async fn the_previous_coordinator_holds_a_version_set_with_targets_as_no_digest(
     old.restart();
 
     assert_eq!(hold_of_d1(&rig).await, json!("no_build_for_host"));
-    assert_eq!(hold_of_d1(&old).await, json!("no_digest"));
+    assert_eq!(hold_of_d1(&old).await, json!("no_build_for_host"));
     assert_eq!(release(&rig, "web", "2.0").await.targets, targets("web"));
     assert_eq!(
         get(&old, Some(OPERATOR), "web", "2.0").await.refusal(),
@@ -915,5 +938,5 @@ async fn the_previous_coordinator_holds_a_version_set_with_targets_as_no_digest(
         )
         .await;
     assert_eq!(code, 200, "{body}");
-    assert_eq!(hold_of_d1(&old).await, Value::Null);
+    assert_eq!(hold_of_d1(&old).await, json!("no_build_for_host"));
 }

@@ -4,51 +4,41 @@
 //! - **The released daemon** is the `hostkeeper` binary of the release `previous-release.toml`
 //!   pins (`hostkeeper_privileged::across`), downloaded and checked by a workflow step before the
 //!   test, checked against the pin again here ([`released_binary`]), and staged as the host's
-//!   first binary: `versions/<v>` of the binary directory, `current` naming it, as the deb, the
-//!   rpm and the pkg leave a host. A binary that is missing or differs from the pin fails the
-//!   test by name; the test fetches nothing.
+//!   first binary: `versions/<v>` of the binary directory, `current` naming it, as the deb leaves
+//!   a host. A binary that is missing or differs from the pin fails the test by name; the test
+//!   fetches nothing.
 //! - **This build** is the program `hostkeeper-named-daemon` (the shipped daemon on the host's
 //!   real ports, its hand-over of its own update acted on first, its version the name of the file
 //!   it runs from) at versions newer than the pinned release ([`newer`]), and
 //!   `hostkeeper-failing-daemon` for a version made to fail its start.
-//! - **hostkeeper's package** of each version is a native package on Linux and an archive on a
-//!   Mac. Linux (`deb`): a `.deb` built around the binary of the version as
-//!   `packaging/linux/nfpm.yaml` lays it out, in a signed apt repository served over
-//!   https on loopback (`https`); the rig puts the repository in the coordinator's registry
-//!   (`Repositories.Put`, which refuses a set of `apt` entries for a repository it does not
-//!   hold), and the coordinator in process orders the package by targets alone, the one `apt`
+//! - **hostkeeper's package** of each version is its native `.deb` (`deb`): built around the
+//!   binary of the version as `packaging/linux/nfpm.yaml` lays it out, in a signed apt repository
+//!   served over https on loopback (`https`); the rig puts the repository in the coordinator's
+//!   registry (`Repositories.Put`, which refuses a set of `apt` entries for a repository it does
+//!   not hold), and the coordinator in process orders the package by targets alone, the one `apt`
 //!   entry of `release targets` for the host's platform and no release index, as CI's set of a
-//!   release does from A24 on, and the daemon installs it through its entry. macOS (`archive`): the rig's
-//!   Mac has no signers file, so neither daemon announces `macos-pkg` there, and it keeps the
-//!   archive orders it had, set by the entry and the
-//!   release index; the released daemon and this build both announce `target-v1` and take the
-//!   entry through the release channel.
+//!   release does from A24 on, and the daemon installs it through its entry.
 //! - **The rest is the end-to-end rig** (`tests/e2e/`): the real coordinator in process,
-//!   managing the service `hostkeeper` for the test's host; the release channel on loopback (a
-//!   Linux daemon is asked for nothing of it: its config names it, as every config does, and the
-//!   tests hold the channel untouched); the production attestation verifier (the pinned `gh`)
-//!   against the test signer's trusted root, which reaches the released daemon as it reaches this
-//!   build's: a fixed path of the host, not a key of the daemon config, so the published release
-//!   is pinned and no release is built for the test.
-//! - **The host** is the platform's ([`Host`]): on Linux the package `hostkeeper` in the host's
-//!   dpkg database, its unit `hostkeeper.service` under systemd where the `.deb` installs it, the
-//!   rig's repository entry in `/etc/hostkeeper/repositories/`, the files the registry's entry
-//!   renders to (`linux`); on a Mac the daemon's
-//!   own job `dev.hostkeeper.hostkeeper` under launchd, its plist where the pkg puts it (`mac`).
-//!   The released daemon updates by the hand-over, so it writes no fallback unit, drop-in or
-//!   job: when this build cannot start, the released binary is what runs again, after its three
-//!   tries.
+//!   managing the service `hostkeeper` for the test's host; the pinned `gh` and a Sigstore trusted
+//!   root of the test signer at the fixed places where the published release looks for them
+//!   (it asks nothing of them for a native entry, and its config names a release channel nothing
+//!   serves, as every config does), so that the published release is pinned and no release is
+//!   built for the test.
+//! - **The host** is [`Host`]: the package `hostkeeper` in the host's dpkg database, its unit
+//!   `hostkeeper.service` under systemd where the `.deb` installs it, the rig's repository entry
+//!   in `/etc/hostkeeper/repositories/`, the files the registry's entry renders to (`linux`). The
+//!   released daemon updates by the hand-over, so it writes no fallback unit or drop-in: when
+//!   this build cannot start, the released binary is what runs again, after its three tries.
 //!
-//! On Linux the rig relies on a released daemon that can install `apt` entries, adopt the `.deb`
-//! of a host set up from it and update itself through its `.deb` (A19): the release
-//! `previous-release.toml` pins is the first that can.
+//! The rig relies on a released daemon that can install `apt` entries, adopt the `.deb` of a host
+//! set up from it and update itself through its `.deb` (A19): the release `previous-release.toml`
+//! pins is the first that can.
 //!
-//! Each test starts from [`Rig::installed`]: on Linux the released daemon runs on a host set up
-//! from the `.deb` of its own version (installed with `dpkg -i`, which runs the shipped
-//! `postinst`), and its start adopted the package: it holds it and records it as installed by
-//! `apt`; on a Mac it has installed its own version's package, as a host the coordinator
-//! converged on the release is. Every wait is a bounded count
-//! of tries of an explicit state ([`super::e2e::wait_for`]); nothing is asserted about time.
+//! Each test starts from [`Rig::installed`]: the released daemon runs on a host set up from the
+//! `.deb` of its own version (installed with `dpkg -i`, which runs the shipped `postinst`), and
+//! its start adopted the package: it holds it and records it as installed by `apt`. Every wait is
+//! a bounded count of tries of an explicit state ([`super::e2e::wait_for`]); nothing is asserted
+//! about time.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -60,32 +50,18 @@ use hostkeeper_steps::record::{Loaded, Record, RecordStore, State};
 use hostkeeper_steps::{BadVersions, Layout};
 use serde_json::Value;
 
-use super::e2e::channel::ReleaseChannel;
 use super::e2e::coordinator::CoordinatorHandle;
 use super::e2e::scenario::{COORDINATED, LOCAL, pinned_gh};
 use super::e2e::signer::FixtureSigner;
 use super::e2e::{HOST_ID, ROLE, wait_for};
 
-#[cfg(target_os = "macos")]
-mod archive;
-#[cfg(target_os = "macos")]
-pub use archive::Built;
-#[cfg(target_os = "linux")]
 mod deb;
-#[cfg(target_os = "linux")]
+#[path = "../shared/https.rs"]
 mod https;
-#[cfg(target_os = "linux")]
 pub use deb::Built;
-#[cfg(target_os = "linux")]
 pub mod linux;
-#[cfg(target_os = "linux")]
 pub use linux::Host;
-#[cfg(target_os = "macos")]
-pub mod mac;
-#[cfg(target_os = "macos")]
-pub use mac::Host;
-/// The fixture repository's builder, which the Linux rig's `.deb` repository is made with.
-#[cfg(target_os = "linux")]
+/// The fixture repository's builder, which the rig's `.deb` repository is made with.
 #[allow(
     dead_code,
     reason = "the rig uses part of the apt device test's repository builder"
@@ -162,12 +138,10 @@ pub fn newer(version: &str, step: u64) -> String {
 /// with. The released binary was built as the pinned release: [`FLOOR`] and the release's
 /// version. This build's `OLDEST_READER` is `hostkeeper_steps::OLDEST_READER` (R2, 0.1.194) and
 /// its version the workspace's (`0.1.0` in a pull request, the release's own once `release
-/// set-version` ran), which is also the version its package store judges a package's floor
-/// against (`hostkeeper_unpack::running_hostkeeper`), whatever name the program runs under; a
-/// higher floor is `daemon_too_old` to it. In a pull request the floor is therefore the
-/// workspace's `0.1.0`, at or below the legacy floor, so a daemon runs the hook's command of
-/// this build's package: the workload fixture (on a Mac, `archive::manifest`; a Linux entry has no
-/// hook command and runs the built-in steps whatever the floor).
+/// set-version` ran), which is also the version of `hostkeeper-privileged`, a crate of the same
+/// workspace, whatever name the program runs under. In a pull request the floor is therefore the
+/// workspace's `0.1.0`, at or below the legacy floor (an entry has no hook command and runs the
+/// built-in steps whatever the floor).
 pub fn floor(build: Build, released: &str) -> String {
     let (oldest, built) = match build {
         Build::Released => (
@@ -176,22 +150,17 @@ pub fn floor(build: Build, released: &str) -> String {
         ),
         Build::This | Build::Failing => (
             hostkeeper_steps::OLDEST_READER,
-            hostkeeper_unpack::running_hostkeeper(),
+            HostkeeperVersion::parse(env!("CARGO_PKG_VERSION")).expect("the workspace version"),
         ),
     };
     oldest.min(built).to_string()
 }
 
-/// The rig of one test. The fields are dropped in this order: the coordinator and the channel,
-/// then the host (the daemon stopped, every place the test took over put back).
+/// The rig of one test. The fields are dropped in this order: the coordinator, then the host (the
+/// daemon stopped, every place the test took over put back).
 pub struct Rig {
     pub coordinator: CoordinatorHandle,
-    pub channel: ReleaseChannel,
-    /// The test signer, which signs the archives of a Mac's packages.
-    #[cfg(target_os = "macos")]
-    pub signer: FixtureSigner,
     /// The apt repository of hostkeeper's `.deb`s and the host's entry of it.
-    #[cfg(target_os = "linux")]
     repository: deb::Repository,
     /// The pinned release's version.
     pub released: String,
@@ -208,10 +177,9 @@ impl Drop for Rig {
         }
         eprintln!(
             "the coordinator's view when the test failed:\nreleases status:\n{}\n\
-             releases converge:\n{}\nrelease channel requests:\n{:#?}\nstep record:\n{:#?}\n{}",
+             releases converge:\n{}\nstep record:\n{:#?}\n{}",
             self.coordinator.status_text(HK),
             self.coordinator.converge_text(HK),
-            self.channel.requests(),
             record_in(&self.host.root().state()),
             self.native_view(),
         );
@@ -219,11 +187,11 @@ impl Drop for Rig {
 }
 
 impl Rig {
-    /// The whole rig up: the host, the pinned `gh`, the signer's trusted root, the release
-    /// channel, the coordinator managing hostkeeper, the daemon config, and the released daemon
-    /// started as the host's daemon and approved as [`HOST_ID`]; nothing ordered yet. On Linux
-    /// the host also has the apt repository and its entry, and the daemon starts on the `.deb` of
-    /// its own version, installed beforehand. `tag` (1 to 8 of `[a-z0-9]`) names the test's tree.
+    /// The whole rig up: the host, the pinned `gh`, the signer's trusted root, the coordinator
+    /// managing hostkeeper, the daemon config, the apt repository and its entry, and the released
+    /// daemon started as the host's daemon, on the `.deb` of its own version installed
+    /// beforehand, and approved as [`HOST_ID`]; nothing ordered yet. `tag` (1 to 8 of `[a-z0-9]`)
+    /// names the test's tree.
     pub fn start(tag: &str) -> Rig {
         let pin = pin();
         let released_binary = released_binary(&pin);
@@ -232,29 +200,21 @@ impl Rig {
         let signer = FixtureSigner::new();
         host.root()
             .install_trusted_root(&signer.trusted_root_jsonl());
-        let channel = ReleaseChannel::start();
-        host.root().trust_ca(&channel.ca_pem());
         let coordinator =
             CoordinatorHandle::start(&host.root().base().join("coordinator"), HK, ROLE);
         host.root().write_config(&format!(
-            "coordinator = \"{}\"\nca_sha256 = \"{}\"\nrelease_channel = \"{}\"\n\n{}",
+            "coordinator = \"{}\"\nca_sha256 = \"{}\"\nrelease_channel = \"https://releases.example\"\n\n{}",
             coordinator.heartbeat_url(),
             coordinator.ca_sha256(),
-            channel.base_url(),
             signer.trusted_signers_toml(),
         ));
         let released = pin.version.to_string();
         let first = host.root().base().join(format!("released-{released}"));
         fs::write(&first, &released_binary)
             .unwrap_or_else(|e| panic!("write {}: {e}", first.display()));
-        #[cfg(target_os = "linux")]
         let repository = deb::Repository::new(host.root().base());
         let rig = Rig {
             coordinator,
-            channel,
-            #[cfg(target_os = "macos")]
-            signer,
-            #[cfg(target_os = "linux")]
             repository,
             released,
             released_binary,
@@ -268,13 +228,8 @@ impl Rig {
     }
 
     /// [`Rig::start`], then the released version's package in place as the host the coordinator
-    /// converged on the release is. On Linux the released daemon adopted the `.deb` the host was
-    /// set up with at its start: it holds it and records it as installed by `apt`. On a Mac the
-    /// released version's package was installed by the coordinator's order; it returns once the
-    /// host has reported that order `OUTCOME_SUCCEEDED`, not only once the coordinator counts the
-    /// host converged (the host runs that version from its start, so it is counted converged
-    /// while the install order may still be running, and a test's next order sent then would be
-    /// answered `busy` with it).
+    /// converged on the release is: the released daemon adopted the `.deb` the host was set up
+    /// with at its start, and holds it and records it as installed by `apt`.
     pub fn installed(tag: &str) -> Rig {
         let rig = Rig::start(tag);
         rig.converge_on_released();

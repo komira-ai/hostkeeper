@@ -6,11 +6,11 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "The host daemon's installers: the installer contract, the registry of the installers it is built with, the installers a daemon announces, and the macos-pkg installer of a signed flat .pkg with its signers file."
+description = "The host daemon's installers: the registry of the installers it is built with, the installers a daemon announces, and the macos-pkg installer of a signed flat .pkg with its signers file."
 
-# docs/design/packages.md, section 5: an installer is built into the daemon, behind one trait,
-# and this crate holds them. It writes only the version directory it stages; the switch, the
-# placement and the step launcher are the daemon's, behind ports. macos-pkg's parsing and steps
+# docs/design/packages.md, section 5: an installer is built into the daemon, and
+# this crate holds them. It writes only the version directory it stages; the switch and
+# the step launcher are the daemon's, behind ports. macos-pkg's parsing and steps
 # are ports and pure logic measured on Linux against fakes; its real tools run only on a Mac, in
 # the macos-device job of `crates/hostkeeper-privileged`.
 [dependencies]
@@ -25,14 +25,15 @@ hostkeeper-proto = { path = "../hostkeeper-proto" }
 hostkeeper-release = { path = "../hostkeeper-release" }
 # The step launcher, which runs the repository installer's tools as transient units.
 hostkeeper-steps = { path = "../hostkeeper-steps" }
-# The bounded reader: today's unpack, the stage of hostkeeper-archive.
-hostkeeper-unpack = { path = "../hostkeeper-unpack" }
 # Fingerprints of signers, and the SHA-256 of a downloaded package against the order's pin, as hex.
 hex.workspace = true
 # `O_NOFOLLOW` for the signers file's and the repository configuration's open.
 libc.workspace = true
 # The receipts and launchd plists, and `pkgutil`'s `-plist` answers.
 plist.workspace = true
+# Directory handles and `openat`, `mkdirat`, `renameat`, `unlinkat`, `fchown`, `fchmod`, `fsync`,
+# for the version directory's publish (`version::HostFs`), and the errno of a full disk.
+rustix = { workspace = true, features = ["fs"] }
 # The record macos-pkg keeps, and the repository installer's record, the service's `installed`
 # entry of placed.json.
 serde.workspace = true
@@ -44,7 +45,7 @@ toml.workspace = true
 
 [dev-dependencies]
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }
-# The running user of the stage's tests.
+# The running user of the repository tests.
 rustix = { workspace = true, features = ["process"] }
 # The record's JSON form, asserted by the tests.
 serde_json.workspace = true

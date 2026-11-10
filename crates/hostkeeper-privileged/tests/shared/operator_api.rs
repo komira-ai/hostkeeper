@@ -243,54 +243,6 @@ impl OperatorApi {
         )
     }
 
-    /// `Releases.SetDesired`: the desired version of `service` is `version`, whose package has
-    /// the SHA-256 `digest`.
-    pub fn set_desired(&self, service: &str, version: &str, digest: &str) -> Result<Value, Status> {
-        rpc!(
-            self,
-            ReleasesClient.set_desired,
-            SetDesiredRequest {
-                service: service.to_owned(),
-                desired: Some(DesiredState {
-                    version: version.to_owned(),
-                    ..DesiredState::default()
-                }),
-                package_digest: Some(digest.to_owned()),
-                ..SetDesiredRequest::default()
-            },
-            "SetDesiredResponse"
-        )
-    }
-
-    /// `Releases.SetDesired` of `service` at `version` by targets: `targets` by platform, and
-    /// the text of the version's release index with its SHA-256 `index_digest` (64 lower-case hex
-    /// digits), as CI's set gives them.
-    pub fn set_desired_targets(
-        &self,
-        service: &str,
-        version: &str,
-        targets: BTreeMap<String, TargetList>,
-        index: &str,
-        index_digest: &str,
-    ) -> Result<Value, Status> {
-        rpc!(
-            self,
-            ReleasesClient.set_desired,
-            SetDesiredRequest {
-                service: service.to_owned(),
-                desired: Some(DesiredState {
-                    version: version.to_owned(),
-                    ..DesiredState::default()
-                }),
-                release_index: Some(index.to_owned()),
-                release_index_digest: Some(index_digest.to_owned()),
-                targets: targets.into_iter().collect(),
-                ..SetDesiredRequest::default()
-            },
-            "SetDesiredResponse"
-        )
-    }
-
     /// `Releases.SetDesired` of `service` at `version` by targets alone: `targets` by platform and
     /// no release index and no index digest, as CI's set of a release whose entries are all native
     /// gives them.

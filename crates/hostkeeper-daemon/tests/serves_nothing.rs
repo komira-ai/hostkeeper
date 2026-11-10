@@ -14,8 +14,7 @@ use clap::error::ErrorKind;
 use clap::{CommandFactory, Parser};
 use hostkeeper_daemon::Stage;
 use hostkeeper_daemon::cli::{
-    Cli, Command, DEFAULT_CONFIG, DEFAULT_PACKAGES_DIR, DEFAULT_STATE_DIR,
-    DEFAULT_TRUSTED_ROOT_MAX_AGE_DAYS, DaemonFlags,
+    Cli, Command, DEFAULT_CONFIG, DEFAULT_PACKAGES_DIR, DEFAULT_STATE_DIR, DaemonFlags,
 };
 use hostkeeper_daemon::start::{self, Settings, Started};
 use hostkeeper_daemon::testing::{FakeNotifier, Log};
@@ -79,9 +78,9 @@ fn parse(arguments: &[String]) -> DaemonFlags {
     }
 }
 
-/// The settings of `flags` with the daemon's directories moved into the rig's scratch directory
-/// and everything else as parsed but the uid that owns the config.
-fn rerooted(rig: &Rig, flags: &DaemonFlags) -> Settings {
+/// The settings with the daemon's directories moved into the rig's scratch directory and the uid
+/// that owns the config the user running the tests.
+fn rerooted(rig: &Rig) -> Settings {
     Settings {
         config: rig.config.clone(),
         state_dir: rig.state.clone(),
@@ -90,15 +89,14 @@ fn rerooted(rig: &Rig, flags: &DaemonFlags) -> Settings {
         run_dir: rig.run_dir.clone(),
         // The scratch config is owned by the user running the tests, not by root.
         trusted_uid: support::my_uid(),
-        ..flags.settings()
     }
 }
 
-/// Starts the daemon on `settings` as the unit's flags say (it tells a fake notifier it is ready
-/// when `flags.notify_systemd`), and returns it once the boot work is over.
-fn start_as(rig: &Rig, flags: &DaemonFlags) -> Started {
+/// Starts the daemon on the rig's directories (it tells a fake notifier it is ready), and returns
+/// it once the boot work is over.
+fn start_as(rig: &Rig) -> Started {
     let notifier = FakeNotifier::new(Log::default());
-    let started = start::startup_notifying(&rerooted(rig, flags), rig.ports(), OWN, &*notifier)
+    let started = start::startup_notifying(&rerooted(rig), rig.ports(), OWN, &*notifier)
         .expect("the daemon starts");
     assert!(
         started
@@ -136,7 +134,7 @@ async fn a_started_and_serving_daemon_binds_no_socket() {
     let rig = Rig::new("serves-nothing");
     let flags = parse(&package_arguments());
 
-    let started = start_as(&rig, &flags);
+    let started = start_as(&rig);
     assert_eq!(sockets_under(rig.scratch.path()), Vec::<PathBuf>::new());
     assert!(!rig.run_dir.join("hostkeeper").exists());
 
@@ -195,10 +193,6 @@ fn the_package_unit_and_the_bootstrap_unit_give_the_same_settings() {
         assert_eq!(flags.packages_dir, Path::new(DEFAULT_PACKAGES_DIR));
         assert!(flags.notify_systemd);
         assert_eq!(flags.link.heartbeat_secs, DEFAULT_HEARTBEAT_SECS);
-        assert_eq!(
-            flags.trusted_root_max_age_days,
-            DEFAULT_TRUSTED_ROOT_MAX_AGE_DAYS
-        );
         let settings = flags.settings();
         assert_eq!(settings.trusted_uid, 0);
         assert_eq!(settings.config, Path::new(DEFAULT_CONFIG));
@@ -219,7 +213,7 @@ async fn a_daemon_starts_from_the_package_unit_and_from_the_bootstrap_unit_and_b
         let rig = Rig::new(name);
         let flags = parse(&arguments);
         assert!(flags.notify_systemd, "{name}");
-        let started = start_as(&rig, &flags);
+        let started = start_as(&rig);
         assert_eq!(
             sockets_under(rig.scratch.path()),
             Vec::<PathBuf>::new(),

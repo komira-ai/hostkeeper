@@ -6,7 +6,6 @@
 
 use std::cell::Cell;
 use std::fs;
-use std::num::NonZeroU64;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 
@@ -84,14 +83,10 @@ impl Mac {
             packages_dir: packages,
             run_dir: self.root().join("run"),
             trusted_uid: me(),
-            trusted_root_max_age_days: NonZeroU64::MIN,
         };
         let files = HostFiles {
             repositories: None,
             os_root: self.root().join("os"),
-            ca_bundle: self.root().join("ca.pem"),
-            gh: self.root().join("gh"),
-            trusted_root: self.root().join("trusted_root.json"),
             stores: self.root().join("stores.toml"),
             macos_pkg_signers: None,
             pki: self.root().join("pki"),
@@ -234,12 +229,12 @@ fn with(mut top: Dictionary, path: &[&str], value: Value) -> Dictionary {
 #[test]
 fn the_defaults_are_the_paths_the_pkg_names() {
     assert_eq!(DEFAULT_CONFIG, DAEMON_CONFIG);
-    let mac = HostFiles::for_platform(PlatformKind::Macos, |_| false);
+    let mac = HostFiles::for_platform(PlatformKind::Macos);
     assert_eq!(
         mac.managed_config.as_deref(),
         Some(Path::new(MANAGED_CONFIG))
     );
-    let linux = HostFiles::for_platform(PlatformKind::Linux, |_| false);
+    let linux = HostFiles::for_platform(PlatformKind::Linux);
     assert_eq!(linux.managed_config, None);
 }
 

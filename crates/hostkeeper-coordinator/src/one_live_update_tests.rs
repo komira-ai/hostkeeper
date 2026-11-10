@@ -13,14 +13,15 @@ use hostkeeper_oidc::testkit::{STATIC_ISSUER, config_text};
 use hostkeeper_wire::RoleName;
 use hostkeeper_wire::wire::{Health, Heartbeat, Outcome, ServiceBeat, ServiceReply};
 
-use crate::decide::{Decision, Gate, Skip, Why, decide_why};
+use crate::decide::{Decision, Gate, Skip, Why};
 use crate::desired::Desired;
 use crate::fleet::{Fleet, Marks};
 use crate::identity::Identity;
 use crate::rollouts::advance;
 use crate::services::Services;
 use crate::testutil::{
-    Rig, beat, id, kbf_def, last, ops_of, role, scratch, secs, unhealthy, updating, version,
+    Rig, beat, decide_why, id, kbf_def, last, ops_of, role, scratch, secs, unhealthy, updating,
+    version,
 };
 
 /// `a` runs on daemons and bakes for two beats; `b` runs on daemons and storage hosts; `wide` runs
@@ -383,7 +384,7 @@ async fn a_restart_mid_update_resumes_with_the_one_update_rule() {
     let beat_at = |rig: &Rig, at: u64, host: &str, b: Heartbeat| {
         rig.at(at);
         rig.coordinator
-            .heartbeat(who(host), b)
+            .heartbeat_native(who(host), b)
             .expect("a heartbeat")
             .reply
     };

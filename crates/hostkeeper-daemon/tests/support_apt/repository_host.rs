@@ -246,7 +246,7 @@ pub fn host(
     let ports = Ports {
         repository: Arc::new(repository),
         announcement: Announcement {
-            installers: vec![Installer::HostkeeperArchive],
+            installers: Vec::new(),
             family: Some(Family::Deb),
         },
         ..apt.rig.ports()

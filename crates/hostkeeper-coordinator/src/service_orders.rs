@@ -5,7 +5,6 @@
 
 use std::time::Duration;
 
-use hostkeeper_wire::Platform;
 use hostkeeper_wire::wire::ServiceReply;
 
 use super::Coordinator;
@@ -22,15 +21,10 @@ use crate::picks;
 pub(super) struct Asked<'a> {
     /// The host that sent the heartbeat.
     pub(super) who: &'a Identity,
-    /// The platform the heartbeat names: which package of a release index the host is ordered.
-    pub(super) platform: Platform,
     /// The legacy service the heartbeat's top level speaks for, if any.
     pub(super) legacy: Option<&'a str>,
     /// The services a halt the heartbeat raised holds: nothing is ordered of them.
     pub(super) held: &'a [String],
-    /// Whether the agent reads order terms (`order-v1`): it is ordered only a version with a
-    /// package digest.
-    pub(super) order_v1: bool,
     /// Whether the transport carries typed orders: only then is an install or an uninstall
     /// ordered.
     pub(super) orders: bool,
@@ -73,38 +67,14 @@ impl Coordinator {
             let order = match decision {
                 Decision::Update { version } => {
                     let order_try = fleet.order_try(name, id, &version, false, now);
-                    // Of a version set with targets, the entry picked for the host: an archive
-                    // goes out on either route, as an old daemon's order is; any other entry only
-                    // over gRPC, and on the JSON route the host waits for its next gRPC heartbeat.
-                    let (terms, target) = match picks::order_of(fleet, name, &version, id) {
-                        Some(picked) => {
-                            let sendable = picked.filter(|p| p.archive || asked.orders);
-                            let Some(picked) = sendable else { continue };
-                            let target = picked.target.filter(|_| asked.orders);
-                            let terms =
-                                order_terms::terms(name, &version, &picked.package, order_try);
-                            (terms.filter(|_| asked.order_v1 || target.is_some()), target)
-                        }
-                        // An agent that reads order terms is ordered only a version with a digest.
-                        None => {
-                            let terms = asked.order_v1.then(|| {
-                                let digests = self.desired.digests(name);
-                                order_terms::of_beat(
-                                    &digests,
-                                    name,
-                                    &version,
-                                    order_try,
-                                    id,
-                                    asked.platform,
-                                )
-                            });
-                            let Some(terms) = terms.map_or(Some(None), |made| made.map(Some))
-                            else {
-                                continue;
-                            };
-                            (terms, None)
-                        }
+                    // The entry picked for the host goes out only over gRPC: the JSON route
+                    // carries no order, and its host waits for its next gRPC heartbeat.
+                    let Some(picked) =
+                        picks::order_of(fleet, name, &version, id).filter(|_| asked.orders)
+                    else {
+                        continue;
                     };
+                    let terms = order_terms::terms(name, &version, &picked.package, order_try);
                     // The host's ack goes from the file before the order exists.
                     if !release_ack(&self.ops, name, id) {
                         continue;
@@ -112,8 +82,7 @@ impl Coordinator {
                     fleet.order(name, id.clone(), version.clone(), now);
                     let service = (Some(name) != asked.legacy).then(|| name.to_owned());
                     let reply = ServiceReply::Update { service, version };
-                    let typed =
-                        target.and_then(|t| order_terms::typed(&reply, terms.as_ref(), Some(t)));
+                    let typed = order_terms::typed(&reply, terms.as_ref(), Some(picked.target));
                     return Some((reply, typed, terms));
                 }
                 Decision::Install {
@@ -126,9 +95,7 @@ impl Coordinator {
                     }
                     let order_id = install_order_id(&digest);
                     let order_try = fleet.order_try(name, id, &version, false, now);
-                    let target = picks::order_of(fleet, name, &version, id)
-                        .flatten()
-                        .and_then(|picked| picked.target);
+                    let target = picks::order_of(fleet, name, &version, id).map(|p| p.target);
                     fleet.order(name, id.clone(), version.clone(), now);
                     Order::Install {
                         service: name.to_owned(),

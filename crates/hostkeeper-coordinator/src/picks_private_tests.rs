@@ -9,11 +9,10 @@ use hostkeeper_proto::hostkeeper::release::v1::{Location, Target};
 use hostkeeper_wire::Platform;
 use hostkeeper_wire::version::Version;
 
-use crate::marks_support::{WEB, ask, operator, rig};
+use crate::marks_support::{AGENT, WEB, ask_heard, beat_on, operator, rig, who};
 use crate::picks::{COORDINATOR_STORE, Pick, TARGET_FEATURE, pick};
-use crate::release_index_support::{AGENT, beat_on};
 use crate::releases::Targets;
-use crate::releases_tests::{entry, list};
+use crate::releases_tests::{apt_entry, list};
 use crate::repositories_support::{credential_in, komira, private, repository, repository_entry};
 use crate::repository_push::PRIVATE_FEATURE;
 use crate::service::ci_calls::Setter;
@@ -66,7 +65,7 @@ fn beats(rig: &Rig, host: &str, installers: &[&str], private: bool) {
     features.push(TARGET_FEATURE.to_owned());
     features.extend(private.then(|| PRIVATE_FEATURE.to_owned()));
     rig.coordinator.hear_installers(
-        &crate::marks_support::who(host, "daemon"),
+        &who(host, "daemon"),
         &agent::HeartbeatRequest {
             features: features.clone(),
             installers: installers.iter().map(|i| (*i).to_owned()).collect(),
@@ -75,23 +74,27 @@ fn beats(rig: &Rig, host: &str, installers: &[&str], private: bool) {
     );
     let mut beat = beat_on(Platform::LinuxX86_64, Vec::new());
     beat.agent_features = features;
-    ask(rig, host, "daemon", beat);
+    ask_heard(rig, who(host, "daemon"), beat);
 }
 
 /// What the pick finds for `host` of `web` at `version`.
 fn picked(rig: &Rig, host: &str, version: &str) -> &'static str {
     let fleet = rig.coordinator.lock_fleet();
     let version = Version::parse(version).expect("a version");
-    match pick(&fleet, WEB, &version, &id(host)).expect("a release").0 {
+    match pick(&fleet, WEB, &version, &id(host)) {
         Pick::Entry(_) => "entry",
         Pick::NoTarget => "no_target",
-        other => panic!("{other:?}"),
+        other => panic!("{host} {version}: {other:?}"),
     }
 }
 
-/// An artifact entry of `web` for a tarball whose every location is in `store`.
+/// An artifact entry of `web` for a `macos-pkg` whose every location is in `store`.
 fn artifact_in(store: &str, locations: usize) -> Target {
-    let mut one = entry(WEB, "tarball", 'c', 10);
+    let mut one = apt_entry(WEB, 3);
+    one.installer = "macos-pkg".to_owned();
+    one.repository = None;
+    one.package_version = None;
+    one.bytes = 10;
     one.locations = (0..locations)
         .map(|n| Location {
             store: store.to_owned(),
@@ -149,13 +152,13 @@ async fn an_artifact_entry_in_the_coordinator_store_needs_the_same_daemon() {
     let one = |target: Target| Targets::from([("linux-x86_64".to_owned(), list(vec![target]))]);
     // Only the desired version's release is read, so each is checked as it is set.
     set(&rig, "2.0", one(artifact_in("coordinator", 2))).await;
-    beats(&rig, "d1", &["tarball"], true);
-    beats(&rig, "d2", &["tarball"], false);
+    beats(&rig, "d1", &["macos-pkg"], true);
+    beats(&rig, "d2", &["macos-pkg"], false);
     assert_eq!(picked(&rig, "d1", "2.0"), "entry");
     assert_eq!(picked(&rig, "d2", "2.0"), "no_target");
 
     set(&rig, "2.1", one(artifact_in("github", 1))).await;
-    beats(&rig, "d2", &["tarball"], false);
+    beats(&rig, "d2", &["macos-pkg"], false);
     assert_eq!(picked(&rig, "d2", "2.1"), "entry", "a public entry");
 
     let mut mixed = artifact_in("coordinator", 1);
@@ -164,7 +167,7 @@ async fn an_artifact_entry_in_the_coordinator_store_needs_the_same_daemon() {
         locator: "example-org/web/releases/download/v2.2/web.tgz".to_owned(),
     });
     set(&rig, "2.2", one(mixed)).await;
-    beats(&rig, "d2", &["tarball"], false);
+    beats(&rig, "d2", &["macos-pkg"], false);
     assert_eq!(
         picked(&rig, "d2", "2.2"),
         "entry",

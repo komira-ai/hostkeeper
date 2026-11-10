@@ -15,8 +15,8 @@ use serde_json::json;
 use crate::audit_file::{self, Appender, AuditLog, DEFAULT_ROTATION};
 use crate::grpc::operator::set_refusal;
 use crate::marks_support::{
-    DB, NEW_DAEMON, WEB, ask, ask_typed, beat_of, digest, fleet_target, force_request, hold,
-    operator, rig, runs, scope_fleet, scope_host, set, start, unhold,
+    DB, NEW_DAEMON, WEB, ask, ask_typed, beat_of, fleet_target, force_request, hold,
+    native_targets, operator, rig, runs, scope_fleet, scope_host, set, start, unhold,
 };
 use crate::ops::{AuditEntry, OpsError, OpsState, OpsStore, Write};
 use crate::orders::Order;
@@ -89,17 +89,17 @@ fn snapshot(rig: &Rig) -> (Vec<Option<Vec<u8>>>, OpsState, Option<String>) {
     (files(rig), rig.coordinator.ops().state(), desired)
 }
 
-/// The operator's set of `web` to `version`, with the digest registered for it.
+/// The operator's set of `web` to `version`, with the release [`native_targets`] `n`.
 async fn operator_set(rig: &Rig, version: &str, n: u8) -> Result<(), SetError> {
-    let body = json!({"service": WEB, "version": version, "release_digest": digest(n)});
+    let body = json!({"service": WEB, "version": version});
     rig.coordinator
-        .set_desired_by(
+        .set_desired_with(
             &Setter::Operator("operator"),
             body.to_string().as_bytes(),
             &WriteAsk::default(),
+            Some(native_targets(WEB, n)),
         )
         .await
-        .map(|(set, _)| set)
         .map(drop)
 }
 
@@ -158,8 +158,12 @@ async fn force_hold_set_desired_refuse_when_append_fails() {
         .into_iter()
         .map(|entry| entry.action)
         .collect();
-    assert_eq!(actions.first().map(String::as_str), Some("hold"));
-    assert!(actions.contains(&"set_desired".to_owned()), "{actions:?}");
+    // CI's two sets, with their releases, and the hold made before the disk filled come first.
+    assert_eq!(actions[..3], ["set_desired", "set_desired", "hold"]);
+    assert!(
+        actions[3..].contains(&"set_desired".to_owned()),
+        "{actions:?}"
+    );
     assert!(actions.contains(&"force".to_owned()), "{actions:?}");
 }
 
@@ -288,8 +292,9 @@ async fn audit_list_unaffected_by_append_failure() {
         .audit_list(&operator(), proto::ListAuditRequest::default())
         .expect("answered");
     let actions: Vec<&str> = listed.entries.iter().map(|e| e.action.as_str()).collect();
-    assert_eq!(actions, ["hold"]);
-    assert_eq!(listed.next_seq, listed.entries[0].seq);
+    // CI's two sets, with their releases, are audited before the hold.
+    assert_eq!(actions, ["set_desired", "set_desired", "hold"]);
+    assert_eq!(listed.next_seq, listed.entries[2].seq);
     let by_service = proto::ListAuditRequest {
         service: Some(DB.to_owned()),
         ..proto::ListAuditRequest::default()
@@ -298,7 +303,7 @@ async fn audit_list_unaffected_by_append_failure() {
         .coordinator
         .audit_list(&operator(), by_service)
         .expect("answered");
-    assert_eq!(filtered.entries, listed.entries);
+    assert_eq!(filtered.entries, listed.entries[2..]);
 }
 
 /// Proves: in the ops store, a change written before memory is refused

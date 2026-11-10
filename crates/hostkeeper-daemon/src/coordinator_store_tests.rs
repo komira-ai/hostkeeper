@@ -2,7 +2,6 @@
 
 use std::sync::Mutex;
 
-use hostkeeper_config::daemon::DaemonConfig;
 use hostkeeper_link::LinkError;
 use hostkeeper_package::ports::Stop;
 use hostkeeper_package::stores::{COORDINATOR_STORE, Stores};
@@ -85,15 +84,7 @@ impl Sink for Keep {
 fn ask(fetch: &Arc<Scripted>, sink: &mut Keep) -> Result<Got, NetError> {
     let clock = FakeClock::new();
     let fetcher = CoordinatorFetcher::new(fetch.clone(), clock.clone(), MAX);
-    let config = DaemonConfig::parse(&format!(
-        "coordinator = \"https://coordinator.test\"\nca_sha256 = \"{}\"\n\
-         release_channel = \"https://releases.test\"\n\n[trusted_signers]\n\
-         organisation = \"komira-ai\"\nworkflow = \".github/workflows/release.yml\"\n\
-         refs = [\"refs/tags/*\"]\nhosted_runner = true\n",
-        "ab".repeat(32)
-    ))
-    .expect("a config");
-    let stores = Stores::channel(&config.release_channel);
+    let stores = Stores::default();
     let url = stores
         .get(COORDINATOR_STORE)
         .expect("the coordinator store")

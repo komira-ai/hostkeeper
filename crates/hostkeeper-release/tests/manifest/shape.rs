@@ -9,7 +9,10 @@ use hostkeeper_release::{
 };
 use prost::Message as _;
 
-use crate::support::{LINUX, container, manifest, pad_manifest_to, place, platform_of, text, web};
+use crate::support::{
+    LINUX, bare_manifest, container, container_manifest, manifest, pad_manifest_to, place,
+    placed_manifest, platform_of, text, web,
+};
 
 fn check(manifest: &Manifest) -> Result<(), ManifestError> {
     manifest::check(&web(), LINUX, manifest)
@@ -37,12 +40,12 @@ fn the_manifest_of_every_installer_passes_its_checks() {
 /// Catches: a size limit off by one, or measured on something other than the encoding.
 #[test]
 fn a_manifest_of_16_kib_passes_and_one_byte_more_is_refused() {
-    let mut at_limit = manifest(Installer::Tarball);
+    let mut at_limit = placed_manifest();
     pad_manifest_to(&mut at_limit, MAX_MANIFEST_BYTES);
     assert_eq!(at_limit.encoded_len(), 16 * 1024);
     assert_eq!(check(&at_limit), Ok(()));
 
-    let mut over = manifest(Installer::Tarball);
+    let mut over = placed_manifest();
     pad_manifest_to(&mut over, MAX_MANIFEST_BYTES + 1);
     assert_eq!(check(&over), Err(ManifestError::TooLarge { bytes: 16_385 }));
     assert_eq!(
@@ -58,7 +61,7 @@ fn runs(count: usize) -> Vec<String> {
 /// Catches: a count limit off by one, or not applied to one of the four fields.
 #[test]
 fn each_count_limit_takes_its_limit_and_refuses_one_more() {
-    let mut run = manifest(Installer::Tarball);
+    let mut run = placed_manifest();
     run.run = runs(MAX_RUN);
     assert_eq!(check(&run), Ok(()));
     run.run = runs(MAX_RUN + 1);
@@ -75,7 +78,7 @@ fn each_count_limit_takes_its_limit_and_refuses_one_more() {
         "the manifest has 65 run entries, more than 64"
     );
 
-    let mut places = manifest(Installer::Tarball);
+    let mut places = placed_manifest();
     let files = |count: usize| {
         (0..count)
             .map(|i| place("file", &format!("f/{i}"), &format!("/opt/web/{i}")))
@@ -93,7 +96,7 @@ fn each_count_limit_takes_its_limit_and_refuses_one_more() {
         })
     );
 
-    let mut params = manifest(Installer::Tarball);
+    let mut params = placed_manifest();
     params.params = (0..MAX_PARAMS)
         .map(|i| (format!("p{i}"), text("v")))
         .collect();
@@ -108,7 +111,7 @@ fn each_count_limit_takes_its_limit_and_refuses_one_more() {
         })
     );
 
-    let mut image = manifest(Installer::OciImage);
+    let mut image = container_manifest();
     image.run = (0..MAX_CONTAINERS)
         .map(|i| format!("web-c{i}.service"))
         .collect();
@@ -139,7 +142,7 @@ fn each_count_limit_takes_its_limit_and_refuses_one_more() {
 #[test]
 fn a_min_hostkeeper_that_is_not_major_minor_patch_is_refused() {
     for bad in ["", "1.2", "1.2.3-rc1", "01.2.3", "v1.2.3"] {
-        let mut m = manifest(Installer::HostkeeperArchive);
+        let mut m = bare_manifest();
         m.min_hostkeeper = bad.to_owned();
         let err = check(&m).expect_err(bad);
         assert!(matches!(err, ManifestError::MinHostkeeper(_)), "{bad}");
@@ -150,7 +153,7 @@ fn a_min_hostkeeper_that_is_not_major_minor_patch_is_refused() {
             )
         );
     }
-    let m = manifest(Installer::HostkeeperArchive);
+    let m = bare_manifest();
     assert_eq!(
         manifest::min_hostkeeper(&m).expect("a version").to_string(),
         "0.4.0"
@@ -162,7 +165,7 @@ fn a_min_hostkeeper_that_is_not_major_minor_patch_is_refused() {
 #[test]
 fn a_param_in_the_updater_namespace_or_without_a_value_is_refused() {
     for key in ["updater", "updater.staged_release", "updater."] {
-        let mut m = manifest(Installer::Tarball);
+        let mut m = placed_manifest();
         m.params.insert(key.to_owned(), text("x"));
         assert_eq!(
             check(&m),
@@ -170,12 +173,12 @@ fn a_param_in_the_updater_namespace_or_without_a_value_is_refused() {
             "{key}"
         );
     }
-    let mut beside = manifest(Installer::Tarball);
+    let mut beside = placed_manifest();
     beside.params.insert("updaters".to_owned(), text("x"));
     beside.params.insert("my.updater".to_owned(), text("x"));
     assert_eq!(check(&beside), Ok(()));
 
-    let mut empty = manifest(Installer::Tarball);
+    let mut empty = placed_manifest();
     empty
         .params
         .insert("unset".to_owned(), Param { value: None });
@@ -187,7 +190,7 @@ fn a_param_in_the_updater_namespace_or_without_a_value_is_refused() {
         check(&empty).expect_err("refused").to_string(),
         "the params key \"unset\" holds no value: a string, an integer, a float or a boolean"
     );
-    let mut reserved = manifest(Installer::Tarball);
+    let mut reserved = placed_manifest();
     reserved.params.insert("updater".to_owned(), text("x"));
     assert_eq!(
         check(&reserved).expect_err("refused").to_string(),
@@ -196,7 +199,7 @@ fn a_param_in_the_updater_namespace_or_without_a_value_is_refused() {
 }
 
 fn with_url(url: &str, run: &[&str]) -> Manifest {
-    let mut m = manifest(Installer::Tarball);
+    let mut m = placed_manifest();
     m.health_url = Some(url.to_owned());
     m.run = run.iter().map(|unit| (*unit).to_owned()).collect();
     m

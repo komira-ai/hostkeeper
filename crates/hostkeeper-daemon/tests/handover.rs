@@ -168,7 +168,7 @@ fn with_the_count_spent_the_old_daemon_settles_failed_and_starts() {
     );
     assert_eq!(exec.calls(), []);
     assert_fell_back(&s);
-    let started = start::startup(&s.rig.settings(), s.rig.ports(), own(OLD)).expect("started");
+    let started = start::startup(&s.rig.settings(), s.ports(), own(OLD)).expect("started");
     assert_eq!(
         started.boot_report().self_update,
         Some(Ok(Settled::NotPending))
@@ -200,7 +200,7 @@ fn the_new_daemon_execs_nothing_and_its_start_confirms_the_hand_over() {
     assert_eq!(exec.calls(), []);
     assert_eq!(snapshot(&s.rig.state), before);
 
-    let started = start::startup(&s.rig.settings(), s.rig.ports(), own(NEW)).expect("started");
+    let started = start::startup(&s.rig.settings(), s.ports(), own(NEW)).expect("started");
     assert_eq!(
         started.boot_report().self_update,
         Some(Ok(Settled::Confirmed))

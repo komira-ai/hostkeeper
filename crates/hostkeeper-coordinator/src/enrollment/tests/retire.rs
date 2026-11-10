@@ -161,7 +161,8 @@ async fn a_host_retired_mid_update_keeps_its_slot_until_its_update_is_final() {
     let c = &rig.coordinator;
     let (s1, s2) = (identity(c, &first), identity(c, &second));
     assign(c, "s1");
-    let heard = |who: &crate::identity::Identity, b| c.heartbeat(who.clone(), b).expect("heard");
+    let heard =
+        |who: &crate::identity::Identity, b| c.heartbeat_native(who.clone(), b).expect("heard");
     assert_eq!(heard(&s1, beat("1.0")).reply, order());
     heard(&s1, updating(beat("1.0"), "2.0"));
 

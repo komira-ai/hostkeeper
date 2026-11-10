@@ -95,6 +95,30 @@ fn an_unknown_or_unfinished_fixture_flag_is_refused() {
     );
 }
 
+/// Catches `--fixture-link` read as another link, or a link it does not name let through: `files`
+/// and `coordinator` are taken (the start goes on, here to the refusal of a `daemon` with no
+/// `--fixture-dir`), and any other value is refused naming it, before the daemon starts.
+#[test]
+fn the_link_flag_takes_files_or_coordinator_only() {
+    let s = scratch("su_link_flag");
+    let program = staged(s.path(), "1.0.0");
+    for link in ["files", "coordinator"] {
+        let out = run(&program, &["--fixture-link", link, "daemon"]);
+        assert_eq!(out.status.code(), Some(2), "{link}: {out:?}");
+        assert_eq!(
+            text(&out.stderr),
+            "hostkeeper-selfupdate-daemon: daemon needs --fixture-dir\n",
+            "{link}"
+        );
+    }
+    let other = run(&program, &["--fixture-link", "http", "daemon"]);
+    assert_eq!(other.status.code(), Some(2), "{other:?}");
+    assert_eq!(
+        text(&other.stderr),
+        "hostkeeper-selfupdate-daemon: --fixture-link takes files or coordinator, not http\n"
+    );
+}
+
 fn paths() -> Paths {
     Paths::under(Path::new("/run/hostkeeper-ci/t"))
 }

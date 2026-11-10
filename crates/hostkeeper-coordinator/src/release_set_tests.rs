@@ -1,8 +1,7 @@
 //! A set of the desired state with targets (`Coordinator::set_desired_with`, packages.md sections
 //! 3.4 to 3.6) as the coordinator decides it, without a transport: what is stored (the third form
 //! of the state and the release beside it), what is refused and in what order, what is audited,
-//! how `--release-channel` is asked, and what `release_verified` reads back. The channel is a fake
-//! fetcher: no network.
+//! and what `release_verified` reads back.
 
 use std::sync::Arc;
 
@@ -10,12 +9,10 @@ use hostkeeper_config::platform::Platform;
 use hostkeeper_oidc::testkit::WORKFLOW;
 use serde_json::{Value, json};
 
-use crate::channel::{ChannelRefusal, Fetched, ReleaseChannel, index_path};
-use crate::channel_tests::FakeChannel;
 use crate::desired::{self, DesiredStore};
+use crate::index_set_support::{index_body, sha};
 use crate::ops::AuditEntry;
 use crate::registry::{MAX_REGISTRY, Release as Registered};
-use crate::release_index_support::{index_body, sha};
 use crate::releases::{Release, Targets, audit_reason};
 use crate::releases_tests::{
     agreeing_index, archive_targets, digest, entry, hex, index_of, list, targets as web_targets,
@@ -293,10 +290,10 @@ async fn refused_targets_change_nothing() {
     assert!(kept(&rig, "2.0").is_none());
 }
 
-/// Proves: with a release index the targets must agree with it: an index that lists exactly the
-/// archive entries is kept as the release's index digest (the state keeps no index, the registry
-/// no digest) and named in the audit reason; one that disagrees is `index_invalid`, a digest that
-/// is not the index's `index_digest_mismatch`, with nothing changed.
+/// Proves: a release index set with targets is kept as the release's index digest alone (the state
+/// keeps no index, the registry no digest) and named in the audit reason, whatever its text, which
+/// is not read: an index that lists other packages than the targets is kept as well; a digest that
+/// is not the index's is `index_digest_mismatch`, with nothing changed.
 #[tokio::test]
 async fn a_set_with_an_index_keeps_its_digest_beside_the_targets() {
     let rig = Rig::new("release-set-index");
@@ -325,19 +322,22 @@ async fn a_set_with_an_index_keeps_its_digest_beside_the_targets() {
         "{reason}"
     );
 
-    let before = files(&rig);
     let other = index_of(LEGACY, "2.1", &[(Platform::LinuxX86_64, '1', 1_111)]);
-    let refused = ci_sets(
+    ci_sets(
         &rig,
         &index_body(LEGACY, "2.1", &other, &sha(&other)),
         Some(archive_targets(LEGACY)),
     )
     .await
-    .expect_err("refused");
+    .expect("an index of other packages is kept as its digest");
     assert_eq!(
-        refused.to_string(),
-        "index_invalid: release_index does not list exactly the archive entries of the targets"
+        kept(&rig, "2.1")
+            .expect("a release")
+            .index_digest()
+            .map(ToString::to_string),
+        Some(sha(&other))
     );
+    let before = files(&rig);
     let refused = ci_sets(
         &rig,
         &index_body(LEGACY, "2.1", &other, &hex('0')),
@@ -461,62 +461,6 @@ async fn a_set_without_targets_cannot_name_a_digest_for_a_version_with_a_release
     )
     .expect("parses");
     assert!(on_disk[LEGACY].contains_key("2.0"));
-}
-
-/// The rig whose coordinator asks the channel `fake` of every set it must.
-fn channel_rig(test: &str, fake: &Arc<FakeChannel>) -> Rig {
-    let mut rig = Rig::new(test);
-    rig.coordinator =
-        Rig::start(&rig.dir, &rig.clock).with_release_channel(ReleaseChannel::new(fake.clone()));
-    rig
-}
-
-/// Proves: with `--release-channel` a set with targets and no index asks no channel (so the
-/// channel's silence does not refuse it), a set with targets and an index asks it for the version
-/// (refusing `not_in_channel` while it holds nothing, and accepting once it holds the very index),
-/// and a set without targets is asked as before.
-#[tokio::test]
-async fn the_channel_is_asked_only_for_a_set_without_targets_or_with_an_index() {
-    let fake = Arc::new(FakeChannel::default());
-    let rig = channel_rig("release-set-channel", &fake);
-    ci_sets(&rig, &body("2.0"), Some(targets(LEGACY)))
-        .await
-        .expect("targets without an index");
-    assert_eq!(fake.asked(), Vec::<String>::new());
-
-    let text = agreeing_index(LEGACY, "2.1");
-    let indexed = index_body(LEGACY, "2.1", &text, &sha(&text));
-    let refused = ci_sets(&rig, &indexed, Some(archive_targets(LEGACY)))
-        .await
-        .expect_err("the channel holds nothing");
-    assert!(
-        matches!(refused, SetError::Channel(ChannelRefusal::NotInChannel)),
-        "{refused:?}"
-    );
-    assert_eq!(fake.asked(), ["kbf/2.1/index.json"]);
-    assert!(kept(&rig, "2.1").is_none());
-
-    fake.answer(
-        &index_path(LEGACY, &version("2.1")),
-        Ok(Fetched::Found(text.clone().into_bytes())),
-    );
-    ci_sets(&rig, &indexed, Some(archive_targets(LEGACY)))
-        .await
-        .expect("the channel holds the index");
-    assert!(kept(&rig, "2.1").is_some());
-
-    let refused = ci_sets(&rig, &body("3.0"), None)
-        .await
-        .expect_err("a set without targets is asked");
-    assert_eq!(refused.reason(), Some("not_in_channel"));
-    assert_eq!(
-        fake.asked(),
-        [
-            "kbf/2.1/index.json",
-            "kbf/2.1/index.json",
-            "kbf/3.0/index.json"
-        ]
-    );
 }
 
 /// Proves: a set with targets of a service already holding the most releases drops its oldest

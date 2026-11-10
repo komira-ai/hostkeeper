@@ -2,6 +2,8 @@
 //! reports, the orders it refuses for it, and what a `placed.json` it cannot read does to each.
 
 mod support;
+mod support_apt;
+mod support_host;
 
 use std::fs;
 use std::path::PathBuf;
@@ -13,30 +15,17 @@ use hostkeeper_daemon::testing::spawn;
 use hostkeeper_daemon::verb::HookedVerb;
 use hostkeeper_daemon::{Outcome, Refusal, Reply};
 use hostkeeper_hook::{Class, Phase, Step, Verdict};
-use hostkeeper_placed::error::{ClaimError, Owner};
+use hostkeeper_placed::error::Owner;
 use hostkeeper_placed::{PlacedError, Tombstone};
-use hostkeeper_proto::hostkeeper::agent::v1::{Force, Order, order};
-use support::{Rig, alerting, d, install, lines, name, snapshot, uninstall};
+use support::{alerting, lines, name, snapshot, uninstall};
+use support_host::NativeHost;
 
-fn force(service: &str) -> Order {
-    Order {
-        order_id: format!("force-{service}"),
-        r#try: 1,
-        verb: Some(order::Verb::Force(Force {
-            target: None,
-            service: service.to_owned(),
-            version: "2.0.0".to_owned(),
-            package_digest: d(),
-            index_digest: String::new(),
-            halt_generation: 1,
-        })),
-    }
-}
-
-/// `service` installed at 1.0.0 from a package that places, with an `uninstall` bound.
-fn installed(rig: &Rig, daemon: &hostkeeper_daemon::Daemon, service: &str) {
-    rig.placed(service, "1.0.0", Some(300));
-    let reply = daemon.order(&install(service, "1.0.0", &d(), 1));
+/// `service` installed at 1.0.0 from a package that runs a unit, with an `uninstall` bound, and
+/// 2.0.0 of it published to force.
+fn installed(farm: &NativeHost, daemon: &hostkeeper_daemon::Daemon, service: &str) {
+    farm.publish_placed(service, "1.0.0", Some(300));
+    farm.publish_placed(service, "2.0.0", Some(300));
+    let reply = daemon.order(&farm.install(service, "1.0.0", 1));
     assert!(
         matches!(
             reply,
@@ -101,9 +90,8 @@ fn the_lifecycle_rules_refuse_by_where_the_service_is() {
     }
 }
 
-/// Catches a failure of linking reported with another token: a path held by another is
-/// `path_conflict`, a claim or unit that breaks a rule of linking `manifest_mismatch`, a
-/// tombstone `uninstalling`, and a failure of the host `link_failed`.
+/// Catches a failure of the links reported with another token: a `current` or `previous` that is
+/// no link to a version is `path_conflict`, and a failure of the host `link_failed`.
 #[test]
 fn each_failure_of_linking_has_its_token() {
     let rows = [
@@ -113,16 +101,6 @@ fn each_failure_of_linking_has_its_token() {
                 owner: Owner::File,
             },
             Refusal::PathConflict,
-        ),
-        (
-            PlacedError::Claim(ClaimError::EmptyPath),
-            Refusal::ManifestMismatch,
-        ),
-        (
-            PlacedError::Tombstoned {
-                service: "web".to_owned(),
-            },
-            Refusal::Uninstalling,
         ),
         (
             PlacedError::Io {
@@ -143,9 +121,10 @@ fn each_failure_of_linking_has_its_token() {
 /// under way `installing`, each with nothing on disk changed.
 #[test]
 fn force_is_refused_while_a_service_is_tombstoned() {
-    let rig = Rig::new("force-refused");
-    let daemon = Arc::new(rig.daemon());
-    installed(&rig, &daemon, "web");
+    let farm = NativeHost::new("force-refused");
+    let rig = farm.rig();
+    let daemon = Arc::new(farm.daemon());
+    installed(&farm, &daemon, "web");
     rig.launcher.additive_exits("web", &[1]);
     assert!(matches!(
         daemon.order(&uninstall("web", 1)),
@@ -154,23 +133,24 @@ fn force_is_refused_while_a_service_is_tombstoned() {
             ..
         }
     ));
-    rig.placed("new", "1.0.0", None);
+    for version in ["1.0.0", "2.0.0"] {
+        farm.publish_placed("new", version, None);
+    }
     let gate = rig.launcher.hold("new", Step::Prepare);
+    let install = farm.install("new", "1.0.0", 1);
     let installing = {
         let daemon = Arc::clone(&daemon);
-        spawn("the install", move || {
-            daemon.order(&install("new", "1.0.0", &d(), 1))
-        })
+        spawn("the install", move || daemon.order(&install))
     };
     gate.entered(&installing)
         .expect("the install's prepare runs");
     let before = snapshot(rig.scratch.path());
     let rows = [("web", Refusal::Uninstalling), ("new", Refusal::Installing)];
     for (service, refusal) in rows {
-        let reply = daemon.order(&force(service));
+        let reply = daemon.order(&farm.force(service, "2.0.0", 1, 1));
         assert_eq!(reply.refusal(), Some(refusal), "{service}: {reply:?}");
     }
-    let Reply::Refused { detail, .. } = daemon.order(&force("web")) else {
+    let Reply::Refused { detail, .. } = daemon.order(&farm.force("web", "2.0.0", 1, 1)) else {
         panic!("refused");
     };
     assert_eq!(detail, "force of web: it is Removing");
@@ -189,9 +169,10 @@ fn force_is_refused_while_a_service_is_tombstoned() {
 /// `running`, one being installed `installing`, one with only a staged version `absent`.
 #[test]
 fn status_reports_removing_while_an_uninstall_is_unfinished() {
-    let rig = Rig::new("status-removing");
-    let daemon = Arc::new(rig.daemon());
-    installed(&rig, &daemon, "web");
+    let farm = NativeHost::new("status-removing");
+    let rig = farm.rig();
+    let daemon = Arc::new(farm.daemon());
+    installed(&farm, &daemon, "web");
     rig.launcher
         .additive_replies("web", &[(1, r#"{"class":"environment","reason":"drain"}"#)]);
     assert!(matches!(
@@ -208,13 +189,14 @@ fn status_reports_removing_while_an_uninstall_is_unfinished() {
         .uninstalling
         .insert("ghost".to_owned(), Tombstone::default());
     rig.save_placed(&record);
-    rig.placed("new", "1.0.0", None);
+    for version in ["1.0.0", "2.0.0"] {
+        farm.publish_placed("new", version, None);
+    }
     let gate = rig.launcher.hold("new", Step::Prepare);
+    let install = farm.install("new", "1.0.0", 1);
     let installing = {
         let daemon = Arc::clone(&daemon);
-        spawn("the install", move || {
-            daemon.order(&install("new", "1.0.0", &d(), 1))
-        })
+        spawn("the install", move || daemon.order(&install))
     };
     gate.entered(&installing)
         .expect("the install's prepare runs");
@@ -260,6 +242,7 @@ fn status_reports_removing_while_an_uninstall_is_unfinished() {
     installing.join().expect("the install");
 
     // Once the uninstall is done, the service is no longer listed.
+    farm.open_up();
     assert!(matches!(
         daemon.order(&uninstall("web", 8)),
         Reply::Finished {
@@ -282,15 +265,18 @@ fn status_reports_removing_while_an_uninstall_is_unfinished() {
 /// refused the same, the start resumes no uninstall and alerts, and `Status` still answers.
 #[test]
 fn a_placed_json_that_cannot_be_read_holds_every_change() {
-    let rig = Rig::new("placed-garbled");
+    let farm = NativeHost::new("placed-garbled");
+    let rig = farm.rig();
     rig.running("web", "1.0.0");
-    rig.add("api", "2.0.0");
+    rig.running("api", "1.0.0");
+    farm.publish("web", "2.0.0");
+    farm.publish("api", "2.0.0");
     fs::write(rig.host("/placed/placed.json"), "{").expect("garbled");
-    let (daemon, alerts) = alerting(rig.daemon());
+    let (daemon, alerts) = alerting(farm.daemon());
     for order in [
         uninstall("web", 1),
-        force("web"),
-        support::update("api", "2.0.0", &d(), 1),
+        farm.force("web", "2.0.0", 1, 1),
+        farm.update("api", "2.0.0", 1),
     ] {
         let reply = daemon.order(&order);
         assert_eq!(reply.refusal(), Some(Refusal::LinkFailed), "{reply:?}");
@@ -314,15 +300,16 @@ fn a_placed_json_that_cannot_be_read_holds_every_change() {
 /// `uninstall` bound, is interrupted with nothing removed, and stays.
 #[test]
 fn a_tombstone_whose_release_cannot_run_the_hook_is_interrupted() {
-    let rig = Rig::new("tombstone-unrunnable");
-    let daemon = rig.daemon();
-    installed(&rig, &daemon, "web");
-    rig.placed("api", "1.0.0", None);
+    let farm = NativeHost::new("tombstone-unrunnable");
+    let rig = farm.rig();
+    let daemon = farm.daemon();
+    installed(&farm, &daemon, "web");
+    farm.publish_placed("api", "1.0.0", None);
     assert!(matches!(
-        daemon.order(&install("api", "1.0.0", &d(), 1)),
+        daemon.order(&farm.install("api", "1.0.0", 1)),
         Reply::Finished { .. }
     ));
-    installed(&rig, &daemon, "db");
+    installed(&farm, &daemon, "db");
     fs::remove_file(rig.packages.join("web/current")).expect("current gone");
     fs::remove_file(rig.packages.join("db/1.0.0.seal")).expect("the seal gone");
     let mut record = rig.placed_record();

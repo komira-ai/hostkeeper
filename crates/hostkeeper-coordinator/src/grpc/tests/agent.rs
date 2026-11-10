@@ -422,14 +422,16 @@ async fn a_heartbeat_is_answered_with_the_order_and_the_features_the_decision_na
     let who = updater("d1", "daemon");
     let mut running = entry("kbf", "1.0");
     running.health = proto::Health::Healthy as i32;
-    let announced = request(
+    running.installer = Some("apt".to_owned());
+    let mut announced = request(
         agent("hostkeeper-daemon", "1.0"),
-        &["order-v1", "unknown-v9"],
+        &["order-v1", "unknown-v9", "target-v1"],
         vec![running],
     );
+    announced.installers = vec!["apt".to_owned()];
     let reply = beat(&farm.coordinator, &who, &announced).await;
     let response: proto::HeartbeatResponse = reply.decode();
-    assert_eq!(response.features, ["order-v1"]);
+    assert_eq!(response.features, ["order-v1", "target-v1"]);
     let order = response.order.expect("an update order");
     assert_eq!(order.r#try, 1);
     assert!(order.order_id.starts_with("update-"));
@@ -440,6 +442,8 @@ async fn a_heartbeat_is_answered_with_the_order_and_the_features_the_decision_na
                 ("kbf", "2.0")
             );
             assert_eq!(update.package_digest, "1".repeat(64));
+            let target = update.target.expect("the entry picked for the host");
+            assert_eq!(target.installer, "apt");
         }
         other => panic!("not an update: {other:?}"),
     }

@@ -1,14 +1,15 @@
 //! Which installers a daemon announces (packages.md section 5.4; packages-tests.md, "Which
-//! installers a daemon announces", the cases of this build): every host announces
-//! `hostkeeper-archive`, of any family, and the family, which chooses the native installer of
-//! A7 and A8, is read from the host's `os-release`, written here under a scratch root.
+//! installers a daemon announces", the cases of this build): no host announces an installer
+//! on its own, and the family, which chooses the native installer of A7 and A8, is read from the
+//! host's `os-release`, written here under a scratch root.
 
 use std::cell::RefCell;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use hostkeeper_install::announce::{
-    ALWAYS, Family, MAX_OS_RELEASE_BYTES, OsHost, announce, announce_with, family, read_bounded,
+    Announcement, Family, MAX_OS_RELEASE_BYTES, OsHost, announce, announce_with, family,
+    read_bounded,
 };
 use hostkeeper_release::Installer;
 use hostkeeper_testkit::Scratch;
@@ -36,14 +37,22 @@ fn of_etc(name: &str, text: &str) -> (Vec<Installer>, Option<Family>) {
     (announced.installers, announced.family)
 }
 
+/// Proves a host announces no installer from its platform and `os-release` alone, and that the
+/// default announcement of a daemon whose files were not read has none and no family.
 #[test]
-fn every_host_announces_the_archive() {
-    assert_eq!(ALWAYS, [Installer::HostkeeperArchive]);
-    let (installers, _) = of_etc("always", "ID=debian\n");
-    assert_eq!(installers, ALWAYS.to_vec());
-    let dir = scratch("always-names");
+fn no_host_announces_an_installer_before_its_native_one_is_added() {
+    let (installers, _) = of_etc("none", "ID=debian\n");
+    assert!(installers.is_empty());
+    let dir = scratch("none-names");
     let announced = announce(linux(dir.path()));
-    assert_eq!(announced.names(), vec!["hostkeeper-archive"]);
+    assert!(announced.names().is_empty());
+    assert_eq!(
+        Announcement::default(),
+        Announcement {
+            installers: Vec::new(),
+            family: None
+        }
+    );
 }
 
 #[test]
@@ -59,13 +68,9 @@ fn an_id_alone_names_its_family() {
         ("opensuse", Family::Rpm),
     ] {
         assert_eq!(family(&format!("ID={id}\n")), Some(want), "ID={id}");
-        // A family's host announces no native installer in this build: the archive, alone.
+        // A family's host announces no native installer from `os-release` alone.
         let (installers, found) = of_etc(&format!("id-{id}"), &format!("ID={id}\n"));
-        assert_eq!(
-            (installers, found),
-            (ALWAYS.to_vec(), Some(want)),
-            "ID={id}"
-        );
+        assert_eq!((installers, found), (Vec::new(), Some(want)), "ID={id}");
     }
 }
 
@@ -91,7 +96,7 @@ fn a_family_only_in_id_like_is_found() {
 #[test]
 fn manjaro_whose_arch_family_no_longer_maps_has_no_family() {
     let (installers, found) = of_etc("manjaro", "ID=manjaro\nID_LIKE=arch\n");
-    assert_eq!(installers, ALWAYS.to_vec());
+    assert_eq!(installers, Vec::new());
     assert_eq!(found, None);
 }
 
@@ -112,7 +117,7 @@ fn a_debian_host_with_rpm_on_disk_announces_no_other_installer() {
     put(dir.path(), "etc/os-release", b"ID=debian\n");
     put(dir.path(), "usr/bin/rpm", b"");
     let announced = announce(linux(dir.path()));
-    assert_eq!(announced.installers, ALWAYS.to_vec());
+    assert_eq!(announced.installers, Vec::new());
     assert_eq!(announced.family, Some(Family::Deb));
 }
 
@@ -160,18 +165,12 @@ fn an_etc_os_release_that_links_to_usr_lib_is_followed() {
 
 #[test]
 fn an_unknown_id_an_empty_file_and_no_file_give_no_family() {
-    assert_eq!(of_etc("unknown", "ID=plan9\n"), (ALWAYS.to_vec(), None));
-    assert_eq!(of_etc("empty", ""), (ALWAYS.to_vec(), None));
-    assert_eq!(
-        of_etc("no-id", "NAME=x\nID_LIKE=\n"),
-        (ALWAYS.to_vec(), None)
-    );
+    assert_eq!(of_etc("unknown", "ID=plan9\n"), (Vec::new(), None));
+    assert_eq!(of_etc("empty", ""), (Vec::new(), None));
+    assert_eq!(of_etc("no-id", "NAME=x\nID_LIKE=\n"), (Vec::new(), None));
     let dir = scratch("none");
     let announced = announce(linux(dir.path()));
-    assert_eq!(
-        (announced.installers, announced.family),
-        (ALWAYS.to_vec(), None)
-    );
+    assert_eq!((announced.installers, announced.family), (Vec::new(), None));
 }
 
 #[test]
@@ -185,7 +184,7 @@ fn a_malformed_line_gives_no_family() {
     ] {
         assert_eq!(family(text), None, "{text:?}");
         let (installers, found) = of_etc("malformed", text);
-        assert_eq!((installers, found), (ALWAYS.to_vec(), None), "{text:?}");
+        assert_eq!((installers, found), (Vec::new(), None), "{text:?}");
     }
 }
 
@@ -223,7 +222,7 @@ fn an_etc_os_release_that_cannot_be_read_falls_back_to_usr_lib() {
 }
 
 #[test]
-fn a_mac_announces_the_archive_and_never_reads_os_release() {
+fn a_mac_announces_nothing_and_never_reads_os_release() {
     let dir = scratch("mac");
     put(dir.path(), "etc/os-release", b"ID=debian\n");
     let read = RefCell::new(Vec::<PathBuf>::new());
@@ -238,7 +237,7 @@ fn a_mac_announces_the_archive_and_never_reads_os_release() {
         },
         &reader,
     );
-    assert_eq!(announced.installers, ALWAYS.to_vec());
+    assert_eq!(announced.installers, Vec::new());
     assert_eq!(announced.family, None);
     assert!(read.borrow().is_empty());
     // The same root on Linux reads both files in order when neither can be read.
@@ -261,8 +260,7 @@ fn each_family_has_its_name() {
 /// The native repository installer of A7 (packages-repositories.md section 4.1): `apt` on a
 /// Debian host with its tools, an installed apt of 2.2 or later and a repository entry.
 mod native {
-    use super::{ALWAYS, Family, Installer, Path, announce, fs, linux, put, scratch};
-    use hostkeeper_install::announce::Announcement;
+    use super::{Announcement, Family, Installer, Path, announce, fs, linux, put, scratch};
     use hostkeeper_install::repository::announce::{
         APT_FLOOR, APT_TOOLS, DPKG_STATUS, announced, capable, installed_apt, native,
     };
@@ -494,45 +492,23 @@ mod native {
         assert_eq!(found.family, Some(Family::Deb));
         let native = native(found.family, root.path(), &one_repository());
         assert_eq!(native, Some(Installer::Apt));
-        let all = announced(
-            found,
-            native,
-            &[Installer::HostkeeperArchive, Installer::Apt],
-        );
-        assert_eq!(
-            all.installers,
-            vec![Installer::HostkeeperArchive, Installer::Apt]
-        );
+        let all = announced(found, native, &[Installer::Apt]);
+        assert_eq!(all.installers, vec![Installer::Apt]);
     }
 
     /// Proves the native installer is added only when the build registered it: with `apt`
-    /// registered it follows the archive; without, nothing is added; `None` adds nothing.
+    /// registered it is added; without, nothing is added; `None` adds nothing.
     #[test]
     fn announced_adds_a_native_installer_only_when_registered() {
         let base = Announcement::default();
-        let with = announced(
-            base.clone(),
-            Some(Installer::Apt),
-            &[Installer::HostkeeperArchive, Installer::Apt],
-        );
-        assert_eq!(
-            with.installers,
-            vec![Installer::HostkeeperArchive, Installer::Apt]
-        );
+        let with = announced(base.clone(), Some(Installer::Apt), &[Installer::Apt]);
+        assert_eq!(with.installers, vec![Installer::Apt]);
         assert_eq!(with.family, None);
-        assert_eq!(with.names(), vec!["hostkeeper-archive", "apt"]);
-        let without = announced(
-            base.clone(),
-            Some(Installer::Apt),
-            &[Installer::HostkeeperArchive],
-        );
+        assert_eq!(with.names(), vec!["apt"]);
+        let without = announced(base.clone(), Some(Installer::Apt), &[]);
         assert_eq!(without, base);
-        assert_eq!(without.installers, ALWAYS.to_vec());
-        let none = announced(
-            base.clone(),
-            None,
-            &[Installer::HostkeeperArchive, Installer::Apt],
-        );
+        assert_eq!(without.installers, Vec::new());
+        let none = announced(base.clone(), None, &[Installer::Apt]);
         assert_eq!(none, base);
     }
 }

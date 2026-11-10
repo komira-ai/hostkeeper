@@ -7,6 +7,7 @@ use hostkeeper_proto::hostkeeper::operator::v1 as operator;
 use hostkeeper_proto::hostkeeper::operator::v1::force_request::Targets;
 
 use super::heartbeat::{beat, farm, updater};
+use crate::releases_tests::apt_entry;
 use crate::service::FEATURES;
 use crate::testutil::OPERATOR;
 
@@ -14,7 +15,7 @@ use crate::testutil::OPERATOR;
 /// both healthy.
 fn daemon_beat(features: &[&str]) -> proto::HeartbeatRequest {
     proto::HeartbeatRequest {
-        installers: Vec::new(),
+        installers: vec!["apt".to_owned()],
         repositories: None,
         platform: proto::Platform::LinuxArm64 as i32,
         agent: Some(proto::AgentInfo {
@@ -28,6 +29,7 @@ fn daemon_beat(features: &[&str]) -> proto::HeartbeatRequest {
                 name: (*name).to_owned(),
                 version: (*version).to_owned(),
                 health: proto::Health::Healthy as i32,
+                installer: Some("apt".to_owned()),
                 ..proto::ServiceBeat::default()
             })
             .collect(),
@@ -53,7 +55,7 @@ async fn the_grpc_response_advertises_forced_v1_with_the_force() {
         .decode();
     assert_eq!(every.features, FEATURES);
 
-    let forced = ["heartbeat-v2", "forced-v1"];
+    let forced = ["heartbeat-v2", "forced-v1", "target-v1"];
     let response: proto::HeartbeatResponse = beat(&farm.coordinator, &who, &daemon_beat(&forced))
         .await
         .decode();
@@ -86,7 +88,7 @@ async fn the_grpc_response_advertises_forced_v1_with_the_force() {
     assert_eq!(
         order.verb,
         Some(proto::order::Verb::Force(proto::Force {
-            target: None,
+            target: Some(apt_entry("other", 0x11)),
             service: "other".to_owned(),
             version: "3.0".to_owned(),
             package_digest: "1".repeat(64),

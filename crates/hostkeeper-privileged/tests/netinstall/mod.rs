@@ -2,7 +2,8 @@
 //! docs/design/network-install.md section 11): a farm LAN with no route out ([`lan`]), the
 //! router's DHCP faked by the test ([`router`]), the real `hostkeeper-pxe` with a boot set its
 //! own `fetch` sealed ([`pxe`]), the real coordinator with `--lan-listen` on the LAN
-//! (`support::pair`), a release channel on the LAN (`support::channel`), and a QEMU guest
+//! (`support::pair`), a release channel on the LAN (`support::channel`) that also serves the
+//! signed apt repository of the fixture service, and a QEMU guest
 //! ([`guest`]). Every wait is on a progress event ([`events`]): a line of the guest's serial
 //! console, of `hostkeeper-pxe`'s log or of the router's DHCP, or an answer of the operator API;
 //! each ends on its event or on the end of the guest, and the job's `timeout-minutes` is the
@@ -36,13 +37,15 @@ use std::sync::Arc;
 use serde_json::Value;
 use socket2::{Domain, Protocol, Socket, Type};
 
+use crate::e2e::aptrepo::{self, AptRepo, Deb, File, Service};
 use crate::e2e::signer::FixtureSigner;
-use crate::support::channel::{Channel, Fixture, Package};
+use crate::support::channel::Channel;
 use crate::support::operator_api::must;
 use crate::support::pair::{Coordinator, ROLE, TestCa, put, rollout};
 use crate::support::{Bench, FIXTURE};
 use events::{Bus, LineSink, Mark, Source};
 use guest::{Guest, Machine, Ssh};
+use hostkeeper_proto::hostkeeper::release::v1::{StepBounds, Target};
 use lan::{LAN_LINK, Lan};
 use program::Program;
 use pxe::{Mode, ServeInputs};
@@ -65,11 +68,15 @@ pub struct Rig {
     router: Option<RouterDhcp>,
     pub coordinator: Coordinator,
     pub channel: Channel,
+    /// The apt repository of the fixture service, which the channel serves to the guest.
+    pub repo: AptRepo,
     pub bus: Bus,
     pub ssh: Ssh,
     pub host_id: &'static str,
     pub signer: FixtureSigner,
     pub channel_ca: String,
+    /// The files the seed gives the installed host's repository directory.
+    pub repository_files: Vec<(String, Vec<u8>)>,
     sink: Arc<LineSink>,
     inputs: ServeInputs,
     artifacts: PathBuf,
@@ -79,9 +86,10 @@ pub struct Rig {
 
 impl Rig {
     /// The world of the test `test`, on the LAN `<net>.0/24`, for `machine` recorded as
-    /// `host_id`: the coordinator, the channel serving the fixture service, the boot set of the
-    /// machine's platform sealed, and the inventory record of the machine (its data MAC, serial
-    /// and platform). Nothing serves network boot yet, and the guest is off.
+    /// `host_id`: the coordinator, the channel, the apt repository (empty, with the host's entry of
+    /// it given to the seed), the boot set of the machine's platform sealed, and the inventory
+    /// record of the machine (its data MAC, serial and platform). Nothing serves network boot yet,
+    /// and the guest is off.
     pub fn new(
         test: &str,
         tag: &str,
@@ -99,14 +107,17 @@ impl Rig {
         let bus = Bus::default();
         let sink = Arc::new(LineSink::new(&bus, &artifacts.join("router-dhcp.log")));
 
-        let services = format!("[[service]]\nname = \"{SERVICE}\"\nroles = [\"{ROLE}\"]\n");
+        let services = format!(
+            "[[service]]\nname = \"{SERVICE}\"\nroles = [\"{ROLE}\"]\nrepository = \"{}\"\n",
+            repositories::NAME
+        );
         let coordinator = Coordinator::start_on_lan(&scratch, &rollout(&services), &[], lan.host());
         let ca = TestCa::new("release channel CA");
         let channel = Channel::start_at(&ca, lan.host());
         let signer = FixtureSigner::new();
 
         // The config every installed host gets: the coordinator's LAN listener and its CA, the
-        // channel, and the signer of the fixture service (and of the release fetch checks).
+        // channel the loader requires, and the signer of the release fetch checks.
         let daemon_config = scratch.join("hostkeeper.toml");
         put(
             &daemon_config,
@@ -130,8 +141,28 @@ impl Rig {
             &daemon_config,
         );
         let ssh = Ssh::new(&scratch.join("ssh"), lan.address(GUEST));
+        // The repository entry every installed host gets: the apt repository of the fixture
+        // service on the channel, signed by a key of the test's, whose keyring the entry names.
+        let repo = AptRepo::new(&scratch, "komira-testing");
+        let keyring = scratch.join("repository-keyring.gpg");
+        repo.export_keyring(&keyring);
+        let keyring_bytes = fs::read(&keyring).expect("the repository's keyring");
+        let entry = repo.sources_text(
+            &channel.url(),
+            &Path::new(repositories::HOST_DIR).join(repositories::KEYRING),
+        );
+        let repository_files = repositories::files(&entry, &keyring_bytes);
+        // The registry holds the repository as the channel serves it: the coordinator refuses a
+        // set of `apt` entries for a repository it does not hold, and pushes it to the host,
+        // whose directory (the files above) is what the registry renders, so the daemon adopts it.
+        let registered = repo.registry_entry_at(repositories::NAME, &channel.url());
+        assert_eq!(registered.keyring, keyring_bytes, "the registry's keyring");
+        must(
+            "repositories put",
+            coordinator.api().put_repository(registered),
+        );
         let repositories = scratch.join("repositories");
-        repositories::write(&repositories);
+        repositories::write(&repositories, &repository_files);
 
         let guest = Guest::new(machine, &scratch.join("guest"), &lan.bridge_ns, &artifacts);
         let rig = Rig {
@@ -139,9 +170,11 @@ impl Rig {
             router: None,
             coordinator,
             channel,
+            repo,
             bus,
             host_id,
             channel_ca: ca.pem(),
+            repository_files,
             signer,
             sink,
             inputs: ServeInputs {
@@ -381,33 +414,20 @@ impl Rig {
             .0
     }
 
-    /// Gives the installed guest what the fixture service's install needs of a host, as
-    /// install_uninstall.rs gives its host: the channel's CA in its CA bundle, and the trusted
-    /// root of the rig's signer beside the guest's own `gh` (the deb's, the production
-    /// verifier), by the operator account over SSH. A Sigstore attestation of a package built by
-    /// the test cannot be made without the network, so this is the one step that is not the
-    /// production path. The daemon is restarted so that it reads the bundle again.
+    /// Gives the installed guest what the fixture service's install needs of a host: the channel's
+    /// CA in its CA bundle, which apt's `https` reads when the daemon's tools fetch the apt
+    /// repository the channel serves, by the operator account over SSH.
     pub fn trust_channel(&mut self) {
         let ssh = &self.ssh;
         let ca = self.channel_ca.clone();
-        let root = self.signer.trusted_root_jsonl();
         self.bus.until("the guest's SSH server", || {
             ssh.output("true", b"").map(|_| ())
         });
-        for (command, input) in [
-            (
-                "sudo tee -a /etc/ssl/certs/ca-certificates.crt",
-                ca.as_bytes(),
-            ),
-            (
-                "sudo install -o root -g root -m 0644 /dev/stdin /usr/lib/hostkeeper/trusted_root.json",
-                root.as_bytes(),
-            ),
-            ("sudo systemctl restart hostkeeper.service", b"".as_slice()),
-        ] {
-            ssh.output(command, input)
-                .unwrap_or_else(|e| panic!("on the guest: {e}"));
-        }
+        ssh.output(
+            "sudo tee -a /etc/ssl/certs/ca-certificates.crt",
+            ca.as_bytes(),
+        )
+        .unwrap_or_else(|e| panic!("on the guest: {e}"));
     }
 
     /// The guest's `/etc/machine-id`: which installed system is running.
@@ -450,15 +470,56 @@ impl Drop for Rig {
     }
 }
 
-/// The installed fixture package, built for the guest: its program the fixture of this build,
-/// its placed file under `/var/lib`, its unit in the daemon's default packages directory.
-pub fn fixture(signer: &FixtureSigner) -> Package {
-    Fixture {
-        service: SERVICE,
-        version: VERSION,
-        program: Path::new(FIXTURE),
-        placed: Path::new("/var/lib/hostkeeper-ci-fixture.conf"),
-        packages: Path::new("/var/lib/hostkeeper/packages"),
-    }
-    .build_signed(|file, digest| signer.bundle(file, digest))
+/// The unit the fixture package runs: the fixture's `serve`, as its main process.
+const SERVICE_UNIT: &str = "[Unit]\nDescription=the network-install test's fixture service\n\n\
+     [Service]\nType=exec\nExecStart=/usr/bin/hostkeeper-ci-fixture serve\n\n[Install]\n\
+     WantedBy=multi-user.target\n";
+
+/// Publishes the fixture package in `repo` and gives the entry that orders it: its program the
+/// fixture of this build (also its hook), its file under `/etc/hostkeeper-ci-fixture`, its unit in
+/// `/usr/lib/systemd/system`, for the host's architecture (the machine's of the x86-64 test).
+/// Serve the repository's files ([`Channel::serve_tree`]) after it.
+pub fn fixture(repo: &AptRepo) -> Target {
+    let program = fs::read(FIXTURE).expect("the fixture program");
+    let published = repo.publish(&Deb {
+        package: SERVICE.to_owned(),
+        version: VERSION.to_owned(),
+        files: vec![
+            File::new("usr/bin/hostkeeper-ci-fixture", program.clone(), 0o755),
+            File::new(
+                &format!("usr/lib/{SERVICE}/hostkeeper-hook"),
+                program,
+                0o755,
+            ),
+            File::new(
+                "usr/lib/systemd/system/hostkeeper-ci-fixture.service",
+                SERVICE_UNIT,
+                0o644,
+            ),
+            File::new(
+                "etc/hostkeeper-ci-fixture/fixture.conf",
+                format!("fixture {VERSION}\n"),
+                0o644,
+            ),
+        ],
+    });
+    let service = Service {
+        repository: repositories::ENTRY.to_owned(),
+        run: vec![format!("{SERVICE}.service")],
+        health_url: None,
+        params: [("fixture.mode".to_owned(), aptrepo::text("ok"))]
+            .into_iter()
+            .collect(),
+        hook_command: vec![format!("/usr/lib/{SERVICE}/hostkeeper-hook")],
+        steps: StepBounds {
+            prepare: 60,
+            cutover: 60,
+            verify: 60,
+            rollback: 60,
+            cleanup: 60,
+            uninstall: Some(60),
+        },
+        verify_deadline_secs: 300,
+    };
+    aptrepo::entry(&service, &published)
 }

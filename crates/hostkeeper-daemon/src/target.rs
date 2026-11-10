@@ -9,9 +9,9 @@
 //! then on the daemon reads the version from that copy, never from a later order: a rollback, a
 //! resume at boot, the observer and the uninstall read the sealed `target.json`.
 //!
-//! [`manifest`] is the one reader of a version directory's manifest: `target.json` when it is
-//! there, `manifest.toml` ([`Manifest::load`]) otherwise, so a `hostkeeper-archive` version reads
-//! exactly as before. The manifest of a repository version names no unit files and places no
+//! [`manifest`] is the one reader of a version directory's manifest, from its `target.json`; a
+//! directory with none (a `hostkeeper-archive` version an earlier daemon left) has no manifest
+//! this daemon reads. The manifest of a repository version names no unit files and places no
 //! file (the package installs its own). Its hook is what the entry's manifest says: a command
 //! whose first word is the absolute path of a file the package installs, which the daemon maps to
 //! that file's copy in the sealed tree (`tree/usr/bin/web` for `/usr/bin/web`, links followed
@@ -179,7 +179,7 @@ pub fn previous_hook(
 }
 
 /// The entry the version directory `dir` was staged for; `None` when it has no `target.json`
-/// (a `hostkeeper-archive` version).
+/// (a `hostkeeper-archive` version an earlier daemon left).
 pub fn read(dir: &Path) -> Result<Option<Target>, TargetError> {
     let file = match File::open(dir.join(TARGET_FILE)) {
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -196,17 +196,32 @@ pub fn read(dir: &Path) -> Result<Option<Target>, TargetError> {
 }
 
 /// The manifest of the version directory `dir`, read for `expected` by a daemon of version
-/// `own`: from `target.json` when the directory has one ([`of_entry`]), from `manifest.toml`
-/// otherwise ([`Manifest::load`]).
+/// `own`, from its `target.json` ([`of_entry`]); a directory with none is
+/// [`ManifestRefusal::Unreadable`].
 pub fn manifest(
     dir: &Path,
     expected: &Expected,
     own: &HostkeeperVersion,
 ) -> Result<Manifest, ManifestRefusal> {
+    entry_and_manifest(dir, expected, own).map(|(_, manifest)| manifest)
+}
+
+/// [`manifest`], with the entry the manifest was read from.
+pub fn entry_and_manifest(
+    dir: &Path,
+    expected: &Expected,
+    own: &HostkeeperVersion,
+) -> Result<(Target, Manifest), ManifestRefusal> {
     let unreadable = |e: TargetError| ManifestRefusal::Unreadable { why: e.to_string() };
     match read(dir).map_err(unreadable)? {
-        Some(entry) => of_entry(dir, &entry, expected, own),
-        None => Manifest::load(dir, expected, own),
+        Some(entry) => {
+            let manifest = of_entry(dir, &entry, expected, own)?;
+            Ok((entry, manifest))
+        }
+        None => Err(unreadable(TargetError::Invalid(format!(
+            "{} holds no {TARGET_FILE}",
+            dir.display()
+        )))),
     }
 }
 

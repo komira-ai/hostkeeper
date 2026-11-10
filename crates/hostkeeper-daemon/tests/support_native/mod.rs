@@ -19,7 +19,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use hostkeeper_daemon::selfupdate::{RELEASE_BINARY, binary_dir};
+use hostkeeper_daemon::selfupdate::binary_dir;
 use hostkeeper_daemon::start::{Started, startup};
 use hostkeeper_daemon::{Daemon, Ports, Reply};
 use hostkeeper_hook::{Class, Phase, Verdict};
@@ -79,7 +79,7 @@ impl NativeRig {
         let keys = self.rig.scratch.path().join("keys");
         Ports {
             announcement: Announcement {
-                installers: vec![Installer::HostkeeperArchive, Installer::Apt],
+                installers: vec![Installer::Apt],
                 family: Some(Family::Deb),
             },
             repository: self.rig.repository_ports(repositories(&keys)),
@@ -176,22 +176,6 @@ impl NativeRig {
     /// The number of tool runs so far.
     pub fn calls(&self) -> usize {
         self.host.calls().len()
-    }
-
-    /// hostkeeper at [`V1`] as the archive installs it: its archive release with its package unit
-    /// (`units/hostkeeper.service`, its `run` unit, placed in the unit directory and wanted by
-    /// `multi-user.target`), installed by an `install` of the version that runs, as on a host
-    /// that took hostkeeper from archives.
-    pub fn install_from_archives(&self) {
-        let dir = self.rig.placed(HK, V1, None);
-        let binary = dir.join(RELEASE_BINARY);
-        fs::create_dir_all(binary.parent().expect("bin")).expect("the bin directory");
-        fs::write(&binary, binary_text(V1)).expect("the archive's binary");
-        fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).expect("its mode");
-        self.rig.store.seal(HK, V1, &d());
-        let reply = self.daemon_at(V1).order(&install(HK, V1, &d(), 1));
-        assert_eq!(reply, succeeded(), "hostkeeper installed from archives");
-        assert_eq!(self.linked("current").as_deref(), Some(V1));
     }
 }
 

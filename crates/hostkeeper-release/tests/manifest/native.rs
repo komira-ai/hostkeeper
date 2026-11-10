@@ -1,34 +1,27 @@
 //! The rules of a native entry (packages-native.md sections 10.2 to 10.4, build item A18): which
 //! installers are native, the hook of a native entry (an empty `hook.command`, or an absolute
 //! program of the package; `hook.boot` needs a command for every installer), a `macos-pkg` entry with no attestation, and the list of the service `hostkeeper`, one
-//! native entry with at most one `hostkeeper-archive` entry after it. Each is judged by the
+//! native entry and no `hostkeeper-archive` entry after it. Each is judged by the
 //! coordinator (`target::check`, `target::check_entry`) and, where it is a manifest's, by the
 //! daemon (`manifest::check_for`) the same way.
 
 use hostkeeper_config::names::{PathError, ServiceName};
 use hostkeeper_config::platform::Platform;
 use hostkeeper_proto::hostkeeper::release::v1::{Blob, Hook, Manifest, Target, TargetList};
-use hostkeeper_release::Installer;
 use hostkeeper_release::manifest::{self, ManifestError};
 use hostkeeper_release::target::{self, EntryError, TargetError, is_native_entry};
+use hostkeeper_release::{ARCHIVE_INSTALLER, Installer};
 
 use crate::support::{
     LINUX, digest, entry, hook, location, manifest, named, platform_of, repository_entry, targets,
-    web,
+    unlisted, web,
 };
 
 /// The installers whose entries are native: the platform's own package format.
 const NATIVE: [Installer; 2] = [Installer::Apt, Installer::MacosPkg];
 
-/// The installers whose entries are not.
-const OTHER: [Installer; 3] = [
-    Installer::HostkeeperArchive,
-    Installer::OciImage,
-    Installer::Tarball,
-];
-
 fn check_entry(entry: &Target) -> Result<(), EntryError> {
-    let installer = entry.installer.parse().unwrap_or(Installer::Tarball);
+    let installer = entry.installer.parse().unwrap_or(Installer::Apt);
     target::check_entry(&web(), platform_of(installer), entry)
 }
 
@@ -57,12 +50,18 @@ fn the_native_installers_are_apt_and_macos_pkg() {
     for installer in NATIVE {
         assert!(is_native_entry(&entry(installer)), "{installer}");
     }
-    for installer in OTHER {
-        assert!(!is_native_entry(&entry(installer)), "{installer}");
-    }
-    // An artifact entry of a name no daemon lists, or of a native one spelled otherwise, is not
-    // native; a repository entry of any installer is.
-    for name in ["deb", "rpm", "Apt", "macos_pkg", "dnf"] {
+    // An artifact entry of a name no daemon lists (the withdrawn installers among them), or of a
+    // native one spelled otherwise, is not native; a repository entry of any installer is.
+    for name in [
+        "deb",
+        "rpm",
+        "Apt",
+        "macos_pkg",
+        "dnf",
+        ARCHIVE_INSTALLER,
+        "tarball",
+        "oci-image",
+    ] {
         assert!(!is_native_entry(&named(name)), "{name}");
         let repository = Target {
             installer: name.to_owned(),
@@ -193,7 +192,7 @@ fn hook_boot_without_a_command_is_refused_for_every_installer() {
     };
     let refused = ManifestError::BootWithoutCommand("restore".to_owned());
     for other in [
-        entry(Installer::Tarball),
+        unlisted("tarball"),
         named("deb"),
         entry(Installer::Apt),
         entry(Installer::MacosPkg),
@@ -207,12 +206,7 @@ fn hook_boot_without_a_command_is_refused_for_every_installer() {
         // With a program the boot step is the hook's.
         assert_eq!(check_entry(&other), Ok(()), "{name}");
     }
-    for installer in [
-        Installer::Tarball,
-        Installer::OciImage,
-        Installer::Apt,
-        Installer::MacosPkg,
-    ] {
+    for installer in [Installer::Apt, Installer::MacosPkg] {
         let mut m = manifest(installer);
         m.hook = Some(Hook {
             command: Vec::new(),
@@ -277,16 +271,13 @@ fn a_macos_pkg_entry_carries_no_attestation() {
         ..pkg
     };
     assert_eq!(check_entry(&at), Ok(()));
-    for installer in [Installer::Tarball, Installer::OciImage] {
+    for other in [unlisted("tarball"), named("deb")] {
+        let name = other.installer.clone();
         let bare = Target {
             attestation: None,
-            ..entry(installer)
+            ..other
         };
-        assert_eq!(
-            check_entry(&bare),
-            Err(EntryError::NoAttestation),
-            "{installer}"
-        );
+        assert_eq!(check_entry(&bare), Err(EntryError::NoAttestation), "{name}");
     }
 }
 
@@ -301,9 +292,18 @@ fn own(installer: Installer) -> Target {
         Platform::MacosArm64 => vec!["hostkeeper".to_owned()],
         _ => vec!["hostkeeper.service".to_owned()],
     };
-    if installer.is_native() {
-        manifest.package = Some("hostkeeper".to_owned());
-    }
+    manifest.package = Some("hostkeeper".to_owned());
+    own
+}
+
+/// hostkeeper's own artifact entry of the installer `name`, which is none of this crate's.
+fn own_unlisted(name: &str) -> Target {
+    let mut own = unlisted(name);
+    let manifest = own.manifest.as_mut().expect("a manifest");
+    manifest.health_url = None;
+    manifest.params.clear();
+    manifest.place.clear();
+    manifest.run = vec!["hostkeeper.service".to_owned()];
     own
 }
 
@@ -315,44 +315,34 @@ fn one_list(
     targets(&[(platform, TargetList { entries })])
 }
 
-/// Catches: hostkeeper's release refused in a shape of the move (its native entry, with the
-/// archive entry after it during the move, or the archive entry alone until hostkeeper's own
-/// release lists its native one), or passing in one no daemon could update itself from (the
-/// archive entry first, two native entries, any other installer); and another service held to
-/// the rule.
+/// Catches: hostkeeper's release refused as one native entry, or passing in a shape no daemon
+/// could update itself from: an archive entry after the native one (which A25 no longer takes
+/// in a new set), an archive entry alone or first, two native entries, any other installer;
+/// and another service held to the rule.
 #[test]
-fn hostkeepers_list_is_one_native_entry_and_at_most_one_archive_entry_after_it() {
+fn hostkeepers_list_is_one_native_entry_and_no_archive_entry() {
     let hostkeeper = ServiceName::new("hostkeeper").expect("a name");
-    let archive = || entry(Installer::HostkeeperArchive);
+    let archive = || own_unlisted(ARCHIVE_INSTALLER);
     for (platform, native) in [
         ("linux-x86_64", Installer::Apt),
         ("linux-arm64", Installer::Apt),
         ("macos-arm64", Installer::MacosPkg),
     ] {
-        for good in [
-            vec![own(native)],
-            vec![own(native), archive()],
-            vec![archive()],
-        ] {
-            let installers: Vec<String> = good.iter().map(|e| e.installer.clone()).collect();
-            assert_eq!(
-                target::check(&hostkeeper, &one_list(platform, good)),
-                Ok(()),
-                "{platform} {installers:?}"
-            );
-        }
+        assert_eq!(
+            target::check(&hostkeeper, &one_list(platform, vec![own(native)])),
+            Ok(()),
+            "{platform}"
+        );
     }
     let at = Platform::LinuxArm64;
-    let tarball = || {
-        let mut tarball = own(Installer::Tarball);
-        tarball.manifest.as_mut().expect("a manifest").place.clear();
-        tarball
-    };
+    let tarball = || own_unlisted("tarball");
     let macos_on_linux = || Target {
         manifest: own(Installer::Apt).manifest,
         ..own(Installer::MacosPkg)
     };
     for bad in [
+        vec![own(Installer::Apt), archive()],
+        vec![archive()],
         vec![archive(), own(Installer::Apt)],
         vec![own(Installer::Apt), macos_on_linux()],
         vec![own(Installer::Apt), archive(), tarball()],
@@ -368,28 +358,42 @@ fn hostkeepers_list_is_one_native_entry_and_at_most_one_archive_entry_after_it()
         );
     }
     // Two entries of one installer are refused as in any list.
-    for twice in [Installer::HostkeeperArchive, Installer::Apt] {
-        assert_eq!(
-            target::check(
-                &hostkeeper,
-                &one_list("linux-arm64", vec![own(twice), own(twice)])
-            ),
-            Err(TargetError::DuplicateInstaller {
-                platform: at,
-                installer: twice.as_str().to_owned()
-            }),
-            "{twice}"
-        );
-    }
+    assert_eq!(
+        target::check(
+            &hostkeeper,
+            &one_list("linux-arm64", vec![archive(), archive()])
+        ),
+        Err(TargetError::DuplicateInstaller {
+            platform: at,
+            installer: ARCHIVE_INSTALLER.to_owned()
+        })
+    );
+    assert_eq!(
+        target::check(
+            &hostkeeper,
+            &one_list(
+                "linux-arm64",
+                vec![own(Installer::Apt), own(Installer::Apt)]
+            )
+        ),
+        Err(TargetError::DuplicateInstaller {
+            platform: at,
+            installer: "apt".to_owned()
+        })
+    );
     assert_eq!(
         TargetError::SelfList {
             platform: Platform::MacosArm64
         }
         .to_string(),
-        "the list of macos-arm64 for the service hostkeeper is not one native entry with at most one hostkeeper-archive entry after it, nor one hostkeeper-archive entry"
+        "the list of macos-arm64 for the service hostkeeper is not one native entry"
     );
     // Any other service may list them in any order.
-    let web_list = vec![archive(), entry(Installer::Apt), entry(Installer::Tarball)];
+    let web_list = vec![
+        unlisted(ARCHIVE_INSTALLER),
+        entry(Installer::Apt),
+        unlisted("tarball"),
+    ];
     assert_eq!(
         target::check(&web(), &one_list("linux-arm64", web_list)),
         Ok(())

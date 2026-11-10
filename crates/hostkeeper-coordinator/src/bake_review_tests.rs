@@ -8,10 +8,10 @@ use hostkeeper_wire::wire::{DeferredReport, Token};
 use crate::bake_canary_tests::{
     all, beats, definition, gate, go, one_daemon_at_a_time, secs, services, skip, why, why_under,
 };
-use crate::decide::{Decision, Gate, Skip, decide_why};
+use crate::decide::{Decision, Gate, Skip};
 use crate::fleet::Fleet;
 use crate::services::Services;
-use crate::testutil::{LEGACY, beat, desired, id, role, unhealthy, updating, version};
+use crate::testutil::{LEGACY, beat, decide_why, desired, id, role, unhealthy, updating, version};
 
 /// A host that was silent for the down limit or more has not proven what it ran meanwhile:
 /// when it comes back its count starts again, so a flapping host never finishes baking on

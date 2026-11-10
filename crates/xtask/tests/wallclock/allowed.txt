@@ -34,9 +34,7 @@ crates/hostkeeper-enroll/src/validity.rs
 # deferral from. The deferral file keeps it in unix seconds, the format kbf's agent shares,
 # because a restart has no memory of the monotonic clock; the loop caps every deferral at
 # MAX_RETRY_SECS from now at each read, so a wrong clock can run a deferred target early, or hold
-# it for at most that long. No other decision of the daemon reads it: it also ages the Sigstore
-# trusted root against its file's modification time, a report of the heartbeat that nothing
-# decides on (crates/hostkeeper-daemon/src/trusted_root.rs).
+# it for at most that long. No other decision of the daemon reads it.
 crates/hostkeeper-daemon/src/unix_clock.rs
 # A record stamped with the time it was made: the MDM kit's `install --uninstall` names the
 # directory it moves the unit files to by the unix second (`MDM_STATE/removed/<seconds>`); no

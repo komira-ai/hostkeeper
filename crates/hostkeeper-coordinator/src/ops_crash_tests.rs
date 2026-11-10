@@ -120,7 +120,7 @@ fn clear(rig: &Rig) {
 /// The generation an answer to `node` tells for kbf.
 fn told(rig: &Rig, node: &str, beat: Heartbeat) -> Option<u64> {
     rig.coordinator
-        .heartbeat(storage(node), beat)
+        .heartbeat_native(storage(node), beat)
         .expect("a heartbeat")
         .halts
         .get(LEGACY)
@@ -132,7 +132,7 @@ fn halted_rig(name: &str) -> Rig {
     let rig = Rig::new(name);
     rig.at(1_100);
     rig.coordinator
-        .heartbeat(storage("s1"), halting())
+        .heartbeat_native(storage("s1"), halting())
         .expect("a heartbeat");
     assert!(kbf(&rig).halt.is_some());
     rig
@@ -146,11 +146,11 @@ fn a_crash_after_a_halt_reached_the_ops_file_restarts_halted() {
     let mut rig = Rig::new("ops-crash-raise-after");
     rig.at(1_100);
     rig.coordinator
-        .heartbeat(storage("s9"), calm())
+        .heartbeat_native(storage("s9"), calm())
         .expect("a heartbeat");
     let before = files(&rig);
     rig.coordinator
-        .heartbeat(storage("s1"), halting())
+        .heartbeat_native(storage("s1"), halting())
         .expect("a heartbeat");
     let after = files(&rig);
     crash(&mut rig, &before, &after, true);
@@ -160,7 +160,7 @@ fn a_crash_after_a_halt_reached_the_ops_file_restarts_halted() {
         ("s1", Some(halted_update()))
     );
     rig.coordinator
-        .heartbeat(storage("s2"), halting())
+        .heartbeat_native(storage("s2"), halting())
         .expect("a heartbeat");
     assert_eq!(kbf(&rig).halt_seen.len(), 1);
 }
@@ -172,17 +172,17 @@ fn a_crash_before_a_halt_reached_the_ops_file_restarts_unhalted_and_the_next_rep
     let mut rig = Rig::new("ops-crash-raise-before");
     rig.at(1_100);
     rig.coordinator
-        .heartbeat(storage("s9"), calm())
+        .heartbeat_native(storage("s9"), calm())
         .expect("a heartbeat");
     let before = files(&rig);
     rig.coordinator
-        .heartbeat(storage("s1"), halting())
+        .heartbeat_native(storage("s1"), halting())
         .expect("a heartbeat");
     let after = files(&rig);
     crash(&mut rig, &before, &after, false);
     assert_eq!(kbf(&rig).halt, None);
     rig.coordinator
-        .heartbeat(storage("s1"), halting())
+        .heartbeat_native(storage("s1"), halting())
         .expect("a heartbeat");
     assert!(kbf(&rig).halt.is_some());
 }
@@ -242,7 +242,7 @@ fn a_crash_around_the_end_of_an_acknowledgement_restarts_on_one_side_of_it() {
         let before = files(&rig);
         let acked = kbf(&rig).halt_acked;
         rig.coordinator
-            .heartbeat(storage("s1"), calm())
+            .heartbeat_native(storage("s1"), calm())
             .expect("a heartbeat");
         assert_eq!(kbf(&rig).halt_acked, []);
         let after = files(&rig);
@@ -250,7 +250,7 @@ fn a_crash_around_the_end_of_an_acknowledgement_restarts_on_one_side_of_it() {
         let expected = if committed { Vec::new() } else { acked };
         assert_eq!(kbf(&rig).halt_acked, expected, "committed: {committed}");
         rig.coordinator
-            .heartbeat(storage("s1"), halting())
+            .heartbeat_native(storage("s1"), halting())
             .expect("a heartbeat");
         assert_eq!(
             kbf(&rig).halt.is_some(),
@@ -322,7 +322,7 @@ fn a_generation_told_to_an_agent_survives_the_release_before_rewriting_the_ops_f
     let mut told_most = told(&rig, "s1", halting()).expect("a generation");
     assert_eq!(told_most, 1);
     rig.coordinator
-        .heartbeat(storage("s1"), halting_for("disk_tainted_again"))
+        .heartbeat_native(storage("s1"), halting_for("disk_tainted_again"))
         .expect("a heartbeat");
     assert!(kbf(&rig).halt.is_some(), "a new failure halts again");
     fails.store(true, Ordering::SeqCst);
@@ -336,7 +336,7 @@ fn a_generation_told_to_an_agent_survives_the_release_before_rewriting_the_ops_f
     rig.restart();
     for _ in 0..3 {
         rig.coordinator
-            .heartbeat(storage("s1"), halting_for("disk_tainted_again"))
+            .heartbeat_native(storage("s1"), halting_for("disk_tainted_again"))
             .expect("a heartbeat");
     }
     assert!(
@@ -373,17 +373,17 @@ fn reports_kept_while_a_halt_with_an_unreadable_report_stood_survive_a_write_and
     fs::write(halts_path(&path), halts.to_string()).expect("written");
     rig.restart();
     rig.coordinator
-        .heartbeat(storage("s3"), halting())
+        .heartbeat_native(storage("s3"), halting())
         .expect("a heartbeat");
     rig.restart();
     let seen: Vec<String> = kbf(&rig).halt_seen.into_iter().map(|a| a.node_id).collect();
     assert_eq!(seen, ["s2", "s3"]);
     clear(&rig);
     rig.coordinator
-        .heartbeat(storage("s2"), halting())
+        .heartbeat_native(storage("s2"), halting())
         .expect("a heartbeat");
     rig.coordinator
-        .heartbeat(storage("s3"), halting())
+        .heartbeat_native(storage("s3"), halting())
         .expect("a heartbeat");
     assert_eq!(kbf(&rig).halt, None, "a cleared report halted again");
 }

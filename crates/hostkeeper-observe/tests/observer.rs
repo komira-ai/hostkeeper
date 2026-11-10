@@ -1,10 +1,11 @@
 //! The observer against the fakes: the states, the failure rule, the aggregation of a run set,
 //! the version check and its cache, and the health probes. Nothing here sleeps or opens a socket.
 
-use std::path::Path;
+use std::collections::BTreeSet;
+use std::num::NonZeroU64;
 use std::time::Duration;
 
-use hostkeeper_config::manifest::{Expected, HostkeeperVersion, Manifest};
+use hostkeeper_config::manifest::{Hook, HostkeeperVersion, Manifest, Timeouts};
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_config::platform::Platform;
 use hostkeeper_observe::fake::{
@@ -15,7 +16,6 @@ use hostkeeper_observe::{
     ObserveOptions, Observer, Ports, ProcessIdentity, ServiceInput, ServiceState, UnhealthyReason,
     UnitState, UnobservedReason, VersionView,
 };
-use hostkeeper_testkit::Scratch;
 
 const DEADLINE: Deadline = Deadline {
     connect: Duration::from_secs(2),
@@ -810,48 +810,40 @@ fn one_probe_per_active_instance_and_all_must_pass() {
     assert_eq!(once.observe(&svc).health, HealthView::Healthy);
 }
 
-/// Writes a tierstore 1.5.0 version directory with `manifest` and its unit template.
-fn package(dir: &Path, manifest: &str) {
-    for (path, text) in [
-        ("manifest.toml", manifest),
-        ("bin/tierstore", "#!/bin/false\n"),
-        ("units/tierstore@.service", "[Service]\n"),
-    ] {
-        let path = dir.join(path);
-        std::fs::create_dir_all(path.parent().expect("a parent")).expect("mkdir");
-        std::fs::write(path, text).expect("write");
-    }
-}
-
-const MANIFEST_HEAD: &str = r#"schema         = 1
-name           = "tierstore"
-version        = "1.5.0"
-platform       = "linux-x86_64"
-min_hostkeeper = "0.4.0"
-
-[hook]
-command = ["bin/tierstore", "update-hook"]
-verify_deadline_secs = 1600
-[hook.timeout_secs]
-prepare = 0
-cutover = 300
-verify = 1000
-rollback = 600
-cleanup = 1300
-"#;
-
-fn load(dir: &Path) -> Manifest {
-    let expected = Expected {
+/// The manifest of tierstore 1.5.0 as the daemon builds it from a version's `target.json`, with
+/// `run` as its run units and `health_url` as its health URL.
+fn manifest(run: &[&str], health_url: Option<&str>) -> Manifest {
+    let bound = |secs| NonZeroU64::new(secs).expect("a bound");
+    Manifest {
         name: ServiceName::new("tierstore").expect("a name"),
         version: Version::new("1.5.0").expect("a version"),
         platform: Platform::LinuxX86_64,
-    };
-    let running = HostkeeperVersion {
-        major: 0,
-        minor: 4,
-        patch: 0,
-    };
-    Manifest::load(dir, &expected, &running).expect("the manifest loads")
+        min_hostkeeper: HostkeeperVersion {
+            major: 0,
+            minor: 4,
+            patch: 0,
+        },
+        hook: Hook {
+            command: vec!["bin/tierstore".to_owned(), "update-hook".to_owned()],
+            boot: None,
+            verify_deadline_secs: 1600,
+            promotion_ceiling_secs: None,
+            cleanup_retries: 3,
+            timeout_secs: Timeouts {
+                prepare: None,
+                cutover: bound(300),
+                verify: bound(1000),
+                rollback: bound(600),
+                cleanup: bound(1300),
+                uninstall: None,
+            },
+        },
+        unit_files: BTreeSet::from(["tierstore@.service".to_owned()]),
+        run: run.iter().map(|unit| (*unit).to_owned()).collect(),
+        health_url: health_url.map(str::to_owned),
+        files: Vec::new(),
+        params: Default::default(),
+    }
 }
 
 /// Catches a service with no run units whose manifest has a health URL being left unprobed, or
@@ -925,17 +917,11 @@ fn an_unmonitored_service_with_a_health_url_is_probed_once() {
     );
 }
 
-/// Catches a manifest without `[health]`, or without `[units]`, failing to load or to observe:
-/// both shapes shipped before health was observed and stay valid.
+/// Catches a manifest without a health URL, or without run units, failing to observe: both
+/// shapes shipped before health was observed and stay valid.
 #[test]
 fn old_step_records_and_manifests_without_health_still_observe() {
-    let base = Path::new(env!("CARGO_TARGET_TMPDIR"));
-    let no_health = Scratch::under(base, "observe-no-health").expect("scratch");
-    package(
-        no_health.path(),
-        &format!("{MANIFEST_HEAD}\n[units]\nrun = [\"{A}\"]\n"),
-    );
-    let current = Current::from_manifest(&load(no_health.path()));
+    let current = Current::from_manifest(&manifest(&[A], None));
     assert_eq!(
         current,
         Current {
@@ -959,9 +945,7 @@ fn old_step_records_and_manifests_without_health_still_observe() {
     );
     assert!(r.health.requests().is_empty());
 
-    let no_units = Scratch::under(base, "observe-no-units").expect("scratch");
-    package(no_units.path(), MANIFEST_HEAD);
-    let current = Current::from_manifest(&load(no_units.path()));
+    let current = Current::from_manifest(&manifest(&[], None));
     assert!(current.run.is_empty());
     let svc = ServiceInput {
         current: Some(current),

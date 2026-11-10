@@ -6,9 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "Placed-path linking: a package's units and files linked from current into their system paths, recorded write-ahead in placed.json."
+description = "The host's record of what the daemon installed (placed.json), the switch of a service's current and previous links, and the service manager's write side."
 
-# Design section 4.7, "Placed paths": the daemon, not the hook, links a package into the system.
+# Design section 4.7: the record of installed services and the links of their package directories.
 # A library with its fakes (`testing`); the daemon calls it. Every directory it works in, and the
 # root every path is read under, is a parameter, so the tests run in a scratch directory.
 [dependencies]

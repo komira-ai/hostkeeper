@@ -10,10 +10,10 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use hostkeeper_install::repository::{Reason, Repositories};
+use hostkeeper_install::version::Owner;
 use hostkeeper_placed::testing::{FakeUnitControl, FaultFs, Log};
 use hostkeeper_release::Installer;
 use hostkeeper_testkit::Scratch;
-use hostkeeper_unpack::Owner;
 
 use super::*;
 use crate::testing::{FakeClock, ScriptedLauncher};
@@ -850,4 +850,34 @@ fn each_tool_run_of_the_daemon_has_a_unit_of_its_own() {
         ]
     );
     assert_eq!(first >> 32, u64::from(std::process::id()));
+}
+
+/// Proves a stage whose entry is for another installer than the backend's ends `Failed` before
+/// the commit, `order_invalid`, and touches nothing on the host.
+#[test]
+fn a_stage_of_an_entry_for_another_installer_is_failed_order_invalid() {
+    let scratch = scratch("repo-stage-refused");
+    let repository = repository(&scratch);
+    let backend = backend_of_entry(&entry("apt")).expect("a backend");
+    let version = Version::new("2.0.0").expect("a version");
+
+    let wrong = repository
+        .stage(
+            Native::Repository(backend),
+            &web(),
+            &version,
+            &entry("tarball"),
+        )
+        .expect_err("an entry of another installer");
+    assert_eq!(
+        wrong,
+        Reply::Finished {
+            verdict: Verdict::Failed {
+                phase: Phase::BeforeCommit,
+                class: HookClass::Release,
+            },
+            reason: Some("order_invalid".to_owned()),
+            resent: false,
+        }
+    );
 }

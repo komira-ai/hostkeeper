@@ -4,11 +4,9 @@
 //! path is in a scratch directory, and the trusted owner is the uid the tests run as.
 
 use std::fs;
-use std::num::NonZeroU64;
 use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 
-use hostkeeper_config::daemon::DaemonConfig;
 use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_daemon::cli::{self, EXIT_CONFIG, HostFiles};
 use hostkeeper_daemon::mac_files::{self, MacFilesError, Rendered};
@@ -150,14 +148,10 @@ impl Mac {
             packages_dir: packages,
             run_dir: self.root().join("run"),
             trusted_uid: me(),
-            trusted_root_max_age_days: NonZeroU64::MIN,
         };
         let files = HostFiles {
             repositories: None,
             os_root: self.root().join("os"),
-            ca_bundle: self.root().join("ca.pem"),
-            gh: self.root().join("gh"),
-            trusted_root: self.root().join("trusted_root.json"),
             stores: self.stores.clone(),
             macos_pkg_signers: Some(self.signers.clone()),
             pki: self.root().join("pki"),
@@ -226,8 +220,7 @@ fn a_start_writes_the_stores_file_from_its_domain_when_there_is_none() {
         "[[store]]\nname = \"lan\"\nkind = \"https\"\nbase = \"https://store.example/\"\nbearer_file = \"{}\"\n",
         bearer.display()
     );
-    let channel = DaemonConfig::parse(CONFIG).expect("config").release_channel;
-    let loaded = stores::load(&mac.stores, &channel, me()).expect("the loader accepts it");
+    let loaded = stores::load(&mac.stores, me()).expect("the loader accepts it");
     let expected = stores::parse(operator.as_bytes(), me()).expect("the operator's text");
     assert_eq!(format!("{loaded:?}"), format!("{expected:?}"));
     let mode = |path: &Path| fs::metadata(path).expect("meta").permissions().mode() & 0o7777;
@@ -369,7 +362,7 @@ fn a_host_without_managed_paths_renders_nothing() {
 /// Mac the two managed paths and Linux and OpenRC none.
 #[test]
 fn a_mac_names_the_two_domains_and_linux_none() {
-    let mac = HostFiles::for_platform(PlatformKind::Macos, |_| false);
+    let mac = HostFiles::for_platform(PlatformKind::Macos);
     assert_eq!(
         mac.managed_stores.as_deref(),
         Some(Path::new(MANAGED_STORES))
@@ -387,7 +380,7 @@ fn a_mac_names_the_two_domains_and_linux_none() {
         "/Library/Managed Preferences/dev.hostkeeper.macos-pkg.plist"
     );
     for kind in [PlatformKind::Linux, PlatformKind::Openrc] {
-        let host = HostFiles::for_platform(kind, |_| false);
+        let host = HostFiles::for_platform(kind);
         assert_eq!((host.managed_stores, host.managed_macos_pkg), (None, None));
     }
 }

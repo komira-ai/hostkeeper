@@ -7,13 +7,14 @@ mod support;
 mod support_apt;
 
 use std::fs;
-use std::path::Path;
+use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 
 use hostkeeper_daemon::link_adapters::DaemonObserver;
 use hostkeeper_daemon::observer::SealedExe;
 use hostkeeper_daemon::prune::LayoutPrune;
-use hostkeeper_daemon::{Daemon, Ports, Reply};
+use hostkeeper_daemon::target;
+use hostkeeper_daemon::{Daemon, Ports, Refusal, Reply};
 use hostkeeper_hook::{Class, Verdict};
 use hostkeeper_link::{Drift, ServiceObserver};
 use hostkeeper_observe::ExpectedExe;
@@ -75,33 +76,56 @@ fn an_install_that_finds_the_package_manager_busy_is_deferred_and_leaves_nothing
     assert_eq!(recorded(&daemon), None);
 }
 
-/// Proves a service keeps the installer it was installed with: an apt service ordered an update
-/// from the release channel (no entry) to an archive version that is not the one the move
-/// replaced ends `Failed`, `release`, `installer_changed`, with nothing fetched from the package
-/// port and the installed package untouched. (The move from archives to apt, and its rollback to
-/// the archive version kept as `previous`, are `tests/move_native.rs`'s.)
+/// Proves a service keeps the installer it was installed with: a service whose running version
+/// was staged for another installer than its entry's ends `Failed`, `release`,
+/// `installer_changed`, with no tool run and the installed package untouched; a version with no
+/// `target.json` at all (one an earlier daemon staged) is `release_unreadable`; and an order with
+/// no entry is `order_invalid` before any of it.
 ///
-/// Catches: an archive update that replaces an apt service's version directory beside its
-/// package.
+/// Catches: an update that replaces a service's version directory beside a package of another
+/// installer, and the move from archives, which this daemon no longer accepts.
 #[test]
-fn an_apt_service_ordered_without_an_entry_is_installer_changed() {
-    let apt = AptRig::new("apt-to-archive");
+fn a_service_keeps_its_installer_and_an_order_without_an_entry_is_invalid() {
+    let apt = AptRig::new("apt-installer-kept");
     let daemon = apt.daemon();
     let one = apt.publish(package("1.0.0-1"));
+    let two = apt.publish(package("2.0.0-1"));
     assert_eq!(
         daemon.order(&install_of("1.0.0", "1.0.0-1", &one, 1)),
         succeeded()
     );
-    apt.rig.stage(SERVICE, "2.0.0");
     let calls = apt.host.calls().len();
+    let none = daemon.order(&update(SERVICE, "2.0.0", &support::d(), 2));
+    assert_eq!(none.refusal(), Some(Refusal::OrderInvalid), "{none:?}");
+
+    // The running version was staged for another installer.
+    support_apt::open_up(&apt.version_dir("1.0.0"));
+    let target_json = apt.version_dir("1.0.0").join("target.json");
+    let mut entry = target::read(&apt.version_dir("1.0.0"))
+        .expect("readable")
+        .expect("a target.json");
+    fs::set_permissions(&target_json, fs::Permissions::from_mode(0o644)).expect("its mode");
+    let staged_for_apt = fs::read(&target_json).expect("target.json");
+    entry.installer = "macos-pkg".to_owned();
+    fs::write(&target_json, target::to_json(&entry).expect("json")).expect("rewritten");
     assert_eq!(
-        daemon.order(&update(SERVICE, "2.0.0", &support::d(), 2)),
+        daemon.order(&update_of("2.0.0", "2.0.0-1", &two, 3)),
         failed(Class::Release, "installer_changed")
     );
-    assert!(apt.rig.store.asked().is_empty(), "nothing was fetched");
     assert_eq!(labels_since(&apt, calls), Vec::<String>::new());
     assert_eq!(apt.host.installed(SERVICE), held("1.0.0-1"));
     assert_eq!(linked(&apt, "current").as_deref(), Some("1.0.0"));
+
+    // No `target.json`: not a version this daemon can tell the installer of.
+    fs::remove_file(&target_json).expect("removed");
+    let reply = daemon.order(&update_of("2.0.0", "2.0.0-1", &two, 4));
+    assert_eq!(
+        reply.refusal(),
+        Some(Refusal::ReleaseUnreadable),
+        "{reply:?}"
+    );
+    assert_eq!(labels_since(&apt, calls), Vec::<String>::new());
+    fs::write(&target_json, staged_for_apt).expect("restored");
 }
 
 /// Proves a version already on the host is the sealed one only for the entry it was staged
@@ -221,7 +245,7 @@ fn the_sealed_digest_of_an_apt_version_is_that_of_its_program_in_the_tree() {
     );
     let program = fs::read(apt.version_dir("1.0.0").join("tree").join(PROGRAM)).expect("it reads");
     let want: [u8; 32] = Sha256::digest(&program).into();
-    let exe = SealedExe::new(&apt.rig.packages, Path::new("/packages"), OWN);
+    let exe = SealedExe::new(&apt.rig.packages, OWN);
     assert_eq!(exe.digest(SERVICE, "1.0.0"), Some(want));
     assert_eq!(exe.digest(SERVICE, "9.9.9"), None);
 }

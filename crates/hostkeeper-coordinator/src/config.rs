@@ -24,9 +24,7 @@
 //! operator's; it takes the address of one interface. With `--ui-dir` it also serves the static
 //! files of that directory under `/ui/` (`crate::ui`); without the flag, the binary serves
 //! [`DEFAULT_UI_DIR`], where the container image holds the operator web app, when that path is
-//! a directory ([`Serve::with_default_ui_dir`]). With `--release-channel` a set of the
-//! desired state is refused unless the release channel holds the version (`crate::channel`):
-//! the URL is checked at start (`https://` only), and the channel is fetched only by a set.
+//! a directory ([`Serve::with_default_ui_dir`]).
 //! With `--health-listen` (a loopback address) it also serves `GET /healthz` in plain HTTP to a
 //! probe on the same machine (`crate::health`).
 //! How the sockets are bound is a function the caller gives ([`bind_tcp`] in the binary), so
@@ -71,8 +69,6 @@ use crate::alerts::{
 };
 use crate::audit_file::wall_clock;
 use crate::backup::{Backup, Report, Restore, backup, restore};
-use crate::channel::ReleaseChannel;
-use crate::channel_https::{ChannelUrl, HttpsChannel};
 use crate::desired::DesiredStore;
 use crate::enrollment::{MacAllowlist, MacPolicy, Setup, StoreAt, os_random, setup};
 use crate::fleet::{CLOCK_SKEW_AFTER, QUIET_START};
@@ -363,32 +359,6 @@ pub struct Serve {
         value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..=16)
     )]
     pub live_rollouts: usize,
-    /// The release channel the hosts fetch packages from, as `https://<host>[:<port>][/<path>]`
-    /// (the daemon config's `release_channel`). With it, a set of the desired state is refused
-    /// `not_in_channel` unless `<channel>/<service>/<version>/index.json` is there (retry once
-    /// the channel holds it), and `channel_digest_mismatch` when that index is of another
-    /// service or version or lists no package with the set's digest. Only `https://` is taken;
-    /// another scheme stops the start. Without it nothing is fetched and no set is refused for
-    /// the channel.
-    #[arg(long)]
-    pub release_channel: Option<String>,
-    /// How long the connection to the release channel and its TLS handshake may take, in
-    /// seconds.
-    #[arg(
-        long,
-        default_value_t = 10,
-        requires = "release_channel",
-        value_parser = clap::value_parser!(u64).range(1..)
-    )]
-    pub release_channel_connect_secs: u64,
-    /// How long one fetch from the release channel may take in all, in seconds.
-    #[arg(
-        long,
-        default_value_t = 30,
-        requires = "release_channel",
-        value_parser = clap::value_parser!(u64).range(1..)
-    )]
-    pub release_channel_timeout_secs: u64,
     /// How long a host the coordinator has heard from may go without a heartbeat before it is an
     /// alert (`silent_host`), in seconds.
     #[arg(
@@ -469,7 +439,7 @@ pub struct Parts {
 /// file; the ops file must be one this build reads), `--ui-dir` is missing or not a directory,
 /// `--private-listen` or `--lan-listen` is a wildcard address, `--health-listen` is not a
 /// loopback address, `--quiet-secs` is below two
-/// heartbeat intervals, `--release-channel` is not an `https://` base URL,
+/// heartbeat intervals,
 /// another coordinator holds the lock of the state files, a halt was being written when the
 /// coordinator stopped, both token flags or neither is given, the legacy service or an
 /// allow-list entry names a service `--rollout-file` does not define, an entry names no
@@ -519,19 +489,6 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
     let oidc = AllowList::from_file(&flags.oidc_config)?;
     let services = Services::from_file(&flags.rollout_file)?;
     let prefixes = SanPrefixes::new(&flags.role_uri_prefix, &flags.host_role_uri_prefix)?;
-    let channel = flags
-        .release_channel
-        .as_deref()
-        .map(|text| -> Result<ReleaseChannel, StartError> {
-            let fetcher = HttpsChannel::new(
-                ChannelUrl::parse(text)?,
-                roots.clone(),
-                Duration::from_secs(flags.release_channel_connect_secs),
-                Duration::from_secs(flags.release_channel_timeout_secs),
-            )?;
-            Ok(ReleaseChannel::new(Arc::new(fetcher)))
-        })
-        .transpose()?;
     let legacy = flags.legacy_service.as_deref();
     if let Some(name) = legacy.filter(|name| services.get(name).is_none()) {
         return Err(StartError::LegacyService(name.to_owned()));
@@ -596,9 +553,6 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         .with_ui(ui)
         .with_alert_thresholds(alert_thresholds(flags))
         .with_repository_origin(crate::repository_origin::RepositoryOrigin::new(roots)?);
-    if let Some(channel) = channel {
-        coordinator = coordinator.with_release_channel(channel);
-    }
     let store = match (&flags.enrollment_dir, records) {
         (Some(dir), _) => Some(StoreAt::Dir(dir)),
         (None, Some(records)) => Some(StoreAt::Records(records)),
