@@ -1,6 +1,6 @@
 //! The coordinator's self-update unit, as committed
 //! (`docs/deploy/coordinator/hostkeeper-coordinator-update.{timer,service}`): the timer starts
-//! the service, and the service's command is one the verb's own flag parser accepts, with the
+//! the service, and the service's command is one the program's own flag parser accepts, with the
 //! download directory the unit gives it write access to; and that command, run as committed
 //! (the installed `hostkeeper-coordinator-update` is this crate's binary of that name, the release
 //! asset's program; the two paths under `/var/lib` and `/etc` are scratch ones), updates a coordinator, leaves an up-to-date one alone, and rolls a new one
@@ -64,7 +64,7 @@ fn parse(args: &[&str]) -> Result<clap::ArgMatches, clap::Error> {
 #[test]
 fn the_timer_starts_the_committed_unit_whose_command_the_programs_parser_accepts() {
     // Catches: a timer that starts another unit, fires on a calendar instead of after each run
-    // ends (so two runs could overlap), a unit whose command the verb does not parse (a flag
+    // ends (so two runs could overlap), a unit whose command the program does not parse (a flag
     // renamed or dropped, a URL that is not https), a download directory the sandbox does not let
     // the unit write, or a docker group the unit does not join.
     let timer = deploy_file("hostkeeper-coordinator-update.timer");

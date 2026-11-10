@@ -64,8 +64,9 @@ On the machine that runs the coordinator's container:
 
 1. Install the program from a release, never from a build on this machine. `gh` (2.102 or newer)
    and `curl` must be on the `PATH`. `<V>` is the release, `X.Y.Z`; `<P>` is `linux-x86_64` or
-   `linux-arm64`, the machine's platform; `<commit>` is the release's commit, as
-   [verify-a-release.md](verify-a-release.md) step 1 finds it. In an empty directory:
+   `linux-arm64`, the machine's platform; `<commit>` is the full commit you pin the release to
+   (`$PIN` in [verify-a-release.md](verify-a-release.md)). `gh` needs the token of step 4 for
+   these commands (`export GH_TOKEN=<token>` in this shell). In an empty directory:
 
    ```sh
    gh release download v<V> --repo komira-ai/hostkeeper \
@@ -76,6 +77,7 @@ On the machine that runs the coordinator's container:
      --signer-workflow komira-ai/hostkeeper/.github/workflows/artifacts.yml \
      --source-ref refs/heads/main --source-digest <commit> --deny-self-hosted-runners
    tar -xzf hostkeeper-coordinator-update-<V>-<P>.tar.gz hostkeeper-coordinator-update
+   install -d -o root -g root -m 0755 /usr/local/libexec/hostkeeper
    install -o root -g root -m 0755 hostkeeper-coordinator-update /usr/local/libexec/hostkeeper/
    /usr/local/libexec/hostkeeper/hostkeeper-coordinator-update --version
    ```
@@ -113,6 +115,13 @@ Watch: `systemctl list-timers hostkeeper-coordinator-update.timer`, then
 
 Turn off: `systemctl disable --now hostkeeper-coordinator-update.timer`. Nothing else changes; the
 container keeps running the version it has.
+
+A machine set up before the program was a release asset (it ran `xtask coordinator-update`, built
+on that machine): do step 1, copy `coordinator/hostkeeper-coordinator-update.service` again (its
+`ExecStart` now starts `/usr/local/libexec/hostkeeper/hostkeeper-coordinator-update`, whose flag
+for a target release is `--target-version`), set `--coordinator-url` as in step 5, run
+`systemctl daemon-reload`, and remove `/usr/local/libexec/hostkeeper/xtask` unless the database
+backup timer of [coordinator/README.md](coordinator/README.md) still runs it.
 
 The program does not update itself: it keeps the version installed in step 1 while it rolls the
 container forward. To take a newer one, run step 1 again with that release; the timer's next run

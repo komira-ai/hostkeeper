@@ -76,7 +76,7 @@ const PREFIX: &str = "coordinator-update";
 /// into place whole, so a run that was killed never leaves a half file that later runs trust.
 const PART: &str = ".part";
 
-/// The flags of `coordinator-update`.
+/// The flags of `hostkeeper-coordinator-update`.
 #[derive(Debug, clap::Args)]
 pub(crate) struct Flags {
     /// The coordinator's container.
@@ -241,7 +241,7 @@ pub(crate) struct Ports<'a> {
     pub(crate) pause: &'a dyn Pause,
 }
 
-/// The verb: `flags` over the real `curl`, through `exec`, and the release adapters.
+/// The program: `flags` over the real `curl`, through `exec`, and the release adapters.
 pub(crate) fn run(
     flags: &Flags,
     source: &dyn Releases,
@@ -367,7 +367,7 @@ fn inspect_old(engine: &dyn Engine, name: &str) -> Result<Value, Error> {
     };
     if old["State"]["Running"] != true {
         return Err(Error::Refused(format!(
-            "container {name} is not running: this verb rolls a running coordinator forward and never starts a stopped one"
+            "container {name} is not running: this program rolls a running coordinator forward and never starts a stopped one"
         )));
     }
     let next = format!("{name}-next");

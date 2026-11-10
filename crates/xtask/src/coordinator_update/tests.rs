@@ -525,7 +525,7 @@ fn the_container_must_exist_run_and_have_no_leftover_next() {
     w.engine.containers.borrow_mut()[0].running = false;
     assert_eq!(
         w.refused(),
-        "container hostkeeper-coordinator is not running: this verb rolls a running coordinator forward and never starts a stopped one"
+        "container hostkeeper-coordinator is not running: this program rolls a running coordinator forward and never starts a stopped one"
     );
     assert_eq!(w.engine.calls(), vec![format!("inspect {NAME}")]);
 
@@ -874,7 +874,7 @@ fn what_docker_loaded_must_be_the_verified_image() {
 }
 
 #[test]
-fn the_verb_needs_an_existing_download_directory_and_runs_docker_through_curl() {
+fn the_program_needs_an_existing_download_directory_and_runs_docker_through_curl() {
     // Proves: a missing download directory is refused before any program runs; with one, the
     // first thing asked is the container, through curl.
     let w = world("cu-run");
