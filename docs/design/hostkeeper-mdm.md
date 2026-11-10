@@ -669,8 +669,8 @@ names a format names that one, and `check-macos-pkg` reads both layers (**Built*
 
 - **Farm identity.** The signature is the operator's, not the release's. A new kit verb,
   `hostkeeper-mdm pkg add <release pkg>`, does four things:
-  1. verifies the release pkg's attestation against the trusted signers, as the daemon verifies a
-     package;
+  1. verifies the release pkg's attestation against the trusted signers
+     (`gh attestation verify`, as at publish time);
   2. signs a copy with `productsign` and the farm key (a 0600 file on the MDM host);
   3. puts the signed copy in the gate's pkg directory under its new digest;
   4. adds the digest to the allowlist with the release pkg's digest beside it.

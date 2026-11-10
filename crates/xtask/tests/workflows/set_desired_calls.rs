@@ -265,23 +265,8 @@ pub fn step_call_problems(who: &str, step: &Node, call: &Call) -> Vec<String> {
 /// The variables of the request program, each from its own variable of the step's `env`, which
 /// is the caller's input of the same name: a variable not passed, or passed from anything else,
 /// leaves that part of the release out of the request with no error.
-pub const REQUEST_ARGS: [(&str, &str, &str); 5] = [
+pub const REQUEST_ARGS: [(&str, &str, &str); 2] = [
     ("version", "VERSION", "${{ inputs.version }}"),
-    (
-        "package_digest",
-        "PACKAGE_DIGEST",
-        "${{ inputs.package_digest }}",
-    ),
-    (
-        "release_index",
-        "RELEASE_INDEX",
-        "${{ inputs.release_index }}",
-    ),
-    (
-        "release_index_digest",
-        "RELEASE_INDEX_DIGEST",
-        "${{ inputs.release_index_digest }}",
-    ),
     ("targets", "TARGETS", "${{ inputs.targets }}"),
 ];
 

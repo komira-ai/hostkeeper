@@ -92,11 +92,8 @@ jobs:
       - id: request
         env:
           VERSION: ${{ inputs.version }}
-          PACKAGE_DIGEST: ${{ inputs.package_digest }}
-          RELEASE_INDEX: ${{ inputs.release_index }}
-          RELEASE_INDEX_DIGEST: ${{ inputs.release_index_digest }}
           TARGETS: ${{ inputs.targets }}
-        run: jq --null-input --arg version \"$VERSION\" --arg package_digest \"$PACKAGE_DIGEST\" --arg release_index \"$RELEASE_INDEX\" --arg release_index_digest \"$RELEASE_INDEX_DIGEST\" --arg targets \"$TARGETS\" '{}' > \"$RUNNER_TEMP/hkctl-request.json\"
+        run: jq --null-input --arg version \"$VERSION\" --arg targets \"$TARGETS\" '{}' > \"$RUNNER_TEMP/hkctl-request.json\"
       - id: set-desired
         continue-on-error: true
         env:
@@ -624,9 +621,6 @@ fn the_inputs_and_outputs_match_the_documented_table() {
     for name in [
         "service",
         "version",
-        "package_digest",
-        "release_index",
-        "release_index_digest",
         "targets",
         "hostkeeper_version",
         "hostkeeper_commit",
@@ -635,6 +629,9 @@ fn the_inputs_and_outputs_match_the_documented_table() {
         "max_polls",
     ] {
         assert!(names.contains(&name), "no input {name}");
+    }
+    for name in ["package_digest", "release_index", "release_index_digest"] {
+        assert!(!names.contains(&name), "input {name} is back");
     }
     assert_eq!(outputs, ["desired_version", "converged", "reason"]);
     // Either side changed alone no longer matches.

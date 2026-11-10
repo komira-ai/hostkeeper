@@ -1,9 +1,8 @@
-//! The rules of the mdm package in `artifacts.yml` ([`super::release::MDM_STEPS`],
-//! [`super::release::MDM_INDEX`], and the mdm package in [`super::release::PACKAGES`]): the file
-//! passes as it is, and each rule refuses its defect put into an otherwise clean copy.
+//! The rules of the mdm package in `artifacts.yml` ([`super::release::MDM_STEPS`], and the mdm
+//! `.deb` in [`super::release::NATIVE_FILES`]): the file passes as it is, and each rule refuses its defect put into an otherwise clean copy.
 
 use super::lint::lint;
-use super::release::{MDM_IF, MDM_INDEX, MDM_STEPS};
+use super::release::{MDM_IF, MDM_STEPS};
 use super::{with_in, workflows};
 
 /// The repository's artifacts.yml.
@@ -31,7 +30,7 @@ fn run_line(step: &str) -> String {
 }
 
 #[test]
-fn artifacts_yml_makes_the_mdm_package_on_linux_x86_64_and_indexes_it() {
+fn artifacts_yml_makes_the_mdm_deb_on_linux_x86_64() {
     // Catches: the rules themselves refusing the committed file (a step text or an `if:` they
     // spell differently from it).
     let text = artifacts_yml();
@@ -54,7 +53,7 @@ fn a_missing_mdm_step_is_refused_and_so_is_one_out_of_order() {
             &format!("artifacts.yml: job build does not run `{step}`"),
         );
     }
-    // The package built, then the archives fetched: the fetch is not found after the check.
+    // The .deb built, then the archives fetched: the fetch is not found after the check.
     let [_, check, fetch, build] = MDM_STEPS;
     let swapped = with_in(&text, &run_line(fetch), "        run: FETCH\n");
     let swapped = with_in(&swapped, &run_line(build), &run_line(fetch));
@@ -100,39 +99,23 @@ fn an_mdm_step_under_another_if_or_a_build_without_the_commit_is_refused() {
 }
 
 #[test]
-fn the_mdm_index_not_written_or_not_uploaded_is_refused() {
-    // Catches: a release without `mdm-index.json` (refused by `release check`), or one whose
-    // index is written but not passed to the attest job, whose check of SHA256SUMS then fails on
-    // the missing file.
-    let text = artifacts_yml();
-    let (index, uploaded) = MDM_INDEX;
-    assert_refused(
-        &with_in(&text, &run_line(index), "        run: echo nothing\n"),
-        &format!("artifacts.yml: job sums does not run `{index}`"),
-    );
-    assert_refused(
-        &with_in(&text, &format!("            {uploaded}\n"), ""),
-        &format!("artifacts.yml: job sums does not upload {uploaded} with the other indexes"),
-    );
-}
-
-#[test]
-fn the_mdm_package_is_attested_on_linux_x86_64_with_its_bundle() {
-    // Catches: a release asset list that names the mdm package's bundle while no step signs it,
-    // or one that signs it without copying the bundle beside it: a host trusts only attested
+fn the_mdm_deb_is_attested_on_linux_x86_64_with_its_bundle() {
+    // Catches: a release asset list that names the mdm .deb's bundle while no step signs it, or
+    // one that signs it without copying the bundle beside it: a host trusts only attested
     // packages.
     let text = artifacts_yml();
-    let subject = "          subject-path: dist/mdm-${{ needs.version.outputs.version }}-linux-x86_64.tar.zst\n";
+    let subject =
+        "          subject-path: dist/mdm_${{ needs.version.outputs.version }}_amd64.deb\n";
     assert_refused(
-        &with_in(&text, subject, "          subject-path: dist/mdm.tar.zst\n"),
-        "artifacts.yml: job attest does not attest mdm-<version>-linux-x86_64.tar.zst",
+        &with_in(&text, subject, "          subject-path: dist/mdm.deb\n"),
+        "artifacts.yml: job attest does not attest mdm_<version>_amd64.deb",
     );
     assert_refused(
         &with_in(
             &text,
-            "steps.mdm-package-linux-x86_64.outputs.bundle-path",
+            "steps.mdm-deb-linux-x86_64.outputs.bundle-path",
             "steps.hkctl.outputs.bundle-path",
         ),
-        "artifacts.yml: job attest does not copy the bundle of mdm-<version>-linux-x86_64.tar.zst from the step mdm-package-linux-x86_64",
+        "artifacts.yml: job attest does not copy the bundle of mdm_<version>_amd64.deb from the step mdm-deb-linux-x86_64",
     );
 }

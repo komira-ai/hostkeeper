@@ -255,9 +255,9 @@ fn a_template_for_a_real_service_name_is_refused() {
 }
 
 #[test]
-fn a_template_that_does_not_set_the_release_jobs_targets_and_index_is_refused() {
-    // Catches: targets or an index written into the caller, taken from another job, or dropped,
-    // and one package for every platform instead of the targets.
+fn a_template_that_does_not_set_the_release_jobs_targets_or_passes_an_index_is_refused() {
+    // Catches: targets written into the caller, taken from another job, or dropped, an index or
+    // its digest given beside them, and one package for every platform instead of the targets.
     assert_eq!(
         changed(
             "      targets: ${{ needs.release.outputs.targets }}\n",
@@ -267,15 +267,19 @@ fn a_template_that_does_not_set_the_release_jobs_targets_and_index_is_refused() 
             "docs/deploy/service-caller.md: job set-desired must pass `targets: ${{ needs.release.outputs.targets }}`"
         )]
     );
-    assert_eq!(
-        changed(
-            "      release_index_digest: ${{ needs.release.outputs.release_index_digest }}\n",
-            ""
-        ),
-        [of(
-            "docs/deploy/service-caller.md: job set-desired must pass `release_index_digest: ${{ needs.release.outputs.release_index_digest }}`"
-        )]
-    );
+    for input in ["release_index", "release_index_digest"] {
+        assert_eq!(
+            changed(
+                "      service: my-service\n",
+                &format!(
+                    "      service: my-service\n      {input}: ${{{{ needs.release.outputs.{input} }}}}\n"
+                )
+            ),
+            [of(&format!(
+                "docs/deploy/service-caller.md: job set-desired passes {input}; a release is set with native entries alone, and no index"
+            ))]
+        );
+    }
     assert_eq!(
         changed(
             "      service: my-service\n",

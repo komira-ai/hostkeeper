@@ -302,8 +302,8 @@ fn release_workflow_with_a_build_step_is_refused() {
             "job publish builds (`cargo build --locked --release`)",
         ),
         (
-            "cargo xtask release package --platform linux-x86_64",
-            "job publish builds (`cargo xtask release package --platform linux-x86_64`)",
+            "cargo xtask release deb --platform linux-x86_64",
+            "job publish builds (`cargo xtask release deb --platform linux-x86_64`)",
         ),
         (
             "cargo xtask release set-version --version 0.1.1",
@@ -688,82 +688,96 @@ pub(super) fn attest_steps(id: &str, name: &str, file: &str, subject: &str) -> S
 
 #[test]
 fn attest_job_attests_every_package_for_every_platform_and_copies_each_bundle() {
-    // Catches: a release asset list that names the bundle of a hello package (or of its failing
-    // build, or of netboot.json) while artifacts.yml has no step that signs it, one that signs it
-    // without copying the bundle beside it, or one that copies the bundle of another step. A host trusts only
-    // attested packages, so each of these would ship a package no host can install.
+    // Catches: a release asset list that names the bundle of a hello package (or of the
+    // installer pkg, or of netboot.json) while artifacts.yml has no step that signs it, one that
+    // signs it without copying the bundle beside it, or one that copies the bundle of another
+    // step. A host trusts only attested packages, so each of these would ship a package no host
+    // can install.
     let hello_x86 = attest_steps(
-        "hello-linux-x86_64",
-        "Name the bundle of the hello package for linux-x86_64",
-        "hello-${V}-linux-x86_64.tar.zst",
-        "hello-${{ needs.version.outputs.version }}-linux-x86_64.tar.zst",
+        "hello-deb-linux-x86_64",
+        "Name the bundle of hello's .deb for linux-x86_64",
+        "hello_${V}_amd64.deb",
+        "hello_${{ needs.version.outputs.version }}_amd64.deb",
     );
-    let failing_arm = attest_steps(
-        "hello-fail-ready-linux-arm64",
-        "Name the bundle of the failing build of hello for linux-arm64",
-        "hello-${V}-fail-ready-linux-arm64.tar.zst",
-        "hello-${{ needs.version.outputs.version }}-fail-ready-linux-arm64.tar.zst",
+    let hello_arm = attest_steps(
+        "hello-deb-linux-arm64",
+        "Name the bundle of hello's .deb for linux-arm64",
+        "hello_${V}_arm64.deb",
+        "hello_${{ needs.version.outputs.version }}_arm64.deb",
     );
     let text = workflow("artifacts.yml");
     assert!(
         text.contains(&hello_x86),
         "the helper writes the steps as the file has them"
     );
-    assert!(text.contains(&failing_arm));
+    assert!(text.contains(&hello_arm));
 
     let text = with_in(&text, &hello_x86, "");
     assert_refused(
         "artifacts.yml",
         &text,
-        "artifacts.yml: job attest does not attest hello-<version>-linux-x86_64.tar.zst",
+        "artifacts.yml: job attest does not attest hello_<version>_amd64.deb",
     );
-    let text = with_in(&workflow("artifacts.yml"), &failing_arm, "");
+    let text = with_in(&workflow("artifacts.yml"), &hello_arm, "");
     assert_refused(
         "artifacts.yml",
         &text,
-        "artifacts.yml: job attest does not attest hello-<version>-fail-ready-linux-arm64.tar.zst",
+        "artifacts.yml: job attest does not attest hello_<version>_arm64.deb",
     );
     // Signed but never copied beside the package.
-    let copy = "        run: cp \"$BUNDLE\" \"dist/hello-${V}-fail-ready-linux-arm64.tar.zst.sigstore.json\"\n";
+    let copy = "        run: cp \"$BUNDLE\" \"dist/hello_${V}_arm64.deb.sigstore.json\"\n";
     let text = with_in(&workflow("artifacts.yml"), copy, "        run: echo\n");
     let found = all_problems("artifacts.yml", &text);
     assert!(
-        found.iter().any(|p| p.contains(
-            "job attest does not copy the bundle of hello-<version>-fail-ready-linux-arm64.tar.zst"
-        )),
+        found.iter().any(|p| p
+            .contains("job attest does not copy the bundle of hello_<version>_arm64.deb")),
         "{found:?}"
     );
     // A copy of the bundle of another step.
     let text = with_in(
         &workflow("artifacts.yml"),
-        "steps.hello-linux-x86_64.outputs.bundle-path",
-        "steps.package-linux-x86_64.outputs.bundle-path",
+        "steps.hello-deb-linux-x86_64.outputs.bundle-path",
+        "steps.pkg-macos-arm64.outputs.bundle-path",
     );
     assert_refused(
         "artifacts.yml",
         &text,
-        "job attest does not copy the bundle of hello-<version>-linux-x86_64.tar.zst from the step hello-linux-x86_64",
+        "job attest does not copy the bundle of hello_<version>_amd64.deb from the step hello-deb-linux-x86_64",
     );
-    // The macOS packages of hello are attested and their bundles copied like the others.
+    // The macOS pkgs, hello's and the installer's, are attested and their bundles copied like
+    // the others.
     let hello_mac = attest_steps(
-        "hello-macos-arm64",
-        "Name the bundle of the hello package for macos-arm64",
-        "hello-${V}-macos-arm64.tar.zst",
-        "hello-${{ needs.version.outputs.version }}-macos-arm64.tar.zst",
+        "hello-pkg-macos-arm64",
+        "Name the bundle of hello's .pkg for macos-arm64",
+        "hello-${V}-macos-arm64.pkg",
+        "hello-${{ needs.version.outputs.version }}-macos-arm64.pkg",
+    );
+    let installer = attest_steps(
+        "pkg-macos-arm64",
+        "Name the bundle of the installer pkg for macos-arm64",
+        "hostkeeper-${V}-macos-arm64.pkg",
+        "hostkeeper-${{ needs.version.outputs.version }}-macos-arm64.pkg",
     );
     let text = workflow("artifacts.yml");
     assert!(text.contains(&hello_mac));
+    assert!(text.contains(&installer));
     assert_refused(
         "artifacts.yml",
         &with_in(&text, &hello_mac, ""),
-        "artifacts.yml: job attest does not attest hello-<version>-macos-arm64.tar.zst",
+        "artifacts.yml: job attest does not attest hello-<version>-macos-arm64.pkg",
     );
-    let copy = "        run: cp \"$BUNDLE\" \"dist/hello-${V}-fail-ready-macos-arm64.tar.zst.sigstore.json\"\n";
+    assert_refused(
+        "artifacts.yml",
+        &with_in(&text, &installer, ""),
+        "artifacts.yml: job attest does not attest hostkeeper-<version>-macos-arm64.pkg",
+    );
+    let copy =
+        "        run: cp \"$BUNDLE\" \"dist/hostkeeper-${V}-macos-arm64.pkg.sigstore.json\"\n";
     let text = with_in(&text, copy, "        run: echo\n");
     let found = all_problems("artifacts.yml", &text);
     assert!(
         found.iter().any(|p| p.contains(
-            "job attest does not copy the bundle of hello-<version>-fail-ready-macos-arm64.tar.zst"
+            "job attest does not copy the bundle of hostkeeper-<version>-macos-arm64.pkg"
         )),
         "{found:?}"
     );
@@ -793,13 +807,13 @@ fn attest_job_attests_every_package_for_every_platform_and_copies_each_bundle() 
     // A package attested under the name of another file.
     let text = with_in(
         &workflow("artifacts.yml"),
-        "subject-path: dist/hello-${{ needs.version.outputs.version }}-linux-arm64.tar.zst",
-        "subject-path: dist/hello-${{ needs.version.outputs.version }}-linux-amd64.tar.zst",
+        "subject-path: dist/hello_${{ needs.version.outputs.version }}_arm64.deb",
+        "subject-path: dist/hello_${{ needs.version.outputs.version }}_amd64.deb",
     );
     assert_refused(
         "artifacts.yml",
         &text,
-        "job attest does not attest hello-<version>-linux-arm64.tar.zst",
+        "job attest does not attest hello_<version>_arm64.deb",
     );
 }
 

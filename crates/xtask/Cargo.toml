@@ -12,16 +12,15 @@ description = "The CI steps of this repository (cargo xtask <verb>)."
 default-run = "xtask"
 
 [dependencies]
-# The DSSE payload of an attestation bundle (`release channel-stage` reads its subjects); the
-# HTTP Basic credentials of `mdm-signing-test send`.
+# The DSSE payload of an attestation bundle (`release targets` reads its subjects); the HTTP
+# Basic credentials of `mdm-signing-test send`.
 base64.workspace = true
 clap.workspace = true
 flate2.workspace = true
 hex.workspace = true
-# The release index, the platforms, the channel paths and the service and version grammars of
-# `release channel-stage`, which stages exactly the tree the daemon's fetch reads. The packaging
-# test (tests/packaging) also loads the config template with the daemon config's loader, and the
-# package test loads the produced `manifest.toml` with the manifest loader.
+# The platforms and the service grammar of `release targets`, and the daemon config's signer
+# type of the release contract. The packaging test (tests/packaging) also loads the config
+# template with the daemon config's loader.
 hostkeeper-config = { path = "../hostkeeper-config" }
 # The release asset `hkctl-<version>` (`release hkctl`): the script the emitter makes from the
 # command table of the protos. The operator docs' test (tests/enrollment_doc.rs) reads hkctl's
@@ -29,18 +28,17 @@ hostkeeper-config = { path = "../hostkeeper-config" }
 hostkeeper-hkctl = { path = "../hostkeeper-hkctl" }
 hostkeeper-proto = { path = "../hostkeeper-proto" }
 # The checks of a release's targets and their manifests (`release targets`), the coordinator's own
-# and the daemon's for a `hostkeeper-archive` entry, run on the entries before CI sends them.
+# and the daemon's for an `apt` entry, run on the entries before CI sends them.
 hostkeeper-release = { path = "../hostkeeper-release" }
-# `OLDEST_READER`, the floor of hostkeeper's own package (`release package`), the one constant
-# the daemon judges a release of hostkeeper by too; the channel-stage tests also use its `Clock`.
+# `OLDEST_READER`, the floor of hostkeeper's own entry (`release targets`), the one constant the
+# daemon judges a release of hostkeeper by too.
 hostkeeper-steps = { path = "../hostkeeper-steps" }
 # The daemon's launchd label, plist and paths the macOS installer pkg installs
-# (`release macos-pkg`), and the launchd plists of a macOS service package
-# (`release package --service hello`, and hello's `.pkg`), rendered with the renderer the daemon's
-# own plists use.
+# (`release macos-pkg`), and the launchd plists of hello's `.pkg`, rendered with the renderer the
+# daemon's own plists use.
 hostkeeper-launchd = { path = "../hostkeeper-launchd" }
-# The mdm package (`release package --service mdm`, `release deb --service mdm`, `release
-# mdm-fetch`): its manifest, units (and their `.deb` text) and
+# The mdm package (`release targets`, `release deb --service mdm`, `release mdm-fetch`): its
+# hook bounds, run units and params (the entry's manifest), its units (and their `.deb` text) and
 # the pins of the tools it carries from hostkeeper-mdm-core, and the tools taken out of their
 # archives by the kit's own archive reader in hostkeeper-mdm.
 hostkeeper-mdm = { path = "../hostkeeper-mdm" }
@@ -55,8 +53,7 @@ rpm.workspace = true
 # host's roots.
 rustls.workspace = true
 rustls-native-certs.workspace = true
-# The zstd compression of the hostkeeper package (`release package`), and the zstd decoder of
-# `release check-linux-pkg` (a tarball).
+# The zstd decoder of `release check-linux-pkg` (a tarball).
 ruzstd.workspace = true
 # Reads back the launchd plist of the installer pkg (`release check-macos-pkg`); writes the
 # commands and the root's profile of `mdm-signing-test`.
@@ -78,17 +75,17 @@ ureq.workspace = true
 # The member manifests `release set-version` checks.
 toml.workspace = true
 
-# The program the package launch test (tests/package_launch.rs) packages as bin/hostkeeper and
-# starts through the committed unit of hostkeeper's own package: it prints what it was started
-# with. A program of the tests, not shipped: it is built only with `test-support`, which only the
-# tests of this crate turn on.
+# The program the hook test (tests/native_hook.rs) puts in a native package's tree and starts
+# through its hook: it prints what it was started with. A program of the tests, not shipped: it is
+# built only with `test-support`, which only the tests of this crate turn on.
 [[bin]]
 name = "xtask-exec-fixture"
 path = "tests/bin/exec_fixture.rs"
 required-features = ["test-support"]
 
-# The `gh` the channel-sync deploy test (tests/channel_sync.rs) runs the committed unit's and
-# sidecar's commands with: it answers from files beside it. A program of the tests, not shipped.
+# The `gh`, `curl` and `cargo` the workflow lint's run tests (tests/workflows) run the committed
+# steps of `release.yml` and `hello-desired.yml` with: they answer from files beside it. A
+# program of the tests, not shipped.
 [[bin]]
 name = "xtask-gh-fixture"
 path = "tests/bin/gh_fixture.rs"
@@ -119,7 +116,7 @@ path = "tests/bin/apt_fixture.rs"
 required-features = ["test-support"]
 
 [features]
-# Builds the launch test's fixture program and `xtask::test_support`. Off for everything else.
+# Builds the test fixture programs and `xtask::test_support`. Off for everything else.
 test-support = []
 
 [dev-dependencies]
@@ -128,27 +125,18 @@ xtask = { path = ".", features = ["test-support"] }
 # The packaging test (tests/packaging/daemon_flags.rs) parses the unit's command lines with the
 # binary's own flag parser and reads its default paths.
 hostkeeper-daemon = { path = "../hostkeeper-daemon" }
-# The package test holds the binary's own parser to refuse each step word and the manifest's
-# `update-hook` command (the shipped binary has neither).
-hostkeeper-hook = { path = "../hostkeeper-hook" }
 # The installer's list for hostkeeper's own macOS package (`macos_pkg::own::list`), which the pkg
 # test (`release macos-pkg`) holds to the payload it builds.
 hostkeeper-install = { path = "../hostkeeper-install" }
 # The packaging test (tests/packaging/unit_file.rs) holds the unit's watchdog to the heartbeat
 # loop's longest call.
 hostkeeper-link = { path = "../hostkeeper-link" }
-# The daemon's fetch and proof (`fetch_package`, `prove`), which the channel-stage tests run
-# against the staged tree through an in-process origin.
-hostkeeper-package = { path = "../hostkeeper-package" }
-# The daemon's unpacker (design 5.5), which the package test unpacks the produced archive with.
-hostkeeper-unpack = { path = "../hostkeeper-unpack" }
 # The netboot test holds the served names of the shim and GRUB in netboot.json to the ones the
 # packet handling of network install serves them by (`LoaderNames`), for each platform.
 hostkeeper-pxe-packets = { path = "../hostkeeper-pxe-packets" }
 hostkeeper-wire = { path = "../hostkeeper-wire" }
-# The example service hello, whose command-line parser and served version the hello package test
-# checks the package's units and manifest against: the version a package names is the one its
-# server answers `/version` with; and the paths its hook looks for in a native package's tree.
+# The example service hello: the native hello test holds the paths its hook looks for in a
+# native package's tree and its default port to the ones the `.deb` and `.pkg` are built with.
 hello = { path = "../../examples/hello" }
 # The operator docs' test (tests/enrollment_doc.rs) reads the refusal tokens from the protos'
 # descriptors.

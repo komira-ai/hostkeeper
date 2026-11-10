@@ -390,22 +390,14 @@ downgrades are allowed by the rule of 4.2.
 
 ### 4.1 Unit, plist and pkg texts
 
-**Revised by [packages-native.md](packages-native.md) section 10.4**, whose A19 is built: hostkeeper updates
-itself from its `.deb` and `.pkg`, installed by the new binary after it confirms, so the `.deb`'s unit, starting
-`/usr/bin/hostkeeper`, is the only unit; the package unit below goes with the archive, and the `.pkg`'s postinstall
-bootstraps the job only when it is not loaded.
+**Revised by [packages-native.md](packages-native.md) section 10.4**: hostkeeper updates itself from its `.deb`
+and `.pkg`, installed by the new binary after it confirms, so the `.deb`'s unit, starting `/usr/bin/hostkeeper`, is the
+only unit; the archive's package unit is deleted (section 10.7), and the `.pkg`'s postinstall bootstraps the job
+only when it is not loaded.
 
-- **Linux, hostkeeper's package unit** (`units/hostkeeper.service`, linked by every update): it keeps
-  `ExecStart=.../bin/current daemon ...` for good. It must: `/usr/bin/hostkeeper` is replaced only by a deb or rpm
-  upgrade, so on most hosts it is an older binary, which would run itself and never hand over to the updated one.
-  Stage 2 drops `--admin-socket` and `RuntimeDirectory=hostkeeper`. It keeps `ExecStartPre=-/usr/bin/hostkeeper
-  self-update-seed ...`, today the only repair of a `current` that starts nothing on a host with a linked unit; the
-  `-` already lets a start go on when the packaged binary lacks the verb. Stage 3 deletes the line with the verb.
-  **Built** (S3): the line and the verb are gone.
 - **Linux, the bootstrap unit** of the deb, the rpm and the boot image overlay
   (`/usr/lib/systemd/system/hostkeeper.service`): stage 2 makes it `ExecStart=/usr/bin/hostkeeper daemon ...`, with no
-  `ExecStartPre`, so the packaged binary seeds and execs `current` (2.1). It is in effect only until hostkeeper's
-  package is first installed, whose linked unit then takes its place in `/etc/systemd/system`. The binary and this unit
+  `ExecStartPre`, so the packaged binary seeds and execs `current` (2.1). It is the only unit of hostkeeper on Linux. The binary and this unit
   come from the same deb, so they always match. From stage 2 the two units are two files in `packaging/linux/`, and the
   packaging tests hold each.
   **Built** (S2b): the package unit is `packaging/linux/units/hostkeeper.service` (`ExecStartPre=-` seed line,
@@ -421,11 +413,6 @@ bootstraps the job only when it is not loaded.
   **Built** (S2b): `DaemonJob::standard` runs `INSTALLED_BINARY` (`crates/hostkeeper-launchd/src/plist.rs`, which no
   longer has `DAEMON_PROGRAM`), and `Postinstall` has the two commands and nothing else; `docs/macos.md` describes
   both.
-- **Why these texts need no floor.** The bootstrap unit, the plist and the postinstall arrive only with the binary of
-  the same deb or pkg. The package unit of stage 2 differs from today's only in a flag every older daemon defaults to
-  the same path (`--admin-socket`, `crates/hostkeeper-daemon/src/cli.rs`, **Built**, deleted in S3) and the socket's runtime
-  directory, so an older binary runs under it, and a newer binary under an older one, as today. So S2b depends only on
-  S1b (the binary that seeds and execs) being released.
 - **After stage 3, a `current` that starts nothing.** The linked unit has no repair line, and systemd logs
   `203/EXEC` every second. Root runs `/usr/bin/hostkeeper daemon` once by hand with the unit's flags (an older packaged
   binary answers `self-update-seed` instead): it seeds, execs `current` and can be stopped, and the unit starts again.
@@ -563,28 +550,10 @@ load a record a stage-2 writer made, and an old-way record, and settle each.
 ### 4.4 The hook of hostkeeper's own package
 
 **Revised by [packages-native.md](packages-native.md) section 10.4:** hostkeeper's native package has no hook and
-no `manifest.toml`; its steps are the built-in ones, and its floor is the entry's `min_hostkeeper`.
-
-Every manifest has a bounded `[hook]` (`manifest.rs`, `hook()`, **Built**). hostkeeper's package has a no-op one,
-`command = ["bin/hostkeeper", "update-hook"]`, which the old daemon runs from the new release at step 8 through the
-step runner, whose held success the follow-on needs (`follow_on` takes the runner's finished record).
-
-- **Stage 1**, for a release of hostkeeper whose floor is above `LEGACY_FLOOR`, runs the step runner with a built-in
-  step for each step that succeeds at once and runs no command. The record, the held success and the verdict are
-  written as today, and a test holds the record byte for byte equal to the one the no-op command gives. Older
-  daemons, and stage 1 for releases before stage 2, still run the command, which every release before stage 3 answers.
-- **Stage 2.** A stage-2 release's floor is R1, so no daemon runs its hook command: an older one defers it first, a
-  newer one runs the built-in steps.
-- **Stage 3** deletes `update-hook` and the five step words from the binary (`crates/hostkeeper-daemon/src/update_hook.rs`).
-  **Built** (S3): `update_hook.rs` and the five step words are gone. `HOOK` in `package.rs` keeps its text, and its comment
-  says that no daemon runs the command and the binary has no such verb.
-
-**The `[hook]` table stays in hostkeeper's manifest, unchanged.** A daemon older than R2 that is ordered a stage-3
-release must reach the floor check, which comes last in the loader; a manifest without `[hook]` is `manifest_mismatch`,
-class release, before the floor, so the release would count as failed on that host. A manifest schema 2 that made the
-table optional is refused the same way. The table is the existing `HOOK` text of the release builder
-(`crates/xtask/src/release/package.rs`, **Built**), kept as it is with its bounds, which the loader requires; its
-comment changes to say that no daemon runs the command. It keeps a straggler's answer `daemon_too_old`.
+no `manifest.toml`; its steps are the built-in ones, and its floor is the entry's `min_hostkeeper`. The no-op
+`[hook]` of hostkeeper's archive manifest is now written into the entry's manifest by `cargo xtask release targets`,
+with the bounds the loader requires, so that a daemon older than the floor still reaches the floor check and defers
+the release `daemon_too_old`.
 
 ### 4.5 How each step is proven
 
@@ -715,15 +684,8 @@ supervised and retried. So `rc-service hostkeeper start` returns when the daemon
 start, as `systemctl start` does for `Type=notify`; unlike it, the start exits 0 then, because a failed start would
 have OpenRC mark the service stopped while supervise-daemon goes on running it.
 
-**Self-update: the start and the fallback.** As on a Mac (4.1), the package is the only source of the script and the
-binary, and the script starts the packaged binary at every start, respawns included: it seeds the binary directory when
-`current` starts nothing (2.1) and execs `current` with its arguments, whose start runs the hand-over (4.3). A
-self-update stages the new binary as `next` and exits 0; supervise-daemon starts the packaged binary, which execs the
-old binary `current` names, which execs `next` while its count lasts; the new binary finishes the switch and confirms.
-A new binary that cannot start is tried three times, each a respawn, and the old binary then settles the update
-`Failed`, `self_update_fallback`, and runs. So the hand-over needs nothing of OpenRC: no unit, no job, no start log
-and no file of the daemon's own update to write or remove, since no release
-before the hand-over ran on an OpenRC host.
+**Self-update.** An Alpine host updates hostkeeper by reinstalling its package, as every host does
+([packages-native.md](packages-native.md) section 10.4); the archive path of the hand-over is deleted (section 10.7).
 
 **What this does not cover yet.** A service package's own OpenRC init script (how a package ships, links and enables
 one) has no design: `apk` is withdrawn with no successor ([packages-repositories.md](packages-repositories.md)), so

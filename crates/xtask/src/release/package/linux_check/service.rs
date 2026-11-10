@@ -12,7 +12,7 @@
 //!
 //! What the package holds besides, maintainer scripts, paths, unit names and enablement, is not
 //! checked. Every problem is one line. The static rule of hostkeeper's own packages is not
-//! applied: a service's programs are built as its archive package's are.
+//! applied: a service's programs are built on the release runner.
 
 use std::collections::BTreeMap;
 use std::path::Path;
