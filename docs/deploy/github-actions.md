@@ -47,7 +47,7 @@ one credential is the OIDC token GitHub issues to the job.
    no other token right; it joins no tailnet.
 5. **Wait for the coordinator** (job `coordinator` of `release.yml`, after `targets`, under
    the condition `set-desired` has). The coordinator is updated by its own machine
-   (`cargo xtask coordinator-update` on a timer there, [coordinator-update.md](coordinator-update.md)),
+   (`hostkeeper-coordinator-update`, a release asset, on a timer there, [coordinator-update.md](coordinator-update.md)),
    not by CI. The job joins the tailnet as `set-desired` does (the same pinned action and the
    same repository variables, after a check of `HOSTKEEPER_TAILNET_TAG`), writes the CA from
    `HOSTKEEPER_COORDINATOR_CA`, and asks the private listener, with one `curl` that retries for
@@ -55,9 +55,12 @@ one credential is the OIDC token GitHub issues to the job.
    the coordinator is at least that version, 409 (`coordinator_older`) while it is older, and
    a coordinator from before the route answers 404; curl retries until 200. The job holds
    `id-token: write` for the tailnet join alone, reads no repository and runs none of our code
-   (curl, jq and the pinned tailscale action). When the 30 minutes pass, the job fails with an
-   error annotation that says the coordinator is older than the release or not reachable, and
-   `set-desired` does not run: the hosts' desired version is not set.
+   (curl, jq and the pinned tailscale action). curl writes the last answer's HTTP status to the
+   step's output. When the 30 minutes pass, the job fails, `set-desired` does not run (the hosts'
+   desired version is not set), and one error annotation says why: after a 409 or a 404, `No
+   coordinator updater reported this release (<X.Y.Z>) (is the timer installed?)`; after anything
+   else (000, no answer: the tailnet join, the CA or the URL variable), that the coordinator did
+   not answer, with the last status.
 6. **Set the desired version** (job `set-desired` of `release.yml`, which needs `coordinator`). The job calls the CI client
    ([set-desired.yml](ci-client.md)) once: it verifies the pinned hostkeeper release's `hkctl`,
    joins the tailnet when `HOSTKEEPER_TAILNET_CLIENT_ID` is set, and runs `hkctl releases set-desired` for the
@@ -217,7 +220,7 @@ call gets a new token.
 | job and step | what it means | what to do |
 |---|---|---|
 | `targets`: The targets of the release | A file of the release does not check out: one of hostkeeper's `.deb`s, its bundle or its control file. Its log names every problem. Nothing is set. | Fix the release (a new commit releases again), then the next run sets it. |
-| `coordinator`: Wait until the coordinator runs this release | After 30 minutes the coordinator was still older than the release (409 `coordinator_older`, or 404 from one before the route), or not reachable (the tailnet join, the CA or the URL variables). The job's error annotation says so, and `set-desired` did not run: the hosts' desired version is not set. | On the coordinator's machine, check the timer of `coordinator-update` and its journal ([coordinator-update.md](coordinator-update.md)); once the coordinator runs the release, **Re-run failed jobs**. |
+| `coordinator`: Wait until the coordinator runs this release | After 30 minutes the coordinator was still older than the release (409 `coordinator_older`, or 404 from one before the route), or not reachable (the tailnet join, the CA or the URL variables). The job's error annotation says which (`No coordinator updater reported this release ... (is the timer installed?)` for the first), and `set-desired` did not run: the hosts' desired version is not set. | On the coordinator's machine, install the timer of `hostkeeper-coordinator-update` from the release asset if it is not there, or read its journal ([coordinator-update.md](coordinator-update.md)); once the coordinator runs the release, **Re-run failed jobs**. |
 | `set-desired`: any verification step | The pinned hostkeeper release is not the one that was built ([When it fails](ci-client.md#when-it-fails)). Nothing is set. | Check the pin. |
 | `set-desired`: Set the desired version | The coordinator refused the call, and `reason` is its token: `unauthorized` or `forbidden` (the allow-list entry, above), `target_invalid` (a list the coordinator's checks refuse), `held_bad`, `below_min_version`, `no_answer` (the coordinator is not reachable: the tailnet variables) ([the full table](ci-client.md#when-it-fails)). | Fix what the token names, then re-run. |
 

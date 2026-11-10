@@ -204,7 +204,7 @@ fn asset_names_are_the_documented_contract() {
     let v = version("7.8.9");
     let names = asset_names(&v, &Platform::RELEASED);
     assert_eq!(names, baseline_for(&v));
-    assert_eq!(names.len(), 62);
+    assert_eq!(names.len(), 68);
     assert_eq!(documented_names(DOC, &v), Ok(names.clone()));
     // The document changed alone: a name dropped, or one renamed.
     let image = "hostkeeper-coordinator-<version>-<linux-platform>.image.tar\n";
@@ -262,8 +262,9 @@ fn asset_name_list_only_grows_but_for_the_withdrawn_names() {
 #[test]
 fn tag_and_version_string_formats_are_pinned() {
     // Catches: a tag that is not `v<X.Y.Z>`, a `--version` text other than
-    // `hostkeeper X.Y.Z+<12 hex>` (`hostkeeper-coordinator ...`, `hostkeeper-mdm ...` and
-    // `mdm ...`, the mdm package's program, for the other shipped binaries), a shipped binary dropped, or a change of the signer identity.
+    // `hostkeeper X.Y.Z+<12 hex>` (`hostkeeper-coordinator ...`, `hostkeeper-mdm ...`,
+    // `hostkeeper-coordinator-update ...` and `mdm ...`, the mdm package's program, for the other
+    // shipped binaries), a shipped binary dropped, or a change of the signer identity.
     let v = version("0.1.27");
     let c = commit("0123456789abcdef0123456789abcdef01234567");
     assert_eq!(v.tag(), "v0.1.27");
@@ -275,6 +276,7 @@ fn tag_and_version_string_formats_are_pinned() {
             "hostkeeper 0.1.27+0123456789ab",
             "hostkeeper-coordinator 0.1.27+0123456789ab",
             "hostkeeper-mdm 0.1.27+0123456789ab",
+            "hostkeeper-coordinator-update 0.1.27+0123456789ab",
             "mdm 0.1.27+0123456789ab",
         ]
     );
@@ -400,8 +402,8 @@ fn the_attested_and_summed_names_partition_the_assets() {
     let v = version("0.1.3");
     let attested = attested_names(&v);
     let summed = summed_names(&v);
-    assert_eq!(attested.len(), 27);
-    assert_eq!(summed.len(), 34);
+    assert_eq!(attested.len(), 29);
+    assert_eq!(summed.len(), 38);
     // The boot sets of network install are summed and attested, with a bundle of their own, and
     // so is the command line, one script for every platform.
     assert!(summed.contains(&NETBOOT.to_owned()) & attested.contains(&NETBOOT.to_owned()));
@@ -569,6 +571,50 @@ fn a_linux_platform_ships_the_mdm_binary_attested_with_its_sbom() {
             .iter()
             .any(|n| n.starts_with("hostkeeper-mdm-0.2.1-macos")),
         "{attested:?}"
+    );
+}
+
+#[test]
+fn a_linux_platform_ships_the_coordinator_updater_attested_with_its_sbom() {
+    // Catches: the coordinator updater's binary missing from a Linux platform (so the machine of
+    // the coordinator's container would have to build it), named other than
+    // `hostkeeper-coordinator-update-<v>-<p>.tar.gz`, shipped without its bundle (so neither
+    // verified offline nor held to the signer), or without its SBOM, an SBOM given a bundle of its
+    // own, or a macOS one.
+    let v = version("0.2.1");
+    for platform in [Platform::LinuxX86_64, Platform::LinuxArm64] {
+        let p = platform.name();
+        let names = asset_names(&v, &[platform]);
+        let updater: Vec<&str> = names
+            .iter()
+            .map(String::as_str)
+            .filter(|n| n.starts_with("hostkeeper-coordinator-update-"))
+            .collect();
+        assert_eq!(
+            updater,
+            [
+                format!("hostkeeper-coordinator-update-0.2.1-{p}.cdx.json"),
+                format!("hostkeeper-coordinator-update-0.2.1-{p}.tar.gz"),
+                format!("hostkeeper-coordinator-update-0.2.1-{p}.tar.gz.sigstore.json"),
+            ],
+            "{p}"
+        );
+    }
+    let attested = attested_names(&v);
+    let summed = summed_names(&v);
+    for p in ["linux-x86_64", "linux-arm64"] {
+        let tarball = format!("hostkeeper-coordinator-update-0.2.1-{p}.tar.gz");
+        let sbom = format!("hostkeeper-coordinator-update-0.2.1-{p}.cdx.json");
+        assert!(attested.contains(&tarball), "{tarball} is attested");
+        assert!(!attested.contains(&sbom), "{sbom} has no bundle");
+        assert!(summed.contains(&tarball) & summed.contains(&sbom), "{p}");
+    }
+    let macos = asset_names(&v, &[Platform::MacosArm64]);
+    assert!(
+        !macos
+            .iter()
+            .any(|n| n.starts_with("hostkeeper-coordinator-update-")),
+        "{macos:?}"
     );
 }
 
