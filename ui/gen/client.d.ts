@@ -579,6 +579,18 @@ export namespace hostkeeper_operator_v1 {
     services?: hostkeeper_operator_v1.ServiceEntry[];
     holds?: hostkeeper_operator_v1.HoldMark[];
   }
+  export type LiveReason =
+    | "LIVE_REASON_UNSPECIFIED"
+    | "LIVE_REASON_UPDATING"
+    | "LIVE_REASON_PROMOTION_PENDING"
+    | "LIVE_REASON_ORDERED"
+    | "LIVE_REASON_BAKING"
+    | "LIVE_REASON_PLAN_UNDER_WAY";
+  export interface LiveRollout {
+    service?: string;
+    reason?: hostkeeper_operator_v1.LiveReason;
+    nodeId?: string;
+  }
   export interface MarkBadRequest { service?: string; version?: string; reason?: string; }
   export interface MarkBadResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface MdmCommand { requestType?: string; commandUuid?: string; sentUnix?: string; }
@@ -770,6 +782,7 @@ export namespace hostkeeper_operator_v1 {
     finished?: boolean;
     waitingOn?: string[];
     hostGroup?: string;
+    waitingOnWhy?: hostkeeper_operator_v1.LiveRollout[];
   }
   export interface RolloutPolicy {
     stages?: hostkeeper_operator_v1.PolicyStage[];

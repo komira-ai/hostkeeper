@@ -49,9 +49,11 @@ fn all() -> BTreeMap<String, Desired> {
 }
 
 /// A fleet past its quiet start with `--live-rollouts` 1, in which `a` runs on `a1` as `a_beat`
-/// says and `b` runs 1.0 on `b1` and `b2`, all heard at 100 s.
+/// says and `b` runs 1.0 on `b1` and `b2`, all heard at 100 s. The coordinator heard `a1` at 1.0
+/// first, at 85 s, so a bake of 2.0 there follows an update it saw.
 fn farm(a_beat: Heartbeat) -> Fleet {
     let mut f = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
+    f.record_in("a", id("a1"), role("daemon"), beat("1.0"), secs(85));
     f.record_in("a", id("a1"), role("daemon"), a_beat, secs(100));
     for host in ["b1", "b2"] {
         f.record_in("b", id(host), role("daemon"), beat("1.0"), secs(100));

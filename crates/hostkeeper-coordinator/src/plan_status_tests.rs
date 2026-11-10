@@ -180,6 +180,7 @@ async fn the_default_plan_over_eight_hosts_is_three_stages_of_one_four_and_eight
             finished: false,
             waiting_on: vec![],
             host_group: String::new(),
+            waiting_on_why: vec![],
         }
     );
     let stages: Vec<(String, Option<u32>)> = [1, 2, 2, 2, 3, 3, 3, 3]
