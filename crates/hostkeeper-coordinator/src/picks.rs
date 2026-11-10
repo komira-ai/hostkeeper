@@ -28,8 +28,9 @@
 //! No pick ever returns an entry of the installer `hostkeeper-archive`, which no daemon from this
 //! coordinator's release installs with; a daemon that still lists it is picked another entry or
 //! none. The move is kept until no host runs a service from archives (the two counts of
-//! docs/operations/move-to-native.md, stage 9), and is deleted after. A daemon that did not announce [`TARGET_FEATURE`] is picked nothing,
-//! [`Pick::NoBuildForHost`]. One that did is picked from the installers it said
+//! docs/operations/move-to-native.md, stage 9), and is deleted after. A daemon that did not
+//! announce [`TARGET_FEATURE`] is picked nothing, [`Pick::NoBuildForHost`]. One that did is
+//! picked from the installers it said
 //! in its last heartbeat over gRPC ([`Heard`]), which the fleet keeps in memory, as it keeps
 //! features: a heartbeat over the JSON route, which carries none, leaves the list as it was, and
 //! until the coordinator has read one (after its start, or a daemon's first heartbeat) the host is

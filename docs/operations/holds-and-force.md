@@ -54,8 +54,8 @@ section 3) is ordered to each host as one entry of its platform's list: the entr
 installer the host runs the service with, wherever it stands in the list, else the first entry
 whose installer the host's daemon lists. The daemon lists its installers in its heartbeats over
 gRPC (`Hosts.Get` shows them as `installers`, and each service's in its heartbeat); a daemon that
-does not announce `target-v1` counts as listing `hostkeeper-archive` alone, and is ordered the
-archive entry in today's form. A host the release picks nothing for is ordered nothing for that
+does not announce `target-v1` is ordered nothing (`no_build_for_host`): no pick returns a
+`hostkeeper-archive` entry. A host the release picks nothing for is ordered nothing for that
 version, keeps what it runs, and is never counted as failed or missing:
 
 - `no_target` (`GATE_REASON_NO_TARGET`): the release has no list for the host's platform;

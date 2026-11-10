@@ -196,7 +196,7 @@ keeps stages 7 to 9 from holding, since it runs its services from archives.
 the rollout file, or remove the services' entries that need `komira`, then `hkctl repositories
 remove --name komira`. A host keeps the files it holds; to stop one announcing `apt`, as root,
 remove the directory's files and the directory and restart the daemon, and the next release of
-each service picks it the archive entry. A host that runs a service from `apt` backs out stage 7
+each service picks it the archive entry (since A25, nothing: `installer_dropped`). A host that runs a service from `apt` backs out stage 7
 or 8 first.
 
 ## Stage 7: `hello`, the canary
@@ -206,7 +206,8 @@ or 8 first.
 **The work.** `hello`'s release lists its native entry before its archive one (A21), and it is
 set as every release of `hello` is. The rollout plan of `hello` moves its hosts: a host that runs
 `hello` from archives and announces `apt` is picked the native entry, and installs the `.deb`
-with its hook. A host that does not announce `apt` is picked the archive entry, as before.
+with its hook. A host that does not announce `apt` is picked the archive entry, as before (since
+A25 no pick returns an archive entry, and such a host is picked nothing: `installer_dropped`).
 Follow it with `hkctl releases converge --service hello`, and with `service-not-native` and
 `--arg service hello`, which names the hosts still on archives.
 
@@ -217,8 +218,10 @@ has no native entry: the version before stage 7, with its release as it was set
 (`hkctl releases get-release --service hello --version <previous>` gives its targets). Or force
 that version (`hkctl releases force`, [holds-and-force.md](holds-and-force.md#force)). A host
 that moved is then picked the archive entry and rolled back to the archive version it kept as
-`previous`, from its sealed copy, with nothing fetched. A version that is not lower is no back-out:
-a host that moved is picked nothing for it (`installer_dropped`) and stays on its `.deb`. The
+`previous`, from its sealed copy, with nothing fetched (since A25 the coordinator orders no such
+rollback: a moved host going back to a version with no native entry is picked nothing,
+`installer_dropped`, and stays on its `.deb`). A version that is not lower is no back-out: a host
+that moved is ordered its native entry, if the release has one, and stays on its `.deb`. The
 automatic rollback of a failed move does the same on one host. Once the next update of `hello`
 on a host has retired that archive version, the move there cannot be undone.
 
