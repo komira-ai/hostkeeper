@@ -106,7 +106,7 @@ fn check_names(
 
 /// One line of `SHA256SUMS` as its digest and name, none when it is not
 /// `<64 lowercase hex>  <name>`.
-fn sums_line(line: &str) -> Option<(&str, &str)> {
+pub(crate) fn sums_line(line: &str) -> Option<(&str, &str)> {
     let (digest, name) = line.split_once("  ")?;
     let hex = (digest.len() == 64)
         & digest
@@ -214,7 +214,7 @@ fn check_attestations(
 /// What is wrong with the answer of the verifier for one form of one asset, one line each: every
 /// attestation must name `signer`'s workflow, a ref one of its globs matches, the source commit
 /// `commit` and `digest`.
-fn judge(
+pub(crate) fn judge(
     label: &str,
     answer: Result<Vec<Attestation>, PortError>,
     digest: &str,

@@ -82,6 +82,7 @@
 
 use super::advisories;
 use super::callers;
+use super::desired;
 
 use super::downloads;
 use super::net_install;
@@ -113,6 +114,9 @@ pub struct Allowed {
 ///   held by a failed privileged run.
 /// - `release.yml` / `image`: `packages`, to push the coordinator's image, the checked bytes of
 ///   the release, to this repository's package in the registry.
+/// - `release.yml` / `coordinator`: `id-token`, for the tailnet join alone (it checks out
+///   nothing and holds no other scope), under the `if:` of `set-desired`
+///   ([`desired::SET_IF`]); [`super::coordinator_wait`] holds the rest of its shape.
 /// - `advisories.yml` / `advisories`: `issues`, to open, rewrite or close the one issue that
 ///   lists the security advisories against the dependencies, on a run of main.
 pub const WRITE_ALLOWED: &[Allowed] = &[
@@ -145,6 +149,12 @@ pub const WRITE_ALLOWED: &[Allowed] = &[
         job: "image",
         scope: "packages",
         condition: RELEASE_IF,
+    },
+    Allowed {
+        file: "release.yml",
+        job: desired::COORDINATOR_JOB,
+        scope: "id-token",
+        condition: desired::SET_IF,
     },
     Allowed {
         file: advisories::FILE,

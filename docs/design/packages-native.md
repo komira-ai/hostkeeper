@@ -251,6 +251,10 @@ archives is moved instead (10.6).
 **The coordinator** is not a service hostkeeper deploys. It ships as its container image and its packages, published
 by the shared release machinery as tierstore's are, and its deployment updates it. Nothing of it changes here but
 `--release-channel`, which its deployment stops passing at 10.5 and A25 deletes.
+Its deployment updates it from every published release by itself: the coordinator's machine runs
+`xtask coordinator-update` from a timer, and a release waits until the coordinator runs it
+before it sets the hosts ([coordinator-update.md](../deploy/coordinator-update.md), which weighs
+this against making the coordinator a hostkeeper service).
 
 ### 10.5 The release channel's end
 

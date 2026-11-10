@@ -1,0 +1,16 @@
+# Starts hostkeeper-coordinator-update.service two minutes after boot and then five minutes after
+# each run ends, so two runs never overlap. A release published in CI reaches the coordinator's
+# container within about five minutes of its image being attested; run the service by hand
+# (`systemctl start hostkeeper-coordinator-update.service`) to update at once.
+#
+# Install both files in /etc/systemd/system and `systemctl enable --now
+# hostkeeper-coordinator-update.timer` (docs/deploy/coordinator-update.md).
+[Unit]
+Description=Check for a new coordinator release every five minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=5min
+
+[Install]
+WantedBy=timers.target

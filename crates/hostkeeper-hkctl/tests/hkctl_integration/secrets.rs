@@ -56,11 +56,20 @@ fn the_token_and_a_secret_never_reach_an_argument_an_environment_or_stderr() {
     let request = rig.put("bad.json", b"{\"noSuchField\":1}", 0o644);
     globals.extend(args(&["--request", &request]));
     let ran = rig.run(Script::Real, &globals, b"", &planted);
+    // The refusal is followed by the probe of the coordinator's version, which carries no token.
+    let seen = gateway.seen();
+    let probe = seen.last().expect("the probe");
+    assert_eq!(probe.target(), "/v1/version?at_least=1.2.3");
+    assert_eq!((probe.status, probe.header("authorization")), (409, None));
+    let said: serde_json::Value = serde_json::from_slice(&probe.answer).expect("a version");
+    let coordinator = said["version"].as_str().expect("a version").to_owned();
     assert_eq!(
-        (ran.code, ran.stderr.as_str()),
+        (ran.code, ran.stderr),
         (
             2,
-            "hkctl: the coordinator answered INVALID_ARGUMENT\nrefused: invalid_request\n"
+            format!(
+                "hkctl: the coordinator answered INVALID_ARGUMENT\nhkctl: the coordinator is older than this hkctl (1.2.3): it runs {coordinator}; update the coordinator, then call again\nrefused: coordinator_older\n"
+            )
         )
     );
     // From stdin.
@@ -84,7 +93,7 @@ fn the_token_and_a_secret_never_reach_an_argument_an_environment_or_stderr() {
     let calls = rig.calls();
     // find ran once per call from the token file, curl once per call.
     let programs: Vec<&str> = calls.iter().map(|c| c.program.as_str()).collect();
-    assert_eq!(programs, ["find", "curl", "find", "curl", "curl"]);
+    assert_eq!(programs, ["find", "curl", "find", "curl", "curl", "curl"]);
     assert_absent(&calls, &[TOKEN, "planted"]);
     for call in &calls {
         for (name, _) in planted {
@@ -96,6 +105,16 @@ fn the_token_and_a_secret_never_reach_an_argument_an_environment_or_stderr() {
         }
     }
     for curl in calls.iter().filter(|c| c.program == "curl") {
+        // The probe of the coordinator's version holds no credential at all.
+        if curl.argv.iter().any(|a| a.contains("/v1/version")) {
+            assert!(
+                !curl.argv.iter().any(|a| a == "--header"),
+                "{:?}",
+                curl.argv
+            );
+            assert!(curl.reads.is_empty(), "{:?}", curl.reads);
+            continue;
+        }
         assert_eq!(
             curl.read_after("--header", 0).as_deref(),
             Some(format!("Authorization: Bearer {TOKEN}\n").as_str())

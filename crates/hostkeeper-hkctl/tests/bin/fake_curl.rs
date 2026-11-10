@@ -11,10 +11,11 @@
 //! the call).
 //!
 //! As `find` it then runs the first other `find` on PATH with its arguments. As `curl`:
-//! - when `<its directory>/fail` exists, it prints `curl: (7) Failed to connect` on stderr and
-//!   exits 7;
-//! - when `<its directory>/reply` exists, it answers its content (a status line, a line break,
-//!   then the body);
+//! - when `<its directory>/fail` or, for the `n`th run of `curl` (from 1; `find` is not counted),
+//!   `fail-<n>` exists, it prints `curl: (7) Failed to connect` on stderr and exits 7;
+//! - when `<its directory>/reply-<n>` exists for the `n`th run of `curl` (from 1), or else
+//!   `<its directory>/reply`, it answers its content (a status line, a line break, then the
+//!   body);
 //! - otherwise it sends the request over plain HTTP/1.1 to the host and port of its `--url`
 //!   (a loopback listener of the test): `POST` with the `--data-binary` it read, or `GET`, and
 //!   every `--header`, read or given; and answers what came back.
@@ -222,11 +223,22 @@ fn main() -> ExitCode {
     if program == "find" {
         return real_find(&dir, &args);
     }
-    if dir.join("fail").exists() {
+    // This run's place among the runs of curl, from 1: the recorded runs of curl, itself included.
+    let nth = std::fs::read_dir(dir.join("calls"))
+        .map(|calls| {
+            calls
+                .filter_map(Result::ok)
+                .filter(|c| std::fs::read(c.path().join("program")).is_ok_and(|p| p == b"curl"))
+                .count()
+        })
+        .unwrap_or(1);
+    if dir.join("fail").exists() || dir.join(format!("fail-{nth}")).exists() {
         eprintln!("curl: (7) Failed to connect");
         return ExitCode::from(7);
     }
-    if let Ok(reply) = std::fs::read(dir.join("reply")) {
+    let reply = std::fs::read(dir.join(format!("reply-{nth}")))
+        .or_else(|_| std::fs::read(dir.join("reply")));
+    if let Ok(reply) = reply {
         let split = reply
             .iter()
             .position(|b| *b == b'\n')
