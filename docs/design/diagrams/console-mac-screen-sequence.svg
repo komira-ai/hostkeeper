@@ -37,7 +37,7 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <path d="M130,110 L400,110" class="ln" marker-end="url(#console-mac-screen-sequence-ak)"/>
 <circle cx="144" cy="96" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
 <text x="144" y="100" class="b" font-size="12" text-anchor="middle">1</text>
-<text x="265" y="90" class="t-m lbl" text-anchor="middle">Console.Open(mac, screen) + token</text>
+<text x="265" y="90" class="t-m lbl" text-anchor="middle">Console/Open(mac, screen) + token</text>
 <rect x="290" y="136" width="220" height="28" rx="5" class="box-o"/>
 <text x="400" y="154" class="t-m" text-anchor="middle">token, console cap, audit line</text>
 <circle cx="275" cy="150" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
