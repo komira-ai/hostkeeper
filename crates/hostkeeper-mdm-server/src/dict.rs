@@ -9,7 +9,7 @@ use crate::Error;
 /// The top dictionary of a property list in XML or binary form.
 pub(crate) fn parse(bytes: &[u8]) -> Result<Dictionary, Error> {
     let value =
-        Value::from_reader(Cursor::new(bytes)).map_err(|e| Error::NotPlist(e.to_string()))?;
+        Value::from_reader(Cursor::new(bytes)).map_err(|e| Error::not_plist(&e.to_string()))?;
     value.into_dictionary().ok_or(Error::NotDictionary)
 }
 
@@ -20,6 +20,15 @@ pub(crate) fn string(d: &Dictionary, key: &'static str) -> Result<String, Error>
         return Err(Error::Empty(key));
     }
     Ok(s)
+}
+
+/// An identity key (`UDID`, `EnrollmentID`, `CommandUUID`) that may be absent but, when present,
+/// must not be empty: an empty identity would key a device row or a queue on "".
+pub(crate) fn opt_id(d: &Dictionary, key: &'static str) -> Result<Option<String>, Error> {
+    match opt_string(d, key)? {
+        Some(s) if s.is_empty() => Err(Error::Empty(key)),
+        other => Ok(other),
+    }
 }
 
 /// A string key that may be absent.

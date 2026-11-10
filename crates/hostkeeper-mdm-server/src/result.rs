@@ -3,7 +3,7 @@
 use plist::{Dictionary, Value};
 
 use crate::Error;
-use crate::dict::{opt_string, parse, string};
+use crate::dict::{opt_id, opt_string, parse, string};
 
 /// One entry of an `Error` result's `ErrorChain`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,7 +34,7 @@ pub enum Status {
 }
 
 /// A result posted to the server URL.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct CommandResult {
     /// `UDID`, or `EnrollmentID` for a user enrollment: the connection's identity.
     pub device: String,
@@ -43,7 +43,20 @@ pub struct CommandResult {
     /// The `CommandUUID` the result answers; absent for [`Status::Idle`].
     pub command_uuid: Option<String>,
     /// The whole dictionary, for a command's answer keys (`QueryResponses`, `ProfileList`, ...).
+    /// `Debug` of the result prints its key names only, as answers can hold secrets.
     pub raw: Dictionary,
+}
+
+impl std::fmt::Debug for CommandResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let keys: Vec<&String> = self.raw.keys().collect();
+        f.debug_struct("CommandResult")
+            .field("device", &self.device)
+            .field("status", &self.status)
+            .field("command_uuid", &self.command_uuid)
+            .field("raw_keys", &keys)
+            .finish()
+    }
 }
 
 impl CommandResult {
@@ -56,9 +69,9 @@ impl CommandResult {
     pub fn parse(bytes: &[u8]) -> Result<Self, Error> {
         let raw = parse(bytes)?;
         let status_text = string(&raw, "Status")?;
-        let device = match opt_string(&raw, "UDID")? {
+        let device = match opt_id(&raw, "UDID")? {
             Some(udid) => udid,
-            None => opt_string(&raw, "EnrollmentID")?.ok_or(Error::NoDeviceId)?,
+            None => opt_id(&raw, "EnrollmentID")?.ok_or(Error::NoDeviceId)?,
         };
         let status = match status_text.as_str() {
             "Idle" => Status::Idle,
@@ -66,10 +79,10 @@ impl CommandResult {
             "NotNow" => Status::NotNow,
             "Error" => Status::Error(chain(&raw)?),
             "CommandFormatError" => Status::CommandFormatError(chain(&raw)?),
-            _ => return Err(Error::UnknownStatus(status_text)),
+            _ => return Err(Error::unknown_status(&status_text)),
         };
         let command_uuid = match status {
-            Status::Idle => opt_string(&raw, "CommandUUID")?,
+            Status::Idle => opt_id(&raw, "CommandUUID")?,
             _ => Some(string(&raw, "CommandUUID")?),
         };
         Ok(Self {

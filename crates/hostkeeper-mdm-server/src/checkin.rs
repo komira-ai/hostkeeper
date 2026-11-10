@@ -4,7 +4,7 @@
 use plist::Dictionary;
 
 use crate::Error;
-use crate::dict::{data, opt_bool, opt_data, opt_string, parse, string};
+use crate::dict::{data, opt_bool, opt_data, opt_id, opt_string, parse, string};
 
 /// The identity a message names a device by: `UDID` of a device enrollment, `EnrollmentID` of a
 /// user enrollment. A device enrollment sends both on some messages; the `UDID` wins.
@@ -18,15 +18,21 @@ pub struct DeviceId {
 
 impl DeviceId {
     fn read(d: &Dictionary) -> Result<Self, Error> {
-        let udid = opt_string(d, "UDID")?;
-        let enrollment_id = opt_string(d, "EnrollmentID")?;
+        Self::read_optional(d)?.ok_or(Error::NoDeviceId)
+    }
+
+    /// The identity when the message names one. An empty `UDID` or `EnrollmentID` is refused,
+    /// not treated as absent, so it cannot hide the other.
+    fn read_optional(d: &Dictionary) -> Result<Option<Self>, Error> {
+        let udid = opt_id(d, "UDID")?;
+        let enrollment_id = opt_id(d, "EnrollmentID")?;
         if udid.is_none() && enrollment_id.is_none() {
-            return Err(Error::NoDeviceId);
+            return Ok(None);
         }
-        Ok(Self {
+        Ok(Some(Self {
             udid,
             enrollment_id,
-        })
+        }))
     }
 
     /// The identifier the server keys the device on.
@@ -62,8 +68,9 @@ pub struct Authenticate {
     pub serial_number: Option<String>,
 }
 
-/// `TokenUpdate`: the Mac's push token and magic, and so a working enrollment.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// `TokenUpdate`: the Mac's push token and magic, and so a working enrollment. `Debug` prints
+/// the lengths of the secret fields, never their bytes.
+#[derive(Clone, PartialEq, Eq)]
 pub struct TokenUpdate {
     /// The device.
     pub id: DeviceId,
@@ -81,6 +88,24 @@ pub struct TokenUpdate {
     pub not_on_console: Option<bool>,
     /// `EnrollmentUserID`, set on a user channel's update.
     pub enrollment_user_id: Option<String>,
+}
+
+impl std::fmt::Debug for TokenUpdate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TokenUpdate")
+            .field("id", &self.id)
+            .field("topic", &self.topic)
+            .field("token_len", &self.token.len())
+            .field("push_magic_len", &self.push_magic.len())
+            .field(
+                "unlock_token_len",
+                &self.unlock_token.as_ref().map(Vec::len),
+            )
+            .field("awaiting_configuration", &self.awaiting_configuration)
+            .field("not_on_console", &self.not_on_console)
+            .field("enrollment_user_id", &self.enrollment_user_id)
+            .finish()
+    }
 }
 
 /// `CheckOut`: the Mac left management.
@@ -106,17 +131,37 @@ pub struct DeclarativeManagement {
 /// `GetBootstrapToken`: the Mac asks for the bootstrap token the server holds.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GetBootstrapToken {
+    /// The `UDID` or `EnrollmentID` when the message carries one; see [`SetBootstrapToken::id`].
+    pub id: Option<DeviceId>,
     /// `AwaitingConfiguration`, when sent.
     pub awaiting_configuration: Option<bool>,
 }
 
-/// `SetBootstrapToken`: the Mac gives the server its bootstrap token.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// `SetBootstrapToken`: the Mac gives the server its bootstrap token. `Debug` prints the length
+/// of the token, never its bytes.
+#[derive(Clone, PartialEq, Eq)]
 pub struct SetBootstrapToken {
+    /// The `UDID` or `EnrollmentID` when the message carries one (Apple's schema does not list
+    /// it, Macs send it). The caller keys the token on the identity of the mTLS-authenticated
+    /// connection and refuses the message when this names another device.
+    pub id: Option<DeviceId>,
     /// The token, absent when the Mac clears it.
     pub bootstrap_token: Option<Vec<u8>>,
     /// `AwaitingConfiguration`, when sent.
     pub awaiting_configuration: Option<bool>,
+}
+
+impl std::fmt::Debug for SetBootstrapToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SetBootstrapToken")
+            .field("id", &self.id)
+            .field(
+                "bootstrap_token_len",
+                &self.bootstrap_token.as_ref().map(Vec::len),
+            )
+            .field("awaiting_configuration", &self.awaiting_configuration)
+            .finish()
+    }
 }
 
 /// A check-in message.
@@ -178,13 +223,15 @@ impl CheckIn {
                 data: opt_data(&d, "Data")?,
             }),
             "GetBootstrapToken" => Self::GetBootstrapToken(GetBootstrapToken {
+                id: DeviceId::read_optional(&d)?,
                 awaiting_configuration: opt_bool(&d, "AwaitingConfiguration")?,
             }),
             "SetBootstrapToken" => Self::SetBootstrapToken(SetBootstrapToken {
+                id: DeviceId::read_optional(&d)?,
                 bootstrap_token: opt_data(&d, "BootstrapToken")?,
                 awaiting_configuration: opt_bool(&d, "AwaitingConfiguration")?,
             }),
-            _ => return Err(Error::UnknownMessageType(message_type)),
+            _ => return Err(Error::unknown_message_type(&message_type)),
         })
     }
 

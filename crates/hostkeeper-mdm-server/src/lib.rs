@@ -25,5 +25,5 @@ pub use checkin::{
     SetBootstrapToken, TokenUpdate,
 };
 pub use command::CommandRequest;
-pub use error::Error;
+pub use error::{Error, MAX_QUOTED};
 pub use result::{CommandResult, ErrorEntry, Status};

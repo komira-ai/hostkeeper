@@ -685,3 +685,127 @@ fn optional_booleans_may_be_absent() {
     };
     assert_eq!((t.not_on_console, t.awaiting_configuration), (None, None));
 }
+
+fn s(v: &str) -> Value {
+    Value::String(v.to_owned())
+}
+
+#[test]
+fn debug_of_a_token_update_prints_no_secret_byte() {
+    let msg = CheckIn::parse(fixture!("checkin-tokenupdate")).unwrap();
+    let shown = format!("{msg:?}");
+    assert!(shown.contains("token_len: 32"), "{shown}");
+    assert!(shown.contains("unlock_token_len: Some(6)"), "{shown}");
+    assert!(!shown.contains("11111111-2222-4333-8444-555555555555"));
+    assert!(!shown.contains("117, 110"), "{shown}");
+    assert!(!shown.contains("[0, 1, 2"));
+}
+
+#[test]
+fn debug_of_a_set_bootstrap_token_prints_no_secret_byte() {
+    let bytes = with(
+        fixture!("checkin-setbootstraptoken"),
+        "BootstrapToken",
+        Value::Data(b"secret-bootstrap".to_vec()),
+    );
+    let shown = format!("{:?}", CheckIn::parse(&bytes).unwrap());
+    assert!(shown.contains("bootstrap_token_len: Some(16)"), "{shown}");
+    assert!(!shown.contains("secret"));
+    assert!(!shown.contains("115, 101"));
+}
+
+#[test]
+fn debug_of_a_result_prints_key_names_and_no_answer_value() {
+    let bytes = with(
+        fixture!("result-acknowledged"),
+        "SecretAnswer",
+        s("hunter2-value"),
+    );
+    let shown = format!("{:?}", CommandResult::parse(&bytes).unwrap());
+    assert!(shown.contains("SecretAnswer"), "{shown}");
+    assert!(!shown.contains("hunter2-value"), "{shown}");
+}
+
+#[test]
+fn an_empty_identity_is_refused_and_does_not_hide_the_other() {
+    let co = fixture!("checkin-checkout");
+    assert_eq!(
+        CheckIn::parse(&with(co, "UDID", s(""))),
+        Err(Error::Empty("UDID"))
+    );
+    let both = with(co, "EnrollmentID", s("ENROLL-1"));
+    assert_eq!(
+        CheckIn::parse(&with(&both, "UDID", s(""))),
+        Err(Error::Empty("UDID"))
+    );
+    assert_eq!(
+        CheckIn::parse(&with(&without(co, "UDID"), "EnrollmentID", s(""))),
+        Err(Error::Empty("EnrollmentID"))
+    );
+}
+
+#[test]
+fn a_result_with_an_empty_identity_or_idle_command_uuid_is_refused() {
+    let ack = fixture!("result-acknowledged");
+    assert_eq!(
+        CommandResult::parse(&with(ack, "UDID", s(""))),
+        Err(Error::Empty("UDID"))
+    );
+    assert_eq!(
+        CommandResult::parse(&with(&without(ack, "UDID"), "EnrollmentID", s(""))),
+        Err(Error::Empty("EnrollmentID"))
+    );
+    assert_eq!(
+        CommandResult::parse(&with(fixture!("result-idle"), "CommandUUID", s(""))),
+        Err(Error::Empty("CommandUUID"))
+    );
+}
+
+#[test]
+fn bootstrap_token_messages_carry_the_device_identity_when_sent() {
+    for kind in ["checkin-getbootstraptoken", "checkin-setbootstraptoken"] {
+        let plain = match CheckIn::parse(&without_none(kind)).unwrap() {
+            CheckIn::GetBootstrapToken(g) => g.id,
+            CheckIn::SetBootstrapToken(t) => t.id,
+            other => panic!("unexpected {other:?}"),
+        };
+        assert_eq!(plain, None);
+        let named = with(&without_none(kind), "UDID", s(UDID));
+        let id = match CheckIn::parse(&named).unwrap() {
+            CheckIn::GetBootstrapToken(g) => g.id,
+            CheckIn::SetBootstrapToken(t) => t.id,
+            other => panic!("unexpected {other:?}"),
+        };
+        assert_eq!(id.unwrap().key(), UDID);
+        assert_eq!(
+            CheckIn::parse(&with(&without_none(kind), "UDID", s(""))),
+            Err(Error::Empty("UDID"))
+        );
+    }
+}
+
+fn without_none(kind: &str) -> Vec<u8> {
+    match kind {
+        "checkin-getbootstraptoken" => fixture!("checkin-getbootstraptoken").to_vec(),
+        _ => fixture!("checkin-setbootstraptoken").to_vec(),
+    }
+}
+
+#[test]
+fn an_error_quotes_at_most_max_quoted_characters_of_what_a_mac_sent() {
+    let long = "A".repeat(1_000_000);
+    let e =
+        CheckIn::parse(&with(fixture!("checkin-checkout"), "MessageType", s(&long))).unwrap_err();
+    assert_eq!(
+        e.to_string(),
+        format!(
+            "unknown check-in message type {:?}",
+            "A".repeat(hostkeeper_mdm_server::MAX_QUOTED)
+        )
+    );
+    let e = CommandResult::parse(&with(fixture!("result-acknowledged"), "Status", s(&long)))
+        .unwrap_err();
+    assert!(e.to_string().len() < 100, "{e}");
+    let e = CheckIn::parse(&[b'<'; 100_000]).unwrap_err();
+    assert!(e.to_string().chars().count() < 100, "{e}");
+}
