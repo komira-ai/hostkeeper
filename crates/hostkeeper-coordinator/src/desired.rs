@@ -492,6 +492,8 @@ impl Held {
 
 #[path = "desired_file.rs"]
 mod file;
+#[path = "desired_groups.rs"]
+mod groups;
 pub(crate) use file::{encode, parse_file};
 
 /// Why the state file could not be read or written.

@@ -38,6 +38,7 @@
 //! store's lock file). The records are the messages of
 //! `proto/hostkeeper/enrollment/store/v1/store.proto` ([`records::pb`]).
 
+mod groups;
 mod hosts;
 mod issue;
 mod mac_nonce;
@@ -277,12 +278,37 @@ pub struct EnrolledHost {
     pub first_serving_unix: Option<u64>,
     /// The role the host was approved for.
     pub role: Role,
+    /// The host group the host is in; empty for a host in none ([`Membership`]).
+    pub host_group: String,
+    /// The group the host moves from while a move runs; `None` when it is not moving.
+    pub moving_from: Option<String>,
     /// What the host's daemon last said it runs, as far as the store kept it
     /// ([`EnrollmentStore::note_running`]); `None` until a heartbeat after the approval.
     pub running: Option<HostRunning>,
     /// When the coordinator accepted the heartbeat `running` was last written from, unix
     /// seconds; `None` with it.
     pub running_unix: Option<u64>,
+}
+
+/// The host group of an enrolled host, as its host record keeps it ([`EnrollmentStore::membership`],
+/// [`EnrollmentStore::set_membership`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Membership {
+    /// The group the host is in; empty for a host in none.
+    pub host_group: String,
+    /// The group the host moves from while a move runs (empty when it was in none); `None` when
+    /// it is not moving.
+    pub moving_from: Option<String>,
+}
+
+impl Membership {
+    /// What the host record `pb` holds.
+    fn of(pb: &records::pb::Host) -> Membership {
+        Membership {
+            host_group: pb.host_group.clone(),
+            moving_from: pb.moving_from.clone(),
+        }
+    }
 }
 
 /// What the store holds for a host id ([`EnrollmentStore::held`]). It is read from the store's

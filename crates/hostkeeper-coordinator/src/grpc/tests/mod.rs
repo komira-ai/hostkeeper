@@ -12,6 +12,7 @@ mod force;
 mod gateway;
 mod heartbeat;
 mod host_group_requests;
+mod host_groups;
 mod hosts;
 mod install;
 mod limits;

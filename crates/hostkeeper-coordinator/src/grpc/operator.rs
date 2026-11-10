@@ -7,15 +7,15 @@
 //! the caller the router admitted. A method the frozen JSON routes have (`Hosts.Include`,
 //! `Hosts.SetLabels`, `Releases.ClearHalt`, `Releases.SetDesired`, `Releases.Converge`,
 //! `Releases.Status`) builds the request that route reads and calls what that route calls. Every
-//! method has a handler but the five of `HostGroups`, which [`super::PENDING`] lists and the
-//! router answers `UNIMPLEMENTED` before any adapter runs. The caller was settled before the request
-//! was read ([`super::admit`]) and arrives in the request's extensions; a request without one is
-//! an anonymous caller, and is refused as such.
+//! method has a handler. The caller was settled before the request was read ([`super::admit`])
+//! and arrives in the request's extensions; a request without one is an anonymous caller, and is
+//! refused as such. The eight services here are adapters of the calls that do not decide by host
+//! group yet; `HostGroups` is in [`super::operator_host_groups`].
 //!
-//! This coordinator holds no host group, so no group has any name: a request that names one in
-//! `host_group` is refused by its call's refusal that says so (`not_in_host_group` of `Releases`
-//! and `Rollouts`, `unknown_host_group` of `Enrollment`), never read as naming none, which would
-//! act on every host. `Audit.List` with a `host_group` filter lists no entry.
+//! These calls place nothing by host group, so a request that names one in `host_group` is
+//! refused by its call's refusal that says so (`not_in_host_group` of `Releases` and `Rollouts`,
+//! `unknown_host_group` of `Enrollment`), never read as naming none, which would act on every
+//! host. `Audit.List` with a `host_group` filter lists no entry.
 
 use std::collections::HashMap;
 use std::sync::Arc;

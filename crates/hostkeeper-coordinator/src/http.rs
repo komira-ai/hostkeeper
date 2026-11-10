@@ -97,6 +97,10 @@ pub const MAX_OPERATOR_BYTES: usize = 4096;
 /// [`MAX_OPERATOR_BYTES`].
 pub const MAX_SET_DESIRED_BYTES: usize = 256 * 1024;
 
+/// The most bytes of a `HostGroups.Put` request read, on the gRPC route and the JSON gateway: a
+/// group lists up to 64 packages of up to 255 bytes and names a policy.
+pub const MAX_HOST_GROUPS_PUT_BYTES: usize = 64 * 1024;
+
 /// The error code of a heartbeat from a host an operator denied (`COORDINATOR_REFUSAL_DENIED`).
 pub const DENIED: &str = "denied";
 

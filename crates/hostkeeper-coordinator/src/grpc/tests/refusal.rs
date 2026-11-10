@@ -4,8 +4,8 @@
 use std::fmt::Debug;
 
 use hostkeeper_proto::hostkeeper::operator::v1::{
-    AlertsRefusal, AuditRefusal, EnrollmentRefusal, HostsRefusal, MdmRefusal, ReleasesRefusal,
-    RepositoriesRefusal, RolloutsRefusal, ServicesRefusal,
+    AlertsRefusal, AuditRefusal, EnrollmentRefusal, HostGroupsRefusal, HostsRefusal, MdmRefusal,
+    ReleasesRefusal, RepositoriesRefusal, RolloutsRefusal, ServicesRefusal,
 };
 use tonic::{Code, Status};
 
@@ -35,7 +35,7 @@ where
 }
 
 /// Proves that each value of `HostsRefusal`, `ReleasesRefusal`, `ServicesRefusal`,
-/// `EnrollmentRefusal`, `AuditRefusal`, `AlertsRefusal`, `RolloutsRefusal`, `MdmRefusal` and `RepositoriesRefusal` becomes the status
+/// `EnrollmentRefusal`, `AuditRefusal`, `AlertsRefusal`, `RolloutsRefusal`, `MdmRefusal`, `RepositoriesRefusal` and `HostGroupsRefusal` becomes the status
 /// its proto comment names: the code of the comment and the
 /// value's name, without its prefix and in lower case, as the whole message; and that
 /// `UNSPECIFIED`, which no caller is refused with, is `INTERNAL`. A value the enum gains that
@@ -508,6 +508,72 @@ fn every_refusal_value_has_the_code_and_token_its_proto_comment_names() {
             ),
         ],
         refusal::repositories,
+    );
+
+    assert_table(
+        &[
+            (HostGroupsRefusal::Unspecified, Internal, "unspecified"),
+            (
+                HostGroupsRefusal::Unauthorized,
+                Unauthenticated,
+                "unauthorized",
+            ),
+            (HostGroupsRefusal::Forbidden, PermissionDenied, "forbidden"),
+            (
+                HostGroupsRefusal::InvalidRequest,
+                InvalidArgument,
+                "invalid_request",
+            ),
+            (HostGroupsRefusal::StoreFailed, Internal, "store_failed"),
+            (
+                HostGroupsRefusal::AuditUnavailable,
+                Unavailable,
+                "audit_unavailable",
+            ),
+            (
+                HostGroupsRefusal::UnknownHostGroup,
+                NotFound,
+                "unknown_host_group",
+            ),
+            (
+                HostGroupsRefusal::InvalidHostGroup,
+                InvalidArgument,
+                "invalid_host_group",
+            ),
+            (
+                HostGroupsRefusal::InvalidPackage,
+                InvalidArgument,
+                "invalid_package",
+            ),
+            (
+                HostGroupsRefusal::InvalidPolicy,
+                InvalidArgument,
+                "invalid_policy",
+            ),
+            (
+                HostGroupsRefusal::HostkeeperNotListed,
+                FailedPrecondition,
+                "hostkeeper_not_listed",
+            ),
+            (
+                HostGroupsRefusal::TooManyPackages,
+                InvalidArgument,
+                "too_many_packages",
+            ),
+            (
+                HostGroupsRefusal::GenerationMismatch,
+                FailedPrecondition,
+                "generation_mismatch",
+            ),
+            (HostGroupsRefusal::NotEmpty, FailedPrecondition, "not_empty"),
+            (HostGroupsRefusal::UnknownHost, NotFound, "unknown_host"),
+            (
+                HostGroupsRefusal::SameHostGroup,
+                FailedPrecondition,
+                "same_host_group",
+            ),
+        ],
+        refusal::host_groups,
     );
 }
 

@@ -1,6 +1,6 @@
 //! The coordinator's gRPC: `hostkeeper.agent.v1.Coordinator` on the heartbeat listener,
 //! `hostkeeper.operator.v1.{Hosts, Releases, Services, Enrollment, Audit, Alerts, Rollouts,
-//! Mdm, Repositories}` on the private one,
+//! Mdm, Repositories, HostGroups}` on the private one,
 //! and the JSON gateway of the operator API ([`gateway`]), all beside the frozen JSON routes of
 //! [`crate::http`].
 //!
@@ -40,6 +40,7 @@ use hostkeeper_proto::hostkeeper::agent::v1::coordinator_server::CoordinatorServ
 use hostkeeper_proto::hostkeeper::operator::v1::alerts_server::AlertsServer;
 use hostkeeper_proto::hostkeeper::operator::v1::audit_server::AuditServer;
 use hostkeeper_proto::hostkeeper::operator::v1::enrollment_server::EnrollmentServer;
+use hostkeeper_proto::hostkeeper::operator::v1::host_groups_server::HostGroupsServer;
 use hostkeeper_proto::hostkeeper::operator::v1::hosts_server::HostsServer;
 use hostkeeper_proto::hostkeeper::operator::v1::mdm_server::MdmServer;
 use hostkeeper_proto::hostkeeper::operator::v1::releases_server::ReleasesServer;
@@ -60,12 +61,13 @@ use self::operator::{
     AlertsService, AuditService, EnrollmentService, HostsService, MdmService, ReleasesService,
     RolloutsService, ServicesService,
 };
+use self::operator_host_groups::HostGroupsService;
 use self::operator_repositories::RepositoriesService;
 use self::refusal::token_status;
 use crate::enrollment::MAX_MESSAGE_BYTES;
 use crate::http::{
-    BoxError, MAX_OPERATOR_BYTES, MAX_SET_DESIRED_BYTES, Peer, Surface, bearer_in, beat_caller,
-    error, handle,
+    BoxError, MAX_HOST_GROUPS_PUT_BYTES, MAX_OPERATOR_BYTES, MAX_SET_DESIRED_BYTES, Peer, Surface,
+    bearer_in, beat_caller, error, handle,
 };
 use crate::identity::Identity;
 use crate::operator::Caller;
@@ -76,6 +78,7 @@ pub(crate) mod agent;
 mod beat_map;
 pub(crate) mod gateway;
 pub(crate) mod operator;
+mod operator_host_groups;
 mod operator_repositories;
 pub(crate) mod refusal;
 pub(crate) mod report;
@@ -88,16 +91,9 @@ mod tests;
 pub const GRPC_FEATURE: &str = "grpc-v1";
 
 /// The gRPC path of every method of the operator API that no handler serves yet: each is
-/// answered `UNIMPLEMENTED`, with no message, until the coordinator has the handler. The five
-/// methods of `HostGroups`, declared ahead of the coordinator's host groups, are: a method added
-/// to a proto is listed here until its handler lands.
-pub const PENDING: &[&str] = &[
-    "/hostkeeper.operator.v1.HostGroups/List",
-    "/hostkeeper.operator.v1.HostGroups/Get",
-    "/hostkeeper.operator.v1.HostGroups/Put",
-    "/hostkeeper.operator.v1.HostGroups/Remove",
-    "/hostkeeper.operator.v1.HostGroups/Move",
-];
+/// answered `UNIMPLEMENTED`, with no message, until the coordinator has the handler. A method
+/// added to a proto is listed here until its handler lands. None is.
+pub const PENDING: &[&str] = &[];
 
 /// The body of an answer: the bytes of a JSON route or the gateway, or a gRPC response.
 pub type RouteBody = Either<Full<Bytes>, GrpcBody>;
@@ -122,11 +118,15 @@ const ROLLOUTS: &str = "hostkeeper.operator.v1.Rollouts";
 const MDM: &str = "hostkeeper.operator.v1.Mdm";
 /// The full name of the operator API's `Repositories`.
 const REPOSITORIES: &str = "hostkeeper.operator.v1.Repositories";
+/// The full name of the operator API's `HostGroups`.
+const HOST_GROUPS: &str = "hostkeeper.operator.v1.HostGroups";
 
 /// The path of `Coordinator.Heartbeat`, which needs a client certificate that names a host.
 const HEARTBEAT: &str = "/hostkeeper.agent.v1.Coordinator/Heartbeat";
 /// The path of `Repositories.Put`, which takes the operator's token and a keyring of up to 64 KiB.
 const REPOSITORIES_PUT: &str = "/hostkeeper.operator.v1.Repositories/Put";
+/// The path of `HostGroups.Put`, which takes the operator's token and a body of up to 64 KiB.
+const HOST_GROUPS_PUT: &str = "/hostkeeper.operator.v1.HostGroups/Put";
 /// The path of `Releases.SetDesired`, which takes CI's token or the operator's.
 const SET_DESIRED: &str = "/hostkeeper.operator.v1.Releases/SetDesired";
 /// The path of `Releases.Converge`, which takes CI's token or the operator's: it changes nothing.
@@ -227,7 +227,7 @@ pub(crate) async fn admit(
             Surface::Control,
             Some(
                 HOSTS | RELEASES | SERVICES | ENROLLMENT | AUDIT | ALERTS | ROLLOUTS | MDM
-                | REPOSITORIES,
+                | REPOSITORIES | HOST_GROUPS,
             ),
         ) => Served::Operator,
         _ => return Err(Status::unimplemented("")),
@@ -299,10 +299,13 @@ where
 }
 
 /// The most bytes an operator's call of `path` reads: [`MAX_SET_DESIRED_BYTES`] for
-/// `SetDesired` and `Repositories.Put`, [`MAX_OPERATOR_BYTES`] for every other method.
+/// `SetDesired` and `Repositories.Put`, [`MAX_HOST_GROUPS_PUT_BYTES`] for `HostGroups.Put`,
+/// [`MAX_OPERATOR_BYTES`] for every other method.
 pub(crate) fn operator_limit(path: &str) -> usize {
     if path == SET_DESIRED || path == REPOSITORIES_PUT {
         MAX_SET_DESIRED_BYTES
+    } else if path == HOST_GROUPS_PUT {
+        MAX_HOST_GROUPS_PUT_BYTES
     } else {
         MAX_OPERATOR_BYTES
     }
@@ -311,7 +314,8 @@ pub(crate) fn operator_limit(path: &str) -> usize {
 /// Serves the gRPC call `request` with the tonic server of its service, in process, with
 /// `admitted` in its extensions for the adapter. The service's message limit applies to the
 /// request: 16 KiB for a heartbeat, 8 KiB for `Enroll`, `Poll` and `Renew`, 256 KiB for
-/// `SetDesired` and `Repositories.Put`, 4 KiB for every other operator's call. A path of a
+/// `SetDesired` and `Repositories.Put`, 64 KiB for `HostGroups.Put`, 4 KiB for every other
+/// operator's call. A path of a
 /// service this coordinator does not serve is `UNIMPLEMENTED`.
 pub(crate) async fn serve_admitted<B>(
     coordinator: &Arc<Coordinator>,
@@ -378,6 +382,11 @@ where
         }
         Some(REPOSITORIES) => {
             let server = RepositoriesServer::new(RepositoriesService::new(coordinator))
+                .max_decoding_message_size(operator_limit(path));
+            call(server, request).await
+        }
+        Some(HOST_GROUPS) => {
+            let server = HostGroupsServer::new(HostGroupsService::new(coordinator))
                 .max_decoding_message_size(operator_limit(path));
             call(server, request).await
         }

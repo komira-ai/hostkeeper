@@ -137,6 +137,8 @@ impl EnrollmentStore {
             first_heartbeat_unix: row.pb.first_heartbeat_unix,
             first_serving_unix: row.pb.first_serving_unix,
             role,
+            host_group: row.pb.host_group.clone(),
+            moving_from: row.pb.moving_from.clone(),
             running: row.pb.running.as_ref().map(HostRunning::of_pb),
             running_unix: row.pb.running.as_ref().map(|r| r.at_unix),
         }))

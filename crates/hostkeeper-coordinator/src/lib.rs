@@ -37,7 +37,9 @@
 //!   ordered to uninstall a service; the uninstall intents a heartbeat ends are cleared by
 //!   `intents`;
 //! - `host_groups`: the stored form of the host groups (their packages, policy, generation and
-//!   desired versions) and of each (group, package)'s marks, which nothing decides by yet;
+//!   desired versions) and of each (group, package)'s marks, which the placement of hosts does
+//!   not read yet; [`operator_host_groups`] and [`host_move`] are the `HostGroups` calls that
+//!   write them, with `group_uninstall`, the uninstall intents a change of a group writes;
 //! - [`order_terms`]: the order id, try and package digest an update answer of the JSON route
 //!   carries to an agent that announced `order-v1`;
 //! - [`force`]: the fleet-wide fix, a hookless `force` ordered at once past the update plan,
@@ -127,11 +129,14 @@ pub mod desired;
 pub mod enrollment;
 pub mod fleet;
 pub mod force;
+pub(crate) mod group_uninstall;
 pub mod grpc;
 pub mod halt;
 pub(crate) mod health;
 pub mod holds;
+pub(crate) mod host_group_proto;
 pub(crate) mod host_groups;
+pub mod host_move;
 pub mod hosts;
 pub mod http;
 pub mod identity;
@@ -146,6 +151,7 @@ pub mod membership;
 pub mod operate;
 pub mod operator;
 pub mod operator_enrollment;
+pub mod operator_host_groups;
 pub mod operator_mdm;
 pub mod operator_repositories;
 pub mod ops;
@@ -248,6 +254,8 @@ mod force_targets_tests;
 #[cfg(test)]
 mod force_tests;
 #[cfg(test)]
+mod group_uninstall_tests;
+#[cfg(test)]
 mod halt_membership_tests;
 #[cfg(test)]
 mod halt_race_tests;
@@ -257,6 +265,22 @@ mod holds_calls_tests;
 mod holds_tests;
 #[cfg(test)]
 mod host_cert_state_tests;
+#[cfg(test)]
+mod host_group_list_tests;
+#[cfg(test)]
+mod host_group_move_tests;
+#[cfg(test)]
+mod host_group_proto_tests;
+#[cfg(test)]
+mod host_group_put_policy_tests;
+#[cfg(test)]
+mod host_group_put_tests;
+#[cfg(test)]
+mod host_group_remove_tests;
+#[cfg(test)]
+mod host_groups_access_tests;
+#[cfg(test)]
+mod host_groups_support;
 #[cfg(test)]
 mod host_held_tests;
 #[cfg(test)]

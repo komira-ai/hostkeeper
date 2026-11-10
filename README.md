@@ -127,10 +127,8 @@ The items B1 to B28 of section 12.2 of the design, by theme. "Built" means the c
   [coordinator-storage.md](docs/design/coordinator-storage.md); the lab's coordinator runs on it).
 - **Enrollment.** Built: B16 (certificate authority, enrollment and renewal), B17 (approval).
   Planned: B21 (adopting hosts that run kbf's agent).
-- **Operator surfaces.** Built: B1 (the protobuf services, every method of which has a handler
-  but the five of `HostGroups` (`HostGroups.List`, `HostGroups.Get`, `HostGroups.Put`,
-  `HostGroups.Remove`, `HostGroups.Move`), declared ahead of the coordinator's host groups, which
-  answer `UNIMPLEMENTED`), B10 (the generated command line: `hkctl`, over the gateway),
+- **Operator surfaces.** Built: B1 (the protobuf services, every method of which has a handler),
+  B10 (the generated command line: `hkctl`, over the gateway),
   B24 (the CI client), B25 (the UI).
 - **Platforms and packaging.** Built: B11 (deb, rpm, unit, boot-image overlay). Partly built:
   B18 (macOS: `hostkeeper-launchd`, the daemon's Mac adapters, package check and claims, and a

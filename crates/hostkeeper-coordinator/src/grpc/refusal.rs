@@ -7,8 +7,8 @@
 //! can never be refused with (`UNSPECIFIED`) is `INTERNAL`.
 
 use hostkeeper_proto::hostkeeper::operator::v1::{
-    AlertsRefusal, AuditRefusal, EnrollmentRefusal, HostsRefusal, MdmRefusal, ReleasesRefusal,
-    RepositoriesRefusal, RolloutsRefusal, ServicesRefusal,
+    AlertsRefusal, AuditRefusal, EnrollmentRefusal, HostGroupsRefusal, HostsRefusal, MdmRefusal,
+    ReleasesRefusal, RepositoriesRefusal, RolloutsRefusal, ServicesRefusal,
 };
 use tonic::{Code, Status};
 
@@ -194,4 +194,25 @@ pub(crate) fn repositories(refusal: RepositoriesRefusal) -> Status {
         RepositoriesRefusal::AuditUnavailable => Code::Unavailable,
     };
     refused(code, refusal.as_str_name(), "REPOSITORIES_REFUSAL_")
+}
+
+/// The status of a refusal by `HostGroups`.
+pub(crate) fn host_groups(refusal: HostGroupsRefusal) -> Status {
+    let code = match refusal {
+        HostGroupsRefusal::Unspecified | HostGroupsRefusal::StoreFailed => Code::Internal,
+        HostGroupsRefusal::Unauthorized => Code::Unauthenticated,
+        HostGroupsRefusal::Forbidden => Code::PermissionDenied,
+        HostGroupsRefusal::InvalidRequest
+        | HostGroupsRefusal::InvalidHostGroup
+        | HostGroupsRefusal::InvalidPackage
+        | HostGroupsRefusal::InvalidPolicy
+        | HostGroupsRefusal::TooManyPackages => Code::InvalidArgument,
+        HostGroupsRefusal::AuditUnavailable => Code::Unavailable,
+        HostGroupsRefusal::UnknownHostGroup | HostGroupsRefusal::UnknownHost => Code::NotFound,
+        HostGroupsRefusal::HostkeeperNotListed
+        | HostGroupsRefusal::GenerationMismatch
+        | HostGroupsRefusal::NotEmpty
+        | HostGroupsRefusal::SameHostGroup => Code::FailedPrecondition,
+    };
+    refused(code, refusal.as_str_name(), "HOST_GROUPS_REFUSAL_")
 }

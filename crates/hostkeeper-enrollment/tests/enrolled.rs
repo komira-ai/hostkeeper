@@ -63,6 +63,8 @@ fn enrolled(host: &str, machine: &str, at: u64) -> EnrolledHost {
         first_heartbeat_unix: None,
         first_serving_unix: None,
         role: Role::parse("web").expect("a role"),
+        host_group: String::new(),
+        moving_from: None,
         running: None,
         running_unix: None,
     }

@@ -4,8 +4,9 @@
 //! operations state (the minimum version, the last good version, the halt and its reports and
 //! generation, the standing force and its generation, the update plan's position).
 //!
-//! This is the stored form only. Nothing decides by it yet: placement, the decision by group and
-//! the `HostGroups` calls are built on it later, and until then no write puts a group in it.
+//! This is the stored form, and what writes it is the `HostGroups` calls
+//! ([`crate::operator_host_groups`], [`crate::host_move`]). The placement of hosts and the decision
+//! by group do not read it yet.
 //!
 //! The groups and their desired versions are part of the desired state ([`crate::desired::Held`]),
 //! kept in the state file under the top-level key `host_groups`; the marks are part of the
@@ -32,7 +33,7 @@ use crate::canary::Canary;
 use crate::defer::DeferBackoff;
 use crate::desired::MAX_COUNT;
 use crate::force::{ForceRecord, SELF_SERVICE};
-use crate::ops::{Halt, HaltAck};
+use crate::ops::{Halt, HaltAck, OpsState};
 use crate::reconcile::{FailThreshold, Rollback};
 use crate::rollouts::Rollout;
 use crate::stages::{Advance, Plan, RawStage};
@@ -238,6 +239,27 @@ impl Policy {
         Plan::read(stages, canary).map_err(|why| PolicyError { key: "stages", why })
     }
 
+    /// The keys whose value differs between `self` and `other`, in the order of the policy.
+    pub(crate) fn changed_keys(&self, other: &Self) -> Vec<&'static str> {
+        [
+            ("stages", self.stages != other.stages),
+            ("canary", self.canary != other.canary),
+            ("bake_beats", self.bake_beats != other.bake_beats),
+            ("rollback", self.rollback != other.rollback),
+            (
+                "rollback_after_failed",
+                self.rollback_after_failed != other.rollback_after_failed,
+            ),
+            ("defer_backoff", self.defer_backoff != other.defer_backoff),
+            ("max_updating", self.max_updating != other.max_updating),
+            ("min_up", self.min_up != other.min_up),
+            ("live_rollouts", self.live_rollouts != other.live_rollouts),
+        ]
+        .into_iter()
+        .filter_map(|(key, changed)| changed.then_some(key))
+        .collect()
+    }
+
     /// Whether every key is in its range (section 3), the ranges of the rollout file and of the
     /// desired state's limits.
     ///
@@ -330,6 +352,54 @@ fn is_default_policy(policy: &Policy) -> bool {
     *policy == Policy::default()
 }
 
+/// Why a list of packages is refused.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ListError {
+    /// The list is empty or longer than [`MAX_PACKAGES`].
+    Count(usize),
+    /// A package's name breaks its rule.
+    Package(String),
+    /// A package is listed twice.
+    Twice(String),
+    /// `hostkeeper` is not listed.
+    HostkeeperNotListed,
+}
+
+impl From<ListError> for GroupError {
+    fn from(why: ListError) -> Self {
+        match why {
+            ListError::Count(n) => Self::Packages(n),
+            ListError::Package(name) => Self::Package(name),
+            ListError::Twice(name) => Self::Twice(name),
+            ListError::HostkeeperNotListed => Self::HostkeeperNotListed,
+        }
+    }
+}
+
+/// Whether `packages` is a group's list (section 1.1): 1 to [`MAX_PACKAGES`] package names, none
+/// twice, `hostkeeper` among them. An empty list is refused for its count.
+///
+/// # Errors
+/// [`ListError`]: the first rule it breaks, in that order.
+pub(crate) fn check_packages(packages: &[String]) -> Result<(), ListError> {
+    if !(1..=MAX_PACKAGES).contains(&packages.len()) {
+        return Err(ListError::Count(packages.len()));
+    }
+    let mut seen = BTreeSet::new();
+    for package in packages {
+        if !is_package_name(package) {
+            return Err(ListError::Package(package.clone()));
+        }
+        if !seen.insert(package.as_str()) {
+            return Err(ListError::Twice(package.clone()));
+        }
+    }
+    if !seen.contains(SELF_SERVICE) {
+        return Err(ListError::HostkeeperNotListed);
+    }
+    Ok(())
+}
+
 /// Why a group is refused.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub(crate) enum GroupError {
@@ -365,21 +435,7 @@ impl HostGroup {
     /// # Errors
     /// [`GroupError`]: the first rule it breaks.
     pub(crate) fn check(&self) -> Result<(), GroupError> {
-        if !(1..=MAX_PACKAGES).contains(&self.packages.len()) {
-            return Err(GroupError::Packages(self.packages.len()));
-        }
-        let mut seen = BTreeSet::new();
-        for package in &self.packages {
-            if !is_package_name(package) {
-                return Err(GroupError::Package(package.clone()));
-            }
-            if !seen.insert(package.as_str()) {
-                return Err(GroupError::Twice(package.clone()));
-            }
-        }
-        if !seen.contains(SELF_SERVICE) {
-            return Err(GroupError::HostkeeperNotListed);
-        }
+        check_packages(&self.packages)?;
         self.policy.check()?;
         if self.generation == 0 {
             return Err(GroupError::Generation("the group"));
@@ -516,6 +572,40 @@ impl GroupsMarks {
             }
         }
         Ok(())
+    }
+}
+
+impl OpsState {
+    /// The marks of `package` in `group`: the default ones for a pair that has none.
+    pub(crate) fn group_marks(&self, group: &GroupName, package: &str) -> GroupMarks {
+        self.host_groups
+            .0
+            .get(group)
+            .and_then(|packages| packages.get(package))
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Takes the marks of every package of `group` that `kept` does not list out of the state,
+    /// but each one's minimum version, which only `Services.SetMinVersion` changes.
+    pub(crate) fn drop_group_packages(&mut self, group: &GroupName, kept: &[String]) {
+        let Some(packages) = self.host_groups.0.get_mut(group) else {
+            return;
+        };
+        for (package, marks) in packages.iter_mut() {
+            if !kept.contains(package) {
+                *marks = GroupMarks {
+                    min_version: marks.min_version.take(),
+                    ..GroupMarks::default()
+                };
+            }
+        }
+        self.host_groups = std::mem::take(&mut self.host_groups).without_defaults();
+    }
+
+    /// Takes every mark of `group` out of the state.
+    pub(crate) fn drop_group(&mut self, group: &GroupName) {
+        self.host_groups.0.remove(group);
     }
 }
 
