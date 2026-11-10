@@ -32,12 +32,11 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <rect x="300" y="110" width="220" height="240" rx="5" class="box-b"/>
 <text x="410.0" y="132" class="b" text-anchor="middle">Coordinator (dev box)</text>
 <text x="410.0" y="150" class="t-m" text-anchor="middle">console module:</text>
-<text x="410.0" y="166" class="t-m" text-anchor="middle">Console.* RPCs, tickets,</text>
+<text x="410.0" y="166" class="t-m" text-anchor="middle">Console/* RPCs, operators file,</text>
 <text x="410.0" y="182" class="t-m" text-anchor="middle">session table, splice,</text>
 <text x="410.0" y="198" class="t-m" text-anchor="middle">console listener</text>
-<text x="410.0" y="214" class="t-m" text-anchor="middle">tokens + console cap,</text>
-<text x="410.0" y="230" class="t-m" text-anchor="middle">audit log, inventory,</text>
-<text x="410.0" y="246" class="t-m" text-anchor="middle">credential file (D5)</text>
+<text x="410.0" y="214" class="t-m" text-anchor="middle">tokens + audit-only append,</text>
+<text x="410.0" y="230" class="t-m" text-anchor="middle">inventory, credential file (D5)</text>
 <rect x="560" y="110" width="200" height="100" rx="5" class="box-o"/>
 <text x="660.0" y="132" class="b" text-anchor="middle">Console relay</text>
 <text x="660.0" y="150" class="t-m" text-anchor="middle">unprivileged, lab host</text>
