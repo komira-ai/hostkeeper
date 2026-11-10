@@ -259,15 +259,19 @@ impl OperatorApi {
     /// (read first with `HostGroups.Get`, to name the generation the replacement is made from).
     /// The reply is the call's, as `entry` and `generation`.
     pub fn put_host_group(&self, group: HostGroup) -> Result<Value, Status> {
-        let held = rpc!(
-            self,
-            HostGroupsClient.get,
-            GetHostGroupRequest {
-                host_group: group.name.clone(),
-                ..GetHostGroupRequest::default()
-            },
-            "GetHostGroupResponse"
-        );
+        // The macro returns early on a refusal with `?`: inside the closure, so a group not held
+        // yet (`NOT_FOUND`) comes back here as a value, and is put with no generation.
+        let held = (|| {
+            rpc!(
+                self,
+                HostGroupsClient.get,
+                GetHostGroupRequest {
+                    host_group: group.name.clone(),
+                    ..GetHostGroupRequest::default()
+                },
+                "GetHostGroupResponse"
+            )
+        })();
         let if_generation = match held {
             Ok(held) => held["hostGroup"]["generation"]
                 .as_str()
