@@ -76,7 +76,7 @@ fn plan() -> op::RolloutPlan {
         waiting_on_why: vec![op::LiveRollout {
             service: "js-agent".to_owned(),
             reason: op::LiveReason::Baking.into(),
-            node_id: "node-05".to_owned(),
+            node_id: "db-5".to_owned(),
         }],
     }
 }

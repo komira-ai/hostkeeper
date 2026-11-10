@@ -123,7 +123,7 @@ fn rollout_page_says_what_the_plan_is_where_it_stands_and_why_it_waits() {
     waiting_on["waitingOn"] = json!(["js-agent", "tierstore"]);
     let mut waiting_on_why = waiting_on.clone();
     waiting_on_why["waitingOnWhy"] = json!([
-        {"service": "js-agent", "reason": "LIVE_REASON_BAKING", "nodeId": "node-05"},
+        {"service": "js-agent", "reason": "LIVE_REASON_BAKING", "nodeId": "db-5"},
         {"service": "tierstore", "reason": "LIVE_REASON_PLAN_UNDER_WAY"},
     ]);
     ui.reply(
@@ -218,7 +218,7 @@ return sections.map((s) => [cell(s, "Plan"), cell(s, "Stage"), cell(s, "Waiting"
             [
                 "4 (100%) hosts of 4 eligible",
                 "1 of 1",
-                "rollout_elsewhere on js-agent (baking on node-05), tierstore (plan_under_way)"
+                "rollout_elsewhere on js-agent (baking on db-5), tierstore (plan_under_way)"
             ],
             ["4 (100%) hosts of 4 eligible", "1 of 1", "quiet"],
             [

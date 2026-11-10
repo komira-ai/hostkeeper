@@ -195,7 +195,7 @@ whose every host runs its desired version, with nothing updating or ordered, hol
 service whose rollout is not live is told `rollout_elsewhere` while N others are, and its plan in
 `Releases.Status` names them (`waiting_on`) and, for each, why it is live and on which host
 (`waiting_on_why`: `updating`, `promotion_pending`, `ordered`, `baking` with the host, or
-`plan_under_way`); the web UI shows it as `rollout_elsewhere on hello (baking on node-05)`. A
+`plan_under_way`); the web UI shows it as `rollout_elsewhere on hello (baking on db-5)`. A
 service that is live is never held by the others. The default keeps one service's rollout at a time across the fleet, as the
 coordinator did before.
 
