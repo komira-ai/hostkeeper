@@ -33,6 +33,7 @@ inside the container is the machine's own, and a probe on the machine reaches it
 | `GET /healthz`, a listener not yet bound | `503` | `starting` |
 | `GET /healthz`, the database's link lost | `503` | `store_unreachable` |
 | `GET /healthz`, another coordinator led the database while this one's link was lost | `503` | `not_writer` |
+| `GET /healthz`, from SIGTERM or SIGINT until the process exits, whatever else holds | `503` | `draining` |
 | `HEAD /healthz` | as `GET` | none |
 | any other path, or any other method (`POST` among them) | `404` | `not_found` |
 
@@ -49,6 +50,11 @@ reads memory only and writes no audit line.
   answering heartbeats meanwhile and orders nothing; the `store_unreachable` alert of
   `Alerts.List` says the same.
 - `not_writer` is the coordinator's last answer: it stops, and the restart policy starts it again.
+- `draining` is answered from the moment the coordinator takes SIGTERM or SIGINT until it exits,
+  ahead of every other token: every answer made after the signal is `draining`, never `ok`, a
+  probe that connected before the signal among them. It never turns back into `ok`. The
+  coordinator does not wait after the signal: it stops serving and exits at once, so this time is
+  short, and from then on a probe gets no answer, which a probe also reads as not healthy.
 
 The listener has the limits of the others: at most 1024 connections at once, ten seconds for a
 request head and for each write of an answer the probe does not read.

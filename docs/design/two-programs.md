@@ -225,7 +225,8 @@ route, and the probe runs outside the container:
   flag there is no such listener, as today.
 - **What it says.** `200` with the body `ok` when every listener the flags name is bound and serving, the store is
   open and, with the Postgres store, this coordinator holds the single-writer lock (coordinator-storage.md section 5);
-  `503` with one reason token otherwise (`store_unreachable`, `not_writer`, `starting`). The body is that token and
+  `503` with one reason token otherwise (`store_unreachable`, `not_writer`, `starting`, and `draining` from SIGTERM
+  or SIGINT until the process exits, ahead of the others). The body is that token and
   nothing else: no version, no host, no count. It reads memory only and writes no audit line. The listener has the
   same limits as the others (handshake, head, connection count; `listen.rs`, **Built**).
 - **Who probes it.** The deployment, from outside the container: the coordinator runs on the host's network
