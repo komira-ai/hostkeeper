@@ -130,7 +130,7 @@ nothing is stored; `Status` counts the pass-throughs. If the origin is down and 
 index older than its TTL is not (a stale index could hide a release), the client gets `502 origin_failed`.
 
 **Where the origins come from.** A public repository's base URL (the registry entry, or the setting `proxy_origins` when the registry holds
-none), and for a pkg, the `url` of its `installs` entry. Which origin holds the signed macOS pkg today is Q9.
+none), and for a pkg, the `url` of its `installs` entry: the signed macOS pkg is published to packages.komira.ai (section 10).
 
 **Host configuration.** A group's repository entry names `https://<mdm name>/apt/<repo>/` as its URI. The daemon config's `release_channel`
 key stays required by the loader (above); until a loader that does not read it has shipped for a release, every config sets it to
@@ -214,17 +214,19 @@ An older coordinator does not have the routes: a host pointed at it gets `404` a
 | PP5 | The loader no longer requires `release_channel` (additive read), then configs stop carrying it one release later | PP2 | S |
 | PP6 | Farm: retire the download server and repoint hosts and Macs (held scripts, the owner's), in the order of section 6 | PP2, PP3, and stage 9's counts at zero (packages-native.md A24 converged) | S |
 
-## 10. Open question
+## 10. Where the macOS pkg is published
 
-- **Q9** Which origin holds the signed macOS pkg: GitHub releases or packages.komira.ai? The proxy takes either (an `installs` entry's
-  `url`); the answer decides which one the release workflow must publish to.
+The signed macOS pkg is published to packages.komira.ai, next to the apt repository, so every package a host or Mac installs has one
+public origin. The release workflow uploads the pkg there (a task of the release side, alongside the apt publish); an `installs` entry's
+`url` names it, and the proxy relays it like any other immutable file. GitHub release assets keep their copy for attestation and as a
+fallback origin.
 
 ## 11. Not verified
 
 1. Where the registry entry of a public repository keeps its base URL, or whether `proxy_origins` is needed (read `registry.rs` before PP2).
 2. That apt on the farm's hosts accepts the proxy's certificate with system roots alone (the farm's hosts have the public roots; confirm with
    one host before PP6).
-3. That a GitHub release asset's redirect chain stays within https and three hops.
+3. That a GitHub release asset's redirect chain stays within https and three hops (only if the fallback origin is used).
 4. That apt treats two URIs of one deb822 stanza as two sources and not as a fallback (section 3); check with one host before PP6.
 5. Whether the proxy's routes can be served with the name and certificate alone while the MDM routes still answer 503 (section 3); the
    listener's route-family switch is read in CM11a.

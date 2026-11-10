@@ -844,10 +844,8 @@ and CM12b. Build while measuring: the farm-Mac checks in section 12 run alongsid
 
 ## 12. Open questions and what is not verified
 
-Questions for the owner. One is open, and it belongs to the package proxy:
-
-- **Q9** Which origin holds the signed macOS pkg: GitHub releases or the public package host? The proxy takes either (an `installs`
-  entry's `url`); the answer decides which one the release workflow must publish the pkg to ([package-proxy.md](package-proxy.md) section 10).
+Questions for the owner: none are open. The signed macOS pkg is published to packages.komira.ai, next to the apt
+repository ([package-proxy.md](package-proxy.md) section 10).
 
 Not verified. A claim in this document that depends on one of these is marked, and none is stated as fact elsewhere.
 
