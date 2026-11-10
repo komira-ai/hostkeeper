@@ -394,10 +394,32 @@ impl DaemonObserver {
 /// the version `current` names does not load.
 pub const NOT_OBSERVED: &str = "not_observed";
 
+/// The detail of the daemon's own service whose unit the service manager does not load while
+/// its package is installed (a unit an earlier move left hides it).
+pub const OWN_UNIT_NOT_LOADED: &str = "own_unit_not_loaded";
+
+/// `observed`, the observation of `service`, as the heartbeat reports it: the daemon's own
+/// service observed absent (the service manager finds no unit) is running, since this daemon is
+/// its process, and installed, since only a service with a `current` is observed. It is reported
+/// unhealthy, [`OWN_UNIT_NOT_LOADED`], so the coordinator never reads it as not installed and
+/// orders its install. Any other service or observation is reported as observed.
+fn own_running(service: &ServiceName, observed: Observation) -> Observation {
+    if (service.as_str() != SELF_SERVICE) | (observed.health != Health::Absent) {
+        return observed;
+    }
+    Observation {
+        liveness: Liveness::Running,
+        health: Health::Unhealthy,
+        health_detail: Some(OWN_UNIT_NOT_LOADED.to_owned()),
+        ..observed
+    }
+}
+
 impl ServiceObserver for DaemonObserver {
     /// One observation of `service` ([`observer::observe`]); a service the daemon does not
-    /// observe is `unobserved`, never absent or stopped. A repository package's observation also
-    /// carries its drift ([`drift`]).
+    /// observe is `unobserved`, never absent or stopped, and the daemon's own service is never
+    /// absent ([`own_running`]). A repository package's observation also carries its drift
+    /// ([`drift`]).
     fn observe(&self, service: &ServiceName) -> Observation {
         let ctx = self.daemon.ctx();
         let observed = observer::observe(
@@ -415,7 +437,7 @@ impl ServiceObserver for DaemonObserver {
                 health_detail: Some(NOT_OBSERVED.to_owned()),
                 drift: None,
             },
-            |seen| observation(&seen),
+            |seen| own_running(service, observation(&seen)),
         );
         Observation {
             drift: drift(ctx, service),
@@ -516,3 +538,7 @@ impl TrustedRootSource for NoTrustedRoot {
         None
     }
 }
+
+#[cfg(test)]
+#[path = "link_adapters_tests.rs"]
+mod tests;

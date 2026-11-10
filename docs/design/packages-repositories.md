@@ -497,6 +497,7 @@ the state it checks, and reads apt's messages only where apt has no other signal
 | The dpkg lock is held past `DPkg::Lock::Timeout`, or past `remove_secs` for the purge (an unattended upgrade is running) | `stage` 3, `activate`, `remove` | `Deferred`, `environment`, `package_manager_busy` |
 | dpkg was interrupted before this run and needs `dpkg --configure -a`, which would touch other packages | any | `Failed`, `environment`, `dpkg_interrupted`. hostkeeper runs nothing host-wide |
 | The install itself failed: a maintainer script exited non-zero, or `dpkg-query` does not show `V` installed afterwards | `activate` | `Failed`, `release`, `dpkg_error`, with apt's last error line. The update rolls back to the previous version (section 4.4), or a first install is purged |
+| After the install over an archive version (packages-native.md section 10.6), systemd does not load a unit the archive placed from the package's own file (`systemctl show`'s `LoadState` is not `loaded`, or its `FragmentPath` is not in `/usr/lib/systemd/system/` or `/lib/systemd/system/`): a unit left in `/etc/systemd/system/` hides it | `activate` | `Failed`, `environment`, `unit_not_loaded`, naming what systemd loads instead. `placed.json` keeps the archive's paths, so the next `activate` takes them away and checks again |
 
 `not_in_repository` defers rather than fails, because a suite seen through a cache may lag the publish by minutes, and
 a failure of class `release` on a canary would mark the version bad. The deferral is shown by `Status` with its

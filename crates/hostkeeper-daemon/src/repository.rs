@@ -35,16 +35,17 @@ use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_hook::{Class as HookClass, Phase, Verdict};
 use hostkeeper_install::backend_of;
 use hostkeeper_install::repository::launcher::LauncherTools;
+use hostkeeper_install::repository::loaded;
 use hostkeeper_install::repository::{
     Backend, Class, Drift, Failure, HostDirs, InstallerLock, Mirror, Order, Outcome, PackageRecord,
-    Pause, Reason, RecordError, Records, Repositories, RepositoryInstaller,
+    Pause, Reason, RecordError, Records, Repositories, RepositoryInstaller, TREE,
 };
 use hostkeeper_install::version::{
     FillError, FillOrder, HostFs, Owner, REASON_ARTIFACT_CHANGED, REASON_DAEMON_TOO_OLD,
     REASON_IO_ERROR, REASON_NO_SPACE, REASON_RESERVED_VERSION, REASON_VERSION_TOO_LONG,
     UnpackError, stage_filled,
 };
-use hostkeeper_placed::{Fs, InstalledEntry, Placer, Roots, UnitControl};
+use hostkeeper_placed::{Fs, InstalledEntry, PlacedError, Placer, Roots, UnitControl};
 use hostkeeper_proto::hostkeeper::release::v1::Target;
 use hostkeeper_release::Installer;
 use hostkeeper_steps::{Clock, Staged, StepExit, StepLauncher, SwitchError, UpdateOrder};
@@ -596,6 +597,16 @@ impl Repository {
     /// binary of hostkeeper's own update runs after it confirmed itself
     /// ([`crate::own_package`]). A version staged for an installer with no backend here, and a
     /// `current` that cannot be switched, are `io_error`: nothing of the package said so.
+    ///
+    /// A service an archive version of an earlier release placed paths for (the move,
+    /// docs/design/packages-native.md section 10.6) has them taken away first, and systemd
+    /// reloaded ([`Placer::take_away_archive_paths`]); after the installer's `activate`, each unit
+    /// the archive placed that the package installs must be loaded from the package's own file
+    /// ([`loaded::check_units`]: `unit_not_loaded` otherwise), and only then are the paths
+    /// dropped from `placed.json` ([`Placer::forget_archive_paths`]), so a failed or deferred
+    /// `activate` takes them away and checks again on its next try. An installer's `activate`
+    /// that fails or defers puts the links it removed back first ([`Repository::put_back`]). A
+    /// failure of the removal or of the record is `io_error`.
     pub fn activate_installed(
         &self,
         service: &ServiceName,
@@ -616,17 +627,54 @@ impl Repository {
             )
         })?;
         let order = self.order(backend, service, version, entry)?;
-        let activated = self.with(backend, service, |installer| {
-            installer.activate(&order, dir)
-        })?;
+        let archive = |e: PlacedError| {
+            Failure::new(
+                Reason::IoError,
+                format!("the paths of the archive version: {e}"),
+            )
+        };
+        let taken = self
+            .placer()
+            .take_away_archive_paths(service.as_str())
+            .map_err(archive)?;
+        let activated = self
+            .with(backend, service, |installer| {
+                installer.activate(&order, dir)
+            })
+            .map_err(|failure| self.put_back(&taken, failure))?;
         if let Some(drift) = activated.drift {
             let mut repaired = self.repaired.lock().unwrap_or_else(PoisonError::into_inner);
             repaired.insert(service.to_string(), drift);
         }
+        if !taken.units.is_empty() {
+            let tools = LauncherTools::sharing(&*self.launcher, service.as_str(), &self.tool_runs);
+            loaded::check_units(&tools, &dir.join(TREE), &taken.units, DRIFT_QUERY_SECS)?;
+        }
+        self.placer()
+            .forget_archive_paths(service.as_str())
+            .map_err(archive)?;
         self.placer()
             .switch_current(service, version)
             .map(drop)
             .map_err(|e| Failure::new(Reason::IoError, e.to_string()))
+    }
+
+    /// `failure`, the installer's `activate` that failed or deferred after `taken` was taken
+    /// away, once the links `taken` removed are put back
+    /// ([`Placer::restore_archive_links`]): with no native version installed, the archive's
+    /// unit is still the one systemd starts the service by. A put-back that fails is said in the
+    /// failure's detail; its reason stays the installer's.
+    fn put_back(&self, taken: &hostkeeper_placed::TakenAway, failure: Failure) -> Failure {
+        match self.placer().restore_archive_links(taken) {
+            Ok(_) => failure,
+            Err(e) => Failure::new(
+                failure.reason(),
+                format!(
+                    "{}; the archive's links were not put back: {e}",
+                    failure.detail()
+                ),
+            ),
+        }
     }
 
     /// The adoption of a package the host's setup installed with no record
