@@ -540,6 +540,7 @@ impl Lan {
                     role: Role::parse("storage").expect("a role"),
                     services: Vec::new(),
                     replace,
+                    host_group: None,
                 },
             )
             .expect("approved");

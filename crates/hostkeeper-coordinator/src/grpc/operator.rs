@@ -11,11 +11,10 @@
 //! and arrives in the request's extensions; a request without one is an anonymous caller, and is
 //! refused as such. `HostGroups` is in [`super::operator_host_groups`].
 //!
-//! `Enrollment.Approve` and `Enrollment.AddRecord` place nothing by host group yet, so a request
-//! that names one in `host_group` is refused `unknown_host_group`, never read as naming none. The
-//! other calls that take a `host_group` read it in their handlers: with no host group held a
-//! request that names one is refused (`not_in_host_group` of `Releases` and `Rollouts`) and
-//! `Audit.List` with a `host_group` filter lists no entry ([`crate::operator`]).
+//! Every call that takes a `host_group` reads it in its handler: with no host group held a
+//! request that names one is refused (`not_in_host_group` of `Releases` and `Rollouts`,
+//! `unknown_host_group` of `Enrollment.Approve` and `Enrollment.AddRecord`), never read as naming
+//! none, and `Audit.List` with a `host_group` filter lists no entry ([`crate::operator`]).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -728,11 +727,6 @@ impl EnrollmentApi for EnrollmentService {
         request: Request<proto::ApproveRequest>,
     ) -> Result<Response<proto::ApproveResponse>, Status> {
         let caller = caller_of(&request);
-        if names_group(&caller, &request.get_ref().host_group) {
-            return Err(refusal::enrollment(
-                proto::EnrollmentRefusal::UnknownHostGroup,
-            ));
-        }
         self.coordinator
             .enrollment_approve(&caller, request.into_inner())
             .map(Response::new)
@@ -755,11 +749,6 @@ impl EnrollmentApi for EnrollmentService {
         request: Request<proto::AddRecordRequest>,
     ) -> Result<Response<proto::AddRecordResponse>, Status> {
         let caller = caller_of(&request);
-        if names_group(&caller, &request.get_ref().host_group) {
-            return Err(refusal::enrollment(
-                proto::EnrollmentRefusal::UnknownHostGroup,
-            ));
-        }
         self.coordinator
             .add_record(&caller, request.into_inner())
             .map(Response::new)
@@ -924,10 +913,4 @@ impl RolloutsApi for RolloutsService {
             .map(Response::new)
             .map_err(refusal::rollouts)
     }
-}
-
-/// Whether an operator's request names a host group, which this coordinator, holding none, has
-/// no group of. A caller who is no operator is left to the handler, which refuses it first.
-fn names_group(caller: &Caller, host_group: &str) -> bool {
-    caller.operator().is_ok() && !host_group.is_empty()
 }

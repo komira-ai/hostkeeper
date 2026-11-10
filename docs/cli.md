@@ -107,7 +107,7 @@ id, role and services the approval names.
 | `--services` | STRING | Services to assign to the host; may be empty. Deprecated: a coordinator that holds host groups refuses any (`services_retired`). Repeat the flag for more. |
 | `--replace` | true\|false | Take the host id from the host that holds it, revoking that host's certificate; also needed to approve a `duplicate_claim` request or a denied host id. It never approves a contested request (`record_contested`). |
 | `--reason` | STRING |  |
-| `--host-group` | STRING | The host group the host is in, which must exist (`unknown_host_group`; a coordinator that does not hold host groups refuses any). With `replace`, the group of the replaced host (`host_group_differs`). |
+| `--host-group` | STRING | The host group the host is in, which must exist (`unknown_host_group`; a coordinator that does not hold host groups refuses any). With a renewal or `replace`, the group of that host (`host_group_differs`). |
 
 #### `hkctl enrollment reject`
 

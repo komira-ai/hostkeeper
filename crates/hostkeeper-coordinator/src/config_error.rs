@@ -109,6 +109,16 @@ pub enum StartError {
     /// The Mac serial allowlist names a service the rollout file does not define.
     #[error("--mac-serial-allowlist names service {0}, which --rollout-file does not define")]
     MacService(String),
+    /// An entry of the Mac serial allowlist names services, which a coordinator that holds host
+    /// groups refuses: the entry's group decides what the Mac runs.
+    #[error(
+        "--mac-serial-allowlist: the entry of serial {0} names services; the coordinator holds host groups, and the Mac's group decides what it runs: name its host_group alone"
+    )]
+    MacServicesRetired(String),
+    /// An entry of the Mac serial allowlist names a host group the coordinator does not hold,
+    /// while it holds some.
+    #[error("--mac-serial-allowlist names host group {0}, which the coordinator does not hold")]
+    MacHostGroup(String),
     /// `--ui-dir` does not name a directory.
     #[error("--ui-dir: {0}")]
     UiDir(#[from] UiDirError),

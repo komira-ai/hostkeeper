@@ -361,6 +361,7 @@ pub fn approve(enrollment: &Enrollment, key: &HostKey, host: &str, replace: bool
                 role: Role::parse("storage").expect("a role"),
                 services: Vec::new(),
                 replace,
+                host_group: None,
             },
         )
         .expect("approved");

@@ -7,6 +7,7 @@ mod agent;
 mod alerts;
 mod credentials;
 mod enrollment;
+mod enrollment_groups;
 mod facts;
 mod force;
 mod gateway;
