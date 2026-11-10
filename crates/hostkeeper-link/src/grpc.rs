@@ -53,11 +53,12 @@ use crate::pki::{CA, CURRENT};
 use crate::ports::{ClientIdentity, CoordinatorLink, LinkError, Log, ReplyFault, Unsendable};
 use crate::proto_map::{self, Dropped};
 
-/// The most bytes of a gRPC reply that are read: 32 KiB, twice [`crate::REPLY_MAX`], because an
-/// order may carry the entry of a release's targets, which is at most 24 KiB encoded
-/// (`docs/design/packages.md` section 3.5). The JSON route keeps its 16 KiB: its reply never
-/// carries an entry.
-pub const GRPC_REPLY_MAX: usize = 32 * 1024;
+/// The most bytes of a gRPC reply that are read: 1 MiB. An order may carry the entry of a
+/// release's targets, at most 24 KiB encoded (`docs/design/packages.md` section 3.5), and a
+/// reply may carry a repository set, at most 8 repositories of at most 64 KiB of keyring each
+/// (`hostkeeper_release::registry`). The JSON route keeps its 16 KiB ([`crate::REPLY_MAX`]): its
+/// reply never carries either.
+pub const GRPC_REPLY_MAX: usize = 1024 * 1024;
 
 /// The protocol the link offers in ALPN: HTTP/2.
 const H2: &[u8] = b"h2";

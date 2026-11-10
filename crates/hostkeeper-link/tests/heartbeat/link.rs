@@ -28,6 +28,7 @@ fn beat() -> Heartbeat {
         renewal: hostkeeper_link::Renewal::default(),
         trusted_root: None,
         installers: Vec::new(),
+        repositories: None,
     }
 }
 
@@ -444,6 +445,7 @@ fn an_update_without_its_terms_is_not_run_and_is_logged_once_per_change() {
         features: ANNOUNCED.to_vec(),
         halt_generations: vec![(service("web"), 3)],
         acknowledged: Vec::new(),
+        repositories: None,
     };
     let line = |whom: &str, to: &str, why: &str| {
         format!("error: the coordinator's update of {whom} to {to} is not run: {why}")

@@ -8,6 +8,7 @@ use bytes::Bytes;
 use hostkeeper_coordinator::grpc::route;
 use hostkeeper_coordinator::http::Surface;
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
+use hostkeeper_proto::hostkeeper::release::v1 as proto_release;
 use hostkeeper_proto::hostkeeper::release::v1::{
     Blob, Hook, InstallerBounds, Location, Manifest, StepBounds, Target, TargetList,
 };
@@ -16,6 +17,7 @@ use hyper::{Request, Version};
 use prost::Message;
 use prost_reflect::{DescriptorPool, DynamicMessage};
 
+use super::OPERATOR;
 use super::rig::{PATIENCE, Rig};
 
 /// The path of `Releases.SetDesired`.
@@ -271,4 +273,44 @@ pub async fn gateway(
     let (code, text) = rig.control("POST", path, bearer, body).await;
     let answer = serde_json::from_str(&text).unwrap_or(serde_json::Value::String(text));
     (code, answer)
+}
+
+/// The path of `Repositories.Put`.
+pub const PUT_REPOSITORY: &str = "/hostkeeper.operator.v1.Repositories/Put";
+
+/// The repository `komira` of the registry (suites `testing` and `stable`, the component
+/// `main`), signed by one hand-built version 4 key.
+pub fn komira() -> proto_release::Repository {
+    let mut body = vec![4, 0, 0, 0, 1, 22];
+    body.extend([1_u8; 8]);
+    let mut keyring = vec![0xc0 | 6, u8::try_from(body.len()).expect("short")];
+    keyring.extend(body);
+    let fingerprint = hostkeeper_release::registry::keys(&keyring).expect("keys")[0]
+        .fingerprint
+        .clone();
+    proto_release::Repository {
+        name: "komira".to_owned(),
+        kind: "apt".to_owned(),
+        uri: "https://packages.example.com/apt".to_owned(),
+        suites: vec!["testing".to_owned(), "stable".to_owned()],
+        components: vec!["main".to_owned()],
+        fingerprints: vec![fingerprint],
+        keyring,
+    }
+}
+
+/// Puts [`komira`] into the registry as the operator: a set with a repository entry is refused
+/// until the registry holds the repository its service names.
+pub async fn put_komira(rig: &Rig) {
+    put_repository(rig, komira()).await;
+}
+
+/// Puts `repository` into the registry as the operator.
+pub async fn put_repository(rig: &Rig, repository: proto_release::Repository) {
+    let request = proto::PutRepositoryRequest {
+        repository: Some(repository),
+        reason: "a test".to_owned(),
+    };
+    let answered = grpc(rig, PUT_REPOSITORY, Some(OPERATOR), &request).await;
+    assert_eq!(answered.code, 0, "{answered:?}");
 }

@@ -212,6 +212,11 @@ fn the_release_refusals_are_new_values_unknown_to_the_release_before() {
             27,
             "RELEASES_REFUSAL_RELEASE_UNKNOWN",
         ),
+        (
+            op::ReleasesRefusal::RepositoryUnknown,
+            28,
+            "RELEASES_REFUSAL_REPOSITORY_UNKNOWN",
+        ),
     ] {
         assert_eq!(added as i32, number, "{added:?}");
         assert_eq!(added.as_str_name(), token);
@@ -229,7 +234,7 @@ fn the_release_refusals_are_new_values_unknown_to_the_release_before() {
     let now = current_pool()
         .get_enum_by_name("hostkeeper.operator.v1.ReleasesRefusal")
         .expect("enum");
-    assert_eq!(now.values().map(|v| v.number()).max(), Some(27));
+    assert_eq!(now.values().map(|v| v.number()).max(), Some(28));
 }
 
 /// Proves: a set with targets reads back as written with the generated types, and a

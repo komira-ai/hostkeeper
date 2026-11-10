@@ -16,6 +16,8 @@
 //!   manifest (`manifest_invalid`).
 //! - [`staged`]: what the daemon checks of a manifest against the tree its installer staged:
 //!   the hook program and every `place` source, reached through no link.
+//! - [`registry`]: the package repositories the coordinator keeps and pushes to every host: a
+//!   repository's rules, the files a host holds for a set, their digest, and a keyring's fingerprints.
 //! - [`installer`] the installers a manifest's rules know and which are repository backends, and
 //!   [`grammar`] the digest, name and locator grammars (section 7.1) and a repository entry's.
 //!
@@ -27,6 +29,7 @@ pub mod grammar;
 pub mod installer;
 pub mod manifest;
 pub mod receipt;
+pub mod registry;
 pub mod staged;
 pub mod target;
 

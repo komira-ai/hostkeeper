@@ -14,6 +14,7 @@ use hostkeeper_steps::Clock;
 use crate::beat::{Health, Heartbeat, Liveness, Oversize, Renewal, TrustedRootFacts};
 use crate::names::Reason;
 use crate::order::{Order, OrderRef, OrderResult, Reply};
+use crate::repositories::{PushedSet, RepositoriesReport};
 
 /// What a reply was refused for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
@@ -237,6 +238,22 @@ pub trait OrderSink: Send + Sync {
     /// or for an `uninstall`, an `abort` and a `clear_record`, which name none, the version of the
     /// service the loop knows (the one it lists, or the target of the order an `abort` stops).
     fn execute(&self, order: &Order, target: &Version) -> OrderResult;
+}
+
+/// The host's repository configuration, which the coordinator's pushed sets replace
+/// (`repositories-v1`). A daemon that has one announces the feature; one that has none (a Mac)
+/// announces nothing of repositories and applies nothing.
+pub trait RepositorySink: Send + Sync {
+    /// What the configuration holds, and the last set it refused: sent in every heartbeat.
+    fn report(&self) -> RepositoriesReport;
+
+    /// Takes `set` as the host's whole configuration when it passes the sink's checks, or keeps
+    /// what it has. It says nothing back: the next report does.
+    fn apply(&self, set: &PushedSet);
+
+    /// The installers the host can run now, by name: what the heartbeat lists in place of the
+    /// list given at start, since a set applied may add one.
+    fn installers(&self) -> Vec<String>;
 }
 
 /// One job for a worker.

@@ -1,10 +1,11 @@
 //! The entry an order carries and the checks the daemon makes of it on receipt, before it asks
 //! the package port for a byte (packages.md sections 3.3 and 4.4).
 //!
-//! The daemon decides the installers it announces once, at its start
-//! ([`crate::executor::Ports::announcement`], [`hostkeeper_install::announce`]): the heartbeat
-//! lists them and the receipt check below judges an entry against the same list, so the two
-//! never differ. [`check`] runs in this order:
+//! The daemon decides the installers it announces at its start
+//! ([`crate::executor::Ports::announcement`], [`hostkeeper_install::announce`]), and adds the
+//! host's native one once a repository set the coordinator pushed gave it an entry
+//! ([`crate::executor::Ctx::installers`]): the heartbeat lists them and the receipt check below
+//! judges an entry against the same list, so the two never differ. [`check`] runs in this order:
 //!
 //! | Check                                                                        | Answer                                                                     |
 //! |------------------------------------------------------------------------------|----------------------------------------------------------------------------|

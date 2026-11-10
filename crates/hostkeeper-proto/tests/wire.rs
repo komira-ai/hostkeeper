@@ -431,6 +431,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 37] = [
             ("trusted_root_age_secs", 8),
             ("trusted_root_reason", 9),
             ("installers", 10),
+            ("repositories", 11),
         ],
     ),
     (
@@ -440,6 +441,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 37] = [
             ("features", 2),
             ("halt_generations", 3),
             ("acks", 4),
+            ("repositories", 5),
         ],
     ),
     (
@@ -610,6 +612,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 37] = [
             ("installers", 21),
             ("running", 22),
             ("running_unix", 23),
+            ("repositories", 24),
         ],
     ),
     (
@@ -689,6 +692,7 @@ fn wire_names_are_pinned() {
             "halt-v1",
             "heartbeat-v2",
             "install-v1",
+            "repositories-v1",
             "target-v1",
             "verdict-acks-v1"
         ]
@@ -815,6 +819,7 @@ fn wire_names_are_pinned() {
                 "target_invalid",
                 "release_exists",
                 "release_unknown",
+                "repository_unknown",
             ],
         ),
         (

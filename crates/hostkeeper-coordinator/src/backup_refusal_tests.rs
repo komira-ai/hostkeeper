@@ -474,6 +474,7 @@ fn a_backup_copies_the_store_files_alone_and_names_what_it_passed_over() {
         absent,
         [
             format!("{state}.releases"),
+            format!("{state}.repositories"),
             format!("{state}.verdicts"),
             ops.clone(),
             format!("{ops}.audit"),

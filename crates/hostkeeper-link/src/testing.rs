@@ -18,9 +18,10 @@ use crate::heartbeater::{DEFAULT_HEARTBEAT_SECS, Heartbeater, LoopConfig, Ports}
 use crate::order::{Order, OrderRef, OrderResult, Outcome, Reply};
 use crate::ports::{
     CertSource, CertState, ClientIdentity, CoordinatorLink, Dispatch, HeldHalts, Job, LinkError,
-    Log, Observation, OrderSink, RecordedService, RenewalSource, ServiceObserver, ServiceRecords,
-    Sleeper, Tick, TrustedRootSource, UnixClock,
+    Log, Observation, OrderSink, RecordedService, RenewalSource, RepositorySink, ServiceObserver,
+    ServiceRecords, Sleeper, Tick, TrustedRootSource, UnixClock,
 };
+use crate::repositories::{PushedSet, RepositoriesReport};
 
 /// A lock that a panicking test thread did not spoil: what it holds is still the fake's state.
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -442,6 +443,46 @@ impl TrustedRootSource for FakeTrustedRoot {
     }
 }
 
+/// The host's repository configuration, as a test sets it: it holds the report a test gives it,
+/// records every set it is given, and lists the installers a test gives it.
+#[derive(Default)]
+pub struct FakeRepositories {
+    report: Mutex<RepositoriesReport>,
+    applied: Mutex<Vec<PushedSet>>,
+    installers: Mutex<Vec<String>>,
+}
+
+impl FakeRepositories {
+    /// Sets the report every heartbeat sends.
+    pub fn set_report(&self, report: RepositoriesReport) {
+        *lock(&self.report) = report;
+    }
+
+    /// Sets the installers every heartbeat lists.
+    pub fn set_installers(&self, installers: &[&str]) {
+        *lock(&self.installers) = installers.iter().map(|name| (*name).to_owned()).collect();
+    }
+
+    /// Every set the loop gave it, in order.
+    pub fn applied(&self) -> Vec<PushedSet> {
+        lock(&self.applied).clone()
+    }
+}
+
+impl RepositorySink for FakeRepositories {
+    fn report(&self) -> RepositoriesReport {
+        lock(&self.report).clone()
+    }
+
+    fn apply(&self, set: &PushedSet) {
+        lock(&self.applied).push(set.clone());
+    }
+
+    fn installers(&self) -> Vec<String> {
+        lock(&self.installers).clone()
+    }
+}
+
 /// The unix second the [`World`]'s clock starts at.
 pub const START_UNIX: u64 = 2_000_000_000;
 
@@ -462,6 +503,10 @@ pub struct World {
     pub trusted_root: Arc<FakeTrustedRoot>,
     pub clock: Arc<FakeClock>,
     pub log: Arc<RecordingLog>,
+    /// The host's repository configuration; the ports hold it only after
+    /// [`World::managing_repositories`].
+    pub repositories: Arc<FakeRepositories>,
+    managing: bool,
 }
 
 impl Default for World {
@@ -485,7 +530,16 @@ impl World {
             trusted_root: Arc::default(),
             clock: Arc::new(FakeClock::new(START_UNIX, START_MONO)),
             log: Arc::default(),
+            repositories: Arc::default(),
+            managing: false,
         }
+    }
+
+    /// The world of a host that manages its repository configuration: its ports hold
+    /// [`World::repositories`], and it announces `repositories-v1`.
+    pub fn managing_repositories(mut self) -> World {
+        self.managing = true;
+        self
     }
 
     /// The ports over these fakes.
@@ -502,6 +556,9 @@ impl World {
             trusted_root: self.trusted_root.clone(),
             clock: self.clock.clone(),
             log: self.log.clone(),
+            repositories: self
+                .managing
+                .then(|| Arc::clone(&self.repositories) as Arc<dyn RepositorySink>),
         }
     }
 

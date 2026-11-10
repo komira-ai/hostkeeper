@@ -190,6 +190,7 @@ async fn index_coordinator(name: &str) -> (Arc<Coordinator>, Scratch, String) {
 fn kbf_beat(platform: agent::Platform, running: &str) -> agent::HeartbeatRequest {
     agent::HeartbeatRequest {
         installers: Vec::new(),
+        repositories: None,
         platform: platform as i32,
         agent: Some(agent::AgentInfo {
             name: "hostkeeper-daemon".to_owned(),

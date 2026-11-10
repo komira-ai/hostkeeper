@@ -156,7 +156,9 @@ message HeartbeatRequest {
   // `install-v1`, which announces that it takes the `Install` and `Uninstall` verbs, `abort-v1`,
   // which announces that it takes the `Abort` verb, `clear-record-v1`, which announces that it
   // takes the `ClearRecord` verb, `verdict-acks-v1`, which asks for `HeartbeatResponse.acks`,
-  // and `target-v1`, which announces that it takes `target` in orders and lists `installers`):
+  // `target-v1`, which announces that it takes `target` in orders and lists `installers`, and
+  // `repositories-v1`, which announces that it writes the repositories the coordinator sends and
+  // reports them in `repositories`):
   // at most 16, each 1 to 32 bytes of `[a-z0-9-]`, none twice. An agent
   // that lists every service it runs in `services` announces `heartbeat-v2`; without it the
   // coordinator counts the host as unmanaged for every service but the legacy one, rather than
@@ -190,6 +192,37 @@ message HeartbeatRequest {
   // only from a daemon that announced `target-v1`; one that did not counts as listing
   // `hostkeeper-archive` alone.
   repeated string installers = 10;
+  // The repository set the host's repository configuration holds, and the last set it refused.
+  // Sent by a daemon that announces `repositories-v1` (a Linux daemon), read only over gRPC;
+  // absent from one that predates it. A report that breaks a rule of `RepositoriesReport` is
+  // dropped and the coordinator keeps the last one it read.
+  optional RepositoriesReport repositories = 11;
+}
+
+// What a host's daemon holds of the repositories the coordinator sends
+// (`HeartbeatResponse.repositories`).
+message RepositoriesReport {
+  // The `generation` of the set in force: the last set the daemon wrote or found already
+  // written. 0 while it holds none the coordinator sent since it started: its repository
+  // configuration is what host setup placed, or none.
+  uint64 generation = 1;
+  // The `digest` of the set in force, 64 lower-case hex characters; empty with `generation` 0.
+  string digest = 2;
+  // The last set the daemon refused, while that set is the last one it was sent: the daemon
+  // keeps the set in force and never uses a refused one. Absent when it refused none.
+  optional RepositoryRefusal refused = 3;
+}
+
+// A repository set a daemon refused, and why.
+message RepositoryRefusal {
+  // The refused set's `generation`.
+  uint64 generation = 1;
+  // The refused set's `digest`, 64 lower-case hex characters.
+  string digest = 2;
+  // Why, as the daemon words it: 1 to 256 bytes (a reader cuts a longer one at a character
+  // boundary), for example the rule of the repository configuration an entry breaks, or a
+  // fingerprint the keyring lacks.
+  string reason = 3;
 }
 
 // Why the Sigstore trusted root a host checks packages with needs attention, as its daemon
@@ -417,6 +450,25 @@ message HeartbeatResponse {
   // not resends each verdict until it reports another, as before. At most one per service
   // listed.
   repeated VerdictAck acks = 4;
+  // The package repositories the host's services need, whole: sent to an agent that announced
+  // `repositories-v1` when the host's report (`HeartbeatRequest.repositories`) does not hold
+  // this set's digest, in force or refused, and only when the coordinator's registry holds every
+  // repository the host's services name, and they name at least one. The daemon replaces its
+  // repository configuration with these entries, and only these, once each passes its checks;
+  // absent: keep what it has.
+  optional RepositorySet repositories = 5;
+}
+
+// A host's package repositories, as the coordinator's registry holds them.
+message RepositorySet {
+  // The registry's generation when the coordinator sent the set: it grows by one at every
+  // `Repositories.Put` and `Repositories.Remove`, and is shown to the operator beside each host.
+  uint64 generation = 1;
+  // The SHA-256 of the files the set is written as, 64 lower-case hex characters, by the rule of
+  // the crate `hostkeeper-release` (`registry::digest`), which daemon and coordinator share.
+  string digest = 2;
+  // The repositories, by name: 1 to 8.
+  repeated hostkeeper.release.v1.Repository entries = 3;
 }
 
 // A verdict the coordinator acknowledges, by the service it is about and the order id and try it

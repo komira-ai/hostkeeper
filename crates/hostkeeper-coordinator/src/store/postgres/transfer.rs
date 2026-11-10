@@ -37,10 +37,12 @@ const MOVE_TIMEOUTS: Timeouts = Timeouts {
 
 /// Every table that holds state, in the order an export counts them; `imports` is the import's
 /// own record, and the bookkeeping (`schema_version`, `lease`, `enrollment_serial`) is not here.
-pub(crate) const STATE_TABLES: [&str; 28] = [
+pub(crate) const STATE_TABLES: [&str; 30] = [
     "desired",
     "desired_digests",
     "releases",
+    "repositories",
+    "repository_generation",
     "services",
     "bad_versions",
     "failure_acks",

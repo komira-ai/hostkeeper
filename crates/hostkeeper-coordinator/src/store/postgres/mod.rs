@@ -26,6 +26,7 @@ mod generations;
 pub(crate) mod migrate;
 mod records;
 mod releases;
+mod repositories;
 pub(crate) mod rows;
 pub(crate) mod session;
 pub(crate) mod state;
