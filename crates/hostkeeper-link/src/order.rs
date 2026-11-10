@@ -17,6 +17,7 @@ use prost::Message;
 use serde_json::{Value, json};
 
 use crate::beat::{Feature, Features};
+use crate::host_facts::PushedFacts;
 use crate::names::{OrderId, PackageDigest, Reason};
 use crate::repositories::PushedSet;
 
@@ -289,4 +290,8 @@ pub struct Reply {
     /// host has. The loop gives it to the daemon's [`crate::RepositorySink`] only while the
     /// coordinator advertises `repositories-v1`.
     pub repositories: Option<PushedSet>,
+    /// The host's facts, whole, over gRPC only; none: the facts file holds the ones the
+    /// coordinator wants. The loop gives them to the daemon's [`crate::FactsSink`] only while the
+    /// coordinator advertises `facts-v1`, before the order of the same reply.
+    pub facts: Option<PushedFacts>,
 }

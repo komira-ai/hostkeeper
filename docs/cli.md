@@ -325,7 +325,8 @@ an error.
 
 `/hostkeeper.operator.v1.Hosts/SetLabels`
 
-Replace a host's labels, which service selectors match. An empty set removes them.
+Replace a host's labels, which service selectors match and which the host's facts file
+carries (its daemon is sent them at its next heartbeat). An empty set removes them.
 
 | flag | value | meaning |
 |---|---|---|

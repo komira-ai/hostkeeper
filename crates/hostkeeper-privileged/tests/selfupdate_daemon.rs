@@ -100,12 +100,12 @@ fn paths() -> Paths {
 }
 
 /// The `ExecStart=` line of the test's main unit made from `real`, with the fixture flag
-/// `--fixture-dir /f`, when `program` is its program.
+/// `--fixture-dir /f` and the test's own `--facts-file`, when `program` is its program.
 fn exec_line(program: &str) -> String {
     format!(
         "ExecStart={program} --fixture-dir /f daemon --config /run/hostkeeper-ci/t/hostkeeper.toml \
          --state-dir /run/hostkeeper-ci/t/state --packages-dir /run/hostkeeper-ci/t/packages \
-         --notify-systemd --heartbeat-secs 1"
+         --notify-systemd --facts-file /run/hostkeeper-ci/t/facts.json --heartbeat-secs 1"
     )
 }
 

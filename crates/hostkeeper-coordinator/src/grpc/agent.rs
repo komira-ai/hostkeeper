@@ -88,12 +88,16 @@ impl Api for AgentService {
                 .hear_repositories(&identity, request.get_ref());
         }
         let host_id = identity.host_id.clone();
+        let facts = (!retiring)
+            .then(|| self.coordinator.host_facts(&identity, request.get_ref()))
+            .flatten();
         let caller = BeatCaller { identity, retiring };
         let (answer, order) = beat(&self.coordinator, caller, &bytes, root).map_err(beat_status)?;
         // The set is made once the heartbeat is taken: the host's announced features are the
         // ones this heartbeat said.
         let mut response = response_of(answer, order);
         response.repositories = self.coordinator.repository_set(&host_id);
+        response.facts = facts;
         Ok(Response::new(response))
     }
 
