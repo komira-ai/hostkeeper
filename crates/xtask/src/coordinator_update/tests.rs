@@ -8,9 +8,10 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use super::engine::Probed;
+use super::tests_fake::FakeSource;
 use super::tests_fake::{FakeEngine, FakePause, FakeProbe, NEW_ID, NewBehaviour, OLD_ID, ports};
 use super::*;
-use crate::release::fakes::{FakeSource, FakeVerifier, good_attestation, nth_commit, scratch};
+use crate::release::fakes::{FakeVerifier, good_attestation, nth_commit, scratch};
 use crate::release::image_index::{fake_image, image_name};
 use crate::release::ports::PortError;
 use crate::testdir::TestDir;
@@ -171,7 +172,7 @@ fn world(name: &str) -> World {
         _root: root,
         download,
         source,
-        verifier: FakeVerifier::attests_as_asked(),
+        verifier: FakeVerifier::good(&nth_commit(7)),
         engine,
         probe: FakeProbe::new(
             Probed::Running(v("0.1.218")),
@@ -901,3 +902,58 @@ fn the_verb_needs_an_existing_download_directory_and_runs_docker_through_curl() 
 
 mod flags;
 mod replace;
+
+#[test]
+fn github_releases_lists_from_the_store_and_downloads_an_asset_by_its_release_url() {
+    // Proves: the list is the release store's, and an asset is fetched from
+    // `https://github.com/<repo>/releases/download/<tag>/<name>` into `<dir>/<name>`; a failed
+    // fetch is the download's error.
+    use crate::release::fakes::{FakeDownload, FakeStore};
+    let root = scratch("cu-github-releases");
+    let store = FakeStore::default();
+    store.insert(Release {
+        tag: "v0.1.219".to_owned(),
+        commit: commit(),
+        draft: false,
+        assets: Vec::new(),
+    });
+    let url = "https://github.com/komira-ai/hostkeeper/releases/download/v0.1.219/SHA256SUMS";
+    let mut fetch = FakeDownload::default();
+    fetch.served.insert(url.to_owned(), b"the sums".to_vec());
+    let releases = GitHubReleases {
+        store: &store,
+        fetch: &fetch,
+    };
+    let repo = Repo::hostkeeper();
+    let listed = releases.list(&repo).expect("the list");
+    assert_eq!(
+        listed.iter().map(|r| r.tag.as_str()).collect::<Vec<_>>(),
+        ["v0.1.219"]
+    );
+    releases
+        .download(&repo, "v0.1.219", "SHA256SUMS", &root)
+        .expect("the download");
+    assert_eq!(
+        std::fs::read(root.join("SHA256SUMS")).expect("the file"),
+        b"the sums"
+    );
+    let missing = releases
+        .download(&repo, "v0.1.219", "missing", &root)
+        .expect_err("not served");
+    assert_eq!(
+        missing.to_string(),
+        "curl https://github.com/komira-ai/hostkeeper/releases/download/v0.1.219/missing: exit status 22"
+    );
+    assert_eq!(
+        fetch
+            .calls
+            .borrow()
+            .iter()
+            .map(|(u, _)| u.as_str())
+            .collect::<Vec<_>>(),
+        [
+            url,
+            "https://github.com/komira-ai/hostkeeper/releases/download/v0.1.219/missing"
+        ]
+    );
+}

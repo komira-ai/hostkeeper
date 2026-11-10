@@ -220,7 +220,8 @@ fn machine(name: &str) -> Machine {
     for dir in [&answers, &downloads, &release] {
         std::fs::create_dir_all(dir).expect("make a scratch directory");
     }
-    // Hard links, not copies (see tests/channel_sync.rs): the fixture answers by its own name.
+    // Hard links, not copies: a copy held open for writing can make a forked exec fail with
+    // "text file busy". The fixture answers by the name it was started by.
     for as_name in ["gh", "curl"] {
         std::fs::hard_link(GH, bin.join(as_name)).expect("install the fixture");
     }

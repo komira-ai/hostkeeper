@@ -22,14 +22,12 @@
 //!   [`IMAGE_UI_CHECK`], [`IMAGE_RUN`]), and its `attest` job, under its exact
 //!   `if:`, runs no repository code: no checkout, and no `run:` but the checks of
 //!   [`ATTEST_RUNS`] and the bundle copies of [`BUNDLE_COPY`]. It attests every package of
-//!   [`PACKAGES`] for every platform of [`PLATFORMS`], each binary tarball of [`TARBALLS`], each
-//!   file of [`ATTESTED_FILES`] and each versioned file of [`VERSIONED_FILES`], and copies the
-//!   bundle of each beside it
+//!   each binary tarball of [`TARBALLS`], each file of [`ATTESTED_FILES`], [`NATIVE_FILES`] and
+//!   [`VERSIONED_FILES`], and copies the bundle of each beside it
 //!   ([`package_problems`]), and attests the SBOM of each binary tarball ([`sbom_problem`]): a
 //!   host trusts only attested packages, so a release asset list that names a bundle needs the
 //!   steps that make it. Its build job makes the mdm package with the steps of [`MDM_STEPS`],
-//!   each under [`MDM_IF`], and its sums job writes and uploads the mdm index ([`MDM_INDEX`],
-//!   [`mdm_problems`]).
+//!   each under [`MDM_IF`] ([`mdm_problems`]).
 //!
 //! Which job may hold which write scope, under which `if:`, is [`super::lint::WRITE_ALLOWED`].
 
@@ -127,17 +125,6 @@ pub const BUNDLE_COPY: (&str, &str) = ("cp \"$BUNDLE\" \"dist/", ".sigstore.json
 /// The platforms the release ships packages for.
 pub const PLATFORMS: [&str; 3] = ["linux-x86_64", "linux-arm64", "macos-arm64"];
 
-/// The packages the release carries, each as the part of its file name before the version, the
-/// part between the version and the platform (`<prefix>-<version><middle>-<platform>.tar.zst`)
-/// and the platforms it is built for. They are hostkeeper's own, hello's, and hello's failing
-/// build on every platform, and mdm's on linux-x86_64 alone.
-pub const PACKAGES: [(&str, &str, &[&str]); 4] = [
-    ("hostkeeper", "", &PLATFORMS),
-    ("hello", "", &PLATFORMS),
-    ("hello", "-fail-ready", &PLATFORMS),
-    ("mdm", "", &["linux-x86_64"]),
-];
-
 /// The architectures of the two Linux platforms as the packages name them: the deb's, then the
 /// rpm's.
 pub const LINUX_ARCHES: [(&str, &str); 2] = [("amd64", "x86_64"), ("arm64", "aarch64")];
@@ -152,12 +139,12 @@ pub const MDM_IF: &str = "matrix.platform == 'linux-x86_64'";
 
 /// The steps of the build job that make the mdm package, in order, each under [`MDM_IF`]: its
 /// program built with the commit, its stamp checked, the pinned archives fetched and checked
-/// against their pins, and the package built from them.
+/// against their pins, and the `.deb` built from them.
 pub const MDM_STEPS: [&str; 4] = [
     "cargo build --locked --release -p hostkeeper-mdm --bin mdm",
     "cargo xtask release check-binary target/release/mdm \"$RELEASE_VERSION\" \"$GITHUB_SHA\"",
     "cargo xtask release mdm-fetch --dir \"$RUNNER_TEMP/mdm-archives\"",
-    "cargo xtask release package --service mdm --platform \"$PLATFORM\" --version \"$RELEASE_VERSION\" --commit \"$GITHUB_SHA\" --binary target/release/mdm --archives \"$RUNNER_TEMP/mdm-archives\" --out dist",
+    "cargo xtask release deb --service mdm --platform \"$PLATFORM\" --version \"$RELEASE_VERSION\" --commit \"$GITHUB_SHA\" --binary target/release/mdm --archives \"$RUNNER_TEMP/mdm-archives\" --out dist",
 ];
 
 /// The runs of the build job that make hello's failing build's `.deb` into `dist/`, where the
@@ -166,13 +153,6 @@ pub const FAIL_READY_DEB_RUNS: [&str; 2] = [
     "cargo xtask release deb --service hello --fail-ready --platform \"$PLATFORM\" --version \"$RELEASE_VERSION\" --commit \"$GITHUB_SHA\" --binary target/release/hello --out dist",
     "cargo xtask release check-linux-pkg \"dist/hello_${RELEASE_VERSION}-fail-ready_$ARCH.deb\" --service hello",
 ];
-
-/// The step of the sums job that writes the mdm package's index, and the file its upload of the
-/// indexes must list, so the attest job finds every file SHA256SUMS lists.
-pub const MDM_INDEX: (&str, &str) = (
-    "cargo xtask release index --service mdm --version \"$RELEASE_VERSION\" --dir dist",
-    "dist/mdm-index.json",
-);
 
 /// The binary tarballs the release carries, each as its program (the stem of its file name,
 /// `<program>-<version>-<platform>.tar.gz`) and the platforms it ships for: hostkeeper's on
@@ -193,9 +173,10 @@ pub const ATTESTED_FILES: [(&str, &str); 1] = [("dist/netboot.json", "netboot.js
 /// The native packages of the services the release ships (docs/design/packages-native.md, item
 /// A21), each as its name with `<version>` for the version: hello's `.deb` for each Linux
 /// architecture, its failing build's `.deb` for each (named by the service version,
-/// `<version>-fail-ready`) and its `.pkg`, and mdm's `.deb` for amd64. Each has a bundle, which
-/// the installer channel publishes beside it.
-pub const NATIVE_FILES: [&str; 6] = [
+/// `<version>-fail-ready`) and its `.pkg`, mdm's `.deb` for amd64, and hostkeeper's installer
+/// `.pkg`. Each has a bundle, which the installer channel publishes beside it.
+pub const NATIVE_FILES: [&str; 7] = [
+    "hostkeeper-<version>-macos-arm64.pkg",
     "hello_<version>_amd64.deb",
     "hello_<version>_arm64.deb",
     "hello_<version>-fail-ready_amd64.deb",
@@ -651,8 +632,7 @@ fn fail_ready_deb_problems(doc: &Node) -> Vec<String> {
 /// What is wrong with the making of the mdm package: a step of [`MDM_STEPS`] missing from the
 /// build job, out of order, or under another `if:` than [`MDM_IF`] (the program built without
 /// the commit, a package built from archives no step fetched, or a step on a platform the
-/// package is not built for); or the sums job not writing its index ([`MDM_INDEX`]) or not
-/// uploading it with the other indexes.
+/// package is not built for).
 fn mdm_problems(doc: &Node) -> Vec<String> {
     let mut problems = Vec::new();
     let build = steps(job(doc, "build"));
@@ -681,26 +661,10 @@ fn mdm_problems(doc: &Node) -> Vec<String> {
             ));
         }
     }
-    let sums = job(doc, "sums");
-    let (index, uploaded) = MDM_INDEX;
-    if !step_values(sums, "run").contains(&index) {
-        problems.push(format!("artifacts.yml: job sums does not run `{index}`"));
-    }
-    let uploads = steps(sums).iter().any(|s| {
-        text_of(Some(s), "uses").is_some_and(|u| u.starts_with("actions/upload-artifact@"))
-            && text_of(entry(s, "with"), "path")
-                .is_some_and(|p| p.lines().any(|l| l.trim() == uploaded))
-    });
-    if !uploads {
-        problems.push(format!(
-            "artifacts.yml: job sums does not upload {uploaded} with the other indexes"
-        ));
-    }
     problems
 }
 
-/// One line per package of [`PACKAGES`], on each of [`PLATFORMS`], per Linux package (the deb
-/// and the rpm) of each of [`LINUX_ARCHES`], per binary tarball of
+/// One line per Linux package (the deb and the rpm) of each of [`LINUX_ARCHES`], per binary tarball of
 /// [`TARBALLS`], per file of [`ATTESTED_FILES`], [`NATIVE_FILES`] and [`VERSIONED_FILES`], that the
 /// attest job does not attest (a
 /// provenance step whose `subject-path` is the file) or whose bundle it does not copy to
@@ -708,16 +672,6 @@ fn mdm_problems(doc: &Node) -> Vec<String> {
 /// SBOM it does not attest ([`sbom_problem`]).
 fn package_problems(attest: Option<&Node>) -> Vec<String> {
     let mut problems = Vec::new();
-    for (prefix, middle, platforms) in PACKAGES {
-        for platform in platforms {
-            let subject = format!(
-                "dist/{prefix}-${{{{ needs.version.outputs.version }}}}{middle}-{platform}.tar.zst"
-            );
-            let file = format!("{prefix}-<version>{middle}-{platform}.tar.zst");
-            let copied = format!("{prefix}-${{V}}{middle}-{platform}.tar.zst");
-            problems.extend(attest_problem(attest, &subject, &file, &copied));
-        }
-    }
     let version = "${{ needs.version.outputs.version }}";
     for ((deb, rpm), program) in LINUX_ARCHES
         .into_iter()

@@ -8,11 +8,7 @@
 //!   file before a build.
 //! - `stamp` and `check-binary` ([`check_binary`]): the `--version` text of a shipped binary
 //!   ([`contract::stamp_of`]) and the check that a built binary prints exactly it.
-//! - `package` ([`package`]): the deterministic package of a service (`--service`, hostkeeper
-//!   unless it says `hello` or `mdm`; for hello `--fail-ready` builds its failing build; for mdm,
-//!   linux-x86_64 only, `--archives` names the pinned archives its tools come out of),
-//!   `.tar.zst`, and its SHA-256.
-//! - `mdm-fetch` ([`mdm_fetch`]): the build-time fetch of the mdm package, each pinned archive of
+//! - `mdm-fetch` ([`mdm_fetch`]): the build-time fetch of the mdm `.deb`'s tools, each pinned archive of
 //!   its tools downloaded with `curl` over HTTPS and checked against its pin
 //!   (`crates/hostkeeper-mdm-core/pins.txt`), a mismatch kept as `<archive>.rejected`.
 //! - `nfpm-stage` ([`package::nfpm_stage`]): the pinned `gh` of one architecture, out of its
@@ -28,10 +24,6 @@
 //! - `deb` ([`native::deb`]): the `.deb` of hello, of its failing build or of mdm, with the
 //!   program at `/usr/lib/<service>/`, the units in `/usr/lib/systemd/system/` and no hook
 //!   wrapper (the manifest's `hook.command` names the program).
-//! - `index` ([`index`]): the release index of a package, `index.json` for hostkeeper,
-//!   `hello-index.json` for hello, `hello-fail-ready-index.json` for its failing build and
-//!   `mdm-index.json` for mdm: which package serves each platform, refused unless it has the
-//!   package of every platform the package is released for.
 //! - `netboot` ([`netboot`]): `netboot.json`, the boot sets of network install for the two Linux
 //!   platforms, rendered from the committed pins (`packaging/netboot/pins.toml`), which it
 //!   refuses unless each platform has its ISO, shim, GRUB, kernel and initrd, each pinned well
@@ -51,26 +43,14 @@
 //! - `plan` ([`plan`]): which commits since the last release are released, oldest first, and
 //!   under which versions.
 //! - `locate` ([`locate`]): the commit is on `main` and its runs exist; the id of its build run.
-//! - `check` ([`check`]): every asset against `SHA256SUMS`, both release indexes against the
-//!   packages, every attestation and bundle against the signer identity of [`contract`] and the
-//!   commit.
+//! - `check` ([`check`]): every asset against `SHA256SUMS`, every attestation and bundle against
+//!   the signer identity of [`contract`] and the commit.
 //! - `publish` ([`publish`]): the GitHub release of a checked directory, idempotent.
-//! - `channel-stage` ([`channel_stage`]): one version of a service from a directory of release
-//!   assets, checked and laid out in a directory as the release channel serves it
-//!   (`S/V/index.json` beside each package and its bundle); copies files only, idempotent.
-//! - `channel-sync` ([`sync`]): every new published release of the services of a trust list,
-//!   downloaded, checked (`release check` for hostkeeper's, the sums for another's), each
-//!   package's attestation verified by its service's signer in the list, and staged into a
-//!   release channel by `channel-stage`, a new version renamed into place whole; never changes a
-//!   version already there.
-//! - `channel-host` ([`channel_host`]): the host of the release channel's base URL, which the
-//!   channel job of `release.yml` pinged when it joined the tailnet; no workflow runs it since
-//!   releases are set with native entries alone (packages-native.md section 10.5), and it goes
-//!   with the channel's other verbs (A28).
 //! - `targets` ([`targets`]): the `targets` of the set that deploys a package of a release, one
-//!   native entry per platform its release index lists and nothing else, read from the
-//!   release's assets and checked as the coordinator and the daemon check them, written as one
-//!   line of JSON for the CI client (`set-desired.yml`, input `targets`).
+//!   native entry per Linux platform the package is released for and nothing else, its manifest
+//!   compiled in and its `.deb` read from the release's assets, checked as the coordinator and
+//!   the daemon check them, written as one line of JSON for the CI client (`set-desired.yml`,
+//!   input `targets`).
 //!
 //! The names and formats a consumer relies on are in [`contract`]. The adapters that run `git`,
 //! `gh`, `pkgbuild`, `productbuild` and `curl` are in [`git`], [`github`], [`macos_pkg`] and
@@ -78,8 +58,6 @@
 //! port; the only code that starts
 //! a process is `real::SystemExec`, built in [`real`] alone.
 
-mod channel_host;
-mod channel_stage;
 pub(crate) mod check;
 mod check_binary;
 mod check_image_ui;
@@ -95,7 +73,6 @@ mod github;
 mod hkctl;
 pub(crate) mod image_index;
 mod image_push;
-mod index;
 mod locate;
 mod macos_pkg;
 mod mdm_fetch;
@@ -111,7 +88,6 @@ mod publish;
 pub(crate) mod real;
 mod run_state;
 mod set_version;
-mod sync;
 mod targets;
 #[cfg(feature = "test-support")]
 pub mod test_support;
@@ -198,48 +174,6 @@ pub(crate) enum Verb {
         version: Version,
         /// The commit, 40 lowercase hex digits.
         commit: Commit,
-    },
-    /// Build the package of a service for one platform, and its `.sha256`.
-    Package {
-        /// The service: hostkeeper (the default), hello or mdm. Hello's manifest and units are
-        /// rendered for the platform, and it builds for every platform; hostkeeper's package for
-        /// macOS has no unit; mdm's builds for linux-x86_64 only, with the pinned tools out of
-        /// `--archives`.
-        #[arg(long, value_enum, default_value_t)]
-        service: Service,
-        #[arg(long, value_enum)]
-        platform: Platform,
-        #[arg(long)]
-        version: Version,
-        /// The commit built; the archive's times are its committer time.
-        #[arg(long)]
-        commit: Commit,
-        /// The service's binary for that platform: `bin/<service>` in the package.
-        #[arg(long)]
-        binary: PathBuf,
-        /// The systemd unit: `units/hostkeeper.service` in the package. Required for a Linux
-        /// platform of hostkeeper; refused for its macos-arm64 package, which carries no unit,
-        /// and for hello, whose units are rendered.
-        #[arg(long)]
-        unit: Option<PathBuf>,
-        /// Build hello's failing build: version `<version>-fail-ready`, started with
-        /// `--fail-ready`, so it never reports ready. Refused for hostkeeper.
-        #[arg(long)]
-        fail_ready: bool,
-        /// The Sigstore trusted root, as `gh attestation trusted-root` prints it:
-        /// `files/trusted_root.json` in the package, which the daemon checks attestations
-        /// against. Required for hostkeeper on every platform (the release passes
-        /// `packaging/sigstore/trusted_root.json`); refused for hello.
-        #[arg(long)]
-        trusted_root: Option<PathBuf>,
-        /// The directory of the pinned archives of the mdm package, as `release mdm-fetch`
-        /// leaves it: each is checked against its pin, and its binaries go to `bin/`. Required
-        /// for mdm; refused for hostkeeper and hello.
-        #[arg(long)]
-        archives: Option<PathBuf>,
-        /// The directory the package and its `.sha256` are written to.
-        #[arg(long)]
-        out: PathBuf,
     },
     /// Download the pinned archives of the tools the mdm package carries into a directory, with
     /// `curl` over HTTPS, and refuse any whose SHA-256 is not its pin (kept beside as
@@ -337,23 +271,6 @@ pub(crate) enum Verb {
         /// The directory the `.deb` is written to.
         #[arg(long)]
         out: PathBuf,
-    },
-    /// Write the release index of a service's packages of a version in a directory, one entry
-    /// per platform the package is released for (linux-x86_64 alone for mdm), refused when the
-    /// package of any is missing: `index.json` for hostkeeper, `hello-index.json` for hello,
-    /// `hello-fail-ready-index.json` for its failing build and `mdm-index.json` for mdm.
-    Index {
-        /// The service: hostkeeper (the default), hello or mdm.
-        #[arg(long, value_enum, default_value_t)]
-        service: Service,
-        /// Index hello's failing build (`hello-fail-ready-index.json`). Refused for hostkeeper.
-        #[arg(long)]
-        fail_ready: bool,
-        #[arg(long)]
-        version: Version,
-        /// The directory holding the packages; the index is written there.
-        #[arg(long)]
-        dir: PathBuf,
     },
     /// Write `netboot.json`, the boot sets of network install, from the pins: for each of
     /// linux-x86_64 and linux-arm64 the Ubuntu ISO, shim, network GRUB, kernel and initrd, each
@@ -549,69 +466,13 @@ pub(crate) enum Verb {
         #[arg(long)]
         commit: Commit,
     },
-    /// Stage one version of a service from a directory of release assets into a directory laid
-    /// out as the release channel serves it (`<out>/S/V/index.json`, each package and its
-    /// `.sigstore.json` bundle beside it), after checking the index, every package's size and
-    /// SHA-256 and every bundle; nothing is written unless all pass. Files already staged with the
-    /// same bytes are left alone; a different file at a staged path is refused. Copies files only:
-    /// no upload, no credentials.
-    ChannelStage {
-        /// The service: a service name of the daemon's grammar.
-        #[arg(long, value_parser = hostkeeper_config::names::ServiceName::new)]
-        service: hostkeeper_config::names::ServiceName,
-        /// The version: a version of the daemon's grammar (`+` allowed).
-        #[arg(long, value_parser = hostkeeper_config::names::Version::new)]
-        version: hostkeeper_config::names::Version,
-        /// The directory of the release's assets: `S-V-<platform>.tar.zst` and its
-        /// `.sigstore.json` for each platform.
-        #[arg(long)]
-        from: PathBuf,
-        /// The release index of the version (default: `index.json` in `--from`); staged as
-        /// `S/V/index.json`.
-        #[arg(long)]
-        index: Option<PathBuf>,
-        /// The platforms the index must list a package for, comma-separated.
-        #[arg(
-            long,
-            value_delimiter = ',',
-            default_values_t = hostkeeper_config::platform::Platform::ALL.to_vec()
-        )]
-        require_platforms: Vec<hostkeeper_config::platform::Platform>,
-        /// The root of the channel's tree; `S/V/` is made under it.
-        #[arg(long)]
-        out: PathBuf,
-    },
-    /// Copy every new published release of the trust list's services into the release channel:
-    /// download its assets, check them (`release check` for a hostkeeper release; for another
-    /// repository's, its SHA256SUMS), verify the attestation of every package a version lists by
-    /// the trust list's signer of its service, and stage each version by `channel-stage`. A
-    /// service the list does not trust from the repository is refused. A version already in the
-    /// channel is left alone; one there with other bytes is refused, and the run goes on with the
-    /// others and then fails. Reads public release assets only.
-    ChannelSync {
-        /// The trust list: a TOML file with one `[[service]]` table per service the channel
-        /// stages (its `name`, `repository`, and the `workflow`, `refs` and `hosted_runner` of
-        /// its signer). Each repository it names is synced, in the order first named.
-        #[arg(long)]
-        trust_list: PathBuf,
-        /// The root of the channel's tree, as `channel-stage --out` names it. It must exist.
-        #[arg(long)]
-        channel_dir: PathBuf,
-        /// Skip every release older than this tag, `v<X.Y.Z>` (the tag itself is synced).
-        #[arg(long, value_parser = sync::parse_tag)]
-        since: Option<Version>,
-        /// Run again and again, this many seconds after each run ends, and never exit (the
-        /// sidecar's loop). Without it the verb runs once.
-        #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
-        every_secs: Option<u64>,
-    },
     /// Write the `targets` of the set that deploys a package of the release: for each Linux
-    /// platform its release index lists, the package's `.deb` alone, an `apt` entry whose manifest
-    /// and `min_hostkeeper` are the archive's own manifest's, of the testing suite; with
+    /// platform the package is released for, the package's `.deb` alone, an `apt` entry of the
+    /// repository's testing suite whose manifest and `min_hostkeeper` the verb compiles in; with
     /// `--fail-ready`, of hello's failing build, of the `testing-fail` suite at `X.Y.Z~fail.ready`.
     /// No list for macOS while no daemon announces `macos-pkg`. Refused, every problem named,
-    /// unless the index, every Linux archive and manifest, and every `.deb` and bundle check out
-    /// and the entries pass the coordinator's checks. Prints `targets=<JSON>`.
+    /// unless every `.deb` and its bundle check out and the entries pass the coordinator's
+    /// checks. Prints `targets=<JSON>`.
     Targets {
         /// The service: hostkeeper (the default), hello or mdm.
         #[arg(long, value_enum, default_value_t)]
@@ -622,8 +483,7 @@ pub(crate) enum Verb {
         /// The release, `X.Y.Z`: the tag `v<X.Y.Z>` holds the assets.
         #[arg(long)]
         version: Version,
-        /// The directory of the release's assets: the package's index, its archives and their
-        /// bundles.
+        /// The directory of the release's assets: the package's `.deb`s and their bundles.
         #[arg(long)]
         dir: PathBuf,
         /// The repository of the release, `owner/name`. Read and not used: a native entry names
@@ -632,17 +492,6 @@ pub(crate) enum Verb {
         #[arg(long)]
         repo: Repo,
         /// A file the `targets=` line is appended to (on Actions, `GITHUB_OUTPUT`).
-        #[arg(long)]
-        output: Option<PathBuf>,
-    },
-    /// Write the host of the release channel's base URL, `hostname=<host>`: the name or IPv4
-    /// address a job that joins the tailnet to read the channel pings. Refused, the reason named,
-    /// unless the URL is `https://<host>[:<port>][/<path>]`.
-    ChannelHost {
-        /// The release channel's base URL (`HOSTKEEPER_RELEASE_CHANNEL`).
-        #[arg(long)]
-        channel: String,
-        /// A file the `hostname=` line is appended to (on Actions, `GITHUB_OUTPUT`).
         #[arg(long)]
         output: Option<PathBuf>,
     },
@@ -676,15 +525,6 @@ pub(crate) fn run<A: Adapters>(
             env_file,
         } => image_index::write_layout(&dir, &version, &out, env_file.as_deref()),
         Verb::CheckImageUi { image, ui } => check_image_ui::check_image_ui(&image, &ui),
-        Verb::Index {
-            service,
-            fail_ready,
-            version,
-            dir,
-        } => match Package::of(service, fail_ready) {
-            Some(package) => index::write_index(&dir, package, &version),
-            None => Err(Error::Failed(package::FAIL_READY_ONLY_HELLO.to_owned())),
-        },
         Verb::Netboot { pins, version, dir } => netboot::write_netboot(&pins, &version, &dir),
         Verb::Hkctl {
             version,
@@ -748,24 +588,6 @@ pub(crate) fn run<A: Adapters>(
                 },
             ),
         },
-        Verb::ChannelStage {
-            service,
-            version,
-            from,
-            index,
-            require_platforms,
-            out,
-        } => channel_stage::stage(&channel_stage::Request {
-            service,
-            version,
-            from,
-            index,
-            require: require_platforms,
-            out,
-        }),
-        Verb::ChannelHost { channel, output } => {
-            channel_host::channel_host(&channel, output.as_deref())
-        }
         Verb::Targets {
             service,
             fail_ready,
@@ -802,32 +624,6 @@ fn run_with(verb: Verb, ports: &Ports<'_>) -> Result<Vec<String>, Error> {
             version,
             commit,
         } => check_binary::check_binary(ports.run_version, &binary, &version, &commit),
-        Verb::Package {
-            service,
-            platform,
-            version,
-            commit,
-            binary,
-            unit,
-            fail_ready,
-            trusted_root,
-            archives,
-            out,
-        } => package::package(
-            ports.git,
-            &package::Request {
-                service,
-                platform,
-                version,
-                commit,
-                binary,
-                unit,
-                fail_ready,
-                trusted_root,
-                archives,
-                out,
-            },
-        ),
         Verb::MdmFetch { dir } => mdm_fetch::fetch(ports.download, &dir),
         Verb::CheckPkgSignature { pkg, identity } => {
             pkg_signature::check(ports.pkgbuild, &pkg, &identity)
@@ -933,41 +729,17 @@ fn run_with(verb: Verb, ports: &Ports<'_>) -> Result<Vec<String>, Error> {
                 layout,
             },
         ),
-        Verb::ChannelSync {
-            trust_list,
-            channel_dir,
-            since,
-            every_secs,
-        } => {
-            let request = sync::Request {
-                trust: sync::load_trust(&trust_list)?,
-                channel: channel_dir,
-                since,
-            };
-            match every_secs {
-                None => sync::sync(ports.source, ports.verifier, &request),
-                Some(secs) => sync::every(
-                    ports.source,
-                    ports.verifier,
-                    &request,
-                    &sync::Sleep(std::time::Duration::from_secs(secs)),
-                ),
-            }
-        }
         Verb::SetVersion { .. }
         | Verb::Stamp { .. }
         | Verb::CompareImages { .. }
         | Verb::ImageIndex { .. }
         | Verb::ImageLayout { .. }
         | Verb::CheckImageUi { .. }
-        | Verb::Index { .. }
         | Verb::Netboot { .. }
         | Verb::Hkctl { .. }
         | Verb::NfpmStage { .. }
         | Verb::CheckLinuxPkg { .. }
         | Verb::CheckMacosPkg { .. }
-        | Verb::ChannelStage { .. }
-        | Verb::ChannelHost { .. }
         | Verb::Targets { .. } => run(verb, || Lent(*ports)),
     }
 }

@@ -56,7 +56,7 @@ use crate::release::contract::{
     COORDINATOR, Commit, Platform, Repo, SUMS, Signer, Version, bundle_of,
 };
 use crate::release::image_index::image_name;
-use crate::release::ports::{Exec, PortError, Release, ReleaseSource, Verifier};
+use crate::release::ports::{Download, Exec, PortError, Release, ReleaseStore, Verifier};
 use crate::release::{self, file_sha256};
 use engine::{CurlEngine, CurlProbe, Engine, Probe, Probed};
 
@@ -157,7 +157,9 @@ fn https_url(text: &str) -> Result<String, String> {
 
 /// A Linux platform by name.
 fn linux_platform(text: &str) -> Result<Platform, String> {
-    Platform::of_name(text)
+    Platform::RELEASED
+        .into_iter()
+        .find(|p| p.name() == text)
         .filter(|p| p.linux_arches().is_some())
         .ok_or_else(|| {
             format!(
@@ -201,9 +203,37 @@ impl<F: Fn(std::time::Duration)> Pause for Sleep<F> {
     }
 }
 
+/// Where the update reads the published releases of a repository and their assets: reads only,
+/// of public release assets.
+pub(crate) trait Releases {
+    /// Every release, drafts included (the caller leaves drafts out).
+    fn list(&self, repo: &Repo) -> Result<Vec<Release>, PortError>;
+    /// Writes the asset `name` of the release `tag` to `dir/<name>`. `name` is a plain file name;
+    /// `dir` exists and does not hold it.
+    fn download(&self, repo: &Repo, tag: &str, name: &str, dir: &Path) -> Result<(), PortError>;
+}
+
+/// [`Releases`] over GitHub: the list from the release store (`gh api`), an asset by its
+/// download URL, `https://github.com/<repo>/releases/download/<tag>/<name>` (`curl`).
+pub(crate) struct GitHubReleases<'a> {
+    pub(crate) store: &'a dyn ReleaseStore,
+    pub(crate) fetch: &'a dyn Download,
+}
+
+impl Releases for GitHubReleases<'_> {
+    fn list(&self, repo: &Repo) -> Result<Vec<Release>, PortError> {
+        self.store.releases(repo)
+    }
+
+    fn download(&self, repo: &Repo, tag: &str, name: &str, dir: &Path) -> Result<(), PortError> {
+        let url = format!("https://github.com/{repo}/releases/download/{tag}/{name}");
+        self.fetch.download(&url, &dir.join(name))
+    }
+}
+
 /// What the update runs against.
 pub(crate) struct Ports<'a> {
-    pub(crate) source: &'a dyn ReleaseSource,
+    pub(crate) source: &'a dyn Releases,
     pub(crate) verifier: &'a dyn Verifier,
     pub(crate) engine: &'a dyn Engine,
     pub(crate) probe: &'a dyn Probe,
@@ -213,7 +243,7 @@ pub(crate) struct Ports<'a> {
 /// The verb: `flags` over the real `curl`, through `exec`, and the release adapters.
 pub(crate) fn run(
     flags: &Flags,
-    source: &dyn ReleaseSource,
+    source: &dyn Releases,
     verifier: &dyn Verifier,
     exec: &dyn Exec,
 ) -> Result<Vec<String>, Error> {
@@ -307,10 +337,7 @@ pub(crate) fn update(ports: &Ports<'_>, flags: &Flags) -> Result<Vec<String>, Er
 }
 
 /// The version to install and its release: `wanted`, else the newest published one.
-fn choose(
-    source: &dyn ReleaseSource,
-    wanted: Option<Version>,
-) -> Result<(Version, Release), Error> {
+fn choose(source: &dyn Releases, wanted: Option<Version>) -> Result<(Version, Release), Error> {
     let repo = Repo::hostkeeper();
     let releases = source.list(&repo)?;
     let published = releases

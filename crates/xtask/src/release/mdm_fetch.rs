@@ -2,7 +2,7 @@
 //! section 6.2). The pinned archive of each tool the package carries
 //! (`hostkeeper_mdm_core::package::TOOLS`) is downloaded over HTTPS into `D`, under the file
 //! name of its pin's URL, and checked against the pin's SHA-256 (`hostkeeper-mdm-core`'s
-//! `pins.txt`); `release package --service mdm --archives D` then checks each again and takes
+//! `pins.txt`); `release deb --service mdm --archives D` then checks each again and takes
 //! the binaries out. Nothing downloaded is run.
 //!
 //! For each pin, in the order of the pins:

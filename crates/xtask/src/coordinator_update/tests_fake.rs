@@ -9,9 +9,9 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use super::engine::{Engine, Probe, Probed};
-use super::{Pause, Ports};
-use crate::release::contract::Version;
-use crate::release::ports::PortError;
+use super::{Pause, Ports, Releases};
+use crate::release::contract::{Repo, Version};
+use crate::release::ports::{PortError, Release, StoredAsset};
 
 /// The id of the container the tests start with, and of the one the verb creates.
 pub(super) const OLD_ID: &str = "oldid0000000000";
@@ -237,7 +237,7 @@ impl Pause for FakePause {
 
 /// `Ports` over the fakes.
 pub(super) fn ports<'a>(
-    source: &'a crate::release::fakes::FakeSource,
+    source: &'a FakeSource,
     verifier: &'a crate::release::fakes::FakeVerifier,
     engine: &'a FakeEngine,
     probe: &'a FakeProbe,
@@ -249,5 +249,97 @@ pub(super) fn ports<'a>(
         engine,
         probe,
         pause,
+    }
+}
+
+/// The published releases of each repository and the bytes of their assets, in memory. A
+/// download writes the bytes to the directory it is given; it fails, writing nothing, once
+/// `downloads_left` downloads have succeeded (a transfer cut short), and for a release, asset or
+/// repository the source does not hold. Each download is recorded as `<repo> <tag> <name>`.
+#[derive(Default)]
+pub(crate) struct FakeSource {
+    releases: RefCell<BTreeMap<String, Vec<Release>>>,
+    bytes: RefCell<BTreeMap<(String, String, String), Vec<u8>>>,
+    /// When set, downloads fail once this many have succeeded.
+    pub(crate) downloads_left: Cell<Option<usize>>,
+    pub(crate) downloads: RefCell<Vec<String>>,
+}
+
+impl FakeSource {
+    /// Publishes the release `tag` of `repo` at `commit` with `assets`, each a name and its
+    /// bytes.
+    pub(crate) fn publish(
+        &self,
+        repo: &str,
+        tag: &str,
+        commit: &str,
+        assets: Vec<(String, Vec<u8>)>,
+    ) {
+        self.add(repo, tag, commit, false, assets);
+    }
+
+    /// Adds a release, a draft when `draft` is set.
+    pub(crate) fn add(
+        &self,
+        repo: &str,
+        tag: &str,
+        commit: &str,
+        draft: bool,
+        assets: Vec<(String, Vec<u8>)>,
+    ) {
+        let mut stored = Vec::new();
+        for (name, bytes) in assets {
+            stored.push(StoredAsset {
+                name: name.clone(),
+                sha256: None,
+            });
+            self.bytes
+                .borrow_mut()
+                .insert((repo.to_owned(), tag.to_owned(), name), bytes);
+        }
+        self.releases
+            .borrow_mut()
+            .entry(repo.to_owned())
+            .or_default()
+            .push(Release {
+                tag: tag.to_owned(),
+                commit: commit.to_owned(),
+                draft,
+                assets: stored,
+            });
+    }
+}
+
+impl Releases for FakeSource {
+    fn list(&self, repo: &Repo) -> Result<Vec<Release>, PortError> {
+        self.releases
+            .borrow()
+            .get(repo.as_str())
+            .cloned()
+            .ok_or_else(|| PortError::new(format!("list the releases of {repo}"), "HTTP 404"))
+    }
+
+    fn download(&self, repo: &Repo, tag: &str, name: &str, dir: &Path) -> Result<(), PortError> {
+        let what = format!("download {name} of {repo} {tag}");
+        if let Some(left) = self.downloads_left.get() {
+            if left == 0 {
+                return Err(PortError::new(what, "the connection was reset"));
+            }
+            self.downloads_left.set(Some(left - 1));
+        }
+        let key = (repo.as_str().to_owned(), tag.to_owned(), name.to_owned());
+        let bytes = self.bytes.borrow().get(&key).cloned();
+        let bytes = bytes.ok_or_else(|| PortError::new(what, "no such asset"))?;
+        let path = dir.join(name);
+        assert!(
+            !path.exists(),
+            "a download never overwrites: {}",
+            path.display()
+        );
+        std::fs::write(&path, bytes).expect("write a downloaded asset");
+        self.downloads
+            .borrow_mut()
+            .push(format!("{repo} {tag} {name}"));
+        Ok(())
     }
 }

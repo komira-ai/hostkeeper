@@ -1,28 +1,24 @@
-//! The `gh` the channel-sync deploy test (tests/channel_sync.rs) puts on the `PATH` of the
-//! committed unit's and sidecar's commands. A program of the tests, not shipped; it reaches no
+//! The `gh`, `curl`, `cargo` and `rustup` the workflow lint's run tests put on the `PATH` of the
+//! committed steps they run with bash (tests/workflows/targets_run_tests.rs and
+//! tests/workflows/hello_run_tests.rs). A program of the tests, not shipped; it reaches no
 //! network.
 //!
-//! It answers from `releases/` beside its own file, and appends each command line to `calls`
-//! there:
+//! Started as `gh`, it answers from `releases/` beside its own file, and appends each command
+//! line to `calls` there:
 //!
 //! - `gh api repos/<o>/<n>/releases?per_page=100` prints `releases/<o>/<n>/list.json`, or `[]`
-//!   when there is none;
-//! - `gh release download <tag> --repo <o>/<n> --pattern <name> --dir <dir>` copies
-//!   `releases/<o>/<n>/<tag>/<name>` into `<dir>`, and fails like GitHub (HTTP 404) when there is
-//!   no such file;
+//!   when there is none (the coordinator-update unit's test, tests/coordinator_update_unit.rs);
 //! - `gh attestation verify <file> [--bundle <b>] --repo <r> --signer-workflow <w> --source-ref
 //!   <ref> --source-digest <c> ...` prints one attestation of `<file>`'s SHA-256 by `<w>` on
-//!   `<ref>` at `<c>`: every file verifies as signed by whom it is asked about.
-//!
+//!   `<ref>` at `<c>`: every file verifies as signed by whom it is asked about (the same test);
 //! - `gh release list --repo <o>/<n> ... --json tagName --jq <filter>` runs `jq --raw-output
 //!   <filter>` over `releases/<o>/<n>/release-list.json` (`[{"tagName": ...}, ...]`, `[]` when
 //!   there is none) and prints what it prints, as `gh` does with `--jq`.
 //!
 //! Anything else exits 2.
 //!
-//! Started as `curl` (a link named `curl`), it is the fake origin of hello-desired.yml's download
-//! (its test tests/workflows/hello_run_tests.rs): `curl --remote-name-all --output-dir <dir>
-//! <url>...` takes each `https://` argument as a URL that may hold curl's globs, `{a,b,...}` sets
+//! Started as `curl` (a link named `curl`), it is the fake origin of hello-desired.yml's download:
+//! `curl --remote-name-all --output-dir <dir> <url>...` takes each `https://` argument as a URL that may hold curl's globs, `{a,b,...}` sets
 //! one after another and not nested, and copies each URL `https://<rest>` a glob expands to from
 //! `channel/<rest>` beside its own file to `<dir>/<its last path segment>`, in order. A missing
 //! one is a failed transfer, as curl's for an HTTP 404 with `--fail`: with `--fail-early` it ends
@@ -35,11 +31,12 @@
 //! `answers/calls` beside its own file, and prints the answer file `answers/<key>`, where the key
 //! is `<METHOD> <path>` with every character but a letter or a digit made `_`: its first line is
 //! the HTTP status, the rest the body, then a line break and the status, as `--write-out
-//! '\n%{http_code}'` prints them. With no such file the answer is a 404. Any other `curl` exits
-//! 2.
+//! '\n%{http_code}'` prints them. With no such file the answer is a 404. A `curl ... --output
+//! <file> -- https://github.com/<o>/<n>/releases/download/<tag>/<name>` (the same test's release
+//! download) copies `releases/<o>/<n>/<tag>/<name>` beside its own file to `<file>`, and a missing
+//! one exits 22. Any other `curl` exits 2.
 //!
-//! Started as `cargo`, for that test and the run test of release.yml's job `targets`
-//! (tests/workflows/targets_run_tests.rs): `cargo xtask <args>` runs the program `xtask` beside
+//! Started as `cargo`, for both tests: `cargo xtask <args>` runs the program `xtask` beside
 //! its own file (the test links this crate's real binary there) with `<args>`, and exits as it
 //! exits; anything else exits 2. Started as `rustup`: `rustup toolchain install` does nothing and
 //! succeeds (the toolchain is the one running the test); anything else exits 2.
@@ -77,20 +74,6 @@ fn answer(data: &Path, args: &[String]) -> ExitCode {
                 return ExitCode::FAILURE;
             }
             ExitCode::SUCCESS
-        }
-        ["release", "download", tag, ..] => {
-            let (Some(repo), Some(name), Some(dir)) = (
-                value(args, "--repo"),
-                value(args, "--pattern"),
-                value(args, "--dir"),
-            ) else {
-                return ExitCode::from(2);
-            };
-            let from = data.join(repo).join(tag).join(name);
-            match std::fs::copy(&from, Path::new(dir).join(name)) {
-                Ok(_) => ExitCode::SUCCESS,
-                Err(_) => fail("HTTP 404: Not Found"),
-            }
         }
         ["attestation", "verify", file, ..] => {
             let (Some(workflow), Some(source_ref), Some(commit)) = (
@@ -193,7 +176,29 @@ fn curl(dir: &Path, args: &[String]) -> ExitCode {
     if args.iter().any(|a| a == "--write-out") {
         return curl_answer(dir, args);
     }
+    if let (Some(file), Some(url)) = (value(args, "--output"), value(args, "--")) {
+        return curl_release_asset(dir, file, url);
+    }
     ExitCode::from(2)
+}
+
+/// The fake `curl ... --output <file> -- https://github.com/<o>/<n>/releases/download/<tag>/<name>`:
+/// copies `releases/<o>/<n>/<tag>/<name>` beside its own file to `<file>`; a missing one is curl's
+/// failed transfer of an HTTP 404 with `--fail`, exit 22.
+fn curl_release_asset(dir: &Path, file: &str, url: &str) -> ExitCode {
+    let Some(rest) = url.strip_prefix("https://github.com/") else {
+        return ExitCode::from(2);
+    };
+    let from = dir
+        .join("releases")
+        .join(rest.replacen("/releases/download/", "/", 1));
+    match std::fs::copy(from, file) {
+        Ok(_) => ExitCode::SUCCESS,
+        Err(_) => {
+            eprintln!("curl: (22) The requested URL returned error: 404");
+            ExitCode::from(22)
+        }
+    }
 }
 
 /// The key of a request's answer file: `<METHOD> <path>` with every character but a letter or a

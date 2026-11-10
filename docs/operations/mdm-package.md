@@ -3,8 +3,10 @@
 The MDM server stack that enrolls the farm's Macs (NanoHUB, the SCEP server, NanoDEP and Caddy,
 with lego for the TLS certificate) is a service package, `mdm`, that hostkeeper installs on one
 Linux host like any other service ([design: two programs, section 6.2](../design/two-programs.md)).
-Assigning `mdm` to a host installs it there; unassigning it uninstalls it. The package carries
-the pinned servers, its own program `bin/mdm` and its units; the release builder fetched the
+Assigning `mdm` to a host installs it there; unassigning it uninstalls it. The package is a `.deb`,
+`mdm_<version>_amd64.deb` (`cargo xtask release deb --service mdm`), which hostkeeper installs with `apt`
+([design: native packages only](../design/packages-native.md), sections 10.2 and 10.6). It carries
+the pinned servers, its own program `mdm` and its units; the release builder fetched the
 pinned archives and checked them against `crates/hostkeeper-mdm-core/pins.txt` when it built
 the package, so nothing is downloaded on the MDM host.
 
@@ -15,37 +17,19 @@ another unit holds.
 
 ## What the package holds
 
-| Path in the package | What it is |
-|---|---|
-| `bin/nanohub`, `bin/depserver`, `bin/depsyncer`, `bin/scepserver`, `bin/caddy`, `bin/lego` | The pinned upstream binaries. |
-| `bin/mdm` | The package's program: its update hook and the operator's Apple-facing verbs. |
-| `units/mdm-scep.service`, `units/mdm-nanohub.service`, `units/mdm-depserver.service` | The run units: started at install and observed by the daemon. |
-| `units/mdm-proxy.service` | The HTTPS proxy; it starts only once lego's certificate is there. |
-| `units/mdm-depsyncer.service` | NanoDEP's syncer; `mdm dep define-profile` enables it. |
-| `units/mdm-cert.service` | Orders the first certificate, while lego has none; then restarts the proxy (which starts it). |
-| `units/mdm-cert-renew.service`, `units/mdm-cert.timer` | Renews the certificate within 30 days of its end (`lego renew --days 30`; earlier runs order nothing), once a day by the timer, then restarts the proxy if it runs. It wants `mdm-cert.service` first, so the timer also retries a first certificate that failed. Both jobs wait for the DNS credentials. |
-| `manifest.toml` | The hook (`bin/mdm update-hook`), the run units, the health URL `http://127.0.0.1:9004/version` and the params: the settings file `/etc/mdm/settings` and the hook's record directory `/var/lib/updater/hooks/mdm`. |
-
-The package is built for `linux-x86_64` only: the pinned tools are linux-amd64 builds.
-
-## The `.deb`
-
-The same package is also built as a `.deb`, `mdm_<version>_amd64.deb` (`cargo xtask release deb --service mdm`),
-which hostkeeper installs with `apt` once the farm moves to native packages
-([design: native packages only](../design/packages-native.md), sections 10.2 and 10.6). It holds the same programs and
-units at the `.deb`'s paths, and no maintainer script, which is mdm's choice and not a rule (on `apt` hostkeeper's
-`policy-rc.d` keeps a script that goes through `invoke-rc.d` or `deb-systemd-invoke` from starting a unit until
-`cutover`), and the hook enables the units of the package that are not `run` units. Each release ships it as an
-attested asset and publishes it
-to the `testing` suite of the project's apt repository ([package-repositories.md](../deploy/package-repositories.md));
-`cargo xtask release targets --service mdm` lists its `apt` entry (repository `komira-testing`) before the
-archive's, so a host whose daemon announces `apt` takes the `.deb` and any other host the archive (stage 8).
+The package is built for `linux-x86_64` only: the pinned tools are linux-amd64 builds. It has no
+maintainer script, which is mdm's choice and not a rule (on `apt` hostkeeper's `policy-rc.d` keeps a
+script that goes through `invoke-rc.d` or `deb-systemd-invoke` from starting a unit until
+`cutover`), and the hook enables the units of the package that are not `run` units. Each release
+ships it as an attested asset and publishes it to the `testing` suite of the project's apt
+repository ([package-repositories.md](../deploy/package-repositories.md)); `cargo xtask release
+targets --service mdm` lists its `apt` entry (repository `komira-testing`).
 
 | Path the `.deb` installs | What it is |
 |---|---|
 | `/usr/lib/mdm/nanohub`, `depserver`, `depsyncer`, `scepserver`, `caddy`, `lego` | The pinned upstream binaries. |
 | `/usr/lib/mdm/mdm` | The package's program. |
-| `/usr/lib/systemd/system/mdm-*.service`, `mdm-cert.timer` | The eight units above, each starting its program from `/usr/lib/mdm/`. |
+| `/usr/lib/systemd/system/mdm-*.service`, `mdm-cert.timer` | The eight units below, each starting its program from `/usr/lib/mdm/`. |
 
 The hook command, its bounds, the run units, the health URL and the params are not in the `.deb`: they are the manifest
 of the release's entry, as for every native package, and the hook command is `["/usr/lib/mdm/mdm", "update-hook"]`. The daemon
@@ -53,6 +37,14 @@ runs the sealed copy of `/usr/lib/mdm/mdm` in the version it staged, `<version d
 checks the staged `scepserver` and `lego` in
 `<version dir>/tree/usr/lib/mdm/`. The program knows which build it is from the path it runs as: run as
 `/usr/lib/mdm/mdm` (or the staged tree's), it is the `.deb`'s.
+
+| Unit | What it does |
+|---|---|
+| `mdm-scep.service`, `mdm-nanohub.service`, `mdm-depserver.service` | The run units: started at install and observed by the daemon. |
+| `mdm-proxy.service` | The HTTPS proxy; it starts only once lego's certificate is there. |
+| `mdm-depsyncer.service` | NanoDEP's syncer; `mdm dep define-profile` enables it. |
+| `mdm-cert.service` | Orders the first certificate, while lego has none; then restarts the proxy (which starts it). |
+| `mdm-cert-renew.service`, `mdm-cert.timer` | Renews the certificate within 30 days of its end (`lego renew --days 30`; earlier runs order nothing), once a day by the timer, then restarts the proxy if it runs. It wants `mdm-cert.service` first, so the timer also retries a first certificate that failed. Both jobs wait for the DNS credentials. |
 
 ## Before the first install
 

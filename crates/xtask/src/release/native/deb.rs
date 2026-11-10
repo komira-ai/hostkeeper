@@ -14,8 +14,8 @@
 //!   writer drops a leading `./` from every other name, which dpkg reads the same): this builder
 //!   writes no maintainer script. `control` names the
 //!   package, its version and architecture, the maintainer, the installed size and the
-//!   description, and declares no dependency (the programs are those the archive package
-//!   carries, built for the release runner's glibc);
+//!   description, and declares no dependency (the programs are built for the release runner's
+//!   glibc);
 //! - `data.tar.gz`, a gzip ustar of `./` and the files of [`super::hello`] or [`super::mdm`] by
 //!   their paths from `/` (`usr/lib/hello/hello`), each directory above them listed first (mode
 //!   0755), every entry owned by root and group root

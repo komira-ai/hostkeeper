@@ -3,10 +3,9 @@
 //!
 //! - `install-tool`: check a downloaded tool against its pinned SHA-256 and install it
 //!   (`install`).
-//! - `release <verb>`: the release steps: the version of a commit, the hostkeeper package, the
-//!   release plan, the check and publication of a release's assets, the staging of one
-//!   version of a service into a release channel's tree, and the sync of new published releases
-//!   into that tree (`release`).
+//! - `release <verb>`: the release steps: the version of a commit, the release plan, the check
+//!   and publication of a release's assets, the native packages of the services and the
+//!   `targets` that deploy them (`release`).
 //! - `advisories`: the security advisories against the dependencies in `Cargo.lock`, kept in
 //!   one GitHub issue that it opens, rewrites and closes (`advisories`).
 //! - `mdm-signing-test <verb>`: the device test of pkg signing of the MDM design (task M11): the
@@ -181,9 +180,13 @@ fn run(cli: Cli) -> Result<Vec<String>, Error> {
         Verb::CoordinatorUpdate(flags) => {
             let adapters = release::real::connect();
             let ports = release::ports::Adapters::ports(&adapters);
+            let releases = coordinator_update::GitHubReleases {
+                store: ports.store,
+                fetch: ports.download,
+            };
             Ok(coordinator_update::run(
                 &flags,
-                ports.source,
+                &releases,
                 ports.verifier,
                 &release::real::exec(),
             )?)
