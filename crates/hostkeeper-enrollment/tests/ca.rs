@@ -237,9 +237,27 @@ fn a_csr_with_a_bad_self_signature_is_refused() {
     assert_eq!(at_limit, ProfileError::BadCsr(CsrDefect::NotDer));
 }
 
+/// Every subjectAltName of `cert`, each as `uri:`, `dns:` or `ip:` and its value.
+fn alt_names(cert: &X509Certificate<'_>) -> Vec<String> {
+    cert.subject_alternative_name()
+        .expect("one")
+        .map(|san| {
+            san.value
+                .general_names
+                .iter()
+                .map(|name| match name {
+                    GeneralName::URI(uri) => format!("uri:{uri}"),
+                    GeneralName::DNSName(dns) => format!("dns:{dns}"),
+                    other => format!("other:{other:?}"),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Catches the CA copying anything the request asked for: a CSR asking for `serverAuth`, a
 /// subjectAltName, `CA:TRUE` and `keyCertSign` is accepted, and its certificate has none of
-/// them.
+/// them: its one subjectAltName is the fixed host role every host certificate names.
 #[test]
 fn requested_extensions_are_never_copied() {
     let ca = TestCa::new("no-copy");
@@ -263,7 +281,7 @@ fn requested_extensions_are_never_copied() {
         .expect("issued");
     let parsed = parse(&cert.der);
     assert_eq!(purposes(&parsed), (false, true, false));
-    assert!(parsed.subject_alternative_name().expect("one").is_none());
+    assert_eq!(alt_names(&parsed), ["uri:urn:hostkeeper:host-role:host"]);
     assert!(
         !parsed
             .basic_constraints()
@@ -715,4 +733,83 @@ fn the_ca_fingerprint_is_the_sha256_of_the_ca_certificate() {
     };
     assert_eq!(poll.ca.sha256_hex(), bundle.sha256_hex());
     assert!(format!("{:?}", ca.ca).starts_with("Ca("));
+}
+
+/// Proves: a host certificate names the fixed host role `host` as its one subjectAltName, after
+/// the default prefix, or after the prefix the CA is given (the coordinator's
+/// `--host-role-uri-prefix`), whatever the host id; the server certificate names no URI.
+///
+/// Catches: a host certificate without a host-role URI, which readers that require one refuse,
+/// or one naming a role of the host, which would go stale at its first move.
+#[test]
+fn every_host_certificate_names_the_fixed_host_role() {
+    let test = TestCa::new("host-role");
+    let host = HostKey::new();
+    let issued = test
+        .ca
+        .issue_host(&host_id("db-7"), &host.p256(), HOST_VALIDITY_SECS, 5)
+        .expect("issued");
+    assert_eq!(
+        alt_names(&parse(&issued.der)),
+        ["uri:urn:hostkeeper:host-role:host"]
+    );
+    let server = test
+        .ca
+        .issue_server(
+            &HostKey::new().p256(),
+            ServerNames {
+                dns: &["coordinator.example".to_owned()],
+                ips: &[],
+            },
+            SERVER_VALIDITY_CAP_SECS,
+            6,
+        )
+        .expect("server certificate");
+    assert_eq!(alt_names(&parse(&server.der)), ["dns:coordinator.example"]);
+
+    let prefixed = test.ca.with_host_role_uri_prefix("urn:kbf:host-role:");
+    let issued = prefixed
+        .issue_host(&host_id("web-1"), &host.p256(), HOST_VALIDITY_SECS, 7)
+        .expect("issued");
+    assert_eq!(
+        alt_names(&parse(&issued.der)),
+        ["uri:urn:kbf:host-role:host"]
+    );
+}
+
+/// Proves: a CA given a host-role prefix that is not ASCII signs no host certificate, refused
+/// naming the URI, and still signs a server certificate.
+///
+/// Catches: a host certificate signed with a host-role URI no reader can parse.
+#[test]
+fn a_host_role_prefix_that_is_not_ascii_signs_no_host_certificate() {
+    let ca = TestCa::new("host-role-bad")
+        .ca
+        .with_host_role_uri_prefix("urn:r\u{f4}le:");
+    let refused = ca
+        .issue_host(
+            &host_id("web-1"),
+            &HostKey::new().p256(),
+            HOST_VALIDITY_SECS,
+            5,
+        )
+        .expect_err("not ASCII");
+    assert_eq!(
+        refused,
+        SignError::BadHostRoleUri("urn:r\u{f4}le:host".to_owned())
+    );
+    assert_eq!(
+        refused.to_string(),
+        "the host-role URI \"urn:r\u{f4}le:host\" is not one a certificate carries"
+    );
+    let server = ca.issue_server(
+        &HostKey::new().p256(),
+        ServerNames {
+            dns: &["coordinator.example".to_owned()],
+            ips: &[],
+        },
+        SERVER_VALIDITY_CAP_SECS,
+        6,
+    );
+    assert!(server.is_ok());
 }

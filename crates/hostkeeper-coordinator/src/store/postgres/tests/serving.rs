@@ -39,6 +39,7 @@ pub(super) fn approve_again(enrollment: &EnrollmentStore, id: &HostId) {
                 role: Role::parse("web").expect("a role"),
                 services: Vec::new(),
                 replace: true,
+                host_group: None,
             },
         )
         .expect("approved again");

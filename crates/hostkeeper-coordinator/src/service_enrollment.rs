@@ -100,10 +100,12 @@ impl Coordinator {
     /// the host it names, refuses a denied host's heartbeat, and orders a duplicate host
     /// nothing. Enrollment audits into this coordinator's ops store from now on, and an
     /// approval it recorded whose audit entry is missing there is audited now
-    /// ([`Enrollment::audit_to`]).
+    /// ([`Enrollment::audit_to`]). It places each host it approves by this coordinator's host
+    /// groups while it holds one ([`Enrollment::held_groups`]).
     #[must_use]
     pub fn with_enrollment(mut self, enrollment: Arc<Enrollment>) -> Self {
         enrollment.audit_to(Arc::clone(&self.ops));
+        enrollment.place_by(Arc::clone(&self.desired));
         self.enrollment = Some(enrollment);
         self
     }

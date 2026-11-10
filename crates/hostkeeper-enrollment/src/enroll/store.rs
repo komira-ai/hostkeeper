@@ -447,8 +447,11 @@ impl EnrollmentStore {
     /// `key_hash` is the SHA-256 of the key the operator saw; it must be the request's. Under
     /// the store lock, in this order: the host id must not be denied and must not be held by
     /// another key, unless `decision.replace` (not for a renewal, which must name the host it
-    /// renews); then a deny row it clears is marked cleared by this request, the host row is
-    /// written (host id, key hash, machine id, role, services), and the request is marked
+    /// renews); a host group the decision names must be the one of the host a renewal renews or
+    /// a `replace` takes the id of, when that host is in one and not denied
+    /// ([`ApproveError::HostGroupDiffers`]); then a deny row it clears is marked cleared by this
+    /// request, the host row is written (host id, key hash, machine id, role, services, host
+    /// group), and the request is marked
     /// approved. A crash between those writes leaves a host row of this key, which a retry
     /// accepts as its own. It does not issue. The key hash is compared in constant time.
     ///
@@ -510,6 +513,7 @@ impl EnrollmentStore {
                     request_id: row.id,
                     host_id: approved.host_id.clone(),
                     role: approved.role.clone(),
+                    host_group: approved.host_group.clone(),
                     services: approved.services.clone(),
                     replace: approved.replace,
                     approver: approved.approver.clone(),
@@ -572,6 +576,21 @@ impl EnrollmentStore {
         if holder.is_some() && !replace && !rejoined {
             return Err(ApproveError::HostIdTaken);
         }
+        // The host a renewal renews, or a replace (or a Mac rejoining) takes the id of, keeps
+        // its group: a denied host's ended with its retirement.
+        let kept = current
+            .as_ref()
+            .filter(|_| (renewal.is_some() || replace || rejoined) && !denied)
+            .map(|h| h.pb.host_group.as_str())
+            .filter(|held| !held.is_empty());
+        if let (Some(held), Some(named)) = (kept, decision.host_group.as_deref())
+            && held != named
+        {
+            return Err(ApproveError::HostGroupDiffers {
+                held: held.to_owned(),
+                named: named.to_owned(),
+            });
+        }
         let replaced = decision.replace || rejoined;
         let mut records = Vec::new();
         if denied {
@@ -591,7 +610,10 @@ impl EnrollmentStore {
             .as_ref()
             .filter(|_| renewal.is_some())
             .map(|h| &h.pb);
-        let host_group = renewed.map(|h| h.host_group.clone()).unwrap_or_default();
+        let host_group = match &decision.host_group {
+            Some(named) => named.clone(),
+            None => renewed.map(|h| h.host_group.clone()).unwrap_or_default(),
+        };
         records.push(Record::Host(pb::Host {
             schema: SCHEMA,
             host_id: host.to_string(),
@@ -607,7 +629,8 @@ impl EnrollmentStore {
             first_serving_unix: None,
             // ... and for what its daemon says it runs.
             running: None,
-            // A renewal keeps the host's group, the move under way and its facts' generation.
+            // A renewal keeps the host's group (the one it names, which is the same), the move
+            // under way and its facts' generation.
             host_group: host_group.clone(),
             moving_from: renewed.and_then(|h| h.moving_from.clone()),
             facts_generation: renewed.and_then(|h| h.facts_generation),
@@ -625,7 +648,7 @@ impl EnrollmentStore {
                 .as_ref()
                 .map(|(hash, _)| hash.as_bytes().to_vec())
                 .unwrap_or_default(),
-            host_group,
+            host_group: host_group.clone(),
         });
         records.push(Record::Request(row.pb));
         if let Some((_, mut file)) = nonce {
@@ -656,6 +679,7 @@ impl EnrollmentStore {
             request_id: *request_id,
             host_id: host.clone(),
             role: decision.role.clone(),
+            host_group,
             services: decision.services.clone(),
             renewal: renewal.is_some(),
             cleared_deny: denied,

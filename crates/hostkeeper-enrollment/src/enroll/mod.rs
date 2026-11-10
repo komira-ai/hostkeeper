@@ -218,6 +218,12 @@ pub struct Decision {
     /// Take the host id over from the key that holds it, or out of its deny row (re-enrollment
     /// of a host). Ignored for a renewal, which keeps its host's key.
     pub replace: bool,
+    /// The host group the host is in, from a coordinator that holds host groups: a renewal, or
+    /// a `replace` of a host that is not denied (a Mac taking its own host id over too), must
+    /// name the group that host is in, unless it is in none ([`ApproveError::HostGroupDiffers`]).
+    /// `None` from a coordinator that holds none: a new key's host is in no group, and a renewal
+    /// keeps its host's.
+    pub host_group: Option<String>,
 }
 
 /// Who made an approval, when and why, and the Mac nonce it consumes: what
@@ -246,6 +252,8 @@ pub struct RecordedApproval {
     pub request_id: KeyHash,
     pub host_id: String,
     pub role: String,
+    /// The host group the approval put the host in; empty for none.
+    pub host_group: String,
     pub services: Vec<String>,
     /// The approval was asked to take the host id over (`replace`), or a Mac's request took
     /// its own host id over from its earlier key.
@@ -333,6 +341,8 @@ pub struct Approval {
     pub request_id: KeyHash,
     pub host_id: HostId,
     pub role: Role,
+    /// The host group the host is in after the approval; empty for none.
+    pub host_group: String,
     pub services: Vec<ServiceName>,
     /// The request renews its host: no new host id was minted.
     pub renewal: bool,
@@ -417,6 +427,11 @@ pub enum ApproveError {
     /// The request is flagged a duplicate claim and the recorded decision does not replace.
     #[error("duplicate_claim: the request is a duplicate claim and replace was not asked for")]
     DuplicateClaim,
+    /// A renewal, or a `replace` of a host that is not denied (a Mac taking its own host id
+    /// over too), names another host group than the one that host is in: only a move changes a
+    /// host's group.
+    #[error("host_group_differs: the host is in host group {held}, not {named}")]
+    HostGroupDiffers { held: String, named: String },
     /// The Mac nonce of a recorded approval is refused.
     #[error(transparent)]
     MacNonce(#[from] MacNonceRefusal),
@@ -435,6 +450,7 @@ impl ApproveError {
             ApproveError::Denied => Some("denied"),
             ApproveError::RenewalOfOtherHost => Some("renewal_of_other_host"),
             ApproveError::DuplicateClaim => Some("duplicate_claim"),
+            ApproveError::HostGroupDiffers { .. } => Some("host_group_differs"),
             ApproveError::MacNonce(refusal) => Some(refusal.token()),
             ApproveError::Store(_) => None,
         }

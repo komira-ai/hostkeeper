@@ -406,6 +406,7 @@ fn enroll_host(enrollment: &Enrollment) -> (Vec<u8>, Vec<u8>) {
                 role: Role::parse("storage").expect("a role"),
                 services: Vec::new(),
                 replace: false,
+                host_group: None,
             },
         )
         .expect("approved");

@@ -7,6 +7,15 @@ certificate (`Poll`) and renews it while it is valid (`Renew`). Why it is shaped
 the store are the crate `hostkeeper-enrollment`; the coordinator's side is the module
 `crates/hostkeeper-coordinator/src/enrollment/`.
 
+A host certificate names its host as `CN=host:<id>` and carries one subjectAltName, the URI of
+the fixed host role `host`: the coordinator's `--host-role-uri-prefix` (by default
+`urn:hostkeeper:host-role:`) followed by `host`, so `urn:hostkeeper:host-role:host`. That role
+means nothing and is the same for every host: the coordinator reads who a host is from its host
+id and its key, and which host group it is in from its enrollment record
+([docs/design/hostgroups.md](design/hostgroups.md) section 1.2), never from its certificate. A
+certificate issued by a release before names no host role and keeps working until it is renewed,
+read for its host id alone; its renewal carries the URI.
+
 The handlers of `Enroll`, `Poll` and `Renew` are built here. The heartbeat listener serves them
 as gRPC calls of `hostkeeper.agent.v1.Coordinator` (`crates/hostkeeper-coordinator/src/grpc/`),
 with no client certificate asked of `Enroll` and `Poll`. With `--lan-listen`, a third listener on
@@ -26,9 +35,9 @@ the farm LAN serves the same, to network-installed hosts, which have no tailnet
 | `--max-pending-enrollments <n>` | How many requests may wait for an operator at once, 1 or more; 256 when not given. A new request over it is refused `pending_full`; no waiting request is dropped for it, and a host posting its waiting request again is still answered. Requires `--ca-key-file`. |
 | `--host-cert-validity-secs <n>` | How long each host certificate the CA issues or renews is valid, in seconds: 60 to 604800 (7 days, the CA's cap), 604800 when not given. The daemon renews at half life. A certificate already issued keeps its validity; the next issuance or renewal takes the new one. Requires `--ca-key-file`. |
 | `--enrollment-request-ttl <time>` | How long a request waits for an operator before it expires: digits and one unit, `s`, `m`, `h` or `d` (`90m`, `72h`), at least one second; `72h` when not given. Requires `--ca-key-file`. |
-| `--record-approve-for <time>` | The approval window of a new inventory record that names a role when `Enrollment.AddRecord` names none: digits and one unit, `s`, `m`, `h` or `d` (`90m`, `24h`), at least one second, no longer than `--record-approve-max`; `24h` when not given. While it is open a pending request that matches the record exactly is approved by the coordinator itself. Needs no `--enrollment-dir`. |
+| `--record-approve-for <time>` | The approval window of a new inventory record that names a host group (or a role) when `Enrollment.AddRecord` names none: digits and one unit, `s`, `m`, `h` or `d` (`90m`, `24h`), at least one second, no longer than `--record-approve-max`; `24h` when not given. While it is open a pending request that matches the record exactly is approved by the coordinator itself. Needs no `--enrollment-dir`. |
 | `--record-approve-max <time>` | The longest approval window a record may be given, by `Enrollment.AddRecord` and `Enrollment.OpenRecord` alike; a longer one is refused `invalid_window`; `7d` when not given. A `--record-approve-for` above it stops the start. Needs no `--enrollment-dir`. |
-| `--mac-serial-allowlist <file>` | The Mac serial numbers a Mac may be approved for by its MDM nonce, with the host id prefix, role and services of each (below). Without it no Mac is approved by its nonce. Requires `--ca-key-file`. |
+| `--mac-serial-allowlist <file>` | The Mac serial numbers a Mac may be approved for by its MDM nonce, with the host id prefix and host group of each (below). Without it no Mac is approved by its nonce. Requires `--ca-key-file`. |
 | `--mdm-api-url <url>` | NanoHUB's API, on loopback: `http://<loopback address>:<port>`, as `http://127.0.0.1:9004`; a name (even `localhost`), another address, `https://`, a path or a query stops the start. With it the coordinator runs the MDM policy gate (below). Requires the two below and enrollment (`--ca-key-file`, with `--enrollment-dir` or `--database-dsn-file`); the gate's device records are kept with the enrollment store, in `--enrollment-dir` or in the database's table `mdm_devices`. |
 | `--mdm-api-key-file <file>` | NanoHUB's API key (NanoHUB's `-api-key`): one key of visible ASCII, in a file of mode 0600 or 0400 owned by the coordinator's user; a link, another mode or owner, or an empty file stops the start, and the message names the flag, never the path or the key. Requires `--mdm-api-url`. |
 | `--mdm-webhook-listen <addr>` | Where the gate serves NanoHUB's webhook: a loopback address and port, as `127.0.0.1:9100`; another address stops the start. Requires `--mdm-api-url`. |
@@ -86,7 +95,7 @@ On the database store (`--database-dsn-file`) the enrollment store is the tables
 `enrollment_serial` and `mac_nonces`, one column per field of the messages below, and an approval
 (the host, the request, the deny row cleared, the Mac nonce consumed) is one transaction. The
 store's lock is its in-process mutex; the database's advisory lock keeps other coordinators off.
-The heartbeat's reads (a host's key and role, its deny row, its duplicate mark) come from a copy of
+The heartbeat's reads (a host's key, role and host group, its deny row, its duplicate mark) come from a copy of
 the hosts and the deny rows in memory, loaded at start and changed after each commit, so a
 heartbeat runs no query; the first heartbeat time and the duplicate mark are each written once.
 An enrollment change's audit row is the coordinator's second transaction, as its second write is
@@ -100,7 +109,7 @@ whole (temporary file, fsync, rename, directory fsync), mode 0600:
 |---|---|
 | `requests/<request id>.pb` | a request: the CSR, the claims, the image, its state, its approval |
 | `issued/<request id>.pb` | the certificate a request was issued |
-| `hosts/<host id>.pb` | an approved host: its key's hash, machine id, role, services, the duplicate mark, when its first heartbeat since the approval was accepted, and when the first that reported a service the coordinator manages for it serving was |
+| `hosts/<host id>.pb` | an approved host: its key's hash, machine id, role, services, host group (and, while a move runs, the group it moves from), the duplicate mark, when its first heartbeat since the approval was accepted, and when the first that reported a service the coordinator manages for it serving was |
 | `deny/<host id>.pb` | a denied host: retiring, retired, or cleared by a later approval |
 | `serial.pb` | the next certificate serial |
 | `mac-nonces/<nonce SHA-256>.pb` | a Mac nonce by its SHA-256 only: its serial, the request it was issued for (absent on a nonce stored before that field), when it was issued, the request that consumed it |
@@ -123,40 +132,49 @@ hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <tok
     enrollment list --limit 50
 hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment approve --request-id <id> --key-sha256 <key-sha256> \
-    --host-id web-17 --role web --services api --reason "racked in row 4"
+    --host-id web-17 --host-group web --reason "racked in row 4"
 ```
 
 `List` answers the waiting requests oldest first (the time the coordinator first received each,
 then its id), a page at a time (`limit` at most 256; `next_page_token` until the last page), each
 with its claims, its `key_sha256`, `renewal_of`, whether it is a `duplicate_claim` and whether a
 Mac nonce was presented, its match against the host inventory (with the one record's host id,
-role, serial and BMC MAC), and `contested_by`: the ids of the other pending requests that match a
+host group, serial and BMC MAC; `record_role` carries the group's name too), and `contested_by`: the ids of the other pending requests that match a
 record it matches, looked for among every pending request, not the page. It never answers a CSR
 or a nonce. With `unenrolled` it answers, in the same order and pages, the
 requests that expired in their place (Request expiry, below).
 
-Automatic approval: a pending request that matches exactly one open, unused record naming a role,
-with no other pending request contesting that record, is approved by the coordinator itself while
-the record's window is open (`--record-approve-for`, `--record-approve-max`), once. The audit entry
-is `enrollment.auto_approved`. Any other match only fills in the form. See
+Automatic approval: a pending request that matches exactly one open, unused record naming a host
+group the coordinator holds, with no other pending request contesting that record, is approved by
+the coordinator itself, in that group, while the record's window is open (`--record-approve-for`,
+`--record-approve-max`), once. The audit entry is `enrollment.auto_approved`, naming the group. Any other match only fills in the form. See
 [operations/enrollment.md](operations/enrollment.md).
 
 `Approve` names the request, the SHA-256 of its key as listed (compared whole, in constant time;
-another request's key hash is `key_mismatch`), the host id, the role, the services (each one the
-coordinator manages) and a reason. A request (not a renewal) that matches exactly one record of
+another request's key hash is `key_mismatch`), the host id, the host group (by `host_group`, or by
+`role` read as the group's name; it must be a group the coordinator holds, `unknown_host_group`;
+naming neither, or a `role` beside `host_group` that is another name, is `invalid_role`) and a
+reason. It names no services (`services_retired`): the host's group decides what it runs. A request (not a renewal) that matches exactly one record of
 the host inventory is approved as that record's host id: an empty host id is it, and the answer's
 `host_id` names it; another host id is `record_mismatch` unless `replace` is set. Any other request
 names its host id. Before that, a request that another pending request contests (they match one
 record) is `record_contested`, `replace` or not, until the operator rejects all but one. Under the store's lock it is refused when the request is not
 pending, is a `duplicate_claim`, or names a host id another key holds or an operator denied,
-unless `replace` is set. One write of the request file records the approval: host id, role,
-services (the host's first assignment), the operator's token name, the time and the reason. The
+unless `replace` is set; a renewal, or a `replace` of a host that is not denied, that names another
+group than that host's is refused `host_group_differs` (a host changes group only by
+`HostGroups.Move`). One write of the request file records the approval: host id, host group (as
+the role too), the operator's token name, the time and the reason; the host record carries the
+group from that write, so `HostGroups.Remove` counts the host before its first `Poll`. The group
+is checked and the approval written under the fleet's lock, which `HostGroups.Remove` checks
+under, as are a record's `AddRecord` and an approval by a record, so no host or record lands in a
+group being removed. The
 certificate is made at the host's next `Poll`, never answered here. With `replace`, the host id's
 earlier key no longer names the host: a certificate of it is not admitted at the heartbeat, and
 it cannot renew.
 
 Each approval is audited `enroll_approve` (`enroll_replace` with `replace`) under the operator's
-token name, with the request id, role, services and the claims; each refused one
+token name, with the request id, the group (`group web`, and the entry's `host_group`) and the
+claims; each refused one
 `enroll_approve_refused` with its token, and nothing else changes. The audit log is a second file,
 so its entry is written right after the approval; an approval whose entry did not land (a crash,
 or an audit file that takes no lines) is audited when the coordinator next starts. An approval is
@@ -200,7 +218,10 @@ again, as it did before it expired.
 | `unauthorized` | no bearer, or not an operator token |
 | `forbidden` | a CI token |
 | `invalid_request` | a request id, key hash, reason or page token that breaks its rule |
-| `invalid_host_id`, `invalid_role`, `invalid_service` | that field breaks its rule; a service the coordinator does not manage; a renewal named under another host id; no host id for a request that matches no single record |
+| `invalid_host_id`, `invalid_role`, `invalid_service` | that field breaks its rule; a service the coordinator does not manage; a renewal named under another host id; no host id for a request that matches no single record; no host group nor role named; a role beside `host_group` that is another name |
+| `services_retired` | `services` named on a coordinator that holds host groups |
+| `unknown_host_group` | a host group, or a role read as one, that the coordinator does not hold; any `host_group` on a coordinator that holds none |
+| `host_group_differs` | a renewal, or a `replace`, naming another group than the host it renews or replaces is in |
 | `unknown_request` | no request has the id |
 | `key_mismatch` | the key hash is not the request's |
 | `record_mismatch` | the request matches one inventory record, the host id is another, and `replace` is not set |
@@ -254,9 +275,10 @@ audited `mac_auto_approve_declined` with one of `serial_not_allowed`, `device_st
 `nonce_wrong_serial`, `nonce_wrong_request`; such an attempt does not use the nonce. Another key
 that presents the nonce, a local user's who read it first for instance, is `nonce_wrong_request`.
 
-The approval assigns the allowlist entry's services to the host as an operator's approval assigns
-the services it names: one `assign` entry per service, by `mdm-nonce`. An assignment that cannot
-be made is logged and leaves the approval standing.
+The approval puts the Mac in its allowlist entry's host group, audited `enroll_approve` by
+`mdm-nonce` naming the group, and assigns nothing: the group decides what the Mac runs. A Mac
+wiped and taking its host id over is held to its host's group as a `replace` is: one moved to
+another group than its entry names is refused `host_group_differs` and waits for an operator.
 
 A Mac wiped after its approval comes back with a new key while its host id is held by the old
 one. Its nonce approval takes the host id over, audited `enroll_replace`, when the gate says the
@@ -274,12 +296,22 @@ and supervised and when its current enrollment began. No operator token may be n
 [[mac]]
 serial = "C02XK1ABJG5J"
 host_id_prefix = "mac-"     # the host id is the prefix and the serial in lower case
-role = "build"
-services = ["builder"]      # services the rollout file defines
+host_group = "build"        # a group the coordinator holds
 ```
 
-A file that does not read, a serial listed twice, or a serial, host id, role or service that
-breaks its rule or names a service the rollout file does not define stops the start.
+A file that does not read, a serial listed twice, an entry that names no `host_group`, or a
+serial, host id or group that breaks its rule stops the start. An entry written before groups
+names `role` instead, read as the group's name (with both, they must be one name), and may name
+`services`. A coordinator that holds a host group at its start refuses an entry that names
+`services` (`--mac-serial-allowlist: the entry of serial <serial> names services; ...`) or a
+group it does not hold (`--mac-serial-allowlist names host group <name>, which the coordinator
+does not hold`), and `HostGroups.Remove` refuses a group an entry names (`not_empty`). A
+coordinator that holds no group approves the Mac as its entry's role and assigns its
+`services`, one `assign` entry per service by `mdm-nonce`, each a service the rollout file
+defines, or the start stops; should it come to hold groups while it runs, an entry with
+`services`, or naming a group it does not hold, is refused as an operator's approval would be
+(`services_retired`, `unknown_host_group`) until the file is fixed and the coordinator started
+again.
 
 ## The MDM policy gate
 

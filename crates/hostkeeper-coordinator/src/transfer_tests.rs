@@ -846,6 +846,7 @@ fn import_of_a_pruned_history_adds_no_audit_rows_at_first_start() {
                 role: hostkeeper_enrollment::names::Role::parse("storage").expect("a role"),
                 services: Vec::new(),
                 replace: false,
+                host_group: None,
             },
             &hostkeeper_enrollment::enroll::ApprovalRecord {
                 approver: "alice".to_owned(),

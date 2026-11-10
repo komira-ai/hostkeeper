@@ -152,6 +152,7 @@ async fn approval_with_the_right_key_records_host_role_services_and_approver() {
             request_id: key.key_hash(),
             host_id: "s1".to_owned(),
             role: "storage".to_owned(),
+            host_group: String::new(),
             services: vec!["kbf".to_owned()],
             replace: false,
             approver: "operator".to_owned(),

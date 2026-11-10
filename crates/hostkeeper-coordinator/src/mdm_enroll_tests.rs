@@ -461,6 +461,7 @@ fn approve_at(rig: &Rig, key: &HostKey, host: &str, at: u64) {
                 role: Role::parse("build").expect("a role"),
                 services: Vec::new(),
                 replace: false,
+                host_group: None,
             },
             &ApprovalRecord {
                 approver: "operator".to_owned(),
