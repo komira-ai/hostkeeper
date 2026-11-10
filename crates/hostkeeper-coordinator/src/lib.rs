@@ -160,7 +160,10 @@ pub mod registry;
 pub mod release_index;
 pub(crate) mod releases;
 pub(crate) mod repositories;
+pub(crate) mod repository_credential;
+pub mod repository_origin;
 pub(crate) mod repository_push;
+pub(crate) mod repository_serve;
 pub mod rollouts;
 mod running;
 pub mod service;
@@ -306,6 +309,8 @@ mod ops_tests;
 #[cfg(test)]
 mod order_terms_tests;
 #[cfg(test)]
+mod picks_private_tests;
+#[cfg(test)]
 mod picks_tests;
 #[cfg(test)]
 mod plan_rollout_tests;
@@ -333,6 +338,16 @@ mod releases_tests;
 mod repositories_support;
 #[cfg(test)]
 mod repositories_tests;
+#[cfg(test)]
+mod repository_listen_tests;
+#[cfg(test)]
+mod repository_origin_support;
+#[cfg(test)]
+mod repository_origin_tests;
+#[cfg(test)]
+mod repository_private_tests;
+#[cfg(test)]
+mod repository_push_private_tests;
 #[cfg(test)]
 mod repository_push_tests;
 #[cfg(test)]

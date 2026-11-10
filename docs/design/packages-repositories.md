@@ -266,7 +266,11 @@ not a binary keyring of public keys, a listed fingerprint the keyring lacks, and
 whose fingerprints is listed (`keyring_invalid`), so the operator states every key the hosts will trust. Each service
 of the rollout file names its repository (`repository`, `komira` when it names none); `Remove` refuses a repository a
 service names (`in_use`). The rules of an entry are the crate `hostkeeper-release`'s (`registry`), shared by the
-coordinator and the daemon.
+coordinator and the daemon. An entry with `access` `hosts` is a private repository (hostgroups.md section 6.6): the
+coordinator reads it from its URI with the credential its `credential_file` holds, serves each host its own group's
+suite over the agent listener, and sends it, with the host's group as its one suite and no `credential_file`, only to a
+daemon that announces `private-repository-v1`, which writes its entry's `URIs` as its local mirror
+(`file:/var/lib/hostkeeper/mirror/<name>`); docs/deploy/package-repositories.md says how.
 
 **The push.** At each heartbeat of a daemon that announces `repositories-v1` (a Linux daemon), the coordinator takes
 the repositories the host's services name: those assigned to the host and those it runs. When the registry holds every
@@ -545,6 +549,11 @@ file the receipt lists, changed or not.
   A Mac whose `stores.toml` lacks that store answers `Failed`, `environment`, `no_store` (packages.md section 7.4), as
   an apt host without the entry answers `repository_unknown`. A mirror store serves the file by digest, as for any
   artifact.
+- **A private `.pkg` is in the store `coordinator`.** A host group's configuration `.pkg` (hostgroups.md section 6.6)
+  is located in the implicit store `coordinator`, at `repositories/<name>/pool/<group>/<file>.pkg`, which the daemon
+  fetches from the coordinator over its mutual-TLS connection; it is checked by digest and signer as any `.pkg`. No
+  `stores.toml` defines that store (one that gives a store the kind `coordinator` is refused at start; a store a file
+  of an earlier release names `coordinator` is kept, and is the one its locations name).
 - **The version is the release's.** The entry has no `repository` and no `package_version` (a daemon given either on
   a `macos-pkg` entry answers `Failed`, `release`, `order_invalid`, section 2.3): the version is the order's
   `desired.version`, and the package's own `PackageInfo` `version` must equal it, so the receipt's version, the

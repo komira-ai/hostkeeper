@@ -16,12 +16,13 @@
 //!
 //! - [`Registry::put`] and [`Registry::remove`] make the registry a change would leave, and
 //!   refuse a repository that clashes with another or past [`MAX_REPOSITORIES`].
+//! - [`Registry::private_channels`] is the channels the pick treats as private ([`crate::picks`]).
 //! - [`Registry::entries_of`] is what a host is sent: the entries its services name, when the
 //!   registry holds every one (`repository_push.rs` adds the generation and the digest).
 //! - [`put_reason`] and [`remove_reason`] are the reasons of the audit entries
 //!   `repository_put` and `repository_remove`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use base64::Engine as _;
@@ -44,11 +45,12 @@ impl Eq for Kept {}
 
 impl Kept {
     /// The record as it is stored: `{"generation": n, "repository": {...}}`, the keyring as
-    /// standard base64.
+    /// standard base64. `access` and `credential_file` are written only when set, so the record of
+    /// a public repository is the one the release before wrote.
     #[must_use]
     pub(crate) fn to_json(&self) -> Value {
         let repository = &self.repository;
-        json!({
+        let mut record = json!({
             "generation": self.generation,
             "repository": {
                 "name": repository.name,
@@ -59,10 +61,21 @@ impl Kept {
                 "fingerprints": repository.fingerprints,
                 "keyring": base64::engine::general_purpose::STANDARD.encode(&repository.keyring),
             },
-        })
+        });
+        for (key, value) in [
+            ("access", &repository.access),
+            ("credential_file", &repository.credential_file),
+        ] {
+            if !value.is_empty() {
+                record["repository"][key] = json!(value);
+            }
+        }
+        record
     }
 
-    /// The record stored as `value`, judged by [`registry::check`].
+    /// The record stored as `value`, judged by [`registry::check`]. `access` and
+    /// `credential_file` are optional: absent, they are empty (a public repository, as every
+    /// record the release before wrote).
     ///
     /// # Errors
     /// Why `value` is no record: a field missing or of the wrong type, a keyring that is not
@@ -79,6 +92,13 @@ impl Kept {
                 .and_then(Value::as_str)
                 .map(str::to_owned)
                 .ok_or_else(|| format!("no {key}"))
+        };
+        let optional = |key: &str| match stored.get(key) {
+            None => Ok(String::new()),
+            Some(value) => value
+                .as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| format!("{key} is not text")),
         };
         let texts = |key: &str| -> Result<Vec<String>, String> {
             stored
@@ -103,6 +123,8 @@ impl Kept {
             keyring: base64::engine::general_purpose::STANDARD
                 .decode(text("keyring")?)
                 .map_err(|_| "a keyring that is not base64".to_owned())?,
+            access: optional("access")?,
+            credential_file: optional("credential_file")?,
         };
         registry::check(&repository).map_err(|why| why.to_string())?;
         Ok(Self {
@@ -170,6 +192,16 @@ impl Registry {
     #[must_use]
     pub(crate) fn get(&self, name: &str) -> Option<&Kept> {
         self.entries.get(name)
+    }
+
+    /// The channels (`<name>-<suite>`) of every private repository of the registry.
+    #[must_use]
+    pub(crate) fn private_channels(&self) -> BTreeSet<String> {
+        self.entries
+            .values()
+            .filter(|kept| registry::is_private(&kept.repository))
+            .flat_map(|kept| registry::channels(&kept.repository))
+            .collect()
     }
 
     /// The registry after a `Put` of `repository`: its generation one more, and the repository
@@ -280,11 +312,21 @@ pub(crate) fn parse_file(bytes: &[u8]) -> Result<Registry, DesiredError> {
 }
 
 /// The reason of the `repository_put` audit entry: the operator's `why`, then the repository's
-/// name, URI, suites and fingerprints.
+/// name, URI, suites and fingerprints, and, for a private repository, `access hosts credential`
+/// and the credential file's path (a path, never the file's content).
 #[must_use]
 pub(crate) fn put_reason(why: &str, repository: &Repository) -> String {
+    let private = if registry::is_private(repository) {
+        format!(
+            " access {} credential {}",
+            registry::ACCESS_HOSTS,
+            repository.credential_file
+        )
+    } else {
+        String::new()
+    };
     format!(
-        "{why}: {} {} suites {} fingerprints {}",
+        "{why}: {} {} suites {} fingerprints {}{private}",
         repository.name,
         repository.uri,
         repository.suites.join(","),

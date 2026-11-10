@@ -370,6 +370,7 @@ fn without_executor(daemon: &Arc<Daemon>, links: &Links) -> Heartbeater {
             state_dir: daemon.ctx().dirs.state.clone(),
             period_secs: links.period,
             installers: Vec::new(),
+            private_repository: false,
         },
         Ports {
             link: Arc::clone(&links.link),

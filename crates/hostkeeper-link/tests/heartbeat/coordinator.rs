@@ -198,6 +198,7 @@ fn a_reply_from_the_real_coordinator_maps_to_the_loops_reply() {
             state_dir: rig.state().to_path_buf(),
             period_secs: DEFAULT_HEARTBEAT_SECS,
             installers: Vec::new(),
+            private_repository: false,
         },
         ports,
     );

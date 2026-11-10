@@ -709,6 +709,7 @@ fn wire_names_are_pinned() {
             "halt-v1",
             "heartbeat-v2",
             "install-v1",
+            "private-repository-v1",
             "repositories-v1",
             "target-v1",
             "verdict-acks-v1"

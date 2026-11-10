@@ -30,6 +30,10 @@
 //! coordinator through a [`Transport`]; [`TcpTransport`] ([`dial`]) is the production one and
 //! the only code of the crate that opens a socket, with [`TcpDial`], its async counterpart.
 //!
+//! [`CoordinatorGet`] ([`fetch`]) reads a path of the coordinator's agent listener over the same
+//! mutual TLS and streams the body to the caller's sink, through the same [`Transport`]: the
+//! daemon's mirror of a private repository reads its files with it.
+//!
 //! The coordinator's repository sets ([`PushedSet`]) go to the daemon's [`RepositorySink`], which
 //! the loop calls only while the coordinator advertises [`Feature::RepositoriesV1`]. Its host
 //! facts ([`PushedFacts`]) go to the daemon's [`FactsSink`], which writes the host's facts file,
@@ -45,6 +49,7 @@
 pub mod beat;
 pub mod deferral;
 pub mod dial;
+pub mod fetch;
 pub mod grpc;
 pub mod heartbeater;
 pub mod host_facts;
@@ -62,11 +67,12 @@ mod wire_map;
 
 pub use beat::{
     ANNOUNCED, FACTS, Feature, Features, Fitted, Health, Heartbeat, Liveness, MAX_HEARTBEAT_BYTES,
-    Observed, OptionalFact, Oversize, Platform, REPOSITORIES, Renewal, RootReason, ServiceFacts,
-    TrustedRootFacts, fit,
+    Observed, OptionalFact, Oversize, PRIVATE_REPOSITORY, Platform, REPOSITORIES, Renewal,
+    RootReason, ServiceFacts, TrustedRootFacts, fit,
 };
 pub use deferral::{Deferral, DeferralError, Deferrals};
 pub use dial::{CALL_SECS, TcpDial, TcpTransport};
+pub use fetch::{CoordinatorGet, GetError, Got, Limit};
 pub use grpc::GRPC_REPLY_MAX;
 pub use grpc::{AsyncConn, GrpcDial, GrpcLinkError, GrpcMtlsLink};
 pub use heartbeater::{

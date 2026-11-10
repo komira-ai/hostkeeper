@@ -23,6 +23,15 @@
 //! there defines every store of the host, and any defect refuses it ([`StoresError`] names the
 //! store and the rule): the daemon does not start on a half-read file.
 //!
+//! Every host also has the implicit store [`COORDINATOR_STORE`], of kind `coordinator`: it is
+//! never read from the file, is found by [`Stores::get`] with or without one, and is not among
+//! [`Stores::all`] (which lists what the file defines). A file that gives a store the kind
+//! `coordinator` is refused ([`Rule::Kind`]); a store the file itself names `coordinator`, which
+//! a file of the release before could hold, is kept as it was and is the one [`Stores::get`]
+//! finds under that name, so such a host fetches from it as before. Its blob URL is `/` and the locator: a path of the coordinator, which only
+//! a fetcher that talks to the coordinator over the host's own connection can ask
+//! ([`crate::entry::EntryEnv::coordinator`]).
+//!
 //! | what the file holds | refused as |
 //! |---|---|
 //! | the file is a link or not a regular file, is not owned by the expected user, is writable by group or others, is over 64 KiB, or cannot be read | [`StoresError::File`] |
@@ -42,7 +51,8 @@
 //!
 //! The URL of a blob: an `https` store gives `<base><locator>`; an `oci` store gives
 //! `<base>v2/<locator>/blobs/sha256:<hex>`, the locator being a repository name; an `oci`
-//! mirror gives `<base>v2/<repository>/blobs/sha256:<hex>`.
+//! mirror gives `<base>v2/<repository>/blobs/sha256:<hex>`; the `coordinator` store gives
+//! `/<locator>`.
 
 use std::fmt;
 use std::fs::OpenOptions;
@@ -60,6 +70,8 @@ use crate::ports::{Url, origin_of};
 
 /// The name of the store a host without a `stores.toml` has.
 pub const CHANNEL_STORE: &str = "channel";
+/// The name of the implicit store of the coordinator, which no file defines.
+pub const COORDINATOR_STORE: &str = "coordinator";
 /// The most bytes of `stores.toml`.
 pub const MAX_STORES_BYTES: u64 = 64 * 1024;
 /// The most bytes of a credential file.
@@ -77,6 +89,8 @@ pub enum Kind {
     Https,
     /// `<base>v2/<repository>/blobs/sha256:<hex>`.
     Oci,
+    /// `/<locator>`: a path of the coordinator.
+    Coordinator,
 }
 
 /// A credential's `Authorization` header value. Its `Debug` shows nothing of it.
@@ -152,6 +166,7 @@ impl Store {
         Url::new(match self.kind {
             Kind::Https => format!("{}{locator}", self.base),
             Kind::Oci => format!("{}v2/{locator}/blobs/sha256:{hex}", self.base),
+            Kind::Coordinator => format!("/{locator}"),
         })
     }
 
@@ -167,6 +182,21 @@ impl Store {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Stores {
     stores: Vec<Store>,
+    coordinator: Store,
+}
+
+/// The implicit store [`COORDINATOR_STORE`]: no base, no credential, no redirect.
+fn coordinator_store() -> Store {
+    Store {
+        name: COORDINATOR_STORE.to_owned(),
+        kind: Kind::Coordinator,
+        base: String::new(),
+        origin: String::new(),
+        redirects: 0,
+        mirror: false,
+        repository: None,
+        authorization: None,
+    }
 }
 
 impl Stores {
@@ -190,17 +220,23 @@ impl Stores {
                 repository: None,
                 authorization: None,
             }],
+            coordinator: coordinator_store(),
         }
     }
 
-    /// Every store, in file order.
+    /// Every store the file defines, in file order; the implicit [`COORDINATOR_STORE`] is not
+    /// among them.
     pub fn all(&self) -> &[Store] {
         &self.stores
     }
 
-    /// The store called `name`.
+    /// The store called `name`: one the file defines, else the implicit [`COORDINATOR_STORE`]
+    /// for its name.
     pub fn get(&self, name: &str) -> Option<&Store> {
-        self.stores.iter().find(|store| store.name == name)
+        self.stores
+            .iter()
+            .find(|store| store.name == name)
+            .or_else(|| (name == COORDINATOR_STORE).then_some(&self.coordinator))
     }
 
     /// The mirrors, in file order.
@@ -393,12 +429,19 @@ fn credential(text: &StoreText, owner: u32) -> Result<Option<Secret>, Rule> {
     }
 }
 
+/// The kinds a file may name.
+#[derive(Clone, Copy)]
+enum Wire {
+    Https,
+    Oci,
+}
+
 /// The store `text` says, or the rule it breaks. Rules are checked in the order of the table of
 /// the module.
 fn store_of(text: StoreText, owner: u32) -> Result<Store, Rule> {
     let kind = match text.kind.as_str() {
-        "https" => Kind::Https,
-        "oci" => Kind::Oci,
+        "https" => Wire::Https,
+        "oci" => Wire::Oci,
         other => return Err(Rule::Kind(other.to_owned())),
     };
     if !base_is_valid(&text.base) {
@@ -406,18 +449,18 @@ fn store_of(text: StoreText, owner: u32) -> Result<Store, Rule> {
     }
     let mirror = text.mirror.unwrap_or(false);
     let redirects = match (kind, text.redirects) {
-        (Kind::Oci, Some(_)) => return Err(Rule::RedirectsOnOci),
-        (Kind::Oci, None) => OCI_REDIRECTS,
-        (Kind::Https, Some(count)) if count > MAX_REDIRECTS => {
+        (Wire::Oci, Some(_)) => return Err(Rule::RedirectsOnOci),
+        (Wire::Oci, None) => OCI_REDIRECTS,
+        (Wire::Https, Some(count)) if count > MAX_REDIRECTS => {
             return Err(Rule::RedirectsOver(count));
         }
-        (Kind::Https, count) => count.unwrap_or(0),
+        (Wire::Https, count) => count.unwrap_or(0),
     };
     match (kind, mirror, &text.repository) {
-        (Kind::Https, true, _) => return Err(Rule::MirrorOnHttps),
-        (Kind::Https, false, Some(_)) => return Err(Rule::RepositoryOnHttps),
-        (Kind::Oci, true, None) => return Err(Rule::MirrorWithoutRepository),
-        (Kind::Oci, _, Some(repository)) if check_locator(repository).is_err() => {
+        (Wire::Https, true, _) => return Err(Rule::MirrorOnHttps),
+        (Wire::Https, false, Some(_)) => return Err(Rule::RepositoryOnHttps),
+        (Wire::Oci, true, None) => return Err(Rule::MirrorWithoutRepository),
+        (Wire::Oci, _, Some(repository)) if check_locator(repository).is_err() => {
             return Err(Rule::Repository);
         }
         _ => {}
@@ -426,7 +469,10 @@ fn store_of(text: StoreText, owner: u32) -> Result<Store, Rule> {
     let origin = origin_of(&text.base).unwrap_or_default();
     Ok(Store {
         name: text.name,
-        kind,
+        kind: match kind {
+            Wire::Https => Kind::Https,
+            Wire::Oci => Kind::Oci,
+        },
         base: text.base,
         origin,
         redirects,
@@ -460,7 +506,10 @@ pub fn parse(text: &[u8], owner: u32) -> Result<Stores, StoresError> {
         }
         stores.push(store_of(text, owner).map_err(refuse)?);
     }
-    Ok(Stores { stores })
+    Ok(Stores {
+        stores,
+        coordinator: coordinator_store(),
+    })
 }
 
 /// The stores of the host from the file at `path`: [`Stores::channel`] when there is no file,

@@ -26,6 +26,7 @@ mod refusal;
 mod release_index;
 mod report;
 mod repositories;
+mod repository_serve;
 mod rollouts;
 mod support;
 mod targets;

@@ -188,6 +188,7 @@ pub type Log = Arc<dyn Fn(&str) + Send + Sync>;
 /// Fetches, proves, unpacks and seals packages with the real libraries.
 pub struct RealPackages {
     fetcher: Box<dyn Fetcher + Send + Sync>,
+    coordinator: Option<Box<dyn Fetcher + Send + Sync>>,
     verifier: Box<dyn Verifier + Send + Sync>,
     clock: Arc<dyn Clock>,
     bounds: Bounds,
@@ -217,6 +218,7 @@ impl RealPackages {
         let fs = HostFs::open(root, owner)?;
         Ok(RealPackages {
             fetcher,
+            coordinator: None,
             verifier,
             clock,
             bounds: config.bounds.clone(),
@@ -237,6 +239,16 @@ impl RealPackages {
     /// has the one store `channel`, the release channel.
     pub fn with_stores(self, stores: Stores) -> RealPackages {
         RealPackages { stores, ..self }
+    }
+
+    /// The same store, asking the locations of the `coordinator` store through `fetcher`
+    /// ([`crate::coordinator_store::CoordinatorFetcher`]); without it such a location is
+    /// `no_store`.
+    pub fn with_coordinator(self, fetcher: Box<dyn Fetcher + Send + Sync>) -> RealPackages {
+        RealPackages {
+            coordinator: Some(fetcher),
+            ..self
+        }
     }
 
     /// The same store, writing its log lines (a `store_digest_mismatch` for each store that gave
@@ -313,6 +325,10 @@ impl RealPackages {
     fn entry_env(&self) -> EntryEnv<'_> {
         EntryEnv {
             fetcher: &*self.fetcher,
+            coordinator: self
+                .coordinator
+                .as_deref()
+                .map(|fetcher| fetcher as &dyn Fetcher),
             verifier: &*self.verifier,
             clock: &*self.clock,
             bounds: &self.bounds,

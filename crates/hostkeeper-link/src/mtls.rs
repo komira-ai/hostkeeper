@@ -82,6 +82,13 @@ pub trait Transport: Send + Sync {
     /// # Errors
     /// The address cannot be resolved or reached.
     fn connect(&self, host: &str, port: u16) -> io::Result<Box<dyn Conn>>;
+
+    /// A connection as [`Transport::connect`] makes, whose reads and writes wait at most `secs`
+    /// seconds from its connect: for a call that carries a file and has its own deadline.
+    ///
+    /// # Errors
+    /// The address cannot be resolved or reached.
+    fn connect_within(&self, host: &str, port: u16, secs: u64) -> io::Result<Box<dyn Conn>>;
 }
 
 /// Why the daemon config's coordinator address is not one the link dials.

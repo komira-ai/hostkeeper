@@ -11,7 +11,7 @@ use super::coordinator::start_on_postgres;
 use super::{TestDatabase, off_runtime};
 use crate::desired::DesiredStore;
 use crate::marks_support::operator;
-use crate::repositories_support::{komira, repository};
+use crate::repositories_support::{komira, private, repository};
 use crate::store::postgres::migrate;
 use crate::store::postgres::rows::Tables;
 use crate::store::postgres::session::Session;
@@ -291,6 +291,39 @@ fn a_repository_put_through_the_coordinator_is_served_again_after_a_restart() {
         )
         .expect("put");
     assert_eq!(next.repository.expect("held").generation, 2);
+    store.stop();
+}
+
+/// Proves: a private entry (its `access` and `credential_file`) is written to its row and loaded
+/// back equal after a restart of the store.
+///
+/// Catches: a private entry that comes back from the database as a public one.
+#[test]
+fn a_private_entry_loads_back_from_its_row() {
+    let db = TestDatabase::new();
+    let (store, loaded) = db.open("first").expect("the store opens");
+    let desired = desired_store(&store, loaded);
+    commit_registry(&desired, |held| {
+        held.put(private(
+            "priv",
+            "https://priv.example.com/apt",
+            &["web"],
+            1,
+            "/etc/hostkeeper/credentials/priv",
+        ))
+    });
+    let held = desired.with_repositories(Clone::clone);
+    store.stop();
+    let (store, loaded) = db.open("second").expect("the store opens again");
+    assert_eq!(loaded.desired.repositories, held);
+    assert_eq!(
+        loaded
+            .desired
+            .repositories
+            .get("priv")
+            .map(|k| k.repository.access.as_str()),
+        Some("hosts")
+    );
     store.stop();
 }
 

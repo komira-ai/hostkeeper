@@ -148,7 +148,11 @@ pub fn stanza(
         .to_ascii_lowercase();
     let size = field(found, "Size").and_then(|s| s.parse::<u64>().ok());
     match (sha256.len() == 64, size) {
-        (true, Some(size)) => Ok(Some(Stanza { sha256, size })),
+        (true, Some(size)) => Ok(Some(Stanza {
+            sha256,
+            size,
+            filename: field(found, "Filename").map(str::to_owned),
+        })),
         _ => Err(Failure::new(
             Reason::ManifestInvalid,
             format!("the index's stanza of {package} {version} has no SHA256 and Size"),

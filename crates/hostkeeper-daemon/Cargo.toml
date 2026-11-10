@@ -118,7 +118,9 @@ hostkeeper-testkit = { path = "../hostkeeper-testkit" }
 # The effective uid: the owner the tests' daemon config is trusted for; an extended attribute
 # set on a scratch file, which the quarantine check reads.
 rustix = { workspace = true, features = ["fs", "process"] }
-tokio = { workspace = true, features = ["macros", "net", "rt"] }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt"] }
+tokio-rustls.workspace = true
+rustls.workspace = true
 
 [lints]
 workspace = true

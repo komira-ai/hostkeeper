@@ -79,6 +79,11 @@ pub enum Feature {
     /// `repositories-v1` it is announced only by a daemon with a facts file ([`crate::FactsSink`]):
     /// the loop adds it ([`FACTS`]).
     FactsV1,
+    /// `private-repository-v1`: the daemon reads the files of a private repository from the
+    /// coordinator ([`crate::CoordinatorGet`]), so the coordinator may send it a private
+    /// repository entry and a package of one. Announced by a daemon with a repository sink and
+    /// by one the wiring says reads them another way (a Mac); not in [`ANNOUNCED`].
+    PrivateRepositoryV1,
 }
 
 /// The features every heartbeat announces, in this order. Each names something the loop does:
@@ -104,6 +109,8 @@ pub const REPOSITORIES: Feature = Feature::RepositoriesV1;
 /// The feature a daemon with a [`crate::FactsSink`] announces after [`ANNOUNCED`] (and
 /// [`REPOSITORIES`], when it announces that).
 pub const FACTS: Feature = Feature::FactsV1;
+/// The feature a daemon that reads private repositories announces after [`REPOSITORIES`].
+pub const PRIVATE_REPOSITORY: Feature = Feature::PrivateRepositoryV1;
 
 impl Feature {
     /// Its wire name.
@@ -122,6 +129,7 @@ impl Feature {
             Feature::TargetV1 => "target-v1",
             Feature::RepositoriesV1 => "repositories-v1",
             Feature::FactsV1 => "facts-v1",
+            Feature::PrivateRepositoryV1 => "private-repository-v1",
         }
     }
 
@@ -129,7 +137,7 @@ impl Feature {
     pub fn parse(name: &str) -> Option<Feature> {
         ANNOUNCED
             .into_iter()
-            .chain([REPOSITORIES, FACTS])
+            .chain([REPOSITORIES, FACTS, PRIVATE_REPOSITORY])
             .find(|feature| feature.as_str() == name)
     }
 }

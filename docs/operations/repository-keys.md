@@ -13,7 +13,8 @@ names a key:
   of `/etc/hostkeeper/stores.toml`, and trusts a `.pkg` only when its leaf certificate is one of the
   signers in `/etc/hostkeeper/macos-pkg.toml`. On a Mac with MDM the coordinator's gate carries
   those files in the config profile, from files its operator gives it. A Mac never reads the
-  registry.
+  registry; a `.pkg` of a private repository is fetched from the implicit store `coordinator`,
+  over the Mac's mutual-TLS connection to the coordinator.
 
 So a key rotation is one change on the coordinator for every Linux host, ahead of the
 repository's own change, and a change of the coordinator's MDM files for managed Macs.
@@ -66,6 +67,30 @@ reason when it refused it (the host keeps its set in force).
 A host whose directory holds what the held setup or `hostkeeper-pxe` wrote for the same URI and
 keyring adopts it as it is; a host whose files differ gets the registry's set in their place, and
 any other entry in the directory goes. No step restarts a daemon.
+
+## Put a private repository in the registry
+
+A private repository (`"access": "hosts"`) holds a site's configuration packages, one suite per
+host group ([package-repositories.md](../deploy/package-repositories.md#private-repositories-a-host-groups-configuration)).
+Put it the same way, with two more fields: `"access": "hosts"` and `"credential_file"`, the
+absolute path on the coordinator's machine of the file that holds the `Authorization` header value
+the coordinator sends the origin. Write that file first, as the coordinator's user, mode 0600, one
+line:
+
+```sh
+install -m 0600 /dev/null /etc/hostkeeper-coordinator/lab.credential
+printf 'Bearer %s\n' "$TOKEN" > /etc/hostkeeper-coordinator/lab.credential
+```
+
+The coordinator refuses the entry `credential_unusable` when the file is absent, a link, not the
+coordinator user's, of a mode other than 0600 or 0400, empty, more than 4 KiB, or not one line of
+printable ASCII, and
+refuses a public entry that names a file (`invalid_request`). Its `suites` are the host groups it
+serves. Each Linux host whose services name it and whose daemon announces
+`private-repository-v1` is sent it with its own group as the one suite, and fills its local mirror
+from the coordinator. To change the credential, write the file again: the coordinator reads it at
+every fetch from the origin, and nothing restarts. A host's `repositories` in `hkctl hosts get`
+shows the set as for any entry; a key rotation is the same as below.
 
 ## Rotate the repository's signing key (Linux)
 

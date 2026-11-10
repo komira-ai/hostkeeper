@@ -205,6 +205,7 @@ fn a_repository_set_of_eight_largest_keyrings_is_read_whole() {
             components: vec!["main".to_owned()],
             fingerprints: vec!["AB".repeat(20)],
             keyring: vec![n; 64 * 1024],
+            ..Default::default()
         })
         .collect();
     let response = pb::HeartbeatResponse {

@@ -34,6 +34,7 @@ pub mod config;
 pub mod enable;
 pub mod launcher;
 pub mod lock;
+pub mod mirror;
 pub mod outcome;
 pub mod policy;
 pub mod record;
@@ -53,6 +54,7 @@ use hostkeeper_release::Installer;
 pub use backend::Backend;
 pub use config::{Repositories, Repository};
 pub use lock::InstallerLock;
+pub use mirror::{Mirror, MirrorError, mirrored_name};
 pub use outcome::{Class, DRIFT_REPAIRED, Failure, Outcome, Reason};
 pub use record::{PackageRecord, RecordError, Records};
 pub use stage::TREE;
@@ -219,6 +221,9 @@ pub struct HostDirs {
     /// The work directories' parent, `/var/lib/hostkeeper/<backend>/` on a host: one directory
     /// per service, where every run of the package manager works.
     pub work: PathBuf,
+    /// The mirrors' parent, `/var/lib/hostkeeper/mirror/` on a host: one directory per private
+    /// repository, which an entry whose URI is `file:<mirror>/<name>` is read from.
+    pub mirror: PathBuf,
 }
 
 /// A version `stage` made in its staging directory.
@@ -263,6 +268,8 @@ pub struct RepositoryInstaller<'a> {
     pub repositories: &'a Repositories,
     pub dirs: &'a HostDirs,
     pub pause: &'a dyn Pause,
+    /// Fills the mirror of a private repository; `None` on a host that has none.
+    pub mirror: Option<&'a dyn Mirror>,
 }
 
 /// A failure of the host's files.

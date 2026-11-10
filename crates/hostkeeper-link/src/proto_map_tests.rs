@@ -960,6 +960,7 @@ fn a_response_keeps_its_repository_set_as_decoded() {
         components: vec!["main".to_owned()],
         fingerprints: vec!["AB".repeat(20)],
         keyring: vec![0x99, 0, 1, 4],
+        ..Default::default()
     }];
     let mapped = reply(pb::HeartbeatResponse {
         repositories: Some(pb::RepositorySet {

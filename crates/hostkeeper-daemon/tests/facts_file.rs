@@ -69,7 +69,8 @@ fn host(rig: &Rig) -> (Heartbeater, Arc<FakeLink>, Arc<ManualDispatch>) {
     (links.heartbeater(&daemon), link, dispatch)
 }
 
-/// Proves a daemon announces `facts-v1`, reports no generation before its file holds facts,
+/// Proves a daemon announces `facts-v1` (a Mac daemon `private-repository-v1` after it), reports
+/// no generation before its file holds facts,
 /// writes the facts of a reply that advertises the feature to its facts file, as the design's
 /// object with the daemon's platform, and starts the order of that reply, and reports the
 /// generation it wrote in the next heartbeat; facts the coordinator sends again with the same
@@ -95,6 +96,10 @@ fn a_host_writes_the_facts_of_a_reply_and_reports_their_generation() {
     let beats = link.beats();
     let mut features = ANNOUNCED.to_vec();
     features.push(FACTS);
+    // A Mac daemon reads private repositories through its `coordinator` store.
+    if hostkeeper_daemon::links::reads_private_repositories(hostkeeper_daemon::links::PLATFORM) {
+        features.push(Feature::PrivateRepositoryV1);
+    }
     assert_eq!(beats[0].features, features);
     assert_eq!(beats[0].facts_generation, None);
     assert_eq!(beats[1].facts_generation, Some(7));
