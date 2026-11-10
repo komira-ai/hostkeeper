@@ -397,5 +397,23 @@ fn a_check_with_other_rights_steps_or_outputs_is_refused() {
             &OUTPUTS[1..]
         )]
     );
-    assert_eq!(STEPS.len(), 2);
+}
+
+#[test]
+fn a_warning_that_is_printed_when_the_release_is_set_is_refused() {
+    // Catches: the warning step's `if:` dropped, so a set release's log says it was not set.
+    let got = problems_with(
+        "        if: ${{ steps.newest.outputs.set != 'true' }}\n",
+        "",
+    );
+    let unconditional = STEPS[1]
+        .strip_prefix("if ${{ steps.newest.outputs.set != 'true' }} ")
+        .expect("the warning step has its if");
+    let shapes = [STEPS[0], unconditional];
+    assert_eq!(
+        got,
+        [format!(
+            "release.yml: job no-downgrade steps are {shapes:?}, not no_downgrade::STEPS"
+        )]
+    );
 }
